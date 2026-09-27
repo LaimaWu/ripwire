@@ -168,6 +168,7 @@ extern "C"
     const TSLanguage* tree_sitter_dart( void );
     const TSLanguage* tree_sitter_kotlin( void );
     const TSLanguage* tree_sitter_gdscript( void );
+    const TSLanguage* tree_sitter_clojure( void );
 }
 
 // ── the ingest-family sections (2026-08-29 split; ingest() phases followed 2026-08-30) ──────────────
@@ -193,6 +194,7 @@ extern "C"
 #include "ingest_names.h"
 #include "ingest_binds.h"
 #include "ingest_elixir.h"
+#include "ingest_clojure.h"
 #include "ingest_importcap.h"
 #include "ingest_valuerefs.h"
 #include "ingest_sidecap.h"
