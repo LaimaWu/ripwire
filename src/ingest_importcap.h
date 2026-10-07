@@ -23,8 +23,9 @@
 // the bare name `require`, whether an argument is a single string literal. Those are normaliser arms, not
 // extractors — one per dialect, not one per language.
 //
-// THE VOCABULARY IS A FAMILY, AND ONLY ITS FIRST MEMBER IS SPENT. `@import.path` is the only capture name
-// in use, because C-family imports have no other part: `#include` names a path and nothing else — no
+// THE VOCABULARY IS A FAMILY. Python is the first dialect to use `@import.names` / `@import.alias`
+// for bindings only, never extra dependency targets. The names remain reserved for later dialects.
+// `@import.path` is the dependency-target capture, because C-family imports have no other part: `#include` names a path and nothing else — no
 // alias to record, no list of imported names — and because Go's alias/dot/blank spellings ride inside the
 // declaration clause its Include has always carried (see DepDialect::Go below), not in a field of their own.
 // The other two names the issue sketches are reserved BY NAME so the next language lands on them rather
@@ -228,7 +229,7 @@ ImportSpec normaliseGoImport( TSNode declaration, std::string_view src )
 }
 
 // ── the dispatch: ONE normaliser per DepDialect ──────────────────────────────────────────────────────
-// CFamily, Web and Go are the dialects that have moved over so far; every other arm returns an empty ImportSpec,
+// CFamily, Web, Go and Python are the dialects that have moved over so far; every other arm returns an empty ImportSpec,
 // which is what makes the capture INERT rather than wrong on a language whose tags.scm has not adopted
 // `@import.path` yet. Each `case` is deleted as its language moves, and the compiler then names every
 // other dialect still to do — the same "one language at a time" landing the issue asks for.
@@ -239,6 +240,7 @@ ImportSpec normaliseImportSpecifier( DepDialect dialect, TSNode directive, std::
         case DepDialect::CFamily: return normaliseCFamilyImport( directive, raw, src );
         case DepDialect::Web:     return normaliseWebImport( directive, raw, src );
         case DepDialect::Go:      return normaliseGoImport( directive, src );
+        case DepDialect::Python:  return { std::string( raw ) };   // preserve the first plain clause's written alias
         default:                  return {};   // no other language captures @import.path yet
     }
 }
@@ -253,6 +255,7 @@ inline bool importsFromCapture( DepDialect dialect ) noexcept
         case DepDialect::CFamily:
         case DepDialect::Web:
         case DepDialect::Go:
+        case DepDialect::Python:
             return true;
         default:
             return false;
@@ -275,6 +278,49 @@ TSNode importDirectiveOf( DepDialect dialect, TSNode pathNode ) noexcept
     const bool hasDirective = !ts_node_is_null( directive );
     ENSURES( hasDirective, "an `arguments` list always belongs to a call" );
     return directive;
+}
+
+// One @import.names clause and its optional @import.alias → the existing Python Import binding.
+// The query selects the clause; normalization keeps the plain-import module marker and from-import
+// member distinction (#287). Both records stay at the STATEMENT byte, with the same empty spans.
+// A multi-clause import still has only its FIRST Include, but every clause binds a name. Reach and
+// depth must apply to bindings too, or a cut/ERROR-wrapped import would still narrow a call.
+void emitCapturedPythonImportBind( TSNode namesNode, TSNode aliasNode, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
+{
+    const bool   hasAlias = !ts_node_is_null( aliasNode );
+    const TSNode clause   = hasAlias ? ts_node_parent( namesNode ) : namesNode;
+    const TSNode stmt     = ts_node_parent( clause );
+    const bool   isFrom   = kindIs( ts_node_type( stmt ), "import_from_statement" );
+    const ImportReach reach = importContainerReach( stmt, Lang::Python );
+    if( reach.depth > kMaxImportContainerDepth || !reach.reachable )
+    {
+        return;
+    }
+    // The old walk called its binding helper only after extracting a nonempty first target.
+    const TSNode first = fieldChild( stmt, isFrom ? NodeField::ModuleName : NodeField::Name );
+    if( nodeTextOf( first, src ).empty() )
+    {
+        return;
+    }
+    std::string_view bound = nodeTextOf( hasAlias ? aliasNode : namesNode, src );
+    if( !isFrom && !hasAlias )
+    {
+        bound = bound.substr( 0, bound.find( '.' ) );   // `import a.b` binds `a`, not `a.b`
+    }
+    std::string target = importSpecifierText( isFrom ? first : namesNode, src );
+    if( bound.empty() || target.empty() )
+    {
+        return;
+    }
+    RawBind b;
+    b.fileId       = fileId;
+    b.startByte    = ts_node_start_byte( stmt );
+    b.lang         = Lang::Python;
+    b.kind         = LocalBindKind::Import;
+    b.var.assign( bound );
+    b.typeName     = std::move( target );
+    b.importedName = isFrom ? std::string{} : "module";
+    binds.push_back( std::move( b ) );
 }
 
 // One captured `@import.path` → the Include record plus its ABS-3 import-role use-site ref, which is
