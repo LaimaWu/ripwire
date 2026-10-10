@@ -2933,6 +2933,12 @@ struct StdMemberGate
         }
     };
 
+    // true ⇒ `name` (a std template's own name, "shared_ptr") is one whose `->` reaches its first template argument
+    static bool isStdArrowTemplate( std::string_view name ) noexcept
+    {
+        const std::span<const std::string_view> wrappers( externalnames::kCppStdArrowTemplates );
+        return std::binary_search( wrappers.begin(), wrappers.end(), name, rw::sortutil::svLess );
+    }
     // The pointee a `->` reaches through a declaration whose recorded type text (Binding::importedName: the written type WHOLE,
     // as the parser spelled it) is a standard smart pointer or optional — the final segment of its first template argument:
     // "std::unique_ptr<ns::List>" -> "List", "std::optional<const Gen<int>>" -> "Gen". "" for every other text: another
@@ -2946,9 +2952,7 @@ struct StdMemberGate
         {
             return {};
         }
-        const std::string_view                  tmpl = trimWs( written.substr( kStd.size(), open - kStd.size() ) );
-        const std::span<const std::string_view> wrappers( externalnames::kCppStdArrowTemplates );
-        if( !std::binary_search( wrappers.begin(), wrappers.end(), tmpl, rw::sortutil::svLess ) )
+        if( !isStdArrowTemplate( trimWs( written.substr( kStd.size(), open - kStd.size() ) ) ) )
         {
             return {};
         }
@@ -6218,7 +6222,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // included ("<fromSymbol>#<var>" -> binding indices; Rule 2's tables keep "" for a std one), and every namespace-scope
     // declaration (var -> binding indices). Empty on a tree with no C++ definition.
     HashMap<std::string, rw::SmallVec<std::uint32_t, 1>> stdQualifiedDecls, stdNamespaceDecls;
-    if( std::any_of( ing.symbols.begin(), ing.symbols.end(), []( const Symbol& s ) { return s.lang == Lang::Cpp; } ) )
+    const bool anyCppDefinition = std::any_of( ing.symbols.begin(), ing.symbols.end(), []( const Symbol& s ) { return s.lang == Lang::Cpp; } );
+    if( anyCppDefinition )
     {
         for( std::uint32_t i = 0; i < std::uint32_t( ing.bindings.size() ); ++i )
         {
@@ -6248,11 +6253,43 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         stdFieldProbe.recvVar.assign( member );
         return narrower.fieldEntryAt( stdFieldProbe, className, { fieldNarrow.fieldTypeByClass, memberFields, chaUp } );
     };
-    // a `->` through a written non-std type: may it reach a class the declaration does not name?
-    const auto arrowIsOpaque = [ & ]( std::string_view type ) -> bool
+    // every C/C++ type alias record (`typedef std::shared_ptr<ns::List> ListSP;` and `using ListSP2 = std::shared_ptr<ns::List>;`
+    // alike, ingest_relations.h captureTypeAlias): alias name -> its recorded targets (the reference indices). A typedef is ALSO
+    // a Struct symbol at its name (so classNames holds it) and a `using` is not; arrowIsOpaque reads both through these records.
+    HashMap<std::string, rw::SmallVec<std::uint32_t, 1>> typeAliasTargets;
+    if( anyCppDefinition )
     {
-        stdFieldProbe.recvVar.assign( type );   // a std::string key for the two name sets
-        if( !classNames.contains( stdFieldProbe.recvVar ) && !chaUp.contains( stdFieldProbe.recvVar ) )
+        for( std::uint32_t i = 0; i < std::uint32_t( ing.references.size() ); ++i )
+        {
+            if( const Reference& r = ing.references[ i ]; isTypeAliasRecord( r ) && !r.recvVar.empty() && !r.calleeName.empty() )
+            {
+                typeAliasTargets[ r.recvVar ].push_back( i );
+            }
+        }
+    }
+    // a `->` through a written non-std type: may it reach a class the declaration does not name? An ALIAS answers by its
+    // recorded target (one rule for typedef and using): a std target is opaque when it is a smart pointer or optional
+    // (kCppStdArrowTemplates — the record keeps no template argument, so the pointee is unrecorded) and is a raw pointer to a
+    // std type otherwise (`typedef std::vector<int> IntVec; IntVec* p; p->size()`); a non-std target answers as that class
+    // does (an in-tree class with its own `operator->`, a class the tree does not define). Any target that is opaque makes
+    // the alias opaque. Aliases of aliases follow to a fixed depth.
+    const auto arrowOpaqueAt = [ & ]( const auto& self, std::string_view type, int depth ) -> bool
+    {
+        const std::string key( type );
+        bool              aliased = false;
+        if( const auto ait = typeAliasTargets.find( key ); ait != typeAliasTargets.end() && depth < 8 )
+        {
+            aliased = true;
+            for( const std::uint32_t i : ait->second )
+            {
+                const Reference& r = ing.references[ i ];
+                if( fieldTypeWrittenInStd( r ) ? StdMemberGate::isStdArrowTemplate( r.calleeName ) : ( r.calleeName != type && self( self, r.calleeName, depth + 1 ) ) )
+                {
+                    return true;
+                }
+            }
+        }
+        if( !aliased && !classNames.contains( key ) && !chaUp.contains( key ) )
         {
             return true;   // a class the tree does not define: its `->` is unknown
         }
@@ -6263,6 +6300,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         const ChaConeMemo::Cone cone = chaCones.coneFor( type );
         return std::any_of( arrowOperators->begin(), arrowOperators->end(), [ & ]( NodeId c ) { return chaCones.contains( cone, type, ing.symbols[ c ].scope ); } );
     };
+    const auto arrowIsOpaque = [ & ]( std::string_view type ) -> bool { return arrowOpaqueAt( arrowOpaqueAt, type, 0 ); };
     // one written type into the receiver facts: the type itself, and for a `->` call its pointee or its opacity
     const auto addWritten = [ & ]( StdMemberGate::Receiver& out, std::string_view typeName, std::string_view qualified, bool viaArrow )
     {

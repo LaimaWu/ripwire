@@ -32,10 +32,12 @@
 #       dereference, a subscript, a range-for `auto` and a template parameter are the stated floor (declined)
 #   (W) written types beyond Rule 2's tables (wrap/): a `->` through std::unique_ptr / shared_ptr / optional of ns::List, an
 #       in-tree SP<T> with its own operator->, a Qt or boost pointer (a class the tree does not define), a smart-pointer root
-#       one field hop off, and namespace-scope / file-static / extern variables written ns::List keep the hedge; std-argument
-#       smart pointers, raw pointers to std containers, `.` on std::vector<ns::List>, an in-tree class with no operator->, a
-#       std-written global and a global hidden by a local or a field stay declined; call results, an iterator and an
-#       unqualified template's arguments are the stated floor (declined)
+#       one field hop off, namespace-scope / file-static / extern variables written ns::List, and a typedef or using alias of
+#       a std smart pointer (or of an undefined wrapper) keep the hedge; std-argument smart pointers, raw pointers to std
+#       containers (an alias of one included), `.` on std::vector<ns::List>, an in-tree class with no operator->, a
+#       std-written global and a global hidden by a local or a field stay declined; call results, an iterator, an
+#       unqualified template's arguments, a std::optional member field and a typedef inside a function body are the stated
+#       floor (declined)
 #   (D) controls: a name outside the table (`grow`) keeps the ladder; a bare `size( b )` binds the free function; a C
 #       function-pointer call (C has no member functions) and the Rust by-name split (stated scope) are unchanged
 #   (E) the callers side: Vec::push_back keeps exactly its typed callers and hedges and counts the eleven declined calls; the one-def
@@ -201,6 +203,20 @@ check "(W) STATED FLOOR: h.list().size() — a call result carries no recorded t
 check "(W) STATED FLOOR: v.front().size() — a call result; v.front() itself is the container's member" callees frontOfVector    '' 2 'front,size:2'
 check "(W) STATED FLOOR: auto it = v.begin(); it->size() — an iterator, declined"                    callees iteratorArrow      '' 1 'size:1'
 check "(W) STATED FLOOR: QList<ns::List>& l; l.size() — an unqualified template's arguments are not recorded" callees unqualifiedTemplate '' 1 'size:1'
+check "(W) typedef std::shared_ptr<ns::List> ListSP; ListSP p; p->size() — a typedef reads its recorded alias target" callees typedefSharedLocal "$LS" '' ''
+check "(W) const ListSP& p; p->size() (the typedef, a parameter)"                                    callees typedefSharedParam "$LS" '' ''
+check "(W) typedef std::unique_ptr<ns::List> ListUP; ListUP p; p->front()"                          callees typedefUniqueLocal "$LR" '' ''
+check "(W) ListUP& p; p->find() (the unique_ptr typedef, a parameter)"                               callees typedefUniqueParam "$LF" '' ''
+check "(W) using ListUsingSP = std::shared_ptr<ns::List>; p->size() — the same rule for using"      callees usingSharedLocal   "$LS" '' ''
+check "(W) using QtListSP = QSharedPointer<ns::List>; p->front() — an alias of an undefined wrapper" callees usingQtAliasLocal  "$LR" '' ''
+check "(W) a field typed by a class-scoped typedef of std::shared_ptr<ns::List>; p_->size()"        callees typedefField       "$LS" '' ''
+check "(W) Owner4::Ptr p; p->size() — a class-scoped typedef, a parameter"                           callees classScopedTypedef "$LS" '' ''
+check "(W) accepted cost: typedef std::unique_ptr<std::string> StrUP; p->size() keeps the hedge (the record holds no argument; as using StrPtr)" callees typedefStrUP "$LS" '' ''
+check "(W) near-miss: typedef std::vector<int> IntVec; IntVec v; v.size() stays declined"             callees typedefVecDot      '' 1 'size:1'
+check "(W) near-miss: IntVec* p; p->size() — a raw pointer to a std alias, declined"                 callees typedefVecPtrArrow '' 1 'size:1'
+check "(W) near-miss: using IntVecUsing = std::vector<int>; IntVecUsing* p; p->size() — declined by the same rule" callees usingVecPtrArrow '' 1 'size:1'
+check "(W) STATED FLOOR: std::optional<ns::List> o_ (a member field); o_->size() — a field's arguments are read for unique_ptr/shared_ptr alone" callees optionalField '' 1 'size:1'
+check "(W) STATED FLOOR: a typedef inside a function body records no alias target; p->size() declined" callees localTypedef     '' 1 'size:1'
 
 # ── (D) controls ──────────────────────────────────────────────────────────────────────────────────────────────
 echo "=== (D) controls: outside the table, bare calls, C and Rust keep the ladder ==="

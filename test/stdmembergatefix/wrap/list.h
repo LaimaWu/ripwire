@@ -30,3 +30,13 @@ struct Box2
 };
 
 extern ns::List g_ext;
+
+// type aliases (test/stdmembergatecheck.sh arm W): a typedef is also a Struct symbol at its name, a `using` is not; the gate
+// reads both through their recorded alias target
+typedef std::shared_ptr<ns::List> ListSP;
+typedef std::unique_ptr<ns::List> ListUP;
+using ListUsingSP = std::shared_ptr<ns::List>;
+typedef std::vector<int> IntVec;
+using IntVecUsing = std::vector<int>;
+typedef std::unique_ptr<std::string> StrUP;
+using QtListSP = QSharedPointer<ns::List>;

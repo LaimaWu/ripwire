@@ -56,3 +56,28 @@ int callResult( Holder2& h ) { return h.list().size(); }
 int frontOfVector( std::vector<ns::List>& v ) { return v.front().size(); }
 int iteratorArrow( std::vector<ns::List>& v ) { auto it = v.begin(); return it->size(); }
 int unqualifiedTemplate( QList<ns::List>& l ) { return l.size(); }
+
+// ---- aliases of a std smart pointer: the alias's recorded target decides, one rule for typedef and using ----
+int typedefSharedLocal() { ListSP p; return p->size(); }
+int typedefSharedParam( const ListSP& p ) { return p->size(); }
+int typedefUniqueLocal() { ListUP p; return p->front(); }
+int typedefUniqueParam( ListUP& p ) { return p->find( 1 ); }
+int usingSharedLocal() { ListUsingSP p; return p->size(); }
+int typedefVecDot() { IntVec v; return int( v.size() ); }
+int typedefVecPtrArrow( IntVec* p ) { return int( p->size() ); }
+int usingVecPtrArrow( IntVecUsing* p ) { return int( p->size() ); }
+int usingQtAliasLocal() { QtListSP p; return p->front(); }
+struct Owner4
+{
+    typedef std::shared_ptr<ns::List> Ptr;
+    Ptr p_;
+    int typedefField() { return p_->size(); }
+};
+int classScopedTypedef( Owner4::Ptr p ) { return p->size(); }
+int localTypedef() { typedef std::shared_ptr<ns::List> LocalSP; LocalSP p; return p->size(); }
+int typedefStrUP() { StrUP p; return int( p->size() ); }
+struct Holder3
+{
+    std::optional<ns::List> o_;
+    int optionalField() { return o_->size(); }
+};
