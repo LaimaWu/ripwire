@@ -4589,7 +4589,7 @@ inline bool deserializeRawCommitStream( const std::string& blob, const std::stri
 // corrupt/foreign blob — is a clean miss that falls through to a full recompute, never a wrong answer). No git repo
 // degrades to an empty stream; no resolvable HEAD to the uncached walk (which itself degrades to an empty stream —
 // gitLogNameOnlyRaw's contract). Thread-safe: every memo it reaches (the HEAD anchor, the toplevel) takes its own
-// mutex, and the blob write is an atomic rename.
+// mutex, and the blob write is an atomic rename. K51: a walk git could not complete comes back with `unread` set and is never stored.
 inline RawCommitStream gitRawCommitStreamCached( const std::string& root, const char* coSince )
 {
     if( !hasEnclosingGitRepo( root ) )
@@ -4599,7 +4599,20 @@ inline RawCommitStream gitRawCommitStreamCached( const std::string& root, const 
     const std::string headSha = gitHeadSha( root );
     if( headSha.empty() )
     {
-        return gitLogNameOnlyRaw( root, coSince );
+        // No resolvable HEAD: an unborn branch has no history to read, and git log's failure there (git's own fatal exit,
+        // 128) is that fact, not an I/O error — so that walk is "read, empty" (K51 floor: a HEAD that is corrupt rather than
+        // unborn exits 128 too and reads the same here). Any OTHER failure means git did not answer at all — not on PATH
+        // (the shell's 127), not executable, no popen — and gitHeadSha's "" was that, not an unborn branch: it stays unread.
+        RawCommitStream noHead = gitLogNameOnlyRaw( root, coSince );
+        if( noHead.unread && noHead.exitCode == 128 )
+        {
+            noHead.unread = false;
+        }
+        else if( noHead.unread )
+        {
+            noHead.notRun = true;
+        }
+        return noHead;
     }
 
     const std::string repoHex  = cacheRootKeyHex( root );
@@ -4618,11 +4631,16 @@ inline RawCommitStream gitRawCommitStreamCached( const std::string& root, const 
     }
 
     raw = gitLogNameOnlyRaw( root, coSince );                                      // cold — the 431 ms walk
-    if( !gitWalksAbandoned() )                                                     // an abandoned read is a prefix: never cached
+    if( raw.unread || gitWalksAbandoned() )
     {
-        atomicWriteFile( cachePath, serializeRawCommitStream( raw, keyMat ) );     // best-effort; a failed
-                                                                                     // write just recomputes next time
+        // K51: a walk that could not be read is NOT stored. Stored, its empty stream would answer "read, no commits" under this
+        // (repo, HEAD, window) key for as long as HEAD stayed put; unstored, the next call walks again and the caller discloses.
+        // The flag rides the returned stream to main.cpp's amp=/churn= block, which DISCLOSEs it into the document (historyread.h).
+        // An abandoned read (a memory-guard refusal stopped the walk) is a prefix too, even when git exited 0: never cached.
+        return raw;
     }
+    atomicWriteFile( cachePath, serializeRawCommitStream( raw, keyMat ) );         // best-effort; a failed
+                                                                                   // write just recomputes next time
     return raw;
 }
 

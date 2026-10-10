@@ -15,6 +15,7 @@
 
 #include "infra/jsonesc.h"   // shSingleQuote — the repository's canonical POSIX argv quoting
 #include "model.h"           // IngestResult
+#include "queryshape.h"      // detail::lowerAscii — the one ASCII lowercaser (K50)
 #include "query.h"           // isKnownLayerWord — the layer vocabulary --verify enforces at evaluation
 #include "sarif.h"           // rootRelativeUri / rootPrefixOf — the ONE root-relative path rule the map emits with
 #include "verify.h"          // parseClaim — the SHIPPED claim grammar; the router never re-implements it
@@ -62,16 +63,10 @@ struct TaskRouteResult
     int                      margin = 0;
 };
 
-inline std::string lowerAscii( std::string_view text )
-{
-    std::string out;
-    out.reserve( text.size() );
-    for( const unsigned char c : text )
-    {
-        out.push_back( char( std::tolower( c ) ) );
-    }
-    return out;
-}
+// K50: ONE ASCII lowercaser for the tree's task-text readers. This file used to spell its own loop (`for( const unsigned char c :
+// text )`, an implicit sign change on every byte >= 0x80 that aborted the sanitizer build on a non-ASCII prompt), and the fix for it
+// made that loop byte-identical to queryshape.h's, which --quality-delta flagged as a clone of the reused helper. It is that one now.
+using queryshape::detail::lowerAscii;
 
 // "is this word one of these?" — the shape four tables' predicates were each writing out by hand, which is
 // how a five-line any_of becomes a duplication finding against its own neighbours.
@@ -447,8 +442,9 @@ inline SymbolMention symbolMention( std::string_view task, std::string_view lowe
     // fall through to the weak tier, where Section-kind symbols are never weak evidence (weakEvidenceKind),
     // so the name could not resolve even when explicitly backtick-marked in the task text (backticks are
     // step 1 of identifierMentionShape, itself unreachable without this).
-    const bool hasMark = std::any_of( name.begin(), name.end(), []( const unsigned char c )
+    const bool hasMark = std::any_of( name.begin(), name.end(), []( const char ch )
     {
+        const unsigned char c = static_cast<unsigned char>( ch );   // explicit narrowing (K50): a byte >= 0x80 must not convert implicitly
         return std::isupper( c ) || c == '_' || c == ':' || c == '.' || c == '$';
     } );
     if( hasMark )
@@ -626,7 +622,7 @@ inline std::string firstFileLineToken( std::string_view task )
             const std::string_view lineDigits = token.substr( colon + 1 );
             const std::string_view fileGuess  = token.substr( 0, colon );
             const bool allDigits = !lineDigits.empty() && std::all_of( lineDigits.begin(), lineDigits.end(),
-                                   []( const unsigned char c ) { return std::isdigit( c ) != 0; } );
+                                   []( const char c ) { return std::isdigit( static_cast<unsigned char>( c ) ) != 0; } );   // explicit narrowing (K50)
             if( allDigits && looksLikeFileToken( fileGuess ) )
             {
                 return std::string( fileGuess ) + ":" + std::string( lineDigits );

@@ -92,6 +92,37 @@ definitions the root names exactly those in `unserved_total=N` (the true count) 
 payload only. An explicit `--top-k=N` keeps the previous shape. Language-neutral: the decision reads the record of which
 requested definitions were emitted.
 
+### Fixed — the cross-branch verbs refuse when the blob batch cannot run
+
+`--stray-content`, `--stray-content --abi`, `--stray-content --plan`, `--eval-stray` and the MCP `stray_content` tool read
+every branch's content through one `git cat-file --batch` whose sha list is written under the cache directory. With `TMPDIR`
+naming a directory that does not exist the list could not be written, every blob read as absent, and the answer was
+`merged="1"` for a branch holding unmerged work (`--abi`: exit 0, no drift). Each now exits 1 (MCP: `-32603`) naming the
+cause and `TMPDIR`, with nothing on stdout, the way `--whereis` refuses on the same condition.
+
+### Fixed — a git history walk that could not be read says so, and is retried
+
+A `git log --name-only` that failed (an unreadable object, a bad ref) came back as an empty stream or as the newest part of
+the window and was stored under the (repo, HEAD, window) key, so `churn=` and `amp=` read as "no change history", or as the
+whole window's count, until HEAD moved, with no tell. A git that would not run at all (not on `PATH`) in a repository read
+the same way, as an unborn branch. A walk git could not finish is now never cached, so the next call walks again, and every
+document that prints `churn=` or `amp=` (the map under `--metrics`, `--for`, `--pack-task` and `--grep` with `--metrics`,
+`--around`) carries `history_unread="1"` on its root (`"history_unread":true` in JSON) beside a comment that defines it and
+names the cause. It means `churn=` and the co-change half of `amp=` count only the commits that were read, so both are
+floors: when git did not run, `churn=` is absent and `amp=` counts callers only; when git stopped part-way, they count the
+newest part of the window it read. It does not mean the other numbers are affected, and a walk that read an empty window (a
+repository with no commit) stays silent; a HEAD that is corrupt rather than unborn still reads as that empty window. Not yet
+covered: `--cochange` (and the MCP `cochange` tool), `--rank-by=churn` and `--owners` run their own git walks and do not yet tell a
+failed one from an empty one (`commits="0" partners="0"`; "found no commits in its window"; exit 1 with "git unavailable /
+no history").
+
+### Fixed — a non-ASCII `--help-task` prompt no longer trips the sanitizer build
+
+`lowerAscii` converted every byte of the prompt through an implicit `char` to `unsigned char` conversion, which the
+sanitizer build (`implicit-integer-sign-change`) aborts on for any byte at or above 0x80. The same shape sat in the
+router's name-shape and `FILE:LINE` predicates, the LSP header parser and the extension test; each now narrows
+explicitly.
+
 ### Changed — a call bound by name alone keeps its rows, marked `via="name"`; typed receivers resolve
 
 A member call `x.m()` (or, where the receiver is implicit, a bare `m()`) bound to every in-repo definition spelled

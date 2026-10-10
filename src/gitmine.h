@@ -1582,7 +1582,40 @@ struct RawCommitStream
 {
     struct Commit { std::int64_t epoch = 0; std::vector<std::string> paths; };
     std::vector<Commit> commits;
+    // K51: the walk COULD NOT BE READ (git would not start, or exited non-zero part-way) — as against "read, and the
+    // window holds no commit". `commits` is then empty or a prefix, never a measurement, and the memoizing caller
+    // must not store it: an empty stream cached under the (repo, HEAD, window) key silenced churn=/amp= until HEAD moved.
+    bool unread = false;
+    // Why, when `unread`: git never ran (no popen, or the shell could not find/execute it: exit 127/126) — `commits` is
+    // empty — as against git ran and stopped part-way, `commits` the newest-first prefix it printed before it died.
+    bool notRun = false;
+    // git's decoded exit code (WEXITSTATUS), -1 when it did not exit normally or never started; 0 on a clean read.
+    int exitCode = 0;
 };
+
+// K51: mark a walk unread. `exitCode` is git's decoded exit (-1: it never started, or did not exit normally); the shell's 127
+// (not on PATH) and 126 (not executable) mean git never ran either, so `commits` is empty, not a prefix.
+inline void markWalkUnread( RawCommitStream& out, int exitCode, bool neverStarted ) noexcept
+{
+    out.unread   = true;
+    out.exitCode = exitCode;
+    out.notRun   = neverStarted || exitCode == 127 || exitCode == 126;
+}
+
+// A pclose()/wait status as an exit code: WEXITSTATUS on a normal exit, -1 for a signal or an unreadable status.
+inline int decodedExitCode( int status ) noexcept
+{
+    return WIFEXITED( status ) ? WEXITSTATUS( status ) : -1;
+}
+
+// K51: fold the walk's pclose() status into `out` — 0 is a clean read and changes nothing.
+inline void noteWalkExit( RawCommitStream& out, int status ) noexcept
+{
+    if( status != 0 )
+    {
+        markWalkUnread( out, decodedExitCode( status ), false );
+    }
+}
 
 inline RawCommitStream gitLogNameOnlyRaw( const std::string& root, const std::string& coSince )
 {
@@ -1594,6 +1627,7 @@ inline RawCommitStream gitLogNameOnlyRaw( const std::string& root, const std::st
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
+        markWalkUnread( out, -1, true );
         return out;
     }
 
@@ -1620,7 +1654,9 @@ inline RawCommitStream gitLogNameOnlyRaw( const std::string& root, const std::st
         }
         out.commits.back().paths.push_back( std::move( s ) );   // readByteSafeLine clear()s its buffer first, so moving out of it is safe
     }
-    os::pclose( pipe );
+    // K51: git died (a missing or corrupt object, a bad ref) — the lines above are a prefix, not the window — or the shell
+    // never ran it (127: not on PATH, 126: not executable), and there are no lines at all.
+    noteWalkExit( out, os::pclose( pipe ) );
     return out;
 }
 
