@@ -557,9 +557,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "via",               "<c via=\"name\">: that callee matched by name alone (receiver unproven); it does NOT mean the edge is false", true, "c", MapHeaderRead::No, "name" },
     // CALLSITE-AT (2026-10-09): a callers row's call sites (editcheck.h rowCallSites); keyed to the callers schema, so the
     // map's own <s> rows never read it. The columnar form names the same list as its sites_at column.
-    { "sites_at",          "<s sites_at=>: its call sites spelled like of=, as file:line (p= is its def line); by name, not proof each binds", true, "s", MapHeaderRead::No, {}, "callers" },
+    { "sites_at",          "<s sites_at=>: its calls of the leaf name, any receiver, as file:line (p= is its def line); not proof each binds", true, "s", MapHeaderRead::No, {}, "callers" },
     { "sites_total",       "<s sites_total=N>: N sites, sites_at= lists the first 16; next= (the uses verb) lists all", true, "s", MapHeaderRead::No, {}, "callers" },
-    { "fields",            "<sites_at> column: each row's call sites spelled like of=, as file:line, space-separated; by name, not proof each binds", true, "cols", MapHeaderRead::No, "sites_at", "callers" },
+    { "fields",            "<sites_at> column: each row's calls of the leaf name, any receiver, as file:line, space-separated; not proof each binds", true, "cols", MapHeaderRead::No, "sites_at", "callers" },
     { "fields",            "<sites_total> column: a row's uncut site count; its sites_at cell lists the first 16, the uses verb all", true, "cols", MapHeaderRead::No, "sites_total", "callers" },
     // FE-B: a map <c> row merging N byte-identical via=name rows (serialize.h writeMapCalleeRows) carries x=N
     { "x",                 "<c x=N>: N same-named via=name rows merged; callees=FILE:SYM lists all", true, "c" },
@@ -868,7 +868,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "uses_floor", "uses_floor=1: this kind's reads and type mentions are not indexed in this run; uses= does not count them", false, {}, MapHeaderRead::No, {}, "safe-delete" },
     { "risk", "risk=unmodelled: nothing found, but the counts cannot see this kind's uses; next= lists them", false, "safe-delete", MapHeaderRead::No, "unmodelled", "safe-delete" },
     // CALLSITE-AT (2026-10-09): sites_l= became sites_at= (pasteable file:line tokens); the callers verb's s rows carry the same pair.
-    { "sites_at", "c sites_at=: its call sites spelled like sym=, as file:line (p= is its def line); by name, not proof each binds", true, "c", MapHeaderRead::No, {}, "safe-delete" },
+    { "sites_at", "c sites_at=: its calls of the leaf name, any receiver, as file:line (p= is its def line); not proof each binds", true, "c", MapHeaderRead::No, {}, "safe-delete" },
     { "sites_total", "c sites_total=N: N sites, sites_at= lists the first 16; the uses verb lists all", true, "c", MapHeaderRead::No, {}, "safe-delete" },
     // count-floor on the targeted lego verb (serialize.h packLego, countfloor.h implementorFloors): present-only.
     { "implementors_floor", "implementors_floor=1: an extends clause spelled like this interface bound nowhere; implementors= may be short (not proof of another)", true, "iface", MapHeaderRead::No, {}, "lego" },

@@ -309,6 +309,10 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # gain sites_at= (each caller's call site as file:line: geometry.cpp:16, sub/consumer.cpp:10) and the full legend gains the
 # present-only sites_at= clause (graphlegend.h kCallSitesAtLegend), 3492 -> 3890 B. Checked mechanically: removing the two
 # sites_at= attributes and that one clause gives the previous pin byte for byte (at= masked). The six other pins are unchanged.
+# RE-ANCHORED BY HAND 2026-10-10 (lane callers-sites-first-call fix round 1, wording = mechanism), callers.xml only: the
+# sites_at= clause says the match is by LEAF name ("its call sites spelled like the called name" -> "its calls of the called
+# LEAF name, any receiver or qualifier"), 3890 -> 3907 B. Checked mechanically: the reverse replacement of that one phrase
+# gives the previous pin byte for byte (at= masked). The six other pins are unchanged.
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
 # sed does not): at="…" masked, trailing newlines dropped.
@@ -645,7 +649,7 @@ pinFor()
 sdtCut="$( python3 - "$TMP/sdt.c" "$TMP/sdt.cut" <<'PY'
 import re, sys
 doc = open( sys.argv[1], encoding = "utf-8", errors = "replace" ).read()
-reading = " c sites_at=: its call sites spelled like sym=, as file:line (p= is its def line); by name, not proof each binds."
+reading = " c sites_at=: its calls of the leaf name, any receiver, as file:line (p= is its def line); not proof each binds."
 body = re.sub( r"<!--.*?-->", "", doc, flags = re.S )
 if not re.search( r'<c [^>]*sites_at="[^"]*:[0-9]', body ):
     print( "NOPREMISE no caller row carries sites_at=" ); sys.exit( 0 )
@@ -676,7 +680,7 @@ fi
 catCut="$( python3 - "$TMP/cat.c" "$TMP/cat.cut" <<'PY'
 import re, sys
 doc = open( sys.argv[1], encoding = "utf-8", errors = "replace" ).read()
-reading = " <s sites_at=>: its call sites spelled like of=, as file:line (p= is its def line); by name, not proof each binds."
+reading = " <s sites_at=>: its calls of the leaf name, any receiver, as file:line (p= is its def line); not proof each binds."
 body = re.sub( r"<!--.*?-->", "", doc, flags = re.S )
 if not re.search( r'<s [^>]*sites_at="[^"]*:[0-9]', body ):
     print( "NOPREMISE no caller row carries sites_at=" ); sys.exit( 0 )

@@ -18,9 +18,9 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 ### Changed — every `--callers` and `--safe-delete` caller row names its call sites as `file:line`
 
 "List every call site that must change" took two calls: a `--callers` row's `p=` is where the CALLER is defined, and the
-lines to edit were only in the `--uses` follow-up. Each caller row now carries `sites_at=`, its call sites spelled like
-the called name as pasteable `file:line` tokens (space-separated, ascending; two calls on one line are one site), so the
-first answer holds them. A file-scope (`<file-scope>`) caller, such as a test file calling a helper at top level, lists
+lines to edit were only in the `--uses` follow-up. Each caller row now carries `sites_at=`, its calls of the called
+leaf name (any receiver or qualifier) as pasteable `file:line` tokens (space-separated, ascending; two calls on one line
+are one site), so the first answer holds them. A file-scope (`<file-scope>`) caller, such as a test file calling a helper at top level, lists
 its sites the same way. `p=`, `count=` and the rows are unchanged.
 
 - **Every dialect:** XML `<s sites_at=>`, `--json` `"sites_at":[...]`, the columnar `<sites_at>` column, and the MCP

@@ -24,8 +24,8 @@
 #include "gitstamp.h"       // r26-stamp Task A: gitstamp::atAttr — the at="<sha>[+dirty]" root anchor
 #include "graphlegend.h"    // §H4 §3.4: the shared counts_floor= marker + floor/counting-unit legend tail
 #include "pageview.h"       // LB-G: pageWindow / effectiveRowCap / pagingDisclosure — the ONE paging vocabulary
-#include "editcheckdecl.h"
-#include "valuerefs.h"       // CALLSITE-AT: VrRender / vrPath — the one root-relative file spelling a site token shares with <vr> rows   // the C/C++ declaration/definition identity: editCheckTieDeclaration / editCheckDeclDefaults
+#include "editcheckdecl.h"   // the C/C++ declaration/definition identity: editCheckTieDeclaration / editCheckDeclDefaults
+#include "valuerefs.h"      // CALLSITE-AT: VrRender / vrPath — the one root-relative file spelling a site token shares with <vr> rows
 
 #include <algorithm>
 #include <compare>
