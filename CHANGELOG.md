@@ -165,7 +165,7 @@ MCP `whereis` takes no `detail` argument, so there the guard's `next=` names the
 characters, the sentence calling a branch row's label lexical replaced by the parser one, and the
 `tools/list` manifest shrinks by 5 B, to 47,109 B on this release's tree (the dropped em dash is six bytes of JSON; every
 other tool is unchanged). Gates: `test/crossrefcheck.sh` (5b–5e),
-`test/selectorhonestycheck.sh` (§A7), `test/pagingsweepcheck.sh`.
+`test/selectorhonestycheck.sh` (HEAD's rows, labelled by the index), `test/pagingsweepcheck.sh`.
 
 ### Changed — a call bound by name alone keeps its rows, marked `via="name"`; typed receivers resolve
 
