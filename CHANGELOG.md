@@ -163,7 +163,8 @@ blob a parse. A parsed blob is labelled as HEAD's index labels the same bytes, s
 cleanly (a fragment, a file mid-edit) can lose a definition or show a false one exactly as HEAD's index would.
 MCP `whereis` takes no `detail` argument, so there the guard's `next=` names the CLI flag. Its description keeps its 701
 characters, the sentence calling a branch row's label lexical replaced by the parser one, and the
-`tools/list` manifest shrinks 46,930 → 46,925 B (the dropped em dash is six bytes of JSON). Gates: `test/crossrefcheck.sh` (5b–5e),
+`tools/list` manifest shrinks by 5 B, to 47,109 B on this release's tree (the dropped em dash is six bytes of JSON; every
+other tool is unchanged). Gates: `test/crossrefcheck.sh` (5b–5e),
 `test/selectorhonestycheck.sh` (§A7), `test/pagingsweepcheck.sh`.
 
 ### Changed — a call bound by name alone keeps its rows, marked `via="name"`; typed receivers resolve
@@ -2540,10 +2541,10 @@ handle is a CLI argv now, and it walks the same list. Every accepted ranking fla
 (the CLI's `--no-route`, `--no-mention-boost`, `--no-doc-mention`, `--cochange-boost`; the twins'
 `no_route`) rides `next=`, so a pasted continuation re-ranks identically — the
 `test/pagingsweepcheck.sh` walk arms pin all five surfaces to `has_more="0"` with identical row
-sequences and pin each flag's echo. The `tools/list` manifest grows 46,930 → 47,114 B (measured
-against train 25's `main`; descriptions identical, and the +184 B of schema is `explore`'s
-`limit`/`offset` alone — `for` already declared the pair, `pack_task` is a dispatch alias, not a
-listed tool), and the ceiling moves 46,950 → 47,150 B
+sequences and pin each flag's echo. The `tools/list` manifest grows 46,930 → 47,109 B (measured
+on this release's tree: the +184 B of schema is `explore`'s `limit`/`offset` alone — `for` already
+declared the pair, `pack_task` is a dispatch alias, not a listed tool — and `whereis`'s description
+is 5 B shorter, the parser-label entry above), and the ceiling moves 46,950 → 47,150 B
 - the one sanctioned case that moves it: `explore`'s two declared schema properties
 (`test/mcpmanifestcheck.sh` arm `(1b)` asserts the figure against a live measurement).
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)

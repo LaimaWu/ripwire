@@ -323,6 +323,9 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 # RE-MEASURED 2026-10-10 (lane whereis-defs-fix fix round 2), CEILING UNMOVED: 46,930 -> 46,925 B. whereis's description says
 # what labels another ref's row now (a parser, not a lexical heuristic) in the same 701 characters — (1c) holds — and the
 # sentence it replaced carried an em dash, six bytes as JSON. Every other tool unchanged. Headroom after this line: 25 B.
+# RE-MEASURED 2026-10-10 (train 26c, whereis-defs-fix merged onto the 47,114 B tree), CEILING UNMOVED: 47,114 -> 47,109 B. Per-tool
+# JSON bytes, the train binary before the merge vs the merged one: whereis 1,689 -> 1,684 (the lane's -5), every other tool
+# identical. Headroom after this line: 41 B.
 CEILING = 47150
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )
