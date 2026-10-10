@@ -51,16 +51,18 @@ void computeDirModules( const rw::IngestResult& ing, std::vector<std::uint32_t>&
 }
 
 // --report "## God files": the files a change ripples through most (afferent = files that include/import/source
-// each one). A file in the built-in TEST layer (builtinLayer == "test": test/, tests/, bench/ — e.g. the shell
-// library every gate `source`s) has only test dependents, so ranking it above src/ headers named a test helper
-// as the codebase's god file. Such files are counted on one layer=test line under the list, never dropped; the
-// header's "of M" counts the ranked (non-test-layer) files. With no depended-on test-layer file the section is
+// each one). A file in serialize.h's testLayerGroup — built-in TEST layer by dir name (test/, tests/, bench/) AND
+// every dependent a test path (isTestPath), both by path — is a test helper (e.g. the shell library every gate
+// `source`s); ranking it above src/ headers named a test helper as the codebase's god file. Such files are counted
+// on one layer=test line under the list, never dropped; the header's "of M" counts the ranked files. A test-dir
+// file with any production dependent stays ranked. With no depended-on test-layer file the section is
 // byte-identical to the single ranking it replaces. Language-neutral: the split is by path layer, not by the
 // directive (#include, import, require, source) that made the edge.
-void emitReportGodFiles( const rw::IngestResult& ing, const std::vector<std::uint32_t>& afferent, bool singleRoot,
-                         std::string_view rootPrefix )
+void emitReportGodFiles( const rw::IngestResult& ing, const std::vector<std::uint32_t>& afferent,
+                         const std::vector<std::uint8_t>& testGroup, bool singleRoot, std::string_view rootPrefix )
 {
     EXPECTS( afferent.size() == ing.files.size(), "afferent is indexed by file id" );
+    EXPECTS( testGroup.size() == ing.files.size(), "testGroup is indexed by file id" );
     std::vector<std::uint32_t> ranked, testLayer;
     for( std::uint32_t f = 0; f < std::uint32_t( afferent.size() ); ++f )
     {
@@ -68,7 +70,7 @@ void emitReportGodFiles( const rw::IngestResult& ing, const std::vector<std::uin
         {
             continue;
         }
-        ( std::string_view( rw::builtinLayer( rw::rootRelPath( ing, f ) ) ) == "test" ? testLayer : ranked ).push_back( f );
+        ( testGroup[f] ? testLayer : ranked ).push_back( f );
     }
     const auto byAfferent = [ & ]( std::uint32_t a, std::uint32_t b ) { return afferent[a] != afferent[b] ? afferent[a] > afferent[b] : a < b; };
     std::sort( ranked.begin(), ranked.end(), byAfferent );
@@ -89,7 +91,7 @@ void emitReportGodFiles( const rw::IngestResult& ing, const std::vector<std::uin
     }
     if( !testLayer.empty() )
     {
-        rw::emitTo( stdout, "- layer=test: {} more depended-on files under a test, tests or bench directory, not ranked above; top `{}` — {} dependents\n",
+        rw::emitTo( stdout, "- layer=test: {} more depended-on files under a test directory whose dependents are all test paths, by path, not ranked above; top `{}` — {} dependents\n",
                      testLayer.size(), relPath( testLayer[0] ), afferent[testLayer[0]] );
     }
 }
@@ -3286,8 +3288,8 @@ std::optional<int> runStructureText( const MainDispatch& d )
         // situ.h's kTestGateLegend and flipimpact.h's writeFlipHeader). Each legend was locally honest,
         // which is precisely why a reader comparing two of the numbers is misled.
         rw::emitTo( stdout, "<!-- ripwire seams: cross-directory call edges NO test reaches (untested integration seams; a fact, not a mandate). module = parent dir; seam = caller-dir -> callee-dir, spelled from= and to=. Each seam pages its own edge rows with shown=/capped=; an edge names caller= at site p= calling callee= at site cp=. UNIT: untested= here counts cross-directory call EDGES. The test gate verb spells untested= over impacted SYMBOLS and the flip verb over the defs a gate lights, so the three numbers count three different things and must never be compared or summed across verbs. raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it). {}{}{}{}-->{}",
-                     rw::modScopeLegend( stHasModScope ),
-                     docLinks > 0 ? "doc_links=N: cross-directory links between two document sections (headings, data keys), left out of bridges= and untested= because no test exercises a document link. " : "",   // #60: exactly when a <edge caller="<file-scope>"> row is
+                     rw::modScopeLegend( stHasModScope ),   // #60: exactly when a <edge caller="<file-scope>"> row is
+                     docLinks > 0 ? "doc_links=N: cross-directory links between two document sections (headings, data keys), left out of bridges= and untested= because no test exercises a document link. " : "",
                      rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str(), rw::rootRelPathsLegend( stSingleRoot ) );
         // P2.1: two nested caps, neither previously marked — at most 20 seam PAIRS, and at most 5 example
         // EDGES inside each. Each <seam> gains shown= alongside its true untested= count.
@@ -3547,7 +3549,7 @@ std::optional<int> runStructureText( const MainDispatch& d )
             rw::emitTo( stdout, "- **{}** — {} symbols\n", presentation.label[c].c_str(), std::size_t( members[c].size() ) );
         }
 
-        emitReportGodFiles( ing, afferent, stSingleRoot, stRootPrefix );
+        emitReportGodFiles( ing, afferent, rw::testLayerGroup( ing, adj ), stSingleRoot, stRootPrefix );
 
         const std::size_t reportCycles = std::min<std::size_t>( cycles.size(), 6 );
         // #220 part 1: while in-repo TS/JS imports drew no edge, the total is measured over the resolved edges only — NOT a

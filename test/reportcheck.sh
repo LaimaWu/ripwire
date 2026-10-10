@@ -22,6 +22,7 @@
 #   - determinism
 #   - 7/9: a depended-on test-layer file (test/lib/helper.sh) is counted on a layer=test line, not ranked as the
 #     god file, and its --deps godfiles row says layer="test"; 8: --seams leaves README -> docs/ links out (doc_links=)
+#   - 10: a file under test/ with a PRODUCTION dependent is not a test helper: it stays ranked, no layer="test"
 #
 # Usage:  RIPWIRE_BIN=build/ripwire bash test/reportcheck.sh   |   RIPWIRE_BIN=asan/ripwire bash …
 # Exits non-zero on any failure. Does NOT edit regression.sh.
@@ -109,7 +110,7 @@ else
         '- `src/core.h` — 3 dependents') ok "7a: the first god file is the source header src/core.h, not the test helper" ;;
         *) no "7a: first god-file row is '$FIRST' (want src/core.h — 3 dependents)" ;;
     esac
-    printf '%s\n' "$GOD" | grep -qxF -- '- layer=test: 1 more depended-on files under a test, tests or bench directory, not ranked above; top `test/lib/helper.sh` — 4 dependents' \
+    printf '%s\n' "$GOD" | grep -qxF -- '- layer=test: 1 more depended-on files under a test directory whose dependents are all test paths, by path, not ranked above; top `test/lib/helper.sh` — 4 dependents' \
         && ok "7b: the test helper is counted on the layer=test line (4 dependents), not dropped" \
         || no "7b: no layer=test line naming test/lib/helper.sh with 4 dependents: $GOD"
     printf '%s\n' "$GOD" | grep -qxF -- '- `testing/tool.sh` — 2 dependents' \
@@ -183,6 +184,55 @@ elif printf '%s' "$RFULL" | grep -q "a godfiles row's layer="; then
     no "9d: the layer= reading rides on a corpus with no layered godfiles row"
 else
     ok "9d: no layer= reading without a layered godfiles row"
+fi
+
+# ── 10) near miss for 7/9: under test/, but depended on by production code (fix round 1) ───────────────────
+# The layer=test group needs EVERY dependent to be a test path (isTestPath), not only the file's own dir.
+# src/p1..p4.cpp include ../test/lib/hooks.h (4 production dependents) → ranked first, no layer="test";
+# test/lib/mixed.h is included by test/t1.cpp, test/t2.cpp AND src/q.cpp (one production dependent) → ranked;
+# app/a.cpp includes src/core.h. Nothing here is test-only, so no layer=test line and no layer= legend.
+X="$TMP/claim"; mkdir -p "$X/src" "$X/app" "$X/test/lib"
+printf '#pragma once\ninline int core(){ return 2; }\n'            > "$X/src/core.h"
+printf '#include "../src/core.h"\nint a(){ return core(); }\n'      > "$X/app/a.cpp"
+printf '#pragma once\ninline int hook(){ return 1; }\n'            > "$X/test/lib/hooks.h"
+for n in 1 2 3 4; do printf '#include "../test/lib/hooks.h"\nint prod%s(){ return hook(); }\n' "$n" > "$X/src/p$n.cpp"; done
+printf '#pragma once\ninline int mixed(){ return 3; }\n'           > "$X/test/lib/mixed.h"
+for n in 1 2; do printf '#include "lib/mixed.h"\nint t%s(){ return mixed(); }\n' "$n" > "$X/test/t$n.cpp"; done
+printf '#include "../test/lib/mixed.h"\nint q(){ return mixed(); }\n' > "$X/src/q.cpp"
+XREP="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$X" --report --no-cache 2>/dev/null )"; xrc=$?
+XGOD="$( printf '%s\n' "$XREP" | sed -n '/^## God files/,/^$/p' )"
+if [ "$xrc" != 0 ] || [ -z "$XGOD" ]; then
+    no "10: --report on the near-miss fixture failed (rc=$xrc) or printed no God files section"
+else
+    case "$( printf '%s\n' "$XGOD" | sed -n 2p )" in
+        '- `test/lib/hooks.h` — 4 dependents') ok "10a: a test/ file with 4 production dependents stays ranked first" ;;
+        *) no "10a: test/lib/hooks.h (4 production dependents) is not the first ranked row: $XGOD" ;;
+    esac
+    printf '%s\n' "$XGOD" | grep -qxF -- '- `test/lib/mixed.h` — 3 dependents' \
+        && ok "10b: one production dependent among test dependents keeps test/lib/mixed.h ranked" \
+        || no "10b: test/lib/mixed.h (1 production + 2 test dependents) missing from the ranked rows: $XGOD"
+    if printf '%s\n' "$XGOD" | grep -q '^- layer=test'; then
+        no "10c: a layer=test line appeared though no file has test dependents only: $XGOD"
+    else
+        printf '%s\n' "$XGOD" | grep -q 'showing 3 of 3' \
+            && ok "10c: no layer=test line; all 3 depended-on files are ranked (showing 3 of 3)" \
+            || no "10c: header does not count all 3 ranked files: $XGOD"
+    fi
+fi
+XFULL="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$X" --deps --legend=full --no-cache 2>/dev/null )"; xdrc=$?
+XGF="$( printf '%s' "$XFULL" | grep -o '<godfiles [^>]*>.*</godfiles>' )"
+if [ "$xdrc" != 0 ] || [ -z "$XGF" ]; then
+    no "10d: --deps --legend=full on the near-miss fixture failed (rc=$xdrc) or printed no <godfiles>"
+else
+    printf '%s' "$XGF" | grep -q '<f p="test/lib/hooks.h" afferent="4"/>' \
+        && printf '%s' "$XGF" | grep -q '<f p="test/lib/mixed.h" afferent="3"/>' \
+        && ok "10d: neither test/ file with a production dependent carries layer=\"test\"" \
+        || no "10d: a test/ file with a production dependent is labelled (or missing): $XGF"
+    if printf '%s' "$XFULL" | grep -qE "godfiles row's layer=|test dependents only"; then
+        no "10e: the full legend reads layer= / a test-dependents claim with no layered godfiles row"
+    else
+        ok "10e: no layer= reading and no test-dependents claim without a layer=test row"
+    fi
 fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

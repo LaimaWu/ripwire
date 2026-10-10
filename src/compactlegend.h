@@ -810,7 +810,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "violations", "violations=N: edges into a file more unstable by over 0.05 (Martin I); only the worst 12 are listed", true, "stabledeps", MapHeaderRead::No, {}, "deps" },
     { "from", "from=: the including file of a stable-deps violation; it depends on the more unstable to=", true, "v", MapHeaderRead::No, {}, "deps" },
     { "gap", "gap=: instab of to= minus instab of from=, project includes only; worst first", true, "v", MapHeaderRead::No, {}, "deps" },
-    { "layer", "godfiles f layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=; absent if none. A layer=test file has test dependents only", true, "f", MapHeaderRead::No, {}, "deps" },
+    { "layer", "godfiles f layer=: built-in arch layer (game|infra|render|math|audio|ai|test) from a dir name in p=; absent if none. layer=test only for a file under a test directory whose dependents are all test paths, by path", true, "f", MapHeaderRead::No, {}, "deps" },
     // doc-drift: src/docdrift.h (root emitted near kDocDriftLegend, <doc-drift docs= clean= ... corpus=>)
     { "docs", "docs=N: markdown docs scanned for anchors; docs minus clean = the doc rows", false, "doc-drift", MapHeaderRead::No, {}, "doc-drift" },
     { "clean", "clean=N: docs with no failed anchor (drift and dated 0); not proof every anchor was checked", false, "doc-drift", MapHeaderRead::No, {}, "doc-drift" },

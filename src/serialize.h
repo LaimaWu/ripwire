@@ -8690,6 +8690,45 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
 // --deps: the file→file physical dependency view. Files ranked by include count (heaviest first =
 // the "pulls in 100 headers to do something simple" detector); each lists its #include/import
 // targets. Descriptive — names the number so the agent can choose a lighter path.
+// --report / --deps godfiles: the layer=test group. A file joins it only when its built-in layer is "test" (a
+// directory name: test/, tests/, bench/) AND every file that depends on it is a test path (isTestPath) — both
+// by path, nothing is parsed. A production file under test/ (src/*.cpp includes ../test/lib/hooks.h) therefore
+// stays ranked. `adj` is the same file→file graph the afferent counts come from; the result is indexed by file id.
+inline std::vector<std::uint8_t> testLayerGroup( const IngestResult& ing, const std::vector<std::vector<std::uint32_t>>& adj )
+{
+    const std::uint32_t       F = std::uint32_t( ing.files.size() );
+    std::vector<std::uint8_t> prodDependent( F, 0 );
+    for( std::uint32_t a = 0; a < std::uint32_t( adj.size() ) && a < F; ++a )
+    {
+        if( isTestPath( rootRelPath( ing, a ) ) )
+        {
+            continue;
+        }
+        for( std::uint32_t b : adj[a] )
+        {
+            if( b < F )
+            {
+                prodDependent[b] = 1;
+            }
+        }
+    }
+    std::vector<std::uint8_t> group( F, 0 );
+    for( std::uint32_t f = 0; f < F; ++f )
+    {
+        group[f] = !prodDependent[f] && std::string_view( builtinLayer( rootRelPath( ing, f ) ) ) == "test";
+    }
+    ENSURES( group.size() == ing.files.size(), "indexed by file id" );
+    return group;
+}
+
+// --deps godfiles row layer=: the built-in arch layer from a dir name, except that "test" is spelled only for a
+// file in the testLayerGroup (every dependent a test path); a test-dir file with a production dependent has none.
+inline const char* godfileLayer( const IngestResult& ing, std::uint32_t f, const std::vector<std::uint8_t>& testGroup ) noexcept
+{
+    const char* fl = builtinLayer( rootRelPath( ing, f ) );
+    return std::string_view( fl ) == "test" && !( f < testGroup.size() && testGroup[f] ) ? "" : fl;
+}
+
 // --deps <godfiles>: the most depended-on files (afferent > 0), most first with a path tie-break, at most 12;
 // `total` receives how many files have any dependent (the listing's total=).
 inline std::vector<std::uint32_t> depsGodfileRows( const IngestResult& ing, const std::vector<std::uint32_t>& afferent, std::size_t& total )
@@ -8789,11 +8828,12 @@ inline void packDeps( std::FILE* out, const IngestResult& ing, int topN,
     // present-only: the layer= reading rides exactly when a shown godfiles row carries layer=
     std::size_t                      godTotal   = 0;
     const std::vector<std::uint32_t> godRows    = depsGodfileRows( ing, afferent, godTotal );
+    const std::vector<std::uint8_t>  testGroup  = testLayerGroup( ing, adj );
     const bool                       godLayered = std::any_of( godRows.begin(), godRows.end(),
-                                                               [ & ]( std::uint32_t f ) { return *builtinLayer( rootRelPath( ing, f ) ) != '\0'; } );
+                                                               [ & ]( std::uint32_t f ) { return *godfileLayer( ing, f, testGroup ) != '\0'; } );
     if( godLayered )
     {
-        w.write( "a godfiles row's layer= is its built-in arch layer from a dir name (absent if none); a layer=test file has test dependents only. " );
+        w.write( "a godfiles row's layer= is its built-in arch layer from a dir name (absent if none); layer=test only for a file under a test directory whose dependents are all test paths, by path. " );
     }
     w.write( rw::depsImportsUnresolvedLegend( tsImports.unresolved > 0 ) );   // #220: exactly when the root carries the pair
     w.write( rw::depsTsImportExtrasLegend( tsImports.dts, tsImports.unread ) );
@@ -8855,8 +8895,8 @@ inline void packDeps( std::FILE* out, const IngestResult& ing, int topN,
                 char gb[ 48 ];  rw::formatTo( gb, sizeof( gb ), "\" afferent=\"{}\"", afferent[ godRows[i] ] );
                 w.write( "<f p=\"" );  w.write( escapeXml( pathRel( godRows[i] ), esc ) );  w.write( gb );
                 // the built-in layer (P3), present-only and AFTER afferent= so the row's existing prefix is unchanged:
-                // a layer=test row is a test helper with test dependents only
-                if( const char* fl = builtinLayer( rootRelPath( ing, godRows[i] ) ); *fl ) { w.write( " layer=\"" );  w.write( fl );  w.write( "\"" ); }
+                // layer=test only for a file in testLayerGroup (every dependent a test path, by path)
+                if( const char* fl = godfileLayer( ing, godRows[i], testGroup ); *fl ) { w.write( " layer=\"" );  w.write( fl );  w.write( "\"" ); }
                 w.write( "/>" );
             }
             w.write( "</godfiles>" );
