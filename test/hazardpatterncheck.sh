@@ -487,6 +487,7 @@ REGA
 cat > "$TMP/reg_b1.tsv" <<'REGB1'
 infra/emit.h	emitTo	silent	1	not an answer path: std::print's failed write is made silent to keep fputs's contract, which the header documents
 ingest_astquery.h	astQueryGrouped	silent	1	FINDING: a file whose query walk throws drops out of --match/--lint hits with no disclosure in any build; file held by the regexguard and crash-fixes lanes
+ingest_astquery.h	definitionLinesWorker	alert-only	1	records in every build: the handler is the sink form DISCLOSE( ( BlobDefsSlot{ slot } ), WorkerThrew, … ), whose disclose() clears that blob's lines and marks it Failed, so the blob confirms no definition (its rows read kind="text"); the parenthesized sink is what the RECORDS pattern does not see
 ingest_astquery.h	spanTiersOfFiles	alert-only	1	FINDING (disclosure lane): a tier worker that throws leaves its files unclassified for --grep-in, silent in Release
 ingest_docpass.h	runDocPostPass	alert-only	1	FINDING (disclosure lane): a doc post-pass throw skips that document, silent in Release
 mcpindex.h	maybePrefetchHeadSnapshot	silent	1	not an answer path: optional background prefetch of the HEAD snapshot; a request recomputes whatever it did not fill (§2b rule 3)
@@ -497,6 +498,8 @@ infra/dynamic_map.hpp	at	1	vendored container API; no ripwire call site reaches 
 regexguard.h	throwIfMatchFaultInjected	1	the RIPWIRE_FAULT_REGEX_MATCH fault switch, off unless the variable is set; its three call sites are the first statement inside GuardedRegex's search, search and forEachMatch try blocks, which catch std::regex_error by type and return Exhausted
 REGB2
 cat > "$TMP/reg_c.tsv" <<'REGC'
+crossref.h	listTreeRows	.at	2	readTreeLevels returns its table only when every level was served whole by catFileBatch and every child tree id was queued unless already read, so the root tree and each subtree id it walks are keys
+crossref.h	listTreesOfRefs	.at	1	rootTreesOf returns its map only when catFileBatch served every distinct tip (an answer for another object fails the read) and each served tip is assigned its tree, so every ref's tip is a key
 infra/dynamic_map.hpp	at	.at	1	the non-const at forwards to the const at of the same container; no ripwire caller
 ingest_astquery.h	nearestNodeKindHint	.at	1	the key was just read out of this same map by nearestNameByEditDistance, so it is present
 REGC
@@ -522,6 +525,7 @@ ingest_astquery.h	collectGatedLocalNames	ts_parser_new	1	deleted before each of 
 ingest_astquery.h	collectGatedLocalNames	ts_parser_parse_string	1	deleted before the final return
 ingest_astquery.h	compileGrammarQueries	ts_query_new	2	moved into GrammarQueries (or deleted when the combined query does not add up); astQueryGrouped deletes every one by hand after the pass
 ingest_astquery.h	computeGrammarDisclosure	ts_query_new	1	a compile probe, deleted inside the same if
+ingest_astquery.h	definitionLinesWorker	ts_query_cursor_new	1	deleted on both exits of the noexcept worker: the no-parser return (when non-null) and after the claim loop, whose one throwing call sits inside try/catch
 ingest_astquery.h	spanTiersOfFiles	ts_parser_parse_string	1	the tree is deleted right after the walk
 ingest_crawl.h	compileQueryStandalone	ts_query_new	1	returned into the process-lifetime CompiledQueryCache, whose destructor deletes every query
 ingest_parsepool.h	runParseWorker	ts_query_cursor_new	1	deleted at the end of the worker; the returns in between belong to lambdas
