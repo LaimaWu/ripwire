@@ -2112,7 +2112,7 @@ inline bool isCjsExportTarget( TSNode nameNode, std::string_view src ) noexcept;
 inline bool isPrototypeMemberTarget( TSNode nameNode, std::string_view src ) noexcept;
 inline bool isPyEnumMemberTarget( TSNode nameNode, std::string_view src ) noexcept;
 inline TSNode jsClassFactoryReceiver( TSNode nameNode, std::string_view src ) noexcept;
-inline bool   jsClassFactoryMakesClass( TSNode nameNode, std::string_view src, int depth = 0 ) noexcept;
+inline bool   jsClassFactoryMakesClass( TSNode nameNode, std::string_view src, int depth = 0 );   // allocates (the scope index)
 
 // The @definition.constant drop decision, in its own function for the same reason isCjsExportTarget and
 // isPyEnumMemberTarget have theirs: dropGatedCapture is a dispatcher, and this is the one arm with a
@@ -2220,7 +2220,7 @@ inline bool yamlKeyCaptureDropped( std::string_view name, TSNode roleNode ) noex
 // the LEFT side is not really exports/module.exports/.prototype. — the query captures every `a.b = fn`
 // shape and cannot text-test, because tags-pass predicates never run (see constCaptureNeedsScreamingGate
 // above).
-inline bool dropGatedCapture( std::string_view defCapSv, Lang lang, std::string_view name, TSNode nameNode, TSNode roleNode, std::string_view src ) noexcept
+inline bool dropGatedCapture( std::string_view defCapSv, Lang lang, std::string_view name, TSNode nameNode, TSNode roleNode, std::string_view src )   // NOT noexcept: the class-factory gate's scope lookup allocates
 {
     if( defCapSv == "definition.function" )
     {
@@ -2412,7 +2412,7 @@ inline bool jsFactoryHasClassBody( TSNode nameNode ) noexcept
     return false;
 }
 
-inline bool jsClassFactoryMakesClass( TSNode nameNode, std::string_view src, int depth ) noexcept
+inline bool jsClassFactoryMakesClass( TSNode nameNode, std::string_view src, int depth )
 {
     const TSNode recv = jsClassFactoryReceiver( nameNode, src );
     if( ts_node_is_null( recv ) || depth >= kFactoryChainCap )

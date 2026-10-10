@@ -196,8 +196,131 @@ struct BaseScopeHit
     bool   cut       = false;
 };
 
-inline BaseScopeHit lookupInScope( TSNode scope, std::string_view name, bool scopeOwner, TSNode self, std::string_view src ) noexcept
+// One scope's declarations, by name, in statement order — built ONCE per scope node per file (BaseScopeIndex), so the base
+// lookup of every class in a 16 000-class module reads a table instead of rescanning the module (quadratic: the scale
+// probe in the lane report measured 0.3 s → 12 s on 8 000 chained classes before the index). `kind` None = a JS/TS
+// declarator whose value is a class expression or a call (a factory the M2 gate decides).
+struct BaseScopeEntry
 {
+    TSNode        stmt{};
+    TSNode        decl{};
+    TSNode        name{};
+    BaseScopeKind kind = BaseScopeKind::None;
+};
+
+struct BaseScopeTable
+{
+    HashMap<std::string_view, std::vector<BaseScopeEntry>> byName;
+};
+
+// the per-FILE memo: scope node id → its table. Lives in captureTagsFacts' frame (BaseScopeIndexGuard), so every key and
+// every string_view it holds points into the one tree and source being read, and nothing outlives them.
+struct BaseScopeIndex
+{
+    HashMap<const void*, BaseScopeTable> tables;
+
+    const BaseScopeTable& tableFor( TSNode scope, std::string_view src )
+    {
+        const auto [ it, fresh ] = tables.try_emplace( scope.id );
+        if( fresh )
+        {
+            fill( it->second, scope, src );
+        }
+        return it->second;
+    }
+
+private:
+    static void fill( BaseScopeTable& table, TSNode scope, std::string_view src )
+    {
+        ChildCursor cursor( scope );
+        forEachNamedChild( scope, cursor.cur, [ & ]( TSNode stmt )
+        {
+            const TSNode d = baseDeclOf( stmt );
+            const char*  t = ts_node_is_null( d ) ? "" : ts_node_type( d );
+            const BaseScopeKind kind = baseScopeKindOf( t );
+            if( kind != BaseScopeKind::None )
+            {
+                const bool   forward = ( kindIs( t, "class_specifier" ) || kindIs( t, "struct_specifier" ) ) && ts_node_is_null( fieldChild( d, NodeField::Body ) );
+                const TSNode nm      = fieldChild( d, NodeField::Name );
+                if( !forward && !ts_node_is_null( nm ) )
+                {
+                    table.byName[ nodeTextOf( nm, src ) ].push_back( BaseScopeEntry{ stmt, d, nm, kind } );
+                }
+            }
+            else if( kindIs( t, "lexical_declaration" ) || kindIs( t, "variable_declaration" ) )
+            {
+                addJsDeclarators( table, stmt, d, src );
+            }
+            return true;
+        } );
+    }
+    static void addJsDeclarators( BaseScopeTable& table, TSNode stmt, TSNode d, std::string_view src )
+    {
+        ChildCursor cursor( d );
+        forEachNamedChild( d, cursor.cur, [ & ]( TSNode decl )
+        {
+            const TSNode nm  = fieldChild( decl, NodeField::Name );
+            const TSNode val = fieldChild( decl, NodeField::Value );
+            if( kindIs( ts_node_type( decl ), "variable_declarator" ) && !ts_node_is_null( nm ) && !ts_node_is_null( val )
+                && ( kindIs( ts_node_type( val ), "class" ) || kindIs( ts_node_type( val ), "call_expression" ) ) )
+            {
+                table.byName[ nodeTextOf( nm, src ) ].push_back( BaseScopeEntry{ stmt, d, nm, BaseScopeKind::None } );
+            }
+            return true;
+        } );
+    }
+};
+
+// the index captureTagsFacts arms for the file it is reading (null outside it: lookupInScope then scans, capped)
+inline thread_local BaseScopeIndex* tBaseScopeIndex = nullptr;
+
+struct BaseScopeIndexGuard
+{
+    BaseScopeIndex  index;
+    BaseScopeIndex* previous;
+    BaseScopeIndexGuard() noexcept : previous( tBaseScopeIndex ) { tBaseScopeIndex = &index; }
+    ~BaseScopeIndexGuard() { tBaseScopeIndex = previous; }
+    BaseScopeIndexGuard( const BaseScopeIndexGuard& ) = delete;
+    BaseScopeIndexGuard& operator=( const BaseScopeIndexGuard& ) = delete;
+};
+
+// lookupInScope through the file's index: the same answer, read off the table (statement order kept)
+inline BaseScopeHit lookupInScopeIndexed( BaseScopeIndex& index, TSNode scope, std::string_view name, bool scopeOwner, TSNode self, std::string_view src )
+{
+    BaseScopeHit         hit;
+    const BaseScopeTable& table = index.tableFor( scope, src );
+    const auto           it    = table.byName.find( name );
+    if( it == table.byName.end() )
+    {
+        return hit;
+    }
+    for( const BaseScopeEntry& e : it->second )
+    {
+        const bool ns = e.kind == BaseScopeKind::Namespace;
+        if( ts_node_eq( e.decl, self ) || ts_node_eq( e.stmt, self ) || ( ns && !scopeOwner ) || ( e.kind == BaseScopeKind::None && scopeOwner ) )
+        {
+            continue;
+        }
+        if( !ts_node_is_null( hit.name ) && !( scopeOwner && ns ) )
+        {
+            hit.ambiguous = true;   // a namespace reopened in one scope is ONE scope (handled by the caller); a class twice is two
+            break;
+        }
+        if( ts_node_is_null( hit.name ) )
+        {
+            hit.decl = e.decl;
+            hit.name = e.name;
+        }
+    }
+    return hit;
+}
+
+inline BaseScopeHit lookupInScope( TSNode scope, std::string_view name, bool scopeOwner, TSNode self, std::string_view src )   // allocates (the file's scope index)
+{
+    if( tBaseScopeIndex != nullptr )
+    {
+        return lookupInScopeIndexed( *tBaseScopeIndex, scope, name, scopeOwner, self, src );
+    }
     BaseScopeHit  hit;
     std::uint32_t seen = 0;
     ChildCursor   cursor( scope );
@@ -265,7 +388,7 @@ inline TSNode scopeBodyOf( TSNode owner ) noexcept
 // `name` in the OTHER blocks of the namespace `ns` (a node of kind `nsKind`) opens beside itself in its enclosing scope:
 // `namespace a { … } namespace a { struct T : Mid {} }` (C++, C#'s `namespace A { }`, TS's `namespace a { }`; a PHP
 // `namespace A;` statement has no block). Two answers, a cut or an ambiguous block set the hit's flags.
-inline BaseScopeHit lookupInReopenedNamespace( TSNode ns, std::string_view name, bool scopeOwner, TSNode self, std::string_view src ) noexcept
+inline BaseScopeHit lookupInReopenedNamespace( TSNode ns, std::string_view name, bool scopeOwner, TSNode self, std::string_view src )   // allocates (the file's scope index)
 {
     BaseScopeHit hit;
     const TSNode nsName = fieldChild( ns, NodeField::Name );
@@ -303,7 +426,7 @@ inline BaseScopeHit lookupInReopenedNamespace( TSNode ns, std::string_view name,
 // innermost first, the way the language's lexical lookup reads them, a reopened namespace as one scope
 // (lookupInReopenedNamespace). `scopeOwner`: the name is a qualifier segment, so a namespace answers too. A cut or
 // ambiguous scope stops the walk with its flag set.
-inline BaseScopeHit findOutward( TSNode site, TSNode self, std::string_view name, bool scopeOwner, std::string_view src ) noexcept
+inline BaseScopeHit findOutward( TSNode site, TSNode self, std::string_view name, bool scopeOwner, std::string_view src )   // allocates (the file's scope index)
 {
     for( TSNode p = ts_node_parent( site ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
     {
@@ -334,7 +457,7 @@ inline TSNode rootOf( TSNode n ) noexcept
 // the FIRST segment through findOutward (only the global scope for an `absolute` `::X`), each further segment inside the
 // body the previous one named.
 inline std::uint32_t localBaseBinding( TSNode site, TSNode self, const std::vector<std::string_view>& segs, bool absolute,
-                                       std::string_view src ) noexcept
+                                       std::string_view src )   // allocates (the file's scope index)
 {
     if( segs.empty() )
     {

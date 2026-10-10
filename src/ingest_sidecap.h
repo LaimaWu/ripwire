@@ -1739,6 +1739,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
         return;
     }
 
+    BaseScopeIndexGuard baseScopes;   // lane lego-transitive fix 1 (mutable: lookups fill it): this file's base-lookup scope tables (ingest_relations.h)
     TSQuery* query = compiledQueryFor( le );   // shared immutable query, compiled once per grammar (pre-warmed) — do NOT delete
     if( query == nullptr )
     {
