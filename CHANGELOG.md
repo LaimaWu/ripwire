@@ -38,7 +38,7 @@ names (a small-vector's `push_back`, a path wrapper's `c_str`, every `empty` and
   in-tree class with its own `operator->` or a class the tree does not define (a Qt or boost pointer), or a `->` through
   a `typedef` / `using` alias of a standard smart pointer or optional (`typedef std::shared_ptr<ns::List> ListSP; ListSP
   p; p->size()` — the alias record keeps no template argument, so `typedef std::unique_ptr<std::string> StrUP` keeps its
-  hedge too) — each keeps its hedge. `std::unique_ptr<std::string> p; p->size()`, `std::vector<ns::List> v; v.size()`
+  hedge too) or of one of those wrapper classes (`using QP = QSharedPointer<ns::List>`) — each keeps its hedge. `std::unique_ptr<std::string> p; p->size()`, `std::vector<ns::List> v; v.size()`
   (the container's own member) and `IntVec* p; p->size()` through an alias of `std::vector<int>` are declined.
 - The stated floor — declined even where the object is an in-tree class, because the index records no written type for
   the receiver: a call result (`h.list().size()`, `v.front().size()`, `makeList().size()`), an iterator (`auto it =
