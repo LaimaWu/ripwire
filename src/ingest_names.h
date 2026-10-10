@@ -2429,7 +2429,7 @@ inline bool jsClassFactoryMakesClass( TSNode nameNode, std::string_view src, int
     }
     const TSNode declarator = ts_node_parent( nameNode );   // jsClassFactoryReceiver proved it a variable_declarator
     const TSNode statement  = ts_node_parent( declarator );
-    const BaseScopeHit hit  = findOutward( recv, statement, nodeTextOf( recv, src ), /*scopeOwner=*/false, /*absolute=*/false, src );
+    const BaseScopeHit hit  = findOutward( recv, statement, nodeTextOf( recv, src ), /*scopeOwner=*/false, src );
     if( hit.cut || hit.ambiguous || ts_node_is_null( hit.decl ) )
     {
         return false;
