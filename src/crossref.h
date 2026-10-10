@@ -112,6 +112,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>   // the worktree overlay: symlink_status / read_symlink / file_size on a changed path
+#include <format>       // blobsUnreadCause — the one refusal sentence
 #include <functional>
 #include <optional>
 #include <string>
@@ -716,8 +717,9 @@ inline constexpr std::string_view kStrayBlobs   = "the branches' blobs";
 inline constexpr std::string_view kWhereisBlobs = "the trees' blobs";
 inline std::string blobsUnreadCause( std::string_view blobs )
 {
-    return "could not read " + std::string( blobs ) + " (the one `git cat-file --batch` did not start or stopped early; its sha list is written under "
-         + quality::cacheDirLadder() + " - is TMPDIR a writable directory?)";
+    return std::format( "could not read {} (the one `git cat-file --batch` did not start or stopped early; its sha list is written under {} - is TMPDIR "
+                        "a writable directory?)",
+                        blobs, quality::cacheDirLadder() );
 }
 
 // ── git plumbing (read-only) ─────────────────────────────────────────────────────────────────────────────
