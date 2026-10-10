@@ -2132,9 +2132,11 @@ inline bool isBareWordCodePath( std::string_view p )
 // type the command. Such a literal, or any literal whose code tier is thin (fewer than kGrepLiftCodeFloor hits),
 // serves its string tier WITH the code tier. Identifier-shaped literals with a full code tier keep today's answer.
 // Fix round 1 (rv-lean-trio item 2): the SHAPE is a text heuristic, so it never outvotes the parser — the lift fires only
-// while the literal's classified CODE hits in source code (grepSourceTierHits: PathTier::Source, not shell/YAML/TOML/JSON,
-// not a test or doc) number under kGrepLiftCodeFloor. `self.app`, `c.json`, `DEFAULT_CSS` have ~100 code rows in source and
-// keep them; tmux `split-window` has 2 in .c files (its other code hits are .sh/.conf lines that type it) and still lifts.
+// while the literal's classified CODE hits in program code (grepSourceTierHits: source AND test files; not a doc, not a
+// shell/YAML/TOML/JSON file, where a bare word parses as code although it is a command word typed) number under
+// kGrepLiftCodeFloor. Test files count because a call there is parsed code, a USE a "list every use" question needs:
+// textual `self.app` / `DEFAULT_CSS` (source) and hono `c.json` (~490 code hits, nearly all in tests) keep their code rows;
+// tmux `split-window` has 2 in .c files (its other code hits are .sh lines that type it) and still lifts.
 inline constexpr std::uint32_t kGrepLiftCodeFloor = 8;
 inline constexpr int           kGrepLiftRowCap    = 10;   // a code+string answer's default window (CLI and MCP alike)
 
@@ -2231,9 +2233,11 @@ inline void grepRankLiftedStrings( const IngestResult& ing, std::vector<GrepRawH
     std::stable_sort( raw.begin(), raw.end(), [ & ]( const GrepRawHit& a, const GrepRawHit& b ) { return groupAt( a.fileId ) < groupAt( b.fileId ); } );
 }
 
-// idea #5's precondition, the SAME "source code" grepLiteralLiftsStrings means (review item 3 of that lane): classified
-// hits in a PathTier::Source file that is not a shell/YAML/TOML/JSON file, by tier. A lift needs a string there (strings only
-// in other files never lift) and, fix round 1, fewer than kGrepLiftCodeFloor code hits there. Unclassified hits never vote.
+// idea #5's two votes, over CLASSIFIED hits only (an unclassified hit never votes). `string`: string-tier hits in the SAME
+// "source code" grepLiteralLiftsStrings means (review item 3 of that lane) — a PathTier::Source file that is not a
+// shell/YAML/TOML/JSON file; a lift needs one (strings only in other files never lift). `code` (fix round 1): code-tier hits
+// in program code — source or test files, neither a doc nor a shell/YAML/TOML/JSON file; a lift needs fewer than
+// kGrepLiftCodeFloor of them.
 struct GrepSourceTierHits
 {
     std::uint32_t code   = 0;
@@ -2245,29 +2249,27 @@ inline GrepSourceTierHits grepSourceTierHits( const IngestResult& ing, const std
     EXPECTS( hitTier.size() == raw.size(), "one tier byte per raw hit" );
     const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( ing, raw, []( const GrepRawHit& r ) { return r.fileId; } );
     GrepSourceTierHits counts;
-    std::uint32_t      lastFile   = UINT32_MAX;
-    bool               lastSource = false;   // one path decision per hit FILE (a file's hits are contiguous)
-    for( std::size_t h = 0; h < raw.size(); ++h )
+    std::uint32_t      lastFile    = UINT32_MAX;
+    bool               lastProgram = false;   // source or test, not a doc nor a bare-word file
+    bool               lastSource  = false;   // ...and not a test either
+    for( std::size_t h = 0; h < raw.size(); ++h )   // one path decision per hit FILE (a file's hits are contiguous)
     {
         const std::uint32_t f = raw[h].fileId;
         if( f != lastFile )
         {
-            lastFile   = f;
-            lastSource = f < tierOfFile.size() && tierOfFile[f] == std::uint8_t( PathTier::Source ) && !isBareWordCodePath( rootRelPath( ing, f ) );
+            lastFile    = f;
+            lastProgram = f < tierOfFile.size() && tierOfFile[f] != std::uint8_t( PathTier::Doc ) && !isBareWordCodePath( rootRelPath( ing, f ) );
+            lastSource  = lastProgram && tierOfFile[f] == std::uint8_t( PathTier::Source );
         }
-        if( !lastSource )
-        {
-            continue;
-        }
-        counts.code   += hitTier[h] == std::uint8_t( SpanTier::Code ) ? 1u : 0u;
-        counts.string += hitTier[h] == std::uint8_t( SpanTier::String ) ? 1u : 0u;
+        counts.code   += lastProgram && hitTier[h] == std::uint8_t( SpanTier::Code ) ? 1u : 0u;
+        counts.string += lastSource && hitTier[h] == std::uint8_t( SpanTier::String ) ? 1u : 0u;
     }
     ENSURES( counts.code + counts.string <= raw.size(), "a source-tier count never exceeds the hits it counts" );
     return counts;
 }
 
 // The span-tier election's code+string arm: either lift — idea #5's (the literal's SHAPE, or a thin code tier, with a
-// source string to serve and fewer than kGrepLiftCodeFloor code hits in source code) or the literal-question lift (grepLiteralLiftsStrings: no code hit in source code). Both need
+// source string to serve and fewer than kGrepLiftCodeFloor code hits in source and test code) or the literal-question lift (grepLiteralLiftsStrings: no code hit in source code). Both need
 // a classified code hit; `literal` is empty for a regex, which only the second lift can serve.
 inline bool grepServesStringsWithCode( const IngestResult& ing, const std::vector<GrepRawHit>& raw, const std::vector<std::uint8_t>& hitTier,
                                        std::uint32_t codeHits, std::uint32_t stringHits, std::string_view literal )
@@ -2280,7 +2282,7 @@ inline bool grepServesStringsWithCode( const IngestResult& ing, const std::vecto
     if( !literal.empty() && stringHits > 0 && ( grepLiteralWantsStrings( literal ) || codeHits < kGrepLiftCodeFloor ) )
     {
         const GrepSourceTierHits src = grepSourceTierHits( ing, raw, hitTier );
-        shapeLift = src.string > 0 && src.code < kGrepLiftCodeFloor;   // fix round 1: a full source code tier keeps its rows
+        shapeLift = src.string > 0 && src.code < kGrepLiftCodeFloor;   // fix round 1: a full code tier keeps its rows
     }
     return shapeLift || grepLiteralLiftsStrings( ing, raw, hitTier );
 }

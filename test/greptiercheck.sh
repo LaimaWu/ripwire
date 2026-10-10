@@ -675,6 +675,27 @@ for lit in self.app DEFAULT_CSS c.json; do
         no "(12m) --grep=$lit lifted beside a full source code tier: tier=$( attr tier "$LF_OUT" ) hits=$( attr hits "$LF_OUT" ) shown=$( attr shown "$LF_OUT" ) suppressed_string=$( attr suppressed_string "$LF_OUT" )"
     fi
 done
+# (12m) the code vote counts TEST files too: a call there is parsed code, a use a "list every use" question needs (hono
+# c.json: ~490 code hits, nearly all in *.test.ts). Two code uses and a string in source plus 12 calls in a test file keep
+# the code answer; the same 12 lines in a shell script are a command typed, not code, and the literal lifts.
+LX="$TMP/testsandbox"
+mkdir -p "$LX/src" "$LX/tests"
+printf 'const note = "reply with r.send";
+export function a(r: any) { return r.send(1); }
+export function b(r: any) { return r.send(2); }
+' >"$LX/src/app.ts"
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do printf 'test("t%s", () => { r.send(%s); });
+' "$i" "$i"; done >"$LX/tests/app.test.ts"
+LX_OUT="$( "$BIN" "$LX" --no-cache --grep=r.send 2>/dev/null )"
+[ -z "$( attr tier "$LX_OUT" )" ] && [ "$( attr shown "$LX_OUT" )" = "14" ] && [ "$( attr suppressed_string "$LX_OUT" )" = "1" ] \
+    && ok "(12m) 2 source + 12 test-file code uses: no lift, all 14 code rows" \
+    || no "(12m) test-file code uses did not hold the lift back: tier=$( attr tier "$LX_OUT" ) shown=$( attr shown "$LX_OUT" )"
+rm "$LX/tests/app.test.ts"; mkdir -p "$LX/scripts"
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do printf 'tool r.send %s\n' "$i" >"$LX/scripts/s$i.sh"; done
+LX_OUT="$( "$BIN" "$LX" --no-cache --grep=r.send 2>/dev/null )"
+[ "$( attr tier "$LX_OUT" )" = "code+string" ] \
+    && ok "(12m) 2 source code uses + 12 script lines: the literal lifts (script lines do not vote)" \
+    || no "(12m) script lines voted against the lift: tier=$( attr tier "$LX_OUT" )"
 # (12n) the boundary, both ways: the count is CODE hits in SOURCE code — lines in shell scripts that type the literal are
 # bare-word code and do not count (tmux split-window: 2 code hits in .c, 85 in .sh, and it lifts; K1). 7 in source plus 9
 # script lines lifts; 8 in source does not.

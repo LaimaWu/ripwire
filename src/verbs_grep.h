@@ -301,7 +301,7 @@ std::string grepTierLegend( const rw::GrepTierReport& tier )
     // so every other tiered answer keeps its bytes.
     const char* const liftClause = tier.servedString == 0 ? ""
         : "A literal no identifier can spell (holding a dash, slash, dot or space) or written in capitals, or one with fewer than 8 "
-          "code hits, also serves strings WITH code while source code holds fewer than 8 of its code hits. On such an answer the rows run: source files whose NAME holds the literal, "
+          "code hits, also serves strings WITH code while source and test files hold fewer than 8 of its code hits. On such an answer the rows run: source files whose NAME holds the literal, "
           "other source code (files with a code hit first), then everything else (shell/YAML/TOML/JSON, tests, docs) in the usual order; string_hits= is how many "
           "of hits= are string-tier, and ref= on a hit whose enclosing definition has no caller edge is the first site outside it "
           "that names it as a whole word in code, never in a comment or string (where a table entry is registered; one site, a floor). ";
