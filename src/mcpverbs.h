@@ -2629,11 +2629,11 @@ inline std::string legoText( const std::string& root, const std::string& type, R
         rw::emitTo( mem, "<ctx>{}{}{}{}{}", kLegoLegend, graphUnindexedLegendComment( rw::graphGaugeClauses( ix.g ) ).c_str(),
                     unprovenDefsVerbComment( UnprovenDefsVerb::Lego, unprovenDefs > 0, "<!-- ripwire lego: " ).c_str(),
                     implementorsFloorLegendComment( ing, ix.g.implementors, focus ),   // count-floor: the CLI twin's clause
-                    legoClosureLegendComment( ix.g.implementors, focus ) );   // lane lego-transitive: the deeper rows' clause, as on the CLI
+                    legoClosureLegendComment( ix.g.implementors, ix.g.implementorBound, focus ).c_str() );   // lane lego-transitive: the deeper rows' clause, as on the CLI
         const std::string legoTargetedAttr = unprovenDefsAttrXml( unprovenDefs ) + graphCountFloorAttrXml( ix.g );   // outlives the call
         packLego( mem, ing, ix.g.implementors, flat, 1, redact, &impure, focus, /*withPaths=*/true,
                   ing.realPaths.empty() ? std::string_view( root ) : std::string_view(),    // R-R: root-relative <iface p=>
-                  LegoTargetedArgs( legoTargetedAttr, page.limit, page.offset ) );   // H1 + M15 + the deeper-row page, as on the CLI
+                  LegoTargetedArgs( legoTargetedAttr, page.limit, page.offset, &ix.g.implementorBound ) );   // H1 + M15 + the deeper-row page, as on the CLI
         rw::emitRaw( mem, "</ctx>" );
     } );
 }

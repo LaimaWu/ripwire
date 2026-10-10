@@ -69,6 +69,9 @@ struct Graph
     std::size_t                scipDocsSeen = 0;   // # SCIP documents consumed (0 unless --scip); honesty summary
     std::size_t                scipEdgesPinned = 0;   // # (from,to) edges the SCIP index pinned; honesty summary
     std::vector<std::vector<NodeId>> implementors;   // base-class id → derived class ids (inheritance/Lego view)
+    // lane lego-transitive fix 1: parallel to implementors — how each base→derived edge was BOUND (BaseBound). The direct rows
+    // and every other reader keep reading implementors alone; only the --lego closure (legoImplementorClosure) walks this.
+    std::vector<std::vector<std::uint8_t>> implementorBound;
     std::vector<std::vector<NodeId>> mentions;       // code symbol id → markdown file-nodes that name it in a `backtick` (doc↔code)
     std::vector<std::uint32_t> ambOut;      // per-symbol: # outgoing calls that STILL resolved to MULTIPLE in-repo
                                             // defs AFTER canonical/narrow/locality resolution (the resolver could
@@ -178,13 +181,24 @@ struct Graph
 };
 
 // One row of an interface's implementor CLOSURE (lane lego-transitive): a type `depth` extends/implements hops below the
-// walk's base, reached FIRST through `via` (the base itself at depth 1).
+// walk's base, reached FIRST through `via` (the base itself at depth 1). `byName` (fix 1): the edge from `via` was bound by
+// the base NAME alone — no import, qualifier or enclosing scope proved which same-named type the clause meant.
 struct ImplementorRow
 {
-    NodeId        id    = kNoNode;
-    NodeId        via   = kNoNode;
-    std::uint32_t depth = 0;
+    NodeId        id     = kNoNode;
+    NodeId        via    = kNoNode;
+    std::uint32_t depth  = 0;
+    bool          byName = false;
 };
+
+// lane lego-transitive fix 1: how an extends/implements edge base→derived was bound (Graph::implementorBound).
+//   Proven — the language's own lookup names THIS base: a same-file declaration the clause's enclosing scopes declare
+//            (ingest_relations.h localBaseBinding), the file an import binds the name (or its qualifier) to, an included
+//            C-family header, the package directory (Java/Kotlin/Go), Ruby's constant scope (RubyBaseScope).
+//   ByName — no such evidence, or it named two candidates: the edge rests on the spelling alone.
+//   Other  — the evidence names a DIFFERENT same-named type: this edge is the name collision, not a subtype.
+// The values order the merge of two references drawing the same edge: the smaller wins (a proven site proves the edge).
+enum class BaseBound : std::uint8_t { Proven = 0, ByName = 1, Other = 2 };
 
 // Breadth-first walk DOWN the implementors map from `base`: every type that extends/implements it directly (depth 1)
 // or through another such type (depth 2+), each ONCE at its shallowest depth. Order is depth ascending, then discovery
@@ -218,6 +232,83 @@ inline std::vector<ImplementorRow> implementorClosure( const std::vector<std::ve
     }
     ENSURES( rows.empty() || rows.back().depth >= rows.front().depth );   // breadth-first: depth never falls
     return rows;
+}
+
+// lane lego-transitive fix 1: the --lego closure, walked ONLY through edges the index proves (BaseBound::Proven). The plain
+// walk above follows every implementors edge, and buildGraph binds a base NAME to every same-named class — so one name
+// collision (b.py's `Leaf(Mid)` under a.py's unrelated `Mid`) became an unhedged depth-2 subtype on every ancestor's
+// answer. Here the depth-1 rows are the direct implementors exactly as the map lists them; below them:
+//   • a Proven edge adds its row and is walked further;
+//   • a ByName edge adds its row HEDGED (byName) and is not walked: nothing proves the type below it is in this closure;
+//   • an Other edge — the evidence names a different same-named type — adds no row; `otherBase` counts those types (each
+//     once, and never one the walk lists anyway). They are listed on the --lego answer of the type they do extend.
+// A direct row whose own edge is not Proven is listed (the map's contract) but not walked. A type first reached hedged and
+// then proven at the same depth is upgraded and walked. Order and determinism are the plain walk's.
+struct LegoClosure
+{
+    std::vector<ImplementorRow> rows;
+    std::size_t                 otherBase = 0;
+};
+
+inline LegoClosure legoImplementorClosure( const std::vector<std::vector<NodeId>>& implementors, const std::vector<std::vector<std::uint8_t>>& bound, NodeId base )
+{
+    EXPECTS( bound.empty() || bound.size() == implementors.size(), "buildGraph sizes the bound map with the implementors map" );
+    LegoClosure                    out;
+    std::vector<ImplementorRow>&   rows = out.rows;
+    std::vector<char>              walk;    // parallel to rows: 1 = the edge that added the row is proven, so its children are read
+    HashMap<NodeId, std::uint32_t> seen;    // node → its row index (base → UINT32_MAX)
+    HashMap<NodeId, char>          other;   // types reached only through an Other edge
+    seen.reserve( 32 );
+    seen.emplace( base, std::numeric_limits<std::uint32_t>::max() );
+    const auto boundOf = [ & ]( NodeId parent, std::size_t k ) noexcept
+    {
+        return bound.empty() ? BaseBound::ByName : BaseBound( bound[ parent ][ k ] );   // no bound map: nothing is proven
+    };
+    const auto expand = [ & ]( NodeId parent, std::uint32_t depth )
+    {
+        if( parent >= implementors.size() )
+        {
+            return;
+        }
+        const std::vector<NodeId>& kids = implementors[ parent ];
+        for( std::size_t k = 0; k < kids.size(); ++k )
+        {
+            const BaseBound b = boundOf( parent, k );
+            if( depth >= 2 && b == BaseBound::Other )
+            {
+                other.try_emplace( kids[ k ], char( 1 ) );
+                continue;
+            }
+            const auto [ it, fresh ] = seen.try_emplace( kids[ k ], std::uint32_t( rows.size() ) );
+            if( fresh )
+            {
+                rows.push_back( ImplementorRow{ kids[ k ], parent, depth, depth >= 2 && b == BaseBound::ByName } );
+                walk.push_back( b == BaseBound::Proven ? char( 1 ) : char( 0 ) );
+            }
+            else if( b == BaseBound::Proven && it->second < rows.size() && rows[ it->second ].depth == depth && walk[ it->second ] == 0 )
+            {
+                rows[ it->second ].via    = parent;   // the same depth, now through a proven edge: upgrade, and walk it
+                rows[ it->second ].byName = false;
+                walk[ it->second ]        = 1;
+            }
+        }
+    };
+    expand( base, 1 );
+    for( std::size_t i = 0; i < rows.size(); ++i )   // rows grows inside the loop: index, never iterate by reference
+    {
+        if( walk[ i ] != 0 )
+        {
+            expand( rows[ i ].id, rows[ i ].depth + 1 );
+        }
+    }
+    for( const auto& [ id, unused ] : other )
+    {
+        ( void )unused;
+        out.otherBase += seen.find( id ) == seen.end() ? 1u : 0u;
+    }
+    ENSURES( rows.size() == walk.size() );
+    ENSURES( rows.empty() || rows.back().depth >= rows.front().depth );   // breadth-first: depth never falls
+    return out;
 }
 
 // FE-B: is the call edge from → to NAME-ONLY, over the raw out-CSR and its parallel hedge bits — bound by name alone at
@@ -5555,6 +5646,202 @@ inline FalseEdgeRules buildFalseEdgeRules( const IngestResult& ing, const HashMa
     return rules;
 }
 
+// lane lego-transitive fix 1: the evidence buildGraph's implementors builder reads to tell WHICH same-named class a base
+// clause meant (BaseBound). Every table is one the call resolver already built; this holds references, owns nothing.
+struct BaseEvidenceTables
+{
+    const IngestResult&                     ing;
+    const ExternalVetoTables&               extVeto;       // Python `from m import X` / `import m as q` → m's one file
+    const JsImportTables&                   jsImports;     // JS/TS named import → the definition it pins
+    const std::vector<std::vector<NodeId>>& fileIncludes;  // C-family: the transitive, path-precise include set (sorted)
+    const std::vector<std::vector<std::uint32_t>>& includeAdj;   // every language: the files a file's imports resolve to
+    const std::vector<std::uint32_t>&       fileDir;       // file → interned directory id
+    const ReceiverEvidence*                 recvEv;        // JS/TS: a CommonJS require alias's module (moduleNames)
+};
+
+// is `path` the module `name` inside the package directory `pkgDir` (`pkg/name.py` or `pkg/name/__init__.py`)?
+inline bool pythonSubmoduleOf( std::string_view path, std::string_view pkgDir, std::string_view name ) noexcept
+{
+    const std::string_view dir = includerDir( path );
+    const std::string_view file = dir.size() < path.size() ? path.substr( dir.empty() ? 0 : dir.size() + 1 ) : path;
+    if( dir == pkgDir )
+    {
+        return file.size() == name.size() + 3 && file.starts_with( name ) && file.ends_with( ".py" );
+    }
+    return file == "__init__.py" && includerDir( dir ) == pkgDir && dir.ends_with( name )
+        && ( dir.size() == name.size() || dir[ dir.size() - name.size() - 1 ] == '/' );
+}
+
+// The candidates of `cand` (one inherit reference's class-like bases, already root/lang filtered) that the language's own
+// lookup PROVES the clause names, into `out`: empty = nothing proves one (or the evidence named two). Tiers, first hit wins:
+//   1. the same-file declaration the clause's enclosing scopes declare (RawRef::baseBind, ingest_relations.h);
+//   2. an import: Python's `from m import X` / `import m as q` (q.X), a JS/TS named import, and every language's resolved
+//      import or include edge (C-family: transitively, as `#include` makes names visible);
+//   3. the package: a Java/Kotlin/Go class in the same directory, or a Java qualifier spelling the candidate's directory.
+// What it does NOT prove: a C++ `using namespace`, a star import, a C# `using`, Swift's module-wide visibility, a re-export —
+// those edges stay ByName (hedged on --lego), never Proven.
+inline constexpr int kPythonReexportHops = 4;   // member-import hops provenBasesOf follows (a package re-exporting a re-export)
+
+inline void provenBasesOf( const BaseEvidenceTables& t, const Reference& r, const std::vector<NodeId>& cand, std::vector<NodeId>& out )
+{
+    out.clear();
+    const IngestResult& ing = t.ing;
+    if( r.baseBind == 0xFFFFFFFFu )
+    {
+        return;   // a scope too large to read: the local lookup could not rule a shadowing declaration out
+    }
+    if( r.baseBind != 0 )
+    {
+        const std::uint32_t at   = r.baseBind - 1u;
+        NodeId              best = kNoNode;
+        for( NodeId c : cand )
+        {
+            const Symbol& s = ing.symbols[ c ];
+            if( s.fileId == r.fileId && s.sigStartByte <= at && at < s.endByte && ( best == kNoNode || s.sigStartByte > ing.symbols[ best ].sigStartByte ) )
+            {
+                best = c;   // the innermost definition holding the bound name
+            }
+        }
+        if( best != kNoNode )
+        {
+            out.push_back( best );
+        }
+        return;   // a local declaration answers the lookup: an import cannot outrank it, and a non-candidate proves none
+    }
+    const std::string_view qual = r.memberRoot;   // the base's written qualifier on an inherit ref ("" bare)
+    const auto inFile = [ & ]( std::uint32_t f )
+    {
+        for( NodeId c : cand )
+        {
+            if( ing.symbols[ c ].fileId == f && std::find( out.begin(), out.end(), c ) == out.end() )
+            {
+                out.push_back( c );
+            }
+        }
+    };
+    std::string key;
+    const auto lookup = [ & ]( const HashMap<std::string, std::uint32_t>& table, std::string_view name ) -> std::uint32_t
+    {
+        key.clear();  Narrower::appendUint( key, r.fileId );  key.push_back( '#' );  key.append( name );
+        const auto it = table.find( key );
+        return it == table.end() ? kNoFile : it->second;
+    };
+    // a Python `from m import N` names m's file; when m defines no candidate it may RE-EXPORT N (a package __init__.py's
+    // `from pkg._mod import N`): follow those member imports, a few hops, until a file defines a candidate
+    const auto pythonChain = [ & ]( std::uint32_t f, std::string_view link )
+    {
+        for( int hop = 0; hop < kPythonReexportHops && f != kNoFile && out.empty(); ++hop )
+        {
+            inFile( f );
+            if( out.empty() )
+            {
+                key.clear();  Narrower::appendUint( key, f );  key.push_back( '#' );  key.append( link );
+                const auto it = t.extVeto.memberImportFile.find( key );
+                f = it == t.extVeto.memberImportFile.end() ? kNoFile : it->second;
+            }
+        }
+    };
+    if( r.lang == Lang::Python )
+    {
+        if( qual.empty() )
+        {
+            pythonChain( lookup( t.extVeto.memberImportFile, r.calleeName ), r.calleeName );
+        }
+        else if( qual.find( '.' ) == std::string_view::npos )
+        {
+            if( const std::uint32_t f = lookup( t.extVeto.importBindFile, qual ); f != kNoFile )
+            {
+                pythonChain( f, r.calleeName );   // `import pkg.mod as q`: q.X is X in that module (or what it re-exports)
+            }
+            else if( const std::uint32_t pkg = lookup( t.extVeto.memberImportFile, qual ); pkg != kNoFile )
+            {
+                // `from pkg import q`: q is pkg's submodule, or a class q that pkg defines or re-exports and X sits in
+                const std::string_view pkgDir = includerDir( rootRelPath( ing, pkg ) );
+                for( NodeId c : cand )
+                {
+                    if( pythonSubmoduleOf( rootRelPath( ing, ing.symbols[ c ].fileId ), pkgDir, qual ) && std::find( out.begin(), out.end(), c ) == out.end() )
+                    {
+                        out.push_back( c );
+                    }
+                }
+                if( out.empty() )
+                {
+                    pythonChain( pkg, qual );
+                }
+            }
+        }
+    }
+    else if( r.lang == Lang::JavaScript || r.lang == Lang::TypeScript )
+    {
+        // a bare name a named import pins; a qualified `ns.Base` is not read (a namespace import binds no table here)
+        if( qual.empty() )
+        {
+            const auto pin = t.jsImports.targets.find( jsImportKey( r.fileId, r.calleeName ) );
+            if( pin != t.jsImports.targets.end() && pin->second.outcome == JsImportOutcome::Pinned
+                && std::find( cand.begin(), cand.end(), pin->second.node ) != cand.end() )
+            {
+                out.push_back( pin->second.node );
+            }
+            else if( t.recvEv != nullptr && ( pin == t.jsImports.targets.end() || pin->second.outcome == JsImportOutcome::Unlisted ) )
+            {
+                // a CommonJS `const { Node } = require('./a')` (a ModuleAlias binding, not an ES import): the candidate the
+                // relative specifier names — the same module test a `Node.m()` member call is proven by (receiverevidence.h)
+                for( NodeId c : cand )
+                {
+                    if( t.recvEv->moduleNames( r, r.calleeName, c ) )
+                    {
+                        out.push_back( c );
+                    }
+                }
+            }
+        }
+    }
+    else if( r.lang == Lang::Cpp || r.lang == Lang::C || r.lang == Lang::ObjC )
+    {
+        if( r.fileId < t.fileIncludes.size() )
+        {
+            const std::vector<NodeId>& inc = t.fileIncludes[ r.fileId ];
+            for( NodeId c : cand )
+            {
+                if( std::binary_search( inc.begin(), inc.end(), NodeId( ing.symbols[ c ].fileId ) ) )
+                {
+                    out.push_back( c );
+                }
+            }
+        }
+    }
+    else if( r.fileId < t.includeAdj.size() )
+    {
+        for( std::uint32_t f : t.includeAdj[ r.fileId ] )
+        {
+            inFile( f );
+        }
+    }
+    if( out.empty() && ( r.lang == Lang::Java || r.lang == Lang::Kotlin || r.lang == Lang::Go ) )
+    {
+        for( NodeId c : cand )   // one package is one directory (the Java/Kotlin layout convention; Go by definition)
+        {
+            const std::uint32_t f = ing.symbols[ c ].fileId;
+            const std::string_view dir = includerDir( rootRelPath( ing, f ) );
+            bool hit = qual.empty() ? t.fileDir[ f ] == t.fileDir[ r.fileId ] : false;
+            if( !qual.empty() && r.lang == Lang::Java )
+            {
+                std::string path( qual );   // `extends a.b.Mid` names package a.b: a directory ending a/b
+                std::replace( path.begin(), path.end(), '.', '/' );
+                hit = dir.size() >= path.size() && dir.ends_with( path ) && ( dir.size() == path.size() || dir[ dir.size() - path.size() - 1 ] == '/' );
+            }
+            if( hit )
+            {
+                out.push_back( c );
+            }
+        }
+    }
+    if( out.size() > 1 )
+    {
+        out.clear();   // the evidence named two same-named types: it proves neither
+    }
+}
+
 inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand );   // defined beside declinedCallsNaming, its one reader
 inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = nullptr, bool census = false )
 {
@@ -7584,6 +7871,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     const auto isClassLike = []( SymKind k ) noexcept
     { return namespaceCompatible( RefRole::Extends, k ); };
     std::vector<NodeId> baseCand;   // one inheritance reference's base candidates, reused across references
+    std::vector<NodeId> baseProven; // … and the one of them the language's lookup proves (provenBasesOf), reused
+    struct BoundEdge { NodeId base; NodeId derived; BaseBound bound; };
+    std::vector<BoundEdge> boundEdges;   // every edge drawn below with how it was bound; merged after the dedup
+    const BaseEvidenceTables baseEvidence{ ing, extVeto, jsImports, fileIncludes, includeAdj, fileDir, &recvEv };
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/5: inheritance edges" );
     for( const Reference& r : ing.references )
@@ -7682,9 +7973,21 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // the call edges' JVM rule, applied to bases: a Kotlin class implements a same-named Java interface only when
         // Kotlin defines no candidate of that name, and the reverse (keepOwnJvmLanguageCandidates; kotlincheck §14c).
         keepOwnJvmLanguageCandidates( ing, r, baseCand );
+        // lane lego-transitive fix 1: how each candidate edge is bound. A Ruby base its constant scope placed is proven as a
+        // whole (classesByFqn holds that ONE constant's opens); every other base asks provenBasesOf.
+        if( rubyScoped != nullptr )
+        {
+            baseProven = baseCand;
+        }
+        else
+        {
+            provenBasesOf( baseEvidence, r, baseCand, baseProven );
+        }
         for( NodeId baseId : baseCand )
         {
             g.implementors[ baseId ].push_back( derived );
+            const bool proven = std::find( baseProven.begin(), baseProven.end(), baseId ) != baseProven.end();
+            boundEdges.push_back( BoundEdge{ baseId, derived, proven ? BaseBound::Proven : baseProven.empty() ? BaseBound::ByName : BaseBound::Other } );
         }
     }
     }
@@ -7692,6 +7995,20 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     {
         std::sort( v.begin(), v.end() );
         v.erase( std::unique( v.begin(), v.end() ), v.end() );
+    }
+    // the bound map, parallel to the deduped lists: two references drawing one edge keep the stronger binding (BaseBound order)
+    g.implementorBound.assign( N, {} );
+    for( NodeId b = 0; b < N; ++b )
+    {
+        g.implementorBound[ b ].assign( g.implementors[ b ].size(), std::uint8_t( BaseBound::Other ) );
+    }
+    for( const BoundEdge& e : boundEdges )
+    {
+        const std::vector<NodeId>& kids = g.implementors[ e.base ];
+        const auto                 pos  = std::lower_bound( kids.begin(), kids.end(), e.derived );
+        ASSUME( pos != kids.end() && *pos == e.derived, "every bound edge was pushed into implementors before the dedup" );
+        std::uint8_t& slot = g.implementorBound[ e.base ][ std::size_t( pos - kids.begin() ) ];
+        slot = std::min( slot, std::uint8_t( e.bound ) );
     }
 
     // doc↔code edges: isDocLink refs (markdown `backtick` → code name) → mentions[codeDef] += docFileNode.

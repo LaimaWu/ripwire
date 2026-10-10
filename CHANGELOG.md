@@ -26,6 +26,15 @@ deeper row is unchanged. The deeper rows are one page of at most 200 (a runaway 
 them. `--lego` honors `--limit`/`--offset` only for this window; without one it keeps its `--max-tokens` notice. The
 `tools/list` manifest grows 46,930 → 47,114 B (+184 B: the declared `limit` and `offset` arguments on `lego`).
 
+The walk below the direct rows follows only extends/implements clauses the index PROVES name the type above: a class
+declared in a scope enclosing the clause (`class Leaf( Mid )` beside its own `Mid`, `b::Mid` inside `namespace b`), the
+file an import binds the name to (Python `from m import Mid`, followed through a package's re-export; a JS/TS named import
+or `const { Mid } = require( './m' )`), a C-family include, the Java/Kotlin/Go package directory, a Java qualifier naming
+the package, or Ruby's constant scope. A clause bound by the NAME alone — no such evidence — is listed hedged,
+`base_by="name"`, and the walk does not continue below it; a clause the evidence binds to a DIFFERENT same-named type adds
+no row at all, and the `<iface>` counts those types as `transitive_other_base=N` (they are listed on the answer of the type
+they do extend). The direct rows are unchanged.
+
 Every `<impl>` row of the targeted answer now says where the class is: `p="file:LINE"`, the `--uses`/`--callers`
 spelling, so the implementor opens at its definition. The `<iface>` row and the ranked `--for` `<lego>` section keep the
 bare `p="file"`.
@@ -37,8 +46,18 @@ where it answered `implementors="0"`. A mixin inside a method body or at a file'
 A JavaScript/TypeScript class FACTORY, `const Sub = Base.extend('Sub', …)` (nunjucks' node classes), is now a class
 definition that extends its receiver: `--lego=BinOp` answers instead of "type not found", and `--lego=Node` lists the
 classes made from it. The name must be the string the call is given — `$.extend({}, a)`, an unnamed Backbone-style
-`Base.extend({…})` and `const A = B.extend('C')` stay what they look like (an object merge, no class). Parser version
-160 (re-index on first run).
+`Base.extend({…})` and `const A = B.extend('C')` stay what they look like (an object merge, no class) — and the parser must
+show a class: the receiver is a class the same file declares (or another factory this rule keeps), or the call hands it a
+class body (an object literal holding a method). So the `debug` package's sub-logger `const error = log.extend('error')`
+and a string-first merge such as `_.extend('merged', { a: 1 })` stay no class; a factory whose receiver is imported from
+another file and gets no class body is not read either (a stated floor), nor is a member-chain receiver
+(`ns.Base.extend('X')`).
+
+A Python base clause is now read as Python evaluates it: `class Inner( Outer.Changed )` extends `Changed` (it used to
+extend both `Outer` and `Changed`), `class Box( Generic[Key] )` extends `Generic` and not its type argument `Key`,
+`metaclass=Meta` is no base, and a computed base (`with_metaclass( M, B )`, `namedtuple( … )`) names none. The
+JavaScript twin: `class A extends ns.Base` extends `Base` (it read `ns`), and `extends mixin( B )` names no base. Parser
+version 162, cache format 30 (re-index on first run).
 
 A bare name now resolves to a CODE definition whenever one matched: `--lego=Loader` answered about a `docs/api.md`
 heading (`defs="3" implementors="0"`) while `src/loader.js` held the class, because the heading had the lower id. The

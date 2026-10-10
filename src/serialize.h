@@ -8483,12 +8483,18 @@ struct LegoClosurePage
 {
     std::vector<ImplementorRow> deeper;               // every depth >= 2 row of the closure, in walk order
     PageWindow                  window{ 0, 0 };       // the slice of `deeper` this answer prints
+    std::size_t                 otherBase = 0;        // fix 1: types left out — their clause names a DIFFERENT same-named type
 };
 
-inline LegoClosurePage legoClosurePage( const std::vector<std::vector<NodeId>>& implementors, NodeId iface, int pageLimit, int pageOffset )
+// fix 1: the closure is graph.h legoImplementorClosure — walked through PROVEN extends edges only, a name-only edge's row
+// hedged (base_by="name") and not walked, a name collision's row left out and counted (transitive_other_base=).
+inline LegoClosurePage legoClosurePage( const std::vector<std::vector<NodeId>>& implementors, const std::vector<std::vector<std::uint8_t>>& bound,
+                                        NodeId iface, int pageLimit, int pageOffset )
 {
-    LegoClosurePage page;
-    for( const ImplementorRow& row : implementorClosure( implementors, iface ) )
+    LegoClosurePage   page;
+    const LegoClosure closure = legoImplementorClosure( implementors, bound, iface );
+    page.otherBase            = closure.otherBase;
+    for( const ImplementorRow& row : closure.rows )
     {
         if( row.depth >= 2 )
         {
@@ -8506,11 +8512,12 @@ inline LegoClosurePage legoClosurePage( const std::vector<std::vector<NodeId>>& 
 inline std::string legoClosureAttrs( const LegoClosurePage& page, std::string_view selector, int pageLimit )
 {
     const std::size_t total = page.deeper.size();
+    const std::string other = page.otherBase == 0 ? std::string() : " transitive_other_base=\"" + std::to_string( page.otherBase ) + "\"";
     if( total == 0 )
     {
-        return {};
+        return other;
     }
-    std::string       out   = " transitive=\"" + std::to_string( total ) + "\"";
+    std::string       out   = " transitive=\"" + std::to_string( total ) + "\"" + other;
     const std::size_t shown = page.window.end - page.window.begin;
     if( shown < total )
     {
@@ -8535,9 +8542,12 @@ struct LegoTargetedArgs
     std::string_view graphCountFloorAttr;   // graphCountFloorAttrXml( g ) — the caller owns the graph
     int              pageLimit  = 0;        // --limit / MCP limit over the deeper implementor rows (0 = the default page)
     int              pageOffset = 0;        // --offset / MCP offset
+    const std::vector<std::vector<std::uint8_t>>* implementorBound = nullptr;   // fix 1: Graph::implementorBound (null: nothing proven)
     LegoTargetedArgs() = default;
-    LegoTargetedArgs( std::string_view floorAttr, int limit = 0, int offset = 0 ) : graphCountFloorAttr( floorAttr ), pageLimit( limit ), pageOffset( offset ) {}
+    LegoTargetedArgs( std::string_view floorAttr, int limit = 0, int offset = 0, const std::vector<std::vector<std::uint8_t>>* bound = nullptr )
+        : graphCountFloorAttr( floorAttr ), pageLimit( limit ), pageOffset( offset ), implementorBound( bound ) {}
 };
+inline const std::vector<std::vector<std::uint8_t>> kNoImplementorBound{};   // the empty bound map: every edge reads ByName
 
 // One <impl> row. `line` (S2): the TARGETED answer puts the definition's line on p= (p="file:LINE", the --uses and
 // --callers spelling) so the reader can open the class itself; the ranked bundle rows keep p="file". `deep` is the
@@ -8559,6 +8569,10 @@ inline void writeLegoImplRow( XmlWriter& w, const IngestResult& ing, NodeId id, 
     {
         w.write( "\" via=\"" );  w.write( escapeXml( ing.symbols[ deep->via ].name, esc ) );
         w.write( "\" depth=\"" );  w.write( std::to_string( deep->depth ) );
+        if( deep->byName )
+        {
+            w.write( "\" base_by=\"name" );   // fix 1: the extends clause names via= by spelling alone — hedged, not walked below
+        }
     }
     w.write( "\"/>" );
 }
@@ -8685,7 +8699,7 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
                                                                   : ( impls.size() < 16 ? impls.size() : 16 );
         const std::size_t          implementorTotal = id < countMap.size() ? std::max( countMap[id].size(), impls.size() ) : impls.size();
         std::string hdr;
-        const LegoClosurePage deep = focusId != kNoNode ? legoClosurePage( implementors, id, targeted.pageLimit, targeted.pageOffset ) : LegoClosurePage{};
+        const LegoClosurePage deep = focusId != kNoNode ? legoClosurePage( implementors, targeted.implementorBound != nullptr ? *targeted.implementorBound : kNoImplementorBound, id, targeted.pageLimit, targeted.pageOffset ) : LegoClosurePage{};
         if( focusId != kNoNode )
         {
             hdr = "\" defs=\"" + std::to_string( definitionCountOfName( ing, id ) ) + "\" implementors=\"" + std::to_string( impls.size() ) + "\""

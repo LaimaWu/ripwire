@@ -3890,10 +3890,10 @@ std::optional<int> runTargetedViews( const MainDispatch& d )
                      rw::graphUnindexedLegendComment( rw::graphGaugeClauses( g ) ).c_str(),
                      rw::unprovenDefsVerbComment( rw::UnprovenDefsVerb::Lego, legoUnprovenDefs > 0, "<!-- ripwire lego: " ).c_str(),
                      rw::implementorsFloorLegendComment( ing, g.implementors, focus ),   // count-floor: present-only, as the two above
-                     rw::legoClosureLegendComment( g.implementors, focus ) );   // lane lego-transitive: present-only, the deeper rows
+                     rw::legoClosureLegendComment( g.implementors, g.implementorBound, focus ).c_str() );   // lane lego-transitive: present-only, the deeper rows
         const std::string legoTargetedAttr = rw::unprovenDefsAttrXml( legoUnprovenDefs ) + rw::graphCountFloorAttrXml( g );   // outlives the call
         packLego( stdout, ing, g.implementors, flat, 1, d.redactPtr, &legoImpure, focus, /*withPaths=*/true, tvRootArg,
-                  rw::LegoTargetedArgs( legoTargetedAttr, cfg.pageLimit, cfg.pageOffset ) );   // H1 + M15: residue, gauge, marker; the deeper-row page
+                  rw::LegoTargetedArgs( legoTargetedAttr, cfg.pageLimit, cfg.pageOffset, &g.implementorBound ) );   // H1 + M15: residue, gauge, marker; the deeper-row page
         rw::emitRaw( stdout, "</ctx>" );
         reportRedactions( stderr, d.redactCounts );      // W3-N1: a contract <m> sig is a redacting seam — disclose the tally
         return 0;

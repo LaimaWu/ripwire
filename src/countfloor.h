@@ -353,20 +353,33 @@ inline constexpr const char* kImplementorsFloorLegendComment =
 inline constexpr const char* kLegoClosureLegendComment =
     "<!-- ripwire lego: transitive=N counts the implementors BELOW a direct one (depth 2 and deeper), each listed once at its "
     "shallowest depth as <impl via= depth=>: via= names the type it extends that reached it, depth= its hops below this "
-    "interface; a direct row carries neither, and implementors= still counts the direct rows alone. The deeper rows are one page: "
+    "interface; a direct row carries neither, and implementors= still counts the direct rows alone. The walk descends only "
+    "through extends clauses the index PROVES name the type above (a same-file declaration in scope, an import, an include, "
+    "the package, a qualifier). The deeper rows are one page: "
     "transitive_shown= rows printed when it is cut, transitive_offset= the first one shown, has_more=\"1\" and "
     "next= the call for the next page. -->";
 
-inline const char* legoClosureLegendComment( const std::vector<std::vector<NodeId>>& graphImplementors, NodeId focus )
+// lane lego-transitive fix 1: the hedge's own clause, present-only beside the one above (no double hyphen: an XML comment).
+inline constexpr const char* kLegoClosureHedgeLegendComment =
+    "<!-- ripwire lego: base_by=\"name\" on a deeper row: its extends clause names the via= type by SPELLING alone (no import, "
+    "include, qualifier or enclosing scope proved which same-named type it means), so the row is a candidate, NOT a proven "
+    "subtype, and the walk does not continue below it. transitive_other_base=N: N types whose extends clause the index binds "
+    "to a DIFFERENT same-named type; they are not listed here (the lego answer of the type they do extend lists them). -->";
+
+// the clauses the targeted answer's deeper rows need: none without a deeper row or a left-out one, the hedge clause only
+// when a hedged row or a left-out count rides
+inline std::string legoClosureLegendComment( const std::vector<std::vector<NodeId>>& graphImplementors,
+                                             const std::vector<std::vector<std::uint8_t>>& implementorBound, NodeId focus )
 {
-    for( const ImplementorRow& row : implementorClosure( graphImplementors, focus ) )
+    const LegoClosure closure = legoImplementorClosure( graphImplementors, implementorBound, focus );
+    bool deeper = false;
+    bool hedged = closure.otherBase > 0;
+    for( const ImplementorRow& row : closure.rows )
     {
-        if( row.depth >= 2 )
-        {
-            return kLegoClosureLegendComment;
-        }
+        deeper = deeper || row.depth >= 2;
+        hedged = hedged || row.byName;
     }
-    return "";
+    return std::string( deeper ? kLegoClosureLegendComment : "" ) + ( hedged ? kLegoClosureHedgeLegendComment : "" );
 }
 
 inline const char* implementorsFloorLegendComment( const IngestResult& ing, const std::vector<std::vector<NodeId>>& graphImplementors, NodeId focus )
