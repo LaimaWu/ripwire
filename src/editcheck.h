@@ -1114,6 +1114,13 @@ inline std::string editCheckVerdictOnlyText( const EditCheckVerdictFacts& f, con
     {
         return {};
     }
+    // fix round 2 (rv-lean-trio2 nit b): a tracked path marked skip-worktree or assume-unchanged can differ from HEAD with
+    // `git status` silent, so the stamp above reads clean over an edited caller. The SAME probe --quality-delta's identity
+    // basis refuses on (quality.h indexHidesTrackedContent; a git failure reads as "hides"): any such path owes the rows.
+    if( quality::indexHidesTrackedContent( root ) )
+    {
+        return {};
+    }
     std::vector<char> esc;
     const auto        ex       = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
     const std::string rowsNext = nextFlag( "--edit-check=", f.page.selector.empty() ? std::string_view( fsym.name ) : f.page.selector )
@@ -1123,8 +1130,9 @@ inline std::string editCheckVerdictOnlyText( const EditCheckVerdictFacts& f, con
                       "argument count was reliably counted and every candidate definition has a FIXED arity that disagrees). That arity "
                       "check is one-sided and is NOT a proof that a call site binds to THIS definition: call edges are matched by NAME. "
                       "root= is the crawl root every p= is relative to (single-root runs only). defs= is the one definition compared. callers= "
-                      "counts its 1-hop callers; their rows are left out of this answer because none is flagged, and rows_next= is "
-                      "the call that lists them — call sites worth OPENING, not a verdict. next= is the test gate on the "
+                      "counts its 1-hop callers; their rows are left out of this answer because none is flagged AND the tree is at HEAD "
+                      "(at= carries no +dirty and no tracked path is marked skip-worktree or assume-unchanged) AND leaving them out saves "
+                      "at least a quarter of the bytes; rows_next= is the call that lists them — call sites worth OPENING, not a verdict. next= is the test gate on the "
                       "definition's file. est_tokens= prices THIS document, through the tool's ONE emitted-bytes estimator. ";
     out += graphCountDisclosure( rw::graphGaugeClauses( g ) );
     out += "-->";

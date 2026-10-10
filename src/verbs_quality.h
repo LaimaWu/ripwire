@@ -960,7 +960,7 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p, std::FILE*
     {
         // idea #11: the collapse, named where its attributes are. No flag spelling (a double dash is illegal in a comment).
         std::fputs( "stale_by_kind= splits stale= by ack kind (kind:N, comma-separated): on an answer with no regression the stale "
-                    "sa rows are collapsed to these counts, and stale_next= is the call that prints them. ", out );
+                    "sa rows are collapsed to these counts when that saves at least a quarter of the bytes, and stale_next= is the call that prints them. ", out );
     }
     std::fputs( "-->", out );   // every section constant above ends with its own separating space
 }
@@ -1854,7 +1854,8 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         const auto emitVerdict = [ & ]( std::FILE* out )
         {
             rw::emitTo( out, "<!-- ripwire quality-delta: the tracked files ARE their git HEAD (head_basis=\"identity\"), so the floor (baseline= "
-                             "names it) is this tree's own snapshot and nothing that existed can be worse: regressions= and gating= are 0. stale= counts ack "
+                             "names it) is this tree's own snapshot and nothing that existed can be worse: regressions= and gating= are 0, and this line stands in "
+                             "for the full document because it saves at least a quarter of the bytes. stale= counts ack "
                              "ledger rows whose target no longer applies (never gating), by kind in stale_by_kind=; stale_next= is the call "
                              "that prints them with the full header (its exclusion and rename counts included). at=: commit+dirty+shallow. -->"
                              "<quality-delta baseline=\"{}\" regressions=\"0\" gating=\"0\" stale=\"{}\"{} head_basis=\"identity\"{}></quality-delta>",

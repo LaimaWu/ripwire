@@ -146,10 +146,33 @@ printf '%s' "$F_D" | grep -q 'status="unchanged"' && ! printf '%s' "$F_D" | grep
 # the near miss: an UNTRACKED file alone is a working-tree change too (at= says +dirty), so the rows ride
 fold_rows "(1v-f) an untracked file alone (+dirty): the rows ride" "$( fec compute )" '<c n="use1" p="src/calc.c:3"/>'
 rm -f "$FOLD/src/stray.c"
+# (1v-h) fix round 2 (rv-lean-trio2 nit b): an edit git status cannot see — the caller's file marked skip-worktree, or
+# assume-unchanged, then edited to the wrong arity — leaves at= clean, so the stamp alone would fold the unflagged use1 row.
+# The fold also refuses on any such index bit (quality.h indexHidesTrackedContent, the probe the qd identity basis uses).
+# RED on 9bd8528a: the verdict alone, use1 folded into rows_next=.
+for bit in skip-worktree assume-unchanged; do
+    ( cd "$FOLD" && git update-index --"$bit" src/calc.c \
+      && sed 's/^int use1(void) { return compute(1, 2); }/int use1(void) { return compute(1, 2, 3); }/' src/calc.c > src/calc.c.new \
+      && cat src/calc.c.new > src/calc.c && rm -f src/calc.c.new )
+    F_H="$( fec compute )"
+    if [ -n "$( cd "$FOLD" && git status --porcelain )" ] || ! printf '%s' "$F_H" | grep -q 'status="unchanged"' \
+       || printf '%s' "$F_H" | grep -q 'at="[0-9a-f]*+dirty' || ! grep -q 'compute(1, 2, 3)' "$FOLD/src/calc.c"; then
+        no "(1v-h) premise ($bit): git status should be silent, at= clean and the edit on disk"; printf '%s\n' "$F_H"
+    else
+        fold_rows "(1v-h) $bit + an edited caller (git status silent): the rows ride, use1 listed" "$F_H" '<c n="use1" p="src/calc.c:3"/>'
+    fi
+    ( cd "$FOLD" && git update-index --no-"$bit" src/calc.c && git checkout -q src/calc.c )
+done
 fold_verdict "(1v-g) back at HEAD: the verdict again" "$( fec compute )" 16 compute
-rows "$OUT1" | grep -q 'incompatible="1"' \
-    && no "clean tree: caller wrongly flagged incompatible (precision)" \
-    || ok "clean tree: no false-positive incompatible flag"
+# fix round 2 (rv-lean-trio2 nit d, checklist 14): an ABSENCE is read only off a run that answered — rc 0, the helper root,
+# and its useit row — never off an empty or refused OUT1.
+if [ "$( ecrc helper )" != 0 ] || ! printf '%s' "$OUT1" | grep -q '<edit-check sym="helper"' || ! rows "$OUT1" | grep -q 'n="useit"'; then
+    no "clean tree: precision premise — helper should answer (rc 0) with its useit row"; printf '%s\n' "$OUT1"
+elif rows "$OUT1" | grep -q 'incompatible="1"'; then
+    no "clean tree: caller wrongly flagged incompatible (precision)"
+else
+    ok "clean tree: no false-positive incompatible flag"
+fi
 
 # ── (a) body-only edit -> unchanged (the contract is params+publicness, NOT the body) ──────────────────
 cat > "$WORK/src/a.cpp" <<'EOF'
