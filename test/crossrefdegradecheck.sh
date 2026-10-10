@@ -388,7 +388,7 @@ if grep -qF "could not read the trees' blobs $K75WORDS" "$TMP/b6b.err" && grep -
    && grep -qF "could not read the branches' blobs $K75WORDS" "$TMP/k75_bad.out.err" && grep -qF "$K75ASK" "$TMP/k75_bad.out.err"; then
     ok "6e one renderer: the --whereis and cross-branch refusals share every word but the noun, TMPDIR named in both"
 else
-    no "6e one renderer: the two refusals differ beyond the noun — whereis: $( head -c 260 "$TMP/b6b.err" ) | sweep: $( grep 'could not read' "$TMP/k75_bad.out.err" | head -c 260 )"
+    no "6e one renderer: the two refusals differ beyond the noun — whereis: $( grep 'could not read' "$TMP/b6b.err" | head -c 260 ) | sweep: $( grep 'could not read' "$TMP/k75_bad.out.err" | head -c 260 )"
 fi
 if [ -n "${M6:-}" ]; then
     case "$M6" in
