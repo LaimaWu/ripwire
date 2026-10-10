@@ -233,12 +233,6 @@ inline BaseScopeHit lookupInScope( TSNode scope, std::string_view name, bool sco
     return hit;
 }
 
-// a separator between the written segments of a qualified type name: C++/Rust `::`, Python/Java/JS/C# `.`, PHP `\\`
-inline bool isQualifierSeparator( char c ) noexcept
-{
-    return std::string_view( ":.\\" ).find( c ) != std::string_view::npos;
-}
-
 // the written segments of a base type node — `Outer.Changed` → {Outer, Changed}, `b::Mid` → {b, Mid}, `Base<T>` →
 // {Base}, `::Mid` → {Mid} with `absolute` — read off the node the grammar already classified as a type name
 inline std::vector<std::string_view> baseSegments( std::string_view text, bool& absolute )
@@ -249,20 +243,15 @@ inline std::vector<std::string_view> baseSegments( std::string_view text, bool& 
         text = text.substr( 0, lt );   // a type-argument list is no segment (finalSegment's rule)
     }
     absolute = text.starts_with( "::" );
-    std::size_t start = 0;
-    for( std::size_t i = 0; i <= text.size(); ++i )
+    for( std::size_t start = 0, i = 0; start <= text.size(); start = i + 1 )
     {
-        if( i < text.size() && !isQualifierSeparator( text[ i ] ) )
-        {
-            continue;
-        }
+        i = std::min( text.find_first_of( ":.\\", start ), text.size() );   // C++/Rust `::`, Python/Java/JS/C# `.`, PHP `\\`
         const std::string_view seg   = text.substr( start, i - start );
         const std::size_t      first = seg.find_first_not_of( " \t" );
         if( first != std::string_view::npos )
         {
             segs.push_back( seg.substr( first, seg.find_last_not_of( " \t" ) - first + 1 ) );   // `Base <T>` leaves `Base `
         }
-        start = i + 1;
     }
     return segs;
 }
