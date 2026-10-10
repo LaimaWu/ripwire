@@ -236,7 +236,7 @@ inline BaseScopeHit lookupInScope( TSNode scope, std::string_view name, bool sco
 // a separator between the written segments of a qualified type name: C++/Rust `::`, Python/Java/JS/C# `.`, PHP `\\`
 inline bool isQualifierSeparator( char c ) noexcept
 {
-    return c == ':' || c == '.' || c == '\\';
+    return std::string_view( ":.\\" ).find( c ) != std::string_view::npos;
 }
 
 // the written segments of a base type node — `Outer.Changed` → {Outer, Changed}, `b::Mid` → {b, Mid}, `Base<T>` →
@@ -783,6 +783,10 @@ void captureMacroBodyCalls( TSNode defineNode, std::uint32_t fileId, Lang lang, 
 // is a computed base this tool cannot name. Every Python child is an expression (its bases have no wrapper).
 inline bool expressionBase( TSNode bn, const char* bt, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawRef>& refs, TSNode classNode )
 {
+    if( lang == Lang::Ruby )
+    {
+        return true;   // Ruby has no wrapper: anything but a constant in its `superclass` clause is computed (see captureBases)
+    }
     if( lang == Lang::Python )
     {
         const TSNode named = kindIs( bt, "subscript" ) ? fieldChild( bn, NodeField::Value ) : bn;
@@ -803,6 +807,19 @@ inline bool expressionBase( TSNode bn, const char* bt, std::uint32_t fileId, Lan
         return true;
     }
     return kindIs( bt, "call_expression" );
+}
+
+// one child of a base-clause WRAPPER (extends_clause / implements_clause / type_list): a type node (and TS's
+// `implements ns.IFoo`, a nested_type_identifier) is a base; anything else is read as an expression base
+inline void wrappedBase( TSNode wn, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawRef>& refs, TSNode classNode )
+{
+    const char* wt = ts_node_type( wn );
+    if( isBaseTypeNode( wt ) || kindIs( wt, "nested_type_identifier" ) )
+    {
+        emitBaseRef( wn, fileId, lang, src, refs, classNode );
+        return;
+    }
+    expressionBase( wn, wt, fileId, lang, src, refs, classNode );
 }
 
 // Capture base classes for the inheritance/Lego view: walk a class node's base clause and emit an
@@ -875,7 +892,7 @@ void captureBases( TSNode classNode, std::uint32_t fileId, Lang lang, std::strin
             // COMPUTED (`class Dynamic < Struct.new( :a )`). Descending into that (call) lands on its receiver
             // `Struct` and minted an edge to it — the receiver is not the base (test/rubyinheritcheck.sh floor (a)).
             // Python's and JavaScript's base EXPRESSIONS are read whole the same way (expressionBase).
-            if( lang == Lang::Ruby || expressionBase( bn, bt, fileId, lang, src, refs, classNode ) )
+            if( expressionBase( bn, bt, fileId, lang, src, refs, classNode ) )
             {
                 return true;
             }
@@ -884,15 +901,7 @@ void captureBases( TSNode classNode, std::uint32_t fileId, Lang lang, std::strin
             ChildCursor wrapCursor( bn );
             forEachChild( bn, wrapCursor.cur, [ & ]( TSNode wn )
             {
-                const char* wt = ts_node_type( wn );
-                if( isBaseTypeNode( wt ) || kindIs( wt, "nested_type_identifier" ) )   // TS `implements ns.IFoo`
-                {
-                    emitBaseRef( wn, fileId, lang, src, refs, classNode );
-                }
-                else
-                {
-                    expressionBase( wn, wt, fileId, lang, src, refs, classNode );
-                }
+                wrappedBase( wn, fileId, lang, src, refs, classNode );
                 return true;
             } );
             return true;
