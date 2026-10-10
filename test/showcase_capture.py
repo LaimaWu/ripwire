@@ -352,6 +352,7 @@ def add(section, cmd, what, **opts):
 S1 = "understand a codebase cold"
 add(S1, f"{BIN} .", "The default ranked symbol map — start here when landing cold in a repo.")
 add(S1, f"{BIN} . --top-k=5", "Same map, capped to the 5 highest-ranked symbols.")
+add(S1, f"{BIN} . --top-k=5 --no-inventory", "The same capped map without its inventory tier: --top-k=5 leaves files out, so the default map appends <inv listed= unlisted=> (program entries, and the files the ranked rows left out) after its rows; --no-inventory drops that tier, and the ranked rows are the same.")
 add(S1, f"{BIN} . --top-k=0 --expand=rankGraphTeleport", "NEW since the last capture: --top-k=0 means PAYLOAD-ONLY — no ranked map rides along with the body you asked for.")
 add(S1, f"{BIN} . --top-k=0", "--top-k=0 with NO payload verb asked for — REFUSES (exit 1) naming the payload verbs, never an empty map.")
 add(S1, f"{BIN} . --max-tokens=1500", "SHAPE the map to fit ~1500 tokens (binary-search top-K).")
