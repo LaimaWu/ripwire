@@ -24,7 +24,9 @@ a template parameter are the stated floor (declined even where the element is `V
 
 `wrap/` holds the written types Rule 2's tables do not carry: `ns::List` (the tree's only `size`/`find`/`front`) reached
 through `std::unique_ptr`/`std::shared_ptr`/`std::optional`, an in-tree `SP<T>` with its own `operator->`, Qt and boost
-pointers, a smart-pointer root one field hop off, and namespace-scope, file-static and extern variables — each keeps the
-ladder's hedge — beside the near-misses that stay declined (a smart pointer of `std::string`, raw pointers to std
-containers, `.` on `std::vector<ns::List>`, an in-tree class with no `operator->`, a std-written global, a global hidden by
-a local or a field) and the stated floor (call results, an iterator, an unqualified template's arguments).
+pointers, a smart-pointer root one field hop off, namespace-scope, file-static and extern variables, and `typedef` /
+`using` aliases of a std smart pointer or of an undefined wrapper (`list.h` tail) — each keeps the ladder's hedge — beside
+the near-misses that stay declined (a smart pointer of `std::string`, raw pointers to std containers or to an alias of one,
+`.` on `std::vector<ns::List>`, an in-tree class with no `operator->`, a std-written global, a global hidden by a local or a
+field) and the stated floor (call results, an iterator, an unqualified template's arguments, a `std::optional` member
+field, a typedef inside a function body).

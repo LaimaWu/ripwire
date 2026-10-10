@@ -2876,8 +2876,11 @@ struct BuiltinMethodGate
 // `ns::List g_list; g_list.size()`; a `->` through a standard smart pointer or optional whose argument is the class,
 // `std::unique_ptr<ns::List> up; up->size()` (kCppStdArrowTemplates); a `->` through an in-tree class with its own
 // `operator->`, `SP<ns::List>& p; p->size()`, or through a class the tree does not define, `QSharedPointer<ns::List>& p` —
-// their pointee is unrecorded; `HashMap<K, V> m; m.find( k )` reaching UnionFind::find by name, `std::unique_ptr<std::string>
-// p; p->size()` and `std::vector<int>* pv; pv->size()` do not keep it).
+// their pointee is unrecorded; a `->` through a typedef or using alias whose recorded target is one of those, `typedef
+// std::shared_ptr<ns::List> ListSP; ListSP p; p->size()` (the alias record keeps no template argument, so `typedef
+// std::unique_ptr<std::string> StrUP` keeps the hedge too); `HashMap<K, V> m; m.find( k )` reaching UnionFind::find by name,
+// `std::unique_ptr<std::string> p; p->size()`, `std::vector<int>* pv; pv->size()` and `IntVec* p; p->size()` through
+// `typedef std::vector<int> IntVec` do not keep it).
 // STATED FLOORS (test/stdmembergatecheck.sh arms H and W pin them): (1) by name: an in-tree class reached through a receiver
 // the index records no written type for loses its by-name edge to declined_calls= — a call result (`h.list().size()`,
 // `v.front().size()`, `makeList().size()`), an iterator (`auto it = v.begin(); it->size()`), `auto` (`auto l = ns::List{}`,
@@ -2885,7 +2888,9 @@ struct BuiltinMethodGate
 // two hops off its root; (2) a template's arguments are read only where the parser recorded the type's whole text — a
 // QUALIFIED type (Binding::importedName) — and only through `->`: `QList<ns::List> l; l.size()` (unqualified) and
 // `std::vector<ns::List> v; v.size()` (the container's own member) are declined; a member field's template arguments are
-// read for std::unique_ptr / std::shared_ptr alone (ingest_relations.h stdSmartPointee); (3) a written type is matched by its
+// read for std::unique_ptr / std::shared_ptr alone (ingest_relations.h stdSmartPointee), so `std::optional<ns::List> o_;
+// o_->size()` is declined, and an alias declared inside a function body records no target (captureTypeAlias), so a local
+// `typedef std::shared_ptr<ns::List> L; L p; p->size()` is declined; (3) a written type is matched by its
 // cone's class NAMES, as CHA-lite matches it, and a namespace-scope variable by its name — those declared in the caller's
 // file or a file it includes, else every one in the tree; (4) generic names and iostream/filesystem/atomic/thread members are
 // not in the table (externalnames.h says which and why), so their calls keep the ladder.
