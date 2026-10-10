@@ -8,6 +8,9 @@
 #   py/diamond.py     Top <- {Left, Right} <- Bottom (both) <- Deepest; Alone <- OnlyChild (direct rows only)
 #   rb/*.rb           Rake::Task <- {FileTask <- FileCreationTask, MultiTask}; Rake::DSL mixed in
 #   js/*.js, ts/*     Node.extend('BinOp', …) class factories (+ near misses); Loader defined in code AND as a docs heading
+#   ns/{py,js,cpp,java,rb}  fix 1 NAMESAKES: each language holds a base, a Mid extending it, an UNRELATED same-named Mid
+#                     with a Leaf below it, and a true Leaf below the right Mid (by import, scope, namespace or package);
+#                     Python dotted / subscript / keyword bases, a package re-export, a star import; the debug-logger idiom
 #
 # (S1) the TARGETED --lego lists implementors below a direct one, each once at its shallowest depth, as
 #      <impl via= depth=>; transitive=N on the <iface>; implementors= still counts the direct rows alone;
@@ -18,6 +21,10 @@
 # (M1) a Ruby module mixed in with include/extend (captureRubyMixinBases) is an implements edge: --lego=DSL lists TaskLib.
 # (M2) a JS/TS class factory `const Sub = Base.extend('Sub', …)` is a class definition extending its receiver.
 # (M3) a bare name resolves to a CODE definition whenever one matched, never to a markdown heading sorted first.
+# (NS) fix 1: the closure descends only through extends edges the index PROVES (a same-file declaration in scope, an import,
+#      an include, the package, a qualifier). A name-only edge's row is hedged base_by="name" and not walked; an edge the
+#      evidence binds to ANOTHER same-named type adds no row and is counted transitive_other_base=. Python's `A.B` base is
+#      B (inside A), `Generic[K]`'s type argument and `metaclass=M` are no base. Red on 4d59c804 (the namesake rows listed).
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
@@ -193,7 +200,102 @@ do
 done
 if lego TNode
 then
-    if has '<impl n="TBin" p="ts/nodes.ts:5"/>' && has '<impl n="TView" p="ts/view.tsx:2"/>'; then ok "TypeScript (with a type argument) and TSX factories list under TNode"; else no "TNode rows: $( printf '%s\n' "$OUT" | grep '^<impl' | tr '\n' ' ' )"; fi
+    if has '<impl n="TBin" p="ts/nodes.ts:5"/>'; then ok "a TypeScript factory (with a type argument) lists under TNode"; else no "TNode rows: $( printf '%s\n' "$OUT" | grep '^<impl' | tr '\n' ' ' )"; fi
+    # fix 1 (ruling 2): view.tsx's receiver is IMPORTED and the call hands no class body — the parser cannot show TView is a
+    # class, so it is not one (the stated floor; jc.js JBody below is the cross-file factory that does show it)
+    if has '<impl n="TView"'; then no "TView (imported receiver, no class body) is still a class"; else ok "TView (imported receiver, no class body) is no class — the stated floor"; fi
+fi
+# the debug package's sub-logger and a string-first merge have the factory SHAPE but no class evidence (fix 1, ruling 2)
+for t in error verbose merged JTrue
+do
+    if "$BIN" "$FIX" --no-cache --lego="$t" >/dev/null 2>"$DIR/err"
+    then
+        no "--lego=$t resolved — '$t' (no class receiver, no class body) became a class"
+    elif grep -q -- "--lego type not found: $t" "$DIR/err"
+    then
+        ok "--lego=$t is not a type (no class receiver in the file, no class body)"
+    else
+        no "--lego=$t failed some other way: $( head -2 "$DIR/err" )"
+    fi
+done
+if lego JBody
+then
+    ok "--lego=JBody resolves: an imported receiver handed a class body (a method) is a class"
+fi
+
+echo "=== (NS) fix 1: the closure walks PROVEN extends edges only — namesakes in every by-name language ==="
+# nsarm SEL TRUE_ROW FALSE_ROW VIA LABEL — the true subtype is a plain depth-2 row via VIA, the namesake's row is absent
+nsarm(){
+    if lego "$1"
+    then
+        if printf '%s\n' "$OUT" | grep "<impl n=\"$2\"" | grep -q "via=\"$4\" depth=\"2\"/>"; then ok "$5: --lego=$1 lists $2 via=\"$4\" depth=\"2\", unhedged"; else no "$5: --lego=$1 true row: $( printf '%s\n' "$OUT" | grep "<impl n=\"$2\"" )"; fi
+        if has "<impl n=\"$3\""; then no "$5: --lego=$1 lists the namesake's $3: $( printf '%s\n' "$OUT" | grep "<impl n=\"$3\"" )"; else ok "$5: --lego=$1 does not list $3 (it extends an unrelated $4)"; fi
+        if iface | grep -q 'transitive_other_base="[1-9]'; then ok "$5: the left-out namesake row is counted (transitive_other_base=)"; else no "$5: no transitive_other_base: $( iface )"; fi
+    fi
+}
+nsarm PBase  PTrue  PLeaf  PMid  "Python (from-import vs same-file class)"
+nsarm JRoot  JTrue2 JLeaf2 JNode "JavaScript (require alias vs same-file class)"
+nsarm CBase  CTrue  CLeaf  CMid  "C++ (namespace ca reopened vs namespace cb)"
+nsarm JvBase JvTrue JvLeaf JvMid "Java (package a vs package b)"
+if lego JRoot
+then
+    if has '<impl n="JLeaf"'; then no "JavaScript: the namesake's factory JLeaf is listed under JRoot"; else ok "JavaScript: the namesake's factory JLeaf (same-file JNode) is not listed under JRoot"; fi
+    if printf '%s\n' "$OUT" | grep '<impl n="JBody"' | grep -q 'via="JNode" depth="2"/>'; then ok "JavaScript: the class-body factory JBody is a proven depth-2 row"; else no "JBody row: $( printf '%s\n' "$OUT" | grep '<impl n="JBody"' )"; fi
+fi
+if lego CBase
+then
+    if printf '%s\n' "$OUT" | grep '<impl n="CQual"' | grep -q 'via="CMid" depth="2"/>'; then ok "C++: a qualified base ca::CMid is proven through its namespace"; else no "CQual row: $( printf '%s\n' "$OUT" | grep '<impl n="CQual"' )"; fi
+fi
+# Ruby already bound its bases by constant scope (resolve.h RubyBaseScope): the arm stays right both ways
+if lego RTask
+then
+    if printf '%s\n' "$OUT" | grep '<impl n="RTrue"' | grep -q 'via="RMid" depth="2"/>'; then ok "Ruby: RTrue (RA::RMid) is a proven depth-2 row"; else no "Ruby RTrue: $( printf '%s\n' "$OUT" | grep '<impl n="RTrue"' )"; fi
+    if has '<impl n="RLeaf"'; then no "Ruby lists RB::RLeaf under RA::RTask"; else ok "Ruby: RB::RLeaf (under RB::RMid) is not listed"; fi
+fi
+# each namesake still answers its OWN direct rows (the map's contract is unchanged)
+if lego ns/py/ns_pb.py:PMid
+then
+    if has '<impl n="PLeaf"'; then ok "the namesake ns_pb.py:PMid still lists its own PLeaf"; else no "ns_pb.py:PMid: $( iface )"; fi
+fi
+# a re-export: `from pkg import PExp`, pkg/__init__.py re-exporting pkg._impl.PExp, beside an unrelated PExp
+if lego PExpBase
+then
+    if printf '%s\n' "$OUT" | grep '<impl n="PExpLeaf"' | grep -q 'via="PExp" depth="2"/>'; then ok "Python: a package re-export proves PExpLeaf (depth 2, unhedged)"; else no "PExpLeaf row: $( printf '%s\n' "$OUT" | grep '<impl n="PExpLeaf"' )"; fi
+fi
+# a name-only edge: a star import names nothing this tool reads, so PStar's PMid is unproven — listed HEDGED, never asserted
+if lego PBase
+then
+    if printf '%s\n' "$OUT" | grep '<impl n="PStar"' | grep -q 'via="PMid" depth="2" base_by="name"/>'; then ok "a name-only edge's row rides hedged: PStar base_by=\"name\""; else no "PStar row: $( printf '%s\n' "$OUT" | grep '<impl n="PStar"' )"; fi
+    if printf '%s\n' "$OUT" | grep '<impl n="PTrue"' | grep -q 'base_by'; then no "a proven row carries base_by"; else ok "a proven row carries no base_by"; fi
+fi
+if "$BIN" "$FIX" --no-cache --lego=PBase --legend=full >"$DIR/full" 2>"$DIR/err"
+then
+    if grep -q 'base_by=\\"name\\" on a deeper row' "$DIR/full" || grep -q 'base_by="name" on a deeper row' "$DIR/full"; then ok "the full legend defines base_by= and transitive_other_base= where they ride"; else no "full legend lacks the hedge clause"; fi
+else
+    no "--lego=PBase --legend=full exited non-zero: $( head -2 "$DIR/err" )"
+fi
+if "$BIN" "$FIX" --no-cache --lego=BaseFormatter --legend=full >"$DIR/full" 2>"$DIR/err" && ! grep -q 'base_by' "$DIR/full"; then ok "an answer with no hedged row carries no hedge clause"; else no "the hedge clause rides an answer without a hedged row"; fi
+
+echo "=== (NS) Python base expressions: a dotted base is ONE base; a type argument or a keyword is none ==="
+if lego POuter
+then
+    if iface | grep -q 'implementors="0"'; then ok "class PInner(POuter.PChanged) is no subtype of POuter"; else no "POuter: $( iface ) $( printf '%s\n' "$OUT" | grep '^<impl' | tr '\n' ' ' )"; fi
+fi
+if lego PChanged
+then
+    if has '<impl n="PInner"'; then ok "…it is PChanged's (the last attribute)"; else no "PChanged lists no PInner"; fi
+fi
+if lego PKey
+then
+    if iface | grep -q 'implementors="0"'; then ok "class PBox(Generic[PKey]): a type argument is no base"; else no "PKey: $( iface )"; fi
+fi
+if lego PBase2
+then
+    if has '<impl n="PSub"'; then ok "class PSub(PBase2[int]): the subscript's value is the base"; else no "PBase2 lists no PSub"; fi
+fi
+if lego PMeta
+then
+    if iface | grep -q 'implementors="0"'; then ok "metaclass=PMeta is no base"; else no "PMeta: $( iface )"; fi
 fi
 
 echo "=== (M3) the focus is a CODE definition whenever one matched ==="
@@ -221,7 +323,7 @@ fi
 echo "=== well-formed ==="
 if command -v xmllint >/dev/null 2>&1
 then
-    for a in "--lego=BaseFormatter" "--lego=BaseFormatter --legend=full" "--lego=BaseFormatter --limit=1 --legend=full" "--lego=Top --legend=full"
+    for a in "--lego=BaseFormatter" "--lego=BaseFormatter --legend=full" "--lego=BaseFormatter --limit=1 --legend=full" "--lego=Top --legend=full" "--lego=PBase --legend=full" "--lego=JRoot --legend=full"
     do
         # shellcheck disable=SC2086
         if "$BIN" "$FIX" --no-cache $a 2>/dev/null | xmllint --noout - 2>/dev/null; then ok "xml well-formed: $a"; else no "xml malformed: $a"; fi
