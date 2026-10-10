@@ -798,7 +798,11 @@ M_F="$( lw zqLean --whereis-listing=defs )"; M_A="$( lw zqLean --whereis-listing
 # bytes, more rows); one byte more and defs is strictly shorter, one byte less and all is.
 mk_tie(){ local d="$TMP/tie$1"; mkdir -p "$d"; git -C "$d" init -q -b main >/dev/null 2>&1; git -C "$d" config commit.gpgsign false
           printf 'int zqTie( int x ) { return x; }\n' >"$d/tie.c"
-          printf 'int useT( void ) { return zqTie( 1 ); } // %s\n' "$( head -c "$1" </dev/zero | tr '\0' 'p' )" >"$d/use.c"
+          # The padding is split over TWO ref rows (lane whereis-lean): a t= over 300 bytes prints a 200-byte preview, so one
+          # row padded by the whole overhead (~330 B) would stop growing a byte per pad byte; two rows of half each stay whole.
+          local h=$(( $1 / 2 ))
+          { printf 'int useT( void ) { return zqTie( 1 ); } // t%s\n' "$( head -c "$h" </dev/zero | tr '\0' 'p' )"
+            printf 'int useU( void ) { return zqTie( 2 ); } // u%s\n' "$( head -c "$(( $1 - h ))" </dev/zero | tr '\0' 'q' )"; } >"$d/use.c"
           git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm tie >/dev/null 2>&1; printf '%s' "$d"; }
 tw(){ "$BIN" "$1" --whereis=zqTie --no-cache "${@:2}" 2>/dev/null; }
 TP="$( mk_tie 1 )"; TD=$(( $( nbytes "$( tw "$TP" --whereis-listing=defs )" ) - $( nbytes "$( tw "$TP" --whereis-listing=all )" ) ))
@@ -1457,6 +1461,121 @@ LTR="$( printf '%s' "$LTO" | grep -oE '<whereis [^>]* refs_scanned="[0-9]+"' | g
 { [ $rcLt -eq 0 ] && [ "$LTR" = 'refs_scanned="2"' ] && [ "$LTH" = 'hits="8"' ] && [ "$LTN" = 2 ]; } \
     && ok "whereis (ls-tree fallback): a root below the work-tree top lists each distinct tip once (2 listings for HEAD + 2 refs on 2 tips), all 8 rows" \
     || no "whereis (ls-tree fallback): want rc 0, refs_scanned=\"2\", hits=\"8\" and 2 ls-tree listings — got rc $rcLt, $LTR, $LTH, $LTN listing(s)"
+
+# ── 5h) the t= PREVIEW (lane whereis-lean; crossref.h kWhereisTextPreviewBytes = 200, writeWhereisRows / writeWhereisTextCut) ──
+# A row's t= is a preview of a LONG line: a line over 300 bytes (the 200-byte preview + kWhereisTextCutMinDrop 100, so a
+# cut always drops 100+ bytes) prints its first bytes, cut on a UTF-8 boundary, plus an ellipsis — 200 bytes at most, the
+# ellipsis included — and the row carries t_bytes= (the whole line's bytes); <t_cut rows= next=> counts the page's cut rows
+# and next= replays the question under --detail=1, which prints every line whole. Arms: a ~7 KB def line (HEAD, the defs
+# page), lines of exactly 200, 201 and 300 bytes (whole), one of 301 (cut to 200), a 3-byte character straddling the kept
+# prefix (cut before it), a short line (unchanged, no t_bytes=), a branch row (tip= date= beside t_bytes=), the refs and
+# all listings, the MCP twin, paging (rows= counts this page), and an answer of short lines (no t_cut, no clause).
+# RED on the pre-lane binary (4c38d363): every t= is the whole line and no row carries t_bytes=.
+PV="$TMP/preview"; mkdir -p "$PV"; git -C "$PV" init -q -b main >/dev/null 2>&1; git -C "$PV" config commit.gpgsign false
+pvRep(){ i=0; s=''; while [ $i -lt "$2" ]; do s="$s$1"; i=$((i+1)); done; printf '%s' "$s"; }
+PV_LONG="int previewName( int a ) { return a$( pvRep ' + 1' 1750 ); }"                    # 7,000+ bytes, the definition
+PV_200="X = previewName + $( pvRep a 182 )"                                               # 18 + 182 = exactly 200 bytes
+PV_201="Y = previewName + $( pvRep b 183 )"                                               # 201 bytes
+PV_300="V = previewName + $( pvRep e 282 )"                                               # 300 bytes
+PV_301="W = previewName + $( pvRep f 283 )"                                               # 301 bytes
+PV_EUR="Z = previewName + $( pvRep c 178 )€$( pvRep d 140 )"                             # 339 bytes, € at bytes 196-198 straddles 197
+printf '%s\n' "$PV_LONG" >"$PV/p.c"
+printf '%s\n%s\n%s\n%s\n%s\npreviewName( 1 )\n' "$PV_200" "$PV_201" "$PV_300" "$PV_301" "$PV_EUR" >"$PV/q.py"
+printf 'int shortName( int a ) { return a; }\nint shortUse( void ) { return shortName( 1 ); }\n' >"$PV/s.c"
+git -C "$PV" add -A >/dev/null 2>&1; git -C "$PV" commit -qm base >/dev/null 2>&1
+git -C "$PV" checkout -qb side >/dev/null 2>&1
+PV_BR="int previewName( long a ) { return a$( pvRep ' - 2' 400 ); }"
+printf '%s\n' "$PV_BR" >"$PV/b.c"; git -C "$PV" add -A >/dev/null 2>&1; git -C "$PV" commit -qm side >/dev/null 2>&1
+git -C "$PV" checkout -q main >/dev/null 2>&1
+pvRow(){ printf '%s' "$1" | sed 's/<!--.*-->//' | tr '<' '\n' | grep "^hit ref=\"$2\" .*p=\"$3\" l=\"$4\" " | head -1; }
+pvT(){ printf '%s' "$1" | sed -n 's/.* t="\(.*\)"\/>*$/\1/p' | sed 's/"\/$//'; }
+pvB(){ LC_ALL=C; printf '%s' "$1" | wc -c | tr -d ' '; }
+PA="$( "$BIN" "$PV" --whereis=previewName --whereis-listing=all --no-cache 2>/dev/null )"; rcPa=$?
+PD="$( "$BIN" "$PV" --whereis=previewName --no-cache 2>/dev/null )"; rcPd=$?
+PR="$( "$BIN" "$PV" --whereis=previewName --whereis-listing=refs --no-cache 2>/dev/null )"; rcPr=$?
+if [ $rcPa -ne 0 ] || [ $rcPd -ne 0 ] || [ $rcPr -ne 0 ] || ! printf '%s' "$PA" | grep -q '<whereis ' || ! printf '%s' "$PD" | grep -q '<whereis ' \
+   || ! printf '%s' "$PR" | grep -q '<whereis '; then
+    no "whereis (preview): a run produced no <whereis> root (rc $rcPa / $rcPd / $rcPr)"
+else
+    ELL='…'
+    r="$( pvRow "$PD" HEAD p.c 1 )"; t="$( pvT "$r" )"
+    { printf '%s' "$r" | grep -q "kind=\"def\" t_bytes=\"$( pvB "$PV_LONG" )\" t=" && [ "$( pvB "$t" )" -le 200 ] && [ "${t%$ELL}" != "$t" ] \
+      && [ "${PV_LONG#"${t%$ELL}"}" != "$PV_LONG" ] && [ "$( pvB "$t" )" = 200 ]; } \
+        && ok "whereis (preview): the $( pvB "$PV_LONG" )-byte definition line prints a 200-byte t= (its first 197 bytes + …) and t_bytes=\"$( pvB "$PV_LONG" )\" on the defs page" \
+        || no "whereis (preview): the long def row is '${r:0:300}' ($( pvB "$t" ) B t=)"
+    for pv in "1|$PV_200|200" "2|$PV_201|201" "3|$PV_300|300"; do
+        r="$( pvRow "$PA" HEAD q.py "${pv%%|*}" )"; w="${pv#*|}"; w="${w%|*}"
+        { [ "$( pvT "$r" )" = "$w" ] && [ "$( pvB "$w" )" = "${pv##*|}" ] && ! printf '%s' "$r" | grep -q 't_bytes='; } \
+            && ok "whereis (preview): a line of exactly ${pv##*|} bytes prints whole, no ellipsis, no t_bytes=" \
+            || no "whereis (preview): the ${pv##*|}-byte line's row is '${r:0:300}'"
+    done
+    r="$( pvRow "$PA" HEAD q.py 4 )"; t="$( pvT "$r" )"
+    { printf '%s' "$r" | grep -q 't_bytes="301"' && [ "$( pvB "$t" )" = 200 ] && [ "$t" = "${PV_301:0:197}$ELL" ]; } \
+        && ok 'whereis (preview): a 301-byte line prints its first 197 bytes + … (200 bytes, the ellipsis included) and t_bytes="301"' \
+        || no "whereis (preview): the 301-byte line's row is '${r:0:300}' ($( pvB "$t" ) B)"
+    r="$( pvRow "$PA" HEAD q.py 5 )"; t="$( pvT "$r" )"; pre="$( LC_ALL=C; printf '%s' "$PV_EUR" | head -c 196 )"
+    { printf '%s' "$r" | grep -q "t_bytes=\"$( pvB "$PV_EUR" )\"" && [ "$t" = "$pre$ELL" ] && [ "$( pvB "$t" )" = 199 ] \
+      && printf '%s' "$t" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; } \
+        && ok 'whereis (preview): a 3-byte € straddling the kept prefix is not split: the cut backs off to byte 196, + … (199 bytes, valid UTF-8)' \
+        || no "whereis (preview): the straddle row is '${r:0:300}' ($( pvB "$t" ) B)"
+    r="$( pvRow "$PA" HEAD q.py 6 )"
+    { [ "$( pvT "$r" )" = 'previewName( 1 )' ] && ! printf '%s' "$r" | grep -q 't_bytes='; } \
+        && ok 'whereis (preview): a short line prints unchanged, with no t_bytes=' \
+        || no "whereis (preview): the short row is '$r'"
+    r="$( pvRow "$PA" side b.c 1 )"; t="$( pvT "$r" )"
+    { printf '%s' "$r" | grep -q " tip=\"[0-9a-f]\{9\}\" date=\"2026-01-01\" .*kind=\"def\" t_bytes=\"$( pvB "$PV_BR" )\" t=" && [ "$( pvB "$t" )" -le 200 ] \
+      && [ "${PV_BR#"${t%$ELL}"}" != "$PV_BR" ]; } \
+        && ok 'whereis (preview): a branch row (tip= date=) is cut the same way and carries t_bytes=' \
+        || no "whereis (preview): the branch row is '${r:0:300}'"
+    nA="$( printf '%s' "$PA" | sed 's/<!--.*-->//' | grep -o ' t_bytes="' | wc -l | tr -d ' ' )"
+    # HEAD: p.c, the 301 and the € lines; side holds the same two blobs (3 more) and b.c: 7 previews on the all page.
+    { [ "$nA" = 7 ] && printf '%s' "$PA" | grep -q '<t_cut rows="7" next="--whereis=previewName --whereis-listing=all --detail=1"/>'; } \
+        && ok 'whereis (preview): <t_cut rows="7" next=…--whereis-listing=all --detail=1> counts exactly the page'"'"'s 7 t_bytes= rows' \
+        || { no "whereis (preview): want 7 t_bytes= rows and their <t_cut>; got $nA"; printf '%s' "$PA" | grep -o '<t_cut[^>]*>'; }
+    r="$( pvRow "$PR" HEAD q.py 4 )"
+    { printf '%s' "$r" | grep -q 't_bytes="301"' && printf '%s' "$PR" | grep -q '<t_cut rows="4" next="--whereis=previewName --whereis-listing=refs --detail=1"/>'; } \
+        && ok 'whereis (preview): the refs listing cuts its rows too, and its <t_cut next=> names listing=refs' \
+        || { no "whereis (preview): the refs listing row is '${r:0:200}'"; printf '%s' "$PR" | grep -o '<t_cut[^>]*>'; }
+    # Rule 5 (recoverable via next=): the next= argv, run as written, prints every line whole — no t_bytes=, no <t_cut>.
+    PN="$( printf '%s' "$PA" | sed -n 's/.*<t_cut [^>]* next="\([^"]*\)".*/\1/p' )"
+    PX="$( "$BIN" "$PV" $PN --no-cache 2>"$TMP/preview.replay.err" )"; rcPx=$?
+    { [ -n "$PN" ] && [ $rcPx -eq 0 ] && printf '%s' "$PX" | grep -q '<whereis ' && ! printf '%s' "$PX" | grep -q 't_bytes=\|<t_cut' \
+      && [ "$( pvT "$( pvRow "$PX" HEAD p.c 1 )" )" = "$PV_LONG" ] && [ "$( pvT "$( pvRow "$PX" side b.c 1 )" )" = "$PV_BR" ] \
+      && ! grep -q 'IGNORED' "$TMP/preview.replay.err"; } \
+        && ok "whereis (preview): the <t_cut next=> ($PN) prints every line whole (the 7 KB def, the branch def) with no t_bytes= and no <t_cut>" \
+        || no "whereis (preview): next='$PN' (rc $rcPx) did not print the lines whole"
+    P1="$( "$BIN" "$PV" --whereis=previewName --whereis-listing=all --limit=1 --offset=0 --no-cache 2>/dev/null )"
+    P5="$( "$BIN" "$PV" --whereis=previewName --whereis-listing=all --limit=1 --offset=2 --no-cache 2>/dev/null )"
+    { printf '%s' "$P1" | grep -q '<t_cut rows="1" ' && ! printf '%s' "$P5" | grep -q '<t_cut\|t_bytes=\|PREVIEW: \|t_bytes=N'; } \
+        && ok 'whereis (preview): paged, rows= counts this page'"'"'s cut rows; a page of short rows carries no <t_cut>, no t_bytes= and no reading' \
+        || { no 'whereis (preview): the paged <t_cut rows=> or its absence is wrong'; printf '%s\n%s' "$P1" "$P5" | grep -o '<t_cut[^>]*>\|<hit [^>]*l="[0-9]*"'; }
+    PS="$( "$BIN" "$PV" --whereis=shortName --whereis-listing=all --legend=full --no-cache 2>/dev/null )"; rcPs=$?
+    { [ $rcPs -eq 0 ] && printf '%s' "$PS" | grep -q '<hit ' && ! printf '%s' "$PS" | grep -q 't_bytes\|<t_cut\|PREVIEW: '; } \
+        && ok 'whereis (preview): an answer of short lines carries no t_bytes=, no <t_cut> and no PREVIEW clause (byte-identical to before the cap)' \
+        || no "whereis (preview): the short-lines answer (rc $rcPs) carries a preview disclosure"
+    PL="$( "$BIN" "$PV" --whereis=previewName --whereis-listing=all --legend=full --no-cache 2>/dev/null )"
+    PC="$( "$BIN" "$PV" --whereis=previewName --whereis-listing=all --legend=compact --no-cache 2>/dev/null )"
+    { printf '%s' "$PL" | grep -q 'PREVIEW: t= is the row'"'"'s trimmed source line when it fits 300 bytes; a longer line prints a preview of 200 bytes' \
+      && printf '%s' "$PC" | grep -q 'hit t_bytes=N: t= previews an N-byte line (over 300 B): 200 B at most' && printf '%s' "$PC" | grep -q 't_cut rows=N: ' \
+      && ! printf '%s' "$PX" | grep -q 'PREVIEW: \|t_bytes=N'; } \
+        && ok 'whereis (preview): the full legend carries the PREVIEW clause and the compact one reads t_bytes= and t_cut rows= (300 B / 200 B, the binary'"'"'s constants), only where a row was cut' \
+        || no 'whereis (preview): a legend lacks the PREVIEW clause / readings, or carries them on the uncut --detail=1 answer'
+    if command -v xmllint >/dev/null 2>&1; then
+        printf '%s' "$PL" | xmllint --noout - 2>/dev/null && printf '%s' "$PC" | xmllint --noout - 2>/dev/null \
+            && ok 'whereis (preview): the full-legend page with the PREVIEW clause spliced in, and the compact page, are well-formed XML (checklist 25)' \
+            || no 'whereis (preview): a page carrying the PREVIEW clause is malformed XML'
+    else
+        printf '  SKIP  whereis (preview): xmllint absent — the PREVIEW clause'"'"'s well-formedness is not checked\n'
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        PM="$( mcpq "$PV" previewName ',"listing":"all"' )"
+        { [ "$PM" = "$PA" ]; } \
+            && ok 'whereis (preview): the MCP twin serves the CLI page byte for byte (t_bytes= rows and <t_cut>)' \
+            || { no 'whereis (preview): the MCP whereis page differs from the CLI one'; diff <( printf '%s' "$PA" | tr '<' '\n' ) <( printf '%s' "$PM" | tr '<' '\n' ) | head -5; }
+    else
+        printf '  SKIP  whereis (preview): MCP twin arm (no python3)\n'
+    fi
+fi
 
 if command -v xmllint >/dev/null 2>&1; then
     if printf '%s' "$SW" | xmllint --noout - 2>/dev/null; then ok "capped stray-content still G4 clean"; else no "capped stray-content XML malformed"; fi

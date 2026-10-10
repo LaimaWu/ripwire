@@ -146,6 +146,18 @@ constexpr std::uint32_t kMaxRefs         = 512;      // refusal bound — a swee
 // bury it under thousands of rows. What is dropped is always COUNTED in a <more/> element, never silently.
 constexpr std::size_t   kStrayFilesPerRef = 12;
 constexpr std::size_t   kWhereisHits      = 60;
+// --whereis: a row's t= is a PREVIEW of a LONG source line: a line over kWhereisTextPreviewBytes + kWhereisTextCutMinDrop
+// bytes prints its first bytes, cut on a UTF-8 boundary, plus an ellipsis (truncateUtf8WithEllipsis) — kWhereisTextPreviewBytes
+// at most, the ellipsis included — and the row says the whole line's size (t_bytes=); any shorter line prints whole. Picked
+// from the data: over 978 t= values of the 26c command sweep (9 repos, every whereis listing) the median line is 54 B and the
+// 95th percentile 108 B, so the cap binds only on the tail; on ripwire's own --whereis=lego 38 of 60 rows were 206 B - 7.3 KB
+// (a Python dict, markdown paragraphs, a legend literal) and held 121 KB of the 129 KB answer. The MIN DROP keeps a cut
+// worth its disclosure: a 202-byte line cut to 200 saved 2 bytes and its page paid ~330 B of t_bytes=, <t_cut> and their
+// readings (ripwire's --whereis=ripwire, 16,084 -> 16,415 B), so a cut always drops at least 100 bytes of the line.
+// --detail lifts it with the row cap and the parse guard; the <t_cut next=> element names that call (writeWhereisTextCut).
+constexpr std::size_t   kWhereisTextPreviewBytes = 200;   // the printed preview, the ellipsis included
+constexpr std::size_t   kWhereisTextCutMinDrop   = 100;   // a line prints whole up to preview + this many bytes (300)
+constexpr std::size_t   kUtf8EllipsisBytes       = 3;     // U+2026, as truncateUtf8WithEllipsis appends it
 
 // --whereis: the RUNAWAY GUARD on the tags parse of other refs' blobs (labelBranchRowsByParse; --detail=N lifts it). Only a
 // blob holding a parse-worthy row (parseWorthyLine) is parsed, one parse per distinct (blob, path): ripwire's own most-called helper
@@ -1579,6 +1591,7 @@ struct WhereResult
     bool                  headHolds = false;   // HEAD's COMMITTED tree holds SYM (on-head= reads the CHECKOUT on a dirty tree)
     std::string           dottedRetry;         // a Class.method spelling whose method the INDEX defines: the bare name (caller-set)
     std::string           renamedTo;           // the working tree renamed SYM to this definition (caller-set, on a zero)
+    std::size_t           textPreviewBytes = kWhereisTextPreviewBytes;   // t= byte cap (caller-set: SIZE_MAX under --detail)
 
     // T1 (completeness claims): true iff the scan PROVABLY covered every text blob of every scanned ref's
     // full tree — no missing/oversized/short-read blob, the batch served every sha, and no ref's tree
@@ -4017,14 +4030,28 @@ inline void writeWhereisRoot( std::FILE* out, const WhereResult& res, const Wher
 
 }
 
+// The --detail=1 replay of the SAME question (the <unparsed next=> and the <t_cut next=>): the symbol, the listing the
+// question named (an explicit one; the default stays the default) and the detail flag, which lifts every cap of this verb
+// (the row cap, the parse guard, the t= preview). A ref filter (the MCP `kind`) is NOT carried, as <refs next=> does not
+// carry it: the CLI has no whereis ref filter (--stray-content= is another verb, and naming it would run that verb instead),
+// and the legend's UNPARSED clause says so.
+inline std::string whereisDetailNext( const WhereResult& res, WhereisListing asked )
+{
+    std::string call = nextFlag( "--whereis=", res.sym );
+    switch( asked )
+    {
+        case WhereisListing::Defs: call += " --whereis-listing=defs"; break;
+        case WhereisListing::Refs: call += " --whereis-listing=refs"; break;
+        case WhereisListing::All:  call += " --whereis-listing=all"; break;
+        case WhereisListing::ShorterOfDefsAll: break;
+    }
+    return nextAttrXml( call + " --detail=1" );
+}
+
 // <unparsed blobs= rows= next=>: the other refs' (blob, path) pairs that held a parse-worthy row and confirm
 // nothing — the runaway guard left them (WhereisParseBudget) or the parser could not finish — and the rows of theirs
 // that read kind="text". next= rides only when the guard left some: --detail=1 lifts it. Absent when every
 // parse-worthy blob was parsed (or mirrored HEAD's), so an answer the guard never touched is byte-identical.
-// The <unparsed next=> replays the SAME question with the guard lifted: the symbol, the listing the question named
-// (an explicit one; the default stays the default) and the detail flag. A ref filter (the MCP `kind`) is NOT carried,
-// as <refs next=> does not carry it: the CLI has no whereis ref filter (--stray-content= is another verb, and naming it
-// would run that verb instead), and the legend's UNPARSED clause says so.
 inline void writeWhereisUnparsed( std::FILE* out, const WhereResult& res, WhereisListing asked )
 {
     const BranchLabelCensus& c = res.branchLabels;
@@ -4032,20 +4059,38 @@ inline void writeWhereisUnparsed( std::FILE* out, const WhereResult& res, Wherei
     {
         return;
     }
-    std::string next;
-    if( c.leftByGuard > 0 )
-    {
-        std::string call = nextFlag( "--whereis=", res.sym );
-        switch( asked )
-        {
-            case WhereisListing::Defs: call += " --whereis-listing=defs"; break;
-            case WhereisListing::Refs: call += " --whereis-listing=refs"; break;
-            case WhereisListing::All:  call += " --whereis-listing=all"; break;
-            case WhereisListing::ShorterOfDefsAll: break;
-        }
-        next = nextAttrXml( call + " --detail=1" );
-    }
+    const std::string next = c.leftByGuard > 0 ? whereisDetailNext( res, asked ) : std::string();
     rw::emitTo( out, "<unparsed blobs=\"{}\" rows=\"{}\"{}/>", c.leftByGuard + c.failed, c.textRows, next.c_str() );
+}
+
+// Whether a row's line is long enough to print as a preview (and carry t_bytes=): over the preview plus the min drop, so
+// a cut always drops at least kWhereisTextCutMinDrop bytes. textPreviewBytes is SIZE_MAX under --detail: nothing is cut.
+inline bool whereisTextCut( const WhereResult& res, const WhereHit& h ) noexcept
+{
+    return res.textPreviewBytes <= SIZE_MAX - kWhereisTextCutMinDrop && h.text.size() > res.textPreviewBytes + kWhereisTextCutMinDrop;
+}
+
+// The rows of this page whose t= is a preview (whereisTextCut): the <t_cut rows=> count and the trigger of the legend's
+// PREVIEW clause, so both ride exactly the pages that print a cut row and an answer of short lines is byte-identical.
+inline std::size_t whereisPageCutRows( const WhereResult& res, const ListedHits& listed, const PageWindow& hitPage )
+{
+    std::size_t cut = 0;
+    for( std::size_t k = hitPage.begin; k < hitPage.end; ++k )
+    {
+        cut += whereisTextCut( res, res.hits[ listed.rows[ k ] ] ) ? 1 : 0;
+    }
+    return cut;
+}
+
+// <t_cut rows= next=>: rows= rows of this page print a t= preview (each carries t_bytes=, the whole line's bytes), and
+// next= replays the question under --detail=1, which prints every line whole. Absent when no row was cut.
+inline void writeWhereisTextCut( std::FILE* out, const WhereResult& res, std::size_t cutRows, WhereisListing asked )
+{
+    if( cutRows == 0 )
+    {
+        return;
+    }
+    rw::emitTo( out, "<t_cut rows=\"{}\"{}/>", cutRows, whereisDetailNext( res, asked ).c_str() );
 }
 
 // The rows of the page, its <more hits=> remainder and the <refs count= next=> element (writeWhereisPage).
@@ -4063,16 +4108,34 @@ inline void writeWhereisRows( std::FILE* out, const WhereResult& res, const List
     {
         const WhereHit& h = res.hits[ listed.rows[ k ] ];
         ++shownCount;
+        // t= is a PREVIEW (kWhereisTextPreviewBytes): a longer line prints its first bytes, cut on a UTF-8 boundary with the
+        // ellipsis, and t_bytes= says the whole line's size. A line that fits prints whole and carries no t_bytes=.
+        std::string       preview;
+        std::string       cutAttr;
+        std::string_view  text = h.text;
+        if( whereisTextCut( res, h ) )
+        {
+            // The cap counts the ellipsis: the kept prefix is 3 bytes shorter, so a cut t= is never longer than the cap
+            // (nor than the line it previews, which a cut at the cap plus the ellipsis made of a 201-byte line).
+            EXPECTS( res.textPreviewBytes > kUtf8EllipsisBytes, "the cap leaves room for the ellipsis it appends" );
+            preview = h.text;
+            truncateUtf8WithEllipsis( preview, res.textPreviewBytes - kUtf8EllipsisBytes );
+            ENSURES( preview.size() <= res.textPreviewBytes && preview.size() < h.text.size(),
+                     "a cut t= fits the cap, ellipsis included, and is shorter than the line" );
+            cutAttr = " t_bytes=\"" + std::to_string( h.text.size() ) + "\"";
+            text    = preview;
+        }
         if( whereisRowOnHeadCommit( h, res.headSha, headDate ) )
         {
-            rw::emitTo( out, "<hit ref=\"{}\" p=\"{}\" l=\"{}\" kind=\"{}\"{} t=\"{}\"/>",
+            rw::emitTo( out, "<hit ref=\"{}\" p=\"{}\" l=\"{}\" kind=\"{}\"{}{} t=\"{}\"/>",
                           ex( h.ref ).c_str(), ex( h.path ).c_str(),
-                          h.line, whereisKindOf( h ), h.testLocal ? " test_local=\"1\"" : "", ex( h.text ).c_str() );
+                          h.line, whereisKindOf( h ), h.testLocal ? " test_local=\"1\"" : "", cutAttr.c_str(), ex( text ).c_str() );
             continue;
         }
-        rw::emitTo( out, "<hit ref=\"{}\" tip=\"{:.9}\" date=\"{}\" p=\"{}\" l=\"{}\" kind=\"{}\"{}{} t=\"{}\"/>",
+        rw::emitTo( out, "<hit ref=\"{}\" tip=\"{:.9}\" date=\"{}\" p=\"{}\" l=\"{}\" kind=\"{}\"{}{}{} t=\"{}\"/>",
                       ex( h.ref ).c_str(), h.tip.c_str(), ex( h.date ).c_str(), ex( h.path ).c_str(),
-                      h.line, whereisKindOf( h ), h.testLocal ? " test_local=\"1\"" : "", whereisSharedAttr( listed, h ).c_str(), ex( h.text ).c_str() );
+                      h.line, whereisKindOf( h ), h.testLocal ? " test_local=\"1\"" : "", whereisSharedAttr( listed, h ).c_str(),
+                      cutAttr.c_str(), ex( text ).c_str() );
     }
     ASSUME( shownCount == hitPage.end - hitPage.begin );
     // <more hits="N"/> = the LISTED rows AFTER this page, so shown + more == the listed rows from this page's offset
@@ -4207,6 +4270,17 @@ inline void writeWhereisListedPage( std::FILE* out, const WhereResult& res, std:
     {
         rw::emitRaw( out, kWhereisSharedDefsLegend );
     }
+    // The PREVIEW clause rides exactly the pages that print a cut t= (whereisPageCutRows), so a page of short lines is
+    // byte-identical to the answer before the cap. No double hyphen inside: the clause sits in an XML comment.
+    const std::size_t cutRows = whereisPageCutRows( res, listed, hitPage );
+    if( cutRows > 0 )
+    {
+        rw::emitTo( out, "PREVIEW: t= is the row's trimmed source line when it fits {} bytes; a longer line prints a preview of {} bytes at "
+                         "most, its first bytes cut on a UTF-8 boundary and an ellipsis, and that row carries t_bytes= (the whole line's "
+                         "size in bytes). The t_cut element counts this page's preview rows; its next= replays the question with the "
+                         "detail flag at 1, which prints every line whole (and lifts the row cap and the parse guard with it). ",
+                     res.textPreviewBytes + kWhereisTextCutMinDrop, res.textPreviewBytes );
+    }
     writeWhereisLegendTail( out, res );
     std::fputs( "-->", out );
     const std::string headDate = whereisHeadDate( res );
@@ -4225,6 +4299,7 @@ inline void writeWhereisListedPage( std::FILE* out, const WhereResult& res, std:
     // row is printed unless the index itself already proved the symbol is defined on HEAD.
     writeWhereisFate( out, res, ex );
     writeWhereisUnparsed( out, res, listed.asked );
+    writeWhereisTextCut( out, res, cutRows, listed.asked );
 
     writeWhereisRows( out, res, listed, hitPage, headDate, ex );
     rw::emitRaw( out, "</whereis>" );
