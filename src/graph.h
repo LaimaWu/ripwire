@@ -2989,7 +2989,8 @@ struct StdMemberGate
         const std::string_view name = ( cut == std::string_view::npos ) ? arg : arg.substr( cut + 2 );
         const bool             isId = !name.empty() && rw::namesplit::isIdentStart( name.front() )
                          && std::all_of( name.begin(), name.end(), []( char c ) { return rw::namesplit::isIdentChar( c ); } );
-        ENSURES( !isId || written.find( name ) != std::string_view::npos, "the pointee is a view into the recorded text" );
+        ENSURES( !isId || ( name.data() >= written.data() && name.data() + name.size() <= written.data() + written.size() ),
+                 "the pointee is a view into the recorded text" );
         return isId ? name : std::string_view{};
     }
 
