@@ -4479,7 +4479,11 @@ computeWindowRefBodyHashes( const std::string& root, std::uint32_t days,
 // would keep serving the old stream to a fixed binary: the exact silent-zero the fix removes, restored by
 // cache. Bumping the scheme makes every pre-existing blob a clean miss (deserialize checks it), not a wrong
 // answer. This is the qchurn cache's OWN version — not kParserVer, which keys extraction and is untouched.
-constexpr std::uint32_t kQChurnCacheScheme = 2;
+// SCHEME 3 (2026-10-10, train 26c, K51): a binary before K51 stored a walk git could not finish (an empty stream, or the
+// newest prefix of the window) as if it were the window, and the key cannot tell that blob from a real read. K51 never
+// stores one, but a blob already on disk would keep serving its silent zero or prefix, with no history_unread=, until HEAD
+// moved. The bump makes every pre-K51 blob a clean miss; the cost is one cold walk per repository.
+constexpr std::uint32_t kQChurnCacheScheme = 3;
 constexpr char          kQChurnMagic[4]    = { 'Q', 'C', 'H', 'N' };
 
 inline std::string serializeRawCommitStream( const RawCommitStream& raw, const std::string& keyMat )

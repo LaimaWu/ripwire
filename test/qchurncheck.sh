@@ -262,6 +262,35 @@ env TMPDIR="$QTMP" "$BIN" "$UNBORN" --for=helper --no-cache >"$TMP/k_unborn.out"
     || no "K51: an unborn repository was disclosed as unread, or failed (rc=$rcU)"
 rm -rf "$UNBORN"
 
+# ── K51 scheme bump (train 26c): a failed walk a pre-K51 binary STORED is not served by this one ─────────────────────────────
+# A pre-K51 binary cached the empty stream of a walk git could not finish under the same (repo, HEAD, window) key, and a
+# K51 binary on scheme 2 served that blob warm: no walk, no churn=, no history_unread= (rv-honesty-small-b N1, seen by hand).
+# kQChurnCacheScheme 3 makes it a clean miss. Needs RIPWIRE_BASE_BIN = a binary from before K51 (it stores the failed walk);
+# skipped by name without one, and skipped by name when the base binary is itself K51-fixed (it stores nothing to serve).
+# Red on the merged train binary before the bump (scheme 2: the warm run walks 0 times and prints no churn=).
+if [ -n "${RIPWIRE_BASE_BIN:-}" ] && [ -x "${RIPWIRE_BASE_BIN:-}" ]; then
+    printf '// k51s\n' >> "$REPO/src/lib.cpp"
+    git -C "$REPO" commit -qam "k51s"                  # a fresh HEAD: no qchurn blob exists for it yet
+    KSTMP="$TMP/kstale"; mkdir -p "$KSTMP"; QCACHE_SAVE="$QCACHE"; QCACHE="$KSTMP/ripwire"
+    ks0="$( nqchurn )"
+    env PATH="$KSHIM:$PATH" TMPDIR="$KSTMP" "$RIPWIRE_BASE_BIN" "$REPO" --for=helper --no-cache >/dev/null 2>&1   # the walk dies; pre-K51 stores it
+    ks1="$( nqchurn )"
+    if [ "$ks1" -gt "$ks0" ] 2>/dev/null; then
+        : > "$TMP/k_stale.log"
+        env TMPDIR="$KSTMP" GIT_TRACE="$TMP/k_stale.log" "$BIN" "$REPO" --for=helper --no-cache >"$TMP/k_stale.out" 2>/dev/null; rcS=$?
+        if [ "$rcS" -eq 0 ] && [ "$( name_only_count "$TMP/k_stale.log" )" -ge 1 ] && grep -q ' churn="[0-9]' "$TMP/k_stale.out"; then
+            ok "K51 scheme: a failed walk a pre-K51 binary cached is a miss here — the walk runs and churn= is printed"
+        else
+            no "K51 scheme: the pre-K51 binary's cached failed walk was served (rc=$rcS, walks=$( name_only_count "$TMP/k_stale.log" ), churn= $( grep -c ' churn="[0-9]' "$TMP/k_stale.out" ))"
+        fi
+    else
+        echo "  SKIP  K51 scheme: RIPWIRE_BASE_BIN stored no blob for the failed walk (blobs $ks0 -> $ks1): it is K51-fixed, so there is no stale blob to serve"
+    fi
+    QCACHE="$QCACHE_SAVE"
+else
+    echo "  SKIP  K51 scheme: RIPWIRE_BASE_BIN (a binary from before K51) is not set — the stale-blob arm needs one to write the blob"
+fi
+
 # ── xmllint clean (sanity — --for output is still well-formed XML under the cached path) ───────────────
 "$BIN" "$REPO" --for="helper" --no-cache 2>/dev/null | xmllint --noout - 2>/dev/null \
     && ok "xmllint clean" || no "xmllint reported malformed XML"

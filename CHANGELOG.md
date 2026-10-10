@@ -105,7 +105,8 @@ cause and `TMPDIR`, with nothing on stdout, the way `--whereis` refuses on the s
 A `git log --name-only` that failed (an unreadable object, a bad ref) came back as an empty stream or as the newest part of
 the window and was stored under the (repo, HEAD, window) key, so `churn=` and `amp=` read as "no change history", or as the
 whole window's count, until HEAD moved, with no tell. A git that would not run at all (not on `PATH`) in a repository read
-the same way, as an unborn branch. A walk git could not finish is now never cached, so the next call walks again, and every
+the same way, as an unborn branch. A walk git could not finish is now never cached, so the next call walks again (a blob an earlier build stored from such a
+walk is not read either: the history-walk cache scheme moves, see the versions note), and every
 document that prints `churn=` or `amp=` (the map under `--metrics`, `--for`, `--pack-task` and `--grep` with `--metrics`,
 `--around`) carries `history_unread="1"` on its root (`"history_unread":true` in JSON) beside a comment that defines it and
 names the cause. It means `churn=` and the co-change half of `amp=` count only the commits that were read, so both are
@@ -1887,8 +1888,10 @@ columns (#339, carried as 122 to 149 on its branch) land at 158, above 156's ful
 (the function-literal fix's record changes, then the false-edge fix's member-call fields, then the receiver chain
 `memberPath`/`memberCtor`; the Ruby branch's appended binding kinds need no bump of their own) and `kQSnapCacheScheme` 15 → 19
 (the `--quality-delta` error-masking and placeholder changes, then the dead kind agreeing with `--dead-code` on functions
-held as values, then on a function that only stores itself, then the defect-shape records of the twelfth kind). Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=593769ab691623d8 entries=806`.
+held as values, then on a function that only stores itself, then the defect-shape records of the twelfth kind), and the
+history-walk cache's `kQChurnCacheScheme` 2 → 3 (an earlier build stored a `git log` walk that git could not finish as if it
+were the window). Every ingest cache written by an earlier build is refused and re-indexed once, every
+cached quality snapshot is recomputed, and every repository's history is walked once more. The session legend dictionary is `dictv=593769ab691623d8 entries=806`.
 
 ### Fixed — a call the language resolves outside the tree no longer binds to a same-named in-repo definition
 
