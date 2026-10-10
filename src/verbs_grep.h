@@ -301,10 +301,10 @@ std::string grepTierLegend( const rw::GrepTierReport& tier )
     // so every other tiered answer keeps its bytes.
     const char* const liftClause = tier.servedString == 0 ? ""
         : "A literal no identifier can spell (holding a dash, slash, dot or space) or written in capitals, or one with fewer than 8 "
-          "code hits, also serves strings WITH code. On such an answer the rows run: source files whose NAME holds the literal, "
+          "code hits, also serves strings WITH code while source code holds fewer than 8 of its code hits. On such an answer the rows run: source files whose NAME holds the literal, "
           "other source code (files with a code hit first), then everything else (shell/YAML/TOML/JSON, tests, docs) in the usual order; string_hits= is how many "
           "of hits= are string-tier, and ref= on a hit whose enclosing definition has no caller edge is the first site outside it "
-          "that names it as a whole word (where a table entry is registered; one site, a floor). ";
+          "that names it as a whole word in code, never in a comment or string (where a table entry is registered; one site, a floor). ";
     return std::string( "SPAN TIERS: each hit is classified by the tree-sitter span it sits in (code/comment/string) and this answer serves "
            "the CODE tier, or — when no hit is code — comment and string TOGETHER; tier= names what was served when it is not "
            "code, so a pattern living only in prose is answered, never emptied. When every code hit is a USE of the literal (a "
@@ -678,7 +678,8 @@ std::vector<GrepHitRef> grepHitRefs( const rw::Config& cfg, const rw::IngestResu
         {
             continue;   // a definition something calls is reached by its callers, not registered
         }
-        refs.push_back( GrepHitRef{ h.enclosingId, rw::grepFirstRefSite( ing, ing.symbols[h.enclosingId].name, h.enclosingId ) } );
+        refs.push_back( GrepHitRef{ h.enclosingId, rw::grepFirstRefSite( ing, ing.symbols[h.enclosingId].name, h.enclosingId,
+                                                                               /*useMemo=*/!cfg.noCache ) } );
     }
     return refs;
 }

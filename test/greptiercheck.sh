@@ -649,6 +649,109 @@ if command -v xmllint >/dev/null 2>&1; then
     fi
 fi
 
+# (12m) fix round 1 (rv-lean-trio item 2): the literal's SHAPE is a text heuristic, so it never outvotes a FULL source code
+# tier — the lift fires only while source code holds fewer than 8 of its code hits. A dotted member pattern (Python
+# docstrings are string tier, so nearly every one has a source string), a TS member call and a SCREAMING constant, each with
+# 12 code uses in source and one string mention, keep main's code-tier answer: no tier=, the string held back, all 12 code
+# rows. RED on 33873861: tier="code+string" and a 10-row window (the textual self.app / hono c.json / DEFAULT_CSS repro).
+LF="$TMP/fullsandbox"
+mkdir -p "$LF/src"
+{
+    printf 'class Screen:\n    """Talks to self.app and DEFAULT_CSS for its styles."""\n'
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do printf '    def m%s(self):\n        return self.app.tick(%s)\n' "$i" "$i"; done
+    printf 'DEFAULT_CSS = "x"\n'
+    for i in 1 2 3 4 5 6 7 8 9 10 11; do printf 'def css%s():\n    return DEFAULT_CSS\n' "$i"; done
+} >"$LF/src/screen.py"
+{
+    printf 'const doc = "send it with c.json";\n'
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do printf 'export function h%s(c: any) { return c.json({ n: %s }); }\n' "$i" "$i"; done
+} >"$LF/src/routes.ts"
+for lit in self.app DEFAULT_CSS c.json; do
+    LF_OUT="$( "$BIN" "$LF" --no-cache --grep="$lit" 2>/dev/null )"
+    if [ -z "$( attr tier "$LF_OUT" )" ] && [ "$( attr hits "$LF_OUT" )" = "12" ] && [ "$( attr suppressed_string "$LF_OUT" )" = "1" ] \
+       && [ -z "$( attr string_hits "$LF_OUT" )" ] && [ "$( attr shown "$LF_OUT" )" = "12" ]; then
+        ok "(12m) --grep=$lit: 12 code hits in source keep the code tier (no lift, all 12 rows, the string held back)"
+    else
+        no "(12m) --grep=$lit lifted beside a full source code tier: tier=$( attr tier "$LF_OUT" ) hits=$( attr hits "$LF_OUT" ) shown=$( attr shown "$LF_OUT" ) suppressed_string=$( attr suppressed_string "$LF_OUT" )"
+    fi
+done
+# (12n) the boundary, both ways: the count is CODE hits in SOURCE code — lines in shell scripts that type the literal are
+# bare-word code and do not count (tmux split-window: 2 code hits in .c, 85 in .sh, and it lifts; K1). 7 in source plus 9
+# script lines lifts; 8 in source does not.
+for n in 7 8; do
+    LB="$TMP/boundary$n"
+    mkdir -p "$LB/src" "$LB/regress"
+    {
+        printf 'class Pane:\n    """Reads self.pane on demand."""\n'
+        i=0; while [ "$i" -lt "$n" ]; do i=$(( i + 1 )); printf '    def p%s(self):\n        return self.pane\n' "$i"; done
+    } >"$LB/src/pane.py"
+    for i in 1 2 3 4 5 6 7 8 9; do printf 'tool self.pane %s\n' "$i" >"$LB/regress/r$i.sh"; done
+    LB_OUT="$( "$BIN" "$LB" --no-cache --grep=self.pane 2>/dev/null )"
+    eval "LB_TIER_$n=\"\$( attr tier \"\$LB_OUT\" )\""
+done
+[ "$LB_TIER_7" = "code+string" ] && ok "(12n) 7 source code hits (+9 script lines): the dotted literal still lifts" \
+                                  || no "(12n) 7 source code hits should lift: tier=$LB_TIER_7"
+[ -z "$LB_TIER_8" ] && ok "(12n) 8 source code hits: no lift (the floor is kGrepLiftCodeFloor)" \
+                     || no "(12n) 8 source code hits must not lift: tier=$LB_TIER_8"
+# (12o) fix round 1 (rv-lean-trio item 3): ref= names a CODE site only. A comment and a string that name the callerless
+# entry inside other definitions, in files that sort BEFORE the registration, are prose, not registrations — in C and in
+# Python. RED on 33873861: ref= pointed at the comment (src/alpha.c:3 / src/aaa.py:2).
+LR="$TMP/refsandbox"
+mkdir -p "$LR/src"
+cat >"$LR/src/do-thing.c" <<'EOF'
+struct entry { const char *name; int (*exec)(int); };
+static int do_thing_exec(int x) { return x; }
+const struct entry do_thing_entry = { .name = "do-thing", .exec = do_thing_exec };
+EOF
+cat >"$LR/src/alpha.c" <<'EOF'
+struct entry;
+void helper(void) {
+    /* unlike do_thing_entry, this one is not registered */
+    int k = 0;
+}
+EOF
+cat >"$LR/src/alpha2.c" <<'EOF'
+const char *describe(void) {
+    return "do_thing_entry";
+}
+EOF
+cat >"$LR/src/zeta.c" <<'EOF'
+struct entry;
+extern const struct entry do_thing_entry;
+const struct entry *table[] = {
+    &do_thing_entry,
+    0
+};
+EOF
+printf '#!/bin/sh\ntool do-thing a\ntool do-thing b\n' >"$LR/run.sh"   # script lines that TYPE it: the code tier beside the string (fxg)
+cat >"$LR/src/jobrun.py" <<'EOF'
+def jobrun_handler(req):
+    return "jobrun"
+EOF
+cat >"$LR/src/aaa.py" <<'EOF'
+def unrelated():
+    # jobrun_handler is documented elsewhere
+    return 1
+EOF
+cat >"$LR/src/abc.py" <<'EOF'
+def describe_job():
+    return "jobrun_handler"
+EOF
+cat >"$LR/src/routes.py" <<'EOF'
+from jobrun import jobrun_handler
+
+def register(table):
+    table["job"] = jobrun_handler
+EOF
+LR_C="$( "$BIN" "$LR" --no-cache --grep=do-thing 2>/dev/null )"
+printf '%s' "$LR_C" | grep -q 'in="do_thing_entry" ref="src/zeta.c:4"' \
+    && ok "(12o) C: ref= is the registration (src/zeta.c:4), never the comment (alpha.c:3) or the string (alpha2.c:2)" \
+    || no "(12o) C: ref= is not src/zeta.c:4: $( printf '%s' "$LR_C" | grep -o '<hit [^>]*in="do_thing_entry"[^>]*>' )"
+LR_P="$( "$BIN" "$LR" --no-cache --grep=jobrun 2>/dev/null )"
+printf '%s' "$LR_P" | grep -q 'in="jobrun_handler" ref="src/routes.py:4"' \
+    && ok "(12o) Python: ref= is the registration (src/routes.py:4), never the comment (aaa.py:2) or the string (abc.py:2)" \
+    || no "(12o) Python: ref= is not src/routes.py:4: $( printf '%s' "$LR_P" | grep -o '<hit [^>]*in="jobrun_handler"[^>]*>' )"
+
 # (12f) the MCP grep twin lifts the same rows (one collection, one decision).
 LT_MCP="$( printf '%s\n%s\n%s\n' \
     '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' \

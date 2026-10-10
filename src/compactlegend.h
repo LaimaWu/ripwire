@@ -858,7 +858,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "tier", "tier=: the span tier served when not code alone: comment, string, comment+string, or code+string (no code hit in source code; source strings lifted)", false, "grep", MapHeaderRead::No, {}, "grep" },
     // idea #5 (lane lean-trio): present-only, on a code+string answer — the served string count and the row order it brings
     { "string_hits", "string_hits=N: of hits=, string-tier; rows: files named like the pattern, source, then the rest", false, "grep", MapHeaderRead::No, {}, "grep" },
-    { "ref", "hit ref=: first site naming the hit's callerless enclosing def (where it is registered; one site)", true, "hit", MapHeaderRead::No, {}, "grep" },
+    { "ref", "hit ref=: first code site (not a comment/string) naming the hit's callerless enclosing def (where it is registered; one site)", true, "hit", MapHeaderRead::No, {}, "grep" },
     { "tier_budget", "tier_budget=: files|bytes cap hit after tier_parsed= of tier_files= hit files; tier counts floors, every row served", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "line_bytes", "line_bytes=N: whole line N bytes; text is a cut prefix", true, "hit", MapHeaderRead::No, {}, "grep" },
     { "unindexed_files_scanned", "unindexed_files_scanned=N: off-index text files also scanned; outside complete=", false, "grep", MapHeaderRead::No, {}, "grep" },

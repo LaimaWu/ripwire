@@ -2065,7 +2065,8 @@ inline GrepCollection grepApplyBooleanTerms( const IngestResult& ing, GrepCollec
 // THE COST MODEL (E5, PLAN_WAVE2_REPORTS_2026-08-17/exp-e5.md): tiering needs the hit files PARSED, and
 // astQuery/astQueryGrouped always parse the whole corpus — the wrong cost model for a verb that has already
 // narrowed to a handful of files. E5 measured the alternative (~42 ns/byte; 0.217 ms median per file on a
-// 2400-file tree) and funded ingest.h's narrow spanTiersOfFiles() entry, which this is the only caller of.
+// 2400-file tree) and funded ingest.h's narrow spanTiersOfFiles() entry, which this and grepFirstRefSite (ref=, at most
+// kGrepRefSitesScanned candidate sites) are the callers of.
 //
 // THE BAIL-OUT (E5 design condition 3) IS A BYTE BUDGET, NOT A TIME BUDGET, and that substitution is the
 // one place this diverges from E5's wording. E5 asked for "a per-call parse-time budget"; a wall-clock
@@ -2130,6 +2131,10 @@ inline bool isBareWordCodePath( std::string_view p )
 // that text lives in source is a string: the command table's `.name = "split-window"`, not the 59 shell lines that
 // type the command. Such a literal, or any literal whose code tier is thin (fewer than kGrepLiftCodeFloor hits),
 // serves its string tier WITH the code tier. Identifier-shaped literals with a full code tier keep today's answer.
+// Fix round 1 (rv-lean-trio item 2): the SHAPE is a text heuristic, so it never outvotes the parser — the lift fires only
+// while the literal's classified CODE hits in source code (grepSourceTierHits: PathTier::Source, not shell/YAML/TOML/JSON,
+// not a test or doc) number under kGrepLiftCodeFloor. `self.app`, `c.json`, `DEFAULT_CSS` have ~100 code rows in source and
+// keep them; tmux `split-window` has 2 in .c files (its other code hits are .sh/.conf lines that type it) and still lifts.
 inline constexpr std::uint32_t kGrepLiftCodeFloor = 8;
 inline constexpr int           kGrepLiftRowCap    = 10;   // a code+string answer's default window (CLI and MCP alike)
 
@@ -2226,26 +2231,43 @@ inline void grepRankLiftedStrings( const IngestResult& ing, std::vector<GrepRawH
     std::stable_sort( raw.begin(), raw.end(), [ & ]( const GrepRawHit& a, const GrepRawHit& b ) { return groupAt( a.fileId ) < groupAt( b.fileId ); } );
 }
 
-// idea #5's precondition, the SAME "source code" grepLiteralLiftsStrings means (review item 3 of that lane): a classified
-// string-tier hit in a PathTier::Source file that is not a shell/YAML/TOML/JSON file. Strings only in such files never lift.
-inline bool grepAnySourceString( const IngestResult& ing, const std::vector<GrepRawHit>& raw, const std::vector<std::uint8_t>& hitTier )
+// idea #5's precondition, the SAME "source code" grepLiteralLiftsStrings means (review item 3 of that lane): classified
+// hits in a PathTier::Source file that is not a shell/YAML/TOML/JSON file, by tier. A lift needs a string there (strings only
+// in other files never lift) and, fix round 1, fewer than kGrepLiftCodeFloor code hits there. Unclassified hits never vote.
+struct GrepSourceTierHits
+{
+    std::uint32_t code   = 0;
+    std::uint32_t string = 0;
+};
+
+inline GrepSourceTierHits grepSourceTierHits( const IngestResult& ing, const std::vector<GrepRawHit>& raw, const std::vector<std::uint8_t>& hitTier )
 {
     EXPECTS( hitTier.size() == raw.size(), "one tier byte per raw hit" );
     const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( ing, raw, []( const GrepRawHit& r ) { return r.fileId; } );
+    GrepSourceTierHits counts;
+    std::uint32_t      lastFile   = UINT32_MAX;
+    bool               lastSource = false;   // one path decision per hit FILE (a file's hits are contiguous)
     for( std::size_t h = 0; h < raw.size(); ++h )
     {
         const std::uint32_t f = raw[h].fileId;
-        if( hitTier[h] == std::uint8_t( SpanTier::String ) && f < tierOfFile.size() && tierOfFile[f] == std::uint8_t( PathTier::Source )
-            && !isBareWordCodePath( rootRelPath( ing, f ) ) )
+        if( f != lastFile )
         {
-            return true;
+            lastFile   = f;
+            lastSource = f < tierOfFile.size() && tierOfFile[f] == std::uint8_t( PathTier::Source ) && !isBareWordCodePath( rootRelPath( ing, f ) );
         }
+        if( !lastSource )
+        {
+            continue;
+        }
+        counts.code   += hitTier[h] == std::uint8_t( SpanTier::Code ) ? 1u : 0u;
+        counts.string += hitTier[h] == std::uint8_t( SpanTier::String ) ? 1u : 0u;
     }
-    return false;
+    ENSURES( counts.code + counts.string <= raw.size(), "a source-tier count never exceeds the hits it counts" );
+    return counts;
 }
 
 // The span-tier election's code+string arm: either lift — idea #5's (the literal's SHAPE, or a thin code tier, with a
-// source string to serve) or the literal-question lift (grepLiteralLiftsStrings: no code hit in source code). Both need
+// source string to serve and fewer than kGrepLiftCodeFloor code hits in source code) or the literal-question lift (grepLiteralLiftsStrings: no code hit in source code). Both need
 // a classified code hit; `literal` is empty for a regex, which only the second lift can serve.
 inline bool grepServesStringsWithCode( const IngestResult& ing, const std::vector<GrepRawHit>& raw, const std::vector<std::uint8_t>& hitTier,
                                        std::uint32_t codeHits, std::uint32_t stringHits, std::string_view literal )
@@ -2254,9 +2276,12 @@ inline bool grepServesStringsWithCode( const IngestResult& ing, const std::vecto
     {
         return false;
     }
-    const bool shapeLift = !literal.empty() && stringHits > 0
-                        && ( grepLiteralWantsStrings( literal ) || codeHits < kGrepLiftCodeFloor )
-                        && grepAnySourceString( ing, raw, hitTier );
+    bool shapeLift = false;
+    if( !literal.empty() && stringHits > 0 && ( grepLiteralWantsStrings( literal ) || codeHits < kGrepLiftCodeFloor ) )
+    {
+        const GrepSourceTierHits src = grepSourceTierHits( ing, raw, hitTier );
+        shapeLift = src.string > 0 && src.code < kGrepLiftCodeFloor;   // fix round 1: a full source code tier keeps its rows
+    }
     return shapeLift || grepLiteralLiftsStrings( ing, raw, hitTier );
 }
 
@@ -2541,7 +2566,7 @@ inline std::vector<GrepEncRow> grepEnclosingRows( const IngestResult& ing, const
 // names it (`&cmd_split_window_entry` in `cmd_table[]`). The enc row already hands that grep over as
 // floor_next=; this runs it for the answer: the first indexed site that names `name` as a whole word inside an
 // enclosing symbol that is neither the definition itself nor another of the same name (an extern declaration), on a
-// line after the one that declares that enclosing symbol (inside its body or initializer).
+// line after the one that declares that enclosing symbol (inside its body or initializer), in CODE (not a comment or string).
 // Bounded: at most kGrepRefSitesScanned candidate sites are enriched. Returns {fileId, line}, or line 0 when none.
 inline constexpr std::size_t kGrepRefSitesScanned = 64;
 
@@ -2557,27 +2582,54 @@ inline bool grepIsWordAt( std::string_view text, std::size_t at, std::size_t len
     return ( at == 0 || !isIdent( text[at - 1] ) ) && ( at + len >= text.size() || !isIdent( text[at + len] ) );
 }
 
-inline GrepRefSite grepFirstRefSite( const IngestResult& ing, const std::string& name, NodeId defId )
+inline GrepRefSite grepFirstRefSite( const IngestResult& ing, const std::string& name, NodeId defId, bool useMemo = true )
 {
     EXPECTS( !name.empty(), "a ref is looked up for a named definition" );
-    const GrepCollection found = grepCollect( ing, name );
-    const std::size_t    n     = std::min( found.raw.size(), kGrepRefSitesScanned );
-    const std::vector<GrepHit> sites = grepEnrich( ing, std::span<const GrepRawHit>( found.raw ).first( n ) );
-    for( const GrepHit& h : sites )
+    const GrepCollection              found = grepCollect( ing, name );
+    const std::span<const GrepRawHit> cand  = std::span<const GrepRawHit>( found.raw ).first( std::min( found.raw.size(), kGrepRefSitesScanned ) );
+    // Fix round 1 (rv-lean-trio item 3): only a CODE-tier occurrence is a registration. A comment (`/* unlike do_thing_entry,
+    // this one is not registered */`) or a string naming the entry is prose, so the candidates are classified by the same span
+    // parse the tier election uses (spanTiersOfFiles / spanTierAt), and an unclassified site — no grammar, unparsed — is
+    // never claimed either: ref= absent is a floor, ref= present is a claim.
+    std::vector<std::uint32_t> batchIndexOf( ing.files.size(), UINT32_MAX );
+    std::vector<std::string>   tierPaths;
+    for( const GrepRawHit& r : cand )
     {
-        if( h.enclosingId == kNoNode || h.enclosingId == defId || h.enclosingId >= ing.symbols.size()
-            || ing.symbols[h.enclosingId].name == name || h.line <= ing.symbols[h.enclosingId].line )
+        if( r.fileId < batchIndexOf.size() && batchIndexOf[r.fileId] == UINT32_MAX )
         {
-            // the definition itself, file scope, a same-named declaration, or a site on the line that DECLARES its
-            // enclosing symbol (a prototype parsed as `enum cmd_retval`): none of them is a body that registers it
+            batchIndexOf[r.fileId] = std::uint32_t( tierPaths.size() );
+            tierPaths.push_back( diskPath( ing, r.fileId ) );
+        }
+    }
+    const SpanTierBatch batch  = spanTiersOfFiles( std::span<const std::string>( tierPaths ), useMemo );   // <= kGrepRefSitesScanned files: the bound
+    const auto          isCode = [ & ]( const GrepRawHit& r ) -> bool
+    {
+        const std::uint32_t index = r.fileId < batchIndexOf.size() ? batchIndexOf[r.fileId] : UINT32_MAX;
+        return index < batch.perFile.size() && batch.perFile[index].isParsed && spanTierAt( batch.perFile[index], r.byteOffset ) == SpanTier::Code;
+    };
+    const std::vector<GrepHit> sites = grepEnrich( ing, cand );
+    ASSUME( sites.size() == cand.size(), "grepEnrich returns one row per raw hit, in order" );
+    std::size_t occurrence = 0;   // which occurrence of `name` on its line raw hit i is (the scanner steps pos+1, as find does below)
+    for( std::size_t i = 0; i < sites.size(); ++i )
+    {
+        const GrepHit& h = sites[i];
+        occurrence = ( i > 0 && cand[i - 1].fileId == cand[i].fileId && cand[i - 1].line == cand[i].line ) ? occurrence + 1 : 0;
+        if( h.enclosingId == kNoNode || h.enclosingId == defId || h.enclosingId >= ing.symbols.size()
+            || ing.symbols[h.enclosingId].name == name || h.line <= ing.symbols[h.enclosingId].line || !isCode( cand[i] ) )
+        {
+            // the definition itself, file scope, a same-named declaration, a site on the line that DECLARES its enclosing
+            // symbol (a prototype parsed as `enum cmd_retval`), or a comment/string/unclassified occurrence: none of them
+            // is a body that registers it
             continue;
         }
-        for( std::size_t at = h.text.find( name ); at != std::string::npos; at = h.text.find( name, at + 1 ) )
+        std::size_t at = h.text.find( name );
+        for( std::size_t k = 0; k < occurrence && at != std::string::npos; ++k )
         {
-            if( grepIsWordAt( h.text, at, name.size() ) )
-            {
-                return GrepRefSite{ h.fileId, h.line };
-            }
+            at = h.text.find( name, at + 1 );
+        }
+        if( at != std::string::npos && grepIsWordAt( h.text, at, name.size() ) )
+        {
+            return GrepRefSite{ h.fileId, h.line };   // a whole-word, code-tier occurrence (a cut line that lost it is skipped)
         }
     }
     return {};
