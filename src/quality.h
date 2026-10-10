@@ -2266,8 +2266,10 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 29;   // MUST equal ingest.cpp's kCacheVersion (gated); 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 160;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 30;   // MUST equal ingest.cpp's kCacheVersion (gated); 30 = lane lego-transitive fix 1 inherit-ref baseBind, 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
+constexpr std::uint32_t kIngestParserVerMirror    = 162;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 162 = 2026-10-10 lane lego-transitive fix 1 (inherit-ref base binding; above 160's
+                                                          //   rich tag 161; the train renumbers)
                                                           // 160 = 2026-10-10 lane lego-transitive (JS/TS class factory; above 156's
                                                           //   rich tag 157 and train 26c's 158/159; the train renumbers)
                                                           // 156 = 2026-10-08 (train 26b: above every lane build, up to 154 / rich tag 155; see the

@@ -71,17 +71,342 @@ inline RawRef rawRefAt( TSNode at, std::uint32_t fileId, Lang lang, RefRole role
     return r;
 }
 
+// ---- lane lego-transitive fix 1: WHICH same-file declaration a base name binds to (parser evidence) ----------------
+// `class Leaf(Mid)` used to reach the implementors builder as the bare NAME `Mid`, which graph.h bound to every class of
+// that name in the tree — so `--lego=Base` listed b.py's `Leaf` under a.py's unrelated `Mid` as a depth-2 subtype. The
+// parser can see what the language's own lookup sees for a name written in the file: a class declared in an enclosing
+// scope (the innermost wins), reached the way the source writes it (`Outer.Changed` → the `Changed` inside `Outer`,
+// `b::Mid` → the `Mid` inside `namespace b`, including a reopened `namespace b { }` block). It records the NAME BYTE of
+// that declaration on the reference (RawRef::baseBind), and graph.h proves the edge to the one candidate whose span holds
+// it. A name no enclosing scope declares records nothing here: graph.h then asks the file's imports / includes / package.
+// What it does NOT read: a `using namespace`, a star import, an alias assignment (`Base = make_base()`), a class declared
+// inside a function the reference is not in. Those leave the reference without a local binding — never a wrong one.
+inline constexpr std::uint32_t kBaseBindNone    = 0;            // no enclosing scope declares the name
+inline constexpr std::uint32_t kBaseBindUnknown = 0xFFFFFFFFu;  // a scope was too large to scan: nothing proven either way
+inline constexpr std::uint32_t kBaseScopeScanCap = 4096;        // named children read per enclosing scope (a runaway guard:
+                                                                // a scope past it binds nothing, the edge stays name-only)
+
+// class-like declaration kinds across the grammars whose base clauses captureBases reads, each with a `name:` field.
+// Kotlin's class_declaration has no `name:` field (kotlinEnclosingScopeOf), so a Kotlin base never binds here.
+inline bool isClassDeclKind( const char* t ) noexcept
+{
+    static const char* const kKinds[] = {
+        "class_specifier", "struct_specifier",                                            // C/C++
+        "class_definition",                                                               // Python
+        "class_declaration", "abstract_class_declaration", "interface_declaration",       // JS/TS/Java/C#/PHP/Swift
+        "enum_declaration", "record_declaration", "struct_declaration", "trait_declaration",
+        "protocol_declaration", "class",                                                  // Swift protocol; JS class expression
+    };
+    for( const char* k : kKinds )
+    {
+        if( std::strcmp( t, k ) == 0 )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// a scope a qualifier segment can name besides a class: a C++/PHP namespace, a C# namespace, a TS namespace
+inline bool isNamespaceDeclKind( const char* t ) noexcept
+{
+    return kindIs( t, "namespace_definition" ) || kindIs( t, "namespace_declaration" ) || kindIs( t, "internal_module" );
+}
+
+// the declaration a scope-level statement carries: `export class X`, a decorated Python class, a C++ template, a C++
+// `struct X { } x;` declaration or a nested `struct In { };` member — the node itself for every other statement
+inline TSNode baseDeclOf( TSNode stmt ) noexcept
+{
+    const char* t = ts_node_type( stmt );
+    if( kindIs( t, "export_statement" ) )
+    {
+        return fieldChild( stmt, NodeField::Declaration );
+    }
+    if( kindIs( t, "decorated_definition" ) )
+    {
+        return fieldChild( stmt, NodeField::Definition );
+    }
+    if( kindIs( t, "template_declaration" ) )
+    {
+        const std::uint32_t n = ts_node_named_child_count( stmt );
+        return n == 0 ? TSNode{} : ts_node_named_child( stmt, n - 1 );   // the templated entity is the last named child
+    }
+    if( kindIs( t, "declaration" ) || kindIs( t, "field_declaration" ) )
+    {
+        return fieldChild( stmt, NodeField::Type );
+    }
+    return stmt;
+}
+
+// does declaration `d` declare `name` as a class (or, when `scopeOwner`, as a class or namespace that a qualifier can
+// name)? A C/C++ class must carry a body: `struct Mid;` declares a name whose definition lives elsewhere. Returns the name
+// node, or a null node.
+inline TSNode baseDeclNames( TSNode d, std::string_view name, bool scopeOwner, std::string_view src ) noexcept
+{
+    if( ts_node_is_null( d ) )
+    {
+        return TSNode{};
+    }
+    const char* t = ts_node_type( d );
+    if( isClassDeclKind( t ) || ( scopeOwner && isNamespaceDeclKind( t ) ) )
+    {
+        if( ( kindIs( t, "class_specifier" ) || kindIs( t, "struct_specifier" ) ) && ts_node_is_null( fieldChild( d, NodeField::Body ) ) )
+        {
+            return TSNode{};
+        }
+        const TSNode nm = fieldChild( d, NodeField::Name );
+        return ( !ts_node_is_null( nm ) && nodeTextOf( nm, src ) == name ) ? nm : TSNode{};
+    }
+    if( !scopeOwner && ( kindIs( t, "lexical_declaration" ) || kindIs( t, "variable_declaration" ) ) )
+    {
+        // JS/TS `const Node = class extends Obj {}` and the class factory `const BinOp = Node.extend('BinOp', …)`: the
+        // declarator's NAME is the class; whether a factory IS one is ingest_names.h's gate, and an edge to a declarator
+        // the gate dropped finds no candidate in graph.h (it stays name-only)
+        TSNode hit{};
+        ChildCursor cursor( d );
+        forEachNamedChild( d, cursor.cur, [ & ]( TSNode decl )
+        {
+            if( !kindIs( ts_node_type( decl ), "variable_declarator" ) )
+            {
+                return true;
+            }
+            const TSNode nm  = fieldChild( decl, NodeField::Name );
+            const TSNode val = fieldChild( decl, NodeField::Value );
+            if( ts_node_is_null( nm ) || ts_node_is_null( val ) || nodeTextOf( nm, src ) != name )
+            {
+                return true;
+            }
+            const char* vt = ts_node_type( val );
+            if( kindIs( vt, "class" ) || kindIs( vt, "call_expression" ) )
+            {
+                hit = nm;
+            }
+            return false;
+        } );
+        return hit;
+    }
+    return TSNode{};
+}
+
+// One scope's lookup of `name`: the declaration among `scope`'s statements (skipping `self`, the class whose header
+// writes the base). `ambiguous` is set when two bodied declarations answer (a Python redefinition, two C++ definitions),
+// `cut` when the scope holds more than kBaseScopeScanCap statements. Returns the declaration node (name in `nameOut`).
+struct BaseScopeHit
+{
+    TSNode decl{};
+    TSNode name{};
+    bool   ambiguous = false;
+    bool   cut       = false;
+};
+
+inline BaseScopeHit lookupInScope( TSNode scope, std::string_view name, bool scopeOwner, TSNode self, std::string_view src ) noexcept
+{
+    BaseScopeHit  hit;
+    std::uint32_t seen = 0;
+    ChildCursor   cursor( scope );
+    forEachNamedChild( scope, cursor.cur, [ & ]( TSNode stmt )
+    {
+        if( ++seen > kBaseScopeScanCap )
+        {
+            hit.cut = true;
+            return false;
+        }
+        const TSNode d = baseDeclOf( stmt );
+        if( ts_node_is_null( d ) || ts_node_eq( d, self ) || ts_node_eq( stmt, self ) )
+        {
+            return true;
+        }
+        const TSNode nm = baseDeclNames( d, name, scopeOwner, src );
+        if( ts_node_is_null( nm ) )
+        {
+            return true;
+        }
+        if( !ts_node_is_null( hit.name ) && !( scopeOwner && isNamespaceDeclKind( ts_node_type( d ) ) ) )
+        {
+            hit.ambiguous = true;   // a namespace reopened in one scope is ONE scope (handled by the caller); a class twice is two
+            return false;
+        }
+        if( ts_node_is_null( hit.name ) )
+        {
+            hit.decl = d;
+            hit.name = nm;
+        }
+        return true;
+    } );
+    return hit;
+}
+
+// the written segments of a base type node — `Outer.Changed` → {Outer, Changed}, `b::Mid` → {b, Mid}, `Base<T>` →
+// {Base}, `::Mid` → {Mid} with `absolute` — read off the node the grammar already classified as a type name
+inline std::vector<std::string_view> baseSegments( std::string_view text, bool& absolute ) noexcept
+{
+    std::vector<std::string_view> segs;
+    if( const std::size_t lt = text.find( '<' ); lt != std::string_view::npos && lt > 0 )
+    {
+        text = text.substr( 0, lt );
+    }
+    absolute = text.starts_with( "::" );
+    std::size_t i = 0;
+    while( i < text.size() )
+    {
+        std::size_t j = i;
+        while( j < text.size() && text[ j ] != ':' && text[ j ] != '.' && text[ j ] != '\\' )
+        {
+            ++j;
+        }
+        std::string_view seg = text.substr( i, j - i );
+        while( !seg.empty() && ( seg.back() == ' ' || seg.back() == '\t' ) ) { seg.remove_suffix( 1 ); }
+        while( !seg.empty() && ( seg.front() == ' ' || seg.front() == '\t' ) ) { seg.remove_prefix( 1 ); }
+        if( !seg.empty() )
+        {
+            segs.push_back( seg );
+        }
+        i = j;
+        while( i < text.size() && ( text[ i ] == ':' || text[ i ] == '.' || text[ i ] == '\\' ) )
+        {
+            ++i;
+        }
+    }
+    return segs;
+}
+
+// the body of a scope owner a qualifier named (a class body, a namespace body); null when it has none
+inline TSNode scopeBodyOf( TSNode owner ) noexcept
+{
+    return fieldChild( owner, NodeField::Body );
+}
+
+// The innermost declaration of `name` visible from `site` (owned by `self`): every enclosing node's statements are read,
+// innermost first, the way the language's lexical lookup reads them. A C++ namespace reopened in the same enclosing scope
+// is searched as one (TrueLeaf in a second `namespace a { }` sees the first block's `Mid`). `scopeOwner`: the name is a
+// qualifier segment, so a namespace answers too. A cut or ambiguous scope stops the walk with its flag set.
+inline BaseScopeHit findOutward( TSNode site, TSNode self, std::string_view name, bool scopeOwner, bool absolute, std::string_view src ) noexcept
+{
+    for( TSNode p = ts_node_parent( site ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    {
+        if( absolute && !ts_node_is_null( ts_node_parent( p ) ) )
+        {
+            continue;   // `::Mid` names the global scope only
+        }
+        BaseScopeHit hit = lookupInScope( p, name, scopeOwner, self, src );
+        const char* pk = ts_node_type( p );
+        if( ts_node_is_null( hit.name ) && !hit.cut && !hit.ambiguous && isNamespaceDeclKind( pk ) )
+        {
+            // the same namespace opened again beside this block: `namespace a { … } namespace a { struct T : Mid {} }` (C++,
+            // and C#'s `namespace A { }` and TS's `namespace a { }` the same way — a PHP `namespace A;` statement has no block)
+            const TSNode nsName = fieldChild( p, NodeField::Name );
+            const TSNode outer  = ts_node_parent( p );
+            if( !ts_node_is_null( nsName ) && !ts_node_is_null( outer ) )
+            {
+                const std::string_view ns   = nodeTextOf( nsName, src );
+                std::uint32_t          seen = 0;
+                ChildCursor            cursor( outer );
+                forEachNamedChild( outer, cursor.cur, [ & ]( TSNode sib )
+                {
+                    if( ++seen > kBaseScopeScanCap )
+                    {
+                        hit.cut = true;
+                        return false;
+                    }
+                    if( ts_node_eq( sib, p ) || std::strcmp( ts_node_type( sib ), pk ) != 0
+                        || nodeTextOf( fieldChild( sib, NodeField::Name ), src ) != ns || ts_node_is_null( scopeBodyOf( sib ) ) )
+                    {
+                        return true;
+                    }
+                    const BaseScopeHit h = lookupInScope( scopeBodyOf( sib ), name, scopeOwner, self, src );
+                    if( h.cut || h.ambiguous || ( !ts_node_is_null( h.name ) && !ts_node_is_null( hit.name ) ) )
+                    {
+                        hit.ambiguous = true;
+                        return false;
+                    }
+                    if( !ts_node_is_null( h.name ) )
+                    {
+                        hit.decl = h.decl;
+                        hit.name = h.name;
+                    }
+                    return true;
+                } );
+            }
+        }
+        if( hit.cut || hit.ambiguous || !ts_node_is_null( hit.name ) )
+        {
+            return hit;
+        }
+    }
+    return BaseScopeHit{};
+}
+
+// Resolve `segs` from the class header at `site` (owned by `self`) and return the binding's encoding for RawRef::baseBind:
+// the FIRST segment through findOutward, each further segment inside the body the previous one named.
+inline std::uint32_t localBaseBinding( TSNode site, TSNode self, const std::vector<std::string_view>& segs, bool absolute,
+                                       std::string_view src ) noexcept
+{
+    if( segs.empty() )
+    {
+        return kBaseBindNone;
+    }
+    const BaseScopeHit first = findOutward( site, self, segs.front(), segs.size() > 1, absolute, src );
+    if( first.cut || first.ambiguous )
+    {
+        return kBaseBindUnknown;
+    }
+    TSNode found     = first.decl;
+    TSNode foundName = first.name;
+    if( ts_node_is_null( found ) )
+    {
+        return kBaseBindNone;
+    }
+    for( std::size_t i = 1; i < segs.size(); ++i )
+    {
+        const TSNode body = scopeBodyOf( found );
+        if( ts_node_is_null( body ) )
+        {
+            return kBaseBindNone;
+        }
+        const BaseScopeHit hit = lookupInScope( body, segs[ i ], i + 1 < segs.size(), self, src );
+        if( hit.cut || hit.ambiguous )
+        {
+            return kBaseBindUnknown;
+        }
+        if( ts_node_is_null( hit.name ) )
+        {
+            return kBaseBindNone;   // the qualifier names an in-file scope that does not declare it: nothing proven here
+        }
+        found     = hit.decl;
+        foundName = hit.name;
+    }
+    return ts_node_start_byte( foundName ) + 1u;   // never 0 (kBaseBindNone) — and below ~0u: a TSNode byte is a u32 < src.size()
+}
+
 // Emit one inherit RawRef (derived → base) for a base-type node. startByte sits inside the class header
 // (the type node's own start), so the byte-span enclosing attribution binds fromSymbol = the derived class.
-inline void emitBaseRef( TSNode typeNode, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawRef>& refs )
+// `self` is the declaration whose header writes the base (its own name never answers the lookup). lane lego-transitive
+// fix 1: the reference also carries the written qualifier (memberRoot on an inherit ref: `Outer` for `Outer.Changed`) and
+// the same-file declaration the name binds to (baseBind, localBaseBinding above). Ruby keeps its own constant lookup
+// (resolve.h RubyBaseScope), so a Ruby base records neither.
+inline void emitBaseRef( TSNode typeNode, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawRef>& refs, TSNode self = TSNode{} )
 {
     const uint32_t a = ts_node_start_byte( typeNode ), b = ts_node_end_byte( typeNode );
     if( a >= b || b > src.size() )
     {
         return;
     }
-    RawRef r    = rawRefAt( typeNode, fileId, lang, RefRole::Extends, finalSegment( src.substr( a, b - a ) ) );   // a base-class / interface use-site
+    const std::string_view text = src.substr( a, b - a );
+    RawRef r    = rawRefAt( typeNode, fileId, lang, RefRole::Extends, finalSegment( text ) );   // a base-class / interface use-site
     r.isInherit = true;
+    if( lang != Lang::Ruby && lang != Lang::Rust )
+    {
+        bool                                absolute = false;
+        const std::vector<std::string_view> segs     = baseSegments( text, absolute );
+        r.baseBind = localBaseBinding( typeNode, self, segs, absolute, src );
+        if( segs.size() > 1 )
+        {
+            const std::size_t last = text.rfind( segs.back() );
+            std::string_view  qual = text.substr( 0, last == std::string_view::npos ? 0 : last );
+            while( !qual.empty() && ( qual.back() == ':' || qual.back() == '.' || qual.back() == '\\' || qual.back() == ' ' ) ) { qual.remove_suffix( 1 ); }
+            r.memberRoot = std::string( qual );
+        }
+    }
     refs.push_back( std::move( r ) );
 }
 
@@ -508,7 +833,7 @@ void captureBases( TSNode classNode, std::uint32_t fileId, Lang lang, std::strin
             const char* bt = ts_node_type( bn );
             if( isBaseTypeNodeIn( bt, lang ) )         // DIRECT: type node right under the clause
             {
-                emitBaseRef( bn, fileId, lang, src, refs );
+                emitBaseRef( bn, fileId, lang, src, refs, classNode );
                 return true;
             }
             // Ruby has no wrapper: its `superclass` clause holds ONE expression, and anything but a constant is
@@ -518,14 +843,49 @@ void captureBases( TSNode classNode, std::uint32_t fileId, Lang lang, std::strin
             {
                 return true;
             }
+            // lane lego-transitive fix 1: Python's bases are EXPRESSIONS in the argument list, with no wrapper either. The
+            // one-level descent below read each identifier INSIDE one as a base of its own: `Outer.Changed` minted `Outer`
+            // and `Changed`, `Generic[Key]` minted `Generic` and the type argument `Key`, `metaclass=ABCMeta` the keyword
+            // `metaclass` and its value. A dotted base is ONE base named by its last attribute (the qualifier rides along
+            // for graph.h), a subscript's base is its value (the type arguments are not bases), and a keyword argument, a
+            // call (`with_metaclass( M, B )`, `namedtuple( … )`) or a splat is a computed base this tool cannot name.
+            if( lang == Lang::Python )
+            {
+                const TSNode named = kindIs( bt, "subscript" ) ? fieldChild( bn, NodeField::Value ) : bn;
+                if( !ts_node_is_null( named ) && ( kindIs( ts_node_type( named ), "attribute" ) || kindIs( ts_node_type( named ), "identifier" ) ) )
+                {
+                    emitBaseRef( named, fileId, lang, src, refs, classNode );
+                }
+                return true;
+            }
+            // The JS twin: `class A extends ns.Base` holds a member_expression, which the descent read as the base `ns`;
+            // `extends mixin( B )` a call, which it read as `mixin`. TS wraps the same expressions in extends_clause.
+            const auto jsExpr = [ & ]( TSNode n, const char* t )
+            {
+                if( ( lang == Lang::JavaScript || lang == Lang::TypeScript ) && kindIs( t, "member_expression" ) )
+                {
+                    emitBaseRef( n, fileId, lang, src, refs, classNode );
+                    return true;
+                }
+                return ( lang == Lang::JavaScript || lang == Lang::TypeScript ) && kindIs( t, "call_expression" );
+            };
+            if( jsExpr( bn, bt ) )
+            {
+                return true;
+            }
             // WRAPPED: descend ONE level into a wrapper (extends_clause / implements_clause / type_list)
             // and emit each type node it holds. One level is enough for every measured grammar shape.
             ChildCursor wrapCursor( bn );
             forEachChild( bn, wrapCursor.cur, [ & ]( TSNode wn )
             {
-                if( isBaseTypeNode( ts_node_type( wn ) ) )
+                const char* wt = ts_node_type( wn );
+                if( isBaseTypeNode( wt ) || kindIs( wt, "nested_type_identifier" ) )   // TS `implements ns.IFoo`
                 {
-                    emitBaseRef( wn, fileId, lang, src, refs );
+                    emitBaseRef( wn, fileId, lang, src, refs, classNode );
+                }
+                else
+                {
+                    jsExpr( wn, wt );
                 }
                 return true;
             } );
