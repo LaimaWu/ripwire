@@ -170,5 +170,32 @@ SD7_ONE="$( "$BIN" "$SD7" --no-cache --safe-delete=sdone 2>/dev/null )"
     && ok "(7) near miss: an uncut answer carries sites_at= with neither sites_total= nor a next=" \
     || no "(7) uncut answer: $SD7_ONE"
 
+# (8) fix round 1 (review item 1), the --callers SA12 twin: in a caller that also holds a real call, a value use, &f, a
+#     block-scope prototype, a string and two comments spelled like the name are NOT call sites. RED when the call-role
+#     filter (editcheck.h forEachCallSite) is dropped.
+cat > "$SD7/n.c" <<'SDEOF'
+typedef int (*sdfp)( int );
+static int sdnoise( int x ) { return x; }
+int sdnoisecaller( void )
+{
+    /* sdnoise( 3 ) in a comment */
+    // sdnoise( 4 ) in a line comment
+    const char *s = "sdnoise( 5 ) in a string";
+    int sdnoise( int );
+    sdfp p = sdnoise;
+    sdfp q = &sdnoise;
+    return sdnoise( 6 ) + ( s != 0 ) + p( 0 ) + q( 0 );
+}
+SDEOF
+SD8="$( "$BIN" "$SD7" --no-cache --safe-delete=sdnoise 2>/dev/null )"
+SD8_ALL="$( printf '%s' "$SD8" | sed 's/<!--.*-->//' | grep -oE ' sites_at="[^"]*"' | sed -e 's/^ sites_at="//' -e 's/"$//' | tr '\n' ' ' | sed 's/ $//' )"
+if ! printf '%s' "$SD8" | grep -q '<c n="sdnoisecaller"'; then
+    no "(8) premise: --safe-delete=sdnoise printed no sdnoisecaller row: $SD8"
+elif [ "$SD8_ALL" = "n.c:11" ]; then
+    ok "(8) near miss: a value use, &f, a local prototype, a string and comments are not sites (only n.c:11)"
+else
+    no "(8) non-call references printed as call sites: every sites_at= is \"$SD8_ALL\", want \"n.c:11\""
+fi
+
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'
 exit "$fail"

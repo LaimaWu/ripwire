@@ -301,5 +301,51 @@ sys.exit( 0 if r.get( "two_lines" ) == [ "lib.c:3", "lib.c:4", "lib.c:5" ] and "
         && ok "SA11: MCP $tool calledBy rows carry sites_at (== CLI) and the answer carries sites_note" \
         || no "SA11: MCP $tool: $( sa_mcp "$tool" target | head -c 400 )"
 done
+# SA12 (fix round 1, review item 1): near misses the call-role filter (editcheck.h forEachCallSite: r.role == Call) must
+#   keep OUT of sites_at=: in ONE caller that also holds a real call, a value use, &f, a block-scope prototype, a string and
+#   two comments spelled like the name; plus a caller whose only use is a value use. RED when that filter is dropped (the
+#   value uses and &f print as sites). Then the mechanism the legend states: matching is by LEAF name, so a qualified
+#   selector (--callers=ns::nst_fn) lists the same row's member call w.nst_fn(5) too.
+mkdir -p "$SA/nm"
+cat > "$SA/nm/noise.c" <<'SAEOF'
+typedef int (*nmfp)(int);
+int nm_target(int x) { return x + 1; }
+int nm_noise(void) {
+    /* nm_target(3) in a comment */
+    // nm_target(4) in a line comment
+    const char *s = "nm_target(5) in a string";
+    int nm_target(int);
+    nmfp p = nm_target;
+    nmfp q = &nm_target;
+    return nm_target(6) + (s != 0) + p(0) + q(0);
+}
+int nm_pointer_only(void) {
+    nmfp p = nm_target;
+    return p(7);
+}
+SAEOF
+cat > "$SA/nm/ns.cpp" <<'SAEOF'
+namespace ns { int nst_fn(int x) { return x + 1; } }
+struct W { int nst_fn(int x) { return x; } };
+int nst_mixed() {
+    W w;
+    int a = w.nst_fn(5);
+    int b = ns::nst_fn(6);
+    return a + b;
+}
+SAEOF
+SA_NM="$( sa --callers=nm_target )"
+SA_NM_ALL="$( printf '%s' "$SA_NM" | sed 's/<!--.*-->//' | grep -oE ' sites_at="[^"]*"' | sed -e 's/^ sites_at="//' -e 's/"$//' | tr '\n' ' ' | sed 's/ $//' )"
+if [ -z "$( row "$SA_NM" nm_noise )" ]; then
+    no "SA12: premise: --callers=nm_target printed no nm_noise row: $SA_NM"
+elif [ "$( sat "$( row "$SA_NM" nm_noise )" )" = "nm/noise.c:10" ] && [ "$SA_NM_ALL" = "nm/noise.c:10" ]; then
+    ok "SA12: near miss: a value use, &f, a local prototype, a string and comments are not sites (only nm/noise.c:10)"
+else
+    no "SA12: non-call references printed as call sites: every sites_at= is \"$SA_NM_ALL\", want \"nm/noise.c:10\""
+fi
+SA_NS="$( sa --callers=ns::nst_fn )"
+[ "$( sat "$( row "$SA_NS" nst_mixed )" )" = "nm/ns.cpp:5 nm/ns.cpp:6" ] \
+    && ok "SA12: by LEAF name: --callers=ns::nst_fn lists the row's w.nst_fn(5) call too (nm/ns.cpp:5 nm/ns.cpp:6)" \
+    || no "SA12: ns::nst_fn row: $( row "$SA_NS" nst_mixed )"
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
