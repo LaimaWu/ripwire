@@ -2378,4 +2378,20 @@ inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hi
     return delivered > 0 ? delivered : candidate.size();
 }
 
+// A FOLD — an answer that leaves rows out and names the call that prints them (edit-check's verdict line and rows_next=,
+// quality-delta's stale_by_kind= and stale_next=) — ships only when it PAYS (lane lean-trio fix round 1, owner ruling 5: a
+// fold must never hide a row for no byte gain). It pays when it is shorter than the full document by at least
+// kFoldMinSavingPct percent, as written (the full legend posture) AND as the compact layer delivers both (L1: the legend dial
+// never moves the payload). Why a margin and not merely "shorter": a reader who needs a folded row pays the full document
+// again on the second call, so with a need rate p the fold saves bytes only while folded < (1 - p) x full. p is UNMEASURED
+// (reports/knob-census.md, fold-honesty table), so the prior is one in four; fx --edit-check=blend (3 callers) saved 5 B of
+// 962 (0.5%) and keeps its rows, this repo's clean --edit-check=escapeXml (66%) and --quality-delta (93%) still fold.
+inline constexpr std::size_t kFoldMinSavingPct = 25;
+
+[[nodiscard]] inline bool foldPays( std::string_view folded, std::string_view full, std::string_view hint = {} )
+{
+    const auto pays = []( std::size_t f, std::size_t u ) noexcept { return f * 100 < u * ( 100 - kFoldMinSavingPct ); };
+    return pays( folded.size(), full.size() ) && pays( compactDeliveredBytesOrWritten( folded, hint ), compactDeliveredBytesOrWritten( full, hint ) );
+}
+
 } // namespace rw

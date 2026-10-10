@@ -51,35 +51,25 @@ OUT1="$( ec helper )"
 # pull just the <c .../> caller rows out of the ELEMENT (not the leading <!-- comment -->, which itself
 # prose-describes the incompatible="1" attribute and would false-positive a naive whole-output grep).
 rows(){ printf '%s' "$1" | grep -oE '<c [^>]*/>'; }
-# lane lean-trio (idea #11): an unchanged contract with nothing flagged is the verdict alone under EVERY legend posture
-# (L1: the dial never moves the payload) — callers= counted, defs= kept, no <c> rows, rows_next= naming the call that lists
-# them — and that call (an explicit --limit, the full document) lists useit(). RED on main 0852bc0f: both postures carry
-# the <c> rows and no rows_next=.
+# lane lean-trio fix round 1 (owner ruling 5, rv-lean-trio item 5): a fold ships only when it PAYS (compactlegend.h
+# foldPays: a quarter of the bytes, in both postures). One caller's row costs less than the verdict line's own legend, so
+# this answer is main's full document again — the useit() row listed, in EVERY posture (L1). RED on 33873861: both postures
+# folded the one row into rows_next=.
 OUT1C="$( cd "$WORK" && "$BIN" . --edit-check=helper --no-cache 2>/dev/null )"
 OUT1L="$( ec helper --limit=1 )"
-if printf '%s' "$OUT1" | grep -q '<edit-check sym="helper"' && printf '%s' "$OUT1" | grep -q 'status="unchanged" defs="1" callers="1"' \
-   && [ -z "$( rows "$OUT1" )" ] && printf '%s' "$OUT1" | grep -q 'rows_next="--edit-check=helper --limit=1"'; then
-    ok "(1c) --legend=full: the unchanged verdict alone, rows_next= names the listing call"
+printf '%s' "$OUT1" | grep -q '<edit-check sym="helper"' && printf '%s' "$OUT1" | grep -q 'callers="1"' \
+    && rows "$OUT1" | grep -q 'n="useit"' && ! printf '%s' "$OUT1" | grep -q 'rows_next=' \
+    && ok "clean tree: 1-hop caller useit() listed, not flagged incompatible (a one-row fold does not pay)" \
+    || { no "clean tree: caller listing wrong"; printf '%s\n' "$OUT1"; }
+if rows "$OUT1C" | grep -q 'n="useit"' && ! printf '%s' "$OUT1C" | grep -q 'rows_next='; then
+    ok "(1c) default (compact): the same row listed — the legend dial never moves the payload"
 else
-    no "(1c) --legend=full: the unchanged verdict-only answer is wrong"; printf '%s\n' "$OUT1"
-fi
-if printf '%s' "$OUT1C" | grep -q 'status="unchanged" defs="1" callers="1"' && [ -z "$( rows "$OUT1C" )" ] \
-   && printf '%s' "$OUT1C" | grep -q 'rows_next="--edit-check=helper --limit=1"'; then
-    ok "(1c) default (compact): the same verdict alone"
-else
-    no "(1c) default (compact): the unchanged verdict-only answer is wrong"; printf '%s\n' "$OUT1C"
+    no "(1c) default (compact): the one caller row was folded"; printf '%s\n' "$OUT1C"
 fi
 if rows "$OUT1L" | grep -q 'n="useit"' && printf '%s' "$OUT1L" | grep -q 'callers="1"' && ! printf '%s' "$OUT1L" | grep -q 'rows_next='; then
-    ok "(1d) the rows_next= call is the full document: it lists the 1-hop caller useit()"
+    ok "(1d) an explicit --limit is the full document: it lists the 1-hop caller useit()"
 else
-    no "(1d) the rows_next= call does not list useit()"; printf '%s\n' "$OUT1L"
-fi
-if command -v xmllint >/dev/null 2>&1; then
-    if printf '%s' "$OUT1C" | xmllint --noout - 2>/dev/null && printf '%s' "$OUT1" | xmllint --noout - 2>/dev/null; then
-        ok "(1e) the verdict-only answer is well-formed XML in both postures"
-    else
-        no "(1e) the verdict-only answer is not well-formed XML"
-    fi
+    no "(1d) the --limit call does not list useit()"; printf '%s\n' "$OUT1L"
 fi
 # (1f) the negative: a symbol with NO caller has no row to leave out, so it is the full document — no rows_next=, the
 # full legend's fold sentence — in every posture.
@@ -90,7 +80,74 @@ if printf '%s' "$OUT1Z" | grep -q 'status="unchanged" defs="1" callers="0"' && !
 else
     no "(1f) a caller-less unchanged contract took the verdict-only shape"; printf '%s\n' "$OUT1Z"
 fi
-rows "$OUT1L" | grep -q 'incompatible="1"' \
+
+# ── (1v) idea #11's VERDICT-ONLY fold: only on a tree that IS its HEAD, only when it pays ─────────────────
+# A private repo of its own (the (a)-(k) arms below edit $WORK). blend (TS) and compute (C) have 16 callers each, so the
+# verdict line pays on a clean tree; mix has 3, so it does not. main.ts imports blend; calc.h prototypes compute.
+FOLD="$( mktemp -d )"; trap 'rm -rf "$WORK" "$SHRINK" "$FOLD"' EXIT
+mkdir -p "$FOLD/src"
+{
+    echo 'export function blend(a: number, b: number): number { return a + b; }'
+    echo 'export function mix(a: number): number { return a * 2; }'
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do echo "export function t$i(): number { return blend($i, 1); }"; done
+    for i in 1 2 3; do echo "export function m$i(): number { return mix($i); }"; done
+} > "$FOLD/src/util.ts"
+printf '%s\n' 'import { blend } from "./util";' 'export function go(): number { return blend(5, 6); }' > "$FOLD/src/main.ts"
+echo 'int compute(int a, int b);' > "$FOLD/src/calc.h"
+{
+    echo '#include "calc.h"'
+    echo 'int compute(int a, int b) { return a + b; }'
+    echo 'int use1(void) { return compute(1, 2); }'
+    for i in 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do echo "int use$i(void) { return compute($i, 1); }"; done
+} > "$FOLD/src/calc.c"
+( cd "$FOLD" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
+fec(){ _s="$1"; shift; ( cd "$FOLD" && "$BIN" . --edit-check="$_s" --no-cache "$@" 2>/dev/null ); }
+fold_verdict(){   # LABEL OUT CALLERS — the verdict alone: callers= counted, no <c> rows, rows_next= naming the --limit call
+    if printf '%s' "$2" | grep -q "status=\"unchanged\" defs=\"1\" callers=\"$3\"" && [ -z "$( rows "$2" )" ] \
+       && printf '%s' "$2" | grep -q "rows_next=\"--edit-check=$4 --limit=$3\""; then ok "$1"; else no "$1"; printf '%s\n' "$2"; fi
+}
+fold_rows(){      # LABEL OUT ROW — the full document: the named row listed, no rows_next=
+    if rows "$2" | grep -qF "$3" && ! printf '%s' "$2" | grep -q 'rows_next='; then ok "$1"; else no "$1"; printf '%s\n' "$2"; fi
+}
+F_TS="$( fec blend --legend=full )"; F_TSC="$( fec blend )"; F_C="$( fec compute )"
+fold_verdict "(1v-a) clean tree, 16 callers, --legend=full: the unchanged verdict alone" "$F_TS" 16 blend
+fold_verdict "(1v-a) clean tree, 16 callers, default (compact): the same verdict alone" "$F_TSC" 16 blend
+fold_verdict "(1v-a) clean tree, C compute (16 callers): the verdict alone" "$F_C" 16 compute
+if command -v xmllint >/dev/null 2>&1; then
+    if printf '%s' "$F_TSC" | xmllint --noout - 2>/dev/null && printf '%s' "$F_TS" | xmllint --noout - 2>/dev/null; then
+        ok "(1e) the verdict-only answer is well-formed XML in both postures"
+    else
+        no "(1e) the verdict-only answer is not well-formed XML"
+    fi
+fi
+F_TSL="$( fec blend --limit=16 )"
+[ "$( rows "$F_TSL" | wc -l | tr -d ' ' )" = 16 ] && rows "$F_TSL" | grep -qF '<c n="go" p="src/main.ts:2"/>' \
+    && ok "(1v-b) the rows_next= call lists all 16 callers, main.ts:go among them" \
+    || { no "(1v-b) the rows_next= call does not list the 16 callers"; printf '%s\n' "$F_TSL"; }
+# ruling 5: 3 callers' rows cost about what the verdict line's legend costs, so the rows ride in both postures
+fold_rows "(1v-c) clean tree, 3 callers (default): the fold does not pay, m1 listed" "$( fec mix )" '<c n="m1" p="src/util.ts:'
+fold_rows "(1v-c) clean tree, 3 callers (--legend=full): the rows ride there too (L1)" "$( fec mix --legend=full )" '<c n="m1" p="src/util.ts:'
+# ruling 1 (rv-lean-trio item 1): on a DIRTY tree every caller row rides. RED on 33873861 (folded into rows_next=):
+#   TS — `export` dropped from blend: the contract check is blind to TS publicness (status stays "unchanged"), and
+#        main.ts:go, the importer the edit breaks, is a row;
+#   C  — use1 edited to the wrong arity beside an unchanged prototype: never flagged, and use1 is a row.
+( cd "$FOLD" && sed 's/^export function blend/function blend/' src/util.ts > src/util.ts.new && mv src/util.ts.new src/util.ts )
+F_D="$( fec blend )"
+printf '%s' "$F_D" | grep -q 'status="unchanged"' && printf '%s' "$F_D" | grep -q 'at="[0-9a-f]*+dirty' \
+    && fold_rows "(1v-d) dirty tree (TS export dropped): every caller rides, main.ts:go listed" "$F_D" '<c n="go" p="src/main.ts:2"/>' \
+    || { no "(1v-d) premise: the TS export drop should read unchanged on a +dirty tree"; printf '%s\n' "$F_D"; }
+( cd "$FOLD" && git checkout -q src/util.ts \
+  && sed 's/^int use1(void) { return compute(1, 2); }/int use1(void) { return compute(1, 2, 3); }/' src/calc.c > src/calc.c.new && mv src/calc.c.new src/calc.c )
+F_D="$( fec compute )"
+printf '%s' "$F_D" | grep -q 'status="unchanged"' && ! printf '%s' "$F_D" | grep -q 'incompatible="1"' \
+    && fold_rows "(1v-e) dirty tree (C caller at the wrong arity, unflagged): use1 listed" "$F_D" '<c n="use1" p="src/calc.c:3"/>' \
+    || { no "(1v-e) premise: the wrong-arity caller should be unflagged under unchanged"; printf '%s\n' "$F_D"; }
+( cd "$FOLD" && git checkout -q src/calc.c && echo 'int stray;' > src/stray.c )
+# the near miss: an UNTRACKED file alone is a working-tree change too (at= says +dirty), so the rows ride
+fold_rows "(1v-f) an untracked file alone (+dirty): the rows ride" "$( fec compute )" '<c n="use1" p="src/calc.c:3"/>'
+rm -f "$FOLD/src/stray.c"
+fold_verdict "(1v-g) back at HEAD: the verdict again" "$( fec compute )" 16 compute
+rows "$OUT1" | grep -q 'incompatible="1"' \
     && no "clean tree: caller wrongly flagged incompatible (precision)" \
     || ok "clean tree: no false-positive incompatible flag"
 

@@ -144,6 +144,26 @@ else
     no "(3) exit code changed from the no-stale run ($rcClean -> $rcFG) — disclosure must never gate"
 fi
 
+# ── (2d) fix round 1 (owner ruling 5, rv-lean-trio item 5): a fold ships only when it PAYS (a quarter of the bytes, in both
+#     postures). ONE stale row on a dirty, regression-free tree costs less than the collapse's own attributes and legend
+#     sentence, so the default answer IS the full document — byte-identical to --show-stale, the <sa> row printed — in
+#     both postures. RED on 33873861: the default collapsed the one row (fx: 1512 B collapsed vs 1481 B full).
+run --quality-delta >"$TMP/fg_default" 2>/dev/null; rcFGd=$?
+run --quality-delta --legend=full >"$TMP/fg_full" 2>/dev/null
+run --quality-delta --show-stale --legend=full >"$TMP/fg_full_show" 2>/dev/null
+fgStale="$( grep -o 'stale="[0-9]*"' "$TMP/findinggone" | head -1 )"
+if [ "$fgStale" = 'stale="1"' ] && grep -q 'at="[0-9a-f]*+dirty' "$TMP/findinggone"; then
+    if cmp -s "$TMP/fg_default" "$TMP/findinggone" && cmp -s "$TMP/fg_full" "$TMP/fg_full_show" && grep -q '<sa ' "$TMP/fg_default" \
+       && [ "$rcFGd" -eq "$rcFG" ]; then
+        ok "(2d) one stale row on a dirty tree: the collapse does not pay, the default is the full document (both postures)"
+    else
+        no "(2d) the one-row collapse shipped although it does not pay"
+        grep -o '<quality-delta[^>]*>' "$TMP/fg_default" "$TMP/fg_full"
+    fi
+else
+    no "(2d) premise: the finding-gone tree should be dirty with exactly one stale ack (got $fgStale)"
+fi
+
 # ── (5) M21(a): a <sa> row NAMES the ack that went stale, wherever the tree can still name it ──────────
 # capture-audit 2026-09-04 (lens 0 M0-2). `<sa kind="complexity" key="4b309450f25c2b44" why="finding-gone"/>`
 # is a 16-hex hash of an identity the reader does not have: to act on it — retire the ack, or look at why

@@ -830,7 +830,7 @@ struct QualityDeltaLegendParts
 // A DEFINITION IS EMITTED WHEN THE THING IT DEFINES IS IN THE DOCUMENT. Nothing is dropped and no limit is
 // softened: a reader can never meet an undefined name, because a name and its sentence appear together or
 // not at all. See the constants above for what each section covers and why it is conditional.
-inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
+inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p, std::FILE* out = stdout )
 {
     const auto anyCloneRow = [] ( const std::vector<rw::quality::Regression>& v )
     {
@@ -853,50 +853,50 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
         return std::any_of( v.begin(), v.end(), []( const rw::quality::Regression& r ) { return r.kind == "defect-shape"; } );
     };
 
-    std::fputs( kQdLegendCore, stdout );
+    std::fputs( kQdLegendCore, out );
 
     // (1) the ONE floor in force. Keyed off the same pointer the element prints, so the sentence cannot
     // drift from the attribute. A marker with no sentence would be a disclosure gap, so the fallthrough is
     // the git-HEAD sentence — what every non-sidecar, non-ref-pair marker degrades to.
-    if     ( p.marker == "sidecar"                          ) { std::fputs( kQdBaseSidecar,     stdout ); }
-    else if( p.marker == "ref-pair"                         ) { std::fputs( kQdBaseRefPair,     stdout ); }
-    else if( p.marker == "git-HEAD (stale sidecar removed)" ) { std::fputs( kQdBaseHeadRemoved, stdout ); }
-    else if( p.marker == "git-HEAD (stale sidecar ignored)" ) { std::fputs( kQdBaseHeadIgnored, stdout ); }
-    else if( p.marker == "git-HEAD (sidecar unreadable)"     ) { std::fputs( kQdBaseHeadUnreadable, stdout ); }
-    else if( p.marker == "git-HEAD (symlinked sidecar refused)" ) { std::fputs( kQdBaseHeadSymlinkRefused, stdout ); }
-    else if( p.marker == "git-HEAD (foreign sidecar ignored)"   ) { std::fputs( kQdBaseHeadForeign, stdout ); }
-    else                                                      { std::fputs( kQdBaseHead,        stdout ); }
+    if     ( p.marker == "sidecar"                          ) { std::fputs( kQdBaseSidecar,     out ); }
+    else if( p.marker == "ref-pair"                         ) { std::fputs( kQdBaseRefPair,     out ); }
+    else if( p.marker == "git-HEAD (stale sidecar removed)" ) { std::fputs( kQdBaseHeadRemoved, out ); }
+    else if( p.marker == "git-HEAD (stale sidecar ignored)" ) { std::fputs( kQdBaseHeadIgnored, out ); }
+    else if( p.marker == "git-HEAD (sidecar unreadable)"     ) { std::fputs( kQdBaseHeadUnreadable, out ); }
+    else if( p.marker == "git-HEAD (symlinked sidecar refused)" ) { std::fputs( kQdBaseHeadSymlinkRefused, out ); }
+    else if( p.marker == "git-HEAD (foreign sidecar ignored)"   ) { std::fputs( kQdBaseHeadForeign, out ); }
+    else                                                      { std::fputs( kQdBaseHead,        out ); }
     if( p.baselineAbsorbed > 0 )
     {
-        std::fputs( kQdBaselineAbsorbedLegend, stdout );   // H11 — the attribute that re-reads the exit code
+        std::fputs( kQdBaselineAbsorbedLegend, out );   // H11 — the attribute that re-reads the exit code
     }
     // #228 — the attribute that says WHICH git-HEAD floor this is, one sentence per value it can carry.
     if( p.headBasis != nullptr )
     {
-        std::fputs( std::string_view( p.headBasis ) == "identity" ? kQdHeadBasisIdentityLegend : kQdHeadBasisArchivedLegend, stdout );
+        std::fputs( std::string_view( p.headBasis ) == "identity" ? kQdHeadBasisIdentityLegend : kQdHeadBasisArchivedLegend, out );
     }
 
     // (2) at= is omitted in the ref-pair form, so its sentence follows the attribute, not the verb.
     if( !p.refPair )
     {
-        std::fputs( kQdAtLegend, stdout );
+        std::fputs( kQdAtLegend, out );
     }
     if( p.anyRegisterMacro )
     {
-        std::fputs( kQdRegisterMacroLegend, stdout );
+        std::fputs( kQdRegisterMacroLegend, out );
     }
     if( p.anyRegisterMacroWarning )
     {
-        std::fputs( kQdRegisterMacroWarnLegend, stdout );
+        std::fputs( kQdRegisterMacroWarnLegend, out );
     }
     if( p.anyDeclinedCallExcluded )
     {
         std::fputs( "declined-call-excluded= is a FLOOR, not a finding: symbols this run kept out of the dead-code kind only because a call "
-                    "the resolver declined to bind (the map's declined=) could have meant them. Never gates; absent at zero. ", stdout );
+                    "the resolver declined to bind (the map's declined=) could have meant them. Never gates; absent at zero. ", out );
     }
     if( p.anyValueRefExcluded )
     {
-        rw::emitRaw( stdout, "value-ref-excluded= is a FLOOR, not a finding: symbols this run kept out of the dead-code kind only because a table, "
+        rw::emitRaw( out, "value-ref-excluded= is a FLOOR, not a finding: symbols this run kept out of the dead-code kind only because a table, "
                              "field, argument or registering decorator holds them as a VALUE (matched by name; it is not a proven call; the callers "
                              "verb lists the sites; @classmethod-style wrappers do not count), "
                              "the --dead-code verb's own rule. Never gates; absent at zero. " );
@@ -906,63 +906,63 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
     // git-INDEPENDENT, so it is a separate condition rather than a clause of the first.
     if( !p.identityAttrs.empty() )
     {
-        std::fputs( kQdIdentityLegend, stdout );
+        std::fputs( kQdIdentityLegend, out );
         if( p.anyAcked )
         {
-            std::fputs( kQdIdentityMechLegend, stdout );
+            std::fputs( kQdIdentityMechLegend, out );
         }
     }
     if( p.identityAttrs.find( "acks_rekeyed_by_scheme=" ) != std::string_view::npos
         || p.identityAttrs.find( "scheme_ambiguous=" ) != std::string_view::npos )
     {
-        std::fputs( kQdSchemeLegend, stdout );
+        std::fputs( kQdSchemeLegend, out );
     }
 
     // (4) key= and the why= taxonomy exist only in a document that has sa rows. stale= itself is a header
     // counter, always printed, and is defined in the core paragraph's axis list.
     if( p.anySaRow )
     {
-        std::fputs( kQdStaleLegend, stdout );
+        std::fputs( kQdStaleLegend, out );
     }
 
     // (5) the row dictionary, and its clone-family half. A clean tree emits neither attribute set, so at the
     // "done" checkpoint an agent actually makes, the reader pays for neither.
     if( !p.rows.empty() || !p.disclosedRows.empty() )
     {
-        std::fputs( kQdRowLegend, stdout );
+        std::fputs( kQdRowLegend, out );
         if( anyCloneRow( p.rows ) || anyCloneRow( p.disclosedRows ) )
         {
-            std::fputs( kQdCloneLegend, stdout );
+            std::fputs( kQdCloneLegend, out );
         }
         if( anyMinorMaskRow( p.rows ) || anyMinorMaskRow( p.disclosedRows ) )
         {
-            rw::emitRaw( stdout, kQdMaskReportOnlyLegend );
+            rw::emitRaw( out, kQdMaskReportOnlyLegend );
         }
         if( anyPlaceholderRow( p.rows ) || anyPlaceholderRow( p.disclosedRows ) )
         {
-            rw::emitRaw( stdout, kQdPlaceholderLegend );
+            rw::emitRaw( out, kQdPlaceholderLegend );
         }
         if( anyDefectShapeRow( p.rows ) || anyDefectShapeRow( p.disclosedRows ) )
         {
-            rw::emitRaw( stdout, kQdDefectShapeLegend );
+            rw::emitRaw( out, kQdDefectShapeLegend );
         }
     }
 
     if( p.scoped )
     {
-        std::fputs( kScopeLegend, stdout );
+        std::fputs( kScopeLegend, out );
     }
     if( p.anyForeignAck )
     {
-        std::fputs( kForeignAcksLegend, stdout );
+        std::fputs( kForeignAcksLegend, out );
     }
     if( p.staleCollapsed )
     {
         // idea #11: the collapse, named where its attributes are. No flag spelling (a double dash is illegal in a comment).
         std::fputs( "stale_by_kind= splits stale= by ack kind (kind:N, comma-separated): on an answer with no regression the stale "
-                    "sa rows are collapsed to these counts, and stale_next= is the call that prints them. ", stdout );
+                    "sa rows are collapsed to these counts, and stale_next= is the call that prints them. ", out );
     }
-    std::fputs( "-->", stdout );   // every section constant above ends with its own separating space
+    std::fputs( "-->", out );   // every section constant above ends with its own separating space
 }
 
 // F-13 — the one place both --dead-code and --quality-delta turn a RegisterMacroConfigDiagnostics into
@@ -1712,147 +1712,169 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         const bool verdictOnly = collapseStale && !refPair && basis.headBasis != nullptr && std::string_view( basis.headBasis ) == "identity"
                               && !scope.active() && foreignAcks.empty() && ackedCount == 0 && configDiag.total() == 0 && baselineAbsorbed == 0
                               && basis.apiNewSurface == 0 && baseSel.sidecarBadLines == 0 && basis.acksBadLines == 0;
-        if( verdictOnly )
+        // Fix round 1 (rv-lean-trio item 5, owner ruling 5): a fold ships only when it PAYS (compactlegend.h foldPays: shorter
+        // by its margin, as written AND as the compact layer delivers it). The whole XML document is one renderer over a FILE*,
+        // so both candidates are rendered and measured, and the full document wins a fold that does not pay or a failed render
+        // (fx, dirty tree, one stale ack: 1512 B folded vs 1481 B full).
+        // `collapse` picks the stale rows' form: true serves only the foreign-scope rows and the stale_by_kind=/stale_next= counts.
+        // R-I: at= is OMITTED for the ref-pair form (see the root below). Read ONCE: both candidates print the same stamp.
+        const std::string atAttrs = refPair ? std::string() : gitstamp::atAttr( root );
+        const auto emitDocument = [ & ]( std::FILE* out, bool collapse )
         {
-            rw::emitTo( stdout, "<!-- ripwire quality-delta: the tracked files ARE their git HEAD (head_basis=\"identity\"), so the floor (baseline= "
-                                "names it) is this tree's own snapshot and nothing that existed can be worse: regressions= and gating= are 0. stale= counts ack "
-                                "ledger rows whose target no longer applies (never gating), by kind in stale_by_kind=; stale_next= is the call "
-                                "that prints them with the full header (its exclusion and rename counts included). at=: commit+dirty+shallow. -->"
-                                "<quality-delta baseline=\"{}\" regressions=\"0\" gating=\"0\" stale=\"{}\"{} head_basis=\"identity\"{}></quality-delta>",
-                        baseSel.marker, staleAcks.size(), gitstamp::atAttr( root ), staleCollapseAttrs );
-            return 0;
-        }
-        if( collapseStale )
-        {
-            saRows = foreignAcks;   // the stale rows are collapsed to staleCollapseAttrs; foreign-scope rows always print
-        }
-        emitQualityDeltaLegend( { baseSel.marker, refPair, identityAttrs, !saRows.empty(), ackedCount > 0,
-                                  basis.registerMacroExcluded > 0, configDiag.total() > 0, regs, outOfScope,
-                                  scope.active() || !foreignAcks.empty(), !foreignAcks.empty(), baselineAbsorbed,
-                                  basis.headBasis, basis.declinedCallExcluded > 0, basis.valueRefExcluded > 0, collapseStale } );
-        const char* baseMarker = baseSel.marker;    // R3: ditto — one seam decides staleness AND names it
-        // 2026-09-06: what the sidecar readers skipped, on the root (absent means none) — see kQdBaseHeadUnreadable
-        std::string sidecarHealthAttrs;
-        if( baseSel.sidecarBadLines > 0 ) { sidecarHealthAttrs += " baseline_bad_lines=\"" + std::to_string( baseSel.sidecarBadLines ) + "\""; }
-        if( basis.acksBadLines > 0 )      { sidecarHealthAttrs += " acks_bad_lines=\"" + std::to_string( basis.acksBadLines ) + "\""; }
-        // #228: present-only, and its absence is the ordinary archived HEAD tree — the floor every git-HEAD
-        // marker named on its own before this attribute existed.
-        if( basis.headBasis != nullptr )  { sidecarHealthAttrs += std::string( " head_basis=\"" ) + basis.headBasis + "\""; }
-        if( basis.declinedCallExcluded > 0 ) { sidecarHealthAttrs += " declined-call-excluded=\"" + std::to_string( basis.declinedCallExcluded ) + "\""; }
-        sidecarHealthAttrs += rw::countAttrXmlOrEmpty( "value-ref-excluded", basis.valueRefExcluded );   // absent at zero, beside its sibling
-        // at= anchors this regression list to the commit (+dirty state) it was computed against.
-        rw::emitTo( stdout, "<quality-delta baseline=\"{}\" regressions=\"{}\" minor=\"{}\" acked=\"{}\" stale=\"{}\" preexisting-worse=\"{}\" new-symbol=\"{}\" gating=\"{}\" register-macro-excluded=\"{}\" api-new-surface=\"{}\"{}{}{}{}{}{}{}>",
-                     baseMarker, regs.size(), minorCount, ackedCount, staleAcks.size(), preexistingCount, newSymbolCount, gatingCount, basis.registerMacroExcluded, basis.apiNewSurface,
-                     // R-I: at= is OMITTED for the ref-pair form rather than stamped with the working tree's
-                     // sha, which would anchor the list to a commit it was not computed from. base_ref= and
-                     // target_ref= are the anchor there, and they carry FULL shas because a wave measurement
-                     // gets quoted into handoffs where a 9-char prefix is one collision from unverifiable.
-                     refPair ? "" : gitstamp::atAttr( root ).c_str(), refs.attrs.c_str(), identityAttrs.c_str(),
-                     scopeAttrs.c_str(), configWarnAttr.c_str(), baselineAbsorbedAttr.c_str(), ( sidecarHealthAttrs + staleCollapseAttrs ).c_str() );
-        // P1: ONE row emitter for both halves of the scope partition — a disclosed row carries the identical
-        // attribute set, because nothing about a finding changes by belonging to someone else. `gatingAllowed`
-        // is the one difference: an out-of-scope row is not what the exit code fires on, and a gating
-        // attribute on it would contradict the header's own gating counter inside the same document.
-        const auto emitRow = [ & ]( const quality::Regression& r, bool gatingAllowed )
-        {
-            // duplication carries a member LIST (members=) + token count; the per-symbol was/now kinds
-            // (complexity/verbosity/nesting/params) carry was/now; api-surface + dead-code are sym-only.
-            // sev="minor" marks a below-materiality delta (never gates); absent = major.
-            const char* sev = r.isMinor ? " sev=\"minor\"" : "";
-            // B10.2 — the optional classification facet: attribute NAME is chosen by kind (churn=
-            // short-horizon-churn's self/ambient split; surface= api-surface's new-symbol/contract-change
-            // tier; idiom= the duplication kind's recognized clone-body shape); r.facet carries only the
-            // VALUE, and quality::facetAttrName is the ONE table that maps kind → attribute name for all
-            // three emitters (this one, the --json twin above, and the MCP one).
-            std::string facetAttr;
-            if( !r.facet.empty() )
+            const std::vector<quality::StaleAck>& served = collapse ? foreignAcks : saRows;
+            emitQualityDeltaLegend( { baseSel.marker, refPair, identityAttrs, !served.empty(), ackedCount > 0,
+                                      basis.registerMacroExcluded > 0, configDiag.total() > 0, regs, outOfScope,
+                                      scope.active() || !foreignAcks.empty(), !foreignAcks.empty(), baselineAbsorbed,
+                                      basis.headBasis, basis.declinedCallExcluded > 0, basis.valueRefExcluded > 0, collapse }, out );
+            const char* baseMarker = baseSel.marker;    // R3: ditto — one seam decides staleness AND names it
+            // 2026-09-06: what the sidecar readers skipped, on the root (absent means none) — see kQdBaseHeadUnreadable
+            std::string sidecarHealthAttrs;
+            if( baseSel.sidecarBadLines > 0 ) { sidecarHealthAttrs += " baseline_bad_lines=\"" + std::to_string( baseSel.sidecarBadLines ) + "\""; }
+            if( basis.acksBadLines > 0 )      { sidecarHealthAttrs += " acks_bad_lines=\"" + std::to_string( basis.acksBadLines ) + "\""; }
+            // #228: present-only, and its absence is the ordinary archived HEAD tree — the floor every git-HEAD
+            // marker named on its own before this attribute existed.
+            if( basis.headBasis != nullptr )  { sidecarHealthAttrs += std::string( " head_basis=\"" ) + basis.headBasis + "\""; }
+            if( basis.declinedCallExcluded > 0 ) { sidecarHealthAttrs += " declined-call-excluded=\"" + std::to_string( basis.declinedCallExcluded ) + "\""; }
+            sidecarHealthAttrs += rw::countAttrXmlOrEmpty( "value-ref-excluded", basis.valueRefExcluded );   // absent at zero, beside its sibling
+            // at= anchors this regression list to the commit (+dirty state) it was computed against.
+            rw::emitTo( out, "<quality-delta baseline=\"{}\" regressions=\"{}\" minor=\"{}\" acked=\"{}\" stale=\"{}\" preexisting-worse=\"{}\" new-symbol=\"{}\" gating=\"{}\" register-macro-excluded=\"{}\" api-new-surface=\"{}\"{}{}{}{}{}{}{}>",
+                         baseMarker, regs.size(), minorCount, ackedCount, staleAcks.size(), preexistingCount, newSymbolCount, gatingCount, basis.registerMacroExcluded, basis.apiNewSurface,
+                         // R-I: at= is OMITTED for the ref-pair form rather than stamped with the working tree's
+                         // sha, which would anchor the list to a commit it was not computed from. base_ref= and
+                         // target_ref= are the anchor there, and they carry FULL shas because a wave measurement
+                         // gets quoted into handoffs where a 9-char prefix is one collision from unverifiable.
+                         atAttrs.c_str(), refs.attrs.c_str(), identityAttrs.c_str(),
+                         scopeAttrs.c_str(), configWarnAttr.c_str(), baselineAbsorbedAttr.c_str(), ( sidecarHealthAttrs + ( collapse ? staleCollapseAttrs : std::string() ) ).c_str() );
+            // P1: ONE row emitter for both halves of the scope partition — a disclosed row carries the identical
+            // attribute set, because nothing about a finding changes by belonging to someone else. `gatingAllowed`
+            // is the one difference: an out-of-scope row is not what the exit code fires on, and a gating
+            // attribute on it would contradict the header's own gating counter inside the same document.
+            const auto emitRow = [ & ]( const quality::Regression& r, bool gatingAllowed )
             {
-                const char* facetName = quality::facetAttrName( r.kind );
-                if( facetName )
+                // duplication carries a member LIST (members=) + token count; the per-symbol was/now kinds
+                // (complexity/verbosity/nesting/params) carry was/now; api-surface + dead-code are sym-only.
+                // sev="minor" marks a below-materiality delta (never gates); absent = major.
+                const char* sev = r.isMinor ? " sev=\"minor\"" : "";
+                // B10.2 — the optional classification facet: attribute NAME is chosen by kind (churn=
+                // short-horizon-churn's self/ambient split; surface= api-surface's new-symbol/contract-change
+                // tier; idiom= the duplication kind's recognized clone-body shape); r.facet carries only the
+                // VALUE, and quality::facetAttrName is the ONE table that maps kind → attribute name for all
+                // three emitters (this one, the --json twin above, and the MCP one).
+                std::string facetAttr;
+                if( !r.facet.empty() )
                 {
-                    facetAttr = std::string( " " ) + facetName + "=\"" + r.facet + "\"";
+                    const char* facetName = quality::facetAttrName( r.kind );
+                    if( facetName )
+                    {
+                        facetAttr = std::string( " " ) + facetName + "=\"" + r.facet + "\"";
+                    }
                 }
-            }
-            // r26 — the ORIGIN axis, emitted LAST so the existing attribute order is untouched. Present only
-            // on new-symbol rows (absent = preexisting-worse), the same "mark the exception" convention sev=
-            // uses. api-surface's own surface="new-symbol" facet is the same fact narrowed to that kind; it
-            // stays for shape compatibility, and origin= is what the exit gate reads.
-            const char* origin = r.isNewSymbol ? " origin=\"new-symbol\"" : "";
-            // P2.5 — the two attributes that make a row ACTIONABLE, appended last so every pre-r27 attribute
-            // keeps its position:
-            //   p="path:line" — sym= is a canonical id whose display tail is often a bare one-letter local
-            //     (`sym="cc"`), i.e. ungreppable. Omitted, never faked, when no locator was resolvable.
-            //   gating="1"    — marks exactly the rows the header's gating= counts and the exit code fires on.
-            //     Until now a gating row was identifiable ONLY by the ABSENCE of sev="minor" (and of
-            //     origin="new-symbol") — absence-as-signal is the least machine-friendly encoding available.
-            std::string locAttr;
-            if( !r.path.empty() )
+                // r26 — the ORIGIN axis, emitted LAST so the existing attribute order is untouched. Present only
+                // on new-symbol rows (absent = preexisting-worse), the same "mark the exception" convention sev=
+                // uses. api-surface's own surface="new-symbol" facet is the same fact narrowed to that kind; it
+                // stays for shape compatibility, and origin= is what the exit gate reads.
+                const char* origin = r.isNewSymbol ? " origin=\"new-symbol\"" : "";
+                // P2.5 — the two attributes that make a row ACTIONABLE, appended last so every pre-r27 attribute
+                // keeps its position:
+                //   p="path:line" — sym= is a canonical id whose display tail is often a bare one-letter local
+                //     (`sym="cc"`), i.e. ungreppable. Omitted, never faked, when no locator was resolvable.
+                //   gating="1"    — marks exactly the rows the header's gating= counts and the exit code fires on.
+                //     Until now a gating row was identifiable ONLY by the ABSENCE of sev="minor" (and of
+                //     origin="new-symbol") — absence-as-signal is the least machine-friendly encoding available.
+                std::string locAttr;
+                if( !r.path.empty() )
+                {
+                    locAttr = " p=\"" + ex( r.path ) + ":" + std::to_string( r.line ) + "\"";
+                }
+                const char* gatingAttr = ( gatingAllowed && quality::rowGates( r ) ) ? " gating=\"1\"" : "";
+                // P8 (L7): the threshold beside the number it judges — bar= on the four numeric kinds (quality.h's
+                // kCcxBar/kLocBar/kNestBar/kParamBar), so was=/now= read without the legend.
+                const char* barAttr = r.kind == "complexity" ? " bar=\"15\"" : r.kind == "verbosity" ? " bar=\"60\""
+                                    : r.kind == "nesting"    ? " bar=\"4\""  : r.kind == "params"    ? " bar=\"5\""  : "";
+                // P3 (L7, nextverb.h): a GATING row hands the agent the body to fix — --expand=FILE:NAME (the file-qualified
+                // selector, so a same-named symbol elsewhere cannot answer). The name is the sym key's last :: segment;
+                // duplication rows name a SET (members=) and carry no single body to open, nor does a FILE-anchored
+                // defect-shape row (top-level code: sym= is the path, and --expand=FILE:FILE matches no symbol).
+                std::string nextAttr;
+                if( *gatingAttr && !r.path.empty() && r.kind != "duplication" && !( r.kind == "defect-shape" && r.sym == r.path ) )
+                {
+                    const std::size_t    sep  = r.sym.rfind( "::" );
+                    const std::string    bare = sep == std::string::npos ? r.sym : r.sym.substr( sep + 2 );
+                    nextAttr = rw::nextAttrXml( rw::nextFlag( "--expand=", r.path + ":" + bare ) );
+                }
+                if( r.kind == "duplication" )
+                {
+                    rw::emitTo( out, "<r kind=\"duplication\" members=\"{}\" tokens=\"{}\"{}{}{}{}{}/>", ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.now, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr );
+                }
+                else if( r.kind == "dead-code" )
+                {
+                    rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\"{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
+                // B10.2e: api-surface now carries two shapes — a brand-new/newly-public symbol (was=now=0, no
+                // param comparison to show) and a param-count contract-change (was/now = the real counts). Print
+                // was/now whenever they differ from each other so the contract-change case's was=/now= is visible
+                // while the new-symbol case's meaningless was="0" now="0" is omitted, matching its old sym-only shape.
+                }
+                else if( r.kind == "api-surface" && r.was == r.now )
+                {
+                    rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\"{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
+                }
+                else
+                {
+                    rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\" was=\"{}\" now=\"{}\"{}{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.was, r.now, barAttr, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
+                }
+            };
+            for( const quality::Regression& r : regs )
             {
-                locAttr = " p=\"" + ex( r.path ) + ":" + std::to_string( r.line ) + "\"";
+                emitRow( r, /*gatingAllowed=*/true );
             }
-            const char* gatingAttr = ( gatingAllowed && quality::rowGates( r ) ) ? " gating=\"1\"" : "";
-            // P8 (L7): the threshold beside the number it judges — bar= on the four numeric kinds (quality.h's
-            // kCcxBar/kLocBar/kNestBar/kParamBar), so was=/now= read without the legend.
-            const char* barAttr = r.kind == "complexity" ? " bar=\"15\"" : r.kind == "verbosity" ? " bar=\"60\""
-                                : r.kind == "nesting"    ? " bar=\"4\""  : r.kind == "params"    ? " bar=\"5\""  : "";
-            // P3 (L7, nextverb.h): a GATING row hands the agent the body to fix — --expand=FILE:NAME (the file-qualified
-            // selector, so a same-named symbol elsewhere cannot answer). The name is the sym key's last :: segment;
-            // duplication rows name a SET (members=) and carry no single body to open, nor does a FILE-anchored
-            // defect-shape row (top-level code: sym= is the path, and --expand=FILE:FILE matches no symbol).
-            std::string nextAttr;
-            if( *gatingAttr && !r.path.empty() && r.kind != "duplication" && !( r.kind == "defect-shape" && r.sym == r.path ) )
+            if( scope.active() )
             {
-                const std::size_t    sep  = r.sym.rfind( "::" );
-                const std::string    bare = sep == std::string::npos ? r.sym : r.sym.substr( sep + 2 );
-                nextAttr = rw::nextAttrXml( rw::nextFlag( "--expand=", r.path + ":" + bare ) );
+                // P1 — the DISCLOSURE half. Dropping these rows would make a scoped report a quieter lie than
+                // the unscoped one it replaces: the debt is real, it is in the same tree, and it will be in
+                // someone's report. So they are printed, in their own element, marked non-gating, with the one
+                // sentence a reader needs written where they meet it. Emitted even when EMPTY — an absent
+                // element then means "no scope was given", never "nobody else has anything open".
+                rw::emitTo( out, "<out-of-scope n=\"{}\" would-gate=\"{}\" note=\"not yours - do not ack: these rows lie outside the scope this run named. "
+                             "They are disclosed rather than hidden, they never gate this exit code, and the ack refuses to write them.\">",
+                             outOfScope.size(), scopedOutGating );
+                for( const quality::Regression& r : outOfScope )
+                {
+                    emitRow( r, /*gatingAllowed=*/false );
+                }
+                rw::emitRaw( out, "</out-of-scope>" );
             }
-            if( r.kind == "duplication" )
-            {
-                rw::emitTo( stdout, "<r kind=\"duplication\" members=\"{}\" tokens=\"{}\"{}{}{}{}{}/>", ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.now, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr );
+            {   // L2 — one <sa> row per stale ack (quality::staleAcksXml). M21(a): the escaper is passed in
+                // because sym= carries a canonical id (corpus text), unlike the closed-vocabulary kind=/why=.
+                std::vector<char> saEsc;
+                std::fputs( quality::staleAcksXml( served, [ & ]( std::string_view t ) { return std::string( escapeXml( t, saEsc ) ); } ).c_str(), out );
             }
-            else if( r.kind == "dead-code" )
-            {
-                rw::emitTo( stdout, "<r kind=\"{}\" sym=\"{}\"{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
-            // B10.2e: api-surface now carries two shapes — a brand-new/newly-public symbol (was=now=0, no
-            // param comparison to show) and a param-count contract-change (was/now = the real counts). Print
-            // was/now whenever they differ from each other so the contract-change case's was=/now= is visible
-            // while the new-symbol case's meaningless was="0" now="0" is omitted, matching its old sym-only shape.
-            }
-            else if( r.kind == "api-surface" && r.was == r.now )
-            {
-                rw::emitTo( stdout, "<r kind=\"{}\" sym=\"{}\"{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
-            }
-            else
-            {
-                rw::emitTo( stdout, "<r kind=\"{}\" sym=\"{}\" was=\"{}\" now=\"{}\"{}{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.was, r.now, barAttr, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
-            }
+            rw::emitRaw( out, "</quality-delta>" );
         };
-        for( const quality::Regression& r : regs )
+        // the identity-tree VERDICT (verdictOnly above): the root line alone
+        const auto emitVerdict = [ & ]( std::FILE* out )
         {
-            emitRow( r, /*gatingAllowed=*/true );
-        }
-        if( scope.active() )
+            rw::emitTo( out, "<!-- ripwire quality-delta: the tracked files ARE their git HEAD (head_basis=\"identity\"), so the floor (baseline= "
+                             "names it) is this tree's own snapshot and nothing that existed can be worse: regressions= and gating= are 0. stale= counts ack "
+                             "ledger rows whose target no longer applies (never gating), by kind in stale_by_kind=; stale_next= is the call "
+                             "that prints them with the full header (its exclusion and rename counts included). at=: commit+dirty+shallow. -->"
+                             "<quality-delta baseline=\"{}\" regressions=\"0\" gating=\"0\" stale=\"{}\"{} head_basis=\"identity\"{}></quality-delta>",
+                        baseSel.marker, staleAcks.size(), atAttrs, staleCollapseAttrs );
+        };
+        if( !collapseStale )
         {
-            // P1 — the DISCLOSURE half. Dropping these rows would make a scoped report a quieter lie than
-            // the unscoped one it replaces: the debt is real, it is in the same tree, and it will be in
-            // someone's report. So they are printed, in their own element, marked non-gating, with the one
-            // sentence a reader needs written where they meet it. Emitted even when EMPTY — an absent
-            // element then means "no scope was given", never "nobody else has anything open".
-            rw::emitTo( stdout, "<out-of-scope n=\"{}\" would-gate=\"{}\" note=\"not yours - do not ack: these rows lie outside the scope this run named. "
-                         "They are disclosed rather than hidden, they never gate this exit code, and the ack refuses to write them.\">",
-                         outOfScope.size(), scopedOutGating );
-            for( const quality::Regression& r : outOfScope )
-            {
-                emitRow( r, /*gatingAllowed=*/false );
-            }
-            rw::emitRaw( stdout, "</out-of-scope>" );
+            emitDocument( stdout, /*collapse=*/false );
+            return gatingCount > 0 ? 2 : 0;
         }
-        {   // L2 — one <sa> row per stale ack (quality::staleAcksXml). M21(a): the escaper is passed in
-            // because sym= carries a canonical id (corpus text), unlike the closed-vocabulary kind=/why=.
-            std::vector<char> saEsc;
-            std::fputs( quality::staleAcksXml( saRows, [ & ]( std::string_view t ) { return std::string( escapeXml( t, saEsc ) ); } ).c_str(), stdout );
+        const Rendered full   = renderToString( [ & ]( std::FILE* f ) { emitDocument( f, /*collapse=*/false ); } );
+        const Rendered folded = renderToString( [ & ]( std::FILE* f ) { if( verdictOnly ) { emitVerdict( f ); } else { emitDocument( f, /*collapse=*/true ); } } );
+        if( !full.ok || !folded.ok )
+        {
+            // renderToString DISCLOSEd the failed buffer; the full document is the superset, written straight to stdout
+            emitDocument( stdout, /*collapse=*/false );
+            return gatingCount > 0 ? 2 : 0;
         }
-        rw::emitRaw( stdout, "</quality-delta>" );
+        const std::string& chosen = foldPays( folded.text, full.text ) ? folded.text : full.text;   // compactlegend.h: the margin and why
+        std::fwrite( chosen.data(), 1, chosen.size(), stdout );
         return gatingCount > 0 ? 2 : 0;   // r26: only a PREEXISTING-worse AND major regression gates (== gating=)
     }
     return std::nullopt;

@@ -23,6 +23,7 @@
 #include "arch.h"           // fnv1a64
 #include "gitstamp.h"       // r26-stamp Task A: gitstamp::atAttr — the at="<sha>[+dirty]" root anchor
 #include "graphlegend.h"    // §H4 §3.4: the shared counts_floor= marker + floor/counting-unit legend tail
+#include "compactlegend.h"  // fix round 1 (ruling 5): foldPays — the verdict line ships only when it pays
 #include "pageview.h"       // LB-G: pageWindow / effectiveRowCap / pagingDisclosure — the ONE paging vocabulary
 #include "editcheckdecl.h"   // the C/C++ declaration/definition identity: editCheckTieDeclaration / editCheckDeclDefaults
 
@@ -1065,6 +1066,11 @@ struct EditCheckPage
 // fixed. The answer is taken only when there ARE caller rows and every fact the full document could add beside them is
 // absent — one definition, nothing flagged, no unproven or declined definition, no notes, no explicit window, not the
 // preview — so the rows are the ONLY thing left out, and rows_next= is the call that prints them (an explicit --limit is the full document).
+// Fix round 1 (rv-lean-trio item 1, owner: a fold must never hide an answer-bearing row): ALSO only when the tree IS its git
+// HEAD — the at= stamp carries no +dirty (tracked changes or untracked files). On a dirty tree the contract check has floors it
+// cannot see past (a TS `export` dropped from SYM is status="unchanged"; a C caller edited to the wrong arity beside an unchanged
+// prototype is never flagged), so a caller row may be the one the edit breaks: every row rides. A non-git root has no HEAD to
+// be at, so it prints the full document too.
 struct EditCheckVerdictFacts
 {
     EditCheckPage    page;
@@ -1089,6 +1095,13 @@ inline bool editCheckVerdictOnlyTaken( const EditCheckVerdictFacts& f ) noexcept
     return f.page.verdictOnly && !f.preview && f.page.limit == 0 && f.page.offset == 0 && cleanContract && nothingBeside;
 }
 
+// Fix round 1 (ruling 1): the at= stamp value of a tree that IS its HEAD — a resolvable commit and no "+dirty" ("+shallow"
+// may ride: it is about history, not the working tree). Empty / dirty → the full document.
+inline bool editCheckTreeAtHead( std::string_view atStamp ) noexcept
+{
+    return !atStamp.empty() && atStamp.find( "+dirty" ) == std::string_view::npos;
+}
+
 // The verdict line, or "" when the full document is owed (editCheckVerdictOnlyTaken). Its legend states what the full
 // document's would about THESE attributes — the arity hedge (incompatible= is a fact about the tree, never a proof of
 // binding), the floor tail every graph-count verb splices — and nothing about rows it does not carry. It is the full
@@ -1097,6 +1110,12 @@ inline std::string editCheckVerdictOnlyText( const EditCheckVerdictFacts& f, con
                                              std::string_view relPath, bool singleRoot )
 {
     if( !editCheckVerdictOnlyTaken( f ) )
+    {
+        return {};
+    }
+    // ruling 1: the subprocess runs only once every in-memory fact already chose the verdict — and its value IS the at= below
+    const std::string atStamp = gitstamp::stampAt( root );
+    if( !editCheckTreeAtHead( atStamp ) )
     {
         return {};
     }
@@ -1116,7 +1135,7 @@ inline std::string editCheckVerdictOnlyText( const EditCheckVerdictFacts& f, con
     out += "-->";
     out += "<edit-check sym=\"" + ex( fsym.name ) + "\" t=\"" + symTag( fsym.kind ) + "\" p=\"" + ex( relPath ) + ":"
          + std::to_string( fsym.line ) + "\" status=\"unchanged\" defs=\"1\" callers=\"" + std::to_string( f.callers ) + "\" incompatible=\"0\"";
-    out += gitstamp::atAttr( root );
+    out += " at=\"" + atStamp + "\"";   // gitstamp::atAttr's own spelling, from the one stamp read above
     out += graphCountFloorAttrXml( g );   // M15: gauge + marker, as on the full document
     if( singleRoot )
     {
@@ -1190,16 +1209,14 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
 
     // idea #11: the VERDICT-ONLY answer (editCheckVerdictOnlyText). Placed after every verdict number is fixed, like the
-    // window above: it cannot move a count.
+    // window above: it cannot move a count. Fix round 1 (ruling 5): it is a CANDIDATE — the full document is still built, and
+    // the verdict line ships only when it pays against it (foldPays, at the end of this function).
     const EditCheckVerdictFacts verdictFacts{ page, preview, verdict.status, incompatibleCount, overloadNodes.size(), unprovenDefs, declinedCalls,
                                               contract.defsUnmeasured, callee.declDefaults.fromDecl, notesDegraded,
                                               renderNoteChildren( ni, symbolNoteTarget( ni, ing, fsym ), esc ).empty()
                                                   && renderNoteChildren( ni, fileNoteTarget( ni, ing.files[ fsym.fileId ] ), esc ).empty(),
                                               callerIds.size() };
-    if( std::string v = editCheckVerdictOnlyText( verdictFacts, g, root, fsym, ecPathRel( fsym.fileId ), ecSingleRoot ); !v.empty() )
-    {
-        return v;
-    }
+    const std::string verdictLine = editCheckVerdictOnlyText( verdictFacts, g, root, fsym, ecPathRel( fsym.fileId ), ecSingleRoot );
 
     // card A1 — the preview sentence, FIRST, because every number below it is about bytes that are not on
     // disk and a reader who meets that fact at the end has already read the document as a fact about the tree.
@@ -1443,6 +1460,12 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     }
     out += "</edit-check>";
     editCheckPriceRoot( out );   // M11: the priced root, LAST — the price covers every byte above it
+    // ruling 5 (rv-lean-trio item 5): rows are hidden only for a byte gain that pays (compactlegend.h foldPays). Three callers'
+    // rows cost about what the verdict line's own legend costs (fx --edit-check=blend: 957 B folded vs 962 B), so they ride.
+    if( !verdictLine.empty() && foldPays( verdictLine, out ) )
+    {
+        return verdictLine;
+    }
     return out;
 }
 
