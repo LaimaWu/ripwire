@@ -1417,6 +1417,47 @@ OWANT="$( git -c core.quotepath=false -C "$OD" ls-tree -r --name-only odd | sort
     && ok 'whereis (tree walk): every row'"'"'s p= is git ls-tree'"'"'s own spelling — quoted (", \, tab) and unquoted (space, UTF-8, leading dash) alike' \
     || { no "whereis (tree walk): p= differs from git ls-tree's spelling (rc $rcOo)"; printf 'got:\n%s\nwant:\n%s\n' "$OGOT" "$OWANT"; }
 
+# ── 5f) train 26c (#339 x the parsed branch labels): a branch's Rails schema column reads as HEAD's index reads it ────
+# HEAD's index makes a db/schema.rb column a definition (#339: captureRubyDefs, the schema recognized by content), and another
+# ref's blob is parsed by the SAME extraction in its DefinitionsOnly posture (ingest_sidecap.h: the Ruby def walk runs before
+# that posture's early return). So a column a branch adds reads kind="def" once its blob earns a parse (a parse-worthy hit line
+# in it), as HEAD's own copy of a column does. RED if the Ruby def walk sat behind the DefinitionsOnly return (measured: the
+# column row reads kind="ref"); the premise is HEAD's index labelling its own column a definition.
+RS="$TMP/rbschema"; mkdir -p "$RS/db" "$RS/other"; git -C "$RS" init -q -b main >/dev/null 2>&1; git -C "$RS" config commit.gpgsign false
+printf 'ActiveRecord::Schema[7.1].define(version: 2024_01_01_000000) do\n  create_table "users", force: :cascade do |t|\n    t.string "email"\n  end\nend\n' >"$RS/db/schema.rb"
+printf 'ActiveRecord::Schema[7.1].define(version: 2024_01_01_000000) do\n  create_table "accounts", force: :cascade do |t|\n    t.string "nickname"\n  end\nend\n' >"$RS/other/schema.rb"
+git -C "$RS" add -A >/dev/null 2>&1; git -C "$RS" commit -qm base >/dev/null 2>&1; git -C "$RS" checkout -qb feat >/dev/null 2>&1
+printf 'ActiveRecord::Schema[7.1].define(version: 2024_02_01_000000) do\n  create_table "users", force: :cascade do |t|\n    t.string "email"\n    t.string "nickname"\n  end\nend\ndef nickname( x )\n  x\nend\n' >"$RS/db/schema.rb"
+git -C "$RS" commit -qam feat >/dev/null 2>&1; git -C "$RS" checkout -q main >/dev/null 2>&1
+RSO="$( "$BIN" "$RS" --whereis=nickname --whereis-listing=all --no-cache 2>/dev/null )"; rcRs=$?
+RSHEAD="$( printf '%s' "$RSO" | grep -oE '<hit ref="HEAD" p="other/schema\.rb" l="3" kind="[a-z]+"' | head -1 )"
+RSCOL="$( printf '%s' "$RSO" | grep -oE '<hit ref="feat" [^>]*p="db/schema\.rb" l="4" kind="[a-z]+"' | head -1 )"
+if [ $rcRs -ne 0 ] || [ "${RSHEAD##*kind=}" != '"def"' ]; then
+    no "whereis (#339 x parsed labels): premise — HEAD's index labels its own schema column a def (rc $rcRs, got: ${RSHEAD:-no row})"
+elif [ "${RSCOL##*kind=}" = '"def"' ]; then
+    ok 'whereis (#339 x parsed labels): a column a branch adds to db/schema.rb reads kind="def", as HEAD'"'"'s index reads its own'
+else
+    no "whereis (#339 x parsed labels): the branch's schema column is not a def (got: ${RSCOL:-no row})"
+fi
+
+# ── 5g) train 26c (cli-perf-068 x the tree-object walk): the ls-tree fallback lists each DISTINCT tip once ─────────────
+# A root below the top of the work tree cannot use the tree-object walk (listTreesOfRefs), so the trees come from
+# `git ls-tree -r`, one per distinct tip (crossref.h listDistinctTips): HEAD + b2 + b3 sit on 2 tips (b3 = b2's tip; b1, at
+# HEAD's tip, is not swept), so 2 listings, not one per ref, and the same 8 rows. RED on a per-ref fallback (3 listings).
+LT="$TMP/lstips"; mkdir -p "$LT/sub"; git -C "$LT" init -q -b main >/dev/null 2>&1; git -C "$LT" config commit.gpgsign false
+printf 'int tipProbe( int x ) { return x; }\nint tipCaller( void ) { return tipProbe( 1 ); }\n' >"$LT/sub/a.c"; printf 'top\n' >"$LT/top.txt"
+git -C "$LT" add -A >/dev/null 2>&1; git -C "$LT" commit -qm one >/dev/null 2>&1; git -C "$LT" branch b1 >/dev/null 2>&1
+git -C "$LT" checkout -qb b2 >/dev/null 2>&1; printf 'int tipProbe( int x, int y ) { return x + y; }\n' >"$LT/sub/b.c"
+git -C "$LT" add -A >/dev/null 2>&1; git -C "$LT" commit -qm two >/dev/null 2>&1; git -C "$LT" branch b3 >/dev/null 2>&1; git -C "$LT" checkout -q main >/dev/null 2>&1
+: >"$TMP/lstips.trace"
+LTO="$( GIT_TRACE="$TMP/lstips.trace" "$BIN" "$LT/sub" --whereis=tipProbe --whereis-listing=all --no-cache 2>/dev/null )"; rcLt=$?
+LTN="$( grep -c 'built-in: git ls-tree' "$TMP/lstips.trace" )"
+LTH="$( printf '%s' "$LTO" | grep -oE '<whereis [^>]* hits="[0-9]+"' | grep -oE 'hits="[0-9]+"' )"
+LTR="$( printf '%s' "$LTO" | grep -oE '<whereis [^>]* refs_scanned="[0-9]+"' | grep -oE 'refs_scanned="[0-9]+"' )"
+{ [ $rcLt -eq 0 ] && [ "$LTR" = 'refs_scanned="2"' ] && [ "$LTH" = 'hits="8"' ] && [ "$LTN" = 2 ]; } \
+    && ok "whereis (ls-tree fallback): a root below the work-tree top lists each distinct tip once (2 listings for HEAD + 2 refs on 2 tips), all 8 rows" \
+    || no "whereis (ls-tree fallback): want rc 0, refs_scanned=\"2\", hits=\"8\" and 2 ls-tree listings — got rc $rcLt, $LTR, $LTH, $LTN listing(s)"
+
 if command -v xmllint >/dev/null 2>&1; then
     if printf '%s' "$SW" | xmllint --noout - 2>/dev/null; then ok "capped stray-content still G4 clean"; else no "capped stray-content XML malformed"; fi
     if printf '%s' "$W1" | xmllint --noout - 2>/dev/null; then ok "paged whereis still G4 clean"; else no "paged whereis XML malformed"; fi
