@@ -32,9 +32,16 @@ names (a small-vector's `push_back`, a path wrapper's `c_str`, every `empty` and
 - The names are data (`src/externalnames.h` `kCppStdMemberNames`, 78 container / string / view / span / optional /
   smart-pointer members, generic verbs such as `get`, `count`, `swap`, `read`, `write` excluded). A receiver a rule
   types is never touched — a typed local, parameter, pointer or member field, `this->`, an implicit-this call — and
-  neither is one whose written non-std type reaches a candidate (an alias of the in-tree container, or a field written
-  as one, keeps its hedge). A receiver with no written type at all — a dereference, a subscript, a range-for `auto`, a
-  template parameter — is declined even where the element is in-tree: the stated floor.
+  neither is one whose recorded written type names an in-tree class that may define the callee: an alias of the in-tree
+  container, a field written as one, a namespace-scope, file-static or extern variable (`ns::List g; g.size()`), the
+  argument of a `std::unique_ptr` / `std::shared_ptr` / `std::optional` reached through `->`, or a `->` through an
+  in-tree class with its own `operator->` or a class the tree does not define (a Qt or boost pointer) — each keeps its
+  hedge. `std::unique_ptr<std::string> p; p->size()` and `std::vector<ns::List> v; v.size()` (the container's own
+  member) are declined.
+- The stated floor — declined even where the object is an in-tree class, because the index records no written type for
+  the receiver: a call result (`h.list().size()`, `v.front().size()`, `makeList().size()`), an iterator (`auto it =
+  v.begin(); it->size()`), an `auto` local, a dereference, a subscript, a range-for `auto`, a template parameter, a field
+  two hops off its root, and the template arguments of a type written unqualified (`QList<ns::List> l; l.size()`).
 - C++ only, each other language for a stated reason: C has no member functions; Rust receivers carry no declared type
   yet; Go, Java, Kotlin, C# and Swift name their standard members after interfaces in-tree types implement; ObjC
   message sends carry no receiver shape; Python, JS, TS and Ruby keep the builtin-method name gate.
