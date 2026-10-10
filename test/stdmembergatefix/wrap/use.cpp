@@ -41,6 +41,11 @@ struct Shelf2
     std::string g_list;
     int fieldHidesGlobal() { return int( g_list.size() ); }
 };
+struct Shelf3
+{
+    std::vector<int> g_list;
+    int stdFieldHidesGlobal() { return int( g_list.size() ); }
+};
 
 // ---- STATED FLOOR: the index records no written type for these receivers ----
 struct Holder2
