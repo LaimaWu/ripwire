@@ -2357,7 +2357,8 @@ struct BranchParseJob
 {
     std::string                sha;          // the blob (with `path`, the unit one parse answers)
     std::string                path;         // the tree path: its extension picks the grammar
-    std::string                bytes;        // the blob, kept only when it holds a parse-worthy row
+    std::size_t                size = 0;     // the blob's bytes, recorded when it holds a parse-worthy row (the guard's measure)
+    std::string                bytes;        // the blob itself, read only once the batch picked this job (labelBranchRowsByParse)
     std::vector<std::uint32_t> hitLines;     // the blob's hit lines, ascending (one hit per line)
     std::vector<std::size_t>   rows;         // every WhereHit this (blob, path) produced on a non-HEAD ref
     std::size_t                headFirst = 0, headEnd = 0;   // HEAD's rows of this same (blob, path), when HEAD holds it
@@ -2436,7 +2437,7 @@ inline std::vector<std::size_t> branchParseBatch( const std::vector<BranchParseJ
     std::size_t              bytes = 0;
     for( const std::size_t j : want )
     {
-        const std::size_t size = jobs[ j ].bytes.size();
+        const std::size_t size = jobs[ j ].size;
         if( batch.size() >= budget.maxBlobs || size > budget.maxBytes - bytes )
         {
             break;   // the guard: this job and every later one confirm nothing (counted below by the caller)
@@ -2498,15 +2499,86 @@ inline void applyBlobDefinitions( WhereResult& result, const BranchParseJob& job
     }
 }
 
-inline void labelBranchRowsByParse( WhereResult& result, std::vector<BranchParseJob>& jobs, const WhereisParseBudget& budget )
+// The bytes of the blobs the batch chose, read back from the object store: the scan kept only their sizes, so peak memory
+// holds the batch (at most the guard's bytes) and never every candidate. A blob is read once however many of the batch's
+// paths hold it. Returns, per batch entry, whether its bytes came back whole (an immutable object of the size the scan saw);
+// one that did not — the stream died, the object went missing between the two reads — is answered as unparsed by the caller.
+// The DISCLOSE sink of one batch entry's read-back (readBranchParseBatch): `whole` is what labelBranchRowsByParse reads.
+struct BranchBlobReadBack
+{
+    enum class DisclosureWhy : std::uint8_t
+    {
+        NotReadBackWhole,   // the second read served no text blob, or one of another size than the scan's
+    };
+    bool whole = true;
+    void disclose( DisclosureWhy why ) noexcept
+    {
+        switch( why )
+        {
+            case DisclosureWhy::NotReadBackWhole: whole = false; break;
+        }
+    }
+};
+
+inline std::vector<BranchBlobReadBack> readBranchParseBatch( const std::string& root, std::vector<BranchParseJob>& jobs,
+                                                             std::span<const std::size_t> batch )
+{
+    std::vector<std::string> shas;          // the batch's distinct blobs, in first-use order
+    std::vector<std::size_t> shaOf( batch.size() );
+    for( std::size_t k = 0; k < batch.size(); ++k )
+    {
+        const std::string& sha = jobs[ batch[ k ] ].sha;
+        const auto         it  = std::find( shas.begin(), shas.end(), sha );   // at most the guard's 256 blobs
+        shaOf[ k ]             = std::size_t( it - shas.begin() );
+        if( it == shas.end() ) { shas.push_back( sha ); }
+    }
+    std::vector<std::string> bytes( shas.size() );
+    std::vector<char>        served( shas.size(), 0 );
+    StreamBlobStats          stats;
+    streamBlobsInSlices( root, shas, kWhereisStreamSlices, [ & ]( std::size_t i, const std::string&, std::string_view b, bool isText )
+    {
+        if( isText )
+        {
+            bytes[ i ].assign( b );
+            served[ i ] = 1;
+        }
+    }, stats );
+    std::vector<BranchBlobReadBack> reads( batch.size() );
+    for( std::size_t k = 0; k < batch.size(); ++k )
+    {
+        // The second read is external input: a blob that came back short or not at all confirms nothing.
+        if( served[ shaOf[ k ] ] == 0 || bytes[ shaOf[ k ] ].size() != jobs[ batch[ k ] ].size )
+        {
+            DISCLOSE( reads[ k ], BranchBlobReadBack::DisclosureWhy::NotReadBackWhole,
+                      "whereis: a blob the parse batch chose did not read back whole; its rows confirm nothing (kind=text, counted in <unparsed>)" );
+        }
+    }
+    // Hand each chosen job its bytes: the last job of a blob takes them, the others copy (a blob at two paths is rare).
+    for( std::size_t k = 0; k < batch.size(); ++k )
+    {
+        if( !reads[ k ].whole ) { continue; }
+        const bool lastUse = std::none_of( batch.begin() + std::ptrdiff_t( k + 1 ), batch.end(),
+                                           [ & ]( std::size_t j ) { return jobs[ j ].sha == jobs[ batch[ k ] ].sha; } );
+        jobs[ batch[ k ] ].bytes = lastUse ? std::move( bytes[ shaOf[ k ] ] ) : bytes[ shaOf[ k ] ];
+    }
+    return reads;
+}
+
+inline void labelBranchRowsByParse( const std::string& root, WhereResult& result, std::vector<BranchParseJob>& jobs, const WhereisParseBudget& budget )
 {
     std::vector<char>              answered = answerWithoutParse( result, jobs );
     const std::vector<std::size_t> batch    = branchParseBatch( jobs, answered, budget, result.branchLabels );
+    const std::vector<BranchBlobReadBack> reads = readBranchParseBatch( root, jobs, batch );
     std::vector<BlobText>          blobs;
+    std::vector<std::size_t>       parsedJobs;   // the batch entries whose bytes read back whole, in batch order
     blobs.reserve( batch.size() );
-    for( const std::size_t j : batch )
+    for( std::size_t k = 0; k < batch.size(); ++k )
     {
-        blobs.push_back( BlobText{ jobs[ j ].path, jobs[ j ].bytes } );
+        if( reads[ k ].whole )
+        {
+            blobs.push_back( BlobText{ jobs[ batch[ k ] ].path, jobs[ batch[ k ] ].bytes } );
+            parsedJobs.push_back( batch[ k ] );
+        }
     }
     std::vector<BlobDefinitions> parsed;
     if( !blobs.empty() )
@@ -2515,11 +2587,21 @@ inline void labelBranchRowsByParse( WhereResult& result, std::vector<BranchParse
         std::lock_guard<std::mutex> ingestLk( quality::headSnapshotIngestMutex() );
         parsed = definitionLinesInBlobs( blobs, result.sym );
     }
-    ENSURES( parsed.size() == batch.size(), "one answer per (blob, path) handed to the parser" );
+    ENSURES( parsed.size() == parsedJobs.size(), "one answer per (blob, path) handed to the parser" );
+    for( std::size_t k = 0; k < parsedJobs.size(); ++k )
+    {
+        applyBlobDefinitions( result, jobs[ parsedJobs[ k ] ], parsed[ k ] );
+        answered[ parsedJobs[ k ] ] = 1;
+        std::string().swap( jobs[ parsedJobs[ k ] ].bytes );   // parsed: release the bytes before the answer is written
+    }
     for( std::size_t k = 0; k < batch.size(); ++k )
     {
-        applyBlobDefinitions( result, jobs[ batch[ k ] ], parsed[ k ] );
-        answered[ batch[ k ] ] = 1;
+        if( !reads[ k ].whole )
+        {
+            labelJobRows( result, jobs[ batch[ k ] ], {}, false );   // chosen but not read back: confirms nothing, as a failed parse
+            ++result.branchLabels.failed;
+            answered[ batch[ k ] ] = 1;
+        }
     }
     for( std::size_t j = 0; j < jobs.size(); ++j )
     {
@@ -3120,12 +3202,14 @@ inline WhereisSites whereisSitesOf( const std::string& root, const std::vector<R
 }
 
 // One blob's scan, done on the stream's own worker thread (streamBlobsInSlices): a pure function of the bytes — its hit
-// rows (stamped with no ref yet) and the bytes themselves only when some row is parse-worthy.
+// rows (stamped with no ref yet) and, when some row is parse-worthy, the blob's SIZE. The bytes are not kept: holding
+// every candidate's bytes until the runaway guard picked its batch cost 0.7-1.3 GB of peak RSS on hot names (the
+// whereis-lean lane); the batch reads back only the blobs it chose (readBranchParseBatch).
 struct WhereisBlobScan
 {
-    bool                  hasSym = false;   // a text blob holding the name's bytes (the cheap reject passed)
-    std::vector<WhereHit> rows;             // its hits; empty ⇔ no whole-word occurrence (hasWholeWord)
-    std::string           bytes;            // kept only for a parse-worthy blob (labelBranchRowsByParse)
+    bool                  hasSym     = false;   // a text blob holding the name's bytes (the cheap reject passed)
+    std::vector<WhereHit> rows;                 // its hits; empty ⇔ no whole-word occurrence (hasWholeWord)
+    std::size_t           parseBytes = 0;       // the blob's size, for a parse-worthy blob (the guard's measure); else 0
 };
 
 inline std::vector<WhereisBlobScan> scanWhereisBlobs( const std::string& root, const std::vector<std::string>& shas, std::string_view sym,
@@ -3143,7 +3227,7 @@ inline std::vector<WhereisBlobScan> scanWhereisBlobs( const std::string& root, c
         scanBlobForSymbol( bytes, sym, RefInfo{}, std::string(), b.rows );
         if( std::any_of( b.rows.begin(), b.rows.end(), []( const WhereHit& h ) { return h.parseWorthy; } ) )
         {
-            b.bytes.assign( bytes );
+            b.parseBytes = bytes.size();
         }
     }, stats );
     return scans;
@@ -3158,7 +3242,7 @@ struct WhereisHeadRows
 };
 
 // Rows [firstRow, end of hits) are one non-HEAD site's copy of a blob: add them to the (blob, path) job, opening it
-// (with the blob's hit lines, its parse-worthiness, HEAD's rows of the same path and the bytes a parse would need)
+// (with the blob's hit lines, its parse-worthiness, HEAD's rows of the same path and the size a parse would read)
 // the first time that path is seen for this blob.
 inline void noteBranchRows( std::vector<BranchParseJob>& jobs, std::size_t firstJobOfBlob, const WhereResult& result, std::size_t firstRow,
                             const std::string& sha, const WhereisSite& site, std::span<const WhereisHeadRows> headRows, const WhereisBlobScan& scan )
@@ -3182,7 +3266,7 @@ inline void noteBranchRows( std::vector<BranchParseJob>& jobs, std::size_t first
         }
         if( fresh.shaped )
         {
-            fresh.bytes = scan.bytes;   // kept for the parse batch (a mirror of HEAD's labels may yet make it unneeded)
+            fresh.size = scan.parseBytes;   // the guard's measure; the bytes are read only if the batch picks this job
         }
         jobs.push_back( std::move( fresh ) );
         job = jobs.end() - 1;
@@ -3314,7 +3398,7 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
     // before references" is a sort key and a wrong label re-orders the first screen.
     result.headLabelsFromIndex = relabelHeadHitsFromIndex( result.hits, evidence.indexDefs );
     // …and the other refs' rows are a PARSER's answer too, after HEAD's: a ref holding HEAD's own blob takes HEAD's labels.
-    labelBranchRowsByParse( result, branchJobs, budget );
+    labelBranchRowsByParse( root, result, branchJobs, budget );
     demoteTestLocalDefs( result.hits );
 
     // The checkout first, then refs by name; within a group, SOURCE before test before docs (§P11.5, see this
