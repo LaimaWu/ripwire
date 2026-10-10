@@ -2946,7 +2946,7 @@ struct StdMemberGate
         {
             return {};
         }
-        const std::string_view                  tmpl = trimSpaces( written.substr( kStd.size(), open - kStd.size() ) );
+        const std::string_view                  tmpl = trimWs( written.substr( kStd.size(), open - kStd.size() ) );
         const std::span<const std::string_view> wrappers( externalnames::kCppStdArrowTemplates );
         if( !std::binary_search( wrappers.begin(), wrappers.end(), tmpl, rw::sortutil::svLess ) )
         {
@@ -2974,13 +2974,13 @@ struct StdMemberGate
         {
             return {};   // no closing `>`: not a text the parser gave a template-id for
         }
-        std::string_view arg = trimSpaces( written.substr( open + 1, end - open - 1 ) );
+        std::string_view arg = trimWs( written.substr( open + 1, end - open - 1 ) );
         for( const std::string_view cv : { std::string_view( "const " ), std::string_view( "volatile " ), std::string_view( "struct " ), std::string_view( "class " ) } )
         {
-            arg = arg.starts_with( cv ) ? trimSpaces( arg.substr( cv.size() ) ) : arg;
+            arg = arg.starts_with( cv ) ? trimWs( arg.substr( cv.size() ) ) : arg;
         }
         arg = arg.starts_with( "::" ) ? arg.substr( 2 ) : arg;
-        arg = trimSpaces( arg.substr( 0, arg.find( '<' ) ) );   // `Gen<int>` names Gen
+        arg = trimWs( arg.substr( 0, arg.find( '<' ) ) );   // `Gen<int>` names Gen
         if( arg.starts_with( kStd ) || arg.empty() || arg.find_first_of( "*&[( " ) != std::string_view::npos )
         {
             return {};
@@ -2994,13 +2994,6 @@ struct StdMemberGate
         return isId ? name : std::string_view{};
     }
 
-private:
-    static std::string_view trimSpaces( std::string_view t ) noexcept
-    {
-        while( !t.empty() && t.front() == ' ' ) { t.remove_prefix( 1 ); }
-        while( !t.empty() && t.back() == ' ' ) { t.remove_suffix( 1 ); }
-        return t;
-    }
 };
 
 // The class a call runs against, keyed as canonByName and the inheritance graph key a class (its name). Inside a def it
