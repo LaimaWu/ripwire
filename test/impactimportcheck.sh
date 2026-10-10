@@ -356,9 +356,16 @@ body "$R_DEF" | grep -o '<rf [^>]*>' | head -1 | grep -qE 'syms="[0-9]+" d="1"' 
 ri --json | grep -qE '"files":\{"files":[0-9]+,"shown_files":20,"files_capped":true,"files_next":"--impact=importHubFn --limit=' \
     && ok "rollup: the --json dialect carries the same rollup object" \
     || no "rollup: --json lacks the files object beside a cut window"
-ri --limit=100 --json | grep -q '"files":{' \
-    && no "rollup: --json carries a files object beside an uncut window" \
-    || ok "rollup: --json carries no files object beside an uncut window"
+# the ABSENCE is read only off a run that succeeded and printed its rows (checklist 14; rv-lean-trio nit a): a crash or an
+# empty answer must not read as "no files object"
+R_ALLJ="$( ri --limit=100 --json )"; rcAllJ=$?
+if [ "$rcAllJ" != 0 ] || ! printf '%s' "$R_ALLJ" | grep -q '"of":"importHubFn"'; then
+    no "rollup: --impact --limit=100 --json did not answer (rc=$rcAllJ) — the absence arm has no document to read"
+elif printf '%s' "$R_ALLJ" | grep -q '"files":{'; then
+    no "rollup: --json carries a files object beside an uncut window"
+else
+    ok "rollup: --json carries no files object beside an uncut window"
+fi
 
 # ── #9c THE CUT NAMES ITS CALL (cut-fix E, 2026-09-24) ──────────────────────────────────────────────────
 # A cut tier was a DEAD-END cut (answer-completeness §1.3/§5.8): counted, and no call named that serves the rest.
