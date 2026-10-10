@@ -693,7 +693,7 @@ inline constexpr int           kRunTraceExitCommandFailed = 4;                  
 inline void printBlobsUnreadRefusal( const char* hostPrefix )
 {
     DISCLOSE( Diagnostics::answerRefused, "the blob batch behind the cross-branch sweep did not serve every blob, so no verdict is printed - stderr names the cause, exit 1" );
-    rw::emitTo( stderr, "ripwire: {}{} - refusing rather than print verdicts nothing measured\n", hostPrefix, rw::crossref::blobsUnreadCause( rw::crossref::kStrayBlobs ) );
+    rw::emitTo( stderr, "ripwire: {}{} - refusing rather than print verdicts nothing measured\n", hostPrefix, rw::crossref::blobsUnreadCause( rw::crossref::UnreadBlobBatch::Branches ) );
 }
 inline void printStrayFilterNoMatch( const char* hostPrefix, std::string_view filter )
 {
@@ -1640,7 +1640,7 @@ std::optional<int> runCrossRef( const MainDispatch& d )
         {
             DISCLOSE( Diagnostics::answerRefused, "whereis: the blob stream did not serve every blob, so no hit count is printed — stderr names the cause, exit 1" );
             rw::emitTo( stderr, "ripwire: --whereis: {} — refusing rather than print a hit count nothing measured\n",
-                        crossref::blobsUnreadCause( crossref::kWhereisBlobs ) );   // K75's one renderer: the sweep's words, this verb's noun
+                        crossref::blobsUnreadCause( crossref::UnreadBlobBatch::Trees ) );   // K75's one renderer: the sweep's words, this verb's noun
             return 1;
         }
         result.seedSpec = std::move( whereisSeed );

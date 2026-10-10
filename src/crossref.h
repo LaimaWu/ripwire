@@ -710,16 +710,20 @@ private:
 
 // K75: the words every host of a blob-reading verb refuses in when the one `git cat-file --batch` behind it did not
 // serve every blob. The cause is named WHERE the reader looks (stderr + exit 1, or an MCP error), never as a zero.
-// ONE renderer for both blob readers (the prconverge.h one-renderer rule): `blobs` names what was not read — the
-// cross-branch sweep's kStrayBlobs or --whereis's kWhereisBlobs — and every other word is shared, so the CLI and MCP
-// hosts of both verbs name the same cause, the cache directory and TMPDIR.
-inline constexpr std::string_view kStrayBlobs   = "the branches' blobs";
-inline constexpr std::string_view kWhereisBlobs = "the trees' blobs";
-inline std::string blobsUnreadCause( std::string_view blobs )
+// ONE renderer for both blob readers (the prconverge.h one-renderer rule): `batch` names which reader's blobs were not
+// read — the cross-branch sweep's (--stray-content, --plan, --abi, --eval-stray) or --whereis's — and every other word is
+// shared, so the CLI and MCP hosts of both verbs name the same cause, the cache directory and TMPDIR.
+enum class UnreadBlobBatch : std::uint8_t
 {
+    Branches,   // the cross-branch sweep's batch: every ref's side of every path it compares
+    Trees,      // --whereis's batch: the trees it searches for the name
+};
+inline std::string blobsUnreadCause( UnreadBlobBatch batch )
+{
+    const std::string_view unread = batch == UnreadBlobBatch::Trees ? "the trees' blobs" : "the branches' blobs";
     return std::format( "could not read {} (the one `git cat-file --batch` did not start or stopped early; its sha list is written under {} - is TMPDIR "
                         "a writable directory?)",
-                        blobs, quality::cacheDirLadder() );
+                        unread, quality::cacheDirLadder() );
 }
 
 // ── git plumbing (read-only) ─────────────────────────────────────────────────────────────────────────────
