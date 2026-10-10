@@ -1712,6 +1712,84 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         const bool verdictOnly = collapseStale && !refPair && basis.headBasis != nullptr && std::string_view( basis.headBasis ) == "identity"
                               && !scope.active() && foreignAcks.empty() && ackedCount == 0 && configDiag.total() == 0 && baselineAbsorbed == 0
                               && basis.apiNewSurface == 0 && baseSel.sidecarBadLines == 0 && basis.acksBadLines == 0;
+        // P1: ONE row emitter for both halves of the scope partition — a disclosed row carries the identical
+        // attribute set, because nothing about a finding changes by belonging to someone else. `gatingAllowed`
+        // is the one difference: an out-of-scope row is not what the exit code fires on, and a gating
+        // attribute on it would contradict the header's own gating counter inside the same document.
+        const auto emitRow = [ & ]( std::FILE* out, const quality::Regression& r, bool gatingAllowed )
+        {
+            // duplication carries a member LIST (members=) + token count; the per-symbol was/now kinds
+            // (complexity/verbosity/nesting/params) carry was/now; api-surface + dead-code are sym-only.
+            // sev="minor" marks a below-materiality delta (never gates); absent = major.
+            const char* sev = r.isMinor ? " sev=\"minor\"" : "";
+            // B10.2 — the optional classification facet: attribute NAME is chosen by kind (churn=
+            // short-horizon-churn's self/ambient split; surface= api-surface's new-symbol/contract-change
+            // tier; idiom= the duplication kind's recognized clone-body shape); r.facet carries only the
+            // VALUE, and quality::facetAttrName is the ONE table that maps kind → attribute name for all
+            // three emitters (this one, the --json twin above, and the MCP one).
+            std::string facetAttr;
+            if( !r.facet.empty() )
+            {
+                const char* facetName = quality::facetAttrName( r.kind );
+                if( facetName )
+                {
+                    facetAttr = std::string( " " ) + facetName + "=\"" + r.facet + "\"";
+                }
+            }
+            // r26 — the ORIGIN axis, emitted LAST so the existing attribute order is untouched. Present only
+            // on new-symbol rows (absent = preexisting-worse), the same "mark the exception" convention sev=
+            // uses. api-surface's own surface="new-symbol" facet is the same fact narrowed to that kind; it
+            // stays for shape compatibility, and origin= is what the exit gate reads.
+            const char* origin = r.isNewSymbol ? " origin=\"new-symbol\"" : "";
+            // P2.5 — the two attributes that make a row ACTIONABLE, appended last so every pre-r27 attribute
+            // keeps its position:
+            //   p="path:line" — sym= is a canonical id whose display tail is often a bare one-letter local
+            //     (`sym="cc"`), i.e. ungreppable. Omitted, never faked, when no locator was resolvable.
+            //   gating="1"    — marks exactly the rows the header's gating= counts and the exit code fires on.
+            //     Until now a gating row was identifiable ONLY by the ABSENCE of sev="minor" (and of
+            //     origin="new-symbol") — absence-as-signal is the least machine-friendly encoding available.
+            std::string locAttr;
+            if( !r.path.empty() )
+            {
+                locAttr = " p=\"" + ex( r.path ) + ":" + std::to_string( r.line ) + "\"";
+            }
+            const char* gatingAttr = ( gatingAllowed && quality::rowGates( r ) ) ? " gating=\"1\"" : "";
+            // P8 (L7): the threshold beside the number it judges — bar= on the four numeric kinds (quality.h's
+            // kCcxBar/kLocBar/kNestBar/kParamBar), so was=/now= read without the legend.
+            const char* barAttr = r.kind == "complexity" ? " bar=\"15\"" : r.kind == "verbosity" ? " bar=\"60\""
+                                : r.kind == "nesting"    ? " bar=\"4\""  : r.kind == "params"    ? " bar=\"5\""  : "";
+            // P3 (L7, nextverb.h): a GATING row hands the agent the body to fix — --expand=FILE:NAME (the file-qualified
+            // selector, so a same-named symbol elsewhere cannot answer). The name is the sym key's last :: segment;
+            // duplication rows name a SET (members=) and carry no single body to open, nor does a FILE-anchored
+            // defect-shape row (top-level code: sym= is the path, and --expand=FILE:FILE matches no symbol).
+            std::string nextAttr;
+            if( *gatingAttr && !r.path.empty() && r.kind != "duplication" && !( r.kind == "defect-shape" && r.sym == r.path ) )
+            {
+                const std::size_t    sep  = r.sym.rfind( "::" );
+                const std::string    bare = sep == std::string::npos ? r.sym : r.sym.substr( sep + 2 );
+                nextAttr = rw::nextAttrXml( rw::nextFlag( "--expand=", r.path + ":" + bare ) );
+            }
+            if( r.kind == "duplication" )
+            {
+                rw::emitTo( out, "<r kind=\"duplication\" members=\"{}\" tokens=\"{}\"{}{}{}{}{}/>", ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.now, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr );
+            }
+            else if( r.kind == "dead-code" )
+            {
+                rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\"{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
+            // B10.2e: api-surface now carries two shapes — a brand-new/newly-public symbol (was=now=0, no
+            // param comparison to show) and a param-count contract-change (was/now = the real counts). Print
+            // was/now whenever they differ from each other so the contract-change case's was=/now= is visible
+            // while the new-symbol case's meaningless was="0" now="0" is omitted, matching its old sym-only shape.
+            }
+            else if( r.kind == "api-surface" && r.was == r.now )
+            {
+                rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\"{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
+            }
+            else
+            {
+                rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\" was=\"{}\" now=\"{}\"{}{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.was, r.now, barAttr, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
+            }
+        };
         // Fix round 1 (rv-lean-trio item 5, owner ruling 5): a fold ships only when it PAYS (compactlegend.h foldPays: shorter
         // by its margin, as written AND as the compact layer delivers it). The whole XML document is one renderer over a FILE*,
         // so both candidates are rendered and measured, and the full document wins a fold that does not pay or a failed render
@@ -1745,87 +1823,9 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
                          // gets quoted into handoffs where a 9-char prefix is one collision from unverifiable.
                          atAttrs.c_str(), refs.attrs.c_str(), identityAttrs.c_str(),
                          scopeAttrs.c_str(), configWarnAttr.c_str(), baselineAbsorbedAttr.c_str(), ( sidecarHealthAttrs + ( collapse ? staleCollapseAttrs : std::string() ) ).c_str() );
-            // P1: ONE row emitter for both halves of the scope partition — a disclosed row carries the identical
-            // attribute set, because nothing about a finding changes by belonging to someone else. `gatingAllowed`
-            // is the one difference: an out-of-scope row is not what the exit code fires on, and a gating
-            // attribute on it would contradict the header's own gating counter inside the same document.
-            const auto emitRow = [ & ]( const quality::Regression& r, bool gatingAllowed )
-            {
-                // duplication carries a member LIST (members=) + token count; the per-symbol was/now kinds
-                // (complexity/verbosity/nesting/params) carry was/now; api-surface + dead-code are sym-only.
-                // sev="minor" marks a below-materiality delta (never gates); absent = major.
-                const char* sev = r.isMinor ? " sev=\"minor\"" : "";
-                // B10.2 — the optional classification facet: attribute NAME is chosen by kind (churn=
-                // short-horizon-churn's self/ambient split; surface= api-surface's new-symbol/contract-change
-                // tier; idiom= the duplication kind's recognized clone-body shape); r.facet carries only the
-                // VALUE, and quality::facetAttrName is the ONE table that maps kind → attribute name for all
-                // three emitters (this one, the --json twin above, and the MCP one).
-                std::string facetAttr;
-                if( !r.facet.empty() )
-                {
-                    const char* facetName = quality::facetAttrName( r.kind );
-                    if( facetName )
-                    {
-                        facetAttr = std::string( " " ) + facetName + "=\"" + r.facet + "\"";
-                    }
-                }
-                // r26 — the ORIGIN axis, emitted LAST so the existing attribute order is untouched. Present only
-                // on new-symbol rows (absent = preexisting-worse), the same "mark the exception" convention sev=
-                // uses. api-surface's own surface="new-symbol" facet is the same fact narrowed to that kind; it
-                // stays for shape compatibility, and origin= is what the exit gate reads.
-                const char* origin = r.isNewSymbol ? " origin=\"new-symbol\"" : "";
-                // P2.5 — the two attributes that make a row ACTIONABLE, appended last so every pre-r27 attribute
-                // keeps its position:
-                //   p="path:line" — sym= is a canonical id whose display tail is often a bare one-letter local
-                //     (`sym="cc"`), i.e. ungreppable. Omitted, never faked, when no locator was resolvable.
-                //   gating="1"    — marks exactly the rows the header's gating= counts and the exit code fires on.
-                //     Until now a gating row was identifiable ONLY by the ABSENCE of sev="minor" (and of
-                //     origin="new-symbol") — absence-as-signal is the least machine-friendly encoding available.
-                std::string locAttr;
-                if( !r.path.empty() )
-                {
-                    locAttr = " p=\"" + ex( r.path ) + ":" + std::to_string( r.line ) + "\"";
-                }
-                const char* gatingAttr = ( gatingAllowed && quality::rowGates( r ) ) ? " gating=\"1\"" : "";
-                // P8 (L7): the threshold beside the number it judges — bar= on the four numeric kinds (quality.h's
-                // kCcxBar/kLocBar/kNestBar/kParamBar), so was=/now= read without the legend.
-                const char* barAttr = r.kind == "complexity" ? " bar=\"15\"" : r.kind == "verbosity" ? " bar=\"60\""
-                                    : r.kind == "nesting"    ? " bar=\"4\""  : r.kind == "params"    ? " bar=\"5\""  : "";
-                // P3 (L7, nextverb.h): a GATING row hands the agent the body to fix — --expand=FILE:NAME (the file-qualified
-                // selector, so a same-named symbol elsewhere cannot answer). The name is the sym key's last :: segment;
-                // duplication rows name a SET (members=) and carry no single body to open, nor does a FILE-anchored
-                // defect-shape row (top-level code: sym= is the path, and --expand=FILE:FILE matches no symbol).
-                std::string nextAttr;
-                if( *gatingAttr && !r.path.empty() && r.kind != "duplication" && !( r.kind == "defect-shape" && r.sym == r.path ) )
-                {
-                    const std::size_t    sep  = r.sym.rfind( "::" );
-                    const std::string    bare = sep == std::string::npos ? r.sym : r.sym.substr( sep + 2 );
-                    nextAttr = rw::nextAttrXml( rw::nextFlag( "--expand=", r.path + ":" + bare ) );
-                }
-                if( r.kind == "duplication" )
-                {
-                    rw::emitTo( out, "<r kind=\"duplication\" members=\"{}\" tokens=\"{}\"{}{}{}{}{}/>", ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.now, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr );
-                }
-                else if( r.kind == "dead-code" )
-                {
-                    rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\"{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
-                // B10.2e: api-surface now carries two shapes — a brand-new/newly-public symbol (was=now=0, no
-                // param comparison to show) and a param-count contract-change (was/now = the real counts). Print
-                // was/now whenever they differ from each other so the contract-change case's was=/now= is visible
-                // while the new-symbol case's meaningless was="0" now="0" is omitted, matching its old sym-only shape.
-                }
-                else if( r.kind == "api-surface" && r.was == r.now )
-                {
-                    rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\"{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
-                }
-                else
-                {
-                    rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\" was=\"{}\" now=\"{}\"{}{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.was, r.now, barAttr, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
-                }
-            };
             for( const quality::Regression& r : regs )
             {
-                emitRow( r, /*gatingAllowed=*/true );
+                emitRow( out, r, /*gatingAllowed=*/true );
             }
             if( scope.active() )
             {
@@ -1839,7 +1839,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
                              outOfScope.size(), scopedOutGating );
                 for( const quality::Regression& r : outOfScope )
                 {
-                    emitRow( r, /*gatingAllowed=*/false );
+                    emitRow( out, r, /*gatingAllowed=*/false );
                 }
                 rw::emitRaw( out, "</out-of-scope>" );
             }

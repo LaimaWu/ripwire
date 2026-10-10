@@ -1095,13 +1095,6 @@ inline bool editCheckVerdictOnlyTaken( const EditCheckVerdictFacts& f ) noexcept
     return f.page.verdictOnly && !f.preview && f.page.limit == 0 && f.page.offset == 0 && cleanContract && nothingBeside;
 }
 
-// Fix round 1 (ruling 1): the at= stamp value of a tree that IS its HEAD — a resolvable commit and no "+dirty" ("+shallow"
-// may ride: it is about history, not the working tree). Empty / dirty → the full document.
-inline bool editCheckTreeAtHead( std::string_view atStamp ) noexcept
-{
-    return !atStamp.empty() && atStamp.find( "+dirty" ) == std::string_view::npos;
-}
-
 // The verdict line, or "" when the full document is owed (editCheckVerdictOnlyTaken). Its legend states what the full
 // document's would about THESE attributes — the arity hedge (incompatible= is a fact about the tree, never a proof of
 // binding), the floor tail every graph-count verb splices — and nothing about rows it does not carry. It is the full
@@ -1113,9 +1106,11 @@ inline std::string editCheckVerdictOnlyText( const EditCheckVerdictFacts& f, con
     {
         return {};
     }
-    // ruling 1: the subprocess runs only once every in-memory fact already chose the verdict — and its value IS the at= below
+    // ruling 1: the tree IS its HEAD — a resolvable commit and no "+dirty" ("+shallow" may ride: it is about history, not the
+    // working tree); an empty stamp (no git, no HEAD) or a dirty one owes the full document. The subprocess runs only once
+    // every in-memory fact already chose the verdict, and its value IS the at= below.
     const std::string atStamp = gitstamp::stampAt( root );
-    if( !editCheckTreeAtHead( atStamp ) )
+    if( atStamp.empty() || atStamp.find( "+dirty" ) != std::string::npos )
     {
         return {};
     }
