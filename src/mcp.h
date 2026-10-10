@@ -2337,8 +2337,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                         if( blobFault )
                         {
                             DISCLOSE( Diagnostics::answerRefused, "whereis (MCP): the blob stream did not serve every blob — a -32603 error names it, no hit count" );
-                            return errResult( -32603, "could not read the trees' blobs (git cat-file --batch did not start or stopped early; is the cache "
-                                                      "dir under TMPDIR writable?) — no hit count rather than one nothing measured" );
+                            return errResultMsg( -32603, crossref::blobsUnreadCause( crossref::kWhereisBlobs ) + " — no hit count rather than one nothing measured" );
                         }
                         return t.empty() ? errResult( -32602, "not a git repository (or no HEAD commit) — no refs to search" ) : textResult( t );
                     } );
@@ -2353,7 +2352,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                         if( blobFault )
                         {
                             DISCLOSE( Diagnostics::answerRefused, "stray_content (MCP): the blob batch did not serve every blob - a -32603 error names it, no verdicts" );
-                            return errResultMsg( -32603, crossref::blobsUnreadCause() );
+                            return errResultMsg( -32603, crossref::blobsUnreadCause( crossref::kStrayBlobs ) );
                         }
                         return t.empty() ? errResult( -32602, "not a git repository (or no HEAD commit) — no refs to compare" ) : textResult( t );
                     } );

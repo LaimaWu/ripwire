@@ -263,8 +263,8 @@ When that directory was unusable (for example `TMPDIR` naming a directory that d
 started and the answer said `on-head="0" hits="0"`, with a near-miss note suggesting the name it had been given, on
 a repository whose HEAD defines it. The CLI now exits 1 and names the cause on stderr, and the MCP `whereis` tool
 answers error -32603. A genuine zero over a working cache directory is answered as before.
-`--stray-content` and `--abi` read blobs the same way and still answer without saying the read failed. That is
-known and not fixed here.
+The cross-branch verbs read blobs the same way and now refuse the same way (the entry above); both verbs, CLI and MCP,
+say it in one sentence that differs only in what was not read and names the cache directory and `TMPDIR`.
 
 ### Added — a Ruby `db/schema.rb` renders its columns as Section definitions
 A Rails schema is recognized BY CONTENT, never by path: a Ruby file whose tree holds a

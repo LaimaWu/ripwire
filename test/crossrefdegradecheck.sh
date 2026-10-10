@@ -378,6 +378,25 @@ PY
     esac
 fi
 
+# 6e (train 26c: the K75 x cli-perf-068 one-renderer item): --whereis and the cross-branch sweep refuse in ONE sentence that
+# differs only in its noun (crossref::blobsUnreadCause), so the --whereis refusal names TMPDIR and its MCP twin names the cache
+# directory, as the sweep's refusal (the K75 loop above, its last stderr) always did. Red before the fold: the --whereis CLI
+# sentence never asked about TMPDIR, and its MCP twin never named the directory the sha list is written under.
+K75WORDS="(the one \`git cat-file --batch\` did not start or stopped early; its sha list is written under "
+K75ASK=" - is TMPDIR a writable directory?)"
+if grep -qF "could not read the trees' blobs $K75WORDS" "$TMP/b6b.err" && grep -qF "$K75ASK" "$TMP/b6b.err" \
+   && grep -qF "could not read the branches' blobs $K75WORDS" "$TMP/k75_bad.out.err" && grep -qF "$K75ASK" "$TMP/k75_bad.out.err"; then
+    ok "6e one renderer: the --whereis and cross-branch refusals share every word but the noun, TMPDIR named in both"
+else
+    no "6e one renderer: the two refusals differ beyond the noun — whereis: $( head -c 260 "$TMP/b6b.err" ) | sweep: $( grep 'could not read' "$TMP/k75_bad.out.err" | head -c 260 )"
+fi
+if [ -n "${M6:-}" ]; then
+    case "$M6" in
+        "ERROR "*"could not read the trees' blobs $K75WORDS"*"$K75ASK"*) ok "6e MCP: the whereis error carries the same sentence (the directory and TMPDIR named)" ;;
+        *) no "6e MCP: the whereis error is not the shared sentence: $( printf '%s' "$M6" | head -c 260 )" ;;
+    esac
+fi
+
 # G4: every emitted document must survive xmllint
 if command -v xmllint >/dev/null 2>&1; then
     g4=0
