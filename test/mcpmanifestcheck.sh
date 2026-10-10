@@ -320,6 +320,9 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 # is #362's explore: its schema takes limit/offset (774 -> 958 B, +184 B); descriptions unchanged at 22,472 B, every other
 # schema unchanged (per-tool dump, 26c parent 0852bc0f vs the merged binary). 46,930 + 184 = 47,114, every byte attributed.
 # Headroom after this line: 36 B, the #214-sized margin.
+# RE-MEASURED 2026-10-10 (lane whereis-defs-fix fix round 2), CEILING UNMOVED: 46,930 -> 46,925 B. whereis's description says
+# what labels another ref's row now (a parser, not a lexical heuristic) in the same 701 characters — (1c) holds — and the
+# sentence it replaced carried an em dash, six bytes as JSON. Every other tool unchanged. Headroom after this line: 25 B.
 CEILING = 47150
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )

@@ -124,6 +124,48 @@ sanitizer build (`implicit-integer-sign-change`) aborts on for any byte at or ab
 router's name-shape and `FILE:LINE` predicates, the LSP header parser and the extension test; each now narrows
 explicitly.
 
+### Changed — `--whereis` labels another ref's row by parsing its blob, lists a line several refs share once, and reads refs from tree objects
+
+A row on another ref used to take `kind="def"` from a lexical reading of its one line, and any such reading errs both ways:
+a looser one called call sites definitions (`if( !task.empty() ) { out += escapeXml( task, esc ); }`, `go f(a)`, `@f(1)`),
+a stricter one lost real definitions (`#define NAME(`, `decltype(auto) NAME(`, `@Test(…) public void NAME()`,
+`#[derive(Debug)] struct NAME`). Measured on this repository (162 local refs), `--whereis=escapeXml`: the default page
+went from 60 rows of `total="2197"` (54 of them call sites) to 2 rows, both the declaration.
+
+- **Another ref's `kind="def"` comes from a parser.** A ref holding HEAD's own blob of a path takes HEAD's index labels,
+  line for line. Any other blob is parsed once per distinct blob and path by the index's own extraction — the same
+  language rule, tags query and symbol model — and a definition it captures for the name labels the nearest row the way
+  HEAD's index labels HEAD's. Only a blob holding a line a loose lexical test calls worth parsing is parsed; a blob
+  without one reads `kind="ref"`. The root says `ref_labels="parsed"` whenever another ref's row is in the answer.
+  Arms: one well-formed file per language family (C, C++, ObjC, Python, TypeScript, JavaScript, Java, Ruby, Go, Rust,
+  Swift, C#, Bash, Markdown) whose every marked line reads as its marker says and as HEAD's index reads the same bytes;
+  the twelve definition shapes the stricter reading lost; a branch-only `#define` and annotated Java method.
+- **A runaway guard on that parse, disclosed.** At most 256 blobs or 64 MB per answer, most rows first, under every
+  listing, the default page included. A blob the guard leaves, or one the parser cannot finish, confirms nothing: its
+  parse-worthy lines read `kind="text"` (listed beside the definitions, never `kind="def"`) and an `<unparsed blobs=
+  rows= next=>` element counts them; `--detail=1` lifts the guard. Its `next=` replays the same question with
+  `--detail=1` (an explicit `--whereis-listing=` rides with it); an MCP `kind` ref filter is not carried, as `<refs
+  next=>` does not carry it: the CLI has no whereis ref filter.
+- **A definition line several refs hold is one row.** Under `listing="defs"` a `kind="def"` (or `kind="text"`) row outside
+  the checkout whose path and line text other refs hold too is printed once, for the first of those refs by name, with
+  `refs="N"`; the root's `folded=` counts the rows it stands for (on the first page, `shown + more + folded + refs count =
+  hits`). `hits=` still counts every copy and `--whereis-listing=all` prints each ref's own row.
+- **Faster.** Every ref's tree is read from git's content-addressed tree objects, each distinct tree once and a level at a
+  time through one `git cat-file --batch`, instead of one `git ls-tree -r` per distinct tip (the same rows in ls-tree's
+  order and spelling — an arm compares quoted and unquoted names with ls-tree itself); a blob several refs share is
+  scanned once. The parallel per-tip listing stays the fallback, used when ripwire runs on a directory below the top of
+  the work tree.
+
+What stays a floor: a definition the loose lexical test misses (a signature wrapped before its parameter list closes, a
+name alone on the line under its return type, or a definition with no parameter list and no declaration keyword before
+the name: `name: function (`, `pub const NAME`, a C# property) is a counted ref when nothing else in its blob earns the
+blob a parse. A parsed blob is labelled as HEAD's index labels the same bytes, so a file its grammar cannot parse
+cleanly (a fragment, a file mid-edit) can lose a definition or show a false one exactly as HEAD's index would.
+MCP `whereis` takes no `detail` argument, so there the guard's `next=` names the CLI flag. Its description keeps its 701
+characters, the sentence calling a branch row's label lexical replaced by the parser one, and the
+`tools/list` manifest shrinks 46,930 → 46,925 B (the dropped em dash is six bytes of JSON). Gates: `test/crossrefcheck.sh` (5b–5e),
+`test/selectorhonestycheck.sh` (§A7), `test/pagingsweepcheck.sh`.
+
 ### Changed — a call bound by name alone keeps its rows, marked `via="name"`; typed receivers resolve
 
 A member call `x.m()` (or, where the receiver is implicit, a bare `m()`) bound to every in-repo definition spelled
