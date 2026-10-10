@@ -851,7 +851,7 @@ Discloses: `hits_capped`
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kGrepCollectionBudget` | `4000000` | — | — |
-| `kGrepLiftRowCap` | `10` | — | a code+string answer's default window (CLI and MCP alike) |
+| `kGrepLiftRowCap` | `10` | — | a RANKED code+string answer's default window (CLI and MCP alike) |
 | `kGrepMatchedLineMaxBytes` | `512` | — | — |
 | `kGrepTierFileBudget` | `128` | — | hit files classified per call |
 | `kMaxAffixSet` | `8` | — | cap on prefix/suffix set sizes |
