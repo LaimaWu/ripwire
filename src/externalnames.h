@@ -324,8 +324,12 @@ inline constexpr std::string_view kRubyBuiltinMethodNames[] = {
 // ElixirResolver::append, every `empty`/`find` in src/), fed by calls on `std::vector`, `std::string` and friends. A
 // standard container is a concrete, non-virtual class template, so a receiver of standard type never dispatches into
 // the tree — the call's other candidate is always the standard library's own member. A name here makes StdMemberGate
-// DECLINE such a call (no edge, counted, disclosed) instead of letting the name pick an in-tree definition; a call
-// whose receiver a rule typed (Rule 1/2/2b, `this`, a written non-std type) is never touched.
+// DECLINE such a call (no edge, counted, disclosed) instead of letting the name pick an in-tree definition. A call
+// whose receiver a rule typed (Rule 1/2/2b, `this`) is never touched, and neither is one whose recorded written type —
+// a local's, a parameter's, a field's or a namespace-scope variable's — names an in-tree class that may define the
+// callee: the class itself, an alias of it, or the pointee of a `->` (kCppStdArrowTemplates below, an in-tree class
+// with its own `operator->`, a class the tree does not define). What the index records no written type for (a call
+// result, an iterator, `auto`, a dereference, a subscript) is graph.h StdMemberGate's stated floor.
 // PROVENANCE: transcribed from the C++23 member synopses of the sequence, associative and unordered containers
 // ([containers]), basic_string and basic_string_view ([strings]), span ([views.span]), optional ([optional]) and the
 // smart pointers ([smartptr]) — MINUS every name that is also a generic verb or noun non-container classes routinely
@@ -344,6 +348,13 @@ inline constexpr std::string_view kCppStdMemberNames[] = {
     "starts_with", "subspan", "substr", "try_emplace", "upper_bound", "use_count", "value_comp", "value_or"
 };
 
+// The standard templates whose `->` reaches their FIRST template argument, so a `->` call through a declaration written
+// `std::unique_ptr<ns::List>` / `std::shared_ptr<…>` / `std::optional<…>` may be a member of that argument (graph.h
+// StdMemberGate::stdArrowPointee reads the declaration's recorded text). std::weak_ptr and std::reference_wrapper have no
+// `->`; a standard container reached through `->` is a raw pointer to the container, whose own member is the call. The
+// member-field capture reads the two smart pointers alone (ingest_relations.h kStdSmartPointers). Sorted by byte.
+inline constexpr std::string_view kCppStdArrowTemplates[] = { "optional", "shared_ptr", "unique_ptr" };
+
 // ONE sortedness proof for the three tables above, taking the table as a span, so the three stay one shape rather than
 // three near-copies of the assert this file already spells per table. The lookup is graph.h BuiltinMethodGate::appliesTo,
 // its only reader, which picks the table by language first.
@@ -356,6 +367,7 @@ static_assert( isStrictlySortedTable( kJsBuiltinMethodNames ), "kJsBuiltinMethod
 static_assert( isStrictlySortedTable( kRubyBuiltinMethodNames ), "kRubyBuiltinMethodNames must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kCppStdMemberNames ), "kCppStdMemberNames must be strictly sorted (binary search)" );
 static_assert( std::size( kCppStdMemberNames ) <= 0xFFFFu, "StdMemberGate packs a kCppStdMemberNames index into 16 bits" );
+static_assert( isStrictlySortedTable( kCppStdArrowTemplates ), "kCppStdArrowTemplates must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kJsGlobalObjectNames ), "kJsGlobalObjectNames must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kJsGlobalFunctionNames ), "kJsGlobalFunctionNames must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kJsGlobalAliasNames ), "kJsGlobalAliasNames must be strictly sorted (binary search)" );

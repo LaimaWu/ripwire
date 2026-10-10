@@ -17,7 +17,8 @@
 # after the ladder decided it — no edge, the header's declined=, declined_calls= on every definition it would have bound,
 # a legend clause of its own — and the caller's --callees answer names those calls once in a <stdm n= calls=> line. A
 # receiver a rule types (Rule 1/2/2b, `this`, an implicit-this call, FE-B's proof) is never touched, and neither is one
-# whose written non-std type reaches a candidate (an alias of the in-tree container).
+# whose recorded written type names an in-tree class that may define the callee (an alias of the in-tree container, the
+# pointee of a smart pointer's `->`, a namespace-scope variable's type — arms C, H, W).
 #
 # THE FIXTURE (test/stdmembergatefix/, see its README). Arms:
 #   (A) typed receivers keep their edges, unhedged: a typed local, parameter, pointer, member field, a smart pointer's `->`,
@@ -29,6 +30,12 @@
 #   (C) a local declared with an alias of the in-tree Vec keeps the ladder's via="name" hedge (the alias's cone reaches Vec)
 #   (H) field receivers: `this->items_` and `b.items_` (Box& b) written as Vec keep the hedge, std fields are declined; a
 #       dereference, a subscript, a range-for `auto` and a template parameter are the stated floor (declined)
+#   (W) written types beyond Rule 2's tables (wrap/): a `->` through std::unique_ptr / shared_ptr / optional of ns::List, an
+#       in-tree SP<T> with its own operator->, a Qt or boost pointer (a class the tree does not define), a smart-pointer root
+#       one field hop off, and namespace-scope / file-static / extern variables written ns::List keep the hedge; std-argument
+#       smart pointers, raw pointers to std containers, `.` on std::vector<ns::List>, an in-tree class with no operator->, a
+#       std-written global and a global hidden by a local or a field stay declined; call results, an iterator and an
+#       unqualified template's arguments are the stated floor (declined)
 #   (D) controls: a name outside the table (`grow`) keeps the ladder; a bare `size( b )` binds the free function; a C
 #       function-pointer call (C has no member functions) and the Rust by-name split (stated scope) are unchanged
 #   (E) the callers side: Vec::push_back keeps exactly its typed callers and hedges and counts the eleven declined calls; the one-def
@@ -164,6 +171,35 @@ check "(H) STATED FLOOR: for( auto& v : vs ) v.push_back() — a range-for auto,
                                                                callees rangeFor            '' 1 'push_back:1'
 check "(H) template parameter C& c; c.push_back() — the receiver may be anything, declined" \
                                                                callees tmplParam           '' 1 'push_back:1'
+
+# ── (W) written types beyond Rule 2's tables (wrap/) ─────────────────────────────────────────────────────────
+echo "=== (W) a recorded written type that names ns::List keeps the hedge; one that does not stays declined ==="
+LS='wrap/list.h:9:size~'; LF='wrap/list.h:10:find~'; LR='wrap/list.h:11:front~'
+check "(W) std::unique_ptr<ns::List> up; up->size() — the smart pointer's argument keeps the hedge"  callees uniqueLocal        "$LS" '' ''
+check "(W) const std::shared_ptr<ns::List>& p; p->size()"                                          callees sharedParam        "$LS" '' ''
+check "(W) std::optional<ns::List> o; o->find()"                                                    callees optionalLocal      "$LF" '' ''
+check "(W) SP<ns::List>& p; p->size() — an in-tree class with its own operator->"                   callees inTreeWrapper      "$LS" '' ''
+check "(W) SP<ns::List> p; p->front() (a local)"                                                    callees inTreeWrapperLocal "$LR" '' ''
+check "(W) QSharedPointer<ns::List>& p; p->front() — a class the tree does not define, its -> unknown" callees qtWrapper      "$LR" '' ''
+check "(W) boost::shared_ptr<ns::List>& p; p->find()"                                               callees boostWrapper       "$LF" '' ''
+check "(W) std::unique_ptr<Box2> b; b->items_.size() — a smart-pointer root, one field hop"         callees smartRootField     "$LS" '' ''
+check "(W) ns::List g_list; g_list.size() — a namespace-scope variable"                             callees globalVar          "$LS" '' ''
+check "(W) namespace app { ns::List nsVar; } nsVar.front()"                                         callees nsGlobalVar        "$LR" '' ''
+check "(W) static ns::List fileStatic; fileStatic.find()"                                           callees fileStaticVar      "$LF" '' ''
+check "(W) extern ns::List g_ext (declared in the included list.h); g_ext.size()"                   callees externVar          "$LS" '' ''
+check "(W) near-miss: std::unique_ptr<std::string> p; p->size() stays declined"                     callees uniqueStd          '' 1 'size:1'
+check "(W) near-miss: std::vector<int>* pv; pv->size() stays declined"                              callees rawStdPtr          '' 1 'size:1'
+check "(W) near-miss: std::unique_ptr<std::vector<int>> up; up->size() stays declined"              callees uniqueStdVec       '' 1 'size:1'
+check "(W) near-miss: std::vector<ns::List> v; v.size() — the container's own member, declined"     callees vectorOfList       '' 1 'size:1'
+check "(W) near-miss: std::vector<ns::List>* pv; pv->size() — a raw pointer to the container, declined" callees rawVectorOfListPtr '' 1 'size:1'
+check "(W) near-miss: Plain* p; p->size() — an in-tree class with no operator-> reaches no candidate" callees plainPtr         '' 1 'size:1'
+check "(W) near-miss: std::string g_str; g_str.size() — a namespace-scope variable written in std"   callees globalStd          '' 1 'size:1'
+check "(W) near-miss: a local std::string g_list hides the namespace-scope ns::List g_list"          callees shadowedGlobal     '' 1 'size:1'
+check "(W) near-miss: a std::string field g_list hides the namespace-scope ns::List g_list"          callees fieldHidesGlobal   '' 1 'size:1'
+check "(W) STATED FLOOR: h.list().size() — a call result carries no recorded type, declined"         callees callResult         'wrap/use.cpp:48:list~' 1 'size:1'
+check "(W) STATED FLOOR: v.front().size() — a call result; v.front() itself is the container's member" callees frontOfVector    '' 2 'front,size:2'
+check "(W) STATED FLOOR: auto it = v.begin(); it->size() — an iterator, declined"                    callees iteratorArrow      '' 1 'size:1'
+check "(W) STATED FLOOR: QList<ns::List>& l; l.size() — an unqualified template's arguments are not recorded" callees unqualifiedTemplate '' 1 'size:1'
 
 # ── (D) controls ──────────────────────────────────────────────────────────────────────────────────────────────
 echo "=== (D) controls: outside the table, bare calls, C and Rust keep the ladder ==="

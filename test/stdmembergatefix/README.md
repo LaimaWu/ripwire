@@ -21,3 +21,10 @@ reach, so the ladder itself declines it (tier 3), and the `<stdm>` line still na
 `sib/` holds the field and expression receivers: a field written as the in-tree `Vec` (`this->items_`, `b.items_` on a
 `Box& b`) keeps the hedge, a field written in `std` is declined, and a dereference, a subscript, a range-for `auto` and
 a template parameter are the stated floor (declined even where the element is `Vec`).
+
+`wrap/` holds the written types Rule 2's tables do not carry: `ns::List` (the tree's only `size`/`find`/`front`) reached
+through `std::unique_ptr`/`std::shared_ptr`/`std::optional`, an in-tree `SP<T>` with its own `operator->`, Qt and boost
+pointers, a smart-pointer root one field hop off, and namespace-scope, file-static and extern variables — each keeps the
+ladder's hedge — beside the near-misses that stay declined (a smart pointer of `std::string`, raw pointers to std
+containers, `.` on `std::vector<ns::List>`, an in-tree class with no `operator->`, a std-written global, a global hidden by
+a local or a field) and the stated floor (call results, an iterator, an unqualified template's arguments).
