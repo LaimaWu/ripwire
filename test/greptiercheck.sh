@@ -773,6 +773,83 @@ printf '%s' "$LR_P" | grep -q 'in="jobrun_handler" ref="src/routes.py:4"' \
     && ok "(12o) Python: ref= is the registration (src/routes.py:4), never the comment (aaa.py:2) or the string (abc.py:2)" \
     || no "(12o) Python: ref= is not src/routes.py:4: $( printf '%s' "$LR_P" | grep -o '<hit [^>]*in="jobrun_handler"[^>]*>' )"
 
+# (12o) fix round 2 (rv-lean-trio2 nit c): the occurrence PAIRING — the k-th raw hit on a line is the k-th whole-word
+# occurrence on it. Same-line shapes, both ways: a comment then the code reference on ONE line is a registration
+# (ref=src/zeta.c:4); a near-namesake in code, then a comment and a string on one line, is not (no ref=). Dropping the
+# pairing ("some hit on the line is code, some occurrence is whole-word") claims src/zeta.c:4 on the second; reading only
+# the line's first occurrence misses the first. RED on 33873861: the second claimed src/a.c:3 (a string).
+for shape in comment-then-code namesake-comment-string; do
+    LQ="$TMP/refline-$shape"
+    mkdir -p "$LQ/src"
+    cp "$LR/src/do-thing.c" "$LQ/src/do-thing.c"
+    printf '#!/bin/sh\ntool do-thing a\ntool do-thing b\n' >"$LQ/run.sh"
+    printf 'struct entry;\nvoid say(void) {\n    const char *s = "do_thing_entry";\n    (void)s;\n}\n' >"$LQ/src/a.c"
+    if [ "$shape" = comment-then-code ]; then reg='    /* do_thing_entry */ &do_thing_entry,'; else reg='    &do_thing_entry_old, /* do_thing_entry */ "do_thing_entry",'; fi
+    printf 'struct entry;\nextern const struct entry do_thing_entry;\nconst struct entry *table[] = {\n%s\n    0 };\n' "$reg" >"$LQ/src/zeta.c"
+    LQ_OUT="$( "$BIN" "$LQ" --no-cache --grep=do-thing 2>/dev/null; printf "\nrc=%s\n" "$?" )"
+    LQ_HIT="$( printf '%s' "$LQ_OUT" | grep -o '<hit [^>]*in="do_thing_entry"[^>]*>' )"
+    if ! printf '%s' "$LQ_OUT" | grep -q '^rc=0$' || [ "$( attr tier "$LQ_OUT" )" != "code+string" ] || [ -z "$LQ_HIT" ]; then
+        no "(12o) $shape: premise — the ranked answer with the do_thing_entry hit: tier=$( attr tier "$LQ_OUT" ) hit=$LQ_HIT"
+    elif [ "$shape" = comment-then-code ]; then
+        printf '%s' "$LQ_HIT" | grep -q 'ref="src/zeta.c:4"' \
+            && ok "(12o) one line, a comment then the code reference: ref=src/zeta.c:4 (the second occurrence pairs with its code hit)" \
+            || no "(12o) one line, a comment then the code reference: ref= is not src/zeta.c:4: $LQ_HIT"
+    else
+        printf '%s' "$LQ_HIT" | grep -q 'ref=' \
+            && no "(12o) one line, a code near-namesake then a comment and a string: a ref= was claimed: $LQ_HIT" \
+            || ok "(12o) one line, a code near-namesake then a comment and a string: no ref= (neither occurrence is code)"
+    fi
+done
+
+# (12p) fix round 2 (rv-lean-trio2 item 1b, checklist 13b): a STOPPED classification cannot prove a code tier thin. 140
+# files hold the dotted literal in a docstring, 3 early files call it, and 30 more callers sort past the 128-file tier
+# budget (unclassified). The ONE program-code count includes unclassified hits, so the shape lift does not fire: main's
+# code-tier answer, every row (all 30 late callers), no window. RED on 9bd8528a: tier=code+string, shown=10 of 173, 0 of
+# the 30 late rows.
+LP="$TMP/budgetsandbox"
+mkdir -p "$LP/pkg"
+printf 'class O:\n    def frob(self, x=0):\n        return x\n\nobj = O()\n' >"$LP/pkg/core.py"
+for i in 1 2 3; do printf 'from pkg.core import obj\n\ndef early_%s():\n    return obj.frob(%s)\n' "$i" "$i" >"$LP/pkg/a_000$i.py"; done
+i=0; while [ "$i" -lt 140 ]; do i=$(( i + 1 )); n="$( printf '%03d' "$i" )"
+    printf 'def doc_%s():\n    """Call obj.frob to frob."""\n    return 1\n' "$n" >"$LP/pkg/a_$n.py"; done
+i=0; while [ "$i" -lt 30 ]; do i=$(( i + 1 )); n="$( printf '%02d' "$i" )"
+    printf 'from pkg.core import obj\n\ndef use_%s():\n    return obj.frob(%s)\n' "$n" "$i" >"$LP/pkg/z_$n.py"; done
+LP_OUT="$( "$BIN" "$LP" --no-cache --grep=obj.frob 2>/dev/null; printf "\nrc=%s\n" "$?" )"
+lp_late="$( printf '%s' "$LP_OUT" | grep -o '<f p="pkg/z_[0-9]*\.py"' | wc -l | tr -d ' ' )"
+if ! printf '%s' "$LP_OUT" | grep -q '^rc=0$' || [ "$( attr tier_budget "$LP_OUT" )" != "files" ]; then
+    no "(12p) premise: the tier budget should stop on the files ceiling: tier_budget=$( attr tier_budget "$LP_OUT" )"
+elif [ -z "$( attr tier "$LP_OUT" )" ] && [ -z "$( attr string_hits "$LP_OUT" )" ] && [ "$lp_late" = 30 ] \
+     && [ -n "$( attr hits "$LP_OUT" )" ] && [ "$( attr shown "$LP_OUT" )" = "$( attr hits "$LP_OUT" )" ]; then
+    ok "(12p) a stopped tier budget: the code tier answers, all $( attr hits "$LP_OUT" ) rows, the 30 unclassified callers among them"
+else
+    no "(12p) a stopped tier budget read the code tier as thin: tier=$( attr tier "$LP_OUT" ) shown=$( attr shown "$LP_OUT" ) hits=$( attr hits "$LP_OUT" ) late_rows=$lp_late"
+fi
+
+# (12q) fix round 2 (rv-lean-trio2 item 1a): the SAME count decides the window under main's literal-question lift. Source
+# holds the dotted literal only in a docstring and 12 test files call it (textual app.query: 1023 hits, its code is
+# test-file uses): main's lift serves code+string as main does — collection order, the 100-row default, no string_hits=,
+# every row. RED on 9bd8528a: shown=10, string_hits=1. The near miss: 7 test calls plus 7 script lines (which never vote)
+# is a thin count, and the same lift is RANKED and windowed (tmux escape-time's shape).
+for n in 12 7; do
+    LQ="$TMP/literalwindow$n"
+    mkdir -p "$LQ/src" "$LQ/tests"
+    printf 'class App:\n    """Widgets are found with app.query."""\n    def run(self):\n        return 1\n' >"$LQ/src/app.py"
+    i=0; while [ "$i" -lt "$n" ]; do i=$(( i + 1 )); printf 'def test_q%s(app):\n    assert app.query("#w%s")\n' "$i" "$i" >"$LQ/tests/test_q$i.py"; done
+    if [ "$n" = 7 ]; then mkdir -p "$LQ/scripts"; i=0; while [ "$i" -lt 7 ]; do i=$(( i + 1 )); printf 'tool app.query %s\n' "$i" >"$LQ/scripts/s$i.sh"; done; fi
+    LQ_OUT="$( "$BIN" "$LQ" --no-cache --grep=app.query 2>/dev/null; printf "\nrc=%s\n" "$?" )"
+    if ! printf '%s' "$LQ_OUT" | grep -q '^rc=0$' || [ "$( attr tier "$LQ_OUT" )" != "code+string" ]; then
+        no "(12q) $n test calls: premise — main's literal lift should serve code+string: tier=$( attr tier "$LQ_OUT" )"
+    elif [ "$n" = 12 ]; then
+        [ -z "$( attr string_hits "$LQ_OUT" )" ] && [ "$( attr hits "$LQ_OUT" )" = 13 ] && [ "$( attr shown "$LQ_OUT" )" = 13 ] \
+            && ok "(12q) 12 test-file code uses under the literal lift: main's answer, all 13 rows, no window, no string_hits=" \
+            || no "(12q) 12 test-file code uses: the window cut code rows: shown=$( attr shown "$LQ_OUT" ) hits=$( attr hits "$LQ_OUT" ) string_hits=$( attr string_hits "$LQ_OUT" )"
+    else
+        [ "$( attr string_hits "$LQ_OUT" )" = 1 ] && [ "$( attr hits "$LQ_OUT" )" = 15 ] && [ "$( attr shown "$LQ_OUT" )" = 10 ] \
+            && ok "(12q) 7 test calls + 7 script lines (a thin count): the literal lift is ranked and windowed (10 of 15, string_hits=1)" \
+            || no "(12q) a thin count under the literal lift should rank and window: shown=$( attr shown "$LQ_OUT" ) hits=$( attr hits "$LQ_OUT" ) string_hits=$( attr string_hits "$LQ_OUT" )"
+    fi
+done
+
 # (12f) the MCP grep twin lifts the same rows (one collection, one decision).
 LT_MCP="$( printf '%s\n%s\n%s\n' \
     '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' \

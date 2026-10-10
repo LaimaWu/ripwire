@@ -301,7 +301,8 @@ std::string grepTierLegend( const rw::GrepTierReport& tier )
     // so every other tiered answer keeps its bytes.
     const char* const liftClause = tier.servedString == 0 ? ""
         : "A literal no identifier can spell (holding a dash, slash, dot or space) or written in capitals, or one with fewer than 8 "
-          "code hits, also serves strings WITH code while source and test files hold fewer than 8 of its code hits. On such an answer the rows run: source files whose NAME holds the literal, "
+          "code hits, also serves strings WITH code while source and test files hold fewer than 8 of its code hits (a hit there no "
+          "parse classified counts as one); under that same count either lift is ranked. On such an answer the rows run: source files whose NAME holds the literal, "
           "other source code (files with a code hit first), then everything else (shell/YAML/TOML/JSON, tests, docs) in the usual order; string_hits= is how many "
           "of hits= are string-tier, and ref= on a hit whose enclosing definition has no caller edge is the first site outside it "
           "that names it as a whole word in code, never in a comment or string (where a table entry is registered; one site, a floor). ";
@@ -727,8 +728,10 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
     }
     const GrepCollection&           found           = phases->found;
     const GrepTierReport&           tierReport      = phases->tier;
-    // idea #5: a code+string answer's default window is kGrepLiftRowCap — its first rows are the ranked answer (the file
-    // whose name holds the literal, then source), and the rest is where the literal is typed; next= pages on.
+    // idea #5: a RANKED code+string answer's default window is kGrepLiftRowCap — its first rows are the ranked answer (the file
+    // whose name holds the literal, then source), and the rest is where the literal is typed; next= pages on. servedString is
+    // set only on that posture (search.h GrepStringLift::Ranked: fewer than kGrepLiftCodeFloor program-code hits, unclassified
+    // ones included), so main's literal lift on a full count keeps the 100-row default (rv-lean-trio2 item 1).
     const int                       histCap         = cfg.packTopN > 0 ? cfg.packTopN : tierReport.servedString > 0 ? kGrepLiftRowCap : 100;
     const int                       rowCap          = effectiveRowCap( cfg.pageLimit, histCap );
     const GrepAuxCollection&        aux             = phases->aux;

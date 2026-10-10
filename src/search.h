@@ -2095,7 +2095,8 @@ struct GrepTierReport
                                            // tier_parsed= once a budget stops it (the cut says how much it left)
     std::uint32_t unclassifiedHits  = 0;   // hits in files past the budget, or with no grammar — NEVER suppressed
     const char*   emittedTier       = "code";        // "code" | "comment" | "string" | "comment+string" | "code+string" — §F4's served tier
-    std::uint32_t servedString      = 0;             // code+string only: how many of the served hits are string-tier (string_hits=)
+    std::uint32_t servedString      = 0;             // a RANKED code+string answer only (GrepStringLift::Ranked): how many of the
+                                                   // served hits are string-tier (string_hits=); 0 on main's plain literal lift
     const char*   budgetHit         = nullptr;       // nullptr | "files" | "bytes" — E5's disclosed bail-out
     bool          didRun            = false;         // false under --grep-in=any: no tier vocabulary may be emitted
 
@@ -2132,13 +2133,21 @@ inline bool isBareWordCodePath( std::string_view p )
 // type the command. Such a literal, or any literal whose code tier is thin (fewer than kGrepLiftCodeFloor hits),
 // serves its string tier WITH the code tier. Identifier-shaped literals with a full code tier keep today's answer.
 // Fix round 1 (rv-lean-trio item 2): the SHAPE is a text heuristic, so it never outvotes the parser — the lift fires only
-// while the literal's classified CODE hits in program code (grepSourceTierHits: source AND test files; not a doc, not a
+// while the literal's CODE hits in program code (grepSourceTierHits: source AND test files; not a doc, not a
 // shell/YAML/TOML/JSON file, where a bare word parses as code although it is a command word typed) number under
 // kGrepLiftCodeFloor. Test files count because a call there is parsed code, a USE a "list every use" question needs:
 // textual `self.app` / `DEFAULT_CSS` (source) and hono `c.json` (~490 code hits, nearly all in tests) keep their code rows;
 // tmux `split-window` has 2 in .c files (its other code hits are .sh lines that type it) and still lifts.
+// Fix round 2 (rv-lean-trio2 item 1): that ONE count decides the shape lift AND the ranked posture (the order, the
+// kGrepLiftRowCap window, string_hits=, ref=) of either lift, and a hit there that no parse classified (past the tier
+// budget, or no grammar) counts as code — a stopped classification can never make a code tier read thin. Main's
+// literal-question lift on a full count (textual `app.query`: its code hits are test-file uses) is served as main serves
+// it: collection order, the 100-row default (GrepStringLift::Served).
 inline constexpr std::uint32_t kGrepLiftCodeFloor = 8;
-inline constexpr int           kGrepLiftRowCap    = 10;   // a code+string answer's default window (CLI and MCP alike)
+inline constexpr int           kGrepLiftRowCap    = 10;   // a RANKED code+string answer's default window (CLI and MCP alike)
+
+// grepApplySpanTiers' per-hit tier byte for a hit no parse classified: the first value past the last SpanTier (see there).
+inline constexpr std::uint8_t kGrepUnclassifiedTier = std::uint8_t( kSpanTierCount );
 
 inline bool grepLiteralWantsStrings( std::string_view p )
 {
@@ -2233,11 +2242,12 @@ inline void grepRankLiftedStrings( const IngestResult& ing, std::vector<GrepRawH
     std::stable_sort( raw.begin(), raw.end(), [ & ]( const GrepRawHit& a, const GrepRawHit& b ) { return groupAt( a.fileId ) < groupAt( b.fileId ); } );
 }
 
-// idea #5's two votes, over CLASSIFIED hits only (an unclassified hit never votes). `string`: string-tier hits in the SAME
-// "source code" grepLiteralLiftsStrings means (review item 3 of that lane) — a PathTier::Source file that is not a
-// shell/YAML/TOML/JSON file; a lift needs one (strings only in other files never lift). `code` (fix round 1): code-tier hits
-// in program code — source or test files, neither a doc nor a shell/YAML/TOML/JSON file; a lift needs fewer than
-// kGrepLiftCodeFloor of them.
+// idea #5's two votes. `string`: CLASSIFIED string-tier hits in the SAME "source code" grepLiteralLiftsStrings means (review
+// item 3 of that lane) — a PathTier::Source file that is not a shell/YAML/TOML/JSON file; a lift needs one (strings only in
+// other files, or unclassified hits, never lift). `code` (fix round 1): code-tier hits in program code — source or test
+// files, neither a doc nor a shell/YAML/TOML/JSON file; a ranked lift needs fewer than kGrepLiftCodeFloor of them. Fix
+// round 2 (rv-lean-trio2 item 1b): an UNCLASSIFIED hit in program code counts here too — past the tier budget it is as
+// likely a code hit as any other, and counting it as zero let a stopped classification hide 30 code callers (fxL).
 struct GrepSourceTierHits
 {
     std::uint32_t code   = 0;
@@ -2261,30 +2271,47 @@ inline GrepSourceTierHits grepSourceTierHits( const IngestResult& ing, const std
             lastProgram = f < tierOfFile.size() && tierOfFile[f] != std::uint8_t( PathTier::Doc ) && !isBareWordCodePath( rootRelPath( ing, f ) );
             lastSource  = lastProgram && tierOfFile[f] == std::uint8_t( PathTier::Source );
         }
-        counts.code   += lastProgram && hitTier[h] == std::uint8_t( SpanTier::Code ) ? 1u : 0u;
+        const bool codeOrUnclassified = hitTier[h] == std::uint8_t( SpanTier::Code ) || hitTier[h] == kGrepUnclassifiedTier;
+        counts.code   += lastProgram && codeOrUnclassified ? 1u : 0u;
         counts.string += lastSource && hitTier[h] == std::uint8_t( SpanTier::String ) ? 1u : 0u;
     }
     ENSURES( counts.code + counts.string <= raw.size(), "a source-tier count never exceeds the hits it counts" );
     return counts;
 }
 
-// The span-tier election's code+string arm: either lift — idea #5's (the literal's SHAPE, or a thin code tier, with a
-// source string to serve and fewer than kGrepLiftCodeFloor code hits in source and test code) or the literal-question lift (grepLiteralLiftsStrings: no code hit in source code). Both need
-// a classified code hit; `literal` is empty for a regex, which only the second lift can serve.
-inline bool grepServesStringsWithCode( const IngestResult& ing, const std::vector<GrepRawHit>& raw, const std::vector<std::uint8_t>& hitTier,
-                                       std::uint32_t codeHits, std::uint32_t stringHits, std::string_view literal )
+// The span-tier election's code+string arm, and the posture it is served in (fix round 2, rv-lean-trio2 item 1: ONE count
+// — grepSourceTierHits().code, unclassified hits included — decides the shape lift AND the ranked window).
+enum class GrepStringLift : std::uint8_t
+{
+    None,     // the code tier answers alone (today's rule)
+    Served,   // main's literal-question lift on a FULL count: strings beside code, collection order, the default window
+    Ranked,   // either lift on a THIN count: grepRankLiftedStrings' order, kGrepLiftRowCap, string_hits=, ref=
+};
+
+// The lifts: idea #5's (the literal's SHAPE, or a thin code tier, with a source string to serve) and the literal-question
+// lift (grepLiteralLiftsStrings: no classified code hit in source code). Both need a classified code hit; `literal` is
+// empty for a regex, which only the second lift can serve. The shape lift needs the thin count; the literal lift fires
+// either way (main's tier choice) and is RANKED only on the thin count.
+inline GrepStringLift grepStringLiftOf( const IngestResult& ing, const std::vector<GrepRawHit>& raw, const std::vector<std::uint8_t>& hitTier,
+                                        std::uint32_t codeHits, std::uint32_t stringHits, std::string_view literal )
 {
     if( codeHits == 0 )
     {
-        return false;
+        return GrepStringLift::None;
     }
-    bool shapeLift = false;
-    if( !literal.empty() && stringHits > 0 && ( grepLiteralWantsStrings( literal ) || codeHits < kGrepLiftCodeFloor ) )
+    const bool literalLift = grepLiteralLiftsStrings( ing, raw, hitTier );
+    const bool shapeAsks   = !literal.empty() && stringHits > 0 && ( grepLiteralWantsStrings( literal ) || codeHits < kGrepLiftCodeFloor );
+    if( !literalLift && !shapeAsks )
     {
-        const GrepSourceTierHits src = grepSourceTierHits( ing, raw, hitTier );
-        shapeLift = src.string > 0 && src.code < kGrepLiftCodeFloor;   // fix round 1: a full code tier keeps its rows
+        return GrepStringLift::None;   // no lift can fire: the program-code count is never computed
     }
-    return shapeLift || grepLiteralLiftsStrings( ing, raw, hitTier );
+    const GrepSourceTierHits src  = grepSourceTierHits( ing, raw, hitTier );
+    const bool               thin = src.code < kGrepLiftCodeFloor;
+    if( thin && ( literalLift || src.string > 0 ) )   // grepLiteralLiftsStrings is true only beside a source string
+    {
+        return GrepStringLift::Ranked;
+    }
+    return literalLift ? GrepStringLift::Served : GrepStringLift::None;
 }
 
 // idea #5's rank key: by file id, 1 when the file holds a classified code-tier hit.
@@ -2375,7 +2402,7 @@ inline GrepCollection grepApplySpanTiers( const IngestResult& ing, GrepCollectio
     // the last SpanTier, so an appended tier moves it instead of colliding with it, and the counter grows with the
     // enum instead of being indexed past its end. serveMask below is a u8 bit per tier, hence the bound.
     static_assert( kSpanTierCount < 8, "serveMask holds one bit per SpanTier in a std::uint8_t" );
-    constexpr std::uint8_t    kUnclassifiedTier = std::uint8_t( kSpanTierCount );
+    constexpr std::uint8_t    kUnclassifiedTier = kGrepUnclassifiedTier;
     std::vector<std::uint8_t> hitTier( collected.raw.size(), kUnclassifiedTier );
     std::uint32_t             tierHitCount[kSpanTierCount] = {};
     for( std::size_t h = 0; h < collected.raw.size(); ++h )
@@ -2401,9 +2428,10 @@ inline GrepCollection grepApplySpanTiers( const IngestResult& ing, GrepCollectio
     // collapse costs nothing on the queries that already worked: a comment-only or string-only corpus still
     // serves the one tier it has. The choice is made over the CLASSIFIED hits only — an unclassified hit
     // cannot vote for a tier nobody proved it belongs to, and it is emitted either way.
-    std::uint8_t serveMask = 0;
-    if( grepServesStringsWithCode( ing, collected.raw, hitTier, tierHitCount[std::size_t( SpanTier::Code )],
-                                   tierHitCount[std::size_t( SpanTier::String )], literal ) )
+    std::uint8_t         serveMask = 0;
+    const GrepStringLift lift      = grepStringLiftOf( ing, collected.raw, hitTier, tierHitCount[std::size_t( SpanTier::Code )],
+                                                       tierHitCount[std::size_t( SpanTier::String )], literal );
+    if( lift != GrepStringLift::None )
     {
         // The literal question (comparison table tmux-16 / textual-16, 2026-09-30): every code hit is a USAGE of
         // the literal — a test/doc file, or a shell/YAML/TOML/JSON file where a bare word parses as code — while
@@ -2431,8 +2459,8 @@ inline GrepCollection grepApplySpanTiers( const IngestResult& ing, GrepCollectio
         return collected;   // nothing was classified at all — nothing to hold back, and nothing to disclose
     }
 
-    const bool        codeWithStrings = serveMask == std::uint8_t( ( 1u << std::size_t( SpanTier::Code ) ) | ( 1u << std::size_t( SpanTier::String ) ) );
-    const std::vector<char> fileHasCode = codeWithStrings ? grepFilesHoldingCode( ing, collected.raw, hitTier ) : std::vector<char>();   // idea #5's rank key
+    const bool              ranked      = lift == GrepStringLift::Ranked;
+    const std::vector<char> fileHasCode = ranked ? grepFilesHoldingCode( ing, collected.raw, hitTier ) : std::vector<char>();   // idea #5's rank key
     std::vector<GrepRawHit> kept;
     kept.reserve( collected.raw.size() );
     for( std::size_t h = 0; h < collected.raw.size(); ++h )
@@ -2452,9 +2480,10 @@ inline GrepCollection grepApplySpanTiers( const IngestResult& ing, GrepCollectio
         }
     }
     collected.raw = std::move( kept );
-    if( codeWithStrings )
+    if( ranked )   // a Served lift keeps main's bytes: no order, no window, no string_hits=, no ref= (all key on servedString)
     {
         report.servedString = tierHitCount[std::size_t( SpanTier::String )];
+        ASSUME( report.servedString > 0, "a ranked lift serves a source string (both lifts need one)" );
         grepRankLiftedStrings( ing, collected.raw, literal, fileHasCode );
     }
     return collected;

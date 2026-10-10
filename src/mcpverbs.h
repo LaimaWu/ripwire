@@ -1124,7 +1124,7 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
     // below under the CLI's own key names.
     const GrepCollection       collected = grepApplySpanTiers( ing, grepCollect( ing, pattern, /*regex=*/false, /*noPrefilter=*/false ),
                                                                grepInMode, tierReport, /*useMemo=*/true, pattern );
-    const int                  grepRowCap   = tierReport.servedString > 0 ? kGrepLiftRowCap : 100;   // the CLI's default window (idea #5)
+    const int                  grepRowCap   = tierReport.servedString > 0 ? kGrepLiftRowCap : 100;   // the CLI's default window (idea #5; ranked lifts only)
     const PageWindow           grepPage  = pageWindow( collected.raw.size(), effectiveRowCap( page.limit, grepRowCap ), page.offset );
     const std::size_t          rowCount  = grepPage.end - grepPage.begin;
     const std::vector<GrepHit> hits      = grepEnrich( ing, std::span<const GrepRawHit>( collected.raw ).subspan( grepPage.begin, rowCount ), 0, 0 );
