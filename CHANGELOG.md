@@ -2084,7 +2084,7 @@ held as values, then on a function that only stores itself, then the defect-shap
 Python base clauses the dead kind's inherited-call evidence walks), and the
 history-walk cache's `kQChurnCacheScheme` 2 → 3 (an earlier build stored a `git log` walk that git could not finish as if it
 were the window). Every ingest cache written by an earlier build is refused and re-indexed once, every
-cached quality snapshot is recomputed, and every repository's history is walked once more. The session legend dictionary is `dictv=74f30d013d02c2a2 entries=829`.
+cached quality snapshot is recomputed, and every repository's history is walked once more. The session legend dictionary is `dictv=80b7e589253a8e76 entries=855`.
 
 ### Fixed — a call the language resolves outside the tree no longer binds to a same-named in-repo definition
 
