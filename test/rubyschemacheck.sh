@@ -129,8 +129,8 @@ done
     || no "defs-only: ref callers: $( callershead ref )"
 "$BIN" "$FIX" --callers=name --no-cache 2>/dev/null >"$TMP/callers_name"
 [ "$( callershead name )"       = 'of="name" defs="19" count="2"' ] \
-    && grep -q '<s t="method" n="render_label" p="consumer_ambiguous.rb:7" via="name"/>' "$TMP/callers_name" \
-    && grep -q '<s t="method" n="lookup" p="pair_def_column.rb:14"/>' "$TMP/callers_name" \
+    && grep -q '<s t="method" n="render_label" p="consumer_ambiguous.rb:7" via="name" sites_at="consumer_ambiguous.rb:8"/>' "$TMP/callers_name" \
+    && grep -q '<s t="method" n="lookup" p="pair_def_column.rb:14" sites_at="pair_def_column.rb:15"/>' "$TMP/callers_name" \
     && ok 'defs-only: the 2 name callers are METHODS (render_label by name alone, lookup pinned by its own class) — the 9 columns contribute zero edges to the 19-def set; SingleColumn.new.name binds nothing (no in-tree def on that model)' \
     || no "defs-only: name callers: $( callershead name )"
 
