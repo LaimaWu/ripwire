@@ -19,8 +19,16 @@ receiver types there yet), whose by-name split must stay unchanged. `far/` calls
 reach, so the ladder itself declines it (tier 3), and the `<stdm>` line still names it.
 
 `sib/` holds the field and expression receivers: a field written as the in-tree `Vec` (`this->items_`, `b.items_` on a
-`Box& b`) keeps the hedge, a field written in `std` is declined, and a dereference, a subscript, a range-for `auto` and
-a template parameter are the stated floor (declined even where the element is `Vec`).
+`Box& b`) keeps the hedge, a field written in `std` is declined, a subscript of a `std::vector<Vec<int>>` reads its element
+type and keeps the hedge, and a dereference, a range-for `auto` and a template parameter are the stated floor (declined even
+where the element is `Vec`).
+
+`elem/` holds the element receivers: one element access (`c[ k ]`, `c.at( k )`, `c.front()`, `c.back()`) of a container whose
+recorded written type is a std sequence container or map of `EvalString` — through a class-scoped typedef'd map field on a
+`std::unique_ptr` local, a std map/vector field, a local, a const parameter, an unordered_map, a typedef and a typedef of it,
+an extern map, a bare and a `this->` field — keeps the ladder's hedge on `EvalString::empty` and `Piece::empty`; an element
+written in std, an element class with no `empty`, and the container's own member stay declined; two element accesses, an
+iterator's `->second` and a range-for `auto` are the stated floor.
 
 `wrap/` holds the written types Rule 2's tables do not carry: `ns::List` (the tree's only `size`/`find`/`front`) reached
 through `std::unique_ptr`/`std::shared_ptr`/`std::optional`, an in-tree `SP<T>` with its own `operator->`, Qt and boost

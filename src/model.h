@@ -745,6 +745,9 @@ struct LocalNameFact
 };
 
 // An unresolved reference (call/usage). Resolved into an edge in the graph stage.
+// The prefix of a C++ call's memberPath that marks an ELEMENT-ACCESS receiver (Reference::memberPath, its C++ reading).
+inline constexpr std::string_view kCppElementMark = "[]";
+
 struct Reference
 {
     NodeId        fromSymbol = kNoNode;   // enclosing symbol (caller); kNoNode if file-scope
@@ -804,6 +807,12 @@ struct Reference
     //   memberCtor is the class a CONSTRUCTED receiver names, final segment — "Reply" for `new Reply( r ).send()`, Go
     //   "Merger" for `(&Merger{}).Len()` — with memberRoot "" (a construction has no root identifier). Both "" for every
     //   other shape and every language that records no member-call shape.
+    //   C++ (parser version 166): memberCall stays false, and a member call whose receiver is ONE element access of a one-hop
+    //   container (`m[ k ].empty()`, `v.at( i ).size()`, `rule->bindings_[ k ].empty()`) carries kCppElementMark + the container's
+    //   shape here ("m", "this.items_", "rule.bindings_"; ingest_binds.h cppElementContainer) — read only by graph.h's
+    //   StdMemberGate receiver exception (stdReceiverOf); chainOf reads memberPath only beside memberCall. A C/C++ type alias
+    //   record and a composeRel "elem" field record carry the std container's whole written text here (ingest_relations.h
+    //   stdElementContainerText).
     std::string   memberPath;
     std::string   memberCtor;
     // FE-B on #373: a Ruby receiver the code BUILDS (`User.new`, a finder, a FactoryBot build, a let or local holding one)

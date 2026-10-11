@@ -250,12 +250,19 @@ names (a small-vector's `push_back`, a path wrapper's `c_str`, every `empty` and
   hedge too) or of one of those wrapper classes (`using QP = QSharedPointer<ns::List>`) — each keeps its hedge. `std::unique_ptr<std::string> p; p->size()`, `std::vector<ns::List> v; v.size()`
   (the container's own member) and `IntVec* p; p->size()` through an alias of `std::vector<int>` are declined.
 - The stated floor — declined even where the object is an in-tree class, because the index records no written type for
-  the receiver: a call result (`h.list().size()`, `v.front().size()`, `makeList().size()`), an iterator (`auto it =
-  v.begin(); it->size()`), an `auto` local, a dereference, a subscript, a range-for `auto`, a template parameter, a field
-  two hops off its root, the template arguments of a type written unqualified (`QList<ns::List> l; l.size()`), a member
+  the receiver: a call result (`h.list().size()`, `makeList().size()`), an iterator (`auto it = v.begin(); it->size()`,
+  `it->second.empty()`), an `auto` local, a dereference, a second element access (`m[ a ][ b ].empty()`), a range-for
+  `auto`, a template parameter, a field two hops off its root, the template arguments of a type written unqualified (`QList<ns::List> l; l.size()`), a member
   field written `std::optional<…>` reached through `->` (`std::optional<ns::List> o_; o_->size()` — a field's template
   argument is read for `std::unique_ptr` / `std::shared_ptr` alone), and a `typedef` declared inside a function body
   (its alias target is not recorded).
+- ONE element access — `m[ k ]`, `m.at( k )`, `v.front()`, `v.back()` — of a named container or a field one hop off a
+  typed root reads the element type off the container's recorded written text (a local's, parameter's or namespace-scope
+  variable's qualified type, a member field written as a standard sequence container or map, a `typedef` / `using` alias
+  of one, alias to alias): `rule->bindings_[ "rspfile" ].empty()` through `typedef std::map<std::string, EvalString>
+  Bindings` keeps its hedge on `EvalString::empty`, while `std::vector<std::string>& v; v[ 0 ].empty()` and
+  `std::map<K, std::vector<T>> m; m[ k ].empty()` (an element written in `std`) stay declined. This reads a written
+  type, not a resolved one: it keeps the ladder's via="name" hedge, never proves the edge.
 - C++ only, each other language for a stated reason: C has no member functions; Rust receivers carry no declared type
   yet; Go, Java, Kotlin, C# and Swift name their standard members after interfaces in-tree types implement; ObjC
   message sends carry no receiver shape; Python, JS, TS and Ruby keep the builtin-method name gate.
