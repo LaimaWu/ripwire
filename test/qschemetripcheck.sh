@@ -34,6 +34,9 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-11, release 0.6.7 (fix27-cpp-subscript and fix27-impact-multidef merged onto train 27): RE-DERIVED ONCE with UPDATE_GOLDEN=1
+#   (hash 52d9f8e52c…c52a66). The only watched text that moved is the kParserVer declaration (and its mirror): 164 -> 167. The lane
+#   built 166 (rich file tag 167); the release renumbers above it, rich file tag 168. kCacheVersion and kQSnapCacheScheme are unchanged.
 # 2026-10-11, train 27 (seams-doc-links, cpp-builtin-member-gate, callers-sites-first-call, lean-trio and lego-transitive merged onto
 #   train 26c; whereis-lean touches no watched text): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (hash e55bd63f7e…efaac9).
 #   Watched text: kParserVer 158 -> 164 (lego-transitive's base-clause and class-factory extraction, 157, 160 then 162 on its branch;

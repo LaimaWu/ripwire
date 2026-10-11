@@ -15,6 +15,8 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+## [0.6.7] — 2026-10-11
+
 ### Fixed — `--impact`: a selector matching several definitions keeps the `via="name"` hedge in its per-file rollup
 
 When the symbol window is cut, `--impact` folds the whole reach set into one `<rf>` row per file. A bare selector such as
@@ -24,6 +26,53 @@ that matches more than one definition, an `<rf>` row now carries `via="name"` wh
 `via="name"` row, and `by_name=K` when K of its `syms=` are (JSON: `"via":"name"` / `"by_name":K`; the MCP `impact` tool
 the same). It does not say which definition a file depends on, and an all-proven row stays plain. A selector matching one
 definition (bare or qualified) folds byte-identically to before.
+
+### Changed — the default map names the files and entry points its ranked rows cut: an inventory tier after the rows
+
+The map prints the top 200 symbols by rank, so a file whose best symbol ranks just below the cut, and a program's `main`
+(called by nothing, so ranked last), were absent without a word. When the ranked rows left out a file with code, the map
+now ends with an `<inv listed= unlisted=>` tier, after rows that are unchanged. It holds `<entry>` rows for a top-level
+`main` the index can prove (with its first callees by name; a script language's `main` only when its own module scope
+calls it, as Bash's `main "$@"`; Swift none), and an `<ls>` row per directory with the code files not shown, names only;
+test, doc, example and bench directories and directories with no code print a count alone. A map that shows every code
+file carries no tier, byte-identical to before. The tier is off under `--max-tokens`, for an `in=DIR` map and for a
+multi-root workspace, and `--no-inventory` (new) prints the previous shape. Two runaway guards disclose themselves
+(`entries_capped=` past 256 entries, `names_capped=` past 2,000 names, whole directories dropped; `entries_next=` and `names_next=` list the rest). Entries are found by name
+convention only; a manifest's declared entry (`package.json` `main`, `console_scripts`, Cargo `[[bin]]`) is not read, and
+the legend says so. Measured with the built binary on the 11 permitted public repositories: the median map grows 7.0%
+(+2.2% to +31.3%; koa's is byte-identical), the ranked rows are identical on all 11, and tmux `input.c`,
+`key-bindings.c` and `main`, hono's `src/validator`, textual's `drivers/` and `command.py` and htop's `main` and its
+signal, affinity and scheduling files are now named. Whether naming a file lets an agent find it is not measured here.
+
+### Changed — `--grep` serves a text-shaped literal's string tier, `--impact` rolls its reach up per file, a clean-tree `--quality-delta` prints its verdict
+
+Three ways a lean answer was missing what the question named.
+- **`--grep`.** A pattern such as `split-window` has few code hits and one string literal that registers the command
+  (`cmd.c:206`), and the code tier left the defining file out. The string tier is now served beside the code tier when
+  fewer than 8 classified code hits (source and test files; not docs or shell, YAML, TOML or JSON) exist, ranked, and
+  `ref=` names the first site in code, never one in a comment or a string. An identifier-shaped pattern with 8 or more
+  code hits is byte-identical. tmux `--grep=split-window`: 16,108 → 5,453 B, defining line first.
+- **`--impact`.** Beside a cut window, the whole reach set is folded into one `<rf>` row per file (20 at most), with
+  umbrella importers counted. tmux `--impact=grid_set_cell` now names `input.c` and `window-client.c` (it named neither);
+  5,907 → 5,099 B. A selector that reaches only through a type (`--impact=grid_cell`) still reaches nothing.
+- **`--quality-delta` and `--edit-check`.** On a tree identical to HEAD, a clean answer prints its verdict and the
+  per-kind count of the stale acks it folds, not the acks. The fold ships only when the answer is at least 25% shorter
+  than the full document; `--show-stale` (new) prints the acks, and the `--edit-check` verdict's `rows_next=` names the
+  `--limit` that lists every caller row. A dirty tree, a non-git root and every answer carrying a regression print
+  everything, byte-identical to before. This repository's clean-tree `--quality-delta`: 14,594 → 978 B. `--edit-check=escapeXml`:
+  3,322 → 1,122 B. Both stay above the sizes the lane aimed at (600 and 400 B), because the verdict keeps the floor
+  disclosures.
+
+### Changed — `--seams` counts links between documents instead of reporting them as untested seams, and `--report` ranks production god files
+
+A markdown link from one document to another is a call edge between two Section symbols, so `--seams` listed
+`. -> docs untested=30` on this repository (66 on code-review-graph, 17 on aislop), every one a doc-to-doc link. An edge
+whose caller and callee are both document sections (a markdown heading or a data key) is now skipped and counted in
+`doc_links=` (53 on this repository; 69 and 17); the same sweep finds no such edge left. `--report`'s god-file list put
+`test/lib/clean-env.sh` first: depended-on files under a test, tests or bench directory whose dependents are all test
+paths are now counted on one `layer=test` line (285 more files here; top file named) and the list starts with
+`src/model.h`. `--deps` godfiles rows carry `layer=` when the file has a built-in layer. An answer with no doc links and
+no such test file is byte-identical to before.
 
 ### Changed — `--whereis`: a long line's `t=` is a 200-byte preview, and the branch-label parse holds only its batch
 
@@ -404,7 +453,7 @@ in a Java class with an outside base drawn to an unrelated class's `flush`.
   change); the `--max-tokens=3000` maps of the eight repositories keep 337 rows (331 before the change). The gate is
   `test/receiverevidencecheck.sh` (every surface, CLI/MCP parity, census conservation, and near misses
   for every evidence rule). Ingest records the receiver chain and the Java/C#/Kotlin/Swift declarations
-  (`kParserVer` 164 in this release, see the versions note; `kCacheVersion` 31), so a cache written by an earlier build is re-parsed.
+  (`kParserVer` 167 in this release, see the versions note; `kCacheVersion` 31), so a cache written by an earlier build is re-parsed.
 ### Added — `--quality-delta` gains a twelfth kind, `defect-shape`: four defect shapes code review kept finding by hand
 
 `kind="defect-shape"` rows name a known defect SHAPE the change added, in `defect=` (`src/defectshape.h`):
@@ -523,7 +572,7 @@ inside a class body), so the rendered `db/schema.rb` stays the ONE source of col
 the migration beside its schema cannot double any def; `add_column` / `remove_column` /
 `change_column` are argument data and read nowhere — a column added then dropped never registers
 (pinned by the three migration fixtures). Rails 8's `db/queue_schema.rb`, `db/cache_schema.rb` and
-`db/cable_schema.rb` are matched by the same content gate. Ingest records the schema columns (`kParserVer` 164 in this release, see the versions note; carried by the branch as
+`db/cable_schema.rb` are matched by the same content gate. Ingest records the schema columns (`kParserVer` 167 in this release, see the versions note; carried by the branch as
 122 → 126 → 144 → 149 across its merges with `main`), so a cache written by an earlier build is re-parsed; no record
 layout change (`kCacheVersion` and `kQSnapCacheScheme` unchanged).
 Gate: `test/rubyschemacheck.sh` on `test/rubyschemafix/` — schema text from a real, running Rails
@@ -1831,9 +1880,9 @@ the `quality.h` mirror and `test/qschemetrip.hash` move with it.
 
 ### Changed — shallow-clone qualification reaches the composed surfaces, the unfetched-rev refusals and the empty windows
 
-0.6.6 put `shallow="1"` on the owners / hotspots / cochange roots of a depth-limited clone and a deepen hint on the
+An earlier change in this release put `shallow="1"` on the owners / hotspots / cochange roots of a depth-limited clone and a deepen hint on the
 pr-context and merge-scout unknown-ref refusals. Four surfaces that answer from the same history were left out
-(found on three depth-1 clones in the 0.6.6 command sweep; every item reproduced on the current base before the fix):
+(found on three depth-1 clones in this release's command sweep; every item reproduced on the current base before the fix):
 
 - `--pr-context` embeds `<owners bf= share=>` and `<cochange window= commits=>` per changed file; `--situ`'s `[3] co-change`
   line and the MCP `situational_awareness` twin carry the same window. On a shallow clone the pr-context root now carries
@@ -2099,7 +2148,7 @@ per page instead. Gate: `test/impactdepthcheck.sh`.
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 124 → 164 (the function-literal fix takes 128; #338 and #325 take 129; the body-less C/C++ type-specifier
+`kParserVer` 124 → 167 (the function-literal fix takes 128; #338 and #325 take 129; the body-less C/C++ type-specifier
 span fix and the TypeScript `await f<T>(x)` / `!f<T>(x)` calls each took a number of their own on their branches, as did
 the false-edge resolution (134, 135), the value-reference rows (140) and the Ruby method-lookup changes (#373: one per
 step from 130 to 137 — bare-word calls, mixins, typed receivers, RSpec targets, Rails declared calls, Rake and Jbuilder
@@ -2112,7 +2161,7 @@ receiver-evidence records took 145 to 154 on theirs; all three land together at 
 whose full-use file tag is 155, so no cache such a build wrote is read as this release's; the Rails `db/schema.rb`
 columns (#339, carried as 122 to 149 on its branch) land at 158, above 156's full-use file tag 157; the `--lego` base-clause and
 class-factory changes, carried as 157, 160 and 162 on their branch, land at 164: branch builds have used up to 162, whose full-use
-file tag is 163), `kCacheVersion` 25 → 31
+file tag is 163; the C++ element-access receivers, carried as 166 on their branch, land at 167, above it: that build wrote 166 and its full-use file tag 167), `kCacheVersion` 25 → 31
 (the function-literal fix's record changes, then the false-edge fix's member-call fields, then the receiver chain
 `memberPath`/`memberCtor`, then the inherit reference's same-file base binding, numbered 30 on its branch and 31 here, above
 every branch build; the Ruby branch's appended binding kinds need no bump of their own) and `kQSnapCacheScheme` 15 → 20
@@ -2783,7 +2832,7 @@ Markdown input is byte-identical. Code in a language the scanner has no network-
 or another `#!` — is read as before and disclosed: `<skillscan
 code_not_flow_scanned="N">`, defined in the compact and full legends and counted on the stderr tally; `clean` does
 not cover those files. Python and JavaScript flow shapes (`requests.post` or `urllib` with `os.environ`, which is
-missed even inside a fenced `python` block) are 0.6.7 work. `ripwire wrap`'s pre-install scan read only `.md`
+missed even inside a fenced `python` block) are later work. `ripwire wrap`'s pre-install scan read only `.md`
 files, so it emitted the recipe (rc 0, empty stderr) for a skill whose `scripts/helper.sh` uploads a credential; it now
 scans every regular file of `./skills` and `.agents/skills` through the same kind-aware scan, following directory
 symlinks as `--scan-skills` does (each directory entered once, by device and inode, so a link loop ends), refuses such a skill

@@ -320,13 +320,16 @@ constexpr std::uint32_t kCacheVersion = 31;           // 31: train 27 — lane l
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 166;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 167;          // bump on any grammar/.scm/extraction change
+                                                      // 167 = 2026-10-11 (train 27 release): the fix27-cpp-subscript extraction below, renumbered above the
+                                                      //   lane build's 166 (rich file tag 167 there), so no cache a lane build wrote is read as this release's.
+                                                      //   Rich file tag 168. No other extraction change; kCacheVersion stays 31.
                                                       // 166 = lane fix27-cpp-subscript (2026-10-11): a C++ member call on ONE element access of a
                                                       //   one-hop container (`m[ k ].empty()`, `v.at( i ).size()`) records the container's shape in
                                                       //   memberPath (ingest_binds.h cppElementContainer); a type alias of a std element container and
                                                       //   a member field written as one record its whole text (ingest_relations.h stdElementContainerText;
                                                       //   the field as a new composeRel "elem" record). 166, not 165: 165 is 164's rich file tag. No
-                                                      //   record layout change (kCacheVersion stays 31). The train renumbers.
+                                                      //   record layout change (kCacheVersion stays 31). Renumbered to 167 by the train.
                                                       // 164 = 2026-10-11 (train 27: the signed lanes merged onto train 26c's 158): cache-key hygiene. One merged lane
                                                       //   changed extraction under lane-local numbers: lego-transitive (157, 160, then 162; the 160 and 162 notes are below). Live
                                                       //   branch builds have used numbers up to 162 (rich file tag 163). 164 (rich file tag 165) is above every one

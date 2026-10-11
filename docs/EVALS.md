@@ -1160,7 +1160,7 @@ rows are hash-only — and no number resembling it will be reported from it.
 **Window 1 (registered 2026-09-02): VOID for the verdict.** Until issue #381 an unconfigured install resolved every session to `treatment`, so this window had no control arm, and the registered treatment − control difference cannot be computed from it. No verdict is read from it. Its four- and six-week dates (2026-09-30, 2026-10-14) are not readout dates.
 
 **Window 2: the readout clock restarts at the release that ships `arm=auto` as the default.** The rule is unchanged: one readout at four weeks, at least 40 recommended prompts per arm, and one extension to six weeks if the readout is underpowered.
-**Window start:** PENDING (the release that ships `arm=auto` writes its release date here as YYYY-MM-DD)
+**Window start:** 2026-10-11
 
 `bench/routing_ab_report.py` reads the `Window start` line: a date gives the readout date (start + 28 days) and the one-time extension date (start + 42 days); `PENDING` gives no date.
 
@@ -6196,7 +6196,7 @@ These are the exact `kind=` strings the binary emits, from `src/quality.h`:
 `complexity` · `verbosity` · `nesting` · `params` · `duplication` · `dead-code` · `api-surface` ·
 `error-masking` · `short-horizon-churn` · `new-clone-of-reused-helper` · `placeholder` · `defect-shape`
 
-The first ten each target a failure mode measured in the literature; `placeholder` (added 0.6.5) is an
+The first ten each target a failure mode measured in the literature; `placeholder` (added 0.6.7) is an
 honesty check on "done" — a stub or TODO the change added — and never gates. `defect-shape` carries four
 facets in `defect=` (`format-arity`, `utf8-cut`, `dedup-first`, `vacuous-assert`), shapes this project's own
 code review kept finding; only `format-arity` gates, and on any origin (new-symbol rows never gate, except
@@ -6220,9 +6220,9 @@ output.
 The verb reports only what a change made *worse*, against git HEAD. `--quality-ack` records a
 reviewed exception; `--ack-only=KIND` scopes it.
 
-### error-masking widened: log-only and rethrow-only (0.6.5) — hand-labelled precision, and which shapes gate
+### error-masking widened: log-only and rethrow-only (0.6.7) — hand-labelled precision, and which shapes gate
 
-`error-masking` counted only an EMPTY handler (empty braces, `pass`, `...`, a comment-only body). 0.6.5 adds
+`error-masking` counted only an EMPTY handler (empty braces, `pass`, `...`, a comment-only body). 0.6.7 adds
 two shapes from `src/handlershape.h`, walked over the same parse the query rows use:
 
 - **log-only** — a BROAD handler (catches everything, or the root error type: `Exception`, `Throwable`,
@@ -6274,7 +6274,7 @@ each, 24 gating across the 40). This repository has no Python/JS handler of eith
 added in that window, so on upgrade its own reports are unchanged; the replay shows the widening costs no
 noise here, not that it finds anything here. The rows the shapes produce were measured on the corpus above.
 
-### placeholder (0.6.5) — what the eleventh kind counts, and a labelled sample
+### placeholder (0.6.7) — what the eleventh kind counts, and a labelled sample
 
 A stub or TODO the change ADDED, counted per enclosing symbol and compared with the baseline like
 error-masking. Every row is `origin="new-symbol"` by construction and never gates. It counts: Rust

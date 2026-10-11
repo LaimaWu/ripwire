@@ -139,7 +139,7 @@ claim cannot quietly drift. The row-by-row ledger is
 JavaScript · Java · Ruby · PHP · Lua · Elixir · Dart · Kotlin · GDScript · Bash · C# · JSON · TOML · YAML · Markdown — see
 [language support and limits](#languages).
 
-**Latest: 0.6.5** — TypeScript alias imports resolve, and fixes from Windows testers. [Release notes](#release-notes) ·
+**Latest: 0.6.7** — more complete answers, faster calls, fewer bytes. [Release notes](#release-notes) ·
 [the presentation](present/ripwire-showcase.pdf) · [the changelog](CHANGELOG.md) — with thanks to the
 contributors named there; this release is largely theirs.
 
@@ -3090,6 +3090,24 @@ terms.
 ---
 
 ## Release notes
+
+**ripwire 0.6.7 — more complete answers, faster calls, fewer bytes.** Each `--callers` and `--safe-delete` row now
+names its call sites as `file:line`, so one answer holds the lines to edit (`--callers=escapeXml` on this repository:
+the 40 caller rows of its first answer, of 142 callers, carry 79 call lines; 0.6.5 gave none). `--lego` lists implementors below a direct one (a two-level
+hierarchy: 5 of 5, was 2); `--impact` names the files its reach lands in (tmux `--impact=grid_set_cell` now names `input.c`
+and `window-client.c`); the default map keeps directories and entry points it used to cut (tmux `input.c`,
+`key-bindings.c`, `main`); `--for` gives the function a question names its own call-hop row (8 of 32 questions over
+8 public repositories gain it, 23 are byte-identical); and `--whereis` labels other branches' definitions with the parser
+(`--whereis=escapeXml` here: 60 rows, 54 of them call sites, became the 2 declarations). A warm
+CLI call costs about a quarter less (`--callers` on a 3,100-file snapshot: 319 → 269 ms), and `--whereis` on a checkout
+with 139 branches takes 3.7 s instead of 12.3 s. Answers lost repeated bytes, not rows: `--whereis=lego` went from
+129,314 to 18,616 B with every row kept, at about 0.9 GB peak memory instead of 1.42 GB. A C++ `empty()` or `find()` no longer
+binds to an in-tree namesake without proof (14 of the top 20 map rows here carried such a name; now 0). Imports for
+JS/TS and Go now come from one shared capture (C-family from @lennix1337). Rails schema columns are definitions (thanks
+@mpapis, #339), and a budgeted `--for` pages over CLI and MCP (thanks @pt-act, #362). Ruby calls follow Ruby's method
+lookup (thanks @andriytyurnikov), and the Linux sanitizer build runs again (thanks @llvm-x86). Reports from
+@ahmedibrahim085 (#381: the router now keeps a control group by default), @KilimcininKorOglu (#350) and @toasterbook88
+(#353). New in CONTRIBUTING.md: a map of each feature family's shared handler, with slices you can claim.
 
 **ripwire 0.6.5 — TypeScript alias imports resolve, and fixes from Windows testers.** Imports through a tsconfig alias,
 `baseUrl` or a workspace package are now real edges, so `--deps`, `--arch`, `--impact` and the call graph see them, and a
