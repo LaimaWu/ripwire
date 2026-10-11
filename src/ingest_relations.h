@@ -83,10 +83,10 @@ inline RawRef rawRefAt( TSNode at, std::uint32_t fileId, Lang lang, RefRole role
 // inside a function the reference is not in. Those leave the reference without a local binding — never a wrong one.
 inline constexpr std::uint32_t kBaseBindNone    = 0;            // no enclosing scope declares the name
 inline constexpr std::uint32_t kBaseBindUnknown = 0xFFFFFFFFu;  // a scope was too large to scan: nothing proven either way
-inline constexpr std::uint32_t kBaseScopeScanCap = 4096;        // named children read per enclosing scope by the UNINDEXED
-                                                                // fallback and the reopened-namespace sibling scan (a runaway
-                                                                // guard: past it those two bind nothing, the edge stays
-                                                                // name-only); the indexed path has no cap
+// kBaseScopeScanCap bounds the two SCANS only: the unindexed lookupInScope fallback and the reopened-namespace sibling scan
+// (a runaway guard: past it those two bind nothing and the edge stays name-only). The indexed path (lookupInScopeIndexed,
+// the one captureTagsFacts installs) reads the scope's table and has no cap: a 32,000-class module scope binds every base.
+inline constexpr std::uint32_t kBaseScopeScanCap = 4096;        // statements the unindexed scope scans read (not the index)
 
 // What a scope-level declaration can be to a base lookup: a class-like declaration (each with a `name:` field), a
 // namespace a qualifier segment can name (C++/PHP namespace_definition, C# namespace_declaration, TS internal_module), or

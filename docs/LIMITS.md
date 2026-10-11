@@ -493,7 +493,7 @@ Discloses: **none**
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
-| `kBaseScopeScanCap` | `4096` | INDEXING | named children read per enclosing scope (a runaway guard: |
+| `kBaseScopeScanCap` | `4096` | INDEXING | statements the unindexed scope scans read (not the index) |
 | `kMaxImportContainerDepth` | `256` | INDEXING | — |
 
 ### `src/ingest_sidecap.h`
