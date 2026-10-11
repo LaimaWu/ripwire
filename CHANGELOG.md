@@ -15,6 +15,16 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — `--impact`: a selector matching several definitions keeps the `via="name"` hedge in its per-file rollup
+
+When the symbol window is cut, `--impact` folds the whole reach set into one `<rf>` row per file. A bare selector such as
+`--impact=arrange` can match several definitions (a method and a free function of the same name), and the fold dropped
+the `via="name"` hedge its symbol rows carry, so a file reached only by name read as a plain dependant. On a selector
+that matches more than one definition, an `<rf>` row now carries `via="name"` when every reached symbol in the file is a
+`via="name"` row, and `by_name=K` when K of its `syms=` are (JSON: `"via":"name"` / `"by_name":K`; the MCP `impact` tool
+the same). It does not say which definition a file depends on, and an all-proven row stays plain. A selector matching one
+definition (bare or qualified) folds byte-identically to before.
+
 ### Changed — `--whereis`: a long line's `t=` is a 200-byte preview, and the branch-label parse holds only its batch
 
 A `--whereis` row's `t=` repeated its whole source line, so on a hot name the long lines were most of the answer. On this

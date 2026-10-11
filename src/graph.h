@@ -11584,13 +11584,28 @@ inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<N
 // window therefore prints the rows instead of the rollup — every file is still named, as a row's p=.
 // 20 (not the symbol window's 40): the rollup is an index of where to look; round-2 tmux-09's two gold files rank 6 and 9
 // of 111 there, and the rows are paid on every cut answer.
+// fix27 (round-4 textual-09, `--impact=arrange`): a selector that matches SEVERAL definitions folds the dependants of
+// all of them into one row per file, and the symbol rows' via="name" hedge (reached only through a name-only edge, so
+// possibly a namesake's dependant) did not survive the fold — a file whose every reached symbol was hedged read as a
+// plain dependant. `hedgeProven` (provenCallerReach over the seeds when the selector matched more than one definition)
+// counts each row's hedged symbols: the emitters print via="name" when all of them are, by_name=K when
+// K of them are. A single-definition selector passes kNoImpactHedge (empty, so impactRowNameOnly is false for every node)
+// and folds byte-identically to before.
+inline const std::vector<char> kNoImpactHedge{};
 inline constexpr std::size_t kImpactFileRollupCap = 20;
+
+// the --impact row (provenCallerReach below)'s hedge: reached, but by no all-proven path
+inline bool impactRowNameOnly( const std::vector<char>& proven, NodeId n ) noexcept
+{
+    return !proven.empty() && n < proven.size() && proven[n] == 0;
+}
 
 struct ImpactFileRow
 {
     std::uint32_t fileId   = 0;
     std::uint32_t syms     = 0;
     std::uint32_t minDepth = 0;
+    std::uint32_t nameOnly = 0;   // fix27: of syms, the via="name" rows (impactRowNameOnly) — counted only on a multi-def selector
 };
 
 struct ImpactFileRollup
@@ -11602,7 +11617,8 @@ struct ImpactFileRollup
 };
 
 inline ImpactFileRollup impactFileRollup( const IngestResult& ing, std::span<const NodeId> reach, const std::vector<std::uint32_t>& depth,
-                                          int pageLimit, std::string_view sym, bool windowCut )
+                                          int pageLimit, std::string_view sym, bool windowCut,
+                                          const std::vector<char>& hedgeProven = kNoImpactHedge )
 {
     ImpactFileRollup          r;
     if( !windowCut )
@@ -11626,6 +11642,7 @@ inline ImpactFileRollup impactFileRollup( const IngestResult& ing, std::span<con
         ImpactFileRow& row = r.rows[rowOfFile[f]];
         ++row.syms;
         row.minDepth = std::min( row.minDepth, d );
+        row.nameOnly += std::uint32_t( impactRowNameOnly( hedgeProven, n ) );   // never on kNoImpactHedge (empty: no row hedged)
     }
     std::sort( r.rows.begin(), r.rows.end(), [ & ]( const ImpactFileRow& a, const ImpactFileRow& b )
                {
@@ -11641,6 +11658,12 @@ inline ImpactFileRollup impactFileRollup( const IngestResult& ing, std::span<con
     }
     ENSURES( r.shown <= r.rows.size(), "the rollup page is a prefix of the ranked files" );
     return r;
+}
+
+// fix27: a LISTED rollup row carries a hedge (the legend's rf via=/by_name= sentence rides exactly then)
+inline bool impactRollupHedged( const ImpactFileRollup& r ) noexcept
+{
+    return std::any_of( r.rows.begin(), r.rows.begin() + std::ptrdiff_t( r.shown ), []( const ImpactFileRow& row ) { return row.nameOnly > 0; } );
 }
 
 // Tarjan SCC on the file→file graph → cycles (SCCs with >1 node). Cyclic physical dependencies are
@@ -11970,11 +11993,7 @@ inline std::vector<char> provenCallerReach( const Graph& g, std::span<const Node
     ENSURES( proven.size() == N && q.size() <= N, "each node is enqueued at most once, by the mark" );
     return proven;
 }
-// the --impact row's hedge: reached, but by no all-proven path
-inline bool impactRowNameOnly( const std::vector<char>& proven, NodeId n ) noexcept
-{
-    return !proven.empty() && n < proven.size() && proven[n] == 0;
-}
+// the --impact row's hedge (impactRowNameOnly) lives above impactFileRollup, which folds it per file (fix27)
 
 // ── Depth-labelled --impact (0.6.5) — the hop depth the walk above already records, put on the listing ──────
 // A flat blast radius cannot tell a direct caller from a four-hop dependent, and a page window cut over a

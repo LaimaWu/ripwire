@@ -9625,6 +9625,21 @@ inline void emitImportRowsXml( std::FILE* out, const IngestResult& ing,
     }
 }
 
+// fix27: an rf row's hedge on a multi-definition selector (graph.h impactFileRollup counts nameOnly only there): via="name"
+// when every reached symbol in the file is a via="name" row, by_name=K when K of its syms= are; nothing when none is.
+template<class RowT>
+inline std::string impactRollupHedgeXml( const RowT& row )
+{
+    if( row.nameOnly == 0 ) { return std::string(); }
+    return row.nameOnly == row.syms ? std::string( " via=\"name\"" ) : " by_name=\"" + std::to_string( row.nameOnly ) + "\"";
+}
+template<class RowT>
+inline std::string impactRollupHedgeJson( const RowT& row )
+{
+    if( row.nameOnly == 0 ) { return std::string(); }
+    return row.nameOnly == row.syms ? std::string( ",\"via\":\"name\"" ) : ",\"by_name\":" + std::to_string( row.nameOnly );
+}
+
 // idea #6: the reach set's per-file rollup (graph.h impactFileRollup), BEFORE the symbol window: <files files=
 // shown_files= files_capped= [files_next=]> holding one <rf p= syms= d=/> per file. Its own tag (rf), so a reader or gate
 // counting the import tier's <f> rows never picks it up, and noun-prefixed counts (the import tier's importers=/
@@ -9644,7 +9659,8 @@ inline void emitImpactFileRollupXml( std::FILE* out, const IngestResult& ing, co
     {
         const std::string_view raw = ing.files[ r.rows[i].fileId ];
         const std::string_view rel = rootPrefix.empty() ? raw : rw::sarif::rootRelativeUri( raw, rootPrefix );
-        rw::emitTo( out, "<rf p=\"{}\" syms=\"{}\" d=\"{}\"/>", std::string( escapeXml( rel, esc ) ).c_str(), r.rows[i].syms, r.rows[i].minDepth );
+        rw::emitTo( out, "<rf p=\"{}\" syms=\"{}\" d=\"{}\"{}/>", std::string( escapeXml( rel, esc ) ).c_str(), r.rows[i].syms, r.rows[i].minDepth,
+                    impactRollupHedgeXml( r.rows[i] ) );   // fix27: the symbol rows' via="name", kept through the fold
     }
     rw::emitRaw( out, "</files>" );
 }
@@ -9664,7 +9680,8 @@ inline void emitImpactFileRollupJson( std::FILE* out, const IngestResult& ing, c
     {
         const std::string_view raw = ing.files[ r.rows[i].fileId ];
         const std::string_view rel = rootPrefix.empty() ? raw : rw::sarif::rootRelativeUri( raw, rootPrefix );
-        rw::emitTo( out, "{}{{\"p\":\"{}\",\"syms\":{},\"d\":{}}}", i ? "," : "", jsonStr( rel ).c_str(), r.rows[i].syms, r.rows[i].minDepth );
+        rw::emitTo( out, "{}{{\"p\":\"{}\",\"syms\":{},\"d\":{}{}}}", i ? "," : "", jsonStr( rel ).c_str(), r.rows[i].syms, r.rows[i].minDepth,
+                    impactRollupHedgeJson( r.rows[i] ) );   // fix27: as the XML row
     }
     rw::emitRaw( out, "]}" );
 }
