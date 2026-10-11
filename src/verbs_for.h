@@ -579,6 +579,17 @@ struct ForLensHeaderParts
         idRouteLegend  = false;   // row 6: the sc=/route= readings fall with them — the attributes stay
         legendDropped  = true;    // …and this is the sentence that says so, naming exactly what fell
     }
+    // train 27 (compactlegendcheck P1-B): the compact <field> (compose) / <iface> (lego) readings are decided before the
+    // payload, on an over-approximation; a section served as its counted stub, or not at all, prints none of those rows.
+    // Clears the reading of each section the caller says is rowless; true when a clause the header carried went (the header
+    // must be rebuilt). No note: no printed attribute loses its reading.
+    bool dropRowlessSectionReadings( bool composeRowless, bool legoRowless ) noexcept
+    {
+        const bool changed = ( composePresent && composeRowless ) || ( legoPresent && legoRowless );
+        composePresent     = composePresent && !composeRowless;
+        legoPresent        = legoPresent && !legoRowless;
+        return changed;
+    }
 };
 
 // Splice a pre-formatted fragment in front of a structural boundary, or leave the document exactly as it
@@ -703,7 +714,9 @@ using rw::deriveForConfidence;
 //
 //   compact      the compact dialect, whose confidence clause defines confidence=/margin_pct= and NOTHING else
 //                (budget_tokens= has never been defined there at any budget, so naming it as dropped would be
-//                the same lie in miniature), and whose sc= reading rides the un-droppable rows clause.
+//                the same lie in miniature), and whose sc= reading rides the un-droppable rows clause. So do its
+//                total= shown= capped= readings ("total= shown= capped=1 if cut"), so the compact note does not
+//                name them as dropped either (train 27: it did, the same lie, and 24 B a spent ceiling paid for).
 //   thin         the root carries coverage= (L-W present-only), whose clause rode the confidence sentence.
 //   routeWasOn   route= rode this answer, so its reading was there to lose.
 //   scWasOn      a served row carries sc=, so the sc= reading was there to lose (default dialect only).
@@ -731,7 +744,8 @@ inline std::string legendDroppedNote( bool compact, bool thin, bool routeWasOn, 
     {
         note += ", " + identity;
     }
-    note += " and r=/tail (total= shown= capped=) dropped (ceiling) - the attributes stay; a wider token-budget defines them]";
+    note += compact ? std::string_view( " and r=/tail dropped (ceiling) - the attributes stay; a wider token-budget defines them]" )
+                    : std::string_view( " and r=/tail (total= shown= capped=) dropped (ceiling) - the attributes stay; a wider token-budget defines them]" );
     return note;
 }
 
@@ -1476,6 +1490,32 @@ inline ForLensPricedHeader finishForLensHeaderPriced( std::string header, const 
 inline std::string finishForLensHeader( std::string header, const ForLensRootFinish& f )
 {
     return finishForLensHeaderPriced( std::move( header ), f ).header;
+}
+
+// train 27 (compactlegendcheck P1-B): how far a paid render's document runs past the exact budget, in the bytes its rows must
+// give up to buy it back. Priced on the header AS BUILT (the ladder's input: no rung note, no over_ceiling label — the shape a
+// fitting answer would carry) with every late splice, markup at the rate est_tokens prices it, plus one token for est_tokens'
+// rounding, plus what the rows already gave up past the handle (`paidSurplus`: the next render's payment starts from the same
+// cut). 0 when that unlabelled document is inside the budget.
+inline std::size_t forUnlabelledOverrunBytes( const std::string& asBuiltHeader, const ForLensRootFinish& f, std::size_t tokenBudget,
+                                              std::size_t paidSurplus )
+{
+    ForLensRootFinish unlabelled = f;
+    unlabelled.lastRungFired     = false;
+    unlabelled.sigsUnpaidOver    = false;
+    unlabelled.tokenBudget       = 0;   // no named budget ⇒ no over_ceiling label in the price
+    unlabelled.bodyCeiling       = false;
+    const std::size_t est        = finishForLensHeaderPriced( asBuiltHeader, unlabelled ).estTokens;
+    return est > tokenBudget ? std::size_t( double( est - tokenBudget + 1 ) * rw::kBytesPerTokenDefault + 0.999 ) + paidSurplus : 0u;
+}
+
+// train 27: the compact dialect never echoes the task in its comment (appendCompactForLegend), so its rung (b) drops nothing
+// and claims nothing (the --pack-task FX4 rule) and its rung (c) names only the route attribute. The full dialect's notes
+// are `base`'s. `lastRung` is the last rung's reason, chosen by the caller on what is true.
+inline constexpr std::string_view kCompactRouteDroppedNote = " [route_attr: dropped (ceiling)]";
+inline rw::CeilingLadderNotes forLadderNotes( bool compact, const rw::CeilingLadderNotes& base, std::string_view lastRung ) noexcept
+{
+    return { compact ? std::string_view() : base.echoDropped, compact ? kCompactRouteDroppedNote : base.echoAndRouteDropped, lastRung };
 }
 
 // DEEP-TAIL d2, JSON dialect — the tail stanza and its explicit-regime fit, as a free function over
@@ -2549,6 +2589,14 @@ inline std::vector<rw::NodeId> forDetailIds( const rw::IngestResult& ing, const 
 // bytes, charged through buildForEnrichment's markupBytes like the rendered section.
 inline constexpr std::string_view kForHopsBudgetCutLegend =
     "; hops shown=0 capped=1: this budget left out the call-hop rows (one hop of callees for each of total= top rows); next= serves them";
+// …and the compact dialect's spelling (train 27, compactlegendcheck P1-B): that dialect defines total= shown= capped=1 and next=
+// in its un-droppable clauses (kForCompactLegendRows / kForCompactLegendFacts), so its hops clause says only what the element
+// is — every reading is the shortest honest one. The reserve below stays the longer spelling's (the widest, like
+// kCompactAttrReserve), so the compact sig room is the full dialect's to the byte and rows(compact) ⊇ rows(full) holds.
+inline constexpr std::string_view kForHopsBudgetCutLegendCompact =
+    "; hops: this budget left out the call-hop rows (one hop of callees for each of total= top rows)";
+static_assert( kForHopsBudgetCutLegendCompact.size() < kForHopsBudgetCutLegend.size(),
+               "forHopsCutReserve reserves the full spelling: it must be the wider one" );
 // the hops cut's continuation (` next="--for=TASK"`) — one spelling for the marker, the partial-cut splice and the reserve
 inline std::string forHopsCutNextAttr( const rw::Config& cfg )
 {
@@ -2827,10 +2875,17 @@ struct ForLensPassMode
     bool             sigsNextPayFromRows = false;
     bool*            sigsNextTryOther    = nullptr;
     std::string_view forAtStamp;
+    // train 27 (compactlegendcheck P1-B): the compact dialect's OVERRUN payment. A paid compact render that lands past its
+    // ceiling reports, through `overrunBytesOut`, the bytes its unlabelled document runs past the exact budget (plus what its
+    // rows already gave up past the handle); the next render pays `overrunReserveBytes` from the rows beside the handle
+    // (serialize.h SigsCutContinuation::overrunBytes) — see runForLens.
+    std::size_t      overrunReserveBytes = 0;
+    std::size_t*     overrunBytesOut     = nullptr;
 };
 std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, const ForLensPassMode& mode )
 {
     using namespace rw;
+    EXPECTS( mode.overrunReserveBytes == 0 || mode.sigsNextPayFromRows, "runForLensPass: an overrun is paid from the rows only in the paying mode" );
     const bool        sigsNextPayFromRows = mode.sigsNextPayFromRows;
     bool* const       sigsNextTryOther    = mode.sigsNextTryOther;
     const std::string forAtStamp( mode.forAtStamp );
@@ -3756,7 +3811,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         const std::string             forRankFlags       = forRankShapingFlags( cfg );
         const rw::SigsCutContinuation forSigsNext{ cfg.forTask, cfg.packTopN, forRankFlags, fixedBytes, forSigsNextCharged, /*json=*/false,
                                                    /*pasteHandle=*/true, /*ledgerGapBytes=*/forSigsNextCharged ? compactLedgerGapBytes : 0u,
-                                                   sigsNextPayFromRows };
+                                                   sigsNextPayFromRows, /*overrunBytes=*/forSigsNextCharged ? mode.overrunReserveBytes : 0u };
         bool        forSigsCapped      = false;   // did the H1 ladder trim <sigs>? — decides the budget_bytes= legend clause below
         rw::SigsCutReport forSigsCut;             // cut-fix lane A: the <sigs> tag's shown/total/docs_dropped — its clauses below
         forSigsCut.continuationRequest = &forSigsNext;   // knob-honesty-068: IN — the capped block's continuation
@@ -4048,7 +4103,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             // fix round 4: the hops budget-cut marker rides a header whose compact legend was just dropped — its one
             // present-only clause says what the empty element is (priced by the ladder through rootFinish)
-            sectionsStubNote += kForHopsBudgetCutLegend;
+            sectionsStubNote += headerParts.compactLegend ? kForHopsBudgetCutLegendCompact : kForHopsBudgetCutLegend;
         }
 
         // ── DEEP-TAIL d2: render the file-grain tail, funded LAST (see serialize.h kForFileTailShownCap) ──
@@ -4084,6 +4139,14 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             kNotes.echoDropped, kNotes.echoAndRouteDropped,
             " [over_ceiling= is 1 on the root: the ranked rows are kept, not cut for the trailing sections, and with the"
             " with-graph block and the first detail body at its floor they exceed this budget - kept, not trimmed]" };
+        // train 27 (compactlegendcheck P1-B): every other over-ceiling shape whose header fits the allowance by itself. The header
+        // floor note above was served there too (lego-charge round 5's named follow-up), and it was false: the overshoot is the
+        // rows and sections the header carries, each cut of which names its next=. Chosen only when the header as built fits
+        // the allowance alone (headerAloneFits below). No double hyphens: it rides inside the header XML comment.
+        static constexpr rw::CeilingLadderNotes kNotesPayloadOver{
+            kNotes.echoDropped, kNotes.echoAndRouteDropped,
+            " [over_ceiling= is 1 on the root: the header alone fits this budget; the rows and sections served with it exceed"
+            " it]" };
 
         // PR #135: the priced root this header will carry — every late splice and the est_tokens fixpoint, in
         // finishForLensHeader (above runForLens, with each splice's rationale). Assembled BEFORE the ladder so the
@@ -4219,6 +4282,18 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             // candidate is built and compared; a drop that does not pay is not taken, and the readings simply ride.
             // This is the assertion, not a comment about one: there is no shape in which the byte-negative branch
             // can be reached, because the branch is the comparison.
+            // train 27 (compactlegendcheck P1-B): THE ROWLESS-SECTION CLAUSES go before any rung that costs information. The
+            // compact dialect decides its <field> (compose) and <iface> (lego) readings BEFORE the payload, on an over-approximation
+            // (composePresent / legoPresent: a ranked symbol with a compose edge / implementors). By now the stub decision is made:
+            // a section served as its counted stub, or not at all, prints none of those rows, so the clause defines nothing in this
+            // document. Under a spent exact ceiling it goes and no note is owed — no printed attribute loses its reading. A document
+            // inside its ceiling keeps every byte; a section streamed unmeasured (the degrade path) keeps its clause.
+            if( headerParts.compactLegend && !fitsExactCeiling( headerStr )
+                && headerParts.dropRowlessSectionReadings( composePreRendered && ( composeWillStub || composeStr.empty() ),
+                                                           legoPreRendered && ( legoWillStub || legoStr.empty() ) ) )
+            {
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+            }
             if( headerParts.legendDroppable() && !fitsExactCeiling( headerStr ) )
             {
                 const ForLensHeaderParts keptParts = headerParts;
@@ -4235,11 +4310,25 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             }
             // M3: the ladder hands back the rung it took. That value — never a search of the emitted text — is
             // what puts over_ceiling="1" on the root below.
-            // fix round 5: the last rung's reason must be TRUE — the header floor only when the header alone overruns
-            const bool keptTrailingOverrun = explicitForCeiling && !reserveTrailing && headerStr.size() + 6 <= ladderCeiling;
+            // fix round 5: the last rung's reason must be TRUE — the header floor only when the header alone overruns.
+            // train 27 (compactlegendcheck P1-B): …in every shape, not only the both-trailing-sections one: a header that fits
+            // its allowance by itself gets the reason that IS true (kNotesPayloadOver), never the header floor. And the compact
+            // dialect never echoes the task in its comment (appendCompactForLegend), so its echo rung drops nothing and claims
+            // nothing (the --pack-task FX4 rule): rung (b) is its header as built, rung (c) names only the route attribute.
+            // "Alone" is measured on the header AS THE LAST RUNG WOULD SERVE IT: this note, every late splice, the over_ceiling
+            // label and (when the handle rides unpaid) its clause — the bytes a reader counts up to <sigs>, never a pre-splice draft.
+            ForLensRootFinish lastRungFinish = rootFinish;
+            lastRungFinish.lastRungFired     = true;
+            lastRungFinish.sigsUnpaidOver    = forSigsCut.continuationUnpaidBytes > 0;
+            const bool             keptShape       = explicitForCeiling && !reserveTrailing;
+            const std::string_view fitsNote        = keptShape ? kNotesKeptRows.overCeiling : kNotesPayloadOver.overCeiling;
+            const bool             headerAloneFits =
+                finishForLensHeader( buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, fitsNote ), lastRungFinish ).size() + 6
+                <= ladderCeiling;
+            const rw::CeilingLadderNotes ladderNotes = forLadderNotes( headerParts.compactLegend, kNotes, headerAloneFits ? fitsNote : kNotes.overCeiling );
+            const std::string       ladderInputHeader = headerStr;   // train 27: the as-built shape the overrun is measured on
             rw::CeilingLadderChoice chosen = rw::climbCeilingLadderBy( buildForHeader, headerStr, fitsExactCeiling, fitsCeiling,
-                                                                       /*hasRouteAttr=*/!routeNoteRaw.empty(),
-                                                                       keptTrailingOverrun ? kNotesKeptRows : kNotes );
+                                                                       /*hasRouteAttr=*/!routeNoteRaw.empty(), ladderNotes );
             headerStr                = std::move( chosen.header );
             rootFinish.lastRungFired = ( chosen.rung == rw::CeilingRung::OverCeiling );
             // knob-honesty-068 (orchestrator rulings 2026-10-07): the recovery handle ALWAYS ships. Read off the FINISHED
@@ -4255,6 +4344,12 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             if( sigsNextTryOther != nullptr && forSigsNextCharged && forSigsCut.hasContinuation && ( landsOver || rootFinish.lastRungFired ) )
             {
                 *sigsNextTryOther = true;
+                // …but never on the both-trailing-sections shape: there the ranked rows are kept and the answer goes over on
+                // purpose (owner ruling 2026-10-09, option B; kNotesKeptRows), so no row is dropped to pay an overrun
+                if( mode.overrunBytesOut != nullptr && !keptShape )
+                {
+                    *mode.overrunBytesOut = forUnlabelledOverrunBytes( ladderInputHeader, rootFinish, cfg.tokenBudget, forSigsCut.continuationPaidSurplus );
+                }
                 return std::nullopt;
             }
             // the handle rode unpaid (the floor could not give its bytes up, or this is the unpaid run) and the document lands
@@ -4388,14 +4483,37 @@ std::optional<int> runForLens( const MainDispatch& d )
     }
     ASSUME( !rc );   // the unpaid render that handed back wrote nothing
     d.redactCounts = tallyAtEntry;
-    bool paidOver  = false;
-    rc             = runForLensPass( d, lr, ForLensPassMode{ .sigsNextPayFromRows = true, .sigsNextTryOther = &paidOver, .forAtStamp = forAtStamp } );
+    bool        paidOver     = false;
+    std::size_t overrunBytes = 0;
+    const bool  compactPays  = cfg.legend == "compact";
+    rc = runForLensPass( d, lr, ForLensPassMode{ .sigsNextPayFromRows = true, .sigsNextTryOther = &paidOver, .forAtStamp = forAtStamp,
+                                                 .overrunBytesOut = compactPays ? &overrunBytes : nullptr } );
     if( !paidOver )
     {
         return rc;
     }
     ASSUME( !rc );   // the paid render that handed back wrote nothing
     d.redactCounts = tallyAtEntry;
+    // train 27 (compactlegendcheck P1-B): THE COMPACT DIALECT ALSO PAYS ITS HEADER. Its sig ledger is capped at the full
+    // dialect's header charge (runForLensPass, the L1 fix round: rows(default) ⊇ rows(full)), so the bytes its header emits
+    // beyond that charge are paid by nobody; lego-charge charged the stubbed <lego>/<compose> as served, which removed the
+    // slack that used to absorb them, and the paid compact answer landed past budgets the full answer fits. Where paying the
+    // handle is not enough, pay the MEASURED overrun from the rows too — once, and serve it only when it then fits (C3: no row is
+    // dropped unless that buys the fit; the rows it drops are the ruled exemption, compactlegendcheck P1-B). The full dialect's
+    // ledger is not capped — it charges its own header, less the disclosures both dialects exempt — so this payment is the
+    // compact dialect's only, and a full answer past its ceiling after paying keeps C3's unpaid fallback below, unchanged.
+    if( compactPays && overrunBytes > 0 )
+    {
+        bool overrunOver = false;
+        rc = runForLensPass( d, lr, ForLensPassMode{ .sigsNextPayFromRows = true, .sigsNextTryOther = &overrunOver, .forAtStamp = forAtStamp,
+                                                     .overrunReserveBytes = overrunBytes } );
+        if( !overrunOver )
+        {
+            return rc;
+        }
+        ASSUME( !rc );   // the overrun-paying render that handed back wrote nothing
+        d.redactCounts = tallyAtEntry;
+    }
     return runForLensPass( d, std::move( lr ), ForLensPassMode{ .sigsNextPayFromRows = false, .forAtStamp = forAtStamp } );
 }
 

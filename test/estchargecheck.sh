@@ -846,28 +846,52 @@ fi
 # own rows — at least 255dc199's 5 (re-pin from a pre-continuation binary if row bytes change; smaller rows only raise it) —
 # and MORE than the paid near miss at 850 serves (4 rows: there paying is what makes the answer fit), with next= riding
 # unpaid and over_ceiling="1" + the unpaid clause on the root. RED on dd6e4c8e (4 rows).
-( cd "$A7S" && "$BIN" corpus --for="map row serializer" --token-budget=925 --no-cache ) >"$A7S/c3.xml" 2>/dev/null; c3_rc=$?
-( cd "$A7S" && "$BIN" corpus --for="map row serializer" --token-budget=970 --no-cache ) >"$A7S/paid.xml" 2>/dev/null; pd_rc=$?
+# TRAIN 27 RE-PIN (2026-10-11) of C3 and its near miss (the floor twin above is unchanged). Under a spent ceiling the compact
+# header no longer carries clauses for sections served as stubs nor a false task_echo / "(total= shown= capped=)" note, and the
+# compact dialect pays a measured overrun from the rows (verbs_for.h runForLens), so on this corpus the paid 4-row answer FITS
+# from 910 and no budget 700..1500 serves the C3 shape on any task tried (C3 then correctly serves the paid answer: 925 = 4 rows,
+# est_tokens=907, no label). The regime lives on a twin of the same corpus WITHOUT the doc comments (smaller rows, so the cut
+# alone leaves 5 rows while the 4-row floor is still over): C3 at 740..750 (494f97b6: 740..770, 5 rows, last rung + unpaid
+# clause), the payable near miss from 760 (494f97b6: from 780). Pinned at 745 / 790, inside both binaries' windows. RED on a
+# mutant whose C3 fallback pays from the rows (4 rows, over). Assertions unchanged.
+mkdir -p "$A7S/c3/corpus"
+python3 - "$A7S/c3/corpus" <<'PYG'
+import os, sys
+out = sys.argv[1]
+for i in range( 4 ):
+    lines = []
+    for j in range( 8 ):
+        nxt = f"serializeRow{i}_{j + 1}( map, row )" if j + 1 < 8 else "0"
+        lines += [ f"int serializeRow{i}_{j}( int map, int row )", "{",
+                   f"    int acc = map + row + {i * 7 + j};",
+                   f"    for( int k = 0; k < {j + 3}; ++k )", "    {",
+                   f"        acc += k * {i + 1} - row;", "    }",
+                   f"    return acc + {nxt};", "}", "" ]
+    with open( os.path.join( out, f"mod{i}.cpp" ), "w" ) as fh:
+        fh.write( "\n".join( lines ) )
+PYG
+( cd "$A7S/c3" && "$BIN" corpus --for="map row serializer" --token-budget=745 --no-cache ) >"$A7S/c3.xml" 2>/dev/null; c3_rc=$?
+( cd "$A7S/c3" && "$BIN" corpus --for="map row serializer" --token-budget=790 --no-cache ) >"$A7S/paid.xml" 2>/dev/null; pd_rc=$?
 sigs_shown(){ grep -aoE '<sigs [^>]*>' "$1" | tail -1 | grep -oE ' shown="[0-9]+"' | tr -dc '0-9'; }
 c3_sh="$( sigs_shown "$A7S/c3.xml" )"; pd_sh="$( sigs_shown "$A7S/paid.xml" )"
 c3_root="$( grep -aoE '^<ctx [^>]*>' "$A7S/c3.xml" | head -1 )"
 if [ "$c3_rc" -eq 0 ] && [ -n "$c3_sh" ] && [ -n "$pd_sh" ] && [ "$c3_sh" -ge 5 ] && [ "$c3_sh" -gt "$pd_sh" ] \
    && grep -aqE '<sigs [^>]* capped="1"[^>]* next="--for=' "$A7S/c3.xml" && [ "${c3_root#* over_ceiling=\"1\"}" != "$c3_root" ] \
    && grep -aqF 'next= rides unpaid: no row is dropped to pay for it' "$A7S/c3.xml"; then
-    ok "#11 A7 C3 @925: over its ceiling either way, the answer keeps the cut's own $c3_sh rows (>= the pre-continuation binary's 5, > the paid 970 answer's $pd_sh) — next= unpaid, over_ceiling=\"1\" + the unpaid clause"
+    ok "#11 A7 C3 @745 (doc-less twin): over its ceiling either way, the answer keeps the cut's own $c3_sh rows (>= 5, > the paid 790 answer's $pd_sh) — next= unpaid, over_ceiling=\"1\" + the unpaid clause"
 else
-    no "#11 A7 C3 @925 (exit $c3_rc): shown=${c3_sh:-?} (want >= 5 and > the paid 970 answer's ${pd_sh:-?}), next= + over_ceiling=\"1\" + the unpaid clause — rows were dropped to pay for a handle that cannot make the answer fit"
+    no "#11 A7 C3 @745 (doc-less twin, exit $c3_rc): shown=${c3_sh:-?} (want >= 5 and > the paid 790 answer's ${pd_sh:-?}), next= + over_ceiling=\"1\" + the unpaid clause — rows were dropped to pay for a handle that cannot make the answer fit"
 fi
-# Its near miss, 850 — the PAYABLE case, unchanged: paying is what makes the answer fit (255dc199: 5 rows, est_tokens=911,
+# Its near miss (790 since the train-27 re-pin above) — the PAYABLE case, unchanged: paying is what makes the answer fit (255dc199: 5 rows, est_tokens=911,
 # over), so the handle is paid (the block sheds its bytes above the floor) — next= rides inside the allowance, and neither
 # over_ceiling="1" nor the unpaid clause appears (a label that rode on every capped answer would pass the arms above alone).
-pd_b="$( bytes_of "$A7S/paid.xml" )"; pd_a="$( awk 'BEGIN{printf "%d", 970*2.36*1.15}' )"
+pd_b="$( bytes_of "$A7S/paid.xml" )"; pd_a="$( awk 'BEGIN{printf "%d", 790*2.36*1.15}' )"
 pd_root="$( grep -aoE '^<ctx [^>]*>' "$A7S/paid.xml" | head -1 )"
 if [ "$pd_rc" -eq 0 ] && [ "$pd_b" -le "$pd_a" ] && grep -aqE '<sigs [^>]* capped="1"[^>]* next="--for=' "$A7S/paid.xml" \
    && [ "${pd_root#* over_ceiling=\"1\"}" = "$pd_root" ] && ! grep -aqF 'next= rides unpaid' "$A7S/paid.xml"; then
-    ok "#11 A7 unpaid twin near miss @970: the capped <sigs> pays for its next= — $pd_b B <= $pd_a B, no over_ceiling=, no unpaid clause"
+    ok "#11 A7 unpaid twin near miss @790 (doc-less twin): the capped <sigs> pays for its next= — $pd_b B <= $pd_a B, no over_ceiling=, no unpaid clause"
 else
-    no "#11 A7 unpaid twin near miss @970 (exit $pd_rc): $pd_b B vs $pd_a B — expected a paid next= inside the allowance with no label"
+    no "#11 A7 unpaid twin near miss @790 (doc-less twin, exit $pd_rc): $pd_b B vs $pd_a B — expected a paid next= inside the allowance with no label"
 fi
 
 # ── #11 A7R (lego-charge fix round 4): THE TRAILING-SECTION RESERVE. Under --token-budget, --with-graph's block and the
@@ -1038,10 +1062,20 @@ a7r_out >"$A7R/hd.xml"
 hd_tag="$( grep -aoE '<hops [^>]*>' "$A7R/hd.xml" | head -1 )"
 hd_shown="$( printf '%s' "$hd_tag" | sed -nE 's/<hops shown="([0-9]+)".*/\1/p' )"; hd_tot="$( printf '%s' "$hd_tag" | sed -nE 's/.* total="([0-9]+)".*/\1/p' )"
 { [ "$h_tag" = "<hops shown=\"0\" total=\"$h_tot\" capped=\"1\" next=\"--for=&apos;$A7R_Q&apos;\"/>" ] && [ "${h_tot:-0}" -ge 1 ] 2>/dev/null \
-  && grep -aqF 'hops shown=0 capped=1: this budget left out the call-hop rows' "$A7R/h.xml" && [ "${h_root#* over_ceiling=}" = "$h_root" ] \
+  && grep -aqF '; hops: this budget left out the call-hop rows (one hop of callees for each of total= top rows)' "$A7R/h.xml" && [ "${h_root#* over_ceiling=}" = "$h_root" ] \
   && [ "${hd_shown:-0}" -ge 1 ] 2>/dev/null && [ "$hd_tot" = "$h_tot" ]; } \
     && ok "#11 A7D hops: the spent-ceiling <hops> is the counted marker ($h_tag), defined, inside budget; its next= serves $hd_shown of $hd_tot rows" \
     || no "#11 A7D hops: spent-ceiling <hops> not the counted, continued marker (got '${h_tag:-none}', next= answer '${hd_tag:-none}', root '${h_root:0:80}…')"
+# A7D-1 (train 27): the compact dialect above defines the marker in its own short clause — it already reads total= shown=
+# capped=1 and next= in its un-droppable clauses (verbs_for.h kForHopsBudgetCutLegendCompact). The FULL dialect keeps the
+# long clause that defines both: the same marker, the same next=, inside the same budget, with shown=0 capped=1 and next= read.
+a7r_out --token-budget=2000 --legend=full >"$A7R/hf.xml"
+hf_tag="$( grep -aoE '<hops [^>]*>' "$A7R/hf.xml" | head -1 )"; hf_root="$( grep -aoE '^<ctx [^>]*>' "$A7R/hf.xml" | head -1 )"
+{ [ "$hf_tag" = "$h_tag" ] && [ -n "$hf_tag" ] \
+  && grep -aqF '; hops shown=0 capped=1: this budget left out the call-hop rows (one hop of callees for each of total= top rows); next= serves them' "$A7R/hf.xml" \
+  && [ "${hf_root#* over_ceiling=}" = "$hf_root" ] && ! grep -aqF '; hops: this budget' "$A7R/hf.xml"; } \
+    && ok "#11 A7D hops (--legend=full twin): the same marker ($hf_tag), defined by the full clause (shown=0 capped=1, next=), inside budget" \
+    || no "#11 A7D hops (--legend=full twin): got '${hf_tag:-none}' vs compact '${h_tag:-none}', root '${hf_root:0:80}…' — the full clause or the budget fit is missing"
 # A7D-2: a PARTIAL hops cut under the budget carries the same next= (5000 tokens: some rows fit, not all).
 a7r_out --token-budget=5000 >"$A7R/hp.xml"
 hp_tag="$( grep -aoE '<hops [^>]*>' "$A7R/hp.xml" | head -1 )"

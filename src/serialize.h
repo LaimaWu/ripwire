@@ -5064,6 +5064,8 @@ struct SigsCutReport
     bool        hasContinuation  = false;   // the caller asked for the continuation (next=/next_budget_tokens=/next_offset=)
     bool        terseContinuation = false;  // a CHARGED pasteable one under a hard ceiling: next= alone (no next_offset=, no
                                             //   clause — the bundle's own next= reading defines it); see SigsCutContinuation
+    std::size_t continuationPaidSurplus = 0;   // train 27: what the rows gave up past what they owed (a whole row dropped for a
+                                               //   smaller handle) — the caller adds it to a measured overrun (verbs_for.h runForLens)
     std::size_t continuationUnpaidBytes = 0;   // a CHARGED one's bytes no row paid for — the rank 1..4 floor could not give them up,
                                                //   or the caller forbade the payment (payFromRows=false): it rides anyway (the recovery
                                                //   handle always ships) and the caller labels any overshoot
@@ -5126,6 +5128,10 @@ struct SigsCutContinuation
                                          //   false = the caller found that paying cannot make its answer fit (over its ceiling either
                                          //   way; orchestrator ruling C3, 2026-10-07): the block keeps the rows the cut alone leaves —
                                          //   no ledger gap, no payment — and the whole continuation rides unpaid (continuationUnpaidBytes)
+    std::size_t      overrunBytes = 0;   // train 27 (compactlegendcheck P1-B): a CHARGED one paying from rows also pays these bytes
+                                         //   from the rows, byte for byte beside the handle — the overrun past the exact budget the
+                                         //   caller MEASURED on its paid render (verbs_for.h runForLens, the compact dialect only);
+                                         //   0 everywhere else, so every other caller's rows are untouched
 };
 
 inline std::size_t sigsCutNextTokens( std::size_t blockBytes, std::size_t fixedBytes ) noexcept
@@ -5312,6 +5318,22 @@ inline bool sigsCutPaysFromRows( const SigsCutContinuation* req ) noexcept
 inline std::size_t sigsCutPlanReserve( const SigsCutContinuation* req ) noexcept
 {
     return sigsCutPaysFromRows( req ) ? req->ledgerGapBytes : 0u;
+}
+// train 27: what a payment from the rows gave up PAST what it owed — the ladder drops whole rows, so a 90 B handle can cost a
+// 150 B row. A caller that measures its paid document still over its budget owes that overrun ON TOP of what was given up.
+inline std::size_t sigsCutPaidSurplus( std::size_t totalBefore, std::size_t totalAfter, std::size_t owed, std::size_t unpaid ) noexcept
+{
+    const std::size_t given   = totalBefore > totalAfter ? totalBefore - totalAfter : 0u;
+    const std::size_t paid    = owed > unpaid ? owed - unpaid : 0u;
+    const std::size_t surplus = given > paid ? given - paid : 0u;
+    ENSURES( surplus <= given, "sigsCutPaidSurplus: the surplus exceeds what the rows gave up" );
+    return surplus;
+}
+// train 27: the row-side share beside the handle — the caller's measured overrun (SigsCutContinuation::overrunBytes), owed only by
+// a capped block whose caller lets rows pay; what the rank 1..4 floor cannot give up is reported with the handle's unpaid bytes
+inline std::size_t sigsCutRowOverrun( const SigsCutContinuation* req ) noexcept
+{
+    return sigsCutPaysFromRows( req ) ? req->overrunBytes : 0u;
 }
 // A CHARGED continuation is paid FROM THE ROWS, byte for byte: the same ladder runs on past the cut until the block has given
 // up `cost` bytes, so block + continuation never exceeds the block the cut alone left — in either dialect, whatever the plan's
@@ -5794,10 +5816,12 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
         // knob-honesty-068: a CHARGED continuation is paid from the rows (paySigsContinuationFromRows); what the floor
         // cannot pay rides anyway and is reported for the caller's over_ceiling label
         //   …only where the caller lets rows pay (payFromRows): otherwise the whole of it rides unpaid on the cut's own rows
-        const std::size_t cutNextOwed   = plan.capped ? cutNextCost : 0u;
+        const std::size_t cutNextOwed   = plan.capped ? cutNextCost + sigsCutRowOverrun( cutNext ) : 0u;
+        const std::size_t totalBeforePay = total;
         const std::size_t cutNextUnpaid = sigsCutPaysFromRows( cutNext )
                                               ? paySigsContinuationFromRows( entries, sigFiles, total, cutNextOwed, entryCost )
                                               : cutNextOwed;
+        const std::size_t cutNextSurplus = sigsCutPaysFromRows( cutNext ) ? sigsCutPaidSurplus( totalBeforePay, total, cutNextOwed, cutNextUnpaid ) : 0u;
 
         // A2: the exact count, computed AFTER the ladder has made its final drop decisions (droppedPositiveCount
         // above — the shared arithmetic with the JSON sibling). Pure bookkeeping, no output bytes either way.
@@ -5847,6 +5871,7 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
         }
         cut.continuationRequest     = cutNext;
         cut.continuationUnpaidBytes = cutNextUnpaid;
+        cut.continuationPaidSurplus = cutNextSurplus;
         sigsCutAttachContinuation( cut, cutNext, cutNextInv, cutNextTokens );   // nothing unless capped and asked for
         if( cutOut )
         {
@@ -10885,10 +10910,12 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
     // knob-honesty-068: a charged continuation is paid from the rows (the XML twin's rule); the floor's unpaid rest rides anyway
     // and this dialect's own predicate (forLensJsonOverCeiling: bytes past the allowance) labels any overshoot
     //   …only where the caller lets rows pay (payFromRows): otherwise the whole of it rides unpaid on the cut's own rows
-    const std::size_t cutNextOwed   = plan.capped ? cutNextCost : 0u;
+    const std::size_t cutNextOwed   = plan.capped ? cutNextCost + sigsCutRowOverrun( cutNext ) : 0u;
+    const std::size_t totalBeforePay = total;
     const std::size_t cutNextUnpaid = sigsCutPaysFromRows( cutNext )
                                           ? paySigsContinuationFromRows( entries, sigFiles, total, cutNextOwed, jsonSigEntryCost )
                                           : cutNextOwed;
+    const std::size_t cutNextSurplus = sigsCutPaysFromRows( cutNext ) ? sigsCutPaidSurplus( totalBeforePay, total, cutNextOwed, cutNextUnpaid ) : 0u;
     if( outCapped )
     {
         *outCapped = plan.ladderFires;   // the LADDER's verdict (the budget_bytes= stanza names its ceiling); cutOut carries capped
@@ -10904,6 +10931,7 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
         }
         cut.continuationRequest     = cutNext;
         cut.continuationUnpaidBytes = cutNextUnpaid;
+        cut.continuationPaidSurplus = cutNextSurplus;
         sigsCutAttachContinuation( cut, cutNext, cutNextInv, cutNextTokens );   // knob-honesty-068: nothing unless capped and asked for
         if( cutOut )
         {

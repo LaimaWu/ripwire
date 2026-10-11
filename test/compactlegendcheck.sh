@@ -1100,6 +1100,84 @@ else
 fi
 [ "$p1bbad" -eq 0 ] && ok "(P1-B) the ruled exemption is pinned: its comparison, the short-root fixed arms, the scope twin and the MCP sentinel"
 
+# (P1-S) THE SWEEP (train 27). The pinned 1500 above is ONE point of a band, and the band moved under it: lego-charge (train 26c,
+# bisected to its merge 7601d3ac) charged a stubbed <lego>/<compose> at its served size, which removed the slack that had been
+# absorbing the compact header's excess over full's (the L1 cap charges the compact rows no more header than full's), so the
+# default answer landed past budgets the full answer met (1300..1500, 1600..1700 on the merged tree), each with a last-rung note
+# blaming "the header floor" while the header was about half the budget. Over --token-budget=1100..1700 step 50, on the same
+# short relative root, both dialects, every budget must hold:
+#   FIT   the default fits its budget wherever full does (so P4 — over the budget AND over full's — fires only where full is over too);
+#   NOTE  in each dialect a last-rung reason is TRUE: "the header floor ... exceeds" only on a header (the root open tag and the
+#         comments before the payload) past the allowance (budget x 2.36 x 1.15), "the header alone fits" only on one inside it;
+#   P1    a row full keeps and the default lost is the ruled exemption (p1Exempt above), as on the fixed arms.
+# …and it BINDS: some budget where full fits and the default paid rows for it (an exempt row), and some where both are over and
+# the true reason rides (the note arm reads a real last rung, not an absence).
+p1sbad=0; p1sn=0; p1sexempt=0; p1sbothover=0; p1sfirst=""
+p1sfail(){ p1sbad=$(( p1sbad + 1 )); [ "$p1sbad" -le 6 ] && p1sfirst="$p1sfirst [$1]"; }
+for tb in $( seq 1100 50 1700 ); do
+    ( cd "$ROOT" && "$BIN" src --for="rank symbols by pagerank" --token-budget="$tb" ) >"$TMP/p1s.def" 2>/dev/null; rd=$?
+    ( cd "$ROOT" && "$BIN" src --for="rank symbols by pagerank" --token-budget="$tb" --legend=full ) >"$TMP/p1s.full" 2>/dev/null; rf=$?
+    allow="$( awk "BEGIN{printf \"%d\", $tb*2.36*1.15}" )"
+    set -- $( python3 "$TMP/p1d.py" "$TMP/p1s.def" "$TMP/p1s.full" )
+    if [ "$rd" -ne 0 ] || [ "$rf" -ne 0 ] || [ $# -ne 6 ] || ! printf '%s' "$1$2$3$4$allow" | grep -qE '^[0-9]+$'; then
+        p1sfail "@$tb: unreadable answers (exit $rd/$rf, facts '$*')"; continue
+    fi
+    dh="$1"; fh="$2"; de="$3"; fe="$4"; p1sn=$(( p1sn + 1 ))
+    [ "$fe" -le "$tb" ] && [ "$de" -gt "$tb" ] && p1sfail "@$tb FIT: default est_tokens $de over the budget, full fits at $fe"
+    [ "$de" -gt "$tb" ] && [ "$fe" -gt "$tb" ] && p1sbothover=$(( p1sbothover + 1 ))
+    for dial in def full; do
+        f="$TMP/p1s.$dial"; h="$dh"; [ "$dial" = full ] && h="$fh"
+        if grep -qF '[over_ceiling= is 1 on the root: the header floor' "$f"; then
+            [ $(( h + 6 )) -gt "$allow" ] || p1sfail "@$tb NOTE($dial): blames the header floor, but the header is $h B of a $allow B allowance"
+        fi
+        if grep -qF '[over_ceiling= is 1 on the root: the header alone fits this budget' "$f"; then
+            [ $(( h + 6 )) -le "$allow" ] || p1sfail "@$tb NOTE($dial): says the header alone fits, but it is $h B of a $allow B allowance"
+            [ "$dial" = def ] && [ "$de" -gt "$tb" ] && [ "$fe" -gt "$tb" ] && p1sbothnote=$(( ${p1sbothnote:-0} + 1 ))
+        fi
+        grep -qF '[over_ceiling= is 1 on the root: the ranked rows are kept' "$f" \
+            && p1sfail "@$tb NOTE($dial): the kept-rows reason (the --detail + --with-graph shape) on a bare --for"
+    done
+    set -- $( python3 "$TMP/rows.py" "$TMP/p1s.def" "$TMP/p1s.full" | tr -d "[](),'" )
+    if [ "${3:-1}" -ne 0 ]; then
+        if p1Exempt "$TMP/p1s.def" "$TMP/p1s.full" "$tb"; then
+            [ "$fe" -le "$tb" ] && p1sexempt=$(( p1sexempt + 1 ))
+        else
+            p1sfail "@$tb P1: lost ${3:-?} row(s) full keeps (default ${1:-?}, full ${2:-?}), not the ruled exemption ($p1facts)"
+        fi
+    fi
+done
+if [ "$p1sbad" -eq 0 ] && [ "$p1sn" -eq 13 ] && [ "$p1sexempt" -gt 0 ] && [ "${p1sbothnote:-0}" -gt 0 ]; then
+    ok "(P1-S) --for='rank symbols by pagerank' on root src, --token-budget=1100..1700 step 50, both dialects: the default fits wherever full does, every last-rung reason is true, every lost row is the exemption (binds: $p1sexempt exempt row budget(s) where full fits, $p1sbothover where both are over with the true reason riding ${p1sbothnote:-0}x)"
+else
+    no "(P1-S) the budget sweep ($p1sn of 13 budgets read, $p1sexempt exempt where full fits, ${p1sbothnote:-0} both-over with the true reason):$p1sfirst ($p1sbad failure(s))"
+fi
+# (P1-S2) THE OVERRUN PAYMENT, and what is left when it cannot pay. The sweep above fits on its own at every budget; the
+# compact dialect's last payment (verbs_for.h runForLens: a paid answer still over pays its MEASURED overrun from the rows)
+# is what fits "serialize the map" at 1300 (a mutant without it serves 6 rows at est_tokens 1457, over, while full fits at
+# 1294): the default must fit there, with full fitting too (the premise). At 1200 the same task is the case the payment
+# cannot reach — both dialects at the rank 1..4 floor, full fits by a token, the compact header is larger — so the default
+# goes over, and then it must say so truthfully (rule 5): over_ceiling="1", the header-fits reason with the header inside the
+# allowance, and the <sigs> next= that serves the rows.
+p1s2bad=""
+for spec in "1300:fit" "1200:disclose"; do
+    tb="${spec%%:*}"; want="${spec#*:}"
+    ( cd "$ROOT" && "$BIN" src --for="serialize the map" --token-budget="$tb" ) >"$TMP/p1s2.def" 2>/dev/null
+    ( cd "$ROOT" && "$BIN" src --for="serialize the map" --token-budget="$tb" --legend=full ) >"$TMP/p1s2.full" 2>/dev/null
+    set -- $( python3 "$TMP/p1d.py" "$TMP/p1s2.def" "$TMP/p1s2.full" )
+    allow="$( awk "BEGIN{printf \"%d\", $tb*2.36*1.15}" )"
+    if [ $# -ne 6 ] || ! printf '%s' "$1$3$4" | grep -qE '^[0-9]+$'; then p1s2bad="$p1s2bad [@$tb unreadable: '$*']"; continue; fi
+    [ "$4" -le "$tb" ] || p1s2bad="$p1s2bad [@$tb premise: full est_tokens $4 is over the budget — re-anchor]"
+    if [ "$want" = fit ]; then
+        [ "$3" -le "$tb" ] || p1s2bad="$p1s2bad [@$tb FIT: default est_tokens $3 over the budget, full fits at $4]"
+    elif [ "$3" -gt "$tb" ]; then
+        { grep -q '^<ctx [^>]* over_ceiling="1"' "$TMP/p1s2.def" && grep -qF '[over_ceiling= is 1 on the root: the header alone fits this budget' "$TMP/p1s2.def" \
+          && [ $(( $1 + 6 )) -le "$allow" ] && grep -qE '<sigs [^>]* next="--for=' "$TMP/p1s2.def"; } \
+            || p1s2bad="$p1s2bad [@$tb DISCLOSE: default over ($3) without over_ceiling + the true reason (header $1 B of $allow B) + sigs next=]"
+    fi
+done
+[ -z "$p1s2bad" ] && ok "(P1-S2) 'serialize the map' on root src: fits at 1300 where full fits (the overrun payment), and where the floor cannot pay (1200) any overshoot is labelled with its true reason and the sigs next=" \
+                  || no "(P1-S2)$p1s2bad"
+
 # (P2) the default map's --token-budget gate decides on the price the default PRINTS. It used to decide on the full
 # dialect's price before the compact layer ran, so a map that fits once compacted was withheld (exit 3). Budget = the
 # compact price itself: the default must answer (exit 0), --legend=full must still withhold (exit 3), and the full price

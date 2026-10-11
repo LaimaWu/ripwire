@@ -81,6 +81,26 @@ measured Python corpus served 4 of 40 signature rows in a ~4.6 KB answer under t
   from the signature rows, so measured at 2000 tokens over 32 questions: 192 hop rows named on 32/32 answers (none before),
   65 signature rows fewer (still disclosed by `<sigs>`'s own `next=`). Gates: `estchargecheck` #11 A7D, `fordisclosurecheck`
   #1b/#1c.
+- The default (compact) answer fits an explicit `--token-budget` where `--legend=full` does on the measured band below, and
+  says why where it cannot. Charging the stub as served
+  removed slack that had been absorbing the compact header's extra bytes (its row budget is charged no more header than
+  the full dialect's), so on this repo's `src` the default `--for='rank symbols by pagerank'` answer went over budgets
+  1300-1500 and 1600-1700 that the full answer met. Four changes, each only on an answer past its exact budget, except the
+  two shorter compact clauses, which ride whenever the hops cut or the clause drop does:
+  - A compact answer that is still over after paying for `<sigs>` `next=` drops rows to pay the measured overrun too, and
+    is served only when that fits. The rows it drops are the ruled exemption (`compactlegendcheck` (P1-B)). The
+    `--detail` + `--with-graph` shape keeps its rows, as ruled.
+  - The `<field>`/`<iface>` readings drop when `<compose>`/`<lego>` is served as a stub: no such row is printed.
+  - The compact hops-cut clause and the compact clause-drop note no longer repeat `total= shown= capped=` / `next=`
+    readings the dialect defines anyway; the compact echo rung no longer claims a `task_echo` drop (it has no echo).
+  - The last-rung note blames the header floor only when the header alone is past the allowance; otherwise it says the
+    header fits and the rows and sections served with it exceed the budget. Both dialects.
+  Measured on `src`, `--token-budget=1100..1700` step 50: the default fits at every budget the full answer fits (13/13
+  read); at 1100-1250 both are over, each with a true reason. Not everywhere: where both dialects sit at the rank 1..4
+  row floor and the full answer fits by a few tokens, the larger compact header can still go over
+  (`--for='serialize the map'` at 1200: 1435 vs 1196 tokens); it then says so, with the true reason and the `<sigs>`
+  `next=`. Gates: `compactlegendcheck` (P1-B), (P1-S), (P1-S2), `estchargecheck` #11 A7D (+ the `--legend=full` twin),
+  C3 re-pinned to a doc-less twin corpus.
 
 ### Changed — `--for`: the function a question names gets the first hop row, with all its callee names
 
