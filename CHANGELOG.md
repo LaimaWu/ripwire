@@ -15,6 +15,30 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — `--whereis`: a long line's `t=` is a 200-byte preview, and the branch-label parse holds only its batch
+
+A `--whereis` row's `t=` repeated its whole source line, so on a hot name the long lines were most of the answer. On this
+repo's own tree (165 local refs), `--whereis=lego` was 129,314 B, and 38 of its 60 rows held lines of 206 B to 7.3 KB:
+a Python dict, markdown paragraphs, a legend literal.
+
+- A line over 300 bytes prints its first bytes, cut on a UTF-8 boundary, plus an ellipsis: 200 bytes at most, the
+  ellipsis included. The row carries `t_bytes=`, the whole line's size. A line of 300 bytes or less prints whole, so a
+  cut always drops at least 100 bytes. A 202-byte line cut to 200 saved 2 bytes and cost its page ~330 B of disclosure.
+- A page that cuts a row carries `<t_cut rows=N next=…>`. Its `next=` replays the question with `--detail=1`, which now
+  lifts the preview along with the row cap and the parse guard and prints every line whole. The full legend's PREVIEW
+  clause and the compact `t_bytes=` / `t_cut rows=` readings ride only on such a page. A page of short lines is
+  byte-identical to before. MCP `whereis` serves the same page; its `next=` is the CLI spelling, as `<unparsed next=>`'s is.
+- Measured on this repo, base vs head interleaved, loads 17-24: `--whereis=lego` 129,314 → 18,579 B (−86%), every row
+  kept. `--whereis=DISCLOSE` 62,250 → 9,827 B. Over 15 names × 4 listings (60 answers, 1,274,845 → 654,876 B), no row
+  moved, no default listing changed and no answer grew. A cut row's `t=` is a prefix of the line, and outside the rows
+  each answer is byte-identical apart from the disclosure.
+  Gate: `crossrefcheck` 5h.
+- Peak memory: the scan kept every candidate blob's bytes, and copied them into each (blob, path) job, until the runaway
+  guard picked its batch. Now it records sizes, and the batch reads back only the blobs it chose. `--whereis=lego`
+  peaks at 0.88-0.94 GB (was 1.42 GB) and `--whereis=DISCLOSE` at 0.85-0.90 GB (was 1.16-1.22 GB). What remains is
+  the index (~0.45 GB on a name with no parse batch) plus the parse of up to 256 blobs / 64 MiB. A chosen blob that does
+  not read back whole confirms nothing: its rows read `kind="text"` and `<unparsed>` counts it.
+
 ### Fixed — `--for`: the `<sigs>` budget is charged for the `<lego>`/`<compose>` stub it serves, not the full render
 
 The default answer collapses `<lego>`/`<compose>` to a ~120 B counted stub, but the `<sigs>` budget was charged the full
