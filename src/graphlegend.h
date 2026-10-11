@@ -755,6 +755,25 @@ inline constexpr const char* kImpactDepthColumnarLegend =
     "the depth column: each row's hop depth (1 = calls SYM directly; the shortest call chain). Rows run depth 1 first, "
     "PageRank order within a depth, so a cut drops the deepest rows first; by_depth=k:n,… counts reaches= per depth and sums "
     "to it, so a capped answer states the depth it stopped in. ";
+// idea #6 (lane lean-trio): the per-file rollup and the umbrella-header count, each said exactly when it rides — the
+// rollup whenever the reach set is non-empty (XML forms only: the JSON form carries it as "files", columnar not at all),
+// the umbrella sentence only beside importers_umbrella=. Shared by the CLI arm and the MCP twin, byte-identical.
+inline std::string impactRollupLegend( bool rollup, bool umbrella )
+{
+    std::string out;
+    if( rollup )
+    {
+        out += "FILES (only beside a cut symbol window): the WHOLE reach set by file. files= in all, shown_files= listed; rf "
+               "syms= reached symbols there, d= fewest hops; by d=, syms=, path; files_capped=\"1\" with files_next= (lists all) when cut. ";
+    }
+    if( umbrella )
+    {
+        out += "importers_umbrella=\"1\": SYM's file is an umbrella header (imported by at least half the files that import anything, and by more than 40), so "
+               "its importers are a COUNT here, not rows (shown_importers= is 0); importers_next= lists them. ";
+    }
+    return out;
+}
+
 inline const char* impactDepthLegend( bool columnar ) noexcept
 {
     return columnar ? kImpactDepthColumnarLegend : kImpactDepthLegend;

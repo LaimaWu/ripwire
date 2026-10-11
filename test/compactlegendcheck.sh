@@ -573,8 +573,12 @@ probeFor()
 # A name with several definitions now serves lean (no ride-along map), so the whole-file answer this probe reaches carries
 # topk_default="0" (+112 B reading) and map_next= (+56 B reading) on its root, both present-only (compactlegend.h). The
 # (U-twin-expand) arm below keeps the OLD 360 B pin for everything else in that legend.
+# RE-PINNED 2026-10-10 (lane lean-trio, idea #11): ripwire.edit-check/v1 610 -> 650 (measured 636, the --edit-check=distance
+# probe; 595 on main 0852bc0f). The probe's contract is unchanged with nothing flagged, so the answer is now the verdict
+# line (no <c> rows), and the compact legend reads its two new facts: rows_next= (the --limit call listing the callers) and
+# callers= as the c rows' total (a floor). Nothing else moved.
 PIN_TABLE='
-ripwire.edit-check/v1             610   595
+ripwire.edit-check/v1             650   636
 ripwire.map/v1                   1140  1129
 ripwire.map-diff/v1              900   885
 ripwire.pack-signatures/v1       770   759

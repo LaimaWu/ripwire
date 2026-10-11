@@ -82,6 +82,19 @@ int TIERTOKEN_frob( int x )
     return x + 1;
 }
 /* TIERTOKEN_frob again, block comment */
+/* lane lean-trio (idea #5): seven more CODE uses, so this token's code tier is FULL (>= 8 hits) and arm (1) keeps its
+   premise — an identifier with a full code tier holds its comments AND strings back. A thin code tier lifts the string
+   tier now; arm (12h) is that path. */
+int tier_uses( void )
+{
+    return TIERTOKEN_frob( 1 )
+         + TIERTOKEN_frob( 2 )
+         + TIERTOKEN_frob( 3 )
+         + TIERTOKEN_frob( 4 )
+         + TIERTOKEN_frob( 5 )
+         + TIERTOKEN_frob( 6 )
+         + TIERTOKEN_frob( 7 );
+}
 int TIERTOKEN_onlycomment_caller( int y )
 {
     // TIERTOKEN_onlycomment appears in comments and NOWHERE else
@@ -100,10 +113,10 @@ D_OUT="$( "$BIN" "$SB" --no-cache --grep=TIERTOKEN_frob 2>/dev/null )"
 d_hits="$( attr hits "$D_OUT" )"
 d_comment="$( attr suppressed_comment "$D_OUT" )"
 d_string="$( attr suppressed_string "$D_OUT" )"
-if [ "$d_hits" = "2" ] && [ "$d_comment" = "2" ] && [ "$d_string" = "1" ]; then
-    ok "(1) code hit + the doc-file mention kept, 2 comment + 1 string suppressed and disclosed"
+if [ "$d_hits" = "9" ] && [ "$d_comment" = "2" ] && [ "$d_string" = "1" ]; then
+    ok "(1) the 8 code hits + the doc-file mention kept, 2 comment + 1 string suppressed and disclosed"
 else
-    no "(1) expected hits=2 suppressed_comment=2 suppressed_string=1, got hits=$d_hits comment=$d_comment string=$d_string"
+    no "(1) expected hits=9 suppressed_comment=2 suppressed_string=1, got hits=$d_hits comment=$d_comment string=$d_string"
     printf '%s\n' "$D_OUT" | grep -o '<grep [^>]*>'
 fi
 # the surviving row must be the DEFINITION line, not one of the prose mentions
@@ -116,7 +129,7 @@ echo "=== (2) --grep-in=any: every tier, and NO tier attributes at all ==="
 # ═══════════════════════════════════════════════════════════════════════════
 A_OUT="$( "$BIN" "$SB" --no-cache --grep=TIERTOKEN_frob --grep-in=any 2>/dev/null )"
 a_hits="$( attr hits "$A_OUT" )"
-if [ "$a_hits" = "5" ]; then ok "(2) --grep-in=any keeps all 5 hits"; else no "(2) --grep-in=any expected hits=5, got $a_hits"; fi
+if [ "$a_hits" = "12" ]; then ok "(2) --grep-in=any keeps all 12 hits (8 code + 2 comment + 1 string + 1 doc)"; else no "(2) --grep-in=any expected hits=12, got $a_hits"; fi
 if printf '%s' "$A_OUT" | grep -qE 'suppressed_comment=|suppressed_string=|tier_budget=|tier_unclassified=|tier="'; then
     no "(2b) --grep-in=any leaked a tier attribute onto an untiered answer"
 else
@@ -555,9 +568,17 @@ printf '%s' "$LT_OUT" | grep -o '<!--.*-->' | head -1 | grep -q 'code+string' \
     && ok "(12d) the legend defines the code+string label in the answer that emits it" \
     || no "(12d) tier=code+string was emitted and the legend never says what it means"
 # (12e) NOT a blanket lift: the same literal as an IDENTIFIER in a C source file keeps the code tier alone.
+# lane lean-trio: seven more code uses keep this identifier's code tier FULL (>= 8 hits) — the premise this arm tests; a
+# THIN code tier now lifts the string tier (arm 12h).
 cat >"$LT/src/reader.c" <<'EOF'
 int LITTOKEN_reader( void ) { return 0; }
 const char *reader_name = "LITTOKEN_reader";
+int reader_uses( void )
+{
+    return LITTOKEN_reader() + LITTOKEN_reader() + LITTOKEN_reader()
+         + LITTOKEN_reader() + LITTOKEN_reader() + LITTOKEN_reader()
+         + LITTOKEN_reader();
+}
 EOF
 cat >"$LT/tests/reader.sh" <<'EOF'
 LITTOKEN_reader
@@ -583,6 +604,270 @@ else
     no "(12g) a JSON/shell string under src/ lifted the string tier: tier=$( attr tier "$LN_OUT" ) suppressed_string=$( attr suppressed_string "$LN_OUT" )"
     printf '%s\n' "$LN_OUT" | grep -o '<grep [^>]*>'
 fi
+
+# (12h) lane lean-trio (idea #5): a THIN code tier (fewer than 8 code hits) serves the source string WITH code — an
+# identifier asked for once or twice is as likely to be the text a table holds. string_hits= keeps the per-tier count.
+# RED on main 0852bc0f: no tier=, suppressed_string="1".
+LH="$TMP/thinsandbox"
+mkdir -p "$LH/src"
+cat >"$LH/src/thin.c" <<'EOF'
+int THINTOKEN_name( void ) { return 0; }
+const char *thin_label = "THINTOKEN_name";
+EOF
+LH_OUT="$( "$BIN" "$LH" --no-cache --grep=THINTOKEN_name 2>/dev/null )"
+if [ "$( attr tier "$LH_OUT" )" = "code+string" ] && [ "$( attr string_hits "$LH_OUT" )" = "1" ] && [ -z "$( attr suppressed_string "$LH_OUT" )" ] \
+   && printf '%s' "$LH_OUT" | grep -q '<hit l="2"'; then
+    ok "(12h) a thin code tier lifts the source string: tier=code+string string_hits=1, the string row served"
+else
+    no "(12h) a thin code tier did not lift the string: tier=$( attr tier "$LH_OUT" ) string_hits=$( attr string_hits "$LH_OUT" ) suppressed_string=$( attr suppressed_string "$LH_OUT" )"
+fi
+# (12i) lane lean-trio (idea #5, round-2 tmux-05): a literal no identifier can spell is served from its string tier even
+# beside a FULL code tier in source, ranked: the source file whose NAME holds the literal first, then other source, then
+# shell scripts; the table entry that holds it carries ref= — the first site naming that callerless entry (where it is
+# registered). RED on main 0852bc0f: the shell rows first, cmd-split.c behind suppressed_string=.
+LS="$TMP/shapesandbox"
+mkdir -p "$LS/src" "$LS/regress"
+cat >"$LS/src/cmd-shape-split.c" <<'EOF'
+struct entry { const char *name; };
+const struct entry cmd_split_entry = {
+    .name = "shape-split",
+};
+EOF
+# a-keys.c sorts BEFORE it by path: the rank, not the path order, must put the file named like the literal first
+cat >"$LS/src/a-keys.c" <<'EOF'
+const char *bindings[] = { "bind x shape-split", 0 };
+EOF
+cat >"$LS/src/cmd.c" <<'EOF'
+extern const struct entry cmd_split_entry;
+const struct entry *cmd_table[] = {
+    &cmd_split_entry,
+    0
+};
+EOF
+for i in 1 2 3 4 5 6 7 8 9; do printf 'tmux shape-split -t %s\n' "$i" >"$LS/regress/a$i.sh"; done
+LS_OUT="$( "$BIN" "$LS" --no-cache --grep=shape-split 2>/dev/null )"
+ls_first="$( printf '%s' "$LS_OUT" | grep -o '<f p="[^"]*"' | head -1 )"
+ls_second="$( printf '%s' "$LS_OUT" | grep -o '<f p="[^"]*"' | sed -n 2p )"
+if [ "$( attr tier "$LS_OUT" )" = "code+string" ] && [ "$ls_first" = '<f p="src/cmd-shape-split.c"' ] && [ "$ls_second" = '<f p="src/a-keys.c"' ]; then
+    ok "(12i) a dashed literal lifts its source strings: the file named like it first, then other source, then scripts"
+else
+    no "(12i) expected tier=code+string, src/cmd-shape-split.c then src/a-keys.c; got tier=$( attr tier "$LS_OUT" ) first=$ls_first second=$ls_second"
+    printf '%s\n' "$LS_OUT" | grep -o '<grep [^>]*>'
+fi
+printf '%s' "$LS_OUT" | grep -q 'in="cmd_split_entry" ref="src/cmd.c:3"' \
+    && ok "(12j) the callerless table entry carries ref= at its registration (src/cmd.c:3), not the extern line" \
+    || no "(12j) no ref=src/cmd.c:3 on the cmd_split_entry hit: $( printf '%s' "$LS_OUT" | grep -o '<hit [^>]*>' | head -2 | tr '\n' ' ' )"
+printf '%s' "$LS_OUT" | grep -o '<!--.*-->' | head -1 | grep -q 'ref=' \
+    && ok "(12k) the legend defines ref= and string_hits= where they are emitted" \
+    || no "(12k) ref= emitted with no reading in the legend"
+if command -v xmllint >/dev/null 2>&1; then
+    if printf '%s' "$LS_OUT" | xmllint --noout - 2>/dev/null; then
+        ok "(12l) the ranked answer is well-formed XML"
+    else
+        no "(12l) the ranked answer is not well-formed XML"
+    fi
+fi
+
+# (12m) fix round 1 (rv-lean-trio item 2): the literal's SHAPE is a text heuristic, so it never outvotes a FULL source code
+# tier — the lift fires only while source code holds fewer than 8 of its code hits. A dotted member pattern (Python
+# docstrings are string tier, so nearly every one has a source string), a TS member call and a SCREAMING constant, each with
+# 12 code uses in source and one string mention, keep main's code-tier answer: no tier=, the string held back, all 12 code
+# rows. RED on 33873861: tier="code+string" and a 10-row window (the textual self.app / hono c.json / DEFAULT_CSS repro).
+LF="$TMP/fullsandbox"
+mkdir -p "$LF/src"
+{
+    printf 'class Screen:\n    """Talks to self.app and DEFAULT_CSS for its styles."""\n'
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do printf '    def m%s(self):\n        return self.app.tick(%s)\n' "$i" "$i"; done
+    printf 'DEFAULT_CSS = "x"\n'
+    for i in 1 2 3 4 5 6 7 8 9 10 11; do printf 'def css%s():\n    return DEFAULT_CSS\n' "$i"; done
+} >"$LF/src/screen.py"
+{
+    printf 'const doc = "send it with c.json";\n'
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do printf 'export function h%s(c: any) { return c.json({ n: %s }); }\n' "$i" "$i"; done
+} >"$LF/src/routes.ts"
+for lit in self.app DEFAULT_CSS c.json; do
+    LF_OUT="$( "$BIN" "$LF" --no-cache --grep="$lit" 2>/dev/null )"
+    if [ -z "$( attr tier "$LF_OUT" )" ] && [ "$( attr hits "$LF_OUT" )" = "12" ] && [ "$( attr suppressed_string "$LF_OUT" )" = "1" ] \
+       && [ -z "$( attr string_hits "$LF_OUT" )" ] && [ "$( attr shown "$LF_OUT" )" = "12" ]; then
+        ok "(12m) --grep=$lit: 12 code hits in source keep the code tier (no lift, all 12 rows, the string held back)"
+    else
+        no "(12m) --grep=$lit lifted beside a full source code tier: tier=$( attr tier "$LF_OUT" ) hits=$( attr hits "$LF_OUT" ) shown=$( attr shown "$LF_OUT" ) suppressed_string=$( attr suppressed_string "$LF_OUT" )"
+    fi
+done
+# (12m) the code vote counts TEST files too: a call there is parsed code, a use a "list every use" question needs (hono
+# c.json: ~490 code hits, nearly all in *.test.ts). Two code uses and a string in source plus 12 calls in a test file keep
+# the code answer; the same 12 lines in a shell script are a command typed, not code, and the literal lifts.
+LX="$TMP/testsandbox"
+mkdir -p "$LX/src" "$LX/tests"
+printf 'const note = "reply with r.send";
+export function a(r: any) { return r.send(1); }
+export function b(r: any) { return r.send(2); }
+' >"$LX/src/app.ts"
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do printf 'test("t%s", () => { r.send(%s); });
+' "$i" "$i"; done >"$LX/tests/app.test.ts"
+LX_OUT="$( "$BIN" "$LX" --no-cache --grep=r.send 2>/dev/null )"
+[ -z "$( attr tier "$LX_OUT" )" ] && [ "$( attr shown "$LX_OUT" )" = "14" ] && [ "$( attr suppressed_string "$LX_OUT" )" = "1" ] \
+    && ok "(12m) 2 source + 12 test-file code uses: no lift, all 14 code rows" \
+    || no "(12m) test-file code uses did not hold the lift back: tier=$( attr tier "$LX_OUT" ) shown=$( attr shown "$LX_OUT" )"
+rm "$LX/tests/app.test.ts"; mkdir -p "$LX/scripts"
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do printf 'tool r.send %s\n' "$i" >"$LX/scripts/s$i.sh"; done
+LX_OUT="$( "$BIN" "$LX" --no-cache --grep=r.send 2>/dev/null )"
+[ "$( attr tier "$LX_OUT" )" = "code+string" ] \
+    && ok "(12m) 2 source code uses + 12 script lines: the literal lifts (script lines do not vote)" \
+    || no "(12m) script lines voted against the lift: tier=$( attr tier "$LX_OUT" )"
+# (12n) the boundary, both ways: the count is CODE hits in SOURCE code — lines in shell scripts that type the literal are
+# bare-word code and do not count (tmux split-window: 2 code hits in .c, 85 in .sh, and it lifts; K1). 7 in source plus 9
+# script lines lifts; 8 in source does not.
+for n in 7 8; do
+    LB="$TMP/boundary$n"
+    mkdir -p "$LB/src" "$LB/regress"
+    {
+        printf 'class Pane:\n    """Reads self.pane on demand."""\n'
+        i=0; while [ "$i" -lt "$n" ]; do i=$(( i + 1 )); printf '    def p%s(self):\n        return self.pane\n' "$i"; done
+    } >"$LB/src/pane.py"
+    for i in 1 2 3 4 5 6 7 8 9; do printf 'tool self.pane %s\n' "$i" >"$LB/regress/r$i.sh"; done
+    LB_OUT="$( "$BIN" "$LB" --no-cache --grep=self.pane 2>/dev/null )"
+    eval "LB_TIER_$n=\"\$( attr tier \"\$LB_OUT\" )\""
+done
+[ "$LB_TIER_7" = "code+string" ] && ok "(12n) 7 source code hits (+9 script lines): the dotted literal still lifts" \
+                                  || no "(12n) 7 source code hits should lift: tier=$LB_TIER_7"
+[ -z "$LB_TIER_8" ] && ok "(12n) 8 source code hits: no lift (the floor is kGrepLiftCodeFloor)" \
+                     || no "(12n) 8 source code hits must not lift: tier=$LB_TIER_8"
+# (12o) fix round 1 (rv-lean-trio item 3): ref= names a CODE site only. A comment and a string that name the callerless
+# entry inside other definitions, in files that sort BEFORE the registration, are prose, not registrations — in C and in
+# Python. RED on 33873861: ref= pointed at the comment (src/alpha.c:3 / src/aaa.py:2).
+LR="$TMP/refsandbox"
+mkdir -p "$LR/src"
+cat >"$LR/src/do-thing.c" <<'EOF'
+struct entry { const char *name; int (*exec)(int); };
+static int do_thing_exec(int x) { return x; }
+const struct entry do_thing_entry = { .name = "do-thing", .exec = do_thing_exec };
+EOF
+cat >"$LR/src/alpha.c" <<'EOF'
+struct entry;
+void helper(void) {
+    /* unlike do_thing_entry, this one is not registered */
+    int k = 0;
+}
+EOF
+cat >"$LR/src/alpha2.c" <<'EOF'
+const char *describe(void) {
+    return "do_thing_entry";
+}
+EOF
+cat >"$LR/src/zeta.c" <<'EOF'
+struct entry;
+extern const struct entry do_thing_entry;
+const struct entry *table[] = {
+    &do_thing_entry,
+    0
+};
+EOF
+printf '#!/bin/sh\ntool do-thing a\ntool do-thing b\n' >"$LR/run.sh"   # script lines that TYPE it: the code tier beside the string (fxg)
+cat >"$LR/src/jobrun.py" <<'EOF'
+def jobrun_handler(req):
+    return "jobrun"
+EOF
+cat >"$LR/src/aaa.py" <<'EOF'
+def unrelated():
+    # jobrun_handler is documented elsewhere
+    return 1
+EOF
+cat >"$LR/src/abc.py" <<'EOF'
+def describe_job():
+    return "jobrun_handler"
+EOF
+cat >"$LR/src/routes.py" <<'EOF'
+from jobrun import jobrun_handler
+
+def register(table):
+    table["job"] = jobrun_handler
+EOF
+LR_C="$( "$BIN" "$LR" --no-cache --grep=do-thing 2>/dev/null )"
+printf '%s' "$LR_C" | grep -q 'in="do_thing_entry" ref="src/zeta.c:4"' \
+    && ok "(12o) C: ref= is the registration (src/zeta.c:4), never the comment (alpha.c:3) or the string (alpha2.c:2)" \
+    || no "(12o) C: ref= is not src/zeta.c:4: $( printf '%s' "$LR_C" | grep -o '<hit [^>]*in="do_thing_entry"[^>]*>' )"
+LR_P="$( "$BIN" "$LR" --no-cache --grep=jobrun 2>/dev/null )"
+printf '%s' "$LR_P" | grep -q 'in="jobrun_handler" ref="src/routes.py:4"' \
+    && ok "(12o) Python: ref= is the registration (src/routes.py:4), never the comment (aaa.py:2) or the string (abc.py:2)" \
+    || no "(12o) Python: ref= is not src/routes.py:4: $( printf '%s' "$LR_P" | grep -o '<hit [^>]*in="jobrun_handler"[^>]*>' )"
+
+# (12o) fix round 2 (rv-lean-trio2 nit c): the occurrence PAIRING — the k-th raw hit on a line is the k-th whole-word
+# occurrence on it. Same-line shapes, both ways: a comment then the code reference on ONE line is a registration
+# (ref=src/zeta.c:4); a near-namesake in code, then a comment and a string on one line, is not (no ref=). Dropping the
+# pairing ("some hit on the line is code, some occurrence is whole-word") claims src/zeta.c:4 on the second; reading only
+# the line's first occurrence misses the first. RED on 33873861: the second claimed src/a.c:3 (a string).
+for shape in comment-then-code namesake-comment-string; do
+    LQ="$TMP/refline-$shape"
+    mkdir -p "$LQ/src"
+    cp "$LR/src/do-thing.c" "$LQ/src/do-thing.c"
+    printf '#!/bin/sh\ntool do-thing a\ntool do-thing b\n' >"$LQ/run.sh"
+    printf 'struct entry;\nvoid say(void) {\n    const char *s = "do_thing_entry";\n    (void)s;\n}\n' >"$LQ/src/a.c"
+    if [ "$shape" = comment-then-code ]; then reg='    /* do_thing_entry */ &do_thing_entry,'; else reg='    &do_thing_entry_old, /* do_thing_entry */ "do_thing_entry",'; fi
+    printf 'struct entry;\nextern const struct entry do_thing_entry;\nconst struct entry *table[] = {\n%s\n    0 };\n' "$reg" >"$LQ/src/zeta.c"
+    LQ_OUT="$( "$BIN" "$LQ" --no-cache --grep=do-thing 2>/dev/null; printf "\nrc=%s\n" "$?" )"
+    LQ_HIT="$( printf '%s' "$LQ_OUT" | grep -o '<hit [^>]*in="do_thing_entry"[^>]*>' )"
+    if ! printf '%s' "$LQ_OUT" | grep -q '^rc=0$' || [ "$( attr tier "$LQ_OUT" )" != "code+string" ] || [ -z "$LQ_HIT" ]; then
+        no "(12o) $shape: premise — the ranked answer with the do_thing_entry hit: tier=$( attr tier "$LQ_OUT" ) hit=$LQ_HIT"
+    elif [ "$shape" = comment-then-code ]; then
+        printf '%s' "$LQ_HIT" | grep -q 'ref="src/zeta.c:4"' \
+            && ok "(12o) one line, a comment then the code reference: ref=src/zeta.c:4 (the second occurrence pairs with its code hit)" \
+            || no "(12o) one line, a comment then the code reference: ref= is not src/zeta.c:4: $LQ_HIT"
+    else
+        printf '%s' "$LQ_HIT" | grep -q 'ref=' \
+            && no "(12o) one line, a code near-namesake then a comment and a string: a ref= was claimed: $LQ_HIT" \
+            || ok "(12o) one line, a code near-namesake then a comment and a string: no ref= (neither occurrence is code)"
+    fi
+done
+
+# (12p) fix round 2 (rv-lean-trio2 item 1b, checklist 13b): a STOPPED classification cannot prove a code tier thin. 140
+# files hold the dotted literal in a docstring, 3 early files call it, and 30 more callers sort past the 128-file tier
+# budget (unclassified). The ONE program-code count includes unclassified hits, so the shape lift does not fire: main's
+# code-tier answer, every row (all 30 late callers), no window. RED on 9bd8528a: tier=code+string, shown=10 of 173, 0 of
+# the 30 late rows.
+LP="$TMP/budgetsandbox"
+mkdir -p "$LP/pkg"
+printf 'class O:\n    def frob(self, x=0):\n        return x\n\nobj = O()\n' >"$LP/pkg/core.py"
+for i in 1 2 3; do printf 'from pkg.core import obj\n\ndef early_%s():\n    return obj.frob(%s)\n' "$i" "$i" >"$LP/pkg/a_000$i.py"; done
+i=0; while [ "$i" -lt 140 ]; do i=$(( i + 1 )); n="$( printf '%03d' "$i" )"
+    printf 'def doc_%s():\n    """Call obj.frob to frob."""\n    return 1\n' "$n" >"$LP/pkg/a_$n.py"; done
+i=0; while [ "$i" -lt 30 ]; do i=$(( i + 1 )); n="$( printf '%02d' "$i" )"
+    printf 'from pkg.core import obj\n\ndef use_%s():\n    return obj.frob(%s)\n' "$n" "$i" >"$LP/pkg/z_$n.py"; done
+LP_OUT="$( "$BIN" "$LP" --no-cache --grep=obj.frob 2>/dev/null; printf "\nrc=%s\n" "$?" )"
+lp_late="$( printf '%s' "$LP_OUT" | grep -o '<f p="pkg/z_[0-9]*\.py"' | wc -l | tr -d ' ' )"
+if ! printf '%s' "$LP_OUT" | grep -q '^rc=0$' || [ "$( attr tier_budget "$LP_OUT" )" != "files" ]; then
+    no "(12p) premise: the tier budget should stop on the files ceiling: tier_budget=$( attr tier_budget "$LP_OUT" )"
+elif [ -z "$( attr tier "$LP_OUT" )" ] && [ -z "$( attr string_hits "$LP_OUT" )" ] && [ "$lp_late" = 30 ] \
+     && [ -n "$( attr hits "$LP_OUT" )" ] && [ "$( attr shown "$LP_OUT" )" = "$( attr hits "$LP_OUT" )" ]; then
+    ok "(12p) a stopped tier budget: the code tier answers, all $( attr hits "$LP_OUT" ) rows, the 30 unclassified callers among them"
+else
+    no "(12p) a stopped tier budget read the code tier as thin: tier=$( attr tier "$LP_OUT" ) shown=$( attr shown "$LP_OUT" ) hits=$( attr hits "$LP_OUT" ) late_rows=$lp_late"
+fi
+
+# (12q) fix round 2 (rv-lean-trio2 item 1a): the SAME count decides the window under main's literal-question lift. Source
+# holds the dotted literal only in a docstring and 12 test files call it (textual app.query: 1023 hits, its code is
+# test-file uses): main's lift serves code+string as main does — collection order, the 100-row default, no string_hits=,
+# every row. RED on 9bd8528a: shown=10, string_hits=1. The near miss: 7 test calls plus 7 script lines (which never vote)
+# is a thin count, and the same lift is RANKED and windowed (tmux escape-time's shape).
+for n in 12 7; do
+    LQ="$TMP/literalwindow$n"
+    mkdir -p "$LQ/src" "$LQ/tests"
+    printf 'class App:\n    """Widgets are found with app.query."""\n    def run(self):\n        return 1\n' >"$LQ/src/app.py"
+    i=0; while [ "$i" -lt "$n" ]; do i=$(( i + 1 )); printf 'def test_q%s(app):\n    assert app.query("#w%s")\n' "$i" "$i" >"$LQ/tests/test_q$i.py"; done
+    if [ "$n" = 7 ]; then mkdir -p "$LQ/scripts"; i=0; while [ "$i" -lt 7 ]; do i=$(( i + 1 )); printf 'tool app.query %s\n' "$i" >"$LQ/scripts/s$i.sh"; done; fi
+    LQ_OUT="$( "$BIN" "$LQ" --no-cache --grep=app.query 2>/dev/null; printf "\nrc=%s\n" "$?" )"
+    if ! printf '%s' "$LQ_OUT" | grep -q '^rc=0$' || [ "$( attr tier "$LQ_OUT" )" != "code+string" ]; then
+        no "(12q) $n test calls: premise — main's literal lift should serve code+string: tier=$( attr tier "$LQ_OUT" )"
+    elif [ "$n" = 12 ]; then
+        [ -z "$( attr string_hits "$LQ_OUT" )" ] && [ "$( attr hits "$LQ_OUT" )" = 13 ] && [ "$( attr shown "$LQ_OUT" )" = 13 ] \
+            && ok "(12q) 12 test-file code uses under the literal lift: main's answer, all 13 rows, no window, no string_hits=" \
+            || no "(12q) 12 test-file code uses: the window cut code rows: shown=$( attr shown "$LQ_OUT" ) hits=$( attr hits "$LQ_OUT" ) string_hits=$( attr string_hits "$LQ_OUT" )"
+    else
+        [ "$( attr string_hits "$LQ_OUT" )" = 1 ] && [ "$( attr hits "$LQ_OUT" )" = 15 ] && [ "$( attr shown "$LQ_OUT" )" = 10 ] \
+            && ok "(12q) 7 test calls + 7 script lines (a thin count): the literal lift is ranked and windowed (10 of 15, string_hits=1)" \
+            || no "(12q) a thin count under the literal lift should rank and window: shown=$( attr shown "$LQ_OUT" ) hits=$( attr hits "$LQ_OUT" ) string_hits=$( attr string_hits "$LQ_OUT" )"
+    fi
+done
 
 # (12f) the MCP grep twin lifts the same rows (one collection, one decision).
 LT_MCP="$( printf '%s\n%s\n%s\n' \

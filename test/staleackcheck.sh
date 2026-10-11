@@ -93,7 +93,10 @@ fi
 cat > "$REPO/src/lib.cpp" <<'EOF'
 int stable( int a ) { return a + 1; }
 EOF
-run --quality-delta >"$TMP/targetgone" 2>/dev/null; rcTG=$?
+# lane lean-trio (idea #11): a regression-free answer collapses its stale rows to counts by default; the row arms below
+# read them through the recovery flag, and arm (2c) asserts the collapse itself on the same tree.
+run --quality-delta --show-stale >"$TMP/targetgone" 2>/dev/null; rcTG=$?
+run --quality-delta >"$TMP/targetgone_c" 2>/dev/null; rcTGc=$?
 if grep -q 'stale="[1-9]' "$TMP/targetgone" && grep -q '<sa kind="complexity"[^>]*why="target-gone"' "$TMP/targetgone"; then
     ok "(2) a deleted acked symbol is reported stale>0 including why=\"target-gone\" for its complexity ack"
 else
@@ -106,12 +109,29 @@ else
     no "(2) exit code changed from the no-stale run ($rcClean -> $rcTG) — disclosure must never gate"
 fi
 
+# ── (2c) the COLLAPSE (lane lean-trio, idea #11): with no regression the default answer prints no <sa> row, keeps stale=
+#     (the same count), splits it by kind in stale_by_kind=, names the recovery call in stale_next=, and exits the same.
+#     RED on main 0852bc0f: the default answer carries the <sa> rows and no stale_by_kind=.
+tgStale="$( grep -o 'stale="[0-9]*"' "$TMP/targetgone" | head -1 )"
+if [ -n "$tgStale" ] && grep -q "$tgStale" "$TMP/targetgone_c" && ! grep -q '<sa ' "$TMP/targetgone_c" \
+   && grep -q 'stale_by_kind="[^"]*complexity:[1-9]' "$TMP/targetgone_c" && grep -q 'stale_next="--quality-delta --show-stale"' "$TMP/targetgone_c" \
+   && [ "$rcTGc" -eq "$rcTG" ]; then
+    ok "(2c) no regression: the stale rows collapse to $tgStale + stale_by_kind=, stale_next= names the recovery flag, same exit"
+else
+    no "(2c) the regression-free collapse is wrong (rc $rcTGc vs $rcTG)"
+    grep -o '<quality-delta[^>]*>\|<sa[^>]*/>' "$TMP/targetgone_c"
+fi
+sed 's/<quality-delta.*//' "$TMP/targetgone_c" | grep -q 'stale_by_kind=' \
+    && ok "(2c) stale_by_kind= and stale_next= are defined in the collapsed answer's own legend" \
+    || no "(2c) stale_by_kind= emitted with no legend definition"
+run --show-stale >/dev/null 2>&1 && no "(2c) --show-stale alone was accepted" || ok "(2c) --show-stale alone is refused (it modifies --quality-delta)"
+
 # ── (3) FINDING-GONE: knotty() survives (same canonId) but is simplified back under the complexity bar ──
 cat > "$REPO/src/lib.cpp" <<'EOF'
 int stable( int a ) { return a + 1; }
 int knotty( int a, int b, int c ) { return a + b + c; }
 EOF
-run --quality-delta >"$TMP/findinggone" 2>/dev/null; rcFG=$?
+run --quality-delta --show-stale >"$TMP/findinggone" 2>/dev/null; rcFG=$?
 if grep -q 'stale="[1-9]' "$TMP/findinggone" && grep -q '<sa kind="complexity"[^>]*why="finding-gone"' "$TMP/findinggone"; then
     ok "(3) a simplified (still-existing) symbol is reported stale>0 including why=\"finding-gone\" for its complexity ack"
 else
@@ -122,6 +142,26 @@ if [ "$rcFG" -eq "$rcClean" ]; then
     ok "(3) stale-ack disclosure does not change the exit code ($rcFG, same as the no-stale run)"
 else
     no "(3) exit code changed from the no-stale run ($rcClean -> $rcFG) — disclosure must never gate"
+fi
+
+# ── (2d) fix round 1 (owner ruling 5, rv-lean-trio item 5): a fold ships only when it PAYS (a quarter of the bytes, in both
+#     postures). ONE stale row on a dirty, regression-free tree costs less than the collapse's own attributes and legend
+#     sentence, so the default answer IS the full document — byte-identical to --show-stale, the <sa> row printed — in
+#     both postures. RED on 33873861: the default collapsed the one row (fx: 1512 B collapsed vs 1481 B full).
+run --quality-delta >"$TMP/fg_default" 2>/dev/null; rcFGd=$?
+run --quality-delta --legend=full >"$TMP/fg_full" 2>/dev/null
+run --quality-delta --show-stale --legend=full >"$TMP/fg_full_show" 2>/dev/null
+fgStale="$( grep -o 'stale="[0-9]*"' "$TMP/findinggone" | head -1 )"
+if [ "$fgStale" = 'stale="1"' ] && grep -q 'at="[0-9a-f]*+dirty' "$TMP/findinggone"; then
+    if cmp -s "$TMP/fg_default" "$TMP/findinggone" && cmp -s "$TMP/fg_full" "$TMP/fg_full_show" && grep -q '<sa ' "$TMP/fg_default" \
+       && [ "$rcFGd" -eq "$rcFG" ]; then
+        ok "(2d) one stale row on a dirty tree: the collapse does not pay, the default is the full document (both postures)"
+    else
+        no "(2d) the one-row collapse shipped although it does not pay"
+        grep -o '<quality-delta[^>]*>' "$TMP/fg_default" "$TMP/fg_full"
+    fi
+else
+    no "(2d) premise: the finding-gone tree should be dirty with exactly one stale ack (got $fgStale)"
 fi
 
 # ── (5) M21(a): a <sa> row NAMES the ack that went stale, wherever the tree can still name it ──────────

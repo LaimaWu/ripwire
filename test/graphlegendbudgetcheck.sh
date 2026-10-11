@@ -123,8 +123,14 @@ budgetFor(){
         # only when a row carries it). Measured on this probe: 3403 B on main (0852bc0f), 3743 B on this lane (+340 B,
         # exactly the clause); 3769 keeps callers' 26 B headroom. The OLD 3429 stays as a twin below: the legend with that
         # one sentence cut out must still fit it, so the rest of the essay cannot re-inflate under the new headroom.
+        # RE-PINNED impact +197 (2026-10-10, lane lean-trio, idea #6): a CUT --impact symbol window now opens with the
+        # per-file rollup of the WHOLE reach set (<files files= shown_files= files_capped=> + <rf syms= d=> rows), and the
+        # full legend gains graphlegend.h impactRollupLegend's FILES sentence, present exactly when that element rides
+        # (this probe's window is cut). Shortened from a 330 B draft to 197 B before the pin moved. Measured on this probe:
+        # 4288 B on main (0852bc0f), 4485 B on this lane (+197 B, exactly the sentence); 4533 keeps impact's 48 B headroom.
+        # The gate's RED-on-1dc7b01 property rests on the uses pin (4114 < 4303), which does not move.
         callers) echo 3769 ;;
-        impact)  echo 4336 ;;
+        impact)  echo 4533 ;;
         uses)    echo 4114 ;;
     esac
 }

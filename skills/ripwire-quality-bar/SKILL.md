@@ -181,6 +181,8 @@ something always fires.)
    **Record a trade-off instead of re-reading it forever:** `ripwire <dir> --quality-ack="why it's accepted"`
    writes the currently-visible findings into `.ripwire_quality_acks` (committable) — later runs suppress
    them honestly (`acked="N"`) and a finding REAPPEARS the moment it worsens past its acked size.
+   A regression-free answer collapses ack rows that no longer apply to `stale=` + `stale_by_kind=`;
+   `--quality-delta --show-stale` (its `stale_next=`) prints those `<sa>` rows when you prune the ledger.
 
    **Ack a SUBSET, never the screen.** Bare `--quality-ack` accepts *every* finding currently visible, so
    using it to accept one deliberate change silently accepts the rest too — that is how a ratchet turns into

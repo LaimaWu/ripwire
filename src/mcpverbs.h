@@ -1017,6 +1017,10 @@ inline std::string grepTierKeys( const GrepTierReport& tier, bool floorAlreadyEm
     if( std::strcmp( tier.emittedTier, "code" ) != 0 )
     {
         keys += std::string( ",\"tier\":\"" ) + tier.emittedTier + "\"";
+        if( tier.servedString > 0 )
+        {
+            keys += ",\"string_hits\":" + std::to_string( tier.servedString );   // the CLI grepTierAttrs() twin (idea #5)
+        }
         // M17: the CLI grepTierAttrs() twin — same condition, same name. A confidence qualifier is exactly
         // the class of fact a dialect may not drop (mcpclidiffcheck's LENS2), and an MCP-only agent has no
         // CLI to re-ask from before trusting the label.
@@ -1127,16 +1131,16 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
 {
     const McpIndex&            ix        = getIndex( root );
     const IngestResult&        ing       = ix.ing;
-    constexpr int              kRowCap   = 100;
+    GrepTierReport             tierReport;
     // R-H span tiers: the SAME filter, in the SAME position (after collection), as the CLI verb applies —
     // search.h owns the policy precisely so these two surfaces cannot answer differently. `grepInMode` is
     // the MCP `in` argument (the CLI --grep-in twin): the escape hatch has to exist here too, because an
     // MCP-only agent that reads suppressed_comment= has no CLI to re-ask from. Counters ride the payload
     // below under the CLI's own key names.
-    GrepTierReport             tierReport;
     const GrepCollection       collected = grepApplySpanTiers( ing, grepCollect( ing, pattern, /*regex=*/false, /*noPrefilter=*/false ),
-                                                               grepInMode, tierReport );
-    const PageWindow           grepPage  = pageWindow( collected.raw.size(), effectiveRowCap( page.limit, kRowCap ), page.offset );
+                                                               grepInMode, tierReport, /*useMemo=*/true, pattern );
+    const int                  grepRowCap   = tierReport.servedString > 0 ? kGrepLiftRowCap : 100;   // the CLI's default window (idea #5; ranked lifts only)
+    const PageWindow           grepPage  = pageWindow( collected.raw.size(), effectiveRowCap( page.limit, grepRowCap ), page.offset );
     const std::size_t          rowCount  = grepPage.end - grepPage.begin;
     const std::vector<GrepHit> hits      = grepEnrich( ing, std::span<const GrepRawHit>( collected.raw ).subspan( grepPage.begin, rowCount ), 0, 0 );
 
@@ -1269,7 +1273,7 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
     // block below is: existing key-order-sensitive gates read up through "hits" first.
     // H4: the SAME window the indexed list obeyed, over this list's own length (the CLI emitter's auxPage
     // twin) — `limit` reached only the hits array before, so a three-row page shipped 29 unindexed rows.
-    out += grepAuxJson( aux.hits, pageWindow( aux.hits.size(), effectiveRowCap( page.limit, kRowCap ), page.offset ),
+    out += grepAuxJson( aux.hits, pageWindow( aux.hits.size(), effectiveRowCap( page.limit, grepRowCap ), page.offset ),
                         singleRootJ, rootPrefixJ );
     // R1 (the 2026-08-12 usage mine): the CLI <enc>/<suggest> twins, appended AFTER "hits" so the
     // historic key order three other gates read (files,total,shown,capped) is byte-untouched.
@@ -2977,6 +2981,8 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     // Reference-as-value round: SYM's binding sites, the CLI --impact's value_refs=/<vrs> by the same call.
     const ValueRefRows  imValueRefs = valueRefCallerRows( ing, valueRefIndexOf( ix ), seeds );
     const PageWindow    ipw         = pageWindow( show.size(), effectiveRowCap( page.limit, 40 ), page.offset );
+    // idea #6: the CLI arm's rollup, under the same rule — it rides only beside a CUT symbol window
+    const ImpactFileRollup imFiles = impactFileRollup( ing, reach, depth, page.limit, symbol, ipw.end - ipw.begin < show.size() );
     const bool          imHasVia    = std::any_of( show.begin() + ipw.begin, show.begin() + ipw.end, [ & ]( NodeId n ) { return impactRowNameOnly( proven, n ); } );
     rw::emitTo( mem, "{}{}. {}{}{}{}{}{}{}{}{}{}{}{}-->", kImpactLegendOpen, kPageRaiseCapClause,
                   reach.empty() ? "" : kImpactDepthLegend,           // 0.6.5: exactly when d=/by_depth= ride, as on the CLI
@@ -2989,7 +2995,8 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   declinedCallsLegendWithGates( declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 ),         // exactly when the root carries declined_calls=, as on the CLI
                   declinedIfaceLegend( declinedIface > 0 ),                                          // likewise declined_iface=, as on the CLI
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
-                    + valueRefsDepthLegendFor( imValueRefs ) ).c_str(),                                // ... and the depth disclosure, as on the CLI
+                    + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI
+                    + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella ) ).c_str(),                  // idea #6, as on the CLI
                   graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), renderDisclosure( prD, DiscloseAs::LegendClause ).c_str() );
     // r27-emitters §P2.1: the listing is capped at 40 by rank. Without shown=/capped= a 40-row answer to
     // "is it safe to change X?" reads as the WHOLE blast radius when it can be 3% of it. Same attributes,
@@ -3012,6 +3019,7 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   pageDisclosure( ipab, sizeof( ipab ), shownRows, show.size(), ipw.end, page.limit, page.offset, true ),
                   graphCountFloorAttrXml( g ).c_str(), renderDisclosure( prD, DiscloseAs::XmlAttrs ).c_str(),   // M15: gauge + marker
                   nextAttrXml( nextFlag( "--safe-delete=", symbol ) ).c_str()  );   // P3 (L7): the CLI twin's next=, same root attribute set (mcpclidiffcheck)
+    emitImpactFileRollupXml( mem, ing, imFiles, imSingleRoot ? std::string_view( imRootPrefix ) : std::string_view() );   // idea #6, as on the CLI
     for( std::size_t i = ipw.begin; i < ipw.end; ++i )
     { const Symbol& s = ing.symbols[ show[i] ];
       const std::string_view rp = imSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], imRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
@@ -4650,7 +4658,7 @@ inline EditCheckReply editCheckText( const std::string& root, const std::string&
     }
 
     return EditCheckReply{ editCheckBundleText( ing, g, root, kDefaultMaxFileBytes, {}, groups[0].lowestNode,
-                                                 /*ni=*/nullptr, /*preview=*/false, pg.limit, pg.offset, unprovenDefs ), {} };
+                                                 /*ni=*/nullptr, /*preview=*/false, EditCheckPage{ pg.limit, pg.offset }, unprovenDefs ), {} };
 }
 
 // ─── `slice` verb (lane/tc-sliceat): the ARISE def-use slice over MCP, mirroring the CLI --slice ────────

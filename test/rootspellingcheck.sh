@@ -218,7 +218,7 @@ cwd_selector()
     key="$( printf '%s' "$label" | tr -c 'A-Za-z0-9' '_' )"
     for sp in $SPELLINGS; do
         pre="$( selector_prefix "$sp" "$d" "$form" )"
-        spell "$sp" "$d" "$TMP/out/$key.$sp" "$flag=$pre$rel"
+        spell "$sp" "$d" "$TMP/out/$key.$sp" "$flag=$pre$rel" ${CWD_EXTRA:+"$CWD_EXTRA"}
         rc="$( cat "$TMP/out/$key.$sp.rc" )"
         if [ "$rc" != 0 ]; then wrong="$wrong $sp(rc=$rc)"; continue; fi
         for pat in "$@"; do
@@ -230,7 +230,13 @@ cwd_selector()
 }
 
 for form in typed abs cwdrel; do
-    cwd_selector "(6) --edit-check=<$form root>/pkg/store.py:load" "$PY" "$form" --edit-check pkg/store.py:load 'sym="load"' '<c n="handler" p="app/views.py:4"/>'
+    # lane lean-trio (idea #11): an unchanged, unflagged contract MAY be its verdict line (no <c> rows), so the default
+    # answer is read off the root: p= is the definition the selector named, callers="1" its caller.
+    cwd_selector "(6) --edit-check=<$form root>/pkg/store.py:load" "$PY" "$form" --edit-check pkg/store.py:load 'sym="load"' 'p="pkg/store.py:1"' 'callers="1"'
+    # PROCESS rule 4 (fix round 1, rv-lean-trio item 4): the caller IDENTITY the arm asserted before idea #11, on a --limit=40
+    # twin (an explicit window is always the full document), so a wrong-file caller cannot pass under any spelling.
+    CWD_EXTRA=--limit=40 cwd_selector "(6) --edit-check=<$form root>/pkg/store.py:load --limit=40" "$PY" "$form" --edit-check pkg/store.py:load \
+        'sym="load"' '<c n="handler" p="app/views.py:4"/>'
     cwd_selector "(6) --callers=<$form root>/pkg/store.py:load"    "$PY" "$form" --callers    pkg/store.py:load 'count="1"' '<s t="fn" n="handler" p="app/views.py:4" sites_at="app/views.py:5"/>'
     cwd_selector "(6) --at=<$form root>/pkg/store.py:2"            "$PY" "$form" --at         pkg/store.py:2    'sym="load"'
     cwd_selector "(6) --affected=<$form root>/pkg/store.py"        "$PY" "$form" --affected   pkg/store.py      'seeds="1"' 'reached="1"'

@@ -504,6 +504,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // (kZoomBridgeCap); shown_symbols= is --tree's on <tree> (kTreeSymbolsPerFile). Their *_capped= siblings read in the
     // shared sub-cap clause.
     { "importers_next",    "importers_next=: the call listing every importer", true, "impact" },
+    // idea #6 (lane lean-trio): the reach set's per-file rollup element and the umbrella-header count, present-only
+    { "importers_umbrella", "importers_umbrella=1: SYM's file is imported by half the files that import anything (and over 40); importers are a count, importers_next= lists them", true, "impact" },
+    { "shown_files", "files files=/shown_files=: files the WHOLE reach set touches (rides beside a cut symbol window) / listed; rf syms= reached symbols there, d= fewest hops; files_capped=1 + files_next= when cut", true, "files", MapHeaderRead::No, {}, "impact" },
     { "shown_bridges",     "shown_bridges=/bridges=: <bridge> rows printed (the 12 heaviest) / all pairs", false, "zoom", MapHeaderRead::No, {}, "zoom" },
     { "shown_symbols",     "shown_symbols=: <s> rows printed", false, "tree", MapHeaderRead::No, {}, "tree" },
     // THE SWEEP'S LAST PASS (2026-09-12) listed every attribute the compact --impact, --safe-delete, --communities,
@@ -714,6 +717,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "decorated-excluded", "decorated-excluded=N: decorated Python defs skipped (a decorator may register them; wrappers included); a floor", true, "dead-code", MapHeaderRead::No, {}, "dead-code" },
     // edit-check: src/editcheck.h (the <edit-check> root emit)
     { "defs", "defs=N: overloads at this site (same file, scope, name) folded into one contract; params compared by MAX", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
+    // idea #11: present-only — rides only the verdict-only (unchanged, nothing flagged) answer, which prints no c rows
+    { "rows_next", "rows_next=: the call listing the c rows", true, "edit-check", MapHeaderRead::No, {}, "edit-check" },
     { "shown_unflagged", "shown_unflagged=N: unflagged callers on this page; flagged ones always print, total= counts unflagged only", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
     // 2026-10-01: present-only — rides only a C/C++ definition whose declaration's defaults widened its accepted arity
     { "defaults_from", "defaults_from=decl: a C/C++ declaration of this definition (same types) has defaults; calls within them are never flagged", false, "edit-check", MapHeaderRead::No, {}, "edit-check" },
@@ -750,6 +755,9 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "gap_syms", "gap_syms=N: searched symbols carrying gaps; <gap t= n= p= gaps=> rows, nearest from= first, are where the search could not see, never a hop; gap_syms_capped=1 more than shown", false, "path", MapHeaderRead::No, {}, "path" },
     // quality-delta: src/verbs_quality.h (root emit) + src/quality.h identityDisclosure
     { "stale", "stale=N: ack ledger rows whose target no longer applies (sa rows); never gating", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    // idea #11 (lane lean-trio): present-only, on a regression-free answer whose stale sa rows were collapsed to counts
+    { "stale_by_kind", "stale_by_kind=: stale= split by ack kind (kind:N,...); the sa rows are collapsed", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "stale_next", "stale_next=: the call printing the sa rows and the full header", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "preexisting-worse", "preexisting-worse=N: regressions on symbols that existed at baseline; they gate when major", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "new-symbol", "new-symbol=N: findings on NEW code; new-symbol rows never gate, except defect-shape format-arity", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "register-macro-excluded", "register-macro-excluded=N: symbols kept out of dead-code as self-registering test/bench macros; a floor", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
@@ -872,6 +880,9 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // undefined; and line_bytes= — the one disclosure that a row's matched text was CUT (search.h kGrepMatchedLineMaxBytes)
     // — reached a compact reader as a bare number. Present-only, like every term here.
     { "tier", "tier=: the span tier served when not code alone: comment, string, comment+string, or code+string (no code hit in source code; source strings lifted)", false, "grep", MapHeaderRead::No, {}, "grep" },
+    // idea #5 (lane lean-trio): present-only, on a code+string answer — the served string count and the row order it brings
+    { "string_hits", "string_hits=N: of hits=, string-tier; rows: files named like the pattern, source, then the rest", false, "grep", MapHeaderRead::No, {}, "grep" },
+    { "ref", "hit ref=: first code site (not a comment/string) naming the hit's callerless enclosing def (where it is registered; one site)", true, "hit", MapHeaderRead::No, {}, "grep" },
     { "tier_budget", "tier_budget=: files|bytes cap hit after tier_parsed= of tier_files= hit files; tier counts floors, every row served", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "line_bytes", "line_bytes=N: whole line N bytes; text is a cut prefix", true, "hit", MapHeaderRead::No, {}, "grep" },
     { "unindexed_files_scanned", "unindexed_files_scanned=N: off-index text files also scanned; outside complete=", false, "grep", MapHeaderRead::No, {}, "grep" },
@@ -2421,6 +2432,22 @@ inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hi
 {
     const std::size_t delivered = compactDeliveredBytes( candidate, hint );
     return delivered > 0 ? delivered : candidate.size();
+}
+
+// A FOLD — an answer that leaves rows out and names the call that prints them (edit-check's verdict line and rows_next=,
+// quality-delta's stale_by_kind= and stale_next=) — ships only when it PAYS (lane lean-trio fix round 1, owner ruling 5: a
+// fold must never hide a row for no byte gain). It pays when it is shorter than the full document by at least
+// kFoldMinSavingPct percent, as written (the full legend posture) AND as the compact layer delivers both (L1: the legend dial
+// never moves the payload). Why a margin and not merely "shorter": a reader who needs a folded row pays the full document
+// again on the second call, so with a need rate p the fold saves bytes only while folded < (1 - p) x full. p is UNMEASURED
+// (reports/knob-census.md, fold-honesty table), so the prior is one in four; fx --edit-check=blend (3 callers) saved 5 B of
+// 962 (0.5%) and keeps its rows, this repo's clean --edit-check=escapeXml (66%) and --quality-delta (93%) still fold.
+inline constexpr std::size_t kFoldMinSavingPct = 25;
+
+[[nodiscard]] inline bool foldPays( std::string_view folded, std::string_view full, std::string_view hint = {} )
+{
+    const auto pays = []( std::size_t f, std::size_t u ) noexcept { return f * 100 < u * ( 100 - kFoldMinSavingPct ); };
+    return pays( folded.size(), full.size() ) && pays( compactDeliveredBytesOrWritten( folded, hint ), compactDeliveredBytesOrWritten( full, hint ) );
 }
 
 } // namespace rw
