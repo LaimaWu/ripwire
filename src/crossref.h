@@ -2511,13 +2511,7 @@ struct BranchBlobReadBack
         NotReadBackWhole,   // the second read served no text blob, or one of another size than the scan's
     };
     bool whole = true;
-    void disclose( DisclosureWhy why ) noexcept
-    {
-        switch( why )
-        {
-            case DisclosureWhy::NotReadBackWhole: whole = false; break;
-        }
-    }
+    void disclose( DisclosureWhy ) noexcept { whole = false; }   // its one reason: the entry confirms nothing
 };
 
 inline std::vector<BranchBlobReadBack> readBranchParseBatch( const std::string& root, std::vector<BranchParseJob>& jobs,
@@ -4170,11 +4164,10 @@ inline std::size_t whereisPageCutRows( const WhereResult& res, const ListedHits&
 // next= replays the question under --detail=1, which prints every line whole. Absent when no row was cut.
 inline void writeWhereisTextCut( std::FILE* out, const WhereResult& res, std::size_t cutRows, WhereisListing asked )
 {
-    if( cutRows == 0 )
+    if( cutRows > 0 )
     {
-        return;
+        rw::emitTo( out, "<t_cut rows=\"{}\"{}/>", cutRows, whereisDetailNext( res, asked ).c_str() );
     }
-    rw::emitTo( out, "<t_cut rows=\"{}\"{}/>", cutRows, whereisDetailNext( res, asked ).c_str() );
 }
 
 // The rows of the page, its <more hits=> remainder and the <refs count= next=> element (writeWhereisPage).
