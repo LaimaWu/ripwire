@@ -463,7 +463,11 @@ for LG in py ts go; do
             || no "multidef $LG: $NM-definition near miss: $NRF rf rows, hedge or sentence present"
     done
     if command -v xmllint >/dev/null 2>&1; then
-        printf '%s' "$M_OUT" | xmllint --noout - 2>/dev/null && ok "multidef $LG: well-formed with the hedge sentence (--legend=full)" || no "multidef $LG: malformed XML"
+        if printf '%s' "$M_OUT" | xmllint --noout - 2>/dev/null; then
+            ok "multidef $LG: well-formed with the hedge sentence (--legend=full)"
+        else
+            no "multidef $LG: malformed XML"
+        fi
     fi
     [ $LG = py ] && {
         MCP_M="$( printf '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}\n{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact","arguments":{"path":"%s","symbol":"arrange"}}}\n' "$MD" \
