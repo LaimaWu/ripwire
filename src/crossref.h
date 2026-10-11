@@ -4155,7 +4155,11 @@ inline void writeWhereisUnparsed( std::FILE* out, const WhereResult& res, Wherei
 // least the 100 bytes between that and kWhereisTextPreviewCapBytes. A page that prints previews cuts EVERY such row.
 inline bool whereisTextCut( const ListedHits& listed, const WhereHit& h ) noexcept
 {
-    return listed.textPreview && h.text.size() > kWhereisTextWholeMaxBytes;
+    if( !listed.textPreview )
+    {
+        return false;   // the page prints whole: its cut render was not shorter, or --detail / the full-text flag asked
+    }
+    return h.text.size() > kWhereisTextWholeMaxBytes;
 }
 
 // The rows of this page whose t= is a preview (whereisTextCut): the <t_cut rows=> count and the trigger of the legend's
