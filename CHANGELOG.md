@@ -268,7 +268,8 @@ interface. The `<iface>` carries `transitive=N`; `implementors=` still counts th
 deeper row is unchanged. The deeper rows are one page of at most 200 (a runaway guard): a cut says
 `transitive_shown=` and `has_more="1"` with a `next=` that pages on, and `--limit`/`--offset` (MCP `limit`/`offset`) page
 them. `--lego` honors `--limit`/`--offset` only for this window; without one it keeps its `--max-tokens` notice. The
-`tools/list` manifest grows 46,930 → 47,114 B (+184 B: the declared `limit` and `offset` arguments on `lego`).
+`tools/list` manifest grows 47,109 → 47,293 B on this release's tree (+184 B: the declared `limit` and `offset` arguments on
+`lego`; 46,930 → 47,114 B on the lane's base).
 
 The walk below the direct rows follows only extends/implements clauses the index PROVES name the type above: a class
 declared in a scope enclosing the clause (`class Leaf( Mid )` beside its own `Mid`, `b::Mid` inside `namespace b`), the
@@ -2696,8 +2697,8 @@ declared the pair, `pack_task` is a dispatch alias, not a listed tool — and `w
 is 5 B shorter, the parser-label entry above), and the ceiling moves 46,950 → 47,150 B
 - the one sanctioned case that moves it: `explore`'s two declared schema properties
 (`test/mcpmanifestcheck.sh` arm `(1b)` asserts the figure against a live measurement). The `--whereis` preview entry above
-then declares whereis's `full_text`: the `tools/list` manifest grows 47,109 → 47,199 B (+90 B, that one schema property), and
-the ceiling moves 47,150 → 47,240 B.
+then declares whereis's `full_text`: the `tools/list` manifest grows 47,293 → 47,383 B on this release's tree (+90 B, that one
+schema property, after the `--lego` window's +184 B; 47,109 → 47,199 B on the lane's base), and the ceiling moves 47,150 → 47,420 B.
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
 
 `LSAN_OPTIONS=… ./asan/ripwire .` — the sanitizer ritual AGENTS.md requires before a PR — aborted on any

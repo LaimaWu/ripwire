@@ -336,7 +336,11 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 # declares `full_text` (the CLI --whereis-full-text twin, the replay its <t_cut next=> names): its schema 851 -> 941 B
 # (+90 B, the one property), its description unchanged at 701 B, every other tool identical (per-tool dump, base 4c38d363 vs
 # the lane binary). 47,109 + 90 = 47,199, every byte attributed. Headroom after this line: 41 B, unchanged.
-CEILING = 47240
+# RE-ANCHORED 2026-10-11 (train 27, the merged tree): 47,240 -> 47,420, measured 47,383 B (33 tools). Per-tool JSON bytes, the
+# train-26c head 4c38d363 vs the merged binary: lego 956 -> 1,140 (+184, lego-transitive's limit/offset) and whereis 1,684 ->
+# 1,774 (+90, whereis-lean's full_text); descriptions unchanged at 22,472 B, every other tool identical. 47,109 + 184 + 90 =
+# 47,383, every byte attributed. Headroom after this line: 37 B, the #214-sized margin.
+CEILING = 47420
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )
 schemaBytes = sum( len( json.dumps( t[ "inputSchema" ], separators = ( ",", ":" ) ) ) for t in tools )
