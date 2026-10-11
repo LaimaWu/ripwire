@@ -2372,11 +2372,11 @@ inline TSNode jsClassFactoryReceiver( TSNode nameNode, std::string_view src ) no
 // factory is handed a class BODY (an object literal holding a method, jsFactoryHasClassBody), or its
 // receiver is an identifier that the file's own lexical lookup (ingest_relations.h findOutward) binds to a class declaration
 // (`class Node extends Obj { }`), a class expression (`const Node = class { }`), or another declarator this same rule keeps
-// (`const BinOp = Node.extend('BinOp', …)` makes `const Add = BinOp.extend('Add')` a class, chained up to kFactoryChainCap).
+// (`const BinOp = Node.extend('BinOp', …)` makes `const Add = BinOp.extend('Add')` a class, chained up to kExtendChainCap).
 // What it does NOT read without a class body, each a stated floor (test/legotransitivecheck.sh M2): a receiver imported
 // from another file (`const { Node } = require('./a')` — the index, not the parser, would have to say that `Node` is a
 // class), a member chain receiver (`nodes.Node.extend('X')`), and a receiver reassigned after its declaration.
-inline constexpr int kFactoryChainCap = 16;
+inline constexpr int kExtendChainCap = 16;   // factory-of-a-factory links the receiver rule follows (nunjucks: 2); past it, no class
 
 // a class BODY passed to the factory: an object literal argument after the name holding at least one method
 // (`Base.extend('View', { render() { … } })`, `{ init: function() { … } }`). A data object (`{ a: 1 }`, nunjucks'
@@ -2415,7 +2415,7 @@ inline bool jsFactoryHasClassBody( TSNode nameNode ) noexcept
 inline bool jsClassFactoryMakesClass( TSNode nameNode, std::string_view src, int depth )
 {
     const TSNode recv = jsClassFactoryReceiver( nameNode, src );
-    if( ts_node_is_null( recv ) || depth >= kFactoryChainCap )
+    if( ts_node_is_null( recv ) || depth >= kExtendChainCap )
     {
         return false;
     }

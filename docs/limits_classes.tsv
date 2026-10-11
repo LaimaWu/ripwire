@@ -23,6 +23,7 @@
 # `kMaxPartitions = 16` bounds a hand-written `--partition=N`. Review on #108 named the class; labelling
 # these OUTPUT would ask for a disclosure that could never fire, which is a different kind of dishonesty
 # from the silent cut this register was built to find.
+kBaseScopeScanCap	INDEXING
 kChaConeCap	INDEXING
 kChurnMergeBombMaxFiles	INDEXING
 kCoBoostMaxFilesPerCommit	INDEXING
@@ -35,6 +36,7 @@ kEditCheckSpellingsShown	OUTPUT
 kEvidenceCap	OUTPUT
 kExpandMaxPer	OUTPUT
 kExpandMaxSeeds	OUTPUT
+kExtendChainCap	INDEXING
 kExtendedLengthThresholdUnits	BOUNDARY
 kFieldWalkCap	INDEXING
 kForPageRowsDefault	OUTPUT
