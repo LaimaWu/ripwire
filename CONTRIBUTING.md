@@ -493,6 +493,32 @@ rules it enforces:
   (Elixir today; a Lisp-style `defn` if one is added) keep a small keyword table in C++. That table belongs in `tags.scm` once the
   mechanism lands; it is not a pattern to extend.
 
+#### Feature families: one shared handler each
+
+The same language feature is often implemented several times in per-language code (before #358 there were ~21 separate
+import extractors). The target is **one shared handler per feature family**, with languages differing only by data: their
+`tags.scm` captures in the shared vocabulary plus small per-language tables. The families:
+
+1. **Modules and imports**: import forms, re-exports, conditional and dynamic imports, includes, package entry files (#358).
+2. **Names and aliases**: renames, name lists, type aliases, re-exports.
+3. **Type definitions**: class/struct/union/enum/interface/trait/protocol, generics and templates, factory-made classes.
+4. **Inheritance and composition**: extends/implements, mixins (`include`/`extend`/`prepend`), trait impls, protocol conformance, extensions, partial classes.
+5. **Callables**: functions, methods, nested functions, lambdas, decorators, properties, operator overloads, constructors.
+6. **Dispatch**: static, virtual/override, interface, duck typing, function pointers and delegates, reflection.
+7. **Data-driven dispatch**: function tables, struct-field initializers, naming conventions (`on_*`, `test_*`), route/decorator registration, event emitters.
+8. **Preprocessing and generation**: macros, conditional compilation, generated code.
+9. **Scope and state**: globals and statics, module state, receivers (`this`/`self`), rebinding.
+10. **Entry points and build**: `main`, CLI entry declarations, package scripts, build manifests.
+11. **Tests**: test discovery per framework.
+12. **Async and concurrency**: async/await, goroutines, callbacks, futures.
+
+Work on a family goes in this order, each step its own small PR with byte-identical output on the languages already handled:
+(a) **fold duplicates**: forms already handled in two or more languages by separate code move into the shared handler;
+(b) **port by data**: a form handled in one language whose mechanism generalises gets captures for the others;
+(c) **new mechanism**: only then, a new shared handler for a form nobody handles yet.
+A per-language function for a concept another language also has (for example a `capture<Lang>Bases` beside the shared
+base-relations path) is a candidate for step (a). Claim a family or a slice of one in an issue before starting, as the #358 slices were claimed.
+
 ### Interfaces
 
 - **Structured-binding returns** over out-params: `auto [ nodes, edges ] = build( … );`.
