@@ -17,10 +17,10 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 240 | 96 | 140 | **100** |
+| 253 | 98 | 149 | **104** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 240 + 7 is the 247 constants this generator parses out of `src/`.
+are not counted as caps, and 253 + 7 is the 260 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -38,8 +38,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **132 of 240 caps are classified
-(47 INDEXING, 41 OUTPUT, 44 BOUNDARY); the remaining 108 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **139 of 253 caps are classified
+(49 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 114 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -89,7 +89,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 96 files that declare a cap — the 240 caps counted above, and no parameter.
+One table for each of the 98 files that declare a cap — the 253 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -190,6 +190,9 @@ Discloses: **none**
 | `kMaxRenameProbeFiles` | `32` | INDEXING | HEAD copies one rename probe reads; past it the probe stops (a hint, never a claim) |
 | `kMaxWorktreePaths` | `8192` | INDEXING | — |
 | `kWhereisHits` | `60` | OUTPUT | — |
+| `kWhereisParseMaxBlobs` | `256` | — | — |
+| `kWhereisTextPreviewCapBytes` | `200` | OUTPUT | the printed preview, the ellipsis included |
+| `kWhereisTextWholeMaxBytes` | `300` | OUTPUT | a line up to this prints whole, so a cut drops 100+ bytes |
 
 ### `src/darkflags.h`
 
@@ -323,7 +326,7 @@ Discloses: `capped`, `hosts_capped`
 
 ### `src/forpage.h`
 
-Discloses: **none**
+Discloses: `capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
@@ -359,6 +362,7 @@ Discloses: `importers_capped`
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kChaConeCap` | `4096` | INDEXING | per-walk discovery cap, unchanged from the per-call walk |
+| `kImpactFileRollupCap` | `20` | — | — |
 | `kMaxEdges` | `256` | — | total emitted edge cap |
 | `kMaxNodes` | `96` | — | total emitted node cap (§3 size caps) |
 | `kMaxRadius` | `12` | — | — |
@@ -475,6 +479,7 @@ Discloses: **none**
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
+| `kExtendChainCap` | `16` | INDEXING | factory-of-a-factory links the receiver rule follows (nunjucks: 2); past it, no class |
 | `kMaxQualifierHops` | `32` | INDEXING | `a::b::c::…` past 32 segments is not written C++ |
 
 ### `src/ingest_parsepool.h`
@@ -492,6 +497,7 @@ Discloses: **none**
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
+| `kBaseScopeScanCap` | `4096` | INDEXING | statements the unindexed scope scans read (not the index) |
 | `kMaxImportContainerDepth` | `256` | INDEXING | — |
 
 ### `src/ingest_sidecap.h`
@@ -583,7 +589,17 @@ Discloses: **none**
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
+| `kMaxUnservedSelectors` | `16` | — | — |
 | `kRecentRows` | `40` | — | F3: ~45 B a row; the file-level answer, not the file list |
+
+### `src/mapinventory.h`
+
+Discloses: `entries_capped`, `names_capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kInventoryEntryCap` | `256` | OUTPUT | — |
+| `kInventoryNameCeiling` | `2000` | OUTPUT | — |
 
 ### `src/mcp.h`
 
@@ -630,7 +646,6 @@ Discloses: `capped`, `blast_radius_capped`, `calledBy_capped`, `coboost_commits_
 | `kMcpPageValueMax` | `1000000000` | — | == cli.h's kPageValueMax |
 | `kMcpRecallTopKMax` | `1000` | — | — |
 | `kOtherDefCap` | `4` | OUTPUT | disclosure, not a listing — cap the tail |
-| `kRowCap` | `100` | — | — |
 
 ### `src/mention.h`
 
@@ -708,6 +723,7 @@ Discloses: `capped`, `count_capped`, `findings_capped`, `hits_capped`, `importer
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kCallHierarchyRowCap` | `40` | — | — |
+| `kCallSitesPerRowCap` | `16` | — | — |
 | `kCochangePartnerCap` | `30` | — | — |
 | `kExternalSurfaceRowCap` | `100` | — | names, by ref count (≈ 5.2 KB on this repo) |
 | `kImportReachRowCap` | `40` | — | — |
@@ -851,6 +867,7 @@ Discloses: `hits_capped`
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kGrepCollectionBudget` | `4000000` | — | — |
+| `kGrepLiftRowCap` | `10` | — | a RANKED code+string answer's default window (CLI and MCP alike) |
 | `kGrepMatchedLineMaxBytes` | `512` | — | — |
 | `kGrepTierFileBudget` | `128` | — | hit files classified per call |
 | `kMaxAffixSet` | `8` | — | cap on prefix/suffix set sizes |
@@ -867,7 +884,7 @@ Discloses: **none**
 
 ### `src/serialize.h`
 
-Discloses: `capped`, `calls_capped`, `inc_capped`, `sibs_capped`
+Discloses: `capped`, `calls_capped`, `entries_capped`, `files_capped`, `importers_capped`, `inc_capped`, `names_capped`, `sibs_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
@@ -879,6 +896,7 @@ Discloses: `capped`, `calls_capped`, `inc_capped`, `sibs_capped`
 | `kForFileTailShownCap` | `24` | — | — |
 | `kForLensDefaultTopN` | `40` | — | — |
 | `kForPayloadBudgetBytes` | `7500` | — | — |
+| `kLegoClosureRowCap` | `200` | OUTPUT | — |
 | `kMaxExpandIncludes` | `24` | — | inc= cap |
 | `kMaxExpandSibs` | `100` | — | sibs= cap — a BLOW-UP GUARD, set above the tail, not a trim of the |
 | `kMaxSig` | `240` | OUTPUT | — |
@@ -984,7 +1002,16 @@ Discloses: `capped`, `coboost_commits_capped`, `terms_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
+| `kForOwnerHopRows` | `3` | — | — |
 | `kJsonEnvelopeDigitsMax` | `10` | — | — |
+
+### `src/verbs_grep.h`
+
+Discloses: `capped`, `hits_capped`, `importers_capped`, `unindexed_candidates_capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kGrepHitRefsMax` | `4` | — | — |
 
 ### `src/verbs_lint.h`
 

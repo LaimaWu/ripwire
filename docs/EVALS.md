@@ -21,7 +21,7 @@ section, and it is not an afterthought.
 | **Co-change / known-item evals** | `--eval`, `--eval-retrieval` (see `bench/ANSWERQUALITY.md`) | Whether the tool surfaces the other files a real historical commit touched; and known-item retrieval across four rankers. |
 | **Ensemble calibration harness** | `bench/ensemblecal/` | Whether `--ensemble`'s four evidence families are actually orthogonal, how often each fires, how stable each is across commits — and the preset ladder derived from that (§9). |
 | **Differential argv harness** | `test/argvdiffcheck.sh` | That a refactor changed *nothing observable*: two binaries, every argv vector, stdout + stderr + exit code byte-identical. |
-| **The gate suite** | `test/regression.sh`, `test/pargates.py` | 678 gate scripts plus the determinism, cache-transparency and golden contracts. <!-- gatecount --> |
+| **The gate suite** | `test/regression.sh`, `test/pargates.py` | 683 gate scripts plus the determinism, cache-transparency and golden contracts. <!-- gatecount --> |
 | **`--quality-delta`** | `src/quality.h` | Ten measured code-quality failure modes, reported only where a change made them worse. |
 
 ### The labeling protocol (why the held-out eval is allowed to disagree with the ranker)
@@ -1160,7 +1160,7 @@ rows are hash-only — and no number resembling it will be reported from it.
 **Window 1 (registered 2026-09-02): VOID for the verdict.** Until issue #381 an unconfigured install resolved every session to `treatment`, so this window had no control arm, and the registered treatment − control difference cannot be computed from it. No verdict is read from it. Its four- and six-week dates (2026-09-30, 2026-10-14) are not readout dates.
 
 **Window 2: the readout clock restarts at the release that ships `arm=auto` as the default.** The rule is unchanged: one readout at four weeks, at least 40 recommended prompts per arm, and one extension to six weeks if the readout is underpowered.
-**Window start:** PENDING (the release that ships `arm=auto` writes its release date here as YYYY-MM-DD)
+**Window start:** 2026-10-11
 
 `bench/routing_ab_report.py` reads the `Window start` line: a date gives the readout date (start + 28 days) and the one-time extension date (start + 42 days); `PENDING` gives no date.
 
@@ -5861,7 +5861,7 @@ four `--quality-delta` shapes, against 2–6 before: this lane closed `sa@key`, 
 shapes by absolute legend size and reports the fraction as INFO. A `legend<=payload` arm is
 unsatisfiable on the case these verbs exist to handle well — a clean tree's payload is near-zero by
 construction — so at 40% of a 572 B payload the whole legend would have to fit in 381 B, shorter than
-the list of the ten measured kinds (eleven since 0.6.5). **A ≤40% relative ceiling for `--quality-delta` and ≤50% for
+the list of the ten measured kinds (twelve kinds now, with placeholder and defect-shape). **A ≤40% relative ceiling for `--quality-delta` and ≤50% for
 `--safe-delete`/`--test-gate` were considered and are recorded as UNREACHABLE rather than as missed
 work**: post-fix fractions are 87.0% / 91.4% / 78.8% on the clean cases and 81.4–86.7% wherever
 the payload is real. The same reasoning `test/testgatelegendbudgetcheck.sh` recorded in 2026-08-28.
@@ -5888,7 +5888,7 @@ copy here would be exactly the dialect divergence that gate exists to catch. Com
 tags, wrap, stable-order defaults), seven individually invoked standalone gates (`g1freshcheck`,
 `skillscan`, `htmlexport`, `compresscheck`, `handoffcheck`, `releaseinstallcheck`,
 `taskroutecheck`), and a single loop
-naming **678 gate scripts**, all of which exist on disk. <!-- gatecount -->
+naming **683 gate scripts**, all of which exist on disk. <!-- gatecount -->
 
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same scripts in parallel so a full
 verification fits in one sitting. It does not modify `regression.sh`.
@@ -6196,7 +6196,7 @@ These are the exact `kind=` strings the binary emits, from `src/quality.h`:
 `complexity` · `verbosity` · `nesting` · `params` · `duplication` · `dead-code` · `api-surface` ·
 `error-masking` · `short-horizon-churn` · `new-clone-of-reused-helper` · `placeholder` · `defect-shape`
 
-The first ten each target a failure mode measured in the literature; `placeholder` (added 0.6.5) is an
+The first ten each target a failure mode measured in the literature; `placeholder` (added 0.6.7) is an
 honesty check on "done" — a stub or TODO the change added — and never gates. `defect-shape` carries four
 facets in `defect=` (`format-arity`, `utf8-cut`, `dedup-first`, `vacuous-assert`), shapes this project's own
 code review kept finding; only `format-arity` gates, and on any origin (new-symbol rows never gate, except
@@ -6220,9 +6220,9 @@ output.
 The verb reports only what a change made *worse*, against git HEAD. `--quality-ack` records a
 reviewed exception; `--ack-only=KIND` scopes it.
 
-### error-masking widened: log-only and rethrow-only (0.6.5) — hand-labelled precision, and which shapes gate
+### error-masking widened: log-only and rethrow-only (0.6.7) — hand-labelled precision, and which shapes gate
 
-`error-masking` counted only an EMPTY handler (empty braces, `pass`, `...`, a comment-only body). 0.6.5 adds
+`error-masking` counted only an EMPTY handler (empty braces, `pass`, `...`, a comment-only body). 0.6.7 adds
 two shapes from `src/handlershape.h`, walked over the same parse the query rows use:
 
 - **log-only** — a BROAD handler (catches everything, or the root error type: `Exception`, `Throwable`,
@@ -6274,7 +6274,7 @@ each, 24 gating across the 40). This repository has no Python/JS handler of eith
 added in that window, so on upgrade its own reports are unchanged; the replay shows the widening costs no
 noise here, not that it finds anything here. The rows the shapes produce were measured on the corpus above.
 
-### placeholder (0.6.5) — what the eleventh kind counts, and a labelled sample
+### placeholder (0.6.7) — what the eleventh kind counts, and a labelled sample
 
 A stub or TODO the change ADDED, counted per enclosing symbol and compared with the baseline like
 error-masking. Every row is `origin="new-symbol"` by construction and never gates. It counts: Rust
@@ -7005,7 +7005,7 @@ Listed because the reason is more useful than the silence.
   shipped**. See `bench/locbench/anchorhop_calib.json`. The mention anchor's reproducible numbers are
   the ablations in §4.
 - **A single round gate-count.** Two in-tree numbers disagree (`test/pargates.py`'s docstring says
-  ~210; `test/argvdiffcheck.sh` says 200+), while the loop in `test/regression.sh` names 678. The <!-- gatecount -->
+  ~210; `test/argvdiffcheck.sh` says 200+), while the loop in `test/regression.sh` names 683. The <!-- gatecount -->
   loop is the authority; the stale docstrings are a known drift. Since 2026-09-10 the number is not
   written by hand anywhere: `docs/gatecount_build.py` derives it from the loop and rewrites every
   published site, `test/gatecountcheck.sh` fails if any of them drifts, and `test/manifestcheck.sh`

@@ -94,7 +94,9 @@ inline const char* symTag( SymKind k ) noexcept
         case SymKind::Struct:    return "struct";
         case SymKind::Interface: return "iface";
         case SymKind::Var:       return "var";
-        case SymKind::Section:   return "sec";    // markdown heading (doc structure; isolated in the graph)
+        case SymKind::Section:   return "sec";    // data-kind defs: doc headings, JSON/YAML keys, and Ruby db/schema.rb
+                                                  // columns — the Ruby ones are definitions only, NO call edges
+                                                  // (graph.h buildGraph's byName skips them; see isMeasurableKind)
         case SymKind::Macro:     return "macro";  // #define (disclosed-degraded: replacement text, not a parsed body)
         case SymKind::Field:     return "field";  // member variable (id=path::Owner::field; use-sites via --uses=Owner.field)
         case SymKind::Other:     return "other";
@@ -743,6 +745,9 @@ struct LocalNameFact
 };
 
 // An unresolved reference (call/usage). Resolved into an edge in the graph stage.
+// The prefix of a C++ call's memberPath that marks an ELEMENT-ACCESS receiver (Reference::memberPath, its C++ reading).
+inline constexpr std::string_view kCppElementMark = "[]";
+
 struct Reference
 {
     NodeId        fromSymbol = kNoNode;   // enclosing symbol (caller); kNoNode if file-scope
@@ -802,6 +807,12 @@ struct Reference
     //   memberCtor is the class a CONSTRUCTED receiver names, final segment — "Reply" for `new Reply( r ).send()`, Go
     //   "Merger" for `(&Merger{}).Len()` — with memberRoot "" (a construction has no root identifier). Both "" for every
     //   other shape and every language that records no member-call shape.
+    //   C++ (parser version 166): memberCall stays false, and a member call whose receiver is ONE element access of a one-hop
+    //   container (`m[ k ].empty()`, `v.at( i ).size()`, `rule->bindings_[ k ].empty()`) carries kCppElementMark + the container's
+    //   shape here ("m", "this.items_", "rule.bindings_"; ingest_binds.h cppElementContainer) — read only by graph.h's
+    //   StdMemberGate receiver exception (stdReceiverOf); chainOf reads memberPath only beside memberCall. A C/C++ type alias
+    //   record and a composeRel "elem" field record carry the std container's whole written text here (ingest_relations.h
+    //   stdElementContainerText).
     std::string   memberPath;
     std::string   memberCtor;
     // FE-B on #373: a Ruby receiver the code BUILDS (`User.new`, a finder, a FactoryBot build, a let or local holding one)
@@ -809,6 +820,13 @@ struct Reference
     //   memberFactory), memberVia = the method that built it. recvVar is then empty. Read through rubyTypedRecvOf.
     std::string   memberVia;
     bool          memberFactory = false;
+    // lane lego-transitive fix 1 (test/legotransitivecheck.sh NS arms), an INHERIT ref only (isInherit): the same-file declaration
+    //   the base name binds to by the language's lexical lookup, as 1 + the byte its name starts at (ingest_relations.h
+    //   localBaseBinding; 0 = no enclosing scope declares it, 0xFFFFFFFF = a scope too large to read, nothing proven). On an
+    //   inherit ref memberRoot holds the base's WRITTEN qualifier (`Outer` for `Outer.Changed`, `b` for `b::Mid`, "" bare) —
+    //   memberCall is false there, so no member-call reader sees it. graph.h's implementors builder reads both (baseEvidence).
+    //   Sits in memberFactory's alignment padding: sizeof(Reference) is unchanged.
+    std::uint32_t baseBind = 0;
 };
 
 // A Ruby call whose RECEIVER the code builds (parser version 132, test/rubytypedrecvcheck.sh): `c = Client.new` then `c.get`,

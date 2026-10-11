@@ -27,6 +27,7 @@
 #include "valuerefs.h" // the reference-as-value rows both surfaces serve beside the call rows
 
 #include <algorithm>
+#include <format>     // std::format — the <stdm> line's two spellings (stdMemberCallsSpelling)
 #include <optional>
 #include <span>
 #include <string>
@@ -87,7 +88,21 @@ struct CallHierarchyRows
     std::string         crossKind;            // cross_kind= value ("fn:1,method:10"), "" unless defs span 2+ kinds
     std::size_t         declinedIface = 0;   // callers only: declinedIfaceCallsNaming below, the root's declined_iface=
     ValueRefRows        valueRefs;     // reference-as-value round: <vr> rows, never in `rows` or any count above
+    StdMemberCallsMade  stdCalls;      // callees only: of declinedCalls, the C++ standard-member ones (graph.h stdMemberCallsMadeBy)
 };
+
+// The callees answer's <stdm> line (graph.h StdMemberGate, stdMemberCallsMadeBy), one spelling per dialect — the JSON keys
+// mirror the XML attributes, n= the same comma-joined value — absent when the definitions made no such call, so every
+// answer on a tree the gate never touched keeps its bytes.
+inline std::string stdMemberCallsSpelling( const StdMemberCallsMade& m, bool json )
+{
+    if( m.calls == 0 )
+    {
+        return {};
+    }
+    return json ? std::format( ",\"stdm\":{{\"n\":\"{}\",\"calls\":{}}}", m.names, m.calls )
+                : std::format( "<stdm n=\"{}\" calls=\"{}\"/>", m.names, m.calls );
+}
 
 // cross_kind= (comparison table hono-07, 2026-09-30): a bare `getPath` resolved to ONE free function
 // (src/utils/url.ts) and TEN `protected getPath` methods of unrelated classes, and the rows unioned their callers
@@ -357,6 +372,7 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
 
     out.declinedCalls = wantCallers ? declinedCallsNaming( g, out.matches ) : declinedCallsMadeBy( g, out.matches );
     out.declinedIface = wantCallers ? declinedIfaceCallsNaming( ing, g, out.matches ) : 0;
+    out.stdCalls      = wantCallers ? StdMemberCallsMade{} : stdMemberCallsMadeBy( g, out.matches );
 
     // LB-G (r10 §5): TIER before path — filter.h states the key once and --uses shares it. Plain path order
     // put 171 `tests/` rows ahead of anything useful on django's `--callers=bulk_create`.

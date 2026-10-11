@@ -1150,6 +1150,90 @@ bool prepareParserFor( TSParser* parser, const LangEntry& le )
     return true;
 }
 
+// ── cold-ingest profile scopes by LANGUAGE FAMILY (cli-perf-068 STEP 0) ──────────────────────────────────────────
+// A PROFILE_SCOPE names one code site, so the parse pool's per-file phases (parse, side captures, tags captures) are
+// opened through underExtractScope, which picks one of eight family-named sites per phase: the self-profile then splits
+// a cold index's parse and extraction cost by language family (the LLVM memory run reads these). In a build without
+// RIPWIRE_PROFILE the macro is nothing and this is a switch that calls `work` — same work, same order, same answer.
+enum class ExtractFamily : std::uint8_t { CFamily, Python, JsTs, JvmDotNet, GoRustSwiftDart, Scripting, Bash, DocsData, Count };
+enum class ExtractPhase : std::uint8_t { Parse, SideFacts, TagsFacts, Count };
+
+// One row per Lang, in enumerator order (model.h): the size assert below fails when a language is appended without a row.
+inline constexpr ExtractFamily kExtractFamilyByLang[] = {
+    ExtractFamily::CFamily,          // Cpp
+    ExtractFamily::Python,           // Python
+    ExtractFamily::JsTs,             // TypeScript
+    ExtractFamily::GoRustSwiftDart,  // Go
+    ExtractFamily::GoRustSwiftDart,  // Rust
+    ExtractFamily::GoRustSwiftDart,  // Swift
+    ExtractFamily::CFamily,          // ObjC
+    ExtractFamily::DocsData,         // Markdown
+    ExtractFamily::JsTs,             // JavaScript
+    ExtractFamily::Bash,             // Bash
+    ExtractFamily::JvmDotNet,        // Java
+    ExtractFamily::Scripting,        // Ruby
+    ExtractFamily::DocsData,         // Unknown
+    ExtractFamily::DocsData,         // Json
+    ExtractFamily::JvmDotNet,        // CSharp
+    ExtractFamily::CFamily,          // C
+    ExtractFamily::DocsData,         // Toml
+    ExtractFamily::DocsData,         // Yaml
+    ExtractFamily::Scripting,        // Php
+    ExtractFamily::Scripting,        // Lua
+    ExtractFamily::Scripting,        // Elixir
+    ExtractFamily::GoRustSwiftDart,  // Dart
+    ExtractFamily::JvmDotNet,        // Kotlin
+    ExtractFamily::Scripting,        // GDScript
+};
+static_assert( std::size( kExtractFamilyByLang ) == kLangCount, "one profile family row per Lang, in enumerator order" );
+static_assert( kExtractFamilyByLang[ std::size_t( Lang::Kotlin ) ] == ExtractFamily::JvmDotNet && kExtractFamilyByLang[ std::size_t( Lang::C ) ] == ExtractFamily::CFamily,
+               "the table follows Lang's enumerator order" );
+
+constexpr ExtractFamily extractFamilyOf( Lang lang ) noexcept
+{
+    const std::size_t langIdx = static_cast<std::size_t>( lang );
+    return langIdx < kLangCount ? kExtractFamilyByLang[ langIdx ] : ExtractFamily::DocsData;
+}
+
+inline constexpr const char* kExtractScopeNames[ std::size_t( ExtractPhase::Count ) ][ std::size_t( ExtractFamily::Count ) ] = {
+    { "ingest/extract[c-family]: parse one file", "ingest/extract[python]: parse one file", "ingest/extract[js-ts]: parse one file",
+      "ingest/extract[jvm-dotnet]: parse one file", "ingest/extract[go-rust-swift-dart]: parse one file", "ingest/extract[scripting]: parse one file",
+      "ingest/extract[bash]: parse one file", "ingest/extract[docs-data]: parse one file" },
+    { "ingest/extract[c-family]: side captures (relations, binds, includes, values)", "ingest/extract[python]: side captures (relations, binds, includes, values)",
+      "ingest/extract[js-ts]: side captures (relations, binds, includes, values)", "ingest/extract[jvm-dotnet]: side captures (relations, binds, includes, values)",
+      "ingest/extract[go-rust-swift-dart]: side captures (relations, binds, includes, values)", "ingest/extract[scripting]: side captures (relations, binds, includes, values)",
+      "ingest/extract[bash]: side captures (relations, binds, includes, values)", "ingest/extract[docs-data]: side captures (relations, binds, includes, values)" },
+    { "ingest/extract[c-family]: tags captures (defs, refs, metrics)", "ingest/extract[python]: tags captures (defs, refs, metrics)",
+      "ingest/extract[js-ts]: tags captures (defs, refs, metrics)", "ingest/extract[jvm-dotnet]: tags captures (defs, refs, metrics)",
+      "ingest/extract[go-rust-swift-dart]: tags captures (defs, refs, metrics)", "ingest/extract[scripting]: tags captures (defs, refs, metrics)",
+      "ingest/extract[bash]: tags captures (defs, refs, metrics)", "ingest/extract[docs-data]: tags captures (defs, refs, metrics)" },
+};
+
+template<ExtractPhase Phase, ExtractFamily Family, class Work>
+decltype( auto ) inExtractScope( Work&& work )
+{
+    PROFILE_SCOPE_DESCRIBE( kExtractScopeNames[ std::size_t( Phase ) ][ std::size_t( Family ) ] );
+    return work();
+}
+
+template<ExtractPhase Phase, class Work>
+decltype( auto ) underExtractScope( Lang lang, Work&& work )
+{
+    switch( extractFamilyOf( lang ) )
+    {
+        case ExtractFamily::CFamily:         return inExtractScope<Phase, ExtractFamily::CFamily>( work );
+        case ExtractFamily::Python:          return inExtractScope<Phase, ExtractFamily::Python>( work );
+        case ExtractFamily::JsTs:            return inExtractScope<Phase, ExtractFamily::JsTs>( work );
+        case ExtractFamily::JvmDotNet:       return inExtractScope<Phase, ExtractFamily::JvmDotNet>( work );
+        case ExtractFamily::GoRustSwiftDart: return inExtractScope<Phase, ExtractFamily::GoRustSwiftDart>( work );
+        case ExtractFamily::Scripting:       return inExtractScope<Phase, ExtractFamily::Scripting>( work );
+        case ExtractFamily::Bash:            return inExtractScope<Phase, ExtractFamily::Bash>( work );
+        case ExtractFamily::DocsData:        break;
+        case ExtractFamily::Count:           break;
+    }
+    return inExtractScope<Phase, ExtractFamily::DocsData>( work );
+}
+
 TSTree* parseTree( TSParser* parser, std::string_view src )
 {
     TSTree* tree = nullptr;
@@ -1546,11 +1630,12 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
 #endif
 
         // Elixir directives share the lexical tags context below (ElixirContext), and as of #358 so do the
-        // C-family ones: their `@import.path` captures are normalised and emitted by captureTagsFacts, and
-        // captureIncludes no longer reads a preproc_include / preproc_call at all. The walk is pure cost
-        // for those languages — it descends only allowlisted containers, and a C-family include lives at
-        // file scope or inside a preprocessor guard, which the tags query already reaches unanchored.
-        if( le.lang != Lang::Elixir && dependencyDialect( le.lang ) != DepDialect::CFamily )
+        // C-family ones and TypeScript/JavaScript's: their `@import.path` captures are normalised and emitted
+        // by captureTagsFacts, and captureIncludes no longer reads a preproc_include / preproc_call /
+        // import_statement / export_statement / require() call at all. The walk is pure cost for those
+        // languages — it descends only allowlisted containers, and the tags query already reaches the same
+        // nodes unanchored (importsFromCapture names the dialects; ingest_importcap.h keeps the reach rule).
+        if( le.lang != Lang::Elixir && !importsFromCapture( dependencyDialect( le.lang ) ) )
         {
             captureIncludes( root, le.lang, fileId, src, incs, refs, binds, constOpens, shortfall );
         }
@@ -1725,6 +1810,14 @@ inline bool isCFamilyTypeSpecifier( Lang lang, TSNode node ) noexcept
     return kindIs( t, "enum_specifier" ) || kindIs( t, "struct_specifier" ) || kindIs( t, "union_specifier" ) || kindIs( t, "class_specifier" );
 }
 
+// The two postures of one tags pass. Full: every fact the index keeps. DefinitionsOnly (definitionLinesInBlobs, --whereis on
+// other refs): the SAME definitions — every step that decides a definition's existence, name, line, kind or scope runs
+// unchanged — without the work only references, imports and metrics read: the @reference arm, @import emission,
+// complexityOf, the function-scope span, the def arm's IS-A / HAS-A / macro-body reference minting and Ruby's
+// reference and bind passes. Measured on 104 C++ header blobs: those were ~60% of this function's samples (cc_walk alone
+// ~30%, the reference arm's qualifier / receiver parent walks ~30%).
+enum class TagsCapture : std::uint8_t { Full, DefinitionsOnly };
+
 /// Append definitions and references captured by the language query, with language-specific filtering.
 /// Captured spans refer to src and root; a null cursor appends nothing. Existing output rows are retained.
 /// `ppDead` is this file's decided-dead byte ranges (preprocDeadRangesFor, computed ONCE per file by the
@@ -1732,13 +1825,15 @@ inline bool isCFamilyTypeSpecifier( Lang lang, TSNode node ) noexcept
 /// file's tags pass runs later, at the prewarm flush).
 void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t fileId, std::string_view src, TSNode root,
                        std::vector<RawDef>& defs, std::vector<RawRef>& refs, std::vector<RawBind>& binds, std::vector<Include>& includes,
-                       const std::vector<PreprocDeadRange>& ppDead, ExtractShortfall& shortfall )
+                       const std::vector<PreprocDeadRange>& ppDead, ExtractShortfall& shortfall, TagsCapture mode = TagsCapture::Full )
 {
+    const bool full = mode == TagsCapture::Full;
     if( cursor == nullptr )
     {
         return;
     }
 
+    BaseScopeIndexGuard baseScopes;   // lane lego-transitive fix 1 (mutable: lookups fill it): this file's base-lookup scope tables (ingest_relations.h)
     TSQuery* query = compiledQueryFor( le );   // shared immutable query, compiled once per grammar (pre-warmed) — do NOT delete
     if( query == nullptr )
     {
@@ -1860,7 +1955,10 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                     // order while costing an allocation and a drain block.
                     case CapRole::Import:
                     {
-                        emitCapturedImport( cap.node, fileId, le.lang, src, includes, refs, shortfall );
+                        if( full )
+                        {
+                            emitCapturedImport( cap.node, fileId, le.lang, src, includes, refs, shortfall );
+                        }
                     }
                     break;
                 }
@@ -2101,7 +2199,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             // A literal-bound name measures its LITERAL; every other def measures defNode, as before.
             const bool   literalBound = !ts_node_is_null( own.literal );
             const TSNode metricNode   = literalBound ? own.literal : defNode;
-            const auto [ cxVal, ccxVal, nestVal, localsVal, ppAltVal, humpsVal, deepVal, evVal, evWhyVal ] = fnOrMethod ? complexityOf( spanThroughBody ? body : metricNode, src, le.lang ) : Complexity{ 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, {} };
+            const auto [ cxVal, ccxVal, nestVal, localsVal, ppAltVal, humpsVal, deepVal, evVal, evWhyVal ] = fnOrMethod && full ? complexityOf( spanThroughBody ? body : metricNode, src, le.lang ) : Complexity{ 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, {} };
             d.cx        = cxVal;
             d.ccx       = ccxVal;
             d.locals    = localsVal;   // Phase 1: floor count, C/C++ only (model.h localsCountedLang) — 0 elsewhere, never emitted there
@@ -2176,7 +2274,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             d.internalLinkage = internalLinkageBit( le.lang, defNode, src );
             // A FUNCTION bound inside another function's body records that function's span (ingest_names.h
             // enclosingFunctionScope): graph.h reachableByName ranks it below every def a call outside it can name.
-            if( kind == SymKind::Function && !bindsOutsideItsFunction( roleNode, le.lang ) )
+            if( full && kind == SymKind::Function && !bindsOutsideItsFunction( roleNode, le.lang ) )
             {
                 // Descend to the OUTER of the two def nodes: a C-family def's defNode climbed from its declarator (the role
                 // node) to the function_definition, which must not read as the function enclosing itself; a multi-name
@@ -2261,9 +2359,17 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             // holds an error (fileHasError, one O(1) flag test per file) — see parseRecoveredBits.
             d.recovered = fileHasError ? parseRecoveredBits( defNode, kind, le.lang, d.scope.empty() ) : std::uint8_t( 0 );
             defs.push_back( std::move( d ) );
+            if( !full )
+            {
+                continue;   // TagsCapture::DefinitionsOnly: the reference edges below feed no definition
+            }
             if( kind == SymKind::Class || isStructOrNamedType( kind ) || kind == SymKind::Interface )
             {
                 captureBases( defNode, fileId, le.lang, src, refs );    // IS-A: inheritance edges (derived → base)
+                if( defCapSv == "definition.classfactory" )               // lane lego-transitive (M2): the factory's receiver is the base
+                {
+                    emitBaseRef( jsClassFactoryReceiver( nameNode, src ), fileId, le.lang, src, refs, defNode );
+                }
                 captureFields( defNode, fileId, le.lang, src, refs );   // HAS-A: member-variable type edges (S5-E)
             }
             else if( kind == SymKind::Macro )
@@ -2271,7 +2377,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 captureMacroBodyCalls( roleNode, fileId, le.lang, src, refs );   // macro-edges: the graph connects THROUGH the macro
             }
             }
-            else if( isRef )
+            else if( isRef && full )
             {
                 // H4: a C++ cast keyword is not a call — see isCppCastKeyword. Valid input, skipped, no alert.
                 if( le.lang == Lang::Cpp && isCppCastKeyword( nameTxt ) )
@@ -2426,7 +2532,11 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
     // `include` in `class << self` — into binds, beside the inherit reference each mixin already is.
     if( le.lang == Lang::Ruby )
     {
-        captureRubyAttrDefs( root, fileId, src, defs );
+        captureRubyDefs( root, fileId, src, defs );   // #339: the Definitions-only walker (attr defs + rendered db/schema.rb columns)
+        if( !full )
+        {
+            return;   // TagsCapture::DefinitionsOnly: the passes below write references and binds only
+        }
         captureRubyBareCalls( root, fileId, src, refs );
         captureRubyFactories( root, fileId, src, binds );
         captureRubyHelperMethods( root, fileId, src, binds );

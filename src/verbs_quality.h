@@ -824,12 +824,13 @@ struct QualityDeltaLegendParts
     const char*                                   headBasis;     // #228: head_basis= value on the root (nullptr = attribute absent)
     bool                                          anyDeclinedCallExcluded = false;   // declined-call-excluded= is on the root
     bool                                          anyValueRefExcluded     = false;   // value-ref-excluded= is on the root
+    bool                                          staleCollapsed          = false;   // idea #11: stale_by_kind=/stale_next= are on the root
 };
 
 // A DEFINITION IS EMITTED WHEN THE THING IT DEFINES IS IN THE DOCUMENT. Nothing is dropped and no limit is
 // softened: a reader can never meet an undefined name, because a name and its sentence appear together or
 // not at all. See the constants above for what each section covers and why it is conditional.
-inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
+inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p, std::FILE* out = stdout )
 {
     const auto anyCloneRow = [] ( const std::vector<rw::quality::Regression>& v )
     {
@@ -852,50 +853,50 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
         return std::any_of( v.begin(), v.end(), []( const rw::quality::Regression& r ) { return r.kind == "defect-shape"; } );
     };
 
-    std::fputs( kQdLegendCore, stdout );
+    std::fputs( kQdLegendCore, out );
 
     // (1) the ONE floor in force. Keyed off the same pointer the element prints, so the sentence cannot
     // drift from the attribute. A marker with no sentence would be a disclosure gap, so the fallthrough is
     // the git-HEAD sentence — what every non-sidecar, non-ref-pair marker degrades to.
-    if     ( p.marker == "sidecar"                          ) { std::fputs( kQdBaseSidecar,     stdout ); }
-    else if( p.marker == "ref-pair"                         ) { std::fputs( kQdBaseRefPair,     stdout ); }
-    else if( p.marker == "git-HEAD (stale sidecar removed)" ) { std::fputs( kQdBaseHeadRemoved, stdout ); }
-    else if( p.marker == "git-HEAD (stale sidecar ignored)" ) { std::fputs( kQdBaseHeadIgnored, stdout ); }
-    else if( p.marker == "git-HEAD (sidecar unreadable)"     ) { std::fputs( kQdBaseHeadUnreadable, stdout ); }
-    else if( p.marker == "git-HEAD (symlinked sidecar refused)" ) { std::fputs( kQdBaseHeadSymlinkRefused, stdout ); }
-    else if( p.marker == "git-HEAD (foreign sidecar ignored)"   ) { std::fputs( kQdBaseHeadForeign, stdout ); }
-    else                                                      { std::fputs( kQdBaseHead,        stdout ); }
+    if     ( p.marker == "sidecar"                          ) { std::fputs( kQdBaseSidecar,     out ); }
+    else if( p.marker == "ref-pair"                         ) { std::fputs( kQdBaseRefPair,     out ); }
+    else if( p.marker == "git-HEAD (stale sidecar removed)" ) { std::fputs( kQdBaseHeadRemoved, out ); }
+    else if( p.marker == "git-HEAD (stale sidecar ignored)" ) { std::fputs( kQdBaseHeadIgnored, out ); }
+    else if( p.marker == "git-HEAD (sidecar unreadable)"     ) { std::fputs( kQdBaseHeadUnreadable, out ); }
+    else if( p.marker == "git-HEAD (symlinked sidecar refused)" ) { std::fputs( kQdBaseHeadSymlinkRefused, out ); }
+    else if( p.marker == "git-HEAD (foreign sidecar ignored)"   ) { std::fputs( kQdBaseHeadForeign, out ); }
+    else                                                      { std::fputs( kQdBaseHead,        out ); }
     if( p.baselineAbsorbed > 0 )
     {
-        std::fputs( kQdBaselineAbsorbedLegend, stdout );   // H11 — the attribute that re-reads the exit code
+        std::fputs( kQdBaselineAbsorbedLegend, out );   // H11 — the attribute that re-reads the exit code
     }
     // #228 — the attribute that says WHICH git-HEAD floor this is, one sentence per value it can carry.
     if( p.headBasis != nullptr )
     {
-        std::fputs( std::string_view( p.headBasis ) == "identity" ? kQdHeadBasisIdentityLegend : kQdHeadBasisArchivedLegend, stdout );
+        std::fputs( std::string_view( p.headBasis ) == "identity" ? kQdHeadBasisIdentityLegend : kQdHeadBasisArchivedLegend, out );
     }
 
     // (2) at= is omitted in the ref-pair form, so its sentence follows the attribute, not the verb.
     if( !p.refPair )
     {
-        std::fputs( kQdAtLegend, stdout );
+        std::fputs( kQdAtLegend, out );
     }
     if( p.anyRegisterMacro )
     {
-        std::fputs( kQdRegisterMacroLegend, stdout );
+        std::fputs( kQdRegisterMacroLegend, out );
     }
     if( p.anyRegisterMacroWarning )
     {
-        std::fputs( kQdRegisterMacroWarnLegend, stdout );
+        std::fputs( kQdRegisterMacroWarnLegend, out );
     }
     if( p.anyDeclinedCallExcluded )
     {
         std::fputs( "declined-call-excluded= is a FLOOR, not a finding: symbols this run kept out of the dead-code kind only because a call "
-                    "the resolver declined to bind (the map's declined=) could have meant them. Never gates; absent at zero. ", stdout );
+                    "the resolver declined to bind (the map's declined=) could have meant them. Never gates; absent at zero. ", out );
     }
     if( p.anyValueRefExcluded )
     {
-        rw::emitRaw( stdout, "value-ref-excluded= is a FLOOR, not a finding: symbols this run kept out of the dead-code kind only because a table, "
+        rw::emitRaw( out, "value-ref-excluded= is a FLOOR, not a finding: symbols this run kept out of the dead-code kind only because a table, "
                              "field, argument or registering decorator holds them as a VALUE (matched by name; it is not a proven call; the callers "
                              "verb lists the sites; @classmethod-style wrappers do not count), "
                              "the --dead-code verb's own rule. Never gates; absent at zero. " );
@@ -905,57 +906,63 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p )
     // git-INDEPENDENT, so it is a separate condition rather than a clause of the first.
     if( !p.identityAttrs.empty() )
     {
-        std::fputs( kQdIdentityLegend, stdout );
+        std::fputs( kQdIdentityLegend, out );
         if( p.anyAcked )
         {
-            std::fputs( kQdIdentityMechLegend, stdout );
+            std::fputs( kQdIdentityMechLegend, out );
         }
     }
     if( p.identityAttrs.find( "acks_rekeyed_by_scheme=" ) != std::string_view::npos
         || p.identityAttrs.find( "scheme_ambiguous=" ) != std::string_view::npos )
     {
-        std::fputs( kQdSchemeLegend, stdout );
+        std::fputs( kQdSchemeLegend, out );
     }
 
     // (4) key= and the why= taxonomy exist only in a document that has sa rows. stale= itself is a header
     // counter, always printed, and is defined in the core paragraph's axis list.
     if( p.anySaRow )
     {
-        std::fputs( kQdStaleLegend, stdout );
+        std::fputs( kQdStaleLegend, out );
     }
 
     // (5) the row dictionary, and its clone-family half. A clean tree emits neither attribute set, so at the
     // "done" checkpoint an agent actually makes, the reader pays for neither.
     if( !p.rows.empty() || !p.disclosedRows.empty() )
     {
-        std::fputs( kQdRowLegend, stdout );
+        std::fputs( kQdRowLegend, out );
         if( anyCloneRow( p.rows ) || anyCloneRow( p.disclosedRows ) )
         {
-            std::fputs( kQdCloneLegend, stdout );
+            std::fputs( kQdCloneLegend, out );
         }
         if( anyMinorMaskRow( p.rows ) || anyMinorMaskRow( p.disclosedRows ) )
         {
-            rw::emitRaw( stdout, kQdMaskReportOnlyLegend );
+            rw::emitRaw( out, kQdMaskReportOnlyLegend );
         }
         if( anyPlaceholderRow( p.rows ) || anyPlaceholderRow( p.disclosedRows ) )
         {
-            rw::emitRaw( stdout, kQdPlaceholderLegend );
+            rw::emitRaw( out, kQdPlaceholderLegend );
         }
         if( anyDefectShapeRow( p.rows ) || anyDefectShapeRow( p.disclosedRows ) )
         {
-            rw::emitRaw( stdout, kQdDefectShapeLegend );
+            rw::emitRaw( out, kQdDefectShapeLegend );
         }
     }
 
     if( p.scoped )
     {
-        std::fputs( kScopeLegend, stdout );
+        std::fputs( kScopeLegend, out );
     }
     if( p.anyForeignAck )
     {
-        std::fputs( kForeignAcksLegend, stdout );
+        std::fputs( kForeignAcksLegend, out );
     }
-    std::fputs( "-->", stdout );   // every section constant above ends with its own separating space
+    if( p.staleCollapsed )
+    {
+        // idea #11: the collapse, named where its attributes are. No flag spelling (a double dash is illegal in a comment).
+        std::fputs( "stale_by_kind= splits stale= by ack kind (kind:N, comma-separated): on an answer with no regression the stale "
+                    "sa rows are collapsed to these counts when that saves at least a quarter of the bytes, and stale_next= is the call that prints them. ", out );
+    }
+    std::fputs( "-->", out );   // every section constant above ends with its own separating space
 }
 
 // F-13 — the one place both --dead-code and --quality-delta turn a RegisterMacroConfigDiagnostics into
@@ -1673,34 +1680,43 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         // emitQualityDeltaLegend above holds the section table and the reasoning; it is passed the same
         // values the root element below prints, so "the legend defines what the header emits" is read off
         // one set of values rather than restated as a second condition that could drift from it.
-        emitQualityDeltaLegend( { baseSel.marker, refPair, identityAttrs, !saRows.empty(), ackedCount > 0,
-                                  basis.registerMacroExcluded > 0, configDiag.total() > 0, regs, outOfScope,
-                                  scope.active() || !foreignAcks.empty(), !foreignAcks.empty(), baselineAbsorbed,
-                                  basis.headBasis, basis.declinedCallExcluded > 0, basis.valueRefExcluded > 0 } );
-        const char* baseMarker = baseSel.marker;    // R3: ditto — one seam decides staleness AND names it
-        // 2026-09-06: what the sidecar readers skipped, on the root (absent means none) — see kQdBaseHeadUnreadable
-        std::string sidecarHealthAttrs;
-        if( baseSel.sidecarBadLines > 0 ) { sidecarHealthAttrs += " baseline_bad_lines=\"" + std::to_string( baseSel.sidecarBadLines ) + "\""; }
-        if( basis.acksBadLines > 0 )      { sidecarHealthAttrs += " acks_bad_lines=\"" + std::to_string( basis.acksBadLines ) + "\""; }
-        // #228: present-only, and its absence is the ordinary archived HEAD tree — the floor every git-HEAD
-        // marker named on its own before this attribute existed.
-        if( basis.headBasis != nullptr )  { sidecarHealthAttrs += std::string( " head_basis=\"" ) + basis.headBasis + "\""; }
-        if( basis.declinedCallExcluded > 0 ) { sidecarHealthAttrs += " declined-call-excluded=\"" + std::to_string( basis.declinedCallExcluded ) + "\""; }
-        sidecarHealthAttrs += rw::countAttrXmlOrEmpty( "value-ref-excluded", basis.valueRefExcluded );   // absent at zero, beside its sibling
-        // at= anchors this regression list to the commit (+dirty state) it was computed against.
-        rw::emitTo( stdout, "<quality-delta baseline=\"{}\" regressions=\"{}\" minor=\"{}\" acked=\"{}\" stale=\"{}\" preexisting-worse=\"{}\" new-symbol=\"{}\" gating=\"{}\" register-macro-excluded=\"{}\" api-new-surface=\"{}\"{}{}{}{}{}{}{}>",
-                     baseMarker, regs.size(), minorCount, ackedCount, staleAcks.size(), preexistingCount, newSymbolCount, gatingCount, basis.registerMacroExcluded, basis.apiNewSurface,
-                     // R-I: at= is OMITTED for the ref-pair form rather than stamped with the working tree's
-                     // sha, which would anchor the list to a commit it was not computed from. base_ref= and
-                     // target_ref= are the anchor there, and they carry FULL shas because a wave measurement
-                     // gets quoted into handoffs where a 9-char prefix is one collision from unverifiable.
-                     refPair ? "" : gitstamp::atAttr( root ).c_str(), refs.attrs.c_str(), identityAttrs.c_str(),
-                     scopeAttrs.c_str(), configWarnAttr.c_str(), baselineAbsorbedAttr.c_str(), sidecarHealthAttrs.c_str() );
+        // idea #11 — THE CLEAN-TREE PAYLOAD. A regression-free answer collapses its stale-ack rows to counts (stale= and
+        // stale_by_kind=), and stale_next= is the call that prints them; on a tree that IS its HEAD (head_basis="identity":
+        // the floor is this tree's own snapshot) with nothing else to disclose, the verdict is the whole answer. Foreign-
+        // scope rows are never collapsed: they are about findings suppressed RIGHT NOW. --show-stale restores today's
+        // document byte for byte, so every collapsed row and attribute is one flag away (PROCESS rule 5).
+        const bool collapseStale = regs.empty() && outOfScope.empty() && !cfg.showStale && !staleAcks.empty();
+        std::string staleCollapseAttrs;
+        if( collapseStale )
+        {
+            std::vector<std::pair<std::string, std::size_t>> byKind;   // first-appearance order of the ledger's own row order
+            for( const quality::StaleAck& a : staleAcks )
+            {
+                // the KIND, without the ack's :new-symbol/:preexisting facet — the rows (stale_next=) carry the facet
+                const std::string kind = a.kind.substr( 0, a.kind.find( ':' ) );
+                const auto it = std::find_if( byKind.begin(), byKind.end(), [ & ]( const auto& kv ) { return kv.first == kind; } );
+                if( it == byKind.end() ) { byKind.emplace_back( kind, 1 ); } else { ++it->second; }
+            }
+            std::string kinds;
+            for( const auto& [ kind, n ] : byKind )
+            {
+                kinds += ( kinds.empty() ? "" : "," ) + kind + ":" + std::to_string( n );
+            }
+            std::string replay = cfg.qualityDeltaRange.empty() ? std::string( "--quality-delta" ) : rw::nextFlag( "--quality-delta=", cfg.qualityDeltaRange );
+            if( scope.active() )
+            {
+                replay += " " + rw::nextFlag( "--scope=", cfg.qualityScope );
+            }
+            staleCollapseAttrs = " stale_by_kind=\"" + ex( kinds ) + "\"" + rw::nextAttrXml( replay + " --show-stale", "stale_next" );
+        }
+        const bool verdictOnly = collapseStale && !refPair && basis.headBasis != nullptr && std::string_view( basis.headBasis ) == "identity"
+                              && !scope.active() && foreignAcks.empty() && ackedCount == 0 && configDiag.total() == 0 && baselineAbsorbed == 0
+                              && basis.apiNewSurface == 0 && baseSel.sidecarBadLines == 0 && basis.acksBadLines == 0;
         // P1: ONE row emitter for both halves of the scope partition — a disclosed row carries the identical
         // attribute set, because nothing about a finding changes by belonging to someone else. `gatingAllowed`
         // is the one difference: an out-of-scope row is not what the exit code fires on, and a gating
         // attribute on it would contradict the header's own gating counter inside the same document.
-        const auto emitRow = [ & ]( const quality::Regression& r, bool gatingAllowed )
+        const auto emitRow = [ & ]( std::FILE* out, const quality::Regression& r, bool gatingAllowed )
         {
             // duplication carries a member LIST (members=) + token count; the per-symbol was/now kinds
             // (complexity/verbosity/nesting/params) carry was/now; api-surface + dead-code are sym-only.
@@ -1755,11 +1771,11 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
             }
             if( r.kind == "duplication" )
             {
-                rw::emitTo( stdout, "<r kind=\"duplication\" members=\"{}\" tokens=\"{}\"{}{}{}{}{}/>", ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.now, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr );
+                rw::emitTo( out, "<r kind=\"duplication\" members=\"{}\" tokens=\"{}\"{}{}{}{}{}/>", ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.now, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr );
             }
             else if( r.kind == "dead-code" )
             {
-                rw::emitTo( stdout, "<r kind=\"{}\" sym=\"{}\"{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
+                rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\"{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
             // B10.2e: api-surface now carries two shapes — a brand-new/newly-public symbol (was=now=0, no
             // param comparison to show) and a param-count contract-change (was/now = the real counts). Print
             // was/now whenever they differ from each other so the contract-change case's was=/now= is visible
@@ -1767,39 +1783,99 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
             }
             else if( r.kind == "api-surface" && r.was == r.now )
             {
-                rw::emitTo( stdout, "<r kind=\"{}\" sym=\"{}\"{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
+                rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\"{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
             }
             else
             {
-                rw::emitTo( stdout, "<r kind=\"{}\" sym=\"{}\" was=\"{}\" now=\"{}\"{}{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.was, r.now, barAttr, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
+                rw::emitTo( out, "<r kind=\"{}\" sym=\"{}\" was=\"{}\" now=\"{}\"{}{}{}{}{}{}{}/>", r.kind.c_str(), ex( quality::displaySym( r.sym, deltaRoot ) ).c_str(), r.was, r.now, barAttr, sev, facetAttr.c_str(), origin, locAttr.c_str(), gatingAttr, nextAttr.c_str() );
             }
         };
-        for( const quality::Regression& r : regs )
+        // Fix round 1 (rv-lean-trio item 5, owner ruling 5): a fold ships only when it PAYS (compactlegend.h foldPays: shorter
+        // by its margin, as written AND as the compact layer delivers it). The whole XML document is one renderer over a FILE*,
+        // so both candidates are rendered and measured, and the full document wins a fold that does not pay or a failed render
+        // (fx, dirty tree, one stale ack: 1512 B folded vs 1481 B full).
+        // `collapse` picks the stale rows' form: true serves only the foreign-scope rows and the stale_by_kind=/stale_next= counts.
+        // R-I: at= is OMITTED for the ref-pair form (see the root below). Read ONCE: both candidates print the same stamp.
+        const std::string atAttrs = refPair ? std::string() : gitstamp::atAttr( root );
+        const auto emitDocument = [ & ]( std::FILE* out, bool collapse )
         {
-            emitRow( r, /*gatingAllowed=*/true );
-        }
-        if( scope.active() )
-        {
-            // P1 — the DISCLOSURE half. Dropping these rows would make a scoped report a quieter lie than
-            // the unscoped one it replaces: the debt is real, it is in the same tree, and it will be in
-            // someone's report. So they are printed, in their own element, marked non-gating, with the one
-            // sentence a reader needs written where they meet it. Emitted even when EMPTY — an absent
-            // element then means "no scope was given", never "nobody else has anything open".
-            rw::emitTo( stdout, "<out-of-scope n=\"{}\" would-gate=\"{}\" note=\"not yours - do not ack: these rows lie outside the scope this run named. "
-                         "They are disclosed rather than hidden, they never gate this exit code, and the ack refuses to write them.\">",
-                         outOfScope.size(), scopedOutGating );
-            for( const quality::Regression& r : outOfScope )
+            const std::vector<quality::StaleAck>& served = collapse ? foreignAcks : saRows;
+            emitQualityDeltaLegend( { baseSel.marker, refPair, identityAttrs, !served.empty(), ackedCount > 0,
+                                      basis.registerMacroExcluded > 0, configDiag.total() > 0, regs, outOfScope,
+                                      scope.active() || !foreignAcks.empty(), !foreignAcks.empty(), baselineAbsorbed,
+                                      basis.headBasis, basis.declinedCallExcluded > 0, basis.valueRefExcluded > 0, collapse }, out );
+            const char* baseMarker = baseSel.marker;    // R3: ditto — one seam decides staleness AND names it
+            // 2026-09-06: what the sidecar readers skipped, on the root (absent means none) — see kQdBaseHeadUnreadable
+            std::string sidecarHealthAttrs;
+            if( baseSel.sidecarBadLines > 0 ) { sidecarHealthAttrs += " baseline_bad_lines=\"" + std::to_string( baseSel.sidecarBadLines ) + "\""; }
+            if( basis.acksBadLines > 0 )      { sidecarHealthAttrs += " acks_bad_lines=\"" + std::to_string( basis.acksBadLines ) + "\""; }
+            // #228: present-only, and its absence is the ordinary archived HEAD tree — the floor every git-HEAD
+            // marker named on its own before this attribute existed.
+            if( basis.headBasis != nullptr )  { sidecarHealthAttrs += std::string( " head_basis=\"" ) + basis.headBasis + "\""; }
+            if( basis.declinedCallExcluded > 0 ) { sidecarHealthAttrs += " declined-call-excluded=\"" + std::to_string( basis.declinedCallExcluded ) + "\""; }
+            sidecarHealthAttrs += rw::countAttrXmlOrEmpty( "value-ref-excluded", basis.valueRefExcluded );   // absent at zero, beside its sibling
+            // at= anchors this regression list to the commit (+dirty state) it was computed against.
+            rw::emitTo( out, "<quality-delta baseline=\"{}\" regressions=\"{}\" minor=\"{}\" acked=\"{}\" stale=\"{}\" preexisting-worse=\"{}\" new-symbol=\"{}\" gating=\"{}\" register-macro-excluded=\"{}\" api-new-surface=\"{}\"{}{}{}{}{}{}{}>",
+                         baseMarker, regs.size(), minorCount, ackedCount, staleAcks.size(), preexistingCount, newSymbolCount, gatingCount, basis.registerMacroExcluded, basis.apiNewSurface,
+                         // R-I: at= is OMITTED for the ref-pair form rather than stamped with the working tree's
+                         // sha, which would anchor the list to a commit it was not computed from. base_ref= and
+                         // target_ref= are the anchor there, and they carry FULL shas because a wave measurement
+                         // gets quoted into handoffs where a 9-char prefix is one collision from unverifiable.
+                         atAttrs.c_str(), refs.attrs.c_str(), identityAttrs.c_str(),
+                         scopeAttrs.c_str(), configWarnAttr.c_str(), baselineAbsorbedAttr.c_str(), ( sidecarHealthAttrs + ( collapse ? staleCollapseAttrs : std::string() ) ).c_str() );
+            for( const quality::Regression& r : regs )
             {
-                emitRow( r, /*gatingAllowed=*/false );
+                emitRow( out, r, /*gatingAllowed=*/true );
             }
-            rw::emitRaw( stdout, "</out-of-scope>" );
+            if( scope.active() )
+            {
+                // P1 — the DISCLOSURE half. Dropping these rows would make a scoped report a quieter lie than
+                // the unscoped one it replaces: the debt is real, it is in the same tree, and it will be in
+                // someone's report. So they are printed, in their own element, marked non-gating, with the one
+                // sentence a reader needs written where they meet it. Emitted even when EMPTY — an absent
+                // element then means "no scope was given", never "nobody else has anything open".
+                rw::emitTo( out, "<out-of-scope n=\"{}\" would-gate=\"{}\" note=\"not yours - do not ack: these rows lie outside the scope this run named. "
+                             "They are disclosed rather than hidden, they never gate this exit code, and the ack refuses to write them.\">",
+                             outOfScope.size(), scopedOutGating );
+                for( const quality::Regression& r : outOfScope )
+                {
+                    emitRow( out, r, /*gatingAllowed=*/false );
+                }
+                rw::emitRaw( out, "</out-of-scope>" );
+            }
+            {   // L2 — one <sa> row per stale ack (quality::staleAcksXml). M21(a): the escaper is passed in
+                // because sym= carries a canonical id (corpus text), unlike the closed-vocabulary kind=/why=.
+                std::vector<char> saEsc;
+                std::fputs( quality::staleAcksXml( served, [ & ]( std::string_view t ) { return std::string( escapeXml( t, saEsc ) ); } ).c_str(), out );
+            }
+            rw::emitRaw( out, "</quality-delta>" );
+        };
+        // the identity-tree VERDICT (verdictOnly above): the root line alone
+        const auto emitVerdict = [ & ]( std::FILE* out )
+        {
+            rw::emitTo( out, "<!-- ripwire quality-delta: the tracked files ARE their git HEAD (head_basis=\"identity\"), so the floor (baseline= "
+                             "names it) is this tree's own snapshot and nothing that existed can be worse: regressions= and gating= are 0, and this line stands in "
+                             "for the full document because it saves at least a quarter of the bytes. stale= counts ack "
+                             "ledger rows whose target no longer applies (never gating), by kind in stale_by_kind=; stale_next= is the call "
+                             "that prints them with the full header (its exclusion and rename counts included). at=: commit+dirty+shallow. -->"
+                             "<quality-delta baseline=\"{}\" regressions=\"0\" gating=\"0\" stale=\"{}\"{} head_basis=\"identity\"{}></quality-delta>",
+                        baseSel.marker, staleAcks.size(), atAttrs, staleCollapseAttrs );
+        };
+        if( !collapseStale )
+        {
+            emitDocument( stdout, /*collapse=*/false );
+            return gatingCount > 0 ? 2 : 0;
         }
-        {   // L2 — one <sa> row per stale ack (quality::staleAcksXml). M21(a): the escaper is passed in
-            // because sym= carries a canonical id (corpus text), unlike the closed-vocabulary kind=/why=.
-            std::vector<char> saEsc;
-            std::fputs( quality::staleAcksXml( saRows, [ & ]( std::string_view t ) { return std::string( escapeXml( t, saEsc ) ); } ).c_str(), stdout );
+        const Rendered full   = renderToString( [ & ]( std::FILE* f ) { emitDocument( f, /*collapse=*/false ); } );
+        const Rendered folded = renderToString( [ & ]( std::FILE* f ) { if( verdictOnly ) { emitVerdict( f ); } else { emitDocument( f, /*collapse=*/true ); } } );
+        if( !full.ok || !folded.ok )
+        {
+            // renderToString DISCLOSEd the failed buffer; the full document is the superset, written straight to stdout
+            emitDocument( stdout, /*collapse=*/false );
+            return gatingCount > 0 ? 2 : 0;
         }
-        rw::emitRaw( stdout, "</quality-delta>" );
+        const std::string& chosen = foldPays( folded.text, full.text ) ? folded.text : full.text;   // compactlegend.h: the margin and why
+        std::fwrite( chosen.data(), 1, chosen.size(), stdout );
         return gatingCount > 0 ? 2 : 0;   // r26: only a PREEXISTING-worse AND major regression gates (== gating=)
     }
     return std::nullopt;
@@ -2384,8 +2460,11 @@ std::optional<int> runEditCheck( const MainDispatch& d )
     // editCheckRowWindow). cli.h's honorsPaging() lists this verb, so the pair reaches here rather than
     // being refused, and 0/0 — the un-spelled window — is the default cap, not "unbounded".
     const std::string xml = editCheckBundleText( ing, d.g, d.root, cfg.maxFileBytes, cfg.excludes, focus, d.notesPtr,
-                                                  /*preview=*/false, cfg.pageLimit, cfg.pageOffset, ecUnprovenDefs,
-                                                  d.notesDegraded );   // L3 follow-up (CodeRabbit 4053600616)
+                                                  /*preview=*/false,
+                                                  // idea #11: an unchanged, unflagged contract is its verdict line under EVERY legend
+                                                  // posture (L1: the legend dial never moves the payload); --limit lists the rows
+                                                  EditCheckPage{ cfg.pageLimit, cfg.pageOffset, /*verdictOnly=*/true, cfg.editCheckSym },
+                                                  ecUnprovenDefs, d.notesDegraded );   // L3 follow-up (CodeRabbit 4053600616)
     std::fwrite( xml.data(), 1, xml.size(), stdout );
     return 0;
 }

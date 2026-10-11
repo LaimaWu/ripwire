@@ -25,6 +25,12 @@ subsystem you're working in — also accepts a remote `ripwire <git-url>` (shall
 you can orient in a dependency before ever cloning it) — or several roots for a split checkout,
 `ripwire dir1 dir2 --report`: ONE merged, root-labeled map instead of two separate mental models.
 
+**Orient ONCE per session, then look up lean.** Plain `ripwire <dir>` is the one-call orient: the ranked map with
+the subsystems, the program entries and every file the ranking left out (`<inv>`). Only that call carries `<inv>`:
+a `--for`, `--expand` or `--max-tokens` map does not, and `--max-tokens` drops the tier (use `--top-k` to keep it).
+After it, `--expand` / `--outline` / `--whereis` / `--callers` answer with no ride-along map. If you skipped the
+orient step, the `map_next=` on an `--expand` root is the call that prints it.
+
 ## The escalation ladder — climb only until you feel oriented
 
 **0. Recall what you already KNOW** — `ripwire <dir> --recall="<the task>"`
@@ -58,7 +64,7 @@ this default deletes. `bodies="0" reason="budget"` means it did not fit whole.
 *Conceptual phrase* (`bundle="compact" bodies="0" reason="compact-route"`): no bodies — you get the ranked
 map plus a `<hops>` section, one row per top-ranked symbol with its one-hop callee names. **Read the map,
 pick ONE symbol, then `--expand=path:name`** (paste the row's own `p=` and `n=`; a bare name that is not
-unique costs you the whole map). That is the flow, and it is cheaper than the bodies were: half the bytes
+unique serves every definition, still without the map). That is the flow, and it is cheaper than the bodies were: half the bytes
 of the old bundle on conceptual queries, and the edges tell you which symbol is worth the second call.
 `--auto-bodies` restores inline bodies on that route if you want them; `--signatures-only` drops both
 shapes; `--detail=N` picks the body count explicitly.
@@ -102,6 +108,9 @@ the gnarliest function. Plan edits around this list.
 **6. Budget it** if the map is large — `--max-tokens=8000` or `--top-k=50`. Both shape the default map;
 a positive, explicit `--top-k` is inert on plain `--for` (it warns on stderr and emits the full bundle) —
 bound a `--for` call with `--signatures-only`, `--token-budget=N` or `--detail=N` instead.
+When the ranked rows leave files out, the map ends with `<inv>`: the program entries (`<entry>`, by each language's entry convention)
+and every unshown file, named or counted per directory (`<ls>`). Read it before concluding a file or entry point is
+not there; `--no-inventory` drops it (the rows are unchanged), and so does `--max-tokens` — `--top-k` keeps it.
 
 ## Orienting N agents at once, not yourself — `--partition=N`
 

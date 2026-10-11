@@ -372,6 +372,8 @@ inline constexpr McpValueSpec kMcpValueFields[] = {
     // answered and given no way to ask for the other one. Advertised as a real boolean, not a string, so a
     // quoted "true" refuses instead of being guessed at (mcpBoolArg).
     { "no_route",      "a BOOLEAN: true forces plain subtoken+body BM25 (omit it for the default router)", "no_route=true", "boolean" },
+    // whereis-lean (review C1): the CLI --whereis-full-text twin, the replay a <t_cut next=> names. Terse: it rides tools/list.
+    { "full_text",     "a BOOLEAN: true prints every t= line whole", "full_text=true", "boolean" },
     // ── the ENVELOPE, outside `params` (§B6 M6/M7) ──
     // These four were read through the bare findString/findObject path, which collapses "absent" onto
     // "present but not the shape I read" — so `"method":5` became `-32700 "parse error"` (a JSON that parsed
@@ -1039,7 +1041,7 @@ inline constexpr McpVerbFields kMcpVerbFields[] = {
     { "situational_awareness",    "path diff files limit offset" },
     { "mentions",                 "path paths symbol limit offset" },
     { "for",                      "path paths task budget_tokens no_route limit offset sections" },   // L-W: limit/offset = the file page; L2: sections = the CLI --sections= twin
-    { "lego",                     "path paths type legend" },
+    { "lego",                     "path paths type limit offset legend" },
     { "owners",                   "path symbol limit offset legend" },
     { "fetch_body",               "path handle start_line end_line" },
     { "batch",                    "path queries legend" },
@@ -1059,13 +1061,16 @@ inline constexpr McpVerbFields kMcpVerbFields[] = {
     { "affected",                 "path paths files legend" },
     { "path_between",             "path paths from to legend" },
     { "connect",                  "path paths symbols radius legend" },
-    { "explore",                  "path paths task budget_tokens partition legend no_route" },
+    // PAGING-POC (issue #294, ask (b)): limit/offset are DECLARED because explore now HONORS them — the
+    // same file-grain widening page the `for` twin serves (one inputSchema row drives this table, the
+    // tools/list stanza and mcpw3fixcheck's enumeration together).
+    { "explore",                  "path paths task budget_tokens partition legend no_route limit offset" },
     { "from_trace",               "path paths trace budget_tokens legend" },
     // 2026-09-10: limit/offset are DECLARED here because the verb now HONORS them (mcpPageArgs -> the
     // unflagged-row window in editcheck.h), the same rule the `impact`/`uses` rows above state. They
     // page the CONTEXT rows only; the flagged callers this verb exists to name are never windowed.
     { "edit_check",               "path paths symbol new_body limit offset legend" },
-    { "whereis",                  "path symbol kind limit offset listing legend" },
+    { "whereis",                  "path symbol kind limit offset listing legend full_text" },
     { "stray_content",            "path kind limit offset legend" },
     { "flags",                    "path kind symbol limit offset legend" },
     { "doc_drift",                "path kind limit offset legend" },

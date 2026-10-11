@@ -152,6 +152,7 @@ ALLOW = {
     "isDefinitionNotDeclaration": "read-only span comparison (model.h); no state — the predicate std::all_of walks above",
     "isFunctionLikeKind":        "read-only enum comparison (graph.h, a local lambda); no state — the F2 body-test scope guard",
     "any":                    "read-only member predicate (pathgaps.h PathSearchGaps::any: calls > 0); no state — the gap-cone postcondition",
+    "inCheckout":             "read-only member predicate (crossref.h WhereHit::inCheckout: fromWorktree || ref == \"HEAD\"); no state — labelJobRows' precondition that a parse job holds no checkout row",
 }
 # (T) ASSUMED-THEN-TESTED allowlist: "site -> reason", one line each. A site lands here only when the equality
 # really is a true invariant (the re-test below is dead defensive code that should eventually be deleted, not

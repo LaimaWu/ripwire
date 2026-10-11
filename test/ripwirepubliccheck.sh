@@ -1289,6 +1289,9 @@ fi
 #       hash (a re-captured line that changes at all drops back into the sweep); a regenerated capture under a new date
 #       re-keys these two entries. Added 2026-10-08 (lane/lean-answers-068 fix round 2); the tracker gap is a named
 #       deferral (harmless: it can only over-scan recorded output, never miss a recipe).
+#   docs/captures/COMMANDS_showcase_2026-10-11.md:580,595 — the same two prose lines, byte for byte (same content hashes), in the
+#       train 27 re-capture: the recorded --recall run again follows a block that ends inside a truncated "```bash" fence. Re-keyed
+#       under the new date, as the entry above says a regenerated capture does.
 ARM9_OK='bench/cppbench/run_cppbench.py:e5d3f485c59b0187
 bench/cppbench/run_cppbench.py:7e89ac16d50cd5d2
 bench/cppbench/run_cppbench.py:5d65fe73e9406e01
@@ -1301,7 +1304,9 @@ bench/substitution_report.py:c3043030dc3e5473
 docs/docs_commands_build.py:fa972c42dc369a5c
 docs/docs_commands_build.py:f10f0b8021b7b6c2
 docs/captures/COMMANDS_showcase_2026-10-08.md:118fbfbb8f6823fe
-docs/captures/COMMANDS_showcase_2026-10-08.md:22be6025a57af773'
+docs/captures/COMMANDS_showcase_2026-10-08.md:22be6025a57af773
+docs/captures/COMMANDS_showcase_2026-10-11.md:118fbfbb8f6823fe
+docs/captures/COMMANDS_showcase_2026-10-11.md:22be6025a57af773'
 python3 - "$TMP/tracked.z" "$ARM9_OK" > "$TMP/arm9" <<'PY'
 import hashlib, os, re, sys
 paths = [p.decode('utf-8', 'surrogateescape')

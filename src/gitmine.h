@@ -19,6 +19,7 @@
                                  // gitmine.h no longer carries its own copy; see jsonesc.h for the dedup rationale
 
 #include <algorithm>
+#include <array>        // popenTrimmed's 64 KB read block
 #include <atomic>       // the join's once-per-process disclosure flags
 #include <bit>          // std::popcount — the recurrence mask's set-bit count (Clio sub-windows)
 #include <cctype>
@@ -238,23 +239,27 @@ inline std::string sinceUnresolvedRefusal( std::string_view value, std::string_v
 // popen-trim shape in the tool: the quality.h git one-liners, the doctor probes, crossref.h and binstale.h all
 // reach it as quality::popenTrimmed (a using-declaration of this). It lives HERE — the lower header, which
 // quality.h includes — because resolveSinceScope needed the same reader (N4, 2026-09-04) and a second copy in
-// this file was a --quality-delta new-clone-of-reused-helper row. Built on readByteSafeLine (infra/stdinline.h),
-// the G3 byte-safe line reader every git pipe in this header uses: no fixed buffer to split a long path on
-// (churnjoincheck's G3 arm forbids fgets here), a high byte never sign-changed. Lines are re-joined with the
-// '\n' the reader consumed, so multi-line callers (crossref.h, the rename map) read exactly what fgets gave them.
+// this file was a --quality-delta new-clone-of-reused-helper row. It reads the WHOLE stream in blocks and splits
+// nothing: the answer is every byte the command wrote, then the trailing whitespace trim. That is byte-for-byte
+// what the line reader it replaces produced (each line re-joined with the '\n' it consumed, an unterminated last
+// line given one, which the trim then removes), with no fixed buffer to split a long path on (churnjoincheck's
+// G3 arm) and no high byte ever sign-changed — but one fread per 64 KB instead of one locked fgetc per byte. The
+// per-byte read was 55% of a --whereis on a 137-branch checkout (one `git ls-tree -r` per branch, cli-floor
+// 2026-10-08), and every git one-liner in the tool reads through here.
 inline std::string popenTrimmed( const std::string& cmd )
 {
+    PROFILE_SCOPE_DESCRIBE( "gitmine: popenTrimmed (one shell + git child, block read)" );
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
         return {};
     }
-    std::string out;
-    std::string line;
-    while( readByteSafeLine( pipe, line ) )
+    std::string                  out;
+    std::array<char, 64 * 1024> block;
+    for( std::size_t got = std::fread( block.data(), 1, block.size(), pipe ); got > 0; got = std::fread( block.data(), 1, block.size(), pipe ) )
     {
-        out += line;
-        out += '\n';
+        ASSUME( got <= block.size(), "fread returns at most the count it was asked for" );
+        out.append( block.data(), got );
     }
     os::pclose( pipe );
     while( !out.empty() && ( out.back() == '\n' || out.back() == '\r' || out.back() == ' ' ) )
@@ -669,7 +674,23 @@ struct GitCommandLines
     std::vector<std::string> lines;
     bool                     isStarted = false;
     int                      status    = 0;
+    bool                     abandoned = false;   // the read stopped early (abandonGitWalks): lines is a prefix, never an answer
 };
+
+// A git walk this run no longer needs: --for / --metrics / --exemplar start the 18-month history walk beside the ingest
+// (main.cpp startHistoryWalks), and a memory-guard refusal used to join that walk's future before exiting — the refusal
+// line was on stderr, the exit code waited for the end of the log (CodeRabbit on #383, main.cpp:3721). Set once,
+// process-wide, only on an exit path: the walk's reader (gitLogNameOnlyRaw, the `--name-only` stream that IS the 431 ms
+// walk) and the shared line reader (gitCommandLines) stop at their next line and pclose, git gets SIGPIPE on its next
+// write, and the join ends there. A block reader (popenTrimmed: the walk's sha-list freshness probe, milliseconds on a
+// real repository) runs to its end. A line reader that stopped early says so (`abandoned`), and the stream cache
+// (quality.h gitRawCommitStreamCached) never writes a prefix. test/memguardcheck.sh (B21).
+inline std::atomic<bool> gGitWalksAbandoned{ false };
+inline void abandonGitWalks() noexcept { gGitWalksAbandoned.store( true, std::memory_order_relaxed ); }
+inline bool gitWalksAbandoned() noexcept { return gGitWalksAbandoned.load( std::memory_order_relaxed ); }
+// the walk readers' line read: false at the end of the stream, or as soon as the walks are abandoned (the lines read so
+// far are then a prefix no caller serves or caches — both are guarded by the same flag)
+inline bool readWalkLine( std::FILE* pipe, std::string& line ) { return !gitWalksAbandoned() && readByteSafeLine( pipe, line ); }
 
 inline GitCommandLines gitCommandLines( const std::string& cmd )
 {
@@ -696,7 +717,7 @@ inline GitCommandLines gitCommandLines( const std::string& cmd )
     // is a silently DROPPED commit rather than a fabricated one — still a number the reader would trust.
     // It leaves a trailing '\r' in place by contract, which is why the strip below still runs.
     std::string line;
-    while( readByteSafeLine( pipe, line ) )
+    while( readWalkLine( pipe, line ) )
     {
         while( !line.empty() && ( line.back() == '\n' || line.back() == '\r' ) )
         {
@@ -707,7 +728,8 @@ inline GitCommandLines gitCommandLines( const std::string& cmd )
             out.lines.push_back( line );
         }
     }
-    out.status = os::pclose( pipe );
+    out.abandoned = gitWalksAbandoned();   // the rest of the stream was never read; pclose ends the child at its next write
+    out.status    = os::pclose( pipe );
     return out;
 }
 
@@ -1560,7 +1582,40 @@ struct RawCommitStream
 {
     struct Commit { std::int64_t epoch = 0; std::vector<std::string> paths; };
     std::vector<Commit> commits;
+    // K51: the walk COULD NOT BE READ (git would not start, or exited non-zero part-way) — as against "read, and the
+    // window holds no commit". `commits` is then empty or a prefix, never a measurement, and the memoizing caller
+    // must not store it: an empty stream cached under the (repo, HEAD, window) key silenced churn=/amp= until HEAD moved.
+    bool unread = false;
+    // Why, when `unread`: git never ran (no popen, or the shell could not find/execute it: exit 127/126) — `commits` is
+    // empty — as against git ran and stopped part-way, `commits` the newest-first prefix it printed before it died.
+    bool notRun = false;
+    // git's decoded exit code (WEXITSTATUS), -1 when it did not exit normally or never started; 0 on a clean read.
+    int exitCode = 0;
 };
+
+// K51: mark a walk unread. `exitCode` is git's decoded exit (-1: it never started, or did not exit normally); the shell's 127
+// (not on PATH) and 126 (not executable) mean git never ran either, so `commits` is empty, not a prefix.
+inline void markWalkUnread( RawCommitStream& out, int exitCode, bool neverStarted ) noexcept
+{
+    out.unread   = true;
+    out.exitCode = exitCode;
+    out.notRun   = neverStarted || exitCode == 127 || exitCode == 126;
+}
+
+// A pclose()/wait status as an exit code: WEXITSTATUS on a normal exit, -1 for a signal or an unreadable status.
+inline int decodedExitCode( int status ) noexcept
+{
+    return WIFEXITED( status ) ? WEXITSTATUS( status ) : -1;
+}
+
+// K51: fold the walk's pclose() status into `out` — 0 is a clean read and changes nothing.
+inline void noteWalkExit( RawCommitStream& out, int status ) noexcept
+{
+    if( status != 0 )
+    {
+        markWalkUnread( out, decodedExitCode( status ), false );
+    }
+}
 
 inline RawCommitStream gitLogNameOnlyRaw( const std::string& root, const std::string& coSince )
 {
@@ -1572,11 +1627,12 @@ inline RawCommitStream gitLogNameOnlyRaw( const std::string& root, const std::st
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
+        markWalkUnread( out, -1, true );
         return out;
     }
 
     std::string s;
-    while( readByteSafeLine( pipe, s ) )   // F6: THE line reader, not a char[4096] a long path can be split across
+    while( readWalkLine( pipe, s ) )   // F6: THE line reader, not a char[4096] a long path can be split across; stops when abandoned
     {
         while( !s.empty() && ( s.back() == '\n' || s.back() == '\r' ) )
         {
@@ -1598,7 +1654,9 @@ inline RawCommitStream gitLogNameOnlyRaw( const std::string& root, const std::st
         }
         out.commits.back().paths.push_back( std::move( s ) );   // readByteSafeLine clear()s its buffer first, so moving out of it is safe
     }
-    os::pclose( pipe );
+    // K51: git died (a missing or corrupt object, a bad ref) — the lines above are a prefix, not the window — or the shell
+    // never ran it (127: not on PATH, 126: not executable), and there are no lines at all.
+    noteWalkExit( out, os::pclose( pipe ) );
     return out;
 }
 

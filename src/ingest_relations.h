@@ -71,17 +71,460 @@ inline RawRef rawRefAt( TSNode at, std::uint32_t fileId, Lang lang, RefRole role
     return r;
 }
 
+// ---- lane lego-transitive fix 1: WHICH same-file declaration a base name binds to (parser evidence) ----------------
+// `class Leaf(Mid)` used to reach the implementors builder as the bare NAME `Mid`, which graph.h bound to every class of
+// that name in the tree — so `--lego=Base` listed b.py's `Leaf` under a.py's unrelated `Mid` as a depth-2 subtype. The
+// parser can see what the language's own lookup sees for a name written in the file: a class declared in an enclosing
+// scope (the innermost wins), reached the way the source writes it (`Outer.Changed` → the `Changed` inside `Outer`,
+// `b::Mid` → the `Mid` inside `namespace b`, including a reopened `namespace b { }` block). It records the NAME BYTE of
+// that declaration on the reference (RawRef::baseBind), and graph.h proves the edge to the one candidate whose span holds
+// it. A name no enclosing scope declares records nothing here: graph.h then asks the file's imports / includes / package.
+// What it does NOT read: a `using namespace`, a star import, an alias assignment (`Base = make_base()`), a class declared
+// inside a function the reference is not in. Those leave the reference without a local binding — never a wrong one.
+inline constexpr std::uint32_t kBaseBindNone    = 0;            // no enclosing scope declares the name
+inline constexpr std::uint32_t kBaseBindUnknown = 0xFFFFFFFFu;  // a scope was too large to scan: nothing proven either way
+// kBaseScopeScanCap bounds the two SCANS only: the unindexed lookupInScope fallback and the reopened-namespace sibling scan
+// (a runaway guard: past it those two bind nothing and the edge stays name-only). The indexed path (lookupInScopeIndexed,
+// the one captureTagsFacts installs) reads the scope's table and has no cap: a 32,000-class module scope binds every base.
+inline constexpr std::uint32_t kBaseScopeScanCap = 4096;        // statements the unindexed scope scans read (not the index)
+
+// What a scope-level declaration can be to a base lookup: a class-like declaration (each with a `name:` field), a
+// namespace a qualifier segment can name (C++/PHP namespace_definition, C# namespace_declaration, TS internal_module), or
+// neither. Kotlin's class_declaration has no `name:` field (kotlinEnclosingScopeOf), so a Kotlin base never binds here.
+enum class BaseScopeKind : std::uint8_t { None, Class, Namespace };
+
+inline BaseScopeKind baseScopeKindOf( const char* t ) noexcept
+{
+    if( kindIs( t, "class_specifier" ) || kindIs( t, "struct_specifier" ) || kindIs( t, "class_definition" )   // C/C++, Python
+        || kindIs( t, "class_declaration" ) || kindIs( t, "abstract_class_declaration" ) || kindIs( t, "interface_declaration" )
+        || kindIs( t, "enum_declaration" ) || kindIs( t, "record_declaration" ) || kindIs( t, "struct_declaration" )
+        || kindIs( t, "trait_declaration" ) || kindIs( t, "protocol_declaration" ) || kindIs( t, "class" ) )   // …JS class expression
+    {
+        return BaseScopeKind::Class;
+    }
+    if( kindIs( t, "namespace_definition" ) || kindIs( t, "namespace_declaration" ) || kindIs( t, "internal_module" ) )
+    {
+        return BaseScopeKind::Namespace;
+    }
+    return BaseScopeKind::None;
+}
+
+inline bool isNamespaceDeclKind( const char* t ) noexcept
+{
+    return baseScopeKindOf( t ) == BaseScopeKind::Namespace;
+}
+
+// the declaration a scope-level statement carries: `export class X`, a decorated Python class, a C++ template, a C++
+// `struct X { } x;` declaration or a nested `struct In { };` member — the node itself for every other statement
+inline TSNode baseDeclOf( TSNode stmt ) noexcept
+{
+    const char* t = ts_node_type( stmt );
+    if( kindIs( t, "export_statement" ) )
+    {
+        return fieldChild( stmt, NodeField::Declaration );
+    }
+    if( kindIs( t, "decorated_definition" ) )
+    {
+        return fieldChild( stmt, NodeField::Definition );
+    }
+    if( kindIs( t, "template_declaration" ) )
+    {
+        const std::uint32_t n = ts_node_named_child_count( stmt );
+        return n == 0 ? TSNode{} : ts_node_named_child( stmt, n - 1 );   // the templated entity is the last named child
+    }
+    if( kindIs( t, "declaration" ) || kindIs( t, "field_declaration" ) )
+    {
+        return fieldChild( stmt, NodeField::Type );
+    }
+    return stmt;
+}
+
+// JS/TS `const Node = class extends Obj {}` and the class factory `const BinOp = Node.extend('BinOp', …)`: the declarator's
+// NAME is the class; whether a factory IS one is ingest_names.h's gate, and an edge to a declarator the gate dropped finds
+// no candidate in graph.h (it stays name-only). Returns the declarator's name node, or a null node.
+inline TSNode jsClassDeclaratorNamed( TSNode d, std::string_view name, std::string_view src ) noexcept
+{
+    TSNode      hit{};
+    ChildCursor cursor( d );
+    forEachNamedChild( d, cursor.cur, [ & ]( TSNode decl )
+    {
+        const TSNode nm  = fieldChild( decl, NodeField::Name );
+        const TSNode val = fieldChild( decl, NodeField::Value );
+        if( !kindIs( ts_node_type( decl ), "variable_declarator" ) || ts_node_is_null( nm ) || ts_node_is_null( val ) || nodeTextOf( nm, src ) != name )
+        {
+            return true;
+        }
+        if( kindIs( ts_node_type( val ), "class" ) || kindIs( ts_node_type( val ), "call_expression" ) )
+        {
+            hit = nm;
+        }
+        return false;
+    } );
+    return hit;
+}
+
+// does declaration `d` declare `name` as a class (or, when `scopeOwner`, as a class or namespace that a qualifier can
+// name)? A C/C++ class must carry a body: `struct Mid;` declares a name whose definition lives elsewhere. Returns the name
+// node, or a null node.
+inline TSNode baseDeclNames( TSNode d, std::string_view name, bool scopeOwner, std::string_view src ) noexcept
+{
+    if( ts_node_is_null( d ) )
+    {
+        return TSNode{};
+    }
+    const char*         t    = ts_node_type( d );
+    const BaseScopeKind kind = baseScopeKindOf( t );
+    if( kind == BaseScopeKind::Class || ( scopeOwner && kind == BaseScopeKind::Namespace ) )
+    {
+        const bool   forward = ( kindIs( t, "class_specifier" ) || kindIs( t, "struct_specifier" ) ) && ts_node_is_null( fieldChild( d, NodeField::Body ) );
+        const TSNode nm      = fieldChild( d, NodeField::Name );
+        return ( !forward && !ts_node_is_null( nm ) && nodeTextOf( nm, src ) == name ) ? nm : TSNode{};
+    }
+    if( !scopeOwner && ( kindIs( t, "lexical_declaration" ) || kindIs( t, "variable_declaration" ) ) )
+    {
+        return jsClassDeclaratorNamed( d, name, src );
+    }
+    return TSNode{};
+}
+
+// One scope's lookup of `name`: the declaration among `scope`'s statements (skipping `self`, the class whose header
+// writes the base). `ambiguous` is set when two bodied declarations answer (a Python redefinition, two C++ definitions),
+// `cut` when the scope holds more than kBaseScopeScanCap statements. Returns the declaration node (name in `nameOut`).
+struct BaseScopeHit
+{
+    TSNode decl{};
+    TSNode name{};
+    bool   ambiguous = false;
+    bool   cut       = false;
+};
+
+// One scope's declarations, by name, in statement order — built ONCE per scope node per file (BaseScopeIndex), so the base
+// lookup of every class in a 16 000-class module reads a table instead of rescanning the module (quadratic: the scale
+// probe in the lane report measured 0.3 s → 12 s on 8 000 chained classes before the index). `kind` None = a JS/TS
+// declarator whose value is a class expression or a call (a factory the M2 gate decides).
+struct BaseScopeEntry
+{
+    TSNode        stmt{};
+    TSNode        decl{};
+    TSNode        name{};
+    BaseScopeKind kind = BaseScopeKind::None;
+};
+
+struct BaseScopeTable
+{
+    HashMap<std::string_view, std::vector<BaseScopeEntry>> byName;
+};
+
+// the per-FILE memo: scope node id → its table. Lives in captureTagsFacts' frame (BaseScopeIndexGuard), so every key and
+// every string_view it holds points into the one tree and source being read, and nothing outlives them.
+struct BaseScopeIndex
+{
+    HashMap<const void*, BaseScopeTable> tables;
+
+    const BaseScopeTable& tableFor( TSNode scope, std::string_view src )
+    {
+        const auto [ it, fresh ] = tables.try_emplace( scope.id );
+        if( fresh )
+        {
+            fill( it->second, scope, src );
+        }
+        return it->second;
+    }
+
+private:
+    static void fill( BaseScopeTable& table, TSNode scope, std::string_view src )
+    {
+        ChildCursor cursor( scope );
+        forEachNamedChild( scope, cursor.cur, [ & ]( TSNode stmt )
+        {
+            const TSNode d = baseDeclOf( stmt );
+            const char*  t = ts_node_is_null( d ) ? "" : ts_node_type( d );
+            const BaseScopeKind kind = baseScopeKindOf( t );
+            if( kind != BaseScopeKind::None )
+            {
+                const bool   forward = ( kindIs( t, "class_specifier" ) || kindIs( t, "struct_specifier" ) ) && ts_node_is_null( fieldChild( d, NodeField::Body ) );
+                const TSNode nm      = fieldChild( d, NodeField::Name );
+                if( !forward && !ts_node_is_null( nm ) )
+                {
+                    table.byName[ nodeTextOf( nm, src ) ].push_back( BaseScopeEntry{ stmt, d, nm, kind } );
+                }
+            }
+            else if( kindIs( t, "lexical_declaration" ) || kindIs( t, "variable_declaration" ) )
+            {
+                addJsDeclarators( table, stmt, d, src );
+            }
+            return true;
+        } );
+    }
+    static void addJsDeclarators( BaseScopeTable& table, TSNode stmt, TSNode d, std::string_view src )
+    {
+        ChildCursor cursor( d );
+        forEachNamedChild( d, cursor.cur, [ & ]( TSNode decl )
+        {
+            const TSNode nm  = fieldChild( decl, NodeField::Name );
+            const TSNode val = fieldChild( decl, NodeField::Value );
+            if( kindIs( ts_node_type( decl ), "variable_declarator" ) && !ts_node_is_null( nm ) && !ts_node_is_null( val )
+                && ( kindIs( ts_node_type( val ), "class" ) || kindIs( ts_node_type( val ), "call_expression" ) ) )
+            {
+                table.byName[ nodeTextOf( nm, src ) ].push_back( BaseScopeEntry{ stmt, d, nm, BaseScopeKind::None } );
+            }
+            return true;
+        } );
+    }
+};
+
+// the index captureTagsFacts arms for the file it is reading (null outside it: lookupInScope then scans, capped)
+inline thread_local BaseScopeIndex* tBaseScopeIndex = nullptr;
+
+struct BaseScopeIndexGuard
+{
+    BaseScopeIndex  index;
+    BaseScopeIndex* previous;
+    BaseScopeIndexGuard() noexcept : previous( tBaseScopeIndex ) { tBaseScopeIndex = &index; }
+    ~BaseScopeIndexGuard() { tBaseScopeIndex = previous; }
+    BaseScopeIndexGuard( const BaseScopeIndexGuard& ) = delete;
+    BaseScopeIndexGuard& operator=( const BaseScopeIndexGuard& ) = delete;
+};
+
+// lookupInScope through the file's index: the same answer, read off the table (statement order kept)
+inline BaseScopeHit lookupInScopeIndexed( BaseScopeIndex& index, TSNode scope, std::string_view name, bool scopeOwner, TSNode self, std::string_view src )
+{
+    BaseScopeHit         hit;
+    const BaseScopeTable& table = index.tableFor( scope, src );
+    const auto           it    = table.byName.find( name );
+    if( it == table.byName.end() )
+    {
+        return hit;
+    }
+    for( const BaseScopeEntry& e : it->second )
+    {
+        const bool ns = e.kind == BaseScopeKind::Namespace;
+        if( ts_node_eq( e.decl, self ) || ts_node_eq( e.stmt, self ) || ( ns && !scopeOwner ) || ( e.kind == BaseScopeKind::None && scopeOwner ) )
+        {
+            continue;
+        }
+        if( !ts_node_is_null( hit.name ) && !( scopeOwner && ns ) )
+        {
+            hit.ambiguous = true;   // a namespace reopened in one scope is ONE scope (handled by the caller); a class twice is two
+            break;
+        }
+        if( ts_node_is_null( hit.name ) )
+        {
+            hit.decl = e.decl;
+            hit.name = e.name;
+        }
+    }
+    return hit;
+}
+
+inline BaseScopeHit lookupInScope( TSNode scope, std::string_view name, bool scopeOwner, TSNode self, std::string_view src )   // allocates (the file's scope index)
+{
+    if( tBaseScopeIndex != nullptr )
+    {
+        return lookupInScopeIndexed( *tBaseScopeIndex, scope, name, scopeOwner, self, src );
+    }
+    BaseScopeHit  hit;
+    std::uint32_t seen = 0;
+    ChildCursor   cursor( scope );
+    forEachNamedChild( scope, cursor.cur, [ & ]( TSNode stmt )
+    {
+        if( ++seen > kBaseScopeScanCap )
+        {
+            hit.cut = true;
+            return false;
+        }
+        const TSNode d = baseDeclOf( stmt );
+        if( ts_node_is_null( d ) || ts_node_eq( d, self ) || ts_node_eq( stmt, self ) )
+        {
+            return true;
+        }
+        const TSNode nm = baseDeclNames( d, name, scopeOwner, src );
+        if( ts_node_is_null( nm ) )
+        {
+            return true;
+        }
+        if( !ts_node_is_null( hit.name ) && !( scopeOwner && isNamespaceDeclKind( ts_node_type( d ) ) ) )
+        {
+            hit.ambiguous = true;   // a namespace reopened in one scope is ONE scope (handled by the caller); a class twice is two
+            return false;
+        }
+        if( ts_node_is_null( hit.name ) )
+        {
+            hit.decl = d;
+            hit.name = nm;
+        }
+        return true;
+    } );
+    return hit;
+}
+
+// the written segments of a base type node — `Outer.Changed` → {Outer, Changed}, `b::Mid` → {b, Mid}, `Base<T>` →
+// {Base}, `::Mid` → {Mid} with `absolute` — read off the node the grammar already classified as a type name
+inline std::vector<std::string_view> baseSegments( std::string_view text, bool& absolute )
+{
+    std::vector<std::string_view> segs;
+    if( const std::size_t lt = text.find( '<' ); lt != std::string_view::npos && lt > 0 )
+    {
+        text = text.substr( 0, lt );   // a type-argument list is no segment (finalSegment's rule)
+    }
+    absolute = text.starts_with( "::" );
+    for( std::size_t start = 0, i = 0; start <= text.size(); start = i + 1 )
+    {
+        i = std::min( text.find_first_of( ":.\\", start ), text.size() );   // C++/Rust `::`, Python/Java/JS/C# `.`, PHP `\\`
+        const std::string_view seg   = text.substr( start, i - start );
+        const std::size_t      first = seg.find_first_not_of( " \t" );
+        if( first != std::string_view::npos )
+        {
+            segs.push_back( seg.substr( first, seg.find_last_not_of( " \t" ) - first + 1 ) );   // `Base <T>` leaves `Base `
+        }
+    }
+    return segs;
+}
+
+// the body of a scope owner a qualifier named (a class body, a namespace body); null when it has none
+inline TSNode scopeBodyOf( TSNode owner ) noexcept
+{
+    return fieldChild( owner, NodeField::Body );
+}
+
+// `name` in the OTHER blocks of the namespace `ns` (a node of kind `nsKind`) opens beside itself in its enclosing scope:
+// `namespace a { … } namespace a { struct T : Mid {} }` (C++, C#'s `namespace A { }`, TS's `namespace a { }`; a PHP
+// `namespace A;` statement has no block). Two answers, a cut or an ambiguous block set the hit's flags.
+inline BaseScopeHit lookupInReopenedNamespace( TSNode ns, std::string_view name, bool scopeOwner, TSNode self, std::string_view src )   // allocates (the file's scope index)
+{
+    BaseScopeHit hit;
+    const TSNode nsName = fieldChild( ns, NodeField::Name );
+    const TSNode outer  = ts_node_parent( ns );
+    if( ts_node_is_null( nsName ) || ts_node_is_null( outer ) )
+    {
+        return hit;
+    }
+    const char*            nsKind = ts_node_type( ns );
+    const std::string_view nsText = nodeTextOf( nsName, src );
+    std::uint32_t          seen   = 0;
+    ChildCursor            cursor( outer );
+    forEachNamedChild( outer, cursor.cur, [ & ]( TSNode sib )
+    {
+        hit.cut = ++seen > kBaseScopeScanCap;
+        const TSNode body = scopeBodyOf( sib );
+        if( hit.cut || ts_node_eq( sib, ns ) || std::strcmp( ts_node_type( sib ), nsKind ) != 0 || ts_node_is_null( body )
+            || nodeTextOf( fieldChild( sib, NodeField::Name ), src ) != nsText )
+        {
+            return !hit.cut;
+        }
+        const BaseScopeHit h = lookupInScope( body, name, scopeOwner, self, src );
+        hit.ambiguous = h.cut || h.ambiguous || ( !ts_node_is_null( h.name ) && !ts_node_is_null( hit.name ) );
+        if( !ts_node_is_null( h.name ) && !hit.ambiguous )
+        {
+            hit.decl = h.decl;
+            hit.name = h.name;
+        }
+        return !hit.ambiguous;
+    } );
+    return hit;
+}
+
+// The innermost declaration of `name` visible from `site` (owned by `self`): every enclosing node's statements are read,
+// innermost first, the way the language's lexical lookup reads them, a reopened namespace as one scope
+// (lookupInReopenedNamespace). `scopeOwner`: the name is a qualifier segment, so a namespace answers too. A cut or
+// ambiguous scope stops the walk with its flag set.
+inline BaseScopeHit findOutward( TSNode site, TSNode self, std::string_view name, bool scopeOwner, std::string_view src )   // allocates (the file's scope index)
+{
+    for( TSNode p = ts_node_parent( site ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    {
+        BaseScopeHit hit = lookupInScope( p, name, scopeOwner, self, src );
+        if( ts_node_is_null( hit.name ) && !hit.cut && !hit.ambiguous && isNamespaceDeclKind( ts_node_type( p ) ) )
+        {
+            hit = lookupInReopenedNamespace( p, name, scopeOwner, self, src );
+        }
+        if( hit.cut || hit.ambiguous || !ts_node_is_null( hit.name ) )
+        {
+            return hit;
+        }
+    }
+    return BaseScopeHit{};
+}
+
+// the tree root above `n` (the global scope a C++ `::Mid` names)
+inline TSNode rootOf( TSNode n ) noexcept
+{
+    for( TSNode p = ts_node_parent( n ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    {
+        n = p;
+    }
+    return n;
+}
+
+// Resolve `segs` from the class header at `site` (owned by `self`) and return the binding's encoding for RawRef::baseBind:
+// the FIRST segment through findOutward (only the global scope for an `absolute` `::X`), each further segment inside the
+// body the previous one named.
+inline std::uint32_t localBaseBinding( TSNode site, TSNode self, const std::vector<std::string_view>& segs, bool absolute,
+                                       std::string_view src )   // allocates (the file's scope index)
+{
+    if( segs.empty() )
+    {
+        return kBaseBindNone;
+    }
+    const bool         qualified = segs.size() > 1;
+    const BaseScopeHit first     = absolute ? lookupInScope( rootOf( site ), segs.front(), qualified, self, src )
+                                            : findOutward( site, self, segs.front(), qualified, src );
+    if( first.cut || first.ambiguous )
+    {
+        return kBaseBindUnknown;
+    }
+    TSNode found     = first.decl;
+    TSNode foundName = first.name;
+    if( ts_node_is_null( found ) )
+    {
+        return kBaseBindNone;
+    }
+    for( std::size_t i = 1; i < segs.size(); ++i )
+    {
+        const TSNode body = scopeBodyOf( found );
+        const BaseScopeHit hit = ts_node_is_null( body ) ? BaseScopeHit{} : lookupInScope( body, segs[ i ], i + 1 < segs.size(), self, src );
+        if( hit.cut || hit.ambiguous )
+        {
+            return kBaseBindUnknown;
+        }
+        if( ts_node_is_null( hit.name ) )
+        {
+            return kBaseBindNone;   // the qualifier names an in-file scope that does not declare it: nothing proven here
+        }
+        found     = hit.decl;
+        foundName = hit.name;
+    }
+    return ts_node_start_byte( foundName ) + 1u;   // never 0 (kBaseBindNone) — and below ~0u: a TSNode byte is a u32 < src.size()
+}
+
 // Emit one inherit RawRef (derived → base) for a base-type node. startByte sits inside the class header
 // (the type node's own start), so the byte-span enclosing attribution binds fromSymbol = the derived class.
-inline void emitBaseRef( TSNode typeNode, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawRef>& refs )
+// `self` is the declaration whose header writes the base (its own name never answers the lookup). lane lego-transitive
+// fix 1: the reference also carries the written qualifier (memberRoot on an inherit ref: `Outer` for `Outer.Changed`) and
+// the same-file declaration the name binds to (baseBind, localBaseBinding above). Ruby keeps its own constant lookup
+// (resolve.h RubyBaseScope), so a Ruby base records neither.
+inline void emitBaseRef( TSNode typeNode, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawRef>& refs, TSNode self = TSNode{} )
 {
     const uint32_t a = ts_node_start_byte( typeNode ), b = ts_node_end_byte( typeNode );
     if( a >= b || b > src.size() )
     {
         return;
     }
-    RawRef r    = rawRefAt( typeNode, fileId, lang, RefRole::Extends, finalSegment( src.substr( a, b - a ) ) );   // a base-class / interface use-site
+    const std::string_view text = src.substr( a, b - a );
+    RawRef r    = rawRefAt( typeNode, fileId, lang, RefRole::Extends, finalSegment( text ) );   // a base-class / interface use-site
     r.isInherit = true;
+    if( lang != Lang::Ruby && lang != Lang::Rust )
+    {
+        bool                                absolute = false;
+        const std::vector<std::string_view> segs     = baseSegments( text, absolute );
+        r.baseBind = localBaseBinding( typeNode, self, segs, absolute, src );
+        if( segs.size() > 1 )
+        {
+            const std::size_t last = text.rfind( segs.back() );
+            std::string_view  qual = text.substr( 0, last == std::string_view::npos ? 0 : last );
+            while( !qual.empty() && ( qual.back() == ':' || qual.back() == '.' || qual.back() == '\\' || qual.back() == ' ' ) ) { qual.remove_suffix( 1 ); }
+            r.memberRoot = std::string( qual );
+        }
+    }
     refs.push_back( std::move( r ) );
 }
 
@@ -445,6 +888,54 @@ void captureMacroBodyCalls( TSNode defineNode, std::uint32_t fileId, Lang lang, 
     }
 }
 
+// lane lego-transitive fix 1: a base clause child that is an EXPRESSION, read whole — true when it was one (emitted or
+// deliberately not). The one-level descent captureBases does for a wrapper read each identifier INSIDE an expression as
+// a base of its own: Python's `Outer.Changed` minted `Outer` and `Changed`, `Generic[Key]` minted the type argument `Key`,
+// `metaclass=ABCMeta` the keyword `metaclass` and its value; JavaScript's `extends ns.Base` minted `ns`, `extends
+// mixin( B )` minted `mixin`. Now a dotted base is ONE base named by its last attribute (the qualifier rides on the ref
+// for graph.h), a subscript's base is its value (type arguments are not bases), and a keyword argument, a call or a splat
+// is a computed base this tool cannot name. Every Python child is an expression (its bases have no wrapper).
+inline bool expressionBase( TSNode bn, const char* bt, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawRef>& refs, TSNode classNode )
+{
+    if( lang == Lang::Ruby )
+    {
+        return true;   // Ruby has no wrapper: anything but a constant in its `superclass` clause is computed (see captureBases)
+    }
+    if( lang == Lang::Python )
+    {
+        const TSNode named = kindIs( bt, "subscript" ) ? fieldChild( bn, NodeField::Value ) : bn;
+        const char*  nt    = ts_node_is_null( named ) ? "" : ts_node_type( named );
+        if( kindIs( nt, "attribute" ) || kindIs( nt, "identifier" ) )
+        {
+            emitBaseRef( named, fileId, lang, src, refs, classNode );
+        }
+        return true;
+    }
+    if( lang != Lang::JavaScript && lang != Lang::TypeScript )
+    {
+        return false;
+    }
+    if( kindIs( bt, "member_expression" ) )
+    {
+        emitBaseRef( bn, fileId, lang, src, refs, classNode );
+        return true;
+    }
+    return kindIs( bt, "call_expression" );
+}
+
+// one child of a base-clause WRAPPER (extends_clause / implements_clause / type_list): a type node (and TS's
+// `implements ns.IFoo`, a nested_type_identifier) is a base; anything else is read as an expression base
+inline void wrappedBase( TSNode wn, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawRef>& refs, TSNode classNode )
+{
+    const char* wt = ts_node_type( wn );
+    if( isBaseTypeNode( wt ) || kindIs( wt, "nested_type_identifier" ) )
+    {
+        emitBaseRef( wn, fileId, lang, src, refs, classNode );
+        return;
+    }
+    expressionBase( wn, wt, fileId, lang, src, refs, classNode );
+}
+
 // Capture base classes for the inheritance/Lego view: walk a class node's base clause and emit an
 // inherit RawRef per base (derived → base). startByte sits inside the class header, so the enclosing
 // attribution assigns fromSymbol = the derived class. Explicit-syntax langs: C++/TS/JS/Java/Python/Swift/
@@ -477,6 +968,7 @@ void captureMacroBodyCalls( TSNode defineNode, std::uint32_t fileId, Lang lang, 
 // child, collecting type nodes at both depths (Rust is a separate pass — impl Trait for T is a sibling).
 void captureBases( TSNode classNode, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawRef>& refs )
 {
+    PROFILE_SCOPE_DESCRIBE( "ingest/relations: base classes of one class" );
     // O(children) at all three levels. These child lists LOOK grammar-bounded — a class node's clauses, a
     // clause's base types — and the earlier class-3 reasoning said so, but EXTRAS refute it: a comment run
     // between two base types is spliced straight into the clause's own child array (src/infra/tschildren.h),
@@ -508,13 +1000,14 @@ void captureBases( TSNode classNode, std::uint32_t fileId, Lang lang, std::strin
             const char* bt = ts_node_type( bn );
             if( isBaseTypeNodeIn( bt, lang ) )         // DIRECT: type node right under the clause
             {
-                emitBaseRef( bn, fileId, lang, src, refs );
+                emitBaseRef( bn, fileId, lang, src, refs, classNode );
                 return true;
             }
             // Ruby has no wrapper: its `superclass` clause holds ONE expression, and anything but a constant is
             // COMPUTED (`class Dynamic < Struct.new( :a )`). Descending into that (call) lands on its receiver
             // `Struct` and minted an edge to it — the receiver is not the base (test/rubyinheritcheck.sh floor (a)).
-            if( lang == Lang::Ruby )
+            // Python's and JavaScript's base EXPRESSIONS are read whole the same way (expressionBase).
+            if( expressionBase( bn, bt, fileId, lang, src, refs, classNode ) )
             {
                 return true;
             }
@@ -523,10 +1016,7 @@ void captureBases( TSNode classNode, std::uint32_t fileId, Lang lang, std::strin
             ChildCursor wrapCursor( bn );
             forEachChild( bn, wrapCursor.cur, [ & ]( TSNode wn )
             {
-                if( isBaseTypeNode( ts_node_type( wn ) ) )
-                {
-                    emitBaseRef( wn, fileId, lang, src, refs );
-                }
+                wrappedBase( wn, fileId, lang, src, refs, classNode );
                 return true;
             } );
             return true;
@@ -667,6 +1157,20 @@ inline bool insideFunctionBody( TSNode n ) noexcept
     return false;
 }
 
+// The whole written text of a type written `std::<container><…>` for a standard container whose element access yields a template
+// argument (externalnames.h cppStdElementArgIndex: `std::map<std::string, EvalString, Less>`, `std::vector<ns::Item>`); "" for
+// every other type, a global `::std::…` included (writtenTypeNamespace reads two segments). graph.h stdElementType
+// reads the argument out of it (parser version 165).
+inline std::string_view stdElementContainerText( TSNode typeNode, std::string_view src ) noexcept
+{
+    const TSNode tmpl = ( !ts_node_is_null( typeNode ) && writtenTypeNamespace( typeNode, src ) == "std" ) ? fieldChild( typeNode, NodeField::Name ) : TSNode{};
+    if( ts_node_is_null( tmpl ) || !kindIs( ts_node_type( tmpl ), "template_type" ) )
+    {
+        return {};
+    }
+    return externalnames::cppStdElementArgIndex( nodeFieldText( tmpl, NodeField::Name, src ) ) < 0 ? std::string_view{} : nodeTextOf( typeNode, src );
+}
+
 // one alias record: `aliasNode` names `target`, the class `spec` spells (see captureTypeAlias for the record's fields)
 inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std::string_view target )
 {
@@ -685,6 +1189,7 @@ inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std:
     r.name       = target;
     r.recvVar    = alias;
     r.qualifier  = writtenTypeNamespace( spec, cx.src );
+    r.memberPath = stdElementContainerText( spec, cx.src );   // `typedef std::map<K, V> Bindings;`: the text its element type is read from
     cx.out.push_back( std::move( r ) );
 }
 
@@ -694,7 +1199,8 @@ inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std:
 // IRBuilderBase::CreateCall (test/fieldnarrowcheck.sh arm t). Rides the compose record shape — cached field for field, so the blob
 // format is unchanged — marked composeRel "alias" with an EMPTY fieldName, the one shape no member record has: `recvVar` = the
 // alias, `name` = the target's class name, `qualifier` = the namespace the target was written in (a `std` target is refused by
-// its reader). Only a PLAIN alias of a named class records: a pointer/reference/array/function declarator, a target that names no
+// its reader), `memberPath` = the target's whole text when it is a std element container (stdElementContainerText, parser
+// version 166; graph.h StdMemberGate's element receivers read it, nothing else does). Only a PLAIN alias of a named class records: a pointer/reference/array/function declarator, a target that names no
 // class (aliasTargetName), a self-alias and an alias local to a function body (it types no member, and the name graph has no
 // scopes to keep it local) record nothing.
 inline void captureTypeAlias( TypeAliasCtx& cx, TSNode n, const char* t )
@@ -789,6 +1295,7 @@ inline WrittenPointee stdSmartPointee( TSNode typeNode, std::string_view src ) n
 // `w_.m()` does not (kParserVer 113). Every other qualified template (`std::vector<Widget> v_;`) still records nothing.
 void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawRef>& refs )
 {
+    PROFILE_SCOPE_DESCRIBE( "ingest/relations: fields of one class" );
     if( lang != Lang::Cpp )
     {
         return; // C++ only for S5-E; extend for Python/TS later
@@ -859,6 +1366,31 @@ void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::stri
                 // recording `std::vector<Widget> v_;` as a std type would only tombstone same-named classes' same-named members,
                 // and on rocksdb and llvm-project that lost six correct narrows and refused no wrong one (2026-09-17).
                 typeName = std::string( pointee.name );
+            }
+            else if( const std::string_view containerText = stdElementContainerText( typeNode, src ); !containerText.empty() )
+            {
+                // `std::map<std::string, Item> items_;` — an ELEMENT record (parser version 165), for StdMemberGate's element
+                // receivers (`items_[ k ].empty()`, graph.h stdReceiverOf) alone: composeRel "elem" with an EMPTY fieldName, so
+                // Rule 2b's field tables never read the container as the field's type (see the vector note above), qualifier
+                // `std`, so the HAS-A edges draw none; recvVar = the field, name = the container, memberPath = its whole text.
+                // A plain value member only. No other record ever came from such a field (the walk below finds no
+                // type_identifier directly under a qualified template), so continuing keeps every other capture as it was.
+                const TSNode elemDecl = fieldChild( fdecl, NodeField::Declarator );
+                if( !ts_node_is_null( elemDecl ) && kindIs( ts_node_type( elemDecl ), "field_identifier" ) )
+                {
+                    RawRef r;
+                    r.fileId     = fileId;
+                    r.startByte  = ts_node_start_byte( fdecl );
+                    r.lang       = lang;
+                    r.isCompose  = true;
+                    r.composeRel = "elem";
+                    r.name       = std::string( nodeFieldText( fieldChild( typeNode, NodeField::Name ), NodeField::Name, src ) );
+                    r.qualifier  = "std";
+                    r.recvVar    = std::string( nodeTextOf( elemDecl, src ) );
+                    r.memberPath = std::string( containerText );
+                    refs.push_back( std::move( r ) );
+                }
+                continue;
             }
             else
             {
@@ -1099,8 +1631,10 @@ inline std::string phpUseTarget( TSNode useNode, std::string_view src )
 
 // TS/JS `require("./x")` and dynamic `import("./x")` → the written specifier, or empty when this call
 // expression is not a module load. Its own function for the same reason csharpUsingTarget and phpUseTarget
-// are: one AST shape per language stays a one-line call inside directiveTargetOf, whose grain is one
-// branch per grammar spelling rather than one branch plus one nested scan.
+// are: one AST shape per language stays a one-line call at the use site rather than one branch plus one nested
+// scan. #358: its readers are now the DepDialect::Web normaliser (src/ingest_importcap.h — the captured
+// `require`/`import` call) and captureJsImportFacts (src/ingest_jsimports.h — the binding a destructured
+// require makes); directiveTargetOf no longer reads it, because the walk no longer visits TS/JS.
 //
 // THREE conditions, all required, and each is what keeps an ordinary call out of the dependency graph:
 //   * the callee is the BARE identifier `require` or `import` — a member expression
@@ -1569,7 +2103,9 @@ inline bool rubyAttrAtClassBodyLevel( TSNode n, std::string_view src ) noexcept
 // graph.h's inheritance graph and base walk read it unchanged. `extend` reaches the class's singleton, not its
 // instances; the graph keeps one method namespace per class (instance and class methods alike), so it is an ancestor
 // there too. So does one inside a module body's `included do … end` (rubyInConcernIncludedBlock). A directive anywhere
-// else — a method body, another block, a file's top level — emits none.
+// else — a method body, another block, a file's top level — emits none. Since lane lego-transitive the reference is also an
+// IMPLEMENTOR edge: graph.h's implementors builder admits a Ruby module as a base, so --lego=M lists every class (and
+// module) that mixes M in, and test/rubyinheritcheck.sh floor (b) is closed.
 // Is `call` a statement of an ActiveSupport::Concern `included do … end` block written at a module's body level? When a
 // class includes the concern the block runs in that class, so a mixin there joins the INCLUDER's ancestors; read as an
 // ancestor of the concern itself, it reaches the includer through the concern — activerecord's AttributeMethods
@@ -1867,7 +2403,8 @@ inline bool isPreprocConditional( const char* type ) noexcept
 // --expand's sibling lift, the SameInclude call-resolution tier, and --impact's import tier) was reading
 // an empty table and reporting the emptiness as a horizontal, cycle-free architecture. The four entries
 // below are exactly the statement forms a top-level `require` is written in; the call node itself is read
-// by directiveTargetOf, which is what keeps every OTHER call expression out.
+// by jsModuleLoadTarget (read by the Web normaliser in src/ingest_importcap.h since #358), which is what keeps
+// every OTHER call expression out.
 //
 // EVERY ENTRY HAS A FIXTURE ARM in test/nestedimportfix — an entry with no arm is an untested claim, and
 // every parent chain below was read off a real parse with `--match`, never predicted from the grammar.
@@ -1994,7 +2531,10 @@ inline bool isFunctionLike( Lang lang, const char* type ) noexcept
     return false;
 }
 
-// TS/JS: every container a `require("./x")` / `import("./x")` call can legitimately sit under.
+// TS/JS: every container a `require("./x")` / `import("./x")` call can legitimately sit under. #358: no walk
+// reads this table for TS/JS any more — it is now the REACH RULE src/ingest_importcap.h re-derives from a
+// captured `@import.path` node's ancestry (a specifier under a node that is not listed here was never an edge,
+// and still is not), and the `insideFn` source for the lazy bit (kJsFunctionContainers, below).
 //
 // The first five are the statement forms that wrap a TOP-LEVEL require, kParserVer 71's set — read off
 // real parses, not predicted:
@@ -2028,7 +2568,7 @@ inline bool isFunctionLike( Lang lang, const char* type ) noexcept
 // function: (_) @f)'` returns a real `function:` field of text "import" here, so the earlier miss was the
 // missing container, never a grammar shape jsModuleLoadTarget could not read).
 // EVERY ENTRY still needs the SAME three jsModuleLoadTarget guards (bare require/import callee, one arg, a
-// string literal) — this table only widens WHERE the walk looks, never what counts as a hit.
+// string literal) — this table only widens WHERE a specifier may sit, never what counts as a hit.
 inline constexpr std::array<std::string_view, 34> kJsImportContainers = {
     "lexical_declaration", "variable_declaration", "variable_declarator", "expression_statement", "assignment_expression",
     "statement_block", "return_statement", "labeled_statement", "export_statement",
@@ -2094,25 +2634,29 @@ constexpr std::uint16_t kMaxImportContainerDepth = 256;
 // READS them stay separately readable — the walk is one shape, this is one branch per grammar spelling.
 //
 // Node types confirmed per grammar: Python import_statement/import_from_statement; Go/Swift
-// import_declaration; Rust use_declaration + mod_item; C# using_directive; TS/JS call_expression for the
-// CommonJS `require("./x")` and dynamic `import("./x")` spellings; plus the kParserVer-81 four (bash
+// import_declaration; Rust use_declaration + mod_item; C# using_directive; plus the kParserVer-81 four (bash
 // `command`, lua `function_call`, ruby `call`, elixir `call`). LEVER-B B0: non-C imports capture the
 // CLEAN written specifier via grammar child fields (module path / quoted specifier / use argument), not a
 // sliced clause — the sound resolver input.
 //
-// #358: the C-family rows are GONE from this list. C++ preproc_include (path field, "" local vs <>
+// #358: the C-family rows are GONE from this list, and so is Go's (the Go `import_declaration` clause is read by
+// the DepDialect::Go normaliser; only Swift still reaches the `import_declaration` branch below). C++ preproc_include (path field, "" local vs <>
 // external) and C++ preproc_call with directive `#import` are captured as `@import.path` by the grammar's
 // own query and read by the DepDialect::CFamily normaliser (src/ingest_importcap.h), so this function is
-// never asked about a C-family node. What is left is every language whose extraction needs the walk's own
-// frame state — which is also the list of languages that have NOT moved over yet.
+// never asked about a C-family node. The TS/JS rows (import_statement `source:`, the export_statement
+// re-export, the CommonJS / dynamic call_expression) went the same way: `@import.path` in
+// queries/{typescript,tsx,javascript}/tags.scm, DepDialect::Web normaliser. What is left is every language
+// whose extraction needs the walk's own frame state — which is also the list of languages that have NOT
+// moved over yet.
 //
-// `lang` exists for exactly one branch: `call_expression` is a node type in most of our grammars, and a
-// C++ or Rust function that happens to be named `require` must never manufacture a dependency edge. The
-// language gate makes that impossible by construction rather than by relying on where the walk goes.
+// `lang` exists for the language-gated branches: `call_expression` / `call` / `command` are node types in
+// most of our grammars, and a C++ or Rust function that happens to be named `require` must never
+// manufacture a dependency edge. The language gate makes that impossible by construction rather than by
+// relying on where the walk goes.
 //
-// `isLazy` (kParserVer 72, TS/JS; Ruby since parser version 82/83): true when `insideFn` says this call sits
-// inside a closure container — see kJsFunctionContainers, the Ruby closure kinds, and captureIncludes'
-// `insideFn` propagation below — or when the directive is a Ruby `autoload`. Allocates a std::string →
+// `isLazy` (Ruby since parser version 82/83; TS/JS since kParserVer 72, now computed in ingest_importcap.h):
+// true when `insideFn` says this call sits inside a closure container — see the Ruby closure kinds and
+// captureIncludes' `insideFn` propagation below — or when the directive is a Ruby `autoload`. Allocates a std::string →
 // not noexcept. `isSymbolic` (parser version 82, Ruby only): the target is a CONSTANT resolved through the
 // corpus's own class/module index, never a path — see model.h Include::isSymbolic.
 //
@@ -2122,8 +2666,38 @@ constexpr std::uint16_t kMaxImportContainerDepth = 256;
 // gone rather than documented as always-false.
 struct DirectiveTarget { std::string target; bool isLazy; bool isSymbolic; bool isReceiver; };
 
-// `insideFn` exists for exactly the same one branch `lang` does: whether the call_expression being read
-// sits inside a TS/JS function body, per captureIncludes' walk — meaningless (and ignored) everywhere else.
+// The written CLAUSE of an `import_declaration` — the declaration's own text with its leading keyword
+// dropped (everything after the first space), at most 96 bytes, trailing `;` / space / newline / CR
+// trimmed. This is the Include target Go has always carried (`"fmt"`, `f "fmt"`, `. "x"`, `_ "x"`, or a
+// whole `( … )` group collapsed to ONE record), and Swift's `import Foundation`. Shared by the Swift walk
+// branch below and by the DepDialect::Go normaliser (src/ingest_importcap.h) so the two cannot drift; the
+// quirks are PRE-EXISTING and preserved byte-for-byte on purpose (#358 is a pure refactor): the keyword is
+// dropped at a SPACE, so `import<TAB>"os"` keeps the word `import`; a group is cut at 96 bytes, mid
+// character if it lands there; a tab is not trimmed. Empty for an empty or out-of-range span.
+std::string importClauseTarget( TSNode n, std::string_view src )
+{
+    std::string        target;
+    const std::uint32_t a = ts_node_start_byte( n ), b = ts_node_end_byte( n );
+    if( a < b && b <= src.size() )
+    {
+        std::string_view s  = src.substr( a, b - a );
+        const std::size_t sp = s.find( ' ' );                        // drop the leading keyword
+        if( sp != std::string_view::npos )
+        {
+            s = s.substr( sp + 1 );
+        }
+        target.assign( s.data(), s.size() < 96 ? s.size() : 96 );
+        while( !target.empty() && ( target.back() == ';' || target.back() == ' ' || target.back() == '\n' || target.back() == '\r' ) )
+        {
+            target.pop_back();
+        }
+    }
+    return target;
+}
+
+// `insideFn` is the walk's sticky "inside a closure" bit, now read by Ruby alone (a constant receiver written
+// inside a method / lambda / block is lazy). TS/JS used to be the other reader: its require()/import() branch
+// moved to `@import.path` (#358), whose lazy bit is re-derived from ancestry in src/ingest_importcap.h.
 DirectiveTarget directiveTargetOf( TSNode n, const char* t, std::string_view src, Lang lang, bool insideFn )
 {
     std::string target;
@@ -2131,34 +2705,17 @@ DirectiveTarget directiveTargetOf( TSNode n, const char* t, std::string_view src
     bool        isSymbolic = false;
     bool        isReceiver = false;
 
-    if( kindIs( t, "import_statement" ) )                 // Python `import a` / TS `import … from 'x'`
+    if( kindIs( t, "import_statement" ) )                 // Python `import a`
     {
         // Prefer the grammar's specifier field over slicing the whole statement (LEVER-B B0: the resolver
-        // needs the REAL written specifier, not the clause). Empirically confirmed node shapes:
+        // needs the REAL written specifier, not the clause). Empirically confirmed node shape:
         //   Python: import_statement name:(dotted_name|aliased_import)  → the dotted module `pkg.mod`.
-        //   TS/JS:  import_statement source:(string)                    → the quoted specifier `'./x'`.
-        // A grammar that lacks the field resolves it to id 0, and fieldChild returns null for it, so a single
-        // capture covers both grammars without a per-language branch.
-        if( const TSNode src_ = fieldChild( n, NodeField::Source );  !ts_node_is_null( src_ ) )
-        {
-            target = importSpecifierText( src_, src );                    // TS/JS: strip the surrounding quotes
-        }
-        else if( const TSNode nm = fieldChild( n, NodeField::Name );  !ts_node_is_null( nm ) )
+        // #358: the TS/JS `import … from 'x'` spelling of this node (and the `export … from 'x'` re-export that
+        // used to follow it) is GONE from this function — it is `@import.path` in queries/{typescript,tsx,javascript}
+        // /tags.scm now, read by the DepDialect::Web normaliser (src/ingest_importcap.h).
+        if( const TSNode nm = fieldChild( n, NodeField::Name );  !ts_node_is_null( nm ) )
         {
             target = importSpecifierText( nm, src );                      // Python: the dotted module head
-        }
-    }
-    else if( kindIs( t, "export_statement" ) && ( lang == Lang::TypeScript || lang == Lang::JavaScript ) )
-    {
-        // kParserVer 124 (#220 part 2): a RE-EXPORT — `export { x } from './y'`, `export * from './y'`,
-        // `export * as ns from './y'`, `export type { T } from './y'` — loads its module exactly as an import does,
-        // and a barrel file is made of nothing else, so an import graph without them misses every cycle through a
-        // barrel. The grammar gives the specifier the same `source:` field import_statement has; every other
-        // export_statement (`export function …`, `export { x }`, `export default …`) has none and reads empty, and
-        // the walk still descends into it (it is a kJsImportContainers entry) for the requires inside.
-        if( const TSNode src_ = fieldChild( n, NodeField::Source );  !ts_node_is_null( src_ ) )
-        {
-            target = importSpecifierText( src_, src );
         }
     }
     else if( kindIs( t, "import_from_statement" ) )            // Python `from pkg.mod import Z`
@@ -2169,12 +2726,6 @@ DirectiveTarget directiveTargetOf( TSNode n, const char* t, std::string_view src
         {
             target = importSpecifierText( mn, src );
         }
-    }
-    else if( kindIs( t, "call_expression" )
-             && ( lang == Lang::TypeScript || lang == Lang::JavaScript ) )   // TS/JS `require("./x")` / `import("./x")`
-    {
-        target = jsModuleLoadTarget( n, src );
-        isLazy = insideFn && !target.empty();   // kParserVer 72: a hit found inside a function body is LAZY
     }
     else if( kindIs( t, "command" ) && lang == Lang::Bash )              // Bash `source x.sh` / `. x.sh`
     {
@@ -2255,25 +2806,14 @@ DirectiveTarget directiveTargetOf( TSNode n, const char* t, std::string_view src
             }
         }
     }
-    else if(    kindIs( t, "import_declaration" ) )            // Go / Swift — captured but NOT precise-resolved
+    else if(    kindIs( t, "import_declaration" ) )            // Swift — captured but NOT precise-resolved
     {
-        // Go (needs go.mod module-root) and Swift (whole-module, no path) are DEFERRED — the precise
-        // resolver leaves them unresolved. Keep the best-effort target for --uses / --deps back-compat.
-        const uint32_t a = ts_node_start_byte( n ), b = ts_node_end_byte( n );
-        if( a < b && b <= src.size() )
-        {
-            std::string_view s  = src.substr( a, b - a );
-            const std::size_t sp = s.find( ' ' );                        // drop the leading keyword
-            if( sp != std::string_view::npos )
-            {
-                s = s.substr( sp + 1 );
-            }
-            target.assign( s.data(), s.size() < 96 ? s.size() : 96 );
-            while( !target.empty() && ( target.back() == ';' || target.back() == ' ' || target.back() == '\n' || target.back() == '\r' ) )
-            {
-                target.pop_back();
-            }
-        }
+        // #358: Go moved onto `@import.path` (queries/go/tags.scm + the DepDialect::Go normaliser in
+        // src/ingest_importcap.h), so this branch is reached by Swift ALONE now. The clause reader is the
+        // one both languages shared and is kept as ONE function (importClauseTarget) rather than copied:
+        // Swift (whole-module, no path) is DEFERRED in the precise resolver, and its slice has its own
+        // landing. Keep the best-effort target for --uses / --deps back-compat.
+        target = importClauseTarget( n, src );
     }
     else if( kindIs( t, "using_directive" ) )
     { // C# `using Foo.Bar;` / `using static Foo;` / `using X = Foo.Bar;`
@@ -2293,14 +2833,12 @@ DirectiveTarget directiveTargetOf( TSNode n, const char* t, std::string_view src
 
 // Capture #include / import directives (physical dependencies) by walking the file's top-level nodes —
 // and the bodies of anything that WRAPS a directive, which tree-sitter does not flatten: preprocessor
-// conditionals in the C family and C#, and ordinary language constructs in Python / Rust / C# / TS / JS
-// (see isImportContainer). Each node is read by directiveTargetOf above.
-// kParserVer 72 cost note: TS/JS's kJsImportContainers now includes call_expression/object/arguments —
-// containers a require() sits under with no other purpose — so the walk over a TS/JS file approaches full
-// AST size rather than "top-level statements only". Bounded per-node (each node is visited once) and still
-// depth-capped by kMaxImportContainerDepth; no perf gate exists in this tree to budget against (see
-// CLAUDE.md's "best tool first, then fast" note), and CommonJS's own weight — an entire module system's
-// worth of edges was previously invisible (kParserVer 71's LB-H measurement) — is the justification.
+// conditionals in C# (the C family and TS/JS read `@import.path` instead, #358), and ordinary language
+// constructs in Python / Rust / C# (see isImportContainer). Each node is read by directiveTargetOf above.
+// kParserVer 72 cost note (HISTORICAL for TS/JS since #358, which retired this walk for them — the cost is gone
+// with it): TS/JS's kJsImportContainers included call_expression/object/arguments — containers a require()
+// sits under with no other purpose — so the walk over a TS/JS file approached full AST size rather than
+// "top-level statements only".
 // ABS-3: each directive ALSO emits an import-role RawRef (name = the importable final segment) so the
 // use-site index reports import sites. The ref is file-scope (fromSymbol=kNoNode) — that is correct for
 // a directive at any container depth, and it NEVER enters the call graph (role != Call → skipped in
@@ -2441,10 +2979,11 @@ void captureIncludes( TSNode root, Lang lang, std::uint32_t fileId, std::string_
     // order, which keeps `incs`/`refs` in SOURCE order: the determinism contract is byte-identity, and an
     // order that depended on the walk shape would break it. Only ALLOWLISTED containers are entered, so a
     // language whose imports are top-level by rule (Go, Java) still costs exactly the old scan.
-    // `insideFn` (kParserVer 72, TS/JS only): true once the walk has descended through a function-body
-    // container (kJsFunctionContainers) — sticky for every descendant, never cleared, exactly like `depth`
+    // `insideFn` (kParserVer 72, TS/JS; Ruby's closure kinds since 83): true once the walk has descended through a
+    // function-body container (isFunctionLike) — sticky for every descendant, never cleared, exactly like `depth`
     // is monotonic. It rides the frame rather than being recomputed from ancestry because the walk never
-    // keeps the ancestor chain around: this is the one bit of it a lazy-require call needs.
+    // keeps the ancestor chain around: this is the one bit of it a lazy-require call needs. #358: TS/JS no longer
+    // walks (its lazy bit is re-derived from ancestry in ingest_importcap.h), so Ruby is its only reader here.
     // `openIdx` (parser version 83, Ruby only): the index in `constOpens` of the innermost class/module open the
     // frame sits inside — kNoOpenIdx at file level. It rides the frame for the same reason `insideFn` does (the
     // walk keeps no ancestor chain) and exists for the RECEIVER DEDUPE: a constant receiver is recorded once per

@@ -84,9 +84,12 @@ common: twenty languages each carrying a private copy of the same idea is twenty
   | module-qualified calls (`Mod.f`, `ns/f`) | no language-neutral resolver exists yet; `src/elixir_resolve.h` is Elixir-specific and the only one. Raise generalising it in your PR rather than writing a `LANG_resolve.h` beside it |
 
   Then run `ripwire --clones` on your tree: your new code should add no clone group.
-- **A qualified call you cannot resolve is counted as unresolved — never sent to the global name ladder.**
+- **The target rule: a qualified call you cannot resolve is counted as unresolved — never sent to the global name ladder.**
   `(str/join …)` laddered to every `join` in the corpus mints edges that are not real (the PR #81 decision:
-  the ladder gave one Elixir function 55 callers where 3 were real).
+  the ladder gave one Elixir function 55 callers where 3 were real). **Known gap:** today only Elixir, Rust and
+  C++ `std::` calls have such a rule; a language that newly sets `Reference::qualifier` still falls through to
+  the bare-name ladder when no `qualifier::name` definition exists (CONTRIBUTING.md, "Refuse, don't guess", slice 6a).
+  Do not add a guard for your language alone: pin the wrong edge as a known-gap arm and say so in your PR.
 
 **A known gap, so you are not surprised by it:** the tags pass does not evaluate `#eq?`/`#any-of?`
 predicates yet (see the notes in `queries/javascript/tags.scm`). A language whose definitions are *a call

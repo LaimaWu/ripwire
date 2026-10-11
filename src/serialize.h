@@ -26,7 +26,9 @@
 #include "sarif.h"       // R-E (2026-08-17): rootRelativeUri/rootPrefixOf — the same root= single-root-only
                           // strip --grep's emitGrepReport uses, reused here so the two verbs cannot diverge
 #include "prconverge.h" // W2-F: RankDisclosure + the pr_iters= / pr_converged= spellings (CLI and MCP share them)
+#include "historyread.h" // K51: history_unread= on every root that prints churn=/amp=
 #include "gitmine.h"    // F3 (H2H-Graft): RecentFile — the map's <recent> rows are the churn-decay miner's own product
+#include "mapinventory.h"   // D7: the map scope's <inv> tier — computeMapInventory, kMapInventoryLegend
 
 #include <algorithm>
 #include <numeric>     // std::iota — codeFirstKeep
@@ -349,7 +351,9 @@ inline std::string ctxRootOpen( std::string_view task, std::string_view routeNot
     {
         out += " route_scrubbed=\"1\"";
     }
+    out += renderHistoryUnread( DiscloseAs::XmlAttrs );   // K51: absent unless the amp=/churn= walk could not be read; shared by --for/--pack-task/--from-trace
     out += ">";
+    out += renderHistoryUnread( DiscloseAs::LegendComment );   // its own definition (historyread.h)
     return out;
 }
 
@@ -377,6 +381,7 @@ inline std::string ctxRootJsonScrubKeys( std::string_view task, std::string_view
     {
         keys += ",\"route_xml_scrubbed\":true";
     }
+    keys += renderHistoryUnread( DiscloseAs::JsonKeys );   // K51: this is the one JSON root writer every ctx-family document shares (--for, --pack-task, --from-trace)
     return keys;
 }
 
@@ -1074,12 +1079,20 @@ inline FileTail computeFileTail( const IngestResult& ing, const std::vector<floa
 // emitted (a total of 0 means genuinely none remain, never not-computed — the B1.4 rule for elements).
 // `shownCap` lets the explicit-budget caller trim rows below the collected count; the JSON twin below
 // renders the SAME decision so the dialects cannot diverge on what was served.
-inline std::string renderFileTailXml( const FileTail& t, std::size_t shownCap, std::vector<char>& esc )
+// `cutNextAttr` (a ready ` next="…"` from nextAttrXml, or empty) rides the open tag ONLY when the tail is cut
+// (shown < total): the call that serves the files left out. Empty (every caller but the --for explicit-budget
+// regime) ⇒ byte-identical to before.
+inline std::string renderFileTailXml( const FileTail& t, std::size_t shownCap, std::vector<char>& esc, std::string_view cutNextAttr = {} )
 {
     const std::size_t shown = std::min( shownCap, t.paths.size() );
     std::string x = "<tail total=\"" + std::to_string( t.total )
                   + "\" shown=\"" + std::to_string( shown )
-                  + "\" capped=\"" + ( shown < t.total ? "1" : "0" ) + "\">";
+                  + "\" capped=\"" + ( shown < t.total ? "1" : "0" ) + "\"";
+    if( shown < t.total )
+    {
+        x += cutNextAttr;
+    }
+    x += ">";
     for( std::size_t i = 0; i < shown; ++i )
     {
         x += "<t p=\"";  x += escapeXml( t.paths[i], esc );  x += "\"/>";
@@ -1128,11 +1141,11 @@ inline constexpr std::string_view kForHdrLegend =
 
 // Explicit-budget row fit: the largest shown count whose rendered XML fits `budgetBytes` (0 rows always
 // "fits" — the shell is reserved by the caller). Walks down from the collected count; deterministic.
-inline std::size_t fileTailShownForBudget( const FileTail& t, std::size_t budgetBytes, std::vector<char>& esc )
+inline std::size_t fileTailShownForBudget( const FileTail& t, std::size_t budgetBytes, std::vector<char>& esc, std::string_view cutNextAttr = {} )
 {
     for( std::size_t shown = t.paths.size(); shown > 0; --shown )
     {
-        if( renderFileTailXml( t, shown, esc ).size() <= budgetBytes )
+        if( renderFileTailXml( t, shown, esc, cutNextAttr ).size() <= budgetBytes )
         {
             return shown;
         }
@@ -1953,6 +1966,11 @@ struct MapAnnotations
     // FE-B: the compact posture strips the map's via="name" comment (compactlegend.h, the via/x rows restate it), so the
     // map does not write it at all — and the --max-tokens fit, which measures this render, prices the delivered bytes.
     bool               viaLegendStripped = false;
+    // D7 MAP-INVENTORY (mapinventory.h): the map scope's inventory tier — <inv> after the ranked rows, naming or counting
+    // every indexed file they did not show, plus the program entries. Set where codeFirstRows is (the plain CLI map, MCP
+    // analyze on a clean working set, MCP rank_by=pagerank) except under --max-tokens (mapInventoryWanted). Filled by
+    // assignment, like the trailing fields above.
+    bool               inventoryTier = false;
 };
 
 // ── the code-first row pick: data_sections_cut= / next= (docs/EVALS.md "Map data Sections never crowd code out of the
@@ -2312,6 +2330,11 @@ inline constexpr const char* kDeclinedMapLegend =
 // only to a map where the gate declined at least one call, so a map the gate never touched keeps its bytes.
 inline constexpr const char* kDeclinedGateMapLegend =
     "<!-- hdr:declined=also-counts-builtin-type-method-calls(dict.get,list.append)whose-bound-targets-classes-the-callers-file-never-names -->";
+// The C++ standard-member gate's declines (graph.h StdMemberGate) ride the same declined= count; charged only to a map where
+// that gate declined at least one call, so a map it never touched keeps its bytes. No '>' and no double hyphen inside.
+inline constexpr const char* kDeclinedStdMapLegend =
+    "<!-- hdr:declined=also-counts-C++-calls-named-like-a-std-container/string/optional/smart-pointer-member(v.push_back,s.size)-on-a-receiver-no-rule-tied-to-an-in-tree-class;"
+    "the-std-member-may-be-the-one-called;not-a-claim-the-receiver-is-a-std-type -->";
 
 // #157: the default map's own nest-refused disclosure — before this, a refused file's absence carried no signal
 // on the map's own header at all, only in the skipped verb's own report (if a reader thought to ask). Charged
@@ -2743,6 +2766,65 @@ inline bool hopSlotHasProvenEdge( const std::vector<std::uint32_t>& outOff, cons
                          []( std::uint8_t bit ) { return bit != 0; } );
 }
 
+// D7 MAP-INVENTORY: whether THIS map carries the inventory tier (mapinventory.h), decided once for both dialects. The
+// default map scope only (MapAnnotations::inventoryTier); never under in=DIR's stub (no ranked rows to complement),
+// multi-root (the roots table already partitions the paths, and a per-root inventory is a different answer), or
+// --max-tokens (its fit binary-searches top-k over the rendered bytes; an inventory that GROWS as top-k shrinks would
+// make that search non-monotone).
+inline bool mapInventoryWanted( const IngestResult& ing, const MapAnnotations& ann ) noexcept
+{
+    return ann.inventoryTier && !ann.stubSymbols && ing.rootLabels.size() < 2 && ann.maxTokensFit == nullptr;
+}
+
+// The XML <inv> element: `<inv listed= unlisted=><entry p= n=><c …/></entry>…<ls p= n= f=/>…</inv>`. Entry callees go
+// through writeMapCalleeRows, the ranked rows' own writer, so prov=/via="name"/x= read exactly as they do above.
+template <class PathRel>
+inline void writeMapInventoryXml( XmlWriter& w, const IngestResult& ing, const MapInventory& inv, const PathRel& pathRel,
+                                  const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets,
+                                  const std::vector<std::uint8_t>* outProv, const std::vector<std::uint8_t>* outNameOnly,
+                                  std::vector<char>& esc, std::vector<std::uint32_t>& scratch )
+{
+    EXPECTS( inv.active, "the caller emits the tier only when it has a cut to inventory" );
+    w.write( "<inv listed=\"" );  w.write( std::to_string( inv.listed ) );
+    w.write( "\" unlisted=\"" );  w.write( std::to_string( inv.unlisted ) );  w.write( "\"" );
+    if( inv.entryTotal > inv.entries.size() )
+    {
+        w.write( " entries_capped=\"1\" entries_total=\"" );  w.write( std::to_string( inv.entryTotal ) );  w.write( "\"" );
+        w.write( nextAttrXml( inv.entriesNext, "entries_next" ) );   // rule 5: the cut is recoverable
+    }
+    if( inv.namesCapped )
+    {
+        w.write( " names_capped=\"1\" names_total=\"" );  w.write( std::to_string( inv.namesTotal ) );  w.write( "\"" );
+        w.write( nextAttrXml( inv.namesNext, "names_next" ) );
+    }
+    w.write( ">" );
+    for( NodeId id : inv.entries )
+    {
+        const Symbol& s = ing.symbols[ id ];
+        w.write( "<entry p=\"" );  w.write( escapeXml( pathRel( s.fileId ), esc ) );
+        w.write( "\" n=\"" );      w.write( escapeXml( s.name, esc ) );  w.write( "\">" );
+        writeMapCalleeRows( w, ing, outOff[ id ], outOff[ id + 1 ], outTargets, outProv, outNameOnly, esc, scratch );
+        w.write( "</entry>" );
+    }
+    for( const MapInventoryDir& d : inv.dirs )
+    {
+        w.write( "<ls p=\"" );  w.write( escapeXml( d.dir, esc ) );
+        w.write( "\" n=\"" );   w.write( std::to_string( d.total ) );  w.write( "\"" );
+        if( !d.named.empty() )
+        {
+            std::string names;
+            for( std::uint32_t f : d.named )
+            {
+                if( !names.empty() ) { names += ','; }
+                names += namesplit::afterLast( pathRel( f ), "/" );
+            }
+            w.write( " f=\"" );  w.write( escapeXml( names, esc ) );  w.write( "\"" );
+        }
+        w.write( "/>" );
+    }
+    w.write( "</inv>" );
+}
+
 inline void serialize( std::FILE* out, const IngestResult& ing, const std::vector<float>& rank,
                        const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets,
                        int topK, bool mostImportantLast = false,
@@ -2805,7 +2887,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
                        std::size_t gateDeclinedCalls = 0,
                        // FE-B: Graph::outNameOnly (parallel to outTargets) → via="name" on a <c> row and the via legend
                        // comment; nullptr/empty ⇒ every edge is evidence-bound and the map is byte-identical.
-                       const std::vector<std::uint8_t>* outNameOnly = nullptr )
+                       const std::vector<std::uint8_t>* outNameOnly = nullptr,
+                       // of declined=, the calls the C++ standard-member gate declined (graph.h g.stdMemberDeclinedCalls) →
+                       // the kDeclinedStdMapLegend clause, absent when zero.
+                       std::size_t stdMemberDeclinedCalls = 0 )
 {
     const std::size_t* changedCount = ann.changedCount;
     const std::string* mapAtStamp   = ann.atStamp;
@@ -2854,6 +2939,9 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         if( !seen[f] ) { seen[f] = 1;  fileOrder.push_back( f ); }
         buckets[f].push_back( id );
     }
+    // D7: the inventory over the files the kept rows did NOT reach (`seen` is exactly the printed <f> groups)
+    const MapInventory inventory = ( mapInventoryWanted( ing, ann ) && !stubbed )
+                                 ? computeMapInventory( ing, outOff, outTargets, seen, pathRel ) : MapInventory{};
 
     // T1/§H7: the byte MODEL. It keeps two jobs and loses one. It still decides the T3 emit order below
     // (which has to be decided before any byte exists — see §H7 at estimateTokens) and it still supplies
@@ -2992,8 +3080,9 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     {
         legend += "<!-- of= is the resolved SEED this neighbourhood is centred on; depth= call hops walked and fanout= "
                   "neighbours kept per hop are its whole boundary, so a row's absence means outside them, not nonexistent. "
-                  "defs= (only when >1) = that NAME has N definitions and the lowest-id one was walked (a C/C++ declaration "
-                  "without a body yields to the lowest-id definition of its scope that has one); qualify with "
+                  "defs= (only when >1) = that NAME has N definitions and the lowest-id one was walked (a CODE definition before a doc "
+                  "heading or config key, and a C/C++ declaration without a body yields to the lowest-id definition of its "
+                  "scope that has one); qualify with "
                   "file:name or @FILE:LINE to pick another. -->";
         legend += seedBiteLegend( ann.seed );   // C2: charged only on a run whose root carries a bite attribute (the at= rule)
         // H1: charged only on a run whose root carries unproven_defs= — the same rule, and part of the head est_tokens prices.
@@ -3029,6 +3118,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     {
         legend += kDataSectionsCutLegend;   // charged to the map that carries data_sections_cut=
     }
+    if( inventory.active )
+    {
+        legend += kMapInventoryLegend;      // D7: charged to the map that carries <inv>
+    }
     // W2-F: the pr_iters= / pr_converged= definition, charged to the maps that carry the attributes — empty
     // for a lexical or HITS ordering, and the prose half only on the map whose iteration stopped short.
     legend += renderDisclosure( ann.prDisclosure, DiscloseAs::LegendComment );
@@ -3041,6 +3134,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     const std::size_t declinedTotal   = counterTotal( declinedOut );     // calls tier 3 declined: no edge, and no guess
     legend += declinedTotal > 0 ? kDeclinedMapLegend : "";               // charged to the map that carries declined=
     legend += gateDeclinedCalls > 0 ? kDeclinedGateMapLegend : "";       // only where the builtin-method gate declined a call
+    legend += stdMemberDeclinedCalls > 0 ? kDeclinedStdMapLegend : "";   // only where the C++ standard-member gate declined a call
     if( outNameOnly && !stubbed && !ann.viaLegendStripped
         && namesOnlyOutAny( outOff, *outNameOnly, std::span<const NodeId>( order.data(), std::min( keep, order.size() ) ) ) )
     {
@@ -3247,6 +3341,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         // L3 follow-up (CodeRabbit 4053600616): TRULY last, past every pre-existing attribute — same placement
         // rule as lens= just above, so no attribute-adjacency assertion in test/ can break on it.
         if( ann.notesDegraded ) { h += notes::kNotesDegradedAttr; }
+        h += renderHistoryUnread( DiscloseAs::XmlAttrs );   // K51: absent unless the amp=/churn= walk could not be read
         // The code-first pick's swaps, last of all (the same placement rule as the two above): absent when nothing was swapped.
         if( dataSecCut.cut > 0 )
         {
@@ -3254,6 +3349,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
             h += nextAttrXml( dataSectionsNext( dataSecCut ) );
         }
         h += ">";
+        h += renderHistoryUnread( DiscloseAs::LegendComment );   // K51: its own definition, right behind the root it marks
         return h;
     };
     const auto buildTail = [ & ]( std::size_t estTokens ) -> std::string
@@ -3334,6 +3430,21 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
             stub += nextAttrXml( ann.stubNext );
             stub += "/>";
             w.write( stub );
+        }
+        // D7: the inventory tier rides the LOW-importance end of the document — after the rows, or before them when the
+        // map is emitted important-last (an explicit flag or the fill-aware auto flip), so the top-ranked rows keep the
+        // end position that order promises.
+        const auto writeInventory = [ & ]()
+        {
+            if( inventory.active )
+            {
+                writeMapInventoryXml( w, ing, inventory, pathRel, outOff, outTargets, outProv, outNameOnly, esc, hedgedScratch );
+            }
+        };
+        const bool inventoryFirst = !stable && effImportantLast;   // --stable's path order wins, as it does for the rows
+        if( inventoryFirst )
+        {
+            writeInventory();
         }
         static const std::vector<std::uint32_t> kNoFiles;
         for( std::uint32_t f : ann.stubSymbols ? kNoFiles : fileOrder )
@@ -3552,6 +3663,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
                 w.write( "</s>" );
             }
             w.write( "</f>" );
+        }
+        if( !inventoryFirst )
+        {
+            writeInventory();
         }
         w.write( "</r>" );
     };
@@ -4949,6 +5064,8 @@ struct SigsCutReport
     bool        hasContinuation  = false;   // the caller asked for the continuation (next=/next_budget_tokens=/next_offset=)
     bool        terseContinuation = false;  // a CHARGED pasteable one under a hard ceiling: next= alone (no next_offset=, no
                                             //   clause — the bundle's own next= reading defines it); see SigsCutContinuation
+    std::size_t continuationPaidSurplus = 0;   // train 27: what the rows gave up past what they owed (a whole row dropped for a
+                                               //   smaller handle) — the caller adds it to a measured overrun (verbs_for.h runForLens)
     std::size_t continuationUnpaidBytes = 0;   // a CHARGED one's bytes no row paid for — the rank 1..4 floor could not give them up,
                                                //   or the caller forbade the payment (payFromRows=false): it rides anyway (the recovery
                                                //   handle always ships) and the caller labels any overshoot
@@ -5011,6 +5128,10 @@ struct SigsCutContinuation
                                          //   false = the caller found that paying cannot make its answer fit (over its ceiling either
                                          //   way; orchestrator ruling C3, 2026-10-07): the block keeps the rows the cut alone leaves —
                                          //   no ledger gap, no payment — and the whole continuation rides unpaid (continuationUnpaidBytes)
+    std::size_t      overrunBytes = 0;   // train 27 (compactlegendcheck P1-B): a CHARGED one paying from rows also pays these bytes
+                                         //   from the rows, byte for byte beside the handle — the overrun past the exact budget the
+                                         //   caller MEASURED on its paid render (verbs_for.h runForLens, the compact dialect only);
+                                         //   0 everywhere else, so every other caller's rows are untouched
 };
 
 inline std::size_t sigsCutNextTokens( std::size_t blockBytes, std::size_t fixedBytes ) noexcept
@@ -5198,6 +5319,22 @@ inline std::size_t sigsCutPlanReserve( const SigsCutContinuation* req ) noexcept
 {
     return sigsCutPaysFromRows( req ) ? req->ledgerGapBytes : 0u;
 }
+// train 27: what a payment from the rows gave up PAST what it owed — the ladder drops whole rows, so a 90 B handle can cost a
+// 150 B row. A caller that measures its paid document still over its budget owes that overrun ON TOP of what was given up.
+inline std::size_t sigsCutPaidSurplus( std::size_t totalBefore, std::size_t totalAfter, std::size_t owed, std::size_t unpaid ) noexcept
+{
+    const std::size_t given   = totalBefore > totalAfter ? totalBefore - totalAfter : 0u;
+    const std::size_t paid    = owed > unpaid ? owed - unpaid : 0u;
+    const std::size_t surplus = given > paid ? given - paid : 0u;
+    ENSURES( surplus <= given, "sigsCutPaidSurplus: the surplus exceeds what the rows gave up" );
+    return surplus;
+}
+// train 27: the row-side share beside the handle — the caller's measured overrun (SigsCutContinuation::overrunBytes), owed only by
+// a capped block whose caller lets rows pay; what the rank 1..4 floor cannot give up is reported with the handle's unpaid bytes
+inline std::size_t sigsCutRowOverrun( const SigsCutContinuation* req ) noexcept
+{
+    return sigsCutPaysFromRows( req ) ? req->overrunBytes : 0u;
+}
 // A CHARGED continuation is paid FROM THE ROWS, byte for byte: the same ladder runs on past the cut until the block has given
 // up `cost` bytes, so block + continuation never exceeds the block the cut alone left — in either dialect, whatever the plan's
 // slack (reserving it in the plan let that slack absorb it and the bundle grow). Returns the bytes the rank 1..4 floor could
@@ -5343,9 +5480,14 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
                                                              //   for the caller's legend splices. Lens path only; zeroed
                                                              //   (nothing cut) on every other path. knob-honesty-068: its
                                                              //   continuationRequest is an INPUT, read before the reset.
-                            SigRowSpelling spelling = {} )   // lean-answers lane: the --for lens's zero cx=/ccx=/in= omitted
+                            SigRowSpelling spelling = {},    // lean-answers lane: the --for lens's zero cx=/ccx=/in= omitted
                                                              //   (SigRowFacts::elideZero); its legend says absent = 0. Default ⇒
                                                              //   byte-identical (pack-task, from-trace and the map stay as they were).
+                            std::uint32_t rankBase = 0 )       // d1/paging (#294): 1-based GLOBAL candidate-rank base for the windowed
+                                                             //   serving (0 = the un-windowed default, byte-identical) — a continuation
+                                                             //   page's rows carry their GLOBAL r= (page 2's first row is r=201, not
+                                                             //   r=1: the rank-adaptive doc/sig tiers and the r=1 row's next= hint key
+                                                             //   on GLOBAL rank), so pages merge without duplicate r=
 {
     const SigsCutContinuation* const cutNext = cutOut != nullptr ? cutOut->continuationRequest : nullptr;
     if( cutOut )
@@ -5413,7 +5555,7 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
         globalRankOf.assign( S, 0 );
         for( std::size_t k = 0; k < keep; ++k )
         {
-            globalRankOf[order[k]] = std::uint32_t( k + 1 );
+            globalRankOf[order[k]] = rankBase + std::uint32_t( k + 1 );   // + rankBase: the WINDOWED serving's global base
         }
     }
 
@@ -5674,10 +5816,12 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
         // knob-honesty-068: a CHARGED continuation is paid from the rows (paySigsContinuationFromRows); what the floor
         // cannot pay rides anyway and is reported for the caller's over_ceiling label
         //   …only where the caller lets rows pay (payFromRows): otherwise the whole of it rides unpaid on the cut's own rows
-        const std::size_t cutNextOwed   = plan.capped ? cutNextCost : 0u;
+        const std::size_t cutNextOwed   = plan.capped ? cutNextCost + sigsCutRowOverrun( cutNext ) : 0u;
+        const std::size_t totalBeforePay = total;
         const std::size_t cutNextUnpaid = sigsCutPaysFromRows( cutNext )
                                               ? paySigsContinuationFromRows( entries, sigFiles, total, cutNextOwed, entryCost )
                                               : cutNextOwed;
+        const std::size_t cutNextSurplus = sigsCutPaysFromRows( cutNext ) ? sigsCutPaidSurplus( totalBeforePay, total, cutNextOwed, cutNextUnpaid ) : 0u;
 
         // A2: the exact count, computed AFTER the ladder has made its final drop decisions (droppedPositiveCount
         // above — the shared arithmetic with the JSON sibling). Pure bookkeeping, no output bytes either way.
@@ -5727,6 +5871,7 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
         }
         cut.continuationRequest     = cutNext;
         cut.continuationUnpaidBytes = cutNextUnpaid;
+        cut.continuationPaidSurplus = cutNextSurplus;
         sigsCutAttachContinuation( cut, cutNext, cutNextInv, cutNextTokens );   // nothing unless capped and asked for
         if( cutOut )
         {
@@ -5754,7 +5899,11 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
             {
                 continue;
             }
-            pushShownSigId( shownIdsOut, order, e.globalRank );   // lane 2
+            // lane 2 — the LOCAL rank under rankBase: globalRank carries the WINDOWED serving's
+            // global offset (#294 review), and order[] holds the WINDOW's rows in its head, so the
+            // id mapping must subtract rankBase or it reads past the window into the masked tail
+            // (the #362 review round's next_offset=2^32 seam).
+            pushShownSigId( shownIdsOut, order, std::uint32_t( e.globalRank - rankBase ) );
             writeSigHeadWithEnd( w, e.head, e.endLine );            // e= after l=, when the lens asked and the extent is known
             if( !e.doc.empty() ) { w.write( "<doc>" );  w.write( escapeXml( e.doc, esc ) );  w.write( "</doc>" ); }
             w.write( escapeXml( e.sig, esc ) );
@@ -6327,24 +6476,38 @@ struct CalleeCallsSink
     // FE-B: set once the block's caller has been charged the via="name" legend comment it will write (packBodies/packHops
     // write it ahead of the rows, after the walk) — so the budget the walk honours already holds those bytes
     bool*                            viaLegendCharged = nullptr;
+    // owner-hop (verbs_for.h THE QUESTION'S OWNER): an owner row lists its callees up to a RUNAWAY GUARD instead of the
+    // sixteen a ranked row shows, and a cut listing carries the pasteable full list. Defaulted to the ranked shape, so
+    // every pre-existing caller is byte-identical. `cappedNext` is already XML-escaped and written only when cut.
+    std::uint32_t                    rowCap     = 16;
+    std::string_view                 cappedNext;
 };
 
 // The <calls> wrapper, written in front of the rows it describes (they have to be walked before `shown`
 // is known). pageview.h THE TRUNCATION VOCABULARY rule 3: shown=/capped= are added ONLY when the 16-row
 // cap or the byte budget actually cut the list, and they are added TOGETHER — never shown="T" capped="0"
 // on a complete listing.
-inline void appendCallsBlock( std::string& out, std::uint32_t total, int shown, const std::string& rows )
+// `nextEscaped` (owner rows only): the continuation that lists the whole set, written beside capped="1" and only then.
+inline void appendCallsBlock( std::string& out, std::uint32_t total, int shown, const std::string& rows, std::string_view nextEscaped = {} )
 {
     char callsHdr[ 64 ];
-    if( static_cast<std::uint32_t>( shown ) < total )
+    const bool cut = static_cast<std::uint32_t>( shown ) < total;
+    if( cut )
     {
-        rw::formatTo( callsHdr, sizeof( callsHdr ), "<calls total=\"{}\" shown=\"{}\" capped=\"1\">", total, shown );
+        rw::formatTo( callsHdr, sizeof( callsHdr ), "<calls total=\"{}\" shown=\"{}\" capped=\"1\"", total, shown );
     }
     else
     {
-        rw::formatTo( callsHdr, sizeof( callsHdr ), "<calls total=\"{}\">", total );
+        rw::formatTo( callsHdr, sizeof( callsHdr ), "<calls total=\"{}\"", total );
     }
     out += callsHdr;
+    if( cut && !nextEscaped.empty() )
+    {
+        out += " next=\"";
+        out += nextEscaped;
+        out += "\"";
+    }
+    out += ">";
     out += rows;
     out += "</calls>";
 }
@@ -6558,7 +6721,7 @@ inline void emitCalleeCallsBlock( std::string& out, NodeId id, const std::vector
     std::string                      callsBody;
     std::vector<MergedCalleeNameRow> nameRows;   // names-only rendering: collected, merged by name, written after the walk
     int                              shown = 0;
-    for( std::uint32_t k = outOff[id]; k < outOff[id + 1] && shown < 16 && used < budgetBytes; ++k )
+    for( std::uint32_t k = outOff[id]; k < outOff[id + 1] && shown < int( sink.rowCap ) && used < budgetBytes; ++k )
     {
         const NodeId cid = walk[ k - outOff[id] ];
         if( cid >= ing.symbols.size() )
@@ -6597,7 +6760,7 @@ inline void emitCalleeCallsBlock( std::string& out, NodeId id, const std::vector
         }
     }
     appendMergedCalleeNameRows( callsBody, nameRows, esc );   // no-op on the signature rendering (nameRows stays empty)
-    appendCallsBlock( out, total, shown, callsBody );
+    appendCallsBlock( out, total, shown, callsBody, sink.cappedNext );
 }
 
 // THE <bodies> DISCLOSURE (§B8.3). This was the one budgeted section element carrying NO attributes at all:
@@ -7348,6 +7511,137 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
     w.flush();
 }
 
+// ── THE QUESTION'S OWNER ROWS (lane owner-hop-068; the selection is verbs_for.h forOwnerHopPlan) ──────────────────
+// The first `rows` nodes handed to packHops are OWNER rows: a ranked callable definition whose whole name equals a word
+// of the question. Each prints `qword="<word>"`, lists its callees up to kForOwnerHopNameGuard (a runaway guard, the
+// kMaxExpandSibs precedent — never a target) and, when that listing is cut, says where the whole of it is
+// (`<calls … capped="1" next=>`). Owners the plan could not seat (the row cap) or the budget could not fund are counted
+// in `<hops qword_cut="N" next=>`, the continuation naming the first of them.
+inline constexpr std::uint32_t kForOwnerHopNameGuard = 100;
+struct HopOwners
+{
+    std::size_t                   rows = 0;            // the first `rows` nodes are owner rows, in slot order
+    std::vector<std::string_view> words;               // the folded question word of each owner row (one per row)
+    std::size_t                   budgetBytes = 0;     // 0: ride ON TOP of the hop budget (default regime, guard only)
+    bool                          fundFirst   = false; // explicit ceiling: owners are funded first and the ranked rows get
+                                                       //   what they leave of budgetBytes (never more than their own budget)
+    std::size_t                   capCut      = 0;     // owners with a proven edge past the row cap (never seated)
+    NodeId                        firstCapCut = kNoNode;
+};
+
+// The continuation that lists one owner's callees: the canonical id when the symbol has a scope (two same-named methods
+// of one file are two entities, and FILE:NAME would merge them), else FILE:NAME. Escaped for an attribute value.
+inline std::string ownerCalleesNext( const IngestResult& ing, const Symbol& s, std::string_view pathRel, std::string_view rootArg,
+                                     std::vector<char>& esc )
+{
+    std::string target = s.scope.empty() ? std::string( pathRel ) + ":" + std::string( s.name ) : canonicalIdForEmit( ing, s, rootArg );
+    return "--callees=" + std::string( escapeXml( target, esc ) );
+}
+
+// What the owner walk hands back to packHops: the rows, how many nodes they consumed, and the budget and via-legend charge
+// the RANKED rows then run on, plus the cut disclosure (`cutNext` already escaped; empty when nothing was cut).
+struct OwnerHopRows
+{
+    std::string xml;
+    std::size_t rows         = 0;          // leading nodes that were owner rows (served or budget-cut)
+    std::size_t shown        = 0;
+    std::size_t rankedBudget = SIZE_MAX;   // the ranked rows' budget: unchanged, or (explicit ceiling) what the owners left
+    bool        rankedVia    = false;      // the ranked rows' via-legend charge state
+    std::size_t cut          = 0;          // qword_cut=: cap cuts + budget cuts
+    std::string cutNext;
+};
+
+// The owner walk (packHops' first rows). Default regime: their own byte room, unlimited, the name guard the only stop, and
+// their own via-legend charge — so the ranked rows are charged exactly what they were charged without owners. Explicit
+// ceiling (fundFirst): funded first; the ranked rows get the rest. A row that cannot pay for its identity and its next= is
+// not started: it is counted as cut, so an owner row never drops its names without saying where the rest are.
+template <typename PathRelFn, typename ContentOfFn>
+inline OwnerHopRows packOwnerHopRows( const IngestResult& ing, const std::vector<NodeId>& nodes, const HopOwners* owners,
+                                      const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets,
+                                      const std::vector<std::uint8_t>& outNameOnly, RedactCounts* redact, const std::vector<float>* rank,
+                                      std::string_view rootArg, std::size_t rankedBudget, bool rankedVia,
+                                      PathRelFn&& pathRel, ContentOfFn&& contentOf, std::vector<char>& esc )
+{
+    OwnerHopRows out;
+    out.rankedBudget = rankedBudget;
+    out.rankedVia    = rankedVia;
+    if( owners == nullptr )
+    {
+        return out;
+    }
+    EXPECTS( owners->words.size() == owners->rows, "one question word per owner row" );
+    out.rows = std::min( owners->rows, nodes.size() );
+    out.cut  = owners->capCut;
+    std::size_t used     = 0;
+    const std::size_t budget = owners->budgetBytes > 0 ? owners->budgetBytes : SIZE_MAX;
+    bool        via      = rankedVia;
+    NodeId      firstCut = kNoNode;                       // the first owner the BUDGET cut (it ranks before every cap cut)
+    for( std::size_t i = 0; i < out.rows; ++i )
+    {
+        const NodeId id = nodes[ i ];
+        // forOwnerHopPlan seats only indexed symbols, each with a proven callee edge (hopSlotHasProvenEdge, read there)
+        ASSUME( id < ing.symbols.size(), "the owner plan seats only indexed symbols (forOwnerHopPlan)" );
+        const Symbol&     s    = ing.symbols[ id ];
+        const std::string next = ownerCalleesNext( ing, s, pathRel( s.fileId ), rootArg, esc );
+        std::string       row  = "<h l=\"" + std::to_string( s.line ) + "\" p=\"";   // composed on std::string: no fixed buffer
+        row += escapeXml( pathRel( s.fileId ), esc );
+        row += "\" n=\"";
+        row += escapeXml( s.name, esc );
+        row += "\" qword=\"";
+        row += escapeXml( owners->words[ i ], esc );
+        row += "\">";
+        const std::size_t rowFixed = row.size() + next.size() + 8 + 16;   // + ' next=""' + '</calls></h>'
+        if( used + rowFixed >= budget )
+        {
+            firstCut = firstCut == kNoNode ? id : firstCut;
+            ++out.cut;
+            continue;
+        }
+        used += rowFixed;
+        emitCalleeCallsBlock( row, id, outOff, outTargets, ing, contentOf, esc, used, budget,
+                              CalleeCallsSink{ redact, /*recorded=*/nullptr, /*namesOnly=*/true, rank, &outNameOnly, &via,
+                                               kForOwnerHopNameGuard, next } );
+        out.xml += row;
+        out.xml += "</h>";
+        ++out.shown;
+    }
+    if( owners->fundFirst )
+    {
+        out.rankedBudget = std::min( rankedBudget, owners->budgetBytes > used ? owners->budgetBytes - used : 0 );
+        out.rankedVia    = rankedVia || via;
+    }
+    const NodeId first = firstCut != kNoNode ? firstCut : owners->firstCapCut;
+    if( out.cut > 0 )
+    {
+        ASSUME( first < ing.symbols.size(), "a counted owner cut names an indexed symbol (forOwnerHopPlan / the walk above)" );
+        out.cutNext = ownerCalleesNext( ing, ing.symbols[ first ], pathRel( ing.symbols[ first ].fileId ), rootArg, esc );
+    }
+    return out;
+}
+
+// The <hops> open tag: the truncation triple, noedge= when non-zero, and the owner cut disclosure when there is one.
+inline std::string hopsOpenTag( std::size_t shown, std::size_t requested, std::size_t noEdge, const OwnerHopRows& own )
+{
+    char open[ 128 ];
+    if( noEdge > 0 )
+    {
+        rw::formatTo( open, sizeof( open ), "<hops shown=\"{}\" total=\"{}\" capped=\"{}\" noedge=\"{}\"",
+                       shown, requested, shown + noEdge < requested ? 1 : 0, noEdge );
+    }
+    else
+    {
+        rw::formatTo( open, sizeof( open ), "<hops shown=\"{}\" total=\"{}\" capped=\"{}\"",
+                       shown, requested, shown < requested ? 1 : 0 );
+    }
+    std::string tag( open );
+    if( own.cut > 0 )
+    {
+        tag += " qword_cut=\"" + std::to_string( own.cut ) + "\" next=\"" + own.cutNext + "\"";   // DISCLOSE the owners not served
+    }
+    tag += ">";
+    return tag;
+}
+
 // ── THE <hops> SECTION: one-hop edge context without the body text ────────────────────────────────────
 // (pre-registered: docs/EVALS.md, the T3 route-narrowing round; the allowance is
 // kForCompactHopBudgetBytes above, with its derivation.)
@@ -7367,8 +7661,9 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
 // group for, and walking `nodes` in the order the caller ranked them spends the budget on the
 // best-ranked symbols first.
 //
-// A candidate with no resolved out-edges gets NO row and is counted in `noedge=` instead — see the loop
-// for why that is the honest form rather than the cheap one. Call edges are name-based, so dynamic
+// A candidate with no resolved out-edges gets NO row and is counted in `noedge=` instead — and so does an OWNER of the
+// question (THE QUESTION'S OWNER ROWS above) with none, exactly once whether or not it was also a ranked candidate — see
+// the loop for why that is the honest form rather than the cheap one. Call edges are name-based, so dynamic
 // dispatch, callbacks and macros can be missing: `noedge=` means none FOUND, never none exists
 // (CONTRIBUTING #3), and it is deliberately a separate number from `capped=`, which says only that the
 // byte budget stopped before the remaining candidates.
@@ -7377,10 +7672,10 @@ inline void packHops( std::FILE* out, const IngestResult& ing, const std::vector
                       const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets,
                       const std::vector<std::uint8_t>& outNameOnly,   // FE-B: Graph::outNameOnly — the <c> rows' via="name"
                       RedactCounts* redact = nullptr,
-                      std::size_t* outShown = nullptr,          // rows actually emitted; nullptr ⇒ not recorded
                       const std::vector<float>* rank = nullptr, // query relevance, for ordering a CUT callee listing
                       std::string_view rootArg = {},            // R-E: same single-root-only root= every verb takes
-                      bool viaLegendInHead = false )            // FE-B: packBodies' parameter of the same name
+                      bool viaLegendInHead = false,             // FE-B: packBodies' parameter of the same name
+                      const HopOwners* owners = nullptr )       // owner-hop: the leading owner rows; nullptr ⇒ none (byte-identical)
 {
     bool viaLegendCharged = viaLegendInHead;   // FE-B: the via="name" legend has been charged against the budget (CalleeCallsSink)
     if( budgetBytes == 0 )                                      // 0 ⇒ UNLIMITED, packBodies' own convention
@@ -7424,12 +7719,19 @@ inline void packHops( std::FILE* out, const IngestResult& ing, const std::vector
         return contents.emplace( fid, std::move( s ) ).first->second;
     };
 
-    std::string children;
-    std::size_t requestedCount = 0;
-    std::size_t shownCount     = 0;
+    // owner-hop: the leading owner rows first (THE QUESTION'S OWNER ROWS above; nothing when `owners` is null), then the
+    // ranked rows exactly as before, from the node the owners end at, on the budget and via charge the owners leave them
+    const OwnerHopRows own = packOwnerHopRows( ing, nodes, owners, outOff, outTargets, outNameOnly, redact, rank, rootArg,
+                                               budgetBytes, viaLegendCharged, pathRel, contentOf, esc );
+    std::string children       = own.xml;
+    std::size_t requestedCount = own.shown;
+    std::size_t shownCount     = own.shown;
     std::size_t noEdgeCount    = 0;
-    for( NodeId id : nodes )
+    budgetBytes      = own.rankedBudget;
+    viaLegendCharged = own.rankedVia;
+    for( auto it = nodes.begin() + std::ptrdiff_t( own.rows ); it != nodes.end(); ++it )
     {
+        const NodeId id = *it;
         if( id >= ing.symbols.size() )
         {
             continue;                                           // never a request this function could answer
@@ -7482,29 +7784,15 @@ inline void packHops( std::FILE* out, const IngestResult& ing, const std::vector
     // capped= is the BUDGET bit only: the candidates neither printed nor accounted by noedge=. Emitted
     // as the 0|1 boolean the vocabulary requires either way; noedge= follows the house silence rule and
     // appears only when it is non-zero.
-    char open[ 128 ];
-    if( noEdgeCount > 0 )
-    {
-        rw::formatTo( open, sizeof( open ), "<hops shown=\"{}\" total=\"{}\" capped=\"{}\" noedge=\"{}\">",
-                       shownCount, requestedCount, shownCount + noEdgeCount < requestedCount ? 1 : 0, noEdgeCount );
-    }
-    else
-    {
-        rw::formatTo( open, sizeof( open ), "<hops shown=\"{}\" total=\"{}\" capped=\"{}\">",
-                       shownCount, requestedCount, shownCount < requestedCount ? 1 : 0 );
-    }
+    const std::string openTag = hopsOpenTag( shownCount, requestedCount, noEdgeCount, own );
     if( !viaLegendInHead && children.find( " via=\"name\"" ) != std::string::npos )
     {
         w.write( viaNameLegendComment() );   // FE-B: exactly when a hop's <calls> row carries via="name"
     }
-    w.write( open );
+    w.write( openTag );
     w.write( children );
     w.write( "</hops>" );
     w.flush();
-    if( outShown )
-    {
-        *outShown = shownCount;
-    }
 }
 
 // ── M6 (density audit 2026-08-08): the WHOLE-FILE form a bare --expand can serve ─────────────────────
@@ -7868,8 +8156,10 @@ inline std::string outlineSkeleton( const std::string& src, const Symbol& s, boo
 // <outline>, byte-identical). total= counts the valid requests with a body to outline (a module scope has
 // none, the packBodies bodyless rule); a skeleton whose span is unreadable is not shown and so also cuts.
 inline void packOutline( std::FILE* out, const IngestResult& ing, const std::vector<NodeId>& nodes, std::size_t budgetBytes, bool compress, RedactCounts* redact,
-                         std::string_view rootArg = {} )   // R-E (2026-08-17): same single-root-only root
+                         std::string_view rootArg = {},    // R-E (2026-08-17): same single-root-only root
                                                            // argument serialize() takes — see its comment.
+                         std::vector<NodeId>* shownIdsOut = nullptr )   // expand-lean-k64: the ids this call EMITTED an <o> for
+                                                           // (nullptr ⇒ not recorded; output unchanged either way)
 {
     XmlWriter         w( out );
     std::vector<char> esc;
@@ -7934,6 +8224,10 @@ inline void packOutline( std::FILE* out, const IngestResult& ing, const std::vec
         piece += safe;  piece += "]]></o>";
         used += safe.size();
         ++shownCount;
+        if( shownIdsOut != nullptr )
+        {
+            shownIdsOut->push_back( id );
+        }
         pieces.push_back( PackedBodyPiece{ slot, id, SIZE_MAX, false, std::move( piece ) } );
     }
     std::stable_sort( pieces.begin(), pieces.end(), []( const PackedBodyPiece& x, const PackedBodyPiece& y ) { return x.fileSlot < y.fileSlot; } );
@@ -8167,6 +8461,82 @@ inline SectionStubPricing priceSectionStub( const char* tag, std::size_t preCapT
     ENSURES( !p.collapse || ( hasRenderedBytes && p.stubXml.size() < renderedBytes ),
              "priceSectionStub: a collapse was decided without measured bytes, or the stub is not smaller than the section" );
     return p;
+}
+
+// One stubbable --for section (<lego> or <compose>) as the stub plan reads it.
+struct ForStubbableSection
+{
+    bool        hasContent;      // the section would render non-empty
+    std::size_t preCapTotal;     // its own pre-cap row count: the stub's total=
+    bool        rendered;        // its bytes were measured (false = the open_memstream degrade path, never collapsed)
+    std::size_t renderedBytes;   // the measured full render (0 when !rendered)
+};
+
+// The <lego>/<compose> stub decision of a ranked --for answer: which section collapses (L2 / R2-L2', priceSectionStub) and
+// the ONE restoring spelling. One function for the CLI lens (verbs_for.h runForLens) and its MCP twin (mcpverbs.h
+// forTaskText), for both the final decision and the <sigs> charge (forSectionsSigCharge below).
+struct ForSectionStubPlan
+{
+    std::string        nextInvocation;   // empty when neither section is a candidate
+    SectionStubPricing lego{};
+    SectionStubPricing compose{};
+    bool               legoWillStub    = false;
+    bool               composeWillStub = false;
+
+    // the bytes the two sections occupy as served: a collapsing section at its stub, any other at its measured render.
+    // kForSectionStubLegend is not in it: a disclosure clause, exempt from the <sigs> charge like the e=/owner/tail clauses.
+    [[nodiscard]] std::size_t servedBytes( const ForStubbableSection& legoIn, const ForStubbableSection& composeIn ) const noexcept
+    {
+        return ( legoWillStub ? lego.stubXml.size() : legoIn.renderedBytes ) + ( composeWillStub ? compose.stubXml.size() : composeIn.renderedBytes );
+    }
+};
+
+inline ForSectionStubPlan planForSectionStubs( std::string_view sections, std::string_view forTask, const ForStubbableSection& legoIn,
+                                               const ForStubbableSection& composeIn )
+{
+    ForSectionStubPlan p;
+    // a CANDIDATE has content and was not opted back in by --sections=; it collapses only when its stub is cheaper
+    const bool legoCandidate    = legoIn.hasContent && !sectionsWant( sections, "lego" );
+    const bool composeCandidate = composeIn.hasContent && !sectionsWant( sections, "compose" );
+    if( legoCandidate || composeCandidate )
+    {
+        p.nextInvocation = nextFlag( "--for=", forTask );
+        p.nextInvocation += ' ';
+        p.nextInvocation += nextFlag( "--sections=", "lego,compose" );
+    }
+    if( legoCandidate )
+    {
+        p.lego = priceSectionStub( "lego", legoIn.preCapTotal, p.nextInvocation, legoIn.rendered, legoIn.renderedBytes );
+    }
+    if( composeCandidate )
+    {
+        p.compose = priceSectionStub( "compose", composeIn.preCapTotal, p.nextInvocation, composeIn.rendered, composeIn.renderedBytes );
+    }
+    p.legoWillStub    = legoCandidate && p.lego.collapse;
+    p.composeWillStub = composeCandidate && p.compose.collapse;
+    const std::size_t served = p.servedBytes( legoIn, composeIn );
+    ENSURES( served <= legoIn.renderedBytes + composeIn.renderedBytes,
+             "planForSectionStubs: a collapse made the two sections bigger than their measured renders" );
+    return p;
+}
+
+// lego-charge (K18 root cause): what <lego>/<compose> cost the <sigs> budget, computed BEFORE the sigs render. It used to be
+// the full pre-rendered bytes, while the default answer serves a collapsing section as a ~120 B stub: textual's 6.5 KB lego
+// left 71 B for <sigs> (4 rows shipped in a 4.6 KB answer under a 7.5 KB ceiling). Now a section is charged as it is SERVED.
+// Two rules decide what "served" means here:
+//  * Without an explicit ceiling, the charge is the DEFAULT answer's, also under --sections=: the stub's next= promises the
+//    sections back "byte-identically in one call" (kForSectionStubLegend), and only a call whose <sigs> match the stubbed
+//    answer's renders them so (the lego is narrowed to the rendered sigs' files, §P3×§P4). The restored sections then ride
+//    on top of that answer, priced in est_tokens=; charging them in full would serve FEWER rows than the stub promised.
+//  * Under an explicit ceiling (--token-budget / MCP budget_tokens), a section --sections= opts into is
+//    charged at its full render: the ceiling is a hard bound, and the stub's next= never carries one.
+// The charge is taken before the §P3×§P4 narrow, on the pre-narrow render and count. The narrow only empties implementor
+// lists, so a served stub's total= can only shrink (runForLens ENSURES it). A section served whole was charged at its
+// pre-narrow render, as it was before this change.
+inline ForSectionStubPlan forSectionsSigChargePlan( std::string_view sections, bool explicitCeiling, std::string_view forTask,
+                                                    const ForStubbableSection& legoIn, const ForStubbableSection& composeIn )
+{
+    return planForSectionStubs( explicitCeiling ? sections : std::string_view(), forTask, legoIn, composeIn );
 }
 
 // B6.3 HTTP-route cross-service view: for a set of relevant symbols, emit the synthesized route USE→DEF
@@ -8468,6 +8838,128 @@ inline bool narrowLegoToRenderedSigs( const IngestResult& ing, std::vector<std::
     return narrowed;
 }
 
+// lane lego-transitive: the TARGETED --lego answer also lists the DEEPER implementors — the types below a direct one
+// (`class Default( SimpleFormatter )` under `BaseFormatter`), each with via= (the type it extends that put it in the
+// closure) and depth= (hops below the interface; the direct rows are depth 1 and carry neither). The direct rows stay
+// uncapped as before; the deeper rows are one page of at most kLegoClosureRowCap, a RUNAWAY guard: the measured
+// closures of a library base class are 1-78 rows, while a framework root (a UI toolkit's node or widget class, 1.4-1.6 K
+// classes below it) would print ~170-190 KB, so it pages. A cut discloses transitive_shown= + has_more="1" + a next= that replays
+// the verb with --offset.
+// --limit/--offset (MCP limit/offset) window these deeper rows; the direct rows repeat on every page.
+inline constexpr std::size_t kLegoClosureRowCap = 200;
+
+struct LegoClosurePage
+{
+    std::vector<ImplementorRow> deeper;               // every depth >= 2 row of the closure, in walk order
+    PageWindow                  window{ 0, 0 };       // the slice of `deeper` this answer prints
+    std::size_t                 otherBase = 0;        // fix 1: types left out — their clause names a DIFFERENT same-named type
+    std::vector<NodeId>         unwalked;             // fix 2: direct rows the walk stops below (their own base unproven)
+};
+
+// fix 1: the closure is graph.h legoImplementorClosure — walked through PROVEN extends edges only, a name-only edge's row
+// hedged (base_by="name") and not walked, a name collision's row left out and counted (transitive_other_base=).
+inline LegoClosurePage legoClosurePage( const std::vector<std::vector<NodeId>>& implementors, const std::vector<std::vector<std::uint8_t>>& bound,
+                                        NodeId iface, int pageLimit, int pageOffset )
+{
+    LegoClosurePage   page;
+    const LegoClosure closure = legoImplementorClosure( implementors, bound, iface );
+    page.otherBase            = closure.otherBase;
+    page.unwalked             = closure.unwalked;
+    for( const ImplementorRow& row : closure.rows )
+    {
+        if( row.depth >= 2 )
+        {
+            page.deeper.push_back( row );
+        }
+    }
+    page.window = pageWindow( page.deeper.size(), effectiveRowCap( pageLimit, int( kLegoClosureRowCap ) ), pageOffset );
+    ENSURES( page.window.begin <= page.window.end && page.window.end <= page.deeper.size() );
+    return page;
+}
+
+// The <iface> attributes of that page. EMPTY when the closure has no deeper row, no left-out row and no unwalked direct
+// row, so an answer without one is byte-identical to the direct-only answer. `selector` is the iface's own file:name, the
+// same handle implementors_next= names, so the next page resolves the same definition whatever the reader typed.
+// `unwalkedSelector` (fix 2) is the file:name of the FIRST direct row the walk stopped below: transitive_unwalked=N counts
+// those rows (each also carries unwalked="1") and unwalked_next= is that first row's own --lego, which walks below it.
+inline std::string legoClosureAttrs( const LegoClosurePage& page, std::string_view selector, std::string_view unwalkedSelector, int pageLimit )
+{
+    const std::size_t total = page.deeper.size();
+    std::string       other = page.otherBase == 0 ? std::string() : " transitive_other_base=\"" + std::to_string( page.otherBase ) + "\"";
+    if( !page.unwalked.empty() )
+    {
+        other += " transitive_unwalked=\"" + std::to_string( page.unwalked.size() ) + "\"";
+        other += rw::nextAttrXml( nextFlag( "--lego=", unwalkedSelector ), "unwalked_next" );
+    }
+    if( total == 0 )
+    {
+        return other;
+    }
+    std::string       out   = " transitive=\"" + std::to_string( total ) + "\"" + other;
+    const std::size_t shown = page.window.end - page.window.begin;
+    if( shown < total )
+    {
+        out += " transitive_shown=\"" + std::to_string( shown ) + "\"";
+    }
+    if( page.window.begin > 0 )
+    {
+        out += " transitive_offset=\"" + std::to_string( page.window.begin ) + "\"";
+    }
+    if( page.window.end < total )
+    {
+        out += " has_more=\"1\"";
+        out += rw::nextAttrXml( pagedNext( nextFlag( "--lego=", selector ), pageLimit, page.window.end ) );
+    }
+    return out;
+}
+
+// The TARGETED verb's own inputs to packLego, one parameter: the root's gauge + marker (M15) and the deeper-row page
+// (lane lego-transitive). The ranked --for bundle passes `{}` — no gauge on its section, no page to window.
+struct LegoTargetedArgs
+{
+    std::string_view graphCountFloorAttr;   // graphCountFloorAttrXml( g ) — the caller owns the graph
+    int              pageLimit  = 0;        // --limit / MCP limit over the deeper implementor rows (0 = the default page)
+    int              pageOffset = 0;        // --offset / MCP offset
+    const std::vector<std::vector<std::uint8_t>>* implementorBound = nullptr;   // fix 1: Graph::implementorBound (null: nothing proven)
+    LegoTargetedArgs() = default;
+    LegoTargetedArgs( std::string_view floorAttr, int limit = 0, int offset = 0, const std::vector<std::vector<std::uint8_t>>* bound = nullptr )
+        : graphCountFloorAttr( floorAttr ), pageLimit( limit ), pageOffset( offset ), implementorBound( bound ) {}
+};
+inline const std::vector<std::vector<std::uint8_t>> kNoImplementorBound{};   // the empty bound map: every edge reads ByName
+
+// One <impl> row. `line` (S2): the TARGETED answer puts the definition's line on p= (p="file:LINE", the --uses and
+// --callers spelling) so the reader can open the class itself; the ranked bundle rows keep p="file". `deep` is the
+// closure row of a depth >= 2 implementor (via= names the type it extends, depth= its hops), null for a direct one.
+// `unwalked` (fix 2): a direct row the closure walk stopped below — its own extends clause is not proven — rides unwalked="1".
+inline void writeLegoImplRow( XmlWriter& w, const IngestResult& ing, NodeId id, std::string_view relPath, bool withPaths, bool line,
+                              const ImplementorRow* deep, bool unwalked, std::vector<char>& esc )
+{
+    const Symbol& im = ing.symbols[ id ];
+    w.write( "<impl n=\"" );  w.write( escapeXml( im.name, esc ) );
+    if( withPaths )
+    {
+        w.write( "\" p=\"" );  w.write( escapeXml( relPath, esc ) );
+        if( line && im.line > 0 )
+        {
+            w.write( ":" );  w.write( std::to_string( im.line ) );
+        }
+    }
+    if( deep != nullptr )
+    {
+        w.write( "\" via=\"" );  w.write( escapeXml( ing.symbols[ deep->via ].name, esc ) );
+        w.write( "\" depth=\"" );  w.write( std::to_string( deep->depth ) );
+        if( deep->byName )
+        {
+            w.write( "\" base_by=\"name" );   // fix 1: the extends clause names via= by spelling alone — hedged, not walked below
+        }
+    }
+    if( unwalked )
+    {
+        w.write( "\" unwalked=\"1" );
+    }
+    w.write( "\"/>" );
+}
+
 // the Lego view: for the top relevant interfaces/base-classes (those with implementors), emit the
 // concrete implementations — the socket → interchangeable bricks. Descriptive (no pattern labels);
 // steers an agent to snap a new brick into the socket instead of reimplementing. Emitted in --for.
@@ -8487,7 +8979,7 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
                       NodeId focusId = kNoNode, bool withPaths = false,
                       std::string_view rootArg = {},    // R-E (2026-08-17): same single-root-only root
                                                         // argument serialize() takes — see its comment.
-                      std::string_view graphCountFloorAttr = {},   // M15: the TARGETED root's gauge + marker
+                      const LegoTargetedArgs& targeted = {},   // M15: the TARGETED root's gauge + marker; lane lego-transitive: its page
                                                         // (graphCountFloorAttrXml( g ) — the caller owns the graph);
                                                         // the ranked --for section passes nothing and keeps its shape
                       std::size_t* outPreCapCount = nullptr,    // L2 (round-1 lever B1): the STUB's total= — this
@@ -8507,6 +8999,7 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
                                                         // (implementors_shown= + implementors_next=). Null keeps the old shape.
 {
     EXPECTS( graphImplementors == nullptr || focusId == kNoNode );   // the targeted verb's map IS the graph's
+    EXPECTS( focusId != kNoNode || ( targeted.pageLimit == 0 && targeted.pageOffset == 0 ) );   // the ranked bundle has no page to window
     const std::string rootPrefix = rootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( rootArg );
     const auto         pathRel   = [ & ]( std::uint32_t fileId ) -> std::string_view
     {
@@ -8568,7 +9061,7 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
     // floor. The marker rides on the TARGETED verb root (--lego=TYPE and its MCP twin); the --for bundle's
     // ranked <lego> section is described by the bundle's own legend and keeps its byte shape.
     w.write( "<lego" );
-    if( focusId != kNoNode ) { w.write( graphCountFloorAttr ); }   // graphCountFloorAttrXml( g ): gauge + kGraphCountFloorAttrXml
+    if( focusId != kNoNode ) { w.write( targeted.graphCountFloorAttr ); }   // graphCountFloorAttrXml( g ): gauge + kGraphCountFloorAttrXml
     w.write( ">" );
     for( std::size_t k = 0; k < keep; ++k )
     {
@@ -8589,9 +9082,13 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
                                                                   : ( impls.size() < 16 ? impls.size() : 16 );
         const std::size_t          implementorTotal = id < countMap.size() ? std::max( countMap[id].size(), impls.size() ) : impls.size();
         std::string hdr;
+        const LegoClosurePage deep = focusId != kNoNode ? legoClosurePage( implementors, targeted.implementorBound != nullptr ? *targeted.implementorBound : kNoImplementorBound, id, targeted.pageLimit, targeted.pageOffset ) : LegoClosurePage{};
         if( focusId != kNoNode )
         {
-            hdr = "\" defs=\"" + std::to_string( definitionCountOfName( ing, id ) ) + "\" implementors=\"" + std::to_string( impls.size() ) + "\"";
+            hdr = "\" defs=\"" + std::to_string( definitionCountOfName( ing, id ) ) + "\" implementors=\"" + std::to_string( impls.size() ) + "\""
+                + legoClosureAttrs( deep, std::string( pathRel( isym.fileId ) ) + ":" + isym.name,
+                                    deep.unwalked.empty() ? std::string() : std::string( pathRel( ing.symbols[ deep.unwalked.front() ].fileId ) ) + ":" + ing.symbols[ deep.unwalked.front() ].name,
+                                    targeted.pageLimit );
         }
         else
         {
@@ -8670,16 +9167,21 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
             }
         }
 
+        std::size_t nextUnwalked = 0;   // deep.unwalked is a subsequence of impls (the walk lists the direct rows in map order)
         for( std::size_t j = 0; j < cap; ++j )
         {
-            const Symbol& im = ing.symbols[ impls[j] ];
-            w.write( "<impl n=\"" );  w.write( escapeXml( im.name, esc ) );
-            if( withPaths ) { w.write( "\" p=\"" );  w.write( escapeXml( pathRel( im.fileId ), esc ) ); }
-            w.write( "\"/>" );
+            const bool unwalked = nextUnwalked < deep.unwalked.size() && deep.unwalked[ nextUnwalked ] == impls[j];
+            nextUnwalked += unwalked ? 1u : 0u;
+            writeLegoImplRow( w, ing, impls[j], pathRel( ing.symbols[ impls[j] ].fileId ), withPaths, focusId != kNoNode, nullptr, unwalked, esc );
         }
+        ENSURES( focusId == kNoNode || nextUnwalked == deep.unwalked.size() );   // targeted: every unwalked row was marked
         if( impls.size() > cap )
         {
             w.write( "<!-- +more -->" );
+        }
+        for( std::size_t j = deep.window.begin; j < deep.window.end; ++j )   // empty unless TARGETED with a deeper row
+        {
+            writeLegoImplRow( w, ing, deep.deeper[j].id, pathRel( ing.symbols[ deep.deeper[j].id ].fileId ), withPaths, true, &deep.deeper[j], false, esc );
         }
         w.write( "</iface>" );
     }
@@ -8690,6 +9192,64 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
 // --deps: the file→file physical dependency view. Files ranked by include count (heaviest first =
 // the "pulls in 100 headers to do something simple" detector); each lists its #include/import
 // targets. Descriptive — names the number so the agent can choose a lighter path.
+// --report / --deps godfiles: the layer=test group. A file joins it only when its built-in layer is "test" (a
+// directory name: test/, tests/, bench/) AND every file that depends on it is a test path (isTestPath) — both
+// by path, nothing is parsed. A production file under test/ (src/*.cpp includes ../test/lib/hooks.h) therefore
+// stays ranked. `adj` is the same file→file graph the afferent counts come from; the result is indexed by file id.
+inline std::vector<std::uint8_t> testLayerGroup( const IngestResult& ing, const std::vector<std::vector<std::uint32_t>>& adj )
+{
+    const std::uint32_t       F = std::uint32_t( ing.files.size() );
+    std::vector<std::uint8_t> prodDependent( F, 0 );
+    for( std::uint32_t a = 0; a < std::uint32_t( adj.size() ) && a < F; ++a )
+    {
+        if( isTestPath( rootRelPath( ing, a ) ) )
+        {
+            continue;
+        }
+        for( std::uint32_t b : adj[a] )
+        {
+            if( b < F )
+            {
+                prodDependent[b] = 1;
+            }
+        }
+    }
+    std::vector<std::uint8_t> group( F, 0 );
+    for( std::uint32_t f = 0; f < F; ++f )
+    {
+        group[f] = !prodDependent[f] && std::string_view( builtinLayer( rootRelPath( ing, f ) ) ) == "test";
+    }
+    ENSURES( group.size() == ing.files.size(), "indexed by file id" );
+    return group;
+}
+
+// --deps godfiles row layer=: the built-in arch layer from a dir name, except that "test" is spelled only for a
+// file in the testLayerGroup (every dependent a test path); a test-dir file with a production dependent has none.
+inline const char* godfileLayer( const IngestResult& ing, std::uint32_t f, const std::vector<std::uint8_t>& testGroup ) noexcept
+{
+    const char* fl = builtinLayer( rootRelPath( ing, f ) );
+    return std::string_view( fl ) == "test" && !( f < testGroup.size() && testGroup[f] ) ? "" : fl;
+}
+
+// --deps <godfiles>: the most depended-on files (afferent > 0), most first with a path tie-break, at most 12;
+// `total` receives how many files have any dependent (the listing's total=).
+inline std::vector<std::uint32_t> depsGodfileRows( const IngestResult& ing, const std::vector<std::uint32_t>& afferent, std::size_t& total )
+{
+    std::vector<std::uint32_t> byAff;
+    for( std::uint32_t f = 0; f < std::uint32_t( ing.files.size() ); ++f )
+    {
+        if( f < afferent.size() && afferent[f] > 0 )
+        {
+            byAff.push_back( f );
+        }
+    }
+    std::sort( byAff.begin(), byAff.end(), [ & ]( std::uint32_t a, std::uint32_t b )
+               { return afferent[a] != afferent[b] ? afferent[a] > afferent[b] : ing.files[a] < ing.files[b]; } );
+    total = byAff.size();
+    byAff.resize( std::min<std::size_t>( byAff.size(), 12 ) );
+    return byAff;
+}
+
 inline void packDeps( std::FILE* out, const IngestResult& ing, int topN,
                       const std::vector<std::vector<std::uint32_t>>& cycles,
                       const std::vector<std::uint32_t>& transitive, const std::vector<std::uint32_t>& afferent,
@@ -8767,6 +9327,16 @@ inline void packDeps( std::FILE* out, const IngestResult& ing, int topN,
              "dependency: it is in the impact verb's importer tier (lazy=1) and in this row's inc t= list, and it is NOT in "
              "afferent=/instab=/transitive=/godfiles/stabledeps/cycles/ccd/acd/nccd/shape=; health lazy_edges= counts the "
              "pairs left out and a row's lazy_edges= its own — both absent when 0. " );
+    // present-only: the layer= reading rides exactly when a shown godfiles row carries layer=
+    std::size_t                      godTotal   = 0;
+    const std::vector<std::uint32_t> godRows    = depsGodfileRows( ing, afferent, godTotal );
+    const std::vector<std::uint8_t>  testGroup  = testLayerGroup( ing, adj );
+    const bool                       godLayered = std::any_of( godRows.begin(), godRows.end(),
+                                                               [ & ]( std::uint32_t f ) { return *godfileLayer( ing, f, testGroup ) != '\0'; } );
+    if( godLayered )
+    {
+        w.write( "a godfiles row's layer= is its built-in arch layer from a dir name (absent if none); layer=test only for a file under a test directory whose dependents are all test paths, by path. " );
+    }
     w.write( rw::depsImportsUnresolvedLegend( tsImports.unresolved > 0 ) );   // #220: exactly when the root carries the pair
     w.write( rw::depsTsImportExtrasLegend( tsImports.dts, tsImports.unread ) );
     w.write( "raise the default cap with limit=N (offset=M pages; a cut listing carries total=/has_more=/next_offset= so a paging loop can continue from it). -->" );
@@ -8812,17 +9382,7 @@ inline void packDeps( std::FILE* out, const IngestResult& ing, int topN,
     // most depended-ON (afferent coupling Ca) = highest blast radius: changing these recompiles the most.
     // The complement of the transitive-cone ranking below (efferent, "pulls in 100 headers").
     {
-        std::vector<std::uint32_t> byAff;
-        for( std::uint32_t f = 0; f < F; ++f )
-        {
-            if( f < afferent.size() && afferent[f] > 0 )
-            {
-                byAff.push_back( f );
-            }
-        }
-        std::sort( byAff.begin(), byAff.end(), [ & ]( std::uint32_t a, std::uint32_t b )
-                   { return afferent[a] != afferent[b] ? afferent[a] > afferent[b] : ing.files[a] < ing.files[b]; } );
-        const std::size_t capG = byAff.size() < 12 ? byAff.size() : 12;
+        const std::size_t capG = godRows.size();
         if( capG )
         {
             // §P9 N6: this listing used to emit exactly 12 rows with no total/cap disclosure while
@@ -8830,12 +9390,16 @@ inline void packDeps( std::FILE* out, const IngestResult& ing, int topN,
             // src/pageview.h, THE TRUNCATION VOCABULARY, rules 1-3, applied here too.
             char gfb[ 64 ];
             rw::formatTo( gfb, sizeof( gfb ), "<godfiles total=\"{}\" shown=\"{}\" capped=\"{}\">",
-                           byAff.size(), capG, capG < byAff.size() ? 1 : 0 );
+                           godTotal, capG, capG < godTotal ? 1 : 0 );
             w.write( gfb );   // ranked by afferent = # files that #include this one
             for( std::size_t i = 0; i < capG; ++i )
             {
-                char gb[ 48 ];  rw::formatTo( gb, sizeof( gb ), "\" afferent=\"{}\"/>", afferent[ byAff[i] ] );
-                w.write( "<f p=\"" );  w.write( escapeXml( pathRel( byAff[i] ), esc ) );  w.write( gb );
+                char gb[ 48 ];  rw::formatTo( gb, sizeof( gb ), "\" afferent=\"{}\"", afferent[ godRows[i] ] );
+                w.write( "<f p=\"" );  w.write( escapeXml( pathRel( godRows[i] ), esc ) );  w.write( gb );
+                // the built-in layer (P3), present-only and AFTER afferent= so the row's existing prefix is unchanged:
+                // layer=test only for a file in testLayerGroup (every dependent a test path, by path)
+                if( const char* fl = godfileLayer( ing, godRows[i], testGroup ); *fl ) { w.write( " layer=\"" );  w.write( fl );  w.write( "\"" ); }
+                w.write( "/>" );
             }
             w.write( "</godfiles>" );
         }
@@ -9059,6 +9623,67 @@ inline void emitImportRowsXml( std::FILE* out, const IngestResult& ing,
         const bool              isLazy = i < lazy.size() && lazy[i] != 0;
         rw::emitTo( out, "<f via=\"import\" p=\"{}\" lazy=\"{}\"/>", std::string( escapeXml( rel, esc ) ).c_str(), isLazy ? "1" : "0" );
     }
+}
+
+// fix27: an rf row's hedge on a multi-definition selector (graph.h impactFileRollup counts nameOnly only there): via="name"
+// when every reached symbol in the file is a via="name" row, by_name=K when K of its syms= are; nothing when none is.
+template<class RowT>
+inline std::string impactRollupHedgeXml( const RowT& row )
+{
+    if( row.nameOnly == 0 ) { return std::string(); }
+    return row.nameOnly == row.syms ? std::string( " via=\"name\"" ) : " by_name=\"" + std::to_string( row.nameOnly ) + "\"";
+}
+template<class RowT>
+inline std::string impactRollupHedgeJson( const RowT& row )
+{
+    if( row.nameOnly == 0 ) { return std::string(); }
+    return row.nameOnly == row.syms ? std::string( ",\"via\":\"name\"" ) : ",\"by_name\":" + std::to_string( row.nameOnly );
+}
+
+// idea #6: the reach set's per-file rollup (graph.h impactFileRollup), BEFORE the symbol window: <files files=
+// shown_files= files_capped= [files_next=]> holding one <rf p= syms= d=/> per file. Its own tag (rf), so a reader or gate
+// counting the import tier's <f> rows never picks it up, and noun-prefixed counts (the import tier's importers=/
+// shown_importers=/importers_capped= shape), so the root's own shown=/capped= stay the only bare ones in the answer.
+// Emitted only when the rollup has rows (it rides beside a cut symbol window only).
+template<class RollupT>
+inline void emitImpactFileRollupXml( std::FILE* out, const IngestResult& ing, const RollupT& r, std::string_view rootPrefix )
+{
+    if( r.rows.empty() )
+    {
+        return;
+    }
+    std::vector<char> esc;
+    rw::emitTo( out, "<files files=\"{}\" shown_files=\"{}\" files_capped=\"{}\"{}>", r.rows.size(), r.shown, r.capped ? "1" : "0",
+                rw::nextAttrXml( r.next, "files_next" ) );
+    for( std::size_t i = 0; i < r.shown; ++i )
+    {
+        const std::string_view raw = ing.files[ r.rows[i].fileId ];
+        const std::string_view rel = rootPrefix.empty() ? raw : rw::sarif::rootRelativeUri( raw, rootPrefix );
+        rw::emitTo( out, "<rf p=\"{}\" syms=\"{}\" d=\"{}\"{}/>", std::string( escapeXml( rel, esc ) ).c_str(), r.rows[i].syms, r.rows[i].minDepth,
+                    impactRollupHedgeXml( r.rows[i] ) );   // fix27: the symbol rows' via="name", kept through the fold
+    }
+    rw::emitRaw( out, "</files>" );
+}
+
+// idea #6: the JSON form of the rollup above — `,"files":{files,shown_files,files_capped[,files_next],rows:[{p,syms,d}]}`,
+// the XML element's own noun-prefixed names. Emits nothing when the rollup has no rows, exactly when the element is absent.
+template<class RollupT>
+inline void emitImpactFileRollupJson( std::FILE* out, const IngestResult& ing, const RollupT& r, std::string_view rootPrefix )
+{
+    if( r.rows.empty() )
+    {
+        return;
+    }
+    rw::emitTo( out, ",\"files\":{{\"files\":{},\"shown_files\":{},\"files_capped\":{}{},\"rows\":[", r.rows.size(), r.shown,
+                r.capped ? "true" : "false", r.next.empty() ? std::string() : ",\"files_next\":\"" + jsonStr( r.next ) + "\"" );
+    for( std::size_t i = 0; i < r.shown; ++i )
+    {
+        const std::string_view raw = ing.files[ r.rows[i].fileId ];
+        const std::string_view rel = rootPrefix.empty() ? raw : rw::sarif::rootRelativeUri( raw, rootPrefix );
+        rw::emitTo( out, "{}{{\"p\":\"{}\",\"syms\":{},\"d\":{}{}}}", i ? "," : "", jsonStr( rel ).c_str(), r.rows[i].syms, r.rows[i].minDepth,
+                    impactRollupHedgeJson( r.rows[i] ) );   // fix27: as the XML row
+    }
+    rw::emitRaw( out, "]}" );
 }
 
 inline void emitImportRowsJson( std::FILE* out, const IngestResult& ing,
@@ -9406,6 +10031,7 @@ inline void writeJsonMapHeader( JsonWriter& w, std::string& esc, const JsonMapHe
     // (every MCP client) reading a truncated ranking with no key to tell it so is the exact defect the XML
     // side just closed. Same slot, same absent-means-converged rule.
     w.write( renderDisclosure( h.ann->prDisclosure, DiscloseAs::JsonKeys ) );
+    w.write( renderHistoryUnread( DiscloseAs::JsonKeys ) );   // K51: the JSON twin of the root's history_unread= (absent unless the amp= walk was unread)
 
     // The JSON twin of the XML root's data_sections_cut= / next= (codeFirstKeep): same keys, same absent-at-zero rule.
     if( h.dataSectionsCut.cut > 0 )
@@ -9436,6 +10062,64 @@ inline void writeJsonMapHeader( JsonWriter& w, std::string& esc, const JsonMapHe
         w.write( "}" );
     }
     w.write( "]" );
+}
+
+// D7: the JSON twin of writeMapInventoryXml — `,"inv":{"listed":L,"unlisted":U,"entry":[{"p":…,"n":…,"c":[…]}],
+// "ls":[{"p":…,"n":N,"f":[…]}]}` after the "r" array. The callee objects spell exactly what a "r" row's "c" array does.
+template <class PathRel>
+inline void writeMapInventoryJson( JsonWriter& w, const IngestResult& ing, const MapInventory& inv, const PathRel& pathRel,
+                                   const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets,
+                                   const std::vector<std::uint8_t>* outProv, const std::vector<std::uint8_t>* outNameOnly,
+                                   std::string& esc )
+{
+    EXPECTS( inv.active, "the caller emits the tier only when it has a cut to inventory" );
+    w.write( ",\"inv\":{\"listed\":" );  w.write( std::to_string( inv.listed ) );
+    w.write( ",\"unlisted\":" );         w.write( std::to_string( inv.unlisted ) );
+    // each guard with its recovery argv (rule 5), as the XML twin prints them
+    if( inv.entryTotal > inv.entries.size() ) { w.write( ",\"entries_capped\":true,\"entries_total\":" + std::to_string( inv.entryTotal ) + ",\"entries_next\":" );  writeJsonStr( w, inv.entriesNext, esc ); }
+    if( inv.namesCapped )                     { w.write( ",\"names_capped\":true,\"names_total\":" + std::to_string( inv.namesTotal ) + ",\"names_next\":" );  writeJsonStr( w, inv.namesNext, esc ); }
+    w.write( ",\"entry\":[" );
+    for( std::size_t i = 0; i < inv.entries.size(); ++i )
+    {
+        const NodeId  id = inv.entries[ i ];
+        const Symbol& s  = ing.symbols[ id ];
+        w.write( i ? ",{\"p\":" : "{\"p\":" );  writeJsonStr( w, pathRel( s.fileId ), esc );
+        w.write( ",\"n\":" );                    writeJsonStr( w, s.name, esc );
+        w.write( ",\"c\":[" );
+        for( std::uint32_t e = outOff[ id ]; e < outOff[ id + 1 ]; ++e )
+        {
+            w.write( e > outOff[ id ] ? ",{\"n\":" : "{\"n\":" );  writeJsonStr( w, ing.symbols[ outTargets[ e ] ].name, esc );
+            if( outProv && e < outProv->size() && ( *outProv )[ e ] )
+            {
+                w.write( ",\"prov\":" );  writeJsonStr( w, provLabel( ( *outProv )[ e ] ), esc );
+            }
+            if( outNameOnly && e < outNameOnly->size() && ( *outNameOnly )[ e ] != 0 )
+            {
+                w.write( ",\"via\":\"name\"" );
+            }
+            w.write( "}" );
+        }
+        w.write( "]}" );
+    }
+    w.write( "],\"ls\":[" );
+    for( std::size_t i = 0; i < inv.dirs.size(); ++i )
+    {
+        const MapInventoryDir& d = inv.dirs[ i ];
+        w.write( i ? ",{\"p\":" : "{\"p\":" );  writeJsonStr( w, d.dir, esc );
+        w.write( ",\"n\":" );  w.write( std::to_string( d.total ) );
+        if( !d.named.empty() )
+        {
+            w.write( ",\"f\":[" );
+            for( std::size_t j = 0; j < d.named.size(); ++j )
+            {
+                if( j ) { w.write( "," ); }
+                writeJsonStr( w, namesplit::afterLast( pathRel( d.named[ j ] ), "/" ), esc );
+            }
+            w.write( "]" );
+        }
+        w.write( "}" );
+    }
+    w.write( "]}" );
 }
 
 // The default-map JSON sibling of serialize() — same rank/order/bucket logic (kept a deliberate, mechanical
@@ -9481,7 +10165,8 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
                            std::size_t externalCalls = 0,                           // Phase 5: same as serialize()'s
                            const std::vector<std::uint32_t>* declinedOut = nullptr, // tier-3 declines: same as serialize()'s
                            std::size_t /*gateDeclinedCalls*/ = 0,   // serialize()'s legend clause; JSON carries no legend, so unread here
-                           const std::vector<std::uint8_t>* outNameOnly = nullptr )   // FE-B: same as serialize()'s → "via":"name"
+                           const std::vector<std::uint8_t>* outNameOnly = nullptr,   // FE-B: same as serialize()'s → "via":"name"
+                           std::size_t /*stdMemberDeclinedCalls*/ = 0 )   // serialize()'s legend clause; JSON carries no legend, so unread here
 {
     const std::size_t S = ing.symbols.size();
     const std::string rootPrefix = rootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( rootArg );
@@ -9510,6 +10195,9 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
         if( !seen[f] ) { seen[f] = 1;  fileOrder.push_back( f ); }
         buckets[f].push_back( id );
     }
+    // D7: the XML twin's inventory, the same selection (mapinventory.h) over the same printed-file set
+    const MapInventory inventory = mapInventoryWanted( ing, ann ) ? computeMapInventory( ing, outOff, outTargets, seen, pathRel )
+                                                                  : MapInventory{};
 
     // T1/§H7: SAME byte-model the XML sibling uses, in the same two roles — the fill-order oracle and the
     // rate source. The REPORTED est_tokens is measured from the emitted bytes in PHASE 2 below, exactly as
@@ -9670,7 +10358,12 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
             }
             w.write( "]}" );
         }
-        w.write( "]}" );
+        w.write( "]" );
+        if( inventory.active )
+        {
+            writeMapInventoryJson( w, ing, inventory, pathRel, outOff, outTargets, outProv, outNameOnly, esc );
+        }
+        w.write( "}" );
     };
     // DEGRADE, one path for both failures: the header FIRST with the MODELLED estimate, the array streamed behind it.
     const auto emitModelled = [ & ]()
@@ -10234,10 +10927,12 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
     // knob-honesty-068: a charged continuation is paid from the rows (the XML twin's rule); the floor's unpaid rest rides anyway
     // and this dialect's own predicate (forLensJsonOverCeiling: bytes past the allowance) labels any overshoot
     //   …only where the caller lets rows pay (payFromRows): otherwise the whole of it rides unpaid on the cut's own rows
-    const std::size_t cutNextOwed   = plan.capped ? cutNextCost : 0u;
+    const std::size_t cutNextOwed   = plan.capped ? cutNextCost + sigsCutRowOverrun( cutNext ) : 0u;
+    const std::size_t totalBeforePay = total;
     const std::size_t cutNextUnpaid = sigsCutPaysFromRows( cutNext )
                                           ? paySigsContinuationFromRows( entries, sigFiles, total, cutNextOwed, jsonSigEntryCost )
                                           : cutNextOwed;
+    const std::size_t cutNextSurplus = sigsCutPaysFromRows( cutNext ) ? sigsCutPaidSurplus( totalBeforePay, total, cutNextOwed, cutNextUnpaid ) : 0u;
     if( outCapped )
     {
         *outCapped = plan.ladderFires;   // the LADDER's verdict (the budget_bytes= stanza names its ceiling); cutOut carries capped
@@ -10253,6 +10948,7 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
         }
         cut.continuationRequest     = cutNext;
         cut.continuationUnpaidBytes = cutNextUnpaid;
+        cut.continuationPaidSurplus = cutNextSurplus;
         sigsCutAttachContinuation( cut, cutNext, cutNextInv, cutNextTokens );   // knob-honesty-068: nothing unless capped and asked for
         if( cutOut )
         {
