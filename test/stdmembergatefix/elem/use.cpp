@@ -16,12 +16,12 @@ bool globalTable() { return g_table[ 1 ].empty(); }
 // near-misses: declined
 bool mapOfString( Rule& r ) { return r.strs_[ "a" ].empty(); }
 bool vectorOfString( std::vector<std::string>& v ) { return v[ 0 ].empty(); }
-bool mapOfVector() { std::map<std::string, std::vector<EvalString>> m; return m[ "a" ].empty(); }
+bool mapOfVector( std::map<std::string, std::vector<EvalString>>& byName, const std::string& k ) { return byName[ k ].empty(); }
 bool elementNoMember( Rule& r ) { return r.others_[ 0 ].empty(); }
 bool containerItself( Rule& r ) { return r.vec_.empty(); }
 bool inTreeTemplate( ns::Grid<EvalString>& g ) { return g[ 0 ].empty(); }
 
 // stated floors: declined
-bool twoLevels() { std::map<std::string, std::vector<EvalString>> m; return m[ "a" ][ 0 ].empty(); }
-bool iteratorSecond( std::map<std::string, EvalString>& m ) { auto it = m.find( "a" ); return it->second.empty(); }
+bool twoLevels( std::map<int, std::vector<EvalString>>& grid ) { return grid[ 1 ][ 0 ].empty(); }
+bool iteratorSecond( std::map<std::string, EvalString>& m ) { return m.find( "a" )->second.empty(); }
 bool rangeForAuto( std::vector<EvalString>& v ) { for( auto& e : v ) { return e.empty(); } return false; }

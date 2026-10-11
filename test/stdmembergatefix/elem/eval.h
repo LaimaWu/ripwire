@@ -36,7 +36,7 @@ struct Rule
     std::vector<Other>                    others_;
     bool own( const std::string& k ) { return bindings_[ k ].empty(); }
     bool ownThis( const std::string& k ) { return this->bindings_[ k ].empty(); }
-    bool localHidesField() { std::vector<std::string> bindings_; return bindings_[ 0 ].empty(); }
+    bool localHidesField() { std::vector<std::string> bindings_{ "x" }; return bindings_[ 0 ].empty(); }
 };
 
 // an in-tree template whose own operator[] yields Other, whatever its argument: not a std container's element access

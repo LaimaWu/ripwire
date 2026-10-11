@@ -3019,6 +3019,80 @@ struct BuiltinMethodGate
     }
 };
 
+// The class template argument `n` of `written` names, its template-id's `<` at `open`: the argument's final segment, `const`
+// / `volatile` / `struct` / `class` and a leading `::` stripped, `Gen<int>` naming Gen. "" when there is no such argument, it is
+// written in std, or it is no class name (a pointer, an array, a function type; a builtin keyword reads as itself and names
+// no class).
+inline std::string_view stdTemplateArgClass( std::string_view written, std::size_t open, int n ) noexcept
+{
+    EXPECTS( open < written.size() && written[ open ] == '<' && n >= 0, "a template-id's `<` and an argument index" );
+    std::size_t begin = open + 1;
+    std::size_t end   = begin;
+    int         depth = 0;
+    int         arg   = 0;
+    for( ; end < written.size(); ++end )
+    {
+        const char c = written[ end ];
+        if( c == '<' || c == '(' )
+        {
+            ++depth;
+        }
+        else if( ( c == '>' || c == ')' ) && depth > 0 )
+        {
+            --depth;
+        }
+        else if( depth == 0 && c == ',' && arg < n )
+        {
+            ++arg;
+            begin = end + 1;
+        }
+        else if( depth == 0 && ( c == '>' || c == ',' ) )
+        {
+            break;
+        }
+    }
+    if( end >= written.size() || arg != n )
+    {
+        return {};   // no closing `>`, or fewer arguments than `n + 1`
+    }
+    std::string_view argText = trimWs( written.substr( begin, end - begin ) );
+    for( const std::string_view cv : { std::string_view( "const " ), std::string_view( "volatile " ), std::string_view( "struct " ), std::string_view( "class " ) } )
+    {
+        argText = argText.starts_with( cv ) ? trimWs( argText.substr( cv.size() ) ) : argText;
+    }
+    argText = argText.starts_with( "::" ) ? argText.substr( 2 ) : argText;
+    argText = trimWs( argText.substr( 0, argText.find( '<' ) ) );   // `Gen<int>` names Gen
+    if( argText.starts_with( "std::" ) || argText.empty() || argText.find_first_of( "*&[( " ) != std::string_view::npos )
+    {
+        return {};
+    }
+    const std::size_t      cut  = argText.rfind( "::" );
+    const std::string_view name = ( cut == std::string_view::npos ) ? argText : argText.substr( cut + 2 );
+    const bool             isId = !name.empty() && rw::namesplit::isIdentStart( name.front() )
+                     && std::all_of( name.begin(), name.end(), []( char c ) { return rw::namesplit::isIdentChar( c ); } );
+    ENSURES( !isId || ( name.data() >= written.data() && name.data() + name.size() <= written.data() + written.size() ),
+             "the class is a view into the recorded text" );
+    return isId ? name : std::string_view{};
+}
+
+// The element type an element access (`c[ k ]`, `c.at( k )`, `c.front()`, `c.back()`) of a container whose recorded type text
+// is `written` yields — the final segment of the template argument externalnames.h cppStdElementArgIndex names:
+// "std::map<std::string, EvalString, Less>" -> "EvalString", "const std::vector<ns::Item>" -> "Item". "" for every other text:
+// another template, an argument written in std ("std::vector<std::string>", "std::map<K, std::vector<T>>" — one level only),
+// an argument that is not a class name.
+inline std::string_view stdElementType( std::string_view written ) noexcept
+{
+    constexpr std::string_view kStd = "std::";
+    written                         = written.starts_with( "const " ) ? trimWs( written.substr( 6 ) ) : written;
+    const std::size_t open          = written.find( '<' );
+    if( !written.starts_with( kStd ) || open == std::string_view::npos )
+    {
+        return {};
+    }
+    const int argIndex = externalnames::cppStdElementArgIndex( trimWs( written.substr( kStd.size(), open - kStd.size() ) ) );
+    return argIndex < 0 ? std::string_view{} : stdTemplateArgClass( written, open, argIndex );
+}
+
 // THE C++ STANDARD-MEMBER GATE (test/stdmembergatecheck.sh; the names are data: externalnames.h kCppStdMemberNames).
 // A C++ member call whose receiver no rule typed — `out.push_back( c )` on a `std::vector<char>&` parameter, `s.size()`,
 // `getV().empty()` — is NAME-ONLY (FE-B): it keeps every same-file, same-directory and included-file definition of the
@@ -3133,79 +3207,7 @@ struct StdMemberGate
         {
             return {};
         }
-        return templateArgClass( written, open, 0 );
-    }
-    // The element type an element access (`c[ k ]`, `c.at( k )`, `c.front()`, `c.back()`) of a container whose recorded type text
-    // is `written` yields — the final segment of the template argument externalnames.h cppStdElementArgIndex names:
-    // "std::map<std::string, EvalString, Less>" -> "EvalString", "const std::vector<ns::Item>" -> "Item". "" for every other text:
-    // another template, an argument written in std ("std::vector<std::string>", "std::map<K, std::vector<T>>" — one level only),
-    // an argument that is not a class name.
-    static std::string_view stdElementType( std::string_view written ) noexcept
-    {
-        constexpr std::string_view kStd = "std::";
-        written                         = written.starts_with( "const " ) ? trimWs( written.substr( 6 ) ) : written;
-        const std::size_t open          = written.find( '<' );
-        if( !written.starts_with( kStd ) || open == std::string_view::npos )
-        {
-            return {};
-        }
-        const int argIndex = externalnames::cppStdElementArgIndex( trimWs( written.substr( kStd.size(), open - kStd.size() ) ) );
-        return argIndex < 0 ? std::string_view{} : templateArgClass( written, open, argIndex );
-    }
-    // The class template argument `n` of `written` names, its template-id's `<` at `open`: the argument's final segment, `const`
-    // / `volatile` / `struct` / `class` and a leading `::` stripped, `Gen<int>` naming Gen. "" when there is no such argument, it is
-    // written in std, or it is no class name (a pointer, an array, a function type; a builtin keyword reads as itself and names
-    // no class).
-    static std::string_view templateArgClass( std::string_view written, std::size_t open, int n ) noexcept
-    {
-        EXPECTS( open < written.size() && written[ open ] == '<' && n >= 0, "a template-id's `<` and an argument index" );
-        std::size_t begin = open + 1;
-        std::size_t end   = begin;
-        int         depth = 0;
-        int         arg   = 0;
-        for( ; end < written.size(); ++end )
-        {
-            const char c = written[ end ];
-            if( c == '<' || c == '(' )
-            {
-                ++depth;
-            }
-            else if( ( c == '>' || c == ')' ) && depth > 0 )
-            {
-                --depth;
-            }
-            else if( depth == 0 && c == ',' && arg < n )
-            {
-                ++arg;
-                begin = end + 1;
-            }
-            else if( depth == 0 && ( c == '>' || c == ',' ) )
-            {
-                break;
-            }
-        }
-        if( end >= written.size() || arg != n )
-        {
-            return {};   // no closing `>`, or fewer arguments than `n + 1`
-        }
-        std::string_view argText = trimWs( written.substr( begin, end - begin ) );
-        for( const std::string_view cv : { std::string_view( "const " ), std::string_view( "volatile " ), std::string_view( "struct " ), std::string_view( "class " ) } )
-        {
-            argText = argText.starts_with( cv ) ? trimWs( argText.substr( cv.size() ) ) : argText;
-        }
-        argText = argText.starts_with( "::" ) ? argText.substr( 2 ) : argText;
-        argText = trimWs( argText.substr( 0, argText.find( '<' ) ) );   // `Gen<int>` names Gen
-        if( argText.starts_with( "std::" ) || argText.empty() || argText.find_first_of( "*&[( " ) != std::string_view::npos )
-        {
-            return {};
-        }
-        const std::size_t      cut  = argText.rfind( "::" );
-        const std::string_view name = ( cut == std::string_view::npos ) ? argText : argText.substr( cut + 2 );
-        const bool             isId = !name.empty() && rw::namesplit::isIdentStart( name.front() )
-                         && std::all_of( name.begin(), name.end(), []( char c ) { return rw::namesplit::isIdentChar( c ); } );
-        ENSURES( !isId || ( name.data() >= written.data() && name.data() + name.size() <= written.data() + written.size() ),
-                 "the class is a view into the recorded text" );
-        return isId ? name : std::string_view{};
+        return stdTemplateArgClass( written, open, 0 );
     }
 
 };
@@ -6896,7 +6898,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     };
     // ELEMENT receivers (parser version 166): a call on ONE element access of a one-hop container — `m[ k ].empty()`, `v.at( i )
     // .size()`, `this->items_[ i ].size()`, `rule->bindings_[ k ].empty()` (memberPath = model.h kCppElementMark + the container's
-    // shape). The container's recorded written text names its element type (StdMemberGate::stdElementType): a local's, a
+    // shape). The container's recorded written text names its element type (stdElementType): a local's, a
     // parameter's or a namespace-scope variable's qualified text (Binding::importedName), a member field written as a std
     // container (its composeRel "elem" record, stdElemFields), and a type alias's recorded target text, followed alias to alias
     // (`typedef std::map<std::string, EvalString> Bindings; Bindings bindings_;`). The element class joins the receiver's written
@@ -6919,7 +6921,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     }
     const auto addElementOfText = [ & ]( StdMemberGate::Receiver& out, std::string_view written )
     {
-        if( const std::string_view element = StdMemberGate::stdElementType( written ); !element.empty() )
+        if( const std::string_view element = stdElementType( written ); !element.empty() )
         {
             out.types.push_back( element );
         }

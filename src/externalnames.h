@@ -357,7 +357,7 @@ inline constexpr std::string_view kCppStdMemberNames[] = {
 inline constexpr std::string_view kCppStdArrowTemplates[] = { "optional", "shared_ptr", "unique_ptr" };
 
 // The standard containers whose ELEMENT ACCESS — `c[ k ]`, `c.at( k )`, `c.front()`, `c.back()` — yields a template argument the
-// declaration wrote, so a member call on that element may be a member of that argument (graph.h StdMemberGate::stdElementType reads
+// declaration wrote, so a member call on that element may be a member of that argument (graph.h stdElementType reads
 // the container's recorded text; ingest_relations.h stdElementContainerText records it for a member field and a type alias). The
 // sequence containers and span yield their FIRST argument; the subscriptable maps their SECOND, the mapped type. Not here: the
 // strings (an element is a character), std::set (no element access), multimap (no `[]` / `at`), and every container adaptor.

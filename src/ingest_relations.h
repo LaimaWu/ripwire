@@ -1159,7 +1159,7 @@ inline bool insideFunctionBody( TSNode n ) noexcept
 
 // The whole written text of a type written `std::<container><…>` for a standard container whose element access yields a template
 // argument (externalnames.h cppStdElementArgIndex: `std::map<std::string, EvalString, Less>`, `std::vector<ns::Item>`); "" for
-// every other type, a global `::std::…` included (writtenTypeNamespace reads two segments). graph.h StdMemberGate::stdElementType
+// every other type, a global `::std::…` included (writtenTypeNamespace reads two segments). graph.h stdElementType
 // reads the argument out of it (parser version 165).
 inline std::string_view stdElementContainerText( TSNode typeNode, std::string_view src ) noexcept
 {

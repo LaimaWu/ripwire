@@ -246,13 +246,13 @@ check "(X) bindings_[ k ].empty() inside Rule — a bare field of the caller's c
 check "(X) this->bindings_[ k ].empty() inside Rule"                                    callees elem/eval.h:ownThis       "$EE" '' ''
 check "(X) near-miss: std::map<std::string, std::string> field; r.strs_[ \"a\" ].empty() stays declined" callees elem/use.cpp:mapOfString '' 1 'empty:1'
 check "(X) near-miss: std::vector<std::string>& v; v[ 0 ].empty() stays declined"      callees elem/use.cpp:vectorOfString '' 1 'empty:1'
-check "(X) near-miss: std::map<K, std::vector<EvalString>> m; m[ \"a\" ].empty() — the element is a std vector, declined" callees elem/use.cpp:mapOfVector '' 1 'empty:1'
+check "(X) near-miss: std::map<K, std::vector<EvalString>>& byName; byName[ k ].empty() — the element is a std vector, declined" callees elem/use.cpp:mapOfVector '' 1 'empty:1'
 check "(X) near-miss: std::vector<Other> field; r.others_[ 0 ].empty() — Other's cone holds no candidate, declined" callees elem/use.cpp:elementNoMember '' 1 'empty:1'
 check "(X) near-miss: r.vec_.empty() — the container's own member, declined"            callees elem/use.cpp:containerItself '' 1 'empty:1'
 check "(X) near-miss: ns::Grid<EvalString>& g; g[ 0 ].empty() — an in-tree template's own operator[], not a std element, declined" callees elem/use.cpp:inTreeTemplate '' 1 'empty:1'
 check "(X) near-miss: a local std::vector<std::string> bindings_ hides the field inside Rule; bindings_[ 0 ].empty() declined" callees elem/eval.h:localHidesField '' 1 'empty:1'
-check "(X) STATED FLOOR: m[ \"a\" ][ 0 ].empty() — two element accesses, declined"    callees elem/use.cpp:twoLevels    '' 1 'empty:1'
-check "(X) STATED FLOOR: auto it = m.find( \"a\" ); it->second.empty() — an iterator, declined" callees elem/use.cpp:iteratorSecond '' 2 'empty,find:2'
+check "(X) STATED FLOOR: grid[ 1 ][ 0 ].empty() — two element accesses, declined"    callees elem/use.cpp:twoLevels    '' 1 'empty:1'
+check "(X) STATED FLOOR: m.find( \"a\" )->second.empty() — an iterator (a call result), declined" callees elem/use.cpp:iteratorSecond '' 2 'empty,find:2'
 check "(X) STATED FLOOR: for( auto& e : v ) e.empty() — a range-for auto, declined"    callees elem/use.cpp:rangeForAuto '' 1 'empty:1'
 
 # ── (D) controls ──────────────────────────────────────────────────────────────────────────────────────────────
