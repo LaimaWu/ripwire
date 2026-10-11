@@ -167,6 +167,45 @@ characters, the sentence calling a branch row's label lexical replaced by the pa
 other tool is unchanged). Gates: `test/crossrefcheck.sh` (5b–5e),
 `test/selectorhonestycheck.sh` (HEAD's rows, labelled by the index), `test/pagingsweepcheck.sh`.
 
+### Changed — a C++ call named like a standard container member binds no in-tree namesake unless a rule ties its receiver to one
+
+`out.push_back( c )` on a `std::vector<char>&` parameter, `s.size()` on a `std::string`, `getV().empty()`: a C++ member
+call whose receiver no rule typed bound by NAME to whatever in-tree class defines the member — a hedged via="name" row,
+but a row, and every graph reader counted it. On this repository's own map 14 of the top 20 PageRank rows were such
+names (a small-vector's `push_back`, a path wrapper's `c_str`, every `empty` and `find` under `src/`), and
+`--callees=escapeXml` listed 8 of them beside its 4 real callees.
+
+- A standard container is a concrete, non-virtual class template, so a receiver of standard type never dispatches into
+  the tree. Such a call is now DECLINED after the ladder decides it: no edge; counted in the header's `declined=` and
+  in `declined_calls=` on every definition it would have bound (so `--callers` / `--impact` / `--safe-delete` say the
+  count, and no definition becomes a dead-code candidate for losing a by-name caller); a legend clause of its own,
+  charged only where it fired. `--callees` (and the MCP `find_symbol` twin) names those calls once:
+  `<stdm n="clear,data,push_back,reserve,size" calls="11"/>` (JSON `"stdm":{"n":"…","calls":11}`).
+- The names are data (`src/externalnames.h` `kCppStdMemberNames`, 78 container / string / view / span / optional /
+  smart-pointer members, generic verbs such as `get`, `count`, `swap`, `read`, `write` excluded). A receiver a rule
+  types is never touched — a typed local, parameter, pointer or member field, `this->`, an implicit-this call — and
+  neither is one whose recorded written type names an in-tree class that may define the callee: an alias of the in-tree
+  container, a field written as one, a namespace-scope, file-static or extern variable (`ns::List g; g.size()`), the
+  argument of a `std::unique_ptr` / `std::shared_ptr` / `std::optional` reached through `->`, a `->` through an
+  in-tree class with its own `operator->` or a class the tree does not define (a Qt or boost pointer), or a `->` through
+  a `typedef` / `using` alias of a standard smart pointer or optional (`typedef std::shared_ptr<ns::List> ListSP; ListSP
+  p; p->size()` — the alias record keeps no template argument, so `typedef std::unique_ptr<std::string> StrUP` keeps its
+  hedge too) or of one of those wrapper classes (`using QP = QSharedPointer<ns::List>`) — each keeps its hedge. `std::unique_ptr<std::string> p; p->size()`, `std::vector<ns::List> v; v.size()`
+  (the container's own member) and `IntVec* p; p->size()` through an alias of `std::vector<int>` are declined.
+- The stated floor — declined even where the object is an in-tree class, because the index records no written type for
+  the receiver: a call result (`h.list().size()`, `v.front().size()`, `makeList().size()`), an iterator (`auto it =
+  v.begin(); it->size()`), an `auto` local, a dereference, a subscript, a range-for `auto`, a template parameter, a field
+  two hops off its root, the template arguments of a type written unqualified (`QList<ns::List> l; l.size()`), a member
+  field written `std::optional<…>` reached through `->` (`std::optional<ns::List> o_; o_->size()` — a field's template
+  argument is read for `std::unique_ptr` / `std::shared_ptr` alone), and a `typedef` declared inside a function body
+  (its alias target is not recorded).
+- C++ only, each other language for a stated reason: C has no member functions; Rust receivers carry no declared type
+  yet; Go, Java, Kotlin, C# and Swift name their standard members after interfaces in-tree types implement; ObjC
+  message sends carry no receiver shape; Python, JS, TS and Ruby keep the builtin-method name gate.
+- Measured on this repository (`--no-cache`, the same tree before and after): call edges 40,567 → 25,020, `ambiguous=`
+  12,576 → 2,774, `declined=` 12,240 → 25,840; the top 20 PageRank rows carry no standard member name (14 before);
+  `--callees=escapeXml` count 12 → 4 plus the `<stdm>` line. Gate: `test/stdmembergatecheck.sh`.
+
 ### Changed — a call bound by name alone keeps its rows, marked `via="name"`; typed receivers resolve
 
 A member call `x.m()` (or, where the receiver is implicit, a bare `m()`) bound to every in-repo definition spelled

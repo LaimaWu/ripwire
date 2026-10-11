@@ -2039,7 +2039,7 @@ int runDefaultMap( const MainDispatch& d )
         {
             return {};
         }
-        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly );
+        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls );
         const rw::MemoryStreamBytes measured = probe.finish();
         return measured.isWhole ? std::string( measured.bytes ) : std::string();
     };
@@ -2052,7 +2052,7 @@ int runDefaultMap( const MainDispatch& d )
             DISCLOSE( maxTokensFit, rw::MapAnnotations::MaxTokensFit::DisclosureWhy::ProbeUnmeasured, "runDefaultMap: open_memstream failed for the --max-tokens fit probe — the map is emitted unshaped and its ceiling unverified" );
             return 0;
         }
-        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly );
+        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls );
         const rw::MemoryStreamBytes measured = probe.finish();
         if( !measured.isWhole )
         {
@@ -2096,7 +2096,7 @@ int runDefaultMap( const MainDispatch& d )
         }
         serializeJson( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics,
                        fanInPtr, &g.ambOut, cfg.stable, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut,
-                       g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, mapProvPtr, mapAnn, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly );
+                       g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, mapProvPtr, mapAnn, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls );
         const rw::MemoryStreamBytes measured = probe.finish();
         if( !measured.isWhole )
         {
@@ -2848,11 +2848,11 @@ int runDefaultMap( const MainDispatch& d )
         {
             serializeJson( out, ing, rank, g.outOff, g.outTargets, mapTopK, cfg.mostImportantLast, cfg.metrics,
                            fanInPtr, &g.ambOut, cfg.stable, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut,
-                           g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, mapProvPtr, mapAnn, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly );
+                           g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, mapProvPtr, mapAnn, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls );
         }
         else
         {
-            serialize( out, ing, rank, g.outOff, g.outTargets, mapTopK, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, payloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly );
+            serialize( out, ing, rank, g.outOff, g.outTargets, mapTopK, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, payloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls );
         }
     }
     else
