@@ -209,9 +209,14 @@ printf '%s' "$OUTC" | grep -q 'status="new-symbol"' \
     && ok "(c) brand-new symbol -> status=new-symbol" || { no "(c) expected new-symbol"; printf '%s\n' "$OUTC"; }
 printf '%s' "$OUTC" | grep -q 'callers="0"' \
     && ok "(c) brand-new symbol has zero callers" || { no "(c) unexpected callers on a brand-new symbol"; printf '%s\n' "$OUTC"; }
-printf '%s' "$OUTC" | grep -q 'params_was=' \
-    && no "(c) new-symbol should not report was/now (nothing to compare against)" \
-    || ok "(c) new-symbol correctly omits was/now"
+# train 27 (checklist 14, the (e) sibling): the absence is read only off the brandnew root, never off an empty answer.
+if ! printf '%s' "$OUTC" | grep -q '<edit-check sym="brandnew"'; then
+    no "(c) premise: no <edit-check sym=\"brandnew\"> answer (an empty answer must not read as 'omits was/now')"
+elif printf '%s' "$OUTC" | grep -q 'params_was='; then
+    no "(c) new-symbol should not report was/now (nothing to compare against)"
+else
+    ok "(c) new-symbol correctly omits was/now"
+fi
 
 # ── (d) unknown SYM -> refuses loudly (nonzero exit, a stderr message, never a crash / empty map) ──────
 ERR_OUT="$( cd "$WORK" && "$BIN" . --edit-check=totallyNoSuchSymbol --no-cache 2>&1 >/dev/null )"
@@ -280,9 +285,15 @@ printf '%s' "$OUTE" | grep -q 'params_was="1" params_now="3"' \
   && defrows "$OUTE" | grep -q 'params="1"' && defrows "$OUTE" | grep -q 'params="3"'; } \
     && ok "(e) additive overload: both folded definitions listed, one still at params=\"1\"" \
     || { no "(e) def rows missing — an additive overload is indistinguishable from a widened definition"; printf '%s\n' "$OUTE"; }
-rows "$OUTE" | grep -q 'incompatible="1"' \
-    && no "(e) additive overload wrongly flags a caller (no existing definition changed)" \
-    || ok "(e) additive overload: no caller flagged (precision)"
+# train 27 (lean-trio signoff, checklist 14): the ABSENCE is read only off a run that answered — rc 0, the folded root and its
+# callsit row — never off an empty or refused OUTE (a refusing binary printed nothing here and this arm said ok).
+if [ "$( ecrc folded )" != 0 ] || ! printf '%s' "$OUTE" | grep -q '<edit-check sym="folded"' || ! rows "$OUTE" | grep -q 'n="callsit"'; then
+    no "(e) additive overload: precision premise — folded should answer (rc 0) with its callsit row"; printf '%s\n' "$OUTE"
+elif rows "$OUTE" | grep -q 'incompatible="1"'; then
+    no "(e) additive overload wrongly flags a caller (no existing definition changed)"
+else
+    ok "(e) additive overload: no caller flagged (precision)"
+fi
 
 # the CONTRAST shape: one definition genuinely widened. Same status, and everything else must differ.
 cat > "$WORK/ovl/o.cpp" <<'EOF'
@@ -521,9 +532,14 @@ if printf '%s' "$OUTI_F" | grep -q 'status="no-baseline"'; then
 else
     no "(h2) non-git root did not answer no-baseline: $( printf '%s' "$OUTI_F" | grep -o 'status="[^"]*"' )"
 fi
-printf '%s' "$OUTI_F" | grep -q 'status="new-symbol"' \
-    && no "(h2) non-git root still calls an existing symbol new-symbol" \
-    || ok "(h2) non-git root never says new-symbol"
+# train 27 (checklist 14, the (e) sibling): the absence is read only off the freefn root, never off an empty answer.
+if ! printf '%s' "$OUTI_F" | grep -q '<edit-check sym="freefn"'; then
+    no "(h2) premise: no <edit-check sym=\"freefn\"> answer (an empty answer must not read as 'never says new-symbol')"
+elif printf '%s' "$OUTI_F" | grep -q 'status="new-symbol"'; then
+    no "(h2) non-git root still calls an existing symbol new-symbol"
+else
+    ok "(h2) non-git root never says new-symbol"
+fi
 # both selectors must resolve, or the two arms below assert nothing (trap #20: a pin that stops measuring).
 if ! printf '%s%s' "$OUTI_M" "$OUTI_F" | grep -q '<edit-check '; then
     no "(i) the Python fixture did not resolve — the implicit-receiver arms measured nothing"
@@ -690,9 +706,14 @@ EOF
 fi
 # the counterpart rule: a row NOT flagged incompatible carries no sites= — the attribute is the flagged
 # row's own evidence, not a fourth spelling of the caller list (grep the ELEMENT, never the legend prose).
-printf '%s' "$OUTK" | grep -oE '<c [^>]*/>' | grep -v 'incompatible="1"' | grep -q 'sites_l="' \
-    && no "(k) sites_l= leaked onto a row that is not flagged incompatible" \
-    || ok "(k) sites_l= rides only on the flagged rows"
+# train 27 (checklist 14, the (e) sibling): the absence is read only off an answer that HAS unflagged rows to read.
+if ! printf '%s' "$OUTK" | grep -q '<edit-check sym="scored"' || ! printf '%s' "$OUTK" | grep -oE '<c [^>]*/>' | grep -qv 'incompatible="1"'; then
+    no "(k) premise: no <edit-check sym=\"scored\"> answer with an unflagged <c> row (nothing to read the absence off)"; printf '%s\n' "$OUTK"
+elif printf '%s' "$OUTK" | grep -oE '<c [^>]*/>' | grep -v 'incompatible="1"' | grep -q 'sites_l="'; then
+    no "(k) sites_l= leaked onto a row that is not flagged incompatible"
+else
+    ok "(k) sites_l= rides only on the flagged rows"
+fi
 rm -rf "$SFIX"
 
 # ── WARM-TIME budget: <= 100 ms on ripwire's OWN src/, after the qheadsnap/qsnap cache is primed ────────
