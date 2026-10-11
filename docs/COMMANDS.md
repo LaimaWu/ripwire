@@ -3668,9 +3668,9 @@ $ ./build/ripwire . --whereis=rankGraphTeleport
 
 ### `--whereis-full-text`
 
-**Answers:** with --whereis: print every t= line whole (no preview, no t_bytes=);
+**Answers:** with --whereis: print every t= line whole (no preview, no t_bytes=).
 
-the listing, window, rows and labels are the page's own, so the <t_cut next=> of a page that printed a preview names it. --detail lifts the preview too, with the row cap and the parse guard. Refused without --whereis. MCP: full_text=true.
+The listing, window, rows and labels are the page's own, so the <t_cut next=> of a page that printed a preview names it. --detail lifts the preview too, with the row cap and the parse guard. Refused without --whereis. MCP: full_text=true.
 
 **Try it**
 
