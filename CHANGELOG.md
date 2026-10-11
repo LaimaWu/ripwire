@@ -222,6 +222,59 @@ its sites the same way. `p=`, `count=` and the rows are unchanged.
 - **`--safe-delete`:** the bare-line `sites_l=` on its caller rows becomes the same `sites_at=`. `--edit-check` keeps
   `sites_l=`.
 
+### Changed — `--lego` lists the implementors below a direct one
+
+`--lego=TYPE` (and the MCP `lego` tool) now walks the extends/implements edges to their closure: a class that extends a
+direct implementor (`class Default( SimpleFormatter )` under `BaseFormatter`) is listed too, once, at its shallowest
+depth, as `<impl n= p= via= depth=>` — `via=` names the type it extends that reached it, `depth=` its hops below the
+interface. The `<iface>` carries `transitive=N`; `implementors=` still counts the direct rows alone, and an answer with no
+deeper row is unchanged. The deeper rows are one page of at most 200 (a runaway guard): a cut says
+`transitive_shown=` and `has_more="1"` with a `next=` that pages on, and `--limit`/`--offset` (MCP `limit`/`offset`) page
+them. `--lego` honors `--limit`/`--offset` only for this window; without one it keeps its `--max-tokens` notice. The
+`tools/list` manifest grows 46,930 → 47,114 B (+184 B: the declared `limit` and `offset` arguments on `lego`).
+
+The walk below the direct rows follows only extends/implements clauses the index PROVES name the type above: a class
+declared in a scope enclosing the clause (`class Leaf( Mid )` beside its own `Mid`, `b::Mid` inside `namespace b`), the
+file an import binds the name to (Python `from m import Mid`, followed through a package's re-export; a JS/TS named import
+or `const { Mid } = require( './m' )`), a C-family include, the Java/Kotlin/Go package directory, a Java qualifier naming
+the package, or Ruby's constant scope. A clause bound by the NAME alone — no such evidence — is listed hedged,
+`base_by="name"`, and the walk does not continue below it; a clause the evidence binds to a DIFFERENT same-named type adds
+no row at all, and the `<iface>` counts those types as `transitive_other_base=N` (they are listed on the answer of the type
+they do extend). A Java or Kotlin `import` and a C# `using` are not proofs. The direct rows are listed as before, and the
+walk does not descend below a direct row whose own extends clause is not proven to name the interface (a cross-package
+Java `import`, a Kotlin `import`, a C# `using`, an ES import of a CommonJS base). When such a row has subtypes, the row
+carries `unwalked="1"`, the `<iface>` counts those rows as `transitive_unwalked=N`, and `unwalked_next=` names the first
+row's own `--lego` call, which lists its subtypes.
+
+Every `<impl>` row of the targeted answer now says where the class is: `p="file:LINE"`, the `--uses`/`--callers`
+spelling, so the implementor opens at its definition. The `<iface>` row and the ranked `--for` `<lego>` section keep the
+bare `p="file"`.
+
+A Ruby module mixed in with `include M`, `extend M` or `prepend M` is now an implements edge as well as an ancestor:
+`--lego=M` lists every class (and module) that mixes it in — `--lego=DSL` lists the classes that `include Rake::DSL`,
+where it answered `implementors="0"`. A mixin inside a method body or at a file's top level still adds nothing.
+
+A JavaScript/TypeScript class FACTORY, `const Sub = Base.extend('Sub', …)` (nunjucks' node classes), is now a class
+definition that extends its receiver: `--lego=BinOp` answers instead of "type not found", and `--lego=Node` lists the
+classes made from it. The name must be the string the call is given — `$.extend({}, a)`, an unnamed Backbone-style
+`Base.extend({…})` and `const A = B.extend('C')` stay what they look like (an object merge, no class) — and the parser must
+show a class: the receiver is a class the same file declares (or another factory this rule keeps), or the call hands it a
+class body (an object literal holding a method). So the `debug` package's sub-logger `const error = log.extend('error')`
+and a string-first merge such as `_.extend('merged', { a: 1 })` stay no class; a factory whose receiver is imported from
+another file and gets no class body is not read either (a stated floor), nor is a member-chain receiver
+(`ns.Base.extend('X')`).
+
+A Python base clause is now read as Python evaluates it: `class Inner( Outer.Changed )` extends `Changed` (it used to
+extend both `Outer` and `Changed`), `class Box( Generic[Key] )` extends `Generic` and not its type argument `Key`,
+`metaclass=Meta` is no base, and a computed base (`with_metaclass( M, B )`, `namedtuple( … )`) names none. The
+JavaScript twin: `class A extends ns.Base` extends `Base` (it read `ns`), and `extends mixin( B )` names no base. Parser
+version 162, cache format 30 (re-index on first run).
+
+A bare name now resolves to a CODE definition whenever one matched: `--lego=Loader` answered about a `docs/api.md`
+heading (`defs="3" implementors="0"`) while `src/loader.js` held the class, because the heading had the lower id. The
+same pick serves `--around` and `--connect` (and their MCP twins). A heading or config key is still reached by its
+`file:name` selector, and is still the answer when nothing else is named that.
+
 ### Changed — a call bound by name alone keeps its rows, marked `via="name"`; typed receivers resolve
 
 A member call `x.m()` (or, where the receiver is implicit, a bare `m()`) bound to every in-repo definition spelled

@@ -326,6 +326,12 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 # RE-MEASURED 2026-10-10 (train 26c, whereis-defs-fix merged onto the 47,114 B tree), CEILING UNMOVED: 47,114 -> 47,109 B. Per-tool
 # JSON bytes, the train binary before the merge vs the merged one: whereis 1,689 -> 1,684 (the lane's -5), every other tool
 # identical. Headroom after this line: 41 B.
+# RE-ANCHORED 2026-10-10 (lane lego-transitive): 46,950 -> 47,134, measured 47,114 (from 46,930, 33 tools) = +184 B, EXACTLY
+# the two declared optional arguments `limit` and `offset` on ONE verb, `lego` — 92 B per property entry (the schema envelope
+# plus the description the contract obliges), the L-W `for` precedent. --lego joined cli.h's honorsPaging set (conditionally,
+# like --for) for its deeper implementor rows, so its twin must declare the window (mcpcontractcheck (G/M13)). A first draft
+# added a description clause (+59 B) and was removed rather than re-anchored around: prose never moves this ceiling, and the
+# answer's own legend defines transitive=/via=/depth= and the page. No other tool moved. Headroom after this line: 20 B.
 CEILING = 47150
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )

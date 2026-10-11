@@ -2436,6 +2436,8 @@ inline bool cppBlockScopeDirectInit( TSNode fnDeclarator, std::string_view src )
 inline bool isCjsExportTarget( TSNode nameNode, std::string_view src ) noexcept;
 inline bool isPrototypeMemberTarget( TSNode nameNode, std::string_view src ) noexcept;
 inline bool isPyEnumMemberTarget( TSNode nameNode, std::string_view src ) noexcept;
+inline TSNode jsClassFactoryReceiver( TSNode nameNode, std::string_view src ) noexcept;
+inline bool   jsClassFactoryMakesClass( TSNode nameNode, std::string_view src, int depth = 0 );   // allocates (the scope index)
 
 // The @definition.constant drop decision, in its own function for the same reason isCjsExportTarget and
 // isPyEnumMemberTarget have theirs: dropGatedCapture is a dispatcher, and this is the one arm with a
@@ -2543,7 +2545,7 @@ inline bool yamlKeyCaptureDropped( std::string_view name, TSNode roleNode ) noex
 // the LEFT side is not really exports/module.exports/.prototype. — the query captures every `a.b = fn`
 // shape and cannot text-test, because tags-pass predicates never run (see constCaptureNeedsScreamingGate
 // above).
-inline bool dropGatedCapture( std::string_view defCapSv, Lang lang, std::string_view name, TSNode nameNode, TSNode roleNode, std::string_view src ) noexcept
+inline bool dropGatedCapture( std::string_view defCapSv, Lang lang, std::string_view name, TSNode nameNode, TSNode roleNode, std::string_view src )   // NOT noexcept: the class-factory gate's scope lookup allocates
 {
     if( defCapSv == "definition.function" )
     {
@@ -2560,6 +2562,10 @@ inline bool dropGatedCapture( std::string_view defCapSv, Lang lang, std::string_
     if( defCapSv == "definition.cjsexport" )
     {
         return !isCjsExportTarget( nameNode, src );
+    }
+    if( defCapSv == "definition.classfactory" )
+    {
+        return !jsClassFactoryMakesClass( nameNode, src );   // lane lego-transitive (M2; fix 1: the receiver must be a class)
     }
     if( defCapSv == "definition.protomethod" )
     {
@@ -2642,6 +2648,134 @@ inline bool isPrototypeMemberTarget( TSNode nameNode, std::string_view src ) noe
         return false;
     }
     return nodeTextOf( fieldChild( obj, NodeField::Property ), src ) == "prototype";
+}
+
+// lane lego-transitive (M2): the RECEIVER of a JS/TS class factory `const Sub = Base.extend('Sub', …)` — the class the
+// factory's result extends — or a null node when `nameNode` (the declarator's name) is not that shape. The shape is all
+// three: the value is a call of a member `X.extend`, its first argument is a string literal, and that literal spells the
+// declared name. The name test is what tells a class factory from an object merge: `$.extend({}, a)`, `_.extend(o, p)`
+// and Backbone's unnamed `Base.extend({…})` have the same call shape and no name, and `const A = B.extend('C')` binds a
+// class to a name other than the one it was made under. The receiver is an identifier or a member chain
+// (`nodes.Node.extend`); a call or `this` receiver is not a class this tool can name. Floors, stated: a template
+// literal name, an assignment without a declaration (`Sub = Base.extend('Sub')`), and `exports.Sub = …` are not read.
+inline TSNode jsClassFactoryReceiver( TSNode nameNode, std::string_view src ) noexcept
+{
+    const TSNode decl = ts_node_parent( nameNode );
+    if( ts_node_is_null( decl ) || !kindIs( ts_node_type( decl ), "variable_declarator" ) )
+    {
+        return TSNode{};
+    }
+    const TSNode call = fieldChild( decl, NodeField::Value );
+    const TSNode fn   = ts_node_is_null( call ) ? call : fieldChild( call, NodeField::Function );
+    if( ts_node_is_null( fn ) || !kindIs( ts_node_type( fn ), "member_expression" )
+        || nodeTextOf( fieldChild( fn, NodeField::Property ), src ) != "extend" )
+    {
+        return TSNode{};
+    }
+    const TSNode args = fieldChild( call, NodeField::Arguments );
+    if( ts_node_is_null( args ) || ts_node_named_child_count( args ) == 0 )
+    {
+        return TSNode{};
+    }
+    const TSNode           first = ts_node_named_child( args, 0 );
+    const std::string_view lit   = nodeTextOf( first, src );
+    if( !kindIs( ts_node_type( first ), "string" ) || lit.size() < 2 || lit.substr( 1, lit.size() - 2 ) != nodeTextOf( nameNode, src ) )
+    {
+        return TSNode{};
+    }
+    const TSNode recv = fieldChild( fn, NodeField::Object );
+    if( ts_node_is_null( recv ) || !( kindIs( ts_node_type( recv ), "identifier" ) || kindIs( ts_node_type( recv ), "member_expression" ) ) )
+    {
+        return TSNode{};
+    }
+    return recv;
+}
+
+// lane lego-transitive fix 1 (M2, orchestrator ruling 2): the shape above is not yet a class. The `debug` package's sub-logger
+// `const error = log.extend('error')` has it exactly — a string literal spelling the declared name — and so does an object
+// merge that happens to pass a matching string. A factory MAKES a class only when the parser shows one: the
+// factory is handed a class BODY (an object literal holding a method, jsFactoryHasClassBody), or its
+// receiver is an identifier that the file's own lexical lookup (ingest_relations.h findOutward) binds to a class declaration
+// (`class Node extends Obj { }`), a class expression (`const Node = class { }`), or another declarator this same rule keeps
+// (`const BinOp = Node.extend('BinOp', …)` makes `const Add = BinOp.extend('Add')` a class, chained up to kExtendChainCap).
+// What it does NOT read without a class body, each a stated floor (test/legotransitivecheck.sh M2): a receiver imported
+// from another file (`const { Node } = require('./a')` — the index, not the parser, would have to say that `Node` is a
+// class), a member chain receiver (`nodes.Node.extend('X')`), and a receiver reassigned after its declaration.
+inline constexpr int kExtendChainCap = 16;   // factory-of-a-factory links the receiver rule follows (nunjucks: 2); past it, no class
+
+// a class BODY passed to the factory: an object literal argument after the name holding at least one method
+// (`Base.extend('View', { render() { … } })`, `{ init: function() { … } }`). A data object (`{ a: 1 }`, nunjucks'
+// `{ fields: [ … ] }`) is not one — such a factory is a class only by its receiver.
+inline bool jsFactoryHasClassBody( TSNode nameNode ) noexcept
+{
+    const TSNode call = fieldChild( ts_node_parent( nameNode ), NodeField::Value );
+    const TSNode args = ts_node_is_null( call ) ? call : fieldChild( call, NodeField::Arguments );
+    const std::uint32_t n = ts_node_is_null( args ) ? 0u : ts_node_named_child_count( args );
+    for( std::uint32_t i = 1; i < n; ++i )
+    {
+        const TSNode obj = ts_node_named_child( args, i );
+        if( !kindIs( ts_node_type( obj ), "object" ) )
+        {
+            continue;
+        }
+        bool        method = false;
+        ChildCursor cursor( obj );
+        forEachNamedChild( obj, cursor.cur, [ & ]( TSNode member )
+        {
+            const char*  mt  = ts_node_type( member );
+            const TSNode val = kindIs( mt, "pair" ) ? fieldChild( member, NodeField::Value ) : TSNode{};
+            method = kindIs( mt, "method_definition" )
+                  || ( !ts_node_is_null( val ) && ( kindIs( ts_node_type( val ), "function_expression" ) || kindIs( ts_node_type( val ), "function" )
+                                                   || kindIs( ts_node_type( val ), "arrow_function" ) ) );
+            return !method;
+        } );
+        if( method )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool jsClassFactoryMakesClass( TSNode nameNode, std::string_view src, int depth )
+{
+    const TSNode recv = jsClassFactoryReceiver( nameNode, src );
+    if( ts_node_is_null( recv ) || depth >= kExtendChainCap )
+    {
+        return false;
+    }
+    if( jsFactoryHasClassBody( nameNode ) )
+    {
+        return true;   // the parser shows the class itself: its body is the argument
+    }
+    if( !kindIs( ts_node_type( recv ), "identifier" ) )
+    {
+        return false;
+    }
+    const TSNode declarator = ts_node_parent( nameNode );   // jsClassFactoryReceiver proved it a variable_declarator
+    const TSNode statement  = ts_node_parent( declarator );
+    const BaseScopeHit hit  = findOutward( recv, statement, nodeTextOf( recv, src ), /*scopeOwner=*/false, src );
+    if( hit.cut || hit.ambiguous || ts_node_is_null( hit.decl ) )
+    {
+        return false;
+    }
+    const char* kind = ts_node_type( hit.decl );
+    if( kindIs( kind, "class_declaration" ) || kindIs( kind, "abstract_class_declaration" ) || kindIs( kind, "class" ) )
+    {
+        return true;
+    }
+    // a declarator: baseDeclNames answered with its NAME node, whose parent is the variable_declarator
+    const TSNode boundDecl = ts_node_parent( hit.name );
+    const TSNode value     = ts_node_is_null( boundDecl ) ? boundDecl : fieldChild( boundDecl, NodeField::Value );
+    if( ts_node_is_null( value ) )
+    {
+        return false;
+    }
+    if( kindIs( ts_node_type( value ), "class" ) )
+    {
+        return true;
+    }
+    return jsClassFactoryMakesClass( hit.name, src, depth + 1 );
 }
 
 // Constructor identifier of `Foo.prototype.NAME` (the object of the inner `.prototype` member).

@@ -1833,6 +1833,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
         return;
     }
 
+    BaseScopeIndexGuard baseScopes;   // lane lego-transitive fix 1 (mutable: lookups fill it): this file's base-lookup scope tables (ingest_relations.h)
     TSQuery* query = compiledQueryFor( le );   // shared immutable query, compiled once per grammar (pre-warmed) — do NOT delete
     if( query == nullptr )
     {
@@ -2365,6 +2366,10 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             if( kind == SymKind::Class || isStructOrNamedType( kind ) || kind == SymKind::Interface )
             {
                 captureBases( defNode, fileId, le.lang, src, refs );    // IS-A: inheritance edges (derived → base)
+                if( defCapSv == "definition.classfactory" )               // lane lego-transitive (M2): the factory's receiver is the base
+                {
+                    emitBaseRef( jsClassFactoryReceiver( nameNode, src ), fileId, le.lang, src, refs, defNode );
+                }
                 captureFields( defNode, fileId, le.lang, src, refs );   // HAS-A: member-variable type edges (S5-E)
             }
             else if( kind == SymKind::Macro )

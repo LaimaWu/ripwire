@@ -1070,6 +1070,8 @@ inline constexpr char kHelpHead[] =
         "                               the interface->impls view for ONE named interface/base: its signature, method contract,\n"
         "                               and every implementor (own-language only). file:name disambiguates a same-named type.\n"
         "                               No contract for a language this surface cannot read soundly: methods=0 caveat=… says so.\n"
+        "                               Implementors BELOW a direct one follow as via= depth= rows (transitive=N), 200 a page,\n"
+        "                               walked through PROVEN extends clauses only (base_by=name: bound by spelling); --limit/--offset page them.\n"
         "    --exemplar=TASK|KIND       before you write: the repo's best existing example of this kind of code, to imitate\n"
         "                               before you write: the repo's best-in-class instance to IMITATE. Just pass a plain task —\n"
         "                               --exemplar=\"format byte sizes\" — and the KIND is inferred from the top match; or name a\n"
@@ -2673,7 +2675,7 @@ inline constexpr char kHelpTail[] =
         "                               --zoom --external-surface --dead-code --mentions --graph-query --stray-content\n"
         "                               --test-gate --biggest-first --ensemble --quality-panel --context-ratio\n"
         "                               --nonlocal-state --comment-coherence --naming-consistency --safe-delete --pr-context\n"
-        "                               --edit-check --flags --situ --for.\n"
+        "                               --edit-check --flags --situ --for --lego.\n"
         "                               Emit at most N rows, skipping the first M; N overrides the verb's own display cap\n"
         "                               (40 hotspot files, 30 co-change pairs, 60 whereis hits, 100 grep/match hits, 40\n"
         "                               impact rows, 20 seam pairs, 40 readability rows, 40 ensemble symbol rows, 40 context-ratio\n"
@@ -3811,7 +3813,7 @@ constexpr const char* kPagingHonoringVerbs =
     "--communities --community --whereis --grep/--regex --match --pattern --impact --uses --exercises "
     "--seams --zoom --external-surface --dead-code --mentions --graph-query --stray-content --test-gate "
     "--biggest-first --ensemble --quality-panel --context-ratio --nonlocal-state --comment-coherence "
-    "--naming-consistency --safe-delete --pr-context --edit-check --flags --situ --for";
+    "--naming-consistency --safe-delete --pr-context --edit-check --flags --situ --for --lego";
 
 inline bool honorsPaging( const Config& c ) noexcept
 {
@@ -3838,7 +3840,11 @@ inline bool honorsPaging( const Config& c ) noexcept
         // PAGING-POC (issue #294): --pack-task joins ONLY under a budgeted window — its candidate page
         // mirrors --for's (the shared emitForCandidatePage). The bare --pack-task bundle keeps refusing
         // the pair (it has no window to serve), and a windowless budget run is untouched.
-        || ( c.packTaskFlag && c.tokenBudget != 0 && ( c.pageLimit > 0 || c.pageOffset > 0 ) );
+        || ( c.packTaskFlag && c.tokenBudget != 0 && ( c.pageLimit > 0 || c.pageOffset > 0 ) )
+        // lane lego-transitive: --lego=TYPE joins the same CONDITIONAL way — --limit/--offset window its deeper
+        // implementor rows (depth >= 2, serialize.h legoClosurePage); without a window it keeps its kShapingVerbs row,
+        // so `--lego --max-tokens` is still the "not read … nothing was dropped" notice, not a paging-family refusal.
+        || ( !c.legoType.empty() && ( c.pageLimit > 0 || c.pageOffset > 0 ) );
 }
 
 // --limit/--offset on a verb that windows NOTHING. Same accept-then-silently-ignore class as every guard in

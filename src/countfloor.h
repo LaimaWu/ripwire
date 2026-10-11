@@ -347,6 +347,51 @@ inline constexpr const char* kImplementorsFloorLegendComment =
     "another implementor exists. floor_next= lists every extends site of the name, bound or not. A type that satisfies an "
     "interface without naming it (structural typing) leaves no clause at all and is never counted. -->";
 
+// lane lego-transitive: the full dialect's clause for the deeper implementor rows, emitted as its own comment exactly when the
+// targeted interface HAS a depth >= 2 implementor (the kImplementorsFloorLegendComment route above). No double hyphen inside:
+// it rides an XML comment. CLI and MCP share it.
+inline constexpr const char* kLegoClosureLegendComment =
+    "<!-- ripwire lego: transitive=N counts the implementors BELOW a direct one (depth 2 and deeper), each listed once at its "
+    "shallowest depth as <impl via= depth=>: via= names the type it extends that reached it, depth= its hops below this "
+    "interface; a direct row carries neither, and implementors= still counts the direct rows alone. The walk descends only "
+    "through extends clauses the index PROVES name the type above (a same-file declaration in scope; a Python or JS/TS named "
+    "import or require; a resolved include; the Java, Kotlin or Go package; a Java package qualifier. A Java or Kotlin import "
+    "or a C# using is not a proof). The deeper rows are one page: "
+    "transitive_shown= rows printed when it is cut, transitive_offset= the first one shown, has_more=\"1\" and "
+    "next= the call for the next page. -->";
+
+// lane lego-transitive fix 1: the hedge's own clause, present-only beside the one above (no double hyphen: an XML comment).
+inline constexpr const char* kLegoClosureHedgeLegendComment =
+    "<!-- ripwire lego: base_by=\"name\" on a deeper row: its extends clause names the via= type by SPELLING alone (no import, "
+    "include, qualifier or enclosing scope proved which same-named type it means), so the row is a candidate, NOT a proven "
+    "subtype, and the walk does not continue below it. transitive_other_base=N: N types whose extends clause the index binds "
+    "to a DIFFERENT same-named type; they are not listed here (the lego answer of the type they do extend lists them). -->";
+
+// lane lego-transitive fix 2: the stop below a DIRECT row whose own base is unproven, present-only beside the two above
+// (rule 5: the walk keeps the stop, the answer says so). No double hyphen: an XML comment.
+inline constexpr const char* kLegoClosureUnwalkedLegendComment =
+    "<!-- ripwire lego: transitive_unwalked=N: N direct rows (each marked unwalked=\"1\") have subtypes of their own, but "
+    "the index does not prove their extends clause names this interface (the row is matched by name), so the walk does not descend below them and their "
+    "subtypes are NOT counted in transitive=. Not proof the row is unrelated. unwalked_next= is the first such row's own "
+    "lego call, which lists its subtypes; the same call on each marked row lists the rest. -->";
+
+// the clauses the targeted answer's deeper rows need: none without a deeper row or a left-out one, the hedge clause only
+// when a hedged row or a left-out count rides, the unwalked clause only when a direct row was not walked
+inline std::string legoClosureLegendComment( const std::vector<std::vector<NodeId>>& graphImplementors,
+                                             const std::vector<std::vector<std::uint8_t>>& implementorBound, NodeId focus )
+{
+    const LegoClosure closure = legoImplementorClosure( graphImplementors, implementorBound, focus );
+    bool deeper = false;
+    bool hedged = closure.otherBase > 0;
+    for( const ImplementorRow& row : closure.rows )
+    {
+        deeper = deeper || row.depth >= 2;
+        hedged = hedged || row.byName;
+    }
+    return std::string( deeper ? kLegoClosureLegendComment : "" ) + ( hedged ? kLegoClosureHedgeLegendComment : "" )
+         + ( closure.unwalked.empty() ? "" : kLegoClosureUnwalkedLegendComment );
+}
+
 inline const char* implementorsFloorLegendComment( const IngestResult& ing, const std::vector<std::vector<NodeId>>& graphImplementors, NodeId focus )
 {
     const NodeId one[1] = { focus };

@@ -1227,23 +1227,9 @@ inline std::vector<std::pair<NodeId, std::string_view>> pythonDispatchRequests( 
 inline std::vector<NodeId> pythonDispatchClasses( const Graph& g, NodeId base )
 {
     std::vector<NodeId> classes{ base };
-    HashMap<NodeId, bool> visited;
-    visited.reserve( 32 );
-    visited.emplace( base, true );
-    for( std::size_t n = 0; n < classes.size(); ++n )
+    for( const ImplementorRow& row : implementorClosure( g.implementors, base ) )   // cycles and diamonds visit a class once
     {
-        const NodeId id = classes[n];
-        if( id >= g.implementors.size() )
-        {
-            continue;
-        }
-        for( NodeId child : g.implementors[id] )
-        {
-            if( visited.emplace( child, true ).second )
-            {
-                classes.push_back( child ); // cycles and diamonds visit a class only once
-            }
-        }
+        classes.push_back( row.id );
     }
     return classes;
 }
@@ -2280,8 +2266,14 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 29;   // MUST equal ingest.cpp's kCacheVersion (gated); 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 158;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 31;   // MUST equal ingest.cpp's kCacheVersion (gated); 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
+constexpr std::uint32_t kIngestParserVerMirror    = 164;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 164 = 2026-10-11 (train 27: lego-transitive's 162 renumbered above every live build, up to 162 / rich tag 163;
+                                                          //   see the kParserVer note)
+                                                          // 162 = 2026-10-10 lane lego-transitive fix 1 (inherit-ref base binding; above 160's
+                                                          //   rich tag 161; the train renumbers)
+                                                          // 160 = 2026-10-10 lane lego-transitive (JS/TS class factory; above 156's
+                                                          //   rich tag 157 and train 26c's 158/159; the train renumbers)
                                                           // 158 = 2026-10-09 (train 26c: PR #339 Rails schema columns; above 156 / rich tag 157; see the
                                                           //   kParserVer note)
                                                           // 156 = 2026-10-08 (train 26b: above every lane build, up to 154 / rich tag 155; see the

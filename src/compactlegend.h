@@ -449,7 +449,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // defs= names resolveFocus's pick (graph.h), and the body preference there holds only IN THE DECLARATION'S SCOPE: a pure
     // virtual beside another class's override keeps the focus. Unconditional, this reading described that answer wrongly
     // (test/decltodefcheck.sh E3g, which also holds the full --around and --connect readings to the same condition).
-    { "defs",              "defs=N: of= names N defs; the lowest-id one was walked, a C/C++ body in the same scope over its declaration", true, "r" },
+    { "defs",              "defs=N: of= names N defs; lowest-id walked, code first, a C/C++ body in the same scope over its declaration", true, "r" },
     // The map HEADER's absent-at-zero gauges: `<!-- files=` is kept as data while the `<!-- hdr:` clauses that define
     // these fields go (kDeclinedMapLegend, kIgnoredLegend, kExtentSuspectHdrLegend, kMacroBlankedHdrLegend, the absent-if-0
     // half of the always-on legend, kMaxTokensFitLegend). Header-ONLY: several are quoted attributes elsewhere.
@@ -902,6 +902,19 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // count-floor on the targeted lego verb (serialize.h packLego, countfloor.h implementorFloors): present-only.
     { "implementors_floor", "implementors_floor=1: an extends clause spelled like this interface bound nowhere; implementors= may be short (not proof of another)", true, "iface", MapHeaderRead::No, {}, "lego" },
     { "floor_next", "floor_next=: lists every extends site of the name, bound or not", true, "iface", MapHeaderRead::No, {}, "lego" },
+    // lane lego-transitive: the deeper implementors (serialize.h legoClosurePage / legoClosureAttrs / writeLegoImplRow): present-only.
+    // ONE term for the closure and its two row attributes (it rides whenever a via=/depth= row does): the reading costs a fixed
+    // ~100 B on every answer with a deeper row, which on a small closure is most of the growth (lane report, K1/K2 bytes).
+    { "transitive", "transitive=N: rows below a direct one, each once: impl via= its base, depth= hops; implementors= counts direct", true, "iface", MapHeaderRead::No, {}, "lego" },
+    { "transitive_shown", "transitive_shown=N: deeper rows on this page; has_more=1 with next= pages on", true, "iface", MapHeaderRead::No, {}, "lego" },
+    { "transitive_offset", "transitive_offset=N: the first deeper row this page shows", true, "iface", MapHeaderRead::No, {}, "lego" },
+    // fix 1: the hedge on a name-only deeper row and the count of name-collision rows left out (present-only, both)
+    { "base_by", "base_by=name: that impl's extends clause names via= by spelling alone; not a proven subtype, not walked below", true, "impl", MapHeaderRead::No, {}, "lego" },
+    { "transitive_other_base", "transitive_other_base=N: types left out, their extends clause binds another same-named type", true, "iface", MapHeaderRead::No, {}, "lego" },
+    // fix 2: the direct rows the walk stops below (their own extends clause unproven) — counted, marked, and one call named
+    { "transitive_unwalked", "transitive_unwalked=N: direct rows with subtypes not walked (their base not proven, matched by name); not in transitive=", true, "iface", MapHeaderRead::No, {}, "lego" },
+    { "unwalked_next", "unwalked_next=: the first such row's own lego call, listing its subtypes", true, "iface", MapHeaderRead::No, {}, "lego" },
+    { "unwalked", "unwalked=1: the walk stopped below that direct impl; its own lego lists its subtypes", true, "impl", MapHeaderRead::No, {}, "lego" },
     // layout: src/layout.h writeLayout / writeLayoutDef
     { "sym", "sym=: the aggregate name asked for", false, "layout", MapHeaderRead::No, {}, "layout" },
     { "found", "found=1: a C-family struct/class/union body was located for sym=", false, "layout", MapHeaderRead::No, {}, "layout" },

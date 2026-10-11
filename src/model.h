@@ -811,6 +811,13 @@ struct Reference
     //   memberFactory), memberVia = the method that built it. recvVar is then empty. Read through rubyTypedRecvOf.
     std::string   memberVia;
     bool          memberFactory = false;
+    // lane lego-transitive fix 1 (test/legotransitivecheck.sh NS arms), an INHERIT ref only (isInherit): the same-file declaration
+    //   the base name binds to by the language's lexical lookup, as 1 + the byte its name starts at (ingest_relations.h
+    //   localBaseBinding; 0 = no enclosing scope declares it, 0xFFFFFFFF = a scope too large to read, nothing proven). On an
+    //   inherit ref memberRoot holds the base's WRITTEN qualifier (`Outer` for `Outer.Changed`, `b` for `b::Mid`, "" bare) —
+    //   memberCall is false there, so no member-call reader sees it. graph.h's implementors builder reads both (baseEvidence).
+    //   Sits in memberFactory's alignment padding: sizeof(Reference) is unchanged.
+    std::uint32_t baseBind = 0;
 };
 
 // A Ruby call whose RECEIVER the code builds (parser version 132, test/rubytypedrecvcheck.sh): `c = Client.new` then `c.get`,

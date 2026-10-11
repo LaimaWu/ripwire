@@ -4443,12 +4443,14 @@ std::optional<int> runTargetedViews( const MainDispatch& d )
         // graphUnindexedLegendComment) because kLegoLegend is one closed literal: the attribute below is
         // conditional on g.unindexedFiles, so its definition has to be too.
         // H1: the unproven_defs= clause takes the same route for the same reason (graphlegend.h unprovenDefsVerbComment).
-        rw::emitTo( stdout, "{}{}{}{}{}", rw::ctxRootOpen( {}, {}, tvRootArg ).c_str(), rw::kLegoLegend,
+        rw::emitTo( stdout, "{}{}{}{}{}{}", rw::ctxRootOpen( {}, {}, tvRootArg ).c_str(), rw::kLegoLegend,
                      rw::graphUnindexedLegendComment( rw::graphGaugeClauses( g ) ).c_str(),
                      rw::unprovenDefsVerbComment( rw::UnprovenDefsVerb::Lego, legoUnprovenDefs > 0, "<!-- ripwire lego: " ).c_str(),
-                     rw::implementorsFloorLegendComment( ing, g.implementors, focus ) );   // count-floor: present-only, as the two above
+                     rw::implementorsFloorLegendComment( ing, g.implementors, focus ),   // count-floor: present-only, as the two above
+                     rw::legoClosureLegendComment( g.implementors, g.implementorBound, focus ).c_str() );   // lane lego-transitive: present-only, the deeper rows
+        const std::string legoTargetedAttr = rw::unprovenDefsAttrXml( legoUnprovenDefs ) + rw::graphCountFloorAttrXml( g );   // outlives the call
         packLego( stdout, ing, g.implementors, flat, 1, d.redactPtr, &legoImpure, focus, /*withPaths=*/true, tvRootArg,
-                  rw::unprovenDefsAttrXml( legoUnprovenDefs ) + rw::graphCountFloorAttrXml( g ) );   // H1 + M15: residue, gauge, marker on the targeted root
+                  rw::LegoTargetedArgs( legoTargetedAttr, cfg.pageLimit, cfg.pageOffset, &g.implementorBound ) );   // H1 + M15: residue, gauge, marker; the deeper-row page
         rw::emitRaw( stdout, "</ctx>" );
         reportRedactions( stderr, d.redactCounts );      // W3-N1: a contract <m> sig is a redacting seam — disclose the tally
         return 0;
