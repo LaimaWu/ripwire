@@ -2986,7 +2986,7 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     const PageWindow    ipw         = pageWindow( show.size(), effectiveRowCap( page.limit, 40 ), page.offset );
     // idea #6: the CLI arm's rollup, under the same rule — it rides only beside a CUT symbol window
     const ImpactFileRollup imFiles = impactFileRollup( ing, reach, depth, page.limit, symbol, ipw.end - ipw.begin < show.size(),
-                                                       seeds.size() > 1 ? &proven : nullptr );   // fix27, as on the CLI
+                                                       seeds.size() > 1 ? proven : kNoImpactHedge );   // fix27, as on the CLI
     const bool          imHasVia    = std::any_of( show.begin() + ipw.begin, show.begin() + ipw.end, [ & ]( NodeId n ) { return impactRowNameOnly( proven, n ); } );
     rw::emitTo( mem, "{}{}. {}{}{}{}{}{}{}{}{}{}{}{}-->", kImpactLegendOpen, kPageRaiseCapClause,
                   reach.empty() ? "" : kImpactDepthLegend,           // 0.6.5: exactly when d=/by_depth= ride, as on the CLI

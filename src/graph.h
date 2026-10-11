@@ -11417,9 +11417,11 @@ inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<N
 // fix27 (round-4 textual-09, `--impact=arrange`): a selector that matches SEVERAL definitions folds the dependants of
 // all of them into one row per file, and the symbol rows' via="name" hedge (reached only through a name-only edge, so
 // possibly a namesake's dependant) did not survive the fold — a file whose every reached symbol was hedged read as a
-// plain dependant. `hedgeProven` (provenCallerReach over the seeds; non-null exactly when the selector matched more than
-// one definition) counts each row's hedged symbols: the emitters print via="name" when all of them are, by_name=K when
-// K of them are. A single-definition selector passes nullptr and folds byte-identically to before.
+// plain dependant. `hedgeProven` (provenCallerReach over the seeds when the selector matched more than one definition)
+// counts each row's hedged symbols: the emitters print via="name" when all of them are, by_name=K when
+// K of them are. A single-definition selector passes kNoImpactHedge (empty, so impactRowNameOnly is false for every node)
+// and folds byte-identically to before.
+inline const std::vector<char> kNoImpactHedge{};
 inline constexpr std::size_t kImpactFileRollupCap = 20;
 
 // the --impact row (provenCallerReach below)'s hedge: reached, but by no all-proven path
@@ -11446,7 +11448,7 @@ struct ImpactFileRollup
 
 inline ImpactFileRollup impactFileRollup( const IngestResult& ing, std::span<const NodeId> reach, const std::vector<std::uint32_t>& depth,
                                           int pageLimit, std::string_view sym, bool windowCut,
-                                          const std::vector<char>* hedgeProven = nullptr )
+                                          const std::vector<char>& hedgeProven = kNoImpactHedge )
 {
     ImpactFileRollup          r;
     if( !windowCut )
@@ -11470,11 +11472,7 @@ inline ImpactFileRollup impactFileRollup( const IngestResult& ing, std::span<con
         ImpactFileRow& row = r.rows[rowOfFile[f]];
         ++row.syms;
         row.minDepth = std::min( row.minDepth, d );
-        if( hedgeProven && impactRowNameOnly( *hedgeProven, n ) )
-        {
-            ++row.nameOnly;
-        }
-        ASSUME( row.nameOnly <= row.syms, "a row's hedged symbols are some of its symbols" );
+        row.nameOnly += std::uint32_t( impactRowNameOnly( hedgeProven, n ) );   // never on kNoImpactHedge (empty: no row hedged)
     }
     std::sort( r.rows.begin(), r.rows.end(), [ & ]( const ImpactFileRow& a, const ImpactFileRow& b )
                {

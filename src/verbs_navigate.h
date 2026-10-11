@@ -2694,7 +2694,7 @@ std::optional<int> runImpact( const MainDispatch& d )
         // idea #6: the rollup rides only beside a CUT symbol window (graph.h impactFileRollup)
         // fix27: on a multi-definition selector the rows keep the symbol rows' via="name" hedge through the fold
         const rw::ImpactFileRollup imFiles = rw::impactFileRollup( ing, reach, imDepth, cfg.pageLimit, cfg.impactSym,
-                                                                   imPage.end - imPage.begin < show.size(), seeds.size() > 1 ? &imProven : nullptr );
+                                                                   imPage.end - imPage.begin < show.size(), seeds.size() > 1 ? imProven : rw::kNoImpactHedge );
         // Reference-as-value round: SYM's own binding sites, beside the radius they are not in.
         const rw::ValueRefIndex imVri( ing );
         const rw::ValueRefRows  imValueRefs = rw::valueRefCallerRows( ing, imVri, seeds );
