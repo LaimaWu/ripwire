@@ -3516,7 +3516,15 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // shipped): defectSitesOf passes the tree's macro names to the C++ scanner, and the scanners skip more calls (an
 // argument that may be a macro, a directive inside the call, #if 0, a brace-spelling escape) and guard more
 // vacuous-assert absences — fewer records, the same blob shape; the producer identity keeps the builds apart.
-constexpr std::uint32_t kQSnapCacheScheme = 19;
+// v20 (2026-10-11, train 27) — no blob shape change; the dead SET's inputs moved. pythonDispatchedMethodIds walks
+// pythonDispatchClasses over g.implementors, and lane lego-transitive changed which Python classes extend which: a base
+// clause is read as Python evaluates it (`class A( Outer.B )` extends B only, `Generic[K]` extends Generic and not K,
+// `metaclass=` and computed bases name none), so the set of methods an inherited receiver call keeps alive can differ
+// for an UNCHANGED sha. kParserVer moved with that extraction (164, its mirror with it), and the producer identity
+// already keeps this build's blobs apart; bumped 19 -> 20 so the history above stays complete and the scheme sits above
+// every live value (19 on every branch). The lane's own note said the walk itself is a refactor (same class set and
+// order for the same g.implementors) — true; what moved is g.implementors.
+constexpr std::uint32_t kQSnapCacheScheme = 20;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)

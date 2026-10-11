@@ -268,7 +268,7 @@ A Python base clause is now read as Python evaluates it: `class Inner( Outer.Cha
 extend both `Outer` and `Changed`), `class Box( Generic[Key] )` extends `Generic` and not its type argument `Key`,
 `metaclass=Meta` is no base, and a computed base (`with_metaclass( M, B )`, `namedtuple( … )`) names none. The
 JavaScript twin: `class A extends ns.Base` extends `Base` (it read `ns`), and `extends mixin( B )` names no base. Parser
-version 162, cache format 30 (re-index on first run).
+version 164, cache format 31 in this release (162 and 30 on the branch; see the versions note): re-index on first run.
 
 A bare name now resolves to a CODE definition whenever one matched: `--lego=Loader` answered about a `docs/api.md`
 heading (`defs="3" implementors="0"`) while `src/loader.js` held the class, because the heading had the lower id. The
@@ -329,7 +329,7 @@ in a Java class with an outside base drawn to an unrelated class's `flush`.
   change); the `--max-tokens=3000` maps of the eight repositories keep 337 rows (331 before the change). The gate is
   `test/receiverevidencecheck.sh` (every surface, CLI/MCP parity, census conservation, and near misses
   for every evidence rule). Ingest records the receiver chain and the Java/C#/Kotlin/Swift declarations
-  (`kParserVer` 158 in this release, see the versions note; `kCacheVersion` 29), so a cache written by an earlier build is re-parsed.
+  (`kParserVer` 164 in this release, see the versions note; `kCacheVersion` 31), so a cache written by an earlier build is re-parsed.
 ### Added — `--quality-delta` gains a twelfth kind, `defect-shape`: four defect shapes code review kept finding by hand
 
 `kind="defect-shape"` rows name a known defect SHAPE the change added, in `defect=` (`src/defectshape.h`):
@@ -378,7 +378,7 @@ an ALL_CAPS name followed by `(`), a call with a preprocessor directive inside i
 that spells a brace. Two floors of that skip: the tree's macro list holds function-like macros only, so a lower-case
 object-like macro defined in another file (`#define xyargs p.x, p.y` in a header) is read as one argument and its call
 can be a false format-arity row; and only a literal `#if 0` is skipped — `#if false`, `#if (0)`, `#if 0 && …` and the
-`#else` of `#if 1` are read as live code. The qsnap blob scheme moves (19 in this release, see the versions note); the
+`#else` of `#if 1` are read as live code. The qsnap blob scheme moves (20 in this release, see the versions note); the
 legend dictionary gains `r defect=`.
 
 ### Changed — a warm CLI call costs about a quarter less, `--whereis` on a many-branch checkout about 70% less, and `--whereis` refuses instead of printing a zero it never measured
@@ -448,7 +448,7 @@ inside a class body), so the rendered `db/schema.rb` stays the ONE source of col
 the migration beside its schema cannot double any def; `add_column` / `remove_column` /
 `change_column` are argument data and read nowhere — a column added then dropped never registers
 (pinned by the three migration fixtures). Rails 8's `db/queue_schema.rb`, `db/cache_schema.rb` and
-`db/cable_schema.rb` are matched by the same content gate. Ingest records the schema columns (`kParserVer` 158 in this release, see the versions note; carried by the branch as
+`db/cable_schema.rb` are matched by the same content gate. Ingest records the schema columns (`kParserVer` 164 in this release, see the versions note; carried by the branch as
 122 → 126 → 144 → 149 across its merges with `main`), so a cache written by an earlier build is re-parsed; no record
 layout change (`kCacheVersion` and `kQSnapCacheScheme` unchanged).
 Gate: `test/rubyschemacheck.sh` on `test/rubyschemafix/` — schema text from a real, running Rails
@@ -2024,7 +2024,7 @@ per page instead. Gate: `test/impactdepthcheck.sh`.
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 124 → 158 (the function-literal fix takes 128; #338 and #325 take 129; the body-less C/C++ type-specifier
+`kParserVer` 124 → 164 (the function-literal fix takes 128; #338 and #325 take 129; the body-less C/C++ type-specifier
 span fix and the TypeScript `await f<T>(x)` / `!f<T>(x)` calls each took a number of their own on their branches, as did
 the false-edge resolution (134, 135), the value-reference rows (140) and the Ruby method-lookup changes (#373: one per
 step from 130 to 137 — bare-word calls, mixins, typed receivers, RSpec targets, Rails declared calls, Rake and Jbuilder
@@ -2035,11 +2035,15 @@ shadow and the value-reference slot text take 143, above 141's full-use file tag
 149. The Go named-type kinds and the train 25 re-review's extraction fixes each took 145 on their branches, and the
 receiver-evidence records took 145 to 154 on theirs; all three land together at 156: branch builds have used up to 154,
 whose full-use file tag is 155, so no cache such a build wrote is read as this release's; the Rails `db/schema.rb`
-columns (#339, carried as 122 to 149 on its branch) land at 158, above 156's full-use file tag 157), `kCacheVersion` 25 → 29
+columns (#339, carried as 122 to 149 on its branch) land at 158, above 156's full-use file tag 157; the `--lego` base-clause and
+class-factory changes, carried as 160 and 162 on their branch, land at 164: branch builds have used up to 162, whose full-use
+file tag is 163), `kCacheVersion` 25 → 31
 (the function-literal fix's record changes, then the false-edge fix's member-call fields, then the receiver chain
-`memberPath`/`memberCtor`; the Ruby branch's appended binding kinds need no bump of their own) and `kQSnapCacheScheme` 15 → 19
+`memberPath`/`memberCtor`, then the inherit reference's same-file base binding, numbered 30 on its branch and 31 here, above
+every branch build; the Ruby branch's appended binding kinds need no bump of their own) and `kQSnapCacheScheme` 15 → 20
 (the `--quality-delta` error-masking and placeholder changes, then the dead kind agreeing with `--dead-code` on functions
-held as values, then on a function that only stores itself, then the defect-shape records of the twelfth kind), and the
+held as values, then on a function that only stores itself, then the defect-shape records of the twelfth kind, then the
+Python base clauses the dead kind's inherited-call evidence walks), and the
 history-walk cache's `kQChurnCacheScheme` 2 → 3 (an earlier build stored a `git log` walk that git could not finish as if it
 were the window). Every ingest cache written by an earlier build is refused and re-indexed once, every
 cached quality snapshot is recomputed, and every repository's history is walked once more. The session legend dictionary is `dictv=74f30d013d02c2a2 entries=829`.
