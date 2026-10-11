@@ -868,7 +868,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // lane lego-transitive: the deeper implementors (serialize.h legoClosurePage / legoClosureAttrs / writeLegoImplRow): present-only.
     // ONE term for the closure and its two row attributes (it rides whenever a via=/depth= row does): the reading costs a fixed
     // ~100 B on every answer with a deeper row, which on a small closure is most of the growth (lane report, K1/K2 bytes).
-    { "transitive", "transitive=N: rows below a direct one (base_by=name ones hedged), each once: impl via= its base, depth= hops; implementors= counts direct", true, "iface", MapHeaderRead::No, {}, "lego" },
+    { "transitive", "transitive=N: rows below a direct one, each once: impl via= its base, depth= hops; implementors= counts direct", true, "iface", MapHeaderRead::No, {}, "lego" },
     { "transitive_shown", "transitive_shown=N: deeper rows on this page; has_more=1 with next= pages on", true, "iface", MapHeaderRead::No, {}, "lego" },
     { "transitive_offset", "transitive_offset=N: the first deeper row this page shows", true, "iface", MapHeaderRead::No, {}, "lego" },
     // fix 1: the hedge on a name-only deeper row and the count of name-collision rows left out (present-only, both)
