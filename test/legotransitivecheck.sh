@@ -25,6 +25,11 @@
 #      an include, the package, a qualifier). A name-only edge's row is hedged base_by="name" and not walked; an edge the
 #      evidence binds to ANOTHER same-named type adds no row and is counted transitive_other_base=. Python's `A.B` base is
 #      B (inside A), `Generic[K]`'s type argument and `metaclass=M` are no base. Red on 4d59c804 (the namesake rows listed).
+# (UW) fix 2 (rule 5): a DIRECT row whose own extends clause is not proven (a cross-package Java import, a Kotlin import, a C#
+#      using, an ES import of a CommonJS base) is not walked below, and the answer SAYS so: the row carries unwalked="1", the
+#      <iface> counts those rows transitive_unwalked=N and names the first one's --lego as unwalked_next=; a present-only
+#      legend clause (full) and terms (compact), CLI and MCP. A direct name-only row with no subtype and a proven tree carry
+#      none of it. Red on d339adf0 (the stop was silent). Corpus uw/{java,kt,cs,js}.
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
@@ -298,6 +303,58 @@ then
     if iface | grep -q 'implementors="0"'; then ok "metaclass=PMeta is no base"; else no "PMeta: $( iface )"; fi
 fi
 
+echo "=== (UW) fix 2: the walk's stop below an unproven DIRECT row is disclosed, never silent ==="
+# uwarm ROOT MID LABEL — MID is ROOT's only direct row, bound by name; its subtype is not walked, and the answer says so
+uwarm(){
+    if lego "$1"
+    then
+        if printf '%s\n' "$OUT" | grep "<impl n=\"$2\"" | grep -q 'unwalked="1"/>'; then ok "$3: --lego=$1 marks $2 unwalked=\"1\""; else no "$3: $2 row: $( printf '%s\n' "$OUT" | grep "<impl n=\"$2\"" )"; fi
+        if iface | grep -q 'transitive_unwalked="1"'; then ok "$3: the <iface> counts it (transitive_unwalked=\"1\")"; else no "$3: no transitive_unwalked: $( iface )"; fi
+        if iface | grep -q "unwalked_next=\"--lego=[^\"]*:$2\""; then ok "$3: unwalked_next= names $2's own --lego"; else no "$3: unwalked_next: $( iface )"; fi
+    fi
+}
+uwarm UwKRoot  UwKMid  "Kotlin (import; the leaf in the same file)"
+uwarm UwCRoot  UwCMid  "C# (using; the leaf in the same file)"
+uwarm UwJsRoot UwJsMid "JavaScript (ES import of a CommonJS base)"
+if lego UwJRoot
+then
+    if iface | grep -q 'transitive_unwalked="2" unwalked_next="--lego=uw/java/a/UwJMid.java:UwJMid"'; then ok "Java: two unwalked direct rows counted, the first named (UwJMid)"; else no "Java UwJRoot: $( iface )"; fi
+    if printf '%s\n' "$OUT" | grep '<impl n="UwJMid2"' | grep -q 'unwalked="1"/>'; then ok "Java: the second unwalked row UwJMid2 is marked too"; else no "UwJMid2 row: $( printf '%s\n' "$OUT" | grep '<impl n="UwJMid2"' )"; fi
+    # near misses: a name-only direct row with NO subtype, and a proven direct row (same package) that IS walked
+    if printf '%s\n' "$OUT" | grep '<impl n="UwJAlone"' | grep -q 'unwalked'; then no "UwJAlone (no subtype) is marked unwalked"; else ok "a name-only direct row with no subtype (UwJAlone) is not marked"; fi
+    if printf '%s\n' "$OUT" | grep '<impl n="UwJNear"' | grep -q 'unwalked'; then no "the proven UwJNear is marked unwalked"; else ok "a proven direct row (UwJNear, same package) is not marked"; fi
+    if printf '%s\n' "$OUT" | grep '<impl n="UwJNearLeaf"' | grep -q 'via="UwJNear" depth="2"/>' && iface | grep -q 'transitive="1"'; then ok "…and its subtype is walked (transitive=\"1\" beside the unwalked count)"; else no "UwJNearLeaf: $( iface )"; fi
+    if has '<impl n="UwJLeaf"' || has '<impl n="UwJLeaf2"'; then no "an unproven row's subtype is listed as a deeper row"; else ok "the unproven rows' subtypes stay off this answer (the stop is kept)"; fi
+fi
+# the named call walks below: --lego=<that row> lists its subtype
+if lego uw/java/a/UwJMid.java:UwJMid
+then
+    if has '<impl n="UwJLeaf"'; then ok "unwalked_next (--lego=uw/java/a/UwJMid.java:UwJMid) lists UwJLeaf"; else no "the unwalked_next call: $( iface )"; fi
+fi
+# a fully proven tree and a name-only one with no subtype carry none of it
+for t in BaseFormatter Top PBase
+do
+    if lego "$t"
+    then
+        if has 'unwalked'; then no "--lego=$t (every direct row proven or childless) carries an unwalked attribute"; else ok "--lego=$t carries no unwalked attribute"; fi
+    fi
+done
+if "$BIN" "$FIX" --no-cache --lego=UwJRoot --legend=full >"$DIR/full" 2>"$DIR/err"
+then
+    if grep -q 'ripwire lego: transitive_unwalked=N' "$DIR/full"; then ok "the full legend defines transitive_unwalked= where it rides"; else no "full legend lacks the unwalked clause"; fi
+else
+    no "--lego=UwJRoot --legend=full exited non-zero: $( head -2 "$DIR/err" )"
+fi
+if "$BIN" "$FIX" --no-cache --lego=UwKRoot --legend=compact >"$DIR/compact" 2>"$DIR/err"
+then
+    if grep -q 'transitive_unwalked=N: ' "$DIR/compact" && grep -q 'unwalked_next=: ' "$DIR/compact" && grep -q 'unwalked=1: ' "$DIR/compact"; then ok "the compact legend reads transitive_unwalked=, unwalked_next= and unwalked="; else no "compact legend lacks the unwalked terms: $( head -c 600 "$DIR/compact" )"; fi
+else
+    no "--lego=UwKRoot --legend=compact exited non-zero: $( head -2 "$DIR/err" )"
+fi
+if "$BIN" "$FIX" --no-cache --lego=BaseFormatter --legend=full >"$DIR/full" 2>"$DIR/err" && ! grep -q 'unwalked' "$DIR/full"; then ok "an answer with no unwalked row carries no unwalked clause"; else no "the unwalked clause rides an answer without an unwalked row"; fi
+M="$( printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"lego\",\"arguments\":{\"path\":\"$FIX\",\"type\":\"UwCRoot\"}}}" | "$BIN" --mcp 2>/dev/null )"
+if printf '%s' "$M" | grep -q 'transitive_unwalked=\\"1\\" unwalked_next=\\"--lego=uw/cs/UwCMid.cs:UwCMid\\"' && printf '%s' "$M" | grep -q 'unwalked=\\"1\\"/>'; then ok "MCP lego carries the same count, next and row mark"; else no "MCP lego UwCRoot: $( printf '%s' "$M" | head -c 400 )"; fi
+
 echo "=== (M3) the focus is a CODE definition whenever one matched ==="
 if lego Loader
 then
@@ -323,7 +380,7 @@ fi
 echo "=== well-formed ==="
 if command -v xmllint >/dev/null 2>&1
 then
-    for a in "--lego=BaseFormatter" "--lego=BaseFormatter --legend=full" "--lego=BaseFormatter --limit=1 --legend=full" "--lego=Top --legend=full" "--lego=PBase --legend=full" "--lego=JRoot --legend=full"
+    for a in "--lego=BaseFormatter" "--lego=BaseFormatter --legend=full" "--lego=BaseFormatter --limit=1 --legend=full" "--lego=Top --legend=full" "--lego=PBase --legend=full" "--lego=JRoot --legend=full" "--lego=UwJRoot --legend=full" "--lego=UwJRoot --limit=1 --legend=full"
     do
         # shellcheck disable=SC2086
         if "$BIN" "$FIX" --no-cache $a 2>/dev/null | xmllint --noout - 2>/dev/null; then ok "xml well-formed: $a"; else no "xml malformed: $a"; fi
