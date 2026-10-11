@@ -486,12 +486,21 @@ rules it enforces:
 - **Reuse the shared mechanism.** Scope walks, shadowing (`VarDecl` bindings with spans) and imports
   (`Binding`/`Include`) each exist once. Extend them; a second copy under a new language's name is a
   review finding, and `--clones` shows it. No language-neutral qualified-call resolver exists yet
-  (`src/elixir_resolve.h` is Elixir-specific); raise generalising it in your PR.
-- **Refuse, don't guess.** A call whose qualifier (`Mod.f`, `ns/f`) cannot be resolved is counted as
-  unresolved, never laddered to every definition of that short name.
+  (`src/elixir_resolve.h` is Elixir-specific); generalising it is slice 6b in the map below.
+- **Refuse, don't guess: the target rule, not yet true for every language.** A module-qualified call (`Mod.f`,
+  `ns/f`) whose qualifier the resolver cannot place should be counted as unresolved, never laddered to every
+  definition of that short name. Today only three languages set a call qualifier, each with its own rule: Elixir
+  refuses (`ElixirResolver`), Rust keeps only the candidates the qualifier can name (`keepRustQualifiedCandidates`
+  in `src/graph.h`), and C++ refuses only a `std::`-rooted miss (`keepStdQualifiedCandidates`), because a C++
+  qualifier can legitimately miss through a namespace alias, a using-declaration or a base class. **Known gap:**
+  a language that newly sets `Reference::qualifier` gets none of these. In `buildGraph` (`src/graph.h`), when the
+  canonical tier (`appendCanonicalCandidates`) finds no `qualifier::name` definition, the call falls through to the
+  bare-name ladder, so #349's Clojure `str/join` binds an in-tree `join`. A shared fix is planned (slice 6a). Until
+  it lands, this rule does **not** mean a qualified call in a new language is free of wrong edges. Pin the wrong
+  edge as a known-gap arm (see the definition of done below), and do not add a guard for your language alone.
 - **Known gap.** Tags-pass predicates (`#eq?`/`#any-of?`) do not run yet, so keyword-headed definitions
   (Elixir today; a Lisp-style `defn` if one is added) keep a small keyword table in C++. That table belongs in `tags.scm` once the
-  mechanism lands; it is not a pattern to extend.
+  mechanism lands (#355, slice 5a); it is not a pattern to extend.
 
 #### Feature families: one shared handler each
 
@@ -518,6 +527,69 @@ Work on a family goes in this order, each step its own small PR with byte-identi
 (c) **new mechanism**: only then, a new shared handler for a form nobody handles yet.
 A per-language function for a concept another language also has (for example a `capture<Lang>Bases` beside the shared
 base-relations path) is a candidate for step (a). Claim a family or a slice of one in an issue before starting, as the #358 slices were claimed.
+
+#### Where each family lives today, and what you can claim
+
+Paths are under `src/`. **State**: *shared* = one mechanism, languages differ by data; *partly* = a shared path exists
+and some languages still bypass it; *duplicated* = the same concept written per language; *none* = no handler yet.
+Sizes: **S** ≈ a day, **M** ≈ a few days. Slices marked *maintainers* are ours; ask before starting one.
+Adding a language is a natural time to take one. If your language needs a family whose state below is *partly* or
+*duplicated*, folding one slice of it (its own small PR, before or after the language PR) is welcome, and the
+review will credit it, but it is never a condition for merging the language.
+
+| Family | Shared mechanism today | State | Claimable slices |
+|---|---|---|---|
+| 1. Imports | `ingest_importcap.h`: `@import.path` captures, `emitCapturedImport`, one `normaliseImportSpecifier` arm per `DepDialect`. Resolution in `resolve.h`. | partly. C-family, JS/TS and Go read the capture; Python is in review (#382). The rest still go through per-language arms of `directiveTargetOf` (`ingest_relations.h`): `csharpUsingTarget`, `phpUseTarget`, `luaRequireTarget`, `bashSourceTarget`, `rubyRequireTarget`, `elixirDirectiveTarget`, plus Rust `use`/`mod`, Kotlin `import_header` and Swift `import_declaration`. | **1a** one language per PR onto `@import.path` plus its normaliser arm, deleting its arm in `directiveTargetOf`: S each for C#, PHP, Lua, Bash, Kotlin and Swift; M for Rust (`use` trees, `mod`), Ruby (`autoload`) and Elixir (`alias`/`use`), whose directives carry more meaning. Claim on #358. |
+| 2. Aliases | None. Renames reach the resolver as `RawBind` records (`ingest_cache.h`) from separate producers: `capturePythonImportBinds` (`ingest_relations.h`), `captureJsImportFacts`, `captureJsModuleAliases` and `captureGoImportFacts` (`ingest_jsimports.h`), C/C++ aliases in `fnPtrAliasName` (`ingest_binds.h`) and `captureTypeAlias` (`ingest_relations.h`). The readers are separate too: `addTypeAliasBases` and `buildUsingReexports` (`resolve.h`). | duplicated: one "local name → target" concept in about five shapes. | **2a** one shared binds channel (`@import.alias` / `@import.names` → one `RawBind` kind): M, *maintainers*, after the #358 import slices. **2b** after 2a, one language per PR moves its renames onto it: S each (Rust `use a as b`, Kotlin `import x as y`, PHP `use … as`, C# `using X = …`). |
+| 3. Types | `captureTagsFacts` (`ingest_sidecap.h`) reads `@definition.*` captures for every language. | shared, but language decisions are `Lang::` branches inside the loop: 36 non-comment `Lang::` mentions, 15 of them Elixir. | **3a** #374: one constexpr per-language hook table that `captureTagsFacts` calls once per capture, one language per commit, Elixir first. M. |
+| 4. Inheritance | `captureBases` (`ingest_relations.h`): base clauses for C++, TS/JS, Java, Python, Swift, C#, PHP, Kotlin and Ruby, chosen by node kind (`isBaseTypeNodeIn`). | partly. Rust `impl … for` is a separate pass; Ruby mixins have their own `captureRubyMixinBases`. | **4a** Ruby `include`/`extend`/`prepend` as captures read by the shared path, retiring `captureRubyMixinBases`: S–M, Ruby (offered on #339). **4b** the base-clause node kinds move from `isBaseTypeNodeIn` into `tags.scm` captures: M, all of the languages above. |
+| 5. Callables | Definitions come from `tags.scm`, read by `captureTagsFacts`. | partly. Keyword-headed definitions keep keyword tables in C++: `elixirFunctionKeyword` and `elixirMetadataAttribute` (`ingest_elixir.h`) repeat `macroBodyKeyword` (`ingest_relations.h`), 0.82 and 0.96 similar by `--clones`. | **5a** #355: the tags pass evaluates `#eq?`/`#any-of?`/`#not-any-of?`, then Elixir's table moves into its `tags.scm`. M; Elixir, then Clojure. |
+| 6. Dispatch | `buildGraph` (`graph.h`): a SCIP pin, then the canonical tier (`appendCanonicalCandidates`, `resolve.h`), bindings and receiver rules (`receiverevidence.h`), then name tiers. Per-language qualified-call rules: `ElixirResolver` (`elixir_resolve.h`), `keepRustQualifiedCandidates` and `keepStdQualifiedCandidates` (`graph.h`). | partly. Facts about each language are scattered `l == Lang::X \|\| …` predicates (`implicitReceiverLang`, `memberNeverReachesFreeFunction` and `classNameReceiverLang` in `receiverevidence.h`; `langUsesHashComment` in `quality.h`), and `--clones` reports them as one group. | **6a** the shared refusal for an unplaced module qualifier (the known gap above): S, *maintainers*, not yet scheduled. **6b** the **language-neutral qualified-call resolver**: generalise `ElixirResolver`'s module table (alias/import/require facts → `Module::name`) so that Clojure `ns/f`, Elixir and other module-qualified languages use one resolver driven by per-language data. M; Elixir byte-identical, Clojure as the first new user. **6c** those predicates become columns of one constexpr per-`Lang` table: S, all languages. |
+| 7. Data-driven dispatch | One mechanism per shape: fn-pointer and callback bindings `buildFnPtrBindTables` (`graph.h`, C/C++); HTTP routes `routesVisitNode` (`ingest_sidecap.h`, a JS/TS and Python walk) into `RouteDef`/`RouteUse` (`model.h`); FFI aliases `BindingAlias` (`model.h`). | partly. Calls by a literal method name (`send(:m)`) resolve for Ruby only. | **7a** #375: one capture for a call whose method name is a literal, resolved through the ordinary receiver rules. M; Python `getattr`, JS/TS `obj["m"]`, Go `MethodByName`. **7b** route registration read from captures instead of the walk: M; JS/TS and Python. |
+| 8. Preprocessing | `retagMacroCallReferences` (`model.h`) for macro calls. Inert regions (quote, discard, comment forms) are per language today, for example `elixirQuoted` (`ingest_elixir.h`). | duplicated. A shared inert-region mechanism is in review (#357, PR #380). | **8a** after #380 and #349 are both on `main`, Clojure's quote/discard filter moves onto the shared mechanism: S, Clojure. |
+| 9. Scope and state | `enclosingScopeOf` (`ingest_names.h`); module and global state in `computeNonLocalState` (`nonlocalstate.h`). | duplicated: `rustEnclosingScopeOf` and `kotlinEnclosingScopeOf` are 0.82 similar to the generic walker by `--clones`. | **9a** #356 part 1: one table-driven enclosing-scope walker (scope-owner kinds, how the name is read). S–M; Rust and Kotlin. Read the notes above both functions first: each says why it was kept apart. If a table does not make the code smaller, a written finding that closes the slice is a valid result. |
+| 10. Entry points | `inventoryEntryStyle` (`mapinventory.h`): one per-language table of entry conventions (`main`, a static `Main`, `__main__.py`). | shared. Entries declared in a manifest or by an attribute are not detected, and the legend says so. | **10a** manifest-declared entries (`package.json` `main`/`bin`, `console_scripts`, Cargo `[[bin]]`): one reader per manifest format feeding the same table. M. **10b** attribute entries (Swift `@main`): S. |
+| 11. Tests | `inFileTestScope` (`ingest_names.h`) dispatches to `pythonInFileTestScope`, `rustInFileTestScope`, `jsInFileTestScope` and `csharpInFileTestScope`. | duplicated: four functions. | **11a** #356 part 2: a table of test-scope shapes. S–M; Python, Rust, JS/TS, C#. The note above `inFileTestScope` says the four rules have different shapes, so measure before folding, as in 9a. |
+| 12. Async | None. | none. | **12a** step (c) only: open a design issue (what counts as the callee of a goroutine, callback or future) with a measured miss before writing code. |
+
+#### Definition of done for a common-code slice
+
+1. **Claim it first**, in the slice's issue (or a new one naming its row and letter above). One slice per PR.
+2. **Byte-identical output on every language already handled.** Build `main` and your head, run one argv list
+   against both with `--no-cache` (or a fresh `--cache` per binary), and diff. Cover the map, `--deps --limit=100000`,
+   `--skipped`, and `--callers`/`--callees`/`--impact`/`--uses` on symbols the slice touches, over the fixtures of
+   every language the slice touches plus at least one real repository per language. Put the argv list and the
+   result in the PR: an empty diff, or each difference named as intended. This is item 7 of the
+   [pre-review list](#6-submitting-a-change), scoped to the slice.
+3. **The family's gates pass**, with any new arm shown red on `main` first. Run them as
+   `bash test/<gate>.sh "$PWD/build/ripwire"`. Imports: `importcapcheck`, `depsprecisecheck`, `resolvecheck`,
+   `nestedimportcheck`. Scopes and tests: `testscopecheck`, `langcheck`. Qualified calls: `elixirnamearitycheck`,
+   `rustqualcheck`, `stdqualcheck`, `resolverhonestycheck`. Bases: `chacheck`, `rubyinheritcheck`. Routes:
+   `routecheck`. Macros: `macroedgecheck`. When extraction output moved, also run `bash test/qschemetripcheck.sh`
+   (it reads the source, not a binary) and bump `kParserVer` and its mirror to any number above `main`'s.
+   Maintainers set the final number when they merge.
+4. **The duplicate is gone.** `ripwire src --clones` no longer lists the group the slice folded, the old
+   per-language function is deleted rather than left beside the shared path, and
+   `ripwire . --quality-delta=origin/main..HEAD` gates 0 on your committed branch (a ref range compares commits
+   only).
+5. **A wrong answer the slice does not fix is pinned, not hidden.** Write a known-gap arm that asserts today's
+   behaviour and names the slice that will flip it (`test/fieldnarrowcheck.sh` shows the form). When that arm
+   fails, the gap has moved: flip the arm. Never delete it.
+6. **What a reviewer checks:** no new `Lang::` branch in shared code, no language-named capture kind, the
+   byte-identity diff, the deleted duplicate, and the rest of the [pre-review list](#6-submitting-a-change).
+
+#### Languages without a grammar: imported, not parsed
+
+A language with no vendored grammar can be indexed from an external symbol source, through **one** shared path
+rather than per-language code: a standard SCIP index, read by the reader behind `--scip=FILE` (`src/scip.h`
+builds the `ScipOverlay` declared in `src/scipoverlay.h`). Today that overlay only pins call edges between
+symbols ripwire's own parsers extracted. Letting it contribute definitions for files no grammar reads is an
+opt-in extension under discussion in #70, not a per-language feature. An imported language is a second tier.
+It gets definitions, bodies, references and grep. It does **not** get complexity, clones, lint, `--match`,
+parse health, grep that tells code from comments and strings, or confirmed calls, since a SCIP reference does
+not say whether it is a call. Every imported row says where it came from. In one sentence: a **parsed** language
+is read by ripwire's own grammar and every verb applies to it; an **imported** language is read from another
+tool's index and only the verbs above apply.
 
 ### Interfaces
 
