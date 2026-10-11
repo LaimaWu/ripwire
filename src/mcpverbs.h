@@ -729,6 +729,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     const HopTestedPartition chTested = computeHopTestedPartition( ing, g, referencingOnly ? calledBy : calls );
 
     bool anyVia = false;   // FE-B: an entry carried "via":"name" — the answer then carries via_note, its reading
+    RowCallSites calledBySites{};   // CALLSITE-AT: the calledBy window's sites (set once the window is known, below)
     const auto symObj = [ & ]( NodeId id, bool via ) -> std::string
     {
         anyVia = anyVia || via;
@@ -753,7 +754,8 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
         for( std::size_t i = w.begin; i < w.end; ++i )
         {
             if( i != w.begin ) { a += ","; }
-            a += symObj( ids[i], rowNameOnly( g, chRows.matches, ids[i], callersSide ) );
+            // CALLSITE-AT: a calledBy row carries its call sites (the CLI --callers row's sites_at=); a calls row never does.
+            a += withRowSites( symObj( ids[i], rowNameOnly( g, chRows.matches, ids[i], callersSide ) ), calledBySites, i - w.begin, callersSide );
         }
         a += "]";
         return a;
@@ -766,6 +768,10 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     const PageWindow pwSecond  = pageWindow( calledBy.size(), rowCap, page.offset );
     const std::size_t rowTotal = referencingOnly ? calledBy.size() : calls.size();
     const bool  discloseCap    = ( pwPrimary.end - pwPrimary.begin ) < rowTotal;
+    // CALLSITE-AT: the calledBy window's rows with their call sites — editcheck.h rowCallSites, the CLI --callers pass and path spelling.
+    const PageWindow& calledByWin = referencingOnly ? pwPrimary : pwSecond;
+    calledBySites = rowCallSites( ing, chRows.matches, std::span<const NodeId>( calledBy ).subspan( calledByWin.begin, calledByWin.end - calledByWin.begin ),
+                                  VrRender{ sqSingleRoot, sqRootPrefix } );
     char        pab[ kPageDisclosureCap ];
 
     std::string out = "{";
@@ -823,6 +829,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     {
         out += rw::viaNameNoteJson();   // FE-B: the reading of "via":"name", only in an answer that carries it
     }
+    out += nextFieldJson( callSitesAtLegend( calledBySites.any, calledBySites.anyCut, kCallSitesPerRowCap ), "sites_note" );   // CALLSITE-AT: its reading, only when a row carries it (nextFieldJson: "" -> no key, JSON-escaped)
     // Reference-as-value round: the CLI's <vrs> window, the same rows (callhierarchy.h computed them once): valueRefs =
     // where the symbol is USED AS A VALUE (the --callers side), valueCallees = what it stores/passes and may call
     // through (the --callees side, find_symbol only). Absent when empty; value_refs is the callers-side count, beside

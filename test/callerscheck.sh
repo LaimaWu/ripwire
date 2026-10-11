@@ -42,14 +42,14 @@ cnt(){ printf '%s' "$1" | grep -oE 'count="[0-9]+"' | grep -oE '[0-9]+'; }
 #    directly rather than a "queryfix/" suffix that used to tolerate an absolute-or-./-relative FIX path) ──
 OUT_HOT="$( c hot )"
 { [ "$( cnt "$OUT_HOT" )" = 2 ] \
-    && printf '%s' "$OUT_HOT" | grep -qE '<s t="fn" n="caller_a" p="src/util\.cpp:3"/>' \
-    && printf '%s' "$OUT_HOT" | grep -qE '<s t="fn" n="caller_b" p="src/util\.cpp:4"/>'; } \
-    && ok "--callers=hot: exactly caller_a (util.cpp:3) + caller_b (util.cpp:4), count=2" \
+    && printf '%s' "$OUT_HOT" | grep -qE '<s t="fn" n="caller_a" p="src/util\.cpp:3" sites_at="src/util\.cpp:3"/>' \
+    && printf '%s' "$OUT_HOT" | grep -qE '<s t="fn" n="caller_b" p="src/util\.cpp:4" sites_at="src/util\.cpp:4"/>'; } \
+    && ok "--callers=hot: exactly caller_a (util.cpp:3) + caller_b (util.cpp:4), count=2, each with its call site (CALLSITE-AT)" \
     || no "--callers=hot: wrong callers/lines — got: $OUT_HOT"
 
 # ── #2: --callers=d3 lists exactly its one known caller (d2), correct file:line ─────────────────────────
 OUT_D3="$( c d3 )"
-{ [ "$( cnt "$OUT_D3" )" = 1 ] && printf '%s' "$OUT_D3" | grep -qE '<s t="fn" n="d2" p="src/chain\.cpp:3"/>'; } \
+{ [ "$( cnt "$OUT_D3" )" = 1 ] && printf '%s' "$OUT_D3" | grep -qE '<s t="fn" n="d2" p="src/chain\.cpp:3" sites_at="src/chain\.cpp:3"/>'; } \
     && ok "--callers=d3: exactly d2 (chain.cpp:3), count=1" \
     || no "--callers=d3: wrong caller/line — got: $OUT_D3"
 
@@ -152,5 +152,200 @@ printf '%s' "$XK_MCP" | grep -q 'cross_kind' && printf '%s' "$XK_MCP" | grep -q 
 # Same-kind overloads keep their bytes: queryfix's hot() is one function.
 c hot | grep -q 'cross_kind=' && no "X: a single-kind answer grew cross_kind=" || ok "X: a single-kind answer carries no cross_kind="
 
+# ── SA: CALLSITE-AT (2026-10-09) — every caller row carries its call sites as pasteable file:line (sites_at=), so
+#    "every call site that must change" is answered by the FIRST call, not a --uses follow-up (tmux-19 / hono-19 /
+#    textual-19 shape: 15 def rows, the 23 sites only in the follow-up). RED on the base binary (no sites_at= at all).
+#    Arms: multi-site rows, a file-scope (<file-scope>) caller expanded to its sites, two calls on one line = one site,
+#    a near-miss row with NO call spelled like the name (an aliased import) carries none, --callees never carries it,
+#    equality with --uses role="call" per caller, the page window (offset), the per-row cap (sites_total= + next=),
+#    present-only legend (compact + full, xmllint), escaping (& in a path; ',' in a columnar cell), and the
+#    JSON / columnar / MCP (find_referencing_symbols, find_symbol calledBy) twins.
+echo "=== SA: caller rows carry their call sites as file:line (sites_at=) ==="
+SA="$( mktemp -d "${TMPDIR:-/tmp}/callerscheck-sa.XXXXXX" )"
+trap 'rm -rf "$SA"' EXIT
+mkdir -p "$SA/t" "$SA/a&b"
+cat > "$SA/lib.c" <<'SAEOF'
+int target(int x) { return x + 1; }
+int two_lines(int y) {
+    int a = target(y);
+    int b = target(a); int c = target(b);
+    return target(c);
+}
+int one_call(int z) { return target(z); }
+SAEOF
+cat > "$SA/t/test_mod.py" <<'SAEOF'
+def pyhelper(x):
+    return x
+
+def py_caller():
+    return pyhelper(1) + pyhelper(2)
+
+pyhelper(3)
+pyhelper(4)
+SAEOF
+cat > "$SA/k.ts" <<'SAEOF'
+export function tsHelper(x: number): number { return x; }
+export function tsDirect(): number { return tsHelper(1); }
+SAEOF
+cat > "$SA/j.ts" <<'SAEOF'
+import { tsHelper as aliased } from "./k";
+export function tsCaller(): number { return aliased(1); }
+SAEOF
+{ printf 'def many(x):\n    return x\n\n'; i=0; while [ $i -lt 20 ]; do printf 'many(%d)\n' $i; i=$((i+1)); done; } > "$SA/m.py"
+printf 'int amp_target(int x) { return x; }\nint amp_caller(int y) { return amp_target(y); }\n' > "$SA/a&b/amp.c"
+sa(){ perl -e 'alarm 15; exec @ARGV' "$BIN" "$SA" --no-cache "$@" 2>/dev/null; }
+row(){ printf '%s' "$1" | sed 's/<!--.*-->//' | grep -oE "<s [^>]*n=\"$2\"[^>]*/>" | head -1; }
+sat(){ printf '%s' "$1" | grep -oE ' sites_at="[^"]*"' | head -1 | sed -e 's/^ sites_at="//' -e 's/"$//'; }
+
+SA_T="$( sa --callers=target )"
+[ "$( sat "$( row "$SA_T" two_lines )" )" = "lib.c:3 lib.c:4 lib.c:5" ] \
+    && ok "SA1: four calls on three lines -> sites_at=\"lib.c:3 lib.c:4 lib.c:5\" (two calls on one line are one site)" \
+    || no "SA1: two_lines row: $( row "$SA_T" two_lines )"
+[ "$( sat "$( row "$SA_T" one_call )" )" = "lib.c:7" ] && row "$SA_T" one_call | grep -q ' p="lib.c:7"' \
+    && ok "SA1: a one-line caller keeps p= (its definition) and lists its one site" \
+    || no "SA1: one_call row: $( row "$SA_T" one_call )"
+SA_P="$( sa --callers=pyhelper )"
+[ "$( sat "$( row "$SA_P" '&lt;file-scope&gt;' )" )" = "t/test_mod.py:7 t/test_mod.py:8" ] \
+    && ok "SA2: a test file's <file-scope> caller expands to its sites (t/test_mod.py:7 t/test_mod.py:8)" \
+    || no "SA2: modscope row: $( row "$SA_P" '&lt;file-scope&gt;' )"
+SA_TS="$( sa --callers=tsHelper )"
+{ row "$SA_TS" tsCaller | grep -q 'p="j.ts:2"' && ! row "$SA_TS" tsCaller | grep -q 'sites_at='; } \
+    && ok "SA3: near miss: a caller whose call is spelled through an aliased import carries no sites_at=" \
+    || no "SA3: tsCaller row: $( row "$SA_TS" tsCaller )"
+[ "$( sat "$( row "$SA_TS" tsDirect )" )" = "k.ts:2" ] && ok "SA3: its direct sibling caller does (k.ts:2)" \
+    || no "SA3: tsDirect row: $( row "$SA_TS" tsDirect )"
+SA_CE="$( sa --callees=two_lines | sed 's/<!--.*-->//' )"
+if ! printf '%s' "$SA_CE" | grep -q '<callees [^>]*count="[1-9]'; then
+    no "SA4: premise: --callees=two_lines printed no callees root with rows: $SA_CE"
+elif printf '%s' "$SA_CE" | grep -q 'sites_at='; then
+    no "SA4: a --callees row carries sites_at="
+else
+    ok "SA4: --callees rows carry no sites_at="
+fi
+# SA5: sites_at= equals the --uses role="call" lines inside that caller, for every row of the answer (one question, two documents).
+SA5_BAD=0; SA5_N=0
+for nm in target pyhelper; do
+    ans="$( sa --callers=$nm )"; uses="$( sa --uses=$nm --limit=1000 )"
+    for r in $( printf '%s' "$ans" | sed 's/<!--.*-->//' | grep -oE '<s [^>]*/>' | sed -E 's/.* n="([^"]*)".*/\1/' ); do
+        got="$( sat "$( row "$ans" "$r" )" )"
+        want="$( printf '%s' "$uses" | grep -oE "<u role=\"call\" p=\"[^\"]*\"[^>]*in_id=\"$r\"" | sed -E 's/.* p="([^"]*)".*/\1/' | sort -t: -k2,2n -u | tr '\n' ' ' | sed 's/ $//' )"
+        SA5_N=$((SA5_N+1)); [ "$got" = "$want" ] || { SA5_BAD=1; printf '        %s/%s: sites_at="%s" but --uses role=call sites "%s"\n' "$nm" "$r" "$got" "$want"; }
+    done
+done
+[ "$SA5_BAD" = 0 ] && [ "$SA5_N" -ge 4 ] && ok "SA5: every row's sites_at= equals its --uses role=call sites ($SA5_N rows)" \
+    || no "SA5: sites_at= != --uses call sites ($SA5_N rows)"
+SA_O="$( sa --callers=target --limit=1 --offset=1 )"
+{ [ "$( printf '%s' "$SA_O" | sed 's/<!--.*-->//' | grep -oE '<s ' | wc -l | tr -d ' ' )" = 1 ] && sat "$( printf '%s' "$SA_O" | sed 's/<!--.*-->//' | grep -oE '<s [^>]*/>' )" | grep -qE '^lib\.c:[0-9]'; } \
+    && ok "SA6: a paged window (offset=1) still carries its row's sites" || no "SA6: paged answer: $SA_O"
+SA_M="$( sa --callers=many )"; MROW="$( row "$SA_M" '&lt;file-scope&gt;' )"
+{ [ "$( sat "$MROW" | wc -w | tr -d ' ' )" = 16 ] && printf '%s' "$MROW" | grep -q ' sites_total="20"' \
+  && [ "$( sat "$MROW" | cut -d' ' -f1 )" = "m.py:4" ] && printf '%s' "$SA_M" | grep -q 'next="--uses=many"'; } \
+    && ok "SA7: a 20-site row lists the first 16 (ascending) with sites_total=\"20\"; next= (--uses=many) lists all" \
+    || no "SA7: capped row: $MROW"
+printf '%s' "$SA_M" | grep -o '<!--.*-->' | grep -q 'sites_total=' && ok "SA7: the compact legend defines sites_total= where it rides" \
+    || no "SA7: sites_total= undefined"
+printf '%s' "$SA_T" | grep -o '<!--.*-->' | grep -q 'sites_total=' && no "SA7: present-only: an uncut answer defines sites_total=" || ok "SA7: present-only: an uncut answer pays nothing for sites_total="
+printf '%s' "$SA_T" | grep -o '<!--.*-->' | grep -q 'sites_at=' && ok "SA8: the compact legend defines sites_at= where it rides" \
+    || no "SA8: sites_at= undefined in the compact legend"
+SA_F="$( sa --callers=many --legend=full )"
+{ printf '%s' "$SA_F" | grep -o '<!--.*-->' | grep -q 'sites_at= on a caller row' && printf '%s' "$SA_F" | grep -q 'sites_total=N' \
+  && printf '%s' "$SA_F" | xmllint --noout - 2>/dev/null; } \
+    && ok "SA8: --legend=full carries the sites_at=/sites_total= clauses and stays well-formed (no -- in the comment)" || no "SA8: full legend: $( printf '%s' "$SA_F" | head -c 300 )"
+SA_D1="$( "$BIN" "$FIX" --callers=d1 --no-cache 2>/dev/null )"
+if ! printf '%s' "$SA_D1" | grep -q '<callers [^>]*count="0"'; then
+    no "SA8: premise: --callers=d1 printed no zero-row callers root: $SA_D1"
+elif printf '%s' "$SA_D1" | grep -q 'sites_at'; then
+    no "SA8: a zero-row answer mentions sites_at"
+else
+    ok "SA8: present-only: a zero-row answer carries no sites_at reading"
+fi
+SA_AMP="$( sa --callers=amp_target )"
+{ printf '%s' "$SA_AMP" | grep -q 'sites_at="a&amp;b/amp.c:2"' && printf '%s' "$SA_AMP" | xmllint --noout - 2>/dev/null; } \
+    && ok "SA9: a path holding & is escaped inside sites_at= (well-formed)" || no "SA9: amp answer: $SA_AMP"
+SA_J="$( sa --callers=target --json )"
+printf '%s' "$SA_J" | python3 -c '
+import json, sys
+d = json.load( sys.stdin ); r = { x["n"]: x.get( "sites_at" ) for x in d["callers"] }
+sys.exit( 0 if r.get( "two_lines" ) == [ "lib.c:3", "lib.c:4", "lib.c:5" ] and r.get( "one_call" ) == [ "lib.c:7" ] else 1 )' \
+    && ok "SA10: --json rows carry \"sites_at\":[file:line,...] (the XML row's list)" || no "SA10: --json: $SA_J"
+sa --callers=many --json | python3 -c '
+import json, sys
+d = json.load( sys.stdin ); r = d["callers"][0]
+sys.exit( 0 if len( r.get( "sites_at", [] ) ) == 16 and r.get( "sites_total" ) == 20 else 1 )' \
+    && ok "SA10: a cut --json row carries sites_total" || no "SA10: --json cut row"
+SA_C="$( sa --callers=target --format=columnar )"
+{ printf '%s' "$SA_C" | grep -q 'fields="path,name,line,kind,tested,sites_at"' && printf '%s' "$SA_C" | grep -q '<sites_at>[^<]*lib.c:3 lib.c:4 lib.c:5' \
+  && printf '%s' "$SA_C" | xmllint --noout - 2>/dev/null; } \
+    && ok "SA10: --format=columnar carries the sites_at column (fields= names it)" || no "SA10: columnar: $( printf '%s' "$SA_C" | sed 's/<!--.*-->//' )"
+sa --callers=many --format=columnar | grep -q '<sites_total>20</sites_total>' && ok "SA10: a cut columnar row carries the sites_total column" \
+    || no "SA10: columnar cut row"
+if ! printf '%s' "$SA_C" | grep -q '<sites_at>'; then
+    no "SA10: premise: the uncut columnar answer carries no sites_at column"
+elif printf '%s' "$SA_C" | grep -q 'sites_total'; then
+    no "SA10: present-only: an uncut columnar answer carries sites_total"
+else
+    ok "SA10: present-only: no sites_total column when nothing was cut"
+fi
+sa_mcp(){ printf '%s\n%s\n%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"'"$1"'","arguments":{"path":"'"$SA"'","symbol":"'"$2"'"}}}' \
+    | perl -e 'alarm 20; exec @ARGV' "$BIN" "$SA" --mcp --no-cache 2>/dev/null | tail -1; }
+for tool in find_referencing_symbols find_symbol; do
+    sa_mcp "$tool" target | python3 -c '
+import json, sys
+env = json.loads( sys.stdin.read() ); d = json.loads( env["result"]["content"][0]["text"] )
+r = { x["name"]: x.get( "sites_at" ) for x in d["calledBy"] }
+calls_clean = all( "sites_at" not in x for x in d.get( "calls", [] ) )
+sys.exit( 0 if r.get( "two_lines" ) == [ "lib.c:3", "lib.c:4", "lib.c:5" ] and "sites_note" in d and calls_clean else 1 )' \
+        && ok "SA11: MCP $tool calledBy rows carry sites_at (== CLI) and the answer carries sites_note" \
+        || no "SA11: MCP $tool: $( sa_mcp "$tool" target | head -c 400 )"
+done
+# SA12 (fix round 1, review item 1): near misses the call-role filter (editcheck.h forEachCallSite: r.role == Call) must
+#   keep OUT of sites_at=: in ONE caller that also holds a real call, a value use, &f, a block-scope prototype, a string and
+#   two comments spelled like the name; plus a caller whose only use is a value use. RED when that filter is dropped (the
+#   value uses and &f print as sites). Then the mechanism the legend states: matching is by LEAF name, so a qualified
+#   selector (--callers=ns::nst_fn) lists the same row's member call w.nst_fn(5) too.
+mkdir -p "$SA/nm"
+cat > "$SA/nm/noise.c" <<'SAEOF'
+typedef int (*nmfp)(int);
+int nm_target(int x) { return x + 1; }
+int nm_noise(void) {
+    /* nm_target(3) in a comment */
+    // nm_target(4) in a line comment
+    const char *s = "nm_target(5) in a string";
+    int nm_target(int);
+    nmfp p = nm_target;
+    nmfp q = &nm_target;
+    return nm_target(6) + (s != 0) + p(0) + q(0);
+}
+int nm_pointer_only(void) {
+    nmfp p = nm_target;
+    return p(7);
+}
+SAEOF
+cat > "$SA/nm/ns.cpp" <<'SAEOF'
+namespace ns { int nst_fn(int x) { return x + 1; } }
+struct W { int nst_fn(int x) { return x; } };
+int nst_mixed() {
+    W w;
+    int a = w.nst_fn(5);
+    int b = ns::nst_fn(6);
+    return a + b;
+}
+SAEOF
+SA_NM="$( sa --callers=nm_target )"
+SA_NM_ALL="$( printf '%s' "$SA_NM" | sed 's/<!--.*-->//' | grep -oE ' sites_at="[^"]*"' | sed -e 's/^ sites_at="//' -e 's/"$//' | tr '\n' ' ' | sed 's/ $//' )"
+if [ -z "$( row "$SA_NM" nm_noise )" ]; then
+    no "SA12: premise: --callers=nm_target printed no nm_noise row: $SA_NM"
+elif [ "$( sat "$( row "$SA_NM" nm_noise )" )" = "nm/noise.c:10" ] && [ "$SA_NM_ALL" = "nm/noise.c:10" ]; then
+    ok "SA12: near miss: a value use, &f, a local prototype, a string and comments are not sites (only nm/noise.c:10)"
+else
+    no "SA12: non-call references printed as call sites: every sites_at= is \"$SA_NM_ALL\", want \"nm/noise.c:10\""
+fi
+SA_NS="$( sa --callers=ns::nst_fn )"
+[ "$( sat "$( row "$SA_NS" nst_mixed )" )" = "nm/ns.cpp:5 nm/ns.cpp:6" ] \
+    && ok "SA12: by LEAF name: --callers=ns::nst_fn lists the row's w.nst_fn(5) call too (nm/ns.cpp:5 nm/ns.cpp:6)" \
+    || no "SA12: ns::nst_fn row: $( row "$SA_NS" nst_mixed )"
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
