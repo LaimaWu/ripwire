@@ -2692,8 +2692,9 @@ std::optional<int> runImpact( const MainDispatch& d )
         // 4057546113. Hoisted so the rows and the reading that describes them come from one expression.
         const rw::PageWindow imPage = pageWindow( show.size(), effectiveRowCap( cfg.pageLimit, rw::kCallHierarchyRowCap ), cfg.pageOffset );
         // idea #6: the rollup rides only beside a CUT symbol window (graph.h impactFileRollup)
+        // fix27: on a multi-definition selector the rows keep the symbol rows' via="name" hedge through the fold
         const rw::ImpactFileRollup imFiles = rw::impactFileRollup( ing, reach, imDepth, cfg.pageLimit, cfg.impactSym,
-                                                                   imPage.end - imPage.begin < show.size() );
+                                                                   imPage.end - imPage.begin < show.size(), seeds.size() > 1 ? &imProven : nullptr );
         // Reference-as-value round: SYM's own binding sites, beside the radius they are not in.
         const rw::ValueRefIndex imVri( ing );
         const rw::ValueRefRows  imValueRefs = rw::valueRefCallerRows( ing, imVri, seeds );
@@ -2721,7 +2722,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                          rw::declinedCallsLegendWithGates( imDeclinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 ),           // exactly when the root carries declined_calls=
                          rw::declinedIfaceLegend( imDeclinedIface > 0 ),                                             // likewise, exactly when declined_iface= is there
                          ( std::string( rw::modScopeLegend( imHasModScope ) )      // #60: likewise, exactly when a t="modscope" row is
-                           + rw::impactRollupLegend( !imFiles.rows.empty() && !cfg.columnar, imports.umbrella ) ).c_str(),   // idea #6
+                           + rw::impactRollupLegend( !imFiles.rows.empty() && !cfg.columnar, imports.umbrella, rw::impactRollupHedged( imFiles ) ) ).c_str(),   // idea #6; fix27
                          ( std::string( rw::valueRefsReachLegend( !imValueRefs.rows.empty() ) )   // exactly when the root carries value_refs=
                            + rw::valueRefsDepthLegendFor( imValueRefs ) ).c_str(),                 // ... and the depth disclosure
                          rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );

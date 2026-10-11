@@ -758,13 +758,19 @@ inline constexpr const char* kImpactDepthColumnarLegend =
 // idea #6 (lane lean-trio): the per-file rollup and the umbrella-header count, each said exactly when it rides — the
 // rollup whenever the reach set is non-empty (XML forms only: the JSON form carries it as "files", columnar not at all),
 // the umbrella sentence only beside importers_umbrella=. Shared by the CLI arm and the MCP twin, byte-identical.
-inline std::string impactRollupLegend( bool rollup, bool umbrella )
+// fix27: `hedged` = a listed rf row carries via= or by_name= (a multi-definition selector only); its sentence rides then.
+inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged = false )
 {
     std::string out;
     if( rollup )
     {
         out += "FILES (only beside a cut symbol window): the WHOLE reach set by file. files= in all, shown_files= listed; rf "
                "syms= reached symbols there, d= fewest hops; by d=, syms=, path; files_capped=\"1\" with files_next= (lists all) when cut. ";
+    }
+    if( rollup && hedged )
+    {
+        out += "rf via=\"name\": of= matched several definitions and every reached symbol there is reached only by name, so the "
+               "file may depend on a namesake, not the definition meant; by_name=K: K of its syms= are. ";
     }
     if( umbrella )
     {

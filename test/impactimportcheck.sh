@@ -367,6 +367,114 @@ else
     ok "rollup: --json carries no files object beside an uncut window"
 fi
 
+# ── #9g MULTI-DEFINITION FOLD KEEPS THE HEDGE (fix27; round-4 textual `--impact=arrange`) ────────────────────────────
+# A bare selector matching SEVERAL definitions (a method Widget.arrange AND a free function arrange) reaches the
+# dependants of all of them; the symbol rows say via="name" where a row is reached only through a name-only edge (maybe a
+# namesake's dependant). The #9f rollup folded those rows into plain <rf p= syms= d=/> rows, so a file whose every reached
+# symbol was hedged read as a dependant of the asked symbol. Now, on a multi-definition selector only, an rf row whose
+# reached symbols are ALL hedged carries via="name", a mixed file by_name=K, an all-proven file neither. Near misses: the
+# same corpus with ONE definition (the free function's file removed) and a qualified selector fold exactly as before (no
+# hedge attribute). Python, TypeScript and Go each. RED on e07f8f33 (train 27): no rf row carries via=/by_name=.
+# Shape per language: 45 files o_NN calling o.arrange() on an untyped/interface receiver (name-only edges, so the window is
+# cut at 40), mixed.* with one proven call and one name-only call, a_proven.* (py/go: a proven call to the free function).
+mkmulti(){ # $1 dir  $2 lang (py|ts|go)  $3 1 = also write the free function's file (two definitions)
+python3 - "$1" "$2" "$3" <<'PY'
+import os, sys
+d, lang, two = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+w = lambda n, t: open( os.path.join( d, n ), "w" ).write( t )
+if lang == "py":
+    os.makedirs( os.path.join( d, "pkg" ) ); d = os.path.join( d, "pkg" ); w( "__init__.py", "" )
+    w( "widget.py", "class Widget:\n    def arrange(self, n):\n        return n\n" )
+    if two: w( "arr.py", "def arrange(n):\n    return n\n" )
+    for k in range( 45 ): w( "o_%02d.py" % k, "def use_o_%02d(o):\n    return o.arrange(%d)\n" % ( k, k ) )
+    if two:
+        w( "mixed.py", "from pkg.arr import arrange\n\ndef proven_m():\n    return arrange(2)\n\ndef named_m(o):\n    return o.arrange(3)\n" )
+        w( "a_proven.py", "from pkg.arr import arrange\n\ndef proven_a():\n    return arrange(4)\n" )
+elif lang == "ts":
+    os.makedirs( os.path.join( d, "src" ) ); d = os.path.join( d, "src" )
+    w( "widget.ts", "export class Widget {\n  arrange(n: number): number { return n; }\n}\n" )
+    if two: w( "arr.ts", "export function arrange(n: number): number { return n; }\n" )
+    for k in range( 45 ): w( "o_%02d.ts" % k, "export function useO%02d(o: any): number { return o.arrange(%d); }\n" % ( k, k ) )
+    w( "mixed.ts", "import { Widget } from \"./widget\";\nexport function provenM(): number { return new Widget().arrange(2); }\n"
+                   "export function namedM(o: any): number { return o.arrange(3); }\n" )
+else:
+    w( "go.mod", "module example.com/m\n\ngo 1.21\n" )
+    # the interface's method is a definition too, so the single-definition corpus has no interface: its receivers are *Widget
+    w( "widget.go", "package m\n\ntype Widget struct{}\n\nfunc (w *Widget) Arrange(n int) int { return n }\n" )
+    if two:
+        w( "iface.go", "package m\n\ntype Arranger interface{ Arrange(int) int }\n" )
+        w( "arr.go", "package m\n\nfunc Arrange(n int) int { return n }\n" )
+    for k in range( 45 ): w( "o_%02d.go" % k, "package m\n\nfunc UseO%02d(o %s) int { return o.Arrange(%d) }\n" % ( k, "Arranger" if two else "*Widget", k ) )
+    if two:
+        w( "mixed.go", "package m\n\nfunc ProvenM() int { return Arrange(2) }\n\nfunc NamedM(o Arranger) int { return o.Arrange(3) }\n" )
+        w( "a_proven.go", "package m\n\nfunc ProvenA() int { return Arrange(4) }\n" )
+PY
+}
+rfrow(){ body "$1" | grep -oE "<rf p=\"[^\"]*/?$2\"[^>]*>" | head -1; }
+for LG in py ts go; do
+    # Q: the qualified spelling each language's resolver takes (Owner.name for Python; file:name for TS and Go)
+    case $LG in py) SY=arrange; Q=Widget.arrange; PD=pkg/;; ts) SY=arrange; Q=widget.ts:arrange; PD=src/;; go) SY=Arrange; Q=widget.go:Arrange; PD=;; esac
+    MD="$( mktemp -d )"; SD="$( mktemp -d )"
+    mkmulti "$MD" $LG 1; mkmulti "$SD" $LG 0
+    M_OUT="$( perl -e 'alarm 30; exec @ARGV' "$BIN" "$MD" --impact=$SY --no-cache --legend=full 2>/dev/null )"; rcM=$?
+    S_OUT="$( perl -e 'alarm 30; exec @ARGV' "$BIN" "$SD" --impact=$SY --no-cache --legend=full 2>/dev/null )"; rcS=$?
+    Q_OUT="$( perl -e 'alarm 30; exec @ARGV' "$BIN" "$MD" --impact=$Q --no-cache --legend=full 2>/dev/null )"; rcQ=$?
+    M_DEFS="$( attr defs "$M_OUT" )"; S_DEFS="$( attr defs "$S_OUT" )"; Q_DEFS="$( attr defs "$Q_OUT" )"
+    # presence guards: each document answered, the multi corpus matched >1 definition and cut its window, its o_ rows are
+    # hedged as SYMBOL rows (the fact the fold must keep), and the single/qualified near misses matched exactly one
+    if [ "$rcM" = 0 ] && [ -n "$M_DEFS" ] && [ "$M_DEFS" -gt 1 ] && [ "$( attr capped "$M_OUT" )" = 1 ] \
+       && body "$M_OUT" | grep -qE '<s [^>]*p="'"$PD"'o_[0-9]+\.[a-z]+:[0-9]+"[^>]* via="name"' \
+       && [ "$rcS" = 0 ] && [ "$S_DEFS" = 1 ] && [ "$( attr capped "$S_OUT" )" = 1 ] && [ "$rcQ" = 0 ] && [ "$Q_DEFS" = 1 ]; then
+        ok "multidef $LG: guard — defs=$M_DEFS cut window with via=name o_ symbol rows; single-def and $Q near misses defs=1"
+    else
+        no "multidef $LG: premise broken — rc=$rcM/$rcS/$rcQ defs=$M_DEFS/$S_DEFS/$Q_DEFS capped=$( attr capped "$M_OUT" )/$( attr capped "$S_OUT" )"
+    fi
+    # the single-definition near miss can only catch a hedge applied regardless of defs= if ITS symbol rows are hedged too
+    # (Python, TS: untyped receivers; Go's *Widget receivers bind proven, so its arm is the plain fold only)
+    if [ $LG = go ] || body "$S_OUT" | grep -qE '<s [^>]* via="name"'; then
+        ok "multidef $LG: single-definition near miss premise (py/ts: its symbol rows carry via=name)"
+    else
+        no "multidef $LG: the single-definition corpus has no via=name symbol row — its near-miss arm is inert"
+    fi
+    O_RF="$( rfrow "$M_OUT" 'o_00\.[a-z]+' )"; X_RF="$( rfrow "$M_OUT" 'mixed\.[a-z]+' )"
+    printf '%s' "$O_RF" | grep -qE 'syms="1" d="1" via="name"/>' \
+        && ok "multidef $LG: an all-by-name file keeps the hedge: $O_RF" \
+        || no "multidef $LG: the o_00 rf row lost the symbol rows' via=\"name\": '$O_RF'"
+    { printf '%s' "$X_RF" | grep -qE 'syms="2" d="1" by_name="1"/>' && ! printf '%s' "$X_RF" | grep -q 'via='; } \
+        && ok "multidef $LG: a mixed file counts its hedged symbols: $X_RF" \
+        || no "multidef $LG: the mixed rf row: '$X_RF' (want syms=2 by_name=1, no via=)"
+    if [ $LG != ts ]; then
+        P_RF="$( rfrow "$M_OUT" 'a_proven\.[a-z]+' )"
+        { [ -n "$P_RF" ] && ! printf '%s' "$P_RF" | grep -qE 'via=|by_name='; } \
+            && ok "multidef $LG: an all-proven file stays plain: $P_RF" \
+            || no "multidef $LG: the all-proven rf row: '$P_RF' (want present, no via=/by_name=)"
+    fi
+    printf '%s' "$M_OUT" | grep -qF 'rf via="name": of= matched several definitions' \
+        && ok "multidef $LG: the rf hedge sentence rides with the hedged rows" \
+        || no "multidef $LG: legend lacks the rf via=/by_name= sentence"
+    perl -e 'alarm 30; exec @ARGV' "$BIN" "$MD" --impact=$SY --no-cache --json 2>/dev/null | grep -qE '"syms":1,"d":1,"via":"name"\}' \
+        && ok "multidef $LG: --json carries the same hedge" \
+        || no "multidef $LG: --json rollup rows lack \"via\":\"name\""
+    for NM in single qualified; do
+        [ $NM = single ] && NO="$S_OUT" || NO="$Q_OUT"
+        NRF="$( body "$NO" | grep -o '<rf [^>]*>' | wc -l | tr -d ' ' )"
+        { [ "$NRF" -gt 0 ] && ! body "$NO" | grep -oE '<rf [^>]*>' | grep -qE 'via=|by_name=' && ! printf '%s' "$NO" | grep -qF 'rf via="name"'; } \
+            && ok "multidef $LG: $NM-definition near miss folds as before ($NRF rf rows, no hedge, no sentence)" \
+            || no "multidef $LG: $NM-definition near miss: $NRF rf rows, hedge or sentence present"
+    done
+    if command -v xmllint >/dev/null 2>&1; then
+        printf '%s' "$M_OUT" | xmllint --noout - 2>/dev/null && ok "multidef $LG: well-formed with the hedge sentence (--legend=full)" || no "multidef $LG: malformed XML"
+    fi
+    [ $LG = py ] && {
+        MCP_M="$( printf '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}\n{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact","arguments":{"path":"%s","symbol":"arrange"}}}\n' "$MD" \
+                  | perl -e 'alarm 60; exec @ARGV' "$BIN" --mcp 2>/dev/null | tail -1 )"
+        printf '%s' "$MCP_M" | grep -qF 'syms=\"1\" d=\"1\" via=\"name\"/>' && printf '%s' "$MCP_M" | grep -qF 'by_name=\"1\"' \
+            && ok "multidef py: the MCP impact twin keeps the same hedge" \
+            || no "multidef py: MCP impact rollup rows lack via=/by_name="
+    }
+    rm -rf "$MD" "$SD"
+done
+
 # ── #9c THE CUT NAMES ITS CALL (cut-fix E, 2026-09-24) ──────────────────────────────────────────────────
 # A cut tier was a DEAD-END cut (answer-completeness §1.3/§5.8): counted, and no call named that serves the rest.
 # importers_next= on a cut root (the root's next= is --safe-delete's), in the XML and the JSON dialect; pasting it
