@@ -19,6 +19,7 @@ bool vectorOfString( std::vector<std::string>& v ) { return v[ 0 ].empty(); }
 bool mapOfVector() { std::map<std::string, std::vector<EvalString>> m; return m[ "a" ].empty(); }
 bool elementNoMember( Rule& r ) { return r.others_[ 0 ].empty(); }
 bool containerItself( Rule& r ) { return r.vec_.empty(); }
+bool inTreeTemplate( ns::Grid<EvalString>& g ) { return g[ 0 ].empty(); }
 
 // stated floors: declined
 bool twoLevels() { std::map<std::string, std::vector<EvalString>> m; return m[ "a" ][ 0 ].empty(); }
