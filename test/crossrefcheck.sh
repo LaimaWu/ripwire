@@ -1723,6 +1723,33 @@ XP="$( "$BIN" "$XG" --whereis=zqText --whereis-listing=all --limit=5 --offset=7 
     && ok 'whereis (full text): a --limit=5 --offset=7 page replays those 5 rows whole (its next= carries the window)' \
     || no "whereis (full text): the paged next='$XPN': $( pvSame "$XP" "$XPX" )"
 
+# ── 5h-D1) a page the MCP kind ref filter bounded DISCLOSES that its <t_cut next=> drops the filter (review whereis-lean D1) ──
+# The CLI has no whereis ref filter, so the next= of a kind-filtered page replays the unfiltered listing (other rows). The
+# page says so: <t_cut uncarried="FILTER">, the full PREVIEW clause names the recovery (MCP whereis with full_text:true), and
+# that recovery IS the page's rows whole. An unfiltered page carries neither. RED on a4884e41 (no uncarried=, no clause).
+if command -v python3 >/dev/null 2>&1; then
+    git -C "$XG" checkout -qb zz >/dev/null 2>&1; XLONG="$( pvRep y 1000 )"
+    i=0; while [ $i -lt 10 ]; do printf 'zqText( %s, %d )\n' "$XLONG" $i >"$XG/z$i.py"; i=$((i+1)); done
+    git -C "$XG" add -A >/dev/null 2>&1; git -C "$XG" commit -qm zz >/dev/null 2>&1; git -C "$XG" checkout -q main >/dev/null 2>&1
+    XF="$( mcpq "$XG" zqText ',"kind":"zz","listing":"all","legend":"full"' )"; XFN="$( xNext "$XF" )"
+    XFR="$( "$BIN" "$XG" $XFN --no-cache 2>/dev/null )"; XFT="$( mcpq "$XG" zqText ',"kind":"zz","listing":"all","legend":"full","full_text":true' )"
+    XU="$( mcpq "$XG" zqText ',"listing":"all","legend":"full"' )"
+    { printf '%s' "$XF" | grep -q '<whereis [^>]* filter="zz"' && printf '%s' "$XF" | grep -q '<t_cut [^>]* uncarried="zz"/>' \
+      && printf '%s' "$XF" | grep -q 'the CLI replay has no kind filter, so that next= lists the unfiltered refs and other rows; call MCP whereis with full_text:true to recover this page' \
+      && [ "$( pvSame "$XF" "$XFR" )" != same ] && [ "$( pvSame "$XF" "$XFT" )" = same ] \
+      && printf '%s' "$XU" | grep -q '<t_cut ' && ! printf '%s' "$XU" | grep -q 'uncarried\|the CLI replay has no kind filter'; } \
+        && ok 'whereis (full text): a kind-filtered page discloses <t_cut uncarried="zz"> and the PREVIEW recovery (MCP full_text:true replays its rows whole; the CLI next= lists other rows); an unfiltered page carries neither' \
+        || no "whereis (full text): kind-filtered page next='$XFN' uncarried=$( printf '%s' "$XF" | grep -c 'uncarried=' ), CLI replay: $( pvSame "$XF" "$XFR" ), full_text: $( pvSame "$XF" "$XFT" )"
+    # Compact dialect: the uncarried= reading rides the page that carries the attribute, and only it.
+    XC="$( mcpq "$XG" zqText ',"kind":"zz","listing":"all","legend":"compact"' )"; XCU="$( mcpq "$XG" zqText ',"listing":"all","legend":"compact"' )"
+    { printf '%s' "$XC" | grep -q 't_cut uncarried=K: this page was bounded by the ref filter K (MCP kind); the CLI replay has no kind filter, so next= replays other rows; call MCP whereis with full_text:true to recover this page' \
+      && printf '%s' "$XCU" | grep -q '<t_cut ' && ! printf '%s' "$XCU" | grep -q 'uncarried'; } \
+        && ok 'whereis (full text): the compact uncarried= reading rides the kind-filtered page only' \
+        || no 'whereis (full text): the compact uncarried= reading is missing on the filtered page or rides an unfiltered one'
+else
+    printf '  SKIP  whereis (full text): python3 absent — the MCP kind-filtered page (D1) is not checked\n'
+fi
+
 if command -v xmllint >/dev/null 2>&1; then
     if printf '%s' "$SW" | xmllint --noout - 2>/dev/null; then ok "capped stray-content still G4 clean"; else no "capped stray-content XML malformed"; fi
     if printf '%s' "$W1" | xmllint --noout - 2>/dev/null; then ok "paged whereis still G4 clean"; else no "paged whereis XML malformed"; fi

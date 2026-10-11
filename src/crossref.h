@@ -4201,13 +4201,18 @@ inline std::string whereisFullTextNext( const WhereResult& res, const WhereisPag
     return nextAttrXml( call + " --whereis-full-text" );
 }
 
-// <t_cut rows= next=>: rows= rows of this page print a t= preview (each carries t_bytes=, the whole line's bytes), and
-// next= replays this page with every line whole (whereisFullTextNext). Absent when no row was cut.
-inline void writeWhereisTextCut( std::FILE* out, const WhereResult& res, const WhereisPageView& v, std::size_t cutRows )
+// <t_cut rows= next= uncarried=>: rows= rows of this page print a t= preview (each carries t_bytes=, the whole line's bytes),
+// and next= replays this page with every line whole (whereisFullTextNext). Absent when no row was cut. On a page the MCP
+// `kind` ref filter bounded, next= cannot carry the filter (the CLI has no whereis ref filter), so it replays OTHER rows:
+// uncarried= names the dropped filter and the PREVIEW clause names the recovery (MCP whereis with full_text:true), review
+// D1, rule 5 (test/crossrefcheck.sh 5h, the D1 arm). An unfiltered page carries no uncarried= and is byte-identical.
+inline void writeWhereisTextCut( std::FILE* out, const WhereResult& res, const WhereisPageView& v, std::size_t cutRows,
+                                 const XmlEscaper& ex )
 {
     if( cutRows > 0 )
     {
-        rw::emitTo( out, "<t_cut rows=\"{}\"{}/>", cutRows, whereisFullTextNext( res, v ).c_str() );
+        const std::string uncarried = res.filter.empty() ? std::string() : ( " uncarried=\"" + ex( res.filter ) + "\"" );
+        rw::emitTo( out, "<t_cut rows=\"{}\"{}{}/>", cutRows, whereisFullTextNext( res, v ).c_str(), uncarried.c_str() );
     }
 }
 
@@ -4403,6 +4408,14 @@ inline void writeWhereisListedPage( std::FILE* out, const WhereResult& res, std:
                          "listing, window, rows and labels) with the whereis full text flag (MCP full_text), which prints every line "
                          "whole and lifts nothing else. ",
                      kWhereisTextWholeMaxBytes, kWhereisTextPreviewCapBytes );
+        // D1: present only on a page a ref filter bounded (the t_cut uncarried= attribute), so an unfiltered page is
+        // byte-identical. The next= above then replays the unfiltered listing, which holds other rows.
+        if( !res.filter.empty() )
+        {
+            rw::emitRaw( out, "This page was bounded by a ref filter (MCP kind, named by the t_cut uncarried attribute): the CLI "
+                              "replay has no kind filter, so that next= lists the unfiltered refs and other rows; call MCP whereis "
+                              "with full_text:true to recover this page. " );
+        }
     }
     writeWhereisLegendTail( out, res );
     std::fputs( "-->", out );
@@ -4422,7 +4435,7 @@ inline void writeWhereisListedPage( std::FILE* out, const WhereResult& res, std:
     // row is printed unless the index itself already proved the symbol is defined on HEAD.
     writeWhereisFate( out, res, ex );
     writeWhereisUnparsed( out, res, listed.asked );
-    writeWhereisTextCut( out, res, WhereisPageView{ listed, hitPage, pageLimit, pageOffset }, cutRows );
+    writeWhereisTextCut( out, res, WhereisPageView{ listed, hitPage, pageLimit, pageOffset }, cutRows, ex );
 
     writeWhereisRows( out, res, listed, hitPage, headDate, ex );
     rw::emitRaw( out, "</whereis>" );
