@@ -3093,15 +3093,15 @@ terms.
 
 **ripwire 0.6.7 — more complete answers, faster calls, fewer bytes.** Each `--callers` and `--safe-delete` row now
 names its call sites as `file:line`, so one answer holds the lines to edit (`--callers=escapeXml` on this repository:
-the 40 caller rows of its first answer, of 142 callers, carry 79 call lines; 0.6.5 gave none). `--lego` lists implementors below a direct one (a two-level
+its first answer shows 40 of 142 callers, every one with its call lines, 79 in all; 0.6.5 showed none). `--lego` lists implementors below a direct one (a two-level
 hierarchy: 5 of 5, was 2); `--impact` names the files its reach lands in (tmux `--impact=grid_set_cell` now names `input.c`
 and `window-client.c`); the default map keeps directories and entry points it used to cut (tmux `input.c`,
 `key-bindings.c`, `main`); `--for` gives the function a question names its own call-hop row (8 of 32 questions over
 8 public repositories gain it, 23 are byte-identical); and `--whereis` labels other branches' definitions with the parser
-(`--whereis=escapeXml` here: 60 rows, 54 of them call sites, became the 2 declarations). A warm
-CLI call costs about a quarter less (`--callers` on a 3,100-file snapshot: 319 → 269 ms), and `--whereis` on a checkout
-with 139 branches takes 3.7 s instead of 12.3 s. Answers lost repeated bytes, not rows: `--whereis=lego` went from
-129,314 to 18,616 B with every row kept, at about 0.9 GB peak memory instead of 1.42 GB. A C++ `empty()` or `find()` no longer
+(`--whereis=escapeXml` here: 60 rows, 54 of them call sites, became the 2 declarations). A warm `--callers` call is faster (319 → 269 ms on a 3,100-file
+snapshot), and `--whereis` is about three times faster: on this repository's 596-ref checkout, `--whereis=lego` takes
+4.7 s instead of 13.3 s and returns 18,616 B instead of 56,075 B (0.6.5 vs 0.6.7), every row kept. It now parses other
+branches' files to tell definitions from call sites, which costs memory: about 1.0 GB at peak, up from 0.6 GB. A C++ `empty()` or `find()` no longer
 binds to an in-tree namesake without proof (14 of the top 20 map rows here carried such a name; now 0). Imports for
 JS/TS and Go now come from one shared capture (C-family from @lennix1337). Rails schema columns are definitions (thanks
 @mpapis, #339), and a budgeted `--for` pages over CLI and MCP (thanks @pt-act, #362). Ruby calls follow Ruby's method
