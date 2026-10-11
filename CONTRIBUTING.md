@@ -508,18 +508,35 @@ The same language feature is often implemented several times in per-language cod
 import extractors). The target is **one shared handler per feature family**, with languages differing only by data: their
 `tags.scm` captures in the shared vocabulary plus small per-language tables. The families:
 
-1. **Modules and imports**: import forms, re-exports, conditional and dynamic imports, includes, package entry files (#358).
-2. **Names and aliases**: renames, name lists, type aliases, re-exports.
-3. **Type definitions**: class/struct/union/enum/interface/trait/protocol, generics and templates, factory-made classes.
-4. **Inheritance and composition**: extends/implements, mixins (`include`/`extend`/`prepend`), trait impls, protocol conformance, extensions, partial classes.
-5. **Callables**: functions, methods, nested functions, lambdas, decorators, properties, operator overloads, constructors.
-6. **Dispatch**: static, virtual/override, interface, duck typing, function pointers and delegates, reflection.
-7. **Data-driven dispatch**: function tables, struct-field initializers, naming conventions (`on_*`, `test_*`), route/decorator registration, event emitters.
-8. **Preprocessing and generation**: macros, conditional compilation, generated code.
-9. **Scope and state**: globals and statics, module state, receivers (`this`/`self`), rebinding.
+1. **Modules and imports**: import forms, re-exports, conditional and `try` imports, dynamic `import()`/`require`, includes,
+   package entry files (#358).
+2. **Names and aliases**: renames (`import a as b`, `use x as y`), name lists, type aliases (`typedef`, `using`, `type X =`),
+   re-exports.
+3. **Type definitions**: class/struct/union/enum/interface/trait/protocol, generics and templates, factory-made classes
+   (`Node.extend(...)`, `type(...)`, `defineComponent(...)`).
+4. **Inheritance and composition**: extends/implements, mixins (`include`/`extend`/`prepend`), trait impls, protocol
+   conformance, extensions and categories, partial classes.
+5. **Callables**: functions, methods, nested functions, lambdas and closures, decorators and annotations, properties
+   (getters/setters), operator overloads, constructors.
+6. **Dispatch**: static, virtual/override, interface, duck typing, function pointers, delegates and method references,
+   reflection (`getattr`, `send`, `__call__`), `eval`.
+7. **Data-driven dispatch**: function tables, struct-field initializers (`.exec = fn`), naming conventions (`on_*`,
+   `handle_*`, `test_*`), decorator and route registration, event emitters, dependency-injection containers.
+8. **Preprocessing and generation**: macros, conditional compilation, code-generation markers, templates.
+9. **Scope and state**: globals and statics, `nonlocal`, module state, receivers (`this`/`self`), assignment rebinding
+   (`f = g` then `f()`).
 10. **Entry points and build**: `main`, CLI entry declarations, package scripts, build manifests.
-11. **Tests**: test discovery per framework.
+11. **Tests**: test discovery per framework (it feeds `--affected` and `--test-gate`).
 12. **Async and concurrency**: async/await, goroutines, callbacks, futures.
+
+These families are also the columns of a **language feature matrix**: one row per (language, form), each with a
+3–10 line fixture and one ripwire call that answers four questions. Is the form indexed as a definition? Do calls and
+references through it resolve (resolved, hedged, silently missed, or a false edge)? Which verbs does it feed
+(`--callers`, `--callees`, `--whereis`, `--for`, `--path`, `--dead-code`)? Which code implements it (file and
+function; two or more sites for one concept is the duplication signal)? The matrix is the feature spec for shared
+code, and every fixture is a ready-made red/green test arm for the slice that fixes it. A language PR that adds
+the fixtures for its own forms fills its own row of the matrix. That is welcome, and it is the cheapest way to see
+which families your language already gets for free.
 
 Work on a family goes in this order, each step its own small PR with byte-identical output on the languages already handled:
 (a) **fold duplicates**: forms already handled in two or more languages by separate code move into the shared handler;
