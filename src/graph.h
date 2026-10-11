@@ -3019,6 +3019,80 @@ struct BuiltinMethodGate
     }
 };
 
+// The class template argument `n` of `written` names, its template-id's `<` at `open`: the argument's final segment, `const`
+// / `volatile` / `struct` / `class` and a leading `::` stripped, `Gen<int>` naming Gen. "" when there is no such argument, it is
+// written in std, or it is no class name (a pointer, an array, a function type; a builtin keyword reads as itself and names
+// no class).
+inline std::string_view stdTemplateArgClass( std::string_view written, std::size_t open, int n ) noexcept
+{
+    EXPECTS( open < written.size() && written[ open ] == '<' && n >= 0, "a template-id's `<` and an argument index" );
+    std::size_t begin = open + 1;
+    std::size_t end   = begin;
+    int         depth = 0;
+    int         arg   = 0;
+    for( ; end < written.size(); ++end )
+    {
+        const char c = written[ end ];
+        if( c == '<' || c == '(' )
+        {
+            ++depth;
+        }
+        else if( ( c == '>' || c == ')' ) && depth > 0 )
+        {
+            --depth;
+        }
+        else if( depth == 0 && c == ',' && arg < n )
+        {
+            ++arg;
+            begin = end + 1;
+        }
+        else if( depth == 0 && ( c == '>' || c == ',' ) )
+        {
+            break;
+        }
+    }
+    if( end >= written.size() || arg != n )
+    {
+        return {};   // no closing `>`, or fewer arguments than `n + 1`
+    }
+    std::string_view argText = trimWs( written.substr( begin, end - begin ) );
+    for( const std::string_view cv : { std::string_view( "const " ), std::string_view( "volatile " ), std::string_view( "struct " ), std::string_view( "class " ) } )
+    {
+        argText = argText.starts_with( cv ) ? trimWs( argText.substr( cv.size() ) ) : argText;
+    }
+    argText = argText.starts_with( "::" ) ? argText.substr( 2 ) : argText;
+    argText = trimWs( argText.substr( 0, argText.find( '<' ) ) );   // `Gen<int>` names Gen
+    if( argText.starts_with( "std::" ) || argText.empty() || argText.find_first_of( "*&[( " ) != std::string_view::npos )
+    {
+        return {};
+    }
+    const std::size_t      cut  = argText.rfind( "::" );
+    const std::string_view name = ( cut == std::string_view::npos ) ? argText : argText.substr( cut + 2 );
+    const bool             isId = !name.empty() && rw::namesplit::isIdentStart( name.front() )
+                     && std::all_of( name.begin(), name.end(), []( char c ) { return rw::namesplit::isIdentChar( c ); } );
+    ENSURES( !isId || ( name.data() >= written.data() && name.data() + name.size() <= written.data() + written.size() ),
+             "the class is a view into the recorded text" );
+    return isId ? name : std::string_view{};
+}
+
+// The element type an element access (`c[ k ]`, `c.at( k )`, `c.front()`, `c.back()`) of a container whose recorded type text
+// is `written` yields — the final segment of the template argument externalnames.h cppStdElementArgIndex names:
+// "std::map<std::string, EvalString, Less>" -> "EvalString", "const std::vector<ns::Item>" -> "Item". "" for every other text:
+// another template, an argument written in std ("std::vector<std::string>", "std::map<K, std::vector<T>>" — one level only),
+// an argument that is not a class name.
+inline std::string_view stdElementType( std::string_view written ) noexcept
+{
+    constexpr std::string_view kStd = "std::";
+    written                         = written.starts_with( "const " ) ? trimWs( written.substr( 6 ) ) : written;
+    const std::size_t open          = written.find( '<' );
+    if( !written.starts_with( kStd ) || open == std::string_view::npos )
+    {
+        return {};
+    }
+    const int argIndex = externalnames::cppStdElementArgIndex( trimWs( written.substr( kStd.size(), open - kStd.size() ) ) );
+    return argIndex < 0 ? std::string_view{} : stdTemplateArgClass( written, open, argIndex );
+}
+
 // THE C++ STANDARD-MEMBER GATE (test/stdmembergatecheck.sh; the names are data: externalnames.h kCppStdMemberNames).
 // A C++ member call whose receiver no rule typed — `out.push_back( c )` on a `std::vector<char>&` parameter, `s.size()`,
 // `getV().empty()` — is NAME-ONLY (FE-B): it keeps every same-file, same-directory and included-file definition of the
@@ -3045,12 +3119,19 @@ struct BuiltinMethodGate
 // std::shared_ptr<ns::List> ListSP; ListSP p; p->size()` (the alias record keeps no template argument, so `typedef
 // std::unique_ptr<std::string> StrUP` keeps the hedge too); `HashMap<K, V> m; m.find( k )` reaching UnionFind::find by name,
 // `std::unique_ptr<std::string> p; p->size()`, `std::vector<int>* pv; pv->size()` and `IntVec* p; p->size()` through
-// `typedef std::vector<int> IntVec` do not keep it).
+// `typedef std::vector<int> IntVec` do not keep it); ONE element access of a container whose recorded written type is a std
+// sequence container or map (externalnames.h kCppStdElementFirstArg / kCppStdElementSecondArg) — `m[ k ].empty()`, `v.at( i )
+// .size()`, `v.front().size()`, `rule->bindings_[ k ].empty()` through `typedef std::map<std::string, EvalString> Bindings;` —
+// reads the element type off that text (stdElementType; a local's, a parameter's or a namespace-scope variable's qualified
+// text, a std-container field's "elem" record, a type alias's recorded target text), so `std::vector<Vec<int>>& vs; vs[ 0 ]
+// .push_back()` keeps the hedge and `std::vector<std::string>& v; v[ 0 ].size()` does not.
 // STATED FLOORS (test/stdmembergatecheck.sh arms H and W pin them): (1) by name: an in-tree class reached through a receiver
 // the index records no written type for loses its by-name edge to declined_calls= — a call result (`h.list().size()`,
 // `v.front().size()`, `makeList().size()`), an iterator (`auto it = v.begin(); it->size()`), `auto` (`auto l = ns::List{}`,
-// `auto& v = pool.items()`), `( *p ).push_back()`, `vs[ 0 ].push_back()`, a range-for `auto`, a template parameter, a field
-// two hops off its root; (2) a template's arguments are read only where the parser recorded the type's whole text — a
+// `auto& v = pool.items()`), `( *p ).push_back()`, a range-for `auto`, a template parameter, a field two hops off its root, an
+// element access of an element access (`m[ a ][ b ].m()`, an element written in std: `std::map<K, std::vector<T>>` reads one
+// level only), an element access whose container is no one-hop name (`h.list()[ 0 ].size()`), an iterator's `->second`, and
+// a std-container field inherited from a base class (stdElemFields keys the declaring class alone); (2) a template's arguments are read only where the parser recorded the type's whole text — a
 // QUALIFIED type (Binding::importedName) — and only through `->`: `QList<ns::List> l; l.size()` (unqualified) and
 // `std::vector<ns::List> v; v.size()` (the container's own member) are declined; a member field's template arguments are
 // read for std::unique_ptr / std::shared_ptr alone (ingest_relations.h stdSmartPointee), so `std::optional<ns::List> o_;
@@ -3126,46 +3207,7 @@ struct StdMemberGate
         {
             return {};
         }
-        std::size_t end   = open + 1;
-        int         depth = 0;
-        for( ; end < written.size(); ++end )
-        {
-            const char c = written[ end ];
-            if( c == '<' || c == '(' )
-            {
-                ++depth;
-            }
-            else if( ( c == '>' || c == ')' ) && depth > 0 )
-            {
-                --depth;
-            }
-            else if( depth == 0 && ( c == '>' || c == ',' ) )
-            {
-                break;
-            }
-        }
-        if( end >= written.size() )
-        {
-            return {};   // no closing `>`: not a text the parser gave a template-id for
-        }
-        std::string_view arg = trimWs( written.substr( open + 1, end - open - 1 ) );
-        for( const std::string_view cv : { std::string_view( "const " ), std::string_view( "volatile " ), std::string_view( "struct " ), std::string_view( "class " ) } )
-        {
-            arg = arg.starts_with( cv ) ? trimWs( arg.substr( cv.size() ) ) : arg;
-        }
-        arg = arg.starts_with( "::" ) ? arg.substr( 2 ) : arg;
-        arg = trimWs( arg.substr( 0, arg.find( '<' ) ) );   // `Gen<int>` names Gen
-        if( arg.starts_with( kStd ) || arg.empty() || arg.find_first_of( "*&[( " ) != std::string_view::npos )
-        {
-            return {};
-        }
-        const std::size_t      cut  = arg.rfind( "::" );
-        const std::string_view name = ( cut == std::string_view::npos ) ? arg : arg.substr( cut + 2 );
-        const bool             isId = !name.empty() && rw::namesplit::isIdentStart( name.front() )
-                         && std::all_of( name.begin(), name.end(), []( char c ) { return rw::namesplit::isIdentChar( c ); } );
-        ENSURES( !isId || ( name.data() >= written.data() && name.data() + name.size() <= written.data() + written.size() ),
-                 "the pointee is a view into the recorded text" );
-        return isId ? name : std::string_view{};
+        return stdTemplateArgClass( written, open, 0 );
     }
 
 };
@@ -6798,27 +6840,29 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         stdRecvKey.clear();  Narrower::appendUint( stdRecvKey, from );  stdRecvKey.push_back( '#' );  stdRecvKey.append( var );
         return stdRecvKey;
     };
-    // a named receiver: its in-scope local or parameter declaration (Rule 2's own answer, and every qualified declaration of
-    // the name in the definition), else the caller's class's field, else a namespace-scope variable of that name — declared in
-    // the caller's file or a file it includes, else anywhere in the tree
-    const auto addNamed = [ & ]( StdMemberGate::Receiver& out, const Reference& ref, const std::string& callerScope, bool viaArrow )
+    StdMemberGate::Receiver stdRecvRoot;   // reused: a FieldOfVar root's written classes
+    // a named receiver's declarations, in C++'s lookup order: its in-scope local or parameter declaration (Rule 2's own answer,
+    // and every qualified declaration of the name in the definition), else the caller's class's field, else a namespace-scope
+    // variable of that name — declared in the caller's file or a file it includes, else anywhere in the tree. onWritten( type
+    // name, qualified text ) takes each declaration's recorded type; onField( class, member ) takes the field and answers whether
+    // the class declares that member typed (a typed field hides the namespace-scope variable).
+    const auto forNamedDecls = [ & ]( const Reference& ref, const std::string& callerScope, const auto& onWritten, const auto& onField )
     {
         const std::string_view var = ref.recvVar;   // a NamedVar's name, or a FieldOfVar's root
-        addWritten( out, narrower.recvVarTypeName( ref ), {}, viaArrow );
+        onWritten( narrower.recvVarTypeName( ref ), std::string_view{} );
         if( const auto qit = stdQualifiedDecls.find( namedKey( ref.fromSymbol, var ) ); qit != stdQualifiedDecls.end() )
         {
             for( const std::uint32_t i : qit->second )
             {
-                addWritten( out, {}, ing.bindings[ i ].importedName, viaArrow );   // a non-std qualified one is Rule 2's answer above
+                onWritten( std::string_view{}, std::string_view( ing.bindings[ i ].importedName ) );   // a non-std qualified one is Rule 2's answer above
             }
         }
         if( const auto lit = fieldNarrow.localNameSet.find( namedKey( ref.fromSymbol, var ) ); lit != fieldNarrow.localNameSet.end() && ( lit->second & kLocalNameDeclared ) != 0 )
         {
             return;   // a declared local hides a field and a namespace-scope variable
         }
-        if( const FlatRecvType* field = fieldTypeIn( callerScope, var ); field != nullptr )
+        if( onField( callerScope, var ) )
         {
-            addField( out, field, viaArrow );
             return;
         }
         stdRecvKey.assign( callerScope ).push_back( '#' );
@@ -6838,11 +6882,132 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         {
             if( !anyVisible || visible( i ) )
             {
-                addWritten( out, ing.bindings[ i ].typeName, ing.bindings[ i ].importedName, viaArrow );
+                onWritten( std::string_view( ing.bindings[ i ].typeName ), std::string_view( ing.bindings[ i ].importedName ) );
             }
         }
     };
-    StdMemberGate::Receiver stdRecvRoot;   // reused: a FieldOfVar root's written classes
+    const auto addNamed = [ & ]( StdMemberGate::Receiver& out, const Reference& ref, const std::string& callerScope, bool viaArrow )
+    {
+        forNamedDecls( ref, callerScope, [ & ]( std::string_view typeName, std::string_view qualified ) { addWritten( out, typeName, qualified, viaArrow ); },
+                       [ & ]( const std::string& cls, std::string_view member )
+                       {
+                           const FlatRecvType* field = fieldTypeIn( cls, member );
+                           addField( out, field, viaArrow );
+                           return field != nullptr;
+                       } );
+    };
+    // ELEMENT receivers (parser version 166): a call on ONE element access of a one-hop container — `m[ k ].empty()`, `v.at( i )
+    // .size()`, `this->items_[ i ].size()`, `rule->bindings_[ k ].empty()` (memberPath = model.h kCppElementMark + the container's
+    // shape). The container's recorded written text names its element type (stdElementType): a local's, a
+    // parameter's or a namespace-scope variable's qualified text (Binding::importedName), a member field written as a std
+    // container (its composeRel "elem" record, stdElemFields), and a type alias's recorded target text, followed alias to alias
+    // (`typedef std::map<std::string, EvalString> Bindings; Bindings bindings_;`). The element class joins the receiver's written
+    // types, so the call keeps the ladder's hedge exactly when that class's cone holds a candidate — `std::vector<std::string>`'s
+    // element names no class and is declined as before.
+    HashMap<std::string, rw::SmallVec<std::uint32_t, 1>> stdElemFields;   // "Class#field" -> its "elem" record indices
+    if( anyCppDefinition )
+    {
+        std::string key;
+        for( std::uint32_t i = 0; i < std::uint32_t( ing.references.size() ); ++i )
+        {
+            const Reference& r = ing.references[ i ];
+            if( r.isCompose && r.composeRel == "elem" && r.fromSymbol != kNoNode && !r.recvVar.empty() && !r.memberPath.empty() )
+            {
+                key.assign( ing.symbols[ r.fromSymbol ].name ).push_back( '#' );
+                key.append( r.recvVar );
+                stdElemFields[ key ].push_back( i );
+            }
+        }
+    }
+    const auto addElementOfText = [ & ]( StdMemberGate::Receiver& out, std::string_view written )
+    {
+        if( const std::string_view element = stdElementType( written ); !element.empty() )
+        {
+            out.types.push_back( element );
+        }
+    };
+    const auto elementOfAliasAt = [ & ]( const auto& self, StdMemberGate::Receiver& out, std::string_view type, int depth ) -> void
+    {
+        const auto it = type.empty() || depth >= 8 ? typeAliasTargets.end() : typeAliasTargets.find( std::string( type ) );
+        if( it == typeAliasTargets.end() )
+        {
+            return;
+        }
+        for( const std::uint32_t i : it->second )
+        {
+            const Reference& r = ing.references[ i ];
+            if( !r.memberPath.empty() )
+            {
+                addElementOfText( out, r.memberPath );
+            }
+            else if( !fieldTypeWrittenInStd( r ) && r.calleeName != type )
+            {
+                self( self, out, r.calleeName, depth + 1 );
+            }
+        }
+    };
+    const auto addElementOfAlias = [ & ]( StdMemberGate::Receiver& out, std::string_view type ) { elementOfAliasAt( elementOfAliasAt, out, type, 0 ); };
+    // a field of `cls` (final segment, as Rule 2b keys it) as a container: its "elem" record, else its recorded type as an alias.
+    // true ⇒ the class declares that member with a record of either kind
+    const auto addElementOfField = [ & ]( StdMemberGate::Receiver& out, std::string_view cls, std::string_view member ) -> bool
+    {
+        const std::size_t cut = cls.rfind( "::" );
+        stdRecvKey.assign( cut == std::string_view::npos ? cls : cls.substr( cut + 2 ) ).push_back( '#' );
+        stdRecvKey.append( member );
+        const auto eit = stdElemFields.find( stdRecvKey );
+        if( eit != stdElemFields.end() )
+        {
+            for( const std::uint32_t i : eit->second )
+            {
+                addElementOfText( out, ing.references[ i ].memberPath );
+            }
+        }
+        const FlatRecvType* field = fieldTypeIn( std::string( cls ), member );
+        if( field != nullptr && !field->arrowOnly )
+        {
+            addElementOfAlias( out, field->type );
+        }
+        return field != nullptr || eit != stdElemFields.end();
+    };
+    Reference stdElemProbe;   // reused: the container root of an element receiver, as a NamedVar receiver of the same call
+    const auto addElementReceiver = [ & ]( StdMemberGate::Receiver& out, const Reference& ref, const std::string& callerScope )
+    {
+        const std::string_view shape = std::string_view( ref.memberPath ).substr( kCppElementMark.size() );
+        const std::size_t      dot   = shape.find( '.' );
+        if( shape.starts_with( "this." ) )
+        {
+            addElementOfField( out, callerScope, shape.substr( 5 ) );   // `this->items_[ i ].size()`
+            return;
+        }
+        stdElemProbe.fileId     = ref.fileId;
+        stdElemProbe.fromSymbol = ref.fromSymbol;
+        stdElemProbe.lang       = ref.lang;
+        stdElemProbe.line       = ref.line;
+        stdElemProbe.startByte  = ref.startByte;
+        stdElemProbe.role       = ref.role;
+        stdElemProbe.recv       = RecvKind::NamedVar;
+        stdElemProbe.recvVar.assign( shape.substr( 0, dot ) );
+        if( dot == std::string_view::npos )
+        {
+            // `m[ k ].empty()` / `bindings_[ k ].empty()`: the named container's declarations, as a named receiver's
+            forNamedDecls( stdElemProbe, callerScope,
+                           [ & ]( std::string_view typeName, std::string_view qualified )
+                           {
+                               addElementOfAlias( out, typeName );
+                               addElementOfText( out, qualified );
+                           },
+                           [ & ]( const std::string& cls, std::string_view member ) { return addElementOfField( out, cls, member ); } );
+            return;
+        }
+        // `rule->bindings_[ k ].empty()` / `r.vec_[ 0 ].empty()`: the root's written classes (a smart pointer's pointee
+        // included, as a FieldOfVar root), then each one's field as a container
+        stdRecvRoot.clear();
+        addNamed( stdRecvRoot, stdElemProbe, callerScope, /*viaArrow=*/true );
+        for( const std::string_view r : stdRecvRoot.types )
+        {
+            addElementOfField( out, r, shape.substr( dot + 1 ) );
+        }
+    };
     const auto stdReceiverOf = [ & ]( const Reference& ref, StdMemberGate::Receiver& out )
     {
         out.clear();
@@ -6858,6 +7023,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         else if( ref.recv == RecvKind::FieldOfThis && !ref.fieldName.empty() )
         {
             addField( out, fieldTypeIn( callerScope, ref.fieldName ), ref.viaArrow );   // `this->items_.m()`
+        }
+        else if( ref.recv == RecvKind::FieldOfVar && ref.recvVar.empty() && !ref.memberCall && ref.memberPath.size() > kCppElementMark.size()
+                 && ref.memberPath.starts_with( kCppElementMark ) )
+        {
+            addElementReceiver( out, ref, callerScope );   // `m[ k ].empty()`: the container's element type
         }
         else if( ref.recv == RecvKind::FieldOfVar && !ref.recvVar.empty() && !ref.fieldName.empty() )
         {

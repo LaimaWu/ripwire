@@ -13,8 +13,9 @@ struct Box
 void fieldOfVar( Box& b ) { b.items_.push_back( 3 ); }
 void fieldOfVarRaw( Box& b ) { b.raw_.push_back( 4 ); }
 
-// STATED FLOORS: a receiver the resolver reads no written type for — a dereference, a subscript, a range-for `auto`, a
-// template parameter — is declined even where the element is the in-tree Vec.
+// STATED FLOORS: a receiver the resolver reads no written type for — a dereference, a range-for `auto`, a template
+// parameter — is declined even where the element is the in-tree Vec. A subscript reads the container's element type
+// (Vec<int>) and keeps the hedge (stdmembergatecheck arm X).
 void derefPtr( Vec<int>* p ) { ( *p ).push_back( 5 ); }
 void subscript( std::vector<Vec<int>>& vs ) { vs[ 0 ].push_back( 6 ); }
 void rangeFor( std::vector<Vec<int>>& vs ) { for( auto& v : vs ) { v.push_back( 7 ); } }

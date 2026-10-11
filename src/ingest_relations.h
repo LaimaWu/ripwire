@@ -1157,6 +1157,20 @@ inline bool insideFunctionBody( TSNode n ) noexcept
     return false;
 }
 
+// The whole written text of a type written `std::<container><…>` for a standard container whose element access yields a template
+// argument (externalnames.h cppStdElementArgIndex: `std::map<std::string, EvalString, Less>`, `std::vector<ns::Item>`); "" for
+// every other type, a global `::std::…` included (writtenTypeNamespace reads two segments). graph.h stdElementType
+// reads the argument out of it (parser version 165).
+inline std::string_view stdElementContainerText( TSNode typeNode, std::string_view src ) noexcept
+{
+    const TSNode tmpl = ( !ts_node_is_null( typeNode ) && writtenTypeNamespace( typeNode, src ) == "std" ) ? fieldChild( typeNode, NodeField::Name ) : TSNode{};
+    if( ts_node_is_null( tmpl ) || !kindIs( ts_node_type( tmpl ), "template_type" ) )
+    {
+        return {};
+    }
+    return externalnames::cppStdElementArgIndex( nodeFieldText( tmpl, NodeField::Name, src ) ) < 0 ? std::string_view{} : nodeTextOf( typeNode, src );
+}
+
 // one alias record: `aliasNode` names `target`, the class `spec` spells (see captureTypeAlias for the record's fields)
 inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std::string_view target )
 {
@@ -1175,6 +1189,7 @@ inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std:
     r.name       = target;
     r.recvVar    = alias;
     r.qualifier  = writtenTypeNamespace( spec, cx.src );
+    r.memberPath = stdElementContainerText( spec, cx.src );   // `typedef std::map<K, V> Bindings;`: the text its element type is read from
     cx.out.push_back( std::move( r ) );
 }
 
@@ -1184,7 +1199,8 @@ inline void emitTypeAlias( TypeAliasCtx& cx, TSNode aliasNode, TSNode spec, std:
 // IRBuilderBase::CreateCall (test/fieldnarrowcheck.sh arm t). Rides the compose record shape — cached field for field, so the blob
 // format is unchanged — marked composeRel "alias" with an EMPTY fieldName, the one shape no member record has: `recvVar` = the
 // alias, `name` = the target's class name, `qualifier` = the namespace the target was written in (a `std` target is refused by
-// its reader). Only a PLAIN alias of a named class records: a pointer/reference/array/function declarator, a target that names no
+// its reader), `memberPath` = the target's whole text when it is a std element container (stdElementContainerText, parser
+// version 166; graph.h StdMemberGate's element receivers read it, nothing else does). Only a PLAIN alias of a named class records: a pointer/reference/array/function declarator, a target that names no
 // class (aliasTargetName), a self-alias and an alias local to a function body (it types no member, and the name graph has no
 // scopes to keep it local) record nothing.
 inline void captureTypeAlias( TypeAliasCtx& cx, TSNode n, const char* t )
@@ -1350,6 +1366,31 @@ void captureFields( TSNode classNode, std::uint32_t fileId, Lang lang, std::stri
                 // recording `std::vector<Widget> v_;` as a std type would only tombstone same-named classes' same-named members,
                 // and on rocksdb and llvm-project that lost six correct narrows and refused no wrong one (2026-09-17).
                 typeName = std::string( pointee.name );
+            }
+            else if( const std::string_view containerText = stdElementContainerText( typeNode, src ); !containerText.empty() )
+            {
+                // `std::map<std::string, Item> items_;` — an ELEMENT record (parser version 165), for StdMemberGate's element
+                // receivers (`items_[ k ].empty()`, graph.h stdReceiverOf) alone: composeRel "elem" with an EMPTY fieldName, so
+                // Rule 2b's field tables never read the container as the field's type (see the vector note above), qualifier
+                // `std`, so the HAS-A edges draw none; recvVar = the field, name = the container, memberPath = its whole text.
+                // A plain value member only. No other record ever came from such a field (the walk below finds no
+                // type_identifier directly under a qualified template), so continuing keeps every other capture as it was.
+                const TSNode elemDecl = fieldChild( fdecl, NodeField::Declarator );
+                if( !ts_node_is_null( elemDecl ) && kindIs( ts_node_type( elemDecl ), "field_identifier" ) )
+                {
+                    RawRef r;
+                    r.fileId     = fileId;
+                    r.startByte  = ts_node_start_byte( fdecl );
+                    r.lang       = lang;
+                    r.isCompose  = true;
+                    r.composeRel = "elem";
+                    r.name       = std::string( nodeFieldText( fieldChild( typeNode, NodeField::Name ), NodeField::Name, src ) );
+                    r.qualifier  = "std";
+                    r.recvVar    = std::string( nodeTextOf( elemDecl, src ) );
+                    r.memberPath = std::string( containerText );
+                    refs.push_back( std::move( r ) );
+                }
+                continue;
             }
             else
             {

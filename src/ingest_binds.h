@@ -2154,6 +2154,54 @@ inline RecvShape classifyReceiver( TSNode node, Lang lang, std::string_view src,
     return {};   // parenthesized / subscripted / call receiver → not one-hop
 }
 
+// The C++ ELEMENT-ACCESS receiver mark (model.h Reference::memberPath, its C++ reading; parser version 165): a member call whose
+// receiver is ONE element access of a one-hop container — `m[ k ].empty()`, `v.at( i ).size()`, `v.front().size()`,
+// `v.back().size()`, `p->at( i ).size()` — records that container's shape as model.h kCppElementMark + "root" (a variable or field
+// NAME, `m`), "this.field" (`this->m[ k ]`) or "root.field" (`rule->bindings_[ k ]`, `r.vec_[ 0 ]`). graph.h StdMemberGate reads
+// the container's recorded written type for its element type (stdReceiverOf). "" for every other receiver: a two-level
+// access (`m[ a ][ b ]`), a dereference, a call result, a deeper chain, and an element access whose container is itself one.
+inline std::string cppElementContainer( TSNode recvNode, std::string_view src )
+{
+    const char* rt        = ts_node_type( recvNode );
+    TSNode      container = {};
+    if( kindIs( rt, "subscript_expression" ) )
+    {
+        container = fieldChild( recvNode, NodeField::Argument );
+    }
+    else if( kindIs( rt, "call_expression" ) )
+    {
+        const TSNode fn = fieldChild( recvNode, NodeField::Function );
+        if( !ts_node_is_null( fn ) && kindIs( ts_node_type( fn ), "field_expression" ) )
+        {
+            const std::string_view accessor = nodeFieldText( fn, NodeField::Field, src );
+            if( accessor == "at" || accessor == "front" || accessor == "back" )
+            {
+                container = memberAccessReceiver( fn, Lang::Cpp );
+            }
+        }
+    }
+    if( ts_node_is_null( container ) )
+    {
+        return {};
+    }
+    const RecvShape shape = classifyReceiver( container, Lang::Cpp, src, /*allowChain=*/true );
+    std::string     out;
+    if( shape.kind == RecvKind::NamedVar && !shape.var.empty() )
+    {
+        out.assign( kCppElementMark ).append( shape.var );
+    }
+    else if( shape.kind == RecvKind::FieldOfThis && !shape.field.empty() )
+    {
+        out.assign( kCppElementMark ).append( "this." ).append( shape.field );
+    }
+    else if( shape.kind == RecvKind::FieldOfVar && !shape.var.empty() && !shape.field.empty() )
+    {
+        out.assign( kCppElementMark ).append( shape.var ).push_back( '.' );
+        out.append( shape.field );
+    }
+    return out;
+}
+
 // TS/JS literal-receiver kinds (issue #163). A member call whose receiver type the syntax already
 // proves is a built-in; it must not take the bare-name ladder. Object literals, identifier
 // receivers, this, casts, and element-returning links stay RecvKind::None. Do NOT widen
@@ -2420,6 +2468,10 @@ inline RecvShape receiverOf( TSNode nameNode, Lang lang, std::string_view src )
         // "truly bare". Found by the veto's own precision listing: `self.to_cartesian().sum()` was read as a
         // bare builtin `sum(…)` and refused. Closes the depth-3 residual test/chainguardcheck.sh arm (h) pinned.
         rs.kind = RecvKind::FieldOfVar;
+        if( lang == Lang::Cpp )
+        {
+            rs.path = cppElementContainer( recvNode, src );   // `m[ k ].empty()`: the container's shape (parser version 165)
+        }
     }
     return rs;
 }

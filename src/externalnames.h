@@ -328,8 +328,9 @@ inline constexpr std::string_view kRubyBuiltinMethodNames[] = {
 // whose receiver a rule typed (Rule 1/2/2b, `this`) is never touched, and neither is one whose recorded written type —
 // a local's, a parameter's, a field's or a namespace-scope variable's — names an in-tree class that may define the
 // callee: the class itself, an alias of it, or the pointee of a `->` (kCppStdArrowTemplates below, an in-tree class
-// with its own `operator->`, a class the tree does not define). What the index records no written type for (a call
-// result, an iterator, `auto`, a dereference, a subscript) is graph.h StdMemberGate's stated floor.
+// with its own `operator->`, a class the tree does not define), or the element type of ONE element access of a std container
+// (kCppStdElementFirstArg below). What the index records no written type for (a call result, an iterator, `auto`, a
+// dereference, a second element access) is graph.h StdMemberGate's stated floor.
 // PROVENANCE: transcribed from the C++23 member synopses of the sequence, associative and unordered containers
 // ([containers]), basic_string and basic_string_view ([strings]), span ([views.span]), optional ([optional]) and the
 // smart pointers ([smartptr]) — MINUS every name that is also a generic verb or noun non-container classes routinely
@@ -355,6 +356,15 @@ inline constexpr std::string_view kCppStdMemberNames[] = {
 // member-field capture reads the two smart pointers alone (ingest_relations.h kStdSmartPointers). Sorted by byte.
 inline constexpr std::string_view kCppStdArrowTemplates[] = { "optional", "shared_ptr", "unique_ptr" };
 
+// The standard containers whose ELEMENT ACCESS — `c[ k ]`, `c.at( k )`, `c.front()`, `c.back()` — yields a template argument the
+// declaration wrote, so a member call on that element may be a member of that argument (graph.h stdElementType reads
+// the container's recorded text; ingest_relations.h stdElementContainerText records it for a member field and a type alias). The
+// sequence containers and span yield their FIRST argument; the subscriptable maps their SECOND, the mapped type. Not here: the
+// strings (an element is a character), std::set (no element access), multimap (no `[]` / `at`), and every container adaptor.
+// Sorted by byte.
+inline constexpr std::string_view kCppStdElementFirstArg[]  = { "array", "deque", "forward_list", "list", "span", "vector" };
+inline constexpr std::string_view kCppStdElementSecondArg[] = { "flat_map", "map", "unordered_map" };
+
 // ONE sortedness proof for the three tables above, taking the table as a span, so the three stay one shape rather than
 // three near-copies of the assert this file already spells per table. The lookup is graph.h BuiltinMethodGate::appliesTo,
 // its only reader, which picks the table by language first.
@@ -368,6 +378,19 @@ static_assert( isStrictlySortedTable( kRubyBuiltinMethodNames ), "kRubyBuiltinMe
 static_assert( isStrictlySortedTable( kCppStdMemberNames ), "kCppStdMemberNames must be strictly sorted (binary search)" );
 static_assert( std::size( kCppStdMemberNames ) <= 0xFFFFu, "StdMemberGate packs a kCppStdMemberNames index into 16 bits" );
 static_assert( isStrictlySortedTable( kCppStdArrowTemplates ), "kCppStdArrowTemplates must be strictly sorted (binary search)" );
+static_assert( isStrictlySortedTable( kCppStdElementFirstArg ), "kCppStdElementFirstArg must be strictly sorted (binary search)" );
+static_assert( isStrictlySortedTable( kCppStdElementSecondArg ), "kCppStdElementSecondArg must be strictly sorted (binary search)" );
+
+// Which template argument an element access of the standard container `name` ("map", "vector") yields: 0 or 1, or -1 when `name`
+// is no container of kCppStdElementFirstArg / kCppStdElementSecondArg.
+constexpr int cppStdElementArgIndex( std::string_view name ) noexcept
+{
+    if( std::binary_search( std::begin( kCppStdElementFirstArg ), std::end( kCppStdElementFirstArg ), name, rw::sortutil::svLess ) )
+    {
+        return 0;
+    }
+    return std::binary_search( std::begin( kCppStdElementSecondArg ), std::end( kCppStdElementSecondArg ), name, rw::sortutil::svLess ) ? 1 : -1;
+}
 static_assert( isStrictlySortedTable( kJsGlobalObjectNames ), "kJsGlobalObjectNames must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kJsGlobalFunctionNames ), "kJsGlobalFunctionNames must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kJsGlobalAliasNames ), "kJsGlobalAliasNames must be strictly sorted (binary search)" );
