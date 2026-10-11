@@ -33,7 +33,11 @@ or `const { Mid } = require( './m' )`), a C-family include, the Java/Kotlin/Go p
 the package, or Ruby's constant scope. A clause bound by the NAME alone — no such evidence — is listed hedged,
 `base_by="name"`, and the walk does not continue below it; a clause the evidence binds to a DIFFERENT same-named type adds
 no row at all, and the `<iface>` counts those types as `transitive_other_base=N` (they are listed on the answer of the type
-they do extend). The direct rows are unchanged.
+they do extend). A Java or Kotlin `import` and a C# `using` are not proofs. The direct rows are listed as before, and the
+walk does not descend below a direct row whose own extends clause is not proven to name the interface (a cross-package
+Java `import`, a Kotlin `import`, a C# `using`, an ES import of a CommonJS base). When such a row has subtypes, the row
+carries `unwalked="1"`, the `<iface>` counts those rows as `transitive_unwalked=N`, and `unwalked_next=` names the first
+row's own `--lego` call, which lists its subtypes.
 
 Every `<impl>` row of the targeted answer now says where the class is: `p="file:LINE"`, the `--uses`/`--callers`
 spelling, so the implementor opens at its definition. The `<iface>` row and the ranked `--for` `<lego>` section keep the

@@ -242,12 +242,14 @@ inline std::vector<ImplementorRow> implementorClosure( const std::vector<std::ve
 //   • a ByName edge adds its row HEDGED (byName) and is not walked: nothing proves the type below it is in this closure;
 //   • an Other edge — the evidence names a different same-named type — adds no row; `otherBase` counts those types (each
 //     once, and never one the walk lists anyway). They are listed on the --lego answer of the type they do extend.
-// A direct row whose own edge is not Proven is listed (the map's contract) but not walked. A type first reached hedged and
-// then proven at the same depth is upgraded and walked. Order and determinism are the plain walk's.
+// A direct row whose own edge is not Proven is listed (the map's contract) but not walked; when types sit below it,
+// `unwalked` names it (fix 2: the stop is disclosed, never silent — the row's own --lego answer walks them). A type first
+// reached hedged and then proven at the same depth is upgraded and walked. Order and determinism are the plain walk's.
 struct LegoClosure
 {
     std::vector<ImplementorRow> rows;
     std::size_t                 otherBase = 0;
+    std::vector<NodeId>         unwalked;   // direct rows with implementors of their own whose edge is not proven, in row order
 };
 
 // The walk's state, one closure: the rows so far, which of them are walked further, the types each row's node maps to,
@@ -272,6 +274,14 @@ public:
         {
             ( void )unused;
             out_.otherBase += seen_.find( id ) == seen_.end() ? 1u : 0u;
+        }
+        for( std::size_t i = 0; i < out_.rows.size() && out_.rows[ i ].depth == 1; ++i )   // breadth-first: the direct rows lead
+        {
+            const NodeId id = out_.rows[ i ].id;
+            if( walk_[ i ] == 0 && id < implementors_.size() && !implementors_[ id ].empty() )
+            {
+                out_.unwalked.push_back( id );
+            }
         }
         ENSURES( out_.rows.size() == walk_.size() );
     }
