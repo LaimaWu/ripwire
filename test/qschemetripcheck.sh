@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-11, PR #349 rebased on train 26b: RE-DERIVED with UPDATE_GOLDEN=1 (hash ea842c12a0…5a779).
+#   kParserVer / quality mirror 156 -> provisional 158 for Clojure grammar/query/extraction and qualified-call
+#   namespace capture; main's rich tag is 157. kCacheVersion 29 and kQSnapCacheScheme 19 are unchanged.
+#   The maintainer must confirm or renumber 158 before this branch lands; regenerate this pin if renumbered.
 # 2026-10-08, train 26b final regeneration (all thirteen lanes merged, the path-gap name fix on top): RE-DERIVED ONCE with
 #   UPDATE_GOLDEN=1 on the merged tree (hash a1e54fc30b…9141af3). Watched text: kParserVer 156 (rich file tag 157; above
 #   FE-B's 154/155, honesty-small's and the cr2 follow-up's 145, cr-qd's 148), kCacheVersion 29 (FE-B's ref record),

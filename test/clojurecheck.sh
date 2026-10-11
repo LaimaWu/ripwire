@@ -21,7 +21,7 @@ names = {s.get('n').split('/')[0] for s in rows}
 expected = {'sample.core', 'sample.browser', 'sample.shared', 'sample.tasks', 'answer', 'cached',
             'square', 'secret', 'unless', 'area', 'Greeter', 'Person', 'Counter', 'quoted', 'interop',
             'run', 'render', 'shared', 'task', 'quoted-holder', 'route', 'spaced', 'commented',
-            'gap-call', 'comment-call'}
+            'gap-call', 'comment-call', 'comment-holder', 'join', 'qualified-join'}
 assert names == expected, (names, expected)
 by = {s.get('n').split('/')[0]: s for s in rows}
 for name, kind in {'answer':'var', 'cached':'var', 'square':'fn', 'unless':'macro',
@@ -36,6 +36,8 @@ assert 'render' in calls('task'), calls('task')
 for name in ('spaced', 'commented', 'gap-call', 'comment-call'):
     assert 'square' in calls(name), (name, calls(name))
 assert 'square' not in calls('quoted-holder'), calls('quoted-holder')
+assert 'square' not in calls('comment-holder'), calls('comment-holder')
+assert 'join' not in calls('qualified-join'), calls('qualified-join')
 print('PASS Clojure definitions, kinds, calls, quote/discard negatives, and four extensions')
 PY
 

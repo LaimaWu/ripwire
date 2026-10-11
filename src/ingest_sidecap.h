@@ -2319,6 +2319,10 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 r.lang      = le.lang;
                 r.role      = isImportRef ? RefRole::Import : RefRole::Call;   // ABS-3: @reference.call is a call use-site; @reference.import a using-decl re-export
                 r.name      = finalSegment( nameTxt );
+                if( le.lang == Lang::Clojure )
+                {
+                    r.qualifier = nodeFieldText( ts_node_parent( nameNode ), NodeField::Namespace, src );
+                }
                 if( le.lang == Lang::Elixir )
                 {
                     r.qualifier = elixir.scopeOf( roleNode );

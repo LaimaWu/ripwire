@@ -3,6 +3,8 @@
 (def answer 42)
 (defonce cached 1)
 (defn square [x] (* x x))
+(defn join [xs] xs)
+(defn qualified-join [] (str/join "," ["a" "b"]))
 (defn- secret [x] (square x))
 (defmacro unless [pred & body] `(if (not ~pred) ~@body))
 (defmulti area :shape)
@@ -21,6 +23,7 @@
 
 (def quoted '(defn phantom [] (missing-call)))
 (defn quoted-holder [] '(square 1))
+(defn comment-holder [] (comment (square 1)))
 `(defn phantom2 [] (other-missing))
 #_(defn discarded [] (never-called))
 

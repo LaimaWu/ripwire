@@ -312,7 +312,10 @@ constexpr std::uint32_t kCacheVersion = 29;           // 29: FE-B (test/receiver
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 156;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 158;          // provisional for PR #349; maintainer assigns the landing value
+                                                      // 158 = 2026-10-11 (PR #349, provisional): Clojure grammar/query/extraction
+                                                      //   and the written namespace on qualified Clojure calls. Rich tag 159;
+                                                      //   main's 156/157 lean/rich pair remains distinct. Reconfirm before merge.
                                                       // 156 = 2026-10-08 (train 26b: signed lanes merged onto main's 148): cache-key hygiene.
                                                       //   Two merged lanes changed extraction under lane-local numbers, both 145:
                                                       //   honesty-small-068 (Go named-type kinds, `type A = B` aliases) and

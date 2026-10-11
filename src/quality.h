@@ -2281,7 +2281,9 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 29;   // MUST equal ingest.cpp's kCacheVersion (gated); 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 156;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 158;  // MUST equal ingest.cpp's kParserVer   (gated); PR #349 provisional
+                                                          // 158 = 2026-10-11 (PR #349, Clojure grammar/query/extraction and qualified-call namespace;
+                                                          //   provisional until the maintainer reserves the landing value)
                                                           // 156 = 2026-10-08 (train 26b: above every lane build, up to 154 / rich tag 155; see the
                                                           //   kParserVer note)
                                                           // 148 = 2026-10-04 (train 26a: PR #373 merged; above the branch's 145 and the 145–147

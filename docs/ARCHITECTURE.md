@@ -259,7 +259,8 @@ invalid clj-kondo corpus files; the third was a Metabase test file.
 
 `queries/clojure/tags.scm` captures structural two-symbol defining lists and direct symbolic list
 heads. `ingest_clojure.h` classifies namespaces, vars, functions, multimethods, macros, protocols,
-records and types, and rejects quoted, syntax-quoted and reader-discarded subtrees. Macro-generated
+records and types, and rejects quoted, syntax-quoted, reader-discarded and `(comment …)` subtrees. Syntax-quote
+`~`/`~@` live holes and shared inert-reference accounting are deferred to issue #357. Macro-generated
 definitions and calls, dynamic invocation, namespace aliases/import resolution and protocol/type
 method symbols are not inferred. Multi-arity functions report inexact arity, so call resolution does
 not narrow on a guess. Clojure does not claim dependency capability until namespace forms have a

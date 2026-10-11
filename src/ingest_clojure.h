@@ -52,12 +52,13 @@ ClojureDefinitionShape clojureDefinitionShape( TSNode list, std::string_view src
     return {};
 }
 
-bool clojureQuotedOrDiscarded( TSNode node ) noexcept
+bool clojureInert( TSNode node, std::string_view src ) noexcept
 {
     for( TSNode parent = ts_node_parent( node ); !ts_node_is_null( parent ); parent = ts_node_parent( parent ) )
     {
         const char* type = ts_node_type( parent );
-        if( kindIs( type, "quoting_lit" ) || kindIs( type, "syn_quoting_lit" ) || kindIs( type, "dis_expr" ) )
+        if( kindIs( type, "quoting_lit" ) || kindIs( type, "syn_quoting_lit" ) || kindIs( type, "dis_expr" )
+            || ( kindIs( type, "list_lit" ) && clojureListHead( parent, src ) == "comment" ) )
         {
             return true;
         }
@@ -78,7 +79,7 @@ bool clojureDeclarationMethod( TSNode list, std::string_view src ) noexcept
 
 bool clojureKeepCapture( TSNode role, bool isDef, std::string_view src ) noexcept
 {
-    if( clojureQuotedOrDiscarded( role ) )
+    if( clojureInert( role, src ) )
     {
         return false;
     }
@@ -95,7 +96,7 @@ bool clojureKeepCapture( TSNode role, bool isDef, std::string_view src ) noexcep
         "if", "if-not", "when", "when-not", "cond", "case", "do", "let", "letfn", "loop", "recur",
         "fn", "fn*", "quote", "var", "set!", "new", ".", "throw", "try", "catch", "finally", "monitor-enter",
         "monitor-exit", "locking", "binding", "with-open", "doseq", "for", "dotimes", "doto", "->", "->>", "as->",
-        "some->", "some->>", "cond->", "cond->>", "and", "or"
+        "some->", "some->>", "cond->", "cond->>", "and", "or", "comment"
     };
     const std::string_view head = clojureListHead( role, src );
     return !head.empty() && std::find( std::begin( specialForms ), std::end( specialForms ), head ) == std::end( specialForms );
