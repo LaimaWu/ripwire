@@ -1500,6 +1500,9 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // whereis arm, a non-string `listing:5` decoded to "" after that gate had run, its shape refusal was dropped, and the
             // closed-set refusal then told the caller it sent '' (CodeRabbit 5468003465; test/crossrefcheck.sh LEAN (L10b)).
             const std::string listingArg = strArg( "listing" );
+            // whereis: full_text (the CLI --whereis-full-text twin) prints every t= line whole and lifts nothing else. A BOOLEAN,
+            // read here with the other typed arguments so a wrong-shaped value refuses through the shared gate (checklist 26).
+            const bool whereisFullText = boolArg( "full_text" ).value;
             // grep: code|any (the CLI --grep-in twin). The `listing` sibling (CodeRabbit 5468003465, checklist 26): read inside the
             // grep arm, a non-string `in:5` decoded to "" after the shape gate had run, its refusal was dropped, and the arm then
             // answered the default tier as if nothing had been sent. test/greptiercheck.sh (9e).
@@ -2332,7 +2335,8 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     {
                         bool              seedFault = false;
                         bool              blobFault = false;
-                        const std::string t = whereisText( path, symbol, kind, crossref::kWhereisHits, pg, &seedFault, listing, &blobFault );
+                        const std::string t = whereisText( path, symbol, kind, crossref::kWhereisHits, pg, &seedFault, listing, &blobFault,
+                                                            whereisFullText );
                         if( seedFault )
                         {
                             return errResultMsg( -32602, mcprefuse::notFound( getIndex( path ).ing, "symbol", symbol ) );

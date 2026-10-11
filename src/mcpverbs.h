@@ -561,7 +561,7 @@ inline std::string rankByText( const std::string& root, std::string_view mode, i
 inline std::string whereisText( const std::string& root, const std::string& symbol, const std::string& filter,
                                 std::size_t maxHits, McpPageArgs page = {}, bool* seedFault = nullptr,
                                 crossref::WhereisListing listing = crossref::WhereisListing::ShorterOfDefsAll,
-                                bool* blobFault = nullptr )
+                                bool* blobFault = nullptr, bool fullText = false )
 {
     std::string sel = symbol;
     std::string seedSpec;
@@ -587,7 +587,8 @@ inline std::string whereisText( const std::string& root, const std::string& symb
         if( blobFault != nullptr ) { *blobFault = true; }
         return {};
     }
-    res.seedSpec = std::move( seedSpec );
+    res.seedSpec  = std::move( seedSpec );
+    res.textWhole = fullText;   // full_text, the CLI --whereis-full-text: every t= whole, nothing else lifted
     // The tree zero stays an answer; the near-miss only says WHICH zero it is. Computed only on the zero,
     // so a real hit list costs nothing and is byte-identical to before.
     // Review M3/M7, the CLI twin's rule: the dotted note only for a method the index defines; on a zero over a dirty

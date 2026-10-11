@@ -146,6 +146,23 @@ constexpr std::uint32_t kMaxRefs         = 512;      // refusal bound — a swee
 // bury it under thousands of rows. What is dropped is always COUNTED in a <more/> element, never silently.
 constexpr std::size_t   kStrayFilesPerRef = 12;
 constexpr std::size_t   kWhereisHits      = 60;
+// --whereis: a row's t= is a PREVIEW of a LONG source line: a line over kWhereisTextWholeMaxBytes bytes prints its first
+// bytes, cut on a UTF-8 boundary, plus an ellipsis (truncateUtf8WithEllipsis) — kWhereisTextPreviewCapBytes at most, the
+// ellipsis included — and the row says the whole line's size (t_bytes=); any shorter line prints whole. Picked from the data:
+// over 978 t= values of the 26c command sweep (9 repos, every whereis listing) the median line is 54 B and the 95th
+// percentile 108 B, so the cap binds only on the tail; on ripwire's own --whereis=lego 38 of 60 rows were 206 B - 7.3 KB
+// (a Python dict, markdown paragraphs, a legend literal) and held 121 KB of the 129 KB answer. The 100-byte gap between the
+// two (the MIN DROP) keeps a cut worth its disclosure: a 202-byte line cut to 200 saved 2 bytes and its page paid ~330 B of t_bytes=, <t_cut> and their
+// readings (ripwire's --whereis=ripwire, 16,084 -> 16,415 B), so a cut always drops at least 100 bytes of the line. Even so a
+// page whose only long lines sit just past the threshold can pay more for its disclosure than its cuts save (review C2: one
+// 395-byte line, +158 B), so a page prints its previews only when that page is SHORTER than the same page whole
+// (writeWhereisPage measures both). --whereis-full-text (MCP full_text) prints every line whole and lifts nothing else: the
+// <t_cut next=> element names that replay of the same page; --detail lifts it with the row cap and the parse guard.
+constexpr std::size_t   kWhereisTextPreviewCapBytes = 200;   // the printed preview, the ellipsis included
+constexpr std::size_t   kWhereisTextWholeMaxBytes   = 300;   // a line up to this prints whole, so a cut drops 100+ bytes
+constexpr std::size_t   kUtf8EllipsisBytes          = 3;     // U+2026, as truncateUtf8WithEllipsis appends it
+static_assert( kWhereisTextPreviewCapBytes > kUtf8EllipsisBytes && kWhereisTextWholeMaxBytes > kWhereisTextPreviewCapBytes,
+               "the preview leaves room for its ellipsis and is shorter than every line it previews" );
 
 // --whereis: the RUNAWAY GUARD on the tags parse of other refs' blobs (labelBranchRowsByParse; --detail=N lifts it). Only a
 // blob holding a parse-worthy row (parseWorthyLine) is parsed, one parse per distinct (blob, path): ripwire's own most-called helper
@@ -1579,6 +1596,7 @@ struct WhereResult
     bool                  headHolds = false;   // HEAD's COMMITTED tree holds SYM (on-head= reads the CHECKOUT on a dirty tree)
     std::string           dottedRetry;         // a Class.method spelling whose method the INDEX defines: the bare name (caller-set)
     std::string           renamedTo;           // the working tree renamed SYM to this definition (caller-set, on a zero)
+    bool                  textWhole = false;   // every t= prints whole (caller-set: --detail, --whereis-full-text, MCP full_text)
 
     // T1 (completeness claims): true iff the scan PROVABLY covered every text blob of every scanned ref's
     // full tree — no missing/oversized/short-read blob, the batch served every sha, and no ref's tree
@@ -2344,7 +2362,8 @@ struct BranchParseJob
 {
     std::string                sha;          // the blob (with `path`, the unit one parse answers)
     std::string                path;         // the tree path: its extension picks the grammar
-    std::string                bytes;        // the blob, kept only when it holds a parse-worthy row
+    std::size_t                size = 0;     // the blob's bytes, recorded when it holds a parse-worthy row (the guard's measure)
+    std::string                bytes;        // the blob itself, read only once the batch picked this job (labelBranchRowsByParse)
     std::vector<std::uint32_t> hitLines;     // the blob's hit lines, ascending (one hit per line)
     std::vector<std::size_t>   rows;         // every WhereHit this (blob, path) produced on a non-HEAD ref
     std::size_t                headFirst = 0, headEnd = 0;   // HEAD's rows of this same (blob, path), when HEAD holds it
@@ -2423,7 +2442,7 @@ inline std::vector<std::size_t> branchParseBatch( const std::vector<BranchParseJ
     std::size_t              bytes = 0;
     for( const std::size_t j : want )
     {
-        const std::size_t size = jobs[ j ].bytes.size();
+        const std::size_t size = jobs[ j ].size;
         if( batch.size() >= budget.maxBlobs || size > budget.maxBytes - bytes )
         {
             break;   // the guard: this job and every later one confirm nothing (counted below by the caller)
@@ -2485,15 +2504,83 @@ inline void applyBlobDefinitions( WhereResult& result, const BranchParseJob& job
     }
 }
 
-inline void labelBranchRowsByParse( WhereResult& result, std::vector<BranchParseJob>& jobs, const WhereisParseBudget& budget )
+// The bytes of the blobs the batch chose, read back from the object store: the scan kept only their sizes, so peak memory
+// holds the batch (at most the guard's bytes by default; every candidate under --detail) and never more. A blob is read once however many of the batch's
+// paths hold it. Returns, per batch entry, whether its bytes came back whole (an immutable object of the size the scan saw);
+// one that did not — the stream died, the object went missing between the two reads — is answered as unparsed by the caller.
+// The DISCLOSE sink of one batch entry's read-back (readBranchParseBatch): `whole` is what labelBranchRowsByParse reads.
+struct BranchBlobReadBack
+{
+    enum class DisclosureWhy : std::uint8_t
+    {
+        NotReadBackWhole,   // the second read served no text blob, or one of another size than the scan's
+    };
+    bool whole = true;
+    void disclose( DisclosureWhy ) noexcept { whole = false; }   // its one reason: the entry confirms nothing
+};
+
+inline std::vector<BranchBlobReadBack> readBranchParseBatch( const std::string& root, std::vector<BranchParseJob>& jobs,
+                                                             std::span<const std::size_t> batch )
+{
+    std::vector<std::string> shas;          // the batch's distinct blobs, in first-use order
+    std::vector<std::size_t> shaOf( batch.size() );
+    for( std::size_t k = 0; k < batch.size(); ++k )
+    {
+        const std::string& sha = jobs[ batch[ k ] ].sha;
+        // A linear find, so this loop and the last-use scan below are O(n^2) in the batch: n is at most the guard's 256 blobs
+        // by default, but every candidate under --detail (~725 on ripwire's own lego, ~0.5 M string compares, not measurable
+        // beside the parse; review C4). Index the shas if a --detail batch ever reaches the tens of thousands.
+        const auto         it  = std::find( shas.begin(), shas.end(), sha );
+        shaOf[ k ]             = std::size_t( it - shas.begin() );
+        if( it == shas.end() ) { shas.push_back( sha ); }
+    }
+    std::vector<std::string> bytes( shas.size() );
+    std::vector<char>        served( shas.size(), 0 );
+    StreamBlobStats          stats;
+    streamBlobsInSlices( root, shas, kWhereisStreamSlices, [ & ]( std::size_t i, const std::string&, std::string_view b, bool isText )
+    {
+        if( isText )
+        {
+            bytes[ i ].assign( b );
+            served[ i ] = 1;
+        }
+    }, stats );
+    std::vector<BranchBlobReadBack> reads( batch.size() );
+    for( std::size_t k = 0; k < batch.size(); ++k )
+    {
+        // The second read is external input: a blob that came back short or not at all confirms nothing.
+        if( served[ shaOf[ k ] ] == 0 || bytes[ shaOf[ k ] ].size() != jobs[ batch[ k ] ].size )
+        {
+            DISCLOSE( reads[ k ], BranchBlobReadBack::DisclosureWhy::NotReadBackWhole,
+                      "whereis: a blob the parse batch chose did not read back whole; its rows confirm nothing (kind=text, counted in <unparsed>)" );
+        }
+    }
+    // Hand each chosen job its bytes: the last job of a blob takes them, the others copy (a blob at two paths is rare).
+    for( std::size_t k = 0; k < batch.size(); ++k )
+    {
+        if( !reads[ k ].whole ) { continue; }
+        const bool lastUse = std::none_of( batch.begin() + std::ptrdiff_t( k + 1 ), batch.end(),
+                                           [ & ]( std::size_t j ) { return jobs[ j ].sha == jobs[ batch[ k ] ].sha; } );
+        jobs[ batch[ k ] ].bytes = lastUse ? std::move( bytes[ shaOf[ k ] ] ) : bytes[ shaOf[ k ] ];
+    }
+    return reads;
+}
+
+inline void labelBranchRowsByParse( const std::string& root, WhereResult& result, std::vector<BranchParseJob>& jobs, const WhereisParseBudget& budget )
 {
     std::vector<char>              answered = answerWithoutParse( result, jobs );
     const std::vector<std::size_t> batch    = branchParseBatch( jobs, answered, budget, result.branchLabels );
+    const std::vector<BranchBlobReadBack> reads = readBranchParseBatch( root, jobs, batch );
     std::vector<BlobText>          blobs;
+    std::vector<std::size_t>       parsedJobs;   // the batch entries whose bytes read back whole, in batch order
     blobs.reserve( batch.size() );
-    for( const std::size_t j : batch )
+    for( std::size_t k = 0; k < batch.size(); ++k )
     {
-        blobs.push_back( BlobText{ jobs[ j ].path, jobs[ j ].bytes } );
+        if( reads[ k ].whole )
+        {
+            blobs.push_back( BlobText{ jobs[ batch[ k ] ].path, jobs[ batch[ k ] ].bytes } );
+            parsedJobs.push_back( batch[ k ] );
+        }
     }
     std::vector<BlobDefinitions> parsed;
     if( !blobs.empty() )
@@ -2502,11 +2589,21 @@ inline void labelBranchRowsByParse( WhereResult& result, std::vector<BranchParse
         std::lock_guard<std::mutex> ingestLk( quality::headSnapshotIngestMutex() );
         parsed = definitionLinesInBlobs( blobs, result.sym );
     }
-    ENSURES( parsed.size() == batch.size(), "one answer per (blob, path) handed to the parser" );
+    ENSURES( parsed.size() == parsedJobs.size(), "one answer per (blob, path) handed to the parser" );
+    for( std::size_t k = 0; k < parsedJobs.size(); ++k )
+    {
+        applyBlobDefinitions( result, jobs[ parsedJobs[ k ] ], parsed[ k ] );
+        answered[ parsedJobs[ k ] ] = 1;
+        std::string().swap( jobs[ parsedJobs[ k ] ].bytes );   // parsed: release the bytes before the answer is written
+    }
     for( std::size_t k = 0; k < batch.size(); ++k )
     {
-        applyBlobDefinitions( result, jobs[ batch[ k ] ], parsed[ k ] );
-        answered[ batch[ k ] ] = 1;
+        if( !reads[ k ].whole )
+        {
+            labelJobRows( result, jobs[ batch[ k ] ], {}, false );   // chosen but not read back: confirms nothing, as a failed parse
+            ++result.branchLabels.failed;
+            answered[ batch[ k ] ] = 1;
+        }
     }
     for( std::size_t j = 0; j < jobs.size(); ++j )
     {
@@ -3107,12 +3204,14 @@ inline WhereisSites whereisSitesOf( const std::string& root, const std::vector<R
 }
 
 // One blob's scan, done on the stream's own worker thread (streamBlobsInSlices): a pure function of the bytes — its hit
-// rows (stamped with no ref yet) and the bytes themselves only when some row is parse-worthy.
+// rows (stamped with no ref yet) and, when some row is parse-worthy, the blob's SIZE. The bytes are not kept: holding
+// every candidate's bytes until the runaway guard picked its batch cost 0.7-1.3 GB of peak RSS on hot names (the
+// whereis-lean lane); the batch reads back only the blobs it chose (readBranchParseBatch).
 struct WhereisBlobScan
 {
-    bool                  hasSym = false;   // a text blob holding the name's bytes (the cheap reject passed)
-    std::vector<WhereHit> rows;             // its hits; empty ⇔ no whole-word occurrence (hasWholeWord)
-    std::string           bytes;            // kept only for a parse-worthy blob (labelBranchRowsByParse)
+    bool                  hasSym     = false;   // a text blob holding the name's bytes (the cheap reject passed)
+    std::vector<WhereHit> rows;                 // its hits; empty ⇔ no whole-word occurrence (hasWholeWord)
+    std::size_t           parseBytes = 0;       // the blob's size, for a parse-worthy blob (the guard's measure); else 0
 };
 
 inline std::vector<WhereisBlobScan> scanWhereisBlobs( const std::string& root, const std::vector<std::string>& shas, std::string_view sym,
@@ -3130,7 +3229,7 @@ inline std::vector<WhereisBlobScan> scanWhereisBlobs( const std::string& root, c
         scanBlobForSymbol( bytes, sym, RefInfo{}, std::string(), b.rows );
         if( std::any_of( b.rows.begin(), b.rows.end(), []( const WhereHit& h ) { return h.parseWorthy; } ) )
         {
-            b.bytes.assign( bytes );
+            b.parseBytes = bytes.size();
         }
     }, stats );
     return scans;
@@ -3145,7 +3244,7 @@ struct WhereisHeadRows
 };
 
 // Rows [firstRow, end of hits) are one non-HEAD site's copy of a blob: add them to the (blob, path) job, opening it
-// (with the blob's hit lines, its parse-worthiness, HEAD's rows of the same path and the bytes a parse would need)
+// (with the blob's hit lines, its parse-worthiness, HEAD's rows of the same path and the size a parse would read)
 // the first time that path is seen for this blob.
 inline void noteBranchRows( std::vector<BranchParseJob>& jobs, std::size_t firstJobOfBlob, const WhereResult& result, std::size_t firstRow,
                             const std::string& sha, const WhereisSite& site, std::span<const WhereisHeadRows> headRows, const WhereisBlobScan& scan )
@@ -3169,7 +3268,7 @@ inline void noteBranchRows( std::vector<BranchParseJob>& jobs, std::size_t first
         }
         if( fresh.shaped )
         {
-            fresh.bytes = scan.bytes;   // kept for the parse batch (a mirror of HEAD's labels may yet make it unneeded)
+            fresh.size = scan.parseBytes;   // the guard's measure; the bytes are read only if the batch picks this job
         }
         jobs.push_back( std::move( fresh ) );
         job = jobs.end() - 1;
@@ -3301,7 +3400,7 @@ inline WhereResult computeWhereis( const std::string& root, std::string_view sym
     // before references" is a sort key and a wrong label re-orders the first screen.
     result.headLabelsFromIndex = relabelHeadHitsFromIndex( result.hits, evidence.indexDefs );
     // …and the other refs' rows are a PARSER's answer too, after HEAD's: a ref holding HEAD's own blob takes HEAD's labels.
-    labelBranchRowsByParse( result, branchJobs, budget );
+    labelBranchRowsByParse( root, result, branchJobs, budget );
     demoteTestLocalDefs( result.hits );
 
     // The checkout first, then refs by name; within a group, SOURCE before test before docs (§P11.5, see this
@@ -3851,6 +3950,7 @@ struct ListedHits
     std::size_t              refsElided = 0;
     std::size_t              defsFolded = 0;   // def rows of other refs a listed row's refs= stands for (folded="N" on the root)
     WhereisListing           asked      = WhereisListing::ShorterOfDefsAll;   // the listing the question named (whereisServedListing)
+    bool                     textPreview = false;   // a long t= prints as a preview (writeWhereisPage: only when that page is shorter)
 };
 
 // kind= of a row: "def" (a parser's definition), "text" (a parse-worthy line on another ref no parse confirmed,
@@ -4017,14 +4117,28 @@ inline void writeWhereisRoot( std::FILE* out, const WhereResult& res, const Wher
 
 }
 
+// The --detail=1 replay of the SAME question (the <unparsed next=>): the symbol, the listing the question named (an explicit
+// one; the default stays the default) and the detail flag, which lifts every cap of this verb (the row cap, the parse guard,
+// the t= preview). A ref filter (the MCP `kind`) is NOT carried, as <refs next=> does not
+// carry it: the CLI has no whereis ref filter (--stray-content= is another verb, and naming it would run that verb instead),
+// and the legend's UNPARSED clause says so.
+inline std::string whereisDetailNext( const WhereResult& res, WhereisListing asked )
+{
+    std::string call = nextFlag( "--whereis=", res.sym );
+    switch( asked )
+    {
+        case WhereisListing::Defs: call += " --whereis-listing=defs"; break;
+        case WhereisListing::Refs: call += " --whereis-listing=refs"; break;
+        case WhereisListing::All:  call += " --whereis-listing=all"; break;
+        case WhereisListing::ShorterOfDefsAll: break;
+    }
+    return nextAttrXml( call + " --detail=1" );
+}
+
 // <unparsed blobs= rows= next=>: the other refs' (blob, path) pairs that held a parse-worthy row and confirm
 // nothing — the runaway guard left them (WhereisParseBudget) or the parser could not finish — and the rows of theirs
 // that read kind="text". next= rides only when the guard left some: --detail=1 lifts it. Absent when every
 // parse-worthy blob was parsed (or mirrored HEAD's), so an answer the guard never touched is byte-identical.
-// The <unparsed next=> replays the SAME question with the guard lifted: the symbol, the listing the question named
-// (an explicit one; the default stays the default) and the detail flag. A ref filter (the MCP `kind`) is NOT carried,
-// as <refs next=> does not carry it: the CLI has no whereis ref filter (--stray-content= is another verb, and naming it
-// would run that verb instead), and the legend's UNPARSED clause says so.
 inline void writeWhereisUnparsed( std::FILE* out, const WhereResult& res, WhereisListing asked )
 {
     const BranchLabelCensus& c = res.branchLabels;
@@ -4032,20 +4146,74 @@ inline void writeWhereisUnparsed( std::FILE* out, const WhereResult& res, Wherei
     {
         return;
     }
-    std::string next;
-    if( c.leftByGuard > 0 )
-    {
-        std::string call = nextFlag( "--whereis=", res.sym );
-        switch( asked )
-        {
-            case WhereisListing::Defs: call += " --whereis-listing=defs"; break;
-            case WhereisListing::Refs: call += " --whereis-listing=refs"; break;
-            case WhereisListing::All:  call += " --whereis-listing=all"; break;
-            case WhereisListing::ShorterOfDefsAll: break;
-        }
-        next = nextAttrXml( call + " --detail=1" );
-    }
+    const std::string next = c.leftByGuard > 0 ? whereisDetailNext( res, asked ) : std::string();
     rw::emitTo( out, "<unparsed blobs=\"{}\" rows=\"{}\"{}/>", c.leftByGuard + c.failed, c.textRows, next.c_str() );
+}
+
+// Whether a row prints its t= as a preview (and carries t_bytes=): this page prints previews (writeWhereisPage served the
+// cut page because it is shorter than the same page whole) and the line is over kWhereisTextWholeMaxBytes, so a cut drops at
+// least the 100 bytes between that and kWhereisTextPreviewCapBytes. A page that prints previews cuts EVERY such row.
+inline bool whereisTextCut( const ListedHits& listed, const WhereHit& h ) noexcept
+{
+    if( !listed.textPreview )
+    {
+        return false;   // the page prints whole: its cut render was not shorter, or --detail / the full-text flag asked
+    }
+    return h.text.size() > kWhereisTextWholeMaxBytes;
+}
+
+// The rows of this page whose t= is a preview (whereisTextCut): the <t_cut rows=> count and the trigger of the legend's
+// PREVIEW clause, so both ride exactly the pages that print a cut row and an answer of short lines is byte-identical.
+inline std::size_t whereisPageCutRows( const WhereResult& res, const ListedHits& listed, const PageWindow& hitPage )
+{
+    std::size_t cut = 0;
+    for( std::size_t k = hitPage.begin; k < hitPage.end; ++k )
+    {
+        cut += whereisTextCut( listed, res.hits[ listed.rows[ k ] ] ) ? 1 : 0;
+    }
+    return cut;
+}
+
+// The <t_cut next=>: THIS PAGE again with every line whole (review C1, rule 5: a cut is recovered by the page it cut, not by
+// a different answer). It names the listing the page SERVED (a default page replays the listing it chose, written out), the
+// page's own window (--limit / --offset when it was paged), --with-history when the fate rows rode, and --whereis-full-text,
+// which lifts the preview and nothing else: the parse guard and the row cap stay, so every kind= label, the row order and the
+// window are the page's own, and the replay is the same rows with whole lines (test/crossrefcheck.sh 5h, the X2 arms).
+// --detail=1 is NOT this call: it lifts the guard as well, which relabels a kind="text" call site kind="ref" (it leaves the
+// defs page), and it unpages a refs or all listing (25 MB for a hot name). The MCP `kind` filter is not carried
+// (whereisDetailNext says why).
+inline std::string whereisFullTextNext( const WhereResult& res, const WhereisPageView& v )
+{
+    std::string call = nextFlag( "--whereis=", res.sym ) + " --whereis-listing=";
+    call += v.listed.attr.empty() ? std::string_view( "all" ) : v.listed.attr;
+    if( v.pageLimit > 0 )
+    {
+        call += " --limit=" + std::to_string( v.pageLimit );
+    }
+    if( v.pageOffset > 0 )
+    {
+        call += " --offset=" + std::to_string( v.pageOffset );
+    }
+    if( res.history != nullptr )
+    {
+        call += " --with-history";
+    }
+    return nextAttrXml( call + " --whereis-full-text" );
+}
+
+// <t_cut rows= next= uncarried=>: rows= rows of this page print a t= preview (each carries t_bytes=, the whole line's bytes),
+// and next= replays this page with every line whole (whereisFullTextNext). Absent when no row was cut. On a page the MCP
+// `kind` ref filter bounded, next= cannot carry the filter (the CLI has no whereis ref filter), so it replays OTHER rows:
+// uncarried= names the dropped filter and the PREVIEW clause names the recovery (MCP whereis with full_text:true), review
+// D1, rule 5 (test/crossrefcheck.sh 5h, the D1 arm). An unfiltered page carries no uncarried= and is byte-identical.
+inline void writeWhereisTextCut( std::FILE* out, const WhereResult& res, const WhereisPageView& v, std::size_t cutRows,
+                                 const XmlEscaper& ex )
+{
+    if( cutRows > 0 )
+    {
+        const std::string uncarried = res.filter.empty() ? std::string() : ( " uncarried=\"" + ex( res.filter ) + "\"" );
+        rw::emitTo( out, "<t_cut rows=\"{}\"{}{}/>", cutRows, whereisFullTextNext( res, v ).c_str(), uncarried.c_str() );
+    }
 }
 
 // The rows of the page, its <more hits=> remainder and the <refs count= next=> element (writeWhereisPage).
@@ -4063,16 +4231,34 @@ inline void writeWhereisRows( std::FILE* out, const WhereResult& res, const List
     {
         const WhereHit& h = res.hits[ listed.rows[ k ] ];
         ++shownCount;
+        // t= is a PREVIEW (kWhereisTextPreviewCapBytes) on a page that prints previews: a longer line prints its first bytes,
+        // cut on a UTF-8 boundary with the ellipsis, and t_bytes= says the whole line's size. A line that fits prints whole
+        // and carries no t_bytes=.
+        std::string       preview;
+        std::string       cutAttr;
+        std::string_view  text = h.text;
+        if( whereisTextCut( listed, h ) )
+        {
+            // The cap counts the ellipsis: the kept prefix is 3 bytes shorter, so a cut t= is never longer than the cap
+            // (nor than the line it previews, which a cut at the cap plus the ellipsis made of a 201-byte line).
+            preview = h.text;
+            truncateUtf8WithEllipsis( preview, kWhereisTextPreviewCapBytes - kUtf8EllipsisBytes );
+            ENSURES( preview.size() <= kWhereisTextPreviewCapBytes && preview.size() < h.text.size(),
+                     "a cut t= fits the cap, ellipsis included, and is shorter than the line" );
+            cutAttr = " t_bytes=\"" + std::to_string( h.text.size() ) + "\"";
+            text    = preview;
+        }
         if( whereisRowOnHeadCommit( h, res.headSha, headDate ) )
         {
-            rw::emitTo( out, "<hit ref=\"{}\" p=\"{}\" l=\"{}\" kind=\"{}\"{} t=\"{}\"/>",
+            rw::emitTo( out, "<hit ref=\"{}\" p=\"{}\" l=\"{}\" kind=\"{}\"{}{} t=\"{}\"/>",
                           ex( h.ref ).c_str(), ex( h.path ).c_str(),
-                          h.line, whereisKindOf( h ), h.testLocal ? " test_local=\"1\"" : "", ex( h.text ).c_str() );
+                          h.line, whereisKindOf( h ), h.testLocal ? " test_local=\"1\"" : "", cutAttr.c_str(), ex( text ).c_str() );
             continue;
         }
-        rw::emitTo( out, "<hit ref=\"{}\" tip=\"{:.9}\" date=\"{}\" p=\"{}\" l=\"{}\" kind=\"{}\"{}{} t=\"{}\"/>",
+        rw::emitTo( out, "<hit ref=\"{}\" tip=\"{:.9}\" date=\"{}\" p=\"{}\" l=\"{}\" kind=\"{}\"{}{}{} t=\"{}\"/>",
                       ex( h.ref ).c_str(), h.tip.c_str(), ex( h.date ).c_str(), ex( h.path ).c_str(),
-                      h.line, whereisKindOf( h ), h.testLocal ? " test_local=\"1\"" : "", whereisSharedAttr( listed, h ).c_str(), ex( h.text ).c_str() );
+                      h.line, whereisKindOf( h ), h.testLocal ? " test_local=\"1\"" : "", whereisSharedAttr( listed, h ).c_str(),
+                      cutAttr.c_str(), ex( text ).c_str() );
     }
     ASSUME( shownCount == hitPage.end - hitPage.begin );
     // <more hits="N"/> = the LISTED rows AFTER this page, so shown + more == the listed rows from this page's offset
@@ -4091,6 +4277,16 @@ inline void writeWhereisRows( std::FILE* out, const WhereResult& res, const List
     }
 }
 
+// The window one --whereis page prints over its listed rows. An explicit --limit overrides maxHits (the caller's 60-hit
+// display default, or SIZE_MAX under --detail); --offset skips whole rows and clamps at the end, so offset-past-the-end is
+// an empty page rather than an out-of-range read. maxHits can be SIZE_MAX, which pageWindow's int limit cannot carry —
+// clamp the "no explicit --limit" arm to the row count instead of overflowing it.
+inline PageWindow whereisHitWindow( std::size_t listedCount, std::size_t maxHits, int pageLimit, int pageOffset )
+{
+    const int rowCap = pageLimit > 0 ? pageLimit : ( maxHits >= listedCount ? int( listedCount ) : int( maxHits ) );
+    return pageWindow( listedCount, rowCap, pageOffset );
+}
+
 // Contract-level defect: this verb said hits="2560" and printed 60, and
 // --limit/--offset were accepted and ignored, so a paging loop over it never advanced and never ended.
 // `pageLimit`/`pageOffset` (0 = un-paginated) window the hit list, which is already deterministically
@@ -4107,14 +4303,7 @@ inline void writeWhereisListedPage( std::FILE* out, const WhereResult& res, std:
     std::vector<char> esc;
     const XmlEscaper  ex = [ & ]( std::string_view s ) { return std::string( escapeXml( s, esc ) ); };
 
-    // The emitted window. An explicit --limit overrides maxHits (the caller's 60-hit display default, or
-    // SIZE_MAX under --detail); --offset skips whole rows and clamps at the end, so offset-past-the-end is
-    // an empty page rather than an out-of-range read. maxHits can be SIZE_MAX, which pageWindow's int limit
-    // cannot carry — clamp the "no explicit --limit" arm to the row count instead of overflowing it.
-    const std::size_t listedCount = listed.rows.size();
-    const int         rowCap  = pageLimit > 0 ? pageLimit
-                              : ( maxHits >= listedCount ? int( listedCount ) : int( maxHits ) );
-    const PageWindow  hitPage = pageWindow( listedCount, rowCap, pageOffset );
+    const PageWindow  hitPage = whereisHitWindow( listed.rows.size(), maxHits, pageLimit, pageOffset );
 
     rw::emitRaw( out, "<!-- ripwire whereis: every LOCAL ref whose TREE contains this symbol, HEAD first, and within a ref "
                        "SOURCE files before test files before docs, then definitions before references, then path and line. "
@@ -4207,6 +4396,27 @@ inline void writeWhereisListedPage( std::FILE* out, const WhereResult& res, std:
     {
         rw::emitRaw( out, kWhereisSharedDefsLegend );
     }
+    // The PREVIEW clause rides exactly the pages that print a cut t= (whereisPageCutRows), so a page of short lines is
+    // byte-identical to the answer before the cap. No double hyphen inside: the clause sits in an XML comment.
+    const std::size_t cutRows = whereisPageCutRows( res, listed, hitPage );
+    if( cutRows > 0 )
+    {
+        rw::emitTo( out, "PREVIEW: t= is the row's trimmed source line when it fits {} bytes; a longer line prints a preview of {} bytes at "
+                         "most, its first bytes cut on a UTF-8 boundary and an ellipsis, and that row carries t_bytes= (the whole line's "
+                         "size in bytes). A page prints previews only when that makes it shorter than the same page whole, and then it "
+                         "cuts every such line. The t_cut element counts this page's preview rows; its next= replays THIS page (its "
+                         "listing, window, rows and labels) with the whereis full text flag (MCP full_text), which prints every line "
+                         "whole and lifts nothing else. ",
+                     kWhereisTextWholeMaxBytes, kWhereisTextPreviewCapBytes );
+        // D1: present only on a page a ref filter bounded (the t_cut uncarried= attribute), so an unfiltered page is
+        // byte-identical. The next= above then replays the unfiltered listing, which holds other rows.
+        if( !res.filter.empty() )
+        {
+            rw::emitRaw( out, "This page was bounded by a ref filter (MCP kind, named by the t_cut uncarried attribute): the CLI "
+                              "replay has no kind filter, so that next= lists the unfiltered refs and other rows; call MCP whereis "
+                              "with full_text:true to recover this page. " );
+        }
+    }
     writeWhereisLegendTail( out, res );
     std::fputs( "-->", out );
     const std::string headDate = whereisHeadDate( res );
@@ -4225,6 +4435,7 @@ inline void writeWhereisListedPage( std::FILE* out, const WhereResult& res, std:
     // row is printed unless the index itself already proved the symbol is defined on HEAD.
     writeWhereisFate( out, res, ex );
     writeWhereisUnparsed( out, res, listed.asked );
+    writeWhereisTextCut( out, res, WhereisPageView{ listed, hitPage, pageLimit, pageOffset }, cutRows, ex );
 
     writeWhereisRows( out, res, listed, hitPage, headDate, ex );
     rw::emitRaw( out, "</whereis>" );
@@ -4291,13 +4502,37 @@ inline ListedHits whereisServedListing( const WhereResult& res, std::size_t maxH
     return defsShorter ? std::move( defs ) : std::move( all );
 }
 
-// One --whereis answer page: the listing it serves (whereisServedListing), then that page.
+// One --whereis answer page: the listing it serves (whereisServedListing), then that page, its long lines cut to previews
+// only when that makes THIS page shorter (review C2). The listing is chosen on the WHOLE-line pages (ListedHits::textPreview
+// is false there), so a preview never flips the default listing. A page holding a line over kWhereisTextWholeMaxBytes is
+// then rendered both ways, and the cut one is served only when it is STRICTLY shorter both as written and as the compact
+// dialect delivers it, the rule whereisServedListing applies to its two pages: its <t_cut>, its rows' t_bytes= and the
+// PREVIEW clause or the compact readings can cost more than cutting a line just past the threshold saves (a 395-byte line
+// saved 92 B and its disclosure cost 250). So a served page is byte-identical to the same page whole, or strictly shorter
+// in both postures. A tie, or a render that fails, serves the page whole (the whole answer).
 inline void writeWhereisPage( std::FILE* out, const WhereResult& res, std::size_t maxHits, int pageLimit, int pageOffset,
                               WhereisListing listing )
 {
     // The LISTED rows (WhereisListing): indices into res.hits, in the hit list's own order, so a listing is a
     // subsequence of the whole list and its rows print byte-identically to the same rows of listing=all.
     const ListedHits listed = whereisServedListing( res, maxHits, listing );
+    ListedHits       previewed = listed;
+    previewed.textPreview      = !res.textWhole;
+    if( whereisPageCutRows( res, previewed, whereisHitWindow( listed.rows.size(), maxHits, pageLimit, pageOffset ) ) == 0 )
+    {
+        writeWhereisListedPage( out, res, maxHits, pageLimit, pageOffset, listed );
+        return;
+    }
+    const Rendered cutPage   = renderToString( [ & ]( std::FILE* f ) { writeWhereisListedPage( f, res, maxHits, pageLimit, pageOffset, previewed ); } );
+    const Rendered wholePage = renderToString( [ & ]( std::FILE* f ) { writeWhereisListedPage( f, res, maxHits, pageLimit, pageOffset, listed ); } );
+    const bool     cutShorter = cutPage.ok && wholePage.ok && cutPage.text.size() < wholePage.text.size()
+                             && compactDeliveredBytesOrWritten( cutPage.text, "whereis" )
+                                    < compactDeliveredBytesOrWritten( wholePage.text, "whereis" );
+    if( cutShorter || wholePage.ok )
+    {
+        rw::emitRaw( out, ( cutShorter ? cutPage.text : wholePage.text ).c_str() );
+        return;
+    }
     writeWhereisListedPage( out, res, maxHits, pageLimit, pageOffset, listed );
 }
 

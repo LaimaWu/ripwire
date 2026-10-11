@@ -1629,7 +1629,7 @@ std::optional<int> runCrossRef( const MainDispatch& d )
         // §A7: HEAD's rows are documented as the PARSED answer, so hand the tree scan what the index knows.
         const std::vector<crossref::IndexDefSite> indexDefs = crossref::whereisIndexDefSites( d.ing, whereisSel, root );
 
-        // --detail lifts both caps of this verb: the row cap below and the runaway guard on the other refs' blob parse.
+        // --detail lifts every cap of this verb: the row cap below, the runaway guard on the other refs' blob parse and the t= preview.
         const crossref::WhereisParseBudget parseBudget = cfg.detail ? crossref::WhereisParseBudget{ SIZE_MAX, SIZE_MAX } : crossref::WhereisParseBudget{};
         crossref::WhereResult result = crossref::computeWhereis( root, whereisSel, cfg.strayFilter,
                                                                  crossref::WhereisEvidence{ cfg.withHistory ? &history : nullptr, indexDefs }, parseBudget );
@@ -1646,6 +1646,9 @@ std::optional<int> runCrossRef( const MainDispatch& d )
             return 1;
         }
         result.seedSpec = std::move( whereisSeed );
+        // --whereis-full-text prints every t= whole and lifts nothing else (the <t_cut next=> of a page that printed a
+        // preview names it); --detail lifts the preview with the row cap and the parse guard.
+        result.textWhole = cfg.detail || cfg.whereisFullText;
         // The tree zero stays an answer; the near-miss only says WHICH zero it is (a name this repo never
         // had, or a keystroke away from one it has). Computed only on the zero, so a real hit list is
         // byte-identical.

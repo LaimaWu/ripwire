@@ -3639,7 +3639,7 @@ $ ./build/ripwire . --stray-content=lane/ --abi
 
 **Answers:** find which branch's tree defines or mentions SYM, HEAD first which REF's tree defines or mentions SYM — HEAD first, then every local branch, with on-head="0" naming the case the verb exists for: content that lives only on a branch.
 
-Each distinct blob is read ONCE (content-addressed), so N branches cost ~one tree. kind="def" on a HEAD row is the PARSED index's answer (head_labels="index"); on another ref's row (ref_labels="parsed") it is the same extraction run over that ref's blob, once per blob and path, and only for a blob holding a line a loose lexical test calls worth parsing (it only CHOOSES blobs): a blob without one reads kind="ref". kind="text" is such a line no parse read (<unparsed> counts them; --detail=1 lifts the parse guard), never a def. head_labels="lexical" ⇒ HEAD fell back to that lexical test (no indexed def of the name, or a working tree that drifted from HEAD). refs_scanned= is the SCAN denominator (refs read besides HEAD), not a matched count. Read-only; single-root only. A checkout that differs from HEAD is read from disk: each changed path's rows say ref="worktree" and replace HEAD's, at= gains +dirty, and worktree= says whether every one was read. LIMITS: a TREE scan finds only what some ref STILL carries, so hits="0" alone cannot tell a name this repo never had from one it deleted, and content dropped by every tree is invisible. Add --with-history: a <fate> row then says v="never" or v="removed" with the commit, date and file that removed it. Remote-tracking refs are excluded (they mirror local ones); refs are capped, narrow with --stray-content=SUBSTR. LISTING: by default only the kind="def" (and kind="text") rows are listed and the kind="ref" rows counted in one <refs count=N next=...> element, when that page lists MORE definitions than the --whereis-listing=all page under the row cap, or the same ones in strictly fewer bytes; otherwise every hit is listed. On that page a definition line several refs hold (same path, same text) is ONE row with refs="N", and folded= on the root counts the rows it stands for (on the first page, shown + more + folded + refs count = hits); listing=all prints each.
+Each distinct blob is read ONCE (content-addressed), so N branches cost ~one tree. kind="def" on a HEAD row is the PARSED index's answer (head_labels="index"); on another ref's row (ref_labels="parsed") it is the same extraction run over that ref's blob, once per blob and path, and only for a blob holding a line a loose lexical test calls worth parsing (it only CHOOSES blobs): a blob without one reads kind="ref". kind="text" is such a line no parse read (<unparsed> counts them; --detail=1 lifts the parse guard), never a def. head_labels="lexical" ⇒ HEAD fell back to that lexical test (no indexed def of the name, or a working tree that drifted from HEAD). refs_scanned= is the SCAN denominator (refs read besides HEAD), not a matched count. Read-only; single-root only. A checkout that differs from HEAD is read from disk: each changed path's rows say ref="worktree" and replace HEAD's, at= gains +dirty, and worktree= says whether every one was read. LIMITS: a TREE scan finds only what some ref STILL carries, so hits="0" alone cannot tell a name this repo never had from one it deleted, and content dropped by every tree is invisible. Add --with-history: a <fate> row then says v="never" or v="removed" with the commit, date and file that removed it. Remote-tracking refs are excluded (they mirror local ones); refs are capped, narrow with --stray-content=SUBSTR. LISTING: by default only the kind="def" (and kind="text") rows are listed and the kind="ref" rows counted in one <refs count=N next=...> element, when that page lists MORE definitions than the --whereis-listing=all page under the row cap, or the same ones in strictly fewer bytes; otherwise every hit is listed. On that page a definition line several refs hold (same path, same text) is ONE row with refs="N", and folded= on the root counts the rows it stands for (on the first page, shown + more + folded + refs count = hits); listing=all prints each. PREVIEW: a line over 300 bytes prints t= as its first bytes (cut on a UTF-8 boundary) plus an ellipsis, 200 bytes in all, and the row carries t_bytes= (the whole line's size), when that makes the page shorter than the same page whole; <t_cut rows=N next=...> counts them, and its next= (--whereis-full-text) replays that page with every line whole.
 
 **Try it**
 
@@ -3657,13 +3657,25 @@ $ ./build/ripwire . --whereis=rankGraphTeleport
 ... [14 more line(s); run it to see the whole thing]
 ```
 
-**Shaped by:** `--whereis-listing`, `--with-history`, `--limit`
+**Shaped by:** `--whereis-full-text`, `--whereis-listing`, `--with-history`, `--limit`
 
 **Caveats (stated by the binary):**
 
 - --detail=1 lifts the parse guard), never a def.
 - refs_scanned= is the SCAN denominator (refs read besides HEAD), not a matched count.
 - LIMITS: a TREE scan finds only what some ref STILL carries, so hits="0" alone cannot tell a name this repo never had from one it deleted, and content dropped by every tree is invisible.
+
+### `--whereis-full-text`
+
+**Answers:** with --whereis: print every t= line whole (no preview, no t_bytes=);
+
+the listing, window, rows and labels are the page's own, so the <t_cut next=> of a page that printed a preview names it. --detail lifts the preview too, with the row cap and the parse guard. Refused without --whereis. MCP: full_text=true.
+
+**Shaped by:** `--whereis`
+
+**Caveats (stated by the binary):**
+
+- Refused without --whereis.
 
 ### `--whereis-listing=WHICH`
 

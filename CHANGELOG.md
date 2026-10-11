@@ -15,6 +15,43 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — `--whereis`: a long line's `t=` is a 200-byte preview, and the branch-label parse holds only its batch
+
+A `--whereis` row's `t=` repeated its whole source line, so on a hot name the long lines were most of the answer. On this
+repo's own tree (165 local refs), `--whereis=lego` was 129,314 B, and 38 of its 60 rows held lines of 206 B to 7.3 KB:
+a Python dict, markdown paragraphs, a legend literal.
+
+- A line over 300 bytes prints its first bytes, cut on a UTF-8 boundary, plus an ellipsis: 200 bytes at most, the
+  ellipsis included. The row carries `t_bytes=`, the whole line's size. A line of 300 bytes or less prints whole, so a
+  cut always drops at least 100 bytes. A 202-byte line cut to 200 saved 2 bytes and cost its page ~330 B of disclosure.
+- A page prints its previews only when that makes it shorter. The served page is rendered cut and whole, and the cut
+  one is served only when it is strictly shorter both as written and as the compact dialect delivers it; then every
+  long line on it is cut. A page whose long lines sit just past 300 B (one 395-byte line saved 92 B and its disclosure
+  cost 250 B) prints whole, byte-identical to before. The default listing is chosen on the whole-line pages, so a
+  preview never changes it.
+- A page that cuts carries `<t_cut rows=N next=…>`. Its `next=` replays THAT page with `--whereis-full-text` (new; MCP
+  `full_text`, a boolean): the listing the page served, its `--limit`/`--offset`, `--with-history` when given, and every
+  line whole. Nothing else is lifted: the parse guard, the row cap and the window stay, so the replay is the same rows
+  with the same `kind=` labels. `--detail=1` still lifts the preview with the row cap and the parse guard, but it is a
+  different answer (it relabels a guard-left `kind="text"` call site as a ref, and unpages a refs or all listing: 25 MB
+  for `--whereis=EXPECTS --whereis-listing=all`), so `next=` does not name it. The full legend's PREVIEW clause and the
+  compact `t_bytes=` / `t_cut rows=` readings ride only on a page that cuts. MCP `whereis` serves the same page; its
+  `next=` is the CLI spelling, as `<unparsed next=>`'s is.
+- Measured on this repo (165 refs), base vs head back to back: `--whereis=lego` 129,314 → 18,616 B (−86%), every row
+  kept, and its `next=` replay is 129,337 B (the base page plus the 23 B of the listing it names).
+  `--whereis=EXPECTS --whereis-listing=all` 40,241 → 18,540 B, replay 40,241 B (was 25.2 MB). Over 25 names × 4
+  listings (100 answers, 2,869,969 → 1,145,411 B): no answer is longer than before, no default listing changed, 43 are
+  byte-identical, and in the 57 that cut, a cut `t=` is a prefix of its line and each `next=` replay lists the same rows
+  as the page and as the base answer. Gates: `crossrefcheck` 5h, 5h-C2 (7 line widths × 2 listings × 2 legends: every
+  page is its whole twin or strictly shorter) and 5h-X2 (a guard-bound page's 44 `kind="text"` rows replay whole).
+- Peak memory: the scan kept every candidate blob's bytes, and copied them into each (blob, path) job, until the runaway
+  guard picked its batch. Now it records sizes, and the batch reads back only the blobs it chose. `--whereis=lego`
+  peaks at 0.88-0.94 GB (was 1.42 GB) and `--whereis=DISCLOSE` at 0.85-0.90 GB (was 1.16-1.22 GB). What remains is
+  the index (~0.45 GB on a name with no parse batch) plus the parse of up to 256 blobs / 64 MiB. A chosen blob that does
+  not read back whole confirms nothing: its rows read `kind="text"` and `<unparsed>` counts it. The second read costs a
+  little time: interleaved base/head ×5 at 1-min load 4-7 (medians), `--whereis=lego` 4.73 → 4.91 s, `--whereis=DISCLOSE`
+  4.61 → 4.64 s, `--whereis=lego --detail=1` 18.15 → 19.71 s (+9%), at peaks of 1.42-1.60 → 0.90-1.06 GB (lego).
+
 ### Fixed — `--for`: the `<sigs>` budget is charged for the `<lego>`/`<compose>` stub it serves, not the full render
 
 The default answer collapses `<lego>`/`<compose>` to a ~120 B counted stub, but the `<sigs>` budget was charged the full
@@ -2658,7 +2695,9 @@ on this release's tree: the +184 B of schema is `explore`'s `limit`/`offset` alo
 declared the pair, `pack_task` is a dispatch alias, not a listed tool — and `whereis`'s description
 is 5 B shorter, the parser-label entry above), and the ceiling moves 46,950 → 47,150 B
 - the one sanctioned case that moves it: `explore`'s two declared schema properties
-(`test/mcpmanifestcheck.sh` arm `(1b)` asserts the figure against a live measurement).
+(`test/mcpmanifestcheck.sh` arm `(1b)` asserts the figure against a live measurement). The `--whereis` preview entry above
+then declares whereis's `full_text`: the `tools/list` manifest grows 47,109 → 47,199 B (+90 B, that one schema property), and
+the ceiling moves 47,150 → 47,240 B.
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
 
 `LSAN_OPTIONS=… ./asan/ripwire .` — the sanitizer ritual AGENTS.md requires before a PR — aborted on any
