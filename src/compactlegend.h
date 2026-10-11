@@ -956,10 +956,10 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "ref_labels", "ref_labels=parsed: another ref's kind= from the index's own tags parse of its blob (one per blob and path; HEAD's own blob takes HEAD's labels); a blob with no line a loose lexical test calls worth parsing is not parsed and its rows read ref; kind=text: such a line no parse read, never a def", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "blobs", "unparsed blobs=N: other refs' blobs holding a line worth parsing that no parse read (past the runaway guard, or the parser could not finish); those lines read kind=text; next= lifts the guard", true, "unparsed", MapHeaderRead::No, {}, "whereis" },
     { "rows", "unparsed rows=N: the kind=text rows those blobs gave", true, "unparsed", MapHeaderRead::No, {}, "whereis" },
-    // whereis-lean lane (crossref.h kWhereisTextPreviewBytes, writeWhereisTextCut): present only on a page that prints a cut t=.
-    // The 200 and 300 are kWhereisTextPreviewBytes and it plus kWhereisTextCutMinDrop (test/crossrefcheck.sh 5h reads the reading and the printed bytes).
+    // whereis-lean lane (crossref.h kWhereisTextPreviewCapBytes, writeWhereisTextCut): present only on a page that prints a cut t=.
+    // The 200 and 300 are kWhereisTextPreviewCapBytes and kWhereisTextWholeMaxBytes (test/crossrefcheck.sh 5h reads the reading and the printed bytes).
     { "t_bytes", "hit t_bytes=N: t= previews an N-byte line (over 300 B): 200 B at most, its first bytes cut on a UTF-8 boundary plus an ellipsis", true, "hit", MapHeaderRead::No, {}, "whereis" },
-    { "rows", "t_cut rows=N: rows of this page whose t= is a preview (each carries t_bytes=); next= prints every line whole (detail=1 lifts every cap of this verb)", true, "t_cut", MapHeaderRead::No, {}, "whereis" },
+    { "rows", "t_cut rows=N: rows of this page whose t= is a preview (each carries t_bytes=); next= replays this page (same listing, window, rows) with every line whole", true, "t_cut", MapHeaderRead::No, {}, "whereis" },
     // 2026-10-01 (selectorrefuse.h writeNotFoundAnswer): the not-found ANSWER the five answering verbs print beside exit 1.
     { "found", "found=0: no indexed definition matched the selector, nothing listed or counted (zero = none found, not none exists); exit stays 1", false, "callers", MapHeaderRead::No, {}, "callers" },
     { "near", "near=: the indexed name to retry with", false, "callers", MapHeaderRead::No, {}, "callers" },

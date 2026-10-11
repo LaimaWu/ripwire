@@ -326,7 +326,11 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 # RE-MEASURED 2026-10-10 (train 26c, whereis-defs-fix merged onto the 47,114 B tree), CEILING UNMOVED: 47,114 -> 47,109 B. Per-tool
 # JSON bytes, the train binary before the merge vs the merged one: whereis 1,689 -> 1,684 (the lane's -5), every other tool
 # identical. Headroom after this line: 41 B.
-CEILING = 47150
+# RE-ANCHORED 2026-10-10 (lane whereis-lean fix round 1, review C1): 47,150 -> 47,240, measured 47,199 B (33 tools). whereis
+# declares `full_text` (the CLI --whereis-full-text twin, the replay its <t_cut next=> names): its schema 851 -> 941 B
+# (+90 B, the one property), its description unchanged at 701 B, every other tool identical (per-tool dump, base 4c38d363 vs
+# the lane binary). 47,109 + 90 = 47,199, every byte attributed. Headroom after this line: 41 B, unchanged.
+CEILING = 47240
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )
 schemaBytes = sum( len( json.dumps( t[ "inputSchema" ], separators = ( ",", ":" ) ) ) for t in tools )

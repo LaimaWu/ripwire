@@ -147,3 +147,5 @@ kUnitSizeLowRiskMax	BOUNDARY
 kVrMaxDepth	INDEXING
 kWalkCap	INDEXING
 kWhereisHits	OUTPUT
+kWhereisTextPreviewCapBytes	OUTPUT
+kWhereisTextWholeMaxBytes	OUTPUT

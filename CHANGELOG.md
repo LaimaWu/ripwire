@@ -2570,7 +2570,9 @@ on this release's tree: the +184 B of schema is `explore`'s `limit`/`offset` alo
 declared the pair, `pack_task` is a dispatch alias, not a listed tool — and `whereis`'s description
 is 5 B shorter, the parser-label entry above), and the ceiling moves 46,950 → 47,150 B
 - the one sanctioned case that moves it: `explore`'s two declared schema properties
-(`test/mcpmanifestcheck.sh` arm `(1b)` asserts the figure against a live measurement).
+(`test/mcpmanifestcheck.sh` arm `(1b)` asserts the figure against a live measurement). The `--whereis` preview entry above
+then declares whereis's `full_text`: the `tools/list` manifest grows 47,109 → 47,199 B (+90 B, that one schema property), and
+the ceiling moves 47,150 → 47,240 B.
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
 
 `LSAN_OPTIONS=… ./asan/ripwire .` — the sanitizer ritual AGENTS.md requires before a PR — aborted on any

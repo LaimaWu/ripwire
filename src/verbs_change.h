@@ -1646,8 +1646,9 @@ std::optional<int> runCrossRef( const MainDispatch& d )
             return 1;
         }
         result.seedSpec = std::move( whereisSeed );
-        // --detail lifts the t= preview too (kWhereisTextPreviewBytes): the <t_cut next=> of a capped answer names this call.
-        result.textPreviewBytes = cfg.detail ? SIZE_MAX : crossref::kWhereisTextPreviewBytes;
+        // --whereis-full-text prints every t= whole and lifts nothing else (the <t_cut next=> of a page that printed a
+        // preview names it); --detail lifts the preview with the row cap and the parse guard.
+        result.textWhole = cfg.detail || cfg.whereisFullText;
         // The tree zero stays an answer; the near-miss only says WHICH zero it is (a name this repo never
         // had, or a keystroke away from one it has). Computed only on the zero, so a real hit list is
         // byte-identical.

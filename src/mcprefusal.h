@@ -372,6 +372,8 @@ inline constexpr McpValueSpec kMcpValueFields[] = {
     // answered and given no way to ask for the other one. Advertised as a real boolean, not a string, so a
     // quoted "true" refuses instead of being guessed at (mcpBoolArg).
     { "no_route",      "a BOOLEAN: true forces plain subtoken+body BM25 (omit it for the default router)", "no_route=true", "boolean" },
+    // whereis-lean (review C1): the CLI --whereis-full-text twin, the replay a <t_cut next=> names. Terse: it rides tools/list.
+    { "full_text",     "a BOOLEAN: true prints every t= line whole", "full_text=true", "boolean" },
     // ── the ENVELOPE, outside `params` (§B6 M6/M7) ──
     // These four were read through the bare findString/findObject path, which collapses "absent" onto
     // "present but not the shape I read" — so `"method":5` became `-32700 "parse error"` (a JSON that parsed
@@ -1068,7 +1070,7 @@ inline constexpr McpVerbFields kMcpVerbFields[] = {
     // unflagged-row window in editcheck.h), the same rule the `impact`/`uses` rows above state. They
     // page the CONTEXT rows only; the flagged callers this verb exists to name are never windowed.
     { "edit_check",               "path paths symbol new_body limit offset legend" },
-    { "whereis",                  "path symbol kind limit offset listing legend" },
+    { "whereis",                  "path symbol kind limit offset listing legend full_text" },
     { "stray_content",            "path kind limit offset legend" },
     { "flags",                    "path kind symbol limit offset legend" },
     { "doc_drift",                "path kind limit offset legend" },
