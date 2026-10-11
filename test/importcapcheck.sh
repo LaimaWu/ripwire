@@ -626,7 +626,10 @@ if [ -n "$WEB_PATTERNS" ] && [ "$WEB_PATTERNS" -ge 6 ]; then
 else
     no "J1: expected >= 6 occurrences of the JS/TS @import.path patterns in the binary, got '${WEB_PATTERNS:-none}'"
 fi
-for gone in 'kindIs( t, "export_statement" )' 'target = jsModuleLoadTarget( n, src );'; do
+# train 27: the walk's branch is matched with its language condition — `kindIs( t, "export_statement" )` alone also matches
+# ingest_relations.h baseDeclOf (lego-transitive: `export class X` is the declaration a base clause binds to), which is not the
+# walk. The full spelling is the line the walk held (main 0852bc0f: present; every tree since #358's JS/TS slice: absent).
+for gone in 'kindIs( t, "export_statement" ) && ( lang == Lang::TypeScript || lang == Lang::JavaScript )' 'target = jsModuleLoadTarget( n, src );'; do
     if grep -rqF "$gone" "$ROOT/src"; then
         no "J1: the walk's TS/JS branch \`$gone\` is still in src/ — it should have been removed with this language"
     else
