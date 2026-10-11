@@ -210,7 +210,7 @@ printf '%s' "$OUTC" | grep -q 'status="new-symbol"' \
 printf '%s' "$OUTC" | grep -q 'callers="0"' \
     && ok "(c) brand-new symbol has zero callers" || { no "(c) unexpected callers on a brand-new symbol"; printf '%s\n' "$OUTC"; }
 # train 27 (checklist 14, the (e) sibling): the absence is read only off the brandnew root, never off an empty answer.
-if ! printf '%s' "$OUTC" | grep -q '<edit-check sym="brandnew"'; then
+if ! printf '%s' "$OUTC" | grep -qE '<edit-check [^>]*sym="brandnew"'; then
     no "(c) premise: no <edit-check sym=\"brandnew\"> answer (an empty answer must not read as 'omits was/now')"
 elif printf '%s' "$OUTC" | grep -q 'params_was='; then
     no "(c) new-symbol should not report was/now (nothing to compare against)"
@@ -287,7 +287,7 @@ printf '%s' "$OUTE" | grep -q 'params_was="1" params_now="3"' \
     || { no "(e) def rows missing — an additive overload is indistinguishable from a widened definition"; printf '%s\n' "$OUTE"; }
 # train 27 (lean-trio signoff, checklist 14): the ABSENCE is read only off a run that answered — rc 0, the folded root and its
 # callsit row — never off an empty or refused OUTE (a refusing binary printed nothing here and this arm said ok).
-if [ "$( ecrc folded )" != 0 ] || ! printf '%s' "$OUTE" | grep -q '<edit-check sym="folded"' || ! rows "$OUTE" | grep -q 'n="callsit"'; then
+if [ "$( ecrc folded )" != 0 ] || ! printf '%s' "$OUTE" | grep -qE '<edit-check [^>]*sym="folded"' || ! rows "$OUTE" | grep -q 'n="callsit"'; then
     no "(e) additive overload: precision premise — folded should answer (rc 0) with its callsit row"; printf '%s\n' "$OUTE"
 elif rows "$OUTE" | grep -q 'incompatible="1"'; then
     no "(e) additive overload wrongly flags a caller (no existing definition changed)"
@@ -533,7 +533,7 @@ else
     no "(h2) non-git root did not answer no-baseline: $( printf '%s' "$OUTI_F" | grep -o 'status="[^"]*"' )"
 fi
 # train 27 (checklist 14, the (e) sibling): the absence is read only off the freefn root, never off an empty answer.
-if ! printf '%s' "$OUTI_F" | grep -q '<edit-check sym="freefn"'; then
+if ! printf '%s' "$OUTI_F" | grep -qE '<edit-check [^>]*sym="freefn"'; then
     no "(h2) premise: no <edit-check sym=\"freefn\"> answer (an empty answer must not read as 'never says new-symbol')"
 elif printf '%s' "$OUTI_F" | grep -q 'status="new-symbol"'; then
     no "(h2) non-git root still calls an existing symbol new-symbol"
@@ -651,10 +651,17 @@ int once( int n )
 {
     return scored( n );
 }
+
+int fine( int n )
+{
+    return n;
+}
 EOF
 ( cd "$SFIX" && git init -q && git config user.email t@t && git config user.name t \
   && git add -A && git commit -qm init >/dev/null 2>&1 )
 # the arity widening: both callers become provably incompatible, one at two sites and one at a single site.
+# train 27: `fine` is a NEW caller written to the widened arity, so the document carries one UNFLAGGED row — the row the
+# (k) counterpart arm below reads its absence off (before it, every row was flagged and that arm could not fail).
 cat > "$SFIX/src/sites.cpp" <<'EOF'
 int scored( int a, int b ) { return a * b; }
 
@@ -668,6 +675,11 @@ int twice( int n )
 int once( int n )
 {
     return scored( n );
+}
+
+int fine( int n )
+{
+    return scored( n, 1 );
 }
 EOF
 OUTK="$( cd "$SFIX" && "$BIN" . --edit-check=scored --no-cache 2>/dev/null )"
@@ -707,7 +719,7 @@ fi
 # the counterpart rule: a row NOT flagged incompatible carries no sites= — the attribute is the flagged
 # row's own evidence, not a fourth spelling of the caller list (grep the ELEMENT, never the legend prose).
 # train 27 (checklist 14, the (e) sibling): the absence is read only off an answer that HAS unflagged rows to read.
-if ! printf '%s' "$OUTK" | grep -q '<edit-check sym="scored"' || ! printf '%s' "$OUTK" | grep -oE '<c [^>]*/>' | grep -qv 'incompatible="1"'; then
+if ! printf '%s' "$OUTK" | grep -qE '<edit-check [^>]*sym="scored"' || ! printf '%s' "$OUTK" | grep -oE '<c [^>]*/>' | grep -qv 'incompatible="1"'; then
     no "(k) premise: no <edit-check sym=\"scored\"> answer with an unflagged <c> row (nothing to read the absence off)"; printf '%s\n' "$OUTK"
 elif printf '%s' "$OUTK" | grep -oE '<c [^>]*/>' | grep -v 'incompatible="1"' | grep -q 'sites_l="'; then
     no "(k) sites_l= leaked onto a row that is not flagged incompatible"
