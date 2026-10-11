@@ -151,7 +151,9 @@ emits a flat `<cand r= s= n= id= k= p= l=>` top-K — identity + score + signatu
     such a line no parse read, never a definition). By default only the `kind="def"` rows are listed and the mentions are
     counted in one `<refs count=N next=…>` row (its `next=` lists them) when that page lists MORE definitions than
     the all page does under the same row cap (a capped all page can list fewer), or the same ones in strictly fewer
-    bytes; otherwise, and with `--whereis-listing=all`, every row is listed.
+    bytes; otherwise, and with `--whereis-listing=all`, every row is listed. A line over 300 bytes prints its `t=` as a
+    200-byte preview (`t_bytes=` is the whole line's size) when that makes the page shorter; the page's `<t_cut next=…>` replays
+    it with `--whereis-full-text`, every line whole.
     A tree scan only finds what some ref *still carries*, so `hits="0"` cannot by itself tell a name this repo
     never had from one it deleted. Add `--with-history` and a `<fate>` row says which: `v="never"`, or
     `v="removed" commit=… date=… p=…` naming the commit that took it out. One `git log` pass, memoized per
