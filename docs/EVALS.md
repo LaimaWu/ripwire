@@ -5861,7 +5861,7 @@ four `--quality-delta` shapes, against 2–6 before: this lane closed `sa@key`, 
 shapes by absolute legend size and reports the fraction as INFO. A `legend<=payload` arm is
 unsatisfiable on the case these verbs exist to handle well — a clean tree's payload is near-zero by
 construction — so at 40% of a 572 B payload the whole legend would have to fit in 381 B, shorter than
-the list of the ten measured kinds (eleven since 0.6.5). **A ≤40% relative ceiling for `--quality-delta` and ≤50% for
+the list of the ten measured kinds (twelve kinds now, with placeholder and defect-shape). **A ≤40% relative ceiling for `--quality-delta` and ≤50% for
 `--safe-delete`/`--test-gate` were considered and are recorded as UNREACHABLE rather than as missed
 work**: post-fix fractions are 87.0% / 91.4% / 78.8% on the clean cases and 81.4–86.7% wherever
 the payload is real. The same reasoning `test/testgatelegendbudgetcheck.sh` recorded in 2026-08-28.
