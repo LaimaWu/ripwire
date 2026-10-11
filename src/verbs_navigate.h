@@ -1227,11 +1227,14 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     const rw::RowCallSites sdSites =
         rw::rowCallSites( ing, defs, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ), sdVr );
 
+    // Designated (train 27): two lanes each inserted a bool here at a different position; named fields keep two adjacent
+    // bools from trading places silently in a positional aggregate.
     emitSafeDeleteLegend( defs.size(), sdUnprovenDefs, ambiguousCallers, risk,
-                          SafeDeleteLegendFlags{ sdSingleRoot, rw::graphGaugeClauses( g ),
-                                                 anyModuleScopeRow( ing, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ) ),
-                                                 sdDeclinedCalls, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0, sdValueRefs.rows.size(),
-                                                 sdFloor.isFloor, usesFloor, sdSites.any, sdSites.anyCut, sdValueRefs.depthCut.files > 0 } );
+                          SafeDeleteLegendFlags{ .singleRoot = sdSingleRoot, .hasUnindexed = rw::graphGaugeClauses( g ),
+                                                 .hasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ) ),
+                                                 .declinedCalls = sdDeclinedCalls, .gateDeclined = g.gateDeclinedCalls > 0, .stdDeclined = g.stdMemberDeclinedCalls > 0,
+                                                 .valueRefs = sdValueRefs.rows.size(), .callersFloor = sdFloor.isFloor, .usesFloor = usesFloor,
+                                                 .hasSitesAt = sdSites.any, .sitesCut = sdSites.anyCut, .valueRefDepthCut = sdValueRefs.depthCut.files > 0 } );
 
     const Symbol&      lead = ing.symbols[ defs[0] ];   // resolveAllByNameQualified walks ascending id — defs[0] is the
                                                         // lowest, same convention --impact/--uses/--callers's of=/defs=

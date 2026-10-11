@@ -2074,7 +2074,7 @@ shadow and the value-reference slot text take 143, above 141's full-use file tag
 receiver-evidence records took 145 to 154 on theirs; all three land together at 156: branch builds have used up to 154,
 whose full-use file tag is 155, so no cache such a build wrote is read as this release's; the Rails `db/schema.rb`
 columns (#339, carried as 122 to 149 on its branch) land at 158, above 156's full-use file tag 157; the `--lego` base-clause and
-class-factory changes, carried as 160 and 162 on their branch, land at 164: branch builds have used up to 162, whose full-use
+class-factory changes, carried as 157, 160 and 162 on their branch, land at 164: branch builds have used up to 162, whose full-use
 file tag is 163), `kCacheVersion` 25 → 31
 (the function-literal fix's record changes, then the false-edge fix's member-call fields, then the receiver chain
 `memberPath`/`memberCtor`, then the inherit reference's same-file base binding, numbered 30 on its branch and 31 here, above

@@ -36,7 +36,7 @@ PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
 # 2026-10-11, train 27 (seams-doc-links, cpp-builtin-member-gate, callers-sites-first-call, lean-trio and lego-transitive merged onto
 #   train 26c; whereis-lean touches no watched text): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (hash e55bd63f7e…efaac9).
-#   Watched text: kParserVer 158 -> 164 (lego-transitive's base-clause and class-factory extraction, 160 then 162 on its branch;
+#   Watched text: kParserVer 158 -> 164 (lego-transitive's base-clause and class-factory extraction, 157, 160 then 162 on its branch;
 #   164 / rich file tag 165 is above every live build, up to 162 / 163), kCacheVersion 29 -> 31 (the lane's inherit-ref
 #   baseBind record, numbered 30 on its branch), quality.h's two mirrors with them, kQSnapCacheScheme 19 -> 20 (the dead set's
 #   Python inheritance input moved; see the v20 note), and pythonDispatchClasses reading implementorClosure (the lane's refactor).

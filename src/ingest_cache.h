@@ -141,7 +141,7 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
 constexpr std::uint32_t kCacheVersion = 31;           // 31: train 27 — lane lego-transitive's record format below (the lane numbered it 30;
-                                                      //    31 is above every live value: the lane's branch builds wrote c30 blobs at 160/162).
+                                                      //    31 is above every live value: the lane's branch builds wrote c30 blobs at 162).
                                                       // 30: lane lego-transitive fix 1 — an INHERIT RawRef appends `baseBind` (u32: the
                                                       //    same-file declaration its base binds to, ingest_relations.h localBaseBinding);
                                                       //    every other ref record is unchanged in size. A FORMAT change: a v29 blob lacks it.
@@ -322,7 +322,7 @@ constexpr std::uint32_t kCacheVersion = 31;           // 31: train 27 — lane l
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
 constexpr std::uint32_t kParserVer    = 164;          // bump on any grammar/.scm/extraction change
                                                       // 164 = 2026-10-11 (train 27: the signed lanes merged onto train 26c's 158): cache-key hygiene. One merged lane
-                                                      //   changed extraction under lane-local numbers: lego-transitive (160, then 162; its notes are below). Live
+                                                      //   changed extraction under lane-local numbers: lego-transitive (157, 160, then 162; the 160 and 162 notes are below). Live
                                                       //   branch builds have used numbers up to 162 (rich file tag 163). 164 (rich file tag 165) is above every one
                                                       //   of them, so no cache another build wrote is read as this build's. kCacheVersion moves with it (31).
                                                       // 162 = lane lego-transitive fix 1 (2026-10-10): an inherit ref records its
