@@ -199,6 +199,7 @@ else
 fi
 if python3 - "$TMP/pn.fresh" "$TMP/pn.bin" "$ROOT" <<'PY'
 import copy, pathlib, re, struct, sys, xml.etree.ElementTree as ET
+from collections import Counter
 
 # readFileRecord/writeBind in ingest_cache.h, lean cache v31. No heuristic string searches:
 # walk the counted arrays and require complete file coverage, clean parse health and exact EOF.
@@ -268,12 +269,14 @@ want = {
     'builtin_call.py': ([], []),
     'importlib_call.py': ([include('importlib')], [bind('importlib', 'importlib', 'module')]),
     'dotted.py': ([include('a.b as c')], [bind('c', 'a.b', 'module')]),
-    # Main's receiver-evidence pass also writes this NameAlias before the Import bind.
-    # Pin it exactly instead of filtering unrelated binds out of the assertion.
+    # The receiver-evidence pass also writes this NameAlias. Pin all its fields and count;
+    # its position relative to the Import bind is an implementation detail of the two passes.
     'relative.py': ([include('.')], [('b', 'a', '', 14, py, name_alias, 0, (0, 0)), bind('b', '.', '')]),
 }
 def check(actual):
-    assert actual == want, ('Include/RawBind mismatch', actual, want)
+    assert actual.keys() == want.keys() and all(
+        incs == want[path][0] and Counter(binds) == Counter(want[path][1])
+        for path, (incs, binds) in actual.items()), ('Include/RawBind mismatch', actual, want)
 check(facts)
 rows = {f.get('p'): [inc.get('t') for inc in f.findall('inc')]
         for f in ET.parse(sys.argv[1]).getroot().findall('f')}
