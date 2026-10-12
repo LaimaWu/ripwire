@@ -37,6 +37,7 @@ std::string_view clojureListHead( TSNode list, std::string_view src ) noexcept
     return kindIs( ts_node_type( head ), "sym_lit" ) ? nodeTextOf( head, src ) : std::string_view{};
 }
 
+// Temporary keyword-head table: CONTRIBUTING slice 5a moves these decisions into tags-pass predicates.
 ClojureDefinitionShape clojureDefinitionShape( TSNode list, std::string_view src ) noexcept
 {
     const std::string_view head = clojureListHead( list, src );
@@ -52,6 +53,7 @@ ClojureDefinitionShape clojureDefinitionShape( TSNode list, std::string_view src
     return {};
 }
 
+// Temporary inert-form filter: CONTRIBUTING slice 8a moves it onto the shared mechanism after #380 and #349 land.
 bool clojureInert( TSNode node, std::string_view src ) noexcept
 {
     for( TSNode parent = ts_node_parent( node ); !ts_node_is_null( parent ); parent = ts_node_parent( parent ) )
@@ -92,6 +94,7 @@ bool clojureKeepCapture( TSNode role, bool isDef, std::string_view src ) noexcep
     {
         return false;
     }
+    // Temporary keyword-head exclusions: CONTRIBUTING slice 5a moves this table into tags-pass predicates.
     constexpr std::string_view specialForms[] = {
         "if", "if-not", "when", "when-not", "cond", "case", "do", "let", "letfn", "loop", "recur",
         "fn", "fn*", "quote", "var", "set!", "new", ".", "throw", "try", "catch", "finally", "monitor-enter",

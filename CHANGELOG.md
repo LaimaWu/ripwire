@@ -19,6 +19,24 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 Vendored Yogthos' ABI-15 `tree-sitter-clojure` parser and added syntax-level definitions and direct-call captures for the four Clojure-family extensions. The grammar comparison parsed 4,930 of 4,933 files (99.94%, 55.5 MB) from Metabase, clojure-lsp, clj-kondo and Babashka checkouts in 2.24 seconds; two failures were intentionally invalid clj-kondo fixtures and one was a Metabase test. This measures parser completion on that corpus, not semantic call-resolution accuracy. Namespace/import resolution, macro expansion and exact multi-arity matching remain outside this first pass; see `docs/ARCHITECTURE.md` for the extraction limits.
 
+### Changed — Python imports use the shared capture vocabulary (#358, Python slice)
+
+Python dependency targets now come from `@import.path`; named clauses and their optional local
+renames use `@import.names` and `@import.alias` to produce the existing import bindings.
+The Python branches and binding extractor they replace leave `src/ingest_relations.h`.
+Resolution stays unchanged. A comma-separated plain import still contributes only its first
+dependency target, and an aliased first clause retains its written `as` spelling in `--deps`.
+These existing limits are preserved rather than widened by the capture migration.
+
+The Python walk is removed. Captured targets and bindings retain the same container reach and depth limit:
+imports at 255/256 containers remain, and a real import at 257 is cut and disclosed. An import-free deep
+container, including a top-level import followed by a deep `pass`, no longer produces `extract-partial`
+and may be cached. Disclosure now reports a captured import actually cut, rather than an empty container.
+No persisted record or extraction-version change is intended; the Python import gate checks
+fresh/warm output and, when `RIPWIRE_BASE_BIN` is supplied, acceptance of a pristine-main cache
+without rewriting it.
+
+
 ## [0.6.7] — 2026-10-11
 
 ### Fixed — `--impact`: a selector matching several definitions keeps the `via="name"` hedge in its per-file rollup

@@ -109,4 +109,280 @@ monotonic_check()
 }
 monotonic_check
 
+# #358 Python capture slice. Expectations below were read from pristine main, not from the new
+# query: ONE Include per statement (first clause), but bindings for EVERY named/aliased clause.
+# Aliased plain imports keep their whole written clause in --deps; cleaning it is a separate change.
+PC="$TMP/captures"; mkdir -p "$PC/pkg"
+cat >"$PC/main.py" <<'PY'
+import a, b
+import a as aa, b as bb
+import pkg.mod
+from pkg.mod import run, spare as renamed
+from . import a
+from pkg import *
+from pkg.mod import (run as f, spare,)
+import os
+if TYPE_CHECKING:
+    import b
+try:
+    from pkg.mod import run as rr
+except ImportError:
+    import a
+class C:
+    import b
+    def method(self):
+        import a as local
+        return local.run()
+def plain():
+    return bb.run()
+PY
+printf 'def run():\n    return 1\n' >"$PC/a.py"
+printf 'def run():\n    return 2\n' >"$PC/b.py"
+printf 'def init():\n    return 1\n' >"$PC/pkg/__init__.py"
+printf 'def run():\n    return 2\ndef spare():\n    return 3\n' >"$PC/pkg/mod.py"
+printf 'import a as aa\nfrom pkg.mod import run as r\n' >"$PC/typing.pyi"
+printf 'x = (import unreachable)\ndef okay():\n    import a\n' >"$PC/broken.py"
+
+# This inspects the EMBEDDED vocabulary; --match alone also matches on a pre-change binary.
+if grep -qa 'import\.names' "$BIN" && grep -qa 'import\.alias' "$BIN"; then
+    ok '#358: Python import.names and import.alias vocabulary is compiled in'
+else
+    no '#358: Python import.names/import.alias vocabulary is absent from this binary'
+fi
+# Historical comments may retain the old name; check definitions, not prose.
+if grep -rEq '^[[:space:]]*(inline[[:space:]]+)?void[[:space:]]+capturePythonImportBinds[[:space:]]*\(' "$ROOT/src"; then
+    no '#358: replaced Python import binding extractor still exists in src/'
+else
+    ok '#358: replaced Python import binding extractor removed'
+fi
+"$BIN" "$PC" --deps --no-cache >"$TMP/pc.deps" 2>"$TMP/pc.err"
+if python3 - "$TMP/pc.deps" <<'PY'
+import sys, xml.etree.ElementTree as ET
+root = ET.parse(sys.argv[1]).getroot()
+rows = {f.get('p'): [i.get('t') for i in f.findall('inc')] for f in root.findall('f')}
+want = ['a', 'a as aa', 'pkg.mod', 'pkg.mod', '.', 'pkg', 'pkg.mod', 'os',
+        'b', 'pkg.mod', 'a', 'b', 'a as local']
+assert rows == {'main.py': want, 'typing.pyi': ['a as aa', 'pkg.mod'], 'broken.py': ['a']}, rows
+PY
+then ok '#358: exact first-clause, alias, from, relative, wildcard, nested and .pyi targets; ERROR import stays out'
+else no '#358: Python target set/order differs from pristine main'
+fi
+"$BIN" "$PC" --callees=plain --no-cache >"$TMP/pc.plain" 2>/dev/null
+if grep -q '<callees [^>]*count="1"' "$TMP/pc.plain" && grep -q 'p="b.py:1"' "$TMP/pc.plain"; then
+    ok '#358: the SECOND comma-separated module alias binds bb.run to b.py only'
+else
+    no '#358: binding for the second module alias was lost or widened'
+fi
+
+# Maintainer negatives and alias forms (#382). Keep these files free of definitions/assignments:
+# then the lean cache exposes EVERY Include/RawBind, including bindings invisible in --deps.
+PN="$TMP/pynegative"; mkdir -p "$PN"
+printf 'from __future__ import annotations\n' >"$PN/future.py"
+printf '__import__("x")\n' >"$PN/builtin_call.py"
+printf 'import importlib\nimportlib.import_module("x")\n' >"$PN/importlib_call.py"
+printf 'import a.b as c\n' >"$PN/dotted.py"
+printf 'from . import a as b\n' >"$PN/relative.py"
+"$BIN" "$PN" --deps --no-cache >"$TMP/pn.fresh" 2>"$TMP/pn.err" \
+    || no '#382: fresh negative/alias fixture extraction failed'
+"$BIN" "$PN" --deps --cache="$TMP/pn.bin" >"$TMP/pn.cold" 2>>"$TMP/pn.err" \
+    || no '#382: cold negative/alias fixture extraction failed'
+cp "$TMP/pn.bin" "$TMP/pn.copy"
+"$BIN" "$PN" --deps --cache="$TMP/pn.bin" >"$TMP/pn.warm" 2>>"$TMP/pn.err" \
+    || no '#382: warm negative/alias fixture extraction failed'
+"$BIN" "$PN" --deps --no-cache >"$TMP/pn.repeat" 2>>"$TMP/pn.err" \
+    || no '#382: repeated negative/alias fixture extraction failed'
+if cmp -s "$TMP/pn.fresh" "$TMP/pn.cold" && cmp -s "$TMP/pn.cold" "$TMP/pn.warm" \
+    && cmp -s "$TMP/pn.fresh" "$TMP/pn.repeat" && cmp -s "$TMP/pn.bin" "$TMP/pn.copy"; then
+    ok '#382: negative/alias deps deterministic, fresh == cold == warm, cache not rewritten'
+else
+    no '#382: negative/alias deps or warm cache identity changed'
+fi
+if python3 - "$TMP/pn.fresh" "$TMP/pn.bin" "$ROOT" <<'PY'
+import copy, pathlib, re, struct, sys, xml.etree.ElementTree as ET
+from collections import Counter
+
+# readFileRecord/writeBind in ingest_cache.h, lean cache v31. No heuristic string searches:
+# walk the counted arrays and require complete file coverage, clean parse health and exact EOF.
+blob = pathlib.Path(sys.argv[2]).read_bytes()
+endian = '<' if sys.byteorder == 'little' else '>'
+assert blob[:4] == b'CTPK' and struct.unpack_from(endian + 'I', blob, 4)[0] == 31, 'update the cache walker for a new layout'
+table, count = struct.unpack_from(endian + 'QI', blob, len(blob) - 24)
+assert count == 5 == struct.unpack_from(endian + 'I', blob, 21)[0], 'all five fixtures must be cached'
+assert table + count * 32 == len(blob) - 24, 'cache table bounds'
+facts = {}
+for i in range(count):
+    off = table + i * 32
+    pos = struct.unpack_from(endian + 'Q', blob, off + 8)[0]
+    end = pos + struct.unpack_from(endian + 'I', blob, off + 24)[0]
+    assert 25 <= pos <= end <= table, 'cache record bounds'
+    def take(n):
+        global pos
+        assert n >= 0 and pos + n <= end, 'truncated cache record'
+        data = blob[pos:pos + n]; pos += n
+        return data
+    def number(fmt):
+        return struct.unpack(endian + fmt, take(struct.calcsize(fmt)))[0]
+    def string():
+        return take(number('I')).decode('utf-8')
+    path = string()
+    assert path not in facts, 'duplicate file record'
+    take(4 * 8)  # content hash and size/mtime/ctime
+    health = struct.unpack(endian + '5I', take(5 * 4))
+    assert health[0] == health[1] == 0 and health[2] > 0, (path, 'fixture must parse cleanly', health)
+    assert number('I') == 0, 'lean fixture must contain no definitions/dictionary'
+    for _ in range(number('I')):  # RawRef: only its variable-length strings affect the walk
+        take(5); string(); inherit = take(2)[0]; string(); take(1); string(); take(1)
+        string(); string(); take(13)  # argCount is serialized u32, narrowed by u16Of32 on read
+        for _ in range(4):
+            string()  # memberRoot/memberPath/memberCtor/memberVia
+        take(1)  # memberFactory
+        if inherit:
+            take(4)  # baseBind
+    incs = []
+    for _ in range(number('I')):
+        flags = tuple(take(3)); byte = number('I'); value_use = number('B')
+        incs.append((string(), byte, flags, value_use))
+    binds = []
+    for _ in range(number('I')):
+        byte = number('I'); lang = number('B'); kind = number('B'); assignment = number('B')
+        spans = (number('I'), number('I'))
+        binds.append((string(), string(), string(), byte, lang, kind, assignment, spans))
+    for _ in range(4):  # FFI aliases, route defs/uses, const-opens: absent in this Python fixture
+        assert number('I') == 0, 'unexpected auxiliary fact'
+    assert pos == end, (path, 'cache walker desynchronised')
+    facts[path] = (incs, binds)
+
+# Derive enum values from their declarations; do not mistake a Type/VarDecl for an Import.
+model = re.sub(r'//[^\n]*', '', pathlib.Path(sys.argv[3], 'src/model.h').read_text())
+def enum_value(enum, name):
+    body = re.search(r'enum class ' + enum + r'\s*:\s*std::uint8_t\s*\{([^}]+)\}', model).group(1)
+    names = [s.strip() for s in body.split(',') if s.strip()]
+    return names.index(name)
+py = enum_value('Lang', 'Python'); imp = enum_value('LocalBindKind', 'Import')
+name_alias = enum_value('LocalBindKind', 'NameAlias')
+def include(target):
+    return (target, 0, (0, 0, 0), 0)
+def bind(var, target, marker):
+    return (var, target, marker, 0, py, imp, 0, (0, 0))
+want = {
+    'future.py': ([], []),
+    'builtin_call.py': ([], []),
+    'importlib_call.py': ([include('importlib')], [bind('importlib', 'importlib', 'module')]),
+    'dotted.py': ([include('a.b as c')], [bind('c', 'a.b', 'module')]),
+    # The receiver-evidence pass also writes this NameAlias. Pin all its fields and count;
+    # its position relative to the Import bind is an implementation detail of the two passes.
+    'relative.py': ([include('.')], [('b', 'a', '', 14, py, name_alias, 0, (0, 0)), bind('b', '.', '')]),
+}
+def check(actual):
+    assert actual.keys() == want.keys() and all(
+        incs == want[path][0] and Counter(binds) == Counter(want[path][1])
+        for path, (incs, binds) in actual.items()), ('Include/RawBind mismatch', actual, want)
+check(facts)
+rows = {f.get('p'): [inc.get('t') for inc in f.findall('inc')]
+        for f in ET.parse(sys.argv[1]).getroot().findall('f')}
+assert rows == {p: [inc[0] for inc in incs] for p, (incs, _) in want.items() if incs}, rows
+
+# Test the SAME predicate with deliberately wrong extracted facts. Each control must fail;
+# unrelated fields are left intact, so loss of coverage cannot hide behind another assertion.
+for path in ('future.py', 'builtin_call.py', 'importlib_call.py'):
+    for channel, extra in ((0, include('x')), (1, bind('x', 'x', 'module'))):
+        bad = copy.deepcopy(facts); bad[path][channel].append(extra)
+        try: check(bad)
+        except AssertionError: pass
+        else: raise AssertionError((path, channel, 'extra fact escaped the negative assertion'))
+for path in ('dotted.py', 'relative.py'):
+    for field, wrong in ((0, 'wrong_alias'), (1, 'wrong.target'), (2, 'wrong_marker')):
+        bad = copy.deepcopy(facts); idx = next(i for i, row in enumerate(bad[path][1]) if row[5] == imp)
+        row = list(bad[path][1][idx]); row[field] = wrong
+        bad[path][1][idx] = tuple(row)
+        try: check(bad)
+        except AssertionError: pass
+        else: raise AssertionError((path, field, 'wrong binding escaped the alias assertion'))
+    for channel in (0, 1):
+        bad = copy.deepcopy(facts)
+        if channel == 0:
+            bad[path][channel].clear()
+        else:
+            bad[path][channel][:] = [row for row in bad[path][channel] if row[5] != imp]
+        try: check(bad)
+        except AssertionError: pass
+        else: raise AssertionError((path, channel, 'missing fact escaped the alias assertion'))
+print('  PASS  #382: 16 corrupt-fact controls rejected by the exact Include/RawBind predicate')
+PY
+then ok '#382: future/dynamic negatives; c -> a.b with module marker; relative Include . and b -> . without marker'
+else no '#382: negative/alias extraction or assertion controls failed'
+fi
+
+# One-space indentation avoids the vendored scanner's 8-bit serialized indent overflow. Each if
+# spends two containers; an else arm spends three. These parse cleanly at exactly 255/256/257.
+BD="$TMP/pybound"; mkdir -p "$BD"
+if python3 - "$BD" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+for depth in (255, 256, 257, 258):
+    if depth % 2:
+        n = (depth - 3) // 2
+        s = ''.join(' ' * i + 'if flag:\n' for i in range(n))
+        s += ' ' * n + 'if flag:\n' + ' ' * (n + 1) + 'pass\n'
+        s += ' ' * n + 'else:\n' + ' ' * (n + 1) + 'import a\n'
+    else:
+        n = depth // 2
+        s = ''.join(' ' * i + 'if flag:\n' for i in range(n))
+        s += ' ' * n + ('pass\n' if depth == 258 else 'import a\n')
+    (p / f'depth{depth}.py').write_text(s)
+PY
+then :; else no '#358: could not generate Python nesting fixture'; fi
+"$BIN" "$BD" --deps --no-cache >"$TMP/pb.deps" 2>/dev/null
+"$BIN" "$BD" --skipped --no-cache >"$TMP/pb.skipped" 2>/dev/null
+if python3 - "$TMP/pb.deps" "$TMP/pb.skipped" <<'PY'
+import sys, xml.etree.ElementTree as ET
+rows = ET.parse(sys.argv[1]).getroot().findall('f')
+assert {f.get('p'): [i.get('t') for i in f.findall('inc')] for f in rows} == {
+    'depth255.py': ['a'], 'depth256.py': ['a']}
+skipped = ET.parse(sys.argv[2]).getroot().find('skipped')
+assert skipped is not None
+assert not skipped.findall('h'), 'nesting fixture must parse without recovery'
+assert {f.get('p') for f in skipped.findall('f') if f.get('why') == 'extract-partial'} == {
+    'depth257.py'}, 'cut at 257 is disclosed; import-free deep container has nothing cut'
+PY
+then ok '#358: clean 255/256 imports kept, 257 cut/disclosed, and import-free 258 not disclosed'
+else no '#358: Python reach/depth/disclosure differs from pristine main'
+fi
+
+# Negative control: changing a non-first clause changes its BINDING while the first-clause Include
+# is unchanged. The mutation must take, and the identical callee extraction must see it.
+printf 'def run():\n    return 3\n' >"$PC/c.py"
+cp "$PC/main.py" "$TMP/pc.source"
+sed 's/a as aa, b as bb/a as aa, c as bb/' "$TMP/pc.source" >"$PC/main.py"
+if cmp -s "$PC/main.py" "$TMP/pc.source"; then no '#358: second-clause mutation did not take'; fi
+"$BIN" "$PC" --callees=plain --no-cache >"$TMP/pc.changed" 2>/dev/null
+if grep -q '<callees [^>]*count="1"' "$TMP/pc.changed" && grep -q 'p="c.py:1"' "$TMP/pc.changed" && ! cmp -s "$TMP/pc.plain" "$TMP/pc.changed"; then
+    ok '#358: second-clause mutation moves the alias edge (binding control is live)'
+else
+    no '#358: second-clause mutation did not move the alias edge'
+fi
+cp "$TMP/pc.source" "$PC/main.py"
+rm -f "$PC/c.py"
+
+"$BIN" "$PC" --deps --cache="$TMP/pc.bin" >"$TMP/pc.cold" 2>/dev/null
+"$BIN" "$PC" --deps --cache="$TMP/pc.bin" >"$TMP/pc.warm" 2>/dev/null
+if cmp -s "$TMP/pc.deps" "$TMP/pc.cold" && cmp -s "$TMP/pc.cold" "$TMP/pc.warm"; then
+    ok '#358: Python dependency output identical through fresh and warm caches'
+else
+    no '#358: Python dependency output differs through cache'
+fi
+BASE_BIN="${RIPWIRE_BASE_BIN:-}"
+if [ -n "$BASE_BIN" ] && [ -x "$BASE_BIN" ]; then
+    "$BASE_BIN" "$PC" --deps --cache="$TMP/pc.base.bin" >"$TMP/pc.base" 2>/dev/null
+    cp "$TMP/pc.base.bin" "$TMP/pc.base.copy"
+    "$BIN" "$PC" --deps --cache="$TMP/pc.base.bin" >"$TMP/pc.prewarm" 2>/dev/null
+    if cmp -s "$TMP/pc.base" "$TMP/pc.deps" && cmp -s "$TMP/pc.prewarm" "$TMP/pc.deps" && cmp -s "$TMP/pc.base.bin" "$TMP/pc.base.copy"; then
+        ok '#358: pristine-main Python cache accepted without rewrite; fresh output byte-identical'
+    else
+        no '#358: pristine-main Python cache/output differs; parser-version parity not established'
+    fi
+else
+    skip '#358: pristine-main cache compatibility (set RIPWIRE_BASE_BIN)'
+fi
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "SOME CHECKS FAILED"; exit 1; }

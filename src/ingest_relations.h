@@ -2633,8 +2633,7 @@ constexpr std::uint16_t kMaxImportContainerDepth = 256;
 // at all. Split out of captureIncludes so the walk that FINDS directives and the per-grammar table that
 // READS them stay separately readable — the walk is one shape, this is one branch per grammar spelling.
 //
-// Node types confirmed per grammar: Python import_statement/import_from_statement; Go/Swift
-// import_declaration; Rust use_declaration + mod_item; C# using_directive; plus the kParserVer-81 four (bash
+// Node types confirmed per grammar: Swift import_declaration; Rust use_declaration + mod_item; C# using_directive; plus the kParserVer-81 four (bash
 // `command`, lua `function_call`, ruby `call`, elixir `call`). LEVER-B B0: non-C imports capture the
 // CLEAN written specifier via grammar child fields (module path / quoted specifier / use argument), not a
 // sliced clause — the sound resolver input.
@@ -2647,7 +2646,7 @@ constexpr std::uint16_t kMaxImportContainerDepth = 256;
 // re-export, the CommonJS / dynamic call_expression) went the same way: `@import.path` in
 // queries/{typescript,tsx,javascript}/tags.scm, DepDialect::Web normaliser. What is left is every language
 // whose extraction needs the walk's own frame state — which is also the list of languages that have NOT
-// moved over yet.
+// moved over yet. Python's imports and bindings now use the capture path too (#358).
 //
 // `lang` exists for the language-gated branches: `call_expression` / `call` / `command` are node types in
 // most of our grammars, and a C++ or Rust function that happens to be named `require` must never
@@ -2705,29 +2704,7 @@ DirectiveTarget directiveTargetOf( TSNode n, const char* t, std::string_view src
     bool        isSymbolic = false;
     bool        isReceiver = false;
 
-    if( kindIs( t, "import_statement" ) )                 // Python `import a`
-    {
-        // Prefer the grammar's specifier field over slicing the whole statement (LEVER-B B0: the resolver
-        // needs the REAL written specifier, not the clause). Empirically confirmed node shape:
-        //   Python: import_statement name:(dotted_name|aliased_import)  → the dotted module `pkg.mod`.
-        // #358: the TS/JS `import … from 'x'` spelling of this node (and the `export … from 'x'` re-export that
-        // used to follow it) is GONE from this function — it is `@import.path` in queries/{typescript,tsx,javascript}
-        // /tags.scm now, read by the DepDialect::Web normaliser (src/ingest_importcap.h).
-        if( const TSNode nm = fieldChild( n, NodeField::Name );  !ts_node_is_null( nm ) )
-        {
-            target = importSpecifierText( nm, src );                      // Python: the dotted module head
-        }
-    }
-    else if( kindIs( t, "import_from_statement" ) )            // Python `from pkg.mod import Z`
-    {
-        // module_name:(dotted_name)  → `pkg.mod`;  module_name:(relative_import)  → `.rel` / `..up` (leading
-        // dots preserved so the resolver can resolve relative-to-file). The imported-names clause is dropped.
-        if( const TSNode mn = fieldChild( n, NodeField::ModuleName );  !ts_node_is_null( mn ) )
-        {
-            target = importSpecifierText( mn, src );
-        }
-    }
-    else if( kindIs( t, "command" ) && lang == Lang::Bash )              // Bash `source x.sh` / `. x.sh`
+    if( kindIs( t, "command" ) && lang == Lang::Bash )              // Bash `source x.sh` / `. x.sh`
     {
         target = bashSourceTarget( n, src );
     }
@@ -2769,8 +2746,7 @@ DirectiveTarget directiveTargetOf( TSNode n, const char* t, std::string_view src
     {
         // No `source:`/`name:` field (this grammar exposes none on import_header — verified against
         // node-types.json, same reason kotlinEnclosingScopeOf walks positionally): find the flat
-        // `identifier` child and take its WHOLE span, mirroring Python's dotted-module-head branch
-        // above. That span already covers every dotted segment (`kotlin.math.max`), including the
+        // `identifier` child and take its WHOLE span, preserving the written dotted module head. That span already covers every dotted segment (`kotlin.math.max`), including the
         // wildcard case (`import a.b.*` has `identifier`="a.b" plus a separate wildcard_import
         // sibling this branch does not need to read) and the aliased case (`import a.b.C as D` has
         // `identifier`="a.b.C" plus a separate import_alias sibling naming "D" — the alias is not
@@ -2843,108 +2819,6 @@ DirectiveTarget directiveTargetOf( TSNode n, const char* t, std::string_view src
 // use-site index reports import sites. The ref is file-scope (fromSymbol=kNoNode) — that is correct for
 // a directive at any container depth, and it NEVER enters the call graph (role != Call → skipped in
 // buildGraph). The ref's line comes from the DIRECTIVE node, never from its enclosing `#if` or body.
-// Phase 5 (docs/EVALS.md "Phase 5", kParserVer 77): the NAME a Python import statement binds in the module
-// namespace, per imported clause, as a file-scope LocalBindKind::Import RawBind (var = bound name, typeName =
-// the module target as written). `import a.b as c` binds `c`; `import a.b` binds `a` (the head — that is the
-// name Python puts in the namespace); `from m import x as y` binds `y`; `from m import x` binds `x`; a
-// `wildcard_import` binds nothing. The Include record keeps only the module and drops the imported-names
-// clause, so without this the bound NAME is unrecoverable resolve-side — and the external-name veto keys on
-// exactly that name. Node shapes (tree-sitter-python v0.23.6): import_statement name:(dotted_name|aliased_import)+;
-// import_from_statement module_name:(dotted_name|relative_import) name:(dotted_name|aliased_import)* | wildcard_import;
-// aliased_import name:(dotted_name) alias:(identifier). startByte = the statement's own start (file scope →
-// emitBindings attributes kNoNode); spans {0,0}. Pure-syntactic, deterministic, source order.
-inline void capturePythonImportBinds( TSNode stmt, const char* t, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
-{
-    const bool isFrom = ( kindIs( t, "import_from_statement" ) );
-    if( !isFrom && !kindIs( t, "import_statement" ) )
-    {
-        return;
-    }
-    std::string target;
-    if( isFrom )
-    {
-        const TSNode mn = fieldChild( stmt, NodeField::ModuleName );
-        if( ts_node_is_null( mn ) )
-        {
-            return;
-        }
-        target = importSpecifierText( mn, src );
-    }
-    const TSNode        moduleNode = isFrom ? fieldChild( stmt, NodeField::ModuleName ) : TSNode{};
-    // One import statement's clause list: the count comes from the input (`from m import ( a, b, … )`),
-    // and a comment between two clauses is a further child, so the indexed form was O(children²) here too.
-    // No scaling arm exists for it (an import flood is not a shape any corpus produces) — this is the
-    // pure-iteration conversion, covered by the byte-identical arms (test/childwalkscalecheck.sh).
-    ChildCursor cursor( stmt );
-    forEachChild( stmt, cursor.cur, [ & ]( TSNode kid )
-    {
-        if( ts_node_is_null( kid ) )
-        {
-            return true;
-        }
-        const char* kt = ts_node_type( kid );
-        if( isFrom && ts_node_eq( kid, moduleNode ) )
-        {
-            return true;   // the module_name child of a from-import is not a bound name; only the `name:` clauses are
-        }
-        std::string_view bound;
-        std::string      clauseTarget;
-        if( kindIs( kt, "aliased_import" ) )
-        {
-            const TSNode alias = fieldChild( kid, NodeField::Alias );
-            const TSNode nm    = fieldChild( kid, NodeField::Name );
-            if( ts_node_is_null( alias ) || ts_node_is_null( nm ) )
-            {
-                return true;
-            }
-            bound        = pattern::nodeText( alias, src );
-            clauseTarget = isFrom ? target : importSpecifierText( nm, src );
-        }
-        else if( kindIs( kt, "dotted_name" ) )
-        {
-            const std::string_view whole = pattern::nodeText( kid, src );
-            if( isFrom )
-            {
-                bound        = whole;    // `from m import x` — a bare clause name is an identifier (a dotted one is a syntax error)
-                clauseTarget = target;
-            }
-            else
-            {
-                const std::size_t dot = whole.find( '.' );
-                bound        = ( dot == std::string_view::npos ) ? whole : whole.substr( 0, dot );   // `import a.b` binds `a`
-                clauseTarget = std::string( whole );
-            }
-        }
-        else
-        {
-            return true;   // keywords, punctuation, wildcard_import
-        }
-        if( bound.empty() || clauseTarget.empty() )
-        {
-            return true;
-        }
-        RawBind b;
-        b.fileId    = fileId;
-        b.startByte = ts_node_start_byte( stmt );
-        b.lang      = Lang::Python;
-        b.kind      = LocalBindKind::Import;
-        b.var.assign( bound );
-        b.typeName  = std::move( clauseTarget );
-        // issue #287 (kParserVer 115): `importedName` is otherwise unused by a Python Import bind (no
-        // reader keys on it before this — checked), so it carries ONE bit here: "module" iff `bound` names
-        // the MODULE itself (`import a.b` / `import a.b as c`, isFrom==false) — the shape a receiver-alias
-        // narrow may trust to mean "this variable's namespace IS the module's". Left empty for `from m
-        // import x [as y]` (isFrom==true): there `bound` names a MEMBER of m (a function, class, ufunc
-        // instance, …), and `bound.anything()` is a call on THAT member, not on m's namespace — numpy's
-        // `from numpy.core.numeric import greater_equal` then `greater_equal.outer(...)` is exactly this:
-        // `.outer` is a ufunc method, not numeric.py's free `outer`, and conflating the two shapes narrowed
-        // the alias-receiver rule onto it (caught on the numpy corpus before this marker existed).
-        b.importedName = isFrom ? std::string {} : "module";
-        binds.push_back( std::move( b ) );
-        return true;
-    } );
-}
-
 // The DISCLOSE sink every extraction pass shares for ONE file: a pass that could not extract all of the file's facts
 // (a nesting bound it will not descend past, a tags query that is not available) says so here, and the parse worker
 // turns a short file into its --skipped row (why="extract-partial") and keeps its facts out of the cache, so a warm run
@@ -3063,10 +2937,6 @@ void captureIncludes( TSNode root, Lang lang, std::uint32_t fileId, std::string_
             }
         }
 
-        if( lang == Lang::Python && !target.empty() )
-        {
-            capturePythonImportBinds( n, t, fileId, src, binds );   // Phase 5: the bound NAMES, beside the module
-        }
         // One directive's emission — the Include record plus its ABS-3 import-role use-site ref. A LAMBDA
         // rather than the straight-line block it used to be for exactly one reason: an Elixir
         // `alias MyApp.{Bar, Baz}` is ONE directive node naming N modules, so N records come off it and

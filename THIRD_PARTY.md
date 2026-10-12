@@ -92,7 +92,8 @@ Notes:
 - `deps/kotlin` is pinned to a bare commit rather than the last tag (`v0.3.8`, Aug 2024) because
   that tag predates a scanner segfault fix (upstream #136) present on `main`; the pinned commit is
   `main`'s tip as of this vendoring, chosen for the fix, not for being a release.
-- `deps/clojure` comes from Yogthos' fork of Sogaiu's grammar. At the pinned revisions the grammar
+- `deps/clojure` comes from Yogthos' fork of Sogaiu's grammar. The comparison used Sogaiu upstream
+  commit `e43eff80d17cf34852dcd92ca5e6986d23a7040f` against the Yogthos pin above. At those revisions the grammar
   rules match; Yogthos' regenerated ABI-15 parser completed the 4,933-file qualification corpus
   while Sogaiu's older ABI-14 generated parser repeatedly stalled.
 - `deps/ts_typescript` keeps `common/scanner.h`, which both sub-grammars' `src/scanner.c` include.

@@ -2,9 +2,9 @@
 ; ingest_clojure.h classifies the head and excludes quote/discard contexts.
 (list_lit
   [(comment) (dis_expr)]* .
-  value: (sym_lit name: (sym_name) @clojure.head)
+  value: (sym_lit name: (sym_name))
   [(comment) (dis_expr)]* .
-  value: (sym_lit name: (sym_name) @name)) @definition.clojure
+  value: (sym_lit name: (sym_name) @name)) @definition.other
 
 ; Only symbolic list heads can be direct calls. Special forms and declaration
 ; heads are excluded by the Clojure capture filter.
