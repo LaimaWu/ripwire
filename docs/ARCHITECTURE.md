@@ -31,7 +31,8 @@ live in `src/ingest_*.h` sections compiled into that one TU — the same section
 crawl + parse setup (`ingest_crawl.h`), the raw-facts model + incremental-cache codec
 (`ingest_cache.h`), structural metrics (`ingest_metrics.h`), cross-symbol relation capture
 (`ingest_relations.h`), the markdown section tier (`ingest_docs.h`), name resolution + capture
-policy (`ingest_names.h`), local-binding capture (`ingest_binds.h`), parse infrastructure + the
+policy (`ingest_names.h`), local-binding capture (`ingest_binds.h`), Ruby's Rails/DSL capture lane
+(`ingest_ruby.h`), parse infrastructure + the
 fused side-capture passes (`ingest_sidecap.h`), and the `--match`/`--lint` query tail
 (`ingest_astquery.h`). The 2026-08-30 follow-on decomposed `ingest()`'s own body into four phase
 sections in call order: the lazy tags.scm prewarm (`ingest_prewarm.h`), the parallel parse pool

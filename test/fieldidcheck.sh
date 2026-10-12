@@ -64,7 +64,7 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 HDR="$ROOT/src/infra/fieldid.h"
 CRAWL="$ROOT/src/ingest_crawl.h"
 # The files the conversion touched. Sections of src/ingest.cpp's TU, plus the two standalone consumers.
-SITE_FILES="src/ingest_metrics.h src/ingest_binds.h src/ingest_sidecap.h src/ingest_relations.h src/ingest_names.h src/ingest_jsimports.h src/ingest_elixir.h src/preprocdead.h src/slice.h"
+SITE_FILES="src/ingest_metrics.h src/ingest_binds.h src/ingest_sidecap.h src/ingest_relations.h src/ingest_names.h src/ingest_ruby.h src/ingest_jsimports.h src/ingest_elixir.h src/preprocdead.h src/slice.h"
 
 [ -f "$HDR" ]   || { echo "missing $HDR — nothing to check"; exit 2; }
 [ -f "$CRAWL" ] || { echo "missing $CRAWL — the grammar table is what this gate enumerates over"; exit 2; }

@@ -82,7 +82,7 @@
 ; The Rails schema capture (test/rubyschemacheck.sh): a file whose tree holds a
 ; `create_table "x", … do |t| … end` call is a rendered db/schema.rb (content-gated — path plays no
 ; part), and each `t.<type> "name"` / `t.<type> :name` in the table block mints ONE data-kind def
-; (SymKind::Section at Lang::Ruby, see model.h) via the C++ side-capture in ingest_names.h, span = the
+; (SymKind::Section at Lang::Ruby, see model.h) via the C++ side-capture in ingest_ruby.h, span = the
 ; name token — Rails-generated attribute uses (`product.price`) resolve to the column as a def.
 ; DEFINITIONS ONLY by maintainer decision: the defs answer --uses/--grep/--whereis, but buildGraph's
 ; byName skips Section-Ruby, so columns admit NO call edges, only the restart share every def gets (untyped-receiver
