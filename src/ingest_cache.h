@@ -320,10 +320,10 @@ constexpr std::uint32_t kCacheVersion = 31;           // 31: train 27 — lane l
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 169;          // provisional for PR #349; maintainer assigns the landing value
-                                                      // 169 = 2026-10-11 (PR #349 merged with 0.6.7): Clojure grammar/query/extraction
-                                                      //   and qualified-call namespace. Rich tag 170; above main's 167/168 pair.
-                                                      //   Reconfirm the landing value before merge. kCacheVersion stays main's 31.
+constexpr std::uint32_t kParserVer    = 158;          // PR #349 provisional, per maintainer guidance 2026-10-12
+                                                      // Clojure grammar/query/extraction and qualified-call namespace.
+                                                      // The integration train assigns the final version when this PR lands;
+                                                      // this provisional value need not track main. kCacheVersion stays main's 31.
                                                       // 167 = 2026-10-11 (train 27 release): the fix27-cpp-subscript extraction below, renumbered above the
                                                       //   lane build's 166 (rich file tag 167 there), so no cache a lane build wrote is read as this release's.
                                                       //   Rich file tag 168. No other extraction change; kCacheVersion stays 31.
