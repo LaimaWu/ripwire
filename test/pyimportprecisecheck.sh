@@ -174,6 +174,142 @@ else
     no '#358: binding for the second module alias was lost or widened'
 fi
 
+# Maintainer negatives and alias forms (#382). Keep these files free of definitions/assignments:
+# then the lean cache exposes EVERY Include/RawBind, including bindings invisible in --deps.
+PN="$TMP/pynegative"; mkdir -p "$PN"
+printf 'from __future__ import annotations\n' >"$PN/future.py"
+printf '__import__("x")\n' >"$PN/builtin_call.py"
+printf 'import importlib\nimportlib.import_module("x")\n' >"$PN/importlib_call.py"
+printf 'import a.b as c\n' >"$PN/dotted.py"
+printf 'from . import a as b\n' >"$PN/relative.py"
+"$BIN" "$PN" --deps --no-cache >"$TMP/pn.fresh" 2>"$TMP/pn.err" \
+    || no '#382: fresh negative/alias fixture extraction failed'
+"$BIN" "$PN" --deps --cache="$TMP/pn.bin" >"$TMP/pn.cold" 2>>"$TMP/pn.err" \
+    || no '#382: cold negative/alias fixture extraction failed'
+cp "$TMP/pn.bin" "$TMP/pn.copy"
+"$BIN" "$PN" --deps --cache="$TMP/pn.bin" >"$TMP/pn.warm" 2>>"$TMP/pn.err" \
+    || no '#382: warm negative/alias fixture extraction failed'
+"$BIN" "$PN" --deps --no-cache >"$TMP/pn.repeat" 2>>"$TMP/pn.err" \
+    || no '#382: repeated negative/alias fixture extraction failed'
+if cmp -s "$TMP/pn.fresh" "$TMP/pn.cold" && cmp -s "$TMP/pn.cold" "$TMP/pn.warm" \
+    && cmp -s "$TMP/pn.fresh" "$TMP/pn.repeat" && cmp -s "$TMP/pn.bin" "$TMP/pn.copy"; then
+    ok '#382: negative/alias deps deterministic, fresh == cold == warm, cache not rewritten'
+else
+    no '#382: negative/alias deps or warm cache identity changed'
+fi
+if python3 - "$TMP/pn.fresh" "$TMP/pn.bin" "$ROOT" <<'PY'
+import copy, pathlib, re, struct, sys, xml.etree.ElementTree as ET
+
+# readFileRecord/writeBind in ingest_cache.h, lean cache v31. No heuristic string searches:
+# walk the counted arrays and require complete file coverage, clean parse health and exact EOF.
+blob = pathlib.Path(sys.argv[2]).read_bytes()
+endian = '<' if sys.byteorder == 'little' else '>'
+assert blob[:4] == b'CTPK' and struct.unpack_from(endian + 'I', blob, 4)[0] == 31, 'update the cache walker for a new layout'
+table, count = struct.unpack_from(endian + 'QI', blob, len(blob) - 24)
+assert count == 5 == struct.unpack_from(endian + 'I', blob, 21)[0], 'all five fixtures must be cached'
+assert table + count * 32 == len(blob) - 24, 'cache table bounds'
+facts = {}
+for i in range(count):
+    off = table + i * 32
+    pos = struct.unpack_from(endian + 'Q', blob, off + 8)[0]
+    end = pos + struct.unpack_from(endian + 'I', blob, off + 24)[0]
+    assert 25 <= pos <= end <= table, 'cache record bounds'
+    def take(n):
+        global pos
+        assert n >= 0 and pos + n <= end, 'truncated cache record'
+        data = blob[pos:pos + n]; pos += n
+        return data
+    def number(fmt):
+        return struct.unpack(endian + fmt, take(struct.calcsize(fmt)))[0]
+    def string():
+        return take(number('I')).decode('utf-8')
+    path = string()
+    assert path not in facts, 'duplicate file record'
+    take(4 * 8)  # content hash and size/mtime/ctime
+    health = struct.unpack(endian + '5I', take(5 * 4))
+    assert health[0] == health[1] == 0 and health[2] > 0, (path, 'fixture must parse cleanly', health)
+    assert number('I') == 0, 'lean fixture must contain no definitions/dictionary'
+    for _ in range(number('I')):  # RawRef: only its variable-length strings affect the walk
+        take(5); string(); inherit = take(2)[0]; string(); take(1); string(); take(1)
+        string(); string(); take(13)  # argCount is serialized u32, narrowed by u16Of32 on read
+        for _ in range(4):
+            string()  # memberRoot/memberPath/memberCtor/memberVia
+        take(1)  # memberFactory
+        if inherit:
+            take(4)  # baseBind
+    incs = []
+    for _ in range(number('I')):
+        flags = tuple(take(3)); byte = number('I'); value_use = number('B')
+        incs.append((string(), byte, flags, value_use))
+    binds = []
+    for _ in range(number('I')):
+        byte = number('I'); lang = number('B'); kind = number('B'); assignment = number('B')
+        spans = (number('I'), number('I'))
+        binds.append((string(), string(), string(), byte, lang, kind, assignment, spans))
+    for _ in range(4):  # FFI aliases, route defs/uses, const-opens: absent in this Python fixture
+        assert number('I') == 0, 'unexpected auxiliary fact'
+    assert pos == end, (path, 'cache walker desynchronised')
+    facts[path] = (incs, binds)
+
+# Derive enum values from their declarations; do not mistake a Type/VarDecl for an Import.
+model = re.sub(r'//[^\n]*', '', pathlib.Path(sys.argv[3], 'src/model.h').read_text())
+def enum_value(enum, name):
+    body = re.search(r'enum class ' + enum + r'\s*:\s*std::uint8_t\s*\{([^}]+)\}', model).group(1)
+    names = [s.strip() for s in body.split(',') if s.strip()]
+    return names.index(name)
+py = enum_value('Lang', 'Python'); imp = enum_value('LocalBindKind', 'Import')
+name_alias = enum_value('LocalBindKind', 'NameAlias')
+def include(target):
+    return (target, 0, (0, 0, 0), 0)
+def bind(var, target, marker):
+    return (var, target, marker, 0, py, imp, 0, (0, 0))
+want = {
+    'future.py': ([], []),
+    'builtin_call.py': ([], []),
+    'importlib_call.py': ([include('importlib')], [bind('importlib', 'importlib', 'module')]),
+    'dotted.py': ([include('a.b as c')], [bind('c', 'a.b', 'module')]),
+    # Main's receiver-evidence pass also writes this NameAlias before the Import bind.
+    # Pin it exactly instead of filtering unrelated binds out of the assertion.
+    'relative.py': ([include('.')], [('b', 'a', '', 14, py, name_alias, 0, (0, 0)), bind('b', '.', '')]),
+}
+def check(actual):
+    assert actual == want, ('Include/RawBind mismatch', actual, want)
+check(facts)
+rows = {f.get('p'): [inc.get('t') for inc in f.findall('inc')]
+        for f in ET.parse(sys.argv[1]).getroot().findall('f')}
+assert rows == {p: [inc[0] for inc in incs] for p, (incs, _) in want.items() if incs}, rows
+
+# Test the SAME predicate with deliberately wrong extracted facts. Each control must fail;
+# unrelated fields are left intact, so loss of coverage cannot hide behind another assertion.
+for path in ('future.py', 'builtin_call.py', 'importlib_call.py'):
+    for channel, extra in ((0, include('x')), (1, bind('x', 'x', 'module'))):
+        bad = copy.deepcopy(facts); bad[path][channel].append(extra)
+        try: check(bad)
+        except AssertionError: pass
+        else: raise AssertionError((path, channel, 'extra fact escaped the negative assertion'))
+for path in ('dotted.py', 'relative.py'):
+    for field, wrong in ((0, 'wrong_alias'), (1, 'wrong.target'), (2, 'wrong_marker')):
+        bad = copy.deepcopy(facts); idx = next(i for i, row in enumerate(bad[path][1]) if row[5] == imp)
+        row = list(bad[path][1][idx]); row[field] = wrong
+        bad[path][1][idx] = tuple(row)
+        try: check(bad)
+        except AssertionError: pass
+        else: raise AssertionError((path, field, 'wrong binding escaped the alias assertion'))
+    for channel in (0, 1):
+        bad = copy.deepcopy(facts)
+        if channel == 0:
+            bad[path][channel].clear()
+        else:
+            bad[path][channel][:] = [row for row in bad[path][channel] if row[5] != imp]
+        try: check(bad)
+        except AssertionError: pass
+        else: raise AssertionError((path, channel, 'missing fact escaped the alias assertion'))
+print('  PASS  #382: 16 corrupt-fact controls rejected by the exact Include/RawBind predicate')
+PY
+then ok '#382: future/dynamic negatives; c -> a.b with module marker; relative Include . and b -> . without marker'
+else no '#382: negative/alias extraction or assertion controls failed'
+fi
+
 # One-space indentation avoids the vendored scanner's 8-bit serialized indent overflow. Each if
 # spends two containers; an else arm spends three. These parse cleanly at exactly 255/256/257.
 BD="$TMP/pybound"; mkdir -p "$BD"
@@ -204,9 +340,9 @@ skipped = ET.parse(sys.argv[2]).getroot().find('skipped')
 assert skipped is not None
 assert not skipped.findall('h'), 'nesting fixture must parse without recovery'
 assert {f.get('p') for f in skipped.findall('f') if f.get('why') == 'extract-partial'} == {
-    'depth257.py', 'depth258.py'}, 'cut at 257; empty deep container also disclosed'
+    'depth257.py'}, 'cut at 257 is disclosed; import-free deep container has nothing cut'
 PY
-then ok '#358: clean 255/256 imports kept, 257 cut, and empty 258 nesting still disclosed'
+then ok '#358: clean 255/256 imports kept, 257 cut/disclosed, and import-free 258 not disclosed'
 else no '#358: Python reach/depth/disclosure differs from pristine main'
 fi
 

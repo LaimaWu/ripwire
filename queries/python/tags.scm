@@ -67,8 +67,8 @@
 
 ; Shared import vocabulary (#358). The dependency target is still ONE per statement: the first
 ; name of a plain import (including its alias spelling), or the module_name of a from-import.
-; C++ keeps only the first name capture and imposes the old container reach/depth; queries are
-; unanchored so conditional and function-body imports keep their existing coverage.
+; The child anchor captures only the first plain-import name. C++ imposes the old container
+; reach/depth; statement patterns remain unanchored so conditional and function imports keep coverage.
 (import_statement . name: (_) @import.path)
 (import_from_statement module_name: (_) @import.path)
 

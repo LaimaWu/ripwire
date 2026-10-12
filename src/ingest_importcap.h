@@ -28,12 +28,11 @@
 // `@import.path` is the dependency-target capture, because C-family imports have no other part: `#include` names a path and nothing else — no
 // alias to record, no list of imported names — and because Go's alias/dot/blank spellings ride inside the
 // declaration clause its Include has always carried (see DepDialect::Go below), not in a field of their own.
-// The other two names the issue sketches are reserved BY NAME so the next language lands on them rather
-// than inventing a spelling: `@import.alias` is the local name an import renames a target to (`import a.b as c`, `use Foo\Bar as Baz`, `using X = Foo.Bar`), and
-// `@import.names` is a group of targets ONE directive names (`use Foo\{A, B}`, `alias MyApp.{Bar, Baz}`),
-// which is why both of those are emitted by the C++ side today through a per-directive helper rather than
-// by one capture — a capture names one node, and a group is many. No enum value reserves them: an unused
-// arm that no query can reach is a lie about what the vocabulary supports.
+// `@import.alias` is the local name an import renames a target to (`import a.b as c`, `use Foo\Bar as Baz`, `using X = Foo.Bar`).
+// `@import.names` names the imported clauses of a directive (`use Foo\{A, B}`, `alias MyApp.{Bar, Baz}`).
+// Python emits one names clause and its optional alias in the SAME match, then its Python-specific
+// helper produces the existing RawBind. Later dialects may need a per-directive helper for groups;
+// a capture names one node, and a group is many. No unused enum arm pretends to support a dialect.
 //
 // SECOND MEMBER: DepDialect::Web (TypeScript, TSX, JavaScript, the .astro frontmatter that rides TypeScript).
 // Its three spellings are three patterns on the SAME capture name — `import … from 'x'`, a re-export
