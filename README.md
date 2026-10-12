@@ -139,7 +139,7 @@ claim cannot quietly drift. The row-by-row ledger is
 JavaScript · Java · Ruby · PHP · Lua · Elixir · Dart · Kotlin · GDScript · Clojure · Bash · C# · JSON · TOML · YAML · Markdown — see
 [language support and limits](#languages).
 
-**Latest: 0.6.5** — TypeScript alias imports resolve, and fixes from Windows testers. [Release notes](#release-notes) ·
+**Latest: 0.6.7** — more complete answers, faster calls, fewer bytes. [Release notes](#release-notes) ·
 [the presentation](present/ripwire-showcase.pdf) · [the changelog](CHANGELOG.md) — with thanks to the
 contributors named there; this release is largely theirs.
 
@@ -190,6 +190,16 @@ you need — no follow-on grep, no three more whole-file reads to fill in what i
 followed by three greps is the same search paid for twice: it does not save you tokens and it does
 not make the coding faster.
 
+**Two jobs, one goal.** An agent meeting a codebase does two things, and ripwire is shaped for both:
+
+1. **Orient — `ripwire .`** One call gives the ranked map: the main subsystems, the program entry points,
+   the symbols that matter most, and a count of every file the ranking left out. The most important
+   information about a new tree, in as few calls as possible.
+2. **Ask — `--for`, `--expand`, `--callers`, `--path`, …** After that, each question gets a lean answer:
+   as few bytes as it can spend while still answering the question fully, so no follow-up grep is needed.
+
+That is the goal, and not every answer reaches it yet; the stair-steps below are how we get there.
+
 <details>
 <summary>The two stair-steps that make it reachable — <b>honest about what is missing</b>, <b>priced in what it spends</b></summary>
 
@@ -215,6 +225,9 @@ clue where to look next. So every change is judged on more than "was it right":
 - **False-confidence rate:** wrong answers that claim to be complete — the worst case, held near zero.
 - **Next-clue usefulness:** for partial and wrong answers, whether following the answer's first
   suggested next step reaches what the question needed, within one hop. Graded blind.
+- **Recoverability:** for every cut answer, whether following its `next=` returns everything that was cut.
+- **Tokens per complete answer:** total tokens an agent spends across a scenario, divided by the questions it got fully answered.
+- **Cut-row recoveries:** how often a needed item arrived only through a continuation.
 
 **Answering comes first; efficiency is how we get there.** We aim for answers about as lean as the
 leanest tools, but a byte budget is never allowed to cost an answer. We have gone too far toward short
@@ -222,6 +235,27 @@ answers before and cut information that was needed, so now every size limit has 
 runaway guard far above typical answers (it catches an output bug, and says so when it trips), or a
 stair-step target where anything over it must be explained. A capped answer is always measured
 against the same answer uncapped, and the one that answers better wins.
+
+**A cut is only honest if you can get the rest back.** Disclosing a cut is the floor, not the bar: a capped
+answer plus the `next=` it prints must return everything the uncapped answer had. A test that checks this for every
+budget option on every command is being built, so that "the answer was cut" always comes with "and here is the rest".
+
+**What a budget may spend first.** When a budget is tight, ripwire drops bytes that carry no answer before
+it drops answers: repeated legend text, duplicated paths, bodies whose signature already says what you need.
+Only then the lowest-ranked rows, each counted. A whole section never disappears without a marker.
+
+**Budgets are yours to set, never ours to impose.** The defaults and the setups `ripwire wrap` writes carry no
+budget that cuts a typical answer; a budget is a choice the caller makes, with its cost disclosed.
+
+**Efficiency is counted per complete answer, across the whole task.** Bytes per answer can fall while the task
+gets more expensive, if the agent then has to ask again. So the efficiency figure is tokens per complete answer
+over a whole scenario — orient, then the questions that follow — not bytes per call.
+
+**Ranking is the tool's best guess; the next= is the safety net — and we measure how often the net is needed.** ripwire cannot always
+know which row answers the question; it goes by ranking. When a needed item appears only after following an answer's next=, the
+honesty layer saved the answer but the ranking put that item below the cut. We count those per round:
+- **Recovered through next=:** the item was cut but recoverable — one extra call. Driving this down is ranking work.
+- **Lost:** the item was cut with no marker or no working next= — a bug, fixed first.
 </details>
 
 ### Same answer, a fraction of the tokens — read this table first if your agent is on a budget
@@ -243,7 +277,7 @@ Ordered understand → navigate → review-the-change:
 | "Where is X handled?" | `ripwire . --for="…"` | **~2.1K tok** | ~4.9K–20K tok — `grep -rn <term> src/`, then read the file it points at | 2.3×–9.3× |
 | "What do I already know?" | `ripwire . --recall="…"` | **~15K tok** | ~445K tok — read all 119 markdown docs this repo carries | 29.2× |
 | "Set me up for this task" | `ripwire . --pack-task="…"` | **~2.1K tok** | ~16K–80K tok — read every relevant file, whole | 7.7×–37.7× |
-| "Show me this one function" | `ripwire . --expand=SYM --top-k=0` | **~260–16.5K tok** body (+~5.7K for the ranked-neighborhood bundle) | ~43K–174K tok — read the whole file it lives in | 2.6×–670× |
+| "Show me this one function" | `ripwire . --expand=SYM` | **~260–16.5K tok** body (+~5.7K for the ranked-neighborhood bundle) | ~43K–174K tok — read the whole file it lives in | 2.6×–670× |
 | "Who calls this function?" | `ripwire . --callers=SYM` | **~580 tok** | ~40K–52K tok — `grep -rn SYM src/` (mostly noise), then open 2–3 files to sort real calls from mentions | 69.2×–89.1× |
 | "Is it safe to change this?" | `ripwire . --impact=SYM` + `--uses=SYM` | **~1.3K tok** | ~18K tok — open every direct-use file, whole | 14.4× |
 | "I have a stack trace" | `ripwire . --from-trace=FILE` | **~1.4K tok** | ~124K–298K tok — grep all 7 frame names, then open the innermost file(s) | 86.9×–208.6× |
@@ -260,7 +294,7 @@ three `docs/ARCHITECTURE.md` names as central; the `--for` row lands `mcpStale`
 (`src/mcpindex.h:633`), the actual staleness check, 5th-ranked; `--recall` lands the container-rule
 doc (`AGENTS.md`) that states, verbatim, the same "no `std::map`" rule `CONTRIBUTING.md` explains in
 full; `--pack-task` names the same three touch points a human would — `cachelint.h`, `mergeCachePack`
-(`src/main.cpp:1787`), the `lintrules.h` helpers it reuses; `--expand --top-k=0` hands back the
+(`src/main.cpp:1787`), the `lintrules.h` helpers it reuses; `--expand` hands back the
 requested function's complete, unmodified body — the ranked-neighborhood addition costs the same
 ~22.6 KB regardless of which function you ask for, confirmed on two (a fixed floor, not per-function
 variance); `--callers` on `langOfPath` names its 2 real callers, the same ones a `grep` hit-list
@@ -799,7 +833,7 @@ to do with it.** Two shapes get the most out of it, and one gets nothing.
 |---|---|---|
 | `ripwire . --for="…" --top-k=5` | `ripwire . --for="…" --signatures-only` (or `--token-budget=N`, `--detail=N`) | `--top-k` is inert on `--for`: the run warns on stderr and emits the full bundle anyway, so the agent *believes* it narrowed the output and did not. |
 | `ripwire . --query="…"` as the default lens | `ripwire . --for="…"` | `--query` is the raw BM25 ranking — the binary's own help calls it debug and says "use --for". It is the right tool for hunting a vocabulary, the wrong default for a task. |
-| `ripwire . --expand=SYM` where SYM is an **ambiguous** bare name | `ripwire . --expand=SYM --top-k=0` (or name it exactly: `--expand=FILE:NAME`) | A multi-match name keeps the ranked map — there IS something to disambiguate — so ~9K est_tokens of map ride along with the bodies. An **unambiguous** single match already defaults to `--top-k=0` on its own (disclosed as `topk_default="0"`); no flag needed there. |
+| `ripwire . --expand=SYM --top-k=0` (a habit from before the lean default) | `ripwire . --expand=SYM` | `--expand` and `--outline` ship no ride-along map whenever every definition asked for is served — one exact match or an ambiguous bare name alike (disclosed as `topk_default="0"`, with `map_next=` naming the call that prints the map if you never oriented). Definitions a byte budget cut are named in `unserved_total=` / `unserved_next=`. An explicit `--top-k=N` still brings the map back. |
 | `--callers=<route handler>` expecting routes | find the URL in the project's own docs (e.g. a feature map), then `--expand` the handler | Framework route handlers have no callers in the graph — the decorator reaches them, not project code. Empty `--callers` on a handler is the design, not a bug. |
 | `ripwire <dir-of-repos> …` (ONE root that happens to contain checkouts) | `cd` into ONE checkout first | Nothing refuses this: the crawl silently walks the nested repos and merges them into one corpus, so you pay for a map of everything and rank across unrelated codebases. Distinct from the real multi-root feature, which is N **explicit** positional roots (`ripwire dir1 dir2 … <verb>`, 2–16 checkouts merged on purpose). |
 
@@ -948,9 +982,9 @@ Full retrieval tables — including the MRR figures behind the router numbers ab
 ## What it answers
 
 <details>
-<summary><b>188 long flags</b> across seven families, plus the MCP server — and <code>--help-task</code> names the ONE command a task wants, or abstains honestly when the evidence is too thin</summary>
+<summary><b>190 long flags</b> across seven families, plus the MCP server — and <code>--help-task</code> names the ONE command a task wants, or abstains honestly when the evidence is too thin</summary>
 
-Around the core sit 188 long flags advertised in `--help`, across seven families — plus an MCP
+Around the core sit 191 long flags advertised in `--help`, across seven families — plus an MCP
 server, so a coding agent can call any of them mid-task instead of grepping and reading whole files.
 `--help` prints one line per flag (~4.5K tokens); `--help=--FLAG` prints that flag's full entry with
 every caveat, `--help=SECTION` one family, and `--help=all` the whole catalog.
@@ -1065,7 +1099,7 @@ every dependency is vendored in-tree, so the build completes with the network of
 git clone https://github.com/redhat-et/ripwire.git
 cd ripwire
 cmake -S . -B build && cmake --build build -j
-./build/ripwire . --max-tokens=3000   # the ranked map — start here on an unfamiliar repo (bare it is ~22 KB here; this keeps the head at ~6 KB)
+./build/ripwire .   # orient once: the ranked map of an unfamiliar repo (add --max-tokens=N only if your context is tight — it cuts the map and says so)
 ```
 
 <details>
@@ -1109,7 +1143,7 @@ skills/install.sh --codex       # Codex CLI: the task-shaped skills that say whe
 Four commands worth learning first:
 
 ```bash
-ripwire . --max-tokens=3000                        # the ranked map — start here (bare it is ~22 KB / ~9K est_tokens on this repo; this keeps the head at ~6 KB / ~2.5K)
+ripwire .                                          # orient once: the ranked map of an unfamiliar repo (add --max-tokens=N only if your context is tight — it cuts the map and says so)
 ripwire . --for="incremental cache invalidation"   # the task lens: what to touch, ranked
 ripwire . --callers=someFunction                   # who calls it
 ripwire . --test-gate                              # before you commit: which tests must run
@@ -1408,18 +1442,19 @@ trailing `…`.
 **Ten seconds, no index server, no embeddings, no API key** — a parse and a call graph, built on the
 spot. The rows below are a real capture: the callers and their files are gate-held current
 (`test/readmeexamplecheck.sh`), the `:line` suffixes were true when captured and drift as the files
-grow — nothing can keep a line number true in a document, so it is not claimed here.
+grow — nothing can keep a line number true in a document, so it is not claimed here. `p=` is where each caller is
+defined; `sites_at=` lists its call sites as pasteable `file:line` tokens, so the lines to edit come with the first answer.
 
 ```
 $ ripwire . --callers=rankGraphTeleport
 <callers of="rankGraphTeleport" defs="1" count="7" root="." hop_tested="0" hop_untested="7" counts_floor="1">
-<s t="fn" n="runEval" p="src/eval.h:171"/>
-<s t="fn" n="rankGraph" p="src/graph.h:3445"/>
-<s t="fn" n="anchoredLexicalRank" p="src/graph.h:3995"/>
-<s t="fn" n="churnDecayRanking" p="src/main.cpp:1157"/>
-<s t="fn" n="churnRankedGraph" p="src/main.cpp:1191"/>
-<s t="fn" n="runDefaultMap" p="src/main.cpp:1295"/>
-<s t="fn" n="getIndex" p="src/mcpindex.h:1108"/>
+<s t="fn" n="getIndex" p="src/mcpindex.h:1165" sites_at="src/mcpindex.h:1268"/>
+<s t="fn" n="rankGraph" p="src/graph.h:7965" sites_at="src/graph.h:7968"/>
+<s t="fn" n="anchoredLexicalRank" p="src/graph.h:8611" sites_at="src/graph.h:8662"/>
+<s t="fn" n="runEval" p="src/eval.h:171" sites_at="src/eval.h:325"/>
+<s t="fn" n="churnDecayRanking" p="src/main.cpp:1383" sites_at="src/main.cpp:1397"/>
+<s t="fn" n="churnRankedGraph" p="src/main.cpp:1422" sites_at="src/main.cpp:1436 src/main.cpp:1437 src/main.cpp:1451"/>
+<s t="fn" n="runDefaultMap" p="src/main.cpp:1632" sites_at="src/main.cpp:1752"/>
 </callers>
 ```
 
@@ -2085,9 +2120,9 @@ wrong, and it has. These are the results that say so, all in-tree, all published
 ### In the tests
 
 <details>
-<summary><b>679 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
+<summary><b>684 gate scripts</b>, five contracts no unit test can hold, and the house rule: write the gate before the code it measures</summary> <!-- gatecount -->
 
-`test/regression.sh` names **679 gate scripts** and is the authoritative list; <!-- gatecount -->
+`test/regression.sh` names **684 gate scripts** and is the authoritative list; <!-- gatecount -->
 `python3 test/pargates.py . ./build/ripwire -j 6` runs the same set in parallel. On top of them sit the
 contracts that do not fit a unit test: two runs byte-identical, warm output identical to cold, output
 that pipes clean through `xmllint --noout`, a sanitizer build with `-fno-sanitize-recover=all`, and a
@@ -2609,12 +2644,14 @@ every request cross the network in the clear: put a TLS-terminating reverse prox
 Change to the repository. Run the following command:
 
 ```bash
-ripwire . --max-tokens=3000   # start here on an unfamiliar repository
+ripwire .   # orient once on an unfamiliar repository
 ```
 
-The command writes the top of the ranked map within the token budget. Remove `--max-tokens=3000`
-for the complete map. The complete map is larger. On a large tree, use `--top-k=N` to limit the row
-count.
+The command writes the ranked map: the main subsystems, the entry points, the most important symbols,
+and a count of every file the ranking left out. Read it once per session, then ask lean questions
+(`--for`, `--expand`, `--callers`). If your context is tight, `--max-tokens=N` keeps only the head of
+the map; the cut is disclosed (`shown=` of `symbols=`), but it can drop what you need, so prefer the
+full map when it fits.
 
 The first call on a tree parses it; every call after that reads a cache and answers in a fraction of
 the time. Judge the cost of the tool by the second call, not the first. If the first call fails, or
@@ -2625,7 +2662,7 @@ identity of the index, and says which one is at fault.
 
 | Task | Command |
 | --- | --- |
-| Orient in a new tree | `ripwire . --max-tokens=3000` |
+| Orient in a new tree | `ripwire .` |
 | Prepare for a task | `ripwire . --for="<task description>"` |
 | Get everything for one task in a single call | `ripwire . --pack-task="<task description>"` |
 | Ask which command to run | `ripwire . --help-task="<task description>"` |
@@ -2647,7 +2684,7 @@ identity of the index, and says which one is at fault.
 
 ### 5. Command families
 
-The `--help` output groups 188 long flags advertised in `--help` into seven families. The `--help=`
+The `--help` output groups 191 long flags advertised in `--help` into seven families. The `--help=`
 column below is the argument that prints one family: `ripwire --help=navigate`. `ripwire
 --help=--FLAG` prints one flag's full text — the caveats, the units, what it refuses and why.
 `ripwire --help=all` is the whole catalog, about 46,000 tokens.
@@ -2694,13 +2731,13 @@ The leading legend comment is elided here; the line numbers are a capture and mo
 
 ```xml
 <callers of="rankGraphTeleport" defs="1" count="7" root="." hop_tested="0" hop_untested="7" graph_ambiguous="7827" graph_unresolved="4865" graph_unindexed="218" counts_floor="1" next="--uses=rankGraphTeleport">
-<s t="fn" n="runEval" p="src/eval.h:171"/>
-<s t="fn" n="rankGraph" p="src/graph.h:3445"/>
-<s t="fn" n="anchoredLexicalRank" p="src/graph.h:3995"/>
-<s t="fn" n="churnDecayRanking" p="src/main.cpp:1157"/>
-<s t="fn" n="churnRankedGraph" p="src/main.cpp:1191"/>
-<s t="fn" n="runDefaultMap" p="src/main.cpp:1295"/>
-<s t="fn" n="getIndex" p="src/mcpindex.h:1108"/>
+<s t="fn" n="getIndex" p="src/mcpindex.h:1165" sites_at="src/mcpindex.h:1268"/>
+<s t="fn" n="rankGraph" p="src/graph.h:7965" sites_at="src/graph.h:7968"/>
+<s t="fn" n="anchoredLexicalRank" p="src/graph.h:8611" sites_at="src/graph.h:8662"/>
+<s t="fn" n="runEval" p="src/eval.h:171" sites_at="src/eval.h:325"/>
+<s t="fn" n="churnDecayRanking" p="src/main.cpp:1383" sites_at="src/main.cpp:1397"/>
+<s t="fn" n="churnRankedGraph" p="src/main.cpp:1422" sites_at="src/main.cpp:1436 src/main.cpp:1437 src/main.cpp:1451"/>
+<s t="fn" n="runDefaultMap" p="src/main.cpp:1632" sites_at="src/main.cpp:1752"/>
 </callers>
 ```
 
@@ -2841,7 +2878,7 @@ python3 test/pargates.py . ./build/ripwire -j 6
 A new gate script must be added to `test/regression.sh` in the same change. The gate
 `test/manifestcheck.sh` enforces this rule.
 
-Another gate derives the cap inventory. The tool has 240 compile-time caps and 7 ranking parameters.
+Another gate derives the cap inventory. The tool has 253 compile-time caps and 7 ranking parameters.
 `docs/LIMITS.md` lists each cap, its value, and whether the file discloses a truncation when the cap
 fires, and `python3 docs/limits_build.py --check` proves that list against `src/`. `docs/TUNING.md`
 lists the measured cost of each cap.
@@ -3054,6 +3091,24 @@ terms.
 ---
 
 ## Release notes
+
+**ripwire 0.6.7 — more complete answers, faster calls, fewer bytes.** Each `--callers` and `--safe-delete` row now
+names its call sites as `file:line`, so one answer holds the lines to edit (`--callers=escapeXml` on this repository:
+its first answer shows 40 of 142 callers, every one with its call lines, 79 in all; 0.6.5 showed none). `--lego` lists implementors below a direct one (a two-level
+hierarchy: 5 of 5, was 2); `--impact` names the files its reach lands in (tmux `--impact=grid_set_cell` now names `input.c`
+and `window-client.c`); the default map keeps directories and entry points it used to cut (tmux `input.c`,
+`key-bindings.c`, `main`); `--for` gives the function a question names its own call-hop row (8 of 32 questions over
+8 public repositories gain it, 23 are byte-identical); and `--whereis` labels other branches' definitions with the parser
+(`--whereis=escapeXml` here: 60 rows, 54 of them call sites, became the 2 declarations). A warm `--callers` call is faster (319 → 269 ms on a 3,100-file
+snapshot), and `--whereis` is about three times faster: on this repository's 596-ref checkout, `--whereis=lego` takes
+4.7 s instead of 13.3 s and returns 18,616 B instead of 56,075 B (0.6.5 vs 0.6.7), every row kept. It now parses other
+branches' files to tell definitions from call sites, which costs memory: about 1.0 GB at peak, up from 0.6 GB. A C++ `empty()` or `find()` no longer
+binds to an in-tree namesake without proof (14 of the top 20 map rows here carried such a name; now 0). Imports for
+JS/TS and Go now come from one shared capture (C-family from @lennix1337). Rails schema columns are definitions (thanks
+@mpapis, #339), and a budgeted `--for` pages over CLI and MCP (thanks @pt-act, #362). Ruby calls follow Ruby's method
+lookup (thanks @andriytyurnikov), and the Linux sanitizer build runs again (thanks @llvm-x86). Reports from
+@ahmedibrahim085 (#381: the router now keeps a control group by default), @KilimcininKorOglu (#350) and @toasterbook88
+(#353). New in CONTRIBUTING.md: a map of each feature family's shared handler, with slices you can claim.
 
 **ripwire 0.6.5 — TypeScript alias imports resolve, and fixes from Windows testers.** Imports through a tsconfig alias,
 `baseUrl` or a workspace package are now real edges, so `--deps`, `--arch`, `--impact` and the call graph see them, and a

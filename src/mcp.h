@@ -31,7 +31,7 @@
 #include <string>
 #include <algorithm>       // std::find — the --mcp-tools duplicate check and the batch-served lookup
 #include <bit>             // std::popcount — the --mcp-tools profile check
-#include "infra/tablelookup.h"   // findByField — mcpToolIndex, the same row lookup wrap and ingest use
+#include "infra/tablelookup.h"   // findIndexByField — mcpToolIndex, the same row lookup wrap and ingest use
 #include <cstdlib>         // ::realpath — the workspace-pin canonicalization (mcpCanonRoot)
 #include <climits>         // PATH_MAX
 #include "infra/os.h"      // rw::os::getcwd — R2a: the launch-cwd assumed root (resolved once at startup)
@@ -141,8 +141,10 @@ inline constexpr McpToolMask kMcpAllToolsMask = ( McpToolMask{ 1 } << kMcpVerbCo
 // kMcpVerbTable's row for `name`, or kMcpVerbCount when the name is not an advertised tool.
 constexpr std::size_t mcpToolIndex( std::string_view name ) noexcept
 {
-    const McpVerbInfo* const row = findByField( kMcpVerbTable, &McpVerbInfo::name, name );
-    return row == nullptr ? kMcpVerbCount : static_cast<std::size_t>( row - kMcpVerbTable );
+    // The INDEX-shaped lookup, not findByField's row pointer: g++ 15 rejected the pointer form's
+    // row-address arithmetic in constant evaluation under -fsanitize=address (the static_asserts
+    // below) — the same GCC class findIndexByField exists for (#347). Same values on every compiler.
+    return findIndexByField( kMcpVerbTable, &McpVerbInfo::name, name );
 }
 
 // The named profiles. `members` is a comma list of tool names; "" means every tool.
@@ -1374,7 +1376,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                    + mcprefuse::toolMetadataFor( "edit_check", pathIsRequired ) + "},"
                    // The cross-branch + dark-content verbs. Read-only git plumbing, no index
                    // coupling for the first two (they read OTHER refs' blobs, which the index never ingested).
-                   + mcprefuse::gitOnlyStanza( omitGitVerbs, "{\"name\":\"whereis\",\"description\":\"WHERE DOES THIS CONTENT LIVE? Which branch's tree defines or mentions a symbol, HEAD first, with on-head=0 naming the case this verb exists for: content that lives only on a branch (a finished fix stranded on 1 of 30 refs). Each distinct blob is read once (content-addressed), so N branches cost about one tree. kind=def on a REF row is a LEXICAL heuristic (ref blobs are raw text, never ingested) — for HEAD's parsed answer use find_symbol/fetch_body. symbol = the name, or an @FILE:LINE seed; kind = optional ref-name substring filter, echoed as filter=; limit/offset page the hits (first 60). at= is HEAD's sha; +dirty = changed paths read from the working tree (worktree=). Single-root; read-only.\","
+                   + mcprefuse::gitOnlyStanza( omitGitVerbs, "{\"name\":\"whereis\",\"description\":\"WHERE DOES THIS CONTENT LIVE? Which branch's tree defines or mentions a symbol, HEAD first, with on-head=0 naming the case this verb exists for: content that lives only on a branch (a finished fix stranded on 1 of 30 refs). Each distinct blob is read once (content-addressed), so N branches cost about one tree. kind=def is a parser's label on any row: HEAD's from the index, another ref's from parsing its blob; kind=text = a def-like line not parsed. symbol = the name, or an @FILE:LINE seed; kind = optional ref-name substring filter, echoed as filter=; limit/offset page the hits (first 60). at= is HEAD's sha; +dirty = changed paths read from the working tree (worktree=). Single-root; read-only.\","
                    + mcprefuse::toolMetadataFor( "whereis", pathIsRequired ) + "}," ) +
                    mcprefuse::gitOnlyStanza( omitGitVerbs, "{\"name\":\"stray_content\",\"description\":\"Per branch: the lines its own divergent work AUTHORED (vs its merge-base with HEAD) that the live line does NOT have. Four verdicts (unmerged+superseded+merged+unknown=refs): v=unmerged is genuinely absent; v=superseded means the live line re-implemented the work — the case `git cherry` structurally cannot see; merged branches are omitted and counted; v=unknown is a branch this scan could NOT analyse at all (no merge-base, unrelated history), not a fourth kind of divergence. Every file row carries its raw del/redone/sim evidence. Line-granular, not semantic. kind = optional ref-name substring filter, echoed as filter=; limit/offset page the refs. Single-root; read-only.\","
                    + mcprefuse::toolMetadataFor( "stray_content", pathIsRequired ) + "}," ) +
@@ -1498,6 +1500,13 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // whereis arm, a non-string `listing:5` decoded to "" after that gate had run, its shape refusal was dropped, and the
             // closed-set refusal then told the caller it sent '' (CodeRabbit 5468003465; test/crossrefcheck.sh LEAN (L10b)).
             const std::string listingArg = strArg( "listing" );
+            // whereis: full_text (the CLI --whereis-full-text twin) prints every t= line whole and lifts nothing else. A BOOLEAN,
+            // read here with the other typed arguments so a wrong-shaped value refuses through the shared gate (checklist 26).
+            const bool whereisFullText = boolArg( "full_text" ).value;
+            // grep: code|any (the CLI --grep-in twin). The `listing` sibling (CodeRabbit 5468003465, checklist 26): read inside the
+            // grep arm, a non-string `in:5` decoded to "" after the shape gate had run, its refusal was dropped, and the arm then
+            // answered the default tier as if nothing had been sent. test/greptiercheck.sh (9e).
+            const std::string grepInArg  = strArg( "in" );
             const std::string from    = strArg( "from" );     // path verb: source symbol
             const std::string to      = strArg( "to" );       // path verb: destination symbol
             const std::string trace   = strArg( "trace" );    // L4 from_trace: the raw trace TEXT
@@ -2206,7 +2215,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     // registers the field and the batch surface already refuses loudly. Both dialects now
                     // read the value through grepInModeFromArg, so they cannot disagree about the set.
                     rw::GrepIn        grepInMode = rw::GrepIn::Code;
-                    const std::string inRefusal  = rw::grepInModeFromArg( strArg( "in" ), grepInMode );
+                    const std::string inRefusal  = rw::grepInModeFromArg( grepInArg, grepInMode );
                     if( !inRefusal.empty() )
                     {
                         resp = errResultMsg( -32602, inRefusal );
@@ -2288,10 +2297,9 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     // --token-budget beside --limit — the page has no byte ceiling to shape against.
                     resp = pagedResult( [ & ]( McpPageArgs pg )
                     {
-                        if( ( pg.limit > 0 || pg.offset > 0 ) && budgetArg.isPresent )
-                        {
-                            return errResultMsg( -32602, "for: limit/offset select the file page, which has no token budget to shape against — drop budget_tokens, or drop limit/offset for the budgeted bundle" );
-                        }
+                        // PAGING-POC follow-up (issue #294): budget + window no longer refuses —
+                        // forTaskText serves the budgeted-bundle CANDIDATE PAGE for it (the CLI twin's
+                        // own document); the budgetless FILE PAGE still answers a windowless-budget call.
                         const std::optional<std::string> answer = forTaskText( path, task, redactPtr,
                                                                                 budgetArg.isPresent ? std::size_t( budgetArg.value ) : 0, noRoute, pg,
                                                                                 sections );   // L2: "" (default) = stub; the validated closed set otherwise
@@ -2307,8 +2315,11 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     // D8 fix: legoText now only returns "" on genuine not-found — a resolved type with zero
                     // implementors comes back as real content (implementors="0" + contract), so this message
                     // is no longer conflating two different failures.
-                    const std::string t = legoText( path, type, redactPtr );
-                    resp = t.empty() ? errResultMsg( -32602, notFoundKind( "type", type ) ) : textResult( t );
+                    resp = pagedResult( [ & ]( McpPageArgs pg )   // lane lego-transitive: limit/offset window the deeper implementors
+                    {
+                        const std::string t = legoText( path, type, redactPtr, pg );
+                        return t.empty() ? errResultMsg( -32602, notFoundKind( "type", type ) ) : textResult( t );
+                    } );
                 }
                 else if( name == "whereis" && !path.empty() && !symbol.empty() )
                 {
@@ -2323,10 +2334,17 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     resp = !listingRefusal.empty() ? errResultMsg( -32602, listingRefusal ) : pagedResult( [ & ]( McpPageArgs pg )
                     {
                         bool              seedFault = false;
-                        const std::string t = whereisText( path, symbol, kind, crossref::kWhereisHits, pg, &seedFault, listing );
+                        bool              blobFault = false;
+                        const std::string t = whereisText( path, symbol, kind, crossref::kWhereisHits, pg, &seedFault, listing, &blobFault,
+                                                            whereisFullText );
                         if( seedFault )
                         {
                             return errResultMsg( -32602, mcprefuse::notFound( getIndex( path ).ing, "symbol", symbol ) );
+                        }
+                        if( blobFault )
+                        {
+                            DISCLOSE( Diagnostics::answerRefused, "whereis (MCP): the blob stream did not serve every blob — a -32603 error names it, no hit count" );
+                            return errResultMsg( -32603, crossref::blobsUnreadCause( crossref::UnreadBlobBatch::Trees ) + " — no hit count rather than one nothing measured" );
                         }
                         return t.empty() ? errResult( -32602, "not a git repository (or no HEAD commit) — no refs to search" ) : textResult( t );
                     } );
@@ -2336,7 +2354,13 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     // `kind` doubles as the optional ref-name substring filter (no dedicated arg needed).
                     resp = pagedResult( [ & ]( McpPageArgs pg )   // M13
                     {
-                        const std::string t = strayContentText( path, kind, crossref::kStrayFilesPerRef, pg );
+                        bool              blobFault = false;
+                        const std::string t = strayContentText( path, kind, crossref::kStrayFilesPerRef, pg, &blobFault );
+                        if( blobFault )
+                        {
+                            DISCLOSE( Diagnostics::answerRefused, "stray_content (MCP): the blob batch did not serve every blob - a -32603 error names it, no verdicts" );
+                            return errResultMsg( -32603, crossref::blobsUnreadCause( crossref::UnreadBlobBatch::Branches ) );
+                        }
                         return t.empty() ? errResult( -32602, "not a git repository (or no HEAD commit) — no refs to compare" ) : textResult( t );
                     } );
                 }
@@ -2566,6 +2590,20 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 // `pack_task` is the dispatch-only alias (same branch, not separately advertised in tools/list above).
                 else if( ( name == "explore" || name == "pack_task" ) && !path.empty() && !task.empty() )
                 {
+                    // PAGING-POC (issue #294, ask (b)): explore's limit/offset — the same bounded pair the
+                    // `for` twin takes (mcpPageArgs → pageWindow), refused-together with partition: a
+                    // partitioned bundle has N+1 slices and no single page to walk.
+                    const McpPageParse explorePage = mcpPageArgs( args );
+                    if( !explorePage.refusal.empty() )
+                    {
+                        resp = errResultMsg( -32602, explorePage.refusal );
+                    }
+                    else if( ( explorePage.page.limit > 0 || explorePage.page.offset > 0 ) && partitionCount > 0 )
+                    {
+                        resp = errResult( -32602, "partition and limit/offset are mutually exclusive — a partitioned bundle has N+1 slices and no single page to walk" );
+                    }
+                    else
+                    {
                     // W3FIX H4: `partition` used to be a bare `std::uint32_t( partitionArg )` cast — N3's
                     // radius bug, one field over — so partition:4294967299 ran a 3-way fan-out and
                     // partition:2^32 served a single bundle, both silently. The band is a DECLARED domain now
@@ -2576,7 +2614,9 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                     static_assert( kMcpRecallTopKMax == 1000,
                                    "the top_k refusal names the band 1..1000 in mcprefusal.h's kMcpValueFields and in the "
                                    "tools/list memory_recall stanza — move all three together" );
-                    resp = textResult( packTaskText( path, task, budgetTokens, redactPtr, partitionCount, noRoute ) );
+                    resp = textResult( packTaskText( path, task, budgetTokens, redactPtr,
+                                                     PackTaskForm{ partitionCount, noRoute, explorePage.page } ) );
+                    }
                 }
                 // L4: `from_trace` — maps a pasted stack-trace/sanitizer/compiler-error TEXT onto indexed symbols
                 // (fromTraceBundleText, tracelocus.h) — the SAME assembler --from-trace's CLI path calls.

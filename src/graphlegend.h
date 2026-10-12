@@ -615,14 +615,29 @@ inline constexpr const char* kDeclinedCallsLegend =
 // answer on a tree the gate never touched keeps its bytes.
 inline constexpr const char* kDeclinedCallsGateClause =
     "It also counts a call named like a builtin-type method (dict.get, list.append) whose bound definitions' classes the caller's file never names. ";
+// The C++ standard-member gate's declines (graph.h StdMemberGate) ride the same count, with ONE definition possible and in
+// the caller's own file or directory too; charged only where that gate declined at least one call in the graph
+// (Graph::stdMemberDeclinedCalls), so a tree it never touched keeps its bytes. What it does NOT mean is in the same breath.
+inline constexpr const char* kDeclinedCallsStdClause =
+    "It also counts a C++ call named like a member of a standard container, string, optional or smart pointer (v.push_back, s.size) on a receiver no rule tied to an in-tree class: the standard library's own member may be the one called, so no in-tree namesake is bound; it is not a claim that the receiver is a standard type. ";
 inline const char* declinedCallsLegend( bool on ) noexcept { return on ? kDeclinedCallsLegend : ""; }
 inline const char* declinedCallsGateLegend( bool on ) noexcept { return on ? kDeclinedCallsGateClause : ""; }
+inline const char* declinedCallsStdLegend( bool on ) noexcept { return on ? kDeclinedCallsStdClause : ""; }
+// The callees answer's <stdm> line (graph.h stdMemberCallsMadeBy): rides exactly when the line does.
+inline constexpr const char* kStdMemberCallsLegend =
+    "<stdm n= calls=>: of declined_calls=, the calls these definitions make that are named like a member of a C++ standard container, string, optional or smart pointer (n=, each name once) on a receiver no rule tied to an in-tree class; calls= how many. No edge and no row: the standard library's own member may be the one called, and so may an in-tree namesake. It does not list every standard-library call the body makes: a name with no in-tree definition never had a candidate to decline. ";
+inline const char* stdMemberCallsLegend( bool on ) noexcept { return on ? kStdMemberCallsLegend : ""; }
 // --test-gate's own short form: the same attribute and unit, sized for a verb whose legend has an absolute byte budget
 // (test/testgatelegendbudgetcheck.sh), so it defines the one form it emits rather than all three.
 inline constexpr const char* kDeclinedCallsTestGateLegend =
     "declined_calls=K (absent when 0): K call SITES the resolver declined to bind that could have reached the change or its radius (the map's declined=); a test behind one is in no row here. ";
 // The clause and, where the gate declined in this graph, its gate sentence — the one spelling every declined_calls= emitter uses.
 inline std::string declinedCallsLegendWithGate( bool on, bool gateDeclined ) { return std::string( declinedCallsLegend( on ) ) + declinedCallsGateLegend( on && gateDeclined ); }
+// The same, plus the C++ standard-member gate's sentence where that gate declined in this graph (graph.h StdMemberGate).
+inline std::string declinedCallsLegendWithGates( bool on, bool gateDeclined, bool stdDeclined )
+{
+    return declinedCallsLegendWithGate( on, gateDeclined ) + declinedCallsStdLegend( on && stdDeclined );
+}
 
 // ── reference-as-value round (src/valuerefs.h, src/ingest_valuerefs.h) ─────────────────────────────────────────
 // Each clause rides ONLY a document that carries the attribute or rows it defines (value_refs= / <vrs>), so an answer
@@ -740,6 +755,31 @@ inline constexpr const char* kImpactDepthColumnarLegend =
     "the depth column: each row's hop depth (1 = calls SYM directly; the shortest call chain). Rows run depth 1 first, "
     "PageRank order within a depth, so a cut drops the deepest rows first; by_depth=k:n,… counts reaches= per depth and sums "
     "to it, so a capped answer states the depth it stopped in. ";
+// idea #6 (lane lean-trio): the per-file rollup and the umbrella-header count, each said exactly when it rides — the
+// rollup whenever the reach set is non-empty (XML forms only: the JSON form carries it as "files", columnar not at all),
+// the umbrella sentence only beside importers_umbrella=. Shared by the CLI arm and the MCP twin, byte-identical.
+// fix27: `hedged` = a listed rf row carries via= or by_name= (a multi-definition selector only); its sentence rides then.
+inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged = false )
+{
+    std::string out;
+    if( rollup )
+    {
+        out += "FILES (only beside a cut symbol window): the WHOLE reach set by file. files= in all, shown_files= listed; rf "
+               "syms= reached symbols there, d= fewest hops; by d=, syms=, path; files_capped=\"1\" with files_next= (lists all) when cut. ";
+    }
+    if( rollup && hedged )
+    {
+        out += "rf via=\"name\": of= matched several definitions and every reached symbol there is reached only by name, so the "
+               "file may depend on a namesake, not the definition meant; by_name=K: K of its syms= are. ";
+    }
+    if( umbrella )
+    {
+        out += "importers_umbrella=\"1\": SYM's file is an umbrella header (imported by at least half the files that import anything, and by more than 40), so "
+               "its importers are a COUNT here, not rows (shown_importers= is 0); importers_next= lists them. ";
+    }
+    return out;
+}
+
 inline const char* impactDepthLegend( bool columnar ) noexcept
 {
     return columnar ? kImpactDepthColumnarLegend : kImpactDepthLegend;
@@ -875,6 +915,22 @@ inline std::string crossKindKeyJson( const std::string& value )
 inline constexpr const char* kModScopeLegend =
     "t=\"modscope\" is a row for a file's MODULE SCOPE, named <file-scope>: the statements outside every named definition, which is where a top-level call and an anonymous callback body's calls live. It is a CALLER, not a function — nothing in the source can name it, so it never appears as a callee, and it has no body, so expanding it returns none. A file that has no such call has no such row. ";
 inline const char* modScopeLegend( bool on ) noexcept { return on ? kModScopeLegend : ""; }
+
+// CALLSITE-AT (2026-10-09): the reading of a caller row's sites_at= — the callers verb's s rows, safe-delete's c rows, and MCP's
+// calledBy[].sites_at — ONE wording for all three. Present-only: `on` is the emitter's own "a row on this page carries sites_at="
+// condition and `cut` its "a row carries sites_total=" condition, so an answer without them pays 0 bytes. `cap` is
+// pageview.h kCallSitesPerRowCap, passed in (this header sits below pageview.h). No double hyphen: inside an XML comment.
+inline constexpr const char* kCallSitesAtLegend =
+    "sites_at= on a caller row: its calls of the called LEAF name, any receiver or qualifier, as file:line tokens "
+    "(space-separated, ascending; two calls on one line are one site); p= stays where the caller is DEFINED. Matched by name like "
+    "the uses verb's call rows, so not proof each binds here; absent when no call there is spelled like it (an aliased import). ";
+inline std::string callSitesAtLegend( bool on, bool cut, std::size_t cap )
+{
+    std::string clause = on ? std::string( kCallSitesAtLegend ) : std::string();
+    clause += on && cut ? "sites_total=N (absent when sites_at= is whole): this row has N sites and sites_at= lists the first " + std::to_string( cap ) + "; the uses verb on the same selector lists every one. "
+                        : std::string();
+    return clause;
+}
 
 // FE-B (test/receiverevidencecheck.sh): the reading of via="name" — ONE wording for every surface that marks a row with it
 // (--callees/--callers, --impact, --path, --connect's <e>, the <calls> rows of --expand and --for, and MCP's "via":"name").

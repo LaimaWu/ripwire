@@ -22,6 +22,8 @@
 #      exactly one; and at exactly cap+1 items `size > shown` went false, so the element vanished ENTIRELY
 #      and one row disappeared unmarked. Both the general case and that boundary are pinned here — nothing
 #      in test/ pinned any more= count before, which is why the bug survived.
+#   6) (cli-perf-068) A blob stream that never started (an unusable cache dir for its sha list) is refused by
+#      --whereis on both hosts, not printed as on-head="0" hits="0" with a near-miss retrying the same name.
 #   5) Two adjacent ways a real hit is reported as no hit at all: a symbol defined on an UNTERMINATED final
 #      line (the scan only evaluated on '\n', so hits="0" — which the help text says means "this repo never
 #      had the name"), and a branch whose name legally contains '|' (the for-each-ref parse split on it and
@@ -37,6 +39,7 @@
 
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
@@ -59,6 +62,64 @@ attr(){ tr '<' '\n' | grep -v '^!--' | sed -n "s/.* $1=\"\([^\"]*\)\".*/\1/p" | 
 count_of(){ tr '<' '\n' | grep -v '^!--' | grep -c "^$1 "; }
 
 echo "crossrefdegradecheck: BIN=$BIN"
+
+# ══ K75: --stray-content, --abi, --plan and --eval-stray REFUSE when the blob batch cannot run ═══════════════
+#
+# Every cross-branch verdict is built from ONE `git cat-file --batch` whose sha list is written under the cache directory. With
+# TMPDIR naming a directory that does not exist, that list cannot be written, the batch never starts, every blob reads as absent,
+# and the answer was merged="1" refs="1" (a branch holding unmerged work), --abi exit 0 with no drift: a measured-looking zero made
+# of nothing (the whereis hits="0" bug's siblings). The refusal is the whereis mechanism: exit 1, the cause named on stderr, no
+# document on stdout. Arms: a control (the same repo answers when the directory exists, which proves the refusal is about the
+# missing directory and not about the fixture), then the refusal on each verb and on the MCP twin.
+K75="$TMP/k75repo"; mkdir -p "$K75"
+k(){ git -C "$K75" "$@" >/dev/null 2>&1; }
+k init -q -b main
+k config commit.gpgsign false
+printf 'int base( void )\n{\n    return 1;\n}\n' > "$K75/a.c"
+printf '#pragma once\nstruct Uniforms\n{\n    float x;\n    float y;\n};\nstatic_assert( sizeof( Uniforms ) == 8, "uniform GPU contract" );\n' > "$K75/shader.h"
+k add -A; k commit -qm base
+k checkout -qb side
+printf 'int base( void )\n{\n    return 1;\n}\n\nint sideOnlyThing( void )\n{\n    return 42;\n}\n' > "$K75/a.c"
+printf '#pragma once\nstruct Uniforms\n{\n    float x;\n    float y;\n    float z;\n};\nstatic_assert( sizeof( Uniforms ) == 8, "uniform GPU contract" );\n' > "$K75/shader.h"
+k commit -qam "side work"
+k checkout -q main
+printf 'int base( void )\n{\n    return 1;\n}\n\nint mainWork( void )\n{\n    return 7;\n}\n' > "$K75/a.c"
+k commit -qam "live-line work"
+K75GOOD="$TMP/k75tmp"; mkdir -p "$K75GOOD"
+K75BAD="$TMP/k75-no-such-dir"                      # never created: TMPDIR names a directory that does not exist
+printf 'side\tunmerged\n' > "$TMP/k75labels.tsv"
+k75(){ local out="$1" tmpd="$2"; shift 2; env TMPDIR="$tmpd" "$BIN" "$K75" "$@" --no-cache --legend=full >"$out" 2>"$out.err"; }
+
+k75 "$TMP/k75_s_good.out" "$K75GOOD" --stray-content; rcS=$?
+[ "$rcS" = 0 ] && grep -q 'v="unmerged"' "$TMP/k75_s_good.out" \
+    && ok "K75 control: --stray-content answers the branch with work as unmerged when the cache dir works" \
+    || no "K75 control: --stray-content (rc=$rcS) did not report v=\"unmerged\" - the refusal arms below would prove nothing"
+k75 "$TMP/k75_a_good.out" "$K75GOOD" --stray-content --abi; rcA=$?
+[ "$rcA" = 2 ] \
+    && ok "K75 control: --abi reports the break (exit 2) when the cache dir works" \
+    || no "K75 control: --abi exited $rcA, not 2"
+
+for v in "--stray-content" "--stray-content --abi" "--stray-content --plan" "--eval-stray=$TMP/k75labels.tsv"; do
+    # shellcheck disable=SC2086
+    k75 "$TMP/k75_bad.out" "$K75BAD" $v; rcB=$?
+    if [ "$rcB" = 1 ] && [ ! -s "$TMP/k75_bad.out" ] && grep -q "could not read the branches' blobs" "$TMP/k75_bad.out.err" && grep -q 'TMPDIR' "$TMP/k75_bad.out.err"; then
+        ok "K75: $v with TMPDIR missing refuses (exit 1, no document, the cause and TMPDIR named on stderr)"
+    else
+        no "K75: $v with TMPDIR missing did not refuse (rc=$rcB, stdout $( wc -c <"$TMP/k75_bad.out" | tr -d ' ' ) bytes): $( grep -v 'math degraded\|compact legend' "$TMP/k75_bad.out.err" | head -c 200 )"
+    fi
+done
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"stray_content","arguments":{"path":"'"$K75"'"}}}' \
+    | env TMPDIR="$K75BAD" "$BIN" --mcp 2>/dev/null | tail -1 >"$TMP/k75_mcp.json"
+grep -q '"code":-32603' "$TMP/k75_mcp.json" && grep -q "could not read the branches" "$TMP/k75_mcp.json" \
+    && ok "K75: the MCP stray_content twin answers -32603 naming the cause, not a verdict or 'not a git repository'" \
+    || no "K75: the MCP twin did not refuse with -32603: $( head -c 240 "$TMP/k75_mcp.json" )"
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"stray_content","arguments":{"path":"'"$K75"'"}}}' \
+    | env TMPDIR="$K75GOOD" "$BIN" --mcp 2>/dev/null | tail -1 >"$TMP/k75_mcp_good.json"
+grep -q 'unmerged' "$TMP/k75_mcp_good.json" && ! grep -q '"error"' "$TMP/k75_mcp_good.json" \
+    && ok "K75 control: the MCP twin answers when the cache dir works" || no "K75 control: the MCP twin did not answer on a good TMPDIR"
+
 
 # ══ fixture A: a SHALLOW clone — the CI default, and the case that reported every branch as merged ═══════
 #
@@ -272,6 +333,69 @@ REFS_BEFORE="$( git -C "$C" for-each-ref --format='%(refname) %(objectname)' 2>/
     && ok "read-only: the working tree is unchanged" || no "read-only: a crossref verb mutated the working tree"
 [ "$( git -C "$C" for-each-ref --format='%(refname) %(objectname)' 2>/dev/null | cksum )" = "$REFS_BEFORE" ] \
     && ok "read-only: no ref was created, moved or deleted" || no "read-only: a crossref verb wrote a ref"
+
+# ══ 6) a blob stream that never ran is not a measured zero (cli-perf-068; the cli-floor §4 finding) ═════════
+# --whereis reads every blob through ONE `git cat-file --batch` whose sha list is a file under the cache dir. With that
+# dir unusable (TMPDIR naming a directory that does not exist) the batch never started, and the answer still printed
+# on-head="0" hits="0" plus a near-miss note whose retry= was the very name asked — on a repository whose HEAD defines
+# it. Now both hosts REFUSE (CLI: exit 1 naming the cause; MCP: an error) instead of printing a count nothing measured.
+# 6c is the near-miss negative: a GENUINE zero over a working cache dir must still answer hits="0", exit 0.
+H="$TMP/blobless"; mkdir -p "$H" "$TMP/goodtmp"
+printf 'int whereisProbeName( int x ) { return x; }\nint whereisProbeCaller( void ) { return whereisProbeName( 1 ); }\n' > "$H/a.c"
+git -C "$H" init -q -b main && git -C "$H" add a.c && git -C "$H" commit -qm one
+TMPDIR="$TMP/goodtmp/" "$BIN" "$H" --whereis=whereisProbeName >"$TMP/b6a.xml" 2>"$TMP/b6a.err"; rc6a=$?
+H6A="$( attr hits < "$TMP/b6a.xml" )"
+if [ "$rc6a" = 0 ] && [ -n "$H6A" ] && [ "$H6A" -ge 2 ] 2>/dev/null; then ok "6a control: a working cache dir finds the name ($H6A hits, exit 0)"
+else no "6a control: expected exit 0 and >=2 hits, got rc=$rc6a hits=${H6A:-none}"; fi
+TMPDIR="$TMP/no-such-dir/" "$BIN" "$H" --whereis=whereisProbeName >"$TMP/b6b.out" 2>"$TMP/b6b.err"; rc6b=$?
+if [ "$rc6b" != 0 ] && ! grep -q '<whereis ' "$TMP/b6b.out" && grep -q 'could not read the trees' "$TMP/b6b.err"; then
+    ok "6b unreadable blob stream: refused (exit $rc6b, cause on stderr), no hits= printed"
+else no "6b unreadable blob stream: expected a refusal, got rc=$rc6b, stdout: $( head -c 200 "$TMP/b6b.out" )"; fi
+TMPDIR="$TMP/goodtmp/" "$BIN" "$H" --whereis=noSuchNameAnywhere >"$TMP/b6c.xml" 2>/dev/null; rc6c=$?
+if [ "$rc6c" = 0 ] && [ "$( attr hits < "$TMP/b6c.xml" )" = "0" ]; then ok "6c negative: a genuine zero over a working cache dir still answers hits=\"0\", exit 0"
+else no "6c negative: a genuine zero was refused or miscounted (rc=$rc6c, hits=$( attr hits < "$TMP/b6c.xml" ))"; fi
+if command -v python3 >/dev/null 2>&1; then
+    M6="$( TMPDIR="$TMP/no-such-dir/" python3 - "$BIN" "$H" <<'PY'
+import json, subprocess, sys
+msgs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize" },
+         { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "whereis", "arguments": { "path": sys.argv[ 2 ], "symbol": "whereisProbeName" } } } ]
+p = subprocess.run( [ sys.argv[ 1 ], "--mcp" ], input = "".join( json.dumps( m ) + "\n" for m in msgs ), capture_output = True, text = True, timeout = 300 )
+lines = [ l for l in p.stdout.splitlines() if l.strip() ]
+d = json.loads( lines[ -1 ] ) if lines else {}
+res = d.get( "result", {} )
+text = ( res.get( "content" ) or [ {} ] )[ 0 ].get( "text", "" )
+if "error" in d:
+    print( "ERROR " + d[ "error" ].get( "message", "" ) )
+elif res.get( "isError" ):
+    print( "ERROR " + text )
+else:
+    print( "ANSWER " + text[ :200 ] )
+PY
+)"
+    case "$M6" in
+        "ERROR "*"could not read the trees"*) ok "6d MCP twin: the same unreadable stream is an error naming the cause, not a hit count" ;;
+        *) no "6d MCP twin: expected an error naming the unread blobs, got: $( printf '%s' "$M6" | head -c 200 )" ;;
+    esac
+fi
+
+# 6e (train 26c: the K75 x cli-perf-068 one-renderer item): --whereis and the cross-branch sweep refuse in ONE sentence that
+# differs only in its noun (crossref::blobsUnreadCause), so the --whereis refusal names TMPDIR and its MCP twin names the cache
+# directory, as the sweep's refusal (the K75 loop above, its last stderr) always did. Red before the fold: the --whereis CLI
+# sentence never asked about TMPDIR, and its MCP twin never named the directory the sha list is written under.
+K75WORDS="(the one \`git cat-file --batch\` did not start or stopped early; its sha list is written under "
+K75ASK=" - is TMPDIR a writable directory?)"
+if grep -qF "could not read the trees' blobs $K75WORDS" "$TMP/b6b.err" && grep -qF "$K75ASK" "$TMP/b6b.err" \
+   && grep -qF "could not read the branches' blobs $K75WORDS" "$TMP/k75_bad.out.err" && grep -qF "$K75ASK" "$TMP/k75_bad.out.err"; then
+    ok "6e one renderer: the --whereis and cross-branch refusals share every word but the noun, TMPDIR named in both"
+else
+    no "6e one renderer: the two refusals differ beyond the noun — whereis: $( grep 'could not read' "$TMP/b6b.err" | head -c 260 ) | sweep: $( grep 'could not read' "$TMP/k75_bad.out.err" | head -c 260 )"
+fi
+if [ -n "${M6:-}" ]; then
+    case "$M6" in
+        "ERROR "*"could not read the trees' blobs $K75WORDS"*"$K75ASK"*) ok "6e MCP: the whereis error carries the same sentence (the directory and TMPDIR named)" ;;
+        *) no "6e MCP: the whereis error is not the shared sentence: $( printf '%s' "$M6" | head -c 260 )" ;;
+    esac
+fi
 
 # G4: every emitted document must survive xmllint
 if command -v xmllint >/dev/null 2>&1; then

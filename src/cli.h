@@ -177,6 +177,7 @@ struct Config
     bool             mostImportantLast = false;            // --order=important-last (was --most-important-last, now a hidden alias): emit highest-rank content last (explicit; always honoured)
     bool             stable            = false;            // --order=stable (was --stable, now a hidden alias): emit in path/id order (stable prefix → provider KV-cache hits on re-runs)
     bool             noStable          = false;            // --no-stable: opt OUT of the stable default that --mcp turns on (P2-C) — NOT an --order alias, unchanged
+    bool             noInventory       = false;            // --no-inventory: drop the default map's <inv> tier (D7, serialize.h mapInventoryWanted) — the pre-D7 map shape
     bool             noAutoOrder       = false;            // --order=important-first (was --no-auto-order, now a hidden alias): opt OUT of T3's fill-aware auto important-last (see serialize.h kFillOrderThreshold)
     int              maxTokens         = 0;                // --max-tokens=N: budget the map to ~N tokens (binary-search top-K) — SHAPES the map to fit
     std::size_t      tokenBudget       = 0;                // --token-budget=N[K]: CI gate — 0 = disabled. After the map is built, if its est_tokens
@@ -314,6 +315,8 @@ struct Config
     bool             qualityBaseline = false;              // --quality-baseline: snapshot ccx/clones/dead to .ripwire_quality_baseline
     bool             allowDirty      = false;              // --allow-dirty: let --quality-baseline pin on a tree that DIFFERS from HEAD (H11) — the sidecar is
                                                             // then stamped dirty=1/absorbed=N and every later --quality-delta carries baseline_absorbed=
+    bool             showStale       = false;              // --show-stale: with --quality-delta, print the stale-ack rows (and the full header) a
+                                                            // regression-free answer collapses to counts (idea #11)
     bool             qualityDelta    = false;              // --quality-delta: report only code-quality regressions vs that baseline (exit 2 if any MAJOR unacked one)
     std::string_view qualityDeltaRange;                    // --quality-delta=REV|A..B (R-I): compare two COMMITTED trees instead of the working
                                                             // tree vs a baseline — the WAVE-level measurement. Same grammar --dmm= takes
@@ -389,6 +392,7 @@ struct Config
     std::string_view laneBrief;                              // --brief=FILE: one non-blank line per lane, each ranked on its own
     bool             whereisFlag     = false;               // --whereis was given at all (a bare/empty value still routes to the
                                                              // handler and refuses loudly rather than falling through to the map)
+    bool             whereisFullText = false;               // --whereis-full-text: every t= prints whole, nothing else lifted (crossref.h whereisFullTextNext)
     std::string_view whereisListing;                        // --whereis-listing=defs|refs|all (default: defs when it lists more definitions than all, else the strictly shorter; crossref.h whereisServedListing)
     std::string_view whereis;                               // --whereis=SYM: every ref whose TREE contains SYM,
                                                              // HEAD first, with on-head= saying whether the live line has it at all.
@@ -831,6 +835,12 @@ inline constexpr char kHelpHead[] =
         "                               body and not the ~200-symbol map that otherwise rides along with it; the <ctx>\n"
         "                               root then carries est_tokens= (the payload's price, the number --token-budget\n"
         "                               gates on), since no map header is there to carry it.\n"
+        "    --no-inventory             drop the default map's <inv> tier, the files and entries its ranked rows leave out.\n"
+        "                               The default map appends <inv listed= unlisted=> after its ranked rows whenever they\n"
+        "                               left out a file with code: <entry> rows (program entries by each language's own entry\n"
+        "                               convention) and <ls> rows naming or counting every unshown file by directory. This\n"
+        "                               flag drops it (the rows are unchanged either way). The tier never rides a map fitted\n"
+        "                               to a token budget, nor a payload verb's ride-along map.\n"
         "    --max-tokens=N             budget the map to ~N tokens (binary-search top-K) — SHAPES the map to fit.\n"
         "                               THE FIT IS A BYTE CEILING, and it is deliberately CONSERVATIVE: N is converted at\n"
         "                               2.36 B/tok (the densest calibrated language, so N holds for any corpus) times a 0.90\n"
@@ -937,6 +947,9 @@ inline constexpr char kHelpHead[] =
         "                               ranked map plus a <hops> section — the same candidate head's ONE-HOP callee signatures,\n"
         "                               the <calls> block a body carries — and NO body CDATA, disclosed as bundle=\"compact\"\n"
         "                               bodies=\"0\" reason=\"compact-route\". Read the map, then --expand=SYM the one you want.\n"
+        "                               A ranked function or method whose whole name is a word of the query (by name, not\n"
+        "                               resolved) gets the first <h qword=WORD> rows, past that head: up to 3, each listing its\n"
+        "                               callees to 100 names (capped=1 next= past it); more are counted as qword_cut= with next=.\n"
         "                               --auto-bodies restores the body walk there. That shape discloses on every run too: a\n"
         "                               ceiling the signatures alone exhaust carries bundle=\"compact\" bodies=\"0\"\n"
         "                               reason=\"budget\" — three distinct reasons, never collapsed (compact-route = the route\n"
@@ -988,7 +1001,9 @@ inline constexpr char kHelpHead[] =
         "                               (with --for=TASK) restore the <lego>/<compose> sections the ranked bundle collapses to\n"
         "                               a counted stub by default — this IS the stub's own next= spelling, so pasting it back\n"
         "                               unchanged is enough. A comma-separated, order-insensitive, closed set (lego and/or\n"
-        "                               compose, each named at most once); every other section of the bundle is unaffected.\n"
+        "                               compose, each named at most once); every other section of the bundle is unaffected —\n"
+        "                               the <sigs> budget is the stubbed answer's. Under an explicit --token-budget\n"
+        "                               the restored sections are charged in full, so <sigs> can carry fewer rows there.\n"
         "    --signatures-only          (with --for) signatures only: no automatic bodies in the bundle\n"
         "                               (with --for) opt out of the terminal-by-default bundle: no auto bodies, no bundle=\"auto\"\n"
         "                               attribute — the signatures-only lens exactly as before. Contradicts --detail=N (refused\n"
@@ -1056,6 +1071,8 @@ inline constexpr char kHelpHead[] =
         "                               the interface->impls view for ONE named interface/base: its signature, method contract,\n"
         "                               and every implementor (own-language only). file:name disambiguates a same-named type.\n"
         "                               No contract for a language this surface cannot read soundly: methods=0 caveat=… says so.\n"
+        "                               Implementors BELOW a direct one follow as via= depth= rows (transitive=N), 200 a page,\n"
+        "                               walked through PROVEN extends clauses only (base_by=name: bound by spelling); --limit/--offset page them.\n"
         "    --exemplar=TASK|KIND       before you write: the repo's best existing example of this kind of code, to imitate\n"
         "                               before you write: the repo's best-in-class instance to IMITATE. Just pass a plain task —\n"
         "                               --exemplar=\"format byte sizes\" — and the KIND is inferred from the top match; or name a\n"
@@ -1124,7 +1141,8 @@ inline constexpr char kHelpHead[] =
         "                               bind and raising it would return nothing new\n"
         "    --callers=SYM              show SYM's direct callers (1-hop in-edges)\n"
         "                               who calls SYM (1-hop in-edges). file:name disambiguates a same-named symbol across files (like --around/--lego);\n"
-        "                               Scope::name picks one scope's definition — the sym= spelling edit-check prints resolves everywhere\n"
+        "                               Scope::name picks one scope's definition — the sym= spelling edit-check prints resolves everywhere.\n"
+        "                               Each caller row's sites_at= lists its call sites as pasteable file:line tokens (16 at most: sites_total=)\n"
         "    --callees=SYM              what SYM calls (1-hop out-edges). file:name disambiguates like --callers\n"
         "    --uses=SYM                 show every place SYM is used, not just called — reads, writes, imports, extends\n"
         "                               the statically resolvable use-sites of SYM (role=call|macro|read|write|import|extends|type, file:line); external=\"1\" if SYM has no in-corpus def.\n"
@@ -1174,6 +1192,8 @@ inline constexpr char kHelpHead[] =
         "                               lazy=\"1\": every one of that importer's edges is written inside a closure — a TS/JS require()/import()\n"
         "                               inside a function body, a Ruby constant receiver or argument inside a method/lambda/block, a Ruby\n"
         "                               autoload or rescue class — not at load time: still a real dependency, weaker than a top-level one\n"
+        "                               a CUT symbol window opens with <files files= shown_files=>: the WHOLE reach set by file (rf syms= d=,\n"
+        "                               20 by default, --limit sizes it); an umbrella header's importers are a count (importers_umbrella=\"1\")\n"
         "    counts_floor=\"1\"           every count on the graph verbs is a FLOOR, never a total; a 0 means none found\n"
         "                               on --callers/--callees/--uses/--impact/--edit-check every count is a FLOOR, never a total: the\n"
         "                               call graph is extracted from source text by name, so dynamic dispatch\n"
@@ -1290,7 +1310,11 @@ inline constexpr char kHelpHead[] =
         "                               a pattern living only in prose is still answered, never silently emptied. When every\n"
         "                               code hit is a use of the literal (a test/doc file, or a shell/YAML/TOML/JSON file) and\n"
         "                               source code (not one of those) holds it as a string, the string tier is served WITH\n"
-        "                               code (tier=\"code+string\"; comments stay held back). any turns\n"
+        "                               code (tier=\"code+string\"; comments stay held back) — and so it is, while source and test\n"
+        "                               files (not docs or scripts) hold under 8 of its code hits (unclassified ones count),\n"
+        "                               for a literal no identifier can spell (- / . or a space), a SCREAMING_CASE one, or one with\n"
+        "                               under 8 code hits. Under that same count either lift ranks its rows: files named by it, then\n"
+        "                               code, then string-only, 10 by default, string_hits= kept. any turns\n"
         "                               tiering off entirely -- the exhaustive view. Hit files are parsed on\n"
         "                               demand under a fixed budget; tier_budget= says so when it stops, and hits it never\n"
         "                               classified are emitted, never suppressed.\n"
@@ -1350,9 +1374,17 @@ inline constexpr char kHelpHead[] =
         "                               EXACT-NAME DEFAULT (one token, one unambiguous match, no explicit --top-k): the ranked map\n"
         "                               defaults to top-k=0 — you already named the exact symbol, so the ~200-row orientation map is\n"
         "                               pure overhead in front of the one body it exists to summarize. Disclosed on the root as\n"
-        "                               topk_default=\"0\" (self-describing: the change is visible without reading source). A MULTI-match\n"
-        "                               name (an ambiguous bare name) or a multi-token --expand keeps the map — there IS something to\n"
-        "                               disambiguate. An EXPLICIT --top-k=N (0 included) always overrides this default.\n"
+        "                               topk_default=\"0\" (self-describing: the change is visible without reading source). The same\n"
+        "                               default applies when --expand names SEVERAL definitions (an ambiguous bare name, or several\n"
+        "                               tokens) and EVERY one is served: the bodies carry p= l= t= for each, the root adds map_next=\n"
+        "                               (the shell call that prints the map you did not get — orient once per session, then look up\n"
+        "                               lean). If a byte budget cut some, the root adds unserved_total=N (the true count) and\n"
+        "                               unserved_next=\"--expand=FILE:LINE:NAME,…\" (the call serving them; past 16 it serves the first\n"
+        "                               16 and unserved_listed=\"16\" says so — a larger --pack-budget-bytes serves the rest) — never the\n"
+        "                               generic map. map_next= and unserved_next= are quoted for the shell; map_next= names every root\n"
+        "                               plus the crawl-scope flags (--exclude, --max-file-size, --no-ignore, --ignore-tests). --outline\n"
+        "                               follows the same rule for its one token (several --outline tokens keep the ordinary map). An\n"
+        "                               EXPLICIT --top-k=N (0 included) always overrides this default.\n"
         "                               Each body also carries sibs=\"a,b,...\" sibs_total=\"N\" [sibs_capped=\"1\"] (the file's OTHER\n"
         "                               symbols, names only, capped at 40) and inc=\"x.h,...\" inc_total=\"N\" [inc_capped=\"1\"] (the\n"
         "                               file's own #include/import targets, capped at 24) — both absent when the count is 0 (a\n"
@@ -1720,6 +1752,9 @@ inline constexpr char kHelpHead[] =
         "                               (with --quality-baseline) pin anyway: the sidecar is stamped with the dirty pin and the absorbed count, and every\n"
         "                               later --quality-delta against it carries baseline_absorbed=\"N\" — so a green exit beside that attribute reads as\n"
         "                               \"clean SINCE THE PIN\", never \"clean\". Refused alone.\n"
+        "    --show-stale               (with --quality-delta) print the stale-ack rows and the full header a clean answer collapses\n"
+        "                               — a regression-free answer keeps only stale= and stale_by_kind= (its <sa> rows collapsed), and on a tree\n"
+        "                               that IS its HEAD only the verdict; either fold only when it saves a quarter of the bytes. Refused alone.\n"
         "    --quality-delta            before a PR: report ONLY what your change made worse, across 12 kinds\n"
         "                               — pair with --test-gate. Each kind is measured against the baseline (complexity/verbosity/nesting/params/dup/dead/api-surface + error-masking/short-horizon-churn/new-clone-of-reused-helper + placeholder + defect-shape);\n"
         "                               every finding is classified by ORIGIN: a symbol that EXISTED at the baseline and got worse (preexisting-worse=\"N\", no attribute on the row) vs one that exists only\n"
@@ -1825,7 +1860,9 @@ inline constexpr char kHelpHead[] =
         "                               matching several definition sites REFUSES (exit 1) and lists the file:name spellings that\n"
         "                               pick one — unlike --callers/--uses, this verb may not union overloads and disclose defs=.\n"
         "                               A .ripwire_notes entry targeting SYM (or its file) rides along as a <note> child, the\n"
-        "                               same row shape --for/--expand surface.\n"
+        "                               same row shape --for/--expand surface. An unchanged contract with nothing flagged, on a tree\n"
+        "                               that IS its HEAD (no +dirty), answers with its verdict alone when that saves a quarter of the bytes:\n"
+        "                               callers= counts the caller rows, rows_next= (--limit=N) lists them. A dirty tree lists them.\n"
         "                               PRE-APPLY PREVIEW — add --edit-payload=FILE|- --dry-run to ask the SAME question about bytes\n"
         "                               that have NOT been written yet. The payload is spliced over SYM's definition span in memory,\n"
         "                               exactly as --replace-symbol-body would write it; that one file is re-parsed, the call graph\n"
@@ -1911,8 +1948,8 @@ inline constexpr char kHelpHead[] =
         "                               uses-exist (a radius exists and some of it is tested) — never a go/no-go verdict; unmodelled\n"
         "                               when nothing was found for a kind used by reading or naming it (a variable, class, struct)\n"
         "                               whose uses those counts cannot see. callers_floor=/uses_floor= mark a count the index holds\n"
-        "                               evidence of a miss for, and next= is the call that lists the rest. A caller row's sites_l= is\n"
-        "                               its call-site LINES (p= stays the line where the caller is defined).\n"
+        "                               evidence of a miss for, and next= is the call that lists the rest. A caller row's sites_at= is its\n"
+        "                               call sites as file:line tokens (p= stays the line where the caller is defined).\n"
         "    --slice=SYM[:VAR]          trace one variable's definitions and uses inside one function\n"
         "                               NAME-BASED intra-procedural def-use slice of variable VAR inside the ONE uniquely-resolved\n"
         "                               definition SYM (statement-level def-use edges as a queryable primitive — the ARISE result,\n"
@@ -2103,10 +2140,13 @@ inline constexpr char kHelpTail[] =
         "                               which REF's tree defines or mentions SYM — HEAD first, then every local branch, with\n"
         "                               on-head=\"0\" naming the case the verb exists for: content that lives only on a branch.\n"
         "                               Each distinct blob is read ONCE (content-addressed), so N branches cost ~one tree.\n"
-        "                               kind=\"def\" on a HEAD row is the PARSED index's answer (head_labels=\"index\"); on a REF row it\n"
-        "                               is a LEXICAL heuristic — ref blobs are raw text, never ingested, so a doc quoting a signature\n"
-        "                               still reads as a definition. head_labels=\"lexical\" ⇒ HEAD fell back to that heuristic too (no\n"
-        "                               indexed def of the name, or a working tree that drifted from HEAD). refs_scanned= is the SCAN\n"
+        "                               kind=\"def\" on a HEAD row is the PARSED index's answer (head_labels=\"index\"); on another\n"
+        "                               ref's row (ref_labels=\"parsed\") it is the same extraction run over that ref's blob, once per\n"
+        "                               blob and path, and only for a blob holding a line a loose lexical test calls worth parsing\n"
+        "                               (it only CHOOSES blobs): a blob without one reads kind=\"ref\". kind=\"text\" is such a line\n"
+        "                               no parse read (<unparsed> counts them; --detail=1 lifts the parse guard), never a def.\n"
+        "                               head_labels=\"lexical\" ⇒ HEAD fell back to that lexical test (no indexed def of the name, or\n"
+        "                               a working tree that drifted from HEAD). refs_scanned= is the SCAN\n"
         "                               denominator (refs read besides HEAD), not a matched count. Read-only; single-root only.\n"
         "                               A checkout that differs from HEAD is read from disk: each changed path's rows say\n"
         "                               ref=\"worktree\" and replace HEAD's, at= gains +dirty, and worktree= says whether every one was read.\n"
@@ -2115,15 +2155,25 @@ inline constexpr char kHelpTail[] =
         "                               is invisible. Add --with-history: a <fate> row then says v=\"never\" or v=\"removed\"\n"
         "                               with the commit, date and file that removed it. Remote-tracking refs are excluded\n"
         "                               (they mirror local ones); refs are capped, narrow with --stray-content=SUBSTR.\n"
-        "                               LISTING: by default only the kind=\"def\" rows are listed and the kind=\"ref\" rows\n"
+        "                               LISTING: by default only the kind=\"def\" (and kind=\"text\") rows are listed and the kind=\"ref\" rows\n"
         "                               counted in one <refs count=N next=...> element, when that page lists MORE definitions\n"
         "                               than the --whereis-listing=all page under the row cap, or the same ones in strictly\n"
-        "                               fewer bytes; otherwise every hit is listed.\n"
+        "                               fewer bytes; otherwise every hit is listed. On that page a definition line several refs\n"
+        "                               hold (same path, same text) is ONE row with refs=\"N\", and folded= on the root counts\n"
+        "                               the rows it stands for (on the first page, shown + more + folded + refs count = hits); listing=all prints each.\n"
+        "                               PREVIEW: a line over 300 bytes prints t= as its first bytes (cut on a UTF-8 boundary) plus an\n"
+        "                               ellipsis, 200 bytes in all, and the row carries t_bytes= (the whole line's size), when that\n"
+        "                               makes the page shorter than the same page whole; <t_cut rows=N next=...> counts them, and\n"
+        "                               its next= (--whereis-full-text) replays that page with every line whole.\n"
+        "    --whereis-full-text        with --whereis: print every t= line whole (no preview, no t_bytes=).\n"
+        "                               The listing, window, rows and labels are the page's own, so the <t_cut next=> of a page\n"
+        "                               that printed a preview names it. --detail lifts the preview too, with the row cap and the\n"
+        "                               parse guard. Refused without --whereis. MCP: full_text=true.\n"
         "    --whereis-listing=WHICH    with --whereis: which rows to list, defs, refs or all (default: more defs, else shorter).\n"
         "                               The default lists defs when that page lists MORE definitions than all under the same\n"
         "                               row cap (references can fill a capped all page before the branch definitions arrive),\n"
         "                               whatever its bytes; when both list the same definitions, defs only when strictly shorter\n"
-        "                               in bytes, else all (a tie lists all). defs lists every kind=\"def\" row and COUNTS\n"
+        "                               in bytes, else all (a tie lists all). defs lists every kind=\"def\" (and kind=\"text\") row and COUNTS\n"
         "                               the kind=\"ref\" rows in one <refs count=N next=...> element whose next= lists exactly\n"
         "                               them (refs). kind=\"def\" is the parser's label: a definition it does not model\n"
         "                               (define_method, setattr, a name bound by assignment) is a counted ref. With no ref\n"
@@ -2634,7 +2684,7 @@ inline constexpr char kHelpTail[] =
         "                               --zoom --external-surface --dead-code --mentions --graph-query --stray-content\n"
         "                               --test-gate --biggest-first --ensemble --quality-panel --context-ratio\n"
         "                               --nonlocal-state --comment-coherence --naming-consistency --safe-delete --pr-context\n"
-        "                               --edit-check --flags --situ --for.\n"
+        "                               --edit-check --flags --situ --for --lego.\n"
         "                               Emit at most N rows, skipping the first M; N overrides the verb's own display cap\n"
         "                               (40 hotspot files, 30 co-change pairs, 60 whereis hits, 100 grep/match hits, 40\n"
         "                               impact rows, 20 seam pairs, 40 readability rows, 40 ensemble symbol rows, 40 context-ratio\n"
@@ -2673,9 +2723,12 @@ inline constexpr char kHelpTail[] =
         "                               Any verb NOT in that list REFUSES both flags (exit 1) rather than accepting and\n"
         "                               ignoring them: budget/top-k verbs (--recall/--pack-task/--from-trace/\n"
         "                               --expand/--outline/--pack-signatures/--format=candidates) are shaped by\n"
-        "                               --top-k/--max-tokens/--token-budget, not a page (--for's bare bundle is shaped by\n"
-        "                               --token-budget the same way, and takes --limit/--offset only as its file page, where\n"
-        "                               the budget flags are refused in turn); the rest (--path/--connect/\n"
+        "                               --token-budget the same way; --for takes --limit/--offset as its FILE page, where\n"
+        "                               the budget flags are refused in turn (bare --pack-task --limit refuses: it has no\n"
+        "                               page without a budget), and --for/--pack-task beside --token-budget take the window\n"
+        "                               as the BUDGETED-BUNDLE CANDIDATE PAGE — one <sigs> window over the ranked candidates,\n"
+        "                               signatures only (bodies come via next= or --expand), their resumable continuation;\n"
+        "                               the rest (--path/--connect/\n"
         "                               --around/--exemplar/--report/--mermaid/--map-diff/--metrics and the default map)\n"
         "                               answer with a single fixed-shape result that has no row list to window at all.\n"
         "    --exclude=SUBSTR           drop matching paths (repeatable)   --ignore-tests\n"
@@ -3110,6 +3163,7 @@ inline constexpr BoolFlag kBoolFlags[] =
 
     // ordering (the --order= aliases stay hand-written: they warn)
     { "--no-stable",          &Config::noStable           },
+    { "--no-inventory",       &Config::noInventory        },   // D7: the default map without its <inv> tier
 
     // the analysis lenses
     { "--metrics",            &Config::metrics            },
@@ -3194,6 +3248,7 @@ inline constexpr BoolFlag kBoolFlags[] =
     { "--quality-baseline",   &Config::qualityBaseline    },
     { "--allow-dirty",        &Config::allowDirty         },   // H11 modifier: refused alone (validateModifierGuards)
     { "--quality-delta",      &Config::qualityDelta       },
+    { "--show-stale",         &Config::showStale          },   // idea #11 modifier: refused without --quality-delta (validateModifierGuards)
     { "--dmm",                &Config::dmm                },   // bare flag → the working tree vs HEAD (the value is an OPTIONAL rev/range)
 
     // review + the cross-branch verbs
@@ -3209,6 +3264,7 @@ inline constexpr BoolFlag kBoolFlags[] =
     { "--doc-drift",          &Config::docDrift           },
     { "--gateability",        &Config::gateabilityFlag    },   // requires --doc-drift, refused below
     { "--with-history",       &Config::withHistory        },
+    { "--whereis-full-text",  &Config::whereisFullText    },   // requires --whereis, refused below
 
     // notes + packs
     { "--notes",              &Config::notesList          },
@@ -3538,7 +3594,7 @@ inline constexpr IntFlag kIntFlags[] =
 //                              nowhere to keep)
 //   • a bare no-op / bare pair --route, --quality-ack (the =REASON form is a kViewFlags row)
 inline constexpr std::size_t kHandWrittenFlagArms = 26;   // +2 lane/lean-answers-068 (2026-10-07): --whereis-listing= and --mcp-legend= (closed-value arms, same shape as --grep-in=); +1 #350 (2026-09-28): --max-memory= (byte-size arm, same shape as --max-file-size=); +1: --color-by= (enum-value arm); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (repeatable-value arms, same shape as --exclude=); +1 R-H: --grep-in= (closed-value arm, same shape as --grep-scope=); +1 lane/flag-biggest-first (2026-09-23): --readability (deprecation-warning alias, same shape as --stable/--most-important-last/--no-auto-order) — its kBoolFlags row is renamed to --biggest-first (same Config::readability member), so the old spelling moves OUT of the table and becomes a hand-written arm, per the house rule that deprecation-warning aliases stay hand-written
-inline constexpr std::size_t kTotalFlagArms = 218;  // +1 knob-honesty-068 (2026-10-07): --lint-max-per-rule= (kIntFlags row) — the per-rule lint budget a floored answer's findings_next= names; +2 lane/lean-answers-068 (2026-10-07): --whereis-listing= and --mcp-legend= (hand-written closed-value arms, see kHandWrittenFlagArms); +1 lane/mcp-tool-profile-065 (2026-09-26): --mcp-tools= (kViewFlags row) — list only a subset of the MCP tools (names and/or the core/full profiles); +1 #350 (2026-09-28): --max-memory= (hand-written byte-size arm, see kHandWrittenFlagArms); +1 lane/flag-biggest-first (2026-09-23): --readability renamed to --biggest-first, kept working as a hand-written deprecated alias (see kHandWrittenFlagArms); +1 lane/r1-for-sections-stub (2026-09-19, L2/B1): --sections= (kViewFlags row) — the closed-set opt-in that restores the <lego>/<compose> sections --for collapses to a counted stub by default; +1 --lsp (kBoolFlags row, 2026-09-15): the navigation LSP server stdio entry point — Phase 1 PoC, docs/LSP.md; +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
+inline constexpr std::size_t kTotalFlagArms = 221;  // +1 lane/whereis-lean (2026-10-10, review C1): --whereis-full-text (kBoolFlags row) — the same --whereis page with every t= line whole, the <t_cut next=> replay; +1 lane/lean-trio (2026-10-10): --show-stale (kBoolFlags row) — prints the stale-ack rows a regression-free --quality-delta collapses; +1 lane/map-inventory-d7 (2026-10-08): --no-inventory (kBoolFlags row) — the default map without its <inv> tier; +1 knob-honesty-068 (2026-10-07): --lint-max-per-rule= (kIntFlags row) — the per-rule lint budget a floored answer's findings_next= names; +2 lane/lean-answers-068 (2026-10-07): --whereis-listing= and --mcp-legend= (hand-written closed-value arms, see kHandWrittenFlagArms); +1 lane/mcp-tool-profile-065 (2026-09-26): --mcp-tools= (kViewFlags row) — list only a subset of the MCP tools (names and/or the core/full profiles); +1 #350 (2026-09-28): --max-memory= (hand-written byte-size arm, see kHandWrittenFlagArms); +1 lane/flag-biggest-first (2026-09-23): --readability renamed to --biggest-first, kept working as a hand-written deprecated alias (see kHandWrittenFlagArms); +1 lane/r1-for-sections-stub (2026-09-19, L2/B1): --sections= (kViewFlags row) — the closed-set opt-in that restores the <lego>/<compose> sections --for collapses to a counted stub by default; +1 --lsp (kBoolFlags row, 2026-09-15): the navigation LSP server stdio entry point — Phase 1 PoC, docs/LSP.md; +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
 static_assert( std::size( kBoolFlags ) + std::size( kViewFlags ) + std::size( kIntFlags ) + kHandWrittenFlagArms == kTotalFlagArms,
                "a --flag arm was added or removed without updating the ledger above — count the arms in parseArgs and fix the counter" );
 
@@ -3767,7 +3823,7 @@ constexpr const char* kPagingHonoringVerbs =
     "--communities --community --whereis --grep/--regex --match --pattern --impact --uses --exercises "
     "--seams --zoom --external-surface --dead-code --mentions --graph-query --stray-content --test-gate "
     "--biggest-first --ensemble --quality-panel --context-ratio --nonlocal-state --comment-coherence "
-    "--naming-consistency --safe-delete --pr-context --edit-check --flags --situ --for";
+    "--naming-consistency --safe-delete --pr-context --edit-check --flags --situ --for --lego";
 
 inline bool honorsPaging( const Config& c ) noexcept
 {
@@ -3790,7 +3846,15 @@ inline bool honorsPaging( const Config& c ) noexcept
         // FILE-GRAIN widening page. Membership is conditional on purpose: the bare --for bundle keeps honoring
         // --token-budget/--max-tokens/--format=candidates --top-k, which validateShapingFlagsHonored refuses on
         // every paging member — and refuses beside the page too, where no byte ceiling exists to shape against.
-        || ( !c.forTask.empty() && ( c.pageLimit > 0 || c.pageOffset > 0 ) );
+        || ( !c.forTask.empty() && ( c.pageLimit > 0 || c.pageOffset > 0 ) )
+        // PAGING-POC (issue #294): --pack-task joins ONLY under a budgeted window — its candidate page
+        // mirrors --for's (the shared emitForCandidatePage). The bare --pack-task bundle keeps refusing
+        // the pair (it has no window to serve), and a windowless budget run is untouched.
+        || ( c.packTaskFlag && c.tokenBudget != 0 && ( c.pageLimit > 0 || c.pageOffset > 0 ) )
+        // lane lego-transitive: --lego=TYPE joins the same CONDITIONAL way — --limit/--offset window its deeper
+        // implementor rows (depth >= 2, serialize.h legoClosurePage); without a window it keeps its kShapingVerbs row,
+        // so `--lego --max-tokens` is still the "not read … nothing was dropped" notice, not a paging-family refusal.
+        || ( !c.legoType.empty() && ( c.pageLimit > 0 || c.pageOffset > 0 ) );
 }
 
 // --limit/--offset on a verb that windows NOTHING. Same accept-then-silently-ignore class as every guard in
@@ -3966,7 +4030,8 @@ inline constexpr PagingFamilyFlagGuard kMaxTokensGuard
 inline constexpr PagingFamilyFlagGuard kTokenBudgetGuard
 {
     "--token-budget is honored by the default map (the CI gate), --for, --pack-task, --recall, "
-    "--handoff, --from-trace, --run-trace and --pr-context — none of them, --pr-context aside (it pages AND shapes by budget), "
+    "--handoff, --from-trace, --run-trace and --pr-context — none of them, --pr-context and --for/--pack-task beside an explicit "
+    "--limit/--offset window aside (those page AND shape by budget: the budgeted-bundle candidate page, issue #294), "
     "in the --limit/--offset-honoring set (",
     ")",
     "no byte budget to gate",
@@ -3999,7 +4064,12 @@ inline void validateShapingFlagsHonored( Config& c ) noexcept
     {
         refusePagingFamilyFlag( c, kMaxTokensGuard );
     }
-    if( c.tokenBudget != 0 && !c.prContext )
+    // PAGING-POC (issue #294): --for/--pack-task under an EXPLICIT --limit/--offset window page their
+    // budgeted bundle (the candidate-offset continuation) — they page AND shape by budget, the same
+    // class --pr-context holds alone today. The refusal skips that combination only; every other
+    // budgeted verb, and the bare bundles, refuse exactly as before.
+    const bool budgetWindowPages = ( !c.forTask.empty() || c.packTaskFlag ) && ( c.pageLimit > 0 || c.pageOffset > 0 );
+    if( c.tokenBudget != 0 && !c.prContext && !budgetWindowPages )
     {
         refusePagingFamilyFlag( c, kTokenBudgetGuard );
     }
@@ -4667,6 +4737,13 @@ inline void validateModifierGuards( Config& c ) noexcept
     // baseline arm) and reaches nothing else, so alone it is the accept-and-ignore class every modifier
     // around it refuses. Named with the flag it modifies, because a caller who typed it alone was reaching
     // for that verb.
+    // idea #11: --show-stale restores the rows a regression-free --quality-delta collapses, and is read nowhere else.
+    if( c.showStale && !c.qualityDelta )
+    {
+        rw::emitRaw( stderr, "ripwire: --show-stale modifies --quality-delta (it prints the stale-ack rows a regression-free answer collapses) — pass both (e.g. ripwire <dir> --quality-delta --show-stale)\n" );
+        c.ok = false;
+    }
+
     if( c.allowDirty && !c.qualityBaseline )
     {
         rw::emitRaw( stderr, "ripwire: --allow-dirty modifies --quality-baseline (it consents to pinning a floor on a tree that differs from HEAD) — pass both (e.g. ripwire <dir> --quality-baseline --allow-dirty)\n" );
@@ -4718,6 +4795,11 @@ inline void validateModifierGuards( Config& c ) noexcept
     if( ( !c.grepAnd.empty() || !c.grepNot.empty() || !c.grepScope.empty() ) && c.grep.empty() )
     {
         rw::emitRaw( stderr, "ripwire: --and=/--not=/--grep-scope= modify --grep=STR — pass it too (e.g. ripwire <dir> --grep=stale --and=mcp)\n" );
+        c.ok = false;
+    }
+    if( c.whereisFullText && !c.whereisFlag )
+    {
+        rw::emitRaw( stderr, "ripwire: --whereis-full-text modifies --whereis=SYM — pass it too (e.g. ripwire <dir> --whereis=parseArgs --whereis-full-text)\n" );
         c.ok = false;
     }
     if( !c.whereisListing.empty() && !c.whereisFlag )
@@ -5033,8 +5115,18 @@ inline void validateConfig( Config& c ) noexcept
     // every bundle-shaping flag beside it would be accepted-and-ignored, the named failure family this file
     // refuses everywhere else (§H4). Named one at a time, so the remedy is the flag to drop. --top-k,
     // --max-tokens and --token-budget are refused by validateShapingFlagsHonored (the page is a paging member).
-    if( !c.forTask.empty() && ( c.pageLimit > 0 || c.pageOffset > 0 ) )
+    // #294 review (verbs_for.h:3824): --pack-task beside a budgeted window serves the CANDIDATE page,
+    // and the candidate page (like the file page) is a fixed <sigs>/<files> shape — bundle-shaping flags
+    // would be accepted-and-ignored there too. Both pages refuse them; the message names the page that
+    // was selected, so the remedy (drop the flag, or the window) reads correctly.
+    const bool forFilePageSelected  = !c.forTask.empty() && c.tokenBudget == 0 && ( c.pageLimit > 0 || c.pageOffset > 0 );
+    const bool forCandidateSelected = ( ( !c.forTask.empty() || c.packTaskFlag ) && c.tokenBudget != 0
+                                        && ( c.pageLimit > 0 || c.pageOffset > 0 ) );
+    if( forFilePageSelected || forCandidateSelected )
     {
+        const char* const pageName = forFilePageSelected
+            ? "--for --limit/--offset is the file-grain widening page (one <f> row per file, its own <files> document)"
+            : "--for/--pack-task --token-budget with --limit/--offset is the budgeted-bundle candidate page (one fixed <sigs> window, its own resumable document)";
         struct PageShapeFlag { const char* name; bool set; };
         const PageShapeFlag shapeFlags[] = {
             { "--json",              c.json },            { "--format=candidates", c.candidates },
@@ -5047,7 +5139,7 @@ inline void validateConfig( Config& c ) noexcept
         {
             if( f.set )
             {
-                rw::emitTo( stderr, "ripwire: --for --limit/--offset is the file-grain widening page (one <f> row per file, its own <files> document) — it has no bundle for {} to shape, so the flag is refused rather than ignored: drop {} for the page, or drop --limit/--offset for the bundle\n", f.name, f.name );
+                rw::emitTo( stderr, "ripwire: {} — it has no bundle for {} to shape, so the flag is refused rather than ignored: drop {} for the page, or drop the window for the bundle\n", pageName, f.name, f.name );   // 3 placeholders, 3 args (the #362 review caught a 4th)
                 c.ok = false;
             }
         }

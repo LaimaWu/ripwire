@@ -89,6 +89,8 @@ struct RawRef
     std::string   memberCtor;          // FE-B: the class a constructed receiver names (`new X().m()`, Go `X{}.m()`); see model.h
     std::string   memberVia;           // FE-B on #373: the method a Ruby typed receiver was built by (`new`, a finder); see model.h
     bool          memberFactory = false;   // FE-B on #373: memberCtor names a FactoryBot factory, not a class
+    std::uint32_t baseBind = 0;          // lane lego-transitive fix 1, an inherit ref only: 1 + the name byte of the same-file
+                                         //   declaration the base binds to (ingest_relations.h localBaseBinding); 0 none, ~0u unknown
 };
 
 // P2-D Rule 2 raw local-variable type binding (pre-attribution). startByte sits inside the enclosing
@@ -138,7 +140,13 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 29;           // 29: FE-B (test/receiverevidencecheck.sh) — RawRef gains `memberPath` (str) and
+constexpr std::uint32_t kCacheVersion = 31;           // 31: train 27 — lane lego-transitive's record format below (the lane numbered it 30;
+                                                      //    31 is above every live value: the lane's branch builds wrote c30 blobs at 162).
+                                                      // 30: lane lego-transitive fix 1 — an INHERIT RawRef appends `baseBind` (u32: the
+                                                      //    same-file declaration its base binds to, ingest_relations.h localBaseBinding);
+                                                      //    every other ref record is unchanged in size. A FORMAT change: a v29 blob lacks it.
+                                                      //    The train renumbers if another lane takes 30.
+                                                      // 29: FE-B (test/receiverevidencecheck.sh) — RawRef gains `memberPath` (str) and
                                                       //    `memberCtor` (str) after `memberRoot` (ref record 46 -> 54 bytes lean;
                                                       //    on #373 also `memberVia` (str) + `memberFactory` (u8), 54 -> 59: the Ruby
                                                       //    typed receiver moved out of recvVar — same version, one FE-B format),
@@ -312,10 +320,39 @@ constexpr std::uint32_t kCacheVersion = 29;           // 29: FE-B (test/receiver
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 158;          // provisional for PR #349; maintainer assigns the landing value
-                                                      // 158 = 2026-10-11 (PR #349, provisional): Clojure grammar/query/extraction
-                                                      //   and the written namespace on qualified Clojure calls. Rich tag 159;
-                                                      //   main's 156/157 lean/rich pair remains distinct. Reconfirm before merge.
+constexpr std::uint32_t kParserVer    = 169;          // provisional for PR #349; maintainer assigns the landing value
+                                                      // 169 = 2026-10-11 (PR #349 merged with 0.6.7): Clojure grammar/query/extraction
+                                                      //   and qualified-call namespace. Rich tag 170; above main's 167/168 pair.
+                                                      //   Reconfirm the landing value before merge. kCacheVersion stays main's 31.
+                                                      // 167 = 2026-10-11 (train 27 release): the fix27-cpp-subscript extraction below, renumbered above the
+                                                      //   lane build's 166 (rich file tag 167 there), so no cache a lane build wrote is read as this release's.
+                                                      //   Rich file tag 168. No other extraction change; kCacheVersion stays 31.
+                                                      // 166 = lane fix27-cpp-subscript (2026-10-11): a C++ member call on ONE element access of a
+                                                      //   one-hop container (`m[ k ].empty()`, `v.at( i ).size()`) records the container's shape in
+                                                      //   memberPath (ingest_binds.h cppElementContainer); a type alias of a std element container and
+                                                      //   a member field written as one record its whole text (ingest_relations.h stdElementContainerText;
+                                                      //   the field as a new composeRel "elem" record). 166, not 165: 165 is 164's rich file tag. No
+                                                      //   record layout change (kCacheVersion stays 31). Renumbered to 167 by the train.
+                                                      // 164 = 2026-10-11 (train 27: the signed lanes merged onto train 26c's 158): cache-key hygiene. One merged lane
+                                                      //   changed extraction under lane-local numbers: lego-transitive (157, 160, then 162; the 160 and 162 notes are below). Live
+                                                      //   branch builds have used numbers up to 162 (rich file tag 163). 164 (rich file tag 165) is above every one
+                                                      //   of them, so no cache another build wrote is read as this build's. kCacheVersion moves with it (31).
+                                                      // 162 = lane lego-transitive fix 1 (2026-10-10): an inherit ref records its
+                                                      //   same-file base binding; Python dotted / subscript / keyword bases and JS
+                                                      //   member / call heritage read as one base or none; a JS class factory needs a
+                                                      //   same-file class receiver. 162, not 161: 161 is 160's rich file tag. The train renumbers.
+                                                      // 160 = lane lego-transitive (2026-10-10): a JS/TS class factory
+                                                      //   `const Sub = Base.extend('Sub', ...)` is a class definition extending
+                                                      //   its receiver (tags.scm @definition.classfactory). 160, not 157: 157 is
+                                                      //   156's rich file tag, and train 26c holds 158 (rich 159). The train renumbers.
+                                                      // 158 = 2026-10-09 (train 26c: PR #339, Rails db/schema.rb columns, merged onto main's 156):
+                                                      //   a Ruby file whose tree holds a `create_table "x", … do |t| … end` call is a rendered
+                                                      //   db/schema.rb BY CONTENT; each `t.<type> "name"` / `t.<type> :name` in the table block
+                                                      //   mints a SymKind::Section def at Lang::Ruby (plus the implicit / `id:` / `primary_key:`
+                                                      //   id rule and `t.timestamps`). DEFINITIONS ONLY: buildGraph's byName skips Section-Ruby,
+                                                      //   so a column takes no call edge. The branch carried 122 -> 126 -> 144 -> 149 across its
+                                                      //   merges with main; 158, not 157: 156's rich file tag is 157. No record layout change
+                                                      //   (kCacheVersion 29, kQSnapCacheScheme 19 stay).
                                                       // 156 = 2026-10-08 (train 26b: signed lanes merged onto main's 148): cache-key hygiene.
                                                       //   Two merged lanes changed extraction under lane-local numbers, both 145:
                                                       //   honesty-small-068 (Go named-type kinds, `type A = B` aliases) and
@@ -2269,7 +2306,7 @@ inline void writeDef( ByteW& w, const RawDef& d, bool withLex, std::size_t fileD
         }
     }
 }
-inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8( std::uint8_t( r.lang ) ); w.str( r.name ); w.u8( r.isInherit ? 1 : 0 ); w.u8( r.isDocLink ? 1 : 0 ); w.str( r.qualifier ); w.u8( std::uint8_t( r.recv ) ); w.str( r.recvVar ); w.u8( r.isCompose ? 1 : 0 ); w.str( r.fieldName ); w.str( r.composeRel ); w.u8( std::uint8_t( r.role ) ); w.u32( r.line ); w.u32( r.argCount ); w.u8( r.argCountKnown ? 1 : 0 ); w.u8( r.viaArrow ? 1 : 0 ); w.u8( r.qualifierRootsStd ? 1 : 0 ); w.u8( r.memberCall ? 1 : 0 ); w.str( r.memberRoot ); w.str( r.memberPath ); w.str( r.memberCtor ); w.str( r.memberVia ); w.u8( r.memberFactory ? 1 : 0 ); }
+inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8( std::uint8_t( r.lang ) ); w.str( r.name ); w.u8( r.isInherit ? 1 : 0 ); w.u8( r.isDocLink ? 1 : 0 ); w.str( r.qualifier ); w.u8( std::uint8_t( r.recv ) ); w.str( r.recvVar ); w.u8( r.isCompose ? 1 : 0 ); w.str( r.fieldName ); w.str( r.composeRel ); w.u8( std::uint8_t( r.role ) ); w.u32( r.line ); w.u32( r.argCount ); w.u8( r.argCountKnown ? 1 : 0 ); w.u8( r.viaArrow ? 1 : 0 ); w.u8( r.qualifierRootsStd ? 1 : 0 ); w.u8( r.memberCall ? 1 : 0 ); w.str( r.memberRoot ); w.str( r.memberPath ); w.str( r.memberCtor ); w.str( r.memberVia ); w.u8( r.memberFactory ? 1 : 0 ); if( r.isInherit ) { w.u32( r.baseBind ); } }
 
 // loadCache's countFits() bounds a corrupt on-disk record COUNT against remaining bytes /
 // minRecordBytes BEFORE reserve() — the guard that keeps a hostile blob's 0xFFFFFFFF count from reaching
@@ -2403,7 +2440,7 @@ inline RawDef readDef( ByteR& r, bool withLex, const std::vector<std::uint64_t>&
     }
     return d;
 }
-inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = r.enumU8<Lang>( kLangCount ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = r.enumU8<RecvKind>( kRecvKindCount ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = r.enumU8<RefRole>( kRefRoleCount ); x.line = r.u32(); x.argCount = r.u16Of32(); x.argCountKnown = r.u8() != 0; x.viaArrow = r.u8() != 0; x.qualifierRootsStd = r.u8() != 0; x.memberCall = r.u8() != 0; x.memberRoot = r.str(); x.memberPath = r.str(); x.memberCtor = r.str(); x.memberVia = r.str(); x.memberFactory = r.u8() != 0; return x; }
+inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = r.enumU8<Lang>( kLangCount ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = r.enumU8<RecvKind>( kRecvKindCount ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = r.enumU8<RefRole>( kRefRoleCount ); x.line = r.u32(); x.argCount = r.u16Of32(); x.argCountKnown = r.u8() != 0; x.viaArrow = r.u8() != 0; x.qualifierRootsStd = r.u8() != 0; x.memberCall = r.u8() != 0; x.memberRoot = r.str(); x.memberPath = r.str(); x.memberCtor = r.str(); x.memberVia = r.str(); x.memberFactory = r.u8() != 0; if( x.isInherit ) { x.baseBind = r.u32(); } return x; }
 inline void   writeBind( ByteW& w, const RawBind& b ) { w.u32( b.startByte ); w.u8( std::uint8_t( b.lang ) ); w.u8( std::uint8_t( b.kind ) ); w.u8( b.isFromAssignment ? 1 : 0 ); w.u32( b.spanStart ); w.u32( b.spanEnd ); w.str( b.var ); w.str( b.typeName ); w.str( b.importedName ); }
 inline RawBind readBind( ByteR& r ) { RawBind b; b.startByte = r.u32(); b.lang = r.enumU8<Lang>( kLangCount ); b.kind = r.enumU8<LocalBindKind>( kLocalBindKindCount ); b.isFromAssignment = r.u8() != 0; b.spanStart = r.u32(); b.spanEnd = r.u32(); b.var = r.str(); b.typeName = r.str(); b.importedName = r.str(); return b; }
 inline void   writeFfi( ByteW& w, const BindingAlias& a ) { w.u8( std::uint8_t( a.kind ) ); w.u8( a.lowConf ? 1 : 0 ); w.str( a.aliasName ); w.str( a.targetName ); w.str( a.targetScope ); }
@@ -2763,7 +2800,12 @@ inline HashMap<std::string, FileFacts> loadCache( const std::string& path, std::
             }
 
             fileBuf.resize( std::size_t( spanEnd - spanStart ) );
-            if( !preadExact( frame.blob.fd, fileBuf.data(), fileBuf.size(), spanStart ) )
+            bool spanRead = false;
+            {
+                PROFILE_SCOPE_DESCRIBE( "ingest/loadCache: pread one coalesced span" );
+                spanRead = preadExact( frame.blob.fd, fileBuf.data(), fileBuf.size(), spanStart );
+            }
+            if( !spanRead )
             {
                 DISCLOSE( Diagnostics::answerUnchanged, "the affected files are reparsed from source: the answer is byte-identical, only slower",
                           "ingest: cache blob read failed mid-load — the unread records are reparsed" );
@@ -2774,7 +2816,12 @@ inline HashMap<std::string, FileFacts> loadCache( const std::string& path, std::
             {
                 const CacheEntry& e   = frame.entries[ wanted[i].entryIndex ];
                 const char*       rec = fileBuf.data() + std::size_t( e.recOffset - spanStart );
-                if( recordSum32( std::string_view( rec, e.recLength ) ) != e.recSum )
+                bool recordSumOk = false;
+                {
+                    PROFILE_SCOPE_DESCRIBE( "ingest/loadCache: record digest (recordSum32)" );
+                    recordSumOk = recordSum32( std::string_view( rec, e.recLength ) ) == e.recSum;
+                }
+                if( !recordSumOk )
                 {
                     // A record torn on its own while the table survived: drop THIS file (it reparses) and
                     // keep the rest of the blob. The table is what must be trusted whole, not each record.
@@ -2785,7 +2832,12 @@ inline HashMap<std::string, FileFacts> loadCache( const std::string& path, std::
                 ByteR       r{ rec, rec + e.recLength };
                 std::string rel;
                 FileFacts   ff;
-                if( !readFileRecord( r, captureValueUses, dictScratch, rel, ff ) )
+                bool decoded = false;
+                {
+                    PROFILE_SCOPE_DESCRIBE( "ingest/loadCache: decode one record (readFileRecord)" );
+                    decoded = readFileRecord( r, captureValueUses, dictScratch, rel, ff );
+                }
+                if( !decoded )
                 {
                     continue;   // corrupt record → that file reparses (readFileRecord already disclosed)
                 }

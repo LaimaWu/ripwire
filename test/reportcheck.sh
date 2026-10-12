@@ -20,6 +20,9 @@
 #   - the report and the XML map AGREE on symbol count (self-consistency: the same graph, two renderings)
 #   - a "God files" section names hub.h (the most-included header)
 #   - determinism
+#   - 7/9: a depended-on test-layer file (test/lib/helper.sh) is counted on a layer=test line, not ranked as the
+#     god file, and its --deps godfiles row says layer="test"; 8: --seams leaves README -> docs/ links out (doc_links=)
+#   - 10: a file under test/ with a PRODUCTION dependent is not a test helper: it stays ranked, no layer="test"
 #
 # Usage:  RIPWIRE_BIN=build/ripwire bash test/reportcheck.sh   |   RIPWIRE_BIN=asan/ripwire bash …
 # Exits non-zero on any failure. Does NOT edit regression.sh.
@@ -85,6 +88,152 @@ printf '%s' "$REP" | grep -qi 'cycle' \
 # ── 6) determinism ───────────────────────────────────────────────────────────────────────────────────
 [ "$( run --report )" = "$( run --report )" ] \
     && ok "--report deterministic (byte-identical run-to-run)" || no "--report non-deterministic"
+
+# ── 7) a test-layer helper is not the god file (seams-doc-links, 2026-10-09) ────────────────────────────
+# Every gate `source`s one shell library, so on this repo test/lib/clean-env.sh (185 dependents, all tests)
+# outranked src/model.h. Fixture: test/lib/helper.sh sourced by 4 test scripts; src/core.h included by 3 files;
+# a near-miss dir named `testing/` (not a built-in layer name) whose helper is sourced by 2 scripts.
+T="$TMP/layer"; mkdir -p "$T/src" "$T/test/lib" "$T/testing"
+printf 'int core();\n'                                            > "$T/src/core.h"
+for f in a b c; do printf '#include "core.h"\nint %s() { return core(); }\n' "$f" > "$T/src/$f.cpp"; done
+printf 'helper() { echo hi; }\n'                                  > "$T/test/lib/helper.sh"
+for n in 1 2 3 4; do printf '#!/usr/bin/env bash\n. "$ROOT/test/lib/helper.sh"\nhelper\n' > "$T/test/g${n}check.sh"; done
+printf 'tool() { echo t; }\n'                                     > "$T/testing/tool.sh"
+for n in 1 2; do printf '#!/usr/bin/env bash\n. "$ROOT/testing/tool.sh"\ntool\n' > "$T/testing/u$n.sh"; done
+LREP="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$T" --report --no-cache 2>/dev/null )"; lrc=$?
+GOD="$( printf '%s\n' "$LREP" | sed -n '/^## God files/,/^$/p' )"
+if [ "$lrc" != 0 ] || [ -z "$GOD" ]; then
+    no "7: --report on the layer fixture failed (rc=$lrc) or printed no God files section"
+else
+    FIRST="$( printf '%s\n' "$GOD" | sed -n 2p )"
+    case "$FIRST" in
+        '- `src/core.h` — 3 dependents') ok "7a: the first god file is the source header src/core.h, not the test helper" ;;
+        *) no "7a: first god-file row is '$FIRST' (want src/core.h — 3 dependents)" ;;
+    esac
+    printf '%s\n' "$GOD" | grep -qxF -- '- layer=test: 1 more depended-on files under a test directory whose dependents are all test paths, by path, not ranked above; top `test/lib/helper.sh` — 4 dependents' \
+        && ok "7b: the test helper is counted on the layer=test line (4 dependents), not dropped" \
+        || no "7b: no layer=test line naming test/lib/helper.sh with 4 dependents: $GOD"
+    printf '%s\n' "$GOD" | grep -qxF -- '- `testing/tool.sh` — 2 dependents' \
+        && ok "7c: near miss: testing/ is not a built-in layer, so its helper is still ranked" \
+        || no "7c: testing/tool.sh missing from the ranked rows: $GOD"
+    printf '%s\n' "$GOD" | grep -c '^- `' | grep -qx 2 \
+        && printf '%s\n' "$GOD" | grep -q 'showing 2 of 2' \
+        && ok "7d: the header counts the ranked files only (showing 2 of 2)" \
+        || no "7d: header/rows disagree with the ranked set: $GOD"
+fi
+# 7e: no depended-on test-layer file → no layer=test line (the section is the single ranking it was)
+if ! printf '%s' "$REP" | grep -q '^## God files'; then
+    no "7e: the hub fixture's --report printed no God files section"
+elif printf '%s' "$REP" | grep -q '^- layer=test'; then
+    no "7e: a layer=test line appeared on a corpus with no test-layer dependents"
+else
+    ok "7e: no layer=test line without a depended-on test-layer file"
+fi
+
+# ── 8) --seams (same runStructureText): a README -> docs/ link is not an untested code seam ───────────────
+# Two README headings link docs/EVALS.md and docs/GUIDE.md; src/main.cpp calls lib/util.cpp (a real untested seam).
+D="$TMP/doclinks"; mkdir -p "$D/docs" "$D/src" "$D/lib"
+printf '# Proj\n\n## Measured\n\nSee [the evals](docs/EVALS.md).\n\n## Usage\n\nRead [the guide](docs/GUIDE.md).\n' > "$D/README.md"
+printf '# EVALS\n\nNumbers.\n'                                    > "$D/docs/EVALS.md"
+printf '# GUIDE\n\nSteps.\n'                                      > "$D/docs/GUIDE.md"
+printf 'int helper();\nint run() { return helper(); }\n'          > "$D/src/main.cpp"
+printf 'int helper() { return 1; }\n'                             > "$D/lib/util.cpp"
+SEAMS="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$D" --seams --no-cache 2>/dev/null )"; src_=$?
+SROOT="$( printf '%s' "$SEAMS" | grep -o '<seams [^>]*>' )"
+if [ "$src_" != 0 ] || [ -z "$SROOT" ]; then
+    no "8: --seams on the doc-link fixture failed (rc=$src_) or printed no <seams> root"
+else
+    if printf '%s' "$SEAMS" | grep -q '<seam from="[^"]*" to="docs"'; then
+        no "8a: a doc-section -> doc-section link is still listed as an untested seam to docs"
+    else
+        ok "8a: no <seam ... to=\"docs\"> from README section links"
+    fi
+    printf '%s' "$SROOT" | grep -q ' bridges="1" untested="1" doc_links="2" ' \
+        && ok "8b: the two doc links are counted in doc_links=2, outside bridges=/untested=" \
+        || no "8b: root counts wrong (want bridges=1 untested=1 doc_links=2): $SROOT"
+    printf '%s' "$SEAMS" | grep -q '<seam from="src" to="lib" untested="1"' \
+        && ok "8c: negative: the real code seam src -> lib is still reported" \
+        || no "8c: the code seam src -> lib went missing"
+    printf '%s' "$SEAMS" | grep -q 'doc_links=N:' \
+        && ok "8d: the legend reads doc_links= where it rides" || no "8d: doc_links= rides with no legend reading"
+fi
+NOSEAMS="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$R" --seams --no-cache 2>/dev/null )"
+{ printf '%s' "$NOSEAMS" | grep -q '<seams ' && ! printf '%s' "$NOSEAMS" | grep -q 'doc_links='; } \
+    && ok "8e: no doc links -> no doc_links= attribute or legend clause (present-only)" \
+    || no "8e: doc_links= appeared without doc links (or --seams printed no root)"
+
+# ── 9) --deps <godfiles> (the same population as 7): a test-layer row says layer="test" ───────────────────
+LDEPS="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$T" --deps --no-cache 2>/dev/null )"; ldrc=$?
+GF="$( printf '%s' "$LDEPS" | grep -o '<godfiles [^>]*>.*</godfiles>' )"
+if [ "$ldrc" != 0 ] || [ -z "$GF" ]; then
+    no "9: --deps on the layer fixture failed (rc=$ldrc) or printed no <godfiles>"
+else
+    printf '%s' "$GF" | grep -q '<f p="test/lib/helper.sh" afferent="4" layer="test"/>' \
+        && ok "9a: the test helper's godfiles row carries layer=\"test\"" || no "9a: no layer=\"test\" on test/lib/helper.sh: $GF"
+    printf '%s' "$GF" | grep -q '<f p="testing/tool.sh" afferent="2"/>' \
+        && ok "9b: near miss: testing/tool.sh has no layer= (not a built-in layer dir)" || no "9b: testing/tool.sh row wrong: $GF"
+fi
+# 9c/9d: the full legend reads godfiles layer= exactly when a shown row carries it (present-only)
+LFULL="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$T" --deps --legend=full --no-cache 2>/dev/null )"
+RFULL="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$R" --deps --legend=full --no-cache 2>/dev/null )"
+printf '%s' "$LFULL" | grep -q "a godfiles row's layer= is its built-in arch layer" \
+    && ok "9c: --deps --legend=full reads layer= where a godfiles row carries it" || no "9c: layer= rides with no full-legend reading"
+if ! printf '%s' "$RFULL" | grep -q '<godfiles '; then
+    no "9d: the hub fixture's --deps --legend=full printed no <godfiles>"
+elif printf '%s' "$RFULL" | grep -q "a godfiles row's layer="; then
+    no "9d: the layer= reading rides on a corpus with no layered godfiles row"
+else
+    ok "9d: no layer= reading without a layered godfiles row"
+fi
+
+# ── 10) near miss for 7/9: under test/, but depended on by production code (fix round 1) ───────────────────
+# The layer=test group needs EVERY dependent to be a test path (isTestPath), not only the file's own dir.
+# src/p1..p4.cpp include ../test/lib/hooks.h (4 production dependents) → ranked first, no layer="test";
+# test/lib/mixed.h is included by test/t1.cpp, test/t2.cpp AND src/q.cpp (one production dependent) → ranked;
+# app/a.cpp includes src/core.h. Nothing here is test-only, so no layer=test line and no layer= legend.
+X="$TMP/claim"; mkdir -p "$X/src" "$X/app" "$X/test/lib"
+printf '#pragma once\ninline int core(){ return 2; }\n'            > "$X/src/core.h"
+printf '#include "../src/core.h"\nint a(){ return core(); }\n'      > "$X/app/a.cpp"
+printf '#pragma once\ninline int hook(){ return 1; }\n'            > "$X/test/lib/hooks.h"
+for n in 1 2 3 4; do printf '#include "../test/lib/hooks.h"\nint prod%s(){ return hook(); }\n' "$n" > "$X/src/p$n.cpp"; done
+printf '#pragma once\ninline int mixed(){ return 3; }\n'           > "$X/test/lib/mixed.h"
+for n in 1 2; do printf '#include "lib/mixed.h"\nint t%s(){ return mixed(); }\n' "$n" > "$X/test/t$n.cpp"; done
+printf '#include "../test/lib/mixed.h"\nint q(){ return mixed(); }\n' > "$X/src/q.cpp"
+XREP="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$X" --report --no-cache 2>/dev/null )"; xrc=$?
+XGOD="$( printf '%s\n' "$XREP" | sed -n '/^## God files/,/^$/p' )"
+if [ "$xrc" != 0 ] || [ -z "$XGOD" ]; then
+    no "10: --report on the near-miss fixture failed (rc=$xrc) or printed no God files section"
+else
+    case "$( printf '%s\n' "$XGOD" | sed -n 2p )" in
+        '- `test/lib/hooks.h` — 4 dependents') ok "10a: a test/ file with 4 production dependents stays ranked first" ;;
+        *) no "10a: test/lib/hooks.h (4 production dependents) is not the first ranked row: $XGOD" ;;
+    esac
+    printf '%s\n' "$XGOD" | grep -qxF -- '- `test/lib/mixed.h` — 3 dependents' \
+        && ok "10b: one production dependent among test dependents keeps test/lib/mixed.h ranked" \
+        || no "10b: test/lib/mixed.h (1 production + 2 test dependents) missing from the ranked rows: $XGOD"
+    if printf '%s\n' "$XGOD" | grep -q '^- layer=test'; then
+        no "10c: a layer=test line appeared though no file has test dependents only: $XGOD"
+    else
+        printf '%s\n' "$XGOD" | grep -q 'showing 3 of 3' \
+            && ok "10c: no layer=test line; all 3 depended-on files are ranked (showing 3 of 3)" \
+            || no "10c: header does not count all 3 ranked files: $XGOD"
+    fi
+fi
+XFULL="$( perl -e 'alarm 15; exec @ARGV' "$BIN" "$X" --deps --legend=full --no-cache 2>/dev/null )"; xdrc=$?
+XGF="$( printf '%s' "$XFULL" | grep -o '<godfiles [^>]*>.*</godfiles>' )"
+if [ "$xdrc" != 0 ] || [ -z "$XGF" ]; then
+    no "10d: --deps --legend=full on the near-miss fixture failed (rc=$xdrc) or printed no <godfiles>"
+else
+    printf '%s' "$XGF" | grep -q '<f p="test/lib/hooks.h" afferent="4"/>' \
+        && printf '%s' "$XGF" | grep -q '<f p="test/lib/mixed.h" afferent="3"/>' \
+        && ok "10d: neither test/ file with a production dependent carries layer=\"test\"" \
+        || no "10d: a test/ file with a production dependent is labelled (or missing): $XGF"
+    if printf '%s' "$XFULL" | grep -qE "godfiles row's layer=|test dependents only"; then
+        no "10e: the full legend reads layer= / a test-dependents claim with no layered godfiles row"
+    else
+        ok "10e: no layer= reading and no test-dependents claim without a layer=test row"
+    fi
+fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

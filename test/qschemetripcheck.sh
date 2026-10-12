@@ -34,10 +34,26 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
-# 2026-10-11, PR #349 rebased on train 26b: RE-DERIVED with UPDATE_GOLDEN=1 (hash ea842c12a0…5a779).
-#   kParserVer / quality mirror 156 -> provisional 158 for Clojure grammar/query/extraction and qualified-call
-#   namespace capture; main's rich tag is 157. kCacheVersion 29 and kQSnapCacheScheme 19 are unchanged.
-#   The maintainer must confirm or renumber 158 before this branch lands; regenerate this pin if renumbered.
+# 2026-10-11, PR #349 merged with release 0.6.7: RE-DERIVED with UPDATE_GOLDEN=1.
+#   kParserVer / quality mirror 167 -> provisional 169 for Clojure extraction and qualified-call namespace;
+#   main's rich tag is 168. kCacheVersion stays main's 31; kQSnapCacheScheme stays main's 20.
+#   The maintainer must confirm or renumber the landing value; regenerate this pin if renumbered.
+# 2026-10-11, release 0.6.7 (fix27-cpp-subscript and fix27-impact-multidef merged onto train 27): RE-DERIVED ONCE with UPDATE_GOLDEN=1
+#   (hash 52d9f8e52c…c52a66). The only watched text that moved is the kParserVer declaration (and its mirror): 164 -> 167. The lane
+#   built 166 (rich file tag 167); the release renumbers above it, rich file tag 168. kCacheVersion and kQSnapCacheScheme are unchanged.
+# 2026-10-11, train 27 (seams-doc-links, cpp-builtin-member-gate, callers-sites-first-call, lean-trio and lego-transitive merged onto
+#   train 26c; whereis-lean touches no watched text): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (hash e55bd63f7e…efaac9).
+#   Watched text: kParserVer 158 -> 164 (lego-transitive's base-clause and class-factory extraction, 157, 160 then 162 on its branch;
+#   164 / rich file tag 165 is above every live build, up to 162 / 163), kCacheVersion 29 -> 31 (the lane's inherit-ref
+#   baseBind record, numbered 30 on its branch), quality.h's two mirrors with them, kQSnapCacheScheme 19 -> 20 (the dead set's
+#   Python inheritance input moved; see the v20 note), and pythonDispatchClasses reading implementorClosure (the lane's refactor).
+# 2026-10-09, train 26c: PR #339 (Rails db/schema.rb columns) merged: RE-DERIVED with UPDATE_GOLDEN=1 (hash ea842c12a0…eb5a779).
+#   kParserVer 156 -> 158 (the schema columns are new extraction facts; 157 is 156's rich file tag; the branch had carried
+#   149 with its own pin), quality.h's mirror with it. kCacheVersion 29 and kQSnapCacheScheme 19 unchanged.
+# 2026-10-10, lane/lego-transitive: RE-PINNED with UPDATE_GOLDEN=1 (hash 3b716e04ee…745391b). kParserVer 156 -> 160
+#   (JS/TS class factory extraction; 157 is 156's rich tag, train 26c holds 158/159), quality.h's mirror with it.
+#   pythonDispatchClasses now reads graph.h implementorClosure: the same breadth-first, visit-once walk over
+#   g.implementors (refactor, same class set and order), so kQSnapCacheScheme and kCacheVersion stay. The train renumbers.
 # 2026-10-08, train 26b final regeneration (all thirteen lanes merged, the path-gap name fix on top): RE-DERIVED ONCE with
 #   UPDATE_GOLDEN=1 on the merged tree (hash a1e54fc30b…9141af3). Watched text: kParserVer 156 (rich file tag 157; above
 #   FE-B's 154/155, honesty-small's and the cr2 follow-up's 145, cr-qd's 148), kCacheVersion 29 (FE-B's ref record),

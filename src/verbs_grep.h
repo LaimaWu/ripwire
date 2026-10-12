@@ -291,13 +291,22 @@ void emitGrepUnindexed( const std::vector<rw::GrepAuxHit>& hits, const rw::PageW
 //
 // Kept DENSE on purpose (G4): this clause rides every answer that holds a row back, and on a small answer
 // legend prose IS the answer — an early draft cost ~1.2 KB and ate the row saving whole.
-const char* grepTierLegend( const rw::GrepTierReport& tier )
+std::string grepTierLegend( const rw::GrepTierReport& tier )
 {
     if( !tier.hasDisclosure() )
     {
-        return "";
+        return {};
     }
-    return "SPAN TIERS: each hit is classified by the tree-sitter span it sits in (code/comment/string) and this answer serves "
+    // idea #5: the lift's second trigger, its order and its count, said only where they apply (a code+string answer),
+    // so every other tiered answer keeps its bytes.
+    const char* const liftClause = tier.servedString == 0 ? ""
+        : "A literal no identifier can spell (holding a dash, slash, dot or space) or written in capitals, or one with fewer than 8 "
+          "code hits, also serves strings WITH code while source and test files hold fewer than 8 of its code hits (a hit there no "
+          "parse classified counts as one); under that same count either lift is ranked. On such an answer the rows run: source files whose NAME holds the literal, "
+          "other source code (files with a code hit first), then everything else (shell/YAML/TOML/JSON, tests, docs) in the usual order; string_hits= is how many "
+          "of hits= are string-tier, and ref= on a hit whose enclosing definition has no caller edge is the first site outside it "
+          "that names it as a whole word in code, never in a comment or string (where a table entry is registered; one site, a floor). ";
+    return std::string( "SPAN TIERS: each hit is classified by the tree-sitter span it sits in (code/comment/string) and this answer serves "
            "the CODE tier, or — when no hit is code — comment and string TOGETHER; tier= names what was served when it is not "
            "code, so a pattern living only in prose is answered, never emptied. When every code hit is a USE of the literal (a "
            "test/doc file, or a shell, YAML, TOML or JSON file) and source code (not one of those) holds it as a string, the string tier is "
@@ -314,7 +323,7 @@ const char* grepTierLegend( const rw::GrepTierReport& tier )
            "under a fixed budget: tier_parsed= how many were classified, tier_budget= which ceiling stopped it (files or bytes, "
            "present only then, beside tier_files= the hit files it had to cover — and the root then also carries counts_floor=\"1\": "
            "the tier counts are floors while hits= stays exact and every row is served), tier_unclassified= hits in files nothing "
-           "classified — always EMITTED, never suppressed. ";
+           "classified — always EMITTED, never suppressed. " ) + liftClause;
 }
 
 // Present only when this answer actually held something back or stopped short — absent-means-nothing-was-
@@ -345,6 +354,10 @@ std::string grepTierAttrs( const rw::GrepTierReport& tier, bool floorAlreadyEmit
     if( std::strcmp( tier.emittedTier, "code" ) != 0 )
     {
         attrs += std::string( " tier=\"" ) + tier.emittedTier + "\"";
+        if( tier.servedString > 0 )
+        {
+            attrs += " string_hits=\"" + std::to_string( tier.servedString ) + "\"";   // idea #5: the per-tier count a served tier keeps
+        }
         // M17: the label was elected over the CLASSIFIED hits only (search.h's grepApplySpanTiers — an
         // unclassified hit may not vote for a tier nobody proved it belongs to, which is right). What was
         // wrong is that the RESULT was then stated as a fact about the whole answer: live,
@@ -533,7 +546,7 @@ GrepScanPhases collectGrepScanPhases( const rw::Config& cfg, const rw::IngestRes
     {
         PROFILE_SCOPE_DESCRIBE( "grep/2: span tiers" );
         phases.found = grepApplySpanTiers( ing, std::move( phases.found ), ( cfg.grepIn == "any" ) ? GrepIn::Any : GrepIn::Code,
-                                           phases.tier, /*useMemo=*/!cfg.noCache );
+                                           phases.tier, /*useMemo=*/!cfg.noCache, cfg.grepRegex ? std::string_view() : std::string_view( pat ) );
     }
     // §R-J: additive scan over CrawlSkips::unsupported — the "unsupported-ext, text-looking" population the
     // crawl already computed at ingest time (queries/*/tags.scm and its siblings). Reuses the SAME per-file
@@ -624,14 +637,60 @@ static bool refuseAbandonedRegexScan( const rw::Config& cfg, const rw::IngestRes
     return true;
 }
 
+// idea #5: ref= on a code+string answer — for each distinct callerless enclosing definition of a hit in a file whose
+// NAME holds the literal (the first rank group, search.h grepRankLiftedStrings), the first site naming it (search.h
+// grepFirstRefSite). At most kGrepHitRefsMax definitions per page, so the extra scans stay bounded.
+inline constexpr std::size_t kGrepHitRefsMax = 4;
+
+struct GrepHitRef
+{
+    rw::NodeId      enclosingId = rw::kNoNode;
+    rw::GrepRefSite site;
+};
+
+std::vector<GrepHitRef> grepHitRefs( const rw::Config& cfg, const rw::IngestResult& ing, const rw::GrepTierReport& tier,
+                                     std::span<const rw::GrepEncRow> encRows, std::span<const rw::GrepHit> hits )
+{
+    std::vector<GrepHitRef> refs;
+    if( tier.servedString == 0 || cfg.grepRegex )
+    {
+        return refs;
+    }
+    const std::string_view pat( cfg.grep );
+    for( const rw::GrepHit& h : hits )
+    {
+        if( refs.size() >= kGrepHitRefsMax )
+        {
+            break;
+        }
+        if( h.enclosingId == rw::kNoNode || h.enclosingId >= ing.symbols.size()
+            || std::ranges::any_of( refs, [ & ]( const GrepHitRef& r ) { return r.enclosingId == h.enclosingId; } ) )
+        {
+            continue;
+        }
+        const std::string_view rel   = rw::rootRelPath( ing, h.fileId );
+        const std::size_t      slash = rel.rfind( '/' );
+        if( ( slash == std::string_view::npos ? rel : rel.substr( slash + 1 ) ).find( pat ) == std::string_view::npos )
+        {
+            continue;
+        }
+        const auto row = std::ranges::find_if( encRows, [ & ]( const rw::GrepEncRow& r ) { return r.chain == h.enclosing; } );
+        if( row == encRows.end() || row->callerCount != 0 )
+        {
+            continue;   // a definition something calls is reached by its callers, not registered
+        }
+        refs.push_back( GrepHitRef{ h.enclosingId, rw::grepFirstRefSite( ing, ing.symbols[h.enclosingId].name, h.enclosingId,
+                                                                               /*useMemo=*/!cfg.noCache ) } );
+    }
+    return refs;
+}
+
 int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g,
                     const std::vector<std::uint32_t>* amp, const std::vector<std::uint8_t>* tested,
                     const GrepScanPhases* prefetched )
 {
     using namespace rw;
     const std::string          pat( cfg.grep );
-    const int                  histCap = cfg.packTopN > 0 ? cfg.packTopN : 100;
-    const int                  rowCap  = effectiveRowCap( cfg.pageLimit, histCap );
 
     // §P0.4: an invalid --regex used to scan nothing and print hits="0" at exit 0 with an EMPTY stderr —
     // indistinguishable from a true negative on every channel. Refuse before scanning, so the prefilter
@@ -669,6 +728,12 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
     }
     const GrepCollection&           found           = phases->found;
     const GrepTierReport&           tierReport      = phases->tier;
+    // idea #5: a RANKED code+string answer's default window is kGrepLiftRowCap — its first rows are the ranked answer (the file
+    // whose name holds the literal, then source), and the rest is where the literal is typed; next= pages on. servedString is
+    // set only on that posture (search.h GrepStringLift::Ranked: fewer than kGrepLiftCodeFloor program-code hits, unclassified
+    // ones included), so main's literal lift on a full count keeps the 100-row default (rv-lean-trio2 item 1).
+    const int                       histCap         = cfg.packTopN > 0 ? cfg.packTopN : tierReport.servedString > 0 ? kGrepLiftRowCap : 100;
+    const int                       rowCap          = effectiveRowCap( cfg.pageLimit, histCap );
     const GrepAuxCollection&        aux             = phases->aux;
     const std::vector<GrepTerm>&    grepTerms       = phases->terms;
     const GrepScope                 grepScopeVal    = phases->scope;
@@ -699,6 +764,7 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
     const std::vector<GrepEncRow>  encRows   = grepEnclosingRows( ing, g, std::span<const GrepHit>( hits ) );   // R1b, before the legend
     const std::vector<CallerFloor> encFloors = grepEncFloors( ing, g, encRows );
     const bool anyEncFloor = std::ranges::any_of( encFloors, []( const CallerFloor& f ) { return f.isFloor; } );
+    const std::vector<GrepHitRef> hitRefs = grepHitRefs( cfg, ing, tierReport, encRows, hits );   // idea #5: ref= (empty off a code+string answer)
     std::vector<char> esc;
     const auto        ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
     // CDATA-safe a context block: split any ]]> (would prematurely close the CDATA) and scrub XML-illegal
@@ -913,7 +979,7 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
     // R-H: the tier disclosure (helper above) — empty when nothing was held back.
     const std::string tierAttr = grepTierAttrs( tierReport, /*floorAlreadyEmitted=*/hitsCapped != 0 );   // N2: tier_budget= floors the root too
     // §R-J: unindexed_files_scanned=/unindexed_files_skipped=/unindexed_candidates_capped= (helper above).
-    const std::string auxAttr = grepUnindexedAttrs( aux );
+    const std::string auxAttr = grepUnindexedAttrs( aux ) + renderHistoryUnread( DiscloseAs::XmlAttrs );   // K51: absent unless the amp= walk (--metrics) could not be read
     const std::string regexSkipAttr = grepRegexSkipAttrs( cfg, found, aux, /*floorAlreadyEmitted=*/hitsCapped != 0 || tierReport.budgetHit != nullptr );
     std::string       scanShortAttr;
     if( found.unreadableFiles != 0 )
@@ -954,6 +1020,7 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
                                  /*collectionCapped=*/ hitsCapped != 0 ),   // H8: the cap hits_capped= names floors the root
                  hitsCapped, completeAttr, tierAttr.c_str(), corpusAttr.c_str(), auxAttr.c_str(), regexSkipAttr.c_str(),
                  scanShortAttr.c_str(), rw::nextAttrXml( grepNext ).c_str() );
+    rw::emitTo( stdout, "{}", renderHistoryUnread( DiscloseAs::LegendComment ) );   // K51: its own definition, behind the root it marks
     // G1 (2026-08-15 harvest): hits GROUP by file under <f p="…">, root-relative when this is a single-root
     // run (report-memgraph §F6: the absolute root prefix alone was 42.5% of a real --grep payload; the
     // repeated-per-hit path was report-octocode §F1's 31.4%). Byte-identical text within one file's group
@@ -988,6 +1055,13 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
             if( !c.more.empty() )
             {
                 rw::emitTo( stdout, " n=\"{}\"", c.more.size() + 1 );   // 1 (this row) + the folded sites — sums to shown=
+            }
+            for( const GrepHitRef& ref : hitRefs )
+            {
+                if( ref.enclosingId == h.enclosingId && ref.site.line != 0 )
+                {
+                    rw::emitTo( stdout, " ref=\"{}:{}\"", ex( pathFor( ref.site.fileId ) ).c_str(), ref.site.line );
+                }
             }
             rw::emitTo( stdout, ">" );
             if( !h.before.empty() )

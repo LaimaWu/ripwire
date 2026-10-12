@@ -19,6 +19,390 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 Vendored Yogthos' ABI-15 `tree-sitter-clojure` parser and added syntax-level definitions and direct-call captures for the four Clojure-family extensions. The grammar comparison parsed 4,930 of 4,933 files (99.94%, 55.5 MB) from Metabase, clojure-lsp, clj-kondo and Babashka checkouts in 2.24 seconds; two failures were intentionally invalid clj-kondo fixtures and one was a Metabase test. This measures parser completion on that corpus, not semantic call-resolution accuracy. Namespace/import resolution, macro expansion and exact multi-arity matching remain outside this first pass; see `docs/ARCHITECTURE.md` for the extraction limits.
 
+## [0.6.7] — 2026-10-11
+
+### Fixed — `--impact`: a selector matching several definitions keeps the `via="name"` hedge in its per-file rollup
+
+When the symbol window is cut, `--impact` folds the whole reach set into one `<rf>` row per file. A bare selector such as
+`--impact=arrange` can match several definitions (a method and a free function of the same name), and the fold dropped
+the `via="name"` hedge its symbol rows carry, so a file reached only by name read as a plain dependant. On a selector
+that matches more than one definition, an `<rf>` row now carries `via="name"` when every reached symbol in the file is a
+`via="name"` row, and `by_name=K` when K of its `syms=` are (JSON: `"via":"name"` / `"by_name":K`; the MCP `impact` tool
+the same). It does not say which definition a file depends on, and an all-proven row stays plain. A selector matching one
+definition (bare or qualified) folds byte-identically to before.
+
+### Changed — the default map names the files and entry points its ranked rows cut: an inventory tier after the rows
+
+The map prints the top 200 symbols by rank, so a file whose best symbol ranks just below the cut, and a program's `main`
+(called by nothing, so ranked last), were absent without a word. When the ranked rows left out a file with code, the map
+now ends with an `<inv listed= unlisted=>` tier, after rows that are unchanged. It holds `<entry>` rows for a top-level
+`main` the index can prove (with its first callees by name; a script language's `main` only when its own module scope
+calls it, as Bash's `main "$@"`; Swift none), and an `<ls>` row per directory with the code files not shown, names only;
+test, doc, example and bench directories and directories with no code print a count alone. A map that shows every code
+file carries no tier, byte-identical to before. The tier is off under `--max-tokens`, for an `in=DIR` map and for a
+multi-root workspace, and `--no-inventory` (new) prints the previous shape. Two runaway guards disclose themselves
+(`entries_capped=` past 256 entries, `names_capped=` past 2,000 names, whole directories dropped; `entries_next=` and `names_next=` list the rest). Entries are found by name
+convention only; a manifest's declared entry (`package.json` `main`, `console_scripts`, Cargo `[[bin]]`) is not read, and
+the legend says so. Measured with the built binary on the 11 permitted public repositories: the median map grows 7.0%
+(+2.2% to +31.3%; koa's is byte-identical), the ranked rows are identical on all 11, and tmux `input.c`,
+`key-bindings.c` and `main`, hono's `src/validator`, textual's `drivers/` and `command.py` and htop's `main` and its
+signal, affinity and scheduling files are now named. Whether naming a file lets an agent find it is not measured here.
+
+### Changed — `--grep` serves a text-shaped literal's string tier, `--impact` rolls its reach up per file, a clean-tree `--quality-delta` prints its verdict
+
+Three ways a lean answer was missing what the question named.
+- **`--grep`.** A pattern such as `split-window` has few code hits and one string literal that registers the command
+  (`cmd.c:206`), and the code tier left the defining file out. The string tier is now served beside the code tier when
+  fewer than 8 classified code hits (source and test files; not docs or shell, YAML, TOML or JSON) exist, ranked, and
+  `ref=` names the first site in code, never one in a comment or a string. An identifier-shaped pattern with 8 or more
+  code hits is byte-identical. tmux `--grep=split-window`: 16,108 → 5,453 B, defining line first.
+- **`--impact`.** Beside a cut window, the whole reach set is folded into one `<rf>` row per file (20 at most), with
+  umbrella importers counted. tmux `--impact=grid_set_cell` now names `input.c` and `window-client.c` (it named neither);
+  5,907 → 5,099 B. A selector that reaches only through a type (`--impact=grid_cell`) still reaches nothing.
+- **`--quality-delta` and `--edit-check`.** On a tree identical to HEAD, a clean answer prints its verdict and the
+  per-kind count of the stale acks it folds, not the acks. The fold ships only when the answer is at least 25% shorter
+  than the full document; `--show-stale` (new) prints the acks, and the `--edit-check` verdict's `rows_next=` names the
+  `--limit` that lists every caller row. A dirty tree, a non-git root and every answer carrying a regression print
+  everything, byte-identical to before. This repository's clean-tree `--quality-delta`: 14,594 → 978 B. `--edit-check=escapeXml`:
+  3,322 → 1,122 B. Both stay above the sizes the lane aimed at (600 and 400 B), because the verdict keeps the floor
+  disclosures.
+
+### Changed — `--seams` counts links between documents instead of reporting them as untested seams, and `--report` ranks production god files
+
+A markdown link from one document to another is a call edge between two Section symbols, so `--seams` listed
+`. -> docs untested=30` on this repository (66 on code-review-graph, 17 on aislop), every one a doc-to-doc link. An edge
+whose caller and callee are both document sections (a markdown heading or a data key) is now skipped and counted in
+`doc_links=` (53 on this repository; 69 and 17); the same sweep finds no such edge left. `--report`'s god-file list put
+`test/lib/clean-env.sh` first: depended-on files under a test, tests or bench directory whose dependents are all test
+paths are now counted on one `layer=test` line (285 more files here; top file named) and the list starts with
+`src/model.h`. `--deps` godfiles rows carry `layer=` when the file has a built-in layer. An answer with no doc links and
+no such test file is byte-identical to before.
+
+### Changed — `--whereis`: a long line's `t=` is a 200-byte preview, and the branch-label parse holds only its batch
+
+A `--whereis` row's `t=` repeated its whole source line, so on a hot name the long lines were most of the answer. On this
+repo's own tree (165 local refs), `--whereis=lego` was 129,314 B, and 38 of its 60 rows held lines of 206 B to 7.3 KB:
+a Python dict, markdown paragraphs, a legend literal.
+
+- A line over 300 bytes prints its first bytes, cut on a UTF-8 boundary, plus an ellipsis: 200 bytes at most, the
+  ellipsis included. The row carries `t_bytes=`, the whole line's size. A line of 300 bytes or less prints whole, so a
+  cut always drops at least 100 bytes. A 202-byte line cut to 200 saved 2 bytes and cost its page ~330 B of disclosure.
+- A page prints its previews only when that makes it shorter. The served page is rendered cut and whole, and the cut
+  one is served only when it is strictly shorter both as written and as the compact dialect delivers it; then every
+  long line on it is cut. A page whose long lines sit just past 300 B (one 395-byte line saved 92 B and its disclosure
+  cost 250 B) prints whole, byte-identical to before. The default listing is chosen on the whole-line pages, so a
+  preview never changes it.
+- A page that cuts carries `<t_cut rows=N next=…>`. Its `next=` replays THAT page with `--whereis-full-text` (new; MCP
+  `full_text`, a boolean): the listing the page served, its `--limit`/`--offset`, `--with-history` when given, and every
+  line whole. Nothing else is lifted: the parse guard, the row cap and the window stay, so the replay is the same rows
+  with the same `kind=` labels. `--detail=1` still lifts the preview with the row cap and the parse guard, but it is a
+  different answer (it relabels a guard-left `kind="text"` call site as a ref, and unpages a refs or all listing: 25 MB
+  for `--whereis=EXPECTS --whereis-listing=all`), so `next=` does not name it. The full legend's PREVIEW clause and the
+  compact `t_bytes=` / `t_cut rows=` readings ride only on a page that cuts. MCP `whereis` serves the same page; its
+  `next=` is the CLI spelling, as `<unparsed next=>`'s is.
+- Measured on this repo (165 refs), base vs head back to back: `--whereis=lego` 129,314 → 18,616 B (−86%), every row
+  kept, and its `next=` replay is 129,337 B (the base page plus the 23 B of the listing it names).
+  `--whereis=EXPECTS --whereis-listing=all` 40,241 → 18,540 B, replay 40,241 B (was 25.2 MB). Over 25 names × 4
+  listings (100 answers, 2,869,969 → 1,145,411 B): no answer is longer than before, no default listing changed, 43 are
+  byte-identical, and in the 57 that cut, a cut `t=` is a prefix of its line and each `next=` replay lists the same rows
+  as the page and as the base answer. Gates: `crossrefcheck` 5h, 5h-C2 (7 line widths × 2 listings × 2 legends: every
+  page is its whole twin or strictly shorter) and 5h-X2 (a guard-bound page's 44 `kind="text"` rows replay whole).
+- Peak memory: the scan kept every candidate blob's bytes, and copied them into each (blob, path) job, until the runaway
+  guard picked its batch. Now it records sizes, and the batch reads back only the blobs it chose. `--whereis=lego`
+  peaks at 0.88-0.94 GB (was 1.42 GB) and `--whereis=DISCLOSE` at 0.85-0.90 GB (was 1.16-1.22 GB). What remains is
+  the index (~0.45 GB on a name with no parse batch) plus the parse of up to 256 blobs / 64 MiB. A chosen blob that does
+  not read back whole confirms nothing: its rows read `kind="text"` and `<unparsed>` counts it. The second read costs a
+  little time: interleaved base/head ×5 at 1-min load 4-7 (medians), `--whereis=lego` 4.73 → 4.91 s, `--whereis=DISCLOSE`
+  4.61 → 4.64 s, `--whereis=lego --detail=1` 18.15 → 19.71 s (+9%), at peaks of 1.42-1.60 → 0.90-1.06 GB (lego).
+
+### Fixed — `--for`: the `<sigs>` budget is charged for the `<lego>`/`<compose>` stub it serves, not the full render
+
+The default answer collapses `<lego>`/`<compose>` to a ~120 B counted stub, but the `<sigs>` budget was charged the full
+render before the collapse. On a corpus whose question names many interfaces, the full `<lego>` filled the budget: one
+measured Python corpus served 4 of 40 signature rows in a ~4.6 KB answer under the 7.5 KB ceiling.
+
+- A section served as a stub is charged at the stub's size (the CLI lens and the MCP `for` tool share one rule).
+- Without an explicit ceiling, `--sections=lego,compose` keeps the stubbed answer's `<sigs>` budget, so the stub's `next=`
+  restores both sections with the same `<sigs>` rows, byte-identically. Under `--token-budget` (MCP `budget_tokens`)
+  the restored sections are charged in full, so the hard bound holds.
+- Measured on 32 `--for` questions over 8 corpora: 19 answers byte-identical, 13 carry more signature rows
+  (4 to 29-33 on the corpus above), and every row the old answer showed is still shown. Gate: `forsectioncollapsecheck` (13).
+- Under `--token-budget` with `--with-graph` or `--detail`, the `<sigs>` budget now leaves room for the graph block, or for
+  the first `--detail` body (whole up to a quarter of the budget, else cut with a `next=` for the rest). Before, they rode
+  past the budget and the first body shrank to its first line. With BOTH flags nothing is reserved: on the measured
+  questions that cut a needed signature row, so those answers keep their rows, serve the first body at its floor, and say
+  `over_ceiling="1"` when they overshoot. Without `--token-budget` nothing changes. Gate: `estchargecheck` #11 A7R.
+- By-design break, owner ruling 2026-10-09: `--token-budget=2000 --detail=20 --with-graph` on this repo's `src` no longer
+  fits its allowance (6029 B vs 5428 B). It keeps every signature row the same budget shows without the two flags, says
+  `over_ceiling="1"`, and the cut first body carries a `next=` that returns exactly the lines it cut. The over-budget note
+  now names the kept rows, the graph block and the first body's floor. It used to blame the header floor, which was false
+  here: the header alone is ~1.8 KB. The old bar still holds for each flag alone and for both flags when the rows fit.
+  Gates: `estchargecheck` #11 A7 twin / A7B / A7R kill+next, `ceilingverdictcheck` (2b).
+- Under `--token-budget`, a spent ceiling no longer drops the compact `<hops>` section without a trace: it ships as
+  `<hops shown="0" total="N" capped="1" next=…/>`, where `next=` is the same question without the budget. A partly cut
+  `<hops>` carries the same `next=`, and a cut `<tail>` carries the `--for … --limit=N` file page. These bytes are reserved
+  from the signature rows, so measured at 2000 tokens over 32 questions: 192 hop rows named on 32/32 answers (none before),
+  65 signature rows fewer (still disclosed by `<sigs>`'s own `next=`). Gates: `estchargecheck` #11 A7D, `fordisclosurecheck`
+  #1b/#1c.
+- The default (compact) answer fits an explicit `--token-budget` where `--legend=full` does on the measured band below, and
+  says why where it cannot. Charging the stub as served
+  removed slack that had been absorbing the compact header's extra bytes (its row budget is charged no more header than
+  the full dialect's), so on this repo's `src` the default `--for='rank symbols by pagerank'` answer went over budgets
+  1300-1500 and 1600-1700 that the full answer met. Four changes, each only on an answer past its exact budget, except the
+  two shorter compact clauses, which ride whenever the hops cut or the clause drop does:
+  - A compact answer that is still over after paying for `<sigs>` `next=` drops rows to pay the measured overrun too, and
+    is served only when that fits. The rows it drops are the ruled exemption (`compactlegendcheck` (P1-B)). The
+    `--detail` + `--with-graph` shape keeps its rows, as ruled.
+  - The `<field>`/`<iface>` readings drop when `<compose>`/`<lego>` is served as a stub: no such row is printed.
+  - The compact hops-cut clause and the compact clause-drop note no longer repeat `total= shown= capped=` / `next=`
+    readings the dialect defines anyway; the compact echo rung no longer claims a `task_echo` drop (it has no echo).
+  - The last-rung note blames the header floor only when the header alone is past the allowance; otherwise it says the
+    header fits and the rows and sections served with it exceed the budget. Both dialects.
+  Measured on `src`, `--token-budget=1100..1700` step 50: the default fits at every budget the full answer fits (13/13
+  read); at 1100-1250 both are over, each with a true reason. Not everywhere: where both dialects sit at the rank 1..4
+  row floor and the full answer fits by a few tokens, the larger compact header can still go over
+  (`--for='serialize the map'` at 1200: 1435 vs 1196 tokens); it then says so, with the true reason and the `<sigs>`
+  `next=`. Gates: `compactlegendcheck` (P1-B), (P1-S), (P1-S2), `estchargecheck` #11 A7D (+ the `--legend=full` twin),
+  C3 re-pinned to a doc-less twin corpus.
+
+### Changed — `--for`: the function a question names gets the first hop row, with all its callee names
+
+The compact `--for` answer hop-expanded only the six best-ranked rows, inside a ~1 KB allowance. A question that names
+the function it is about ("How does the JWT middleware verify a token?") often ranks that function below a dozen symbols
+that repeat the question's other words, so its callees — the names an agent needed next — were never served.
+
+- A ranked function or method DEFINITION (not a test symbol, not a C prototype) whose whole name, leading `_ # $ @`
+  removed and ASCII case folded, equals a word of the question is that question's owner, when the word has such a
+  definition in the top 24. It gets a `<h qword="word">` row first in `<hops>`, past the six-row cap; every same-named
+  definition in the ranked pool is its own row. At most three owner rows; the rest are disclosed as
+  `<hops qword_cut="N" next="--callees=…">`. A small list of common English words (get, then, write, …) ranks after the
+  other owner words, so verbs a question merely uses do not take the owner's slot.
+- An owner row lists its callees up to 100 names (a runaway guard); past it, or under an explicit budget that cuts it,
+  `<calls capped="1" next=…>` names the full list. The hop-slot rule still applies: an owner with no proven callee
+  edge has no row and is counted in `noedge=` once. Name-only callees keep `via="name"`.
+- By name, not by resolution: `qword=` says the name equals the word, never that the symbol is the only or the true
+  implementation. Default regime: owner rows ride on top of the hop allowance, so every earlier `<h>` row is still
+  served (a moved owner can only free room), and `<sigs>`/`<tail>` are unchanged: the legend clauses the owner rows
+  switch on (`qword=`, and `via="name"` when only an owner row carries it) are not charged to the signature budget. Under `--token-budget` they are funded first. A question that names no
+  owner, `--json --for` and the MCP `for` verb are byte-identical; `RIPWIRE_NO_OWNER_HOP=1` restores the previous
+  answer. Measured on the 32 `--for` rows of the round-1 comparison set: the two in-scope rows now name 5 of 5 gold
+  callee items they missed (were 0 of 5); 23 of 32 answers are byte-identical, 1 differs only in `noedge=`, and 8 grow by 0.2–1.1 KB (+1.4% over all 32). Gate:
+  `test/ownerhopcheck.sh`.
+
+### Changed — `ripwire wrap` recommends `--for` at its default budget
+
+The CLI-first paste block (claude, codex, opencode, openclaw, hermes) and the aider repo-map line now read
+`--for="<your task>"` instead of adding `--token-budget=2000`. That budget is a ceiling. Over 40 `--for` questions in
+eight open-source repositories (one release binary, `--no-cache`) it halved the median answer (4.6 KB against 9.2 KB).
+It dropped signature rows on 35 questions and call-hop rows on 24. Only the signature cut carried `capped="1"` and a
+`next=`. The file tail and two partial hop cuts carried `capped="1"` alone, and on 24 questions the whole call-hop block
+was left out with no marker (22 of them had hop rows). The default budget and every other knob are unchanged, and
+`--token-budget=N` still works when passed by hand. Only the printed `wrap` text changes.
+### Changed — `--expand` / `--outline` ship no ride-along map when every definition they name is served
+
+`--expand=NAME` on a name with several definitions, and `--outline=NAME`, used to carry the generic top-200 ranked map
+beside bodies that already answered the request (on this repository `--expand=subtokens`: 26,752 B, of which 19,444 B
+was map rows that never mention the symbol; `--expand=emitTo` served the whole 24,788 B file because the whole-file
+comparison priced the bundle with that map). When every requested definition is served the map now defaults to
+`top-k=0`: the root carries `topk_default="0"` and `map_next="ripwire ROOT..."` (the call that prints the map, for a session
+that skipped orienting: every root of the call plus its crawl-scope flags, shell-quoted). When a byte budget cut some
+definitions the root names exactly those in `unserved_total=N` (the true count) and a shell-quoted
+`unserved_next="--expand=FILE:LINE:NAME,..."` instead of shipping the map; past 16 cut definitions it serves the first 16,
+`unserved_listed="16"` says so, and a larger `--pack-budget-bytes` serves the rest. The whole-file comparison therefore prices the
+payload only. An explicit `--top-k=N` keeps the previous shape. Language-neutral: the decision reads the record of which
+requested definitions were emitted.
+
+### Fixed — the cross-branch verbs refuse when the blob batch cannot run
+
+`--stray-content`, `--stray-content --abi`, `--stray-content --plan`, `--eval-stray` and the MCP `stray_content` tool read
+every branch's content through one `git cat-file --batch` whose sha list is written under the cache directory. With `TMPDIR`
+naming a directory that does not exist the list could not be written, every blob read as absent, and the answer was
+`merged="1"` for a branch holding unmerged work (`--abi`: exit 0, no drift). Each now exits 1 (MCP: `-32603`) naming the
+cause and `TMPDIR`, with nothing on stdout, the way `--whereis` refuses on the same condition.
+
+### Fixed — a git history walk that could not be read says so, and is retried
+
+A `git log --name-only` that failed (an unreadable object, a bad ref) came back as an empty stream or as the newest part of
+the window and was stored under the (repo, HEAD, window) key, so `churn=` and `amp=` read as "no change history", or as the
+whole window's count, until HEAD moved, with no tell. A git that would not run at all (not on `PATH`) in a repository read
+the same way, as an unborn branch. A walk git could not finish is now never cached, so the next call walks again (a blob an earlier build stored from such a
+walk is not read either: the history-walk cache scheme moves, see the versions note), and every
+document that prints `churn=` or `amp=` (the map under `--metrics`, `--for`, `--pack-task` and `--grep` with `--metrics`,
+`--around`) carries `history_unread="1"` on its root (`"history_unread":true` in JSON) beside a comment that defines it and
+names the cause. It means `churn=` and the co-change half of `amp=` count only the commits that were read, so both are
+floors: when git did not run, `churn=` is absent and `amp=` counts callers only; when git stopped part-way, they count the
+newest part of the window it read. It does not mean the other numbers are affected, and a walk that read an empty window (a
+repository with no commit) stays silent; a HEAD that is corrupt rather than unborn still reads as that empty window. Not yet
+covered: `--cochange` (and the MCP `cochange` tool), `--rank-by=churn` and `--owners` run their own git walks and do not yet tell a
+failed one from an empty one (`commits="0" partners="0"`; "found no commits in its window"; exit 1 with "git unavailable /
+no history").
+
+### Fixed — a non-ASCII `--help-task` prompt no longer trips the sanitizer build
+
+`lowerAscii` converted every byte of the prompt through an implicit `char` to `unsigned char` conversion, which the
+sanitizer build (`implicit-integer-sign-change`) aborts on for any byte at or above 0x80. The same shape sat in the
+router's name-shape and `FILE:LINE` predicates, the LSP header parser and the extension test; each now narrows
+explicitly.
+
+### Changed — `--whereis` labels another ref's row by parsing its blob, lists a line several refs share once, and reads refs from tree objects
+
+A row on another ref used to take `kind="def"` from a lexical reading of its one line, and any such reading errs both ways:
+a looser one called call sites definitions (`if( !task.empty() ) { out += escapeXml( task, esc ); }`, `go f(a)`, `@f(1)`),
+a stricter one lost real definitions (`#define NAME(`, `decltype(auto) NAME(`, `@Test(…) public void NAME()`,
+`#[derive(Debug)] struct NAME`). Measured on this repository (162 local refs), `--whereis=escapeXml`: the default page
+went from 60 rows of `total="2197"` (54 of them call sites) to 2 rows, both the declaration.
+
+- **Another ref's `kind="def"` comes from a parser.** A ref holding HEAD's own blob of a path takes HEAD's index labels,
+  line for line. Any other blob is parsed once per distinct blob and path by the index's own extraction — the same
+  language rule, tags query and symbol model — and a definition it captures for the name labels the nearest row the way
+  HEAD's index labels HEAD's. Only a blob holding a line a loose lexical test calls worth parsing is parsed; a blob
+  without one reads `kind="ref"`. The root says `ref_labels="parsed"` whenever another ref's row is in the answer.
+  Arms: one well-formed file per language family (C, C++, ObjC, Python, TypeScript, JavaScript, Java, Ruby, Go, Rust,
+  Swift, C#, Bash, Markdown) whose every marked line reads as its marker says and as HEAD's index reads the same bytes;
+  the twelve definition shapes the stricter reading lost; a branch-only `#define` and annotated Java method.
+- **A runaway guard on that parse, disclosed.** At most 256 blobs or 64 MB per answer, most rows first, under every
+  listing, the default page included. A blob the guard leaves, or one the parser cannot finish, confirms nothing: its
+  parse-worthy lines read `kind="text"` (listed beside the definitions, never `kind="def"`) and an `<unparsed blobs=
+  rows= next=>` element counts them; `--detail=1` lifts the guard. Its `next=` replays the same question with
+  `--detail=1` (an explicit `--whereis-listing=` rides with it); an MCP `kind` ref filter is not carried, as `<refs
+  next=>` does not carry it: the CLI has no whereis ref filter.
+- **A definition line several refs hold is one row.** Under `listing="defs"` a `kind="def"` (or `kind="text"`) row outside
+  the checkout whose path and line text other refs hold too is printed once, for the first of those refs by name, with
+  `refs="N"`; the root's `folded=` counts the rows it stands for (on the first page, `shown + more + folded + refs count =
+  hits`). `hits=` still counts every copy and `--whereis-listing=all` prints each ref's own row.
+- **Faster.** Every ref's tree is read from git's content-addressed tree objects, each distinct tree once and a level at a
+  time through one `git cat-file --batch`, instead of one `git ls-tree -r` per distinct tip (the same rows in ls-tree's
+  order and spelling — an arm compares quoted and unquoted names with ls-tree itself); a blob several refs share is
+  scanned once. The parallel per-tip listing stays the fallback, used when ripwire runs on a directory below the top of
+  the work tree.
+
+What stays a floor: a definition the loose lexical test misses (a signature wrapped before its parameter list closes, a
+name alone on the line under its return type, or a definition with no parameter list and no declaration keyword before
+the name: `name: function (`, `pub const NAME`, a C# property) is a counted ref when nothing else in its blob earns the
+blob a parse. A parsed blob is labelled as HEAD's index labels the same bytes, so a file its grammar cannot parse
+cleanly (a fragment, a file mid-edit) can lose a definition or show a false one exactly as HEAD's index would.
+MCP `whereis` takes no `detail` argument, so there the guard's `next=` names the CLI flag. Its description keeps its 701
+characters, the sentence calling a branch row's label lexical replaced by the parser one, and the
+`tools/list` manifest shrinks by 5 B, to 47,109 B on this release's tree (the dropped em dash is six bytes of JSON; every
+other tool is unchanged). Gates: `test/crossrefcheck.sh` (5b–5e),
+`test/selectorhonestycheck.sh` (HEAD's rows, labelled by the index), `test/pagingsweepcheck.sh`.
+
+### Changed — a C++ call named like a standard container member binds no in-tree namesake unless a rule ties its receiver to one
+
+`out.push_back( c )` on a `std::vector<char>&` parameter, `s.size()` on a `std::string`, `getV().empty()`: a C++ member
+call whose receiver no rule typed bound by NAME to whatever in-tree class defines the member — a hedged via="name" row,
+but a row, and every graph reader counted it. On this repository's own map 14 of the top 20 PageRank rows were such
+names (a small-vector's `push_back`, a path wrapper's `c_str`, every `empty` and `find` under `src/`), and
+`--callees=escapeXml` listed 8 of them beside its 4 real callees.
+
+- A standard container is a concrete, non-virtual class template, so a receiver of standard type never dispatches into
+  the tree. Such a call is now DECLINED after the ladder decides it: no edge; counted in the header's `declined=` and
+  in `declined_calls=` on every definition it would have bound (so `--callers` / `--impact` / `--safe-delete` say the
+  count, and no definition becomes a dead-code candidate for losing a by-name caller); a legend clause of its own,
+  charged only where it fired. `--callees` (and the MCP `find_symbol` twin) names those calls once:
+  `<stdm n="clear,data,push_back,reserve,size" calls="11"/>` (JSON `"stdm":{"n":"…","calls":11}`).
+- The names are data (`src/externalnames.h` `kCppStdMemberNames`, 78 container / string / view / span / optional /
+  smart-pointer members, generic verbs such as `get`, `count`, `swap`, `read`, `write` excluded). A receiver a rule
+  types is never touched — a typed local, parameter, pointer or member field, `this->`, an implicit-this call — and
+  neither is one whose recorded written type names an in-tree class that may define the callee: an alias of the in-tree
+  container, a field written as one, a namespace-scope, file-static or extern variable (`ns::List g; g.size()`), the
+  argument of a `std::unique_ptr` / `std::shared_ptr` / `std::optional` reached through `->`, a `->` through an
+  in-tree class with its own `operator->` or a class the tree does not define (a Qt or boost pointer), or a `->` through
+  a `typedef` / `using` alias of a standard smart pointer or optional (`typedef std::shared_ptr<ns::List> ListSP; ListSP
+  p; p->size()` — the alias record keeps no template argument, so `typedef std::unique_ptr<std::string> StrUP` keeps its
+  hedge too) or of one of those wrapper classes (`using QP = QSharedPointer<ns::List>`) — each keeps its hedge. `std::unique_ptr<std::string> p; p->size()`, `std::vector<ns::List> v; v.size()`
+  (the container's own member) and `IntVec* p; p->size()` through an alias of `std::vector<int>` are declined.
+- The stated floor — declined even where the object is an in-tree class, because the index records no written type for
+  the receiver: a call result (`h.list().size()`, `makeList().size()`), an iterator (`auto it = v.begin(); it->size()`,
+  `it->second.empty()`), an `auto` local, a dereference, a second element access (`m[ a ][ b ].empty()`), a range-for
+  `auto`, a template parameter, a field two hops off its root, the template arguments of a type written unqualified (`QList<ns::List> l; l.size()`), a member
+  field written `std::optional<…>` reached through `->` (`std::optional<ns::List> o_; o_->size()` — a field's template
+  argument is read for `std::unique_ptr` / `std::shared_ptr` alone), and a `typedef` declared inside a function body
+  (its alias target is not recorded).
+- ONE element access — `m[ k ]`, `m.at( k )`, `v.front()`, `v.back()` — of a named container or a field one hop off a
+  typed root reads the element type off the container's recorded written text (a local's, parameter's or namespace-scope
+  variable's qualified type, a member field written as a standard sequence container or map, a `typedef` / `using` alias
+  of one, alias to alias): `rule->bindings_[ "rspfile" ].empty()` through `typedef std::map<std::string, EvalString>
+  Bindings` keeps its hedge on `EvalString::empty`, while `std::vector<std::string>& v; v[ 0 ].empty()` and
+  `std::map<K, std::vector<T>> m; m[ k ].empty()` (an element written in `std`) stay declined. This reads a written
+  type, not a resolved one: it keeps the ladder's via="name" hedge, never proves the edge.
+- C++ only, each other language for a stated reason: C has no member functions; Rust receivers carry no declared type
+  yet; Go, Java, Kotlin, C# and Swift name their standard members after interfaces in-tree types implement; ObjC
+  message sends carry no receiver shape; Python, JS, TS and Ruby keep the builtin-method name gate.
+- Measured on this repository (`--no-cache`, the same tree before and after): call edges 40,567 → 25,020, `ambiguous=`
+  12,576 → 2,774, `declined=` 12,240 → 25,840; the top 20 PageRank rows carry no standard member name (14 before);
+  `--callees=escapeXml` count 12 → 4 plus the `<stdm>` line. Gate: `test/stdmembergatecheck.sh`.
+
+### Changed — every `--callers` and `--safe-delete` caller row names its call sites as `file:line`
+
+"List every call site that must change" took two calls: a `--callers` row's `p=` is where the CALLER is defined, and the
+lines to edit were only in the `--uses` follow-up. Each caller row now carries `sites_at=`, its calls of the called
+leaf name (any receiver or qualifier) as pasteable `file:line` tokens (space-separated, ascending; two calls on one line
+are one site), so the first answer holds them. A file-scope (`<file-scope>`) caller, such as a test file calling a helper at top level, lists
+its sites the same way. `p=`, `count=` and the rows are unchanged.
+
+- **Every dialect:** XML `<s sites_at=>`, `--json` `"sites_at":[...]`, the columnar `<sites_at>` column, and the MCP
+  `find_referencing_symbols` / `find_symbol` `calledBy` rows (with a `sites_note` reading). The sites are the `--uses`
+  call rows inside that caller: matched by name, so they are not proof each one binds to this definition.
+- **A long list is cut, never silently:** a row lists at most 16 sites; a cut row carries `sites_total=N`, and `next=`
+  (the `--uses` call on the same selector) lists every site.
+- **`--safe-delete`:** the bare-line `sites_l=` on its caller rows becomes the same `sites_at=`. `--edit-check` keeps
+  `sites_l=`.
+
+### Changed — `--lego` lists the implementors below a direct one
+
+`--lego=TYPE` (and the MCP `lego` tool) now walks the extends/implements edges to their closure: a class that extends a
+direct implementor (`class Default( SimpleFormatter )` under `BaseFormatter`) is listed too, once, at its shallowest
+depth, as `<impl n= p= via= depth=>` — `via=` names the type it extends that reached it, `depth=` its hops below the
+interface. The `<iface>` carries `transitive=N`; `implementors=` still counts the direct rows alone, and an answer with no
+deeper row is unchanged. The deeper rows are one page of at most 200 (a runaway guard): a cut says
+`transitive_shown=` and `has_more="1"` with a `next=` that pages on, and `--limit`/`--offset` (MCP `limit`/`offset`) page
+them. `--lego` honors `--limit`/`--offset` only for this window; without one it keeps its `--max-tokens` notice. The
+`tools/list` manifest grows 47,109 → 47,293 B on this release's tree (+184 B: the declared `limit` and `offset` arguments on
+`lego`; 46,930 → 47,114 B on the lane's base).
+
+The walk below the direct rows follows only extends/implements clauses the index PROVES name the type above: a class
+declared in a scope enclosing the clause (`class Leaf( Mid )` beside its own `Mid`, `b::Mid` inside `namespace b`), the
+file an import binds the name to (Python `from m import Mid`, followed through a package's re-export; a JS/TS named import
+or `const { Mid } = require( './m' )`), a C-family include, the Java/Kotlin/Go package directory, a Java qualifier naming
+the package, or Ruby's constant scope. A clause bound by the NAME alone — no such evidence — is listed hedged,
+`base_by="name"`, and the walk does not continue below it; a clause the evidence binds to a DIFFERENT same-named type adds
+no row at all, and the `<iface>` counts those types as `transitive_other_base=N` (they are listed on the answer of the type
+they do extend). A Java or Kotlin `import` and a C# `using` are not proofs. The direct rows are listed as before, and the
+walk does not descend below a direct row whose own extends clause is not proven to name the interface (a cross-package
+Java `import`, a Kotlin `import`, a C# `using`, an ES import of a CommonJS base). When such a row has subtypes, the row
+carries `unwalked="1"`, the `<iface>` counts those rows as `transitive_unwalked=N`, and `unwalked_next=` names the first
+row's own `--lego` call, which lists its subtypes.
+
+Every `<impl>` row of the targeted answer now says where the class is: `p="file:LINE"`, the `--uses`/`--callers`
+spelling, so the implementor opens at its definition. The `<iface>` row and the ranked `--for` `<lego>` section keep the
+bare `p="file"`.
+
+A Ruby module mixed in with `include M`, `extend M` or `prepend M` is now an implements edge as well as an ancestor:
+`--lego=M` lists every class (and module) that mixes it in — `--lego=DSL` lists the classes that `include Rake::DSL`,
+where it answered `implementors="0"`. A mixin inside a method body or at a file's top level still adds nothing.
+
+A JavaScript/TypeScript class FACTORY, `const Sub = Base.extend('Sub', …)` (nunjucks' node classes), is now a class
+definition that extends its receiver: `--lego=BinOp` answers instead of "type not found", and `--lego=Node` lists the
+classes made from it. The name must be the string the call is given — `$.extend({}, a)`, an unnamed Backbone-style
+`Base.extend({…})` and `const A = B.extend('C')` stay what they look like (an object merge, no class) — and the parser must
+show a class: the receiver is a class the same file declares (or another factory this rule keeps), or the call hands it a
+class body (an object literal holding a method). So the `debug` package's sub-logger `const error = log.extend('error')`
+and a string-first merge such as `_.extend('merged', { a: 1 })` stay no class; a factory whose receiver is imported from
+another file and gets no class body is not read either (a stated floor), nor is a member-chain receiver
+(`ns.Base.extend('X')`).
+
+A Python base clause is now read as Python evaluates it: `class Inner( Outer.Changed )` extends `Changed` (it used to
+extend both `Outer` and `Changed`), `class Box( Generic[Key] )` extends `Generic` and not its type argument `Key`,
+`metaclass=Meta` is no base, and a computed base (`with_metaclass( M, B )`, `namedtuple( … )`) names none. The
+JavaScript twin: `class A extends ns.Base` extends `Base` (it read `ns`), and `extends mixin( B )` names no base. Parser
+version 164, cache format 31 in this release (162 and 30 on the branch; see the versions note): re-index on first run.
+
+A bare name now resolves to a CODE definition whenever one matched: `--lego=Loader` answered about a `docs/api.md`
+heading (`defs="3" implementors="0"`) while `src/loader.js` held the class, because the heading had the lower id. The
+same pick serves `--around` and `--connect` (and their MCP twins). A heading or config key is still reached by its
+`file:name` selector, and is still the answer when nothing else is named that.
+
 ### Changed — a call bound by name alone keeps its rows, marked `via="name"`; typed receivers resolve
 
 A member call `x.m()` (or, where the receiver is implicit, a bare `m()`) bound to every in-repo definition spelled
@@ -73,7 +457,7 @@ in a Java class with an outside base drawn to an unrelated class's `flush`.
   change); the `--max-tokens=3000` maps of the eight repositories keep 337 rows (331 before the change). The gate is
   `test/receiverevidencecheck.sh` (every surface, CLI/MCP parity, census conservation, and near misses
   for every evidence rule). Ingest records the receiver chain and the Java/C#/Kotlin/Swift declarations
-  (`kParserVer` 156 in this release, see the versions note; `kCacheVersion` 29), so a cache written by an earlier build is re-parsed.
+  (`kParserVer` 167 in this release, see the versions note; `kCacheVersion` 31), so a cache written by an earlier build is re-parsed.
 ### Added — `--quality-delta` gains a twelfth kind, `defect-shape`: four defect shapes code review kept finding by hand
 
 `kind="defect-shape"` rows name a known defect SHAPE the change added, in `defect=` (`src/defectshape.h`):
@@ -122,8 +506,94 @@ an ALL_CAPS name followed by `(`), a call with a preprocessor directive inside i
 that spells a brace. Two floors of that skip: the tree's macro list holds function-like macros only, so a lower-case
 object-like macro defined in another file (`#define xyargs p.x, p.y` in a header) is read as one argument and its call
 can be a false format-arity row; and only a literal `#if 0` is skipped — `#if false`, `#if (0)`, `#if 0 && …` and the
-`#else` of `#if 1` are read as live code. The qsnap blob scheme moves (19 in this release, see the versions note); the
+`#else` of `#if 1` are read as live code. The qsnap blob scheme moves (20 in this release, see the versions note); the
 legend dictionary gains `r defect=`.
+
+### Changed — a warm CLI call costs about a quarter less, `--whereis` on a many-branch checkout about 70% less, and `--whereis` refuses instead of printing a zero it never measured
+
+Every answer is byte-identical to before except the one `--whereis` refusal below. Measured on 2026-10-08 on a
+10-core arm64 Mac, Release builds, median of 5 warm calls, against main at 60dd3b3f:
+
+| call | before | after |
+| --- | ---: | ---: |
+| `--callers` on a 3,100-file snapshot of this repository, no `.git` | 319 ms | 269 ms |
+| the same snapshot as a one-commit git repository | 437 ms | 341 ms |
+| five verbs on this repository's checkout (median of medians) | 448 ms | 342 ms |
+| `--whereis` on a checkout with 139 local branches | 12.3 s | 3.7 s |
+
+- **The git ignore probe runs beside the crawl.** Every call on a git checkout asked `git ls-files --others --ignored`
+  before the crawl could start. The crawl now walks with the previous call's answer for that root while git computes
+  this call's, and the two are compared byte for byte before anything is parsed; when they differ, the crawl and the
+  cache load are redone on git's answer. Every answer is still git's own answer for this call. Under `--no-cache` the
+  probe runs before the crawl, as it did.
+- **No shell is started for a markitdown that cannot run.** The doc pass started `/bin/sh -c markitdown …` for every
+  pdf/docx/pptx/xlsx on every call, and on a machine without markitdown the shell's "not found" was never cached. The
+  PATH is now searched the way the shell searches it, once per ingest, so installing markitdown is still noticed on
+  the next call.
+- **The resolver reads dense arrays for a name with many definitions.** A module-scope call has had a caller node since
+  0.6.2, so the test scripts' top-level `ok "…"` calls (about 650 shell definitions of `ok`) reach the candidate walks.
+  Those walks now read per-symbol arrays instead of whole symbols.
+- **`--whereis` reads each git listing in blocks and lists each distinct tip once**, the listings in parallel, and
+  scans each blob once however many branches share it.
+
+### Fixed — `--whereis` refuses when it could not read the blobs, instead of answering `hits="0"`
+
+`--whereis` reads every blob through one `git cat-file --batch`, whose sha list is a file under the cache directory.
+When that directory was unusable (for example `TMPDIR` naming a directory that does not exist), the batch never
+started and the answer said `on-head="0" hits="0"`, with a near-miss note suggesting the name it had been given, on
+a repository whose HEAD defines it. The CLI now exits 1 and names the cause on stderr, and the MCP `whereis` tool
+answers error -32603. A genuine zero over a working cache directory is answered as before.
+The cross-branch verbs read blobs the same way and now refuse the same way (the entry above); both verbs, CLI and MCP,
+say it in one sentence that differs only in what was not read and names the cache directory and `TMPDIR`.
+
+### Added — a Ruby `db/schema.rb` renders its columns as Section definitions
+A Rails schema is recognized BY CONTENT, never by path: a Ruby file whose tree holds a
+`create_table "x", … do |t| … end` call — the call's do-block carries one block parameter — is a
+rendered schema, wherever it lives. Each `t.<type> "name"` / `t.<type> :name` in a table block mints
+ONE `SymKind::Section` def at `Lang::Ruby` — the data-kind slot a doc heading or YAML key already
+occupies (model.h: a Section's isolation is a language property; the Ruby ones are still no call
+edges) — span = the name token, both quote spellings and the `:symbol` form. Rails-generated attribute
+uses (`product.price`) then resolve to the column as a definition: it appears in `--uses`, `--grep`,
+`--whereis` and the map. THE COLUMNS ARE DEFINITIONS ONLY, by maintainer decision: buildGraph's
+byName skips Section-Ruby, so a column admits NO call edge (it still takes the restart share of the ranking
+that every definition gets, so a Rails app's `k=` values are smaller; its map rows do not change) — an untyped
+`response.code` must not become a table's caller, and 200 `name` columns must not damp a model's real
+`def name` (both measured at review; edges may return behind an evidence rule, e.g. a receiver proven
+to be the owning model). The id rule covers the grounded spellings: no id column/spelling → an
+implicit `id` def (the anchor is the table-name string — no `id` token exists there); `id: false` →
+no id def; `id: :uuid` → an `id` def at the pair key (the uuid is a TYPE of the id column, never a
+column of its own; the type is not modelled); `primary_key: "x"` → a def named the string instead.
+An ARRAY or symbol `primary_key` (a composite key, or a hand-written migration) mints NO implicit id —
+the rendered composite columns are the block's own explicit `t.<type>` lines. `t.timestamps` mints
+`created_at` AND `updated_at` (the DSL names them literally, symmetric with the id rule) — the two
+defs anchor at the method token's edges. The DSL CALLS keep their reference posture exactly like the
+attr family: `string`/`datetime`/`create_table` stay external-surface names. Duplicate columns across
+tables stay SEPARATE defs (same name, distinct identity bytes): `id` on N tables is `defs="N"`, and
+the map row merges them with `overloads`, never hiding the multiplicity. MIGRATIONS never interfere: a
+class-wrapped create_table — the migration shape, string- or symbol-named — is refused by a
+class/module-nest gate (a rendered schema's tables live at file level or under `Schema[].define`, never
+inside a class body), so the rendered `db/schema.rb` stays the ONE source of column names and indexing
+the migration beside its schema cannot double any def; `add_column` / `remove_column` /
+`change_column` are argument data and read nowhere — a column added then dropped never registers
+(pinned by the three migration fixtures). Rails 8's `db/queue_schema.rb`, `db/cache_schema.rb` and
+`db/cable_schema.rb` are matched by the same content gate. Ingest records the schema columns (`kParserVer` 167 in this release, see the versions note; carried by the branch as
+122 → 126 → 144 → 149 across its merges with `main`), so a cache written by an earlier build is re-parsed; no record
+layout change (`kCacheVersion` and `kQSnapCacheScheme` unchanged).
+Gate: `test/rubyschemacheck.sh` on `test/rubyschemafix/` — schema text from a real, running Rails
+8.1 app's `bin/rails db:schema:dump` (verified `db:schema:load`-able), original domain tables scrubbed
+to `spike_*` names; two spellings no dump emits are restored by hand and marked in-file (`id: :uuid`,
+which that dump actually failed on, and a literal `t.timestamps`). Stated capture floors, each pinned
+by a gate arm: `t.index` / `t.references` / `t.belongs_to` / `t.polymorphic` / `t.check_constraint` /
+`t.exclusion_constraint` / `t.unique_constraint` name no column (a `t.references`/`t.belongs_to` mints
+no `<x>_id`, and a `create_join_table` mints nothing — Rails dumps render these as explicit columns);
+a column call must be ON the block parameter (`helper.string "x"` names nothing); a symbol-named table
+(`create_table :users`) is a migration spelling, not a schema surface; `where("price > ?")` string
+fragments stay opaque; the picker splits honestly (`rec.name` on a plain local and a rich `X.new.name`
+receiver are `graph_ambiguous`, `self.name` inside the defining class pins its own def). The
+before-evidence: on the pre-change binary every column was `defs=0 external=1` — the fixture's
+`--uses=name` read `defs="10"` (9 attr/def defs plus the YAML key) with the schema columns invisible; it
+now reads `defs="19" external="0"` and the column uses resolve to definitions only.
+
 
 ### Changed — a Ruby call to self, or on an instance the code builds, answers from its own side: an instance never reaches `def self.m`
 
@@ -1414,9 +1884,9 @@ the `quality.h` mirror and `test/qschemetrip.hash` move with it.
 
 ### Changed — shallow-clone qualification reaches the composed surfaces, the unfetched-rev refusals and the empty windows
 
-0.6.6 put `shallow="1"` on the owners / hotspots / cochange roots of a depth-limited clone and a deepen hint on the
+An earlier change in this release put `shallow="1"` on the owners / hotspots / cochange roots of a depth-limited clone and a deepen hint on the
 pr-context and merge-scout unknown-ref refusals. Four surfaces that answer from the same history were left out
-(found on three depth-1 clones in the 0.6.6 command sweep; every item reproduced on the current base before the fix):
+(found on three depth-1 clones in this release's command sweep; every item reproduced on the current base before the fix):
 
 - `--pr-context` embeds `<owners bf= share=>` and `<cochange window= commits=>` per changed file; `--situ`'s `[3] co-change`
   line and the MCP `situational_awareness` twin carry the same window. On a shallow clone the pr-context root now carries
@@ -1448,6 +1918,24 @@ The README's goal section gains the four measures an answer is judged on (comple
 false-confidence rate, next-clue usefulness) and the rule that answering comes before size; `docs/METHODOLOGY.md`
 gains §9.2, which fixes the two roles a size limit may have (runaway guard, stair-step target) and the
 capped-versus-uncapped grading rule. Documentation only; no behaviour change.
+
+### Changed — Go import edges come from the shared `@import.path` capture (#358, Go slice)
+
+Go is the second language onto the shared import-capture vocabulary that the C-family slice introduced. A Go
+`import_declaration` — single or grouped, aliased (`import f "fmt"`), dot (`import . "x"`), blank (`import _ "x"`), and
+cgo's `import "C"` — is now matched by `(import_declaration) @import.path` in `queries/go/tags.scm` and read by one
+`DepDialect::Go` normaliser in `src/ingest_importcap.h`; `captureIncludes` no longer walks Go files. The captured node is
+the whole declaration because that is the unit the Include record has always been built from: its target is the
+declaration's clause (`importClauseTarget`, shared with Swift, which still reads it from the walk), so a grouped block
+stays ONE record and `resolveGoImport` still takes the first quoted token. Splitting a group into one record per spec,
+and moving the alias onto `@import.alias`, would add rows and are left for their own slice.
+
+**Output is byte-identical.** Dependency and resolve output over the Go fixtures and repos in the lane report is
+unchanged, the go.mod `module` / `replace` resolution reads the same records, and a cache written by the previous binary
+is accepted untouched, so no parser-version bump is owed. `test/importcapcheck.sh` gains six Go arms (embedded capture,
+21 byte-exact rows covering every form above plus tab, semicolon, raw-string, UTF-8 cut and error-recovery spellings, no
+widening for a function-body import, replace-based resolution with a bogus-target negative, the import-role use-site
+ref, and the Go cache round-trip).
 
 ### Changed — the C-family import edges come from one shared capture instead of two per-language extractors (#358, C-family slice)
 
@@ -1498,6 +1986,53 @@ both binaries and running them against one unchanged tree — the pre-change bui
 on both `--no-cache` and `--deps`. The new `test/importcapcheck.sh` pins the shapes (quote vs angle, all three
 `#import` spellings, a macro include, guarded arms, both dead arms, the `#pragma`/`#error` gate, the import-role
 use-site half, cache round-trip, determinism) over a 14-edge fixture it builds itself.
+
+### Changed — the TypeScript / JavaScript import edges come from the shared capture too (#358, JS/TS slice)
+
+The second language family onto the `@import.path` vocabulary the C-family slice introduced. `import … from 'x'`, the
+re-exports (`export * from`, `export * as n from`, `export { a as b } from`, `export type { T } from`) and the CommonJS /
+dynamic `require('x')` / `import('x')` are now three patterns on the one capture name in `queries/{typescript,tsx,
+javascript}/tags.scm`, normalised by a `DepDialect::Web` arm in `src/ingest_importcap.h`. `captureIncludes` no longer
+walks a TypeScript or JavaScript file at all, and the three branches of `directiveTargetOf` that read it are gone.
+`jsModuleLoadTarget` stays: it is the text gate for the call spelling, and `captureJsImportFacts` (the bindings a
+destructured `require` makes) still reads it.
+
+A query cannot say "the callee's text is `require`" (tags-pass predicates never run), so the pattern matches any bare
+call with a leading string and the three guards that keep an ordinary call out of the graph stay C++: the callee is
+the bare name `require`/`import`, there is exactly one argument, and it is a string. Two more things the walk owned
+are re-derived from the captured node's ancestry, not dropped: the **container reach** (the walk entered only an
+allowlist, so `require('x').y`, `[require('x')]`, `a ? require('x') : b`, a class method body and a `declare module`
+body were never edges, and still are not) and the **lazy bit** (a `require`/`import` call written inside a function
+body is `lazy="1"` on `--impact`'s import tier, from the same ancestor read that checks the reach).
+
+**Not changed, deliberately.** `import x = require('y')` (TypeScript) is not an edge, before or after: the grammar
+gives it its own `import_require_clause`, which the walk never read and no pattern here matches. `@import.alias` and
+`@import.names` are not used: the Include record of a JS/TS import names a module and nothing else; the bound names
+are a different record (`captureJsImportFacts`, untouched).
+
+**Disclosure differences from the walk, in `--skipped` only** (the C-family slice's two, plus a third in the function both languages share).
+`extract-partial` for import nesting now fires only when a captured import is actually cut at the bound. A `require('x')`
+is itself a container to the old walk, so it announced at 254 and 255 nested blocks although the edge was kept; this
+does not. A call the pattern captures but the `require`/`import` text gate drops (`foo('x')`) under 300 nested blocks is
+not announced either, and neither is a C-family `#pragma once` under 300 `#ifdef` — the text gate now runs before the
+bound test, in the one function both languages share, so an import was never cut. In the other direction, an import
+under 300 nested blocks inside a class method is announced (the ancestor read reaches the bound before it can learn the
+walk would never have entered the class). All three are pinned in `test/importcapcheck.sh`.
+
+**The ancestry is read in one descent from the root.** `ts_node_parent` is itself a descent from the root, so walking up
+k ancestors costs k of them. The first version of this slice did that, bounded to 256 hops, and a synthetic file of
+2 000 nested `foo( "x", foo( "x", … ) )` calls took 152 s against 0.5 s for the walk it replaced (Apple M2 Pro, one run
+each, loaded machine). The final version reads reach, depth and the lazy bit off one `ts_node_child_with_descendant`
+descent, after the text gate, and the same file takes 0.9 s. On three TypeScript repositories and the CommonJS tree of a
+global npm install the `--deps` wall time is unchanged to within run-to-run noise.
+
+**Dependency edges are byte-identical.** Verified with both binaries against unchanged trees: `--deps`, `--uses`,
+`--impact`, `--callers`, `--zoom`, `--report` and `--for` over three TypeScript repositories, the CommonJS tree of a
+global npm install, two npm cache trees, a `.astro` tree and this repository's `test/` fixtures. `test/importcapcheck.sh`
+gains a JS/TS section (J1–J8): an exact edge list, in source order, for `.ts .js .tsx .mjs .cjs .jsx` and a `.astro`
+frontmatter (68 edges, with the `neg_*` shapes that must stay out), the lazy bit, the use-site half, the depth bound at
+254/255/256 blocks, the disclosure differences, and cache round-trip with a pre-change cache accepted unchanged
+(no `kParserVer` bump).
 
 ### Changed — `--affected` and `--test-gate` mark which tests to run first (`run_first=`)
 
@@ -1617,7 +2152,7 @@ per page instead. Gate: `test/impactdepthcheck.sh`.
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 124 → 156 (the function-literal fix takes 128; #338 and #325 take 129; the body-less C/C++ type-specifier
+`kParserVer` 124 → 167 (the function-literal fix takes 128; #338 and #325 take 129; the body-less C/C++ type-specifier
 span fix and the TypeScript `await f<T>(x)` / `!f<T>(x)` calls each took a number of their own on their branches, as did
 the false-edge resolution (134, 135), the value-reference rows (140) and the Ruby method-lookup changes (#373: one per
 step from 130 to 137 — bare-word calls, mixins, typed receivers, RSpec targets, Rails declared calls, Rake and Jbuilder
@@ -1627,12 +2162,19 @@ shadow and the value-reference slot text take 143, above 141's full-use file tag
 148, renumbered from its branch's 145: other branch builds in flight have used up to 147, and 148's full-use file tag is
 149. The Go named-type kinds and the train 25 re-review's extraction fixes each took 145 on their branches, and the
 receiver-evidence records took 145 to 154 on theirs; all three land together at 156: branch builds have used up to 154,
-whose full-use file tag is 155, so no cache such a build wrote is read as this release's), `kCacheVersion` 25 → 29
+whose full-use file tag is 155, so no cache such a build wrote is read as this release's; the Rails `db/schema.rb`
+columns (#339, carried as 122 to 149 on its branch) land at 158, above 156's full-use file tag 157; the `--lego` base-clause and
+class-factory changes, carried as 157, 160 and 162 on their branch, land at 164: branch builds have used up to 162, whose full-use
+file tag is 163; the C++ element-access receivers, carried as 166 on their branch, land at 167, above it: that build wrote 166 and its full-use file tag 167), `kCacheVersion` 25 → 31
 (the function-literal fix's record changes, then the false-edge fix's member-call fields, then the receiver chain
-`memberPath`/`memberCtor`; the Ruby branch's appended binding kinds need no bump of their own) and `kQSnapCacheScheme` 15 → 19
+`memberPath`/`memberCtor`, then the inherit reference's same-file base binding, numbered 30 on its branch and 31 here, above
+every branch build; the Ruby branch's appended binding kinds need no bump of their own) and `kQSnapCacheScheme` 15 → 20
 (the `--quality-delta` error-masking and placeholder changes, then the dead kind agreeing with `--dead-code` on functions
-held as values, then on a function that only stores itself, then the defect-shape records of the twelfth kind). Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=593769ab691623d8 entries=806`.
+held as values, then on a function that only stores itself, then the defect-shape records of the twelfth kind, then the
+Python base clauses the dead kind's inherited-call evidence walks), and the
+history-walk cache's `kQChurnCacheScheme` 2 → 3 (an earlier build stored a `git log` walk that git could not finish as if it
+were the window). Every ingest cache written by an earlier build is refused and re-indexed once, every
+cached quality snapshot is recomputed, and every repository's history is walked once more. The session legend dictionary is `dictv=80b7e589253a8e76 entries=855`.
 
 ### Fixed — a call the language resolves outside the tree no longer binds to a same-named in-repo definition
 
@@ -2214,6 +2756,39 @@ five times, round-robin across the sizes, and compares medians. The thresholds a
 stall (one 640 KB run delayed 0.6 s) fails the old arm and passes the new one. A deliberately quadratic per-word
 rescan in `scanAsanWordBoundaries` still fails B1, B2 and B3 (medians 1033 / 14094 ms / timeout).
 
+### Added — the budgeted-bundle candidate page: `--for`/`--pack-task` under a budget take a resumable `--limit`/`--offset` window; MCP `explore` gains `limit`/`offset` (issue #294, PR #362)
+
+`--for=TASK --token-budget=N` with an explicit `--limit`/`--offset` now answers with the **candidate
+page**: one `<sigs>` window over the same ranked candidate set the bundle cuts — the pageview quintet
+(`shown=/total=/capped=/has_more=/next_offset=`) on the root, `above_cliff=` the head-tier count,
+`tier=` one tier per page (a head window ends at the cliff), `r=` each row's GLOBAL candidate rank,
+`at=` the git index answered from, `next=` the pasteable continuation argv (dropped when
+`has_more="0"`), `over_ceiling="1"` when the budget cannot fit the window (fewer rows served, never
+silently more bytes), and the page's own legend in both dialects (`--legend=full|compact`, the central
+compact table). `--pack-task` under a budget takes the same window; a window with no budget stays the
+`--for` file page; `--partition` and a window refuse together. The un-paged bundles are byte-identical
+(`forbudgetmonotoncheck`), and `--offset=0` alone remains the un-paged answer — its resume point is
+its own `<sigs shown=>`.
+
+MCP `explore` declares `limit`/`offset` (the same bounded pair `for` takes) and answers the same
+page shape; previously it silently ignored `budget_tokens` beside a window and served the budgetless
+file page. All five page paths — CLI `--for`, CLI `--pack-task`, MCP `for`/`explore`/`pack_task` —
+page ONE candidate list: the CLI pages force the ranking's full distribution under a window (the
+rule `--for`'s bundle path already followed), exactly the exhaustive scoring the MCP twins always
+used, so the `ranking=` attribute the first round carried is gone — there is nothing left to
+distinguish. Every page, CLI or MCP, carries the same pasteable `next=`/`next_tier=`: an MCP page's
+handle is a CLI argv now, and it walks the same list. Every accepted ranking flag
+(the CLI's `--no-route`, `--no-mention-boost`, `--no-doc-mention`, `--cochange-boost`; the twins'
+`no_route`) rides `next=`, so a pasted continuation re-ranks identically — the
+`test/pagingsweepcheck.sh` walk arms pin all five surfaces to `has_more="0"` with identical row
+sequences and pin each flag's echo. The `tools/list` manifest grows 46,930 → 47,109 B (measured
+on this release's tree: the +184 B of schema is `explore`'s `limit`/`offset` alone — `for` already
+declared the pair, `pack_task` is a dispatch alias, not a listed tool — and `whereis`'s description
+is 5 B shorter, the parser-label entry above), and the ceiling moves 46,950 → 47,150 B
+- the one sanctioned case that moves it: `explore`'s two declared schema properties
+(`test/mcpmanifestcheck.sh` arm `(1b)` asserts the figure against a live measurement). The `--whereis` preview entry above
+then declares whereis's `full_text`: the `tools/list` manifest grows 47,293 → 47,383 B on this release's tree (+90 B, that one
+schema property, after the `--lego` window's +184 B; 47,109 → 47,199 B on the lane's base), and the ceiling moves 47,150 → 47,420 B.
 ### Fixed — the Linux G1 sanitizer ritual completes: five string_view comparator lambdas stop wrapping, and the GCC ASan path builds (#342)
 
 `LSAN_OPTIONS=… ./asan/ripwire .` — the sanitizer ritual AGENTS.md requires before a PR — aborted on any
@@ -2261,7 +2836,7 @@ Markdown input is byte-identical. Code in a language the scanner has no network-
 or another `#!` — is read as before and disclosed: `<skillscan
 code_not_flow_scanned="N">`, defined in the compact and full legends and counted on the stderr tally; `clean` does
 not cover those files. Python and JavaScript flow shapes (`requests.post` or `urllib` with `os.environ`, which is
-missed even inside a fenced `python` block) are 0.6.7 work. `ripwire wrap`'s pre-install scan read only `.md`
+missed even inside a fenced `python` block) are later work. `ripwire wrap`'s pre-install scan read only `.md`
 files, so it emitted the recipe (rc 0, empty stderr) for a skill whose `scripts/helper.sh` uploads a credential; it now
 scans every regular file of `./skills` and `.agents/skills` through the same kind-aware scan, following directory
 symlinks as `--scan-skills` does (each directory entered once, by device and inode, so a link loop ends), refuses such a skill

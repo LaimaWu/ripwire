@@ -1227,23 +1227,9 @@ inline std::vector<std::pair<NodeId, std::string_view>> pythonDispatchRequests( 
 inline std::vector<NodeId> pythonDispatchClasses( const Graph& g, NodeId base )
 {
     std::vector<NodeId> classes{ base };
-    HashMap<NodeId, bool> visited;
-    visited.reserve( 32 );
-    visited.emplace( base, true );
-    for( std::size_t n = 0; n < classes.size(); ++n )
+    for( const ImplementorRow& row : implementorClosure( g.implementors, base ) )   // cycles and diamonds visit a class once
     {
-        const NodeId id = classes[n];
-        if( id >= g.implementors.size() )
-        {
-            continue;
-        }
-        for( NodeId child : g.implementors[id] )
-        {
-            if( visited.emplace( child, true ).second )
-            {
-                classes.push_back( child ); // cycles and diamonds visit a class only once
-            }
-        }
+        classes.push_back( row.id );
     }
     return classes;
 }
@@ -2280,10 +2266,20 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 29;   // MUST equal ingest.cpp's kCacheVersion (gated); 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 158;  // MUST equal ingest.cpp's kParserVer   (gated); PR #349 provisional
-                                                          // 158 = 2026-10-11 (PR #349, Clojure grammar/query/extraction and qualified-call namespace;
-                                                          //   provisional until the maintainer reserves the landing value)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 31;   // MUST equal ingest.cpp's kCacheVersion (gated); 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
+constexpr std::uint32_t kIngestParserVerMirror    = 169;  // MUST equal ingest.cpp's kParserVer   (gated); PR #349 provisional
+                                                          // 169 = 2026-10-11 (PR #349 merged with 0.6.7: Clojure extraction;
+                                                          //   above main's 167 / rich tag 168; maintainer confirms the landing value)
+                                                          // 167 = 2026-10-11 (train 27 release: lane fix27-cpp-subscript's 166 renumbered above the lane build;
+                                                          //   see the kParserVer note)
+                                                          // 164 = 2026-10-11 (train 27: lego-transitive's 162 renumbered above every live build, up to 162 / rich tag 163;
+                                                          //   see the kParserVer note)
+                                                          // 162 = 2026-10-10 lane lego-transitive fix 1 (inherit-ref base binding; above 160's
+                                                          //   rich tag 161; the train renumbers)
+                                                          // 160 = 2026-10-10 lane lego-transitive (JS/TS class factory; above 156's
+                                                          //   rich tag 157 and train 26c's 158/159; the train renumbers)
+                                                          // 158 = 2026-10-09 (train 26c: PR #339 Rails schema columns; above 156 / rich tag 157; see the
+                                                          //   kParserVer note)
                                                           // 156 = 2026-10-08 (train 26b: above every lane build, up to 154 / rich tag 155; see the
                                                           //   kParserVer note)
                                                           // 148 = 2026-10-04 (train 26a: PR #373 merged; above the branch's 145 and the 145–147
@@ -2661,11 +2657,18 @@ inline std::string headSnapExclHex( const std::vector<std::string>& excludes, st
 // only WRITTEN into its shard the next time it is (re)computed. A blob absent from both locations is a clean
 // miss, created fresh, in its shard. `evictOldCacheFamily` below sweeps both layouts, so an old flat blob
 // still ages out on schedule even if its key is never rewritten.
+// A 64-bit key spelled as its 16 lowercase hex digits — the ack ledger's key (ackMapKey), the shard below, and the
+// ingest's per-root sidecar names.
+inline std::string hex16( std::uint64_t key )
+{
+    char hex[ 20 ];
+    rw::formatTo( hex, sizeof( hex ), "{:016x}", static_cast<unsigned long long>( key ) );
+    return hex;
+}
+
 inline std::string blobShardHex( std::string_view filename )
 {
-    char hex[ 3 ];
-    rw::formatTo( hex, sizeof( hex ), "{:02x}", static_cast<unsigned>( fnv1a64( filename ) & 0xff ) );
-    return std::string( hex );
+    return hex16( fnv1a64( filename ) ).substr( 14 );   // the low byte, two hex digits: "{:02x}" of ( hash & 0xff )
 }
 
 inline std::string resolveCacheBlobPath( const std::string& dir, const std::string& filename )
@@ -3517,7 +3520,15 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // shipped): defectSitesOf passes the tree's macro names to the C++ scanner, and the scanners skip more calls (an
 // argument that may be a macro, a directive inside the call, #if 0, a brace-spelling escape) and guard more
 // vacuous-assert absences — fewer records, the same blob shape; the producer identity keeps the builds apart.
-constexpr std::uint32_t kQSnapCacheScheme = 19;
+// v20 (2026-10-11, train 27) — no blob shape change; the dead SET's inputs moved. pythonDispatchedMethodIds walks
+// pythonDispatchClasses over g.implementors, and lane lego-transitive changed which Python classes extend which: a base
+// clause is read as Python evaluates it (`class A( Outer.B )` extends B only, `Generic[K]` extends Generic and not K,
+// `metaclass=` and computed bases name none), so the set of methods an inherited receiver call keeps alive can differ
+// for an UNCHANGED sha. kParserVer moved with that extraction (164, its mirror with it), and the producer identity
+// already keeps this build's blobs apart; bumped 19 -> 20 so the history above stays complete and the scheme sits above
+// every live value (19 on every branch). The lane's own note said the walk itself is a refactor (same class set and
+// order for the same g.implementors) — true; what moved is g.implementors.
+constexpr std::uint32_t kQSnapCacheScheme = 20;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
@@ -4472,7 +4483,11 @@ computeWindowRefBodyHashes( const std::string& root, std::uint32_t days,
 // would keep serving the old stream to a fixed binary: the exact silent-zero the fix removes, restored by
 // cache. Bumping the scheme makes every pre-existing blob a clean miss (deserialize checks it), not a wrong
 // answer. This is the qchurn cache's OWN version — not kParserVer, which keys extraction and is untouched.
-constexpr std::uint32_t kQChurnCacheScheme = 2;
+// SCHEME 3 (2026-10-10, train 26c, K51): a binary before K51 stored a walk git could not finish (an empty stream, or the
+// newest prefix of the window) as if it were the window, and the key cannot tell that blob from a real read. K51 never
+// stores one, but a blob already on disk would keep serving its silent zero or prefix, with no history_unread=, until HEAD
+// moved. The bump makes every pre-K51 blob a clean miss; the cost is one cold walk per repository.
+constexpr std::uint32_t kQChurnCacheScheme = 3;
 constexpr char          kQChurnMagic[4]    = { 'Q', 'C', 'H', 'N' };
 
 inline std::string serializeRawCommitStream( const RawCommitStream& raw, const std::string& keyMat )
@@ -4582,7 +4597,7 @@ inline bool deserializeRawCommitStream( const std::string& blob, const std::stri
 // corrupt/foreign blob — is a clean miss that falls through to a full recompute, never a wrong answer). No git repo
 // degrades to an empty stream; no resolvable HEAD to the uncached walk (which itself degrades to an empty stream —
 // gitLogNameOnlyRaw's contract). Thread-safe: every memo it reaches (the HEAD anchor, the toplevel) takes its own
-// mutex, and the blob write is an atomic rename.
+// mutex, and the blob write is an atomic rename. K51: a walk git could not complete comes back with `unread` set and is never stored.
 inline RawCommitStream gitRawCommitStreamCached( const std::string& root, const char* coSince )
 {
     if( !hasEnclosingGitRepo( root ) )
@@ -4592,7 +4607,20 @@ inline RawCommitStream gitRawCommitStreamCached( const std::string& root, const 
     const std::string headSha = gitHeadSha( root );
     if( headSha.empty() )
     {
-        return gitLogNameOnlyRaw( root, coSince );
+        // No resolvable HEAD: an unborn branch has no history to read, and git log's failure there (git's own fatal exit,
+        // 128) is that fact, not an I/O error — so that walk is "read, empty" (K51 floor: a HEAD that is corrupt rather than
+        // unborn exits 128 too and reads the same here). Any OTHER failure means git did not answer at all — not on PATH
+        // (the shell's 127), not executable, no popen — and gitHeadSha's "" was that, not an unborn branch: it stays unread.
+        RawCommitStream noHead = gitLogNameOnlyRaw( root, coSince );
+        if( noHead.unread && noHead.exitCode == 128 )
+        {
+            noHead.unread = false;
+        }
+        else if( noHead.unread )
+        {
+            noHead.notRun = true;
+        }
+        return noHead;
     }
 
     const std::string repoHex  = cacheRootKeyHex( root );
@@ -4611,8 +4639,16 @@ inline RawCommitStream gitRawCommitStreamCached( const std::string& root, const 
     }
 
     raw = gitLogNameOnlyRaw( root, coSince );                                      // cold — the 431 ms walk
+    if( raw.unread || gitWalksAbandoned() )
+    {
+        // K51: a walk that could not be read is NOT stored. Stored, its empty stream would answer "read, no commits" under this
+        // (repo, HEAD, window) key for as long as HEAD stayed put; unstored, the next call walks again and the caller discloses.
+        // The flag rides the returned stream to main.cpp's amp=/churn= block, which DISCLOSEs it into the document (historyread.h).
+        // An abandoned read (a memory-guard refusal stopped the walk) is a prefix too, even when git exited 0: never cached.
+        return raw;
+    }
     atomicWriteFile( cachePath, serializeRawCommitStream( raw, keyMat ) );         // best-effort; a failed
-                                                                                     // write just recomputes next time
+                                                                                   // write just recomputes next time
     return raw;
 }
 
@@ -6472,9 +6508,7 @@ inline std::optional<bool> rescoreAckRecord( const AckRecord& r, std::optional<s
 
 inline std::string ackMapKey( const std::string& kind, std::uint64_t key )
 {
-    char hex[ 20 ];
-    rw::formatTo( hex, sizeof( hex ), "{:016x}", static_cast<unsigned long long>( key ) );
-    return kind + " " + hex;
+    return kind + " " + hex16( key );
 }
 
 // ─── THE LEGACY-ACK BACKFILL — what a row written before provenance existed CAN still get back ─────────
@@ -7476,6 +7510,10 @@ inline std::size_t healDefectSites( Snapshot& base, const IdentityAliases& al )
 {
     std::size_t healed = 0;
     std::vector<DefectSiteKey> addSites;
+    // ADD, NEVER OVERWRITE, per `to` anchor: two alias sources that converge on one current anchor (a scheme alias and a
+    // rename alias, CodeRabbit on #383) must not both copy their sites under it — the baseline check above only sees
+    // anchors the baseline already held, not ones this loop filled. The first alias in `from` order fills; the rest skip.
+    std::vector<std::uint64_t> filledTo;
     for( const auto& [ from, to ] : al.toCurrent )
     {
         const auto lo = std::lower_bound( base.defectSites.begin(), base.defectSites.end(), DefectSiteKey{ from, 0 } );
@@ -7484,6 +7522,15 @@ inline std::size_t healDefectSites( Snapshot& base, const IdentityAliases& al )
         {
             continue;
         }
+        if( lo == base.defectSites.end() || lo->anchor != from )
+        {
+            continue;   // nothing to copy: an alias with no recorded sites must not claim the anchor
+        }
+        if( std::find( filledTo.begin(), filledTo.end(), to ) != filledTo.end() )
+        {
+            continue;
+        }
+        filledTo.push_back( to );
         for( auto it = lo; it != base.defectSites.end() && it->anchor == from; ++it )
         {
             addSites.push_back( { to, it->site } );

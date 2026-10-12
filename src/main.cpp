@@ -89,6 +89,7 @@ static_assert( rw::kTestGateCcxBarMirror == rw::quality::kCcxBar, "situ.h kTestG
 #include "didyoumean.h"            // §P12.1 / §B6 M8: the ONE near-miss suggester, now shared with the MCP refusal table
 #include "selectorrefuse.h"        // §B4.2: the ONE file:name selector not-found refusal — all six SYM-taking verbs
 #include "gitmine.h"
+#include "historyread.h"        // K51: the disclosure of a git history walk that could not be read (churn=/amp=)
 #include "ownersview.h"            // §P6.4: countUniformOwnership/ownershipRowsToPrint — shared with mcpverbs.h's `owners` verb
 #include "mention.h"               // B8: query-mention anchoring — files/modules/symbols NAMED in the --for text
 #include "siblift.h"               // r4 EXPERIMENT: env-gated same-directory sibling lift (inert by default)
@@ -1080,6 +1081,12 @@ inline std::FILE* openTokenBudgetBuffer( rw::MemoryStream& stream, TokenBudgetSt
 // here the same way the layer will compact it and repriced by the same rule (compactlegend.h compactRepricedTokens),
 // so the number decided on is the number the root prints. A body the dialect cannot shape keeps its own price — an
 // empty one (the map streamed unbuffered) and a --json one (no posture) included.
+// map-inventory-d7: the number decided on is READ from the compacted body — the root's est_tokens=, or the map header's
+// field when --stable keeps the root free of it — never recomputed from compacted.size(). That recount priced the bytes
+// AFTER the layer had rewritten the est digits themselves (a 5-digit full price repriced to 4 digits is 2 bytes shorter
+// in the root and the header), so on that boundary the gate said one token less than the header it was asserting
+// (tokenbudgetcheck #9: src --top-k=233 on 7608d1f6, header 9965, gate 9964). The recount stays only as the fallback for
+// a compacted body that prints no price at all.
 static std::size_t compactPostureMapPrice( const rw::Config& cfg, std::string_view body, std::size_t fullEstTokens )
 {
     if( cfg.legend != "compact" || fullEstTokens == 0 )
@@ -1091,6 +1098,29 @@ static std::size_t compactPostureMapPrice( const rw::Config& cfg, std::string_vi
     {
         return fullEstTokens;
     }
+    const std::string_view       doc  = compacted;
+    const rw::CompactRootInfo    root = rw::findCompactRoot( doc );
+    if( const std::size_t printed = root.tag.empty() ? 0 : rw::rootUnsignedAttr( doc.substr( root.openBegin, root.openEnd - root.openBegin ), "est_tokens" );
+        printed > 0 )
+    {
+        return printed;
+    }
+    const std::string_view header = rw::compactMapHeader( doc );
+    if( const std::size_t at = header.find( " est_tokens=" ); at != std::string_view::npos )
+    {
+        std::size_t v = 0;
+        bool        any = false;
+        for( std::size_t i = at + 12; i < header.size() && header[ i ] >= '0' && header[ i ] <= '9'; ++i )
+        {
+            v   = v * 10 + std::size_t( header[ i ] - '0' );
+            any = true;
+        }
+        if( any && v > 0 )
+        {
+            return v;
+        }
+    }
+    // no printed price to read (a body whose root and header carry none): the recount is the only number there is
     return static_cast<std::size_t>( rw::compactRepricedTokens( static_cast<long long>( fullEstTokens ), body.size(), compacted.size() ) );
 }
 
@@ -1205,6 +1235,28 @@ inline std::string churnDecayWindowLabel( std::string_view minedSpan )
     return label;
 }
 
+// The crawl-scope flags a pasted continuation must replay so it indexes the SAME files this run did: --exclude,
+// --max-file-size, --no-ignore, --ignore-tests (the enumeration below says why these four and no others). Each is
+// returned with its leading space; empty at the defaults. Shared by scopedMapNextInvocation and leanMapPointer.
+inline std::string crawlScopeFlags( const rw::Config& cfg )
+{
+    std::string inv;
+    for( const std::string& x : cfg.excludes )
+    {
+        inv += " " + rw::nextFlag( "--exclude=", x );
+    }
+    // The ceiling is replayed as the BYTE COUNT it resolved to, not as the caller's "2K": parseByteSize accepts
+    // plain digits, and the number is what shaped the crawl. Omitted at the default, so the common hint is
+    // unchanged to the byte.
+    if( cfg.maxFileBytes != rw::kDefaultMaxFileBytes )
+    {
+        inv += " --max-file-size=" + std::to_string( cfg.maxFileBytes );
+    }
+    if( cfg.noIgnore )     { inv += " --no-ignore"; }
+    if( cfg.ignoreTests )  { inv += " --ignore-tests"; }
+    return inv;
+}
+
 // C1-b (2026-09-12): --in=DIR's page of <recent scope=> rows, from the SAME mining pass as the global block. The prefix is
 // matched on the ROOT-RELATIVE spelling the map prints (serialize.h pathRel: rootRelativeUri against the crawl root as
 // typed), so a scoped row is byte-identical to its global twin — a sub-root-relative spelling missed every held-out gold
@@ -1268,19 +1320,7 @@ inline std::string scopedMapNextInvocation( const rw::Config& cfg, std::string_v
     {
         inv += " " + rw::nextFlag( "--since=", cfg.since );
     }
-    for( const std::string& x : cfg.excludes )
-    {
-        inv += " " + rw::nextFlag( "--exclude=", x );
-    }
-    // The ceiling is replayed as the BYTE COUNT it resolved to, not as the caller's "2K": parseByteSize accepts
-    // plain digits, and the number is what shaped the crawl. Omitted at the default, so the common hint is
-    // unchanged to the byte.
-    if( cfg.maxFileBytes != rw::kDefaultMaxFileBytes )
-    {
-        inv += " --max-file-size=" + std::to_string( cfg.maxFileBytes );
-    }
-    if( cfg.noIgnore )     { inv += " --no-ignore"; }
-    if( cfg.ignoreTests )  { inv += " --ignore-tests"; }
+    inv += crawlScopeFlags( cfg );
     if( withIn )
     {
         inv += " " + rw::nextFlag( "--in=", scopeDir );
@@ -1524,6 +1564,83 @@ inline constexpr std::string_view kExpandWholeFileLegend =
 inline constexpr const char* kMapRidesAlongFmt =
     " note=\"the ranked top-{} map below rides along with the requested payload; --top-k=0 for the payload "
     "alone (--top-k=1 for a minimal map)\"";
+
+// ── expand-lean-k64: --expand/--outline whose requested definitions were ALL served ride no map ─────────────────────
+// A multi-definition name used to ship the generic top-200 map beside bodies that already answer it (0 of 185 rows named
+// the symbol). When every requested definition is served there is nothing left to disambiguate: top-k defaults to 0, the
+// root says so (topk_default="0", the exact-name default's own disclosure) and carries ONE recoverable pointer to the map
+// it did not ship (map_next=, a shell line: the map is the default verb of `ripwire ROOT`). The bodies' headers already
+// carry p= l= t= for every definition. When some were NOT served (cut by the byte budget, unreadable), the root names
+// exactly those — unserved_total= (the true count) and unserved_next= (the --expand/--outline call serving them, quoted by
+// the next= house rule) — never the generic map. kMaxUnservedSelectors is a blow-up guard (the kMaxExpandSibs precedent),
+// not a target: past it unserved_next= serves the FIRST kMaxUnservedSelectors and unserved_listed= says how many it lists;
+// the rest are recovered by the same call with a larger --pack-budget-bytes (the legend says so). Language-neutral: the
+// decision reads the served-id record, not any language's syntax. An EXPLICIT --top-k keeps today's shape.
+inline constexpr std::size_t kMaxUnservedSelectors = 16;
+
+// `ripwire ROOT…`: EVERY root this call crawled (a multi-root call's map is the map of all of them — an empty mapRootArg
+// there used to fall back to ".", the parent tree), each quoted by the next= house rule, plus the crawl-scope flags that
+// decided which files were indexed, so the pasted call maps the same corpus. Presentation and payload flags stay out.
+inline std::string leanMapPointer( const rw::Config& cfg )
+{
+    std::string inv = "ripwire";
+    for( const std::string_view root : cfg.roots )
+    {
+        inv += " " + rw::nextFlag( "", root );
+    }
+    if( cfg.roots.empty() )
+    {
+        inv += " .";
+    }
+    return inv + crawlScopeFlags( cfg );
+}
+
+struct UnservedDefs
+{
+    std::size_t requested = 0;   // valid, non-module-scope requests
+    std::size_t unserved  = 0;   // of those, the ones with no body/outline in the answer
+    std::string attrs;           // ` unserved_total="N" [unserved_listed="K"] unserved_next="--expand=P:L:N,…"` — empty when unserved == 0
+};
+
+inline UnservedDefs unservedDefsOf( const rw::IngestResult& ing, const std::vector<rw::NodeId>& requested, std::vector<rw::NodeId> served,
+                                    std::string_view verbFlag, std::string_view rootArg )
+{
+    UnservedDefs u;
+    std::sort( served.begin(), served.end() );
+    const std::string rootPrefix = rootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( rootArg );
+    std::string       selectors;
+    std::size_t       listed = 0;
+    for( rw::NodeId id : requested )
+    {
+        if( id >= ing.symbols.size() || ing.symbols[ id ].kind == rw::SymKind::ModuleScope )
+        {
+            continue;
+        }
+        ++u.requested;
+        if( std::binary_search( served.begin(), served.end(), id ) )
+        {
+            continue;
+        }
+        ++u.unserved;
+        if( listed >= kMaxUnservedSelectors )
+        {
+            continue;
+        }
+        const rw::Symbol&          sym  = ing.symbols[ id ];
+        const std::string_view path = rootArg.empty() ? std::string_view( ing.files[ sym.fileId ] ) : rw::sarif::rootRelativeUri( ing.files[ sym.fileId ], rootPrefix );
+        selectors += ( listed == 0 ? "" : "," );
+        selectors += std::string( path ) + ":" + std::to_string( sym.line ) + ":" + sym.name;
+        ++listed;
+    }
+    if( u.unserved > 0 )
+    {
+        // unserved_listed= only when the guard cut the list: unserved_next= then serves the first `listed`, not all of them.
+        u.attrs = " unserved_total=\"" + std::to_string( u.unserved ) + "\""
+            + ( listed < u.unserved ? " unserved_listed=\"" + std::to_string( listed ) + "\"" : std::string() )
+            + rw::nextAttrXml( rw::nextFlag( std::string( verbFlag ) + "=", selectors ), "unserved_next" );
+    }
+    return u;
+}
 
 // ── ONE PRICE FOR BOTH SERVING CANDIDATES (CodeRabbit, PR #215, second round on this comparison) ─────
 // THE DEFECT was not a missing addend, it was two counters. The bundle candidate was priced to the byte
@@ -1872,6 +1989,7 @@ int runDefaultMap( const MainDispatch& d )
     mapAnn.viaLegendStripped = cfg.legend == "compact" && !cfg.json;   // FE-B: the rewrite would strip the map's via comment
     mapAnn.notesDegraded = d.notesDegraded;   // L3 follow-up (CodeRabbit 4053600616): onto every <r> this run emits
     mapAnn.codeFirstRows = isDefaultMapScope;   // the code-first row pick + its data_sections_cut= / next= (serialize.h)
+    mapAnn.inventoryTier = isDefaultMapScope && !cfg.noInventory;   // D7: the <inv> tier (mapInventoryWanted also drops it under --max-tokens)
     // C1-b (2026-09-12): --in=DIR — the scoped block and the map stub, filled by assignment like seed. The two next= strings
     // outlive every serialize() call below (mapAnn holds views into them). The scoped next= is the SAME run at the next
     // offset, page size carried when the caller set one; the stub's next= is the same run without in= (the map it stubbed).
@@ -1921,7 +2039,7 @@ int runDefaultMap( const MainDispatch& d )
         {
             return {};
         }
-        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly );
+        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls );
         const rw::MemoryStreamBytes measured = probe.finish();
         return measured.isWhole ? std::string( measured.bytes ) : std::string();
     };
@@ -1934,7 +2052,7 @@ int runDefaultMap( const MainDispatch& d )
             DISCLOSE( maxTokensFit, rw::MapAnnotations::MaxTokensFit::DisclosureWhy::ProbeUnmeasured, "runDefaultMap: open_memstream failed for the --max-tokens fit probe — the map is emitted unshaped and its ceiling unverified" );
             return 0;
         }
-        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly );
+        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls );
         const rw::MemoryStreamBytes measured = probe.finish();
         if( !measured.isWhole )
         {
@@ -1978,7 +2096,7 @@ int runDefaultMap( const MainDispatch& d )
         }
         serializeJson( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics,
                        fanInPtr, &g.ambOut, cfg.stable, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut,
-                       g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, mapProvPtr, mapAnn, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly );
+                       g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, mapProvPtr, mapAnn, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls );
         const rw::MemoryStreamBytes measured = probe.finish();
         if( !measured.isWhole )
         {
@@ -2319,19 +2437,62 @@ int runDefaultMap( const MainDispatch& d )
     // measurement). Built only when a body is expanded; the same vector rides the two emissions below, so the
     // charged render and the emitted one cannot differ.
     const std::vector<float> calleeOrder = expandNodes.empty() ? std::vector<float>{} : rw::calleeNameSpecificity( ing );
+    EmittedBodies            expandRecord;   // expand-lean-k64: which requested bodies the render above actually emitted
     if( !expandNodes.empty() )
     {
         bodiesSection = rw::chargeSection( [ & ]( std::FILE* f )
-            { packBodies( f, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, g.outNameOnly, cfg.compress, redactPtr,
-                          expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
+            { expandRecord = EmittedBodies{};   // a re-render starts from empty: the record is what THIS render emitted
+              packBodies( f, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, g.outNameOnly, cfg.compress, redactPtr,
+                          expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/&expandRecord,
                           /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, &calleeOrder ); },   // V1: octocode F2 sibs=/inc=
             rw::kBytesPerTokenBody );
     }
+    std::vector<NodeId> outlineShown;   // expand-lean-k64: the outlines the render below emitted
     if( !outlineNodes.empty() )
     {
         outlineSection = rw::chargeSection( [ & ]( std::FILE* f )
-            { packOutline( f, ing, outlineNodes, cfg.packBudgetBytes, cfg.compress, redactPtr, mapRootArg ); },
+            { outlineShown.clear();
+              packOutline( f, ing, outlineNodes, cfg.packBudgetBytes, cfg.compress, redactPtr, mapRootArg, &outlineShown ); },
             rw::kBytesPerTokenBody );
+    }
+
+    // expand-lean-k64 (see kMaxUnservedSelectors above): a payload verb whose requested definitions were ALL served rides no
+    // map. Decided HERE, after the payload rendered, because "all served" is a property of the render; nothing between the
+    // exact-name default above and this point reads mapTopK. Same exclusions as the exact-name default (composed verbs claim
+    // the map for their own purpose; --max-tokens sizes the map; --json has its own twin), plus an explicit --top-k.
+    // Scope: every --expand the exact-name default above did not take (one ambiguous name, several tokens, several tokens
+    // naming one definition) and ONE --outline token (any count — a single-definition --outline rode the same map).
+    // --outline with several tokens keeps the ordinary default. Consequence: wherever the M6 mode choice runs, the map is
+    // already gone, so its bundleDoc.mapBytes term below is 0 from the CLI (kept: the price must stay honest if a future
+    // posture rides a map there).
+    std::string ctxLeanAttr = exactNameExpandDefault ? std::string( " topk_default=\"0\"" ) : std::string();
+    std::string ctxUnservedAttr;
+    const bool  leanEligible = !exactNameExpandDefault && !cfg.topKExplicit && !cfg.packSignatures && cfg.packTopN == 0 && cfg.query.empty()
+        && !cfg.adaptive && cfg.maxTokens == 0 && !cfg.json
+        && ( ( !cfg.expand.empty() && cfg.outline.empty() && !expandNodes.empty() && bodiesSection.isRendered )
+             || ( cfg.outline.size() == 1 && cfg.expand.empty() && !outlineNodes.empty() && outlineSection.isRendered ) );
+    if( leanEligible )
+    {
+        std::vector<NodeId> served;
+        if( cfg.expand.empty() )
+        {
+            served = outlineShown;
+        }
+        else
+        {
+            for( const EmittedBody& b : expandRecord.kept )
+            {
+                served.push_back( b.id );
+            }
+        }
+        const UnservedDefs un = unservedDefsOf( ing, cfg.expand.empty() ? outlineNodes : expandNodes, std::move( served ),
+                                                cfg.expand.empty() ? "--outline" : "--expand", mapRootArg );
+        if( un.requested > 0 )
+        {
+            mapTopK      = 0;
+            ctxLeanAttr  = " topk_default=\"0\"" + nextAttrXml( leanMapPointer( cfg ), "map_next" );
+            ctxUnservedAttr = un.attrs;
+        }
     }
 
     // The --expand fallback: estimateExpandBodyTokens is no longer the primary estimate (measured bytes are),
@@ -2378,7 +2539,7 @@ int runDefaultMap( const MainDispatch& d )
     // the INITIAL value so it survives even when expandAutoServeScope below does not run (a range slice, or
     // a pre-render degrade) — every path exactNameExpandDefault can reach ends up with SOME <ctx ...> to
     // decorate, since hasExtension is provably true whenever --expand is non-empty.
-    std::string         ctxOpenStr = exactNameExpandDefault ? "<ctx topk_default=\"0\">" : "<ctx>";
+    std::string         ctxOpenStr = "<ctx" + ctxLeanAttr + ctxUnservedAttr + ">";
     // R-E fix (2026-08-19): the payload document root DISCLOSES the root its p= are relative to, on the two
     // shapes where the ride-along map's <r root=…> is NOT there to do it — no map at all (mapTopK==0, which
     // the exact-name --expand default always picks) and whole-file mode. The first R-E landing made
@@ -2448,11 +2609,11 @@ int runDefaultMap( const MainDispatch& d )
         // because every byte on that path is raw code text — the same rate and the same pricedRootAttr fixpoint
         // the whole-file emission below applies. topk_default="0" and the unproven residue ride BOTH openers, so
         // the first is charged to both documents and the second is passed as the shared root bytes.
-        const std::size_t         topkDefaultBytes = exactNameExpandDefault ? ( sizeof( " topk_default=\"0\"" ) - 1 ) : 0;
+        const std::size_t         topkDefaultBytes = ctxLeanAttr.size();
         ExpandServeDocument       bundleDoc;
         bundleDoc.payloadBytes  = bodiesSection.xml.size();
         bundleDoc.mapBytes      = mapTopK > 0 ? measureEmittedMapBytes( mapTopK, payloadTokens ) : 0;
-        bundleDoc.rootAttrBytes = ctxRootBytesWhenNoMap + topkDefaultBytes + noteBytes;   // root=/est_tokens= only where no map carries them; note= only where a map does
+        bundleDoc.rootAttrBytes = ctxRootBytesWhenNoMap + topkDefaultBytes + ctxUnservedAttr.size() + noteBytes;   // root=/est_tokens= only where no map carries them; note= only where a map does
         ExpandServeDocument       fileDoc;
         fileDoc.payloadBytes  = wholeFile.xml.size();                         // as EMITTED, not the raw file bytes
         fileDoc.rootAttrBytes = ctxRootAttr.size() + topkDefaultBytes + ctxNotesDegradedBytes;   // whole-file mode always carries root= (no <r root=> rides with it) and, when degraded, the marker too
@@ -2488,9 +2649,9 @@ int runDefaultMap( const MainDispatch& d )
             // the ROOT ATTRIBUTES ride too: the compact legend reads root=/est_tokens=/topk_default= etc. present-only, so a
             // candidate without them would price a legend shorter than the one delivered. The est_tokens= values are the
             // candidates' own prices (the layer reprices them, and a placeholder of another digit count would move the delta).
-            const std::string topk       = exactNameExpandDefault ? " topk_default=\"0\"" : "";
+            const std::string topk       = ctxLeanAttr;
             const std::string fileEst    = std::to_string( static_cast<std::size_t>( double( wholeFile.xml.size() + kExpandWholeFileLegend.size() + ctxRootAttr.size() ) / rw::kBytesPerTokenBody ) + 1 );
-            const std::string bundleRoot = "<ctx" + ctxUnprovenAttr + ( mapTopK == 0 ? ctxRootAttr + " est_tokens=\"" + std::to_string( payloadTokens ) + "\"" : std::string() ) + topk + noteBuf + wholeFileNext + " mode=\"bundle\">";
+            const std::string bundleRoot = "<ctx" + ctxUnprovenAttr + ( mapTopK == 0 ? ctxRootAttr + " est_tokens=\"" + std::to_string( payloadTokens ) + "\"" : std::string() ) + topk + ctxUnservedAttr + noteBuf + wholeFileNext + " mode=\"bundle\">";
             const std::string fileRoot   = "<ctx" + ctxUnprovenAttr + ctxRootAttr + topk + " mode=\"whole-file\" est_tokens=\"" + fileEst + "\">";
             // in the order the bundle is EMITTED — the bodies first, the ride-along map after them: the layer reads its
             // head terms off the root's first child, so a map-first candidate priced a different legend (rv-r1-L1-2: 107 B)
@@ -2505,13 +2666,14 @@ int runDefaultMap( const MainDispatch& d )
             ASSUME( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
             ctxOpenStr.insert( 4, wholeFileNext );
         }
-        if( exactNameExpandDefault )
+        if( !ctxLeanAttr.empty() )
         {
             // chooseExpandServe's four formatted opens all start "<ctx mode=\"...\" reason=\"...\">" — insert
             // right after "<ctx" so the self-describing default rides alongside whichever mode/reason M6
             // independently picked (bundle-without-a-map still beats a huge whole-file, so this composes).
+            // The unserved names ride the bundle only: a whole-file serving carries every requested definition.
             ASSUME( ctxOpenStr.rfind( "<ctx", 0 ) == 0 );
-            ctxOpenStr.insert( 4, " topk_default=\"0\"" );
+            ctxOpenStr.insert( 4, ctxLeanAttr + ( serveWholeFile ? std::string() : ctxUnservedAttr ) );
         }
     }
     // …and the insert itself, same technique topk_default= uses right above (the four chooseExpandServe
@@ -2686,11 +2848,11 @@ int runDefaultMap( const MainDispatch& d )
         {
             serializeJson( out, ing, rank, g.outOff, g.outTargets, mapTopK, cfg.mostImportantLast, cfg.metrics,
                            fanInPtr, &g.ambOut, cfg.stable, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut,
-                           g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, mapProvPtr, mapAnn, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly );
+                           g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, mapProvPtr, mapAnn, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls );
         }
         else
         {
-            serialize( out, ing, rank, g.outOff, g.outTargets, mapTopK, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, payloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly );
+            serialize( out, ing, rank, g.outOff, g.outTargets, mapTopK, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, payloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls );
         }
     }
     else
@@ -3078,7 +3240,7 @@ inline constexpr std::string_view kJsonVerbs[] =
 // that itself refuses --json is deliberately NOT here — its verb is named first, which is the answer.
 inline constexpr std::string_view kJsonRideAlongFlags[] =
 {
-    "--json", "--ignore-tests", "--no-cache", "--no-ignore", "--no-stable", "--refetch", "--compress", "--no-redact",
+    "--json", "--ignore-tests", "--no-cache", "--no-ignore", "--no-stable", "--no-inventory", "--refetch", "--compress", "--no-redact",
     "--cache", "--since", "--pin-census", "--scip", "--legend",
     "--anchor", "--no-route", "--adaptive", "--no-mention-boost", "--cochange-boost", "--no-doc-mention", "--signatures-only",
     "--auto-bodies", "--with-graph", "--scope", "--task", "--brief",
@@ -3118,7 +3280,7 @@ std::string_view firstFlagOutside( const rw::Config& c, std::span<const std::str
 // signature bodies through redactPtr, so --no-redact composes with it).
 inline constexpr std::string_view kMapShapingFlags[] =
 {
-    "--json", "--ignore-tests", "--no-cache", "--no-ignore", "--no-stable", "--refetch", "--compress", "--no-redact",
+    "--json", "--ignore-tests", "--no-cache", "--no-ignore", "--no-stable", "--no-inventory", "--refetch", "--compress", "--no-redact",
     "--cache", "--since", "--pin-census", "--scip", "--legend", "--metrics", "--map-diff",
 };
 
@@ -3769,6 +3931,10 @@ static constexpr CompactKeyRule kBundleKeyRules[] =
     { "skipped",         []( const rw::Config& c ) noexcept { return c.skippedList; },                               CompactKeyMark::FirstChild, "skipped" },
     { "notes",           []( const rw::Config& c ) noexcept { return c.notesList; },                                 CompactKeyMark::FirstChild, "notes" },
     { "lego",            []( const rw::Config& c ) noexcept { return !c.legoType.empty(); },                         CompactKeyMark::FirstChild, "lego" },
+    // the candidate page's rule sits ABOVE pack-task's: both ask on the same flags, and the mark
+    // (above_cliff, the page root's own attribute) is what tells the <sigs> page from the <ctx> bundle
+    // the pack-task row below must keep serving.
+    { "candidate-page",  []( const rw::Config& c ) noexcept { return ( !c.forTask.empty() || c.packTaskFlag ) && c.tokenBudget != 0 && ( c.pageLimit > 0 || c.pageOffset > 0 ); }, CompactKeyMark::RootAttr, "above_cliff" },
     { "pack-task",       []( const rw::Config& c ) noexcept { return c.packTaskFlag || !c.packTask.empty(); },       CompactKeyMark::RootAttr,   "budget_tokens" },
     { "from-trace",      []( const rw::Config& c ) noexcept { return !c.fromTrace.empty() || !c.runTrace.empty(); }, CompactKeyMark::RootAttr,   "task" },
     { "expand",          []( const rw::Config& c ) noexcept { return !c.expand.empty(); },                           CompactKeyMark::None,       {} },
@@ -3847,7 +4013,11 @@ static bool nativeCompactLegendVerb( const rw::Config& c ) noexcept
     // L1 fix round (rv-r1-L1 LOW-1): --batch outranks --for in dispatch, so `--for=X --batch=F` answers the batch envelope —
     // an answer this layer shapes. Only a run --for actually answers is skipped.
     const bool batchAnswers = !c.batchFile.empty();   // the batch envelope answers, and this layer shapes it
-    return !batchAnswers && !c.forTask.empty();
+    // the budgeted-bundle CANDIDATE PAGE (#294/PR #362) is NOT the --for bundle this skip protects:
+    // its legend is pure prose (no data comment), so the layer's rewrite is safe — and required, or
+    // --legend=compact is accepted and ignored on the page (the #362 review's item 5).
+    const bool forCandidatePage = !c.forTask.empty() && c.tokenBudget != 0 && ( c.pageLimit > 0 || c.pageOffset > 0 );
+    return !batchAnswers && !c.forTask.empty() && !forCandidatePage;
 }
 
 // L1 fix round (rv-r1-L1 LOW-3): a DEFAULTED posture captured every run through a tmpfile, a 1.28 MB `--lint --sarif`
@@ -5086,6 +5256,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
                 DISCLOSE( Diagnostics::answerRefused, "main: over the memory guard's hard limit between workspace roots — exit 5, one stderr line" );
                 rw::emitTo( stderr, "ripwire: {}\n", rw::memguard::hardStopLine( "ingest of workspace root " + std::to_string( parts.size() ) + " of "
                                                                                    + std::to_string( ws.size() ) + " (" + r.label + ")" ) );
+                rw::abandonGitWalks();   // the refusal is out: do not wait for the history walks' futures (gitmine.h)
                 return 5;
             }
         }
@@ -5110,10 +5281,12 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         rw::memguard::answerStops();   // the refusal answers for any stop the ingest recorded
         DISCLOSE( Diagnostics::answerRefused, "main: over the memory guard's hard limit after the ingest — exit 5, one stderr line" );
         rw::emitTo( stderr, "ripwire: {}\n", rw::memguard::hardStopLine( "ingest" ) );
+        rw::abandonGitWalks();   // the refusal is out: do not wait for the history walks' futures (gitmine.h)
         return 5;
     }
     if( const int rc = memoryStopExit( ing, cfg, verbPrec.winner ); rc != 0 )
     {
+        rw::abandonGitWalks();   // same: historyWalks joins on this return, and the answer it fed is refused
         return rc;
     }
     if( cfg.ignoreTests )
@@ -5182,6 +5355,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
     {
         DISCLOSE( Diagnostics::answerRefused, "main: over the memory guard's hard limit after the graph build — exit 5, one stderr line" );
         rw::emitTo( stderr, "ripwire: {}\n", rw::memguard::hardStopLine( "graph build" ) );
+        rw::abandonGitWalks();   // the refusal is out: do not wait for the history walks' futures (gitmine.h)
         return 5;
     }
 
@@ -5252,6 +5426,23 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             // sets concatenate (commits are disjoint across repos) and churn accumulates per file.
             ASSUME( historyWalks.size() == ( multiRoot ? ws.size() : 1u ),
                     "this block runs under startHistoryWalks' condition (--help-task has already answered), so every root's walk was started" );
+            // K51: a walk git could not finish arrives flagged (it is never cached either); the document says so (historyread.h).
+            HistoryReadReport& historyReport = historyRead();
+            const auto         joinWalk      = [ & ]( std::size_t r )
+            {
+                quality::HistoryWalk walk = historyWalks[ r ].get();
+                if( walk.raw.unread && walk.raw.notRun )
+                {
+                    DISCLOSE( historyReport, HistoryReadReport::DisclosureWhy::WalkNotRun,
+                              "main: git did not run for the history walk — churn= is absent and amp= counts callers only, and the document says so" );
+                }
+                else if( walk.raw.unread )
+                {
+                    DISCLOSE( historyReport, HistoryReadReport::DisclosureWhy::WalkStopped,
+                              "main: the git history walk stopped part-way — churn= and amp= count only the commits read (floors), and the document says so" );
+                }
+                return walk;
+            };
             std::vector<std::vector<std::uint32_t>> commits;
             if( multiRoot )
             {
@@ -5261,7 +5452,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
                     // Y2: the memoized form — skips the 431 ms `git log --name-only` walk on a
                     // warm (repo, HEAD sha, window, boundary-sha) hit; see quality.h's qchurn family.
                     std::vector<std::vector<std::uint32_t>> part =
-                        quality::resolveHistoryWalk( historyWalks[ r ].get(), ing,
+                        quality::resolveHistoryWalk( joinWalk( r ), ing,
                                              cfg.forTask.empty() ? 0u : 12u,
                                              cfg.forTask.empty() ? nullptr : &rootChurn, r );
                     for( std::vector<std::uint32_t>& c : part )
@@ -5284,7 +5475,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
             else
             {
                 // Y2: memoized — see the multi-root branch above.
-                commits = quality::resolveHistoryWalk( historyWalks[ 0 ].get(), ing,
+                commits = quality::resolveHistoryWalk( joinWalk( 0 ), ing,
                                                cfg.forTask.empty() ? 0u : 12u,
                                                cfg.forTask.empty() ? nullptr : &forChurn );
             }
@@ -5360,6 +5551,9 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
                            ampPtr, cboPtr, testedPtr, lcom4Ptr, impurePtr, forChurn, redactCounts, redactPtr, notesPtr,
                            notesDegraded, grepPhases.valid ? &grepPhases : nullptr, needsValueUses };
 
+    // Every verb from here on answers from the built graph: its query and its emit are this scope (the self-profile's
+    // "after the graph" share; the verbs' own scopes nest inside it).
+    PROFILE_SCOPE_DESCRIBE( "main: query + emit (the verb, after the graph)" );
     if( std::optional<int> handled = runForLens( dsp ) )
     {
         return *handled;

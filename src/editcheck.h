@@ -23,13 +23,17 @@
 #include "arch.h"           // fnv1a64
 #include "gitstamp.h"       // r26-stamp Task A: gitstamp::atAttr — the at="<sha>[+dirty]" root anchor
 #include "graphlegend.h"    // §H4 §3.4: the shared counts_floor= marker + floor/counting-unit legend tail
+#include "compactlegend.h"  // fix round 1 (ruling 5): foldPays — the verdict line ships only when it pays
 #include "pageview.h"       // LB-G: pageWindow / effectiveRowCap / pagingDisclosure — the ONE paging vocabulary
 #include "editcheckdecl.h"   // the C/C++ declaration/definition identity: editCheckTieDeclaration / editCheckDeclDefaults
+#include "valuerefs.h"      // CALLSITE-AT: VrRender / vrPath — the one root-relative file spelling a site token shares with <vr> rows
 
 #include <algorithm>
+#include <compare>
 #include <cstdint>
 #include <cstdio>
 #include <deque>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <string>
@@ -650,17 +654,20 @@ inline bool editCheckArityAccepts( const Symbol& os, std::uint16_t minArity, std
 // aliases, imports and receiver, to a definition in the overload set: the same lexical evidence the map used,
 // asked about the function rather than one arity of it. Built once per document; `scratch` is the resolver's
 // output buffer, reused across a pass.
-struct EditCheckCalleeTest
+//
+// CALLSITE-AT (2026-10-09): the test is split from the arity data. CallSiteCalleeTest is the name/Elixir half alone,
+// which is all a SITE pass needs (the callers verb's sites_at= and safe-delete's sites_at=, callSitesAt below); EditCheckCalleeTest
+// adds editCheckDeclDefaults, which reads the C/C++ declarations' source text and is only the arity verdict's input.
+struct CallSiteCalleeTest
 {
     const IngestResult&           ing;
     const Symbol&                 focus;
     std::span<const NodeId>       overloadNodes;
     std::optional<ElixirResolver> logical;   // engaged for an Elixir focus only
     std::vector<NodeId>           scratch;
-    EditCheckDeclDefaults         declDefaults;   // per overload: the fewest arguments a matching C/C++ declaration admits
 
-    EditCheckCalleeTest( const IngestResult& input, const Symbol& focusSymbol, std::span<const NodeId> overloads )
-        : ing( input ), focus( focusSymbol ), overloadNodes( overloads ), declDefaults( editCheckDeclDefaults( input, overloads, {} ) )
+    CallSiteCalleeTest( const IngestResult& input, const Symbol& focusSymbol, std::span<const NodeId> overloads )
+        : ing( input ), focus( focusSymbol ), overloadNodes( overloads )
     {
         if( focus.lang == Lang::Elixir )
         {
@@ -687,6 +694,16 @@ struct EditCheckCalleeTest
             }
         }
         return false;
+    }
+};
+
+struct EditCheckCalleeTest : CallSiteCalleeTest
+{
+    EditCheckDeclDefaults declDefaults;   // per overload: the fewest arguments a matching C/C++ declaration admits
+
+    EditCheckCalleeTest( const IngestResult& input, const Symbol& focusSymbol, std::span<const NodeId> overloads )
+        : CallSiteCalleeTest( input, focusSymbol, overloads ), declDefaults( editCheckDeclDefaults( input, overloads, {} ) )
+    {
     }
 };
 
@@ -753,25 +770,191 @@ inline std::vector<char> editCheckIncompatibleFlags( const IngestResult& ing, st
 // ONE pass over ing.references plus one sort — never a per-row rescan (editCheckIncompatibleFlags' own
 // rule; a widely-shared name has hundreds of caller rows). Duplicate (node,line) pairs collapse: this is a
 // set of LINES TO OPEN, so two calls on one line are one site.
-inline std::vector<std::pair<NodeId, std::uint32_t>>
-editCheckCallSites( const IngestResult& ing, EditCheckCalleeTest& callee, std::span<const char> callerIncompatible )
+template <class OnSite>
+inline void forEachCallSite( const IngestResult& ing, CallSiteCalleeTest& callee, std::span<const char> callerSelected, OnSite&& onSite )
 {
-    std::vector<std::pair<NodeId, std::uint32_t>> sites;
     for( const Reference& r : ing.references )
     {
         if( r.role != RefRole::Call || r.isCompose || r.isDocLink || r.lang == Lang::Markdown )
         {
             continue;
         }
-        if( r.fromSymbol >= callerIncompatible.size() || !callerIncompatible[ r.fromSymbol ] || !callee.reaches( r ) )
+        if( r.fromSymbol >= callerSelected.size() || !callerSelected[ r.fromSymbol ] || !callee.reaches( r ) )
         {
             continue;
         }
-        sites.emplace_back( r.fromSymbol, r.line );
+        onSite( r );
+    }
+}
+
+inline std::vector<std::pair<NodeId, std::uint32_t>>
+editCheckCallSites( const IngestResult& ing, CallSiteCalleeTest& callee, std::span<const char> callerIncompatible )
+{
+    std::vector<std::pair<NodeId, std::uint32_t>> sites;
+    forEachCallSite( ing, callee, callerIncompatible, [ & ]( const Reference& r ) { sites.emplace_back( r.fromSymbol, r.line ); } );
+    std::sort( sites.begin(), sites.end() );
+    sites.erase( std::unique( sites.begin(), sites.end() ), sites.end() );
+    return sites;
+}
+
+// CALLSITE-AT (2026-10-09, idea #1 of the 26b ideas pass): the SAME pass as editCheckCallSites, keeping each site's own
+// file, for the rows that print a site as a pasteable `file:line` token (the callers verb's sites_at=, safe-delete's sites_at=).
+// A row's p= is where the CALLER is defined; until this, "every call site that must change" needed the uses verb as a
+// second call (tmux-19: 15 caller rows in the first answer, the 23 sites only in the follow-up). The file is the
+// reference's own fileId, never inferred from the caller row. Sorted (caller, file, line), (caller, file, line) unique:
+// two calls on one line are one site to open. POD with no member initializers (EditCheckContract's reason above).
+struct CallSiteAt
+{
+    NodeId        caller;
+    std::uint32_t fileId;
+    std::uint32_t line;
+
+    friend auto operator<=>( const CallSiteAt&, const CallSiteAt& ) = default;
+};
+
+// The call sites of `defs` inside the caller rows `pageCallers` (one page of a callers listing). `defs` is the resolved
+// definition set of ONE selector; a set whose members carry two leaf names (a qualified tier may) gets one pass per
+// distinct name, so the second name's sites are never silently dropped. Each pass is one scan of the reference table.
+inline std::vector<CallSiteAt> callSitesAt( const IngestResult& ing, std::span<const NodeId> defs, std::span<const NodeId> pageCallers )
+{
+    std::vector<CallSiteAt> sites;
+    if( defs.empty() || pageCallers.empty() )
+    {
+        return sites;
+    }
+    std::vector<char> onPage( ing.symbols.size(), 0 );
+    for( const NodeId c : pageCallers )
+    {
+        EXPECTS( c < onPage.size(), "a caller row is an indexed symbol" );
+        onPage[c] = 1;
+    }
+    std::vector<NodeId> sameName;
+    for( std::size_t i = 0; i < defs.size(); ++i )
+    {
+        const std::string_view name    = ing.symbols[ defs[i] ].name;
+        const auto             nameAt  = [ & ]( NodeId d ) { return ing.symbols[d].name == name; };
+        if( std::any_of( defs.begin(), defs.begin() + std::ptrdiff_t( i ), nameAt ) )
+        {
+            continue;   // this name's pass already ran
+        }
+        sameName.clear();
+        std::copy_if( defs.begin() + std::ptrdiff_t( i ), defs.end(), std::back_inserter( sameName ), nameAt );
+        CallSiteCalleeTest callee( ing, ing.symbols[ defs[i] ], sameName );
+        forEachCallSite( ing, callee, onPage, [ & ]( const Reference& r ) { sites.push_back( CallSiteAt{ r.fromSymbol, r.fileId, r.line } ); } );
     }
     std::sort( sites.begin(), sites.end() );
     sites.erase( std::unique( sites.begin(), sites.end() ), sites.end() );
     return sites;
+}
+
+// One caller's slice of callSitesAt's sorted result (empty when the pass found none for it).
+inline std::span<const CallSiteAt> callSitesOf( std::span<const CallSiteAt> sites, NodeId caller )
+{
+    const auto lo = std::lower_bound( sites.begin(), sites.end(), caller, []( const CallSiteAt& s, NodeId c ) { return s.caller < c; } );
+    const auto hi = std::upper_bound( lo, sites.end(), caller, []( NodeId c, const CallSiteAt& s ) { return c < s.caller; } );
+    return { lo, hi };
+}
+
+// One caller's sites as pasteable `file:line` tokens, ascending, at most kCallSitesPerRowCap of them (pageview.h: a
+// runaway guard; the cut is disclosed by sites_total= and the uses verb lists the rest). `pathOf( fileId )` spells the file
+// exactly as the row's own p= does (valuerefs.h vrPath: root-relative on a single root). Unescaped: each dialect escapes its own way.
+static_assert( kCallSitesPerRowCap == 16, "compactlegend.h's sites_total= readings spell this cap as 16: change both together" );
+inline std::vector<std::string> callSiteTokens( const IngestResult& ing, std::span<const CallSiteAt> mine, const VrRender& rr )
+{
+    std::vector<std::string> tokens;
+    const std::size_t        shown = std::min( mine.size(), kCallSitesPerRowCap );
+    tokens.reserve( shown );
+    for( std::size_t i = 0; i < shown; ++i )
+    {
+        tokens.push_back( vrPath( ing, mine[i].fileId, rr ) + ":" + std::to_string( mine[i].line ) );
+    }
+    ENSURES( tokens.size() <= kCallSitesPerRowCap, "the per-row site cap holds" );
+    return tokens;
+}
+
+// A page of caller rows with their site tokens, computed ONCE and rendered by every dialect (XML, columnar, JSON, MCP):
+// tokens[i]/totals[i] belong to rows[i]; `any` = some row has a site (the legend clause rides exactly then), `anyCut` =
+// some row's list was cut (sites_total= rides). POD-style, value-initialized (EditCheckContract's reason above).
+struct RowCallSites
+{
+    std::vector<std::vector<std::string>> tokens;
+    std::vector<std::size_t>              totals;
+    bool                                  any;
+    bool                                  anyCut;
+};
+
+inline RowCallSites rowCallSites( const IngestResult& ing, std::span<const NodeId> defs, std::span<const NodeId> rows, const VrRender& rr )
+{
+    RowCallSites out{};
+    const std::vector<CallSiteAt> sites = callSitesAt( ing, defs, rows );
+    out.tokens.reserve( rows.size() );
+    out.totals.reserve( rows.size() );
+    for( const NodeId r : rows )
+    {
+        const std::span<const CallSiteAt> mine = callSitesOf( sites, r );
+        out.tokens.push_back( callSiteTokens( ing, mine, rr ) );
+        out.totals.push_back( mine.size() );
+        out.any    = out.any || !mine.empty();
+        out.anyCut = out.anyCut || mine.size() > out.tokens.back().size();
+    }
+    ENSURES( out.tokens.size() == rows.size() && out.totals.size() == rows.size(), "one entry per row, in row order" );
+    return out;
+}
+
+// The XML row attributes for one caller: ` sites_at="f:l f:l"` (space-separated, XML-escaped) plus ` sites_total="N"` only when
+// the list was cut. "" when the pass found no site in this caller (the attribute is never printed empty).
+inline std::string callSitesAttrXml( const std::vector<std::string>& tokens, std::size_t total )
+{
+    if( tokens.empty() )
+    {
+        return {};
+    }
+    std::string joined;
+    for( const std::string& t : tokens )
+    {
+        if( !joined.empty() ) { joined += ' '; }
+        joined += t;
+    }
+    std::vector<char> esc;
+    std::string out = " sites_at=\"" + std::string( escapeXml( joined, esc ) ) + "\"";
+    if( total > tokens.size() )
+    {
+        out += " sites_total=\"" + std::to_string( total ) + "\"";
+    }
+    return out;
+}
+
+// The JSON twin (CLI --json rows and the MCP calledBy rows): `,"sites_at":["f:l",..]` plus `,"sites_total":N` only when cut.
+inline std::string callSitesKeyJson( const std::vector<std::string>& tokens, std::size_t total )
+{
+    if( tokens.empty() )
+    {
+        return {};
+    }
+    std::string out = ",\"sites_at\":[";
+    for( std::size_t i = 0; i < tokens.size(); ++i )
+    {
+        out += i == 0 ? "\"" : ",\"";
+        out += jsonStr( tokens[i] );
+        out += "\"";
+    }
+    out += "]";
+    if( total > tokens.size() )
+    {
+        out += ",\"sites_total\":" + std::to_string( total );
+    }
+    return out;
+}
+
+// One JSON row object with its sites_at/sites_total keys spliced in before the closing brace — only on the callers side and
+// only when the page has sites (row k of `sites`); every other row comes back unchanged.
+inline std::string withRowSites( std::string rowJson, const RowCallSites& sites, std::size_t k, bool callersSide )
+{
+    if( callersSide && sites.any && k < sites.tokens.size() && !rowJson.empty() )
+    {
+        rowJson.insert( rowJson.size() - 1, callSitesKeyJson( sites.tokens[k], sites.totals[k] ) );
+    }
+    return rowJson;
 }
 
 // The comma-joined, ascending site list for ONE caller, or "" when the pass above found none (a flagged
@@ -1049,10 +1232,111 @@ inline bool editCheckShowsModuleScope( const IngestResult& ing, const std::vecto
 // definitions a file:name spelling found and could not tie to the file it named. callers=/incompatible= are read from
 // `focus` alone, so without it a declaration whose dropped definition carries the broken caller answered incompatible="0"
 // with nothing beside it. Defaults to 0 — absent attribute, absent clause — for a caller that resolved no file:name.
+// `page` (2026-09-10, folded into one value by lane lean-trio): --limit/--offset, and — idea #11 — the CLI's clean-answer
+// posture: `verdictOnly` makes an unchanged contract with nothing flagged print the verdict and the call that lists the
+// callers instead of 40 caller rows, under every legend posture; `selector` is the CLI's own spelling of SYM, replayed in
+// rows_next=. The MCP verb and the preview keep the full document (verdictOnly false).
+struct EditCheckPage
+{
+    int              limit       = 0;
+    int              offset      = 0;
+    bool             verdictOnly = false;
+    std::string_view selector;
+};
+
+// idea #11: the facts the VERDICT-ONLY answer is decided on, gathered by editCheckBundleText once every verdict number is
+// fixed. The answer is taken only when there ARE caller rows and every fact the full document could add beside them is
+// absent — one definition, nothing flagged, no unproven or declined definition, no notes, no explicit window, not the
+// preview — so the rows are the ONLY thing left out, and rows_next= is the call that prints them (an explicit --limit is the full document).
+// Fix round 1 (rv-lean-trio item 1, owner: a fold must never hide an answer-bearing row): ALSO only when the tree IS its git
+// HEAD — the at= stamp carries no +dirty (tracked changes or untracked files). On a dirty tree the contract check has floors it
+// cannot see past (a TS `export` dropped from SYM is status="unchanged"; a C caller edited to the wrong arity beside an unchanged
+// prototype is never flagged), so a caller row may be the one the edit breaks: every row rides. A non-git root has no HEAD to
+// be at, so it prints the full document too.
+struct EditCheckVerdictFacts
+{
+    EditCheckPage    page;
+    bool             preview          = false;
+    std::string_view status;
+    std::size_t      incompatible     = 0;
+    std::size_t      defs             = 0;
+    std::size_t      unprovenDefs     = 0;
+    std::size_t      declinedCalls    = 0;
+    bool             defsUnmeasured   = false;
+    bool             defaultsFromDecl = false;
+    bool             notesDegraded    = false;
+    bool             noNotes          = true;
+    std::size_t      callers          = 0;
+};
+
+inline bool editCheckVerdictOnlyTaken( const EditCheckVerdictFacts& f ) noexcept
+{
+    // callers > 0: with no caller there is no row to leave out, so the full document is owed (its payload is the same line)
+    const bool cleanContract = f.status == "unchanged" && f.incompatible == 0 && f.defs == 1 && !f.defsUnmeasured && f.callers > 0;
+    const bool nothingBeside = f.unprovenDefs == 0 && f.declinedCalls == 0 && !f.defaultsFromDecl && !f.notesDegraded && f.noNotes;
+    return f.page.verdictOnly && !f.preview && f.page.limit == 0 && f.page.offset == 0 && cleanContract && nothingBeside;
+}
+
+// The verdict line, or "" when the full document is owed (editCheckVerdictOnlyTaken). Its legend states what the full
+// document's would about THESE attributes — the arity hedge (incompatible= is a fact about the tree, never a proof of
+// binding), the floor tail every graph-count verb splices — and nothing about rows it does not carry. It is the full
+// dialect; the compact layer rewrites it like any other (L1: the payload is the same under both postures).
+inline std::string editCheckVerdictOnlyText( const EditCheckVerdictFacts& f, const Graph& g, const std::string& root, const Symbol& fsym,
+                                             std::string_view relPath, bool singleRoot )
+{
+    if( !editCheckVerdictOnlyTaken( f ) )
+    {
+        return {};
+    }
+    // ruling 1: the tree IS its HEAD — a resolvable commit and no "+dirty" ("+shallow" may ride: it is about history, not the
+    // working tree); an empty stamp (no git, no HEAD) or a dirty one owes the full document. The subprocess runs only once
+    // every in-memory fact already chose the verdict, and its value IS the at= below.
+    const std::string atStamp = gitstamp::stampAt( root );
+    if( atStamp.empty() || atStamp.find( "+dirty" ) != std::string::npos )
+    {
+        return {};
+    }
+    // fix round 2 (rv-lean-trio2 nit b): a tracked path marked skip-worktree or assume-unchanged can differ from HEAD with
+    // `git status` silent, so the stamp above reads clean over an edited caller. The SAME probe --quality-delta's identity
+    // basis refuses on (quality.h indexHidesTrackedContent; a git failure reads as "hides"): any such path owes the rows.
+    if( quality::indexHidesTrackedContent( root ) )
+    {
+        return {};
+    }
+    std::vector<char> esc;
+    const auto        ex       = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
+    const std::string rowsNext = nextFlag( "--edit-check=", f.page.selector.empty() ? std::string_view( fsym.name ) : f.page.selector )
+                               + " --limit=" + std::to_string( f.callers );
+    std::string out = "<!-- ripwire edit-check: SYM's contract (param count + publicness) NOW vs git HEAD: status=\"unchanged\" "
+                      "(nothing about the contract moved), and no 1-hop caller is flagged incompatible=\"1\" (flagged only when its "
+                      "argument count was reliably counted and every candidate definition has a FIXED arity that disagrees). That arity "
+                      "check is one-sided and is NOT a proof that a call site binds to THIS definition: call edges are matched by NAME. "
+                      "root= is the crawl root every p= is relative to (single-root runs only). defs= is the one definition compared. callers= "
+                      "counts its 1-hop callers; their rows are left out of this answer because none is flagged AND the tree is at HEAD "
+                      "(at= carries no +dirty and no tracked path is marked skip-worktree or assume-unchanged) AND leaving them out saves "
+                      "at least a quarter of the bytes; rows_next= is the call that lists them — call sites worth OPENING, not a verdict. next= is the test gate on the "
+                      "definition's file. est_tokens= prices THIS document, through the tool's ONE emitted-bytes estimator. ";
+    out += graphCountDisclosure( rw::graphGaugeClauses( g ) );
+    out += "-->";
+    out += "<edit-check sym=\"" + ex( fsym.name ) + "\" t=\"" + symTag( fsym.kind ) + "\" p=\"" + ex( relPath ) + ":"
+         + std::to_string( fsym.line ) + "\" status=\"unchanged\" defs=\"1\" callers=\"" + std::to_string( f.callers ) + "\" incompatible=\"0\"";
+    out += " at=\"" + atStamp + "\"";   // gitstamp::atAttr's own spelling, from the one stamp read above
+    out += graphCountFloorAttrXml( g );   // M15: gauge + marker, as on the full document
+    if( singleRoot )
+    {
+        out += " root=\"" + ex( root ) + "\"";
+    }
+    out += nextAttrXml( rowsNext, "rows_next" );
+    out += nextAttrXml( nextFlag( "--test-gate=", relPath ) );
+    out += "></edit-check>";
+    editCheckPriceRoot( out );   // M11: unconditional, like the full document's
+    return out;
+}
+
 inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g, const std::string& root,
                                         std::size_t maxFileBytes, const std::vector<std::string>& excludes, NodeId focus,
                                         const notes::NoteIndex* ni = nullptr, bool preview = false,
-                                        int pageLimit = 0, int pageOffset = 0, std::size_t unprovenDefs = 0,
+                                        EditCheckPage page = {}, std::size_t unprovenDefs = 0,
                                         // L3 follow-up (CodeRabbit 4053600616): read BEFORE the caller nulls `ni`
                                         // for emptiness (main.cpp's MainDispatch::notesDegraded), so a sidecar
                                         // that left EVERY line unparsed still reaches this root. Defaults false,
@@ -1061,6 +1345,8 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
                                         // the pre-apply preview's spliced file: its spans index these bytes, not the disk
                                         const EditCheckSpliced& spliced = {} )
 {
+    const int     pageLimit  = page.limit;
+    const int     pageOffset = page.offset;
     const Symbol& fsym = ing.symbols[ focus ];
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= uses (sarif.h) — the ONE
     // shared assembler for CLI --edit-check and the MCP edit_check verb, so the two dialects cannot diverge.
@@ -1106,6 +1392,16 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
 
     std::vector<char> esc;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
+
+    // idea #11: the VERDICT-ONLY answer (editCheckVerdictOnlyText). Placed after every verdict number is fixed, like the
+    // window above: it cannot move a count. Fix round 1 (ruling 5): it is a CANDIDATE — the full document is still built, and
+    // the verdict line ships only when it pays against it (foldPays, at the end of this function).
+    const EditCheckVerdictFacts verdictFacts{ page, preview, verdict.status, incompatibleCount, overloadNodes.size(), unprovenDefs, declinedCalls,
+                                              contract.defsUnmeasured, callee.declDefaults.fromDecl, notesDegraded,
+                                              renderNoteChildren( ni, symbolNoteTarget( ni, ing, fsym ), esc ).empty()
+                                                  && renderNoteChildren( ni, fileNoteTarget( ni, ing.files[ fsym.fileId ] ), esc ).empty(),
+                                              callerIds.size() };
+    const std::string verdictLine = editCheckVerdictOnlyText( verdictFacts, g, root, fsym, ecPathRel( fsym.fileId ), ecSingleRoot );
 
     // card A1 — the preview sentence, FIRST, because every number below it is about bytes that are not on
     // disk and a reader who meets that fact at the end has already read the document as a fact about the tree.
@@ -1203,7 +1499,7 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     // H1: what callers= and incompatible= did not read, addressed to incompatible= by name — ahead of the floor tail, and
     // emitted exactly when the root carries unproven_defs= (graphlegend.h unprovenDefsVerbLegend).
     out += unprovenDefsVerbLegend( UnprovenDefsVerb::EditCheck, unprovenDefs > 0 );
-    out += declinedCallsLegendWithGate( declinedCalls > 0, g.gateDeclinedCalls > 0 );   // exactly when the root carries declined_calls=
+    out += declinedCallsLegendWithGates( declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 );   // exactly when the root carries declined_calls=
     // §H4 §3.4: the shared floor + counting-unit tail, appended from the ONE constant every graph-count verb
     // splices. It is load-bearing HERE more than anywhere: callers="1" on a symbol with an unmodelled second
     // caller is the exact shape §H4 measured, and this legend's own "the tree as it stands" paragraph reads
@@ -1349,6 +1645,12 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     }
     out += "</edit-check>";
     editCheckPriceRoot( out );   // M11: the priced root, LAST — the price covers every byte above it
+    // ruling 5 (rv-lean-trio item 5): rows are hidden only for a byte gain that pays (compactlegend.h foldPays). Three callers'
+    // rows cost about what the verdict line's own legend costs (fx --edit-check=blend: 957 B folded vs 962 B), so they ride.
+    if( !verdictLine.empty() && foldPays( verdictLine, out ) )
+    {
+        return verdictLine;
+    }
     return out;
 }
 

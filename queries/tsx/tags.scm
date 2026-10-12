@@ -117,6 +117,25 @@
 (method_signature
   name: (property_identifier) @name) @definition.method
 
+; lane lego-transitive (M2): a class FACTORY — `const Sub = Base.extend('Sub', …)` (nunjucks' node classes). The call
+; returns a class extending its receiver, so the declarator is a class definition. Captured by shape here, kept only by
+; ingest_names.h isJsClassFactory (tags-pass predicates never run): property `extend`, first argument a string literal
+; spelling the declared name — `$.extend({}, a)` and an unnamed Backbone `Base.extend({…})` are object merges by shape and
+; drop (a disclosed floor). The receiver becomes the base (ingest_sidecap.h, emitBaseRef).
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: (call_expression
+      function: (member_expression)
+      arguments: (arguments . (string))))) @definition.classfactory
+
+(variable_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: (call_expression
+      function: (member_expression)
+      arguments: (arguments . (string))))) @definition.classfactory
+
 ; ---- references ----
 
 (call_expression
@@ -203,6 +222,38 @@
 (new_expression
   constructor: (member_expression
     property: (property_identifier) @name)) @reference.call
+
+; ---- import capture (the shared vocabulary of issue #358) ----
+; ONE capture name for every way this grammar loads a module: the node is the specifier STRING as written,
+; quotes included, and the DepDialect::Web normaliser (src/ingest_importcap.h) strips them. Read off a real
+; parse with `--match`, never predicted. Three patterns, one name:
+;
+;   import … from 'x'  /  import 'x'  /  import type … from 'x'      — import_statement `source:`
+;   export * from 'x'  /  export { a as b } from 'x'  /  export type { T } from 'x'
+;                                                                    — export_statement `source:`; every other
+;                                                                      export_statement has none and never matches
+;   require('x')  /  import('x')                                     — a call whose FIRST named argument is a string
+;
+; The call pattern is deliberately broader than a module load: it matches any bare-identifier (or `import`) call
+; with a leading string, `foo('x')` included, because a tags-pass predicate (`#eq? @f "require"`) is NOT evaluated
+; in this tree (pinned by test/matchgrammarcheck.sh). So the C++ normaliser owns the three guards that keep an
+; ordinary call out of the dependency graph: the callee TEXT is `require`/`import`, there is exactly ONE argument,
+; and that argument is the string. The leading `.` anchors the capture to the first named child, so a 16 000-argument
+; call yields one match, not 16 000.
+;
+; The patterns are UNANCHORED, so they match at any depth; the walk this replaced entered only an allowlist of
+; container nodes (kJsImportContainers), and `require('x').y`, `[require('x')]`, `a ? require('x') : b` were never
+; edges. src/ingest_importcap.h restores that reach from the captured node's ancestry. `import x = require('y')`
+; (TS) is an import_require_clause with its own `source:` and matches nothing here, as it matched nothing before.
+(import_statement
+  source: (string) @import.path)
+
+(export_statement
+  source: (string) @import.path)
+
+(call_expression
+  function: [ (identifier) (import) ]
+  arguments: (arguments . (string) @import.path))
 
 ; #285: `<Foo />` / `<Foo>…</Foo>` invokes Foo exactly like `Foo()` — bind the OPENING tag's name only
 ; (self-closing has no separate closing tag; a paired element's jsx_closing_element repeats the same

@@ -310,7 +310,37 @@ tools = json.loads( line )[ "result" ][ "tools" ]
 # 46,732: the quality_delta description's twelfth kind, +61 B) — and the merged tree carries both: 46,869 + 61 = 46,930,
 # every byte attributed (whereis schema 851 B and quality_delta's description as their lanes measured them; no other
 # tool moved; knob-honesty and the path-gap fix touch no tool description or schema). Headroom after this line: 20 B.
-CEILING = 46950
+# PAGING LANE (#362, synced onto train 25): 46,732 -> 46,916 B, the ceiling moves 46,750 -> 46,950.
+# The +184 B is explore's limit/offset alone (774 -> 958 B) — for already declared the pair (777 B,
+# unchanged), pack_task is a dispatch alias, not a listed tool, and no tool declares next_tier (it
+# is a response attribute, not a schema property). Measured live on both trees: train-25 main's
+# binary answers 46,732 B, this branch's answers 46,916 B (33 tools each, descriptions identical at
+# 22,411 B, schemas 19,585 -> 19,769). Headroom after this line: 34 B, the #214-sized margin.
+# RE-ANCHORED 2026-10-10 (train 26c, the merged tree): 46,950 -> 47,150, measured 47,114 B (33 tools). The one tool that moved
+# is #362's explore: its schema takes limit/offset (774 -> 958 B, +184 B); descriptions unchanged at 22,472 B, every other
+# schema unchanged (per-tool dump, 26c parent 0852bc0f vs the merged binary). 46,930 + 184 = 47,114, every byte attributed.
+# Headroom after this line: 36 B, the #214-sized margin.
+# RE-MEASURED 2026-10-10 (lane whereis-defs-fix fix round 2), CEILING UNMOVED: 46,930 -> 46,925 B. whereis's description says
+# what labels another ref's row now (a parser, not a lexical heuristic) in the same 701 characters — (1c) holds — and the
+# sentence it replaced carried an em dash, six bytes as JSON. Every other tool unchanged. Headroom after this line: 25 B.
+# RE-MEASURED 2026-10-10 (train 26c, whereis-defs-fix merged onto the 47,114 B tree), CEILING UNMOVED: 47,114 -> 47,109 B. Per-tool
+# JSON bytes, the train binary before the merge vs the merged one: whereis 1,689 -> 1,684 (the lane's -5), every other tool
+# identical. Headroom after this line: 41 B.
+# RE-ANCHORED 2026-10-10 (lane lego-transitive): 46,950 -> 47,134, measured 47,114 (from 46,930, 33 tools) = +184 B, EXACTLY
+# the two declared optional arguments `limit` and `offset` on ONE verb, `lego` — 92 B per property entry (the schema envelope
+# plus the description the contract obliges), the L-W `for` precedent. --lego joined cli.h's honorsPaging set (conditionally,
+# like --for) for its deeper implementor rows, so its twin must declare the window (mcpcontractcheck (G/M13)). A first draft
+# added a description clause (+59 B) and was removed rather than re-anchored around: prose never moves this ceiling, and the
+# answer's own legend defines transitive=/via=/depth= and the page. No other tool moved. Headroom after this line: 20 B.
+# RE-ANCHORED 2026-10-10 (lane whereis-lean fix round 1, review C1): 47,150 -> 47,240, measured 47,199 B (33 tools). whereis
+# declares `full_text` (the CLI --whereis-full-text twin, the replay its <t_cut next=> names): its schema 851 -> 941 B
+# (+90 B, the one property), its description unchanged at 701 B, every other tool identical (per-tool dump, base 4c38d363 vs
+# the lane binary). 47,109 + 90 = 47,199, every byte attributed. Headroom after this line: 41 B, unchanged.
+# RE-ANCHORED 2026-10-11 (train 27, the merged tree): 47,240 -> 47,420, measured 47,383 B (33 tools). Per-tool JSON bytes, the
+# train-26c head 4c38d363 vs the merged binary: lego 956 -> 1,140 (+184, lego-transitive's limit/offset) and whereis 1,684 ->
+# 1,774 (+90, whereis-lean's full_text); descriptions unchanged at 22,472 B, every other tool identical. 47,109 + 184 + 90 =
+# 47,383, every byte attributed. Headroom after this line: 37 B, the #214-sized margin.
+CEILING = 47420
 manifest = len( json.dumps( { "tools": tools }, separators = ( ",", ":" ) ) )
 descBytes   = sum( len( t[ "description" ] ) for t in tools )
 schemaBytes = sum( len( json.dumps( t[ "inputSchema" ], separators = ( ",", ":" ) ) ) for t in tools )
@@ -340,11 +370,15 @@ check( listingDesc.endswith( "default: more defs listed, else the shorter page" 
 changelog = open( os.path.join( ROOT, "CHANGELOG.md" ), encoding = "utf-8" ).read()
 _, _, afterHeading = changelog.partition( "## [Unreleased]" )
 unreleased = afterHeading.split( "\n## [", 1 )[ 0 ]  # [Unreleased]'s body, up to the next dated heading
-m = re.search( r"tools/list.? manifest grows [\d,]+[^\d]+([\d,]+) B", unreleased )
+claims = re.findall( r"tools/list.? manifest grows [\d,]+[^\d]+([\d,]+) B", unreleased )
+m = claims[ -1 ] if claims else None   # #362 round 4 (B5c): several [Unreleased] entries restate the figure
+                                       # (theirs pre-paging, ours the merged tree's). The LAST claim describes
+                                       # the current manifest; earlier ones are historical within the same
+                                       # mutable section, kept verbatim per review.
 if m is None:
     print( "  INFO  (1b) no 'tools/list manifest grows N -> N B' claim in CHANGELOG's [Unreleased] section (nothing to check)" )
 else:
-    claimed = int( m.group( 1 ).replace( ",", "" ) )
+    claimed = int( m.replace( ",", "" ) )
     check( claimed == manifest,
            "(1b) CHANGELOG's [Unreleased] manifest-growth claim (%d B) matches the live tools/list measurement (%d B)"
            % ( claimed, manifest ) )

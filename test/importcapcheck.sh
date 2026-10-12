@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# importcapcheck.sh — the gate for the shared import-capture vocabulary (issue #358), C-family slice.
+# importcapcheck.sh — the gate for the shared import-capture vocabulary (issue #358), C-family and Go slices.
 #
 # WHAT THIS PINS. `#include` / `#import` for c, cpp, objc (and the .h/.hpp/.cu/.cuh/.metal extensions
 # that ride those grammars) no longer come from a per-language extractor in src/ingest_relations.h. They
@@ -39,6 +39,20 @@
 #  13  no kParserVer bump is owed    — a cache written by a PRE-CHANGE binary is accepted and reads
 #                                    identically, which is the evidence the records did not change
 #                                    (RIPWIRE_BASE_BIN, the house name; SKIPs when unset, as on CI)
+#
+#
+# THE GO SLICE (arms 14-19, below the C-family arms). Go's `import_declaration` — single and grouped, aliased,
+# dot, blank, cgo `import "C"` — is captured as `@import.path` in queries/go/tags.scm and read by the ONE
+# DepDialect::Go normaliser in src/ingest_importcap.h; the walk in captureIncludes no longer runs for Go.
+#  14  the Go capture is COMPILED IN — `(import_declaration) @import.path` is in the binary's embedded tags.scm
+#  15  every Go form, exact rows — single/aliased/dot/blank/group/cgo/tab/semicolon/raw-string/UTF-8 cut/error
+#                                    recovery, pinned as the byte-for-byte rows the extractor emitted
+#  16  no widening                  — an import_declaration the grammar never makes a child of the file root
+#                                    (inside a function body) stays out, exactly as the walk left it
+#  17  resolution through imports   — a go.mod `replace` still maps an import onto a sibling root's package
+#                                    (single, aliased and grouped), and a bogus replace target removes the edge
+#  18  the use-site half            — `--uses=<last path element>` reports role="import" for a Go import
+#  19  Go cache + determinism       — warm == cold == --no-cache on --deps over the Go fixture
 #
 # Usage:  test/importcapcheck.sh
 #         RIPWIRE_BIN=asan/ripwire test/importcapcheck.sh
@@ -441,6 +455,514 @@ if cmp -s "$TMP/d1.xml" "$TMP/d2.xml"; then
     ok "deterministic (two --no-cache runs identical)"
 else
     no "non-deterministic output"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# JS/TS SLICE (DepDialect::Web) — TypeScript, TSX, JavaScript and the .astro frontmatter.
+#
+# WHAT THIS PINS. `import … from 'x'`, the re-exports (`export * from`, `export { a as b } from`,
+# `export type { T } from`), and the CommonJS / dynamic `require('x')` / `import('x')` no longer come from
+# captureIncludes' walk (directiveTargetOf's import_statement-source / export_statement / call_expression
+# branches). They come from the same `@import.path` name, three patterns per queries/{typescript,tsx,
+# javascript}/tags.scm, normalised by the DepDialect::Web arm of src/ingest_importcap.h. The EMITTED edges
+# are exactly the ones the walk emitted, for every spelling — and for every spelling the walk did NOT emit:
+#
+#   J1  the Web patterns are COMPILED IN, and the walk's TS/JS branches are GONE from src/
+#   J2  exact edge list, in source order, for .ts .js .tsx .mjs .cjs .jsx and the .astro frontmatter —
+#       ES default/named/namespace/side-effect/type imports, three re-export spellings, CommonJS in every
+#       container shape the walk entered (declaration, assignment, export, callback, await, if/try/for…)
+#   J3  THE NEGATIVES — the query matches ANY `x('s')` call at ANY depth; every `neg_*` specifier below is
+#       a shape the walk never turned into an edge (member callee, `.foo` chained on the call, ternary,
+#       array, two arguments, a comment before the string, template literal, computed, `require.resolve`,
+#       a `new` argument, TS `import x = require()`, a `declare module` body, a class method) and none may
+#       become one. The leading text gate (callee is `require`/`import`) and the reach rule are what hold.
+#   J4  the LAZY bit — a require()/import() written inside a function body is lazy="1" on --impact's import
+#       tier; a top-level one is lazy="0"; one file required both ways is lazy="0" (the pair rule)
+#   J5  the use-site half — --uses reports the import-role ref of a named import
+#   J6  the DEPTH BOUND on blocks — kept at 255 and 256 containers, cut AND announced at 257, as the walk did
+#   J7  the DELIBERATE disclosure differences (the two of the C-family arm 12c, same reason, plus a non-import under a too-deep nest)
+#   J8  cache round-trip, a pre-change binary's cache accepted (no kParserVer bump), determinism
+#
+# The expected lists are the SPECIFICATION and were read off the pre-change binary, never reasoned out: this
+# slice is a refactor, so main's set is the contract. The `neg_*` / `lazy_*` / `cjs_*` names say what each
+# edge (or non-edge) is, so a diff reads without opening the fixture.
+
+web_fixture_ts() { local W="$1"
+    cat > "$W/main.ts" <<'TS'
+import def from "./es_default";
+import { named1, named2 as alias2 } from "./es_named";
+import * as ns from "./es_namespace";
+import "./es_sideeffect";
+import type { T } from "./es_type_named";
+import type DefT from "./es_type_default";
+import { type U, V } from "./es_inline_type";
+import dflt, { n1 } from "./es_default_and_named";
+import json from "./es_import_attributes" with { type: "json" };
+export * from "./re_star";
+export { default } from "./re_default";
+export { default as D } from './re_default_as_single_quote';
+export * as hns from "./re_star_as";
+export { x as y } from "./re_named_as";
+export type { Z } from "./re_type";
+import eq = require("./neg_import_equals");
+import type eq2 = require("./neg_import_equals_type");
+export = ns;
+const r1 = require("./cjs_const");
+const { q1, q2 } = require("./cjs_destructured");
+var r2 = require('./cjs_var_single');
+require("./cjs_bare");
+module.exports = require("./cjs_module_exports");
+const dyn = await import("./dyn_await");
+const opt = require?.("./cjs_optional_call");
+const memb = require("./neg_member").foo;
+const tern = cond ? require("./neg_ternary") : null;
+const arr = [require("./neg_array")];
+const two = require("./neg_two_args", "./neg_second");
+const cm = require(/*c*/ "./neg_comment");
+const tpl = require(`./neg_template`);
+const nonlit = require(neg_variable);
+const other = foo.require("./neg_foo_require");
+const cat = require("./neg_concat" + sfx);
+const res = require.resolve("./neg_resolve");
+const nw = new Foo(require("./neg_new_arg"));
+const nest = foo(bar(require("./fn_arg_nested")));
+const th = import("./neg_dynamic_then").then(( m ) => m);
+const bang = !require("./neg_unary");
+function f() { return require("./lazy_function"); }
+const g2 = () => import("./lazy_arrow");
+class K { m() { return require("./neg_class_method"); } }
+const o = { get G() { return require("./lazy_getter"); } };
+if (x) { require("./if_then"); } else { require("./if_else"); }
+try { require("./try_body"); } catch (e) { require("./catch_body"); }
+for (;;) { require("./for_body"); }
+switch (x) { case 1: require("./switch_case"); }
+export default require("./export_default_require");
+export const ex = require("./export_const_require");
+export function ef() { return import("./export_fn_dynamic"); }
+foo(function () { require("./callback_fn"); });
+foo(() => require("./callback_arrow"), require("./callback_second"));
+const pe = (require("./paren_require"));
+const aw = await require("./await_require");
+label: require("./labeled");
+TS
+}
+web_fixture_js() { local W="$1"
+    cat > "$W/main.js" <<'JS'
+import def from "./es_default";
+import { named1, named2 as alias2 } from "./es_named";
+import * as ns from "./es_namespace";
+import "./es_sideeffect";
+export * from "./re_star";
+export * as hns from "./re_star_as";
+export { x as y } from "./re_named_as";
+const r1 = require("./cjs_const");
+const { q1, q2 } = require("./cjs_destructured");
+require("./cjs_bare");
+module.exports = require("./cjs_module_exports");
+const dyn = await import("./dyn_await");
+const memb = require("./neg_member").foo;
+const arr = [require("./neg_array")];
+const two = require("./neg_two_args", "./neg_second");
+const cm = require(/*c*/ "./neg_comment");
+const nonlit = require(neg_variable);
+function f() { return require("./lazy_function"); }
+const g2 = () => import("./lazy_arrow");
+class K { m() { return require("./neg_class_method"); } }
+exports.run = function () { return require("./lazy_exports_fn"); };
+JS
+}
+web_fixture_small() { local W="$1"   # .tsx .mjs .cjs .jsx and the .astro frontmatter
+    cat > "$W/neg.ts" <<'NEG'
+declare module "amb" { import q from "./neg_ambient"; }
+namespace NS { import w = require("./neg_ns_equals"); const z2 = require("./neg_ns_const"); }
+NEG
+    cat > "$W/comp.tsx" <<'TSX'
+import React from "react";
+import { Button } from "./tsx_button";
+export { Card } from "./tsx_card";
+export const View = () => <Button onClick={() => import("./tsx_lazy")}>{require("./neg_tsx_jsx_child")}</Button>;
+const side = require("./tsx_cjs");
+TSX
+    printf 'import m from "./mjs_import";\nexport * from "./mjs_reexport";\nconst c = require("./mjs_cjs");\n' > "$W/mod.mjs"
+    printf 'const a = require("./cjs_file");\nmodule.exports = { get b() { return require("./cjs_lazy"); } };\n' > "$W/mod.cjs"
+    printf 'import J from "./jsx_import";\nconst V = () => <J/>;\n' > "$W/view.jsx"
+    printf '%s\n' '---' 'import A from "./astro_import";' 'const m = require("./astro_require");' 'export * from "./astro_reexport";' '---' '<div>{A}</div>' > "$W/page.astro"
+}
+web_fixture_stubs() { local W="$1"
+    # every specifier above names a real file, so each edge RESOLVES and the lazy bit and --uses are observable
+    local spec
+    for spec in $(cat "$W"/main.ts "$W"/neg.ts "$W"/main.js "$W"/comp.tsx "$W"/mod.mjs "$W"/mod.cjs "$W"/view.jsx "$W"/page.astro \
+                  | grep -o '"\./[A-Za-z_0-9]*"\|'"'"'\./[A-Za-z_0-9]*'"'" | tr -d "\"'" | sort -u); do
+        printf 'export const %s = 1;\n' "${spec#./}" > "$W/${spec#./}.js"
+    done
+}
+web_fixture() {   # $1 = an empty directory
+    mkdir -p "$1"
+    web_fixture_ts "$1"; web_fixture_js "$1"; web_fixture_small "$1"; web_fixture_stubs "$1"
+}
+
+# The expected Include targets per file, in source order, as one space-separated line each — read off the
+# PRE-CHANGE binary on exactly this fixture. 40 / 15 / 4 / 3 / 2 / 1 / 3 edges.
+W_MAIN_TS='./es_default ./es_named ./es_namespace ./es_sideeffect ./es_type_named ./es_type_default ./es_inline_type ./es_default_and_named ./es_import_attributes ./re_star ./re_default ./re_default_as_single_quote ./re_star_as ./re_named_as ./re_type ./cjs_const ./cjs_destructured ./cjs_var_single ./cjs_bare ./cjs_module_exports ./dyn_await ./cjs_optional_call ./fn_arg_nested ./lazy_function ./lazy_arrow ./lazy_getter ./if_then ./if_else ./try_body ./catch_body ./for_body ./export_default_require ./export_const_require ./export_fn_dynamic ./callback_fn ./callback_arrow ./callback_second ./paren_require ./await_require ./labeled'
+W_MAIN_JS='./es_default ./es_named ./es_namespace ./es_sideeffect ./re_star ./re_star_as ./re_named_as ./cjs_const ./cjs_destructured ./cjs_bare ./cjs_module_exports ./dyn_await ./lazy_function ./lazy_arrow ./lazy_exports_fn'
+W_COMP_TSX='react ./tsx_button ./tsx_card ./tsx_cjs'
+W_MOD_MJS='./mjs_import ./mjs_reexport ./mjs_cjs'
+W_MOD_CJS='./cjs_file ./cjs_lazy'
+W_VIEW_JSX='./jsx_import'
+W_PAGE_ASTRO='./astro_import ./astro_require ./astro_reexport'
+
+WEB="$TMP/web"; web_fixture "$WEB"
+"$BIN" "$WEB" --deps --no-cache > "$TMP/web.deps.xml" 2> "$TMP/web.deps.err"
+web_incs(){ sed 's/<f /\n<f /g' "$TMP/web.deps.xml" | grep "^<f p=\"$1\"" | grep -o '<inc t="[^"]*"' | sed 's/<inc t="//; s/"$//' | tr '\n' ' ' | sed 's/ $//'; }
+
+# ── J1: the Web patterns are COMPILED IN, and the walk's TS/JS branches are gone ───────────────────────
+# `source: (string) @import.path` is the line two of the three patterns share (import_statement and
+# export_statement) in each of the three embedded query files; a pre-change binary carries none (measured: 0
+# vs 6). The C-family patterns never contain it, so unlike the C-family arm 1 this one is RED on a binary
+# without the JS/TS slice.
+WEB_PATTERNS=$(grep -ao 'source: (string) @import\.path' "$BIN" | wc -l | tr -d '[:space:]')
+if [ -n "$WEB_PATTERNS" ] && [ "$WEB_PATTERNS" -ge 6 ]; then
+    ok "J1: the JS/TS import patterns are in the binary's embedded tags.scm ($WEB_PATTERNS occurrences; 0 on a pre-change build)"
+else
+    no "J1: expected >= 6 occurrences of the JS/TS @import.path patterns in the binary, got '${WEB_PATTERNS:-none}'"
+fi
+# train 27: the walk's branch is matched with its language condition — `kindIs( t, "export_statement" )` alone also matches
+# ingest_relations.h baseDeclOf (lego-transitive: `export class X` is the declaration a base clause binds to), which is not the
+# walk. The full spelling is the line the walk held (main 0852bc0f: present; every tree since #358's JS/TS slice: absent).
+for gone in 'kindIs( t, "export_statement" ) && ( lang == Lang::TypeScript || lang == Lang::JavaScript )' 'target = jsModuleLoadTarget( n, src );'; do
+    if grep -rqF "$gone" "$ROOT/src"; then
+        no "J1: the walk's TS/JS branch \`$gone\` is still in src/ — it should have been removed with this language"
+    else
+        ok "J1: the walk's TS/JS branch is gone from src/ ($gone)"
+    fi
+done
+
+# ── J2 + J3: exact edge list per file, which also pins every negative ──────────────────────────────────
+WEB_BAD=0
+for pair in "main.ts:$W_MAIN_TS" "main.js:$W_MAIN_JS" "comp.tsx:$W_COMP_TSX" "mod.mjs:$W_MOD_MJS" \
+            "mod.cjs:$W_MOD_CJS" "view.jsx:$W_VIEW_JSX" "page.astro:$W_PAGE_ASTRO"; do
+    f=${pair%%:*}; want=${pair#*:}
+    got=$(web_incs "$f")
+    if [ -z "$got" ] || [ "$got" != "$want" ]; then
+        WEB_BAD=1
+        no "J2: $f Include targets differ from the pre-change set"
+        printf '    expected: %s\n    got:      %s\n' "$want" "${got:-<none>}"
+    fi
+done
+[ "$WEB_BAD" -eq 0 ] && ok "J2: exact Include set and order for .ts .js .tsx .mjs .cjs .jsx and the .astro frontmatter (68 edges)"
+NEG=$(grep -o '<inc t="[^"]*neg_[^"]*"' "$TMP/web.deps.xml" | wc -l | tr -d '[:space:]')
+EDGES=$(grep -o '<inc t=' "$TMP/web.deps.xml" | wc -l | tr -d '[:space:]')
+if [ "$NEG" = "0" ] && [ "${EDGES:-0}" -eq 68 ]; then
+    ok "J3: no neg_* specifier became an edge (the query is broader than a module load; the text gate and the reach rule hold)"
+else
+    no "J3: neg_* edges=${NEG:-?} (want 0), total edges=${EDGES:-?} (want 68)"
+fi
+
+# ── J4: the LAZY bit, re-derived from ancestry ────────────────────────────────────────────────────────
+# Include::isLazy came from captureIncludes' sticky `insideFn`; the tags pass has no walk frame, so
+# importContainerReach recomputes it from the captured call's ancestors. Observable one level up: --impact's
+# import tier prints lazy= per importer edge.
+LZ="$TMP/lz"; mkdir -p "$LZ"
+printf 'const eager = require("./eager");\nfunction later() { return require("./lazy_only"); }\nfunction both() { return require("./both"); }\nconst b2 = require("./both");\nmodule.exports = { later, both, eager, b2 };\n' > "$LZ/entry.js"
+for n in eager lazy_only both; do printf 'function %s_fn() { return 1; }\nmodule.exports = %s_fn;\n' "$n" "$n" > "$LZ/$n.js"; done
+LZ_BAD=0
+for pair in eager_fn:0 lazy_only_fn:1 both_fn:0; do
+    s=${pair%%:*}; want=${pair#*:}
+    got=$("$BIN" "$LZ" --impact="$s" --no-cache 2>/dev/null | grep -o '<f via="import" p="entry\.js" lazy="[01]"' | grep -o 'lazy="[01]"' | head -1)
+    if [ "$got" != "lazy=\"$want\"" ]; then LZ_BAD=1; no "J4: --impact=$s importer edge is ${got:-absent}, want lazy=\"$want\""; fi
+done
+[ "$LZ_BAD" -eq 0 ] && ok "J4: lazy bit — top-level require lazy=0, function-body require lazy=1, a file required both ways lazy=0"
+
+# ── J5: the use-site half ────────────────────────────────────────────────────────────────────────────
+WU=$("$BIN" "$WEB" --uses=es_named --no-cache 2>/dev/null | grep -o '<u role="import" p="main\.\(ts\|js\):2"' | wc -l | tr -d '[:space:]')
+if [ "${WU:-0}" -eq 2 ]; then
+    ok "J5: --uses reports the import-role ref of a named import in both main.ts:2 and main.js:2"
+else
+    no "J5: --uses=es_named import-role rows = ${WU:-?} (want 2)"
+fi
+
+# ── J6: the DEPTH BOUND, on nested blocks ───────────────────────────────────────────────────────────
+# `{ { … require('./deep') … } }` — each block is a statement_block, and the statement is an
+# expression_statement, so n blocks put the call under n+1 containers. The walk captured a directive under
+# exactly 256 containers and cut at 257; importContainerReach must agree. n = 254, 255 are kept; 256 is
+# cut and announced.
+WB="$TMP/wbound"
+web_bound(){ # $1=blocks
+    mkdir -p "$WB/$1"; printf 'export const deep = 1;\n' > "$WB/$1/deep.js"
+    local i=0
+    { while [ "$i" -lt "$1" ]; do printf '{'; i=$((i + 1)); done
+      printf ' require("./deep"); '
+      i=0; while [ "$i" -lt "$1" ]; do printf '}'; i=$((i + 1)); done; printf '\n'; } > "$WB/$1/a.js"
+}
+WB_BAD=0
+for n in 254 255 256; do
+    web_bound "$n"
+    e=$("$BIN" "$WB/$n" --deps    --no-cache 2>/dev/null | grep -o '<inc ' | wc -l | tr -d '[:space:]')
+    f=$("$BIN" "$WB/$n" --skipped --no-cache 2>/dev/null | grep -c 'why="extract-partial"' | tr -d '[:space:]' || true)
+    if [ "$n" -le 255 ]; then want_e=1; want_f=0; else want_e=0; want_f=1; fi
+    if [ "$e" != "$want_e" ] || [ "$f" != "$want_f" ]; then
+        WB_BAD=1
+        no "J6: $n nested blocks: edge=$e extract-partial=$f (want $want_e/$want_f)"
+    fi
+done
+[ "$WB_BAD" -eq 0 ] && ok "J6: depth bound — kept under 255 and 256 containers, cut AND announced under 257 (edges identical to the walk's)"
+
+# ── J7: the DELIBERATE disclosure differences, in both directions (the C-family arm 12c, for JS) ────
+# (i) QUIETER: `require('./deep')` is ITSELF a container, so the walk refused to descend into it from depth
+#     256 and announced, although the edge was kept and nothing was dropped. n=255 above is that shape: edge
+#     kept, and this binary says nothing because nothing was lost (the walk said extract-partial).
+# (ii) LOUDER: 300 blocks inside a class METHOD. The walk never entered the class (class_declaration is not
+#     an import container) so it said nothing; the ancestor loop reaches the bound first and announces. The
+#     safe direction — a floor that says so — and the same trade the C-family slice accepted.
+WL="$TMP/wloud"; mkdir -p "$WL"; printf 'export const deep = 1;\n' > "$WL/deep.js"
+{ printf 'class K { m() { '; i=0; while [ "$i" -lt 300 ]; do printf '{'; i=$((i + 1)); done
+  printf ' require("./deep"); '; i=0; while [ "$i" -lt 300 ]; do printf '}'; i=$((i + 1)); done; printf ' } }\n'; } > "$WL/a.js"
+LE=$("$BIN" "$WL" --deps    --no-cache 2>/dev/null | grep -o '<inc ' | wc -l | tr -d '[:space:]')
+LF=$("$BIN" "$WL" --skipped --no-cache 2>/dev/null | grep -c 'why="extract-partial"' | tr -d '[:space:]' || true)
+QF=$("$BIN" "$WB/255" --skipped --no-cache 2>/dev/null | grep -c 'why="extract-partial"' | tr -d '[:space:]' || true)
+if [ "$LE" = "0" ] && [ "$LF" = "1" ] && [ "$QF" = "0" ]; then
+    ok "J7: disclosure differences hold — silent when the edge was kept (255 blocks), loud when the bound cut an unreachable import (class method)"
+else
+    no "J7: class-method-under-300: edges=$LE partial=$LF (want 0/1); 255-blocks partial=$QF (want 0)"
+fi
+
+# (iii) QUIETER, and no import in the file at all: 300 nested blocks around `foo( "x" )` (a call the Web pattern
+#     captures and the text gate drops), and 300 nested #ifdef around `#pragma once` (captured by the C/C++
+#     preproc_call pattern, dropped by the #import gate). The walk announced on any too-deep CONTAINER, and the
+#     first version of this arm announced because the bound test ran before the text gate; both said "an import
+#     was cut" when nothing import-shaped existed. The text gate now runs first, so neither does.
+WQ="$TMP/wquiet"; mkdir -p "$WQ/js" "$WQ/c"
+{ i=0; while [ "$i" -lt 300 ]; do printf '{'; i=$((i + 1)); done
+  printf ' foo("x"); '; i=0; while [ "$i" -lt 300 ]; do printf '}'; i=$((i + 1)); done; printf '\n'; } > "$WQ/js/a.js"
+{ i=0; while [ "$i" -lt 300 ]; do printf '#ifdef G%s\n' "$i"; i=$((i + 1)); done
+  printf '#pragma once\n'; i=0; while [ "$i" -lt 300 ]; do printf '#endif\n'; i=$((i + 1)); done; } > "$WQ/c/a.c"
+QJ=$("$BIN" "$WQ/js" --skipped --no-cache 2>/dev/null | grep -c 'why="extract-partial"' | tr -d '[:space:]' || true)
+QC=$("$BIN" "$WQ/c"  --skipped --no-cache 2>/dev/null | grep -c 'why="extract-partial"' | tr -d '[:space:]' || true)
+if [ "$QJ" = "0" ] && [ "$QC" = "0" ]; then
+    ok "J7: no announcement when nothing import-shaped was cut (foo( \"x\" ) under 300 blocks, #pragma once under 300 #ifdef)"
+else
+    no "J7: non-import under a too-deep nest announced an import cut: js=$QJ c=$QC (want 0/0)"
+fi
+
+# ── J8: cache round-trip and a pre-change cache ─────────────────────────────────────────────────────
+WC="$TMP/web.cache.bin"
+"$BIN" "$WEB" --cache="$WC" --deps > "$TMP/web.cold.xml" 2>/dev/null
+"$BIN" "$WEB" --cache="$WC" --deps > "$TMP/web.warm.xml" 2>/dev/null
+if cmp -s "$TMP/web.cold.xml" "$TMP/web.warm.xml" && cmp -s "$TMP/web.cold.xml" "$TMP/web.deps.xml"; then
+    ok "J8: warm == cold == --no-cache on --deps for the JS/TS fixture (isLazy round-trips)"
+else
+    no "J8: JS/TS --deps differs between cold, warm and --no-cache"
+fi
+if [ -n "$BASE_BIN" ] && [ -x "$BASE_BIN" ]; then
+    WP="$TMP/web.pre.bin"; rm -f "$WP"
+    "$BASE_BIN" "$WEB" --cache="$WP" --deps >/dev/null 2>&1
+    cp "$WP" "$TMP/web.pre.bin.copy"
+    "$BIN" "$WEB" --cache="$WP" --deps > "$TMP/web.prewarm.xml" 2>/dev/null
+    if cmp -s "$TMP/web.prewarm.xml" "$TMP/web.deps.xml" && cmp -s "$WP" "$TMP/web.pre.bin.copy"; then
+        ok "J8: a pre-change binary's JS/TS cache is accepted unchanged and reads identically — no kParserVer bump is owed"
+    else
+        no "J8: a pre-change JS/TS cache reads differently or was rewritten — extraction output changed, kParserVer must be bumped"
+    fi
+else
+    skip "J8: pre-change-cache arm for JS/TS (set RIPWIRE_BASE_BIN=<path to a pre-change ripwire> to run it)"
+fi
+"$BIN" "$WEB" --no-cache --deps > "$TMP/web.d2.xml" 2>/dev/null
+if cmp -s "$TMP/web.deps.xml" "$TMP/web.d2.xml"; then
+    ok "J8: deterministic (two --no-cache JS/TS runs identical)"
+else
+    no "J8: non-deterministic JS/TS output"
+fi
+
+# THE GO SLICE (arms 14-19). Go's import_declaration rides `(import_declaration) @import.path` and the
+# DepDialect::Go normaliser; the Include target is the declaration CLAUSE, exactly as the removed walk branch
+# built it, so every row below is the byte-for-byte row the extractor emitted (read off the pre-change binary,
+# not predicted). A GROUPED import is ONE row whose text is the whole group cut at 96 bytes — resolve.h's
+# resolveGoImport documents that — and splitting it per spec would ADD rows, which is exactly what arm 15
+# would show as a diff.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+GO="$TMP/go"; mkdir -p "$GO/cmd" "$GO/pkg/util" "$GO/replaced"
+printf 'module example.com/app\n\ngo 1.21\n\nrequire example.com/ext v0.0.0\n\nreplace example.com/ext => ./replaced\n' > "$GO/go.mod"
+printf 'package ext\n\nfunc Ext() int { return 1 }\n'     > "$GO/replaced/ext.go"
+printf 'package util\n\nfunc Helper() int { return 2 }\n' > "$GO/pkg/util/util.go"
+cat > "$GO/main.go" <<'GOSRC'
+package main
+
+import "fmt"
+import f2 "os"
+import . "strings"
+import _ "embed"
+import (
+	"example.com/app/pkg/util"
+	alias "example.com/ext"
+	. "math"
+	_ "net/http/pprof"
+	"strconv" // trailing comment
+)
+
+import "C"
+
+func main() {
+	fmt.Println(util.Helper(), alias.Ext(), f2.Args, strconv.Itoa(1), ToUpper("x"), Abs(1))
+}
+GOSRC
+# a TAB after the keyword keeps the word `import` (the keyword is dropped at a SPACE); two spaces leave one
+# leading space; a trailing `;` is trimmed; a raw-string path keeps its backticks.
+printf 'package main\n\nimport\t"os"\nimport  "io";\nimport `raw/path`\n\nfunc t() { _ = os.Args }\n' > "$GO/cmd/tab.go"
+cat > "$GO/cmd/long.go" <<'GOSRC'
+package main
+
+import (
+	"github.com/very/long/module/path/that/goes/on/and/on/and/on/forever/and/ever/amen/pkg1"
+	"github.com/very/long/module/path/that/goes/on/and/on/and/on/forever/and/ever/amen/pkg2"
+)
+
+func l() {}
+GOSRC
+# error recovery: a bare `import` swallowing the next lines is still ONE import_declaration, and a broken
+# function header does not stop the next import being recovered.
+printf 'package main\n\nimport\nfunc b( {\nimport "after/error"\n' > "$GO/cmd/broken.go"
+printf 'package main\n\nfunc f( {\nimport "x"\n}\n' > "$GO/cmd/err.go"
+# the 96-byte cut lands mid multibyte sequence on purpose: the pre-change bytes are kept, not "fixed".
+printf 'package main\nimport "é世界/pkg"; import "z"\nimport ("é世界/pkg/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n)\n' > "$GO/cmd/utf.go"
+# a definition named like the last path element of utf.go's first import: --uses keys on an INDEXED name, so
+# arm 18 needs one (`fmt`, `os` have no definition in the tree and answer found=0).
+printf 'package main\n\nfunc pkg() {}\n' > "$GO/cmd/pkgdef.go"
+# arm 16's negative: an import inside a function body is not a file-scope declaration and was never an edge.
+printf 'package main\n\nfunc a() {\n\timport "inbody"\n}\n' > "$GO/cmd/nested.go"
+
+"$BIN" "$GO" --deps --no-cache > "$TMP/go.xml" 2>/dev/null
+grep -o '<f p="[^"]*"\|<inc t="[^"]*"' "$TMP/go.xml" > "$TMP/go.rows"
+cat > "$TMP/go.want" <<'GOWANT'
+<f p="cmd/broken.go"
+<inc t="b( {&#10;import &quot;after/error&quot;"
+<f p="cmd/err.go"
+<inc t="&quot;x&quot;"
+<f p="cmd/long.go"
+<inc t="(&#10;&#9;&quot;github.com/very/long/module/path/that/goes/on/and/on/and/on/forever/and/ever/amen/pkg1&quot;&#10;&#9;&quot;gi"
+<f p="cmd/tab.go"
+<inc t="import&#9;&quot;os&quot;"
+<inc t=" &quot;io&quot;"
+<inc t="`raw/path`"
+<f p="cmd/utf.go"
+<inc t="&quot;é世界/pkg&quot;"
+<inc t="&quot;z&quot;"
+<inc t="(&quot;é世界/pkg/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+<f p="main.go"
+<inc t="&quot;fmt&quot;"
+<inc t="f2 &quot;os&quot;"
+<inc t=". &quot;strings&quot;"
+<inc t="_ &quot;embed&quot;"
+<inc t="(&#10;&#9;&quot;example.com/app/pkg/util&quot;&#10;&#9;alias &quot;example.com/ext&quot;&#10;&#9;. &quot;math&quot;&#10;&#9;_ &quot;net/http/pprof&quot;&#10;&#9;&quot;strconv&quot;"
+<inc t="&quot;C&quot;"
+GOWANT
+
+# ── arm 14: the Go capture is COMPILED IN ─────────────────────────────────────────────────────────────
+# Same reasoning as arm 1: a --match probe feeds its own query to the astQuery engine and passes on a
+# pre-change binary, so the capture is looked for where it lives — the tags.scm embedded in the image. The
+# C-family arm above already finds the literal `import.path`; THIS literal is Go's own pattern, absent from
+# a build whose Go imports still come from the walk.
+if grep -qa '(import_declaration) @import\.path' "$BIN"; then
+    ok "Go: (import_declaration) @import.path is in the binary's embedded tags.scm"
+else
+    no "Go: the import_declaration capture is not compiled into this binary — Go imports are not on the shared vocabulary"
+fi
+
+# ── arm 15: every Go form, exact rows ─────────────────────────────────────────────────────────────────
+if cmp -s "$TMP/go.rows" "$TMP/go.want"; then
+    ok "Go: 21 rows byte-exact — single, aliased, dot, blank, group (cut at 96 bytes), cgo \"C\", tab, semicolon, raw string, UTF-8 cut, error recovery"
+else
+    no "Go: Include rows differ from the pre-change extractor's (diff expected vs got below)"
+    diff "$TMP/go.want" "$TMP/go.rows" | sed 's/^/      /' | head -30
+fi
+# each form NAMED, so a red arm says which spelling a regression lost rather than "rows differ".
+for form in 'fmt&quot;' 'f2 &quot;os&quot;' '\. &quot;strings&quot;' '_ &quot;embed&quot;' '&quot;C&quot;' 'alias &quot;example\.com/ext&quot;'; do
+    grep -q "<inc t=\"[^\"]*$form" "$TMP/go.xml" || no "Go: the form [$form] has no Include row"
+done
+# the group is ONE row: three spec lines of main.go's block must not each become a row of their own.
+if [ "$(grep -c '<inc t="(&#10;&#9;&quot;example' "$TMP/go.xml")" -eq 1 ] \
+   && ! grep -q '<inc t="&quot;strconv&quot;"' "$TMP/go.xml" \
+   && ! grep -q '<inc t="&quot;example.com/app/pkg/util&quot;"' "$TMP/go.xml"; then
+    ok "Go: a grouped import block is ONE Include (its specs are not split into rows)"
+else
+    no "Go: a grouped import block was split into per-spec rows — that ADDS edges, a behaviour change"
+fi
+
+# ── arm 16: no widening ───────────────────────────────────────────────────────────────────────────────
+if grep -q 'inbody' "$TMP/go.xml"; then
+    no "Go: an import inside a function body became an edge (the capture is wider than the walk it replaced)"
+else
+    ok "Go: an import inside a function body stays out (reach re-derived from ancestry, as for C-family)"
+fi
+if ! grep -q 'cmd/nested.go' "$TMP/go.xml"; then
+    ok "Go: the function-body file carries no Include row at all"
+else
+    no "Go: cmd/nested.go gained an Include row"
+fi
+
+# ── arm 17: resolution through imports — go.mod `replace` onto a sibling root ─────────────────────────
+# The module-path resolution the Include feeds (resolve.h resolveGoImport) reads the FIRST QUOTED TOKEN of the
+# clause, so a single, an aliased and a GROUPED import of the same package all resolve to its one file. Two
+# importing roots, one providing root; svc/pkg/handle.go must have afferent=2.
+WS="$TMP/gows"; mkdir -p "$WS/svc/pkg" "$WS/cli" "$WS/cli2" "$WS/clibogus"
+printf 'package pkg\n\nfunc GoHandle() int { return 1 }\n' > "$WS/svc/pkg/handle.go"
+printf 'module example.com/svc\n\ngo 1.21\n'               > "$WS/svc/go.mod"
+printf 'module example.com/cli\n\ngo 1.21\n\nreplace example.com/svc => ../svc\n'   > "$WS/cli/go.mod"
+printf 'package main\n\nimport svc "example.com/svc/pkg"\n\nfunc runGoMain() int { return svc.GoHandle() }\n' > "$WS/cli/main.go"
+printf 'module example.com/cli2\n\ngo 1.21\n\nreplace example.com/svc => ../svc\n'  > "$WS/cli2/go.mod"
+printf 'package main\n\nimport (\n\tsvc "example.com/svc/pkg"\n\t"fmt"\n)\n\nfunc runGrouped() int { fmt.Println(); return svc.GoHandle() }\n' > "$WS/cli2/main.go"
+printf 'module example.com/clibogus\n\ngo 1.21\n\nreplace example.com/svc => ../svc/NONEXISTENT\n' > "$WS/clibogus/go.mod"
+printf 'package main\n\nimport svc "example.com/svc/pkg"\n\nfunc runBogus() int { return svc.GoHandle() }\n' > "$WS/clibogus/main.go"
+"$BIN" "$WS/svc" "$WS/cli" "$WS/cli2" --deps --no-cache > "$TMP/gows.xml" 2>/dev/null
+if grep -q '<f p="svc/pkg/handle.go" afferent="2"' "$TMP/gows.xml"; then
+    ok "Go: a go.mod replace resolves a single/aliased import AND a grouped one onto the sibling root's package (afferent=2)"
+else
+    no "Go: replace-based resolution changed — svc/pkg/handle.go afferent != 2: $(grep -o '<f p="svc/pkg/handle.go"[^>]*' "$TMP/gows.xml")"
+fi
+# the evidence-driven negative: the same import under a replace whose target does not exist resolves to nothing.
+"$BIN" "$WS/svc" "$WS/clibogus" --deps --no-cache > "$TMP/gobogus.xml" 2>/dev/null
+if grep -q '<inc t="svc &quot;example.com/svc/pkg&quot;"' "$TMP/gobogus.xml" && ! grep -q '<f p="svc/pkg/handle.go" afferent="[1-9]' "$TMP/gobogus.xml"; then
+    ok "Go: a replace to a missing directory leaves the import captured but UNRESOLVED (evidence-driven, not name-driven)"
+else
+    no "Go: bogus replace — the import is not captured, or it resolved: $(grep -o '<f p="svc/pkg/handle.go"[^>]*' "$TMP/gobogus.xml")"
+fi
+
+# ── arm 18: the use-site half ─────────────────────────────────────────────────────────────────────────
+GUSES="$("$BIN" "$GO" --uses=pkg --no-cache 2>/dev/null)"
+if printf '%s' "$GUSES" | grep -q '<u role="import" p="cmd/utf.go:2"'; then
+    ok "Go: --uses=pkg reports the import site cmd/utf.go:2 with role=\"import\" (the ABS-3 half survived the move)"
+else
+    no "Go: --uses lost the import-role use-site ref for a Go import: $(printf '%s' "$GUSES" | grep -o '<u [^>]*' | head -3)"
+fi
+
+# ── arm 19: Go cache round-trip + determinism ────────────────────────────────────────────────────────
+GCACHE="$TMP/go.cache"
+"$BIN" "$GO" --cache="$GCACHE" --deps > "$TMP/gocold.xml" 2>/dev/null
+"$BIN" "$GO" --cache="$GCACHE" --deps > "$TMP/gowarm.xml" 2>/dev/null
+if cmp -s "$TMP/gocold.xml" "$TMP/gowarm.xml" && cmp -s "$TMP/gocold.xml" "$TMP/go.xml"; then
+    ok "Go: warm == cold == --no-cache on --deps (the Go Include round-trip is byte-identical)"
+else
+    no "Go: --deps differs between cold, warm and --no-cache"
+fi
+if [ -n "${BASE_BIN:-}" ] && [ -x "${BASE_BIN:-}" ]; then
+    "$BASE_BIN" "$GO" --deps --no-cache > "$TMP/gobase.xml" 2>/dev/null
+    if cmp -s "$TMP/gobase.xml" "$TMP/go.xml"; then
+        ok "Go: --deps over the fixture is byte-identical to the pre-change binary's"
+    else
+        no "Go: --deps differs from the pre-change binary — dependency output changed"
+    fi
+    # and the Go half of arm 13: a cache written by the pre-change binary over the Go fixture is ACCEPTED
+    # (file untouched) and reads identically, so no kParserVer bump is owed for the Go records either.
+    GPRE="$TMP/gopre.bin"; rm -f "$GPRE"
+    "$BASE_BIN" "$GO" --cache="$GPRE" --deps >/dev/null 2>&1
+    cp "$GPRE" "$TMP/gopre.bin.copy"
+    "$BIN" "$GO" --cache="$GPRE" --deps > "$TMP/gopre.xml" 2>/dev/null
+    if cmp -s "$TMP/gopre.xml" "$TMP/go.xml" && cmp -s "$GPRE" "$TMP/gopre.bin.copy"; then
+        ok "Go: a pre-change binary's cache over the Go fixture is accepted untouched and reads identically — no kParserVer bump owed"
+    else
+        no "Go: a pre-change cache reads differently or was rewritten — extraction output changed, kParserVer must be bumped"
+    fi
+else
+    skip "Go: pre-change comparison (set RIPWIRE_BASE_BIN=<pre-change ripwire> to run it)"
 fi
 
 # ── well-formed XML ───────────────────────────────────────────────────────────────────────────────────

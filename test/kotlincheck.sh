@@ -276,11 +276,11 @@ HELPER_CALLERS="$( "$BIN" "$FIX" --callers="JavaBridge.java:helper" --no-cache 2
 # `JavaBridge.helper(5)` reaches Java's JavaBridge.helper — proven, no via= — while the BARE ambiguousCall() keeps the
 # own-language-first rule (it never reaches Java's helper) and binds Kotlin's Extra.helper only HEDGED: a top-level
 # function's bare call reaches an object's member through an import, which this file does not have.
-echo "$UTIL_HELPER_CALLERS" | grep -q 'count="1"' && echo "$UTIL_HELPER_CALLERS" | grep -q '<s t="fn" n="ambiguousCall" p="[^"]*" via="name"/>' \
+echo "$UTIL_HELPER_CALLERS" | grep -q 'count="1"' && echo "$UTIL_HELPER_CALLERS" | grep -q '<s t="fn" n="ambiguousCall" p="[^"]*" via="name" sites_at="Greeter.kt:30"/>' \
     && ! echo "$UTIL_HELPER_CALLERS" | grep -q 'n="useJavaHelper"' \
     && ok "--callers=Util.kt:helper: count=1 — the bare ambiguousCall, hedged via=\"name\"; the qualified useJavaHelper no longer lands here" \
     || no "--callers=Util.kt:helper: expected only the bare call, hedged: $( echo "$UTIL_HELPER_CALLERS" | grep -oE '<callers [^>]*>|<s [^>]*/>' | tr '\n' ' ' )"
-echo "$HELPER_CALLERS" | grep -q 'count="1"' && echo "$HELPER_CALLERS" | grep -q '<s t="fn" n="useJavaHelper" p="[^"]*"/>' \
+echo "$HELPER_CALLERS" | grep -q 'count="1"' && echo "$HELPER_CALLERS" | grep -q '<s t="fn" n="useJavaHelper" p="[^"]*" sites_at="Greeter.kt:21"/>' \
     && ok "--callers=JavaBridge.java:helper: count=1 — the qualified useJavaHelper, proven by its class-name receiver; the bare site never reaches Java (own language first)" \
     || no "--callers=JavaBridge.java:helper: expected exactly the qualified useJavaHelper, proven: $( echo "$HELPER_CALLERS" | grep -oE '<callers [^>]*>|<s [^>]*/>' | tr '\n' ' ' )"
 
@@ -876,7 +876,8 @@ for L in split flat; do
     # reading the Java interface. Implementors of that definition are the read: collapsed as a declaration, it had none.
     LEGO="$( "$BIN" "$BL/$L" --lego=Marker --no-cache 2>/dev/null )"
     if echo "$LEGO" | grep -q "<iface n=\"Marker\" p=\"${K}Models.kt\""; then
-        echo "$LEGO" | grep -q "<impl n=\"Tagged\" p=\"${K}Models.kt\"" \
+        # lane lego-transitive (S2): a targeted --lego impl row now carries its definition line, p="FILE:LINE"
+        echo "$LEGO" | grep -q "<impl n=\"Tagged\" p=\"${K}Models.kt:[0-9][0-9]*\"" \
             && ok "$L: the bodyless Kotlin interface Marker survives the collapse, and Tagged implements it" \
             || no "$L: the bodyless Kotlin interface Marker has no Tagged implementor — it was collapsed as a declaration: $( echo "$LEGO" | grep -oE '<(iface|impl) [^>]*>' | tr '\n' ' ' )"
     else
