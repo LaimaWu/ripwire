@@ -1098,6 +1098,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
     // file — unbounded storm). Deterministic for a fixed HEAD, so every per-file probe below is identical.
     // Mined ONCE here even when the budget forces several render passes below (each pass is pure re-emission).
     const auto        coSets   = gitCommitFileSets( root, ing, "18 months ago", 30, nullptr, onlyRoot );
+    CoCouplingCache   coCoupling( ing );   // prcontext-hoist: ONE include-coupling build for every file and every render pass
     const std::string coWindow = defaultWindowLabel( root, "18mo" );   // F2: <cochange commits=> had no window to read it against
 
     // A4-P?: mine file OWNERSHIP ONCE too (was gitFileAuthors(root, ing, f) — one `git log` popen PER changed
@@ -1278,7 +1279,7 @@ inline int writePrContext( std::FILE* out, const std::string& root, const Ingest
             // (6) co-change partners NOT in the diff (gitmine). Degrades to an empty list without git. A4-P10:
             // answered from the once-mined `coSets` (no per-file `git log` popen).
             std::uint32_t                commits = 0;
-            const std::vector<CoPartner> partners = cochangePartners( ing, ing.files[f], commits, coSets );
+            const std::vector<CoPartner> partners = cochangePartners( ing, ing.files[f], commits, coSets, nullptr, &coCoupling );
             std::vector<const CoPartner*> outside;
             for( const CoPartner& p : partners )
             {
