@@ -20,7 +20,8 @@
 //          2026-09-28 on a 160,000-file synthetic C tree, the ingest's own tail (dedup, symbols, attribution) grows the
 //          footprint ~1.5x past the moment the parse stops, and with a 4/5 line every stop the 5 s cadence caught
 //          became a hard stop after the ingest instead of a partial answer.
-//   hard   at the limit itself, checked between phases (main.cpp) and before each MCP tool call: no partial answer.
+//   hard   at the limit itself, checked between phases (main.cpp; --quality-delta=A..B, which dispatches before main()'s
+//          ingest, between its own: verbs_quality.h refPairOverHardLimit) and before each MCP tool call: no partial answer.
 //   pressure: the OS signal (os::mem_pressure) at "critical" stops the crawl or the parse too — but only once this
 //          process holds at least max( 256 MiB, limit/8 ), so a small run is never cut because something ELSE is
 //          using the machine. It never causes a hard stop.
@@ -122,7 +123,7 @@ enum class TripAt : std::uint8_t
     Pressure,   // pressure:N — the Nth crawl entry reads as critical OS memory pressure
     Parse,      // parse:N    — exactly the first N files of the parse order are parsed: memory_parsed=N
     Request,    // request:N  — the Nth MCP tool call reads as over the hard limit
-    Hard,       // hard:N     — the Nth hard-line reading (overHardLimit: between CLI phases, per workspace root) reads as over
+    Hard,       // hard:N     — the Nth hard-line reading (overHardLimit: between CLI phases, per workspace root, between --quality-delta=A..B's phases) reads as over
     Eager,      // eager:1    — no five-second time gate: every guarded unit takes a REAL footprint reading (only stricter)
 };
 struct TestTrip

@@ -39,6 +39,18 @@ releases all three before it extracts the target; `RefPairDelta` no longer has a
 nine `--quality-delta` range argvs on this repository compared between the 0.6.7 binary and this one (stdout, stderr
 and exit code).
 
+### Fixed — the memory guard's hard line never ran inside `--quality-delta=A..B` (#387)
+
+The hard line was read only between `main()`'s phases, before any verb ran, and the range form did all of its
+indexing after them: two commit ingests, two graphs and a snapshot with nothing but the time-gated soft watch inside
+each ingest. A cut ingest was not refused either. The range form scored the partial tree, printed the answer, and the
+backstop then exited 5 with a line saying the answer above might be wrong. Now the range form reads the hard line after
+each commit's ingest (before its graph is built) and after its graph, and after the base snapshot both before and after
+the base index is released. Over the line it exits 5 with one line naming the phase. A commit ingest the guard cut is
+refused (exit 5, one line, nothing on stdout), before the next commit is extracted. Gates: `memguardcheck` (B22) drives
+each of the six readings through `RIPWIRE_TEST_MEMGUARD=hard:N` and counts the ingests
+that ran; (B23) cuts the base ingest with `parse:3` and `crawl:20`.
+
 ### Changed — Python imports use the shared capture vocabulary (#358, Python slice)
 
 Python dependency targets now come from `@import.path`; named clauses and their optional local

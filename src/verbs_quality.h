@@ -86,6 +86,47 @@ struct RefPairDelta
     const rw::quality::RefTree& target() const noexcept { return targetTree; }
 };
 
+// #387: what loadRefPairDelta prints and returns when one commit's tree could not be scored. A memory-guard stop is named
+// as one — exit 5 and the guard's own line — because "could not materialize or parse" would send the reader looking for
+// a broken commit; anything else is the environment, exit 1, with the sha named.
+int refPairLoadRefusal( rw::quality::RefTreeLoad load, const rw::quality::RefTree& tree, const std::string& sha, std::string_view side )
+{
+    using namespace rw;
+    if( load == quality::RefTreeLoad::OverHardLimit )
+    {
+        memguard::answerStops();
+        DISCLOSE( Diagnostics::answerRefused, "--quality-delta=A..B: over the memory guard's hard limit after a commit's ingest, before its graph — exit 5, one stderr line" );
+        rw::emitTo( stderr, "ripwire: {}\n", memguard::hardStopLine( "ingest of the " + std::string( side ) + " commit" ) );
+        return 5;
+    }
+    if( load == quality::RefTreeLoad::MemoryStopped )
+    {
+        memguard::answerStops();   // this refusal answers for the stop the commit's ingest recorded
+        DISCLOSE( Diagnostics::answerRefused, "--quality-delta=A..B: the memory guard cut a commit's ingest, so nothing is scored — exit 5, one stderr line" );
+        rw::emitTo( stderr, "ripwire: {}\n", memguard::verbRefusalLine( tree.ing.memoryStop, "--quality-delta=A..B" ) );
+        return 5;
+    }
+    rw::emitTo( stderr, "ripwire: --quality-delta: could not materialize or parse the tree at {}\n", sha.c_str() );
+    return 1;
+}
+
+// #387: the hard line between the range form's phases. main() checks it after the working-tree ingest and graph build,
+// which this form now dispatches before, so these are its only readings, in order: after each commit's ingest
+// (loadRefTree, before the graph is built) and after its graph; for the base, after its snapshot and again once its index
+// is released. Over the line nothing answers: exit 5 and one line naming the phase.
+bool refPairOverHardLimit( std::string_view phase )
+{
+    using namespace rw;
+    if( !memguard::overHardLimit() )
+    {
+        return false;
+    }
+    memguard::answerStops();
+    DISCLOSE( Diagnostics::answerRefused, "--quality-delta=A..B: over the memory guard's hard limit between its phases — exit 5, one stderr line" );
+    rw::emitTo( stderr, "ripwire: {}\n", memguard::hardStopLine( phase ) );
+    return true;
+}
+
 // Resolve the spec and materialize both sides. Returns an EXIT CODE on any refusal or environment failure
 // (already reported on stderr), or nullopt when `out` is ready to compare. Splitting user error from
 // environment failure is the same line --dmm's handler draws: a revision that does not resolve is a typo the
@@ -140,21 +181,41 @@ std::optional<int> loadRefPairDelta( const std::string& root, std::string_view s
         // index, graph and temp dir are released here, before the target tree is materialized.
         quality::TmpTreeGuard baseGuard;
         quality::RefTree      baseTree;
-        if( !quality::loadRefTree( root, ref.baseSha, cfg.excludes, cfg.maxFileBytes, "qdpair-base", baseGuard, baseTree ) )
+        const quality::RefTreeLoad baseLoad = quality::loadRefTree( root, ref.baseSha, cfg.excludes, cfg.maxFileBytes, "qdpair-base", baseGuard, baseTree );
+        if( baseLoad != quality::RefTreeLoad::Loaded )
         {
-            rw::emitTo( stderr, "ripwire: --quality-delta: could not materialize or parse the tree at {}\n", ref.baseSha.c_str() );
-            return 1;
+            return refPairLoadRefusal( baseLoad, baseTree, ref.baseSha, "base" );
+        }
+        if( refPairOverHardLimit( "graph of the base commit" ) )
+        {
+            return 5;
         }
         out.baseSnapshot = quality::computeSnapshot( baseTree.ing, baseTree.g, baseTree.root );
+        if( refPairOverHardLimit( "snapshot of the base commit" ) )
+        {
+            return 5;
+        }
     }
-    if( !quality::loadRefTree( root, ref.targetSha, cfg.excludes, cfg.maxFileBytes, "qdpair-target", out.targetGuard, out.targetTree ) )
+    if( !out.sameRef && refPairOverHardLimit( "base commit's snapshot, with its index released" ) )
     {
-        rw::emitTo( stderr, "ripwire: --quality-delta: could not materialize or parse the tree at {}\n", ref.targetSha.c_str() );
-        return 1;
+        return 5;
+    }
+    const quality::RefTreeLoad targetLoad = quality::loadRefTree( root, ref.targetSha, cfg.excludes, cfg.maxFileBytes, "qdpair-target", out.targetGuard, out.targetTree );
+    if( targetLoad != quality::RefTreeLoad::Loaded )
+    {
+        return refPairLoadRefusal( targetLoad, out.targetTree, ref.targetSha, "target" );
+    }
+    if( refPairOverHardLimit( "graph of the target commit" ) )
+    {
+        return 5;
     }
     if( out.sameRef )
     {
         out.baseSnapshot = quality::computeSnapshot( out.targetTree.ing, out.targetTree.g, out.targetTree.root );
+        if( refPairOverHardLimit( "snapshot of the base commit" ) )
+        {
+            return 5;
+        }
     }
 
     // Both values are bare 40-char object names straight out of `rev-parse --verify` (resolveRefSpec accepts
