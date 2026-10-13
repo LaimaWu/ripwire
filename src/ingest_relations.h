@@ -670,7 +670,9 @@ struct DefBodyNodes
 inline DefBodyNodes defBodyNodeOf( TSNode roleNode, TSNode nameNode, SymKind kind, Lang lang ) noexcept
 {
     TSNode body = fieldChild( roleNode, NodeField::Body );
-    if( ts_node_is_null( body ) && kind == SymKind::Macro )
+    // A C `#define`'s replacement is its `value` field. Clojure names EVERY list child `value:`, so there the field's
+    // first child is the `defmacro` head itself and the signature would end before the name (review N1 on #349).
+    if( ts_node_is_null( body ) && kind == SymKind::Macro && lang != Lang::Clojure )
     {
         body = fieldChild( roleNode, NodeField::Value );
     }

@@ -21,12 +21,19 @@ names = {s.get('n').split('/')[0] for s in rows}
 expected = {'sample.core', 'sample.browser', 'sample.shared', 'sample.tasks', 'answer', 'cached',
             'square', 'secret', 'unless', 'area', 'Greeter', 'Person', 'Counter', 'quoted', 'interop',
             'run', 'render', 'shared', 'task', 'quoted-holder', 'route', 'spaced', 'commented',
-            'gap-call', 'comment-call', 'comment-holder', 'join', 'qualified-join'}
+            'gap-call', 'comment-call', 'comment-holder', 'join', 'qualified-join', 'documented'}
 assert names == expected, (names, expected)
 by = {s.get('n').split('/')[0]: s for s in rows}
 for name, kind in {'answer':'var', 'cached':'var', 'square':'fn', 'unless':'macro',
                    'Greeter':'iface', 'Person':'cls', 'Counter':'cls'}.items():
     assert by[name].get('t') == kind, (name, by[name].attrib)
+# Review N1: a defmacro's signature includes its name. The grammar names every list child `value:`, and the C
+# `#define` fallback once read that field as the macro body, so the span ended before the name and every
+# defmacro row carried extent_suspect="name". Near misses: a defn, and a macro with a docstring and attr-map.
+for name in ('unless', 'documented', 'square', 'secret'):
+    assert by[name].get('extent_suspect') is None, (name, by[name].attrib)
+assert by['documented'].get('t') == 'macro', by['documented'].attrib
+print('PASS defmacro and defn rows carry no extent_suspect (signature includes the name)')
 def calls(name):
     return {c.get('n').split('/')[0] for c in by[name].iter('c')}
 assert 'square' in calls('secret'), calls('secret')

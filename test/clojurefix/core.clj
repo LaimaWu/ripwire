@@ -7,6 +7,7 @@
 (defn qualified-join [] (str/join "," ["a" "b"]))
 (defn- secret [x] (square x))
 (defmacro unless [pred & body] `(if (not ~pred) ~@body))
+(defmacro documented "doc" {:added "1"} [x] (list 'square x))
 (defmulti area :shape)
 (defmethod area :circle [{:keys [radius]}] (square radius))
 (defmethod route [:get :admin] [request] request)
