@@ -30,8 +30,9 @@
 // ~15 MB per 5 s), and then at most once per five seconds: the crawl looks every 1,024 entries, the parse on each file
 // completion, and only the thread that wins the time slot pays the syscall. A CLI run shorter than five seconds reads
 // the footprint three times — at ingest start, after the ingest and after the graph build (the hard line) — and an MCP
-// tool call once more; none of it changes a byte of output unless a line is crossed (test/memguardcheck.sh (C)). No
-// thread, no timer, no signal handler.
+// tool call once more. The `--quality-delta=A..B` range form reads it up to 2 + 6 times: two outside its commit
+// ingests and the six hard-line readings around them. None of it changes a byte of output unless a line is crossed
+// (test/memguardcheck.sh (C)). No thread, no timer, no signal handler.
 //
 // THE STOP. A soft stop sets an atomic flag the crawl loop and the parse workers read before the next unit of work,
 // records WHY through DISCLOSE on IngestResult::memoryStop, and lets ingest() finish with what it has: the crawl keeps

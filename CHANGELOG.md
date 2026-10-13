@@ -49,7 +49,8 @@ each commit's ingest (before its graph is built) and after its graph, and after 
 the base index is released. Over the line it exits 5 with one line naming the phase. A commit ingest the guard cut is
 refused (exit 5, one line, nothing on stdout), before the next commit is extracted. Gates: `memguardcheck` (B22) drives
 each of the six readings through `RIPWIRE_TEST_MEMGUARD=hard:N` and counts the ingests
-that ran; (B23) cuts the base ingest with `parse:3` and `crawl:20`.
+that ran; (B23) cuts the base ingest with `parse:3` and `crawl:20`. The delta passes after the last reading,
+`computeDelta` and its clone passes, are not read, so a run close to the limit can still finish somewhat over it.
 
 ### Changed — Python imports use the shared capture vocabulary (#358, Python slice)
 

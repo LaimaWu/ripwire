@@ -127,6 +127,54 @@ bool refPairOverHardLimit( std::string_view phase )
     return true;
 }
 
+// #387: the base commit lives only in this function. Its snapshot is everything the comparison needs from it, so its
+// index, graph and temp dir are released on return, before the target tree is materialized. Exit code on a refusal.
+std::optional<int> scoreBaseCommit( const std::string& root, const std::string& sha, const rw::Config& cfg, rw::quality::Snapshot& out )
+{
+    using namespace rw;
+    quality::TmpTreeGuard      baseGuard;
+    quality::RefTree           baseTree;
+    const quality::RefTreeLoad load = quality::loadRefTree( root, sha, cfg.excludes, cfg.maxFileBytes, "qdpair-base", baseGuard, baseTree );
+    if( load != quality::RefTreeLoad::Loaded )
+    {
+        return refPairLoadRefusal( load, baseTree, sha, "base" );
+    }
+    if( refPairOverHardLimit( "graph of the base commit" ) )
+    {
+        return 5;
+    }
+    out = quality::computeSnapshot( baseTree.ing, baseTree.g, baseTree.root );
+    if( refPairOverHardLimit( "snapshot of the base commit" ) )
+    {
+        return 5;
+    }
+    return std::nullopt;
+}
+
+// #387: the target commit, held in `out` for computeDelta. For A==A it is also the floor, so its snapshot is taken here.
+std::optional<int> loadTargetCommit( const std::string& root, const std::string& sha, const rw::Config& cfg, RefPairDelta& out )
+{
+    using namespace rw;
+    const quality::RefTreeLoad load = quality::loadRefTree( root, sha, cfg.excludes, cfg.maxFileBytes, "qdpair-target", out.targetGuard, out.targetTree );
+    if( load != quality::RefTreeLoad::Loaded )
+    {
+        return refPairLoadRefusal( load, out.targetTree, sha, "target" );
+    }
+    if( refPairOverHardLimit( "graph of the target commit" ) )
+    {
+        return 5;
+    }
+    if( out.sameRef )
+    {
+        out.baseSnapshot = quality::computeSnapshot( out.targetTree.ing, out.targetTree.g, out.targetTree.root );
+        if( refPairOverHardLimit( "snapshot of the base commit" ) )
+        {
+            return 5;
+        }
+    }
+    return std::nullopt;
+}
+
 // Resolve the spec and materialize both sides. Returns an EXIT CODE on any refusal or environment failure
 // (already reported on stderr), or nullopt when `out` is ready to compare. Splitting user error from
 // environment failure is the same line --dmm's handler draws: a revision that does not resolve is a typo the
@@ -177,45 +225,19 @@ std::optional<int> loadRefPairDelta( const std::string& root, std::string_view s
     out.sameRef = ( ref.baseSha == ref.targetSha );
     if( !out.sameRef )
     {
-        // #387: the base tree lives only in this scope. Its snapshot is everything the comparison needs from it, so its
-        // index, graph and temp dir are released here, before the target tree is materialized.
-        quality::TmpTreeGuard baseGuard;
-        quality::RefTree      baseTree;
-        const quality::RefTreeLoad baseLoad = quality::loadRefTree( root, ref.baseSha, cfg.excludes, cfg.maxFileBytes, "qdpair-base", baseGuard, baseTree );
-        if( baseLoad != quality::RefTreeLoad::Loaded )
+        if( const std::optional<int> refused = scoreBaseCommit( root, ref.baseSha, cfg, out.baseSnapshot ) )
         {
-            return refPairLoadRefusal( baseLoad, baseTree, ref.baseSha, "base" );
+            return refused;
         }
-        if( refPairOverHardLimit( "graph of the base commit" ) )
-        {
-            return 5;
-        }
-        out.baseSnapshot = quality::computeSnapshot( baseTree.ing, baseTree.g, baseTree.root );
-        if( refPairOverHardLimit( "snapshot of the base commit" ) )
+        // #387: the base tree's index, graph and temp dir were released when scoreBaseCommit returned.
+        if( refPairOverHardLimit( "base commit's snapshot, with its index released" ) )
         {
             return 5;
         }
     }
-    if( !out.sameRef && refPairOverHardLimit( "base commit's snapshot, with its index released" ) )
+    if( const std::optional<int> refused = loadTargetCommit( root, ref.targetSha, cfg, out ) )
     {
-        return 5;
-    }
-    const quality::RefTreeLoad targetLoad = quality::loadRefTree( root, ref.targetSha, cfg.excludes, cfg.maxFileBytes, "qdpair-target", out.targetGuard, out.targetTree );
-    if( targetLoad != quality::RefTreeLoad::Loaded )
-    {
-        return refPairLoadRefusal( targetLoad, out.targetTree, ref.targetSha, "target" );
-    }
-    if( refPairOverHardLimit( "graph of the target commit" ) )
-    {
-        return 5;
-    }
-    if( out.sameRef )
-    {
-        out.baseSnapshot = quality::computeSnapshot( out.targetTree.ing, out.targetTree.g, out.targetTree.root );
-        if( refPairOverHardLimit( "snapshot of the base commit" ) )
-        {
-            return 5;
-        }
+        return refused;
     }
 
     // Both values are bare 40-char object names straight out of `rev-parse --verify` (resolveRefSpec accepts
