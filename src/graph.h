@@ -2620,8 +2620,8 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 //   (3) a split with one evidenced arm is kept whole, false arms included;
 //   (4) an object handed to the caller with no mention of its class in the file (an unannotated parameter, dependency
 //       injection, a factory return) no longer reaches the in-repo method by name; the call is declined and counted;
-//   (5) Python `from m import Cls as Alias` records no original name (capturePythonImportBinds keeps the module only),
-//       so an aliased class is no evidence until the extractor records it (a parser-version change); likewise a TS
+//   (5) Python `from m import Cls as Alias` records no original name (emitCapturedPythonImportBind keeps the module
+//       only), so an aliased class is no evidence until the extractor records it (a parser-version change); likewise a TS
 //       namespace import used as `ns.Cls.m()` and a CJS `const X = require( … )` that the export table does not pin;
 //   (6) languages without a table keep the ladder unchanged, each for the reason externalnames.h records: Java,
 //       Kotlin, C#, Swift, Rust and ObjC (the extractor records no declared parameter or local type there — an ObjC

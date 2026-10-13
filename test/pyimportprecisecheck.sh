@@ -144,7 +144,11 @@ printf 'import a as aa\nfrom pkg.mod import run as r\n' >"$PC/typing.pyi"
 printf 'x = (import unreachable)\ndef okay():\n    import a\n' >"$PC/broken.py"
 
 # This inspects the EMBEDDED vocabulary; --match alone also matches on a pre-change binary.
-if grep -qa 'import\.names' "$BIN" && grep -qa 'import\.alias' "$BIN"; then
+# The needles are the PYTHON PATTERNS themselves, not the bare capture names: v0.6.7's binary already
+# carries `@import.names` and `@import.alias` in the Go tags.scm comment that explains their absence there,
+# so a bare-name grep passed on a binary without the Python captures (review N2 on #382). Measured: both
+# needles are absent from the v0.6.7 main binary (0e0f67c7) and the v0.6.5 release asset; present here.
+if grep -qaF 'name: (dotted_name) @import.names' "$BIN" && grep -qaF 'alias: (identifier) @import.alias' "$BIN"; then
     ok '#358: Python import.names and import.alias vocabulary is compiled in'
 else
     no '#358: Python import.names/import.alias vocabulary is absent from this binary'

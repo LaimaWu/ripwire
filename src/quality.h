@@ -2268,7 +2268,9 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 31;   // MUST equal ingest.cpp's kCacheVersion (gated); 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 167;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 171;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 171 = 2026-10-13 (PR #349 Clojure lands above main's 167 / rich tag 168 and the
+                                                          //   branch's own 169 / rich tag 170; see the kParserVer note)
                                                           // 167 = 2026-10-11 (train 27 release: lane fix27-cpp-subscript's 166 renumbered above the lane build;
                                                           //   see the kParserVer note)
                                                           // 164 = 2026-10-11 (train 27: lego-transitive's 162 renumbered above every live build, up to 162 / rich tag 163;

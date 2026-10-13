@@ -1184,6 +1184,7 @@ inline constexpr ExtractFamily kExtractFamilyByLang[] = {
     ExtractFamily::GoRustSwiftDart,  // Dart
     ExtractFamily::JvmDotNet,        // Kotlin
     ExtractFamily::Scripting,        // GDScript
+    ExtractFamily::Scripting,        // Clojure
 };
 static_assert( std::size( kExtractFamilyByLang ) == kLangCount, "one profile family row per Lang, in enumerator order" );
 static_assert( kExtractFamilyByLang[ std::size_t( Lang::Kotlin ) ] == ExtractFamily::JvmDotNet && kExtractFamilyByLang[ std::size_t( Lang::C ) ] == ExtractFamily::CFamily,
@@ -2024,6 +2025,17 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             {
                 continue;
             }
+            if( le.lang == Lang::Clojure )
+            {
+                if( !clojureKeepCapture( roleNode, isDef, src ) )
+                {
+                    continue;
+                }
+                if( isDef )
+                {
+                    kind = clojureDefinitionShape( roleNode, src ).kind;
+                }
+            }
             if( le.lang == Lang::Elixir && refCapSv == "reference.bare" )
             {
                 // Bare pipe targets have their own capture; every other bare name needs lexical variable exclusion.
@@ -2228,10 +2240,12 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 const std::uint32_t endRow   = ts_node_end_point( spanThroughBody ? body : defNode ).row;   // LB-E: rows through the sibling block
                 d.loc = ( endRow >= startRow ) ? ( endRow - startRow + 1u ) : 1u;
             }
-            d.params    = fnOrMethod ? ( le.lang == Lang::Elixir ? elixirParams( defNode, src ) : paramCountOf( metricNode, literalBound ) ) : std::uint16_t( 0 );
+            d.params    = fnOrMethod ? ( le.lang == Lang::Elixir ? elixirParams( defNode, src )
+                                                   : le.lang == Lang::Clojure ? clojureParams( defNode, src )
+                                                                              : paramCountOf( metricNode, literalBound ) ) : std::uint16_t( 0 );
             // LB-E: a testmacroblock's parameter surface is the MACRO's business, not visible here — claim
             // inexact so the resolver's arity narrowing never trusts params=0 on a test-title symbol.
-            d.arityExact = ( fnOrMethod && !isTestMacroBlock ) ? std::uint8_t( cc_paramArityExact( metricNode, le.lang, kind ) ? 1 : 0 ) : std::uint8_t( 0 );   // B2.2
+            d.arityExact = ( fnOrMethod && !isTestMacroBlock && le.lang != Lang::Clojure ) ? std::uint8_t( cc_paramArityExact( metricNode, le.lang, kind ) ? 1 : 0 ) : std::uint8_t( 0 );   // B2.2
             // L8: the in-file test-scope bit, for EVERY kind (a `#[cfg(test)] mod` and a `class TestFoo`
             // are themselves symbols, and dropping the members while keeping the shell would be a worse
             // answer than either). Runs on defNode, whose ancestors are the enclosing scopes.
@@ -2426,6 +2440,10 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 r.lang      = le.lang;
                 r.role      = isImportRef ? RefRole::Import : RefRole::Call;   // ABS-3: @reference.call is a call use-site; @reference.import a using-decl re-export
                 r.name      = finalSegment( nameTxt );
+                if( le.lang == Lang::Clojure )
+                {
+                    r.qualifier = nodeFieldText( ts_node_parent( nameNode ), NodeField::Namespace, src );
+                }
                 if( le.lang == Lang::Elixir )
                 {
                     r.qualifier = elixir.scopeOf( roleNode );
