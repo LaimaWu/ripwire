@@ -111,10 +111,55 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 echo "legendcoveragecheck: BIN=$BIN"
 
+# THE CALL RUNNER both sweeps below share (2026-10-13, lane/legendcov-speed). The roster is ~170 independent read-only
+# calls, and the gate used to run them ONE AT A TIME: 394 s on the dev machine, and over its 1200 s budget (rc=124) on the
+# macOS plain shard twice in three days. Two of them (--pr-context=HEAD~30, ±budget) are ~40% of that on their own — the
+# cost is inside ripwire (prcontext/cochangePartners), not here. So the calls run on a small pool, the heaviest submitted
+# FIRST so they overlap everything else instead of finishing last. Nothing a row asserts changed: every row still runs its
+# own command, once, and is judged in roster order exactly as before. Why concurrency is safe here: no roster call writes
+# into the corpus (the roster comment says so), and the warm-by-default TMPDIR cache publishes by exclusive temp file +
+# rename (ingest_cache.h saveCache), one blob per (root, lean/rich) — two calls racing on a cold root both parse and the
+# last rename wins with an equal blob. The ONE exception is --doctor, whose answer reads that cache directory: it runs
+# serially after the pool has drained, as it did before (late, on a warm and quiescent cache dir).
+# Every call now has a budget (LEGENDCOV_CALL_TIMEOUT, default 600 s), and a call that times out or dies on a signal
+# is a TIMEOUT/ERROR row of its own — never an empty document judged as "silent", and never a partial one judged at all
+# (CHECKLIST 14). A non-zero EXIT (--quality-delta 2, --doctor 1) is a verdict the verb returns, judged as before.
+# LEGENDCOV_JOBS=1 restores the serial run.
+cat > "$TMP/lcrun.py" <<'PYR'
+import os, subprocess, concurrent.futures as cf
+JOBS         = max( 1, int( os.environ.get( "LEGENDCOV_JOBS" ) or min( 4, os.cpu_count() or 1 ) ) )
+CALL_TIMEOUT = max( 1, int( os.environ.get( "LEGENDCOV_CALL_TIMEOUT" ) or 600 ) )
+def call( BIN, args ):
+    """-> (stdout, None) on a completed call (any exit code), (None, reason) on a timeout / signal / no start."""
+    try:
+        p = subprocess.run( [ BIN ] + args, capture_output = True, timeout = CALL_TIMEOUT )
+    except subprocess.TimeoutExpired:
+        return None, f"TIMEOUT (no answer within {CALL_TIMEOUT}s)"
+    except OSError as e:
+        return None, f"ERROR (could not start: {e})"
+    if p.returncode < 0:
+        return None, f"ERROR (killed by signal {-p.returncode})"
+    return p.stdout, None
+def runAll( BIN, argvs, first = lambda a: False, last = lambda a: False ):
+    """Run argvs[i] once each; -> list of (stdout, reason) by index. `first` calls are submitted ahead of the rest;
+    `last` calls run serially once the pool has drained."""
+    res    = [ None ] * len( argvs )
+    pooled = sorted( ( i for i, a in enumerate( argvs ) if not last( a ) ), key = lambda i: not first( argvs[ i ] ) )
+    with cf.ThreadPoolExecutor( JOBS ) as ex:
+        futs = { ex.submit( call, BIN, argvs[ i ] ): i for i in pooled }
+        for f in cf.as_completed( futs ): res[ futs[ f ] ] = f.result()
+    for i, a in enumerate( argvs ):
+        if last( a ): res[ i ] = call( BIN, a )
+    return res
+def isDoctor( a ): return "--doctor" in a
+PYR
+
 python3 - "$BIN" "$ROOT" "$BASELINE" "$TMP" <<'PY' > "$TMP/out" 2>"$TMP/pyerr"
 import subprocess, re, sys, os
 
 BIN, ROOT, BASELINE, TMP = sys.argv[1:5]
+sys.path.insert( 0, TMP )
+from lcrun import runAll, isDoctor, JOBS, CALL_TIMEOUT
 SMALL = os.path.join( ROOT, "src" )
 
 # The roster: one runnable invocation per first-screen shape. Value-taking verbs get a symbol that exists in
@@ -374,9 +419,16 @@ def legendOf( doc, anyRoot = False ):
 def mentioned( a, legend ): return re.search( r'\b' + re.escape( a ) + r'\b', legend ) is not None
 def defined  ( a, legend ): return re.search( r'(?<![\w:.-])' + re.escape( a ) + r'\s*=', legend ) is not None
 
-emitted, gapsMentioned, gapsDefined, silent, table = set(), set(), set(), [], []
-for name, args in ROSTER:
-    doc = subprocess.run( [ BIN ] + args, capture_output = True ).stdout
+# The heaviest calls go first (measured 2026-10-13, dev machine: --pr-context=HEAD~30 ±budget 50-105 s, --quality-delta
+# 12-16 s, --naming-calibration 9 s, --merge-scout / --dmm 5-8 s; everything else <= 5 s). Scheduling only — no verdict.
+HEAVY   = ( "--pr-context=HEAD~30", "--quality-delta", "--naming-calibration", "--merge-scout", "--dmm" )
+RESULTS = runAll( BIN, [ args for _, args in ROSTER ],
+                  first = lambda a: any( x.startswith( HEAVY ) for x in a ), last = isDoctor )
+
+emitted, gapsMentioned, gapsDefined, silent, table, callfail = set(), set(), set(), [], [], []
+for ( name, args ), ( doc, err ) in zip( ROSTER, RESULTS ):
+    if err is not None:
+        callfail.append( f"{name}: {err}: ripwire {' '.join( args )}" );  continue
     if not doc.strip():
         silent.append( name );  table.append( ( name, 0, [], [] ) );  continue
     isDefault = name.endswith( "-default" )
@@ -430,6 +482,7 @@ writeLines( "definedby", ( base & emitted ) - gapsDefined )       # (B1) the leg
 writeLines( "gone",      base - emitted )                         # (B2) the verb no longer emits it
 writeLines( "notnested", gapsMentioned - gapsDefined )            # (D) must be empty by construction
 writeLines( "silent",    silent )
+writeLines( "callfail",  callfail )                               # TIMEOUT/ERROR rows fail on their own
 writeLines( "defaultgaps", defaultGaps )                          # (G) fails
 with open( os.path.join( TMP, "defaultcount" ), "w" ) as f: f.write( f"{len( defaultRows )} {defaultKeys}\n" )
 closed = len( ( base & emitted ) - gapsDefined ) + len( base - emitted )
@@ -443,6 +496,14 @@ PY
 
 if [ -s "$TMP/pyerr" ]; then no "the sweep itself failed: $( head -c 300 "$TMP/pyerr" )"; echo "$fail" >/dev/null; fi
 cat "$TMP/out"
+
+# A roster call that TIMED OUT or died on a signal has no document to judge: it is named here as what it is, and the gate
+# fails on it — it is neither "silent" (C) nor a document with no gaps (A)/(G).
+if [ -s "$TMP/callfail" ]; then
+    while IFS= read -r l; do no "$l"; done <"$TMP/callfail"
+elif [ ! -f "$TMP/callfail" ]; then
+    no "the roster sweep did not record its call outcomes — no verdict below can be trusted"
+fi
 
 # (A) the ratchet: no NEW undefined attribute on any first screen.
 if [ -s "$TMP/new" ]; then
@@ -589,7 +650,20 @@ def legendOf( doc ):
     return lead.decode( 'utf-8', 'replace' )
 
 def defined( a, legend ): return re.search( r'(?<![\w:.-])' + re.escape( a ) + r'\s*=', legend ) is not None
-def doc    ( args ):      return subprocess.run( [ BIN ] + args, capture_output = True ).stdout
+
+# The nine calls below (3 dialects x TIGHT/WIDE/MARGIN) run up front on the shared pool; doc() serves them. A call that
+# timed out or died has NO document: doc() raises, and the dialect's verdict is that TIMEOUT/ERROR line — never the
+# "note ABSENT" an empty string would otherwise read as.
+sys.path.insert( 0, TMP )
+from lcrun import runAll
+class CallFailed( Exception ): pass
+DIALECTS = ( ( "full", [ "--legend=full" ] ), ( "compact", [ "--legend=compact" ] ), ( "default", [] ) )
+ARGVS    = [ [ SMALL, QUERY, b ] + extra for _, extra in DIALECTS for b in ( TIGHT, WIDE, MARGIN ) ]
+DOCS     = { tuple( a ): r for a, r in zip( ARGVS, runAll( BIN, ARGVS ) ) }
+def doc( args ):
+    out, err = DOCS[ tuple( args ) ]
+    if err is not None: raise CallFailed( f"{err}: ripwire {' '.join( args )}" )
+    return out
 
 def attrsOf( d ):
     seen, order = {}, []
@@ -601,9 +675,13 @@ def attrsOf( d ):
     return order, seen
 
 bad, checked, entered, left, census = [], 0, [], [], []
-for dialect, extra in ( ( "full", [ "--legend=full" ] ), ( "compact", [ "--legend=compact" ] ), ( "default", [] ) ):
-    dt          = doc( [ SMALL, QUERY, TIGHT ] + extra )
-    tight, wide = legendOf( dt ), legendOf( doc( [ SMALL, QUERY, WIDE ] + extra ) )
+for dialect, extra in DIALECTS:
+    try:
+        dt, dw, dm = ( doc( [ SMALL, QUERY, b ] + extra ) for b in ( TIGHT, WIDE, MARGIN ) )
+    except CallFailed as e:
+        bad.append( f"{dialect}: {e}" )
+        continue
+    tight, wide = legendOf( dt ), legendOf( dw )
     mt, mw      = NOTE.search( tight ), NOTE.search( wide )
     if not mt:
         bad.append( f"{dialect}: the dropped-legend note is ABSENT at {TIGHT} — the probe no longer climbs rung zero, so this arm checks nothing; re-anchor the budget" )
@@ -615,7 +693,7 @@ for dialect, extra in ( ( "full", [ "--legend=full" ] ), ( "compact", [ "--legen
     # climb rung zero. This is the arm that would have caught the old 1300 on the machine that chose it —
     # a probe one step from the rung's top edge passes locally and fails wherever the charged bytes differ,
     # and the checkout path length alone is enough to move them.
-    if not NOTE.search( legendOf( doc( [ SMALL, QUERY, MARGIN ] + extra ) ) ):
+    if not NOTE.search( legendOf( dm ) ):
         bad.append( f"{dialect}: the note is present at {TIGHT} but ABSENT at {MARGIN} — the probe is within 200 tokens of the rung's TOP edge, so it no longer fires on a document any smaller (a shorter checkout path is enough). Re-anchor TIGHT to the middle of the measured band, do not widen a tolerance" )
         continue
     names = sorted( set( NAME.findall( mt.group( 0 ) ) ) )
