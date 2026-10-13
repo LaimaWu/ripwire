@@ -33,6 +33,22 @@ fresh/warm output and, when `RIPWIRE_BASE_BIN` is supplied, acceptance of a pris
 without rewriting it.
 
 
+### Fixed — on Linux the memory guard read only the resident set, while the cgroup limit kills on the cgroup's charge (#387)
+
+The guard's default limit already came from the cgroup v2 `memory.max` of ripwire's own leaf, but its readings came
+from `/proc/self/statm`: this process's resident pages. The OOM killer acts on what the leaf is charged for, which also
+counts every other process in the leaf. When the leaf has a finite `memory.max`, the guard now measures the larger of
+the resident set and the leaf's unreclaimable charge: `memory.current` less reclaimable page cache (`memory.stat`
+`file` minus `shmem`). Page cache is left out because the kernel drops it before it kills; #387's reporter saw about
+4.2 GB of it under `--quality-delta`, from the two extracted commit trees. A leaf with no limit, a limit on an ancestor
+cgroup, and cgroup v1 are unchanged: the resident set alone. Gate: `memguardcheck` (B24), which needs a leaf with a
+`memory.max` of its own: it runs in a 1 GiB child of a delegated parent cgroup, or in a transient systemd user scope,
+so no other gate's charge decides it and its 320 MiB counts against no other gate; it skips by name elsewhere. A sibling holding 320 MiB of anonymous
+memory puts the leaf over `--max-memory=256M` (exit 5; the 0.6.7 rule answers, exit 0), and 320 MiB of page cache
+does not (exit 0). `--help` says what is measured, and the MCP refusal at the hard line names the cgroup, not this
+server, when the cgroup's charge is the larger reading: restarting the server does not help there.
+
+
 ## [0.6.7] — 2026-10-11
 
 ### Fixed — `--impact`: a selector matching several definitions keeps the `via="name"` hedge in its per-file rollup

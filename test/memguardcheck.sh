@@ -708,6 +708,90 @@ else
     no "(B12b) stderr: $( grep '^ripwire:' "$TMP/b12.err" | head -c 250 )"
 fi
 
+# (B24) #387: in a cgroup v2 leaf with a finite memory.max, the guard reads the leaf's unreclaimable charge as well as this
+#       process's resident set, because the OOM killer acts on the leaf. A sibling process in the same leaf holds 320 MiB
+#       of anonymous memory, so the leaf is past a 256M limit while ripwire's own resident set is far under it: the hard
+#       line stops the run (exit 5). Then the same leaf holds 320 MiB of page cache instead, which the kernel can drop:
+#       the run answers (exit 0). RED on 0.6.7 for the first half (statm only: exit 0).
+#   ISOLATION. The arm runs in a cgroup of its own, a 1 GiB leaf holding nothing but this arm's processes, so another
+#       gate's charge cannot decide it and its 320 MiB cannot count against another gate's leaf. Two ways to get one:
+#       a child of this shell's parent cgroup, when that parent is delegated to this user (cgroup.procs writable, the
+#       memory controller in its cgroup.subtree_control), or a `systemd-run --user --scope` with MemoryMax. Anywhere
+#       else (most CI runners, a container without a delegated cgroup, macOS) the arm SKIPs by name.
+b24_body="$TMP/b24body.sh"
+cat >"$b24_body" <<'B24'
+set -u
+BIN="$1"; FX="$2"; W="$3"; fail=0
+ok(){ printf '  PASS  %s\n' "$*"; }
+no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
+cg="/sys/fs/cgroup$( sed -n 's/^0:://p' /proc/self/cgroup | head -1 )"; cg="${cg%/}"
+max="$( cat "$cg/memory.max" 2>/dev/null )"; cur0="$( cat "$cg/memory.current" 2>/dev/null )"
+if ! printf '%s' "$max" | grep -qE '^[0-9]+$' || ! printf '%s' "$cur0" | grep -qE '^[0-9]+$' || [ "$cur0" -ge $(( 64 * 1024 * 1024 )) ]; then
+    no "(B24) premise: the isolated leaf $cg has no finite memory.max ($max) or is not empty enough (memory.current=$cur0)"
+    exit 1
+fi
+cg_stat(){ awk -v k="$1" '$1==k { print $2 }' "$cg/memory.stat"; }
+python3 -c 'import sys, time
+b = bytes( range( 256 ) ) * ( 320 * 4096 )
+sys.stdout.write( "held\n" ); sys.stdout.flush(); time.sleep( 120 )' >"$W/b24.hold" &
+holder=$!
+trap 'kill "$holder" 2>/dev/null' EXIT
+for _ in $( seq 1 100 ); do grep -q held "$W/b24.hold" 2>/dev/null && break; sleep 0.1; done
+cur1="$( cat "$cg/memory.current" )"
+"$BIN" "$FX" --no-cache --max-memory=256M >"$W/b24a.out" 2>"$W/b24a.err"; rc=$?
+kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+if [ $(( cur1 - cur0 )) -lt $(( 300 * 1024 * 1024 )) ]; then
+    no "(B24) premise: the sibling's 320 MiB did not reach the leaf's memory.current (grew $(( ( cur1 - cur0 ) / 1048576 )) MiB) — the arm proves nothing"
+elif [ "$rc" = 5 ] && [ ! -s "$W/b24a.out" ] && grep -q '^ripwire: memory limit reached during the ingest (limit 256M, from --max-memory)' "$W/b24a.err"; then
+    ok "(B24) an isolated leaf holding 320 MiB of anonymous memory beside ripwire is over a 256M limit: exit 5 at the hard line"
+else
+    no "(B24) leaf +$(( ( cur1 - cur0 ) / 1048576 )) MiB anonymous, --max-memory=256M: rc=$rc stderr: $( grep '^ripwire:' "$W/b24a.err" | head -c 200 )"
+fi
+reclaim0=$(( $( cg_stat file ) - $( cg_stat shmem ) ))
+dd if=/dev/zero of="$W/b24.cache" bs=1M count=320 2>/dev/null && cat "$W/b24.cache" >/dev/null
+reclaim1=$(( $( cg_stat file ) - $( cg_stat shmem ) ))
+cur2="$( cat "$cg/memory.current" )"
+"$BIN" "$FX" --no-cache --max-memory=256M >"$W/b24b.out" 2>"$W/b24b.err"; rc=$?
+rm -f "$W/b24.cache"
+if [ $(( reclaim1 - reclaim0 )) -lt $(( 200 * 1024 * 1024 )) ]; then
+    printf '  SKIP  (B24) the 320 MiB file did not stay in the leaf'"'"'s reclaimable page cache (file - shmem grew %s MiB): its filesystem is not charged here\n' "$(( ( reclaim1 - reclaim0 ) / 1048576 ))"
+elif [ "$cur2" -le $(( 256 * 1024 * 1024 )) ]; then
+    printf '  SKIP  (B24) the leaf charge with the page cache held is %s MiB, not above the 256M limit: a guard counting page cache would not be caught\n' "$(( cur2 / 1048576 ))"
+elif [ "$rc" = 0 ] && [ -s "$W/b24b.out" ] && ! grep -q '^ripwire: memory' "$W/b24b.err"; then
+    ok "(B24) the same leaf holding $(( ( reclaim1 - reclaim0 ) / 1048576 )) MiB of reclaimable page cache is not over the limit: the run answers"
+else
+    no "(B24) reclaimable page cache counted against the limit: rc=$rc stderr: $( grep '^ripwire:' "$W/b24b.err" | head -c 200 )"
+fi
+exit "$fail"
+B24
+b24_how="" b24_cg=""
+b24_own="$( sed -n 's/^0:://p' /proc/self/cgroup 2>/dev/null | head -1 )"
+if [ -n "$b24_own" ] && [ "$b24_own" != "/" ] && command -v python3 >/dev/null 2>&1; then
+    b24_parent="/sys/fs/cgroup${b24_own%/*}"
+    if [ -w "$b24_parent/cgroup.procs" ] && grep -qw memory "$b24_parent/cgroup.subtree_control" 2>/dev/null \
+       && mkdir "$b24_parent/ripwire-memguardcheck-$$" 2>/dev/null; then
+        b24_cg="$b24_parent/ripwire-memguardcheck-$$"
+        if echo $(( 1024 * 1024 * 1024 )) >"$b24_cg/memory.max" 2>/dev/null; then
+            b24_how="delegated child cgroup $b24_cg"
+        else
+            rmdir "$b24_cg" 2>/dev/null; b24_cg=""
+        fi
+    fi
+    if [ -z "$b24_how" ] && command -v systemd-run >/dev/null 2>&1 && systemd-run --user --scope --quiet true >/dev/null 2>&1; then
+        b24_how="systemd-run --user --scope"
+    fi
+fi
+mkdir -p "$TMP/b24"
+if [ -n "$b24_cg" ]; then
+    ( echo "$BASHPID" >"$b24_cg/cgroup.procs" 2>/dev/null || { printf '  FAIL  (B24) could not move into %s\n' "$b24_cg"; exit 1; }
+      exec bash "$b24_body" "$BIN" "$FX" "$TMP/b24" ) || fail=1
+    rmdir "$b24_cg" 2>/dev/null || no "(B24) the arm's cgroup $b24_cg was left behind"
+elif [ -n "$b24_how" ]; then
+    systemd-run --user --scope --quiet -p MemoryMax=1G -p MemorySwapMax=0 -- bash "$b24_body" "$BIN" "$FX" "$TMP/b24" || fail=1
+else
+    printf '  SKIP  (B24) no isolated cgroup v2 leaf to run in: neither a delegated parent cgroup (cgroup.procs writable, memory in cgroup.subtree_control) nor systemd-run --user, or no python3 (own leaf=%s)\n' "${b24_own:-none}"
+fi
+
 echo "=== (C) a default run is byte-identical to the guard made huge ==="
 for tree in "$FX" "$ROOT/test/fixture"; do
     "$BIN" "$tree" --no-cache >"$TMP/c_def.out" 2>&1
