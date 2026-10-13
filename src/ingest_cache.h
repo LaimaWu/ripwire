@@ -320,10 +320,12 @@ constexpr std::uint32_t kCacheVersion = 31;           // 31: train 27 — lane l
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 158;          // PR #349 provisional, per maintainer guidance 2026-10-12
-                                                      // Clojure grammar/query/extraction and qualified-call namespace.
-                                                      // The integration train assigns the final version when this PR lands;
-                                                      // this provisional value need not track main. kCacheVersion stays main's 31.
+constexpr std::uint32_t kParserVer    = 171;          // bump on any grammar/.scm/extraction change
+                                                      // 171 = 2026-10-13 (PR #349 lands, @tag-und-nacht): Clojure grammar, tags.scm and extraction
+                                                      //   (ingest_clojure.h) and the qualified-call namespace in Reference::qualifier. The branch built
+                                                      //   156, 158 and 169 (rich file tag 170); main is 167 (rich file tag 168). 171, not 168: a lean 168
+                                                      //   would read main's rich 167 blobs as its own; not 169/170: the branch's own 169 build and its
+                                                      //   rich tag. Rich file tag 172. kCacheVersion stays 31.
                                                       // 167 = 2026-10-11 (train 27 release): the fix27-cpp-subscript extraction below, renumbered above the
                                                       //   lane build's 166 (rich file tag 167 there), so no cache a lane build wrote is read as this release's.
                                                       //   Rich file tag 168. No other extraction change; kCacheVersion stays 31.

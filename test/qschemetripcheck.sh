@@ -34,6 +34,11 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-13, PR #349 lands (maintainer renumber commit on the contributor's branch): RE-DERIVED with UPDATE_GOLDEN=1.
+#   The only watched text that moved is the kParserVer declaration (and its mirror): provisional 158 -> 171. The branch
+#   built 156, 158 and 169 (rich file tag 170); main is 167 (rich file tag 168); 171 / rich file tag 172 is above all of
+#   them. The 10-11 entry below records the branch's merge with release 0.6.7, not a merge into main.
+#   kCacheVersion 31 and kQSnapCacheScheme 20 are unchanged.
 # 2026-10-12, PR #349 maintainer reply: RE-DERIVED with UPDATE_GOLDEN=1.
 #   kParserVer / quality mirror 169 -> provisional 158 as requested; the integration train assigns the
 #   final version on landing. Extraction behaviour is unchanged; kCacheVersion 31 and kQSnapCacheScheme 20 stay.
