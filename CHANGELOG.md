@@ -28,10 +28,10 @@ The Python walk is removed. Captured targets and bindings retain the same contai
 imports at 255/256 containers remain, and a real import at 257 is cut and disclosed. An import-free deep
 container, including a top-level import followed by a deep `pass`, no longer produces `extract-partial`
 and may be cached. Disclosure now reports a captured import actually cut, rather than an empty container.
-No persisted record or extraction-version change is intended; the Python import gate checks
-fresh/warm output and, when `RIPWIRE_BASE_BIN` is supplied, acceptance of a pristine-main cache
-without rewriting it.
-
+There is no record content or extraction-version change; the order of a file's bind records
+differs, and no reader depends on it (a cache written by the previous release gives identical
+answers). The Python import gate checks fresh/warm output and, when `RIPWIRE_BASE_BIN` is supplied,
+acceptance of a pristine-main cache without rewriting it.
 
 ## [0.6.7] — 2026-10-11
 

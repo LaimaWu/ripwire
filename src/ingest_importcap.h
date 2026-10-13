@@ -347,7 +347,7 @@ void emitCapturedPythonImportBind( TSNode namesNode, TSNode aliasNode, std::uint
 //
 // SEVEN PARAMETERS, and that is the house shape rather than an accident. --quality-delta's `params` check
 // bars 5, and this is over it; the siblings it sits between take 5 (captureBases, captureFields,
-// capturePythonImportBinds) and 9 (captureIncludes — the very function this round moved C-family OUT of),
+// emitCapturedPythonImportBind above) and 9 (captureIncludes — the very function this round moved C-family OUT of),
 // with the two per-file drivers at 10. Four of the seven are the sink set (includes, refs, shortfall) plus
 // the file id every capture records carry. Collapsing them into a context struct would take this one call
 // under the bar while leaving every sibling over it, i.e. a local abstraction that makes the family harder
