@@ -15,6 +15,21 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — `--quality-delta=A..B` indexed the working tree it never reads (#387)
+
+The range form materializes and indexes both commits itself. `main()` still ingested and graphed the working tree
+before dispatch, so a run held three indexes where it needed two, and memory followed the repository rather than the
+range: a 20,356-file repository's `HEAD~1..HEAD` was OOM-killed at an 8 GiB cgroup limit (#387). When the range form is
+the verb that answers, it now dispatches before the working-tree ingest. A verb that outranks it (`--for`,
+`--quality-baseline`, the rest of the dispatch table above it) still gets the working-tree index, and so does a run
+with `--pin-census`, whose census describes the working tree.
+
+The `.ripwire_config` inert-name disclosure (`config-warnings=`) now tests `register_macros=` names against the judged
+tree, commit B, instead of the working tree. The answer differs only when a configured macro is used in one of those
+two trees and not the other. The config file itself is still read from the repository root. Gate: `qdrefpaircheck` (G)
+counts ingests through `RIPWIRE_CACHE_STATS` and `RIPWIRE_STATS`; on the 0.6.7 binary it sees three ingests, one of
+them the working tree.
+
 ### Changed — Python imports use the shared capture vocabulary (#358, Python slice)
 
 Python dependency targets now come from `@import.path`; named clauses and their optional local

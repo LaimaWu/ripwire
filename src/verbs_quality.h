@@ -1513,7 +1513,9 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
 
         // F-13 — the .ripwire_config disclosure, built once for both emitters (see the header comment on
         // registerMacroConfigWarningAttr just above runQualityViews for why the stderr wording lives there).
-        const rw::quality::RegisterMacroConfigDiagnostics configDiag = rw::quality::diagnoseRegisterMacroConfig( ing, root );
+        // #387: the inert-name test reads the JUDGED tree's index, which in the ref-pair form is tree B — the working tree
+        // is not indexed there at all (runQualityDeltaRangeBeforeIngest).
+        const rw::quality::RegisterMacroConfigDiagnostics configDiag = rw::quality::diagnoseRegisterMacroConfig( judged, root );
         const std::string configWarnAttr = registerMacroConfigWarningAttr( configDiag );
 
         // P2.5 — one stderr line NAMING the gating finding, in --token-budget's style ("ripwire: --token-budget
@@ -1879,6 +1881,32 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         return gatingCount > 0 ? 2 : 0;   // r26: only a PREEXISTING-worse AND major regression gates (== gating=)
     }
     return std::nullopt;
+}
+
+// #387: the range form compares two COMMITTED trees, each materialized and indexed by loadRefPairDelta, and reads the
+// working tree only for its path. main() used to index and graph that tree anyway before dispatch, so a one-commit range
+// on a 20,000-file repository held three indexes at once and was OOM-killed at 8 GiB. When --quality-delta=A..B is the
+// verb that answers (dispatch winner; a typed task or --quality-baseline beside it still outranks it), main() calls this
+// before the working-tree ingest, and the handler reads only the judged tree's index. --pin-census keeps the old path:
+// it writes the working tree's census as a side effect of any run that asks for it.
+std::optional<int> runQualityDeltaRangeBeforeIngest( const rw::Config& cfg, const char* dispatchWinner, const std::string& root,
+                                                      const std::vector<rw::WorkspaceRoot>& ws )
+{
+    if( cfg.qualityDeltaRange.empty() || !cfg.pinCensus.empty() || dispatchWinner == nullptr || std::string_view( dispatchWinner ) != "--quality-delta" )
+    {
+        return std::nullopt;
+    }
+    const rw::IngestResult           noWorkingTree;
+    const rw::Graph                  noGraph;
+    const rw::QMetrics               noMetrics;
+    const std::vector<std::uint32_t> noFanIn;
+    std::vector<std::uint32_t>       noChurn;
+    rw::RedactCounts                 redactCounts;
+    rw::RedactCounts* const          redactPtr = cfg.noRedact ? nullptr : &redactCounts;
+    const MainDispatch dsp{ cfg, noWorkingTree, noGraph, root, /*multiRoot=*/false, ws, noFanIn, nullptr, noMetrics,
+                            nullptr, nullptr, nullptr, nullptr, nullptr, noChurn, redactCounts, redactPtr, nullptr,
+                            false, nullptr, false };
+    return runQualityDelta( dsp );
 }
 
 // ── --dmm ────────────────────────────────────────────────────────────────────────────────────────────────

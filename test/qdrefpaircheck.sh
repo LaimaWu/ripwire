@@ -181,6 +181,66 @@ hdr "$TMP/bare.xml" | grep -q 'base_ref=' \
     && ok "(D) the bare form still names its own floor ($( attr "$TMP/bare.xml" baseline ))" \
     || no "(D) the bare form reported baseline=ref-pair"
 
+# ── (G) #387: the range form indexes its two commits and never the working tree ──────────────────────────
+# A 20,000-file repository's HEAD~1..HEAD was OOM-killed at 8 GiB because main() indexed and graphed the working tree
+# before dispatch, beside the two commits the range form indexes itself. Two observables, neither of them a timing:
+# RIPWIRE_STATS prints its [stats] line only at the working-tree ingest site in main(), and RIPWIRE_CACHE_STATS prints
+# one line per ingest that parsed anything, with files=. An untracked file makes the working tree's count differ from
+# both commits' (1 file each). RED on a binary before #387: three cache-stats lines, one of them files=2, and [stats].
+printf 'int wt_only( void ) { return 0; }\n' >"$R/wt_only.c"
+RIPWIRE_STATS=1 RIPWIRE_CACHE_STATS=1 "$BIN" "$R" "--quality-delta=$A_SHA..$B_SHA" --no-cache >"$TMP/g.xml" 2>"$TMP/g.err"; gRc=$?
+gLines="$( grep -c '^ripwire: cache-stats ' "$TMP/g.err" )"
+gWt="$( grep -c '^ripwire: cache-stats .* files=2 ' "$TMP/g.err" )"
+if [ "$gRc" = 2 ] && [ "$gLines" = 2 ] && [ "$gWt" = 0 ] && ! grep -q '^\[stats\]' "$TMP/g.err"; then
+    ok "(G) A..B ingests its two commits only (2 cache-stats lines, none of the 2-file working tree, no [stats])"
+else
+    no "(G) A..B rc=$gRc cache-stats lines=$gLines (want 2), working-tree lines=$gWt (want 0), [stats]=$( grep -c '^\[stats\]' "$TMP/g.err" ) (want 0)"
+fi
+RIPWIRE_STATS=1 RIPWIRE_CACHE_STATS=1 "$BIN" "$R" "--quality-delta=$B_SHA..$B_SHA" --no-cache >/dev/null 2>"$TMP/g2.err"
+[ "$( grep -c '^ripwire: cache-stats ' "$TMP/g2.err" )" = 1 ] && ! grep -q '^\[stats\]' "$TMP/g2.err" \
+    && ok "(G) A==B ingests its one commit once" \
+    || no "(G) A==B cache-stats lines=$( grep -c '^ripwire: cache-stats ' "$TMP/g2.err" ) (want 1), [stats]=$( grep -c '^\[stats\]' "$TMP/g2.err" )"
+RIPWIRE_STATS=1 RIPWIRE_CACHE_STATS=1 "$BIN" "$R" --quality-delta --no-cache >/dev/null 2>"$TMP/g3.err"
+grep -q '^\[stats\]' "$TMP/g3.err" && grep -q '^ripwire: cache-stats .* files=2 ' "$TMP/g3.err" \
+    && ok "(G) control: the bare form still indexes the 2-file working tree, and both observables see it" \
+    || no "(G) control: the bare form showed no working-tree ingest — the two observables above prove nothing"
+"$BIN" . "--quality-delta=$A_SHA..$B_SHA" >"$TMP/g4.xml" 2>/dev/null
+cmp -s "$TMP/syn.xml" "$TMP/g4.xml" \
+    && ok "(G) an untracked working-tree file does not change the A..B answer" \
+    || { no "(G) an untracked working-tree file changed the A..B answer"; diff "$TMP/syn.xml" "$TMP/g4.xml" | head -4; }
+"$BIN" "$R" "--for=tangle" "--quality-delta=$A_SHA..$B_SHA" >/dev/null 2>"$TMP/g5.err"; g5Rc=$?
+[ "$g5Rc" = 0 ] && grep -q 'IGNORED this run: --quality-delta' "$TMP/g5.err" \
+    && ok "(G) a verb that outranks --quality-delta still answers from the working tree (--for wins, the range is disclosed as ignored)" \
+    || no "(G) --for beside A..B: rc=$g5Rc stderr: $( head -c 200 "$TMP/g5.err" )"
+rm -f "$R/wt_only.c"
+# The .ripwire_config disclosure reads the JUDGED tree's index (commit B). Both commits use the configured macro and the
+# working tree does not, so a disclosure that read the working tree, or an empty index, would call the name inert.
+# RED on 0.6.7, which read the working tree. The control names a macro no tree uses.
+RC="$TMP/rcfg"; mkdir -p "$RC"
+( cd "$RC" && git init -q . && git config user.email t@t && git config user.name t
+  printf 'static void liveHelper() { }\nMY_CUSTOM_TEST( MySuite, MyCase ) { liveHelper(); }\nint main() { liveHelper(); return 0; }\n' >sample.cpp
+  printf 'register_macros = MY_CUSTOM_TEST\n' >.ripwire_config
+  git add -A && git commit -qm base
+  printf 'static void liveHelper() { }\nMY_CUSTOM_TEST( MySuite, MyCase ) { liveHelper(); }\nint main() { liveHelper(); liveHelper(); return 0; }\n' >sample.cpp
+  git commit -qam target
+  printf 'static void liveHelper() { }\nint main() { liveHelper(); return 0; }\n' >sample.cpp )
+grep -q MY_CUSTOM_TEST "$RC/sample.cpp" \
+    && no "(G) premise: the working tree still uses MY_CUSTOM_TEST, so it cannot tell the trees apart" \
+    || ok "(G) premise: both commits use MY_CUSTOM_TEST and the working tree does not"
+"$BIN" "$RC" --quality-delta=HEAD~1..HEAD >"$TMP/g6.xml" 2>"$TMP/g6.err"; g6Rc=$?
+if [ "$g6Rc" != 0 ] || [ -z "$( hdr "$TMP/g6.xml" )" ]; then
+    no "(G) the judged-tree config arm got no report (rc=$g6Rc): $( head -c 200 "$TMP/g6.err" )"
+elif hdr "$TMP/g6.xml" | grep -q 'config-warnings=' || grep -q 'matching no indexed symbol' "$TMP/g6.err"; then
+    no "(G) a register_macros= name used in the judged tree was called inert: $( hdr "$TMP/g6.xml" | head -c 200 )"
+else
+    ok "(G) a register_macros= name used in the judged tree, and not in the working tree, is not called inert"
+fi
+printf 'register_macros = NOPE_NEVER_USED\n' >"$RC/.ripwire_config"
+"$BIN" "$RC" --quality-delta=HEAD~1..HEAD >"$TMP/g7.xml" 2>"$TMP/g7.err"; g7Rc=$?
+[ "$g7Rc" = 0 ] && hdr "$TMP/g7.xml" | grep -q 'config-warnings=' && grep -q 'NOPE_NEVER_USED' "$TMP/g7.err" \
+    && ok "(G) control: a name no tree uses is still disclosed as inert" \
+    || no "(G) control: an unused register_macros= name drew no disclosure (rc=$g7Rc): $( hdr "$TMP/g7.xml" | head -c 200 )"
+
 # ── (E) DECISIVE: ripwire's own recorded harvest wave, against the live-recomputed overlay oracle ─────────
 # RE-PIN LOG for the recorded literal below (it is a bare number, so its justification has to live here).
 # 2026-09-20, integration/train-13 (lane/t13-honesty-fixes fix 2): 9 → 8 gating rows on this wave, and the
