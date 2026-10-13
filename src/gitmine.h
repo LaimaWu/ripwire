@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <optional>     // CoCouplingCache — the lazily-built StaticIncludeCoupling shared across probes
 #include <mutex>        // gitRepoToplevel's per-directory memo — one rev-parse probe per root, not per miner
 #include <string>
 #include <string_view>
@@ -2692,6 +2693,32 @@ private:
     mutable HashMap<std::uint32_t, std::vector<char>>  memo_;
 };
 
+// One StaticIncludeCoupling per INGEST, built on first need and shared by every cochangePartners probe of
+// that ingest (prcontext-hoist, CHECKLIST 30(a)). The coupling is a pure function of `ing` alone (its
+// include list + buildPreciseIncludeAdj), so a multi-probe caller (--pr-context, --situ) rebuilt the SAME
+// whole-ingest include graph once per changed file — ~87% of a --pr-context=HEAD~30 run. The key is the
+// ingest itself, held by reference: the cache cannot answer for another one (EXPECTS in get), and it dies
+// with the caller's scope, before `ing` does. Lazy, so a probe that never clears kSupport (no git, a clean
+// tree) still builds nothing — exactly the per-call cost it had before.
+class CoCouplingCache
+{
+public:
+    explicit CoCouplingCache( const IngestResult& ing ) : ing_( ing ) {}
+    const StaticIncludeCoupling& get( const IngestResult& ing )
+    {
+        EXPECTS( &ing == &ing_, "a CoCouplingCache answers only for the ingest it was built for" );
+        if( !coupling_ )
+        {
+            coupling_.emplace( ing_ );
+        }
+        return *coupling_;
+    }
+
+private:
+    const IngestResult&                  ing_;
+    std::optional<StaticIncludeCoupling> coupling_;
+};
+
 // ─── recurrence across sub-windows (Clio, ICSE 2011) ──────────────────────────────────────────────
 //
 // THE DEFECT THIS CLOSES. `--cochange` mined ONE window (18 months by default) and reported any pair
@@ -2907,7 +2934,8 @@ inline const char* coPairAttr( const CoPartner& p ) noexcept { return coPairAttr
 // `outSubWindows` (optional): the recurrence denominator this call actually used, for the emitter's
 // `sub_windows=` disclosure. Nobody may publish recur= without it — see kCoRecurSubWindows above.
 inline std::vector<CoPartner> cochangePartners( const IngestResult& ing, std::string_view fileSubstr, std::uint32_t& outCommits,
-                                                const std::vector<std::vector<std::uint32_t>>& sets, std::uint32_t* outSubWindows = nullptr )
+                                                const std::vector<std::vector<std::uint32_t>>& sets, std::uint32_t* outSubWindows = nullptr,
+                                                CoCouplingCache* couplingCache = nullptr )   // multi-probe callers share one (see CoCouplingCache)
 {
     outCommits = 0;
     if( outSubWindows )
@@ -2959,7 +2987,9 @@ inline std::vector<CoPartner> cochangePartners( const IngestResult& ing, std::st
     // A4-F22 / P9.1: "surprising" must mean "no static #include coupling *either way, transitively*" —
     // see StaticIncludeCoupling above, the ONE predicate shared with --cochange's repo-wide pair scan
     // in main.cpp (P9.1 was the two paths disagreeing).
-    const StaticIncludeCoupling coupling( ing );
+    // Built at most once per ingest when the caller passes `couplingCache`; a one-off local cache otherwise.
+    std::optional<CoCouplingCache> localCache;
+    CoCouplingCache&               cache = couplingCache ? *couplingCache : localCache.emplace( ing );
     constexpr std::uint32_t kSupport = 3;
     for( const auto& [other, n] : together )
     {
@@ -2970,7 +3000,7 @@ inline std::vector<CoPartner> cochangePartners( const IngestResult& ing, std::st
             const auto maskIt       = recurMask.find( other );
             res.push_back( { other, n, coConfidence( n, freq[fid] ), coConfidence( n, freq[other] ),
                              coRecurrenceOf( maskIt == recurMask.end() ? 0u : maskIt->second ),
-                             isDepCapable && !coupling.isStaticallyCoupled( fid, other ), isDepCapable } );
+                             isDepCapable && !cache.get( ing ).isStaticallyCoupled( fid, other ), isDepCapable } );
         }
     }
     std::sort( res.begin(), res.end(), [ & ]( const CoPartner& x, const CoPartner& y )
