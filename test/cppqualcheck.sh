@@ -59,9 +59,42 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -d "$FIX" ] || { echo "no test/cppqualfix dir — fixture missing"; exit 2; }
 cd "$ROOT"
 
-echo "cppqualcheck: BIN=$BIN  CORPUS=test/cppqualfix + repo root"
+# BINARY FLAVOUR, detected once (§9 reads it too). From the binary's UNDEFINED symbols: a -fsanitize=integer
+# build imports __ubsan_handle_* from the runtime and an ASan build __asan_report_*; a plain one imports none.
+# `strings` is the fallback for a toolchain without nm; if neither tool is present the flavour is UNKNOWN.
+BINFLAV="unknown"
+if command -v nm >/dev/null 2>&1; then
+    nm -u "$BIN" 2>/dev/null | grep -qE '__ubsan_handle|__asan_report' && BINFLAV="sanitizer" || BINFLAV="plain"
+elif command -v strings >/dev/null 2>&1; then
+    strings -a "$BIN" 2>/dev/null | grep -q '__asan_annotation' && BINFLAV="sanitizer" || BINFLAV="plain"
+fi
 
-run(){ perl -e 'alarm 30; exec @ARGV' "$BIN" "$@" 2>/dev/null; }
+# PER-CALL BUDGET. Every call runs under a perl alarm so a hang fails the gate instead of the CI job. 30 s for a
+# plain binary; 90 s for a sanitizer one, which runs ~3x slower locally and slower still on a shared CI runner
+# (the macOS ASan leg measured 16-30 s for ONE cold repo-root call, so a 30 s budget was a coin toss there).
+ALARM=30
+[ "$BINFLAV" = sanitizer ] && ALARM=90
+echo "cppqualcheck: BIN=$BIN  CORPUS=test/cppqualfix + repo root  flavour=$BINFLAV  alarm=${ALARM}s per call"
+
+# A call that is KILLED or FAILS prints nothing on stdout, and an empty output reads as a count of '' — which
+# used to surface as "expected 32", a wrong-answer verdict for what was a timeout (CHECKLIST 14). So `run`
+# keeps the call's exit status: any non-zero rc prints its own FAIL line naming the call — TIMEOUT for 142
+# (SIGALRM), ERROR otherwise — on fd 3 (the gate's real stdout, since `run` is nearly always inside a $( )),
+# drops a marker the end-of-gate verdict reads (a subshell cannot set $fail), and returns the rc.
+exec 3>&1
+RUNFAILED="$( mktemp )"; rm -f "$RUNFAILED"     # a NAME only; the file exists iff some call failed
+run(){
+    local rc
+    perl -e 'alarm shift; exec @ARGV' "$ALARM" "$BIN" "$@" 2>/dev/null; rc=$?
+    [ "$rc" = 0 ] && return 0
+    if [ "$rc" = 142 ]; then
+        printf '  FAIL  TIMEOUT (rc=142, alarm %ss): ripwire %s\n' "$ALARM" "$*" >&3
+    else
+        printf '  FAIL  ERROR (rc=%s): ripwire %s\n' "$rc" "$*" >&3
+    fi
+    : >"$RUNFAILED"
+    return "$rc"
+}
 cnt(){ printf '%s' "$1" | grep -oE 'count="[0-9]+"' | head -1 | tr -dc 0-9; }
 
 # expect the `count="N"` of a fixture verb to equal a literal
@@ -146,7 +179,7 @@ printf '%s' "$MAP" | grep -q 'n="callerCtor" amb=' \
 # exclusion lives at capture time in ingest.cpp. Asserted PRE-resolution via the probe, because a cast ref
 # resolves to nothing and would otherwise vanish silently while still inflating every extraction count.
 if [ -x "$PROBE" ]; then
-    CASTREFS="$( perl -e 'alarm 30; exec @ARGV' "$PROBE" "$FIX" 2>/dev/null | grep -A1 'callerCasts' | grep 'calls:' )"
+    CASTREFS="$( perl -e 'alarm shift; exec @ARGV' "$ALARM" "$PROBE" "$FIX" 2>/dev/null | grep -A1 'callerCasts' | grep 'calls:' )"
     # VACUITY GUARD (L-6). "does not contain a cast keyword" is satisfied by the EMPTY STRING, so if the
     # probe's output format ever shifts under this grep the arm would pass while testing nothing. Assert the
     # POSITIVE first: callerCasts' four cast operands and its parameters are real refs that must be present.
@@ -163,7 +196,7 @@ else
     echo "  SKIP  ripwire_probe not built at $PROBE — cast arm is --uses-only"
 fi
 for kw in static_cast reinterpret_cast const_cast dynamic_cast; do
-    RC="$( perl -e 'alarm 30; exec @ARGV' "$BIN" "$FIX" --uses="$kw" --no-cache >/dev/null 2>&1; echo $? )"
+    RC="$( perl -e 'alarm shift; exec @ARGV' "$ALARM" "$BIN" "$FIX" --uses="$kw" --no-cache >/dev/null 2>&1; echo $? )"
     [ "$RC" = 1 ] && ok "--uses=$kw refuses (no def, no use-sites) — the cast flood stayed out" \
         || no "--uses=$kw expected refusal (exit 1), got exit $RC"
 done
@@ -177,13 +210,30 @@ expect uses    mutexFn 0 "most-vexing-parse: unfixable by any query widening, pi
 expect callers mutexFn 0 "most-vexing-parse: no caller, by construction"
 
 # ── §6 REPO-ROOT RECOVERY — the seams the defect was found on ───────────────────────────────────────────
+# ONE WARM CACHE PER VERB for the repo-root arms (§6 and §12f). Each was a separate --no-cache call, i.e. a full
+# cold parse of the whole repo per arm — the cost that crossed the per-call alarm on the macOS ASan runner. None
+# of these arms is ABOUT cold extraction (each pins what the resolver answers on the tree), so they share a
+# per-run temp dir (CHECKLIST 12): the first call of a verb parses cold and writes its cache, the rest read it
+# warm. ONE FILE PER VERB, not one in all: --uses reads the RICH artifact and --callers the lean one (doctor's
+# rich_verbs=), and a single --cache= file handed to both is rewritten — a cold parse — on every switch
+# (measured: 2.1 s cold, 0.5 s warm, back to 1.7 s cold on the next --callers). So two cold parses, four warm.
+# The fixture arms keep --no-cache. The dir is removed on exit (the EXIT trap below and §7/§9's).
+RCDIR="$( mktemp -d )"; trap 'rm -rf "$RCDIR"' EXIT
+# rrun VAR --VERB=SYM… — one repo-root call on that verb's cache: stdout into VAR, returns the call's own rc
+# (non-zero has already printed its TIMEOUT/ERROR line). An arm compares a count only when the call succeeded.
+rrun(){
+    local __out __rc __verb="${2%%=*}"
+    __out="$( run . "${@:2}" --cache="$RCDIR/${__verb#--}.cache" )"; __rc=$?
+    printf -v "$1" '%s' "$__out"
+    return "$__rc"
+}
 # Literals from the W1-MEASURE census. These are the
 # flagship "did I break a caller?" sites: selectBaseline's second caller is a hard compile error under an
 # arity change and was never named; writeTally had a def and two call sites and reported ZERO callers.
-US="$( run . --uses=selectBaseline --no-cache )"
-{ [ "$( cnt "$US" )" = 2 ] && printf '%s' "$US" | grep -q 'mcpverbs.h'; } \
+rrun US --uses=selectBaseline \
+&& { { [ "$( cnt "$US" )" = 2 ] && printf '%s' "$US" | grep -q 'mcpverbs.h'; } \
     && ok "repo: --uses=selectBaseline count=2 and names the mcpverbs.h qualified caller (was 1)" \
-    || no "repo: --uses=selectBaseline expected 2 incl. mcpverbs.h, got '$( cnt "$US" )': $US"
+    || no "repo: --uses=selectBaseline expected 2 incl. mcpverbs.h, got '$( cnt "$US" )': $US"; }
 # 4 -> 5 when src/readability.h adopted docparse::detail::readWholeFile as the canonical whole-file read
 # (the feat/readability-lens round); 5 -> 6 when src/renamemine.h adopted the same one (feat/naming-calibration);
 # 6 -> 7 when src/commentcoherence.h adopted the same one (feat/comment-coherence);
@@ -258,25 +308,29 @@ US="$( run . --uses=selectBaseline --no-cache )"
 # through the canonical helper — one new call site, same helper.
 # 31 -> 32 (lane/cr-qd-kinds-068): quality.h defectSitesOf reads each C++ / Python / Bash test-script file for the
 # defect-shape scanners through the canonical helper — one new call site, same helper.
-[ "$( cnt "$( run . --uses=readWholeFile --no-cache )" )" = 32 ] \
+rrun RW --uses=readWholeFile \
+&& { [ "$( cnt "$RW" )" = 32 ] \
     && ok "repo: --uses=readWholeFile count=32 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
-    || no "repo: --uses=readWholeFile expected 32"
-[ "$( cnt "$( run . --callers=writeTally --no-cache )" )" = 1 ] \
+    || no "repo: --uses=readWholeFile expected 32, got '$( cnt "$RW" )'"; }
+rrun WC --callers=writeTally \
+&& { [ "$( cnt "$WC" )" = 1 ] \
     && ok "repo: --callers=writeTally count=1 (was 0 — both template call sites are in writeDocDriftPage)" \
-    || no "repo: --callers=writeTally expected 1"
-[ "$( cnt "$( run . --uses=writeTally --no-cache )" )" = 2 ] \
+    || no "repo: --callers=writeTally expected 1, got '$( cnt "$WC" )'"; }
+rrun WU --uses=writeTally \
+&& { [ "$( cnt "$WU" )" = 2 ] \
     && ok "repo: --uses=writeTally count=2 (the two explicit-template-argument call sites)" \
-    || no "repo: --uses=writeTally expected 2"
-[ "$( cnt "$( run . --callers=headSnapshotIngestMutex --no-cache )" )" = 0 ] \
+    || no "repo: --uses=writeTally expected 2, got '$( cnt "$WU" )'"; }
+rrun HM --callers=headSnapshotIngestMutex \
+&& { [ "$( cnt "$HM" )" = 0 ] \
     && ok "repo: --callers=headSnapshotIngestMutex stays 0 — its 4 sites are most-vexing-parse declarations" \
-    || no "repo: --callers=headSnapshotIngestMutex expected 0 (widening must NOT invent these edges)"
+    || no "repo: --callers=headSnapshotIngestMutex expected 0 (widening must NOT invent these edges), got '$( cnt "$HM" )'"; }
 
 # ── §7 --edit-check names a CROSS-FILE QUALIFIED caller on a contract change (plan §6) ──────────────────
 # The measured defect: `--edit-check=selectBaseline` on an arity change reported callers="1" and never named
 # the `rw::quality::selectBaseline( … )` caller in mcpverbs.h — a hard compile error under that change.
 # Same scenario, hermetically, in a private temp git repo (editcheckcheck.sh's mechanism).
 if command -v git >/dev/null 2>&1; then
-    WORK="$( mktemp -d )"; trap 'rm -rf "$WORK"' EXIT
+    WORK="$( mktemp -d )"; trap 'rm -rf "$WORK" "$RCDIR"' EXIT
     mkdir -p "$WORK/src"
     cat > "$WORK/src/a.cpp" <<'EOF'
 namespace app
@@ -300,7 +354,7 @@ EOF
     ( cd "$WORK" && git init -q && git config user.email t@t && git config user.name t \
       && git add -A && git commit -qm init >/dev/null 2>&1 )
 
-    EC0="$( cd "$WORK" && perl -e 'alarm 30; exec @ARGV' "$BIN" . --edit-check=inner --no-cache 2>/dev/null )"
+    EC0="$( cd "$WORK" && perl -e 'alarm shift; exec @ARGV' "$ALARM" "$BIN" . --edit-check=inner --no-cache 2>/dev/null )"
     printf '%s' "$EC0" | grep -q 'status="unchanged"' && printf '%s' "$EC0" | grep -q 'callers="2"' \
         && ok "--edit-check clean tree: callers=\"2\" — the qualified cross-file caller is counted (was 1)" \
         || no "--edit-check clean tree: expected unchanged + callers=\"2\", got: $EC0"
@@ -319,7 +373,7 @@ int nearUse( int a ) { return inner( a ); }
 }
 }
 EOF
-    EC1="$( cd "$WORK" && perl -e 'alarm 30; exec @ARGV' "$BIN" . --edit-check=inner --no-cache 2>/dev/null )"
+    EC1="$( cd "$WORK" && perl -e 'alarm shift; exec @ARGV' "$ALARM" "$BIN" . --edit-check=inner --no-cache 2>/dev/null )"
     ROWS="$( printf '%s' "$EC1" | grep -oE '<c [^>]*/>' )"
     printf '%s' "$EC1" | grep -q 'status="contract-change"' && printf '%s' "$EC1" | grep -q 'params_was="1" params_now="2"' \
         && ok "--edit-check arity change: contract-change, params 1 -> 2" \
@@ -417,7 +471,7 @@ fi
 #       plain. What a plain rc=0 still buys: the frame parses, the scan terminates, and the document is
 #       produced — everything except the sanitizer class. The abort evidence comes from CI, which runs this
 #       gate under asan (.github/workflows/ci.yml, the G1 heavy-verb list).
-TRDIR="$( mktemp -d )"; TRTXT="$( mktemp )"; trap 'rm -rf "$TRDIR" "$TRTXT" ${WORK:+"$WORK"}' EXIT
+TRDIR="$( mktemp -d )"; TRTXT="$( mktemp )"; trap 'rm -rf "$TRDIR" "$TRTXT" "$RCDIR" ${WORK:+"$WORK"}' EXIT
 cat > "$TRDIR/edge.cpp" <<'EOF'
 namespace nsx
 {
@@ -432,8 +486,8 @@ bool operator>( const S& a, const S& b ) { return a.v > b.v; }
 }
 EOF
 printf '#0 0x1 in nsx::ops::operator>(S const&, S const&) edge.cpp:8\n' > "$TRTXT"
-TROUT="$( perl -e 'alarm 60; exec @ARGV' "$BIN" "$TRDIR" --from-trace="$TRTXT" --no-cache 2>/dev/null )"
-TRC="$( perl -e 'alarm 60; exec @ARGV' "$BIN" "$TRDIR" --from-trace="$TRTXT" --no-cache >/dev/null 2>&1; echo $? )"
+TROUT="$( perl -e 'alarm shift; exec @ARGV' "$(( ALARM * 2 ))" "$BIN" "$TRDIR" --from-trace="$TRTXT" --no-cache 2>/dev/null )"
+TRC="$( perl -e 'alarm shift; exec @ARGV' "$(( ALARM * 2 ))" "$BIN" "$TRDIR" --from-trace="$TRTXT" --no-cache >/dev/null 2>&1; echo $? )"
 
 # (a) POSITIVE CONTROL first — without it, rc=0 proves nothing about the scan.
 #
@@ -456,16 +510,10 @@ else
     no "positive control FAILED: the <frame/> did not resolve by NAME, so the rc check below would be vacuous. Got: ${TRFRAME:-<no frame element>}"
 fi
 
-# (b) FLAVOUR PROBE — disclose whether this binary can observe the class the arm is about. Detected from the
-#     binary's UNDEFINED symbols: a -fsanitize=integer build imports __ubsan_handle_* from the runtime, a
-#     plain one imports none. `strings` is the fallback for a toolchain without nm; if neither tool is
-#     present the flavour is reported UNKNOWN rather than guessed.
-TRFLAV="unknown"
-if command -v nm >/dev/null 2>&1; then
-    nm -u "$BIN" 2>/dev/null | grep -qE '__ubsan_handle|__asan_report' && TRFLAV="sanitizer" || TRFLAV="plain"
-elif command -v strings >/dev/null 2>&1; then
-    strings -a "$BIN" 2>/dev/null | grep -q '__asan_annotation' && TRFLAV="sanitizer" || TRFLAV="plain"
-fi
+# (b) FLAVOUR PROBE — disclose whether this binary can observe the class the arm is about. BINFLAV is detected
+#     once at the top from the binary's UNDEFINED symbols (a -fsanitize=integer build imports __ubsan_handle_*
+#     from the runtime, a plain one imports none); if neither nm nor strings is present it is UNKNOWN, not guessed.
+TRFLAV="$BINFLAV"
 case "$TRFLAV" in
     sanitizer) echo "  NOTE  §9 flavour: SANITIZER binary — this run CAN observe the integer-overflow class (rc=134 before the fix)" ;;
     plain)     echo "  NOTE  §9 flavour: PLAIN binary — the wrap would execute SILENTLY here, so rc=0 below is NOT abort evidence."
@@ -631,7 +679,7 @@ tmplexpect uses tqDepQualTmpl 1 "10. X::template f<T>() resolves (was named \`te
 tmplexpect uses tqDeepDepTmpl 1 "11. X::Y::template f<T>() resolves through the re-split"
 tmplexpect uses tqCommentDepTmpl 1 "15. X::template /* c */ f<T>() — a comment between the keyword and the name"
 if [ -x "$PROBE" ]; then
-    TMPLREFS="$( perl -e 'alarm 30; exec @ARGV' "$PROBE" "$TMPLFIX" 2>/dev/null | grep -A1 ' tqCallDependentQualified ' | grep 'calls:' )"
+    TMPLREFS="$( perl -e 'alarm shift; exec @ARGV' "$ALARM" "$PROBE" "$TMPLFIX" 2>/dev/null | grep -A1 ' tqCallDependentQualified ' | grep 'calls:' )"
     if [ -z "$TMPLREFS" ]; then
         no "tmpl §12 probe: tqCallDependentQualified has no reference list — the name arm would be vacuous"
     else
@@ -675,10 +723,10 @@ printf '%s' "$TMPLMAP" | grep -qE 'files=1 symbols=54 edges=19 shown=54 est_toke
 #     the reader was the one spelled bare inside Reader::str. Presence guard first: the arm proves nothing
 #     once the loader stops spelling the member form.
 if grep -q 'r\.pod<' src/gitoracle.h; then
-    POD="$( run . --callers=pod --no-cache )"
-    printf '%s' "$POD" | grep -qE '<s [^>]*n="loadOracleCache"' \
+    rrun POD --callers=pod \
+    && { printf '%s' "$POD" | grep -qE '<s [^>]*n="loadOracleCache"' \
         && ok "repo: --callers=pod names loadOracleCache (was only Reader::str — the r.pod<T>() sites minted nothing)" \
-        || no "repo: --callers=pod does not name loadOracleCache. Rows: $( printf '%s' "$POD" | grep -oE '<s [^>]*>' | tr '\n' ' ' )"
+        || no "repo: --callers=pod does not name loadOracleCache. Rows: $( printf '%s' "$POD" | grep -oE '<s [^>]*>' | tr '\n' ' ' )"; }
 else
     no "repo: src/gitoracle.h no longer spells r.pod<…>() — re-point this arm at a live member-template call site"
 fi
@@ -726,5 +774,7 @@ else
     no "xmllint not on PATH — the G4 arm cannot run; install libxml2/xmllint (a gate that cannot run must say so)"
 fi
 
+# A call `run` saw fail (TIMEOUT/ERROR, already printed) fails the gate even when its arm's own check could not.
+[ -e "$RUNFAILED" ] && { fail=1; rm -f "$RUNFAILED"; }
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
