@@ -61,20 +61,20 @@ std::string noBaselineFatalMessage( const std::string& baselineFile, const rw::q
 
 // ── R-I: --quality-delta=A..B, the WAVE-level form ───────────────────────────────────────────────────────
 //
-// The state two COMMITTED trees need, with the temp-dir teardown bound to the caller's scope. Both trees stay
-// alive together on purpose: computeSnapshot reads A while computeDelta reads B, and both read file bytes
-// through their materialized tree, so neither guard may fire early (quality::loadRefTree's header states the
-// same contract from the other side).
+// What two COMMITTED trees leave behind for the comparison: the base tree's snapshot, and the target tree itself with
+// its temp-dir teardown bound to the caller's scope. The target stays alive because computeDelta reads it, and reads
+// file bytes through its materialized tree. The base tree does not: computeSnapshot is the only reader of it, so
+// loadRefPairDelta scores it and releases its index, graph and temp dir before the target is materialized (#387 — both
+// indexes together were most of what a 20,000-file repository's run held when the OOM killer took it).
 //
 // `sameRef` is the A==B case. It is a legal question with an empty answer, and it is answered by materializing
 // ONE tree and comparing it with itself rather than by a special-cased early return: the empty delta then
 // falls out of the ordinary machinery instead of being asserted by a branch nobody re-tests.
 struct RefPairDelta
 {
-    rw::quality::TmpTreeGuard baseGuard;             // declared BEFORE the trees so teardown outlives their use
-    rw::quality::TmpTreeGuard targetGuard;
-    rw::quality::RefTree      baseTree;
+    rw::quality::TmpTreeGuard targetGuard;           // declared BEFORE the tree so teardown outlives its use
     rw::quality::RefTree      targetTree;
+    rw::quality::Snapshot     baseSnapshot;          // the floor: computeSnapshot over the base tree, which is gone
     bool                  sameRef = false;
     std::string           attrs;                     // XML:  ` base_ref="…" target_ref="…" churn="unavailable"`
     std::string           jsonAttrs;                 // JSON: the SAME three facts — built beside attrs so the
@@ -83,7 +83,7 @@ struct RefPairDelta
                                                      // record is read over, against the REAL repo (both trees
                                                      // here are temp dirs with no history of their own)
 
-    const rw::quality::RefTree& target() const noexcept { return sameRef ? baseTree : targetTree; }
+    const rw::quality::RefTree& target() const noexcept { return targetTree; }
 };
 
 // Resolve the spec and materialize both sides. Returns an EXIT CODE on any refusal or environment failure
@@ -131,18 +131,30 @@ std::optional<int> loadRefPairDelta( const std::string& root, std::string_view s
         return 1;
     }
 
-    // DISTINCT tags — see quality::loadRefTree's header. Sharing one would make the target's extraction
-    // delete the base tree out from under the clone detector, which reads file bytes off disk.
+    // DISTINCT tags — see quality::loadRefTree's header. The base tree is gone before the target is extracted, but
+    // a shared tag would still let one side's extraction delete the other's directory if that order ever changed.
     out.sameRef = ( ref.baseSha == ref.targetSha );
-    if( !quality::loadRefTree( root, ref.baseSha, cfg.excludes, cfg.maxFileBytes, "qdpair-base", out.baseGuard, out.baseTree ) )
+    if( !out.sameRef )
     {
-        rw::emitTo( stderr, "ripwire: --quality-delta: could not materialize or parse the tree at {}\n", ref.baseSha.c_str() );
-        return 1;
+        // #387: the base tree lives only in this scope. Its snapshot is everything the comparison needs from it, so its
+        // index, graph and temp dir are released here, before the target tree is materialized.
+        quality::TmpTreeGuard baseGuard;
+        quality::RefTree      baseTree;
+        if( !quality::loadRefTree( root, ref.baseSha, cfg.excludes, cfg.maxFileBytes, "qdpair-base", baseGuard, baseTree ) )
+        {
+            rw::emitTo( stderr, "ripwire: --quality-delta: could not materialize or parse the tree at {}\n", ref.baseSha.c_str() );
+            return 1;
+        }
+        out.baseSnapshot = quality::computeSnapshot( baseTree.ing, baseTree.g, baseTree.root );
     }
-    if( !out.sameRef && !quality::loadRefTree( root, ref.targetSha, cfg.excludes, cfg.maxFileBytes, "qdpair-target", out.targetGuard, out.targetTree ) )
+    if( !quality::loadRefTree( root, ref.targetSha, cfg.excludes, cfg.maxFileBytes, "qdpair-target", out.targetGuard, out.targetTree ) )
     {
         rw::emitTo( stderr, "ripwire: --quality-delta: could not materialize or parse the tree at {}\n", ref.targetSha.c_str() );
         return 1;
+    }
+    if( out.sameRef )
+    {
+        out.baseSnapshot = quality::computeSnapshot( out.targetTree.ing, out.targetTree.g, out.targetTree.root );
     }
 
     // Both values are bare 40-char object names straight out of `rev-parse --verify` (resolveRefSpec accepts
@@ -217,7 +229,7 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
         // sidecar's whole contract is "pinned at the current HEAD", which says nothing about a pair of
         // arbitrary commits — and the bare form's self-heal deleting a user's pinned floor as a side effect
         // of a wave-level measurement would be a side effect nobody asked for.
-        out.baseSel.snapshot = quality::computeSnapshot( refs.baseTree.ing, refs.baseTree.g, refs.baseTree.root );
+        out.baseSel.snapshot = std::move( refs.baseSnapshot );
         out.baseSel.marker   = "ref-pair";
         out.deltaRoot        = refs.target().root;
         // R1 IDENTITY. The SPAN is what makes this honest here: both trees are materialized OUT of the repo

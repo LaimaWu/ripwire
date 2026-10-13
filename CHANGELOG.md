@@ -30,6 +30,15 @@ two trees and not the other. The config file itself is still read from the repos
 counts ingests through `RIPWIRE_CACHE_STATS` and `RIPWIRE_STATS`; on the 0.6.7 binary it sees three ingests, one of
 them the working tree.
 
+### Fixed — `--quality-delta=A..B` kept the base commit's index alive for the whole run (#387)
+
+The base commit is read once, to compute the snapshot the target is compared against. Its index, graph and extracted
+temp tree were still held until the run ended, beside the target's. `loadRefPairDelta` now scores the base and
+releases all three before it extracts the target; `RefPairDelta` no longer has a field that could hold the base tree.
+`A..A` still extracts one tree and compares it with itself. Findings are byte-identical: `qdrefpaircheck` (A)/(B), and
+nine `--quality-delta` range argvs on this repository compared between the 0.6.7 binary and this one (stdout, stderr
+and exit code).
+
 ### Changed — Python imports use the shared capture vocabulary (#358, Python slice)
 
 Python dependency targets now come from `@import.path`; named clauses and their optional local

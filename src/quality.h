@@ -4299,10 +4299,10 @@ inline std::pair<Snapshot, bool> computeHeadSnapshot( const std::string& root, c
 
 // ─── R-I: one materialized commit tree, ingested AND graphed, with an EXPLICIT lifetime ─────────────────
 //
-// `--quality-delta=A..B` needs BOTH trees live at the same moment: computeSnapshot builds the floor from A
-// while computeDelta reads B's IngestResult, and both read file bytes through the materialized tree. So the
-// temp dir must OUTLIVE the call. dmm.h's ingestCommitTree deliberately lets its TmpTreeGuard fire at return
-// (its profileOf touches only symbol metrics); that is NOT safe here, so the guard belongs to the CALLER and
+// `--quality-delta=A..B` reads file bytes through each materialized tree after this call returns: computeSnapshot
+// builds the floor from A, and computeDelta reads B. So the temp dir must OUTLIVE the call. It need not outlive the
+// other side's: the caller scores A and releases it before materializing B (#387). dmm.h's ingestCommitTree
+// deliberately lets its TmpTreeGuard fire at return (its profileOf touches only symbol metrics); that is NOT safe here, so the guard belongs to the CALLER and
 // this function only fills it — the lifetime is stated in the signature instead of being a comment someone
 // has to find.
 //
