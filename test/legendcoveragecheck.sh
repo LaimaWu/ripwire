@@ -676,11 +676,17 @@ def attrsOf( d ):
 
 bad, checked, entered, left, census = [], 0, [], [], []
 for dialect, extra in DIALECTS:
-    try:
-        dt, dw, dm = ( doc( [ SMALL, QUERY, b ] + extra ) for b in ( TIGHT, WIDE, MARGIN ) )
-    except CallFailed as e:
-        bad.append( f"{dialect}: {e}" )
+    # Each of the three calls is judged on its own, so two failed calls report two lines, not the first only.
+    docs, fails = [], []
+    for b in ( TIGHT, WIDE, MARGIN ):
+        try:
+            docs.append( doc( [ SMALL, QUERY, b ] + extra ) )
+        except CallFailed as e:
+            fails.append( f"{dialect}: {e}" )
+    if fails:
+        bad.extend( fails )
         continue
+    dt, dw, dm = docs
     tight, wide = legendOf( dt ), legendOf( dw )
     mt, mw      = NOTE.search( tight ), NOTE.search( wide )
     if not mt:
