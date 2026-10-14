@@ -901,8 +901,9 @@ inline void attachRollupOfDef( RollupT& rollup, const IngestResult& ing, const R
 // `srcDefs` / `dstDefs` are endpointDefinitionCount's, not the raw match counts.
 struct PathEndpointBinding
 {
-    bool from = true;
-    bool to   = true;
+    bool from     = true;
+    bool to       = true;
+    bool splitHop = false;   // some hop's edge into it is a split arm (its row carries prov="split"; the legend clause rides)
 };
 // How many definitions an endpoint really names: its groups (a definition with its declarations is one), less the untied
 // declarations (defGroupUntied) — a prototype the identity rule cannot prove is the same function is no second candidate here,
@@ -917,10 +918,19 @@ inline std::size_t endpointDefinitionCount( const IngestResult& ing, std::span<c
     const std::size_t untied = std::size_t( std::count( groups.untied.begin(), groups.untied.end(), char( 1 ) ) );
     return std::max<std::size_t>( 1, groups.size() - untied );
 }
+// a hop row (i > 0) whose edge into it is a split arm (Q1: on every path, whatever the endpoints' defs=)
+inline bool pathHopSplitArm( const Graph& g, std::span<const NodeId> path, std::size_t i ) noexcept
+{
+    return i > 0 && i < path.size() && edgeSplitArm( g, path[ i - 1 ], path[i] );
+}
 inline PathEndpointBinding pathEndpointBinding( const Graph& g, std::size_t srcDefs, std::size_t dstDefs, std::span<const NodeId> path ) noexcept
 {
     PathEndpointBinding b;
     b.from = srcDefs <= 1 || !path.empty();
+    for( std::size_t i = 1; i < path.size() && !b.splitHop; ++i )
+    {
+        b.splitHop = pathHopSplitArm( g, path, i );
+    }
     if( dstDefs > 1 )
     {
         if( path.size() < 2 )
@@ -934,21 +944,6 @@ inline PathEndpointBinding pathEndpointBinding( const Graph& g, std::size_t srcD
         }
     }
     return b;
-}
-// a hop row (i > 0) whose edge into it is a split arm (Q1: on every path, whatever the endpoints' defs=)
-inline bool pathHopSplitArm( const Graph& g, std::span<const NodeId> path, std::size_t i ) noexcept
-{
-    return i > 0 && i < path.size() && edgeSplitArm( g, path[ i - 1 ], path[i] );
-}
-// How many hops of the path are split arms — both path emitters ask whether any is, for the legend clause (present-only).
-inline std::size_t pathSplitHopCount( const Graph& g, std::span<const NodeId> path ) noexcept
-{
-    std::size_t hops = 0;
-    for( std::size_t i = 1; i < path.size(); ++i )
-    {
-        hops += pathHopSplitArm( g, path, i ) ? 1u : 0u;
-    }
-    return hops;
 }
 
 }   // namespace rw

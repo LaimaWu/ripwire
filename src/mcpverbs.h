@@ -3498,7 +3498,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     const PathSearchGaps ptGaps = pth.empty() ? pathSearchGaps( ing, g, srcDefs, valueRefIndexOf( ix ) ) : PathSearchGaps{};
     const bool ptHasVia = pathHasNameOnlyHop( g, pth );   // FE-B: exactly when a hop of this path is via="name", as on the CLI
     const PathEndpointBinding ptBound    = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), pth );   // attrib-multidef, as on the CLI
-    const bool                ptHasSplit = pathSplitHopCount( g, pth ) > 0;
+    const bool                ptHasSplit = ptBound.splitHop;
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                        "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + viaNameLegend( ptHasVia )
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to ) ).c_str(),
