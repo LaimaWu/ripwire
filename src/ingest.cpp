@@ -196,7 +196,7 @@ extern "C"
 #include "ingest_binds.h"
 #include "ingest_elixir.h"
 #include "ingest_clojure.h"
-#include "ingest_ruby.h"      # Ruby Rails/DSL capture lane (schema columns, Jbuilder typing, factories, class-side DSL walks) - carved verbatim 2026-10-12
+#include "ingest_ruby.h"      // Ruby Rails/DSL capture lane (schema columns, Jbuilder typing, factories, class-side DSL walks) - carved verbatim 2026-10-12
 #include "ingest_importcap.h"
 #include "ingest_valuerefs.h"
 #include "ingest_sidecap.h"

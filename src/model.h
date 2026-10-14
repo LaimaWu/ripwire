@@ -906,7 +906,7 @@ inline const RspecTarget* rspecTargetOf( std::string_view cls, std::string_view 
 inline constexpr std::string_view kRubyDelegationCalls[] = { "def_delegator", "def_delegators", "delegate", "delegate_missing_to" };
 
 // A Jbuilder template's `json` (test/rubyrakejbuildercheck.sh, parser version 135): the template handler binds it to the
-// view's JbuilderTemplate, a BasicObject whose method_missing makes every call on it a key. ingest_binds.h types the local
+// view's JbuilderTemplate, a BasicObject whose method_missing makes every call on it a key. ingest_ruby.h types the local
 // in a `.jbuilder` file; graph.h RubyTypedReceivers refuses a call on it unless the tree opens the class.
 inline constexpr std::string_view kJbuilderTemplate = "JbuilderTemplate";
 inline constexpr std::string_view kJbuilderLocal    = "json";

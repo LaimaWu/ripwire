@@ -191,7 +191,7 @@ constexpr std::array<LangEntry, 57> kLangTable = {{
     { ".rb",   Lang::Ruby,       &tree_sitter_ruby,       "ruby"       },   // Ruby — class/module/def + method calls + require
     // A Rake task file and a Jbuilder view are plain Ruby (test/rubyrakejbuildercheck.sh, parser version 135): what a
     // task or a JSON view calls is a caller like any other. Outside any class their self is known — Rake's `main`, the
-    // view — and graph.h RubyTopSelf reads it; a `.jbuilder` file's `json` is the template's (ingest_binds.h).
+    // view — and graph.h RubyTopSelf reads it; a `.jbuilder` file's `json` is the template's (ingest_ruby.h).
     { ".rake", Lang::Ruby,       &tree_sitter_ruby,       "ruby"       },
     { kJbuilderExt, Lang::Ruby,  &tree_sitter_ruby,       "ruby"       },
     { ".json", Lang::Json,       &tree_sitter_json,       "json"       },   // JSON — top-level + 2nd-level object keys as t="sec"; DATA, no call edges
