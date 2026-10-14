@@ -381,6 +381,22 @@ inline constexpr std::string_view kMcpForLensColumnsLegend =
 // dialects (verbs_for.h, mcpverbs.h) spell the same sentence.
 inline constexpr std::string_view kForBudgetBytesNote =
     " [budget_bytes= is the default BYTE ceiling this ranked payload was shaped against; it bounds that payload, not the whole document est_tokens prices]";
+// forbudget-soft: the same attribute on an answer whose ranked head ran PAST it (sigs past_target=). There the number shaped
+// the row TEXT (signatures and doc excerpts shortened toward it) and removed no row, so calling it a ceiling would be false.
+// Says what it does not mean: not a bound on the rows. No "--" (it rides inside an XML comment, G4).
+inline constexpr std::string_view kForBudgetBytesTargetNote =
+    " [budget_bytes= is the default BYTE target this ranked payload was shaped toward: row text shortens toward it, no row of"
+    " the ranked head is removed for it (sigs past_target=)]";
+// forbudget-soft: <sigs past_target="K">, present only on a block whose ranked head passed the default target. The rows are
+// a rank prefix, so "the last K" names them exactly. Not a cut: nothing is missing.
+inline constexpr std::string_view kForPastTargetNote =
+    " [sigs past_target=K: the last K rows are past the budget_bytes target, served because they are rows of the ranked head;"
+    " none is cut]";
+// forbudget-soft: an EXPLICIT token budget on a task lens is a SOFT target (owner decision 2026-10-14) — the full dialect's
+// reading of budget_tokens= (the compact one rides its est_tokens clause). Says what it does NOT promise: a byte bound.
+inline constexpr std::string_view kForSoftBudgetNote =
+    " [budget_tokens=: the soft token target; rows stop once it is reached, the rank 1..4 rows and every disclosure always ship,"
+    " so est_tokens may exceed it]";
 // The prose of the two root-relative comments above, as the dictionary quotes it. Asserted to sit inside them, so the
 // wrapper constants and these cannot drift apart.
 inline constexpr std::string_view kForRootRelProse =

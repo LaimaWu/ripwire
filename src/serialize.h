@@ -36,7 +36,6 @@
 #include <cstdio>
 #include <cstdlib>    // §H7 degrade seam: std::getenv for the non-release fault switch
 #include <cstring>
-#include <limits>      // knob-honesty-068: the resume index's widest digit count (sigsCutContinuationReserve)
 #include <optional>
 #include <string_view>
 #include <iterator>   // back_inserter (reorderDocsAfterCode)
@@ -889,18 +888,6 @@ inline constexpr std::string_view kForSigsNextBudgetNote =
 // (rv-knob-honesty-068 N2). No consumer is added in this lane.
 inline constexpr std::string_view kForSigsNextOffsetNote =
     " [sigs next_offset=: the candidate index the cut starts at; no consumer yet (the for offset pages files; next= re-runs the list)]";
-// knob-honesty-068 (orchestrator rulings 2026-10-07, PROCESS rule 5: the recovery handle ALWAYS ships): a charged <sigs> pays
-// for its next= in rows ONLY where that makes the answer fit. Where it cannot — the rank 1..4 floor has nothing left to give,
-// or the answer lands past its ceiling paid or not (dropping rows does not make it fit) — no row is dropped for it: the
-// handle rides unpaid on the rows the cut alone left, and when the document lands past its ceiling over_ceiling="1" says so
-// and this clause says why. Not "est_tokens exceeds budget_tokens": on a --detail bundle the bodies price at the body rate,
-// so the byte allowance (budget_tokens x 2.36 x 1.15) can be the ceiling crossed.
-// NO ANGLE BRACKETS (CHECKLIST 17): the clause rides the header legend, BEFORE the real tag, so a literal sigs tag spelled
-// here satisfied every "the sigs block is intact" grep and moved sigsblock()'s span start into this comment on exactly the
-// documents that carry it (rv-knob-honesty-068 C2).
-inline constexpr std::string_view kForSigsUnpaidOverCeilingNote =
-    " [over_ceiling=1 also when the sigs next= rides unpaid: no row is dropped to pay for it on an answer that would not fit either way]";
-
 // The clauses a <sigs> cut report owes, concatenated in a fixed order ("" when it owes none) — defined below SigsCutReport
 // (sigsCutReportLegend), because the continuation's clauses read the report itself.
 
@@ -923,12 +910,83 @@ inline constexpr std::string_view kForSigsUnpaidOverCeilingNote =
 // deterministic, query-independent, and self-announcing (capped="1" on <sigs>). An EXPLICIT
 // --token-budget=N overrides the default (N tokens × the conservative byte rate), so a caller who asks
 // for a bigger (or smaller) bundle beats the default — but in AUTO-BUNDLE mode the sig side's claim on
-// that wider ceiling is capped at THIS default budget (main.cpp sigSideCeiling; classb-bytes-memo §2's
+// that wider ceiling is capped at THIS default budget (main.cpp sigSideCeiling, retired by forbudget-soft; classb-bytes-memo §2's
 // N=8000 trap: an uncapped claim re-inflated the trimmed tail and crowded the auto bodies out), so the
 // excess buys bodies, not sig tail. An explicit --pack-top-n keeps the whole-ceiling sig claim, and
 // --signatures-only / --detail=N / --json (no auto bodies to reserve for) are likewise uncapped.
+//
+// STOP WHEN COMPLETE (forbudget-soft, owner decisions 2026-10-14; PROCESS rule 5). The default bundle's ranked head (<sigs
+// total=>: the relevance floor intersected with kForLensDefaultTopN or --pack-top-n) IS the answer, so this budget is a
+// STAIR-STEP TARGET, not a ceiling: steps A..E above still shrink row TEXT against it (an answer that fit before is
+// byte-identical), but step F — the only step that removes a row — runs against kForRunawayGuardBytes below. The rows served
+// past the target are disclosed on the block (<sigs past_target="K">: the last K rows are the ones F would have dropped
+// here) and the budget_bytes= clause calls this number a target on such an answer. An EXPLICIT --token-budget is a SOFT
+// target over the rows alone (forSigsBudgets below); the text above about its frozen sig share describes the
+// legacy hard-ceiling regime it replaced.
 inline constexpr std::size_t kForPayloadBudgetBytes = 7500;
 inline constexpr std::size_t kForCapTailSigBytes    = 96;
+
+// ── THE RUNAWAY GUARD (forbudget-soft; PROCESS rule 5's role (a)) ────────────────────────────────────────────────
+// The one default-regime row cut. Measured on the same quantity the 7.5 KB target measures (the charged header + the charged
+// sections + <sigs>), far above a typical answer: hitting it is a BUG SIGNAL (a recursion, a dump, a head far wider than any
+// question needs), never a budget. A default answer that hits it discloses over_ceiling="1" on the root, <sigs capped="1"
+// next=…> (the continuation serves every row: an explicit target is never cut by this guard, see max(guard, T)) and
+// kForRunawayGuardNote. The value is set by the pre-registered rule (forbudget-soft PLAN §G): at least 4 x the target and
+// 2 x the largest complete default payload measured on the round-2 --for argv, verified with zero hits on the round-4 and
+// capsweep argv. Gate: test/forsoftbudgetcheck.sh (D4, D4b, NX2).
+inline constexpr std::size_t kForRunawayGuardBytes = 32000;
+static_assert( kForRunawayGuardBytes >= 4 * kForPayloadBudgetBytes, "the runaway guard sits far above the default target" );
+// The reading spliced on an answer that hit the guard (and only there). It names the value so a reader (and the gate) reads the
+// guard from the answer itself. "A bug signal" is true of a default-size head; an explicitly wide --pack-top-n head is named
+// as the other way to reach it. No "--" (it rides inside an XML comment, G4).
+inline std::string forRunawayGuardNote()
+{
+    return " [over_ceiling=1: the ranked head passed the runaway guard of " + std::to_string( kForRunawayGuardBytes )
+         + " B (header plus ranked payload), so the rows past it are cut and sigs next= serves them all; on a default-size head"
+           " this is a bug signal, not a budget (a wide pack-top-n head can reach it too)]";
+}
+
+// ── THE TWO <sigs> BUDGETS (forbudget-soft, owner decisions 2026-10-14; gate: forsoftbudgetcheck) ──────────────────────
+// `target`: what the ladder's text-shrink steps A..E aim at (serialize.h trimSigLadder's effectiveBudget). `rowDrop`: where
+// its row-drop step F aims (SigsCutReport::rowDropBudgetBytes). Both in the block's own bytes.
+//   • DEFAULT (no --token-budget, softRowBytes == 0): the target is kForPayloadBudgetBytes' sig share (the bundle's charged
+//     header + sections subtracted), exactly as before, so an answer that fit is byte-identical; rows drop only past the
+//     runaway guard's share (kForRunawayGuardBytes, the same quantity) — the whole ranked head is the answer.
+//   • SOFT TARGET (an explicit --token-budget / MCP budget_tokens: T = softRowBytes): T is charged against the ROWS inside
+//     <sigs> only — never the header or a disclosure — so the compact and full dialects serve the same rows. Rows drop,
+//     tail-first, until they fit T (+ the "<sigs></sigs>" wrapper); rank 1..4 always ship. Rows are therefore a rank prefix,
+//     monotone in T, and the next row would cross T. The text tier (what A..E aim at) is T itself — a wide target serves the
+//     rows uncut, which is what the cut's own next= (--signatures-only at a wide target) promises — EXCEPT on the default
+//     auto bundle (`tierAtDefault`: bodies or hops ride after the rows and no --pack-top-n names a sig posture), where it is
+//     the DEFAULT target's share as the full dialect's header prices it (`fullFixedBytes`) when T is wider: there a wider
+//     target must not re-inflate row text at the bodies' expense (classb-bytes-memo §2's N=8000 trap), so the rows shrink
+//     as the default's do and a target wider than the complete answer serves the default answer's rows at its tier.
+// This replaced the auto bundle's frozen sig share and the trailing-section reserve of the hard-ceiling regime (classb-bytes-
+// memo §2, lego-charge fix round 4): with no byte promise there is nothing for either to protect — the trailing sections take
+// what the rows leave of T, in the default answer's priority order.
+struct ForSigsBudgets
+{
+    std::size_t target  = 1;   // >= 1: 0 means "no budget" to packSignatures
+    std::size_t rowDrop = 0;   // > target whenever a soft target or the guard is in force
+};
+inline ForSigsBudgets forSigsBudgets( std::size_t softRowBytes, std::size_t fixedBytes, std::size_t fullFixedBytes, bool tierAtDefault ) noexcept
+{
+    constexpr std::size_t kSigsWrapperBytes = 13;   // "<sigs>" + "</sigs>": the block's own frame, not a row
+    const auto share = []( std::size_t budget, std::size_t fixed ) { return budget > fixed ? budget - fixed : std::size_t( 1 ); };
+    ForSigsBudgets b;
+    if( softRowBytes > 0 )
+    {
+        b.target  = tierAtDefault ? std::min( softRowBytes, share( kForPayloadBudgetBytes, fullFixedBytes ) ) : softRowBytes;
+        b.rowDrop = softRowBytes + kSigsWrapperBytes;
+    }
+    else
+    {
+        b.target  = share( kForPayloadBudgetBytes, fixedBytes );
+        b.rowDrop = std::max( share( kForRunawayGuardBytes, fixedBytes ), b.target + 1 );
+    }
+    ENSURES( b.target >= 1 && b.rowDrop > b.target, "forSigsBudgets: the row-drop budget sits above the text target" );
+    return b;
+}
 
 // ── THE --for LENS'S RANKED-HEAD CAP, OWNED ONCE (round-4 finding F-03) ──────────────────────────────
 // How many ranked symbols the --for lens considers before the relevance floor narrows it and the ladder
@@ -950,12 +1008,11 @@ inline constexpr int kForLensDefaultTopN = 40;
 // the DEFAULT gets richer rather than a richer verb staying unreachable. This allowance is the body
 // budget the DEFAULT bundle gains ON TOP of kForPayloadBudgetBytes (~1.6K tokens at kBytesPerTokenBody):
 // the signature budget above is untouched, so the ranked map is byte-identical to the signatures-only
-// run and the bodies ride only on this disclosed extra. An EXPLICIT --token-budget=N is a hard ceiling —
-// no allowance; bodies take the budget the signature bundle left over, where the signature side's claim
-// is capped at kForPayloadBudgetBytes (main.cpp sigSideCeiling — the forbudgetmonotoncheck invariant: a
-// wider ceiling never serves less decisive content; at any ceiling >= kForPayloadBudgetBytes +
-// kForAutoBodyBudgetBytes the sig render equals the default regime's, so the bodies' leftover is
-// provably >= the default's and every body the default serves still fits). Disclosure is on
+// run and the bodies ride only on this disclosed extra. An EXPLICIT --token-budget=N is a soft target over
+// the rows (forbudget-soft) — no allowance; bodies take what the <sigs> rows left of N, the rows shrunk at
+// the default's tier on this bundle (forSigsBudgets tierAtDefault), so a wide N never re-inflates row text at
+// the bodies' expense (the forbudgetmonotoncheck invariant: a wider target never serves less decisive
+// content). Disclosure is on
 // the <ctx> root (bundle="auto" bodies="N", reason="budget" when none fit) plus a legend sentence;
 // --signatures-only opts out byte-identically; --detail=N (the explicit knob) supersedes the automatic
 // selection. Candidate cap: kPackTaskBodyCandidates — the default --for converges on the pack-task shape.
@@ -1101,12 +1158,14 @@ inline std::string renderFileTailXml( const FileTail& t, std::size_t shownCap, s
     return x;
 }
 
-// The JSON twin: `"tail":{"total":T,"shown":K,"files":[…]}` (the caller supplies the leading comma).
-inline std::string renderFileTailJson( const FileTail& t, std::size_t shownCap )
+// The JSON twin: `"tail":{"total":T,"shown":K,"files":[…]}` (the caller supplies the leading comma). forbudget-soft (D-4): a
+// capped tail carries `"next":"…"` — the XML twin's next= (the file page that lists what it left out) — before its files.
+inline std::string renderFileTailJson( const FileTail& t, std::size_t shownCap, std::string_view cutNextInvocation = {} )
 {
     const std::size_t shown = std::min( shownCap, t.paths.size() );
     std::string j = "\"tail\":{\"total\":" + std::to_string( t.total )
-                  + ",\"shown\":" + std::to_string( shown ) + ",\"files\":[";
+                  + ",\"shown\":" + std::to_string( shown )
+                  + ( shown < t.total ? nextFieldJson( cutNextInvocation ) : std::string() ) + ",\"files\":[";
     for( std::size_t i = 0; i < shown; ++i )
     {
         if( i > 0 )
@@ -4912,10 +4971,24 @@ inline std::size_t droppedPositiveCount( std::size_t candidatePositives, std::si
 // so subtract the old cost first and add the new one — never form `before - after` (it can be negative,
 // i.e. unsigned-overflow UB under G1's -fsanitize=integer). `total >= before` always holds (before is a
 // summand of total).
-template<class EntryT, class FileT, class CostFn>
-inline void trimSigLadder( std::vector<EntryT>& entries, std::vector<FileT>& files,
-                           std::size_t& total, std::size_t effectiveBudget, CostFn entryCost )
+//
+// THE TARGET AND THE ROW-DROP BUDGET (forbudget-soft). Steps A..E aim at `effectiveBudget` (the TARGET: they shorten row text,
+// no row goes). Step F — the only step that removes a row — runs against `dropBudget` (>= the target; equal to it in the
+// classic hard-ceiling call below). When it is wider, the rows F WOULD have dropped at the target but keeps are counted
+// (a dry run over the same tail walk, so they are exactly the last rows kept: pastTargetRows) and `targetCutTotal` is the
+// block total that cut would have left — the caller's trailing sections are funded as if the block stopped there.
+struct SigLadderOutcome
 {
+    std::size_t pastTargetRows = 0;   // rows F would have dropped at the target and kept (the --for default's past_target=)
+    std::size_t droppedRows    = 0;   // rows F dropped against dropBudget
+    std::size_t targetCutTotal = 0;   // the block total after F at the target (== total when nothing ran past it)
+};
+template<class EntryT, class FileT, class CostFn>
+inline SigLadderOutcome trimSigLadder( std::vector<EntryT>& entries, std::vector<FileT>& files,
+                                       std::size_t& total, std::size_t effectiveBudget, CostFn entryCost, std::size_t dropBudget )
+{
+    EXPECTS( dropBudget >= effectiveBudget );   // the row-drop budget is never tighter than the target the shrink steps aim at
+    SigLadderOutcome out;
     const auto fits      = [ & ] { return total <= effectiveBudget; };
     const auto shrinkSig = [ & ]( EntryT& e, std::size_t cap )
     { total -= entryCost( e ); truncateUtf8WithEllipsis( e.sig, cap ); total += entryCost( e ); };
@@ -4963,7 +5036,34 @@ inline void trimSigLadder( std::vector<EntryT>& entries, std::vector<FileT>& fil
     // file-major form ("tail file first, source order inside it") could drop a rank-5 row in the last file
     // while a rank-39 row in the first file survived. A file's wrapBytes (its file notes now — the <f>
     // wrapper is gone) go with the file's last live row, exactly as before.
-    for( std::size_t k = entries.size(); k > 0 && !fits(); )
+    // F's dry run at the TARGET (only when the row-drop budget is wider): the same walk, on a copy of the live counts, so the
+    // rows it names are exactly the tail rows the real walk below keeps past the target.
+    std::size_t wouldDrop = 0;
+    out.targetCutTotal    = total;
+    if( dropBudget > effectiveBudget && !fits() )
+    {
+        std::vector<std::size_t> live( files.size() );
+        for( std::size_t i = 0; i < files.size(); ++i )
+        {
+            live[ i ] = files[ i ].liveCount;
+        }
+        for( std::size_t k = entries.size(); k > 0 && out.targetCutTotal > effectiveBudget; )
+        {
+            const EntryT& e = entries[ --k ];
+            if( e.dropped || e.globalRank <= 4 )
+            {
+                continue;
+            }
+            out.targetCutTotal -= entryCost( e );
+            ++wouldDrop;
+            if( --live[ e.fileSlot ] == 0 )
+            {
+                out.targetCutTotal -= files[ e.fileSlot ].wrapBytes;
+            }
+        }
+    }
+    const auto fitsDrop = [ & ] { return total <= dropBudget; };
+    for( std::size_t k = entries.size(); k > 0 && !fitsDrop(); )
     {
         EntryT& e = entries[ --k ];
         if( e.dropped || e.globalRank <= 4 )
@@ -4972,12 +5072,21 @@ inline void trimSigLadder( std::vector<EntryT>& entries, std::vector<FileT>& fil
         }
         total -= entryCost( e );
         e.dropped = true;
+        ++out.droppedRows;
         FileT& sf = files[ e.fileSlot ];
         if( --sf.liveCount == 0 )
         {
             total -= sf.wrapBytes; // the file's notes go with its last live row
         }
     }
+    if( dropBudget == effectiveBudget )
+    {
+        out.targetCutTotal = total;
+    }
+    // the guard's cut is a tail of the target's (same walk, wider stop), so it never drops a row the target kept
+    ASSUME( out.droppedRows <= wouldDrop || dropBudget == effectiveBudget );
+    out.pastTargetRows = wouldDrop > out.droppedRows ? wouldDrop - out.droppedRows : 0u;
+    return out;
 }
 
 // ── THE ROW GATE (`budgetBytes`, --pack-budget-bytes), RANK FIRST (cut-fix lane A, 2026-09-23) ─────────────
@@ -5050,6 +5159,16 @@ struct SigsCutReport
     // the report — carried here rather than as one more defaulted trailing parameter, so a train merge that adds another
     // defaulted parameter to these 20+-parameter signatures cannot silently bind a value to the wrong one. nullptr ⇒ none.
     const SigsCutContinuation* continuationRequest = nullptr;
+    // IN (forbudget-soft): where the ladder's row-drop step F aims. 0 = at the payload budget, the steps A..E target (the hard
+    // ceiling every caller had before). Nonzero = F runs against THIS budget (>= the payload budget; same units, the block's
+    // own bytes): the payload budget stays the TARGET the text-shrink steps aim at, and rows past it are kept until this one.
+    // The --for default passes the runaway guard's share here; an explicit soft target passes its row bytes T.
+    std::size_t rowDropBudgetBytes  = 0;
+    bool        pastTargetDisclosed = false;   // IN: print past_target= (the default regime's target); the soft regime does not
+    std::size_t pastTarget      = 0;       // OUT: rows step F would have dropped at the payload budget and kept (past_target=)
+    std::size_t pastTargetBytes = 0;       // OUT: the block bytes those rows add over the target cut (rows, their file notes,
+                                           //   the tag's attribute bytes) — what the caller's trailing sections must not pay for
+    bool        rowDropCut      = false;   // OUT: step F dropped rows against rowDropBudgetBytes (the guard / the soft target)
     std::size_t shown       = 0;
     std::size_t total       = 0;
     std::size_t docsDropped = 0;
@@ -5062,13 +5181,6 @@ struct SigsCutReport
     std::size_t lastShownRank    = 0;  // the 1-based candidate rank of the last row printed (rows are a rank PREFIX: the ladder
                                        //   drops tail-first) — the resume index; next_offset= when rows were dropped
     bool        hasContinuation  = false;   // the caller asked for the continuation (next=/next_budget_tokens=/next_offset=)
-    bool        terseContinuation = false;  // a CHARGED pasteable one under a hard ceiling: next= alone (no next_offset=, no
-                                            //   clause — the bundle's own next= reading defines it); see SigsCutContinuation
-    std::size_t continuationPaidSurplus = 0;   // train 27: what the rows gave up past what they owed (a whole row dropped for a
-                                               //   smaller handle) — the caller adds it to a measured overrun (verbs_for.h runForLens)
-    std::size_t continuationUnpaidBytes = 0;   // a CHARGED one's bytes no row paid for — the rank 1..4 floor could not give them up,
-                                               //   or the caller forbade the payment (payFromRows=false): it rides anyway (the recovery
-                                               //   handle always ships) and the caller labels any overshoot
 };
 
 // ── THE <sigs> CUT'S CONTINUATION (knob-honesty-068; PROCESS rule 5: every cut disclosed AND recoverable via next=) ──────────
@@ -5076,30 +5188,15 @@ struct SigsCutReport
 // r=1 row's (a body, or the file-grain widening page), so the trimmed tail was a dead end. The block now carries its own
 // next= — the SAME ranked lens re-run with the sig side widened until nothing is cut:
 //     --for=TASK --signatures-only [RANKING FLAGS] [--pack-top-n=N] --token-budget=T [--json]
-// --signatures-only gives the signatures the WHOLE explicit ceiling (verbs_for.h forSigSideCeiling: no auto-body share),
-// and T is sized from THIS block's untrimmed bytes plus the bytes the caller says ride beside it (`fixedBytes`), at the
-// budget conversion's own rate, rounded up to a 100-token step — a ceiling, so over-sizing it costs nothing (the re-run is
-// as big as its content, bounded by the same candidate pool). --pack-top-n rides only when the caller set it (it sets
-// total=). The value depends on the task and the untrimmed rows only — never on the ceiling that cut them — so the block
-// stays byte-identical at the default and at any explicit ceiling above it (forbudgetmonotoncheck's invariant).
-// WHO PAYS FOR ITS BYTES — two regimes, one predicate per caller (`charged`):
-//   • EXEMPT (the default ceiling; an explicit one wide enough that the sig side is frozen at the default's): the plan never
-//     reserves it — the e= / docs_after_code convention, a disclosure never costs a row the ceiling did not already cut — so
-//     the ranked set is the one it was and forbudgetmonotoncheck's byte identity holds. Downstream sections pay (the body
-//     leftover, the tail funded last); est_tokens measures it.
-//   • CHARGED (an explicit ceiling whose sig side is ALL of it: a --token-budget at or under the default sig share, any
-//     explicit one beside --signatures-only, MCP budget_tokens, --json --token-budget): nothing downstream can pay there, and
-//     an explicit --token-budget is a HARD ceiling (est_tokens <= budget, fornotesbudgetcheck), so the attribute is reserved
-//     inside the block like shown=/total=, and it rides TERSE there: next= alone — no next_offset=, no bracket clause; the
-//     bundle's own next= reading defines it ("the follow-up to paste"). Measured why (knob-honesty-068 report): with the
-//     clauses, the compact dialect — whose sig ledger leans on the header rungs — landed past the ceiling where the full
-//     one fitted (compactlegendcheck P4), and the rungs cannot shed a clause that is the cut's only disclosure. The e=
-//     ruling's shape: under a tight ceiling the extras go, the one thing that must stay (here the call) stays and is paid
-//     for. MCP keeps its clause (next_budget_tokens= has no other reading).
-//     …PAID ONLY WHERE PAYING IS WHAT MAKES THE ANSWER FIT (orchestrator ruling C3, 2026-10-07/08, CLI and MCP alike): the
-//     caller renders with payFromRows=false first (the rows the cut alone leaves, the whole handle unpaid) and serves that
-//     when it fits; it pays only when that answer lands past its ceiling and the paid one does not. Past it either way, the
-//     unpaid answer ships with over_ceiling="1" on the root (kForSigsUnpaidOverCeilingNote).
+// --signatures-only serves the rows uncut at a wide soft target (forSigsBudgets: the text tier is the target itself off the
+// default auto bundle), and T is sized from THIS block's untrimmed bytes plus the bytes the caller says ride beside it
+// (`fixedBytes`), at the budget conversion's own rate, rounded up to a 100-token step — a soft target, so over-sizing it costs
+// nothing (the re-run is as big as its content, bounded by the same candidate pool). --pack-top-n rides only when the caller
+// set it (it sets total=). The value depends on the task and the untrimmed rows only — never on the target that cut them.
+// WHO PAYS FOR ITS BYTES: nobody — the continuation is EXEMPT (the e= / docs_after_code convention: a disclosure never costs
+// a row). forbudget-soft retired the CHARGED regime (knob-honesty-068: a hard explicit ceiling paid the handle from rows,
+// terse, and re-rendered up to three times under ruling C3): an explicit budget is a soft target over the rows now, with no
+// byte promise for a handle to be paid into.
 // THE RESUME INDEX, next_offset= (present when rows were DROPPED, not only shrunk): the candidate index the cut starts at —
 // the last printed row's 1-based rank in the (score desc, id asc) candidate order, so a pseudo-symbol slot that prints no
 // row cannot skew it the way a printed-row count would. The root's at= stamps the index it was cut from; a continuation
@@ -5116,22 +5213,10 @@ struct SigsCutContinuation
     int              packTopN   = 0;     // the caller's explicit --pack-top-n (0 = the default pool): it sets total=, so it is echoed
     std::string_view rankFlags  = {};    // the caller's RANKING flags, pre-spelled (" --no-route --adaptive"…): the re-run must rank
                                          //   the same set, or "the rows this block cut" are rows of a different list
-    std::size_t      fixedBytes = 0;     // what the re-run's ceiling must carry besides the block: the charged header + sibling blocks
-    bool             charged    = false; // reserve it (and its legend clause) INSIDE the block's budget — see the regime rule above
+    std::size_t      fixedBytes = 0;     // what the re-run's target must carry besides the block: the charged header + sibling blocks
     bool             json       = false; // the --json dialect: the re-run is --json too
     bool             pasteHandle = true; // false on MCP: the client re-calls the tool, so no CLI argv — the machine form,
                                          //   next_budget_tokens=, is the argument a re-call of the same tool needs
-    std::size_t      ledgerGapBytes = 0; // a CHARGED one's plan also reserves this: the sig room the caller's dialect was given beyond
-                                         //   what its header honestly costs (the --for compact dialect, verbs_for.h compactLedgerGapBytes),
-                                         //   so a capped compact block is cut to the rows a PAID full one keeps
-    bool             payFromRows = true; // a CHARGED one: pay for it in rows (the plan's ledger gap + paySigsContinuationFromRows).
-                                         //   false = the caller found that paying cannot make its answer fit (over its ceiling either
-                                         //   way; orchestrator ruling C3, 2026-10-07): the block keeps the rows the cut alone leaves —
-                                         //   no ledger gap, no payment — and the whole continuation rides unpaid (continuationUnpaidBytes)
-    std::size_t      overrunBytes = 0;   // train 27 (compactlegendcheck P1-B): a CHARGED one paying from rows also pays these bytes
-                                         //   from the rows, byte for byte beside the handle — the overrun past the exact budget the
-                                         //   caller MEASURED on its paid render (verbs_for.h runForLens, the compact dialect only);
-                                         //   0 everywhere else, so every other caller's rows are untouched
 };
 
 inline std::size_t sigsCutNextTokens( std::size_t blockBytes, std::size_t fixedBytes ) noexcept
@@ -5191,6 +5276,7 @@ struct SigsTrimPlan
     bool        capped          = false;
     std::size_t effectiveBudget = 0;   // the ladder's target: the budget minus the tag's reserved bytes
     std::size_t docsDroppable   = 0;   // the docs_dropped= upper bound
+    std::size_t reserveBytes    = 0;   // the tag's reserved bytes (forbudget-soft: the row-drop budget subtracts them too)
 };
 template<class EntryT>
 inline SigsTrimPlan planSigsTrim( const std::vector<EntryT>& entries, std::size_t totalRows, std::size_t gateCut,
@@ -5207,7 +5293,40 @@ inline SigsTrimPlan planSigsTrim( const std::vector<EntryT>& entries, std::size_
                         && blockBytes + docsReserve + ( gateCut > 0 ? markerBytes : 0u ) > payloadBudgetBytes;
     plan.capped          = plan.ladderFires || gateCut > 0;
     plan.effectiveBudget = payloadBudgetBytes > reserve ? payloadBudgetBytes - reserve : 0u;
+    plan.reserveBytes    = reserve;
     return plan;
+}
+
+// forbudget-soft: step F's effective budget for a caller that asked for a wider row-drop budget (SigsCutReport::
+// rowDropBudgetBytes): that budget less the tag's reserve and the past_target= attribute the block may then carry — never
+// below the target's own effective budget (0 asked, or one at or under the payload budget = the classic hard ceiling).
+inline std::size_t sigsRowDropEffective( const SigsTrimPlan& plan, std::size_t payloadBudgetBytes, std::size_t rowDropBudgetBytes,
+                                         std::size_t totalRows ) noexcept
+{
+    if( rowDropBudgetBytes <= payloadBudgetBytes )
+    {
+        return plan.effectiveBudget;
+    }
+    const std::size_t reserve = plan.reserveBytes + sizeof( " past_target=\"\"" ) - 1 + sigsDecimalDigits( totalRows );
+    return std::max( plan.effectiveBudget, rowDropBudgetBytes > reserve ? rowDropBudgetBytes - reserve : 0u );
+}
+
+// forbudget-soft: what the ladder's two budgets left on the report — the rows past the target, the bytes they add over the
+// target cut (rows, file notes and, when it is printed, the attribute), and whether the wider budget itself cut rows.
+inline void sigsCutRecordLadder( SigsCutReport& cut, const SigLadderOutcome& ladder, std::size_t totalAfterLadder,
+                                 std::size_t rowDropBudgetBytes, bool pastTargetDisclosed )
+{
+    cut.rowDropBudgetBytes  = rowDropBudgetBytes;
+    cut.pastTargetDisclosed = pastTargetDisclosed;
+    cut.pastTarget          = ladder.pastTargetRows;
+    cut.rowDropCut          = rowDropBudgetBytes > 0 && ladder.droppedRows > 0;
+    if( ladder.pastTargetRows > 0 )
+    {
+        ASSUME( totalAfterLadder >= ladder.targetCutTotal );   // the target cut is a superset of the guard's: fewer bytes
+        cut.pastTargetBytes = totalAfterLadder - ladder.targetCutTotal
+                            + ( pastTargetDisclosed ? sizeof( " past_target=\"\"" ) - 1 + sigsDecimalDigits( ladder.pastTargetRows ) : 0u );
+    }
+    ENSURES( cut.pastTarget <= cut.shown, "sigsCutRecordLadder: more rows past the target than rows shown" );   // they are shown rows
 }
 
 // What the finished block shows, from its rows after the gate and the ladder: shown rows, and the shown rows whose doc
@@ -5237,8 +5356,7 @@ inline void sigsCutAttachContinuation( SigsCutReport& cut, const SigsCutContinua
     {
         return;
     }
-    cut.hasContinuation   = true;
-    cut.terseContinuation = req->charged && req->pasteHandle;
+    cut.hasContinuation = true;
     if( req->pasteHandle )
     {
         cut.next = invocation;
@@ -5250,7 +5368,7 @@ inline void sigsCutAttachContinuation( SigsCutReport& cut, const SigsCutContinua
 }
 inline bool sigsCutHasNextOffset( const SigsCutReport& cut ) noexcept
 {
-    return cut.hasContinuation && !cut.terseContinuation && cut.isCapped && cut.shown < cut.total && cut.lastShownRank > 0;
+    return cut.hasContinuation && cut.isCapped && cut.shown < cut.total && cut.lastShownRank > 0;
 }
 // the legend clauses a cut report owes, in a fixed order: shrunk-not-dropped, the continuation's (knob-honesty-068), docs_dropped,
 // docs_after_code (train 26b: lean's reorder reading joins the knob's report legend)
@@ -5261,7 +5379,11 @@ inline std::string sigsCutReportLegend( const SigsCutReport& cut )
     {
         notes += kForSigsShrunkNote;
     }
-    if( cut.isCapped && !cut.next.empty() && !cut.terseContinuation )
+    if( cut.pastTargetDisclosed && cut.pastTarget > 0 )
+    {
+        notes += kForPastTargetNote;
+    }
+    if( cut.isCapped && !cut.next.empty() )
     {
         notes += kForSigsNextNote;
     }
@@ -5293,67 +5415,6 @@ inline std::string sigsCutLegendNotes( bool isCapped, std::size_t shown, std::si
     cut.docsDropped = docsDropped;
     return sigsCutReportLegend( cut );
 }
-// The bytes a CHARGED continuation adds, an upper bound fixed before the plan: the pasteable form is terse (the call alone);
-// the MCP machine form keeps its attribute, the resume index at its widest digits, and the clauses that define them.
-inline std::size_t sigsCutContinuationReserve( const SigsCutContinuation* req, std::size_t valueAttrBytes, std::size_t offsetAttrBytes,
-                                               bool withClauses )
-{
-    if( req == nullptr || !req->charged )
-    {
-        return 0;
-    }
-    if( req->pasteHandle )
-    {
-        return valueAttrBytes;   // terse: next= alone (sigsCutAttachContinuation)
-    }
-    const std::size_t clauses = withClauses ? kForSigsNextBudgetNote.size() + kForSigsNextOffsetNote.size() : 0u;
-    return valueAttrBytes + offsetAttrBytes + clauses;
-}
-// The plan-side share of a CHARGED continuation: the dialect's ledger gap (SigsCutContinuation::ledgerGapBytes). It rides the
-// marker's reservation, so it is spent only when the ladder fires — an uncapped block is untouched.
-inline bool sigsCutPaysFromRows( const SigsCutContinuation* req ) noexcept
-{
-    return req != nullptr && req->charged && req->payFromRows;
-}
-inline std::size_t sigsCutPlanReserve( const SigsCutContinuation* req ) noexcept
-{
-    return sigsCutPaysFromRows( req ) ? req->ledgerGapBytes : 0u;
-}
-// train 27: what a payment from the rows gave up PAST what it owed — the ladder drops whole rows, so a 90 B handle can cost a
-// 150 B row. A caller that measures its paid document still over its budget owes that overrun ON TOP of what was given up.
-inline std::size_t sigsCutPaidSurplus( std::size_t totalBefore, std::size_t totalAfter, std::size_t owed, std::size_t unpaid ) noexcept
-{
-    const std::size_t given   = totalBefore > totalAfter ? totalBefore - totalAfter : 0u;
-    const std::size_t paid    = owed > unpaid ? owed - unpaid : 0u;
-    const std::size_t surplus = given > paid ? given - paid : 0u;
-    ENSURES( surplus <= given, "sigsCutPaidSurplus: the surplus exceeds what the rows gave up" );
-    return surplus;
-}
-// train 27: the row-side share beside the handle — the caller's measured overrun (SigsCutContinuation::overrunBytes), owed only by
-// a capped block whose caller lets rows pay; what the rank 1..4 floor cannot give up is reported with the handle's unpaid bytes
-inline std::size_t sigsCutRowOverrun( const SigsCutContinuation* req ) noexcept
-{
-    return sigsCutPaysFromRows( req ) ? req->overrunBytes : 0u;
-}
-// A CHARGED continuation is paid FROM THE ROWS, byte for byte: the same ladder runs on past the cut until the block has given
-// up `cost` bytes, so block + continuation never exceeds the block the cut alone left — in either dialect, whatever the plan's
-// slack (reserving it in the plan let that slack absorb it and the bundle grow). Returns the bytes the rank 1..4 floor could
-// NOT give up (0 = paid in full); the continuation rides regardless (orchestrator ruling 2026-10-07) and the caller labels it.
-// Called only where the caller lets rows pay (sigsCutPaysFromRows): its callers render that way only after the unpaid answer
-// landed past its ceiling, and serve the result only when it fits (ruling C3), so no row is dropped unless that buys the fit.
-template<class EntryT, class FileT, class CostFn>
-inline std::size_t paySigsContinuationFromRows( std::vector<EntryT>& entries, std::vector<FileT>& files, std::size_t& total,
-                                                std::size_t cost, CostFn entryCost )
-{
-    if( cost == 0 )
-    {
-        return 0;
-    }
-    const std::size_t target = total > cost ? total - cost : 0u;
-    trimSigLadder( entries, files, total, target, entryCost );
-    return total > target ? total - target : 0u;   // not bounded by `cost`: a ladder action may append an ellipsis (trimSigLadder)
-}
-
 // The <sigs> open tag: `<sigs>` untrimmed; ` shown= total= capped="1"` when rows were cut or shrunk; ` docs_dropped=`
 // when a shown row lost its doc comment. The bytes it adds are the ones planSigsTrim reserved.
 inline std::string sigsOpenTag( const SigsCutReport& cut )
@@ -5363,6 +5424,11 @@ inline std::string sigsOpenTag( const SigsCutReport& cut )
     if( cut.isCapped )
     {
         rw::formatTo( nb, sizeof( nb ), " shown=\"{}\" total=\"{}\" capped=\"1\"", cut.shown, cut.total );
+        tag += nb;
+    }
+    if( cut.pastTargetDisclosed && cut.pastTarget > 0 )   // forbudget-soft: the rows served past the default target
+    {
+        rw::formatTo( nb, sizeof( nb ), " past_target=\"{}\"", cut.pastTarget );
         tag += nb;
     }
     if( cut.docsDropped > 0 )
@@ -5490,10 +5556,16 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
                                                              //   on GLOBAL rank), so pages merge without duplicate r=
 {
     const SigsCutContinuation* const cutNext = cutOut != nullptr ? cutOut->continuationRequest : nullptr;
+    // forbudget-soft: the two other INPUTS the report carries (the row-drop budget and whether past_target= is printed), read
+    // before the reset like the continuation request
+    const std::size_t rowDropBudgetIn     = cutOut != nullptr ? cutOut->rowDropBudgetBytes : 0u;
+    const bool        pastTargetDisclosed = cutOut != nullptr && cutOut->pastTargetDisclosed;
     if( cutOut )
     {
         *cutOut = SigsCutReport {};
         cutOut->continuationRequest = cutNext;
+        cutOut->rowDropBudgetBytes  = rowDropBudgetIn;
+        cutOut->pastTargetDisclosed = pastTargetDisclosed;
     }
     if( droppedPositiveOut )
     {
@@ -5794,34 +5866,25 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
 
         // the tag's own attributes cost bytes — budget the trimmed state INCLUDING them (planSigsTrim; capture-audit
         // 2026-09-04 for the shown=/total= marker, cut-fix lane A for docs_dropped=).
-        // knob-honesty-068: the continuation a capped tag carries — sized from the UNTRIMMED block, known before the plan, so
-        // a CHARGED one rides the marker's reservation (attribute + its legend clause) and an exempt one costs the plan nothing
+        // knob-honesty-068: the continuation a capped tag carries — sized from the UNTRIMMED block; exempt (a disclosure never
+        // costs a row), so the plan reserves nothing for it
         const std::string cutNextInv    = cutNext != nullptr ? sigsCutNextInvocation( *cutNext, total ) : std::string();
         const std::size_t cutNextTokens = cutNext != nullptr ? sigsCutNextTokens( total, cutNext->fixedBytes ) : 0u;
-        const std::size_t cutNextCost   = sigsCutContinuationReserve(
-            cutNext,
-            ( cutNext != nullptr && cutNext->pasteHandle ) ? nextAttrXml( cutNextInv ).size()
-                                                           : sizeof( " next_budget_tokens=\"\"" ) - 1 + sigsDecimalDigits( cutNextTokens ),
-            sizeof( " next_offset=\"\"" ) - 1 + sigsDecimalDigits( std::numeric_limits<std::uint32_t>::max() ), /*withClauses=*/true );
         const SigsTrimPlan plan = planSigsTrim( entries, totalRows, gateCut, total, payloadBudgetBytes,
-                                                sizeof( " shown=\"\" total=\"\" capped=\"1\"" ) - 1 + sigsCutPlanReserve( cutNext ),
+                                                sizeof( " shown=\"\" total=\"\" capped=\"1\"" ) - 1,
                                                 sizeof( " docs_dropped=\"\"" ) - 1 );
+        SigLadderOutcome ladder;
         if( plan.ladderFires )
         {
             // one ladder ACTION on one entry, tail-first; every action re-checks the budget so the ladder
             // stops at the first fitting state. Pure function of (global rank, the kFor* constants) — the
             // ladder itself is trimSigLadder() above, shared verbatim with the JSON sibling (§A4a).
-            trimSigLadder( entries, sigFiles, total, plan.effectiveBudget, entryCost );
+            // forbudget-soft: step F aims at the caller's row-drop budget when it asked for a wider one (the --for default's
+            // runaway guard, an explicit soft target); the shrink steps keep aiming at payloadBudgetBytes
+            ladder = trimSigLadder( entries, sigFiles, total, plan.effectiveBudget, entryCost,
+                                    sigsRowDropEffective( plan, payloadBudgetBytes, rowDropBudgetIn, totalRows ) );
         }
-        // knob-honesty-068: a CHARGED continuation is paid from the rows (paySigsContinuationFromRows); what the floor
-        // cannot pay rides anyway and is reported for the caller's over_ceiling label
-        //   …only where the caller lets rows pay (payFromRows): otherwise the whole of it rides unpaid on the cut's own rows
-        const std::size_t cutNextOwed   = plan.capped ? cutNextCost + sigsCutRowOverrun( cutNext ) : 0u;
-        const std::size_t totalBeforePay = total;
-        const std::size_t cutNextUnpaid = sigsCutPaysFromRows( cutNext )
-                                              ? paySigsContinuationFromRows( entries, sigFiles, total, cutNextOwed, entryCost )
-                                              : cutNextOwed;
-        const std::size_t cutNextSurplus = sigsCutPaysFromRows( cutNext ) ? sigsCutPaidSurplus( totalBeforePay, total, cutNextOwed, cutNextUnpaid ) : 0u;
+        const std::size_t totalAfterLadder = total;
 
         // A2: the exact count, computed AFTER the ladder has made its final drop decisions (droppedPositiveCount
         // above — the shared arithmetic with the JSON sibling). Pure bookkeeping, no output bytes either way.
@@ -5869,9 +5932,8 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
                 { e.head = sigRowHead( ing, e.id, SigRowFacts{ metrics, fanIn, e.lensRun.c_str(), e.pureSig ? " pure=\"1\"" : "", newRank, topRowNext,
                                                                spelling.elideZeroMetrics }, esc, rootArg ); } );
         }
-        cut.continuationRequest     = cutNext;
-        cut.continuationUnpaidBytes = cutNextUnpaid;
-        cut.continuationPaidSurplus = cutNextSurplus;
+        cut.continuationRequest = cutNext;
+        sigsCutRecordLadder( cut, ladder, totalAfterLadder, rowDropBudgetIn, pastTargetDisclosed );   // forbudget-soft
         sigsCutAttachContinuation( cut, cutNext, cutNextInv, cutNextTokens );   // nothing unless capped and asked for
         if( cutOut )
         {
@@ -10820,6 +10882,8 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
                                                                            //   knob-honesty-068: continuationRequest is an INPUT
 {
     const SigsCutContinuation* const cutNext = cutOut != nullptr ? cutOut->continuationRequest : nullptr;
+    const std::size_t rowDropBudgetIn     = cutOut != nullptr ? cutOut->rowDropBudgetBytes : 0u;   // forbudget-soft: the XML twin's inputs
+    const bool        pastTargetDisclosed = cutOut != nullptr && cutOut->pastTargetDisclosed;
     const bool rankAdaptivePayload = lens.rankAdaptivePayload;
     if( outCapped )
     {
@@ -10829,6 +10893,8 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
     {
         *cutOut = SigsCutReport {};
         cutOut->continuationRequest = cutNext;   // knob-honesty-068: the request survives the reset
+        cutOut->rowDropBudgetBytes  = rowDropBudgetIn;
+        cutOut->pastTargetDisclosed = pastTargetDisclosed;
     }
     if( droppedPositiveOut )
     {
@@ -10911,28 +10977,19 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
     // reserved INSIDE this array's budget exactly as the XML tag's attributes are inside its block's — they used to be
     // absent, and a JSON consumer could not tell 24 rows of 40 from 24 of 24.
     // (Without the rank-adaptive payload every globalRank is 0: no row is droppable and no doc is ever removed.)
-    // knob-honesty-068: the "sigs_next" key, charged or exempt by the XML twin's rule (SigsCutContinuation; no legend here)
+    // knob-honesty-068: the "sigs_next" key, exempt by the XML twin's rule (SigsCutContinuation; no legend here)
     const std::string cutNextInv    = cutNext != nullptr ? sigsCutNextInvocation( *cutNext, total ) : std::string();
     const std::size_t cutNextTokens = cutNext != nullptr ? sigsCutNextTokens( total, cutNext->fixedBytes ) : 0u;
-    const std::size_t cutNextCost   = sigsCutContinuationReserve( cutNext, nextFieldJson( cutNextInv, "sigs_next" ).size(),
-                                                                  sizeof( ",\"sigs_next_offset\":" ) - 1 + sigsDecimalDigits( std::numeric_limits<std::uint32_t>::max() ),
-                                                                  /*withClauses=*/false );
     const SigsTrimPlan plan = planSigsTrim( entries, totalRows, gateCut, total, payloadBudgetBytes,
-                                            sizeof( ",\"sigs_shown\":,\"sigs_total\":" ) - 1 + sigsCutPlanReserve( cutNext ),
+                                            sizeof( ",\"sigs_shown\":,\"sigs_total\":" ) - 1,
                                             sizeof( ",\"docs_dropped\":" ) - 1 );
+    SigLadderOutcome ladder;
     if( plan.ladderFires )
     {
-        trimSigLadder( entries, sigFiles, total, plan.effectiveBudget, jsonSigEntryCost );
+        ladder = trimSigLadder( entries, sigFiles, total, plan.effectiveBudget, jsonSigEntryCost,
+                                sigsRowDropEffective( plan, payloadBudgetBytes, rowDropBudgetIn, totalRows ) );   // forbudget-soft: the XML twin's split
     }
-    // knob-honesty-068: a charged continuation is paid from the rows (the XML twin's rule); the floor's unpaid rest rides anyway
-    // and this dialect's own predicate (forLensJsonOverCeiling: bytes past the allowance) labels any overshoot
-    //   …only where the caller lets rows pay (payFromRows): otherwise the whole of it rides unpaid on the cut's own rows
-    const std::size_t cutNextOwed   = plan.capped ? cutNextCost + sigsCutRowOverrun( cutNext ) : 0u;
-    const std::size_t totalBeforePay = total;
-    const std::size_t cutNextUnpaid = sigsCutPaysFromRows( cutNext )
-                                          ? paySigsContinuationFromRows( entries, sigFiles, total, cutNextOwed, jsonSigEntryCost )
-                                          : cutNextOwed;
-    const std::size_t cutNextSurplus = sigsCutPaysFromRows( cutNext ) ? sigsCutPaidSurplus( totalBeforePay, total, cutNextOwed, cutNextUnpaid ) : 0u;
+    const std::size_t totalAfterLadder = total;
     if( outCapped )
     {
         *outCapped = plan.ladderFires;   // the LADDER's verdict (the budget_bytes= stanza names its ceiling); cutOut carries capped
@@ -10946,9 +11003,8 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
                 [ & ]( JsonSigEntry& e, std::uint32_t newRank )
                 { e.head = jsonSigRowHead( ing, e.id, ing.symbols[ e.id ].fileId, lens, e.pureSig, rootArg, newRank ); } );
         }
-        cut.continuationRequest     = cutNext;
-        cut.continuationUnpaidBytes = cutNextUnpaid;
-        cut.continuationPaidSurplus = cutNextSurplus;
+        cut.continuationRequest = cutNext;
+        sigsCutRecordLadder( cut, ladder, totalAfterLadder, rowDropBudgetIn, pastTargetDisclosed );   // forbudget-soft
         sigsCutAttachContinuation( cut, cutNext, cutNextInv, cutNextTokens );   // knob-honesty-068: nothing unless capped and asked for
         if( cutOut )
         {

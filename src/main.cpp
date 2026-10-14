@@ -4074,7 +4074,10 @@ static int finishCompactCapture( const rw::Config& cfg, std::string& doc, int rc
     };
     // the DEFAULT posture shapes what it can and leaves the rest exactly as it was emitted (cfg.legendDefaulted);
     // only an ASKED --legend=compact refuses an answer the dialect cannot shape
-    switch( rw::applyCompactDialect( doc, compactLegendHint( cfg, doc ) ) )
+    // forbudget-soft: an explicit --token-budget on a task lens is a SOFT target — the settle never labels it "over"
+    const bool budgetIsSoft = cfg.tokenBudget > 0
+                           && ( !cfg.forTask.empty() || ( !cfg.packTask.empty() && cfg.partitionCount == 0 ) || !cfg.fromTrace.empty() || !cfg.runTrace.empty() );
+    switch( rw::applyCompactDialect( doc, compactLegendHint( cfg, doc ), budgetIsSoft ) )
     {
         case rw::CompactOutcome::Rewritten:
         case rw::CompactOutcome::AlreadyCompact:

@@ -131,9 +131,13 @@ cat > "$TMP/legend.py" <<'PY'
 # normalised) of WIDE that NARROW lacks, one per line — present-only clauses (each rides only with its own attribute)
 # excluded. Empty output = no clause was dropped. exit 3 when either file has no header comment.
 import re, sys
-PRESENT_ONLY = re.compile( r'dropped_positive|docs_dropped|capped=1 with shown|sigs next|next_offset|next_budget|past_target|'
+# Present-only = rides only with its own attribute or section on THIS answer (fewer rows can legitimately not carry it): the
+# cut/target readings, e= (rows carry it only where endLinesFitCeiling says), sc=, the lego/compose stub (only when a
+# section collapsed), the shrunk-not-dropped reading.
+PRESENT_ONLY = re.compile( r'dropped_positive|docs_dropped|capped=[#1] with shown|sigs next|next_offset|next_budget|past_target|'
                            r'budget_bytes|BYTE target|over_ceiling|runaway|docs_after_code|relevance floor|this budget left out|'
-                           r'e= on a d row|d e= its last line|sc=scope|cut, recoverable|bodies shown|hops shown=0', re.I )
+                           r'e= on a d row|d e= its last line|extent is not known|line of the definition|the name.s line|'
+                           r'sc=scope|cut, recoverable|bodies shown|hops shown=#|collapse to a counted stub', re.I )
 def clauses( path ):
     s = open( path ).read()
     head = s.split( '<sigs', 1 )[ 0 ]
@@ -416,26 +420,31 @@ for n in "${SWEEP[@]}"; do
         if [ "$mode" = def ]; then a="$f"; ref="$TMP/def.xml"; else a="$TMP/so_$n.xml"; ref="$TMP/so_def.xml"; fi
         st="$( python3 - "$a" "$ref" "$T" <<'PY'
 import subprocess, sys, re
+# a row's CHARGE is the ladder's (serialize.h entryCost): its printed bytes plus the zero cx=/ccx=/in= the lean spelling elides
+# (SigEntry::elidedBytes — charged so the kept rows are the ones kept before the elision)
+def charge( a, printed ):
+    return printed + sum( n for k, n in ( ( 'cx', 7 ), ( 'ccx', 8 ), ( 'in', 7 ) ) if not re.search( r'\b' + k + r'="', a ) )
 def rb( p ):
     s = open( p ).read()
     m = re.search( r'<sigs\b[^>]*>(.*?)</sigs>', s, re.S )
     if not m: return None
-    inner = m.group( 1 ); rows = []
+    inner = m.group( 1 ); rows = []; elided = 0
     for d in re.finditer( r'<d ([^>]*)>.*?</d>|<d ([^>]*)/>', inner, re.S ):
         a = d.group( 1 ) or d.group( 2 )
         r = re.search( r'\br="(\d+)"', a )
-        rows.append( ( int( r.group( 1 ) ) if r else 10**9, len( d.group( 0 ).encode() ) ) )
+        printed = len( d.group( 0 ).encode() ); c = charge( a, printed ); elided += c - printed
+        rows.append( ( int( r.group( 1 ) ) if r else 10**9, c ) )
     rows.sort()
-    return len( inner.encode() ), rows
+    return len( inner.encode() ) + elided, rows
 a, ref, T = rb( sys.argv[ 1 ] ), rb( sys.argv[ 2 ] ), int( sys.argv[ 3 ] )
 if a is None or ref is None: print( "ERR no <sigs>" ); sys.exit( 0 )
 ab, ar = a; rr = ref[ 1 ]
 k = len( ar )
 fits = ab <= T or k <= 4
-if k >= len( rr ): print( "OK fits=%d rows=%d/%d bytes=%d T=%d complete" % ( fits, k, len( rr ), ab, T ) ); sys.exit( 0 )
+if k >= len( rr ): print( "OK fits=%d rows=%d/%d charged=%d T=%d complete" % ( fits, k, len( rr ), ab, T ) ); sys.exit( 0 )
 nxt = rr[ k ][ 1 ]
 maximal = ab + nxt > T - 160
-print( "%s fits=%d maximal=%d rows=%d/%d bytes=%d next=%d T=%d" % ( "OK" if fits and maximal else "BAD", fits, maximal, k, len( rr ), ab, nxt, T ) )
+print( "%s fits=%d maximal=%d rows=%d/%d charged=%d next=%d T=%d" % ( "OK" if fits and maximal else "BAD", fits, maximal, k, len( rr ), ab, nxt, T ) )
 PY
 )"
         case "$st" in

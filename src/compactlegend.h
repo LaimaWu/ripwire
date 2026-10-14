@@ -2333,7 +2333,10 @@ inline void eraseLedgerOverCeilingClause( std::string& doc )
 }
 
 // Returns true when `original`'s root label was corrected (the caller compacts it again).
-inline bool settleOverCeilingLabel( std::string& original, std::string_view compacted )
+// forbudget-soft: `budgetIsSoft` — the caller knows (out of band, never from the document's text, which echoes the task
+// verbatim) that this answer's budget_tokens= is a SOFT target the caller passed (the task lenses' explicit budget, owner
+// decision 2026-10-14): est_tokens may exceed it by contract, so only max_tokens= is judged here.
+inline bool settleOverCeilingLabel( std::string& original, std::string_view compacted, bool budgetIsSoft = false )
 {
     constexpr std::string_view kLabel = " over_ceiling=\"1\"";
     const CompactRootInfo outRoot = findCompactRoot( compacted );
@@ -2343,7 +2346,7 @@ inline bool settleOverCeilingLabel( std::string& original, std::string_view comp
         return false;
     }
     const std::string_view outOpen = compacted.substr( outRoot.openBegin, outRoot.openEnd - outRoot.openBegin );
-    const std::size_t budget = rootUnsignedAttr( outOpen, "budget_tokens" );
+    const std::size_t budget = budgetIsSoft ? 0u : rootUnsignedAttr( outOpen, "budget_tokens" );
     const std::size_t maxTok = rootUnsignedAttr( outOpen, "max_tokens" );
     const std::size_t est    = rootUnsignedAttr( outOpen, "est_tokens" );
     if( ( budget == 0 && maxTok == 0 ) || est == 0 )
@@ -2400,12 +2403,12 @@ inline bool settleOverCeilingLabel( std::string& original, std::string_view comp
     return true;
 }
 
-inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hint )
+inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hint, bool budgetIsSoft = false )
 {
     std::string       original    = doc;
     const std::size_t pricedBytes = doc.size();   // what the emitter's est_tokens= describes
     CompactOutcome    outcome     = applyCompactDialectOnce( doc, hint );
-    if( outcome == CompactOutcome::Rewritten && settleOverCeilingLabel( original, doc ) )
+    if( outcome == CompactOutcome::Rewritten && settleOverCeilingLabel( original, doc, budgetIsSoft ) )
     {
         doc = original;
         outcome = applyCompactDialectOnce( doc, hint, pricedBytes );

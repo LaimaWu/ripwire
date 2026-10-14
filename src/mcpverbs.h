@@ -1857,7 +1857,10 @@ inline void spliceForLegoCountLegend( std::string& doc, bool carries )
     }
 }
 
-inline void priceForTaskRoot( std::string& doc, std::size_t budgetTokens )
+// forbudget-soft: budget_tokens= is a SOFT target here too (the CLI twin's rule) — est_tokens may exceed it and nothing is
+// labelled "over" for it. The one over_ceiling this surface can carry is the runaway guard's (`guardOver`: the default head
+// passed kForRunawayGuardBytes); its reading (forRunawayGuardNote) was spliced with the <sigs> clauses by the assembly.
+inline void priceForTaskRoot( std::string& doc, bool guardOver )
 {
     if( doc.empty() )
     {
@@ -1865,14 +1868,9 @@ inline void priceForTaskRoot( std::string& doc, std::size_t budgetTokens )
     }
     std::size_t estTokens = 0;
     std::string rootAttrs = rw::pricedRootAttr( doc.size(), rw::kBytesPerTokenDefault, 0, &estTokens );
-    if( budgetTokens > 0 && estTokens > budgetTokens )
+    if( guardOver )
     {
-        const std::size_t legendEnd = doc.find( " -->" );
-        if( legendEnd != std::string::npos )
-        {
-            doc.insert( legendEnd, rw::kOverCeilingLegend );
-            rootAttrs = rw::pricedRootAttr( doc.size(), rw::kBytesPerTokenDefault, 0, &estTokens );
-        }
+        rootAttrs = rw::pricedRootAttr( doc.size() + sizeof( " over_ceiling=\"1\"" ) - 1, rw::kBytesPerTokenDefault, 0, &estTokens );
         rootAttrs += " over_ceiling=\"1\"";
     }
     rw::spliceRootAttrs( doc, rootAttrs );
@@ -1898,6 +1896,7 @@ struct McpForAssemblyInputs   // forTaskText's locals the assembly reads, by ref
     const std::vector<char>&                   impure;
     RedactCounts*                              redact;
     std::size_t                                sigsBudget;
+    std::size_t                                rowDropBudget;   // forbudget-soft: where step F aims (the guard / the soft target)
     std::size_t                                fixedBytes;
     std::size_t                                budgetTokens;
     const notes::NoteIndex&                    noteIndex;
@@ -1913,7 +1912,7 @@ struct McpForAssemblyInputs   // forTaskText's locals the assembly reads, by ref
                                                                //   decided once in forTaskText (the noRoute/task/budget verdicts live there)
     const std::vector<std::vector<NodeId>>&    implementors;   // train 26b: ix.g.implementors, for the count-floor lego re-render
 };
-inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, bool payFromRows, std::string headerStr, std::string legoStr,
+inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::string headerStr, std::string legoStr,
                                       std::string composeStr, std::vector<std::vector<NodeId>> legoScoped, std::size_t legoPreCapCount )
 {
     const IngestResult&                       ing                = in.ing;
@@ -1942,9 +1941,9 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, bool payFr
     {
         return McpForAssembly{};   // the answer buffer could not be opened: an internal error, never "not found"
     }
+    // forbudget-soft: exempt in every regime (no byte promise to pay into: a target + the runaway guard, or a soft target)
     const rw::SigsCutContinuation mcpSigsNext{ task, 0, std::string_view(), fixedBytes,
-                                               /*charged=*/budgetTokens > 0, /*json=*/false, /*pasteHandle=*/false,
-                                               /*ledgerGapBytes=*/0u, payFromRows };
+                                               /*json=*/false, /*pasteHandle=*/false };
     // A2 (survey card, 2026-09-03): sigs render into their OWN buffer (rather than streaming straight into
     // `mem` the way this call used to) so droppedPositive is known BEFORE headerStr is written — headerStr,
     // once flushed to `mem`, cannot be edited retroactively (the same reason the CLI twin's degrade path
@@ -1953,6 +1952,8 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, bool payFr
     bool        mcpSigsCapped      = false;   // did the H1 ladder trim <sigs>? — decides the budget_bytes= disclosure below
     rw::SigsCutReport mcpSigsCut;             // cut-fix lane A: the <sigs> tag's cut readings, spliced below as the CLI twin does
     mcpSigsCut.continuationRequest = &mcpSigsNext;   // knob-honesty-068: IN — the capped block's machine continuation
+    mcpSigsCut.rowDropBudgetBytes  = in.rowDropBudget;   // forbudget-soft: IN — the CLI twin's two budgets
+    mcpSigsCut.pastTargetDisclosed = budgetTokens == 0;
     std::vector<rw::NodeId> mcpShownIds;   // lane 2: the sigs rows actually emitted — the tail excludes these files, not the whole surface
     std::string sigsStr = renderToString( [ & ]( std::FILE* m2 )
     {
@@ -2004,7 +2005,18 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, bool payFr
         const std::size_t closeAt = headerStr.rfind( " -->" );
         if( closeAt != std::string::npos )
         {
-            headerStr.insert( closeAt, rw::kForBudgetBytesNote );
+            // forbudget-soft: "target" where the head ran past it (the CLI twin's choice)
+            headerStr.insert( closeAt, mcpSigsCut.pastTarget > 0 ? rw::kForBudgetBytesTargetNote : rw::kForBudgetBytesNote );
+        }
+    }
+    // forbudget-soft: the runaway guard's reading, where it cut the default head (the CLI twin's clause; priceForTaskRoot puts
+    // over_ceiling="1" on the root)
+    if( mcpSigsCut.rowDropCut && budgetTokens == 0 )
+    {
+        const std::size_t closeAt = headerStr.rfind( " -->" );
+        if( closeAt != std::string::npos )
+        {
+            headerStr.insert( closeAt, rw::forRunawayGuardNote() );
         }
     }
     // cut-fix lane A: the <sigs> tag's cut readings (docs_dropped=, shrunk-not-dropped, docs_after_code=, the continuation's) —
@@ -2098,7 +2110,7 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, bool payFr
         // rule: rw::forSectionsSigChargePlan), recomputed here from the sections AS SERVED — the count-floor lego re-render
         // above may have changed the section's size since forTaskText charged the budget, and the invariant below is the
         // two planners' agreement on one input: the served stub never exceeds the stub the charge plan collapses it to.
-        const ForSectionStubPlan mcpSigChargePlan = forSectionsSigChargePlan( sections, budgetTokens > 0, task, mcpLegoServedIn, mcpComposeServedIn );
+        const ForSectionStubPlan mcpSigChargePlan = forSectionsSigChargePlan( sections, /*explicitCeiling=*/false, task, mcpLegoServedIn, mcpComposeServedIn );
         const bool mcpLegoWillStub    = plan.legoWillStub;
         const bool mcpComposeWillStub = plan.composeWillStub;
         // postcondition of the rule itself, checked BEFORE the swap below discards the original size:
@@ -2132,7 +2144,8 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, bool payFr
     {
         std::vector<char> tailEsc;
         const std::string tailStr = renderFileTailXml( computeFileTail( ing, lensRank, mcpShownIds, flRootArg ),
-                                                       kForFileTailShownCap, tailEsc );
+                                                       kForFileTailShownCap, tailEsc,
+                                                       nextAttrXml( forWidenNext( task ) ) );   // forbudget-soft D-4: the cap's next=
         std::fwrite( tailStr.data(), 1, tailStr.size(), mem );
     }
     rw::emitRaw( mem, "</ctx>" );
@@ -2517,6 +2530,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
                           + std::string( mcpIdRouteParts.route )
                           + std::string( rw::kMcpForBundleSigsLegend )
                           + std::string( mcpForConf.note )
+                          + ( budgetTokens > 0 ? std::string( rw::kForSoftBudgetNote ) : std::string() )   // forbudget-soft: budget_tokens= is a soft target
                           // No "--" anywhere in this clause: it rides inside an XML comment, where a double
                           // hyphen is ill-formed (G4), so the CLI verb is named without its dashes.
                           + std::string( rw::kMcpForLensColumnsLegend )
@@ -2578,12 +2592,15 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
                                                .renderedBytes = legoStr.size() };
     const ForStubbableSection mcpComposeChargeIn{ .hasContent = !composeStr.empty(), .preCapTotal = composePreCapCount, .rendered = true,
                                                   .renderedBytes = composeStr.size() };
-    const ForSectionStubPlan  mcpSigChargePlan = forSectionsSigChargePlan( sections, budgetTokens > 0, task, mcpLegoChargeIn, mcpComposeChargeIn );
+    const ForSectionStubPlan  mcpSigChargePlan = forSectionsSigChargePlan( sections, /*explicitCeiling=*/false, task, mcpLegoChargeIn, mcpComposeChargeIn );
     const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes - mcpIdRouteExemptBytes - mcpAtLegendExemptBytes
                                  - mcpEndLineExemptBytes
                                  - rw::forZeroNoteBytes( headerStr )   // lean-answers: the zero reading never costs a row
                                  + mcpSigChargePlan.servedBytes( mcpLegoChargeIn, mcpComposeChargeIn ) + routeStr.size() + 6;   // + "</ctx>"
-    const std::size_t sigsBudget = forBudgetBytes > fixedBytes ? forBudgetBytes - fixedBytes : 1;   // ≥1: 0 = "no budget"
+    // forbudget-soft: the CLI twin's two budgets (rw::forSigsBudgets) — the default target + the runaway guard, or a soft target
+    // over the rows (one dialect here, so the soft tier's header is this one)
+    const ForSigsBudgets mcpSigsBudgets = forSigsBudgets( budgetTokens > 0 ? forBudgetBytes : 0u, fixedBytes, fixedBytes, /*tierAtDefault=*/false );   // no bodies ride here
+    const std::size_t    sigsBudget     = mcpSigsBudgets.target;
     // knob-honesty-068: the CLI twin's <sigs> continuation (serialize.h SigsCutContinuation). This surface is signatures-only,
     // so its sig side IS the ceiling: charged under a caller's budget_tokens, exempt at the default. NO CLI argv here — an
     // MCP client continues by re-calling the tool: the machine form next_budget_tokens=T (re-call `for` with budget_tokens=T)
@@ -2595,54 +2612,21 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     const notes::NoteIndex* const notesPtr  = noteIndex.empty() ? nullptr : &noteIndex;
 
     // knob-honesty-068 (orchestrator ruling C3): the assembly is one pass (assembleMcpFor above), run once or twice below.
-    const McpForAssemblyInputs assemblyIn{ ing, lensRank, forTopN, fanIn, impure, redact, sigsBudget, fixedBytes, budgetTokens,
+    const McpForAssemblyInputs assemblyIn{ ing, lensRank, forTopN, fanIn, impure, redact, sigsBudget, mcpSigsBudgets.rowDrop, fixedBytes, budgetTokens,
                                            noteIndex, notesPtr, flRootArg, task, mcpTopRowNext, mcpForHdrRows, routeStr,
                                            composePreCapCount, sections,
                                            rw::forLensRules( !noRoute && !taskAsksAboutDocs( task ) && !std::getenv( "RIPWIRE_NO_DOCS_AFTER_CODE" )
                                                                  && rw::docsAfterCodeFitsCeiling( budgetTokens, /*bodyCeiling=*/false ),
                                                              rw::endLinesFitCeiling( budgetTokens, /*bodyCeiling=*/false ) ),   // LB-A, e=, docs reorder
                                            ix.g.implementors };
-    // C3 (completed 2026-10-08) — drop a row to pay for the handle ONLY where dropping it is what makes the answer fit (the CLI
-    // twin's rule, runForLens). The UNPAID pass runs first: every row the cut leaves + the handle; when it fits (or nothing is
-    // capped under a budget) it is served and nothing is paid. Only when it lands past budget_tokens does the PAID pass run, and
-    // it is served only when IT fits — paying is what made it fit. Otherwise (this surface overshoots on its own: the header
-    // bytes its ledger exempts) the unpaid answer is served: the cut's rows, the handle riding unpaid, over_ceiling="1"
-    // (priceForTaskRoot). Both passes share the one ranking above; only the assembly re-runs.
-    const auto estOf = []( std::size_t docBytes )
-    {
-        std::size_t est = 0;
-        (void)rw::pricedRootAttr( docBytes, rw::kBytesPerTokenDefault, 0, &est );   // priceForTaskRoot's own reading
-        return est;
-    };
-    const std::optional<RedactCounts> tallyAtEntry = redact != nullptr ? std::optional<RedactCounts>( *redact ) : std::nullopt;
-    McpForAssembly chosen = assembleMcpFor( assemblyIn, /*payFromRows=*/false, headerStr, legoStr, composeStr, legoScoped, legoPreCapCount );
+    // forbudget-soft: ONE assembly (the C3 unpaid/paid passes went with the hard ceiling they priced against)
+    McpForAssembly chosen = assembleMcpFor( assemblyIn, headerStr, legoStr, composeStr, legoScoped, legoPreCapCount );
     if( !chosen.doc )
     {
         return std::nullopt;
     }
-    if( budgetTokens > 0 && chosen.cut.hasContinuation && estOf( chosen.doc->size() ) > budgetTokens )
-    {
-        const std::optional<RedactCounts> tallyUnpaid = redact != nullptr ? std::optional<RedactCounts>( *redact ) : std::nullopt;
-        if( tallyAtEntry )
-        {
-            *redact = *tallyAtEntry;   // the summary counts the rows of the ONE answer served
-        }
-        McpForAssembly paid = assembleMcpFor( assemblyIn, /*payFromRows=*/true, headerStr, legoStr, composeStr, legoScoped, legoPreCapCount );
-        if( !paid.doc )
-        {
-            return std::nullopt;
-        }
-        if( estOf( paid.doc->size() ) <= budgetTokens )
-        {
-            chosen = std::move( paid );
-        }
-        else if( tallyUnpaid )
-        {
-            *redact = *tallyUnpaid;   // the unpaid answer is served: its tally
-        }
-    }
     std::string out = std::move( *chosen.doc );
-    priceForTaskRoot( out, budgetTokens );   // R1: est_tokens=, and over_ceiling="1" when it exceeds budgetTokens
+    priceForTaskRoot( out, chosen.cut.rowDropCut && budgetTokens == 0 );   // R1: est_tokens=; over_ceiling="1" only past the runaway guard
     return out;
 }
 
@@ -4542,6 +4526,7 @@ inline std::string packTaskText( const std::string& root, const std::string& tas
 
     PackTaskInputs in;
     in.budgetTokens = budgetTokens;
+    in.softTarget   = budgetTokens > 0 && !( partitionCount >= packpartition::kMinPartitions && partitionCount <= packpartition::kMaxPartitions );   // forbudget-soft: the CLI twin's rule
     in.fanIn        = &fanIn;
     in.impure       = &impure;
     in.redact       = redact;
