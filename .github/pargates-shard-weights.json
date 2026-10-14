@@ -25,6 +25,7 @@
 "artifactcheck.sh": 5.4,
 "atcheck.sh": 12.1,
 "atomscheck.sh": 4.2,
+"attribmultidefcheck.sh": 60.0,
 "attrvocabcheck.sh": 66.7,
 "baselinecheck.sh": 1.8,
 "baselinedirtycheck.sh": 9.8,
