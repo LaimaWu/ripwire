@@ -114,6 +114,10 @@ COLD_FILES = (
       "Elixir-specific capture helpers: per node, but for one grammar with a small corpus share. Same argument as ingest_jsimports.h above." ),
     ( "src/ingest_clojure.h",
       "Clojure-specific capture helpers: per query capture, but only for Clojure files. Same corpus-share argument as ingest_elixir.h above." ),
+    ( "src/ingest_ruby.h",
+      "Ruby's Rails/DSL capture lane (schema columns, Jbuilder typing, the factory and class-side DSL walks): per node, but behind "
+      "the contains-\"attr\" / contains-\"create_table\" per-file early-outs and one grammar family's corpus share. Same argument as "
+      "ingest_jsimports.h and ingest_elixir.h above; the general per-node walk shapes it was carved from stay covered by ingest_binds.h." ),
     # ── per-DIRECTIVE, where every hot ingest section above is per-node or per-file ────────────────────
     ( "src/ingest_importcap.h",
       "the shared @import.path capture vocabulary (issue #358), carrying the C family for now. It is called from ONE place in ingest_sidecap.h and runs once per captured "

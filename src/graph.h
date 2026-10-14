@@ -4884,7 +4884,7 @@ inline void rubyInstanceForwarders( const IngestResult& ing, HashMap<std::string
     }
 }
 
-// Every FactoryBot factory the tree defines → the class it builds (ingest_binds.h captureRubyFactories); a name two
+// Every FactoryBot factory the tree defines → the class it builds (ingest_ruby.h captureRubyFactories); a name two
 // definitions give different classes is a tombstone: it types nothing. Every trailing path of every constant the tree
 // opens, which a qualified constant must be. And which of RSpec's builders the tree defines a method of the name of.
 inline RubyTypedReceivers buildRubyTypedReceivers( const IngestResult& ing, const RubySelfReach& reach, const RubyBaseScope& bases,

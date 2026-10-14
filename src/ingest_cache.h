@@ -488,7 +488,7 @@ constexpr std::uint32_t kParserVer    = 171;          // bump on any grammar/.sc
                                                       //   build, a let or local holding one) carries its type in the
                                                       //   call RawRef's recvVar (FE-B on #373 moved it to memberCtor/memberVia), and each
                                                       //   FactoryBot `factory` mints a RawBind of the APPENDED kind
-                                                      //   LocalBindKind::RubyFactory (ingest_binds.h). Same layout:
+                                                      //   LocalBindKind::RubyFactory (ingest_ruby.h). Same layout:
                                                       //   kCacheVersion unchanged (27). A Ruby cache written at 131
                                                       //   holds untyped receivers and no factories and must re-parse.
                                                       // 131 = 2026-10-02 (test/rubyreachcheck.sh): a Ruby MIXIN is an

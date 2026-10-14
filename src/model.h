@@ -902,11 +902,11 @@ inline const RspecTarget* rspecTargetOf( std::string_view cls, std::string_view 
 
 // Ruby's delegation DSL: a class that writes one defines methods the tree indexes nowhere in it (ActiveSupport's `delegate`
 // and `delegate_missing_to`, Forwardable's `def_delegator(s)`), so it may answer a name no lookup over the tree finds (graph.h
-// RubySelfReach); one a `class << self` writes defines the class object's (ingest_binds.h captureRubySingletonAccessors).
+// RubySelfReach); one a `class << self` writes defines the class object's (ingest_ruby.h captureRubySingletonAccessors).
 inline constexpr std::string_view kRubyDelegationCalls[] = { "def_delegator", "def_delegators", "delegate", "delegate_missing_to" };
 
 // A Jbuilder template's `json` (test/rubyrakejbuildercheck.sh, parser version 135): the template handler binds it to the
-// view's JbuilderTemplate, a BasicObject whose method_missing makes every call on it a key. ingest_binds.h types the local
+// view's JbuilderTemplate, a BasicObject whose method_missing makes every call on it a key. ingest_ruby.h types the local
 // in a `.jbuilder` file; graph.h RubyTypedReceivers refuses a call on it unless the tree opens the class.
 inline constexpr std::string_view kJbuilderTemplate = "JbuilderTemplate";
 inline constexpr std::string_view kJbuilderLocal    = "json";
@@ -1059,28 +1059,28 @@ enum class LocalBindKind : std::uint8_t
                    //     var "." is a dot import. fromSymbol kNoNode, spans {0,0}. Read only by graph.h FalseEdgeRules;
                    //     every other binding consumer filters by kind or skips file-scope records. APPENDED (cache u8).
     RubyFactory,    // parser version 132: a FactoryBot `factory :name` definition — var=the factory name (or one of its
-                   //     `aliases:`), typeName=the final segment of the class it builds (ingest_binds.h captureRubyFactories).
+                   //     `aliases:`), typeName=the final segment of the class it builds (ingest_ruby.h captureRubyFactories).
                    //     Read by graph.h rubyFactoryClasses ONLY; every other reader skips it by kind or finds no
                    //     variable of that name. APPENDED for the same cache reason as VarDecl.
     RubyHelperMethod, // parser version 135: a `helper_method :name` declaration at class-body position — var=the method,
-                   //     typeName=the final segment of the class or module that declares it (ingest_binds.h
-                   //     RubyBareCallWalk::noteDeclaredCall). Read by graph.h RubyTopSelf ONLY. APPENDED, as above.
+                   //     typeName=the final segment of the class or module that declares it (ingest_ruby.h
+                   //     rubyNoteHelperMethods). Read by graph.h RubyTopSelf ONLY. APPENDED, as above.
     RubySingletonDef, // parser version 137: a Ruby SINGLETON method — `def self.m`, a def or an accessor inside `class << self`
                    //     — at startByte, the def's own start (Symbol::sigStartByte); var=the method, typeName empty
-                   //     (ingest_binds.h rubyNoteClassSideDef, captureRubySingletonAccessors). A name the delegation DSL
+                   //     (ingest_ruby.h rubyNoteClassSideDef, captureRubySingletonAccessors). A name the delegation DSL
                    //     defines in a `class << self` has no def: typeName=the owning class, var=the name (empty for
                    //     `delegate_missing_to`, every name). Read by graph.h's class-object lookup ONLY
                    //     (rubyClassObjectDefs). APPENDED, as above. Parser version 145: a def that is a class method of
                    //     each class INCLUDING its module rather than one of the module carries importedName
                    //     kRubyIncluderMark — a singleton def inside a concern's `included do … end`, which defines it on
                    //     the includer itself — or kRubyClassMethodsMark — a def inside its `class_methods do … end`, which
-                   //     ActiveSupport::Concern extends onto the includer (ingest_binds.h rubyDefSide).
+                   //     ActiveSupport::Concern extends onto the includer (ingest_ruby.h rubyDefSide).
     RubyClassMixin, // parser version 145: a mixin the CLASS OBJECT's lookup reaches rather than its instances' — the constant
                    //     of an `extend M`, or of an `include`/`prepend` inside `class << self` — at startByte, the
                    //     constant's own start, where ingest_relations.h captureRubyMixinBases puts its inherit reference;
                    //     var and typeName empty; importedName=kRubyIncluderMark when the directive sits in a concern's
                    //     `included do … end`, which extends the includer, not the concern. A module body's `extend self`
-                   //     has no constant: var="self", at the directive's own start byte (ingest_binds.h
+                   //     has no constant: var="self", at the directive's own start byte (ingest_ruby.h
                    //     captureRubyClassMixins). Read by graph.h's class-object lookup ONLY (rubyFqnAncestry). APPENDED,
                    //     as above.
     // FE-B (test/receiverevidencecheck.sh): the receiver-evidence facts graph.h ReceiverEvidence reads, and NOTHING else.
