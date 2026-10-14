@@ -53,7 +53,7 @@
 #       on a name one file defines, the degraded answer names ack-healing as skipped and shows the row.
 #   (P) R4 cache isolation: P1 with the cache on leaves the HEAD ingest-cache blob untouched; a cached run after it is
 #       byte-identical to (A).
-#   (Q) R5 the target-phase stop (ingest:2 cuts the target's full ingest): a degraded answer, four ingests.
+#   (Q) R5 the target-phase stop (ingest:2 cuts the target's full ingest): a degraded answer naming the target's stop.
 #   (R) R7b a peak over the limit (peak:1) is disclosed on a full answer, rc and rows unchanged; R7c a replay whose
 #       selection holds only whole-tree kinds refuses under pressure (exit 5), never an empty pass.
 #   (S) R9 --quality-kinds=complexity reports no false finding-gone for a dead-code ack.
@@ -157,7 +157,8 @@ for m in re.finditer(r'<(r|sa) [^>]*/>', doc):
 print("\n".join(sorted(out)))
 PY
 }
-attr(){ sed -n 's/.*<quality-delta [^>]*'"$2"'="\([^"]*\)".*/\1/p' "$1" | head -n 1; }
+# the root attribute NAMED $2 — space-led, so gating= never reads scoped-out-gating= (the greedy match takes the last)
+attr(){ sed -n 's/.*<quality-delta [^>]* '"$2"'="\([^"]*\)".*/\1/p' "$1" | head -n 1; }
 hasattr(){ grep -q "<quality-delta [^>]* $2=\"" "$1"; }
 ingests(){ grep -c '^ripwire: cache-stats ' "$WORK/e"; }
 memlines(){ grep -c '^ripwire: memory limit ' "$WORK/e"; }
@@ -191,14 +192,17 @@ bnext="$( attr "$WORK/B.xml" kinds_next )"
 if [ -s "$WORK/B.xml" ] && validxml "$WORK/B.xml" \
    && [ "$( attr "$WORK/B.xml" kinds_skipped )" = "$WHOLE_KINDS" ] && [ "$( attr "$WORK/B.xml" skipped_why )" = memory ] \
    && [ "$( attr "$WORK/B.xml" ingest_scope )" = changed-files ] && hasattr "$WORK/B.xml" memory_limit \
-   && isnum "$needn" && [ "$needn" -ge 64 ] && [ "$( attr "$WORK/B.xml" also_skipped )" = "config-warnings,stale-acks" ] && ! hasattr "$WORK/B.xml" stale \
+   && isnum "$needn" && [ "$( attr "$WORK/B.xml" also_skipped )" = "config-warnings,stale-acks" ] && ! hasattr "$WORK/B.xml" stale \
    && ! hasattr "$WORK/B.xml" memory_stop && ! hasattr "$WORK/B.xml" register-macro-excluded && isnum "$bgate" && [ "$BRC" = "$wantrc" ]; then
-    ok "(B) P1: a degraded answer (rc=$BRC, gating=$bgate) names kinds_skipped=$WHOLE_KINDS, the limit, need=${need} (>= the 64M floor), also_skipped, no stale=/dead-code counts"
+    ok "(B) P1: a degraded answer (rc=$BRC, gating=$bgate) names kinds_skipped=$WHOLE_KINDS, the limit, need=${need}, also_skipped, no stale=/dead-code counts"
 else
     no "(B) P1: rc=$BRC (want $wantrc) gating=$bgate kinds_skipped=$( attr "$WORK/B.xml" kinds_skipped ) why=$( attr "$WORK/B.xml" skipped_why ) scope=$( attr "$WORK/B.xml" ingest_scope ) need=$need stdout=$( wc -c <"$WORK/B.xml" | tr -d ' ' )B"
 fi
-if [ "$bnext" = "--quality-delta=$BASE..$TGT --quality-kinds=$WHOLE_KINDS --max-memory=$need" ]; then ok "(B) kinds_next= replays exactly the skipped kinds at the projected need"
-else no "(B) kinds_next='$bnext'"; fi
+# R7c: the replay's --max-memory is strictly above the projected need (in whole MiB) and clears the parser's 64M floor
+replaymb=""; isnum "$needn" && { replaymb=$(( needn + 1 )); [ "$replaymb" -lt 64 ] && replaymb=64; }
+if [ -n "$replaymb" ] && [ "$bnext" = "--quality-delta=$BASE..$TGT --quality-kinds=$WHOLE_KINDS --max-memory=${replaymb}M" ]; then
+    ok "(B) kinds_next= replays exactly the skipped kinds at --max-memory=${replaymb}M (above need=${need}, at least the 64M floor)"
+else no "(B) kinds_next='$bnext' (want --max-memory=${replaymb:-?}M)"; fi
 if [ "$( memlines )" = 1 ] && grep -q "^ripwire: memory limit .*dead-code, duplication, new-clone-of-reused-helper" "$WORK/B.err" && [ "$BING" = 3 ]; then
     ok "(B) one stderr line names the skipped kinds; three ingests (the base in full, then both commits' changed files)"
 else no "(B) memory lines=$( memlines ) ingests=$BING stderr: $( grep '^ripwire: [^c]' "$WORK/B.err" | head -c 300 )"; fi
@@ -279,16 +283,19 @@ fi
 
 # ── (G) near misses under project:1 ────────────────────────────────────────────────────────────────────────────
 nm(){ # $1 label, $2 repo; compares LOCAL rows with the unpressured run and requires the degraded header and the exact rc
+    # S5: new-symbol= counts the rows of the kinds that RAN, so the degraded count equals the unpressured run's LOCAL rows
+    # carrying origin="new-symbol" (a rename makes every moved symbol new in both modes); api-new-surface= equal outright.
     local L="$1" R="$2"
     ( cd "$R" && TMPDIR="$WORK/tmp" "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache >"$WORK/nmA.xml" 2>/dev/null )
     ( cd "$R" && TMPDIR="$WORK/tmp" RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache >"$WORK/nmB.xml" 2>"$WORK/nmB.err" ); local rc=$?
+    local localnew; localnew="$( rows "$WORK/nmA.xml" "$LOCAL_CSV" | grep -c 'origin="new-symbol"' )"
     if [ "$( attr "$WORK/nmB.xml" kinds_skipped )" = "$WHOLE_KINDS" ] && [ "$( rows "$WORK/nmB.xml" "$LOCAL_CSV" )" = "$( rows "$WORK/nmA.xml" "$LOCAL_CSV" )" ] \
        && ! grep -q 'could not materialize' "$WORK/nmB.err" && [ "$rc" = "$( degrc "$WORK/nmB.xml" )" ] \
-       && [ "$( attr "$WORK/nmB.xml" new-symbol )" = "$( attr "$WORK/nmA.xml" new-symbol )" ] \
+       && [ "$( attr "$WORK/nmB.xml" new-symbol )" = "$localnew" ] \
        && [ "$( attr "$WORK/nmB.xml" api-new-surface )" = "$( attr "$WORK/nmA.xml" api-new-surface )" ]; then
-        ok "(G) $L: degraded answer (rc=$rc), LOCAL rows, new-symbol= and api-new-surface= equal the unpressured run"
+        ok "(G) $L: degraded answer (rc=$rc), LOCAL rows, new-symbol=$localnew (the LOCAL new-symbol rows) and api-new-surface= equal the unpressured run"
     else
-        no "(G) $L: rc=$rc (want $( degrc "$WORK/nmB.xml" )) kinds_skipped=$( attr "$WORK/nmB.xml" kinds_skipped ) new-symbol $( attr "$WORK/nmA.xml" new-symbol )/$( attr "$WORK/nmB.xml" new-symbol ) stderr: $( head -c 300 "$WORK/nmB.err" )"
+        no "(G) $L: rc=$rc (want $( degrc "$WORK/nmB.xml" )) kinds_skipped=$( attr "$WORK/nmB.xml" kinds_skipped ) new-symbol want $localnew got $( attr "$WORK/nmB.xml" new-symbol ) stderr: $( head -c 300 "$WORK/nmB.err" )"
     fi
 }
 FE="$WORK/fe"; mkfx "$FE"; g "$FE" commit -q --allow-empty -m empty; nm "empty diff" "$FE"
@@ -440,22 +447,24 @@ else ok "(N) CMakeCache: neither answer rows the pruned bld/x.py"; fi
 # Legacy-scheme ack key of a scope-less name = fnv1a64( bare name ) (quality.h addSchemeAliases: canonicalId degrades to the
 # bare name). The full run re-keys it only when ONE file defines the name; two definitions poison it.
 mkacks(){ printf '# ripwire quality acks v1\nack placeholder %s 5 legacy-scheme row\n' "$( fnv dupname )" >"$1/.ripwire_quality_acks"; }
+# the finding rows (<r>) of a kind — stale-ack <sa> rows are a whole-answer fact the degraded answer names as skipped
+frows(){ rows "$1" "$2" | grep '^<r ' || true; }
 FO="$WORK/fo"; mkfx "$FO"; printf 'def dupname():\n    return 1\n' >"$FO/py/a.py"; printf 'def dupname():\n    return 2\n' >"$FO/py/b.py"
 g "$FO" add -A; g "$FO" commit -qm two; printf 'def dupname():\n    # TODO: one\n    return 1\n' >"$FO/py/a.py"; g "$FO" add -A; g "$FO" commit -qm todo; mkacks "$FO"
 qdin "$FO" "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache; cp "$WORK/o" "$WORK/OA.xml"
 qdin "$FO" RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache
-if [ -n "$( rows "$WORK/OA.xml" placeholder )" ] && [ "$( rows "$WORK/o" placeholder )" = "$( rows "$WORK/OA.xml" placeholder )" ] \
+if [ -n "$( frows "$WORK/OA.xml" placeholder )" ] && [ "$( frows "$WORK/o" placeholder )" = "$( frows "$WORK/OA.xml" placeholder )" ] \
    && [ "$( attr "$WORK/o" acked )" = "$( attr "$WORK/OA.xml" acked )" ] && case ",$( attr "$WORK/o" also_skipped )," in *,ack-healing,*) true;; *) false;; esac; then
     ok "(O) a legacy ack on a name two files define (one changed): the same placeholder rows and acked= as the full run; ack-healing named as skipped"
-else no "(O) two definitions: rows full=$( rows "$WORK/OA.xml" placeholder | grep -c . ) degraded=$( rows "$WORK/o" placeholder | grep -c . ) acked $( attr "$WORK/OA.xml" acked )/$( attr "$WORK/o" acked ) also_skipped=$( attr "$WORK/o" also_skipped )"; fi
+else no "(O) two definitions: rows full=$( frows "$WORK/OA.xml" placeholder | grep -c . ) degraded=$( frows "$WORK/o" placeholder | grep -c . ) acked $( attr "$WORK/OA.xml" acked )/$( attr "$WORK/o" acked ) also_skipped=$( attr "$WORK/o" also_skipped )"; fi
 FO1="$WORK/fo1"; mkfx "$FO1"; printf 'def dupname():\n    return 1\n' >"$FO1/py/a.py"
 g "$FO1" add -A; g "$FO1" commit -qm one; printf 'def dupname():\n    # TODO: one\n    return 1\n' >"$FO1/py/a.py"; g "$FO1" add -A; g "$FO1" commit -qm todo; mkacks "$FO1"
 qdin "$FO1" "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache; cp "$WORK/o" "$WORK/O1A.xml"
 qdin "$FO1" RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache
-if [ "$( attr "$WORK/O1A.xml" acked )" = 1 ] && [ -z "$( rows "$WORK/O1A.xml" placeholder )" ] && [ -n "$( rows "$WORK/o" placeholder )" ] \
+if [ "$( attr "$WORK/O1A.xml" acked )" = 1 ] && [ -z "$( frows "$WORK/O1A.xml" placeholder )" ] && [ -n "$( frows "$WORK/o" placeholder )" ] \
    && case ",$( attr "$WORK/o" also_skipped )," in *,ack-healing,*) true;; *) false;; esac && [ "$RC" = "$( degrc "$WORK/o" )" ]; then
     ok "(O) a legacy ack on a name one file defines: the full run re-keys it; the degraded run names ack-healing as skipped and shows the row (rc=$RC)"
-else no "(O) one definition: full acked=$( attr "$WORK/O1A.xml" acked ) rows full=$( rows "$WORK/O1A.xml" placeholder | grep -c . ) degraded=$( rows "$WORK/o" placeholder | grep -c . ) also_skipped=$( attr "$WORK/o" also_skipped ) rc=$RC"; fi
+else no "(O) one definition: full acked=$( attr "$WORK/O1A.xml" acked ) rows full=$( frows "$WORK/O1A.xml" placeholder | grep -c . ) degraded=$( frows "$WORK/o" placeholder | grep -c . ) also_skipped=$( attr "$WORK/o" also_skipped ) rc=$RC"; fi
 # no ledger: nothing to heal, so ack-healing is never named
 if [ "$( attr "$WORK/B.xml" also_skipped )" = "config-warnings,stale-acks" ]; then ok "(O) with no ledger, ack-healing is not named (nothing to heal)"
 else no "(O) no ledger: also_skipped=$( attr "$WORK/B.xml" also_skipped )"; fi
@@ -478,10 +487,13 @@ else
 fi
 
 # ── (Q) R5: the target phase stops after the projection said it fits ───────────────────────────────────────────
+# ingest:2 cuts the process's 2nd ingest (the target's full tree) at its first crawl entry: that ingest parses nothing and
+# so prints no cache-stats line — 3 lines (base in full, both changed-file sets), and the stderr line names the target.
 qd RIPWIRE_TEST_MEMGUARD=ingest:2 "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache; cp "$WORK/o" "$WORK/Q.xml"
 if [ "$( attr "$WORK/Q.xml" kinds_skipped )" = "$WHOLE_KINDS" ] && [ "$( attr "$WORK/Q.xml" memory_stop )" = crawl ] && [ "$( attr "$WORK/Q.xml" memory_need )" = unmeasured ] \
-   && [ "$( ingests )" = 4 ] && [ "$RC" = "$( degrc "$WORK/Q.xml" )" ] && [ "$( rows "$WORK/Q.xml" "$LOCAL_CSV" )" = "$( rows "$WORK/A.xml" "$LOCAL_CSV" )" ]; then
-    ok "(Q) a stop in the target's full ingest falls to the changed files (four ingests, rc=$RC), LOCAL rows equal (A); defect-shape kept (the base's macro set was read)"
+   && [ "$( ingests )" = 3 ] && grep -q '^ripwire: memory limit .*stopped the crawl of the target commit' "$WORK/e" \
+   && [ "$RC" = "$( degrc "$WORK/Q.xml" )" ] && [ "$( rows "$WORK/Q.xml" "$LOCAL_CSV" )" = "$( rows "$WORK/A.xml" "$LOCAL_CSV" )" ]; then
+    ok "(Q) a stop in the target's full ingest falls to the changed files (rc=$RC), LOCAL rows equal (A); defect-shape kept (the base's macro set was read)"
 else no "(Q) rc=$RC kinds_skipped=$( attr "$WORK/Q.xml" kinds_skipped ) stop=$( attr "$WORK/Q.xml" memory_stop ) ingests=$( ingests ) stderr: $( grep '^ripwire: [^c]' "$WORK/e" | head -c 300 )"; fi
 
 # ── (R) R7: a peak over the cap is said; a replay with nothing it can run refuses ──────────────────────────────
