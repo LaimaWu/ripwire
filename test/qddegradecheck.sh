@@ -45,7 +45,7 @@ ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v git >/dev/null 2>&1 || { echo "  SKIP  qddegradecheck (git not available)"; exit 0; }
@@ -174,8 +174,8 @@ if [ -n "$( attr "$WORK/B.xml" kinds_skipped )" ]; then
         if [ "$( rows "$WORK/B.xml" "$k" )" = "$( rows "$WORK/A.xml" "$k" )" ] && [ -n "$( rows "$WORK/A.xml" "$k" )" ]; then ok "(C) P1 $k: rows identical to the unpressured answer"
         else no "(C) P1 $k: rows differ: $( diff <( rows "$WORK/A.xml" "$k" ) <( rows "$WORK/B.xml" "$k" ) | head -c 300 )"; fi
     done
-    [ -z "$( rows "$WORK/B.xml" "$WHOLE_KINDS" )" ] && ok "(C) P1: no row of a skipped kind" || no "(C) P1: a skipped kind has rows"
-    [ "$( attr "$WORK/B.xml" api-new-surface )" = "$( attr "$WORK/A.xml" api-new-surface )" ] && ok "(C) P1: api-new-surface= equal" || no "(C) api-new-surface differs"
+    if [ -z "$( rows "$WORK/B.xml" "$WHOLE_KINDS" )" ]; then ok "(C) P1: no row of a skipped kind"; else no "(C) P1: a skipped kind has rows"; fi
+    if [ "$( attr "$WORK/B.xml" api-new-surface )" = "$( attr "$WORK/A.xml" api-new-surface )" ]; then ok "(C) P1: api-new-surface= equal"; else no "(C) api-new-surface differs"; fi
 else
     no "(C) P1: premise — (B) is not a degraded answer (no kinds_skipped=), so per-kind identity proves nothing"
 fi
@@ -191,7 +191,7 @@ if [ -n "$bnext" ]; then
     else no "(D) union differs from (A)"; fi
     if isnum "$bgate" && isnum "$dgate" && isnum "$AGATE" && [ $(( bgate + dgate )) = "$AGATE" ]; then ok "(D) gating= adds up: $bgate + $dgate = $AGATE"
     else no "(D) gating: B=$bgate D=$dgate A=$AGATE"; fi
-    [ "$( attr "$WORK/D.xml" skipped_why )" = selector ] && ok "(D) the replay says its kinds were selected (skipped_why=selector)" || no "(D) replay skipped_why=$( attr "$WORK/D.xml" skipped_why )"
+    if [ "$( attr "$WORK/D.xml" skipped_why )" = selector ]; then ok "(D) the replay says its kinds were selected (skipped_why=selector)"; else no "(D) replay skipped_why=$( attr "$WORK/D.xml" skipped_why )"; fi
 else
     no "(D) premise: no kinds_next= to replay"
 fi
@@ -206,7 +206,7 @@ else
 fi
 if [ -n "$( attr "$WORK/E.xml" kinds_skipped )" ]; then
     for k in api-surface complexity error-masking nesting params placeholder verbosity; do
-        [ "$( rows "$WORK/E.xml" "$k" )" = "$( rows "$WORK/A.xml" "$k" )" ] && ok "(E) P0 $k: rows identical" || no "(E) P0 $k: rows differ"
+        if [ "$( rows "$WORK/E.xml" "$k" )" = "$( rows "$WORK/A.xml" "$k" )" ]; then ok "(E) P0 $k: rows identical"; else no "(E) P0 $k: rows differ"; fi
     done
     case "$( attr "$WORK/E.xml" memory_need )" in '>'*M) ok "(E) P0: memory_need= is a lower bound ('>' the limit) — the full need was never measured";; *) no "(E) P0 memory_need=$( attr "$WORK/E.xml" memory_need )";; esac
 else
@@ -269,7 +269,7 @@ for k in api-surface complexity dead-code defect-shape duplication error-masking
     else no "(H) --quality-kinds=$k: rc=$RC rows=$( rows "$WORK/o" | grep -c . ) want $( rows "$WORK/A.xml" "$k" | grep -c . ) why=$( attr "$WORK/o" skipped_why )"; fi
 done
 qd "$BIN" . --quality-delta=HEAD~1..HEAD "--quality-kinds=$ALL12" --no-cache
-[ "$RC" = "$ARC" ] && cmp -s "$WORK/o" "$WORK/A.xml" && ok "(H) all 12 named: byte-identical to no selector" || no "(H) all 12 named: rc=$RC or output differs from (A)"
+if [ "$RC" = "$ARC" ] && cmp -s "$WORK/o" "$WORK/A.xml"; then ok "(H) all 12 named: byte-identical to no selector"; else no "(H) all 12 named: rc=$RC or output differs from (A)"; fi
 
 # ── (I) --quality-ack under pressure ──────────────────────────────────────────────────────────────────────────
 qd RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --quality-ack --no-cache
@@ -305,7 +305,9 @@ PY
 then ok "(K) --json carries the twins (kinds_skipped list, skipped_why, ingest_scope, also_skipped, kinds_next, memory_*)"
 else no "(K) --json twins missing or wrong: $( head -c 300 "$WORK/o" )"; fi
 qd "$BIN" . --quality-delta=HEAD~1..HEAD --json --no-cache
-grep -q '"kinds_skipped"\|"ingest_scope"\|"kinds_next"\|"also_skipped"' "$WORK/o" && no "(K) an unpressured --json carries a degraded-only key" || ok "(K) an unpressured --json carries none of the degraded keys"
+if [ "$RC" = "$ARC" ] && [ -s "$WORK/o" ] && ! grep -q '"kinds_skipped"\|"ingest_scope"\|"kinds_next"\|"also_skipped"' "$WORK/o"; then
+    ok "(K) an unpressured --json carries none of the degraded keys"
+else no "(K) unpressured --json: rc=$RC (want $ARC), empty, or it carries a degraded-only key"; fi
 
 # ── (L) guard: the projection seam past the run's one projection reading changes nothing ───────────────────────
 qd RIPWIRE_TEST_MEMGUARD=project:2 "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache
