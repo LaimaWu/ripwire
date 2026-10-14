@@ -41,7 +41,40 @@ struct GrepEncOptions
     bool                              handles;
     std::string_view                  root;
     std::vector<char>&                esc;
+    std::span<const rw::GrepCarrier>  carriers;     // L4: parallel to the rows (grepcarrier.h), or empty when no row is a carrier
+    bool                              singleRoot;   // reads_at= paths strip rootPrefix exactly when the hit rows' p= do
+    std::string_view                  rootPrefix;
 };
+
+// L4 (grepcarrier.h): a carrier row's reads=/reads_at= (the uses verb's read sites for its name; absent = not counted)
+// and vals=/vals_total= (the function values it stores). Pure serialization of grepCarriers' verdict.
+std::string grepCarrierAttrs( const rw::GrepCarrier& c, bool singleRoot, std::string_view rootPrefix, std::vector<char>& esc )
+{
+    const rw::GrepCarrierText t = rw::grepCarrierText( c, singleRoot, rootPrefix );
+    const auto joined = [ & ]( const std::vector<std::string>& items )
+    {
+        std::string out;
+        for( std::size_t k = 0; k < items.size(); ++k )
+        {
+            out += ( k > 0 ? " " : "" ) + std::string( rw::escapeXml( items[k], esc ) );
+        }
+        return out;
+    };
+    std::string out;
+    if( !t.readsAt.empty() )
+    {
+        out += " reads=\"" + std::to_string( c.reads ) + "\" reads_at=\"" + joined( t.readsAt ) + "\"";
+    }
+    if( !t.vals.empty() )
+    {
+        out += " vals=\"" + joined( t.vals ) + "\"";
+        if( c.valsTotal > c.vals.size() )
+        {
+            out += " vals_total=\"" + std::to_string( c.valsTotal ) + "\"";
+        }
+    }
+    return out;
+}
 
 class GrepHandleAttrs
 {
@@ -145,9 +178,76 @@ void emitGrepEncRows( const rw::IngestResult& ing, const rw::Graph& g, std::span
         {
             rw::emitTo( stdout, " tested=\"1\"" );
         }
+        if( r < opt.carriers.size() && opt.carriers[r].isCarrier )
+        {
+            std::fputs( grepCarrierAttrs( opt.carriers[r], opt.singleRoot, opt.rootPrefix, opt.esc ).c_str(), stdout );
+        }
         std::fputs( handleAttrs.forRow( row ).c_str(), stdout );
         rw::emitTo( stdout, "/>" );
     }
+}
+
+// L4 (grepcarrier.h): the carrier verdict for a page's <enc> rows. vals= reads this run's own value index (both ingest
+// families capture value references). reads= needs role="read" references, which only the RICH family captures, and
+// --grep runs LEAN (cli.h needsValueUses): so when a carrier on THIS page is one the uses verb can read for (an armed
+// language, not a header) and this run is lean, the same root is ingested once more, rich, through that family's own
+// warm cache (the uses verb's blob, so a tree that answered the uses verb already pays a cache load, not a parse), and
+// dropped before the answer prints. A page with no such carrier — every hit inside a function, a C initialiser, a
+// JS constant — pays nothing. Multi-root lean runs leave reads= unknown (absent): the rich re-ingest is single-root.
+struct GrepCarrierReadsSource
+{
+    const rw::IngestResult* reads = nullptr;
+    enum class DisclosureWhy : std::uint8_t { MemoryStop };
+    void disclose( DisclosureWhy ) noexcept { reads = nullptr; }   // a stopped ingest's reads would be short: leave reads= unknown
+};
+
+std::vector<rw::GrepCarrier> grepPageCarriers( const rw::Config& cfg, const rw::IngestResult& ing, const std::string& root,
+                                               std::span<const rw::GrepEncRow> rows, bool valueUses )
+{
+    if( std::ranges::none_of( rows, [ & ]( const rw::GrepEncRow& row ) { return rw::isGrepCarrierRow( ing, row ); } ) )
+    {
+        return {};
+    }
+    const rw::ValueRefIndex vri( ing );
+    const bool              singleRoot = ing.realPaths.empty() && cfg.roots.size() == 1;
+    if( valueUses || !singleRoot || !rw::grepCarriersWantReads( ing, rows ) )
+    {
+        return rw::grepCarriers( ing, vri, rows, valueUses ? &ing : nullptr );
+    }
+    const std::string cachePath = cfg.noCache ? std::string() : defaultCachePath( root, true );
+    rw::IngestResult  rich      = rw::ingest( root.c_str(), cfg.excludes, cachePath, cfg.maxFileBytes, /*captureValueUses=*/true,
+                                              /*excludeLabel=*/{}, /*respectGitignore=*/!cfg.noIgnore );
+    if( cfg.ignoreTests )
+    {
+        rw::applyIgnoreTests( rich );   // the same population the lean ingest answers from
+    }
+    GrepCarrierReadsSource source{ &rich };
+    if( rich.memoryStop.isSet() )
+    {
+        rw::memguard::answerStops();   // answered here: reads= stays absent (unknown), the rest of the answer is the lean run's
+        DISCLOSE( source, GrepCarrierReadsSource::DisclosureWhy::MemoryStop, "grep: the rich re-ingest for reads= stopped at the memory guard" );
+    }
+    return rw::grepCarriers( ing, vri, rows, source.reads );
+}
+
+// L4: the root next= on an uncut answer whose TOP hit sits in a carrier with reads= — the uses verb on that carrier's name
+// (the spelling floor_next= uses, countfloor.h countFloorNext), because where the value is read is the hop the at verb on
+// the hit's own line cannot give. "" otherwise: the at verb on the top hit stays the follow-up.
+std::string grepCarrierNext( const rw::IngestResult& ing, std::span<const rw::GrepHit> hits, std::span<const rw::GrepEncRow> rows,
+                             std::span<const rw::GrepCarrier> carriers )
+{
+    if( hits.empty() || hits[0].enclosingId == rw::kNoNode )
+    {
+        return {};
+    }
+    for( std::size_t r = 0; r < rows.size() && r < carriers.size(); ++r )
+    {
+        if( std::ranges::find( rows[r].ids, hits[0].enclosingId ) != rows[r].ids.end() )
+        {
+            return carriers[r].readsKnown && carriers[r].reads > 0 ? rw::nextFlag( "--uses=", ing.symbols[ hits[0].enclosingId ].name ) : std::string();
+        }
+    }
+    return {};
 }
 
 // count-floor: callers= beside evidence of a miss for THAT row is a floor (countfloor.h). Computed once per page, before
@@ -166,6 +266,19 @@ std::vector<rw::CallerFloor> grepEncFloors( const rw::IngestResult& ing, const r
 
 // count-floor (countfloor.h): the full dialect's reading of a row's own floor marker — no attribute=value literal (this
 // legend's rule) — spliced only when a row on the page carries it, so a page without one keeps every byte.
+// L4 (grepcarrier.h): the carrier attributes and the next= rule they switch, spliced only when a row on the page carries
+// one (so a page without a carrier keeps every legend byte). No attribute=value literal (this legend's rule) and no
+// double dash (an XML comment).
+inline constexpr const char* kGrepCarrierClause =
+    "On a row whose definitions are all variables, constants or initialisers (a carrier), reads= counts the read sites the "
+    "uses verb lists for that NAME (matched by name, every same-named definition; present only when nonzero and only where "
+    "that verb indexes reads, so its absence means none counted, never none exist) and reads_at= names the first three as "
+    "file:line in that verb's order (source before tests, then path and line); vals= names up to three function values the "
+    "carrier itself stores (resolved by name to an indexed function), as slot=function@line: the slot key (absent for a "
+    "plain assignment) and the line of the one definition that name resolves to (path:line when it is in another file, no "
+    "line when the name resolves to several); vals_total= counts all of them when more than three. When the top hit sits in a carrier with "
+    "reads=, the root next= is the uses verb on that carrier instead of the at verb. ";
+
 inline constexpr const char* kGrepEncFloorClause =
     "callers_floor= (value 1, present only on such a row) marks a count the index holds evidence of a miss for: a declined or "
     "unbound call spelled like the name, a use as a value, or a kind used by reading or naming it (a variable, a class, an "
@@ -687,7 +800,7 @@ std::vector<GrepHitRef> grepHitRefs( const rw::Config& cfg, const rw::IngestResu
 
 int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g,
                     const std::vector<std::uint32_t>* amp, const std::vector<std::uint8_t>* tested,
-                    const GrepScanPhases* prefetched )
+                    const GrepScanPhases* prefetched, const std::string& root, bool valueUses )
 {
     using namespace rw;
     const std::string          pat( cfg.grep );
@@ -764,6 +877,8 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
     const std::vector<GrepEncRow>  encRows   = grepEnclosingRows( ing, g, std::span<const GrepHit>( hits ) );   // R1b, before the legend
     const std::vector<CallerFloor> encFloors = grepEncFloors( ing, g, encRows );
     const bool anyEncFloor = std::ranges::any_of( encFloors, []( const CallerFloor& f ) { return f.isFloor; } );
+    const std::vector<GrepCarrier> encCarriers = grepPageCarriers( cfg, ing, root, encRows, valueUses );   // L4, before the legend
+    const bool anyCarrierAttr = std::ranges::any_of( encCarriers, []( const GrepCarrier& c ) { return ( c.readsKnown && c.reads > 0 ) || !c.vals.empty(); } );
     const std::vector<GrepHitRef> hitRefs = grepHitRefs( cfg, ing, tierReport, encRows, hits );   // idea #5: ref= (empty off a code+string answer)
     std::vector<char> esc;
     const auto        ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
@@ -912,7 +1027,7 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
                  // parse this verb's header counters by grep, and a quoted numeric example here would be matched first — the quality-delta legend's rule.
                  "After the hit rows, <enc> rows list each DISTINCT enclosing symbol NAME of THIS page (first-appearance order, bounded by the page) with callers= its 1-hop DISTINCT-caller count, "
                  "unioned across same-named defs like the callers verb (a FLOOR — dynamic dispatch contributes no edge), defs= how many defs the name grouped (only when more than one), cx= complexity; "
-                 "{}"   // count-floor: kGrepEncFloorClause, present-only (a row on this page carries callers_floor=)
+                 "{}{}"   // count-floor: kGrepEncFloorClause, present-only (a row on this page carries callers_floor=); L4: kGrepCarrierClause, the same
                  "amp=/tested= join only when a metrics co-run already computed that lens. On a zero-hit answer a <suggest> element may follow: SUGGESTIONS, never matches — near= the nearest indexed "
                  "symbol name (did-you-mean), next= a ready-to-paste conceptual fallback; absent for regex/non-word-like patterns or when nothing plausible exists. "
                  // T1: the completeness claim, defined where it appears (no attribute=value literal in these
@@ -965,7 +1080,7 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
                  // P3 (L7): next= on the root, defined where the reader meets it
                  "next= is the one pasteable follow-up: the at verb on the top hit; the next page (compact legend) when cut; "
                  "the conceptual lens on a zero-hit answer. "
-                 "{} -->", anyEncFloor ? kGrepEncFloorClause : "", rw::kPageRaiseCapClause );
+                 "{} -->", anyEncFloor ? kGrepEncFloorClause : "", anyCarrierAttr ? kGrepCarrierClause : "", rw::kPageRaiseCapClause );
     }
     emitGrepHandleLegend( cfg.grepHandles );
     // G3: terms=/scope=/suppressed= — only when AND/NOT was actually given, so a plain --grep answer
@@ -1004,6 +1119,10 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
     if( grepPage.end < hitCount || hitsCapped != 0 )
     {
         grepNext = rw::nextFlag( cfg.grepRegex ? "--regex=" : "--grep=", pat ) + " --offset=" + std::to_string( grepPage.end ) + " --legend=compact";
+    }
+    else if( const std::string carrierNext = grepCarrierNext( ing, hits, encRows, encCarriers ); !carrierNext.empty() )
+    {
+        grepNext = carrierNext;   // L4: the top hit sits in a carrier the uses verb lists reads for — those reads are the next hop
     }
     else if( !hits.empty() )
     {
@@ -1113,7 +1232,7 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
 
     // ── R1b: the <enc> block — the map's context on the answer, no second call (helper above) ──────
     const GrepEncOptions encOpt{ amp, tested, cfg.grepHandles,
-                                cfg.roots.size() == 1 ? cfg.roots[0] : std::string_view(), esc };
+                                cfg.roots.size() == 1 ? cfg.roots[0] : std::string_view(), esc, encCarriers, singleRoot, rootPrefix };
     emitGrepEncRows( ing, g, encRows, encFloors, encOpt );
 
     // ── R1a: the zero-hit follow-up — suggestions, labeled as such, never matches (helper above) ───
@@ -1136,7 +1255,7 @@ std::optional<int> runGrep( const MainDispatch& d )
     }
     // body: emitGrepReport() above. amp/tested are non-null only when a co-run (--metrics) computed
     // them at dispatch build time — grep itself never asks for the analysis (R1's no-new-analysis rule).
-    return emitGrepReport( d.cfg, d.ing, d.g, d.ampPtr, d.testedPtr, d.grepPhases );
+    return emitGrepReport( d.cfg, d.ing, d.g, d.ampPtr, d.testedPtr, d.grepPhases, d.root, d.valueUses );
 }
 
 }   // namespace — verbs_grep.h section of main.cpp

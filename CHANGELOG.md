@@ -15,6 +15,18 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — `--grep` names what a hit's variable carries and who reads it
+
+When a hit sits inside a variable, constant or initialiser (its enclosing definition's kind is a variable), the `<enc>`
+row now says where that value goes instead of only a call count nobody can satisfy: `reads=N reads_at=` are the
+uses verb's read sites for the name (first three, the uses verb's order; only where that verb indexes reads —
+Python, C++ and ObjC outside headers — and absent, never zero, elsewhere), and `vals=` names up to three function
+values the carrier stores, as `slot=fn@line` of the one definition each resolves to (`vals_total=` beyond three).
+When the top hit's carrier has reads, the root `next=` is `--uses=<carrier>`. The MCP `grep` verb's `enclosing`
+rows carry the same `reads`/`reads_at`/`vals` keys (`src/grepcarrier.h`, shared). Reads are rich-family facts, so a
+lean `--grep` run whose page holds such a carrier ingests the same root once more through the rich warm cache; a page
+without one costs nothing extra. Gate: `test/countfloorcheck.sh` arm P.
+
 ### Added — Clojure (`.clj`/`.cljs`/`.cljc`/`.bb`)
 
 Vendored Yogthos' ABI-15 `tree-sitter-clojure` parser and added syntax-level definitions and direct-call captures for the four Clojure-family extensions. The grammar comparison parsed 4,930 of 4,933 files (99.94%, 55.5 MB) from Metabase, clojure-lsp, clj-kondo and Babashka checkouts in 2.24 seconds; two failures were intentionally invalid clj-kondo fixtures and one was a Metabase test. This measures parser completion on that corpus, not semantic call-resolution accuracy. Namespace/import resolution, macro expansion and exact multi-arity matching remain outside this first pass; see `docs/ARCHITECTURE.md` for the extraction limits.

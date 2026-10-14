@@ -892,6 +892,11 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // count-floor (src/countfloor.h): the row's own floor marker, emitted only beside evidence of a miss for THAT row.
     { "callers_floor", "callers_floor=1: callers= may be short for this row: a declined or unbound call spelled like it, a value use, or a kind used by reading/naming it (var, class, struct, interface); not proof more callers exist; absent = no such evidence", true, "enc", MapHeaderRead::No, {}, "grep" },
     { "floor_next", "floor_next=: the call that lists what that count could not see (the uses verb; the literal scan where reads are not indexed)", true, "enc", MapHeaderRead::No, {}, "grep" },
+    // L4 (src/grepcarrier.h): a carrier row (every def a variable/constant/initialiser) — its read sites and stored function values.
+    { "reads", "reads=N: read sites the uses verb lists for this carrier's name (by name; present only when nonzero where reads are indexed; absent = none counted)", true, "enc", MapHeaderRead::No, {}, "grep" },
+    { "reads_at", "reads_at=: the first three of those sites, file:line, uses order; the root next= is then the uses verb", true, "enc", MapHeaderRead::No, {}, "grep" },
+    { "vals", "vals=: up to three function values the carrier stores, slot=fn@line of its one resolved def (path:line elsewhere; no @ if several)", true, "enc", MapHeaderRead::No, {}, "grep" },
+    { "vals_total", "vals_total=N: every stored function value, when more than vals= shows", true, "enc", MapHeaderRead::No, {}, "grep" },
     // count-floor + CALLSITE-LINE on safe-delete (src/verbs_navigate.h runSafeDelete): root markers beside the counts they qualify.
     { "callers_floor", "callers_floor=1: callers= and impact_reaches= may be short (a declined, unbound or value use, or a kind read not called); not proof of more", false, {}, MapHeaderRead::No, {}, "safe-delete" },
     { "uses_floor", "uses_floor=1: this kind's reads and type mentions are not indexed in this run; uses= does not count them", false, {}, MapHeaderRead::No, {}, "safe-delete" },

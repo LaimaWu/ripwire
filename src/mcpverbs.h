@@ -24,6 +24,7 @@
 #include "partition.h"     // the explore verb's `partition` argument (packTaskPartitionText)
 #include "tracelocus.h"    // L4: the shared --from-trace / MCP from_trace bundle assembler (fromTraceBundleText)
 #include "countfloor.h"     // count-floor: a row's callers=/implementors= floor marker and its follow-up (CLI and MCP share it)
+#include "grepcarrier.h"    // L4: a grep enclosing row's carrier reads/vals (CLI and MCP share it)
 #include "editcheck.h"     // L4: the shared --edit-check / MCP edit_check contract-comparison core (editCheckBundleText)
 #include "callhierarchy.h"  // H14/M13: the shared 1-hop call-hierarchy computation — find_symbol / find_referencing_symbols
 #include "graphlegend.h"   // §H4 §3.4: the ONE counts_floor= marker + shared graph-count legend wording (CLI ≡ MCP)
@@ -887,7 +888,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
 // under --handles mints (search.h grepEncHandleCandidate decides WHICH row may carry one; handleFor mints it from the index's
 // own byte hash) — or `handle_omitted` with the CLI legend's reason. Before this a grep answer named enclosing symbols that
 // fetch_body could not take, so the agent re-read every file it had just searched.
-inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepHit> hits )
+inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepHit> hits, bool singleRoot, std::string_view rootPrefix )
 {
     const IngestResult&           ing     = ix.ing;
     const Graph&                  g       = ix.g;
@@ -905,6 +906,10 @@ inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepHi
     }
     const std::vector<CallerFloor> floors = callerFloors( ing, g, rowIds, &valueRefIndexOf( ix ) );
     ENSURES( floors.size() == encRows.size() );
+    // L4: the CLI <enc> carrier attributes (grepcarrier.h), by the same function. The MCP index is the RICH family
+    // (mcpindex.h ingests with value uses), so its own references carry the reads: no second ingest here.
+    const std::vector<GrepCarrier> carriers = grepCarriers( ing, valueRefIndexOf( ix ), encRows, &ing );
+    ENSURES( carriers.size() == encRows.size() );
     std::string out = ",\"enclosing\":[";
     for( std::size_t r = 0; r < encRows.size(); ++r )
     {
@@ -925,6 +930,31 @@ inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepHi
         if( row.cx > 0 )
         {
             out += ",\"cx\":" + std::to_string( row.cx );
+        }
+        if( const GrepCarrier& c = carriers[r]; c.isCarrier )
+        {
+            const GrepCarrierText t = grepCarrierText( c, singleRoot, rootPrefix );
+            const auto jsonList = [ & ]( const std::vector<std::string>& items )
+            {
+                std::string list = "[";
+                for( std::size_t k = 0; k < items.size(); ++k )
+                {
+                    list += ( k > 0 ? ",\"" : "\"" ) + mcpdetail::jsonEscape( items[k] ) + "\"";
+                }
+                return list + "]";
+            };
+            if( !t.readsAt.empty() )
+            {
+                out += ",\"reads\":" + std::to_string( c.reads ) + ",\"reads_at\":" + jsonList( t.readsAt );
+            }
+            if( !t.vals.empty() )
+            {
+                out += ",\"vals\":" + jsonList( t.vals );
+                if( c.valsTotal > c.vals.size() )
+                {
+                    out += ",\"vals_total\":" + std::to_string( c.valsTotal );
+                }
+            }
         }
         const char*  omitted = nullptr;
         const NodeId id      = grepEncHandleCandidate( ing, row, omitted );
@@ -1278,7 +1308,7 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                         singleRootJ, rootPrefixJ );
     // R1 (the 2026-08-12 usage mine): the CLI <enc>/<suggest> twins, appended AFTER "hits" so the
     // historic key order three other gates read (files,total,shown,capped) is byte-untouched.
-    out += grepEnclosingJson( ix, std::span<const GrepHit>( hits ) );
+    out += grepEnclosingJson( ix, std::span<const GrepHit>( hits ), singleRootJ, rootPrefixJ );
     if( collected.raw.empty() )
     {
         out += grepSuggestJson( ing, pattern );
