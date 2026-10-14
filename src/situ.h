@@ -835,6 +835,7 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     // A4-P10: mine the commit file-sets ONCE (not one `git log` popen per probed file) and answer every probe
     // from the shared sets — identical result (mining is deterministic for a fixed HEAD), no subprocess storm.
     const auto                     coSets     = gitCommitFileSets( root, ing, "18 months ago", 30, nullptr, onlyRoot );
+    CoCouplingCache                coCoupling( ing );   // prcontext-hoist: one include-coupling build for every probe
     const std::string              coWindow   = defaultWindowLabel( root, "18mo" );   // F2: see SituationFacts::coWindow
     const std::size_t              coCommits  = coSets.size();
     HashMap<std::uint32_t, double> partnerDeg;
@@ -852,7 +853,7 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
         }
         ++probed;
         std::uint32_t                commits = 0;
-        const std::vector<CoPartner> ps      = cochangePartners( ing, ing.files[f], commits, coSets );
+        const std::vector<CoPartner> ps      = cochangePartners( ing, ing.files[f], commits, coSets, nullptr, &coCoupling );
         for( const CoPartner& p : ps )
         {
             if( !changedFile[p.fileId] )
@@ -1007,6 +1008,7 @@ inline SituationFacts computeSituationFacts( const std::string& root, const Inge
     // A4-P10: mine the commit file-sets ONCE and answer every probe from the shared sets (was one `git log`
     // popen per probed file — up to 40 — the O(files)-subprocess storm). Deterministic for a fixed HEAD.
     const auto                     coSets = gitCommitFileSets( root, ing, "18 months ago", 30 );
+    CoCouplingCache                coCoupling( ing );   // prcontext-hoist: one include-coupling build for every probe
     facts.declDef  = declDefPartners( ing, changedFile );  // F3: same relationship, same rule, one implementation
     facts.siblings = lexicalSiblings( ing, changedFile );   // L-D: the same list the CLI report's [1] prints
     facts.coWindow = defaultWindowLabel( root, "18mo" );   // F2: the composed zero's window travels WITH the zero
@@ -1022,7 +1024,7 @@ inline SituationFacts computeSituationFacts( const std::string& root, const Inge
         }
         ++probed;
         std::uint32_t                commits = 0;
-        const std::vector<CoPartner> ps      = cochangePartners( ing, ing.files[f], commits, coSets );
+        const std::vector<CoPartner> ps      = cochangePartners( ing, ing.files[f], commits, coSets, nullptr, &coCoupling );
         for( const CoPartner& p : ps )
         {
             if( !changedFile[p.fileId] )

@@ -15,6 +15,10 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — Clojure (`.clj`/`.cljs`/`.cljc`/`.bb`)
+
+Vendored Yogthos' ABI-15 `tree-sitter-clojure` parser and added syntax-level definitions and direct-call captures for the four Clojure-family extensions. The grammar comparison parsed 4,930 of 4,933 files (99.94%, 55.5 MB) from Metabase, clojure-lsp, clj-kondo and Babashka checkouts in 2.24 seconds; two failures were intentionally invalid clj-kondo fixtures and one was a Metabase test. This measures parser completion on that corpus, not semantic call-resolution accuracy. Namespace/import resolution, macro expansion and exact multi-arity matching remain outside this first pass; see `docs/ARCHITECTURE.md` for the extraction limits.
+
 ### Changed — Python imports use the shared capture vocabulary (#358, Python slice)
 
 Python dependency targets now come from `@import.path`; named clauses and their optional local
@@ -28,10 +32,10 @@ The Python walk is removed. Captured targets and bindings retain the same contai
 imports at 255/256 containers remain, and a real import at 257 is cut and disclosed. An import-free deep
 container, including a top-level import followed by a deep `pass`, no longer produces `extract-partial`
 and may be cached. Disclosure now reports a captured import actually cut, rather than an empty container.
-No persisted record or extraction-version change is intended; the Python import gate checks
-fresh/warm output and, when `RIPWIRE_BASE_BIN` is supplied, acceptance of a pristine-main cache
-without rewriting it.
-
+There is no record content or extraction-version change; the order of a file's bind records
+differs, and no reader depends on it (a cache written by the previous release gives identical
+answers). The Python import gate checks fresh/warm output and, when `RIPWIRE_BASE_BIN` is supplied,
+acceptance of a pristine-main cache without rewriting it.
 
 ### Fixed — on Linux the memory guard read only the resident set, while the cgroup limit kills on the cgroup's charge (#387)
 

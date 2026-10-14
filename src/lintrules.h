@@ -109,6 +109,8 @@ inline constexpr LangTokenRow kLangTokenRows[] = {
     { "dart",       Lang::Dart       },
     { "kotlin",     Lang::Kotlin     },
     { "gdscript",   Lang::GDScript   },
+    { "clojure",    Lang::Clojure    },
+    { "clj",        Lang::Clojure    },
 };
 
 /// Parse a supported language token; assign out only on success and otherwise return false.
@@ -168,6 +170,7 @@ inline constexpr LintExtRow kLintExtRows[] = {
     { ".dart", Lang::Dart },
     { ".kt", Lang::Kotlin },
     { ".gd", Lang::GDScript },
+    { ".clj", Lang::Clojure }, { ".cljs", Lang::Clojure }, { ".cljc", Lang::Clojure }, { ".bb", Lang::Clojure },
 };
 
 /// Classify a path by its supported extension, returning Unknown when no extension matches.
@@ -263,6 +266,7 @@ inline bool dependencyCapable( Lang lang ) noexcept
             return true;
         case Lang::Dart:   // no import capture yet — see the DART paragraph above
         case Lang::GDScript:   // no preload/load capture yet — the same paragraph
+        case Lang::Clojure:    // no namespace/import extraction yet
         case Lang::Json: case Lang::Toml: case Lang::Yaml: case Lang::Markdown: case Lang::Unknown:
             return false;
     }
