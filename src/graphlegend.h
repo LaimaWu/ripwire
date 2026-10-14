@@ -1016,6 +1016,18 @@ inline std::string forViaNameClause()
 {
     return std::string( kForViaNameClause );
 }
+// attrib-multidef Q1: a <calls><c> row whose edge is one arm of a resolver split carries prov="split" — the same per-edge label
+// the map prints — on --for's bodies and hops. Defined in --for's FIRST-SCREEN legend on an over-approximated bit (serialize.h
+// splitArmsOutAny), as via="name" is, and as a comment beside the rows on a bundle whose head did not define it.
+inline constexpr std::string_view kForCompactSplitClause =
+    "; c prov=split: that callee's edge carries the resolver's split label, so it may be another arm's (NOT a claim the edge is false)";
+inline constexpr std::string_view kForSplitClause =
+    " prov=\"split\" on a <c> row: that callee's edge carries the resolver's split label (a call along it was one arm of a call split "
+    "between same-named definitions), so it may be another arm's. It does NOT mean the edge is false.";
+inline std::string splitArmCallsLegendComment()
+{
+    return "<!--" + std::string( kForSplitClause ) + " -->";
+}
 // …as its own comment node, for the surfaces whose legend is written beside the rows (a <bodies>/<hops> block's <calls>)
 inline std::string viaNameLegendComment()
 {

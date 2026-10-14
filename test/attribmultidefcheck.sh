@@ -509,6 +509,25 @@ if ans h_p1 capfix callers s xml -- --callers=go --limit=5; then
 fi
 FIX="$FIXSAVE"
 
+# ── (I) Q1 on --for: a body's <calls> row (and a hop's) whose edge is a resolver split arm carries prov="split", defined in the
+# bundle's first-screen legend; a proven callee row does not ──────────────────────────────────────────────────────────────────
+echo "(I) Q1: --for <calls> rows of a split call"
+if ( cd "$FIX/cpp" && "$BIN" . --no-cache --for=PutInt ) >"$DIR/i_for.out" 2>/dev/null && grep -q '<ctx' "$DIR/i_for.out"; then
+    n_split="$( grep -oE '<c n="put"[^>]* prov="split"' "$DIR/i_for.out" | wc -l | tr -d ' ' )"
+    [ "$n_split" = 2 ]; say $? "[P] i_for: both put arms in PutInt's <calls> carry prov=\"split\"" \
+        "[P] i_for: $n_split of 2 put <calls> rows carry prov=\"split\""
+    sed 's/-->.*//' "$DIR/i_for.out" | grep -q 'prov=split'; say $? "[P] i_for: the first-screen legend defines prov=split" \
+        "[P] i_for: prov=split is not defined in the --for header"
+else no "i_for: --for=PutInt failed"; fi
+if ( cd "$FIX/cpp" && "$BIN" . --no-cache --for=UsesBoth ) >"$DIR/i_for2.out" 2>/dev/null && grep -q '<ctx' "$DIR/i_for2.out"; then
+    ! grep -q 'prov="split"' "$DIR/i_for2.out"; say $? "[N] i_for2: proven callees (both empty) carry no prov=" \
+        "[N] i_for2: a proven callee row carries prov=\"split\""
+else no "i_for2: --for=UsesBoth failed"; fi
+if command -v xmllint >/dev/null 2>&1; then
+    ( cd "$FIX/cpp" && "$BIN" . --no-cache --for=PutInt --legend=full ) >"$DIR/i_forf.out" 2>/dev/null && xmllint --noout "$DIR/i_forf.out" 2>/dev/null
+    say $? "[C] i_forf: --for=PutInt --legend=full well-formed (the prov=split clause rides)" "[C] i_forf: --for=PutInt --legend=full malformed or failed"
+fi
+
 # ── (G) well-formedness and determinism ───────────────────────────────────────────────────────────────────────────────
 echo "(G) well-formedness, determinism"
 if command -v xmllint >/dev/null 2>&1; then

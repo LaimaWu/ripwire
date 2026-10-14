@@ -33,6 +33,8 @@ endpoint has several definitions and no proven hop bound one. Measured base vs h
 16 MCP requests (single-definition selectors, prototype + definition pairs, every dialect): 212 and 16 byte-identical; the
 other five are the split-arm break above (2) and one C++ prototype whose parameter types are spelled differently from its
 definition (`std::string` vs `string`), which the declaration identity rule reads as another function (3).
+On `--for`, a body's or a hop's `<calls>` row whose edge is a resolver split arm carries the same `prov="split"`, defined in the
+bundle's first-screen legend when any listed callee edge can carry it (the `via="name"` rule's over-approximation).
 
 ### Added — Clojure (`.clj`/`.cljs`/`.cljc`/`.bb`)
 
