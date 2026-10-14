@@ -931,7 +931,7 @@ inline constexpr std::size_t kForCapTailSigBytes    = 96;
 // sections + <sigs>), far above a typical answer: hitting it is a BUG SIGNAL (a recursion, a dump, a head far wider than any
 // question needs), never a budget. A default answer that hits it discloses over_ceiling="1" on the root, <sigs capped="1"
 // next=…> (the continuation serves every row: an explicit target is never cut by this guard, see max(guard, T)) and
-// kForRunawayGuardNote. The value is set by the pre-registered rule (forbudget-soft PLAN §G): roundup_1000( max( 4 x the
+// forRunawayGuardNote(). The value is set by the lane's pre-registered guard rule (forbudget-soft, frozen before the code): roundup_1000( max( 4 x the
 // target, 2 x the largest complete default payload on the round-2 --for argv ) ) = max( 30,000, 2 x 12,519 ) = 30,000 B (44
 // default-regime round-2 answers, measured on the provisional 32,000 build); verified with zero hits on the round-4-only (max
 // 13,005 B) and capsweep (max 12,094 B) argv. Gate: test/forsoftbudgetcheck.sh (D4, D4b, NX2).

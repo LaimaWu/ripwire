@@ -427,11 +427,13 @@ else
     [[ "$LC_STUBTOTAL" =~ ^[0-9]+$ ]] && [ "$LC_IFACES" -eq "$(( LC_STUBTOTAL < 12 ? LC_STUBTOTAL : 12 ))" ] \
         && ok "(13c) the stub's total=$LC_STUBTOTAL matches the restored <lego> ($LC_IFACES <iface> rows, display cap 12)" \
         || no "(13c) the stub's total=\"$LC_STUBTOTAL\" vs $LC_IFACES restored <iface> rows (display cap 12)"
-    # (13d) NEAR-MISS: under an explicit ceiling, a section --sections= opts into is charged in full — the hard bound holds
-    # (its <lego> is then narrowed to the few rendered rows' files — here none of stages.h — so the bound is read off <sigs>)
-    [ "$LC_TBEST" -le 3000 ] && [ "$LC_TBREST" -lt "$LC_TB" ] \
-        && ok "(13d) --token-budget=3000 --sections=lego,compose: est_tokens=$LC_TBEST <= 3000, <sigs> $LC_TBREST < $LC_TB (the full <lego> was charged)" \
-        || no "(13d) --token-budget=3000 --sections=lego,compose: est_tokens=$LC_TBEST, <sigs> $LC_TBREST vs $LC_TB stubbed — the opted-in section was not charged in full under an explicit ceiling"
+    # (13d) forbudget-soft (owner decisions 2026-10-14; rule 4): an explicit --token-budget is a SOFT target charged against
+    # the <sigs> rows only, so a section --sections= opts into is NOT charged to the rows any more — it rides on top (priced in
+    # est_tokens=) and costs no row (SEC); nothing is labelled over_ceiling. The old near-miss (the opted-in <lego> charged in
+    # full, <sigs> shrinking) is the by-design break; what must hold now: the same rows with and without the opt-in.
+    [ "$LC_TBREST" -eq "$LC_TB" ] && ! grep -q 'over_ceiling="1"' "$TMP/lc_tbrest.xml" && grep -q '<lego><iface ' "$TMP/lc_tbrest.xml" \
+        && ok "(13d) --token-budget=3000 --sections=lego,compose: the restored <lego> costs no <sigs> row ($LC_TBREST == $LC_TB), no over_ceiling (est_tokens=$LC_TBEST)" \
+        || no "(13d) --token-budget=3000 --sections=lego,compose: <sigs> $LC_TBREST vs $LC_TB without it (or over_ceiling, or no full <lego>) — an opted-in section must not cost rows under a soft target"
 fi
 if command -v python3 >/dev/null 2>&1; then
     lc_mcp(){ printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"test/legochargefix","task":"%s"%s}}}\n' "$LCQ" "$1" \
@@ -441,9 +443,10 @@ t = json.loads(sys.stdin.readline())['result']['content'][0]['text']
 m = re.search(r'<sigs shown=\"([0-9]+)\"', t)
 print(m.group(1) if m else 'none')"; }
     LCM_DEF="$( lc_mcp '' )"; LCM_TB="$( lc_mcp ',"budget_tokens":3000' )"; LCM_TBREST="$( lc_mcp ',"budget_tokens":3000,"sections":"lego,compose"' )"
-    [[ "$LCM_DEF" =~ ^[0-9]+$ && "$LCM_TB" =~ ^[0-9]+$ && "$LCM_TBREST" =~ ^[0-9]+$ ]] && [ "$LCM_DEF" -ge 24 ] && [ "$LCM_TBREST" -lt "$LCM_TB" ] \
-        && ok "(13e) MCP for: the same charge — <sigs> $LCM_DEF rows by default; under budget_tokens + sections $LCM_TBREST < $LCM_TB" \
-        || no "(13e) MCP for: <sigs shown> default=$LCM_DEF budget=$LCM_TB budget+sections=$LCM_TBREST (want >= 24, and the last below the middle)"
+    # forbudget-soft (rule 4): the CLI twin's rule — under budget_tokens (a soft target) the opted-in sections cost no row
+    [[ "$LCM_DEF" =~ ^[0-9]+$ && "$LCM_TB" =~ ^[0-9]+$ && "$LCM_TBREST" =~ ^[0-9]+$ ]] && [ "$LCM_DEF" -ge 24 ] && [ "$LCM_TBREST" -eq "$LCM_TB" ] \
+        && ok "(13e) MCP for: <sigs> $LCM_DEF rows by default; under budget_tokens the sections cost no row ($LCM_TBREST == $LCM_TB)" \
+        || no "(13e) MCP for: <sigs shown> default=$LCM_DEF budget=$LCM_TB budget+sections=$LCM_TBREST (want >= 24, and the last two equal)"
 else
     printf '  SKIP  %s\n' "(13e) python3 absent: the MCP twin of the lego charge is not checked"
 fi
