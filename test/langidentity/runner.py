@@ -332,6 +332,20 @@ class Session:
         return False
 
 
+def prepare_fixtures(a, corpora):
+    """Point every fixture corpus at the scratch repository holding its copy. -> False after a FAIL line."""
+    fixtures = [c for c in corpora if c['kind'] == 'fixture']
+    if not fixtures:
+        return True
+    fixrepo = materialize(a.root, sorted({c['root'] for c in fixtures}), os.path.join(a.scratch, 'fixrepo'))
+    if not fixrepo:
+        print('  FAIL  could not copy the fixture directories into a scratch git repository (is git installed?)')
+        return False
+    for c in fixtures:
+        c['cwd'] = fixrepo
+    return True
+
+
 def main():
     a = parse_args()
     if a.ratchet_only:
@@ -346,14 +360,8 @@ def main():
         for c in corpora:
             print('%s\t%s\t%s' % (c['id'], c['kind'], c['root']))
         return 0
-    fixtures = [c for c in corpora if c['kind'] == 'fixture']
-    if fixtures:
-        fixrepo = materialize(a.root, sorted({c['root'] for c in fixtures}), os.path.join(a.scratch, 'fixrepo'))
-        if not fixrepo:
-            print('  FAIL  could not copy the fixture directories into a scratch git repository (is git installed?)')
-            return 1
-        for c in fixtures:
-            c['cwd'] = fixrepo
+    if not prepare_fixtures(a, corpora):
+        return 1
     session = Session(a, intended, read_touched(a.syms))
     for c in corpora:
         session.run_corpus(c)
