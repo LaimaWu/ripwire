@@ -499,13 +499,19 @@ struct dirwatch_event
 // ── memory: the process footprint, the machine's RAM, and the pressure signal (#350's memory guard) ───────────
 // No POSIX call answers any of these, so each is a lowercase helper returning 0 for "this platform cannot say
 // cheaply" — the guard (src/memguard.h) then falls back to what it can read, and says nothing on a normal run.
-// Every body is one syscall or one small /proc read, and the guard calls them at most once per five seconds.
+// Every body is one syscall or at most four small /proc and /sys reads, and the guard calls them at most once per five
+// seconds, plus once at each hard-line check between phases.
 // mem_footprint: bytes this process holds. macOS: TASK_VM_INFO phys_footprint (what Activity Monitor and the
 //   jetsam killer count — compressed and swapped pages included). Linux: resident pages from /proc/self/statm.
 // mem_physical: bytes of physical RAM. macOS hw.memsize; Linux _SC_PHYS_PAGES x _SC_PAGESIZE.
 // mem_cgroup_max: the cgroup v2 memory.max of this process's OWN (leaf) cgroup (Linux; 0 = none, "max", or unreadable).
 //   Known floor: a limit set on an ANCESTOR cgroup (a systemd slice's MemoryMax) and cgroup v1's memory.limit_in_bytes
 //   are not read, so there the default falls back to physical RAM.
+// mem_cgroup_unreclaimable: what that same leaf is charged for and the kernel cannot reclaim (#387) — memory.current less
+//   its reclaimable page cache, memory.stat's `file` minus `shmem` (tmpfs and shared memory are counted in `file` and
+//   cannot be dropped). Read only when the leaf has a finite memory.max, because there the OOM killer acts on the
+//   leaf's charge: it counts every process in the leaf, and anonymous memory the kernel charged to the leaf that
+//   /proc/self/statm does not show. 0 = no such leaf, no limit on it, or unreadable (Linux only; 0 elsewhere).
 // mem_pressure: 0 unknown, 1 normal, 2 warning, 3 critical. macOS kern.memorystatus_vm_pressure_level (1/2/4);
 //   Linux /proc/pressure/memory, critical when "full avg10" (every non-idle task stalled on memory, 10 s mean)
 //   reaches 20%, warning when "some avg10" does. Integer percent only — no float parse, no locale.
@@ -528,6 +534,7 @@ inline std::uint64_t mem_physical()
     return ::sysctlbyname( "hw.memsize", &bytes, &len, nullptr, 0 ) == 0 && len == sizeof( bytes ) ? bytes : 0;
 }
 inline std::uint64_t mem_cgroup_max() { return 0; }
+inline std::uint64_t mem_cgroup_unreclaimable() { return 0; }
 inline int mem_pressure()
 {
     int         level = 0;
@@ -579,6 +586,42 @@ struct procfs
         const std::size_t at = text.find( key );
         return at == std::string_view::npos ? -1 : leading_int( text.substr( at + key.size() ) );
     }
+    // this process's own cgroup v2 leaf as a /sys/fs/cgroup directory ending in '/', or "" when /proc/self/cgroup has no
+    // cgroup v2 unified line (v1 hierarchies are not read)
+    static std::string cgroup_leaf_dir()
+    {
+        char buf[ 4096 ];   // a v1 host lists one line per controller before the "0::" line; 4 KiB holds every layout seen
+        if( read_small( "/proc/self/cgroup", buf, sizeof( buf ) ) == 0 )
+        {
+            return std::string();
+        }
+        const std::string_view text( buf );
+        const std::size_t      at = text.find( "0::" );   // the cgroup v2 unified line
+        if( at == std::string_view::npos || ( at != 0 && text[ at - 1 ] != '\n' ) )
+        {
+            return std::string();
+        }
+        std::string_view group = text.substr( at + 3 );
+        group = group.substr( 0, group.find( '\n' ) );
+        std::string path = "/sys/fs/cgroup";
+        path.append( group );
+        if( path.back() != '/' )
+        {
+            path.push_back( '/' );
+        }
+        return path;
+    }
+    // the number at the start of the small file `dir` + `name`; 0 when absent, unreadable, or not a number ("max")
+    static std::uint64_t cgroup_leaf_number( const std::string& dir, const char* name )
+    {
+        char value[ 32 ];
+        if( read_small( ( dir + name ).c_str(), value, sizeof( value ) ) == 0 )
+        {
+            return 0;
+        }
+        const long long number = leading_int( std::string_view( value ) );
+        return number > 0 ? std::uint64_t( number ) : 0;
+    }
 };
 inline std::uint64_t mem_footprint()
 {
@@ -599,33 +642,31 @@ inline std::uint64_t mem_physical()
 }
 inline std::uint64_t mem_cgroup_max()
 {
-    char buf[ 4096 ];   // a v1 host lists one line per controller before the "0::" line; 4 KiB holds every layout seen
-    if( procfs::read_small( "/proc/self/cgroup", buf, sizeof( buf ) ) == 0 )
+    const std::string dir = procfs::cgroup_leaf_dir();
+    return dir.empty() ? 0 : procfs::cgroup_leaf_number( dir, "memory.max" );   // "max\n" reads as 0: no limit
+}
+inline std::uint64_t mem_cgroup_unreclaimable()
+{
+    const std::string dir = procfs::cgroup_leaf_dir();
+    if( dir.empty() || procfs::cgroup_leaf_number( dir, "memory.max" ) == 0 )
     {
         return 0;
     }
-    const std::string_view text( buf );
-    const std::size_t      at = text.find( "0::" );   // the cgroup v2 unified line; v1 hierarchies are not read
-    if( at == std::string_view::npos || ( at != 0 && text[ at - 1 ] != '\n' ) )
+    const std::uint64_t charged = procfs::cgroup_leaf_number( dir, "memory.current" );
+    char stat[ 8192 ];   // memory.stat is ~40-60 short lines; `file` and `shmem` are both in its first dozen on 5.x and 6.x kernels
+    if( charged == 0 || procfs::read_small( ( dir + "memory.stat" ).c_str(), stat, sizeof( stat ) ) == 0 )
     {
         return 0;
     }
-    std::string_view group = text.substr( at + 3 );
-    group = group.substr( 0, group.find( '\n' ) );
-    std::string path = "/sys/fs/cgroup";
-    path.append( group );
-    if( path.back() != '/' )
-    {
-        path.push_back( '/' );
-    }
-    path += "memory.max";
-    char limit[ 32 ];
-    if( procfs::read_small( path.c_str(), limit, sizeof( limit ) ) == 0 )
+    const std::string_view text( stat );
+    const long long        file  = procfs::field_after( text, "\nfile " );   // the leading newline keeps file_mapped, file_dirty… out
+    const long long        shmem = procfs::field_after( text, "\nshmem " );
+    if( file < 0 || shmem < 0 )
     {
         return 0;
     }
-    const long long bytes = procfs::leading_int( std::string_view( limit ) );   // "max\n" reads as -1: no limit
-    return bytes > 0 ? std::uint64_t( bytes ) : 0;
+    const std::uint64_t reclaimable = file > shmem ? std::uint64_t( file - shmem ) : 0;
+    return charged > reclaimable ? charged - reclaimable : 0;
 }
 inline int mem_pressure()
 {
@@ -648,6 +689,7 @@ inline int mem_pressure()
 inline std::uint64_t mem_footprint()  { return 0; }
 inline std::uint64_t mem_physical()   { return 0; }
 inline std::uint64_t mem_cgroup_max() { return 0; }
+inline std::uint64_t mem_cgroup_unreclaimable() { return 0; }
 inline int           mem_pressure()   { return 0; }
 #endif
 
@@ -1041,11 +1083,12 @@ int dirwatch_add( int watchFd, int dirFd, dirwatch_event* change );
 int dirwatch_poll( int watchFd, dirwatch_event* events, int eventCount, const ::timespec* timeout );
 
 // ── memory (see the POSIX branch): PrivateUsage from GetProcessMemoryInfo, ullTotalPhys from GlobalMemoryStatusEx,
-// no cgroup (0), and QueryMemoryResourceNotification on a low-memory notification object created once (3 when the
-// system signals low memory, else 1).
+// no cgroup (0, both cgroup helpers), and QueryMemoryResourceNotification on a low-memory notification object created
+// once (3 when the system signals low memory, else 1).
 std::uint64_t mem_footprint();
 std::uint64_t mem_physical();
 [[gnu::always_inline]] inline std::uint64_t mem_cgroup_max() { return 0; }
+[[gnu::always_inline]] inline std::uint64_t mem_cgroup_unreclaimable() { return 0; }
 int           mem_pressure();
 
 }   // namespace rw::os

@@ -2085,14 +2085,20 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 // reading per tool call; nothing is measured on any other method.
                 // Over the line, the resident index is released first (it is usually most of the footprint) and the
                 // footprint read once more: under the line again, the call proceeds and rebuilds for its own root; still
-                // over, it is refused and the sentence says the server itself must be restarted.
+                // over, it is refused, and the sentence names what is over: this server (restart it), or the cgroup leaf
+                // it runs in when the leaf's charge is the larger reading (memguard::leafChargeDecides).
                 if( const bool seamOver = memguard::requestSeamTrips(); !pathsUsageError && ( seamOver || memguard::overHardLimit() ) )
                 {
                     releaseMcpIndexMemory();
                     if( seamOver || memguard::overHardLimit() )
                     {
                         DISCLOSE( Diagnostics::answerRefused, "mcp: a tool call over the memory guard's hard limit, even with the index released, is refused with an MCP error naming the limit" );
-                        resp            = errResultMsg( -32000, memguard::hardStopLine( "session (this server's footprint)" )
+                        // #387: on a Linux cgroup leaf with a memory.max the reading may be the leaf's charge, which counts
+                        // every process in it; restarting this server does not bring that back under the line, so say which
+                        resp            = memguard::leafChargeDecides()
+                                        ? errResultMsg( -32000, memguard::hardStopLine( "session (the charge of the cgroup this server runs in, every process in it counted)" )
+                                                                + "; the resident index was released and the cgroup is still over it — free memory held by the other processes in this server's cgroup, or raise the limit" )
+                                        : errResultMsg( -32000, memguard::hardStopLine( "session (this server's footprint)" )
                                                                 + "; the resident index was released and the server is still over it — restart the MCP server" );
                         pathsUsageError = true;   // the skip-flag: no dispatch, no getIndex()
                     }

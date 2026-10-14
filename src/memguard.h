@@ -12,7 +12,8 @@
 // never obeyed. When the machine cannot say how much RAM it has the footprint cap is off and only the pressure signal
 // remains.
 //
-// THE LINES, measured on the process footprint (os::mem_footprint):
+// THE LINES, measured on the process footprint (measuredFootprint: os::mem_footprint, or the cgroup leaf's unreclaimable
+// charge when the leaf has a memory.max and that is larger):
 //   crawl  stops when the footprint has GROWN by limit/8 since this ingest began, or reaches half the limit. The
 //          crawl's own cost is ~1-3 KB per file (#350's measurements), so a crawl that alone reaches an eighth of the
 //          limit is a tree whose parse could never fit; stopping there is what leaves room to answer.
@@ -64,7 +65,7 @@
 #include <string_view>
 
 #include "infra/Diagnostics.h"   // VALIDATE — the environment is external input
-#include "infra/os.h"            // rw::os::mem_footprint / mem_physical / mem_cgroup_max / mem_pressure
+#include "infra/os.h"            // rw::os::mem_footprint / mem_physical / mem_cgroup_max / mem_cgroup_unreclaimable / mem_pressure
 #include "model.h"               // MemoryStop — the disclosure sink
 
 namespace rw::memguard
@@ -107,6 +108,22 @@ inline std::uint64_t defaultLimitBytes()
         machine = cgroup;
     }
     return machine / 100 * 65;
+}
+
+// the footprint every line is measured on: this process's own (os::mem_footprint), or, when it is larger, the
+// unreclaimable charge of the cgroup v2 leaf this process runs in, read only when that leaf has a finite memory.max (#387).
+// There the OOM killer acts on the leaf's charge, which counts every process in the leaf and anonymous memory statm
+// does not show; the leaf's reclaimable page cache (the extracted commit trees --quality-delta=A..B writes) is left out,
+// because the kernel drops it before it kills. An unlimited or unreadable leaf reads 0, so the process footprint decides.
+inline std::uint64_t measuredFootprint()
+{
+    return std::max( os::mem_footprint(), os::mem_cgroup_unreclaimable() );
+}
+// true when the cgroup leaf's charge, not this process's own footprint, is the larger figure: a message about the hard line
+// then names the leaf, because freeing this process's memory may not bring the leaf back under it
+inline bool leafChargeDecides()
+{
+    return os::mem_cgroup_unreclaimable() > os::mem_footprint();
 }
 
 // the limit as a --max-memory value ("10854M"): what the reader would type to raise it — so always in whole MiB,
@@ -209,7 +226,7 @@ public:
         : trip_( testTrip() )
         , hardBytes_( limits().hardBytes )
     {
-        baseFootprint_ = os::mem_footprint();
+        baseFootprint_ = measuredFootprint();
         nextCheckTick_.store( GateClock::now().time_since_epoch().count() + kCheckIntervalTicks, std::memory_order_relaxed );
     }
     Watch( const Watch& )            = delete;
@@ -230,7 +247,7 @@ public:
         {
             return false;
         }
-        const std::uint64_t footprint = os::mem_footprint();
+        const std::uint64_t footprint = measuredFootprint();
         const bool overLine = hardBytes_ != 0 && footprint != 0
                            && ( footprint >= softLine() || ( footprint > baseFootprint_ && footprint - baseFootprint_ >= hardBytes_ / 8 ) );
         return ( overLine && tripSoft( false ) ) || ( underPressure( footprint ) && tripSoft( true ) );
@@ -253,7 +270,7 @@ public:
         {
             return;
         }
-        const std::uint64_t footprint = os::mem_footprint();
+        const std::uint64_t footprint = measuredFootprint();
         if( hardBytes_ != 0 && footprint != 0 && footprint >= softLine() )
         {
             (void)tripSoft( false );
@@ -337,7 +354,7 @@ inline bool overHardLimit()
             return true;
         }
     }
-    const std::uint64_t footprint = os::mem_footprint();
+    const std::uint64_t footprint = measuredFootprint();
     return footprint != 0 && footprint >= l.hardBytes;
 }
 
