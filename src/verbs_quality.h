@@ -61,20 +61,20 @@ std::string noBaselineFatalMessage( const std::string& baselineFile, const rw::q
 
 // ── R-I: --quality-delta=A..B, the WAVE-level form ───────────────────────────────────────────────────────
 //
-// The state two COMMITTED trees need, with the temp-dir teardown bound to the caller's scope. Both trees stay
-// alive together on purpose: computeSnapshot reads A while computeDelta reads B, and both read file bytes
-// through their materialized tree, so neither guard may fire early (quality::loadRefTree's header states the
-// same contract from the other side).
+// What two COMMITTED trees leave behind for the comparison: the base tree's snapshot, and the target tree itself with
+// its temp-dir teardown bound to the caller's scope. The target stays alive because computeDelta reads it, and reads
+// file bytes through its materialized tree. The base tree does not: computeSnapshot is the only reader of it, so
+// loadRefPairDelta scores it and releases its index, graph and temp dir before the target is materialized (#387 — both
+// indexes together were most of what a 20,000-file repository's run held when the OOM killer took it).
 //
 // `sameRef` is the A==B case. It is a legal question with an empty answer, and it is answered by materializing
 // ONE tree and comparing it with itself rather than by a special-cased early return: the empty delta then
 // falls out of the ordinary machinery instead of being asserted by a branch nobody re-tests.
 struct RefPairDelta
 {
-    rw::quality::TmpTreeGuard baseGuard;             // declared BEFORE the trees so teardown outlives their use
-    rw::quality::TmpTreeGuard targetGuard;
-    rw::quality::RefTree      baseTree;
+    rw::quality::TmpTreeGuard targetGuard;           // declared BEFORE the tree so teardown outlives its use
     rw::quality::RefTree      targetTree;
+    rw::quality::Snapshot     baseSnapshot;          // the floor: computeSnapshot over the base tree, which is gone
     bool                  sameRef = false;
     std::string           attrs;                     // XML:  ` base_ref="…" target_ref="…" churn="unavailable"`
     std::string           jsonAttrs;                 // JSON: the SAME three facts — built beside attrs so the
@@ -83,8 +83,97 @@ struct RefPairDelta
                                                      // record is read over, against the REAL repo (both trees
                                                      // here are temp dirs with no history of their own)
 
-    const rw::quality::RefTree& target() const noexcept { return sameRef ? baseTree : targetTree; }
+    const rw::quality::RefTree& target() const noexcept { return targetTree; }
 };
+
+// #387: what loadRefPairDelta prints and returns when one commit's tree could not be scored. A memory-guard stop is named
+// as one — exit 5 and the guard's own line — because "could not materialize or parse" would send the reader looking for
+// a broken commit; anything else is the environment, exit 1, with the sha named.
+int refPairLoadRefusal( rw::quality::RefTreeLoad load, const rw::quality::RefTree& tree, const std::string& sha, std::string_view side )
+{
+    using namespace rw;
+    if( load == quality::RefTreeLoad::OverHardLimit )
+    {
+        memguard::answerStops();
+        DISCLOSE( Diagnostics::answerRefused, "--quality-delta=A..B: over the memory guard's hard limit after a commit's ingest, before its graph — exit 5, one stderr line" );
+        rw::emitTo( stderr, "ripwire: {}\n", memguard::hardStopLine( "ingest of the " + std::string( side ) + " commit" ) );
+        return 5;
+    }
+    if( load == quality::RefTreeLoad::MemoryStopped )
+    {
+        memguard::answerStops();   // this refusal answers for the stop the commit's ingest recorded
+        DISCLOSE( Diagnostics::answerRefused, "--quality-delta=A..B: the memory guard cut a commit's ingest, so nothing is scored — exit 5, one stderr line" );
+        rw::emitTo( stderr, "ripwire: {}\n", memguard::verbRefusalLine( tree.ing.memoryStop, "--quality-delta=A..B" ) );
+        return 5;
+    }
+    rw::emitTo( stderr, "ripwire: --quality-delta: could not materialize or parse the tree at {}\n", sha.c_str() );
+    return 1;
+}
+
+// #387: the hard line between the range form's phases. main() checks it after the working-tree ingest and graph build,
+// which this form now dispatches before, so these are its only readings, in order: after each commit's ingest
+// (loadRefTree, before the graph is built) and after its graph; for the base, after its snapshot and again once its index
+// is released. Over the line nothing answers: exit 5 and one line naming the phase.
+bool refPairOverHardLimit( std::string_view phase )
+{
+    using namespace rw;
+    if( !memguard::overHardLimit() )
+    {
+        return false;
+    }
+    memguard::answerStops();
+    DISCLOSE( Diagnostics::answerRefused, "--quality-delta=A..B: over the memory guard's hard limit between its phases — exit 5, one stderr line" );
+    rw::emitTo( stderr, "ripwire: {}\n", memguard::hardStopLine( phase ) );
+    return true;
+}
+
+// #387: the base commit lives only in this function. Its snapshot is everything the comparison needs from it, so its
+// index, graph and temp dir are released on return, before the target tree is materialized. Exit code on a refusal.
+std::optional<int> scoreBaseCommit( const std::string& root, const std::string& sha, const rw::Config& cfg, rw::quality::Snapshot& out )
+{
+    using namespace rw;
+    quality::TmpTreeGuard      baseGuard;
+    quality::RefTree           baseTree;
+    const quality::RefTreeLoad load = quality::loadRefTree( root, sha, cfg.excludes, cfg.maxFileBytes, "qdpair-base", baseGuard, baseTree );
+    if( load != quality::RefTreeLoad::Loaded )
+    {
+        return refPairLoadRefusal( load, baseTree, sha, "base" );
+    }
+    if( refPairOverHardLimit( "graph of the base commit" ) )
+    {
+        return 5;
+    }
+    out = quality::computeSnapshot( baseTree.ing, baseTree.g, baseTree.root );
+    if( refPairOverHardLimit( "snapshot of the base commit" ) )
+    {
+        return 5;
+    }
+    return std::nullopt;
+}
+
+// #387: the target commit, held in `out` for computeDelta. For A==A it is also the floor, so its snapshot is taken here.
+std::optional<int> loadTargetCommit( const std::string& root, const std::string& sha, const rw::Config& cfg, RefPairDelta& out )
+{
+    using namespace rw;
+    const quality::RefTreeLoad load = quality::loadRefTree( root, sha, cfg.excludes, cfg.maxFileBytes, "qdpair-target", out.targetGuard, out.targetTree );
+    if( load != quality::RefTreeLoad::Loaded )
+    {
+        return refPairLoadRefusal( load, out.targetTree, sha, "target" );
+    }
+    if( refPairOverHardLimit( "graph of the target commit" ) )
+    {
+        return 5;
+    }
+    if( out.sameRef )
+    {
+        out.baseSnapshot = quality::computeSnapshot( out.targetTree.ing, out.targetTree.g, out.targetTree.root );
+        if( refPairOverHardLimit( "snapshot of the base commit" ) )
+        {
+            return 5;
+        }
+    }
+    return std::nullopt;
+}
 
 // Resolve the spec and materialize both sides. Returns an EXIT CODE on any refusal or environment failure
 // (already reported on stderr), or nullopt when `out` is ready to compare. Splitting user error from
@@ -131,18 +220,24 @@ std::optional<int> loadRefPairDelta( const std::string& root, std::string_view s
         return 1;
     }
 
-    // DISTINCT tags — see quality::loadRefTree's header. Sharing one would make the target's extraction
-    // delete the base tree out from under the clone detector, which reads file bytes off disk.
+    // DISTINCT tags — see quality::loadRefTree's header. The base tree is gone before the target is extracted, but
+    // a shared tag would still let one side's extraction delete the other's directory if that order ever changed.
     out.sameRef = ( ref.baseSha == ref.targetSha );
-    if( !quality::loadRefTree( root, ref.baseSha, cfg.excludes, cfg.maxFileBytes, "qdpair-base", out.baseGuard, out.baseTree ) )
+    if( !out.sameRef )
     {
-        rw::emitTo( stderr, "ripwire: --quality-delta: could not materialize or parse the tree at {}\n", ref.baseSha.c_str() );
-        return 1;
+        if( const std::optional<int> refused = scoreBaseCommit( root, ref.baseSha, cfg, out.baseSnapshot ) )
+        {
+            return refused;
+        }
+        // #387: the base tree's index, graph and temp dir were released when scoreBaseCommit returned.
+        if( refPairOverHardLimit( "base commit's snapshot, with its index released" ) )
+        {
+            return 5;
+        }
     }
-    if( !out.sameRef && !quality::loadRefTree( root, ref.targetSha, cfg.excludes, cfg.maxFileBytes, "qdpair-target", out.targetGuard, out.targetTree ) )
+    if( const std::optional<int> refused = loadTargetCommit( root, ref.targetSha, cfg, out ) )
     {
-        rw::emitTo( stderr, "ripwire: --quality-delta: could not materialize or parse the tree at {}\n", ref.targetSha.c_str() );
-        return 1;
+        return refused;
     }
 
     // Both values are bare 40-char object names straight out of `rev-parse --verify` (resolveRefSpec accepts
@@ -217,7 +312,7 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
         // sidecar's whole contract is "pinned at the current HEAD", which says nothing about a pair of
         // arbitrary commits — and the bare form's self-heal deleting a user's pinned floor as a side effect
         // of a wave-level measurement would be a side effect nobody asked for.
-        out.baseSel.snapshot = quality::computeSnapshot( refs.baseTree.ing, refs.baseTree.g, refs.baseTree.root );
+        out.baseSel.snapshot = std::move( refs.baseSnapshot );
         out.baseSel.marker   = "ref-pair";
         out.deltaRoot        = refs.target().root;
         // R1 IDENTITY. The SPAN is what makes this honest here: both trees are materialized OUT of the repo
@@ -1513,7 +1608,9 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
 
         // F-13 — the .ripwire_config disclosure, built once for both emitters (see the header comment on
         // registerMacroConfigWarningAttr just above runQualityViews for why the stderr wording lives there).
-        const rw::quality::RegisterMacroConfigDiagnostics configDiag = rw::quality::diagnoseRegisterMacroConfig( ing, root );
+        // #387: the inert-name test reads the JUDGED tree's index, which in the ref-pair form is tree B — the working tree
+        // is not indexed there at all (runQualityDeltaRangeBeforeIngest).
+        const rw::quality::RegisterMacroConfigDiagnostics configDiag = rw::quality::diagnoseRegisterMacroConfig( judged, root );
         const std::string configWarnAttr = registerMacroConfigWarningAttr( configDiag );
 
         // P2.5 — one stderr line NAMING the gating finding, in --token-budget's style ("ripwire: --token-budget
@@ -1879,6 +1976,32 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         return gatingCount > 0 ? 2 : 0;   // r26: only a PREEXISTING-worse AND major regression gates (== gating=)
     }
     return std::nullopt;
+}
+
+// #387: the range form compares two COMMITTED trees, each materialized and indexed by loadRefPairDelta, and reads the
+// working tree only for its path. main() used to index and graph that tree anyway before dispatch, so a one-commit range
+// on a 20,000-file repository held three indexes at once and was OOM-killed at 8 GiB. When --quality-delta=A..B is the
+// verb that answers (dispatch winner; a typed task or --quality-baseline beside it still outranks it), main() calls this
+// before the working-tree ingest, and the handler reads only the judged tree's index. --pin-census keeps the old path:
+// it writes the working tree's census as a side effect of any run that asks for it.
+std::optional<int> runQualityDeltaRangeBeforeIngest( const rw::Config& cfg, const char* dispatchWinner, const std::string& root,
+                                                      const std::vector<rw::WorkspaceRoot>& ws )
+{
+    if( cfg.qualityDeltaRange.empty() || !cfg.pinCensus.empty() || dispatchWinner == nullptr || std::string_view( dispatchWinner ) != "--quality-delta" )
+    {
+        return std::nullopt;
+    }
+    const rw::IngestResult           noWorkingTree;
+    const rw::Graph                  noGraph;
+    const rw::QMetrics               noMetrics;
+    const std::vector<std::uint32_t> noFanIn;
+    std::vector<std::uint32_t>       noChurn;
+    rw::RedactCounts                 redactCounts;
+    rw::RedactCounts* const          redactPtr = cfg.noRedact ? nullptr : &redactCounts;
+    const MainDispatch dsp{ cfg, noWorkingTree, noGraph, root, /*multiRoot=*/false, ws, noFanIn, nullptr, noMetrics,
+                            nullptr, nullptr, nullptr, nullptr, nullptr, noChurn, redactCounts, redactPtr, nullptr,
+                            false, nullptr, false };
+    return runQualityDelta( dsp );
 }
 
 // ── --dmm ────────────────────────────────────────────────────────────────────────────────────────────────

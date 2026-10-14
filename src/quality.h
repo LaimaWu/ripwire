@@ -32,6 +32,7 @@
 #include "gitmine.h"            // shSingleQuote + gitFileCommitCountsInDayWindow — short-horizon-churn window mining
 #include "docparse.h"           // docparse::detail::readWholeFile — THE canonical whole-file byte read (commentcoherence.h names it that); reused rather than re-rolled, see forEachSymbolBody
 #include "filter.h"             // B10.1a: isTestPath — the general test-dir convention behind isTestScriptPath
+#include "memguard.h"           // #387: loadRefTree reads the hard line between a commit's ingest and its graph
 #include "infra/Diagnostics.h"  // DISCLOSE — the degrade path when git archive/ingest fails (no-op under NDEBUG; a gate-visible degrade line needs its own fprintf)
 #include "infra/jsonesc.h"      // L2 — rw::jsonesc::escapeMcp for staleAcksJsonArray's kind= field (the same posture serialize.h's jsonStr uses)
 #include "sourceidentity.h"    // rw::kRipwireSourceIdentity — the producer identity the qsnap/qbody keys and blob header carry
@@ -4301,10 +4302,10 @@ inline std::pair<Snapshot, bool> computeHeadSnapshot( const std::string& root, c
 
 // ─── R-I: one materialized commit tree, ingested AND graphed, with an EXPLICIT lifetime ─────────────────
 //
-// `--quality-delta=A..B` needs BOTH trees live at the same moment: computeSnapshot builds the floor from A
-// while computeDelta reads B's IngestResult, and both read file bytes through the materialized tree. So the
-// temp dir must OUTLIVE the call. dmm.h's ingestCommitTree deliberately lets its TmpTreeGuard fire at return
-// (its profileOf touches only symbol metrics); that is NOT safe here, so the guard belongs to the CALLER and
+// `--quality-delta=A..B` reads file bytes through each materialized tree after this call returns: computeSnapshot
+// builds the floor from A, and computeDelta reads B. So the temp dir must OUTLIVE the call. It need not outlive the
+// other side's: the caller scores A and releases it before materializing B (#387). dmm.h's ingestCommitTree
+// deliberately lets its TmpTreeGuard fire at return (its profileOf touches only symbol metrics); that is NOT safe here, so the guard belongs to the CALLER and
 // this function only fills it — the lifetime is stated in the signature instead of being a comment someone
 // has to find.
 //
@@ -4318,8 +4319,18 @@ inline std::pair<Snapshot, bool> computeHeadSnapshot( const std::string& root, c
 // --quality-delta's own (repo, excludes, sha) ingest-cache family, so a pair with a HEAD endpoint is a warm
 // blob read; any OTHER revision parses COLD on purpose, because that family is capped at two files per
 // (repo, excludes) and letting arbitrary ref pairs sweep it would trade the primary verb's warm path for
-// this one's on every run. Degrade (never throws): a failed archive/extract/ingest returns false, having
-// already alerted, and the caller reports the environment failure rather than a half-built comparison.
+// this one's on every run. Degrade (never throws): a failed archive/extract/ingest returns Unavailable, having
+// already alerted, and the caller reports the environment failure rather than a half-built comparison. An ingest the
+// memory guard stopped returns MemoryStopped before any graph is built: a partial tree is never scored (#350, #387). An
+// ingest that leaves the process at or over the guard's hard line returns OverHardLimit, also before the graph is built.
+enum class RefTreeLoad : std::uint8_t
+{
+    Loaded,
+    Unavailable,
+    MemoryStopped,   // out.ing.memoryStop says where and why
+    OverHardLimit,   // memguard::overHardLimit() read true after the ingest; the caller names the phase
+};
+
 struct RefTree
 {
     std::string  root;      // the materialized temp root — empty until this call succeeds
@@ -4334,14 +4345,14 @@ struct RefTree
 // detection — which re-reads file BYTES rather than trusting the in-memory index — then scored tree B's
 // bodies against tree B, inflating the duplication kind from 5 findings to 66. The two sides are named
 // separately here so the collision cannot be reintroduced by a caller that forgets.
-inline bool loadRefTree( const std::string& repoRoot, const std::string& sha, const std::vector<std::string>& excludes,
-                         std::size_t maxFileBytes, const char* tag, TmpTreeGuard& guard, RefTree& out )
+inline RefTreeLoad loadRefTree( const std::string& repoRoot, const std::string& sha, const std::vector<std::string>& excludes,
+                                std::size_t maxFileBytes, const char* tag, TmpTreeGuard& guard, RefTree& out )
 {
     ASSUME( tag != nullptr && *tag != '\0' );
     const std::string tmpRoot = materializeCommitTree( repoRoot, sha, tag );
     if( tmpRoot.empty() )
     {
-        return false;                     // materializeCommitTree already alerted
+        return RefTreeLoad::Unavailable;  // materializeCommitTree already alerted
     }
     guard.p = tmpRoot;                    // teardown is the CALLER's from here, success or not
 
@@ -4358,15 +4369,23 @@ inline bool loadRefTree( const std::string& repoRoot, const std::string& sha, co
         out.ing = ingest( tmpRoot.c_str(), excludes,
                           cachePath.empty() ? std::string_view {} : std::string_view( cachePath ), maxFileBytes );
     }
+    if( out.ing.memoryStop.isSet() )
+    {
+        return RefTreeLoad::MemoryStopped;
+    }
     if( out.ing.symbols.empty() && out.ing.files.empty() )
     {
         DISCLOSE( Diagnostics::answerRefused, "the only caller, --quality-delta=A..B, refuses with the sha named; nothing is scored",
                   "quality: a materialized commit tree ingested empty" );
-        return false;
+        return RefTreeLoad::Unavailable;
+    }
+    if( memguard::overHardLimit() )
+    {
+        return RefTreeLoad::OverHardLimit;
     }
     out.g    = buildGraph( out.ing, nullptr );
     out.root = tmpRoot;
-    return true;
+    return RefTreeLoad::Loaded;
 }
 
 // Signal-to-noise round — the committed-thrash evidence for short-horizon-churn: the per-canonId RAW-body

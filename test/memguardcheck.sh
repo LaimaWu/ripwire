@@ -644,6 +644,51 @@ else
     ok "(B15b) a normal --json map carries neither counts_floor nor memory_*"
 fi
 
+# (B22) #387: --quality-delta=A..B reads the hard line between its own phases. It dispatches before main()'s working-tree
+#       ingest, so its only hard-line readings are its own, in order: after the base commit's ingest, before its graph
+#       (hard:1); after the base graph (hard:2); after the base snapshot, before the base is released (hard:3); after the
+#       release (hard:4); after the target commit's ingest (hard:5) and its graph (hard:6). Each stop is exit 5, no stdout,
+#       one line naming the phase. RIPWIRE_CACHE_STATS prints one line per ingest, so the count says which commits were
+#       ingested: hard:4 stopping with ONE ingest is the proof that the base is scored and released before the target is
+#       extracted. hard:7 is past the last reading and must change nothing. RED on 0.6.7: its first reading is after the
+#       working-tree ingest.
+QR="$TMP/qr"; cp -R "$FX" "$QR"
+git -C "$QR" init -q && git -C "$QR" add -A && git -C "$QR" -c user.name=t -c user.email=t@example.com commit -qm base
+printf 'int a_extra( int x ) { return a_00( x ) + a_01( x ); }\n' >"$QR/a/extra.c"
+git -C "$QR" add -A && git -C "$QR" -c user.name=t -c user.email=t@example.com commit -qm target
+mkdir -p "$TMP/qrtmp"
+qr_run(){ ( cd "$QR" && TMPDIR="$TMP/qrtmp" RIPWIRE_CACHE_STATS=1 RIPWIRE_TEST_MEMGUARD="$1" "$BIN" . --quality-delta=HEAD~1..HEAD >"$TMP/b22.out" 2>"$TMP/b22.err" ); }
+( cd "$QR" && TMPDIR="$TMP/qrtmp" "$BIN" . --quality-delta=HEAD~1..HEAD >"$TMP/b22ref.out" 2>/dev/null ); refRc=$?
+for want in "1|ingest of the base commit|1" "2|graph of the base commit|1" "3|snapshot of the base commit|1" \
+            "4|base commit's snapshot, with its index released|1" "5|ingest of the target commit|2" "6|graph of the target commit|2"; do
+    n="${want%%|*}"; rest="${want#*|}"; phase="${rest%|*}"; ingests="${rest##*|}"
+    qr_run "hard:$n"; rc=$?
+    got="$( grep -c '^ripwire: cache-stats ' "$TMP/b22.err" )"
+    if [ "$rc" = 5 ] && [ ! -s "$TMP/b22.out" ] && grep -q "^ripwire: memory limit reached during the $phase (limit " "$TMP/b22.err" \
+       && [ "$( grep -c '^ripwire: [^c]' "$TMP/b22.err" )" = 1 ] && [ "$got" = "$ingests" ]; then
+        ok "(B22) hard:$n stops the range form after the $phase (exit 5, one line, $got ingest(s))"
+    else
+        no "(B22) hard:$n rc=$rc stdout=$( wc -c <"$TMP/b22.out" | tr -d ' ' )B ingests=$got (want $ingests) stderr: $( grep '^ripwire: [^c]' "$TMP/b22.err" | head -c 250 )"
+    fi
+done
+qr_run "hard:7"; rc=$?
+if [ "$rc" = "$refRc" ] && [ -s "$TMP/b22ref.out" ] && cmp -s "$TMP/b22.out" "$TMP/b22ref.out" && [ "$( grep -c '^ripwire: cache-stats ' "$TMP/b22.err" )" = 2 ]; then
+    ok "(B22) hard:7, past the range form's six readings, answers byte-identically to no seam (rc=$rc)"
+else
+    no "(B22) hard:7 rc=$rc (want $refRc) or its answer differs from the unseamed run"
+fi
+# (B23) #387: a commit ingest the memory guard cut is never scored. The range form refuses (exit 5, one line naming the
+#       stop and the verb, no stdout) instead of answering from a partial tree with the backstop line after it (0.6.7).
+for trip in parse:3 crawl:20; do
+    qr_run "$trip"; rc=$?
+    if [ "$rc" = 5 ] && [ ! -s "$TMP/b22.out" ] && grep -q '^ripwire: the memory guard stopped the .*; --quality-delta=A..B cannot answer from a partial index' "$TMP/b22.err" \
+       && [ "$( grep -c '^ripwire: [^c]' "$TMP/b22.err" )" = 1 ] && [ "$( grep -c '^ripwire: cache-stats ' "$TMP/b22.err" )" = 1 ]; then
+        ok "(B23) $trip cuts the base commit's ingest: the range form refuses before the target is ingested (exit 5, one line)"
+    else
+        no "(B23) $trip rc=$rc stdout=$( wc -c <"$TMP/b22.out" | tr -d ' ' )B stderr: $( grep '^ripwire: [^c]' "$TMP/b22.err" | head -c 250 )"
+    fi
+done
+
 # (B11) a verb's non-zero verdict from a partial ingest still gets the line; --html and --index-out never pass silently
 run_trip crawl:30 "$FX" --no-cache --html >/dev/null 2>"$TMP/b11.err"; rc=$?
 if [ "$rc" = 5 ] && grep -q '^ripwire: .*--html cannot answer from a partial index' "$TMP/b11.err"; then

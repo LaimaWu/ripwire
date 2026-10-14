@@ -20,7 +20,8 @@
 //          2026-09-28 on a 160,000-file synthetic C tree, the ingest's own tail (dedup, symbols, attribution) grows the
 //          footprint ~1.5x past the moment the parse stops, and with a 4/5 line every stop the 5 s cadence caught
 //          became a hard stop after the ingest instead of a partial answer.
-//   hard   at the limit itself, checked between phases (main.cpp) and before each MCP tool call: no partial answer.
+//   hard   at the limit itself, checked between phases (main.cpp; --quality-delta=A..B, which dispatches before main()'s
+//          ingest, between its own: verbs_quality.h refPairOverHardLimit) and before each MCP tool call: no partial answer.
 //   pressure: the OS signal (os::mem_pressure) at "critical" stops the crawl or the parse too — but only once this
 //          process holds at least max( 256 MiB, limit/8 ), so a small run is never cut because something ELSE is
 //          using the machine. It never causes a hard stop.
@@ -29,8 +30,9 @@
 // ~15 MB per 5 s), and then at most once per five seconds: the crawl looks every 1,024 entries, the parse on each file
 // completion, and only the thread that wins the time slot pays the syscall. A CLI run shorter than five seconds reads
 // the footprint three times — at ingest start, after the ingest and after the graph build (the hard line) — and an MCP
-// tool call once more; none of it changes a byte of output unless a line is crossed (test/memguardcheck.sh (C)). No
-// thread, no timer, no signal handler.
+// tool call once more. The `--quality-delta=A..B` range form reads it up to 2 + 6 times: two outside its commit
+// ingests and the six hard-line readings around them. None of it changes a byte of output unless a line is crossed
+// (test/memguardcheck.sh (C)). No thread, no timer, no signal handler.
 //
 // THE STOP. A soft stop sets an atomic flag the crawl loop and the parse workers read before the next unit of work,
 // records WHY through DISCLOSE on IngestResult::memoryStop, and lets ingest() finish with what it has: the crawl keeps
@@ -122,7 +124,7 @@ enum class TripAt : std::uint8_t
     Pressure,   // pressure:N — the Nth crawl entry reads as critical OS memory pressure
     Parse,      // parse:N    — exactly the first N files of the parse order are parsed: memory_parsed=N
     Request,    // request:N  — the Nth MCP tool call reads as over the hard limit
-    Hard,       // hard:N     — the Nth hard-line reading (overHardLimit: between CLI phases, per workspace root) reads as over
+    Hard,       // hard:N     — the Nth hard-line reading (overHardLimit: between CLI phases, per workspace root, between --quality-delta=A..B's phases) reads as over
     Eager,      // eager:1    — no five-second time gate: every guarded unit takes a REAL footprint reading (only stricter)
 };
 struct TestTrip

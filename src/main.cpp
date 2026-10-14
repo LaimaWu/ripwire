@@ -5219,6 +5219,12 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         return rc;
     }
 
+    // #387: --quality-delta=A..B indexes its two commits itself and never reads the working tree's index.
+    if( std::optional<int> handled = runQualityDeltaRangeBeforeIngest( cfg, verbPrec.winner, root, ws ) )
+    {
+        return *handled;
+    }
+
     // Warm by default: with no explicit --cache and without --no-cache, use a per-root TMPDIR cache so a
     // repeated invocation (e.g. successive --grep / --around / --for on the same tree) re-parses only what
     // changed. Verified output-identical to a cold parse (regression: cache transparency).

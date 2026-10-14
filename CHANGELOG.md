@@ -19,6 +19,43 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 Vendored Yogthos' ABI-15 `tree-sitter-clojure` parser and added syntax-level definitions and direct-call captures for the four Clojure-family extensions. The grammar comparison parsed 4,930 of 4,933 files (99.94%, 55.5 MB) from Metabase, clojure-lsp, clj-kondo and Babashka checkouts in 2.24 seconds; two failures were intentionally invalid clj-kondo fixtures and one was a Metabase test. This measures parser completion on that corpus, not semantic call-resolution accuracy. Namespace/import resolution, macro expansion and exact multi-arity matching remain outside this first pass; see `docs/ARCHITECTURE.md` for the extraction limits.
 
+### Fixed — `--quality-delta=A..B` indexed the working tree it never reads (#387)
+
+The range form materializes and indexes both commits itself. `main()` still ingested and graphed the working tree
+before dispatch, so a run held three indexes where it needed two, and memory followed the repository rather than the
+range: a 20,356-file repository's `HEAD~1..HEAD` was OOM-killed at an 8 GiB cgroup limit (#387). When the range form is
+the verb that answers, it now dispatches before the working-tree ingest. A verb that outranks it (`--for`,
+`--quality-baseline`, the rest of the dispatch table above it) still gets the working-tree index, and so does a run
+with `--pin-census`, whose census describes the working tree.
+
+The `.ripwire_config` inert-name disclosure (`config-warnings=`) now tests `register_macros=` names against the judged
+tree, commit B, instead of the working tree. The answer differs only when a configured macro is used in one of those
+two trees and not the other. The config file itself is still read from the repository root. Gate: `qdrefpaircheck` (G)
+counts ingests through `RIPWIRE_CACHE_STATS` and `RIPWIRE_STATS`; on the 0.6.7 binary it sees three ingests, one of
+them the working tree.
+
+### Fixed — `--quality-delta=A..B` kept the base commit's index alive for the whole run (#387)
+
+The base commit is read once, to compute the snapshot the target is compared against. Its index, graph and extracted
+temp tree were still held until the run ended, beside the target's. `loadRefPairDelta` now scores the base and
+releases all three before it extracts the target; `RefPairDelta` no longer has a field that could hold the base tree.
+`A..A` still extracts one tree and compares it with itself. Findings are byte-identical: `qdrefpaircheck` (A)/(B), and
+nine `--quality-delta` range argvs on this repository compared between the 0.6.7 binary and this one (stdout, stderr
+and exit code).
+
+### Fixed — the memory guard's hard line never ran inside `--quality-delta=A..B` (#387)
+
+The hard line was read only between `main()`'s phases, before any verb ran, and the range form did all of its
+indexing after them: two commit ingests, two graphs and a snapshot with nothing but the time-gated soft watch inside
+each ingest. A cut ingest was not refused either. The range form scored the partial tree, printed the answer, and the
+backstop then exited 5 with a line saying the answer above might be wrong. Now the range form reads the hard line after
+each commit's ingest (before its graph is built) and after its graph, and after the base snapshot both before and after
+the base index is released. Over the line it exits 5 with one line naming the phase. A commit ingest the guard cut is
+refused (exit 5, one line, nothing on stdout), before the next commit is extracted. Gates: `memguardcheck` (B22) drives
+each of the six readings through `RIPWIRE_TEST_MEMGUARD=hard:N` and counts the ingests
+that ran; (B23) cuts the base ingest with `parse:3` and `crawl:20`. The delta passes after the last reading,
+`computeDelta` and its clone passes, are not read, so a run close to the limit can still finish somewhat over it.
+
 ### Changed — Python imports use the shared capture vocabulary (#358, Python slice)
 
 Python dependency targets now come from `@import.path`; named clauses and their optional local
