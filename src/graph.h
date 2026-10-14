@@ -370,11 +370,18 @@ inline bool edgeNameOnly( const Graph& g, NodeId from, NodeId to ) noexcept
     return edgeNameOnlyInCsr( g.outOff, g.outTargets, g.outNameOnly, from, to );
 }
 
-// FE-B: does any hop of a directed call path (path[i-1] → path[i]) run through a name-only edge? --path and MCP
-// path_between ask it once to decide their via="name" legend sentence (one spelling for both transports).
+// Does any hop of a directed call path (path[i-1] → path[i]) satisfy `edgeHas( from, to )`? The one walk behind the path
+// legends' present-only questions (via="name" here, defattrib.h's prov="split").
+template <class EdgePred>
+inline bool pathHasHopWhere( std::span<const NodeId> path, EdgePred&& edgeHas ) noexcept
+{
+    return std::adjacent_find( path.begin(), path.end(), edgeHas ) != path.end();
+}
+// FE-B: does any hop run through a name-only edge? --path and MCP path_between ask it once to decide their via="name"
+// legend sentence (one spelling for both transports).
 inline bool pathHasNameOnlyHop( const Graph& g, std::span<const NodeId> path ) noexcept
 {
-    return std::adjacent_find( path.begin(), path.end(), [ & ]( NodeId from, NodeId to ) { return edgeNameOnly( g, from, to ); } ) != path.end();
+    return pathHasHopWhere( path, [ & ]( NodeId from, NodeId to ) { return edgeNameOnly( g, from, to ); } );
 }
 
 // The out-CSR position of the call edge from → to, or SIZE_MAX when there is none (ascending within a source: buildGraph sorts
@@ -389,12 +396,6 @@ inline std::size_t edgeIndex( const Graph& g, NodeId from, NodeId to ) noexcept
     const auto e  = g.outTargets.begin() + g.outOff[ std::size_t( from ) + 1 ];
     const auto it = std::lower_bound( b, e, to );
     return ( it != e && *it == to ) ? std::size_t( it - g.outTargets.begin() ) : SIZE_MAX;
-}
-
-// FE-B: does the call edge from → to exist at all
-inline bool edgeExists( const Graph& g, NodeId from, NodeId to ) noexcept
-{
-    return edgeIndex( g, from, to ) != SIZE_MAX;
 }
 
 // FE-B's per-row via="name" (EVERY edge joining a row to the selector's definitions is name-only) is defattrib.h's

@@ -640,10 +640,14 @@ inline void defTokenTo( std::string& out, const DefGroups& groups, std::uint32_t
 inline std::string defTokens( const DefGroups& groups, std::span<const std::uint32_t> toks )
 {
     std::string text;
-    for( std::size_t i = 0; i < toks.size(); ++i )
+    for( const std::uint32_t tok : toks )
     {
-        text += i ? " " : "";
-        defTokenTo( text, groups, toks[i] );
+        defTokenTo( text, groups, tok );
+        text += ' ';
+    }
+    if( !text.empty() )
+    {
+        text.pop_back();   // the separator after the last token
     }
     return text;
 }
@@ -682,7 +686,11 @@ inline std::string ofDefColumnValue( const DefGroups& groups, const RowDefTokens
 // vocabulary. Never on a multi-group answer (its tokens carry ~s), never on a by-name row (via="name" already hedges it).
 inline bool rowSplitArm( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row ) noexcept
 {
-    return !groups.multi() && tokens.strongest( row ) == DefMark::Split;   // None when no tie was recorded
+    if( groups.multi() )
+    {
+        return false;   // its tokens carry ~s instead
+    }
+    return tokens.strongest( row ) == DefMark::Split;   // None when no tie was recorded
 }
 inline const char* splitArmAttrXml( bool on ) noexcept { return on ? " prov=\"split\"" : ""; }
 inline const char* splitArmKeyJson( bool on ) noexcept { return on ? ",\"prov\":\"split\"" : ""; }
@@ -934,7 +942,7 @@ inline bool pathHopSplitArm( const Graph& g, std::span<const NodeId> path, std::
 }
 inline bool pathHasSplitHop( const Graph& g, std::span<const NodeId> path ) noexcept
 {
-    return std::adjacent_find( path.begin(), path.end(), [ & ]( NodeId from, NodeId to ) { return edgeSplitArm( g, from, to ); } ) != path.end();
+    return pathHasHopWhere( path, [ & ]( NodeId from, NodeId to ) { return edgeSplitArm( g, from, to ); } );
 }
 
 }   // namespace rw
