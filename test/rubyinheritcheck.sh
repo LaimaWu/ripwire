@@ -498,7 +498,8 @@ then
 fi
 # The expected count: every `class X < Const` in the fixture (a computed superclass mints no inherit reference) and,
 # since parser version 131, every constant of a class-body `include`/`extend`/`prepend` — a mixin is an ancestor too
-# (ingest_relations.h captureRubyMixinBases), so the seam drops its directive from the join as well.
+# (queries/ruby/tags.scm @reference.mixin since slice 4a; captureRubyMixinBases before that), so the seam drops its
+# directive from the join as well.
 SUPERS="$( cat "$FIX"/*.rb | grep -cE '^[[:space:]]*class [A-Z][A-Za-z0-9_:]* < (::)?[A-Z][A-Za-z0-9_]*(::[A-Z][A-Za-z0-9_]*)*[[:space:]]*(;|#|$)' )"
 MIXINS="$( cat "$FIX"/*.rb | grep -E '^[[:space:]]+(include|extend|prepend) ' | grep -oE '(::)?[A-Z][A-Za-z0-9_]*(::[A-Z][A-Za-z0-9_]*)*' | grep -c . )"
 WANT=$(( SUPERS + MIXINS ))
@@ -519,6 +520,40 @@ then
     echo "$SEAMC" | grep -q 'ruby_bases_unscoped=N:' \
         && ok "seam: the compact legend defines ruby_bases_unscoped=" \
         || no "seam: --legend=compact carries ruby_bases_unscoped= with no row defining it"
+fi
+
+# ---- slice 4a: the mixin read moved to queries/ruby/tags.scm (@reference.mixin) -------------------------------
+# The constants of a class-body `include`/`extend`/`prepend` are inherit references. Since slice 4a the tags query
+# states the SHAPE and the shared capture consumer owns the two guards a tags pattern cannot: the directive's TEXT
+# and its POSITION. The query matches ANY call holding a constant argument, so those two guards are the only thing
+# between `Logger.new( MixA )` and an invented ancestor — this fixture pins all three boundaries in one count.
+MIXQ="$DIR/mixq"; mkdir -p "$MIXQ"
+cat > "$MIXQ/q.rb" <<'RUBY'
+module MixA; end
+module MixB; end
+module Space
+  module Mod; end
+end
+class Mixed
+  include MixA, MixB
+  include Space::Mod
+  Logger.new( MixA )
+  def f
+    include MixA
+  end
+  class << self
+    include MixA
+  end
+end
+RUBY
+if RIPWIRE_TEST_RUBY_BASE_UNSCOPED=1 runq MIXSEAM "$MIXQ" --no-cache --lego=MixA --legend=full
+then
+    echo "$MIXSEAM" | grep -q ' ruby_bases_unscoped="4"' \
+        && ok "slice 4a: 4 mixin inherit refs (2 off one directive, 1 scope_resolution, 1 under class << self) — and neither Logger.new( MixA ) nor the method-body include is one" \
+        || no "slice 4a: expected ruby_bases_unscoped=\"4\" (2 + 1 + 1, the call and the method body refused), got: $( echo "$MIXSEAM" | grep -o 'ruby_bases_unscoped="[0-9]*"' )"
+    echo "$MIXSEAM" | sed 's/></>\n</g' | grep -q '<impl n="Mixed"' \
+        && ok "slice 4a: --lego=MixA lists Mixed — the capture-driven path mints the same ancestry as the walk it replaced" \
+        || no "slice 4a: --lego=MixA lists no Mixed (the mixin ancestry is gone)"
 fi
 
 echo

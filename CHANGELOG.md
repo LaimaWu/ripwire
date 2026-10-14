@@ -15,6 +15,16 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
+
+Ruby's `include`/`extend`/`prepend` are now captured by `queries/ruby/tags.scm` as `@reference.mixin` and turned into
+inherit references by the shared capture consumer — the same emitter every language's base clause goes through. The
+Ruby-only `captureRubyMixinBases` and its `captureIncludes` call site are gone; the query states the call shape and
+the C++ reader keeps the two guards a tags pattern cannot state (the directive's text, and its class-body position).
+Output is byte-identical: the map, `--deps`, `--skipped` and the read verbs match the base build over a real Rails
+corpus and the Ruby fixtures, and `--lego` lists the same implementors. `kParserVer` moves 171 -> 173 (the extraction
+path changed; 172 is 171's rich file tag).
+
 ### Added — Clojure (`.clj`/`.cljs`/`.cljc`/`.bb`)
 
 Vendored Yogthos' ABI-15 `tree-sitter-clojure` parser and added syntax-level definitions and direct-call captures for the four Clojure-family extensions. The grammar comparison parsed 4,930 of 4,933 files (99.94%, 55.5 MB) from Metabase, clojure-lsp, clj-kondo and Babashka checkouts in 2.24 seconds; two failures were intentionally invalid clj-kondo fixtures and one was a Metabase test. This measures parser completion on that corpus, not semantic call-resolution accuracy. Namespace/import resolution, macro expansion and exact multi-arity matching remain outside this first pass; see `docs/ARCHITECTURE.md` for the extraction limits.
