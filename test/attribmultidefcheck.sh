@@ -9,31 +9,42 @@
 # file rollup only; this gate covers every verb that folds per-selector rows.
 #
 # The contract (docs: the lane design, reports/attrib-multidef.md):
-#   * DEFINITION GROUP: a bodied definition plus the bodyless declarations the parser pairs with it (same language family,
-#     scope, name and parameter count, one bodied partner); an unpaired declaration is its own group. An answer is
-#     MULTI-GROUP when its selector matched two or more groups.
+#   * DEFINITION GROUP: a bodied definition plus the bodyless declarations that DECLARE it — for C/C++/ObjC the
+#     --edit-check identity rule (src/editcheckdecl.h editCheckTieDeclaration: same full scope chain, qualifiers,
+#     parameter-type list, include proof, linkage), for TypeScript the overload signatures beside their implementation;
+#     a declaration that declares no listed definition (a foreign one: another scope chain, a static definition in
+#     another file) is its own group. An answer is MULTI-GROUP when its selector matched two or more groups.
 #   * A multi-group answer lists the groups as <def ix= t= [sc=] p= [bodyless="1"]/> children of its root (CLI JSON
 #     "def_table":[{"ix","t","sc","p"}], MCP "def_table":[{"ix","kind","scope","file","line"}]); every row carries
 #     of_def="TOKENS" (JSON/MCP "of_def":[TOKENS]): space-separated K (a <def ix=>) with a mark — K alone = a proven edge
 #     ties the row to group K, K~n = by name alone, K~s = only as one arm of a call the resolver split between
-#     same-named definitions. callers: row -> group; callees: group -> row; impact: a chain of calls from the row to the
-#     group (a by-name hop makes it ~n, else a split hop ~s); safe-delete <c> rows as callers; the impact <rf> rollup
-#     row: the union of its symbols' tokens, the strongest mark per K.
-#   * A ONE-group answer (a single definition, or a definition with its own declarations) carries no table and no of_def:
-#     byte-identical. Its rows that are one arm of a split call carry prov="split" (the map's per-edge vocabulary) when
-#     the selector matched 2+ definitions (the ninja-26 shape: a declaration + its definition).
-#   * --path: an endpoint with several definitions that no path bound (reachable="0") carries no from_p=/to_p=.
-#
-# Corpus test/attribmultideffix (in-tree, outside test/fixture):
-#   cpp/  ninja-07 shape StringPiece::empty vs EvalString::empty (UsesPiece/UsesEval/UsesBoth, RunPiece/RunEval at depth 2
-#         in their own files), ninja-26 shape ManifestParser::ParseDefault (decl + def) calling the CanonicalizePath
-#         overload pair (a split call), near misses in fmt.{h,cc}: Fmt::put overloads in ONE class (split), outer::run vs
-#         outer::inner::run (nested namespace), Box<T>::get vs the Box<int> specialisation; ReadPath decl + def.
-#   go/   nfpm-06 shape: three Get (files.Get fn, modtime Get fn, (*Info).Get method), cross_kind fn:2,method:1.
+#     same-named definitions, K~t = bound to a primary template whose specialisation is also a listed group (which of
+#     them the call reaches is unproven). callers: row -> group; callees: group -> row; impact: a chain of calls from
+#     the row to the group (a by-name hop makes it ~n, else a split hop ~s); safe-delete <c> rows as callers; the
+#     impact <rf> rollup row: the union of its symbols' tokens, the strongest mark per K. Above 16 groups the table
+#     lists the groups the page's rows name and the root says defs_listed=N.
+#   * Every other answer (one definition, or one definition with its own declarations) carries no table and no of_def;
+#     its rows that are one arm of a split call carry prov="split" (the map's per-edge vocabulary), whatever defs= is.
+#   * --path: a to= with several definitions carries no to_p= unless a proven hop bound it (unreached, or the hop into
+#     it is a split arm or by name: dropped); a from= with several definitions carries no from_p= when unreached.
+
+# Corpus test/attribmultideffix (in-tree, outside test/fixture); the stand-in dir per known-items row in [brackets]:
+#   cpp/  [ninja-07] StringPiece::empty vs EvalString::empty (UsesPiece/UsesEval/UsesBoth, RunPiece/RunEval at depth 2
+#         in their own files; UsesStd, a std::string::empty confounder), [ninja-26] ManifestParser::ParseDefault (decl +
+#         def) calling the CanonicalizePath overload pair (a split call), near misses in fmt.{h,cc}: Fmt::put overloads in
+#         ONE class (split), outer::run vs outer::inner::run (nested namespace), Box<T>::get vs the Box<int>
+#         specialisation; ReadPath decl + def; detail.{h,cc}: a::detail::tally declared, b::detail::tally defined (same
+#         leaf scope, another chain: a foreign declaration).
+#   c/    plain C: a static helper in helper_a.c + a same-named prototype in helper_b.c (foreign declaration); proto.h's
+#         lost + its definition in proto.c (the tmux prototype + definition shape: one group).
+#   go/   [nfpm-06] three Get (files.Get fn, modtime Get fn, (*Info).Get method), cross_kind fn:2,method:1.
 #   py/ts/java/  two same-named methods of different classes IN ONE FILE (entity identity: owner, not file + name);
-#         py/ also draw_mixed: a proven Widget.render call and a by-name thing.render call in one row.
-#   rs/   mdbook-06 shape: Book::iter vs Shelf::iter on param-typed receivers (by name + split today: hedged tokens).
+#         py/ also draw_mixed: a proven Widget.render call and a by-name thing.render call in one row. [kysely-06] ts/;
+#         ts/overloads.ts: overload signatures of differing arity + one implementation (one group).
+#   js/rb/  two same-named methods of two classes, constructor-typed receivers.
+#   rs/   [mdbook-06] Book::iter vs Shelf::iter on param-typed receivers (by name + split today: hedged tokens).
 #   objc/ two -area methods, typed message receivers (split today: hedged tokens).
+#   (generated at run time) 20 Python classes with one same-named method each: the definition-table cap (16).
 #
 # Arm classes in the output: [P] positive — the defect shape, RED on a binary without per-row attribution; [N] near miss —
 # a shape the new code could plausibly mis-handle (a one-group answer that must stay plain, an overload or a namesake that
@@ -100,8 +111,9 @@ if form == 'xml':
         a = attrs(d)
         table[a.get('ix', '?')] = a.get('p', '?')
         print('DEF\t%s\t%s\t%s\t%s' % (a.get('ix', '?'), a.get('p', '?'), a.get('bodyless', '0'), a.get('sc', '')))
-    print('ROOT\tok\tdefs=%s\tgroups=%d\tto_p=%s\tfrom_p=%s' % (root.get('defs', root.get('to_defs', '?')), len(defs),
-          root.get('to_p', '-'), root.get('from_p', '-')))
+    print('ROOT\tok\tdefs=%s\tgroups=%d\tto_p=%s\tfrom_p=%s\tcount=%s\tdefs_listed=%s\tnext_offset=%s' % (
+          root.get('defs', root.get('to_defs', '?')), len(defs), root.get('to_p', '-'), root.get('from_p', '-'),
+          root.get('count', root.get('reaches', root.get('callers', '?'))), root.get('defs_listed', '-'), root.get('next_offset', '-')))
     for r in re.findall(r'<%s\s[^>]*?/?>' % re.escape(rowkey), body):
         a = attrs(r)
         name = a.get('n', a.get('p', '?'))
@@ -119,7 +131,9 @@ else:
         p = d.get('p') or ('%s:%s' % (d.get('file', '?'), d.get('line', '?')))
         table[str(d.get('ix'))] = p
         print('DEF\t%s\t%s\t%s\t%s' % (d.get('ix'), p, d.get('bodyless', 0), d.get('sc', d.get('scope', ''))))
-    print('ROOT\tok\tdefs=%s\tgroups=%d\tto_p=-\tfrom_p=-' % (j.get('defs', '?'), len(tab)))
+    print('ROOT\tok\tdefs=%s\tgroups=%d\tto_p=%s\tfrom_p=%s\tcount=%s\tdefs_listed=%s\tnext_offset=%s' % (
+          j.get('defs', j.get('to_defs', '?')), len(tab), j.get('to_p', '-'), j.get('from_p', '-'),
+          j.get('count', j.get('reaches', '?')), j.get('defs_listed', '-'), j.get('next_offset', '-')))
     for r in j.get(rowkey) or []:
         name = r.get('n', r.get('name', '?'))
         tok = r.get('of_def')
@@ -173,12 +187,31 @@ hedged(){
     [ -z "$bad" ]; say $? "[$cls] $tag: $n hedged ($got)" \
         "[$cls] $tag: $n tokens '$got' —$bad"
 }
-# plain CLASS TAG : one-group answer — no <def> table and no of_def on any row (a read of a successful run)
+# plain CLASS TAG [split] : one-group answer — no <def> table and no of_def on any row (a read of a successful run); and,
+# unless `split` is given (an answer whose split arms must carry it), no prov="split" on any row either
 plain(){
-    local cls="$1" tag="$2"
+    local cls="$1" tag="$2" allow="${3:-}"
     if [ "$( groups "$tag" )" = 0 ] && ! awk -F'\t' '$1=="ROW" && $3!="-" { f=1 } END { exit !f }' "$DIR/$tag.rows" \
-       && [ "$( nrows "$tag" )" -gt 0 ]; then ok "[$cls] $tag: one definition group — no <def> table, no of_def ($( nrows "$tag" ) rows)"
-    else no "[$cls] $tag: a one-group answer grew attribution: groups=$( groups "$tag" ), rows: $( grep '^ROW' "$DIR/$tag.rows" | cut -f2,3 | tr '\t\n' '= ' )"; fi
+       && { [ -n "$allow" ] || ! awk -F'\t' '$1=="ROW" && $4 ~ /prov=split/ { f=1 } END { exit !f }' "$DIR/$tag.rows"; } \
+       && [ "$( nrows "$tag" )" -gt 0 ]; then ok "[$cls] $tag: one definition group — no <def> table, no of_def$( [ -n "$allow" ] || printf ', no prov' ) ($( nrows "$tag" ) rows)"
+    else no "[$cls] $tag: a one-group answer grew attribution: groups=$( groups "$tag" ), rows: $( grep '^ROW' "$DIR/$tag.rows" | cut -f2,3,4 | tr '\t\n' '= ' )"; fi
+}
+# rowset CLASS TAG COUNT NAMES : attribution adds attributes and never removes a row — the root count and the sorted row-name
+# multiset equal the base binary's (pinned from base d4325a8c)
+rowset(){
+    local cls="$1" tag="$2" want_n="$3" want="$4" got got_n
+    got="$( awk -F'\t' '$1=="ROW" { print $2 }' "$DIR/$tag.rows" | sort | tr '\n' ' ' | sed 's/ $//' )"
+    got_n="$( rootf "$tag" count )"
+    { [ "$got" = "$want" ] && [ "$got_n" = "$want_n" ]; }; say $? "[C] $tag: rows preserved (count=$got_n; $got)" \
+        "[C] $tag: rows changed: count='$got_n' want '$want_n'; rows '$got' want '$want'"
+}
+# defbody CLASS TAG P BODYLESS : the <def> row with p=P exists and carries bodyless=BODYLESS (1 = a declaration tied to no
+# listed definition, its own group)
+defbody(){
+    local cls="$1" tag="$2" p="$3" want="$4" got
+    got="$( awk -F'\t' -v p="$p" '$1=="DEF" && $3==p { print $4; exit }' "$DIR/$tag.rows" )"
+    [ "$got" = "$want" ]; say $? "[$cls] $tag: <def p=\"$p\"> bodyless=$want" \
+        "[$cls] $tag: <def p=\"$p\"> bodyless='$got', want '$want' (defs: $( awk -F'\t' '$1=="DEF" { printf "%s/%s ", $3, $4 }' "$DIR/$tag.rows" ))"
 }
 # invariant CLASS TAG : every row has of_def, every K resolves to a <def>, and a row with no unmarked token is hedged
 invariant(){
@@ -200,30 +233,44 @@ if ans a_cpp cpp callers s xml -- --callers=empty; then
     expect P a_cpp UsesBoth  "$EV $SP"
     expect P a_cpp ParseDefault "$EV"
     invariant P a_cpp
+    rowset C a_cpp 4 "ParseDefault UsesBoth UsesEval UsesPiece"
+    # the std::string::empty confounder: the C++ standard-member gate declines it (no row), or the row names no group proven
+    g="$( row a_cpp UsesStd )"
+    case "$g" in
+        "") ok "[N] a_cpp: UsesStd (std::string::empty) is no row" ;;
+        *) bad=""; for t in $g; do case "$t" in *~n|*~s|*~t) ;; *) bad="$bad $t" ;; esac; done
+           [ -z "$bad" ]; say $? "[N] a_cpp: UsesStd row hedged ($g)" "[N] a_cpp: UsesStd (a std::string member call) carries proven token(s):$bad" ;;
+    esac
     sed 's/-->.*//' "$DIR/a_cpp.out" | grep -q 'of_def='; say $? "[P] a_cpp: the legend defines of_def= (present-only clause)" \
         "[P] a_cpp: of_def= is not defined in the answer's legend"
 fi
 if ans a_cppj cpp - callers json -- --callers=empty --json; then
     expect P a_cppj UsesPiece "$SP"; expect P a_cppj UsesBoth "$EV $SP"
+    rowset C a_cppj 4 "ParseDefault UsesBoth UsesEval UsesPiece"
 fi
 if ( cd "$FIX/cpp" && "$BIN" . --no-cache --callers=empty --format=columnar ) >"$DIR/a_col.out" 2>/dev/null && grep -q '<callers ' "$DIR/a_col.out"; then
     { grep -q '<def ' "$DIR/a_col.out" && grep -qE 'fields="[^"]*of_def' "$DIR/a_col.out"; }; say $? "[P] a_col: columnar carries the <def> table and an of_def column" \
         "[P] a_col: columnar lacks <def> rows or the of_def column: $( grep -oE 'fields="[^"]*"' "$DIR/a_col.out" )"
 else no "a_col: columnar --callers=empty failed"; fi
 if ans a_sd cpp safe-delete c xml -- --safe-delete=empty; then
-    expect P a_sd UsesPiece "$SP"; expect P a_sd UsesEval "$EV"; invariant P a_sd
+    expect P a_sd UsesPiece "$SP"; expect P a_sd UsesEval "$EV"; expect P a_sd UsesBoth "$EV $SP"; expect P a_sd ParseDefault "$EV"
+    invariant P a_sd
+    rowset C a_sd 4 "ParseDefault UsesBoth UsesEval UsesPiece"
 fi
 if mcp a_mcp cpp calledBy find_referencing_symbols '"symbol":"empty"'; then
     expect P a_mcp UsesPiece "$SP"; expect P a_mcp UsesBoth "$EV $SP"; invariant P a_mcp
+    rowset C a_mcp 4 "ParseDefault UsesBoth UsesEval UsesPiece"
 fi
 if mcp a_mcps cpp calledBy find_symbol '"symbol":"empty"'; then
     expect P a_mcps UsesEval "$EV"
+    [ "$( groups a_mcps )" = 2 ]; say $? "[P] a_mcps: find_symbol's root symbol object rides beside a def_table of 2" \
+        "[P] a_mcps: def_table rows=$( groups a_mcps ), want 2"
 fi
 
 # ── (B) ninja-26 shape, C++ callees: a declaration + its definition = ONE group; the split overload arms are hedged ──
 echo "(B) C++ --callees=ParseDefault (decl + def; CanonicalizePath overload split)"
 if ans b_cpp cpp callees s xml -- --callees=ParseDefault; then
-    plain N b_cpp
+    plain N b_cpp split
     for n in CanonicalizePath; do
         n_split="$( awk -F'\t' -v n="$n" '$1=="ROW" && $2==n && $4 ~ /prov=split/' "$DIR/b_cpp.rows" | wc -l | tr -d ' ' )"
         [ "$n_split" = 2 ]; say $? "[P] b_cpp: both CanonicalizePath arms carry prov=\"split\"" \
@@ -235,20 +282,32 @@ if ans b_cpp cpp callees s xml -- --callees=ParseDefault; then
     done
 fi
 if ans b_cpp2 cpp callers s xml -- --callers=CanonicalizePath; then
-    hedged P b_cpp2 ParseDefault "util.cc:2 util.cc:6 util.h:3 util.h:4"
-    hedged P b_cpp2 CanonicalizePath "util.cc:2 util.cc:6 util.h:3 util.h:4"
+    # two overloads, each declared in util.h and defined in util.cc: the declarations fold into their definitions
+    [ "$( groups b_cpp2 )" = 2 ]; say $? "[N] b_cpp2: two groups (each util.h declaration folds into its util.cc definition)" \
+        "[N] b_cpp2: <def> rows=$( groups b_cpp2 ), want 2"
+    hedged P b_cpp2 ParseDefault "util.cc:2 util.cc:6"
+    hedged P b_cpp2 CanonicalizePath "util.cc:2 util.cc:6"
 fi
 if ans b_rp cpp callers s xml -- --callers=ReadPath; then plain N b_rp; fi
 if ans b_up cpp callers s xml -- --callers=UsesPiece; then plain N b_up; fi
 if ans b_q cpp callers s xml -- --callers=string_piece.h:empty; then plain N b_q; fi
+# Q1 (orchestrator ruling): the split-arm hedge rides single-definition answers too (by-design byte change on them)
+if ans b_one cpp callees s xml -- --callees=PutInt; then
+    plain N b_one split
+    n_split="$( awk -F'\t' '$1=="ROW" && $2=="put" && $4 ~ /prov=split/' "$DIR/b_one.rows" | wc -l | tr -d ' ' )"
+    [ "$n_split" = 2 ]; say $? "[P] b_one: a single-definition --callees=PutInt marks both put arms prov=\"split\"" \
+        "[P] b_one: $n_split of 2 put rows carry prov=\"split\" on the single-definition answer"
+fi
 
-# ── (C) near misses in one C++ file pair ──────────────────────────────────────────────────────────────────────────────
-echo "(C) C++ near misses: overloads in one class, nested namespace, template specialisation"
+# ── (C) near misses in one C++ file pair, the foreign declarations (C++ and C), the TS overload signatures ──────────────
+echo "(C) near misses: overloads in one class, nested namespace, template specialisation, foreign declarations, TS overloads"
 if ans c_put cpp callers s xml -- --callers=put; then
-    hedged N c_put PutInt "fmt.cc:2 fmt.cc:3 fmt.h:3 fmt.h:4"
-    hedged N c_put PutStr "fmt.cc:2 fmt.cc:3 fmt.h:3 fmt.h:4"
+    hedged N c_put PutInt "fmt.cc:2 fmt.cc:3"
+    hedged N c_put PutStr "fmt.cc:2 fmt.cc:3"
 fi
 if ans c_run cpp callers s xml -- --callers=run; then
+    [ "$( groups c_run )" = 2 ]; say $? "[N] c_run: two groups (each fmt.h declaration folds into its own fmt.cc definition)" \
+        "[N] c_run: <def> rows=$( groups c_run ), want 2"
     expect N c_run RunOuter fmt.cc:4
     expect N c_run RunInner fmt.cc:5
     sc4="$( awk -F'\t' '$1=="DEF" && $3=="fmt.cc:4" { print $5 }' "$DIR/c_run.rows" )"
@@ -256,22 +315,47 @@ if ans c_run cpp callers s xml -- --callers=run; then
     { [ -n "$sc4" ] && [ -n "$sc5" ] && [ "$sc4" != "$sc5" ]; }; say $? "[N] c_run: the two run groups carry distinct sc= ($sc4 / $sc5)" \
         "[N] c_run: nested-namespace groups not told apart by sc= ('$sc4' / '$sc5')"
 fi
+# Box<T>::get (fmt.h:14) vs the Box<int> specialisation's get (fmt.h:18). The resolver binds GetInt(const Box<int>&) to the
+# PRIMARY today (premise arm below), so a token naming the primary is a claim no proof backs: it must carry the ~t mark
+# (bound to a primary template whose specialisation is listed), never stand unmarked, and never pose as a split (~s: the
+# resolver split nothing). The specialisation itself, proven, is accepted (a future resolver fix).
+gettok(){
+    local tag="$1" n="$2" g t bad=""
+    g="$( row "$tag" "$n" )"
+    if [ -z "$g" ] || [ "$g" = "-" ]; then no "[N] $tag: $n carries no of_def ('$g')"; return; fi
+    for t in $g; do case "$t" in "fmt.h:14~t"|"fmt.h:18") ;; *) bad="$bad $t" ;; esac; done
+    [ -z "$bad" ]; say $? "[N] $tag: $n tokens '$g' (the primary only as ~t)" \
+        "[N] $tag: $n tokens '$g' — not allowed:$bad (want fmt.h:14~t or fmt.h:18)"
+}
 if ans c_get cpp callers s xml -- --callers=get; then
-    # GetInt(const Box<int>&) calls the SPECIALISATION's get (fmt.h:18). The resolver binds the primary (fmt.h:14) today:
-    # a proven token naming the primary alone is a false attribution; the specialisation, or a hedge, is correct.
-    g="$( row c_get GetInt )"
-    case "$g" in
-        "fmt.h:18") ok "[N] c_get: GetInt -> the Box<int> specialisation" ;;
-        ""|"-"|"fmt.h:14") no "[N] c_get: GetInt attributed '$g' (the primary template, or nothing): must name fmt.h:18 or hedge" ;;
-        *) case "$g" in *~n|*~s) ok "[N] c_get: GetInt hedged ($g)" ;; *) no "[N] c_get: GetInt attributed '$g'" ;; esac ;;
-    esac
-    g="$( row c_get GetDouble )"
-    case "$g" in
-        "fmt.h:14") ok "[N] c_get: GetDouble -> the primary template" ;;
-        *~n|*~s) ok "[N] c_get: GetDouble hedged ($g)" ;;
-        *) no "[N] c_get: GetDouble attributed '$g' (want fmt.h:14 or a hedge)" ;;
-    esac
+    gettok c_get GetInt
+    gettok c_get GetDouble
 fi
+if ( cd "$FIX/cpp" && "$BIN" . --no-cache --callers=get --legend=full ) >"$DIR/c_getl.out" 2>/dev/null; then
+    sed 's/-->.*//' "$DIR/c_getl.out" | grep -q 'K~t'; say $? "[P] c_getl: the legend reads the ~t mark (K~t)" \
+        "[P] c_getl: no K~t reading in the --legend=full answer"
+else no "c_getl: --callers=get --legend=full failed"; fi
+# S4 premise: the resolver's binding this lane hedges and does not fix (the resolver card flips this arm when it lands)
+if ans c_geti cpp callees s xml -- --callees=GetInt; then
+    grep -q 'n="get" p="fmt.h:14"' "$DIR/c_geti.out"; say $? "[C] c_geti: premise — the resolver binds GetInt's b.get() to the primary (fmt.h:14)" \
+        "[C] c_geti: premise moved — GetInt's get is no longer fmt.h:14 (resolver card landed? re-anchor c_get): $( grep -o '<s [^>]*>' "$DIR/c_geti.out" | head -2 | tr '\n' ' ' )"
+fi
+if ans c_tal cpp callers s xml -- --callers=tally; then
+    [ "$( groups c_tal )" = 2 ]; say $? "[N] c_tal: a::detail::tally (declared) and b::detail::tally (defined) are two groups" \
+        "[N] c_tal: <def> rows=$( groups c_tal ), want 2 (same leaf scope, another chain: never one group)"
+    defbody N c_tal detail.h:3 1
+    defbody N c_tal detail.cc:2 0
+    invariant N c_tal
+fi
+if ans c_hlp c callers s xml -- --callers=helper; then
+    [ "$( groups c_hlp )" = 2 ]; say $? "[N] c_hlp: C static helper (helper_a.c) and the prototype in helper_b.c are two groups" \
+        "[N] c_hlp: <def> rows=$( groups c_hlp ), want 2 (internal linkage in another file: never one group)"
+    defbody N c_hlp helper_b.c:2 1
+    defbody N c_hlp helper_a.c:2 0
+    invariant N c_hlp
+fi
+if ans c_lost c callers s xml -- --callers=lost; then plain N c_lost; fi          # C prototype + definition: one group
+if ans c_pick ts callers s xml -- --callers=pick; then plain N c_pick; fi         # TS overload signatures + implementation
 if ( cd "$FIX/cpp" && "$BIN" . --no-cache --for=empty ) >"$DIR/c_for.out" 2>/dev/null; then
     n_d="$( grep -oE '<d [^>]*n="empty"[^>]*>' "$DIR/c_for.out" | grep -c 'sc="' )"
     [ "$n_d" -ge 2 ]; say $? "[C] c_for: --for=empty serves each definition as its own row with sc= ($n_d)" \
@@ -282,12 +366,14 @@ else no "c_for: --for=empty failed"; fi
 echo "(D) C++ --impact=empty"
 if ans d_imp cpp impact s xml -- --impact=empty; then
     expect P d_imp UsesPiece "$SP"; expect P d_imp UsesEval "$EV"; expect P d_imp UsesBoth "$EV $SP"
-    expect P d_imp RunPiece "$SP";  expect P d_imp RunEval "$EV"
+    expect P d_imp RunPiece "$SP";  expect P d_imp RunEval "$EV"; expect P d_imp ParseDefault "$EV"
     invariant P d_imp
+    rowset C d_imp 6 "ParseDefault RunEval RunPiece UsesBoth UsesEval UsesPiece"
 fi
 if ans d_rf cpp impact rf xml -- --impact=empty --limit=2; then
     expect P d_rf parser.cc "$EV $SP"
     expect P d_rf eval_user.cc "$EV"
+    rowset C d_rf 6 "eval_user.cc parser.cc"
 fi
 if ans d_impj cpp - reach json -- --impact=empty --json; then
     # the row array key of the JSON dialect is read off the answer, never assumed
@@ -311,17 +397,26 @@ if ans e_re cpp path s xml -- --path=RunPiece,empty; then
         "[C] e_re: to_p='$( rootf e_re to_p )'"
 fi
 if ans e_sp cpp path s xml -- --path=PutInt,put; then
-    # the hop into put is one arm of a split call (Fmt::put(int) vs Fmt::put(const char*)): the row that ends the path says so
+    # the hop into put is one arm of a split call (Fmt::put(int) vs Fmt::put(const char*)): the row that ends the path says
+    # so, and the root does not claim the arm the BFS happened to take as the definition put was bound to
     case "$( rowflags e_sp put )" in *prov=split*) ok "[P] e_sp: the split hop into a multi-definition to= carries prov=\"split\"" ;;
         *) no "[P] e_sp: the hop into put is a split arm but carries '$( rowflags e_sp put )'" ;; esac
+    [ "$( rootf e_sp to_p )" = "-" ]; say $? "[P] e_sp: a to= bound only by a split hop carries no to_p" \
+        "[P] e_sp: to_p=\"$( rootf e_sp to_p )\" claimed for a to= the path reached by a split arm"
+    [ "$( rootf e_sp from_p )" = "fmt.cc:6" ]; say $? "[N] e_sp: the single-definition from= keeps from_p" \
+        "[N] e_sp: from_p='$( rootf e_sp from_p )'"
 fi
 if mcp e_mcp cpp s path_between '"from":"Clear","to":"empty"'; then
     [ "$( rootf e_mcp to_p )" = "-" ]; say $? "[P] e_mcp: MCP path_between drops the unbound to_p too" \
         "[P] e_mcp: MCP to_p='$( rootf e_mcp to_p )'"
 fi
+if mcp e_mcps cpp s path_between '"from":"PutInt","to":"put"'; then
+    [ "$( rootf e_mcps to_p )" = "-" ]; say $? "[P] e_mcps: MCP path_between drops a to_p bound by a split hop" \
+        "[P] e_mcps: MCP to_p='$( rootf e_mcps to_p )'"
+fi
 
-# ── (F) the other languages: nfpm-06 (Go), entity identity in one file (Python, TypeScript, Java), hedged (Rust, ObjC) ──
-echo "(F) Go / Python / TypeScript / Java / Rust / ObjC"
+# ── (F) the other languages: nfpm-06 (Go), entity identity in one file (Python, TypeScript, Java), JS, Ruby, hedged (Rust, ObjC)
+echo "(F) Go / Python / TypeScript / Java / JavaScript / Ruby / Rust / ObjC"
 if ans f_go go callers s xml -- --callers=Get; then
     expect P f_go Package  "deb/deb.go:7 files/files.go:4"
     expect P f_go Describe "deb/deb.go:7"
@@ -329,28 +424,45 @@ if ans f_go go callers s xml -- --callers=Get; then
     expect P f_go Stamp    "modtime.go:4"
     [ "$( groups f_go )" = 3 ]; say $? "[P] f_go: three <def> groups" \
         "[P] f_go: <def> rows=$( groups f_go ), want 3"
+    rowset C f_go 4 "Describe ListOnly Package Stamp"
 fi
-if mcp f_gomcp go calledBy find_referencing_symbols '"symbol":"Get"'; then expect P f_gomcp Describe "deb/deb.go:7"; fi
+if mcp f_gomcp go calledBy find_referencing_symbols '"symbol":"Get"'; then
+    expect P f_gomcp Describe "deb/deb.go:7"
+    rowset C f_gomcp 4 "Describe ListOnly Package Stamp"
+fi
 if ans f_py py callers s xml -- --callers=render; then
     expect P f_py draw_widget widgets.py:2
     expect P f_py draw_canvas widgets.py:6
     expect P f_py draw_both   "widgets.py:2 widgets.py:6"
     expect P f_py draw_mixed  "widgets.py:2 widgets.py:6~n"
+    rowset C f_py 4 "draw_both draw_canvas draw_mixed draw_widget"
 fi
 if ans f_ts ts callers s xml -- --callers=area; then
     expect P f_ts circleArea shapes.ts:2; expect P f_ts squareArea shapes.ts:5; expect P f_ts bothAreas "shapes.ts:2 shapes.ts:5"
+    rowset C f_ts 3 "bothAreas circleArea squareArea"
 fi
 if ans f_java java callers s xml -- --callers=lookup; then
     expect P f_java fromCache Store.java:2; expect P f_java fromRegistry Store.java:5; expect P f_java fromBoth "Store.java:2 Store.java:5"
+    rowset C f_java 3 "fromBoth fromCache fromRegistry"
+fi
+if ans f_js js callers s xml -- --callers=area; then
+    expect P f_js circleArea shapes.js:1; expect P f_js squareArea shapes.js:2
+    rowset C f_js 2 "circleArea squareArea"
+fi
+if ans f_rb rb callers s xml -- --callers=area; then
+    expect P f_rb circle_area shapes.rb:2; expect P f_rb square_area shapes.rb:7
+    rowset C f_rb 2 "circle_area square_area"
 fi
 if ans f_rs rs callers s xml -- --callers=iter; then
     hedged P f_rs count_items "src/lib.rs:3 src/lib.rs:7"
     hedged P f_rs count_books "src/lib.rs:3 src/lib.rs:7"
     case "$( rowflags f_rs count_items )" in *via=name*) ok "[N] f_rs: the existing via=\"name\" row hedge stays" ;; *) no "[N] f_rs: via=\"name\" lost on count_items" ;; esac
+    rowset C f_rs 2 "count_books count_items"
 fi
 if ans f_objc objc callers s xml -- --callers=area; then
     hedged P f_objc circleArea "Shapes.m:6 Shapes.m:12"
     hedged P f_objc squareArea "Shapes.m:6 Shapes.m:12"
+    rowset C f_objc 2 "circleArea squareArea"
 fi
 if ans f_py1 py callers s xml -- --callers=draw_widget; then
     # a single definition with no caller: the root, no rows — read the table count only
@@ -358,16 +470,51 @@ if ans f_py1 py callers s xml -- --callers=draw_widget; then
         "[N] f_py1: <def> rows on a single definition"
 fi
 
+# ── (H) the definition-table cap: 20 same-named definitions, 12 callers — the table lists what the page names ─────────
+echo "(H) the definition-table cap (16): a generated 20-definition selector"
+mkdir -p "$DIR/capfix"
+python3 - "$DIR/capfix/caps.py" <<'PY'
+import sys
+out = []
+for k in range(20):
+    out.append('class C%02d:\n    def go(self):\n        return %d\n' % (k, k))
+for k in range(12):
+    out.append('def use_%02d():\n    x = C%02d()\n    return x.go()\n' % (k, k))
+open(sys.argv[1], 'w').write('\n'.join(out))
+PY
+FIXSAVE="$FIX"; FIX="$DIR"
+if ans h_all capfix callers s xml -- --callers=go; then
+    [ "$( groups h_all )" = 12 ] && [ "$( rootf h_all defs_listed )" = 12 ]; say $? "[P] h_all: 20 groups, 12 rows: the table lists the 12 the rows name, defs_listed=\"12\"" \
+        "[P] h_all: <def> rows=$( groups h_all ) defs_listed='$( rootf h_all defs_listed )', want 12 / 12"
+    invariant P h_all
+fi
+if ans h_p1 capfix callers s xml -- --callers=go --limit=5; then
+    [ "$( groups h_p1 )" = 5 ] && [ "$( rootf h_p1 defs_listed )" = 5 ]; say $? "[P] h_p1: page 1 (--limit=5) lists its 5 groups, defs_listed=\"5\"" \
+        "[P] h_p1: <def> rows=$( groups h_p1 ) defs_listed='$( rootf h_p1 defs_listed )', want 5 / 5"
+    invariant P h_p1
+    nxt="$( rootf h_p1 next_offset )"
+    if [ "$nxt" = 5 ] && ans h_p2 capfix callers s xml -- --callers=go --limit=5 --offset="$nxt"; then
+        invariant P h_p2
+        both="$( { awk -F'\t' '$1=="ROW" { print $2 }' "$DIR/h_p1.rows"; awk -F'\t' '$1=="ROW" { print $2 }' "$DIR/h_p2.rows"; } | sort | uniq -d | tr '\n' ' ' )"
+        [ -z "$both" ] && [ "$( nrows h_p2 )" = 5 ]; say $? "[C] h_p2: next_offset=$nxt pages on to 5 new rows, each attributed in its own table" \
+            "[C] h_p2: page 2 rows=$( nrows h_p2 ), repeated from page 1: '$both'"
+    else no "[C] h_p1: next_offset='$nxt' (want 5) or the page-2 call failed"; fi
+fi
+FIX="$FIXSAVE"
+
 # ── (G) well-formedness and determinism ───────────────────────────────────────────────────────────────────────────────
 echo "(G) well-formedness, determinism"
 if command -v xmllint >/dev/null 2>&1; then
-    for t in a_cpp a_col a_sd b_cpp d_imp d_rf e_un f_go; do
+    for t in a_cpp a_col a_sd b_cpp c_get d_imp d_rf e_un e_sp f_go h_p1; do
         [ -s "$DIR/$t.out" ] || continue
         xmllint --noout "$DIR/$t.out" 2>/dev/null; say $? "[C] $t: well-formed XML" \
             "[C] $t: malformed XML"
     done
-    ( cd "$FIX/cpp" && "$BIN" . --no-cache --callers=empty --legend=full ) >"$DIR/g_full.out" 2>/dev/null && xmllint --noout "$DIR/g_full.out" 2>/dev/null; say $? "[C] g_full: --legend=full well-formed" \
-        "[C] g_full: --legend=full malformed or failed"
+    for v in "--callers=empty" "--callees=ParseDefault" "--impact=empty" "--safe-delete=empty" "--path=PutInt,put" "--callers=get" "--callers=empty --format=columnar"; do
+        # shellcheck disable=SC2086
+        ( cd "$FIX/cpp" && "$BIN" . --no-cache $v --legend=full ) >"$DIR/g_full.out" 2>/dev/null && xmllint --noout "$DIR/g_full.out" 2>/dev/null; say $? "[C] g_full: $v --legend=full well-formed" \
+            "[C] g_full: $v --legend=full malformed or failed"
+    done
 else
     printf '  SKIP  xml well-formedness (no xmllint)\n'
 fi
