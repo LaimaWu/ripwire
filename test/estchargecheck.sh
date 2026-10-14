@@ -54,6 +54,13 @@ skip(){ printf '  SKIP  %s\n' "$*"; }
 cd "$ROOT"
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
+# RUNTIME (CI kills a gate at 1200 s; this one measured ~2065 s on a loaded Mac, every src/ call cold): one incremental cache
+# per verb class and root, under $TMP (never the shared per-root TMPDIR cache), instead of --no-cache wherever an arm tests
+# neither the cache nor a degrade path. A cached document is byte-identical to a cold one (measured on the map and --for), and
+# #7 below compares each cached #1 shape against a cold --no-cache rerun, so that transparency is asserted, not assumed. The
+# degrade arms (#14), the git-less fixture corpora (tiny, cold by design) and the flavour probe stay --no-cache.
+CM="--cache=$TMP/c_map"; CF="--cache=$TMP/c_for"; CP="--cache=$TMP/c_pack"; CT="--cache=$TMP/c_trace"; CX="--cache=$TMP/c_expand"
+CH="--cache=$TMP/c_handoff"   # the --handoff arm's root is "." (the checkout), not src: its own cache
 
 # ── BUILD-FLAVOUR / DEGRADE-OBSERVABILITY PROBE (read by #14 below) ───────────────────────────────────
 # CI runs the whole suite TWICE: once against a Release binary (catches optimizer-only bugs, e.g. the
@@ -124,7 +131,7 @@ declare -a SHAPES=(
 for entry in "${SHAPES[@]}"; do
     label="${entry%%:*}"; rest="${entry#*:}"; hi="${rest%%:*}"; args="${rest#*:}"
     # shellcheck disable=SC2086
-    "$BIN" src $args --no-cache >"$TMP/$label.out" 2>/dev/null
+    "$BIN" src $args "$CM" >"$TMP/$label.out" 2>/dev/null
     B="$( bytes_of "$TMP/$label.out" )"
     E="$( est_of "$TMP/$label.out" )"
     if [ -z "$E" ] || [ "$E" -le 0 ] 2>/dev/null; then
@@ -144,7 +151,7 @@ done
 # ranked rows leave out), and a payload verb's ride-along map does not — so "the same map" is the bare map WITHOUT that
 # tier. --no-inventory is that map (the same rows, no tier; #2-rows proves both premises). The old comparison is kept
 # as #2-tier: the bare map with its tier must charge at least what the rows alone do.
-"$BIN" src --top-k=10 --no-inventory --no-cache >"$TMP/map_rows.out" 2>/dev/null
+"$BIN" src --top-k=10 --no-inventory "$CM" >"$TMP/map_rows.out" 2>/dev/null
 E_MAP="$( est_of "$TMP/map_rows.out" )"
 E_TIER="$( est_of "$TMP/map.out" )"
 rows_of(){ sed 's/<inv listed="[0-9].*<\/inv>//' "$1" | grep -aoE '<f p="[^"]*"|<s t="[^"]*" n="[^"]*"' | tr '\n' ' '; }
@@ -171,7 +178,7 @@ done
 #    fits) and each payload arm must fail it. ────────────────────────────────────────────────────────────
 TB=$(( E_MAP + 20 ))
 # D7: the control is the rows-only twin above (the bare map's tier is charged and need not fit this budget)
-"$BIN" src --top-k=10 --no-inventory --token-budget=$TB --no-cache >"$TMP/tb_map.out" 2>"$TMP/tb_map.err"
+"$BIN" src --top-k=10 --no-inventory --token-budget=$TB "$CM" >"$TMP/tb_map.out" 2>"$TMP/tb_map.err"
 rc_map=$?
 [ "$rc_map" -eq 0 ] \
     && ok "#3 control: the bare map fits --token-budget=$TB (exit 0)" \
@@ -179,7 +186,7 @@ rc_map=$?
 for entry in "sigs:--pack-signatures" "src:--pack-top-n=3" "bodies:--expand=$SYM" "outline:--outline=$SYM"; do
     label="${entry%%:*}"; args="${entry#*:}"
     # shellcheck disable=SC2086
-    "$BIN" src --top-k=10 $args --token-budget=$TB --no-cache >"$TMP/tb_$label.out" 2>"$TMP/tb_$label.err"
+    "$BIN" src --top-k=10 $args --token-budget=$TB "$CM" >"$TMP/tb_$label.out" 2>"$TMP/tb_$label.err"
     rc=$?
     OB="$( bytes_of "$TMP/tb_$label.out" )"
     if [ "$rc" -eq 3 ] && [ "$OB" -lt 2048 ]; then
@@ -192,14 +199,14 @@ done
 # ── #4 (§B7.8): the WITHHELD artifact uses the withheld_est_tokens vocabulary --recall already renamed
 #    this exact semantic to (recall.h). `est_tokens=` on a withheld artifact names a number that describes
 #    something the caller did NOT receive. XML and JSON both. ─────────────────────────────────────────────
-"$BIN" src --token-budget=1 --no-cache >"$TMP/wh.xml" 2>"$TMP/wh.err"
+"$BIN" src --token-budget=1 "$CM" >"$TMP/wh.xml" 2>"$TMP/wh.err"
 grep -aq 'withheld_est_tokens="' "$TMP/wh.xml" \
     && ok "#4 XML withheld record uses withheld_est_tokens=\"…\"" \
     || no "#4 XML withheld record does not use withheld_est_tokens= (got: $( head -c 200 "$TMP/wh.xml" ))"
 grep -aqE '<r est_tokens="' "$TMP/wh.xml" \
     && no "#4 XML withheld record still spells the plain est_tokens= on the artifact it withheld" \
     || ok "#4 XML withheld record no longer spells a bare est_tokens= for the withheld artifact"
-"$BIN" src --token-budget=1 --json --no-cache >"$TMP/wh.json" 2>"$TMP/whj.err"
+"$BIN" src --token-budget=1 --json "$CM" >"$TMP/wh.json" 2>"$TMP/whj.err"
 grep -aq '"withheld_est_tokens":' "$TMP/wh.json" \
     && ok "#4 JSON withheld record uses \"withheld_est_tokens\"" \
     || no "#4 JSON withheld record does not use \"withheld_est_tokens\" (got: $( head -c 200 "$TMP/wh.json" ))"
@@ -228,7 +235,7 @@ grep -aq 'withheld_est_tokens=[0-9]* > budget=' "$TMP/wh.err" \
 # L1 (2026-09-19): the CLI default legend is compact; #5's legend arms read the FULL legend's max_tokens=/over_ceiling= prose
 # from this sweep, so it asks for the full legend (byte-identical to the old default, and the larger envelope).
 for N in 100 300 400 450 500 600 800 1200 1500 3000 6000; do
-    "$BIN" src --max-tokens=$N --no-cache --legend=full >"$TMP/mt$N.out" 2>"$TMP/mt$N.err"
+    "$BIN" src --max-tokens=$N "$CM" --legend=full >"$TMP/mt$N.out" 2>"$TMP/mt$N.err"
     MB="$( bytes_of "$TMP/mt$N.out" )"
     ME="$( est_of "$TMP/mt$N.out" )"
     LIM="$( awk "BEGIN{printf \"%d\", $N*2.36*0.90}" )"
@@ -327,7 +334,7 @@ PY
 for entry in "mapdiff:3000:--map-diff" "mapdiff2:12000:--map-diff" "churn:800:--rank-by=churn" "churn2:1200:--rank-by=churn" "payload:6000:--pack-signatures" "payload2:6000:--expand=$SYM"; do
     label="${entry%%:*}"; rest="${entry#*:}"; N="${rest%%:*}"; args="${rest#*:}"
     # shellcheck disable=SC2086
-    "$BIN" src --max-tokens=$N $args --no-cache >"$TMP/p_$label.out" 2>/dev/null
+    "$BIN" src --max-tokens=$N $args "$CM" >"$TMP/p_$label.out" 2>/dev/null
     PB="$( mapbytes_of "$TMP/p_$label.out" )"
     LIM="$( awk "BEGIN{printf \"%d\", $N*2.36*0.90}" )"
     OVER=0;  head -c "$PB" "$TMP/p_$label.out" | grep -aq 'over_ceiling=1' && OVER=1
@@ -415,7 +422,8 @@ grep -aq 'max_tokens=.*2\.36.*0\.90\|max_tokens=.*conservative' "$TMP/mt1500.out
     || no "#5 legend clause for max_tokens=/fit_bytes= missing or does not name the rate + headroom"
 # and the DEFAULT map must be byte-identical to a run without --max-tokens support (golden neutrality:
 # no --max-tokens ⇒ no marker, no legend clause)
-"$BIN" src --top-k=10 --no-cache >"$TMP/neutral.out" 2>/dev/null
+# RUNTIME: the default map is #1's "map" shape (src --top-k=10), already captured — not re-run.
+cp "$TMP/map.out" "$TMP/neutral.out"
 grep -aq 'max_tokens=\|fit_bytes=' "$TMP/neutral.out" \
     && no "#5 the default map leaked a max_tokens=/fit_bytes= marker (must be --max-tokens-only)" \
     || ok "#5 the default map carries no max_tokens=/fit_bytes= marker (opt-in, golden-neutral)"
@@ -423,7 +431,7 @@ grep -aq 'max_tokens=\|fit_bytes=' "$TMP/neutral.out" \
 # ── #6: the THIRD estimator (--partition's <bundle est_tokens=>, partition.h) is flat bytes/2.36 — exact
 #    and conservative, therefore honest, but a DIFFERENT currency from the map's language-weighted one.
 #    It must say which, in its own legend. ─────────────────────────────────────────────────────────────
-"$BIN" src --pack-task="estimate tokens" --partition=2 --no-cache >"$TMP/part.out" 2>/dev/null
+"$BIN" src --pack-task="estimate tokens" --partition=2 "$CP" >"$TMP/part.out" 2>/dev/null
 if grep -aq '<bundle [^>]*est_tokens=' "$TMP/part.out"; then
     # NON-VACUOUS (L1 fix round, the iter1a measurement): the rate must be stated in the answer's own COMMENTS. A document-wide
     # grep passed on a ranked body that merely quoted "2.36" in its CDATA, while the compact legend never said it.
@@ -452,8 +460,9 @@ fi
 det=1
 for entry in "${SHAPES[@]}"; do
     label="${entry%%:*}"; rest="${entry#*:}"; args="${rest#*:}"
-    # shellcheck disable=SC2086
-    "$BIN" src $args --no-cache >"$TMP/d1.out" 2>/dev/null
+    # RUNTIME: run 1 is #1's capture of this shape (warm per-class cache), run 2 a cold --no-cache rerun — two runs as
+    # before, and the comparison now also asserts that the cache never changes a byte of the document
+    cp "$TMP/$label.out" "$TMP/d1.out"
     # shellcheck disable=SC2086
     "$BIN" src $args --no-cache >"$TMP/d2.out" 2>/dev/null
     A="$( est_of "$TMP/d1.out" )"; C="$( est_of "$TMP/d2.out" )"
@@ -480,7 +489,7 @@ fi
 # ── #9: XML/JSON parity on the charged number — the two serializations must report the SAME est_tokens
 #    for the same request (the sibling emitter has its own header writer; a fix applied to one only is
 #    exactly how the §H5 dialect divergences are born). ───────────────────────────────────────────────────
-"$BIN" src --top-k=10 --metrics --json --no-cache >"$TMP/j.json" 2>/dev/null
+"$BIN" src --top-k=10 --metrics --json "$CM" >"$TMP/j.json" 2>/dev/null
 JE="$( grep -aoE '"est_tokens":[0-9]+' "$TMP/j.json" | head -1 | grep -oE '[0-9]+' )"
 XE="$( est_of "$TMP/metrics.out" )"
 JB="$( bytes_of "$TMP/j.json" )"
@@ -584,7 +593,7 @@ PYX
 for entry in "for:320:" "for_graph:320:--with-graph" "for_detail:420:--detail=20" "for_both:420:--detail=20 --with-graph"; do
     label="${entry%%:*}"; rest="${entry#*:}"; hi="${rest%%:*}"; args="${rest#*:}"
     # shellcheck disable=SC2086
-    "$BIN" src --for="$FOR_TASK" $args --no-cache >"$TMP/f_$label.out" 2>/dev/null
+    "$BIN" src --for="$FOR_TASK" $args "$CF" >"$TMP/f_$label.out" 2>/dev/null
     B="$( bytes_of "$TMP/f_$label.out" )"
     E="$( forest_of "$TMP/f_$label.out" )"
     if [ -z "$E" ] || [ "$E" -le 0 ] 2>/dev/null; then
@@ -649,20 +658,36 @@ def rb( p ):
         rows.append( ( int( r.group( 1 ) ) if r else 10**9, c ) )
     rows.sort()
     return len( inner.encode() ), len( inner.encode() ) + elided, rows
-a = rb( sys.argv[ 1 ] ); T = int( int( sys.argv[ 2 ] ) * 2.36 * 0.90 )
-if a is None: print( "BAD no <sigs>" ); sys.exit( 1 )
-pb, ab, ar = a; k = len( ar )
-fits = pb <= T or k <= 4
-if len( sys.argv ) < 4:
-    print( "%s fits=%d rows=%d bytes=%d T=%d" % ( "OK" if fits else "BAD", fits, k, pb, T ) ); sys.exit( 0 if fits else 1 )
-ref = rb( sys.argv[ 3 ] )
-if ref is None: print( "BAD no <sigs> in the reference answer" ); sys.exit( 1 )
-rr = ref[ 2 ]
-if k >= len( rr ):
-    print( "%s fits=%d rows=%d/%d bytes=%d T=%d complete" % ( "OK" if fits else "BAD", fits, k, len( rr ), pb, T ) ); sys.exit( 0 if fits else 1 )
-maximal = ab + rr[ k ][ 1 ] > T - 160
-print( "%s fits=%d maximal=%d rows=%d/%d bytes=%d charged=%d next=%d T=%d" % ( "OK" if fits and maximal else "BAD", fits, maximal, k, len( rr ), pb, ab, rr[ k ][ 1 ], T ) )
-sys.exit( 0 if fits and maximal else 1 )
+def row_ids( p ):   # soft_rows.py's list, for an in-process caller (the sweep)
+    s = open( p, encoding='utf-8', errors='replace' ).read()
+    m = re.search( r'<sigs\b[^>]*>(.*?)</sigs>', s, re.S )
+    if not m: return []
+    rows = []
+    for d in re.finditer( r'<d ([^>]*)>', m.group( 1 ) ):
+        a = d.group( 1 )
+        g = lambda k: ( re.search( r'\b' + k + r'="([^"]*)"', a ) or [ None, "?" ] )[ 1 ]
+        r = g( "r" )
+        rows.append( ( int( r ) if r.isdigit() else 10**9, g( "p" ) + ":" + g( "l" ) + ":" + g( "n" ) ) )
+    rows.sort()
+    return [ x[ 1 ] for x in rows ]
+def verdict( path, n, refpath=None ):
+    a = rb( path ); T = int( int( n ) * 2.36 * 0.90 )
+    if a is None: return False, "BAD no <sigs>"
+    pb, ab, ar = a; k = len( ar )
+    fits = pb <= T or k <= 4
+    if refpath is None:
+        return fits, "%s fits=%d rows=%d bytes=%d T=%d" % ( "OK" if fits else "BAD", fits, k, pb, T )
+    ref = rb( refpath )
+    if ref is None: return False, "BAD no <sigs> in the reference answer"
+    rr = ref[ 2 ]
+    if k >= len( rr ):
+        return fits, "%s fits=%d rows=%d/%d bytes=%d T=%d complete" % ( "OK" if fits else "BAD", fits, k, len( rr ), pb, T )
+    maximal = ab + rr[ k ][ 1 ] > T - 160
+    return fits and maximal, "%s fits=%d maximal=%d rows=%d/%d bytes=%d charged=%d next=%d T=%d" % (
+        "OK" if fits and maximal else "BAD", fits, maximal, k, len( rr ), pb, ab, rr[ k ][ 1 ], T )
+if __name__ == "__main__":
+    good, msg = verdict( sys.argv[ 1 ], sys.argv[ 2 ], sys.argv[ 3 ] if len( sys.argv ) > 3 else None )
+    print( msg ); sys.exit( 0 if good else 1 )
 PY
 soft_rows(){ python3 "$TMP/soft_rows.py" "$1"; }
 soft_st(){ python3 "$TMP/soft_st.py" "$@"; }
@@ -682,12 +707,12 @@ SOFT_CLAUSE_FULL='[budget_tokens=: the soft token target; rows stop once it is r
 # 10 / 11 rows with --detail=20 / --with-graph against the bare run's 14 — the reserve the soft target deleted.
 TBF=2000
 ALLOW="$( awk "BEGIN{printf \"%d\", $TBF*2.36*1.15}" )"   # still read by the no-budget --detail arm below
-"$BIN" src --for="$FOR_TASK" --token-budget=$TBF --no-cache >"$TMP/f_tbp.out" 2>/dev/null
-"$BIN" src --for="$FOR_TASK" --token-budget=5000 --no-cache >"$TMP/f_tbp5.out" 2>/dev/null
+"$BIN" src --for="$FOR_TASK" --token-budget=$TBF "$CF" >"$TMP/f_tbp.out" 2>/dev/null
+"$BIN" src --for="$FOR_TASK" --token-budget=5000 "$CF" >"$TMP/f_tbp5.out" 2>/dev/null
 for tw in "2000:--detail=20:f_tbp:f_for_detail" "2000:--with-graph:f_tbp:f_for_graph" "5000:--detail=20 --with-graph:f_tbp5:f_for_both"; do
     tw_n="${tw%%:*}"; tw_rest="${tw#*:}"; tw_args="${tw_rest%%:*}"; tw_rest="${tw_rest#*:}"; tw_bare="${tw_rest%%:*}"; tw_ref="${tw_rest#*:}"
     # shellcheck disable=SC2086
-    "$BIN" src --for="$FOR_TASK" --token-budget=$tw_n $tw_args --no-cache >"$TMP/f_tw.out" 2>/dev/null
+    "$BIN" src --for="$FOR_TASK" --token-budget=$tw_n $tw_args "$CF" >"$TMP/f_tw.out" 2>/dev/null
     rc_tw=$?
     tw_root="$( ctx_root "$TMP/f_tw.out" )"
     soft_rows "$TMP/f_tw.out" >"$TMP/tw.rows" 2>/dev/null; soft_rows "$TMP/$tw_bare.out" >"$TMP/tw_bare.rows" 2>/dev/null
@@ -706,7 +731,7 @@ done
 # invariant and is kept: --detail=20 --with-graph at 2000 keeps every <sigs> row of the flagless 2000 answer, and its rows are
 # the uncapped answer's top rows in rank order (no higher-ranked row missing). Plus NOLBL, both trailing sections present, and
 # a cut first body still carries the next= that serves the rest.
-"$BIN" src --for="$FOR_TASK" --token-budget=$TBF --detail=20 --with-graph --no-cache >"$TMP/f_tb.out" 2>"$TMP/f_tb.err"
+"$BIN" src --for="$FOR_TASK" --token-budget=$TBF --detail=20 --with-graph "$CF" >"$TMP/f_tb.out" 2>"$TMP/f_tb.err"
 rc_ftb=$?
 a7b_root="$( ctx_root "$TMP/f_tb.out" )"
 soft_rows "$TMP/f_tb.out" >"$TMP/a7b.rows" 2>/dev/null; soft_rows "$TMP/f_tbp.out" >"$TMP/a7b.plain" 2>/dev/null; soft_rows "$TMP/f_for.out" >"$TMP/a7b.unc" 2>/dev/null
@@ -727,7 +752,7 @@ a7b_b1="$( grep -aoE '<b [^>]*>' "$TMP/f_tb.out" | head -1 )"
 # spelling broke xmllint). The note is gone; the disclosure that now rides the header comment of a soft answer is the reading
 # of budget_tokens= as a soft target, compact and full dialect. Both answers must carry their clause and stay well-formed XML.
 if command -v xmllint >/dev/null 2>&1; then
-    "$BIN" src --for="$FOR_TASK" --token-budget=$TBF --detail=20 --with-graph --legend=full --no-cache >"$TMP/f_tbl.out" 2>/dev/null
+    "$BIN" src --for="$FOR_TASK" --token-budget=$TBF --detail=20 --with-graph --legend=full "$CF" >"$TMP/f_tbl.out" 2>/dev/null
     a7x_bad=""
     grep -aqF "$SOFT_CLAUSE_COMPACT" "$TMP/f_tb.out" || a7x_bad="$a7x_bad f_tb:no-soft-target-clause"
     grep -aqF "$SOFT_CLAUSE_FULL" "$TMP/f_tbl.out" || a7x_bad="$a7x_bad f_tbl:no-soft-target-clause"
@@ -746,7 +771,7 @@ fi
 # shape now pins HL: the root keeps task= VERBATIM (all 700 chars) and route=, nothing is dropped "(ceiling)", no task_echo /
 # legend-clause drop note, no last-rung note, no over_ceiling=; the rank 1..4 floor ships and the <sigs> cut carries next=.
 A7N_TASK="$( python3 -c 'w="serialize the map rows into the output buffer while keeping the row order stable and flushing the writer "; print((w*10)[:700].strip())' )"
-"$BIN" src --for="$A7N_TASK" --token-budget=300 --detail=3 --with-graph --no-cache >"$TMP/f_tbn.out" 2>/dev/null
+"$BIN" src --for="$A7N_TASK" --token-budget=300 --detail=3 --with-graph "$CF" >"$TMP/f_tbn.out" 2>/dev/null
 rc_a7n=$?
 a7n_root="$( ctx_root "$TMP/f_tbn.out" )"
 a7n_sigs="$( grep -aoE '<sigs [^>]*>' "$TMP/f_tbn.out" | head -1 )"
@@ -778,9 +803,9 @@ python3 -c 'import re,sys; m=re.search(r" task=\"([^\"]*)\"", sys.argv[1]); sys.
 # NX (a <sigs> with shown < total carries next=). The byte-exactness the old arm protected lives on in est_tokens'
 # identities (A9/A10, §C1, #19): est_tokens prices the delivered document, whatever its size.
 # RE-ANCHORED (forbudget-soft): the --detail=20 --with-graph spec ran 2880..3080, the old late-label band; on the soft target
-# that range serves all 32 rows (complete), so it now sweeps 300..2500 step 50, where the rows run from the 4-row floor to
-# complete (d099ec21: 4 rows at 300, 28 at 2000, 32 at 2500). The default spec keeps 760..1500 step 10 (8..20 rows); the
-# one-row named task keeps 400..600 (step 20) — its document prices at est_tokens=719, past every N there: the soft overshoot.
+# that range serves all 32 rows (complete), so it now sweeps 300..2500, where the rows run from the 4-row floor to complete
+# (d099ec21: 4 rows at 300, 28 at 2000, 32 at 2500). The default spec keeps 760..1500 (8..20 rows); the one-row named task
+# keeps 400..600 — its document prices at est_tokens=719, past every N there: the soft overshoot.
 A7S="$TMP/a7sweep"
 mkdir -p "$A7S/corpus"
 python3 - "$A7S/corpus" <<'PYG'
@@ -800,43 +825,67 @@ for i in range( 4 ):
         fh.write( "\n".join( lines ) )
 PYG
 a7s_bad=""; a7s_badn=0; a7s_runs=0; a7s_over=0; a7s_cut=0
-for spec in "default:760:1500:10:serialize the map:" "detail_graph:300:2500:50:serialize the map:--detail=20 --with-graph" \
-            "named_one_row:400:600:20:serializeRow0_3:"; do
-    s_label="${spec%%:*}"; s_rest="${spec#*:}"; s_from="${s_rest%%:*}"; s_rest="${s_rest#*:}"; s_to="${s_rest%%:*}"; s_rest="${s_rest#*:}"
-    s_step="${s_rest%%:*}"; s_rest="${s_rest#*:}"; s_task="${s_rest%%:*}"; s_args="${s_rest#*:}"
+# RUNTIME (CI's 1200 s per-gate limit): the sweep keeps only the rungs where the served row set CHANGES — the first and the
+# last budget of every distinct row count, plus the band edges — and judges all of them in ONE python pass after the runs
+# (it was 131 rungs with three interpreter starts each, ~266 s of this gate's wall time). Measured on the 480bc90b binary at
+# step 10 / 50 / 20: default 760..1500 serves 8..20 rows (13 counts over 75 rungs), --detail=20 --with-graph 300..2500 serves
+# 4..32 (29 counts over 45 rungs), the named task 1 row everywhere. A rung dropped here served exactly the rows of a kept
+# neighbour on both sides, so every ST fit (tightest at a count's FIRST budget) and every maximality (tightest at its LAST)
+# is still asserted, and RP still compares each adjacent pair of distinct row sets.
+A7S_RUNGS_default="760 770 780 840 850 900 910 960 970 1020 1030 1090 1100 1150 1160 1210 1220 1270 1280 1330 1340 1400 1410 1460 1470 1500"
+A7S_RUNGS_detail_graph="300 500 550 600 650 700 750 800 850 900 950 1000 1050 1100 1150 1200 1250 1300 1350 1400 1450 1500 1550 1600 1650 1700 1750 1800 1850 1900 1950 2000 2050 2100 2150 2200 2250 2500"
+A7S_RUNGS_named_one_row="400 600"
+: >"$A7S/manifest"
+for spec in "default:serialize the map:" "detail_graph:serialize the map:--detail=20 --with-graph" "named_one_row:serializeRow0_3:"; do
+    s_label="${spec%%:*}"; s_rest="${spec#*:}"; s_task="${s_rest%%:*}"; s_args="${s_rest#*:}"
+    eval "s_rungs=\$A7S_RUNGS_$s_label"
     # shellcheck disable=SC2086
-    ( cd "$A7S" && "$BIN" corpus --for="$s_task" $s_args --no-cache ) >"$A7S/ref.xml" 2>/dev/null   # the spec's complete answer
-    : >"$A7S/prev.rows"
-    for (( N = s_from; N <= s_to; N += s_step )); do
+    ( cd "$A7S" && "$BIN" corpus --for="$s_task" $s_args --no-cache ) >"$A7S/ref_$s_label.xml" 2>/dev/null   # the spec's complete answer
+    for N in $s_rungs; do
         # shellcheck disable=SC2086
-        ( cd "$A7S" && "$BIN" corpus --for="$s_task" --token-budget=$N $s_args --no-cache ) >"$A7S/o.xml" 2>/dev/null
-        s_rc=$?
-        a7s_runs=$(( a7s_runs + 1 ))
-        s_root="$( ctx_root "$A7S/o.xml" )"
-        s_sigs="$( grep -aoE '<sigs [^>]*>' "$A7S/o.xml" | head -1 )"
-        s_sh="$( printf '%s' "$s_sigs" | sed -nE 's/.* shown="([0-9]+)".*/\1/p' )"; s_tot="$( printf '%s' "$s_sigs" | sed -nE 's/.* total="([0-9]+)".*/\1/p' )"
-        s_est="$( printf '%s' "$s_root" | sed -nE 's/.* est_tokens="([0-9]+)".*/\1/p' )"
-        soft_rows "$A7S/o.xml" >"$A7S/cur.rows" 2>/dev/null
-        s_why=""
-        { [ "$s_rc" -eq 0 ] && [ -n "$s_root" ] && [ -n "$s_est" ]; } || s_why="$s_why exit-$s_rc/no-root-or-est"
-        { [ "${s_root#* over_ceiling=}" = "$s_root" ] && ! grep -aqF '[over_ceiling= is 1 on the root: ' "$A7S/o.xml"; } || s_why="$s_why labelled"
-        s_st="$( soft_st "$A7S/o.xml" "$N" "$A7S/ref.xml" )" || s_why="$s_why ST:[$s_st]"
-        [ ! -s "$A7S/prev.rows" ] || rows_prefix "$A7S/prev.rows" "$A7S/cur.rows" || s_why="$s_why not-monotone"
-        if [ -n "$s_sh" ] && [ -n "$s_tot" ] && [ "$s_sh" -lt "$s_tot" ] 2>/dev/null; then
-            a7s_cut=$(( a7s_cut + 1 ))
-            [ "${s_sigs#* next=\"--for=}" != "$s_sigs" ] || s_why="$s_why cut-without-next"
-        fi
-        [ -n "$s_est" ] && [ "$s_est" -gt "$N" ] 2>/dev/null && a7s_over=$(( a7s_over + 1 ))
-        if [ -n "$s_why" ]; then
-            a7s_badn=$(( a7s_badn + 1 ))
-            [ "$a7s_badn" -le 6 ] && a7s_bad="$a7s_bad $s_label@$N:[${s_why# }]"
-        fi
-        cp "$A7S/cur.rows" "$A7S/prev.rows"
+        ( cd "$A7S" && "$BIN" corpus --for="$s_task" --token-budget=$N $s_args --no-cache ) >"$A7S/o_${s_label}_$N.xml" 2>/dev/null
+        printf '%s %s %s %s %s\n' "$s_label" "$N" "$?" "$A7S/o_${s_label}_$N.xml" "$A7S/ref_$s_label.xml" >>"$A7S/manifest"
     done
 done
-[ "$a7s_badn" -eq 0 ] \
-    && ok "#11 A7 sweep (forbudget-soft): $a7s_runs budgets over a git-less corpus (default 760..1500 step 10, --detail=20 --with-graph 300..2500 step 50, one-row named task 400..600 step 20) — every answer exit 0, unlabelled, its rows fit T or the floor and a cut is maximal, rows monotone in N, every cut <sigs> carries next=" \
-    || no "#11 A7 sweep (forbudget-soft): $a7s_badn of $a7s_runs budgets break the soft target (first:$a7s_bad)"
+# one pass over every rung: exit 0 + root + est_tokens; NOLBL (no root over_ceiling=, no last-rung note); ST (soft_st's verdict);
+# RP (each rung's rows a rank prefix of the next rung's, same spec); NX (shown < total carries next="--for=). Prints
+# "runs badn cut over", then up to six "label@N:[why]" lines.
+a7s_out="$( python3 - "$A7S/manifest" "$TMP" <<'PYS'
+import re, sys
+sys.path.insert( 0, sys.argv[ 2 ] )
+import soft_st
+runs = badn = cut = over = 0; bad = []; prev = {}
+for line in open( sys.argv[ 1 ] ):
+    label, n, rc, f, ref = line.split()
+    n = int( n ); runs += 1; why = []
+    d = open( f, encoding='utf-8', errors='replace' ).read()
+    root = re.search( r'^<ctx [^>]*>', d ); root = root.group( 0 ) if root else ''
+    est = re.search( r' est_tokens="(\d+)"', root )
+    if rc != '0' or not root or not est: why.append( 'exit-%s/no-root-or-est' % rc )
+    if ' over_ceiling=' in root or '[over_ceiling= is 1 on the root: ' in d: why.append( 'labelled' )
+    good, msg = soft_st.verdict( f, n, ref )
+    if not good: why.append( 'ST:[%s]' % msg )
+    rows = soft_st.row_ids( f )
+    if not rows or ( label in prev and rows[ :len( prev[ label ] ) ] != prev[ label ] ): why.append( 'not-monotone' )
+    prev[ label ] = rows
+    sigs = re.search( r'<sigs [^>]*>', d ); sigs = sigs.group( 0 ) if sigs else ''
+    sh = re.search( r' shown="(\d+)"', sigs ); tot = re.search( r' total="(\d+)"', sigs )
+    if sh and tot and int( sh.group( 1 ) ) < int( tot.group( 1 ) ):
+        cut += 1
+        if ' next="--for=' not in sigs: why.append( 'cut-without-next' )
+    if est and int( est.group( 1 ) ) > n: over += 1
+    if why:
+        badn += 1
+        if len( bad ) < 6: bad.append( '%s@%d:[%s]' % ( label, n, ' '.join( why ) ) )
+print( runs, badn, cut, over )
+for b in bad: print( b )
+PYS
+)"
+read -r a7s_runs a7s_badn a7s_cut a7s_over <<<"$( printf '%s\n' "$a7s_out" | head -1 )"
+a7s_bad="$( printf '%s\n' "$a7s_out" | tail -n +2 | tr '\n' ' ' )"
+{ [ -n "$a7s_runs" ] && [ "$a7s_runs" -eq 66 ] && [ "$a7s_badn" -eq 0 ]; } 2>/dev/null \
+    && ok "#11 A7 sweep (forbudget-soft): $a7s_runs budgets over a git-less corpus (the first and last budget of every row count: default 760..1500, --detail=20 --with-graph 300..2500, one-row named task 400/600) — every answer exit 0, unlabelled, its rows fit T or the floor and a cut is maximal, rows monotone in N, every cut <sigs> carries next=" \
+    || no "#11 A7 sweep (forbudget-soft): ${a7s_badn:-?} of ${a7s_runs:-?} budgets break the soft target, or the sweep did not judge its 66 rungs (first: $a7s_bad)"
 # control (REPLACED, forbudget-soft (rule 4); was ">= 1 budget labelled over_ceiling INSIDE the allowance", a band the soft
 # target deleted): the sweep must actually exercise both halves of the contract — rows CUT at the target (else ST and NX ran
 # on complete answers only) and an answer whose est_tokens exceeds its N (the soft overshoot, which NOLBL then pins unlabelled).
@@ -1140,7 +1189,7 @@ PY
 }
 # T3 (contract update, same wave): the bare --for is terminal by default and carries auto BODIES at the
 # 3.80 body rate, so the markup-only 2.50 identity now lives on the --signatures-only shape…
-"$BIN" src --for="$FOR_TASK" --signatures-only --no-cache >"$TMP/f_sigonly.out" 2>/dev/null
+"$BIN" src --for="$FOR_TASK" --signatures-only "$CF" >"$TMP/f_sigonly.out" 2>/dev/null
 if out="$( selfconsistent "$TMP/f_sigonly.out" )"; then
     ok "#11 A9/A10 --for --signatures-only: est_tokens is self-consistent — bytes/est/expected = $out (its own attributes are charged)"
 else
@@ -1168,7 +1217,7 @@ PY
 # multi-word conceptual query — serve <hops> instead of <bodies> by default, so the AUTO-BODY shape this
 # arm is about now lives behind --auto-bodies. Re-anchored there rather than deleted: the mixed-rate
 # identity is the only arm that can catch a mis-rated body span.
-"$BIN" src --for="$FOR_TASK" --auto-bodies --no-cache >"$TMP/f_forauto.out" 2>/dev/null
+"$BIN" src --for="$FOR_TASK" --auto-bodies "$CF" >"$TMP/f_forauto.out" 2>/dev/null
 if out="$( mixedconsistent "$TMP/f_forauto.out" )"; then
     ok "#11 A9/A10 --for --auto-bodies: est_tokens matches markup@2.50 + bodies@3.80 — bytes/span/est/expected = $out"
 else
@@ -1199,7 +1248,7 @@ grep -aq '<hops ' "$TMP/f_for.out" \
 # The weak query is a single nonsense word, which routes subtoken+body and therefore goes COMPACT: the
 # R9 shell it emits is <hops shown="0" total="0" capped="0">, markup-rate like the rest of that document,
 # so the FLAT identity is the right one here now (mixedconsistent would exit on the absent <bodies>).
-"$BIN" src --for="zzqqxx" --no-cache >"$TMP/f_weak.out" 2>/dev/null
+"$BIN" src --for="zzqqxx" "$CF" >"$TMP/f_weak.out" 2>/dev/null
 if grep -aq 'weak="1"' "$TMP/f_weak.out"; then
     if out="$( selfconsistent "$TMP/f_weak.out" )"; then
         ok "#11 A9 --for with weak=\"1\": est_tokens self-consistent — bytes/est/expected = $out (the 9 B attr + the R9 <hops> shell are both charged)"
@@ -1224,7 +1273,8 @@ fi
 # to sit above it. If no budget in the ladder qualifies, that is a real failure and it says so.
 PT_TB=""
 for _tb in 800 1000 1200 1500 2000 3000; do
-    "$BIN" src --pack-task="$FOR_TASK" --token-budget=$_tb --no-cache >"$TMP/pt_probe.out" 2>/dev/null
+    "$BIN" src --pack-task="$FOR_TASK" --token-budget=$_tb "$CP" >"$TMP/pt_probe.out" 2>/dev/null
+    cp "$TMP/pt_probe.out" "$TMP/pt_probe_$_tb.out"   # RUNTIME: reused below (the bare bundle at PT_TB, #15's 1500)
     _b="$( bytes_of "$TMP/pt_probe.out" )"
     _a="$( awk "BEGIN{printf \"%d\", $_tb*2.36*1.15}" )"
     if [ "$_b" -le "$_a" ] 2>/dev/null && ! grep -aqE 'over_ceiling(="1"|:)' "$TMP/pt_probe.out"; then PT_TB=$_tb; break; fi
@@ -1234,8 +1284,9 @@ if [ -z "$PT_TB" ]; then
     PT_TB=3000
 fi
 PT_ALLOW="$( awk "BEGIN{printf \"%d\", $PT_TB*2.36*1.15}" )"
-"$BIN" src --pack-task="$FOR_TASK" --token-budget=$PT_TB --no-cache >"$TMP/pt_bare.out" 2>/dev/null
-"$BIN" src --pack-task="$FOR_TASK" --token-budget=$PT_TB --with-graph --no-cache >"$TMP/pt_graph.out" 2>/dev/null
+if [ -s "$TMP/pt_probe_$PT_TB.out" ]; then cp "$TMP/pt_probe_$PT_TB.out" "$TMP/pt_bare.out"   # RUNTIME: the probe's own document
+else "$BIN" src --pack-task="$FOR_TASK" --token-budget=$PT_TB "$CP" >"$TMP/pt_bare.out" 2>/dev/null; fi
+"$BIN" src --pack-task="$FOR_TASK" --token-budget=$PT_TB --with-graph "$CP" >"$TMP/pt_graph.out" 2>/dev/null
 PTB="$( bytes_of "$TMP/pt_bare.out" )";  PTG="$( bytes_of "$TMP/pt_graph.out" )"
 if [ "$PTG" -le "$PT_ALLOW" ] 2>/dev/null; then
     ok "#11 A11 --pack-task --token-budget=$PT_TB --with-graph: $PTG B within the $PT_ALLOW B allowance"
@@ -1251,7 +1302,7 @@ fi
 
 # A12 — --around's appended <compose>/<routes>. Pick a focus whose ego-graph is SMALL, so the sibling blocks
 # are a large fraction of the document and an uncharged block moves the rate hard (base: 3.07 B/tok).
-"$BIN" src --around=Config --no-cache >"$TMP/around.out" 2>/dev/null
+"$BIN" src --around=Config "$CM" >"$TMP/around.out" 2>/dev/null
 AB="$( bytes_of "$TMP/around.out" )"
 AE="$( est_of "$TMP/around.out" )"
 if grep -aq '<compose\|<routes' "$TMP/around.out" && [ -n "$AE" ] && [ "$AE" -gt 0 ] 2>/dev/null; then
@@ -1271,12 +1322,12 @@ fi
 
 # ── #12 (bucket B of the enumeration): the two DELIBERATE non-conventions, pinned so a future change to them
 #    is a decision rather than a drift. Neither is a defect; both are things a reader could mistake for one. ─
-"$BIN" src --top-k=10 --stable --pack-signatures --no-cache >"$TMP/stable.out" 2>/dev/null
+"$BIN" src --top-k=10 --stable --pack-signatures "$CM" >"$TMP/stable.out" 2>/dev/null
 grep -aqE '<r est_tokens="' "$TMP/stable.out" \
     && no "#12 B3 --stable emitted est_tokens on the root — it is deliberately omitted (volatile prefix)" \
     || ok "#12 B3 --stable omits est_tokens by design (the root element is the cacheable prefix)"
 # B4 --top-k=0: no header exists to carry est_tokens, but the gate must still SEE the payload
-"$BIN" src --top-k=0 --pack-top-n=3 --token-budget=600 --no-cache >"$TMP/k0.out" 2>"$TMP/k0.err"
+"$BIN" src --top-k=0 --pack-top-n=3 --token-budget=600 "$CM" >"$TMP/k0.out" 2>"$TMP/k0.err"
 rc_k0=$?
 { [ "$rc_k0" -eq 3 ] && [ "$( bytes_of "$TMP/k0.out" )" -lt 2048 ]; } 2>/dev/null \
     && ok "#12 B4 --top-k=0 --pack-top-n=3 --token-budget=600: exit 3, payload withheld (mapEstTokens = payloadTokens)" \
@@ -1316,6 +1367,8 @@ fi
 #        arm is unobservable BY DESIGN and the plain-flavour CI leg is what proves it (→ SKIP, reason
 #        named), or the seam regressed on a flavour that CAN see alerts (→ FAILURE). ─────────────────────
 # L1 (2026-09-19): the compact legend spells <sigs> inside its comment, so #14c's find(<sigs) would start in the legend; both runs ask for the full legend.
+# RUNTIME: every FAULTED run below stays cold (--no-cache); the undegraded controls and the exact-match bad-value runs use
+# the per-class cache (byte-identical to cold, asserted by #7), since none of them tests a degrade path.
 RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" src --top-k=10 --pack-signatures --no-cache --legend=full >"$TMP/dg.out" 2>"$TMP/dg.err"
 rc_dg=$?
 if grep -aq 'chargeSection: open_memstream failed' "$TMP/dg.err"; then
@@ -1331,7 +1384,7 @@ if grep -aq 'chargeSection: open_memstream failed' "$TMP/dg.err"; then
 
     #    (c) THE BYTES ARE STILL COMPLETE AND CORRECT. The whole point of the degrade: the caller loses the
     #        charge, never the content. Byte-compare the payload against the undegraded run.
-    "$BIN" src --top-k=10 --pack-signatures --no-cache --legend=full >"$TMP/dg_ctl.out" 2>/dev/null
+    "$BIN" src --top-k=10 --pack-signatures "$CM" --legend=full >"$TMP/dg_ctl.out" 2>/dev/null
     if python3 - "$TMP/dg_ctl.out" "$TMP/dg.out" <<'PY'
 import sys
 ctl = open( sys.argv[1], 'rb' ).read()
@@ -1408,7 +1461,7 @@ PY
     #    The negative assertion is paired with a POSITIVE CONTROL on the identical shape, because "no
     #    est_tokens in the header region" is also what an extractor pointed at the wrong bytes reports: the
     #    UNDEGRADED run of the same command must find one there, or the anchor is dead and the arm is vacuous.
-    "$BIN" src --for="$FOR_TASK" --detail=5 --no-cache >"$TMP/dgf_ctl.out" 2>/dev/null
+    "$BIN" src --for="$FOR_TASK" --detail=5 "$CF" >"$TMP/dgf_ctl.out" 2>/dev/null
     FCTL="$( forest_of "$TMP/dgf_ctl.out" )"
     { [ -n "$FCTL" ] && [ "$FCTL" -gt 0 ]; } 2>/dev/null \
         && ok "#14d anchor control: the UNDEGRADED --for --detail=5 header does carry est_tokens=\"$FCTL\" (the probe is live)" \
@@ -1428,7 +1481,7 @@ PY
     #        control (`$TMP/dg_ctl.out`, no switch in the environment) is the reference.
     g4fail=0
     for badval in 10 1x 1000000 11 '1 ' 0 true ''; do
-        RIPWIRE_FAULT_CHARGE_BUFFER="$badval" "$BIN" src --top-k=10 --pack-signatures --no-cache --legend=full >"$TMP/dg_g4.out" 2>"$TMP/dg_g4.err"
+        RIPWIRE_FAULT_CHARGE_BUFFER="$badval" "$BIN" src --top-k=10 --pack-signatures "$CM" --legend=full >"$TMP/dg_g4.out" 2>"$TMP/dg_g4.err"
         if grep -aq 'chargeSection: open_memstream failed' "$TMP/dg_g4.err"; then
             no "#14e RIPWIRE_FAULT_CHARGE_BUFFER='$badval' INJECTED the fault — only the exact value \"1\" may (prefix test, verifier G4)"
             g4fail=1
@@ -1476,7 +1529,7 @@ if grep -aq 'chargeSection: the charge buffer did not finish whole' "$TMP/mf.err
     grep -aq 'serialize: the charge buffer did not finish whole .* MODELLED bytes' "$TMP/mf.err" \
         && ok "#14f(a) the serialize finish alert fired and says est_tokens reports the MODELLED bytes" \
         || no "#14f(a) serialize's finish degraded without its alert (or the alert lost the MODELLED clause)"
-    "$BIN" src --top-k=10 --pack-signatures --no-cache >"$TMP/mf_ctl.out" 2>/dev/null
+    "$BIN" src --top-k=10 --pack-signatures "$CM" >"$TMP/mf_ctl.out" 2>/dev/null
     if [ -s "$TMP/mf_ctl.out" ] && cmp -s <( mask_est "$TMP/mf_ctl.out" ) <( mask_est "$TMP/mf.out" ); then
         ok "#14f(b) the degraded document is byte-identical to the undegraded one outside est_tokens ($( bytes_of "$TMP/mf.out" ) B) — rendered again, whole"
     else
@@ -1502,7 +1555,7 @@ if grep -aq 'chargeSection: the charge buffer did not finish whole' "$TMP/mf.err
         && ok "#14f(d) degraded est_tokens=$MFE is the MODELLED number, below the charged $MFC" \
         || no "#14f(d) degraded est_tokens=$MFE vs charged $MFC — the modelled fallback is not observable"
     INFRA_FAULT_MEMSTREAM_FINISH=1 "$BIN" src --top-k=10 --json --no-cache >"$TMP/mfj.out" 2>"$TMP/mfj.err"
-    "$BIN" src --top-k=10 --json --no-cache >"$TMP/mfj_ctl.out" 2>/dev/null
+    "$BIN" src --top-k=10 --json "$CM" >"$TMP/mfj_ctl.out" 2>/dev/null
     if grep -aq 'serializeJson: the charge buffer did not finish whole' "$TMP/mfj.err" && [ -s "$TMP/mfj_ctl.out" ] \
        && cmp -s <( mask_est "$TMP/mfj_ctl.out" ) <( mask_est "$TMP/mfj.out" ) \
        && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$TMP/mfj.out" 2>/dev/null; then
@@ -1708,7 +1761,8 @@ JSON_TASK="add retry to the http client"
 jsonEnvelopeCase()
 {
     local label="$1"; shift
-    "$BIN" src --for="$JSON_TASK" --json --no-cache "$@" > "$TMP/fj.out" 2>/dev/null || true
+    "$BIN" src --for="$JSON_TASK" --json "$CF" "$@" > "$TMP/fj.out" 2>/dev/null || true
+    [ "$label" = "--token-budget=200" ] && cp "$TMP/fj.out" "$TMP/fj200.out"   # RUNTIME: the §C2 control reads this capture
     python3 - "$TMP/fj.out" "$label" <<'PYEOF'
 import json, sys
 raw = open( sys.argv[1], "rb" ).read()
@@ -1749,7 +1803,7 @@ jsonEnvelopeCase "--token-budget=16000" --token-budget=16000
 # survives only at the default regime's runaway guard). The control now pins both halves of that at the same call: the
 # overshoot is REAL (est_tokens > 200 — the §C1 identity above already proved that number prices the whole document) and the
 # document carries NO over_ceiling key (NOLBL). Base d4325a8c: "over_ceiling":true here.
-"$BIN" src --for="$JSON_TASK" --json --no-cache --token-budget=200 > "$TMP/fj200.out" 2>/dev/null || true
+# (RUNTIME: $TMP/fj200.out is the --token-budget=200 capture jsonEnvelopeCase made above — the same call, not re-run.)
 c2_est="$( python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("est_tokens","")); sys.exit(0 if "over_ceiling" not in d else 1)' "$TMP/fj200.out" 2>/dev/null )"; c2_rc=$?
 { [ "$c2_rc" -eq 0 ] && [ -n "$c2_est" ] && [ "$c2_est" -gt 200 ]; } 2>/dev/null \
     && ok "§C2 control (forbudget-soft): --for --json --token-budget=200 prices past its target (est_tokens=$c2_est) with no over_ceiling key — a soft target is never labelled" \
@@ -1768,7 +1822,7 @@ c2_est="$( python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.
 # as an implication over a sweep rather than pinned to an N, because the crossover moves with the corpus.
 c4any=0; c4bad=0
 for n in 500 1000 3000 6000 6500 10000 20000; do
-    "$BIN" src --max-tokens="$n" --json --no-cache > "$TMP/c4.json" 2>/dev/null || true
+    "$BIN" src --max-tokens="$n" --json "$CM" > "$TMP/c4.json" 2>/dev/null || true
     verdict="$( python3 - "$TMP/c4.json" <<'PYEOF'
 import json, sys
 raw = open( sys.argv[1], "rb" ).read()
@@ -1795,7 +1849,7 @@ done
 
 # and the XML dialect must be untouched by all of this: its verdict already measured its own rendering.
 for n in 200 1000 6000; do
-    "$BIN" src --max-tokens="$n" --no-cache > "$TMP/c4.xml" 2>/dev/null || true
+    "$BIN" src --max-tokens="$n" "$CM" > "$TMP/c4.xml" 2>/dev/null || true
     xb="$( wc -c < "$TMP/c4.xml" | tr -d ' ' )"
     # the XML states its fit inside the header COMMENT (serialize.h writes ` fit_bytes=N`, unquoted prose,
     # not an attribute) — and the legend line also carries the literal `fit_bytes=honoured:`, so take the
@@ -1830,7 +1884,8 @@ band15(){   # $1 label $2 file $3 root-element $4 hi*100 [$5 arm tag, default #1
         || no "$tag $label: $B B / est_tokens=$E = $(( R / 100 )).$(( R % 100 )) B/tok — OUTSIDE the band (the root's number does not price the delivered document)"
 }
 # (a) --pack-task: a comfortable budget prices; a tiny one labels over_ceiling on the ROOT, not only in prose
-"$BIN" src --pack-task="$FOR_TASK" --token-budget=1500 --no-cache >"$TMP/p15_pt.xml" 2>/dev/null
+if [ -s "$TMP/pt_probe_1500.out" ]; then cp "$TMP/pt_probe_1500.out" "$TMP/p15_pt.xml"   # RUNTIME: A11's probe made this exact call
+else "$BIN" src --pack-task="$FOR_TASK" --token-budget=1500 "$CP" >"$TMP/p15_pt.xml" 2>/dev/null; fi
 band15 "--pack-task --token-budget=1500" "$TMP/p15_pt.xml" ctx 420
 [ "$( root_attr "$TMP/p15_pt.xml" ctx budget_tokens )" = "1500" ] \
     && ok "#15 --pack-task: root budget_tokens=\"1500\" — the ceiling in the SAME unit as est_tokens=" \
@@ -1840,8 +1895,8 @@ band15 "--pack-task --token-budget=1500" "$TMP/p15_pt.xml" ctx 420
 # header floor exceeds the ceiling). Now NOLBL + HL at the same call: no over_ceiling= on the root, task= verbatim and route=
 # kept, no "(ceiling)" / task-echo drop; the full dialect reads budget_tokens= as the soft target (packtask.h
 # kPackTaskSoftBudgetSentence). The overshoot stays real and priced: est_tokens > 50.
-"$BIN" src --pack-task="$FOR_TASK" --token-budget=50 --no-cache >"$TMP/p15_pt50.xml" 2>/dev/null
-"$BIN" src --pack-task="$FOR_TASK" --token-budget=50 --legend=full --no-cache >"$TMP/p15_pt50f.xml" 2>/dev/null
+"$BIN" src --pack-task="$FOR_TASK" --token-budget=50 "$CP" >"$TMP/p15_pt50.xml" 2>/dev/null
+"$BIN" src --pack-task="$FOR_TASK" --token-budget=50 --legend=full "$CP" >"$TMP/p15_pt50f.xml" 2>/dev/null
 pt50_why=""
 [ -n "$( perl -0pe 's#<!--.*?-->##gs' "$TMP/p15_pt50.xml" | grep -oE '<ctx( [^>]*)?>' | head -1 )" ] || pt50_why="$pt50_why no-root"
 [ -z "$( root_attr "$TMP/p15_pt50.xml" ctx over_ceiling )" ] || pt50_why="$pt50_why over_ceiling-on-a-soft-target"
@@ -1857,7 +1912,7 @@ E50="$( root_est "$TMP/p15_pt50.xml" ctx )"
     || no "#15 --pack-task --token-budget=50: est_tokens='$E50' does not exceed the 50-token target (the floor cannot fit 50 tokens)"
 # (b) --from-trace: the same two shapes on a name-resolved frame
 printf 'Traceback (most recent call last):\n  File "src/graph.h", line 1, in rankGraphTeleport\n' >"$TMP/p15_trace.txt"
-"$BIN" src --from-trace="$TMP/p15_trace.txt" --token-budget=1500 --no-cache >"$TMP/p15_ft.xml" 2>/dev/null
+"$BIN" src --from-trace="$TMP/p15_trace.txt" --token-budget=1500 "$CT" >"$TMP/p15_ft.xml" 2>/dev/null
 band15 "--from-trace --token-budget=1500" "$TMP/p15_ft.xml" ctx 420
 [ "$( root_attr "$TMP/p15_ft.xml" ctx budget_tokens )" = "1500" ] \
     && ok "#15 --from-trace: root budget_tokens=\"1500\"" \
@@ -1866,8 +1921,8 @@ band15 "--from-trace --token-budget=1500" "$TMP/p15_ft.xml" ctx 420
 # over_ceiling= only against max_tokens=. Was: root over_ceiling="1" at 50. Now at the same call: est_tokens > 50 (the overshoot
 # is priced), no over_ceiling= (no max_tokens= was passed), the <trace src=> echo of the trace file ships, and the full dialect
 # reads budget_tokens= as the soft target (tracelocus.h).
-"$BIN" src --from-trace="$TMP/p15_trace.txt" --token-budget=50 --no-cache >"$TMP/p15_ft50.xml" 2>/dev/null
-"$BIN" src --from-trace="$TMP/p15_trace.txt" --token-budget=50 --legend=full --no-cache >"$TMP/p15_ft50f.xml" 2>/dev/null
+"$BIN" src --from-trace="$TMP/p15_trace.txt" --token-budget=50 "$CT" >"$TMP/p15_ft50.xml" 2>/dev/null
+"$BIN" src --from-trace="$TMP/p15_trace.txt" --token-budget=50 --legend=full "$CT" >"$TMP/p15_ft50f.xml" 2>/dev/null
 FT50="$( root_est "$TMP/p15_ft50.xml" ctx )"
 ft50_why=""
 { [ -n "$FT50" ] && [ "$FT50" -gt 50 ]; } 2>/dev/null || ft50_why="$ft50_why est_tokens='${FT50:-absent}'-not-past-50"
@@ -1892,7 +1947,7 @@ grep -aqF 'budget_tokens= is the soft token target you passed' "$TMP/p15_ft50f.x
 #     d099ec21: 4 rows at 100..600, 5 at 800, 10 at 1200, 20 at 2000, every rung unlabelled with est_tokens > N.
 f15_prev=""
 for N in 100 300 400 600 800 1200 1500 1600 1700 2000 2500 3000; do
-    "$BIN" src --for="$FOR_TASK" --token-budget=$N --no-cache >"$TMP/p15_for$N.xml" 2>/dev/null
+    "$BIN" src --for="$FOR_TASK" --token-budget=$N "$CF" >"$TMP/p15_for$N.xml" 2>/dev/null
     FB="$( bytes_of "$TMP/p15_for$N.xml" )"
     FE="$( root_est "$TMP/p15_for$N.xml" ctx )"
     FO="$( root_attr "$TMP/p15_for$N.xml" ctx over_ceiling )"
@@ -1927,8 +1982,8 @@ perl -0pe 's#<!--(.*?)-->#\1#gs' "$TMP/p15_for3000.xml" | grep -qE '(^|[^[:alnum
     && ok "#15 --for --token-budget=100 (forbudget-soft): the legend defines budget_tokens= as the soft row target the rows stop at" \
     || no "#15 --for --token-budget=100 (forbudget-soft): budget_tokens= rides the root but the legend does not read it as a soft target"
 # (c) --handoff: priced, labelled, and withheld= is a boolean with the count beside it
-"$BIN" . --handoff --token-budget=100 --no-cache >"$TMP/p15_ho100.xml" 2>/dev/null
-"$BIN" . --handoff --token-budget=100000 --no-cache >"$TMP/p15_hobig.xml" 2>/dev/null
+"$BIN" . --handoff --token-budget=100 "$CH" >"$TMP/p15_ho100.xml" 2>/dev/null
+"$BIN" . --handoff --token-budget=100000 "$CH" >"$TMP/p15_hobig.xml" 2>/dev/null
 band15 "--handoff --token-budget=100000" "$TMP/p15_hobig.xml" handoff 320
 [ "$( root_attr "$TMP/p15_ho100.xml" handoff over_ceiling )" = "1" ] \
     && ok "#15 --handoff --token-budget=100: root over_ceiling=\"1\" (the verified floor exceeds 100 tokens)" \
@@ -1949,11 +2004,11 @@ fi
     && ok "#15 --handoff --token-budget=100000: no over_ceiling= (absent = inside the ceiling, the map's convention)" \
     || no "#15 --handoff --token-budget=100000: over_ceiling=\"$( root_attr "$TMP/p15_hobig.xml" handoff over_ceiling )\" on a packet well inside its budget"
 # (d) --expand --top-k=0: the root prices the bodies-only document, and that number IS the one --token-budget gates on
-"$BIN" src --expand=pageWindow --top-k=0 --no-cache >"$TMP/p15_ex.xml" 2>/dev/null
+"$BIN" src --expand=pageWindow --top-k=0 "$CX" >"$TMP/p15_ex.xml" 2>/dev/null
 band15 "--expand=pageWindow --top-k=0" "$TMP/p15_ex.xml" ctx 420
 EX="$( root_est "$TMP/p15_ex.xml" ctx )"
 if [ -n "$EX" ] && [ "$EX" -gt 1 ] 2>/dev/null; then
-    "$BIN" src --expand=pageWindow --top-k=0 --no-cache --token-budget=$(( EX - 1 )) >/dev/null 2>"$TMP/p15_ex.err"; rc=$?
+    "$BIN" src --expand=pageWindow --top-k=0 "$CX" --token-budget=$(( EX - 1 )) >/dev/null 2>"$TMP/p15_ex.err"; rc=$?
     grep -q "withheld_est_tokens=$EX " "$TMP/p15_ex.err" && [ "$rc" -ne 0 ] \
         && ok "#15 --expand --top-k=0: the root's est_tokens=$EX is the number --token-budget gates on (withheld_est_tokens=$EX, exit $rc) — one estimator" \
         || no "#15 --expand --top-k=0: root est_tokens=$EX but the gate says '$( head -1 "$TMP/p15_ex.err" | cut -c1-120 )' — two counters"
@@ -1999,8 +2054,9 @@ sys.stdout.write( r["result"]["content"][0]["text"] if "result" in r else "" )
 '
 }
 LEGARG=""
-[ -n "$( mcp_for_text "rank graph teleport" ',"legend":"full"' )" ] && LEGARG=',"legend":"full"'
-mcp_for_text "rank graph teleport" "$LEGARG" >"$TMP/f5_mcp.xml"
+# RUNTIME: the probe's own answer is the bundle when the server takes the arg; re-asked without it only when it does not
+mcp_for_text "rank graph teleport" ',"legend":"full"' >"$TMP/f5_mcp.xml"
+if [ -s "$TMP/f5_mcp.xml" ]; then LEGARG=',"legend":"full"'; else mcp_for_text "rank graph teleport" "" >"$TMP/f5_mcp.xml"; fi
 if [ ! -s "$TMP/f5_mcp.xml" ]; then
     no "#16 MCP for returned nothing (legend arg '${LEGARG:-none}') — the arm cannot measure what it cannot fetch"
 else

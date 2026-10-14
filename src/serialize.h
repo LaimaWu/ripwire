@@ -5189,6 +5189,9 @@ struct SigsCutReport
     std::size_t pastTargetBytes = 0;       // OUT: the block bytes those rows add over the target cut (rows, their file notes,
                                            //   the tag's attribute bytes) — what the caller's trailing sections must not pay for
     bool        rowDropCut      = false;   // OUT: step F dropped rows against rowDropBudgetBytes (the guard / the soft target)
+    std::vector<std::uint32_t> pastTargetRanks;   // OUT: the r= values the past_target rows are SHOWN with, ascending — the K
+                                                  //   lowest-ranked shown rows by their global rank, read after the docs reorder
+                                                  //   renumbered them (sigsRowsAtTarget scopes the default's sections by it)
     std::size_t shown       = 0;
     std::size_t total       = 0;
     std::size_t docsDropped = 0;
@@ -5347,6 +5350,35 @@ inline void sigsCutRecordLadder( SigsCutReport& cut, const SigLadderOutcome& lad
                             + ( pastTargetDisclosed ? sizeof( " past_target=\"\"" ) - 1 + sigsDecimalDigits( ladder.pastTargetRows ) : 0u );
     }
     ENSURES( cut.pastTarget <= cut.shown, "sigsCutRecordLadder: more rows past the target than rows shown" );   // they are shown rows
+}
+
+// forbudget-soft: which shown rows are the past_target= ones, by the r= they are shown with. The ladder's past-target rows are
+// the rank TAIL of the shown set (the K highest global ranks); the docs reorder (reorderDocsAfterCode) then renumbers the shown
+// rows, so the tail cannot be read back off the rendered r= (a doc row of global rank 28 is shown as r="35"). Recorded from the
+// entries after the reorder, before the block renders. EntryT: the XML SigEntry or the JSON sibling (dropped, globalRank, displayRank).
+template< class EntryT >
+inline void sigsCutRecordPastTargetRanks( SigsCutReport& cut, const std::vector<EntryT>& entries )
+{
+    cut.pastTargetRanks.clear();
+    if( cut.pastTarget == 0 )
+    {
+        return;
+    }
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> live;   // (globalRank, displayRank) of the shown rows
+    for( const EntryT& e : entries )
+    {
+        if( !e.dropped )
+        {
+            live.emplace_back( e.globalRank, e.displayRank );
+        }
+    }
+    std::sort( live.begin(), live.end(), []( const auto& a, const auto& b ) { return a.first > b.first; } );
+    for( std::size_t k = 0; k < live.size() && k < cut.pastTarget; ++k )
+    {
+        cut.pastTargetRanks.push_back( live[ k ].second );
+    }
+    std::sort( cut.pastTargetRanks.begin(), cut.pastTargetRanks.end() );
+    ENSURES( cut.pastTargetRanks.size() == cut.pastTarget, "sigsCutRecordPastTargetRanks: a past_target row is not a shown row" );
 }
 
 // What the finished block shows, from its rows after the gate and the ladder: shown rows, and the shown rows whose doc
@@ -5954,6 +5986,7 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
         }
         cut.continuationRequest = cutNext;
         sigsCutRecordLadder( cut, ladder, totalAfterLadder, rowDropBudgetIn, pastTargetDisclosed );   // forbudget-soft
+        sigsCutRecordPastTargetRanks( cut, entries );   // forbudget-soft: after the docs reorder renumbered them
         sigsCutAttachContinuation( cut, cutNext, cutNextInv, cutNextTokens );   // nothing unless capped and asked for
         if( cutOut )
         {
@@ -8856,17 +8889,17 @@ inline std::vector<std::vector<NodeId>> legoImplementorsOnSurface( const IngestR
 // forbudget-soft: the <sigs> rows a DEFAULT answer's sections are scoped by — the rows at the target cut, without the
 // past_target= rows (the K highest ranks: the rows are a rank prefix), so <lego>/<compose> narrow as they did when the target
 // was a ceiling and keep the shape they had (§1.3's section invariant: no section loses rows because the head was kept whole).
-// Selected by each row's r=, not by emission position (the docs reorder, docs_after_code=, moves doc rows below the code rows).
+// Selected by the r= values the ladder recorded for the past-target rows (cut.pastTargetRanks), not by emission position nor
+// by an r= threshold: the docs reorder (docs_after_code=) moves doc rows below the code rows AND renumbers them.
 // The whole block on a soft target or an answer with nothing past its target. Only <d …>…</d> rows are kept (a file's
 // notes ride its rows and are scanned for p= the same way).
 inline std::string sigsRowsAtTarget( std::string_view sigsRendered, const SigsCutReport& cut )
 {
-    if( !cut.pastTargetDisclosed || cut.pastTarget == 0 || cut.pastTarget >= cut.shown )
+    if( !cut.pastTargetDisclosed || cut.pastTargetRanks.empty() || cut.pastTarget >= cut.shown )
     {
         return std::string( sigsRendered );
     }
-    struct Row { std::uint32_t rank; std::string_view text; };
-    std::vector<Row> rows;
+    std::string kept;
     for( std::size_t at = sigsRendered.find( "<d " ); at != std::string_view::npos; at = sigsRendered.find( "<d ", at + 3 ) )
     {
         const std::size_t end = sigsRendered.find( "</d>", at );
@@ -8881,26 +8914,9 @@ inline std::string sigsRowsAtTarget( std::string_view sigsRendered, const SigsCu
         {
             rank = rank * 10 + std::uint32_t( text[ i ] - '0' );
         }
-        rows.push_back( { rank, text } );
-    }
-    if( rows.size() <= cut.pastTarget )
-    {
-        return std::string( sigsRendered );
-    }
-    std::vector<std::uint32_t> ranks;
-    ranks.reserve( rows.size() );
-    for( const Row& r : rows )
-    {
-        ranks.push_back( r.rank );
-    }
-    std::nth_element( ranks.begin(), ranks.begin() + std::ptrdiff_t( rows.size() - cut.pastTarget - 1 ), ranks.end() );
-    const std::uint32_t keepUpTo = ranks[ rows.size() - cut.pastTarget - 1 ];   // the highest rank inside the target cut
-    std::string kept;
-    for( const Row& r : rows )
-    {
-        if( r.rank <= keepUpTo )
+        if( !std::binary_search( cut.pastTargetRanks.begin(), cut.pastTargetRanks.end(), rank ) )
         {
-            kept.append( r.text );
+            kept.append( text );
         }
     }
     return kept;
@@ -11077,6 +11093,7 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
         }
         cut.continuationRequest = cutNext;
         sigsCutRecordLadder( cut, ladder, totalAfterLadder, rowDropBudgetIn, pastTargetDisclosed );   // forbudget-soft
+        sigsCutRecordPastTargetRanks( cut, entries );   // forbudget-soft: after the docs reorder renumbered them
         sigsCutAttachContinuation( cut, cutNext, cutNextInv, cutNextTokens );   // knob-honesty-068: nothing unless capped and asked for
         if( cutOut )
         {
