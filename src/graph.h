@@ -370,18 +370,11 @@ inline bool edgeNameOnly( const Graph& g, NodeId from, NodeId to ) noexcept
     return edgeNameOnlyInCsr( g.outOff, g.outTargets, g.outNameOnly, from, to );
 }
 
-// Does any hop of a directed call path (path[i-1] → path[i]) satisfy `edgeHas( from, to )`? The one walk behind the path
-// legends' present-only questions (via="name" here, defattrib.h's prov="split").
-template <class EdgePred>
-inline bool pathHasHopWhere( std::span<const NodeId> path, EdgePred&& edgeHas ) noexcept
-{
-    return std::adjacent_find( path.begin(), path.end(), edgeHas ) != path.end();
-}
-// FE-B: does any hop run through a name-only edge? --path and MCP path_between ask it once to decide their via="name"
-// legend sentence (one spelling for both transports).
+// FE-B: does any hop of a directed call path (path[i-1] → path[i]) run through a name-only edge? --path and MCP
+// path_between ask it once to decide their via="name" legend sentence (one spelling for both transports).
 inline bool pathHasNameOnlyHop( const Graph& g, std::span<const NodeId> path ) noexcept
 {
-    return pathHasHopWhere( path, [ & ]( NodeId from, NodeId to ) { return edgeNameOnly( g, from, to ); } );
+    return std::adjacent_find( path.begin(), path.end(), [ & ]( NodeId from, NodeId to ) { return edgeNameOnly( g, from, to ); } ) != path.end();
 }
 
 // The out-CSR position of the call edge from → to, or SIZE_MAX when there is none (ascending within a source: buildGraph sorts

@@ -940,9 +940,15 @@ inline bool pathHopSplitArm( const Graph& g, std::span<const NodeId> path, std::
 {
     return i > 0 && i < path.size() && edgeSplitArm( g, path[ i - 1 ], path[i] );
 }
-inline bool pathHasSplitHop( const Graph& g, std::span<const NodeId> path ) noexcept
+// How many hops of the path are split arms — both path emitters ask whether any is, for the legend clause (present-only).
+inline std::size_t pathSplitHopCount( const Graph& g, std::span<const NodeId> path ) noexcept
 {
-    return pathHasHopWhere( path, [ & ]( NodeId from, NodeId to ) { return edgeSplitArm( g, from, to ); } );
+    std::size_t hops = 0;
+    for( std::size_t i = 1; i < path.size(); ++i )
+    {
+        hops += pathHopSplitArm( g, path, i ) ? 1u : 0u;
+    }
+    return hops;
 }
 
 }   // namespace rw

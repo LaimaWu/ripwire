@@ -244,6 +244,14 @@ inline std::pair<std::string_view, bool> callHierarchyNextSelector( const Ingest
     return { name, true };
 }
 
+// attrib-multidef (defattrib.h): which definition each row belongs to, over the rows in their FINAL order — computed here,
+// once, so every dialect of both surfaces (the CLI verbs and the MCP twins) reads one attribution.
+inline CallHierarchyRows withOneHopAttribution( const IngestResult& ing, const Graph& g, CallHierarchyRows rows, bool wantCallers )
+{
+    rows.attr = attributeOneHopAnswer( ing, g, rows.matches, rows.rows, wantCallers );
+    return rows;
+}
+
 inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph& g, std::string_view selector, bool wantCallers,
                                             const ValueRefIndex* valueIndex = nullptr )   // the MCP server passes its cached one
 {
@@ -329,8 +337,7 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
         rankBeforeCap( ing, out.rows, [ & ]( NodeId r ) { return ing.symbols[r].fileId; },
                        [ & ]( NodeId r ) { return navRelevanceWeight( g, r ); } );
     }
-    out.attr = attributeOneHopAnswer( ing, g, out.matches, out.rows, wantCallers );   // attrib-multidef, over the FINAL row order
-    return out;
+    return withOneHopAttribution( ing, g, std::move( out ), wantCallers );
 }
 
 }   // namespace rw
