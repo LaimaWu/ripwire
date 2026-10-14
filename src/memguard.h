@@ -23,6 +23,10 @@
 //          became a hard stop after the ingest instead of a partial answer.
 //   hard   at the limit itself, checked between phases (main.cpp; --quality-delta=A..B, which dispatches before main()'s
 //          ingest, between its own: verbs_quality.h refPairOverHardLimit) and before each MCP tool call: no partial answer.
+//          The range form alone answers PART of the question instead (qd-memory-degrade): a stop in either commit's full
+//          tree — or a projection that says the target phase will not fit (projectTargetPhase) — releases the full trees
+//          and re-asks from both commits' CHANGED FILES the kinds those files decide, naming every kind it skipped
+//          (exit 2 when a row gates, else 6); exit 5 is then left for "even the changed files did not fit".
 //   pressure: the OS signal (os::mem_pressure) at "critical" stops the crawl or the parse too — but only once this
 //          process holds at least max( 256 MiB, limit/8 ), so a small run is never cut because something ELSE is
 //          using the machine. It never causes a hard stop.
@@ -32,21 +36,28 @@
 // completion, and only the thread that wins the time slot pays the syscall. A CLI run shorter than five seconds reads
 // the footprint three times — at ingest start, after the ingest and after the graph build (the hard line) — and an MCP
 // tool call once more. The `--quality-delta=A..B` range form reads it up to 2 + 6 times: two outside its commit
-// ingests and the six hard-line readings around them. None of it changes a byte of output unless a line is crossed
-// (test/memguardcheck.sh (C)). No thread, no timer, no signal handler.
+// ingests and the six hard-line readings around them, plus one projection after the base commit (two footprint readings
+// and one PEAK reading, os::mem_footprint_peak) and one peak reading after the answer. None of it changes a byte of
+// output unless a line is crossed (test/memguardcheck.sh (C), test/qddegradecheck.sh (L)). No thread, no timer, no
+// signal handler.
 //
 // THE STOP. A soft stop sets an atomic flag the crawl loop and the parse workers read before the next unit of work,
 // records WHY through DISCLOSE on IngestResult::memoryStop, and lets ingest() finish with what it has: the crawl keeps
 // the entries it saw (then sorts them, as always); the parse keeps every file it claimed — a prefix of its parse order
 // (a worker checks the flag BEFORE claiming a file, so every claimed file completes). Nothing derived from a partial ingest is ever persisted — not the ingest
 // cache, not a quality snapshot, not a baseline. Whether the partial ingest may answer is the caller's decision — main.cpp answers the
-// default map with memory_stop= in its header and refuses every other verb (exit 5); the MCP server answers with
-// `_memory_stop` in the envelope.
+// default map with memory_stop= in its header and refuses every other verb (exit 5) except --quality-delta=A..B, which
+// releases the cut tree unscored and answers from both commits' changed files (see "hard" above); the MCP server
+// answers with `_memory_stop` in the envelope.
 //
 // THE TEST SEAM. RIPWIRE_TEST_MEMGUARD=crawl:N | pressure:N | parse:N | request:N | hard:N ADDS a trip — at the Nth crawl entry
 // (over the line, or under critical pressure), after exactly N files of the parse order are parsed, or at the Nth and
 // later MCP tool calls, or at the Nth and later hard-line readings (hard:N); eager:1 instead drops the five-second time gate, so every guarded unit takes a REAL reading — so test/memguardcheck.sh can drive every stop path deterministically. It never replaces a real
-// reading: every real line, the time gate and the hard line still apply, so it can only make a run stricter.
+// reading: every real line, the time gate and the hard line still apply, so it can only make a run stricter. crawl:N and
+// parse:N count per INGEST (each ingest's own Watch). Three more for the range form (test/qddegradecheck.sh): project:N —
+// the Nth target-phase projection reads "does not fit"; ingest:N — the Nth ingest of the process stops its crawl at its
+// first entry (a stop in ONE chosen ingest, e.g. the target's after the base fit); peak:N — the Nth post-answer peak
+// reading reads as over the limit.
 //
 // REPEATABILITY. A crawl stop keeps what the walk had seen, then sorts it. A parse stop keeps the first K slots of the
 // parse ORDER (cache misses, then cache hits, then grammarless files, each largest first, then fileId — or plain fileId
@@ -98,8 +109,9 @@ inline Limits& limitsSlot() noexcept
 }
 inline const Limits& limits() noexcept { return limitsSlot(); }
 
-// 65% of min( physical RAM, cgroup memory.max ), or 0 when the machine cannot say how much RAM it has.
-inline std::uint64_t defaultLimitBytes()
+// the machine's own ceiling: physical RAM, or the cgroup's memory.max when that is lower; 0 when unknown. Also what a
+// degraded --quality-delta=A..B compares its replay's need with (a need above it is recoverable only on a larger machine).
+inline std::uint64_t machineMemoryBytes()
 {
     std::uint64_t machine = os::mem_physical();
     const std::uint64_t cgroup = os::mem_cgroup_max();
@@ -107,7 +119,12 @@ inline std::uint64_t defaultLimitBytes()
     {
         machine = cgroup;
     }
-    return machine / 100 * 65;
+    return machine;
+}
+// 65% of min( physical RAM, cgroup memory.max ), or 0 when the machine cannot say how much RAM it has.
+inline std::uint64_t defaultLimitBytes()
+{
+    return machineMemoryBytes() / 100 * 65;
 }
 
 // the footprint every line is measured on: this process's own (os::mem_footprint), or, when it is larger, the
@@ -143,6 +160,9 @@ enum class TripAt : std::uint8_t
     Request,    // request:N  — the Nth MCP tool call reads as over the hard limit
     Hard,       // hard:N     — the Nth hard-line reading (overHardLimit: between CLI phases, per workspace root, between --quality-delta=A..B's phases) reads as over
     Eager,      // eager:1    — no five-second time gate: every guarded unit takes a REAL footprint reading (only stricter)
+    Project,    // project:N  — the Nth target-phase projection (projectTargetPhase) reads as "does not fit"
+    Ingest,     // ingest:N   — the Nth ingest of the process stops its crawl at its first entry (a crawl stop)
+    Peak,       // peak:N     — the Nth post-answer peak reading (peakOverLimit) reads as over the limit
 };
 struct TestTrip
 {
@@ -159,6 +179,7 @@ inline TripAt tripAtFor( std::string_view phase ) noexcept
     } kPhases[] = {
         { "crawl", TripAt::Crawl }, { "pressure", TripAt::Pressure }, { "parse", TripAt::Parse },
         { "request", TripAt::Request }, { "hard", TripAt::Hard }, { "eager", TripAt::Eager },
+        { "project", TripAt::Project }, { "ingest", TripAt::Ingest }, { "peak", TripAt::Peak },
     };
     for( const auto& p : kPhases )
     {
@@ -207,6 +228,32 @@ inline const TestTrip& testTrip() noexcept
 using GateClock = std::chrono::steady_clock;
 inline constexpr GateClock::rep kCheckIntervalTicks = std::chrono::duration_cast<GateClock::duration>( std::chrono::nanoseconds( kCheckIntervalNs ) ).count();
 
+// The seams' process-wide call counters, one struct (stopCounts' shape): every ingest() (the ingest:N ordinal, counted
+// at its Watch), the MCP tool calls (request:N), the range form's projections (project:N) and its post-answer peak
+// readings (peak:N). Relaxed: each is read by the call that bumps it.
+struct SeamCounters
+{
+    std::atomic<std::uint64_t> ingests{ 0 };
+    std::atomic<std::uint64_t> requests{ 0 };
+    std::atomic<std::uint64_t> projections{ 0 };
+    std::atomic<std::uint64_t> peaks{ 0 };
+};
+inline SeamCounters& seamCounters() noexcept
+{
+    static SeamCounters counters;
+    return counters;
+}
+// one call of a call-counted seam: true for the Nth call (`laterToo` false) or the Nth and every later one
+inline bool seamCallTrips( TripAt at, std::atomic<std::uint64_t>& seen, bool laterToo ) noexcept
+{
+    if( testTrip().at != at )
+    {
+        return false;
+    }
+    const std::uint64_t n = seen.fetch_add( 1, std::memory_order_relaxed ) + 1;
+    return laterToo ? n >= testTrip().index : n == testTrip().index;
+}
+
 // install: main() calls this once, before any thread, with the resolved limit. A zero `bytes` means "the default".
 inline void install( std::uint64_t bytes, Source source )
 {
@@ -225,6 +272,7 @@ public:
     Watch() noexcept
         : trip_( testTrip() )
         , hardBytes_( limits().hardBytes )
+        , ingestOrdinal_( seamCounters().ingests.fetch_add( 1, std::memory_order_relaxed ) + 1 )
     {
         baseFootprint_ = measuredFootprint();
         nextCheckTick_.store( GateClock::now().time_since_epoch().count() + kCheckIntervalTicks, std::memory_order_relaxed );
@@ -242,6 +290,10 @@ public:
         if( entryCount + 1 == trip_.index && ( trip_.at == TripAt::Crawl || trip_.at == TripAt::Pressure ) )
         {
             return tripSoft( trip_.at == TripAt::Pressure );
+        }
+        if( trip_.at == TripAt::Ingest && ingestOrdinal_ == trip_.index )
+        {
+            return tripSoft( false );   // ingest:N — this whole ingest is the one the seam cuts, at its first entry
         }
         if( ( entryCount & ( kCrawlStride - 1 ) ) != 0 || !claimTimeSlot() )
         {
@@ -329,6 +381,7 @@ private:
 
     const TestTrip&             trip_;
     const std::uint64_t         hardBytes_;
+    const std::uint64_t         ingestOrdinal_;
     std::uint64_t               baseFootprint_ = 0;
     std::atomic<GateClock::rep> nextCheckTick_{ 0 };
     std::atomic<bool>           stopped_{ false };
@@ -362,14 +415,79 @@ inline bool overHardLimit()
 // pre-check is `requestSeamTrips() || overHardLimit()` — additive, like every seam.
 inline bool requestSeamTrips()
 {
-    if( testTrip().at != TripAt::Request )
-    {
-        return false;
-    }
-    static std::atomic<std::uint64_t> requestsSeen{ 0 };
-    return requestsSeen.fetch_add( 1, std::memory_order_relaxed ) + 1 >= testTrip().index;
+    return seamCallTrips( TripAt::Request, seamCounters().requests, /*laterToo=*/true );
 }
 
+// ── the range form's projection and peak (qd-memory-degrade) ───────────────────────────────────────────────
+// --quality-delta=A..B scores the base commit and releases it before the target is materialized (#387). The target
+// phase then holds the base snapshot, the full target tree and computeDelta's passes; on the measured repositories its
+// growth over the starting footprint was 0.9-1.4x the base phase's. What the base released is reused, not added: the
+// footprint once it is released (`after`) is anywhere from the start plus the snapshot (the allocator returned the
+// pages) to the base phase's peak (it kept them), and the target phase grows into that. So after the base phase:
+//     need       = max( after, before + k * ( basePeak - before ) )   against the hard limit, and
+//     ingestNeed = max( after, ingestPeak )                          against the parse line (half the limit),
+// where `before` is this process's own footprint before the base phase and `basePeak` / `ingestPeak` its PEAK at the end
+// of the base phase / of the base ingest (os::mem_footprint_peak — the readings between phases miss the clone passes'
+// transient peak). k is kProjectionScalePct / 100, calibrated in the qd-memory-degrade report as the max over the measured
+// corpora of ( full peak - before ) / ( base-phase peak - before ), rounded up. A run whose true need lies within that
+// margin below the limit may be answered degraded; the projection never lets a run past the limit by its own choice (an
+// under-projection is caught by the guard's stops, which degrade). An unknown peak (0) projects nothing: the full attempt
+// runs, and a stop in it still degrades.
+inline constexpr std::uint64_t kProjectionScalePct = 175;   // max measured 1.48 over 11 cold runs on 5 corpora (qd-memory-degrade report), + ~18%
+struct TargetProjection
+{
+    bool          measured  = false;   // false: no peak reading — nothing was projected
+    bool          fits      = true;
+    std::uint64_t needBytes = 0;       // the projected need (0 when not measured)
+};
+inline TargetProjection projectTargetPhase( std::uint64_t before, std::uint64_t ingestPeak, std::uint64_t basePeak, std::uint64_t after )
+{
+    TargetProjection    p;
+    const std::uint64_t limit = limits().hardBytes;
+    p.measured = basePeak != 0 && ingestPeak != 0 && after != 0 && basePeak >= before;
+    if( p.measured )
+    {
+        const std::uint64_t growth     = basePeak - before;
+        const std::uint64_t scaled     = growth / 100 * kProjectionScalePct + growth % 100 * kProjectionScalePct / 100;   // no overflow below 2^57 B
+        p.needBytes                    = std::max( after, before + scaled );
+        const std::uint64_t ingestNeed = std::max( after, ingestPeak );
+        p.fits = limit == 0 || ( p.needBytes < limit && ingestNeed < limit / 2 );
+    }
+    if( seamCallTrips( TripAt::Project, seamCounters().projections, /*laterToo=*/false ) )
+    {
+        p.fits = false;   // the seam: additive — it can only make a run degrade, never let one run full past a real projection
+    }
+    return p;
+}
+// --max-memory for a replay of what a degraded run skipped: strictly above the projected need, in whole MiB, at least the
+// parser's floor, and at most what a size_t can hold (item 27: the value the continuation names is one the parser
+// accepts). After a stop no need was measured, so the replay names twice the limit: a guess, and said to be one.
+inline std::uint64_t replayLimitBytes( std::uint64_t needBytes, bool needMeasured )
+{
+    const std::uint64_t limit = limits().hardBytes;
+    std::uint64_t       want  = needMeasured ? ( ( needBytes + kMiB - 1 ) / kMiB + 1 ) * kMiB   // one MiB above the need as spelled
+                                             : ( limit > ( UINT64_MAX / 2 ) ? UINT64_MAX : limit * 2 );
+    want = std::max( want, kFloorBytes );
+    const std::uint64_t ceiling = std::uint64_t( SIZE_MAX ) / kMiB * kMiB;
+    return std::min( want, ceiling );
+}
+// The peak after the answer was computed, when it went over the limit (or the peak:N seam says so), else 0. computeDelta
+// runs after the last hard-line reading, so a full answer can finish over --max-memory (rv-pr391 N1: 1.09-1.11x); this
+// is the reading that SAYS so instead of answering silently over it. It never changes the exit code.
+inline std::uint64_t peakOverLimit()
+{
+    const std::uint64_t limit = limits().hardBytes;
+    if( limit == 0 )
+    {
+        return 0;
+    }
+    std::uint64_t peak = os::mem_footprint_peak();
+    if( seamCallTrips( TripAt::Peak, seamCounters().peaks, /*laterToo=*/false ) )
+    {
+        peak = std::max( peak, limit + kMiB );   // the seam: the reading says over, whatever the real peak was
+    }
+    return peak > limit ? peak : 0;
+}
 // ── the backstop: a stop nobody answered for ────────────────────────────────────────────────────────────
 // ingest() counts every stop it discloses; the caller that decides what the partial ingest may answer (main.cpp's
 // memoryStopExit) marks every stop so far as answered for. A CLI run that ends with a stop nobody answered for — an
@@ -405,13 +523,20 @@ inline std::string_view phaseName( MemoryStop::Phase phase ) noexcept
 // every message ends with the override
 inline constexpr std::string_view kOverride = "raise it with --max-memory=<N>[K|M|G] or RIPWIRE_MAX_MEMORY, or pass a smaller root";
 
-// the hard stop's one line: nothing was built that could answer
-inline std::string hardStopLine( std::string_view where )
+// where the limit came from, as the clause every message spells it with
+inline std::string_view limitSourceClause() noexcept
 {
     const Limits& l = limits();
-    return "memory limit reached during the " + std::string( where ) + " (limit " + limitSpelling( l.hardBytes )
-         + ( l.source == Source::Flag ? ", from --max-memory" : l.source == Source::Env ? ", from RIPWIRE_MAX_MEMORY" : ", 65% of this machine's memory" )
-         + "); stopped cleanly without an answer — " + std::string( kOverride );
+    return l.source == Source::Flag ? "from --max-memory" : l.source == Source::Env ? "from RIPWIRE_MAX_MEMORY" : "65% of this machine's memory";
+}
+
+// the hard stop's one line: nothing was built that could answer. `also` is said between the limit and the verdict — the
+// range form's "the changed files alone did not fit either" — and is empty everywhere else (the line keeps its bytes).
+inline std::string hardStopLine( std::string_view where, std::string_view also = {} )
+{
+    std::string line = "memory limit reached during the ";
+    line.append( where ).append( " (limit " ).append( limitSpelling( limits().hardBytes ) ).append( ", " ).append( limitSourceClause() ).append( "); " );
+    return line.append( also ).append( "stopped cleanly without an answer — " ).append( kOverride );
 }
 
 // which line a soft stop crossed, spelled against the limit that sets it (a soft stop is never the limit itself)

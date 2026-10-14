@@ -766,6 +766,17 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "renames", "renames=/rename_window_commits=: git rename pairs read over that many commits, to re-file baseline and acks", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },   // also defines rename_window_commits=
     { "acked_by_rename", "acked_by_rename=/acked_by_content=: acked= suppressions matched via git renames / an equal body hash", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },   // also defines acked_by_content=
     { "renames_window_truncated", "renames_window_truncated=1: history is deeper than the rename window, older renames unread", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    // qd-memory-degrade: present-only on an answer that did not run every kind (verbs_quality.h kindsDisclosure)
+    { "kinds_skipped", "kinds_skipped=: kinds NOT run, so none of their rows is here and every count covers the rest; a count only they feed is absent", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "skipped_why", "skipped_why=selector (the caller chose; stale acks judged for those kinds only) | memory (see ingest_scope=)", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "ingest_scope", "ingest_scope=changed-files: the full trees did not fit, so both commits' changed files answered the kinds they decide, rows as a full answer's; exit 2 if one gates, else 6", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "memory_need", "memory_need=NM: the full answer's projected need; unmeasured after a stop (memory_stop=)", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "also_skipped", "also_skipped=: whole-answer facts not computed (config-warnings, stale-acks, ack-healing: acks match by recorded key only)", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "kinds_next", "kinds_next=: the call running exactly the skipped kinds on the same commits (after a stop its max-memory is a guess)", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "memory_stop", "memory_stop=crawl|parse|hard: the guard's stop that sent it to the changed files; a soft stop does not show the need exceeds the limit", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "memory_limit", "memory_limit=NM: the guard's limit, spelled as the max-memory value that raises it", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "memory_pressure", "memory_pressure=1: OS memory pressure stopped it, not the limit", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "memory_peak", "memory_peak=NM: the peak went OVER the limit after the guard's last reading; the answer is complete, the exit code unchanged", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     // readability: src/readability.h (the <readability> root emit)
     { "functions", "functions=N: functions and methods measured (bodyless declarations are not)", false, "readability", MapHeaderRead::No, {}, "readability" },
     // scan-skills: src/skillscan.h printSkillScanArtifact
