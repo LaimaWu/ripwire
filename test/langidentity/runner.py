@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """runner.py -- the engine of test/langidentitycheck.sh (read that file's header for the contract).
 
-Runs one fixed argv set per corpus with a BASE and a HEAD ripwire binary, compares stdout bytes and exit
-code, and classifies every argv SAME | DIFF | EMPTY | ERROR. Never spawns a shell: every argv is a list.
+Runs one fixed argv set per corpus with a BASE and a HEAD ripwire binary, compares stdout bytes, stderr (after
+norm_stderr) and the exit code, and classifies every argv SAME | DIFF | EMPTY | ERROR. Never spawns a shell: every
+argv is a list.
 
 usage: runner.py [--base BIN] [--ratchet-only] --head BIN --root REPO --scratch DIR --manifest FILE --ratchet FILE
                  [--langs a,b] [--syms FILE] [--intended FILE] [--repo LANG:DIR]... [--jobs N]
                  [--timeout S] [--keep DIR] [--list]
 (--ratchet-only runs just the ratchet line against --head, which needs no --base.)
 Exit 0 = every argv SAME (or DIFF with an --intended row), the self-test fired, the ratchet holds.
+Exit 2 = an unusable --intended file or --repo spec (nothing was compared).
 """
 import argparse
-import fnmatch
 import json
 import os
 import re
@@ -31,9 +32,40 @@ EXTS = {
     'cpp': ('.cpp', '.cc', '.cxx', '.hpp', '.hh', '.hxx', '.h'), 'c': ('.c', '.h'), 'py': ('.py', '.pyi'),
     'ts': ('.ts', '.tsx'), 'js': ('.js', '.jsx', '.mjs', '.cjs'), 'go': ('.go',), 'rs': ('.rs',),
     'swift': ('.swift',), 'objc': ('.m', '.mm', '.h'), 'sh': ('.sh', '.bash'), 'java': ('.java',),
-    'rb': ('.rb',), 'cs': ('.cs',), 'php': ('.php',), 'lua': ('.lua',), 'ex': ('.ex', '.exs'),
-    'dart': ('.dart',), 'kt': ('.kt', '.kts'), 'gd': ('.gd',), 'clj': ('.clj', '.cljs', '.cljc'),
+    'rb': ('.rb',), 'cs': ('.cs',), 'php': ('.php', '.phtml'), 'lua': ('.lua',), 'ex': ('.ex', '.exs'),
+    'dart': ('.dart',), 'kt': ('.kt', '.kts'), 'gd': ('.gd',), 'clj': ('.clj', '.cljs', '.cljc', '.bb'),
 }
+
+# The only stderr text that may differ between two builds of the same behaviour: the provenance tag a notice ends
+# with, "(FILE:LINE, FUNCTION-SIGNATURE — logged once per site)" (src/infra/diagnostics.cpp). Its LINE and SIGNATURE
+# move whenever a slice edits that source file; the FILE name and the notice text before the tag are kept, so a
+# changed, added or dropped message still reads as DIFF. Each binary's own TMPDIR is the only other variable part.
+SITE_TAG = re.compile(rb'\(([A-Za-z0-9_./+-]+):\d+, [^\n]*? \xe2\x80\x94 logged once per site\)')
+# A comparison with nothing in it: the root element of BASE's stdout has no child element (count="0" and friends).
+ROOT_ELEM = re.compile(rb'<([A-Za-z_][\w-]*) schema="[^"]*"[^>]*>')
+
+
+def norm_stderr(err, tmpdir):
+    """stderr with the provenance tag's line number and signature, and this binary's TMPDIR, replaced by fixed text."""
+    for t in {tmpdir, os.path.realpath(tmpdir)}:
+        err = err.replace(t.encode(), b'<TMP>')
+    return SITE_TAG.sub(lambda m: b'(' + m.group(1) + b':N, <signature> \xe2\x80\x94 logged once per site)', err)
+
+
+def first_diff(x, y):
+    """-> (byte offset, 1-based line in x) of the first difference between two byte strings."""
+    n, lim = 0, min(len(x), len(y))
+    while n < lim and x[n] == y[n]:
+        n += 1
+    return n, x.count(b'\n', 0, n) + 1
+
+
+def zero_rows(out):
+    """True when the first schema-tagged element of this stdout has no child element: a SAME that compared no data."""
+    m = ROOT_ELEM.search(out)
+    if not m:
+        return False
+    return m.group(0).endswith(b'/>') or out[m.end():].lstrip().startswith(b'</' + m.group(1) + b'>')
 
 
 def run(binary, argv, cwd, tmpdir, timeout):
@@ -50,8 +82,9 @@ def run(binary, argv, cwd, tmpdir, timeout):
     return r.returncode, r.stdout, r.stderr, time.monotonic() - t0, None
 
 
-def classify(b, h):
-    """b, h = run() tuples -> (status, detail). ERROR beats EMPTY beats DIFF beats SAME."""
+def classify(b, h, tmp=None):
+    """b, h = run() tuples -> (status, detail). ERROR beats EMPTY beats DIFF beats SAME. A DIFF is stdout first, then
+    stderr after norm_stderr (tmp = {'base': TMPDIR, 'head': TMPDIR}; None compares stdout only, as the self-test does)."""
     if b[4] or h[4]:
         return 'ERROR', 'base: %s; head: %s' % (b[4] or 'ran', h[4] or 'ran')
     if b[0] != 0 or h[0] != 0:
@@ -59,12 +92,13 @@ def classify(b, h):
     if not b[1] or not h[1]:
         return 'EMPTY', 'stdout bytes base=%d head=%d (a vacuous comparison)' % (len(b[1]), len(h[1]))
     if b[1] != h[1]:
-        n = 0
-        lim = min(len(b[1]), len(h[1]))
-        while n < lim and b[1][n] == h[1][n]:
-            n += 1
-        line = b[1].count(b'\n', 0, n) + 1
+        n, line = first_diff(b[1], h[1])
         return 'DIFF', 'bytes base=%d head=%d, first difference at byte %d (line %d)' % (len(b[1]), len(h[1]), n, line)
+    if tmp is not None:
+        eb, eh = norm_stderr(b[2], tmp['base']), norm_stderr(h[2], tmp['head'])
+        if eb != eh:
+            n, line = first_diff(eb, eh)
+            return 'DIFF', 'stderr only: bytes base=%d head=%d, first difference at stderr line %d' % (len(eb), len(eh), line)
     return 'SAME', ''
 
 
@@ -124,7 +158,8 @@ def top_names(syms, lang, count):
     exts = EXTS.get(lang)
     seen, picked = set(), []
     for p, n, _t, _k in sorted(syms, key=lambda s: -s[3]):
-        if not n or n in seen or (exts and not p.lower().endswith(exts)):
+        # <file-scope> and other <pseudo> rows are not symbols a verb can name usefully
+        if not n or n.startswith('<') or n in seen or (exts and not p.lower().endswith(exts)):
             continue
         seen.add(n)
         picked.append(n)
@@ -164,9 +199,9 @@ def select_corpora(a):
                         'root': cols[1], 'kind': 'fixture', 'cwd': ''})
     for spec in a.repo:
         lang, _sep, path = spec.partition(':')
-        if not path or not os.path.isdir(path):
-            print('  FAIL  --repo=%s: expected LANG:DIR with an existing directory' % spec)
-            return None
+        if not path or not os.path.isdir(path) or lang not in EXTS:
+            print('  FAIL  --repo=%s: expected LANG:DIR, LANG one of %s, DIR an existing directory' % (spec, ' '.join(EXTS)))
+            raise SystemExit(2)
         if not want or lang in want:
             corpora.append({'id': '%s/%s' % (lang, os.path.basename(path.rstrip('/'))), 'lang': lang,
                             'root': os.path.abspath(path), 'kind': 'repo', 'cwd': a.root})
@@ -186,17 +221,49 @@ def read_touched(path):
     return touched
 
 
-def read_intended(path):
-    """--intended: CORPUS-GLOB <TAB> ARGV-GLOB <TAB> ARM -> rows, or None after a FAIL line."""
+ARM_PATH = re.compile(r'test/[A-Za-z0-9_]+check\.sh')
+
+
+def read_intended(path, root):
+    """--intended: CORPUS <TAB> ARGV <TAB> ARM, matched exactly (no globs; a row waives one argv of one corpus).
+    ARM must start with an existing test/*check.sh, the gate arm that pins the new behaviour. -> rows, or None after
+    a FAIL line (the caller exits 2: nothing is compared against a waiver list that cannot be trusted)."""
     rows, bad = [], False
     if path:
         for n, cols in read_tsv(path):
-            if len(cols) < 3 or not all(c.strip() for c in cols[:3]):
-                print('  FAIL  %s line %d: an intended row is CORPUS<TAB>ARGV<TAB>ARM, all three non-empty' % (path, n))
+            cols = [c.strip() for c in cols]
+            why = ''
+            if len(cols) < 3 or not all(cols[:3]):
+                why = 'an intended row is CORPUS<TAB>ARGV<TAB>ARM, all three non-empty'
+            elif any(ch in cols[0] + cols[1] for ch in '*?['):
+                why = 'no wildcards: name one corpus id and one argv exactly as the report prints them (one row per DIFF)'
+            elif not ARM_PATH.match(cols[2]) or not os.path.isfile(os.path.join(root, ARM_PATH.match(cols[2]).group(0))):
+                why = 'ARM must start with an existing test/<name>check.sh (the arm that pins the change), got "%s"' % cols[2]
+            if why:
+                print('  FAIL  %s line %d: %s' % (path, n, why))
                 bad = True
                 continue
-            rows.append({'corpus': cols[0].strip(), 'argv': cols[1].strip(), 'arm': cols[2].strip(), 'hits': 0})
+            rows.append({'line': n, 'corpus': cols[0], 'argv': cols[1], 'arm': cols[2], 'hits': 0})
     return None if bad else rows
+
+
+def check_intended_targets(intended, plans, path):
+    """Every row must name a selected corpus and an argv in that corpus's plan. -> False after FAIL lines."""
+    ok = True
+    for row in intended:
+        verbs = plans.get(row['corpus'])
+        if verbs is None:
+            print('  FAIL  %s line %d: corpus "%s" is not among the selected corpora (%s)' % (
+                path, row['line'], row['corpus'], ' '.join(sorted(plans)) or 'none'))
+            ok = False
+        elif row['argv'] not in [verb_text(v) for v in verbs]:
+            print('  FAIL  %s line %d: argv "%s" is not in the plan of %s' % (path, row['line'], row['argv'], row['corpus']))
+            ok = False
+    return ok
+
+
+def verb_text(verb):
+    return ' '.join(verb) if verb else '(map)'
 
 
 class Session:
@@ -212,9 +279,10 @@ class Session:
             self.tmp[label] = os.path.join(a.scratch, 'tmp-' + label)
             os.makedirs(self.tmp[label], exist_ok=True)
         self.fails = []
-        self.counts = {'SAME': 0, 'DIFF': 0, 'EMPTY': 0, 'ERROR': 0, 'intended': 0}
+        self.counts = {'SAME': 0, 'DIFF': 0, 'EMPTY': 0, 'ERROR': 0, 'intended': 0, 'zero': 0}
         self.wall = {'base': 0.0, 'head': 0.0}
         self.biggest = (0, None)  # (symbol count, corpus) for the self-test
+        self.headers = {}
 
     def both(self, c, verb):
         """Run one argv with BASE and HEAD. They overlap: the answers are independent, and a run is mostly process start."""
@@ -249,7 +317,7 @@ class Session:
         verbs = list(CORPUS_VERBS)
         for name in names + extra:
             verbs += [[v + '=' + name] for v in SYMBOL_VERBS]
-        print('corpus %s (%s): %d symbols, %d top + %d touched named, %d argv%s' % (
+        self.headers[c['id']] = ('corpus %s (%s): %d symbols, %d top + %d touched named, %d argv%s' % (
             c['id'], c['root'], len(base_syms), len(names), len(extra), len(verbs),
             ('; %d touched name(s) absent from both maps' % absent) if absent else ''))
         return verbs
@@ -257,7 +325,7 @@ class Session:
     def explain(self, corpus_id, text):
         """The --intended arm that explains a DIFF of this argv in this corpus, or ''."""
         for row in self.intended:
-            if fnmatch.fnmatchcase(corpus_id, row['corpus']) and fnmatch.fnmatchcase(text, row['argv']):
+            if corpus_id == row['corpus'] and text == row['argv']:
                 row['hits'] += 1
                 return row['arm']
         return ''
@@ -271,8 +339,11 @@ class Session:
                     fh.write(data)
 
     def report(self, c, verb, b, h):
-        status, detail = classify(b, h)
-        text = ' '.join(verb) if verb else '(map)'
+        status, detail = classify(b, h, self.tmp)
+        text = verb_text(verb)
+        if status == 'SAME' and zero_rows(b[1]):
+            self.counts['zero'] += 1
+            detail = '(zero rows in both)'
         self.wall['base'] += b[3]
         self.wall['head'] += h[3]
         arm = self.explain(c['id'], text) if status == 'DIFF' else ''
@@ -286,10 +357,10 @@ class Session:
         if status != 'SAME' and self.a.keep:
             self.keep(c, text, b, h)
 
-    def run_corpus(self, c):
-        verbs = self.plan(c)
+    def run_corpus(self, c, verbs):
         if verbs is None:
             return
+        print(self.headers[c['id']])
         with ThreadPoolExecutor(max_workers=max(1, self.a.jobs)) as ex:
             results = list(ex.map(lambda v: self.both(c, v), verbs))
         for verb, b, h in results:
@@ -299,11 +370,15 @@ class Session:
         n = self.counts
         total = n['SAME'] + n['DIFF'] + n['EMPTY'] + n['ERROR']
         for row in self.intended:
-            if not row['hits']:
-                print('  NOTE  intended row matched no DIFF (stale, or the corpus was not selected): %s | %s | %s' % (
-                    row['corpus'], row['argv'], row['arm']))
-        text = '%d argv over %d corpora: %d SAME, %d DIFF (%d intended), %d EMPTY, %d ERROR; wall base=%.1fs head=%.1fs' % (
-            total, ncorpora, n['SAME'], n['DIFF'], n['intended'], n['EMPTY'], n['ERROR'], self.wall['base'], self.wall['head'])
+            if row['hits']:
+                print('  NOTE  intended row %d (%s) waived %d DIFF: %s | %s' % (
+                    row['line'], row['arm'], row['hits'], row['corpus'], row['argv']))
+            else:
+                print('  NOTE  intended row %d matched no DIFF (stale): %s | %s | %s' % (
+                    row['line'], row['corpus'], row['argv'], row['arm']))
+        text = ('%d argv over %d corpora: %d SAME (%d with zero rows in both), %d DIFF (%d intended), %d EMPTY, %d ERROR; '
+                'wall base=%.1fs head=%.1fs') % (total, ncorpora, n['SAME'], n['zero'], n['DIFF'], n['intended'],
+                                                 n['EMPTY'], n['ERROR'], self.wall['base'], self.wall['head'])
         if not self.fails:
             print('  PASS  ' + text)
             return
@@ -353,9 +428,11 @@ def main():
         os.makedirs(tmp, exist_ok=True)
         return 1 if ratchet(a, a.head, tmp) else 0
     corpora = select_corpora(a)
-    intended = read_intended(a.intended)
-    if corpora is None or intended is None:
+    if corpora is None:
         return 1
+    intended = read_intended(a.intended, a.root)
+    if intended is None:
+        return 2
     if a.list:
         for c in corpora:
             print('%s\t%s\t%s' % (c['id'], c['kind'], c['root']))
@@ -363,8 +440,11 @@ def main():
     if not prepare_fixtures(a, corpora):
         return 1
     session = Session(a, intended, read_touched(a.syms))
+    plans = {c['id']: session.plan(c) for c in corpora}
+    if not check_intended_targets(intended, plans, a.intended):
+        return 2
     for c in corpora:
-        session.run_corpus(c)
+        session.run_corpus(c, plans[c['id']])
     session.summary(len(corpora))
     fired = session.self_test()
     ratchet_fail = ratchet(a, a.head, session.tmp['head'])  # printed last
