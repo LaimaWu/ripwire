@@ -4972,6 +4972,62 @@ inline std::size_t droppedPositiveCount( std::size_t candidatePositives, std::si
 // so subtract the old cost first and add the new one — never form `before - after` (it can be negative,
 // i.e. unsigned-overflow UB under G1's -fsanitize=integer). `total >= before` always holds (before is a
 // summand of total).
+// Ladder step F's walk, LOWEST RANK first (P7, terminality round A, lane R, 2026-09-05: `entries` is in rank order — both callers
+// sort it before the ladder runs — so the tail walk IS the rank walk; the old file-major form could drop a rank-5 row in the
+// last file while a rank-39 row in the first file survived). A file's wrapBytes (its notes) go with the file's last live row.
+// Rank 1..4 always survive (the floor). Returns the rows it dropped.
+template<class EntryT, class FileT, class CostFn>
+inline std::size_t sigLadderDropRows( std::vector<EntryT>& entries, std::vector<FileT>& files, std::size_t& total,
+                                      std::size_t budget, CostFn entryCost )
+{
+    std::size_t dropped = 0;
+    for( std::size_t k = entries.size(); k > 0 && total > budget; )
+    {
+        EntryT& e = entries[ --k ];
+        if( e.dropped || e.globalRank <= 4 )
+        {
+            continue;
+        }
+        total -= entryCost( e );
+        e.dropped = true;
+        ++dropped;
+        FileT& sf = files[ e.fileSlot ];
+        if( --sf.liveCount == 0 )
+        {
+            total -= sf.wrapBytes;
+        }
+    }
+    return dropped;
+}
+// forbudget-soft: the same walk as a DRY RUN on a copy of the live counts — how many rows step F would drop at `budget` and the
+// block total it would leave, mutating nothing.
+template<class EntryT, class FileT, class CostFn>
+inline std::pair<std::size_t, std::size_t> sigLadderDryDrop( const std::vector<EntryT>& entries, const std::vector<FileT>& files,
+                                                             std::size_t total, std::size_t budget, CostFn entryCost )
+{
+    std::vector<std::size_t> live( files.size() );
+    for( std::size_t i = 0; i < files.size(); ++i )
+    {
+        live[ i ] = files[ i ].liveCount;
+    }
+    std::size_t wouldDrop = 0;
+    for( std::size_t k = entries.size(); k > 0 && total > budget; )
+    {
+        const EntryT& e = entries[ --k ];
+        if( e.dropped || e.globalRank <= 4 )
+        {
+            continue;
+        }
+        total -= entryCost( e );
+        ++wouldDrop;
+        if( --live[ e.fileSlot ] == 0 )
+        {
+            total -= files[ e.fileSlot ].wrapBytes;
+        }
+    }
+    return { wouldDrop, total };
+}
+
 //
 // THE TARGET AND THE ROW-DROP BUDGET (forbudget-soft). Steps A..E aim at `effectiveBudget` (the TARGET: they shorten row text,
 // no row goes). Step F — the only step that removes a row — runs against `dropBudget` (>= the target; equal to it in the
@@ -5032,54 +5088,17 @@ inline SigLadderOutcome trimSigLadder( std::vector<EntryT>& entries, std::vector
             shrinkSig( entries[k], kForTailSigBytes );
         }
     }
-    // F: drop whole entries, LOWEST RANK first. P7 (terminality round A, lane R, 2026-09-05): `entries` is in
-    // rank order (both callers sort it before the ladder runs), so the tail walk IS the rank walk — the old
-    // file-major form ("tail file first, source order inside it") could drop a rank-5 row in the last file
-    // while a rank-39 row in the first file survived. A file's wrapBytes (its file notes now — the <f>
-    // wrapper is gone) go with the file's last live row, exactly as before.
-    // F's dry run at the TARGET (only when the row-drop budget is wider): the same walk, on a copy of the live counts, so the
-    // rows it names are exactly the tail rows the real walk below keeps past the target.
+    // F: drop whole entries, lowest rank first (sigLadderDropRows), against the row-drop budget.
+    // F's dry run at the TARGET (only when the row-drop budget is wider) names exactly the tail rows the real walk keeps past it
     std::size_t wouldDrop = 0;
     out.targetCutTotal    = total;
     if( dropBudget > effectiveBudget && !fits() )
     {
-        std::vector<std::size_t> live( files.size() );
-        for( std::size_t i = 0; i < files.size(); ++i )
-        {
-            live[ i ] = files[ i ].liveCount;
-        }
-        for( std::size_t k = entries.size(); k > 0 && out.targetCutTotal > effectiveBudget; )
-        {
-            const EntryT& e = entries[ --k ];
-            if( e.dropped || e.globalRank <= 4 )
-            {
-                continue;
-            }
-            out.targetCutTotal -= entryCost( e );
-            ++wouldDrop;
-            if( --live[ e.fileSlot ] == 0 )
-            {
-                out.targetCutTotal -= files[ e.fileSlot ].wrapBytes;
-            }
-        }
+        const auto [ rows, cutTotal ] = sigLadderDryDrop( entries, files, total, effectiveBudget, entryCost );
+        wouldDrop          = rows;
+        out.targetCutTotal = cutTotal;
     }
-    const auto fitsDrop = [ & ] { return total <= dropBudget; };
-    for( std::size_t k = entries.size(); k > 0 && !fitsDrop(); )
-    {
-        EntryT& e = entries[ --k ];
-        if( e.dropped || e.globalRank <= 4 )
-        {
-            continue; // rank 1..4 always survive (the floor)
-        }
-        total -= entryCost( e );
-        e.dropped = true;
-        ++out.droppedRows;
-        FileT& sf = files[ e.fileSlot ];
-        if( --sf.liveCount == 0 )
-        {
-            total -= sf.wrapBytes; // the file's notes go with its last live row
-        }
-    }
+    out.droppedRows = sigLadderDropRows( entries, files, total, dropBudget, entryCost );
     if( dropBudget == effectiveBudget )
     {
         out.targetCutTotal = total;

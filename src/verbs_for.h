@@ -2453,7 +2453,7 @@ ForAutoBodiesResult buildForEnrichment( const rw::Config& cfg, const rw::IngestR
 // residual the rendered bundle actually left; the shell's bytes were reserved ahead of the body walk
 // (kForFileTailShellReserve inside the enrichment's committed sum), so the disclosure always fits.
 // fix round 4 (rule 5, review rv-wrap-recipe-k29 F1): under an explicit ceiling the cut tail carries `cutNextAttr` —
-// the --for file page (forTailCutNextAttr) that lists every positive-score file — and the shell reserve the caller
+// the --for file page (forTailNext in runForLensPass) that lists every positive-score file — and the shell reserve the caller
 // took (forTailShellReserve) includes it, so the disclosure still always fits.
 inline std::string renderForFileTailXml( const rw::FileTail& tail, std::size_t tokenBudget,
                                          std::size_t bundleBudget, std::size_t spentBytes, std::string_view cutNextAttr = {} )
@@ -2468,14 +2468,6 @@ inline std::string renderForFileTailXml( const rw::FileTail& tail, std::size_t t
     return rw::renderFileTailXml( tail, rw::fileTailShownForBudget( tail, tailAllowed, esc, cutNextAttr ), esc, cutNextAttr );
 }
 
-// The tail's cut continuation: the --for file page (one row per positive-score file, pageable), the one call that lists the
-// files the <tail> left out. forbudget-soft (decision D-4, PROCESS rule 5: every cut recoverable): in EVERY regime now — the
-// default's 24-row cap was the one default cut with no next=; it moves every default answer whose tail is capped by this
-// attribute alone (rendered only on a capped tail, renderFileTailXml).
-inline std::string forTailCutNextAttr( const rw::Config& cfg )
-{
-    return rw::nextAttrXml( rw::forWidenNext( cfg.forTask ) );
-}
 
 // R2-AF (round 2, S4): render the task's named-file/decl-impl-partner rows (rw::forNamedHeaderRows,
 // mention.h — the resolution rule and its rationale live there) as `<hdr p= of=/>`, root-relative like
@@ -3381,7 +3373,10 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // the first --detail body's floor under a soft target (head-cut with next= when it is over a quarter of the target): the
         // target fills the rows first, and the floor keeps the one body the caller asked for from being cut to nothing
         const std::size_t detailFloorBudget = forSoftTarget ? forDetailFirstBodyFloor( ing, detailIds, bundleBudget ) : 0u;
-        const std::string forTailNext       = forTailCutNextAttr( cfg );   // D-4: a capped <tail>'s next= (the file page), every regime
+        // D-4 (forbudget-soft; PROCESS rule 5: every cut recoverable): a capped <tail> carries next= — the --for file page (one row
+        // per positive-score file, pageable), the one call that lists the files the tail left out — in EVERY regime (the
+        // default's 24-row cap was the one default cut with no continuation; renderFileTailXml writes it on a capped tail only)
+        const std::string forTailNext       = rw::nextAttrXml( rw::forWidenNext( cfg.forTask ) );
         // THE TWO <sigs> BUDGETS (forbudget-soft; serialize.h kForPayloadBudgetBytes / kForRunawayGuardBytes): the target the
         // text-shrink steps aim at, and where the row-drop step aims — the runaway guard (default), or the soft target's rows.
         const ForSigsBudgets sigsBudgets = forSigsBudgets( forSoftTarget ? bundleBudget : 0u, fixedBytes,
