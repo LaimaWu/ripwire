@@ -778,11 +778,19 @@ std::vector<GrepHitRef> grepHitRefs( const rw::Config& cfg, const rw::IngestResu
     return refs;
 }
 
-int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g,
-                    const std::vector<std::uint32_t>* amp, const std::vector<std::uint8_t>* tested,
-                    const GrepScanPhases* prefetched, const std::string& root, bool valueUses )
+// The dispatch context whole: amp/tested are non-null only when a co-run (--metrics) computed them at dispatch build
+// time — grep itself never asks for the analysis (R1's no-new-analysis rule); root and valueUses feed L4's reads pass.
+int emitGrepReport( const MainDispatch& d )
 {
     using namespace rw;
+    const Config&                     cfg        = d.cfg;
+    const IngestResult&               ing        = d.ing;
+    const Graph&                      g          = d.g;
+    const std::vector<std::uint32_t>* amp        = d.ampPtr;
+    const std::vector<std::uint8_t>*  tested     = d.testedPtr;
+    const GrepScanPhases*             prefetched = d.grepPhases;
+    const std::string&                root       = d.root;
+    const bool                        valueUses  = d.valueUses;
     const std::string          pat( cfg.grep );
 
     // §P0.4: an invalid --regex used to scan nothing and print hits="0" at exit 0 with an EMPTY stderr —
@@ -1233,9 +1241,7 @@ std::optional<int> runGrep( const MainDispatch& d )
     {
         return std::nullopt; // not this verb — fall through the dispatch chain
     }
-    // body: emitGrepReport() above. amp/tested are non-null only when a co-run (--metrics) computed
-    // them at dispatch build time — grep itself never asks for the analysis (R1's no-new-analysis rule).
-    return emitGrepReport( d.cfg, d.ing, d.g, d.ampPtr, d.testedPtr, d.grepPhases, d.root, d.valueUses );
+    return emitGrepReport( d );   // body: emitGrepReport() above
 }
 
 }   // namespace — verbs_grep.h section of main.cpp

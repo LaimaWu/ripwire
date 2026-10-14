@@ -431,63 +431,56 @@ printf 'function homeHandler() { return 1; }\nexport const ROUTES = { home: home
 
 OUT_P="$( run pc --grep=PC_NAMED_MARK )"; ROW_P="$( enc_row "$OUT_P" NAMED )"
 [ -n "$ROW_P" ] || no "(P) premise: no <enc n=\"NAMED\"> row"
-[ "$( attr "$ROW_P" reads )" = 3 ] && ok "(P) reads=\"3\" — the uses verb's three read sites of NAMED" || no "(P) reads on NAMED: $ROW_P"
-[ "$( attr "$ROW_P" reads_at )" = "lib/reader.py:4 lib/reader.py:7 test_reader.py:4" ] \
-    && ok "(P) reads_at= lists them in the uses verb's order (source before tests, then path, line)" || no "(P) reads_at on NAMED: $ROW_P"
+if [ "$( attr "$ROW_P" reads )" = 3 ]; then ok "(P) reads=\"3\" — the uses verb's three read sites of NAMED"; else no "(P) reads on NAMED: $ROW_P"; fi
+if [ "$( attr "$ROW_P" reads_at )" = "lib/reader.py:4 lib/reader.py:7 test_reader.py:4" ]; then ok "(P) reads_at= lists them in the uses verb's order (source before tests, then path, line)"; else no "(P) reads_at on NAMED: $ROW_P"; fi
 USES_P="$( run pc --uses=NAMED | grep -oE '<u role="read" p="[^"]*"' | sed 's/.*p="//; s/"$//' | sort | tr '\n' ' ' )"
-[ "$USES_P" = "lib/reader.py:4 lib/reader.py:7 test_reader.py:4 " ] && ok "(P) the same three sites --uses=NAMED lists as role=\"read\"" || no "(P) --uses=NAMED read rows: $USES_P"
-[ "$( attr "$( root_tag "$OUT_P" grep )" next )" = "--uses=NAMED" ] && ok "(P) root next=\"--uses=NAMED\" (the top hit's carrier has reads)" \
-    || no "(P) root next on NAMED: $( root_tag "$OUT_P" grep )"
+if [ "$USES_P" = "lib/reader.py:4 lib/reader.py:7 test_reader.py:4 " ]; then ok "(P) the same three sites --uses=NAMED lists as role=\"read\""; else no "(P) --uses=NAMED read rows: $USES_P"; fi
+if [ "$( attr "$( root_tag "$OUT_P" grep )" next )" = "--uses=NAMED" ]; then ok "(P) root next=\"--uses=NAMED\" (the top hit's carrier has reads)"; else no "(P) root next on NAMED: $( root_tag "$OUT_P" grep )"; fi
 case "$ROW_P" in *vals=*) no "(P) a carrier holding a string got vals=: $ROW_P" ;; *) ok "(P) no vals= on a carrier that stores no function" ;; esac
 
 ROW_PU="$( enc_row "$( run pc --grep=PC_UNREAD_MARK )" UNREAD )"; R_PU="$( root_tag "$( run pc --grep=PC_UNREAD_MARK )" grep )"
 [ -n "$ROW_PU" ] || no "(P) premise: no <enc n=\"UNREAD\"> row"
 case "$ROW_PU" in *reads=*|*reads_at=*) no "(P) near miss: a carrier read nowhere printed reads: $ROW_PU" ;; *) ok "(P) near miss: a carrier read nowhere carries no reads= (absent, never a zero)" ;; esac
-[ "$( attr "$R_PU" next )" = "--at=lib/conf.py:6" ] && ok "(P) near miss: no reads => next= stays the at verb on the top hit" || no "(P) near miss next: $R_PU"
+if [ "$( attr "$R_PU" next )" = "--at=lib/conf.py:6" ]; then ok "(P) near miss: no reads => next= stays the at verb on the top hit"; else no "(P) near miss next: $R_PU"; fi
 
 ROW_PT="$( enc_row "$( run pc --grep=PC_TABLE_MARK )" TABLE )"
-[ "$( attr "$ROW_PT" vals )" = "[get]=handle_get@lib/handlers.py:1 [put]=local_put@3" ] \
-    && ok "(P) vals= on a dict carrier: [key]=fn@its definition (path:line in another file)" || no "(P) vals on TABLE: $ROW_PT"
+if [ "$( attr "$ROW_PT" vals )" = "[get]=handle_get@lib/handlers.py:1 [put]=local_put@3" ]; then ok "(P) vals= on a dict carrier: [key]=fn@its definition (path:line in another file)"; else no "(P) vals on TABLE: $ROW_PT"; fi
 
 ROW_PI="$( enc_row "$( run pc --grep=PC_INNER_MARK )" inner )"; R_PI="$( root_tag "$( run pc --grep=PC_INNER_MARK )" grep )"
 [ -n "$ROW_PI" ] || no "(P) premise: no <enc n=\"inner\"> row"
 case "$ROW_PI" in *reads=*|*vals=*) no "(P) negative: a literal in a function body got carrier attributes: $ROW_PI" ;; *) ok "(P) negative: a hit inside a function keeps its row unchanged" ;; esac
-[ "$( attr "$R_PI" next )" = "--at=lib/conf.py:11" ] && ok "(P) negative: next= stays the at verb inside a function" || no "(P) negative next: $R_PI"
+if [ "$( attr "$R_PI" next )" = "--at=lib/conf.py:11" ]; then ok "(P) negative: next= stays the at verb inside a function"; else no "(P) negative next: $R_PI"; fi
 
 ROW_PC="$( enc_row "$( run cc --grep=C_ENT_MARK )" ent )"
-[ "$( attr "$ROW_PC" vals )" = "exec=local_exec@3 undo=other_exec@other.c:1" ] \
-    && ok "(P) C initialiser: vals=\"exec=local_exec@3 undo=other_exec@other.c:1\"" || no "(P) C initialiser row: $ROW_PC"
+if [ "$( attr "$ROW_PC" vals )" = "exec=local_exec@3 undo=other_exec@other.c:1" ]; then ok "(P) C initialiser: vals=\"exec=local_exec@3 undo=other_exec@other.c:1\""; else no "(P) C initialiser row: $ROW_PC"; fi
 case "$ROW_PC" in *reads=*) no "(P) C reads are not indexed, yet reads= printed: $ROW_PC" ;; *) ok "(P) C: no reads= (the uses verb indexes no C reads; floor_next stays the literal scan)" ;; esac
 ROW_PCP="$( enc_row "$( run cc --grep=C_PLAIN_MARK )" plain )"
 [ -n "$ROW_PCP" ] || no "(P) premise: no <enc n=\"plain\"> row"
 case "$ROW_PCP" in *vals=*|*reads=*) no "(P) near miss: a C string constant got carrier attributes: $ROW_PCP" ;; *) ok "(P) near miss: a C constant holding a string and read in C carries neither attribute" ;; esac
 ROW_PX="$( enc_row "$( run cc --grep=CPP_NAME_MARK )" kCppName )"
-[ "$( attr "$ROW_PX" reads )" = 1 ] && [ "$( attr "$ROW_PX" reads_at )" = "use.cpp:2" ] && ok "(P) C++ (reads indexed): reads=\"1\" reads_at=\"use.cpp:2\"" || no "(P) C++ row: $ROW_PX"
+if [ "$( attr "$ROW_PX" reads )" = 1 ] && [ "$( attr "$ROW_PX" reads_at )" = "use.cpp:2" ]; then ok "(P) C++ (reads indexed): reads=\"1\" reads_at=\"use.cpp:2\""; else no "(P) C++ row: $ROW_PX"; fi
 ROW_PH="$( enc_row "$( run cc --grep=CPP_HDR_MARK )" kHdrName )"
 [ -n "$ROW_PH" ] || no "(P) premise: no <enc n=\"kHdrName\"> row"
 case "$ROW_PH" in *reads=*) no "(P) near miss: a header carrier counted reads its .c users hide: $ROW_PH" ;; *) ok "(P) near miss: a .h carrier carries no reads= (its readers may be .c files the uses verb never reads)" ;; esac
 ROW_PS="$( enc_row "$( run tsc --grep=TS_ROUTES_MARK )" ROUTES )"
-[ "$( attr "$ROW_PS" vals )" = "home=homeHandler@1" ] && ok "(P) TS object carrier: vals=\"home=homeHandler@1\"" || no "(P) TS row: $ROW_PS"
+if [ "$( attr "$ROW_PS" vals )" = "home=homeHandler@1" ]; then ok "(P) TS object carrier: vals=\"home=homeHandler@1\""; else no "(P) TS row: $ROW_PS"; fi
 case "$ROW_PS" in *reads=*) no "(P) TS reads are not indexed, yet reads= printed: $ROW_PS" ;; *) ok "(P) TS: no reads= (not indexed for TS)" ;; esac
 
 MCP_P="$( mcp_call grep "{\"path\":\"$W/pc\",\"pattern\":\"PC_NAMED_MARK\"}" )"
-printf '%s' "$MCP_P" | python3 -c '
+if printf '%s' "$MCP_P" | python3 -c '
 import json, sys
 d = json.loads( sys.stdin.read() )
 r = { x["n"]: x for x in d.get( "enclosing", [] ) }.get( "NAMED", {} )
-sys.exit( 0 if r.get( "reads" ) == 3 and r.get( "reads_at" ) == [ "lib/reader.py:4", "lib/reader.py:7", "test_reader.py:4" ] else 1 )' \
-    && ok "(P) MCP grep enclosing NAMED: reads 3 and the same reads_at as the CLI" || no "(P) MCP grep NAMED: $MCP_P"
-printf '%s' "$MCP_P" | python3 -c '
+sys.exit( 0 if r.get( "reads" ) == 3 and r.get( "reads_at" ) == [ "lib/reader.py:4", "lib/reader.py:7", "test_reader.py:4" ] else 1 )'; then ok "(P) MCP grep enclosing NAMED: reads 3 and the same reads_at as the CLI"; else no "(P) MCP grep NAMED: $MCP_P"; fi
+if printf '%s' "$MCP_P" | python3 -c '
 import json, sys
-sys.exit( 0 if json.loads( sys.stdin.read() ).get( "next" ) == "--uses=NAMED" else 1 )' \
-    && ok "(P) MCP grep next is --uses=NAMED, as the CLI root next=" || no "(P) MCP grep next: $MCP_P"
+sys.exit( 0 if json.loads( sys.stdin.read() ).get( "next" ) == "--uses=NAMED" else 1 )'; then ok "(P) MCP grep next is --uses=NAMED, as the CLI root next="; else no "(P) MCP grep next: $MCP_P"; fi
 MCP_PC="$( mcp_call grep "{\"path\":\"$W/cc\",\"pattern\":\"C_ENT_MARK\"}" )"
-printf '%s' "$MCP_PC" | python3 -c '
+if printf '%s' "$MCP_PC" | python3 -c '
 import json, sys
 d = json.loads( sys.stdin.read() )
 r = { x["n"]: x for x in d.get( "enclosing", [] ) }.get( "ent", {} )
-sys.exit( 0 if r.get( "vals" ) == [ "exec=local_exec@3", "undo=other_exec@other.c:1" ] and "reads" not in r else 1 )' \
-    && ok "(P) MCP grep enclosing ent: the same vals as the CLI, no reads key" || no "(P) MCP grep ent: $MCP_PC"
+sys.exit( 0 if r.get( "vals" ) == [ "exec=local_exec@3", "undo=other_exec@other.c:1" ] and "reads" not in r else 1 )'; then ok "(P) MCP grep enclosing ent: the same vals as the CLI, no reads key"; else no "(P) MCP grep ent: $MCP_PC"; fi
 
 # ── N: legend ────────────────────────────────────────────────────────────────────────────────────────────
 echo "=== N: every new attribute is defined where it rides ==="
