@@ -381,8 +381,9 @@ moved = [r['n'] for r in off['rows'] if ident(r) in owners]
 order_ok = [ident(r) for r in head if ident(r) in {ident(b) for b in base}] == [ident(r) for r in base if ident(r) in hd]
 # forbudget-soft (decision D-3; rule 4): the DEFAULT <hops> is no longer cut at its 1,000 B allowance, so the rows of the A/B handle
 # are already complete and a moved owner can free nothing — "gained" is then impossible by construction. The premise keeps
-# "an owner moved" and accepts either a gain or an A/B listing with no cut <calls> left to widen.
-base_complete = all((r.get('ca') or {}).get('capped') != '1' for r in base)
+# "an owner moved" and accepts either a gain or an A/B listing with no BUDGET-cut <calls> left to widen (a listing cut at the
+# 16-name row cap cannot gain either: the cap is not the budget).
+base_complete = all((r.get('ca') or {}).get('capped') != '1' or int((r.get('ca') or {}).get('shown', '0') or 0) >= 16 for r in base)   # only the 16-name row cap left
 premise = bool(moved) and (bool(gained) or base_complete) if mode == 'prefix' else True
 print('OK' if not missing and order_ok and off['rows'] and premise
       else 'BAD missing=%s order_ok=%s base_rows=%d gained=%s moved=%s' % (missing[:3], order_ok, len(off['rows']), gained, moved))

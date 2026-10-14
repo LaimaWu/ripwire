@@ -8834,28 +8834,57 @@ inline std::vector<std::vector<NodeId>> legoImplementorsOnSurface( const IngestR
 // every --for run whose rendered sigs happened to hit this path at all. Caught by legobundlecheck.sh going
 // red for the wrong reason (an empty lego, not a mis-narrowed one) rather than by a dedicated assertion —
 // worth a gate of its own if this class recurs.
-// forbudget-soft: the <sigs> text a DEFAULT answer's sections are scoped by — the rows up to the target cut, without the
-// past_target= rows (the last K <d> rows in emission order), so <lego>/<compose> narrow as they did when the target was a
-// ceiling and keep the shape they had (§1.3's section invariant: no section loses rows because the head was kept whole).
-// The whole block on a soft target or an answer with nothing past its target. Emission order is rank order except where the
-// docs reorder moved a doc row below the code rows (docs_after_code=): then the cut falls one row early or late — a scope
-// over- or under-approximation by that row's file, never a wrong row.
-inline std::string_view sigsRowsAtTarget( std::string_view sigsRendered, const SigsCutReport& cut ) noexcept
+// forbudget-soft: the <sigs> rows a DEFAULT answer's sections are scoped by — the rows at the target cut, without the
+// past_target= rows (the K highest ranks: the rows are a rank prefix), so <lego>/<compose> narrow as they did when the target
+// was a ceiling and keep the shape they had (§1.3's section invariant: no section loses rows because the head was kept whole).
+// Selected by each row's r=, not by emission position (the docs reorder, docs_after_code=, moves doc rows below the code rows).
+// The whole block on a soft target or an answer with nothing past its target. Only <d …>…</d> rows are kept (a file's
+// notes ride its rows and are scanned for p= the same way).
+inline std::string sigsRowsAtTarget( std::string_view sigsRendered, const SigsCutReport& cut )
 {
     if( !cut.pastTargetDisclosed || cut.pastTarget == 0 || cut.pastTarget >= cut.shown )
     {
-        return sigsRendered;
+        return std::string( sigsRendered );
     }
-    const std::size_t keep = cut.shown - cut.pastTarget;
-    std::size_t       seen = 0;
+    struct Row { std::uint32_t rank; std::string_view text; };
+    std::vector<Row> rows;
     for( std::size_t at = sigsRendered.find( "<d " ); at != std::string_view::npos; at = sigsRendered.find( "<d ", at + 3 ) )
     {
-        if( seen++ == keep )
+        const std::size_t end = sigsRendered.find( "</d>", at );
+        if( end == std::string_view::npos )
         {
-            return sigsRendered.substr( 0, at );
+            break;
+        }
+        const std::string_view text = sigsRendered.substr( at, end + 4 - at );
+        const std::size_t      rAt  = text.find( " r=\"" );
+        std::uint32_t          rank = 0;
+        for( std::size_t i = rAt == std::string_view::npos ? text.size() : rAt + 4; i < text.size() && text[ i ] >= '0' && text[ i ] <= '9'; ++i )
+        {
+            rank = rank * 10 + std::uint32_t( text[ i ] - '0' );
+        }
+        rows.push_back( { rank, text } );
+    }
+    if( rows.size() <= cut.pastTarget )
+    {
+        return std::string( sigsRendered );
+    }
+    std::vector<std::uint32_t> ranks;
+    ranks.reserve( rows.size() );
+    for( const Row& r : rows )
+    {
+        ranks.push_back( r.rank );
+    }
+    std::nth_element( ranks.begin(), ranks.begin() + std::ptrdiff_t( rows.size() - cut.pastTarget - 1 ), ranks.end() );
+    const std::uint32_t keepUpTo = ranks[ rows.size() - cut.pastTarget - 1 ];   // the highest rank inside the target cut
+    std::string kept;
+    for( const Row& r : rows )
+    {
+        if( r.rank <= keepUpTo )
+        {
+            kept.append( r.text );
         }
     }
-    return sigsRendered;
+    return kept;
 }
 inline bool narrowLegoToRenderedSigs( const IngestResult& ing, std::vector<std::vector<NodeId>>& legoScoped,
                                       std::string_view sigsRendered, std::string_view rootPrefix = {} )
