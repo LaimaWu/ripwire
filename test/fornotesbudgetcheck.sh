@@ -10,6 +10,33 @@
 # Exits non-zero on any failure; prints PASS/FAIL per check and ALL PASS on success.
 # DO NOT edit regression.sh — this is a standalone gate invoked from there.
 #
+# ── BY-DESIGN BREAK — forbudget-soft (rule 4); owner decisions 2026-10-14. READ THIS FIRST. ──────────────────────────────
+# An explicit --token-budget=N on --for is now a SOFT TARGET, not a byte ceiling over the whole document: T = N x 2.36 x 0.90
+# bytes (serialize.h kMinBytesPerToken x kBudgetHeadroom) is charged against the bytes INSIDE <sigs> only — the rows, each
+# with its <note> children (the JSON twin: the emitted "sigs" array, jsonSigEntryCost's exact model, notes included). Rows
+# are added in rank order while they fit T, the rank 1..4 floor always ships, the cut carries next=; the header and every
+# disclosure are never charged, so est_tokens MAY exceed N and nothing is labelled over_ceiling= for it. The DEFAULT --for
+# (no budget) stops when complete: the ranked head ships whole, rows past the 7.5 KB target disclosed as past_target=.
+# The SUBJECT of this gate survives the move intact — W3-N2: note bytes are CHARGED to the budget like the rows they ride,
+# never trimmed — only the thing they are charged against moved from the whole document to the <sigs> rows. So the arms
+# that asserted the deleted contract ("est_tokens <= N in both dialects" at 1200/1640/3000; the 700..2000 sweep's
+# "est_tokens <= N OR over_ceiling=1"; the no-notes tree's "est_tokens <= 900" / "over 900 and labelled") are REPLACED by
+# the invariants that pin W3-N2 under the soft target, on the same fixture and the same rungs:
+#   ST     the rows' bytes inside <sigs>, notes included, fit T — or only the rank 1..4 floor ships — and a cut is MAXIMAL
+#          (the next row of the same dialect's no-budget answer would cross T; 160 B slack, as forsoftbudgetcheck's (ST)).
+#          A note that were NOT charged would let a cut run past T by its note bytes: that is the W3-N2 leak, measured here.
+#   NOTES  every served row carries its note — charged, never trimmed — and a notes tree serves NO MORE rows than the same
+#          tree without notes at the same N (and strictly fewer somewhere: the charge is real, not vacuous).
+#   NOLBL  no over_ceiling= on a budget_tokens answer (a soft target is never "over").
+#   RP     rows(N) are a rank prefix of the no-budget answer's rows, and monotone in N (rows(N-10) a prefix of rows(N)).
+#   NX     every cut names its continuation (<sigs next=> / "sigs_next").
+#   CF     the compact and full legends serve the same rows.
+#   DH     the no-budget answer on the note-heavy tree serves the whole ranked head, every row with its note, unlabelled.
+# Unchanged and kept: notes are never trimmed (arm 3), the dialects agree on what a budget buys (arm 2), the stated budget
+# is echoed as budget_tokens on every rung (sweep), est_tokens is always served, L3 inertness, determinism, G4. This gate
+# never had a --max-tokens arm (that knob shapes the map, not --for). The CEILING MARGIN history below describes the RETIRED
+# hard-ceiling regime; it is kept as the record of why the rungs sit where they do.
+#
 # What the audit found: `used +=` in packSignatures added the doc and the signature and nothing else,
 # while appendNoteChildren streamed <note> children straight into the writer for free. On a note-heavy
 # tree the XML lens therefore ran far past the ceiling its own header reports — measured est_tokens 1279
@@ -222,34 +249,165 @@ done
 
 TASK="widget dispatcher pipeline stage"
 
-xmlEst(){ "$BIN" "$CORPUS" --for="$TASK" --token-budget="$1" 2>/dev/null | grep -o 'est_tokens="[0-9]*"' | head -1 | tr -dc '0-9'; }
-xmlRows(){ "$BIN" "$CORPUS" --for="$TASK" --token-budget="$1" 2>/dev/null | grep -o '<d ' | wc -l | tr -d ' '; }
-jsonEst(){ "$BIN" "$CORPUS" --for="$TASK" --token-budget="$1" --json 2>/dev/null \
-           | python3 -c 'import sys,json; print(json.load(sys.stdin)["est_tokens"])' 2>/dev/null; }
-jsonRows(){ "$BIN" "$CORPUS" --for="$TASK" --token-budget="$1" --json 2>/dev/null \
-            | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len(d["sigs"]))' 2>/dev/null; }   # P7: flat sigs array
+# ── forbudget-soft (rule 4): the soft-target reader every replaced arm below uses ─────────────────────────────────────────
+# soft FILE N ROWSOUT [REF [PREV]] prints ONE line, "OK|BAD rows= total= charged= T= est= over= echo= next= notes= fits= maximal= rp=":
+#   rows / total   the served <sigs> rows / the ranked head (<sigs total=> | "sigs_total")
+#   charged        what the soft target is charged against. XML: the bytes inside <sigs> — every <d> WITH its <note> children
+#                  — plus the zero cx=/ccx=/in= the lean spelling elides (serialize.h entryCost charges them). JSON: the
+#                  emitted "sigs" array, notes included (jsonSigEntryCost is that array's exact byte model).
+#   T              N x 2.36 x 0.90 (kMinBytesPerToken x kBudgetHeadroom)
+#   est / over / echo   est_tokens ("-" when absent) / over_ceiling= on the ROOT / budget_tokens == N on the root
+#   next           a cut (rows < total) names its continuation (<sigs next=> | "sigs_next"); 1 when nothing was cut
+#   notes          served rows that carry a note
+#   fits           charged <= T, or only the rank 1..4 floor is served — and the floor is never short (rows >= min(4,total))
+#   maximal        with REF (the SAME dialect's no-budget answer): a cut stops only where REF's next row would cross T
+#                  (160 B slack, as forsoftbudgetcheck's (ST)) — a binary that stops early at a hard ceiling is not ST
+#   rp             RP: the rows are a non-empty rank prefix of REF's rows, and the rows file PREV (when named: the next
+#                  narrower rung's ROWSOUT) is a prefix of these rows — monotone in N. A named PREV that is missing is a 0.
+# (One python3 per answer, the fields read with bash's own regex: this machine class pays ~0.1 s per process spawn, and the
+# sweep below reads 393 answers — the reader does in-process what a pipe of head/wc/sed would spawn for.)
+# The verdict is OK when est is numeric and fits, maximal and next all hold. ROWSOUT gets the rows, p:l:n in rank (r=) order.
+# exit 3 = the answer has no <sigs> block / "sigs" array: a missing premise, FAILed by the caller, never skipped.
+cat > "$TMP/soft.py" <<'PY'
+import json, re, sys
+def read( path ):
+    s = open( path, encoding='utf-8', errors='replace' ).read()
+    rows = []
+    if s.lstrip().startswith( '{' ):
+        try: d = json.loads( s )
+        except Exception: return None
+        i = s.find( '"sigs":[' )
+        if i < 0 or not isinstance( d.get( 'sigs' ), list ): return None
+        _, end = json.JSONDecoder().raw_decode( s, i + 7 )
+        charged = len( s[ i + 7:end ].encode() )
+        for e in d[ 'sigs' ]:
+            r = e.get( 'r' )
+            cost = len( json.dumps( e, separators=( ',', ':' ), ensure_ascii=False ).encode() ) + 1
+            rows.append( ( r if isinstance( r, int ) else 10**9, "%s:%s:%s" % ( e.get( 'p' ), e.get( 'l' ), e.get( 'n' ) ), cost,
+                           1 if e.get( 'notes' ) else 0 ) )
+        total = d.get( 'sigs_total', len( rows ) )
+        nxt = bool( d.get( 'sigs_next' ) )
+        over = d.get( 'over_ceiling' ) is True
+        est = d.get( 'est_tokens' ); est = str( est ) if isinstance( est, int ) else '-'
+        bt = d.get( 'budget_tokens' )
+    else:
+        root = re.search( r'<ctx\b[^>]*>', s )
+        m = re.search( r'<sigs\b([^>]*)>(.*?)</sigs>', s, re.S )
+        if not root or not m: return None
+        inner = m.group( 2 ); charged = len( inner.encode() )
+        for x in re.finditer( r'<d ([^>]*)>.*?</d>|<d ([^>]*)/>', inner, re.S ):
+            a = x.group( 1 ) or x.group( 2 )
+            g = lambda k: ( re.search( r'\b' + k + r'="([^"]*)"', a ) or [ None, "?" ] )[ 1 ]
+            elided = sum( n for k, n in ( ( 'cx', 7 ), ( 'ccx', 8 ), ( 'in', 7 ) ) if not re.search( r'\b' + k + r'="', a ) )
+            charged += elided
+            r = g( 'r' )
+            rows.append( ( int( r ) if r.isdigit() else 10**9, g( 'p' ) + ":" + g( 'l' ) + ":" + g( 'n' ), len( x.group( 0 ).encode() ) + elided,
+                           1 if '<note ' in x.group( 0 ) else 0 ) )
+        t = re.search( r'\btotal="(\d+)"', m.group( 1 ) ); total = int( t.group( 1 ) ) if t else len( rows )
+        nxt = re.search( r'\bnext="[^"]+"', m.group( 1 ) ) is not None
+        rt = root.group( 0 )
+        over = re.search( r'\bover_ceiling="', rt ) is not None
+        e = re.search( r'\best_tokens="(\d+)"', rt ); est = e.group( 1 ) if e else '-'
+        b = re.search( r'\bbudget_tokens="(\d+)"', rt ); bt = int( b.group( 1 ) ) if b else None
+    rows.sort()
+    return dict( rows=rows, charged=charged, total=total, next=nxt, over=over, est=est, bt=bt )
+a = read( sys.argv[ 1 ] )
+if a is None: sys.exit( 3 )
+N = int( sys.argv[ 2 ] ); X = int( N * 2.36 * 0.90 )
+open( sys.argv[ 3 ], 'w' ).write( "".join( x[ 1 ] + "\n" for x in a[ 'rows' ] ) )
+k = len( a[ 'rows' ] )
+fits = ( a[ 'charged' ] <= X or k <= 4 ) and k >= min( 4, a[ 'total' ] )
+cut = k < a[ 'total' ]
+nxt = a[ 'next' ] or not cut
+maximal = True
+if len( sys.argv ) > 4:
+    ref = read( sys.argv[ 4 ] )
+    if ref is None: sys.exit( 3 )
+    if cut and k < len( ref[ 'rows' ] ):
+        maximal = a[ 'charged' ] + ref[ 'rows' ][ k ][ 2 ] > X - 160
+mine = [ x[ 1 ] for x in a[ 'rows' ] ]
+rp = len( sys.argv ) > 4 and k > 0 and mine == [ x[ 1 ] for x in ref[ 'rows' ] ][ :k ]
+if rp and len( sys.argv ) > 5 and sys.argv[ 5 ]:
+    try: prev = [ x for x in open( sys.argv[ 5 ] ).read().split( "\n" ) if x ]
+    except OSError: prev = None
+    rp = prev is not None and len( prev ) > 0 and prev == mine[ :len( prev ) ]
+ok = a[ 'est' ] != '-' and fits and maximal and nxt
+print( "%s rows=%d total=%d charged=%d T=%d est=%s over=%d echo=%d next=%d notes=%d fits=%d maximal=%d rp=%d"
+       % ( "OK" if ok else "BAD", k, a[ 'total' ], a[ 'charged' ], X, a[ 'est' ], int( a[ 'over' ] ), int( a[ 'bt' ] == N ),
+           int( nxt ), sum( x[ 3 ] for x in a[ 'rows' ] ), int( fits ), int( maximal ), int( rp ) ) )
+PY
+soft(){ python3 "$TMP/soft.py" "$@"; }
+field(){ local re=" $2=([^ ]*)"; [[ " $1 " =~ $re ]] && printf '%s' "${BASH_REMATCH[1]}"; }   # field LINE KEY: one key= of a soft line
+isnum(){ case "${1:-}" in ''|*[!0-9]*) return 1;; esac; return 0; }
 
-# ── arm 1: est_tokens must fit the ceiling the user asked for, in BOTH dialects ────────────────────
+# The no-budget answers, one per dialect the arms below read: the REF each cut's maximality and rank prefix are measured
+# against, and the DH arm's subject.
+"$BIN" "$CORPUS" --for="$TASK"                  > "$TMP/def.xml"     2>/dev/null
+"$BIN" "$CORPUS" --for="$TASK" --legend=compact > "$TMP/def.compact" 2>/dev/null
+"$BIN" "$CORPUS" --for="$TASK" --json           > "$TMP/def.json"    2>/dev/null
+for dialect in xml compact json; do
+  dl="$( soft "$TMP/def.$dialect" 0 "$TMP/def_$dialect.rows" )" || { no "no-budget answer ($dialect) has no <sigs> block — every soft arm below lacks its reference"; continue; }
+  dr="$( field "$dl" rows )"
+  isnum "$dr" && [ "$dr" -ge 5 ] || no "no-budget answer ($dialect) serves '$dr' rows — the reference cannot measure a cut past the floor"
+done
+
+# ── arm DH (NEW, forbudget-soft (rule 4)): the default answer on a note-heavy tree serves the WHOLE head, every note intact ──
+# The default --for stops when complete: kForPayloadBudgetBytes (7,500 B) is a TARGET whose row drop only runs past the
+# 32,000 B runaway guard. This tree's 40-row head with a ~130 B note on every row is ~13 KB of <sigs>: notes are charged
+# against the target (the rows past it are DISCLOSED as past_target=) and never cost a row, never get trimmed, never
+# label the answer over_ceiling=. HEAD d099ec21: 40 of 40 rows, 40 notes, past_target=20, both dialects. RED on the base
+# binary (d4325a8c): 20 of 40 rows, no past_target= (the 7.5 KB ceiling's row drop).
+for dialect in xml json; do
+  dl="$( soft "$TMP/def.$dialect" 0 /dev/null )" || { no "(DH) default ($dialect): no <sigs> block"; continue; }
+  dr="$( field "$dl" rows )"; dt="$( field "$dl" total )"; dn="$( field "$dl" notes )"; dov="$( field "$dl" over )"
+  case "$dialect" in json) pt="$( python3 -c 'import sys,json; print(json.load(open(sys.argv[1])).get("sigs_past_target",""))' "$TMP/def.json" 2>/dev/null )" ;;
+                     *)    pt="$( grep -o '<sigs [^>]*>' "$TMP/def.xml" | head -1 | sed -n 's/.*past_target="\([0-9]*\)".*/\1/p' )" ;; esac
+  if isnum "$dr" && isnum "$dt" && isnum "$dn" && [ "$dr" -eq "$dt" ] && [ "$dn" -eq "$dr" ] && [ "$dov" = 0 ] && isnum "$pt" && [ "$pt" -ge 1 ]; then
+    ok "(DH) default ($dialect): the whole head ships ($dr of $dt rows, $dn notes), $pt row(s) disclosed past_target, no over_ceiling"
+  else
+    no "(DH) default ($dialect): rows=$dr total=$dt notes=$dn over=$dov past_target='$pt' — the default must ship the whole head with every note, past the target disclosed, unlabelled"
+  fi
+done
+
+# ── arm 1: notes are CHARGED against the budget, in BOTH dialects ─────────────────────────────────
+# REPLACED — forbudget-soft (rule 4). Was: "est_tokens <= --token-budget" in XML and JSON at 1200/1640/3000 (the whole
+# document fit the ceiling). Under the soft target est_tokens may exceed N by the never-charged header (HEAD d099ec21: XML
+# 1564 / 1940 / 3085, JSON 1232 at 1200), so that bar asserts the deleted contract. What W3-N2 means now, asserted here at
+# the same three rungs in both dialects: ST (the rows — each WITH its note — fit T = N x 2.36 x 0.90 or are the floor, and
+# the cut is maximal), NOTES (every served row carries its note), NOLBL (no over_ceiling=), est_tokens still served.
+# MEASURED (HEAD d099ec21, this fixture in a scratch dir), rows / charged bytes of T: 1200 -> 7 / 2338 of 2548 (JSON 7 /
+# 2371), 1640 -> 10 / 3322 of 3483 (JSON 10 / 3388), 3000 -> 19 / 6280 of 6372 (JSON 18 / 6106); a note on every row.
+# RED on the base binary (d4325a8c): 1200 -> XML 4 rows (1355 B), JSON 6 (2033 B); 1640 -> XML 7; 3000 -> 16 / 17 — every
+# one a cut a whole row short of T (not maximal: the hard ceiling reserved the header the soft target no longer charges).
 # (tight budget 1100, re-anchored 2026-09-11 — see the CEILING MARGIN block above for the arithmetic)
 # RE-ANCHORED 2026-10-10 (train 26c): the tight rung 1100 -> 1200. lego-charge charges <lego>/<compose> at their served size
 # and #362's <tail next=> rides the bundle, so at 1100 this corpus's XML answer is the 4-row floor with its next= unpaid
 # (est_tokens 1213, over_ceiling="1" + the unpaid clause: disclosed, not silent — the knob-honesty contract, not the leak
 # this arm pins). Swept on the merged binary: 1150 / 1200 serve 4 rows at est_tokens=1121 (JSON 1098), 1250..1350 five rows
 # at 1246; 1200 sits mid-plateau with 79 tokens of headroom, one step clear of each edge. 1640 and 3000 unchanged.
-for tb in 1200 1640 3000; do
-  xe="$( xmlEst "$tb" )"; je="$( jsonEst "$tb" )"
-  if [ -z "$xe" ] || [ -z "$je" ]; then no "budget=$tb: could not read est_tokens from one of the dialects (xml='$xe' json='$je')"; continue; fi
-  if [ "$xe" -le "$tb" ]; then ok "budget=$tb: XML est_tokens=$xe fits the ceiling"
-  else no "budget=$tb: XML est_tokens=$xe blows the ceiling by $(( 100 * ( xe - tb ) / tb ))% — note bytes are not charged"; fi
-  if [ "$je" -le "$tb" ]; then ok "budget=$tb: JSON est_tokens=$je fits the ceiling"
-  else no "budget=$tb: JSON est_tokens=$je blows the ceiling — the reference side regressed"; fi
+for tb in 1200 1640 3000 900; do
+  "$BIN" "$CORPUS" --for="$TASK" --token-budget="$tb"        > "$TMP/n_$tb.xml"  2>/dev/null
+  "$BIN" "$CORPUS" --for="$TASK" --token-budget="$tb" --json > "$TMP/n_$tb.json" 2>/dev/null
+  [ "$tb" = 900 ] && continue   # 900 is read by arm 4's notes-vs-no-notes comparison (and by its CF twin), not asserted here
+  for dialect in xml json; do
+    sl="$( soft "$TMP/n_$tb.$dialect" "$tb" "$TMP/n_${tb}_$dialect.rows" "$TMP/def.$dialect" )" \
+      || { no "budget=$tb ($dialect): no <sigs> block in the answer or its reference — the charge cannot be measured"; continue; }
+    sr="$( field "$sl" rows )"; sn="$( field "$sl" notes )"
+    case "$sl" in OK*) ok "(ST) budget=$tb ($dialect): the rows WITH their notes fit the target — $sl" ;;
+                  *)   no "(ST) budget=$tb ($dialect): $sl — note bytes ride the rows and must be charged with them: fit T (or the floor), and stop only where the next row would cross it" ;; esac
+    if isnum "$sr" && isnum "$sn" && [ "$sr" -ge 1 ] && [ "$sn" -eq "$sr" ]; then ok "(NOTES) budget=$tb ($dialect): every served row carries its note ($sn of $sr) — charged, not dropped to make room"
+    else no "(NOTES) budget=$tb ($dialect): $sn note(s) on $sr row(s) — a note was dropped instead of charged"; fi
+    case "$sl" in *" over=0 "*) ok "(NOLBL) budget=$tb ($dialect): no over_ceiling= on a soft target" ;;
+                  *)            no "(NOLBL) budget=$tb ($dialect): over_ceiling= on a budget_tokens answer — a soft target is never 'over' ($sl)" ;; esac
+  done
 done
 
 # ── arm 2: the two dialects select COMPARABLE row counts (they need not be equal) ──────────────────
 # Before the fix the XML lens bought 2-2.4x the rows with the same budget, because notes were free.
+# (forbudget-soft: the rows are read off arm 1's answers — the same argv, so one run each instead of two.)
 for tb in 1200 1640 3000; do
-  xr="$( xmlRows "$tb" )"; jr="$( jsonRows "$tb" )"
-  if [ -z "$jr" ] || [ "$jr" -eq 0 ]; then no "budget=$tb: JSON selected no rows — the comparison has no denominator"; continue; fi
+  xr="$( grep -c . "$TMP/n_${tb}_xml.rows" 2>/dev/null )"; jr="$( grep -c . "$TMP/n_${tb}_json.rows" 2>/dev/null )"
+  if ! isnum "$xr" || ! isnum "$jr" || [ "$jr" -eq 0 ]; then no "budget=$tb: JSON selected no rows (xml='$xr' json='$jr') — the comparison has no denominator"; continue; fi
   if [ "$xr" -le $(( jr * 13 / 10 + 1 )) ] && [ "$xr" -ge $(( jr * 7 / 10 )) ]; then
     ok "budget=$tb: XML $xr rows vs JSON $jr rows — the two dialects agree on what fits"
   else
@@ -268,7 +426,18 @@ fullText="$( printf '%s' "$OUT800" | grep -c "stage table downstream" )"
 if [ "$fullText" -ge 1 ]; then ok "a surviving note carries its FULL text (no note-level truncation)"
 else no "a surviving note lost its tail — notes must be charged, never trimmed"; fi
 
-# ── arm 6: an explicit ceiling is NEVER silently overshot — every dialect, every rung in the band ──
+# ── arm 6: every rung of the band, every dialect: notes charged against a SOFT target — swept, not sampled ──
+# REPLACED — forbudget-soft (rule 4). Was, per rung and dialect: "est_tokens <= --token-budget OR over_ceiling=1 on the
+# root" (HEAD d099ec21: 322 of 393 runs over and unlabelled — by design: est_tokens may exceed N, and a soft target is never
+# labelled over). The per-rung invariant now, over the SAME band (700..2000), the SAME step (10) and the SAME three dialects
+# (393 runs): ST (the rows, notes included, fit T or are the floor; a cut is maximal against that dialect's no-budget answer;
+# est_tokens served; the cut names its next=) + NOLBL (no over_ceiling=) + RP (rows a rank prefix of the no-budget rows, and
+# rows(N-10) a prefix of rows(N): monotone) + CF (the default and --legend=compact XML dialects serve the same rows). The
+# budget_tokens ECHO half of the arm is unchanged. The history below records the retired disjunction and why the band
+# starts at 700; the band, the step and the dialects are kept as they were (the density is the arm's value, CHECKLIST 14).
+# MEASURED: HEAD d099ec21 green on all 393 runs (every rung a cut; the 40-row head is never complete below 2000). RED on base
+# (d4325a8c): 304 runs not maximal (the hard ceiling's header reserve), 87 labelled over_ceiling= (first: 700, xml); RP, CF
+# and the echo are green on both.
 # PLACED HERE, before arm 4, deliberately: this arm needs the NOTE-BEARING corpus (notes are the exempt-
 # adjacent bytes that make the ladder's rungs tight enough to overshoot at all), and arm 4 deletes
 # .ripwire_notes to test inertness. Moving it below arm 4 would make it green for the wrong reason.
@@ -320,48 +489,55 @@ else no "a surviving note lost its tail — notes must be charged, never trimmed
 # --legend=compact. This arm is the regression lock on that rule, swept rather than sampled, because the
 # rung a single sample happens to sit on is exactly what made the defect survive four earlier re-anchors of
 # the middle rung above: 1550 and 1600 are both inside a FLAT stretch, and the edge is at ~1610.
-sweepFail=0; sweepOver=0; sweepFirstRed=""; sweepRungs=0; sweepEchoFail=0; sweepEchoFirst=""
+sweepRungs=0; sweepEchoFail=0; sweepEchoFirst=""
+stFail=0; stFirst=""; lblFail=0; lblFirst=""; rpFail=0; rpFirst=""; cfFail=0; cfFirst=""; sweepCut=0
 tb=700
 while [ "$tb" -le 2000 ]; do
   sweepRungs=$(( sweepRungs + 1 ))
   for dialect in xml compact json; do
     case "$dialect" in
-      xml)     out="$( "$BIN" "$CORPUS" --for="$TASK" --token-budget="$tb" 2>/dev/null )" ;;
-      compact) out="$( "$BIN" "$CORPUS" --for="$TASK" --token-budget="$tb" --legend=compact 2>/dev/null )" ;;
-      json)    out="$( "$BIN" "$CORPUS" --for="$TASK" --token-budget="$tb" --json 2>/dev/null )" ;;
+      xml)     "$BIN" "$CORPUS" --for="$TASK" --token-budget="$tb"                  > "$TMP/sw.$dialect" 2>/dev/null ;;
+      compact) "$BIN" "$CORPUS" --for="$TASK" --token-budget="$tb" --legend=compact > "$TMP/sw.$dialect" 2>/dev/null ;;
+      json)    "$BIN" "$CORPUS" --for="$TASK" --token-budget="$tb" --json           > "$TMP/sw.$dialect" 2>/dev/null ;;
     esac
-    case "$dialect" in
-      json) est="$( printf '%s' "$out" | grep -o '"est_tokens":[0-9]*' | head -1 | tr -dc '0-9' )"
-            case "$out" in *'"over_ceiling":true'*)     lab=1 ;; *) lab=0 ;; esac
-            case "$out" in *"\"budget_tokens\":$tb"*)   echoed=1 ;; *) echoed=0 ;; esac ;;
-      *)    est="$( printf '%s' "$out" | grep -o 'est_tokens="[0-9]*"' | head -1 | tr -dc '0-9' )"
-            case "$out" in *'over_ceiling="1"'*)        lab=1 ;; *) lab=0 ;; esac
-            case "$out" in *"budget_tokens=\"$tb\""*)   echoed=1 ;; *) echoed=0 ;; esac ;;
-    esac
-    if [ "$echoed" -eq 0 ]; then
+    cur="$TMP/sw_$(( sweepRungs % 2 ))_$dialect.rows"; prv="$TMP/sw_$(( ( sweepRungs + 1 ) % 2 ))_$dialect.rows"
+    [ "$tb" -eq 700 ] && prv=""
+    if ! sl="$( soft "$TMP/sw.$dialect" "$tb" "$cur" "$TMP/def.$dialect" "$prv" )"; then
+      no "sweep budget=$tb ($dialect): no <sigs> block in the answer or its reference — the price and the rows a budget shapes must always be served"
+      stFail=$(( stFail + 1 )); continue
+    fi
+    case "$sl" in *" echo=1 "*) ;; *)
       sweepEchoFail=$(( sweepEchoFail + 1 ))
-      [ -z "$sweepEchoFirst" ] && sweepEchoFirst="budget=$tb ($dialect)"
-    fi
-    if [ -z "$est" ]; then
-      no "sweep budget=$tb ($dialect): no est_tokens in the answer — the price a budget shapes against must always be served"
-      sweepFail=$(( sweepFail + 1 ))
-      continue
-    fi
-    if [ "$est" -gt "$tb" ]; then
-      sweepOver=$(( sweepOver + 1 ))
-      if [ "$lab" -eq 0 ]; then
-        sweepFail=$(( sweepFail + 1 ))
-        [ -z "$sweepFirstRed" ] && sweepFirstRed="budget=$tb ($dialect) est_tokens=$est, $(( est - tb )) over, NO over_ceiling"
-      fi
-    fi
+      [ -z "$sweepEchoFirst" ] && sweepEchoFirst="budget=$tb ($dialect)" ;; esac
+    case "$sl" in OK*) ;; *)
+      stFail=$(( stFail + 1 ))
+      [ -z "$stFirst" ] && stFirst="budget=$tb ($dialect) $sl" ;; esac
+    case "$sl" in *" over=0 "*) ;; *)
+      lblFail=$(( lblFail + 1 ))
+      [ -z "$lblFirst" ] && lblFirst="budget=$tb ($dialect) $sl" ;; esac
+    case "$sl" in *" rp=1"*) ;; *)
+      rpFail=$(( rpFail + 1 ))
+      [ -z "$rpFirst" ] && rpFirst="budget=$tb ($dialect): the rows are not a rank prefix of the no-budget rows, or rows(N=$(( tb - 10 ))) are not a prefix of them — $sl" ;; esac
+    [ "$( field "$sl" rows )" != "$( field "$sl" total )" ] && sweepCut=$(( sweepCut + 1 ))
   done
+  if ! cmp -s "$TMP/sw_$(( sweepRungs % 2 ))_xml.rows" "$TMP/sw_$(( sweepRungs % 2 ))_compact.rows"; then
+    cfFail=$(( cfFail + 1 ))
+    [ -z "$cfFirst" ] && cfFirst="budget=$tb: the default and --legend=compact rows differ"
+  fi
   tb=$(( tb + 10 ))
 done
-if [ "$sweepFail" -eq 0 ]; then
-  ok "sweep 700..2000 step 10 x 3 dialects ($(( sweepRungs * 3 )) runs): every overshoot is LABELLED ($sweepOver of $(( sweepRungs * 3 )) rungs ran over the stated ceiling, every one carrying over_ceiling)"
+runs=$(( sweepRungs * 3 ))
+if [ "$stFail" -eq 0 ]; then
+  ok "(ST) sweep 700..2000 step 10 x 3 dialects ($runs runs): the rows WITH their notes fit T = N x 2.36 x 0.90 (or are the floor), every cut maximal and naming next= ($sweepCut cut)"
 else
-  no "sweep 700..2000 step 10 x 3 dialects: $sweepFail SILENT overshoot(s) — first: $sweepFirstRed"
+  no "(ST) sweep 700..2000 step 10 x 3 dialects: $stFail run(s) broke stop-at-target — first: $stFirst"
 fi
+if [ "$lblFail" -eq 0 ]; then ok "(NOLBL) sweep 700..2000 step 10 x 3 dialects ($runs runs): no over_ceiling= on any soft target"
+else no "(NOLBL) sweep 700..2000 step 10 x 3 dialects: $lblFail run(s) labelled a soft target over_ceiling= — first: $lblFirst"; fi
+if [ "$rpFail" -eq 0 ]; then ok "(RP) sweep 700..2000 step 10 x 3 dialects ($runs runs): rows are a rank prefix of the no-budget rows, monotone in N"
+else no "(RP) sweep 700..2000 step 10 x 3 dialects: $rpFail run(s) broke the rank prefix — first: $rpFirst"; fi
+if [ "$cfFail" -eq 0 ]; then ok "(CF) sweep 700..2000 step 10: the default and --legend=compact dialects serve the same rows on all $sweepRungs rungs"
+else no "(CF) sweep 700..2000 step 10: $cfFail rung(s) where the legend changed the rows — first: $cfFirst"; fi
 if [ "$sweepEchoFail" -eq 0 ]; then
   ok "sweep 700..2000 step 10 x 3 dialects: every rung ECHOES the ceiling it was shaped against (budget_tokens on the root)"
 else
@@ -375,24 +551,52 @@ rm -f "$CORPUS/.ripwire_notes"
 # postures fit — 808 / 817 — and 900 holds 865 in the full legend with margin). The notes corpus's 800 runs above are unchanged.
 bare="$( "$BIN" "$CORPUS" --for="$TASK" --token-budget=900 2>/dev/null )"
 case "$bare" in *"<note "*) no "a tree with no .ripwire_notes still emitted a <note> element";; *) ok "a tree with no notes emits none (L3 inertness)";; esac
-# L1 (2026-09-19): the 800-token fit was calibrated in the full legend, the default when it was written, and is asked
-# for by name. The DEFAULT (compact) answer on this tree carries more rows and lands over 800 at this one budget; that is
-# the --for sig ledger's exemption design (disclosure clauses exempt from the sig charge, recovered by rung zero, which
-# the compact dialect's shorter clauses rarely pay for). RE-MEASURED in the L1 fix round with a script, not a count typed
-# here: 66 budgets (300..3550 step 50) on the P4-shape fixtures, the default is over on 15 (72 functions) and 15 (12
-# functions), --legend=full on 11 and 12; the earlier "8 of 66 vs 2, 55 before" did not reproduce. What the default MUST do
-# there is say so — asserted below.
-bareFull="$( "$BIN" "$CORPUS" --for="$TASK" --token-budget=900 --legend=full 2>/dev/null )"
-bareEst="$( printf '%s' "$bareFull" | grep -o 'est_tokens="[0-9]*"' | head -1 | tr -dc '0-9' )"
-if [ -n "$bareEst" ] && [ "$bareEst" -le 900 ]; then ok "no-notes tree also fits the ceiling in the full legend (est_tokens=$bareEst)"
-else no "no-notes tree reports est_tokens='$bareEst' against a budget of 900 (full legend)"; fi
-defEst="$( printf '%s' "$bare" | grep -o 'est_tokens="[0-9]*"' | head -1 | tr -dc '0-9' )"
-if [ -z "$defEst" ]; then no "no-notes tree at the default posture carries no est_tokens="
-elif [ "$defEst" -le 900 ]; then ok "no-notes tree at the default posture fits (est_tokens=$defEst)"
-else
-    case "$bare" in *'over_ceiling="1"'*) ok "no-notes tree at the default posture is over 900 (est_tokens=$defEst) and SAYS so (over_ceiling=\"1\")" ;;
-                    *) no "no-notes tree at the default posture is over 900 (est_tokens=$defEst) in SILENCE" ;; esac
-fi
+# L1 (2026-09-19) — the retired hard-ceiling reading of this arm: the full legend fit 900, the default (compact) answer
+# carried more rows and was over 900, which it had to SAY (over_ceiling="1").
+# REPLACED — forbudget-soft (rule 4). Was: "--legend=full est_tokens <= 900" and "default est_tokens <= 900, or over and
+# labelled over_ceiling=1" (HEAD d099ec21: 1736 / 1304, unlabelled — by design). Now, on the no-notes tree at 900, both
+# postures: ST (the rows fit T, maximal against the no-budget answer, next= on the cut) + NOLBL; and CF — the two legends
+# serve the SAME rows (the retired ladder let the compact dialect's shorter clauses buy it more rows than the full legend).
+# Then the W3-N2 twin this tree exists for: at every rung arm 1 measured (and 900), in both dialects, the notes tree served
+# NO MORE rows than this tree without notes — and strictly fewer on at least one, so the charge is real, not vacuous.
+# MEASURED (HEAD d099ec21): no-notes 900 -> 13 rows in both legends (1786 B of T 1911); notes vs no-notes rows: 900 5/13,
+# 1200 7/18 (JSON 7/17), 1640 10/25 (10/24), 3000 19/40 (18/40). RED on base (d4325a8c): 7 rows default vs 6 full (CF), each a
+# cut short of T (ST). The NOTES twins are green on both binaries — W3-N2 held before the soft target and holds after it.
+"$BIN" "$CORPUS" --for="$TASK" --token-budget=900 --legend=full > "$TMP/b_900.full" 2>/dev/null
+"$BIN" "$CORPUS" --for="$TASK"                                  > "$TMP/b_def.xml"  2>/dev/null
+"$BIN" "$CORPUS" --for="$TASK" --json                           > "$TMP/b_def.json" 2>/dev/null
+printf '%s' "$bare" > "$TMP/b_900.xml"
+for posture in xml full; do
+  if sl="$( soft "$TMP/b_900.$posture" 900 "$TMP/b_900_$posture.rows" "$TMP/b_def.xml" )"; then
+    case "$sl" in OK*) ok "(ST) no-notes tree, budget=900 ($posture legend): the rows fit the target — $sl" ;;
+                  *)   no "(ST) no-notes tree, budget=900 ($posture legend): $sl" ;; esac
+    case "$sl" in *" over=0 "*) ok "(NOLBL) no-notes tree, budget=900 ($posture legend): no over_ceiling= on a soft target" ;;
+                  *)            no "(NOLBL) no-notes tree, budget=900 ($posture legend): over_ceiling= on a soft target ($sl)" ;; esac
+  else
+    no "no-notes tree, budget=900 ($posture legend): no <sigs> block in the answer or the no-budget reference"
+  fi
+done
+if [ -s "$TMP/b_900_xml.rows" ] && cmp -s "$TMP/b_900_xml.rows" "$TMP/b_900_full.rows"; then ok "(CF) no-notes tree, budget=900: the default and full legends serve the same $( grep -c . "$TMP/b_900_xml.rows" ) rows"
+else no "(CF) no-notes tree, budget=900: default rows ($( grep -c . "$TMP/b_900_xml.rows" 2>/dev/null )) != full-legend rows ($( grep -c . "$TMP/b_900_full.rows" 2>/dev/null )) — the legend bought rows"; fi
+fewer=0
+for tb in 900 1200 1640 3000; do
+  for dialect in xml json; do
+    if [ ! -s "$TMP/b_$tb.$dialect" ]; then
+      case "$dialect" in json) "$BIN" "$CORPUS" --for="$TASK" --token-budget="$tb" --json > "$TMP/b_$tb.$dialect" 2>/dev/null ;;
+                         *)    "$BIN" "$CORPUS" --for="$TASK" --token-budget="$tb"        > "$TMP/b_$tb.$dialect" 2>/dev/null ;; esac
+    fi
+    nl="$( soft "$TMP/n_$tb.$dialect" "$tb" /dev/null )"; bl="$( soft "$TMP/b_$tb.$dialect" "$tb" /dev/null )"
+    nr="$( field "$nl" rows )"; br="$( field "$bl" rows )"; nn="$( field "$nl" notes )"
+    if ! isnum "$nr" || ! isnum "$br" || ! isnum "$nn" || [ "$nn" -lt 1 ]; then
+      no "(NOTES) budget=$tb ($dialect): could not read both row counts with notes on the notes tree (notes tree '$nr' rows / '$nn' notes, no-notes tree '$br')"; continue
+    fi
+    if [ "$nr" -le "$br" ]; then ok "(NOTES) budget=$tb ($dialect): the notes tree serves $nr rows, the same tree without notes $br — notes are charged like the rows they ride"
+    else no "(NOTES) budget=$tb ($dialect): the notes tree serves $nr rows, MORE than the same tree without notes ($br) — note bytes are not charged"; fi
+    [ "$nr" -lt "$br" ] && fewer=$(( fewer + 1 ))
+  done
+done
+if [ "$fewer" -ge 1 ]; then ok "(NOTES) the notes tree served strictly fewer rows on $fewer of 8 rung/dialect pairs — the charge is real"
+else no "(NOTES) the notes tree never served fewer rows than the no-notes tree on any of 8 rung/dialect pairs — notes cost nothing (W3-N2)"; fi
 
 # ── arm 5: still deterministic and well-formed after the accounting change ─────────────────────────
 if [ "$( "$BIN" "$CORPUS" --for="$TASK" --token-budget=900 2>/dev/null )" = "$bare" ]; then ok "output is byte-identical run-to-run"
