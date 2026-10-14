@@ -2081,7 +2081,7 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
     // whole block away (serialize.h narrowLegoToRenderedSigs' own R-E note): MCP `for` served no <lego> at all where the
     // CLI served six rows.
     const std::string mcpLegoRootPrefix = flRootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( flRootArg );
-    if( !legoStr.empty() && narrowLegoToRenderedSigs( ing, legoScoped, sigsStr, mcpLegoRootPrefix ) )
+    if( !legoStr.empty() && narrowLegoToRenderedSigs( ing, legoScoped, sigsRowsAtTarget( sigsStr, mcpSigsCut ), mcpLegoRootPrefix ) )   // forbudget-soft
     {
         legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount, &implementors ); } );   // R-R: the re-render dropped the root its first render (above) passed
     }
@@ -4568,6 +4568,9 @@ inline FromTraceResult fromTraceText( const std::string& root, const std::string
     FromTraceInputs in;
     in.bundleBudgetBytes = budgetTokens > 0 ? rw::budgetBytesForTokens( budgetTokens )
                                             : rw::kForPayloadBudgetBytes;
+    // forbudget-soft (sibling of the CLI --from-trace): the caller's budget_tokens is named on the root and read as a SOFT
+    // target (no ceiling ladder, no over_ceiling for it) — this twin used to shape by it without naming it at all
+    in.budgetTokens = budgetTokens;
     in.fanIn  = &fanIn;
     in.impure = &impure;
     in.redact = redact;

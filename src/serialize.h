@@ -931,10 +931,11 @@ inline constexpr std::size_t kForCapTailSigBytes    = 96;
 // sections + <sigs>), far above a typical answer: hitting it is a BUG SIGNAL (a recursion, a dump, a head far wider than any
 // question needs), never a budget. A default answer that hits it discloses over_ceiling="1" on the root, <sigs capped="1"
 // next=…> (the continuation serves every row: an explicit target is never cut by this guard, see max(guard, T)) and
-// kForRunawayGuardNote. The value is set by the pre-registered rule (forbudget-soft PLAN §G): at least 4 x the target and
-// 2 x the largest complete default payload measured on the round-2 --for argv, verified with zero hits on the round-4 and
-// capsweep argv. Gate: test/forsoftbudgetcheck.sh (D4, D4b, NX2).
-inline constexpr std::size_t kForRunawayGuardBytes = 32000;
+// kForRunawayGuardNote. The value is set by the pre-registered rule (forbudget-soft PLAN §G): roundup_1000( max( 4 x the
+// target, 2 x the largest complete default payload on the round-2 --for argv ) ) = max( 30,000, 2 x 12,519 ) = 30,000 B (44
+// default-regime round-2 answers, measured on the provisional 32,000 build); verified with zero hits on the round-4-only (max
+// 13,005 B) and capsweep (max 12,094 B) argv. Gate: test/forsoftbudgetcheck.sh (D4, D4b, NX2).
+inline constexpr std::size_t kForRunawayGuardBytes = 30000;
 static_assert( kForRunawayGuardBytes >= 4 * kForPayloadBudgetBytes, "the runaway guard sits far above the default target" );
 // The reading spliced on an answer that hit the guard (and only there). It names the value so a reader (and the gate) reads the
 // guard from the answer itself. "A bug signal" is true of a default-size head; an explicitly wide --pack-top-n head is named
@@ -8833,6 +8834,29 @@ inline std::vector<std::vector<NodeId>> legoImplementorsOnSurface( const IngestR
 // every --for run whose rendered sigs happened to hit this path at all. Caught by legobundlecheck.sh going
 // red for the wrong reason (an empty lego, not a mis-narrowed one) rather than by a dedicated assertion —
 // worth a gate of its own if this class recurs.
+// forbudget-soft: the <sigs> text a DEFAULT answer's sections are scoped by — the rows up to the target cut, without the
+// past_target= rows (the last K <d> rows in emission order), so <lego>/<compose> narrow as they did when the target was a
+// ceiling and keep the shape they had (§1.3's section invariant: no section loses rows because the head was kept whole).
+// The whole block on a soft target or an answer with nothing past its target. Emission order is rank order except where the
+// docs reorder moved a doc row below the code rows (docs_after_code=): then the cut falls one row early or late — a scope
+// over- or under-approximation by that row's file, never a wrong row.
+inline std::string_view sigsRowsAtTarget( std::string_view sigsRendered, const SigsCutReport& cut ) noexcept
+{
+    if( !cut.pastTargetDisclosed || cut.pastTarget == 0 || cut.pastTarget >= cut.shown )
+    {
+        return sigsRendered;
+    }
+    const std::size_t keep = cut.shown - cut.pastTarget;
+    std::size_t       seen = 0;
+    for( std::size_t at = sigsRendered.find( "<d " ); at != std::string_view::npos; at = sigsRendered.find( "<d ", at + 3 ) )
+    {
+        if( seen++ == keep )
+        {
+            return sigsRendered.substr( 0, at );
+        }
+    }
+    return sigsRendered;
+}
 inline bool narrowLegoToRenderedSigs( const IngestResult& ing, std::vector<std::vector<NodeId>>& legoScoped,
                                       std::string_view sigsRendered, std::string_view rootPrefix = {} )
 {

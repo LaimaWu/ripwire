@@ -173,6 +173,9 @@ cmp -s "$TMP/ck5.xml" "$TMP/ck400.xml" \
     || no "(4) CLI --for moved with --top-k — the reference this parity is measured against is not what it claims"
 
 # ── (5) budget_tokens on this twin is never a SILENT overshoot — the CLI rule, stated for the dialect ─────
+# forbudget-soft (2026-10-14, rule 4): budget_tokens is now a SOFT target over the <sigs> rows on both the CLI and this twin —
+# est_tokens may exceed it and over_ceiling= never fires on it. The "est_tokens <= budget OR over_ceiling" clause described
+# below is replaced by NOLBL + ST + NX (see the arm); the echo and served-or-declared price clauses are unchanged.
 # THE FAMILY RULE (METHODOLOGY §9 #2 + #4, and the CLI half of it: fornotesbudgetcheck arm 6). A caller who
 # states a ceiling gets one of exactly two honest answers, never a third:
 #   • the price is SERVED — est_tokens= on the root — and then est_tokens <= budget_tokens, or the root
@@ -191,6 +194,36 @@ cmp -s "$TMP/ck5.xml" "$TMP/ck400.xml" \
 # removing the budget_tokens= splice (mcpverbs.h, the H9 insert) fails the echo clause on every rung.
 mcp_for_budget(){ printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"%s","task":"%s","budget_tokens":%s}}}\n' \
                          "$CORPUS" "$1" "$2" | "$BIN" --mcp 2>/dev/null | python3 "$TMP/mcptext.py"; }
+# forbudget-soft (rule 4): the soft target's bytes per token (read from source: a missing constant FAILS every rung) and the
+# uncut reference (a wide target serves the MCP rows uncut) the ST maximality reads the next row's bytes from.
+TBPT="$( python3 -c "import re,sys; s=open(sys.argv[1]).read(); g=lambda k:float(re.search(r'inline constexpr double '+k+r' *= *([0-9.]+);',s).group(1)); print(g('kMinBytesPerToken')*g('kBudgetHeadroom'))" src/serialize.h 2>/dev/null )"
+mcp_for_budget "$INERT_Q" 100000 >"$TMP/mcp_ref.xml"
+cat > "$TMP/mcpst.py" <<'PY'
+# mcpst.py REF N BYTES_PER_TOKEN < answer: "OK|BAD ST ..." — the rows' charge (bytes inside <sigs> plus the zero cx=/ccx=/in=
+# the lean spelling elides: the ladder's entryCost) fits T or is the 1..4 floor; a cut is maximal and carries next_budget_tokens > N
+import re, sys
+def rows( s ):
+    m = re.search( r'<sigs\b([^>]*)>(.*?)</sigs>', s, re.S )
+    if not m: return None
+    out = []; elided = 0
+    for d in re.finditer( r'<d ([^>]*)>.*?</d>|<d ([^>]*)/>', m.group( 2 ), re.S ):
+        a = d.group( 1 ) or d.group( 2 ); r = re.search( r'\br="(\d+)"', a ); pr = len( d.group( 0 ).encode() )
+        c = pr + sum( n for k, n in ( ( "cx", 7 ), ( "ccx", 8 ), ( "in", 7 ) ) if not re.search( r'\b' + k + r'="', a ) )
+        elided += c - pr; out.append( ( int( r.group( 1 ) ) if r else 10**9, c ) )
+    out.sort()
+    return m.group( 1 ), [ c for _, c in out ], len( m.group( 2 ).encode() ) + elided
+try: n, bpt = int( sys.argv[ 2 ] ), float( sys.argv[ 3 ] )
+except ValueError: print( "BAD premise: no numeric budget / bytes-per-token constant" ); sys.exit( 0 )
+a, ref = rows( sys.stdin.read() ), rows( open( sys.argv[ 1 ] ).read() )
+if a is None or ref is None or not ref[ 1 ]: print( "BAD premise: no <sigs> rows (answer or uncut reference)" ); sys.exit( 0 )
+T = int( n * bpt ); attrs, ar, charged = a; k = len( ar ); bad = []
+if not ( charged <= T or k <= 4 ): bad.append( "rows charged %d B > T=%d with %d rows (floor 4)" % ( charged, T, k ) )
+if k < len( ref[ 1 ] ):
+    if charged + ref[ 1 ][ k ] <= T - 160: bad.append( "cut at %d with the next row (%d B) fitting T" % ( k, ref[ 1 ][ k ] ) )
+    nb = re.search( r'\bnext_budget_tokens="([0-9]+)"', attrs )
+    if not ( 'capped="1"' in attrs and nb and int( nb.group( 1 ) ) > n ): bad.append( "NX: a cut without capped + next_budget_tokens > %d" % n )
+print( "%s ST rows=%d/%d charged=%d T=%d%s" % ( "BAD" if bad else "OK", k, len( ref[ 1 ] ), charged, T, ( ": " + "; ".join( bad ) ) if bad else "" ) )
+PY
 for tb in 900 1200 1600 2000 6000; do
     b="$( mcp_for_budget "$INERT_Q" "$tb" )"
     root="$( printf '%s' "$b" | sed -n 's/^\(<[^>]*>\).*/\1/p' | head -1 )"
@@ -204,11 +237,17 @@ for tb in 900 1200 1600 2000 6000; do
     esac
     est="$( printf '%s' "$root" | grep -o 'est_tokens="[0-9]*"' | head -1 | tr -dc '0-9' )"
     if [ -n "$est" ]; then
-        case "$root" in *'over_ceiling="1"'*) lab=1 ;; *) lab=0 ;; esac
-        if [ "$est" -le "$tb" ] || [ "$lab" -eq 1 ]; then
-            ok "(5) budget_tokens=$tb: price SERVED and honest (est_tokens=$est, over_ceiling=$lab)"
+        # forbudget-soft (rule 4): MCP `for` budget_tokens is a SOFT target over the <sigs> rows, so "est_tokens <= budget OR
+        # over_ceiling" is replaced by NOLBL (never over_ceiling= on budget_tokens; est_tokens may exceed it) + ST (the rows'
+        # charged bytes fit T = N x kMinBytesPerToken x kBudgetHeadroom, or are the rank 1..4 floor; a cut is maximal against
+        # the uncut wide-target answer) + NX (a cut carries next_budget_tokens= above N). RED on base (d4325a8c): over_ceiling="1"
+        # at 900/2000 and a hard cut far short of T (900: 4 rows).
+        st="$( printf '%s' "$b" | python3 "$TMP/mcpst.py" "$TMP/mcp_ref.xml" "$tb" "$TBPT" )"
+        case "$root" in *'over_ceiling'*) lab=1 ;; *) lab=0 ;; esac
+        if [ "$lab" -eq 0 ] && [ "${st%% *}" = OK ]; then
+            ok "(5) budget_tokens=$tb: price SERVED (est_tokens=$est), no over_ceiling on the soft target, $st"
         else
-            no "(5) budget_tokens=$tb: est_tokens=$est exceeds the stated ceiling by $(( est - tb )) with NO over_ceiling — a silent overshoot on the MCP twin"
+            no "(5) budget_tokens=$tb: est_tokens=$est over_ceiling=$lab (NOLBL: must be 0) — $st"
         fi
     else
         case "$root" in

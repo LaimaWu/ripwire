@@ -15,8 +15,10 @@
 #     for the same symbol (one canonical id form across lenses — the --plan-lanes prerequisite).
 #   * --for and --pack-task agree on in= for every symbol both bundles name (never 0-vs-real).
 #   * no bundle asserts in="0" without a fan-in source: --from-trace OMITS the attribute instead.
-#   * the added attributes are ACCOUNTED for, not overflowed — a --token-budget=N run still fits its own
-#     reported byte budget, and --for's est_tokens still matches the bytes actually delivered.
+#   * the added attributes are ACCOUNTED for, not overflowed — a --token-budget=N run's SECTIONS still fit its own
+#     reported ceiling (forbudget-soft: an explicit --pack-task --token-budget is a soft target — the header is never
+#     charged and never labelled over_ceiling; the default --pack-task keeps the hard fit-or-label rule), and --for's
+#     est_tokens still matches the bytes actually delivered.
 #   * determinism (run twice → byte-identical) + well-formed XML on all three verbs.
 # Mutation-tested: the n=-presence assertion is checked to actually FAIL on a row stripped of n=.
 # Exits non-zero on any failure.
@@ -198,16 +200,20 @@ for B in 600 1200 6000; do
     # label is the ladder's colon note (or the root attribute), never the bare word.
     OVERLBL="$( sed -n 's/.*<!-- ripwire task bundle\(.*\)-->.*/\1/p' "$TMP/b.$B" | grep -cE 'over_ceiling(="1"|:)' )"
     [ "${OVERLBL:-0}" -gt 0 ] && OVERLBL=1 || OVERLBL=0
-    [ "$BYTES" -gt "$CEILTOL" ] && OVERREAL=1 || OVERREAL=0
-    if [ -z "$BUDGET" ] || [ -z "$CEIL" ]; then
-        no "--token-budget=$B: header reported no budget/ceiling — the ledger is unreadable"
-    elif [ "$OVERREAL" = "$OVERLBL" ]; then
-        if [ "$OVERREAL" = 0 ]; then ok "--token-budget=$B: delivered $BYTES B <= ceiling $CEIL B * 1.15 first-entry tolerance (budget $BUDGET B), no over_ceiling claimed"
-        else                         ok "--token-budget=$B: delivered $BYTES B past ceiling $CEIL B * 1.15 and SAYS over_ceiling (the ladder's honest rung)"; fi
-    elif [ "$OVERREAL" = 1 ]; then
-        no "--token-budget=$B: delivered $BYTES B OVERFLOWS ceiling $CEIL B even at the 1.15 single-entry tolerance, with NO over_ceiling label"
+    grep -qE '^<ctx [^>]* over_ceiling=' "$TMP/b.$B" && OVERLBL=1
+    # forbudget-soft (rule 4): an EXPLICIT --pack-task --token-budget is a SOFT target. The biconditional above (whole document
+    # <= ceiling*1.15 iff no over_ceiling) priced the header against a hard ceiling; it is replaced by NOLBL (never over_ceiling=
+    # / an "over_ceiling:" note on an explicit budget) + ST (the SECTIONS — everything past the root and its header comments —
+    # fit the ledger's ceiling*1.15: the quota cascade is unchanged, the header is never charged) + the legend names the soft
+    # target. RED on base (d4325a8c): 600/1200 carry over_ceiling="1" and a legend without "soft token target". The hard twin
+    # (the DEFAULT --pack-task keeps fit-or-label) follows the loop.
+    PAY="$( python3 -c 'import re,sys; s=open(sys.argv[1],"rb").read(); m=re.match(rb"<ctx [^>]*>(?:<!--.*?-->)*",s,re.S); print(len(s)-m.end() if m else "")' "$TMP/b.$B" 2>/dev/null )"
+    if [ -z "$BUDGET" ] || [ -z "$CEIL" ] || [ -z "$PAY" ]; then
+        no "--token-budget=$B: header reported no budget/ceiling (or no root to split the sections off) — the ledger is unreadable"
+    elif [ "$OVERLBL" = 0 ] && [ "$PAY" -le "$CEILTOL" ] && grep -q 'soft token target' "$TMP/b.$B"; then
+        ok "--token-budget=$B: soft target — sections $PAY B <= ceiling $CEIL B * 1.15 (document $BYTES B, header uncharged), no over_ceiling, legend names the soft target"
     else
-        no "--token-budget=$B: delivered $BYTES B FITS ceiling $CEIL B * 1.15 yet the header claims over_ceiling"
+        no "--token-budget=$B: soft target broken — over_ceiling=$OVERLBL (must be 0), sections $PAY B vs ceiling*1.15 $CEILTOL B, soft-target legend $( grep -c 'soft token target' "$TMP/b.$B" )"
     fi
     # the truncation ledger must still reconcile: every "kept X of Y" has X <= Y
     python3 - "$TMP/b.$B" <<'PY' || no "--token-budget=$B: truncation ledger does not reconcile"
@@ -218,6 +224,19 @@ sys.exit( 1 if bad else 0 )
 PY
 done
 [ $fail -eq 0 ] && ok "truncation ledgers reconcile (kept <= total on every section)"
+# (twin) the DEFAULT --pack-task (no --token-budget) keeps its HARD ceiling: the biconditional this arm used to state for every
+# budget — the document fits ceiling*1.15 iff it carries no over_ceiling label (a fitting answer that claims over_ceiling fails too).
+"$BIN" "$FIX" --no-cache --pack-task="$TASK" --legend=full >"$TMP/b.def" 2>/dev/null
+D_BYTES="$( wc -c < "$TMP/b.def" | tr -d ' ' )"; D_CEIL="$( grep -o 'ceiling [0-9]*' "$TMP/b.def" | head -1 | tr -dc '0-9' )"
+D_LBL="$( sed -n 's/.*<!-- ripwire task bundle\(.*\)-->.*/\1/p' "$TMP/b.def" | grep -cE 'over_ceiling(="1"|:)' )"
+grep -qE '^<ctx [^>]* over_ceiling="1"' "$TMP/b.def" && D_LBL=1
+if [ -z "$D_CEIL" ] || [ -z "$D_BYTES" ]; then
+    no "(twin) default --pack-task: header reported no ceiling — the hard ledger is unreadable"
+elif { [ "$D_BYTES" -le $(( D_CEIL * 115 / 100 )) ] && [ "${D_LBL:-0}" -eq 0 ]; } || { [ "$D_BYTES" -gt $(( D_CEIL * 115 / 100 )) ] && [ "${D_LBL:-0}" -gt 0 ]; }; then
+    ok "(twin) default --pack-task: hard ceiling honest — $D_BYTES B vs ceiling $D_CEIL B * 1.15, over_ceiling label=${D_LBL:-0}"
+else
+    no "(twin) default --pack-task: $D_BYTES B vs ceiling $D_CEIL B * 1.15 with over_ceiling label=${D_LBL:-0} — fit-or-label broken on the hard default"
+fi
 
 # ── 5b) W3FIX M1 — the FIXTURE BLIND SPOT the arm above had: a THREE-WORD task ──────────────────────────
 # $TASK is "compute perimeter distance" — 26 bytes. The header echoes the task TWICE (verbatim in task=, and
@@ -234,17 +253,24 @@ else
         "$BIN" "$FIX" --no-cache --pack-task="$LONGTASK" --token-budget=$B --legend=full >"$TMP/lt.$B" 2>/dev/null
         LT_BYTES="$( wc -c < "$TMP/lt.$B" | tr -d ' ' )"
         LT_CEIL="$( grep -o 'ceiling [0-9]*' "$TMP/lt.$B" | head -1 | tr -dc '0-9' )"
-        # the disclosure lives in the header COMMENT — read only up to the first "-->" so a body cannot supply it
-        LT_HDR="$( head -c 6000 "$TMP/lt.$B" | sed -e 's/-->.*//' )"
-        if [ -z "$LT_CEIL" ]; then
-            no "5b --token-budget=$B (320-byte task): header reported no ceiling — the ledger is unreadable"
-        elif [ "$LT_BYTES" -le $(( LT_CEIL * 115 / 100 )) ]; then
-            ok "5b --token-budget=$B (320-byte task): delivered $LT_BYTES B <= ceiling $LT_CEIL B * 1.15"
-        elif printf '%s' "$LT_HDR" | grep -q 'over_ceiling'; then
-            ok "5b --token-budget=$B (320-byte task): $LT_BYTES B over ceiling $LT_CEIL B and DISCLOSES over_ceiling"
-        else
-            no "5b --token-budget=$B (320-byte task): $LT_BYTES B past ceiling $LT_CEIL B * 1.15 in SILENCE"
-        fi
+        # forbudget-soft (rule 4): "fit ceiling*1.15 or SAY over_ceiling" is gone on an explicit budget (a soft target labels
+        # nothing; the old grep -q 'over_ceiling' then passed on the legend's own "no over_ceiling" words). Replaced by HL + NOLBL
+        # + the floor: the 320-byte task rides VERBATIM in task= and in the header echo, no clause is dropped "(ceiling)", no
+        # task_echo: dropped, no over_ceiling= / "over_ceiling:" note, a ranking section with >= 1 row ships, and the sections
+        # fit ceiling*1.15. RED on base (d4325a8c: over_ceiling="1" + the "over_ceiling: the header floor" note).
+        LT_HDR="$( python3 -c 'import re,sys; s=open(sys.argv[1],encoding="utf-8").read(); m=re.match(r"<ctx [^>]*>(?:<!--.*?-->)*",s,re.S); print(m.group(0) if m else "")' "$TMP/lt.$B" 2>/dev/null )"
+        LT_PAY="$( python3 -c 'import re,sys; s=open(sys.argv[1],"rb").read(); m=re.match(rb"<ctx [^>]*>(?:<!--.*?-->)*",s,re.S); print(len(s)-m.end() if m else "")' "$TMP/lt.$B" 2>/dev/null )"
+        lt_bad=""
+        [ -n "$LT_CEIL" ] && [ -n "$LT_PAY" ] || lt_bad="$lt_bad; no ceiling ledger / no root (premise)"
+        printf '%s' "$LT_HDR" | grep -qF "<ctx task=\"$LONGTASK\"" || lt_bad="$lt_bad; task= not verbatim"
+        printf '%s' "$LT_HDR" | grep -qF "ripwire task bundle for \"$LONGTASK\"" || lt_bad="$lt_bad; header task echo dropped"
+        printf '%s' "$LT_HDR" | grep -qE '\(ceiling\)|task_echo: dropped' && lt_bad="$lt_bad; a header clause/echo dropped at the ceiling"
+        printf '%s' "$LT_HDR" | grep -qE 'over_ceiling(="1"|:)|^<ctx [^>]* over_ceiling=' && lt_bad="$lt_bad; over_ceiling on a soft target"
+        grep -qE '<sigs shown="[1-9][0-9]*"[^>]*><d ' "$TMP/lt.$B" || lt_bad="$lt_bad; no ranking row served (floor)"
+        [ -n "$LT_PAY" ] && [ -n "$LT_CEIL" ] && [ "$LT_PAY" -gt $(( LT_CEIL * 115 / 100 )) ] && lt_bad="$lt_bad; sections $LT_PAY B past ceiling $LT_CEIL B * 1.15"
+        [ -z "$lt_bad" ] \
+            && ok "5b --token-budget=$B (320-byte task): $LT_BYTES B, task echoed verbatim, no header drop, no over_ceiling, floor ranking served, sections $LT_PAY B <= ceiling $LT_CEIL B * 1.15" \
+            || no "5b --token-budget=$B (320-byte task): $LT_BYTES B${lt_bad}"
     done
 fi
 

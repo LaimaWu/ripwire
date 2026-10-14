@@ -83,18 +83,22 @@ done
 # 942, 1000 six rows at 940 / 989 — 60 tokens of headroom in the full legend, the dialect this arm measures (the 2026-09-12
 # re-anchor's 36-token posture or better); 1025+ seven rows at 987. The assertions are unchanged.
 OUT2="$( "$BIN" "$TMP/tiny" --for="widget routine dispatcher" --token-budget=1000 --no-cache --legend=full 2>/dev/null )"
-EST2="$( printf '%s' "$OUT2" | grep -o 'est_tokens="[0-9]*"' | head -1 | tr -dc '0-9' )"
-if [ -n "$EST2" ] && [ "$EST2" -le 1000 ]; then
-    ok "arm2: --token-budget=1000 fits the ceiling in the full legend (est_tokens=$EST2)"
-else
-    no "arm2: --token-budget=1000 est_tokens=${EST2:-unreadable} exceeds the ceiling — the legend clause is too expensive"
-fi
+# forbudget-soft (owner decisions 2026-10-14; rule 4): --token-budget on --for is a SOFT target charged against the <sigs>
+# ROWS only — the header (this root= clause included) is never charged and never labelled "over". The arm's subject, "the
+# clause's cost", is therefore asserted where it now lives: the clause costs NO row (the full legend, which carries it at
+# length, serves exactly the rows the compact default does at the same target), and neither answer carries over_ceiling=.
 OUT2D="$( "$BIN" "$TMP/tiny" --for="widget routine dispatcher" --token-budget=1000 --no-cache 2>/dev/null )"
-EST2D="$( printf '%s' "$OUT2D" | grep -o 'est_tokens="[0-9]*"' | head -1 | tr -dc '0-9' )"
-if [ -n "$EST2D" ] && { [ "$EST2D" -le 1000 ] || printf '%s' "$OUT2D" | head -c 600 | grep -q ' over_ceiling="1"'; }; then
-    ok "arm2: the default answer at --token-budget=1000 fits or says it does not (est_tokens=$EST2D)"
+rows2(){ printf '%s' "$1" | python3 -c 'import re,sys; m=re.search(r"<sigs\b[^>]*>(.*?)</sigs>",sys.stdin.read(),re.S); print("|".join(re.findall(r"<d [^>]*\bn=\"([^\"]*)\"",m.group(1))) if m else "")'; }
+R2F="$( rows2 "$OUT2" )"; R2D="$( rows2 "$OUT2D" )"
+if [ -n "$R2F" ] && [ "$R2F" = "$R2D" ]; then
+    ok "arm2: --token-budget=1000: the full legend's clause costs no row (full rows == compact rows: $( printf '%s' "$R2F" | tr '|' '\n' | grep -c . ))"
 else
-    no "arm2: the default answer at --token-budget=1000 is over (est_tokens=${EST2D:-unreadable}) with no over_ceiling label"
+    no "arm2: --token-budget=1000: full rows '${R2F:0:80}' != compact rows '${R2D:0:80}' — a header clause is being charged to the rows"
+fi
+if [ -n "$OUT2D" ] && ! printf '%s%s' "$OUT2" "$OUT2D" | grep -q ' over_ceiling="1"'; then
+    ok "arm2: --token-budget=1000: neither dialect labels a soft target over_ceiling"
+else
+    no "arm2: --token-budget=1000: over_ceiling=\"1\" on a soft target (or the call failed)"
 fi
 if printf '%s' "$OUT2" | grep -qF "$CLAUSE_SNIPPET"; then
     ok "arm2: the clause SURVIVES at --token-budget=1000 (not dropped by the ceiling ladder)"

@@ -1296,7 +1296,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "core_overlap", "core_overlap=: share of the core surface a partition reaches anyway", false, "ctx-partitions", MapHeaderRead::No, {}, "pack-task" },
     // from-trace: src/tracelocus.h (renderTraceBlock, buildTraceHeader via ctxRootOpen, the budget_tokens attr)
     { "task", "task=: the trace source this bundle maps, verbatim (a file path, stdin, or an MCP label)", false, "ctx", MapHeaderRead::No, {}, "from-trace" },
-    { "budget_tokens", "budget_tokens=N: the token budget passed (absent when none); over_ceiling=1 if est_tokens= exceeds it", false, "ctx", MapHeaderRead::No, {}, "from-trace" },
+    { "budget_tokens", "budget_tokens=N: the soft token target passed (absent when none); est_tokens= may exceed it, no over_ceiling for it", false, "ctx", MapHeaderRead::No, {}, "from-trace" },   // forbudget-soft: the caller's budget is a soft target (tracelocus.h)
     { "src", "src=/format=: the trace read and its dominant frame format, python|asan|node|compiler|generic", true, "trace", MapHeaderRead::No, {}, "from-trace" },   // also defines format=
     { "frame_lines", "frame_lines=/parsed=: frame-shaped input lines / those yielding a path:line; the rest matched no format", true, "trace", MapHeaderRead::No, {}, "from-trace" },   // also defines parsed=
     { "in_corpus", "in_corpus=: parsed frames in indexed files; always suspects= + merged= + unresolved=", true, "trace", MapHeaderRead::No, {}, "from-trace" },

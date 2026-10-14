@@ -3573,7 +3573,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // block to the RENDERED sigs' files and re-render (a byte-subset of what the budget already charged
         // for, so the bundle only shrinks; before est_tokens so the header reports the delivered size).
         if( sigsPreRendered && legoPreRendered && !legoStr.empty()
-            && narrowLegoToRenderedSigs( ing, legoScoped, sigsStr, flRootArg.empty() ? std::string_view() : rw::sarif::rootPrefixOf( flRootArg ) ) )
+            && narrowLegoToRenderedSigs( ing, legoScoped, rw::sigsRowsAtTarget( sigsStr, forSigsCut ),   // forbudget-soft: scoped at the target
+                                         flRootArg.empty() ? std::string_view() : rw::sarif::rootPrefixOf( flRootArg ) ) )
         {
             legoStr = captureXml( [ & ]( std::FILE* f ) { packLego( f, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount, &g.implementors ); } );
         }
@@ -3748,6 +3749,15 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             // fix round 4: the hops budget-cut marker's present-only clause says what the empty element is
             sectionsStubNote += headerParts.compactLegend ? kForHopsBudgetCutLegendCompact : kForHopsBudgetCutLegend;
+            // forbudget-soft: the marker carries no row, so the readings only hop rows could need (the via="name" and the
+            // owner qword clauses) have nothing to define — cleared as the old attribute-only shape cleared them, so a
+            // spent target answers byte-identically with and without the owner plan (ownerhopcheck (B2)); the bundle legend stays
+            if( headerParts.viaPresent || headerParts.ownerPresent )
+            {
+                headerParts.viaPresent   = false;
+                headerParts.ownerPresent = false;
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+            }
         }
 
         // ── DEEP-TAIL d2: render the file-grain tail, funded LAST (see serialize.h kForFileTailShownCap) ──

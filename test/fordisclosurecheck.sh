@@ -24,14 +24,13 @@
 #      against a trunk where every conceptual query still took the body walk. The rule is unchanged;
 #      only the set of shapes it has to hold across grew, and the compact shape had inherited its own
 #      fresh copy of the silent branch, fixed at that merge.)
-#   2) the ceiling-exhausted case (allowance fully consumed by the signature bundle) discloses as
-#      the ATTRIBUTE ALONE — bodies="0" reason="budget", no legend, no section element, because
-#      only the attribute has reserved bytes at a spent ceiling (D10's "trims to fit" is a contract
-#      too: fornotesbudgetcheck/forrootlegendcheck hold est_tokens to the stated ceiling at these
-#      budgets, and the ~half-KB legend has no reserve there). The <sigs> block stays intact and
-#      byte-identical to the --signatures-only run, and est_tokens moves by at most the attribute's
-#      own worth. The no-fit-but-allowance-exists case (forautobodycheck #3b) keeps its richer
-#      shell + legend disclosure — those budgets can pay for them.
+#   2) the target-exhausted case (the explicit --token-budget spent by the signature rows) discloses on
+#      the root — bodies="0" reason="budget" — and, since forbudget-soft (2026-10-14: an explicit
+#      --token-budget is a SOFT target over the <sigs> rows; no header ladder, no over_ceiling=), it
+#      KEEPS the bundle legend and serves the empty <bodies shown="0" capped="1"> shell (no body
+#      bytes): the old attribute-only shape existed to fit a hard byte ceiling that is gone. The <sigs>
+#      block stays intact and byte-identical to the --signatures-only run, and est_tokens prices the
+#      extra disclosure bytes (rises, at no more than one token per kMinBytesPerToken bytes).
 #   3) --for --json serves no bodies BY DESIGN and says so: "bundle":"sigs" is always present
 #      (the B1.4 rule — a reader must be able to tell "genuinely none" from "not in this dialect").
 #   4) the MCP `for` verb (and batch's for sub-query — same builder, forTaskText) serves the
@@ -112,8 +111,10 @@ else
     no "#1b compact route, ceiling exhausted: a <hops> other than the empty counted marker leaked past a spent ceiling ($ct_hops)"
 fi
 # #1c (fix round 4): the cut file tail under the same spent ceiling carries the call that lists the files it left out —
-# the --for file page — and that call answers (rc 0, a <files> page holding at least the tail's total). Negative: the
-# default regime's tail (no --token-budget) is unchanged — no next= (a named deferral).
+# the --for file page — and that call answers (rc 0, a <files> page holding at least the tail's total).
+# forbudget-soft (rule 4, decision D-4): a capped <tail> is continued in EVERY regime, so the old negative "the default
+# regime's tail carries no next=" is replaced by its positive: the default (no --token-budget) capped tail carries the same
+# file-page next=, and that page holds at least the default tail's total. RED on base (d4325a8c: the default tail has no next=).
 ct_tail="$( grep -oE '<tail [^>]*>' "$CT" | head -1 )"
 ct_ttot="$( printf '%s' "$ct_tail" | sed -nE 's/.* total="([0-9]+)".*/\1/p' )"
 "$BIN" src --for="$CONCTASK" --limit=40 --no-cache >"$TMP/cpage" 2>/dev/null; cp_rc=$?
@@ -124,12 +125,26 @@ cp_tot="$( grep -oE '^<files [^>]*>' "$TMP/cpage" | sed -nE 's/.* total="([0-9]+
     || no "#1c compact route, ceiling exhausted: the cut <tail> has no working next= (tail '$ct_tail', page rc=$cp_rc total='${cp_tot:-none}')"
 "$BIN" src --for="$CONCTASK" --no-cache >"$TMP/cdef" 2>/dev/null
 cd_tail="$( grep -oE '<tail [^>]*>' "$TMP/cdef" | head -1 )"
-{ [ -n "$cd_tail" ] && [ "${cd_tail#* next=}" = "$cd_tail" ]; } \
-    && ok "#1c default regime: <tail> unchanged, no next= added ($cd_tail)" \
-    || no "#1c default regime: <tail> changed or missing ('$cd_tail') — the explicit-budget next= leaked into the default"
-grep -q 'bundle=compact:' "$CT" \
-    && no "#1b compact route, ceiling exhausted: the legend leaked past a spent ceiling (no reserve there)" \
-    || ok "#1b compact route, ceiling exhausted: legend dropped (only the attribute's reserved bytes are spent)"
+cd_ttot="$( printf '%s' "$cd_tail" | sed -nE 's/.* total="([0-9]+)".*/\1/p' )"
+if ! printf '%s' "$cd_tail" | grep -q ' capped="1"'; then
+    no "#1c default regime premise: the default <tail> is not capped ('$cd_tail') — this arm measures nothing; re-anchor it on a capped tail"
+elif printf '%s' "$cd_tail" | grep -qE "capped=\"1\" next=\"--for=&apos;$CONCTASK&apos; --limit=40\">\$" && [ "$cp_rc" -eq 0 ] \
+     && [ -n "$cp_tot" ] && [ -n "$cd_ttot" ] && [ "$cp_tot" -ge "$cd_ttot" ] 2>/dev/null; then
+    ok "#1c default regime: the capped <tail> carries the file-page next= (D-4), which pages $cp_tot files >= the tail's $cd_ttot"
+else
+    no "#1c default regime: the capped <tail> has no working file-page next= ('$cd_tail', page rc=$cp_rc total='${cp_tot:-none}')"
+fi
+# forbudget-soft (rule 4): a spent SOFT target has no header ladder, so the old "legend dropped (no reserve at a spent ceiling)"
+# arm (which only ever read the FULL legend's spelling, so it passed vacuously on the compact default) is replaced by HL: the
+# --legend=full twin keeps the bundle=compact: clause, and neither answer drops a clause "(ceiling)" or carries over_ceiling=.
+# RED on base (d4325a8c: the full twin drops route=/r=/tail "(ceiling)" and labels over_ceiling="1").
+"$BIN" src --for="$CONCTASK" --token-budget=400 --legend=full --no-cache >"$TMP/c400full" 2>/dev/null; cf_rc=$?
+if [ "$cf_rc" -eq 0 ] && grep -q 'bundle=compact:' "$TMP/c400full" && ! grep -q '(ceiling)' "$TMP/c400full" "$CT" \
+   && ! grep -q 'over_ceiling="1"' "$TMP/c400full" "$CT"; then
+    ok "#1b compact route, target exhausted: the bundle legend is kept (--legend=full carries bundle=compact:), no (ceiling) drop, no over_ceiling"
+else
+    no "#1b compact route, target exhausted: legend/label (full rc=$cf_rc; bundle=compact: $( grep -c 'bundle=compact:' "$TMP/c400full" ), (ceiling) drops $( cat "$TMP/c400full" "$CT" | grep -c '(ceiling)' ), over_ceiling $( cat "$TMP/c400full" "$CT" | grep -c 'over_ceiling="1"' ))"
+fi
 grep -q '<sigs' "$CT" && ok "#1b compact route, ceiling exhausted: the <sigs> block is intact" \
     || no "#1b compact route, ceiling exhausted: the <sigs> block vanished"
 
@@ -140,12 +155,21 @@ T="$TMP/n400"
 grep -q 'bundle="auto" bodies="0" reason="budget"' "$T" \
     && ok "#2 ceiling-exhausted: bodies=\"0\" reason=\"budget\" disclosed" \
     || no "#2 ceiling-exhausted: missing bodies=\"0\" reason=\"budget\" on the <ctx> root"
-grep -q '<bodies' "$T" \
-    && no "#2 ceiling-exhausted: a <bodies> element leaked past a spent ceiling (attribute-only there)" \
-    || ok "#2 ceiling-exhausted: no <bodies> element (the attribute IS the disclosure at a spent ceiling)"
-grep -q 'bundle=auto:' "$T" \
-    && no "#2 ceiling-exhausted: the ~half-KB legend leaked past a spent ceiling (it has no reserve there)" \
-    || ok "#2 ceiling-exhausted: legend dropped (only the attribute's reserved bytes are spent)"
+# forbudget-soft (rule 4): the attribute-only shape existed to fit a hard ceiling; on a soft target the empty <bodies> shell
+# rides (shown="0", capped="1", no <b> row — the no-body-bytes arm below still holds) and the bundle legend is kept (HL, read
+# on the --legend=full twin; the compact default never spelled bundle=auto:), with no (ceiling) drop and no over_ceiling.
+# RED on base (d4325a8c: no shell, the full legend drops clauses "(ceiling)", over_ceiling="1").
+t_bodies="$( grep -oE '<bodies [^>]*>' "$T" | head -1 )"
+{ printf '%s' "$t_bodies" | grep -qE '^<bodies shown="0" total="[1-9][0-9]*" capped="1">$' && ! grep -q '<b ' "$T"; } \
+    && ok "#2 target exhausted: the empty <bodies> shell rides ($t_bodies), no body row" \
+    || no "#2 target exhausted: expected the empty <bodies shown=\"0\" total=N capped=\"1\"> shell, got '${t_bodies:-none}'"
+"$BIN" src --for="$NAMETASK" --token-budget=400 --legend=full --no-cache >"$TMP/n400full" 2>/dev/null; nf_rc=$?
+if [ "$nf_rc" -eq 0 ] && grep -q 'bundle=auto:' "$TMP/n400full" && ! grep -q '(ceiling)' "$TMP/n400full" "$T" \
+   && ! grep -q 'over_ceiling="1"' "$TMP/n400full" "$T"; then
+    ok "#2 target exhausted: the bundle legend is kept (--legend=full carries bundle=auto:), no (ceiling) drop, no over_ceiling"
+else
+    no "#2 target exhausted: legend/label (full rc=$nf_rc; bundle=auto: $( grep -c 'bundle=auto:' "$TMP/n400full" ), (ceiling) drops $( cat "$TMP/n400full" "$T" | grep -c '(ceiling)' ), over_ceiling $( cat "$TMP/n400full" "$T" | grep -c 'over_ceiling="1"' ))"
+fi
 grep -q '<b [^>]*><!\[CDATA\[' "$T" \
     && no "#2 ceiling-exhausted: emitted body bytes past an exhausted ceiling (must serve none)" \
     || ok "#2 ceiling-exhausted: no body bytes (whole-body-or-nothing still holds)"
@@ -158,7 +182,10 @@ grep -q '<sigs' "$T" && ok "#2 ceiling-exhausted: the <sigs> block is intact" \
 # first (a floor document: root over_ceiling="1", the LAST <sigs tag capped with a next=; else this arm proves nothing), then:
 # the same document with its real block removed must NOT match, and sigsblock() must start at the real tag (its span never
 # crosses a comment close). RED on dd6e4c8e.
-if grep -qE '^<ctx [^>]* over_ceiling="1"' "$T" && grep -oE '<sigs [^>]*>' "$T" | tail -1 | grep -q ' capped="1".* next="'; then
+# forbudget-soft (rule 4): the premise is re-anchored on what still holds. A soft target labels nothing (no over_ceiling=),
+# but the 400 document still has a capped <sigs> carrying next= with the header legend's sigs/next= clauses BEFORE the real
+# tag, so the two anti-forgery greps keep their teeth. Premise: no over_ceiling on the root, the LAST <sigs tag capped + next=.
+if ! grep -qE '^<ctx [^>]* over_ceiling=' "$T" && grep -oE '<sigs [^>]*>' "$T" | tail -1 | grep -q ' capped="1".* next="'; then
     python3 -c 'import sys; s=open(sys.argv[1],"rb").read(); a=s.rfind(b"<sigs"); b=s.find(b"</sigs>",a); sys.stdout.buffer.write(s[:a]+s[b+7:] if a>=0 and b>=0 else s)' "$T" >"$TMP/n400_nosigs"
     grep -q '<sigs' "$TMP/n400_nosigs" \
         && no "#2c the intact-block grep still matches with the <sigs> block removed — a legend clause spells the tag" \
@@ -167,7 +194,7 @@ if grep -qE '^<ctx [^>]* over_ceiling="1"' "$T" && grep -oE '<sigs [^>]*>' "$T" 
         && no "#2c sigsblock() starts inside the header legend comment, not at the real tag" \
         || ok "#2c sigsblock() starts at the real <sigs> tag"
 else
-    no "#2c premise: the --token-budget=400 document is no longer a floor document (root over_ceiling=\"1\", a capped <sigs> with next=) — re-anchor this arm on one that is"
+    no "#2c premise: the --token-budget=400 document has no capped <sigs> with next= (or labels over_ceiling= on a soft target) — re-anchor this arm on one that is"
 fi
 "$BIN" src --for="$NAMETASK" --token-budget=400 --signatures-only --no-cache >"$TMP/n400so" 2>/dev/null
 sigsblock "$T" >"$TMP/s_a"; sigsblock "$TMP/n400so" >"$TMP/s_s"
@@ -177,9 +204,14 @@ diff -q "$TMP/s_a" "$TMP/s_s" >/dev/null \
     || no "#2 ceiling-exhausted: the disclosure changed the <sigs> bytes"
 ET_T=$( grep -o 'est_tokens="[0-9]*"' "$T" | head -1 | grep -o '[0-9]*' )
 ET_S=$( grep -o 'est_tokens="[0-9]*"' "$TMP/n400so" | head -1 | grep -o '[0-9]*' )
-{ [ -n "${ET_T:-}" ] && [ -n "${ET_S:-}" ] && [ $(( ET_T - ET_S )) -ge 0 ] && [ $(( ET_T - ET_S )) -le 30 ]; } \
-    && ok "#2 ceiling-exhausted: est_tokens moved by only the attribute's worth ($ET_T vs $ET_S, band 0..30)" \
-    || no "#2 ceiling-exhausted: est_tokens delta out of band (tight=$ET_T vs sig-only=$ET_S — the disclosure leaked more than its reserve)"
+# forbudget-soft (rule 4): the old band (0..30 tokens: the attribute's reserved worth) priced a disclosure squeezed under a hard
+# ceiling; the legend clause and the <bodies> shell now ride, so the band is replaced by honest pricing of the extra bytes:
+# est_tokens rises (>= 1) and by no more than one token per kMinBytesPerToken (2.36) bytes of the byte delta (+1 rounding).
+BY_T=$( wc -c <"$T" | tr -d ' ' ); BY_S=$( wc -c <"$TMP/n400so" | tr -d ' ' )
+ET_MAX=$( python3 -c 'import math,sys; print(math.ceil(max(0,int(sys.argv[1])-int(sys.argv[2]))/2.36)+1)' "${BY_T:-0}" "${BY_S:-0}" 2>/dev/null )
+{ [ -n "${ET_T:-}" ] && [ -n "${ET_S:-}" ] && [ -n "${ET_MAX:-}" ] && [ "$BY_T" -gt "$BY_S" ] && [ $(( ET_T - ET_S )) -ge 1 ] && [ $(( ET_T - ET_S )) -le "$ET_MAX" ]; } \
+    && ok "#2 target exhausted: est_tokens prices the disclosure bytes ($ET_T vs $ET_S for +$(( BY_T - BY_S )) B, band 1..$ET_MAX)" \
+    || no "#2 target exhausted: est_tokens delta out of band (tight=${ET_T:-?} vs sig-only=${ET_S:-?}, bytes ${BY_T:-?} vs ${BY_S:-?}, max ${ET_MAX:-?})"
 
 # ── #3: the --json dialect names its own posture ────────────────────────────────────────────────────────
 "$BIN" src --for="$NAMETASK" --json --no-cache >"$TMP/j1" 2>/dev/null; rc=$?

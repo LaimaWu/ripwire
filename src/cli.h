@@ -924,7 +924,7 @@ inline constexpr char kHelpHead[] =
         "                               the answer and every row of it ships. A ~7.5KB payload TARGET shortens row text toward\n"
         "                               it (tail signatures and doc excerpts first; <sigs shown=S total=T capped=\"1\"> with S=T\n"
         "                               marks a shrink); rows served past it carry past_target=\"K\" (the last K rows). Only a\n"
-        "                               runaway guard (32KB, a bug signal) cuts rows: over_ceiling=\"1\" and <sigs next=> serving\n"
+        "                               runaway guard (30KB, a bug signal) cuts rows: over_ceiling=\"1\" and <sigs next=> serving\n"
         "                               them all (S printed of the T rows handed to the trim). The r=1 (top-ranked)\n"
         // §B7.5 (CA4): this said <sigs payload="capped"> — the STRING ENUM the §P8 vocabulary migration
         // replaced with the boolean capped="1" every other truncating element spells (serialize.h's own
