@@ -477,6 +477,10 @@ d = json.loads( sys.stdin.read() )
 r = { x["n"]: x for x in d.get( "enclosing", [] ) }.get( "NAMED", {} )
 sys.exit( 0 if r.get( "reads" ) == 3 and r.get( "reads_at" ) == [ "lib/reader.py:4", "lib/reader.py:7", "test_reader.py:4" ] else 1 )' \
     && ok "(P) MCP grep enclosing NAMED: reads 3 and the same reads_at as the CLI" || no "(P) MCP grep NAMED: $MCP_P"
+printf '%s' "$MCP_P" | python3 -c '
+import json, sys
+sys.exit( 0 if json.loads( sys.stdin.read() ).get( "next" ) == "--uses=NAMED" else 1 )' \
+    && ok "(P) MCP grep next is --uses=NAMED, as the CLI root next=" || no "(P) MCP grep next: $MCP_P"
 MCP_PC="$( mcp_call grep "{\"path\":\"$W/cc\",\"pattern\":\"C_ENT_MARK\"}" )"
 printf '%s' "$MCP_PC" | python3 -c '
 import json, sys

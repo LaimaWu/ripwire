@@ -888,11 +888,11 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
 // under --handles mints (search.h grepEncHandleCandidate decides WHICH row may carry one; handleFor mints it from the index's
 // own byte hash) — or `handle_omitted` with the CLI legend's reason. Before this a grep answer named enclosing symbols that
 // fetch_body could not take, so the agent re-read every file it had just searched.
-inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepHit> hits, bool singleRoot, std::string_view rootPrefix )
+inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepEncRow> encRows, std::span<const GrepCarrier> carriers,
+                                      bool singleRoot, std::string_view rootPrefix )
 {
-    const IngestResult&           ing     = ix.ing;
-    const Graph&                  g       = ix.g;
-    const std::vector<GrepEncRow> encRows = grepEnclosingRows( ing, g, hits );
+    const IngestResult& ing = ix.ing;
+    const Graph&        g   = ix.g;
     if( encRows.empty() )
     {
         return {};
@@ -906,10 +906,7 @@ inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepHi
     }
     const std::vector<CallerFloor> floors = callerFloors( ing, g, rowIds, &valueRefIndexOf( ix ) );
     ENSURES( floors.size() == encRows.size() );
-    // L4: the CLI <enc> carrier attributes (grepcarrier.h), by the same function. The MCP index is the RICH family
-    // (mcpindex.h ingests with value uses), so its own references carry the reads: no second ingest here.
-    const std::vector<GrepCarrier> carriers = grepCarriers( ing, valueRefIndexOf( ix ), encRows, &ing );
-    ENSURES( carriers.size() == encRows.size() );
+    EXPECTS( carriers.size() == encRows.size(), "the caller computed one carrier verdict per row (grepCarriers)" );
     std::string out = ",\"enclosing\":[";
     for( std::size_t r = 0; r < encRows.size(); ++r )
     {
@@ -1174,6 +1171,12 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
     const PageWindow           grepPage  = pageWindow( collected.raw.size(), effectiveRowCap( page.limit, grepRowCap ), page.offset );
     const std::size_t          rowCount  = grepPage.end - grepPage.begin;
     const std::vector<GrepHit> hits      = grepEnrich( ing, std::span<const GrepRawHit>( collected.raw ).subspan( grepPage.begin, rowCount ), 0, 0 );
+    // R1 <enc> rows and L4's carrier verdict, once, before the root: next= reads them (grepCarrierNext) and so does the
+    // enclosing block. The MCP index is the RICH family (mcpindex.h ingests with value uses), so its own references
+    // carry the reads — no second ingest here, unlike the lean CLI run.
+    const std::vector<GrepEncRow>  encRowsJ  = grepEnclosingRows( ing, ix.g, std::span<const GrepHit>( hits ) );
+    const std::vector<GrepCarrier> carriersJ = grepCarriers( ing, valueRefIndexOf( ix ), encRowsJ, &ing );
+    const std::string              carrierNextJ = grepCarrierNext( ing, hits, encRowsJ, carriersJ );
 
     // §R-J: the CLI's unindexed_files_scanned=/unindexed block twin (search.h grepCollectAux) — literal-only,
     // matching this verb. No --max-file-size equivalent on the MCP surface, so this uses the same
@@ -1249,6 +1252,8 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                     // P3 (L7): the CLI grep root's next= — the same three-way rule (verbs_grep.h), mcpclidiffcheck LENS2
                     + nextFieldJson( ( grepPage.end < collected.raw.size() || collected.isBudgetReached )
                                          ? nextFlag( "--grep=", pattern ) + " --offset=" + std::to_string( grepPage.end ) + " --legend=compact"
+                                     : !carrierNextJ.empty()
+                                         ? carrierNextJ
                                      : !collected.raw.empty() && grepPage.begin < collected.raw.size()
                                          ? nextFlag( "--at=", std::string( pathForJ( collected.raw[ grepPage.begin ].fileId ) ) + ":" + std::to_string( collected.raw[ grepPage.begin ].line ) )
                                          : nextFlag( "--for=", pattern ) )
@@ -1308,7 +1313,7 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                         singleRootJ, rootPrefixJ );
     // R1 (the 2026-08-12 usage mine): the CLI <enc>/<suggest> twins, appended AFTER "hits" so the
     // historic key order three other gates read (files,total,shown,capped) is byte-untouched.
-    out += grepEnclosingJson( ix, std::span<const GrepHit>( hits ), singleRootJ, rootPrefixJ );
+    out += grepEnclosingJson( ix, encRowsJ, carriersJ, singleRootJ, rootPrefixJ );
     if( collected.raw.empty() )
     {
         out += grepSuggestJson( ing, pattern );

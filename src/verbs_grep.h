@@ -230,26 +230,6 @@ std::vector<rw::GrepCarrier> grepPageCarriers( const rw::Config& cfg, const rw::
     return rw::grepCarriers( ing, vri, rows, source.reads );
 }
 
-// L4: the root next= on an uncut answer whose TOP hit sits in a carrier with reads= — the uses verb on that carrier's name
-// (the spelling floor_next= uses, countfloor.h countFloorNext), because where the value is read is the hop the at verb on
-// the hit's own line cannot give. "" otherwise: the at verb on the top hit stays the follow-up.
-std::string grepCarrierNext( const rw::IngestResult& ing, std::span<const rw::GrepHit> hits, std::span<const rw::GrepEncRow> rows,
-                             std::span<const rw::GrepCarrier> carriers )
-{
-    if( hits.empty() || hits[0].enclosingId == rw::kNoNode )
-    {
-        return {};
-    }
-    for( std::size_t r = 0; r < rows.size() && r < carriers.size(); ++r )
-    {
-        if( std::ranges::find( rows[r].ids, hits[0].enclosingId ) != rows[r].ids.end() )
-        {
-            return carriers[r].readsKnown && carriers[r].reads > 0 ? rw::nextFlag( "--uses=", ing.symbols[ hits[0].enclosingId ].name ) : std::string();
-        }
-    }
-    return {};
-}
-
 // count-floor: callers= beside evidence of a miss for THAT row is a floor (countfloor.h). Computed once per page, before
 // the legend, so the full dialect defines callers_floor= exactly when a row carries it; the MCP twin calls the same
 // function over the same rows (mcpverbs.h grepEnclosingJson), so the two surfaces cannot disagree.
@@ -1120,7 +1100,7 @@ int emitGrepReport( const rw::Config& cfg, const rw::IngestResult& ing, const rw
     {
         grepNext = rw::nextFlag( cfg.grepRegex ? "--regex=" : "--grep=", pat ) + " --offset=" + std::to_string( grepPage.end ) + " --legend=compact";
     }
-    else if( const std::string carrierNext = grepCarrierNext( ing, hits, encRows, encCarriers ); !carrierNext.empty() )
+    else if( const std::string carrierNext = rw::grepCarrierNext( ing, hits, encRows, encCarriers ); !carrierNext.empty() )
     {
         grepNext = carrierNext;   // L4: the top hit sits in a carrier the uses verb lists reads for — those reads are the next hop
     }

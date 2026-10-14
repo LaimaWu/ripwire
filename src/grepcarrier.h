@@ -25,6 +25,7 @@
 #include "countfloor.h"      // valueUsesArmedFor — where reads reach the use-site table
 #include "filter.h"          // pathTierIndexOver, compareTierThenPath — the uses verb's base row order
 #include "model.h"
+#include "nextverb.h"        // nextFlag — the root next= spelling
 #include "sarif.h"           // rootRelativeUri — the root-relative spelling every grep path takes
 #include "search.h"          // GrepEncRow — the rows this decorates
 #include "valuerefindex.h"   // ValueRefIndex — madeIn / targetsOf, the stored function values
@@ -249,6 +250,27 @@ inline std::vector<GrepCarrier> grepCarriers( const IngestResult& ing, const Val
         }
     }
     return out;
+}
+
+// The root next= on an uncut answer whose TOP hit sits in a carrier with reads= — the uses verb on that carrier's name
+// (the spelling floor_next= uses, countfloor.h countFloorNext), because where the value is read is the hop the at verb
+// on the hit's own line cannot give. "" otherwise: the at verb on the top hit stays the follow-up. The CLI grep root
+// and the MCP grep twin both call it; each caller keeps its cut-answer rule (the next page) ahead of this one.
+inline std::string grepCarrierNext( const IngestResult& ing, std::span<const GrepHit> hits, std::span<const GrepEncRow> rows,
+                                    std::span<const GrepCarrier> carriers )
+{
+    if( hits.empty() || hits[0].enclosingId == kNoNode )
+    {
+        return {};
+    }
+    for( std::size_t r = 0; r < rows.size() && r < carriers.size(); ++r )
+    {
+        if( std::ranges::find( rows[r].ids, hits[0].enclosingId ) != rows[r].ids.end() )
+        {
+            return carriers[r].readsKnown && carriers[r].reads > 0 ? nextFlag( "--uses=", ing.symbols[ hits[0].enclosingId ].name ) : std::string();
+        }
+    }
+    return {};
 }
 
 // The two list attributes as plain text items (the emitters escape them for their own dialect): reads_at= as
