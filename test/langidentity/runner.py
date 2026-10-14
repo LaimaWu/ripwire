@@ -202,12 +202,19 @@ def select_corpora(a):
         if not path or not os.path.isdir(path) or lang not in EXTS:
             print('  FAIL  --repo=%s: expected LANG:DIR, LANG one of %s, DIR an existing directory' % (spec, ' '.join(EXTS)))
             raise SystemExit(2)
-        if not want or lang in want:
-            corpora.append({'id': '%s/%s' % (lang, os.path.basename(path.rstrip('/'))), 'lang': lang,
-                            'root': os.path.abspath(path), 'kind': 'repo', 'cwd': a.root})
+        # an explicit --repo always runs: --langs filters manifest rows only, so the untouched-language repository a
+        # slice adds is never dropped silently
+        corpora.append({'id': '%s/%s' % (lang, os.path.basename(path.rstrip('/'))), 'lang': lang,
+                        'root': os.path.abspath(path), 'kind': 'repo', 'cwd': a.root})
     if not corpora:
         print('  FAIL  no corpus selected (--langs=%s matched no manifest row and no --repo)' % a.langs)
         return None
+    # the id keys the plan, the corpus line and every --intended row: a repeat would run one corpus's plan on both
+    ids = [c['id'] for c in corpora]
+    dup = sorted({i for i in ids if ids.count(i) > 1})
+    if dup:
+        print('  FAIL  duplicate corpus id(s): %s (LANG/basename must be unique; rename or drop one directory)' % ' '.join(dup))
+        raise SystemExit(2)
     return corpora
 
 

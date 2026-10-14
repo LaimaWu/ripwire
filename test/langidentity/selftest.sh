@@ -8,7 +8,7 @@ H="${1:-$HERE/../langidentitycheck.sh}"
 S="$( mktemp -d )"
 trap 'rm -rf "$S"' EXIT
 fail=0
-for v in base moved stderr msg stdout; do  # one bash per call: the variant is baked in, not exec'd through a wrapper
+for v in base moved stderr msg stdout rc; do  # one bash per call: the variant is baked in, not exec'd through a wrapper
     { printf '#!/usr/bin/env bash\nset -- %s "$@"\n' "$v"; tail -n +2 "$HERE/stub.sh"; } > "$S/$v"
     chmod +x "$S/$v"
 done
@@ -55,6 +55,7 @@ int(){ local f="$S/int$(( NARM + 1 )).tsv"; printf '%s\n' "$@" > "$f"; printf '%
 arm stderr-tag-moved 0 ' 0 DIFF ;; !--callers=<file-scope> ;; SAME \([1-9][0-9]* with zero rows' -- "$S/base" "$S/moved"
 arm stderr-extra-line 1 'DIFF .*stderr only' -- "$S/base" "$S/stderr"
 arm stderr-message-changed 1 'DIFF .*stderr only' -- "$S/base" "$S/msg"
+arm exit-status-changed 1 'ERROR .*rc base=0 head=1' -- "$S/base" "$S/rc"
 # 2. SKIP only for an empty BASE; a BASE that is named but missing is a usage error
 arm base-missing-positional 2 'no BASE binary at' -- "$S/nosuchbase" "$S/base"
 arm base-missing-env 2 'no BASE binary at' RIPWIRE_BASE="$S/nosuchbase" -- "$S/base"
@@ -71,6 +72,11 @@ arm intended-argv-not-planned 2 'not in the plan' -- "$S/base" "$S/stdout" \
 arm stdout-diff-unexplained 1 '2 DIFF \(0 intended\)' -- "$S/base" "$S/stdout"
 arm intended-exact-rows 0 'waived 1 DIFF' -- "$S/base" "$S/stdout" \
     --intended="$( int "$C$T--callers=alpha${T}test/langidentitycheck.sh" "$C$T--callers=beta${T}test/langidentitycheck.sh arm 3" )"
+# 4. corpora: an explicit --repo runs whatever --langs says; a corpus id that repeats is refused, not overwritten
+mkdir -p "$S/pyrepo" "$S/dup/gdscriptfix"
+arm repo-outside-langs-kept 0 'py/pyrepo.repo' -- "$S/base" "$S/base" --repo=py:"$S/pyrepo" --list
+arm duplicate-corpus-id-refused 2 'duplicate corpus id\(s\): gd/gdscriptfix' -- "$S/base" "$S/base" \
+    --repo=gd:"$S/dup/gdscriptfix" --list
 wait
 i=1
 while [ "$i" -le "$NARM" ]; do judge "$i"; i=$(( i + 1 )); done

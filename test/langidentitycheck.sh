@@ -22,9 +22,10 @@
 #                   wildcards: one row per DIFF), and ARM starts with the existing test/<name>check.sh whose arm pins the
 #                   new behaviour (free text may follow). A row that breaks any of this, or names a corpus or argv the
 #                   run does not plan, exits 2 before anything is compared. The summary prints how much each row waived.
-#   --repo=LANG:DIR a real repository to add as a corpus under that language tag (one of the --langs tags; anything
-#                   else exits 2). Repeatable. Callers pass what they have
-#                   (an in-sample clone of their language); the harness names none.
+#   --repo=LANG:DIR a real repository to add as a corpus under that language tag (one of the tags above; anything
+#                   else exits 2). Repeatable; runs whatever --langs says (--langs filters manifest rows only). Its id
+#                   is LANG/basename(DIR), and an id that repeats one already selected exits 2. Callers pass what they
+#                   have (an in-sample clone of their language); the harness names none.
 #   --jobs=N        argv run in parallel (default 1: the machine is usually shared)
 #   --keep=DIR      write BASE/HEAD stdout and stderr of every non-SAME argv under DIR
 #   --list          print the corpora that would run, and stop
@@ -154,7 +155,7 @@ for r in "${REPOS[@]+"${REPOS[@]}"}"; do ARGS+=( --repo "$r" ); done
 cd "$ROOT" || exit 2
 python3 -I "$DIR/runner.py" "${ARGS[@]}"
 rc=$?
-[ "$rc" = 2 ] && { echo "langidentitycheck: unusable --intended or --repo (lines above); nothing compared"; exit 2; }
+[ "$rc" = 2 ] && { echo "langidentitycheck: unusable --intended, --repo or corpus set (lines above); nothing compared"; exit 2; }
 [ "$rc" = 0 ] || fail=1
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

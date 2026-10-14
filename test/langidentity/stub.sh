@@ -6,6 +6,7 @@
 #   stderr  base plus one extra stderr line (must read DIFF)
 #   msg     base with the notice text changed, tag untouched (must read DIFF)
 #   stdout  base with one stdout byte changed on every --callers= argv (must read DIFF)
+#   rc      base with the same output but exit code 1 on every argv but the --json map (must read ERROR)
 v="$1"; shift
 case " $* " in
     *" --json "*)
@@ -26,4 +27,5 @@ esac
 printf '[math degraded] %s  (crossref.h:%d, %s — logged once per site)\n' "$msg" "$line" "$sig" >&2
 printf 'scratch: %s/stub.tmp\n' "${TMPDIR:-/tmp}" >&2
 [ "$v" = stderr ] && printf 'warning: injected stderr line\n' >&2
+[ "$v" = rc ] && exit 1
 exit 0
