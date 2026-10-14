@@ -50,6 +50,46 @@ cd "$ROOT"
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 
+# ── CALL HARNESS (speed + honesty; changes no assertion) ───────────────────────────────────────────────
+# rwcall ARGS… runs ONE ripwire call under a per-call budget (ESTCHARGE_CALL_TIMEOUT seconds, default 300; a cold
+# src/ call takes a few seconds). A call that is killed — the budget's SIGALRM or any other signal — prints its own
+# `FAIL TIMEOUT|ERROR …: ripwire <argv>` line on fd 7 (the gate's stdout, so a call inside $( ) still reports) and is
+# recorded in $TMP/call_failures, which fails the gate at the end: a hung call is a named failure, never a silent
+# shard timeout and never judged as an ordinary answer. Exit codes below 128 (3 = budget withheld, 1, 2) are returned
+# to the arm unchanged, as before. Environment prefixes (RIPWIRE_FAULT_…=1 rwcall …) reach the binary.
+# rw ROOT ARGS… is rwcall on a SHARED WARM CACHE instead of --no-cache, for the arms on the repo's own trees (src, .,
+# "$ROOT"). None of those arms is about cold extraction — each pins what the answer says — and a cache read serves
+# the same bytes as a cold parse (stdout and stderr; shown byte-identical per answer when this harness landed), so
+# they share one cache file per (root, artifact class) under $TMP (CHECKLIST 12: a per-run dir, removed on exit).
+# One file per class because the rich verbs (--doctor's rich_verbs=: for, metrics, …) read another artifact and a
+# single file handed to both is rewritten — a cold parse — on every switch. The fault-injection arms (RIPWIRE_FAULT_*,
+# INFRA_FAULT_*) and #7's first run keep --no-cache: a fault switch must not meet a cache path it was never written
+# against, and #7 then compares a cold run with a warm one.
+exec 7>&1
+CALL_BUDGET="${ESTCHARGE_CALL_TIMEOUT:-300}"
+RWC="$TMP/rwcache"; mkdir -p "$RWC"
+# rwcall_bin EXE ARGS… is the same budget and failure accounting for another executable (#13's $RIPWIRE_BASE).
+rwcall_bin(){
+    local exe=$1
+    shift
+    perl -e 'alarm shift; exec @ARGV or exit 127' "$CALL_BUDGET" "$exe" "$@"
+    local rc=$?
+    if [ "$rc" -ge 128 ]; then
+        local why="ERROR (killed by signal $(( rc - 128 )))"
+        [ "$rc" = 142 ] && why="TIMEOUT (no answer within ${CALL_BUDGET}s)"
+        printf '  FAIL  %s: ripwire %s\n' "$why" "$*" >&7
+        printf '%s: %s\n' "$why" "$*" >>"$TMP/call_failures"
+    fi
+    return "$rc"
+}
+rwcall(){ rwcall_bin "$BIN" "$@"; }
+rw(){
+    local key class=lean a
+    case "$1" in src) key=src ;; .) key=dot ;; "$ROOT") key=abs ;; *) key=other ;; esac
+    for a in "$@"; do case "$a" in --for=*|--metrics) class=rich ;; esac; done
+    rwcall "$@" --cache="$RWC/$key.$class.cache"
+}
+
 # ── BUILD-FLAVOUR / DEGRADE-OBSERVABILITY PROBE (read by #14 below) ───────────────────────────────────
 # CI runs the whole suite TWICE: once against a Release binary (catches optimizer-only bugs, e.g. the
 # ASSUME-then-defend trap) and once against the plain build — Release defines NDEBUG, which compiles
@@ -78,9 +118,9 @@ TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 # file lives in $TMP, outside the checkout, and --no-cache keeps the probe from writing next to test/fixture.
 alerts_observable=0
 printf 'not a scip index at all\n' > "$TMP/flavour.scip"
-"$BIN" test/fixture --scip="$TMP/flavour.scip" --top-k=1 --no-cache >/dev/null 2>"$TMP/flavour.err"
+rwcall test/fixture --scip="$TMP/flavour.scip" --top-k=1 --no-cache >/dev/null 2>"$TMP/flavour.err"
 grep -qF '[math degraded] --scip: corrupt/truncated index' "$TMP/flavour.err" && alerts_observable=1
-BUILD_FLAVOUR="$( "$BIN" --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
+BUILD_FLAVOUR="$( rwcall --version 2>/dev/null | sed -nE 's/^[^(]*\(([^,)]*).*/\1/p' )"
 case "$BUILD_FLAVOUR" in
     Release|RelWithDebInfo|MinSizeRel) ndebug_flavour=1 ;;
     *)                                 ndebug_flavour=0 ;;
@@ -93,6 +133,82 @@ SYM=estimateTokens
 est_of(){ grep -aoE 'est_tokens=[0-9]+' "$1" | head -1 | grep -oE '[0-9]+'; }
 bytes_of(){ wc -c < "$1" | tr -d ' '; }
 
+# ── SHARED DEFINITIONS (moved here unchanged from #11 so the sections below can run as independent chains) ───────
+#    FOR_TASK and forest_of are read by #11, #14 and #15; KEPT_NOTE/FLOOR_NOTE by #11 and #11 A7R; sigs_unpaid_twin by
+#    #11 and its sweep. Defining them before the sections fork is the only reason they live here.
+FOR_TASK="serialize the map"
+# WEAK_QUERY is #11 A9's nonsense word. It is spelled ONLY here, at top level, never inside a function: the
+# repo's own bash functions are indexed symbols, so a section body that carried the word would make it match
+# something — and forcalibfactscheck's zero-hit arm runs `--for` with this word on the repo root and requires
+# scored=0. #11 A9b below asserts this gate stays out of that query's answer.
+WEAK_QUERY="zzqqxx"
+
+# The --for lens spells est_tokens="N" QUOTED in its header comment, where the map spells it bare in its
+# stats comment — and est_of() matches the bare form, so on --for it silently read nothing. Worse, a --detail
+# bundle EMBEDS serialize.h's own comments as body text, which contain the literal `est_tokens=507` from
+# §H7's bug repro: a document-wide grep returns 507 and every rate arm scores 146 B/tok against a number
+# that came out of a quoted source file. So this extractor is HEADER-SCOPED (everything before the first
+# payload element) and takes the quoted spelling. Trap worth keeping: on a verb that emits source text,
+# grepping the whole document for your own marker reads your own source back at you.
+# The payload-element list is a denylist and therefore incomplete by construction — a bundle that emits some
+# OTHER element first (or none at all) falls back to `len(d)`, i.e. straight back into the trap. `-->` closes
+# the header comment the attribute is spliced into (main.cpp inserts it at the header's own rfind(" -->")).
+# W3-S item 5 (2026-08-19): --for's header can now legitimately hold TWO trailing comments — the main lens
+# comment, then a second, standalone "<!-- root= is the crawl root ... -->" clause (forRootRelPathsLegendShort,
+# main.cpp) appended after it closes, the same "second small comment after the first one closes" shape
+# kRootRelPathsLegend already uses at eighteen OTHER call sites (e.g. --cochange's kCochangeRepoLegend +
+# rootRelPathsLegend()). est_tokens is spliced into whichever comment is LAST (main.cpp's own
+# `headerStr.rfind(" -->")`, exactly as this comment already said), so this extractor must find the LAST
+# "-->" that precedes the payload boundary, not the FIRST — a plain `d.find(b'-->')` stopped scanning right
+# after the FIRST comment closed and missed est_tokens sitting inside the second one entirely.
+forest_of(){ python3 - "$1" <<'PYX'
+import sys, re
+d = open( sys.argv[1], 'rb' ).read()
+payload = min( ( i for i in ( d.find( b'<sigs' ), d.find( b'<lego' ), d.find( b'<bodies' ) ) if i >= 0 ), default=len( d ) )
+close = d.rfind( b'-->', 0, payload )
+cut = close + 3 if close >= 0 else payload
+m = re.search( rb'est_tokens="(\d+)"', d[ :cut ] )
+print( m.group( 1 ).decode() if m else '' )
+PYX
+}
+
+KEPT_NOTE='[over_ceiling= is 1 on the root: the ranked rows are kept, not cut for the trailing sections'
+FLOOR_NOTE='[over_ceiling= is 1 on the root: the header floor'
+# THE <sigs> UNPAID TWIN (knob-honesty-068; orchestrator rulings 2026-10-07, PROCESS rules 4/5). A capped <sigs> under a
+# hard ceiling carries next= — the call that recovers its cut — and pays for it from its rows ONLY where that makes the
+# answer fit (ruling C3). Where it cannot (the rank 1..4 floor has nothing left to shed, or the answer lands past its ceiling
+# paid or not) no row is dropped for it: the recovery handle ALWAYS ships, unpaid, and the document may then land past the
+# allowance, and only if it says so. This is not a wider allowance: every condition of the old bound still holds for
+# everything except the disclosed handle. Train 26c: the single A7 arm it guarded is superseded by the lane's A7 twin loop +
+# A7B below; the twin itself still serves the sweep and the floor arm. sigs_unpaid_twin FILE ALLOW → exit 0 iff ALL of: the root carries
+# over_ceiling="1"; the legend carries the unpaid clause defining it; <sigs> is capped and carries next="--for=…";
+# est_tokens is positive and prices the delivered bytes inside the 2.00-4.20 B/tok band (honest: it moved with the handle);
+# and the document WITHOUT the handle and its label (the next= attribute, over_ceiling="1", the clause) is within ALLOW —
+# the old bound, intact — or carries the ladder's last-rung disclosure (the header floor alone exceeds the budget: the one
+# overshoot the old bound already admitted). The rows are the ones the cut alone leaves (the C3 arm below pins them).
+sigs_unpaid_twin(){ python3 - "$1" "$2" <<'PYF'
+import sys, re
+d = open( sys.argv[ 1 ], 'rb' ).read().decode( 'utf-8', 'replace' ); allow = int( sys.argv[ 2 ] )
+clause = ' [over_ceiling=1 also when the sigs next= rides unpaid: no row is dropped to pay for it on an answer that would not fit either way]'
+root = re.search( r'<ctx [^>]*>', d ); sigs = re.search( r'<sigs [^>]*>', d )
+why = []
+if not root or ' over_ceiling="1"' not in root.group( 0 ): why.append( 'no root over_ceiling="1"' )
+if clause not in d: why.append( 'no unpaid clause' )
+nxt = re.search( r' next="--for=[^"]*"', sigs.group( 0 ) ) if sigs else None
+if not sigs or ' capped="1"' not in sigs.group( 0 ): why.append( '<sigs> not capped' )
+if not nxt: why.append( '<sigs> carries no next=' )
+est = re.search( r' est_tokens="(\d+)"', root.group( 0 ) ) if root else None
+b = len( d.encode( 'utf-8' ) )
+if not est or int( est.group( 1 ) ) <= 0 or not ( 200 <= b * 100 // int( est.group( 1 ) ) <= 420 ): why.append( 'est_tokens absent or out of band' )
+rest = b - ( len( nxt.group( 0 ) ) if nxt else 0 ) - len( ' over_ceiling="1"' ) - len( clause )
+lastRung = '[over_ceiling= is 1 on the root: ' in d   # either last-rung reason: the header floor, or (lego-charge) the kept rows
+if rest > allow and not lastRung: why.append( f'{rest} B without the handle > {allow} B (and no last-rung disclosure)' )
+print( '; '.join( why ) if why else f'{b} B, {rest} B without the handle <= {allow} B, est_tokens={est.group( 1 )}' )
+sys.exit( 1 if why else 0 )
+PYF
+}
+
+est_1(){
 # ── #1: the CHARGE band. For every payload shape, bytes/est_tokens must sit inside the calibrated B/tok
 #    band FOR THAT SHAPE. Lower bound everywhere is 2.00: the densest calibrated language is 2.36 B/tok
 #    (serialize.h kMinBytesPerToken) and 2.00 leaves rounding/envelope slack under it. The UPPER bound is
@@ -103,7 +219,7 @@ bytes_of(){ wc -c < "$1" | tr -d ' '; }
 #      BODY shapes  (<src> / <bodies> / <outline>) → <= 4.20  (kBytesPerTokenBody 3.80 + slack)
 #    Anything OUTSIDE its band is not an estimate, it is an uncharged (or double-charged) payload.
 #    Integer math throughout: rate*100. ─────────────────────────────────────────────────────────────────
-declare -a SHAPES=(
+SHAPES=(   # a plain assignment, not declare: inside est_1 a declare would be local and #7/#8/#10 read it
     "map:320:--top-k=10"
     "metrics:320:--top-k=10 --metrics"
     "sigs:320:--top-k=10 --pack-signatures"
@@ -119,7 +235,7 @@ declare -a SHAPES=(
 for entry in "${SHAPES[@]}"; do
     label="${entry%%:*}"; rest="${entry#*:}"; hi="${rest%%:*}"; args="${rest#*:}"
     # shellcheck disable=SC2086
-    "$BIN" src $args --no-cache >"$TMP/$label.out" 2>/dev/null
+    rw src $args >"$TMP/$label.out" 2>/dev/null
     B="$( bytes_of "$TMP/$label.out" )"
     E="$( est_of "$TMP/$label.out" )"
     if [ -z "$E" ] || [ "$E" -le 0 ] 2>/dev/null; then
@@ -133,13 +249,15 @@ for entry in "${SHAPES[@]}"; do
         no "#1 $label: $B B / est_tokens=$E = $(( R / 100 )).$(( R % 100 )) B/tok — OUTSIDE the 2.00-$(( hi / 100 )).$(( hi % 100 )) band (payload not charged)"
     fi
 done
+}
 
+est_2(){
 # ── #2: MONOTONE charging — adding a payload to the same map can never LOWER the reported estimate. ────
 # D7 (2026-10-08, by-design break, PROCESS rule 4): the bare map now carries the inventory tier (<inv>, the files its
 # ranked rows leave out), and a payload verb's ride-along map does not — so "the same map" is the bare map WITHOUT that
 # tier. --no-inventory is that map (the same rows, no tier; #2-rows proves both premises). The old comparison is kept
 # as #2-tier: the bare map with its tier must charge at least what the rows alone do.
-"$BIN" src --top-k=10 --no-inventory --no-cache >"$TMP/map_rows.out" 2>/dev/null
+rw src --top-k=10 --no-inventory >"$TMP/map_rows.out" 2>/dev/null
 E_MAP="$( est_of "$TMP/map_rows.out" )"
 E_TIER="$( est_of "$TMP/map.out" )"
 rows_of(){ sed 's/<inv listed="[0-9].*<\/inv>//' "$1" | grep -aoE '<f p="[^"]*"|<s t="[^"]*" n="[^"]*"' | tr '\n' ' '; }
@@ -159,14 +277,16 @@ for label in metrics sigs src bodies outline "bodies+sigs"; do
 done
 [ "$mono" = 1 ] && ok "#2 monotone: every payload shape reports est_tokens >= the bare map's ($E_MAP)" \
     || no "#2 a payload shape reported FEWER tokens than the bare map ($E_MAP) — charging is not monotone"
+}
 
+est_3(){
 # ── #3: the --token-budget GATE actually stops each payload. The audit's own repro: a budget the BARE
 #    map fits, with a payload that blows past it, must exit 3 and withhold — pre-fix both exited 0 and
 #    streamed 12 KB / 67 KB. Budget is set from the bare map's own estimate (so the map alone always
 #    fits) and each payload arm must fail it. ────────────────────────────────────────────────────────────
 TB=$(( E_MAP + 20 ))
 # D7: the control is the rows-only twin above (the bare map's tier is charged and need not fit this budget)
-"$BIN" src --top-k=10 --no-inventory --token-budget=$TB --no-cache >"$TMP/tb_map.out" 2>"$TMP/tb_map.err"
+rw src --top-k=10 --no-inventory --token-budget=$TB >"$TMP/tb_map.out" 2>"$TMP/tb_map.err"
 rc_map=$?
 [ "$rc_map" -eq 0 ] \
     && ok "#3 control: the bare map fits --token-budget=$TB (exit 0)" \
@@ -174,7 +294,7 @@ rc_map=$?
 for entry in "sigs:--pack-signatures" "src:--pack-top-n=3" "bodies:--expand=$SYM" "outline:--outline=$SYM"; do
     label="${entry%%:*}"; args="${entry#*:}"
     # shellcheck disable=SC2086
-    "$BIN" src --top-k=10 $args --token-budget=$TB --no-cache >"$TMP/tb_$label.out" 2>"$TMP/tb_$label.err"
+    rw src --top-k=10 $args --token-budget=$TB >"$TMP/tb_$label.out" 2>"$TMP/tb_$label.err"
     rc=$?
     OB="$( bytes_of "$TMP/tb_$label.out" )"
     if [ "$rc" -eq 3 ] && [ "$OB" -lt 2048 ]; then
@@ -183,25 +303,29 @@ for entry in "sigs:--pack-signatures" "src:--pack-top-n=3" "bodies:--expand=$SYM
         no "#3 $label ($args) --token-budget=$TB: expected exit 3 + withheld, got exit=$rc stdout=$OB B — the gate does not see this payload"
     fi
 done
+}
 
+est_4(){
 # ── #4 (§B7.8): the WITHHELD artifact uses the withheld_est_tokens vocabulary --recall already renamed
 #    this exact semantic to (recall.h). `est_tokens=` on a withheld artifact names a number that describes
 #    something the caller did NOT receive. XML and JSON both. ─────────────────────────────────────────────
-"$BIN" src --token-budget=1 --no-cache >"$TMP/wh.xml" 2>"$TMP/wh.err"
+rw src --token-budget=1 >"$TMP/wh.xml" 2>"$TMP/wh.err"
 grep -aq 'withheld_est_tokens="' "$TMP/wh.xml" \
     && ok "#4 XML withheld record uses withheld_est_tokens=\"…\"" \
     || no "#4 XML withheld record does not use withheld_est_tokens= (got: $( head -c 200 "$TMP/wh.xml" ))"
 grep -aqE '<r est_tokens="' "$TMP/wh.xml" \
     && no "#4 XML withheld record still spells the plain est_tokens= on the artifact it withheld" \
     || ok "#4 XML withheld record no longer spells a bare est_tokens= for the withheld artifact"
-"$BIN" src --token-budget=1 --json --no-cache >"$TMP/wh.json" 2>"$TMP/whj.err"
+rw src --token-budget=1 --json >"$TMP/wh.json" 2>"$TMP/whj.err"
 grep -aq '"withheld_est_tokens":' "$TMP/wh.json" \
     && ok "#4 JSON withheld record uses \"withheld_est_tokens\"" \
     || no "#4 JSON withheld record does not use \"withheld_est_tokens\" (got: $( head -c 200 "$TMP/wh.json" ))"
 grep -aq 'withheld_est_tokens=[0-9]* > budget=' "$TMP/wh.err" \
     && ok "#4 stderr names withheld_est_tokens vs the budget" \
     || no "#4 stderr does not name withheld_est_tokens vs budget (got: $( cat "$TMP/wh.err" ))"
+}
 
+est_5(){
 # ── #5 (§B13.4): --max-tokens=N is a CONSERVATIVE BYTE ceiling, and it must SAY SO. The delivered map
 #    honours N*2.36*0.90 bytes exactly but reports est_tokens ~81% of N, so a caller composing
 #    --max-tokens with --token-budget (which --help invites) was comparing two different currencies with
@@ -223,7 +347,7 @@ grep -aq 'withheld_est_tokens=[0-9]* > budget=' "$TMP/wh.err" \
 # L1 (2026-09-19): the CLI default legend is compact; #5's legend arms read the FULL legend's max_tokens=/over_ceiling= prose
 # from this sweep, so it asks for the full legend (byte-identical to the old default, and the larger envelope).
 for N in 100 300 400 450 500 600 800 1200 1500 3000 6000; do
-    "$BIN" src --max-tokens=$N --no-cache --legend=full >"$TMP/mt$N.out" 2>"$TMP/mt$N.err"
+    rw src --max-tokens=$N --legend=full >"$TMP/mt$N.out" 2>"$TMP/mt$N.err"
     MB="$( bytes_of "$TMP/mt$N.out" )"
     ME="$( est_of "$TMP/mt$N.out" )"
     LIM="$( awk "BEGIN{printf \"%d\", $N*2.36*0.90}" )"
@@ -264,7 +388,9 @@ done
 grep -aq 'over_ceiling=floor-alone-exceeded-fit_bytes' "$TMP/mt400.out" \
     && ok "#5 the over_ceiling marker is defined in the legend of the map that states it" \
     || no "#5 --max-tokens emitted an over_ceiling marker its own legend does not define"
+}
 
+est_5b(){
 # ── #5b (§F5): THE PROBE MUST PRICE THE SHAPE IT BUILDS. The binary search measures a rendered map; every
 #    annotation the probe did not carry became a silent breach of the very cap it was computing. All three
 #    found members, at the N where each one breached on the pre-fix binary:
@@ -322,7 +448,7 @@ PY
 for entry in "mapdiff:3000:--map-diff" "mapdiff2:12000:--map-diff" "churn:800:--rank-by=churn" "churn2:1200:--rank-by=churn" "payload:6000:--pack-signatures" "payload2:6000:--expand=$SYM"; do
     label="${entry%%:*}"; rest="${entry#*:}"; N="${rest%%:*}"; args="${rest#*:}"
     # shellcheck disable=SC2086
-    "$BIN" src --max-tokens=$N $args --no-cache >"$TMP/p_$label.out" 2>/dev/null
+    rw src --max-tokens=$N $args >"$TMP/p_$label.out" 2>/dev/null
     PB="$( mapbytes_of "$TMP/p_$label.out" )"
     LIM="$( awk "BEGIN{printf \"%d\", $N*2.36*0.90}" )"
     OVER=0;  head -c "$PB" "$TMP/p_$label.out" | grep -aq 'over_ceiling=1' && OVER=1
@@ -334,7 +460,9 @@ for entry in "mapdiff:3000:--map-diff" "mapdiff2:12000:--map-diff" "churn:800:--
         no "#5b --max-tokens=$N $args: map portion $PB B EXCEEDS the $LIM B ceiling, unlabelled — the probe priced a shape it did not build"
     fi
 done
+}
 
+est_5c(){
 # ── #5c: mapbytes_of must keep a root disclosure that sits between the root tag and <bodies> (a REAL
 #    root-priced clause) while still EXCLUDING the bodies section's own legend, which ALSO sits between the
 #    root tag and the literal "<bodies" tag but is payload, not map — CodeRabbit PR #292 finding 4052087945,
@@ -367,7 +495,9 @@ if [ "$GOT_5C" = "$WANT_5C" ]; then
 else
     no "#5c mapbytes_of: got $GOT_5C B, want $WANT_5C B — either the root disclosure was dropped or the bodies legend leaked into the map charge"
 fi
+}
 
+est_5d(){
 # ── #5d (§F5): CHARGE note= TO THE --max-tokens CEILING — CodeRabbit PR #292 finding 4052087920. The
 #    bundle selector (bundleDoc.rootAttrBytes) already counted noteBytes, but neither the binary-search
 #    that PICKS mapTopK nor the final over_ceiling verdict did — both land inside the same `<ctx ...>` open
@@ -385,7 +515,7 @@ git -C "$F5D" config user.email ripwire@example.invalid
 git -C "$F5D" config user.name ripwire-gate
 git -C "$F5D" add -A
 git -C "$F5D" commit -qm base
-"$BIN" "$F5D" --max-tokens=990 --expand=run --no-cache >"$TMP/f5d.out" 2>/dev/null
+rwcall "$F5D" --max-tokens=990 --expand=run --no-cache >"$TMP/f5d.out" 2>/dev/null
 PB_5D="$( mapbytes_of "$TMP/f5d.out" )"
 LIM_5D=$(( 990 * 2124 / 1000 ))   # N*2.36*0.90, integer (awk's earlier "%d" truncation, same formula every other arm uses)
 OVER_5D=0; head -c "$PB_5D" "$TMP/f5d.out" | grep -aq 'over_ceiling=1' && OVER_5D=1
@@ -410,15 +540,17 @@ grep -aq 'max_tokens=.*2\.36.*0\.90\|max_tokens=.*conservative' "$TMP/mt1500.out
     || no "#5 legend clause for max_tokens=/fit_bytes= missing or does not name the rate + headroom"
 # and the DEFAULT map must be byte-identical to a run without --max-tokens support (golden neutrality:
 # no --max-tokens ⇒ no marker, no legend clause)
-"$BIN" src --top-k=10 --no-cache >"$TMP/neutral.out" 2>/dev/null
+rw src --top-k=10 >"$TMP/neutral.out" 2>/dev/null
 grep -aq 'max_tokens=\|fit_bytes=' "$TMP/neutral.out" \
     && no "#5 the default map leaked a max_tokens=/fit_bytes= marker (must be --max-tokens-only)" \
     || ok "#5 the default map carries no max_tokens=/fit_bytes= marker (opt-in, golden-neutral)"
+}
 
+est_6(){
 # ── #6: the THIRD estimator (--partition's <bundle est_tokens=>, partition.h) is flat bytes/2.36 — exact
 #    and conservative, therefore honest, but a DIFFERENT currency from the map's language-weighted one.
 #    It must say which, in its own legend. ─────────────────────────────────────────────────────────────
-"$BIN" src --pack-task="estimate tokens" --partition=2 --no-cache >"$TMP/part.out" 2>/dev/null
+rw src --pack-task="estimate tokens" --partition=2 >"$TMP/part.out" 2>/dev/null
 if grep -aq '<bundle [^>]*est_tokens=' "$TMP/part.out"; then
     # NON-VACUOUS (L1 fix round, the iter1a measurement): the rate must be stated in the answer's own COMMENTS. A document-wide
     # grep passed on a ranked body that merely quoted "2.36" in its CDATA, while the compact legend never said it.
@@ -441,23 +573,27 @@ PY
 else
     no "#6 --partition emitted no <bundle est_tokens= (corpus/flag shape changed — re-anchor this arm)"
 fi
+}
 
+est_7(){
 # ── #7: determinism — every shape's reported est_tokens is identical run-to-run (est_tokens now derives
 #    from measured emitted bytes, so this also guards the measurement path against order/alloc noise). ──
 det=1
 for entry in "${SHAPES[@]}"; do
     label="${entry%%:*}"; rest="${entry#*:}"; args="${rest#*:}"
     # shellcheck disable=SC2086
-    "$BIN" src $args --no-cache >"$TMP/d1.out" 2>/dev/null
+    rwcall src $args --no-cache >"$TMP/d1.out" 2>/dev/null
     # shellcheck disable=SC2086
-    "$BIN" src $args --no-cache >"$TMP/d2.out" 2>/dev/null
+    rw src $args >"$TMP/d2.out" 2>/dev/null
     A="$( est_of "$TMP/d1.out" )"; C="$( est_of "$TMP/d2.out" )"
     [ -n "$A" ] && [ "$A" = "$C" ] || { echo "    $label: $A vs $C"; det=0; }
     cmp -s "$TMP/d1.out" "$TMP/d2.out" || { echo "    $label: output not byte-identical run-to-run"; det=0; }
 done
 [ "$det" = 1 ] && ok "#7 every payload shape is deterministic (est_tokens + full bytes identical run-to-run)" \
     || no "#7 a payload shape is non-deterministic"
+}
 
+est_8(){
 # ── #8: G4 — every shape stays well-formed XML (the measurement path must not disturb the document) ────
 if command -v xmllint >/dev/null 2>&1; then
     g4=1
@@ -471,11 +607,13 @@ if command -v xmllint >/dev/null 2>&1; then
 else
     printf '  SKIP  #8 xmllint not installed\n'
 fi
+}
 
+est_9(){
 # ── #9: XML/JSON parity on the charged number — the two serializations must report the SAME est_tokens
 #    for the same request (the sibling emitter has its own header writer; a fix applied to one only is
 #    exactly how the §H5 dialect divergences are born). ───────────────────────────────────────────────────
-"$BIN" src --top-k=10 --metrics --json --no-cache >"$TMP/j.json" 2>/dev/null
+rw src --top-k=10 --metrics --json >"$TMP/j.json" 2>/dev/null
 JE="$( grep -aoE '"est_tokens":[0-9]+' "$TMP/j.json" | head -1 | grep -oE '[0-9]+' )"
 XE="$( est_of "$TMP/metrics.out" )"
 JB="$( bytes_of "$TMP/j.json" )"
@@ -512,7 +650,9 @@ PYX
 else
     no "#9 --json --metrics reported no est_tokens"
 fi
+}
 
+est_10(){
 # ── #10: (optional) tiktoken accuracy report over every shape — informational, never gates ─────────────
 if python3 -c 'import tiktoken' >/dev/null 2>&1; then
     for entry in "${SHAPES[@]}"; do
@@ -530,7 +670,9 @@ PY
 else
     printf '  SKIP  #10 tiktoken accuracy report (tiktoken not installed)\n'
 fi
+}
 
+est_11(){
 # ── #11 (§F1, CA4 wave-1 verifier): THE NON-MAP EMITTERS. §H7 gave runDefaultMap the property "a section
 #    cannot be APPENDED without being charged" and stopped there. Four more emitters appended sections AFTER
 #    their own size was finalized. ONE ARM PER MEMBER of the enumeration in the §F1 commit message, so a
@@ -542,44 +684,13 @@ fi
 #      A11 --pack-task --with-graph   (was 12.6% past its allowance with NO over_ceiling)
 #      A12 --around <compose>/<routes>(was 804 B at est_tokens=262 = 3.07 B/tok, outside the markup band)
 #    Each is a BAND or an IDENTITY, never a pinned token count (house rule: estimates get a tolerance). ─────
-FOR_TASK="serialize the map"
-
-# The --for lens spells est_tokens="N" QUOTED in its header comment, where the map spells it bare in its
-# stats comment — and est_of() matches the bare form, so on --for it silently read nothing. Worse, a --detail
-# bundle EMBEDS serialize.h's own comments as body text, which contain the literal `est_tokens=507` from
-# §H7's bug repro: a document-wide grep returns 507 and every rate arm scores 146 B/tok against a number
-# that came out of a quoted source file. So this extractor is HEADER-SCOPED (everything before the first
-# payload element) and takes the quoted spelling. Trap worth keeping: on a verb that emits source text,
-# grepping the whole document for your own marker reads your own source back at you.
-# The payload-element list is a denylist and therefore incomplete by construction — a bundle that emits some
-# OTHER element first (or none at all) falls back to `len(d)`, i.e. straight back into the trap. `-->` closes
-# the header comment the attribute is spliced into (main.cpp inserts it at the header's own rfind(" -->")).
-# W3-S item 5 (2026-08-19): --for's header can now legitimately hold TWO trailing comments — the main lens
-# comment, then a second, standalone "<!-- root= is the crawl root ... -->" clause (forRootRelPathsLegendShort,
-# main.cpp) appended after it closes, the same "second small comment after the first one closes" shape
-# kRootRelPathsLegend already uses at eighteen OTHER call sites (e.g. --cochange's kCochangeRepoLegend +
-# rootRelPathsLegend()). est_tokens is spliced into whichever comment is LAST (main.cpp's own
-# `headerStr.rfind(" -->")`, exactly as this comment already said), so this extractor must find the LAST
-# "-->" that precedes the payload boundary, not the FIRST — a plain `d.find(b'-->')` stopped scanning right
-# after the FIRST comment closed and missed est_tokens sitting inside the second one entirely.
-forest_of(){ python3 - "$1" <<'PYX'
-import sys, re
-d = open( sys.argv[1], 'rb' ).read()
-payload = min( ( i for i in ( d.find( b'<sigs' ), d.find( b'<lego' ), d.find( b'<bodies' ) ) if i >= 0 ), default=len( d ) )
-close = d.rfind( b'-->', 0, payload )
-cut = close + 3 if close >= 0 else payload
-m = re.search( rb'est_tokens="(\d+)"', d[ :cut ] )
-print( m.group( 1 ).decode() if m else '' )
-PYX
-}
-
 # A7/A8 — the two appended --for sections must be INSIDE the delivered document's rate band. The --detail
 # shape is a BODY shape (bodies dominate the bytes and are charged at kBytesPerTokenBody), so it takes the
 # 4.20 body ceiling; the graph block is markup. An uncharged section pushes the rate straight out of band.
 for entry in "for:320:" "for_graph:320:--with-graph" "for_detail:420:--detail=20" "for_both:420:--detail=20 --with-graph"; do
     label="${entry%%:*}"; rest="${entry#*:}"; hi="${rest%%:*}"; args="${rest#*:}"
     # shellcheck disable=SC2086
-    "$BIN" src --for="$FOR_TASK" $args --no-cache >"$TMP/f_$label.out" 2>/dev/null
+    rw src --for="$FOR_TASK" $args >"$TMP/f_$label.out" 2>/dev/null
     B="$( bytes_of "$TMP/f_$label.out" )"
     E="$( forest_of "$TMP/f_$label.out" )"
     if [ -z "$E" ] || [ "$E" -le 0 ] 2>/dev/null; then
@@ -615,7 +726,7 @@ for tw in "2000:--detail=20" "2000:--with-graph" "5000:--detail=20 --with-graph"
     tw_n="${tw%%:*}"; tw_args="${tw#*:}"
     tw_allow="$( awk "BEGIN{printf \"%d\", $tw_n*2.36*1.15}" )"
     # shellcheck disable=SC2086
-    "$BIN" src --for="$FOR_TASK" --token-budget=$tw_n $tw_args --no-cache >"$TMP/f_tw.out" 2>/dev/null
+    rw src --for="$FOR_TASK" --token-budget=$tw_n $tw_args >"$TMP/f_tw.out" 2>/dev/null
     rc_tw=$?
     tw_b="$( bytes_of "$TMP/f_tw.out" )"
     { [ "$rc_tw" -eq 0 ] && [ -n "$tw_b" ] && [ "$tw_b" -le "$tw_allow" ]; } 2>/dev/null \
@@ -633,46 +744,11 @@ done
 #             first --detail body are all present;
 #   (next)    a cut first body carries a next= that recovers exactly the lines it cut (checked on A7R's corpus below,
 #             whose first body is longer than the floor; here a first body served whole carries no truncated=).
-KEPT_NOTE='[over_ceiling= is 1 on the root: the ranked rows are kept, not cut for the trailing sections'
-FLOOR_NOTE='[over_ceiling= is 1 on the root: the header floor'
 rows_of(){ grep -aoE '<d [^>]*>' "$1" | sed -nE 's/.* n="([^"]*)".*/\1/p'; }
-"$BIN" src --for="$FOR_TASK" --token-budget=$TBF --detail=20 --with-graph --no-cache >"$TMP/f_tb.out" 2>"$TMP/f_tb.err"
+rw src --for="$FOR_TASK" --token-budget=$TBF --detail=20 --with-graph >"$TMP/f_tb.out" 2>"$TMP/f_tb.err"
 rc_ftb=$?
-"$BIN" src --for="$FOR_TASK" --token-budget=$TBF --no-cache >"$TMP/f_tbp.out" 2>/dev/null
+rw src --for="$FOR_TASK" --token-budget=$TBF >"$TMP/f_tbp.out" 2>/dev/null
 FTB="$( bytes_of "$TMP/f_tb.out" )"
-# THE <sigs> UNPAID TWIN (knob-honesty-068; orchestrator rulings 2026-10-07, PROCESS rules 4/5). A capped <sigs> under a
-# hard ceiling carries next= — the call that recovers its cut — and pays for it from its rows ONLY where that makes the
-# answer fit (ruling C3). Where it cannot (the rank 1..4 floor has nothing left to shed, or the answer lands past its ceiling
-# paid or not) no row is dropped for it: the recovery handle ALWAYS ships, unpaid, and the document may then land past the
-# allowance, and only if it says so. This is not a wider allowance: every condition of the old bound still holds for
-# everything except the disclosed handle. Train 26c: the single A7 arm it guarded is superseded by the lane's A7 twin loop +
-# A7B below; the twin itself still serves the sweep and the floor arm. sigs_unpaid_twin FILE ALLOW → exit 0 iff ALL of: the root carries
-# over_ceiling="1"; the legend carries the unpaid clause defining it; <sigs> is capped and carries next="--for=…";
-# est_tokens is positive and prices the delivered bytes inside the 2.00-4.20 B/tok band (honest: it moved with the handle);
-# and the document WITHOUT the handle and its label (the next= attribute, over_ceiling="1", the clause) is within ALLOW —
-# the old bound, intact — or carries the ladder's last-rung disclosure (the header floor alone exceeds the budget: the one
-# overshoot the old bound already admitted). The rows are the ones the cut alone leaves (the C3 arm below pins them).
-sigs_unpaid_twin(){ python3 - "$1" "$2" <<'PYF'
-import sys, re
-d = open( sys.argv[ 1 ], 'rb' ).read().decode( 'utf-8', 'replace' ); allow = int( sys.argv[ 2 ] )
-clause = ' [over_ceiling=1 also when the sigs next= rides unpaid: no row is dropped to pay for it on an answer that would not fit either way]'
-root = re.search( r'<ctx [^>]*>', d ); sigs = re.search( r'<sigs [^>]*>', d )
-why = []
-if not root or ' over_ceiling="1"' not in root.group( 0 ): why.append( 'no root over_ceiling="1"' )
-if clause not in d: why.append( 'no unpaid clause' )
-nxt = re.search( r' next="--for=[^"]*"', sigs.group( 0 ) ) if sigs else None
-if not sigs or ' capped="1"' not in sigs.group( 0 ): why.append( '<sigs> not capped' )
-if not nxt: why.append( '<sigs> carries no next=' )
-est = re.search( r' est_tokens="(\d+)"', root.group( 0 ) ) if root else None
-b = len( d.encode( 'utf-8' ) )
-if not est or int( est.group( 1 ) ) <= 0 or not ( 200 <= b * 100 // int( est.group( 1 ) ) <= 420 ): why.append( 'est_tokens absent or out of band' )
-rest = b - ( len( nxt.group( 0 ) ) if nxt else 0 ) - len( ' over_ceiling="1"' ) - len( clause )
-lastRung = '[over_ceiling= is 1 on the root: ' in d   # either last-rung reason: the header floor, or (lego-charge) the kept rows
-if rest > allow and not lastRung: why.append( f'{rest} B without the handle > {allow} B (and no last-rung disclosure)' )
-print( '; '.join( why ) if why else f'{b} B, {rest} B without the handle <= {allow} B, est_tokens={est.group( 1 )}' )
-sys.exit( 1 if why else 0 )
-PYF
-}
 a7b_root="$( grep -aoE '^<ctx [^>]*>' "$TMP/f_tb.out" | head -1 )"
 a7b_hdr="$( python3 -c 'import sys; d=open(sys.argv[1],"rb").read(); print(d.find(b"<sigs"))' "$TMP/f_tb.out" )"
 rows_of "$TMP/f_tb.out" >"$TMP/a7b.rows"; rows_of "$TMP/f_tbp.out" >"$TMP/a7b.plain"; rows_of "$TMP/f_for.out" >"$TMP/a7b.unc"
@@ -697,7 +773,7 @@ a7b_b1="$( grep -aoE '<b [^>]*>' "$TMP/f_tb.out" | head -1 )"
 # must be well-formed XML — its first spelling held two flag names with their leading double hyphens and every such
 # answer failed xmllint ("Double hyphen within comment"), on the compact default and on --legend=full alike.
 if command -v xmllint >/dev/null 2>&1; then
-    "$BIN" src --for="$FOR_TASK" --token-budget=$TBF --detail=20 --with-graph --legend=full --no-cache >"$TMP/f_tbl.out" 2>/dev/null
+    rw src --for="$FOR_TASK" --token-budget=$TBF --detail=20 --with-graph --legend=full >"$TMP/f_tbl.out" 2>/dev/null
     a7x_bad=""
     for f in f_tb f_tbl; do
         grep -aqF "$KEPT_NOTE" "$TMP/$f.out" || a7x_bad="$a7x_bad $f:no-kept-rows-note(premise)"
@@ -714,7 +790,7 @@ fi
 # alone puts the header past the 814 B allowance, so the TRUE reason is the header floor and the kept-rows note would be
 # false. Red on the mutant that drops the header-fits term from keptTrailingOverrun (review mutant MX).
 A7N_TASK="$( python3 -c 'w="serialize the map rows into the output buffer while keeping the row order stable and flushing the writer "; print((w*10)[:700].strip())' )"
-"$BIN" src --for="$A7N_TASK" --token-budget=300 --detail=3 --with-graph --no-cache >"$TMP/f_tbn.out" 2>/dev/null
+rw src --for="$A7N_TASK" --token-budget=300 --detail=3 --with-graph >"$TMP/f_tbn.out" 2>/dev/null
 rc_a7n=$?
 a7n_allow="$( awk "BEGIN{printf \"%d\", 300*2.36*1.15}" )"
 a7n_root="$( grep -aoE '^<ctx [^>]*>' "$TMP/f_tbn.out" | head -1 )"
@@ -732,7 +808,9 @@ grep -aqF "$FLOOR_NOTE" "$TMP/f_tbn.out" || a7n_why="$a7n_why no-header-floor-no
 { [ "$( bytes_of "$TMP/f_for_detail.out" )" -gt "$ALLOW" ]; } 2>/dev/null \
     && ok "#11 A7 no --token-budget: --detail keeps its --pack-budget-bytes budget (unbudgeted bundle unshrunk)" \
     || no "#11 A7 no --token-budget: --detail was trimmed anyway — the budget bound leaked into the default path"
+}
 
+est_11_sweep(){
 # A7 SWEEP (PR #135 CI, 2026-09-11) — the budget must bound the document at EVERY budget, not at the one operating
 # point above. That arm went red at 5 429 B against its 5 428 B allowance when a merge moved the live src/ corpus,
 # and the main binary emits the same 5 429 bytes on the same tree, so the corpus only exposed it. The defect: the
@@ -783,7 +861,7 @@ for spec in "default:760:1500:10:serialize the map:" "detail_graph:2880:3080:10:
     s_step="${s_rest%%:*}"; s_rest="${s_rest#*:}"; s_task="${s_rest%%:*}"; s_args="${s_rest#*:}"
     for (( N = s_from; N <= s_to; N += s_step )); do
         # shellcheck disable=SC2086
-        ( cd "$A7S" && "$BIN" corpus --for="$s_task" --token-budget=$N $s_args --no-cache ) >"$A7S/o.xml" 2>/dev/null
+        ( cd "$A7S" && rwcall corpus --for="$s_task" --token-budget=$N $s_args --no-cache ) >"$A7S/o.xml" 2>/dev/null
         s_rc=$?
         a7s_runs=$(( a7s_runs + 1 ))
         s_b="$( bytes_of "$A7S/o.xml" )"
@@ -832,7 +910,7 @@ done
 # --token-budget=780 the default bundle's <sigs> sits at its rank 1..4 floor: the answer the cut alone leaves FITS (the
 # pre-continuation binary, 255dc199, serves it at est_tokens=774 with no label), its next= cannot be paid in rows, and the
 # document lands past the allowance only by the handle — the twin must hold, with no last-rung disclosure to lean on.
-( cd "$A7S" && "$BIN" corpus --for="map row serializer" --token-budget=900 --no-cache ) >"$A7S/floor.xml" 2>/dev/null; fl_rc=$?
+( cd "$A7S" && rwcall corpus --for="map row serializer" --token-budget=900 --no-cache ) >"$A7S/floor.xml" 2>/dev/null; fl_rc=$?
 fl_a="$( awk 'BEGIN{printf "%d", 900*2.36*1.15}' )"
 if [ "$fl_rc" -eq 0 ] && ! grep -aqF '[over_ceiling= is 1 on the root: the header floor' "$A7S/floor.xml" \
    && fl_why="$( sigs_unpaid_twin "$A7S/floor.xml" "$fl_a" )"; then
@@ -870,8 +948,8 @@ for i in range( 4 ):
     with open( os.path.join( out, f"mod{i}.cpp" ), "w" ) as fh:
         fh.write( "\n".join( lines ) )
 PYG
-( cd "$A7S/c3" && "$BIN" corpus --for="map row serializer" --token-budget=745 --no-cache ) >"$A7S/c3.xml" 2>/dev/null; c3_rc=$?
-( cd "$A7S/c3" && "$BIN" corpus --for="map row serializer" --token-budget=790 --no-cache ) >"$A7S/paid.xml" 2>/dev/null; pd_rc=$?
+( cd "$A7S/c3" && rwcall corpus --for="map row serializer" --token-budget=745 --no-cache ) >"$A7S/c3.xml" 2>/dev/null; c3_rc=$?
+( cd "$A7S/c3" && rwcall corpus --for="map row serializer" --token-budget=790 --no-cache ) >"$A7S/paid.xml" 2>/dev/null; pd_rc=$?
 sigs_shown(){ grep -aoE '<sigs [^>]*>' "$1" | tail -1 | grep -oE ' shown="[0-9]+"' | tr -dc '0-9'; }
 c3_sh="$( sigs_shown "$A7S/c3.xml" )"; pd_sh="$( sigs_shown "$A7S/paid.xml" )"
 c3_root="$( grep -aoE '^<ctx [^>]*>' "$A7S/c3.xml" | head -1 )"
@@ -893,7 +971,9 @@ if [ "$pd_rc" -eq 0 ] && [ "$pd_b" -le "$pd_a" ] && grep -aqE '<sigs [^>]* cappe
 else
     no "#11 A7 unpaid twin near miss @790 (doc-less twin, exit $pd_rc): $pd_b B vs $pd_a B — expected a paid next= inside the allowance with no label"
 fi
+}
 
+est_11_a7r(){
 # ── #11 A7R (lego-charge fix round 4): THE TRAILING-SECTION RESERVE. Under --token-budget, --with-graph's block and the
 # first --detail body were charged only AFTER <sigs> had claimed the whole sig-side ceiling, so both rode past the
 # budget, and the ladder's last rung then blamed the HEADER floor ("no payload left to trim") while <sigs> was the
@@ -921,7 +1001,7 @@ for i in range( 6 ):
         fh.write( "\n".join( lines ) )
 PYG
 A7R_Q="serialize the map row"
-a7r_out(){ ( cd "$A7R" && "$BIN" corpus --for="$A7R_Q" "$@" --no-cache ) 2>/dev/null; }
+a7r_out(){ ( cd "$A7R" && rwcall corpus --for="$A7R_Q" "$@" --no-cache ) 2>/dev/null; }
 a7r_sigs(){ python3 -c 'import re,sys; m=re.search(r"<sigs\b.*?</sigs>",open(sys.argv[1]).read(),re.S); print(m.group(0) if m else "")' "$1"; }
 # A7R-1 (positive): every budget, three shapes — exit 0, inside the allowance, NO over_ceiling on the root (est_tokens fits
 # budget_tokens), no ladder last rung, <sigs> present, and with --detail a first <b> that is not the one-line over_ceiling
@@ -1002,7 +1082,7 @@ for N in 2000 2500; do
     if [ -z "$k2_next" ]; then
         k2_why="$k2_why first-body-not-head-cut-with-next"
     else
-        ( cd "$A7R" && "$BIN" corpus --expand="$k2_next" --no-cache ) >"$A7R/k2n.xml" 2>/dev/null
+        ( cd "$A7R" && rwcall corpus --expand="$k2_next" --no-cache ) >"$A7R/k2n.xml" 2>/dev/null
         python3 - "$A7R/k2.xml" "$A7R/k2n.xml" "$A7R/corpus" <<'PYR' || k2_why="$k2_why next=-does-not-recover-the-cut"
 import re, sys, os
 cut = open( sys.argv[1] ).read(); nxt = open( sys.argv[2] ).read()
@@ -1048,7 +1128,9 @@ w0="$( a7r_sigs "$A7R/w0.xml" )"; w1="$( a7r_sigs "$A7R/w1.xml" )"
 { [ -n "$w0" ] && [ "$w0" = "$w1" ] && [ "${w0#*capped=\"1\"}" != "$w0" ]; } \
     && ok "#11 A7R wide ceiling: <sigs> (capped=1) byte-identical with and without --with-graph at --token-budget=8000 — the reserve binds only when the bundle cannot hold both" \
     || no "#11 A7R wide ceiling: <sigs> differs with --with-graph at --token-budget=8000 (or is not cut) — the reserve shrank a sig share that had room"
+}
 
+est_11_a7d(){
 # ── #11 A7D (fix round 4, review rv-wrap-recipe-k29 F1; rule 5 — never a silent cut): under --token-budget the compact
 # <hops> section is no longer DROPPED with no element when the ceiling is spent. The arm corpus is on the conceptual route.
 # A7D-1: at 2000 tokens the section is the counted marker — shown="0" total=N capped="1" and next= the same question with
@@ -1105,7 +1187,7 @@ PY
 }
 # T3 (contract update, same wave): the bare --for is terminal by default and carries auto BODIES at the
 # 3.80 body rate, so the markup-only 2.50 identity now lives on the --signatures-only shape…
-"$BIN" src --for="$FOR_TASK" --signatures-only --no-cache >"$TMP/f_sigonly.out" 2>/dev/null
+rw src --for="$FOR_TASK" --signatures-only >"$TMP/f_sigonly.out" 2>/dev/null
 if out="$( selfconsistent "$TMP/f_sigonly.out" )"; then
     ok "#11 A9/A10 --for --signatures-only: est_tokens is self-consistent — bytes/est/expected = $out (its own attributes are charged)"
 else
@@ -1133,7 +1215,7 @@ PY
 # multi-word conceptual query — serve <hops> instead of <bodies> by default, so the AUTO-BODY shape this
 # arm is about now lives behind --auto-bodies. Re-anchored there rather than deleted: the mixed-rate
 # identity is the only arm that can catch a mis-rated body span.
-"$BIN" src --for="$FOR_TASK" --auto-bodies --no-cache >"$TMP/f_forauto.out" 2>/dev/null
+rw src --for="$FOR_TASK" --auto-bodies >"$TMP/f_forauto.out" 2>/dev/null
 if out="$( mixedconsistent "$TMP/f_forauto.out" )"; then
     ok "#11 A9/A10 --for --auto-bodies: est_tokens matches markup@2.50 + bodies@3.80 — bytes/span/est/expected = $out"
 else
@@ -1164,7 +1246,7 @@ grep -aq '<hops ' "$TMP/f_for.out" \
 # The weak query is a single nonsense word, which routes subtoken+body and therefore goes COMPACT: the
 # R9 shell it emits is <hops shown="0" total="0" capped="0">, markup-rate like the rest of that document,
 # so the FLAT identity is the right one here now (mixedconsistent would exit on the absent <bodies>).
-"$BIN" src --for="zzqqxx" --no-cache >"$TMP/f_weak.out" 2>/dev/null
+rw src --for="$WEAK_QUERY" >"$TMP/f_weak.out" 2>/dev/null
 if grep -aq 'weak="1"' "$TMP/f_weak.out"; then
     if out="$( selfconsistent "$TMP/f_weak.out" )"; then
         ok "#11 A9 --for with weak=\"1\": est_tokens self-consistent — bytes/est/expected = $out (the 9 B attr + the R9 <hops> shell are both charged)"
@@ -1173,6 +1255,15 @@ if grep -aq 'weak="1"' "$TMP/f_weak.out"; then
     fi
 else
     no "#11 A9 could not produce a weak=\"1\" bundle (threshold or query shape changed — re-anchor this arm)"
+fi
+# A9b: the same word on the REPO ROOT must not find this gate. Its sections are bash functions that ripwire
+# indexes, so a section body spelling the word makes it a hit and reds forcalibfactscheck's zero-hit arm
+# (scored=0) in whichever CI shard runs it (PR #398, round 1). Hence WEAK_QUERY lives at top level.
+rw "$ROOT" --for="$WEAK_QUERY" --json >"$TMP/f_weak_root.json" 2>/dev/null
+if [ -s "$TMP/f_weak_root.json" ] && ! grep -q 'test/estchargecheck\.sh' "$TMP/f_weak_root.json"; then
+    ok "#11 A9b --for=\$WEAK_QUERY on the repo root finds nothing in this gate (forcalibfactscheck's zero-hit arm stays at scored=0)"
+else
+    no "#11 A9b --for=\$WEAK_QUERY on the repo root hits test/estchargecheck.sh (or answered nothing) — a section body spells the word; keep it in WEAK_QUERY only"
 fi
 
 # M11 (2026-09-04): the pack-task legend now DEFINES over_ceiling= in prose, so the three greps below read the
@@ -1189,7 +1280,7 @@ fi
 # to sit above it. If no budget in the ladder qualifies, that is a real failure and it says so.
 PT_TB=""
 for _tb in 800 1000 1200 1500 2000 3000; do
-    "$BIN" src --pack-task="$FOR_TASK" --token-budget=$_tb --no-cache >"$TMP/pt_probe.out" 2>/dev/null
+    rw src --pack-task="$FOR_TASK" --token-budget=$_tb >"$TMP/pt_probe.out" 2>/dev/null
     _b="$( bytes_of "$TMP/pt_probe.out" )"
     _a="$( awk "BEGIN{printf \"%d\", $_tb*2.36*1.15}" )"
     if [ "$_b" -le "$_a" ] 2>/dev/null && ! grep -aqE 'over_ceiling(="1"|:)' "$TMP/pt_probe.out"; then PT_TB=$_tb; break; fi
@@ -1199,8 +1290,8 @@ if [ -z "$PT_TB" ]; then
     PT_TB=3000
 fi
 PT_ALLOW="$( awk "BEGIN{printf \"%d\", $PT_TB*2.36*1.15}" )"
-"$BIN" src --pack-task="$FOR_TASK" --token-budget=$PT_TB --no-cache >"$TMP/pt_bare.out" 2>/dev/null
-"$BIN" src --pack-task="$FOR_TASK" --token-budget=$PT_TB --with-graph --no-cache >"$TMP/pt_graph.out" 2>/dev/null
+rw src --pack-task="$FOR_TASK" --token-budget=$PT_TB >"$TMP/pt_bare.out" 2>/dev/null
+rw src --pack-task="$FOR_TASK" --token-budget=$PT_TB --with-graph >"$TMP/pt_graph.out" 2>/dev/null
 PTB="$( bytes_of "$TMP/pt_bare.out" )";  PTG="$( bytes_of "$TMP/pt_graph.out" )"
 if [ "$PTG" -le "$PT_ALLOW" ] 2>/dev/null; then
     ok "#11 A11 --pack-task --token-budget=$PT_TB --with-graph: $PTG B within the $PT_ALLOW B allowance"
@@ -1216,7 +1307,7 @@ fi
 
 # A12 — --around's appended <compose>/<routes>. Pick a focus whose ego-graph is SMALL, so the sibling blocks
 # are a large fraction of the document and an uncharged block moves the rate hard (base: 3.07 B/tok).
-"$BIN" src --around=Config --no-cache >"$TMP/around.out" 2>/dev/null
+rw src --around=Config >"$TMP/around.out" 2>/dev/null
 AB="$( bytes_of "$TMP/around.out" )"
 AE="$( est_of "$TMP/around.out" )"
 if grep -aq '<compose\|<routes' "$TMP/around.out" && [ -n "$AE" ] && [ "$AE" -gt 0 ] 2>/dev/null; then
@@ -1233,20 +1324,24 @@ if grep -aq '<compose\|<routes' "$TMP/around.out" && [ -n "$AE" ] && [ "$AE" -gt
 else
     no "#11 A12 --around=Config emitted no <compose>/<routes> or no est_tokens — re-anchor this arm on a focus that has one"
 fi
+}
 
+est_12(){
 # ── #12 (bucket B of the enumeration): the two DELIBERATE non-conventions, pinned so a future change to them
 #    is a decision rather than a drift. Neither is a defect; both are things a reader could mistake for one. ─
-"$BIN" src --top-k=10 --stable --pack-signatures --no-cache >"$TMP/stable.out" 2>/dev/null
+rw src --top-k=10 --stable --pack-signatures >"$TMP/stable.out" 2>/dev/null
 grep -aqE '<r est_tokens="' "$TMP/stable.out" \
     && no "#12 B3 --stable emitted est_tokens on the root — it is deliberately omitted (volatile prefix)" \
     || ok "#12 B3 --stable omits est_tokens by design (the root element is the cacheable prefix)"
 # B4 --top-k=0: no header exists to carry est_tokens, but the gate must still SEE the payload
-"$BIN" src --top-k=0 --pack-top-n=3 --token-budget=600 --no-cache >"$TMP/k0.out" 2>"$TMP/k0.err"
+rw src --top-k=0 --pack-top-n=3 --token-budget=600 >"$TMP/k0.out" 2>"$TMP/k0.err"
 rc_k0=$?
 { [ "$rc_k0" -eq 3 ] && [ "$( bytes_of "$TMP/k0.out" )" -lt 2048 ]; } 2>/dev/null \
     && ok "#12 B4 --top-k=0 --pack-top-n=3 --token-budget=600: exit 3, payload withheld (mapEstTokens = payloadTokens)" \
     || no "#12 B4 --top-k=0 --pack-top-n=3 --token-budget=600: exit $rc_k0, $( bytes_of "$TMP/k0.out" ) B — the gate does not see a payload-only document"
+}
 
+est_13(){
 # ── #13 (Owner ruling 3): the CALL GRAPH must not move. est_tokens is a reporting concern; if any of these
 #    five counts changed, this lane touched something it had no business touching. Pinned as a SELF-COMPARISON
 #    against $RIPWIRE_BASE when one is supplied (that is the only honest form — the numbers are corpus-
@@ -1256,10 +1351,10 @@ counts_of(){ grep -aoE 'files=[0-9]+|symbols=[0-9]+|edges=[0-9]+|ambiguous=[0-9]
 # MEASURED ON test/fixture, NOT src/: src/ is this binary's own source, so adding a function to it moves
 # symbols=/edges= legitimately and the arm would red on every future edit. test/fixture is a frozen corpus,
 # which is what makes "the graph did not move" a statement about the CHANGE rather than about the diff size.
-"$BIN" test/fixture --no-cache >"$TMP/g_new.out" 2>/dev/null
+rwcall test/fixture --no-cache >"$TMP/g_new.out" 2>/dev/null
 NEWC="$( counts_of "$TMP/g_new.out" )"
 if [ -n "${RIPWIRE_BASE:-}" ] && [ -x "${RIPWIRE_BASE:-}" ]; then
-    "$RIPWIRE_BASE" test/fixture --no-cache >"$TMP/g_base.out" 2>/dev/null
+    rwcall_bin "$RIPWIRE_BASE" test/fixture --no-cache >"$TMP/g_base.out" 2>/dev/null
     BASEC="$( counts_of "$TMP/g_base.out" )"
     [ "$NEWC" = "$BASEC" ] \
         && ok "#13 ruling 3: files=/symbols=/edges=/ambiguous=/unresolved= unmoved vs RIPWIRE_BASE — [$NEWC]" \
@@ -1269,7 +1364,9 @@ else
         && ok "#13 ruling 3: the five graph counts are present [$NEWC] (set RIPWIRE_BASE to diff them against the pre-change binary)" \
         || no "#13 ruling 3: the graph counts are missing or malformed [$NEWC]"
 fi
+}
 
+est_14(){
 # ── #14 (the CA4 coverage debt, trap #3): THE open_memstream DEGRADE PATH. The wave-1 verifier declared these
 #    paths never exercised: `open_memstream` fails on ALLOCATION, so no `ulimit -n` harness reaches them. The
 #    fault switch RIPWIRE_FAULT_CHARGE_BUFFER=1 exists ONLY on the non-NDEBUG flavour — the same flavour
@@ -1281,7 +1378,7 @@ fi
 #        arm is unobservable BY DESIGN and the plain-flavour CI leg is what proves it (→ SKIP, reason
 #        named), or the seam regressed on a flavour that CAN see alerts (→ FAILURE). ─────────────────────
 # L1 (2026-09-19): the compact legend spells <sigs> inside its comment, so #14c's find(<sigs) would start in the legend; both runs ask for the full legend.
-RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" src --top-k=10 --pack-signatures --no-cache --legend=full >"$TMP/dg.out" 2>"$TMP/dg.err"
+RIPWIRE_FAULT_CHARGE_BUFFER=1 rwcall src --top-k=10 --pack-signatures --no-cache --legend=full >"$TMP/dg.out" 2>"$TMP/dg.err"
 rc_dg=$?
 if grep -aq 'chargeSection: open_memstream failed' "$TMP/dg.err"; then
     ok "#14a observability probe: this flavour CAN observe DISCLOSE (the fault switch is live)"
@@ -1296,7 +1393,7 @@ if grep -aq 'chargeSection: open_memstream failed' "$TMP/dg.err"; then
 
     #    (c) THE BYTES ARE STILL COMPLETE AND CORRECT. The whole point of the degrade: the caller loses the
     #        charge, never the content. Byte-compare the payload against the undegraded run.
-    "$BIN" src --top-k=10 --pack-signatures --no-cache --legend=full >"$TMP/dg_ctl.out" 2>/dev/null
+    rw src --top-k=10 --pack-signatures --legend=full >"$TMP/dg_ctl.out" 2>/dev/null
     if python3 - "$TMP/dg_ctl.out" "$TMP/dg.out" <<'PY'
 import sys
 ctl = open( sys.argv[1], 'rb' ).read()
@@ -1338,21 +1435,21 @@ PY
         && ok "#14d2 [XML map buffer] est_measured= is defined in the same document" || no "#14d2 [XML map buffer] est_measured= rides undefined"
     grep -aq 'est_measured' "$TMP/dg_ctl.out" \
         && no "#14d2 control: the undegraded map carries est_measured" || ok "#14d2 control: the undegraded map carries no est_measured (measured is the default)"
-    RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" test/fixture --json --no-cache >"$TMP/dgj.out" 2>/dev/null
-    "$BIN" test/fixture --json --no-cache >"$TMP/dgj_ctl.out" 2>/dev/null
+    RIPWIRE_FAULT_CHARGE_BUFFER=1 rwcall test/fixture --json --no-cache >"$TMP/dgj.out" 2>/dev/null
+    rwcall test/fixture --json --no-cache >"$TMP/dgj_ctl.out" 2>/dev/null
     { grep -aq '"est_tokens":[0-9]*,.*"est_measured":false' "$TMP/dgj.out" && ! grep -aq 'est_measured' "$TMP/dgj_ctl.out"; } \
         && ok "#14d2 [JSON map + header probe] \"est_measured\":false on the degrade, absent on the control (XML parity)" \
         || no "#14d2 [JSON map + header probe] the JSON map's modelled est_tokens is unlabelled: $( head -c 200 "$TMP/dgj.out" )"
-    FXSYM="$( "$BIN" test/fixture --no-cache 2>/dev/null | grep -aoE ' n="[A-Za-z_]+"' | head -1 | sed 's/ n="//; s/"//' )"
-    RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" test/fixture --top-k=0 --expand="$FXSYM" --no-cache >"$TMP/dgk0.out" 2>/dev/null
-    "$BIN" test/fixture --top-k=0 --expand="$FXSYM" --no-cache >"$TMP/dgk0_ctl.out" 2>/dev/null
+    FXSYM="$( rwcall test/fixture --no-cache 2>/dev/null | grep -aoE ' n="[A-Za-z_]+"' | head -1 | sed 's/ n="//; s/"//' )"
+    RIPWIRE_FAULT_CHARGE_BUFFER=1 rwcall test/fixture --top-k=0 --expand="$FXSYM" --no-cache >"$TMP/dgk0.out" 2>/dev/null
+    rwcall test/fixture --top-k=0 --expand="$FXSYM" --no-cache >"$TMP/dgk0_ctl.out" 2>/dev/null
     { grep -aq '<ctx [^>]*est_tokens="[0-9]*" est_measured="0"' "$TMP/dgk0.out" && grep -aq 'est_measured=0: ' "$TMP/dgk0.out" \
       && ! grep -aq 'est_measured' "$TMP/dgk0_ctl.out"; } \
         && ok "#14d2 [payload section, --top-k=0 --expand=$FXSYM] the section-only est_tokens is labelled and defined; the control carries none" \
         || no "#14d2 [payload section] the uncharged section's est_tokens is unlabelled: $( grep -aoE '<ctx [^>]*>' "$TMP/dgk0.out" | head -1 )"
 
-    RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" test/fixture --pack-task="parse the config" --with-graph --no-cache >"$TMP/dgpt.out" 2>/dev/null
-    "$BIN" test/fixture --pack-task="parse the config" --with-graph --no-cache >"$TMP/dgpt_ctl.out" 2>/dev/null
+    RIPWIRE_FAULT_CHARGE_BUFFER=1 rwcall test/fixture --pack-task="parse the config" --with-graph --no-cache >"$TMP/dgpt.out" 2>/dev/null
+    rwcall test/fixture --pack-task="parse the config" --with-graph --no-cache >"$TMP/dgpt_ctl.out" 2>/dev/null
     { grep -aq '<ctx [^>]*est_measured="0"' "$TMP/dgpt.out" && grep -aq 'est_measured=0: ' "$TMP/dgpt.out" \
       && ! grep -aq 'est_measured' "$TMP/dgpt_ctl.out"; } \
         && ok "#14d2 [trailing section, --pack-task --with-graph] the graph block streamed uncharged and the root says est_measured=\"0\"" \
@@ -1373,12 +1470,12 @@ PY
     #    The negative assertion is paired with a POSITIVE CONTROL on the identical shape, because "no
     #    est_tokens in the header region" is also what an extractor pointed at the wrong bytes reports: the
     #    UNDEGRADED run of the same command must find one there, or the anchor is dead and the arm is vacuous.
-    "$BIN" src --for="$FOR_TASK" --detail=5 --no-cache >"$TMP/dgf_ctl.out" 2>/dev/null
+    rw src --for="$FOR_TASK" --detail=5 >"$TMP/dgf_ctl.out" 2>/dev/null
     FCTL="$( forest_of "$TMP/dgf_ctl.out" )"
     { [ -n "$FCTL" ] && [ "$FCTL" -gt 0 ]; } 2>/dev/null \
         && ok "#14d anchor control: the UNDEGRADED --for --detail=5 header does carry est_tokens=\"$FCTL\" (the probe is live)" \
         || no "#14d anchor control: the undegraded --for --detail=5 header has no est_tokens (got '$FCTL') — the omission probe below is vacuous"
-    RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" src --for="$FOR_TASK" --detail=5 --no-cache >"$TMP/dgf.out" 2>"$TMP/dgf.err"
+    RIPWIRE_FAULT_CHARGE_BUFFER=1 rwcall src --for="$FOR_TASK" --detail=5 --no-cache >"$TMP/dgf.out" 2>"$TMP/dgf.err"
     FDG="$( forest_of "$TMP/dgf.out" )"
     [ -z "$FDG" ] \
         && ok "#14d degraded --for OMITS est_tokens entirely (never a fabricated number)" \
@@ -1393,7 +1490,7 @@ PY
     #        control (`$TMP/dg_ctl.out`, no switch in the environment) is the reference.
     g4fail=0
     for badval in 10 1x 1000000 11 '1 ' 0 true ''; do
-        RIPWIRE_FAULT_CHARGE_BUFFER="$badval" "$BIN" src --top-k=10 --pack-signatures --no-cache --legend=full >"$TMP/dg_g4.out" 2>"$TMP/dg_g4.err"
+        RIPWIRE_FAULT_CHARGE_BUFFER="$badval" rwcall src --top-k=10 --pack-signatures --no-cache --legend=full >"$TMP/dg_g4.out" 2>"$TMP/dg_g4.err"
         if grep -aq 'chargeSection: open_memstream failed' "$TMP/dg_g4.err"; then
             no "#14e RIPWIRE_FAULT_CHARGE_BUFFER='$badval' INJECTED the fault — only the exact value \"1\" may (prefix test, verifier G4)"
             g4fail=1
@@ -1408,7 +1505,9 @@ elif [ "$alerts_observable" -eq 0 ] && [ "$ndebug_flavour" -eq 1 ]; then
 else
     no "#14a observability probe FAILED: RIPWIRE_FAULT_CHARGE_BUFFER=1 produced no DISCLOSE on a build that CAN observe alerts (--version build type \"$BUILD_FLAVOUR\", unrelated-degrade-path observable=$alerts_observable) — the openChargeBuffer seam regressed. This is a FAILURE, not a skip."
 fi
+}
 
+est_14f(){
 # ── #14f THE MEMSTREAM FINISH DEGRADE: a buffer that opened and then lost a write takes the SAME path a failed open
 #    takes, and never prints the short bytes. A memstream records a lost write in its error flag, and on macOS fflush and
 #    fclose both return 0 afterwards (measured: 19 of 19 injected realloc failures; src/infra/emit.h MemoryStream).
@@ -1434,14 +1533,14 @@ fi
 # L1 fix round (iter1a found item): the COMPACT default carries est_measured='s reading inside its one legend comment (a
 # present-only term, compactlegend.h), not as the full dialect's own comment, so the mask drops that sentence too.
 mask_est(){ sed -E 's/<!-- est_measured=0: [^>]*-->//g; s/ est_measured=0: est_tokens is the MODELLED estimate[^.]*\.//g; s/est_tokens(="?|":)[0-9]+/est_tokens\1N/g; s/ est_measured="0"//g; s/ est_measured=0//g; s/"est_measured":false,//g' "$1"; }
-INFRA_FAULT_MEMSTREAM_FINISH=1 "$BIN" src --top-k=10 --pack-signatures --no-cache >"$TMP/mf.out" 2>"$TMP/mf.err"
+INFRA_FAULT_MEMSTREAM_FINISH=1 rwcall src --top-k=10 --pack-signatures --no-cache >"$TMP/mf.out" 2>"$TMP/mf.err"
 rc_mf=$?
 if grep -aq 'chargeSection: the charge buffer did not finish whole' "$TMP/mf.err"; then
     ok "#14f observability probe: INFRA_FAULT_MEMSTREAM_FINISH=1 reached the chargeSection finish"
     grep -aq 'serialize: the charge buffer did not finish whole .* MODELLED bytes' "$TMP/mf.err" \
         && ok "#14f(a) the serialize finish alert fired and says est_tokens reports the MODELLED bytes" \
         || no "#14f(a) serialize's finish degraded without its alert (or the alert lost the MODELLED clause)"
-    "$BIN" src --top-k=10 --pack-signatures --no-cache >"$TMP/mf_ctl.out" 2>/dev/null
+    rw src --top-k=10 --pack-signatures >"$TMP/mf_ctl.out" 2>/dev/null
     if [ -s "$TMP/mf_ctl.out" ] && cmp -s <( mask_est "$TMP/mf_ctl.out" ) <( mask_est "$TMP/mf.out" ); then
         ok "#14f(b) the degraded document is byte-identical to the undegraded one outside est_tokens ($( bytes_of "$TMP/mf.out" ) B) — rendered again, whole"
     else
@@ -1466,8 +1565,8 @@ if grep -aq 'chargeSection: the charge buffer did not finish whole' "$TMP/mf.err
     { [ -n "$MFE" ] && [ -n "$MFC" ] && [ "$MFE" -lt "$MFC" ]; } 2>/dev/null \
         && ok "#14f(d) degraded est_tokens=$MFE is the MODELLED number, below the charged $MFC" \
         || no "#14f(d) degraded est_tokens=$MFE vs charged $MFC — the modelled fallback is not observable"
-    INFRA_FAULT_MEMSTREAM_FINISH=1 "$BIN" src --top-k=10 --json --no-cache >"$TMP/mfj.out" 2>"$TMP/mfj.err"
-    "$BIN" src --top-k=10 --json --no-cache >"$TMP/mfj_ctl.out" 2>/dev/null
+    INFRA_FAULT_MEMSTREAM_FINISH=1 rwcall src --top-k=10 --json --no-cache >"$TMP/mfj.out" 2>"$TMP/mfj.err"
+    rw src --top-k=10 --json >"$TMP/mfj_ctl.out" 2>/dev/null
     if grep -aq 'serializeJson: the charge buffer did not finish whole' "$TMP/mfj.err" && [ -s "$TMP/mfj_ctl.out" ] \
        && cmp -s <( mask_est "$TMP/mfj_ctl.out" ) <( mask_est "$TMP/mfj.out" ) \
        && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$TMP/mfj.out" 2>/dev/null; then
@@ -1475,8 +1574,8 @@ if grep -aq 'chargeSection: the charge buffer did not finish whole' "$TMP/mf.err
     else
         no "#14f(e) --json under the finish fault: no alert, a different document outside est_tokens, or JSON that does not parse"
     fi
-    "$BIN" test/fixture --token-budget=100000 --no-cache >"$TMP/mft_ctl.out" 2>/dev/null; rc_mft_ctl=$?
-    INFRA_FAULT_MEMSTREAM_FINISH=1 "$BIN" test/fixture --token-budget=100000 --no-cache >"$TMP/mft.out" 2>"$TMP/mft.err"; rc_mft=$?
+    rwcall test/fixture --token-budget=100000 --no-cache >"$TMP/mft_ctl.out" 2>/dev/null; rc_mft_ctl=$?
+    INFRA_FAULT_MEMSTREAM_FINISH=1 rwcall test/fixture --token-budget=100000 --no-cache >"$TMP/mft.out" 2>"$TMP/mft.err"; rc_mft=$?
     if [ "$rc_mft_ctl" -eq 0 ] && [ -s "$TMP/mft_ctl.out" ] && [ "$rc_mft" -eq 1 ] && [ ! -s "$TMP/mft.out" ] \
        && grep -aq 'the map is withheld, not printed short' "$TMP/mft.err"; then
         ok "#14f(f) --token-budget: the control prints $( bytes_of "$TMP/mft_ctl.out" ) B at exit 0; under the fault stdout is EMPTY, exit 1, and stderr says the map was withheld"
@@ -1484,8 +1583,8 @@ if grep -aq 'chargeSection: the charge buffer did not finish whole' "$TMP/mf.err
         no "#14f(f) --token-budget under the finish fault: control rc=$rc_mft_ctl ($( bytes_of "$TMP/mft_ctl.out" ) B), faulted rc=$rc_mft with $( bytes_of "$TMP/mft.out" ) B on stdout — want 0/non-empty and 1/empty with the withheld line"
     fi
     printf 'Traceback (most recent call last):\n  File "test/fixture/app.py", line 10, in total_area\n    return sum(area_of_triangle(b, h) for b, h in triangles)\n  File "test/fixture/app.py", line 5, in area_of_triangle\n    return 0.5 * base * height\nZeroDivisionError: boom\n' >"$TMP/mftr.txt"
-    "$BIN" test/fixture --from-trace="$TMP/mftr.txt" --no-cache >"$TMP/mftr_ctl.out" 2>/dev/null; rc_mftr_ctl=$?
-    INFRA_FAULT_MEMSTREAM_FINISH=1 "$BIN" test/fixture --from-trace="$TMP/mftr.txt" --no-cache >"$TMP/mftr.out" 2>"$TMP/mftr.err"; rc_mftr=$?
+    rwcall test/fixture --from-trace="$TMP/mftr.txt" --no-cache >"$TMP/mftr_ctl.out" 2>/dev/null; rc_mftr_ctl=$?
+    INFRA_FAULT_MEMSTREAM_FINISH=1 rwcall test/fixture --from-trace="$TMP/mftr.txt" --no-cache >"$TMP/mftr.out" 2>"$TMP/mftr.err"; rc_mftr=$?
     if [ "$rc_mftr_ctl" -eq 0 ] && grep -aq '<trace ' "$TMP/mftr_ctl.out" && [ "$rc_mftr" -eq 1 ] && [ ! -s "$TMP/mftr.out" ] \
        && grep -aq 'a --from-trace buffer lost bytes; the bundle is withheld' "$TMP/mftr.err"; then
         ok "#14f(g) --from-trace: the control prints its <trace> bundle ($( bytes_of "$TMP/mftr_ctl.out" ) B) at exit 0; under the fault stdout is EMPTY, exit 1, and stderr says the bundle was withheld"
@@ -1530,8 +1629,8 @@ PY
         "ghp_""ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" "AKIA""IOSFODNN7EXAMPLE" > "$TMP/mfred/app.py"
     for mfredMode in xml json; do
         mfredFlag=""; [ "$mfredMode" = json ] && mfredFlag="--json"
-        "$BIN" "$TMP/mfred" --for="probe vault loader helper" $mfredFlag --no-cache >/dev/null 2>"$TMP/mfred_ctl.err"
-        INFRA_FAULT_MEMSTREAM_FINISH=1 "$BIN" "$TMP/mfred" --for="probe vault loader helper" $mfredFlag --no-cache >/dev/null 2>"$TMP/mfred_f.err"
+        rwcall "$TMP/mfred" --for="probe vault loader helper" $mfredFlag --no-cache >/dev/null 2>"$TMP/mfred_ctl.err"
+        INFRA_FAULT_MEMSTREAM_FINISH=1 rwcall "$TMP/mfred" --for="probe vault loader helper" $mfredFlag --no-cache >/dev/null 2>"$TMP/mfred_f.err"
         mfredCtl="$( grep -a '^ripwire: redacted ' "$TMP/mfred_ctl.err" )"; mfredF="$( grep -a '^ripwire: redacted ' "$TMP/mfred_f.err" )"
         if [ -n "$mfredCtl" ] && [ "$mfredCtl" = "$mfredF" ]; then
             ok "#14f(i) --for ($mfredMode): the redaction summary under the fault equals the control's ($mfredCtl)"
@@ -1544,7 +1643,9 @@ elif [ "$alerts_observable" -eq 0 ] && [ "$ndebug_flavour" -eq 1 ]; then
 else
     no "#14f observability probe FAILED: INFRA_FAULT_MEMSTREAM_FINISH=1 produced no finish alert on a build that CAN observe alerts (build type \"$BUILD_FLAVOUR\", observable=$alerts_observable) — the MemoryStream seam or its switch regressed"
 fi
+}
 
+est_14g(){
 # ── #14g THE FENCE, over the source: every memstream is owned by rw::MemoryStream ─────────────────────────────────────
 #    [[nodiscard]] on MemoryStream::finish makes a caller that IGNORES the answer a compiler warning; it cannot stop a
 #    caller from opening a stream by hand, which is how twenty-two sites read buf/sz after an unchecked close. So, over
@@ -1657,7 +1758,9 @@ PY
         no "#14g positive control ($MS_SPELL): expected tracelocus.h (A)=1 (C)=1 and 2 in total, got $MS_CA, $MS_CC and $MS_CT — the scan cannot see the defect it exists for"
     fi
 done
+}
 
+est_c1c2(){
 # ── §C1 + §C2 (capture-audit-4, wave 3): --for --json's ENVELOPE is charged, and so is over_ceiling ─────
 #
 # emitForLensJson reserved a flat 40 bytes for `,"capped":false,"est_tokens":NNNNN,"sigs":}` — 38 fixed plus
@@ -1673,7 +1776,7 @@ JSON_TASK="add retry to the http client"
 jsonEnvelopeCase()
 {
     local label="$1"; shift
-    "$BIN" src --for="$JSON_TASK" --json --no-cache "$@" > "$TMP/fj.out" 2>/dev/null || true
+    rw src --for="$JSON_TASK" --json "$@" > "$TMP/fj.out" 2>/dev/null || true
     python3 - "$TMP/fj.out" "$label" <<'PYEOF'
 import json, sys
 raw = open( sys.argv[1], "rb" ).read()
@@ -1710,11 +1813,13 @@ jsonEnvelopeCase "--token-budget=3000"  --token-budget=3000
 jsonEnvelopeCase "--token-budget=16000" --token-budget=16000
 
 # the over_ceiling key must actually FIRE somewhere in that sweep, or the §C2 arm above is vacuous.
-"$BIN" src --for="$JSON_TASK" --json --no-cache --token-budget=200 > "$TMP/fj200.out" 2>/dev/null || true
+rw src --for="$JSON_TASK" --json --token-budget=200 > "$TMP/fj200.out" 2>/dev/null || true
 grep -q '"over_ceiling":true' "$TMP/fj200.out" \
     && ok "§C2 control: over_ceiling DOES fire at a small budget (the charge arm above is not vacuous)" \
     || no "§C2 control: no budget in the sweep produced over_ceiling - the §C2 arms proved nothing"
+}
 
+est_c4(){
 # ── §C4 (capture-audit-4, wave 3): the --max-tokens ceiling VERDICT measures the EMITTED dialect ────────
 #
 # The top-K binary search prices the XML rendering (main.cpp's measureMapBytes calls serialize()), and under
@@ -1728,7 +1833,7 @@ grep -q '"over_ceiling":true' "$TMP/fj200.out" \
 # as an implication over a sweep rather than pinned to an N, because the crossover moves with the corpus.
 c4any=0; c4bad=0
 for n in 500 1000 3000 6000 6500 10000 20000; do
-    "$BIN" src --max-tokens="$n" --json --no-cache > "$TMP/c4.json" 2>/dev/null || true
+    rw src --max-tokens="$n" --json > "$TMP/c4.json" 2>/dev/null || true
     verdict="$( python3 - "$TMP/c4.json" <<'PYEOF'
 import json, sys
 raw = open( sys.argv[1], "rb" ).read()
@@ -1755,7 +1860,7 @@ done
 
 # and the XML dialect must be untouched by all of this: its verdict already measured its own rendering.
 for n in 200 1000 6000; do
-    "$BIN" src --max-tokens="$n" --no-cache > "$TMP/c4.xml" 2>/dev/null || true
+    rw src --max-tokens="$n" > "$TMP/c4.xml" 2>/dev/null || true
     xb="$( wc -c < "$TMP/c4.xml" | tr -d ' ' )"
     # the XML states its fit inside the header COMMENT (serialize.h writes ` fit_bytes=N`, unquoted prose,
     # not an attribute) — and the legend line also carries the literal `fit_bytes=honoured:`, so take the
@@ -1766,7 +1871,9 @@ for n in 200 1000 6000; do
         no "§C4 XML N=$n: $xb B exceeds fit_bytes $xfit with no over_ceiling=1"
     else ok "§C4 XML N=$n: $xb B vs fit_bytes $xfit, label consistent"; fi
 done
+}
 
+est_15(){
 # ── #15 (capture-audit 2026-09-04, M11 / lens 7 F-EST-1/2/3, lens 1 F10, lens 4): EVERY --token-budget consumer
 #    prices its ROOT. The audited binary took a budget on --pack-task (header prose said `budget=12744 bytes`),
 #    --from-trace, --handoff (--token-budget=100 delivered 521 payload bytes with no est_tokens=/over_ceiling=)
@@ -1790,12 +1897,12 @@ band15(){   # $1 label $2 file $3 root-element $4 hi*100 [$5 arm tag, default #1
         || no "$tag $label: $B B / est_tokens=$E = $(( R / 100 )).$(( R % 100 )) B/tok — OUTSIDE the band (the root's number does not price the delivered document)"
 }
 # (a) --pack-task: a comfortable budget prices; a tiny one labels over_ceiling on the ROOT, not only in prose
-"$BIN" src --pack-task="$FOR_TASK" --token-budget=1500 --no-cache >"$TMP/p15_pt.xml" 2>/dev/null
+rw src --pack-task="$FOR_TASK" --token-budget=1500 >"$TMP/p15_pt.xml" 2>/dev/null
 band15 "--pack-task --token-budget=1500" "$TMP/p15_pt.xml" ctx 420
 [ "$( root_attr "$TMP/p15_pt.xml" ctx budget_tokens )" = "1500" ] \
     && ok "#15 --pack-task: root budget_tokens=\"1500\" — the ceiling in the SAME unit as est_tokens=" \
     || no "#15 --pack-task: root carries no budget_tokens=\"1500\" beside est_tokens= (got '$( root_attr "$TMP/p15_pt.xml" ctx budget_tokens )')"
-"$BIN" src --pack-task="$FOR_TASK" --token-budget=50 --no-cache >"$TMP/p15_pt50.xml" 2>/dev/null
+rw src --pack-task="$FOR_TASK" --token-budget=50 >"$TMP/p15_pt50.xml" 2>/dev/null
 [ "$( root_attr "$TMP/p15_pt50.xml" ctx over_ceiling )" = "1" ] \
     && ok "#15 --pack-task --token-budget=50: root over_ceiling=\"1\" (the header floor exceeds the ceiling)" \
     || no "#15 --pack-task --token-budget=50: no over_ceiling=\"1\" on the root while the ledger prose says the floor exceeds the budget"
@@ -1805,12 +1912,12 @@ E50="$( root_est "$TMP/p15_pt50.xml" ctx )"
     || no "#15 --pack-task --token-budget=50: est_tokens='$E50' does not exceed the budget it is labelled over"
 # (b) --from-trace: the same two shapes on a name-resolved frame
 printf 'Traceback (most recent call last):\n  File "src/graph.h", line 1, in rankGraphTeleport\n' >"$TMP/p15_trace.txt"
-"$BIN" src --from-trace="$TMP/p15_trace.txt" --token-budget=1500 --no-cache >"$TMP/p15_ft.xml" 2>/dev/null
+rw src --from-trace="$TMP/p15_trace.txt" --token-budget=1500 >"$TMP/p15_ft.xml" 2>/dev/null
 band15 "--from-trace --token-budget=1500" "$TMP/p15_ft.xml" ctx 420
 [ "$( root_attr "$TMP/p15_ft.xml" ctx budget_tokens )" = "1500" ] \
     && ok "#15 --from-trace: root budget_tokens=\"1500\"" \
     || no "#15 --from-trace: root carries no budget_tokens=\"1500\" (got '$( root_attr "$TMP/p15_ft.xml" ctx budget_tokens )')"
-"$BIN" src --from-trace="$TMP/p15_trace.txt" --token-budget=50 --no-cache >"$TMP/p15_ft50.xml" 2>/dev/null
+rw src --from-trace="$TMP/p15_trace.txt" --token-budget=50 >"$TMP/p15_ft50.xml" 2>/dev/null
 [ "$( root_attr "$TMP/p15_ft50.xml" ctx over_ceiling )" = "1" ] \
     && ok "#15 --from-trace --token-budget=50: root over_ceiling=\"1\"" \
     || no "#15 --from-trace --token-budget=50: no over_ceiling=\"1\" on the root (the prose label alone is what a parser discards)"
@@ -1829,7 +1936,7 @@ band15 "--from-trace --token-budget=1500" "$TMP/p15_ft.xml" ctx 420
 #     two NUMBERS the root itself prints, in the unit it prints them in: est_tokens <= N OR over_ceiling="1",
 #     on EVERY rung. 1600/1700 are in the sweep because they are the rungs that were red.
 for N in 100 300 400 600 800 1200 1500 1600 1700 2000 2500 3000; do
-    "$BIN" src --for="$FOR_TASK" --token-budget=$N --no-cache >"$TMP/p15_for$N.xml" 2>/dev/null
+    rw src --for="$FOR_TASK" --token-budget=$N >"$TMP/p15_for$N.xml" 2>/dev/null
     FB="$( bytes_of "$TMP/p15_for$N.xml" )"
     FE="$( root_est "$TMP/p15_for$N.xml" ctx )"
     FO="$( root_attr "$TMP/p15_for$N.xml" ctx over_ceiling )"
@@ -1870,8 +1977,8 @@ grep -o '<!--.*-->' "$TMP/p15_for100.xml" | grep -qE '(^|[^[:alnum:]_:.-])over_c
     && ok "#15 --for --token-budget=100: the legend defines over_ceiling=" \
     || no "#15 --for --token-budget=100: over_ceiling= rides the root but no legend clause defines it"
 # (c) --handoff: priced, labelled, and withheld= is a boolean with the count beside it
-"$BIN" . --handoff --token-budget=100 --no-cache >"$TMP/p15_ho100.xml" 2>/dev/null
-"$BIN" . --handoff --token-budget=100000 --no-cache >"$TMP/p15_hobig.xml" 2>/dev/null
+rw . --handoff --token-budget=100 >"$TMP/p15_ho100.xml" 2>/dev/null
+rw . --handoff --token-budget=100000 >"$TMP/p15_hobig.xml" 2>/dev/null
 band15 "--handoff --token-budget=100000" "$TMP/p15_hobig.xml" handoff 320
 [ "$( root_attr "$TMP/p15_ho100.xml" handoff over_ceiling )" = "1" ] \
     && ok "#15 --handoff --token-budget=100: root over_ceiling=\"1\" (the verified floor exceeds 100 tokens)" \
@@ -1892,11 +1999,11 @@ fi
     && ok "#15 --handoff --token-budget=100000: no over_ceiling= (absent = inside the ceiling, the map's convention)" \
     || no "#15 --handoff --token-budget=100000: over_ceiling=\"$( root_attr "$TMP/p15_hobig.xml" handoff over_ceiling )\" on a packet well inside its budget"
 # (d) --expand --top-k=0: the root prices the bodies-only document, and that number IS the one --token-budget gates on
-"$BIN" src --expand=pageWindow --top-k=0 --no-cache >"$TMP/p15_ex.xml" 2>/dev/null
+rw src --expand=pageWindow --top-k=0 >"$TMP/p15_ex.xml" 2>/dev/null
 band15 "--expand=pageWindow --top-k=0" "$TMP/p15_ex.xml" ctx 420
 EX="$( root_est "$TMP/p15_ex.xml" ctx )"
 if [ -n "$EX" ] && [ "$EX" -gt 1 ] 2>/dev/null; then
-    "$BIN" src --expand=pageWindow --top-k=0 --no-cache --token-budget=$(( EX - 1 )) >/dev/null 2>"$TMP/p15_ex.err"; rc=$?
+    rw src --expand=pageWindow --top-k=0 --token-budget=$(( EX - 1 )) >/dev/null 2>"$TMP/p15_ex.err"; rc=$?
     grep -q "withheld_est_tokens=$EX " "$TMP/p15_ex.err" && [ "$rc" -ne 0 ] \
         && ok "#15 --expand --top-k=0: the root's est_tokens=$EX is the number --token-budget gates on (withheld_est_tokens=$EX, exit $rc) — one estimator" \
         || no "#15 --expand --top-k=0: root est_tokens=$EX but the gate says '$( head -1 "$TMP/p15_ex.err" | cut -c1-120 )' — two counters"
@@ -1920,7 +2027,9 @@ if command -v xmllint >/dev/null 2>&1; then
         if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "#15 $f.xml is well-formed"; else no "#15 $f.xml FAILED xmllint"; fi
     done
 fi
+}
 
+est_16(){
 # ── #16 (F5, terminality round A 2026-09-05): the MCP `for` bundle PRICES itself ────────────────────────
 # The MCP twin used to DECLARE est_tokens absent — `lens="churn,amp,tested,est_tokens"`, with a legend
 # sentence saying "this bundle is capped by the server, not priced". Declaring an absence is honest about
@@ -1935,7 +2044,7 @@ fi
 mcp_for_text(){   # $1 task, $2 extra JSON arguments (may be empty) → the tool's text payload on stdout
     printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
                   "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"for\",\"arguments\":{\"task\":\"$1\"$2}}}" \
-        | ( cd "$ROOT" && "$BIN" --mcp 2>/dev/null ) | tail -1 | python3 -c '
+        | ( cd "$ROOT" && rwcall --mcp 2>/dev/null ) | tail -1 | python3 -c '
 import sys, json
 r = json.load( sys.stdin )
 sys.stdout.write( r["result"]["content"][0]["text"] if "result" in r else "" )
@@ -1962,13 +2071,15 @@ else
     # CLI/MCP agreement in KIND, not in bytes: the two dialects deliberately serve different payload (the
     # CLI folds the git/clone lens columns, the server runs no such pass), so the assertion is that both
     # numbers are the same estimator applied to their own bytes — i.e. both land in the same markup band.
-    "$BIN" "$ROOT" --for="rank graph teleport" --no-cache >"$TMP/f5_cli.xml" 2>/dev/null
+    rw "$ROOT" --for="rank graph teleport" >"$TMP/f5_cli.xml" 2>/dev/null
     band15 "CLI --for (same task, same repo)" "$TMP/f5_cli.xml" ctx 320 "#16"
     if command -v xmllint >/dev/null 2>&1; then
         if xmllint --noout "$TMP/f5_mcp.xml" 2>/dev/null; then ok "#16 the priced MCP for bundle is well-formed XML"; else no "#16 the priced MCP for bundle is malformed XML"; fi
     fi
 fi
+}
 
+est_17(){
 # ── #17 (0.6.1, M2): --connect must charge its CONDITIONAL legend comment, and stay CONSERVATIVE ────────
 # packConnect emits THREE things ahead of its payload — kConnectHeader, the #66 graph_unindexed legend
 # comment (emitted exactly when graph_unindexed= rides the root), and the shared root-relative legend — and
@@ -2010,7 +2121,7 @@ done
 printf -- '<script setup lang="ts">\nconst x = 1;\n</script>\n<template><p>{{ x }}</p></template>\n' >"$C17/unindexed_1/src/page.vue"
 for d in unindexed_0 unindexed_1; do
     # L1 (2026-09-19): #17 measures the FULL legend's #66 comment (graph_unindexed= prose), so it asks for the full legend.
-    "$BIN" "$C17/$d" --connect=render,greet --no-cache --legend=full >"$TMP/c17_$d.xml" 2>/dev/null
+    rwcall "$C17/$d" --connect=render,greet --no-cache --legend=full >"$TMP/c17_$d.xml" 2>/dev/null
 done
 C17_LEGEND='graph_unindexed=N is a third gauge'
 # (a) presence guards — assert the mutation TOOK before trusting any number derived from it. Without these
@@ -2056,7 +2167,9 @@ if command -v xmllint >/dev/null 2>&1; then
         if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "#17 $f.xml is well-formed"; else no "#17 $f.xml FAILED xmllint"; fi
     done
 fi
+}
 
+est_18(){
 # ── #18 (PR #215 review): RUNG ZERO PRICES THE DOCUMENT IT WOULD EMIT, IN THE ROOT'S OWN MIXED RATE ────
 #
 # THE DEFECT. --for's ceiling ladder has a rung ZERO below its own three rungs: the droppable legend trio
@@ -2098,7 +2211,7 @@ with open( os.path.join( out, "steps.py" ), "w" ) as fh:
         fh.write( f'def widgetPingStep{j}( total, step ):\n    """Step {j}."""\n    return total + step\n\n' )
 PYRZ
 # L1 (2026-09-19): #18 counts the FULL legend's droppable clauses (confidence=/tail:/route= prose), so rz_run asks for the full legend.
-rz_run(){ ( cd "$RZ" && "$BIN" corpus --for="widget ping box router" --detail=1 --token-budget="$1" --no-cache --legend=full ) >"$RZ/o.xml" 2>/dev/null; }
+rz_run(){ ( cd "$RZ" && rwcall corpus --for="widget ping box router" --detail=1 --token-budget="$1" --no-cache --legend=full ) >"$RZ/o.xml" 2>/dev/null; }
 rz_est(){ grep -aoE 'est_tokens="[0-9]+"' "$RZ/o.xml" | head -1 | tr -dc '0-9'; }
 rz_note(){ grep -acF '[legend clauses:' "$RZ/o.xml"; }
 # FE-B (test/receiverevidencecheck.sh): 1200 -> 1400. The fixture's bare widgetPingStepN() calls name a function another
@@ -2157,7 +2270,9 @@ else
         no "#18 rung zero control at --token-budget=$RZ_CTRL: dropped-note=$RZ_CN clauses still riding=$RZ_CC/3 (est_tokens=${RZ_CE:-unreadable}) — rung zero no longer fires at all, so the arm above is green for the wrong reason"
     fi
 fi
+}
 
+est_19(){
 # ── #19 (CodeRabbit 4054594308, train 8): THE <hdr> ROWS ARE PRICED ─────────────────────────────────────
 #
 # THE DEFECT. --for's <hdr p= of=/> rows (R2-AF: the named file's decl/impl partner, printed first inside the
@@ -2198,7 +2313,7 @@ sys.exit( 0 if est == expected and d.count( b'<hdr ' ) == 6 else 1 )
 PYHXI
 }
 for hx_mode in "--signatures-only" "" "--token-budget=1500"; do
-    ( cd "$HX" && "$BIN" corpus --for="$HX_TASK" $hx_mode --no-cache ) >"$HX/o.xml" 2>/dev/null
+    ( cd "$HX" && rwcall corpus --for="$HX_TASK" $hx_mode --no-cache ) >"$HX/o.xml" 2>/dev/null
     hx_label="${hx_mode:-default}"
     if hx_out="$( hx_identity "$HX/o.xml" )"; then
         ok "#19 <hdr> rows priced ($hx_label): est_tokens matches markup@2.50 + bodies@3.80 with six rows present — bytes/span/est/expected = $hx_out"
@@ -2225,7 +2340,7 @@ print( json.dumps( { "jsonrpc": "2.0", "id": 1, "method": "initialize" } ) )
 print( json.dumps( { "jsonrpc": "2.0", "id": 2, "method": "tools/call",
                      "params": { "name": "for", "arguments": { "path": sys.argv[2], "task": sys.argv[1] } } } ) )
 PYHXM
-"$BIN" --mcp <"$HX/mcp.in" >"$HX/mcp.json" 2>/dev/null
+rwcall --mcp <"$HX/mcp.in" >"$HX/mcp.json" 2>/dev/null
 HX_M="$( python3 - "$HX/mcp.json" <<'PYHXR'
 import json, re, sys
 try:
@@ -2242,6 +2357,86 @@ if [ "$#" = 4 ] && [ "$2" = "$3" ] && [ "$4" = "hdr=6" ]; then
 else
     no "#19 MCP for twin: bytes/est/expected = ${HX_M:-unreadable} (six <hdr> rows required and priced)"
 fi
+}
 
+# ── THE SECTION POOL (speed + structure; changes no assertion) ──────────────────────────────────────────────
+# Every est_* function above is one section of this gate, its text unchanged. A CHAIN is a run of sections that share
+# state — a variable, a function or a $TMP file one section writes and a later one reads — so its sections run in roster
+# order in one subshell. Chains share nothing else and run concurrently on a bounded pool (ESTCHARGE_JOBS, default
+# min(4, cpus); 1 = one chain holding every section in roster order, i.e. the old serial run), heaviest chain first.
+# Each section's stdout (and fd 7, the call harness's FAIL lines) and stderr go to its own files, which are replayed
+# strictly in ROSTER order as soon as each prefix is complete: the PASS/FAIL lines and their order are the serial
+# run's. A section whose subshell died before finishing (e.g. a set -u abort) prints its own FAIL line instead of
+# vanishing, and a section listed in no chain (or two) fails the gate before anything runs.
+# Chain weights (s, warm cache, one local run): #11 ~45 + A7R 9 + A7D 12 (f_for.out, the A7R corpus and a7r_out);
+# #11 sweep ~38; #15 31 + #16 7 + #17 1 (root_attr/root_est/band15); #1..#10 ~38 (SHAPES, $label.out, E_MAP);
+# #5 8 + #5b 11 + #5c + #5d 3 (mapbytes_of; #5d's legend arm reads #5's mt1500.out); #14 19; every other section
+# stands alone (<= 8 s). A dependency missed here shows up as a diff between two serial runs in opposite chain orders.
+POOL_ROSTER=( est_1 est_2 est_3 est_4 est_5 est_5b est_5c est_5d est_6 est_7 est_8 est_9 est_10 est_11 est_11_sweep
+              est_11_a7r est_11_a7d est_12 est_13 est_14 est_14f est_14g est_c1c2 est_c4 est_15 est_16 est_17 est_18 est_19 )
+POOL_CHAINS=( "est_11 est_11_a7r est_11_a7d" "est_11_sweep" "est_15 est_16 est_17" "est_1 est_2 est_3 est_7 est_8 est_9 est_10"
+              "est_5 est_5b est_5c est_5d" "est_14" "est_14f" "est_14g" "est_c1c2" "est_c4" "est_19" "est_18" "est_6"
+              "est_4" "est_12" "est_13" )
+for pool_s in "${POOL_ROSTER[@]}"; do
+    pool_n=0
+    for pool_c in "${POOL_CHAINS[@]}"; do
+        for pool_m in $pool_c; do [ "$pool_m" = "$pool_s" ] && pool_n=$(( pool_n + 1 )); done
+    done
+    [ "$pool_n" = 1 ] || no "harness: section $pool_s is in $pool_n chains (want exactly 1) — fix POOL_CHAINS"
+done
+[ "$fail" = 0 ] || { echo "FAILURES ABOVE"; exit 1; }
+POOL_JOBS="${ESTCHARGE_JOBS:-}"
+if [ -z "$POOL_JOBS" ]; then
+    pool_cpus="$( getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1 )"
+    case "$pool_cpus" in ''|*[!0-9]*) pool_cpus=1 ;; esac
+    POOL_JOBS=$(( pool_cpus < 4 ? pool_cpus : 4 ))
+fi
+case "$POOL_JOBS" in ''|*[!0-9]*|0) echo "estchargecheck: ESTCHARGE_JOBS='$POOL_JOBS' is not a positive integer"; exit 2 ;; esac
+[ "$POOL_JOBS" = 1 ] && POOL_CHAINS=( "${POOL_ROSTER[*]}" )
+# Warm the two shared src/ caches once, before the pool, so the chains read them instead of racing four cold parses.
+rw src --top-k=1 >/dev/null 2>&1 &
+rw src --for="$FOR_TASK" >/dev/null 2>&1 &
+wait
+SEC="$TMP/sections"; mkdir -p "$SEC"
+pool_chain(){
+    local s
+    for s in "$@"; do
+        fail=0
+        "$s" >"$SEC/$s.out" 7>&1 2>"$SEC/$s.err"
+        echo "$fail" >"$SEC/$s.rc"
+    done
+}
+pool_next=0; pool_printed=0
+while :; do
+    pool_done=0; pool_k=0
+    while [ "$pool_k" -lt "$pool_next" ]; do
+        [ -e "$SEC/chain$pool_k.done" ] && pool_done=$(( pool_done + 1 ))
+        pool_k=$(( pool_k + 1 ))
+    done
+    while [ $(( pool_next - pool_done )) -lt "$POOL_JOBS" ] && [ "$pool_next" -lt "${#POOL_CHAINS[@]}" ]; do
+        # shellcheck disable=SC2086
+        ( ( pool_chain ${POOL_CHAINS[$pool_next]} ); : >"$SEC/chain$pool_next.done" ) &
+        pool_next=$(( pool_next + 1 ))
+    done
+    while [ "$pool_printed" -lt "${#POOL_ROSTER[@]}" ]; do
+        pool_s="${POOL_ROSTER[$pool_printed]}"
+        if [ -e "$SEC/$pool_s.rc" ]; then
+            cat "$SEC/$pool_s.out"; cat "$SEC/$pool_s.err" >&2
+            [ "$( cat "$SEC/$pool_s.rc" )" = 0 ] || fail=1
+        elif [ "$pool_done" = "${#POOL_CHAINS[@]}" ]; then
+            [ -e "$SEC/$pool_s.out" ] && cat "$SEC/$pool_s.out"; [ -e "$SEC/$pool_s.err" ] && cat "$SEC/$pool_s.err" >&2
+            no "harness: section $pool_s did not finish (its subshell exited early; its stderr is above)"
+        else
+            break
+        fi
+        pool_printed=$(( pool_printed + 1 ))
+    done
+    [ "$pool_printed" -ge "${#POOL_ROSTER[@]}" ] && break
+    sleep 0.2
+done
+wait
+
+
+[ -s "$TMP/call_failures" ] && fail=1   # a killed call already printed its own FAIL line (CALL HARNESS)
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
