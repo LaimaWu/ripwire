@@ -1,0 +1,38 @@
+# test/langidentity/manifest.tsv -- the fixture corpora test/langidentitycheck.sh runs, one row per directory.
+# Columns (TAB-separated): LANG-TAG <TAB> FIXTURE-DIR relative to the repository root, or "-" when the language has none.
+# LANG-TAG is the short label of src/model.h (langTag), restricted to the code languages; the gate checks that every
+# one of them has at least one row, so a language appended to the enum without a row fails there.
+# Pure single-language directories only (a mixed directory would run its other languages' symbols under this tag).
+# Fixture-only languages (no in-sample real repo): java kt swift cs php lua ex clj dart gd objc sh.
+# Languages with NO fixture directory: none today. List one as "LANG<TAB>-" here, never leave it out.
+cpp	test/massfix
+cpp	test/cppqualfix
+c	test/cfix
+c	test/expandsibsfix
+py	test/pymodulealiasfix
+py	test/pyshapefix
+ts	test/tsshapefix
+ts	test/jsxcallfix
+js	test/jsshapefix
+js	test/impactimportfix
+go	test/goinstfix
+rs	test/rustqualfix
+rs	test/rustimportprecisefix
+swift	test/swiftshapefix
+swift	test/swiftfix
+objc	test/objcfieldfix
+sh	test/bashsourcefix
+java	test/javamethodreffix
+rb	test/rubyconstfix
+rb	test/rubyrecvfix
+cs	test/csharpfix
+cs	test/csharpcondfix
+php	test/phpfix
+lua	test/luafix
+lua	test/luarequirefix
+ex	test/elixirfix
+ex	test/elixirresolvefix
+dart	test/dartfix
+kt	test/kotlinfix
+gd	test/gdscriptfix
+clj	test/clojurefix
