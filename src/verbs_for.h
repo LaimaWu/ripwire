@@ -2189,9 +2189,9 @@ ForAutoBodiesResult buildForAutoBodies( const rw::Config& cfg, const rw::IngestR
         // shell the "budget" branch below already gets for free, rather than a second hand-rolled tag.
         out.attr    = " bundle=\"auto\" bodies=\"0\" reason=\"no_candidates\"";
         out.section = rw::chargeSection( [ & ]( std::FILE* f )
-            { rw::packBodies( f, ing, autoBodyIds, /*budgetBytes=*/1, g.outOff, g.outTargets, g.outNameOnly, cfg.compress, redactPtr,
+            { rw::packBodies( f, ing, autoBodyIds, /*budgetBytes=*/1, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), cfg.compress, redactPtr,
                                /*ranges=*/nullptr, /*noteIndex=*/nullptr, nullptr, /*truncateOversizedFirst=*/false,
-                               /*withFileContext=*/false, fabRootArg, &lensRank, viaLegendInHead, &g.outProv, splitLegendInHead ); },
+                               /*withFileContext=*/false, fabRootArg, &lensRank, rw::CalleeLegendsInHead( viaLegendInHead, splitLegendInHead ) ); },
             rw::kBytesPerTokenBody );
         if( !out.section.isRendered )
         {
@@ -2211,9 +2211,9 @@ ForAutoBodiesResult buildForAutoBodies( const rw::Config& cfg, const rw::IngestR
     const std::size_t  autoBodyBudget = std::max<std::size_t>( 1, std::min( leftBytes, cfg.packBudgetBytes ) );
     rw::EmittedBodies autoEmitted;
     out.section = rw::chargeSection( [ & ]( std::FILE* f )
-        { rw::packBodies( f, ing, autoBodyIds, autoBodyBudget, g.outOff, g.outTargets, g.outNameOnly, cfg.compress, redactPtr,
+        { rw::packBodies( f, ing, autoBodyIds, autoBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), cfg.compress, redactPtr,
                            /*ranges=*/nullptr, /*noteIndex=*/nullptr, &autoEmitted, /*truncateOversizedFirst=*/false,
-                           /*withFileContext=*/false, fabRootArg, &lensRank, viaLegendInHead, &g.outProv, splitLegendInHead ); },
+                           /*withFileContext=*/false, fabRootArg, &lensRank, rw::CalleeLegendsInHead( viaLegendInHead, splitLegendInHead ) ); },
         rw::kBytesPerTokenBody );
 
     if( !out.section.isRendered )
@@ -2720,8 +2720,8 @@ ForAutoBodiesResult buildForCompactHops( const rw::Config& cfg, const rw::Ingest
     const rw::HopOwners           owners   = forHopOwners( cfg, ing, ownerPlan, leftBytes, fcRootArg );
 
     out.section = rw::chargeSection( [ & ]( std::FILE* f )
-        { rw::packHops( f, ing, hopNodes, hopBudget, g.outOff, g.outTargets, g.outNameOnly, redactPtr, &lensRank, fcRootArg,
-                        viaLegendInHead, &owners, &g.outProv, promised.splitLegendInHead ); },   // g.outNameOnly also feeds the hop-slot rule (serialize.h noProvenEdge)
+        { rw::packHops( f, ing, hopNodes, hopBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), redactPtr, &lensRank, fcRootArg,
+                        rw::CalleeLegendsInHead( viaLegendInHead, promised.splitLegendInHead ), &owners ); },   // g.outNameOnly also feeds the hop-slot rule (serialize.h noProvenEdge)
         // MARKUP rate, not the body rate — and this is an honesty choice, not a copy-paste slip. The body
         // rate (3.80 B/tok) prices SOURCE TEXT; the compact section contains none, only tags, identifiers
         // and line numbers, which tokenize like the rest of the bundle. Charging structured markup at the
@@ -3736,9 +3736,9 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             // real render redacts is still counted once
             std::optional<RedactCounts> floorRedact = redactPtr != nullptr ? std::optional<RedactCounts>( *redactPtr ) : std::nullopt;
             trailingReserve += rw::chargeSection( [ & ]( std::FILE* f )
-                { packBodies( f, ing, detailIds, detailFloorBudget, g.outOff, g.outTargets, g.outNameOnly, cfg.compress, floorRedact ? &*floorRedact : nullptr,
+                { packBodies( f, ing, detailIds, detailFloorBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), cfg.compress, floorRedact ? &*floorRedact : nullptr,
                               /*ranges=*/nullptr, notesPtr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
-                              /*withFileContext=*/false, flRootArg, &lensRank, headerParts.viaPresent, &g.outProv, headerParts.splitPresent ); },
+                              /*withFileContext=*/false, flRootArg, &lensRank, rw::CalleeLegendsInHead( headerParts.viaPresent, headerParts.splitPresent ) ); },
                 rw::kBytesPerTokenBody ).xml.size();   // a degraded measure is 0 bytes: the reserve falls back to the graph alone
         }
         const std::string forTailNext = forTailCutNextAttr( cfg );   // fix round 4: the explicit-budget tail's cut next= (empty otherwise)
@@ -4062,9 +4062,9 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                 detailBodyBudget = std::min( detailBodyBudget, std::max( leftBytes, detailFloorBudget ) );
             }
             detailSection = rw::chargeSection( [ & ]( std::FILE* f )
-                { packBodies( f, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, g.outNameOnly, cfg.compress, redactPtr,
+                { packBodies( f, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), cfg.compress, redactPtr,
                               /*ranges=*/nullptr, notesPtr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
-                              /*withFileContext=*/false, flRootArg, &lensRank, headerParts.viaPresent, &g.outProv, headerParts.splitPresent ); },   // L3: --detail bodies surface notes too (part of the --for bundle)
+                              /*withFileContext=*/false, flRootArg, &lensRank, rw::CalleeLegendsInHead( headerParts.viaPresent, headerParts.splitPresent ) ); },   // L3: --detail bodies surface notes too (part of the --for bundle)
                 rw::kBytesPerTokenBody );
             if( !detailSection.isRendered )
             {
@@ -4433,10 +4433,10 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // directly at the SAME budget — uncharged for that one run, with an alert, never a fabricated number.
         if( cfg.detail > 0 )
         {
-            rw::emitChargedSection( stdout, detailSection, [ & ]{ packBodies( stdout, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, g.outNameOnly,
+            rw::emitChargedSection( stdout, detailSection, [ & ]{ packBodies( stdout, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ),
                                                                               cfg.compress, redactPtr, /*ranges=*/nullptr, notesPtr,
                                                                               /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
-                                                                              /*withFileContext=*/false, flRootArg, &lensRank, headerParts.viaPresent, &g.outProv, headerParts.splitPresent ); } );
+                                                                              /*withFileContext=*/false, flRootArg, &lensRank, rw::CalleeLegendsInHead( headerParts.viaPresent, headerParts.splitPresent ) ); } );
         }
         else if( autoSection.isRendered && !autoSection.xml.empty() )
         {

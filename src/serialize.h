@@ -6719,6 +6719,27 @@ inline bool calleeRowVia( const std::vector<std::uint32_t>& outOff, const std::v
     return via;
 }
 
+// attrib-multidef Q1: the per-edge bytes a section's <calls> rows read — Graph::outNameOnly (via="name") and, where the caller
+// asks for it, Graph::outProv (prov="split"), with the flag its prov comment's one-time charge sets (packHops passes its own to
+// the owner rows). Built implicitly from outNameOnly alone, so every caller that marks no split arm passes what it always did.
+struct CalleeEdgeBytes
+{
+    const std::vector<std::uint8_t>& nameOnly;
+    const std::vector<std::uint8_t>* prov               = nullptr;
+    bool*                            splitLegendCharged = nullptr;
+    CalleeEdgeBytes( const std::vector<std::uint8_t>& nameOnlyBytes, const std::vector<std::uint8_t>* provBytes = nullptr,   // NOLINT: implicit
+                     bool* charged = nullptr ) noexcept
+        : nameOnly( nameOnlyBytes ), prov( provBytes ), splitLegendCharged( charged ) {}
+};
+// …and which of their readings the caller's own first-screen legend already carries (FE-B's via="name", Q1's prov="split"), so
+// the section neither repeats nor charges them. Built implicitly from the via bit alone, as every pre-Q1 caller passes it.
+struct CalleeLegendsInHead
+{
+    bool via   = false;
+    bool split = false;
+    CalleeLegendsInHead( bool viaInHead = false, bool splitInHead = false ) noexcept : via( viaInHead ), split( splitInHead ) {}   // NOLINT: implicit
+};
+
 // attrib-multidef Q1: the sink a section passes, with the split-arm bytes it reads and the flag its comment charge sets
 inline CalleeCallsSink withSplitArms( CalleeCallsSink sink, const std::vector<std::uint8_t>* prov, bool* splitLegendCharged ) noexcept
 {
@@ -6729,12 +6750,12 @@ inline CalleeCallsSink withSplitArms( CalleeCallsSink sink, const std::vector<st
 
 // attrib-multidef Q1: is the <calls> row id → cid a split arm (and not by name alone: that row says via="name")? The first
 // such row of an answer charges the comment that defines it to `used`, before the row, when the head did not define it.
-inline bool calleeRowSplit( const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets, NodeId id, NodeId cid, bool via,
-                            std::size_t& used, const CalleeCallsSink& sink )
+inline std::string_view calleeRowSplitAttr( const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets, NodeId id, NodeId cid,
+                                            bool via, std::size_t& used, const CalleeCallsSink& sink )
 {
     if( via || sink.prov == nullptr || sink.prov->empty() || std::size_t( id ) + 1 >= outOff.size() )
     {
-        return false;
+        return {};
     }
     const auto b  = outTargets.begin() + outOff[ id ];
     const auto e  = outTargets.begin() + outOff[ std::size_t( id ) + 1 ];
@@ -6745,7 +6766,7 @@ inline bool calleeRowSplit( const std::vector<std::uint32_t>& outOff, const std:
         used += splitArmCallsLegendComment().size();
         *sink.splitLegendCharged = true;
     }
-    return split;
+    return split ? std::string_view( " prov=\"split\"" ) : std::string_view();
 }
 
 // §P10.1: the disclosed <calls total=... [shown=... capped="1"]> block
@@ -6786,13 +6807,12 @@ inline void emitCalleeCallsBlock( std::string& out, NodeId id, const std::vector
         }
         const Symbol& cs = ing.symbols[cid];
         const std::string_view viaAttr = viaNameAttr( calleeRowVia( outOff, outTargets, id, cid, used, sink ) );   // FE-B: via="name" or ""
-        const bool             split   = calleeRowSplit( outOff, outTargets, id, cid, !viaAttr.empty(), used, sink );   // Q1
-        const std::string_view splitAttr = split ? std::string_view( " prov=\"split\"" ) : std::string_view();
+        const std::string_view splitAttr = calleeRowSplitAttr( outOff, outTargets, id, cid, !viaAttr.empty(), used, sink );   // Q1: prov="split" or ""
 
         // COMPACT: the names-only rendering — see collectCalleeNameRow above for what it does and does not do.
         if( sink.namesOnly )
         {
-            collectCalleeNameRow( nameRows, cs, used, sink, !viaAttr.empty(), split );
+            collectCalleeNameRow( nameRows, cs, used, sink, !viaAttr.empty(), !splitAttr.empty() );
             ++shown;
             continue;
         }
@@ -7167,7 +7187,7 @@ inline void regroupEmittedRecord( EmittedBodies* out, const std::vector<PackedBo
 inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vector<NodeId>& nodes,
                         std::size_t budgetBytes,
                         const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets,
-                        const std::vector<std::uint8_t>& outNameOnly,   // FE-B: Graph::outNameOnly — the <c> rows' via="name"
+                        const CalleeEdgeBytes& outEdges,   // FE-B: Graph::outNameOnly — the <c> rows' via="name" (+ Q1's outProv)
                         bool compress = false, RedactCounts* redact = nullptr,
                         const HashMap<NodeId, LineRange>* ranges = nullptr,
                         const notes::NoteIndex* noteIndex = nullptr,    // L3: field notes — surfaces <note> children on each
@@ -7188,14 +7208,14 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
                                                                             //   on --for/--pack-task/--from-trace, calleeNameSpecificity on
                                                                             //   --expand; nullptr (--around/--exemplar) ⇒ node-id order.
                                                                             //   See CalleeCallsSink::rank.
-                        bool viaLegendInHead = false,   // FE-B: the caller's own first-screen legend already defines via="name"
-                                                        //   (namesOnlyOutAny above), so this section neither repeats nor charges it
-                        const std::vector<std::uint8_t>* outProv = nullptr,   // attrib-multidef Q1: Graph::outProv — the <c> rows'
-                                                                              //   prov="split"; nullptr (every caller but --for) ⇒ none
-                        bool splitLegendInHead = false )   // Q1: viaLegendInHead's twin (serialize.h splitArmsOutAny)
+                        CalleeLegendsInHead legendsInHead = {} )   // FE-B: the caller's own first-screen legend already defines via="name"
+                                                                    //   (namesOnlyOutAny above), so this section neither repeats nor charges
+                                                                    //   it; Q1: likewise prov="split" (splitArmsOutAny)
 {
+    const std::vector<std::uint8_t>& outNameOnly     = outEdges.nameOnly;
+    const bool                       viaLegendInHead = legendsInHead.via;
     bool viaLegendCharged = viaLegendInHead;   // FE-B: the via="name" legend has been charged against the budget (CalleeCallsSink)
-    bool splitLegendCharged = splitLegendInHead;   // attrib-multidef Q1: likewise for the prov="split" comment
+    bool splitLegendCharged = legendsInHead.split;   // attrib-multidef Q1: likewise for the prov="split" comment
     // budgetBytes == 0 ⇒ UNLIMITED (A3-F2): the MCP `exemplar` verb has no byte budget, and 0 must never
     // mean "cap at zero bytes" (the cap fired before the first body and emitted a bare <bodies></bodies>).
     // Matches buildRecall's "0 = no cap" convention; the CLI always passes a real budget (default 64 KB).
@@ -7493,7 +7513,7 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
         // rows survive when it CUTS one, which is far from rare here (CalleeCallsSink::rank).
         emitCalleeCallsBlock( piece, id, outOff, outTargets, ing, contentOf, esc, used, budgetBytes,
                               withSplitArms( CalleeCallsSink{ redact, record ? &record->calls : nullptr, /*namesOnly=*/false, calleeRank, &outNameOnly,
-                                                              &viaLegendCharged }, outProv, &splitLegendCharged ) );
+                                                              &viaLegendCharged }, outEdges.prov, &splitLegendCharged ) );
         const std::string bodyNotes = renderNoteChildren( noteIndex, symbolNoteTarget( noteIndex, ing, s ), esc );   // L3/D5
         piece += bodyNotes;
         used += bodyNotes.size();                                                                   // W3-N2: same charge-never-trim rule
@@ -7569,7 +7589,7 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
     {
         w.write( viaNameLegendComment() );   // FE-B: the same rule, for a <calls> row's via="name"
     }
-    if( !splitLegendInHead && children.find( " prov=\"split\"" ) != std::string::npos )
+    if( !legendsInHead.split && children.find( " prov=\"split\"" ) != std::string::npos )
     {
         w.write( splitArmCallsLegendComment() );   // attrib-multidef Q1: the same rule, for a <calls> row's prov="split"
     }
@@ -7625,11 +7645,11 @@ struct OwnerHopRows
 template <typename PathRelFn, typename ContentOfFn>
 inline OwnerHopRows packOwnerHopRows( const IngestResult& ing, const std::vector<NodeId>& nodes, const HopOwners* owners,
                                       const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets,
-                                      const std::vector<std::uint8_t>& outNameOnly, RedactCounts* redact, const std::vector<float>* rank,
+                                      const CalleeEdgeBytes& outEdges, RedactCounts* redact, const std::vector<float>* rank,
                                       std::string_view rootArg, std::size_t rankedBudget, bool rankedVia,
-                                      PathRelFn&& pathRel, ContentOfFn&& contentOf, std::vector<char>& esc,
-                                      const std::vector<std::uint8_t>* outProv = nullptr, bool* splitLegendCharged = nullptr )   // Q1
+                                      PathRelFn&& pathRel, ContentOfFn&& contentOf, std::vector<char>& esc )
 {
+    const std::vector<std::uint8_t>& outNameOnly = outEdges.nameOnly;
     OwnerHopRows out;
     out.rankedBudget = rankedBudget;
     out.rankedVia    = rankedVia;
@@ -7668,7 +7688,7 @@ inline OwnerHopRows packOwnerHopRows( const IngestResult& ing, const std::vector
         used += rowFixed;
         emitCalleeCallsBlock( row, id, outOff, outTargets, ing, contentOf, esc, used, budget,
                               withSplitArms( CalleeCallsSink{ redact, /*recorded=*/nullptr, /*namesOnly=*/true, rank, &outNameOnly, &via,
-                                                              kForOwnerHopNameGuard, next }, outProv, splitLegendCharged ) );
+                                                              kForOwnerHopNameGuard, next }, outEdges.prov, outEdges.splitLegendCharged ) );
         out.xml += row;
         out.xml += "</h>";
         ++out.shown;
@@ -7738,17 +7758,17 @@ inline std::string hopsOpenTag( std::size_t shown, std::size_t requested, std::s
 inline void packHops( std::FILE* out, const IngestResult& ing, const std::vector<NodeId>& nodes,
                       std::size_t budgetBytes,
                       const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets,
-                      const std::vector<std::uint8_t>& outNameOnly,   // FE-B: Graph::outNameOnly — the <c> rows' via="name"
+                      const CalleeEdgeBytes& outEdges,   // FE-B: Graph::outNameOnly — the <c> rows' via="name" (+ Q1's outProv)
                       RedactCounts* redact = nullptr,
                       const std::vector<float>* rank = nullptr, // query relevance, for ordering a CUT callee listing
                       std::string_view rootArg = {},            // R-E: same single-root-only root= every verb takes
-                      bool viaLegendInHead = false,             // FE-B: packBodies' parameter of the same name
-                      const HopOwners* owners = nullptr,        // owner-hop: the leading owner rows; nullptr ⇒ none (byte-identical)
-                      const std::vector<std::uint8_t>* outProv = nullptr,   // attrib-multidef Q1: packBodies' parameter of the same name
-                      bool splitLegendInHead = false )                       // Q1: likewise
+                      CalleeLegendsInHead legendsInHead = {},   // FE-B (+ Q1): packBodies' parameter of the same name
+                      const HopOwners* owners = nullptr )       // owner-hop: the leading owner rows; nullptr ⇒ none (byte-identical)
 {
+    const std::vector<std::uint8_t>& outNameOnly     = outEdges.nameOnly;
+    const bool                       viaLegendInHead = legendsInHead.via;
     bool viaLegendCharged = viaLegendInHead;   // FE-B: the via="name" legend has been charged against the budget (CalleeCallsSink)
-    bool splitLegendCharged = splitLegendInHead;   // attrib-multidef Q1: likewise for the prov="split" comment
+    bool splitLegendCharged = legendsInHead.split;   // attrib-multidef Q1: likewise for the prov="split" comment
     if( budgetBytes == 0 )                                      // 0 ⇒ UNLIMITED, packBodies' own convention
     {
         budgetBytes = SIZE_MAX;
@@ -7792,8 +7812,8 @@ inline void packHops( std::FILE* out, const IngestResult& ing, const std::vector
 
     // owner-hop: the leading owner rows first (THE QUESTION'S OWNER ROWS above; nothing when `owners` is null), then the
     // ranked rows exactly as before, from the node the owners end at, on the budget and via charge the owners leave them
-    const OwnerHopRows own = packOwnerHopRows( ing, nodes, owners, outOff, outTargets, outNameOnly, redact, rank, rootArg,
-                                               budgetBytes, viaLegendCharged, pathRel, contentOf, esc, outProv, &splitLegendCharged );
+    const OwnerHopRows own = packOwnerHopRows( ing, nodes, owners, outOff, outTargets, CalleeEdgeBytes( outNameOnly, outEdges.prov, &splitLegendCharged ),
+                                               redact, rank, rootArg, budgetBytes, viaLegendCharged, pathRel, contentOf, esc );
     std::string children       = own.xml;
     std::size_t requestedCount = own.shown;
     std::size_t shownCount     = own.shown;
@@ -7845,7 +7865,7 @@ inline void packHops( std::FILE* out, const IngestResult& ing, const std::vector
         // running `used` so the row identity bytes and the edge bytes share one budget.
         emitCalleeCallsBlock( row, id, outOff, outTargets, ing, contentOf, esc, used, budgetBytes,
                               withSplitArms( CalleeCallsSink{ redact, /*recorded=*/nullptr, /*namesOnly=*/true, rank, &outNameOnly, &viaLegendCharged },
-                                             outProv, &splitLegendCharged ) );
+                                             outEdges.prov, &splitLegendCharged ) );
         row += "</h>";
         children += row;
         ++shownCount;
@@ -7861,7 +7881,7 @@ inline void packHops( std::FILE* out, const IngestResult& ing, const std::vector
     {
         w.write( viaNameLegendComment() );   // FE-B: exactly when a hop's <calls> row carries via="name"
     }
-    if( !splitLegendInHead && children.find( " prov=\"split\"" ) != std::string::npos )
+    if( !legendsInHead.split && children.find( " prov=\"split\"" ) != std::string::npos )
     {
         w.write( splitArmCallsLegendComment() );   // attrib-multidef Q1: exactly when a hop's <calls> row carries prov="split"
     }
