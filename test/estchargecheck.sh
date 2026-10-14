@@ -68,8 +68,11 @@ TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 exec 7>&1
 CALL_BUDGET="${ESTCHARGE_CALL_TIMEOUT:-300}"
 RWC="$TMP/rwcache"; mkdir -p "$RWC"
-rwcall(){
-    perl -e 'alarm shift; exec @ARGV or exit 127' "$CALL_BUDGET" "$BIN" "$@"
+# rwcall_bin EXE ARGS… is the same budget and failure accounting for another executable (#13's $RIPWIRE_BASE).
+rwcall_bin(){
+    local exe=$1
+    shift
+    perl -e 'alarm shift; exec @ARGV or exit 127' "$CALL_BUDGET" "$exe" "$@"
     local rc=$?
     if [ "$rc" -ge 128 ]; then
         local why="ERROR (killed by signal $(( rc - 128 )))"
@@ -79,6 +82,7 @@ rwcall(){
     fi
     return "$rc"
 }
+rwcall(){ rwcall_bin "$BIN" "$@"; }
 rw(){
     local key class=lean a
     case "$1" in src) key=src ;; .) key=dot ;; "$ROOT") key=abs ;; *) key=other ;; esac
@@ -133,6 +137,11 @@ bytes_of(){ wc -c < "$1" | tr -d ' '; }
 #    FOR_TASK and forest_of are read by #11, #14 and #15; KEPT_NOTE/FLOOR_NOTE by #11 and #11 A7R; sigs_unpaid_twin by
 #    #11 and its sweep. Defining them before the sections fork is the only reason they live here.
 FOR_TASK="serialize the map"
+# WEAK_QUERY is #11 A9's nonsense word. It is spelled ONLY here, at top level, never inside a function: the
+# repo's own bash functions are indexed symbols, so a section body that carried the word would make it match
+# something — and forcalibfactscheck's zero-hit arm runs `--for` with this word on the repo root and requires
+# scored=0. #11 A9b below asserts this gate stays out of that query's answer.
+WEAK_QUERY="zzqqxx"
 
 # The --for lens spells est_tokens="N" QUOTED in its header comment, where the map spells it bare in its
 # stats comment — and est_of() matches the bare form, so on --for it silently read nothing. Worse, a --detail
@@ -1237,7 +1246,7 @@ grep -aq '<hops ' "$TMP/f_for.out" \
 # The weak query is a single nonsense word, which routes subtoken+body and therefore goes COMPACT: the
 # R9 shell it emits is <hops shown="0" total="0" capped="0">, markup-rate like the rest of that document,
 # so the FLAT identity is the right one here now (mixedconsistent would exit on the absent <bodies>).
-rw src --for="zzqqxx" >"$TMP/f_weak.out" 2>/dev/null
+rw src --for="$WEAK_QUERY" >"$TMP/f_weak.out" 2>/dev/null
 if grep -aq 'weak="1"' "$TMP/f_weak.out"; then
     if out="$( selfconsistent "$TMP/f_weak.out" )"; then
         ok "#11 A9 --for with weak=\"1\": est_tokens self-consistent — bytes/est/expected = $out (the 9 B attr + the R9 <hops> shell are both charged)"
@@ -1246,6 +1255,15 @@ if grep -aq 'weak="1"' "$TMP/f_weak.out"; then
     fi
 else
     no "#11 A9 could not produce a weak=\"1\" bundle (threshold or query shape changed — re-anchor this arm)"
+fi
+# A9b: the same word on the REPO ROOT must not find this gate. Its sections are bash functions that ripwire
+# indexes, so a section body spelling the word makes it a hit and reds forcalibfactscheck's zero-hit arm
+# (scored=0) in whichever CI shard runs it (PR #398, round 1). Hence WEAK_QUERY lives at top level.
+rw "$ROOT" --for="$WEAK_QUERY" --json >"$TMP/f_weak_root.json" 2>/dev/null
+if [ -s "$TMP/f_weak_root.json" ] && ! grep -q 'test/estchargecheck\.sh' "$TMP/f_weak_root.json"; then
+    ok "#11 A9b --for=\$WEAK_QUERY on the repo root finds nothing in this gate (forcalibfactscheck's zero-hit arm stays at scored=0)"
+else
+    no "#11 A9b --for=\$WEAK_QUERY on the repo root hits test/estchargecheck.sh (or answered nothing) — a section body spells the word; keep it in WEAK_QUERY only"
 fi
 
 # M11 (2026-09-04): the pack-task legend now DEFINES over_ceiling= in prose, so the three greps below read the
@@ -1336,7 +1354,7 @@ counts_of(){ grep -aoE 'files=[0-9]+|symbols=[0-9]+|edges=[0-9]+|ambiguous=[0-9]
 rwcall test/fixture --no-cache >"$TMP/g_new.out" 2>/dev/null
 NEWC="$( counts_of "$TMP/g_new.out" )"
 if [ -n "${RIPWIRE_BASE:-}" ] && [ -x "${RIPWIRE_BASE:-}" ]; then
-    "$RIPWIRE_BASE" test/fixture --no-cache >"$TMP/g_base.out" 2>/dev/null
+    rwcall_bin "$RIPWIRE_BASE" test/fixture --no-cache >"$TMP/g_base.out" 2>/dev/null
     BASEC="$( counts_of "$TMP/g_base.out" )"
     [ "$NEWC" = "$BASEC" ] \
         && ok "#13 ruling 3: files=/symbols=/edges=/ambiguous=/unresolved= unmoved vs RIPWIRE_BASE — [$NEWC]" \
