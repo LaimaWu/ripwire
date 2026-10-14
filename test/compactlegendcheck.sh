@@ -1363,7 +1363,7 @@ for tb in 500 900; do
         p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=$tb: est_tokens unreadable (compact '$pc', full '$pf')"
     fi
 done
-[ "$p4floor_bad" -eq 0 ] && ok "(P4 floor twin) soft target on the twelve-routine fixture: at 500 both dialects serve the same maximal rank prefix within T, unlabelled, its next= serving the whole head; at 900 the complete head ships uncut; est_tokens honest; compact never further over than full ($p4facts)"
+[ "$p4floor_bad" -eq 0 ] && ok "(P4 floor twin) soft target on the twelve-routine fixture: at 500 both dialects serve the same maximal rank prefix within T, unlabelled, its next= serving the whole head, and with 900 the complete head ships uncut, est_tokens honest; compact never further over than full ($p4facts)"
 
 # (P5) the BUDGET LEDGER survives compaction (orchestrator rule, METHODOLOGY §9.3/§9.4: never cut silently). --pack-task's
 # full legend ends with "budget=N bytes (T-token target, ceiling C) | ranking: … | bodies: … | callers: … | notes: … | tests:
