@@ -133,7 +133,7 @@ def top_names(syms, lang, count):
     return picked
 
 
-def main():
+def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument('--base', default='')
     ap.add_argument('--head', required=True)
@@ -150,24 +150,15 @@ def main():
     ap.add_argument('--keep', default='')
     ap.add_argument('--list', action='store_true')
     ap.add_argument('--ratchet-only', action='store_true')
-    a = ap.parse_args()
-    fails = []
+    return ap.parse_args()
 
-    tmp = {}
-    for label in ('base', 'head'):
-        tmp[label] = os.path.join(a.scratch, 'tmp-' + label)
-        os.makedirs(tmp[label], exist_ok=True)
-    binary = {'base': a.base, 'head': a.head}
-    if a.ratchet_only:
-        return 1 if ratchet(a, a.head, tmp['head']) else 0
+
+def select_corpora(a):
+    """Manifest fixtures, then caller-supplied repos, filtered by --langs. -> list of dicts, or None after a FAIL line."""
     want = [x for x in a.langs.split(',') if x]
-
-    # -- corpora: manifest fixtures, then caller-supplied repos --
     corpora = []
     for _n, cols in read_tsv(a.manifest):
-        if len(cols) < 2 or cols[1] == '-':
-            continue
-        if want and cols[0] not in want:
+        if len(cols) < 2 or cols[1] == '-' or (want and cols[0] not in want):
             continue
         corpora.append({'id': '%s/%s' % (cols[0], os.path.basename(cols[1].rstrip('/'))), 'lang': cols[0],
                         'root': cols[1], 'kind': 'fixture', 'cwd': ''})
@@ -175,19 +166,186 @@ def main():
         lang, _sep, path = spec.partition(':')
         if not path or not os.path.isdir(path):
             print('  FAIL  --repo=%s: expected LANG:DIR with an existing directory' % spec)
-            return 1
-        if want and lang not in want:
-            continue
-        corpora.append({'id': '%s/%s' % (lang, os.path.basename(path.rstrip('/'))), 'lang': lang,
-                        'root': os.path.abspath(path), 'kind': 'repo', 'cwd': a.root})
+            return None
+        if not want or lang in want:
+            corpora.append({'id': '%s/%s' % (lang, os.path.basename(path.rstrip('/'))), 'lang': lang,
+                            'root': os.path.abspath(path), 'kind': 'repo', 'cwd': a.root})
     if not corpora:
         print('  FAIL  no corpus selected (--langs=%s matched no manifest row and no --repo)' % a.langs)
+        return None
+    return corpora
+
+
+def read_touched(path):
+    """--syms: NAME or LANG:NAME per line -> [(lang or '', name)]."""
+    touched = []
+    if path:
+        for _n, cols in read_tsv(path):
+            lang, sep, name = cols[0].strip().partition(':')
+            touched.append((lang, name) if sep and lang in EXTS else ('', cols[0].strip()))
+    return touched
+
+
+def read_intended(path):
+    """--intended: CORPUS-GLOB <TAB> ARGV-GLOB <TAB> ARM -> rows, or None after a FAIL line."""
+    rows, bad = [], False
+    if path:
+        for n, cols in read_tsv(path):
+            if len(cols) < 3 or not all(c.strip() for c in cols[:3]):
+                print('  FAIL  %s line %d: an intended row is CORPUS<TAB>ARGV<TAB>ARM, all three non-empty' % (path, n))
+                bad = True
+                continue
+            rows.append({'corpus': cols[0].strip(), 'argv': cols[1].strip(), 'arm': cols[2].strip(), 'hits': 0})
+    return None if bad else rows
+
+
+class Session:
+    """One harness run: the binaries, the per-binary TMPDIRs, the tallies and the failure list."""
+
+    def __init__(self, a, intended, touched):
+        self.a = a
+        self.intended = intended
+        self.touched = touched
+        self.binary = {'base': a.base, 'head': a.head}
+        self.tmp = {}
+        for label in ('base', 'head'):
+            self.tmp[label] = os.path.join(a.scratch, 'tmp-' + label)
+            os.makedirs(self.tmp[label], exist_ok=True)
+        self.fails = []
+        self.counts = {'SAME': 0, 'DIFF': 0, 'EMPTY': 0, 'ERROR': 0, 'intended': 0}
+        self.wall = {'base': 0.0, 'head': 0.0}
+        self.biggest = (0, None)  # (symbol count, corpus) for the self-test
+
+    def both(self, c, verb):
+        """Run one argv with BASE and HEAD. They overlap: the answers are independent, and a run is mostly process start."""
+        argv = [c['root']] + verb + ['--no-cache']
+        with ThreadPoolExecutor(max_workers=2) as pair:
+            fb = pair.submit(run, self.binary['base'], argv, c['cwd'], self.tmp['base'], self.a.timeout)
+            fh = pair.submit(run, self.binary['head'], argv, c['cwd'], self.tmp['head'], self.a.timeout)
+            return verb, fb.result(), fh.result()
+
+    def plan(self, c):
+        """The argv list of one corpus, or None when its symbol list cannot be read."""
+        base_syms = symbols_of(self.binary['base'], c['root'], c['cwd'], self.tmp['base'], self.a.timeout)
+        head_syms = symbols_of(self.binary['head'], c['root'], c['cwd'], self.tmp['head'], self.a.timeout)
+        if base_syms is None or head_syms is None:
+            print('corpus %s (%s)' % (c['id'], c['root']))
+            print('  ERROR  (symbol list)  the %s map could not be read as JSON' % ('base' if base_syms is None else 'head'))
+            self.counts['ERROR'] += 1
+            self.fails.append('%s: symbol list unreadable' % c['id'])
+            return None
+        if len(base_syms) > self.biggest[0]:
+            self.biggest = (len(base_syms), c)
+        names = top_names(base_syms, c['lang'], TOP_PER_LANG)
+        known = {s[1] for s in base_syms} | {s[1] for s in head_syms}
+        extra, absent = [], 0
+        for lang, name in self.touched:
+            if lang and lang != c['lang']:
+                continue
+            if name not in known:
+                absent += 1
+            elif name not in names and name not in extra:
+                extra.append(name)
+        verbs = list(CORPUS_VERBS)
+        for name in names + extra:
+            verbs += [[v + '=' + name] for v in SYMBOL_VERBS]
+        print('corpus %s (%s): %d symbols, %d top + %d touched named, %d argv%s' % (
+            c['id'], c['root'], len(base_syms), len(names), len(extra), len(verbs),
+            ('; %d touched name(s) absent from both maps' % absent) if absent else ''))
+        return verbs
+
+    def explain(self, corpus_id, text):
+        """The --intended arm that explains a DIFF of this argv in this corpus, or ''."""
+        for row in self.intended:
+            if fnmatch.fnmatchcase(corpus_id, row['corpus']) and fnmatch.fnmatchcase(text, row['argv']):
+                row['hits'] += 1
+                return row['arm']
+        return ''
+
+    def keep(self, c, text, b, h):
+        d = os.path.join(self.a.keep, c['id'].replace('/', '_'), re.sub(r'[^A-Za-z0-9._=-]', '_', text))
+        os.makedirs(d, exist_ok=True)
+        for lab, r in (('base', b), ('head', h)):
+            for ext, data in (('.out', r[1]), ('.err', r[2])):
+                with open(os.path.join(d, lab + ext), 'wb') as fh:
+                    fh.write(data)
+
+    def report(self, c, verb, b, h):
+        status, detail = classify(b, h)
+        text = ' '.join(verb) if verb else '(map)'
+        self.wall['base'] += b[3]
+        self.wall['head'] += h[3]
+        arm = self.explain(c['id'], text) if status == 'DIFF' else ''
+        if arm:
+            self.counts['intended'] += 1
+        elif status != 'SAME':
+            self.fails.append('%s %s: %s' % (c['id'], text, 'unexplained DIFF' if status == 'DIFF' else status))
+        self.counts[status] += 1
+        print('  %-5s %-36s base=%.2fs head=%.2fs%s%s' % (status, text, b[3], h[3], ('  ' + detail) if detail else '',
+                                                       ('  [intended: %s]' % arm) if arm else ''))
+        if status != 'SAME' and self.a.keep:
+            self.keep(c, text, b, h)
+
+    def run_corpus(self, c):
+        verbs = self.plan(c)
+        if verbs is None:
+            return
+        with ThreadPoolExecutor(max_workers=max(1, self.a.jobs)) as ex:
+            results = list(ex.map(lambda v: self.both(c, v), verbs))
+        for verb, b, h in results:
+            self.report(c, verb, b, h)
+
+    def summary(self, ncorpora):
+        n = self.counts
+        total = n['SAME'] + n['DIFF'] + n['EMPTY'] + n['ERROR']
+        for row in self.intended:
+            if not row['hits']:
+                print('  NOTE  intended row matched no DIFF (stale, or the corpus was not selected): %s | %s | %s' % (
+                    row['corpus'], row['argv'], row['arm']))
+        text = '%d argv over %d corpora: %d SAME, %d DIFF (%d intended), %d EMPTY, %d ERROR; wall base=%.1fs head=%.1fs' % (
+            total, ncorpora, n['SAME'], n['DIFF'], n['intended'], n['EMPTY'], n['ERROR'], self.wall['base'], self.wall['head'])
+        if not self.fails:
+            print('  PASS  ' + text)
+            return
+        print('  FAIL  ' + text)
+        for f in self.fails[:30]:
+            print('        - ' + f)
+        if len(self.fails) > 30:
+            print('        ... %d more' % (len(self.fails) - 30))
+
+    def self_test(self):
+        """An arm that cannot fail proves nothing: HEAD with a smaller --top-k MUST read as DIFF. -> True when it fired."""
+        n_syms, corpus = self.biggest
+        if corpus is None or n_syms < 2:
+            print('  FAIL  self-test cannot fire: no selected corpus has a map of at least 2 symbols')
+            return False
+        k = 199 if n_syms > 199 else n_syms - 1
+        argv = [corpus['root'], '--no-cache']
+        b = run(self.binary['base'], argv, corpus['cwd'], self.tmp['base'], self.a.timeout)
+        h = run(self.binary['head'], argv + ['--top-k=%d' % k], corpus['cwd'], self.tmp['head'], self.a.timeout)
+        status, detail = classify(b, h)
+        if status == 'DIFF':
+            print('  PASS  self-test: head with --top-k=%d on %s reads as DIFF (%s)' % (k, corpus['id'], detail))
+            return True
+        print('  FAIL  self-test: head with --top-k=%d on %s read as %s, so a real change could read as SAME' % (
+            k, corpus['id'], status))
+        return False
+
+
+def main():
+    a = parse_args()
+    if a.ratchet_only:
+        tmp = os.path.join(a.scratch, 'tmp-head')
+        os.makedirs(tmp, exist_ok=True)
+        return 1 if ratchet(a, a.head, tmp) else 0
+    corpora = select_corpora(a)
+    intended = read_intended(a.intended)
+    if corpora is None or intended is None:
         return 1
     if a.list:
         for c in corpora:
             print('%s\t%s\t%s' % (c['id'], c['kind'], c['root']))
         return 0
-
     fixtures = [c for c in corpora if c['kind'] == 'fixture']
     if fixtures:
         fixrepo = materialize(a.root, sorted({c['root'] for c in fixtures}), os.path.join(a.scratch, 'fixrepo'))
@@ -196,142 +354,36 @@ def main():
             return 1
         for c in fixtures:
             c['cwd'] = fixrepo
-
-    # -- touched symbols: NAME or LANG:NAME per line --
-    touched = []
-    if a.syms:
-        for _n, cols in read_tsv(a.syms):
-            word = cols[0].strip()
-            lang, sep, name = word.partition(':')
-            touched.append((lang, name) if sep and lang in EXTS else ('', word))
-
-    # -- intended DIFF rows: CORPUS-GLOB <TAB> ARGV-GLOB <TAB> ARM --
-    intended, bad_intended = [], False
-    if a.intended:
-        for n, cols in read_tsv(a.intended):
-            if len(cols) < 3 or not all(c.strip() for c in cols[:3]):
-                print('  FAIL  %s line %d: an intended row is CORPUS<TAB>ARGV<TAB>ARM, all three non-empty' % (a.intended, n))
-                bad_intended = True
-                continue
-            intended.append({'corpus': cols[0].strip(), 'argv': cols[1].strip(), 'arm': cols[2].strip(), 'hits': 0})
-    if bad_intended:
-        return 1
-
-    counts = {'SAME': 0, 'DIFF': 0, 'EMPTY': 0, 'ERROR': 0, 'intended': 0}
-    wall = {'base': 0.0, 'head': 0.0}
-    biggest = (0, None)  # (symbol count, corpus) for the self-test
-
-    def one(c, verb):
-        cwd = c['cwd']
-        argv = [c['root']] + verb + ['--no-cache']
-        # BASE and HEAD overlap: the two answers are independent, and a run is mostly process start and git time
-        with ThreadPoolExecutor(max_workers=2) as pair:
-            fb = pair.submit(run, binary['base'], argv, cwd, tmp['base'], a.timeout)
-            fh = pair.submit(run, binary['head'], argv, cwd, tmp['head'], a.timeout)
-            return verb, fb.result(), fh.result()
-
+    session = Session(a, intended, read_touched(a.syms))
     for c in corpora:
-        base_syms = symbols_of(binary['base'], c['root'], c['cwd'], tmp['base'], a.timeout)
-        head_syms = symbols_of(binary['head'], c['root'], c['cwd'], tmp['head'], a.timeout)
-        if base_syms is None or head_syms is None:
-            print('corpus %s (%s)' % (c['id'], c['root']))
-            print('  ERROR  (symbol list)  the %s map could not be read as JSON' % ('base' if base_syms is None else 'head'))
-            counts['ERROR'] += 1
-            fails.append('%s: symbol list unreadable' % c['id'])
+        session.run_corpus(c)
+    session.summary(len(corpora))
+    fired = session.self_test()
+    ratchet_fail = ratchet(a, a.head, session.tmp['head'])  # printed last
+    return 1 if (session.fails or not fired or ratchet_fail) else 0
+
+
+PREDICATE = re.compile(r'[=!]=\s*(?<![A-Za-z0-9_])Lang::|(?<![A-Za-z0-9_])Lang::\w+\s*[=!]=')
+
+
+def count_predicates(listing, perlang):
+    """`==`/`!=` lines against a Lang:: enumerator in a --regex listing, one per distinct file:line, per-language files and
+    `case` labels left out."""
+    seen, count = set(), 0
+    for path, body in re.findall(r'<f p="([^"]+)"[^>]*>(.*?)</f>', listing, re.S):
+        if os.path.basename(path) in perlang:
             continue
-        if len(base_syms) > biggest[0]:
-            biggest = (len(base_syms), c)
-        names = top_names(base_syms, c['lang'], TOP_PER_LANG)
-        known = {s[1] for s in base_syms} | {s[1] for s in head_syms}
-        extra, absent = [], 0
-        for lang, name in touched:
-            if lang and lang != c['lang']:
+        for line, code in re.findall(r'<hit l="(\d+)" in="[^"]*"><!\[CDATA\[(.*?)\]\]></hit>', body, re.S):
+            if (path, line) in seen:
                 continue
-            if name in known and name not in names and name not in extra:
-                extra.append(name)
-            elif name not in known:
-                absent += 1
-        verbs = list(CORPUS_VERBS)
-        for name in names + extra:
-            verbs += [[v + '=' + name] for v in SYMBOL_VERBS]
-        print('corpus %s (%s): %d symbols, %d top + %d touched named, %d argv%s' % (
-            c['id'], c['root'], len(base_syms), len(names), len(extra), len(verbs),
-            ('; %d touched name(s) absent from both maps' % absent) if absent else ''))
-        with ThreadPoolExecutor(max_workers=max(1, a.jobs)) as ex:
-            results = list(ex.map(lambda v: one(c, v), verbs))
-        for verb, b, h in results:
-            status, detail = classify(b, h)
-            text = ' '.join(verb) if verb else '(map)'
-            wall['base'] += b[3]
-            wall['head'] += h[3]
-            note = ''
-            if status == 'DIFF':
-                for row in intended:
-                    if fnmatch.fnmatchcase(c['id'], row['corpus']) and fnmatch.fnmatchcase(text, row['argv']):
-                        row['hits'] += 1
-                        note = '  [intended: %s]' % row['arm']
-                        break
-                if note:
-                    counts['intended'] += 1
-                else:
-                    fails.append('%s %s: unexplained DIFF' % (c['id'], text))
-            elif status != 'SAME':
-                fails.append('%s %s: %s' % (c['id'], text, status))
-            counts[status] += 1
-            print('  %-5s %-36s base=%.2fs head=%.2fs%s%s' % (status, text, b[3], h[3],
-                                                           ('  ' + detail) if detail else '', note))
-            if status != 'SAME' and a.keep:
-                d = os.path.join(a.keep, c['id'].replace('/', '_'), re.sub(r'[^A-Za-z0-9._=-]', '_', text))
-                os.makedirs(d, exist_ok=True)
-                for lab, r in (('base', b), ('head', h)):
-                    with open(os.path.join(d, lab + '.out'), 'wb') as fh:
-                        fh.write(r[1])
-                    with open(os.path.join(d, lab + '.err'), 'wb') as fh:
-                        fh.write(r[2])
-
-    total = counts['SAME'] + counts['DIFF'] + counts['EMPTY'] + counts['ERROR']
-    for row in intended:
-        if not row['hits']:
-            print('  NOTE  intended row matched no DIFF (stale, or the corpus was not selected): %s | %s | %s' % (
-                row['corpus'], row['argv'], row['arm']))
-    summary = '%d argv over %d corpora: %d SAME, %d DIFF (%d intended), %d EMPTY, %d ERROR; wall base=%.1fs head=%.1fs' % (
-        total, len(corpora), counts['SAME'], counts['DIFF'], counts['intended'], counts['EMPTY'], counts['ERROR'],
-        wall['base'], wall['head'])
-    if fails:
-        print('  FAIL  ' + summary)
-        for f in fails[:30]:
-            print('        - ' + f)
-        if len(fails) > 30:
-            print('        ... %d more' % (len(fails) - 30))
-    else:
-        print('  PASS  ' + summary)
-
-    # -- self-test: an arm that cannot fail proves nothing. HEAD with a smaller --top-k MUST read as DIFF --
-    st_fail = False
-    n_syms, corpus = biggest
-    if corpus is None or n_syms < 2:
-        print('  FAIL  self-test cannot fire: no selected corpus has a map of at least 2 symbols')
-        st_fail = True
-    else:
-        k = 199 if n_syms > 199 else n_syms - 1
-        argv = [corpus['root'], '--no-cache']
-        b = run(binary['base'], argv, corpus['cwd'], tmp['base'], a.timeout)
-        h = run(binary['head'], argv + ['--top-k=%d' % k], corpus['cwd'], tmp['head'], a.timeout)
-        status, detail = classify(b, h)
-        if status == 'DIFF':
-            print('  PASS  self-test: head with --top-k=%d on %s reads as DIFF (%s)' % (k, corpus['id'], detail))
-        else:
-            print('  FAIL  self-test: head with --top-k=%d on %s read as %s, so a real change could read as SAME' % (
-                k, corpus['id'], status))
-            st_fail = True
-
-    # -- ratchet: shared-file `== Lang::X` predicates may not rise (printed last) --
-    ratchet_fail = ratchet(a, binary['head'], tmp['head'])
-    return 1 if (fails or st_fail or ratchet_fail) else 0
+            seen.add((path, line))
+            if not re.search(r'\bcase\s+Lang::', code) and PREDICATE.search(code):
+                count += 1
+    return count
 
 
 def ratchet(a, head, tmpdir):
-    """Count `==`/`!=` predicates against a Lang:: enumerator in src/ files that are not per-language files."""
+    """Print the ratchet line: shared-file `== Lang::X` predicates may not rise. -> True when it FAILS."""
     ceiling, perlang = None, set()
     for _n, cols in read_tsv(a.ratchet):
         if cols[0] == 'ceiling' and len(cols) > 1 and cols[1].isdigit():
@@ -346,20 +398,7 @@ def ratchet(a, head, tmpdir):
     if err or rc != 0 or not out:
         print('  FAIL  ratchet: the HEAD binary could not list Lang:: mentions (%s, rc=%s)' % (err or 'ran', rc))
         return True
-    text = out.decode('utf-8', 'replace')
-    seen, count = set(), 0
-    pred = re.compile(r'[=!]=\s*(?<![A-Za-z0-9_])Lang::|(?<![A-Za-z0-9_])Lang::\w+\s*[=!]=')
-    for path, body in re.findall(r'<f p="([^"]+)"[^>]*>(.*?)</f>', text, re.S):
-        if os.path.basename(path) in perlang:
-            continue
-        for line, code in re.findall(r'<hit l="(\d+)" in="[^"]*"><!\[CDATA\[(.*?)\]\]></hit>', body, re.S):
-            if (path, line) in seen:
-                continue
-            seen.add((path, line))
-            if re.search(r'\bcase\s+Lang::', code):
-                continue
-            if pred.search(code):
-                count += 1
+    count = count_predicates(out.decode('utf-8', 'replace'), perlang)
     if count > ceiling:
         print('  FAIL  ratchet: shared-file "== Lang::" predicates %d > ceiling %d (move the new one into a LangFacts column or a per-language file)' % (count, ceiling))
         return True
