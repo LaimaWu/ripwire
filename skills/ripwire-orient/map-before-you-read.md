@@ -121,9 +121,11 @@ are deciding how much of them to read.
 - Budget a large map: `--max-tokens=8000` or `--top-k=50`. `est_tokens` is calibrated per language against
   real tokenizer output, not a flat chars/4 guess, and `--max-tokens` fits to 90%-of-budget headroom — a
   ceiling, never a target you pad against.
-- **CI/hook budget gate, not a shaping flag:** `--token-budget=N[K|M|G]` asserts instead of fitting — exit 3
-  if `est_tokens` exceeds N, map unchanged. Use it to fail a build/hook on drift; `--max-tokens` SHAPES
-  instead. Composable: set either, both, or neither.
+- **`--token-budget=N[K|M|G]` has two personalities.** On the default map, `--query` and `--recall` it is a
+  CI/hook budget GATE: it asserts instead of fitting — exit 3 if `est_tokens` exceeds N, the map withheld,
+  never trimmed. Use it there to fail a build/hook on drift; `--max-tokens` SHAPES the map instead, and the
+  two compose (set either, both, or neither). On the task lenses (`--for`, `--pack-task`, `--from-trace`)
+  the same flag SHAPES the answer toward N and exits 0 — see `--help` for what it keeps.
 - **A high-cardinality verb paginates**: `--deps`/`--callers`/`--callees`/`--hotspots`/`--tree`/`--lint` take
   `--limit=N --offset=M` — sorted results, so `--offset=N` after `--limit=N` is the exact continuation, no
   drops/dupes. Default (no `--limit`) is the whole result; reach for pagination on a big monorepo instead.
