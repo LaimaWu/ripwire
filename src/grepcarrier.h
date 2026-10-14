@@ -126,113 +126,106 @@ inline std::vector<std::uint64_t> valueSitesOf( const IngestResult& rd, std::spa
 
 }   // namespace grepcarrier
 
-// One carrier verdict per row. `ing` is the ingest the rows came from; `vri` its value index (vals=); `reads` the
-// ingest whose role="read" references count (nullptr = none captured: reads= stays unknown on every row). The reads
-// pass is ONE walk over `reads->references` for every carrier name on the page, never a per-row rescan.
-inline std::vector<GrepCarrier> grepCarriers( const IngestResult& ing, const ValueRefIndex& vri, std::span<const GrepEncRow> rows,
-                                              const IngestResult* reads )
+namespace grepcarrier
 {
-    std::vector<GrepCarrier> out( rows.size() );
-    std::vector<NodeId>      carrierIds;     // every carrier definition on the page, for ONE madeIn pass
-    std::vector<std::string_view> readNames; // the names whose reads are counted
-    for( std::size_t r = 0; r < rows.size(); ++r )
-    {
-        if( !isGrepCarrierRow( ing, rows[r] ) )
-        {
-            continue;
-        }
-        out[r].isCarrier = true;
-        carrierIds.insert( carrierIds.end(), rows[r].ids.begin(), rows[r].ids.end() );
-        const Symbol& s = ing.symbols[ rows[r].ids.front() ];
-        if( reads != nullptr && grepCarrierReadsVisible( ing, s ) )
-        {
-            out[r].readsKnown = true;
-            readNames.push_back( s.name );
-        }
-    }
-    if( carrierIds.empty() )
-    {
-        return out;
-    }
 
-    // vals=: the stored function values, attributed to the row whose definition made them (source order: madeIn is
-    // ascending reference order, which is file then byte order within one ingest).
+// One stored function value as vals= prints it: the slot key without its leading '.', the name as written, and the one
+// definition it resolves to (none when it resolves to several). `targets` is vri.targetsOf of that reference.
+inline GrepCarrierVal storedVal( const IngestResult& ing, const Reference& ref, std::span<const NodeId> targets )
+{
+    const std::string_view rel = ref.composeRel;
+    GrepCarrierVal         val{ std::string( rel.starts_with( '.' ) ? rel.substr( 1 ) : rel ), ref.calleeName, {}, 0 };
+    if( targets.size() == 1 && targets[0] < ing.symbols.size() )
+    {
+        const Symbol& def = ing.symbols[ targets[0] ];
+        val.line = def.line;
+        if( def.fileId != ref.fileId && def.fileId < ing.files.size() )
+        {
+            val.path = ing.files[ def.fileId ];
+        }
+    }
+    return val;
+}
+
+// vals=: the stored function values of every carrier on the page, attributed to the row whose definition made them —
+// ONE madeIn pass for the page (source order: madeIn is ascending reference order, file then byte within one ingest).
+inline void fillVals( const IngestResult& ing, const ValueRefIndex& vri, std::span<const GrepEncRow> rows, std::span<const NodeId> carrierIds,
+                      std::span<GrepCarrier> out )
+{
     for( const std::uint32_t v : vri.madeIn( carrierIds, RefRole::Value ) )
     {
-        const Reference& ref = ing.references[v];
-        if( ref.fieldName.starts_with( '@' ) || vri.targetsOf( v ).empty() )
+        const Reference&          ref     = ing.references[v];
+        const std::vector<NodeId> targets = vri.targetsOf( v );
+        if( ref.fieldName.starts_with( '@' ) || targets.empty() )
         {
             continue;   // a decorator row is a fact about a definition; an unresolved name is not a function value
         }
-        for( std::size_t r = 0; r < rows.size(); ++r )
+        const auto row = std::ranges::find_if( rows, [ & ]( const GrepEncRow& rw ) { return std::ranges::find( rw.ids, ref.fromSymbol ) != rw.ids.end(); } );
+        if( row == rows.end() || !out[ std::size_t( row - rows.begin() ) ].isCarrier )
         {
-            if( !out[r].isCarrier || std::ranges::find( rows[r].ids, ref.fromSymbol ) == rows[r].ids.end() )
-            {
-                continue;
-            }
-            ++out[r].valsTotal;
-            if( out[r].vals.size() < kGrepCarrierShown )
-            {
-                const std::string_view key = std::string_view( ref.composeRel ).starts_with( '.' ) ? std::string_view( ref.composeRel ).substr( 1 )
-                                                                                                    : std::string_view( ref.composeRel );
-                GrepCarrierVal val{ std::string( key ), ref.calleeName, {}, 0 };
-                if( const std::vector<NodeId> targets = vri.targetsOf( v ); targets.size() == 1 && targets[0] < ing.symbols.size() )
-                {
-                    const Symbol& def = ing.symbols[ targets[0] ];
-                    val.line = def.line;
-                    if( def.fileId != ref.fileId && def.fileId < ing.files.size() )
-                    {
-                        val.path = ing.files[ def.fileId ];
-                    }
-                }
-                out[r].vals.push_back( std::move( val ) );
-            }
-            break;   // one row per name (grepEnclosingRows groups by chain): a definition sits on one row
+            continue;   // madeIn was asked for carrier ids only; a row that is no carrier holds none of them
+        }
+        GrepCarrier& c = out[ std::size_t( row - rows.begin() ) ];   // a definition sits on one row (grepEnclosingRows groups by chain)
+        if( ++c.valsTotal <= kGrepCarrierShown )
+        {
+            c.vals.push_back( storedVal( ing, ref, targets ) );
         }
     }
+}
 
-    if( readNames.empty() )
-    {
-        return out;
-    }
-    EXPECTS( reads != nullptr, "a name is queued for reads only when a reads ingest was handed in" );
-    std::ranges::sort( readNames );
-    readNames.erase( std::unique( readNames.begin(), readNames.end() ), readNames.end() );
-    const std::vector<std::uint64_t> valueSites = grepcarrier::valueSitesOf( *reads, readNames );
+struct ReadHit
+{
+    std::uint32_t name;     // index into the sorted, unique name list
+    std::uint32_t fileId;   // into the reads ingest
+    std::uint32_t line;
+};
 
-    // ONE pass: the uses verb's read rows (collectUseSites' filters) for every queued name.
-    struct ReadHit { std::uint32_t name; std::uint32_t fileId; std::uint32_t line; };
-    std::vector<ReadHit> hits;
-    for( const Reference& r : reads->references )
+// The uses verb's role="read" rows (collectUseSites' filters) for every name in `names` (sorted, unique), in ONE pass
+// over the reads ingest, sorted by name, then the uses verb's base order (tier, path, line).
+inline std::vector<ReadHit> readSitesOf( const IngestResult& rd, std::span<const std::string_view> names )
+{
+    const std::vector<std::uint64_t> valueSites = valueSitesOf( rd, names );
+    std::vector<ReadHit>             hits;
+    for( const Reference& r : rd.references )
     {
         if( r.role != RefRole::Read || r.isCompose || r.isDocLink || r.lang == Lang::Markdown )
         {
             continue;
         }
-        const auto it = std::ranges::lower_bound( readNames, std::string_view( r.calleeName ) );
-        if( it == readNames.end() || *it != r.calleeName )
+        const auto it = std::ranges::lower_bound( names, std::string_view( r.calleeName ) );
+        if( it == names.end() || *it != r.calleeName || std::ranges::binary_search( valueSites, ( std::uint64_t( r.fileId ) << 32 ) | r.startByte ) )
         {
-            continue;
+            continue;   // another name, or a site the uses verb serves as role="value", not a read
         }
-        if( std::ranges::binary_search( valueSites, ( std::uint64_t( r.fileId ) << 32 ) | r.startByte ) )
-        {
-            continue;   // the uses verb serves this site as role="value", not a read
-        }
-        hits.push_back( { std::uint32_t( it - readNames.begin() ), r.fileId, r.line } );
+        hits.push_back( { std::uint32_t( it - names.begin() ), r.fileId, r.line } );
     }
-    const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( *reads, hits, []( const ReadHit& h ) { return h.fileId; } );
+    const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( rd, hits, []( const ReadHit& h ) { return h.fileId; } );
     std::ranges::sort( hits, [ & ]( const ReadHit& a, const ReadHit& b )
     {
         if( a.name != b.name )
         {
             return a.name < b.name;
         }
-        if( const int c = compareTierThenPath( *reads, tierOfFile, a.fileId, b.fileId ); c != 0 )
-        {
-            return c < 0;
-        }
-        return a.line < b.line;
+        const int c = compareTierThenPath( rd, tierOfFile, a.fileId, b.fileId );
+        return c != 0 ? c < 0 : a.line < b.line;
     } );
+    return hits;
+}
+
+// reads=/reads_at= for every readsKnown row, from one readSitesOf pass over the reads ingest.
+inline void fillReads( const IngestResult& ing, const IngestResult& rd, std::span<const GrepEncRow> rows, std::span<GrepCarrier> out )
+{
+    std::vector<std::string_view> names;
+    for( std::size_t r = 0; r < rows.size(); ++r )
+    {
+        if( out[r].readsKnown )
+        {
+            names.push_back( ing.symbols[ rows[r].ids.front() ].name );
+        }
+    }
+    std::ranges::sort( names );
+    names.erase( std::unique( names.begin(), names.end() ), names.end() );
+    const std::vector<ReadHit> hits = readSitesOf( rd, names );
     for( std::size_t r = 0; r < rows.size(); ++r )
     {
         if( !out[r].readsKnown )
@@ -240,15 +233,49 @@ inline std::vector<GrepCarrier> grepCarriers( const IngestResult& ing, const Val
             continue;
         }
         const std::string_view name = ing.symbols[ rows[r].ids.front() ].name;
-        const std::uint32_t    k    = std::uint32_t( std::ranges::lower_bound( readNames, name ) - readNames.begin() );
-        ASSUME( k < readNames.size() && readNames[k] == name, "every readsKnown row queued its name" );
+        const std::uint32_t    k    = std::uint32_t( std::ranges::lower_bound( names, name ) - names.begin() );
+        ASSUME( k < names.size() && names[k] == name, "every readsKnown row queued its name" );
         const auto [ first, last ] = std::ranges::equal_range( hits, k, {}, &ReadHit::name );   // hits are sorted by name first
         out[r].reads = std::uint32_t( last - first );
         for( auto h = first; h != last && out[r].at.size() < kGrepCarrierShown; ++h )
         {
-            out[r].at.push_back( { reads->files[ h->fileId ], h->line } );
+            out[r].at.push_back( { rd.files[ h->fileId ], h->line } );
         }
     }
+}
+
+}   // namespace grepcarrier
+
+// One carrier verdict per row. `ing` is the ingest the rows came from; `vri` its value index (vals=); `reads` the
+// ingest whose role="read" references count (nullptr = none captured: reads= stays unknown on every row). Each pass
+// walks its table ONCE for the whole page, never per row.
+inline std::vector<GrepCarrier> grepCarriers( const IngestResult& ing, const ValueRefIndex& vri, std::span<const GrepEncRow> rows,
+                                              const IngestResult* reads )
+{
+    std::vector<GrepCarrier> out( rows.size() );
+    std::vector<NodeId>      carrierIds;   // every carrier definition on the page, for ONE madeIn pass
+    bool                     anyReads = false;
+    for( std::size_t r = 0; r < rows.size(); ++r )
+    {
+        if( !isGrepCarrierRow( ing, rows[r] ) )
+        {
+            continue;
+        }
+        out[r].isCarrier  = true;
+        out[r].readsKnown = reads != nullptr && grepCarrierReadsVisible( ing, ing.symbols[ rows[r].ids.front() ] );
+        anyReads          = anyReads || out[r].readsKnown;
+        carrierIds.insert( carrierIds.end(), rows[r].ids.begin(), rows[r].ids.end() );
+    }
+    if( !carrierIds.empty() )
+    {
+        grepcarrier::fillVals( ing, vri, rows, carrierIds, out );
+    }
+    if( anyReads )
+    {
+        EXPECTS( reads != nullptr, "a row is readsKnown only when a reads ingest was handed in" );
+        grepcarrier::fillReads( ing, *reads, rows, out );
+    }
+    ENSURES( out.size() == rows.size() );
     return out;
 }
 
