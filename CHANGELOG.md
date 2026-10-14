@@ -15,6 +15,16 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a function stored through `??`, `||`, `&&`, `or` or `and` is a value use
+
+`this.getPath = (strict ?? true) ? (options.getPath ?? getPath) : getPathNoStrict` recorded only `getPathNoStrict`:
+value-reference capture walked parentheses and ternary branches but stopped at a logical operator, so `--callers`,
+`--impact`, `--safe-delete` and `--dead-code` never saw `getPath` stored there. The walk now climbs the
+value-preserving operators — JS/TS `??`, `||`, `&&` and the logical assignments `??=`, `||=`, `&&=`; Python `or`,
+`and` — in every position it already read (assignment, return, argument, parameter default). The left operand of
+`&&`/`and` only decides and stays no row; C/C++ and Go `||`/`&&` yield a truth value and stay no row. Parser version
+173 (caches re-parse once). Gate: `test/recallshapecheck.sh` arms OP1–OP17.
+
 ### Added — `--grep` names what a hit's variable carries and who reads it
 
 When a hit sits inside a variable, constant or initialiser (its enclosing definition's kind is a variable), the `<enc>`
