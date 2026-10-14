@@ -11606,6 +11606,8 @@ struct ImpactFileRow
     std::uint32_t syms     = 0;
     std::uint32_t minDepth = 0;
     std::uint32_t nameOnly = 0;   // fix27: of syms, the via="name" rows (impactRowNameOnly) — counted only on a multi-def selector
+    std::string   ofDefXml;       // attrib-multidef (defattrib.h attachRollupOfDef): the row's of_def=, "" on a one-group selector
+    std::string   ofDefJson;      // ... and its JSON key
 };
 
 struct ImpactFileRollup

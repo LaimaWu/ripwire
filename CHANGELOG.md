@@ -15,6 +15,25 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — a multi-definition answer says which definition each row belongs to
+
+A selector that names several same-named definitions (`--callers=empty` over two classes' `empty`) used to answer with the
+union of their callers, callees or dependants, and only `defs=` said there was more than one. `--callers`, `--callees`,
+`--safe-delete`, `--impact` (and its file rollup) and their MCP twins now list the definition GROUPS as
+`<def ix= t= sc= p= [bodyless="1"]/>` rows (JSON `def_table`) and tag every row with `of_def="K..."`: `K` a resolved edge
+ties the row to group K, `K~s` its edge carries the resolver's `split` label, `K~n` by name alone, `K~t` a resolved edge into a
+primary template while a specialisation of it is another group. A group is a definition with the declarations tied to it — the
+C/C++/ObjC declaration identity `--edit-check` already uses, and a TypeScript implementation with its overload signatures; a
+declaration that identity rule cannot tie stays silent unless a row names it. Above 16 groups the table lists the ones the
+page's rows name (`defs_listed=`). Labels come from the call graph's own edge provenance; they are the resolver's binding, not
+a type check, and a hedged token does not mean the edge is false.
+Two by-design byte changes ride along: a row (or a `--path` hop) whose edge to the selector is one arm of a resolver split
+carries `prov="split"` on every answer, single-definition ones included; and `--path` leaves out `to_p=` (`from_p=`) when that
+endpoint has several definitions and no proven hop bound one. Measured base vs head on 217 CLI argv over 7 repositories and
+16 MCP requests (single-definition selectors, prototype + definition pairs, every dialect): 212 and 16 byte-identical; the
+other five are the split-arm break above (2) and one C++ prototype whose parameter types are spelled differently from its
+definition (`std::string` vs `string`), which the declaration identity rule reads as another function (3).
+
 ### Added — Clojure (`.clj`/`.cljs`/`.cljc`/`.bb`)
 
 Vendored Yogthos' ABI-15 `tree-sitter-clojure` parser and added syntax-level definitions and direct-call captures for the four Clojure-family extensions. The grammar comparison parsed 4,930 of 4,933 files (99.94%, 55.5 MB) from Metabase, clojure-lsp, clj-kondo and Babashka checkouts in 2.24 seconds; two failures were intentionally invalid clj-kondo fixtures and one was a Metabase test. This measures parser completion on that corpus, not semantic call-resolution accuracy. Namespace/import resolution, macro expansion and exact multi-arity matching remain outside this first pass; see `docs/ARCHITECTURE.md` for the extraction limits.

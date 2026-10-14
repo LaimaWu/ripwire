@@ -731,7 +731,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
 
     bool anyVia = false;   // FE-B: an entry carried "via":"name" — the answer then carries via_note, its reading
     RowCallSites calledBySites{};   // CALLSITE-AT: the calledBy window's sites (set once the window is known, below)
-    const auto symObj = [ & ]( NodeId id, bool via ) -> std::string
+    const auto symObj = [ & ]( NodeId id, bool via, const std::string& attrib = std::string() ) -> std::string
     {
         anyVia = anyVia || via;
         const Symbol& s = ing.symbols[id];
@@ -746,17 +746,25 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
              + "\",\"line\":" + std::to_string( s.line )
              + ",\"handle\":\"" + mcpdetail::jsonEscape( handleFor( ix, id ) ) + "\""
              + ( rw::isTestedByReach( ing, chTested.testReach, id ) ? ",\"tested\":true" : "" )
-             + ( via ? ",\"via\":\"name\"" : "" )   // FE-B: the CLI row's via="name", the same edge bit (graph.h rowNameOnly)
+             + ( via ? ",\"via\":\"name\"" : "" )   // FE-B: the CLI row's via="name", the same edge bit (defattrib.h, one pass)
+             + attrib                                  // attrib-multidef: the CLI row's of_def= / prov="split"
              + "}";
     };
+    // attrib-multidef (defattrib.h): calledBy rows are callers (the callers computation's attribution), calls rows callees
+    const OneHopAttribution& calledByAttr = referencingOnly ? chRows.attr : chCallers.attr;
+    const OneHopAttribution& callsAttr    = chRows.attr;
+    bool anySplit = false;   // a row carried "prov":"split" — the answer then carries split_note, its reading
     const auto rowArray = [ & ]( const std::vector<NodeId>& ids, const PageWindow& w, bool callersSide ) -> std::string
     {
+        const OneHopAttribution& at = callersSide ? calledByAttr : callsAttr;
         std::string a = "[";
         for( std::size_t i = w.begin; i < w.end; ++i )
         {
             if( i != w.begin ) { a += ","; }
+            anySplit = anySplit || at.splitArm( i );
             // CALLSITE-AT: a calledBy row carries its call sites (the CLI --callers row's sites_at=); a calls row never does.
-            a += withRowSites( symObj( ids[i], rowNameOnly( g, chRows.matches, ids[i], callersSide ) ), calledBySites, i - w.begin, callersSide );
+            a += withRowSites( symObj( ids[i], at.nameOnly( i ), ofDefKeyJson( at.groups, at.tokens, i ) + splitArmKeyJson( at.splitArm( i ) ) ),
+                               calledBySites, i - w.begin, callersSide );
         }
         a += "]";
         return a;
@@ -815,6 +823,22 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     // which is where the disclosure has to be — the same posture bodyless_defs= already holds here.
     out += unprovenDefsKeyJson( chRows.unprovenDefs );
     out += crossKindKeyJson( chRows.crossKind );   // hono-07: the CLI root's cross_kind=, self-named like unproven_defs above
+    // attrib-multidef: the CLI root's <def> table, in this surface's row vocabulary, listing the groups either window names (all of
+    // them up to the cap). The `symbol` object above stays the first definition — def_table[0] — and this table rides beside it.
+    {
+        std::vector<char> named;
+        defTableMarkNamed( named, chRows.attr.groups, calledByAttr.tokens, ( referencingOnly ? pwPrimary : pwSecond ).begin, ( referencingOnly ? pwPrimary : pwSecond ).end );
+        if( !referencingOnly )
+        {
+            defTableMarkNamed( named, chRows.attr.groups, callsAttr.tokens, pwPrimary.begin, pwPrimary.end );
+        }
+        const DefTableListing listing = defTableListing( chRows.attr.groups, named );
+        out += defTableJson( ing, chRows.attr.groups, listing, sqRootPrefix, /*mcp=*/true );
+        if( chRows.attr.groups.multi() )
+        {
+            out += nextFieldJson( defTableLegend( true, listing.cut ), "def_note" );   // its reading, only when the table rides
+        }
+    }
     out += pageDisclosure( pab, sizeof( pab ), pwPrimary.end - pwPrimary.begin, rowTotal, pwPrimary.end,
                            page.limit, page.offset, discloseCap, kJsonPageSyntax );
     if( !referencingOnly )
@@ -830,6 +854,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     {
         out += rw::viaNameNoteJson();   // FE-B: the reading of "via":"name", only in an answer that carries it
     }
+    out += nextFieldJson( splitArmLegend( anySplit ), "split_note" );   // attrib-multidef Q1: likewise for "prov":"split"
     out += nextFieldJson( callSitesAtLegend( calledBySites.any, calledBySites.anyCut, kCallSitesPerRowCap ), "sites_note" );   // CALLSITE-AT: its reading, only when a row carries it (nextFieldJson: "" -> no key, JSON-escaped)
     // Reference-as-value round: the CLI's <vrs> window, the same rows (callhierarchy.h computed them once): valueRefs =
     // where the symbol is USED AS A VALUE (the --callers side), valueCallees = what it stores/passes and may call
@@ -2985,12 +3010,21 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     const ValueRefRows  imValueRefs = valueRefCallerRows( ing, valueRefIndexOf( ix ), seeds );
     const PageWindow    ipw         = pageWindow( show.size(), effectiveRowCap( page.limit, 40 ), page.offset );
     // idea #6: the CLI arm's rollup, under the same rule — it rides only beside a CUT symbol window
-    const ImpactFileRollup imFiles = impactFileRollup( ing, reach, depth, page.limit, symbol, ipw.end - ipw.begin < show.size(),
-                                                       seeds.size() > 1 ? proven : kNoImpactHedge );   // fix27, as on the CLI
+    ImpactFileRollup imFiles = impactFileRollup( ing, reach, depth, page.limit, symbol, ipw.end - ipw.begin < show.size(),
+                                                 seeds.size() > 1 ? proven : kNoImpactHedge );   // fix27, as on the CLI
+    // attrib-multidef (defattrib.h): the CLI --impact's attribution, by the same calls
+    const ReachAttribution imAttr = attributeReachAnswer( ing, g, seeds, reach );
+    std::vector<char>      imNamed;
+    attachRollupOfDef( imFiles, ing, imAttr, imNamed );
+    for( std::size_t i = ipw.begin; i < ipw.end && imAttr.groups.multi(); ++i )
+    {
+        imAttr.markNamed( imNamed, show[ i ] );
+    }
+    const DefTableListing imListing = defTableListing( imAttr.groups, imNamed );
     const bool          imHasVia    = std::any_of( show.begin() + ipw.begin, show.begin() + ipw.end, [ & ]( NodeId n ) { return impactRowNameOnly( proven, n ); } );
     rw::emitTo( mem, "{}{}. {}{}{}{}{}{}{}{}{}{}{}{}-->", kImpactLegendOpen, kPageRaiseCapClause,
                   reach.empty() ? "" : kImpactDepthLegend,           // 0.6.5: exactly when d=/by_depth= ride, as on the CLI
-                  kImpactImportTierLegend,
+                  ( std::string( kImpactImportTierLegend ) + importersNextLegend( !imports.next.empty() ) ).c_str(),   // cut-fix E, as on the CLI
                   ( impactTsImportLegend( imports.importsUnresolved, imports.tsconfigUnread )   // #220: exactly when the root carries them, as on the CLI
                     + viaNameLegend( imHasVia, true ) ).c_str(),                                // FE-B: exactly when a shown row is via="name", as on the CLI
                   kTestedRowLegend, kImpactTestedPartitionLegend,   // A6
@@ -3000,7 +3034,8 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   declinedIfaceLegend( declinedIface > 0 ),                                          // likewise declined_iface=, as on the CLI
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
                     + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI
-                    + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ) ) ).c_str(),                  // idea #6, as on the CLI
+                    + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ) )                   // idea #6, as on the CLI
+                    + defTableLegend( imAttr.groups.multi(), imListing.cut ) ).c_str(),                                              // attrib-multidef, as on the CLI
                   graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), renderDisclosure( prD, DiscloseAs::LegendClause ).c_str() );
     // r27-emitters §P2.1: the listing is capped at 40 by rank. Without shown=/capped= a 40-row answer to
     // "is it safe to change X?" reads as the WHOLE blast radius when it can be 3% of it. Same attributes,
@@ -3016,21 +3051,22 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     const std::string  imRootPrefix = imSingleRoot ? sarif::rootPrefixOf( root ) : std::string();
     const std::string  imRootAttr   = imSingleRoot ? ( " root=\"" + ex( root ) + "\"" ) : std::string();
     rw::emitTo( mem, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}{}>",
-                  ex( symbol ).c_str(), seeds.size(), reach.size(), unprovenDefsAttrXml( unprovenDefs ).c_str(),   // H1: where the CLI root carries it
+                  ex( symbol ).c_str(), seeds.size(), reach.size(), unprovenDefsAttrXml( unprovenDefs ) + defsListedAttrXml( imAttr.groups, imListing ),   // H1: where the CLI root carries it; attrib-multidef
                   byDepthAttrXml( byDepth ),                                                                        // 0.6.5: the CLI root's by_depth=
                   imports.xmlAttrs.c_str(), radiusTested, radiusUntested, ( declinedCallsAttrXml( declinedCalls ) + declinedIfaceAttrXml( declinedIface ) ).c_str(),
                   ( valueRefsCountAttrXml( imValueRefs.rows.size() ) + valueRefsDepthAttrXml( ing, imValueRefs.depthCut, VrRender{ imSingleRoot, imRootPrefix } ) ), imRootAttr.c_str(),
                   pageDisclosure( ipab, sizeof( ipab ), shownRows, show.size(), ipw.end, page.limit, page.offset, true ),
                   graphCountFloorAttrXml( g ).c_str(), renderDisclosure( prD, DiscloseAs::XmlAttrs ).c_str(),   // M15: gauge + marker
                   nextAttrXml( nextFlag( "--safe-delete=", symbol ) ).c_str()  );   // P3 (L7): the CLI twin's next=, same root attribute set (mcpclidiffcheck)
+    rw::emitRaw( mem, defTableXml( ing, imAttr.groups, imListing, imSingleRoot ? std::string_view( imRootPrefix ) : std::string_view() ).c_str() );   // attrib-multidef
     emitImpactFileRollupXml( mem, ing, imFiles, imSingleRoot ? std::string_view( imRootPrefix ) : std::string_view() );   // idea #6, as on the CLI
     for( std::size_t i = ipw.begin; i < ipw.end; ++i )
     { const Symbol& s = ing.symbols[ show[i] ];
       const std::string_view rp = imSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], imRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
       // A6: tested="1" only (never a literal 0) — see kTestedRowLegend. 0.6.5: d= as on the CLI row.
-      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
+      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
                     depthRunAttrXml( show, depth, i, ipw.begin ), isTestedByReach( ing, impTestReach, show[i] ) ? " tested=\"1\"" : "",
-                    viaNameAttr( impactRowNameOnly( proven, show[i] ) ) ); }   // FE-B (D3)
+                    viaNameAttr( impactRowNameOnly( proven, show[i] ) ), imAttr.ofDefXml( show[i] ) ); }   // FE-B (D3); attrib-multidef
     // the import tier's rows, after the symbol rows and under their own tag — a different unit, so a
     // different element (see the CLI arm and kImpactImportTierLegend for why they are never one number).
     emitImportRowsXml( mem, ing, std::span<const std::uint32_t>( imports.files ).first( imports.shown ), imRootPrefix,
@@ -3461,13 +3497,17 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     // PATH-GAP: the CLI --path's gap clause, by the same analysis and emitter (src/pathgaps.h).
     const PathSearchGaps ptGaps = pth.empty() ? pathSearchGaps( ing, g, srcDefs, valueRefIndexOf( ix ) ) : PathSearchGaps{};
     const bool ptHasVia = pathHasNameOnlyHop( g, pth );   // FE-B: exactly when a hop of this path is via="name", as on the CLI
+    const PathEndpointBinding ptBound    = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), pth );   // attrib-multidef, as on the CLI
+    const bool                ptHasSplit = pathHasSplitHop( g, pth );
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
-                       "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + viaNameLegend( ptHasVia ) ).c_str(),
+                       "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + viaNameLegend( ptHasVia )
+                                                           + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
                   pathGapsLegend( ptGaps.any() ),
                   graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rootRelPathsLegend( ptSingleRoot ) );
-    rw::emitTo( mem, "<path from=\"{}\" to=\"{}\" from_p=\"{}\" to_p=\"{}\" from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
-                  ex( from ).c_str(), ex( to ).c_str(), loc( srcUsed ).c_str(), loc( dstUsed ).c_str(),
+    rw::emitTo( mem, "<path from=\"{}\" to=\"{}\"{}{} from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
+                  ex( from ).c_str(), ex( to ).c_str(), ptBound.from ? " from_p=\"" + loc( srcUsed ) + "\"" : std::string(),
+                  ptBound.to ? " to_p=\"" + loc( dstUsed ) + "\"" : std::string(),
                   srcDefs.size(), dstDefs.size(), unprovenDefsAttrXml( unprovenDefs ).c_str(),   // H1: as the CLI root carries it
                   pth.empty() ? 0 : 1, pth.empty() ? std::size_t( 0 ) : pth.size() - 1, ptRootAttr.c_str(),
                   graphCountFloorAttrXml( g ).c_str()  );   // M15: gauge + marker
@@ -3480,8 +3520,8 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     for( std::size_t i = 0; i < pth.size(); ++i )
     { const Symbol&           s  = ing.symbols[ pth[i] ];
       const std::string_view  rp = ptSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], ptRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
-      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
-                    viaNameAttr( i > 0 && edgeNameOnly( g, pth[ i - 1 ], pth[ i ] ) ) ); }   // FE-B: as on the CLI
+      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
+                    viaNameAttr( i > 0 && edgeNameOnly( g, pth[ i - 1 ], pth[ i ] ) ), splitArmAttrXml( pathHopSplitArm( g, pth, i ) ) ); }   // FE-B; attrib-multidef: as on the CLI
     rw::emitRaw( mem, "</path>" );
     return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }

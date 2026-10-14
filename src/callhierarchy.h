@@ -20,6 +20,7 @@
 // surface-specific by contract (the CLI has a legend, the MCP arm speaks JSON-RPC errors), and folding them
 // in would trade one drift for another.
 
+#include "defattrib.h" // the per-row definition attribution every surface of these rows serves (and tsContractSignatures)
 #include "filter.h"    // pathTierIndexOver / compareTierThenPath — the tier-then-path row order both surfaces serve
 #include "graph.h"     // resolveAllByNameQualified, the CSR, testSymbolForwardReach / countTestedIn / isTestedByReach
 #include "model.h"
@@ -89,6 +90,7 @@ struct CallHierarchyRows
     std::size_t         declinedIface = 0;   // callers only: declinedIfaceCallsNaming below, the root's declined_iface=
     ValueRefRows        valueRefs;     // reference-as-value round: <vr> rows, never in `rows` or any count above
     StdMemberCallsMade  stdCalls;      // callees only: of declinedCalls, the C++ standard-member ones (graph.h stdMemberCallsMadeBy)
+    OneHopAttribution   attr;          // attrib-multidef (defattrib.h): the definition groups + each row's ties, parallel to `rows`
 };
 
 // The callees answer's <stdm> line (graph.h StdMemberGate, stdMemberCallsMadeBy), one spelling per dialect — the JSON keys
@@ -141,94 +143,8 @@ inline std::string crossKindValue( const IngestResult& ing, const std::vector<No
     return value;
 }
 
-// The TypeScript methods with no body that are a CONTRACT — an interface member (method_signature), an abstract or an
-// ambient (.d.ts) member — as their own symbol ids, minus overload signatures: those sit in the same OWNER (the innermost
-// class or interface whose span holds them, in the same file) as a bodied method of the same name, which implements
-// them, so their receiver is that class and not an interface. The owner is part of the key because TS methods carry no
-// `scope`: keyed by file alone, an `interface Router { match(): void }` beside an unrelated `class Matcher { match() {} }`
-// lost its signature (test/declinecheck.sh (I), the same-file arm).
-inline std::vector<NodeId> tsContractSignatures( const IngestResult& ing )
-{
-    struct Span
-    {
-        std::uint32_t fileId;
-        std::uint32_t start;
-        std::uint32_t end;
-        NodeId        id;
-    };
-    std::vector<Span>   owners;   // every TS class/interface/struct span, by file then start
-    std::vector<NodeId> methods;
-    for( NodeId id = 0; id < ing.symbols.size(); ++id )
-    {
-        const Symbol& s = ing.symbols[id];
-        if( s.lang != Lang::TypeScript )
-        {
-            continue;
-        }
-        if( s.kind == SymKind::Method )
-        {
-            methods.push_back( id );
-        }
-        else if( s.kind == SymKind::Class || s.kind == SymKind::Interface || isStructOrNamedType( s.kind ) )
-        {
-            owners.push_back( Span{ s.fileId, s.sigStartByte, s.endByte, id } );
-        }
-    }
-    std::sort( owners.begin(), owners.end(), []( const Span& a, const Span& b ) noexcept
-               { return a.fileId != b.fileId ? a.fileId < b.fileId : a.start < b.start; } );
-    // The innermost owner span holding `s` in its own file; kNoNode for a method no owner span holds.
-    const auto ownerOf = [ & ]( const Symbol& s ) noexcept
-    {
-        const auto first = std::lower_bound( owners.begin(), owners.end(), s.fileId,
-                                             []( const Span& o, std::uint32_t f ) noexcept { return o.fileId < f; } );
-        NodeId        best    = kNoNode;
-        std::uint32_t bestLen = 0xFFFFFFFFu;
-        for( auto it = first; it != owners.end() && it->fileId == s.fileId && it->start <= s.sigStartByte; ++it )
-        {
-            if( s.sigStartByte < it->end && it->end - it->start < bestLen )
-            {
-                best    = it->id;
-                bestLen = it->end - it->start;
-            }
-        }
-        return best;
-    };
-    struct Owned
-    {
-        NodeId           owner;
-        std::uint32_t    fileId;
-        std::string_view name;
-    };
-    const auto byOwnerThenName = []( const Owned& a, const Owned& b ) noexcept
-    {
-        if( a.fileId != b.fileId )
-        {
-            return a.fileId < b.fileId;
-        }
-        return a.owner != b.owner ? a.owner < b.owner : sortutil::svLess( a.name, b.name );
-    };
-    std::vector<Owned>  bodied;   // (file, owner, name) of every bodied TS method
-    std::vector<NodeId> bodyless;
-    for( const NodeId id : methods )
-    {
-        const Symbol& s = ing.symbols[id];
-        if( s.sigEndByte == s.endByte )
-        {
-            bodyless.push_back( id );
-        }
-        else
-        {
-            bodied.push_back( Owned{ ownerOf( s ), s.fileId, s.name } );
-        }
-    }
-    std::sort( bodied.begin(), bodied.end(), byOwnerThenName );
-    std::erase_if( bodyless, [ & ]( NodeId id )
-    {
-        const Symbol& s = ing.symbols[id];
-        return std::binary_search( bodied.begin(), bodied.end(), Owned{ ownerOf( s ), s.fileId, s.name }, byOwnerThenName );
-    } );
-    return bodyless;
-}
+// tsContractSignatures (the TS contract-vs-overload-signature rule) lives in defattrib.h, beside the definition grouping that
+// also reads it.
 
 // One declined list's verdict for declinedIfaceCallsNaming: TypeScript, its called name among `sigNames`, and either a
 // candidate in `isTarget` or the name among `targetSigNames`. A declined list is one called name's same-language
@@ -413,6 +329,9 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
         rankBeforeCap( ing, out.rows, [ & ]( NodeId r ) { return ing.symbols[r].fileId; },
                        [ & ]( NodeId r ) { return navRelevanceWeight( g, r ); } );
     }
+    // attrib-multidef: which definition each row belongs to (defattrib.h), over the rows in their FINAL order — one pass over
+    // the matches' edges, read by every dialect of both surfaces (and their via="name": strongest tie by name alone).
+    out.attr = attributeOneHopAnswer( ing, g, out.matches, out.rows, wantCallers );
     return out;
 }
 

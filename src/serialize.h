@@ -9659,8 +9659,8 @@ inline void emitImpactFileRollupXml( std::FILE* out, const IngestResult& ing, co
     {
         const std::string_view raw = ing.files[ r.rows[i].fileId ];
         const std::string_view rel = rootPrefix.empty() ? raw : rw::sarif::rootRelativeUri( raw, rootPrefix );
-        rw::emitTo( out, "<rf p=\"{}\" syms=\"{}\" d=\"{}\"{}/>", std::string( escapeXml( rel, esc ) ).c_str(), r.rows[i].syms, r.rows[i].minDepth,
-                    impactRollupHedgeXml( r.rows[i] ) );   // fix27: the symbol rows' via="name", kept through the fold
+        rw::emitTo( out, "<rf p=\"{}\" syms=\"{}\" d=\"{}\"{}{}/>", std::string( escapeXml( rel, esc ) ).c_str(), r.rows[i].syms, r.rows[i].minDepth,
+                    impactRollupHedgeXml( r.rows[i] ), r.rows[i].ofDefXml );   // fix27: the symbol rows' via="name", kept through the fold; attrib-multidef
     }
     rw::emitRaw( out, "</files>" );
 }
@@ -9680,8 +9680,8 @@ inline void emitImpactFileRollupJson( std::FILE* out, const IngestResult& ing, c
     {
         const std::string_view raw = ing.files[ r.rows[i].fileId ];
         const std::string_view rel = rootPrefix.empty() ? raw : rw::sarif::rootRelativeUri( raw, rootPrefix );
-        rw::emitTo( out, "{}{{\"p\":\"{}\",\"syms\":{},\"d\":{}{}}}", i ? "," : "", jsonStr( rel ).c_str(), r.rows[i].syms, r.rows[i].minDepth,
-                    impactRollupHedgeJson( r.rows[i] ) );   // fix27: as the XML row
+        rw::emitTo( out, "{}{{\"p\":\"{}\",\"syms\":{},\"d\":{}{}{}}}", i ? "," : "", jsonStr( rel ).c_str(), r.rows[i].syms, r.rows[i].minDepth,
+                    impactRollupHedgeJson( r.rows[i] ), r.rows[i].ofDefJson );   // fix27: as the XML row; attrib-multidef
     }
     rw::emitRaw( out, "]}" );
 }

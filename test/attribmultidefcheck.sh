@@ -29,7 +29,7 @@
 #     it is a split arm or by name: dropped); a from= with several definitions carries no from_p= when unreached.
 
 # Corpus test/attribmultideffix (in-tree, outside test/fixture); the stand-in dir per known-items row in [brackets]:
-#   cpp/  [ninja-07] StringPiece::empty vs EvalString::empty (UsesPiece/UsesEval/UsesBoth, RunPiece/RunEval at depth 2
+#   cpp/  [ninja-07] StringPiece::empty vs EvalString::empty (UsesPiece/UsesEval/UsesBoth, DrivePiece/DriveEval at depth 2
 #         in their own files; UsesStd, a std::string::empty confounder), [ninja-26] ManifestParser::ParseDefault (decl +
 #         def) calling the CanonicalizePath overload pair (a split call), near misses in fmt.{h,cc}: Fmt::put overloads in
 #         ONE class (split), outer::run vs outer::inner::run (nested namespace), Box<T>::get vs the Box<int>
@@ -286,9 +286,14 @@ if ans b_cpp2 cpp callers s xml -- --callers=CanonicalizePath; then
     [ "$( groups b_cpp2 )" = 2 ]; say $? "[N] b_cpp2: two groups (each util.h declaration folds into its util.cc definition)" \
         "[N] b_cpp2: <def> rows=$( groups b_cpp2 ), want 2"
     hedged P b_cpp2 ParseDefault "util.cc:2 util.cc:6"
-    hedged P b_cpp2 CanonicalizePath "util.cc:2 util.cc:6"
+    # the string* overload's own call passes three arguments: the resolver binds it to the 3-parameter overload, proven
+    expect N b_cpp2 CanonicalizePath util.cc:6
 fi
 if ans b_rp cpp callers s xml -- --callers=ReadPath; then plain N b_rp; fi
+# UsesPiece is declared in piece_user.cc with no #include that ties it to parser.cc's definition: the identity rule answers
+# Unproven (may declare it, cannot prove it), and no row ties to that declaration (DrivePiece's call binds the definition), so
+# the declaration is silent and the answer stays one group — the tmux/ninja prototype shape (a variadic or template-qualified
+# declarator is Unproven the same way). A FOREIGN declaration (c_tal, c_hlp below: provably another function) is always listed.
 if ans b_up cpp callers s xml -- --callers=UsesPiece; then plain N b_up; fi
 if ans b_q cpp callers s xml -- --callers=string_piece.h:empty; then plain N b_q; fi
 # Q1 (orchestrator ruling): the split-arm hedge rides single-definition answers too (by-design byte change on them)
@@ -366,9 +371,9 @@ else no "c_for: --for=empty failed"; fi
 echo "(D) C++ --impact=empty"
 if ans d_imp cpp impact s xml -- --impact=empty; then
     expect P d_imp UsesPiece "$SP"; expect P d_imp UsesEval "$EV"; expect P d_imp UsesBoth "$EV $SP"
-    expect P d_imp RunPiece "$SP";  expect P d_imp RunEval "$EV"; expect P d_imp ParseDefault "$EV"
+    expect P d_imp DrivePiece "$SP";  expect P d_imp DriveEval "$EV"; expect P d_imp ParseDefault "$EV"
     invariant P d_imp
-    rowset C d_imp 6 "ParseDefault RunEval RunPiece UsesBoth UsesEval UsesPiece"
+    rowset C d_imp 6 "DriveEval DrivePiece ParseDefault UsesBoth UsesEval UsesPiece"
 fi
 if ans d_rf cpp impact rf xml -- --impact=empty --limit=2; then
     expect P d_rf parser.cc "$EV $SP"
@@ -379,9 +384,9 @@ if ans d_impj cpp - reach json -- --impact=empty --json; then
     # the row array key of the JSON dialect is read off the answer, never assumed
     key="$( python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); print(next((k for k,v in j.items() if isinstance(v,list) and v and isinstance(v[0],dict) and "n" in v[0]), "-"))' "$DIR/d_impj.out" 2>/dev/null )"
     python3 "$DIR/amd.py" "$DIR/d_impj.out" json - "$key" >"$DIR/d_impj.rows"
-    expect P d_impj RunPiece "$SP"
+    expect P d_impj DrivePiece "$SP"
 fi
-if mcp d_mcp cpp s impact '"symbol":"empty"'; then expect P d_mcp RunEval "$EV"; fi
+if mcp d_mcp cpp s impact '"symbol":"empty"'; then expect P d_mcp DriveEval "$EV"; fi
 if ans d_one cpp impact s xml -- --impact=string_piece.h:empty; then plain N d_one; fi
 
 # ── (E) --path endpoints ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -392,7 +397,7 @@ if ans e_un cpp path s xml -- --path=Clear,empty; then
     [ "$( rootf e_un from_p )" = "eval_env.h:4" ]; say $? "[N] e_un: the single-definition from= keeps from_p" \
         "[N] e_un: from_p='$( rootf e_un from_p )'"
 fi
-if ans e_re cpp path s xml -- --path=RunPiece,empty; then
+if ans e_re cpp path s xml -- --path=DrivePiece,empty; then
     [ "$( rootf e_re to_p )" = "$SP" ]; say $? "[C] e_re: a reached multi-definition to= names the bound one ($SP)" \
         "[C] e_re: to_p='$( rootf e_re to_p )'"
 fi
@@ -434,7 +439,9 @@ if ans f_py py callers s xml -- --callers=render; then
     expect P f_py draw_widget widgets.py:2
     expect P f_py draw_canvas widgets.py:6
     expect P f_py draw_both   "widgets.py:2 widgets.py:6"
-    expect P f_py draw_mixed  "widgets.py:2 widgets.py:6~n"
+    # draw_mixed calls Widget.render twice: w.render() (proven) and thing.render() (split between the two by name). The graph keeps
+    # ONE provenance per edge (resolve.h edgeProvenance: split outranks plain), so the Widget edge reads ~s — a hedge, never a claim
+    expect P f_py draw_mixed  "widgets.py:2~s widgets.py:6~n"
     rowset C f_py 4 "draw_both draw_canvas draw_mixed draw_widget"
 fi
 if ans f_ts ts callers s xml -- --callers=area; then

@@ -155,7 +155,9 @@ for name in seed_names:
     # row COUNT this invariance reads is unchanged by it (test/impactdepthcheck.sh gates the depths themselves).
     # FE-B: a row reached only through a by-name edge carries via="name" after tested= — it DISCLOSES how the row was
     # reached, never whether it is one, so the row count this invariance reads must take it like d= above.
-    rows = re.findall(r'<s t="(\w+)" n="([^"]+)" p="([^"]+)"(?: d="\d+")?( tested="1")?(?: via="name")?/>', doc)
+    # attrib-multidef: a row of a multi-definition selector carries of_def= (which definition it is a dependant of) last — it
+    # attributes the row, never adds or removes one, so the count this invariance reads takes it like via= above.
+    rows = re.findall(r'<s t="(\w+)" n="([^"]+)" p="([^"]+)"(?: d="\d+")?( tested="1")?(?: via="name")?(?: of_def="[^"]*")?/>', doc)
     reaches = int(attrs.get("reaches", "-1"))
     if len(rows) != reaches:
         row_count_ok = False
