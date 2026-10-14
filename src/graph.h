@@ -377,44 +377,28 @@ inline bool pathHasNameOnlyHop( const Graph& g, std::span<const NodeId> path ) n
     return std::adjacent_find( path.begin(), path.end(), [ & ]( NodeId from, NodeId to ) { return edgeNameOnly( g, from, to ); } ) != path.end();
 }
 
-// FE-B: does the call edge from → to exist at all (the out-CSR is ascending within a source)
-inline bool edgeExists( const Graph& g, NodeId from, NodeId to ) noexcept
+// The out-CSR position of the call edge from → to, or SIZE_MAX when there is none (ascending within a source: buildGraph sorts
+// by (from, to)). The per-edge bytes (outNameOnly, outProv) are read at it; defattrib.h's row attribution reads both.
+inline std::size_t edgeIndex( const Graph& g, NodeId from, NodeId to ) noexcept
 {
     if( std::size_t( from ) + 1 >= g.outOff.size() )
     {
-        return false;
+        return SIZE_MAX;
     }
-    const auto b = g.outTargets.begin() + g.outOff[ from ];
-    const auto e = g.outTargets.begin() + g.outOff[ std::size_t( from ) + 1 ];
-    return std::binary_search( b, e, to );
+    const auto b  = g.outTargets.begin() + g.outOff[ from ];
+    const auto e  = g.outTargets.begin() + g.outOff[ std::size_t( from ) + 1 ];
+    const auto it = std::lower_bound( b, e, to );
+    return ( it != e && *it == to ) ? std::size_t( it - g.outTargets.begin() ) : SIZE_MAX;
 }
 
-// FE-B: a neighbour row of a selector that matched several definitions is via="name" iff EVERY edge joining it to one
-// of them is name-only — one proven edge makes the row proven. `towardMatches`: the row is a CALLER (row → match);
-// else a callee (match → row). false when no edge joins them, and on a graph with no name-only edge.
-inline bool rowNameOnly( const Graph& g, std::span<const NodeId> matches, NodeId row, bool towardMatches ) noexcept
+// FE-B: does the call edge from → to exist at all
+inline bool edgeExists( const Graph& g, NodeId from, NodeId to ) noexcept
 {
-    if( g.outNameOnly.empty() )
-    {
-        return false;
-    }
-    bool any = false;
-    for( const NodeId m : matches )
-    {
-        const NodeId from = towardMatches ? row : m;
-        const NodeId to   = towardMatches ? m : row;
-        if( !edgeExists( g, from, to ) )
-        {
-            continue;
-        }
-        if( !edgeNameOnly( g, from, to ) )
-        {
-            return false;
-        }
-        any = true;
-    }
-    return any;
+    return edgeIndex( g, from, to ) != SIZE_MAX;
 }
+
+// FE-B's per-row via="name" (EVERY edge joining a row to the selector's definitions is name-only) is defattrib.h's
+// OneHopAttribution::nameOnly now: the strongest tie the one attribution pass recorded is by name alone.
 
 // The via="name" spelling every XML row of a name-only edge carries (" via=\"name\"", 11 bytes), "" otherwise.
 inline const char* viaNameAttr( bool nameOnly ) noexcept

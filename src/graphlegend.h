@@ -925,7 +925,13 @@ inline constexpr const char* kDefTableLegend =
 inline constexpr const char* kDefsListedLegend = "defs_listed=N: above 16 groups the table lists only the N that this page's rows name. ";
 inline std::string defTableLegend( bool table, bool cut )
 {
-    return table ? std::string( kDefTableLegend ) + ( cut ? kDefsListedLegend : "" ) : std::string();
+    std::string clause;
+    if( table )
+    {
+        clause = kDefTableLegend;
+        clause += cut ? kDefsListedLegend : "";
+    }
+    return clause;
 }
 inline constexpr const char* kSplitArmRowLegend =
     "prov=\"split\" on a row: its edge to of= (on a path, the hop into it) carries the resolver's split label, a call along it was one "

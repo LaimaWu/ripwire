@@ -382,23 +382,10 @@ inline DefMark defMarkOfEdge( const Graph& g, std::size_t e ) noexcept
     return ( e < g.outProv.size() && g.outProv[e] == 3u ) ? DefMark::Split : DefMark::Proven;
 }
 
-// The out-CSR position of from → to, or SIZE_MAX (ascending within a source: buildGraph sorts by (from, to)).
-inline std::size_t defEdgeIndex( const Graph& g, NodeId from, NodeId to ) noexcept
-{
-    if( std::size_t( from ) + 1 >= g.outOff.size() )
-    {
-        return SIZE_MAX;
-    }
-    const auto b  = g.outTargets.begin() + g.outOff[ from ];
-    const auto e  = g.outTargets.begin() + g.outOff[ std::size_t( from ) + 1 ];
-    const auto it = std::lower_bound( b, e, to );
-    return ( it != e && *it == to ) ? std::size_t( it - g.outTargets.begin() ) : SIZE_MAX;
-}
-
 // FE-B's two path predicates' sibling: the hop from → to is one arm of a resolver split (and not by name alone).
 inline bool edgeSplitArm( const Graph& g, NodeId from, NodeId to ) noexcept
 {
-    const std::size_t e = defEdgeIndex( g, from, to );
+    const std::size_t e = edgeIndex( g, from, to );
     return e != SIZE_MAX && defMarkOfEdge( g, e ) == DefMark::Split;
 }
 
@@ -454,7 +441,7 @@ inline RowDefTokens attributeOneHop( const Graph& g, const DefGroups& groups, st
         {
             for( std::uint32_t k = ro[m]; k < ro[m + 1]; ++k )
             {
-                const std::size_t e = defEdgeIndex( g, ci[k], m );
+                const std::size_t e = edgeIndex( g, ci[k], m );
                 if( e != SIZE_MAX )
                 {
                     ties.push_back( DefTie{ ci[k], grp, std::uint8_t( defMarkOfEdge( g, e ) ) } );
@@ -476,37 +463,68 @@ inline RowDefTokens attributeOneHop( const Graph& g, const DefGroups& groups, st
 // A (any chain) — propagated from the seeds over the in-edges until nothing grows (monotone, so it ends; a cycle only re-adds
 // bits it already holds). The bitsets live on a dense index of the reach set plus the seeds, never on every node (review S5:
 // 1047 groups over all nodes would be megabytes per walk). Token: K from P, K~s from S\P, K~n from A\S.
-inline RowDefTokens attributeReach( const Graph& g, const DefGroups& groups, std::span<const NodeId> seeds, std::span<const NodeId> reach,
-                                    std::span<const NodeId> rows )
+struct ReachBits
+{
+    std::vector<NodeId>        dense;   // ascending: the reach set plus the seeds
+    std::size_t                words = 0;
+    std::vector<std::uint64_t> p, s, a;  // dense.size() * words each
+
+    std::size_t denseOf( NodeId n ) const noexcept
+    {
+        const auto [ first, last ] = std::equal_range( dense.begin(), dense.end(), n );
+        return first == last ? SIZE_MAX : std::size_t( first - dense.begin() );
+    }
+    // fold u's reaches into its caller c across one edge of tie `mark`; true when c gained a bit
+    bool foldInto( std::size_t c, std::size_t u, DefMark mark ) noexcept
+    {
+        bool changed = false;
+        for( std::size_t w = 0; w < words; ++w )
+        {
+            const std::size_t cw = c * words + w;
+            const std::size_t uw = u * words + w;
+            const std::uint64_t na = a[cw] | a[uw];
+            const std::uint64_t ns = mark >= DefMark::Split ? ( s[cw] | s[uw] ) : s[cw];
+            const std::uint64_t np = mark == DefMark::Proven ? ( p[cw] | p[uw] ) : p[cw];
+            changed = changed || na != a[cw] || ns != s[cw] || np != p[cw];
+            a[cw] = na;
+            s[cw] = ns;
+            p[cw] = np;
+        }
+        return changed;
+    }
+    DefMark markOf( std::size_t d, std::size_t grp ) const noexcept
+    {
+        const std::uint64_t bit = std::uint64_t( 1 ) << ( grp % 64 );
+        const std::size_t   w   = d * words + grp / 64;
+        return ( p[w] & bit ) ? DefMark::Proven : ( s[w] & bit ) ? DefMark::Split : ( a[w] & bit ) ? DefMark::Name : DefMark::None;
+    }
+};
+
+inline ReachBits reachBitsets( const Graph& g, const DefGroups& groups, std::span<const NodeId> seeds, std::span<const NodeId> reach )
 {
     EXPECTS( groups.ofMatch.size() == seeds.size(), "the groups are defGroupsOf( seeds )" );
-    std::vector<NodeId> dense( reach.begin(), reach.end() );
-    dense.insert( dense.end(), seeds.begin(), seeds.end() );
-    std::sort( dense.begin(), dense.end() );
-    dense.erase( std::unique( dense.begin(), dense.end() ), dense.end() );
-    const auto denseOf = [ & ]( NodeId n ) noexcept -> std::size_t
-    {
-        const auto it = std::lower_bound( dense.begin(), dense.end(), n );
-        return ( it != dense.end() && *it == n ) ? std::size_t( it - dense.begin() ) : SIZE_MAX;
-    };
-    const std::size_t          words = ( groups.size() + 63 ) / 64;
-    std::vector<std::uint64_t> pBits( dense.size() * words, 0 ), sBits( dense.size() * words, 0 ), aBits( dense.size() * words, 0 );
-    std::vector<char>          queued( dense.size(), 0 );
-    std::vector<std::size_t>   work;
+    ReachBits bits;
+    bits.dense.assign( reach.begin(), reach.end() );
+    bits.dense.insert( bits.dense.end(), seeds.begin(), seeds.end() );
+    std::sort( bits.dense.begin(), bits.dense.end() );
+    bits.dense.erase( std::unique( bits.dense.begin(), bits.dense.end() ), bits.dense.end() );
+    bits.words = ( groups.size() + 63 ) / 64;
+    bits.p.assign( bits.dense.size() * bits.words, 0 );
+    bits.s = bits.p;
+    bits.a = bits.p;
+    std::vector<char>        queued( bits.dense.size(), 0 );
+    std::vector<std::size_t> work;
     for( std::size_t si = 0; si < seeds.size(); ++si )
     {
-        const std::size_t d   = denseOf( seeds[si] );
-        const std::size_t grp = groups.ofMatch[si];
+        const std::size_t d = bits.denseOf( seeds[si] );
         ASSUME( d != SIZE_MAX, "every seed is in the dense index (it was inserted)" );
-        const std::uint64_t bit = std::uint64_t( 1 ) << ( grp % 64 );
-        pBits[ d * words + grp / 64 ] |= bit;
-        sBits[ d * words + grp / 64 ] |= bit;
-        aBits[ d * words + grp / 64 ] |= bit;
-        if( !queued[d] )
-        {
-            queued[d] = 1;
-            work.push_back( d );
-        }
+        const std::size_t   w   = d * bits.words + groups.ofMatch[si] / 64;
+        const std::uint64_t bit = std::uint64_t( 1 ) << ( groups.ofMatch[si] % 64 );
+        bits.p[w] |= bit;
+        bits.s[w] |= bit;
+        bits.a[w] |= bit;
+        work.push_back( d );
+        queued[d] = 1;
     }
     const auto* ro = g.inEdges.rowOffsets();
     const auto* ci = g.inEdges.colIndices();
@@ -515,48 +533,32 @@ inline RowDefTokens attributeReach( const Graph& g, const DefGroups& groups, std
         const std::size_t u = work.back();
         work.pop_back();
         queued[u] = 0;
-        const NodeId un = dense[u];
-        for( std::uint32_t k = ro[un]; k < ro[un + 1]; ++k )
+        for( std::uint32_t k = ro[ bits.dense[u] ]; k < ro[ bits.dense[u] + 1 ]; ++k )
         {
-            const std::size_t c = denseOf( ci[k] );
-            const std::size_t e = defEdgeIndex( g, ci[k], un );
-            if( c == SIZE_MAX || e == SIZE_MAX )
-            {
-                continue;   // outside the reach set (cannot happen for a full closure) or no out-edge twin
-            }
-            const DefMark mark    = defMarkOfEdge( g, e );
-            bool          changed = false;
-            for( std::size_t w = 0; w < words; ++w )
-            {
-                const std::uint64_t a = aBits[ c * words + w ] | aBits[ u * words + w ];
-                const std::uint64_t s = mark >= DefMark::Split ? ( sBits[ c * words + w ] | sBits[ u * words + w ] ) : sBits[ c * words + w ];
-                const std::uint64_t p = mark == DefMark::Proven ? ( pBits[ c * words + w ] | pBits[ u * words + w ] ) : pBits[ c * words + w ];
-                changed = changed || a != aBits[ c * words + w ] || s != sBits[ c * words + w ] || p != pBits[ c * words + w ];
-                aBits[ c * words + w ] = a;
-                sBits[ c * words + w ] = s;
-                pBits[ c * words + w ] = p;
-            }
-            if( changed && !queued[c] )
+            const std::size_t c = bits.denseOf( ci[k] );
+            const std::size_t e = edgeIndex( g, ci[k], bits.dense[u] );
+            // outside the reach set (cannot happen for a full closure) or no out-edge twin: nothing to fold
+            if( c != SIZE_MAX && e != SIZE_MAX && bits.foldInto( c, u, defMarkOfEdge( g, e ) ) && !queued[c] )
             {
                 queued[c] = 1;
                 work.push_back( c );
             }
         }
     }
+    return bits;
+}
+
+inline RowDefTokens attributeReach( const Graph& g, const DefGroups& groups, std::span<const NodeId> seeds, std::span<const NodeId> reach,
+                                    std::span<const NodeId> rows )
+{
+    const ReachBits     bits = reachBitsets( g, groups, seeds, reach );
     std::vector<DefTie> ties;
     for( const NodeId r : rows )
     {
-        const std::size_t d = denseOf( r );
-        if( d == SIZE_MAX )
+        const std::size_t d = bits.denseOf( r );
+        for( std::size_t grp = 0; grp < groups.size() && d != SIZE_MAX; ++grp )
         {
-            continue;
-        }
-        for( std::size_t grp = 0; grp < groups.size(); ++grp )
-        {
-            const std::uint64_t bit = std::uint64_t( 1 ) << ( grp % 64 );
-            const std::size_t   w   = d * words + grp / 64;
-            const DefMark       m   = ( pBits[w] & bit ) ? DefMark::Proven : ( sBits[w] & bit ) ? DefMark::Split : ( aBits[w] & bit ) ? DefMark::Name : DefMark::None;
-            if( m != DefMark::None )
+            if( const DefMark m = bits.markOf( d, grp ); m != DefMark::None )
             {
                 ties.push_back( DefTie{ r, std::uint32_t( grp ), std::uint8_t( m ) } );
             }
@@ -635,13 +637,15 @@ inline void defTokenTo( std::string& out, const DefGroups& groups, std::uint32_t
     }
 }
 // A row's tokens, space-separated (the sites_at= convention).
-inline void defTokensTo( std::string& out, const DefGroups& groups, std::span<const std::uint32_t> toks )
+inline std::string defTokens( const DefGroups& groups, std::span<const std::uint32_t> toks )
 {
+    std::string text;
     for( std::size_t i = 0; i < toks.size(); ++i )
     {
-        out += i ? " " : "";
-        defTokenTo( out, groups, toks[i] );
+        text += i ? " " : "";
+        defTokenTo( text, groups, toks[i] );
     }
+    return text;
 }
 inline std::string ofDefAttrXml( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row )
 {
@@ -649,10 +653,7 @@ inline std::string ofDefAttrXml( const DefGroups& groups, const RowDefTokens& to
     {
         return {};
     }
-    std::string out = " of_def=\"";
-    defTokensTo( out, groups, tokens.of( row ) );
-    out += '"';
-    return out;
+    return " of_def=\"" + defTokens( groups, tokens.of( row ) ) + "\"";
 }
 inline std::string ofDefKeyJson( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row )
 {
@@ -674,16 +675,14 @@ inline std::string ofDefKeyJson( const DefGroups& groups, const RowDefTokens& to
 // The columnar of_def column's value for one row: the tokens space-separated (the sites_at column's convention).
 inline std::string ofDefColumnValue( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row )
 {
-    std::string out;
-    defTokensTo( out, groups, tokens.of( row ) );
-    return out;
+    return defTokens( groups, tokens.of( row ) );
 }
 
 // Q1: a row of a ONE-group answer whose every non-by-name edge to the selector is a split arm says so, in the map's per-edge
 // vocabulary. Never on a multi-group answer (its tokens carry ~s), never on a by-name row (via="name" already hedges it).
 inline bool rowSplitArm( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row ) noexcept
 {
-    return !groups.multi() && !tokens.empty() && tokens.strongest( row ) == DefMark::Split;
+    return !groups.multi() && tokens.strongest( row ) == DefMark::Split;   // None when no tie was recorded
 }
 inline const char* splitArmAttrXml( bool on ) noexcept { return on ? " prov=\"split\"" : ""; }
 inline const char* splitArmKeyJson( bool on ) noexcept { return on ? ",\"prov\":\"split\"" : ""; }
@@ -801,7 +800,7 @@ struct OneHopAttribution
     DefGroups    groups;
     RowDefTokens tokens;   // parallel to the rows; empty when nothing was computed
 
-    bool nameOnly( std::size_t row ) const noexcept { return !tokens.empty() && tokens.strongest( row ) == DefMark::Name; }
+    bool nameOnly( std::size_t row ) const noexcept { return tokens.strongest( row ) == DefMark::Name; }   // None when none recorded
     bool splitArm( std::size_t row ) const noexcept { return rowSplitArm( groups, tokens, row ); }
 };
 inline OneHopAttribution attributeOneHopAnswer( const IngestResult& ing, const Graph& g, std::span<const NodeId> matches,
@@ -827,8 +826,8 @@ struct ReachAttribution
 
     std::size_t indexOf( NodeId n ) const noexcept
     {
-        const auto it = std::lower_bound( reach.begin(), reach.end(), n );
-        return ( it != reach.end() && *it == n ) ? std::size_t( it - reach.begin() ) : SIZE_MAX;
+        const auto [ first, last ] = std::equal_range( reach.begin(), reach.end(), n );
+        return first == last ? SIZE_MAX : std::size_t( first - reach.begin() );
     }
     std::string ofDefXml( NodeId n ) const
     {
@@ -922,7 +921,7 @@ inline PathEndpointBinding pathEndpointBinding( const Graph& g, std::size_t srcD
         }
         else
         {
-            const std::size_t e = defEdgeIndex( g, path[ path.size() - 2 ], path.back() );
+            const std::size_t e = edgeIndex( g, path[ path.size() - 2 ], path.back() );
             b.to = e != SIZE_MAX && defMarkOfEdge( g, e ) == DefMark::Proven;
         }
     }
@@ -935,14 +934,7 @@ inline bool pathHopSplitArm( const Graph& g, std::span<const NodeId> path, std::
 }
 inline bool pathHasSplitHop( const Graph& g, std::span<const NodeId> path ) noexcept
 {
-    for( std::size_t i = 1; i < path.size(); ++i )
-    {
-        if( pathHopSplitArm( g, path, i ) )
-        {
-            return true;
-        }
-    }
-    return false;
+    return std::adjacent_find( path.begin(), path.end(), [ & ]( NodeId from, NodeId to ) { return edgeSplitArm( g, from, to ); } ) != path.end();
 }
 
 }   // namespace rw

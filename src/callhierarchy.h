@@ -329,8 +329,7 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
         rankBeforeCap( ing, out.rows, [ & ]( NodeId r ) { return ing.symbols[r].fileId; },
                        [ & ]( NodeId r ) { return navRelevanceWeight( g, r ); } );
     }
-    // attrib-multidef: which definition each row belongs to (defattrib.h), over the rows in their FINAL order — one pass over
-    // the matches' edges, read by every dialect of both surfaces (and their via="name": strongest tie by name alone).
+    // attrib-multidef (defattrib.h): each row's definition, over the FINAL row order, for every dialect of both surfaces
     out.attr = attributeOneHopAnswer( ing, g, out.matches, out.rows, wantCallers );
     return out;
 }
