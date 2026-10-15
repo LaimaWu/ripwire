@@ -42,6 +42,7 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
+export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py: the soft-target readers, shared helpers (CHECKLIST 32)
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "estchargecheck: BIN=$BIN"
@@ -689,23 +690,20 @@ def verdict( path, n, refpath=None ):
     s = open( path, encoding='utf-8', errors='replace' ).read()
     U = ( len( s.split( '</sigs>', 1 )[ 1 ].encode() ) - len( '</ctx>' ) ) if '</sigs>' in s else 0
     U += sum( len( h.encode() ) for h in re.findall( r'<hdr [^>]*/>', s.split( '<sigs', 1 )[ 0 ] ) )
-    def tail_size( t ):
-        # FIX1 R1: the refill reserves the tail at its HEAD-scoped size (the tail of the no-budget answer) when that is what binds, so U
-        # counts the tail at no less than the reference tail (an upper bound on the reserve: the maximality check stays a bound)
-        import json as _j
-        if t.lstrip().startswith( "{" ):
-            try: return len( _j.dumps( _j.loads( t ).get( "tail", {} ), separators=( ",", ":" ), ensure_ascii=False ).encode() )
-            except ValueError: return 0
-        m = re.search( r"<tail\b.*?</tail>", t, re.S )
-        return len( m.group( 0 ).encode() ) if m else 0
+    # the tail size: test/lib/softbudget.py, shared by the five soft-target readers (the FIX1 R1 tail floor)
+    import os as _os, sys as _sys; _sys.path.insert( 0, _os.environ[ "RIPWIRE_TESTLIB" ] ); from softbudget import tail_size
     U += max( 0, tail_size( open( refpath, encoding='utf-8', errors='replace' ).read() ) - tail_size( s ) )
     root = re.match( r'<ctx [^>]*>', s )
     if root and ' bundle="' not in root.group( 0 ):
         bm = re.search( r'<bodies\b.*?</bodies>', s, re.S )
         U -= len( bm.group( 0 ).encode() ) if bm else 0
     maximal = ab + rr[ k ][ 1 ] > T - U - 160
-    return fits and maximal, "%s fits=%d maximal=%d rows=%d/%d bytes=%d charged=%d next=%d T=%d U=%d" % (
-        "OK" if fits and maximal else "BAD", fits, maximal, k, len( rr ), pb, ab, rr[ k ][ 1 ], T, U )
+    # FIX2 C1 (rule 4): the upper-bound twin of maximality (test/lib/softbudget.py upper_bound): rows past the floor stop where T less
+    # the other sections and the tail reserve runs out; RED on a binary that ignores the tail reserve
+    from softbudget import upper_bound
+    upper, udet = upper_bound( s, open( refpath, encoding='utf-8', errors='replace' ).read(), T, k, len( rr ), U )
+    return fits and maximal and upper, "%s fits=%d maximal=%d upper=%d rows=%d/%d bytes=%d charged=%d next=%d T=%d U=%d%s" % (
+        "OK" if fits and maximal and upper else "BAD", fits, maximal, upper, k, len( rr ), pb, ab, rr[ k ][ 1 ], T, U, "" if upper else " -- " + udet )
 if __name__ == "__main__":
     good, msg = verdict( sys.argv[ 1 ], sys.argv[ 2 ], sys.argv[ 3 ] if len( sys.argv ) > 3 else None )
     print( msg ); sys.exit( 0 if good else 1 )

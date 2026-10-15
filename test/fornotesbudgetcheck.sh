@@ -201,6 +201,7 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
+export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py: the soft-target readers, shared helpers (CHECKLIST 32)
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "fornotesbudgetcheck: BIN=$BIN"
@@ -250,7 +251,7 @@ done
 TASK="widget dispatcher pipeline stage"
 
 # ── forbudget-soft (rule 4): the soft-target reader every replaced arm below uses ─────────────────────────────────────────
-# soft FILE N ROWSOUT [REF [PREV]] prints ONE line, "OK|BAD rows= total= charged= T= est= over= echo= next= notes= fits= maximal= rp=":
+# soft FILE N ROWSOUT [REF [PREV]] prints ONE line, "OK|BAD rows= total= charged= T= est= over= echo= next= notes= fits= maximal= upper= rp=":
 #   rows / total   the served <sigs> rows / the ranked head (<sigs total=> | "sigs_total")
 #   charged        what the soft target is charged against. XML: the bytes inside <sigs> — every <d> WITH its <note> children
 #                  — plus the zero cx=/ccx=/in= the lean spelling elides (serialize.h entryCost charges them). JSON: the
@@ -260,13 +261,15 @@ TASK="widget dispatcher pipeline stage"
 #   next           a cut (rows < total) names its continuation (<sigs next=> | "sigs_next"); 1 when nothing was cut
 #   notes          served rows that carry a note
 #   fits           charged <= T, or only the rank 1..4 floor is served — and the floor is never short (rows >= min(4,total))
+#   upper          with REF, FIX2 C1: the maximality twin, rows past the floor stop where T less the other sections and the
+#                  tail reserve runs out (test/lib/softbudget.py upper_bound; a tail-reserve-zero binary is RED here)
 #   maximal        with REF (the SAME dialect's no-budget answer): a cut stops only where REF's next row would cross T
 #                  (160 B slack, as forsoftbudgetcheck's (ST)) — a binary that stops early at a hard ceiling is not ST
 #   rp             RP: the rows are a non-empty rank prefix of REF's rows, and the rows file PREV (when named: the next
 #                  narrower rung's ROWSOUT) is a prefix of these rows — monotone in N. A named PREV that is missing is a 0.
 # (One python3 per answer, the fields read with bash's own regex: this machine class pays ~0.1 s per process spawn, and the
 # sweep below reads 393 answers — the reader does in-process what a pipe of head/wc/sed would spawn for.)
-# The verdict is OK when est is numeric and fits, maximal and next all hold. ROWSOUT gets the rows, p:l:n in rank (r=) order.
+# The verdict is OK when est is numeric and fits, maximal, upper and next all hold. ROWSOUT gets the rows, p:l:n in rank (r=) order.
 # exit 3 = the answer has no <sigs> block / "sigs" array: a missing premise, FAILed by the caller, never skipped.
 cat > "$TMP/soft.py" <<'PY'
 import json, re, sys
@@ -328,15 +331,8 @@ def sections_u( s ):
 a = read( sys.argv[ 1 ] )
 if a is None: sys.exit( 3 )
 N = int( sys.argv[ 2 ] ); X = int( N * 2.36 * 0.90 )
-def tail_size( t ):
-    # FIX1 R1: the refill reserves the tail at its HEAD-scoped size (the tail of the no-budget answer) when that is what binds, so U
-    # counts the tail at no less than the reference tail (an upper bound on the reserve: the maximality check stays a bound)
-    import json as _j
-    if t.lstrip().startswith( "{" ):
-        try: return len( _j.dumps( _j.loads( t ).get( "tail", {} ), separators=( ",", ":" ), ensure_ascii=False ).encode() )
-        except ValueError: return 0
-    m = re.search( r"<tail\b.*?</tail>", t, re.S )
-    return len( m.group( 0 ).encode() ) if m else 0
+# the tail size: test/lib/softbudget.py, shared by the five soft-target readers (the FIX1 R1 tail floor)
+import os as _os, sys as _sys; _sys.path.insert( 0, _os.environ[ "RIPWIRE_TESTLIB" ] ); from softbudget import tail_size
 U = sections_u( open( sys.argv[ 1 ], encoding='utf-8', errors='replace' ).read() )
 if len( sys.argv ) > 4:
     _at = open( sys.argv[ 1 ], encoding='utf-8', errors='replace' ).read(); _rt = open( sys.argv[ 4 ], encoding='utf-8', errors='replace' ).read()
@@ -346,22 +342,26 @@ k = len( a[ 'rows' ] )
 fits = ( a[ 'charged' ] <= X or k <= 4 ) and k >= min( 4, a[ 'total' ] )
 cut = k < a[ 'total' ]
 nxt = a[ 'next' ] or not cut
-maximal = True
+maximal = upper = True
 if len( sys.argv ) > 4:
     ref = read( sys.argv[ 4 ] )
     if ref is None: sys.exit( 3 )
     if cut and k < len( ref[ 'rows' ] ):
         maximal = a[ 'charged' ] + ref[ 'rows' ][ k ][ 2 ] > X - U - 160
+    # FIX2 C1 (rule 4): the upper-bound twin of maximality (test/lib/softbudget.py upper_bound): rows past the floor stop where T less
+    # the other sections and the tail reserve runs out; RED on a binary that ignores the tail reserve (rows over-served)
+    from softbudget import upper_bound
+    upper = upper_bound( _at, _rt, X, k, a[ 'total' ], U )[ 0 ]
 mine = [ x[ 1 ] for x in a[ 'rows' ] ]
 rp = len( sys.argv ) > 4 and k > 0 and mine == [ x[ 1 ] for x in ref[ 'rows' ] ][ :k ]
 if rp and len( sys.argv ) > 5 and sys.argv[ 5 ]:
     try: prev = [ x for x in open( sys.argv[ 5 ] ).read().split( "\n" ) if x ]
     except OSError: prev = None
     rp = prev is not None and len( prev ) > 0 and prev == mine[ :len( prev ) ]
-ok = a[ 'est' ] != '-' and fits and maximal and nxt
-print( "%s rows=%d total=%d charged=%d T=%d est=%s over=%d echo=%d next=%d notes=%d fits=%d maximal=%d rp=%d"
+ok = a[ 'est' ] != '-' and fits and maximal and upper and nxt
+print( "%s rows=%d total=%d charged=%d T=%d est=%s over=%d echo=%d next=%d notes=%d fits=%d maximal=%d upper=%d rp=%d"
        % ( "OK" if ok else "BAD", k, a[ 'total' ], a[ 'charged' ], X, a[ 'est' ], int( a[ 'over' ] ), int( a[ 'bt' ] == N ),
-           int( nxt ), sum( x[ 3 ] for x in a[ 'rows' ] ), int( fits ), int( maximal ), int( rp ) ) )
+           int( nxt ), sum( x[ 3 ] for x in a[ 'rows' ] ), int( fits ), int( maximal ), int( upper ), int( rp ) ) )
 PY
 soft(){ python3 "$TMP/soft.py" "$@"; }
 field(){ local re=" $2=([^ ]*)"; [[ " $1 " =~ $re ]] && printf '%s' "${BASH_REMATCH[1]}"; }   # field LINE KEY: one key= of a soft line
@@ -517,7 +517,7 @@ else no "a surviving note lost its tail — notes must be charged, never trimmed
 # rung a single sample happens to sit on is exactly what made the defect survive four earlier re-anchors of
 # the middle rung above: 1550 and 1600 are both inside a FLAT stretch, and the edge is at ~1610.
 sweepRungs=0; sweepEchoFail=0; sweepEchoFirst=""
-stFail=0; stFirst=""; lblFail=0; lblFirst=""; rpFail=0; rpFirst=""; cfFail=0; cfFirst=""; sweepCut=0
+stFail=0; stFirst=""; lblFail=0; lblFirst=""; rpFail=0; rpFirst=""; cfFail=0; cfFirst=""; sweepCut=0; upFail=0; upFirst=""
 tb=700
 while [ "$tb" -le 2000 ]; do
   sweepRungs=$(( sweepRungs + 1 ))
@@ -539,6 +539,9 @@ while [ "$tb" -le 2000 ]; do
     case "$sl" in OK*) ;; *)
       stFail=$(( stFail + 1 ))
       [ -z "$stFirst" ] && stFirst="budget=$tb ($dialect) $sl" ;; esac
+    case "$sl" in *" upper=1 "*) ;; *)
+      upFail=$(( upFail + 1 ))
+      [ -z "$upFirst" ] && upFirst="budget=$tb ($dialect) $sl" ;; esac
     case "$sl" in *" over=0 "*) ;; *)
       lblFail=$(( lblFail + 1 ))
       [ -z "$lblFirst" ] && lblFirst="budget=$tb ($dialect) $sl" ;; esac
@@ -559,6 +562,10 @@ if [ "$stFail" -eq 0 ]; then
 else
   no "(ST) sweep 700..2000 step 10 x 3 dialects: $stFail run(s) broke stop-at-target — first: $stFirst"
 fi
+# (UP) FIX2 C1 (rule 4): the upper-bound twin of maximality, counted on its own: a binary that ignores the tail reserve serves
+# rows past T less the sections and that reserve, and both fits (rows <= T) and the relaxed maximality stay green on it.
+if [ "$upFail" -eq 0 ]; then ok "(UP) sweep 700..2000 step 10 x 3 dialects ($runs runs): no cut past the floor serves rows into the tail reserve"
+else no "(UP) sweep 700..2000 step 10 x 3 dialects: $upFail run(s) served rows past T less the sections and the tail reserve — first: $upFirst"; fi
 if [ "$lblFail" -eq 0 ]; then ok "(NOLBL) sweep 700..2000 step 10 x 3 dialects ($runs runs): no over_ceiling= on any soft target"
 else no "(NOLBL) sweep 700..2000 step 10 x 3 dialects: $lblFail run(s) labelled a soft target over_ceiling= — first: $lblFirst"; fi
 if [ "$rpFail" -eq 0 ]; then ok "(RP) sweep 700..2000 step 10 x 3 dialects ($runs runs): rows are a rank prefix of the no-budget rows, monotone in N"

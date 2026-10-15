@@ -145,7 +145,10 @@ REPO_Q=( "rank graph teleport" "compact legend rewrite" "edit receipt post-check
 # +4.81% / +5.25%) and attributed it to the lane: decision D-3 (the default <hops> serves every hop row — the part inside the old
 # 1,000 B allowance is not subtracted) and the default regime's header clauses (budget_bytes= read as a target, past_target=).
 # The other seven are unmoved. Train 28 re-measures attrib-multidef's --for piece against these pins.
-REPO_BASE=( 10134 10029 10642 10102 9880 9947 10496 10605 9966 10379 )
+# FIX2 N2 (review rv-forbudget-soft-fix1 N-a): those three pins were read on a +dirty tree, whose root at= stamp carries 6 B
+# more than a clean one (a clean tree read -0.06% on each). Re-taken from a CLEAN committed tree (the lane head, no local edits)
+# with this lane's build: 9947 -> 9941, 10496 -> 10490, 10605 -> 10599 B. The by-design reason above is unchanged.
+REPO_BASE=( 10134 10029 10642 10102 9880 9941 10490 10599 9966 10379 )
 # q3 RE-PINNED 2026-10-10 (train 26c): 10080 -> 10642 B (+5.58% on the merged stack), an OUTPUT change of two signed lanes
 # that each stay inside the 4% alone: lego-charge serves two more signature rows (25 -> 27 of 40) because <lego>/<compose>
 # are charged to the <sigs> budget at the size they are SERVED (a collapsing section its stub), and owner-hop adds the

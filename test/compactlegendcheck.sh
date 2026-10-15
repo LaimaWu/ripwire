@@ -51,6 +51,7 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
+export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py: the soft-target readers, shared helpers (CHECKLIST 32)
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "compactlegendcheck: BIN=$BIN"
@@ -1128,12 +1129,14 @@ fi
 #   ST     the rows' bytes inside <sigs> (+ the zero cx=/ccx=/in= the lean spelling elides, which serialize.h's entryCost
 #          charges — fornotesbudgetcheck's soft.py reads them the same way) fit T, or only the rank 1..4 floor ships, the floor
 #          is never short; a cut is MAXIMAL: the next row of the same dialect's no-budget answer would cross T (160 B slack);
+#   UP     (FIX2 C1, rule 4) the maximality twin: a cut past the floor serves no rows past T less the other sections and
+#          the tail reserve (test/lib/softbudget.py upper_bound), RED on a binary that ignores the tail reserve;
 #   RP     the rows are a rank prefix of that dialect's no-budget rows;
 #   NOLBL  no over_ceiling= on the root, and neither old over_ceiling clause ("[over_ceiling= is 1 on the root" / "[over_ceiling=1
 #          also when the sigs next= rides unpaid") in the legend;
 #   NX     a cut (rows < total) is capped="1" and carries next= on <sigs>, and its next_offset= (when printed) is the row count;
 #   HL     nothing is dropped "(ceiling)", no "task_echo: dropped", the root keeps route= and task= verbatim.
-# softp.py FILE N TASK ROWSOUT [REF] prints ONE line "OK|BAD rows= total= charged= T= est= over= next= fits= maximal= rp= hl=";
+# softp.py FILE N TASK ROWSOUT [REF] prints ONE line "OK|BAD rows= total= charged= T= est= over= next= fits= maximal= upper= rp= hl=";
 # exit 3 = no <ctx> root or no <sigs> block (a missing premise: the caller FAILs it, never skips). ROWSOUT gets the rows.
 cat > "$TMP/softp.py" <<'PY'
 import html, json, re, sys
@@ -1175,15 +1178,8 @@ def sections_u( s ):
 a = read( sys.argv[ 1 ] )
 if a is None: sys.exit( 3 )
 N = int( sys.argv[ 2 ] ); X = int( N * 2.36 * 0.90 ); k = len( a[ "rows" ] )
-def tail_size( t ):
-    # FIX1 R1: the refill reserves the tail at its HEAD-scoped size (the tail of the no-budget answer) when that is what binds, so U
-    # counts the tail at no less than the reference tail (an upper bound on the reserve: the maximality check stays a bound)
-    import json as _j
-    if t.lstrip().startswith( "{" ):
-        try: return len( _j.dumps( _j.loads( t ).get( "tail", {} ), separators=( ",", ":" ), ensure_ascii=False ).encode() )
-        except ValueError: return 0
-    m = re.search( r"<tail\b.*?</tail>", t, re.S )
-    return len( m.group( 0 ).encode() ) if m else 0
+# the tail size: test/lib/softbudget.py, shared by the five soft-target readers (the FIX1 R1 tail floor)
+import os as _os, sys as _sys; _sys.path.insert( 0, _os.environ[ "RIPWIRE_TESTLIB" ] ); from softbudget import tail_size
 U = sections_u( a[ "s" ] )
 if len( sys.argv ) > 5:
     try: U += max( 0, tail_size( open( sys.argv[ 5 ], encoding = "utf-8", errors = "replace" ).read() ) - tail_size( a[ "s" ] ) )
@@ -1192,16 +1188,20 @@ open( sys.argv[ 4 ], "w" ).write( "".join( x[ 1 ] + "\n" for x in a[ "rows" ] ) 
 cut = k < a[ "total" ]
 fits = ( a[ "charged" ] <= X or k <= 4 ) and k >= min( 4, a[ "total" ] )
 nxt = not cut or ( a[ "capped" ] and a[ "next" ] and a[ "nextoff" ] in ( None, k ) )
-maximal = rp = True
+maximal = rp = upper = True
 if len( sys.argv ) > 5:
     ref = read( sys.argv[ 5 ] )
     if ref is None: sys.exit( 3 )
     if cut and k < len( ref[ "rows" ] ): maximal = a[ "charged" ] + ref[ "rows" ][ k ][ 2 ] > X - U - 160
+    # FIX2 C1 (rule 4): the upper-bound twin of maximality (test/lib/softbudget.py upper_bound): rows past the floor stop where T less
+    # the other sections and the tail reserve runs out; RED on a binary that ignores the tail reserve
+    from softbudget import upper_bound
+    upper = upper_bound( a[ "s" ], ref[ "s" ], X, k, a[ "total" ], U )[ 0 ]
     rp = k > 0 and [ x[ 1 ] for x in a[ "rows" ] ] == [ x[ 1 ] for x in ref[ "rows" ] ][ :k ]
-ok = a[ "est" ] != "-" and fits and maximal and rp and nxt and not a[ "over" ] and a[ "hl" ]
-print( "%s rows=%d total=%d charged=%d T=%d est=%s over=%d next=%d fits=%d maximal=%d rp=%d hl=%d"
+ok = a[ "est" ] != "-" and fits and maximal and upper and rp and nxt and not a[ "over" ] and a[ "hl" ]
+print( "%s rows=%d total=%d charged=%d T=%d est=%s over=%d next=%d fits=%d maximal=%d upper=%d rp=%d hl=%d"
        % ( "OK" if ok else "BAD", k, a[ "total" ], a[ "charged" ], X, a[ "est" ], int( a[ "over" ] ), int( nxt ), int( fits ),
-           int( maximal ), int( rp ), int( a[ "hl" ] ) ) )
+           int( maximal ), int( upper ), int( rp ), int( a[ "hl" ] ) ) )
 PY
 spfield(){ local re=" $2=([^ ]*)"; [[ " $1 " =~ $re ]] && printf '%s' "${BASH_REMATCH[1]}"; }   # spfield LINE KEY
 # spRef LAB DIR ROOTARG TASK — the no-budget answer of both dialects (the ST/RP reference), and its rows in "$TMP/sp.ref.LAB.DIAL.rows".

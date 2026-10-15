@@ -93,6 +93,7 @@ set -u
 export PYTHONDONTWRITEBYTECODE=1
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"   # a gate that indexes a repo must not inherit GIT_DIR/GIT_WORK_TREE (gitenvhermeticcheck D)
+export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py: the soft-target readers, shared helpers (CHECKLIST 32)
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"          # allow a repo-relative binary
 CORPUS="$ROOT/test/forcompletefix"
@@ -470,15 +471,8 @@ if mode == "tight":
         else:
             U = ( len( A.split( "</sigs>", 1 )[ 1 ].encode() ) - len( "</ctx>" ) if "</sigs>" in A else 0 )
             U += sum( len( h.encode() ) for h in re.findall( r'<hdr [^>]*/>', A.split( "<sigs", 1 )[ 0 ] ) )
-            def tail_size( t ):
-                # FIX1 R1: the refill reserves the tail at its HEAD-scoped size (the tail of the no-budget answer) when that is what binds, so U
-                # counts the tail at no less than the reference tail (an upper bound on the reserve: the maximality check stays a bound)
-                import json as _j
-                if t.lstrip().startswith( "{" ):
-                    try: return len( _j.dumps( _j.loads( t ).get( "tail", {} ), separators=( ",", ":" ), ensure_ascii=False ).encode() )
-                    except ValueError: return 0
-                m = re.search( r"<tail\b.*?</tail>", t, re.S )
-                return len( m.group( 0 ).encode() ) if m else 0
+            # the tail size: test/lib/softbudget.py, shared by the five soft-target readers (the FIX1 R1 tail floor)
+            import os as _os, sys as _sys; _sys.path.insert( 0, _os.environ[ "RIPWIRE_TESTLIB" ] ); from softbudget import tail_size
             if len( sys.argv ) > 7: U += max( 0, tail_size( body( sys.argv[ 7 ] ) ) - tail_size( A ) )
         if a is None or ref is None or not ref[ 0 ]: bad.append( "ST: no rows to charge (premise: answer and uncut reference)" )
         elif tb > 0:
@@ -487,6 +481,11 @@ if mode == "tight":
             if k < len( ref[ 0 ] ):
                 if a[ 1 ] + ref[ 0 ][ k ] <= T - U - 160: bad.append( "ST: cut at %d of %d rows with %d B charged, the next row (%d B) fits T=%d less the sections U=%d" % ( k, len( ref[ 0 ] ), a[ 1 ], ref[ 0 ][ k ], T, U ) )
                 if not ( a[ 2 ] and a[ 3 ] ): bad.append( "NX: rows cut (%d of %d) without capped + next=" % ( k, len( ref[ 0 ] ) ) )
+                # FIX2 C1 (rule 4): the upper-bound twin of maximality (test/lib/softbudget.py upper_bound): rows past the floor
+                # stop where T less the other sections and the tail reserve runs out; RED on a binary that ignores the tail reserve
+                import os as _os, sys as _sys; _sys.path.insert( 0, _os.environ[ "RIPWIRE_TESTLIB" ] ); from softbudget import upper_bound
+                up, udet = upper_bound( A, body( sys.argv[ 7 ] ), T, k, len( ref[ 0 ] ), U )
+                if not up: bad.append( "UP: " + udet )
             print( "  ....  %s: ST rows=%d/%d charged=%d T=%d" % ( label, k, len( ref[ 0 ] ), a[ 1 ], T ) )
 else:
     if not moved: bad.append( "no docs_after_code= (the reorder did not apply)" )
