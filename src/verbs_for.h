@@ -3652,8 +3652,12 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // on the same contract: exempt, so <sigs> is byte-identical with and without the owner rows (the rows ride on top of
         // the hop budget; their reading never costs a signature row). Gate: ownerhopcheck (S).
         const std::size_t ownerLegendEmitted = ownerLegendExemptBytes( headerParts, compactLegendOn );
+        // attrib-multidef Q1: the prov="split" clause is a disclosure on the same contract — exempt, as e= is, so <sigs> (rows and
+        // its continuation's budget) is byte-identical with and without it (fordisclosurecheck #2: auto vs --signatures-only)
+        const std::size_t splitLegendEmitted = !headerParts.splitPresent ? 0u
+                                             : ( compactLegendOn ? rw::kForCompactSplitClause.size() : rw::kForSplitClause.size() );
         const std::size_t exemptBytes = adaptiveNote.size() + autoLegendBytes + confidenceExemptBytes + tailLegendEmitted + idRouteLegendEmitted
-                                      + endLineLegendEmitted + ownerLegendEmitted;
+                                      + endLineLegendEmitted + ownerLegendEmitted + splitLegendEmitted;
         if( exemptBytes > headerStr.size() )
         {
             DISCLOSE( "runForLens: header exemptions exceed the emitted header — the sig ledger would underflow; charging the header whole" );
@@ -3678,7 +3682,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                               + confidenceEarlyAttrsBytes + confidenceEarlyNoteBytes + forAtAttrStr.size()
                                               + rw::kForFileTailLegend.size() + idRouteParts.bytes()
                                               + ( headerParts.endLinePresent ? rw::kForEndLineLegend.size() : 0u )
-                                              + ownerLegendExemptBytes( headerParts, /*compact=*/false );
+                                              + ownerLegendExemptBytes( headerParts, /*compact=*/false )
+                                              + ( headerParts.splitPresent ? rw::kForSplitClause.size() : 0u );   // attrib-multidef Q1
             std::size_t       fullCharged     = fullExempt > fullHeaderBytes ? fullHeaderBytes : fullHeaderBytes - fullExempt;
             fullCharged -= std::min( fullCharged, rw::forZeroNoteBytes( fullHeader ) );   // lean-answers: exempt, as above
             chargedHeaderBytes    = std::min( chargedHeaderBytes, fullCharged );
