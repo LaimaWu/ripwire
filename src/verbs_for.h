@@ -1347,7 +1347,9 @@ inline void forLensJsonSoftRefill( const PackSigs& packSigs, const ForLensJsonIn
     const std::size_t  cutRows  = st.json.size() - std::min( st.json.size(), st.cut.pastTargetBytes );
     const rw::FileTail cutTail  = rw::computeFileTail( in.ing, in.rank, *in.evidence, rw::rowsAtTargetIds( st.shown, in.rank, st.cut.pastTarget ),
                                                        in.rootArg, in.task );
-    const std::size_t  tailBytes = forLensJsonTailStanza( cutTail, in.tokenBudget, rw::forSoftSectionsShare( b.bundleBytes, cutRows ) ).size();
+    // the tail at its RESERVE (its share, or its whole stanza when smaller), not its filled bytes: rows stay monotone in N
+    const std::size_t  tailBytes = std::min( rw::forSoftSectionsShare( b.bundleBytes, cutRows ),
+                                             forLensJsonTailStanza( cutTail, 0, 0 ).size() );
     const std::size_t  rowDrop   = rw::forSoftRowDropFill( b.bundleBytes, tailBytes );
     if( rowDrop >= b.firstRowDrop )
     {
@@ -3839,8 +3841,14 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // replaced, never added to; a re-render whose buffer fails keeps the first render and its readings whole.
         if( forSoftTarget && sigsPreRendered && forSigsCut.pastTarget > 0 )
         {
+            // the tail is charged at its RESERVE — its share, or its whole render when that is smaller — not at its filled bytes: a
+            // fill that steps a whole row at a time would otherwise make the rows past the cut fall as N grows (rows monotone in N)
+            std::vector<char> tailEsc;
+            const std::size_t tailReserve    = std::min( std::max<std::size_t>( bundleBudget > tailSpentBytes ? bundleBudget - tailSpentBytes : 0u,
+                                                                                rw::kForFileTailShellReserve ),
+                                                         rw::renderFileTailXml( forFileTailShown, forFileTailShown.paths.size(), tailEsc ).size() );
             const std::size_t sectionsServed = forHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size() + graphSection.xml.size()
-                                             + autoSection.xml.size() + tailStr.size();   // not the --detail bodies (above)
+                                             + autoSection.xml.size() + tailReserve;   // not the --detail bodies (above)
             const std::size_t rowDropFill    = rw::forSoftRowDropFill( bundleBudget, sectionsServed );
             if( rowDropFill < sigsBudgets.rowDrop )
             {
