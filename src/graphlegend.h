@@ -938,8 +938,8 @@ inline constexpr const char* kSplitArmRowLegend =
     "arm of a call split between same-named definitions, so the row may be another arm's; NOT a claim the edge is false. ";
 inline const char* splitArmLegend( bool on ) noexcept { return on ? kSplitArmRowLegend : ""; }
 inline constexpr const char* kPathUnboundLegend =
-    "from_p=/to_p= are left out when that endpoint has several definitions and nothing bound one: unreached, or (to_p) reached "
-    "only through a split or by-name hop. ";
+    "An endpoint with several definitions that nothing bound prints no from_p or to_p: unreached, or (to) reached only through a "
+    "split or by-name hop. ";
 inline const char* pathUnboundLegend( bool on ) noexcept { return on ? kPathUnboundLegend : ""; }
 
 // ── issue #60: the module-scope owner's clause, emitted exactly when a t="modscope" ROW is in the answer ──
