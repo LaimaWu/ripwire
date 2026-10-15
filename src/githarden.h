@@ -297,9 +297,31 @@ inline bool statAbsentOrOk( const std::error_code& ec ) noexcept
     return !ec || ec == std::errc::no_such_file_or_directory || ec == std::errc::not_a_directory;
 }
 
+// The target(s) a `.git` file at `dir` names with `gitdir:`. false = doubt (a `.git` that is a symlink to something
+// the no-follow reader cannot open, or a file holding a NUL: git reads the path as a C string, cut at the first NUL).
+inline bool addGitFileTargets( const std::filesystem::path& dir, const std::filesystem::path& dotGit,
+                               std::vector<std::filesystem::path>& gitDirs )
+{
+    const std::optional<std::string> head = pathguard::readRegularFileNoFollow( dotGit.string() );
+    if( !head )
+    {
+        return !pathguard::isSymlink( dotGit.string() );
+    }
+    if( head->find( '\0' ) != std::string::npos )
+    {
+        return false;
+    }
+    if( head->starts_with( "gitdir:" ) )
+    {
+        const std::string_view text( *head );
+        addPointerReadings( text.substr( text.starts_with( "gitdir: " ) ? 8 : 7 ), text.substr( 7 ), dir, gitDirs );
+    }
+    return true;
+}
+
 // One level of git's discovery walk: the gitdirs directory `dir` could contribute — its `.git` directory, the
 // target(s) of a `.git` gitdir: file, and `dir` itself when it holds a HEAD. false = doubt (a stat error that is not
-// "absent", a `.git` that is a symlink to something the no-follow reader cannot open, or a `.git` file holding a NUL).
+// "absent", or a `.git` file addGitFileTargets cannot speak for).
 inline bool addGitDirsAt( const std::filesystem::path& dir, std::vector<std::filesystem::path>& gitDirs )
 {
     std::error_code                    ec;
@@ -314,22 +336,9 @@ inline bool addGitDirsAt( const std::filesystem::path& dir, std::vector<std::fil
     {
         addUniquePath( gitDirs, dotGit );
     }
-    else if( std::filesystem::exists( std::filesystem::symlink_status( dotGit, ec ) ) )
+    else if( std::filesystem::exists( std::filesystem::symlink_status( dotGit, ec ) ) && !addGitFileTargets( dir, dotGit, gitDirs ) )
     {
-        const std::optional<std::string> head = pathguard::readRegularFileNoFollow( dotGit.string() );
-        if( !head && pathguard::isSymlink( dotGit.string() ) )
-        {
-            return false;
-        }
-        if( head && head->find( '\0' ) != std::string::npos )
-        {
-            return false;   // git reads the path as a C string, cut at the first NUL — let git answer
-        }
-        if( head && head->starts_with( "gitdir:" ) )
-        {
-            const std::string_view text( *head );
-            addPointerReadings( text.substr( text.starts_with( "gitdir: " ) ? 8 : 7 ), text.substr( 7 ), dir, gitDirs );
-        }
+        return false;
     }
     ec.clear();
     if( std::filesystem::exists( std::filesystem::symlink_status( dir / "HEAD", ec ) ) )
