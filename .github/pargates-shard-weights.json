@@ -112,7 +112,7 @@
 "deadprecisioncheck.sh": 0.8,
 "deckcheck.sh": 54.8,
 "deckclaimcheck.sh": 0.1,
-"declinedsitecheck.sh": 25.0,
+"declinedsitecheck.sh": 35.0,
 "deeptailcheck.sh": 1.0,
 "defaultceilingcheck.sh": 20.1,
 "defectshapecheck.sh": 14.2,
