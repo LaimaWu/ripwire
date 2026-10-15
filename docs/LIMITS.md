@@ -17,10 +17,10 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 254 | 99 | 149 | **105** |
+| 256 | 100 | 149 | **107** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 254 + 7 is the 261 constants this generator parses out of `src/`.
+are not counted as caps, and 256 + 7 is the 263 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -38,8 +38,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **139 of 254 caps are classified
-(49 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 115 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **139 of 256 caps are classified
+(49 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 117 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -89,7 +89,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 99 files that declare a cap — the 254 caps counted above, and no parameter.
+One table for each of the 100 files that declare a cap — the 256 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -203,6 +203,15 @@ Discloses: `capped`, `reads_capped`
 | `kMaxAliasDepth` | `8` | INDEXING | — |
 | `kMaxEnvNameLen` | `128` | BOUNDARY | longest plausible environment-variable name |
 | `kMaxSitesShown` | `8` | OUTPUT | <read> sites per gate; a DEFAULT, raisable by --limit=N (effectiveRowCap), lifted by --detail |
+
+### `src/declinedsites.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kDeclinedSiteCandCap` | `8` | — | cand= entries per row on --legend=full; cand_more= counts the rest |
+| `kDeclinedSiteCap` | `16` | — | <dc> rows per answer by default; --limit=N raises it (dc_next= does) |
 
 ### `src/defattrib.h`
 
