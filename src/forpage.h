@@ -39,6 +39,7 @@
 // keeps `--expand=FILE:NAME`. The thresholds are a registered hypothesis (PLAN_OUTPUT_ROUTING_LOOP §1.5 L-N),
 // not a tuned number: the routing-loop ladder measures them, and a later round moves them with a measured reason.
 
+#include "mention.h"     // ForNamedHeaderRow — forHdrRowsXml below renders the resolver's rows
 #include "lexical.h"     // LexTermEvidence — the term masks + df the BM25 pass already accumulated
 #include "model.h"
 #include "nextverb.h"    // nextFlag / nextAttrXml — the ONE next= spelling
@@ -631,6 +632,27 @@ inline std::string renderForFilePageXml( const IngestResult& ing, const ForFileP
     return x;
 }
 
+
+// R2-AF (round 2, S4): the <hdr p= of=/> rows of a --for answer (rw::forNamedHeaderRows, mention.h, resolves them) — ONE render
+// for the CLI --for (verbs_for.h renderForHdrRowsXml) and the MCP `for` twin, root-relative like every other --for path.
+// "" when the task names nothing with a unique partner.
+inline std::string forHdrRowsXml( const IngestResult& ing, const std::vector<ForNamedHeaderRow>& rows, std::string_view rootArg )
+{
+    std::string x;
+    std::vector<char> esc;
+    for( const ForNamedHeaderRow& row : rows )
+    {
+        // local invariant: forNamedHeaderRows only ever returns fileIds it read out of ing.files itself (mention.h), so an
+        // out-of-range id here would mean that resolver's own contract broke — trapped where the bad index would be used
+        ASSUME( row.partnerFile < ing.files.size() && row.namedFile < ing.files.size() );
+        x += "<hdr p=\"";
+        x += escapeXml( lensRowPath( ing, row.partnerFile, rootArg ), esc );
+        x += "\" of=\"";
+        x += escapeXml( lensRowPath( ing, row.namedFile, rootArg ), esc );
+        x += "\"/>";
+    }
+    return x;
+}
 
 // ── FOLD C (forbudget-soft round C, owner decision 2026-10-14): the --for answer's <tail> carries page 0 of this page ──
 // One model and one renderer for the CLI --for (XML + JSON) and the MCP `for` twin. The tail lists, in this order:

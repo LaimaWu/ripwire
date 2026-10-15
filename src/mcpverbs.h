@@ -1913,32 +1913,6 @@ struct McpForAssemblyInputs   // forTaskText's locals the assembly reads, by ref
     const std::vector<std::vector<NodeId>>&    implementors;   // train 26b: ix.g.implementors, for the count-floor lego re-render
     const LexTermEvidence&                     evidence;       // FOLD C: the term evidence the tail's page rows rank by
 };
-// R2-AF (round 2, S4): the <hdr> rows — the CLI twin's exact rule (verbs_for.h renderForHdrRowsXml), duplicated here rather than
-// shared because main.cpp includes this file (mcp.h, line 48) before verbs_for.h (line 525) — the render is ~10 lines over the SAME
-// resolver (rw::forNamedHeaderRows, mention.h), which is the part a divergence would actually cost. "" when there is no row.
-inline std::string mcpForHdrRowsXml( const IngestResult& ing, const std::vector<rw::ForNamedHeaderRow>& rows, std::string_view flRootArg )
-{
-    std::string x;
-    const std::string rootPrefix = flRootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( flRootArg );
-    const auto        rel        = [ & ]( std::uint32_t f ) -> std::string
-    {
-        return flRootArg.empty() ? std::string( ing.files[f] ) : std::string( rw::sarif::rootRelativeUri( ing.files[f], rootPrefix ) );
-    };
-    std::vector<char> esc;
-    for( const rw::ForNamedHeaderRow& row : rows )
-    {
-        // same local invariant as the CLI twin's renderForHdrRowsXml (verbs_for.h): the resolver
-        // (rw::forNamedHeaderRows, mention.h) is the only producer of these ids.
-        ASSUME( row.partnerFile < ing.files.size() && row.namedFile < ing.files.size() );
-        x += "<hdr p=\"";
-        x += rw::escapeXml( rel( row.partnerFile ), esc );
-        x += "\" of=\"";
-        x += rw::escapeXml( rel( row.namedFile ), esc );
-        x += "\"/>";
-    }
-    return x;
-}
-
 // round C (owner decision 2026-10-14, RESERVE SECTIONS FIRST — the CLI twin's rule): under budget_tokens the sections are scoped and
 // served from the rows at the target cut, and the rows past the cut fill what the sections served before the tail (<hdr> rows,
 // <lego>, <compose>, <routes>: `sectionsBytes`) leave of T — never below the cut. The tail rides on top on this twin, as it always
@@ -2019,9 +1993,9 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
     mcpSigsCut.continuationRequest = &mcpSigsNext;   // knob-honesty-068: IN — the capped block's machine continuation
     mcpSigsCut.rowDropBudgetBytes  = in.rowDropBudget;   // forbudget-soft: IN — the CLI twin's two budgets
     mcpSigsCut.pastTargetDisclosed = budgetTokens == 0;
-    // R2-AF (round 2, S4): first rows inside the root, right after the legend (mcpForHdrRowsXml); rendered before the rows so the
+    // R2-AF (round 2, S4): first rows inside the root, right after the legend (forHdrRowsXml); rendered before the rows so the
     // round C refill below prices them
-    const std::string mcpHdrXml = mcpForHdrRowsXml( ing, mcpForHdrRows, flRootArg );
+    const std::string mcpHdrXml = forHdrRowsXml( ing, mcpForHdrRows, flRootArg );   // forpage.h: the CLI twin's one render
     std::vector<rw::NodeId> mcpShownIds;   // lane 2: the sigs rows actually emitted — the tail's rank rows exclude these files
     // round C: the render is named so a soft target can narrow its rows past the cut once the sections are served (below); the
     // redaction tally around it is snapshotted so a second render replaces this one's count instead of adding to it

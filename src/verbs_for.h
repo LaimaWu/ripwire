@@ -2542,25 +2542,7 @@ inline std::string renderForHdrRowsXml( const rw::IngestResult& ing, const std::
     {
         return {};
     }
-    const std::string rootPrefix = rootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( rootArg );
-    const auto         rel       = [ & ]( std::uint32_t f ) -> std::string
-    {
-        return rootArg.empty() ? std::string( ing.files[f] ) : std::string( rw::sarif::rootRelativeUri( ing.files[f], rootPrefix ) );
-    };
-    std::vector<char> esc;
-    std::string        x;
-    for( const rw::ForNamedHeaderRow& row : rows )
-    {
-        // local invariant: forNamedHeaderRows only ever returns fileIds it read out of ing.files itself
-        // (mention.h), so an out-of-range id here would mean that resolver's own contract broke, not a
-        // renderer bug — worth trapping right at the point the bad index would otherwise index OOB below.
-        ASSUME( row.partnerFile < ing.files.size() && row.namedFile < ing.files.size() );
-        x += "<hdr p=\"";
-        x += rw::escapeXml( rel( row.partnerFile ), esc );
-        x += "\" of=\"";
-        x += rw::escapeXml( rel( row.namedFile ), esc );
-        x += "\"/>";
-    }
+    std::string x = rw::forHdrRowsXml( ing, rows, rootArg );   // forpage.h: the one render, shared with the MCP twin
     // runForLens charges x.size() in every budget sum and emits x itself, so "no row" and "no bytes" must agree
     ENSURES( !x.empty(), "renderForHdrRowsXml: rows resolved but nothing rendered" );
     return x;
