@@ -1252,14 +1252,11 @@ inline constexpr std::string_view kExplanatoryCues[] = {
 // (forowner.h forBodySlotAsked) read the one predicate.
 inline bool hasExplanatoryCue( std::string_view lower ) noexcept
 {
-    for( const std::string_view cue : kExplanatoryCues )
-    {
-        if( boundedFind( lower, cue ) != std::string_view::npos )
-        {
-            return true;   // one word-bounded cue is enough
-        }
-    }
-    return false;
+    // the house cue scorer (cueScore), word-bounded, over the six cues — any hit is a cue
+    static_assert( std::size( kExplanatoryCues ) == 6, "hasExplanatoryCue lists every explanatory cue" );
+    return cueScore( lower, CueMatch::WordBounded,
+                     { { kExplanatoryCues[0], 1 }, { kExplanatoryCues[1], 1 }, { kExplanatoryCues[2], 1 },
+                       { kExplanatoryCues[3], 1 }, { kExplanatoryCues[4], 1 }, { kExplanatoryCues[5], 1 } } ) > 0;
 }
 
 // `since Monday`, `since 2026-09-01` — structural, because a date has no paraphrase (the same reasoning
