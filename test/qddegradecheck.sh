@@ -37,11 +37,13 @@
 #   (D) the kinds_next= replay yields exactly the skipped kinds' rows, not degraded again; union with (B) = (A).
 #   (E) P0 (crawl seam cuts the base's FULL ingest): answers from the changed files; defect-shape skipped (a changed
 #       C++ file and no whole macro set); memory_stop=, memory_need="unmeasured"; (E2) a Python-only change keeps it.
-#   (F) even the changed files do not fit (hard line after the base ingest, and every later reading): exit 5.
+#   (F) even the changed files do not fit (hard line after the base ingest, and every later reading): exit 5; the
+#       pre-check refusal says the changed files were NOT tried, never that they "did not fit" (review C3).
 #   (G) near misses under project:1: an empty diff, a rename-only diff, a non-code-only diff, and A..A.
 #   (H) --quality-kinds: unknown kind refused naming the 12; refused beside --quality-ack and on the bare form; each
 #       single kind = (A)'s rows of that kind; all 12 named = byte-identical to no flag.
-#   (I) --quality-ack under pressure refuses (exit 5) and leaves the ledger untouched.
+#   (I) --quality-ack is never pre-empted by the projection (review C2: project:1 acks in full, the same ledger as an
+#       unpressured ack); a real stop (crawl:12) refuses it (exit 5) and leaves the ledger untouched.
 #   (J) --scope naming an unchanged file under pressure is not refused as "names nothing indexed".
 #   (K) legend + JSON: --legend=full defines every new attribute and parses as XML; --json carries the twins.
 #   (L) guard: a projection seam index past the run's one projection reading changes nothing (byte-identical).
@@ -60,6 +62,10 @@
 #   (S) R9 --quality-kinds=complexity reports no false finding-gone for a dead-code ack.
 #   (T) S2 fits near the line: --max-memory at 2x the measured full peak answers in full, byte-identical (guard).
 #   (V) R8 a degraded answer with rows and no gating row exits 6, not 2 and not 0.
+#   --- fix round 1 (final review C1) ---
+#   (W) --quality-kinds with a LOCAL kind under pressure: the kinds the caller left out are skipped_why="selector",
+#       never memory cuts; memory's share (memory_skipped=, skipped_why="selector,memory") is exactly what kinds_next=
+#       replays; no stderr line ends in an empty "skipped" list.
 #
 # Usage: bash test/qddegradecheck.sh [BIN]
 set -u
@@ -276,8 +282,9 @@ fi
 # ── (F) even the changed files do not fit ──────────────────────────────────────────────────────────────────────
 qd RIPWIRE_TEST_MEMGUARD=hard:1 "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache; FRC=$RC
 if [ "$FRC" = 5 ] && [ ! -s "$WORK/o" ] && [ "$( grep -c '^ripwire: [^c]' "$WORK/e" )" = 1 ] \
-   && grep -q '^ripwire: memory limit reached during the ingest of the base commit (limit .*changed files' "$WORK/e"; then
-    ok "(F) the changed files do not fit either: exit 5, nothing on stdout, one line naming the phase and the changed-files attempt"
+   && grep -q '^ripwire: memory limit reached during the ingest of the base commit (limit .*changed files' "$WORK/e" \
+   && grep -q 'after releasing the full tree, so the changed files were not tried' "$WORK/e" && ! grep -q 'did not fit' "$WORK/e"; then
+    ok "(F) still over the limit after releasing the full tree: exit 5, nothing on stdout, one line naming the phase and that the changed files were not tried"
 else
     no "(F) rc=$FRC stdout=$( wc -c <"$WORK/o" | tr -d ' ' )B stderr: $( grep '^ripwire: [^c]' "$WORK/e" | head -c 300 )"
 fi
@@ -329,11 +336,19 @@ done
 qd "$BIN" . --quality-delta=HEAD~1..HEAD "--quality-kinds=$ALL12" --no-cache
 if [ "$RC" = "$ARC" ] && cmp -s "$WORK/o" "$WORK/A.xml"; then ok "(H) all 12 named: byte-identical to no selector"; else no "(H) all 12 named: rc=$RC or output differs from (A)"; fi
 
-# ── (I) --quality-ack under pressure ──────────────────────────────────────────────────────────────────────────
-qd RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --quality-ack --no-cache
-if [ "$RC" = 5 ] && [ ! -e "$FX/.ripwire_quality_acks" ] && [ "$( memlines )" = 1 ] && [ ! -s "$WORK/o" ]; then ok "(I) --quality-ack under pressure refuses (exit 5), the ledger untouched"
-else no "(I) rc=$RC ledger=$( [ -e "$FX/.ripwire_quality_acks" ] && echo written || echo absent ) stderr: $( grep '^ripwire: [^c]' "$WORK/e" | head -c 300 )"; fi
-rm -f "$FX/.ripwire_quality_acks"
+# ── (I) --quality-ack: the projection never pre-empts it (C2); a real stop refuses it ───────────────────────────
+# Each run acks in its own copy of the fixture, so the ledgers compare. ackl: the ledger's ack lines (no header).
+ackl(){ grep '^ack ' "$1/.ripwire_quality_acks" 2>/dev/null; }
+FIA="$WORK/fia"; FIP="$WORK/fip"; FIS="$WORK/fis"; cp -R "$FX" "$FIA"; cp -R "$FX" "$FIP"; cp -R "$FX" "$FIS"
+qdin "$FIA" "$BIN" . --quality-delta=HEAD~1..HEAD --quality-ack --no-cache; iarc=$RC
+qdin "$FIP" RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --quality-ack --no-cache
+if [ -n "$( ackl "$FIA" )" ] && [ "$RC" = "$iarc" ] && [ "$( ackl "$FIP" )" = "$( ackl "$FIA" )" ] && [ "$( memlines )" = 0 ]; then
+    ok "(I) --quality-ack under project:1 is not pre-empted: it acks in full, the same $( ackl "$FIA" | grep -c . ) ack line(s) as an unpressured ack (rc=$RC)"
+else no "(I) project:1 --quality-ack: rc=$RC (unpressured $iarc) acks=$( ackl "$FIP" | grep -c . ) want $( ackl "$FIA" | grep -c . ) stderr: $( grep '^ripwire: [^c]' "$WORK/e" | head -c 300 )"; fi
+qdin "$FIS" RIPWIRE_TEST_MEMGUARD=crawl:12 "$BIN" . --quality-delta=HEAD~1..HEAD --quality-ack --no-cache
+if [ "$RC" = 5 ] && [ ! -e "$FIS/.ripwire_quality_acks" ] && [ "$( grep -c '^ripwire: [^c]' "$WORK/e" )" = 1 ] && grep -q 'nothing was acked' "$WORK/e" && [ ! -s "$WORK/o" ]; then
+    ok "(I) --quality-ack under a real stop (crawl:12) refuses (exit 5, one line), the ledger untouched"
+else no "(I) crawl:12 --quality-ack: rc=$RC ledger=$( [ -e "$FIS/.ripwire_quality_acks" ] && echo written || echo absent ) stderr: $( grep '^ripwire: [^c]' "$WORK/e" | head -c 300 )"; fi
 
 # ── (J) --scope naming an unchanged file under pressure ───────────────────────────────────────────────────────
 qd "$BIN" . --quality-delta=HEAD~1..HEAD --scope=py/u2.py --no-cache; jA=$RC; cp "$WORK/o" "$WORK/JA.xml"
@@ -563,6 +578,33 @@ qdin "$FV" RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD
 if [ "$RC" = 6 ] && [ "$( attr "$WORK/o" gating )" = 0 ] && [ -n "$( rows "$WORK/o" placeholder )" ] && [ -n "$( attr "$WORK/o" kinds_skipped )" ]; then
     ok "(V) a degraded answer with a placeholder row and gating=0 exits 6 (partial, nothing gating), stdout non-empty"
 else no "(V) rc=$RC gating=$( attr "$WORK/o" gating ) rows=$( rows "$WORK/o" | grep -c . )"; fi
+
+# ── (W) C1: a selector's exclusions are not memory cuts ─────────────────────────────────────────────────────────
+others(){ echo "$ALL12" | tr ',' '\n' | grep -vx -e "$1" -e "${2:-}" | paste -sd, -; }   # the 12 kinds without $1 (and $2)
+emptyskip(){ grep -q 'skipped *$' "$WORK/e"; }
+qd RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --quality-kinds=complexity --no-cache
+if [ "$( attr "$WORK/o" ingest_scope )" = changed-files ] && [ "$( attr "$WORK/o" kinds_skipped )" = "$( others complexity )" ] \
+   && [ "$( attr "$WORK/o" skipped_why )" = selector ] && ! hasattr "$WORK/o" memory_skipped && ! hasattr "$WORK/o" kinds_next \
+   && [ "$( rows "$WORK/o" )" = "$( rows "$WORK/A.xml" complexity )" ] && [ "$RC" = "$( degrc "$WORK/o" )" ] \
+   && ! emptyskip && [ "$( memlines )" = 1 ] && grep -q '^ripwire: memory limit .*every selected kind ran' "$WORK/e"; then
+    ok "(W) project:1 --quality-kinds=complexity: the 11 left out are skipped_why=selector, no memory share, no kinds_next=, stderr says every selected kind ran (rc=$RC)"
+else no "(W) complexity: rc=$RC why=$( attr "$WORK/o" skipped_why ) skipped=$( attr "$WORK/o" kinds_skipped ) next=$( attr "$WORK/o" kinds_next ) stderr: $( grep '^ripwire: [^c]' "$WORK/e" | od -c | tail -n 3 | head -c 300 )"; fi
+qd RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --quality-kinds=complexity,dead-code --no-cache
+wnext="$( attr "$WORK/o" kinds_next )"
+if [ "$( attr "$WORK/o" ingest_scope )" = changed-files ] && [ "$( attr "$WORK/o" kinds_skipped )" = "$( others complexity )" ] \
+   && [ "$( attr "$WORK/o" skipped_why )" = selector,memory ] && [ "$( attr "$WORK/o" memory_skipped )" = dead-code ] \
+   && case "$wnext" in "--quality-delta=$BASE..$TGT --quality-kinds=dead-code --max-memory="*M) true;; *) false;; esac \
+   && [ "$( rows "$WORK/o" )" = "$( rows "$WORK/A.xml" complexity )" ] && ! emptyskip \
+   && grep -q '^ripwire: memory limit .*; skipped dead-code — run them with ' "$WORK/e"; then
+    ok "(W) project:1 --quality-kinds=complexity,dead-code: skipped_why=selector,memory, memory_skipped=dead-code = exactly what kinds_next= replays"
+else no "(W) complexity,dead-code: why=$( attr "$WORK/o" skipped_why ) memory_skipped=$( attr "$WORK/o" memory_skipped ) next='$wnext' stderr: $( grep '^ripwire: [^c]' "$WORK/e" | head -c 300 )"; fi
+qd RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --quality-kinds=complexity,dead-code --legend=full --no-cache
+if sed -n 's/^\(<!--.*-->\).*/\1/p' "$WORK/o" | grep -q 'memory_skipped=' && validxml "$WORK/o"; then ok "(W) --legend=full defines memory_skipped= when it rides, and parses as XML"
+else no "(W) the legend lacks memory_skipped= (or invalid XML)"; fi
+qd RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --quality-kinds=complexity,dead-code --json --no-cache
+if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=json.dumps(d); sys.exit(0 if "\"memory_skipped\": [\"dead-code\"]" in s and "\"skipped_why\": \"selector,memory\"" in s else 1)' "$WORK/o" 2>/dev/null; then
+    ok "(W) --json carries memory_skipped=[dead-code] and skipped_why=selector,memory"
+else no "(W) --json: $( grep -o '"memory_skipped[^]]*]\|"skipped_why":"[^"]*"' "$WORK/o" | head -c 200 )"; fi
 
 [ "$fail" = 0 ] && echo "qddegradecheck: ALL PASS" || echo "qddegradecheck: FAIL"
 exit "$fail"
