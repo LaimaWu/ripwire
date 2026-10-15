@@ -429,7 +429,11 @@ inline const char* doctorLegendComment()
                        "appended to git's environment override for this run (stderr said so as git_harden=fsmonitor-hook); "
                        "builtin, off and unset need no override and read neutralised=\"0\". Independently of this row, every git command "
                        "ripwire runs carries no-optional-locks and core.fsmonitor=false, so no monitor of either form runs for its "
-                       "read-only calls. "
+                       "read-only calls. filter_drivers counts the filter drivers the repository's own config defines; when it is not 0, "
+                       "filter_scope is local (the repository's config) or all (a git older than 2.26 cannot report scope, so the "
+                       "user's own drivers are pinned too) and filter_pinned is 1 (every git child runs them with an empty command, "
+                       "so the files are read as stored; stderr said git_harden=filter-driver) or refused (a name git's -c option "
+                       "cannot spell: every git child is refused instead). "
                        "layout's state=\"agree\" means the layout records match; agree compares only the types= registered in src/model.h; "
                        "a same-size layout change or a stale constant is invisible, so agree does not rule out a mixed binary; "
                        "checked=\"1\" means the comparison ran; "
@@ -800,6 +804,14 @@ inline std::string doctorGitConfigTrustAttrs( const rw::Config& cfg )
     const bool                     neutralised = form == githarden::FsmonitorForm::Hook && githarden::g_startup.applied;
     std::string attrs = "fsmonitor=\"" + std::string( githarden::fsmonitorFormName( form ) ) + "\"";
     attrs += " neutralised=\"" + std::string( neutralised ? "1" : "0" ) + "\"";
+    // The repository's own filter drivers, as the startup probe found and pinned them (githarden.h FILTER DRIVERS).
+    const githarden::FilterDriverOutcome filters = githarden::startupFiltersFor( cfg.rootPath );
+    attrs += " filter_drivers=\"" + std::to_string( filters.drivers ) + "\"";
+    if( filters.drivers > 0 )
+    {
+        attrs += std::string( " filter_scope=\"" ) + ( filters.allScopes ? "all" : "local" ) + "\"";
+        attrs += std::string( " filter_pinned=\"" ) + ( filters.refused ? "refused" : "1" ) + "\"";
+    }
     return attrs;
 }
 

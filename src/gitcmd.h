@@ -15,14 +15,14 @@
 //                             otherwise apply, and git passes it on to any git it spawns. The builtin daemon
 //                             is not consulted by ripwire's own few calls either — their cost is a stat pass
 //                             of the same order as the crawl ripwire already makes.
-//   -c log.showSignature=false  a repository's config can turn signature display on for every `git log`, and
-//                             signature display runs the configured gpg.program. ripwire's log formats never
-//                             ask for a signature (and its parsers would misread the extra lines), so the pin
-//                             changes no answer. Version-safe: a git that predates the key ignores it.
+//   -c log.showSignature=false  signature display stays off whatever the repository's config says, so `git log`
+//                             starts no signature program. ripwire's log formats never ask for a signature (and
+//                             its parsers would misread the extra lines), so the pin changes no answer.
+//                             Version-safe: a git that predates the key ignores it.
 //
-// FILTER DRIVERS. A repository's config may name `filter.<name>.clean/smudge/process` programs, and git runs
-// them whenever it re-hashes a working-tree file (`status`, a diff against the working tree) or exports one
-// (`archive`). The driver NAME is chosen by the repository, so there is no single key to pin. githarden.h asks
+// FILTER DRIVERS. ripwire neutralises repository-configured filter and diff programs for its own git children.
+// A repository's config may name `filter.<name>.clean/smudge/process` programs for git to use while it reads
+// working-tree files. The driver NAME is chosen by the repository, so there is no single key to pin. githarden.h asks
 // git, once per root, which filter drivers the repository-local config (local + worktree scope, includes
 // followed) defines and registers them here; every later gitCmd() then carries
 //     -c 'filter.<name>.clean=' -c 'filter.<name>.smudge=' -c 'filter.<name>.process=' -c 'filter.<name>.required=false'

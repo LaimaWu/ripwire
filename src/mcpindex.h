@@ -19,7 +19,7 @@
 #include "serialize.h"
 #include "search.h"
 #include "gitmine.h"
-#include "githarden.h"          // githarden::hardenLateRoot — a request-named root's filter drivers are pinned before its first git child
+#include "githarden.h"          // githarden::hardenLateRoot — a request-named root's filter drivers are pinned before its first git child (hardenRequestRoot)
 #include "lexical.h"
 #include "recall.h"
 #include "valuerefs.h"          // reference-as-value round: the per-index ValueRefIndex cache (valueRefIndexOf)
@@ -957,6 +957,24 @@ inline std::string mcpWorkspaceKey( const std::vector<std::string>& rootArgs, st
     return key;
 }
 
+// The git-config trust boundary for a root a REQUEST names (githarden.h): probe it, once, before anything runs git
+// there. A registered multi-root workspace KEY is not a directory, so each of its member roots is probed instead.
+// Called from the MCP dispatch for every request's resolved `path` (so verbs that never reach getIndex() are
+// covered), and again from getIndex() as a backstop for the LSP server; repeat calls cost one lookup.
+inline void hardenRequestRoot( const std::string& root )
+{
+    const auto wsIt = mcpWorkspaceRegistry().find( root );
+    if( wsIt == mcpWorkspaceRegistry().end() )
+    {
+        githarden::hardenLateRoot( root );
+        return;
+    }
+    for( const WorkspaceRoot& r : wsIt->second )
+    {
+        githarden::hardenLateRoot( r.arg );
+    }
+}
+
 // ─── Phase-M: qsnap PREFETCH ──────────────────────────────────────────────────────────────────────────
 //
 // A FILE-CACHE WARMER, NOT an index mechanism — it never touches this McpIndex. When a request observes that
@@ -1165,7 +1183,7 @@ inline const ValueRefIndex& valueRefIndexOf( const McpIndex& ix )
 // the cached index for `root`, rebuilt only when stale (otherwise returned as-is, no parse, no graph rebuild).
 inline const McpIndex& getIndex( const std::string& root )
 {
-    githarden::hardenLateRoot( root );   // a root first named in a request: pin its filter drivers before any git child runs there
+    hardenRequestRoot( root );   // a root (or workspace) first named in a request: pin its filter drivers before any git child runs there
     McpIndex& ix = mcpIndexSlot();
 
     // hot path. The FS-event watcher (Feature 1) lets us SKIP the directory-mtime sweep when it proves no

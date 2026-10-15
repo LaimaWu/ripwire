@@ -15,6 +15,10 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — ripwire neutralises repository-configured filter and diff programs for its own git children
+
+Every git command ripwire runs now pins the filter drivers the repository's own config defines to an empty command, carries `--no-ext-diff --no-textconv` on `diff`/`log`/`show`/`blame` and `--ignore-submodules=dirty` on `status`/`diff`, and keeps signature display off; stderr discloses the pinning as `git_harden=filter-driver`, and `--doctor`'s `git-config-trust` row reports it (`filter_drivers=`, `filter_scope=`, `filter_pinned=`). Visible effects: files behind a repository-local filter (git-crypt, a per-repository LFS driver) are seen unfiltered, as stored; edits inside a submodule no longer mark the stamp `+dirty`; a user's own textconv no longer shapes `--numstat` (such binary rows read `-`); and a pinned driver name applies to every root in the same run. Gate: `test/gitchildoptscheck.sh`.
+
 ### Added — Clojure (`.clj`/`.cljs`/`.cljc`/`.bb`)
 
 Vendored Yogthos' ABI-15 `tree-sitter-clojure` parser and added syntax-level definitions and direct-call captures for the four Clojure-family extensions. The grammar comparison parsed 4,930 of 4,933 files (99.94%, 55.5 MB) from Metabase, clojure-lsp, clj-kondo and Babashka checkouts in 2.24 seconds; two failures were intentionally invalid clj-kondo fixtures and one was a Metabase test. This measures parser completion on that corpus, not semantic call-resolution accuracy. Namespace/import resolution, macro expansion and exact multi-arity matching remain outside this first pass; see `docs/ARCHITECTURE.md` for the extraction limits.

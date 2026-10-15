@@ -2103,6 +2103,13 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                         pathsUsageError = true;   // the skip-flag: no dispatch, no getIndex()
                     }
                 }
+                // The git-config trust boundary for the root(s) this request names (githarden.h, hardenRequestRoot):
+                // probed HERE, once per root, after every refusal above and before the dispatch chain, so each verb
+                // is covered whether or not it reaches getIndex() — and every member root of a `paths` workspace.
+                if( !pathsUsageError && !path.empty() )
+                {
+                    hardenRequestRoot( path );
+                }
                 if( !pathsUsageError && isMcpEditVerb( name ) )
                 {
                     if( std::string missingEditArg = missingArgMsg(); !missingEditArg.empty() )

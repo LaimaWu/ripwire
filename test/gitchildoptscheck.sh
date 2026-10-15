@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
-# gitchildoptscheck.sh — every git child ripwire starts carries the options that keep a REPOSITORY's own config
-# from naming a program git runs (src/gitcmd.h, src/githarden.h).
+# gitchildoptscheck.sh — every git child ripwire starts carries the options that neutralise repository-configured
+# filter and diff programs (src/gitcmd.h, src/githarden.h).
 #
-# githardencheck.sh covers core.fsmonitor. This gate covers the rest of that trust class on ripwire's read-only
-# calls: a filter driver (`filter.<name>.clean` with a matching `filter=<name>` attribute) that git runs when it
-# re-hashes a working-tree file whose stat data is stale — the state a copied or extracted tree is in — and the diff
-# programs (diff.external, diff.<driver>.command/textconv).
+# githardencheck.sh covers core.fsmonitor. This gate covers the filter drivers a repository's own config defines
+# (`filter.<name>.clean/smudge/process`) and the diff programs (diff.external, diff.<driver>.command/textconv).
 #
-# The fixture is the review's F12b shape (tmp/rv-githarden-speed/fx/mkfx.sh): one commit, `*.c filter=ev`, a local
-# filter.ev.clean that appends a line to MARK and passes its input through, the content UNCHANGED and only the file's
-# mtime moved. A ripwire run can leave the index refreshed, which makes the next run a no-op, so EVERY behavioural
-# row rebuilds the fixture first.
+# The fixture: one commit, `*.c filter=ev`, and a local filter.ev.clean whose program only appends a line to MARK and
+# passes its input through, so every time git runs it is counted. A ripwire run can leave the index refreshed,
+# which changes what the next run does, so EVERY behavioural row rebuilds the fixture first.
 #
 # Arms:
 #   (A) presence: on a fresh fixture, plain `git --no-optional-locks status` runs the filter — the fixture is live.
@@ -19,9 +16,14 @@
 #   (C) green: map, --situ, --quality-delta, --hotspots, --rank-by=churn and --doctor each run the filter 0 times,
 #       each on a fresh fixture, and each must have answered (exit status + a stdout marker) so a run that stops
 #       before git cannot pass as "0 firings".
-#   (D) disclosure: stderr carries git_harden=filter-driver; stdout does not.
-#   (E) an MCP server started with NO root, whose request names the fixture (the late-root path): 0 firings, and
-#       the request was answered.
+#   (D) disclosure: stderr carries git_harden=filter-driver; stdout does not; --doctor's git-config-trust row
+#       reports filter_drivers="1" filter_scope="local" filter_pinned="1", and filter_drivers="0" on a plain repo.
+#   (E) MCP roots named only in a request: a server started with NO root drives situational_awareness,
+#       quality_delta, stray_content, edit_check and quality_baseline at the fixture, an `analyze` whose `paths`
+#       names the fixture and a second repository (a multi-root workspace), and a `batch`; a server started on the
+#       second repository is asked quality_delta about the fixture. Each row: 0 firings, and the request answered.
+#   (S) the fixture with its .git/config moved elsewhere and replaced by a symlink to it (git follows the link; the
+#       cheap pre-scan does not read through it): --situ and an MCP quality_delta run the filter 0 times.
 #   (F) a PATH shim that records each git child's argv and GIT_* environment and then execs the real git. Over the
 #       same verbs, on the fixture and on a plain multi-commit repository with a working-tree edit:
 #         F1 every child starts with --no-optional-locks -c core.fsmonitor=false -c log.showSignature=false
@@ -36,6 +38,9 @@
 #   (G) structural: every source line that spells a git log/diff/show/blame invocation carries --no-textconv, and
 #       every `status --porcelain` carries --ignore-submodules=dirty; a mutation control on a COPY of src/ must be
 #       found by the same scan.
+#
+# Not armed: two callers racing to probe the same root (githarden.h hardenLateRoot holds its lock across the probe).
+# Both servers dispatch requests one at a time, so no request sequence can make two probes of one root overlap.
 #
 # Usage: RIPWIRE_BIN=build/ripwire [RIPWIRE_BASE_BIN=/path/to/pre-fix/ripwire] bash test/gitchildoptscheck.sh
 
@@ -65,9 +70,9 @@ printf '#!/bin/sh\necho "cmd $* in $PWD" >> %s\ncat\n' "$MARK" > "$CMD"; chmod +
 FX="$TMP/f12b"
 fired(){ [ -f "$MARK" ] && wc -l < "$MARK" | tr -d ' ' || echo 0; }
 
-# The F12b recipe, verbatim in shape: clean filter, content unchanged, only the stat data stale.
+# The fixture: clean filter, content unchanged, only the stat data stale.
 mkfx(){
-    rm -rf "$FX" "$MARK"
+    rm -rf "$FX" "$MARK" "$TMP/cfgstore"
     mkdir -p "$FX"
     ( cd "$FX" && "$REALGIT" init -q && printf 'int f(void){return 1;}\n' > f.c && printf '*.c filter=ev\n' > .gitattributes \
         && "$REALGIT" add -A && "$REALGIT" -c user.name=g -c user.email=g@g commit -qm i \
@@ -138,19 +143,80 @@ grep -q 'git_harden=filter-driver' "$TMP/r-c-situ.err" \
 grep -q 'git_harden=' "$TMP/r-c-situ.out" \
     && no "(D) stdout carries a git_harden= line (the disclosure leaked into the answer)" \
     || ok "(D) stdout carries no git_harden= (disclosure stays on stderr)"
+DOCROW="$( grep -oE '<c n="git-config-trust"[^>]*/>' "$TMP/r-c-doctor.out" )"
+case "$DOCROW" in
+    *'filter_drivers="1" filter_scope="local" filter_pinned="1"'*) ok "(D) --doctor reports the pinning: $DOCROW" ;;
+    *) no "(D) --doctor's git-config-trust row lacks filter_drivers=\"1\" filter_scope=\"local\" filter_pinned=\"1\": '${DOCROW:-<absent>}'" ;;
+esac
 
-# ── (E) MCP server with no root; the request names the fixture ─────────────────────────────────────────
-mcpsession(){
+# ── (E) MCP roots named only in a request ──────────────────────────────────────────────────────────────
+# A second, plain repository: the other member of the multi-root row, and the startup root of the last row.
+SECOND="$TMP/second"
+( mkdir -p "$SECOND" && cd "$SECOND" && "$REALGIT" init -q && printf 'int g(void){return 2;}\n' > g.c && "$REALGIT" add -A \
+    && "$REALGIT" -c user.name=g -c user.email=g@g commit -qm i ) >/dev/null 2>&1 || no "(E) could not build the second repository"
+mcpsession(){   # ARGUMENTS-JSON for one tools/call (id 2) after the handshake
     printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"gitchildoptscheck","version":"1"}}}'
     printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-    printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"situational_awareness","arguments":{"path":"%s"}}}\n' "$1"
+    printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"%s","arguments":%s}}\n' "$1" "$2"
 }
-mcpsession "$FX" > "$TMP/mcp.in"
-run_row "e-mcp" "0" '"id":2,"result"' sh -c '"$1" --mcp < "$2"' _ "$BIN" "$TMP/mcp.in"
-case "$RVERDICT" in
-    ok) ok "(E) MCP request-named root: answered (id 2 result) and the clean filter did not run" ;;
-    *)  no "(E) MCP request-named root: verdict $RVERDICT, exit $RRC, firings $RFIRED: $( head -c 200 "$TMP/r-e-mcp.err" )" ;;
+MCPROWS="situational_awareness|{\"path\":\"$FX\"}|
+quality_delta|{\"path\":\"$FX\"}|
+stray_content|{\"path\":\"$FX\"}|
+edit_check|{\"path\":\"$FX\",\"symbol\":\"f\"}|
+quality_baseline|{\"path\":\"$FX\"}|
+analyze|{\"paths\":[\"$FX\",\"$SECOND\"]}|
+batch|{\"path\":\"$FX\",\"queries\":[{\"verb\":\"stray_content\"},{\"verb\":\"callers\",\"symbol\":\"f\"}]}|
+quality_delta|{\"path\":\"$FX\"}|$SECOND"
+erow=0
+while IFS='|' read -r everb eargs estart; do
+    erow=$(( erow + 1 ))
+    mcpsession "$everb" "$eargs" > "$TMP/mcp-$erow.in"
+    if [ -n "$estart" ]; then
+        run_row "e-$erow" "0" '"id":2,"result"' sh -c '"$1" "$3" --mcp < "$2"' _ "$BIN" "$TMP/mcp-$erow.in" "$estart"
+        elabel="$everb (server started on another root)"
+    else
+        run_row "e-$erow" "0" '"id":2,"result"' sh -c '"$1" --mcp < "$2"' _ "$BIN" "$TMP/mcp-$erow.in"
+        elabel="$everb"
+        case "$eargs" in *'"paths"'*) elabel="$everb (two-root paths workspace)" ;; esac
+    fi
+    case "$RVERDICT" in
+        ok) ok "(E) MCP request-named root, $elabel: answered (id 2 result) and the clean filter did not run" ;;
+        *)  no "(E) MCP request-named root, $elabel: verdict $RVERDICT, exit $RRC, firings $RFIRED: $( head -c 200 "$TMP/r-e-$erow.err" )" ;;
+    esac
+done <<< "$MCPROWS"
+DOCPLAIN="$( "$BIN" "$SECOND" --doctor 2>/dev/null | grep -oE '<c n="git-config-trust"[^>]*/>' )"
+case "$DOCPLAIN" in
+    *'filter_drivers="0"'*filter_scope*) no "(D) --doctor on a repository with no filter driver still names a scope: $DOCPLAIN" ;;
+    *'filter_drivers="0"'*)              ok "(D) --doctor on a repository with no filter driver: $DOCPLAIN" ;;
+    *)                                   no "(D) --doctor on a repository with no filter driver: '${DOCPLAIN:-<absent>}'" ;;
 esac
+
+# ── (S) the governing config file is a symlink ──────────────────────────────────────────────────────────
+mkfx_symcfg(){
+    mkfx
+    mkdir -p "$TMP/cfgstore" && mv "$FX/.git/config" "$TMP/cfgstore/config" && ln -s "$TMP/cfgstore/config" "$FX/.git/config" \
+        || { echo "symlinked-config fixture build failed"; exit 2; }
+}
+mkfx_symcfg
+"$REALGIT" --no-optional-locks -C "$FX" status --porcelain >/dev/null 2>&1
+[ "$( fired )" -ge 1 ] \
+    && ok "(S) presence: with .git/config a symlink, plain git status still runs the clean filter (git follows the link)" \
+    || no "(S) presence: git did not follow the symlinked config — the arm cannot conclude"
+srow(){   # TAG CMD…: like run_row, on the symlinked-config fixture
+    stag="$1"; shift
+    mkfx_symcfg
+    "$@" > "$TMP/r-$stag.out" 2> "$TMP/r-$stag.err"
+    SRC=$?; SFIRED="$( fired )"
+}
+srow s-situ "$BIN" "$FX" --situ
+{ [ "$SRC" -eq 0 ] && grep -qF situational-awareness "$TMP/r-s-situ.out" && [ "$SFIRED" -eq 0 ]; } \
+    && ok "(S) --situ with a symlinked .git/config: answered and the clean filter did not run" \
+    || no "(S) --situ with a symlinked .git/config: exit $SRC, firings $SFIRED"
+mcpsession quality_delta "{\"path\":\"$FX\"}" > "$TMP/mcp-s.in"
+srow s-mcp sh -c '"$1" --mcp < "$2"' _ "$BIN" "$TMP/mcp-s.in"
+{ [ "$SRC" -eq 0 ] && grep -qF '"id":2,"result"' "$TMP/r-s-mcp.out" && [ "$SFIRED" -eq 0 ]; } \
+    && ok "(S) MCP quality_delta with a symlinked .git/config: answered and the clean filter did not run" \
+    || no "(S) MCP quality_delta with a symlinked .git/config: exit $SRC, firings $SFIRED"
 
 # ── (F) the PATH shim: argv + GIT_* environment of every child ──────────────────────────────────────────
 mkdir -p "$TMP/shim"
