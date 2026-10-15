@@ -1,0 +1,11 @@
+# test/langidentity/ratchet.tsv -- the ratchet printed last by test/langidentitycheck.sh.
+# ceiling: the most "== Lang::X" / "!= Lang::X" predicate lines (a `case` label is not a predicate) src/ may hold outside the
+#          per-language files below; counted from `ripwire src --regex='Lang::[A-Z][A-Za-z]+'`, one count per distinct line.
+#          It may fall (lower the number in the same commit that removes the predicate) and may never rise.
+# perlang: a file that exists for ONE language, whose predicates are the point of the file and do not count.
+ceiling	352
+perlang	ingest_elixir.h
+perlang	elixir_resolve.h
+perlang	ingest_clojure.h
+perlang	ingest_jsimports.h
+perlang	ingest_ruby.h

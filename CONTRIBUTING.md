@@ -577,7 +577,11 @@ review will credit it, but it is never a condition for merging the language.
    `--skipped`, and `--callers`/`--callees`/`--impact`/`--uses` on symbols the slice touches, over the fixtures of
    every language the slice touches plus at least one real repository per language. Put the argv list and the
    result in the PR: an empty diff, or each difference named as intended. This is item 7 of the
-   [pre-review list](#6-submitting-a-change), scoped to the slice.
+   [pre-review list](#6-submitting-a-change), scoped to the slice. `bash test/langidentitycheck.sh BASE HEAD
+   --langs=<touched languages> --syms=FILE --repo=LANG:DIR` runs exactly that argv set (fixtures from
+   `test/langidentity/manifest.tsv`, your repositories from `--repo`, including one of a language you did not touch)
+   and compares stdout, stderr and exit code; put its lines in the PR, and waive each DIFF by one exact `--intended`
+   row naming the `test/*check.sh` arm that pins it. See the script's header for the options.
 3. **The family's gates pass**, with any new arm shown red on `main` first. Run them as
    `bash test/<gate>.sh "$PWD/build/ripwire"`. Imports: `importcapcheck`, `depsprecisecheck`, `resolvecheck`,
    `nestedimportcheck`. Scopes and tests: `testscopecheck`, `langcheck`. Qualified calls: `elixirnamearitycheck`,
