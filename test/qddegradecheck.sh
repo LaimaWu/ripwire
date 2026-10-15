@@ -601,6 +601,9 @@ else no "(W) complexity,dead-code: why=$( attr "$WORK/o" skipped_why ) memory_sk
 qd RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --quality-kinds=complexity,dead-code --legend=full --no-cache
 if sed -n 's/^\(<!--.*-->\).*/\1/p' "$WORK/o" | grep -q 'memory_skipped=' && validxml "$WORK/o"; then ok "(W) --legend=full defines memory_skipped= when it rides, and parses as XML"
 else no "(W) the legend lacks memory_skipped= (or invalid XML)"; fi
+qd RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --quality-kinds=complexity --legend=full --no-cache
+if [ -s "$WORK/o" ] && ! sed -n 's/^\(<!--.*-->\).*/\1/p' "$WORK/o" | grep -q 'memory_skipped=' && validxml "$WORK/o"; then ok "(W) present-only: no memory_skipped= sentence when only the selector skipped"
+else no "(W) the selector-only legend defines memory_skipped= (or invalid XML / no output)"; fi
 # (no --json arm: --json is refused beside --quality-kinds, so memory_skipped= — which rides only beside a selector — has
 # no JSON surface yet; the JSON twin is written by the same kindsDisclosure as the XML)
 
