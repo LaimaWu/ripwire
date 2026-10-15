@@ -174,21 +174,41 @@ inline std::optional<std::string> nonPortableRegexEscape( const std::string& pat
 // pass; and the '?' that opens '(?:', '(?=' or '(?!' is a group MODIFIER, not a quantifier, so (?:abc)+
 // passes while (?:a+)+b is still refused.
 //
-// THE SECOND ARM — overlapping alternation, closed 2026-10-12 (M2-c). A group whose branches carried no
-// quantifier at all used to pass however it was quantified, which made `(a|a)+b` a real bomb the screen
-// could not see; that was the audit's live PoC `^(a|aa)+b$`, and this file used to name it as the known
-// GAP. The screen cannot read semantics, so it now refuses a group's own top-level '|' under an unbounded
-// outer UNLESS it can prove the branches disjoint, and the only proof cheap enough to be worth trusting is
-// CHARACTER SETS: every branch must consume exactly ONE character, and all those characters must be
-// pairwise disjoint. So `(a|b)+` — the gate's own safeCase control — still passes, and so does
-// `(\d|[a-z])+`, while `(a|a)+b`, `^(a|aa)+b$`, `(x|xy)+c$` and `(\w|\d)+$` are refused. The price is a
-// KNOWN FALSE-POSITIVE CLASS, stated here rather than discovered later: a MULTI-CHARACTER alternation such
-// as `(cat|dog)+` or `(get|getResponse)+` is refused although it cannot backtrack, because `ab|cd` and
-// `cat|dog` are the same SHAPE as the refused `^(ab|cd)+e$`, and a screen that must return ONE verdict on
-// two shapes cannot tell them apart. Refusal is a safe failure, a hang is not — and the refusal says what it
-// actually knows ("cannot PROVE are disjoint"), NOT that the branches overlap, because for (cat|dog)+ they do
-// not; the only workaround it names is bounding the OUTER quantifier, which works for the whole class (PM-1,
-// 2026-10-12). Every one of these cases is an arm of test/regexbombcheck.sh.
+// THE SECOND ARM — overlapping alternation, closed 2026-10-12 (M2-c), widened 2026-10-15 (M2-e). A group whose
+// branches carried no quantifier at all used to pass however it was quantified, which made `(a|a)+b` a real bomb
+// the screen could not see; that was the audit's live PoC `^(a|aa)+b$`, and this file used to name it as the known
+// GAP. The screen cannot read semantics, so it now refuses a group's own top-level '|' under an unbounded outer
+// UNLESS it can prove the branches disjoint, and the proofs run in two strengths: M2-c's is the cheap whole-
+// footprint one — every branch consumes exactly ONE character, and all those characters must be pairwise
+// disjoint, which keeps `(a|b)+` and `(\d|[a-z])+` passing and refuses `(a|a)+b`, `^(a|aa)+b$`, `(x|xy)+c$` and
+// `(\w|\d)+$`; M2-e proves one level weaker so it reads branches M2-c cannot: a branch that is an UNQUANTIFIED
+// sequence of width-one atoms has a fixed width and matches deterministically once started, so the only question
+// left is which branch starts a position, and the branch's first character answers it in one. Pairwise-disjoint
+// first-character sets across every branch settle that — `'([^"\]|\\.)*'`, `(\r\n|\n)+`, `(cat|dog)+` and
+// `(foo|bar)+` are admitted — while the shapes M2-c was built for stay refused: `(a|aa)+` and
+// `(get|getResponse)+` repeat branches whose FIRST character is the same, so the split ambiguity the first
+// character cannot break is exactly what they have. What stays outside BOTH proofs is refused as before named:
+// a branch with a quantifier of its own (its width varies, the ambiguity is back), an anchor or other zero-width
+// head (no first character to decide with), a nested group (its choice structure is not modelled), an empty
+// branch (an empty-loop hazard). The price of M2-e is a smaller known false-positive class than M2-c's, still
+// stated rather than discovered: a NON-DETERMINISTIC alternation whose branches share a first character is
+// indistinguishable, without matching it, from one that overlaps another, and a screen that must return ONE
+// verdict cannot tell them apart. Refusal is a safe failure, a hang is not — and the refusal says what it
+// actually knows ("cannot PROVE are disjoint"), NOT that the branches overlap, because for disjoint branches it
+// is the PROOF that failed, not the branches; the only workaround it names is bounding the OUTER quantifier,
+// which works for the whole class (PM-1, 2026-10-12). Every one of these cases is an arm of
+// test/regexbombcheck.sh.
+//
+// M2-d (round 6, the PR #397 review's PAREN BYPASS). The alternation arm judged a group only when an
+// unbounded quantifier sat ON it — so an alternation one group deeper sailed past untouched:
+// '((a|aa))+b$' closes its inner group under NO quantifier, only hasQuantifierInside ever reached the
+// parent frame, and the outer '+' repeated an alternation the screen cannot prove disjoint without ever
+// judging it. The arm was checking the right fact in the wrong place. The screen now carries that verdict
+// up the frame stack exactly the way hasQuantifierInside travels: a group whose own top-level '|' is not
+// proven disjoint sets hasUnprovenAlternationInside on its parent when it closes (whatever quantified IT),
+// and a group that closes under an unbounded quantifier with that flag set is refused by the SAME
+// alternation sentence. '((a|aa))+b$' and '(?:(?:a|aa))+b$' are refused; every alternation the screen CAN
+// prove disjoint — (a|b)+, and one nested inside a quantified group — still scans.
 //
 // Scope: EVERY user-authored pattern, through compileGuardedRegex below — --regex, --graph-query file(), the
 // --arch path-rules and the #match?/#not-match? predicates of --match and --lint-rules. This paragraph used to
@@ -599,59 +619,223 @@ inline bool regexCharSetOfSingleCharBranch( const std::string& pat, std::size_t 
     return true;
 }
 
-// true when the group's own top-level alternation can match the same text two ways, as far as a screen that
-// compares character sets can tell. `pipes` holds the group's own '|' offsets, ascending. The FIRST branch
-// that is not a provably single-character set ends the question: disjointness is unproven, so refuse.
-inline bool regexAlternationOverlaps( const std::string& pat, std::size_t bodyBegin, std::size_t closeAt, const std::vector<std::size_t>& pipes )
+// ── M2-e (round 6, the PR #397 review): the FIRST-CHARACTER arm — prove disjointness one element deeper ──────
+//
+// M2-c could only prove a branch's WHOLE footprint, so every multi-character branch was refused wholesale and
+// the false-positive class was real code: the quoted-string matcher "([^"\]|\\.)*", a CRLF walker (\r\n|\n)+,
+// keyword pairs with no shared first character ((cat|dog)+, (foo|bar)+). A branch that is an UNQUANTIFIED
+// sequence of width-one atoms is decidable one level weaker. Its width is fixed, so once started it matches
+// deterministically — there is one path through it, no choices for a backtracker to enumerate — and the only
+// remaining ambiguity is WHICH branch starts a position, decided by the branch's first character alone. When
+// every branch parses as such a sequence and the branches' first-character sets are pairwise disjoint, at most
+// one branch is viable at any position and the repetition cannot multiply: proven disjoint, admit.
+//
+// Everything outside that model stays unproven, refused with the same sentence as before, and each residue is a
+// hazard this weaker proof cannot cover: a branch with a quantifier of its own varies in width, so the input can
+// be split between the branches and the repetition ambiguously; an anchor or other zero-width head has no first
+// character to decide with; a nested group's choice structure is not modelled; an empty branch matches the empty
+// string, an empty-loop hazard in its own right. (a|aa)+ and (get|getResponse)+ stay refused because their
+// branches' first-character sets are the SAME set — disjoint first characters are exactly what they lack.
+inline bool regexFirstCharSetOfQuantifierFreeBranch( const std::string& pat, std::size_t begin, std::size_t end, RegexCharSet& first )
 {
-    std::vector<RegexCharSet> branches;
-    branches.reserve( pipes.size() + 1 );
-
-    std::size_t begin = bodyBegin;
-    for( std::size_t k = 0; k <= pipes.size(); ++k )
+    if( begin >= end )
     {
-        const std::size_t end = ( k < pipes.size() ) ? pipes[ k ] : closeAt;
-        RegexCharSet      set;
-        if( !regexCharSetOfSingleCharBranch( pat, begin, end, set ) )
-        {
-            return true;
-        }
-        branches.push_back( set );
-        begin = end + 1;
+        return false;   // an empty branch matches the EMPTY STRING — the empty-loop hazard stays unproven
     }
-
-    for( std::size_t a = 0; a < branches.size(); ++a )
+    bool firstResolved = false;
+    for( std::size_t i = begin; i < end; )
     {
-        for( std::size_t b = a + 1; b < branches.size(); ++b )
+        const char c = pat[ i ];
+        if( c == '\\' )
         {
-            if( regexCharSetsIntersect( branches[ a ], branches[ b ] ) )
+            RegexCharSet member;
+            if( i + 2 > end || !regexCharSetOfEscape( pat[ i + 1 ], member ) )
             {
-                return true;
+                return false;   // trailing backslash, or an escape this screen will not commit to ('\b', '\1', '\x'…)
             }
+            if( !firstResolved )
+            {
+                first         = member;
+                firstResolved = true;
+            }
+            i += 2;
+            continue;
         }
+        if( c == '[' )
+        {
+            RegexCharSet member;
+            std::size_t  next = i;
+            if( !regexCharSetOfClass( pat, i, end, member, next ) )
+            {
+                return false;   // a class this model cannot read (nested '[', a bad range, unterminated)
+            }
+            if( !firstResolved )
+            {
+                first         = member;
+                firstResolved = true;
+            }
+            i = next;
+            continue;
+        }
+        // '.' is a plain width-one atom to this arm's width argument, but its first set is every byte but a
+        // line terminator — which intersects anything — so a wildcard-headed branch must not pretend to a
+        // smaller first set here or it would be admitted ambiguously.
+        if( c == '.' )
+        {
+            if( !firstResolved )
+            {
+                first         = regexCharSetOfAny();
+                firstResolved = true;
+            }
+            ++i;
+            continue;
+        }
+        // A quantifier ends the question (the branch's width would vary), and so do parentheses (a nested
+        // group's own choice structure is not modelled), anchors and the delimiters the single-char arm
+        // refuses as atoms — nothing here gets a first character one branch at a time can disagree on.
+        if( c == '*' || c == '+' || c == '?' || c == '{' || c == '(' || c == ')' || c == '^' || c == '$' || c == '}' || c == ']' )
+        {
+            return false;
+        }
+        if( !firstResolved )
+        {
+            first = {};
+            first.add( static_cast<unsigned char>( c ) );
+            firstResolved = true;
+        }
+        ++i;
     }
-    return false;
+    return firstResolved;
 }
 
 // The alternation arm's refusal, in the same voice as catastrophicRegexMessage above: name the construct, say why
 // the paths multiply, and leave the reader a workaround. Every gate that greps a refusal for 'backtrack' and for
 // a workaround ('collapse' or 'bounded') reads this sentence too.
 //
-// PM-1 (2026-10-12, PM-directed). The wording used to ASSERT the branches "can match the same text". For the
-// false-positive class the header above names — (cat|dog)+, (get|getResponse)+, the `X|[^X]…` family — that claim
-// is simply false, and the workaround it taught ("factor the branches so no two of them can match the same text")
-// cannot be applied to branches that are ALREADY disjoint. A screen that refuses a shape it cannot read must say
-// what it actually knows: it cannot PROVE the branches disjoint, and a branch of more than one character is
-// refused because its shape is indistinguishable, without matching it, from an overlapping one. The actionable
-// workaround — bounding the OUTER quantifier — works for every pattern in this class, so it carries alone.
+// PM-1 (2026-10-12, PM-directed). The wording used to ASSERT the branches "can match the same text". The refusal
+// now fires only when BOTH proofs fail — M2-c's whole-footprint single-character proof and M2-e's
+// first-character proof — so the branches are unmodelled (a quantifier, an anchor head, a nested group) or their
+// first characters are provably the SAME; for that class the old claim can still be false, and the workaround it
+// taught ("factor the branches so no two of them can match the same text") cannot be applied to branches that
+// are ALREADY disjoint. A screen that refuses a shape it cannot read must say what it actually knows: it cannot
+// PROVE the branches disjoint. The actionable workaround — bounding the OUTER quantifier — works for every
+// pattern this class can hold, so it carries alone.
 inline std::string catastrophicRegexAlternationMessage( char outerQuant )
 {
     return   catastrophicRegexPrologue( outerQuant ) + "an alternation whose "
              "branches the structural screen cannot PROVE are disjoint. A branch carries no quantifier of its own, so the "
-             "nested-repetition refusal cannot see this one, and a branch of more than one character is refused because its SHAPE is "
-             "indistinguishable, without matching it, from one that overlaps another: every way of splitting the input between the "
-             "branches and the outer repetition is then a separate path, so matching a non-matching line costs time exponential in its "
-             "length. Workaround: make the OUTER bounded with an explicit interval ('(get|getResponse){1,5}')";
+             "nested-repetition refusal cannot see this one, and the character-set proofs cover a branch only when it is an "
+             "unquantified sequence of width-one atoms whose FIRST character differs from every other branch's: a branch with a "
+             "quantifier, a zero-width head or a nested group — or one sharing its first character with another — leaves the "
+             "input splittable between the branches and the outer repetition, every split a separate path, so matching a "
+             "non-matching line costs time exponential in its length. Workaround: make the OUTER quantifier a small explicit bound "
+             "('(X){1,5}' for whatever the group is, a ceiling every engine honours identically)";
+}
+
+// The group's own top-level branch spans, in order. ONE splitter for the two disjointness proofs (M2-c's
+// whole-footprint sets and M2-e's first-character sets), so they cannot disagree about what a branch is.
+inline void regexTopLevelBranchSpans( std::size_t bodyBegin, std::size_t closeAt, const std::vector<std::size_t>& pipes,
+                                      std::vector<std::pair<std::size_t, std::size_t>>& out )
+{
+    out.clear();
+    std::size_t begin = bodyBegin;
+    for( std::size_t k = 0; k <= pipes.size(); ++k )
+    {
+        const std::size_t end = ( k < pipes.size() ) ? pipes[ k ] : closeAt;
+        out.push_back( { begin, end } );
+        begin = end + 1;
+    }
+}
+
+// What the two disjointness proofs decided about a group's own top-level '|'. ONE selector, two strengths — a
+// two-symbol clone (the shape --quality-delta gates on) is a negative outcome for proofs that must not be able
+// to disagree about what a branch or an intersection is. The pairwise-intersection test each proof ends with is
+// inlined here twice rather than raised to a helper on purpose: a standalone one-loop helper IS that test's own
+// clone shape (it duplicate-matched src/mergescout.h's overlap loop the moment it existed, measured
+// --quality-delta), and a helper shared across FILES would make the two proofs parse intersection through another
+// file's seam.
+//   DisjointWholeFootprint — M2-c: every branch consumes exactly ONE character and the characters are pairwise
+//                           disjoint; the strongest wording, and every verdict it makes is byte-identical to
+//                           round 5's.
+//   DisjointFirstChar      — M2-e: M2-c cannot read the branches, but every branch is an unquantified sequence
+//                           of width-one atoms and the branches' FIRST characters are pairwise disjoint, so at
+//                           most one branch is viable at any position and the repetition cannot multiply.
+//   Unproven               — neither proof reads the alternation (a quantified branch, a zero-width head, a
+//                           nested group, an empty branch, or first characters that intersect): refuse.
+enum class RegexAlternationProof
+{
+    Unproven,
+    DisjointWholeFootprint,
+    DisjointFirstChar
+};
+
+// The selector, M2-c first: the whole-footprint proof answers with the least reading, so every alternation it
+// could already rule keeps round 5's verdict; the first-character proof only widens what is provable for the
+// branches the whole-footprint proof always refused unread.
+inline RegexAlternationProof regexAlternationProof( const std::string& pat, std::size_t bodyBegin, std::size_t closeAt, const std::vector<std::size_t>& pipes )
+{
+    std::vector<std::pair<std::size_t, std::size_t>> spans;
+    regexTopLevelBranchSpans( bodyBegin, closeAt, pipes, spans );
+
+    {   // M2-c — the whole footprint of every branch, and all of them pairwise disjoint
+        std::vector<RegexCharSet> whole;
+        whole.reserve( spans.size() );
+        bool allRead = true;
+        for( const auto [ begin, end ] : spans )
+        {
+            RegexCharSet set;
+            if( !regexCharSetOfSingleCharBranch( pat, begin, end, set ) )
+            {
+                allRead = false;
+                break;
+            }
+            whole.push_back( set );
+        }
+        if( allRead )
+        {
+            bool pairwiseDisjoint = true;
+            for( std::size_t a = 0; a < whole.size() && pairwiseDisjoint; ++a )
+            {
+                for( std::size_t b = a + 1; b < whole.size(); ++b )
+                {
+                    if( regexCharSetsIntersect( whole[ a ], whole[ b ] ) )
+                    {
+                        pairwiseDisjoint = false;
+                        break;
+                    }
+                }
+            }
+            if( pairwiseDisjoint )
+            {
+                return RegexAlternationProof::DisjointWholeFootprint;
+            }
+        }
+    }
+
+    {   // M2-e — the first character of every branch, the branch an unquantified width-one sequence
+        std::vector<RegexCharSet> firsts;
+        firsts.reserve( spans.size() );
+        for( const auto [ begin, end ] : spans )
+        {
+            RegexCharSet first;
+            if( !regexFirstCharSetOfQuantifierFreeBranch( pat, begin, end, first ) )
+            {
+                return RegexAlternationProof::Unproven;
+            }
+            firsts.push_back( first );
+        }
+        for( std::size_t a = 0; a < firsts.size(); ++a )
+        {
+            for( std::size_t b = a + 1; b < firsts.size(); ++b )
+            {
+                if( regexCharSetsIntersect( firsts[ a ], firsts[ b ] ) )
+                {
+                    return RegexAlternationProof::Unproven;
+                }
+            }
+        }
+        return RegexAlternationProof::DisjointFirstChar;
+    }
 }
 
 // One frame per OPEN group. M2-c replaced the bare flag vector with a frame because the alternation arm needs
@@ -659,33 +843,57 @@ inline std::string catastrophicRegexAlternationMessage( char outerQuant )
 // top-level '|' characters are — a '|' inside a nested group belongs to that group, not to this one, and
 // treating it as this group's would split a branch in the wrong place. File scope, not a local of the scan
 // below, because regexCloseGroup (which owns the group-close verdict) reads and writes these too.
+// M2-d adds the second travelling flag: hasUnprovenAlternationInside, set on a parent when a group it encloses
+// closes with a top-level '|' the screen could not prove disjoint, so a quantified ancestor the arm never saw
+// still refuses (see regexCloseGroupVerdict's M2-d arm).
 struct RegexGroupFrame
 {
-    bool                     hasQuantifierInside = false;
-    std::size_t              bodyBegin           = 0;
+    bool                     hasQuantifierInside         = false;
+    bool                     hasUnprovenAlternationInside = false;
+    std::size_t              bodyBegin                    = 0;
     std::vector<std::size_t> topLevelPipes;
+};
+
+// What closing a group decides. M2-d: the verdict PLUS whether the group's OWN top-level alternation is one the
+// screen cannot prove disjoint — a fact about the group's subtree that its parent must inherit even when the
+// group itself closes under no quantifier (the paren bypass; regexCloseGroup folds it into the parent frame).
+struct RegexGroupClose
+{
+    std::optional<std::string> refusal             = std::nullopt;
+    bool                       unprovenAlternation = false;
 };
 
 // The verdict made when a group CLOSES, in two arms and in this order:
 //   (1) a quantifier INSIDE the group, repeated by an unbounded quantifier ON the group — the (X+)+ family;
-//   (2) M2-c's alternation arm: a group whose own top-level branches the screen cannot prove disjoint, repeated
-//       by an unbounded quantifier — (a|a)+, and the conservative (cat|dog)+ / X|[^X] class it refuses with it.
-// Arm (2) runs ONLY when arm (1) has not refused, so every pattern refused before M2-c keeps the message it had
-// (regexguardcheck.sh asserts that wording at every entry point). Returns the refusal, or nullopt when the group
-// is admissible — the caller owns the bookkeeping that follows.
-inline std::optional<std::string> regexCloseGroupVerdict( const std::string& pat, std::size_t closeAt, const RegexGroupFrame& frame )
+//   (2) M2-c's alternation arm, widened by M2-d: a group closing under an unbounded quantifier whose own
+//       top-level branches the screen cannot prove disjoint — (a|a)+ — OR that carries the flag a NESTED
+//       group set on its frame — ((a|aa))+ — refused with the same alternation sentence. The nested form is
+//       the paren bypass closed: the inner group closed under no quantifier, so only this flag tells the
+//       outer '+' it is repeating an alternation the screen never proved disjoint.
+// Arm (2) runs ONLY when arm (1) has not refused, so every pattern refused before M2-c keeps the message it
+// had (regexguardcheck.sh asserts that wording at every entry point). `unprovenAlternation` is true when the
+// group's own top-level '|' exists and the screen could not prove its branches disjoint — a fact about the
+// group's SUBTREE its parent must inherit whether or not this close refused, which regexCloseGroup folds.
+inline RegexGroupClose regexCloseGroupVerdict( const std::string& pat, std::size_t closeAt, const RegexGroupFrame& frame )
 {
     const RegexQuantifier quant = regexQuantifierAt( pat, closeAt + 1 );
+    RegexGroupClose       out;
+    // M2-c then M2-e, the selector above: the alternation is PROVEN DISJOINT when either proof passes — the
+    // whole-footprint single-character proof, or the first-character proof for branches the first cannot read.
+    // The whole-footprint proof keeps running FIRST so every verdict it already made stays byte-identical; the
+    // first-character proof only widens what is proven for the branches it always refused unread.
+    out.unprovenAlternation = !frame.topLevelPipes.empty()
+        && regexAlternationProof( pat, frame.bodyBegin, closeAt, frame.topLevelPipes ) == RegexAlternationProof::Unproven;
     if( quant.isPresent && quant.isUnbounded && frame.hasQuantifierInside )
     {
-        return catastrophicRegexMessage( pat[ closeAt + 1 ] );
+        out.refusal = catastrophicRegexMessage( pat[ closeAt + 1 ] );
+        return out;
     }
-    if( quant.isPresent && quant.isUnbounded && !frame.topLevelPipes.empty()
-        && regexAlternationOverlaps( pat, frame.bodyBegin, closeAt, frame.topLevelPipes ) )
+    if( quant.isPresent && quant.isUnbounded && ( out.unprovenAlternation || frame.hasUnprovenAlternationInside ) )
     {
-        return catastrophicRegexAlternationMessage( pat[ closeAt + 1 ] );
+        out.refusal = catastrophicRegexAlternationMessage( pat[ closeAt + 1 ] );
     }
-    return std::nullopt;
+    return out;
 }
 
 // A ')' in the scan: pop the frame, judge it (regexCloseGroupVerdict), fold its verdict into the parent group,
@@ -701,9 +909,10 @@ inline std::optional<std::string> regexCloseGroup( const std::string& pat, std::
     const RegexGroupFrame frame = std::move( frames.back() );
     frames.pop_back();
 
-    if( std::optional<std::string> refusal = regexCloseGroupVerdict( pat, i, frame ) )
+    const RegexGroupClose close = regexCloseGroupVerdict( pat, i, frame );
+    if( close.refusal )
     {
-        return refusal;
+        return close.refusal;
     }
 
     const RegexQuantifier quant = regexQuantifierAt( pat, i + 1 );
@@ -712,6 +921,15 @@ inline std::optional<std::string> regexCloseGroup( const std::string& pat, std::
     if( !frames.empty() && ( frame.hasQuantifierInside || quant.isPresent ) )
     {
         frames.back().hasQuantifierInside = true;
+    }
+    // M2-d — and an alternation the screen could not prove disjoint travels the same way: this group's own
+    // top-level '|' if the close could not prove it disjoint, or one a nested group already handed it. Whatever
+    // quantified THIS group is beside the point; a QUANTIFIED ANCESTOR repeating this group repeats the
+    // alternation, which is what ((a|aa))+b$ is and what the old arm, judging only an unbounded quantifier ON
+    // the group itself, never saw.
+    if( !frames.empty() && ( frame.hasUnprovenAlternationInside || close.unprovenAlternation ) )
+    {
+        frames.back().hasUnprovenAlternationInside = true;
     }
     if( quant.isPresent )
     {
@@ -745,7 +963,7 @@ inline std::optional<std::string> catastrophicRegexConstruct( const std::string&
         if( c == '(' )
         {
             const std::size_t modifier = regexGroupModifierLength( pat, i );
-            frames.push_back( { false, i + 1 + modifier, {} } );
+            frames.push_back( { false, false, i + 1 + modifier, {} } );
             i += modifier;
             continue;
         }
@@ -885,14 +1103,6 @@ inline constexpr std::string_view kRegexAbandonedReason =
 inline constexpr std::string_view kRegexOversizeReason =
     "the subject was too long for the regex engine to attempt safely on this thread (longer than the measured-safe "
     "bound for this pattern's recursion cost and stack size)";
-
-// The counterpart for the MATCH BUDGET (Phase 2) — the guard's own bound, not the engine's. Distinct from
-// kRegexAbandonedReason on purpose: "the engine gave up" points a reader at the standard library's complexity
-// budget, which only libc++ has; this one points at the GUARD, which is what protects libstdc++ (no budget of its
-// own — it backtracks without end). Naming the wrong one would send a reader to the wrong fix.
-inline constexpr std::string_view kRegexBudgetReason =
-    "the scan hit this file's match budget (the guard stopped scanning it after the per-file bound on engine "
-    "line-match attempts was exceeded — the backstop for an engine with no complexity budget of its own)";
 
 // ── THE PATTERN'S SHAPE, read once when it compiles ─────────────────────────────────────────────────────────────
 //
@@ -1422,11 +1632,6 @@ struct RegexLineScan
 {
     RegexVerdict  verdict          = RegexVerdict::Miss;
     std::uint32_t skippedLineCount = 0;   // lines longer than engineLineBytesMax that could have matched: never matched
-    // Phase 2: set when `verdict == Exhausted` because the per-file MATCH BUDGET was exceeded rather than because
-    // the engine threw. The verdict is deliberately the SAME (Exhausted) so every consumer and gate that already
-    // handles an abandoned file keeps handling it identically and none can be missed; only the DISCLOSURE sentence
-    // differs (kRegexBudgetReason vs kRegexAbandonedReason), which is what this flag selects.
-    bool          budgeted         = false;
 };
 
 // The longest subject the engine may be handed on a thread whose stack is `stackBytes`: SIZE_MAX where the engine does not
@@ -1592,38 +1797,6 @@ struct RegexLiteralPaths
     }
 };
 
-// ── PHASE 2: THE MATCH BUDGET — the libstdc++ backstop ────────────────────────────────────────────────────────
-//
-// The Exhausted catch fires only when the ENGINE gives up. libc++ has a complexity budget and does; libstdc++ has
-// none — "it never throws, so that catch is never reached and the process simply backtracks" (the M2 note at the top
-// of this file) — so a pattern the widened screen still ADMITS can backtrack without bound on Linux, and the guard
-// must supply the bound itself. The budget is per FILE (the line loop's own unit) and counts ENGINE LINE-MATCH
-// ATTEMPTS: how many candidate lines were handed to std::cregex_iterator. A file that exceeds it stops being scanned
-// there — the hits already collected are kept, the file is counted and named through the SAME Exhausted channel
-// (never a silent floor), and the run continues with the next file.
-//
-// Why a COUNT and not a clock: a wall-clock bound makes the verdict depend on machine speed, and this tree's contract
-// is that one pattern gets ONE verdict on every platform (regexbombcheck.sh's header says so in as many words). A
-// count is a pure function of the file and the pattern. Why it cannot bound a SINGLE line: it cannot — a single
-// std::regex call is atomic to its caller. That case is Phase 1's (the structural screen refuses the shapes that
-// backtrack) and the subject-size bound's (maxEngineSubjectBytes/Skipped); the budget covers the AGGREGATE a large
-// file of admissible-but-slow lines produces — the Failure Mode the spec names, "a very large file matched by a
-// cheap pattern on a slow machine".
-//
-// The literal paths never reach this counter (they return before the engine branch below), which is the spec's
-// "keep the budget OUT of the literal paths": budgeting a byte search is dead cost.
-inline constexpr std::uint32_t kRegexFileMatchBudget = 1000000;   // per file; >>10x this tree's own gate corpus (evidence/README.md)
-
-// RIPWIRE_FAULT_REGEX_BUDGET=1 caps the budget to a handful of attempts, the same idiom as
-// RIPWIRE_FAULT_REGEX_LINE_BOUND (a boolean switch that makes an engine-only path reachable everywhere). Non-NDEBUG
-// only, read ONCE per process through rw::faultSwitchOnOnce: a release build compiles the branch to the constant.
-inline constexpr std::uint32_t kRegexFaultBudget = 4;
-struct RegexBudgetFaultTag {};   // this switch's own faultSwitchOnOnce cache (infra/emit.h)
-inline std::uint32_t regexFileMatchBudget() noexcept
-{
-    return rw::faultSwitchOnOnce<RegexBudgetFaultTag>( "RIPWIRE_FAULT_REGEX_BUDGET" ) ? kRegexFaultBudget : kRegexFileMatchBudget;
-}
-
 // The line loop behind GuardedRegex::forEachLineMatch. The engine may throw here; the member holds the boundary, and
 // `scan` keeps what was counted before a throw.
 template<typename OnMatch>
@@ -1651,10 +1824,8 @@ void regexScanLines( const std::regex& engine, const RegexLiteralPaths& paths, s
         } );
         return;
     }
-    const bool  canJump   = policy.useLiteralPaths && !hasPlan && paths.required.isLineFree;
-    const bool  canFilter = policy.useLiteralPaths && !hasPlan && !paths.required.anyOf.empty();
-    const std::uint32_t budget        = regexFileMatchBudget();   // Phase 2: engine line-match attempts, per file
-    std::uint32_t       engineAttempts = 0;
+    const bool canJump   = policy.useLiteralPaths && !hasPlan && paths.required.isLineFree;
+    const bool canFilter = policy.useLiteralPaths && !hasPlan && !paths.required.anyOf.empty();
     std::size_t lineBegin = 0;
     while( !isStopped )
     {
@@ -1685,16 +1856,6 @@ void regexScanLines( const std::regex& engine, const RegexLiteralPaths& paths, s
         }
         else if( isCandidate )
         {
-            // Phase 2 — the budget is checked BEFORE the engine is handed the line, so a file that has already
-            // spent its budget stops without paying for one more attempt. Exhausted (not a new verdict) so every
-            // consumer and gate that already treats an abandoned file as "answer unknown past here" is unchanged.
-            if( engineAttempts >= budget )
-            {
-                scan.verdict  = RegexVerdict::Exhausted;
-                scan.budgeted = true;
-                return;
-            }
-            ++engineAttempts;
             for( auto it = std::cregex_iterator( base + lineBegin, base + matchEnd, engine ); it != std::cregex_iterator(); ++it )
             {
                 if( !report( lineBegin + std::size_t( it->position() ) ) )
@@ -1721,18 +1882,12 @@ inline constexpr unsigned kRegexFaultStackShift = 22;   // RIPWIRE_FAULT_REGEX_L
 // release), read ONCE per process (determinism), exact "1" (the rule faultSwitchOn owns). Called ONLY inside
 // the try of a noexcept GuardedRegex member, so the throw it raises never leaves the seam — and before any literal
 // path, so a pattern the engine never sees still reaches it.
-//
-// RIPWIRE_FAULT_REGEX_MATCH_MIXED=1 is its per-SUBJECT sibling (the RIPWIRE_FAULT_SCAN_STACK_MIXED idiom): it throws
-// only for a subject at or above kRegexFaultMixedSubjectBytes, so a run that ALSO sets RIPWIRE_FAULT_REGEX_BUDGET=1
-// obtains BOTH causes of a stopped --regex scan at once — the engine giving up on a large file, the guard's budget
-// stopping a small many-lined one. The every-subject switch cannot do that: it abandons EVERY file here, before the
-// budget is ever consulted, so the budget count stays 0 (test/regexbombcheck.sh arm (7)).
-inline constexpr std::size_t kRegexFaultMixedSubjectBytes = 64;   // RIPWIRE_FAULT_REGEX_MATCH_MIXED=1: throw only for a subject this long or longer
-inline void throwIfMatchFaultInjected( std::size_t subjectBytes = 0 )
+// (Its former per-subject sibling RIPWIRE_FAULT_REGEX_MATCH_MIXED rode with the guard's per-file match budget —
+// it existed only so one run could carry both causes of a stopped scan — and was removed with the budget, PR #397.)
+inline void throwIfMatchFaultInjected()
 {
     static const bool isEverySubject = rw::faultSwitchOn( "RIPWIRE_FAULT_REGEX_MATCH" );
-    static const bool isLargeSubject = rw::faultSwitchOn( "RIPWIRE_FAULT_REGEX_MATCH_MIXED" );
-    if( isEverySubject || ( isLargeSubject && subjectBytes >= kRegexFaultMixedSubjectBytes ) )
+    if( isEverySubject )
     {
         throw std::regex_error( std::regex_constants::error_complexity );
     }
@@ -1752,7 +1907,7 @@ public:
     {
         try
         {
-            throwIfMatchFaultInjected( subject.size() );
+            throwIfMatchFaultInjected();
             if( paths.hasPlan() )
             {
                 return paths.findsPlanMatch( subject.data(), subject.size() ) ? RegexVerdict::Hit : RegexVerdict::Miss;
@@ -1774,7 +1929,7 @@ public:
     {
         try
         {
-            throwIfMatchFaultInjected( subject.size() );
+            throwIfMatchFaultInjected();
             return !paths.holdsRequired( subject.data(), subject.size() )                          ? RegexVerdict::Miss
                  : subject.size() > maxEngineSubjectBytes( stackBytes )                           ? RegexVerdict::Skipped
                  : std::regex_search( subject.data(), subject.data() + subject.size(), captures, engine ) ? RegexVerdict::Hit : RegexVerdict::Miss;
@@ -1803,7 +1958,7 @@ public:
         }
         try
         {
-            throwIfMatchFaultInjected( text.size() );
+            throwIfMatchFaultInjected();
             regexScanLines( engine, paths, text, policy, onMatch, scan );
         }
         catch( const std::regex_error& ) { scan.verdict = RegexVerdict::Exhausted; }

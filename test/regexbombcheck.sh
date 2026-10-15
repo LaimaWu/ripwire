@@ -197,12 +197,24 @@ safeCase "a+b (no group)"          'a+b'
 safeCase "(a)+b (empty inner)"     '(a)+b'
 safeCase "(abc)+ (literal group)"  '(abc)+'
 safeCase "(a|b)+ (plain alt)"      '(a|b)+'
+safeCase "((a|b))+ (nested disjoint alt)" '((a|b))+'
 safeCase "[a+]+b ('+' in class)"   '[a+]+b'
 safeCase "(a+)b (outer unquant.)"  '(a+)b'
 safeCase "(a+)(b)+ (siblings)"     '(a+)(b)+'
 safeCase "(?:abc)+ (non-capturing)" '(?:abc)+'
 safeCase "(\s*\w+){1,20} (bounded outer)" '(\s*\w+){1,20}'
 safeCase "(a?)b (bounded, outer unquant.)" '(a?)b'
+
+# ── M2-e (round 6, PR #397): PROVEN DISJOINT BY FIRST CHARACTER — the multi-character class M2-c refused unread ─
+# A branch that is an unquantified sequence of width-one atoms has a fixed width and matches deterministically
+# once started, so the only remaining ambiguity is WHICH branch starts a position — and the branch's first
+# character answers that in one. Pairwise-disjoint first-character sets across every branch end the question: the
+# repetition cannot multiply, and these are admitted where M2-c refused them wholesale.
+safeCase "^(ab|cd)+e$ (disjoint multi-char)" '^(ab|cd)+e$'
+safeCase "(cat|dog)+ (keyword pair)"         '(cat|dog)+'
+safeCase "(foo|bar)+ (prefix-free words)"    '(foo|bar)+'
+safeCase "quoted-string JSON walker"         '"([^"\\]|\\.)*"'
+safeCase "(\r\n|\n)+ (CRLF walker)"          '"(\r\n|\n)+"'
 
 # and the point of the fixture survives: a safe pattern still finds normal.cpp's ordinary matches while
 # bomb.md sits in the very same candidate set, scanned harmlessly.
@@ -226,20 +238,27 @@ fi
 "$BIN" "$CORPUS" --regex='a+b' --no-prefilter --no-cache >"$TMP/s2" 2>/dev/null
 if diff -q "$TMP/s1" "$TMP/s2" >/dev/null; then ok "deterministic on the safe scanning path too"; else no "non-deterministic (safe path)"; fi
 
-# ── (5) the ALTERNATION battery: the screen's documented gap, CLOSED statically (Phase 1) ───────────────
+# ── (5) the ALTERNATION battery: the screen's documented gap, CLOSED statically (Phase 1; first characters, M2-e) ─
 # This section used to print an INFO line — `(a|a)+b` "ran past 30 s — a KNOWN gap in the static guard". Phase 1
 # closes that gap, so the gap line is REPLACED by real arms: every shape the screen now refuses is asserted here —
 # bounded, by name, no hits= on stdout — the same contract bombCase() holds the nested battery to.
 #
 #   (a|a)+b      the audit's own PoC shape — two IDENTICAL branches, the simplest semantic overlap
+#   (a|aa)+      the same overlap, taken at the FIRST CHARACTER: both branches start with the same set, so no
+#                proof — whole-footprint or first-character — can break the split ambiguity (round 6, PR #397)
 #   ^(a|aa)+b$   the audit's live bypass — a branch that is a PREFIX of another
 #   (x|xy)+c$    the prefix shape again, with a trailing literal
 #   (\w|\d)+$    two character classes that INTERSECT (\d is a subset of \w)
-#   ^(ab|cd)+e$  the conservative case: DISJOINT multi-character branches, refused because the screen cannot PROVE
-#                disjointness without matching them (the documented false-positive class; PM ruling (a), 2026-10-12)
+#   (get|getResponse)+  the shape that reads as innocent: both branches start with 'g', so which one matches a
+#                byte is still ambiguous and the repetition can still split the input both ways (M2-e)
+#   ((a|aa))+b$  M2-d — the PAREN BYPASS: the alternation sits one group deeper and closes under NO quantifier,
+#                so only the flag it hands the parent frame tells the outer '+' what it repeats (round 6, PR #397)
+#   (?:(?:a|aa))+b$  M2-d — the same bypass through non-capturing groups, whose modifiers must not be read as body
 #
 # The mid-match catch the old INFO line described is NOT gone — it is asserted portably by test/regexguardcheck.sh
-# arm (b1) through the fault switch, and for the budget by section (6) below. Nothing here claims otherwise.
+# arm (b1) through the fault switch, and for the stopped-scan refusal by section (7) below. Nothing here claims
+# otherwise. (The guard's per-file MATCH BUDGET — round 5's second cause of a stopped scan — is gone: the PR #397
+# review removed it, sections (6)/(7) assert the removal and the single-cause refusal that is left.)
 altCase(){
     local label="$1" pat="$2"
     local rc; rc="$( capRun 20 "$TMP/out" "$TMP/err" "$CORPUS" --regex="$pat" --no-cache )"
@@ -254,135 +273,120 @@ altCase(){
     grep -qi 'backtrack' "$TMP/err" && ok "$label: refusal names the construct (catastrophic backtracking)" \
         || no "$label: refusal does not name the construct: $( head -c 200 "$TMP/err" )"
     # PM-1: the alternation refusal must say it cannot PROVE disjointness, NOT that the branches overlap (false for
-    # the multi-character case, e.g. (cat|dog)+). 'backtrack' and a workaround word are the pinned pair; this asserts
-    # the honest wording too, so a future rewording that regresses to the false claim reds here.
+    # disjoint branches — the refusal fires because no PROOF (whole-footprint or first-character) can read them).
+    # 'backtrack' and a workaround word are the pinned pair; this asserts the honest wording too, so a future
+    # rewording that regresses to the false claim reds here.
     grep -qiE 'prove|disjoint' "$TMP/err" && ok "$label: refusal is honest about the false-positive class (cannot PROVE disjoint)" \
         || no "$label: refusal does not state the screen cannot PROVE disjointness: $( head -c 200 "$TMP/err" )"
 }
 
 altCase "(a|a)+b"     '(a|a)+b'
+altCase "(a|aa)+"     '(a|aa)+'
 altCase "^(a|aa)+b$"  '^(a|aa)+b$'
 altCase "(x|xy)+c$"   '(x|xy)+c$'
 altCase "(\w|\d)+$"   '(\w|\d)+$'
-altCase "^(ab|cd)+e$" '^(ab|cd)+e$'
+altCase "(get|getResponse)+" '(get|getResponse)+'
+altCase "((a|aa))+b$" '((a|aa))+b$'
+altCase "(?:(?:a|aa))+b$" '(?:(?:a|aa))+b$'
 # (a|a*)+ (a branch that can match EMPTY) is refused by the NESTED arm, not this one: its group contains '*', so the
 # first arm fires and its message is the nested-repetition one. It is asserted as a bombCase above, where that
 # message belongs. The PM-1 honesty assertion below applies only to patterns the ALTERNATION arm actually catches.
 
-# ── (6) the MATCH BUDGET: the libstdc++ backstop (Phase 2) ───────────────────────────────────────────────
-# The Exhausted catch fires only when the ENGINE gives up — libc++ has a complexity budget, libstdc++ has none (it
-# "never throws ... simply backtracks"). The guard now bounds a scan ITSELF: a per-file cap on engine line-match
-# attempts. RIPWIRE_FAULT_REGEX_BUDGET=1 caps the cap to a handful (the RIPWIRE_FAULT_REGEX_LINE_BOUND idiom), so the
-# path is reachable on every platform rather than only where a real bomb exists. The budget's verdict is the SAME
-# Exhausted shape (exit 1, disclosed, no hits=) with its OWN reason sentence, so the reader is pointed at the GUARD,
-# not at an engine complexity budget libstdc++ does not have.
+# ── (6) the MATCH BUDGET IS REMOVED — the fault switch that keyed it is inert ─────────────────────────────
+# Round 5 added a per-file match budget (kRegexFileMatchBudget, keyed by RIPWIRE_FAULT_REGEX_BUDGET) as a libstdc++
+# backstop. The PR #397 review removed it (round 6): it counted line-MATCH ATTEMPTS, so a file of fast linear
+# answers (^9\d\d$ under --no-prefilter, \d{4}-\d{2}-\d{2} over logs) exhausted it and was refused although every
+# attempt was cheap; and one std::regex call is atomic to its caller, so a counter BETWEEN calls bounded nothing
+# inside one — the single-match hole was open either way (docs/LIMITS.md, `regex-screen-multiquantifier`). A
+# first-class removal, asserted, not a silent one: these arms prove the switch is no longer read and the fixture
+# the budget used to stop mid-scan now scans cleanly with it SET.
+#
+# many.md holds 10 candidate lines (each carries the required literal 'x'); hit.md one, so a scan that continued
+# past a budgeted file still had something to find — the old arm's own fixture, kept so the removal is proven
+# against exactly what used to stop. `x+` is ADMITTED by the screen and is NOT a literal plan, so every candidate
+# line reaches the engine — the counter the budget used to read. The switch is a plain environment variable the
+# binary no longer consults, so this runs on every flavour without asking (there is no NDEBUG-leg asymmetry left).
+BUDGET_DIR="$TMP/budgetfix"; mkdir -p "$BUDGET_DIR"
+: >"$BUDGET_DIR/many.md"
+for _i in 1 2 3 4 5 6 7 8 9 10; do printf 'x line %s\n' "$_i" >>"$BUDGET_DIR/many.md"; done
+printf 'x marker\n' >"$BUDGET_DIR/hit.md"
+
+# control: with no switch the corpus scans cleanly, so what (6) pins below is the switch, not the corpus.
+rc="$( capRun 20 "$TMP/out" "$TMP/err" "$BUDGET_DIR" --regex='x+' --no-cache )"
+if [ "$rc" = 0 ] && grep -q 'hits="[1-9]' "$TMP/out"; then ok "budget removal control: with no switch the corpus scans cleanly at exit 0 (hits present)"
+else no "budget removal control: exit $rc — the corpus does not scan cleanly even with nothing to stop it: $( head -c 200 "$TMP/err" )"; fi
+
+# the removal itself: RIPWIRE_FAULT_REGEX_BUDGET=1 — the exact value that stopped this corpus at exit 1 with
+# kRegexBudgetReason on stderr — now changes nothing at all, and the answer is byte-identical to the control's.
+rc="$( RIPWIRE_FAULT_REGEX_BUDGET=1 capRun 20 "$TMP/b.out" "$TMP/b.err" "$BUDGET_DIR" --regex='x+' --no-cache )"
+if [ "$rc" = 0 ] && grep -q 'hits="[1-9]' "$TMP/b.out"; then
+    ok "budget: RIPWIRE_FAULT_REGEX_BUDGET=1 is inert (the budget is removed): the corpus still scans at exit 0"
+else
+    no "budget: RIPWIRE_FAULT_REGEX_BUDGET=1 still changes the answer (exit $rc) — removed machinery still live?"
+fi
+if cmp -s "$TMP/out" "$TMP/b.out"; then ok "budget: stdout byte-identical with the switch set (nothing reads it)"
+else no "budget: stdout differs with the switch set — something still consumes the removed switch"; fi
+grep -q 'match budget' "$TMP/b.err" && no "budget: stderr still names a match budget the guard no longer has" \
+    || ok "budget: no match-budget sentence anywhere on stderr"
+
+# ── (7) A STOPPED SCAN HAS ONE CAUSE — THE ENGINE'S — and the refusal says so, once ──────────────────────
+# The round-4 fix split a stopped --regex scan per cause, each with its own count, reason, file and advice,
+# because one run could stop files BOTH ways: the engine abandoning a match in one file, the guard's per-file
+# budget (section (6)'s removed machinery) stopping others. The PR #397 review removed the budget, so a stop is
+# the ENGINE abandoning a match (RegexVerdict::Exhausted from std::regex) and nothing else, and the split carried
+# nothing: one sentence again, the whole stopped count, the first (lowest-fileId) file, kRegexAbandonedReason and
+# the outer-quantifier advice. (7) drives the one remaining cause over a three-file fixture and asserts the whole
+# single-cause contract: the count is the run's total (there is no per-cause subtraction any more), exactly ONE
+# refusal sentence prints, and the stderr is byte-identical run to run.
 #
 # Fault switches are compiled out under NDEBUG, so ASK the binary (the prcontextcheck idiom) before asserting.
 RIPWIRE_FAULT_CHARGE_BUFFER=1 "$BIN" "$CORPUS" --top-k=5 --pack-signatures --no-cache >/dev/null 2>"$TMP/probe.err"
 if grep -aq 'open_memstream failed' "$TMP/probe.err"; then FAULTS=1; else FAULTS=0; fi
 
-BUDGET_DIR="$TMP/budgetfix"; mkdir -p "$BUDGET_DIR"
-# many.md holds 10 candidate lines (each carries the required literal 'x'); hit.md holds one, so a run that continues
-# past a budgeted file still has something to find. `x+` is ADMITTED by the screen and is NOT a literal plan, so every
-# candidate line reaches the engine — the counter the budget reads. (Post-Phase-1 there is no screen-admitted BOMB to
-# hand the engine: the screen refuses them, which is the point. The budget's job is the AGGREGATE — the spec's own
-# Failure Mode, "a very large file matched by a cheap pattern".)
-: >"$BUDGET_DIR/many.md"
-for _i in 1 2 3 4 5 6 7 8 9 10; do printf 'x line %s\n' "$_i" >>"$BUDGET_DIR/many.md"; done
-printf 'x marker\n' >"$BUDGET_DIR/hit.md"
-
-# control FIRST: with no fault switch the same corpus scans cleanly, proving the fixture is otherwise fine and that
-# the budget (not the corpus) is what changes the outcome below.
-rc="$( capRun 20 "$TMP/out" "$TMP/err" "$BUDGET_DIR" --regex='x+' --no-cache )"
-if [ "$rc" = 0 ] && grep -q 'hits="[1-9]' "$TMP/out"; then ok "budget control: with no switch the corpus scans cleanly at exit 0 (hits present)"
-else no "budget control: exit $rc — the corpus does not scan cleanly even with no budget in play: $( head -c 200 "$TMP/err" )"; fi
-
-if [ "$FAULTS" -eq 1 ]; then
-    rc="$( RIPWIRE_FAULT_REGEX_BUDGET=1 capRun 20 "$TMP/b.out" "$TMP/b.err" "$BUDGET_DIR" --regex='x+' --no-cache )"
-    if [ "$rc" = TIMEOUT ]; then
-        no "budget: TIMEOUT/KILLED after 20 s — the budget did not stop the scan"
-    elif [ "$rc" -eq 1 ]; then ok "budget: a file over the per-file budget refuses at exit 1 (bounded)"
-    else no "budget: exit $rc (expected a refusal at exit 1)"; fi
-    grep -q 'hits=' "$TMP/b.out" && no "budget: printed a hits= element — a budgeted scan was reported as a measurement" \
-        || ok "budget: no hits= element on stdout"
-    grep -qF 'match budget' "$TMP/b.err" && ok "budget: the refusal names the GUARD's budget" \
-        || no "budget: stderr does not name the match budget: $( head -c 240 "$TMP/b.err" )"
-    grep -qF 'per-file bound on engine line-match attempts' "$TMP/b.err" \
-        && ok "budget: the refusal quotes kRegexBudgetReason (the guard, not the engine)" \
-        || no "budget: stderr does not quote the budget reason: $( head -c 240 "$TMP/b.err" )"
-    # the exact-"1" rule every fault switch in this tree keeps: anything else leaves the budget at its real value.
-    RIPWIRE_FAULT_REGEX_BUDGET=10 "$BIN" "$BUDGET_DIR" --regex='x+' --no-cache >"$TMP/b10.out" 2>/dev/null
-    grep -q 'hits="[1-9]' "$TMP/b10.out" && ok "budget control: RIPWIRE_FAULT_REGEX_BUDGET=10 is not ON (exact \"1\" only)" \
-        || no "budget control: RIPWIRE_FAULT_REGEX_BUDGET=10 changed the answer"
-else
-    printf '  INFO  budget: this binary compiles fault switches out (NDEBUG): the budget cap is unobservable BY DESIGN here; the plain-flavour leg proves it\n'
-fi
-
-# ── (7) BOTH CAUSES AT ONCE — a mixed run names the engine's files AND the budget's, each with its OWN count ─────
-# The round-4 fix. ONE run can stop files for BOTH reasons: the engine abandoning a match in one file, the guard's
-# budget stopping others. The old message SUMMED every stopped file and attributed that total to a single cause, so a
-# mixed run told the reader that N files hit the budget when only some did — and named no file for the rest. This arm
-# drives both counters nonzero in ONE run and asserts each cause's own count, its own reason sentence and its own file.
-#
-# Why a THIRD switch is needed (measured 2026-10-14): RIPWIRE_FAULT_REGEX_MATCH abandons EVERY file at the top of
-# forEachLineMatch, BEFORE the budget is ever consulted, so setting it beside RIPWIRE_FAULT_REGEX_BUDGET=1 leaves the
-# budget count at 0 — the two switches together can never produce a mixed run. Its per-subject sibling
-# RIPWIRE_FAULT_REGEX_MATCH_MIXED throws only for a subject >= kRegexFaultMixedSubjectBytes, so with the budget switch
-# on the LARGE file is engine-abandoned while the small many-lined files are budget-stopped: both counters, one run.
 if [ "$FAULTS" -eq 1 ]; then
     MIX_DIR="$TMP/mixfix"; mkdir -p "$MIX_DIR"
-    # engine.md: ONE line of 200 'x' — >= kRegexFaultMixedSubjectBytes (64), so the engine fault fires before any line is read.
-    printf '%0.sx' {1..200} >"$MIX_DIR/engine.md"; printf '\n' >>"$MIX_DIR/engine.md"
-    # budgetA/B.md: 10 short candidate lines each (20 bytes, under the 64-byte fault), so the engine runs and the
-    # per-file budget (RIPWIRE_FAULT_REGEX_BUDGET=1 caps it to 4) stops each at its 5th attempt.
-    for _b in A B; do
-        : >"$MIX_DIR/budget$_b.md"; for _i in 1 2 3 4 5 6 7 8 9 10; do printf 'x\n' >>"$MIX_DIR/budget$_b.md"; done
+    # three files, each with candidate lines for 'x+' (every line carries the required literal 'x'), in an order the
+    # sorted crawl fixes: the refusal must name aa.md, the lowest fileId, and count all three.
+    for _f in aa mm zz; do
+        : >"$MIX_DIR/$_f.md"; for _i in 1 2 3 4 5; do printf 'x line\n' >>"$MIX_DIR/$_f.md"; done
     done
 
-    rc="$( RIPWIRE_FAULT_REGEX_MATCH_MIXED=1 RIPWIRE_FAULT_REGEX_BUDGET=1 capRun 20 "$TMP/m.out" "$TMP/m.err" "$MIX_DIR" --regex='x+' --no-prefilter --no-cache )"
+    rc="$( RIPWIRE_FAULT_REGEX_MATCH=1 capRun 20 "$TMP/m.out" "$TMP/m.err" "$MIX_DIR" --regex='x+' --no-prefilter --no-cache )"
     if [ "$rc" = TIMEOUT ]; then
-        no "mixed: TIMEOUT/KILLED after 20 s"
-    elif [ "$rc" -eq 1 ]; then ok "mixed: a run carrying both causes refuses at exit 1 (bounded)"
-    else no "mixed: exit $rc (expected a refusal at exit 1)"; fi
-    grep -q 'hits=' "$TMP/m.out" && no "mixed: printed a hits= element — a stopped scan was reported as a measurement" \
-        || ok "mixed: no hits= element on stdout"
+        no "stopped scan: TIMEOUT/KILLED after 20 s"
+    elif [ "$rc" -eq 1 ]; then ok "stopped scan: the engine abandoning every candidate file refuses at exit 1 (bounded)"
+    else no "stopped scan: exit $rc (expected a refusal at exit 1)"; fi
+    grep -q 'hits=' "$TMP/m.out" && no "stopped scan: printed a hits= element — a stopped scan was reported as a measurement" \
+        || ok "stopped scan: no hits= element on stdout"
 
-    # Isolate the refusal sentences: the DISCLOSE lines on stderr mention the same words, so match the refusal head.
+    # Isolate the refusal sentence: the DISCLOSE lines on stderr mention the same words, so match the refusal head.
     refusals="$( grep -F 'no hit is reported:' "$TMP/m.err" )"
-    budgetLine="$( printf '%s\n' "$refusals" | grep -F "the scan hit this file's match budget" )"
-    engineLine="$( printf '%s\n' "$refusals" | grep -F 'the regex engine abandoned the match' )"
-
-    # THE FIX: the budget sentence carries the BUDGET's own count (2), not the run's total (3), and names a budget file.
-    if printf '%s\n' "$budgetLine" | grep -qF 'in 2 file(s), first' && printf '%s\n' "$budgetLine" | grep -qF 'budget'; then
-        ok "mixed: the budget sentence reports the BUDGET's own count (2), not the run's total (3)"
+    # ONE CAUSE, ONE SENTENCE: the round-4 message printed one sentence per cause; with the budget gone there is
+    # exactly one, whoever runs it — asserting the count of sentences pins the removal as hard as (6) does.
+    if [ "$( printf '%s\n' "$refusals" | grep -c . )" = 1 ]; then
+        ok "stopped scan: exactly ONE refusal sentence (a stopped scan has one cause)"
     else
-        no "mixed: the budget sentence does not report its own count: $( printf '%s\n' "$budgetLine" | head -c 260 )"
+        no "stopped scan: expected exactly one refusal sentence, got $( printf '%s\n' "$refusals" | grep -c . ): $( printf '%s\n' "$refusals" | head -c 260 )"
     fi
-    # ... and the engine gets its OWN sentence, with the ENGINE's count (1) and an engine file — the old message had none.
-    if [ -n "$engineLine" ] && printf '%s\n' "$engineLine" | grep -qF 'in 1 file(s), first' && printf '%s\n' "$engineLine" | grep -qF 'engine'; then
-        ok "mixed: the engine sentence reports the ENGINE's own count (1) and names an engine file"
+    engineLine="$refusals"
+    # the whole stopped count, and the first file the sorted crawl fixes
+    if printf '%s\n' "$engineLine" | grep -qF 'in 3 file(s), first' && printf '%s\n' "$engineLine" | grep -qF 'first aa.md'; then
+        ok "stopped scan: the refusal carries the whole stopped count (3) and names the lowest-fileId file (aa.md)"
     else
-        no "mixed: no engine sentence with its own count: $( printf '%s\n' "$refusals" | head -c 360 )"
+        no "stopped scan: the refusal does not count 3 files naming aa.md: $( printf '%s\n' "$engineLine" | head -c 320 )"
     fi
-    # each sentence quotes ITS OWN reason word — neither claims the other's files
-    printf '%s\n' "$budgetLine" | grep -qF 'per-file bound on engine line-match attempts' \
-        && ok "mixed: the budget sentence quotes kRegexBudgetReason" \
-        || no "mixed: the budget sentence does not quote kRegexBudgetReason: $( printf '%s\n' "$budgetLine" | head -c 260 )"
+    # the reason is the ENGINE's own — no second sentence, no budget reason left to quote
     printf '%s\n' "$engineLine" | grep -qF 'std::regex gave up part-way through it' \
-        && ok "mixed: the engine sentence quotes kRegexAbandonedReason" \
-        || no "mixed: the engine sentence does not quote kRegexAbandonedReason: $( printf '%s\n' "$engineLine" | head -c 260 )"
-    # FIXED ORDER: the budget cause first, every run (the pre-round-4 priority when both were present)
-    if [ "$( printf '%s\n' "$refusals" | head -1 | grep -cF "the scan hit this file's match budget" )" = 1 ]; then
-        ok "mixed: the two sentences are in a fixed order (budget first)"
-    else
-        no "mixed: the sentence order is not the fixed one: $( printf '%s\n' "$refusals" | head -1 | head -c 160 )"
-    fi
-    # determinism: the mixed stderr is a pure function of the corpus, byte for byte
-    RIPWIRE_FAULT_REGEX_MATCH_MIXED=1 RIPWIRE_FAULT_REGEX_BUDGET=1 "$BIN" "$MIX_DIR" --regex='x+' --no-prefilter --no-cache >"$TMP/m2.out" 2>"$TMP/m2.err"
+        && ok "stopped scan: the refusal quotes kRegexAbandonedReason" \
+        || no "stopped scan: the refusal does not quote kRegexAbandonedReason: $( printf '%s\n' "$engineLine" | head -c 260 )"
+    printf '%s\n' "$engineLine" | grep -qF 'match budget' && no "stopped scan: the refusal still names the removed budget" \
+        || ok "stopped scan: no match-budget sentence anywhere in the refusal"
+    # determinism: the refused stderr is a pure function of the corpus, byte for byte
+    RIPWIRE_FAULT_REGEX_MATCH=1 "$BIN" "$MIX_DIR" --regex='x+' --no-prefilter --no-cache >"$TMP/m2.out" 2>"$TMP/m2.err"
     { diff -q "$TMP/m.out" "$TMP/m2.out" >/dev/null && diff -q "$TMP/m.err" "$TMP/m2.err" >/dev/null; } \
-        && ok "mixed: deterministic (two mixed refusals byte-identical on stdout AND stderr)" || no "mixed: non-deterministic"
+        && ok "stopped scan: deterministic (two refusals byte-identical on stdout AND stderr)" || no "stopped scan: non-deterministic"
 else
-    printf '  INFO  mixed: this binary compiles fault switches out (NDEBUG): the mixed path is unobservable BY DESIGN here\n'
+    printf '  INFO  stopped scan: this binary compiles fault switches out (NDEBUG): the injected abandonment is unobservable BY DESIGN here\n'
 fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"

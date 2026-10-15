@@ -274,8 +274,12 @@ fi
 # rather than by a match-time catch only libc++ has.
 #
 # NO GUARANTEE LOSES ITS ARM (PM re-scope rule): the real-engine abandonment path is still proven, portably, by (b1)'s
-# fault switch above (every entry point, every standard library) and, for the budget, by test/regexbombcheck.sh (6).
-# What changes here is only the MECHANISM that catches `(a|a)+z`: a match-time catch -> a static refusal.
+# fault switch above (every entry point, every standard library) and by test/regexbombcheck.sh (7). (The guard's
+# per-file match budget — round 5's second cause, whose (b2) note pointed at regexbombcheck (6) — was removed in the
+# PR #397 review; a stopped scan has one cause again.) What changes here is only the MECHANISM that catches `(a|a)+z`:
+# a match-time catch -> a static refusal. ROUND 6 re-vehicles the real-engine leg: the wrapped alternation forms it
+# used to ride are refused at admission since M2-d/M2-e, so the leg rides `a*a*a*a*a*b` — the multi-quantifier
+# residual the screen ADMITS, which is what makes it the real-engine vehicle.
 LINKS_LIBCXX=0
 if command -v otool >/dev/null 2>&1 && otool -L "$BIN" 2>/dev/null | grep -q 'libc++'; then LINKS_LIBCXX=1; fi
 if command -v ldd >/dev/null 2>&1 && ldd "$BIN" 2>/dev/null | grep -q 'libc++\.so'; then LINKS_LIBCXX=1; fi
@@ -308,6 +312,31 @@ closedStatically "--graph-query file((a|a)+z)" '(a|a)+z' --graph-query='file(all
 closedStatically "--arch TO (a|a)+z"           '(a|a)+z' --arch="$TMP/arch_alt.txt"
 closedStatically "--match #match? (a|a)+z"     '(a|a)+z' "--match=$MATCH_ALT"
 closedStatically "--regex (a|a)+z"             '(a|a)+z' --regex='(a|a)+z'
+
+# The REAL-ENGINE leg of (b2), re-vehicled (round 6, PR #397 review). The arm used to prove what a REAL engine does
+# with a pattern the screen LETS THROUGH; the wrapped-alternation forms that used to ride it are refused at
+# admission since M2-d/M2-e, so the vehicle is now `a*a*a*a*a*b` — the multi-quantifier residual the screen admits
+# BY CONSTRUCTION (docs/LIMITS.md, regex-screen-multiquantifier). What abandons below is the ENGINE and not the
+# screen, which is the whole point of the leg. libc++'s engine throws error_complexity on bait.md's 4000-a line
+# (--no-prefilter: the line must reach the engine, and the required-literal prefilter would rule it out); libstdc++
+# has no budget and would backtrack without end, so the no-switch leg runs where the engine has a budget, and the
+# fault-switch leg carries the refuse-don't-silence contract on every flavour.
+FIVESTAR='a*a*a*a*a*b'
+if [ "$LINKS_LIBCXX" -eq 1 ]; then
+    rc="$( capRun 30 "$TMP/r5.out" "$TMP/r5.err" "$FIX" --no-cache --no-prefilter "--regex=$FIVESTAR" )"
+    abandonedContract "(b2)" "--regex $FIVESTAR (real libc++ engine)" "$rc" "$TMP/r5.out" "$TMP/r5.err" "$FIVESTAR"
+else
+    printf '  INFO  (b2) real-engine leg: this binary links libstdc++, whose engine has no complexity budget —\n'
+    printf '        admitting %s over the 4000-a bait is the documented hang, not an assertable verdict\n' "$FIVESTAR"
+fi
+if [ "$FAULTS" -eq 1 ]; then
+    # abandonedContract directly, NOT exhaustedByName: that helper labels every row (b1), and an arm's output must
+    # name the arm that ran it — a (b1) line in the (b2) section would read as the wrong guarantee being proven.
+    b2rc="$( RIPWIRE_FAULT_REGEX_MATCH=1 capRun 20 "$TMP/r2f.out" "$TMP/r2f.err" "$FIX" --no-cache --no-prefilter "--regex=$FIVESTAR" )"
+    abandonedContract "(b2)" "--regex $FIVESTAR (screen-admitted, fault-injected)" "$b2rc" "$TMP/r2f.out" "$TMP/r2f.err" "$FIVESTAR"
+else
+    printf '  INFO  (b2) fault-switch leg: fault switches are compiled out (NDEBUG); (b1) proves the contract on this flavour\n'
+fi
 
 # ── (c) static: the engine is spelled in src/regexguard.h and nowhere else ─────────────────────────────────────
 python3 - "$ROOT" "$TMP" <<'PY' >"$TMP/static.txt" 2>&1

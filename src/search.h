@@ -1158,10 +1158,6 @@ struct GrepScanVerdict
 {
     bool          isAbandoned       = false;
     std::uint32_t regexLinesSkipped = 0;
-    // Phase 2: the abandonment was the GUARD's per-file match budget, not the engine giving up. isAbandoned is true
-    // either way (the file's answer is unknown past that point, so it is counted and refused identically); this flag
-    // only selects WHICH sentence the refusal quotes, so a reader is sent to the right cause.
-    bool          isBudgeted        = false;
 };
 
 // The 1-based line number of `pos` in the literal path, counting only the newlines between `scanned` and `pos` and
@@ -1214,7 +1210,9 @@ inline std::uint32_t lineAtOffset( const std::string& text, std::size_t pos, std
         // on CRLF input the way rg's `--crlf` does rather than never matching.
         //
         // The engine can give up DURING a match (libc++'s error_complexity/error_stack) on a pattern the
-        // structural screen passed — overlapping alternation, (a|a)+z, over a pathological line. Only
+        // structural screen ADMITS — the multi-quantifier residual (a*a*a*a*a*b, docs/LIMITS.md) over a
+        // pathological line; the overlapping-alternation shape this note used to name ((a|a)+z) is refused at
+        // admission since M2-c, before a byte reaches an engine. Only
         // construction was guarded before A4-F10, and an uncaught throw here reached std::terminate; A4-F10
         // then skipped the rest of the file, which kept the run alive but left a silent floor. GuardedRegex
         // now owns the catch and says Exhausted: this file's sites so far are kept, scanning it stops (as the
@@ -1234,19 +1232,11 @@ inline std::uint32_t lineAtOffset( const std::string& text, std::size_t pos, std
         } );
         if( scan.verdict == RegexVerdict::Exhausted )
         {
-            if( scan.budgeted )
-            {
-                DISCLOSE( Diagnostics::answerRefused, "the verdict makes --regex refuse by name (the file and the cause on stderr, exit 1); no hit is reported",
-                          "grep: the per-file match budget stopped the scan (a pattern the screen admits, on a file it could not finish) — the verb refuses the answer" );
-            }
-            else
-            {
-                DISCLOSE( Diagnostics::answerRefused, "the verdict makes --regex refuse by name (the file and the cause on stderr, exit 1); no hit is reported",
-                          "grep: the regex engine abandoned a match (catastrophic backtracking?) — the verb refuses the answer" );
-            }
+            DISCLOSE( Diagnostics::answerRefused, "the verdict makes --regex refuse by name (the file and the cause on stderr, exit 1); no hit is reported",
+                      "grep: the regex engine abandoned a match (catastrophic backtracking?) — the verb refuses the answer" );
         }
         scanned = text.size();   // the literal branch's cursor is not shared with this one; keep it honest
-        return { scan.verdict == RegexVerdict::Exhausted, scan.skippedLineCount, scan.budgeted };
+        return { scan.verdict == RegexVerdict::Exhausted, scan.skippedLineCount };
     }
     else
     {
@@ -1365,22 +1355,14 @@ struct GrepCollection
     bool                    isBudgetReached = false;
     std::uint32_t           unreadableFiles = 0;
     bool                    degraded        = false;
-    // A --regex scan whose engine ABANDONED a match (RegexVerdict::Exhausted) in this many indexed files — the WHOLE
-    // stopped set, the engine's own files AND the guard's budgeted ones below (a budget stop arrives as Exhausted).
-    // Nonzero ⇒ the hit set is a floor, so `degraded` is set too, and the CLI refuses it by name rather than print a
-    // count the engine never finished (literal scans: 0). The two per-cause pairs below carry what the refusal names.
+    // A --regex scan whose engine ABANDONED a match (RegexVerdict::Exhausted) in this many indexed files — every
+    // stopped file, one cause. Nonzero ⇒ the hit set is a floor, so `degraded` is set too, and the CLI refuses it
+    // by name rather than print a count the engine never finished (literal scans: 0). firstRegexAbandonedFile is
+    // the lowest such fileId — what the refusal sentence names.
+    // (The per-file match budget was a second cause here until the PR #397 review removed it: it refused fast
+    // linear answers and bounded nothing the engine's own spin-up does not, so a stopped scan has ONE cause again.)
     std::uint32_t           regexAbandonedFiles     = 0;
-    // Phase 2: of the abandoned files above, this many were stopped by the GUARD's per-file MATCH BUDGET rather than
-    // by the engine giving up (src/regexguard.h, kRegexFileMatchBudget). The refusal quotes kRegexBudgetReason rather
-    // than kRegexAbandonedReason when this is nonzero, so the reader is pointed at the guard, not at libc++.
-    std::uint32_t           regexBudgetedFiles      = 0;
-    std::uint32_t           firstRegexBudgetedFile  = 0;
-    // Of the abandoned files, this many were stopped by the ENGINE rather than by the guard's budget, and the lowest
-    // such fileId — what the ENGINE sentence of the refusal counts and names. The budgeted slots are a subset of the
-    // abandoned ones, so this is the difference (countStoppedFiles); the full abandoned set would name a file the
-    // budget stopped.
-    std::uint32_t           regexEngineOnlyFiles     = 0;
-    std::uint32_t           firstRegexEngineOnlyFile = 0;
+    std::uint32_t           firstRegexAbandonedFile = 0;
     // A --regex scan's lines the engine was never handed because they were longer than a scan thread's stack can take
     // (GrepScanVerdict). A match there is neither found nor ruled out, so nonzero makes hits= a floor; it does NOT set
     // `degraded` — every other line was read, and the answer is printed with the count beside it rather than refused.
@@ -1401,44 +1383,21 @@ struct GrepCollection
 // How many files a per-file bit vector marks, and the lowest fileId among them — one cause's share of a stopped scan.
 struct AbandonedFileCount { std::uint32_t count; std::uint32_t firstFileId; };
 
-// A stopped --regex scan's shares, split by cause and read in ONE pass over both per-file bit vectors, in ascending
-// fileId order after the join, so the file each refusal sentence names is a pure function of the corpus, never of
-// which worker finished first. The budgeted slots are a SUBSET of the abandoned ones (a budget stop arrives as an
-// Exhausted verdict), so the engine's own share is the difference — and reading the whole abandoned set for the
-// engine would let that sentence claim a file the BUDGET stopped (the mixed-case overclaim the round-4 fix removes).
-struct StoppedFileCounts
+// How many files the per-file bit vector marks, and the lowest fileId among them — what a stopped --regex scan's
+// refusal counts and names. One pass, in ascending fileId order, so the file the sentence names is a pure function
+// of the corpus, never of which worker finished first.
+// (A stopped scan had TWO causes until the PR #397 review removed the guard's per-file match budget: this read two
+// bit vectors and split the set so the engine's sentence could not claim the budget's files. One cause, one vector.)
+inline AbandonedFileCount countStoppedFiles( const std::vector<char>& perFileAbandoned ) noexcept
 {
-    std::uint32_t     abandoned = 0;               // the whole stopped set; `degraded` reads it
-    AbandonedFileCount engineOnly{ 0, 0 };          // ...stopped by the ENGINE (abandoned minus budgeted)
-    AbandonedFileCount budgeted   { 0, 0 };          // ...stopped by the GUARD's per-file match budget
-};
-
-inline StoppedFileCounts countStoppedFiles( const std::vector<char>& perFileAbandoned, const std::vector<char>& perFileBudgeted ) noexcept
-{
-    StoppedFileCounts out;
+    AbandonedFileCount out{ 0, 0 };
     for( std::uint32_t f = 0; f < std::uint32_t( perFileAbandoned.size() ); ++f )
     {
-        if( perFileAbandoned[f] == 0 )
+        if( perFileAbandoned[f] != 0 && out.count == 0 )
         {
-            continue;
+            out.firstFileId = f;
         }
-        ++out.abandoned;
-        if( perFileBudgeted[f] != 0 )
-        {
-            if( out.budgeted.count == 0 )
-            {
-                out.budgeted.firstFileId = f;
-            }
-            ++out.budgeted.count;
-        }
-        else
-        {
-            if( out.engineOnly.count == 0 )
-            {
-                out.engineOnly.firstFileId = f;
-            }
-            ++out.engineOnly.count;
-        }
+        out.count += perFileAbandoned[f] != 0 ? 1u : 0u;
     }
     return out;
 }
@@ -1488,7 +1447,6 @@ inline GrepCollection grepCollect( const IngestResult& ing, const std::string& p
     // ── pass 1: parallel scan, one worker per hardware thread, one file at a time ──────────────────────
     std::vector<std::vector<GrepMatchSite>> perFileSites( fileCount );   // slot f written by exactly one worker
     std::vector<char>                       perFileAbandoned( regex ? fileCount : 0, 0 );   // slot f: the engine abandoned a match in f
-    std::vector<char>                       perFileBudgeted( regex ? fileCount : 0, 0 );    // slot f: the per-file MATCH BUDGET stopped the scan of f (Phase 2)
     std::vector<std::uint32_t>              perFileSkipped( regex ? fileCount : 0, 0 );     // slot f: lines too long for the engine in f
     std::atomic<std::size_t>                engineLineBytesMax { 0 };    // every worker stores the SAME value: one settled stack, one pattern
     std::atomic<std::uint32_t>              nextFileId { 0 };
@@ -1522,14 +1480,10 @@ inline GrepCollection grepCollect( const IngestResult& ing, const std::string& p
                 {
                     continue;
                 }
-                const auto [ isAbandoned, linesSkipped, isBudgeted ] = grepScanText( text, pat, regex ? &reLocal.regex : nullptr, budgetCount, perFileSites[f], linePolicy );
+                const auto [ isAbandoned, linesSkipped ] = grepScanText( text, pat, regex ? &reLocal.regex : nullptr, budgetCount, perFileSites[f], linePolicy );
                 if( isAbandoned )
                 {
                     perFileAbandoned[f] = 1;
-                }
-                if( isBudgeted )
-                {
-                    perFileBudgeted[f] = 1;
                 }
                 if( linesSkipped != 0 )
                 {
@@ -1625,15 +1579,14 @@ inline GrepCollection grepCollect( const IngestResult& ing, const std::string& p
     // read the bit BEFORE the move — a braced-init-list is evaluated left to right, so `raw.size()` after
     // `std::move( raw )` would read a moved-from vector and always report "not capped"
     const bool isBudgetReached = raw.size() >= budgetCount;
-    const StoppedFileCounts stopped = countStoppedFiles( perFileAbandoned, perFileBudgeted );   // one pass: `degraded` reads the whole set, the refusal the two per-cause shares
+    const AbandonedFileCount stopped = countStoppedFiles( perFileAbandoned );   // one pass: `degraded` reads the set, the refusal its first file
     std::uint64_t regexLinesSkipped = 0;
     for( const std::uint32_t skipped : perFileSkipped )
     {
         regexLinesSkipped += skipped;
     }
     return { std::move( raw ), isBudgetReached, unreadableCount.load( std::memory_order_relaxed ),
-             workerDegraded.load( std::memory_order_relaxed ) || stopped.abandoned != 0, stopped.abandoned,
-             stopped.budgeted.count, stopped.budgeted.firstFileId, stopped.engineOnly.count, stopped.engineOnly.firstFileId,
+             workerDegraded.load( std::memory_order_relaxed ) || stopped.count != 0, stopped.count, stopped.firstFileId,
              regexLinesSkipped, engineLineBytesMax.load( std::memory_order_relaxed ), regex ? scanStackBytes : 0 };
 }
 
@@ -1684,10 +1637,8 @@ struct GrepAuxCollection
     std::uint32_t           filesUnreadable      = 0;   // open/read failed after the crawl saw it (deleted/permission mid-run)
     bool                    candidatesCapped     = false;
     bool                    degraded             = false;   // regex failed to COMPILE — nothing was scanned, mirrors GrepCollection's construction-failure case
-    std::uint32_t           regexAbandonedFiles  = 0;       // the engine abandoned a match in this many unindexed files — the whole stopped set (see GrepCollection)
-    std::uint32_t           regexBudgetedFiles   = 0;       // Phase 2: of those, this many hit the per-file MATCH BUDGET (see GrepCollection)
-    std::string             firstRegexBudgetedPath;         // the first of them, in the candidate list's own path order
-    std::string             firstRegexEngineOnlyPath;       // of the abandoned ones, the first the ENGINE (not the budget) stopped — the ENGINE sentence's file (see GrepCollection)
+    std::uint32_t           regexAbandonedFiles  = 0;       // the engine abandoned a match in this many unindexed files — every stopped file (see GrepCollection)
+    std::string             firstRegexAbandonedPath;        // the first of them, in the candidate list's own path order (what the refusal names)
     std::uint64_t           regexLinesSkipped    = 0;       // lines too long for the engine in unindexed files (see GrepCollection)
     std::size_t             regexLineBytesMax    = 0;       // the engine line bound of this scan's one thread (see GrepCollection)
     std::size_t             regexStackBytes      = 0;       // that thread's stack (see GrepCollection); 0 for a literal scan
@@ -1703,28 +1654,19 @@ struct GrepAuxCollection
         degraded = true;
     }
 
-    // One stopped --regex candidate: the whole stopped set, plus EACH cause's own first file (what the refusal's two
-    // sentences name). A budgeted file is also abandoned, so the engine's own share is abandoned minus budgeted. The
-    // whole per-file decision lives here, so the scan loop that calls it keeps no branch of its own.
-    void noteRegexScanOutcome( bool isAbandoned, bool isBudgeted, const std::string& path )
+    // One stopped --regex candidate: the stopped count, plus the first stopped file's path (what the refusal names).
+    // The whole per-file decision lives here, so the scan loop that calls it keeps no branch of its own.
+    void noteRegexScanOutcome( bool isAbandoned, const std::string& path )
     {
         if( !isAbandoned )
         {
             return;
         }
+        if( regexAbandonedFiles == 0 )
+        {
+            firstRegexAbandonedPath = path;
+        }
         ++regexAbandonedFiles;
-        if( isBudgeted )   // Phase 2: the guard's per-file match budget, not the engine
-        {
-            if( regexBudgetedFiles == 0 )
-            {
-                firstRegexBudgetedPath = path;
-            }
-            ++regexBudgetedFiles;
-        }
-        else if( firstRegexEngineOnlyPath.empty() )   // the ENGINE stopped it: the file the engine sentence names
-        {
-            firstRegexEngineOnlyPath = path;
-        }
     }
 };
 
@@ -1756,8 +1698,8 @@ inline void scanUnsupportedFiles( const CrawlSkips& skips, const std::string& pa
         ++out.filesScanned;
 
         sites.clear();
-        const auto [ isAbandoned, linesSkipped, isBudgeted ] = grepScanText( text, pat, re, kGrepCollectionBudget, sites, linePolicy );
-        out.noteRegexScanOutcome( isAbandoned, isBudgeted, row.path );
+        const auto [ isAbandoned, linesSkipped ] = grepScanText( text, pat, re, kGrepCollectionBudget, sites, linePolicy );
+        out.noteRegexScanOutcome( isAbandoned, row.path );
         out.regexLinesSkipped += linesSkipped;
         if( sites.empty() )
         {

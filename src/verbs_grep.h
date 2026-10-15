@@ -619,16 +619,13 @@ void joinGrepScanPrefetch( std::thread& worker )
 // the same shape and exit code as the pattern refusal above, so a caller handles both the one way it already
 // does. The file named is the lowest-fileId indexed one (else the first unindexed one): deterministic.
 //
-// A stopped --regex scan has TWO possible causes, and ONE run can carry BOTH: the ENGINE abandoning a match
-// (RegexVerdict::Exhausted from std::regex) and the GUARD's own per-file MATCH BUDGET stopping a scan the screen
-// admitted (src/regexguard.h, kRegexFileMatchBudget). A budget stop ARRIVES as an Exhausted verdict (search.h's
-// per-file loop sets isAbandoned and isBudgeted together), so the budgeted set is a SUBSET of the abandoned set —
-// the engine's own count is the DIFFERENCE, never the total. Reporting the total against one cause (what this did
-// before round 4) told a mixed run's reader that N files hit the budget when only some did, and named no file for
-// the rest. Each cause now reports its OWN count, reason sentence, first file and advice.
+// A stopped scan has ONE cause: the ENGINE abandoning a match. It had two until the PR #397 review removed the
+// guard's per-file match budget (round 4 had split the message per cause, because one run could stop files both
+// ways); with the budget gone the split carried nothing, so the refusal is one sentence again — the engine's own
+// count, reason and first file.
 
-// One cause of a stopped --regex scan, resolved to the four facts its sentence needs: how many files IT stopped, the
-// reason sentence to quote, the file to name, and the advice that fixes it.
+// One stopped scan resolved to the four facts its sentence needs: how many files it stopped, the reason sentence
+// to quote, the file to name, and the advice that fixes it.
 struct AbandonedRegexCause
 {
     std::uint32_t    count = 0;
@@ -638,33 +635,30 @@ struct AbandonedRegexCause
 };
 
 // The file named for a stopped scan: the lowest-fileId INDEXED one, else the first UNINDEXED one. A single real
-// root rewrites an indexed path root-relative — the same spelling every other verb reports a file with. The BUDGET
-// cause names the lowest BUDGETED file; the ENGINE cause names the lowest file the ENGINE abandoned that the budget
-// did NOT stop — never the whole abandoned set, which includes the budget's own files (the mixed-case overclaim).
+// root rewrites an indexed path root-relative — the same spelling every other verb reports a file with.
 inline std::string_view abandonedRegexFirstPath( const rw::Config& cfg, const rw::IngestResult& ing,
-                                                 const rw::GrepCollection& found, const rw::GrepAuxCollection& aux, bool isBudgetCause )
+                                                 const rw::GrepCollection& found, const rw::GrepAuxCollection& aux )
 {
-    const std::uint32_t indexedCount = isBudgetCause ? found.regexBudgetedFiles : found.regexEngineOnlyFiles;
-    if( indexedCount == 0 )
+    if( found.regexAbandonedFiles == 0 )
     {
-        return isBudgetCause ? std::string_view( aux.firstRegexBudgetedPath ) : std::string_view( aux.firstRegexEngineOnlyPath );
+        return std::string_view( aux.firstRegexAbandonedPath );
     }
-    const std::uint32_t fileId     = isBudgetCause ? found.firstRegexBudgetedFile : found.firstRegexEngineOnlyFile;
+    const std::uint32_t fileId     = found.firstRegexAbandonedFile;
     const bool          singleRoot = ing.realPaths.empty() && cfg.roots.size() == 1;
     return singleRoot ? rw::sarif::rootRelativeUri( ing.files[ fileId ], rw::sarif::rootPrefixOf( std::string( cfg.roots[0] ) ) )
                       : std::string_view( ing.files[ fileId ] );
 }
 
-// The trailing advice, per cause. A budget stop is fixed by narrowing the pattern or the corpus, not by rewriting an
-// alternation; and the old tail named (a|a)+ as the pattern to avoid, which the structural screen now REFUSES at
-// admission, so a reader reaching THIS message can no longer have written it (PM-1).
-inline constexpr std::string_view kAbandonedBudgetAdvice =
-    "narrow the pattern or the corpus: a file could not be scanned within the guard's per-file match budget";
+// The trailing advice: the engine's own offence, fixed by narrowing what it must try — bounding the outer
+// quantifier or narrowing the search — never by rewriting an alternation the screen has already refused.
 inline constexpr std::string_view kAbandonedEngineAdvice =
     "bound the OUTER quantifier of the pattern, or narrow the search, so it cannot backtrack on the subject";
 
-// The refusal sentence, emitted once per cause. Its head — the pattern, the reason, the count and the file — is the
-// same shape for both, so a caller reads the two alike; the reason word and the trailing advice are the cause's own.
+// The refusal sentence. Its head — the pattern, the reason, the count and the file — is one shape; the reason word
+// and the trailing advice name the one cause. When an engine abandonment reaches this seam the reason is
+// kRegexAbandonedReason and the advice kAbandonedEngineAdvice, on purpose (and NOT byte-identical to any
+// pre-round-4 message: the reason named the engine's give-up and the advice named the outer quantifier from that
+// round on).
 inline void emitAbandonedRegexRefusal( std::string_view pattern, const AbandonedRegexCause& cause )
 {
     rw::emitTo( stderr, "ripwire: --regex='{}' refused, no hit is reported: {} in {} file(s), first {} — the hits collected before that "
@@ -679,28 +673,9 @@ static bool refuseAbandonedRegexScan( const rw::Config& cfg, const rw::IngestRes
     {
         return false;
     }
-    // The budgeted files are a SUBSET of the abandoned ones (a budget stop arrives as an Exhausted verdict, so the
-    // collection's budgeted count never exceeds its abandoned count), so the engine's own count is the difference.
-    // Neither sentence claims the other's files: the budget sentence quotes kRegexBudgetReason with the budget count,
-    // the engine sentence kRegexAbandonedReason with what is left.
-    const std::uint32_t budgetCount = found.regexBudgetedFiles + aux.regexBudgetedFiles;
-    const std::uint32_t engineCount = stoppedCount - budgetCount;
-
-    // A FIXED order when both causes are present — the budget cause first, the priority the pre-round-4 message
-    // already had — so a mixed run's stderr is a pure function of the corpus. On the single-cause paths exactly one
-    // sentence prints and the count it carries is the whole of stoppedCount, byte-identical to the old message.
-    if( budgetCount != 0 )
-    {
-        const AbandonedRegexCause budgetCause{ budgetCount, rw::kRegexBudgetReason,
-                                               abandonedRegexFirstPath( cfg, ing, found, aux, true ), kAbandonedBudgetAdvice };
-        emitAbandonedRegexRefusal( cfg.grep, budgetCause );
-    }
-    if( engineCount != 0 )
-    {
-        const AbandonedRegexCause engineCause{ engineCount, rw::kRegexAbandonedReason,
-                                               abandonedRegexFirstPath( cfg, ing, found, aux, false ), kAbandonedEngineAdvice };
-        emitAbandonedRegexRefusal( cfg.grep, engineCause );
-    }
+    const AbandonedRegexCause cause{ stoppedCount, rw::kRegexAbandonedReason,
+                                     abandonedRegexFirstPath( cfg, ing, found, aux ), kAbandonedEngineAdvice };
+    emitAbandonedRegexRefusal( cfg.grep, cause );
     return true;
 }
 

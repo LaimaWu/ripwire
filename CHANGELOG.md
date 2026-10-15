@@ -83,7 +83,7 @@ There is no record content or extraction-version change; the order of a file's b
 differs, and no reader depends on it (a cache written by the previous release gives identical
 answers). The Python import gate checks fresh/warm output and, when `RIPWIRE_BASE_BIN` is supplied,
 acceptance of a pristine-main cache without rewriting it.
-### Security — the pattern screen refuses overlapping alternation, and a per-file match budget discloses the scan it stops
+### Security — the pattern screen refuses overlapping alternation, one group deeper
 
 ### Fixed — on Linux the memory guard read only the resident set, while the cgroup limit kills on the cgroup's charge (#387)
 
@@ -107,28 +107,40 @@ on a subject it fails to match. The screen that guards every user-authored patte
 a group containing a quantifier, but it passed a group whose branches merely *overlap* — the classic `(a|aa)+b$`, and
 the `(get|getResponse)+` shape that reads as innocent. It now refuses those too, and the refusal states what the
 screen actually knows: it **cannot PROVE the branches disjoint**. It does not claim the branches overlap, and it does
-not teach a factoring an already-disjoint alternation could not perform.
+not teach a factoring an already-disjoint alternation could not perform. The verdict also travels one group deeper:
+`((a|aa))+b$` and `(?:(?:a|aa))+b$` close their alternation under no quantifier of its own, but its quantified
+ancestor repeats it all the same, and the same refusal fires there.
 
-A second cause reaches the same refusal: the guard's own **per-file match budget** (`kRegexFileMatchBudget`, a
-deterministic count of engine line-match attempts per file — not a clock, so the answer cannot vary by machine). A
-file the guard cannot scan within that budget stops the verb with exit 1 and no `hits=`, and the message quotes the
-guard's reason rather than sending a reader to an engine complexity budget libstdc++ does not have.
+A first-character proof narrows the false-positive class (round 6): an alternation the whole-footprint proof cannot
+read is now **proven disjoint when every branch is an unquantified sequence of width-one atoms and the branches'
+first-character sets are pairwise disjoint** — at most one branch is viable at any position, so the repetition cannot
+multiply. The quoted-string matcher `"([^"\\]|\\.)*"`, a CRLF walker `(\r\n|\n)+`, and keyword pairs `(cat|dog)+` and
+`(foo|bar)+` are admitted where the shape was refused wholesale. `(a|aa)+` and `(get|getResponse)+` stay refused:
+their branches share a first character, which is exactly the split ambiguity no proof can break.
 
-One run can stop files for BOTH causes at once, and the refusal now names both: each cause reports its **own** count,
-reason sentence and first file, so a mixed run no longer attributes the whole stopped set to whichever cause it
-happened to pick (it used to print the total against one cause and name no file for the rest). The budget sentence
-quotes the guard's reason for the budget's files and the engine sentence the engine's reason for the engine's files;
-neither claims the other's. A run with a single cause prints one sentence, byte-identical to before.
+**The per-file match budget this change carried in earlier rounds is gone** (PR #397 review). It counted engine
+line-match attempts per file, so it refused fast linear answers — `^9\d\d$` under `--no-prefilter`,
+`\d{4}-\d{2}-\d{2}` over a log — while bounding nothing new: one `std::regex` call is atomic to its caller, so a
+counter between calls cannot see the work inside one. A stopped `--regex` scan has ONE cause again — **the engine
+abandoning a match** — and its refusal is one sentence: the engine's own reason, the whole stopped count, the first
+(lowest-fileId) stopped file, and rewritten advice. The advice no longer suggests rewriting the pattern "so no two of
+its alternatives can match the same text": its own example of what to avoid, `(a|a)+`, is refused by the screen at
+admission now, so a reader reaching this message can no longer have written it — the reason sentence and the advice
+were both changed on purpose, not carried over.
 
 Honest patterns are untouched: the 17-pattern golden set is byte-identical on stdout, stderr and exit code, and the
-corpus sweep over 99,845 literals newly refuses 33 and newly admits 0.
+corpus sweep over 99,845 literals newly refuses 33 and newly admits 0 (round 1's rule). Round 6 re-ran the same
+instrument over the grown tree — 100,065 distinct literals, round-5 head against the round-6 screen: the only
+newly refused rows are this round's own two paren-bypass gate fixtures, and the 22 newly admitted rows are the
+disjoint-first shapes the first-character proof reads, every one of them verified to still terminate on a 4000-byte
+pathological line under `--no-prefilter` (`corpus-sweep-round6.txt` in the spec's evidence bundle).
 
-**The budget bounds a file's aggregate cost; a single pathological match remains unbounded on libstdc++, tracked by
-`regex-screen-multiquantifier`.** The new rule targets a group with a top-level `|`; a pattern carrying several
-quantified atoms and no such group — `a*a*a*a*a*b`, `^(a)*(a)*(a)*(a)*(a)*$` — is admitted, and on libstdc++ a
-subject that holds its required literal and then a long run is unbounded work the budget cannot see: one `std::regex`
-call is atomic to its caller, and the cap is checked before the engine is handed a line. libc++ returns only because
-its engine throws `error_complexity`. The follow-on spec owns it; this change does not claim it closed.
+**A single pathological match remains unbounded on libstdc++, tracked by `regex-screen-multiquantifier` (follow-on
+spec).** The new rule targets a group with a top-level `|`; a pattern carrying several quantified atoms and no such
+group — `a*a*a*a*a*b`, `^(a)*(a)*(a)*(a)*(a)*$` — is admitted, and on libstdc++ a subject that holds its required
+literal and then a long run is unbounded work: one `std::regex` call is atomic to its caller, and its backtracking
+never throws. libc++ returns only because its engine throws `error_complexity`. The follow-on spec owns it; this
+change does not claim it closed.
 ## [0.6.7] — 2026-10-11
 
 ### Fixed — `--impact`: a selector matching several definitions keeps the `via="name"` hedge in its per-file rollup
