@@ -414,10 +414,11 @@ struct ForLensJsonInputs
     // The R-E harvest reached the XML --for bundle but left this JSON sibling's packSignaturesJson call
     // spelling `/*rootArg=*/{}` — the two dialects of ONE question disagreed about the spelling of a path.
     std::string_view                  rootArg;
-    // DEEP-TAIL d2: the file-grain tail candidates (computed once, above the dialect split, from the same
-    // resolved surface <sigs> selects). REQUIRED, not defaulted — a defaulted pointer is how a dialect
+    // DEEP-TAIL d2: the file-grain tail (FOLD C: page 0 of the --for file page, computed once above the dialect split, so
+    // both dialects serve the same rows). REQUIRED, not defaulted — a defaulted pointer is how a dialect
     // silently loses a surface its XML twin serves.
     const rw::FileTail*               fileTail;
+    const rw::LexTermEvidence*        evidence;   // FOLD C: the term evidence the tail's page rows rank by (the lens run's own)
     // L3 follow-up (CodeRabbit 4053600616): read BEFORE the caller nulls noteIndex for emptiness (d.notesDegraded,
     // MainDispatch) — REQUIRED like fileTail above, for the same reason: a defaulted bool is how a degrade
     // silently drops off this dialect while the XML twin keeps carrying it.
@@ -429,7 +430,6 @@ struct ForLensJsonInputs
     std::string_view                  task;
     int                               packTopN;
     std::string_view                  rankFlags;   // forRankShapingFlags( cfg ), owned by the caller for the call's duration
-    std::string_view                  tailCutNext; // forbudget-soft (D-4): the capped tail's continuation (rw::forWidenNext), REQUIRED
 };
 
 // The lens bundle's opening keys. Every note is absent-unless-present — the same silence-means-nothing-
@@ -705,7 +705,7 @@ inline std::size_t ownerLegendExemptBytes( const ForLensHeaderParts& p, bool com
 inline constexpr std::string_view kForCompactLegendBodies =
     "; b t= n= p= l= full bodies, c n= l= callee signatures";
 inline constexpr std::string_view kForCompactLegendTail =
-    "; t p= file outside sigs (weaker), r= rank (gap = trimmed)";
+    "; t p= file outside sigs (weaker), then t p= sym=: the file page's first 40 rows (file-first, sym= top symbols), r= rank (gap = trimmed)";
 // R2-AF (round 2, S4): the COMPACT dialect's `<hdr p= of=/>` clause — verbatim, round-2 amendment §R7.
 // 96 B, present-only like every clause in this dialect (appendCompactForLegend below).
 inline constexpr std::string_view kForCompactLegendHdr =
@@ -1304,30 +1304,19 @@ inline std::string finishForLensHeader( std::string header, const ForLensRootFin
     return finishForLensHeaderPriced( std::move( header ), f ).header;
 }
 
-// DEEP-TAIL d2, JSON dialect — the tail stanza and its explicit-regime fit, as a free function over
-// emitForLensJson's locals (the ForLensHeaderParts precedent: that emitter is already
-// carrying the whole envelope fixpoint). Default regime: the full row cap. Explicit regime: the hard
-// ceiling stays hard — rows trim one by one into whatever the rendered bundle left, down to the honest
-// empty shell (the always-present key is the disclosure; an absent key would read as "no tail exists").
-// forbudget-soft: a soft target funds the tail from what the ROWS left of it (`rowsAllowance` = T minus the rows served before
-// it); the header is never charged. `cutNext` (D-4) rides a capped tail in every regime.
-inline std::string forLensJsonTailStanza( const rw::FileTail& tail, std::size_t tokenBudget,
-                                          std::size_t rowsAllowance, std::string_view cutNext )
+// DEEP-TAIL d2, JSON dialect — the tail stanza and its explicit-regime fill, as a free function over
+// emitForLensJson's locals (the ForLensHeaderParts precedent: that emitter is already carrying the whole envelope
+// fixpoint). Default regime: the full row cap (page 0's 40 rows, FOLD C). Explicit regime (forbudget-soft round C,
+// reserve first): the tail keeps at least its share — `shareBytes`, what the rows at the target cut left of the bundle
+// budget — so rows are added until the stanza reaches it (rw::fileTailShownToFill); a cut tail carries "next".
+inline std::string forLensJsonTailStanza( const rw::FileTail& tail, std::size_t tokenBudget, std::size_t shareBytes )
 {
-    std::string stanza = "," + rw::renderFileTailJson( tail, rw::kForFileTailShownCap, cutNext );
     if( tokenBudget == 0 )
     {
-        return stanza;
+        return "," + rw::renderFileTailJson( tail, rw::kForFileTailShownCap );
     }
-    for( std::size_t shown = tail.paths.size(); ; --shown )
-    {
-        stanza = "," + rw::renderFileTailJson( tail, shown, cutNext );
-        if( stanza.size() <= rowsAllowance || shown == 0 )
-        {
-            break;
-        }
-    }
-    return stanza;
+    const auto render = [ & ]( std::size_t shown ) { return "," + rw::renderFileTailJson( tail, shown ); };
+    return render( rw::fileTailShownToFill( tail, shareBytes, render ) );
 }
 
 // One RENDER of the --json bundle (emitForLensJson below).
@@ -1416,7 +1405,7 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
     // row cap here (the degrade path below needs a stanza before any budget is knowable); the normal path
     // re-fits it after the sigs render (forLensJsonTailStanza above) — residual-funded, sigs untouched:
     // the reservation feeding sigsBudget above deliberately does NOT include these bytes.
-    std::string tailStanza = "," + renderFileTailJson( *in.fileTail, kForFileTailShownCap, in.tailCutNext );
+    std::string tailStanza = "," + renderFileTailJson( *in.fileTail, kForFileTailShownCap );
 
     bool        sigsCapped         = false;   // the LADDER's verdict: decides the budget_bytes= stanza
     rw::SigsCutReport sigsCut;               // cut-fix lane A: what the array cut (gate or ladder) — "capped" and the sigs_* keys
@@ -1439,6 +1428,56 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
             if( isSigsBuffered )
             {
                 sigsJson.assign( block.bytes );
+            }
+        }
+        // round C (RESERVE SECTIONS FIRST, the XML twin's rule): the tail is funded from the rows at the soft target's cut, and
+        // the rows past the cut fill what it left of T — never below the cut. Re-rendered only when that narrows the rows; the
+        // first render's redaction count and note tallies are replaced, and a failed re-render keeps the first render whole.
+        if( isSigsBuffered && in.tokenBudget > 0 && sigsCut.pastTarget > 0 )
+        {
+            constexpr std::size_t kSigsWrapperBytes = 13;   // the array's frame (serialize.h forSigsBudgets' wrapper allowance)
+            const std::size_t cutRows     = sigsJson.size() - std::min( sigsJson.size(), sigsCut.pastTargetBytes );
+            const rw::FileTail cutTail    = rw::computeFileTail( in.ing, in.rank, *in.evidence, rw::rowsAtTargetIds( jsonShownIds, in.rank, sigsCut.pastTarget ),
+                                                             in.rootArg, in.task );
+            const std::size_t tailBytes   = forLensJsonTailStanza( cutTail, in.tokenBudget, bundleBudget > cutRows ? bundleBudget - cutRows : 0u ).size();
+            const std::size_t rowDropFill = ( bundleBudget > tailBytes ? bundleBudget - tailBytes : 0u ) + kSigsWrapperBytes;
+            if( rowDropFill < sigsBudgets.rowDrop )
+            {
+                const rw::SigsCutReport                firstCut     = sigsCut;
+                const bool                             firstCapped  = sigsCapped;
+                const std::size_t                      firstDropped = sigsDroppedPositive;
+                const JsonSigNoteCounts                firstNotes   = noteCounts;
+                const std::vector<rw::NodeId>          firstShown   = jsonShownIds;
+                const std::optional<rw::RedactCounts>  redactFirst  = in.redact != nullptr ? std::optional<rw::RedactCounts>( *in.redact ) : std::nullopt;
+                if( redactBeforeSigs )
+                {
+                    *in.redact = *redactBeforeSigs;
+                }
+                noteCounts                  = JsonSigNoteCounts {};
+                sigsCut                     = rw::SigsCutReport {};
+                sigsCut.continuationRequest = &cutNext;
+                sigsCut.rowDropBudgetBytes  = rowDropFill;
+                rw::MemoryStream refillStream;
+                bool             refilled = false;
+                if( std::FILE* const rm = rw::openChargeStream( refillStream ) )
+                {
+                    packSigs( rm, sigsBudget, &sigsCapped, &sigsDroppedPositive, &jsonShownIds, &sigsCut );
+                    const rw::MemoryStreamBytes refill = refillStream.finish();
+                    if( refill.isWhole )
+                    {
+                        sigsJson.assign( refill.bytes );
+                        refilled = true;
+                    }
+                }
+                if( !refilled )
+                {
+                    sigsCut = firstCut;  sigsCapped = firstCapped;  sigsDroppedPositive = firstDropped;  noteCounts = firstNotes;
+                    jsonShownIds = firstShown;
+                    if( redactFirst )
+                    {
+                        *in.redact = *redactFirst;
+                    }
+                }
             }
         }
         ForLensBlockCharge sigsCharge;   // the sink: an unmeasured block takes the omitting path below
@@ -1536,11 +1575,12 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
                                             ? ",\"budget_bytes\":" + std::to_string( kForPayloadBudgetBytes )
                                             : std::string();
 
-    // DEEP-TAIL, explicit-regime fit (forLensJsonTailStanza above): residual-funded, sigs untouched.
-    // lane 2: same rule as the XML twin — the tail excludes the files of the rows actually emitted, not the whole surface
-    const rw::FileTail jsonTail = rw::computeFileTail( in.ing, in.rank, jsonShownIds, in.rootArg );
-    tailStanza = forLensJsonTailStanza( jsonTail, in.tokenBudget, bundleBudget > sigsJson.size() ? bundleBudget - sigsJson.size() : 0u,
-                                        in.tailCutNext );   // soft: the rows' leftover funds the tail; D-4: its cut's continuation
+    // DEEP-TAIL (FOLD C: page 0 of the file page), the explicit-regime fill (forLensJsonTailStanza above): reserve first — funded
+    // from what the rows AT THE CUT left of the bundle budget (the same share the refill above priced the rows against)
+    // lane 2: the rank rows exclude the files of the rows emitted (after a refill: the rows it kept — the XML twin's rule)
+    const std::size_t  jsonCutRows = sigsJson.size() - std::min( sigsJson.size(), sigsCut.pastTargetBytes );
+    const rw::FileTail jsonTail    = rw::computeFileTail( in.ing, in.rank, *in.evidence, jsonShownIds, in.rootArg, in.task );
+    tailStanza = forLensJsonTailStanza( jsonTail, in.tokenBudget, bundleBudget > jsonCutRows ? bundleBudget - jsonCutRows : 0u );
     const std::size_t bundleBytesBase   = header.size() + sigsJson.size() + notesStanza.size()
                                         + surfaceCountsStanza.size() + tailStanza.size() + envelopeTextBytes
                                         + droppedPositiveStanza.size()   // A2: 0 bytes on the (overwhelming) no-drop path
@@ -2447,25 +2487,23 @@ ForAutoBodiesResult buildForEnrichment( const rw::Config& cfg, const rw::IngestR
     return out;
 }
 
-// DEEP-TAIL d2 — the XML tail render + its explicit-regime fit, a free function over runForLens' locals
-// (that function is already one of the largest in this file — the ForLensHeaderParts precedent). Default
-// regime: the full row cap, bytes riding on top (est_tokens measures them). Explicit regime: rows fit the
-// residual the rendered bundle actually left; the shell's bytes were reserved ahead of the body walk
-// (kForFileTailShellReserve inside the enrichment's committed sum), so the disclosure always fits.
-// fix round 4 (rule 5, review rv-wrap-recipe-k29 F1): under an explicit ceiling the cut tail carries `cutNextAttr` —
-// the --for file page (forTailNext in runForLensPass) that lists every positive-score file — and the shell reserve the caller
-// took (forTailShellReserve) includes it, so the disclosure still always fits.
+// DEEP-TAIL d2 — the XML tail render + its explicit-regime fill, a free function over runForLens' locals (that function
+// is already one of the largest in this file — the ForLensHeaderParts precedent). Default regime: page 0's full 40 rows
+// (FOLD C), bytes riding on top (est_tokens measures them). Explicit regime (forbudget-soft round C, reserve first): the
+// tail keeps at least its SHARE — the bundle budget less `spentBytes` (the rows at the target cut and the sections served
+// before the tail), never below the empty shell — so rows are added until the element reaches it (its last row may cross
+// it: a soft target makes no byte promise). A cut tail carries next= (the page after its last row) in every regime.
 inline std::string renderForFileTailXml( const rw::FileTail& tail, std::size_t tokenBudget,
-                                         std::size_t bundleBudget, std::size_t spentBytes, std::string_view cutNextAttr = {} )
+                                         std::size_t bundleBudget, std::size_t spentBytes )
 {
     std::vector<char> esc;
     if( tokenBudget == 0 )
     {
-        return rw::renderFileTailXml( tail, rw::kForFileTailShownCap, esc, cutNextAttr );   // forbudget-soft D-4: the cap's next= too
+        return rw::renderFileTailXml( tail, rw::kForFileTailShownCap, esc );
     }
-    const std::size_t tailAllowed = std::max<std::size_t>( bundleBudget > spentBytes ? bundleBudget - spentBytes : 0u,
-                                                           rw::kForFileTailShellReserve + cutNextAttr.size() );
-    return rw::renderFileTailXml( tail, rw::fileTailShownForBudget( tail, tailAllowed, esc, cutNextAttr ), esc, cutNextAttr );
+    const std::size_t share  = std::max<std::size_t>( bundleBudget > spentBytes ? bundleBudget - spentBytes : 0u, rw::kForFileTailShellReserve );
+    const auto        render = [ & ]( std::size_t shown ) { return rw::renderFileTailXml( tail, shown, esc ); };
+    return render( rw::fileTailShownToFill( tail, share, render ) );
 }
 
 
@@ -2834,9 +2872,14 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             forConf.attrs += " budget_tokens=\"" + std::to_string( cfg.tokenBudget ) + "\"";
         }
+        // round C: the body ceiling's two disclosures (this attribute and its note below), measured so a soft target's cut can
+        // be priced without them — a body ceiling never moves a row (formaxtokenscheck (E))
+        std::size_t forBodyCeilingDisclosureBytes = 0;
         if( forBodyCeiling )
         {
+            const std::size_t before = forConf.attrs.size();
             forConf.attrs += " max_tokens=\"" + std::to_string( cfg.maxTokens ) + "\"";
+            forBodyCeilingDisclosureBytes += forConf.attrs.size() - before;
         }
         // forbudget-soft (owner decision 2026-10-14): budget_tokens= is a SOFT target now — rows stop once it is reached and
         // nothing else is shaped by it — so its reading says so (kForSoftBudgetNote); max_tokens= stays the hard body ceiling.
@@ -2848,7 +2891,9 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         }
         if( forBodyCeiling )
         {
+            const std::size_t before = forConf.note.size();
             forConf.note += " [max_tokens=: the token ceiling the detail bodies were shaped against]";
+            forBodyCeilingDisclosureBytes += forConf.note.size() - before;
         }
 
         // §L10b: mention_anchored=/doc_mentions= — the machine form of mentionNote/docMentionNote, EACH
@@ -3069,13 +3114,12 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // header above, and the body otherwise; "" keeps the --expand hint.
         const std::string forTopRowNext = forThin ? forWidenNext( cfg.forTask ) : std::string();
 
-        // DEEP-TAIL d2: the file-grain tail candidates — one shared walk (serialize.h computeFileTail) for
-        // both dialects, computed from the SAME resolved surface <sigs> selects, so the two dialects (and
-        // the MCP twin, which calls the same function) cannot select different tails.
-        const FileTail forFileTail = computeFileTail( ing, lensRank, lensSurfaceIds, flRootArg );   // the DEGRADE paths' tail (surface = head)
-        // H2H-Graft lane 2 (2026-09-07): the tail served must exclude only the files of the sigs rows actually
-        // EMITTED. Excluding the whole 40-candidate surface left every row the byte ladder trimmed (rank 5..40)
-        // in neither section: on rocksdb, three single-file answers at candidate rank 5/10/5 were served nowhere.
+        // DEEP-TAIL d2, FOLD C (forbudget-soft round C): the file-grain tail is page 0 of the --for file page — one shared
+        // model (forpage.h computeFileTail) for both dialects and the MCP twin, from the SAME ranking and term evidence the
+        // `--limit=40` page uses, so the tail, its next= page and the page itself cannot disagree.
+        const FileTail forFileTail = computeFileTail( ing, lensRank, lr.evidence, lensSurfaceIds, flRootArg, cfg.forTask );   // the DEGRADE paths' tail
+        // H2H-Graft lane 2 (2026-09-07): the tail's rank rows exclude only the files of the sigs rows actually EMITTED (a row the
+        // ladder trimmed must land in the tail, never nowhere).
         std::vector<NodeId> shownSigIds;
 
         // L2: --json — the ranking ("sigs") bundle, plus (§B1.4) a COUNT of what <lego>/<compose>/<routes>
@@ -3153,8 +3197,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                                                    &forClone, testedPtr, ampPtr, redactPtr,
                                                                    cfg.packBudgetBytes, cfg.tokenBudget, notesPtr,
                                                                    legoTotal, composeTotal, routesTotal, flRootArg,
-                                                                   &forFileTail, d.notesDegraded, forDocsAfterCode, cfg.forTask,
-                                                                   cfg.packTopN, forRankShapingFlags( cfg ), rw::forWidenNext( cfg.forTask ) } );
+                                                                   &forFileTail, &lr.evidence, d.notesDegraded, forDocsAfterCode, cfg.forTask,
+                                                                   cfg.packTopN, forRankShapingFlags( cfg ) } );
             // §B0: this early return skipped the end-of-function tally below, so a --for --json run redacted
             // SILENTLY — the one stderr line that tells the user a secret was in their tree never appeared.
             reportRedactions( stderr, redactCounts );
@@ -3373,14 +3417,13 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // the first --detail body's floor under a soft target (head-cut with next= when it is over a quarter of the target): the
         // target fills the rows first, and the floor keeps the one body the caller asked for from being cut to nothing
         const std::size_t detailFloorBudget = forSoftTarget ? forDetailFirstBodyFloor( ing, detailIds, bundleBudget ) : 0u;
-        // D-4 (forbudget-soft; PROCESS rule 5: every cut recoverable): a capped <tail> carries next= — the --for file page (one row
-        // per positive-score file, pageable), the one call that lists the files the tail left out — in EVERY regime (the
-        // default's 24-row cap was the one default cut with no continuation; renderFileTailXml writes it on a capped tail only)
-        const std::string forTailNext       = rw::nextAttrXml( rw::forWidenNext( cfg.forTask ) );
         // THE TWO <sigs> BUDGETS (forbudget-soft; serialize.h kForPayloadBudgetBytes / kForRunawayGuardBytes): the target the
         // text-shrink steps aim at, and where the row-drop step aims — the runaway guard (default), or the soft target's rows.
+        // round C (reserve first): a soft target's cut is priced with the full dialect's header and every fixed section — the
+        // graph block included, which the retired ceiling reserved out of the sig claim — so both dialects cut alike
+        const std::size_t    cutHeaderBytes = fullChargedHeaderBytes - std::min( fullChargedHeaderBytes, forBodyCeilingDisclosureBytes );
         const ForSigsBudgets sigsBudgets = forSigsBudgets( forSoftTarget ? bundleBudget : 0u, fixedBytes,
-                                                          fullChargedHeaderBytes + sectionsChargedBytes,
+                                                          cutHeaderBytes + sectionsChargedBytes + graphSection.xml.size(),
                                                           /*tierAtDefault=*/autoBundleMode && cfg.packTopN == 0 );
         const std::size_t    sigsBudget  = sigsBudgets.target;
 
@@ -3448,7 +3491,10 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         forSigsCut.continuationRequest = &forSigsNext;   // knob-honesty-068: IN — the capped block's continuation
         forSigsCut.rowDropBudgetBytes  = sigsBudgets.rowDrop;   // forbudget-soft: IN — where step F aims (guard / soft target)
         forSigsCut.pastTargetDisclosed = !forSoftTarget;        //   …and the default's rows past its target are disclosed
-        sigsPreRendered = preRender( [ & ]( std::FILE* sm )
+        // round C: the render is named so a soft target can narrow its rows past the cut once the sections are served (below);
+        // the redaction tally around it is snapshotted so a second render replaces this one's count instead of adding to it
+        const std::optional<RedactCounts> redactBeforeSigs = redactPtr != nullptr ? std::optional<RedactCounts>( *redactPtr ) : std::nullopt;
+        const auto renderSigs = [ & ]( std::FILE* sm )
             {
                 packSignatures( sm, ing, lensRank, forTopN, cfg.packBudgetBytes, true, fanInPtr, impurePtr, redactPtr,
                                 &forChurn, &forClone, testedPtr, ampPtr,     // Q3: churn/clone/tested/amp folded onto the <d> blocks
@@ -3458,14 +3504,15 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                 flRootArg,                                   // R-E: root-relative p=
                                 rw::forLensRules( forDocsAfterCode, forEndLines ),   // LB-A floor, e= (endLinesFitCeiling), docs reorder
                                 &forDroppedPositive,                         // A2: exact count, see droppedPositiveCount
-                                &shownSigIds,                                // lane 2: the rows actually emitted — the tail excludes THESE files
+                                &shownSigIds,                                // lane 2: the rows actually emitted — the tail's rank rows exclude THESE files
                                 &forSigsCapped,                              // did the ladder fire? — the budget_bytes= clause rides only then
                                 forTopRowNext,                               // L-W: the widening page on a thin answer, else the body
                                 &forSigsCut,                                 // cut-fix lane A: which cut readings the tag owes;
                                                                              //   knob-honesty-068: carries forSigsNext IN
                                 SigRowSpelling{ .elideZeroMetrics = true } );   // lean-answers lane: zero cx=/ccx=/in= omitted (legend: absent = 0)
-            },
-            sigsStr );
+            };
+        sigsPreRendered = preRender( renderSigs, sigsStr );
+        const std::optional<RedactCounts> redactAfterSigs = redactPtr != nullptr ? std::optional<RedactCounts>( *redactPtr ) : std::nullopt;
         if( !sigsPreRendered )
         {
             DISCLOSE( blockCharge, ForLensBlockCharge::DisclosureWhy::SigsUnmeasured,
@@ -3545,7 +3592,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // only when the tag carries the case (serialize.h sigsCutLegendNotes), so the reserve below already covers them.
         // forbudget-soft: on an answer whose ranked head ran PAST the target (past_target=), the number shaped row text and
         // removed no row — its reading says "target" there; elsewhere the payload fit it and the ceiling reading stays true
-        const std::string sigsCeilingNote   = ( forDefaultCeiling ? std::string( forSigsCut.pastTarget > 0 ? rw::kForBudgetBytesTargetNote : rw::kForBudgetBytesNote )
+        std::string       sigsCeilingNote   = ( forDefaultCeiling ? std::string( forSigsCut.pastTarget > 0 ? rw::kForBudgetBytesTargetNote : rw::kForBudgetBytesNote )
                                                                   : std::string() )
             + rw::sigsCutReportLegend( forSigsCut )    // + the continuation's and the docs reorder's readings (docs_after_code=)
             + ( forGuardCut ? rw::forRunawayGuardNote() : std::string() );   // forbudget-soft: the runaway guard's reading, where it cut
@@ -3600,8 +3647,13 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // the one rule both surfaces share, its ONE restoring invocation (used at every site below: the buffered substitution
         // and the degrade-path fallback), and the DEGRADE path it documents: no rendered bytes to gate on there, so the
         // section never collapses and is streamed whole below.
+        // round C (reserve first): a soft target serves the sections whole when they fit what the rows at its cut left
+        const std::size_t sigsAtCutBytes = sigsStr.size() - std::min( sigsStr.size(), forSigsCut.pastTargetBytes );
+        const std::size_t sectionsShare  = bundleBudget - std::min( bundleBudget, forHdrXml.size() + sigsAtCutBytes + routeStr.size() + graphSection.xml.size() );
         const rw::ForSectionStubPlan stubPlan = rw::planForSectionStubs(
-            cfg.sections, cfg.forTask,
+            forSoftTarget && legoPreRendered && composePreRendered ? rw::forSoftSectionsOptIn( cfg.sections, legoStr.size(), composeStr.size(), sectionsShare )
+                                                                   : std::string_view( cfg.sections ),
+            cfg.forTask,
             rw::ForStubbableSection{ .hasContent = legoPreRendered ? !legoStr.empty() : legoStubTotal > 0, .preCapTotal = legoStubTotal,
                                      .rendered = legoPreRendered, .renderedBytes = legoStr.size() },
             rw::ForStubbableSection{ .hasContent = composePreRendered ? !composeStr.empty() : composeStubTotal > 0, .preCapTotal = composeStubTotal,
@@ -3663,9 +3715,10 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         std::size_t detailBodyBudget = 0;
         // forbudget-soft: WHAT THE TRAILING SECTIONS ARE FUNDED FROM (bodies, hops, tail), in the default answer's priority
         // order. DEFAULT: the bundle as it stood at the 7.5 KB target — the rows served past it (past_target=) are not charged
-        // to the sections after them, so no section shrinks because the head was kept whole. SOFT TARGET: the rows already
-        // served (<sigs>, the header rows, the fixed sections); the header and every disclosure are never charged.
-        const std::size_t sigsFundedBytes = sigsStr.size() - std::min( sigsStr.size(), forSoftTarget ? 0u : forSigsCut.pastTargetBytes );
+        // to the sections after them, so no section shrinks because the head was kept whole. SOFT TARGET (round C, reserve
+        // first): the same rule at the soft target's cut — the rows the retired hard ceiling served at this N — so each section
+        // keeps at least the share that ceiling gave it; the header and every disclosure are never charged there.
+        const std::size_t sigsFundedBytes = sigsStr.size() - std::min( sigsStr.size(), forSigsCut.pastTargetBytes );
         const std::size_t rowsSpentBytes  = forHdrXml.size() + sigsFundedBytes + legoStr.size() + composeStr.size() + routeStr.size() + graphSection.xml.size();
         const std::size_t headerSpentBytes = forSoftTarget ? 0u
                                                            : headerStr.size() + 6 + headerSpliceReserve + droppedPositiveSpliceReserve + sectionsStubSpliceReserve;
@@ -3755,15 +3808,80 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             }
         }
 
-        // ── DEEP-TAIL d2: render the file-grain tail, funded LAST (see serialize.h kForFileTailShownCap) ──
-        // Rendered after the bodies decision so the explicit regime spends only the RESIDUAL the rendered
-        // bundle actually left — the sigs and the bodies are byte-identical to a tail-less bundle in the
-        // default regime by construction (nothing above charges these bytes), and under a hard ceiling the
-        // weakest-evidence section is the one that trims. The pre-ladder headerStr sizes the residual (a
-        // ladder rung can only SHRINK the header, so the fit stays conservative and deterministic).
-        const FileTail    forFileTailShown = sigsPreRendered ? computeFileTail( ing, lensRank, shownSigIds, flRootArg ) : forFileTail;
-        const std::string tailStr = renderForFileTailXml( forFileTailShown, cfg.tokenBudget, bundleBudget,
-                                                           rowsSpentBytes + detailSection.xml.size() + autoSection.xml.size(), forTailNext );
+        // ── DEEP-TAIL d2: render the file-grain tail (FOLD C: page 0 of the file page; serialize.h kForFileTailShownCap) ──
+        // Rendered after the bodies decision. Default regime: the full 40 rows ride on top — the sigs and the bodies are
+        // byte-identical to a tail-less bundle by construction (nothing above charges these bytes). A soft target: the tail is
+        // the last trailing section, funded from what the rows AT THE CUT and the sections before it left (reserve first).
+        // its rank rows exclude the shown rows' files — under a soft target the rows AT THE CUT, the ones a refill below keeps
+        const FileTail    forFileTailShown = sigsPreRendered ? computeFileTail( ing, lensRank, lr.evidence,
+                                                                                forSoftTarget ? rowsAtTargetIds( shownSigIds, lensRank, forSigsCut.pastTarget )
+                                                                                              : shownSigIds,
+                                                                                flRootArg, cfg.forTask )
+                                                             : forFileTail;
+        // round C: the --detail bodies are the caller's own request under their own ceiling (--max-tokens / the pack budget), so
+        // they neither fund nor are funded by the reserved sections: the tail's share and the rows' refill both leave them out,
+        // and a body ceiling never moves a row (formaxtokenscheck (E))
+        const std::size_t tailSpentBytes = forSoftTarget ? rowsSpentBytes + autoSection.xml.size()
+                                                         : rowsSpentBytes + detailSection.xml.size() + autoSection.xml.size();
+        std::string       tailStr        = renderForFileTailXml( forFileTailShown, cfg.tokenBudget, bundleBudget, tailSpentBytes );
+
+        // ── round C (owner decision 2026-10-14, RESERVE SECTIONS FIRST): the rows past the soft target's cut fill what the
+        // trailing sections left of T. The sections above were funded as if the rows stopped at the cut (sigsFundedBytes), so
+        // each kept at least the share the retired hard ceiling gave it; the rows are now narrowed to T less those sections'
+        // served bytes — never below the cut (a row budget at or under the target IS the cut: serialize.h sigsRowDropEffective).
+        // Re-rendered only when that budget is narrower than the first render's, which changes only rows past the cut: the
+        // sections' scope (sigsRowsAtTarget) and funding read the rows AT the cut. The first render's redaction count is
+        // replaced, never added to; a re-render whose buffer fails keeps the first render and its readings whole.
+        if( forSoftTarget && sigsPreRendered && forSigsCut.pastTarget > 0 )
+        {
+            constexpr std::size_t kSigsWrapperBytes = 13;   // "<sigs>" + "</sigs>" (serialize.h forSigsBudgets)
+            const std::size_t sectionsServed = forHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size() + graphSection.xml.size()
+                                             + autoSection.xml.size() + tailStr.size();   // not the --detail bodies (above)
+            const std::size_t rowDropFill    = ( bundleBudget > sectionsServed ? bundleBudget - sectionsServed : 0u ) + kSigsWrapperBytes;
+            if( rowDropFill < sigsBudgets.rowDrop )
+            {
+                const rw::SigsCutReport   firstCut       = forSigsCut;
+                const std::size_t         firstDropped   = forDroppedPositive;
+                const bool                firstCapped    = forSigsCapped;
+                const std::vector<NodeId> firstShown     = shownSigIds;
+                const std::optional<RedactCounts> redactNow = redactPtr != nullptr ? std::optional<RedactCounts>( *redactPtr ) : std::nullopt;
+                if( redactPtr != nullptr && redactBeforeSigs && redactAfterSigs )
+                {
+                    for( std::size_t k = 0; k < redactPtr->byKind.size(); ++k )   // take the first render's count back out
+                    {
+                        redactPtr->byKind[k] -= redactAfterSigs->byKind[k] - redactBeforeSigs->byKind[k];
+                    }
+                }
+                forSigsCut                     = rw::SigsCutReport {};
+                forSigsCut.continuationRequest = &forSigsNext;
+                forSigsCut.rowDropBudgetBytes  = rowDropFill;
+                forSigsCut.pastTargetDisclosed = false;
+                std::string refill;
+                if( preRender( renderSigs, refill ) )
+                {
+                    sigsStr = std::move( refill );
+                    // the first render's spelling of the same attribute (no second fixed buffer: fixedbufsweep's census)
+                    droppedPositiveNote = forDroppedPositive > 0 ? " dropped_positive=\"" + std::to_string( forDroppedPositive ) + "\""
+                                                                 : std::string();
+                    sigsCeilingNote = rw::sigsCutReportLegend( forSigsCut );   // a soft target: no default ceiling, no guard reading
+                    // lane 2: a row the refill dropped lands in the tail's rank rows — re-listed against the rows now shown, at
+                    // the same share (the share, not the rows, is what the refill priced)
+                    tailStr = renderForFileTailXml( computeFileTail( ing, lensRank, lr.evidence, shownSigIds, flRootArg, cfg.forTask ),
+                                                    cfg.tokenBudget, bundleBudget, tailSpentBytes );
+                }
+                else
+                {
+                    forSigsCut         = firstCut;
+                    forDroppedPositive = firstDropped;
+                    forSigsCapped      = firstCapped;
+                    shownSigIds        = firstShown;
+                    if( redactNow )
+                    {
+                        *redactPtr = *redactNow;
+                    }
+                }
+            }
+        }
 
         // PR #135: the priced root this header will carry — every late splice and the est_tokens fixpoint, in
         // finishForLensHeader (above runForLens, with each splice's rationale).

@@ -955,16 +955,15 @@ inline std::string forRunawayGuardNote()
 //     runaway guard's share (kForRunawayGuardBytes, the same quantity) — the whole ranked head is the answer.
 //   • SOFT TARGET (an explicit --token-budget / MCP budget_tokens: T = softRowBytes): T is charged against the ROWS inside
 //     <sigs> only — never the header or a disclosure — so the compact and full dialects serve the same rows. Rows drop,
-//     tail-first, until they fit T (+ the "<sigs></sigs>" wrapper); rank 1..4 always ship. Rows are therefore a rank prefix,
-//     monotone in T, and the next row would cross T. The text tier (what A..E aim at) is T itself — a wide target serves the
-//     rows uncut, which is what the cut's own next= (--signatures-only at a wide target) promises — EXCEPT on the default
-//     auto bundle (`tierAtDefault`: bodies or hops ride after the rows and no --pack-top-n names a sig posture), where it is
-//     the DEFAULT target's share as the full dialect's header prices it (`fullFixedBytes`) when T is wider: there a wider
-//     target must not re-inflate row text at the bodies' expense (classb-bytes-memo §2's N=8000 trap), so the rows shrink
-//     as the default's do and a target wider than the complete answer serves the default answer's rows at its tier.
-// This replaced the auto bundle's frozen sig share and the trailing-section reserve of the hard-ceiling regime (classb-bytes-
-// memo §2, lego-charge fix round 4): with no byte promise there is nothing for either to protect — the trailing sections take
-// what the rows leave of T, in the default answer's priority order.
+//     tail-first, until they fit the row budget (+ the "<sigs></sigs>" wrapper); rank 1..4 always ship. Rows are therefore a
+//     rank prefix, monotone in T. RESERVE SECTIONS FIRST (round C, owner decision 2026-10-14): the text tier and the TARGET
+//     CUT (what A..E aim at, and where the default regime's past_target= would start) is the retired hard ceiling's sig
+//     claim — T less the charged header and sections as the full dialect prices them (`fullFixedBytes`), and on the default
+//     auto bundle (`tierAtDefault`: bodies or hops ride after the rows and no --pack-top-n names a sig posture) no more than
+//     the DEFAULT target's share (classb-bytes-memo §2's N=8000 trap: a wider target must not re-inflate row text at the
+//     bodies' expense). The trailing sections (lego/compose scope, hops, bodies, the tail) are funded as if the rows stopped
+//     at that cut, so each keeps at least the share the hard ceiling gave it; the rows past the cut then fill what the
+//     sections leave of T (the caller's second rowDrop, runForLens) — and never fall below the cut.
 struct ForSigsBudgets
 {
     std::size_t target  = 1;   // >= 1: 0 means "no budget" to packSignatures
@@ -977,7 +976,13 @@ inline ForSigsBudgets forSigsBudgets( std::size_t softRowBytes, std::size_t fixe
     ForSigsBudgets b;
     if( softRowBytes > 0 )
     {
-        b.target  = tierAtDefault ? std::min( softRowBytes, share( kForPayloadBudgetBytes, fullFixedBytes ) ) : softRowBytes;
+        // round C (owner decision 2026-10-14, RESERVE SECTIONS FIRST): the target is the retired hard ceiling's sig claim at this
+        // N — T less the bundle's charged header and sections as the FULL dialect prices them (one cut for both dialects), and
+        // on the default auto bundle no more than the default target's share — so the rows at the target are the rows that
+        // ceiling served, the trailing sections are funded as if the rows stopped there (the default regime's own rule), and
+        // the rows past it fill what the sections leave of T (the caller narrows rowDrop to that once they are rendered).
+        const std::size_t cut = share( softRowBytes, fullFixedBytes );
+        b.target  = tierAtDefault ? std::min( cut, share( kForPayloadBudgetBytes, fullFixedBytes ) ) : cut;
         b.rowDrop = softRowBytes + kSigsWrapperBytes;
     }
     else
@@ -1059,137 +1064,36 @@ inline constexpr std::size_t kForAnchorBodyBudgetBytes = 22800;
 // The lens serves ranked SYMBOL heads concentrated in few files; a consumer that needs file-grain recall
 // 20+ deep (external re-measure: the pre-registered retrieval lanes score exactly that) runs out of files
 // long before that depth — measured externally as the ENTIRE recall gap on the one task family where the
-// head's MRR already wins. The tail is the cheapest honest widening: the REMAINING candidate files (a
-// positive lens score, not already in the served head's file set) as PATHS ONLY, in the deterministic
-// best-symbol projection of the same (score desc, id asc) order the head selected with — a projection of
-// the existing ranking, never a re-rank. Zero-score files are NOT served (the LB-A relevance-floor
-// reasoning at file grain: a file whose symbols matched nothing has no evidence to stand on). total=
-// counts every candidate file; shown= what this bundle printed; capped="1" when they differ. The legend
-// labels it file-grain, weaker evidence than the ranked rows above it.
-//   • DEFAULT regime: rows cap at kForFileTailShownCap; the bytes ride ON TOP of the sig/body budgets
-//     (the kForAutoBodyBudgetBytes precedent) and are measured into est_tokens — the ranked head and the
-//     bodies stay byte-identical to a tail-less bundle by construction.
-//   • EXPLICIT --token-budget: the ceiling stays hard — the tail is funded LAST (weakest evidence pays
-//     first): rows fit into the residual the rendered bundle actually left, trimming down to the honest
-//     empty shell. kForFileTailShellReserve rides inside the committed bytes handed to the body walk so
-//     that shell always fits — the kAutoAttrReserve pattern, sized for `<tail total="NNNNN" shown="0"
-//     capped="1"></tail>`.
-inline constexpr std::size_t kForFileTailShownCap     = 24;
+// head's MRR already wins. Zero-score files are NOT served (the LB-A relevance-floor reasoning at file grain).
+// The REMAINING candidate files (a positive lens score, not among the shown head's files) as PATHS ONLY, in the
+// deterministic best-symbol projection of the same (score desc, id asc) order the head selected with — the rank rows.
+// FOLD C (forbudget-soft round C, owner decision 2026-10-14): page 0 of the --for file page (forpage.h computeForFilePage:
+// one row per positive-score file, file-first by the IDF share its top symbols cover) follows them, each row with sym=
+// naming its top symbols, so the answer carries its file grain and a capped tail's next= is the page itself. Measured
+// before the fold (arm M4, the page appended to the answer): 6 of 6 predicted rows reached an R0-missing item, none lost
+// one. The model and its renderers live in forpage.h (they need the page's ranking and its next= composer); the constants
+// and the legend stay here, where the --for header reads them.
+//   • DEFAULT regime: kForFileTailRankCap rank rows + kForFileTailPageRows page rows; the bytes ride ON TOP of the
+//     sig/body budgets and are measured into est_tokens.
+//   • EXPLICIT --token-budget (a soft target): the tail is a trailing section funded first at its share — the
+//     bytes left once the rows at the target cut and the sections before it are paid (runForLens) — and fills
+//     that share (its last row may cross it); every cut carries next=. kForFileTailShellReserve sizes the
+//     empty shell `<tail total="NNNNN" shown="0" capped="1"></tail>`.
+inline constexpr std::size_t kForFileTailRankCap      = 24;   // the rank rows (deep-tail d2): files outside the shown head
+inline constexpr std::size_t kForFileTailPageRows     = 40;   // FOLD C: page 0 of the file page (forpage.h kForPageRowsDefault)
+inline constexpr std::size_t kForFileTailShownCap     = kForFileTailRankCap + kForFileTailPageRows;   // the default row cap
 inline constexpr std::size_t kForFileTailShellReserve = 48;
-
-// The candidate walk, shared by the XML and JSON dialects (and the MCP `for` twin) so the three surfaces
-// cannot select differently. `headIds` is THE BUNDLE'S RESOLVED SURFACE (the exact set <sigs> selects);
-// paths are root-relativized exactly as every emitted p= is (R-R). paths.size() <= kForFileTailShownCap;
-// `total` keeps counting past the cap so the disclosure pair is honest.
-struct FileTail
-{
-    std::vector<std::string> paths;      // first kForFileTailShownCap tail files, ranker order, display form
-    std::size_t              total = 0;  // every remaining candidate file with a positive lens score
-};
-
-inline FileTail computeFileTail( const IngestResult& ing, const std::vector<float>& rank,
-                                 const std::vector<NodeId>& headIds, std::string_view rootArg )
-{
-    FileTail out;
-    std::vector<char> inHead( ing.files.size(), 0 );
-    for( NodeId sid : headIds )
-    {
-        if( sid < ing.symbols.size() && ing.symbols[ sid ].fileId < inHead.size() )
-        {
-            inHead[ ing.symbols[ sid ].fileId ] = 1;
-        }
-    }
-
-    const std::size_t   S = ing.symbols.size();
-    std::vector<NodeId> order( S );
-    for( NodeId i = 0; i < S; ++i )
-    {
-        order[i] = i;
-    }
-    sortutil::radixSortByScoreDescId( order, rank );
-
-    const std::string rootPrefix = rootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( rootArg );
-    std::vector<char> seen( ing.files.size(), 0 );
-    for( std::size_t k = 0; k < S; ++k )
-    {
-        const NodeId id = order[k];
-        if( id >= rank.size() || !( rank[id] > 0.0f ) )
-        {
-            break;                                   // (score desc) order: the zero-score tail is contiguous
-        }
-        const std::uint32_t f = ing.symbols[id].fileId;
-        if( f >= seen.size() || seen[f] || inHead[f] )
-        {
-            continue;
-        }
-        seen[f] = 1;
-        ++out.total;
-        if( out.paths.size() < kForFileTailShownCap )
-        {
-            out.paths.emplace_back( rootArg.empty() ? std::string( ing.files[f] )
-                                                    : std::string( rw::sarif::rootRelativeUri( ing.files[f], rootPrefix ) ) );
-        }
-    }
-    return out;
-}
-
-// The XML shape: `<tail total="T" shown="K" capped="0|1"><t p="…"/>…</tail>` — §P8 vocabulary, always
-// emitted (a total of 0 means genuinely none remain, never not-computed — the B1.4 rule for elements).
-// `shownCap` lets the explicit-budget caller trim rows below the collected count; the JSON twin below
-// renders the SAME decision so the dialects cannot diverge on what was served.
-// `cutNextAttr` (a ready ` next="…"` from nextAttrXml, or empty) rides the open tag ONLY when the tail is cut
-// (shown < total): the call that serves the files left out. Empty (every caller but the --for explicit-budget
-// regime) ⇒ byte-identical to before.
-inline std::string renderFileTailXml( const FileTail& t, std::size_t shownCap, std::vector<char>& esc, std::string_view cutNextAttr = {} )
-{
-    const std::size_t shown = std::min( shownCap, t.paths.size() );
-    std::string x = "<tail total=\"" + std::to_string( t.total )
-                  + "\" shown=\"" + std::to_string( shown )
-                  + "\" capped=\"" + ( shown < t.total ? "1" : "0" ) + "\"";
-    if( shown < t.total )
-    {
-        x += cutNextAttr;
-    }
-    x += ">";
-    for( std::size_t i = 0; i < shown; ++i )
-    {
-        x += "<t p=\"";  x += escapeXml( t.paths[i], esc );  x += "\"/>";
-    }
-    x += "</tail>";
-    return x;
-}
-
-// The JSON twin: `"tail":{"total":T,"shown":K,"files":[…]}` (the caller supplies the leading comma). forbudget-soft (D-4): a
-// capped tail carries `"next":"…"` — the XML twin's next= (the file page that lists what it left out) — before its files.
-inline std::string renderFileTailJson( const FileTail& t, std::size_t shownCap, std::string_view cutNextInvocation = {} )
-{
-    const std::size_t shown = std::min( shownCap, t.paths.size() );
-    std::string j = "\"tail\":{\"total\":" + std::to_string( t.total )
-                  + ",\"shown\":" + std::to_string( shown )
-                  + ( shown < t.total ? nextFieldJson( cutNextInvocation ) : std::string() ) + ",\"files\":[";
-    for( std::size_t i = 0; i < shown; ++i )
-    {
-        if( i > 0 )
-        {
-            j += ",";
-        }
-        j += '"';
-        jsonesc::escapeInto( t.paths[i], j, false, true, false );   // same core appendJsonStrField uses
-        j += '"';
-    }
-    j += "]}";
-    return j;
-}
 
 // The legend clause defining BOTH deep-tail surfaces (the r= rank fact and the <tail> element) — a named
 // constant, shared by the CLI --for header and the MCP `for` twin, so the sigs-budget exemption in each
 // dialect subtracts EXACTLY the bytes the clause adds (the kForAutoBundleLegend pattern). No "--" anywhere:
 // it rides inside an XML comment where "--" is ill-formed (G4).
 inline constexpr std::string_view kForFileTailLegend =
-    "; tail: file-grain tail, WEAKER evidence than the ranked rows (paths only): every positive-score file "
-    "NOT among the shown sigs rows — the files of trimmed rows first, best-symbol rank order; rows are t p=file; total=such files, "
-    "shown=printed, capped=1 when they differ. r= on a ranked row is its 1-based rank in this lens ranking, "
-    "rows in r= order, p= the file (a gap = a budget-trimmed row)";
+    "; tail: file-grain rows, WEAKER evidence than the ranked rows: first t p= alone, the positive-score files NOT among the "
+    "shown sigs rows, the files of trimmed rows first, best-symbol rank order; then t p= sym=, the file page's first 40 rows "
+    "not listed above, file-first (the IDF share of the query's subtokens its top 8 symbols cover), sym= its top symbols; "
+    "total=every positive-score file, shown=printed, capped=1 when they differ, next= the page from its first unprinted row. "
+    "r= on a ranked row is its 1-based rank in this lens ranking, rows in r= order, p= the file (a gap = a budget-trimmed row)";
 
 // R2-AF (round 2, S4): the legend clause defining `<hdr p= of=/>` — verbatim, round-2 amendment §R7. A
 // named constant, shared by the CLI --for header and the MCP `for` twin (rw::forNamedHeaderRows,
@@ -1198,20 +1102,6 @@ inline constexpr std::string_view kForFileTailLegend =
 inline constexpr std::string_view kForHdrLegend =
     "; hdr p= of=: the file the task names (of=) has exactly one same-directory, same-stem declaration/"
     "implementation partner (p=), listed first by name alone: a lookup, not a ranked or graph-derived row";
-
-// Explicit-budget row fit: the largest shown count whose rendered XML fits `budgetBytes` (0 rows always
-// "fits" — the shell is reserved by the caller). Walks down from the collected count; deterministic.
-inline std::size_t fileTailShownForBudget( const FileTail& t, std::size_t budgetBytes, std::vector<char>& esc, std::string_view cutNextAttr = {} )
-{
-    for( std::size_t shown = t.paths.size(); shown > 0; --shown )
-    {
-        if( renderFileTailXml( t, shown, esc, cutNextAttr ).size() <= budgetBytes )
-        {
-            return shown;
-        }
-    }
-    return 0;
-}
 
 // ── COMPACT CONCEPTUAL SERVING (pre-registered: docs/EVALS.md, the T3 route-narrowing round) ──────────
 // On the CONCEPTUAL route — the subtoken+body ranker, the route that names no anchor — the allowance
@@ -8635,6 +8525,18 @@ inline ForSectionStubPlan planForSectionStubs( std::string_view sections, std::s
     return p;
 }
 
+// round C (forbudget-soft, owner decision 2026-10-14: RESERVE SECTIONS FIRST): under a soft target a stubbable section is
+// served whole when the two sections' measured renders fit what the rows at the target cut left of the bundle budget
+// (`shareBytes`). The collapse exists to save bytes a hard ceiling could not spare; a section that fits its share keeps it,
+// because a stub there serves less than the retired ceiling did (forbudget-soft §B5: s078/s083, a 1-interface <lego> became a
+// stub once the soft target's wider rows widened its scope). Otherwise the caller's --sections= stands and the priced
+// collapse (planForSectionStubs) decides. The default regime never calls this: its stub posture is unchanged.
+inline std::string_view forSoftSectionsOptIn( std::string_view sections, std::size_t legoBytes, std::size_t composeBytes,
+                                              std::size_t shareBytes ) noexcept
+{
+    return legoBytes + composeBytes <= shareBytes ? std::string_view( "lego,compose" ) : sections;
+}
+
 // lego-charge (K18 root cause): what <lego>/<compose> cost the <sigs> budget, computed BEFORE the sigs render. It used to be
 // the full pre-rendered bytes, while the default answer serves a collapsing section as a ~120 B stub: textual's 6.5 KB lego
 // left 71 B for <sigs> (4 rows shipped in a 4.6 KB answer under a 7.5 KB ceiling). Now a section is charged as it is SERVED.
@@ -8891,11 +8793,12 @@ inline std::vector<std::vector<NodeId>> legoImplementorsOnSurface( const IngestR
 // was a ceiling and keep the shape they had (§1.3's section invariant: no section loses rows because the head was kept whole).
 // Selected by the r= values the ladder recorded for the past-target rows (cut.pastTargetRanks), not by emission position nor
 // by an r= threshold: the docs reorder (docs_after_code=) moves doc rows below the code rows AND renumbers them.
-// The whole block on a soft target or an answer with nothing past its target. Only <d …>…</d> rows are kept (a file's
+// A soft target scopes them the same way at ITS target cut (round C, reserve first: the rows the retired ceiling served).
+// The whole block on an answer with nothing past its target. Only <d …>…</d> rows are kept (a file's
 // notes ride its rows and are scanned for p= the same way).
 inline std::string sigsRowsAtTarget( std::string_view sigsRendered, const SigsCutReport& cut )
 {
-    if( !cut.pastTargetDisclosed || cut.pastTargetRanks.empty() || cut.pastTarget >= cut.shown )
+    if( cut.pastTargetRanks.empty() || cut.pastTarget >= cut.shown )
     {
         return std::string( sigsRendered );
     }
