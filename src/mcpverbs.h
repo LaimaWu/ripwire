@@ -1913,6 +1913,57 @@ struct McpForAssemblyInputs   // forTaskText's locals the assembly reads, by ref
     const std::vector<std::vector<NodeId>>&    implementors;   // train 26b: ix.g.implementors, for the count-floor lego re-render
     const LexTermEvidence&                     evidence;       // FOLD C: the term evidence the tail's page rows rank by
 };
+// R2-AF (round 2, S4): the <hdr> rows — the CLI twin's exact rule (verbs_for.h renderForHdrRowsXml), duplicated here rather than
+// shared because main.cpp includes this file (mcp.h, line 48) before verbs_for.h (line 525) — the render is ~10 lines over the SAME
+// resolver (rw::forNamedHeaderRows, mention.h), which is the part a divergence would actually cost. "" when there is no row.
+inline std::string mcpForHdrRowsXml( const IngestResult& ing, const std::vector<rw::ForNamedHeaderRow>& rows, std::string_view flRootArg )
+{
+    std::string x;
+    const std::string rootPrefix = flRootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( flRootArg );
+    const auto        rel        = [ & ]( std::uint32_t f ) -> std::string
+    {
+        return flRootArg.empty() ? std::string( ing.files[f] ) : std::string( rw::sarif::rootRelativeUri( ing.files[f], rootPrefix ) );
+    };
+    std::vector<char> esc;
+    for( const rw::ForNamedHeaderRow& row : rows )
+    {
+        // same local invariant as the CLI twin's renderForHdrRowsXml (verbs_for.h): the resolver
+        // (rw::forNamedHeaderRows, mention.h) is the only producer of these ids.
+        ASSUME( row.partnerFile < ing.files.size() && row.namedFile < ing.files.size() );
+        x += "<hdr p=\"";
+        x += rw::escapeXml( rel( row.partnerFile ), esc );
+        x += "\" of=\"";
+        x += rw::escapeXml( rel( row.namedFile ), esc );
+        x += "\"/>";
+    }
+    return x;
+}
+
+// round C (owner decision 2026-10-14, RESERVE SECTIONS FIRST — the CLI twin's rule): under budget_tokens the sections are scoped and
+// served from the rows at the target cut, and the rows past the cut fill what the sections served before the tail (<hdr> rows,
+// <lego>, <compose>, <routes>: `sectionsBytes`) leave of T — never below the cut. The tail rides on top on this twin, as it always
+// did. Re-rendered only when that narrows the rows; the first render's redaction count is replaced, never added to.
+template< class Render >
+inline void mcpForSoftRefill( const McpForAssemblyInputs& in, const Render& renderSigs, std::string& sigsStr, rw::SigsCutReport& cut,
+                              const rw::SigsCutContinuation* next, std::size_t sectionsBytes,
+                              const std::optional<RedactCounts>& before, const std::optional<RedactCounts>& after )
+{
+    if( in.budgetTokens == 0 || cut.pastTarget == 0 )
+    {
+        return;
+    }
+    const std::size_t rowDrop = forSoftRowDropFill( budgetBytesForTokens( in.budgetTokens ), sectionsBytes );
+    if( rowDrop >= in.rowDropBudget )
+    {
+        return;
+    }
+    redactTakeBack( in.redact, before, after );
+    cut                     = rw::SigsCutReport {};
+    cut.continuationRequest = next;
+    cut.rowDropBudgetBytes  = rowDrop;
+    sigsStr                 = captureXml( renderSigs );   // assembleMcpFor's own render seam (its renderToString)
+}
+
 // round C (RESERVE SECTIONS FIRST, the CLI twin's rule): the --sections= posture the stub plan reads — under budget_tokens the two
 // sections ride whole when they fit what the rows at the cut (and <routes>) left of the budget (serialize.h forSoftSectionsOptIn)
 inline std::string_view mcpSoftSections( const McpForAssemblyInputs& in, const std::string& sigsStr, const rw::SigsCutReport& cut,
@@ -1968,31 +2019,9 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
     mcpSigsCut.continuationRequest = &mcpSigsNext;   // knob-honesty-068: IN — the capped block's machine continuation
     mcpSigsCut.rowDropBudgetBytes  = in.rowDropBudget;   // forbudget-soft: IN — the CLI twin's two budgets
     mcpSigsCut.pastTargetDisclosed = budgetTokens == 0;
-    // R2-AF (round 2, S4): first rows inside the root, right after the legend — the CLI twin's exact rule
-    // (verbs_for.h renderForHdrRowsXml), duplicated here rather than shared because main.cpp includes this
-    // file (mcp.h, line 48) before verbs_for.h (line 525) — the render is ~10 lines over the SAME resolver
-    // (rw::forNamedHeaderRows, mention.h), which is the part a divergence would actually cost.
-    std::string mcpHdrXml;
-    if( !mcpForHdrRows.empty() )
-    {
-        const std::string mcpHdrRootPrefix = flRootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( flRootArg );
-        const auto         mcpHdrRel        = [ & ]( std::uint32_t f ) -> std::string
-        {
-            return flRootArg.empty() ? std::string( ing.files[f] ) : std::string( rw::sarif::rootRelativeUri( ing.files[f], mcpHdrRootPrefix ) );
-        };
-        std::vector<char> mcpHdrEsc;
-        for( const rw::ForNamedHeaderRow& row : mcpForHdrRows )
-        {
-            // same local invariant as the CLI twin's renderForHdrRowsXml (verbs_for.h): the resolver
-            // (rw::forNamedHeaderRows, mention.h) is the only producer of these ids.
-            ASSUME( row.partnerFile < ing.files.size() && row.namedFile < ing.files.size() );
-            mcpHdrXml += "<hdr p=\"";
-            mcpHdrXml += rw::escapeXml( mcpHdrRel( row.partnerFile ), mcpHdrEsc );
-            mcpHdrXml += "\" of=\"";
-            mcpHdrXml += rw::escapeXml( mcpHdrRel( row.namedFile ), mcpHdrEsc );
-            mcpHdrXml += "\"/>";
-        }
-    }
+    // R2-AF (round 2, S4): first rows inside the root, right after the legend (mcpForHdrRowsXml); rendered before the rows so the
+    // round C refill below prices them
+    const std::string mcpHdrXml = mcpForHdrRowsXml( ing, mcpForHdrRows, flRootArg );
     std::vector<rw::NodeId> mcpShownIds;   // lane 2: the sigs rows actually emitted — the tail's rank rows exclude these files
     // round C: the render is named so a soft target can narrow its rows past the cut once the sections are served (below); the
     // redaction tally around it is snapshotted so a second render replaces this one's count instead of adding to it
@@ -2085,19 +2114,8 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
     // before the tail (<hdr> rows, <lego>, <compose>, <routes>) leave of T — never below the cut. The tail rides on top here,
     // as it always did on this twin. Re-rendered only when that narrows the rows; the first render's redaction count is
     // replaced, never added to.
-    if( budgetTokens > 0 && mcpSigsCut.pastTarget > 0 )
-    {
-        const std::size_t mcpRowDropFill = forSoftRowDropFill( budgetBytesForTokens( budgetTokens ),
-                                                               mcpHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size() );
-        if( mcpRowDropFill < in.rowDropBudget )
-        {
-            redactTakeBack( redact, redactBeforeSigs, redactAfterSigs );
-            mcpSigsCut                     = rw::SigsCutReport {};
-            mcpSigsCut.continuationRequest = &mcpSigsNext;
-            mcpSigsCut.rowDropBudgetBytes  = mcpRowDropFill;
-            sigsStr                        = renderToString( renderSigs );
-        }
-    }
+    mcpForSoftRefill( in, renderSigs, sigsStr, mcpSigsCut, &mcpSigsNext, mcpHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size(),
+                      redactBeforeSigs, redactAfterSigs );
     // A2: same insert-before-"-->" splice as the CLI twin (verbs_for.h) — absent entirely on the (overwhelming)
     // no-drop path, so headerStr's bytes are unchanged there (byte-identical to the pre-A2 output). Bare
     // spelling (no bracket note), same economy and same reasoning as the CLI twin — byte-consistent between
