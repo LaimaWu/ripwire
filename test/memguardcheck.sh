@@ -682,7 +682,9 @@ fi
 #       cut tree is released unscored and BOTH commits' changed files answer the kinds that need only them — one cut
 #       ingest + two changed-file ingests, a degraded header (ingest_scope="changed-files", memory_stop= naming the stop),
 #       exit 2 if a row gates else 6, and no row names a file outside the diff (a/extra.c). test/qddegradecheck.sh pins
-#       the degraded answer's contents; this arm pins that nothing of the cut full tree reaches it.
+#       the degraded answer's contents; this arm pins that nothing of the cut full tree reaches it. Cache-stats lines: 2 —
+#       the cut base ingest and the target's changed files; the base's changed-file set is EMPTY (a/extra.c is an add),
+#       and an ingest that parses nothing prints no cache-stats line.
 for trip in parse:3 crawl:20; do
     qr_run "$trip"; rc=$?
     gt="$( sed -n 's/.*<quality-delta [^>]* gating="\([0-9]*\)".*/\1/p' "$TMP/b22.out" | head -n 1 )"
@@ -690,8 +692,9 @@ for trip in parse:3 crawl:20; do
     outside="$( grep -o ' p="[^"]*"' "$TMP/b22.out" | grep -vc ' p="a/extra\.c:' )"
     if [ -n "$gt" ] && [ "$rc" = "$want" ] && grep -q '<quality-delta [^>]* ingest_scope="changed-files"' "$TMP/b22.out" \
        && grep -q "<quality-delta [^>]* memory_stop=\"${trip%%:*}\"" "$TMP/b22.out" && [ "$outside" = 0 ] \
-       && [ "$( grep -c '^ripwire: cache-stats ' "$TMP/b22.err" )" = 3 ] && [ "$( grep -c '^ripwire: memory limit ' "$TMP/b22.err" )" = 1 ]; then
-        ok "(B23) $trip cuts the base commit's ingest: the cut tree is never scored — 1 cut + 2 changed-file ingests answer (exit $rc, degraded header)"
+       && [ "$( grep -c '^ripwire: cache-stats ' "$TMP/b22.err" )" = 2 ] && [ "$( grep -c '^ripwire: memory limit ' "$TMP/b22.err" )" = 1 ] \
+       && grep -q "^ripwire: memory limit .*stopped the ${trip%%:*} of the base commit" "$TMP/b22.err"; then
+        ok "(B23) $trip cuts the base commit's ingest: the cut tree is never scored — the changed files answer (exit $rc, degraded header naming the base's stop)"
     else
         no "(B23) $trip rc=$rc (want $want) gating=$gt rows-outside-the-diff=$outside ingests=$( grep -c '^ripwire: cache-stats ' "$TMP/b22.err" ) stderr: $( grep '^ripwire: [^c]' "$TMP/b22.err" | head -c 250 )"
     fi

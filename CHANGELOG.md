@@ -36,7 +36,8 @@ empty: there acks match by their recorded key only), and `kinds_next=`, the call
 the same two commits. One stderr line says the same.
 
 - **Exit codes.** A partial answer exits **2** when a row of a kind that ran gates (the skipped kinds can only add
-  rows, so that verdict is final) and **6** (new) otherwise — a partial answer is never a clean exit 0. Exit **5** now
+  rows, so that verdict is final — except, with ack-healing skipped, for a row only an identity-healed ack hides in the
+  full answer) and **6** (new) otherwise — a partial answer is never a clean exit 0. Exit **5** now
   means, for this form, that even the changed files did not fit, or that they cannot stand in for the trees (a symlink
   anywhere, an export-subst attribute, or a changed `.gitattributes` with an export attribute), on one line naming why.
   `--quality-ack` under pressure refuses (exit 5, ledger untouched): accepting needs every kind's rows.

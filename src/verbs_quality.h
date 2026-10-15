@@ -1182,7 +1182,8 @@ inline constexpr const char* kQdDegradedLegend =
     "legacy-scheme re-key or a content-id match would hide in the full answer is shown here, and can gate). kinds_next= is the "
     "call that runs exactly the skipped kinds over the same two commits, at a max-memory just above memory_need= (after a stop: "
     "twice the limit, a guess, since no need was measured). EXIT 2 when a row of a kind that ran gates (final: the skipped kinds "
-    "only add rows); otherwise EXIT 6, a partial answer with no gating row, never 0. ";
+    "only add rows, though with ack-healing skipped that row may be one an identity-healed ack hides in the full answer); "
+    "otherwise EXIT 6, a partial answer with no gating row, never 0. ";
 inline constexpr const char* kQdMemoryStopLegend =
     "memory_stop= names the guard's stop that sent this answer to the changed files: crawl (the crawl line, an eighth of the "
     "limit grown) or parse (half the limit) is a soft line, memory_pressure=1 when the OS pressure signal stopped it instead, "
