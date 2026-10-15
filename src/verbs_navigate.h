@@ -583,6 +583,32 @@ inline std::vector<char> usesChosenCallers( const rw::IngestResult& ing, const r
     return isChosenCaller;
 }
 
+// TS/JS literal receivers (issue #163 twin): candidate test for literal polyfills.
+// A definition is a polyfill candidate for a literal receiver when it is a scope-matched Method (e.g. JS Foo.prototype.NAME),
+// compatible in language, and within the reference's own root in multi-root workspaces.
+[[nodiscard]] inline bool
+isJsTsLitPolyfillCandidate( const rw::IngestResult& ing, rw::NodeId candSym, std::string_view ctor, const rw::Reference& r ) noexcept
+{
+    if( candSym >= ing.symbols.size() )
+    {
+        return false;
+    }
+    const rw::Symbol& sy = ing.symbols[ candSym ];
+    if( sy.kind != rw::SymKind::Method || sy.scope != ctor || !rw::langCompatible( sy.lang, r.lang ) )
+    {
+        return false;
+    }
+    if( !ing.fileRoot.empty() )
+    {
+        if( sy.fileId >= ing.fileRoot.size() || r.fileId >= ing.fileRoot.size()
+            || ing.fileRoot[ sy.fileId ] != ing.fileRoot[ r.fileId ] )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 // TS/JS literal receivers (issue #163 twin): only names that are built-in members of the literal's type
 // leave --uses when an in-repo definition shares the name. If no in-repo definition exists (valueDefs empty),
 // return false so external/stdlib queries (e.g. --uses=repeat on hono) answer with external="1" instead of refusing.
@@ -609,7 +635,7 @@ isBuiltinLiteralCall( const rw::IngestResult& ing, const rw::Reference& r,
     {
         return false;
     }
-    for( NodeId def : valueDefs )
+    for( NodeId def : checkDefs )
     {
         if( isJsTsLitPolyfillCandidate( ing, def, ctor, r ) )
         {
