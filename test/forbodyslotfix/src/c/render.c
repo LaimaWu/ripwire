@@ -8,25 +8,45 @@ render_screen(struct screen *s)
 {
     int row, col;
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 1 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 2 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 3 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 4 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 5 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 6 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 7 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 8 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 9 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 10 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 11 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 12 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 13 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 14 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 15 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 16 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 17 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 18 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 19 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 20 + col) % 90)); } }
+    /* 画面の各セルを行ごとに塗る、最後の列まで続ける — écran: chaque cellule, ligne après ligne */
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 21 + col) % 90)); } }
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 22 + col) % 90)); } }
     for (row = 0; row < s->rows; row++) { for (col = 0; col < s->cols; col++) { s->cells[row][col] = (char)(32 + ((row * 23 + col) % 90)); } }
