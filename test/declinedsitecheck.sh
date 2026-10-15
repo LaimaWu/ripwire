@@ -15,8 +15,10 @@
 #   * --callees=X: one <dc n="NAME" l="LINE" cands="K" via="declined"/> row per declined call X makes, after the <s>
 #     rows; a gate decline says which gate: gate="builtin" (the builtin-method name gate) or gate="std" (the C++
 #     standard-member gate); a tier-3 decline carries no gate=.
-#   * --callers=T (and --safe-delete=T): one <dc in="CALLER" p="FILE:LINE" cands="K"/> row per declined call whose
-#     candidate list holds a definition of T.
+#   * --callers=T (and --safe-delete=T): one <dc in="CALLER" p="FILE:LINE" cands="K" via="declined"/> row per declined
+#     call whose candidate LIST holds a definition of T (membership, never the called name: two lists can share a name).
+#   * Ruby: a call the side cut declined (in reach, on the other side of self) reads gate="side"; a declined `new` names
+#     the called name (n="new"), never its `initialize` candidates.
 #   * NEVER an edge: count=, the <s> rows, hop_tested=/hop_untested= and every MCP "count" are exactly what the
 #     pre-change binary printed; a <dc> row is its own element and never carries via="name" or prov=.
 #   * Capped AND counted: declined_calls= stays the total; past the cap the root says dc_shown="N" (rows printed) and
@@ -50,6 +52,14 @@
 #   (F) legend: defined where rows ride, absent elsewhere (and on the zero-decline corpus test/lpinfix)
 #   (G) the cap, on generated trees: callers and callees past the cap are counted, file-first, with dc_next=
 #   (H) safe-delete never reads none-found beside a declined possible caller; impact and for print no <dc>
+#   (K) the gates review's amendments: R1 the three Ruby decline sites (new, side, side over the assembled set) and
+#       the W1 discriminator (callers by candidate list, never by name); R2 rows == declined_calls= on every uncut
+#       answer (== declined_iface= on the TS interface answers); R3 W1 on the declinedlistcheck shapes (language and
+#       root filters split one name into two lists); R4 the default attribute whitelist (no candidates leak under
+#       another key, CLI JSON or MCP); R5 every other root attribute is the pre-change literal; R6 dc_next= runs and
+#       names every declined line; R7 the cut is file-first in path order; R8 safe-delete's possible-callers is
+#       per definition (control none-found; the TS interface method flips); R9/R10 the legend drops "no count or
+#       row" where rows ride and reads the review's hedge wording
 #   (I) determinism; (J) the predicates can fail
 #
 # RED ON BASE: every [P] arm fails on a binary without the record (no <dc> row anywhere); [C] arms are controls that
@@ -358,6 +368,168 @@ say( x.ok and x.dc == [] and x.a( "reaches" ) == "0" and x.a( "declined_calls" )
      "impact prints no <dc> row (declined_calls= stays its disclosure); reaches=\"0\" unchanged", x.why() )
 rc, out = run( GO, "--for=doPackage" )
 say( rc == 0 and "<dc" not in out and len( out ) > 0, "[C] h_for", "--for prints no <dc> row", "rc=%s" % rc )
+
+# ── (K) the gates review's amendments (R1–R11): the wrong implementations that passed every arm above ────────────────
+print( "=== (K) R1 Ruby decline sites: new, and the two side cuts (gate=\"side\") ===" )
+RBS = os.path.join( FIX, "rbside" )
+x = ask( RBS, "callees", "build" )
+say( x.ok and len( x.dc ) == 1 and x.dc[ 0 ].get( "n" ) == "new" and x.dc[ 0 ].get( "l" ) == "3" and x.dc[ 0 ].get( "cands" ) == "1"
+     and "gate" not in x.dc[ 0 ], "[P] k_rb_new",
+     "ruby --callees=build names the declined `new` at base.rb:3 as n=\"new\" (the CALLED name, never the candidate's initialize), cands=1, no gate=", x.why() )
+x = ask( RBS, "callers", "lib/child.rb:initialize" )
+say( x.ok and dc_sites( x, ( "in", "p" ) ) == [ ( "build", "lib/base.rb:3", "1" ) ], "[P] k_rb_new_callers",
+     "ruby --callers=lib/child.rb:initialize names the declined `new` in build at lib/base.rb:3", x.why() )
+for sel in ( "run", "make" ):
+    x = ask( RBS, "callees", sel )
+    say( x.ok and len( x.dc ) == 1 and x.dc[ 0 ].get( "n" ) == "helper" and x.dc[ 0 ].get( "l" ) == "7" and x.dc[ 0 ].get( "gate" ) == "side",
+         "[P] k_rb_side_%s" % sel, "ruby --callees=%s names helper@7 with gate=\"side\" (in reach, other side of self)" % sel, x.why() )
+for sel, only in ( ( "lib/widget.rb:helper", "run" ), ( "lib/gadget.rb:helper", "make" ) ):
+    x = ask( RBS, "callers", sel )
+    say( x.ok and [ d.get( "in" ) for d in x.dc ] == [ only ], "[P] k_rb_w1_%s" % only,
+         "W1: --callers=%s names ONLY %s (candidate-list membership, never the called name)" % ( sel, only ), x.why() )
+
+print( "=== (K) R3 W1 on the declinedlistcheck shapes: lists, never names ===" )
+ONE, WS = os.path.join( TMP, "one" ), os.path.join( TMP, "ws" )
+def cfn( path, name, body ):
+    os.makedirs( os.path.dirname( path ), exist_ok = True )
+    open( path, "w" ).write( "int %s()\n{\n    return %s;\n}\n" % ( name, body ) )
+def pyfn( path, name, body ):
+    os.makedirs( os.path.dirname( path ), exist_ok = True )
+    open( path, "w" ).write( "def %s():\n    return %s\n" % ( name, body ) )
+cfn( os.path.join( ONE, "a", "size.cpp" ), "size", "1" ); cfn( os.path.join( ONE, "b", "size.cpp" ), "size", "2" )
+pyfn( os.path.join( ONE, "c", "size.py" ), "size", "3" ); pyfn( os.path.join( ONE, "d", "size.py" ), "size", "4" )
+cfn( os.path.join( ONE, "e", "caller.cpp" ), "e_call", "size()" ); pyfn( os.path.join( ONE, "f", "caller.py" ), "f_call", "size()" )
+for r in ( "r1", "r2" ):
+    cfn( os.path.join( WS, r, "x.cpp" ), "foo", "1" ); cfn( os.path.join( WS, r, "y", "foo.cpp" ), "foo", "2" )
+    cfn( os.path.join( WS, r, "z", "caller.cpp" ), "%s_call" % r, "foo()" )
+for sel, only in ( ( "a/size.cpp:size", "e_call" ), ( "c/size.py:size", "f_call" ) ):
+    x = ask( ONE, "callers", sel )
+    say( x.ok and [ d.get( "in" ) for d in x.dc ] == [ only ] and x.a( "declined_calls" ) == "1", "[P] k_list_%s" % only,
+         "W1: --callers=%s names only %s (the language filter splits `size` into two lists)" % ( sel, only ), x.why() )
+rc, out = 124, ""
+try:
+    p = subprocess.run( [ BIN, "r1", "r2", "--no-cache", "--callers=r1/x.cpp:foo" ], cwd = WS, capture_output = True, text = True, timeout = 240 )
+    rc, out = p.returncode, p.stdout
+except subprocess.TimeoutExpired:
+    pass
+x = Answer( rc, out, "callers" )
+say( x.ok and [ d.get( "in" ) for d in x.dc ] == [ "r1_call" ], "[P] k_list_roots",
+     "W1: two roots: --callers=r1/x.cpp:foo names only r1's caller (the root filter splits `foo`)", x.why() )
+
+print( "=== (K) R2 rows == declined_calls= on every uncut answer; TS: == declined_iface= too ===" )
+uncut = [ ( "go callees doPackage", ask( GO, "callees", "doPackage" ) ), ( "rb callers define_task", ask( RB, "callers", "lib/rake/task_manager.rb:define_task" ) ),
+          ( "py callers fetch", ask( PYF, "callers", "fetch" ) ), ( "py callees load", ask( PYF, "callees", "load" ) ),
+          ( "go safe-delete Package", ask( GO, "safe-delete", "deb/deb.go:Package" ) ), ( "rbside callees build", ask( RBS, "callees", "build" ) ),
+          ( "rbside callers widget helper", ask( RBS, "callers", "lib/widget.rb:helper" ) ), ( "bb callees param_get", ask( BB, "callees", "py/plain.py:param_get" ) ),
+          ( "sm callees stdAppend", ask( SM, "callees", "stdAppend" ) ), ( "ts callees dispatch", ask( TS, "callees", "dispatch" ) ),
+          ( "cpp callees drive", ask( CPP, "callees", "drive" ) ), ( "df callers java", ask( DF, "callers", "java/alpha/Alpha.java:jbody" ) ) ]
+bad = [ "%s: rows=%d declined_calls=%s" % ( tag, len( x.dc ), x.a( "declined_calls" ) ) for tag, x in uncut
+        if not ( x.ok and x.a( "dc_shown" ) is None and len( x.dc ) > 0 and str( len( x.dc ) ) == x.a( "declined_calls" ) ) ]
+say( not bad, "[P] k_rows_eq_declined", "on %d uncut answers the <dc> row count equals declined_calls= (every decline site records)" % len( uncut ), "; ".join( bad ) )
+for sel in ( "src/routers/trie/router.ts:match", "src/routers/router.ts:match" ):
+    x = ask( TS, "callers", sel )
+    say( x.ok and len( x.dc ) == 1 and x.a( "declined_calls" ) == "1" and x.a( "declined_iface" ) == "1" and x.dc[ 0 ].get( "in" ) == "dispatch",
+         "[P] k_ts_iface_%s" % sel.split( "/" )[ -2 ], "ts --callers=%s: one <dc> (dispatch) == declined_calls=\"1\" == declined_iface=\"1\"" % sel, x.why() )
+
+print( "=== (K) R4 attribute whitelist; R11 via=\"declined\" on every form ===" )
+CALLEE_KEYS, CALLER_KEYS = { "n", "l", "cands", "via", "gate", "of_def" }, { "in", "p", "cands", "via", "gate", "of_def" }
+ce = [ x for tag, x in uncut if x.tag == "callees" ] + [ ask( G, "callees", "big" ) ]
+cr = [ x for tag, x in uncut if x.tag != "callees" ] + [ ask( G, "callers", "alpha/a.py:poll" ) ]
+say( all( x.ok and x.dc for x in ce ) and all( set( d ) <= CALLEE_KEYS and d.get( "via" ) == "declined" for x in ce for d in x.dc ), "[P] k_keys_callees",
+     "default callees <dc> keys stay within {n,l,cands,via,gate,of_def}, via=\"declined\" on each", str( [ d for x in ce for d in x.dc if set( d ) - CALLEE_KEYS ][ :3 ] ) )
+say( all( x.ok and x.dc for x in cr ) and all( set( d ) <= CALLER_KEYS and d.get( "via" ) == "declined" for x in cr for d in x.dc ), "[P] k_keys_callers",
+     "default callers and safe-delete <dc> keys stay within {in,p,cands,via,gate,of_def}, via=\"declined\" on each (Q2)",
+     str( [ d for x in cr for d in x.dc if set( d ) - CALLER_KEYS or d.get( "via" ) != "declined" ][ :3 ] ) )
+jbad = []
+for root, flag in ( ( GO, "--callees=doPackage" ), ( RB, "--callers=lib/rake/task_manager.rb:define_task" ) ):
+    rc, out = run( root, flag, "--json" )
+    try:
+        j = json.loads( out )
+    except ValueError:
+        j = {}
+    if rc != 0 or not j.get( "dc" ) or any( "cand" in d or "candidates" in d for d in j[ "dc" ] ):
+        jbad.append( "%s rc=%s dc=%s" % ( flag, rc, j.get( "dc" ) ) )
+say( not jbad, "[P] k_json_nocand", "--json default \"dc\" entries carry no \"cand\" (candidates only on legend=full)", "; ".join( jbad ) )
+mbad = []
+for tool, root, sym in ( ( "find_symbol", GO, "doPackage" ), ( "find_referencing_symbols", RB, "lib/rake/task_manager.rb:define_task" ) ):
+    m = mcp( tool, { "path": root, "symbol": sym } ) or {}
+    ds = m.get( "declined_sites", [] )
+    if not ds or any( "candidates" in d or "cand" in d or d.get( "via" ) != "declined" for d in ds ):
+        mbad.append( "%s declined_sites=%s" % ( tool, ds ) )
+say( not mbad, "[P] k_mcp_nocand", "MCP default \"declined_sites\" entries carry via=\"declined\" and no \"candidates\"", "; ".join( mbad ) )
+
+print( "=== (K) R5 the root keeps every base attribute (dc_shown/dc_next aside) ===" )
+BASE_ROOTS = [
+    ( "a_go", GO, "callees", "doPackage", { "schema": "ripwire.callees/v1", "of": "doPackage", "defs": "1", "count": "2", "hop_tested": "0", "hop_untested": "2",
+      "declined_calls": "3", "graph_ambiguous": "0", "graph_unresolved": "0", "graph_unindexed": "1", "counts_floor": "1", "next": "--expand=doPackage" } ),
+    ( "a_rb", RB, "callers", "lib/rake/task_manager.rb:define_task", { "schema": "ripwire.callers/v1", "of": "lib/rake/task_manager.rb:define_task", "defs": "1",
+      "count": "2", "hop_tested": "0", "hop_untested": "2", "declined_calls": "6", "graph_ambiguous": "0", "graph_unresolved": "0", "counts_floor": "1",
+      "next": "--uses=define_task" } ),
+    ( "d_callers", PYF, "callers", "fetch", { "schema": "ripwire.callers/v1", "of": "fetch", "defs": "2", "count": "2", "hop_tested": "0", "hop_untested": "2",
+      "declined_calls": "4", "graph_ambiguous": "0", "graph_unresolved": "0", "counts_floor": "1", "next": "--uses=fetch" } ),
+    ( "g_callers", G, "callers", "alpha/a.py:poll", { "schema": "ripwire.callers/v1", "of": "alpha/a.py:poll", "defs": "1", "count": "0", "hop_tested": "0",
+      "hop_untested": "0", "declined_calls": "76", "graph_ambiguous": "0", "graph_unresolved": "0", "counts_floor": "1", "next": "--uses=poll" } ),
+]
+for tag, root, verb, sel, want in BASE_ROOTS:
+    x = ask( root, verb, sel )
+    got = { k: v for k, v in ( x.root.attrib.items() if x.root is not None else [] ) if k not in ( "root", "dc_shown", "dc_next" ) }
+    say( x.ok and x.dc and got == want, "[P] k_root_%s" % tag, "%s --%s=%s: rows ride and every other root attribute is the base literal" % ( tag, verb, sel ),
+         "got %s" % { k: ( got.get( k ), want.get( k ) ) for k in set( got ) | set( want ) if got.get( k ) != want.get( k ) } )
+
+print( "=== (K) R6 dc_next is a call that lists every site; R7 the cut is file-first in path order ===" )
+import shlex
+G_CALLER_LINES = { "big/big.py:%d" % l for l in range( 2, 42 ) } | { "callers/f%d.py:%d" % ( f, 2 + 4 * k ) for f in range( 3 ) for k in range( 12 ) }
+for verb, sel, want_lines in ( ( "callers", "alpha/a.py:poll", G_CALLER_LINES ), ( "callees", "big", { str( l ) for l in range( 2, 42 ) } ) ):
+    x = ask( G, verb, sel )
+    nxt = x.a( "dc_next" ) or ""
+    rc, out = run( G, *shlex.split( nxt ) ) if nxt else ( 1, "" )
+    if verb == "callers":
+        named = set( re.findall( r' p="([^"]+)"', out ) )
+    else:
+        named = { m for m in re.findall( r'<dc [^>]*\bl="(\d+)"', out ) }
+    say( x.ok and nxt and rc == 0 and want_lines <= named, "[P] k_dc_next_%s" % verb,
+         "the printed dc_next= (%s) runs (rc 0) and names all %d declined call lines" % ( nxt or "absent", len( want_lines ) ),
+         "rc=%s missing=%d" % ( rc, len( want_lines - named ) ) )
+x = ask( G, "callers", "alpha/a.py:poll" )
+first4 = [ d.get( "p", "" ).rsplit( ":", 1 )[ 0 ] for d in x.dc[ :4 ] ]
+say( x.ok and first4 == [ "big/big.py", "callers/f0.py", "callers/f1.py", "callers/f2.py" ], "[P] k_cut_order",
+     "the first four callers rows of the cut are four distinct files in path order (each file's first site before any file's second)", "first4=%s" % first4 )
+
+print( "=== (K) R8 safe-delete: possible-callers only where a declined call could mean THIS definition ===" )
+x = ask( GO, "safe-delete", "cmd/package.go:onlyResolved" )
+say( x.ok and x.a( "risk" ) == "none-found" and x.dc == [] and x.a( "declined_calls" ) is None, "[C] k_sd_ctrl",
+     "a definition no declined call could mean keeps risk=\"none-found\" on a tree that has declines", x.why() )
+x = ask( TS, "safe-delete", "src/routers/trie/router.ts:match" )
+say( x.ok and x.a( "risk" ) == "possible-callers" and [ d.get( "in" ) for d in x.dc ] == [ "dispatch" ], "[P] k_sd_ts",
+     "ts --safe-delete=src/routers/trie/router.ts:match reads risk=\"possible-callers\" with the dispatch <dc> row (base: none-found)", x.why() )
+
+print( "=== (K) R9 + R10 legend: no \"no count or row\" where <dc> rides; the hedge in the review's words ===" )
+R10_EDGE = "NOT an edge and NOT a caller or callee claim"
+R10_K1   = "(K may be 1)"
+lbad = []
+for tag, x in uncut + [ ( "g callers", ask( G, "callers", "alpha/a.py:poll" ) ) ]:
+    if not x.ok or not x.dc:
+        lbad.append( "%s: no <dc> rows" % tag )
+    elif "no count or row" in x.legend:
+        lbad.append( "%s: says 'no count or row'" % tag )
+say( not lbad, "[P] k_legend_drift", "no answer carrying <dc> rows also says 'no count or row' (compact)", "; ".join( lbad[ :4 ] ) )
+lbad = []
+for root, verb, sel in ( ( GO, "callees", "doPackage" ), ( RB, "callers", "lib/rake/task_manager.rb:define_task" ), ( GO, "safe-delete", "deb/deb.go:Package" ),
+                         ( RBS, "callees", "run" ) ):
+    x = ask( root, verb, sel, "--legend=full" )
+    if not x.ok or not x.dc:
+        lbad.append( "%s: no <dc> rows" % sel )
+    elif "no count or row" in x.legend or R10_EDGE not in x.legend or R10_K1 not in x.legend or LEG_DONT not in x.legend or LEG_NOT not in x.legend:
+        lbad.append( "%s: legend lacks the R10 wording or keeps 'no count or row'" % sel )
+    elif x.err:
+        lbad.append( "%s: %s" % ( sel, x.err ) )
+say( not lbad, "[P] k_legend_full", "--legend=full: the <dc> clause reads 'NOT an edge and NOT a caller or callee claim', '(K may be 1)', 'proved none', "
+     "'not a claim this call reaches any of them'; no 'no count or row'; well-formed XML", "; ".join( lbad ) )
+x = ask( RBS, "callees", "run", "--legend=full" )
+say( x.ok and x.dc and "gate=side" in x.legend, "[P] k_legend_side", "the gate=side reading rides where a gate=\"side\" row does", x.why() )
+x = ask( GO, "safe-delete", "deb/deb.go:Package", "--legend=full" )
+say( x.ok and "possible-callers:" in x.legend and "not a safety reading" in x.legend and "none-found beside declined_calls=" not in x.legend,
+     "[P] k_legend_sd", "safe-delete's risk sentence defines possible-callers and says it is not a safety reading", x.why() )
 
 # ── (I) determinism ────────────────────────────────────────────────────────────────────────────────────────────────
 print( "=== (I) determinism ===" )
