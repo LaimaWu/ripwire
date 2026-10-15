@@ -1340,8 +1340,9 @@ struct ForJsonRefillState   // the first render's outputs, by reference: the ref
 // it had at the same N). One function for the refill's reserve and the final fill, so the two read the same number.
 inline std::size_t forLensJsonTailShare( std::size_t tokenBudget, std::size_t bundleBytes, std::size_t fixedBytes, std::size_t cutRowsBytes ) noexcept
 {
-    return std::max( rw::forSoftSectionsShare( bundleBytes, cutRowsBytes ),
-                     rw::forSoftSectionsShare( rw::ceilingAllowanceBytes( tokenBudget ), fixedBytes + cutRowsBytes ) );
+    const std::size_t softShare    = rw::forSoftSectionsShare( bundleBytes, cutRowsBytes );                                   // T less the rows at the cut
+    const std::size_t retiredShare = rw::forSoftSectionsShare( rw::ceilingAllowanceBytes( tokenBudget ), fixedBytes + cutRowsBytes );   // the hard ceiling's
+    return softShare > retiredShare ? softShare : retiredShare;
 }
 
 struct ForJsonRefillBudgets
