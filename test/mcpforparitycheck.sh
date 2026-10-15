@@ -214,15 +214,21 @@ def rows( s ):
     return m.group( 1 ), [ c for _, c in out ], len( m.group( 2 ).encode() ) + elided
 try: n, bpt = int( sys.argv[ 2 ] ), float( sys.argv[ 3 ] )
 except ValueError: print( "BAD premise: no numeric budget / bytes-per-token constant" ); sys.exit( 0 )
-a, ref = rows( sys.stdin.read() ), rows( open( sys.argv[ 1 ] ).read() )
+ans = sys.stdin.read()
+a, ref = rows( ans ), rows( open( sys.argv[ 1 ] ).read() )
+# round C (forbudget-soft, owner decision 2026-10-14: RESERVE SECTIONS FIRST; rule 4): the sections served before the tail
+# (<hdr> rows, <lego>, <compose>, <routes>) are reserved first and the rows past the cut fill what they leave of T — the
+# maximality bound is T less those sections' bytes (U, read off the answer); the tail rides on top on this twin
+after = ans.split( '</sigs>', 1 )[ 1 ] if '</sigs>' in ans else ''
+U = len( after.split( '<tail', 1 )[ 0 ].encode() ) + sum( len( h.encode() ) for h in re.findall( r'<hdr [^>]*/>', ans.split( '<sigs', 1 )[ 0 ] ) )
 if a is None or ref is None or not ref[ 1 ]: print( "BAD premise: no <sigs> rows (answer or uncut reference)" ); sys.exit( 0 )
 T = int( n * bpt ); attrs, ar, charged = a; k = len( ar ); bad = []
 if not ( charged <= T or k <= 4 ): bad.append( "rows charged %d B > T=%d with %d rows (floor 4)" % ( charged, T, k ) )
 if k < len( ref[ 1 ] ):
-    if charged + ref[ 1 ][ k ] <= T - 160: bad.append( "cut at %d with the next row (%d B) fitting T" % ( k, ref[ 1 ][ k ] ) )
+    if charged + ref[ 1 ][ k ] <= T - U - 160: bad.append( "cut at %d with the next row (%d B) fitting T less the sections (U=%d)" % ( k, ref[ 1 ][ k ], U ) )
     nb = re.search( r'\bnext_budget_tokens="([0-9]+)"', attrs )
     if not ( 'capped="1"' in attrs and nb and int( nb.group( 1 ) ) > n ): bad.append( "NX: a cut without capped + next_budget_tokens > %d" % n )
-print( "%s ST rows=%d/%d charged=%d T=%d%s" % ( "BAD" if bad else "OK", k, len( ref[ 1 ] ), charged, T, ( ": " + "; ".join( bad ) ) if bad else "" ) )
+print( "%s ST rows=%d/%d charged=%d T=%d U=%d%s" % ( "BAD" if bad else "OK", k, len( ref[ 1 ] ), charged, T, U, ( ": " + "; ".join( bad ) ) if bad else "" ) )
 PY
 for tb in 900 1200 1600 2000 6000; do
     b="$( mcp_for_budget "$INERT_Q" "$tb" )"

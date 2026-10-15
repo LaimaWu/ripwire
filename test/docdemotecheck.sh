@@ -99,6 +99,10 @@ PY
 "$BIN" docdemotefix --for="$BUGQ" --no-route --format=candidates --no-cache >"$TMP/noroute.xml" 2>/dev/null
 "$BIN" docdemotefix --for="$BUGQ"     --no-cache >"$TMP/bugfor.xml"    2>/dev/null
 "$BIN" docdemotefix --for="$TRACEQ"   --no-cache >"$TMP/tracefor.xml"  2>/dev/null
+# RE-PIN 2026-10-15 (lane forbudget-soft round C, FOLD C; rule 4): docdemotegolden_for.xml 5839 -> 6529 B (est_tokens "2340" ->
+# "2616") and docdemotegolden_noroute.xml 9350 -> 10039 B ("3309" -> "3584"). Only the <tail> (page 0 of the file page after the
+# rank rows, sym= on its rows, total= every positive-score file), the tail legend clause and est_tokens= moved (checked byte-equal
+# with those three stripped).
 # RE-PIN 2026-10-08 (train 26b: lean-answers merged): docdemotegolden_for.xml 6167 -> 5851 B (est_tokens "2467" -> "2340")
 # and docdemotegolden_noroute.xml 9695 -> 9364 B ("3441" -> "3309"). Only the zero elision and its legend reading moved:
 # undoing it (zeros back, reading removed, est_tokens=/at= masked) gives the train-side goldens exactly, on both fixtures,

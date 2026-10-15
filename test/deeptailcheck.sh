@@ -13,6 +13,12 @@
 #       best-symbol projection of the same ranking, disclosed as total=/shown=/capped= and labelled
 #       weaker-than-head evidence in the legend.
 #
+# FOLD C (forbudget-soft round C, owner decision 2026-10-14; rule 4): the <tail> now lists the RANK rows above (paths only,
+# `<t p=…/>`, the files outside the shown head, files of trimmed rows first) and THEN page 0 of `--for=TASK --limit=40`
+# minus the files already listed, each with sym= (`<t p=… sym=…/>`). total= counts every positive-score file (the page's
+# total=), so the old "total = files outside the head" denominator is a by-design break: the arms below read the rank rows
+# (no sym=) where they used to read the whole tail, and pin the page rows against the page itself.
+#
 # RED-FIRST: every d1/d2 assertion below FAILS against the prebuilt d8e257d baseline (which emits neither
 # surface); each fuses presence with content bytes so a bare-exit arm cannot pass green-while-inert.
 #
@@ -52,24 +58,53 @@ Q="widget frobnicate helper"
 XML="$( "$BIN" "$CORPUS" --no-cache --for="$Q" --pack-top-n=4 --legend=full 2>/dev/null )"
 printf '%s' "$XML" > "$TMP/for.xml"
 
-# ── 1) d2: the file-grain tail — present, complete, disjoint from the head ─────────────────────────────
+# ── 1) d2: the file-grain tail — present, complete; its rank rows disjoint from the head ───────────────
+# a python reader of the tail: "rank" rows (no sym=) and "page" rows (p, sym), in order
+cat > "$TMP/tail.py" <<'PY'
+import re, sys, html
+s = open( sys.argv[ 1 ] ).read()
+m = re.search( r"<tail\b[^>]*>(.*?)</tail>", s, re.S )
+rows = re.findall( r'<t p="([^"]*)"( sym="([^"]*)")?/>', m.group( 1 ) if m else "" )
+mode = sys.argv[ 2 ]
+for p, has, sym in rows:
+    if mode == "rank" and not has: print( html.unescape( p ) )
+    if mode == "page" and has: print( html.unescape( p ) + "\t" + html.unescape( sym ) )
+    if mode == "all": print( html.unescape( p ) + "\t" + html.unescape( sym ) )
+PY
+# the page rows a tail must carry: page 0 of the file page, minus the rank rows, in page order
+pagerows(){ "$BIN" "$CORPUS" --no-cache --for="$Q" --limit=40 2>/dev/null | python3 -c '
+import re, sys, html
+rank = set( open( sys.argv[ 1 ] ).read().split( "\n" ) )
+for p, sym in re.findall( r"<f p=\"([^\"]*)\"[^>]*? sym=\"([^\"]*)\"", sys.stdin.read() ):
+    p = html.unescape( p )
+    if p not in rank: print( p + "\t" + html.unescape( sym ) )
+' "$1"; }
 TAILTAG="$( printf '%s' "$XML" | grep -o '<tail [^>]*>' | head -1 )"
 case "$TAILTAG" in
-    *'total="11"'*'shown="11"'*'capped="0"'*) ok "tail element carries the exact split: $TAILTAG" ;;
+    *'total="12"'*'shown="12"'*'capped="0"'*) ok "tail element: every positive-score file (12), all shown: $TAILTAG" ;;
     '') no "no <tail> element in the --for bundle (d2 missing)" ;;
-    *)  no "tail element has wrong counts: $TAILTAG (expected total=11 shown=11 capped=0)" ;;
+    *)  no "tail element has wrong counts: $TAILTAG (expected total=12 shown=12 capped=0)" ;;
 esac
-TROWS="$( printf '%s' "$XML" | grep -o '<t p="[^"]*"/>' | wc -l | tr -d ' ' )"
-if [ "$TROWS" = "11" ]; then ok "tail serves 11 <t p= rows"; else no "tail rows: $TROWS (expected 11)"; fi
-# disjoint: no tail path may also be a head row's p= (P7: the head is flat <d … p=> rows, no <f> wrapper)
-DUP="$( printf '%s' "$XML" | python3 -c '
+python3 "$TMP/tail.py" "$TMP/for.xml" rank > "$TMP/rank1.txt"
+TROWS="$( grep -c . "$TMP/rank1.txt" )"
+if [ "$TROWS" = "11" ]; then ok "tail serves 11 rank rows (<t p=/> without sym=): the files outside the one-file head"; else no "tail rank rows: $TROWS (expected 11)"; fi
+# disjoint: no rank row may also be a head row's p= (P7: the head is flat <d … p=> rows, no <f> wrapper)
+DUP="$( python3 - "$TMP/for.xml" "$TMP/rank1.txt" <<'PY'
 import re, sys
-s = sys.stdin.read()
-head  = set( re.findall( r"<d [^>]*?\bp=\"([^\"]*)\"", s ) )
-tails = re.findall( r"<t p=\"([^\"]*)\"/>", s )
-print( sum( 1 for t in tails if t in head ) )
-' )"
-if [ "$DUP" = "0" ]; then ok "tail files are disjoint from the head's files"; else no "$DUP tail file(s) duplicate a head file"; fi
+s = open( sys.argv[ 1 ] ).read()
+head = set( re.findall( r"<d [^>]*?\bp=\"([^\"]*)\"", s ) )
+print( sum( 1 for t in open( sys.argv[ 2 ] ).read().split() if t in head ) )
+PY
+)"
+if [ "$DUP" = "0" ]; then ok "tail rank rows are disjoint from the head's files"; else no "$DUP tail rank row(s) duplicate a head file"; fi
+# FOLD C: the page rows ARE the file page's first 40 rows not listed above, in page order, sym= included
+python3 "$TMP/tail.py" "$TMP/for.xml" page > "$TMP/page1.txt"
+pagerows "$TMP/rank1.txt" > "$TMP/page1_want.txt"
+if [ -s "$TMP/page1_want.txt" ] && cmp -s "$TMP/page1.txt" "$TMP/page1_want.txt"; then
+    ok "FOLD C: the tail's page rows are the --limit=40 page's rows not listed above ($( grep -c . "$TMP/page1.txt" ), sym= equal)"
+else
+    no "FOLD C: tail page rows differ from the file page's ($( grep -c . "$TMP/page1.txt" ) vs $( grep -c . "$TMP/page1_want.txt" ))"
+fi
 
 # ── 2) d1: r= on every ranked row, exactly the ranks 1..K ──────────────────────────────────────────────
 RSEQ="$( printf '%s' "$XML" | grep -o '<d l="[^>]*>' | grep -o ' r="[0-9]*"' | grep -o '[0-9]*' | sort -n | tr '\n' ' ' )"
@@ -92,17 +127,20 @@ d = json.load( open( sys.argv[1] ) )
 xml = open( sys.argv[2] ).read()
 rs = sorted( s.get( "r", 0 ) for s in d.get( "sigs", [] ) )   # P7: flat sigs array
 tail = d.get( "tail" )
-xtails = re.findall( r"<t p=\"([^\"]*)\"/>", xml )
+import html
+xrows = [ ( html.unescape( p ), html.unescape( y ) ) for p, _, y in re.findall( r"<t p=\"([^\"]*)\"( sym=\"([^\"]*)\")?/>", xml ) ]
+xrows = [ ( p, y ) for p, _h, y in [ ( r[0], None, r[1] ) for r in xrows ] ]
 checks = [
     bool( rs ) and rs == list( range( 1, len( rs ) + 1 ) ),
-    tail is not None and tail.get( "total" ) == 4 and tail.get( "shown" ) == 4,
-    tail is not None and tail.get( "files" ) == xtails,
+    tail is not None and tail.get( "total" ) == 12 and tail.get( "shown" ) == 12
+        and [ f for f, y in zip( tail.get( "files", [] ), tail.get( "sym", [] ) ) if not y ] == [ "w09.py", "w10.py", "w11.py", "w12.py" ],
+    tail is not None and list( zip( tail.get( "files", [] ), tail.get( "sym", [] ) ) ) == xrows,
 ]
 print( " ".join( "Y" if c else "N" for c in checks ) )
 EOF
 )"
 case "$JV" in
-    "Y Y Y") ok "JSON: r keys are contiguous 1..K; tail total/shown=4/4; files match the XML tail exactly" ;;
+    "Y Y Y") ok "JSON: r keys are contiguous 1..K; tail total/shown=12/12, rank rows w09..w12; files+sym match the XML tail exactly" ;;
     *)       no "JSON dialect wrong (r-seq / tail-counts / xml-parity = $JV)" ;;
 esac
 
@@ -121,28 +159,31 @@ if [ "$PTJ" = "Y" ]; then ok "pack-task JSON ranking rows carry r"; else no "pac
 TB="$( "$BIN" "$CORPUS" --no-cache --for="$Q" --pack-top-n=4 --token-budget=220 2>/dev/null )"
 TBTAG="$( printf '%s' "$TB" | grep -o '<tail [^>]*>' | head -1 )"
 case "$TBTAG" in
-    *'total="11"'*) ok "tight --token-budget keeps the tail disclosure: $TBTAG" ;;
+    *'total="12"'*) ok "tight --token-budget keeps the tail disclosure: $TBTAG" ;;
     '') no "tight --token-budget dropped the <tail> element entirely (disclosure lost)" ;;
     *)  no "tight-budget tail lost its denominator: $TBTAG" ;;
 esac
 TBSHOWN="$( printf '%s' "$TBTAG" | grep -o 'shown="[0-9]*"' | grep -o '[0-9]*' )"
 TBCAP="$(   printf '%s' "$TBTAG" | grep -o 'capped="[0-9]"' | grep -o '[0-9]' )"
-if [ -n "$TBSHOWN" ] && [ "$TBSHOWN" -lt 11 ] && [ "$TBCAP" = "1" ]; then
-    ok "tight budget trimmed tail rows (shown=$TBSHOWN) and disclosed capped=1"
+if [ -n "$TBSHOWN" ] && [ "$TBSHOWN" -lt 12 ] && [ "$TBCAP" = "1" ] && printf '%s' "$TBTAG" | grep -q ' next="'; then
+    ok "tight budget trimmed tail rows (shown=$TBSHOWN), disclosed capped=1 and named next="
 else
     no "tight budget did not trim/disclose honestly (shown=$TBSHOWN capped=$TBCAP)"
 fi
 if printf '%s' "$TB" | xmllint --noout - 2>/dev/null; then ok "tight-budget bundle stays well-formed"; else no "tight-budget bundle fails xmllint"; fi
 
-# ── 7) zero-tail honesty: a head that covers every file still emits the element (0 = none remain) ──────
+# ── 7) zero-tail honesty: a head that covers every file leaves NO rank row (0 = none remain); the page rows still
+#       list every positive-score file (FOLD C), so total= = the 3 files and nothing is cut ─────────────────────────
 MINI="$TMP/mini"
 mkdir -p "$MINI"
 for i in 1 2 3; do
     printf 'def widget_frobnicate_%s():\n    """widget frobnicate helper %s"""\n    return 1\n' "$i" "$i" > "$MINI/m$i.py"
 done
-Z="$( "$BIN" "$MINI" --no-cache --for="$Q" 2>/dev/null | grep -o '<tail [^>]*>' | head -1 )"
+"$BIN" "$MINI" --no-cache --for="$Q" 2>/dev/null > "$TMP/mini.xml"
+Z="$( grep -o '<tail [^>]*>' "$TMP/mini.xml" | head -1 )"
+ZR="$( python3 "$TMP/tail.py" "$TMP/mini.xml" rank | grep -c . )"
 case "$Z" in
-    *'total="0"'*'shown="0"'*'capped="0"'*) ok "all-files-in-head bundle still emits <tail total=0 shown=0> (none remain, said out loud)" ;;
+    *'total="3"'*'shown="3"'*'capped="0"'*) [ "$ZR" = "0" ] && ok "all-files-in-head bundle: 0 rank rows (none remain), the 3 files as page rows, nothing cut ($Z)"                                                           || no "all-files-in-head bundle lists $ZR rank row(s) — a head file served as 'outside the head'" ;;
     *) no "zero-tail bundle wrong/missing: '$Z'" ;;
 esac
 
@@ -159,11 +200,17 @@ T9_TAG="$( printf '%s' "$T9" | grep -o '<tail [^>]*>' | head -1 )"
 T9_TOTAL="$( printf '%s' "$T9_TAG" | grep -oE 'total="[0-9]+"' | grep -oE '[0-9]+' )"
 case "$T9_SIGS" in *'capped="1"'*) ok "(9) fixture guard: the 900-token budget trims sigs rows ($T9_SIGS; $T9_NSHOWN file(s) shown)" ;;
                    *) no "(9) fixture guard: expected the ladder to trim at --token-budget=900, got '$T9_SIGS'" ;; esac
-[ "$T9_TOTAL" = "$(( 12 - T9_NSHOWN ))" ] \
-    && ok "(9a) tail total=$T9_TOTAL = 12 files minus the $T9_NSHOWN shown (trimmed surface rows are IN the tail)" \
-    || no "(9a) tail total=$T9_TOTAL but $T9_NSHOWN file(s) are shown — $(( 12 - T9_NSHOWN - ${T9_TOTAL:-0} )) ranked file(s) served nowhere ($T9_TAG)"
+printf '%s' "$T9" > "$TMP/t9.xml"
+T9_RANK="$( python3 "$TMP/tail.py" "$TMP/t9.xml" rank | grep -c . )"
+T9_SHOWNROWS="$( printf '%s' "$T9_TAG" | grep -oE 'shown="[0-9]+"' | grep -oE '[0-9]+' )"
+# every file outside the shown rows is a rank row (12 - shown files), or the cut tail stops short of them and says so (next=)
+if [ "$T9_TOTAL" = "12" ] && { [ "$T9_RANK" = "$(( 12 - T9_NSHOWN ))" ] || { [ "$T9_SHOWNROWS" -lt "$(( 12 - T9_NSHOWN ))" ] && printf '%s' "$T9_TAG" | grep -q ' next="'; }; }; then
+    ok "(9a) tail total=12; rank rows $T9_RANK = 12 files minus the $T9_NSHOWN shown, or a cut tail naming next= (trimmed rows land IN the tail)"
+else
+    no "(9a) tail total=$T9_TOTAL, $T9_RANK rank row(s) but $T9_NSHOWN file(s) shown — a ranked file served nowhere ($T9_TAG)"
+fi
 T9_EXPECT_FIRST="$( for i in 01 02 03 04 05 06 07 08 09 10 11 12; do printf '%s\n' "w$i.py"; done | grep -vxF -f <( printf '%s\n' "$T9_SHOWN_FILES" ) | head -1 )"
-T9_FIRST="$( printf '%s' "$T9" | grep -o '<t p="[^"]*"' | head -1 | sed 's/<t p="//;s/"//' )"
+T9_FIRST="$( python3 "$TMP/tail.py" "$TMP/t9.xml" rank | head -1 )"
 if [ -n "$T9_FIRST" ]; then
     [ "$T9_FIRST" = "$T9_EXPECT_FIRST" ] && ok "(9b) first tail row is the best trimmed file ($T9_FIRST)" \
                                           || no "(9b) first tail row '$T9_FIRST', expected the best trimmed file '$T9_EXPECT_FIRST'"
@@ -173,15 +220,22 @@ fi
 # The JSON twin runs its OWN ladder (its rows cost different bytes), so it may trim one row more or less at the
 # same budget; the contract is per dialect — its tail total = 12 minus the files ITS sigs rows show.
 T9J="$( "$BIN" "$CORPUS" --no-cache --for="$Q" --token-budget=900 --json 2>/dev/null )"
-T9J_TOTAL="$( printf '%s' "$T9J" | grep -o '"tail":{"total":[0-9]*' | grep -oE '[0-9]+$' )"
-T9J_NSHOWN="$( printf '%s' "$T9J" | grep -o '"p":"w[0-9]*\.py"' | sort -u | grep -c . )"   # sigs rows carry "p":; the tail carries "files":[]
-[ -n "$T9J_TOTAL" ] && [ "$T9J_TOTAL" = "$(( 12 - T9J_NSHOWN ))" ] \
-    && ok "(9c) JSON twin: tail total=$T9J_TOTAL = 12 minus its own $T9J_NSHOWN shown file(s)" \
-    || no "(9c) JSON twin: tail total='$T9J_TOTAL' but its sigs show $T9J_NSHOWN file(s)"
+T9JV="$( printf '%s' "$T9J" | python3 -c '
+import json, sys
+d = json.load( sys.stdin ); t = d.get( "tail", {} )
+shown = { s.get( "p" ) for s in d.get( "sigs", [] ) }
+rank = [ f for f, y in zip( t.get( "files", [] ), t.get( "sym", [] ) ) if not y ]
+cut_ok = t.get( "shown", 0 ) < 12 - len( shown ) and "next" in t
+print( "%s %d %d %d" % ( "Y" if t.get( "total" ) == 12 and ( len( rank ) == 12 - len( shown ) or cut_ok ) and not ( set( rank ) & shown ) else "N",
+                         t.get( "total", -1 ), len( rank ), len( shown ) ) )' )"
+case "$T9JV" in
+    Y*) ok "(9c) JSON twin: tail total=12, rank rows = 12 minus its own shown files, none a shown file ($T9JV)" ;;
+    *)  no "(9c) JSON twin: tail wrong (ok total rank shown = $T9JV)" ;;
+esac
 
 # ── 8) the legend defines both new surfaces where the reader meets them ────────────────────────────────
 HDR="$( printf '%s' "$XML" | sed 's/-->.*//' )"
-if printf '%s' "$HDR" | grep -q 'tail: file-grain tail'; then ok "legend defines the tail (file-grain, weaker evidence)"; else no "legend does not define the tail"; fi
+if printf '%s' "$HDR" | grep -q 'tail: file-grain rows, WEAKER evidence' && printf '%s' "$HDR" | grep -q 'sym= its top symbols'; then ok "legend defines the tail (file-grain, weaker evidence; rank rows, then page rows with sym=)"; else no "legend does not define the tail"; fi
 if printf '%s' "$HDR" | grep -q 'r= on a ranked row'; then ok "legend defines r= (true ranker order)"; else no "legend does not define r="; fi
 
 # ── 9) determinism + well-formedness ───────────────────────────────────────────────────────────────────
@@ -204,7 +258,7 @@ import json, sys
 r = json.load( sys.stdin )
 print( "" if "error" in r else r["result"]["content"][0]["text"] )
 ' )"
-if printf '%s' "$MCP_INNER" | grep -q '<tail total='; then ok "MCP for verb serves the file-grain tail"; else no "MCP for verb has no <tail>"; fi
+if printf '%s' "$MCP_INNER" | grep -q '<tail total=' && printf '%s' "$MCP_INNER" | grep -q '<t p="[^"]*" sym="'; then ok "MCP for verb serves the file-grain tail, page rows included (sym=)"; else no "MCP for verb has no <tail> or no page rows"; fi
 if printf '%s' "$MCP_INNER" | grep -q '<d l="[^>]*r="1"'; then ok "MCP for verb rows carry r="; else no "MCP for verb rows carry no r="; fi
 
 echo

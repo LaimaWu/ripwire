@@ -9,8 +9,11 @@ pack-signatures 1801 1784 2116 --pack-signatures
 expand 541 542 455 --expand=billableTotal
 # for-named re-pinned 2026-10-07: its --for rows now carry e= (+237 B, +64 o200k over its twin);
 # for-named-noe is its e=-free twin (RIPWIRE_FOR_ENDLINES=never, byte-identical to the pre-e= answer). Other rows: 2026-09-12 pins.
-for-named 962 958 1290 --for=billableTotal
-for-named-noe 898 893 1195 RIPWIRE_FOR_ENDLINES=never --for=billableTotal
+# for-named / for-named-noe re-pinned 2026-10-15 (forbudget-soft round C, FOLD C: the <tail> carries page 0 of the file page;
+# 962->1031 / 898->967 o200k, measured with pin.py; the twins still differ by exactly the e= rows, 64 o200k).
+for-named 1031 1026 1392 --for=billableTotal
+for-named-noe 967 961 1298 RIPWIRE_FOR_ENDLINES=never --for=billableTotal
 # for-budgeted re-pinned 2026-10-14 (forbudget-soft: an explicit budget is a soft row target — the header is no longer shed to fit, measured with pin.py; other rows kept).
-for-budgeted 855 849 1201 --for=dedupe --token-budget=400
+# …and 2026-10-15 (round C: reserve sections first — the tail keeps its share and carries page rows with sym=; 855->982 o200k).
+for-budgeted 982 974 1376 --for=dedupe --token-budget=400
 pack-task 882 862 1104 --pack-task=dedupe

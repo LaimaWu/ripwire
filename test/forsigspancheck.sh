@@ -65,7 +65,8 @@
 #        --token-budget=8000 still reorder and carry docs_after_code= with its reading, XML, JSON and MCP; a question that
 #        names docs keeps score order at 1200 too.
 #        A BODY ceiling (--max-tokens=N --detail=K, XML only: --json refuses the pair, MCP `for` has no max_tokens) is the third tight
-#        ceiling: the same twin equality, est_tokens <= N, on the TS fixture at 1600 and the Python+docs fixture (pydocs) at 1660
+#        ceiling: the same twin equality, est_tokens <= N, on the TS fixture at 1700 and the Python+docs fixture (pydocs) at 1760
+#        (round C re-anchor: 1600 / 1660 before the tail carried the file page)
 #        (RED at f4253d45: est 1634 > 1600 / 1725 > 1660, over_ceiling="1"); near miss --detail alone still reorders.
 #   (J)  dialect parity: --for --json "sigs" entries carry "e" equal to the XML rows' e= (and none where XML has none).
 #   (M)  the MCP `for` twin: the same e= on the C rows, none on the extent_suspect rows, and a legend clause for e=.
@@ -460,12 +461,21 @@ if mode == "tight":
             return [ c for _, c in rows ], len( m2.group( 2 ).encode() ) + elided, 'capped="1"' in m2.group( 1 ), " next=" in m2.group( 1 )
         a, ref = charged( A ), charged( body( sys.argv[ 7 ] ) ) if len( sys.argv ) > 7 else None
         T = int( budget * tb )
+        # forbudget-soft round C (owner decision 2026-10-14: RESERVE SECTIONS FIRST; rule 4): the trailing sections are served
+        # first and the rows past the target cut fill what they leave of T — maximality is judged against T less their bytes
+        # (U: XML, everything after </sigs> but </ctx>, plus the <hdr> rows; JSON, the "tail" object)
+        if A.lstrip().startswith( "{" ):
+            try: U = len( json.dumps( json.loads( A ).get( "tail", {} ), separators=( ",", ":" ), ensure_ascii=False ).encode() )
+            except ValueError: U = 0
+        else:
+            U = ( len( A.split( "</sigs>", 1 )[ 1 ].encode() ) - len( "</ctx>" ) if "</sigs>" in A else 0 )
+            U += sum( len( h.encode() ) for h in re.findall( r'<hdr [^>]*/>', A.split( "<sigs", 1 )[ 0 ] ) )
         if a is None or ref is None or not ref[ 0 ]: bad.append( "ST: no rows to charge (premise: answer and uncut reference)" )
         elif tb > 0:
             k = len( a[ 0 ] ); fits = a[ 1 ] <= T or k <= 4
             if not fits: bad.append( "ST: rows charged %d B > target %d B with %d rows (floor 4)" % ( a[ 1 ], T, k ) )
             if k < len( ref[ 0 ] ):
-                if a[ 1 ] + ref[ 0 ][ k ] <= T - 160: bad.append( "ST: cut at %d of %d rows with %d B charged, the next row (%d B) fits T=%d" % ( k, len( ref[ 0 ] ), a[ 1 ], ref[ 0 ][ k ], T ) )
+                if a[ 1 ] + ref[ 0 ][ k ] <= T - U - 160: bad.append( "ST: cut at %d of %d rows with %d B charged, the next row (%d B) fits T=%d less the sections U=%d" % ( k, len( ref[ 0 ] ), a[ 1 ], ref[ 0 ][ k ], T, U ) )
                 if not ( a[ 2 ] and a[ 3 ] ): bad.append( "NX: rows cut (%d of %d) without capped + next=" % ( k, len( ref[ 0 ] ) ) )
             print( "  ....  %s: ST rows=%d/%d charged=%d T=%d" % ( label, k, len( ref[ 0 ] ), a[ 1 ], T ) )
 else:
@@ -506,7 +516,9 @@ done
 # sit in the window where the uncharged note alone pushed a within-ceiling answer over (RED at f4253d45: ts 1534 -> 1634 with
 # over_ceiling="1" at 1600; pydocs 1626 -> 1725 at 1660). JSON refuses the pair and MCP `for` has no body-ceiling input.
 QP='How is a message delivered to its handler?'
-for spec in "ts|$Q1|1600" "pydocs|$QP|1660"; do
+# forbudget-soft round C (FOLD C; rule 4): the default answer's <tail> now carries page 0 of the file page (+94 / +87 tokens on
+# these two answers), so the windows move with it: 1600 -> 1700, 1660 -> 1760 (est 1628 / 1713 on the round C binary).
+for spec in "ts|$Q1|1700" "pydocs|$QP|1760"; do
     r="${spec%%|*}"; rest="${spec#*|}"; q="${rest%|*}"; mt="${rest##*|}"
     ON="$( onr "$r" "bc$mt" "$q" "--max-tokens=$mt" --detail=1 )"; OFF="$( offr "$r" "bc$mt" "$q" "--max-tokens=$mt" --detail=1 )"
     if ran_ok "$ON" "T/body/$r" && ran_ok "$OFF" "T/body/$r (twin)"; then

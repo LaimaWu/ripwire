@@ -407,8 +407,8 @@ lc_est(){ grep -o 'est_tokens="[0-9]*"' "$1" | head -1 | grep -o '[0-9][0-9]*'; 
 lc_sigs(){ grep -o '<sigs .*</sigs>' "$1"; }
 "$BIN" test/legochargefix --no-cache --for="$LCQ" >"$TMP/lc_def.xml" 2>/dev/null;                                  rc_def=$?
 "$BIN" test/legochargefix --no-cache --for="$LCQ" --sections=lego,compose >"$TMP/lc_rest.xml" 2>/dev/null;         rc_rest=$?
-"$BIN" test/legochargefix --no-cache --for="$LCQ" --token-budget=3000 >"$TMP/lc_tb.xml" 2>/dev/null;               rc_tb=$?
-"$BIN" test/legochargefix --no-cache --for="$LCQ" --token-budget=3000 --sections=lego,compose >"$TMP/lc_tbrest.xml" 2>/dev/null; rc_tbrest=$?
+"$BIN" test/legochargefix --no-cache --for="$LCQ" --token-budget=6000 >"$TMP/lc_tb.xml" 2>/dev/null;               rc_tb=$?
+"$BIN" test/legochargefix --no-cache --for="$LCQ" --token-budget=6000 --sections=lego,compose >"$TMP/lc_tbrest.xml" 2>/dev/null; rc_tbrest=$?
 LC_DEF="$( lc_shown "$TMP/lc_def.xml" )"; LC_REST="$( lc_shown "$TMP/lc_rest.xml" )"
 LC_TB="$( lc_shown "$TMP/lc_tb.xml" )";   LC_TBREST="$( lc_shown "$TMP/lc_tbrest.xml" )"; LC_TBEST="$( lc_est "$TMP/lc_tbrest.xml" )"
 if [ "$rc_def$rc_rest$rc_tb$rc_tbrest" != "0000" ] || ! [[ "$LC_DEF" =~ ^[0-9]+$ && "$LC_REST" =~ ^[0-9]+$ && "$LC_TB" =~ ^[0-9]+$ && "$LC_TBREST" =~ ^[0-9]+$ && "$LC_TBEST" =~ ^[0-9]+$ ]]; then
@@ -427,13 +427,15 @@ else
     [[ "$LC_STUBTOTAL" =~ ^[0-9]+$ ]] && [ "$LC_IFACES" -eq "$(( LC_STUBTOTAL < 12 ? LC_STUBTOTAL : 12 ))" ] \
         && ok "(13c) the stub's total=$LC_STUBTOTAL matches the restored <lego> ($LC_IFACES <iface> rows, display cap 12)" \
         || no "(13c) the stub's total=\"$LC_STUBTOTAL\" vs $LC_IFACES restored <iface> rows (display cap 12)"
-    # (13d) forbudget-soft (owner decisions 2026-10-14; rule 4): an explicit --token-budget is a SOFT target charged against
-    # the <sigs> rows only, so a section --sections= opts into is NOT charged to the rows any more — it rides on top (priced in
-    # est_tokens=) and costs no row (SEC); nothing is labelled over_ceiling. The old near-miss (the opted-in <lego> charged in
-    # full, <sigs> shrinking) is the by-design break; what must hold now: the same rows with and without the opt-in.
-    [ "$LC_TBREST" -eq "$LC_TB" ] && ! grep -q 'over_ceiling="1"' "$TMP/lc_tbrest.xml" && grep -q '<lego><iface ' "$TMP/lc_tbrest.xml" \
-        && ok "(13d) --token-budget=3000 --sections=lego,compose: the restored <lego> costs no <sigs> row ($LC_TBREST == $LC_TB), no over_ceiling (est_tokens=$LC_TBEST)" \
-        || no "(13d) --token-budget=3000 --sections=lego,compose: <sigs> $LC_TBREST vs $LC_TB without it (or over_ceiling, or no full <lego>) — an opted-in section must not cost rows under a soft target"
+    # (13d) forbudget-soft (owner decisions 2026-10-14; rule 4): an explicit --token-budget is a SOFT target. Round C (RESERVE
+    # SECTIONS FIRST, owner decision 2026-10-14): the trailing sections are served first and the rows past the target cut fill
+    # what they leave of T — so a section --sections= opts into rides WHOLE and its bytes come out of the rows past the cut,
+    # never out of the section. By-design break of round B's "the same rows with and without the opt-in" (sections were funded
+    # from what the rows left): what holds now is the full <lego>, no over_ceiling, and rows that do not GROW with the opt-in.
+    # (Re-anchored from 3000 to 6000 tokens: at 3000 the rows at the cut name no implementing file, so <lego> is empty either way.)
+    [ "$LC_TBREST" -le "$LC_TB" ] && ! grep -q 'over_ceiling="1"' "$TMP/lc_tbrest.xml" && grep -q '<lego><iface ' "$TMP/lc_tbrest.xml" \
+        && ok "(13d) --token-budget=6000 --sections=lego,compose: the opted-in <lego> rides whole, reserved before the rows past the cut ($LC_TBREST <= $LC_TB rows), no over_ceiling (est_tokens=$LC_TBEST)" \
+        || no "(13d) --token-budget=6000 --sections=lego,compose: <sigs> $LC_TBREST vs $LC_TB without it (or over_ceiling, or no full <lego>) — an opted-in section is reserved first under a soft target"
 fi
 if command -v python3 >/dev/null 2>&1; then
     lc_mcp(){ printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"test/legochargefix","task":"%s"%s}}}\n' "$LCQ" "$1" \
