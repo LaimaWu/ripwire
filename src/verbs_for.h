@@ -1320,6 +1320,73 @@ inline std::string forLensJsonTailStanza( const rw::FileTail& tail, std::size_t 
 }
 
 // One RENDER of the --json bundle (emitForLensJson below).
+// ── round C (owner decision 2026-10-14, RESERVE SECTIONS FIRST): the JSON twin's row refill, a free function over
+// emitForLensJsonPass' locals (the forLensJsonTailStanza precedent). The tail is funded from the rows at the soft target's cut;
+// the rows past the cut then fill what it left of T — never below the cut (rw::forSoftRowDropFill). Re-rendered only when that
+// narrows the rows; the first render's redaction count and note tallies are replaced, and a failed re-render keeps the first
+// render (and every reading taken from it) whole.
+struct ForJsonRefillState   // the first render's outputs, by reference: the refill replaces them together or not at all
+{
+    std::string&              json;
+    rw::SigsCutReport&        cut;
+    bool&                     capped;
+    std::size_t&              droppedPositive;
+    rw::JsonSigNoteCounts&    notes;
+    std::vector<rw::NodeId>&  shown;
+};
+struct ForJsonRefillBudgets
+{
+    std::size_t bundleBytes;    // budgetBytesForTokens( N )
+    std::size_t sigsTarget;     // the ladder's target (the cut)
+    std::size_t firstRowDrop;   // the first render's row budget (T plus the frame)
+};
+template< class PackSigs >
+inline void forLensJsonSoftRefill( const PackSigs& packSigs, const ForLensJsonInputs& in, ForJsonRefillState st, ForJsonRefillBudgets b,
+                                   const rw::SigsCutContinuation& cutNext, const std::optional<rw::RedactCounts>& redactBeforeSigs )
+{
+    const std::size_t  cutRows  = st.json.size() - std::min( st.json.size(), st.cut.pastTargetBytes );
+    const rw::FileTail cutTail  = rw::computeFileTail( in.ing, in.rank, *in.evidence, rw::rowsAtTargetIds( st.shown, in.rank, st.cut.pastTarget ),
+                                                       in.rootArg, in.task );
+    const std::size_t  tailBytes = forLensJsonTailStanza( cutTail, in.tokenBudget, rw::forSoftSectionsShare( b.bundleBytes, cutRows ) ).size();
+    const std::size_t  rowDrop   = rw::forSoftRowDropFill( b.bundleBytes, tailBytes );
+    if( rowDrop >= b.firstRowDrop )
+    {
+        return;
+    }
+    const std::string                     firstJson = st.json;
+    const rw::SigsCutReport               firstCut  = st.cut;
+    const bool                            firstCap  = st.capped;
+    const std::size_t                     firstDrop = st.droppedPositive;
+    const rw::JsonSigNoteCounts           firstNote = st.notes;
+    const std::vector<rw::NodeId>         firstIds  = st.shown;
+    const std::optional<rw::RedactCounts> redactFirst = in.redact != nullptr ? std::optional<rw::RedactCounts>( *in.redact ) : std::nullopt;
+    if( redactBeforeSigs )
+    {
+        *in.redact = *redactBeforeSigs;
+    }
+    st.notes                   = rw::JsonSigNoteCounts {};
+    st.cut                     = rw::SigsCutReport {};
+    st.cut.continuationRequest = &cutNext;
+    st.cut.rowDropBudgetBytes  = rowDrop;
+    rw::MemoryStream refillStream;
+    std::FILE* const rm = rw::openChargeStream( refillStream );
+    if( rm != nullptr )
+    {
+        packSigs( rm, b.sigsTarget, &st.capped, &st.droppedPositive, &st.shown, &st.cut );
+    }
+    const rw::MemoryStreamBytes refill = rm != nullptr ? refillStream.finish() : rw::MemoryStreamBytes {};
+    if( rm != nullptr && refill.isWhole )
+    {
+        st.json.assign( refill.bytes );
+        return;
+    }
+    st.json = firstJson;  st.cut = firstCut;  st.capped = firstCap;  st.droppedPositive = firstDrop;  st.notes = firstNote;  st.shown = firstIds;
+    if( redactFirst )
+    {
+        *in.redact = *redactFirst;
+    }
+}
+
 inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const ForLensJsonInputs& in )
 {
     using namespace rw;
@@ -1430,55 +1497,11 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
                 sigsJson.assign( block.bytes );
             }
         }
-        // round C (RESERVE SECTIONS FIRST, the XML twin's rule): the tail is funded from the rows at the soft target's cut, and
-        // the rows past the cut fill what it left of T — never below the cut. Re-rendered only when that narrows the rows; the
-        // first render's redaction count and note tallies are replaced, and a failed re-render keeps the first render whole.
+        // round C (RESERVE SECTIONS FIRST, the XML twin's rule): the rows past the soft target's cut fill what the tail left of T
         if( isSigsBuffered && in.tokenBudget > 0 && sigsCut.pastTarget > 0 )
         {
-            constexpr std::size_t kSigsWrapperBytes = 13;   // the array's frame (serialize.h forSigsBudgets' wrapper allowance)
-            const std::size_t cutRows     = sigsJson.size() - std::min( sigsJson.size(), sigsCut.pastTargetBytes );
-            const rw::FileTail cutTail    = rw::computeFileTail( in.ing, in.rank, *in.evidence, rw::rowsAtTargetIds( jsonShownIds, in.rank, sigsCut.pastTarget ),
-                                                             in.rootArg, in.task );
-            const std::size_t tailBytes   = forLensJsonTailStanza( cutTail, in.tokenBudget, bundleBudget > cutRows ? bundleBudget - cutRows : 0u ).size();
-            const std::size_t rowDropFill = ( bundleBudget > tailBytes ? bundleBudget - tailBytes : 0u ) + kSigsWrapperBytes;
-            if( rowDropFill < sigsBudgets.rowDrop )
-            {
-                const rw::SigsCutReport                firstCut     = sigsCut;
-                const bool                             firstCapped  = sigsCapped;
-                const std::size_t                      firstDropped = sigsDroppedPositive;
-                const JsonSigNoteCounts                firstNotes   = noteCounts;
-                const std::vector<rw::NodeId>          firstShown   = jsonShownIds;
-                const std::optional<rw::RedactCounts>  redactFirst  = in.redact != nullptr ? std::optional<rw::RedactCounts>( *in.redact ) : std::nullopt;
-                if( redactBeforeSigs )
-                {
-                    *in.redact = *redactBeforeSigs;
-                }
-                noteCounts                  = JsonSigNoteCounts {};
-                sigsCut                     = rw::SigsCutReport {};
-                sigsCut.continuationRequest = &cutNext;
-                sigsCut.rowDropBudgetBytes  = rowDropFill;
-                rw::MemoryStream refillStream;
-                bool             refilled = false;
-                if( std::FILE* const rm = rw::openChargeStream( refillStream ) )
-                {
-                    packSigs( rm, sigsBudget, &sigsCapped, &sigsDroppedPositive, &jsonShownIds, &sigsCut );
-                    const rw::MemoryStreamBytes refill = refillStream.finish();
-                    if( refill.isWhole )
-                    {
-                        sigsJson.assign( refill.bytes );
-                        refilled = true;
-                    }
-                }
-                if( !refilled )
-                {
-                    sigsCut = firstCut;  sigsCapped = firstCapped;  sigsDroppedPositive = firstDropped;  noteCounts = firstNotes;
-                    jsonShownIds = firstShown;
-                    if( redactFirst )
-                    {
-                        *in.redact = *redactFirst;
-                    }
-                }
-            }
+            forLensJsonSoftRefill( packSigs, in, ForJsonRefillState{ sigsJson, sigsCut, sigsCapped, sigsDroppedPositive, noteCounts, jsonShownIds },
+                                   ForJsonRefillBudgets{ bundleBudget, sigsBudget, sigsBudgets.rowDrop }, cutNext, redactBeforeSigs );
         }
         ForLensBlockCharge sigsCharge;   // the sink: an unmeasured block takes the omitting path below
         if( !isSigsBuffered )
@@ -3834,10 +3857,9 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // replaced, never added to; a re-render whose buffer fails keeps the first render and its readings whole.
         if( forSoftTarget && sigsPreRendered && forSigsCut.pastTarget > 0 )
         {
-            constexpr std::size_t kSigsWrapperBytes = 13;   // "<sigs>" + "</sigs>" (serialize.h forSigsBudgets)
             const std::size_t sectionsServed = forHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size() + graphSection.xml.size()
                                              + autoSection.xml.size() + tailStr.size();   // not the --detail bodies (above)
-            const std::size_t rowDropFill    = ( bundleBudget > sectionsServed ? bundleBudget - sectionsServed : 0u ) + kSigsWrapperBytes;
+            const std::size_t rowDropFill    = rw::forSoftRowDropFill( bundleBudget, sectionsServed );
             if( rowDropFill < sigsBudgets.rowDrop )
             {
                 const rw::SigsCutReport   firstCut       = forSigsCut;
@@ -3845,13 +3867,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                 const bool                firstCapped    = forSigsCapped;
                 const std::vector<NodeId> firstShown     = shownSigIds;
                 const std::optional<RedactCounts> redactNow = redactPtr != nullptr ? std::optional<RedactCounts>( *redactPtr ) : std::nullopt;
-                if( redactPtr != nullptr && redactBeforeSigs && redactAfterSigs )
-                {
-                    for( std::size_t k = 0; k < redactPtr->byKind.size(); ++k )   // take the first render's count back out
-                    {
-                        redactPtr->byKind[k] -= redactAfterSigs->byKind[k] - redactBeforeSigs->byKind[k];
-                    }
-                }
+                rw::redactTakeBack( redactPtr, redactBeforeSigs, redactAfterSigs );   // the first render's count comes back out
                 forSigsCut                     = rw::SigsCutReport {};
                 forSigsCut.continuationRequest = &forSigsNext;
                 forSigsCut.rowDropBudgetBytes  = rowDropFill;

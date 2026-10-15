@@ -1913,6 +1913,19 @@ struct McpForAssemblyInputs   // forTaskText's locals the assembly reads, by ref
     const std::vector<std::vector<NodeId>>&    implementors;   // train 26b: ix.g.implementors, for the count-floor lego re-render
     const LexTermEvidence&                     evidence;       // FOLD C: the term evidence the tail's page rows rank by
 };
+// round C (RESERVE SECTIONS FIRST, the CLI twin's rule): the --sections= posture the stub plan reads — under budget_tokens the two
+// sections ride whole when they fit what the rows at the cut (and <routes>) left of the budget (serialize.h forSoftSectionsOptIn)
+inline std::string_view mcpSoftSections( const McpForAssemblyInputs& in, const std::string& sigsStr, const rw::SigsCutReport& cut,
+                                         std::size_t sectionsBytes )
+{
+    if( in.budgetTokens == 0 )
+    {
+        return in.sections;
+    }
+    const std::size_t atCut = sigsStr.size() - std::min( sigsStr.size(), cut.pastTargetBytes );
+    return forSoftSectionsOptIn( in.sections, sectionsBytes, 0u,
+                                 forSoftSectionsShare( budgetBytesForTokens( in.budgetTokens ), atCut + in.routeStr.size() ) );
+}
 inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::string headerStr, std::string legoStr,
                                       std::string composeStr, std::vector<std::vector<NodeId>> legoScoped, std::size_t legoPreCapCount )
 {
@@ -2037,11 +2050,7 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
                                                       .renderedBytes = composeStr.size() };
         // round C (reserve first, the CLI twin's rule): under budget_tokens the sections ride whole when they fit what the rows
         // at the cut left of the budget
-        const std::size_t mcpSigsAtCut   = sigsStr.size() - std::min( sigsStr.size(), mcpSigsCut.pastTargetBytes );
-        const std::size_t mcpBudgetBytes = budgetTokens > 0 ? budgetBytesForTokens( budgetTokens ) : 0u;
-        const std::size_t mcpShare       = mcpBudgetBytes - std::min( mcpBudgetBytes, mcpSigsAtCut + in.routeStr.size() );
-        const ForSectionStubPlan plan = planForSectionStubs( budgetTokens > 0 ? forSoftSectionsOptIn( sections, legoStr.size(), composeStr.size(), mcpShare )
-                                                                              : std::string_view( sections ),
+        const ForSectionStubPlan plan = planForSectionStubs( mcpSoftSections( in, sigsStr, mcpSigsCut, legoStr.size() + composeStr.size() ),
                                                              task, mcpLegoServedIn, mcpComposeServedIn );
         // lego-charge (train 26c seam): the charge plan the <sigs> budget follows (forTaskText's mcpSigChargePlan, the same
         // rule: rw::forSectionsSigChargePlan), recomputed here from the sections AS SERVED — the count-floor lego re-render
@@ -2078,19 +2087,11 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
     // replaced, never added to.
     if( budgetTokens > 0 && mcpSigsCut.pastTarget > 0 )
     {
-        constexpr std::size_t kSigsWrapperBytes = 13;   // "<sigs>" + "</sigs>" (serialize.h forSigsBudgets)
-        const std::size_t mcpTargetBytes  = budgetBytesForTokens( budgetTokens );
-        const std::size_t mcpSectionsUsed = mcpHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size();
-        const std::size_t mcpRowDropFill  = ( mcpTargetBytes > mcpSectionsUsed ? mcpTargetBytes - mcpSectionsUsed : 0u ) + kSigsWrapperBytes;
+        const std::size_t mcpRowDropFill = forSoftRowDropFill( budgetBytesForTokens( budgetTokens ),
+                                                               mcpHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size() );
         if( mcpRowDropFill < in.rowDropBudget )
         {
-            if( redact != nullptr && redactBeforeSigs && redactAfterSigs )
-            {
-                for( std::size_t k = 0; k < redact->byKind.size(); ++k )   // take the first render's count back out
-                {
-                    redact->byKind[k] -= redactAfterSigs->byKind[k] - redactBeforeSigs->byKind[k];
-                }
-            }
+            redactTakeBack( redact, redactBeforeSigs, redactAfterSigs );
             mcpSigsCut                     = rw::SigsCutReport {};
             mcpSigsCut.continuationRequest = &mcpSigsNext;
             mcpSigsCut.rowDropBudgetBytes  = mcpRowDropFill;

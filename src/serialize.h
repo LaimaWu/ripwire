@@ -994,6 +994,35 @@ inline ForSigsBudgets forSigsBudgets( std::size_t softRowBytes, std::size_t fixe
     return b;
 }
 
+// ── ROUND C (owner decision 2026-10-14, RESERVE SECTIONS FIRST): the shared arithmetic of the soft target's row refill ──────
+// The rows past a soft target's cut fill what the trailing sections served before them left of T: this is the row-drop budget
+// a refill render passes (SigsCutReport::rowDropBudgetBytes, the "<sigs></sigs>" frame added as forSigsBudgets adds it). At or
+// under the ladder's target it IS the cut (sigsRowDropEffective), so the rows never fall below it. CLI XML, JSON and MCP `for`.
+inline std::size_t forSoftRowDropFill( std::size_t targetBytes, std::size_t sectionsServedBytes ) noexcept
+{
+    constexpr std::size_t kSigsWrapperBytes = 13;   // "<sigs>" + "</sigs>", as forSigsBudgets
+    return ( targetBytes > sectionsServedBytes ? targetBytes - sectionsServedBytes : 0u ) + kSigsWrapperBytes;
+}
+// What a soft target's bundle budget leaves the trailing sections once `spentBytes` (the rows at the cut and the fixed
+// sections) are paid — the share forSoftSectionsOptIn and the tail fill read.
+inline std::size_t forSoftSectionsShare( std::size_t budgetBytes, std::size_t spentBytes ) noexcept
+{
+    return budgetBytes > spentBytes ? budgetBytes - spentBytes : 0u;
+}
+// A refill render replaces the first render's redaction count rather than adding to it: take the first render's own
+// contribution (`after` less `before`, snapshotted around it) back out of the run's tally before rendering again.
+inline void redactTakeBack( RedactCounts* tally, const std::optional<RedactCounts>& before, const std::optional<RedactCounts>& after ) noexcept
+{
+    if( tally == nullptr || !before || !after )
+    {
+        return;
+    }
+    for( std::size_t k = 0; k < tally->byKind.size(); ++k )
+    {
+        tally->byKind[k] -= after->byKind[k] - before->byKind[k];
+    }
+}
+
 // ── THE --for LENS'S RANKED-HEAD CAP, OWNED ONCE (round-4 finding F-03) ──────────────────────────────
 // How many ranked symbols the --for lens considers before the relevance floor narrows it and the ladder
 // above trims it. The CLI lens (`--pack-top-n`, else this) and the MCP `for` verb MUST read the same

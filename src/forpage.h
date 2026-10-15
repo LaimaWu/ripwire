@@ -656,56 +656,49 @@ struct FileTail
     std::string               task;      // the --for task: a cut tail's next= names the page
 };
 
-inline FileTail computeFileTail( const IngestResult& ing, const std::vector<float>& rank, const LexTermEvidence& ev,
-                                 const std::vector<NodeId>& headIds, std::string_view rootArg, std::string_view task )
+// 1. the rank rows: the best-symbol projection of the lens order, outside the shown head's files; marks each file it lists
+inline void fileTailRankRows( FileTail& out, std::vector<char>& listed, const IngestResult& ing, const std::vector<float>& rank,
+                              const std::vector<NodeId>& headIds, std::string_view rootArg )
 {
-    FileTail out;
-    out.task = std::string( task );
     const std::size_t F = ing.files.size();
-    std::vector<char> listed( F, 0 );
+    std::vector<char> inHead( F, 0 );
+    for( NodeId sid : headIds )
     {
-        // 1. the rank rows: the best-symbol projection of the lens order, outside the shown head's files
-        std::vector<char> inHead( F, 0 );
-        for( NodeId sid : headIds )
+        if( sid < ing.symbols.size() && ing.symbols[ sid ].fileId < F )
         {
-            if( sid < ing.symbols.size() && ing.symbols[ sid ].fileId < F )
-            {
-                inHead[ ing.symbols[ sid ].fileId ] = 1;
-            }
-        }
-        const std::size_t   S = std::min( ing.symbols.size(), rank.size() );
-        std::vector<NodeId> order( S );
-        for( NodeId i = 0; i < S; ++i )
-        {
-            order[i] = i;
-        }
-        sortutil::radixSortByScoreDescId( order, rank );
-        for( std::size_t k = 0; k < S && out.paths.size() < kForFileTailRankCap; ++k )
-        {
-            const NodeId id = order[k];
-            if( !( rank[id] > 0.0f ) )
-            {
-                break;                                   // (score desc) order: the zero-score tail is contiguous
-            }
-            const std::uint32_t f = ing.symbols[id].fileId;
-            if( f >= F || listed[f] || inHead[f] )
-            {
-                continue;
-            }
-            listed[f] = 1;
-            out.paths.push_back( lensRowPath( ing, f, rootArg ) );
-            out.syms.emplace_back();
-            out.pageNext.push_back( 0 );
+            inHead[ ing.symbols[ sid ].fileId ] = 1;
         }
     }
-    // 2. the page rows: page 0 of the file page, minus the files already listed
-    const ForFilePage page = computeForFilePage( ing, rank, ev );
+    const std::size_t   S = std::min( ing.symbols.size(), rank.size() );
+    std::vector<NodeId> order( S );
+    for( NodeId i = 0; i < S; ++i )
+    {
+        order[i] = i;
+    }
+    sortutil::radixSortByScoreDescId( order, rank );
+    for( std::size_t k = 0; k < S && out.paths.size() < kForFileTailRankCap && rank[ order[k] ] > 0.0f; ++k )   // the zero-score tail is contiguous
+    {
+        const std::uint32_t f = ing.symbols[ order[k] ].fileId;
+        if( f >= F || listed[f] || inHead[f] )
+        {
+            continue;
+        }
+        listed[f] = 1;
+        out.paths.push_back( lensRowPath( ing, f, rootArg ) );
+        out.syms.emplace_back();
+        out.pageNext.push_back( 0 );
+    }
+}
+
+// 2. the page rows: page 0 of the file page, minus the files already listed, each with its sym= names
+inline void fileTailPageRows( FileTail& out, std::vector<char>& listed, const IngestResult& ing, const ForFilePage& page, std::string_view rootArg )
+{
     out.total    = page.rows.size();
     out.pageSeen = std::min( page.rows.size(), kForFileTailPageRows );
-    for( std::size_t r = 0; r < page.rows.size() && r < kForFileTailPageRows; ++r )
+    for( std::size_t r = 0; r < out.pageSeen; ++r )
     {
         const ForFileRow& row = page.rows[r];
-        if( row.fileId >= F || listed[ row.fileId ] )
+        if( row.fileId >= listed.size() || listed[ row.fileId ] )
         {
             continue;
         }
@@ -714,12 +707,22 @@ inline FileTail computeFileTail( const IngestResult& ing, const std::vector<floa
         std::string sym;
         for( std::size_t k = 0; k < kForPageSymNameCount && row.top[k] != kNoNode; ++k )
         {
-            if( k > 0 ) { sym += ','; }
+            sym += k > 0 ? "," : "";
             sym += ing.symbols[ row.top[k] ].name;
         }
         out.syms.push_back( std::move( sym ) );
         out.pageNext.push_back( r + 1 );
     }
+}
+
+inline FileTail computeFileTail( const IngestResult& ing, const std::vector<float>& rank, const LexTermEvidence& ev,
+                                 const std::vector<NodeId>& headIds, std::string_view rootArg, std::string_view task )
+{
+    FileTail          out;
+    std::vector<char> listed( ing.files.size(), 0 );
+    out.task = std::string( task );
+    fileTailRankRows( out, listed, ing, rank, headIds, rootArg );
+    fileTailPageRows( out, listed, ing, computeForFilePage( ing, rank, ev ), rootArg );
     ENSURES( out.paths.size() == out.syms.size() && out.paths.size() == out.pageNext.size() && out.paths.size() <= out.total,
              "computeFileTail: the rows, their sym= and their continuations disagree, or more rows than positive-score files" );
     return out;
