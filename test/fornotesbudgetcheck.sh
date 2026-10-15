@@ -311,9 +311,24 @@ def read( path ):
         b = re.search( r'\bbudget_tokens="(\d+)"', rt ); bt = int( b.group( 1 ) ) if b else None
     rows.sort()
     return dict( rows=rows, charged=charged, total=total, next=nxt, over=over, est=est, bt=bt )
+def sections_u( s ):
+    # round C (forbudget-soft, owner decision 2026-10-14: RESERVE SECTIONS FIRST; rule 4): the trailing sections are served first
+    # and the rows past the cut fill what they leave of T, so maximality reads T less their bytes (U): XML, all after </sigs> but
+    # </ctx> plus the <hdr> rows, less the --detail bodies (a root without bundle=); JSON, the "tail" object
+    if s.lstrip().startswith( "{" ):
+        try: return len( json.dumps( json.loads( s ).get( "tail", {} ), separators=( ",", ":" ), ensure_ascii=False ).encode() )
+        except ValueError: return 0
+    u = ( len( s.split( "</sigs>", 1 )[ 1 ].encode() ) - len( "</ctx>" ) ) if "</sigs>" in s else 0
+    u += sum( len( h.encode() ) for h in re.findall( r"<hdr [^>]*/>", s.split( "<sigs", 1 )[ 0 ] ) )
+    root = re.search( r"<ctx [^>]*>", s )
+    if root and ' bundle="' not in root.group( 0 ):
+        bm = re.search( r"<bodies\b.*?</bodies>", s, re.S )
+        u -= len( bm.group( 0 ).encode() ) if bm else 0
+    return u
 a = read( sys.argv[ 1 ] )
 if a is None: sys.exit( 3 )
 N = int( sys.argv[ 2 ] ); X = int( N * 2.36 * 0.90 )
+U = sections_u( open( sys.argv[ 1 ], encoding='utf-8', errors='replace' ).read() )
 open( sys.argv[ 3 ], 'w' ).write( "".join( x[ 1 ] + "\n" for x in a[ 'rows' ] ) )
 k = len( a[ 'rows' ] )
 fits = ( a[ 'charged' ] <= X or k <= 4 ) and k >= min( 4, a[ 'total' ] )
@@ -324,7 +339,7 @@ if len( sys.argv ) > 4:
     ref = read( sys.argv[ 4 ] )
     if ref is None: sys.exit( 3 )
     if cut and k < len( ref[ 'rows' ] ):
-        maximal = a[ 'charged' ] + ref[ 'rows' ][ k ][ 2 ] > X - 160
+        maximal = a[ 'charged' ] + ref[ 'rows' ][ k ][ 2 ] > X - U - 160
 mine = [ x[ 1 ] for x in a[ 'rows' ] ]
 rp = len( sys.argv ) > 4 and k > 0 and mine == [ x[ 1 ] for x in ref[ 'rows' ] ][ :k ]
 if rp and len( sys.argv ) > 5 and sys.argv[ 5 ]:

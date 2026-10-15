@@ -546,6 +546,10 @@ probeFor()
 # callers prose minus that reading to the OLD 330; the existing (U-twin) holds safe-delete minus its reading to 720.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
+# RE-PINNED 2026-10-15 (lane forbudget-soft round C, FOLD C): ripwire.for/v1 775 -> 820 (measured 802; 761 at the last pin).
+#   The <tail> now carries page-0 rows of the file page with sym=, and the compact tail clause reads them: "; t p= file
+#   outside sigs (weaker), r= rank (gap = trimmed)" (58 B) -> "...(weaker), t sym= a file-page row: its top symbols, r= ..."
+#   (99 B, +41 B), nothing else moved. (L) stays under its 7,900 B bill (7,871 B).
 # RE-PINNED 2026-10-04 (lane/lean-answers-068), two new definitions, each measured on this gate's fixture against the
 # base binary (255dc199) — no prose was added to any reading that already rode:
 #   ripwire.for/v1 738->761: " (absent cx/ccx/in = 0)" (+23 B) — the --for lens omits a zero cx=/ccx=/in=.
@@ -645,7 +649,7 @@ ripwire.pack-task/v1             990   974
 ripwire.pack-top-n/v1            760   745
 ripwire.expand/v1                280   265
 ripwire.expand-file/v1            510   508
-ripwire.for/v1                    775   761
+ripwire.for/v1                    820   802
 '
 pinFor()
 {
@@ -1128,7 +1132,7 @@ fi
 # softp.py FILE N TASK ROWSOUT [REF] prints ONE line "OK|BAD rows= total= charged= T= est= over= next= fits= maximal= rp= hl=";
 # exit 3 = no <ctx> root or no <sigs> block (a missing premise: the caller FAILs it, never skips). ROWSOUT gets the rows.
 cat > "$TMP/softp.py" <<'PY'
-import html, re, sys
+import html, json, re, sys
 def read( path ):
     try: s = open( path, encoding = "utf-8", errors = "replace" ).read()
     except OSError: return None
@@ -1150,9 +1154,24 @@ def read( path ):
                         or "[over_ceiling=1 also when the sigs next= rides unpaid" in s,
                  hl = "(ceiling)" not in s and "task_echo: dropped" not in s and ' route="' in rt
                       and tk is not None and html.unescape( tk.group( 1 ) ) == sys.argv[ 3 ] )
+def sections_u( s ):
+    # round C (forbudget-soft, owner decision 2026-10-14: RESERVE SECTIONS FIRST; rule 4): the trailing sections are served first
+    # and the rows past the cut fill what they leave of T, so maximality reads T less their bytes (U): XML, all after </sigs> but
+    # </ctx> plus the <hdr> rows, less the --detail bodies (a root without bundle=); JSON, the "tail" object
+    if s.lstrip().startswith( "{" ):
+        try: return len( json.dumps( json.loads( s ).get( "tail", {} ), separators=( ",", ":" ), ensure_ascii=False ).encode() )
+        except ValueError: return 0
+    u = ( len( s.split( "</sigs>", 1 )[ 1 ].encode() ) - len( "</ctx>" ) ) if "</sigs>" in s else 0
+    u += sum( len( h.encode() ) for h in re.findall( r"<hdr [^>]*/>", s.split( "<sigs", 1 )[ 0 ] ) )
+    root = re.search( r"<ctx [^>]*>", s )
+    if root and ' bundle="' not in root.group( 0 ):
+        bm = re.search( r"<bodies\b.*?</bodies>", s, re.S )
+        u -= len( bm.group( 0 ).encode() ) if bm else 0
+    return u
 a = read( sys.argv[ 1 ] )
 if a is None: sys.exit( 3 )
 N = int( sys.argv[ 2 ] ); X = int( N * 2.36 * 0.90 ); k = len( a[ "rows" ] )
+U = sections_u( a[ "s" ] )
 open( sys.argv[ 4 ], "w" ).write( "".join( x[ 1 ] + "\n" for x in a[ "rows" ] ) )
 cut = k < a[ "total" ]
 fits = ( a[ "charged" ] <= X or k <= 4 ) and k >= min( 4, a[ "total" ] )
@@ -1161,7 +1180,7 @@ maximal = rp = True
 if len( sys.argv ) > 5:
     ref = read( sys.argv[ 5 ] )
     if ref is None: sys.exit( 3 )
-    if cut and k < len( ref[ "rows" ] ): maximal = a[ "charged" ] + ref[ "rows" ][ k ][ 2 ] > X - 160
+    if cut and k < len( ref[ "rows" ] ): maximal = a[ "charged" ] + ref[ "rows" ][ k ][ 2 ] > X - U - 160
     rp = k > 0 and [ x[ 1 ] for x in a[ "rows" ] ] == [ x[ 1 ] for x in ref[ "rows" ] ][ :k ]
 ok = a[ "est" ] != "-" and fits and maximal and rp and nxt and not a[ "over" ] and a[ "hl" ]
 print( "%s rows=%d total=%d charged=%d T=%d est=%s over=%d next=%d fits=%d maximal=%d rp=%d hl=%d"

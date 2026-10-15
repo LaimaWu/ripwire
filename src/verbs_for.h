@@ -705,7 +705,7 @@ inline std::size_t ownerLegendExemptBytes( const ForLensHeaderParts& p, bool com
 inline constexpr std::string_view kForCompactLegendBodies =
     "; b t= n= p= l= full bodies, c n= l= callee signatures";
 inline constexpr std::string_view kForCompactLegendTail =
-    "; t p= file outside sigs (weaker), then t p= sym=: the file page's first 40 rows (file-first, sym= top symbols), r= rank (gap = trimmed)";
+    "; t p= file outside sigs (weaker), t sym= a file-page row: its top symbols, r= rank (gap = trimmed)";
 // R2-AF (round 2, S4): the COMPACT dialect's `<hdr p= of=/>` clause — verbatim, round-2 amendment §R7.
 // 96 B, present-only like every clause in this dialect (appendCompactForLegend below).
 inline constexpr std::string_view kForCompactLegendHdr =
