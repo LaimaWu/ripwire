@@ -21,9 +21,9 @@ Ruby's `include`/`extend`/`prepend` are now captured by `queries/ruby/tags.scm` 
 inherit references by the shared capture consumer — the same emitter every language's base clause goes through. The
 Ruby-only `captureRubyMixinBases` and its `captureIncludes` call site are gone; the query states the call shape and
 the C++ reader keeps the two guards a tags pattern cannot state (the directive's text, and its class-body position).
-Output is byte-identical: the map, `--deps`, `--skipped` and the read verbs match the base build over a real Rails
-corpus and the Ruby fixtures, and `--lego` lists the same implementors. `kParserVer` moves 171 -> 173 (the extraction
-path changed; 172 is 171's rich file tag).
+Output is byte-identical: the map, `--deps --limit=100000`, `--skipped`, `--callers`, `--callees`, `--impact` and
+`--uses` all match the base build over a real Rails corpus and the Ruby fixtures, and `--lego` lists the same
+implementors. `kParserVer` moves 171 -> 173 (the extraction path changed; 172 is 171's rich file tag).
 
 ### Added — Clojure (`.clj`/`.cljs`/`.cljc`/`.bb`)
 
