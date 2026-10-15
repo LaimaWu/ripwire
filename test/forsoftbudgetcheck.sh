@@ -633,7 +633,8 @@ ok = list( zip( t.get( "files", [] ), t.get( "sym", [] ) ) ) == xr and str( t.ge
 print( "OK" if ok else "BAD json rows=%d xml rows=%d total %s/%s" % ( len( t.get( "files", [] ) ), len( xr ), t.get( "total" ), xa.get( "total" ) ) )
 PY
 )"
-[ "$C4" = OK ] && ok "(C4) --json tail == the XML tail (files + sym, total=, next)" || no "(C4) --json tail differs from the XML tail: $C4"
+if [ "$C4" = OK ]; then ok "(C4) --json tail == the XML tail (files + sym, total=, next)"
+else no "(C4) --json tail differs from the XML tail: $C4"; fi
 # (C5) the MCP twin serves the same tail rows as the CLI default
 mcp_call for "$Q" > "$TMP/mcp_def_tail.xml"
 if python3 "$TMP/tail.py" "$TMP/mcp_def_tail.xml" all > "$TMP/c5.mcp" && python3 "$TMP/tail.py" "$TMP/def.xml" all > "$TMP/c5.cli" \

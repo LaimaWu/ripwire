@@ -183,7 +183,9 @@ done
 Z="$( grep -o '<tail [^>]*>' "$TMP/mini.xml" | head -1 )"
 ZR="$( python3 "$TMP/tail.py" "$TMP/mini.xml" rank | grep -c . )"
 case "$Z" in
-    *'total="3"'*'shown="3"'*'capped="0"'*) [ "$ZR" = "0" ] && ok "all-files-in-head bundle: 0 rank rows (none remain), the 3 files as page rows, nothing cut ($Z)"                                                           || no "all-files-in-head bundle lists $ZR rank row(s) — a head file served as 'outside the head'" ;;
+    *'total="3"'*'shown="3"'*'capped="0"'*)
+        if [ "$ZR" = "0" ]; then ok "all-files-in-head bundle: 0 rank rows (none remain), the 3 files as page rows, nothing cut ($Z)"
+        else no "all-files-in-head bundle lists $ZR rank row(s) — a head file served as 'outside the head'"; fi ;;
     *) no "zero-tail bundle wrong/missing: '$Z'" ;;
 esac
 
