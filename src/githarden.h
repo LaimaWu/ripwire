@@ -258,6 +258,14 @@ inline bool gitDiscoveryNamedByEnvironment() noexcept
     return false;
 }
 
+inline void addUniquePath( std::vector<std::filesystem::path>& out, const std::filesystem::path& p )
+{
+    if( std::find( out.begin(), out.end(), p ) == out.end() )
+    {
+        out.push_back( p );
+    }
+}
+
 // Both readings of a pointer file's path, each made absolute against `base`, appended to `out` once each.
 inline void addPointerReadings( std::string_view exactRest, std::string_view looseRest, const std::filesystem::path& base,
                                 std::vector<std::filesystem::path>& out )
@@ -278,10 +286,7 @@ inline void addPointerReadings( std::string_view exactRest, std::string_view loo
         {
             p = base / p;
         }
-        if( std::find( out.begin(), out.end(), p ) == out.end() )
-        {
-            out.push_back( std::move( p ) );
-        }
+        addUniquePath( out, p );
     }
 }
 
@@ -289,6 +294,66 @@ inline void addPointerReadings( std::string_view exactRest, std::string_view loo
 inline bool statAbsentOrOk( const std::error_code& ec ) noexcept
 {
     return !ec || ec == std::errc::no_such_file_or_directory || ec == std::errc::not_a_directory;
+}
+
+// One level of git's discovery walk: the gitdirs directory `dir` could contribute — its `.git` directory, the
+// target(s) of a `.git` gitdir: file, and `dir` itself when it holds a HEAD. false = doubt (a stat error that is not
+// "absent", or a `.git` that is a symlink to something the no-follow reader cannot open).
+inline bool addGitDirsAt( const std::filesystem::path& dir, std::vector<std::filesystem::path>& gitDirs )
+{
+    std::error_code                    ec;
+    const std::filesystem::path        dotGit = dir / ".git";
+    const std::filesystem::file_status st     = std::filesystem::status( dotGit, ec );   // follows a link, as git's stat does
+    if( !statAbsentOrOk( ec ) )
+    {
+        return false;
+    }
+    ec.clear();
+    if( std::filesystem::is_directory( st ) )
+    {
+        addUniquePath( gitDirs, dotGit );
+    }
+    else if( std::filesystem::exists( std::filesystem::symlink_status( dotGit, ec ) ) )
+    {
+        const std::optional<std::string> head = pathguard::readRegularFileNoFollow( dotGit.string() );
+        if( !head && pathguard::isSymlink( dotGit.string() ) )
+        {
+            return false;
+        }
+        if( head && head->starts_with( "gitdir:" ) )
+        {
+            const std::string_view text( *head );
+            addPointerReadings( text.substr( text.starts_with( "gitdir: " ) ? 8 : 7 ), text.substr( 7 ), dir, gitDirs );
+        }
+    }
+    ec.clear();
+    if( std::filesystem::exists( std::filesystem::symlink_status( dir / "HEAD", ec ) ) )
+    {
+        addUniquePath( gitDirs, dir );   // a bare repository, or a directory inside a gitdir
+    }
+    return true;
+}
+
+// The local config files one gitdir could govern with: its config and config.worktree, and the same pair in every
+// reading of its `commondir`. false = doubt (a commondir behind a symlink, which git reads through).
+inline bool addGitDirConfigFiles( const std::filesystem::path& gitDir, std::vector<std::filesystem::path>& files )
+{
+    files.push_back( gitDir / "config" );
+    files.push_back( gitDir / "config.worktree" );
+    const std::string                commondirFile = ( gitDir / "commondir" ).string();
+    const std::optional<std::string> common        = pathguard::readRegularFileNoFollow( commondirFile );
+    if( !common )
+    {
+        return !pathguard::isSymlink( commondirFile );
+    }
+    std::vector<std::filesystem::path> commonDirs;
+    addPointerReadings( *common, *common, gitDir, commonDirs );
+    for( const std::filesystem::path& commonDir : commonDirs )
+    {
+        files.push_back( commonDir / "config" );
+        files.push_back( commonDir / "config.worktree" );
+    }
+    return true;
 }
 
 inline std::optional<std::vector<std::filesystem::path>> discoveryConfigSuperset( const std::string& root )
@@ -304,38 +369,12 @@ inline std::optional<std::vector<std::filesystem::path>> discoveryConfigSuperset
         return std::nullopt;
     }
     std::vector<std::filesystem::path> gitDirs;
-    for( ;; )
+    for( ;; )   // every ancestor-or-self: never stop at the first `.git`, never judge which one git accepts
     {
-        const std::filesystem::path       dotGit = dir / ".git";
-        const std::filesystem::file_status st    = std::filesystem::status( dotGit, ec );   // follows a link, as git's stat does
-        if( !statAbsentOrOk( ec ) )
+        if( !addGitDirsAt( dir, gitDirs ) )
         {
             return std::nullopt;
         }
-        ec.clear();
-        if( std::filesystem::is_directory( st ) )
-        {
-            if( std::find( gitDirs.begin(), gitDirs.end(), dotGit ) == gitDirs.end() ) { gitDirs.push_back( dotGit ); }
-        }
-        else if( std::filesystem::exists( std::filesystem::symlink_status( dotGit, ec ) ) )
-        {
-            const std::optional<std::string> head = pathguard::readRegularFileNoFollow( dotGit.string() );
-            if( !head && pathguard::isSymlink( dotGit.string() ) )
-            {
-                return std::nullopt;
-            }
-            if( head && head->starts_with( "gitdir:" ) )
-            {
-                const std::string_view text( *head );
-                addPointerReadings( text.substr( text.starts_with( "gitdir: " ) ? 8 : 7 ), text.substr( 7 ), dir, gitDirs );
-            }
-        }
-        ec.clear();
-        if( std::filesystem::exists( std::filesystem::symlink_status( dir / "HEAD", ec ) ) )
-        {
-            if( std::find( gitDirs.begin(), gitDirs.end(), dir ) == gitDirs.end() ) { gitDirs.push_back( dir ); }
-        }
-        ec.clear();
         const std::filesystem::path parent = dir.parent_path();
         if( parent == dir || parent.empty() )
         {
@@ -347,20 +386,7 @@ inline std::optional<std::vector<std::filesystem::path>> discoveryConfigSuperset
     files.reserve( gitDirs.size() * 4 );
     for( const std::filesystem::path& gitDir : gitDirs )
     {
-        files.push_back( gitDir / "config" );
-        files.push_back( gitDir / "config.worktree" );
-        const std::string commondirFile = ( gitDir / "commondir" ).string();
-        if( const std::optional<std::string> common = pathguard::readRegularFileNoFollow( commondirFile ) )
-        {
-            std::vector<std::filesystem::path> commonDirs;
-            addPointerReadings( *common, *common, gitDir, commonDirs );
-            for( const std::filesystem::path& commonDir : commonDirs )
-            {
-                files.push_back( commonDir / "config" );
-                files.push_back( commonDir / "config.worktree" );
-            }
-        }
-        else if( pathguard::isSymlink( commondirFile ) )
+        if( !addGitDirConfigFiles( gitDir, files ) )
         {
             return std::nullopt;
         }
