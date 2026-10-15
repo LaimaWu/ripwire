@@ -328,7 +328,19 @@ def sections_u( s ):
 a = read( sys.argv[ 1 ] )
 if a is None: sys.exit( 3 )
 N = int( sys.argv[ 2 ] ); X = int( N * 2.36 * 0.90 )
+def tail_size( t ):
+    # FIX1 R1: the refill reserves the tail at its HEAD-scoped size (the tail of the no-budget answer) when that is what binds, so U
+    # counts the tail at no less than the reference tail (an upper bound on the reserve: the maximality check stays a bound)
+    import json as _j
+    if t.lstrip().startswith( "{" ):
+        try: return len( _j.dumps( _j.loads( t ).get( "tail", {} ), separators=( ",", ":" ), ensure_ascii=False ).encode() )
+        except ValueError: return 0
+    m = re.search( r"<tail\b.*?</tail>", t, re.S )
+    return len( m.group( 0 ).encode() ) if m else 0
 U = sections_u( open( sys.argv[ 1 ], encoding='utf-8', errors='replace' ).read() )
+if len( sys.argv ) > 4:
+    _at = open( sys.argv[ 1 ], encoding='utf-8', errors='replace' ).read(); _rt = open( sys.argv[ 4 ], encoding='utf-8', errors='replace' ).read()
+    U += max( 0, tail_size( _rt ) - tail_size( _at ) )
 open( sys.argv[ 3 ], 'w' ).write( "".join( x[ 1 ] + "\n" for x in a[ 'rows' ] ) )
 k = len( a[ 'rows' ] )
 fits = ( a[ 'charged' ] <= X or k <= 4 ) and k >= min( 4, a[ 'total' ] )

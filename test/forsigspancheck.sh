@@ -470,6 +470,16 @@ if mode == "tight":
         else:
             U = ( len( A.split( "</sigs>", 1 )[ 1 ].encode() ) - len( "</ctx>" ) if "</sigs>" in A else 0 )
             U += sum( len( h.encode() ) for h in re.findall( r'<hdr [^>]*/>', A.split( "<sigs", 1 )[ 0 ] ) )
+            def tail_size( t ):
+                # FIX1 R1: the refill reserves the tail at its HEAD-scoped size (the tail of the no-budget answer) when that is what binds, so U
+                # counts the tail at no less than the reference tail (an upper bound on the reserve: the maximality check stays a bound)
+                import json as _j
+                if t.lstrip().startswith( "{" ):
+                    try: return len( _j.dumps( _j.loads( t ).get( "tail", {} ), separators=( ",", ":" ), ensure_ascii=False ).encode() )
+                    except ValueError: return 0
+                m = re.search( r"<tail\b.*?</tail>", t, re.S )
+                return len( m.group( 0 ).encode() ) if m else 0
+            if len( sys.argv ) > 7: U += max( 0, tail_size( body( sys.argv[ 7 ] ) ) - tail_size( A ) )
         if a is None or ref is None or not ref[ 0 ]: bad.append( "ST: no rows to charge (premise: answer and uncut reference)" )
         elif tb > 0:
             k = len( a[ 0 ] ); fits = a[ 1 ] <= T or k <= 4
