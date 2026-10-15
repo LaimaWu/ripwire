@@ -4253,7 +4253,7 @@ inline RefSpec resolveRefSpec( const std::string& root, std::string_view spec )
 // quotepath=false — no injection, deterministic path handling.
 inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::string_view root,
                                  const std::vector<char>* fileInBaseline = nullptr,     // fwd — defined below; computeHeadSnapshot reuses it
-                                 const KindScope& scope = {} );
+                                 const KindScope& scope = KindScope() );   // no braces here: qschemetripcheck's extractor reads them as a body
 // `excludes` MUST mirror the working-tree side's cfg.excludes (A4-F5): the HEAD snapshot is compared key-for-key
 // against the working tree, and any in-edge-derived kind (dead-code, api-surface) diverges if one side honors
 // --exclude and the other does not — e.g. a helper called only from tests/ is dead on a --exclude=tests working
@@ -4558,10 +4558,11 @@ inline ChangedFiles changedFilesBetween( const std::string& root, const std::str
     //    sentinels, the attribute files, and any symlink at all. One streamed `ls-tree -r` per side.
     std::vector<std::size_t> order( changed.size() );
     for( std::size_t k = 0; k < order.size(); ++k ) { order[k] = k; }
-    std::sort( order.begin(), order.end(), [ & ]( std::size_t a, std::size_t b ) { return changed[a] < changed[b]; } );
+    // rw::sortutil::svLess, not operator<: libstdc++'s string_view compare trips -fsanitize=integer (splitNulPaths' note)
+    std::sort( order.begin(), order.end(), [ & ]( std::size_t a, std::size_t b ) { return rw::sortutil::svLess( changed[a], changed[b] ); } );
     const auto changedIndex = [ & ]( std::string_view path ) -> std::size_t
     {
-        const auto it = std::lower_bound( order.begin(), order.end(), path, [ & ]( std::size_t k, std::string_view p ) { return std::string_view( changed[k] ) < p; } );
+        const auto it = std::lower_bound( order.begin(), order.end(), path, [ & ]( std::size_t k, std::string_view p ) { return rw::sortutil::svLess( changed[k], p ); } );
         return ( it != order.end() && changed[ *it ] == path ) ? *it : SIZE_MAX;
     };
     const auto readSide = [ & ]( const std::string& sha, std::vector<char>& existsHere, std::vector<std::string>& cmakeDirs,

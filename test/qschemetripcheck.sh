@@ -34,6 +34,13 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-14, lane/qd-memory-degrade: RE-DERIVED with UPDATE_GOLDEN=1. Manifest text moved in computeSnapshot (a KindScope
+#   parameter: the dead set and the clone/construct/defect/body passes run only for the kinds asked; the dead set moved to
+#   addDeadSet, same keys, sorted as before) and defectSitesOf (cFamilyMacroNames factored out; an optional macro override).
+#   Every Snapshot a qsnap/qheadsnap blob holds is computed with the default scope (all kinds, no override), which builds
+#   the same records in the same sorted order, so what a cached Snapshot means is unchanged: kQSnapCacheScheme 20,
+#   kCacheVersion 31 and kParserVer stay. The forward declaration's default is spelled KindScope() — braces there read as a
+#   body to extract_fn.
 # 2026-10-13, PR #349 lands (maintainer renumber commit on the contributor's branch): RE-DERIVED with UPDATE_GOLDEN=1.
 #   The only watched text that moved is the kParserVer declaration (and its mirror): provisional 158 -> 171. The branch
 #   built 156, 158 and 169 (rich file tag 170); main is 167 (rich file tag 168); 171 / rich file tag 172 is above all of
