@@ -22,7 +22,8 @@
 #     them the call reaches is unproven). callers: row -> group; callees: group -> row; impact: a chain of calls from
 #     the row to the group (a by-name hop makes it ~n, else a split hop ~s); safe-delete <c> rows as callers; the
 #     impact <rf> rollup row: the union of its symbols' tokens, the strongest mark per K. Above 16 groups the table
-#     lists the groups the page's rows name and the root says defs_listed=N.
+#     lists the groups the page's rows name and the root says defs_listed=N; there a row prints its K, K~s and K~t tokens
+#     and ONE bare ~n when it also has by-name ties (a row tied by name alone prints no of_def: its via="name" hedges it).
 #   * Every other answer (one definition, or one definition with its own declarations) carries no table and no of_def;
 #     its rows that are one arm of a split call carry prov="split" (the map's per-edge vocabulary), whatever defs= is.
 #   * --path: a to= with several definitions carries no to_p= unless a proven hop bound it (unreached, or the hop into
@@ -44,7 +45,10 @@
 #   js/rb/  two same-named methods of two classes, constructor-typed receivers.
 #   rs/   [mdbook-06] Book::iter vs Shelf::iter on param-typed receivers (by name + split today: hedged tokens).
 #   objc/ two -area methods, typed message receivers (split today: hedged tokens).
-#   (generated at run time) 20 Python classes with one same-named method each: the definition-table cap (16).
+#   u2/   [final review R1] scan_tok defined in prog1/util.c, an untied prototype in prog2/main.c (no #include proves the
+#         tie), a static namesake in prog3/other.c: a printed table lists all three groups (the prototype bodyless=1).
+#   (generated at run time) 20 Python classes with one same-named method each: the definition-table cap (16); a second
+#         20-class file with a by-name and a mixed caller (final review R2: a cut table enumerates no by-name tie).
 #
 # Arm classes in the output: [P] positive — the defect shape, RED on a binary without per-row attribution; [N] near miss —
 # a shape the new code could plausibly mis-handle (a one-group answer that must stay plain, an overload or a namesake that
@@ -87,6 +91,8 @@ def canon(tokens, table):
     out = []
     for t in tokens:
         k, _, mark = t.partition('~')
+        if k == '' and mark:
+            out.append('~' + mark); continue   # a cut table's bare ~n (its by-name ties, not enumerated)
         p = table.get(k)
         out.append(('!' + k) if p is None else (p + ('~' + mark if mark else '')))
     return ' '.join(sorted(out))
@@ -507,6 +513,75 @@ if ans h_p1 capfix callers s xml -- --callers=go --limit=5; then
             "[C] h_p2: page 2 rows=$( nrows h_p2 ), repeated from page 1: '$both'"
     else no "[C] h_p1: next_offset='$nxt' (want 5) or the page-2 call failed"; fi
 fi
+# R2 (final review): above the cap, by-name ties are not enumerated. use_any reaches go by name alone: no of_def, via="name"
+# is its hedge; use_mix holds a split arm into C05.go plus by-name ties: its split token and ONE bare ~n. The cut table then
+# lists only the groups a printed token names (the three proven callers' and C05's).
+python3 - "$DIR/capfix2/caps.py" <<'PY'
+import os, sys
+os.makedirs(os.path.dirname(sys.argv[1]), exist_ok=True)
+out = []
+for k in range(20):
+    out.append('class C%02d:\n    def go(self):\n        return %d\n' % (k, k))
+for k in range(3):
+    out.append('def use_%02d():\n    x = C%02d()\n    return x.go()\n' % (k, k))
+out.append('def use_any(o):\n    return o.go()\n')
+out.append('def use_mix(o):\n    y = C05()\n    y.go()\n    return o.go()\n')
+open(sys.argv[1], 'w').write('\n'.join(out))
+PY
+# cutinv TAG : on a cut table every row has of_def or is via="name", and every K resolves to a listed <def>
+cutinv(){
+    local tag="$1" bad
+    bad="$( awk -F'\t' '$1=="ROW" { if ($3=="-" && $4 !~ /via=name/) print $2": no of_def and no via=name"; else if ($3 ~ /!/) print $2": token names no <def> ("$3")" }' "$DIR/$tag.rows" )"
+    if [ "$( nrows "$tag" )" -gt 0 ] && [ -z "$bad" ]; then ok "[P] $tag: cut invariant — every row attributed or via=\"name\", every K in the table"
+    else no "[P] $tag: cut invariant broken: $( printf '%s' "$bad" | tr '\n' ';' | cut -c1-300 )"; fi
+}
+for form in xml json; do
+    t=h2_$form
+    if [ "$form" = json ]; then ans "$t" capfix2 callers callers json -- --callers=go --json; else ans "$t" capfix2 callers s xml -- --callers=go; fi || continue
+    expect P "$t" use_any -
+    case "$( rowflags "$t" use_any )" in *via=name*) ok "[P] $t: use_any (by name alone) keeps via=\"name\"" ;; *) no "[P] $t: use_any lost via=\"name\" ('$( rowflags "$t" use_any )')" ;; esac
+    expect P "$t" use_mix "caps.py:22~s ~n"
+    expect C "$t" use_00 caps.py:2
+    { [ "$( groups "$t" )" = 4 ] && [ "$( rootf "$t" defs_listed )" = 4 ]; }; say $? "[P] $t: the cut table lists the 4 groups a printed token names, defs_listed=4" \
+        "[P] $t: <def> rows=$( groups "$t" ) defs_listed='$( rootf "$t" defs_listed )', want 4 / 4"
+    cutinv "$t"
+done
+if ans h2_imp capfix2 impact s xml -- --impact=go; then
+    expect P h2_imp use_any -
+    expect P h2_imp use_mix "caps.py:22~s ~n"
+    { [ "$( groups h2_imp )" = 4 ] && [ "$( rootf h2_imp defs_listed )" = 4 ]; }; say $? "[P] h2_imp: impact's cut table lists 4 groups, defs_listed=4" \
+        "[P] h2_imp: <def> rows=$( groups h2_imp ) defs_listed='$( rootf h2_imp defs_listed )', want 4 / 4"
+    cutinv h2_imp
+fi
+if ( cd "$DIR/capfix2" && "$BIN" . --no-cache --callers=go --legend=full ) >"$DIR/h2_full.out" 2>/dev/null; then
+    sed -n '1,/-->/p' "$DIR/h2_full.out" | grep -q 'bare ~n'; say $? "[P] h2_full: the full legend reads the cut table's bare ~n" \
+        "[P] h2_full: no legend reading of the bare ~n token"
+    if command -v xmllint >/dev/null 2>&1; then
+        xmllint --noout "$DIR/h2_full.out" 2>/dev/null; say $? "[C] h2_full: --legend=full well-formed" "[C] h2_full: --legend=full malformed"
+    fi
+    ( cd "$DIR/capfix2" && "$BIN" . --no-cache --callers=go ) 2>/dev/null | sed -n '1,/-->/p' | grep -q 'bare ~n'; say $? "[P] h2_cmp: the compact legend reads the bare ~n" \
+        "[P] h2_cmp: the compact legend does not read the bare ~n"
+else no "h2_full: --callers=go --legend=full failed"; fi
+FIX="$FIXSAVE"
+
+# ── (J) R1 (final review): an untied declaration is dropped only when that leaves ONE group; a printed table lists it ──────
+echo "(J) untied declarations on a printed table"
+if ans j_u2 u2 callers s xml -- --callers=scan_tok; then
+    [ "$( groups j_u2 )" = 3 ]; say $? "[P] j_u2: three groups listed (definition, untied prototype, static namesake)" \
+        "[P] j_u2: <def> rows=$( groups j_u2 ), want 3 (an untied prototype vanished from a printed table)"
+    defbody P j_u2 prog2/main.c:2 1
+    defbody C j_u2 prog1/util.c:2 0
+    defbody C j_u2 prog3/other.c:2 0
+    expect C j_u2 use_tok1 prog1/util.c:2
+    expect C j_u2 use_tok3 prog3/other.c:2
+fi
+if ans j_u2i u2 impact s xml -- --impact=scan_tok; then
+    [ "$( groups j_u2i )" = 3 ]; say $? "[P] j_u2i: impact lists the three groups" "[P] j_u2i: <def> rows=$( groups j_u2i ), want 3"
+fi
+# the one-group sibling (u1 = prog1 + prog2): dropping the untied prototype leaves one group, so the answer stays plain
+mkdir -p "$DIR/u1/prog1" "$DIR/u1/prog2"; cp "$FIX/u2/prog1/util.c" "$DIR/u1/prog1/"; cp "$FIX/u2/prog2/main.c" "$DIR/u1/prog2/"
+FIXSAVE="$FIX"; FIX="$DIR"
+if ans j_u1 u1 callers s xml -- --callers=scan_tok; then plain C j_u1; fi
 FIX="$FIXSAVE"
 
 # ── (I) Q1 on --for: a body's <calls> row (and a hop's) whose edge is a resolver split arm carries prov="split", defined in the
