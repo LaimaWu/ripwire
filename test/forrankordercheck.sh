@@ -138,7 +138,14 @@ REPO_Q=( "rank graph teleport" "compact legend rewrite" "edit receipt post-check
 # replace, so the byte-shaped <sigs> section fits five more signature rows, and the legend that grew 154 B (the sc=
 # rule, the route= code's reading and the merged-callee reading) is paid for several times over in rows. The other
 # nine stay at their for-widen bases: -1.11%, +0.36%, -0.45%, +1.54%, +0.02%, +1.66%, +0.18%, -0.56%, +2.30%.
-REPO_BASE=( 10134 10029 10642 10102 9880 9397 10009 10070 9966 10379 )
+# q6 q7 q8 RE-PINNED 2026-10-15 (lane forbudget-soft FIX1, review rv-forbudget-soft N2; rule 4, a stated by-design break — the 4% rule
+# itself is unchanged): 9397 -> 9947, 10009 -> 10496, 10070 -> 10605 B, i.e. the answer LESS its past-target rows, its hop bytes
+# over the old 1,000 B allowance, its tail page rows and the tail clause growth (the allowances below), measured on this lane's
+# build at this tree (+5.85% / +4.87% / +5.31% over the old pins). The review measured the same growth on the base tree (+6.42% /
+# +4.81% / +5.25%) and attributed it to the lane: decision D-3 (the default <hops> serves every hop row — the part inside the old
+# 1,000 B allowance is not subtracted) and the default regime's header clauses (budget_bytes= read as a target, past_target=).
+# The other seven are unmoved. Train 28 re-measures attrib-multidef's --for piece against these pins.
+REPO_BASE=( 10134 10029 10642 10102 9880 9947 10496 10605 9966 10379 )
 # q3 RE-PINNED 2026-10-10 (train 26c): 10080 -> 10642 B (+5.58% on the merged stack), an OUTPUT change of two signed lanes
 # that each stay inside the 4% alone: lego-charge serves two more signature rows (25 -> 27 of 40) because <lego>/<compose>
 # are charged to the <sigs> budget at the size they are SERVED (a collapsing section its stub), and owner-hop adds the

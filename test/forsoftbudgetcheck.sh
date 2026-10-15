@@ -52,6 +52,7 @@
 
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"   # gitenvhermeticcheck (D): no ambient GIT_* reaches the RP10 fixture repos
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 fail=0
@@ -445,6 +446,16 @@ a, ref, T = rb( sys.argv[ 1 ] ), rb( sys.argv[ 2 ] ), int( sys.argv[ 3 ] )
 ans = open( sys.argv[ 1 ] ).read()
 U = ( len( ans.split( '</sigs>', 1 )[ 1 ].encode() ) - len( '</ctx>' ) if '</sigs>' in ans else 0 )
 U += sum( len( h.encode() ) for h in re.findall( r'<hdr [^>]*/>', ans.split( '<sigs', 1 )[ 0 ] ) )
+def tail_size( t ):
+    # FIX1 R1: the refill reserves the tail at its HEAD-scoped size (the tail of the no-budget answer) when that is what binds, so U
+    # counts the tail at no less than the reference tail (an upper bound on the reserve: the maximality check stays a bound)
+    import json as _j
+    if t.lstrip().startswith( "{" ):
+        try: return len( _j.dumps( _j.loads( t ).get( "tail", {} ), separators=( ",", ":" ), ensure_ascii=False ).encode() )
+        except ValueError: return 0
+    m = re.search( r"<tail\b.*?</tail>", t, re.S )
+    return len( m.group( 0 ).encode() ) if m else 0
+U += max( 0, tail_size( open( sys.argv[ 2 ] ).read() ) - tail_size( ans ) )
 if a is None or ref is None: print( "ERR no <sigs>" ); sys.exit( 0 )
 ab, ar = a; rr = ref[ 1 ]
 k = len( ar )
@@ -671,6 +682,65 @@ for spec in "legotransitivefix|$QNODE|600|lego|9" "legotransitivefix|$QNODE|1000
     if [ "$rrc" -eq 0 ] && isnum "$got" && [ "$got" -ge "$want" ]; then ok "(RF1) $fx '$q' N=$n: <$sec> keeps $got rows >= the retired ceiling's $want"
     else no "(RF1) $fx '$q' N=$n: <$sec> serves '$got' rows < the retired ceiling's $want (rc=$rrc) — a section lost its share to the rows"; fi
 done
+
+# (RF2) FIX1 R2 (review rv-forbudget-soft): the --json tail is a trailing section too — at an explicit N it keeps at least the
+# bytes the retired hard ceiling (d4325a8c) gave it. Lower bounds measured on frozen in-repo fixtures; 974dd5b1 served 470/412/434
+# and 514/438 B there (RED), the tail funded from what the refilled rows left.
+for spec in "receiverevidencefix|$QNODE|1000|527" "receiverevidencefix|$QNODE|2000|582" "receiverevidencefix|$QNODE|3000|622" \
+            "falseedgefix|$QHAND|2000|544" "falseedgefix|$QHAND|3000|526"; do
+    IFS='|' read -r fx q n want <<< "$spec"
+    got="$( "$BIN" "test/$fx" --no-cache --for="$q" --token-budget="$n" --json 2>/dev/null \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(json.dumps(d["tail"],separators=(",",":"))))' 2>/dev/null )"
+    if isnum "$got" && [ "$got" -ge "$want" ]; then ok "(RF2) $fx '$q' N=$n --json: the tail keeps $got B >= the retired ceiling's $want B"
+    else no "(RF2) $fx '$q' N=$n --json: the tail serves '$got' B < the retired ceiling's $want B — a trailing section lost its share"; fi
+done
+# (RP10) FIX1 R1: rows are a rank prefix and MONOTONE in N at a step of 10, at three root path lengths (the header's root= moves
+# which N the cut steps at; 974dd5b1 dropped a row at 1490 with a 28-char root: the tail's reserve stepped with the cut). The
+# fornotesbudgetcheck corpus shape (72 noted symbols), swept 1400..1600, default and --json dialects.
+RPD="$( mktemp -d /tmp/rwrp.XXXXXX )" || RPD="$TMP/rp"
+mkdir -p "$RPD/a/c" "$RPD/medium_root_path_component/c" "$TMP/a_long_root_path_component_for_the_rp10_sweep/c"
+for root in "$RPD/a/c" "$RPD/medium_root_path_component/c" "$TMP/a_long_root_path_component_for_the_rp10_sweep/c"; do
+    mkdir -p "$root/src"
+    python3 - "$root" <<'PY'
+import os, sys
+for i in range( 12 ):
+    with open( os.path.join( sys.argv[ 1 ], "src", "mod%d.py" % i ), "w" ) as f:
+        for j in range( 6 ):
+            f.write( "def widgetRoutine%d_%d( alpha, beta ):\n    \"\"\"Route the widget pipeline stage %d.%d through the dispatcher.\"\"\"\n    return alpha + beta\n\n\n" % ( i, j, i, j ) )
+PY
+    ( cd "$root" && git init -q -b main . && git add -A && git -c user.email=gate@example.invalid -c user.name=gate commit -qm corpus ) >/dev/null 2>&1
+    for i in 0 1 2 3 4 5 6 7 8 9 10 11; do for j in 0 1 2 3 4 5; do
+        "$BIN" "$root" --note-add="widgetRoutine${i}_${j}: this routine is load-bearing for the widget dispatcher and must not be reordered without rechecking the stage table downstream" >/dev/null 2>&1
+    done; done
+    rp10="$( python3 - "$BIN" "$root" <<'PY'
+import json, re, subprocess, sys
+B, root = sys.argv[ 1 ], sys.argv[ 2 ]; q = "widget dispatcher pipeline stage"
+def rows( s, js ):
+    if js:
+        return [ "%s:%s:%s" % ( e.get( "p" ), e.get( "l" ), e.get( "n" ) ) for e in sorted( json.loads( s ).get( "sigs", [] ), key=lambda e: e.get( "r", 10**9 ) ) ]
+    m = re.search( r"<sigs\b[^>]*>(.*?)</sigs>", s, re.S ); out = []
+    for x in re.finditer( r"<d ([^>]*)>", m.group( 1 ) if m else "" ):
+        g = lambda k: ( re.search( r"\b" + k + r'="([^"]*)"', x.group( 1 ) ) or [ None, "?" ] )[ 1 ]
+        out.append( ( int( g( "r" ) ) if g( "r" ).isdigit() else 10**9, g( "p" ) + ":" + g( "l" ) + ":" + g( "n" ) ) )
+    return [ b for a, b in sorted( out ) ]
+bad = []
+for js in ( False, True ):
+    extra = [ "--json" ] if js else []
+    ref = rows( subprocess.run( [ B, root, "--for=" + q ] + extra, capture_output=True ).stdout.decode(), js ); prev = None
+    for n in range( 1400, 1601, 10 ):
+        r = rows( subprocess.run( [ B, root, "--for=" + q, "--token-budget=%d" % n ] + extra, capture_output=True ).stdout.decode(), js )
+        if not r or r != ref[ :len( r ) ] or ( prev is not None and prev != r[ :len( prev ) ] ):
+            bad.append( "%s@%d:%s->%d" % ( "json" if js else "xml", n, len( prev ) if prev else "-", len( r ) ) )
+        prev = r
+print( "OK" if not bad else "BAD " + " ".join( bad[ :4 ] ) )
+PY
+)"
+    case "$rp10" in
+        OK) ok "(RP10) root of ${#root} chars: rows are a rank prefix, monotone in N, 1400..1600 step 10, default and --json" ;;
+        *)  no "(RP10) root of ${#root} chars: $rp10 — the rows past the cut fell as N grew (or are not a rank prefix)" ;;
+    esac
+done
+rm -rf "$RPD"
 
 # ── twins: the CI-gate personality of --token-budget is unchanged on the map, --query and --recall ───────
 "$BIN" "$CORPUS" --token-budget=100 "$CM" > "$TMP/map.out" 2>/dev/null; grc=$?

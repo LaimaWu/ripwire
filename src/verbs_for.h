@@ -1334,8 +1334,20 @@ struct ForJsonRefillState   // the first render's outputs, by reference: the ref
     rw::JsonSigNoteCounts&    notes;
     std::vector<rw::NodeId>&  shown;
 };
+// FIX1 R2 (review rv-forbudget-soft): the JSON tail's SHARE under a soft target — what the rows at the cut leave of the bundle
+// budget, and never less than what the retired hard ceiling left it (its allowance, N x kMinBytesPerToken x the first-entry
+// tolerance, less the envelope it charged and the rows at the cut): owner decision 2 (a trailing section keeps at least the share
+// it had at the same N). One function for the refill's reserve and the final fill, so the two read the same number.
+inline std::size_t forLensJsonTailShare( std::size_t tokenBudget, std::size_t bundleBytes, std::size_t fixedBytes, std::size_t cutRowsBytes ) noexcept
+{
+    const std::size_t softShare    = rw::forSoftSectionsShare( bundleBytes, cutRowsBytes );                                   // T less the rows at the cut
+    const std::size_t retiredShare = rw::forSoftSectionsShare( rw::ceilingAllowanceBytes( tokenBudget ), fixedBytes + cutRowsBytes );   // the hard ceiling's
+    return softShare > retiredShare ? softShare : retiredShare;
+}
+
 struct ForJsonRefillBudgets
 {
+    std::size_t fixedBytes;     // the envelope the sigs budget charged (header, reserves, counts, notes)
     std::size_t bundleBytes;    // budgetBytesForTokens( N )
     std::size_t sigsTarget;     // the ladder's target (the cut)
     std::size_t firstRowDrop;   // the first render's row budget (T plus the frame)
@@ -1345,11 +1357,10 @@ inline void forLensJsonSoftRefill( const PackSigs& packSigs, const ForLensJsonIn
                                    const rw::SigsCutContinuation& cutNext, const std::optional<rw::RedactCounts>& redactBeforeSigs )
 {
     const std::size_t  cutRows  = st.json.size() - std::min( st.json.size(), st.cut.pastTargetBytes );
-    const rw::FileTail cutTail  = rw::computeFileTail( in.ing, in.rank, *in.evidence, rw::rowsAtTargetIds( st.shown, in.rank, st.cut.pastTarget ),
-                                                       in.rootArg, in.task );
-    // the tail at its RESERVE (its share, or its whole stanza when smaller), not its filled bytes: rows stay monotone in N
-    const std::size_t  tailBytes = std::min( rw::forSoftSectionsShare( b.bundleBytes, cutRows ),
-                                             forLensJsonTailStanza( cutTail, 0, 0 ).size() );
+    // the tail at its RESERVE: its share, capped at the head-scoped tail's whole stanza (the same at every N; the XML twin's
+    // rule) — not its filled bytes nor the cut-scoped tail's size, both of which step with N: rows stay monotone in N
+    const std::size_t  tailBytes = std::min( forLensJsonTailShare( in.tokenBudget, b.bundleBytes, b.fixedBytes, cutRows ),
+                                             forLensJsonTailStanza( *in.fileTail, 0, 0 ).size() );
     const std::size_t  rowDrop   = rw::forSoftRowDropFill( b.bundleBytes, tailBytes );
     if( rowDrop >= b.firstRowDrop )
     {
@@ -1503,7 +1514,7 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
         if( isSigsBuffered && in.tokenBudget > 0 && sigsCut.pastTarget > 0 )
         {
             forLensJsonSoftRefill( packSigs, in, ForJsonRefillState{ sigsJson, sigsCut, sigsCapped, sigsDroppedPositive, noteCounts, jsonShownIds },
-                                   ForJsonRefillBudgets{ bundleBudget, sigsBudget, sigsBudgets.rowDrop }, cutNext, redactBeforeSigs );
+                                   ForJsonRefillBudgets{ fixedBytes, bundleBudget, sigsBudget, sigsBudgets.rowDrop }, cutNext, redactBeforeSigs );
         }
         ForLensBlockCharge sigsCharge;   // the sink: an unmeasured block takes the omitting path below
         if( !isSigsBuffered )
@@ -1605,7 +1616,7 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
     // lane 2: the rank rows exclude the files of the rows emitted (after a refill: the rows it kept — the XML twin's rule)
     const std::size_t  jsonCutRows = sigsJson.size() - std::min( sigsJson.size(), sigsCut.pastTargetBytes );
     const rw::FileTail jsonTail    = rw::computeFileTail( in.ing, in.rank, *in.evidence, jsonShownIds, in.rootArg, in.task );
-    tailStanza = forLensJsonTailStanza( jsonTail, in.tokenBudget, bundleBudget > jsonCutRows ? bundleBudget - jsonCutRows : 0u );
+    tailStanza = forLensJsonTailStanza( jsonTail, in.tokenBudget, forLensJsonTailShare( in.tokenBudget, bundleBudget, fixedBytes, jsonCutRows ) );
     const std::size_t bundleBytesBase   = header.size() + sigsJson.size() + notesStanza.size()
                                         + surfaceCountsStanza.size() + tailStanza.size() + envelopeTextBytes
                                         + droppedPositiveStanza.size()   // A2: 0 bytes on the (overwhelming) no-drop path
@@ -3841,12 +3852,14 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // replaced, never added to; a re-render whose buffer fails keeps the first render and its readings whole.
         if( forSoftTarget && sigsPreRendered && forSigsCut.pastTarget > 0 )
         {
-            // the tail is charged at its RESERVE — its share, or its whole render when that is smaller — not at its filled bytes: a
-            // fill that steps a whole row at a time would otherwise make the rows past the cut fall as N grows (rows monotone in N)
+            // the tail is charged at its RESERVE — its share, capped at the whole render of the head-scoped tail (forFileTail: the
+            // rows outside the 40-row surface, the same at every N) — not at its filled bytes nor at the cut-scoped tail's size:
+            // both step with N (a whole row at a time; a file moving from the rank rows into the page rows gains its sym=), and
+            // the rows past the cut would then fall as N grows. With this reserve the rows are monotone in N.
             std::vector<char> tailEsc;
             const std::size_t tailReserve    = std::min( std::max<std::size_t>( bundleBudget > tailSpentBytes ? bundleBudget - tailSpentBytes : 0u,
                                                                                 rw::kForFileTailShellReserve ),
-                                                         rw::renderFileTailXml( forFileTailShown, forFileTailShown.paths.size(), tailEsc ).size() );
+                                                         rw::renderFileTailXml( forFileTail, forFileTail.paths.size(), tailEsc ).size() );
             const std::size_t sectionsServed = forHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size() + graphSection.xml.size()
                                              + autoSection.xml.size() + tailReserve;   // not the --detail bodies (above)
             const std::size_t rowDropFill    = rw::forSoftRowDropFill( bundleBudget, sectionsServed );
