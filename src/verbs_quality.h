@@ -318,6 +318,10 @@ std::optional<int> loadChangedFiles( const std::string& root, const rw::Config& 
     {
         out.kinds &= static_cast<quality::KindMask>( ~quality::kindBit( "defect-shape" ) );
     }
+    if( out.kinds == 0 )   // the selection was defect-shape (with whole-tree kinds) and the changed files cannot decide it: never an empty pass
+    {
+        return refPairStopRefusal( stop, out, "the selected kinds need the whole tree (defect-shape too: the changed files' C-family macro names differ, or a C++ file changed without the base's whole set)" );
+    }
     out.degraded     = true;
     out.baseSnapshot = quality::computeSnapshot( baseTree.ing, baseTree.g, baseTree.root, nullptr, { out.kinds, out.macroOverride() } );
     if( !cfg.qualityScope.empty() )
@@ -333,10 +337,14 @@ std::optional<int> loadChangedFiles( const std::string& root, const rw::Config& 
 
 // qd-memory-degrade: the two full trees, as #387 reads them — the base scored and released, then the target — with the
 // projection between them. A stop in either is recorded in out.stop; `projectedNoFit` says the projection chose the
-// changed files before the target was read. Exit code on an environment failure only.
+// changed files before the target was read. The projection is asked only when the changed files could answer a selected
+// kind for certain: a selection of whole-tree kinds (with or without defect-shape, which the changed files may not
+// decide) gains nothing from pre-empting the full attempt — that is the replay kinds_next= names, and it runs in full,
+// refused only by a real stop. Exit code on an environment failure only.
 std::optional<int> loadFullTrees( const std::string& root, const rw::Config& cfg, RefPairDelta& out, bool& projectedNoFit )
 {
     using namespace rw;
+    const quality::KindMask certainLocal = static_cast<quality::KindMask>( out.selected & ~( quality::kWholeTreeKinds | quality::kindBit( "defect-shape" ) ) );
     if( !out.sameRef )
     {
         const std::uint64_t before = os::mem_footprint();
@@ -345,9 +353,9 @@ std::optional<int> loadFullTrees( const std::string& root, const rw::Config& cfg
             return failed;
         }
         // #387: the base tree's index, graph and temp dir were released when scoreBaseCommit returned.
-        if( out.stop.stopped || hardLineStops( "base commit's snapshot, with its index released", out.stop ) )
+        if( out.stop.stopped || hardLineStops( "base commit's snapshot, with its index released", out.stop ) || certainLocal == 0 )
         {
-            return std::nullopt;
+            return out.stop.stopped ? std::nullopt : loadTargetCommit( root, out.targetSha, cfg, out );
         }
         const std::uint64_t              basePeak = os::mem_footprint_peak();
         const std::uint64_t              after    = memguard::measuredFootprint();

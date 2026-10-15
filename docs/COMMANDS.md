@@ -2967,7 +2967,7 @@ $ ./build/ripwire . --quality-delta
 
 **Answers:** (with --quality-delta=A..B) run only the named kinds — the replay a partial answer hands back (with --quality-delta=A..B) run ONLY the named kinds, comma-separated, of the twelve: api-surface, complexity, dead-code, defect-shape, duplication, error-masking, nesting, new-clone-of-reused-helper, params, placeholder, short-horizon-churn, verbosity.
 
-A named kind's rows are exactly its rows in a full answer (same code, same bars); the header names the others (kinds_skipped=, skipped_why="selector"), stale acks are judged for the named kinds only, and a pass no named kind needs does not run. An unknown name is refused (exit 1) naming the twelve; refused beside --quality-ack or --quality-baseline and on the bare form (the working-tree form and the MCP quality_delta tool have no selector yet).
+A named kind's rows are exactly its rows in a full answer (same code, same bars); the header names the others (kinds_skipped=, skipped_why="selector"), stale acks are judged for the named kinds only, and a pass no named kind needs does not run. An unknown name is refused (exit 1) naming the twelve; refused beside --quality-ack or --quality-baseline and on the bare form (the working-tree form and the MCP quality_delta tool have no selector yet). A selection the changed files cannot answer (whole-tree kinds, with or without defect-shape) is never pre-empted by the memory projection: it runs in full, and only a real memory stop refuses it (exit 5) — so the kinds_next= replay is not degraded again.
 
 **Caveats (stated by the binary):**
 

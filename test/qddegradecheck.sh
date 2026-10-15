@@ -54,8 +54,9 @@
 #   (P) R4 cache isolation: P1 with the cache on leaves the HEAD ingest-cache blob untouched; a cached run after it is
 #       byte-identical to (A).
 #   (Q) R5 the target-phase stop (ingest:2 cuts the target's full ingest): a degraded answer naming the target's stop.
-#   (R) R7b a peak over the limit (peak:1) is disclosed on a full answer, rc and rows unchanged; R7c a replay whose
-#       selection holds only whole-tree kinds refuses under pressure (exit 5), never an empty pass.
+#   (R) R7b a peak over the limit (peak:1) is disclosed on a full answer, rc and rows unchanged; R7c a selection the
+#       changed files cannot answer refuses under a stop (exit 5), never an empty pass, and is never pre-empted by the
+#       projection (the replay runs in full).
 #   (S) R9 --quality-kinds=complexity reports no false finding-gone for a dead-code ack.
 #   (T) S2 fits near the line: --max-memory at 2x the measured full peak answers in full, byte-identical (guard).
 #   (V) R8 a degraded answer with rows and no gating row exits 6, not 2 and not 0.
@@ -506,10 +507,24 @@ else no "(R) peak:1 rc=$RC (want $ARC) memory_peak=$pk stderr: $( grep '^ripwire
 qd RIPWIRE_TEST_MEMGUARD=peak:1 "$BIN" . --quality-delta=HEAD~1..HEAD --legend=full --no-cache
 if sed -n 's/^\(<!--.*-->\).*/\1/p' "$WORK/o" | grep -q -- 'memory_peak=' && validxml "$WORK/o"; then ok "(R) --legend=full defines memory_peak= when it rides, and parses as XML"
 else no "(R) the legend lacks memory_peak= (or invalid XML)"; fi
-qd RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD "--quality-kinds=$WHOLE_KINDS" --no-cache
+# A selection the changed files could not answer (whole-tree kinds, with or without defect-shape) is never pre-empted by
+# the projection — it is the replay kinds_next= names, and degrading it could only refuse: it runs in full. A real stop
+# still refuses it, by name, and so does a defect-shape-only selection whose changed files cannot decide defect-shape
+# (found on this repository's own HEAD~20..HEAD: the replay degraded again and answered EMPTY with exit 6).
+qd RIPWIRE_TEST_MEMGUARD=crawl:12 "$BIN" . --quality-delta=HEAD~1..HEAD "--quality-kinds=$WHOLE_KINDS" --no-cache
 if [ "$RC" = 5 ] && [ ! -s "$WORK/o" ] && [ "$( grep -c '^ripwire: [^c]' "$WORK/e" )" = 1 ] && grep -q 'whole-tree' "$WORK/e"; then
-    ok "(R) a whole-tree-only selection under pressure refuses (exit 5, one line naming why) — never an empty pass"
-else no "(R) whole-tree-only replay under pressure: rc=$RC stdout=$( wc -c <"$WORK/o" | tr -d ' ' )B stderr: $( grep '^ripwire: [^c]' "$WORK/e" | head -c 300 )"; fi
+    ok "(R) a whole-tree-only selection under a stop refuses (exit 5, one line naming why) — never an empty pass"
+else no "(R) whole-tree-only selection under a stop: rc=$RC stdout=$( wc -c <"$WORK/o" | tr -d ' ' )B stderr: $( grep '^ripwire: [^c]' "$WORK/e" | head -c 300 )"; fi
+qd RIPWIRE_TEST_MEMGUARD=crawl:12 "$BIN" . --quality-delta=HEAD~1..HEAD --quality-kinds=defect-shape --no-cache
+if [ "$RC" = 5 ] && [ ! -s "$WORK/o" ] && [ "$( grep -c '^ripwire: [^c]' "$WORK/e" )" = 1 ] && grep -q 'defect-shape' "$WORK/e"; then
+    ok "(R) a defect-shape-only selection the changed files cannot decide (a changed C++ file, no whole macro set) refuses (exit 5) — never an empty pass"
+else no "(R) defect-shape-only under a stop: rc=$RC stdout=$( wc -c <"$WORK/o" | tr -d ' ' )B stderr: $( grep '^ripwire: [^c]' "$WORK/e" | head -c 300 )"; fi
+REPLAY_KINDS="dead-code,defect-shape,duplication,new-clone-of-reused-helper"
+qd RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD "--quality-kinds=$REPLAY_KINDS" --no-cache
+if [ -s "$WORK/o" ] && ! hasattr "$WORK/o" ingest_scope && [ "$( rows "$WORK/o" )" = "$( rows "$WORK/A.xml" "$REPLAY_KINDS" )" ] && [ -n "$( rows "$WORK/o" )" ] \
+   && { [ "$RC" = 0 ] || [ "$RC" = 2 ]; }; then
+    ok "(R) the replay's selection is not pre-empted by the projection (project:1): answered in full, exactly (A)'s rows of those kinds (rc=$RC)"
+else no "(R) replay selection under project:1: rc=$RC scope=$( attr "$WORK/o" ingest_scope ) rows=$( rows "$WORK/o" | grep -c . ) want $( rows "$WORK/A.xml" "$REPLAY_KINDS" | grep -c . )"; fi
 
 # ── (S) R9: stale acks under --quality-kinds are checked for the selected kinds only ───────────────────────────
 FSS="$WORK/fss"; cp -R "$FX" "$FSS"
