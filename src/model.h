@@ -1134,16 +1134,13 @@ static_assert( enumCountIsExact<LocalBindKind, kLocalBindKindCount>(), "kLocalBi
 inline constexpr const char* kFnBindLambdaTarget  = "(lambda)";    // parens are illegal in identifiers, so
 inline constexpr const char* kFnBindClobberTarget = "(unknown)";   //   neither sentinel can match a real def
 
-// One main-object implementor row (Graph::rubyMainMixins): the module the top level mixes in, and the directive's site.
+// One main-object implementor row (Graph::rubyMainMixins, ordered by base, then by site): the module the top level mixes in,
+// and the directive's site.
 struct RubyMainMixinRow
 {
     NodeId        base   = kNoNode;
     std::uint32_t fileId = 0;
     std::uint32_t line   = 0;   // the constant's 1-based line
-    friend bool   operator<( const RubyMainMixinRow& a, const RubyMainMixinRow& b ) noexcept
-    {
-        return std::tie( a.base, a.fileId, a.line ) < std::tie( b.base, b.fileId, b.line );
-    }
 };
 
 struct Binding

@@ -8921,19 +8921,22 @@ struct LegoTargetedArgs
     int              pageLimit  = 0;        // --limit / MCP limit over the deeper implementor rows (0 = the default page)
     int              pageOffset = 0;        // --offset / MCP offset
     const std::vector<std::vector<std::uint8_t>>* implementorBound = nullptr;   // fix 1: Graph::implementorBound (null: nothing proven)
-    std::span<const RubyMainMixinRow> mainMixins;   // lane ruby-pair: Graph::rubyMainMixins (sorted by base) — the main-object rows
+    std::span<const RubyMainMixinRow> mainMixins;   // lane ruby-pair: Graph::rubyMainMixins (sorted by base) — the main-object rows (withMainRows)
     LegoTargetedArgs() = default;
-    LegoTargetedArgs( std::string_view floorAttr, int limit = 0, int offset = 0, const std::vector<std::vector<std::uint8_t>>* bound = nullptr,
-                      std::span<const RubyMainMixinRow> mains = {} )
-        : graphCountFloorAttr( floorAttr ), pageLimit( limit ), pageOffset( offset ), implementorBound( bound ), mainMixins( mains ) {}
+    LegoTargetedArgs( std::string_view floorAttr, int limit = 0, int offset = 0, const std::vector<std::vector<std::uint8_t>>* bound = nullptr )
+        : graphCountFloorAttr( floorAttr ), pageLimit( limit ), pageOffset( offset ), implementorBound( bound ) {}
+    LegoTargetedArgs&& withMainRows( std::span<const RubyMainMixinRow> rows ) && noexcept
+    {
+        mainMixins = rows;
+        return std::move( *this );
+    }
 };
 
 // lane ruby-pair: the main-object implementor rows of base `id` (LegoTargetedArgs::mainMixins), in (file, line) order.
 inline std::span<const RubyMainMixinRow> legoMainRowsOf( std::span<const RubyMainMixinRow> rows, NodeId id ) noexcept
 {
-    const auto lo = std::lower_bound( rows.begin(), rows.end(), id, []( const RubyMainMixinRow& r, NodeId v ) { return r.base < v; } );
-    const auto hi = std::upper_bound( lo, rows.end(), id, []( NodeId v, const RubyMainMixinRow& r ) { return v < r.base; } );
-    return { lo, hi };
+    const auto [ first, last ] = std::ranges::equal_range( rows, id, {}, &RubyMainMixinRow::base );
+    return { first, last };
 }
 
 // The present-only legend clause of a main-object row (no `--` inside: it rides in an XML comment).

@@ -1054,9 +1054,8 @@ inline constexpr SubscriptOperatorNames kSubscriptOperatorMethods[] = {
 
 inline const SubscriptOperatorNames* subscriptOperatorNamesOf( Lang lang ) noexcept
 {
-    const auto it = std::find_if( std::begin( kSubscriptOperatorMethods ), std::end( kSubscriptOperatorMethods ),
-                                  [ lang ]( const SubscriptOperatorNames& n ) { return n.lang == lang; } );
-    return it == std::end( kSubscriptOperatorMethods ) ? nullptr : &*it;
+    const auto* const it = std::ranges::find( kSubscriptOperatorMethods, lang, &SubscriptOperatorNames::lang );
+    return it == std::ranges::end( kSubscriptOperatorMethods ) ? nullptr : it;
 }
 
 // The operator method element access `access` runs: the write form when it is an assignment's whole target (`h[ k ] = v`),

@@ -4568,7 +4568,7 @@ std::optional<int> runTargetedViews( const MainDispatch& d )
                      rw::legoClosureLegendComment( g.implementors, g.implementorBound, focus ).c_str() );   // lane lego-transitive: present-only, the deeper rows
         const std::string legoTargetedAttr = rw::unprovenDefsAttrXml( legoUnprovenDefs ) + rw::graphCountFloorAttrXml( g );   // outlives the call
         packLego( stdout, ing, g.implementors, flat, 1, d.redactPtr, &legoImpure, focus, /*withPaths=*/true, tvRootArg,
-                  rw::LegoTargetedArgs( legoTargetedAttr, cfg.pageLimit, cfg.pageOffset, &g.implementorBound, g.rubyMainMixins ) );   // H1 + M15: residue, gauge, marker; the deeper-row page
+                  rw::LegoTargetedArgs( legoTargetedAttr, cfg.pageLimit, cfg.pageOffset, &g.implementorBound ).withMainRows( g.rubyMainMixins ) );   // H1 + M15: residue, gauge, marker; the deeper-row page
         rw::emitRaw( stdout, "</ctx>" );
         reportRedactions( stderr, d.redactCounts );      // W3-N1: a contract <m> sig is a redacting seam — disclose the tally
         return 0;

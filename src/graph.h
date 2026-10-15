@@ -5064,9 +5064,9 @@ inline std::vector<RubyMainMixinRow> rubyMainObjectMixins( const IngestResult& i
             rows.push_back( RubyMainMixinRow { base, b.fileId, b.spanStart } );
         }
     }
-    std::sort( rows.begin(), rows.end() );
-    rows.erase( std::unique( rows.begin(), rows.end(), []( const RubyMainMixinRow& a, const RubyMainMixinRow& b ) { return !( a < b ) && !( b < a ); } ), rows.end() );
-    ENSURES( std::is_sorted( rows.begin(), rows.end() ), "legoMainRowsOf binary-searches the rows by base" );
+    // ing.bindings is in (file, byte) order, so a stable sort by base leaves each base's rows in site order
+    std::ranges::stable_sort( rows, {}, &RubyMainMixinRow::base );
+    ENSURES( std::ranges::is_sorted( rows, {}, &RubyMainMixinRow::base ), "legoMainRowsOf binary-searches the rows by base" );
     return rows;
 }
 
