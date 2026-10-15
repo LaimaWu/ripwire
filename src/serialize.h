@@ -1102,15 +1102,14 @@ inline constexpr std::size_t kForAnchorBodyBudgetBytes = 22800;
 // before the fold (arm M4, the page appended to the answer): 6 of 6 predicted rows reached an R0-missing item, none lost
 // one. The model and its renderers live in forpage.h (they need the page's ranking and its next= composer); the constants
 // and the legend stay here, where the --for header reads them.
-//   • DEFAULT regime: kForFileTailRankCap rank rows + kForFileTailPageRows page rows; the bytes ride ON TOP of the
+//   • DEFAULT regime: kForFileTailShownCap rank rows + kForFileTailPageRows page rows; the bytes ride ON TOP of the
 //     sig/body budgets and are measured into est_tokens.
 //   • EXPLICIT --token-budget (a soft target): the tail is a trailing section funded first at its share — the
 //     bytes left once the rows at the target cut and the sections before it are paid (runForLens) — and fills
 //     that share (its last row may cross it); every cut carries next=. kForFileTailShellReserve sizes the
 //     empty shell `<tail total="NNNNN" shown="0" capped="1"></tail>`.
-inline constexpr std::size_t kForFileTailRankCap      = 24;   // the rank rows (deep-tail d2): files outside the shown head
+inline constexpr std::size_t kForFileTailShownCap     = 24;   // the rank rows (deep-tail d2): files outside the shown head
 inline constexpr std::size_t kForFileTailPageRows     = 40;   // FOLD C: page 0 of the file page (forpage.h kForPageRowsDefault)
-inline constexpr std::size_t kForFileTailShownCap     = kForFileTailRankCap + kForFileTailPageRows;   // the default row cap
 inline constexpr std::size_t kForFileTailShellReserve = 48;
 
 // The legend clause defining BOTH deep-tail surfaces (the r= rank fact and the <tail> element) — a named

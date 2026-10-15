@@ -1313,7 +1313,7 @@ inline std::string forLensJsonTailStanza( const rw::FileTail& tail, std::size_t 
 {
     if( tokenBudget == 0 )
     {
-        return "," + rw::renderFileTailJson( tail, rw::kForFileTailShownCap );
+        return "," + rw::renderFileTailJson( tail, tail.paths.size() );   // every row computeFileTail collected
     }
     const auto render = [ & ]( std::size_t shown ) { return "," + rw::renderFileTailJson( tail, shown ); };
     return render( rw::fileTailShownToFill( tail, shareBytes, render ) );
@@ -1472,7 +1472,7 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
     // row cap here (the degrade path below needs a stanza before any budget is knowable); the normal path
     // re-fits it after the sigs render (forLensJsonTailStanza above) — residual-funded, sigs untouched:
     // the reservation feeding sigsBudget above deliberately does NOT include these bytes.
-    std::string tailStanza = "," + renderFileTailJson( *in.fileTail, kForFileTailShownCap );
+    std::string tailStanza = "," + renderFileTailJson( *in.fileTail, in.fileTail->paths.size() );
 
     bool        sigsCapped         = false;   // the LADDER's verdict: decides the budget_bytes= stanza
     rw::SigsCutReport sigsCut;               // cut-fix lane A: what the array cut (gate or ladder) — "capped" and the sigs_* keys
@@ -2522,7 +2522,7 @@ inline std::string renderForFileTailXml( const rw::FileTail& tail, std::size_t t
     std::vector<char> esc;
     if( tokenBudget == 0 )
     {
-        return rw::renderFileTailXml( tail, rw::kForFileTailShownCap, esc );
+        return rw::renderFileTailXml( tail, tail.paths.size(), esc );   // every row computeFileTail collected
     }
     const std::size_t share  = std::max<std::size_t>( bundleBudget > spentBytes ? bundleBudget - spentBytes : 0u, rw::kForFileTailShellReserve );
     const auto        render = [ & ]( std::size_t shown ) { return rw::renderFileTailXml( tail, shown, esc ); };
@@ -3813,7 +3813,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             }
         }
 
-        // ── DEEP-TAIL d2: render the file-grain tail (FOLD C: page 0 of the file page; serialize.h kForFileTailShownCap) ──
+        // ── DEEP-TAIL d2: render the file-grain tail (FOLD C: page 0 of the file page; serialize.h kForFileTailShownCap / kForFileTailPageRows) ──
         // Rendered after the bodies decision. Default regime: the full 40 rows ride on top — the sigs and the bodies are
         // byte-identical to a tail-less bundle by construction (nothing above charges these bytes). A soft target: the tail is
         // the last trailing section, funded from what the rows AT THE CUT and the sections before it left (reserve first).

@@ -2176,8 +2176,8 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
     // from budget_tokens but <lego>/<compose>), and a cut tail carries the page after its last row as next=.
     {
         std::vector<char> tailEsc;
-        const std::string tailStr = renderFileTailXml( computeFileTail( ing, lensRank, in.evidence, mcpShownIds, flRootArg, task ),
-                                                       kForFileTailShownCap, tailEsc );
+        const FileTail    mcpTail = computeFileTail( ing, lensRank, in.evidence, mcpShownIds, flRootArg, task );
+        const std::string tailStr = renderFileTailXml( mcpTail, mcpTail.paths.size(), tailEsc );   // every row computeFileTail collected
         std::fwrite( tailStr.data(), 1, tailStr.size(), mem );
     }
     rw::emitRaw( mem, "</ctx>" );

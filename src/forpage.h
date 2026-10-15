@@ -658,7 +658,7 @@ inline std::string forHdrRowsXml( const IngestResult& ing, const std::vector<For
 // One model and one renderer for the CLI --for (XML + JSON) and the MCP `for` twin. The tail lists, in this order:
 //   1. RANK rows (deep-tail d2, unchanged): the files of positive-score symbols NOT among the shown sigs rows, in the
 //      best-symbol projection of the lens's own (score desc, id asc) order — the files of trimmed rows first; at most
-//      kForFileTailRankCap; paths only (`<t p=…/>`). H2H-Graft lane 2: a row the ranked head did not show lands here.
+//      kForFileTailShownCap; paths only (`<t p=…/>`). H2H-Graft lane 2: a row the ranked head did not show lands here.
 //   2. PAGE rows (FOLD C): page 0 of `--for=TASK --limit=40` (computeForFilePage, the same ranking and term evidence),
 //      minus the files already listed above, each with sym= (its top symbols by lens rank). The measured arm M4 appended
 //      this page to the answer: 6 of 6 predicted rows reached an R0-missing item; the rank rows stay because two graded rows
@@ -698,7 +698,7 @@ inline void fileTailRankRows( FileTail& out, std::vector<char>& listed, const In
         order[i] = i;
     }
     sortutil::radixSortByScoreDescId( order, rank );
-    for( std::size_t k = 0; k < S && out.paths.size() < kForFileTailRankCap && rank[ order[k] ] > 0.0f; ++k )   // the zero-score tail is contiguous
+    for( std::size_t k = 0; k < S && out.paths.size() < kForFileTailShownCap && rank[ order[k] ] > 0.0f; ++k )   // the zero-score tail is contiguous
     {
         const std::uint32_t f = ing.symbols[ order[k] ].fileId;
         if( f >= F || listed[f] || inHead[f] )
@@ -836,7 +836,7 @@ inline std::string renderFileTailJson( const FileTail& t, std::size_t shownCap )
 
 // The explicit-budget fill (reserve first, forbudget-soft round C): the FEWEST rows whose rendered size reaches
 // `shareBytes` — the tail keeps at least its share, so its last row may cross it — or every collected row. `render`
-// is the dialect's renderer at a row count. Deterministic; at most kForFileTailShownCap + 1 renders.
+// is the dialect's renderer at a row count. Deterministic; at most kForFileTailShownCap + kForFileTailPageRows + 1 renders.
 template< class Render >
 inline std::size_t fileTailShownToFill( const FileTail& t, std::size_t shareBytes, const Render& render )
 {
