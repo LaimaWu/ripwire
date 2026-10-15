@@ -1174,6 +1174,7 @@ struct QualityDeltaLegendParts
     bool                                          degraded                = false;   // ... ingest_scope= memory_limit= memory_need= also_skipped= kinds_next=
     bool                                          memoryStopped           = false;   // ... memory_stop= (and memory_pressure= when it was pressure)
     bool                                          memoryPeak              = false;   // ... memory_peak= (any range answer whose peak went over the limit)
+    bool                                          memorySkippedShare      = false;   // ... memory_skipped= (skipped_why="selector,memory")
 };
 
 // qd-memory-degrade — present-only: each rides only with the attributes it defines. No double dash anywhere in them
@@ -1182,8 +1183,9 @@ inline constexpr const char* kQdKindsSkippedLegend =
     "kinds_skipped= names the kinds this answer did NOT run (alphabetical): no row of them is in this document, which is not a "
     "statement that none exists, and regressions=, gating= and every count cover only the kinds that ran; a count only a "
     "skipped kind feeds (register-macro-excluded=) is absent, never 0. skipped_why=\"selector\": the caller chose the kinds "
-    "(the kinds selector), and stale acks were judged for the chosen kinds only; skipped_why=\"memory\": see ingest_scope=; "
-    "skipped_why=\"selector,memory\": both, and memory_skipped= names memory's share (the rest the caller left out). ";
+    "(the kinds selector), and stale acks were judged for the chosen kinds only; skipped_why=\"memory\": see ingest_scope=. ";
+inline constexpr const char* kQdMemorySkippedLegend =
+    "skipped_why=\"selector,memory\": both; memory_skipped= names memory's share (what kinds_next= runs), the rest the caller left out. ";
 inline constexpr const char* kQdDegradedLegend =
     "ingest_scope=\"changed-files\": the two full trees did not fit the memory guard's limit (memory_limit=, the max-memory value "
     "that sets it), so both commits' CHANGED files were ingested alone and the kinds those files decide ran with the same code and "
@@ -1342,6 +1344,10 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p, std::FILE*
     if( p.degraded )
     {
         std::fputs( kQdDegradedLegend, out );
+    }
+    if( p.memorySkippedShare )
+    {
+        std::fputs( kQdMemorySkippedLegend, out );
     }
     if( p.memoryStopped )
     {
@@ -2377,7 +2383,8 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
                                       basis.registerMacroExcluded > 0, configDiag.total() > 0, regs, outOfScope,
                                       scope.active() || !foreignAcks.empty(), !foreignAcks.empty(), baselineAbsorbed,
                                       basis.headBasis, basis.declinedCallExcluded > 0, basis.valueRefExcluded > 0, collapse,
-                                      refs.kinds != quality::kAllKinds, refs.degraded, !refs.memoryStop.empty(), kd.peakOver != 0 }, out );
+                                      refs.kinds != quality::kAllKinds, refs.degraded, !refs.memoryStop.empty(), kd.peakOver != 0,
+                                      kd.memorySkipped != 0 && refs.selected != quality::kAllKinds }, out );
             const char* baseMarker = baseSel.marker;    // R3: ditto — one seam decides staleness AND names it
             // 2026-09-06: what the sidecar readers skipped, on the root (absent means none) — see kQdBaseHeadUnreadable
             std::string sidecarHealthAttrs;
