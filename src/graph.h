@@ -13169,6 +13169,7 @@ inline std::vector<std::uint32_t> declinedSitesMadeBy( const Graph& g, std::span
     std::vector<std::uint32_t> sites;
     if( g.declinedSiteCaller.empty() || sources.empty() )
     {
+        ENSURES( declinedCallsMadeBy( g, sources ) == 0, "no record, so no declined call: every decline site writes one" );
         return sites;
     }
     std::vector<char> isSource( g.declinedOut.size(), 0 );
