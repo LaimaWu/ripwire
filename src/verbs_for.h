@@ -712,7 +712,7 @@ inline constexpr std::string_view kForCompactLegendBodies =
 // root clause below), present-only (bodySlotPresent), right after the owner clause. No "--": it rides inside an XML comment.
 inline constexpr std::string_view kForCompactLegendBodySlot =
     "; b t= n= p= l= full bodies, c n= l= callee signatures; bodies=1 reason=owner: ONE owner body, by name not resolved "
-    "(pick=name|member|subtoken), not the only relevant one; shown=0 capped=1 next= when a budget skipped it";
+    "(pick=name|member), not the only relevant one; shown=0 capped=1 next= when a budget skipped it";
 static_assert( kForCompactLegendBodySlot.starts_with( kForCompactLegendBodies ), "the slot's compact clause defines <b> as the bodies clause does" );
 inline constexpr std::string_view kForBodySlotRootClause = "; when it rides this root reads bodies=1 reason=owner";
 inline std::string bodySlotLegend( const ForLensHeaderParts& p, bool compact )

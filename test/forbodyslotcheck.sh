@@ -22,8 +22,9 @@
 #            interface row (rank <= 24) with a callable definition that is its member (the parser's scope= equals
 #            the class name, or the class's own byte span contains it in the same file) and whose folded name is
 #            a non-common question word (pick="member"); Go receiver methods are a named floor (no scope, outside
-#            the type's span). Then the best-ranked head-tier callable of the same predicate whose name shares a
-#            kept question subtoken (pick="subtoken"). None: no slot. Classes/structs/types are never the owner.
+#            the type's span). None: no slot — the answer is the slot-off answer byte for byte (FIX1, owner ruling
+#            2026-10-15: the subtoken fallback, pick="subtoken", is DROPPED; a callable that only shares a word with
+#            the question is not its owner). Classes/structs/types are never the owner.
 #   RENDER   one <bodies><b t= l= p= n=> in the --expand shape (packBodies), <calls> kept. A body over
 #            kForBodySlotMaxBytes (6000) is head-cut at a line end: truncated="1" lines="lo-hi/T"
 #            next="--expand=P:L:N:A-B" (the cutfix-bodies vocabulary), bodies capped="1"; a FIRST line longer
@@ -49,7 +50,10 @@
 #   D6 [G] no explanatory cue (where / show documentation / bare noun phrase): bodies=0, no <b
 #   D7 [G] postures: --signatures-only, --json, --auto-bodies, --detail=1, --format=candidates, name-exact unchanged
 #   D8 [P] Python: body of the METHOD apply, never the class Stylesheet (r1)
-#   D9 [P] C: body of cmd_find_target (identifier word); D9b [P] subtoken fallback via "target"
+#   D9 [P] C: body of cmd_find_target (identifier word)
+#   D9b [G] only a SUBTOKEN match exists ("target" ~ cmd_find_target, ranked): NO slot, byte-identical to slot-off.
+#          BY-DESIGN BREAK (rule 4, FIX1): this arm pinned the subtoken fallback's body (pick="subtoken") through
+#          66cc4b63; the owner ruling of 2026-10-15 dropped the fallback, so it now pins its absence — red on 66cc4b63
 #   D10 [P] oversized C owner: head-cut at a line end, lines= next=; the next= serves the rest; no over_ceiling root;
 #          the kept lines hold 2- and 3-byte UTF-8 (bytes exceed characters by > 10%), so a cap counted in
 #          characters fails the <= 6000 B check (review R7)
@@ -57,7 +61,8 @@
 #   L1 [P] Rust: entry point index (calls walk) beats walk at r1     L2 [P] C++: Builder::Build DEFINITION (.cc), not the r1 header declaration
 #   L3 [P] Go: method Package, never the type Packager
 #   N1 [P] TS: negotiate's definition, not the r1 .d.ts declaration; [G] a .d.ts-only name never yields a .d.ts body
-#   N2 [P/G] the only name owner is a tests/ helper: the slot falls back to a non-test callable, never tests/
+#   N2 [G] the only name owner is a tests/ helper: NO slot (no fallback since FIX1 — by-design break, rule 4: through
+#          66cc4b63 the subtoken fallback served a non-test body here; red on 66cc4b63), never a tests/ body
 #   N3 [P] two equal owners in two files: ONE body, the better-ranked one (p= and l= of the r1 row)
 #   N4 [P] two same-named methods of two classes in ONE file: ONE body, the r1 row's (entity identity, checklist 16)
 #   N5 [G] a struct named by the question is never the body; every <b t=> is fn/method
@@ -520,8 +525,10 @@ if r="$( chk rowis "$TMP/py.xml" 1 Stylesheet src/textual/css/stylesheet.py )"; 
 if r="$( chk body "$TMP/py.xml" apply src/textual/css/stylesheet.py "_check_rule(" "widget.refresh()" )"; then ok "(D8) Python: $r (the method)"; else no "(D8) Python: $r"; fi
 if r="$( chk nobodyof "$TMP/py.xml" Stylesheet )"; then ok "(D8) Python: the class Stylesheet (r1) is never the body"; else no "(D8) Python: $r"; fi
 if r="$( chk body "$TMP/c.xml" cmd_find_target src/c/cmd-find.c "cmd_find_get_session(" "cmd_find_valid_state(" )"; then ok "(D9) C: $r"; else no "(D9) C: $r"; fi
-if r="$( chk body "$TMP/sub.xml" cmd_find_target src/c/cmd-find.c "cmd_find_get_session(" )"; then ok "(D9b) C subtoken fallback ('target'): $r"; else no "(D9b) C subtoken fallback: $r"; fi
-if r="$( chk bodiesattr "$TMP/sub.xml" pick subtoken )"; then ok "(D9b) the fallback names itself: $r"; else no "(D9b) $r"; fi
+# D9b premise: the subtoken match the dropped fallback served IS a ranked row here — so "no slot" is the rule, not a miss
+if grep -q '<d [^>]*n="cmd_find_target"' "$TMP/sub.xml"; then :; else no "(D9b) premise: cmd_find_target is not a ranked row on T_SUB"; fi
+if r="$( chk nobody "$TMP/sub.xml" )" && cmp -s "$TMP/sub.xml" "$TMP/sub.off.xml"; then ok "(D9b) only a subtoken match (cmd_find_target ~ 'target'): no slot, byte-identical to RIPWIRE_NO_BODY_SLOT=1"; else no "(D9b) only a subtoken match: a body rides or the answer differs from slot-off ${r:-}"; fi
+if grep -q 'pick="subtoken"' "$TMP/sub.xml"; then no "(D9b) pick=\"subtoken\" still rides"; else ok "(D9b) no pick=\"subtoken\""; fi
 if r="$( chk bodyattr "$TMP/big.xml" render_screen truncated '^1$' )"; then ok "(D10) oversized owner: $r"; else no "(D10) oversized: $r"; fi
 if r="$( chk cutatline "$TMP/big.xml" render_screen 6000 )"; then ok "(D10) oversized owner: $r (whole lines, <= 6000 B)"; else no "(D10) oversized: $r"; fi
 if nx="$( chk nextof "$TMP/big.xml" render_screen )" && printf '%s' "$nx" | grep -q '^--expand=src/c/render.c:'; then
@@ -554,7 +561,7 @@ if r="$( chk body "$TMP/dts.xml" negotiate src/negotiate.ts "negotiate fallback"
 for k in dts dts2; do
     if r="$( chk nobodyat "$TMP/$k.xml" '\.d\.ts$' )"; then ok "(N1) $k: no body from a .d.ts declaration"; else no "(N1) $k: $r"; fi
 done
-if r="$( chk bodycount "$TMP/test.xml" 1 )"; then ok "(N2) the only name owner is a tests/ helper: the subtoken fallback serves one body"; else no "(N2) $r"; fi
+if r="$( chk nobody "$TMP/test.xml" )" && cmp -s "$TMP/test.xml" "$TMP/test.off.xml"; then ok "(N2) the only name owner is a tests/ helper: no slot, byte-identical to RIPWIRE_NO_BODY_SLOT=1"; else no "(N2) a body rides, or the answer differs from slot-off ${r:-}"; fi
 if r="$( chk nobodyat "$TMP/test.xml" '(^|/)tests?/' )" && r2="$( chk nobodyof "$TMP/test.xml" roundtrip )"; then ok "(N2) no body from tests/ (roundtrip is a test symbol)"; else no "(N2) ${r:-} ${r2:-}"; fi
 if r="$( chk bodycount "$TMP/two.xml" 1 )"; then ok "(N3) two equal owners: one body"; else no "(N3) $r"; fi
 if r="$( chk bodyisrow "$TMP/two.xml" render )"; then ok "(N3) two equal owners: $r (the better-ranked)"; else no "(N3) $r"; fi

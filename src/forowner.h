@@ -18,7 +18,9 @@
 //      file (TS/JS classes and every other language whose methods nest in the class body). A common word (get, run, set …) is
 //      never a member owner. NAMED FLOOR: Go receiver methods carry no scope and sit outside the type's span, so a Go type
 //      donates no member until the parser records a receiver scope (forbodyslotcheck (Q1) Go floor pins it).
-//   3. pick="subtoken": the best-ranked head-tier callable definition whose name shares a subtoken with a question word.
+// Neither → no slot (the answer is the slot-off answer byte for byte). There is no subtoken fallback (owner ruling
+// 2026-10-15, lane for-body-slot FIX1): a callable that merely shares one word with the question is not its owner, and
+// measured over the round-4 rows it served 28 KB of mostly tangential or off-subject bodies for no substantive item.
 // A class/struct/interface/type is never the body; a test symbol never is; a declaration (header prototype, .d.ts, TS overload
 // signature, C++ pure virtual, Go interface method spec) never is (isDefinitionNotDeclaration). This is a choice BY NAME over
 // the ranked head (pick= says which reading chose it), never a resolution: the body is the entry point among the named owners,
@@ -26,7 +28,6 @@
 // RIPWIRE_NO_BODY_SLOT (any value) turns the slot off — the A/B handle, the RIPWIRE_NO_OWNER_HOP precedent; the two are
 // independent (forbodyslotcheck (EV1)).
 
-#include "exemplar.h"   // shareNameSubtoken — the subtoken fallback's one test (lexical.h subtokens)
 #include "filter.h"     // isTestSymbol
 #include "graph.h"      // langCompatible
 #include "lexical.h"    // isRouteStopword
@@ -168,7 +169,7 @@ inline constexpr std::string_view kForBodySlotLegend =
     "; owner body: an explanatory question (how does, what does) also carries ONE body, in a bodies section near the end. It is "
     "chosen BY NAME in the ranked head, not resolved: pick=name its name equals a question word (among several such owners, the "
     "one calling an owner another word names), pick=member a method of a ranked class the question names (by the parser's scope "
-    "or the class's own span), pick=subtoken the best-ranked callable sharing a word. It is not necessarily the question's "
+    "or the class's own span); no such owner, no body. It is not necessarily the question's "
     "subject nor the only relevant body. Over 6000 B it is cut at a line end (b truncated=1 lines= next= the rest); a budget too "
     "small for it skips it: bodies shown=0 capped=1 next= the call that serves it";
 
@@ -180,11 +181,11 @@ inline constexpr std::size_t kForBodySlotMaxBytes = 6000;
 static_assert( kForBodySlotMaxBytes == 6000 && kForBodySlotLegend.find( "Over 6000 B" ) != std::string_view::npos,
                "the slot legend states the cap: move both together" );
 
-enum class BodySlotPick : std::uint8_t { None, Name, Member, Subtoken };
+enum class BodySlotPick : std::uint8_t { None, Name, Member };
 
 // pick= spellings, indexed by BodySlotPick (None has none)
-inline constexpr std::string_view kBodySlotPickNames[] = { "", "name", "member", "subtoken" };
-static_assert( std::size( kBodySlotPickNames ) == std::size_t( BodySlotPick::Subtoken ) + 1, "one pick= spelling per BodySlotPick" );
+inline constexpr std::string_view kBodySlotPickNames[] = { "", "name", "member" };
+static_assert( std::size( kBodySlotPickNames ) == std::size_t( BodySlotPick::Member ) + 1, "one pick= spelling per BodySlotPick" );
 
 struct ForBodySlotOwner
 {
@@ -306,22 +307,6 @@ inline NodeId forMemberOwner( const IngestResult& ing, const std::vector<std::st
     return kNoNode;
 }
 
-// THE SUBTOKEN FALLBACK: the best-ranked head-tier callable definition whose name shares a subtoken with a question word.
-inline NodeId forSubtokenOwner( const IngestResult& ing, const std::vector<std::string>& words, const std::vector<NodeId>& lensSurfaceIds,
-                                const std::vector<float>& lensRank )
-{
-    const std::size_t head = std::min( lensSurfaceIds.size(), std::size_t( kForDocExcerptRankCount ) );
-    for( std::size_t i = 0; i < head; ++i )
-    {
-        const NodeId id = lensSurfaceIds[i];
-        if( id < ing.symbols.size() && lensRank[id] > 0.0f && isOwnerCallableDef( ing, id ) && shareNameSubtoken( ing.symbols[id].name, words ) )
-        {
-            return id;
-        }
-    }
-    return kNoNode;
-}
-
 // The slot's one owner, in the order the header comment states; {kNoNode, None} when the question names none.
 inline ForBodySlotOwner forBodySlotOwner( const IngestResult& ing, const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets,
                                           std::string_view task, const std::vector<NodeId>& lensSurfaceIds, const std::vector<float>& lensRank )
@@ -340,10 +325,6 @@ inline ForBodySlotOwner forBodySlotOwner( const IngestResult& ing, const std::ve
     else if( const NodeId m = forMemberOwner( ing, words, lensSurfaceIds, lensRank ); m != kNoNode )
     {
         out = ForBodySlotOwner{ m, BodySlotPick::Member };
-    }
-    else if( const NodeId s = forSubtokenOwner( ing, words, lensSurfaceIds, lensRank ); s != kNoNode )
-    {
-        out = ForBodySlotOwner{ s, BodySlotPick::Subtoken };
     }
     const bool ownerIsCallableDef = !out.any() || ( out.id < ing.symbols.size() && isOwnerCallableDef( ing, out.id ) );
     ENSURES( ownerIsCallableDef, "the body slot's owner is one indexed callable definition outside the test partition" );
