@@ -2011,6 +2011,7 @@ inline std::string_view rubyNamedDirective( TSNode n, std::string_view src, std:
 // records, in SOURCE order (the same shape as elixirAliasGroup). A non-constant argument (`include
 // Object.const_get(:X)`, `include mod`) contributes nothing; the constant ones beside it still do. The constant
 // NODES: captureIncludes reads each one's text for its Include record, and captureRubyMixinBases its byte.
+inline std::vector<TSNode> rubyConstantArguments( TSNode n );
 inline std::vector<TSNode> rubyMixinTargets( TSNode n, std::string_view src )
 {
     std::vector<TSNode>    out;
@@ -2019,7 +2020,14 @@ inline std::vector<TSNode> rubyMixinTargets( TSNode n, std::string_view src )
     {
         return out;
     }
-    const TSNode args = fieldChild( n, NodeField::Arguments );
+    return rubyConstantArguments( n );
+}
+
+// The constant (or constant-path) arguments of call `n`, in source order — a mixin directive's targets
+inline std::vector<TSNode> rubyConstantArguments( TSNode n )
+{
+    std::vector<TSNode> out;
+    const TSNode        args = fieldChild( n, NodeField::Arguments );
     if( ts_node_is_null( args ) )
     {
         return out;

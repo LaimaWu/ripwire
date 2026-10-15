@@ -8921,10 +8921,24 @@ struct LegoTargetedArgs
     int              pageLimit  = 0;        // --limit / MCP limit over the deeper implementor rows (0 = the default page)
     int              pageOffset = 0;        // --offset / MCP offset
     const std::vector<std::vector<std::uint8_t>>* implementorBound = nullptr;   // fix 1: Graph::implementorBound (null: nothing proven)
+    std::span<const RubyMainMixinRow> mainMixins;   // lane ruby-pair: Graph::rubyMainMixins (sorted by base) — the main-object rows
     LegoTargetedArgs() = default;
-    LegoTargetedArgs( std::string_view floorAttr, int limit = 0, int offset = 0, const std::vector<std::vector<std::uint8_t>>* bound = nullptr )
-        : graphCountFloorAttr( floorAttr ), pageLimit( limit ), pageOffset( offset ), implementorBound( bound ) {}
+    LegoTargetedArgs( std::string_view floorAttr, int limit = 0, int offset = 0, const std::vector<std::vector<std::uint8_t>>* bound = nullptr,
+                      std::span<const RubyMainMixinRow> mains = {} )
+        : graphCountFloorAttr( floorAttr ), pageLimit( limit ), pageOffset( offset ), implementorBound( bound ), mainMixins( mains ) {}
 };
+
+// lane ruby-pair: the main-object implementor rows of base `id` (LegoTargetedArgs::mainMixins), in (file, line) order.
+inline std::span<const RubyMainMixinRow> legoMainRowsOf( std::span<const RubyMainMixinRow> rows, NodeId id ) noexcept
+{
+    const auto lo = std::lower_bound( rows.begin(), rows.end(), id, []( const RubyMainMixinRow& r, NodeId v ) { return r.base < v; } );
+    const auto hi = std::upper_bound( lo, rows.end(), id, []( NodeId v, const RubyMainMixinRow& r ) { return v < r.base; } );
+    return { lo, hi };
+}
+
+// The present-only legend clause of a main-object row (no `--` inside: it rides in an XML comment).
+inline constexpr std::string_view kLegoMainRowClause =
+    "<!-- impl t=\"object\" n=\"main\": Ruby's main object, the self of a file's top level, which that file's top-level include or extend of this module makes answer its methods; p= the directive's constant. Counted in implementors=; no class is behind it, so no deeper row walks below it. -->";
 inline const std::vector<std::vector<std::uint8_t>> kNoImplementorBound{};   // the empty bound map: every edge reads ByName
 
 // One <impl> row. `line` (S2): the TARGETED answer puts the definition's line on p= (p="file:LINE", the --uses and
@@ -9082,10 +9096,11 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
                                                                   : ( impls.size() < 16 ? impls.size() : 16 );
         const std::size_t          implementorTotal = id < countMap.size() ? std::max( countMap[id].size(), impls.size() ) : impls.size();
         std::string hdr;
+        const std::span<const RubyMainMixinRow> mainRows = focusId != kNoNode ? legoMainRowsOf( targeted.mainMixins, id ) : std::span<const RubyMainMixinRow> {};
         const LegoClosurePage deep = focusId != kNoNode ? legoClosurePage( implementors, targeted.implementorBound != nullptr ? *targeted.implementorBound : kNoImplementorBound, id, targeted.pageLimit, targeted.pageOffset ) : LegoClosurePage{};
         if( focusId != kNoNode )
         {
-            hdr = "\" defs=\"" + std::to_string( definitionCountOfName( ing, id ) ) + "\" implementors=\"" + std::to_string( impls.size() ) + "\""
+            hdr = "\" defs=\"" + std::to_string( definitionCountOfName( ing, id ) ) + "\" implementors=\"" + std::to_string( impls.size() + mainRows.size() ) + "\""
                 + legoClosureAttrs( deep, std::string( pathRel( isym.fileId ) ) + ":" + isym.name,
                                     deep.unwalked.empty() ? std::string() : std::string( pathRel( ing.symbols[ deep.unwalked.front() ].fileId ) ) + ":" + ing.symbols[ deep.unwalked.front() ].name,
                                     targeted.pageLimit );
@@ -9178,6 +9193,15 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
         if( impls.size() > cap )
         {
             w.write( "<!-- +more -->" );
+        }
+        for( const RubyMainMixinRow& m : mainRows )   // targeted only (empty otherwise): after the class rows, before the deeper ones
+        {
+            w.write( "<impl t=\"object\" n=\"main\" p=\"" );  w.write( escapeXml( pathRel( m.fileId ), esc ) );
+            w.write( ":" );  w.write( std::to_string( m.line ) );  w.write( "\"/>" );
+        }
+        if( !mainRows.empty() )
+        {
+            w.write( kLegoMainRowClause );
         }
         for( std::size_t j = deep.window.begin; j < deep.window.end; ++j )   // empty unless TARGETED with a deeper row
         {

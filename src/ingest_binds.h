@@ -1033,6 +1033,55 @@ inline void rubyForEachDeclaredSymbol( TSNode call, RubyDeclared kind, std::stri
     } );
 }
 
+// ── Subscript = operator-method call (RefRole::Subscript; queries/{ruby,python}/tags.scm @reference.subscript) ───────────
+// An element access `recv[ args ]` runs the receiver class's subscript OPERATOR METHOD. Which method is the language's
+// own spelling, kept HERE as data rather than per-language code: the read form, and the form an assignment's target runs.
+// C++ `operator[]` could ride the same row and the same graph.h proof (its Rules 1/2/2b type `this`, a local and a field);
+// it is not armed: its element accesses are mostly builtin arrays, pointers and std containers, whose answers this lane
+// keeps byte-identical. Every other indexed language has no user-definable subscript method (C, Go, Java, Bash, Lua)
+// or spells it otherwise (C# indexers `this[ ]`, Swift `subscript`, Rust `Index::index`, Kotlin `operator fun get`,
+// JS/TS proxies) and records nothing for it.
+struct SubscriptOperatorNames
+{
+    Lang             lang;
+    std::string_view read;    // `recv[ k ]`
+    std::string_view write;   // `recv[ k ] = v`
+};
+inline constexpr SubscriptOperatorNames kSubscriptOperatorMethods[] = {
+    { Lang::Python, "__getitem__", "__setitem__" },
+    { Lang::Ruby,   "[]",          "[]=" },
+};
+
+inline const SubscriptOperatorNames* subscriptOperatorNamesOf( Lang lang ) noexcept
+{
+    const auto it = std::find_if( std::begin( kSubscriptOperatorMethods ), std::end( kSubscriptOperatorMethods ),
+                                  [ lang ]( const SubscriptOperatorNames& n ) { return n.lang == lang; } );
+    return it == std::end( kSubscriptOperatorMethods ) ? nullptr : &*it;
+}
+
+// The operator method element access `access` runs: the write form when it is an assignment's whole target (`h[ k ] = v`),
+// "" where no one name is right — a target inside a multiple assignment (`a[ 0 ], b = …`), a `del x[ k ]` (Python's
+// `__delitem__`, not read), an annotation (`x: Dict[ str, int ]`, a type, not a value). A compound assignment
+// (`h[ k ] += 1`, `h[ k ] ||= v`) runs both forms and is recorded as the read one, the setter capture's floor.
+inline std::string_view subscriptOperatorName( TSNode access, const SubscriptOperatorNames& names ) noexcept
+{
+    const TSNode parent = ts_node_parent( access );
+    if( ts_node_is_null( parent ) )
+    {
+        return names.read;
+    }
+    const char* pt = ts_node_type( parent );
+    if( kindIs( pt, "assignment" ) )
+    {
+        return ts_node_eq( fieldChild( parent, NodeField::Left ), access ) ? names.write : names.read;
+    }
+    const bool multiTarget = kindIs( pt, "pattern_list" ) || kindIs( pt, "tuple_pattern" ) || kindIs( pt, "list_pattern" )
+                          || kindIs( pt, "left_assignment_list" ) || kindIs( pt, "destructured_left_assignment" );
+    const bool notValue    = kindIs( pt, "delete_statement" ) || kindIs( pt, "type" ) || kindIs( pt, "generic_type" )
+                          || ( kindIs( pt, "expression_list" ) && kindIs( ts_node_type( ts_node_parent( parent ) ), "delete_statement" ) );
+    return multiTarget || notValue ? std::string_view {} : names.read;
+}
+
 // One call whose receiver is typed (RubyBareCallWalk): the call node's start (its reference's startByte) and method,
 // whether the receiver is an (identifier) — the reference's NamedVar — or a value, and what it builds; for a local, the
 // scope and name whose binding types are read once the walk has seen every binding (`local` non-empty, `type` filled by
@@ -1091,6 +1140,8 @@ private:
     void noteLetType( TSNode letCall, std::string_view name );
     void noteImplicitSubject();
     void noteTypedCall( TSNode call );
+    void noteTypedSubscript( TSNode access );
+    void noteTypedSend( std::uint32_t at, TSNode recv, std::string_view method );
     void noteDeclaredCall( TSNode call );
     void noteNamedReceiver( std::uint32_t at, std::string_view method, std::string_view name );
     const RubyTypedSite* siteOf( const RawRef& r ) const;
@@ -1160,6 +1211,10 @@ inline void RubyBareCallWalk::visit( const Item& item, ChildCursor& cursor )
     {
         noteTypedCall( n );
         noteDeclaredCall( n );
+    }
+    else if( kindIs( t, "element_reference" ) )
+    {
+        noteTypedSubscript( n );
     }
     binding_.clear();
     if( const std::optional<RubyLocalRole> role = rubyLocalRole( t ) )
@@ -1321,13 +1376,25 @@ inline void RubyBareCallWalk::noteImplicitSubject()
 // a call whose receiver is typed: a value written in place, a let RSpec runs there, or a local of the scope (read at the end)
 inline void RubyBareCallWalk::noteTypedCall( TSNode call )
 {
-    const TSNode           recv   = fieldChild( call, NodeField::Receiver );
-    const std::string_view method = fieldChildTextOfKind( call, NodeField::Method, "identifier", src_ );
+    noteTypedSend( ts_node_start_byte( call ), fieldChild( call, NodeField::Receiver ), fieldChildTextOfKind( call, NodeField::Method, "identifier", src_ ) );
+}
+
+// an element access `recv[ k ]` sends its receiver the operator method its reference names (subscriptOperatorRef), typed
+// the way a call's receiver is
+inline void RubyBareCallWalk::noteTypedSubscript( TSNode access )
+{
+    const SubscriptOperatorNames* names = subscriptOperatorNamesOf( Lang::Ruby );
+    ASSUME( names != nullptr, "kSubscriptOperatorMethods carries a Ruby row" );
+    noteTypedSend( ts_node_start_byte( access ), fieldChild( access, NodeField::Object ), subscriptOperatorName( access, *names ) );
+}
+
+// the typed-receiver record of one send at `at`: `method` on `recv`
+inline void RubyBareCallWalk::noteTypedSend( std::uint32_t at, TSNode recv, std::string_view method )
+{
     if( ts_node_is_null( recv ) || method.empty() )
     {
         return;
     }
-    const std::uint32_t at    = ts_node_start_byte( call );
     const bool          ident = kindIs( ts_node_type( recv ), "identifier" );
     if( !ident || !scopes_.visible( pattern::nodeText( recv, src_ ) ) )
     {
@@ -1456,7 +1523,7 @@ inline void RubyBareCallWalk::sendTargets( std::size_t firstRef, std::size_t end
 inline const RubyTypedSite* RubyBareCallWalk::siteOf( const RawRef& r ) const
 {
     const bool ident = r.recv == RecvKind::NamedVar;
-    if( r.lang != Lang::Ruby || r.role != RefRole::Call || ( !ident && r.recv != RecvKind::FieldOfVar ) )
+    if( r.lang != Lang::Ruby || ( r.role != RefRole::Call && r.role != RefRole::Subscript ) || ( !ident && r.recv != RecvKind::FieldOfVar ) )
     {
         return nullptr;
     }
@@ -1938,11 +2005,18 @@ inline RecvShape receiverOf( TSNode nameNode, Lang lang, std::string_view src )
 // RubyClassObjects). A qualified constant's whole path; the path through the described class for `described_class` and
 // for `described_class::Worker`; empty for a final segment alone, and for a path with any other head that is no constant
 // (`self.class::Foo`).
+inline std::string rubyWrittenPathOfReceiver( TSNode recv, std::string_view final, std::string_view src );
 inline std::string rubyReceiverWrittenPath( TSNode nameNode, std::string_view final, std::string_view src )
 {
     const TSNode call = calleeAccessParent( nameNode );
-    const TSNode recv = ts_node_is_null( call ) || !kindIs( ts_node_type( call ), "call" ) ? TSNode {} : fieldChild( call, NodeField::Receiver );
-    std::string  written;
+    return rubyWrittenPathOfReceiver( ts_node_is_null( call ) || !kindIs( ts_node_type( call ), "call" ) ? TSNode {} : fieldChild( call, NodeField::Receiver ),
+                                      final, src );
+}
+
+// rubyReceiverWrittenPath's answer for the receiver node itself (an element access's `object:` reads it too)
+inline std::string rubyWrittenPathOfReceiver( TSNode recv, std::string_view final, std::string_view src )
+{
+    std::string written;
     if( ts_node_is_null( recv ) )
     {
         return written;
@@ -1959,6 +2033,43 @@ inline std::string rubyReceiverWrittenPath( TSNode nameNode, std::string_view fi
         written = rubyIsConstantChain( recv ) ? std::string( pattern::nodeText( recv, src ) ) : rubyDescribedRelativePath( recv, src );
     }
     return written == final ? std::string {} : written;
+}
+
+// The RefRole::Subscript reference of element access `access` (whose receiver is `recv`), or nullopt where it can name no
+// class: a language with no operator row, a form subscriptOperatorName names nothing for, a receiver whose class no rule
+// can type — a literal (`{ a: 1 }[ :a ]`, `[ 1, 2 ][ 0 ]`), a call result in Python, another element access. The
+// receiver is read as a member call's is (classifyReceiver), so graph.h's receiver rules read the same fields; a Ruby
+// receiver too rich for them stays FieldOfVar, which the typing walk may still type (`Report.new[ :x ]`,
+// RubyBareCallWalk::noteTypedSend).
+inline std::optional<RawRef> subscriptOperatorRef( TSNode access, TSNode recv, std::uint32_t fileId, Lang lang, std::string_view src )
+{
+    const SubscriptOperatorNames* names = subscriptOperatorNamesOf( lang );
+    const std::string_view        op    = names == nullptr ? std::string_view {} : subscriptOperatorName( access, *names );
+    if( op.empty() || ts_node_is_null( recv ) )
+    {
+        return std::nullopt;
+    }
+    RecvShape rs = classifyReceiver( recv, lang, src, /*allowChain=*/ true );
+    if( rs.kind == RecvKind::None && lang != Lang::Ruby )
+    {
+        return std::nullopt;
+    }
+    RawRef r;
+    r.fileId    = fileId;
+    r.startByte = ts_node_start_byte( access );
+    r.line      = ts_node_start_point( access ).row + 1;
+    r.lang      = lang;
+    r.role      = RefRole::Subscript;
+    r.name      = op;
+    r.recv      = rs.kind == RecvKind::None ? RecvKind::FieldOfVar : rs.kind;   // receiverOf's "too rich" member shape
+    r.recvVar   = std::move( rs.var );
+    r.fieldName = std::move( rs.field );
+    if( lang == Lang::Ruby && r.recv == RecvKind::NamedVar )
+    {
+        r.fieldName = rubyWrittenPathOfReceiver( recv, r.recvVar, src );   // a constant's path as written (parser version 137)
+    }
+    ENSURES( r.recv != RecvKind::None, "a subscript always has a receiver: graph.h's receiver rules read it as a member call" );
+    return r;
 }
 
 // Java method references are not ordinary member-access nodes. The pinned grammar's first named

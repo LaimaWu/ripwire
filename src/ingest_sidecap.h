@@ -2407,6 +2407,16 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             }
             else if( isRef && full )
             {
+                // An element access: @name is its RECEIVER, and the site names the receiver class's subscript operator
+                // method (ingest_binds.h subscriptOperatorRef) — never a call by itself (RefRole::Subscript).
+                if( refCapSv == "reference.subscript" )
+                {
+                    if( std::optional<RawRef> sub = subscriptOperatorRef( roleNode, nameNode, fileId, le.lang, src ) )
+                    {
+                        refs.push_back( std::move( *sub ) );
+                    }
+                    continue;
+                }
                 // H4: a C++ cast keyword is not a call — see isCppCastKeyword. Valid input, skipped, no alert.
                 if( le.lang == Lang::Cpp && isCppCastKeyword( nameTxt ) )
                 {
@@ -2574,6 +2584,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
         captureRubyHelperMethods( root, fileId, src, binds );
         captureRubySingletonAccessors( root, fileId, src, binds );
         captureRubyClassMixins( root, fileId, src, binds );
+        captureRubyMainMixins( root, fileId, src, binds );
         if( le.ext == kJbuilderExt )
         {
             typeRubyJbuilderLocal( fileId, refs );

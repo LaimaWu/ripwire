@@ -2684,7 +2684,7 @@ inline std::string legoText( const std::string& root, const std::string& type, R
         const std::string legoTargetedAttr = unprovenDefsAttrXml( unprovenDefs ) + graphCountFloorAttrXml( ix.g );   // outlives the call
         packLego( mem, ing, ix.g.implementors, flat, 1, redact, &impure, focus, /*withPaths=*/true,
                   ing.realPaths.empty() ? std::string_view( root ) : std::string_view(),    // R-R: root-relative <iface p=>
-                  LegoTargetedArgs( legoTargetedAttr, page.limit, page.offset, &ix.g.implementorBound ) );   // H1 + M15 + the deeper-row page, as on the CLI
+                  LegoTargetedArgs( legoTargetedAttr, page.limit, page.offset, &ix.g.implementorBound, ix.g.rubyMainMixins ) );   // H1 + M15 + the deeper-row page, as on the CLI
         rw::emitRaw( mem, "</ctx>" );
     } );
 }
@@ -3210,9 +3210,9 @@ inline std::string usesSelectorRefusal( const IngestResult& ing, const std::stri
         {
             continue;
         }
-        if( r.isCompose || r.isDocLink )
+        if( r.isCompose || r.isDocLink || r.role == RefRole::Subscript )
         {
-            continue; // type edge / doc mention — not a use-site
+            continue; // type edge / doc mention / an element access (no use-site: valuerefindex.h UsesValueFilter::skip) — not a use-site
         }
         if( r.lang == Lang::Markdown )
         {

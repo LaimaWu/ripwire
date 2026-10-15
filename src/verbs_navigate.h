@@ -2098,9 +2098,9 @@ accumulateExternalSurface( const rw::IngestResult& ing, const rw::HashMap<std::s
     rw::HashMap<std::string, std::array<ExtSurfaceAcc, kExtSurfaceLangSlots>> ext;
     for( const Reference& r : ing.references )
     {
-        if( r.isCompose || r.isDocLink )
+        if( r.isCompose || r.isDocLink || r.role == RefRole::Subscript )
         {
-            continue; // type edge / doc mention — not a code reference
+            continue; // type edge / doc mention / an element access (its operator is a builtin's unless graph.h proves the class) — not a code reference
         }
         if( r.lang == Lang::Markdown )
         {

@@ -320,7 +320,13 @@ constexpr std::uint32_t kCacheVersion = 31;           // 31: train 27 — lane l
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 171;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 174;          // bump on any grammar/.scm/extraction change
+                                                      // 174 = lane ruby-pair (train 28, 2026-10-14; the train renumbers): Ruby and Python element
+                                                      //   accesses record RefRole::Subscript references (tags.scm @reference.subscript, ingest_binds.h
+                                                      //   subscriptOperatorRef; a NEW role byte, which readRef validates against kRefRoleCount), the
+                                                      //   Ruby typing walk types their receivers, and a Ruby file's top-level `include M` / `extend M`
+                                                      //   records LocalBindKind::RubyMainMixin (an appended kind). 172/173 skipped: rich file tag 172
+                                                      //   is 171's. Rich file tag 175. kCacheVersion stays 31.
                                                       // 171 = 2026-10-13 (PR #349 lands, @tag-und-nacht): Clojure grammar, tags.scm and extraction
                                                       //   (ingest_clojure.h) and the qualified-call namespace in Reference::qualifier. The branch built
                                                       //   156, 158 and 169 (rich file tag 170); main is 167 (rich file tag 168). 171, not 168: a lean 168

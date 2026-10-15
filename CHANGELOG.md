@@ -15,6 +15,31 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — an element access is a call of the receiver class's subscript operator, where the receiver is proven (Ruby, Python)
+
+Ruby `recv[ k ]` runs the receiver class's `[]` (`[]=` as an assignment's target), and Python `obj[ k ]` its
+`__getitem__` (`__setitem__`). Neither was a call before, so rake's `--callees=invoke_task` missed `t = self[ name ]`,
+which runs TaskManager#[] through Application's `include TaskManager`. The site is now a call **only where a receiver
+rule proves the class**: Ruby's lookup on `self` in a def (through include/extend ancestry), a receiver the code builds
+(`r = Registry.new`, `Registry.new[ k ]`), a class constant's own `def self.[]` (`Rake::Task[ name ]`); Python's receiver
+evidence (`self` in a class or its bases, a typed parameter, a constructed local, a field the class assigns). Every
+other element access — a Hash/Array/dict/list local, a literal, an untyped parameter, a Python class object — makes no
+edge, no `via="name"` hedge and no count: a `[]` or `__getitem__` definition elsewhere in the tree never decides it by
+name. It does NOT mean every subscript of an in-tree class is found: a Ruby instance variable receiver is not typed, a
+compound assignment (`h[ k ] ||= v`) is recorded as the read form, and `del o[ k ]`, a multiple-assignment target and an
+annotation record nothing. On rake 93 callers of `[]` appear; on textual 42 of `__getitem__`. C++ `operator[]` could
+share the path and is not armed. `--uses` lists no subscript site. Parser version 174 (the train renumbers). Gate:
+`test/subscriptopcheck.sh`.
+
+### Added — `--lego=M` lists Ruby's main object when a file's top level mixes M in
+
+A top-level `include M`, `extend M` or `self.extend M` makes Ruby's main object answer M's methods (rake's
+dsl_definition.rb ends with `self.extend Rake::DSL`). `--lego=M` now lists it as `<impl t="object" n="main"
+p="FILE:LINE">`, counted in `implementors=`, with a present-only legend clause. Ruby-only: no other indexed language has
+an object that a file's top level mixes a module into. Not read: a directive inside a top-level `if`/`begin` or a block,
+`prepend`, a mixin onto another object, and a module the tree never opens. The ranked `--for` lego section is unchanged.
+Gate: `test/subscriptopcheck.sh` (L arms).
+
 ### Added — Clojure (`.clj`/`.cljs`/`.cljc`/`.bb`)
 
 Vendored Yogthos' ABI-15 `tree-sitter-clojure` parser and added syntax-level definitions and direct-call captures for the four Clojure-family extensions. The grammar comparison parsed 4,930 of 4,933 files (99.94%, 55.5 MB) from Metabase, clojure-lsp, clj-kondo and Babashka checkouts in 2.24 seconds; two failures were intentionally invalid clj-kondo fixtures and one was a Metabase test. This measures parser completion on that corpus, not semantic call-resolution accuracy. Namespace/import resolution, macro expansion and exact multi-arity matching remain outside this first pass; see `docs/ARCHITECTURE.md` for the extraction limits.
