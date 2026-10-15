@@ -320,7 +320,13 @@ constexpr std::uint32_t kCacheVersion = 31;           // 31: train 27 — lane l
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 171;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 173;          // bump on any grammar/.scm/extraction change
+                                                      // 173 = 2026-10-15 (slice 4a, #400): the Ruby mixin directives (`include` / `extend` / `prepend`)
+                                                      //   move off the captureIncludes walk onto the shared base-relations path —
+                                                      //   queries/ruby/tags.scm captures the directive as @reference.mixin and captureTagsFacts
+                                                      //   emits each constant's inherit reference through emitBaseRef (captureRubyMixinBases retired).
+                                                      //   Output byte-identical; the extraction path changed, so the number moves. 173, not 172: 172 is
+                                                      //   171's rich file tag. Rich file tag 174. kCacheVersion stays 31.
                                                       // 171 = 2026-10-13 (PR #349 lands, @tag-und-nacht): Clojure grammar, tags.scm and extraction
                                                       //   (ingest_clojure.h) and the qualified-call namespace in Reference::qualifier. The branch built
                                                       //   156, 158 and 169 (rich file tag 170); main is 167 (rich file tag 168). 171, not 168: a lean 168
@@ -494,7 +500,7 @@ constexpr std::uint32_t kParserVer    = 171;          // bump on any grammar/.sc
                                                       // 131 = 2026-10-02 (test/rubyreachcheck.sh): a Ruby MIXIN is an
                                                       //   ancestor — `include`/`extend`/`prepend` at class-DSL
                                                       //   position mints one inherit RawRef per constant, at the
-                                                      //   constant's byte (ingest_relations.h captureRubyMixinBases).
+                                                      //   constant's byte (ingest_relations.h emitCapturedMixinBase).
                                                       //   New records, same layout: kCacheVersion unchanged (27). A
                                                       //   Ruby cache written at 130 holds none of them and must re-parse.
                                                       // 130 = 2026-10-01 (test/rubybarecallcheck.sh): Ruby's BARE-WORD call — an
