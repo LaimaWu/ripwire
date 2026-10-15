@@ -672,29 +672,27 @@ inline bool defRowUnprinted( const DefGroups& groups, const RowDefTokens& tokens
 {
     return defTableCapped( groups ) && tokens.strongest( row ) <= DefMark::Name;
 }
-// A row with no printed token on a cut table carries no of_def at all (its via="name" is the hedge); below the cap every row
-// keeps the attribute, as before.
-inline std::string ofDefAttrXml( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row )
+// A row's of_def in one dialect: `open`, the printed tokens (`sep`, `quote`), `close`. A row with no printed token on a cut
+// table carries no of_def at all (its via="name" is the hedge); below the cap every row keeps the attribute, as before.
+inline std::string ofDefIn( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row, std::string_view open, std::string_view sep,
+                            std::string_view quote, char close )
 {
     if( !groups.multi() || tokens.empty() || defRowUnprinted( groups, tokens, row ) )
     {
         return {};
     }
-    std::string out = " of_def=\"";
-    defTokensTo( out, groups, tokens.of( row ), " ", "" );
-    out += '"';
+    std::string out( open );
+    defTokensTo( out, groups, tokens.of( row ), sep, quote );
+    out += close;
     return out;
+}
+inline std::string ofDefAttrXml( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row )
+{
+    return ofDefIn( groups, tokens, row, " of_def=\"", " ", "", '"' );
 }
 inline std::string ofDefKeyJson( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row )
 {
-    if( !groups.multi() || tokens.empty() || defRowUnprinted( groups, tokens, row ) )
-    {
-        return {};
-    }
-    std::string out = ",\"of_def\":[";
-    defTokensTo( out, groups, tokens.of( row ), ",", "\"" );
-    out += ']';
-    return out;
+    return ofDefIn( groups, tokens, row, ",\"of_def\":[", ",", "\"", ']' );
 }
 // The columnar of_def column's value for one row: the printed tokens space-separated (the sites_at column's convention).
 inline std::string ofDefColumnValue( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row )
