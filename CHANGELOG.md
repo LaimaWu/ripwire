@@ -15,6 +15,22 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — the call sites the resolver declined are named, as hedged `<dc>` rows
+
+A call the resolver declines to bind (two or more same-language candidates and no evidence to choose one, the builtin-method
+and C++ standard-member name gates, Ruby's class-versus-instance side cut and `new`) gets no edge, and `declined_calls=` counted
+it without naming it: "what does doPackage call" missed a call through a Go interface value, and "who calls
+TaskManager#define_task" missed the tests that call it on an untyped receiver. `--callees` now lists each such call the
+definitions make as `<dc n= l= cands= via="declined"/>`, and `--callers` lists each declined call whose candidates include the
+selector's definition as `<dc in= p= cands= via="declined"/>` (by the stored candidate list, never by the called name).
+`gate="builtin"|"std"|"side"` names the rule that declined it; candidates (`cand=`) print only with `--legend=full`. A row is a
+call SITE, never an edge: it is not in `count=`, the `<s>` rows, `hop_tested=`/`hop_untested=` or any reach, and the legend says
+the call may reach none of its `cands=` definitions. 16 rows by default (`--limit` raises it; the callers form is cut
+file-first), with `dc_shown=`/`dc_next=` past the cap. The same rows ride `--json` (`"dc"`), `--format=columnar` and the MCP
+twins (`"declined_sites"`). `--safe-delete` now reads `risk="possible-callers"` (not `none-found`) for a definition only a
+declined call could have meant, and lists those calls; `--impact` prints no rows and its legend names `--callers` as where the
+first-hop sites are listed. One record per declined call (13 B); the graph is rebuilt every run, so no cache version moves.
+
 ### Changed — a multi-definition answer says which definition each row belongs to
 
 A selector that names several same-named definitions (`--callers=empty` over two classes' `empty`) used to answer with the
