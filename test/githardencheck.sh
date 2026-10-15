@@ -55,8 +55,10 @@
 #       detects a stall.
 #   (O) the startup scan finds the governing config from the filesystem alone, a superset of git's discovery: an
 #       invalid .git dir skipped for the hooked parent, a commondir planted in an ordinary .git, a bare root, a
-#       symlinked root (git walks the physical path), a symlinked .git/config (git reads through it). Each shape
-#       first proves plain git reads the hook value there.
+#       symlinked root (git walks the physical path), a symlinked .git/config (git reads through it), a NUL byte
+#       inside a .git gitdir file or a commondir file (git cuts the path at the NUL, so the scan defers to git), and a
+#       .git pointer file behind a symlink (the scan defers to git; the shim sees that child). Each shape first proves
+#       plain git reads the hook value there.
 #   (Q) no stale answer: a repo whose config gains the hook (directly, then only via include.path) between two
 #       calls is disclosed on the next call.
 #   (P) the cost, counted through a PATH shim: a plain repo's run starts no startup-scan git child; with GIT_DIR
@@ -488,6 +490,35 @@ rm -f "$TMP/o5/.git/config"; ln -s "$TMP/o5.cfg" "$TMP/o5/.git/config"
 if [ -L "$TMP/o5/.git/config" ]; then ok "(O) O5-symlinked-config fixture: .git/config is a symlink"; else no "(O) O5-symlinked-config fixture: .git/config is not a symlink"; fi
 governs "O5-symlinked-config" "$TMP/o5"
 discloses "O5-symlinked-config" "$TMP/o5"
+# (O6) a .git gitdir: file with a NUL inside the path: git reads it as a C string, cut at the NUL, so it governs with
+# the hooked gitdir before the NUL; a scan that keeps the NUL in the path opens nothing and must not call it clean.
+newrepo "$TMP/o6src"; "$REALGIT" -C "$TMP/o6src" config core.fsmonitor "$TMP/hook.sh"
+mkdir -p "$TMP/o6" && printf 'int f;\n' > "$TMP/o6/f.c" && printf 'gitdir: %s/o6src/.git\000junk\n' "$TMP" > "$TMP/o6/.git"
+if od -An -c "$TMP/o6/.git" | grep -q '\\0'; then ok "(O) O6-nul-gitdir fixture: o6/.git holds a NUL byte"; else no "(O) O6-nul-gitdir fixture: o6/.git holds no NUL byte"; fi
+governs "O6-nul-gitdir" "$TMP/o6"
+discloses "O6-nul-gitdir" "$TMP/o6"
+# (O7) a commondir with a NUL inside the path: the same cut, for the shared config.
+newrepo "$TMP/o7"; newrepo "$TMP/o7common"; "$REALGIT" -C "$TMP/o7common" config core.fsmonitor "$TMP/hook.sh"
+printf '%s/o7common/.git\000junk\n' "$TMP" > "$TMP/o7/.git/commondir"
+if od -An -c "$TMP/o7/.git/commondir" | grep -q '\\0'; then ok "(O) O7-nul-commondir fixture: commondir holds a NUL byte"; else no "(O) O7-nul-commondir fixture: commondir holds no NUL byte"; fi
+governs "O7-nul-commondir" "$TMP/o7"
+discloses "O7-nul-commondir" "$TMP/o7"
+# (O8) the root's .git is a symlink to a gitdir: file: git reads through it; the scan defers to git, so the disclosure
+# comes from the git-resolved fallback — the shim must see its rev-parse child.
+newrepo "$TMP/o8src"; "$REALGIT" -C "$TMP/o8src" config core.fsmonitor "$TMP/hook.sh"
+printf 'gitdir: %s/o8src/.git\n' "$TMP" > "$TMP/o8.ptr"
+mkdir -p "$TMP/o8" && printf 'int f;\n' > "$TMP/o8/f.c" && ln -s "$TMP/o8.ptr" "$TMP/o8/.git"
+if [ -L "$TMP/o8/.git" ]; then ok "(O) O8-symlinked-pointer fixture: o8/.git is a symlink"; else no "(O) O8-symlinked-pointer fixture: o8/.git is not a symlink"; fi
+governs "O8-symlinked-pointer" "$TMP/o8"
+discloses "O8-symlinked-pointer" "$TMP/o8"
+mkdir -p "$TMP/shimo8"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/shimo8.log"\nexec "%s" "$@"\n' "$TMP" "$REALGIT" > "$TMP/shimo8/git"
+chmod +x "$TMP/shimo8/git"
+rm -f "$TMP/shimo8.log"; PATH="$TMP/shimo8:$PATH" "$BIN" "$TMP/o8" >/dev/null 2>&1; o8rc=$?
+O8RES="$( grep -c 'rev-parse --absolute-git-dir' "$TMP/shimo8.log" 2>/dev/null )"; O8RES="${O8RES:-0}"
+[ "$o8rc" -eq 0 ] && [ "$O8RES" -ge 1 ] \
+    && ok "(O) O8-symlinked-pointer: the scan deferred to git (rev-parse --absolute-git-dir x$O8RES), rc 0" \
+    || no "(O) O8-symlinked-pointer: rc=$o8rc, rev-parse --absolute-git-dir x$O8RES — the git fallback was not taken"
 
 # ── (Q) no stale answer: a config that gains the key between two calls is hardened on the second ──────────────
 # Nothing about the scan is kept across processes; this pins it. The first (warm-cache) call sees a plain repo; then

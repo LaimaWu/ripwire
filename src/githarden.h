@@ -28,7 +28,7 @@
 // `.git` dir or `gitdir:` file, every ancestor that is itself a gitdir, and each one's `commondir`), so the probe
 // and disclosure run for the governing repo whatever its depth, with no git child unless a file could carry the
 // key. Where the filesystem cannot speak for git (GIT_DIR/GIT_COMMON_DIR/GIT_WORK_TREE set, a root that does not
-// canonicalise, a pointer file behind a symlink), `gitResolvedConfigDirs` asks git itself
+// canonicalise, a pointer file behind a symlink or holding a NUL), `gitResolvedConfigDirs` asks git itself
 // (`rev-parse --absolute-git-dir --git-common-dir`, the hook disabled on that probe's OWN command line).
 //
 // The trust decision is PER PROCESS: a long-lived --mcp server probes its roots once at start. A config edited
@@ -242,8 +242,9 @@ inline std::vector<std::filesystem::path> gitResolvedConfigDirs( const std::stri
 // a value. Pointer files are read both as git reads them (the rest of the file, trailing CR/LF dropped, relative
 // to D or to the gitdir) and as the first line trimmed of blanks; where the two differ both are kept.
 // nullopt = the filesystem cannot speak for git here, and the caller asks git (gitResolvedConfigDirs) as before:
-// an environment-named repository, a root that does not canonicalise, a stat that fails other than "absent", or a
-// pointer file (.git, commondir) that is a symlink — git reads through it, the no-follow reader does not.
+// an environment-named repository, a root that does not canonicalise, a stat that fails other than "absent", a
+// pointer file (.git, commondir) that is a symlink — git reads through it, the no-follow reader does not — or a
+// pointer file with a NUL byte in it (git cuts the path there).
 // test/githardencheck.sh (O) pins the shapes (an invalid .git skipped, a planted commondir, a bare root, a
 // symlinked root) and (P) counts the git children: none for a root whose config cannot carry the key.
 inline bool gitDiscoveryNamedByEnvironment() noexcept
@@ -298,7 +299,7 @@ inline bool statAbsentOrOk( const std::error_code& ec ) noexcept
 
 // One level of git's discovery walk: the gitdirs directory `dir` could contribute — its `.git` directory, the
 // target(s) of a `.git` gitdir: file, and `dir` itself when it holds a HEAD. false = doubt (a stat error that is not
-// "absent", or a `.git` that is a symlink to something the no-follow reader cannot open).
+// "absent", a `.git` that is a symlink to something the no-follow reader cannot open, or a `.git` file holding a NUL).
 inline bool addGitDirsAt( const std::filesystem::path& dir, std::vector<std::filesystem::path>& gitDirs )
 {
     std::error_code                    ec;
@@ -320,6 +321,10 @@ inline bool addGitDirsAt( const std::filesystem::path& dir, std::vector<std::fil
         {
             return false;
         }
+        if( head && head->find( '\0' ) != std::string::npos )
+        {
+            return false;   // git reads the path as a C string, cut at the first NUL — let git answer
+        }
         if( head && head->starts_with( "gitdir:" ) )
         {
             const std::string_view text( *head );
@@ -335,7 +340,7 @@ inline bool addGitDirsAt( const std::filesystem::path& dir, std::vector<std::fil
 }
 
 // The local config files one gitdir could govern with: its config and config.worktree, and the same pair in every
-// reading of its `commondir`. false = doubt (a commondir behind a symlink, which git reads through).
+// reading of its `commondir`. false = doubt (a commondir behind a symlink, which git reads through, or one holding a NUL).
 inline bool addGitDirConfigFiles( const std::filesystem::path& gitDir, std::vector<std::filesystem::path>& files )
 {
     files.push_back( gitDir / "config" );
@@ -345,6 +350,10 @@ inline bool addGitDirConfigFiles( const std::filesystem::path& gitDir, std::vect
     if( !common )
     {
         return !pathguard::isSymlink( commondirFile );
+    }
+    if( common->find( '\0' ) != std::string::npos )
+    {
+        return false;   // as for a `.git` file: git cuts the path at the NUL — let git answer
     }
     std::vector<std::filesystem::path> commonDirs;
     addPointerReadings( *common, *common, gitDir, commonDirs );
