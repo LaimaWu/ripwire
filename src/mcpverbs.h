@@ -1194,9 +1194,12 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
     const std::vector<GrepHit> hits      = grepEnrich( ing, std::span<const GrepRawHit>( collected.raw ).subspan( grepPage.begin, rowCount ), 0, 0 );
     // R1 <enc> rows and L4's carrier verdict, once, before the root: next= reads them (grepCarrierNext) and so does the
     // enclosing block. The MCP index is the RICH family (mcpindex.h ingests with value uses), so its own references
-    // carry the reads — no second ingest here, unlike the lean CLI run.
+    // carry the reads — no second ingest here, unlike the lean CLI run. Reads are counted on the SAME pages the CLI counts
+    // them (grepCarriersWantReads: the top hit's carrier), so the two surfaces print the same reads on every page, single
+    // root or workspace, although this index could count them on every page.
     const std::vector<GrepEncRow>  encRowsJ  = grepEnclosingRows( ing, ix.g, std::span<const GrepHit>( hits ) );
-    const std::vector<GrepCarrier> carriersJ = grepCarriers( ing, valueRefIndexOf( ix ), encRowsJ, &ing );
+    const std::vector<GrepCarrier> carriersJ = grepCarriers( ing, valueRefIndexOf( ix ), encRowsJ,
+                                                             grepCarriersWantReads( ing, hits, encRowsJ ) ? &ing : nullptr );
     const std::string              carrierNextJ = grepCarrierNext( ing, hits, encRowsJ, carriersJ );
 
     // §R-J: the CLI's unindexed_files_scanned=/unindexed block twin (search.h grepCollectAux) — literal-only,

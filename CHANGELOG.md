@@ -29,13 +29,18 @@ value-preserving operators — JS/TS `??`, `||`, `&&` and the logical assignment
 
 When a hit sits inside a variable, constant or initialiser (its enclosing definition's kind is a variable), the `<enc>`
 row now says where that value goes instead of only a call count nobody can satisfy: `reads=N reads_at=` are the
-uses verb's read sites for the name (first three, the uses verb's order; only where that verb indexes reads —
+uses verb's read sites for the name (first three, in tier, path, line order — not the order the uses verb prints; only where that verb indexes reads —
 Python, C++ and ObjC outside headers — and absent, never zero, elsewhere), and `vals=` names up to three function
 values the carrier stores, as `slot=fn@line` of the one definition each resolves to (`vals_total=` beyond three).
 When the top hit's carrier has reads, the root `next=` is `--uses=<carrier>`. The MCP `grep` verb's `enclosing`
 rows carry the same `reads`/`reads_at`/`vals` keys (`src/grepcarrier.h`, shared). Reads are rich-family facts, so a
-lean `--grep` run whose page holds such a carrier ingests the same root once more through the rich warm cache; a page
-without one costs nothing extra. Gate: `test/countfloorcheck.sh` arm P.
+lean `--grep` run counts them only when the TOP hit sits in such a carrier (the row that decides `next=`): it then
+ingests the same root(s) once more through the rich warm cache — per root on a workspace run, so the CLI and the MCP
+workspace print the same reads — or uncached when `--cache=F` names the cache (F keeps the lean blob; no other cache file
+is written). Any other page costs nothing extra; a lower carrier keeps `floor_next="--uses=<name>"` as its clue. The
+second ingest runs under the memory guard (`--max-memory`, then the hard line): a stop keeps the lean answer and the
+root says so with `reads_skipped=memory_stop|hard_limit` and `reads_next=--uses=<carrier>`. Gate:
+`test/countfloorcheck.sh` arm P (P/top, P/mem, P/cache, P/ws).
 
 ### Added — Clojure (`.clj`/`.cljs`/`.cljc`/`.bb`)
 

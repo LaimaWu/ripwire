@@ -75,8 +75,9 @@ inline constexpr std::size_t   kVrTextCap    = 96;    // a written slot / callee
 // Families with no row here, and why: C/C++ and Go `||` / `&&` yield a truth value (int or bool), never an operand, so
 // a function there is a test, not a stored value. The conditional `c ? f : g` (C, C++, JS/TS; Python `f if c else g`)
 // and parentheses are handled by transparent() for every family already. Value references are captured for the C, JS,
-// Python and Go families only (model.h kValueRefFamilyOfLang); Ruby `a || m`, Java, C#, Swift, Rust, Bash have no
-// value-reference capture at all, so they have no operator to walk either.
+// Python and Go families only (model.h kValueRefFamilyOfLang); Ruby, Java, C#, Swift, Rust, Bash have no
+// value-reference capture at all, so they have no operator to walk either. (Ruby `a || m` needs none: a bare `m` is a
+// call there and is already an edge; Ruby's function value is `method(:m)`, a different shape.)
 struct VrPassOp
 {
     VrFam            fam;

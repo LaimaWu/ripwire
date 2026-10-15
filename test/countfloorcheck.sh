@@ -432,7 +432,7 @@ printf 'function homeHandler() { return 1; }\nexport const ROUTES = { home: home
 OUT_P="$( run pc --grep=PC_NAMED_MARK )"; ROW_P="$( enc_row "$OUT_P" NAMED )"
 [ -n "$ROW_P" ] || no "(P) premise: no <enc n=\"NAMED\"> row"
 if [ "$( attr "$ROW_P" reads )" = 3 ]; then ok "(P) reads=\"3\" — the uses verb's three read sites of NAMED"; else no "(P) reads on NAMED: $ROW_P"; fi
-if [ "$( attr "$ROW_P" reads_at )" = "lib/reader.py:4 lib/reader.py:7 test_reader.py:4" ]; then ok "(P) reads_at= lists them in the uses verb's order (source before tests, then path, line)"; else no "(P) reads_at on NAMED: $ROW_P"; fi
+if [ "$( attr "$ROW_P" reads_at )" = "lib/reader.py:4 lib/reader.py:7 test_reader.py:4" ]; then ok "(P) reads_at= lists them in tier, path, line order (source before tests, then path, line)"; else no "(P) reads_at on NAMED: $ROW_P"; fi
 USES_P="$( run pc --uses=NAMED | grep -oE '<u role="read" p="[^"]*"' | sed 's/.*p="//; s/"$//' | sort | tr '\n' ' ' )"
 if [ "$USES_P" = "lib/reader.py:4 lib/reader.py:7 test_reader.py:4 " ]; then ok "(P) the same three sites --uses=NAMED lists as role=\"read\""; else no "(P) --uses=NAMED read rows: $USES_P"; fi
 if [ "$( attr "$( root_tag "$OUT_P" grep )" next )" = "--uses=NAMED" ]; then ok "(P) root next=\"--uses=NAMED\" (the top hit's carrier has reads)"; else no "(P) root next on NAMED: $( root_tag "$OUT_P" grep )"; fi
@@ -481,6 +481,71 @@ import json, sys
 d = json.loads( sys.stdin.read() )
 r = { x["n"]: x for x in d.get( "enclosing", [] ) }.get( "ent", {} )
 sys.exit( 0 if r.get( "vals" ) == [ "exec=local_exec@3", "undo=other_exec@other.c:1" ] and "reads" not in r else 1 )'; then ok "(P) MCP grep enclosing ent: the same vals as the CLI, no reads key"; else no "(P) MCP grep ent: $MCP_PC"; fi
+
+# P/top (train-28 fix N1): reads are counted only when the TOP hit's carrier is readable. A page whose top hit is in a
+# function and whose lower hit is in a readable carrier pays NO second ingest (the hard-line seam set for the reading
+# that ingest would add never fires), and the lower carrier keeps floor_next= (the uses verb) as its clue, no reads=.
+mkdir -p "$W/pm/lib" "$W/pw/a/lib" "$W/pw/b"
+printf 'def early():\n    return "PM_MIX_MARK"\n\nLATE = "PM_MIX_MARK"\n' > "$W/pm/lib/aa.py"
+printf 'from lib import aa\n\ndef reader():\n    return aa.LATE\n' > "$W/pm/lib/rd.py"
+printf 'TOPV = "PW_WS_MARK"\n' > "$W/pw/a/lib/top.py"
+printf 'from lib import top\n\ndef r2():\n    return top.TOPV\n' > "$W/pw/a/lib/use.py"
+printf 'OTHER = "PW_WS_MARK"\n\ndef r3():\n    return OTHER\n' > "$W/pw/b/bb.py"
+OUT_PM="$( cd "$W/pm" && RIPWIRE_TEST_MEMGUARD=hard:3 "$BIN" . --no-cache --grep=PM_MIX_MARK 2>/dev/null )"
+ROW_PM="$( enc_row "$OUT_PM" LATE )"; R_PM="$( root_tag "$OUT_PM" grep )"
+[ -n "$ROW_PM" ] || no "(P/top) premise: no <enc n=\"LATE\"> row"
+[ -n "$( enc_row "$OUT_PM" early )" ] || no "(P/top) premise: no <enc n=\"early\"> row (the top hit's function)"
+case "$ROW_PM" in *reads=*|*reads_at=*) no "(P/top) a lower carrier counted reads although the top hit is in a function: $ROW_PM" ;; *) ok "(P/top) top hit in a function: the lower carrier LATE has no reads=" ;; esac
+if [ "$( attr "$ROW_PM" floor_next )" = "--uses=LATE" ]; then ok "(P/top) the lower carrier keeps floor_next=\"--uses=LATE\" as the clue"; else no "(P/top) clue on LATE: $ROW_PM"; fi
+case "$R_PM" in *reads_skipped=*) no "(P/top) a second ingest ran (the hard-line reading after it fired): $R_PM" ;; *) ok "(P/top) no second ingest: the hard-line reading it would add never happened" ;; esac
+if [ "$( attr "$R_PM" next )" = "--at=lib/aa.py:2" ]; then ok "(P/top) next= stays the at verb on the top hit"; else no "(P/top) next: $R_PM"; fi
+MCP_PM="$( mcp_call grep "{\"path\":\"$W/pm\",\"pattern\":\"PM_MIX_MARK\"}" )"
+if printf '%s' "$MCP_PM" | python3 -c '
+import json, sys
+r = { x["n"]: x for x in json.loads( sys.stdin.read() ).get( "enclosing", [] ) }.get( "LATE" )
+sys.exit( 0 if r is not None and "reads" not in r and r.get( "floor_next" ) == "--uses=LATE" else 1 )'; then ok "(P/top) MCP: the same page, the same verdict (no reads key on LATE, floor_next clue)"; else no "(P/top) MCP LATE: $MCP_PM"; fi
+
+# P/mem (fix N4): the second ingest runs under the memory guard. Over the hard line after it (seam: the third hard-line
+# reading of a single-root grep, after main's ingest and graph readings), the answer keeps the lean rows and its root
+# discloses the skipped reads in band, with the call that recovers them; exit 0, nothing refused.
+OUT_PX="$( cd "$W/pc" && RIPWIRE_TEST_MEMGUARD=hard:3 "$BIN" . --no-cache --grep=PC_NAMED_MARK 2>/dev/null; echo "rc=$?" )"
+R_PX="$( root_tag "$OUT_PX" grep )"; ROW_PXM="$( enc_row "$OUT_PX" NAMED )"
+[ -n "$ROW_PXM" ] || no "(P/mem) premise: no <enc n=\"NAMED\"> row on the stopped answer"
+if [ "$( attr "$R_PX" reads_skipped )" = hard_limit ] && [ "$( attr "$R_PX" reads_next )" = "--uses=NAMED" ]; then ok "(P/mem) stopped: root reads_skipped=\"hard_limit\" reads_next=\"--uses=NAMED\""; else no "(P/mem) root on a stopped reads ingest: $R_PX"; fi
+case "$ROW_PXM" in *reads=*) no "(P/mem) a stopped ingest still printed reads=: $ROW_PXM" ;; *) ok "(P/mem) stopped: no reads= on the row (unknown, never a short count)" ;; esac
+case "$OUT_PX" in *rc=0) ok "(P/mem) stopped: exit 0, the lean answer stands" ;; *) no "(P/mem) stopped exit: ${OUT_PX##*rc=}" ;; esac
+comments "$( cd "$W/pc" && RIPWIRE_TEST_MEMGUARD=hard:3 "$BIN" . --no-cache --grep=PC_NAMED_MARK --legend=compact 2>/dev/null )" | grep -qF "reads_skipped=" \
+    && ok "(P/mem) compact legend defines reads_skipped= on that answer" || no "(P/mem) compact legend lacks reads_skipped="
+comments "$( cd "$W/pc" && RIPWIRE_TEST_MEMGUARD=hard:3 "$BIN" . --no-cache --grep=PC_NAMED_MARK --legend=full 2>/dev/null )" | grep -qF "reads_next" \
+    && ok "(P/mem) full legend defines reads_next on that answer" || no "(P/mem) full legend lacks reads_next"
+case "$OUT_P" in *reads_skipped*) no "(P/mem) near miss: an unstopped answer carries reads_skipped" ;; *) ok "(P/mem) near miss: an unstopped answer carries no reads_skipped (nor its legend)" ;; esac
+
+# P/cache (fix N5): an explicit --cache=F is honoured — the second ingest writes no rich auto-cache under TMPDIR.
+mkdir -p "$W/tmpd"
+OUT_PK="$( cd "$W/pc" && TMPDIR="$W/tmpd" XDG_CACHE_HOME="$W/tmpd" "$BIN" . --cache="$W/named.bin" --grep=PC_NAMED_MARK 2>/dev/null )"
+[ "$( attr "$( enc_row "$OUT_PK" NAMED )" reads )" = 3 ] || no "(P/cache) premise: reads=\"3\" under --cache= (the second ingest ran)"
+if [ -z "$( find "$W/tmpd" -type f 2>/dev/null )" ] && [ -f "$W/named.bin" ]; then ok "(P/cache) --cache=F: F written, no hidden rich auto-cache under TMPDIR"; else no "(P/cache) files under TMPDIR: $( find "$W/tmpd" -type f | tr '\n' ' ' )"; fi
+OUT_PK2="$( cd "$W/pc" && TMPDIR="$W/tmpd" XDG_CACHE_HOME="$W/tmpd" "$BIN" . --cache="$W/named.bin" --grep=PC_NAMED_MARK 2>/dev/null )"
+if [ "$OUT_PK" = "$OUT_PK2" ]; then ok "(P/cache) warm == cold under --cache=F"; else no "(P/cache) warm and cold answers differ under --cache=F"; fi
+
+# P/ws (fix N6): reads= on a workspace (multi-root) run — the CLI re-ingests each root rich and merges, so it prints the
+# same reads/reads_at as the MCP workspace index (rich) on the same page.
+OUT_PW="$( "$BIN" "$W/pw/a" "$W/pw/b" --no-cache --grep=PW_WS_MARK 2>/dev/null )"
+ROW_PWA="$( enc_row "$OUT_PW" TOPV )"; ROW_PWB="$( enc_row "$OUT_PW" OTHER )"
+if [ "$( attr "$ROW_PWA" reads_at )" = "a/lib/use.py:4" ] && [ "$( attr "$ROW_PWB" reads_at )" = "b/bb.py:4" ]; then ok "(P/ws) CLI workspace: reads_at= per root, label/path"; else no "(P/ws) CLI workspace rows: $ROW_PWA $ROW_PWB"; fi
+if [ "$( attr "$( root_tag "$OUT_PW" grep )" next )" = "--uses=TOPV" ]; then ok "(P/ws) CLI workspace next=\"--uses=TOPV\""; else no "(P/ws) CLI workspace next: $( root_tag "$OUT_PW" grep )"; fi
+MCP_PW="$( mcp_call grep "{\"paths\":[\"$W/pw/a\",\"$W/pw/b\"],\"pattern\":\"PW_WS_MARK\"}" )"
+CLI_PW="$( for n in TOPV OTHER; do r="$( enc_row "$OUT_PW" "$n" )"; printf '%s %s %s\n' "$n" "$( attr "$r" reads )" "$( attr "$r" reads_at )"; done )"
+MCPS_PW="$( printf '%s' "$MCP_PW" | python3 -c '
+import json, sys
+d = json.loads( sys.stdin.read() )
+for x in d.get( "enclosing", [] ):
+    print( x["n"], x.get( "reads", "" ), " ".join( x.get( "reads_at", [] ) ) )
+print( "next", d.get( "next" ) )' )"
+if [ "$MCPS_PW" = "$CLI_PW
+next --uses=TOPV" ]; then ok "(P/ws) MCP workspace: reads/reads_at/next identical to the CLI"; else no "(P/ws) MCP vs CLI: [$MCPS_PW] vs [$CLI_PW]"; fi
+OUT_PWS="$( RIPWIRE_TEST_MEMGUARD=hard:4 "$BIN" "$W/pw/a" "$W/pw/b" --no-cache --grep=PW_WS_MARK 2>/dev/null )"
+if [ "$( attr "$( root_tag "$OUT_PWS" grep )" reads_skipped )" = hard_limit ] && [ -z "$( attr "$( enc_row "$OUT_PWS" OTHER )" reads )" ]; then ok "(P/ws) a workspace stopped after its first rich root: reads_skipped=, no partial reads= on any row"; else no "(P/ws) stopped workspace: $( root_tag "$OUT_PWS" grep )"; fi
 
 # ── N: legend ────────────────────────────────────────────────────────────────────────────────────────────
 echo "=== N: every new attribute is defined where it rides ==="

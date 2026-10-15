@@ -894,9 +894,11 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "floor_next", "floor_next=: the call that lists what that count could not see (the uses verb; the literal scan where reads are not indexed)", true, "enc", MapHeaderRead::No, {}, "grep" },
     // L4 (src/grepcarrier.h): a carrier row (every def a variable/constant/initialiser) — its read sites and stored function values.
     { "reads", "reads=N: read sites the uses verb lists for this carrier's name (by name; present only when nonzero where reads are indexed; absent = none counted)", true, "enc", MapHeaderRead::No, {}, "grep" },
-    { "reads_at", "reads_at=: the first three of those sites, file:line, uses order; the root next= is then the uses verb", true, "enc", MapHeaderRead::No, {}, "grep" },
+    { "reads_at", "reads_at=: the first three of those sites, file:line, tier/path/line order; the root next= is then the uses verb", true, "enc", MapHeaderRead::No, {}, "grep" },
     { "vals", "vals=: up to three function values the carrier stores, slot=fn@line of its one resolved def (path:line elsewhere; no @ if several)", true, "enc", MapHeaderRead::No, {}, "grep" },
     { "vals_total", "vals_total=N: every stored function value, when more than vals= shows", true, "enc", MapHeaderRead::No, {}, "grep" },
+    { "reads_skipped", "reads_skipped=memory_stop|hard_limit: the memory guard stopped the index that counts the top carrier's reads; no reads= on any row", false, "grep", MapHeaderRead::No, {}, "grep" },
+    { "reads_next", "reads_next=: the uses verb on the top hit's carrier, the call that lists the reads reads_skipped= left out", false, "grep", MapHeaderRead::No, {}, "grep" },
     // count-floor + CALLSITE-LINE on safe-delete (src/verbs_navigate.h runSafeDelete): root markers beside the counts they qualify.
     { "callers_floor", "callers_floor=1: callers= and impact_reaches= may be short (a declined, unbound or value use, or a kind read not called); not proof of more", false, {}, MapHeaderRead::No, {}, "safe-delete" },
     { "uses_floor", "uses_floor=1: this kind's reads and type mentions are not indexed in this run; uses= does not count them", false, {}, MapHeaderRead::No, {}, "safe-delete" },

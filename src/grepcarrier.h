@@ -13,7 +13,8 @@
 //   * reads= / reads_at= are the uses verb's role="read" sites for the carrier's NAME (matched by name, the uses verb's own
 //     unit), counted only where that verb can see reads at all: an ingest that captured value uses and a language whose
 //     reads reach the use-site table (countfloor.h valueUsesArmedFor), never a C-family header, whose readers are `.c`
-//     files the uses verb never reads (the countFloorNext rule). Anywhere else the attributes are ABSENT: unknown, never 0;
+//     files the uses verb never reads (the countFloorNext rule), and only on a page whose TOP hit sits in such a carrier
+//     (grepCarriersWantReads — the CLI pays a second ingest for them). Anywhere else the attributes are ABSENT: unknown, never 0;
 //   * vals= are the function values the carrier itself stores: value references (valuerefindex.h) made inside the
 //     carrier's definition whose name resolves to an indexed function, in source order, as slot=fn@line: the slot key as
 //     the value index normalised it, and the line of the ONE definition the name resolves to (@path:line when that
@@ -63,7 +64,7 @@ struct GrepCarrier
     bool                         isCarrier  = false;   // every definition on the row is a Var
     bool                         readsKnown = false;   // reads= is a count the uses verb could make (see the rule above)
     std::uint32_t                reads      = 0;       // role="read" sites spelled like the carrier's name
-    std::vector<GrepCarrierSite> at;                   // the first kGrepCarrierShown of them, in the uses verb's base order
+    std::vector<GrepCarrierSite> at;                   // the first kGrepCarrierShown of them, in tier, path, line order (not the order the uses verb prints)
     std::vector<GrepCarrierVal>  vals;                 // the first kGrepCarrierShown stored function values
     std::uint32_t                valsTotal  = 0;       // every stored function value on the row
 };
@@ -80,14 +81,27 @@ inline bool isGrepCarrierRow( const IngestResult& ing, const GrepEncRow& row ) n
     return !row.ids.empty() && std::ranges::all_of( row.ids, [ & ]( NodeId id ) { return id < ing.symbols.size() && ing.symbols[id].kind == SymKind::Var; } );
 }
 
-// Do any rows want reads= — a carrier whose language/path the uses verb reads? The CLI asks this before paying for a
-// rich ingest, so an answer with no such row costs nothing extra.
-inline bool grepCarriersWantReads( const IngestResult& ing, std::span<const GrepEncRow> rows ) noexcept
+// The row holding the TOP hit's enclosing definition — the row the root next= is decided on — or rows.size() when the
+// top hit has no enclosing definition or no row holds it.
+inline std::size_t grepTopHitRow( std::span<const GrepHit> hits, std::span<const GrepEncRow> rows ) noexcept
 {
-    return std::ranges::any_of( rows, [ & ]( const GrepEncRow& row )
+    if( hits.empty() || hits[0].enclosingId == kNoNode )
     {
-        return isGrepCarrierRow( ing, row ) && grepCarrierReadsVisible( ing, ing.symbols[ row.ids.front() ] );
-    } );
+        return rows.size();
+    }
+    const auto row = std::ranges::find_if( rows, [ & ]( const GrepEncRow& r ) { return std::ranges::find( r.ids, hits[0].enclosingId ) != r.ids.end(); } );
+    return std::size_t( row - rows.begin() );
+}
+
+// Does this page count reads at all? Only when the TOP hit's row is a carrier the uses verb reads for (a language whose
+// reads reach the use-site table, not a header): that row decides the root next=, so it is the one whose reads are worth
+// a rich ingest (the CLI's second ingest is paid here and only here). Once counted, every readable carrier row on the
+// page gets reads=; on a page that does not count, a lower carrier keeps its floor_next= (the uses verb on its name) as
+// the clue. The CLI and the MCP twin both ask this, so the two surfaces count reads on the same pages.
+inline bool grepCarriersWantReads( const IngestResult& ing, std::span<const GrepHit> hits, std::span<const GrepEncRow> rows ) noexcept
+{
+    const std::size_t top = grepTopHitRow( hits, rows );
+    return top < rows.size() && isGrepCarrierRow( ing, rows[top] ) && grepCarrierReadsVisible( ing, ing.symbols[ rows[top].ids.front() ] );
 }
 
 namespace grepcarrier
@@ -181,7 +195,8 @@ struct ReadHit
 };
 
 // The uses verb's role="read" rows (collectUseSites' filters) for every name in `names` (sorted, unique), in ONE pass
-// over the reads ingest, sorted by name, then the uses verb's base order (tier, path, line).
+// over the reads ingest, sorted by name, then tier, path, line (source before tests) — the order
+// the uses verb starts from before it ranks; its printed order is rankUseSites', which reads_at= does not follow.
 inline std::vector<ReadHit> readSitesOf( const IngestResult& rd, std::span<const std::string_view> names )
 {
     const std::vector<std::uint64_t> valueSites = valueSitesOf( rd, names );
@@ -286,18 +301,12 @@ inline std::vector<GrepCarrier> grepCarriers( const IngestResult& ing, const Val
 inline std::string grepCarrierNext( const IngestResult& ing, std::span<const GrepHit> hits, std::span<const GrepEncRow> rows,
                                     std::span<const GrepCarrier> carriers )
 {
-    if( hits.empty() || hits[0].enclosingId == kNoNode )
+    const std::size_t top = grepTopHitRow( hits, rows );
+    if( top >= rows.size() || top >= carriers.size() || !carriers[top].readsKnown || carriers[top].reads == 0 )
     {
         return {};
     }
-    for( std::size_t r = 0; r < rows.size() && r < carriers.size(); ++r )
-    {
-        if( std::ranges::find( rows[r].ids, hits[0].enclosingId ) != rows[r].ids.end() )
-        {
-            return carriers[r].readsKnown && carriers[r].reads > 0 ? nextFlag( "--uses=", ing.symbols[ hits[0].enclosingId ].name ) : std::string();
-        }
-    }
-    return {};
+    return nextFlag( "--uses=", ing.symbols[ hits[0].enclosingId ].name );
 }
 
 // The two list attributes as plain text items (the emitters escape them for their own dialect): reads_at= as
