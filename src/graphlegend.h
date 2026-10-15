@@ -686,13 +686,13 @@ inline const char* declinedSitesImpactPointer( bool on ) noexcept { return on ? 
 // What one answer's <dc> rows carry, read off the rows it prints (never re-derived).
 struct DeclinedSitesLegendFlags
 {
-    bool any         = false;   // a <dc> row is printed
-    bool callersForm = false;   // in= p= rows (callers, safe-delete) rather than n= l= (callees)
-    bool side        = false;   // a row says gate="side"
-    bool nameGate    = false;   // a row says gate="builtin" or gate="std"
-    bool ofDef       = false;   // a row carries of_def=
-    bool cut         = false;   // the root carries dc_shown= / dc_next=
-    bool cand        = false;   // a row carries cand= (legend full)
+    bool any = false; // a <dc> row is printed
+    bool callersForm = false; // in= p= rows (callers, safe-delete) rather than n= l= (callees)
+    bool side = false; // a row says gate="side"
+    bool nameGate = false; // a row says gate="builtin" or gate="std"
+    bool ofDef = false; // a row carries of_def=
+    bool cut = false; // the root carries dc_shown= / dc_next=
+    bool cand = false; // a row carries cand= (legend full)
 };
 inline std::string declinedSitesLegend( const DeclinedSitesLegendFlags& f )
 {
