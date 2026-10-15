@@ -344,13 +344,10 @@ inline std::string declinedSiteCutAttrXml( const DeclinedSiteCut& cut )
     return " dc_shown=\"" + std::to_string( cut.shown ) + "\" dc_next=\"" + std::string( escapeXml( cut.next, esc ) ) + "\"";
 }
 // The JSON twin of the two root attributes, the same names on the CLI --json and the MCP twins (the attribute-parity rule).
+// A cut prints at least one row (the cap and --limit are >= 1), so dc_shown is never the 0 countFieldOrEmpty leaves out.
 inline std::string declinedSiteCutKeyJson( const DeclinedSiteCut& cut )
 {
-    if( cut.next.empty() )
-    {
-        return {};
-    }
-    return ",\"dc_shown\":" + std::to_string( cut.shown ) + nextFieldJson( cut.next, "dc_next" );
+    return countFieldOrEmpty( "dc_shown", cut.next.empty() ? 0 : cut.shown, /*json=*/true ) + nextFieldJson( cut.next, "dc_next" );
 }
 
 // What the legend must define, read off the rows an answer prints (graphlegend.h declinedSitesLegend).
