@@ -944,7 +944,7 @@ inline void wrappedBase( TSNode wn, std::uint32_t fileId, Lang lang, std::string
 // C#/PHP/Kotlin/Ruby. Ruby reuses the `superclass` clause name Java's extends clause already has, and
 // names its base with (constant)/(scope_resolution) — see isBaseTypeNodeIn. A Ruby MIXIN
 // (`include M` / `extend M` / `prepend M`) is a call in the class BODY, not a clause, so it is captured where
-// the call is read instead: captureRubyMixinBases (parser version 131; test/rubyreachcheck.sh). Lua is deliberately absent and it is a DISCLOSED non-goal, not an omission: Lua inheritance IS
+// the call is read instead: the @reference.mixin capture (parser version 131; test/rubyreachcheck.sh). Lua is deliberately absent and it is a DISCLOSED non-goal, not an omission: Lua inheritance IS
 // `setmetatable( Derived, { __index = Base } )`, an ordinary runtime call over an ordinary table, so there
 // is no syntax to read and a Lua corpus correctly reports no inheritance edges at all.
 //
@@ -1988,6 +1988,11 @@ inline std::string_view fieldIdentifierText( TSNode n, NodeField field, std::str
 // (measured: NoMethodError at class level) — captured for third-party DSLs that define it; the
 // disclosure lives in the CHANGELOG and the tags.scm header.
 inline constexpr std::array<std::string_view, 4> kRubyConstantDirectives = { "include", "extend", "prepend", "autoload" };
+// The MIXIN subset of the set above (family 4, slice 4a): the three directives that make each constant argument an
+// ANCESTOR of the enclosing class. `autoload` is in the set above and not here — it names a file to load, never a base.
+// The shared capture consumer (ingest_sidecap.h captureTagsFacts) reads this table for the @reference.mixin captures
+// queries/ruby/tags.scm emits; a language whose bases come from a clause emits no such capture and needs no row.
+inline constexpr std::array<std::string_view, 3> kRubyMixinDirectives = { "include", "extend", "prepend" };
 inline constexpr std::array<std::string_view, 5> kRubyAttrFamilyNames    = { "attribute", "attributes", "attr_reader", "attr_writer", "attr_accessor" };
 // `module_function` is NOT a visibility wrapper here: `module_function attr_accessor :x` raises in either position
 // (measured, Ruby 4.0.7: NoMethodError in a class, which undefines module_function; TypeError in a module, which
@@ -2010,7 +2015,7 @@ inline std::string_view rubyNamedDirective( TSNode n, std::string_view src, std:
 // `include A, B` / `extend M` / `prepend P` — ONE directive naming N constants and therefore N Include
 // records, in SOURCE order (the same shape as elixirAliasGroup). A non-constant argument (`include
 // Object.const_get(:X)`, `include mod`) contributes nothing; the constant ones beside it still do. The constant
-// NODES: captureIncludes reads each one's text for its Include record, and captureRubyMixinBases its byte.
+// NODES: captureIncludes reads each one's text for its Include record, and the @reference.mixin capture its byte.
 inline std::vector<TSNode> rubyMixinTargets( TSNode n, std::string_view src )
 {
     std::vector<TSNode>    out;
@@ -2108,6 +2113,10 @@ inline bool rubyAttrAtClassBodyLevel( TSNode n, std::string_view src ) noexcept
 // else — a method body, another block, a file's top level — emits none. Since lane lego-transitive the reference is also an
 // IMPLEMENTOR edge: graph.h's implementors builder admits a Ruby module as a base, so --lego=M lists every class (and
 // module) that mixes M in, and test/rubyinheritcheck.sh floor (b) is closed.
+// SLICE 4a moved the READ off the captureIncludes walk: queries/ruby/tags.scm captures the directive's call shape as
+// @reference.mixin and the shared capture consumer applies the two guards below — the directive's TEXT (kRubyMixinDirectives)
+// and the POSITION — then emits the same reference through the shared emitBaseRef. Both position readers stay here because
+// they are the guards a tags pattern cannot state.
 // Is `call` a statement of an ActiveSupport::Concern `included do … end` block written at a module's body level? When a
 // class includes the concern the block runs in that class, so a mixin there joins the INCLUDER's ancestors; read as an
 // ancestor of the concern itself, it reaches the includer through the concern — activerecord's AttributeMethods
@@ -2126,17 +2135,21 @@ inline bool rubyInConcernIncludedBlock( TSNode call, std::string_view src ) noex
         && rubyAttrAtClassBodyLevel( owner, src );
 }
 
-inline void captureRubyMixinBases( TSNode call, const std::vector<TSNode>& constants, std::uint32_t fileId, std::string_view src,
+// The mixin directive a @reference.mixin capture names (family 4, slice 4a): when `call` is a receiverless
+// `include`/`extend`/`prepend` at class-DSL position, its constant argument is an ANCESTOR of the enclosing class, so
+// it emits one inherit reference through the shared emitBaseRef — the shape a superclass mints. Both guards are here
+// because a tags pattern can state neither: the TEXT (tags predicates do not run, so `Logger.new( Config )` matches
+// the same call shape) and the POSITION (a method body, another block and the file top level emit nothing). Kept out
+// of captureTagsFacts — the densest dispatch point in that file — behind one call, like the scope readers above.
+inline void emitCapturedMixinBase( TSNode call, TSNode constant, std::uint32_t fileId, std::string_view src,
                                    std::vector<RawRef>& refs )
 {
-    if( constants.empty() || !( rubyAttrAtClassBodyLevel( call, src ) || rubyInConcernIncludedBlock( call, src ) ) )
+    if( rubyNamedDirective( call, src, kRubyMixinDirectives ).empty()
+        || !( rubyAttrAtClassBodyLevel( call, src ) || rubyInConcernIncludedBlock( call, src ) ) )
     {
         return;
     }
-    for( const TSNode a : constants )
-    {
-        emitBaseRef( a, fileId, Lang::Ruby, src, refs );
-    }
+    emitBaseRef( constant, fileId, Lang::Ruby, src, refs );
 }
 
 // A CONSTANT CHAIN: `Name`, `A::B::C`, `::A::B` — every segment a constant, the head a constant or absent (`::A`).
@@ -3013,13 +3026,14 @@ void captureIncludes( TSNode root, Lang lang, std::uint32_t fileId, std::string_
         else if( lang == Lang::Ruby && kindIs( t, "call" ) )
         {
             // `include A, B` / `extend M` / `prepend P` (parser version 82): N constants off one directive node, in
-            // SOURCE order, each a symbolic Include — the Ruby twin of the Elixir alias group below.
+            // SOURCE order, each a symbolic Include — the Ruby twin of the Elixir alias group below. The ANCESTOR half
+            // of the same directive (the inherit reference each constant mints) is read by the shared base-relations
+            // path from queries/ruby/tags.scm's @reference.mixin captures since slice 4a.
             const std::vector<TSNode> mixins = rubyMixinTargets( n, src );
             for( const TSNode member : mixins )
             {
                 emitDirective( rubyConstantText( member, src ), true, isLazy, false );
             }
-            captureRubyMixinBases( n, mixins, fileId, src, refs );   // parser version 131: and each is an ancestor
         }
         else if( lang == Lang::Ruby && kindIs( t, "argument_list" ) )
         {

@@ -266,6 +266,7 @@
 "landingcheck.sh": 27.4,
 "langcensuscheck.sh": 0.8,
 "langcheck.sh": 1.1,
+"langidentitycheck.sh": 6.0,
 "layerquerycheck.sh": 0.5,
 "layoutcheck.sh": 22.6,
 "lb3namecheck.sh": 0.2,
