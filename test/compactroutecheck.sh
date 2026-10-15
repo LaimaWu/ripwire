@@ -44,7 +44,11 @@ echo "compactroutecheck: BIN=$BIN"
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 
-CONC="how are identifiers split into subtokens for ranking"   # multi-word, no word is a whole symbol name
+# for-body-slot (train 28; rule 4, by design): the question no longer opens with "how are" — an explanatory cue now carries
+# ONE owner body beside the hops (forbodyslotcheck owns that contract; arm (1d) below reads the cue form). The compact
+# contract pinned here is the conceptual route WITHOUT that cue, the same words otherwise.
+CONC="identifiers split into subtokens for ranking"   # multi-word, no word is a whole symbol name, no explanatory cue
+CONC_CUE="how are identifiers split into subtokens for ranking"
 NAME="pageRankDouble"                                          # name-exact: a small, stable anchor
 
 rw(){ "$BIN" src --no-cache "$@" 2>/dev/null; }
@@ -77,6 +81,14 @@ grep -q '<bodies ' "$TMP/conc" \
 grep -q 'bundle="compact" bodies="0" reason="compact-route"' "$TMP/conc" \
     && ok '(1c) the root discloses bundle="compact" bodies="0" reason="compact-route"' \
     || no '(1c) missing the bundle="compact" bodies="0" reason="compact-route" disclosure (every removal is disclosed)'
+rw --for="$CONC_CUE" >"$TMP/conccue"
+n_cue="$( bodycount "$TMP/conccue" )"
+if grep -q '<sigs' "$TMP/conccue" && { { [ "$n_cue" = 1 ] && grep -q 'bundle="compact" bodies="1" reason="owner"' "$TMP/conccue"; } \
+       || { [ "$n_cue" = 0 ] && grep -q 'bundle="compact" bodies="0" reason="compact-route"' "$TMP/conccue"; }; }; then
+    ok "(1d) with an explanatory cue the compact route carries at most ONE body (the owner's, reason=owner): $n_cue"
+else
+    no "(1d) the explanatory-cue form served $n_cue body block(s) without the owner disclosure"
+fi
 
 # ── (2) the one-hop edge context is really served ───────────────────────────────────────────────────────
 grep -qE '<hops shown="[0-9]+" total="[0-9]+" capped="[01]"( noedge="[0-9]+")?>' "$TMP/conc" \

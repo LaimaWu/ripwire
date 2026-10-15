@@ -61,12 +61,15 @@
 #   N3 [P] two equal owners in two files: ONE body, the better-ranked one (p= and l= of the r1 row)
 #   N4 [P] two same-named methods of two classes in ONE file: ONE body, the r1 row's (entity identity, checklist 16)
 #   N5 [G] a struct named by the question is never the body; every <b t=> is fn/method
-#   E1 [P] --token-budget=3000: the body rides; rows a rank prefix of the default rows, >= 4, no over_ceiling
+#   E1 [P] --token-budget=5000: the body rides; rows a rank prefix of the default rows, >= 4, no over_ceiling (re-anchored
+#          from 3000 in Phase B: the reserve-first share the rows at the cut leave holds the 2.7 KB jwt body from N=4800 on
+#          this fixture; below it the slot is skipped and disclosed — E2, E3)
 #   E2 [P] --token-budget=400: bodies=0 reason=budget; the skipped slot discloses itself on <bodies … next=--expand=…jwt.ts:…>
 #   E3 [G/P] N sweep: rows monotone + rank prefix + <= slot-off; body bytes monotone; [P] at 1000000 body == default body
-#   E4 [P] --token-budget=3000 and MCP budget_tokens=3000 (slot-off cuts the rows there): the body is paid INSIDE N —
-#          rows(slot) < rows(off), <sigs shown=K next_offset=K next=> names the displaced rows, est_tokens(slot) -
-#          est_tokens(off) <= (legend + root delta + one row) / 2.5 (a body appended after the row cut fails this)
+#   E4 [P] T_REF at --token-budget=800 and MCP budget_tokens=800 (slot-off serves rows past the cut there, and the share
+#          the rows at the cut leave holds the small refresh body): the body is paid INSIDE N — rows(slot) < rows(off),
+#          <sigs shown=K next_offset=K next=> names the displaced rows, est_tokens(slot) - est_tokens(off) <= the room slot-off
+#          left under N + (legend + root delta + one row) / 2.5 (a body appended after the row cut fails both; M5)
 #   MC1-MC4 MCP for: [P] body parity with the CLI; [P] budget_tokens=400 recoverable; [G] no cue, no body
 #   MC5 [P] MCP for on the cut owner (T_BIG: same truncated=/lines=/next= and CDATA as the CLI) and on the Rust
 #          entry point (T_RS: index) — MCP/CLI drift on the cut or on the pick
@@ -145,6 +148,11 @@ def first_row(t, name):
         if n == name:
             return a
     return None
+def defstart(a, cd):
+    """the def's first source line: l= is the NAME's line, and the CDATA starts at the def (a C return type sits above it)"""
+    lines = cd.split("\n")
+    k = next((i for i, x in enumerate(lines) if a.get("n", "") in x), 0)
+    return int(a["l"]) - k
 def strip_slot(t):
     """the answer minus everything the body slot may add: legend comments, the <bodies> element, root bodies=/reason=/est_tokens="""
     t = re.sub(r'<!--.*?-->', '', t, flags=re.S)
@@ -218,11 +226,15 @@ elif cmd == "cutatline":                # cutatline FILE NAME MAXB : a head-cut 
     if not m: fail("lines=%r is not lo-hi/T" % a.get("lines"))
     lo, hi, tot = map(int, m.groups())
     src = open(os.path.join(os.environ["FIX"], a["p"]), encoding="utf-8").read().split("\n")
-    l0 = int(a["l"])
+    l0 = defstart(a, cd)
     want = "\n".join(src[l0 - 1: l0 - 1 + (hi - lo + 1)])
     if cd.rstrip("\n") != want.rstrip("\n"): fail("CDATA is not source lines %d..%d of %s (a cut inside a line?)" % (l0, l0 + hi - lo, a["p"]))
     if not (lo == 1 and hi < tot): fail("lines=%s does not describe a head cut" % a.get("lines"))
     print("cut %s lines=%s %d B" % (args[1], a["lines"], len(cd.encode())))
+elif cmd == "defline":                  # defline FILE NAME : print the def's first source line of the <b n=NAME>
+    hit = [b for b in bodies(load(args[0])) if b[0].get("n") == args[1]]
+    if not hit: fail("no <b n=%s>" % args[1])
+    print(defstart(hit[0][0], hit[0][1]))
 elif cmd == "nextof":                   # nextof FILE NAME : print the <b n=NAME next=> value
     t = load(args[0]); hit = [b for b in bodies(t) if b[0].get("n") == args[1]]
     if not hit or not hit[0][0].get("next"): fail("no <b n=%s next=>" % args[1])
@@ -254,7 +266,7 @@ elif cmd == "estdelta":                 # estdelta FILE_SLOT FILE_OFF : est_toke
     if eb == 0: fail("no <bodies> element to price (est %s vs %s)" % (es, eo))
     if es - eo < eb // 5: fail("est_tokens %s - %s < %d B x 0.2 (the body rate is 3.80 B/token)" % (es, eo, eb))
     print("est_tokens %s vs %s (+%d for %d B)" % (es, eo, es - eo, eb))
-elif cmd == "paidinside":               # paidinside FILE_SLOT FILE_OFF : E4 — the body is paid inside the target, the displaced rows named
+elif cmd == "paidinside":               # paidinside FILE_SLOT FILE_OFF N : E4 — the body is paid inside the target N, the displaced rows named
     ts, to = load(args[0]), load(args[1])
     if not bodies(ts): fail("premise: no body rides the budgeted answer")
     ns, no_ = len(rows(ts)), len(rows(to))
@@ -262,13 +274,16 @@ elif cmd == "paidinside":               # paidinside FILE_SLOT FILE_OFF : E4 —
     sa = sigs(ts)
     if not (sa.get("shown", "").isdigit() and sa.get("total", "").isdigit()): fail("<sigs> lacks numeric shown=/total=: %s" % sa)
     if int(sa["shown"]) != ns or int(sa["total"]) <= ns: fail("<sigs shown=%s total=%s> with %d rows: the cut is not disclosed" % (sa["shown"], sa["total"], ns))
-    if sa.get("next_offset") != str(ns) or not sa.get("next"): fail("<sigs next_offset=%r next=%r>: the displaced rows are not recoverable" % (sa.get("next_offset"), sa.get("next")))
+    # the CLI names the continuation as an argv (next=), the MCP twin as the re-call's budget (next_budget_tokens=); both resume at next_offset=
+    if sa.get("next_offset") != str(ns) or not (sa.get("next") or sa.get("next_budget_tokens", "").isdigit()):
+        fail("<sigs next_offset=%r next=%r next_budget_tokens=%r>: the displaced rows are not recoverable" % (sa.get("next_offset"), sa.get("next"), sa.get("next_budget_tokens")))
     es, eo = est(ts), est(to)
     lg = len(legend(ts).encode()) - len(legend(to).encode())
     rd = len(re.search(r'<ctx [^>]*>', ts).group(0).encode()) - len(re.search(r'<ctx [^>]*>', to).group(0).encode())
     mrow = max(len(d.group(0).encode()) for d in re.finditer(r'<d [^>]*>.*?</d>', to, re.S))
-    bound = (max(lg, 0) + max(rd, 0) + mrow) / 2.5 + 4
-    if es - eo > bound: fail("est_tokens %d - %d = %d > %.0f (legend %+d B, root %+d B, one row %d B): the body rides on top of the target" % (es, eo, es - eo, bound, lg, rd, mrow))
+    room = max(0, int(args[2]) - eo)   # what slot-off left unused under N: a body may fill it without displacing a row
+    bound = room + (max(lg, 0) + max(rd, 0) + mrow) / 2.5 + 4
+    if es - eo > bound: fail("est_tokens %d - %d = %d > %.0f (room %d, legend %+d B, root %+d B, one row %d B): the body rides on top of the target" % (es, eo, es - eo, bound, room, lg, rd, mrow))
     print("rows %d < %d, <sigs shown=%s next_offset=%s>, est %d vs %d (bound +%.0f)" % (ns, no_, sa["shown"], sa["next_offset"], es, eo, bound))
 elif cmd == "bodyat":                   # bodyat FILE NAME PATH LINE : exactly one <b>, it is n=NAME p=PATH l=LINE
     bs = bodies(load(args[0]))
@@ -512,7 +527,7 @@ if r="$( chk cutatline "$TMP/big.xml" render_screen 6000 )"; then ok "(D10) over
 if nx="$( chk nextof "$TMP/big.xml" render_screen )" && printf '%s' "$nx" | grep -q '^--expand=src/c/render.c:'; then
     ok "(D10) oversized owner: next=$nx"
     hi="$( grep -o '<b [^>]*n="render_screen"[^>]*' "$TMP/big.xml" | grep -o 'lines="[0-9]*-[0-9]*' | sed 's/.*-//' )"
-    l0="$( grep -o '<b [^>]*n="render_screen"[^>]*' "$TMP/big.xml" | grep -o ' l="[0-9]*"' | grep -o '[0-9]*' )"
+    l0="$( chk defline "$TMP/big.xml" render_screen )"   # the def's first line (l= names the name's line, one below 'void')
     if [ -n "$hi" ] && [ -n "$l0" ]; then
         run "$nx" >"$TMP/big.next.xml"
         if r="$( chk startsat "$TMP/big.next.xml" src/c/render.c $(( l0 + hi )) )"; then ok "(D10) the next= serves the rest, from source line $(( l0 + hi ))"; else no "(D10) next=: $r"; fi
@@ -638,10 +653,10 @@ else
 fi
 
 # ── E: explicit targets (reserve-sections-first) ───────────────────────────────────────────────────────────
-run --for="$T_D" --token-budget=3000 >"$TMP/e3000.xml"
-if r="$( chk body "$TMP/e3000.xml" jwt src/middleware/jwt/jwt.ts "getCookie" )"; then ok "(E1) --token-budget=3000: $r"; else no "(E1) --token-budget=3000: $r"; fi
-if r="$( chk prefix "$TMP/e3000.xml" "$TMP/d.xml" )"; then ok "(E1) --token-budget=3000: $r"; else no "(E1) --token-budget=3000: $r"; fi
-if r="$( chk over "$TMP/e3000.xml" )"; then ok "(E1) --token-budget=3000: no over_ceiling"; else no "(E1) $r"; fi
+run --for="$T_D" --token-budget=5000 >"$TMP/e5000.xml"
+if r="$( chk body "$TMP/e5000.xml" jwt src/middleware/jwt/jwt.ts "getCookie" )"; then ok "(E1) --token-budget=5000: $r"; else no "(E1) --token-budget=5000: $r"; fi
+if r="$( chk prefix "$TMP/e5000.xml" "$TMP/d.xml" )"; then ok "(E1) --token-budget=5000: $r"; else no "(E1) --token-budget=5000: $r"; fi
+if r="$( chk over "$TMP/e5000.xml" )"; then ok "(E1) --token-budget=5000: no over_ceiling"; else no "(E1) $r"; fi
 run --for="$T_D" --token-budget=400 >"$TMP/e400.xml"
 if r="$( chk rootattr "$TMP/e400.xml" bodies 0 )" && r2="$( chk rootattr "$TMP/e400.xml" reason budget )"; then ok "(E2) --token-budget=400: bodies=0 reason=budget"; else no "(E2) --token-budget=400: ${r:-} ${r2:-}"; fi
 if r="$( chk bodiesnext "$TMP/e400.xml" '^--expand=src/middleware/jwt/jwt\.ts:' )"; then ok "(E2) --token-budget=400: the skipped slot discloses itself, recoverable: $r"; else no "(E2) --token-budget=400: $r"; fi
@@ -664,9 +679,10 @@ chk cdata "$TMP/s1000000.xml" jwt >"$TMP/cd.wide" 2>/dev/null || cdw=1
 chk cdata "$TMP/d.xml" jwt >"$TMP/cd.default" 2>/dev/null || cdd=1
 if [ "$cdw$cdd" = "00" ] && [ -s "$TMP/cd.wide" ] && cmp -s "$TMP/cd.wide" "$TMP/cd.default"; then ok "(E3) N=1000000: the body equals the default answer's body"; else no "(E3) N=1000000: no body, or it differs from the default answer's"; fi
 
-# E4: at N=3000 slot-off serves rows past the cut; with the slot the body is reserved first and the rows give way (review R3)
-run --for="$T_D" --token-budget=3000 >"$TMP/e4.xml"; runoff --for="$T_D" --token-budget=3000 >"$TMP/e4.off.xml"
-if r="$( chk paidinside "$TMP/e4.xml" "$TMP/e4.off.xml" )"; then ok "(E4) --token-budget=3000: $r"; else no "(E4) --token-budget=3000: $r"; fi
+# E4: T_REF at N=800 — slot-off serves rows past the cut there and the share the rows at the cut leave holds the small body:
+# the body is reserved first and the rows give way (review R3). (T_D's 2.7 KB jwt body is skipped below N=4800: its own arm, E2/E3.)
+run --for="$T_REF" --token-budget=800 >"$TMP/e4.xml"; runoff --for="$T_REF" --token-budget=800 >"$TMP/e4.off.xml"
+if r="$( chk paidinside "$TMP/e4.xml" "$TMP/e4.off.xml" 800 )"; then ok "(E4) --token-budget=800: $r"; else no "(E4) --token-budget=800: $r"; fi
 
 # ── MC: MCP for parity ─────────────────────────────────────────────────────────────────────────────────────
 mcpfor "$T_D" >"$TMP/m.d.xml"; mcpfor "$T_NOCUE" >"$TMP/m.nocue.xml"; mcpfor "$T_D" '{"budget_tokens":400}' >"$TMP/m.d400.xml"
@@ -694,9 +710,9 @@ if [ "$cbc$cbm" = "00" ] && [ -s "$TMP/cd.big.cli" ] && cmp -s "$TMP/cd.big.cli"
 [ "$mc5" = 0 ] && ok "(MC5) MCP T_BIG: the same head cut as the CLI (truncated=/lines=/next= and CDATA)"
 r=""; r2=""
 if r="$( chk body "$TMP/m.rs.xml" index src/rs/indexer.rs "let order = walk(" )" && r2="$( chk nobodyof "$TMP/m.rs.xml" walk )"; then ok "(MC5) MCP T_RS: $r — the entry point, as the CLI"; else no "(MC5) MCP T_RS: ${r:-} ${r2:-}"; fi
-# E4 on MCP: budget_tokens=3000 pays the body inside the target too
-mcpfor "$T_D" '{"budget_tokens":3000}' >"$TMP/m.e4.xml"; mcpforoff "$T_D" '{"budget_tokens":3000}' >"$TMP/m.e4.off.xml"
-if r="$( chk paidinside "$TMP/m.e4.xml" "$TMP/m.e4.off.xml" )"; then ok "(E4) MCP budget_tokens=3000: $r"; else no "(E4) MCP budget_tokens=3000: $r"; fi
+# E4 on MCP: budget_tokens=800 pays the body inside the target too
+mcpfor "$T_REF" '{"budget_tokens":800}' >"$TMP/m.e4.xml"; mcpforoff "$T_REF" '{"budget_tokens":800}' >"$TMP/m.e4.off.xml"
+if r="$( chk paidinside "$TMP/m.e4.xml" "$TMP/m.e4.off.xml" 800 )"; then ok "(E4) MCP budget_tokens=800: $r"; else no "(E4) MCP budget_tokens=800: $r"; fi
 # EV1: the owner-hop env never reaches the slot (review R6: the shared owner helper carries no early return)
 RIPWIRE_NO_OWNER_HOP=1 "$BIN" "$FIX" --cache="$TMP/rw.cache" --for="$T_D" 2>/dev/null >"$TMP/d.noown.xml"
 bs1=0; bs2=0
@@ -727,7 +743,7 @@ t = t.replace("</ctx>", body + "</ctx>")
 t = re.sub(r'est_tokens="(\d+)"', lambda m: 'est_tokens="%d"' % (int(m.group(1)) + 790), t, count=1)
 open(sys.argv[2], "w", encoding="utf-8").write(t)
 PY2
-if chk paidinside "$TMP/c5.xml" "$TMP/e4.off.xml" >/dev/null 2>&1; then no "(M5) the E4 checker accepted a body appended after the row cut"; else ok "(M5) the E4 checker rejects a body appended after the row cut"; fi
+if chk paidinside "$TMP/c5.xml" "$TMP/e4.off.xml" 800 >/dev/null 2>&1; then no "(M5) the E4 checker accepted a body appended after the row cut"; else ok "(M5) the E4 checker rejects a body appended after the row cut"; fi
 
 # ── X: hygiene ──────────────────────────────────────────────────────────────────────────────────────────────
 run --for="$T_D" >"$TMP/d2.xml"

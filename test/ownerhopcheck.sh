@@ -440,7 +440,9 @@ done
 # ── (B) explicit budget: owner funded first; an exhausted ceiling adds nothing; a cut is disclosed (C7) ──────────────
 f="$TMP/ts.b.xml"; run ts "$f" "--for=$QTS" --token-budget=4500
 fo="$TMP/ts.b.off.xml"; runoff ts "$fo" "--for=$QTS" --token-budget=4500
-if ran_ok "$fo" "(B1) A/B" && ! grep -q 'reason="compact-route"' "$fo"; then no "(B1) premise: --token-budget=4500 no longer leaves the hops a budget on the A/B handle — re-tune"; fi
+# for-body-slot (train 28; rule 4, by design): an explanatory question's owner body now rides beside the hops, and a served one
+# turns the root's reason to "owner" — the premise "the hops kept a budget" reads either spelling (never "budget")
+if ran_ok "$fo" "(B1) A/B" && ! grep -qE 'reason="(compact-route|owner)"' "$fo"; then no "(B1) premise: --token-budget=4500 no longer leaves the hops a budget on the A/B handle — re-tune"; fi
 if ran_ok "$f" "(B1)"; then
     HJ "$f" "$TMP/ts.b.json" "(B1)"; H root "$f" >"$TMP/ts.b.root"
     first="$( J "d['rows'][0]['n'] if d['rows'] else None" <"$TMP/ts.b.json" )"

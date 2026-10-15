@@ -373,6 +373,11 @@ inline constexpr std::string_view kMcpForBuildingBlocksLegend =
 static_assert( kMcpForBuildingBlocksLegend.find( kForZeroAbsentMcpNote ) != std::string_view::npos, "the MCP for zero reading is spelled once" );
 inline constexpr std::string_view kMcpForBundleSigsLegend =
     "; bundle=sigs: signatures only in this bundle, no inline bodies — fetch a symbol's full body with the fetch_body verb";
+// for-body-slot: the same sentence on an answer that carries the one owner body of an explanatory question (forowner.h); at least
+// as long as the sentence it replaces, so the sigs ledger's exemption of the difference never underflows
+inline constexpr std::string_view kMcpForBundleSigsOwnerLegend =
+    "; bundle=sigs: signatures, and no inline body but the ONE owner body below — fetch any other full body with the fetch_body verb";
+static_assert( kMcpForBundleSigsOwnerLegend.size() >= kMcpForBundleSigsLegend.size(), "the slot's bundle sentence replaces the plain one without shrinking" );
 inline constexpr std::string_view kMcpForLensColumnsLegend =
     "; lens=\"churn,amp,tested\": the three per-row quality columns the CLI for lens carries and this dialect"
     " does NOT (they need a git and a quality pass this server does not run per request); an absent column here"
