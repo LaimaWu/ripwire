@@ -313,6 +313,10 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # sites_at= clause says the match is by LEAF name ("its call sites spelled like the called name" -> "its calls of the called
 # LEAF name, any receiver or qualifier"), 3890 -> 3907 B. Checked mechanically: the reverse replacement of that one phrase
 # gives the previous pin byte for byte (at= masked). The six other pins are unchanged.
+# RE-ANCHORED BY HAND 2026-10-15 (lane forbudget-soft round C, FOLD C, by design), for.xml only: the <tail> carries page 0 of the
+# --for file page (rows with sym=), its full legend clause defines them, and est_tokens= prices them, 4111 -> 4500 B. Checked
+# mechanically: with the <tail> element, the tail clause and est_tokens= masked, the new answer equals the previous pin byte for
+# byte (at= masked). The six other pins are unchanged.
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
 # sed does not): at="…" masked, trailing newlines dropped.
@@ -1367,9 +1371,13 @@ for tb in 500 900; do
                 fi
             fi
         else
-            case "$sigs" in *' capped="1"'*|*' next="'*) capd=1 ;; *) capd=0 ;; esac
-            if [ "$r" -ne "$t" ] || [ "$capd" -ne 0 ] || ! cmp -s "$TMP/sp.$lg.rows" "$TMP/sp.ref.p4.$lg.rows"; then
-                p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=900 --legend=$lg: $r of $t rows, capped/next=$capd — a target wider than the answer must serve the no-budget answer's rows uncut"
+            # round C (forbudget-soft, owner decision 2026-10-14: RESERVE SECTIONS FIRST; rule 4): the trailing sections are
+            # reserved before the rows past the cut, so 900 no longer serves the whole 12-row head (11 rows measured) — by design.
+            # What holds: the rows are a rank prefix of the no-budget answer's, and a cut carries capped + next=.
+            case "$sigs" in *' capped="1"'*) capd=1 ;; *) capd=0 ;; esac
+            case "$sigs" in *' next="'*) nxd=1 ;; *) nxd=0 ;; esac
+            if ! head -n "$r" "$TMP/sp.ref.p4.$lg.rows" | cmp -s - "$TMP/sp.$lg.rows" || { [ "$r" -lt "$t" ] && [ $(( capd * nxd )) -ne 1 ]; }; then
+                p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=900 --legend=$lg: $r of $t rows, capped=$capd next=$nxd — the rows must be a rank prefix of the no-budget answer's, and a cut must carry capped + next="
             fi
         fi
         p4facts="$p4facts $tb/$lg: $r of $t rows est $pe;"
