@@ -587,7 +587,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // ties, the cut table's count, and the columnar split column. Present-only, element-scoped. A row's prov="split" (Q1) reads
     // through the shared prov= row above, which already fires on any prov= in the payload.
     { "ix",                "<def ix= t= sc= p= bodyless=1>: the groups defs= forms (a definition + the declarations tied to it; bodyless=1 tied to none)", true, "def" },
-    { "defs_listed",       "defs_listed=N: above 16 groups, only the N this page's rows name are listed" },
+    { "defs_listed",       "defs_listed=N: above 16 groups, only the N this page's rows name are listed; K~n not enumerated: a bare ~n = also by name, a by-name-only row has no of_def" },
     { "of_def",            "of_def=K..: the def ix=K groups the row belongs to; K resolved edge, K~s edge labelled split, K~n by name alone, K~t into a primary template whose specialisation is listed; NOT a claim the edge is false", true, "s" },
     { "of_def",            "c of_def=K..: the def ix=K groups that caller belongs to (K~s split label, K~n by name, K~t primary template); NOT a claim the edge is false", true, "c" },
     { "of_def",            "rf of_def=K..: the def ix=K groups its file's reached symbols belong to, strongest tie per group", true, "rf" },

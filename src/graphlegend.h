@@ -922,7 +922,10 @@ inline constexpr const char* kDefTableLegend =
     "between same-named definitions); K~n = every call along it bound by name alone; K~t = a resolved edge into a primary template "
     "while a specialisation of it is another group (which one the call reaches is unproven). On impact the tie is a chain of calls (a "
     "by-name hop makes it ~n, else a split hop ~s) and an rf row unions its file's symbols. ~n/~s/~t do NOT mean the edge is false. ";
-inline constexpr const char* kDefsListedLegend = "defs_listed=N: above 16 groups the table lists only the N that this page's rows name. ";
+inline constexpr const char* kDefsListedLegend =
+    "defs_listed=N: above 16 groups the table lists only the N that this page's rows name, and a row enumerates no by-name tie: "
+    "it prints its K, K~s and K~t tokens and one bare ~n when it also has ties by name alone; a row tied by name alone prints no "
+    "of_def (its via=name is the hedge). ";
 inline std::string defTableLegend( bool table, bool cut )
 {
     std::string clause;

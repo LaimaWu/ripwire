@@ -49,8 +49,9 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <deque>
+#include <format>
 #include <iterator>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -61,6 +62,7 @@ namespace rw
 
 // The table lists every group up to this many; above it, only the groups a row on the page names (defs_listed= says how
 // many it listed). textual's `render` has 61 definitions and `compose` 1047: a full table there would outweigh the page.
+// Above it a row also enumerates no by-name tie (defTokensTo): its K, K~s, K~t and one bare ~n (final review R2).
 inline constexpr std::size_t kDefTableCap = 16;
 
 // One row's tie to one group, weakest first, so the strongest of several edges is a max().
@@ -80,7 +82,8 @@ struct DefGroups
     std::vector<char>          primaryOfSpec;   // per group: its sc= is the template base of another group's sc= (the ~t mark)
     std::vector<char>          untied;          // per group: C-family declarations only, which MAY declare a listed definition (the
                                                 // identity rule's Unproven: a template-qualified or macro-built declarator, no shared
-                                                // #include) — silent unless a row ties to it (defGroupsDropSilent)
+                                                // #include) — dropped only when no row ties to it and one group is left
+                                                // (defGroupsDropSilent); on a printed table it is listed bodyless="1"
 
     std::size_t size() const noexcept { return rep.size(); }
     bool        multi() const noexcept { return rep.size() >= 2; }
@@ -319,7 +322,7 @@ inline std::vector<char> defGroupUntied( const IngestResult& ing, std::span<cons
         return untied;
     }
     EditCheckSources                                  sources( ing, EditCheckSpliced{} );
-    std::deque<std::pair<NodeId, EditCheckSignature>> defSigs;   // each definition's signature, read once (stable refs)
+    std::vector<std::optional<EditCheckSignature>> defSigs( matches.size() );   // by match position: each one's signature, read once
     for( std::size_t i = 0; i < matches.size(); ++i )
     {
         const std::uint32_t grp = groups.ofMatch[i];
@@ -334,13 +337,11 @@ inline std::vector<char> defGroupUntied( const IngestResult& ing, std::span<cons
             {
                 continue;   // Different on parser fields alone: no source read
             }
-            auto at = std::find_if( defSigs.begin(), defSigs.end(), [ & ]( const auto& e ) { return e.first == matches[j]; } );
-            if( at == defSigs.end() )
+            if( !defSigs[j] )
             {
-                defSigs.emplace_back( matches[j], editCheckSignatureOf( sources, f ) );
-                at = std::prev( defSigs.end() );
+                defSigs[j] = editCheckSignatureOf( sources, f );
             }
-            untied[grp] = editCheckTieDeclaration( ing, sources, matches[i], matches[j], at->second ).tie == EditCheckTie::Unproven ? 1 : 0;
+            untied[grp] = editCheckTieDeclaration( ing, sources, matches[i], matches[j], *defSigs[j] ).tie == EditCheckTie::Unproven ? 1 : 0;
         }
     }
     return untied;
@@ -591,6 +592,13 @@ struct DefTableListing
     std::vector<std::uint32_t> listed;   // ascending group indices
     bool                       cut = false;
 };
+// Above the cap the table is cut, and a row's by-name ties are not enumerated (they print as one bare ~n).
+inline bool defTableCapped( const DefGroups& groups ) noexcept { return groups.size() > kDefTableCap; }
+// A token the row PRINTS: every one up to the cap; above it, no K~n (the groups a cut table lists are the printed ones).
+inline bool defTokenPrinted( const DefGroups& groups, std::uint32_t tok ) noexcept
+{
+    return !defTableCapped( groups ) || DefMark( tok & 3u ) != DefMark::Name;
+}
 inline void defTableMarkNamed( std::vector<char>& named, const DefGroups& groups, const RowDefTokens& tokens, std::size_t begin, std::size_t end )
 {
     named.resize( groups.size(), 0 );
@@ -598,14 +606,14 @@ inline void defTableMarkNamed( std::vector<char>& named, const DefGroups& groups
     {
         for( const std::uint32_t t : tokens.of( r ) )
         {
-            named[ t >> 2 ] = 1;
+            named[ t >> 2 ] = char( named[ t >> 2 ] | ( defTokenPrinted( groups, t ) ? 1 : 0 ) );
         }
     }
 }
 inline DefTableListing defTableListing( const DefGroups& groups, const std::vector<char>& named )
 {
     DefTableListing out;
-    const bool      all = groups.size() <= kDefTableCap;
+    const bool      all = !defTableCapped( groups );
     for( std::size_t k = 0; k < groups.size(); ++k )
     {
         if( all || ( k < named.size() && named[k] ) )
@@ -613,7 +621,7 @@ inline DefTableListing defTableListing( const DefGroups& groups, const std::vect
             out.listed.push_back( std::uint32_t( k ) );
         }
     }
-    out.cut = out.listed.size() < groups.size();
+    out.cut = !all;   // above the cap even a listing that names every group says defs_listed= (its rows print no K~n)
     return out;
 }
 
@@ -622,7 +630,7 @@ inline void defTokenTo( std::string& out, const DefGroups& groups, std::uint32_t
 {
     const std::uint32_t grp  = tok >> 2;
     const DefMark       mark = DefMark( tok & 3u );
-    out += std::to_string( grp + 1 );
+    std::format_to( std::back_inserter( out ), "{}", grp + 1 );   // into the row's own buffer (review N1)
     if( mark == DefMark::Name )
     {
         out += "~n";
@@ -636,50 +644,67 @@ inline void defTokenTo( std::string& out, const DefGroups& groups, std::uint32_t
         out += "~t";
     }
 }
-// A row's tokens, space-separated (the sites_at= convention).
-inline std::string defTokens( const DefGroups& groups, std::span<const std::uint32_t> toks )
+// A row's printed tokens appended to `out`, each wrapped in `quote` and joined by `sep` (XML/columnar: " " and "", the sites_at=
+// convention; JSON: "," and "\""). Above the cap (R2) the K~n ties are not enumerated: the K/K~s/K~t tokens, then ONE bare
+// `~n` when the row also has a by-name tie.
+inline void defTokensTo( std::string& out, const DefGroups& groups, std::span<const std::uint32_t> toks, std::string_view sep, std::string_view quote )
 {
-    std::string text;
+    std::size_t printed = 0;
+    bool        byName  = false;
     for( const std::uint32_t tok : toks )
     {
-        defTokenTo( text, groups, tok );
-        text += ' ';
+        if( !defTokenPrinted( groups, tok ) )
+        {
+            byName = true;
+            continue;
+        }
+        out.append( printed++ ? sep : std::string_view() ).append( quote );
+        defTokenTo( out, groups, tok );
+        out.append( quote );
     }
-    if( !text.empty() )
+    if( byName )
     {
-        text.pop_back();   // the separator after the last token
+        out.append( printed ? sep : std::string_view() ).append( quote ).append( "~n" ).append( quote );
     }
-    return text;
 }
+// Above the cap a row tied by name alone (or not at all) carries no of_def: its via="name" is the hedge (R2).
+inline bool defRowUnprinted( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row ) noexcept
+{
+    return defTableCapped( groups ) && tokens.strongest( row ) <= DefMark::Name;
+}
+// A row with no printed token on a cut table carries no of_def at all (its via="name" is the hedge); below the cap every row
+// keeps the attribute, as before.
 inline std::string ofDefAttrXml( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row )
 {
-    if( !groups.multi() || tokens.empty() )
+    if( !groups.multi() || tokens.empty() || defRowUnprinted( groups, tokens, row ) )
     {
         return {};
     }
-    return " of_def=\"" + defTokens( groups, tokens.of( row ) ) + "\"";
+    std::string out = " of_def=\"";
+    defTokensTo( out, groups, tokens.of( row ), " ", "" );
+    out += '"';
+    return out;
 }
 inline std::string ofDefKeyJson( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row )
 {
-    if( !groups.multi() || tokens.empty() )
+    if( !groups.multi() || tokens.empty() || defRowUnprinted( groups, tokens, row ) )
     {
         return {};
     }
-    std::string                          out  = ",\"of_def\":[";
-    const std::span<const std::uint32_t> toks = tokens.of( row );
-    for( std::size_t i = 0; i < toks.size(); ++i )
-    {
-        out += i ? ",\"" : "\"";
-        defTokenTo( out, groups, toks[i] );
-        out += '"';
-    }
-    out += "]";
+    std::string out = ",\"of_def\":[";
+    defTokensTo( out, groups, tokens.of( row ), ",", "\"" );
+    out += ']';
     return out;
 }
-// The columnar of_def column's value for one row: the tokens space-separated (the sites_at column's convention).
+// The columnar of_def column's value for one row: the printed tokens space-separated (the sites_at column's convention).
 inline std::string ofDefColumnValue( const DefGroups& groups, const RowDefTokens& tokens, std::size_t row )
 {
-    return defTokens( groups, tokens.of( row ) );
+    std::string text;
+    if( !defRowUnprinted( groups, tokens, row ) )
+    {
+        defTokensTo( text, groups, tokens.of( row ), " ", "" );
+    }
+    return text;
 }
 
 // Q1: a row of a ONE-group answer whose every non-by-name edge to the selector is a split arm says so, in the map's per-edge
@@ -760,8 +785,11 @@ inline std::string defsListedAttrXml( const DefGroups& groups, const DefTableLis
     return ( groups.multi() && listing.cut ) ? " defs_listed=\"" + std::to_string( listing.listed.size() ) + "\"" : std::string();
 }
 
-// An answer's groups once its ties are known: an untied group (defGroupUntied) no row names is dropped, the rest renumbered in
-// order, and the tokens rewritten to the new numbers. Fewer than two groups left: a one-group answer (no table, no of_def).
+// An answer's groups once its ties are known: the untied groups (defGroupUntied) no row names are dropped ONLY when that leaves
+// one group — the tmux/ninja prototype + definition answer stays one group with no table. When two or more groups would remain
+// the table is printed anyway, and it claims to list every group defs= forms, so nothing is dropped: each untied declaration
+// is listed (bodyless="1": "another function, or the tie is unproven"), as --edit-check counts it as a contract of its own
+// (final review R1). Dropping: the rest renumbered in order, the tokens rewritten to the new numbers.
 inline void defGroupsDropSilent( DefGroups& groups, RowDefTokens& tokens )
 {
     if( !groups.multi() || std::none_of( groups.untied.begin(), groups.untied.end(), []( char c ) { return c != 0; } ) )
@@ -772,6 +800,15 @@ inline void defGroupsDropSilent( DefGroups& groups, RowDefTokens& tokens )
     for( const std::uint32_t t : tokens.tok )
     {
         named[ t >> 2 ] = 1;
+    }
+    std::size_t left = 0;
+    for( std::size_t k = 0; k < groups.size(); ++k )
+    {
+        left += ( groups.untied[k] && !named[k] ) ? 0 : 1;
+    }
+    if( left >= 2 )
+    {
+        return;   // a table is printed: every group is listed
     }
     std::vector<std::uint32_t> renum( groups.size(), UINT32_MAX );
     DefGroups                  kept;
