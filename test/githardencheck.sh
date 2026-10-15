@@ -485,7 +485,7 @@ discloses "O4-symlinked-root" "$TMP/o4link"
 newrepo "$TMP/o5"; cp "$TMP/o5/.git/config" "$TMP/o5.cfg"
 printf '[core]\n\tfsmonitor = %s\n' "$TMP/hook.sh" >> "$TMP/o5.cfg"
 rm -f "$TMP/o5/.git/config"; ln -s "$TMP/o5.cfg" "$TMP/o5/.git/config"
-[ -L "$TMP/o5/.git/config" ] && ok "(O) O5-symlinked-config fixture: .git/config is a symlink" || no "(O) O5-symlinked-config fixture: .git/config is not a symlink"
+if [ -L "$TMP/o5/.git/config" ]; then ok "(O) O5-symlinked-config fixture: .git/config is a symlink"; else no "(O) O5-symlinked-config fixture: .git/config is not a symlink"; fi
 governs "O5-symlinked-config" "$TMP/o5"
 discloses "O5-symlinked-config" "$TMP/o5"
 
