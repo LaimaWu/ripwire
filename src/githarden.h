@@ -23,9 +23,13 @@
 // git child now carries (gitcmd.h: --no-optional-locks -c core.fsmonitor=false, for every form of the key, in
 // every directory). What this header does is TELL the user when a root they pointed at carries the hook form,
 // and keep the env override as a second layer there. Because the governing config need not sit in `root/.git`
-// — it can live up the parent chain, or in a per-worktree gitdir plus a shared commondir — `gitResolvedConfigDirs`
-// asks git itself (`rev-parse --absolute-git-dir --git-common-dir`, the hook disabled on that probe's OWN
-// command line) which dir governs the root, and the probe and disclosure run for THAT repo whatever its depth.
+// — it can live up the parent chain, or in a per-worktree gitdir plus a shared commondir — the cheap tier scans
+// every config file git's own discovery COULD pick for the root (`discoveryConfigSuperset`: every ancestor's
+// `.git` dir or `gitdir:` file, every ancestor that is itself a gitdir, and each one's `commondir`), so the probe
+// and disclosure run for the governing repo whatever its depth, with no git child unless a file could carry the
+// key. Where the filesystem cannot speak for git (GIT_DIR/GIT_COMMON_DIR/GIT_WORK_TREE set, a root that does not
+// canonicalise, a pointer file behind a symlink), `gitResolvedConfigDirs` asks git itself
+// (`rev-parse --absolute-git-dir --git-common-dir`, the hook disabled on that probe's OWN command line).
 //
 // The trust decision is PER PROCESS: a long-lived --mcp server probes its roots once at start. A config edited
 // under a running server is not re-read — the same freshness contract every other startup-only fact has here.
@@ -47,9 +51,11 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>   // std::errc — discoveryConfigSuperset tells "absent" from a stat it cannot judge
 #include <utility>
 #include <vector>
 
@@ -220,11 +226,159 @@ inline std::vector<std::filesystem::path> gitResolvedConfigDirs( const std::stri
     return dirs;
 }
 
+// ── the filesystem superset: every config file git's discovery could govern the root with, no git child ──────
+//
+// The `rev-parse` above is one git child per crawl root per process — on the critical path of EVERY call, and the
+// answer it gives is a fact about the filesystem. With no GIT_DIR / GIT_COMMON_DIR / GIT_WORK_TREE in the
+// environment, git (setup.c, 2.50.1) finds the governing gitdir by walking up from the PHYSICAL cwd: at each
+// directory D it takes D/.git when that is a directory git accepts as a repository, or the path a `gitdir: X` FILE
+// at D/.git names, or D itself when D is a gitdir (a bare repository, or a cwd inside .git — which needs a D/HEAD);
+// a `.git` directory git rejects is skipped and the walk goes on up. The gitdir's `commondir` file, when present,
+// names the dir whose `config` is shared (a linked worktree; git honours it in ANY gitdir). Local config is then
+// gitdir/config, gitdir/config.worktree and commondir/config (+ includes, which the byte scan below reaches through
+// the word "include"). So the union over EVERY ancestor-or-self D of those candidates — never stopping at the first
+// `.git`, never judging which one git accepts — is a SUPERSET of the files git can read as local config. A superset
+// is the safe direction: an extra candidate can only trigger the authoritative `git config --get` probe, never hide
+// a value. Pointer files are read both as git reads them (the rest of the file, trailing CR/LF dropped, relative
+// to D or to the gitdir) and as the first line trimmed of blanks; where the two differ both are kept.
+// nullopt = the filesystem cannot speak for git here, and the caller asks git (gitResolvedConfigDirs) as before:
+// an environment-named repository, a root that does not canonicalise, a stat that fails other than "absent", or a
+// pointer file (.git, commondir) that is a symlink — git reads through it, the no-follow reader does not.
+// test/githardencheck.sh (O) pins the shapes (an invalid .git skipped, a planted commondir, a bare root, a
+// symlinked root) and (P) counts the git children: none for a root whose config cannot carry the key.
+inline bool gitDiscoveryNamedByEnvironment() noexcept
+{
+    for( const char* name : { "GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE" } )
+    {
+        if( const char* value = std::getenv( name ); value != nullptr && *value != '\0' )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Both readings of a pointer file's path, each made absolute against `base`, appended to `out` once each.
+inline void addPointerReadings( std::string_view exactRest, std::string_view looseRest, const std::filesystem::path& base,
+                                std::vector<std::filesystem::path>& out )
+{
+    while( !exactRest.empty() && ( exactRest.back() == '\n' || exactRest.back() == '\r' ) )
+    {
+        exactRest.remove_suffix( 1 );
+    }
+    const std::string loose = trimmedFirstLine( looseRest );
+    for( const std::string_view reading : { exactRest, std::string_view( loose ) } )
+    {
+        if( reading.empty() )
+        {
+            continue;
+        }
+        std::filesystem::path p( reading );
+        if( p.is_relative() )
+        {
+            p = base / p;
+        }
+        if( std::find( out.begin(), out.end(), p ) == out.end() )
+        {
+            out.push_back( std::move( p ) );
+        }
+    }
+}
+
+// true = absent (or not a directory on the way); false = a stat error git could see differently — doubt.
+inline bool statAbsentOrOk( const std::error_code& ec ) noexcept
+{
+    return !ec || ec == std::errc::no_such_file_or_directory || ec == std::errc::not_a_directory;
+}
+
+inline std::optional<std::vector<std::filesystem::path>> discoveryConfigSuperset( const std::string& root )
+{
+    if( gitDiscoveryNamedByEnvironment() )
+    {
+        return std::nullopt;
+    }
+    std::error_code       ec;
+    std::filesystem::path dir = std::filesystem::canonical( std::filesystem::path( root ), ec );   // git walks the physical cwd
+    if( ec || dir.empty() )
+    {
+        return std::nullopt;
+    }
+    std::vector<std::filesystem::path> gitDirs;
+    for( ;; )
+    {
+        const std::filesystem::path       dotGit = dir / ".git";
+        const std::filesystem::file_status st    = std::filesystem::status( dotGit, ec );   // follows a link, as git's stat does
+        if( !statAbsentOrOk( ec ) )
+        {
+            return std::nullopt;
+        }
+        ec.clear();
+        if( std::filesystem::is_directory( st ) )
+        {
+            if( std::find( gitDirs.begin(), gitDirs.end(), dotGit ) == gitDirs.end() ) { gitDirs.push_back( dotGit ); }
+        }
+        else if( std::filesystem::exists( std::filesystem::symlink_status( dotGit, ec ) ) )
+        {
+            const std::optional<std::string> head = pathguard::readRegularFileNoFollow( dotGit.string() );
+            if( !head && pathguard::isSymlink( dotGit.string() ) )
+            {
+                return std::nullopt;
+            }
+            if( head && head->starts_with( "gitdir:" ) )
+            {
+                const std::string_view text( *head );
+                addPointerReadings( text.substr( text.starts_with( "gitdir: " ) ? 8 : 7 ), text.substr( 7 ), dir, gitDirs );
+            }
+        }
+        ec.clear();
+        if( std::filesystem::exists( std::filesystem::symlink_status( dir / "HEAD", ec ) ) )
+        {
+            if( std::find( gitDirs.begin(), gitDirs.end(), dir ) == gitDirs.end() ) { gitDirs.push_back( dir ); }
+        }
+        ec.clear();
+        const std::filesystem::path parent = dir.parent_path();
+        if( parent == dir || parent.empty() )
+        {
+            break;
+        }
+        dir = parent;
+    }
+    std::vector<std::filesystem::path> files;
+    files.reserve( gitDirs.size() * 4 );
+    for( const std::filesystem::path& gitDir : gitDirs )
+    {
+        files.push_back( gitDir / "config" );
+        files.push_back( gitDir / "config.worktree" );
+        const std::string commondirFile = ( gitDir / "commondir" ).string();
+        if( const std::optional<std::string> common = pathguard::readRegularFileNoFollow( commondirFile ) )
+        {
+            std::vector<std::filesystem::path> commonDirs;
+            addPointerReadings( *common, *common, gitDir, commonDirs );
+            for( const std::filesystem::path& commonDir : commonDirs )
+            {
+                files.push_back( commonDir / "config" );
+                files.push_back( commonDir / "config.worktree" );
+            }
+        }
+        else if( pathguard::isSymlink( commondirFile ) )
+        {
+            return std::nullopt;
+        }
+    }
+    ENSURES( files.size() >= gitDirs.size() * 2, "two candidates per gitdir, plus its commondir's" );
+    return files;
+}
+
 inline std::vector<std::filesystem::path> localConfigCandidates( const std::filesystem::path& root )
 {
+    if( std::optional<std::vector<std::filesystem::path>> superset = discoveryConfigSuperset( root.string() ) )
+    {
+        return std::move( *superset );   // may be empty: no `.git` and no gitdir anywhere above — nothing git could read
+    }
+    DISCLOSE( Diagnostics::answerUnchanged, "githarden: the filesystem cannot speak for git's discovery at this root, so git names the governing dirs (one more git child); the scan and the authoritative probe after it are unchanged" );
     std::vector<std::filesystem::path> out;
 
-    // Authoritative first: git resolves the governing gitdir/commondir for ANY root, subdirectory and
+    // Authoritative here: git resolves the governing gitdir/commondir for ANY root, subdirectory and
     // worktree and GIT_DIR included. Its config, its per-worktree config.worktree, and the shared common
     // config are the files a hook value could be spelled in (directly or through an include the cheap scan
     // also catches).
@@ -280,6 +434,12 @@ inline bool localConfigMayCarryFsmonitor( const std::string& root )
         std::optional<std::string> bytes = pathguard::readRegularFileNoFollow( candidate.string() );
         if( !bytes )
         {
+            // git reads a config file THROUGH a symlink; the no-follow reader does not. A linked candidate is
+            // therefore unknown, not clean — git's own answer is asked for (arm (O) symlinked config).
+            if( pathguard::isSymlink( candidate.string() ) )
+            {
+                return true;
+            }
             continue;
         }
         for( char& c : *bytes )
@@ -354,6 +514,7 @@ inline FsmonitorForm startupFormFor( std::string_view root ) noexcept
 // (a git URL, which git itself clones fresh — its config is never hostile) is skipped.
 inline const Report& hardenForRoots( std::span<const std::string_view> roots )
 {
+    PROFILE_SCOPE_DESCRIBE( "githarden: hardenForRoots (startup trust probe, per crawl root)" );
     Report& r = g_startup;
     r.forms.clear();
     r.applied = false;
