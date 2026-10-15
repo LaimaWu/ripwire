@@ -263,7 +263,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             rw::emitTo( stdout, "{}{}{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar ).c_str(),
                          rw::capLegendClause( rw::computePageDisclosure( pw.end - pw.begin, result.size(), pw.end,
                                                                         cfg.pageLimit, cfg.pageOffset, chDiscloseCap ).active ),
-                         rw::declinedCallsLegendWithGates( chRows.declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0, !chDc.empty() )   // exactly when the root carries declined_calls=
+                         rw::declinedCallsLegendForRows( chRows.declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0, !chDc.empty() )   // exactly when the root carries declined_calls=
                            + rw::declinedSitesLegend( rw::declinedSitesLegendFlags( chDc, wantCallers, chDcCut ) ),   // and the <dc> rows, exactly when one rides
                          std::string( rw::declinedIfaceLegend( chRows.declinedIface > 0 ) )   // likewise, exactly when declined_iface= is there
                            + rw::stdMemberCallsLegend( chRows.stdCalls.calls > 0 && !cfg.columnar ),   // and when the <stdm> line is (XML only)
@@ -1025,7 +1025,7 @@ inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs
     // Since lane declined-sites a definition some declined call could have meant never reads none-found: it reads
     // possible-callers, whose own sentence says it is not a safety reading, and its <dc> rows name the calls.
     ASSUME( declinedCalls == 0 || risk != "none-found", "runSafeDelete reads possible-callers (or unmodelled) wherever declined_calls= rides" );
-    std::string declinedClause = rw::declinedCallsLegendWithGates( declinedCalls > 0, flags.gateDeclined, flags.stdDeclined, flags.declinedSites.any )
+    std::string declinedClause = rw::declinedCallsLegendForRows( declinedCalls > 0, flags.gateDeclined, flags.stdDeclined, flags.declinedSites.any )
                                + rw::declinedSitesLegend( flags.declinedSites );
     declinedClause += rw::valueRefsSafeDeleteLegend( flags.valueRefs > 0 );   // exactly when the root carries value_refs=
     declinedClause += rw::valueRefsDepthLegend( flags.valueRefDepthCut );      // exactly when it carries the depth disclosure
@@ -1249,9 +1249,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     const bool  anyEvidence = !callerIds.empty() || !sites.empty() || !sdValueRefs.rows.empty();   // a decorator row is not a use site, still evidence
     // lane declined-sites: declined calls whose candidate lists hold a definition (as --callers counts and lists them) — the
     // <dc> rows, file-first, cut at the callers verb's own cap (one constant, gates review Q6).
-    const std::size_t   sdDeclinedCalls = declinedCallsNaming( g, defs );
-    std::vector<std::uint32_t> sdDeclinedSites = declinedSitesNaming( g, defs );
-    orderDeclinedSites( ing, g, sdDeclinedSites, /*fileFirst=*/true );
+    const auto [ sdDeclinedCalls, sdDeclinedSites ] = rw::declinedCallsAndSites( ing, g, defs, /*wantCallers=*/true );
     const char* risk        = ( !anyEvidence && usesFloor )                   ? "unmodelled"
                             : !anyEvidence && sdDeclinedCalls > 0             ? "possible-callers"   // gates review Q3: never none-found beside a declined possible caller
                             : !anyEvidence                                    ? "none-found"

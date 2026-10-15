@@ -52,18 +52,13 @@ inline constexpr std::size_t kDeclinedSiteCandCap = 8;    // cand= entries per r
 
 // gate= on a row: which name gate (or Ruby's side cut) declined the call; nothing for the ladder's own tier-3 decline and
 // for Ruby's `new` (its candidates are `initialize`, the row's n= is the called `new`).
+// Indexed by DeclinedSiteKind, in its declaration order (Ladder, Builtin, Std, RubySide, RubyNew, Iface).
+inline constexpr const char* kDeclinedSiteGateNames[] = { nullptr, "builtin", "std", "side", nullptr, nullptr };
+static_assert( std::size( kDeclinedSiteGateNames ) == std::size_t( DeclinedSiteKind::Iface ) + 1, "one gate= spelling per DeclinedSiteKind" );
 inline const char* declinedSiteGate( DeclinedSiteKind kind ) noexcept
 {
-    switch( kind )
-    {
-        case DeclinedSiteKind::Builtin:  return "builtin";
-        case DeclinedSiteKind::Std:      return "std";
-        case DeclinedSiteKind::RubySide: return "side";
-        case DeclinedSiteKind::Ladder:
-        case DeclinedSiteKind::RubyNew:
-        case DeclinedSiteKind::Iface:    return nullptr;
-    }
-    return nullptr;
+    const auto k = std::size_t( kind );
+    return k < std::size( kDeclinedSiteGateNames ) ? kDeclinedSiteGateNames[ k ] : nullptr;
 }
 
 // The served order, in place. Every form first sorts by the call's file (path order), line, then record (resolve order:
@@ -106,6 +101,18 @@ inline void orderDeclinedSites( const IngestResult& ing, const Graph& g, std::ve
         interleaved.push_back( sites[i] );
     }
     sites.swap( interleaved );
+}
+
+// One 1-hop answer's declined_calls= and the records behind it, in served order: callers (declinedCallsNaming) the declined
+// calls whose lists hold a match, file-first; callees (declinedCallsMadeBy) the declines the matches made, file and line.
+inline std::pair<std::size_t, std::vector<std::uint32_t>> declinedCallsAndSites( const IngestResult& ing, const Graph& g, std::span<const NodeId> matches,
+                                                                                bool wantCallers )
+{
+    const std::size_t          calls = wantCallers ? declinedCallsNaming( g, matches ) : declinedCallsMadeBy( g, matches );
+    std::vector<std::uint32_t> sites = wantCallers ? declinedSitesNaming( g, matches ) : declinedSitesMadeBy( g, matches );
+    orderDeclinedSites( ing, g, sites, /*fileFirst=*/wantCallers );
+    ENSURES( sites.size() == calls, "a <dc> row per declined call the answer counts" );
+    return { calls, std::move( sites ) };
 }
 
 // One row's facts, surface-neutral: every dialect below spells these and nothing else.
@@ -343,7 +350,7 @@ inline std::string declinedSiteCutKeyJson( const DeclinedSiteCut& cut )
     {
         return {};
     }
-    return ",\"dc_shown\":" + std::to_string( cut.shown ) + ",\"dc_next\":\"" + jsonStr( cut.next ) + "\"";
+    return ",\"dc_shown\":" + std::to_string( cut.shown ) + nextFieldJson( cut.next, "dc_next" );
 }
 
 // What the legend must define, read off the rows an answer prints (graphlegend.h declinedSitesLegend).

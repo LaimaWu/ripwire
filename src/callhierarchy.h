@@ -34,6 +34,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>      // std::tie — declined_calls= and its <dc> records from one call
 #include <utility>
 #include <vector>
 
@@ -298,10 +299,7 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
         }
     }
 
-    out.declinedCalls = wantCallers ? declinedCallsNaming( g, out.matches ) : declinedCallsMadeBy( g, out.matches );
-    out.declinedSites = wantCallers ? declinedSitesNaming( g, out.matches ) : declinedSitesMadeBy( g, out.matches );
-    orderDeclinedSites( ing, g, out.declinedSites, /*fileFirst=*/wantCallers );
-    ENSURES( out.declinedSites.size() == out.declinedCalls, "a <dc> row per declined call the answer counts" );
+    std::tie( out.declinedCalls, out.declinedSites ) = declinedCallsAndSites( ing, g, out.matches, wantCallers );   // the count and its <dc> rows
     out.declinedIface = wantCallers ? declinedIfaceCallsNaming( ing, g, out.matches ) : 0;
     out.stdCalls      = wantCallers ? StdMemberCallsMade{} : stdMemberCallsMadeBy( g, out.matches );
 

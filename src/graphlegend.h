@@ -651,7 +651,7 @@ inline std::string declinedCallsLegendWithGates( bool on, bool gateDeclined, boo
 // twin says so instead (gates review R9) and is the one such an answer carries; everything else in it is the clause above.
 inline constexpr const char* kDeclinedCallsRowsLegend =
     "declined_calls=K (absent when 0) counts call SITES the resolver declined to bind: the called name has two or more same-language definitions, none in the caller's file or directory, and no qualifier, receiver type or include chose one, so no edge exists and no count here includes them; the <dc> rows below name them (the map header's declined=). Callers form: declined calls that could have meant this selector's definitions; impact form: that could have reached SYM or a symbol in its radius; callees form: declined calls these definitions make. Each call counts once however many candidates it had; the uses verb on the called name lists the sites. ";
-inline std::string declinedCallsLegendWithGates( bool on, bool gateDeclined, bool stdDeclined, bool dcRows )
+inline std::string declinedCallsLegendForRows( bool on, bool gateDeclined, bool stdDeclined, bool dcRows )
 {
     if( !dcRows )
     {
