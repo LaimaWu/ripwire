@@ -304,6 +304,8 @@ struct CompactCompletenessTerm
                                           // item: <cols fields=> naming tested carries the tested column, not every columnar answer
     std::string_view onKey     = {};      // read ONLY on an answer of this schema key (ripwire.<key>/v1): the same NAME on the same
                                           // element means different things on two verbs (<f files=> on context-ratio vs ensemble)
+    std::string_view unlessTag  = {};     // with unlessAttr: NOT read on a payload where this element carries that attribute — the
+    std::string_view unlessAttr = {};     // row a richer one replaces there (declined_calls= beside a <dc via=> row says "in no row")
 };
 
 // #60: the escaped spelling of the module-scope owner's name, as it reaches a rendered document, and the
@@ -335,7 +337,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // first two at once.
     { "bodyless_defs",     "bodyless_defs=K: K of defs= have no body, so no callees to read" },
     { "unproven_defs",     "unproven_defs=K: K same-named defs not tied to that file, in no count or row (bare name shows them)" },
-    { "declined_calls",    "declined_calls=K: K call sites left unbound (no evidence chose one def), in no count or row" },
+    { "declined_calls",    "declined_calls=K: K call sites left unbound (no evidence chose one def), in no count or row", false, {}, MapHeaderRead::No, {}, {}, "dc", "via" },
     { "cross_kind",        "cross_kind=kind:N,...: the defs= definitions differ in kind; rows union all of them (narrow with file:name)" },
     // lane recall: absent at zero, callers and impact only (graphlegend.h kDeclinedIfaceLegend).
     { "declined_iface",    "declined_iface=K: K declined TS calls sharing a name with an interface/abstract signature, by name only (MAY go through it); not a subset of declined_calls=" },
@@ -591,6 +593,15 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "of_def",            "of_def=K..: the def ix=K groups the row belongs to; K resolved edge, K~s edge labelled split, K~n by name alone, K~t into a primary template whose specialisation is listed; NOT a claim the edge is false", true, "s" },
     { "of_def",            "c of_def=K..: the def ix=K groups that caller belongs to (K~s split label, K~n by name, K~t primary template); NOT a claim the edge is false", true, "c" },
     { "of_def",            "rf of_def=K..: the def ix=K groups its file's reached symbols belong to, strongest tie per group", true, "rf" },
+    // lane declined-sites (declinedsites.h): the <dc> rows, read exactly where one rides. The first row also reads
+    // declined_calls=, whose plain row above steps aside there (its "in no count or row" is false beside a <dc> row).
+    { "via",               "declined_calls=K: K call sites left unbound, in no count; <dc n= l=|in= p= cands=K via=declined>: one such call SITE "
+                           "(callees: called name, line; callers: calling def, file:line); NOT an edge or a caller/callee claim; cands=K: "
+                           "K in-tree defs it could have meant (K may be 1), the resolver proved none; not a claim this call reaches any of them",
+                           true, "dc", MapHeaderRead::No, "declined" },
+    { "gate",              "dc gate=: builtin or std, a name gate declined it; side, a Ruby call whose in-reach defs answer on the other side of self", true, "dc" },
+    { "of_def",            "dc of_def=K: the def ix=K making the call; K~d: its candidates include group K, never a claim it calls K", true, "dc" },
+    { "dc_shown",          "dc_shown=N: dc rows printed (callers: file-first); dc_next= lists every site" },
     { "fields",            "<of_def> column: each row's def ix=K groups (K~s split label, K~n by name, K~t primary template), space-separated", true, "cols", MapHeaderRead::No, "of_def" },
     { "fields",            "<split> column: 1 where the row's edge to of= carries the resolver's split label (may be another arm's)", true, "cols", MapHeaderRead::No, "split" },
     { "fields",            "<via> column: 1 = via=name, the row's edge matched by name alone (receiver unproven); NOT a claim the edge is false", true, "cols", MapHeaderRead::No, "via" },
@@ -1789,6 +1800,10 @@ inline bool isCompletenessTermPresent( const CompactCompletenessTerm& t, std::st
         return true;
     }
     if( t.mapHeader == MapHeaderRead::Only )
+    {
+        return false;
+    }
+    if( !t.unlessTag.empty() && payloadHasAnyAttr( doc, t.unlessAttr, t.unlessTag ) )
     {
         return false;
     }

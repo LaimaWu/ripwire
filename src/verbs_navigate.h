@@ -225,6 +225,14 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         {
             chHasSplit = chAttr.splitArm( i );
         }
+        // lane declined-sites (declinedsites.h): the <dc> rows — the declined call SITES declined_calls= counts, in callhierarchy.h's
+        // served order, cut at the default cap (--limit raises it; dc_next= names that call) — computed once for every dialect below.
+        const rw::DeclinedSiteCut chDcCut = rw::declinedSiteCut( chRows.declinedSites.size(), cfg.pageLimit, wantCallers ? "--callers=" : "--callees=", sym,
+                                                                 std::size_t( effectiveRowCap( cfg.pageLimit, rw::kCallHierarchyRowCap ) ) );
+        const std::vector<rw::DeclinedSiteView> chDc =
+            rw::declinedSiteViews( ing, g, std::span<const std::uint32_t>( chRows.declinedSites ).first( chDcCut.shown ), wantCallers, matches, chAttr.groups,
+                                   rw::VrRender{ chSingleRoot, chRootPrefix }, cfg.legend == "full" );
+        const std::string chDcRows = rw::declinedSitesXml( chDc, wantCallers );
 
         // §H4 §3.4: the FIRST legend these two verbs have ever shipped (0 bytes before — which is why every
         // one of their root attributes sits in test/legendcoverage_baseline.txt), and the floor marker that
@@ -255,7 +263,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             rw::emitTo( stdout, "{}{}{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar ).c_str(),
                          rw::capLegendClause( rw::computePageDisclosure( pw.end - pw.begin, result.size(), pw.end,
                                                                         cfg.pageLimit, cfg.pageOffset, chDiscloseCap ).active ),
-                         rw::declinedCallsLegendWithGates( chRows.declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 ),   // exactly when the root carries declined_calls=
+                         rw::declinedCallsLegendWithGates( chRows.declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0, !chDc.empty() )   // exactly when the root carries declined_calls=
+                           + rw::declinedSitesLegend( rw::declinedSitesLegendFlags( chDc, wantCallers, chDcCut ) ),   // and the <dc> rows, exactly when one rides
                          std::string( rw::declinedIfaceLegend( chRows.declinedIface > 0 ) )   // likewise, exactly when declined_iface= is there
                            + rw::stdMemberCallsLegend( chRows.stdCalls.calls > 0 && !cfg.columnar ),   // and when the <stdm> line is (XML only)
                          ( std::string( rw::unprovenDefsLegend( chRows.unprovenDefs > 0 ) )      // H1: likewise, exactly when unproven_defs= is there
@@ -275,7 +284,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // Callees keep expand on the original selector; nextFlag retains quoting and the 120-byte contract.
         const std::string chNextAttr = rw::nextAttrXml( rw::nextFlag( wantCallers ? "--uses=" : "--expand=", chNextSelector ) );
         // The tier-3 declines count= does not include (callhierarchy.h), on every dialect; absent at zero.
-        const std::string chDeclinedAttr = rw::declinedCallsAttrXml( chRows.declinedCalls ) + rw::declinedIfaceAttrXml( chRows.declinedIface );
+        const std::string chDeclinedAttr = rw::declinedCallsAttrXml( chRows.declinedCalls ) + rw::declinedSiteCutAttrXml( chDcCut )   // + the <dc> cut, beside the count it cuts
+                                         + rw::declinedIfaceAttrXml( chRows.declinedIface );
         // Reference-as-value round: value_refs= beside count= (never in it), absent at zero; the <vrs> window after the rows.
         const rw::VrRender   chVr { chSingleRoot, chRootPrefix };
         const std::string    chValueRefsAttr = ( rw::valueRefsCountAttrXml( chRows.valueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( ing, chRows.valueRefs.depthCut, chVr ) );   // + the depth cut that makes it a floor
@@ -322,7 +332,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             const std::string chDefRows = rw::defTableXml( ing, chAttr.groups, chListing, chRootPrefix );
             emitColumnarSymbolRows( stdout, ing, tag, attr, page, chRootPrefix, &chTested.testReach, nullptr,
                                     rw::ColumnarRowExtras{ &pageVia, chSites.any ? &chSites.tokens : nullptr, &chSites.totals,   // CALLSITE-AT: sites_at only when a row has sites
-                                                           chAttr.groups.multi() ? &pageOfDef : nullptr, &chDefRows, &pageSplit } );
+                                                           chAttr.groups.multi() ? &pageOfDef : nullptr, &chDefRows, &pageSplit, &chDcRows } );   // + the <dc> rows verbatim
             return 0;
         }
 
@@ -343,7 +353,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             // R-E: the JSON twin of the XML root= below — right after the leading identifying fields.
             if( chSingleRoot ) { rw::emitTo( stdout, ",\"root\":\"{}\"", jsonStr( cfg.roots[0] ).c_str() ); }
             rw::emitTo( stdout, ",\"hop_tested\":{},\"hop_untested\":{}{}{}", chTested.tested, chTested.untested,
-                         rw::declinedCallsKeyJson( chRows.declinedCalls ) + rw::declinedIfaceKeyJson( chRows.declinedIface )   // A6; then the XML root's declined_calls=/declined_iface=
+                         rw::declinedCallsKeyJson( chRows.declinedCalls ) + rw::declinedSiteCutKeyJson( chDcCut )
+                           + rw::declinedIfaceKeyJson( chRows.declinedIface )   // A6; then the XML root's declined_calls=/dc_shown=/dc_next=/declined_iface=
                            + rw::stdMemberCallsSpelling( chRows.stdCalls, /*json=*/true ),                                                           // and the XML <stdm> line
                          ( rw::valueRefsCountKeyJson( chRows.valueRefs.rows.size() ) + rw::valueRefsDepthKeyJson( ing, chRows.valueRefs.depthCut, chVr ) ) );
             rw::emitTo( stdout, "{}{}", pageDisclosure( pab, sizeof( pab ), pw.end - pw.begin, result.size(), pw.end,
@@ -362,7 +373,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                 chAtKeys[ i ] += rw::ofDefKeyJson( chAttr.groups, chAttr.tokens, i ) + rw::splitArmKeyJson( chAttr.splitArm( i ) );   // attrib-multidef
             }
             printJsonSymbolRows( ing, result, pw.begin, pw.end, chRootPrefix, &chTested.testReach, nullptr, &chVia, &chAtKeys );
-            rw::emitTo( stdout, "]{}}}", rw::valueRefsJson( ing, chRows.valueRefs, wantCallers, chVr, "vrs", chVrNext ) );
+            rw::emitTo( stdout, "]{}{}}}", rw::declinedSitesJson( chDc, wantCallers, /*mcp=*/false ),   // the XML <dc> rows, keys = its attribute names
+                         rw::valueRefsJson( ing, chRows.valueRefs, wantCallers, chVr, "vrs", chVrNext ) );
             return 0;
         }
 
@@ -394,7 +406,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                          rw::splitArmAttrXml( chAttr.splitArm( i ) ), rw::ofDefAttrXml( chAttr.groups, chAttr.tokens, i ),   // attrib-multidef
                          chSites.any ? rw::callSitesAttrXml( chSites.tokens[ i - pw.begin ], chSites.totals[ i - pw.begin ] ) : std::string() );   // CALLSITE-AT
         }
-        rw::emitTo( stdout, "{}{}</{}>", rw::stdMemberCallsSpelling( chRows.stdCalls, /*json=*/false ),   // the declined C++ standard-member calls, after the rows
+        rw::emitTo( stdout, "{}{}{}</{}>", rw::stdMemberCallsSpelling( chRows.stdCalls, /*json=*/false ),   // the declined C++ standard-member calls, after the rows
+                     chDcRows,                                                                                // and each declined call SITE (<dc>)
                      rw::valueRefsXml( ing, chRows.valueRefs, wantCallers, chVr, chVrNext ), tag );
         return 0;
     }
@@ -936,6 +949,7 @@ struct SafeDeleteLegendFlags
     bool        defTable      = false;   // attrib-multidef: the <def> table + of_def= rows (a multi-group selector)
     bool        defTableCut   = false;   // ... and the table lists only the groups this page's rows name (defs_listed=)
     bool        splitArms     = false;   // a <c prov="split"> row is on this page (a one-group selector's split arm, Q1)
+    rw::DeclinedSitesLegendFlags declinedSites{};   // lane declined-sites: what the <dc> rows on this answer carry (declinedsites.h)
 };
 
 // count-floor (countfloor.h) + CALLSITE-AT: the safe-delete legend's clauses for callers_floor=, uses_floor=, next= and
@@ -987,12 +1001,15 @@ inline constexpr SafeDeleteRiskReading kSafeDeleteRiskReadings[] = {
     { "uses-exist",      "uses-exist: callers or uses exist, and at least part of the radius is test-covered. " },
     { "unmodelled",      "unmodelled: zero callers AND zero uses were READ, but this kind is used by reading or naming it and those "
                          "counts cannot see that — no reading either way, never a none-found. " },
+    // lane declined-sites (gates review Q3): what none-found read beside declined_calls= before the <dc> rows named the calls
+    { "possible-callers", "possible-callers: zero proven callers and zero uses, but declined_calls=K call sites (the <dc> rows) could have "
+                          "meant this definition; not a safety reading. " },
 };
 inline const char* safeDeleteRiskSentence( std::string_view risk ) noexcept
 {
     const auto it  = std::ranges::find( kSafeDeleteRiskReadings, risk, &SafeDeleteRiskReading::risk );
     const auto end = std::end( kSafeDeleteRiskReadings );   // outside the promise: a self-check names values, it calls nothing
-    ASSUME( it != end, "safeDeleteRiskSentence: runSafeDelete assigns only the four values listed" );
+    ASSUME( it != end, "safeDeleteRiskSentence: runSafeDelete assigns only the five values listed" );
     return it != end ? it->sentence : "";
 }
 
@@ -1005,11 +1022,11 @@ inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs
     const std::size_t declinedCalls = flags.declinedCalls;
     // declined_calls=: its definition, and — beside risk=none-found — the sentence that keeps none-found from reading as
     // a safety verdict about a definition some declined call may have meant (graph.h declinedCallsNaming).
-    std::string declinedClause = rw::declinedCallsLegendWithGates( declinedCalls > 0, flags.gateDeclined, flags.stdDeclined );
-    if( declinedCalls > 0 && risk == "none-found" )
-    {
-        declinedClause += "none-found beside declined_calls= is not a safety reading: those calls may reach this definition. ";
-    }
+    // Since lane declined-sites a definition some declined call could have meant never reads none-found: it reads
+    // possible-callers, whose own sentence says it is not a safety reading, and its <dc> rows name the calls.
+    ASSUME( declinedCalls == 0 || risk != "none-found", "runSafeDelete reads possible-callers (or unmodelled) wherever declined_calls= rides" );
+    std::string declinedClause = rw::declinedCallsLegendWithGates( declinedCalls > 0, flags.gateDeclined, flags.stdDeclined, flags.declinedSites.any )
+                               + rw::declinedSitesLegend( flags.declinedSites );
     declinedClause += rw::valueRefsSafeDeleteLegend( flags.valueRefs > 0 );   // exactly when the root carries value_refs=
     declinedClause += rw::valueRefsDepthLegend( flags.valueRefDepthCut );      // exactly when it carries the depth disclosure
     declinedClause += safeDeleteFloorLegend( flags, risk );   // count-floor + CALLSITE-AT: present-only clauses
@@ -1230,7 +1247,13 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     ENSURES( !usesFloor || sdFloor.isFloor );   // a NotCalls definition always floors callers= too (callerFloors' first rule)
 
     const bool  anyEvidence = !callerIds.empty() || !sites.empty() || !sdValueRefs.rows.empty();   // a decorator row is not a use site, still evidence
+    // lane declined-sites: declined calls whose candidate lists hold a definition (as --callers counts and lists them) — the
+    // <dc> rows, file-first, cut at the callers verb's own cap (one constant, gates review Q6).
+    const std::size_t   sdDeclinedCalls = declinedCallsNaming( g, defs );
+    std::vector<std::uint32_t> sdDeclinedSites = declinedSitesNaming( g, defs );
+    orderDeclinedSites( ing, g, sdDeclinedSites, /*fileFirst=*/true );
     const char* risk        = ( !anyEvidence && usesFloor )                   ? "unmodelled"
+                            : !anyEvidence && sdDeclinedCalls > 0             ? "possible-callers"   // gates review Q3: never none-found beside a declined possible caller
                             : !anyEvidence                                    ? "none-found"
                             : ( !reach.empty() && radiusTested == 0 )         ? "untested-radius"
                             :                                                   "uses-exist";
@@ -1253,7 +1276,8 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     // #60: exactly when an owner is one of the <c> rows this page prints. pageWindow is pure, so recomputing
     // it here (the legend streams BEFORE the rows) cannot disagree with the window the rows below take.
     const PageWindow sdLw = pageWindow( callerIds.size(), effectiveRowCap( cfg.pageLimit, 40 ), cfg.pageOffset );
-    const std::size_t sdDeclinedCalls = declinedCallsNaming( g, defs );   // declined calls that could have meant a def (as --callers counts them)
+    const rw::DeclinedSiteCut sdDcCut = rw::declinedSiteCut( sdDeclinedSites.size(), cfg.pageLimit, "--safe-delete=", cfg.safeDeleteSym,
+                                                             std::size_t( effectiveRowCap( cfg.pageLimit, 40 ) ) );
 
     // CALLSITE-AT: a <c> row's p= is where the CALLER is defined; the lines to open are its call sites, as pasteable
     // file:line tokens (editcheck.h rowCallSites: the uses verb's call-role filters, one scan of the reference table, the
@@ -1271,13 +1295,17 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     {
         sdHasSplit = sdAttr.splitArm( i );
     }
+    const std::vector<rw::DeclinedSiteView> sdDc =
+        rw::declinedSiteViews( ing, g, std::span<const std::uint32_t>( sdDeclinedSites ).first( sdDcCut.shown ), /*callersForm=*/true, defs, sdAttr.groups,
+                               sdVr, cfg.legend == "full" );
     emitSafeDeleteLegend( defs.size(), sdUnprovenDefs, ambiguousCallers, risk,
                           SafeDeleteLegendFlags{ .singleRoot = sdSingleRoot, .hasUnindexed = rw::graphGaugeClauses( g ),
                                                  .hasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ) ),
                                                  .declinedCalls = sdDeclinedCalls, .gateDeclined = g.gateDeclinedCalls > 0, .stdDeclined = g.stdMemberDeclinedCalls > 0,
                                                  .valueRefs = sdValueRefs.rows.size(), .callersFloor = sdFloor.isFloor, .usesFloor = usesFloor,
                                                  .hasSitesAt = sdSites.any, .sitesCut = sdSites.anyCut, .valueRefDepthCut = sdValueRefs.depthCut.files > 0,
-                                                 .defTable = sdAttr.groups.multi(), .defTableCut = sdListing.cut, .splitArms = sdHasSplit } );
+                                                 .defTable = sdAttr.groups.multi(), .defTableCut = sdListing.cut, .splitArms = sdHasSplit,
+                                                 .declinedSites = rw::declinedSitesLegendFlags( sdDc, /*callersForm=*/true, sdDcCut ) } );
 
     const Symbol&      lead = ing.symbols[ defs[0] ];   // resolveAllByNameQualified walks ascending id — defs[0] is the
                                                         // lowest, same convention --impact/--uses/--callers's of=/defs=
@@ -1301,7 +1329,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                 defs.size(), callerIds.size(), sdCallersFloorAttr, ambiguousCallers, reach.size(), sites.size(), sdUsesFloorAttr,
                 testedSelf ? 1 : 0, radiusTested, radiusUntested, deadCodeCandidate ? 1 : 0, risk,
                 rw::unprovenDefsAttrXml( sdUnprovenDefs ).c_str(),   // H1: beside the verdict it qualifies; absent at zero
-                rw::declinedCallsAttrXml( sdDeclinedCalls ).c_str(), // beside risk= too: declined calls that may reach it; absent at zero
+                ( rw::declinedCallsAttrXml( sdDeclinedCalls ) + rw::declinedSiteCutAttrXml( sdDcCut ) ).c_str(), // beside risk= too: declined calls that may reach it (+ the <dc> cut); absent at zero
                 ( rw::valueRefsCountAttrXml( sdValueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( ing, sdValueRefs.depthCut, sdVr ) ), // value uses: in uses=, never in callers=/impact_reaches=; absent at zero
                 pageDisclosure( cab, sizeof( cab ), cw.end - cw.begin, callerIds.size(), cw.end, cfg.pageLimit, cfg.pageOffset, true ),
                 rw::graphCountFloorAttrXml( g ).c_str(), sdRootAttr.c_str(), sdNextAttr.c_str(),
@@ -1320,8 +1348,8 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
         }
         rw::emitTo( stdout, "{}{}/>", rw::splitArmAttrXml( sdAttr.splitArm( i ) ), rw::ofDefAttrXml( sdAttr.groups, sdAttr.tokens, i ) );   // attrib-multidef
     }
-    rw::emitTo( stdout, "{}</safe-delete>", rw::valueRefsXml( ing, sdValueRefs, true, sdVr,
-                                                              "--uses=" + std::string( cfg.safeDeleteSym ) ) );
+    rw::emitTo( stdout, "{}{}</safe-delete>", rw::declinedSitesXml( sdDc, /*callersForm=*/true ),   // lane declined-sites: each declined possible caller, after the <c> rows
+                rw::valueRefsXml( ing, sdValueRefs, true, sdVr, "--uses=" + std::string( cfg.safeDeleteSym ) ) );
     return 0;
 }
 
@@ -2806,7 +2834,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                          rw::testedLensLegend( cfg.columnar ), rw::kImpactTestedPartitionLegend,   // A6: the columnar form reads its dense column
                          rw::kTestedLensBlindSpotLegend,                           // F-02: rides with the partition
                          rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Impact, imUnprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=
-                         rw::declinedCallsLegendWithGates( imDeclinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 ),           // exactly when the root carries declined_calls=
+                         rw::declinedCallsLegendWithGates( imDeclinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 ) + rw::declinedSitesImpactPointer( imDeclinedCalls > 0 ),           // exactly when the root carries declined_calls=
                          rw::declinedIfaceLegend( imDeclinedIface > 0 ),                                             // likewise, exactly when declined_iface= is there
                          ( std::string( rw::modScopeLegend( imHasModScope ) )      // #60: likewise, exactly when a t="modscope" row is
                            + rw::impactRollupLegend( !imFiles.rows.empty() && !cfg.columnar, imports.umbrella, rw::impactRollupHedged( imFiles ) )   // idea #6; fix27

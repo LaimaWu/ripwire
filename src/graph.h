@@ -45,6 +45,21 @@ namespace rw
 
 // ComposeEdge defined in model.h (so serialize.h can use it without including graph.h).
 
+// Which rule declined a call (Graph::declinedSiteKind): what a <dc> row's gate= says, and what train 29's interface-typed
+// dispatch rows (L6) will add a value to. One byte per declined call; the value is never ranked or counted, only read back.
+enum class DeclinedSiteKind : std::uint8_t
+{
+    Ladder,     // tier 3: two or more candidates, none in the caller's file or directory, no evidence chose one (no gate=)
+    Builtin,    // the builtin-method name gate (BuiltinMethodGate): gate="builtin"
+    Std,        // the C++ standard-member gate (StdMemberGate): gate="std"
+    RubySide,   // Ruby: in reach of self's method lookup, but on the other side of self (class vs instance): gate="side"
+    RubyNew,    // Ruby: `new` on a class object, the reachable `initialize` definitions unpicked (no gate=; the row names `new`)
+    Iface,      // RESERVED for L6 (interface-typed dispatch rows); nothing writes it yet
+};
+// A declined call whose candidate list internDeclinedList could not store (its uint32 offset ceiling): the record keeps the
+// call, with no list (no cands=, and no callers row — declinedCallsNaming cannot count it either).
+inline constexpr std::uint32_t kNoDeclinedList = UINT32_MAX;
+
 struct Graph
 {
     sparseCsr<float>           inEdges;     // N×N, row = target's in-neighbours (for PageRank)
@@ -139,6 +154,18 @@ struct Graph
     std::vector<std::uint32_t> declinedListOff{ 0u };   // the leading offset lives here, so a default Graph is already a valid zero-list CSR
     std::vector<NodeId>        declinedListCand;
     std::vector<std::size_t>   declinedListCallCount;
+    // lane declined-sites: ONE record per declined CALL, written beside every ++declinedOut (buildGraph's recordDecline), so
+    // the record count is the header's declined= and the records a selector's definitions made are its declined_calls=.
+    // Parallel columns in resolve-loop order (deterministic): the caller; the interned candidate list (kNoDeclinedList when
+    // internDeclinedList could not store it); the call's index into ing.references, from which the line, the file and the
+    // CALLED name are read (never off the candidates: a Ruby `new` declines with `initialize` candidates), and receiver and
+    // qualifier stay reachable for L6; and the rule that declined it. 13 B per declined call. Read by declinedSitesMadeBy /
+    // declinedSitesNaming below, the <dc> rows of the callers, callees and safe-delete answers. Built from the ingest each
+    // run like the rest of the Graph (never cached), so no cache version moves with it.
+    std::vector<NodeId>           declinedSiteCaller;
+    std::vector<std::uint32_t>    declinedSiteList;
+    std::vector<std::uint32_t>    declinedSiteRef;
+    std::vector<DeclinedSiteKind> declinedSiteKind;
     // 1 for a definition some call the builtin-method name gate DECLINED could have meant (BuiltinMethodGate below); empty
     // on a corpus with no such decline. Read by the dead-code predicate (quality.h isDeadCandidate): a definition a
     // declined `pool.get( k )` could have meant is not provably uncalled, which is what it was before the gate, when
@@ -6136,7 +6163,7 @@ inline void fillImplementorBound( Graph& g, const std::vector<ImplementorBoundEd
     }
 }
 
-inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand );   // defined beside declinedCallsNaming, its one reader
+inline std::uint32_t internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand );   // defined beside declinedCallsNaming, its one reader
 inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = nullptr, bool census = false )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph: resolve refs + build CSR" );
@@ -6477,6 +6504,19 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     std::vector<NodeId>      cand, tier;
     HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>> declinedListsByHash;   // tier-3 declines: list hash → list numbers (internDeclinedList)
     declinedListsByHash.reserve( 4096 );
+    // Every decline site goes through here: the caller's count (declinedOut, the header's declined=), the candidate list
+    // (internDeclinedList, the callers answers' declined_calls=) and ONE site record (Graph::declinedSite*) — so the rows a
+    // callers or callees answer prints are exactly the calls its declined_calls= counts.
+    const auto recordDecline = [ & ]( const Reference& r, std::span<const NodeId> declinedCand, DeclinedSiteKind kind )
+    {
+        EXPECTS( &r >= ing.references.data() && &r < ing.references.data() + ing.references.size(), "the resolve loop's own reference" );
+        EXPECTS( r.fromSymbol < g.declinedOut.size(), "a declined call has a caller" );
+        ++g.declinedOut[ r.fromSymbol ];
+        g.declinedSiteList.push_back( internDeclinedList( g, declinedListsByHash, declinedCand ) );
+        g.declinedSiteCaller.push_back( r.fromSymbol );
+        g.declinedSiteRef.push_back( std::uint32_t( &r - ing.references.data() ) );
+        g.declinedSiteKind.push_back( kind );
+    };
     std::vector<NodeId>      bindingTier;   // A4-R5 reused FFI-alias fallback candidate buffer
     std::string              bindKey;       // A4-R5 reused "<fileId>#var" key buffer for the ctypes-handle gate
     HashMap<std::uint64_t, char> bindingEdges;   // A4-R5 (from<<32|to) keys of edges resolved via an FFI alias —
@@ -7515,8 +7555,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 disposition = vetoExternal( r );
                 continue;
             }
-            ++g.declinedOut[ r.fromSymbol ];
-            internDeclinedList( g, declinedListsByHash, std::span<const NodeId>( rubyReachable.data(), rubyReachable.size() ) );
+            recordDecline( r, std::span<const NodeId>( rubyReachable.data(), rubyReachable.size() ), DeclinedSiteKind::RubyNew );
             disposition = CallDisposition::Declined;
             continue;
         }
@@ -7711,8 +7750,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                     : RubyCut::Unchanged;
         if( rubyCut == RubyCut::Declined )
         {
-            ++g.declinedOut[ r.fromSymbol ];   // in reach, but on the other side of self: no edge, and no claim it is outside
-            internDeclinedList( g, declinedListsByHash, std::span<const NodeId>( rubyReachable.data(), rubyReachable.size() ) );
+            // in reach, but on the other side of self: no edge, and no claim it is outside
+            recordDecline( r, std::span<const NodeId>( rubyReachable.data(), rubyReachable.size() ), DeclinedSiteKind::RubySide );
             disposition = CallDisposition::Declined;
             continue;
         }
@@ -7843,8 +7882,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             cand.swap( filtScratch );
             if( cut == RubyCut::Declined )
             {
-                ++g.declinedOut[ r.fromSymbol ];
-                internDeclinedList( g, declinedListsByHash, cand );
+                recordDecline( r, cand, DeclinedSiteKind::RubySide );
                 disposition = CallDisposition::Declined;
                 continue;
             }
@@ -8069,8 +8107,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                     }
                     else
                     {
-                        ++g.declinedOut[ r.fromSymbol ];
-                        internDeclinedList( g, declinedListsByHash, cand );
+                        recordDecline( r, cand, DeclinedSiteKind::Ladder );
                         if( stdIndex != StdMemberGate::kNotStd && !stdReceiverKeeps( stdRecv, r.fromSymbol, cand ) )
                         {
                             g.stdMemberDeclines.emplace_back( r.fromSymbol, stdIndex );   // the <stdm> line names it too
@@ -8131,8 +8168,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                     // DECLINED. Still no edge and still no guess — that precision rule is the ladder's point. What is gone is the silence: the decline counts on the
                     // caller (declinedOut → the header's declined=, the callees answer's declined_calls=) and records the candidate list it could equally have meant
                     // (internDeclinedList → the callers and impact answers' declined_calls=), so a count="0" there says a call was declined. test/declinecheck.sh (A), (B).
-                    ++g.declinedOut[ r.fromSymbol ];
-                    internDeclinedList( g, declinedListsByHash, cand );
+                    recordDecline( r, cand, DeclinedSiteKind::Ladder );
                     disposition = CallDisposition::Declined;
                     continue;
                 }
@@ -8369,9 +8405,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                     continue;
                 }
                 std::sort( gateRefused.begin(), gateRefused.end() );   // one sequence per set, as internDeclinedList keys it
-                ++g.declinedOut[ r.fromSymbol ];
                 ++g.gateDeclinedCalls;
-                internDeclinedList( g, declinedListsByHash, gateRefused );
+                recordDecline( r, gateRefused, DeclinedSiteKind::Builtin );
                 g.gateDeclinedTarget.resize( N, 0 );   // no-op after the first decline
                 for( const NodeId c : gateRefused )
                 {
@@ -8410,9 +8445,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             if( !gateRefused.empty() && byName >= StdMemberGate::kMinInTreeCandidates )
             {
                 std::sort( gateRefused.begin(), gateRefused.end() );   // one sequence per set, as internDeclinedList keys it
-                ++g.declinedOut[ r.fromSymbol ];
                 ++g.stdMemberDeclinedCalls;
-                internDeclinedList( g, declinedListsByHash, gateRefused );
+                recordDecline( r, gateRefused, DeclinedSiteKind::Std );
                 g.gateDeclinedTarget.resize( N, 0 );   // no-op after the first decline: a definition a declined call could have meant is not dead
                 for( const NodeId c : gateRefused )
                 {
@@ -8685,6 +8719,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     }
     DASSERT( verifyCsr( g.inEdges, N ) );   // structural, so CHECKED in debug and not promised in release — see Diagnostics.h
     DASSERT( verifyOffsetCsr( g.declinedListOff, g.declinedListCand, g.declinedListCallCount.size(), N ) );
+    // One site record per declined call (recordDecline): at most one per reference, so the uint32 record and reference
+    // indices cannot wrap, and the four columns stay parallel.
+    ENSURES( g.declinedSiteCaller.size() <= ing.references.size() && g.declinedSiteList.size() == g.declinedSiteCaller.size()
+             && g.declinedSiteRef.size() == g.declinedSiteCaller.size() && g.declinedSiteKind.size() == g.declinedSiteCaller.size() );
     }
 
     // inheritance edges (Lego view): isInherit refs (derived → base name) → implementors[base] += derived.
@@ -13033,12 +13071,14 @@ inline GaugeClauses graphGaugeClauses( const Graph& g ) noexcept
 // it, so a collision costs a compare, never a wrong share. List numbers are first-seen in the sequential resolve loop, and the
 // map is only probed and inserted into — neither reaches output.
 //
+// Returns the call's list number (Graph::declinedSiteList), or kNoDeclinedList when the list could not be stored.
+//
 // DEGRADE: the offsets are uint32. A new list that would carry the candidate array past UINT32_MAX entries is not recorded:
-// the call stays counted on its caller (declinedOut, the header's declined=), and declined_calls= on the callers and impact
-// answers can under-count, as the counts_floor="1" those answers carry already allows. A declined set holds at least one
+// the call stays counted on its caller (declinedOut, the header's declined=) and keeps its site record with no list, and
+// declined_calls= on the callers and impact answers can under-count, as the counts_floor="1" those answers carry already allows. A declined set holds at least one
 // candidate — tier 3's two or more, or the ONE lone method the builtin-method name gate (BuiltinMethodGate) refused to
 // bind by name — so the list count never exceeds the entry count and the uint32 list numbers cannot wrap first.
-inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand )
+inline std::uint32_t internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand )
 {
     EXPECTS( !cand.empty(), "tier 3 declines a set it could not narrow to one; the builtin-method gate a non-empty set it admitted none of" );
     std::uint64_t     hash  = 14695981039346656037ull;   // the FNV-1a 64-bit offset basis
@@ -13055,19 +13095,21 @@ inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<st
         if( listCount == cand.size() && std::memcmp( g.declinedListCand.data() + listOffset, cand.data(), cand.size_bytes() ) == 0 )
         {
             ++g.declinedListCallCount[ listIndex ];
-            return;
+            return listIndex;
         }
     }
     constexpr std::size_t kOffsetCeiling = UINT32_MAX;
     if( cand.size() > kOffsetCeiling - g.declinedListCand.size() )
     {
         DISCLOSE( "graph: the declined candidate lists would overflow their uint32 offsets — this call's list is not recorded, so declined_calls= can under-count" );
-        return;
+        return kNoDeclinedList;
     }
-    bucket.push_back( std::uint32_t( g.declinedListCallCount.size() ) );
+    const std::uint32_t listIndex = std::uint32_t( g.declinedListCallCount.size() );
+    bucket.push_back( listIndex );
     g.declinedListCand.insert( g.declinedListCand.end(), cand.begin(), cand.end() );
     g.declinedListOff.push_back( std::uint32_t( g.declinedListCand.size() ) );
     g.declinedListCallCount.push_back( 1 );
+    return listIndex;
 }
 
 // declined_calls= on the callers and impact answers: how many tier-3 declines named at least one of `targets`
@@ -13118,6 +13160,77 @@ inline std::size_t declinedCallsMadeBy( const Graph& g, std::span<const NodeId> 
         }
     }
     return callCount;
+}
+
+// lane declined-sites: the site records (Graph::declinedSite*) behind the two counts above, for the <dc> rows
+// (declinedsites.h). declinedSitesMadeBy: the declines `sources` made — one record per call declinedCallsMadeBy counts.
+inline std::vector<std::uint32_t> declinedSitesMadeBy( const Graph& g, std::span<const NodeId> sources )
+{
+    std::vector<std::uint32_t> sites;
+    if( g.declinedSiteCaller.empty() || sources.empty() )
+    {
+        return sites;
+    }
+    std::vector<char> isSource( g.declinedOut.size(), 0 );
+    for( const NodeId s : sources )
+    {
+        if( s < isSource.size() )
+        {
+            isSource[ s ] = 1;
+        }
+    }
+    for( std::uint32_t site = 0; site < g.declinedSiteCaller.size(); ++site )
+    {
+        if( isSource[ g.declinedSiteCaller[ site ] ] )
+        {
+            sites.push_back( site );
+        }
+    }
+    ENSURES( sites.size() == declinedCallsMadeBy( g, sources ), "every declined call a source made has its record, and no other does" );
+    return sites;
+}
+
+// declinedSitesNaming: the declined calls whose stored candidate LIST holds one of `targets` — list membership, never the
+// called name (the language and root filters split one name into several lists) — one record per call declinedCallsNaming
+// counts. Which lists hold a target is decided once per list (a bit), then the records are one pass: O(lists + records).
+inline std::vector<std::uint32_t> declinedSitesNaming( const Graph& g, std::span<const NodeId> targets )
+{
+    std::vector<std::uint32_t> sites;
+    if( g.declinedListCallCount.empty() || targets.empty() )
+    {
+        return sites;
+    }
+    std::vector<char> isTarget( g.declinedOut.size(), 0 );
+    for( const NodeId t : targets )
+    {
+        if( t < isTarget.size() )
+        {
+            isTarget[ t ] = 1;
+        }
+    }
+    std::vector<char> listHolds( g.declinedListCallCount.size(), 0 );
+    std::size_t       callCount = 0;   // declinedCallsNaming's own sum, for the postcondition
+    for( std::size_t listIndex = 0; listIndex < listHolds.size(); ++listIndex )
+    {
+        for( std::uint32_t slot = g.declinedListOff[ listIndex ]; slot < g.declinedListOff[ listIndex + 1 ]; ++slot )
+        {
+            if( isTarget[ g.declinedListCand[ slot ] ] )
+            {
+                listHolds[ listIndex ] = 1;
+                callCount += g.declinedListCallCount[ listIndex ];
+                break;
+            }
+        }
+    }
+    for( std::uint32_t site = 0; site < g.declinedSiteList.size(); ++site )
+    {
+        if( const std::uint32_t list = g.declinedSiteList[ site ]; list != kNoDeclinedList && listHolds[ list ] )
+        {
+            sites.push_back( site );
+        }
+    }
+    ENSURES( sites.size() == callCount, "each stored list counts exactly the calls whose records name it" );
+    return sites;
 }
 
 // The callees answer's <stdm> line: of the declines `sources` made (declinedCallsMadeBy), the C++ calls named like a
