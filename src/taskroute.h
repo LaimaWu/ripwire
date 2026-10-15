@@ -1252,8 +1252,14 @@ inline constexpr std::string_view kExplanatoryCues[] = {
 // (forowner.h forBodySlotAsked) read the one predicate.
 inline bool hasExplanatoryCue( std::string_view lower ) noexcept
 {
-    return std::any_of( std::begin( kExplanatoryCues ), std::end( kExplanatoryCues ),
-                        [lower]( const std::string_view cue ) { return boundedFind( lower, cue ) != std::string_view::npos; } );
+    for( const std::string_view cue : kExplanatoryCues )
+    {
+        if( boundedFind( lower, cue ) != std::string_view::npos )
+        {
+            return true;   // one word-bounded cue is enough
+        }
+    }
+    return false;
 }
 
 // `since Monday`, `since 2026-09-01` — structural, because a date has no paraphrase (the same reasoning

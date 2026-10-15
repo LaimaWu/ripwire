@@ -54,10 +54,6 @@ inline constexpr std::string_view kOwnerCommonWords[] = {
     "use", "when", "with", "write" };
 static_assert( std::ranges::is_sorted( kOwnerCommonWords, rw::sortutil::svLess ), "kOwnerCommonWords is binary-searched: keep it sorted" );
 
-inline bool isOwnerCommonWord( std::string_view w ) noexcept
-{
-    return std::ranges::binary_search( kOwnerCommonWords, w, rw::sortutil::svLess );   // svLess: #345
-}
 
 // ASCII fold of one name or word, leading _ # $ @ removed (the owner match key)
 inline std::string ownerFoldName( std::string_view n )
@@ -160,7 +156,8 @@ inline std::vector<OwnerCandidate> forOwnerCandidates( const IngestResult& ing, 
     std::sort( headWords.begin(), headWords.end() );
     std::erase_if( found, [ & ]( const OwnerCandidate& o ) { return !std::binary_search( headWords.begin(), headWords.end(), o.word ); } );
     // rank order, common words after the rest (stable: rank order inside each group)
-    std::stable_partition( found.begin(), found.end(), []( const OwnerCandidate& o ) { return !isOwnerCommonWord( o.word ); } );
+    std::stable_partition( found.begin(), found.end(), []( const OwnerCandidate& o )
+                           { return !std::ranges::binary_search( kOwnerCommonWords, std::string_view( o.word ), rw::sortutil::svLess ); } );   // svLess: #345
     return found;
 }
 
@@ -185,17 +182,9 @@ static_assert( kForBodySlotMaxBytes == 6000 && kForBodySlotLegend.find( "Over 60
 
 enum class BodySlotPick : std::uint8_t { None, Name, Member, Subtoken };
 
-inline std::string_view bodySlotPickName( BodySlotPick p ) noexcept
-{
-    switch( p )
-    {
-        case BodySlotPick::Name:     return "name";
-        case BodySlotPick::Member:   return "member";
-        case BodySlotPick::Subtoken: return "subtoken";
-        case BodySlotPick::None:     break;
-    }
-    return {};
-}
+// pick= spellings, indexed by BodySlotPick (None has none)
+inline constexpr std::string_view kBodySlotPickNames[] = { "", "name", "member", "subtoken" };
+static_assert( std::size( kBodySlotPickNames ) == std::size_t( BodySlotPick::Subtoken ) + 1, "one pick= spelling per BodySlotPick" );
 
 struct ForBodySlotOwner
 {
@@ -250,39 +239,35 @@ inline bool isParsedMemberOf( const Symbol& m, const Symbol& c ) noexcept
     return m.fileId == c.fileId && c.sigStartByte <= m.sigStartByte && m.endByte <= c.endByte && c.endByte > c.sigStartByte;
 }
 
-// THE MEMBER OWNER: the first head-tier class/struct/interface row (rank order) with a member definition the question names
-// (a non-common word); among that class's members the highest lens score, then the lowest id. One pass over the symbols
-// collects the named callable definitions once (no per-class rescan); kNoNode when no head-tier class has one.
-inline NodeId forMemberOwner( const IngestResult& ing, const std::vector<std::string>& words, const std::vector<NodeId>& lensSurfaceIds,
-                              const std::vector<float>& lensRank )
+// The head-tier (rank <= kForDocExcerptRankCount) class/struct/interface rows, rank order: the classes that may donate a member.
+inline std::vector<NodeId> headTierClassRows( const IngestResult& ing, const std::vector<NodeId>& lensSurfaceIds, const std::vector<float>& lensRank )
 {
-    std::vector<NodeId> classRows;
+    std::vector<NodeId> rows;
     const std::size_t   head = std::min( lensSurfaceIds.size(), std::size_t( kForDocExcerptRankCount ) );
     for( std::size_t i = 0; i < head; ++i )
     {
         const NodeId id = lensSurfaceIds[i];
-        if( id < ing.symbols.size() && lensRank[id] > 0.0f )
+        if( id >= ing.symbols.size() || lensRank[id] <= 0.0f )
         {
-            const SymKind k = ing.symbols[id].kind;
-            if( k == SymKind::Class || k == SymKind::Struct || k == SymKind::Interface )
-            {
-                classRows.push_back( id );
-            }
+            continue;
+        }
+        const SymKind k = ing.symbols[id].kind;
+        if( k == SymKind::Class || k == SymKind::Struct || k == SymKind::Interface )
+        {
+            rows.push_back( id );
         }
     }
-    if( classRows.empty() )
-    {
-        return kNoNode;
-    }
+    return rows;
+}
+
+// Every callable definition outside the tests whose folded name is a NON-common question word, in id order — one pass over the
+// symbols (the fold allocates, so the cheap kind test runs first), read once by every head-tier class.
+inline std::vector<NodeId> memberWordDefs( const IngestResult& ing, const std::vector<std::string>& words )
+{
     std::vector<std::string> memberWords = words;
-    std::erase_if( memberWords, []( const std::string& w ) { return isOwnerCommonWord( w ); } );
-    if( memberWords.empty() )
-    {
-        return kNoNode;
-    }
-    // the named callable definitions, once (the fold allocates, so the cheap kind test runs first)
+    std::erase_if( memberWords, []( const std::string& w ) { return std::ranges::binary_search( kOwnerCommonWords, std::string_view( w ), rw::sortutil::svLess ); } );
     std::vector<NodeId> named;
-    for( NodeId id = 0; id < ing.symbols.size(); ++id )
+    for( NodeId id = 0; id < ing.symbols.size() && !memberWords.empty(); ++id )
     {
         const SymKind k = ing.symbols[id].kind;
         if( ( k == SymKind::Function || k == SymKind::Method ) && isOwnerCallableDef( ing, id )
@@ -291,18 +276,24 @@ inline NodeId forMemberOwner( const IngestResult& ing, const std::vector<std::st
             named.push_back( id );
         }
     }
+    return named;
+}
+
+// THE MEMBER OWNER: the first head-tier class/struct/interface row (rank order) with a member definition the question names
+// (a non-common word); among that class's members the highest lens score, then the lowest id. kNoNode when none has one.
+inline NodeId forMemberOwner( const IngestResult& ing, const std::vector<std::string>& words, const std::vector<NodeId>& lensSurfaceIds,
+                              const std::vector<float>& lensRank )
+{
+    const std::vector<NodeId> classRows = headTierClassRows( ing, lensSurfaceIds, lensRank );
+    const std::vector<NodeId> named     = classRows.empty() ? std::vector<NodeId>{} : memberWordDefs( ing, words );
+    const auto score = [ & ]( NodeId id ) { return id < lensRank.size() ? lensRank[id] : 0.0f; };
     for( NodeId cls : classRows )
     {
         NodeId best = kNoNode;
         for( NodeId m : named )
         {
-            if( !isParsedMemberOf( ing.symbols[m], ing.symbols[cls] ) )
-            {
-                continue;
-            }
-            const float rm = m < lensRank.size() ? lensRank[m] : 0.0f;
-            const float rb = best != kNoNode && best < lensRank.size() ? lensRank[best] : 0.0f;
-            if( best == kNoNode || rm > rb )   // `named` is in id order, so a tie keeps the lower id
+            // `named` is in id order, so a tie in score keeps the lower id
+            if( isParsedMemberOf( ing.symbols[m], ing.symbols[cls] ) && ( best == kNoNode || score( m ) > score( best ) ) )
             {
                 best = m;
             }
@@ -370,7 +361,7 @@ inline void spliceBodySlotPick( std::string& xml, BodySlotPick pick )
     const std::size_t close = xml.find( '>', at );
     if( close != std::string::npos )
     {
-        xml.insert( close, std::string( " pick=\"" ) + std::string( bodySlotPickName( pick ) ) + "\"" );
+        xml.insert( close, std::string( " pick=\"" ) + std::string( kBodySlotPickNames[std::size_t( pick )] ) + "\"" );
     }
 }
 
@@ -385,7 +376,7 @@ inline std::string bodySlotSkippedXml( const IngestResult& ing, NodeId id, BodyS
     const std::string path       = rootArg.empty() ? std::string( ing.files[s.fileId] ) : std::string( rw::sarif::rootRelativeUri( ing.files[s.fileId], rootPrefix ) );
     std::vector<char> esc;
     std::string       x = "<bodies shown=\"0\" total=\"1\" capped=\"1\" pick=\"";
-    x += bodySlotPickName( pick );
+    x += kBodySlotPickNames[std::size_t( pick )];
     x += "\" next=\"";
     x += escapeXml( "--expand=" + path + ":" + std::to_string( s.line ) + ":" + s.name, esc );
     x += "\"></bodies>";
