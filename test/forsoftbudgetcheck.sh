@@ -457,12 +457,17 @@ fits = ab <= T or k <= 4
 if k >= len( rr ): print( "OK fits=%d rows=%d/%d charged=%d T=%d complete" % ( fits, k, len( rr ), ab, T ) ); sys.exit( 0 )
 nxt = rr[ k ][ 1 ]
 maximal = ab + nxt > T - U - 160
-print( "%s fits=%d maximal=%d rows=%d/%d charged=%d next=%d T=%d U=%d" % ( "OK" if fits and maximal else "BAD", fits, maximal, k, len( rr ), ab, nxt, T, U ) )
+# FIX2 C1 (rule 4): the upper-bound twin of maximality (test/lib/softbudget.py upper_bound): rows past the floor stop where T less
+# the other sections and the tail reserve runs out; RED on a binary that ignores the tail reserve
+from softbudget import upper_bound
+upper, udet = upper_bound( ans, open( sys.argv[ 2 ] ).read(), T, k, len( rr ), U )
+print( "%s fits=%d maximal=%d upper=%d rows=%d/%d charged=%d next=%d T=%d U=%d%s" % ( "OK" if fits and maximal and upper else "BAD", fits, maximal, upper,
+       k, len( rr ), ab, nxt, T, U, "" if upper else " -- " + udet ) )
 PY
 )"
         case "$st" in
             OK*)  ok "(ST) N=$n $mode: $st" ;;
-            *)    no "(ST) N=$n $mode: $st — the rows must fit the target and stop only where the next row would cross it" ;;
+            *)    no "(ST) N=$n $mode: $st — the rows must fit the target and stop only where the next row would cross it, never past T less the sections and the tail reserve" ;;
         esac
     done
     prev="$n"

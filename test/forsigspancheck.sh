@@ -481,6 +481,11 @@ if mode == "tight":
             if k < len( ref[ 0 ] ):
                 if a[ 1 ] + ref[ 0 ][ k ] <= T - U - 160: bad.append( "ST: cut at %d of %d rows with %d B charged, the next row (%d B) fits T=%d less the sections U=%d" % ( k, len( ref[ 0 ] ), a[ 1 ], ref[ 0 ][ k ], T, U ) )
                 if not ( a[ 2 ] and a[ 3 ] ): bad.append( "NX: rows cut (%d of %d) without capped + next=" % ( k, len( ref[ 0 ] ) ) )
+                # FIX2 C1 (rule 4): the upper-bound twin of maximality (test/lib/softbudget.py upper_bound): rows past the floor
+                # stop where T less the other sections and the tail reserve runs out; RED on a binary that ignores the tail reserve
+                import os as _os, sys as _sys; _sys.path.insert( 0, _os.environ[ "RIPWIRE_TESTLIB" ] ); from softbudget import upper_bound
+                up, udet = upper_bound( A, body( sys.argv[ 7 ] ), T, k, len( ref[ 0 ] ), U )
+                if not up: bad.append( "UP: " + udet )
             print( "  ....  %s: ST rows=%d/%d charged=%d T=%d" % ( label, k, len( ref[ 0 ] ), a[ 1 ], T ) )
 else:
     if not moved: bad.append( "no docs_after_code= (the reorder did not apply)" )
