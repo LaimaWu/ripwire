@@ -1802,7 +1802,7 @@ inline constexpr char kHelpHead[] =
         "                               target phase will not fit the limit, it ingests only both commits' CHANGED files and runs the kinds those decide; the header names the rest\n"
         "                               (kinds_skipped=, ingest_scope=\"changed-files\", memory_need=, also_skipped=) and kinds_next= replays exactly them. Exit 2 when a row gates (the\n"
         "                               skipped kinds only add rows), else 6 — partial, never 0; exit 5 only when even the changed files do not fit or cannot stand in for the trees\n"
-        "                               (a symlink, an export attribute). --quality-ack is refused there (exit 5, ledger untouched): accepting needs every kind's rows.\n"
+        "                               (a symlink, an export attribute). --quality-ack (it needs every kind's rows) skips the projection: only a real memory stop refuses it (exit 5, ledger untouched).\n"
         "    --quality-kinds=K[,K...]   (with --quality-delta=A..B) run only the named kinds — the replay a partial answer hands back\n"
         "                               (with --quality-delta=A..B) run ONLY the named kinds, comma-separated, of the twelve: api-surface, complexity, dead-code, defect-shape,\n"
         "                               duplication, error-masking, nesting, new-clone-of-reused-helper, params, placeholder, short-horizon-churn, verbosity. A named kind's rows are\n"

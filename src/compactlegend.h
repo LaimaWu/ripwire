@@ -768,7 +768,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "renames_window_truncated", "renames_window_truncated=1: history is deeper than the rename window, older renames unread", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     // qd-memory-degrade: present-only on an answer that did not run every kind (verbs_quality.h kindsDisclosure)
     { "kinds_skipped", "kinds_skipped=: kinds NOT run, so none of their rows is here and every count covers the rest; a count only they feed is absent", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
-    { "skipped_why", "skipped_why=selector (the caller chose; stale acks judged for those kinds only) | memory (see ingest_scope=)", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "skipped_why", "skipped_why=selector (the caller chose; stale acks judged for those kinds only) | memory (see ingest_scope=) | selector,memory (both)", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
+    { "memory_skipped", "memory_skipped=: beside skipped_why=selector,memory, the kinds memory skipped; kinds_next= runs exactly them", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "ingest_scope", "ingest_scope=changed-files: the full trees did not fit, so both commits' changed files answered the kinds they decide, rows as a full answer's; exit 2 if one gates, else 6", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "memory_need", "memory_need=NM: the full answer's projected need; unmeasured after a stop (memory_stop=)", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     { "also_skipped", "also_skipped=: whole-answer facts not computed (config-warnings, stale-acks, ack-healing: acks match by recorded key only)", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },

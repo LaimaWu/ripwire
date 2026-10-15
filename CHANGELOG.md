@@ -40,9 +40,13 @@ the same two commits. One stderr line says the same.
   full answer) and **6** (new) otherwise — a partial answer is never a clean exit 0. Exit **5** now
   means, for this form, that even the changed files did not fit, or that they cannot stand in for the trees (a symlink
   anywhere, an export-subst attribute, or a changed `.gitattributes` with an export attribute), on one line naming why.
-  `--quality-ack` under pressure refuses (exit 5, ledger untouched): accepting needs every kind's rows.
+  Exit 6 also when every selected kind ran: the `also_skipped=` facts are still missing. `--quality-ack` needs every
+  kind's rows, so the projection never pre-empts it: it runs in full, and only a real memory stop refuses it (exit 5,
+  ledger untouched). A refusal whose process still held more than the limit after releasing the full tree says the
+  changed files were not tried.
 - **`--quality-kinds=K[,K…]`** (new, range form only) runs only the named kinds — the replay `kinds_next=` names. A
-  named kind's rows are its rows in a full answer; stale acks are judged for the named kinds only; passes no named kind
+  named kind's rows are its rows in a full answer; under pressure the kinds it left out stay the caller's
+  (`skipped_why="selector,memory"`, with `memory_skipped=` naming memory's share, which `kinds_next=` replays); stale acks are judged for the named kinds only; passes no named kind
   needs (the clone passes, the dead-code evidence) do not run. Refused beside `--quality-ack`/`--quality-baseline`
   and on the working-tree form; the MCP `quality_delta` tool (working-tree form) has no selector yet.
 - **`memory_peak=`** (new, present-only) on any range answer whose peak footprint went over the limit after the guard's

@@ -239,7 +239,8 @@ std::string degradedStderrLine( const RefPairDelta& refs, rw::quality::KindMask 
                     : refs.memoryStop == "hard" ? "the memory limit was reached during the " + refs.stopWhere + "; the full need was not measured"
                     : "the memory guard stopped the " + refs.stopWhere + ( refs.memoryPressure ? " under critical system memory pressure" : "" ) + "; the full need was not measured";
     std::string line = "memory limit " + ( limit == 0 ? std::string( "unknown" ) : memguard::limitSpelling( limit ) ) + " (" + std::string( memguard::limitSourceClause() )
-                     + "): --quality-delta=A..B answered from the changed files only (" + why + "); skipped " + quality::kindList( memorySkipped, ", " );
+                     + "): --quality-delta=A..B answered from the changed files only (" + why + ")"
+                     + ( memorySkipped != 0 ? "; skipped " + quality::kindList( memorySkipped, ", " ) : std::string( "; every selected kind ran" ) );
     if( !kindsNext.empty() )
     {
         line += " — run them with " + std::string( kindsNext );
@@ -278,7 +279,9 @@ std::optional<int> loadChangedFiles( const std::string& root, const rw::Config& 
     }
     if( memguard::overHardLimit() )
     {
-        return refPairStopRefusal( stop, out, "the changed files alone did not fit either" );
+        // the footprint still held after the full tree was released (on macOS the allocator keeps its pages): nothing of
+        // the changed files was ingested, so the line says they were not tried — never that they did not fit
+        return refPairStopRefusal( stop, out, "this process still held more than the limit after releasing the full tree, so the changed files were not tried" );
     }
     quality::ChangedFiles changed = quality::changedFilesBetween( root, out.baseSha, out.targetSha, !cfg.qualityScope.empty() );
     if( !changed.ok )
@@ -344,7 +347,10 @@ std::optional<int> loadChangedFiles( const std::string& root, const rw::Config& 
 std::optional<int> loadFullTrees( const std::string& root, const rw::Config& cfg, RefPairDelta& out, bool& projectedNoFit )
 {
     using namespace rw;
-    const quality::KindMask certainLocal = static_cast<quality::KindMask>( out.selected & ~( quality::kWholeTreeKinds | quality::kindBit( "defect-shape" ) ) );
+    // --quality-ack needs every kind's rows, which the changed files never give: like a whole-tree selection it is never
+    // pre-empted by the projection, and only a real stop refuses it (review C2: base acked within the cap, head refused)
+    const quality::KindMask certainLocal = cfg.qualityAck ? quality::KindMask( 0 )
+                                         : static_cast<quality::KindMask>( out.selected & ~( quality::kWholeTreeKinds | quality::kindBit( "defect-shape" ) ) );
     if( !out.sameRef )
     {
         const std::uint64_t before = os::mem_footprint();
@@ -1170,7 +1176,8 @@ inline constexpr const char* kQdKindsSkippedLegend =
     "kinds_skipped= names the kinds this answer did NOT run (alphabetical): no row of them is in this document, which is not a "
     "statement that none exists, and regressions=, gating= and every count cover only the kinds that ran; a count only a "
     "skipped kind feeds (register-macro-excluded=) is absent, never 0. skipped_why=\"selector\": the caller chose the kinds "
-    "(the kinds selector), and stale acks were judged for the chosen kinds only; skipped_why=\"memory\": see ingest_scope=. ";
+    "(the kinds selector), and stale acks were judged for the chosen kinds only; skipped_why=\"memory\": see ingest_scope=; "
+    "skipped_why=\"selector,memory\": both, and memory_skipped= names memory's share (the rest the caller left out). ";
 inline constexpr const char* kQdDegradedLegend =
     "ingest_scope=\"changed-files\": the two full trees did not fit the memory guard's limit (memory_limit=, the max-memory value "
     "that sets it), so both commits' CHANGED files were ingested alone and the kinds those files decide ran with the same code and "
@@ -1181,9 +1188,10 @@ inline constexpr const char* kQdDegradedLegend =
     "stale-acks (no stale= and no stale sa rows), ack-healing (acks matched by their recorded key only: a row that only a "
     "legacy-scheme re-key or a content-id match would hide in the full answer is shown here, and can gate). kinds_next= is the "
     "call that runs exactly the skipped kinds over the same two commits, at a max-memory just above memory_need= (after a stop: "
-    "twice the limit, a guess, since no need was measured). EXIT 2 when a row of a kind that ran gates (final: the skipped kinds "
+    "twice the limit, a guess, since no need was measured); it carries no output flag (rows only). EXIT 2 when a row of a kind that ran gates (final: the skipped kinds "
     "only add rows, though with ack-healing skipped that row may be one an identity-healed ack hides in the full answer); "
-    "otherwise EXIT 6, a partial answer with no gating row, never 0. ";
+    "otherwise EXIT 6, a partial answer with no gating row, never 0 — even when every selected kind ran, since the also_skipped= "
+    "facts are still missing. ";
 inline constexpr const char* kQdMemoryStopLegend =
     "memory_stop= names the guard's stop that sent this answer to the changed files: crawl (the crawl line, an eighth of the "
     "limit grown) or parse (half the limit) is a soft line, memory_pressure=1 when the OS pressure signal stopped it instead, "
@@ -1606,15 +1614,25 @@ KindsDisclosure kindsDisclosure( const rw::Config& cfg, const RefPairDelta& refs
         }
         out.json += "]";
     };
-    const quality::KindMask skipped = static_cast<quality::KindMask>( quality::kAllKinds & ~refs.kinds );
+    // review C1: the kinds the CALLER left out and the kinds MEMORY skipped are two sets with two reasons — a selector's
+    // exclusions are never disclosed as memory cuts, and kinds_next= replays exactly the memory set
+    const quality::KindMask skipped  = static_cast<quality::KindMask>( quality::kAllKinds & ~refs.kinds );
+    const quality::KindMask selector = static_cast<quality::KindMask>( quality::kAllKinds & ~refs.selected );
+    if( refs.degraded )
+    {
+        out.memorySkipped = static_cast<quality::KindMask>( refs.selected & ~refs.kinds );
+    }
     if( skipped != 0 )
     {
         add( "kinds_skipped", quality::kindList( skipped, "," ), true );
-        add( "skipped_why", refs.degraded ? "memory" : "selector", false );
+        add( "skipped_why", out.memorySkipped == 0 ? "selector" : selector == 0 ? "memory" : "selector,memory", false );
+        if( out.memorySkipped != 0 && selector != 0 )
+        {
+            add( "memory_skipped", quality::kindList( out.memorySkipped, "," ), true );
+        }
     }
     if( refs.degraded )
     {
-        out.memorySkipped         = static_cast<quality::KindMask>( refs.selected & ~refs.kinds );
         const std::uint64_t limit = memguard::limits().hardBytes;
         add( "ingest_scope", "changed-files", false );
         if( limit != 0 )

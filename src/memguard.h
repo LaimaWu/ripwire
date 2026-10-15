@@ -531,7 +531,7 @@ inline std::string_view limitSourceClause() noexcept
 }
 
 // the hard stop's one line: nothing was built that could answer. `also` is said between the limit and the verdict — the
-// range form's "the changed files alone did not fit either" — and is empty everywhere else (the line keeps its bytes).
+// range form's "the changed files were not tried" / "were cut too" — and is empty everywhere else (the line keeps its bytes).
 inline std::string hardStopLine( std::string_view where, std::string_view also = {} )
 {
     std::string line = "memory limit reached during the ";
