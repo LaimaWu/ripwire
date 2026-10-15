@@ -583,6 +583,39 @@ inline std::vector<char> usesChosenCallers( const rw::IngestResult& ing, const r
     return isChosenCaller;
 }
 
+// TS/JS literal receivers (issue #163 twin): only names that are built-in members of the literal's type
+// leave --uses when an in-repo definition shares the name. If no in-repo definition exists (valueDefs empty),
+// return false so external/stdlib queries (e.g. --uses=repeat on hono) answer with external="1" instead of refusing.
+// Python literal calls (e.g. "hello".replace) remain listed by --uses (scoping matches graph.h's #163 JS/TS block).
+// Named function-expression polyfills (String.prototype.padStart = function padStart(n) { ... }, indexed as plain functions)
+// and TS prototype assignments drop their literal calls from --uses, matching graph.h.
+[[nodiscard]] inline bool
+isBuiltinLiteralCall( const rw::IngestResult& ing, const rw::Reference& r, std::span<const rw::NodeId> valueDefs ) noexcept
+{
+    using namespace rw;
+    if( valueDefs.empty() )
+    {
+        return false;
+    }
+    if( !isJsTsLitRecv( r.recv ) )
+    {
+        return false;
+    }
+    const std::string_view ctor = jsLitCtorName( r.recv );
+    if( ctor.empty() || !isJsTsBuiltinMember( ctor, r.calleeName ) )
+    {
+        return false;
+    }
+    for( NodeId def : valueDefs )
+    {
+        if( isJsTsLitPolyfillCandidate( ing, def, ctor, r ) )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 // ONE use-site row: (file, line, role, enclosing canonical id). File scope ⇒ `in` empty.
 struct UseSite { std::uint32_t fileId; std::uint32_t line; rw::RefRole role; std::string in; rw::NodeId from; };   // from: the enclosing symbol (kNoNode at file scope) — rankUseSites' weight
 
@@ -598,7 +631,8 @@ struct UseSite { std::uint32_t fileId; std::uint32_t line; rw::RefRole role; std
 // that never matched the row's own root-relative p=, the map's id=, or a git path — the M6/L1/M0-5 finding.
 inline std::pair<std::vector<UseSite>, std::size_t>
 collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span<const char> isChosenCaller,
-                 std::string_view rootForId = {}, std::span<const rw::NodeId> valueDefs = {}, const rw::ValueRefIndex* valueIndex = nullptr )
+                 std::string_view rootForId = {}, std::span<const rw::NodeId> valueDefs = {},
+                 const rw::ValueRefIndex* valueIndex = nullptr, std::size_t* outDeclinedLiteralCalls = nullptr )
 {
     using namespace rw;
     std::vector<UseSite> sites;
@@ -630,6 +664,14 @@ collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span
         if( r.role == RefRole::Call )
         {
             ++callSitesOfName;
+            if( isBuiltinLiteralCall( ing, r, valueDefs ) )
+            {
+                if( outDeclinedLiteralCalls != nullptr )
+                {
+                    ++*outDeclinedLiteralCalls;
+                }
+                continue;
+            }
         }
         // the file: qualifier's call-role narrowing — and, since issue #164, a "::" spelling's too
         // (scopeNarrowed, the same file:name semantics off a scope-qualified selector). A file-scope call site
@@ -738,8 +780,9 @@ std::optional<int> runUses( const MainDispatch& d )
         // The value index is this verb's own, so the depth cut the --callers answer discloses (valuerefs.h) is read off the
         // SAME index the role="value" rows come from: a file nested past the walk's cap holds a use below it that no row shows.
         const rw::ValueRefIndex usVri( ing );
+        std::size_t usDeclinedLiteralCalls = 0;
         auto [ sites, callSitesOfName ] = collectUseSites( ing, sel, isChosenCaller,
-                                                           usSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, &usVri );
+                                                           usSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, &usVri, &usDeclinedLiteralCalls );
         const rw::ValueRefIndex::DepthCuts usDepthCut = usVri.depthCutsFor( defs );
         rw::rankUseSites( ing, g, sites );   // cut-fix C: most-depended-on sites first, so the cap drops the lightest
 
@@ -799,6 +842,7 @@ std::optional<int> runUses( const MainDispatch& d )
                      "{}{}{}-->{}{}", rw::kUsesLegendOpen,
                      ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Uses, usUnprovenDefs > 0 )           // H1: exactly when the root carries unproven_defs=
                        + rw::declinedCallsLegendWithGates( usDeclinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 )                                // exactly when it carries declined_calls=
+                       + rw::declinedLiteralCallsLegend( usDeclinedLiteralCalls > 0 )
                        + rw::usesValueRoleLegend( std::any_of( sites.begin(), sites.end(), []( const UseSite& u ) { return u.role == RefRole::Value; } ) )
                        + rw::valueRefsDepthLegend( usDepthCut.files > 0 ) ).c_str(),   // exactly when the root carries the depth disclosure
                      rw::capLegendClause( rw::computePageDisclosure( pageRows, sites.size(), upw.end,
@@ -823,6 +867,7 @@ std::optional<int> runUses( const MainDispatch& d )
             // a markdown SECTION heading reaches routinely. Same shape as runImpact / the callers arm.
             const std::string attr = "of=\"" + ex( sym ) + "\" defs=\"" + std::to_string( defs.size() )
                                    + "\" external=\"" + ( external ? "1" : "0" ) + "\" count=\"" + std::to_string( sites.size() ) + "\""
+                                   + rw::declinedLiteralCallsAttrXml( usDeclinedLiteralCalls )
                                    + rw::unprovenDefsAttrXml( usUnprovenDefs )   // H1: where the XML root carries it
                                    + selectorAttrs + usRootAttr + upage + rw::graphCountFloorAttrXml( g )   // §H4 §3.4
                                    + rw::valueRefsDepthAttrXml( ing, usDepthCut, rw::VrRender{ usSingleRoot, usRootPrefix } );   // the depth cut that makes count= a floor; absent when none
@@ -830,8 +875,9 @@ std::optional<int> runUses( const MainDispatch& d )
             return 0;
         }
 
-        rw::emitTo( stdout, "<uses of=\"{}\" defs=\"{}\" external=\"{}\" count=\"{}\"{}{}{}{}{}{}>",
+        rw::emitTo( stdout, "<uses of=\"{}\" defs=\"{}\" external=\"{}\" count=\"{}\"{}{}{}{}{}{}{}>",
                      ex( sym ).c_str(), defs.size(), external ? 1 : 0, sites.size(),
+                     rw::declinedLiteralCallsAttrXml( usDeclinedLiteralCalls ).c_str(),
                      rw::unprovenDefsAttrXml( usUnprovenDefs ).c_str(),   // H1: beside the count it qualifies; absent at zero
                      selectorAttrs.c_str(), usRootAttr.c_str(), upage,
                      rw::graphCountFloorAttrXml( g ).c_str(),

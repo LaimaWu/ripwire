@@ -479,6 +479,38 @@ inline bool langCompatible( Lang a, Lang b ) noexcept
     return aJvm && bJvm;
 }
 
+// TS/JS literal receivers (issue #163): candidate test shared between buildGraph and isBuiltinLiteralCall (verbs_navigate.h).
+// A definition is a polyfill candidate for a literal receiver when it is a scope-matched Method (e.g. JS Foo.prototype.NAME),
+// compatible in language, and within the reference's own root in multi-root workspaces.
+[[nodiscard]] inline bool
+isJsTsLitPolyfillCandidate( const IngestResult& ing, NodeId candSym, std::string_view ctor, Lang refLang, std::uint32_t refFileId ) noexcept
+{
+    if( candSym >= ing.symbols.size() )
+    {
+        return false;
+    }
+    const Symbol& sy = ing.symbols[ candSym ];
+    if( sy.kind != SymKind::Method || sy.scope != ctor || !langCompatible( sy.lang, refLang ) )
+    {
+        return false;
+    }
+    if( !ing.fileRoot.empty() )
+    {
+        if( sy.fileId >= ing.fileRoot.size() || refFileId >= ing.fileRoot.size()
+            || ing.fileRoot[ sy.fileId ] != ing.fileRoot[ refFileId ] )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] inline bool
+isJsTsLitPolyfillCandidate( const IngestResult& ing, NodeId candSym, std::string_view ctor, const Reference& r ) noexcept
+{
+    return isJsTsLitPolyfillCandidate( ing, candSym, ctor, r.lang, r.fileId );
+}
+
 // langCompatible's sibling: which definition KINDS a reference of a given ROLE may bind to. One predicate
 // so the rule is stated ONCE — before it, the same idea lived hard-coded in the inherit overlay
 // (`isClassLikeK`) and the implementors builder (`isClassLike`), which is how two copies of one rule end up
@@ -7388,9 +7420,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 }
                 for( NodeId c : it->second )
                 {
-                    const Symbol& sy = ing.symbols[c];
-                    if( sy.kind == SymKind::Method && sy.scope == ctor
-                        && langCompatible( sy.lang, r.lang ) && sameRoot( c, r.fileId ) )
+                    if( isJsTsLitPolyfillCandidate( ing, c, ctor, r ) )
                     {
                         cand.push_back( c );
                     }
