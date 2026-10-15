@@ -204,15 +204,16 @@ void emitGrepEncRows( const rw::IngestResult& ing, const rw::Graph& g, std::span
 //     (reads_skipped= and reads_next=, the uses verb on the top hit's carrier), never a silent drop or stderr alone.
 struct GrepCarrierReadsSource
 {
-    const rw::IngestResult* reads = nullptr;
-    const char*             skipped = nullptr;   // the root's reads_skipped= value, or nullptr when nothing was skipped
     enum class DisclosureWhy : std::uint8_t { MemoryStop, HardLimit };
-    void disclose( DisclosureWhy why ) noexcept   // a stopped ingest's reads would be short: leave reads= unknown, say so on the root
-    {
-        reads   = nullptr;
-        skipped = why == DisclosureWhy::MemoryStop ? "memory_stop" : "hard_limit";
-    }
+    std::optional<DisclosureWhy> stop;   // set by a stopped second ingest: reads= stays unknown and the root names why
+    void disclose( DisclosureWhy why ) noexcept { stop = why; }
 };
+
+// The root's reads_skipped= spelling of each stop (the legends define both).
+constexpr std::string_view grepReadsSkippedName( GrepCarrierReadsSource::DisclosureWhy why ) noexcept
+{
+    return why == GrepCarrierReadsSource::DisclosureWhy::MemoryStop ? "memory_stop" : "hard_limit";
+}
 
 struct GrepPageCarriers
 {
@@ -220,8 +221,10 @@ struct GrepPageCarriers
     std::string                  skippedAttrs;   // " reads_skipped=… reads_next=…" on a memory-stopped second ingest, else ""
 };
 
-// The second, rich ingest of this run's root(s), or nullopt when the memory guard stopped it (`source` then says why).
-std::optional<rw::IngestResult> grepReadsIngest( const MainDispatch& d, GrepCarrierReadsSource& source )
+// The rich ingest of each root of this run, in order: one for a single root (uncached under --no-cache or a NAMED
+// --cache=F, see above), one per workspace root (main()'s per-root auto-cache keying). A workspace stops adding roots
+// at the first one the guard stopped or that left the footprint over the hard line.
+std::vector<rw::IngestResult> grepReadsRoots( const MainDispatch& d )
 {
     using namespace rw;
     const Config& cfg = d.cfg;
@@ -230,23 +233,29 @@ std::optional<rw::IngestResult> grepReadsIngest( const MainDispatch& d, GrepCarr
         return ingest( dir.c_str(), cfg.excludes, cachePath, cfg.maxFileBytes, /*captureValueUses=*/true, label, /*respectGitignore=*/!cfg.noIgnore );
     };
     std::vector<IngestResult> parts;
-    if( d.multiRoot )
-    {
-        for( const WorkspaceRoot& r : d.ws )
-        {
-            parts.push_back( one( r.arg, r.label, cfg.noCache ? std::string() : defaultCachePath( r.arg, true ) ) );
-            if( parts.back().memoryStop.isSet() || memguard::overHardLimit() )
-            {
-                break;   // the next root would only add to an ingest already over the line
-            }
-        }
-    }
-    else
+    if( !d.multiRoot )
     {
         parts.push_back( one( d.root, {}, cfg.noCache || !cfg.cacheFile.empty() ? std::string() : defaultCachePath( d.root, true ) ) );
+        return parts;
     }
-    const bool stopped = std::ranges::any_of( parts, []( const IngestResult& p ) { return p.memoryStop.isSet(); } );
-    if( stopped || ( d.multiRoot && parts.size() < d.ws.size() ) || memguard::overHardLimit() )
+    for( const WorkspaceRoot& r : d.ws )
+    {
+        parts.push_back( one( r.arg, r.label, cfg.noCache ? std::string() : defaultCachePath( r.arg, true ) ) );
+        if( parts.back().memoryStop.isSet() || memguard::overHardLimit() )
+        {
+            break;   // the next root would only add to an ingest already over the line
+        }
+    }
+    return parts;
+}
+
+// The second, rich ingest of this run's root(s), or nullopt when the memory guard stopped it (`source` then says why).
+std::optional<rw::IngestResult> grepReadsIngest( const MainDispatch& d, GrepCarrierReadsSource& source )
+{
+    using namespace rw;
+    std::vector<IngestResult> parts   = grepReadsRoots( d );
+    const bool                stopped = std::ranges::any_of( parts, []( const IngestResult& p ) { return p.memoryStop.isSet(); } );
+    if( stopped || parts.size() < ( d.multiRoot ? d.ws.size() : 1 ) || memguard::overHardLimit() )
     {
         memguard::answerStops();   // answered here: reads= stays absent (unknown), the rest of the answer is the lean run's
         if( stopped )
@@ -260,7 +269,7 @@ std::optional<rw::IngestResult> grepReadsIngest( const MainDispatch& d, GrepCarr
         return std::nullopt;
     }
     IngestResult rich = d.multiRoot ? mergeWorkspaceIngests( d.ws, parts ) : std::move( parts.front() );
-    if( cfg.ignoreTests )
+    if( d.cfg.ignoreTests )
     {
         applyIgnoreTests( rich );   // the same population the lean ingest answers from
     }
@@ -287,9 +296,10 @@ GrepPageCarriers grepPageCarriers( const MainDispatch& d, std::span<const rw::Gr
     const std::optional<rw::IngestResult> rich = grepReadsIngest( d, source );
     if( !rich )
     {
+        ASSUME( source.stop.has_value(), "grepReadsIngest returns nothing only after a DISCLOSE named the stop" );
         const std::string next = rw::nextFlag( "--uses=", ing.symbols[ hits[0].enclosingId ].name );
         return { rw::grepCarriers( ing, vri, rows, nullptr ),
-                 std::string( " reads_skipped=\"" ) + source.skipped + "\"" + rw::nextAttrXml( next, "reads_next" ) };
+                 std::string( " reads_skipped=\"" ) + std::string( grepReadsSkippedName( *source.stop ) ) + "\"" + rw::nextAttrXml( next, "reads_next" ) };
     }
     return { rw::grepCarriers( ing, vri, rows, &*rich ), {} };
 }
