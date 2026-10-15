@@ -615,7 +615,7 @@ inline void captureRubySingletonAccessors( TSNode root, std::uint32_t fileId, st
 
 // Parser version 145 (test/rubyclassrecvcheck.sh): each mixin the CLASS OBJECT's lookup reaches rather than its
 // instances' — the constants of an `extend M`, and of an `include`/`prepend` inside `class << self` — as a
-// LocalBindKind::RubyClassMixin binding at the constant's own start byte, where captureRubyMixinBases puts its inherit
+// LocalBindKind::RubyClassMixin binding at the constant's own start byte, where emitCapturedMixinBase puts its inherit
 // reference, read where that reads the directive (class-body level, or a concern's `included do`). One a concern's
 // `included do` writes extends the includer, not the concern: importedName kRubyIncluderMark. A class body's `extend self`
 // names no constant: its binding sits at the directive, var "self". A file that never writes `extend` or `<<` is not
@@ -627,7 +627,7 @@ inline bool rubyExtendsSelf( TSNode n ) noexcept
     return !ts_node_is_null( args ) && ts_node_named_child_count( args ) == 1 && kindIs( ts_node_type( ts_node_named_child( args, 0 ) ), "self" );
 }
 
-// The RubyClassMixin bindings of the mixin directive `n` (an `extend` when `extend`), read where captureRubyMixinBases reads
+// The RubyClassMixin bindings of the mixin directive `n` (an `extend` when `extend`), read where emitCapturedMixinBase reads
 // it: one per constant a class object's lookup reaches, and a module body's `extend self`.
 inline void rubyNoteClassMixins( TSNode n, bool extend, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
 {

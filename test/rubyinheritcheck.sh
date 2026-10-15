@@ -548,12 +548,30 @@ end
 RUBY
 if RIPWIRE_TEST_RUBY_BASE_UNSCOPED=1 runq MIXSEAM "$MIXQ" --no-cache --lego=MixA --legend=full
 then
-    echo "$MIXSEAM" | grep -q ' ruby_bases_unscoped="4"' \
-        && ok "slice 4a: 4 mixin inherit refs (2 off one directive, 1 scope_resolution, 1 under class << self) — and neither Logger.new( MixA ) nor the method-body include is one" \
-        || no "slice 4a: expected ruby_bases_unscoped=\"4\" (2 + 1 + 1, the call and the method body refused), got: $( echo "$MIXSEAM" | grep -o 'ruby_bases_unscoped="[0-9]*"' )"
-    echo "$MIXSEAM" | sed 's/></>\n</g' | grep -q '<impl n="Mixed"' \
-        && ok "slice 4a: --lego=MixA lists Mixed — the capture-driven path mints the same ancestry as the walk it replaced" \
-        || no "slice 4a: --lego=MixA lists no Mixed (the mixin ancestry is gone)"
+    if echo "$MIXSEAM" | grep -q ' ruby_bases_unscoped="4"'
+    then
+        ok "slice 4a: 4 mixin inherit refs (2 off one directive, 1 scope_resolution, 1 under class << self) — and neither Logger.new( MixA ) nor the method-body include is one"
+    else
+        no "slice 4a: expected ruby_bases_unscoped=\"4\" (2 + 1 + 1, the call and the method body refused), got: $( echo "$MIXSEAM" | grep -o 'ruby_bases_unscoped="[0-9]*"' )"
+    fi
+    if echo "$MIXSEAM" | sed 's/></>\n</g' | grep -q '<impl n="Mixed"'
+    then
+        ok "slice 4a: --lego=MixA lists Mixed — the capture-driven path mints the same ancestry as the walk it replaced"
+    else
+        no "slice 4a: --lego=MixA lists no Mixed (the mixin ancestry is gone)"
+    fi
+fi
+# The MIGRATION itself. An IMPLEMENTATION guard, deliberately not a behaviour one: this slice is byte-identical by
+# contract, so NO output can tell the capture path from the walk it replaced — which is exactly why the two parity
+# arms above pass on main as well. What only this arm can catch is the regression they cannot: restoring the retired
+# Ruby-only walk, or dropping the capture, leaves every output byte the same while undoing the slice's whole point.
+# Red on main, green here — the one "red first" a behaviour-preserving slice has.
+if grep -q '@reference.mixin' "$ROOT/queries/ruby/tags.scm" 2>/dev/null \
+   && ! grep -qE 'void captureRubyMixinBases *\(' "$ROOT/src/ingest_relations.h" 2>/dev/null
+then
+    ok "slice 4a: the mixin read is queries/ruby/tags.scm's @reference.mixin capture, and the retired captureRubyMixinBases definition is gone"
+else
+    no "slice 4a: the migration is undone — tags.scm @reference.mixin=$( grep -c '@reference.mixin' "$ROOT/queries/ruby/tags.scm" 2>/dev/null ), ingest_relations.h captureRubyMixinBases definition=$( grep -cE 'void captureRubyMixinBases *\(' "$ROOT/src/ingest_relations.h" 2>/dev/null )"
 fi
 
 echo

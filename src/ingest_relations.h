@@ -944,7 +944,7 @@ inline void wrappedBase( TSNode wn, std::uint32_t fileId, Lang lang, std::string
 // C#/PHP/Kotlin/Ruby. Ruby reuses the `superclass` clause name Java's extends clause already has, and
 // names its base with (constant)/(scope_resolution) — see isBaseTypeNodeIn. A Ruby MIXIN
 // (`include M` / `extend M` / `prepend M`) is a call in the class BODY, not a clause, so it is captured where
-// the call is read instead: captureRubyMixinBases (parser version 131; test/rubyreachcheck.sh). Lua is deliberately absent and it is a DISCLOSED non-goal, not an omission: Lua inheritance IS
+// the call is read instead: the @reference.mixin capture (parser version 131; test/rubyreachcheck.sh). Lua is deliberately absent and it is a DISCLOSED non-goal, not an omission: Lua inheritance IS
 // `setmetatable( Derived, { __index = Base } )`, an ordinary runtime call over an ordinary table, so there
 // is no syntax to read and a Lua corpus correctly reports no inheritance edges at all.
 //
@@ -2015,7 +2015,7 @@ inline std::string_view rubyNamedDirective( TSNode n, std::string_view src, std:
 // `include A, B` / `extend M` / `prepend P` — ONE directive naming N constants and therefore N Include
 // records, in SOURCE order (the same shape as elixirAliasGroup). A non-constant argument (`include
 // Object.const_get(:X)`, `include mod`) contributes nothing; the constant ones beside it still do. The constant
-// NODES: captureIncludes reads each one's text for its Include record, and captureRubyMixinBases its byte.
+// NODES: captureIncludes reads each one's text for its Include record, and the @reference.mixin capture its byte.
 inline std::vector<TSNode> rubyMixinTargets( TSNode n, std::string_view src )
 {
     std::vector<TSNode>    out;
