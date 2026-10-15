@@ -27,7 +27,8 @@
 #   disclosure. Rows are added in rank order while they fit T; the rank 1..4 floor always ships; there is no byte
 #   promise, so nothing is labelled over a ceiling and nothing in the header is dropped to fit:
 #     (ST)  stop at target, in the default and --signatures-only modes: the rows' bytes fit T (or are only the
-#           floor), and when rows were left out the next row of the complete answer would cross T (fill is maximal);
+#           floor), and when rows were left out the next row of the complete answer would cross T less the trailing
+#           sections' bytes (round C: sections are reserved first, rows fill the rest; fill is maximal);
 #     (E1)  no over_ceiling= at a tight target; the floor rows ship; the <sigs> cut carries next=;
 #     (E2)  no legend clause is dropped: at every N the legend's clauses include the wide answer's (present-only
 #           clauses aside), the root keeps task= and route=, the full dialect keeps its task echo; and a 900-char
@@ -145,7 +146,8 @@ def clauses( path ):
     if not com: sys.exit( 3 )
     out = set()
     for c in com:
-        for seg in re.split( r'\s*(?:\[|\]|;\s|\.\s|\s—\s)\s*', c ):
+        # " est_tokens= prices…" is spliced after the last clause with a bare space (pre-existing): a clause boundary too
+        for seg in re.split( r'\s*(?:\[|\]|;\s|\.\s|\s—\s|\s(?=est_tokens= prices))\s*', c ):
             seg = re.sub( r'\d+', '#', re.sub( r'\s+', ' ', seg ) ).strip( ' .:;' )
             if len( seg ) >= 12: out.add( seg )
     return out
@@ -437,14 +439,20 @@ def rb( p ):
     rows.sort()
     return len( inner.encode() ) + elided, rows
 a, ref, T = rb( sys.argv[ 1 ] ), rb( sys.argv[ 2 ] ), int( sys.argv[ 3 ] )
+# round C (owner decision 2026-10-14: RESERVE SECTIONS FIRST): the trailing sections (and the <hdr> rows) are served first
+# and the rows past the target cut fill what they leave of T — the maximality bound is T less the bytes of those sections (U, read
+# off the answer: everything after </sigs> but </ctx>, plus the <hdr> rows before it)
+ans = open( sys.argv[ 1 ] ).read()
+U = ( len( ans.split( '</sigs>', 1 )[ 1 ].encode() ) - len( '</ctx>' ) if '</sigs>' in ans else 0 )
+U += sum( len( h.encode() ) for h in re.findall( r'<hdr [^>]*/>', ans.split( '<sigs', 1 )[ 0 ] ) )
 if a is None or ref is None: print( "ERR no <sigs>" ); sys.exit( 0 )
 ab, ar = a; rr = ref[ 1 ]
 k = len( ar )
 fits = ab <= T or k <= 4
 if k >= len( rr ): print( "OK fits=%d rows=%d/%d charged=%d T=%d complete" % ( fits, k, len( rr ), ab, T ) ); sys.exit( 0 )
 nxt = rr[ k ][ 1 ]
-maximal = ab + nxt > T - 160
-print( "%s fits=%d maximal=%d rows=%d/%d charged=%d next=%d T=%d" % ( "OK" if fits and maximal else "BAD", fits, maximal, k, len( rr ), ab, nxt, T ) )
+maximal = ab + nxt > T - U - 160
+print( "%s fits=%d maximal=%d rows=%d/%d charged=%d next=%d T=%d U=%d" % ( "OK" if fits and maximal else "BAD", fits, maximal, k, len( rr ), ab, nxt, T, U ) )
 PY
 )"
         case "$st" in
@@ -546,6 +554,122 @@ EOC="$( attr ctx over_ceiling "$TMP/mcp_explore.xml" 2>/dev/null )"; ea=$?
 if [ "$ea" -ne 0 ]; then no "(P3) MCP explore budget_tokens=300 produced no <ctx> root"
 elif [ -z "$EOC" ]; then ok "(P3) MCP explore budget_tokens=300: no over_ceiling= (soft target)"
 else no "(P3) MCP explore budget_tokens=300: over_ceiling='$EOC'"; fi
+
+# ── ROUND C (owner decisions 2026-10-14) ─────────────────────────────────────────────────────────────────────
+# FOLD C: the default answer's <tail> carries the file page's first page (`--for=TASK --limit=40`): after the rank rows
+# (paths only: the positive-score files outside the shown sigs rows), the page's first 40 rows not already listed, each with
+# sym=; total= every positive-score file (the page's total=); a cut tail's next= is the page from its first unprinted page row.
+# RESERVE SECTIONS FIRST: under an explicit --token-budget the trailing sections (<hops>, <lego>, <compose>, the tail) keep at
+# least the share the retired hard ceiling gave them, and the rows past its cut fill what they leave of T (ST above reads T - U).
+cat > "$TMP/tail.py" <<'PY'
+# tail.py FILE MODE: the <tail> of an answer — "rank" (paths of rows without sym=), "page" (p<TAB>sym of rows with sym=),
+# "all" (p<TAB>sym), "attrs" (total shown capped next). exit 3: no <tail>.
+import re, sys, html
+s = open( sys.argv[ 1 ] ).read()
+m = re.search( r'<tail\b([^>]*)>(.*?)</tail>', s, re.S )
+if not m: sys.exit( 3 )
+a = dict( re.findall( r'(\w+)="([^"]*)"', m.group( 1 ) ) )
+rows = [ ( html.unescape( p ), html.unescape( y ), bool( h ) ) for p, h, y in re.findall( r'<t p="([^"]*)"( sym="([^"]*)")?/>', m.group( 2 ) ) ]
+mode = sys.argv[ 2 ]
+if mode == "attrs": print( a.get( "total", "" ), a.get( "shown", "" ), a.get( "capped", "" ), html.unescape( a.get( "next", "" ) ) )
+for p, y, h in rows:
+    if mode == "rank" and not h: print( p )
+    if mode == "page" and h: print( p + "\t" + y )
+    if mode == "all": print( p + "\t" + y )
+PY
+cat > "$TMP/page.py" <<'PY'
+# page.py RANKFILE < page: the page's rows (p<TAB>sym) not among RANKFILE's paths, in page order; "total=N" first
+import re, sys, html
+s = sys.stdin.read(); rank = set( open( sys.argv[ 1 ] ).read().split( "\n" ) )
+m = re.search( r'<files\b[^>]*\btotal="([0-9]+)"', s ); print( "total=" + ( m.group( 1 ) if m else "" ) )
+for p, y in re.findall( r'<f p="([^"]*)"[^>]*? sym="([^"]*)"', s ):
+    if html.unescape( p ) not in rank: print( html.unescape( p ) + "\t" + html.unescape( y ) )
+PY
+# (C1) the default answer's tail: rank rows outside the shown head, then page 0 of the file page, sym= equal
+if python3 "$TMP/tail.py" "$TMP/def.xml" attrs > "$TMP/c1.attrs"; then
+    read -r C1T C1S C1C C1N < "$TMP/c1.attrs"
+    python3 "$TMP/tail.py" "$TMP/def.xml" rank > "$TMP/c1.rank"; python3 "$TMP/tail.py" "$TMP/def.xml" page > "$TMP/c1.page"
+    "$BIN" "$CORPUS" --for="$Q" --limit=40 "$CF" 2>/dev/null | python3 "$TMP/page.py" "$TMP/c1.rank" > "$TMP/c1.want"
+    C1PT="$( head -1 "$TMP/c1.want" | sed 's/total=//' )"; sed -i.bak '1d' "$TMP/c1.want"
+    C1DUP="$( python3 - "$TMP/def.xml" "$TMP/c1.rank" <<'PY'
+import re, sys
+head = set( re.findall( r'<d [^>]*?\bp="([^"]*)"', open( sys.argv[ 1 ] ).read() ) )
+print( sum( 1 for p in open( sys.argv[ 2 ] ).read().split( "\n" ) if p in head ) )
+PY
+)"
+    if [ -s "$TMP/c1.page" ] && cmp -s "$TMP/c1.page" "$TMP/c1.want" && [ "$C1T" = "$C1PT" ] && [ "$C1DUP" = 0 ] && [ "$( lines "$TMP/c1.rank" )" -le 24 ]; then
+        ok "(C1) default tail: $( lines "$TMP/c1.rank" ) rank rows outside the head, then the page's first rows ($( lines "$TMP/c1.page" ), sym= equal); total=$C1T == the page's"
+    else
+        no "(C1) default tail: page rows $( lines "$TMP/c1.page" ) vs the page's $( lines "$TMP/c1.want" ), total=$C1T vs page $C1PT, $C1DUP rank row(s) in the head"
+    fi
+    # (C2) a capped tail's next= is the page from its first unprinted page row, and it runs (rc 0, a <files> page at that offset)
+    if [ "$C1C" = 1 ] && [ "$C1S" -lt "$C1T" ]; then
+        C2OFF="$( printf '%s' "$C1N" | sed -nE "s/^--for='.*' --limit=40( --offset=([0-9]+))?\$/\2/p" )"
+        if printf '%s' "$C1N" | grep -qE "^--for='$Q' --limit=40( --offset=[0-9]+)?\$" && run_next "$C1N" "$TMP/c2.xml" \
+           && grep -qE "^<files [^>]* offset=\"${C2OFF:-0}\"" "$TMP/c2.xml" && [ "${C2OFF:-0}" -ge "$( lines "$TMP/c1.page" )" ]; then
+            ok "(C2) the capped tail's next= ('${C1N:0:70}…') runs and serves the page from offset ${C2OFF:-0} (past every page row it printed)"
+        else
+            no "(C2) the capped tail's next= ('$C1N') is not the file page from its first unprinted row, or did not run"
+        fi
+    else
+        no "(C2) premise: the default tail is not capped (total=$C1T shown=$C1S) — re-anchor on a capped tail"
+    fi
+    # (C3) the size is disclosed: est_tokens= on the root prices the whole answer, tail included (markup rate 2.5 B/token)
+    C3E="$( attr ctx est_tokens "$TMP/def.xml" )"; C3B="$( wc -c < "$TMP/def.xml" | tr -d ' ' )"
+    if isnum "$C3E" && [ "$(( C3E * 25 ))" -ge "$(( C3B * 10 * 97 / 100 ))" ]; then ok "(C3) est_tokens=$C3E prices the $C3B-byte answer, its tail included"
+    else no "(C3) est_tokens='$C3E' does not price the $C3B-byte answer (the tail rides unpriced)"; fi
+else
+    no "(C1) the default answer carries no <tail>"
+fi
+# (C4) the JSON twin: the same tail rows (files + sym index-aligned), total=, next present exactly when cut
+cli_for --json > "$TMP/def.json"
+C4="$( python3 - "$TMP/def.json" "$TMP/def.xml" <<'PY'
+import json, re, sys, html
+t = json.load( open( sys.argv[ 1 ] ) ).get( "tail", {} ); x = open( sys.argv[ 2 ] ).read()
+xa = dict( re.findall( r'(\w+)="([^"]*)"', re.search( r'<tail\b([^>]*)>', x ).group( 1 ) ) )
+xr = [ ( html.unescape( p ), html.unescape( y ) ) for p, _, y in re.findall( r'<t p="([^"]*)"( sym="([^"]*)")?/>', x ) ]
+ok = list( zip( t.get( "files", [] ), t.get( "sym", [] ) ) ) == xr and str( t.get( "total" ) ) == xa.get( "total" ) \
+     and ( "next" in t ) == ( xa.get( "capped" ) == "1" ) and ( t.get( "next" ) or "" ) == html.unescape( xa.get( "next", "" ) )
+print( "OK" if ok else "BAD json rows=%d xml rows=%d total %s/%s" % ( len( t.get( "files", [] ) ), len( xr ), t.get( "total" ), xa.get( "total" ) ) )
+PY
+)"
+[ "$C4" = OK ] && ok "(C4) --json tail == the XML tail (files + sym, total=, next)" || no "(C4) --json tail differs from the XML tail: $C4"
+# (C5) the MCP twin serves the same tail rows as the CLI default
+mcp_call for "$Q" > "$TMP/mcp_def_tail.xml"
+if python3 "$TMP/tail.py" "$TMP/mcp_def_tail.xml" all > "$TMP/c5.mcp" && python3 "$TMP/tail.py" "$TMP/def.xml" all > "$TMP/c5.cli" \
+   && [ -s "$TMP/c5.cli" ] && cmp -s "$TMP/c5.mcp" "$TMP/c5.cli"; then ok "(C5) MCP for serves the CLI default's tail rows ($( lines "$TMP/c5.cli" ), sym= included)"
+else no "(C5) MCP for's tail rows differ from the CLI default's ($( lines "$TMP/c5.mcp" ) vs $( lines "$TMP/c5.cli" ))"; fi
+# (C6) under every explicit target of the sweep the tail is present, and a cut tail names a next= that runs
+for n in "${SWEEP[@]}"; do
+    f="$TMP/t_${n}_full.xml"
+    if ! python3 "$TMP/tail.py" "$f" attrs > "$TMP/c6.attrs"; then no "(C6) N=$n: no <tail>"; continue; fi
+    read -r T6 S6 C6 N6 < "$TMP/c6.attrs"
+    if [ "$C6" = 1 ]; then
+        if [ -n "$N6" ] && run_next "$N6" "$TMP/c6.xml" && grep -q '^<files ' "$TMP/c6.xml"; then ok "(C6) N=$n: the cut tail ($S6 of $T6) names a next= that runs"
+        else no "(C6) N=$n: the cut tail ($S6 of $T6) names no runnable next= ('$N6')"; fi
+    else ok "(C6) N=$n: the tail is complete ($S6 of $T6)"; fi
+done
+# (RF1) RESERVE SECTIONS FIRST, pinned against the retired hard ceiling (d4325a8c) on frozen in-repo fixtures: each trailing
+# section keeps at least the rows that ceiling served it at the same N. Round B's soft target (sections took what the rows
+# left of T) served 0 rows in every case below (RED on 13297e3a); lower bounds, never equalities.
+cat > "$TMP/sec.py" <<'PY'
+# sec.py SECTION < answer: the section's rows (lego: iface+impl+m; tail: t; hops: h+c)
+import re, sys
+tags = { "lego": ( "iface", "impl", "m" ), "tail": ( "t", ), "hops": ( "h", "c" ) }[ sys.argv[ 1 ] ]
+s = sys.stdin.read(); m0 = re.search( r'<%s\b[^>]*>' % sys.argv[ 1 ], s )
+if not m0: print( 0 ); sys.exit( 0 )
+el = m0.group( 0 ) if m0.group( 0 ).endswith( "/>" ) else s[ m0.start(): s.find( "</%s>" % sys.argv[ 1 ], m0.end() ) ]
+print( sum( len( re.findall( r'<%s[ >/]' % t, el ) ) for t in tags ) )
+PY
+QNODE="where is the node interface implemented"; QHAND="how does the handler process a request and call the service"
+for spec in "legotransitivefix|$QNODE|600|lego|9" "legotransitivefix|$QNODE|1000|lego|9" "forcompletefix|$QNODE|1500|tail|11" \
+            "forcompletefix|$QNODE|3000|tail|1" "forcompletefix|$QHAND|3000|tail|1"; do
+    IFS='|' read -r fx q n sec want <<< "$spec"
+    "$BIN" "test/$fx" --no-cache --for="$q" --token-budget="$n" > "$TMP/rf.xml" 2>/dev/null; rrc=$?
+    got="$( python3 "$TMP/sec.py" "$sec" < "$TMP/rf.xml" )"
+    if [ "$rrc" -eq 0 ] && isnum "$got" && [ "$got" -ge "$want" ]; then ok "(RF1) $fx '$q' N=$n: <$sec> keeps $got rows >= the retired ceiling's $want"
+    else no "(RF1) $fx '$q' N=$n: <$sec> serves '$got' rows < the retired ceiling's $want (rc=$rrc) — a section lost its share to the rows"; fi
+done
 
 # ── twins: the CI-gate personality of --token-budget is unchanged on the map, --query and --recall ───────
 "$BIN" "$CORPUS" --token-budget=100 "$CM" > "$TMP/map.out" 2>/dev/null; grc=$?
