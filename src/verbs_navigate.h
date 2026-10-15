@@ -590,10 +590,13 @@ inline std::vector<char> usesChosenCallers( const rw::IngestResult& ing, const r
 // Named function-expression polyfills (String.prototype.padStart = function padStart(n) { ... }, indexed as plain functions)
 // and TS prototype assignments drop their literal calls from --uses, matching graph.h.
 [[nodiscard]] inline bool
-isBuiltinLiteralCall( const rw::IngestResult& ing, const rw::Reference& r, std::span<const rw::NodeId> valueDefs ) noexcept
+isBuiltinLiteralCall( const rw::IngestResult& ing, const rw::Reference& r,
+                      std::span<const rw::NodeId> valueDefs,
+                      std::span<const rw::NodeId> literalDefs = {} ) noexcept
 {
     using namespace rw;
-    if( valueDefs.empty() )
+    const std::span<const rw::NodeId> checkDefs = literalDefs.empty() ? valueDefs : literalDefs;
+    if( checkDefs.empty() )
     {
         return false;
     }
@@ -632,7 +635,8 @@ struct UseSite { std::uint32_t fileId; std::uint32_t line; rw::RefRole role; std
 inline std::pair<std::vector<UseSite>, std::size_t>
 collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span<const char> isChosenCaller,
                  std::string_view rootForId = {}, std::span<const rw::NodeId> valueDefs = {},
-                 const rw::ValueRefIndex* valueIndex = nullptr, std::size_t* outDeclinedLiteralCalls = nullptr )
+                 const rw::ValueRefIndex* valueIndex = nullptr, std::size_t* outDeclinedLiteralCalls = nullptr,
+                 std::span<const rw::NodeId> literalDefs = {} )
 {
     using namespace rw;
     std::vector<UseSite> sites;
@@ -664,7 +668,7 @@ collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span
         if( r.role == RefRole::Call )
         {
             ++callSitesOfName;
-            if( isBuiltinLiteralCall( ing, r, valueDefs ) )
+            if( isBuiltinLiteralCall( ing, r, valueDefs, literalDefs ) )
             {
                 if( outDeclinedLiteralCalls != nullptr )
                 {
@@ -780,9 +784,10 @@ std::optional<int> runUses( const MainDispatch& d )
         // The value index is this verb's own, so the depth cut the --callers answer discloses (valuerefs.h) is read off the
         // SAME index the role="value" rows come from: a file nested past the walk's cap holds a use below it that no row shows.
         const rw::ValueRefIndex usVri( ing );
+        const std::vector<NodeId> literalDefs = ( sel.fileQualified || sel.scopeNarrowed ) ? rw::resolveAllByName( ing, sel.siteMatchName ) : std::vector<NodeId>{};
         std::size_t usDeclinedLiteralCalls = 0;
         auto [ sites, callSitesOfName ] = collectUseSites( ing, sel, isChosenCaller,
-                                                           usSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, &usVri, &usDeclinedLiteralCalls );
+                                                           usSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, &usVri, &usDeclinedLiteralCalls, literalDefs );
         const rw::ValueRefIndex::DepthCuts usDepthCut = usVri.depthCutsFor( defs );
         rw::rankUseSites( ing, g, sites );   // cut-fix C: most-depended-on sites first, so the cap drops the lightest
 
