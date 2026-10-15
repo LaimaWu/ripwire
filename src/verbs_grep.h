@@ -209,11 +209,8 @@ struct GrepCarrierReadsSource
     void disclose( DisclosureWhy why ) noexcept { stop = why; }
 };
 
-// The root's reads_skipped= spelling of each stop (the legends define both).
-constexpr std::string_view grepReadsSkippedName( GrepCarrierReadsSource::DisclosureWhy why ) noexcept
-{
-    return why == GrepCarrierReadsSource::DisclosureWhy::MemoryStop ? "memory_stop" : "hard_limit";
-}
+// The root's reads_skipped= spelling of each stop, indexed by DisclosureWhy (the legends define both).
+inline constexpr std::array<std::string_view, 2> kGrepReadsSkippedName = { "memory_stop", "hard_limit" };
 
 struct GrepPageCarriers
 {
@@ -299,7 +296,7 @@ GrepPageCarriers grepPageCarriers( const MainDispatch& d, std::span<const rw::Gr
         ASSUME( source.stop.has_value(), "grepReadsIngest returns nothing only after a DISCLOSE named the stop" );
         const std::string next = rw::nextFlag( "--uses=", ing.symbols[ hits[0].enclosingId ].name );
         return { rw::grepCarriers( ing, vri, rows, nullptr ),
-                 std::string( " reads_skipped=\"" ) + std::string( grepReadsSkippedName( *source.stop ) ) + "\"" + rw::nextAttrXml( next, "reads_next" ) };
+                 std::string( " reads_skipped=\"" ) + std::string( kGrepReadsSkippedName[ static_cast<std::size_t>( *source.stop ) ] ) + "\"" + rw::nextAttrXml( next, "reads_next" ) };
     }
     return { rw::grepCarriers( ing, vri, rows, &*rich ), {} };
 }
