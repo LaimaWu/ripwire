@@ -345,8 +345,8 @@ inline ForBodySlotOwner forBodySlotOwner( const IngestResult& ing, const std::ve
     {
         out = ForBodySlotOwner{ s, BodySlotPick::Subtoken };
     }
-    ENSURES( !out.any() || ( out.id < ing.symbols.size() && isOwnerCallableDef( ing, out.id ) ),
-             "the body slot's owner is one indexed callable definition outside the test partition" );
+    const bool ownerIsCallableDef = !out.any() || ( out.id < ing.symbols.size() && isOwnerCallableDef( ing, out.id ) );
+    ENSURES( ownerIsCallableDef, "the body slot's owner is one indexed callable definition outside the test partition" );
     return out;
 }
 

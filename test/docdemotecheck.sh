@@ -99,6 +99,10 @@ PY
 "$BIN" docdemotefix --for="$BUGQ" --no-route --format=candidates --no-cache >"$TMP/noroute.xml" 2>/dev/null
 "$BIN" docdemotefix --for="$BUGQ"     --no-cache >"$TMP/bugfor.xml"    2>/dev/null
 "$BIN" docdemotefix --for="$TRACEQ"   --no-cache >"$TMP/tracefor.xml"  2>/dev/null
+# RE-PIN 2026-10-15 (lane for-body-slot, train 28; rule 4, by design): docdemotegolden_for.xml 6529 -> 7540 B (est_tokens
+# "2616" -> "2979"). The question is explanatory ("how does …"), so the compact route now carries ONE owner body (pick=subtoken
+# pin_page) and its legend clause; root bodies="1" reason="owner". Checked: the same binary with RIPWIRE_NO_BODY_SLOT=1 answers
+# the old golden byte for byte — no ranking, demotion or route byte moved.
 # RE-PIN 2026-10-15 (lane forbudget-soft round C, FOLD C; rule 4): docdemotegolden_for.xml 5839 -> 6529 B (est_tokens "2340" ->
 # "2616") and docdemotegolden_noroute.xml 9350 -> 10039 B ("3309" -> "3584"). Only the <tail> (page 0 of the file page after the
 # rank rows, sym= on its rows, total= every positive-score file), the tail legend clause and est_tokens= moved (checked byte-equal
