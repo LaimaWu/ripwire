@@ -1500,7 +1500,7 @@ inline std::vector<std::vector<std::uint32_t>> gitLogFileSets( const std::string
     // open --name-only pipe would leave a filled pipe buffer waiting on us while we wait on the probe.
     const GitPathIndex byGitPath = gitPathIndexOfFiles( ing, onlyRoot );
 
-    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " log " + kMergeDiffArgs + windowArgs + "--name-only --format=tformat:__C__ 2>/dev/null";
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " log --no-ext-diff --no-textconv " + kMergeDiffArgs + windowArgs + "--name-only --format=tformat:__C__ 2>/dev/null";
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
@@ -1623,7 +1623,7 @@ inline RawCommitStream gitLogNameOnlyRaw( const std::string& root, const std::st
     PROFILE_SCOPE_DESCRIBE( "gitmine: gitLogNameOnlyRaw (git log --name-only popen)" );
     RawCommitStream out;
     const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
-                          + " log " + kMergeDiffArgs + "--since=" + shSingleQuote( defaultWindowSince( root, coSince ) )   // F1: HEAD-anchored when `coSince` is a default month window
+                          + " log --no-ext-diff --no-textconv " + kMergeDiffArgs + "--since=" + shSingleQuote( defaultWindowSince( root, coSince ) )   // F1: HEAD-anchored when `coSince` is a default month window
                           + " --name-only --format=tformat:__C__%x20%ct 2>/dev/null";
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
@@ -1676,7 +1676,7 @@ inline std::string gitWindowBoundarySha( const std::string& root, const std::str
     // G3: the shared reader, not a private `char buf[128]` + fgets accumulate. `| tail -1` already reduces
     // the output to one line, so `.back()` is that line; gitCommandLines has already stripped its CR/LF tail.
     const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
-                          + " log --since=" + shSingleQuote( defaultWindowSince( root, coSince ) )   // F1: the probe must resolve the window it guards, by the same rule
+                          + " log --no-ext-diff --no-textconv --since=" + shSingleQuote( defaultWindowSince( root, coSince ) )   // F1: the probe must resolve the window it guards, by the same rule
                           + " --format=%H 2>/dev/null | tail -1";
     const GitCommandLines res = gitCommandLines( cmd );
     if( !res.isStarted || res.lines.empty() )
@@ -1798,7 +1798,7 @@ inline std::int64_t gitHeadCommitEpoch( const std::string& root )
 {
     // G3: the shared reader. `log -1 --format=%ct` prints exactly one line, so the first is the whole
     // answer; gitCommandLines strips the CR/LF tail, and the trailing-space strip is kept for the value.
-    const std::string     cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " log -1 --format=%ct HEAD 2>/dev/null";
+    const std::string     cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " log --no-ext-diff --no-textconv -1 --format=%ct HEAD 2>/dev/null";
     const GitCommandLines res = gitCommandLines( cmd );
     if( !res.isStarted || res.lines.empty() )
     {
@@ -1841,7 +1841,7 @@ inline std::vector<std::uint32_t> gitFileCommitCountsInDayWindow( const std::str
     // Stream `git log --name-only` with each commit's epoch on its __C__ marker line: "__C__ <epoch>".
     // A commit counts once per file it touches, iff its epoch is within [cutoff, headEpoch].
     const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
-                          + " log " + kMergeDiffArgs + "--name-only --format=tformat:__C__%x20%ct 2>/dev/null";
+                          + " log --no-ext-diff --no-textconv " + kMergeDiffArgs + "--name-only --format=tformat:__C__%x20%ct 2>/dev/null";
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
     {
@@ -2069,7 +2069,7 @@ inline DecayedChurnMined gitLogDecayedFileMining( const std::string& root, const
     // built BEFORE the log pipe opens, for the reason gitLogFileSets states: it runs a git probe of its own.
     const GitPathIndex byGitPath = gitPathIndexOfFiles( ing, onlyRoot );
 
-    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " log " + kMergeDiffArgs + windowArgs
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " log --no-ext-diff --no-textconv " + kMergeDiffArgs + windowArgs
                           + "--name-only --format=tformat:__C__%x20%ct 2>/dev/null";
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
@@ -2433,7 +2433,7 @@ inline std::vector<FileOwnership> gitFileAuthors(
     // -- <relpath>): one "__C__email|unix-ts" header per commit, then its changed files, one per line,
     // until a blank line / the next header. Mirrors gitCommitFileSets' exact invocation style.
     std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root )
-                     + " log " + kMergeDiffArgs + "--name-only --format=tformat:__C__%ae\\|%at";
+                     + " log --no-ext-diff --no-textconv " + kMergeDiffArgs + "--name-only --format=tformat:__C__%ae\\|%at";
     if( singleFile )
     {
         const std::string& fp = ing.files[ onlyFileId ];
@@ -3362,7 +3362,7 @@ inline bool gitChurnCounts( const std::string& root, const rw::IngestResult& ing
 {
     const std::string windowArgs = rw::historyWindowArgs( root, scope, since );
     const rw::GitCommandLines touched = rw::gitCommandLines(
-        gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " log " + rw::kMergeDiffArgs + windowArgs + "--name-only --format= 2>/dev/null" );
+        gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " log --no-ext-diff --no-textconv " + rw::kMergeDiffArgs + windowArgs + "--name-only --format= 2>/dev/null" );
     if( !touched.isStarted )
     {
         return false;

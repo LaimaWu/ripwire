@@ -248,7 +248,7 @@ inline int writeHandoffPacket( std::FILE* out, const std::string& root, const In
     };
 
     const std::string branch  = gitOneLine( root, "rev-parse --abbrev-ref HEAD" );
-    const std::string subject = gitOneLine( root, "log -1 --format=%s" );
+    const std::string subject = gitOneLine( root, "log --no-ext-diff --no-textconv -1 --format=%s" );
     const std::string at      = gitstamp::atAttr( root );
 
     auto [ changedMask, gitOk ] = gitDiffChangedMask( root, ing );

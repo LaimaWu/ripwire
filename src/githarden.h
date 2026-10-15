@@ -30,6 +30,16 @@
 // The trust decision is PER PROCESS: a long-lived --mcp server probes its roots once at start. A config edited
 // under a running server is not re-read — the same freshness contract every other startup-only fact has here.
 //
+// FILTER DRIVERS (2026-10-15). The same trust class reaches git through `filter.<name>.clean/smudge/process`: a
+// repository-local config can name a program that git runs whenever it re-hashes a stale working-tree file (`git
+// status`, a diff against the working tree) or exports one (`git archive`), and the driver name is the repository's
+// choice, so no fixed -c key covers it. hardenFilterDriversFor() asks git which drivers the local/worktree scopes
+// define (cheap-tier gated on the same candidate files: "filter" or "include") and pins each to an empty command on
+// every later git child (gitcmd.h FILTER DRIVERS), disclosing git_harden=filter-driver. A server that meets a root
+// only in a request (MCP/LSP with no startup root) probes it on first sighting (hardenLateRoot, from getIndex).
+// Diff programs (diff.external, diff.<driver>.command/textconv) are refused at the call site instead, with
+// --no-ext-diff --no-textconv; submodule repositories are not entered (--ignore-submodules=dirty).
+//
 // NOT covered, and measured NOT to fire here: a `post-index-change` hook under `git status --porcelain` (git 2.50.1,
 // the same fixture). Hooks are the same trust class as config, but an arm that cannot be observed to fire is not
 // asserted (CONTRIBUTING §2) — so nothing is claimed for hooks. Revisit when a git version is shown to run one on
@@ -47,6 +57,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -273,8 +285,18 @@ inline std::vector<std::filesystem::path> localConfigCandidates( const std::file
     return out;
 }
 
-inline bool localConfigMayCarryFsmonitor( const std::string& root )
+// One read of the local config candidates, two questions: could a file carry core.fsmonitor, and could one carry a
+// filter driver? "include" answers yes to both — an include can bring in either key. Same soundness argument as above:
+// a key git honours must be spelled in one of these files or reached through an include they name.
+struct LocalConfigNeedles
 {
+    bool fsmonitor = false;
+    bool filter    = false;
+};
+
+inline LocalConfigNeedles localConfigNeedles( const std::string& root )
+{
+    LocalConfigNeedles found;
     for( const std::filesystem::path& candidate : localConfigCandidates( root ) )
     {
         std::optional<std::string> bytes = pathguard::readRegularFileNoFollow( candidate.string() );
@@ -286,12 +308,162 @@ inline bool localConfigMayCarryFsmonitor( const std::string& root )
         {
             if( c >= 'A' && c <= 'Z' ) { c = static_cast<char>( c + ( 'a' - 'A' ) ); }
         }
-        if( bytes->find( "fsmonitor" ) != std::string::npos || bytes->find( "include" ) != std::string::npos )
+        const bool include = bytes->find( "include" ) != std::string::npos;
+        found.fsmonitor    = found.fsmonitor || include || bytes->find( "fsmonitor" ) != std::string::npos;
+        found.filter       = found.filter || include || bytes->find( "filter" ) != std::string::npos;
+    }
+    return found;
+}
+
+// ── filter drivers the REPOSITORY's own config names (gitcmd.h FILTER DRIVERS) ─────────────────────────────
+//
+// `git config --show-scope -z --get-regexp` lists every filter.<name>.clean/smudge/process with the scope it came
+// from; an include is reported with the scope of the file that included it. Only `local` and `worktree` are the
+// repository's own writing: `global`/`system` are the user's and the machine's (git-lfs installs its driver
+// there), and `command` is this process's own -c pins and the caller's GIT_CONFIG_* block. The read is a config
+// read — it refreshes no index and starts no program. -z keeps a name with any byte but NUL/newline intact:
+// each entry is "scope\0key\nvalue\0".
+//
+// A git older than 2.26 has no --show-scope and rejects the option (exit 129). The fallback reads the same
+// entries WITHOUT scope and pins every one of them, the user's global drivers included: over-neutralising is the
+// safe direction, and the disclosure says scope="all" so the difference is visible.
+struct FilterDriverProbe
+{
+    std::vector<std::string> names;          // distinct driver names, in the order git listed them
+    bool                     allScopes = false;   // the pre-2.26 fallback: scope could not be read, every scope pinned
+};
+
+inline bool readConfigListing( const std::string& root, bool withScope, std::string& body )
+{
+    const std::string out = popenTrimmed( hardenedGitPrefix( root ) + " config" + ( withScope ? " --show-scope" : "" )
+                                          + " -z --get-regexp '^filter\\..*\\.(clean|smudge|process)$' 2>/dev/null; printf '\\nrc=%s' \"$?\"" );
+    const std::size_t rcAt = out.rfind( "\nrc=" );
+    if( rcAt == std::string::npos )
+    {
+        return false;
+    }
+    const std::string_view rc = std::string_view( out ).substr( rcAt + 4 );
+    if( rc != "0" && rc != "1" )
+    {
+        return false;   // 1 is "no match"; anything else is git refusing the command line or the config
+    }
+    body = out.substr( 0, rcAt );
+    return true;
+}
+
+// "filter.<name>.<var>\n<value>" → <name>. The name is everything between the section's dot and the LAST dot, so a
+// name holding dots survives; nullopt for anything that is not a filter driver key.
+inline std::optional<std::string> filterDriverNameOf( std::string_view entry )
+{
+    entry                               = entry.substr( 0, entry.find( '\n' ) );   // the key; the value follows the newline
+    constexpr std::string_view kSection = "filter.";
+    const std::size_t          lastDot  = entry.rfind( '.' );
+    if( !entry.starts_with( kSection ) || lastDot == std::string_view::npos || lastDot < kSection.size() )
+    {
+        return std::nullopt;
+    }
+    return std::string( entry.substr( kSection.size(), lastDot - kSection.size() ) );
+}
+
+inline FilterDriverProbe probeLocalFilterDrivers( const std::string& root )
+{
+    FilterDriverProbe probe;
+    std::string       body;
+    bool              withScope = true;
+    if( !readConfigListing( root, true, body ) )
+    {
+        withScope = false;
+        if( !readConfigListing( root, false, body ) )
         {
-            return true;
+            return probe;   // git cannot read this config at all — then no git command here gets as far as a filter
+        }
+        probe.allScopes = true;
+    }
+    std::vector<std::string_view> fields;
+    for( std::size_t start = 0; start < body.size(); )
+    {
+        const std::size_t nul  = body.find( '\0', start );
+        const std::size_t stop = nul == std::string::npos ? body.size() : nul;
+        fields.push_back( std::string_view( body ).substr( start, stop - start ) );
+        start = stop + 1;
+    }
+    const std::size_t stride = withScope ? 2 : 1;
+    for( std::size_t i = 0; i + stride <= fields.size(); i += stride )
+    {
+        if( withScope && fields[i] != "local" && fields[i] != "worktree" )
+        {
+            continue;
+        }
+        std::optional<std::string> name = filterDriverNameOf( fields[i + stride - 1] );
+        if( name && std::find( probe.names.begin(), probe.names.end(), *name ) == probe.names.end() )
+        {
+            probe.names.push_back( std::move( *name ) );
         }
     }
-    return false;
+    return probe;
+}
+
+// Probe one root's filter drivers, pin them (gitcmd.h), and disclose on stderr. The names are the repository's
+// text and are never printed — only their count. Safe to call from a server thread: the pins are mutex-guarded.
+inline void hardenFilterDriversFor( const std::string& root )
+{
+    const FilterDriverProbe probe = probeLocalFilterDrivers( root );
+    if( probe.names.empty() )
+    {
+        return;
+    }
+    if( pinGitFilterDrivers( probe.names ).unpinnable )
+    {
+        emitTo( stderr, "ripwire: git: {} configures a filter driver whose name git's -c option cannot spell — every git call this run is refused instead (git_harden=filter-driver-refused): history, churn and the dirty stamp are unavailable\n", root );
+        return;
+    }
+    emitTo( stderr, "ripwire: git: {} configures {} filter driver(s) in {} — neutralised for this run (git_harden=filter-driver): every git call ripwire makes runs them with an empty clean/smudge/process command, so no configured filter program starts\n",
+            root, probe.names.size(), probe.allScopes ? "its config (scope=all: this git cannot report scope, so the user's own drivers are neutralised too)" : "the repository's own config" );
+}
+
+// Roots a server meets only in a REQUEST (an MCP or LSP server started with no root): the startup pass never saw
+// them, so the first request that names one probes it here. One probe per distinct spelling; the startup roots
+// are recorded too, so they are not probed twice.
+namespace detail
+{
+struct ProbedRoots
+{
+    std::mutex               lock;
+    std::vector<std::string> roots;
+};
+inline ProbedRoots& probedRoots()
+{
+    static ProbedRoots probed;
+    return probed;
+}
+inline bool firstSighting( const std::string& root )
+{
+    ProbedRoots&                      probed = probedRoots();
+    const std::lock_guard<std::mutex> guard( probed.lock );
+    if( std::find( probed.roots.begin(), probed.roots.end(), root ) != probed.roots.end() )
+    {
+        return false;
+    }
+    probed.roots.push_back( root );
+    return true;
+}
+}   // namespace detail
+
+inline void hardenLateRoot( const std::string& root )
+{
+    if( root.empty() || !detail::firstSighting( root ) )
+    {
+        return;
+    }
+    std::error_code ec;
+    if( !std::filesystem::is_directory( std::filesystem::path( root ), ec ) || ec )
+    {
+        return;
+    }
+    if( localConfigNeedles( root ).filter )
+    {
+        hardenFilterDriversFor( root );
+    }
 }
 
 // ── the environment override block (git's own mechanism, git-config(1) ENVIRONMENT) ───────────────────────
@@ -365,10 +537,16 @@ inline const Report& hardenForRoots( std::span<const std::string_view> roots )
         {
             continue;
         }
-        const std::string   rootStr = std::string( root );
-        const FsmonitorForm form    = localConfigMayCarryFsmonitor( rootStr ) ? probeFsmonitorForm( rootStr ) : FsmonitorForm::Unset;
+        const std::string        rootStr = std::string( root );
+        const LocalConfigNeedles needles = localConfigNeedles( rootStr );
+        const FsmonitorForm      form    = needles.fsmonitor ? probeFsmonitorForm( rootStr ) : FsmonitorForm::Unset;
         r.forms.emplace_back( rootStr, form );
         anyHook = anyHook || form == FsmonitorForm::Hook;
+        detail::firstSighting( rootStr );
+        if( needles.filter )
+        {
+            hardenFilterDriversFor( rootStr );
+        }
     }
     if( !anyHook )
     {

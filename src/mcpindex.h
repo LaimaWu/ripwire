@@ -19,6 +19,7 @@
 #include "serialize.h"
 #include "search.h"
 #include "gitmine.h"
+#include "githarden.h"          // githarden::hardenLateRoot — a request-named root's filter drivers are pinned before its first git child
 #include "lexical.h"
 #include "recall.h"
 #include "valuerefs.h"          // reference-as-value round: the per-index ValueRefIndex cache (valueRefIndexOf)
@@ -1164,6 +1165,7 @@ inline const ValueRefIndex& valueRefIndexOf( const McpIndex& ix )
 // the cached index for `root`, rebuilt only when stale (otherwise returned as-is, no parse, no graph rebuild).
 inline const McpIndex& getIndex( const std::string& root )
 {
+    githarden::hardenLateRoot( root );   // a root first named in a request: pin its filter drivers before any git child runs there
     McpIndex& ix = mcpIndexSlot();
 
     // hot path. The FS-event watcher (Feature 1) lets us SKIP the directory-mtime sweep when it proves no
