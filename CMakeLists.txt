@@ -204,6 +204,16 @@ if(RIPWIRE_PGO)
   if(RIPWIRE_PGO STREQUAL "generate")
     # Counters land in <build>/prof as default_*.profraw, one per process image.
     set(_ripwire_pgo_flag "-fprofile-generate=${CMAKE_BINARY_DIR}/prof")
+    if(WIN32 AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+      # LLVM bug workaround (Clang 22.1.8 / x86_64-v3): instruction selection backend crashes during
+      # profile generation when SLP vectorizer is active ("Cannot select: ch = brind ..., v2i64 CopyFromReg").
+      # Scoped strictly to the generate phase so the final 'use' build keeps SLP vectorization active.
+      # For direct compilation (non-LTO), /clang:-fno-slp-vectorize is passed to the compiler frontend.
+      # When LTO is active (e.g. Release builds), code generation is performed at link time by lld-link,
+      # which requires /mllvm:-vectorize-slp=false.
+      add_compile_options(/clang:-fno-slp-vectorize)
+      add_link_options(/mllvm:-vectorize-slp=false)
+    endif()
   elseif(RIPWIRE_PGO STREQUAL "use")
     if(NOT RIPWIRE_PGO_PROFILE OR NOT EXISTS "${RIPWIRE_PGO_PROFILE}")
       message(FATAL_ERROR
@@ -221,7 +231,13 @@ if(RIPWIRE_PGO)
   # must be linked in, and the vendored C is where the parse loop lives — profiling only our C++ would
   # profile the caller of the hot code and not the hot code.
   add_compile_options(${_ripwire_pgo_flag})
-  add_link_options(${_ripwire_pgo_flag})
+  # On Windows with MSVC frontend (clang-cl), CMake routes link options directly to lld-link/link.exe,
+  # which rejects clang driver flags like -fprofile-generate. clang-cl automatically injects the compiler-rt
+  # profiling library dependency (/DEFAULTLIB:clang_rt.profile-x86_64.lib) into the compiled objects, so
+  # link options are unnecessary there and adding ${_ripwire_pgo_flag} would fail link invocation.
+  if(NOT (WIN32 AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"))
+    add_link_options(${_ripwire_pgo_flag})
+  endif()
   message(STATUS "RIPWIRE_PGO: ${RIPWIRE_PGO} — see docs/OPTREMARKS.md F2 and scripts/pgobuild.sh")
 endif()
 
