@@ -228,6 +228,13 @@ std::optional<int> loadTargetCommit( const std::string& root, const std::string&
     return std::nullopt;
 }
 
+// review C1: the degraded line's last clause — the kinds memory skipped, or, when it skipped none (a selector of kinds
+// the changed files decide), that every selected kind ran: never an empty "skipped" list
+std::string memorySkippedClause( rw::quality::KindMask memorySkipped )
+{
+    return memorySkipped != 0 ? "; skipped " + rw::quality::kindList( memorySkipped, ", " ) : std::string( "; every selected kind ran" );
+}
+
 // qd-memory-degrade — the stderr line of a degraded answer: the limit, why the full trees were not read, the kinds it
 // skipped, the replay. One line, beside the gating line, so a caller reading only $? and stderr knows the answer is partial.
 std::string degradedStderrLine( const RefPairDelta& refs, rw::quality::KindMask memorySkipped, std::string_view kindsNext )
@@ -239,8 +246,7 @@ std::string degradedStderrLine( const RefPairDelta& refs, rw::quality::KindMask 
                     : refs.memoryStop == "hard" ? "the memory limit was reached during the " + refs.stopWhere + "; the full need was not measured"
                     : "the memory guard stopped the " + refs.stopWhere + ( refs.memoryPressure ? " under critical system memory pressure" : "" ) + "; the full need was not measured";
     std::string line = "memory limit " + ( limit == 0 ? std::string( "unknown" ) : memguard::limitSpelling( limit ) ) + " (" + std::string( memguard::limitSourceClause() )
-                     + "): --quality-delta=A..B answered from the changed files only (" + why + ")"
-                     + ( memorySkipped != 0 ? "; skipped " + quality::kindList( memorySkipped, ", " ) : std::string( "; every selected kind ran" ) );
+                     + "): --quality-delta=A..B answered from the changed files only (" + why + ")" + memorySkippedClause( memorySkipped );
     if( !kindsNext.empty() )
     {
         line += " — run them with " + std::string( kindsNext );
@@ -1625,8 +1631,9 @@ KindsDisclosure kindsDisclosure( const rw::Config& cfg, const RefPairDelta& refs
     if( skipped != 0 )
     {
         add( "kinds_skipped", quality::kindList( skipped, "," ), true );
-        add( "skipped_why", out.memorySkipped == 0 ? "selector" : selector == 0 ? "memory" : "selector,memory", false );
-        if( out.memorySkipped != 0 && selector != 0 )
+        const bool both = out.memorySkipped != 0 && selector != 0;   // then memory_skipped= names memory's share
+        add( "skipped_why", both ? "selector,memory" : out.memorySkipped != 0 ? "memory" : "selector", false );
+        if( both )
         {
             add( "memory_skipped", quality::kindList( out.memorySkipped, "," ), true );
         }
