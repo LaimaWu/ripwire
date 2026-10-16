@@ -124,6 +124,22 @@ expect ts       call_d        "a.ts:3"                    "[P] TS d(1): keeps d(
 expect ts       call_w        "a.ts:4"                    "[P] TS w(1): the this-parameter is not passed — keeps w(this, a)"
 expect js       call_j        "a.js:1 b.js:1"             "[N] JavaScript: fewer arguments are legal — both kept"
 expect kt       callK         "A.kt:1 B.kt:1"             "[N] Kotlin: a default keeps its edge (no minimum-arity row)"
+# fix round 1 (review B1-B4): each [P] arm below was RED on the lane head 3901e59d.
+expect tsval    call_h        "a.ts:4 b.ts:2"             "[P] B1 TS field arrow typed by its annotation (hono header: SetHeaders = (name, value, options) => …) keeps — its optional params live in the type"
+expect tsval    call_f        "a.ts:6 b.ts:4"             "[P] B1 TS const f: Fn = (a, b) => … keeps — the annotation, not the arrow, is the call's contract"
+expect tsval    call_g        "a.ts:7 b.ts:5"             "[P] B1 TS ((a, b) => …) as Fn keeps — a cast arrow takes its type from elsewhere"
+expect tsval    call_u        "b.ts:6"                    "[N] B1 control: a bare unannotated-binding arrow with typed params still drops for too few"
+expect fallback call_q        "a.cpp:1"                   "[P] B2 C++ q(1,2): the too-many q(int) stays out when the only survivor is too-few (head ⊆ base)"
+expect tsfallback call_m      "a.ts:2"                    "[P] B2 TS x.m('a','b'): the too-many B.m(a) stays out when A.m(a,b,c) is too-few"
+expect packcall call_p        "a.cpp:1 b.cpp:1"           "[P] B3 C++ p(std::forward<T>(t)...): a pack expansion is an unknown count — p(int,int) kept"
+expect packcall call_p2       "a.cpp:1 b.cpp:1"           "[P] B3 C++ p(t...): a pack expansion is an unknown count — p(int,int) kept"
+expect packcall call_s        "a.ts:1 b.ts:1"             "[N] B3 TS s(...xs): spread is an unknown count"
+expect packcall call_k        "a.py:1 b.py:1"             "[N] B3 Python k(*xs): unpack is an unknown count"
+expect packcall call_k2       "a.py:1 b.py:1"             "[N] B3 Python k(**kw): unpack is an unknown count"
+expect pyblock  call_m1       "a.py:6 b.py:2"             "[P] B4 Python method under if in a class body is a method (self not counted)"
+expect pyblock  call_m2       "a.py:9 b.py:4"             "[P] B4 Python method under try in a class body is a method"
+expect pyblock  call_m3       "a.py:14 b.py:6"            "[P] B4 Python method under with in a class body is a method"
+expect pyblock  call_m4       "a.py:18 b.py:8"            "[P] B4 Python method under a nested if in a class body is a method"
 
 # ── 4) determinism — byte-identical run-to-run over all three fixtures ──────────────────────────────
 echo "── determinism (byte-identical, two --no-cache runs) ──"
