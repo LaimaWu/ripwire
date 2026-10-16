@@ -253,7 +253,7 @@ branch build has used, so no cache such a build wrote is read as this release's;
 numbered 9 on #380's branch, which predates the subscript role), and the binding kind byte one (Ruby's main-object mixin); no record changes shape. `kQSnapCacheScheme` 20 → 21:
 the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls), so the dead kind can
 differ for an unchanged commit. Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=f83935bb22c0b728 entries=885`.
 
 
 ## [0.6.7] — 2026-10-11
