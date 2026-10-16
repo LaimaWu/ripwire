@@ -60,6 +60,9 @@
 #       names every declined line; R7 the cut is file-first in path order; R8 safe-delete's possible-callers is
 #       per definition (control none-found; the TS interface method flips); R9/R10 the legend drops "no count or
 #       row" where rows ride and reads the review's hedge wording
+#   (N) a proven Ruby subscript the side cut declines (`self[ k ]` in a class method, the `def []` an instance method;
+#       the same through an included module): the record names the subscript's own reference — rc 0, no contract
+#       abort (the ladder runs on a copy of the site, so the record cannot be derived from the copy's address)
 #   (I) determinism; (J) the predicates can fail
 #
 # RED ON BASE: every [P] arm fails on a binary without the record (no <dc> row anywhere); [C] arms are controls that
@@ -608,6 +611,22 @@ m = mcp( "find_symbol", { "path": PYF, "symbol": "load" } ) or {}
 note = str( m.get( "declined_note", "" ) )
 say( any( d.get( "of_def" ) for d in m.get( "declined_sites", [] ) ) and "of_def [K]" in note and "<dc" not in note, "[M] m_mcp_note_ofdef",
      "MCP find_symbol on a multi-definition selector: the of_def clause speaks the entry keys too", note[ -200: ] )
+
+# ── (N) a proven subscript the side cut declines (CodeRabbit, #413) ──────────────────────────────────────────────
+print( "=== (N) a declined proven subscript is recorded at its own reference ===" )
+RBSUB = os.path.join( TMP, "rbsub" )
+os.makedirs( RBSUB, exist_ok = True )
+with open( os.path.join( RBSUB, "k.rb" ), "w" ) as f:
+    f.write( "class Keeper\n  def [](k)\n    k\n  end\n  def self.run\n    self[1]\n  end\nend\n"
+             "module Mixer\n  def [](k)\n    k\n  end\nend\nclass Holder\n  include Mixer\n  def self.go\n    self[2]\n  end\nend\n" )
+for caller, line in ( ( "run", "6" ), ( "go", "17" ) ):
+    x = ask( RBSUB, "callees", caller )
+    say( x.ok and [ ( d.get( "n" ), d.get( "l" ), d.get( "gate" ) ) for d in x.dc ] == [ ( "[]", line, "side" ) ], "[P] n_sub_%s" % caller,
+         "ruby --callees=%s: `self[...]` in a class method declines on the side cut, one <dc n=\"[]\" l=\"%s\" gate=\"side\"> (rc 0, no abort)" % ( caller, line ),
+         x.why() )
+x = ask( RBSUB, "callers", "[]" )
+say( x.ok and sorted( ( d.get( "in" ), d.get( "p" ) ) for d in x.dc ) == [ ( "go", "k.rb:17" ), ( "run", "k.rb:6" ) ], "[P] n_sub_callers",
+     "ruby --callers=[]: both declined subscripts are named at their own lines", x.why() )
 
 # ── (J) the predicates can fail ────────────────────────────────────────────────────────────────────────────────────
 print( "=== (J) the predicates reject what they must ===" )

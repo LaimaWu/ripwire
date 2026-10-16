@@ -6549,14 +6549,17 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // Every decline site goes through here: the caller's count (declinedOut, the header's declined=), the candidate list
     // (internDeclinedList, the callers answers' declined_calls=) and ONE site record (Graph::declinedSite*) — so the rows a
     // callers or callees answer prints are exactly the calls its declined_calls= counts.
+    // `siteIndex` is the site's index in ing.references, carried by the resolve loop: a proven subscript runs the ladder on a
+    // COPY of its site (subscriptCall, role Call), so the address of `r` is not an element of ing.references there.
+    std::size_t siteIndex = 0;
     const auto recordDecline = [ & ]( const Reference& r, std::span<const NodeId> declinedCand, DeclinedSiteKind kind )
     {
-        EXPECTS( &r >= ing.references.data() && &r < ing.references.data() + ing.references.size(), "the resolve loop's own reference" );
+        EXPECTS( siteIndex < ing.references.size(), "the resolve loop's own reference" );
         EXPECTS( r.fromSymbol < g.declinedOut.size(), "a declined call has a caller" );
         ++g.declinedOut[ r.fromSymbol ];
         g.declinedSiteList.push_back( internDeclinedList( g, declinedListsByHash, declinedCand ) );
         g.declinedSiteCaller.push_back( r.fromSymbol );
-        g.declinedSiteRef.push_back( std::uint32_t( &r - ing.references.data() ) );
+        g.declinedSiteRef.push_back( std::uint32_t( siteIndex ) );
         g.declinedSiteKind.push_back( kind );
     };
     std::vector<NodeId>      bindingTier;   // A4-R5 reused FFI-alias fallback candidate buffer
@@ -7309,8 +7312,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     };
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/3: resolve loop (per reference)" );
-    for( const Reference& site : ing.references )
+    for( siteIndex = 0; siteIndex < ing.references.size(); ++siteIndex )
     {
+        const Reference& site = ing.references[ siteIndex ];
         // An element access is a call only where its receiver's class is proven (subscriptOperatorProven above); the
         // rest of the loop reads it as that call.
         const bool subscript = site.role == RefRole::Subscript;
