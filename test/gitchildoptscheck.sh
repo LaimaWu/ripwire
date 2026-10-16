@@ -16,6 +16,8 @@
 #   (C) green: map, --situ, --quality-delta, --hotspots, --rank-by=churn and --doctor each run the filter 0 times,
 #       each on a fresh fixture, and each must have answered (exit status + a stdout marker) so a run that stops
 #       before git cannot pass as "0 firings".
+#       Also --plan-lint=FILE with FILE in the fixture and the crawl root elsewhere (FILE's repository is probed late),
+#       red under RIPWIRE_BASE_BIN on a binary without that probe.
 #   (D) disclosure: stderr carries git_harden=filter-driver; stdout does not; --doctor's git-config-trust row
 #       reports filter_drivers="1" filter_scope="local" filter_pinned="1", and filter_drivers="0" on a plain repo.
 #   (E) MCP roots named only in a request: a server started with NO root drives situational_awareness,
@@ -135,6 +137,25 @@ run_row "c-control-bad-flag" "0" "" "$BIN" "$FX" --no-such-flag-gitchildoptschec
 [ "$RVERDICT" = rc ] \
     && ok "(C) control: an unrecognised flag (exit $RRC, 0 firings) fails on its exit status, so a row cannot pass by not running" \
     || no "(C) control: an unrecognised flag was not caught (verdict $RVERDICT)"
+# (C) --plan-lint=FILE whose repository is NOT the crawl root (CodeRabbit, #413): git resolves FILE's own repository, which
+# the startup probe never saw, so plan-lint probes it before its first git child. Red on a binary without that probe.
+mkdir -p "$TMP/elsewhere" && printf 'int e;\n' > "$TMP/elsewhere/e.c"
+run_row "c-plan-lint-file" "0" "plan-lint" "$BIN" "$TMP/elsewhere" --plan-lint="$FX/f.c"
+case "$RVERDICT" in
+    ok)     ok "(C) plan-lint, FILE in the fixture and the root elsewhere: answered, and the clean filter did not run (0 firings)" ;;
+    rc)     no "(C) plan-lint FILE elsewhere: exit $RRC, expected 0: $( head -c 200 "$TMP/r-c-plan-lint-file.err" )" ;;
+    marker) no "(C) plan-lint FILE elsewhere: stdout lacks 'plan-lint' — the verb did not answer" ;;
+    *)      no "(C) plan-lint FILE elsewhere: the clean filter ran $RFIRED time(s): $( head -2 "$MARK" | tr '\n' ';' )" ;;
+esac
+grep -q 'git_harden=filter-driver' "$TMP/r-c-plan-lint-file.err" \
+    && ok "(C) plan-lint FILE elsewhere: stderr discloses git_harden=filter-driver for FILE's repository" \
+    || no "(C) plan-lint FILE elsewhere: no git_harden=filter-driver line: $( head -c 200 "$TMP/r-c-plan-lint-file.err" )"
+if [ -n "$BASE" ]; then
+    run_row "base-plan-lint-file" "0" "plan-lint" "$BASE" "$TMP/elsewhere" --plan-lint="$FX/f.c"
+    [ "$RVERDICT" = fired ] \
+        && ok "(B) red: the pre-fix binary's plan-lint on FILE elsewhere ran the clean filter $RFIRED time(s)" \
+        || no "(B) the pre-fix binary's plan-lint did not run the filter (verdict $RVERDICT) — the red cannot be shown"
+fi
 
 # ── (D) disclosure ──────────────────────────────────────────────────────────────────────────────────────
 grep -q 'git_harden=filter-driver' "$TMP/r-c-situ.err" \
