@@ -1207,8 +1207,9 @@ inline constexpr const char* kQdMemoryStopLegend =
     "limit grown) or parse (half the limit) is a soft line, memory_pressure=1 when the OS pressure signal stopped it instead, "
     "hard is the limit itself; a soft stop does not show the full need exceeds the limit. ";
 inline constexpr const char* kQdMemoryPeakLegend =
-    "memory_peak= is this process's peak footprint when it went OVER the memory limit: the answer is complete and its exit "
-    "code unchanged, but the last stretch of the comparison ran past the limit the guard holds between phases. ";
+    "memory_peak= is this process's peak footprint when it went OVER the memory limit: the answer and its exit code are what "
+    "they would be without it (complete, or the changed-files answer ingest_scope= names), but the last stretch of the "
+    "comparison ran past the limit the guard holds between phases. ";
 
 // A DEFINITION IS EMITTED WHEN THE THING IT DEFINES IS IN THE DOCUMENT. Nothing is dropped and no limit is
 // softened: a reader can never meet an undefined name, because a name and its sentence appear together or
@@ -1696,9 +1697,10 @@ void emitMemoryLines( const KindsDisclosure& kd, const RefPairDelta& refs )
     }
     if( kd.peakOver != 0 )
     {
-        rw::emitTo( stderr, "ripwire: memory peak {} went over the {} limit ({}): the answer is complete, but its last stretch ran past the limit the guard holds "
+        rw::emitTo( stderr, "ripwire: memory peak {} went over the {} limit ({}): {}, but its last stretch ran past the limit the guard holds "
                             "between phases — {}\n",
-                    memguard::limitSpelling( kd.peakOver ), memguard::limitSpelling( memguard::limits().hardBytes ), memguard::limitSourceClause(), memguard::kOverride );
+                    memguard::limitSpelling( kd.peakOver ), memguard::limitSpelling( memguard::limits().hardBytes ), memguard::limitSourceClause(),
+                    refs.degraded ? "the changed-files answer stands as stated above" : "the answer is complete", memguard::kOverride );
     }
 }
 

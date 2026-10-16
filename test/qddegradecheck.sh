@@ -540,6 +540,16 @@ else no "(R) peak:1 rc=$RC (want $ARC) memory_peak=$pk stderr: $( grep '^ripwire
 qd RIPWIRE_TEST_MEMGUARD=peak:1 "$BIN" . --quality-delta=HEAD~1..HEAD --legend=full --no-cache
 if sed -n 's/^\(<!--.*-->\).*/\1/p' "$WORK/o" | grep -q -- 'memory_peak=' && validxml "$WORK/o"; then ok "(R) --legend=full defines memory_peak= when it rides, and parses as XML"
 else no "(R) the legend lacks memory_peak= (or invalid XML)"; fi
+# CodeRabbit #413: the peak sentence speaks for a changed-files answer too, never "complete" unconditionally. A degraded
+# answer whose peak also went over is not reachable through one seam, so the wording is pinned here and the stderr
+# twin keeps "the answer is complete" on the full answer above.
+if sed -n 's/^\(<!--.*-->\).*/\1/p' "$WORK/o" | grep -q -- 'memory_peak=[^.]*(complete, or the changed-files answer ingest_scope= names)'; then
+    ok "(R) the memory_peak= legend covers both a complete and a changed-files answer"
+else no "(R) the memory_peak= legend still reads as complete-only"; fi
+qd RIPWIRE_TEST_MEMGUARD=peak:1 "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache
+grep -q '^ripwire: memory peak .*: the answer is complete, but' "$WORK/e" \
+    && ok "(R) a full answer's peak line still says the answer is complete" \
+    || no "(R) the full answer's peak line: $( grep '^ripwire: memory peak' "$WORK/e" | head -c 200 )"
 # A selection the changed files could not answer (whole-tree kinds, with or without defect-shape) is never pre-empted by
 # the projection — it is the replay kinds_next= names, and degrading it could only refuse: it runs in full. A real stop
 # still refuses it, by name, and so does a defect-shape-only selection whose changed files cannot decide defect-shape
