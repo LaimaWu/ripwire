@@ -111,7 +111,9 @@ inline std::pair<std::size_t, std::vector<std::uint32_t>> declinedCallsAndSites(
     const std::size_t          calls = wantCallers ? declinedCallsNaming( g, matches ) : declinedCallsMadeBy( g, matches );
     std::vector<std::uint32_t> sites = wantCallers ? declinedSitesNaming( g, matches ) : declinedSitesMadeBy( g, matches );
     orderDeclinedSites( ing, g, sites, /*fileFirst=*/wantCallers );
-    ENSURES( sites.size() == calls, "a <dc> row per declined call the answer counts" );
+    // callees: an inert quoted site (#380) is counted with no record (graph.h inertDeclinedCaller), so it has no row
+    ENSURES( sites.size() + ( wantCallers ? 0u : inertDeclinedMadeBy( g, matches ) ) == calls,
+             "a <dc> row per declined call the answer counts, but an inert quoted site" );
     return { calls, std::move( sites ) };
 }
 
