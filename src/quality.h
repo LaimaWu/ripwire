@@ -2042,16 +2042,16 @@ inline RenameMap gitRenameMap( const std::string& root, const std::string& span 
         // silently dropped the most common rename an agent ever makes — and the gate would still have passed,
         // because the content route rescues that same ack by a different mechanism. That near-miss is why the
         // gate asserts the ROUTE (acked_by_rename) and not merely the outcome.
-        absorb( popenTrimmed( pinned + "diff -M50% --diff-filter=R --name-status --cached 2>/dev/null" ) );
-        absorb( popenTrimmed( pinned + "diff -M50% --diff-filter=R --name-status HEAD 2>/dev/null" ) );
-        absorb( popenTrimmed( pinned + "log -M50% --diff-filter=R --name-status --format= -n "
+        absorb( popenTrimmed( pinned + "diff --no-ext-diff --no-textconv --ignore-submodules=dirty -M50% --diff-filter=R --name-status --cached 2>/dev/null" ) );
+        absorb( popenTrimmed( pinned + "diff --no-ext-diff --no-textconv --ignore-submodules=dirty -M50% --diff-filter=R --name-status HEAD 2>/dev/null" ) );
+        absorb( popenTrimmed( pinned + "log --no-ext-diff --no-textconv -M50% --diff-filter=R --name-status --format= -n "
                               + std::to_string( kRenameWindowCommits ) + " 2>/dev/null" ) );
     }
     else
     {
         rm.truncatedWindow = false;   // the range IS the scope; nothing outside it was in question
         rm.commitsScanned  = 0;
-        absorb( popenTrimmed( pinned + "log -M50% --diff-filter=R --name-status --format= " + shSingleQuote( span ) + " 2>/dev/null" ) );
+        absorb( popenTrimmed( pinned + "log --no-ext-diff --no-textconv -M50% --diff-filter=R --name-status --format= " + shSingleQuote( span ) + " 2>/dev/null" ) );
     }
     return rm;
 }
@@ -2073,7 +2073,7 @@ inline std::string gitHeadSha( const std::string& root )
 // dashes at 4 and 7) — the caller degrades to a fixed epoch date. Read-only: `git log` never mutates the repo.
 inline std::string gitCommitterDateIso( const std::string& root )
 {
-    std::string out = gitOneLine( root, "log -1 --format=%cs HEAD 2>/dev/null" );   // not const: a const local cannot be moved out on return
+    std::string out = gitOneLine( root, "log --no-ext-diff --no-textconv -1 --format=%cs HEAD 2>/dev/null" );   // not const: a const local cannot be moved out on return
     if( out.size() != 10 || out[4] != '-' || out[7] != '-' )
     {
         return {};
@@ -2120,7 +2120,7 @@ inline bool gitIsAncestor( const std::string& root, const std::string& ancestor,
 // (HEAD epoch anchors the window — wall-clock is never consulted). "" on any failure (degrade: churn silent).
 inline std::string gitWindowRefSha( const std::string& root, std::uint32_t days )
 {
-    const std::string epochStr = gitOneLine( root, "log -1 --format=%ct HEAD 2>/dev/null" );
+    const std::string epochStr = gitOneLine( root, "log --no-ext-diff --no-textconv -1 --format=%ct HEAD 2>/dev/null" );
     if( epochStr.empty() )
     {
         return {};
@@ -5425,7 +5425,7 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
 // (not a repo, unborn HEAD, git absent) reads as "not identical" and falls back to the archived baseline.
 inline bool workingTreeMatchesHead( const std::string& root )
 {
-    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " diff --quiet HEAD -- . >/dev/null 2>&1";
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " diff --no-ext-diff --no-textconv --ignore-submodules=dirty --quiet HEAD -- . >/dev/null 2>&1";
     return os::system( cmd.c_str() ) == 0;
 }
 
@@ -6339,7 +6339,7 @@ inline void gitBlameRangeWindowCommits( const std::string& root, const std::stri
         return;
     }
     const std::string cmd = gitCmd( " -c core.quotepath=false" ) + gitBlameConfigPins( root ) + " -C " + shSingleQuote( root )
-                          + " blame --porcelain -L " + std::to_string( startLine ) + ",+" + std::to_string( lineCount )
+                          + " blame --no-ext-diff --no-textconv --porcelain -L " + std::to_string( startLine ) + ",+" + std::to_string( lineCount )
                           + " HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
@@ -6413,7 +6413,7 @@ inline std::vector<DiffHunk> gitDiffHunksVsHead( const std::string& root, const 
 {
     std::vector<DiffHunk> hunks;
     const std::string cmd = gitCmd( " -c core.quotepath=false -c diff.algorithm=myers -C " ) + shSingleQuote( root )
-                          + " diff --no-ext-diff --unified=0 --no-color HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
+                          + " diff --no-ext-diff --no-textconv --ignore-submodules=dirty --unified=0 --no-color HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe ) { DISCLOSE( "quality: churn hunk diff could not be spawned" ); return hunks; }
 
@@ -9706,7 +9706,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                 // degrades every symbol below to AMBIENT (churnEditWindowCommitCount is gated on `> 0`).
                 std::int64_t churnCutoffEpoch = 0;
                 {
-                    const std::string epochStr = gitOneLine( std::string( root ), "log -1 --format=%ct HEAD 2>/dev/null" );
+                    const std::string epochStr = gitOneLine( std::string( root ), "log --no-ext-diff --no-textconv -1 --format=%ct HEAD 2>/dev/null" );
                     if( !epochStr.empty() )
                     {
                         const std::int64_t headEpoch = std::strtoll( epochStr.c_str(), nullptr, 10 );

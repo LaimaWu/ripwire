@@ -1147,6 +1147,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "lean", "lean=/rich=: can THIS binary open that artifact (ok, absent, parser-version ...); format, never freshness", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines rich=
     { "fsmonitor", "fsmonitor=: the checkout's core.fsmonitor at startup: unset, builtin, off, or hook (a command git runs)", true, "c", MapHeaderRead::No, {}, "doctor" },
     { "neutralised", "neutralised=1: a hook fsmonitor was overridden to false for this run; 0 when none was needed", true, "c", MapHeaderRead::No, {}, "doctor" },
+    { "filter_drivers", "filter_drivers=N: filter drivers the repository's own config defines; filter_scope= local|all, filter_pinned= 1 (run with an empty command) or refused", true, "c", MapHeaderRead::No, {}, "doctor" },   // also defines filter_scope= filter_pinned=
     { "state", "state=: layout records agree, disagree (mixed binary: rebuild clean-first), not-checked or no-records", true, "c", MapHeaderRead::No, {}, "doctor" },
     { "checked", "checked=1: the cross-unit layout comparison ran; 0 = under two comparable records", true, "c", MapHeaderRead::No, {}, "doctor" },
     { "units", "units=N: translation units that registered a layout record", true, "c", MapHeaderRead::No, {}, "doctor" },
