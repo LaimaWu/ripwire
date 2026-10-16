@@ -323,7 +323,7 @@ std::optional<int> loadChangedFiles( const std::string& root, const rw::Config& 
     // defect-shape's one tree-wide input (see the header comment of this function)
     const std::vector<std::string> baseChanged   = quality::cFamilyMacroNames( baseTree.ing );
     const std::vector<std::string> targetChanged = quality::cFamilyMacroNames( out.targetTree.ing );
-    const auto anyCpp = []( const IngestResult& ing ) { return std::any_of( ing.files.begin(), ing.files.end(), []( const std::string& f ) { return langOfPath( f ) == Lang::Cpp; } ); };
+    const auto anyCpp = []( const IngestResult& ing ) { return std::any_of( ing.files.begin(), ing.files.end(), []( const std::string& f ) { return langFacts( langOfPath( f ) ).defectShapeNeedsMacroSet; } ); };
     if( baseChanged != targetChanged || ( !out.haveBaseMacros && ( anyCpp( baseTree.ing ) || anyCpp( out.targetTree.ing ) ) ) )
     {
         out.kinds &= static_cast<quality::KindMask>( ~quality::kindBit( "defect-shape" ) );
