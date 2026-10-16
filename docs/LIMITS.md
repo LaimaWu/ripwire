@@ -204,6 +204,14 @@ Discloses: `capped`, `reads_capped`
 | `kMaxEnvNameLen` | `128` | BOUNDARY | longest plausible environment-variable name |
 | `kMaxSitesShown` | `8` | OUTPUT | <read> sites per gate; a DEFAULT, raisable by --limit=N (effectiveRowCap), lifted by --detail |
 
+### `src/defattrib.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kDefTableCap` | `16` | — | — |
+
 ### `src/didyoumean.h`
 
 Discloses: **none**

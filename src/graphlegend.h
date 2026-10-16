@@ -501,6 +501,13 @@ inline constexpr const char* kImpactLegendOpen =
 inline constexpr const char* kImpactImportTierLegend =
     "importers= is a SECOND, weaker reach: the files that directly include/import a file defining SYM, as <f via=\"import\" p=\"…\" lazy=\"0|1\"/> rows after the symbol rows — not call reach, never added to reaches= (different units, files vs symbols; an importer may use a different symbol from that file, or none at all). DIRECT (one hop), never the transitive include cone. lazy=\"1\" means every one of that importer's edges into SYM's file is written INSIDE A CLOSURE (a TS/JS require()/import() in a function body, a Ruby constant receiver or argument in a method/lambda/block, a Ruby autoload or rescue class), firing only if and when it runs; lazy=\"0\" means at least one edge is load-time. shown_importers=/importers_capped= disclose that listing's own truncation (importers= stays the full count); most-imported first; limit= sizes it, offset= windows the symbol rows only. ";
 
+// cut-fix E's importers_next= (graph.h sizeImportTier), present-only: it rides a CUT import listing alone, and the full
+// legend never defined it (legendcoveragecheck (A) found it once SYM's file passed 40 importers on this tree).
+inline const char* importersNextLegend( bool on ) noexcept
+{
+    return on ? "importers_next= (a cut importer listing only) is the call that lists every importer. " : "";
+}
+
 // The columnar form re-serializes the SYMBOL rows as parallel arrays and has no row shape for a second
 // listing, so it carries importers= alone. Said in band rather than left as a shape difference a reader
 // has to notice: a count with no rows beside it otherwise reads as a bug.
@@ -938,6 +945,40 @@ inline std::string crossKindKeyJson( const std::string& value )
     return value.empty() ? std::string() : ",\"cross_kind\":\"" + value + "\"";
 }
 
+// ── attrib-multidef (src/defattrib.h): the definition table, a row's of_def=, the split-arm prov=, an unbound --path endpoint ──
+// Each clause rides exactly when its attribute is in the answer (present-only), on the callers/callees/safe-delete/impact and
+// path legends, CLI and MCP alike. No double hyphen anywhere: every one lands inside an XML comment (checklist 25).
+inline constexpr const char* kDefTableLegend =
+    "<def ix= t= sc= p= bodyless=1> rows: the GROUPS the defs= definitions form, a definition with the declarations tied to it "
+    "(C family: the edit-check identity rule; TypeScript: its overload signatures); bodyless=1 a declaration tied to none of them "
+    "(another function, or the tie is unproven). of_def=K... on a row: the groups it belongs to, by ix. K = a resolved edge (the "
+    "resolver's binding, not a type check); K~s = its edge carries prov=split (a call along it was one arm of a call the resolver split "
+    "between same-named definitions); K~n = every call along it bound by name alone; K~t = a resolved edge into a primary template "
+    "while a specialisation of it is another group (which one the call reaches is unproven). On impact the tie is a chain of calls (a "
+    "by-name hop makes it ~n, else a split hop ~s) and an rf row unions its file's symbols. ~n/~s/~t do NOT mean the edge is false. ";
+inline constexpr const char* kDefsListedLegend =
+    "defs_listed=N: above 16 groups the table lists only the N that this page's rows name, and a row enumerates no by-name tie: "
+    "it prints its K, K~s and K~t tokens and one bare ~n when it also has ties by name alone; a row tied by name alone prints no "
+    "of_def (its via=name is the hedge). ";
+inline std::string defTableLegend( bool table, bool cut )
+{
+    std::string clause;
+    if( table )
+    {
+        clause = kDefTableLegend;
+        clause += cut ? kDefsListedLegend : "";
+    }
+    return clause;
+}
+inline constexpr const char* kSplitArmRowLegend =
+    "prov=\"split\" on a row: its edge to of= (on a path, the hop into it) carries the resolver's split label, a call along it was one "
+    "arm of a call split between same-named definitions, so the row may be another arm's; NOT a claim the edge is false. ";
+inline const char* splitArmLegend( bool on ) noexcept { return on ? kSplitArmRowLegend : ""; }
+inline constexpr const char* kPathUnboundLegend =
+    "An endpoint with several definitions that nothing bound prints no from_p or to_p: unreached, or (to) reached only through a "
+    "split or by-name hop. ";
+inline const char* pathUnboundLegend( bool on ) noexcept { return on ? kPathUnboundLegend : ""; }
+
 // ── issue #60: the module-scope owner's clause, emitted exactly when a t="modscope" ROW is in the answer ──
 // A file-scope call (a top-level statement, or a call inside an anonymous callback body) used to have no
 // caller node, so --callers/--impact answered with a row short. It now has one, and the row's t= is a kind
@@ -1011,6 +1052,18 @@ inline constexpr std::string_view kForViaNameClause =
 inline std::string forViaNameClause()
 {
     return std::string( kForViaNameClause );
+}
+// attrib-multidef Q1: a <calls><c> row whose edge is one arm of a resolver split carries prov="split" — the same per-edge label
+// the map prints — on --for's bodies and hops. Defined in --for's FIRST-SCREEN legend on an over-approximated bit (serialize.h
+// splitArmsOutAny), as via="name" is, and as a comment beside the rows on a bundle whose head did not define it.
+inline constexpr std::string_view kForCompactSplitClause =
+    "; c prov=split: a resolver split arm; may be another arm's (NOT a claim the edge is false)";
+inline constexpr std::string_view kForSplitClause =
+    " prov=\"split\" on a <c> row: that callee's edge carries the resolver's split label (a call along it was one arm of a call split "
+    "between same-named definitions), so it may be another arm's. It does NOT mean the edge is false.";
+inline std::string splitArmCallsLegendComment()
+{
+    return "<!--" + std::string( kForSplitClause ) + " -->";
 }
 // …as its own comment node, for the surfaces whose legend is written beside the rows (a <bodies>/<hops> block's <calls>)
 inline std::string viaNameLegendComment()

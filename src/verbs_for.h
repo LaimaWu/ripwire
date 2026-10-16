@@ -558,6 +558,8 @@ struct ForLensHeaderParts
     bool             bodySlotPresent = false; // for-body-slot: an explanatory question on the compact route named an owner
                                             // (forowner.h forBodySlotOwner), so a <bodies> element rides — served, or skipped
                                             // under a target with its next= — and the slot clause defines it (present-only)
+    bool             splitPresent = false;   // attrib-multidef Q1: may a <calls><c> row carry prov="split"? viaPresent's twin
+                                            // question over the same ids (serialize.h splitArmsOutAny); set after construction
 };
 
 // Splice a pre-formatted fragment in front of a structural boundary, or leave the document exactly as it
@@ -846,6 +848,7 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
         { p.modScopePresent, rw::kForCompactModScopeClause },   // #60
         { p.endLinePresent, rw::kForCompactEndLineLegend },
         { p.viaPresent, rw::kForCompactViaNameClause },        // FE-B
+        { p.splitPresent, rw::kForCompactSplitClause },        // attrib-multidef Q1
     };
     for( const auto& [ on, clause ] : kPresentOnly )
     {
@@ -996,6 +999,10 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     if( p.viaPresent )
     {
         h.append( rw::forViaNameClause() );   // FE-B: present-only, on the same bit the compact strip reads
+    }
+    if( p.splitPresent )
+    {
+        h.append( rw::kForSplitClause );   // attrib-multidef Q1: likewise
     }
     h.append( extraNotes );
     h += " -->";
@@ -1915,7 +1922,7 @@ std::vector<rw::NodeId> computeAutoBodyCandidateIds( const rw::IngestResult& ing
 ForAutoBodiesResult buildForAutoBodies( const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g,
                                         const std::vector<rw::NodeId>& lensSurfaceIds, const std::vector<float>& lensRank,
                                         std::size_t committedBytes, std::size_t bundleBudget, rw::RedactCounts* redactPtr,
-                                        const std::vector<rw::RouteAnchorDef>& anchorDefs, bool viaLegendInHead )
+                                        const std::vector<rw::RouteAnchorDef>& anchorDefs, bool viaLegendInHead, bool splitLegendInHead = false )
 {
     ForAutoBodiesResult out;
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= uses (sarif.h).
@@ -1974,9 +1981,9 @@ ForAutoBodiesResult buildForAutoBodies( const rw::Config& cfg, const rw::IngestR
         // shell the "budget" branch below already gets for free, rather than a second hand-rolled tag.
         out.attr    = " bundle=\"auto\" bodies=\"0\" reason=\"no_candidates\"";
         out.section = rw::chargeSection( [ & ]( std::FILE* f )
-            { rw::packBodies( f, ing, autoBodyIds, /*budgetBytes=*/1, g.outOff, g.outTargets, g.outNameOnly, cfg.compress, redactPtr,
+            { rw::packBodies( f, ing, autoBodyIds, /*budgetBytes=*/1, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), cfg.compress, redactPtr,
                                /*ranges=*/nullptr, /*noteIndex=*/nullptr, nullptr, /*truncateOversizedFirst=*/false,
-                               /*withFileContext=*/false, fabRootArg, &lensRank, viaLegendInHead ); },
+                               /*withFileContext=*/false, fabRootArg, &lensRank, rw::CalleeLegendsInHead( viaLegendInHead, splitLegendInHead ) ); },
             rw::kBytesPerTokenBody );
         if( !out.section.isRendered )
         {
@@ -1996,9 +2003,9 @@ ForAutoBodiesResult buildForAutoBodies( const rw::Config& cfg, const rw::IngestR
     const std::size_t  autoBodyBudget = std::max<std::size_t>( 1, std::min( leftBytes, cfg.packBudgetBytes ) );
     rw::EmittedBodies autoEmitted;
     out.section = rw::chargeSection( [ & ]( std::FILE* f )
-        { rw::packBodies( f, ing, autoBodyIds, autoBodyBudget, g.outOff, g.outTargets, g.outNameOnly, cfg.compress, redactPtr,
+        { rw::packBodies( f, ing, autoBodyIds, autoBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), cfg.compress, redactPtr,
                            /*ranges=*/nullptr, /*noteIndex=*/nullptr, &autoEmitted, /*truncateOversizedFirst=*/false,
-                           /*withFileContext=*/false, fabRootArg, &lensRank, viaLegendInHead ); },
+                           /*withFileContext=*/false, fabRootArg, &lensRank, rw::CalleeLegendsInHead( viaLegendInHead, splitLegendInHead ) ); },
         rw::kBytesPerTokenBody );
 
     if( !out.section.isRendered )
@@ -2174,6 +2181,7 @@ struct ForSectionPromises
 {
     bool                viaLegendInHead = false;
     const ForOwnerPlan* owners          = nullptr;   // nullptr ⇒ no owner rows (an empty plan reads the same)
+    bool                splitLegendInHead = false;   // attrib-multidef Q1: the header defines prov="split" (splitPresent)
 };
 
 inline ForOwnerPlan forOwnerHopPlan( const rw::IngestResult& ing, const rw::Graph& g, std::string_view task,
@@ -2401,8 +2409,8 @@ ForAutoBodiesResult buildForCompactHops( const rw::Config& cfg, const rw::Ingest
     const rw::HopOwners           owners   = forHopOwners( cfg, ing, ownerPlan, leftBytes, fcRootArg );
 
     out.section = rw::chargeSection( [ & ]( std::FILE* f )
-        { rw::packHops( f, ing, hopNodes, hopBudget, g.outOff, g.outTargets, g.outNameOnly, redactPtr, &lensRank, fcRootArg,
-                        viaLegendInHead, &owners ); },   // g.outNameOnly also feeds the hop-slot rule (serialize.h noProvenEdge)
+        { rw::packHops( f, ing, hopNodes, hopBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), redactPtr, &lensRank, fcRootArg,
+                        rw::CalleeLegendsInHead( viaLegendInHead, promised.splitLegendInHead ), &owners ); },   // g.outNameOnly also feeds the hop-slot rule (serialize.h noProvenEdge)
         // MARKUP rate, not the body rate — and this is an honesty choice, not a copy-paste slip. The body
         // rate (3.80 B/tok) prices SOURCE TEXT; the compact section contains none, only tags, identifiers
         // and line numbers, which tokenize like the rest of the bundle. Charging structured markup at the
@@ -2442,7 +2450,8 @@ ForAutoBodiesResult buildForEnrichment( const rw::Config& cfg, const rw::IngestR
     const std::size_t   committed = committedBytes + plan.attrReserve;
     ForAutoBodiesResult out       = plan.compact
         ? buildForCompactHops( cfg, ing, g, lensSurfaceIds, lensRank, committed, bundleBudget, redactPtr, promised )
-        : buildForAutoBodies( cfg, ing, g, lensSurfaceIds, lensRank, committed, bundleBudget, redactPtr, anchorDefs, promised.viaLegendInHead );
+        : buildForAutoBodies( cfg, ing, g, lensSurfaceIds, lensRank, committed, bundleBudget, redactPtr, anchorDefs, promised.viaLegendInHead,
+                              promised.splitLegendInHead );
     if( plan.compact )
     {
         out.markupBytes = out.section.xml.size();
@@ -3000,7 +3009,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             : rw::ForBodySlotOwner{};
         bool forViaPresent = false;
         bool forViaByOwnerOnly = false;   // owner-hop: the six ranked hop ids alone answer no, the owner rows switch it on
-        if( !g.outNameOnly.empty() )
+        bool forSplitPresent = false;     // attrib-multidef Q1: the same question for prov="split", over the same ids
+        if( !g.outNameOnly.empty() || !g.outProv.empty() )
         {
             std::vector<rw::NodeId> viaIds;
             if( autoBundleMode && plan.compact )
@@ -3024,7 +3034,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             {
                 viaIds = forDetailIds( ing, lensRank, cfg.detail, forTopN );
             }
-            forViaPresent = rw::namesOnlyOutAny( g.outOff, g.outNameOnly, viaIds );
+            forViaPresent   = rw::namesOnlyOutAny( g.outOff, g.outNameOnly, viaIds );
+            forSplitPresent = rw::splitArmsOutAny( g.outOff, g.outNameOnly, g.outProv, viaIds );
         }
         ForLensHeaderParts headerParts{ cfg.forTask, rootOpenStr, taskNote, adaptiveNote,
                                         mentionNote, boostNote, docMentionNote, sibliftNote, expandNote, floorNote,
@@ -3034,6 +3045,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                         /*hdrLegend=*/!forHdrRows.empty(), forScPresent, forComposePresent,
                                         forLegoPresent, forLayerPresent, forModScopePresent, forEndLinePresent, forViaPresent,
                                         ownerPlan.any(), forViaByOwnerOnly, slotOwner.any() };
+        headerParts.splitPresent = forSplitPresent;   // attrib-multidef Q1 (a trailing member: the aggregate above keeps its order)
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
         { return forLensHeaderText( headerParts, withRouteAttr, withTaskEcho, extraNotes ); };
         std::string headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
@@ -3311,8 +3323,12 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // for-body-slot: the slot clause on the same contract — the body rides on top of the complete answer, so its reading never
         // costs a signature row (forbodyslotcheck (D4): <sigs> byte-identical with RIPWIRE_NO_BODY_SLOT=1)
         const std::size_t bodySlotLegendEmitted = bodySlotLegend( headerParts, compactLegendOn ).size();
+        // attrib-multidef Q1: the prov="split" clause is a disclosure on the same contract — exempt, as e= is, so <sigs> (rows and
+        // its continuation's budget) is byte-identical with and without it (fordisclosurecheck #2: auto vs --signatures-only)
+        const std::size_t splitLegendEmitted = !headerParts.splitPresent ? 0u
+                                             : ( compactLegendOn ? rw::kForCompactSplitClause.size() : rw::kForSplitClause.size() );
         const std::size_t exemptBytes = adaptiveNote.size() + autoLegendBytes + confidenceExemptBytes + tailLegendEmitted + idRouteLegendEmitted
-                                      + endLineLegendEmitted + ownerLegendEmitted + bodySlotLegendEmitted;
+                                      + endLineLegendEmitted + ownerLegendEmitted + bodySlotLegendEmitted + splitLegendEmitted;
         if( exemptBytes > headerStr.size() )
         {
             DISCLOSE( "runForLens: header exemptions exceed the emitted header — the sig ledger would underflow; charging the header whole" );
@@ -3340,7 +3356,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                               + rw::kForFileTailLegend.size() + idRouteParts.bytes()
                                               + ( headerParts.endLinePresent ? rw::kForEndLineLegend.size() : 0u )
                                               + ownerLegendExemptBytes( headerParts, /*compact=*/false )
-                                              + bodySlotLegend( headerParts, /*compact=*/false ).size();
+                                              + bodySlotLegend( headerParts, /*compact=*/false ).size()
+                                              + ( headerParts.splitPresent ? rw::kForSplitClause.size() : 0u );   // attrib-multidef Q1
             std::size_t       fullCharged     = fullExempt > fullHeaderBytes ? fullHeaderBytes : fullHeaderBytes - fullExempt;
             fullCharged -= std::min( fullCharged, rw::forZeroNoteBytes( fullHeader ) );   // lean-answers: exempt, as above
             chargedHeaderBytes     = std::min( chargedHeaderBytes, fullCharged );
@@ -3708,9 +3725,9 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                 detailBodyBudget = std::min( detailBodyBudget, std::max( leftBytes, detailFloorBudget ) );
             }
             detailSection = rw::chargeSection( [ & ]( std::FILE* f )
-                { packBodies( f, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, g.outNameOnly, cfg.compress, redactPtr,
+                { packBodies( f, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), cfg.compress, redactPtr,
                               /*ranges=*/nullptr, notesPtr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
-                              /*withFileContext=*/false, flRootArg, &lensRank, headerParts.viaPresent ); },   // L3: --detail bodies surface notes too (part of the --for bundle)
+                              /*withFileContext=*/false, flRootArg, &lensRank, rw::CalleeLegendsInHead( headerParts.viaPresent, headerParts.splitPresent ) ); },   // L3: --detail bodies surface notes too (part of the --for bundle)
                 rw::kBytesPerTokenBody );
             if( !detailSection.isRendered )
             {
@@ -3733,11 +3750,12 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             // the bodies stay what they were; a soft target funds them from the rows' leftover (headerSpentBytes is 0)
             enrich = buildForEnrichment( cfg, ing, g, lensSurfaceIds, lensRank, plan, routeAnchorDefs, redactPtr,
                                           headerSpentBytes + rowsSpentBytes,
-                                          bundleBudget, ForSectionPromises{ headerParts.viaPresent, &ownerPlan } );
+                                          bundleBudget, ForSectionPromises{ headerParts.viaPresent, &ownerPlan, headerParts.splitPresent } );
             if( enrich.surfaceOff )
             {
                 headerParts.autoBundle = headerParts.compactBundle = false;
                 headerParts.viaPresent = false;   // FE-B: the section that could carry it is gone (autoBundleMode excludes --detail)
+                headerParts.splitPresent = false;   // attrib-multidef Q1: likewise
                 headerParts.ownerPresent = false;   // owner-hop: the same section
                 headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
             }
@@ -3978,10 +3996,10 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // directly at the SAME budget — uncharged for that one run, with an alert, never a fabricated number.
         if( cfg.detail > 0 )
         {
-            rw::emitChargedSection( stdout, detailSection, [ & ]{ packBodies( stdout, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, g.outNameOnly,
+            rw::emitChargedSection( stdout, detailSection, [ & ]{ packBodies( stdout, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ),
                                                                               cfg.compress, redactPtr, /*ranges=*/nullptr, notesPtr,
                                                                               /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
-                                                                              /*withFileContext=*/false, flRootArg, &lensRank, headerParts.viaPresent ); } );
+                                                                              /*withFileContext=*/false, flRootArg, &lensRank, rw::CalleeLegendsInHead( headerParts.viaPresent, headerParts.splitPresent ) ); } );
         }
         else if( autoSection.isRendered && !autoSection.xml.empty() )
         {
