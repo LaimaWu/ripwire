@@ -87,3 +87,24 @@ int useWritten()
     cfg::Config c = cfg::makeConfig();
     return c.get();
 }
+
+// nearOverloadName: the other overload — its truth is Other::get, so a first-definition bug shows here.
+int nearOverloadName()
+{
+    auto x = cfg::pick( "name" );
+    return x.get();
+}
+
+// nearUniqueDot: `u.get()` on a std::unique_ptr result is unique_ptr::get — the arrow templates unwrap under `->` only.
+int nearUniqueDot()
+{
+    auto u = cfg::ownConfig();
+    return u.get() != nullptr;
+}
+
+// nearTypeParamNamed: a template parameter named after the in-tree Config, instantiated with Other.
+int nearTypeParamNamed()
+{
+    auto g = cfg::create2<cfg::Other>();
+    return g.get();
+}

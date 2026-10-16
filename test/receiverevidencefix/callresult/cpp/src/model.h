@@ -34,3 +34,9 @@ struct Factory
     Config make() const;
 };
 }
+
+namespace cfg
+{
+Config                        async( int which );   // an in-tree namesake of std::async
+template<class Config> Config create2();            // a template parameter named after the in-tree Config
+}

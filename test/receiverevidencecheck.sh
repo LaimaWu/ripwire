@@ -133,7 +133,8 @@
 #            Go `x := f()` / `a, b := f()`, Rust `let x = f()?` / `let (a, _) = f()?` / `.unwrap()`, C++ `auto x = f()`, Java
 #            `var`, Kotlin `val`/`var`, TS `const x = [await] f()` — takes the callee's DECLARED return type when the callee binds
 #            exactly ONE in-tree definition with evidence (never by name alone) and that type, after the language's wrapper rows
-#            (Go `*T`, `(T, error)` by position incl. named results; Rust Result/Option/Box/&T, tuples by position; C++ T&, T*,
+#            (Go `*T`, `(T, error)` by position incl. named results, grouped names `(a, b T)` one position per NAME; Rust
+#            Result/Option/Box/&T, tuples by position; C++ T&, T*,
 #            std::unique_ptr<T>, a `using` alias through addTypeAliasBases; TS Promise<T> under await), names an in-tree class
 #            or interface. [P] RESOLVE (red before the lane); [N] near misses record NOTHING and stay as they were: an
 #            overloaded / two-def callee, an outside callee (os.Open, String::new, std::async, List.of), a wrapper outside the
@@ -143,6 +144,14 @@
 #            languages (Go UseReassigned, Kotlin useVar: still proven). One level: a callee whose receiver is itself typed by
 #            a call result is not followed (Rust use_path's `book.build()` result: floor, not gated). Twins marked `# guard`
 #            write the type and resolve before the lane (Rust has no such reader yet: no twin arm).
+#            Proven-only near misses with a WRONG namesake in tree: an outside callee beside an in-tree def of the same name
+#            (os.Open/model.Open, String::new/model::new, std::async/cfg::async, List.of/Configs.of, Object.freeze/freeze);
+#            a QUALIFIED outside result type whose last segment names an in-tree class (Go `*os.File`, Rust std::fs::File vs
+#            an in-tree File) — the qualifier must name an in-tree package/module, and the Go written/param twin is held to
+#            the same rule; a wrapper without its operator (C++ `u.get()` on unique_ptr; Rust Option without `?`, one `?`
+#            on Result<Option<T>>, a trailing method that is not unwrap/expect); a type parameter spelled like an in-tree
+#            class; both overloads of a C++ callee. Go `pkg.F` (an import name, renamed or not) reaches package-level funcs
+#            only, never a method; a LOCAL spelled like the import is not the package.
 #   (C) conservation: each root's census dispositions still sum to calls= with unaccounted=0 (no silent drop).
 #   (K) the predicates can fail: a planted unhedged false row fails notproven, a planted hedged row passes it and
 #            fails proven, marked rejects an unhedged row, a rootless or not-found answer is NOROOT, the MCP reader
@@ -1082,24 +1091,40 @@ proven    $SR/rb callees lib/panel.rb:typed "method render lib/shapes.rb:8"   # 
 echo "=== (L) call-result typing (lane call-result-typing): a binding initialised by a call takes the callee's DECLARED return type ==="
 # [P] arms are RED before the lane (the receiver is name-only: hedged or declined); [N] arms are near misses that must
 # stay green — the rule records NOTHING for them (honest floor). Roots: callresult/<lang>/ (one tree each).
+# An [N] arm forbids only a WRONG namesake. Where the true edge is a floor (the rule records nothing, so the call stays
+# name-only), the arm's comment names it and it is NOT gated either way: a later lane may prove it.
 CR=callresult
-# Go — Config.Get model.go:7, Other.Get :13, Config.Close :9, Other.Close :15, Packager.Package :18, func Get :54.
-for f in UseValue UsePtr UseOne UseMethod UseReassigned; do   # (T, error) named results, (*T, error), *T, a method callee, a reassignment (Go's static type stays)
+# Go — model.go: Config.Get :7, Other.Get :13, Config.Close :9, Other.Close :15, Packager.Package :18, func Get :54;
+#      extra.go: File.Close :8, Ref.Get :17, Deb.Package :31, Rpm.Package :35.
+for f in UseValue UsePtr UseOne UseMethod UseReassigned UseGrouped; do   # (T, error) named results, (*T, error), *T, a method callee, a reassignment (Go's static type stays), grouped names `(a, b *Config, o *Other)` element 1
     proven    $CR/go callees "src/app/app.go:$f" "method Get src/model/model.go:7"      # [P]
     notproven $CR/go callees "src/app/app.go:$f" "Get src/model/model.go:13"            # [N] the namesake is never proven
 done
-proven    $CR/go callees src/app/app.go:UsePair "method Get src/model/model.go:13"      # [P] the second result types the second name
-notproven $CR/go callees src/app/app.go:UsePair "Get src/model/model.go:7"              # [N]
+for f in UsePair UseGroupedLast; do   # the second result types the second name; grouped names count one position per NAME (element 2)
+    proven    $CR/go callees "src/app/app.go:$f" "method Get src/model/model.go:13"     # [P]
+    notproven $CR/go callees "src/app/app.go:$f" "Get src/model/model.go:7"             # [N]
+done
 proven    $CR/go callees src/app/app.go:UseIface "method Package src/model/model.go:18" # [P] an interface result types the binding as the interface
+notproven $CR/go callees src/app/app.go:UseIface "Package src/model/extra.go:31" "Package src/model/extra.go:35"   # [N] … never an implementor
 proven    $CR/go callees src/app/app.go:UseQualifiedFn "fn Get src/model/model.go:54"   # [P] `model.Get` reaches the package func, never a method (nfpm.Get)
 proven    $CR/go callees src/app/app.go:UseQualifiedFn "method Package src/model/model.go:18"   # [P] … and its result types pkg (nfpm-14 hop 1)
-notproven $CR/go callees src/app/app.go:NearExternal "Close src/model/model.go:9" "Close src/model/model.go:15"   # [N] outside callee (os.Open)
-for f in NearTwoDefs NearAlias NearWrapper NearGeneric; do   # two-def callee; a Go alias (no alias record: floor); Ref[T] outside the list; a type-parameter result
-    notproven $CR/go callees "src/app/app.go:$f" "Get src/model/model.go:7" "Get src/model/model.go:13"   # [N]
+notproven $CR/go callees src/app/app.go:UseQualifiedFn "Get src/model/model.go:7" "Get src/model/model.go:13"   # [N]
+proven    $CR/go callees src/app/renamed.go:UseRenamedImport "fn Get src/model/model.go:54"   # [P] a renamed import `m.Get` is the same package rule
+notproven $CR/go callees src/app/renamed.go:UseRenamedImport "Get src/model/model.go:7" "Get src/model/model.go:13"   # [N]
+notproven $CR/go callees src/app/app.go:NearShadowPkg "Get src/model/model.go:54" "Get src/model/model.go:13"   # [N] a local `model := …` is not the package (truth Config.Get :7)
+notproven $CR/go callees src/app/app.go:NearExternal "Close src/model/model.go:9" "Close src/model/model.go:15" "Close src/model/extra.go:8"   # [N] outside callee os.Open beside the in-tree model.Open
+notproven $CR/go callees src/app/app.go:NearTwoDefs "Get src/model/model.go:7" "Get src/model/model.go:13"   # [N] a two-def callee (truth unknown)
+notproven $CR/go callees src/app/app.go:NearWrapper "Get src/model/model.go:7" "Get src/model/model.go:13"   # [N] Ref[T] is outside the list (truth Ref.Get extra.go:17)
+for f in NearAlias NearGeneric; do   # a Go alias (no alias record); a type-parameter result Generic[model.Config] — truth Config.Get :7 (floor, not gated)
+    notproven $CR/go callees "src/app/app.go:$f" "Get src/model/model.go:13"           # [N]
 done
+notproven $CR/go callees src/app/app.go:NearTypeParamNamed "Get src/model/model.go:7"   # [N] a type parameter spelled Config, instantiated with Other (truth Other.Get :13: floor)
 notproven $CR/go callees src/app/app.go:NearShadow "Close src/model/model.go:9" "Close src/model/model.go:15"    # [N] an inner `c :=` hides the typed outer c
+notproven $CR/go callees src/app/app.go:NearQualified "Close src/model/extra.go:8"      # [N] `(*os.File, error)`: the qualifier names no in-tree package
+notproven $CR/go callees src/app/app.go:NearOSParam "Close src/model/extra.go:8"        # [N] the written/param twin `f *os.File` (a false proven edge before the lane)
 proven    $CR/go callees src/app/app.go:UseWritten "method Get src/model/model.go:7"    # guard: the written-type twin
-# Rust — Config::get model.rs:6, Other::get :13, Config::len :7, Other::len :14, Book::build :46.
+# Rust — model.rs: Config::get :6, Other::get :13, Config::len :7, Other::len :14, Book::build :46, Config::iter :66;
+#        osfile.rs: File::sync_all :5.
 for f in use_try use_option use_box use_ref use_plain use_self use_unwrap; do   # Result<T,_> + ?, Option<T> + ?, Box<T>, &T, T, a self-method callee's tuple element 0, .unwrap() / .expect(..)
     proven    $CR/rust callees "src/app.rs:$f" "method get src/model.rs:6"             # [P]
     notproven $CR/rust callees "src/app.rs:$f" "get src/model.rs:13"                   # [N]
@@ -1108,41 +1133,58 @@ proven    $CR/rust callees src/app.rs:use_tuple "method get src/model.rs:13"    
 notproven $CR/rust callees src/app.rs:use_tuple "get src/model.rs:6"                   # [N]
 proven    $CR/rust callees src/app.rs:use_path "method build src/model.rs:46"          # [P] `let book = Book::load(..)?; book.build()` (mdbook-14 hop 1)
 notproven $CR/rust callees src/app.rs:use_path "get src/model.rs:13"                   # [N] (c = book.build() is one level further: floor, not gated)
-for f in near_external near_wrapper near_shadow; do   # String::new(); Vec<T> outside the list (the slice's len); a later `let c` rebinds c
+for f in near_external near_wrapper near_shadow; do   # String::new() beside the in-tree model::new; Vec<T> outside the list (the slice's len); a later `let c` rebinds c
     notproven $CR/rust callees "src/app.rs:$f" "len src/model.rs:7" "len src/model.rs:14"   # [N]
 done
-for f in near_std_get near_two_defs near_alias near_generic; do   # a std HashMap result's get; two-def callee; a Rust alias (floor); generic T
+for f in near_std_get near_two_defs; do   # a std HashMap result's get; a two-def callee (truth unknown)
     notproven $CR/rust callees "src/app.rs:$f" "get src/model.rs:6" "get src/model.rs:13"   # [N]
 done
+for f in near_alias near_generic; do   # a Rust alias (no alias record); generic::<Config>() — truth Config::get :6 (floor, not gated)
+    notproven $CR/rust callees "src/app.rs:$f" "get src/model.rs:13"                   # [N]
+done
+for f in near_method_tail near_type_param_named; do   # `.into_other()` is not stripped like unwrap (truth Other::get: floor); a type parameter spelled Config, instantiated with Other
+    notproven $CR/rust callees "src/app.rs:$f" "get src/model.rs:6"                    # [N]
+done
+for f in near_no_try near_nested; do   # Option<T> with no `?`; Result<Option<T>> with one `?` — both leave an Option: Option::iter
+    notproven $CR/rust callees "src/app.rs:$f" "iter src/model.rs:66"                  # [N]
+done
+notproven $CR/rust callees src/app.rs:near_qualified "sync_all src/osfile.rs:5"        # [N] io::Result<std::fs::File> / std::fs::File: the qualifier names std
 # C++ — Config::get model.cpp:5, Other::get :7.
 for f in usePlain useRef usePtr useUnique useAlias useMethod; do   # T, const T&, T* (->), std::unique_ptr<T> (->), a using alias (addTypeAliasBases), a method callee
     proven    $CR/cpp callees "src/app.cpp:$f" "method get src/model.cpp:5"            # [P]
     notproven $CR/cpp callees "src/app.cpp:$f" "get src/model.cpp:7"                   # [N]
 done
-for f in nearOverload nearExternal nearWrapper nearGeneric nearShadow; do   # overloaded callee; std::async; std::reference_wrapper (its own get); template T; an inner `auto c`
+for f in nearOverload nearGeneric; do   # pick(1) of an overloaded callee; create<cfg::Config>() — truth Config::get :5 (floor, not gated)
+    notproven $CR/cpp callees "src/app.cpp:$f" "get src/model.cpp:7"                   # [N] (a last-definition bug)
+done
+for f in nearOverloadName nearTypeParamNamed; do   # pick("name") — truth Other::get :7 (floor); a template parameter spelled Config, instantiated with Other
+    notproven $CR/cpp callees "src/app.cpp:$f" "get src/model.cpp:5"                   # [N] (a first-definition bug)
+done
+for f in nearExternal nearWrapper nearShadow nearUniqueDot; do   # std::async beside the in-tree cfg::async; std::reference_wrapper (its own get); an inner `auto c`; `u.get()` on a unique_ptr (unique_ptr::get)
     notproven $CR/cpp callees "src/app.cpp:$f" "get src/model.cpp:5" "get src/model.cpp:7"   # [N]
 done
 proven    $CR/cpp callees src/app.cpp:useWritten "method get src/model.cpp:5"          # guard: the written-type twin
 # Java / Kotlin / TS (cheap rows) — Config.get vs Other.get.
 proven    $CR/java callees src/app/Use.java:useVar "method get src/app/Config.java:4"  # [P] `var c = Configs.make()`
 notproven $CR/java callees src/app/Use.java:useVar "get src/app/Other.java:4"          # [N]
-for f in nearExternal nearWrapper nearGeneric; do   # List.of(..).get; Optional<T> (its own get); <T> T
+for f in nearExternal nearWrapper; do   # List.of(..) beside the in-tree Configs.of, then l.get(0); Optional<T> (its own get)
     notproven $CR/java callees "src/app/Use.java:$f" "get src/app/Config.java:4" "get src/app/Other.java:4"   # [N]
 done
+notproven $CR/java callees src/app/Use.java:nearGeneric "get src/app/Other.java:4"     # [N] <Config>create() — truth Config.get (floor, not gated)
+notproven $CR/java callees src/app/Use.java:nearTypeParamNamed "get src/app/Config.java:4"   # [N] a type parameter spelled Config, instantiated with Other
 proven    $CR/java callees src/app/Use.java:useWritten "method get src/app/Config.java:4"   # guard
 for f in useVal useVar; do   # `val c = makeConfig()`; `var c = …; c = …` (Kotlin's declared type stays)
     proven    $CR/kt callees "src/app/Use.kt:$f" "fn get src/app/Model.kt:4"           # [P]
     notproven $CR/kt callees "src/app/Use.kt:$f" "get src/app/Model.kt:8"              # [N]
 done
-notproven $CR/kt callees src/app/Use.kt:nearInferred "get src/app/Model.kt:4" "get src/app/Model.kt:8"   # [N] no written return type
+notproven $CR/kt callees src/app/Use.kt:nearInferred "get src/app/Model.kt:8"          # [N] no written return type — truth Config.get :4 (floor, not gated)
 proven    $CR/kt callees src/app/Use.kt:useWritten "fn get src/app/Model.kt:4"         # guard
 for f in useConst useAwait; do   # `const c = makeConfig()`; `await loadConfig()` through Promise<T>
     proven    $CR/ts callees "src/use.ts:$f" "method get src/model.ts:2"               # [P]
     notproven $CR/ts callees "src/use.ts:$f" "get src/model.ts:6"                      # [N]
 done
-for f in nearUntyped nearMap; do   # no written return type (TS inference is not modelled); Object.freeze(new Map()).get
-    notproven $CR/ts callees "src/use.ts:$f" "get src/model.ts:2" "get src/model.ts:6"   # [N]
-done
+notproven $CR/ts callees src/use.ts:nearUntyped "get src/model.ts:6"                   # [N] no written return type (TS inference is not modelled) — truth Config.get :2 (floor)
+notproven $CR/ts callees src/use.ts:nearMap "get src/model.ts:2" "get src/model.ts:6"  # [N] Object.freeze beside the in-tree freeze(): Map.get
 proven    $CR/ts callees src/use.ts:useWritten "method get src/model.ts:2"             # guard
 
 echo "=== (C) conservation: no call silently disappears ==="

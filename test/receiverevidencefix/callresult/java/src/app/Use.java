@@ -7,16 +7,18 @@ public class Use {
         return c.get();
     }
 
-    // nearExternal: an outside callee whose result has a same-named member.
+    // nearExternal: an outside callee (List.of, beside the in-tree Configs.of) whose result has a same-named member.
     int nearExternal() {
         var l = java.util.List.of(new Config());
-        return l.get(0).get();
+        l.get(0);
+        return 0;
     }
 
     // nearWrapper: Optional<T> is outside the Java list; its own get() runs.
     int nearWrapper() {
         var o = Configs.find();
-        return o.get().get();
+        o.get();
+        return 0;
     }
 
     // nearGeneric: a type-parameter result.
@@ -29,5 +31,11 @@ public class Use {
     int useWritten() {
         Config c = Configs.make();
         return c.get();
+    }
+
+    // nearTypeParamNamed: a type parameter named after the in-tree Config, instantiated with Other.
+    int nearTypeParamNamed() {
+        var g = Configs.<Other>create2();
+        return g.get();
     }
 }

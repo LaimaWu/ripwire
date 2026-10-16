@@ -57,3 +57,18 @@ pub struct Mill;
 impl Mill {
     pub fn produce(&self) -> Other { Other }
 }
+
+// new: an in-tree namesake of String::new (an outside callee never types through it).
+pub fn new() -> Config { Config }
+
+// Config::iter (mdbook's Book::iter beside Option::iter) and a non-unwrap method returning Other.
+impl Config {
+    pub fn iter(&self) -> usize { 0 }
+    pub fn into_other(&self) -> Other { Other }
+}
+
+// nested: one `?` strips ONE layer — the binding is Option<Config>, not Config.
+pub fn nested() -> Result<Option<Config>, Error> { Ok(Some(Config)) }
+
+// generic2 names its type parameter after the in-tree Config.
+pub fn generic2<Config: Default>() -> Config { Config::default() }

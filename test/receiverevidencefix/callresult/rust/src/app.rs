@@ -106,3 +106,36 @@ pub fn use_unwrap(path: &str) -> u32 {
     let d = model::find("k").expect("present");
     c.get("u") + d.get("v")
 }
+
+// near_qualified: an in-tree callee returning std's File (written qualified) beside the in-tree osfile::File.
+pub fn near_qualified() -> std::io::Result<()> {
+    let f = crate::osfile::open_std()?;
+    f.sync_all()?;
+    let g = crate::osfile::open_fs();
+    g.sync_all()?;
+    Ok(())
+}
+
+// near_no_try: Option<T> without `?` — `r.iter()` is Option::iter, never Config::iter.
+pub fn near_no_try() -> usize {
+    let r = model::find("k");
+    r.iter().count()
+}
+
+// near_nested: Result<Option<T>, _> with ONE `?` leaves Option<T>: `c.iter()` is Option::iter.
+pub fn near_nested() -> Result<usize, model::Error> {
+    let c = model::nested()?;
+    Ok(c.iter().count())
+}
+
+// near_method_tail: a trailing method other than unwrap/expect is not stripped: o is Other (one level further: floor).
+pub fn near_method_tail() -> u32 {
+    let o = model::make().into_other();
+    o.get("o")
+}
+
+// near_type_param_named: a type parameter named after the in-tree Config, instantiated with Other.
+pub fn near_type_param_named() -> u32 {
+    let g = model::generic2::<model::Other>();
+    g.get("p")
+}

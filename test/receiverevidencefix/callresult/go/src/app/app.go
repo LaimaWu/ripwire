@@ -101,3 +101,38 @@ func UseQualifiedFn(info *model.Info) {
 	pkg, _ := model.Get("deb")
 	pkg.Package(info)
 }
+
+// NearQualified: an in-tree callee returning an OUTSIDE qualified type (*os.File) whose final segment names the
+// in-tree model.File: the qualifier resolves to no in-tree package, so nothing is recorded.
+func NearQualified() {
+	f, _ := model.OpenOS()
+	f.Close()
+}
+
+// NearOSParam: the written twin of the same outside type (a parameter): f.Close is os.File's.
+func NearOSParam(f *os.File) {
+	f.Close()
+}
+
+// UseGrouped / UseGroupedLast: grouped named results `(a, b *Config, o *Other)` count one position per NAME.
+func UseGrouped() {
+	_, y, _ := model.Triple()
+	y.Get("deb")
+}
+
+func UseGroupedLast() {
+	_, _, z := model.Triple()
+	z.Get("rpm")
+}
+
+// NearTypeParamNamed: a type parameter named after the in-tree Config, instantiated with Other.
+func NearTypeParamNamed() {
+	g := model.Generic2[model.Other]()
+	g.Get("deb")
+}
+
+// NearShadowPkg: a local spelled like the import is not the package — `model.Get` here is a method call on the local.
+func NearShadowPkg() {
+	model := model.Make()
+	model.Get("x")
+}

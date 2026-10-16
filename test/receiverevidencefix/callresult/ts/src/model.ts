@@ -11,3 +11,5 @@ export function makeConfig(): Config { return new Config(); }
 export function makeUntyped() { return new Config(); }
 
 export async function loadConfig(): Promise<Config> { return new Config(); }
+
+export function freeze(): Config { return new Config(); }

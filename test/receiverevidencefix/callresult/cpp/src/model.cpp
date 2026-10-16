@@ -16,3 +16,8 @@ Other pick( const char* ) { return {}; }
 std::reference_wrapper<Config> wrapRef() { static Config c; return c; }
 Config Factory::make() const { return {}; }
 }
+
+namespace cfg
+{
+Config async( int ) { return {}; }
+}
