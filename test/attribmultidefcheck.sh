@@ -470,7 +470,12 @@ if ans f_rs rs callers s xml -- --callers=iter; then
     hedged P f_rs count_items "src/lib.rs:3 src/lib.rs:7"
     hedged P f_rs count_books "src/lib.rs:3 src/lib.rs:7"
     case "$( rowflags f_rs count_items )" in *via=name*) ok "[N] f_rs: the existing via=\"name\" row hedge stays" ;; *) no "[N] f_rs: via=\"name\" lost on count_items" ;; esac
-    rowset C f_rs 2 "count_books count_items"
+    # train 29 (call-result typing): a Rust member call now carries its receiver PATH, so `self.items.iter()` inside each
+    # iter is a chained receiver no rule types — name-only, each listing the OTHER iter (hedged), where before `self` alone
+    # proved the caller's own method (a self-loop, dropped). The two attributed rows above are unchanged.
+    rowset C f_rs 4 "count_books count_items iter iter"
+    [ -z "$( awk -F'\t' '$1=="ROW" && $2=="iter" && $4 !~ /via=name/' "$DIR/f_rs.rows" )" ]; say $? "[N] f_rs: both iter rows (self.items.iter() / self.books.iter()) are via=\"name\"" \
+        "[N] f_rs: an iter row lost its via=\"name\" hedge"
 fi
 if ans f_objc objc callers s xml -- --callers=area; then
     hedged P f_objc circleArea "Shapes.m:6 Shapes.m:12"

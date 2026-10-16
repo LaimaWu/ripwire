@@ -5125,7 +5125,7 @@ inline void captureGoEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32
         const TSNode left  = fieldChild( n, NodeField::Left );
         const TSNode right = fieldChild( n, NodeField::Right );
         const bool   one   = !ts_node_is_null( left ) && !ts_node_is_null( right ) && ts_node_named_child_count( left ) == 1 && ts_node_named_child_count( right ) == 1;
-        const BindSite site = goShortVarSite( n, at );
+        const auto   site  = goShortVarSite( n, at );
         pushGoNames( cx, left, one ? constructedBy( ts_node_named_child( right, 0 ), cx.lang, src ) : std::string_view{}, site );
         // (L) `x := f()` / `a, b := f()`: one CallResult per name, by position — the resolve loop types each from f's results
         const TSNode call = ( !ts_node_is_null( right ) && ts_node_named_child_count( right ) == 1 ) ? ts_node_named_child( right, 0 ) : TSNode{};
@@ -5349,7 +5349,11 @@ inline TSNode rustUnwrappedCall( TSNode value, std::uint8_t& depth, std::string_
 inline BindSite rustLetSite( TSNode decl, std::uint32_t at )
 {
     const TSNode block = ancestorOfKind( decl, { "block" } );
-    return ts_node_is_null( block ) ? BindSite{ at, 0u, 0u } : BindSite{ at, ts_node_end_byte( decl ), ts_node_end_byte( block ) };
+    if( ts_node_is_null( block ) )
+    {
+        return { at, 0u, 0u };
+    }
+    return { at, ts_node_end_byte( decl ), ts_node_end_byte( block ) };
 }
 
 // FE-B for Rust (train 29): every name a function binds is a tombstone over its span — `let` patterns, parameters, closure
@@ -5365,7 +5369,7 @@ inline void captureRustEvidence( BindCtx& cx, TSNode n, const char* t, std::uint
     else if( kindIs( t, "let_declaration" ) )
     {
         const TSNode   pattern = fieldChild( n, NodeField::Pattern );
-        const BindSite site    = rustLetSite( n, at );
+        const auto     site    = rustLetSite( n, at );
         pushPatternTombstones( cx, pattern, site );
         std::uint8_t depth = 0;
         const TSNode call  = ts_node_is_null( fieldChild( n, NodeField::Type ) ) ? rustUnwrappedCall( fieldChild( n, NodeField::Value ), depth, cx.src ) : TSNode{};
@@ -5727,17 +5731,16 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
             // exists and shadows).
             if( kindIs( ct, "init_declarator" ) )
             {
-                const TSNode declarator = fieldChild( c, NodeField::Declarator );
-                emitDeclBinds( fileId, lang, declarator, src, declaredTypeOf( written, fieldChild( c, NodeField::Value ), src ),
-                               BindSite{ ts_node_start_byte( n ), shadowSpanStart( scope, declarator ), scope.end }, binds );
+                const TSNode   declarator = fieldChild( c, NodeField::Declarator );
+                const BindSite declSite{ ts_node_start_byte( n ), shadowSpanStart( scope, declarator ), scope.end };
+                emitDeclBinds( fileId, lang, declarator, src, declaredTypeOf( written, fieldChild( c, NodeField::Value ), src ), declSite, binds );
                 // (L) `auto x = f()` / `const auto& x = f()`: the callee's declared result types x (graph.h's resolve loop)
                 const TSNode type  = fieldChild( n, NodeField::Type );
                 const TSNode value = fieldChild( c, NodeField::Value );
                 if( !ts_node_is_null( type ) && kindIs( ts_node_type( type ), "placeholder_type_specifier" ) && !ts_node_is_null( value )
                     && kindIs( ts_node_type( value ), "call_expression" ) )
                 {
-                    pushCallResult( cx, cppDeclaredName( declarator ), value, 0, 0,
-                                    BindSite{ ts_node_start_byte( n ), shadowSpanStart( scope, declarator ), scope.end } );
+                    pushCallResult( cx, cppDeclaredName( declarator ), value, 0, 0, declSite );
                 }
             }
             else   // plain declarator (identifier / pointer_declarator / reference_declarator), no initializer

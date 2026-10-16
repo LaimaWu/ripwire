@@ -77,7 +77,7 @@ enum class NodeField : std::uint8_t
     Superclasses, Target, Trait, Type, Update,
     Value,
     Op,
-    Result, ReturnType, TypeParameters,   // train 29 call-result typing: Go's `result`, Rust's `return_type`, Go's `type_parameters`
+    Result, ReturnType, TypeParameters,
     Count
 };
 
