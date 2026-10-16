@@ -2199,7 +2199,7 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
             share = forSoftSectionsShare( budgetBytesForTokens( budgetTokens ), mcpHdrXml.size() + atCut + legoStr.size() + composeStr.size() + routeStr.size() );
         }
         mcpSlot = renderForBodySlot( BodySlotInputs{ ing, in.g.outOff, in.g.outTargets, in.g.outNameOnly, lensRank, flRootArg, redact, notesPtr,
-                                                     /*viaLegendInHead=*/false, /*compress=*/false },
+                                                     /*viaLegendInHead=*/false, /*compress=*/false, &in.g.outProv, /*splitLegendInHead=*/false },
                                      in.slotOwner, share );
     }
     mcpForSoftRefill( in, renderSigs, sigsStr, mcpSigsCut, &mcpSigsNext,

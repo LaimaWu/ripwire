@@ -3780,7 +3780,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             const std::size_t slotSpent = rowsSpentBytes + plan.attrReserve + enrich.section.xml.size();   // the rows at the cut + the hops
             slot = rw::renderForBodySlot( rw::BodySlotInputs{ ing, g.outOff, g.outTargets, g.outNameOnly, lensRank, flRootArg, redactPtr, notesPtr,
-                                                              headerParts.viaPresent, cfg.compress },
+                                                              headerParts.viaPresent, cfg.compress, &g.outProv, headerParts.splitPresent },
                                           slotOwner, forSoftTarget ? std::optional<std::size_t>( rw::forSoftSectionsShare( bundleBudget, slotSpent ) )
                                                                    : std::nullopt );
             if( slot.served )

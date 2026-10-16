@@ -387,6 +387,10 @@ struct BodySlotInputs
     const notes::NoteIndex*           notes;
     bool                              viaLegendInHead;   // the header already defines via="name"
     bool                              compress;          // --compress (the CLI only; the MCP twin never sets it)
+    // train 28 (for-body-slot x attrib-multidef): the slot's <calls> rows carry prov="split" like every other --for body's, so
+    // a split arm reads as one here too; the split reading rides beside the rows unless the header already defines it
+    const std::vector<std::uint8_t>*  outProv           = nullptr;   // Graph::outProv (nullptr: no split labels)
+    bool                              splitLegendInHead = false;     // the header already defines prov="split"
 };
 inline BodySlotRender renderForBodySlot( const BodySlotInputs& in, ForBodySlotOwner owner, std::optional<std::size_t> share )
 {
@@ -394,9 +398,9 @@ inline BodySlotRender renderForBodySlot( const BodySlotInputs& in, ForBodySlotOw
     BodySlotRender                    out;
     const std::optional<RedactCounts> before = in.redact != nullptr ? std::optional<RedactCounts>( *in.redact ) : std::nullopt;
     ChargedSection sec = chargeSection( [ & ]( std::FILE* f )
-        { packBodies( f, in.ing, { owner.id }, kForBodySlotMaxBytes, in.outOff, in.outTargets, in.outNameOnly, in.compress, in.redact,
-                      /*ranges=*/nullptr, in.notes, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true, /*withFileContext=*/false,
-                      in.rootArg, &in.lensRank, in.viaLegendInHead ); },
+        { packBodies( f, in.ing, { owner.id }, kForBodySlotMaxBytes, in.outOff, in.outTargets, CalleeEdgeBytes( in.outNameOnly, in.outProv ),
+                      in.compress, in.redact, /*ranges=*/nullptr, in.notes, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
+                      /*withFileContext=*/false, in.rootArg, &in.lensRank, CalleeLegendsInHead( in.viaLegendInHead, in.splitLegendInHead ) ); },
         kBytesPerTokenBody );
     if( !sec.isRendered )
     {
