@@ -688,8 +688,7 @@ inline std::string declinedCallsLegendForRows( bool on, bool gateDeclined, bool 
     {
         return declinedCallsLegendWithGates( on, gateDeclined, stdDeclined, inertDeclined );
     }
-    return std::string( kDeclinedCallsRowsLegend ) + declinedCallsGateLegend( gateDeclined )
-         + ( inertDeclined ? std::string( kInertDeclinedCallsClause ) + kInertNoDcRowClause : std::string() ) + declinedCallsStdLegend( stdDeclined );
+    return std::string( kDeclinedCallsRowsLegend ) + declinedCallsGateLegend( gateDeclined ) + ( inertDeclined ? std::string( kInertDeclinedCallsClause ) + kInertNoDcRowClause : std::string() ) + declinedCallsStdLegend( stdDeclined );
 }
 // The <dc> clause, in the gates review's words (R10): what a row is, and above all what it is NOT. Each later sentence rides
 // only where its attribute does, so an answer pays for the vocabulary it prints.
@@ -753,7 +752,8 @@ inline std::string declinedSitesLegend( const DeclinedSitesLegendFlags& f, bool 
     out += f.side ? kDeclinedSitesSideClause : "";
     out += f.nameGate ? kDeclinedSitesNameGateClause : "";
     out += f.ofDef ? ( f.callersForm ? ( mcp ? kDeclinedSitesOfDefCallersMcp : kDeclinedSitesOfDefCallers )
-                                     : ( mcp ? kDeclinedSitesOfDefCalleesMcp : kDeclinedSitesOfDefCallees ) ) : "";
+                                     : ( mcp ? kDeclinedSitesOfDefCalleesMcp : kDeclinedSitesOfDefCallees ) )
+                   : "";
     out += f.cut ? ( mcp ? kDeclinedSitesCutClauseMcp : kDeclinedSitesCutClause ) : "";
     out += f.cand ? ( mcp ? kDeclinedSitesCandClauseMcp : kDeclinedSitesCandClause ) : "";
     return out;
