@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/Diagnostics.h" // ENSURES (callHierarchyRowCap)
 
 
 // pageview.h — §P8 ("Contract-level" bullets 1+2): the ONE paging window
@@ -173,11 +174,11 @@ inline constexpr int kCallHierarchyBandMax = kCallHierarchyRowCap + kCallHierarc
 // a total inside the band is its own cap, anything larger keeps kCallHierarchyRowCap.
 inline int callHierarchyRowCap( int pageLimit, std::size_t rowTotal ) noexcept
 {
-    if( pageLimit <= 0 && rowTotal > std::size_t( kCallHierarchyRowCap ) && rowTotal <= std::size_t( kCallHierarchyBandMax ) )
-    {
-        return int( rowTotal );
-    }
-    return effectiveRowCap( pageLimit, kCallHierarchyRowCap );
+    const int cap = ( pageLimit <= 0 && rowTotal > std::size_t( kCallHierarchyRowCap ) && rowTotal <= std::size_t( kCallHierarchyBandMax ) )
+                        ? int( rowTotal )
+                        : effectiveRowCap( pageLimit, kCallHierarchyRowCap );
+    ENSURES( cap > 0, "a call-hierarchy window always holds at least one row: the band, an explicit --limit or the default 40" );
+    return cap;
 }
 // M13 (capture-audit 2026-09-04): --cochange's per-file partner cap. It was a bare `30` literal inside
 // verbs_report.h's --cochange arm and NOTHING at all on the MCP twin, which served every partner uncapped

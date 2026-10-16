@@ -9,7 +9,8 @@
 // pasteable invocation, typically ≤ kNextAttrMaxBytes and never dropped past it: --edit-check contract-change → --uses=SYM; --impact →
 // --safe-delete=SYM; a gating --quality-delta row → --expand=FILE:NAME; --test-gate → its first run= command;
 // --situ → --test-gate; --from-trace/--run-trace → --slice=@FILE:LINE (the innermost in-corpus frame);
-// --callers → --uses=SELECTOR (bare NAME for a narrowed selector with declined calls; otherwise the spelling is mirrored);
+// --callers → --uses=SELECTOR (bare NAME for a narrowed selector with declined calls; otherwise the spelling is mirrored), or the next
+// page (callersPageNext below) on a capped callers page, the uses verb then riding as uses_next=;
 // --grep → --at=FILE:LINE of the top hit, or the
 // next page under --legend=compact when the answer is capped, or --for=PAT on a zero-hit answer; --for → the
 // top-ranked row's --expand=FILE:NAME. Gate: test/nextverbcheck.sh — every next= that starts with `--` is run
@@ -177,6 +178,14 @@ inline std::string pagedNext( std::string_view invocation, int pageLimit, std::s
         out += " --offset=" + std::to_string( nextOffset );
     }
     return out;
+}
+
+// L8 (train 29): the NEXT PAGE of a callers listing — the CLI --callers root's next=, find_referencing_symbols' next and
+// find_symbol's calledBy_next all name this one call, so the three cannot spell the page differently. `selector` is the
+// selector as typed (a file:name narrowing is kept); `columnar` keeps --format=columnar so the page has the same form.
+inline std::string callersPageNext( std::string_view selector, int pageLimit, std::size_t nextOffset, bool columnar = false )
+{
+    return pagedNext( nextFlag( "--callers=", selector ) + ( columnar ? " --format=columnar" : "" ), pageLimit, nextOffset );
 }
 
 } // namespace rw

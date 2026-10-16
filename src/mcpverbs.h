@@ -676,8 +676,7 @@ inline std::string calledByCutJson( std::string_view name, std::size_t total, co
                     + ",\"calledBy_capped\":true";
     if( window.end < total )
     {
-        const std::string next = nextFlag( "--callers=", name ) + ( pageLimit > 0 ? " --limit=" + std::to_string( pageLimit ) : std::string() )
-                               + " --offset=" + std::to_string( window.end );
+        const std::string next = callersPageNext( name, pageLimit, window.end );
         out += ",\"calledBy_next\":\"" + mcpdetail::jsonEscape( next ) + "\"";
     }
     return out;
@@ -841,7 +840,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
          + declinedIfaceKeyJson( chRows.declinedIface )   // the CLI root's declined_iface= (callers direction only)
          + stdMemberCallsSpelling( chRows.stdCalls, /*json=*/true )       // the CLI callees answer's <stdm> line (callees direction only; absent when none)
          + ( referencingOnly && pwPrimary.end < rowTotal   // L8: a capped callers page names the next page, the uses verb as uses_next (the CLI root's pair)
-                 ? nextFieldJson( pagedNext( nextFlag( "--callers=", name ), page.limit, pwPrimary.end ) ) + nextFieldJson( nextFlag( "--uses=", chNextSelector ), "uses_next" )
+                 ? nextFieldJson( callersPageNext( name, page.limit, pwPrimary.end ) ) + nextFieldJson( nextFlag( "--uses=", chNextSelector ), "uses_next" )
                  : nextFieldJson( nextFlag( referencingOnly ? "--uses=" : "--expand=", chNextSelector ) ) );   // P3 (L7): the CLI root's next= (mcpattrparitycheck)
     if( !referencingOnly && chRows.bodylessDefs > 0 )
     {

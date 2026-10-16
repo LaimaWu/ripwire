@@ -290,7 +290,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // Callees keep expand on the original selector; nextFlag retains quoting and the 120-byte contract.
         const std::string chHintCall = rw::nextFlag( wantCallers ? "--uses=" : "--expand=", chNextSelector );
         const std::string chNextAttr = chNextIsPage
-            ? rw::nextAttrXml( rw::pagedNext( rw::nextFlag( "--callers=", sym ) + ( cfg.columnar ? " --format=columnar" : "" ), cfg.pageLimit, pw.end ) )
+            ? rw::nextAttrXml( rw::callersPageNext( sym, cfg.pageLimit, pw.end, cfg.columnar ) )
                 + rw::nextAttrXml( chHintCall, "uses_next" )
             : rw::nextAttrXml( chHintCall );
         // The tier-3 declines count= does not include (callhierarchy.h), on every dialect; absent at zero.
