@@ -5348,12 +5348,9 @@ inline TSNode rustUnwrappedCall( TSNode value, std::uint8_t& depth, std::string_
 // Rust: where a `let` name is visible — from the end of its statement (`let c = c.f();` reads the OUTER c) to its block's end
 inline BindSite rustLetSite( TSNode decl, std::uint32_t at )
 {
-    const TSNode block = ancestorOfKind( decl, { "block" } );
-    if( ts_node_is_null( block ) )
-    {
-        return { at, 0u, 0u };
-    }
-    return { at, ts_node_end_byte( decl ), ts_node_end_byte( block ) };
+    auto site = siteFrom( ts_node_end_byte( decl ), ancestorOfKind( decl, { "block" } ) );   // the statement's end .. the block's end
+    site.startByte = at;   // the record itself sits at the statement (enclosing-def attribution)
+    return site;
 }
 
 // FE-B for Rust (train 29): every name a function binds is a tombstone over its span — `let` patterns, parameters, closure
