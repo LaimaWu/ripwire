@@ -140,7 +140,10 @@ import re, sys
 PRESENT_ONLY = re.compile( r'dropped_positive|docs_dropped|capped=[#1] with shown|sigs next|next_offset|next_budget|past_target|'
                            r'budget_bytes|BYTE target|over_ceiling|runaway|docs_after_code|relevance floor|this budget left out|'
                            r'e= on a d row|d e= its last line|extent is not known|line of the definition|the name.s line|'
-                           r'sc=scope|cut, recoverable|bodies shown|hops shown=#|collapse to a counted stub', re.I )
+                           r'sc=scope|cut, recoverable|bodies shown|hops shown=#|collapse to a counted stub|'
+                           # the <c> row readings ride only with a row that carries them: a spent target's hops cut marker
+                           # leaves none (via="name" since forbudget-soft, attrib-multidef's prov="split" since train 28)
+                           r'on a <c> row|c prov=split|another arm|NOT mean the edge is false|NOT a claim the edge is false', re.I )
 def clauses( path ):
     s = open( path ).read()
     head = s.split( '<sigs', 1 )[ 0 ]
