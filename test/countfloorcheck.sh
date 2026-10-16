@@ -437,11 +437,9 @@ USES_P="$( run pc --uses=NAMED | grep -oE '<u role="read" p="[^"]*"' | sed 's/.*
 if [ "$USES_P" = "lib/reader.py:4 lib/reader.py:7 test_reader.py:4 " ]; then ok "(P) the same three sites --uses=NAMED lists as role=\"read\""; else no "(P) --uses=NAMED read rows: $USES_P"; fi
 if [ "$( attr "$( root_tag "$OUT_P" grep )" next )" = "--uses=NAMED" ]; then ok "(P) root next=\"--uses=NAMED\" (the top hit's carrier has reads)"; else no "(P) root next on NAMED: $( root_tag "$OUT_P" grep )"; fi
 case "$ROW_P" in *vals=*) no "(P) a carrier holding a string got vals=: $ROW_P" ;; *) ok "(P) no vals= on a carrier that stores no function" ;; esac
-# langfacts-fold (train 29): a Markdown file that names the carrier is no reader of it. Green before the fold and after it
-# (src/grepcarrier.h readSitesOf drops a Markdown reference through the language-facts column isDocument); the pc corpus plus
-# one doc. A CONTROL, not a mutation-sensitive arm, said plainly: a Markdown reference is a doc-link mention or a doc-to-doc
-# call, never role Read, so the role test already drops it and the isDocument clause is a second guard. Clearing the column
-# for Markdown leaves this arm green (checked on the fold's binary); the arm pins the answer, not that clause.
+# langfacts-fold (train 29): a Markdown file that names the carrier is no reader of it (the pc corpus plus one doc). A Markdown
+# reference is a doc-link mention or a doc-to-doc call, never role Read, so readSitesOf's role test drops it; a former
+# per-language "is a document" clause there was dead (no producer gives a Markdown ref role Read) and is gone.
 mkdir -p "$W/pcmd"; cp -R "$W/pc/." "$W/pcmd/"; mkdir -p "$W/pcmd/docs"
 printf '# Guide\n\nSet `NAMED` before use; see [NAMED](lib/conf.py) and the NAMED value.\n\n```python\nconf.NAMED\nNAMED\n```\n' > "$W/pcmd/docs/guide.md"
 ROW_PMD="$( enc_row "$( run pcmd --grep=PC_NAMED_MARK )" NAMED )"

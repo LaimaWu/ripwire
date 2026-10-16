@@ -59,10 +59,6 @@ struct LangFacts
     /// declared inheritance chain (graph.h).
     bool mixinAncestry = false;
 
-    /// Markdown: the file is prose. A reference in it is a mention in a document, never a read of a code variable, so the `--uses`
-    /// read sites and everything built on them (grepcarrier.h) leave it out.
-    bool isDocument = false;
-
     /// Ruby: an element access `recv[ k ]` whose receiver the shape rules cannot classify (a call result, a richer expression) is
     /// still recorded as a site on that receiver, because the typing walk may type it later (`Report.new[ :x ]`). Python and the
     /// rest record nothing for such a receiver (ingest_binds.h subscriptOperatorRef).
@@ -91,7 +87,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Rust },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC },
-    { .lang = Lang::Markdown, .isDocument = true },
+    { .lang = Lang::Markdown },
     { .lang = Lang::JavaScript },
     { .lang = Lang::Bash },
     { .lang = Lang::Java },
