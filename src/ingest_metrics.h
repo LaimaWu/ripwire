@@ -1474,8 +1474,16 @@ inline std::uint16_t countParams( TSNode defNode )   // A4-F25: NOT noexcept —
 //   * `receiverChild`      — a child holding a node of this kind is never passed (TS `this: T`) → NO minimum;
 //   * `decoratedParent`    — a def whose PARENT is this kind is decorated; a decorator may supply arguments → NO minimum;
 //   * `selfOwner`          — a def whose nearest enclosing class-or-function scope is this kind is a method whose first
-//                            parameter (`self`/`cls`) the call omits → NO minimum. Python tags every `def` @definition.function, so SymKind::Method never
-//                            marks a Python method and the kind gate below cannot see one; the parse tree can.
+//                            parameter (`self`/`cls`) the call omits → NO minimum. Python tags every `def`
+//                            @definition.function, so SymKind::Method never marks a Python method and the kind gate
+//                            below cannot see one; the parse tree can.
+//   * `fnValue`            — a parameter list owned by a function VALUE of this kind (TS arrow / function expression,
+//                            Python lambda) bound to the def's name gets a minimum only when the arrow's own list IS
+//                            the call's contract: the value is the binding's `value` directly (no `as`/`satisfies` cast,
+//                            no wrapper), the binding carries no `type` annotation, and every parameter carries its own
+//                            `type`. Otherwise the signature lives elsewhere — hono `header: SetHeaders = (name, value,
+//                            options) => …` takes `value?`/`options?` from SetHeaders, and an untyped parameter is
+//                            contextually typed — so the arrow's parameter count says nothing about optionality → NO minimum.
 // Every kind name is the vendored grammar's own (third_party/deps/<lang>/src/parser.c symbol table). Languages
 // WITHOUT a row, each for a stated reason: JavaScript (a call may legally pass fewer arguments than declared);
 // Swift (a trailing closure is an argument outside the list callArity counts); Kotlin, C#, PHP, Ruby, Dart and the
@@ -1491,12 +1499,13 @@ struct ParamMinLang
     std::string_view receiverChild;
     std::string_view decoratedParent;
     std::string_view selfOwner;
+    std::string_view fnValue[2];
 };
 inline constexpr ParamMinLang kParamMinLangs[] = {
-    { Lang::Cpp,        { "optional_parameter_declaration", {} },        {},                   { {}, {} },                                     "void", {},     {},                     {} },
-    { Lang::Java,       { {}, {} },                                      {},                   { {}, {} },                                     {},     {},     {},                     {} },   // no default parameters
-    { Lang::Python,     { "default_parameter", "typed_default_parameter" }, {},                { "keyword_separator", "positional_separator" }, {},     {},     "decorated_definition", "class_definition" },
-    { Lang::TypeScript, { "optional_parameter", {} },                    "required_parameter", { {}, {} },                                     {},     "this", {},                     {} },
+    { Lang::Cpp,        { "optional_parameter_declaration", {} },        {},                   { {}, {} },                                     "void", {},     {},                     {},                 { {}, {} } },
+    { Lang::Java,       { {}, {} },                                      {},                   { {}, {} },                                     {},     {},     {},                     {},                 { {}, {} } },   // no default parameters
+    { Lang::Python,     { "default_parameter", "typed_default_parameter" }, {},                { "keyword_separator", "positional_separator" }, {},     {},     "decorated_definition", "class_definition", { "lambda", {} } },
+    { Lang::TypeScript, { "optional_parameter", {} },                    "required_parameter", { {}, {} },                                     {},     "this", {},                     {},                 { "arrow_function", "function_expression" } },
 };
 // Is `def` a member of an `owner`-kind node: the nearest enclosing `owner` or function is `owner`. The walk has no
 // depth cap — a class body may hold a def under any number of `if`/`try`/`with`/`else` blocks and a decorator wrapper
@@ -1534,7 +1543,7 @@ inline bool paramKindIn( std::string_view t, const std::string_view ( &kinds )[2
 //     optional parameter (`= v`, TS `x?`) — any of which makes the accepted arity a RANGE, not a point.
 // `minimum`: the fewest arguments a call can pass — the list's parameters minus its defaulted ones and minus what is
 // no parameter (kParamMinLangs). 0 = no lower bound known: no row, a variadic or implicit-self list, a receiver
-// parameter, a decorated def, a Python method, or no list. The resolver takes the minimum over this def AND every declaration of
+// parameter, a decorated def, a Python method, a function value typed elsewhere, or no list. The resolver takes the minimum over this def AND every declaration of
 // it (graph.h paramsMinAcrossDeclarations), because C++ may put the default on a separate prototype only.
 // A bounded pre-order scan of the FIRST parameter list mirrors countParams; deterministic.
 struct ParamShape
@@ -1597,21 +1606,21 @@ inline ParamShape cc_paramShape( TSNode defNode, Lang lang, SymKind kind, std::s
         const char* t = ts_node_type( f.n );
         if( f.n.id != defNode.id && cc_isParamList( t ) )       // the FIRST parameter list — classify and scan it
         {
-            collectChildren( f.n, cursor.cur, kids );
-            const std::vector<TSNode> params = kids;           // the list's direct children (the scan reuses kids)
+            collectChildren( f.n, cursor.cur, kids );           // the list's direct children — read before the scan below reuses kids
             std::uint16_t named = 0, defaulted = 0, notParam = 0;
-            bool          elastic = false, receiver = false;
+            bool          elastic = false, receiver = false, untyped = false;
             TSNode        lone{};
             struct QF { TSNode n; std::uint16_t depth; };
             std::vector<QF> q;
             q.reserve( 32 );
-            for( const TSNode c : params )
+            for( const TSNode c : kids )
             {
                 const char* ct = ts_node_type( c );
                 if( ts_node_is_named( c ) && !kindIs( ct, "comment" ) )
                 {
                     ++named;
-                    lone = c;
+                    lone    = c;
+                    untyped = untyped || ts_node_is_null( fieldChild( c, NodeField::Type ) );
                     if( isDefaulted( c ) )
                     {
                         ++defaulted;
@@ -1645,7 +1654,15 @@ inline ParamShape cc_paramShape( TSNode defNode, Lang lang, SymKind kind, std::s
                                    && std::string_view( ts_node_type( decoParent ) ) == row->decoratedParent;
             const bool   method     = row != nullptr && !row->selfOwner.empty() && ownedBy( defNode, row->selfOwner );
             const bool   soleVoid   = row != nullptr && !row->soleVoid.empty() && named == 1 && nodeTextOf( lone, src ) == row->soleVoid;
-            if( row != nullptr && !elastic && !receiver && !decorated && !method && !soleVoid )
+            // a function VALUE whose signature lives elsewhere (row comment `fnValue`): annotated or cast binding, or a
+            // contextually typed (untyped) parameter.
+            const TSNode fnNode     = ts_node_parent( f.n );
+            const TSNode binding    = ts_node_is_null( fnNode ) ? TSNode{} : ts_node_parent( fnNode );
+            const bool   fnValue    = row != nullptr && !ts_node_is_null( fnNode ) && paramKindIn( ts_node_type( fnNode ), row->fnValue );
+            const bool   typedElsewhere = fnValue
+                                   && ( untyped || ts_node_is_null( binding ) || !ts_node_eq( fieldChild( binding, NodeField::Value ), fnNode )
+                                        || !ts_node_is_null( fieldChild( binding, NodeField::Type ) ) );
+            if( row != nullptr && !elastic && !receiver && !decorated && !method && !soleVoid && !typedElsewhere )
             {
                 ASSUME( defaulted + notParam <= named );   // each counted child is one of the named ones
                 shape.minimum = std::uint16_t( named - defaulted - notParam );
