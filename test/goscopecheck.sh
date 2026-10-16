@@ -22,6 +22,9 @@
 #   (D) the cache round-trips the scope: a warm run equals the --no-cache run byte for byte.
 #   (E) the multi-definition table: --callers=Loop labels its two <def> rows sc="Matcher" and sc="Terminal".
 #   (F) unchanged rows: a Python class keeps sc= on itself, its method and a nested function (the SelfAndInside row).
+#   (G) entity identity: Matcher.Loop and Terminal.Loop (one file, two receiver types) are two map rows, never one
+#       overloads="2" row (Go has no overloading; the owner-less ids used to fold them).
+#   (H) --uses names a call's enclosing method by its scoped id (deb.go::Deb::Package); a free function keeps its name.
 #
 # Go struct fields are not indexed as definitions (queries/go/tags.scm captures none), so "a struct field scopes to its
 # struct" has no row to check; the nearest-type_spec rule is pinned by the interface-in-function arm instead.
@@ -108,6 +111,19 @@ run --callers=Loop
 if [ "$rc" -eq 0 ] && grep -q '<def ix="1" t="method" sc="Matcher"' "$TMP/out" && grep -q '<def ix="2" t="method" sc="Terminal"' "$TMP/out"; then
     ok "(E) --callers=Loop def rows carry sc=\"Matcher\" and sc=\"Terminal\""
 else no "(E) --callers=Loop (rc=$rc): the <def> rows do not name both owners"; fi
+
+echo "=== (G) two receiver types' same-named methods in one file are two rows, never overloads ==="
+loops="$( grep -o '<s t="method" n="Loop"[^>]*>' "$TMP/map.xml" )"
+nloops="$( printf '%s\n' "$loops" | grep -c 'n="Loop"' )"
+if [ "$nloops" -eq 2 ] && ! printf '%s' "$loops" | grep -q 'overloads='; then ok "(G) Matcher.Loop and Terminal.Loop are 2 map rows, no overloads="
+else no "(G) wanted 2 Loop rows without overloads=, got: $loops"; fi
+
+echo "=== (H) --uses names the enclosing method by its scoped id ==="
+run --uses=ConventionalFileName
+if [ "$rc" -eq 0 ] && grep -q '<u role="call" p="deb.go:11" in_id="deb.go::Deb::Package"/>' "$TMP/out" \
+   && grep -q '<u role="call" p="other.go:38" in_id="Run"/>' "$TMP/out"; then
+    ok "(H) the call in Deb.Package reads in_id=\"deb.go::Deb::Package\"; the free function Run keeps in_id=\"Run\""
+else no "(H) --uses=ConventionalFileName (rc=$rc) lacks the scoped in_id rows"; fi
 
 echo "=== (F) unchanged rows: a Python class's scope ==="
 mkdir -p "$TMP/py"
