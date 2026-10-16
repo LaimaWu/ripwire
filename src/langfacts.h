@@ -115,7 +115,7 @@ constexpr std::size_t firstMisorderedRow( const std::array<LangFacts, N>& table 
                                                  { return static_cast<std::size_t>( static_cast<Lang>( row.lang ) ) != expected++; } );
     return static_cast<std::size_t>( misplaced - table.begin() );
 }
-static_assert( firstMisorderedRow( kLangFacts ) == kLangCount, "kLangFacts: one row per Lang, in enum order — the first row out of place is firstMisorderedRow(kLangFacts)" );
+static_assert( firstMisorderedRow( kLangFacts ) == kLangCount, "kLangFacts: one row per Lang, in enum order — the compiler's note 'evaluates to A == B' gives the first row out of place as A (B = kLangCount)" );
 
 /// The row of `l`; a value past the enum (a corrupt cache byte) reads the all-default row.
 inline constexpr LangFacts langFacts( Lang l ) noexcept
