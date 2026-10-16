@@ -710,9 +710,12 @@ inline constexpr std::string_view kForCompactLegendBodies =
     "; b t= n= p= l= full bodies, c n= l= callee signatures";
 // for-body-slot: the compact dialect's reading of the ONE owner body (the full dialect's is forowner.h kForBodySlotLegend + the
 // root clause below), present-only (bodySlotPresent), right after the owner clause. No "--": it rides inside an XML comment.
+// FIX1 R3: it states what the full one states — what each pick= means and what reason=owner does NOT mean (the subject, the
+// whole answer): the default posture is this dialect, so this is the only reading most readers get.
 inline constexpr std::string_view kForCompactLegendBodySlot =
-    "; b t= n= p= l= full bodies, c n= l= callee signatures; bodies=1 reason=owner: ONE owner body, by name not resolved "
-    "(pick=name|member), not the only relevant one; shown=0 capped=1 next= when a budget skipped it";
+    "; b t= n= p= l= full bodies, c n= l= callee signatures; bodies=1 reason=owner: ONE body, the question's owner by the rule "
+    "(pick=name: its name is a question word; pick=member: a method so named of a ranked class), chosen by name not resolved; "
+    "not necessarily the subject, not a claim it is the whole answer; shown=0 capped=1 next= when a budget skipped it";
 static_assert( kForCompactLegendBodySlot.starts_with( kForCompactLegendBodies ), "the slot's compact clause defines <b> as the bodies clause does" );
 inline constexpr std::string_view kForBodySlotRootClause = "; when it rides this root reads bodies=1 reason=owner";
 inline std::string bodySlotLegend( const ForLensHeaderParts& p, bool compact )

@@ -46,7 +46,8 @@
 #   D2 [G] T_D: not verify's body (jwt is r1 here, so this is NOT an entry-point discriminator — L1 and EP1 are)
 #   D3 [P] est_tokens prices the body at no less than 0.2 token per body byte (the body rate is 3.80 B/token)
 #   D4 [G] sigs/hops/tail byte-identical slot vs slot-off on every fixture question (checklist 23); slot-off has no body
-#   D5 [P] legends: full answer explains bodies=1; compact legend defines b t= n= p= l= when a body rides
+#   D5 [P] legends: full answer explains bodies=1; compact legend defines b t= n= p= l= when a body rides; R3 (FIX1) [P] the
+#          compact clause reads pick=name / pick=member and says reason=owner is not necessarily the subject nor the whole answer
 #   D6 [G] no explanatory cue (where / show documentation / bare noun phrase): bodies=0, no <b
 #   D7 [G] postures: --signatures-only, --json, --auto-bodies, --detail=1, --format=candidates, name-exact unchanged
 #   D8 [P] Python: body of the METHOD apply, never the class Stylesheet (r1)
@@ -498,6 +499,10 @@ done <<<"$QUESTIONS"
 if r="$( chk legend "$TMP/d.xml" 'bodies=1' )"; then ok "(D5) full legend explains bodies=1 (the owner body)"; else no "(D5) full legend: $r"; fi
 if r="$( chk bodycount "$TMP/d.c.xml" 1 )"; then ok "(D5) compact dialect: the body rides too"; else no "(D5) compact dialect: $r"; fi
 if r="$( chk legend "$TMP/d.c.xml" 'b t= n= p= l=' )"; then ok "(D5) compact legend defines b t= n= p= l= when a body rides"; else no "(D5) compact legend: $r"; fi
+# R3 (FIX1, checklist 3): the compact reading says what each pick= means and what reason=owner does NOT mean — a pick=name
+# body (d) and a pick=member body (Q1 C++) alike; red on 66cc4b63 ("ONE owner body, by name not resolved (pick=…)" only)
+R3_STRS=( 'pick=name: its name is a question word' 'pick=member: a method so named of a ranked class' 'not necessarily the subject' 'not a claim it is the whole answer' )
+if r="$( chk legend "$TMP/d.c.xml" "${R3_STRS[@]}" )"; then ok "(D5/R3) pick=name body: the compact legend reads pick= and says what reason=owner does not mean"; else no "(D5/R3) pick=name body: $r"; fi
 for k in where show nocue; do
     if r="$( chk rootattr "$TMP/$k.xml" bodies 0 )"; then ok "(D6) $k (no explanatory cue): $r"; else no "(D6) $k: $r"; fi
     if r="$( chk nobody "$TMP/$k.xml" )"; then ok "(D6) $k: no <bodies> element"; else no "(D6) $k: $r"; fi
@@ -580,6 +585,10 @@ Q_FORGE="How does the forge assemble a kiln job: scheduling glaze batches, track
 Q_RUN="How does the forge run a kiln job: scheduling glaze batches, tracking firing queues and recording kiln results?"
 for r in cpp rs py ts go deep other; do rrun "$r" --for="$Q_FORGE" >"$TMP/q1.$r.xml"; done
 rrun common --for="$Q_RUN" >"$TMP/q1.common.xml"
+rrun cpp --for="$Q_FORGE" --legend=compact >"$TMP/q1.cpp.c.xml"
+if r="$( chk bodiesattr "$TMP/q1.cpp.c.xml" pick member )" && r2="$( chk legend "$TMP/q1.cpp.c.xml" "${R3_STRS[@]}" )"; then
+    ok "(D5/R3) pick=member body (C++): the compact legend reads pick= and says what reason=owner does not mean"
+else no "(D5/R3) pick=member body (C++): ${r:-} ${r2:-}"; fi
 rrun name --for="How does refresh repaint the screen?" >"$TMP/ep.name.xml"
 rrun self --for="How does normalize flatten the tree?" >"$TMP/ep.self.xml"
 rrun tsover --for="How does format render the value?" >"$TMP/ds.tsover.xml"
@@ -756,7 +765,7 @@ if chk paidinside "$TMP/c5.xml" "$TMP/e4.off.xml" 800 >/dev/null 2>&1; then no "
 run --for="$T_D" >"$TMP/d2.xml"
 if cmp -s "$TMP/d.xml" "$TMP/d2.xml"; then ok "(X1) T-D deterministic x2"; else no "(X1) T-D differs between two runs"; fi
 if command -v xmllint >/dev/null 2>&1; then
-    for f in d d.c big hyd py rs cpp go m.d e400; do
+    for f in d d.c q1.cpp.c big hyd py rs cpp go m.d e400; do
         if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "(X2) $f.xml is well-formed XML"; else no "(X2) $f.xml failed xmllint"; fi
     done
 else
