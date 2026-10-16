@@ -643,11 +643,11 @@ inline constexpr const char* kDeclinedCallsLegend =
 // answer on a tree the gate never touched keeps its bytes.
 inline constexpr const char* kDeclinedCallsGateClause =
     "It also counts a call named like a builtin-type method (dict.get, list.append) whose bound definitions' classes the caller's file never names. ";
-// The C++ standard-member gate's declines (graph.h StdMemberGate) ride the same count, with ONE definition possible and in
+// The standard-member gate's declines (graph.h StdMemberGate, one name row per language) ride the same count, with ONE definition possible and in
 // the caller's own file or directory too; charged only where that gate declined at least one call in the graph
 // (Graph::stdMemberDeclinedCalls), so a tree it never touched keeps its bytes. What it does NOT mean is in the same breath.
 inline constexpr const char* kDeclinedCallsStdClause =
-    "It also counts a C++ call named like a member of a standard container, string, optional or smart pointer (v.push_back, s.size) on a receiver no rule tied to an in-tree class: the standard library's own member may be the one called, so no in-tree namesake is bound; it is not a claim that the receiver is a standard type. ";
+    "It also counts a call named like a standard-type member of its language (per-language name lists: C++ containers, strings, optional, smart pointers, v.push_back, s.size; Rust collections, strings, Option, Result, v.push, xs.iter) on a receiver no rule tied to an in-tree class: the standard library's own member may be the one called, so no in-tree namesake is bound; it is not a claim that the receiver is a standard type, and a Rust receiver written as an in-tree type is declined too (Rust records no receiver type yet). ";
 inline constexpr const char* kInertDeclinedCallsClause =
     "In the callees form it also counts ordinary Elixir call candidates in inert quote AST after unquote/unquote_splicing re-entry. "
     "These sites have no uses rows or target candidates, so they contribute no caller or impact declined_calls= candidate list. ";
@@ -656,7 +656,7 @@ inline const char* declinedCallsGateLegend( bool on ) noexcept { return on ? kDe
 inline const char* declinedCallsStdLegend( bool on ) noexcept { return on ? kDeclinedCallsStdClause : ""; }
 // The callees answer's <stdm> line (graph.h stdMemberCallsMadeBy): rides exactly when the line does.
 inline constexpr const char* kStdMemberCallsLegend =
-    "<stdm n= calls=>: of declined_calls=, the calls these definitions make that are named like a member of a C++ standard container, string, optional or smart pointer (n=, each name once) on a receiver no rule tied to an in-tree class; calls= how many. No edge and no row: the standard library's own member may be the one called, and so may an in-tree namesake. It does not list every standard-library call the body makes: a name with no in-tree definition never had a candidate to decline. ";
+    "<stdm n= calls=>: of declined_calls=, the calls these definitions make that are named like a standard-type member of their language (C++ containers, strings, optional, smart pointers; Rust collections, strings, Option, Result; n=, each name once) on a receiver no rule tied to an in-tree class; calls= how many. No edge and no row: the standard library's own member may be the one called, and so may an in-tree namesake. It does not list every standard-library call the body makes: a name with no in-tree definition never had a candidate to decline. ";
 inline const char* stdMemberCallsLegend( bool on ) noexcept { return on ? kStdMemberCallsLegend : ""; }
 // --test-gate's own short form: the same attribute and unit, sized for a verb whose legend has an absolute byte budget
 // (test/testgatelegendbudgetcheck.sh), so it defines the one form it emits rather than all three.
@@ -667,7 +667,7 @@ inline std::string declinedCallsLegendWithGate( bool on, bool gateDeclined, bool
 {
     return std::string( declinedCallsLegend( on ) ) + declinedCallsGateLegend( on && gateDeclined ) + ( on && inertDeclined ? kInertDeclinedCallsClause : "" );
 }
-// The same, plus the C++ standard-member gate's sentence where that gate declined in this graph (graph.h StdMemberGate).
+// The same, plus the standard-member gate's sentence where that gate declined in this graph (graph.h StdMemberGate).
 inline std::string declinedCallsLegendWithGates( bool on, bool gateDeclined, bool stdDeclined, bool inertDeclined = false )
 {
     return declinedCallsLegendWithGate( on, gateDeclined, inertDeclined ) + declinedCallsStdLegend( on && stdDeclined );
@@ -701,7 +701,7 @@ inline constexpr const char* kDeclinedSitesCallersForm =
 inline constexpr const char* kDeclinedSitesSideClause =
     "gate=side: a Ruby call whose in-reach definitions answer on the other side of self. ";
 inline constexpr const char* kDeclinedSitesNameGateClause =
-    "gate=builtin|std: declined by the builtin-method or the C++ standard-member name gate. ";
+    "gate=builtin|std: declined by the builtin-method or the standard-member name gate (per-language name lists, C++ and Rust). ";
 inline constexpr const char* kDeclinedSitesOfDefCallees =
     "of_def=K on a <dc>: the definition (ix=K) making the call, a fact. ";
 inline constexpr const char* kDeclinedSitesOfDefCallers =

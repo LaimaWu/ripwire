@@ -1437,7 +1437,7 @@ inline void writeTestGateReport( std::FILE* out, const IngestResult& ing, const 
                   ( std::string( rw::graphUnindexedLegend( rw::graphGaugeClauses( g ) ) )   // #66: exactly when the root carries the attribute
                     + ( r.declinedCalls > 0 ? rw::kDeclinedCallsTestGateLegend : "" )                               // exactly when it carries declined_calls=
                     + rw::declinedCallsGateLegend( r.declinedCalls > 0 && g.gateDeclinedCalls > 0 ) ).c_str(),   // the short form above makes no
-                    // claim the C++ standard-member gate's declines would contradict, so its clause stays off this budgeted legend
+                    // claim the standard-member gate's declines would contradict, so its clause stays off this budgeted legend
                   rw::rootRelPathsLegend( !tgRootAttr.empty() ) );
     // §P11.4: this gate EXITS 4 on the obligation, so its rows carry the command that discharges it — where
     // one is derivable. Absent run= = not derivable (testmap.h states why a fallback would be a lie).

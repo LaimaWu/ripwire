@@ -2308,11 +2308,11 @@ inline constexpr const char* kDeclinedMapLegend =
 // only to a map where the gate declined at least one call, so a map the gate never touched keeps its bytes.
 inline constexpr const char* kDeclinedGateMapLegend =
     "<!-- hdr:declined=also-counts-builtin-type-method-calls(dict.get,list.append)whose-bound-targets-classes-the-callers-file-never-names -->";
-// The C++ standard-member gate's declines (graph.h StdMemberGate) ride the same declined= count; charged only to a map where
+// The standard-member gate's declines (graph.h StdMemberGate) ride the same declined= count; charged only to a map where
 // that gate declined at least one call, so a map it never touched keeps its bytes. No '>' and no double hyphen inside.
 inline constexpr const char* kDeclinedStdMapLegend =
-    "<!-- hdr:declined=also-counts-C++-calls-named-like-a-std-container/string/optional/smart-pointer-member(v.push_back,s.size)-on-a-receiver-no-rule-tied-to-an-in-tree-class;"
-    "the-std-member-may-be-the-one-called;not-a-claim-the-receiver-is-a-std-type -->";
+    "<!-- hdr:declined=also-counts-calls-named-like-a-standard-type-member-of-their-language(C++-v.push_back,s.size;Rust-v.push,xs.iter)-on-a-receiver-no-rule-tied-to-an-in-tree-class;"
+    "the-std-member-may-be-the-one-called;not-a-claim-the-receiver-is-a-std-type;Rust-records-no-receiver-type-yet -->";
 inline constexpr const char* kInertDeclinedMapLegend =
     "<!-- hdr:declined=also-counts-ordinary-Elixir-call-sites-inside-inert-quote-AST-after-unquote/unquote_splicing-re-entry;no-edge;not-a-possible-callee -->";
 
@@ -2888,7 +2888,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
                        // FE-B: Graph::outNameOnly (parallel to outTargets) → via="name" on a <c> row and the via legend
                        // comment; nullptr/empty ⇒ every edge is evidence-bound and the map is byte-identical.
                        const std::vector<std::uint8_t>* outNameOnly = nullptr,
-                       // of declined=, the calls the C++ standard-member gate declined (graph.h g.stdMemberDeclinedCalls) →
+                       // of declined=, the calls the standard-member gate declined (graph.h g.stdMemberDeclinedCalls) →
                        // the kDeclinedStdMapLegend clause, absent when zero.
                        std::size_t stdMemberDeclinedCalls = 0,
                        // of declined=, the Elixir call candidates inside inert quote AST (g.inertDeclinedCalls, #380) →
@@ -3137,7 +3137,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     const std::size_t declinedTotal   = counterTotal( declinedOut );     // calls tier 3 declined: no edge, and no guess
     legend += declinedTotal > 0 ? kDeclinedMapLegend : "";               // charged to the map that carries declined=
     legend += gateDeclinedCalls > 0 ? kDeclinedGateMapLegend : "";       // only where the builtin-method gate declined a call
-    legend += stdMemberDeclinedCalls > 0 ? kDeclinedStdMapLegend : "";   // only where the C++ standard-member gate declined a call
+    legend += stdMemberDeclinedCalls > 0 ? kDeclinedStdMapLegend : "";   // only where the standard-member gate declined a call
     legend += inertDeclinedCalls > 0 ? kInertDeclinedMapLegend : "";     // only where an Elixir quote declined a call candidate
     if( outNameOnly && !stubbed && !ann.viaLegendStripped
         && namesOnlyOutAny( outOff, *outNameOnly, std::span<const NodeId>( order.data(), std::min( keep, order.size() ) ) ) )

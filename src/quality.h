@@ -3612,7 +3612,11 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // UNCHANGED sha. kParserVer moved with those extractions (176, its mirror with it), and the producer identity already keeps
 // this build's blobs apart; bumped 20 -> 21 so the history above stays complete and the scheme sits above every live value
 // (20 on main and every lane). Lane qd-memory-degrade's KindScope builds the default scope's records unchanged (its note).
-constexpr std::uint32_t kQSnapCacheScheme = 21;
+// v22 (2026-10-16, lane rust-std-rows, #405; train 29 renumbers on a collision) — no blob shape change; the dead SET's inputs moved:
+// the standard-member gate gained a Rust row (graph.h kStdMemberNames), so a Rust definition a DECLINED call could have meant is
+// no dead candidate (Graph::gateDeclinedTarget), as v15 did for the builtin-method gate. No extraction change: kParserVer and its
+// mirror stay. The producer identity already keeps this build's blobs apart; bumped 21 -> 22 so the history above stays complete.
+constexpr std::uint32_t kQSnapCacheScheme = 22;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
