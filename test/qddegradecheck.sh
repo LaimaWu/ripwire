@@ -206,11 +206,15 @@ if [ -s "$WORK/B.xml" ] && validxml "$WORK/B.xml" \
 else
     no "(B) P1: rc=$BRC (want $wantrc) gating=$bgate kinds_skipped=$( attr "$WORK/B.xml" kinds_skipped ) why=$( attr "$WORK/B.xml" skipped_why ) scope=$( attr "$WORK/B.xml" ingest_scope ) need=$need stdout=$( wc -c <"$WORK/B.xml" | tr -d ' ' )B"
 fi
-# R7c: the replay's --max-memory is strictly above the projected need (in whole MiB) and clears the parser's 64M floor
-replaymb=""; isnum "$needn" && { replaymb=$(( needn + 1 )); [ "$replaymb" -lt 64 ] && replaymb=64; }
-if [ -n "$replaymb" ] && [ "$bnext" = "--quality-delta=$BASE..$TGT --quality-kinds=$WHOLE_KINDS --max-memory=${replaymb}M" ]; then
-    ok "(B) kinds_next= replays exactly the skipped kinds at --max-memory=${replaymb}M (above need=${need}, at least the 64M floor)"
-else no "(B) kinds_next='$bnext' (want --max-memory=${replaymb:-?}M)"; fi
+# R7c: the replay's --max-memory is strictly above the projected need (in whole MiB) and clears the parser's 64M floor.
+# CodeRabbit #413 (by-design change of this pin, rule 4): it is also never below the limit this run used — a replay under
+# a lower limit than the one that degraded cannot answer in full — and above twice the ingest need (the parse line; on
+# this fixture far under the limit, so the limit term decides). The old reading (above need, at least 64M) still holds.
+blim="$( attr "$WORK/B.xml" memory_limit )"; blimn="${blim%M}"
+replaymb=""; isnum "$needn" && isnum "$blimn" && { replaymb=$(( needn > blimn ? needn + 1 : blimn + 1 )); [ "$replaymb" -lt 64 ] && replaymb=64; }
+if [ -n "$replaymb" ] && [ "$replaymb" -gt "$needn" ] && [ "$bnext" = "--quality-delta=$BASE..$TGT --quality-kinds=$WHOLE_KINDS --max-memory=${replaymb}M" ]; then
+    ok "(B) kinds_next= replays exactly the skipped kinds at --max-memory=${replaymb}M (above need=${need} and the ${blim} limit, at least the 64M floor)"
+else no "(B) kinds_next='$bnext' (want --max-memory=${replaymb:-?}M: above need=${need} and limit=${blim})"; fi
 if [ "$( memlines )" = 1 ] && grep -q "^ripwire: memory limit .*dead-code, duplication, new-clone-of-reused-helper" "$WORK/B.err" && [ "$BING" = 3 ]; then
     ok "(B) one stderr line names the skipped kinds; three ingests (the base in full, then both commits' changed files)"
 else no "(B) memory lines=$( memlines ) ingests=$BING stderr: $( grep '^ripwire: [^c]' "$WORK/B.err" | head -c 300 )"; fi

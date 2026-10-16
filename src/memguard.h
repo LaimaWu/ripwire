@@ -436,9 +436,10 @@ inline bool requestSeamTrips()
 inline constexpr std::uint64_t kProjectionScalePct = 175;   // max measured 1.48 over 11 cold runs on 5 corpora (qd-memory-degrade report), + ~18%
 struct TargetProjection
 {
-    bool          measured  = false;   // false: no peak reading — nothing was projected
-    bool          fits      = true;
-    std::uint64_t needBytes = 0;       // the projected need (0 when not measured)
+    bool          measured        = false;   // false: no peak reading — nothing was projected
+    bool          fits            = true;
+    std::uint64_t needBytes       = 0;       // the projected need (0 when not measured)
+    std::uint64_t ingestNeedBytes = 0;       // max( after, ingestPeak ), judged against half the limit (0 when not measured)
 };
 inline TargetProjection projectTargetPhase( std::uint64_t before, std::uint64_t ingestPeak, std::uint64_t basePeak, std::uint64_t after )
 {
@@ -451,6 +452,7 @@ inline TargetProjection projectTargetPhase( std::uint64_t before, std::uint64_t 
         const std::uint64_t scaled     = growth / 100 * kProjectionScalePct + growth % 100 * kProjectionScalePct / 100;   // no overflow below 2^57 B
         p.needBytes                    = std::max( after, before + scaled );
         const std::uint64_t ingestNeed = std::max( after, ingestPeak );
+        p.ingestNeedBytes              = ingestNeed;
         p.fits = limit == 0 || ( p.needBytes < limit && ingestNeed < limit / 2 );
     }
     if( seamCallTrips( TripAt::Project, seamCounters().projections, /*laterToo=*/false ) )
@@ -459,14 +461,18 @@ inline TargetProjection projectTargetPhase( std::uint64_t before, std::uint64_t 
     }
     return p;
 }
-// --max-memory for a replay of what a degraded run skipped: strictly above the projected need, in whole MiB, at least the
-// parser's floor, and at most what a size_t can hold (item 27: the value the continuation names is one the parser
-// accepts). After a stop no need was measured, so the replay names twice the limit: a guess, and said to be one.
-inline std::uint64_t replayLimitBytes( std::uint64_t needBytes, bool needMeasured )
+// --max-memory for a replay of what a degraded run skipped: strictly above BOTH lines the projection judged — the projected
+// need (against the limit) and twice the ingest need (against the parse line, half the limit) — and never below the limit
+// this run used, in whole MiB, at least the parser's floor, and at most what a size_t can hold (item 27: the value the
+// continuation names is one the parser accepts). After a stop no need was measured, so the replay names twice the limit:
+// a guess, and said to be one.
+inline std::uint64_t replayLimitBytes( std::uint64_t needBytes, std::uint64_t ingestNeedBytes, bool needMeasured )
 {
-    const std::uint64_t limit = limits().hardBytes;
-    std::uint64_t       want  = needMeasured ? ( ( needBytes + kMiB - 1 ) / kMiB + 1 ) * kMiB   // one MiB above the need as spelled
-                                             : ( limit > ( UINT64_MAX / 2 ) ? UINT64_MAX : limit * 2 );
+    const std::uint64_t limit      = limits().hardBytes;
+    const std::uint64_t ingestLine = ingestNeedBytes > ( UINT64_MAX / 2 ) ? UINT64_MAX : ingestNeedBytes * 2;
+    const std::uint64_t need       = std::max( { needBytes, ingestLine, limit } );
+    std::uint64_t       want       = needMeasured ? ( need >= UINT64_MAX - kMiB ? UINT64_MAX : ( ( need + kMiB - 1 ) / kMiB + 1 ) * kMiB )   // one MiB above, as spelled
+                                                  : ( limit > ( UINT64_MAX / 2 ) ? UINT64_MAX : limit * 2 );
     want = std::max( want, kFloorBytes );
     const std::uint64_t ceiling = std::uint64_t( SIZE_MAX ) / kMiB * kMiB;
     return std::min( want, ceiling );

@@ -100,6 +100,7 @@ struct RefPairDelta
     bool                      memoryPressure = false;              // the stop was the OS pressure signal
     std::string               stopWhere;                           // the stop's phase, as its sentence names it
     std::uint64_t             needBytes = 0;                       // the projected need (the projection decided and measured it)
+    std::uint64_t             ingestNeedBytes = 0;                 // the projection's ingest need (judged against half the limit)
     std::vector<std::string>  baseMacros;                          // the base commit's whole C-family macro-name set, when its full tree was read
     bool                      haveBaseMacros = false;
     std::vector<std::string>  targetFiles;                         // the target commit's files, for --scope's test (degraded + scoped only)
@@ -372,7 +373,8 @@ std::optional<int> loadFullTrees( const std::string& root, const rw::Config& cfg
         const std::uint64_t              basePeak = os::mem_footprint_peak();
         const std::uint64_t              after    = memguard::measuredFootprint();
         const memguard::TargetProjection proj     = memguard::projectTargetPhase( before, out.ingestPeak, basePeak, after );
-        out.needBytes  = proj.needBytes;
+        out.needBytes       = proj.needBytes;
+        out.ingestNeedBytes = proj.ingestNeedBytes;
         projectedNoFit = !proj.fits;
         if( std::getenv( "RIPWIRE_STATS" ) )   // the projection's own readings, the calibration's instrument (kProjectionScalePct)
         {
@@ -1667,7 +1669,7 @@ KindsDisclosure kindsDisclosure( const rw::Config& cfg, const RefPairDelta& refs
             out.kindsNext = "--quality-delta=" + refs.baseSha + ".." + refs.targetSha + " --quality-kinds=" + quality::kindList( out.memorySkipped, "," );
             if( limit != 0 )
             {
-                out.kindsNext += " --max-memory=" + memguard::limitSpelling( memguard::replayLimitBytes( refs.needBytes, refs.memoryStop.empty() ) );
+                out.kindsNext += " --max-memory=" + memguard::limitSpelling( memguard::replayLimitBytes( refs.needBytes, refs.ingestNeedBytes, refs.memoryStop.empty() ) );
             }
             if( !cfg.qualityScope.empty() )
             {
