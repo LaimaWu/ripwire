@@ -1048,18 +1048,16 @@ inline constexpr std::array<ScopeOwnerRow, 6> kScopeOwners = { {
     { "type_spec", ScopeNameRead::NameField, ScopeReach::InsideOnly },                 // Go (test/goscopecheck.sh)
 } };
 
-// `t` (a NUL-terminated node kind) equals `kind`: byte by byte, stopping at the first mismatch, so a shorter `t`
-// mismatches at its NUL and nothing past it is read (kindIs's rule, for a length known only at run time).
-inline bool scopeOwnerKindIs( const char* t, std::string_view kind ) noexcept
+// Does owner `p` (matched to `row`) scope the definition named by `node`? The reach column: a Go type's own name and a
+// def inside a method body are NOT its members.
+inline bool ownerScopes( const ScopeOwnerRow& row, TSNode p, TSNode node ) noexcept
 {
-    for( std::size_t i = 0; i < kind.size(); ++i )
+    if( row.reach == ScopeReach::SelfAndInside )
     {
-        if( t[i] != kind[i] )
-        {
-            return false;
-        }
+        return true;
     }
-    return t[kind.size()] == '\0';
+    const bool self = ts_node_eq( fieldChild( p, NodeField::Name ), node );
+    return self == ( row.reach == ScopeReach::SelfOnly );
 }
 
 // Go `func (d *Deb) m()` / `func (Stack[T]) m()`: the receiver's type name; "" when the declaration has no receiver.
@@ -1077,31 +1075,25 @@ inline std::string enclosingScopeOf( TSNode node, std::string_view src )
 {
     for( TSNode p = ts_node_parent( node ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
     {
-        const char* t   = ts_node_type( p );
-        const auto  row = std::find_if( kScopeOwners.begin(), kScopeOwners.end(), [ & ]( const ScopeOwnerRow& r ) { return scopeOwnerKindIs( t, r.kind ); } );
-        if( row == kScopeOwners.end() )
+        const std::string_view kind( ts_node_type( p ) );   // one strlen per ancestor, then a compare per row
+        for( const ScopeOwnerRow& row : kScopeOwners )
         {
-            continue;
-        }
-        if( row->reach != ScopeReach::SelfAndInside )
-        {
-            const bool self = ts_node_eq( fieldChild( p, NodeField::Name ), node );
-            if( self == ( row->reach == ScopeReach::InsideOnly ) )
+            if( row.kind != kind || !ownerScopes( row, p, node ) )
             {
-                continue;   // a Go type's own name, or a def inside a method body: the owner does not scope it
+                continue;
             }
-        }
-        if( row->read == ScopeNameRead::ReceiverType )
-        {
+            if( row.read == ScopeNameRead::NameField )
+            {
+                // `struct Slot<bool>` → "Slot"; every non-template name keeps its written text; anonymous (no `name:`) → ""
+                return cppScopeNameText( fieldChild( p, NodeField::Name ), src );
+            }
             const std::string_view recv = receiverTypeName( p, src );
-            if( recv.empty() )
+            if( !recv.empty() )
             {
-                continue;   // no receiver read: not this row's shape, so the walk goes on
+                return std::string( recv );
             }
-            return std::string( recv );
+            // no receiver read: not this row's shape (another grammar's method_declaration), so the walk goes on
         }
-        // `struct Slot<bool>` → "Slot"; every non-template name keeps its written text; anonymous (no `name:`) → ""
-        return cppScopeNameText( fieldChild( p, NodeField::Name ), src );
     }
     return {};
 }
