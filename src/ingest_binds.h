@@ -4175,38 +4175,21 @@ inline void pushCallResult( BindCtx& cx, TSNode var, TSNode call, std::uint8_t i
     {
         return;
     }
-    RawBind b;
-    b.fileId      = cx.fileId;
-    b.startByte   = ts_node_start_byte( call );     // the call Reference's own byte (the call's start): graph.h joins on it + the name
-    b.lang        = cx.lang;
-    b.kind        = LocalBindKind::CallResult;
-    b.resultIndex = index;
-    b.unwrapDepth = depth;
-    b.spanStart   = site.spanStart;
-    b.spanEnd     = site.spanEnd;
-    b.var.assign( name );
-    b.typeName.assign( nodeTextOf( callee, cx.src ) );
-    cx.binds->push_back( std::move( b ) );
+    // startByte: the call Reference's own byte (the call's start) — graph.h joins on it and the callee name
+    cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = ts_node_start_byte( call ), .lang = cx.lang, .kind = LocalBindKind::CallResult,
+                                  .resultIndex = index, .unwrapDepth = depth, .spanStart = site.spanStart, .spanEnd = site.spanEnd,
+                                  .var = std::string( name ), .typeName = std::string( nodeTextOf( callee, cx.src ) ) } );
 }
 
 // One ReturnType of the definition starting at `defStart`: position `index`, class `cls` ("" records nothing), the qualified
 // text whole (`os.File`, `std::fs::File`; "" when unqualified) and `depth` Result/Option layers above the class.
 inline void pushReturnType( BindCtx& cx, std::uint32_t defStart, std::uint8_t index, std::string_view cls, std::string_view whole, std::uint8_t depth )
 {
-    if( cls.empty() )
+    if( !cls.empty() )   // Symbol::sigStartByte joins startByte (the RubySingletonDef pattern)
     {
-        return;
+        cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = defStart, .lang = cx.lang, .kind = LocalBindKind::ReturnType,
+                                      .resultIndex = index, .unwrapDepth = depth, .importedName = std::string( whole ), .typeName = std::string( cls ) } );
     }
-    RawBind b;
-    b.fileId      = cx.fileId;
-    b.startByte   = defStart;   // Symbol::sigStartByte joins it (the RubySingletonDef pattern)
-    b.lang        = cx.lang;
-    b.kind        = LocalBindKind::ReturnType;
-    b.resultIndex = index;
-    b.unwrapDepth = depth;
-    b.typeName.assign( cls );
-    b.importedName.assign( whole );
-    cx.binds->push_back( std::move( b ) );
 }
 
 // Is `name` one of the type parameters the identifiers under `node` declare (Go `[T any]`, a generic receiver's `Ref[T]`)?
@@ -4462,6 +4445,16 @@ inline TSNode cppDeclaredName( TSNode d )
     return {};
 }
 
+// (L) Java `var x = m()`: the callee's declared result types x (a written type is Rule-2/FE-B's own record)
+inline void pushJavaVarCallResult( BindCtx& cx, TSNode type, TSNode declarator, BindSite site )
+{
+    const TSNode value = fieldChild( declarator, NodeField::Value );
+    if( !ts_node_is_null( type ) && nodeTextOf( type, cx.src ) == "var" && !ts_node_is_null( value ) && kindIs( ts_node_type( value ), "method_invocation" ) )
+    {
+        pushCallResult( cx, fieldChild( declarator, NodeField::Name ), value, 0, 0, site );
+    }
+}
+
 // Java / Kotlin / TS: the class one written result type names — a plain type name (`Config`), TS `Promise<T>` as one LAYER
 // (an `await` at the call site unwraps it), a qualified name (`java.io.File`, `ns.T`) returned with `whole` set (kept only
 // when its qualifier names an in-tree package: never, for these languages today — a floor). "" for anything else (a generic
@@ -4554,10 +4547,7 @@ inline void captureDeclaredReturnType( BindCtx& cx, TSNode fn )
 // superset; their class is not recorded, since an `else` branch does not see them).
 inline void captureJavaDeclEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32_t at )
 {
-    if( kindIs( t, "method_declaration" ) )
-    {
-        captureDeclaredReturnType( cx, n );   // (L) call-result typing
-    }
+
     const auto callable = [ & ] { return ancestorOfKind( n, { "method_declaration", "constructor_declaration", "compact_constructor_declaration", "lambda_expression" } ); };
     const auto block    = [ & ] { return ancestorOfKind( n, { "block", "switch_block_statement_group", "switch_rule", "lambda_expression", "method_declaration" } ); };
     if( kindIs( t, "formal_parameter" ) )
@@ -4617,10 +4607,9 @@ inline void captureJavaDeclEvidence( BindCtx& cx, TSNode n, const char* t, std::
         if( kindIs( ts_node_type( d ), "variable_declarator" ) )
         {
             pushDeclaratorEvidence( cx, kind, type, fieldChild( d, NodeField::Name ), fieldChild( d, NodeField::Value ), site );
-            const TSNode value = fieldChild( d, NodeField::Value );   // (L) `var x = f()`: the callee's declared result types x
-            if( !field && !ts_node_is_null( type ) && nodeTextOf( type, cx.src ) == "var" && !ts_node_is_null( value ) && kindIs( ts_node_type( value ), "method_invocation" ) )
+            if( !field )
             {
-                pushCallResult( cx, fieldChild( d, NodeField::Name ), value, 0, 0, site );
+                pushJavaVarCallResult( cx, type, d, site );
             }
         }
     }
@@ -4720,10 +4709,7 @@ inline void captureCSharpDeclEvidence( BindCtx& cx, TSNode n, const char* t, std
 // entry, a `when ( val x = … )` subject, a catch parameter.
 inline void captureKotlinDeclEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32_t at )
 {
-    if( kindIs( t, "function_declaration" ) )
-    {
-        captureDeclaredReturnType( cx, n );   // (L) call-result typing
-    }
+
     if( kindIs( t, "parameter" ) || kindIs( t, "class_parameter" ) )
     {
         const bool property = kindIs( t, "class_parameter" );
@@ -4881,6 +4867,10 @@ inline void captureTypedDeclEvidence( BindCtx& cx, TSNode n, const char* t )
     {
         noteTypeParameters( cx, n );
         return;
+    }
+    if( kindIs( t, "method_declaration" ) || kindIs( t, "function_declaration" ) )
+    {
+        captureDeclaredReturnType( cx, n );   // (L) call-result typing: Java's `type`, Kotlin's type after the parameters (C#/Swift: none read)
     }
     if( cx.lang == Lang::Java )
     {
@@ -5203,14 +5193,8 @@ inline constexpr std::array<RustWrapperRow, 3> kRustResultWrappers = { {
 } };
 inline RustWrap rustWrapperOf( std::string_view name ) noexcept
 {
-    for( const RustWrapperRow& w : kRustResultWrappers )
-    {
-        if( w.name == name )
-        {
-            return w.wrap;
-        }
-    }
-    return RustWrap::None;
+    const auto row = std::ranges::find( kRustResultWrappers, name, &RustWrapperRow::name );
+    return row == kRustResultWrappers.end() ? RustWrap::None : row->wrap;
 }
 
 // the type an `impl` block names (`Book` in `impl Book` / `impl<T> Store<T>` / `impl Trait for Book`) — what `Self` means in it

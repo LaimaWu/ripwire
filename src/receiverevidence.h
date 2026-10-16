@@ -286,8 +286,9 @@ struct ReceiverEvidence
         }
     }
 
-    void addLocalFact( const std::string& k, const Binding& b ) { addLocalFact( k, b, b.typeName ); }
-    void addLocalFact( const std::string& k, const Binding& b, std::string_view type )
+    void addLocalFact( const std::string& k, const Binding& b ) { addTypedFact( k, b, b.typeName ); }
+    // the same fact naming `type` instead of the binding's own (a qualified written type refused: "")
+    void addTypedFact( const std::string& k, const Binding& b, std::string_view type )
     {
         const bool                  spanned = b.spanEnd > b.spanStart;
         LocalFact                   f{ spanned ? b.spanStart : 0u, spanned ? b.spanEnd : 0u, std::string( type ) };
@@ -467,7 +468,7 @@ struct ReceiverEvidence
         for( const Binding* q : qualified )
         {
             const bool inTree = qualifiedClassInTree( q->fileId, q->importedName, q->typeName );
-            addLocalFact( keyOf( factScope( *q ), '#', q->var ), *q, inTree ? std::string_view( q->typeName ) : std::string_view{} );
+            addTypedFact( keyOf( factScope( *q ), '#', q->var ), *q, inTree ? std::string_view( q->typeName ) : std::string_view{} );
         }
         active = true;
     }

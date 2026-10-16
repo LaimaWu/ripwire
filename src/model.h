@@ -1135,8 +1135,9 @@ inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( Loc
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {
-    return k == LocalBindKind::RecvType || k == LocalBindKind::MemberType || k == LocalBindKind::MethodAlias || k == LocalBindKind::NameAlias
-        || k == LocalBindKind::StaticMember || k == LocalBindKind::CallResult || k == LocalBindKind::ReturnType;
+    // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result pair after RubyMainMixin
+    static_assert( std::uint8_t( LocalBindKind::StaticMember ) - std::uint8_t( LocalBindKind::RecvType ) == 4, "FE-B's five receiver-evidence kinds stay one run" );
+    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || k == LocalBindKind::CallResult || k == LocalBindKind::ReturnType;
 }
 // Binding::resultIndex of a record about a WHOLE result (a single non-tuple result; a Rust `let t = pair()?` binding all of it).
 inline constexpr std::uint8_t kWholeResult = 0xFF;

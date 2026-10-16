@@ -1612,17 +1612,11 @@ void streamSideCaptures( TSNode root, const SideArms& arms )
 
 // The languages the binds pass (ingest_binds.h bindsVisitNode) visits: the Rule-2 / L3 / shadow families, and the languages
 // that join for the receiver-evidence records alone (FE-B; train 29 call-result typing adds Rust).
-inline bool bindPassLang( Lang l ) noexcept
-{
-    switch( l )
-    {
-        case Lang::Cpp: case Lang::ObjC: case Lang::C: case Lang::Python: case Lang::TypeScript: case Lang::JavaScript: case Lang::Java:
-        case Lang::Go: case Lang::CSharp: case Lang::Kotlin: case Lang::Swift: case Lang::Rust:
-            return true;
-        default:
-            return false;
-    }
-}
+inline constexpr std::array<Lang, 12> kBindPassLangs = {
+    Lang::Cpp, Lang::ObjC, Lang::C, Lang::Python, Lang::TypeScript, Lang::JavaScript, Lang::Java,
+    Lang::Go, Lang::CSharp, Lang::Kotlin, Lang::Swift, Lang::Rust,
+};
+inline bool bindPassLang( Lang l ) noexcept { return extent::inSet( kBindPassLangs, l ); }   // the shared membership test
 
 void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_view src, TSNode root,
                        std::vector<RawRef>& refs, std::vector<Include>& incs, std::vector<RawBind>& binds,
