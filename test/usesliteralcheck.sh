@@ -47,12 +47,12 @@ has_site replace "call app.ts:4" \
 has_site replace "call app.ts:16" \
     && ok "replace casted receiver call kept @app.ts:16" \
     || no "replace casted receiver missing @app.ts:16"
-! has_site replace "call app.ts:8" \
-    && ok "replace literal string call dropped @app.ts:8" \
-    || no "replace literal string call leaked @app.ts:8"
 ! has_site replace "call app.ts:9" \
-    && ok "replace template literal call dropped @app.ts:9" \
-    || no "replace template literal call leaked @app.ts:9"
+    && ok "replace literal string call dropped @app.ts:9" \
+    || no "replace literal string call leaked @app.ts:9"
+! has_site replace "call app.ts:10" \
+    && ok "replace template literal call dropped @app.ts:10" \
+    || no "replace template literal call leaked @app.ts:10"
 
 # ── 2) map: literal array call filtered out, direct call kept, declined_literal_calls="1" ─────────────
 MAP_OUT="$( "$BIN" "$CORPUS" --uses=map --no-cache 2>/dev/null )"
@@ -65,9 +65,9 @@ echo "$MAP_OUT" | grep -q 'declined_literal_calls="1"' \
 has_site map "call app.ts:5" \
     && ok "map direct call kept @app.ts:5" \
     || no "map direct call missing @app.ts:5"
-! has_site map "call app.ts:10" \
-    && ok "map literal array call dropped @app.ts:10" \
-    || no "map literal array call leaked @app.ts:10"
+! has_site map "call app.ts:11" \
+    && ok "map literal array call dropped @app.ts:11" \
+    || no "map literal array call leaked @app.ts:11"
 
 # ── 3) test: literal regex call filtered out, direct call kept, declined_literal_calls="1" ───────────
 TEST_OUT="$( "$BIN" "$CORPUS" --uses=test --no-cache 2>/dev/null )"
@@ -80,9 +80,9 @@ echo "$TEST_OUT" | grep -q 'declined_literal_calls="1"' \
 has_site test "call app.ts:6" \
     && ok "test direct call kept @app.ts:6" \
     || no "test direct call missing @app.ts:6"
-! has_site test "call app.ts:11" \
-    && ok "test literal regex call dropped @app.ts:11" \
-    || no "test literal regex call leaked @app.ts:11"
+! has_site test "call app.ts:12" \
+    && ok "test literal regex call dropped @app.ts:12" \
+    || no "test literal regex call leaked @app.ts:12"
 
 # ── 4) trimEnd: prototype polyfill keeps literal call row ─────────────────────────────────────────────
 TRIM_OUT="$( "$BIN" "$CORPUS" --uses=trimEnd --no-cache 2>/dev/null )"
@@ -120,5 +120,52 @@ if diff -q "$TMP/a" "$TMP/b" >/dev/null; then
 else
     no "determinism failure"
 fi
+
+# Cross-surface parity: compare retained rows and root counts, not surface-specific prose.
+if python3 - "$BIN" "$CORPUS" "$TMP" <<'PYTEST'
+import json, os, shutil, subprocess, sys, xml.etree.ElementTree as ET
+binary, source, scratch = sys.argv[1:]
+# Outside the repository: MCP working-set Git mining must not depend on this checkout's size/state.
+if sys.platform == 'win32':
+    source, scratch = [subprocess.check_output(['cygpath', '-m', p], text=True).strip() for p in (source, scratch)]
+corpus = os.path.join(scratch, 'fixture')
+shutil.copytree(source, corpus)
+for name, declined in [('replace', 2), ('map', 1), ('test', 1), ('trimEnd', 0), ('repeat', 0)]:
+    cli = ET.fromstring(subprocess.check_output([binary, corpus, '--uses='+name, '--legend=full', '--no-cache'], text=True))
+    messages = [dict(jsonrpc='2.0', id=1, method='initialize'),
+                dict(jsonrpc='2.0', id=2, method='tools/call', params=dict(name='uses', arguments=dict(path=corpus, symbol=name, legend='full')))]
+    output = subprocess.check_output([binary, '--mcp'], input=''.join(json.dumps(m)+'\n' for m in messages), text=True, timeout=30)
+    response = json.loads(output.splitlines()[-1])
+    text = response['result']['content'][0]['text']
+    mcp = ET.fromstring(text)
+    assert cli.attrib['count'] == mcp.attrib['count'], (name, cli.attrib, mcp.attrib)
+    assert int(mcp.get('declined_literal_calls', 0)) == declined, (name, mcp.attrib)
+    assert [r.attrib for r in cli] == [r.attrib for r in mcp], name
+    if declined:
+        assert 'declined_literal_calls=' in text and 'dropped because' in text
+    for verb in ['--safe-delete='+name, '--verify=uses('+name+')', '--verify=unused('+name+')']:
+        if name == 'repeat' and verb.startswith('--safe-delete'):
+            continue  # safe-delete requires an in-tree definition
+        xml = subprocess.check_output([binary, corpus, verb, '--legend=full', '--no-cache'], text=True)
+        root = ET.fromstring(xml)
+        assert int(root.get('declined_literal_calls', 0)) == declined, (verb, root.attrib)
+        if declined:
+            assert 'dropped because' in xml, verb
+PYTEST
+then ok "CLI/MCP rows and counts agree; safe-delete/verify disclose literal exclusions"
+else no "literal cross-surface parity/disclosure regression"; fi
+
+# A polyfill in another root must not rescue a local built-in call.
+mkdir -p "$TMP/root-a" "$TMP/root-b"
+printf '%s\n' 'function replace() {}' 'function caller() { "q".replace("q", "r"); }' > "$TMP/root-a/app.js"
+printf '%s\n' 'String.prototype.replace = function(x, y) { return x; };' > "$TMP/root-b/polyfill.js"
+multi="$( "$BIN" "$TMP/root-a" "$TMP/root-b" --uses=replace --legend=full --no-cache 2>/dev/null )"
+echo "$multi" | grep -q 'declined_literal_calls="1"' \
+    && ok "multi-root literal ignores foreign polyfill" \
+    || no "multi-root literal incorrectly rescued by foreign polyfill"
+callers="$( "$BIN" "$TMP/root-a" "$TMP/root-b" --callers=replace --no-cache 2>/dev/null )"
+echo "$callers" | grep -q 'count="0"' \
+    && ok "multi-root callers agrees with uses" \
+    || no "multi-root callers disagrees with uses"
 
 exit "$fail"

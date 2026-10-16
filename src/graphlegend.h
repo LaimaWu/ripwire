@@ -701,10 +701,7 @@ inline std::string declinedLiteralCallsAttrXml( std::size_t declinedLiteralCalls
 {
     return countAttrXmlOrEmpty( "declined_literal_calls", declinedLiteralCalls );
 }
-inline std::string declinedLiteralCallsKeyJson( std::size_t declinedLiteralCalls )
-{
-    return countFieldOrEmpty( "declined_literal_calls", declinedLiteralCalls, /*json=*/true );
-}
+
 inline constexpr const char* kDeclinedLiteralCallsLegend =
     "declined_literal_calls=K (absent when 0) counts built-in member call sites on JavaScript/TypeScript literals (such as \"string\".replace or [].map) dropped because an in-repo definition shares the member name. ";
 inline const char* declinedLiteralCallsLegend( bool on ) noexcept { return on ? kDeclinedLiteralCallsLegend : ""; }
