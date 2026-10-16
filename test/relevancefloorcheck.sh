@@ -177,12 +177,17 @@ echo "=== (4) byte ceiling on the fixture ==="
 # answer with exactly those two additions normalised out (4), and the whole answer gets its own ceiling of
 # 3300 B (4b) — still far below the 5307 B padded answer this arm exists to keep out.
 a_bytes="$( printf '%s' "$A_OUT" | wc -c | tr -d ' ' )"
-a_norm_bytes="$( printf '%s' "$A_OUT" | sed -E 's/ e="[0-9]+"//g; s/; e= on a d row: the 1-based line where that definition ends, body-inclusive; absent when the extent is not known \(extent_suspect, docs, config\), never 0; l= is the line of the definition.s name, so a definition can start above l=//' | wc -c | tr -d ' ' )"
+# RE-PIN 2026-10-15 (lane forbudget-soft round C, FOLD C; rule 4): the <tail> now carries page 0 of the --for file page — rows
+# `<t p=… sym=…/>` — and its full legend clause grew 391 -> 598 B to define them. (4) normalises those out too (the page rows,
+# and the clause back to its old 391 B), so its 3000 B assertion still measures what it measured; (4b), the whole answer,
+# moves 3300 -> 3400 B (measured 3366): still far below the 5307 B padded answer this arm exists to keep out.
+a_norm_bytes="$( printf '%s' "$A_OUT" | sed -E 's/ e="[0-9]+"//g; s/; e= on a d row: the 1-based line where that definition ends, body-inclusive; absent when the extent is not known \(extent_suspect, docs, config\), never 0; l= is the line of the definition.s name, so a definition can start above l=//' \
+                 | python3 -c 'import re,sys; s=sys.stdin.read(); s=re.sub(r"<t p=\"[^\"]*\" sym=\"[^\"]*\"/>","",s); m=re.search(r"; tail: [^\]]*?budget-trimmed row\)",s); s=s.replace(m.group(0),"x"*391) if m and len(m.group(0))>391 else s; sys.stdout.write(s)' | wc -c | tr -d ' ' )"
 case "$a_bytes$a_norm_bytes" in *[!0-9]*|'') no "(4) byte counts are not numeric ('$a_bytes' / '$a_norm_bytes')"; a_bytes=999999; a_norm_bytes=999999 ;; esac
 [ "$a_norm_bytes" -lt 3000 ] && ok "(4) the floored bundle without e= and its clause is $a_norm_bytes B (< 3000; pre-fix was 5307 B on this fixture)" \
                              || no "(4) the floored bundle without e= and its clause is $a_norm_bytes B, over the 3000 B ceiling"
-[ "$a_bytes" -lt 3300 ] && ok "(4b) the whole floored bundle is $a_bytes B (< 3300 with e= and its legend clause)" \
-                        || no "(4b) the whole floored bundle is $a_bytes B, over the 3300 B ceiling"
+[ "$a_bytes" -lt 3400 ] && ok "(4b) the whole floored bundle is $a_bytes B (< 3400 with e=, the tail page rows and their legend clauses)" \
+                        || no "(4b) the whole floored bundle is $a_bytes B, over the 3400 B ceiling"
 if printf '%s' "$A_OUT" | grep -q ' e="'; then
     [ "$a_norm_bytes" -lt "$a_bytes" ] \
         && ok "(4c) the normalisation in (4) removed e= bytes ($a_bytes -> $a_norm_bytes B), so the 3000 B twin is live" \

@@ -735,7 +735,17 @@ PY
 
 if [ -s "$TMP/noteerr" ]; then no "(E) the dropped-note sweep itself failed: $( head -c 300 "$TMP/noteerr" )"; fi
 cat "$TMP/noteout"
-if [ ! -s "$TMP/notegaps" ] && ! grep -q 'names_checked=[1-9]' "$TMP/noteout" 2>/dev/null; then
+# forbudget-soft (owner decisions 2026-10-14; rule 4): an explicit --token-budget on --for is a SOFT target, so no ceiling
+# ladder runs and rung zero's note can no longer ride: at the tight probe budget the legend must be WHOLE in every dialect
+# (HL) — the note ABSENT, which is exactly what the sweep reports as "ABSENT". Every first-screen attribute of that answer is
+# still defined by its own legend (arm (A) runs the same roster). A note that rides again is the regression this now catches.
+ABSENT_ONLY=0
+if [ -s "$TMP/notegaps" ] && ! grep -qv 'the dropped-legend note is ABSENT at --token-budget=' "$TMP/notegaps"; then ABSENT_ONLY=1; fi
+if [ "$ABSENT_ONLY" = 1 ] && [ "$( wc -l < "$TMP/notegaps" | tr -d ' ' )" -ge 3 ]; then
+    ok "(E) no dropped-legend note in any dialect at the tight probe budget — a soft target never sheds a legend clause (HL; full, compact, default)"
+elif [ ! -s "$TMP/notegaps" ] && grep -q 'names_checked=[1-9]' "$TMP/noteout" 2>/dev/null; then
+    no "(E) a dropped-legend note rides a soft --for target again — the header was shed (HL)"
+elif [ ! -s "$TMP/notegaps" ] && ! grep -q 'names_checked=[1-9]' "$TMP/noteout" 2>/dev/null; then
     no "(E) the dropped-note sweep checked ZERO attribute names — a sweep with an empty population passes for the wrong reason"
 elif [ -s "$TMP/notegaps" ]; then
     no "(E) $( wc -l < "$TMP/notegaps" | tr -d ' ' ) dropped-legend note problem(s) — the note names a definition its own dialect does not have, or the probe has drifted off the rung:"

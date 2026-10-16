@@ -200,6 +200,7 @@
 "forrootlegendcheck.sh": 8.6,
 "forsectioncollapsecheck.sh": 5.2,
 "forsigspancheck.sh": 6.0,
+"forsoftbudgetcheck.sh": 120.0,
 "freshclonecheck.sh": 170.8,
 "freshnesscheck.sh": 4.4,
 "g1configcheck.sh": 0.8,

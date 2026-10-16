@@ -1316,7 +1316,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "core_overlap", "core_overlap=: share of the core surface a partition reaches anyway", false, "ctx-partitions", MapHeaderRead::No, {}, "pack-task" },
     // from-trace: src/tracelocus.h (renderTraceBlock, buildTraceHeader via ctxRootOpen, the budget_tokens attr)
     { "task", "task=: the trace source this bundle maps, verbatim (a file path, stdin, or an MCP label)", false, "ctx", MapHeaderRead::No, {}, "from-trace" },
-    { "budget_tokens", "budget_tokens=N: the token budget passed (absent when none); over_ceiling=1 if est_tokens= exceeds it", false, "ctx", MapHeaderRead::No, {}, "from-trace" },
+    { "budget_tokens", "budget_tokens=N: the soft token target passed (absent when none); est_tokens= may exceed it, no over_ceiling for it", false, "ctx", MapHeaderRead::No, {}, "from-trace" },   // forbudget-soft: the caller's budget is a soft target (tracelocus.h)
     { "src", "src=/format=: the trace read and its dominant frame format, python|asan|node|compiler|generic", true, "trace", MapHeaderRead::No, {}, "from-trace" },   // also defines format=
     { "frame_lines", "frame_lines=/parsed=: frame-shaped input lines / those yielding a path:line; the rest matched no format", true, "trace", MapHeaderRead::No, {}, "from-trace" },   // also defines parsed=
     { "in_corpus", "in_corpus=: parsed frames in indexed files; always suspects= + merged= + unresolved=", true, "trace", MapHeaderRead::No, {}, "from-trace" },
@@ -2365,7 +2365,10 @@ inline void eraseLedgerOverCeilingClause( std::string& doc )
 }
 
 // Returns true when `original`'s root label was corrected (the caller compacts it again).
-inline bool settleOverCeilingLabel( std::string& original, std::string_view compacted )
+// forbudget-soft: `budgetIsSoft` — the caller knows (out of band, never from the document's text, which echoes the task
+// verbatim) that this answer's budget_tokens= is a SOFT target the caller passed (the task lenses' explicit budget, owner
+// decision 2026-10-14): est_tokens may exceed it by contract, so only max_tokens= is judged here.
+inline bool settleOverCeilingLabel( std::string& original, std::string_view compacted, bool budgetIsSoft = false )
 {
     constexpr std::string_view kLabel = " over_ceiling=\"1\"";
     const CompactRootInfo outRoot = findCompactRoot( compacted );
@@ -2375,7 +2378,7 @@ inline bool settleOverCeilingLabel( std::string& original, std::string_view comp
         return false;
     }
     const std::string_view outOpen = compacted.substr( outRoot.openBegin, outRoot.openEnd - outRoot.openBegin );
-    const std::size_t budget = rootUnsignedAttr( outOpen, "budget_tokens" );
+    const std::size_t budget = budgetIsSoft ? 0u : rootUnsignedAttr( outOpen, "budget_tokens" );
     const std::size_t maxTok = rootUnsignedAttr( outOpen, "max_tokens" );
     const std::size_t est    = rootUnsignedAttr( outOpen, "est_tokens" );
     if( ( budget == 0 && maxTok == 0 ) || est == 0 )
@@ -2432,12 +2435,12 @@ inline bool settleOverCeilingLabel( std::string& original, std::string_view comp
     return true;
 }
 
-inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hint )
+inline CompactOutcome applyCompactDialect( std::string& doc, std::string_view hint, bool budgetIsSoft = false )
 {
     std::string       original    = doc;
     const std::size_t pricedBytes = doc.size();   // what the emitter's est_tokens= describes
     CompactOutcome    outcome     = applyCompactDialectOnce( doc, hint );
-    if( outcome == CompactOutcome::Rewritten && settleOverCeilingLabel( original, doc ) )
+    if( outcome == CompactOutcome::Rewritten && settleOverCeilingLabel( original, doc, budgetIsSoft ) )
     {
         doc = original;
         outcome = applyCompactDialectOnce( doc, hint, pricedBytes );

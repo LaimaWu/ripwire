@@ -379,7 +379,12 @@ missing = [ident(r) for r in base if ident(r) not in hd or not same(calls(r), ca
 gained = [r['n'] for r in base if ident(r) in hd and len(calls(hd[ident(r)])) > len(calls(r))]
 moved = [r['n'] for r in off['rows'] if ident(r) in owners]
 order_ok = [ident(r) for r in head if ident(r) in {ident(b) for b in base}] == [ident(r) for r in base if ident(r) in hd]
-premise = bool(gained) and bool(moved) if mode == 'prefix' else True
+# forbudget-soft (decision D-3; rule 4): the DEFAULT <hops> is no longer cut at its 1,000 B allowance, so the rows of the A/B handle
+# are already complete and a moved owner can free nothing — "gained" is then impossible by construction. The premise keeps
+# "an owner moved" and accepts either a gain or an A/B listing with no BUDGET-cut <calls> left to widen (a listing cut at the
+# 16-name row cap cannot gain either: the cap is not the budget).
+base_complete = all((r.get('ca') or {}).get('capped') != '1' or int((r.get('ca') or {}).get('shown', '0') or 0) >= 16 for r in base)   # only the 16-name row cap left
+premise = bool(moved) and (bool(gained) or base_complete) if mode == 'prefix' else True
 print('OK' if not missing and order_ok and off['rows'] and premise
       else 'BAD missing=%s order_ok=%s base_rows=%d gained=%s moved=%s' % (missing[:3], order_ok, len(off['rows']), gained, moved))
 PY
@@ -408,7 +413,20 @@ for spec in "compact|$QTS|" "compact|$QV|" "full|$QTS|--legend=full" "compact|$Q
         if [ "$non" -ge 1 ] && [ "$noff" = 0 ] && grep -q 'qword="gateway"' "$on"; then :
         else no "(S/$dia '$q'${extra:+ $extra}) premise: via clause head=$non A/B=$noff (want >=1 / 0) with the gateway owner row"; continue; fi
     fi
-    if [ "$( SECTS "$on" )" = "$( SECTS "$off" )" ] && [ "$( SECTS "$off" )" != "[]" ]; then
+    # forbudget-soft round C (owner decision 2026-10-14: RESERVE SECTIONS FIRST; rule 4): under an explicit --token-budget the
+    # owner rows are hop rows — a trailing section reserved before the rows past the target cut — so they may cost rows PAST
+    # the cut, never a row at it: the rows are then a rank prefix of the A/B handle's (the clause itself, a header disclosure,
+    # is still never charged). The default-regime specs keep the byte-identity.
+    if [ -n "$extra" ] && [ "$extra" != "--legend=full" ]; then
+        if python3 - "$on" "$off" <<'PY'
+import re, sys
+rows = lambda f: re.findall( r'<d [^>]*?\bp="([^"]*)"[^>]*?\bn="([^"]*)"|<d [^>]*?\bn="([^"]*)"[^>]*?\bp="([^"]*)"', open( f ).read().split( '</sigs>' )[ 0 ] )
+a, b = rows( sys.argv[ 1 ] ), rows( sys.argv[ 2 ] )
+sys.exit( 0 if a and b and b[ :len( a ) ] == a and 'over_ceiling="1"' not in open( sys.argv[ 1 ] ).read() else 1 )
+PY
+        then ok "(S/$dia '$q' $extra) soft target: the owner rows (a section, reserved first) leave <sigs> a rank prefix of the A/B handle's, no over_ceiling"
+        else no "(S/$dia '$q' $extra) soft target: <sigs> is not a rank prefix of the A/B handle's: $( grep -o '<sigs [^>]*>' "$on" | cut -c1-80 ) vs $( grep -o '<sigs [^>]*>' "$off" | cut -c1-80 )"; fi
+    elif [ "$( SECTS "$on" )" = "$( SECTS "$off" )" ] && [ "$( SECTS "$off" )" != "[]" ]; then
         ok "(S/$dia '$q'${extra:+ $extra}) the owner rows' via=\"name\" clause costs <sigs>/<tail> nothing (byte-identical to the A/B handle)"
     else no "(S/$dia '$q'${extra:+ $extra}) <sigs>/<tail> differ from the A/B handle: $( grep -o '<sigs [^>]*>' "$on" ) vs $( grep -o '<sigs [^>]*>' "$off" )"; fi
 done
@@ -440,9 +458,11 @@ if ran_ok "$f" "(B1b)"; then
     if [ "$got" = row ] || [ "$got" = cut ] || grep -q 'reason="budget"' "$f"; then ok "(B1b) --token-budget=4000: the owner is first or disclosed ($got)"
     else no "(B1b) --token-budget=4000: gateway neither the first owner row nor named by qword_cut/next= ($got)"; fi
 fi
-on="$TMP/b2.on.xml"; off="$TMP/b2.off.xml"; run ts "$on" "--for=$QTS" --token-budget=1200; runoff ts "$off" "--for=$QTS" --token-budget=1200
+# forbudget-soft round C (rule 4): sections are funded from the rows at the soft target's cut (reserve first), so 1200 tokens
+# now leaves the hops a share; re-anchored at 700, the widest budget that still exhausts it (measured: 700 budget, 900 not)
+on="$TMP/b2.on.xml"; off="$TMP/b2.off.xml"; run ts "$on" "--for=$QTS" --token-budget=700; runoff ts "$off" "--for=$QTS" --token-budget=700
 if ran_ok "$on" "(B2)" && ran_ok "$off" "(B2) A/B"; then
-    grep -q 'reason="budget"' "$off" || no "(B2) premise: --token-budget=1200 no longer exhausts the ceiling (no reason=\"budget\") — re-tune"
+    grep -q 'reason="budget"' "$off" || no "(B2) premise: --token-budget=700 no longer exhausts the ceiling (no reason=\"budget\") — re-tune"
     if cmp -s "$on" "$off"; then ok "(B2) exhausted ceiling: byte-identical to the A/B handle (owner rows add nothing)"; else no "(B2) exhausted-ceiling answer changed"; fi
 fi
 # (B3) a budget sweep on the 105-callee owner: no budget may drop callee names silently
