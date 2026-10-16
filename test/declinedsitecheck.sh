@@ -537,6 +537,32 @@ rc1, o1 = run( GO, "--callees=doPackage", "--legend=full" )
 rc2, o2 = run( GO, "--callees=doPackage", "--legend=full" )
 say( rc1 == 0 and rc2 == 0 and o1 == o2 and len( o1 ) > 0, "[C] i_det", "two runs byte-identical" )
 
+# ── (L) train 28: PR #380's inert quoted sites beside the <dc> records ─────────────────────────────────────────────────
+# An Elixir call candidate inside inert quote AST is counted in declinedOut (the callees declined_calls=) but reaches no
+# decline site, so it writes no record and has no <dc> row. Merged with this lane, declinedSitesMadeBy's postcondition
+# (records == declined_calls=) aborted --callees on such a function (ENSURES, both branches: a tree with no record at all,
+# and a tree whose records belong to other callers). Arms: an Elixir-only tree, then the same file beside a Python tree
+# with tier-3 records; and the rows legend says the quoted sites have no row (only where both ride).
+print( "=== (L) inert quoted sites (PR #380) carry no record and abort nothing ===" )
+EX = os.path.join( T, "elixirfix" )
+x = ask( EX, "callees", "quoted", "--legend=full" )
+say( x.ok and x.a( "declined_calls" ) == "1" and not x.dc, "[L] l_ex_only",
+     "elixirfix --callees=quoted: exit 0, declined_calls=\"1\" (the quoted nonexistent(x)), no <dc> row", x.why() )
+MIX = os.path.join( TMP, "mix" )
+import shutil
+shutil.copytree( PYF, os.path.join( MIX, "py" ) )
+os.makedirs( os.path.join( MIX, "ex" ) ); shutil.copy( os.path.join( EX, "run.exs" ), os.path.join( MIX, "ex", "run.exs" ) )
+x = ask( MIX, "callees", "quoted" )
+say( x.ok and x.a( "declined_calls" ) == "1" and not x.dc, "[L] l_mixed_inert",
+     "beside Python records: --callees=quoted exit 0, declined_calls=\"1\", no <dc> row", x.why() )
+rc, out = run( MIX, "--callees=py/caller/use.py:load_twice", "--legend=full" )
+y = Answer( rc, out, "callees" )
+say( y.ok and len( y.dc ) >= 1 and "No <dc> row names those quoted sites" in out and "inert quote AST" in out, "[L] l_rows_legend",
+     "a Python answer with <dc> rows on a tree with quoted sites: rows, the inert clause and its no-row sentence", y.why() )
+rc, out = run( PYF, "--callees=caller/use.py:load_twice", "--legend=full" )
+say( rc == 0 and "No <dc> row names those quoted sites" not in out and "inert quote AST" not in out, "[L] l_rows_legend_neg",
+     "the same answer on the Python tree alone carries neither sentence (present-only)" )
+
 # ── (J) the predicates can fail ────────────────────────────────────────────────────────────────────────────────────
 print( "=== (J) the predicates reject what they must ===" )
 fake = Answer( 0, '<callers of="x" count="1" declined_calls="1"><s n="a" p="f:1"/><dc in="b" p="g:2" cands="2" of_def="1"/></callers>', "callers" )

@@ -156,6 +156,10 @@ struct Graph
     // named by declinedListCallCount[k] calls — what the callers and impact answers read to count, once per call, the declines that could have meant THEIR symbols.
     std::vector<std::uint32_t> declinedOut;
     std::size_t                inertDeclinedCalls = 0;   // quoted call sites counted in declinedOut, with no candidate list
+    // train 28 (PR #380 x lane declined-sites): the caller of each inert quoted site, in resolve-loop order. Those sites ride
+    // declinedOut with no candidate list and reach no decline site, so they write no declinedSite* record below; this column is
+    // what lets declinedSitesMadeBy state its record-count postcondition with them in it (records + inert == declined_calls=).
+    std::vector<NodeId>        inertDeclinedCaller;
     std::vector<std::uint32_t> declinedListOff{ 0u };   // the leading offset lives here, so a default Graph is already a valid zero-list CSR
     std::vector<NodeId>        declinedListCand;
     std::vector<std::size_t>   declinedListCallCount;
@@ -7345,6 +7349,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             // site on its caller; do not intern target candidates, since it could reach none of them.
             ++g.declinedOut[ r.fromSymbol ];
             ++g.inertDeclinedCalls;
+            g.inertDeclinedCaller.push_back( r.fromSymbol );   // no declinedSite* record: no candidate list, no decline site
             disposition = CallDisposition::Declined;
             continue;
         }
@@ -13301,12 +13306,24 @@ inline std::size_t declinedCallsMadeBy( const Graph& g, std::span<const NodeId> 
 
 // lane declined-sites: the site records (Graph::declinedSite*) behind the two counts above, for the <dc> rows
 // (declinedsites.h). declinedSitesMadeBy: the declines `sources` made — one record per call declinedCallsMadeBy counts.
+// The inert quoted sites (#380) `sources` made: counted in declinedOut, never a record (Graph::inertDeclinedCaller).
+inline std::size_t inertDeclinedMadeBy( const Graph& g, std::span<const NodeId> sources ) noexcept
+{
+    std::size_t n = 0;
+    for( const NodeId caller : g.inertDeclinedCaller )
+    {
+        n += std::ranges::contains( sources, caller ) ? 1u : 0u;
+    }
+    return n;
+}
+
 inline std::vector<std::uint32_t> declinedSitesMadeBy( const Graph& g, std::span<const NodeId> sources )
 {
     std::vector<std::uint32_t> sites;
     if( g.declinedSiteCaller.empty() || sources.empty() )
     {
-        ENSURES( declinedCallsMadeBy( g, sources ) == 0, "no record, so no declined call: every decline site writes one" );
+        ENSURES( declinedCallsMadeBy( g, sources ) == inertDeclinedMadeBy( g, sources ),
+                 "no record, so no declined call but an inert quoted site: every decline site writes one" );
         return sites;
     }
     std::vector<char> isSource( g.declinedOut.size(), 0 );
@@ -13324,7 +13341,8 @@ inline std::vector<std::uint32_t> declinedSitesMadeBy( const Graph& g, std::span
             sites.push_back( site );
         }
     }
-    ENSURES( sites.size() == declinedCallsMadeBy( g, sources ), "every declined call a source made has its record, and no other does" );
+    ENSURES( sites.size() + inertDeclinedMadeBy( g, sources ) == declinedCallsMadeBy( g, sources ),
+             "every declined call a source made has its record, and no other does; an inert quoted site has none" );
     return sites;
 }
 
