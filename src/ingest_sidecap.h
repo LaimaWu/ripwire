@@ -2051,7 +2051,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 if( nameTxt == "/" && elixirNodeIs( parent, "unary_operator" ) && nodeFieldText( parent, NodeField::Operator, src  ) == "&" ) { continue; }
             }
 
-            if( le.lang == Lang::Elixir && elixirInert( roleNode, src ) )
+            if( langFacts( le.lang ).hasInertQuoteRegions && elixirInert( roleNode, src ) )
             {
                 // Keep call/operator/named-capture candidates as declined facts, never edges. Heads,
                 // special forms and non-call operators already failed their syntax filters. Bare AST

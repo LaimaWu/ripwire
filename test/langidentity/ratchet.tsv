@@ -7,7 +7,7 @@
 #   #399's ratchet (grep-carrier +1, ruby-pair +4, qd-memory-degrade +1, #380 +1, attrib-multidef/declined-sites +3); the
 #   ceiling moves 352 -> 362 for train 28 only. Train 29 brings it back to <= 352. This waiver is not a precedent: the rule
 #   above (may fall, never rise) holds for every other change.
-ceiling	356
+ceiling	355
 perlang	ingest_elixir.h
 perlang	elixir_resolve.h
 perlang	ingest_clojure.h
