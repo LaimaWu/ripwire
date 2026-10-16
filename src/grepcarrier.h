@@ -30,6 +30,7 @@
 #include "sarif.h"           // rootRelativeUri — the root-relative spelling every grep path takes
 #include "search.h"          // GrepEncRow — the rows this decorates
 #include "valuerefindex.h"   // ValueRefIndex — madeIn / targetsOf, the stored function values
+#include "infra/sortutil.h"  // sortutil::svLess — the byte order every string_view search here uses
 #include "infra/Diagnostics.h"
 
 #include <algorithm>
@@ -116,7 +117,7 @@ inline std::vector<std::uint64_t> valueSitesOf( const IngestResult& rd, std::spa
     for( std::uint32_t i = 0; i < rd.references.size(); ++i )
     {
         const Reference& r = rd.references[i];
-        if( r.role == RefRole::Value && !r.fieldName.starts_with( '@' ) && std::ranges::binary_search( names, std::string_view( r.calleeName ) ) )
+        if( r.role == RefRole::Value && !r.fieldName.starts_with( '@' ) && std::ranges::binary_search( names, std::string_view( r.calleeName ), sortutil::svLess ) )
         {
             candidates.push_back( i );
         }
@@ -207,7 +208,7 @@ inline std::vector<ReadHit> readSitesOf( const IngestResult& rd, std::span<const
         {
             continue;
         }
-        const auto it = std::ranges::lower_bound( names, std::string_view( r.calleeName ) );
+        const auto it = std::ranges::lower_bound( names, std::string_view( r.calleeName ), sortutil::svLess );
         if( it == names.end() || *it != r.calleeName || std::ranges::binary_search( valueSites, ( std::uint64_t( r.fileId ) << 32 ) | r.startByte ) )
         {
             continue;   // another name, or a site the uses verb serves as role="value", not a read
@@ -238,7 +239,7 @@ inline void fillReads( const IngestResult& ing, const IngestResult& rd, std::spa
             names.push_back( ing.symbols[ rows[r].ids.front() ].name );
         }
     }
-    std::ranges::sort( names );
+    std::ranges::sort( names, sortutil::svLess );   // byte order: the default string_view < aborts the Linux G1 leg (portablebuildcheck #6)
     names.erase( std::unique( names.begin(), names.end() ), names.end() );
     const std::vector<ReadHit> hits = readSitesOf( rd, names );
     for( std::size_t r = 0; r < rows.size(); ++r )
@@ -248,7 +249,7 @@ inline void fillReads( const IngestResult& ing, const IngestResult& rd, std::spa
             continue;
         }
         const std::string_view name = ing.symbols[ rows[r].ids.front() ].name;
-        const std::uint32_t    k    = std::uint32_t( std::ranges::lower_bound( names, name ) - names.begin() );
+        const std::uint32_t    k    = std::uint32_t( std::ranges::lower_bound( names, name, sortutil::svLess ) - names.begin() );
         ASSUME( k < names.size() && names[k] == name, "every readsKnown row queued its name" );
         const auto [ first, last ] = std::ranges::equal_range( hits, k, {}, &ReadHit::name );   // hits are sorted by name first
         out[r].reads = std::uint32_t( last - first );
