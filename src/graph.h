@@ -3169,11 +3169,25 @@ inline std::string_view stdElementType( std::string_view written ) noexcept
 // so an unproven receiver may well dispatch into the tree; a Go gate needs typed receivers, not a name list. Java, Kotlin,
 // C# and Swift likewise (add/size, Add, append). ObjC message sends carry no receiver shape. Python/JS/TS/Ruby:
 // BuiltinMethodGate above.
-inline constexpr std::array<std::span<const std::string_view>, kLangCount> kStdMemberNames = []
+// One language's row: a pointer and a count, not a std::span — libstdc++ 13.2/13.3 cannot evaluate a value-initialised
+// std::span (its dynamic __extent_storage has no default constructor) inside a constant expression, so a constexpr array of
+// spans failed to compile under gcc-13 and clang-on-libstdc++ (CI 2026-10-16). span() builds the view at run time.
+struct StdMemberRow
 {
-    std::array<std::span<const std::string_view>, kLangCount> rows {};   // value-initialised: a language with no row is not gated
-    rows[ std::size_t( Lang::Cpp ) ]  = externalnames::kCppStdMemberNames;
-    rows[ std::size_t( Lang::Rust ) ] = externalnames::kRustStdMemberNames;
+    const std::string_view* names = nullptr;
+    std::size_t             count = 0;
+    constexpr std::span<const std::string_view> span() const noexcept { return { names, count }; }
+};
+template<std::size_t N>
+constexpr StdMemberRow stdMemberRow( const std::string_view ( &table )[ N ] ) noexcept
+{
+    return { table, N };
+}
+inline constexpr std::array<StdMemberRow, kLangCount> kStdMemberNames = []
+{
+    std::array<StdMemberRow, kLangCount> rows {};   // value-initialised: a language with no row is not gated
+    rows[ std::size_t( Lang::Cpp ) ]  = stdMemberRow( externalnames::kCppStdMemberNames );
+    rows[ std::size_t( Lang::Rust ) ] = stdMemberRow( externalnames::kRustStdMemberNames );
     rows[ std::size_t( Lang::Go ) ]   = {};   // EMPTY on purpose: see LANGUAGE SCOPE above
     return rows;
 }();
@@ -3185,12 +3199,13 @@ inline constexpr std::array<std::size_t, kLangCount + 1> kStdMemberRowStart = []
     std::array<std::size_t, kLangCount + 1> start {};
     for( std::size_t l = 0; l < kLangCount; ++l )
     {
-        start[ l + 1 ] = start[ l ] + kStdMemberNames[ l ].size();
+        start[ l + 1 ] = start[ l ] + kStdMemberNames[ l ].count;
     }
     return start;
 }();
 static_assert( kStdMemberRowStart[ kLangCount ] < 0xFFFFu, "StdMemberGate packs a kStdMemberNames flat index into 16 bits, 0xFFFF = none" );
-static_assert( std::all_of( kStdMemberNames.begin(), kStdMemberNames.end(), []( std::span<const std::string_view> row ) { return externalnames::isStrictlySortedTable( row ); } ), "every kStdMemberNames row is strictly sorted (binary search)" );
+// Every row's table is proven strictly sorted where it is defined (externalnames.h static_asserts), which tableIndexOf's
+// binary search needs; nothing here re-reads a row as a std::span at compile time (the libstdc++ 13 note above).
 struct StdMemberGate
 {
     static constexpr std::uint16_t kNotStd = 0xFFFFu;
@@ -3204,7 +3219,7 @@ struct StdMemberGate
     // type, are the caller's to add.
     static std::uint16_t tableIndexOf( const Reference& r ) noexcept
     {
-        const std::span<const std::string_view> table = enumTableAt( kStdMemberNames, r.lang, std::span<const std::string_view>{} );   // strictly sorted: static_assert
+        const std::span<const std::string_view> table = enumTableAt( kStdMemberNames, r.lang, StdMemberRow{} ).span();   // strictly sorted: static_assert
         if( table.empty() || r.role != RefRole::Call || !r.qualifier.empty() || !isMemberCallRef( r ) )
         {
             return kNotStd;
@@ -3225,7 +3240,7 @@ struct StdMemberGate
         const auto        next = std::upper_bound( kStdMemberRowStart.begin(), kStdMemberRowStart.end(), std::size_t( index ) );
         const std::size_t lang = std::size_t( next - kStdMemberRowStart.begin() ) - 1;
         ASSUME( lang < kLangCount, "an index below the last row start lies inside one row" );
-        return kStdMemberNames[ lang ][ index - kStdMemberRowStart[ lang ] ];
+        return kStdMemberNames[ lang ].names[ index - kStdMemberRowStart[ lang ] ];
     }
 
     // What the receiver exception read off a call's receiver (buildGraph's stdReceiverOf): the written class names whose cone
