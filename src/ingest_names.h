@@ -1030,7 +1030,7 @@ enum class ScopeNameRead : std::uint8_t
 enum class ScopeReach : std::uint8_t
 {
     SelfAndInside,   // C++/Python: every def under the owner, the owner's own name included (`class Foo` sc="Foo", kept as is)
-    InsideOnly,      // Go type_spec: its members (an interface's method_elem), never the type's own name
+    InsideOnly,      // Go type_spec / type_alias: its members (an interface's method_elem), never the type's own name
     SelfOnly,        // Go method_declaration: the method's own name; a def in its body (a local var, a func literal) is a local
 };
 struct ScopeOwnerRow
@@ -1039,13 +1039,14 @@ struct ScopeOwnerRow
     ScopeNameRead    read;
     ScopeReach       reach;
 };
-inline constexpr std::array<ScopeOwnerRow, 6> kScopeOwners = { {
+inline constexpr std::array<ScopeOwnerRow, 7> kScopeOwners = { {
     { "class_specifier", ScopeNameRead::NameField, ScopeReach::SelfAndInside },        // C++
     { "struct_specifier", ScopeNameRead::NameField, ScopeReach::SelfAndInside },       // C++
     { "namespace_definition", ScopeNameRead::NameField, ScopeReach::SelfAndInside },   // C++
     { "class_definition", ScopeNameRead::NameField, ScopeReach::SelfAndInside },       // Python
     { "method_declaration", ScopeNameRead::ReceiverType, ScopeReach::SelfOnly },       // Go (test/goscopecheck.sh)
     { "type_spec", ScopeNameRead::NameField, ScopeReach::InsideOnly },                 // Go (test/goscopecheck.sh)
+    { "type_alias", ScopeNameRead::NameField, ScopeReach::InsideOnly },                // Go `type A = interface{…}` (arm I)
 } };
 
 // Does owner `p` (matched to `row`) scope the definition named by `node`? The reach column: a Go type's own name and a
@@ -1064,7 +1065,8 @@ inline bool ownerScopes( const ScopeOwnerRow& row, TSNode p, TSNode node ) noexc
 inline std::string_view receiverTypeName( TSNode method, std::string_view src )
 {
     const TSNode list = fieldChild( method, NodeField::Receiver );
-    const TSNode decl = ts_node_is_null( list ) || ts_node_named_child_count( list ) == 0 ? TSNode{} : ts_node_named_child( list, 0 );
+    // the parameter_declaration, not named child 0: a comment in the list is a named child too (arm I)
+    const TSNode decl = ts_node_is_null( list ) ? TSNode{} : firstChildOfKind( list, /*namedOnly=*/true, { "parameter_declaration" } );
     return ts_node_is_null( decl ) ? std::string_view{} : finalTypeSegment( fieldChild( decl, NodeField::Type ), src );
 }
 
