@@ -34,6 +34,13 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-15, train 28 (grep-carrier, ruby-pair, qd-memory-degrade, githarden-speed, git-child-hardening, PR #380, forbudget-soft,
+#   for-body-slot, attrib-multidef, declined-sites merged onto main 1bcb6540): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged
+#   tree (hash 279718355d…5ba2db). Watched text: kParserVer 173 -> 176 (main's slice 4a 173 / rich 174, lane grep-carrier 173,
+#   lane ruby-pair 174 / rich 175, PR #380 145; 176 / rich file tag 177 is above every live build), kCacheVersion 31 -> 32
+#   (RefRole gained Subscript 9 and Inert 10; see the kCacheVersion note), quality.h's two mirrors with them, kQSnapCacheScheme
+#   20 -> 21 (the dead set's call inputs moved; see the v21 note), and the lanes' own watched-text moves logged below
+#   (qd-memory-degrade's computeSnapshot / defectSitesOf).
 # 2026-10-15, slice 4a (#400, Ruby mixins onto the shared base-relations path): RE-DERIVED with UPDATE_GOLDEN=1.
 #   The only watched text that moved is the kParserVer declaration (and its mirror): 171 -> 173. Ruby's
 #   `include`/`extend`/`prepend` are captured by queries/ruby/tags.scm as @reference.mixin and read by

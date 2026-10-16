@@ -23,7 +23,7 @@ Ruby-only `captureRubyMixinBases` and its `captureIncludes` call site are gone; 
 the C++ reader keeps the two guards a tags pattern cannot state (the directive's text, and its class-body position).
 Output is byte-identical: the map, `--deps --limit=100000`, `--skipped`, `--callers`, `--callees`, `--impact` and
 `--uses` all match the base build over a real Rails corpus and the Ruby fixtures, and `--lego` lists the same
-implementors. `kParserVer` moves 171 -> 173 (the extraction path changed; 172 is 171's rich file tag).
+implementors. `kParserVer` moves (the extraction path changed; 176 in this release, see the versions note).
 
 ### Fixed — a function stored through `??`, `||`, `&&`, `or` or `and` is a value use
 
@@ -33,7 +33,7 @@ value-reference capture walked parentheses and ternary branches but stopped at a
 value-preserving operators — JS/TS `??`, `||`, `&&` and the logical assignments `??=`, `||=`, `&&=`; Python `or`,
 `and` — in every position it already read (assignment, return, argument, parameter default). The left operand of
 `&&`/`and` only decides and stays no row; C/C++ and Go `||`/`&&` yield a truth value and stay no row. Parser version
-173 (caches re-parse once). Gate: `test/recallshapecheck.sh` arms OP1–OP17.
+176 in this release (caches re-parse once; see the versions note). Gate: `test/recallshapecheck.sh` arms OP1–OP17.
 
 ### Added — `--grep` names what a hit's variable carries and who reads it
 
@@ -65,7 +65,7 @@ edge, no `via="name"` hedge and no count: a `[]` or `__getitem__` definition els
 name. It does NOT mean every subscript of an in-tree class is found: a Ruby instance variable receiver is not typed, a
 compound assignment (`h[ k ] ||= v`) is recorded as the read form, and `del o[ k ]`, a multiple-assignment target and an
 annotation record nothing. On rake 93 callers of `[]` appear; on textual 42 of `__getitem__`. C++ `operator[]` could
-share the path and is not armed. `--uses` lists no subscript site. Parser version 174 (the train renumbers). Gate:
+share the path and is not armed. `--uses` lists no subscript site. Parser version 176 in this release (see the versions note). Gate:
 `test/subscriptopcheck.sh`.
 
 ### Added — `--lego=M` lists Ruby's main object when a file's top level mixes M in
@@ -80,6 +80,19 @@ Gate: `test/subscriptopcheck.sh` (L arms).
 ### Changed — ripwire neutralises repository-configured filter and diff programs for its own git children
 
 Every git command ripwire runs now pins the filter drivers the repository's own config defines to an empty command, carries `--no-ext-diff --no-textconv` on `diff`/`log`/`show`/`blame` and `--ignore-submodules=dirty` on `status`/`diff`, and keeps signature display off; stderr discloses the pinning as `git_harden=filter-driver`, and `--doctor`'s `git-config-trust` row reports it (`filter_drivers=`, `filter_scope=`, `filter_pinned=`). Visible effects: files behind a repository-local filter (git-crypt, a per-repository LFS driver) are seen unfiltered, as stored; edits inside a submodule no longer mark the stamp `+dirty`; a user's own textconv no longer shapes `--numstat` (such binary rows read `-`); and a pinned driver name applies to every root in the same run. Gate: `test/gitchildoptscheck.sh`.
+
+### Fixed — an Elixir call inside `unquote(...)` under `quote` is a call again; quoted call sites are counted (#357, PR #380 by @LaimaWu)
+
+Everything under a `quote` used to be dropped, so a helper called only from `unquote(...)` or `unquote_splicing(...)`
+inside a macro's quote had no caller edge from that macro. The quoted body is now read through one shared walk
+(`src/ingest_inert.h`, `inInertRegion`), with Elixir deciding per ancestor whether a region is inert or a live hole
+(`src/ingest_elixir.h`): calls inside `unquote(...)`/`unquote_splicing(...)` are live, as are `bind_quoted:` option
+expressions; `bind_quoted` turns unquoting off unless `unquote: true` turns it back on, and `unquote: false` keeps the
+argument inert; a nested quote inside a live hole is inert again. Ordinary call, operator and named-capture candidates
+that stay inert mint no edge and are counted: the map's `declined=` includes them (its full legend says so where any were
+counted) and `--callees` counts them in `declined_calls=` on their enclosing function. They are not possible callers:
+`--callers`, `--uses` and `--impact` of a function called only from inert quoted code still read zero. Not read yet: a
+bracketed options list (`quote [unquote: false] do`), under which a hole is taken as live. Gate: `test/elixircheck.sh`.
 
 ### Added — Clojure (`.clj`/`.cljs`/`.cljc`/`.bb`)
 
@@ -191,6 +204,18 @@ so no other gate's charge decides it and its 320 MiB counts against no other gat
 memory puts the leaf over `--max-memory=256M` (exit 5; the 0.6.7 rule answers, exit 0), and 320 MiB of page cache
 does not (exit 0). `--help` says what is measured, and the MCP refusal at the hard line names the cgroup, not this
 server, when the cgroup's charge is the larger reading: restarting the server does not help there.
+
+### Changed — the versions this release moves, stated once
+
+`kParserVer` 171 → 176: slice 4a (#400) takes 173 on `main` (its full-use file tag 174); the value-reference walk through
+`??`/`||`/`&&`/`or`/`and` carried 173 on its branch, the Ruby/Python subscript references and Ruby's main-object mixins
+174 (file tag 175), and the Elixir quote live holes (#380) 145 on theirs. They land together at 176, above every number a
+branch build has used, so no cache such a build wrote is read as this release's; its full-use file tag is 177.
+`kCacheVersion` 31 → 32: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
+numbered 9 on #380's branch, which predates the subscript role); no record changes shape. `kQSnapCacheScheme` 20 → 21:
+the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls), so the dead kind can
+differ for an unchanged commit. Every ingest cache written by an earlier build is refused and re-indexed once, and every
+cached quality snapshot is recomputed.
 
 
 ## [0.6.7] — 2026-10-11

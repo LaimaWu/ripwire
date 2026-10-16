@@ -2335,7 +2335,7 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 31;   // MUST equal ingest.cpp's kCacheVersion (gated); 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 32;   // MUST equal ingest.cpp's kCacheVersion (gated); 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
 constexpr std::uint32_t kIngestParserVerMirror    = 176;  // MUST equal ingest.cpp's kParserVer   (gated)
                                                           // 176 = 2026-10-15 (train 28: above main 173/174, grep-carrier 173/174,
                                                           //   ruby-pair 174/175, #380 145, the other lanes 171; see the kParserVer note)
@@ -3606,7 +3606,13 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // already keeps this build's blobs apart; bumped 19 -> 20 so the history above stays complete and the scheme sits above
 // every live value (19 on every branch). The lane's own note said the walk itself is a refactor (same class set and
 // order for the same g.implementors) — true; what moved is g.implementors.
-constexpr std::uint32_t kQSnapCacheScheme = 20;
+// v21 (2026-10-15, train 28) — no blob shape change; the dead SET's inputs moved again. Lane ruby-pair makes a proven element
+// access a call of the receiver class's subscript operator (Ruby `[]`/`[]=`, Python `__getitem__`/`__setitem__`) and PR #380
+// makes an Elixir `unquote(...)` call under `quote` live, so the calls that keep a definition alive can differ for an
+// UNCHANGED sha. kParserVer moved with those extractions (176, its mirror with it), and the producer identity already keeps
+// this build's blobs apart; bumped 20 -> 21 so the history above stays complete and the scheme sits above every live value
+// (20 on main and every lane). Lane qd-memory-degrade's KindScope builds the default scope's records unchanged (its note).
+constexpr std::uint32_t kQSnapCacheScheme = 21;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
