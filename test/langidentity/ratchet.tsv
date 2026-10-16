@@ -3,10 +3,11 @@
 #          per-language files below; counted from `ripwire src --regex='Lang::[A-Z][A-Za-z]+'`, one count per distinct line.
 #          It may fall (lower the number in the same commit that removes the predicate) and may never rise.
 # perlang: a file that exists for ONE language, whose predicates are the point of the file and do not count.
-# ONE-TIME NAMED EXCEPTION (owner waiver 2026-10-16): the 10 shared-file Lang:: predicates came from lanes signed before
-#   #399's ratchet (grep-carrier +1, ruby-pair +4, qd-memory-degrade +1, #380 +1, attrib-multidef/declined-sites +3); the
-#   ceiling moves 352 -> 362 for train 28 only. Train 29 brings it back to <= 352. This waiver is not a precedent: the rule
-#   above (may fall, never rise) holds for every other change.
+# CLOSED (train 29, langfacts-fold): the one-time named exception (owner waiver 2026-10-16) raised the ceiling 352 -> 362 for
+#   train 28, for 10 shared-file Lang:: predicates added by lanes signed before #399's ratchet (grep-carrier +1, ruby-pair +4,
+#   qd-memory-degrade +1, #380 +1, attrib-multidef/declined-sites +3). Train 29 folded them into src/langfacts.h columns,
+#   byte-identical, and lowered the ceiling below 352. The waiver is not a precedent: the rule above (may fall, never rise)
+#   holds for every change.
 ceiling	350
 perlang	ingest_elixir.h
 perlang	elixir_resolve.h

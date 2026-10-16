@@ -508,7 +508,9 @@ Languages differ in fewer places than their code suggests. Language-specific cod
 
 1. **Facts** are decided once per language: a boolean, an enum or a short list (does `x.f()` ever reach a free function, which line-comment markers the language has).
    They are columns of one `constexpr` table with one row per `Lang`. A missing row or a missing required column is a compile error.
-   This table is being introduced by slice 6c. Until it lands, extend the nearest existing per-`Lang` table and never add a new `l == Lang::X || …` predicate.
+   The table is `src/langfacts.h` (`kLangFacts`; shared code reads `langFacts( l ).column`). A column is named for its reason (`overloadSignatures`), never for a language or a family,
+   and an optional one defaults to the conservative answer (`false`); a column every new language must decide is typed `Must<T>`. Slice 6c is moving the existing per-`Lang` tables and predicates into it.
+   Until it has moved them, extend the nearest existing table, add a column rather than a new `l == Lang::X || …` predicate, and note that `test/langidentitycheck.sh`'s ratchet counts those predicates in shared files and may only fall.
 2. **Hooks** are for an algorithm that genuinely differs (a different tree walk or binding rule). A hook is a named function pointer in a per-language hook table, and an empty slot means the shared path.
    The body lives in that language's own file (`src/ingest_<lang>.h`), with a one-sentence reason above it. Slice 3a builds the first hook table, for `captureTagsFacts`.
 3. **Family rows** belong to a mechanism that only some languages use, such as the qualified-call resolver of slice 6b. It keeps its own small `constexpr` rows beside its shared handler, and a language without a row does not use it.
