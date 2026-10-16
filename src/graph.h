@@ -8424,8 +8424,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             //     paramsMin is 0 — no lower bound — for a variadic, implicit-self, receiver-parameter or
             //     decorated def and for every language without a kParamMinLangs row (JavaScript, where a call
             //     may pass fewer arguments; Kotlin; …), so those are never dropped for too few arguments.
-            //     Residual floor (disclosed, not handled): a C/C++ argument that is a macro expanding to several
-            //     arguments (`f( PAIR )`) is counted as one, so it reads as a shorter call than it is.
+            //     Residual floors (disclosed, not handled): a C/C++ argument that is a macro expanding to several
+            //     arguments (`f( PAIR )`) is counted as one, so it reads as a shorter call than it is; and a default
+            //     written only on a declaration ripwire does not index (a `.inl`/`.ipp` header, a header outside the
+            //     tree) is invisible, so the definition is judged on its own minimum.
             // Strictly conservative otherwise: no candidate is filtered when the call-site count is unknown, and
             // each stage degrades (leaves the tier untouched) rather than empty it. The stages run IN ORDER — too
             // many first, exactly as before the minimum existed, then too few on what survives — so a tier that the

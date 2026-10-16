@@ -655,9 +655,13 @@ inline EditCheckVerdict editCheckVerdict( const EditCheckContract& contract, std
 //
 // The test is deliberately made HERE rather than on `arityExact`, which is also graph.h's
 // call-resolution arity filter — moving it there would move edge counts corpus-wide, which is the qualified-
-// call round's agenda and not this one's. graph.h needs no equivalent change: its filter drops a candidate
-// only when `argCount > params`, and the implicit receiver errs the other way (0 args vs 1 param), so that
-// one-sided form is already safe against this class.
+// call round's agenda and not this one's. graph.h's filter drops a candidate for too MANY arguments
+// (`argCount > params`, where the implicit receiver errs the other way: 0 args vs 1 param) and, since train 29,
+// for too FEW (`argCount < paramsMin`); the too-few side is safe against this class because ingest gives a
+// Python method no minimum at all (ingest_metrics.h kParamMinLangs `selfOwner`, the parse-tree test this
+// predicate's scope test approximates). editCheckMinArity (editcheckdecl.h) computes its own declaration-aware
+// minimum per QUERY from source text; graph.h reads Symbol::paramsMin, computed once per def at extraction —
+// two readings of "fewest arguments", kept apart because the per-query text tie is too costly per def in buildGraph.
 //
 // Residual, stated because it is a deliberate over-approximation: a Python function nested inside another
 // FUNCTION also has a non-empty scope and is exempted too. That direction only ever suppresses a flag, which

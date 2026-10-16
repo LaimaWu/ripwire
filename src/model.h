@@ -572,9 +572,6 @@ struct Symbol
     // Saturates at 255 per tag: a def past that is beyond every triage threshold (humps' rule).
     std::array<std::uint8_t, kEvWhyTagCount> evWhy{};
     std::uint16_t params        = 0;   // parameter count from the def's parameter-list child; --metrics params= (NUMBER only — no 7±2)
-    std::uint16_t paramsMin     = 0;   // B2.2: the fewest arguments a call can pass — params minus defaulted ones (ingest_metrics.h
-                                       // kParamMinLangs); 0 = no lower bound known. graph.h takes the minimum over this def AND
-                                       // every declaration of it before dropping a candidate a shorter call cannot reach.
     std::uint8_t  maxNest       = 0;   // max control-structure nesting depth reached inside the def; --metrics nest=
     std::uint8_t  arityExact    = 0;   // B2.2: 1 ⇒ `params` is a FIXED, call-comparable arity (no variadic / default
                                        // args, and NOT an implicit-`self` method) → a same-name candidate whose
@@ -619,6 +616,12 @@ struct Symbol
     // function's byte span under this id. graph.h reachableByName reads it: a call outside the span cannot name this
     // def, so it yields to every candidate that call can. A 4th bit of the same byte (no new byte; the assert holds).
     std::uint8_t  fnLocal : 1 = 0;
+    // B2.2 MINIMUM ARITY (train 29): the fewest arguments a call can pass — params minus defaulted ones (ingest_metrics.h
+    // kParamMinLangs); 0 = no lower bound known. graph.h takes the minimum over this def AND every declaration of it before
+    // dropping a candidate a shorter call cannot reach. The last 4 bits of the same byte (no new byte; the assert holds),
+    // SATURATING at 15 in ingest_model.h::assignSymbols: a lower minimum only keeps candidates, so saturation is sound — a
+    // 16-required-parameter def merely stops being dropped for 15-argument calls. RawDef and the cache keep the full u16.
+    std::uint8_t  paramsMin : 4 = 0;
     // EXTENT HONESTY (src/extentsuspect.h, gate test/extentcheck.sh): the containment rules this def's extent,
     // scope or recovered kind FAILED, as extent::kSuspect* bits (name/head/scope/error); 0 ⇒ every rule held.
     // Computed at LOAD from facts the cache already carries (the extents, the name byte, the `recovered`
@@ -663,11 +666,9 @@ struct Symbol
 // "guard-return:15" for a function with 20 guard returns is a wrong count, not a floor (honesty rule #3);
 // uint8_t saturating at 255 inherits humps' justification instead.
 //
-// `paramsMin` (B2.2 minimum arity, train 29) then cost the third step: 64 -> 72 + 2*string, MEASURED with a standalone
-// offsetof probe (params@58, paramsMin@60, maxNest@62, arityExact@63, extentSuspect@65, name@72): extentSuspect had
-// taken the last pad byte, so any new field rounds up by a full 8 B. A uint16_t keeps params' range (a minimum never
-// exceeds params) and leaves 6 B of live padding (66..71) for the NEXT field to land in free.
-static_assert( sizeof( Symbol ) == 72 + 2 * sizeof( std::string ),
+// `paramsMin` (B2.2 minimum arity, train 29) costs nothing: a 4-bit field in testScope's bit-field byte, whose last
+// 4 bits were free. A u16 field would have cost a full 8 B (64 -> 72: extentSuspect had taken the last pad byte).
+static_assert( sizeof( Symbol ) == 64 + 2 * sizeof( std::string ),
                "Symbol size changed — verify the new field uses the smallest type + is grouped (SoA); see model.h" );
 
 // The byte span of the function whose body binds a function-local def's name (Symbol::fnLocal). A call site inside

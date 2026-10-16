@@ -26,8 +26,13 @@ default written only on a header prototype still keeps the out-of-line definitio
 from a per-language table (C++, Python, TypeScript, and Java with no default form); a variadic, implicit-self,
 TypeScript `this:` or decorated Python definition is never dropped this way, and neither is any candidate in a
 language without a row — JavaScript (a call may pass fewer arguments), Swift (trailing closures), Kotlin and the rest.
-Fewer calls stay ambiguous, so `ambiguous=` and `graph_ambiguous=` drop. One residual limit stays: a C/C++
-argument that is a macro expanding to several arguments is counted as one. `kParserVer` 178 and `kCacheVersion` 33
+A TypeScript arrow or function expression whose binding carries a type annotation or a cast, or whose parameters are
+untyped (contextually typed), and a Python lambda, get no minimum: their optional parameters live in a type elsewhere.
+The too-few check runs after the too-many check and only when it leaves a candidate, so it never brings back an
+overload the too-many check dropped. A call with a spread, splat or C++ pack expansion (`f( t... )`) has an unknown
+argument count. Fewer calls stay ambiguous, so `ambiguous=` and `graph_ambiguous=` drop. Two residual limits stay: a
+C/C++ argument that is a macro expanding to several arguments is counted as one, and a default written only on a
+declaration ripwire does not index (a `.inl`/`.ipp` header, a header outside the tree) is not seen. `kParserVer` 178 and `kCacheVersion` 33
 (a definition record gains `paramsMin`; the train renumbers). Gate: `test/aritycheck.sh` §3b.
 
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
