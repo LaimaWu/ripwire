@@ -148,7 +148,12 @@ REPO_Q=( "rank graph teleport" "compact legend rewrite" "edit receipt post-check
 # FIX2 N2 (review rv-forbudget-soft-fix1 N-a): those three pins were read on a +dirty tree, whose root at= stamp carries 6 B
 # more than a clean one (a clean tree read -0.06% on each). Re-taken from a CLEAN committed tree (the lane head, no local edits)
 # with this lane's build: 9947 -> 9941, 10496 -> 10490, 10605 -> 10599 B. The by-design reason above is unchanged.
-REPO_BASE=( 10134 10029 10642 10102 9880 9941 10490 10599 9966 10379 )
+REPO_BASE=( 10134 10458 10642 10102 9880 9941 10490 10599 9966 10379 )
+# q2 RE-PINNED 2026-10-16 (train 28, owner ruling; rule 4 by-design break, the 26c q3 precedent): 10029 -> 10458 B net of
+# past-target/hop/tail-page rows (+4.28% on the merged stack), an OUTPUT change of two signed lanes that each stay inside the
+# 4% alone. Measured on the merged tree: for-body-slot's binary (forbudget-soft + the owner body) 10,368 B (+3.38%); the
+# attrib-multidef merge adds +90 B — the compact split reading "; c prov=split: ..." in the header and prov="split" on the
+# two <c> rows of a real split arm (an intended disclosure). q6-q8 are not touched (+0.84% / +0.99% / +3.12% on their pins).
 # q3 RE-PINNED 2026-10-10 (train 26c): 10080 -> 10642 B (+5.58% on the merged stack), an OUTPUT change of two signed lanes
 # that each stay inside the 4% alone: lego-charge serves two more signature rows (25 -> 27 of 40) because <lego>/<compose>
 # are charged to the <sigs> budget at the size they are SERVED (a collapsing section its stub), and owner-hop adds the
