@@ -245,12 +245,12 @@ server, when the cgroup's charge is the larger reading: restarting the server do
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 171 → 176: slice 4a (#400) takes 173 on `main` (its full-use file tag 174); the value-reference walk through
+`kParserVer` 167 → 176: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
 `??`/`||`/`&&`/`or`/`and` carried 173 on its branch, the Ruby/Python subscript references and Ruby's main-object mixins
 174 (file tag 175), and the Elixir quote live holes (#380) 145 on theirs. They land together at 176, above every number a
 branch build has used, so no cache such a build wrote is read as this release's; its full-use file tag is 177.
 `kCacheVersion` 31 → 32: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
-numbered 9 on #380's branch, which predates the subscript role); no record changes shape. `kQSnapCacheScheme` 20 → 21:
+numbered 9 on #380's branch, which predates the subscript role), and the binding kind byte one (Ruby's main-object mixin); no record changes shape. `kQSnapCacheScheme` 20 → 21:
 the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls), so the dead kind can
 differ for an unchanged commit. Every ingest cache written by an earlier build is refused and re-indexed once, and every
 cached quality snapshot is recomputed.
