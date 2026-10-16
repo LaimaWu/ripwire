@@ -438,17 +438,27 @@ else
         || no "(13d) --token-budget=6000 --sections=lego,compose: <sigs> $LC_TBREST vs $LC_TB without it (or over_ceiling, or no full <lego>) — an opted-in section is reserved first under a soft target"
 fi
 if command -v python3 >/dev/null 2>&1; then
+    # lc_mcp ARGS: "<rows> <lego> <over>" — rows from <sigs shown=> (a cut bundle) or the <d> rows inside an uncut <sigs>,
+    # lego 1 when the full <lego><iface …> rides, over 1 on over_ceiling="1"
     lc_mcp(){ printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"test/legochargefix","task":"%s"%s}}}\n' "$LCQ" "$1" \
                 | "$BIN" --mcp 2>/dev/null | python3 -c "
 import json,sys,re
 t = json.loads(sys.stdin.readline())['result']['content'][0]['text']
 m = re.search(r'<sigs shown=\"([0-9]+)\"', t)
-print(m.group(1) if m else 'none')"; }
-    LCM_DEF="$( lc_mcp '' )"; LCM_TB="$( lc_mcp ',"budget_tokens":3000' )"; LCM_TBREST="$( lc_mcp ',"budget_tokens":3000,"sections":"lego,compose"' )"
-    # forbudget-soft (rule 4): the CLI twin's rule — under budget_tokens (a soft target) the opted-in sections cost no row
-    [[ "$LCM_DEF" =~ ^[0-9]+$ && "$LCM_TB" =~ ^[0-9]+$ && "$LCM_TBREST" =~ ^[0-9]+$ ]] && [ "$LCM_DEF" -ge 24 ] && [ "$LCM_TBREST" -eq "$LCM_TB" ] \
-        && ok "(13e) MCP for: <sigs> $LCM_DEF rows by default; under budget_tokens the sections cost no row ($LCM_TBREST == $LCM_TB)" \
-        || no "(13e) MCP for: <sigs shown> default=$LCM_DEF budget=$LCM_TB budget+sections=$LCM_TBREST (want >= 24, and the last two equal)"
+b = re.search(r'<sigs>(.*?)</sigs>', t, re.S)
+rows = m.group(1) if m else ( str( len( re.findall( r'<d ', b.group(1) ) ) ) if b else 'none' )
+print(rows, int('<lego><iface ' in t), int('over_ceiling=\"1\"' in t))"; }
+    read -r LCM_DEF _ _ <<< "$( lc_mcp '' )"
+    read -r LCM_TB _ _ <<< "$( lc_mcp ',"budget_tokens":6000' )"
+    read -r LCM_TBREST LCM_LEGO LCM_OVER <<< "$( lc_mcp ',"budget_tokens":6000,"sections":"lego,compose"' )"
+    # forbudget-soft round C (rule 4), re-anchored from 3000 to 6000 tokens as (13d) was (CodeRabbit, #413): at 3000 the
+    # opted-in sections render no <lego> at all, so "the same rows" held whether or not they were charged. What holds at
+    # 6000: the full <lego> rides, no over_ceiling, and the opted-in sections never ADD a row. (MCP `for` under
+    # budget_tokens serves the signatures bundle, uncut here, so the row counts are equal; the inequality is the contract.)
+    [[ "$LCM_DEF" =~ ^[0-9]+$ && "$LCM_TB" =~ ^[0-9]+$ && "$LCM_TBREST" =~ ^[0-9]+$ ]] && [ "$LCM_DEF" -ge 24 ] && [ "$LCM_TBREST" -le "$LCM_TB" ] \
+        && [ "${LCM_LEGO:-0}" = 1 ] && [ "${LCM_OVER:-1}" = 0 ] \
+        && ok "(13e) MCP for: <sigs> $LCM_DEF rows by default; under budget_tokens=6000 the opted-in <lego> rides whole, no over_ceiling, and adds no row ($LCM_TBREST <= $LCM_TB)" \
+        || no "(13e) MCP for: <sigs> default=$LCM_DEF budget=$LCM_TB budget+sections=$LCM_TBREST lego=${LCM_LEGO:-?} over=${LCM_OVER:-?} (want >= 24, the last <= the middle, a full <lego>, no over_ceiling)"
 else
     printf '  SKIP  %s\n' "(13e) python3 absent: the MCP twin of the lego charge is not checked"
 fi
