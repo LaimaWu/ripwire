@@ -21,8 +21,8 @@
 #            No name owner: the MEMBER owner (Phase B, owner ruling Q1) — the first head-tier class/struct/
 #            interface row (rank <= 24) with a callable definition that is its member (the parser's scope= equals
 #            the class name, or the class's own byte span contains it in the same file) and whose folded name is
-#            a non-common question word (pick="member"); Go receiver methods are a named floor (no scope, outside
-#            the type's span). None: no slot — the answer is the slot-off answer byte for byte (FIX1, owner ruling
+#            a non-common question word (pick="member"); a Go receiver method qualifies through its receiver
+#            scope (#403; it was a named floor before Go carried one). None: no slot — the answer is the slot-off answer byte for byte (FIX1, owner ruling
 #            2026-10-15: the subtoken fallback, pick="subtoken", is DROPPED; a callable that only shares a word with
 #            the question is not its owner). Classes/structs/types are never the owner.
 #   RENDER   one <bodies><b t= l= p= n=> in the --expand shape (packBodies), <calls> kept. A body over
@@ -86,9 +86,8 @@
 #   DS1-DS4 [P] the definition, never the declaration row that outranks it: TS overload signatures, C++ pure
 #          virtual + in-class override declaration, Go interface method spec, TS abstract method
 #   Q1 [P] member owner, the head-tier class's member defined outside the head tier: C++ out of line (sc=),
-#          Rust impl (sc=), Python (sc=), TS class (span containment); pick="member"
-#      [G] floor and near misses: Go receiver method (no member body — the named floor, until Go carries a
-#          receiver scope); a common-word member (run); a class past the head tier (r31); another class's
+#          Rust impl (sc=), Python (sc=), TS class (span containment), Go receiver (sc=, #403); pick="member"
+#      [G] near misses: a common-word member (run); a class past the head tier (r31); another class's
 #          same-named method that outranks the member is not served (entity identity); never the class/type
 #   M1-M4 mutation controls (canned pre-change shapes are rejected)   X1-X3 determinism, xmllint, no '--' in comments
 #   I0-I10 [optional, RIPWIRE_BASE_BIN=<pre-change binary>] byte identity where the slot must not fire (I0: slot off
@@ -642,13 +641,9 @@ q1 cpp 24 Forge src/forge.h Assemble src/forge.cc 4 "C++ out of line (sc=)"
 q1 rs 24 Forge src/forge.rs assemble src/forge.rs 10 "Rust impl (sc=)"
 q1 py 24 Forge src/forge.py assemble src/forge.py 11 "Python (sc=)"
 q1 ts 24 Forge src/forge.ts assemble src/forge.ts 9 "TS class (span)"
-# the Go floor: the type ranks, its receiver method does not and carries no scope — no member body (flips when Go has a receiver scope)
-gr="$( chk rankof "$TMP/q1.go.xml" Forge src/forge.go )"; gm="$( chk rankof "$TMP/q1.go.xml" Assemble src/forge.go )"
-if [ "$gr" = 1 ] && { [ "$gm" = 0 ] || [ "$gm" -gt 24 ]; }; then
-    if r="$( chk nobodyof "$TMP/q1.go.xml" Assemble )" && r2="$( chk nobodyof "$TMP/q1.go.xml" Forge )"; then ok "(Q1) Go floor: type Forge r1, receiver Assemble r$gm: no member body, never the type (the named floor)"; else no "(Q1) Go floor: ${r:-} ${r2:-}"; fi
-else
-    no "(Q1) Go floor premise: Forge r$gr Assemble r$gm"
-fi
+# Go receiver (#403): this was the named Go floor (no member body while Go methods carried no scope); with the receiver
+# scope the member owner applies to Go as to the rows above, and q1 still asserts the type itself is never served.
+q1 go 24 Forge src/forge.go Assemble src/forge.go 14 "Go receiver (sc=)"
 # near misses
 cr="$( chk rankof "$TMP/q1.common.xml" Forge src/forge.h )"; mr="$( chk rankof "$TMP/q1.common.xml" Run src/forge.cc )"
 if [ "$cr" = 1 ] && [ "$mr" -gt 24 ] 2>/dev/null; then
