@@ -83,6 +83,12 @@
 #   (L)  legend: the qword clause is present iff a qword row is, and says "by name" (not a resolution claim).
 #   (I)  RIPWIRE_BASE_BIN set: head + RIPWIRE_NO_OWNER_HOP=1 vs base on the --for / --json / MCP / budget answers,
 #        head (no knob) vs base on the no-owner questions, plus 12 out-of-scope argv — every binary's rc checked.
+#        BY-DESIGN BREAK (rule 4, lane for-body-slot FIX1 R4): the head side also runs with RIPWIRE_NO_BODY_SLOT=1. The
+#        body slot (forowner.h) is independent of RIPWIRE_NO_OWNER_HOP by design (forbodyslotcheck (EV1)), so on any
+#        base without the slot 4 of these 27 argv differed for the slot alone (H c "log walk the process tables",
+#        H py "Reactive work", H ts "relay forward a request", M ts) — not for owner-hop. The arm's premise is kept: the
+#        owner-hop knob is still the one under test, and a head whose RIPWIRE_NO_OWNER_HOP=1 stops restoring the base
+#        still differs here (checklist 28; forbodyslotcheck I0 pins the slot-off == base half separately).
 #
 # Exit: 0 all PASS (named SKIPs allowed), 1 any FAIL, 2 missing prerequisite.
 
@@ -527,10 +533,10 @@ if [ -n "${RIPWIRE_BASE_BIN:-}" ] && [ -x "${RIPWIRE_BASE_BIN}" ]; then
         mode="${parts[0]}"; r="${parts[1]}"; args=( ${parts[@]+"${parts[@]:2}"} ); shown="${args[*]-}"
         n=$((n+1)); hf="$TMP/i.$n.h"; bf="$TMP/i.$n.b"
         if [ "$mode" = M ]; then
-            mcp "RIPWIRE_NO_OWNER_HOP=1" "$BIN" "$hf"; mcp "RIPWIRE_X=0" "$RIPWIRE_BASE_BIN" "$bf"
+            mcp "RIPWIRE_NO_OWNER_HOP=1 RIPWIRE_NO_BODY_SLOT=1" "$BIN" "$hf"; mcp "RIPWIRE_X=0" "$RIPWIRE_BASE_BIN" "$bf"   # R4: slot off on the head side
         else
             if [ "$mode" = K ]; then knob="RIPWIRE_NO_OWNER_HOP=1"; else knob="RIPWIRE_X=0"; fi
-            ( cd "$FIX/$r" && env "$knob" "$BIN" . --no-cache ${args[@]+"${args[@]}"} >"$hf" 2>"$hf.err" ); printf '%s' "$?" >"$hf.rc"
+            ( cd "$FIX/$r" && env "$knob" RIPWIRE_NO_BODY_SLOT=1 "$BIN" . --no-cache ${args[@]+"${args[@]}"} >"$hf" 2>"$hf.err" ); printf '%s' "$?" >"$hf.rc"   # R4
             ( cd "$FIX/$r" && "$RIPWIRE_BASE_BIN" . --no-cache ${args[@]+"${args[@]}"} >"$bf" 2>"$bf.err" ); printf '%s' "$?" >"$bf.rc"
         fi
         if ! ran_ok "$hf" "(I) head $mode $r $shown" || ! ran_ok "$bf" "(I) base $mode $r $shown"; then e=$((e+1)); continue; fi
