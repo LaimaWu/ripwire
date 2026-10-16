@@ -15,6 +15,24 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — Go methods carry their receiver type as scope (#403, slice 9a)
+
+Go methods now carry their receiver type as scope (`sc=`), with `*` and type arguments stripped (`*Stack[T]` → `Stack`),
+and interface members carry their interface (a `type A = interface{…}` alias included). `Type::method` and `Type.method`
+selectors now work on `--callers`, `--callees`, `--path`, `--impact`, `--uses` and `--expand`; a bare name still answers
+every definition. On fzf, `--path=Matcher::Loop,Pattern::extendedMatch` was "endpoint not found" and is now a 5-hop chain.
+
+**One-time id change for Go.** The canonical id of a Go method or interface member is now `file::Type::method`, so:
+- quality-baseline and `.ripwire_quality_acks` rows, and `.ripwire_notes` pinned to a Go method, stop matching. Re-pin
+  them. `--notes` lists an old note with `dangling="1"`, and `--note-add` with the same target stores the new id;
+- same-named methods of different receiver types in one file are now separate map rows, not one `overloads=N` row (Go
+  has no overloading);
+- `--uses` prints the scoped id in `in_id=`, and `--expand` of a bare name lists each receiver's definition.
+
+Known floors: struct fields are not Go definitions, so nothing scopes to a struct; a member of an anonymous interface in
+a struct field scopes to the struct. Rust and Kotlin keep their own scope walkers; C++ and Python output is byte-identical.
+`kParserVer` moves (182 in this train's reservation; the train renumbers).
+
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
 Ruby's `include`/`extend`/`prepend` are now captured by `queries/ruby/tags.scm` as `@reference.mixin` and turned into
