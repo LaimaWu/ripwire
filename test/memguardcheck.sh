@@ -677,17 +677,38 @@ if [ "$rc" = "$refRc" ] && [ -s "$TMP/b22ref.out" ] && cmp -s "$TMP/b22.out" "$T
 else
     no "(B22) hard:7 rc=$rc (want $refRc) or its answer differs from the unseamed run"
 fi
-# (B23) #387: a commit ingest the memory guard cut is never scored. The range form refuses (exit 5, one line naming the
-#       stop and the verb, no stdout) instead of answering from a partial tree with the backstop line after it (0.6.7).
+# (B23) #387: a commit ingest the memory guard cut is never scored. Until qd-memory-degrade the range form refused here
+#       (exit 5, one line, no stdout). BY-DESIGN BREAK (qd-memory-degrade, owner decision 4, disclosed in CHANGELOG): the
+#       cut tree is released unscored and BOTH commits' changed files answer the kinds that need only them — one cut
+#       ingest + two changed-file ingests, a degraded header (ingest_scope="changed-files", memory_stop= naming the stop),
+#       exit 2 if a row gates else 6, and no row names a file outside the diff (a/extra.c). test/qddegradecheck.sh pins
+#       the degraded answer's contents; this arm pins that nothing of the cut full tree reaches it. Cache-stats lines: 2 —
+#       the cut base ingest and the target's changed files; the base's changed-file set is EMPTY (a/extra.c is an add),
+#       and an ingest that parses nothing prints no cache-stats line.
 for trip in parse:3 crawl:20; do
     qr_run "$trip"; rc=$?
-    if [ "$rc" = 5 ] && [ ! -s "$TMP/b22.out" ] && grep -q '^ripwire: the memory guard stopped the .*; --quality-delta=A..B cannot answer from a partial index' "$TMP/b22.err" \
-       && [ "$( grep -c '^ripwire: [^c]' "$TMP/b22.err" )" = 1 ] && [ "$( grep -c '^ripwire: cache-stats ' "$TMP/b22.err" )" = 1 ]; then
-        ok "(B23) $trip cuts the base commit's ingest: the range form refuses before the target is ingested (exit 5, one line)"
+    gt="$( sed -n 's/.*<quality-delta [^>]* gating="\([0-9]*\)".*/\1/p' "$TMP/b22.out" | head -n 1 )"
+    want=6; [ -n "$gt" ] && [ "$gt" -gt 0 ] && want=2
+    outside="$( grep -o ' p="[^"]*"' "$TMP/b22.out" | grep -vc ' p="a/extra\.c:' )"
+    if [ -n "$gt" ] && [ "$rc" = "$want" ] && grep -q '<quality-delta [^>]* ingest_scope="changed-files"' "$TMP/b22.out" \
+       && grep -q "<quality-delta [^>]* memory_stop=\"${trip%%:*}\"" "$TMP/b22.out" && [ "$outside" = 0 ] \
+       && [ "$( grep -c '^ripwire: cache-stats ' "$TMP/b22.err" )" = 2 ] && [ "$( grep -c '^ripwire: memory limit ' "$TMP/b22.err" )" = 1 ] \
+       && grep -q "^ripwire: memory limit .*stopped the ${trip%%:*} of the base commit" "$TMP/b22.err"; then
+        ok "(B23) $trip cuts the base commit's ingest: the cut tree is never scored — the changed files answer (exit $rc, degraded header naming the base's stop)"
     else
-        no "(B23) $trip rc=$rc stdout=$( wc -c <"$TMP/b22.out" | tr -d ' ' )B stderr: $( grep '^ripwire: [^c]' "$TMP/b22.err" | head -c 250 )"
+        no "(B23) $trip rc=$rc (want $want) gating=$gt rows-outside-the-diff=$outside ingests=$( grep -c '^ripwire: cache-stats ' "$TMP/b22.err" ) stderr: $( grep '^ripwire: [^c]' "$TMP/b22.err" | head -c 250 )"
     fi
 done
+# (B23 twin, rule 4) the refusal still holds when even the changed files are cut: crawl:1 trips every ingest at its first
+#       crawl entry, so the target's changed-file ingest (a/, a/extra.c) is cut too — exit 5, no stdout, ONE line naming
+#       the stop, that the verb cannot answer from a partial index, and that the changed files were tried.
+qr_run "crawl:1"; rc=$?
+if [ "$rc" = 5 ] && [ ! -s "$TMP/b22.out" ] && grep -q '^ripwire: the memory guard stopped the .*; --quality-delta=A..B cannot answer from a partial index' "$TMP/b22.err" \
+   && grep -q 'changed files' "$TMP/b22.err" && [ "$( grep -c '^ripwire: [^c]' "$TMP/b22.err" )" = 1 ]; then
+    ok "(B23) crawl:1 cuts the changed files too: the range form refuses (exit 5, one line naming the stop and the changed-files attempt)"
+else
+    no "(B23) crawl:1 rc=$rc stdout=$( wc -c <"$TMP/b22.out" | tr -d ' ' )B stderr: $( grep '^ripwire: [^c]' "$TMP/b22.err" | head -c 250 )"
+fi
 
 # (B11) a verb's non-zero verdict from a partial ingest still gets the line; --html and --index-out never pass silently
 run_trip crawl:30 "$FX" --no-cache --html >/dev/null 2>"$TMP/b11.err"; rc=$?

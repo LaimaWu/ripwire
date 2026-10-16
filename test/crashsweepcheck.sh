@@ -343,6 +343,7 @@ pincensus.h	writePinCensus	fopen	1	closes	returns only on a failed open; one fcl
 planlint.h	gitBlameLineSha	popen	1	closes	no exit between popen and pclose
 prcontext.h	numstatChangedPaths	popen	1	closes	rc = pclose after the loop; no exit between
 quality.h	SidecarWriteLock	open	1	owned	SidecarWriteLock's destructor unlocks and closes
+quality.h	forEachGitNulRecord	popen	1	closes	fread loop with no exit; pclose after it (qd-memory-degrade: the changed-files listing)
 quality.h	gitBlameRangeWindowCommits	popen	1	closes	continue-only loop; pclose after it
 quality.h	gitDiffHunksVsHead	popen	1	closes	continue-only loop; pclose after it
 quality.h	gitRepoHasHistory	popen	1	closes	fgets-only loop, then pclose

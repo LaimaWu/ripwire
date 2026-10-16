@@ -44,7 +44,7 @@ Two limits apply to nearly everything here and are not repeated in every section
 
 **zoom the detail ladder** — [`--detail`](#--detailn) · [`--pack-signatures`](#--pack-signatures) · [`--outline`](#--outlineab) · [`--expand`](#--expandab) · [`--compress`](#--compress) · [`--pack-top-n`](#--pack-top-nn) · [`--no-redact`](#--no-redact)
 
-**assess quality / structure** — [`--metrics`](#--metrics) · [`--deps`](#--deps) · [`--hotspots`](#--hotspots) · [`--clones`](#--clones) · [`--biggest-first`](#--biggest-first) · [`--nonlocal-state`](#--nonlocal-state) · [`--ensemble`](#--ensemble) · [`--quality-panel`](#--quality-panelpreset) · [`--context-ratio`](#--context-ratio) · [`--naming-calibration`](#--naming-calibration) · [`--naming-consistency`](#--naming-consistency) · [`--naming-locals`](#--naming-locals) · [`--comment-coherence`](#--comment-coherence) · [`--cochange`](#--cochangefile) · [`--cochange-recur`](#--cochange-recurk) · [`--cochange-groups`](#--cochange-groups) · [`--since`](#--sincerevdate) · [`--arch`](#--archfile) · [`--arch`](#--archfile---baseline) · [`--arch`](#--archfile---baseline-update) · [`--lint`](#--lint) · [`--lint-catalog`](#--lint-catalog) · [`--lint-rules`](#--lint-rulesdir) · [`--lint-select`](#--lint-selectprefix) · [`--lint-ignore`](#--lint-ignoreprefix) · [`--lint-max-per-rule`](#--lint-max-per-rulen) · [`--sarif`](#--sarif) · [`--with-profile`](#--with-profilefile) · [`--communities`](#--communities) · [`--community`](#--communityid) · [`--zoom`](#--zoomdepth) · [`--report`](#--report) · [`--seams`](#--seams) · [`--mermaid`](#--mermaid) · [`--owners`](#--ownerssym) · [`--dead-code`](#--dead-codedir) · [`--quality-baseline`](#--quality-baseline) · [`--allow-dirty`](#--allow-dirty) · [`--show-stale`](#--show-stale) · [`--quality-delta`](#--quality-delta) · [`--quality-delta`](#--quality-deltarevab) · [`--dmm`](#--dmmrevab) · [`--quality-ack`](#--quality-ackreason) · [`--ack-only`](#--ack-onlysubstrsubstr) · [`--scope`](#--scopeglobglob) · [`--edit-check`](#--edit-checksym) · [`--replace-symbol-body`](#--replace-symbol-bodytarget) · [`--insert-before-symbol`](#--insert-before-symboltarget) · [`--insert-after-symbol`](#--insert-after-symboltarget) · [`--edit-payload`](#--edit-payloadfile-) · [`--edit-target-file`](#--edit-target-filepath) · [`--no-post-check`](#--no-post-check) · [`--edit-plan`](#--edit-planfile) · [`--dry-run`](#--dry-run----apply) · [`--safe-delete`](#--safe-deletesym) · [`--slice`](#--slicesymvar) · [`--slice-flow`](#--slice-flowbackfwdboth) · [`--slice-depth`](#--slice-depthn) · [`--at`](#--atfileline) · [`--pr-context`](#--pr-contextbaseref) · [`--merge-scout`](#--merge-scoutrefref) · [`--plan-lanes`](#--plan-lanesn---taskgoal) · [`--plan-lanes`](#--plan-lanes---brieffile) · [`--stray-content`](#--stray-contentsubstr) · [`--plan`](#--plan) · [`--abi`](#--abi) · [`--whereis`](#--whereissym) · [`--whereis-full-text`](#--whereis-full-text) · [`--whereis-listing`](#--whereis-listingwhich) · [`--flags`](#--flagssubstr) · [`--flip`](#--flipname) · [`--layout`](#--layoutstruct) · [`--field-affinity`](#--field-affinitystruct) · [`--doc-drift`](#--doc-driftsubstr) · [`--doc-drift`](#--doc-drift---gateability) · [`--with-history`](#--with-history) · [`--plan-lint`](#--plan-lintfile) · [`--from-trace`](#--from-tracefile) · [`--run-trace`](#--run-tracecmd) · [`--run-timeout`](#--run-timeoutseconds) · [`--note-add`](#--note-addtarget-text) · [`--notes`](#--notes) · [`--pack-task`](#--pack-tasktask) · [`--partition`](#--partitionn) · [`--with-graph`](#--with-graph) · [`--export`](#--exportccjsonfile) · [`--batch`](#--batchfile)
+**assess quality / structure** — [`--metrics`](#--metrics) · [`--deps`](#--deps) · [`--hotspots`](#--hotspots) · [`--clones`](#--clones) · [`--biggest-first`](#--biggest-first) · [`--nonlocal-state`](#--nonlocal-state) · [`--ensemble`](#--ensemble) · [`--quality-panel`](#--quality-panelpreset) · [`--context-ratio`](#--context-ratio) · [`--naming-calibration`](#--naming-calibration) · [`--naming-consistency`](#--naming-consistency) · [`--naming-locals`](#--naming-locals) · [`--comment-coherence`](#--comment-coherence) · [`--cochange`](#--cochangefile) · [`--cochange-recur`](#--cochange-recurk) · [`--cochange-groups`](#--cochange-groups) · [`--since`](#--sincerevdate) · [`--arch`](#--archfile) · [`--arch`](#--archfile---baseline) · [`--arch`](#--archfile---baseline-update) · [`--lint`](#--lint) · [`--lint-catalog`](#--lint-catalog) · [`--lint-rules`](#--lint-rulesdir) · [`--lint-select`](#--lint-selectprefix) · [`--lint-ignore`](#--lint-ignoreprefix) · [`--lint-max-per-rule`](#--lint-max-per-rulen) · [`--sarif`](#--sarif) · [`--with-profile`](#--with-profilefile) · [`--communities`](#--communities) · [`--community`](#--communityid) · [`--zoom`](#--zoomdepth) · [`--report`](#--report) · [`--seams`](#--seams) · [`--mermaid`](#--mermaid) · [`--owners`](#--ownerssym) · [`--dead-code`](#--dead-codedir) · [`--quality-baseline`](#--quality-baseline) · [`--allow-dirty`](#--allow-dirty) · [`--show-stale`](#--show-stale) · [`--quality-delta`](#--quality-delta) · [`--quality-delta`](#--quality-deltarevab) · [`--quality-kinds`](#--quality-kindskk) · [`--dmm`](#--dmmrevab) · [`--quality-ack`](#--quality-ackreason) · [`--ack-only`](#--ack-onlysubstrsubstr) · [`--scope`](#--scopeglobglob) · [`--edit-check`](#--edit-checksym) · [`--replace-symbol-body`](#--replace-symbol-bodytarget) · [`--insert-before-symbol`](#--insert-before-symboltarget) · [`--insert-after-symbol`](#--insert-after-symboltarget) · [`--edit-payload`](#--edit-payloadfile-) · [`--edit-target-file`](#--edit-target-filepath) · [`--no-post-check`](#--no-post-check) · [`--edit-plan`](#--edit-planfile) · [`--dry-run`](#--dry-run----apply) · [`--safe-delete`](#--safe-deletesym) · [`--slice`](#--slicesymvar) · [`--slice-flow`](#--slice-flowbackfwdboth) · [`--slice-depth`](#--slice-depthn) · [`--at`](#--atfileline) · [`--pr-context`](#--pr-contextbaseref) · [`--merge-scout`](#--merge-scoutrefref) · [`--plan-lanes`](#--plan-lanesn---taskgoal) · [`--plan-lanes`](#--plan-lanes---brieffile) · [`--stray-content`](#--stray-contentsubstr) · [`--plan`](#--plan) · [`--abi`](#--abi) · [`--whereis`](#--whereissym) · [`--whereis-full-text`](#--whereis-full-text) · [`--whereis-listing`](#--whereis-listingwhich) · [`--flags`](#--flagssubstr) · [`--flip`](#--flipname) · [`--layout`](#--layoutstruct) · [`--field-affinity`](#--field-affinitystruct) · [`--doc-drift`](#--doc-driftsubstr) · [`--doc-drift`](#--doc-drift---gateability) · [`--with-history`](#--with-history) · [`--plan-lint`](#--plan-lintfile) · [`--from-trace`](#--from-tracefile) · [`--run-trace`](#--run-tracecmd) · [`--run-timeout`](#--run-timeoutseconds) · [`--note-add`](#--note-addtarget-text) · [`--notes`](#--notes) · [`--pack-task`](#--pack-tasktask) · [`--partition`](#--partitionn) · [`--with-graph`](#--with-graph) · [`--export`](#--exportccjsonfile) · [`--batch`](#--batchfile)
 
 **self-diagnosis** — [`--doctor`](#--doctor) · [`--agent`](#--agentcodexclaude) · [`--skipped`](#--skipped)
 
@@ -2860,7 +2860,7 @@ $ ./build/ripwire . --quality-baseline
 (empty)
 ```
 
-**Shaped by:** `--allow-dirty`, `--quality-delta`, `--legend`
+**Shaped by:** `--allow-dirty`, `--quality-delta`, `--quality-kinds`, `--legend`
 
 **Caveats (stated by the binary):**
 
@@ -2930,7 +2930,7 @@ $ ./build/ripwire . --quality-delta
 </quality-delta>
 ```
 
-**Shaped by:** `--affected`, `--test-gate`, `--allow-dirty`, `--show-stale`, `--dmm`, `--quality-ack`, `--scope`, `--json`
+**Shaped by:** `--affected`, `--test-gate`, `--allow-dirty`, `--show-stale`, `--quality-kinds`, `--dmm`, `--quality-ack`, `--scope`
 
 **Caveats (stated by the binary):**
 
@@ -2942,7 +2942,7 @@ $ ./build/ripwire . --quality-delta
 
 **Answers:** the same 12-kind report between two committed trees — a whole branch at once the same 12-kind report between two COMMITTED TREES instead of the working tree vs a baseline — the WAVE-level measurement (=A..B = tree B against tree A;
 
-=REV = that commit against its FIRST PARENT; an EMPTY side of the range means HEAD). Same grammar --dmm= takes, and A...B is REFUSED rather than read as A..B. Use it to measure a whole integration branch at once (--quality-delta=<merge-base>..<head>): per-lane checks each compare against their own baseline and cannot see a regression the WAVE introduced. Identical output contract to the bare form — same kinds, gating="N", exit 2, and the same .ripwire_quality_acks ratchet (acks are keyed root-relative, so a ledger recorded from working-tree runs applies unchanged). base_ref= and target_ref= disclose the two RESOLVED shas. No sidecar is read, written or deleted by this form, and at= is omitted: the two refs ARE the anchor. A==B is a legal, empty, exit-0 comparison. ONE KIND CANNOT BE MEASURED HERE and says so as churn="unavailable": short-horizon-churn needs git history at the tree being judged, and both trees are materialized OUT of the repo into temp dirs. The other 10 kinds are computed exactly as the bare form computes them.
+=REV = that commit against its FIRST PARENT; an EMPTY side of the range means HEAD). Same grammar --dmm= takes, and A...B is REFUSED rather than read as A..B. Use it to measure a whole integration branch at once (--quality-delta=<merge-base>..<head>): per-lane checks each compare against their own baseline and cannot see a regression the WAVE introduced. Identical output contract to the bare form — same kinds, gating="N", exit 2, and the same .ripwire_quality_acks ratchet (acks are keyed root-relative, so a ledger recorded from working-tree runs applies unchanged). base_ref= and target_ref= disclose the two RESOLVED shas. No sidecar is read, written or deleted by this form, and at= is omitted: the two refs ARE the anchor. A==B is a legal, empty, exit-0 comparison. ONE KIND CANNOT BE MEASURED HERE and says so as churn="unavailable": short-horizon-churn needs git history at the tree being judged, and both trees are materialized OUT of the repo into temp dirs. The other 10 kinds are computed exactly as the bare form computes them. UNDER MEMORY PRESSURE IT ANSWERS PART OF THE QUESTION rather than nothing: when the guard stops either commit's full tree, or projects that the target phase will not fit the limit, it ingests only both commits' CHANGED files and runs the kinds those decide; the header names the rest (kinds_skipped=, ingest_scope="changed-files", memory_need=, also_skipped=) and kinds_next= replays exactly them. Exit 2 when a row gates (the skipped kinds only add rows), else 6 — partial, never 0; exit 5 only when even the changed files do not fit or cannot stand in for the trees (a symlink, an export attribute). --quality-ack (it needs every kind's rows) skips the projection: only a real memory stop refuses it (exit 5, ledger untouched).
 
 **Try it**
 
@@ -2955,13 +2955,25 @@ $ ./build/ripwire . --quality-delta
 </quality-delta>
 ```
 
-**Shaped by:** `--affected`, `--test-gate`, `--allow-dirty`, `--show-stale`, `--dmm`, `--quality-ack`, `--scope`, `--json`
+**Shaped by:** `--affected`, `--test-gate`, `--allow-dirty`, `--show-stale`, `--quality-kinds`, `--dmm`, `--quality-ack`, `--scope`
 
 **Caveats (stated by the binary):**
 
 - Same grammar --dmm= takes, and A...B is REFUSED rather than read as A..B.
 - Use it to measure a whole integration branch at once (--quality-delta=<merge-base>..<head>): per-lane checks each compare against their own baseline and cannot see a regression the WAVE introduced.
 - ONE KIND CANNOT BE MEASURED HERE and says so as churn="unavailable": short-horizon-churn needs git history at the tree being judged, and both trees are materialized OUT of the repo into temp dirs.
+
+### `--quality-kinds=K[,K...]`
+
+**Answers:** (with --quality-delta=A..B) run only the named kinds — the replay a partial answer hands back (with --quality-delta=A..B) run ONLY the named kinds, comma-separated, of the twelve: api-surface, complexity, dead-code, defect-shape, duplication, error-masking, nesting, new-clone-of-reused-helper, params, placeholder, short-horizon-churn, verbosity.
+
+A named kind's rows are exactly its rows in a full answer (same code, same bars); the header names the others (kinds_skipped=, skipped_why="selector"), stale acks are judged for the named kinds only, and a pass no named kind needs does not run. An unknown name is refused (exit 1) naming the twelve; refused beside --quality-ack or --quality-baseline and on the bare form (the working-tree form and the MCP quality_delta tool have no selector yet). A selection the changed files cannot answer (whole-tree kinds, with or without defect-shape) is never pre-empted by the memory projection: it runs in full, and only a real memory stop refuses it (exit 5) — so the kinds_next= replay is not degraded again.
+
+**Caveats (stated by the binary):**
+
+- the header names the others (kinds_skipped=, skipped_why="selector"), stale acks are judged for the named kinds only, and a pass no named kind needs does not run.
+- An unknown name is refused (exit 1) naming the twelve;
+- refused beside --quality-ack or --quality-baseline and on the bare form (the working-tree form and the MCP quality_delta tool have no selector yet).
 
 ### `--dmm[=REV|A..B]`
 
@@ -3005,7 +3017,7 @@ $ ./build/ripwire . --quality-delta --quality-ack --ack-only=zzznope
 (empty)
 ```
 
-**Shaped by:** `--ack-only`, `--scope`, `--legend`
+**Shaped by:** `--quality-delta`, `--quality-kinds`, `--ack-only`, `--scope`, `--legend`
 
 **Caveats (stated by the binary):**
 
@@ -4849,7 +4861,7 @@ $ ./build/ripwire . --max-file-size=8K --top-k=3
 
 **Answers:** the memory guard's limit (default 65% of this machine's memory, env RIPWIRE_MAX_MEMORY) the memory guard is on for every run and silent on normal ones: it measures this process's footprint (on Linux, in a cgroup v2 leaf with a memory.max, the leaf's unreclaimable charge when that is larger) at most once per 5 s, from 5 s into an ingest.
 
-Past its lines the crawl (growth of limit/8) or the parse (half the limit) stops, and the default map answers from what was built, disclosed in its header (memory_stop=, memory_parsed=, memory_limit=; a parse stop keeps the first K slots it claimed of its work order — uncached files first, largest first within a tier, or path order when every grammar-bearing file was an ingest-cache hit — so a partial map repeats for a given memory_parsed=K); critical OS pressure stops them too. Every other verb (--html, --mermaid, --expand, --outline and, after a crawl stop, --in included) refuses a partial index, and so does any verb whose own internal ingest was cut; at the limit itself ripwire exits 5 with one line naming it. Nothing derived from a partial ingest is cached. The default is 65% of physical RAM (or of the cgroup's memory.max when lower); this flag, or RIPWIRE_MAX_MEMORY when the flag is absent, replaces it; below 64M is refused.
+Past its lines the crawl (growth of limit/8) or the parse (half the limit) stops, and the default map answers from what was built, disclosed in its header (memory_stop=, memory_parsed=, memory_limit=; a parse stop keeps the first K slots it claimed of its work order — uncached files first, largest first within a tier, or path order when every grammar-bearing file was an ingest-cache hit — so a partial map repeats for a given memory_parsed=K); critical OS pressure stops them too. Every other verb (--html, --mermaid, --expand, --outline and, after a crawl stop, --in included) refuses a partial index, and so does any verb whose own internal ingest was cut; at the limit itself ripwire exits 5 with one line naming it. --quality-delta=A..B alone answers from both commits' changed files instead (exit 2 or 6, see its row). Nothing derived from a partial ingest is cached. The default is 65% of physical RAM (or of the cgroup's memory.max when lower); this flag, or RIPWIRE_MAX_MEMORY when the flag is absent, replaces it; below 64M is refused.
 
 **Shaped by:** `--mcp`
 

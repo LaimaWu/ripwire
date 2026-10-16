@@ -81,6 +81,43 @@ Gate: `test/subscriptopcheck.sh` (L arms).
 
 Vendored Yogthos' ABI-15 `tree-sitter-clojure` parser and added syntax-level definitions and direct-call captures for the four Clojure-family extensions. The grammar comparison parsed 4,930 of 4,933 files (99.94%, 55.5 MB) from Metabase, clojure-lsp, clj-kondo and Babashka checkouts in 2.24 seconds; two failures were intentionally invalid clj-kondo fixtures and one was a Metabase test. This measures parser completion on that corpus, not semantic call-resolution accuracy. Namespace/import resolution, macro expansion and exact multi-arity matching remain outside this first pass; see `docs/ARCHITECTURE.md` for the extraction limits.
 
+### Changed — `--quality-delta=A..B` answers the kinds it can under memory pressure, and exits 6 when that answer has no gating row (#387 follow-up)
+
+A tripped memory guard in the range form used to give exit 5 and nothing, so on a large repository a four-file change
+could not get even the findings those four files decide. Now, when the guard stops either commit's full tree (a crawl
+or parse stop, or the hard limit), or when a projection after the base commit says the target phase will not fit the
+limit, the range form releases what it loaded and ingests only both commits' **changed files** (never through a cache).
+There it runs the kinds those files decide — api-surface, complexity, error-masking, nesting, params, placeholder,
+verbosity, and defect-shape when the changed files define the same C-family macro names on both sides (and either the
+base's whole macro set was read or no changed file is C++) — with the same code and bars as a full answer, so their
+rows are the full answer's rows of those kinds. dead-code, duplication and new-clone-of-reused-helper need every file
+and are skipped. Every cut is named in the header: `kinds_skipped=`, `skipped_why="memory"`,
+`ingest_scope="changed-files"`, `memory_limit=`, `memory_need=` (the projected need, or `"unmeasured"` after a stop,
+with `memory_stop=` naming it), `also_skipped=` (config-warnings, stale-acks, and ack-healing when the ledger is not
+empty: there acks match by their recorded key only), and `kinds_next=`, the call that runs exactly the skipped kinds on
+the same two commits. One stderr line says the same.
+
+- **Exit codes.** A partial answer exits **2** when a row of a kind that ran gates (the skipped kinds can only add
+  rows, so that verdict is final — except, with ack-healing skipped, for a row only an identity-healed ack hides in the
+  full answer) and **6** (new) otherwise — a partial answer is never a clean exit 0. Exit **5** now
+  means, for this form, that even the changed files did not fit, or that they cannot stand in for the trees (a symlink
+  anywhere, an export-subst attribute, or a changed `.gitattributes` with an export attribute), on one line naming why.
+  Exit 6 also when every selected kind ran: the `also_skipped=` facts are still missing. `--quality-ack` needs every
+  kind's rows, so the projection never pre-empts it: it runs in full, and only a real memory stop refuses it (exit 5,
+  ledger untouched). A refusal whose process still held more than the limit after releasing the full tree says the
+  changed files were not tried.
+- **`--quality-kinds=K[,K…]`** (new, range form only) runs only the named kinds — the replay `kinds_next=` names. A
+  named kind's rows are its rows in a full answer; under pressure the kinds it left out stay the caller's
+  (`skipped_why="selector,memory"`, with `memory_skipped=` naming memory's share, which `kinds_next=` replays); stale acks are judged for the named kinds only; passes no named kind
+  needs (the clone passes, the dead-code evidence) do not run. Refused beside `--quality-ack`/`--quality-baseline`
+  and on the working-tree form; the MCP `quality_delta` tool (working-tree form) has no selector yet.
+- **`memory_peak=`** (new, present-only) on any range answer whose peak footprint went over the limit after the guard's
+  last reading, with one stderr line; the exit code is unchanged.
+- **Behaviour change, by design:** `test/memguardcheck.sh` B23 pinned "a cut base ingest → exit 5 and nothing". That is
+  the refusal this change replaces: the cut tree is still never scored (one cut ingest, then two changed-file ingests,
+  and no row names a file outside the diff), and a twin arm keeps the exit-5 refusal when even the changed files are cut.
+  When memory suffices the answer is byte-identical to before. Gate: `test/qddegradecheck.sh`.
+
 ### Fixed — `--quality-delta=A..B` indexed the working tree it never reads (#387)
 
 The range form materializes and indexes both commits itself. `main()` still ingested and graphed the working tree
