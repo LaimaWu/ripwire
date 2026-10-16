@@ -631,7 +631,7 @@ inline EditCheckVerdict editCheckVerdict( const EditCheckContract& contract, std
 // ── the implicit-RECEIVER wildcard, recognised here because ingest's own version cannot fire ──────────────
 // A definition whose first parameter is a receiver the call site never writes: `params` counts it, the
 // call-site argument count does not, so an EXACT-arity comparison is off by one — and off in the direction
-// that manufactures a flag. ingest.cpp's cc_paramArityExact already exempts this class, but it keys on
+// that manufactures a flag. ingest_metrics.h cc_paramShape already exempts this class, but it keys on
 // `kind == SymKind::Method`, and Python's tags.scm has no `@definition.method` at all: every `def`, including
 // one nested in a class, is captured as `@definition.function`. So the exemption is unreachable for Python —
 // on this repo it could not fire on a single definition, and 12 of the 19 nonzero incompatible= counts on an
@@ -646,7 +646,7 @@ inline EditCheckVerdict editCheckVerdict( const EditCheckContract& contract, std
 // The Ruby half of that predicate is BELT AND BRACES, not a live exemption, and saying so here is the point:
 // Ruby's `def m(a)` has NO implicit receiver parameter — `params` and the call site's argument count already
 // agree — so there is nothing to exempt, and in any case Ruby never reaches this disjunct. The caller test
-// below short-circuits on `os.arityExact == 0` first, and `cc_paramArityExact`'s language gate
+// below short-circuits on `os.arityExact == 0` first, and `cc_paramShape`'s language gate
 // (src/ingest_metrics.h) does not list Ruby, so every Ruby definition carries arityExact 0 and no Ruby caller
 // is arity-flaggable at all. MEASURED both ways on a two-file Ruby repo whose method gained a parameter:
 // `incompatible="0"` for a SCOPED method and for a top-level one alike, before and after the scope arm. What

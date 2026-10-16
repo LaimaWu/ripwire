@@ -15,6 +15,21 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a call with fewer arguments than an overload requires no longer lists that overload
+
+A three-argument call `canon( p, b, e )` listed both `canon` overloads under `--callees`, including the
+four-parameter one with no default that the call cannot reach. The
+resolver's arity filter dropped a candidate only for too MANY arguments; it now also drops one for too FEW: each
+definition records the fewest arguments a call can pass (its parameters minus the defaulted ones), and the resolver
+judges it on the minimum over the definition and every declaration of the same name and parameter count, so a C++
+default written only on a header prototype still keeps the out-of-line definition. Defaulted parameters are read
+from a per-language table (C++, Python, TypeScript, and Java with no default form); a variadic, implicit-self,
+TypeScript `this:` or decorated Python definition is never dropped this way, and neither is any candidate in a
+language without a row — JavaScript (a call may pass fewer arguments), Swift (trailing closures), Kotlin and the rest.
+Fewer calls stay ambiguous, so `ambiguous=` and `graph_ambiguous=` drop. One residual limit stays: a C/C++
+argument that is a macro expanding to several arguments is counted as one. `kParserVer` 178 and `kCacheVersion` 33
+(a definition record gains `paramsMin`; the train renumbers). Gate: `test/aritycheck.sh` §3b.
+
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
 Ruby's `include`/`extend`/`prepend` are now captured by `queries/ruby/tags.scm` as `@reference.mixin` and turned into

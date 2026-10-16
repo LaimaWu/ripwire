@@ -6205,6 +6205,49 @@ inline void fillImplementorBound( Graph& g, const std::vector<ImplementorBoundEd
     }
 }
 
+// B2.2 MINIMUM ARITY ACROSS DECLARATIONS: per symbol, the fewest arguments a call can pass to it — its own paramsMin
+// (ingest_metrics.h cc_paramShape) lowered to the lowest paramsMin of any DECLARATION with the same name and the same
+// parameter count. C++ may write a default on a separate prototype only (`int f( int x, int y = 5 );` in a header,
+// `int f( int x, int y ){…}` out of line), and a default on either makes the shorter call legal, so a definition is
+// judged on the minimum over itself and every declaration of it. The pairing is deliberately LOOSE (name + params,
+// any scope, any language): a declaration joined to a definition it does not declare can only LOWER the minimum,
+// which keeps a candidate the resolver could have dropped (a lost hedge) — it never drops one and never adds an edge.
+// Read off `byName` BEFORE the decl/def collapse folds declarations away. A symbol outside byName keeps 0 (no bound).
+inline std::vector<std::uint16_t> paramsMinAcrossDeclarations( const IngestResult& ing, const HashMap<std::string, rw::SmallVec<NodeId, 2>>& byName )
+{
+    std::vector<std::uint16_t> out( ing.symbols.size(), 0 );
+    std::vector<std::pair<std::uint16_t, std::uint16_t>> declMin;   // ( params, paramsMin ) of the name's declarations
+    for( const auto& [ name, ids ] : byName )
+    {
+        declMin.clear();
+        for( const NodeId id : ids )
+        {
+            const Symbol& s = ing.symbols[ id ];
+            out[ id ] = s.paramsMin;
+            if( !isDefinitionNotDeclaration( s ) )
+            {
+                declMin.push_back( { s.params, s.paramsMin } );
+            }
+        }
+        if( declMin.empty() )
+        {
+            continue;
+        }
+        std::sort( declMin.begin(), declMin.end() );   // per params value, its lowest declared minimum sorts first
+        for( const NodeId id : ids )
+        {
+            const Symbol& s  = ing.symbols[ id ];
+            const auto    it = std::lower_bound( declMin.begin(), declMin.end(), std::pair<std::uint16_t, std::uint16_t>{ s.params, 0 } );
+            if( it != declMin.end() && it->first == s.params )
+            {
+                out[ id ] = std::min( out[ id ], it->second );
+            }
+        }
+    }
+    ENSURES( out.size() == ing.symbols.size() );
+    return out;
+}
+
 inline std::uint32_t internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand );   // defined beside declinedCallsNaming, its one reader
 inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = nullptr, bool census = false )
 {
@@ -6308,6 +6351,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             byName[ s.name ].push_back( s.id );
         }
     }
+
+    // B2.2 minimum arity: read every declaration's minimum BEFORE the collapse below folds declarations away.
+    const std::vector<std::uint16_t> paramsMinOf = paramsMinAcrossDeclarations( ing, byName );
 
     // decl/def collapse (adversarial-review #1) — collapseDeclarationsOfName carries the rule, its per-root and per-family
     // keys, and why a Kotlin body never evicts a Java declaration (or the reverse).
@@ -8367,30 +8413,30 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
 
             // B2.2 arity filter: when the call site has a reliably-counted positional-argument list, drop any
-            // same-name candidate whose declared parameter count is a FIXED, call-comparable arity (arityExact)
-            // and cannot possibly accept that many args — a provably-wrong overload. Strictly conservative: a
-            // variadic / default-argument / implicit-self candidate (arityExact==0) is NEVER dropped, nor is
-            // any candidate when the call-site count is unknown. Degrade rather than empty the tier.
-            //
-            // Decided: only `argCount > params` is provably wrong.
-            // arityExact is computed from the DEFINITION node only (cc_paramArityExact); a C++ default argument
-            // written ONLY on a separate header PROTOTYPE (`void f( int x = 5 );`) is invisible there, so an
-            // out-of-line def whose default lives in the decl reads as a fixed arity==params. An
-            // (params-1)-arg call against such a def is legal (the default fills the gap) but used to fail
-            // `params != argCount` and get "provably" excluded — dropping the correct edge AND silently
-            // suppressing the amb= honesty counter when a sibling overload happened to survive. No default
-            // argument can ever rescue a call with MORE args than the def declares, so `argCount > params`
-            // stays a sound exclusion in every language; `argCount < params` no longer excludes — the def
-            // stays a candidate and correctly re-enters amb= when multiple defs still survive. Trades a little
-            // precision for honesty (decided acceptance); the fuller decl/def arityExact merge is deferred.
+            // same-name candidate that provably cannot accept that many args — a provably-wrong overload — in
+            // either direction:
+            //   * TOO MANY: `argCount > params` on a FIXED, call-comparable arity (arityExact). No default can
+            //     rescue a call with more args than the def declares, so this is sound in every language. A
+            //     variadic / default-argument / implicit-self candidate (arityExact==0) is never dropped this way.
+            //   * TOO FEW: `argCount < paramsMinOf[c]` — the fewest arguments the candidate can take, the minimum
+            //     over its definition AND every declaration of it (paramsMinAcrossDeclarations: a C++ default
+            //     written only on the header PROTOTYPE still makes the shorter call legal and keeps the def).
+            //     paramsMin is 0 — no lower bound — for a variadic, implicit-self, receiver-parameter or
+            //     decorated def and for every language without a kParamMinLangs row (JavaScript, where a call
+            //     may pass fewer arguments; Kotlin; …), so those are never dropped for too few arguments.
+            //     Residual floor (disclosed, not handled): a C/C++ argument that is a macro expanding to several
+            //     arguments (`f( PAIR )`) is counted as one, so it reads as a shorter call than it is.
+            // Strictly conservative otherwise: no candidate is filtered when the call-site count is unknown, and
+            // the filter degrades (leaves the tier untouched) rather than empty it.
             if( r.argCountKnown && tier.size() > 1 )
             {
                 filtScratch.clear();
                 for( NodeId c : tier )
                 {
                     const Symbol& cs = ing.symbols[ c ];
-                    const bool provablyWrong = ( cs.arityExact != 0 ) && ( r.argCount > cs.params );
-                    if( !provablyWrong )
+                    const bool tooMany = ( cs.arityExact != 0 ) && ( r.argCount > cs.params );
+                    const bool tooFew  = r.argCount < paramsMinOf[ c ];
+                    if( !tooMany && !tooFew )
                     {
                         filtScratch.push_back( c );
                     }
