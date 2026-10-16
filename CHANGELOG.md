@@ -18,9 +18,10 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 ### Changed — a Rust call named like a standard collection, string or Option member binds no in-tree namesake by name (#405)
 
 The standard-member name gate is now one table with a row per language (`graph.h` `kStdMemberNames`). The C++ row is
-unchanged; a Rust row (`src/externalnames.h` `kRustStdMemberNames`, 46 names written from the Rust standard library
+unchanged; a Rust row (`src/externalnames.h` `kRustStdMemberNames`, 40 names written from the Rust standard library
 documentation: `push`, `insert`, `iter`, `len`, `to_owned`, `unwrap` and the like, minus names in-tree types commonly
-define themselves, such as `next`, `get`, `map`, `clone`, `write`, `expect`) makes a Rust member call whose receiver no
+define themselves, such as `next`, `get`, `map`, `clone`, `write`, `expect`, and trait methods in-tree types implement,
+such as `into_iter`, `extend`, `as_ref`, `borrow`) makes a Rust member call whose receiver no
 rule typed decline instead of binding every same-named in-tree method: no edge, counted in `declined_calls=`, named on
 the caller's `--callees` answer in a `<stdm>` line. A call the language itself proves (`self.iter()` inside the type
 that defines `iter`) keeps its edge. On rust-lang/mdBook, `--callers=iter` no longer lists six functions whose `.iter()`

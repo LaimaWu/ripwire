@@ -53,6 +53,11 @@
 #       with their <stdm> line; `self.iter()` inside the defining impl stays proven; a name outside the table and a name with no
 #       in-tree definition are untouched, a qualified `Stack::push( s, 1 )` keeps its edge; STATED FLOOR until Rust records receiver types: a parameter, local or field written
 #       as the in-tree Stack / Book, or a generic bounded by an in-tree trait, is declined too (counted, never silently dropped)
+#       FLIP WHEN RUST RECORDS RECEIVER TYPES (map L3, rust-receivers): these five (R) STATED FLOOR arms pin today's decline
+#       and must turn into "keeps the edge / the via=name hedge" in the lane that types them — stack_param (parameter),
+#       stack_local (local), rsgate/lib.rs:add (field self.inner), book_iter (parameter of the in-tree Book), generic_bound
+#       (P: Pushable); with them the (R) --callers counts (rsgate/lib.rs:push declined 6, Book::iter declined 2) and
+#       attribmultidefcheck's f_rs_iter twin. vec_param / vec_iter / std_vec stay declined (their receivers are std types).
 #   (E) the callers side: Vec::push_back keeps exactly its typed callers and hedges and counts the ten declined calls; the one-def
 #       Solo::append keeps soloTyped and counts stdAppend; Pool::clear keeps poolTyped and counts two
 #   (F) disclosure surfaces: the map header's declined= equals the census's declined bucket, the full map legend, the
@@ -312,6 +317,14 @@ grep -q '<stdm n= calls=>: of declined_calls=' "$TMP/ce.xml" \
 rw --callees=stdParam >"$TMP/cec.xml"
 grep -q 'stdm n= calls=: of declined_calls=' "$TMP/cec.xml" \
     && ok "(F) the compact callees legend defines stdm n= calls=" || no "(F) the compact callees legend does not define stdm"
+# every surface that defines the clause also states the Rust floor (checklist 3: what the claim does NOT mean)
+floor_missing=""
+grep -q 'Rust-records-no-receiver-type-yet' "$TMP/map.xml"                                            || floor_missing="$floor_missing map"
+grep -q 'a Rust receiver written as an in-tree type is declined too (Rust records no receiver type yet)' "$TMP/cl.xml" || floor_missing="$floor_missing callers"
+grep -q 'a Rust receiver written as an in-tree type is listed too (Rust records no receiver type yet)' "$TMP/ce.xml"   || floor_missing="$floor_missing callees"
+grep -q 'stdm n= calls=: [^>]*(Rust: one written as an in-tree type too, until Rust records receiver types)' "$TMP/cec.xml" || floor_missing="$floor_missing compact"
+[ -z "$floor_missing" ] && ok "(F) the map, callers, full callees and compact callees legends each state the Rust floor" \
+    || no "(F) the Rust floor is missing from:$floor_missing"
 rw --callees=typedLocal --legend=full >"$TMP/cen.xml"
 if [ -z "$( root_tag "$TMP/cen.xml" callees )" ]; then no "(F) --callees=typedLocal produced no <callees> root — the absence below would be vacuous"
 elif grep -q 'stdm' "$TMP/cen.xml"; then no "(F) a callees answer with no declined standard-member call mentions stdm"

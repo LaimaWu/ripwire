@@ -3204,8 +3204,24 @@ inline constexpr std::array<std::size_t, kLangCount + 1> kStdMemberRowStart = []
     return start;
 }();
 static_assert( kStdMemberRowStart[ kLangCount ] < 0xFFFFu, "StdMemberGate packs a kStdMemberNames flat index into 16 bits, 0xFFFF = none" );
-// Every row's table is proven strictly sorted where it is defined (externalnames.h static_asserts), which tableIndexOf's
-// binary search needs; nothing here re-reads a row as a std::span at compile time (the libstdc++ 13 note above).
+// Every row strictly sorted (tableIndexOf binary-searches it), proven HERE over the rows themselves, so a row added above
+// without its own externalnames.h assert cannot slip in unsorted. Walks the pointer and count, never a std::span (the
+// libstdc++ 13 note above).
+constexpr bool stdMemberRowsStrictlySorted() noexcept
+{
+    for( const StdMemberRow& row : kStdMemberNames )
+    {
+        for( std::size_t i = 1; i < row.count; ++i )
+        {
+            if( !rw::sortutil::svLess( row.names[ i - 1 ], row.names[ i ] ) )
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+static_assert( stdMemberRowsStrictlySorted(), "every kStdMemberNames row is strictly sorted (binary search)" );
 struct StdMemberGate
 {
     static constexpr std::uint16_t kNotStd = 0xFFFFu;
