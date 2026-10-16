@@ -8427,24 +8427,30 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             //     Residual floor (disclosed, not handled): a C/C++ argument that is a macro expanding to several
             //     arguments (`f( PAIR )`) is counted as one, so it reads as a shorter call than it is.
             // Strictly conservative otherwise: no candidate is filtered when the call-site count is unknown, and
-            // the filter degrades (leaves the tier untouched) rather than empty it.
+            // each stage degrades (leaves the tier untouched) rather than empty it. The stages run IN ORDER — too
+            // many first, exactly as before the minimum existed, then too few on what survives — so a tier that the
+            // too-few stage would empty keeps the too-many stage's result: a candidate dropped for too many
+            // arguments never comes back (one combined pass restored the whole tier and re-added it).
             if( r.argCountKnown && tier.size() > 1 )
             {
-                filtScratch.clear();
-                for( NodeId c : tier )
+                for( const bool fewStage : { false, true } )
                 {
-                    const Symbol& cs = ing.symbols[ c ];
-                    const bool tooMany = ( cs.arityExact != 0 ) && ( r.argCount > cs.params );
-                    const bool tooFew  = r.argCount < paramsMinOf[ c ];
-                    if( !tooMany && !tooFew )
+                    filtScratch.clear();
+                    for( NodeId c : tier )
                     {
-                        filtScratch.push_back( c );
+                        const Symbol& cs = ing.symbols[ c ];
+                        const bool provablyWrong = fewStage ? r.argCount < paramsMinOf[ c ]
+                                                            : ( cs.arityExact != 0 ) && ( r.argCount > cs.params );
+                        if( !provablyWrong )
+                        {
+                            filtScratch.push_back( c );
+                        }
                     }
-                }
-                if( !filtScratch.empty() && filtScratch.size() < tier.size() )
-                {
-                    tier.swap( filtScratch );
-                    censusArity = true;
+                    if( !filtScratch.empty() && filtScratch.size() < tier.size() )
+                    {
+                        tier.swap( filtScratch );
+                        censusArity = true;
+                    }
                 }
             }
         }
