@@ -2336,7 +2336,9 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 34;   // MUST equal ingest.cpp's kCacheVersion (gated); 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 184;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 185;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 185 = 2026-10-16 (#409): cross-file markdown #slug binds to that file's
+                                                          //   heading. 185, not 184: 184 is train 29. Rich file tag 186.
                                                           // 184 = 2026-10-17 (train 29: above arity-min 178/179, call-result-typing
                                                           //   180/181, go-scope 182/183; see the kParserVer note)
                                                           // 182 = 2026-10-16 (train 29 L5 go-scope reservation, #403: Go method /
