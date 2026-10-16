@@ -77,7 +77,11 @@ def json_charged_stanzas( t ):
 
 def upper_bound( answer, ref, T, k, total, u_floored ):
     """The upper-bound twin. Returns (ok, detail). Applies only to a cut (k < total) served past the rank floor (k > 4).
-    `u_floored` is the reader's U including FIX1's tail floor (XML; ignored for JSON). A missing <sigs> is not ok."""
+    `u_floored` is the reader's U including FIX1's tail floor (XML; ignored for JSON). A missing <sigs> is not ok.
+    Resolution (forbudget-soft fix-1 review, F1): the XML twin carries about 1.8-2.8 rows of slack (measured on the fornotes
+    corpus), because at a cut the tail fills less than its share and that unused share is real headroom the answer does not
+    show, so this reader cannot recover it. A 1-row over-serve is therefore NOT caught in XML; JSON, which states its tail,
+    catches it at most rungs. A tighter XML twin needs the cut disclosed in the answer."""
     if k >= total or k <= 4:
         return True, "upper=n/a"
     rows = rows_printed( answer )
