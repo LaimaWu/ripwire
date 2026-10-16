@@ -25,6 +25,7 @@
 
 #include "countfloor.h"      // valueUsesArmedFor — where reads reach the use-site table
 #include "filter.h"          // pathTierIndexOver, compareTierThenPath — the uses verb's base row order
+#include "langfacts.h"       // langFacts(l).isDocument — a prose file's references are mentions, not reads
 #include "model.h"
 #include "nextverb.h"        // nextFlag — the root next= spelling
 #include "sarif.h"           // rootRelativeUri — the root-relative spelling every grep path takes
@@ -204,7 +205,7 @@ inline std::vector<ReadHit> readSitesOf( const IngestResult& rd, std::span<const
     std::vector<ReadHit>             hits;
     for( const Reference& r : rd.references )
     {
-        if( r.role != RefRole::Read || r.isCompose || r.isDocLink || r.lang == Lang::Markdown )
+        if( r.role != RefRole::Read || r.isCompose || r.isDocLink || langFacts( r.lang ).isDocument )
         {
             continue;
         }
