@@ -886,8 +886,9 @@ inline void captureRubyFactories( TSNode root, std::uint32_t fileId, std::string
 // pathological): the Include record still comes from the captureIncludes walk, which stops at kMaxImportContainerDepth
 // (256 AST levels), while this inherit reference comes from the query, which has no such bound. Past that depth — 260
 // nested `module`s with an `include M` innermost — rubyDirectiveSitesByFile finds no directive for the reference, so
-// --lego gains one implementor and the tree gains a ruby_bases_unscoped="1" and a second degraded-notice line. No real
-// code reaches 256 levels of nesting; the cut is stated here so "byte-identical" reads exactly.
+// --lego lists the includer as an implementor while the walk's own depth-bound notice on stderr ("import-container
+// nesting past the depth bound — deeper imports not captured") stays the only degraded line: no ruby_bases_unscoped=
+// appears on any verb. No real code reaches 256 levels of nesting; the cut is stated here so "byte-identical" reads exactly.
 inline void emitCapturedRubyMixinBase( TSNode call, TSNode constant, std::uint32_t fileId, Lang lang, std::string_view src,
                                        std::vector<RawRef>& refs )
 {
