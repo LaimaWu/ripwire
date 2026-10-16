@@ -19,7 +19,7 @@ impl Book {
 pub fn vec_param(v: &mut Vec<i32>) { v.push(1); }
 pub fn stack_param(s: &mut Stack<i32>) { s.push(1); }
 pub fn unknown_param(x: &mut Unknown) { x.push(1); }
-pub fn stack_local() { let mut s = Stack { items: Vec::new() }; s.push(2); }
+pub fn stack_local() -> usize { let mut s: Stack<i32> = Stack { items: vec![7, 8] }; s.push(2); 3 }
 pub fn not_in_table(s: &Stack<i32>) { s.frobnicate(); }
 pub fn vec_iter(v: &Vec<i32>) -> usize { let mut n = 0; for _x in v.iter() { n += 1; } n }
 pub fn book_iter(book: &Book) -> usize { let mut n = 0; for _s in book.iter() { n += 1; } n }

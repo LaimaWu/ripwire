@@ -279,7 +279,7 @@ check "(R) self.iter() inside Book — proven (FE-B self), kept unhedged" callee
 check "(R) s.frobnicate() — no std name, the ladder is unchanged" callees not_in_table 'rsgate/lib.rs:7:frobnicate~' '' ''
 check "(R) m.insert() with no in-tree insert in reach — nothing to decline, nothing counted" callees map_insert '' '' ''
 check "(R) STATED FLOOR: s.push() on a &mut Stack<i32> parameter — Rust records no parameter type yet, declined" callees stack_param '' 1 'push:1'
-check "(R) STATED FLOOR: let s = Stack { .. }; s.push() — no local type either, declined" callees stack_local '' 1 'push:1'
+check "(R) STATED FLOOR: let s: Stack<i32> = Stack { .. }; s.push() — no local type either, even written, declined" callees stack_local '' 1 'push:1'
 check "(R) STATED FLOOR: self.inner.push() with inner: Stack<i32> — no Rust field type is recorded, declined" callees rsgate/lib.rs:add '' 1 'push:1'
 check "(R) STATED FLOOR: book.iter() on a &Book parameter — declined though Book defines iter" callees book_iter '' 1 'iter:1'
 check "(R) old scope fixture: let mut v = Vec::new(); v.push() — declined" callees std_vec '' 1 'push:1'
