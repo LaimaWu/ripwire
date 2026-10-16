@@ -25,6 +25,7 @@
 
 #include "model.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 
@@ -114,14 +115,9 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
 template<std::size_t N>
 constexpr std::size_t firstMisorderedRow( const std::array<LangFacts, N>& table ) noexcept
 {
-    for( std::size_t i = 0; i < N; ++i )
-    {
-        if( static_cast<std::size_t>( static_cast<Lang>( table[ i ].lang ) ) != i )
-        {
-            return i;
-        }
-    }
-    return N;
+    const auto misplaced = std::ranges::find_if( table, [ expected = std::size_t( 0 ) ]( const LangFacts& row ) mutable
+                                                 { return static_cast<std::size_t>( static_cast<Lang>( row.lang ) ) != expected++; } );
+    return static_cast<std::size_t>( misplaced - table.begin() );
 }
 static_assert( firstMisorderedRow( kLangFacts ) == kLangCount, "kLangFacts: one row per Lang, in enum order — the first row out of place is firstMisorderedRow(kLangFacts)" );
 
