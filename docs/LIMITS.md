@@ -17,7 +17,7 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 254 | 99 | 149 | **105** |
+| 256 | 100 | 149 | **107** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
 are not counted as caps, and 255 + 7 is the 262 constants this generator parses out of `src/`.
@@ -89,7 +89,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 99 files that declare a cap — the 254 caps counted above, and no parameter.
+One table for each of the 100 files that declare a cap — the 256 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -203,6 +203,15 @@ Discloses: `capped`, `reads_capped`
 | `kMaxAliasDepth` | `8` | INDEXING | — |
 | `kMaxEnvNameLen` | `128` | BOUNDARY | longest plausible environment-variable name |
 | `kMaxSitesShown` | `8` | OUTPUT | <read> sites per gate; a DEFAULT, raisable by --limit=N (effectiveRowCap), lifted by --detail |
+
+### `src/declinedsites.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kDeclinedSiteCandCap` | `8` | — | cand= entries per row on --legend=full; cand_more= counts the rest |
+| `kDeclinedSiteCap` | `16` | — | <dc> rows per answer by default; --limit=N raises it (dc_next= does) |
 
 ### `src/defattrib.h`
 

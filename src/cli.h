@@ -344,7 +344,7 @@ struct Config
                                                             // computes — 1-hop callers, the transitive --impact blast radius, every --uses
                                                             // read/write/import/call/extends site, how much of the radius the tested= lens
                                                             // covers, and --dead-code's own zero-caller/internal-linkage shape at defs=1. FACTS only:
-                                                            // risk= names what was found (none-found/uses-exist/untested-radius/unmodelled), never a
+                                                            // risk= names what was found (none-found/possible-callers/uses-exist/untested-radius/unmodelled), never a
                                                             // go/no-go verdict. file:name disambiguates like --around/--lego.
     std::string_view sliceSpec;                            // --slice=SYM[:VAR] (lane/paper-slice): NAME-BASED intra-procedural def-use
                                                             // slice of VAR inside the ONE uniquely-resolved definition SYM (multiple defs
@@ -1155,7 +1155,10 @@ inline constexpr char kHelpHead[] =
         "                               who calls SYM (1-hop in-edges). file:name disambiguates a same-named symbol across files (like --around/--lego);\n"
         "                               Scope::name picks one scope's definition — the sym= spelling edit-check prints resolves everywhere.\n"
         "                               Each caller row's sites_at= lists its call sites as pasteable file:line tokens (16 at most: sites_total=)\n"
-        "    --callees=SYM              what SYM calls (1-hop out-edges). file:name disambiguates like --callers\n"
+        "                               A call the resolver DECLINED to bind whose candidates include SYM is a <dc in= p= via=\"declined\"> row:\n"
+        "                               a call site, never an edge or a count= row (16 at most, file-first: dc_shown=, dc_next=)\n"
+        "    --callees=SYM              what SYM calls (1-hop out-edges). file:name disambiguates like --callers; each call it makes that the\n"
+        "                               resolver declined to bind is a <dc n= l= via=\"declined\"> row, never an edge or a count= row\n"
         "    --uses=SYM                 show every place SYM is used, not just called — reads, writes, imports, extends\n"
         "                               the statically resolvable use-sites of SYM (role=call|macro|read|write|import|extends|type, file:line); external=\"1\" if SYM has no in-corpus def.\n"
         "                               file:name or a \"::\" spelling narrows defs= AND the role=\"call\" sites (kept only where the call RESOLVES to a chosen def —\n"
@@ -1969,7 +1972,8 @@ inline constexpr char kHelpHead[] =
         "                               zero-caller/internal-linkage shape at defs=1 (dead_code_candidate=). ambiguous_callers= names callers\n"
         "                               whose own calls include an ambiguously-resolved one (g.ambOut) — a caveat, not a count of\n"
         "                               proven-wrong edges. FACTS only: risk= names what was found — none-found (zero callers AND\n"
-        "                               zero uses), untested-radius (a radius exists and none of it is test-covered), or\n"
+        "                               zero uses), possible-callers (none of either, but a call the resolver declined could have meant\n"
+        "                               SYM: its <dc> rows), untested-radius (a radius exists and none of it is test-covered), or\n"
         "                               uses-exist (a radius exists and some of it is tested) — never a go/no-go verdict; unmodelled\n"
         "                               when nothing was found for a kind used by reading or naming it (a variable, class, struct)\n"
         "                               whose uses those counts cannot see. callers_floor=/uses_floor= mark a count the index holds\n"

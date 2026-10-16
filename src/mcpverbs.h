@@ -784,6 +784,14 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     calledBySites = rowCallSites( ing, chRows.matches, std::span<const NodeId>( calledBy ).subspan( calledByWin.begin, calledByWin.end - calledByWin.begin ),
                                   VrRender{ sqSingleRoot, sqRootPrefix } );
     char        pab[ kPageDisclosureCap ];
+    // lane declined-sites (declinedsites.h): the CLI root's <dc> rows for the direction count= describes (find_symbol: the
+    // declines its definitions make; find_referencing_symbols: the declined calls that could have meant them), cut by the
+    // same `limit` the rows take — one computation (callhierarchy.h ordered them), the CLI's own row builder.
+    const DeclinedSiteCut sqDcCut = declinedSiteCut( chRows.declinedSites.size(), page.limit, referencingOnly ? "--callers=" : "--callees=", name,
+                                                     std::size_t( rowCap ) );
+    const std::vector<DeclinedSiteView> sqDc = declinedSiteViews( ing, g, std::span<const std::uint32_t>( chRows.declinedSites ).first( sqDcCut.shown ),
+                                                                  referencingOnly, chRows.matches, chRows.attr.groups, VrRender{ sqSingleRoot, sqRootPrefix },
+                                                                  /*candidates=*/false );
 
     std::string out = "{";
     if( sqSingleRoot )
@@ -805,6 +813,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
          + ",\"hop_tested\":" + std::to_string( chTested.tested )
          + ",\"hop_untested\":" + std::to_string( chTested.untested )
          + declinedCallsKeyJson( chRows.declinedCalls )   // the CLI root's declined_calls=, for the direction count= describes
+         + declinedSiteCutKeyJson( sqDcCut )              // the CLI root's dc_shown= / dc_next=, absent when nothing was cut
          + declinedIfaceKeyJson( chRows.declinedIface )   // the CLI root's declined_iface= (callers direction only)
          + stdMemberCallsSpelling( chRows.stdCalls, /*json=*/true )       // the CLI callees answer's <stdm> line (callees direction only; absent when none)
          + nextFieldJson( nextFlag( referencingOnly ? "--uses=" : "--expand=", chNextSelector ) );   // P3 (L7): the CLI root's next= (mcpattrparitycheck)
@@ -857,6 +866,8 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
         out += rw::viaNameNoteJson();   // FE-B: the reading of "via":"name", only in an answer that carries it
     }
     out += nextFieldJson( splitArmLegend( anySplit ), "split_note" );   // attrib-multidef Q1: likewise for "prov":"split"
+    out += declinedSitesJson( sqDc, referencingOnly, /*mcp=*/true );   // lane declined-sites: the CLI <dc> rows, never in calls/calledBy or count
+    out += nextFieldJson( declinedSitesLegend( declinedSitesLegendFlags( sqDc, referencingOnly, sqDcCut ) ), "declined_note" );   // their reading, only when they ride
     out += nextFieldJson( callSitesAtLegend( calledBySites.any, calledBySites.anyCut, kCallSitesPerRowCap ), "sites_note" );   // CALLSITE-AT: its reading, only when a row carries it (nextFieldJson: "" -> no key, JSON-escaped)
     // Reference-as-value round: the CLI's <vrs> window, the same rows (callhierarchy.h computed them once): valueRefs =
     // where the symbol is USED AS A VALUE (the --callers side), valueCallees = what it stores/passes and may call
@@ -3140,7 +3151,7 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   kTestedRowLegend, kImpactTestedPartitionLegend,   // A6
                   kTestedLensBlindSpotLegend,                       // F-02: rides with the partition, byte-identical to the CLI twin
                   unprovenDefsVerbLegend( UnprovenDefsVerb::Impact, unprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=, as on the CLI
-                  declinedCallsLegendWithGates( declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 ),         // exactly when the root carries declined_calls=, as on the CLI
+                  declinedCallsLegendWithGates( declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 ) + declinedSitesImpactPointer( declinedCalls > 0 ),   // exactly when the root carries declined_calls=, as on the CLI (+ where its sites are listed)
                   declinedIfaceLegend( declinedIface > 0 ),                                          // likewise declined_iface=, as on the CLI
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
                     + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI

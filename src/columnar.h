@@ -25,6 +25,7 @@
 
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace rw
@@ -241,6 +242,7 @@ struct ColumnarRowExtras
     const std::vector<std::string>*              ofDef    = nullptr;
     const std::string*                           defRows  = nullptr;
     const std::vector<char>*                     splitArm = nullptr;
+    const std::string*                           tailRows = nullptr;   // XML rows kept verbatim after </cols> (lane declined-sites: <dc>)
 };
 inline std::string columnarExtraFields( const ColumnarRowExtras& extras )
 {
@@ -391,7 +393,7 @@ inline void emitColumnarSymbolRows( std::FILE* out, const IngestResult& ing,
     // A6 / 0.6.5 / FE-B: each present only when the caller passed it — see the wrapper banner and emitColumnarOptionalColumns.
     emitColumnarOptionalColumns( out, ing, rows, testReach, depth, extras );
 
-    rw::emitTo( out, "</cols></{}>", wrapperTag );
+    rw::emitTo( out, "</cols>{}</{}>", extras.tailRows != nullptr ? std::string_view( *extras.tailRows ) : std::string_view(), wrapperTag );
 }
 
 // COLUMNAR form of the --uses verb: use-site rows carry (fileId, line, role, enclosing-symbol name `in`)

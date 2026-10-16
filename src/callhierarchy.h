@@ -20,6 +20,7 @@
 // surface-specific by contract (the CLI has a legend, the MCP arm speaks JSON-RPC errors), and folding them
 // in would trade one drift for another.
 
+#include "declinedsites.h"   // the <dc> rows: the declined call sites, ordered here once for every surface
 #include "defattrib.h" // the per-row definition attribution every surface of these rows serves (and tsContractSignatures)
 #include "filter.h"    // pathTierIndexOver / compareTierThenPath — the tier-then-path row order both surfaces serve
 #include "graph.h"     // resolveAllByNameQualified, the CSR, testSymbolForwardReach / countTestedIn / isTestedByReach
@@ -33,6 +34,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>      // std::tie — declined_calls= and its <dc> records from one call
 #include <utility>
 #include <vector>
 
@@ -91,6 +93,9 @@ struct CallHierarchyRows
     ValueRefRows        valueRefs;     // reference-as-value round: <vr> rows, never in `rows` or any count above
     StdMemberCallsMade  stdCalls;      // callees only: of declinedCalls, the C++ standard-member ones (graph.h stdMemberCallsMadeBy)
     OneHopAttribution   attr;          // attrib-multidef (defattrib.h): the definition groups + each row's ties, parallel to `rows`
+    // lane declined-sites (declinedsites.h): the records behind declinedCalls, in served order (callers file-first, callees
+    // file and line) — the <dc> rows, never in `rows` or any count above; uncut, declinedSites.size() == declinedCalls.
+    std::vector<std::uint32_t> declinedSites;
 };
 
 // The callees answer's <stdm> line (graph.h StdMemberGate, stdMemberCallsMadeBy), one spelling per dialect — the JSON keys
@@ -294,7 +299,7 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
         }
     }
 
-    out.declinedCalls = wantCallers ? declinedCallsNaming( g, out.matches ) : declinedCallsMadeBy( g, out.matches );
+    std::tie( out.declinedCalls, out.declinedSites ) = declinedCallsAndSites( ing, g, out.matches, wantCallers );   // the count and its <dc> rows
     out.declinedIface = wantCallers ? declinedIfaceCallsNaming( ing, g, out.matches ) : 0;
     out.stdCalls      = wantCallers ? StdMemberCallsMade{} : stdMemberCallsMadeBy( g, out.matches );
 

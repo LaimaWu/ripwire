@@ -202,11 +202,21 @@ for spec in "edit-check|--edit-check=mono/py/e/pool.py:popitem" "safe-delete|--s
         no "(R) $flag: no declined_calls=\"1\" or no definition: ${R:-no <$tag> root}"
     fi
 done
+# Re-anchored by design (lane declined-sites, gates review R11): this arm pinned risk="none-found" beside declined_calls=,
+# qualified by a legend sentence. A definition with no caller and no use that a declined call could have meant now reads
+# risk="possible-callers" and the declined call is listed as a <dc> row; the qualifying-sentence assert is kept as the twin:
+# the risk value's own sentence still says it is not a safety reading.
 rw --safe-delete=mono/py/e/pool.py:popitem --legend=full >"$TMP/sd.xml"
-if [ "$( attr "$( root_tag "$TMP/sd.xml" safe-delete )" risk )" = none-found ] && legend_of "$TMP/sd.xml" | grep -q 'none-found beside declined_calls= is not a safety reading'; then
-    ok "(R) --safe-delete: risk=none-found is qualified by the declined_calls= sentence"
+SDR="$( root_tag "$TMP/sd.xml" safe-delete )"
+if [ "$( attr "$SDR" risk )" = possible-callers ] && [ "$( attr "$SDR" declined_calls )" = 1 ] && grep -q '<dc in="' "$TMP/sd.xml"; then
+    ok "(R) --safe-delete: risk=possible-callers beside declined_calls=\"1\", the declined caller listed as a <dc> row"
 else
-    no "(R) --safe-delete: risk=none-found stands unqualified beside declined_calls="
+    no "(R) --safe-delete: a definition only a declined call could mean should read risk=possible-callers with its <dc> row: ${SDR:-no <safe-delete> root}"
+fi
+if legend_of "$TMP/sd.xml" | grep -q 'possible-callers: .*not a safety reading'; then
+    ok "(R) --safe-delete: risk=possible-callers is qualified in the legend (not a safety reading)"
+else
+    no "(R) --safe-delete: risk=possible-callers stands unqualified in the legend"
 fi
 QD="$TMP/qd"; rm -rf "$QD"; mkdir -p "$QD"; cp -R mono "$QD/" 2>/dev/null
 ( cd "$QD" && git init -q && git -c user.name=t -c user.email=t@t add -A && git -c user.name=t -c user.email=t@t commit -qm base ) >/dev/null 2>&1

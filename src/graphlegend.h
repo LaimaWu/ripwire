@@ -673,6 +673,73 @@ inline std::string declinedCallsLegendWithGates( bool on, bool gateDeclined, boo
     return declinedCallsLegendWithGate( on, gateDeclined, inertDeclined ) + declinedCallsStdLegend( on && stdDeclined );
 }
 
+// ── lane declined-sites: the <dc> rows (declinedsites.h) ────────────────────────────────────────────────────────────
+// Where <dc> rows ride, the clause above cannot say "no count or row here includes them": the rows name those calls. This
+// twin says so instead (gates review R9) and is the one such an answer carries; everything else in it is the clause above.
+inline constexpr const char* kDeclinedCallsRowsLegend =
+    "declined_calls=K (absent when 0) counts call SITES the resolver declined to bind: the called name has two or more same-language definitions, none in the caller's file or directory, and no qualifier, receiver type or include chose one, so no edge exists and no count here includes them; the <dc> rows below name them (the map header's declined=). Callers form: declined calls that could have meant this selector's definitions; impact form: that could have reached SYM or a symbol in its radius; callees form: declined calls these definitions make. Each call counts once however many candidates it had; the uses verb on the called name lists the sites. ";
+// inertDeclined (#380): the callees form's Elixir inert quote sites ride the same count with no <dc> row (they never reach a
+// decline site), so their clause follows the gate sentences either way, exactly as declinedCallsLegendWithGates spells it.
+inline std::string declinedCallsLegendForRows( bool on, bool gateDeclined, bool stdDeclined, bool dcRows, bool inertDeclined = false )
+{
+    if( !dcRows )
+    {
+        return declinedCallsLegendWithGates( on, gateDeclined, stdDeclined, inertDeclined );
+    }
+    return std::string( kDeclinedCallsRowsLegend ) + declinedCallsGateLegend( gateDeclined ) + ( inertDeclined ? kInertDeclinedCallsClause : "" )
+         + declinedCallsStdLegend( stdDeclined );
+}
+// The <dc> clause, in the gates review's words (R10): what a row is, and above all what it is NOT. Each later sentence rides
+// only where its attribute does, so an answer pays for the vocabulary it prints.
+inline constexpr const char* kDeclinedSitesLegend =
+    "<dc>: a call SITE the resolver declined to bind; NOT an edge and NOT a caller or callee claim (counted in declined_calls=, never in count= or a row above). cands=K: K in-tree definitions the call could have meant (K may be 1); the resolver proved none; not a claim this call reaches any of them (it may reach an out-of-tree, builtin or standard-library method). ";
+inline constexpr const char* kDeclinedSitesCalleesForm =
+    "<dc n= l= via=\"declined\">: the called name and the line of the call, in the body of one of these definitions. ";
+inline constexpr const char* kDeclinedSitesCallersForm =
+    "<dc in= p= via=\"declined\">: the definition making the call and the call's file:line, listed because its candidates include a definition of this selector. ";
+inline constexpr const char* kDeclinedSitesSideClause =
+    "gate=side: a Ruby call whose in-reach definitions answer on the other side of self. ";
+inline constexpr const char* kDeclinedSitesNameGateClause =
+    "gate=builtin|std: declined by the builtin-method or the C++ standard-member name gate. ";
+inline constexpr const char* kDeclinedSitesOfDefCallees =
+    "of_def=K on a <dc>: the definition (ix=K) making the call, a fact. ";
+inline constexpr const char* kDeclinedSitesOfDefCallers =
+    "of_def=K~d on a <dc>: its candidates include definition group K; never a claim it calls K. ";
+inline constexpr const char* kDeclinedSitesCutClause =
+    "dc_shown=N: the <dc> rows printed (the callers form cuts file-first: each file's first site before any file's second); dc_next= is the call that lists every site. ";
+inline constexpr const char* kDeclinedSitesCandClause =
+    "cand= (legend full only): the candidate definitions as file:line, cand_more= how many more. ";
+// The impact answer prints no <dc> row (gates review Q4): where its declined_calls= rides, it names where the sites are listed.
+inline constexpr const char* kDeclinedSitesImpactPointer =
+    "The callers verb on SYM lists its declined first-hop calls as <dc> rows. ";
+inline const char* declinedSitesImpactPointer( bool on ) noexcept { return on ? kDeclinedSitesImpactPointer : ""; }
+// What one answer's <dc> rows carry, read off the rows it prints (never re-derived).
+struct DeclinedSitesLegendFlags
+{
+    bool any = false; // a <dc> row is printed
+    bool callersForm = false; // in= p= rows (callers, safe-delete) rather than n= l= (callees)
+    bool side = false; // a row says gate="side"
+    bool nameGate = false; // a row says gate="builtin" or gate="std"
+    bool ofDef = false; // a row carries of_def=
+    bool cut = false; // the root carries dc_shown= / dc_next=
+    bool cand = false; // a row carries cand= (legend full)
+};
+inline std::string declinedSitesLegend( const DeclinedSitesLegendFlags& f )
+{
+    if( !f.any )
+    {
+        return {};
+    }
+    std::string out( kDeclinedSitesLegend );
+    out += f.callersForm ? kDeclinedSitesCallersForm : kDeclinedSitesCalleesForm;
+    out += f.side ? kDeclinedSitesSideClause : "";
+    out += f.nameGate ? kDeclinedSitesNameGateClause : "";
+    out += f.ofDef ? ( f.callersForm ? kDeclinedSitesOfDefCallers : kDeclinedSitesOfDefCallees ) : "";
+    out += f.cut ? kDeclinedSitesCutClause : "";
+    out += f.cand ? kDeclinedSitesCandClause : "";
+    return out;
+}
+
 // ── reference-as-value round (src/valuerefs.h, src/ingest_valuerefs.h) ─────────────────────────────────────────
 // Each clause rides ONLY a document that carries the attribute or rows it defines (value_refs= / <vrs>), so an answer
 // with no value reference keeps its bytes. What a row does NOT mean is said in the same breath: it is matched by name,
