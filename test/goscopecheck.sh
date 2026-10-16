@@ -25,6 +25,8 @@
 #   (G) entity identity: Matcher.Loop and Terminal.Loop (one file, two receiver types) are two map rows, never one
 #       overloads="2" row (Go has no overloading; the owner-less ids used to fold them).
 #   (H) --uses names a call's enclosing method by its scoped id (deb.go::Deb::Package); a free function keeps its name.
+#   (I) a comment inside the receiver list keeps the receiver scope (Body sc="Note"); members of an alias to an
+#       interface literal (`type Sink = interface{…}`) scope to the alias (Flush sc="Sink").
 #
 # Go struct fields are not indexed as definitions (queries/go/tags.scm captures none), so "a struct field scopes to its
 # struct" has no row to check; the nearest-type_spec rule is pinned by the interface-in-function arm instead.
@@ -98,6 +100,16 @@ for spec in "method Push Stack" "method Size Stack" "method Close closer" \
     sc="$3"; [ "$sc" = "-" ] && sc=""
     want="no sc="; [ -n "$sc" ] && want="sc=\"$sc\""
     if has_row "$1" "$2" "$sc"; then ok "(C) t=$1 $2 $want"; else no "(C) t=$1 $2 wanted $want"; fi
+done
+
+echo "=== (I) receiver-list comment and interface alias (alias.go) ==="
+# I1: `func ( /* c */ n *Note) Body()` — the first named child of the receiver list is the comment, not the parameter.
+# I2: `type Sink = interface{ Flush() error }` — a type_alias owns its interface members as a type_spec does.
+for spec in "method Body Note" "method Flush Sink" "struct Note -"; do
+    set -- $spec
+    sc="$3"; [ "$sc" = "-" ] && sc=""
+    want="no sc="; [ -n "$sc" ] && want="sc=\"$sc\""
+    if has_row "$1" "$2" "$sc"; then ok "(I) t=$1 $2 $want"; else no "(I) t=$1 $2 wanted $want"; fi
 done
 
 echo "=== (D) the cache round-trips the scope ==="
