@@ -72,6 +72,10 @@ struct Graph
     // lane lego-transitive fix 1: parallel to implementors — how each base→derived edge was BOUND (BaseBound). The direct rows
     // and every other reader keep reading implementors alone; only the --lego closure (legoImplementorClosure) walks this.
     std::vector<std::vector<std::uint8_t>> implementorBound;
+    // lane ruby-pair: the Ruby main object as an implementor — each top-level `include M` / `extend M` whose constant the
+    // tree opens (rubyMainObjectMixins), sorted by (base, fileId, line). Not in `implementors`: main is no symbol, so the
+    // graph's class readers (closure, CHA, ranks) never see it; only --lego's targeted answer lists it.
+    std::vector<RubyMainMixinRow> rubyMainMixins;
     std::vector<std::vector<NodeId>> mentions;       // code symbol id → markdown file-nodes that name it in a `backtick` (doc↔code)
     std::vector<std::uint32_t> ambOut;      // per-symbol: # outgoing calls that STILL resolved to MULTIPLE in-repo
                                             // defs AFTER canonical/narrow/locality resolution (the resolver could
@@ -519,6 +523,7 @@ inline bool namespaceCompatible( RefRole role, SymKind kind ) noexcept
         }
         case RefRole::Call: case RefRole::Read: case RefRole::Write: case RefRole::Import:
         case RefRole::Value: case RefRole::Through:   // never in the call loop; graph.h valueRefIndex narrows by kind itself
+        case RefRole::Subscript:                      // the call loop's own receiver proof decides it (subscriptOperatorProven)
         {
             return true;   // un-narrowed — see the doctrine above; a NEW role is a -Werror=switch decision here
         }
@@ -4995,7 +5000,7 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
         // a backtick mention in prose is not code evidence; a read/write USE-site is recorded only by the rich ingest (--uses,
         // MCP), so reading it here made the same call bind on MCP and decline on the CLI map — evidence must not depend on
         // which ingest ran (FE-B found it through mcpclidiffcheck's stanza on a Python `set().update()` beside a method)
-        if( !r.isDocLink && r.role != RefRole::Read && r.role != RefRole::Write )
+        if( !r.isDocLink && r.role != RefRole::Read && r.role != RefRole::Write && r.role != RefRole::Subscript )   // a subscript names an operator, and is a call only once proven
         {
             note( r.fileId, r.calleeName );
             note( r.fileId, r.recvVar );
@@ -5004,7 +5009,7 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
     }
     for( const Binding& b : ing.bindings )
     {
-        if( !isReceiverEvidenceKind( b.kind ) )   // FE-B's receiver evidence is read by ReceiverEvidence alone
+        if( !isReceiverEvidenceKind( b.kind ) && b.kind != LocalBindKind::RubyMainMixin )   // FE-B's receiver evidence is read by ReceiverEvidence alone; a main mixin by --lego alone
         {
             noteBindingClasses( gate, fileGated, b );
         }
@@ -5032,6 +5037,37 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
         std::sort( named.begin(), named.end() );
         named.erase( std::unique( named.begin(), named.end() ), named.end() );
     }
+}
+
+// The main object's mixins (LocalBindKind::RubyMainMixin, ingest_ruby.h captureRubyMainMixins) as implementor rows: the
+// constant a Ruby file's top level writes is read as Ruby reads it there — at the top level, so the path as written is the
+// fully-qualified constant (a leading `::` changes nothing) — and each class or module whose own open is that constant
+// (RubyBaseScope::classesByFqn) gets one row per directive. A constant the tree never opens (`include FileUtils`) lists
+// nothing: the module is outside the tree. Ruby-only by construction (no other language records the kind).
+inline std::vector<RubyMainMixinRow> rubyMainObjectMixins( const IngestResult& ing, const RubyBaseScope& bases )
+{
+    std::vector<RubyMainMixinRow> rows;
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind != LocalBindKind::RubyMainMixin )
+        {
+            continue;
+        }
+        const std::string_view written = std::string_view( b.typeName ).starts_with( "::" ) ? std::string_view( b.typeName ).substr( 2 ) : std::string_view( b.typeName );
+        const auto             it      = bases.classesByFqn.find( std::string( written ) );
+        if( it == bases.classesByFqn.end() )
+        {
+            continue;
+        }
+        for( const NodeId base : it->second )
+        {
+            rows.push_back( RubyMainMixinRow { base, b.fileId, b.spanStart } );
+        }
+    }
+    // ing.bindings is in (file, byte) order, so a stable sort by base leaves each base's rows in site order
+    std::ranges::stable_sort( rows, {}, &RubyMainMixinRow::base );
+    ENSURES( std::ranges::is_sorted( rows, {}, &RubyMainMixinRow::base ), "legoMainRowsOf binary-searches the rows by base" );
+    return rows;
 }
 
 inline BuiltinMethodGate buildBuiltinMethodGate( const IngestResult& ing, const ExternalVeto& veto, const ExternalVetoTables& vetoTables,
@@ -7171,10 +7207,99 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             g.pinCensus.addOracleRow( nd.from, nd.calleeName, nd.kind );
         }
     }
+    // SUBSCRIPT = OPERATOR-METHOD CALL (RefRole::Subscript; ingest_binds.h subscriptOperatorRef; test/subscriptopcheck.sh).
+    // An element access `recv[ k ]` runs the receiver class's subscript operator method (Ruby `[]`/`[]=`, Python
+    // `__getitem__`/`__setitem__`) — but only a class the tree defines can make it a call into the tree, and the receiver
+    // of nearly every element access is a builtin Hash/Array/dict/list whose own operator runs. So the site is taken up
+    // as a call ONLY where a receiver rule PROVES the class: Ruby's lookup on self in a def (RubyClassObjects::selfCall,
+    // then RubySelfReach through the class's include/extend/superclass ancestry), a receiver the code builds
+    // (RubyTypedReceivers), a class constant's closed lookup (`Registry[ :x ]` reaching its `def self.[]`); Python's
+    // receiver evidence (`self` in a class and its bases, a typed parameter or local, a constructed receiver); and Rule 1
+    // with its base walk for `self`. Anything else — an untyped local, a literal, a parameter, an instance variable —
+    // is dropped HERE, before any tally: no edge, no hedge, no unresolved=/external=/declined= count, so an answer that
+    // holds no proven subscript is byte-identical to one built before this rule. The decision is never by name: no `[]`
+    // or `__getitem__` definition anywhere in the tree makes a site a call unless its receiver's class reaches it.
+    // A proven site then runs the ladder below as the call `recv.[]( k )` would (role Call on a copy): the same rules
+    // decide its candidates, so it lands where that call lands; the census leaves it out (pincensus.h's population).
+    Reference                subscriptCall;            // the site as the call it runs (role Call), reused per proven subscript
+    std::vector<NodeId>      subscriptCand;            // scratch: what the proof found (the ladder recomputes it)
+    CallDispositionCounts    subscriptDispositions {}; // a proven subscript's tally: outside the census's call population
+    // Python: `Registry[ k ]` / `cls[ k ]` subscripts the CLASS object, which runs its metaclass's `__getitem__` (or the
+    // class's `__class_getitem__`), never the instance method receiver evidence would read a class-name receiver's call as.
+    const auto subscriptOnClassObject = [ & ]( const Reference& r ) -> bool
+    {
+        const ReceiverEvidence::Chain ch = ReceiverEvidence::chainOf( r );
+        bool isStatic = false, superOnly = false;
+        return ch.valid && ch.path.empty() && ch.ctor.empty() && ( ch.root == "cls" || ( !recvEv.rootClass( r, ch, isStatic, superOnly ).empty() && isStatic ) );
+    };
+    const auto subscriptOperatorProven = [ & ]( const Reference& r ) -> bool
+    {
+        EXPECTS( r.role == RefRole::Call, "the proof reads the site as the call it runs" );
+        if( r.fromSymbol == kNoNode || !byName.contains( r.calleeName ) )
+        {
+            return false;   // no caller node, or no definition of the operator method anywhere: nothing to prove
+        }
+        subscriptCand.clear();
+        const std::string& scope           = callerSelfScope( ing, r );
+        bool               rubySelfDecided = false;
+        if( r.lang == Lang::Ruby )
+        {
+            const RubySideAnswer self = rubyClasses.selfCall( r );
+            rubySelfDecided           = self.side.has_value();
+            if( rubySelfDecided && narrowTo( self.hit, r, subscriptCand ) )
+            {
+                return true;
+            }
+            if( const std::string* typed = rubyTypes.classOf( r ); typed != nullptr )
+            {
+                const RubySideAnswer built = rubyClasses.typedLookup( r, *typed );
+                return ( built.side && narrowTo( built.hit, r, subscriptCand ) )
+                    || narrowTo( built.side ? rubyClasses.onSide( rubyTypes.lookup( r, *typed ), *built.side ) : rubyTypes.lookup( r, *typed ), r, subscriptCand );
+            }
+            if( const RubyClosedLookup closed = rubyClosedLookup( r, rubyTypes, rubyClasses ); closed.closed )
+            {
+                return narrowTo( closed.hit, r, subscriptCand );
+            }
+            if( r.recv == RecvKind::ThisObj && RubySelfReach::judges( r, scope ) )
+            {
+                const std::string& key = rubyReach.selfOf( ing, r );
+                for( NodeId c : byName.find( r.calleeName )->second )
+                {
+                    if( langCompatible( ing.symbols[ c ].lang, r.lang ) && sameRoot( c, r.fileId ) && rubyTop.proves( key, c ) )
+                    {
+                        return true;   // Ruby's own lookup on self reaches it (an included module's `def []`)
+                    }
+                }
+            }
+        }
+        else if( !subscriptOnClassObject( r ) && recvEv.narrow( r ) )
+        {
+            return true;   // a stated class: `self` in a class or its bases, a typed parameter or local, a constructed receiver
+        }
+        if( r.recv != RecvKind::ThisObj || rubySelfDecided )
+        {
+            return false;
+        }
+        return narrowTo( narrower.rule1ClassMember( r, scope ), r, subscriptCand )
+            || narrowTo( narrower.rule1BaseWalk( r, scope, r.lang == Lang::Ruby ? rubyUp : chaUp, chaUpDeclared ), r, subscriptCand );
+    };
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/3: resolve loop (per reference)" );
-    for( const Reference& r : ing.references )
+    for( const Reference& site : ing.references )
     {
+        // An element access is a call only where its receiver's class is proven (subscriptOperatorProven above); the
+        // rest of the loop reads it as that call.
+        const bool subscript = site.role == RefRole::Subscript;
+        if( subscript )
+        {
+            subscriptCall      = site;
+            subscriptCall.role = RefRole::Call;
+            if( !subscriptOperatorProven( subscriptCall ) )
+            {
+                continue;
+            }
+        }
+        const Reference& r = subscript ? subscriptCall : site;
         // inheritance / doc-mention / HAS-A → not a call. ABS-3: read/write/import use-sites are ALSO excluded
         // here — they live only in the use-site index, NEVER in the call graph CSR, so PageRank and the default
         // ranked map are unchanged by them (G5). Role Macro (the macro-edges round) IS admitted beside Call: an
@@ -7188,7 +7313,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // From here on every exit names its disposition and the tally counts it when the iteration ends,
         // whichever `continue` ends it. An exit that names nothing is counted Unaccounted (DispositionTally).
         CallDisposition        disposition = CallDisposition::Unaccounted;
-        const DispositionTally tally{ disposition, g.callDispositions };
+        const DispositionTally tally{ disposition, subscript ? subscriptDispositions : g.callDispositions };
         if( r.fromSymbol == kNoNode )
         {
             disposition = CallDisposition::FileScope;   // no caller node for an edge; the use-site index still lists the site
@@ -8528,7 +8653,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // Recorded HERE and nowhere else: this is the exact point where the resolver has finished deciding
         // and is about to commit the edge, so the row states what was committed and what committed it.
         // pincensus.h::classifyPin owns the precedence rule; this site only reports the stage outcomes.
-        if( census )
+        if( census && !subscript )
         {
             // `narrowed` is passed WITHOUT the import pin: it is a latch this loop sets so the receiver
             // rules below cannot append more candidates, and on the ES-import path it says nothing about
@@ -8834,6 +8959,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         v.erase( std::unique( v.begin(), v.end() ), v.end() );
     }
     fillImplementorBound( g, boundEdges );
+    g.rubyMainMixins = rubyMainObjectMixins( ing, rubyBases );
 
     // doc↔code edges: isDocLink refs (markdown `backtick` → code name) → mentions[codeDef] += docFileNode.
     // Resolve the name to real DEFINITIONS (body present), any file; stored OUT of the call graph so a doc

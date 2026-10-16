@@ -270,7 +270,8 @@ inline constexpr std::string_view kGoBuiltinNames[] = {
 //       if(typeof Object.getOwnPropertyDescriptor(t.prototype,n).value==='function')s.add(n)}console.log([...s].sort())"
 //     102 names. TypeScript reads the same table: it runs on the same builtin objects.
 //   kRubyBuiltinMethodNames — Ruby 4.0.7, Hash Array String public_instance_methods(false), identifier-shaped names only
-//     (operators such as `<<` and `[]` are never a call reference's name):
+//     (an operator such as `<<` is never a call reference's name; `[]`/`[]=` is one only as an element access whose
+//     receiver class graph.h subscriptOperatorProven has proven, which no name table decides):
 //     ruby -e 'puts [Hash,Array,String].flat_map{|t| t.public_instance_methods(false)}.map(&:to_s)
 //       .select{|n| n =~ /\A[a-z_][A-Za-z0-9_]*[?!=]?\z/}.uniq.sort'
 //     233 names.

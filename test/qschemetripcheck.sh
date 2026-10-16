@@ -40,6 +40,10 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   captureTagsFacts instead of the retired captureRubyMixinBases; output is byte-identical, but the extraction
 #   path changed, so the number moves. 173, not 172: 172 is 171's rich file tag.
 #   kCacheVersion 31 and kQSnapCacheScheme 20 are unchanged.
+# 2026-10-14, lane/ruby-pair (train 28): RE-PINNED with UPDATE_GOLDEN=1. The only watched text that moved is the kParserVer
+#   declaration (and its mirror): 171 -> 174 (Ruby/Python subscript references and the Ruby main-object mixin binding; 172 is
+#   171's rich file tag; the train renumbers). kCacheVersion 31 and kQSnapCacheScheme 20 are unchanged: what a cached Snapshot
+#   represents is the same, and the parser version already keys every extraction fact it holds.
 # 2026-10-13, PR #349 lands (maintainer renumber commit on the contributor's branch): RE-DERIVED with UPDATE_GOLDEN=1.
 #   The only watched text that moved is the kParserVer declaration (and its mirror): provisional 158 -> 171. The branch
 #   built 156, 158 and 169 (rich file tag 170); main is 167 (rich file tag 168); 171 / rich file tag 172 is above all of

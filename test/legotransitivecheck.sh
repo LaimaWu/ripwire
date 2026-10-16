@@ -160,7 +160,9 @@ then
     if has '<impl n="TaskLib" p="rb/tasklib.rb:2"/>'; then ok "--lego=DSL lists TaskLib (include Rake::DSL) at rb/tasklib.rb:2"; else no "--lego=DSL: no TaskLib row: $( iface )"; fi
     if has '<impl n="MakefileLoader"'; then ok "--lego=DSL lists MakefileLoader"; else no "--lego=DSL: no MakefileLoader"; fi
     if has '<impl n="Singleton"'; then ok "--lego=DSL lists Singleton (extend Rake::DSL)"; else no "--lego=DSL: no Singleton (extend)"; fi
-    if iface | grep -q 'implementors="3"'; then ok "implementors=\"3\": the top-level self.extend adds no row"; else no "DSL count: $( iface )"; fi
+    # lane ruby-pair lifted this floor: the top-level `self.extend Rake::DSL` is Ruby's main object, one more implementor row
+    # (test/subscriptopcheck.sh owns its arms); the three class rows above are unchanged
+    if iface | grep -q 'implementors="4"' && has '<impl t="object" n="main" p="rb/dsl_definition.rb:8"/>'; then ok "implementors=\"4\": the three classes and the main object the top-level self.extend mixes into"; else no "DSL count: $( iface )"; fi
     if iface | grep -q 'implementors_floor'; then no "the bound include still reads as an unbound floor: $( iface )"; else ok "no implementors_floor once the include binds"; fi
 fi
 if lego Helpers

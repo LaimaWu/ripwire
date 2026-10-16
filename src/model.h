@@ -403,16 +403,22 @@ inline bool isJsTsBuiltinMember( std::string_view ctor, std::string_view name ) 
 //             function value. name = the container, fieldName = the written callee, composeRel = the key,
 //             qualifier = p|l|f, argCount = the parameter index. Joined to Value rows only (called_by=/through=, a
 //             may-call clue); never a use site, never in the CSR.
-enum class RefRole : std::uint8_t { Call, Read, Write, Import, Extends, Macro, Type, Value, Through };
+//   Subscript — an element access `recv[ args ]` (Ruby, Python; ingest_binds.h subscriptOperatorRef), named as the
+//             receiver class's subscript OPERATOR METHOD (kSubscriptOperatorMethods: Ruby `[]` / `[]=`, Python
+//             `__getitem__` / `__setitem__`); receiver fields as a call's. NOT a call by itself: graph.h's resolve loop
+//             takes it up as one ONLY where a receiver rule proves the class (subscriptOperatorProven) — `self[ k ]` in a
+//             class, a receiver the source types — and drops it otherwise, with no count anywhere (a `hash[ k ]` is the
+//             builtin's own operator, not an unresolved call). Never a use site.
+enum class RefRole : std::uint8_t { Call, Read, Write, Import, Extends, Macro, Type, Value, Through, Subscript };
 // The number of RefRole enumerators — the bound readRef validates a cached role byte against (see kSymKindCount).
-inline constexpr std::size_t kRefRoleCount = static_cast<std::size_t>( RefRole::Through ) + 1;
+inline constexpr std::size_t kRefRoleCount = static_cast<std::size_t>( RefRole::Subscript ) + 1;
 static_assert( enumCountIsExact<RefRole, kRefRoleCount>(), "kRefRoleCount must name the LAST RefRole enumerator — move it with the append" );
 static_assert( sizeof( RefRole ) == 1, "RefRole must be a single byte (SoA-friendly, smallest int that fits)" );
 
 // the terse `role=` attribute string for the use-site index — a declarative table indexed by the enum, in enum
 // order. The static_assert is the guard a switch's -Werror=switch used to be: a NEW role without a spelling is a
 // build error, never a silent fallback.
-inline constexpr const char* kRefRoleTagTable[] = { "call", "read", "write", "import", "extends", "macro", "type", "value", "through" };
+inline constexpr const char* kRefRoleTagTable[] = { "call", "read", "write", "import", "extends", "macro", "type", "value", "through", "subscript" };
 static_assert( std::size( kRefRoleTagTable ) == kRefRoleCount, "kRefRoleTagTable: one spelling per RefRole, in enum order" );
 inline const char* refRoleTag( RefRole r ) noexcept
 {
@@ -1103,9 +1109,15 @@ enum class LocalBindKind : std::uint8_t
     StaticMember,  // a JS/TS class member declared `static`: var = the member's name, typeName "static", recorded INSIDE its
                    //     body so it attributes to the member. A call on the CLASS reaches only these, a call on an INSTANCE
                    //     only the others (the two sides of the lookup; #373's Ruby class-object rule, here for JS/TS).
+    RubyMainMixin, // parser version 174 (lane ruby-pair): a Ruby file's TOP-LEVEL `include M` / `extend M` / `self.extend M` —
+                   //     self there is the main object, which then answers M's methods (rake's `self.extend Rake::DSL`). One
+                   //     record per constant, at the constant's own start: typeName = the constant as written, importedName =
+                   //     the directive ("include" / "extend"), spanStart = the constant's 1-based line; var stays EMPTY and the
+                   //     record is file-scope, so no local-name table reads it. Read by graph.h rubyMainObjectMixins ONLY
+                   //     (--lego's `<impl t="object" n="main">` row). APPENDED (cache u8).
 };
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::StaticMember ) + 1;
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::RubyMainMixin ) + 1;
 // FE-B: the five kinds only graph.h ReceiverEvidence reads (see RecvType above).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {
@@ -1121,6 +1133,15 @@ static_assert( enumCountIsExact<LocalBindKind, kLocalBindKindCount>(), "kLocalBi
 
 inline constexpr const char* kFnBindLambdaTarget  = "(lambda)";    // parens are illegal in identifiers, so
 inline constexpr const char* kFnBindClobberTarget = "(unknown)";   //   neither sentinel can match a real def
+
+// One main-object implementor row (Graph::rubyMainMixins, ordered by base, then by site): the module the top level mixes in,
+// and the directive's site.
+struct RubyMainMixinRow
+{
+    NodeId        base   = kNoNode;
+    std::uint32_t fileId = 0;
+    std::uint32_t line   = 0;   // the constant's 1-based line
+};
 
 struct Binding
 {

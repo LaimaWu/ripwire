@@ -841,7 +841,7 @@ public:
     // True when reference `refIndex` is NOT a use-site row of this answer.
     bool skip( std::uint32_t refIndex, const Reference& r ) const
     {
-        if( r.role == RefRole::Through )
+        if( r.role == RefRole::Through || r.role == RefRole::Subscript )   // a subscript is a use only as the call it may resolve to
         {
             return true;
         }

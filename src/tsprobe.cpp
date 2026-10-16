@@ -150,7 +150,7 @@ int main( int argc, char** argv )
     {
         // A value use (a function stored or passed) and a call THROUGH a value are not call references: this dump is
         // the pre-resolution CALL list test/callformcheck.sh reads, so they stay out of it (src/valuerefs.h serves them).
-        if( r.fromSymbol != rw::kNoNode && r.role != rw::RefRole::Value && r.role != rw::RefRole::Through )
+        if( r.fromSymbol != rw::kNoNode && r.role != rw::RefRole::Value && r.role != rw::RefRole::Through && r.role != rw::RefRole::Subscript )
         {
             bySym[ r.fromSymbol ].push_back( &r );
         }

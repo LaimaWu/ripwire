@@ -2277,6 +2277,7 @@ constexpr std::uint32_t kIngestParserVerMirror    = 176;  // MUST equal ingest.c
                                                           //   retired. Output byte-identical, extraction path changed. 173, not 172: 172
                                                           //   is 171's rich file tag.
                                                           // 173 = 2026-10-14 (train 28 grep-carrier: value refs through ?? || && / or and)
+                                                          // 174 = lane ruby-pair (train 28: Ruby/Python subscript references, Ruby main-object mixins)
                                                           // 171 = 2026-10-13 (PR #349 Clojure lands above main's 167 / rich tag 168 and the
                                                           //   branch's own 169 / rich tag 170; see the kParserVer note)
                                                           // 167 = 2026-10-11 (train 27 release: lane fix27-cpp-subscript's 166 renumbered above the lane build;

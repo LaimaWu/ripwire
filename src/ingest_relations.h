@@ -2016,6 +2016,7 @@ inline std::string_view rubyNamedDirective( TSNode n, std::string_view src, std:
 // records, in SOURCE order (the same shape as elixirAliasGroup). A non-constant argument (`include
 // Object.const_get(:X)`, `include mod`) contributes nothing; the constant ones beside it still do. The constant
 // NODES: captureIncludes reads each one's text for its Include record, and the @reference.mixin capture its byte.
+inline std::vector<TSNode> rubyConstantArguments( TSNode n );
 inline std::vector<TSNode> rubyMixinTargets( TSNode n, std::string_view src )
 {
     std::vector<TSNode>    out;
@@ -2024,7 +2025,14 @@ inline std::vector<TSNode> rubyMixinTargets( TSNode n, std::string_view src )
     {
         return out;
     }
-    const TSNode args = fieldChild( n, NodeField::Arguments );
+    return rubyConstantArguments( n );
+}
+
+// The constant (or constant-path) arguments of call `n`, in source order — a mixin directive's targets
+inline std::vector<TSNode> rubyConstantArguments( TSNode n )
+{
+    std::vector<TSNode> out;
+    const TSNode        args = fieldChild( n, NodeField::Arguments );
     if( ts_node_is_null( args ) )
     {
         return out;
@@ -2110,7 +2118,8 @@ inline bool rubyAttrAtClassBodyLevel( TSNode n, std::string_view src ) noexcept
 // graph.h's inheritance graph and base walk read it unchanged. `extend` reaches the class's singleton, not its
 // instances; the graph keeps one method namespace per class (instance and class methods alike), so it is an ancestor
 // there too. So does one inside a module body's `included do … end` (rubyInConcernIncludedBlock). A directive anywhere
-// else — a method body, another block, a file's top level — emits none. Since lane lego-transitive the reference is also an
+// else — a method body, another block, a file's top level — emits none (a top-level one mixes into Ruby's main object:
+// ingest_ruby.h captureRubyMainMixins records it for --lego's main row instead). Since lane lego-transitive the reference is also an
 // IMPLEMENTOR edge: graph.h's implementors builder admits a Ruby module as a base, so --lego=M lists every class (and
 // module) that mixes M in, and test/rubyinheritcheck.sh floor (b) is closed.
 // SLICE 4a moved the READ off the captureIncludes walk: queries/ruby/tags.scm captures the directive's call shape as
