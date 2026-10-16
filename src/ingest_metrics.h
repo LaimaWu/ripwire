@@ -1663,7 +1663,7 @@ inline ParamShape cc_paramShape( TSNode defNode, Lang lang, SymKind kind, std::s
 
 // B2.2 CALL-SITE ARITY: count the positional arguments of the call whose callee identifier is `nameNode`.
 // Returns { argCount, known }. `known` is true ONLY when a recognized call node + argument container is
-// found for a supported language AND no spread/splat/apply argument is present (which would make the count
+// found for a supported language AND no spread/splat/apply/pack-expansion argument is present (which would make the count
 // unreliable). Any uncertainty → { 0, false } so the resolver never arity-filters that call (zero false
 // negatives). Pure-syntactic, deterministic, allocation-free. Languages: C++/Python/TS/JS/Java/Swift/C#.
 inline std::pair<std::uint16_t, bool> callArity( TSNode nameNode, Lang lang, std::string_view /*src*/ ) noexcept
@@ -1718,9 +1718,10 @@ inline std::pair<std::uint16_t, bool> callArity( TSNode nameNode, Lang lang, std
     {   if( !ts_node_is_named( c ) ) { return true; }                                          // '(' ')' ',' separators
         const char* ct = ts_node_type( c );
         if( kindIs( ct, "comment" ) ) { return true; }
-        if( std::strstr( ct, "splat" ) != nullptr || std::strstr( ct, "spread" ) != nullptr || kindIs( ct, "..." ) )
+        if(    std::strstr( ct, "splat" ) != nullptr || std::strstr( ct, "spread" ) != nullptr || kindIs( ct, "..." )
+            || kindIs( ct, "parameter_pack_expansion" ) )
         {
-            unreliable = true;                                    // `f(*args)` / `f(...xs)` → unreliable
+            unreliable = true;                                    // `f(*args)` / `f(...xs)` / C++ `f(t...)` (a pack of any size) → unreliable
             return false;
         }
         ++count;
