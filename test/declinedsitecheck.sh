@@ -563,6 +563,25 @@ rc, out = run( PYF, "--callees=caller/use.py:load_twice", "--legend=full" )
 say( rc == 0 and "No <dc> row names those quoted sites" not in out and "inert quote AST" not in out, "[L] l_rows_legend_neg",
      "the same answer on the Python tree alone carries neither sentence (present-only)" )
 
+# ── (M) train 28: the review's N1 (honesty-adjacent) and N3 ──────────────────────────────────────────────────────────
+# N1: both declined_calls= clauses said "two or more same-language definitions, none in the caller's file or directory"
+# of every counted call, false beside a Ruby side-cut row whose ONE candidate is in the caller's own file (rbside). The
+# clause now scopes that to tier 3 and says a name gate or Ruby's side/new rule may decline one. N3: the MCP declined_note
+# describes the "declined_sites" entries by their own keys, not the XML <dc in= p=> attributes.
+print( "=== (M) the declined_calls= clauses scope tier 3; the MCP note speaks its own keys ===" )
+UNSCOPED = "none in the caller's file or directory, and no qualifier, receiver type or include chose one, so no edge"
+SCOPED = "chose one (tier 3); a name gate or Ruby's side/new rule may decline one"
+x = ask( RBS, "callees", "run", "--legend=full" )
+say( x.ok and any( d.get( "gate" ) == "side" and d.get( "cands" ) == "1" for d in x.dc ) and SCOPED in x.text and UNSCOPED not in x.text,
+     "[M] m_rows_clause", "rbside --callees=run beside a gate=\"side\" cands=\"1\" row: the rows clause scopes tier 3", x.why() )
+x = ask( RBS, "impact", "lib/widget.rb:helper", "--legend=full" )
+say( x.ok and ( "declined_calls=" not in x.text or ( SCOPED in x.text and UNSCOPED not in x.text ) ), "[M] m_base_clause",
+     "the row-less clause (impact) is scoped the same way where it rides", x.why() )
+m = mcp( "find_symbol", { "path": GO, "symbol": "doPackage" } ) or {}
+note = str( m.get( "declined_note", "" ) )
+say( bool( m.get( "declined_sites" ) ) and note.startswith( "declined_sites:" ) and "{name, line" in note and "<dc" not in note, "[M] m_mcp_note",
+     "MCP find_symbol declined_note names the declined_sites keys, not <dc> attributes", note[ :160 ] )
+
 # ── (J) the predicates can fail ────────────────────────────────────────────────────────────────────────────────────
 print( "=== (J) the predicates reject what they must ===" )
 fake = Answer( 0, '<callers of="x" count="1" declined_calls="1"><s n="a" p="f:1"/><dc in="b" p="g:2" cands="2" of_def="1"/></callers>', "callers" )

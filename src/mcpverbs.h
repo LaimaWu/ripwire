@@ -867,7 +867,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     }
     out += nextFieldJson( splitArmLegend( anySplit ), "split_note" );   // attrib-multidef Q1: likewise for "prov":"split"
     out += declinedSitesJson( sqDc, referencingOnly, /*mcp=*/true );   // lane declined-sites: the CLI <dc> rows, never in calls/calledBy or count
-    out += nextFieldJson( declinedSitesLegend( declinedSitesLegendFlags( sqDc, referencingOnly, sqDcCut ) ), "declined_note" );   // their reading, only when they ride
+    out += nextFieldJson( declinedSitesLegend( declinedSitesLegendFlags( sqDc, referencingOnly, sqDcCut ), /*mcp=*/true ), "declined_note" );   // their reading, only when they ride
     out += nextFieldJson( callSitesAtLegend( calledBySites.any, calledBySites.anyCut, kCallSitesPerRowCap ), "sites_note" );   // CALLSITE-AT: its reading, only when a row carries it (nextFieldJson: "" -> no key, JSON-escaped)
     // Reference-as-value round: the CLI's <vrs> window, the same rows (callhierarchy.h computed them once): valueRefs =
     // where the symbol is USED AS A VALUE (the --callers side), valueCallees = what it stores/passes and may call

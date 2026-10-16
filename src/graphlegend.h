@@ -637,7 +637,7 @@ inline const char* capLegendClause( bool active ) noexcept
 // declinedCallsLegend( bool ) takes the emitter's own attribute-present condition, never a re-derivation. No
 // double hyphen anywhere, because it lands inside an XML comment.
 inline constexpr const char* kDeclinedCallsLegend =
-    "declined_calls=K (absent when 0) counts call SITES the resolver declined to bind: the called name has two or more same-language definitions, none in the caller's file or directory, and no qualifier, receiver type or include chose one, so no edge exists and no count or row here includes them (the map header's declined=). Callers form: declined calls that could have meant this selector's definitions; impact form: that could have reached SYM or a symbol in its radius; callees form: declined calls these definitions make. Each call counts once however many candidates it had; the uses verb on the called name lists the sites. ";
+    "declined_calls=K (absent when 0) counts call SITES the resolver declined to bind: the called name has two or more same-language definitions, none in the caller's file or directory, and no qualifier, receiver type or include chose one (tier 3); a name gate or Ruby's side/new rule may decline one (the callers and callees <dc> rows say which, gate=; a declined new carries none). No edge exists and no count or row here includes them (the map header's declined=). Callers form: declined calls that could have meant this selector's definitions; impact form: that could have reached SYM or a symbol in its radius; callees form: declined calls these definitions make. Each call counts once however many candidates it had; the uses verb on the called name lists the sites. ";
 // The builtin-method name gate's declines (graph.h BuiltinMethodGate) ride the same count with ONE definition possible;
 // this clause is charged only where the gate declined at least one call in the graph (Graph::gateDeclinedCalls), so an
 // answer on a tree the gate never touched keeps its bytes.
@@ -677,7 +677,7 @@ inline std::string declinedCallsLegendWithGates( bool on, bool gateDeclined, boo
 // Where <dc> rows ride, the clause above cannot say "no count or row here includes them": the rows name those calls. This
 // twin says so instead (gates review R9) and is the one such an answer carries; everything else in it is the clause above.
 inline constexpr const char* kDeclinedCallsRowsLegend =
-    "declined_calls=K (absent when 0) counts call SITES the resolver declined to bind: the called name has two or more same-language definitions, none in the caller's file or directory, and no qualifier, receiver type or include chose one, so no edge exists and no count here includes them; the <dc> rows below name them (the map header's declined=). Callers form: declined calls that could have meant this selector's definitions; impact form: that could have reached SYM or a symbol in its radius; callees form: declined calls these definitions make. Each call counts once however many candidates it had; the uses verb on the called name lists the sites. ";
+    "declined_calls=K (absent when 0) counts call SITES the resolver declined to bind: the called name has two or more same-language definitions, none in the caller's file or directory, and no qualifier, receiver type or include chose one (tier 3); a name gate or Ruby's side/new rule may decline one, see gate= (a declined new carries none). No edge exists and no count here includes them; the <dc> rows below name them (the map header's declined=). Callers form: declined calls that could have meant this selector's definitions; impact form: that could have reached SYM or a symbol in its radius; callees form: declined calls these definitions make. Each call counts once however many candidates it had; the uses verb on the called name lists the sites. ";
 // Beside <dc> rows the rows clause says the rows name the declined calls; the inert quoted sites it also counts have none.
 inline constexpr const char* kInertNoDcRowClause = "No <dc> row names those quoted sites: they reach no decline site. ";
 // inertDeclined (#380): the callees form's Elixir inert quote sites ride the same count with no <dc> row (they never reach a
@@ -726,14 +726,22 @@ struct DeclinedSitesLegendFlags
     bool cut = false; // the root carries dc_shown= / dc_next=
     bool cand = false; // a row carries cand= (legend full)
 };
-inline std::string declinedSitesLegend( const DeclinedSitesLegendFlags& f )
+// train 28 (declined-sites review N3): the MCP twins carry the same sites as "declined_sites" entries with their own keys, so
+// their declined_note names those keys ({name, line, cands, via} / {in, file, line, cands}) instead of the XML attributes.
+inline constexpr const char* kDeclinedSitesMcpLead =
+    "declined_sites: each entry a call SITE the resolver declined to bind; NOT an edge and NOT a caller or callee claim (counted in declined_calls, never in count or a row above). cands=K: K in-tree definitions the call could have meant (K may be 1); the resolver proved none; not a claim this call reaches any of them (it may reach an out-of-tree, builtin or standard-library method). ";
+inline constexpr const char* kDeclinedSitesCalleesFormMcp =
+    "{name, line, via=declined}: the called name and the line of the call, in the body of one of these definitions. ";
+inline constexpr const char* kDeclinedSitesCallersFormMcp =
+    "{in, file, line, via=declined}: the definition making the call and the call's file and line, listed because its candidates include a definition of this selector. ";
+inline std::string declinedSitesLegend( const DeclinedSitesLegendFlags& f, bool mcp = false )
 {
     if( !f.any )
     {
         return {};
     }
-    std::string out( kDeclinedSitesLegend );
-    out += f.callersForm ? kDeclinedSitesCallersForm : kDeclinedSitesCalleesForm;
+    std::string out( mcp ? kDeclinedSitesMcpLead : kDeclinedSitesLegend );
+    out += f.callersForm ? ( mcp ? kDeclinedSitesCallersFormMcp : kDeclinedSitesCallersForm ) : ( mcp ? kDeclinedSitesCalleesFormMcp : kDeclinedSitesCalleesForm );
     out += f.side ? kDeclinedSitesSideClause : "";
     out += f.nameGate ? kDeclinedSitesNameGateClause : "";
     out += f.ofDef ? ( f.callersForm ? kDeclinedSitesOfDefCallers : kDeclinedSitesOfDefCallees ) : "";
