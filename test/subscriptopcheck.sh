@@ -316,8 +316,11 @@ if lego Tasks l1; then
     if [ "$m" = "<impl t=\"object\" n=\"main\" p=\"registry.rb:$EXT1\"/> <impl t=\"object\" n=\"main\" p=\"registry.rb:$EXT2\"/> " ]; then
         ok "L1 self.extend Tasks and extend ::Tasks: two main rows at their constants"
     else no "L1 --lego=Tasks main rows: got '$m'"; fi
-    if grep -q '<iface n="Tasks"[^>]* implementors="2"' "$DIR/l1.xml"; then ok "L1 implementors= counts the main rows"
-    else no "L1 implementors= should be 2: $( grep -o '<iface [^>]*>' "$DIR/l1.xml" )"; fi
+    # train 28 (the lane review's carried item; by design, rule 4): the two directives are two ROWS of ONE implementor — both mix
+    # into the same main object — so implementors= counts it once. Was implementors="2" (one per directive). The two rows stay
+    # asserted above; L2 below keeps a class beside main at 2.
+    if grep -q '<iface n="Tasks"[^>]* implementors="1"' "$DIR/l1.xml"; then ok "L1 implementors= counts the main object once (two directives, two rows)"
+    else no "L1 implementors= should be 1 (one main object): $( grep -o '<iface [^>]*>' "$DIR/l1.xml" )"; fi
     if grep -q '<!-- impl t="object" n="main":' "$DIR/l1.xml"; then ok "L1 the main-row legend clause rides with the row"
     else no "L1 no main-row legend clause"; fi
     if command -v xmllint > /dev/null 2>&1; then

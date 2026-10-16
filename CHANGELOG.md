@@ -72,7 +72,8 @@ share the path and is not armed. `--uses` lists no subscript site. Parser versio
 
 A top-level `include M`, `extend M` or `self.extend M` makes Ruby's main object answer M's methods (rake's
 dsl_definition.rb ends with `self.extend Rake::DSL`). `--lego=M` now lists it as `<impl t="object" n="main"
-p="FILE:LINE">`, counted in `implementors=`, with a present-only legend clause. Ruby-only: no other indexed language has
+p="FILE:LINE">`, one row per directive, counted once in `implementors=` (every directive mixes into the same object),
+with a present-only legend clause. Ruby-only: no other indexed language has
 an object that a file's top level mixes a module into. Not read: a directive inside a top-level `if`/`begin` or a block,
 `prepend`, a mixin onto another object, and a module the tree never opens. The ranked `--for` lego section is unchanged.
 Gate: `test/subscriptopcheck.sh` (L arms).

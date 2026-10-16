@@ -9124,7 +9124,7 @@ inline std::span<const RubyMainMixinRow> legoMainRowsOf( std::span<const RubyMai
 
 // The present-only legend clause of a main-object row (no `--` inside: it rides in an XML comment).
 inline constexpr std::string_view kLegoMainRowClause =
-    "<!-- impl t=\"object\" n=\"main\": Ruby's main object, the self of a file's top level, which that file's top-level include or extend of this module makes answer its methods; p= the directive's constant. Counted in implementors=; no class is behind it, so no deeper row walks below it. -->";
+    "<!-- impl t=\"object\" n=\"main\": Ruby's main object, the self of a file's top level, which that file's top-level include or extend of this module makes answer its methods; p= the directive's constant, one row per directive. Counted once in implementors= however many directives list it (there is one main object); no class is behind it, so no deeper row walks below it. -->";
 inline const std::vector<std::vector<std::uint8_t>> kNoImplementorBound{};   // the empty bound map: every edge reads ByName
 
 // One <impl> row. `line` (S2): the TARGETED answer puts the definition's line on p= (p="file:LINE", the --uses and
@@ -9286,7 +9286,7 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
         const LegoClosurePage deep = focusId != kNoNode ? legoClosurePage( implementors, targeted.implementorBound != nullptr ? *targeted.implementorBound : kNoImplementorBound, id, targeted.pageLimit, targeted.pageOffset ) : LegoClosurePage{};
         if( focusId != kNoNode )
         {
-            hdr = "\" defs=\"" + std::to_string( definitionCountOfName( ing, id ) ) + "\" implementors=\"" + std::to_string( impls.size() + mainRows.size() ) + "\""
+            hdr = "\" defs=\"" + std::to_string( definitionCountOfName( ing, id ) ) + "\" implementors=\"" + std::to_string( impls.size() + ( mainRows.empty() ? 0u : 1u ) ) + "\""
                 + legoClosureAttrs( deep, std::string( pathRel( isym.fileId ) ) + ":" + isym.name,
                                     deep.unwalked.empty() ? std::string() : std::string( pathRel( ing.symbols[ deep.unwalked.front() ].fileId ) ) + ":" + ing.symbols[ deep.unwalked.front() ].name,
                                     targeted.pageLimit );
@@ -9380,6 +9380,8 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
         {
             w.write( "<!-- +more -->" );
         }
+        // train 28 (ruby-pair review): one row per directive (each p= a site), but ONE implementor — every top-level directive
+        // mixes into the same main object, so implementors= above counts it once however many rows list it
         for( const RubyMainMixinRow& m : mainRows )   // targeted only (empty otherwise): after the class rows, before the deeper ones
         {
             w.write( "<impl t=\"object\" n=\"main\" p=\"" );  w.write( escapeXml( pathRel( m.fileId ), esc ) );
