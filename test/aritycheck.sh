@@ -131,7 +131,7 @@ expect tsval    call_g        "a.ts:7 b.ts:5"             "[P] B1 TS ((a, b) => 
 expect tsval    call_u        "b.ts:6"                    "[N] B1 control: a bare unannotated-binding arrow with typed params still drops for too few"
 expect fallback call_q        "a.cpp:1"                   "[P] B2 C++ q(1,2): the too-many q(int) stays out when the only survivor is too-few (head ⊆ base)"
 expect tsfallback call_m      "a.ts:2"                    "[P] B2 TS x.m('a','b'): the too-many B.m(a) stays out when A.m(a,b,c) is too-few"
-expect packcall call_p        "a.cpp:1 b.cpp:1"           "[P] B3 C++ p(std::forward<T>(t)...): a pack expansion is an unknown count — p(int,int) kept"
+expect packcall fwd           "a.cpp:1 b.cpp:1"           "[P] B3 C++ p(std::forward<T>(t)...): a pack expansion is an unknown count — p(int,int) kept"
 expect packcall call_p2       "a.cpp:1 b.cpp:1"           "[P] B3 C++ p(t...): a pack expansion is an unknown count — p(int,int) kept"
 expect packcall call_s        "a.ts:1 b.ts:1"             "[N] B3 TS s(...xs): spread is an unknown count"
 expect packcall call_k        "a.py:1 b.py:1"             "[N] B3 Python k(*xs): unpack is an unknown count"
