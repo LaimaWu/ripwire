@@ -6914,7 +6914,11 @@ struct Narrower
             return namesStdType( declared.importedName ) ? RecvVarType{} : RecvVarType{ declared.typeName, !declared.importedName.empty(), &declared };
         }
         const auto vit = varType.find( keyBind );
-        return ( vit == varType.end() ) ? RecvVarType{} : RecvVarType{ vit->second.type, vit->second.writtenQualified, nullptr };
+        if( vit == varType.end() || ( vit->second.arrowOnly && !r.viaArrow ) )
+        {
+            return RecvVarType{};   // a smart pointer's pointee (a call result's, train 29) answers `->` only, never `.`
+        }
+        return RecvVarType{ vit->second.type, vit->second.writtenQualified, nullptr };
     }
 
     // the qualifier the receiver's declaration wrote — the lexical record's own, else the flat table's kept one (read while

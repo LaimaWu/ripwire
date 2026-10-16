@@ -98,6 +98,56 @@ inline bool memberNeverReachesFreeFunction( Lang l ) noexcept
         || l == Lang::CSharp || l == Lang::Swift;
 }
 
+// a call through a module alias (`pkg.F()`) reaches the module's package-level functions only, never a method: Go, where a
+// package qualifier never names a receiver (train 29 call-result-typing, review decision (b): nfpm's `nfpm.Get( … )` beside
+// `( *Config ).Get`). A local spelled like the import hides it before this is asked (graph.h ladderProves).
+inline bool moduleCallReachesFunctionsOnly( Lang l ) noexcept
+{
+    switch( l )
+    {
+        case Lang::Go: return true;
+        default:       return false;
+    }
+}
+
+// (L) the languages whose own receiver rules (Rules 1, 2c, FE-A) answer self, fields and paths, so receiver evidence adds
+// only a LOCAL whose class a binding states (ReceiverEvidence::narrowTypedLocal): Rust, whose locals are typed by the call
+// results graph.h's resolve loop records (train 29; the rust-receivers lane adds written `let x: T` and parameters).
+inline bool receiverLocalsOnly( Lang l ) noexcept
+{
+    switch( l )
+    {
+        case Lang::Rust: return true;
+        default:         return false;
+    }
+}
+
+// (L) the languages whose call-result types land in Rule 2's tables (graph.h varType / scopedRecvDecls) rather than in the
+// receiver-evidence local table: C++ and Objective-C++, whose member calls Rule 2 narrows
+inline bool callResultSinkIsRule2( Lang l ) noexcept
+{
+    switch( l )
+    {
+        case Lang::Cpp: case Lang::ObjC: return true;
+        default:                         return false;
+    }
+}
+
+// (L) call-result typing: where an UNQUALIFIED declared result type is looked up — Go, Java, Kotlin and TS: the callee's own
+// directory (Go's package; a Java/Kotlin package, a TS module's neighbours — a class imported from elsewhere is a floor);
+// Rust, the crate (any in-tree class; a `use` of an outside type is a disclosed floor of the qualifier rule); None, every
+// language that records no ReturnType.
+enum class ResultTypeScope : std::uint8_t { None, PackageDir, Tree };
+inline ResultTypeScope callResultScopeOf( Lang l ) noexcept
+{
+    switch( l )
+    {
+        case Lang::Go: case Lang::Java: case Lang::Kotlin: case Lang::TypeScript: return ResultTypeScope::PackageDir;
+        case Lang::Rust: case Lang::Cpp: case Lang::ObjC:                        return ResultTypeScope::Tree;
+        default:                                                                 return ResultTypeScope::None;
+    }
+}
+
 // the languages where `Cls.m()` is a call on the CLASS (a static or an unbound method): C++ spells that `Cls::m()` (a
 // qualifier, the canonical tier's), so a C++/C/Rust receiver spelled like a class is a variable or a member; Ruby's class
 // receivers are its own lookup's question
@@ -236,10 +286,11 @@ struct ReceiverEvidence
         }
     }
 
-    void addLocalFact( const std::string& k, const Binding& b )
+    void addLocalFact( const std::string& k, const Binding& b ) { addLocalFact( k, b, b.typeName ); }
+    void addLocalFact( const std::string& k, const Binding& b, std::string_view type )
     {
         const bool                  spanned = b.spanEnd > b.spanStart;
-        LocalFact                   f{ spanned ? b.spanStart : 0u, spanned ? b.spanEnd : 0u, b.typeName };
+        LocalFact                   f{ spanned ? b.spanStart : 0u, spanned ? b.spanEnd : 0u, std::string( type ) };
         std::vector<LocalFact>&     facts = localType[ k ];
         if( std::none_of( facts.begin(), facts.end(), [ & ]( const LocalFact& g ) { return g.start == f.start && g.end == f.end && g.type == f.type; } ) )
         {
@@ -346,6 +397,7 @@ struct ReceiverEvidence
             }
         }
         const std::size_t N = ing.symbols.size();
+        std::vector<const Binding*> qualified;   // typed locals written `pkg.T`: decided once every import alias is known
         for( const Binding& b : ing.bindings )
         {
             if( b.kind == LocalBindKind::ModuleAlias && b.fromSymbol == kNoNode && !b.var.empty() && !b.isFromAssignment )
@@ -367,16 +419,7 @@ struct ReceiverEvidence
             {
                 continue;
             }
-            // a typed local the extractor also indexed as a symbol of its own (a Go `var c T` inside a function) belongs
-            // to the function that declares it
-            NodeId from = b.fromSymbol;
-            if( !callableKind( ing.symbols[ from ].kind ) && !classLike( ing.symbols[ from ].kind ) )
-            {
-                if( const NodeId fn = enclosingFn( from ); fn != kNoNode )
-                {
-                    from = fn;
-                }
-            }
+            const NodeId from = factScope( b );
             const bool typedLocal = b.kind == LocalBindKind::RecvType
                                  || ( b.kind == LocalBindKind::Type && ( ing.symbols[ b.fromSymbol ].lang == Lang::TypeScript
                                                                          || ing.symbols[ b.fromSymbol ].lang == Lang::Python ) );
@@ -386,6 +429,10 @@ struct ReceiverEvidence
                 {
                     staticMember[ from ] = 1;
                 }
+            }
+            else if( typedLocal && !b.var.empty() && b.kind == LocalBindKind::RecvType && !b.importedName.empty() )
+            {
+                qualified.push_back( &b );
             }
             else if( typedLocal && !b.var.empty() )
             {
@@ -414,7 +461,100 @@ struct ReceiverEvidence
                 }
             }
         }
+        // a written type `pkg.T` (the Go capture is its only writer: importedName = the qualified text) names a class of THIS
+        // tree only when `pkg` is an import of an in-tree package: `f *os.File` beside an in-tree `File` is os's File, never
+        // ours (test/receiverevidencecheck.sh (L) NearOSParam). Anything else keeps the name as a tombstone: it proves nothing.
+        for( const Binding* q : qualified )
+        {
+            const bool inTree = qualifiedClassInTree( q->fileId, q->importedName, q->typeName );
+            addLocalFact( keyOf( factScope( *q ), '#', q->var ), *q, inTree ? std::string_view( q->typeName ) : std::string_view{} );
+        }
         active = true;
+    }
+    // the definition a local binding belongs to: a typed local the extractor also indexed as a symbol of its own (a Go
+    // `var c T` inside a function) belongs to the function that declares it
+    NodeId factScope( const Binding& b ) const
+    {
+        NodeId from = b.fromSymbol;
+        if( from < ing.symbols.size() && !callableKind( ing.symbols[ from ].kind ) && !classLike( ing.symbols[ from ].kind ) )
+        {
+            if( const NodeId fn = enclosingFn( from ); fn != kNoNode )
+            {
+                from = fn;
+            }
+        }
+        return from;
+    }
+    // the import path the file-scope name `name` binds in file `fileId` ("" when none, or rebound)
+    std::string_view importPathOf( std::uint32_t fileId, std::string_view name ) const
+    {
+        const auto it = moduleAlias.find( keyOf( fileId, '#', name ) );
+        return it == moduleAlias.end() ? std::string_view{} : std::string_view( it->second );
+    }
+    // does the written `qualifier.cls` (`whole`, as file `fileId` spells it) name an in-tree class: its qualifier is an import
+    // of a package this tree holds — the exact package path when the tree has module facts (go.mod), else a directory that
+    // ends the path, segment-aligned, holding a class of that name
+    bool qualifiedClassInTree( std::uint32_t fileId, std::string_view whole, std::string_view cls ) const
+    {
+        const std::size_t dot = whole.find( '.' );
+        if( dot == std::string_view::npos || cls.empty() || !classNames.contains( std::string( cls ) ) )
+        {
+            return false;
+        }
+        const std::string_view path = importPathOf( fileId, whole.substr( 0, dot ) );
+        if( path.empty() )
+        {
+            return false;
+        }
+        if( goPackages != nullptr && !goPackages->known.empty() )
+        {
+            return goPackages->known.contains( std::string( path ) );
+        }
+        for( const std::vector<NodeId>& inFile : classesByFile )
+        {
+            for( NodeId c : inFile )
+            {
+                const std::string_view dir = includerDir( rootRelPath( ing, ing.symbols[ c ].fileId ) );
+                if( ing.symbols[ c ].name == cls && !dir.empty() && path.size() >= dir.size() && path.ends_with( dir )
+                    && ( path.size() == dir.size() || path[ path.size() - dir.size() - 1 ] == '/' ) )
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    // (L) call-result typing: the local `b` (a LocalBindKind::CallResult) holds class `cls` over its span — the class
+    // REPLACES the empty tombstone its own declaration recorded there (the same span), so no other binding of the name
+    // changes. False when that declaration recorded no tombstone (nothing to type).
+    bool typeCallResult( const Binding& b, std::string_view cls )
+    {
+        const auto it = localType.find( keyOf( factScope( b ), '#', b.var ) );
+        if( it == localType.end() || cls.empty() )
+        {
+            return false;
+        }
+        const bool spanned = b.spanEnd > b.spanStart;
+        for( LocalFact& f : it->second )
+        {
+            if( f.start == ( spanned ? b.spanStart : 0u ) && f.end == ( spanned ? b.spanEnd : 0u ) && f.type.empty() )
+            {
+                f.type.assign( cls );
+                return true;
+            }
+        }
+        // TS: the base pass reads a call initializer as a constructor (`const c = makeConfig()` → a Type record naming
+        // `makeConfig`); when no class has that name, that record is this declaration's own guess, and the declared result
+        // replaces it
+        for( LocalFact& f : it->second )
+        {
+            if( f.type == b.typeName && !classNames.contains( f.type ) )
+            {
+                f.type.assign( cls );
+                return true;
+            }
+        }
+        return false;
     }
 
     // ── queries ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -758,9 +898,14 @@ struct ReceiverEvidence
         // C++, Ruby, Rust and C keep their own receiver rules (Rules 1, 2, 2b, 2c): this one adds the languages that had none
         const bool typedLang = r.lang == Lang::JavaScript || r.lang == Lang::TypeScript || r.lang == Lang::Python || r.lang == Lang::Go
                             || r.lang == Lang::Java || r.lang == Lang::Kotlin || r.lang == Lang::CSharp || r.lang == Lang::Swift;
-        if( !active || r.fromSymbol >= ing.symbols.size() || !r.qualifier.empty() || !typedLang )
+        const bool localsOnly = receiverLocalsOnly( r.lang );
+        if( !active || r.fromSymbol >= ing.symbols.size() || !r.qualifier.empty() || !( typedLang || localsOnly ) )
         {
             return false;
+        }
+        if( localsOnly )
+        {
+            return narrowTypedLocal( r );
         }
         if( !isMemberCallRef( r ) )
         {
@@ -809,6 +954,23 @@ struct ReceiverEvidence
         }
         found.resize( kept );
         return !found.empty();
+    }
+
+    // (L) a language whose own receiver rules answer self / fields / paths (receiverLocalsOnly): only `local.m()` on a local
+    // whose class a binding states — a call result typed by graph.h's resolve loop — reaches the class's members here
+    bool narrowTypedLocal( const Reference& r ) const
+    {
+        if( !isMemberCallRef( r ) )
+        {
+            return false;
+        }
+        const Chain ch = chainOf( r );
+        if( !ch.valid || !ch.path.empty() || !ch.ctor.empty() || ch.root.empty() || isThisRoot( ch.root ) )
+        {
+            return false;
+        }
+        const std::optional<std::string_view> t = localAt( r.fromSymbol, ch.root, r.startByte );
+        return t.has_value() && !t->empty() && methodOf( *t, r.calleeName, false );
     }
 
     // Python `feed = parser.feed; … feed( data )`: the alias names a typed object's method

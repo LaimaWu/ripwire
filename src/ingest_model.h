@@ -998,6 +998,8 @@ inline void emitBindings( IngestResult& result, std::vector<RawBind>& rawBinds, 
                        return a.kind < b.kind;
                    }
                    if( a.typeName != b.typeName ) { return a.typeName < b.typeName; }
+                   if( a.resultIndex != b.resultIndex ) { return a.resultIndex < b.resultIndex; }   // ReturnType: one record per position
+                   if( a.unwrapDepth != b.unwrapDepth ) { return a.unwrapDepth < b.unwrapDepth; }
                    return a.importedName < b.importedName;
                } );
     result.bindings.resize( rawBinds.size() );
@@ -1009,6 +1011,8 @@ inline void emitBindings( IngestResult& result, std::vector<RawBind>& rawBinds, 
         b.fileId     = rb.fileId;
         b.kind       = rb.kind;
         b.isFromAssignment = rb.isFromAssignment;
+        b.resultIndex = rb.resultIndex;
+        b.unwrapDepth = rb.unwrapDepth;
         b.startByte  = rb.startByte;   // the declaration a VarDecl and its typed record share (Rule 2 lexical lookup)
         b.spanStart  = rb.spanStart;   // shadow fix round: the declaring block's span rides through
         b.spanEnd    = rb.spanEnd;

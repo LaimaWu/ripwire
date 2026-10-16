@@ -6487,7 +6487,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
 
     // P2-D one-hop type narrowing over the canonical scope::name map above (no new pass): Rule 1 pins `this->m()` / `self.m()` to the caller's enclosing class; Rule 2
     // pins `x.m()` to the variable's type (a parameter's through the lexical table); Rule 3 pins a call to the ONE included file defining it — all BEFORE the spray. See resolve.h.
-    const ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );
+    ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );   // not const: (L) call-result typing fills an `auto` declaration's type
     const HashMap<std::string, std::vector<std::string>> usingReexports = buildUsingReexports( ing );
     const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId, usingReexports );
     const HashMap<std::string, char> memberFields = Narrower::memberFieldNames( ing );   // Rule 2c's member-field veto and Rule 2b's declared-member set, "<Owner>#<field>" (C/C++)
@@ -6677,6 +6677,132 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         recvEv.goPackages = &falseEdges.goPackages;
         recvEv.build();
     }
+    // (L) call-result typing (train 29 lane call-result-typing; test/receiverevidencecheck.sh (L)): each LocalBindKind::CallResult
+    // by its call's key — (file << 32 | the callee name's byte), the call Reference's own — and each definition's declared
+    // results (LocalBindKind::ReturnType) by (file << 32 | its start byte), which Symbol::sigStartByte joins. The resolve loop
+    // types a CallResult's local from the ONE proven target its own call commits — no second ladder: the loop's decision IS the
+    // input, so the two cannot disagree (review R7) — and the uses that follow it in (file, byte) order read the type through
+    // the receiver-evidence tables. One level: a call whose receiver is itself call-result typed resolves before or after its
+    // own record by order alone, and is not iterated (floor, test/receiverevidencecheck.sh (L) use_path).
+    HashMap<std::uint64_t, std::vector<std::uint32_t>> callResultAt;
+    HashMap<std::uint64_t, std::vector<std::uint32_t>> returnTypesAt;
+    for( std::uint32_t bi = 0; bi < ing.bindings.size(); ++bi )
+    {
+        const Binding& b = ing.bindings[ bi ];
+        if( b.kind == LocalBindKind::CallResult && !b.var.empty() )
+        {
+            callResultAt[ ( std::uint64_t( b.fileId ) << 32 ) | b.startByte ].push_back( bi );
+        }
+        else if( b.kind == LocalBindKind::ReturnType && !b.typeName.empty() )
+        {
+            returnTypesAt[ ( std::uint64_t( b.fileId ) << 32 ) | b.startByte ].push_back( bi );
+        }
+    }
+    // is the class a callee's declared result names (`whole`: written qualified) one of THIS tree's, where the language looks
+    // it up: qualified — the qualifier must be an import of an in-tree package (receiverevidence.h qualifiedClassInTree);
+    // unqualified — a class of the callee's own scope (callResultScopeOf). Anything else types nothing.
+    const auto resultClassInTree = [ & ]( const Binding& rt, NodeId callee ) -> bool
+    {
+        if( !rt.importedName.empty() )
+        {
+            return recvEv.qualifiedClassInTree( rt.fileId, rt.importedName, rt.typeName );
+        }
+        const auto it = byName.find( rt.typeName );
+        if( it == byName.end() )
+        {
+            return false;
+        }
+        const ResultTypeScope scope = callResultScopeOf( ing.symbols[ callee ].lang );
+        for( NodeId c : it->second )
+        {
+            const Symbol& cs = ing.symbols[ c ];
+            if( !ReceiverEvidence::classLike( cs.kind ) || cs.lang != ing.symbols[ callee ].lang )
+            {
+                continue;
+            }
+            if( scope == ResultTypeScope::Tree || ( scope == ResultTypeScope::PackageDir && fileDir[ cs.fileId ] == fileDir[ ing.symbols[ callee ].fileId ] ) )
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    // C++ (Rule 2's tables are its receiver evidence): an `auto` declaration's type — the lexical table's declaration at the
+    // record's own declaration point when the name has one there and it is untyped, else the flat table's entry when it still
+    // holds this declaration's constructor-shaped guess (the callee's name, which no class carries) or nothing. A tombstoned
+    // entry (two declarations disagree) stays tombstoned. `arrowOnly`: a std smart pointer's pointee, reached by `->` alone.
+    std::string crKey;
+    const auto typeRule2CallResult = [ & ]( const Binding& cr, std::uint32_t rtIndex, bool arrowOnly )
+    {
+        const Binding& rt = ing.bindings[ rtIndex ];
+        if( cr.fromSymbol == kNoNode )
+        {
+            return;
+        }
+        buildShadowKey( crKey, cr.fromSymbol, cr.var );
+        if( const auto sit = scopedRecvDecls.byName.find( crKey ); sit != scopedRecvDecls.byName.end() )
+        {
+            for( ScopedRecvDecl& d : sit->second )
+            {
+                const bool guess = d.typeBinding < ing.bindings.size() && ing.bindings[ d.typeBinding ].typeName == cr.typeName
+                                && !classNames.contains( cr.typeName );   // the declaration's own constructor-shaped guess
+                if( d.spanStart == cr.spanStart && ( d.typeBinding == kRecvDeclUntyped || guess ) && !arrowOnly )
+                {
+                    d.typeBinding = rtIndex;   // its typeName is the class; importedName "" (an unqualified fact)
+                }
+            }
+            return;
+        }
+        const auto vit = varType.find( crKey );
+        if( vit == varType.end() )
+        {
+            varType.try_emplace( crKey, FlatRecvType{ rt.typeName, false, arrowOnly } );
+        }
+        else if( vit->second.type == cr.typeName && !classNames.contains( cr.typeName ) )
+        {
+            vit->second = FlatRecvType{ rt.typeName, false, arrowOnly };
+        }
+    };
+    // the call `r` committed ONE proven edge to `callee`: type every local its result binds (by position and unwrap depth)
+    const auto typeCallResults = [ & ]( const Reference& r, NodeId callee )
+    {
+        const auto at = callResultAt.find( ( std::uint64_t( r.fileId ) << 32 ) | r.startByte );
+        if( at == callResultAt.end() )
+        {
+            return;
+        }
+        const Symbol& cs  = ing.symbols[ callee ];
+        const auto    rts = returnTypesAt.find( ( std::uint64_t( cs.fileId ) << 32 ) | cs.sigStartByte );
+        if( rts == returnTypesAt.end() )
+        {
+            return;
+        }
+        for( std::uint32_t bi : at->second )
+        {
+            const Binding& cr = ing.bindings[ bi ];
+            if( cr.typeName != r.calleeName )
+            {
+                continue;   // another call starting at the same byte
+            }
+            for( std::uint32_t ri : rts->second )
+            {
+                const Binding& rt = ing.bindings[ ri ];
+                if( callResultSinkIsRule2( r.lang ) )
+                {
+                    if( rt.resultIndex == cr.resultIndex && rt.unwrapDepth <= 1 && resultClassInTree( rt, callee ) )
+                    {
+                        typeRule2CallResult( cr, ri, rt.unwrapDepth == 1 );
+                        break;
+                    }
+                }
+                else if( rt.resultIndex == cr.resultIndex && rt.unwrapDepth == cr.unwrapDepth && resultClassInTree( rt, callee ) )
+                {
+                    recvEv.typeCallResult( cr, rt.typeName );
+                    break;
+                }
+            }
+        }
+    };
     HashMap<std::uint64_t, char> nameOnlyEdges;   // (from<<32|to) of an edge some call bound by NAME ALONE (no receiver evidence)
     HashMap<std::uint64_t, char> provenEdges;     // … and of an edge some call bound WITH evidence: a proven site wins the merged row
     std::vector<NodeId>      provedScratch;   // reused: the name-ladder candidates the language's own lookup proves
@@ -6724,7 +6850,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
             if( recvEv.moduleNames( ref, ch.root, c ) )
             {
-                return true;
+                return !( moduleCallReachesFunctionsOnly( ref.lang ) && cs.kind == SymKind::Method );   // Go `pkg.F()`: never a method
             }
             if( ref.lang == Lang::Python && ref.recv == RecvKind::NamedVar )
             {
@@ -8755,6 +8881,17 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 finalSegmentEdges[ekey] = 1;   // remember (from,to) for prov="final-segment"
             }
             ( nameOnly ? nameOnlyEdges : provenEdges )[ ekey ] = 1;   // FE-B: a proven site wins the merged row (Graph::outNameOnly)
+        }
+        // (L) the call committed exactly ONE proven, unsplit target: the locals its result binds take that target's declared type
+        if( !callResultAt.empty() && nReal == 1 && !nameOnly && !splitPick && !bindingPinned && !subscript )
+        {
+            for( NodeId to : tier )
+            {
+                if( to != r.fromSymbol )
+                {
+                    typeCallResults( r, to );
+                }
+            }
         }
         disposition = CallDisposition::Bound;
     }

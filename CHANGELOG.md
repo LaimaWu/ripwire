@@ -15,6 +15,18 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — a local bound to a call takes the callee's declared result type
+
+`config, err := nfpm.ParseFile(path); config.Get(f)` reached `Config.Get` by name alone; `let (book, _) =
+self.preprocess_book(..)?; book.iter()` reached the wrong `iter`. A local initialised by a call — Go `x := f()` / `a, b :=
+f()`, Rust `let x = f()?` (also `.unwrap()` / `.expect()`, tuple patterns by position), C++ `auto x = f()`, Java `var`,
+Kotlin `val`/`var`, TS `const x = [await] f()` — now takes the callee's DECLARED result type when that call itself resolved
+to exactly one definition with evidence, the result names a class of this tree (through `*T`, `&T`, `Box<T>`, a `?` per
+`Result`/`Option` layer, `await` for `Promise<T>`, a std smart pointer's pointee under `->` only), and the type is not a
+type parameter or a qualified type from outside the tree. Anything else records nothing and the call stays hedged. Go's
+`pkg.F()` now reaches package-level functions only, never a same-named method, and a Go parameter or local written
+`*os.File` no longer resolves to an in-tree type that happens to be called `File`. `kParserVer` and the cache version move.
+
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
 Ruby's `include`/`extend`/`prepend` are now captured by `queries/ruby/tags.scm` as `@reference.mixin` and turned into

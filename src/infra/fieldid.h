@@ -77,6 +77,7 @@ enum class NodeField : std::uint8_t
     Superclasses, Target, Trait, Type, Update,
     Value,
     Op,
+    Result, ReturnType, TypeParameters,   // train 29 call-result typing: Go's `result`, Rust's `return_type`, Go's `type_parameters`
     Count
 };
 
@@ -109,6 +110,7 @@ inline constexpr std::array<NodeFieldName, kNodeFieldCount> kNodeFieldNames = { 
     { NodeField::Superclasses, "superclasses", 12 },  { NodeField::Target, "target", 6 },               { NodeField::Trait, "trait", 5 },
     { NodeField::Type, "type", 4 },                   { NodeField::Update, "update", 6 },               { NodeField::Value, "value", 5 },
     { NodeField::Op, "op", 2 },
+    { NodeField::Result, "result", 6 },               { NodeField::ReturnType, "return_type", 11 },     { NodeField::TypeParameters, "type_parameters", 15 },
 } };
 
 // ORDER, COUNT AND LENGTH, checked at compile time. The old assert compared kNodeFieldNames.size() with the extent the

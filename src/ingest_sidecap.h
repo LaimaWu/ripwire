@@ -1610,6 +1610,20 @@ void streamSideCaptures( TSNode root, const SideArms& arms )
     }
 }
 
+// The languages the binds pass (ingest_binds.h bindsVisitNode) visits: the Rule-2 / L3 / shadow families, and the languages
+// that join for the receiver-evidence records alone (FE-B; train 29 call-result typing adds Rust).
+inline bool bindPassLang( Lang l ) noexcept
+{
+    switch( l )
+    {
+        case Lang::Cpp: case Lang::ObjC: case Lang::C: case Lang::Python: case Lang::TypeScript: case Lang::JavaScript: case Lang::Java:
+        case Lang::Go: case Lang::CSharp: case Lang::Kotlin: case Lang::Swift: case Lang::Rust:
+            return true;
+        default:
+            return false;
+    }
+}
+
 void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_view src, TSNode root,
                        std::vector<RawRef>& refs, std::vector<Include>& incs, std::vector<RawBind>& binds,
                        std::vector<BindingAlias>& ffis, std::vector<RouteDef>& routeDefs,
@@ -1688,12 +1702,10 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
         {
             arms.rust = &rustCtx;
         }
-        // FE-B: JavaScript and Go (and, review B3, C#, Kotlin and Swift) join for the receiver-evidence records alone
-        // (captureReceiverEvidence); every other branch of the pass gates its own language, so their record streams gain
+        // FE-B: JavaScript and Go (and, review B3, C#, Kotlin and Swift; train 29, Rust) join for the receiver-evidence records
+        // alone (captureReceiverEvidence); every other branch of the pass gates its own language, so their record streams gain
         // exactly those kinds.
-        if( le.lang == Lang::Cpp || le.lang == Lang::ObjC || le.lang == Lang::Python || le.lang == Lang::TypeScript
-            || le.lang == Lang::Java || le.lang == Lang::JavaScript || le.lang == Lang::Go
-            || le.lang == Lang::C || le.lang == Lang::CSharp || le.lang == Lang::Kotlin || le.lang == Lang::Swift )
+        if( bindPassLang( le.lang ) )
         {
             arms.bind = &bindCtx;
         }

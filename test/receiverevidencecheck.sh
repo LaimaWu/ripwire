@@ -135,7 +135,7 @@
 #            exactly ONE in-tree definition with evidence (never by name alone) and that type, after the language's wrapper rows
 #            (Go `*T`, `(T, error)` by position incl. named results, grouped names `(a, b T)` one position per NAME; Rust
 #            Result/Option/Box/&T, tuples by position; C++ T&, T*,
-#            std::unique_ptr<T>, a `using` alias through addTypeAliasBases; TS Promise<T> under await), names an in-tree class
+#            std::unique_ptr<T> (its pointee under `->` only); TS Promise<T> under await), names an in-tree class
 #            or interface. [P] RESOLVE (red before the lane); [N] near misses record NOTHING and stay as they were: an
 #            overloaded / two-def callee, an outside callee (os.Open, String::new, std::async, List.of), a wrapper outside the
 #            list (Go Ref[T], Rust Vec<T> / HashMap, C++ std::reference_wrapper, Java Optional<T>), a type-parameter result, a
@@ -1104,10 +1104,14 @@ for f in UsePair UseGroupedLast; do   # the second result types the second name;
     proven    $CR/go callees "src/app/app.go:$f" "method Get src/model/model.go:13"     # [P]
     notproven $CR/go callees "src/app/app.go:$f" "Get src/model/model.go:7"             # [N]
 done
-proven    $CR/go callees src/app/app.go:UseIface "method Package src/model/model.go:18" # [P] an interface result types the binding as the interface
-notproven $CR/go callees src/app/app.go:UseIface "Package src/model/extra.go:31" "Package src/model/extra.go:35"   # [N] … never an implementor
+# An interface result types the binding as the interface: `pkg.Package( … )` then answers exactly as the written twin
+# UseIfaceWritten does — the interface's bodyless signature (Packager.Package :18) is a dispatch contract FE-B leaves to the
+# ladder (declined on base for the written type too), so that row is a floor shared with the twin (interface dispatch: L6),
+# and an implementor is never proven.
+for f in UseIface UseQualifiedFn UseIfaceWritten; do
+    notproven $CR/go callees "src/app/app.go:$f" "Package src/model/extra.go:31" "Package src/model/extra.go:35"   # [N] never an implementor
+done
 proven    $CR/go callees src/app/app.go:UseQualifiedFn "fn Get src/model/model.go:54"   # [P] `model.Get` reaches the package func, never a method (nfpm.Get)
-proven    $CR/go callees src/app/app.go:UseQualifiedFn "method Package src/model/model.go:18"   # [P] … and its result types pkg (nfpm-14 hop 1)
 notproven $CR/go callees src/app/app.go:UseQualifiedFn "Get src/model/model.go:7" "Get src/model/model.go:13"   # [N]
 proven    $CR/go callees src/app/renamed.go:UseRenamedImport "fn Get src/model/model.go:54"   # [P] a renamed import `m.Get` is the same package rule
 notproven $CR/go callees src/app/renamed.go:UseRenamedImport "Get src/model/model.go:7" "Get src/model/model.go:13"   # [N]
@@ -1150,8 +1154,13 @@ for f in near_no_try near_nested; do   # Option<T> with no `?`; Result<Option<T>
 done
 notproven $CR/rust callees src/app.rs:near_qualified "sync_all src/osfile.rs:5"        # [N] io::Result<std::fs::File> / std::fs::File: the qualifier names std
 # C++ — Config::get model.cpp:5, Other::get :7.
-for f in usePlain useRef usePtr useUnique useAlias useMethod; do   # T, const T&, T* (->), std::unique_ptr<T> (->), a using alias (addTypeAliasBases), a method callee
+for f in usePlain useRef usePtr useUnique useMethod; do   # T, const T&, T* (->), std::unique_ptr<T> (->), a method callee
     proven    $CR/cpp callees "src/app.cpp:$f" "method get src/model.cpp:5"            # [P]
+    notproven $CR/cpp callees "src/app.cpp:$f" "get src/model.cpp:7"                   # [N]
+done
+# a `using` alias result answers as its written twin does: Rule 2 proves no member through the alias (Config::get :5 is a
+# floor shared by useAlias and useAliasWritten, not gated); Other::get is never proven
+for f in useAlias useAliasWritten; do
     notproven $CR/cpp callees "src/app.cpp:$f" "get src/model.cpp:7"                   # [N]
 done
 for f in nearOverload nearGeneric; do   # pick(1) of an overloaded callee; create<cfg::Config>() — truth Config::get :5 (floor, not gated)

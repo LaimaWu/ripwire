@@ -108,3 +108,11 @@ int nearTypeParamNamed()
     auto g = cfg::create2<cfg::Other>();
     return g.get();
 }
+
+// useAliasWritten (twin): the alias written — Rule 2 reaches no member through a `using` alias today, so neither the
+// written nor the call-result-typed binding proves Config::get (a floor both share); Other::get is never proven.
+int useAliasWritten()
+{
+    cfg::ConfigAlias a = cfg::makeAlias();
+    return a.get();
+}

@@ -1117,15 +1117,29 @@ enum class LocalBindKind : std::uint8_t
                    //     the directive ("include" / "extend"), spanStart = the constant's 1-based line; var stays EMPTY and the
                    //     record is file-scope, so no local-name table reads it. Read by graph.h rubyMainObjectMixins ONLY
                    //     (--lego's `<impl t="object" n="main">` row). APPENDED (cache u8).
+    // Train 29 lane call-result-typing (test/receiverevidencecheck.sh (L)): a binding initialised by a CALL takes the callee's
+    // DECLARED return type. Both kinds are receiver evidence (isReceiverEvidenceKind): graph.h's resolve loop alone reads them.
+    CallResult,    // a local bound to a call's result (Go `x := f()` / `a, b := f()`, Rust `let x = f()?` / `let (a, _) = f()?`):
+                   //     var = the bound name, typeName = the callee's final name, startByte = the CALL's start byte (the call
+                   //     Reference's own; with typeName it names one call), spanStart/spanEnd = where the name is visible (the same span as the name's RecvType
+                   //     tombstone, which the typed fact replaces), resultIndex = the position it binds (kWholeResult: the whole
+                   //     value), unwrapDepth = the unwrap operators applied before binding (Rust `?` / `.unwrap()` / `.expect()`).
+    ReturnType,    // one DECLARED result of a function definition, at startByte = the def's own start (Symbol::sigStartByte):
+                   //     resultIndex = its position (kWholeResult: a single non-tuple result), typeName = the class it names
+                   //     after the language's transparent wrappers (Go `*T`, Rust `Box<T>` / `&T`), importedName = the type
+                   //     written WHOLE when it is qualified (`os.File`, `std::fs::File`), else "", unwrapDepth = the
+                   //     Result/Option layers above it (each needs one unwrap operator at the call site). var stays empty.
 };
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::RubyMainMixin ) + 1;
-// FE-B: the five kinds only graph.h ReceiverEvidence reads (see RecvType above).
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::ReturnType ) + 1;
+// FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {
     return k == LocalBindKind::RecvType || k == LocalBindKind::MemberType || k == LocalBindKind::MethodAlias || k == LocalBindKind::NameAlias
-        || k == LocalBindKind::StaticMember;
+        || k == LocalBindKind::StaticMember || k == LocalBindKind::CallResult || k == LocalBindKind::ReturnType;
 }
+// Binding::resultIndex of a record about a WHOLE result (a single non-tuple result; a Rust `let t = pair()?` binding all of it).
+inline constexpr std::uint8_t kWholeResult = 0xFF;
 // The importedName of a Ruby class-object binding that acts on each class INCLUDING the module, not on the module
 // (LocalBindKind::RubySingletonDef, RubyClassMixin; parser version 145): written in a concern's `included do`, or a def
 // in its `class_methods do`.
@@ -1154,6 +1168,8 @@ struct Binding
                                               // kind==Type: read off a C++ ASSIGNMENT's callee (`x = f( … )`), not a declaration —
                                               //   a function's name as often as a class's, so buildGraph drops it unless a class of
                                               //   that name exists (resolve.h assignmentNamesNoClass). Rides the padding after `kind`.
+    std::uint8_t  resultIndex = kWholeResult; // kind==CallResult/ReturnType: the result position (see LocalBindKind). Rides the padding.
+    std::uint8_t  unwrapDepth = 0;            // kind==CallResult/ReturnType: unwrap operators / layers (see LocalBindKind). Rides the padding.
     std::uint32_t startByte  = 0;         // the record's own position (RawBind::startByte). ONE declaration's
                                           //   VarDecl and its typed record (Type or ParamType) carry the SAME
                                           //   value — that shared byte is how Rule 2's lexical receiver lookup
@@ -1176,7 +1192,7 @@ struct Binding
                                           //   name as written minus `&` (`alpha`, `ns::alpha`), or a sentinel.
 };
 static_assert( sizeof( Binding ) == 6 * sizeof( std::uint32_t ) + 3 * sizeof( std::string ),
-               "Binding's scalars are five u32, a u8 kind and a bool in 24 bytes — both ride one u32 slot" );
+               "Binding's scalars are five u32, a u8 kind, a bool and two u8 in 24 bytes — the four ride one u32 slot" );
 
 // R5 cross-language FFI binding alias. A language-binding DECLARATION found in a C/C++ file (or a
 // ctypes-handle assignment in a Python file) that makes a C/C++ definition reachable under a DIFFERENT

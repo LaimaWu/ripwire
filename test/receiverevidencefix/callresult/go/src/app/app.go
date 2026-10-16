@@ -136,3 +136,9 @@ func NearShadowPkg() {
 	model := model.Make()
 	model.Get("x")
 }
+
+// UseIfaceWritten (twin): the interface type written on a parameter — an interface-typed binding, written or call-result
+// typed, answers the same: the interface's bodyless signature is a dispatch contract the ladder keeps (FE-B), never a body.
+func UseIfaceWritten(p model.Packager, info *model.Info) {
+	p.Package(info)
+}
