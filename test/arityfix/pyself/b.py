@@ -1,3 +1,3 @@
 class B:
-    def m(self, a, b):
-        return a + b
+    def m(self):
+        return 0

@@ -1472,7 +1472,10 @@ inline std::uint16_t countParams( TSNode defNode )   // A4-F25: NOT noexcept —
 //   * `notParam`           — a child of this kind is no parameter at all (Python's bare `*` and `/` separators);
 //   * `soleVoid`           — a list whose ONLY parameter reads exactly this text has no parameter (C++ `f(void)`);
 //   * `receiverChild`      — a child holding a node of this kind is never passed (TS `this: T`) → NO minimum;
-//   * `decoratedParent`    — a def whose PARENT is this kind is decorated; a decorator may supply arguments → NO minimum.
+//   * `decoratedParent`    — a def whose PARENT is this kind is decorated; a decorator may supply arguments → NO minimum;
+//   * `selfOwner`          — a def within 3 parents of this kind is a method whose first parameter (`self`/`cls`) the call
+//                            omits → NO minimum. Python tags every `def` @definition.function, so SymKind::Method never
+//                            marks a Python method and the kind gate below cannot see one; the parse tree can.
 // Every kind name is the vendored grammar's own (third_party/deps/<lang>/src/parser.c symbol table). Languages
 // WITHOUT a row, each for a stated reason: JavaScript (a call may legally pass fewer arguments than declared);
 // Swift (a trailing closure is an argument outside the list callArity counts); Kotlin, C#, PHP, Ruby, Dart and the
@@ -1487,13 +1490,33 @@ struct ParamMinLang
     std::string_view soleVoid;
     std::string_view receiverChild;
     std::string_view decoratedParent;
+    std::string_view selfOwner;
 };
 inline constexpr ParamMinLang kParamMinLangs[] = {
-    { Lang::Cpp,        { "optional_parameter_declaration", {} },        {},                   { {}, {} },                                     "void", {},     {} },
-    { Lang::Java,       { {}, {} },                                      {},                   { {}, {} },                                     {},     {},     {} },   // no default parameters
-    { Lang::Python,     { "default_parameter", "typed_default_parameter" }, {},                { "keyword_separator", "positional_separator" }, {},     {},     "decorated_definition" },
-    { Lang::TypeScript, { "optional_parameter", {} },                    "required_parameter", { {}, {} },                                     {},     "this", {} },
+    { Lang::Cpp,        { "optional_parameter_declaration", {} },        {},                   { {}, {} },                                     "void", {},     {},                     {} },
+    { Lang::Java,       { {}, {} },                                      {},                   { {}, {} },                                     {},     {},     {},                     {} },   // no default parameters
+    { Lang::Python,     { "default_parameter", "typed_default_parameter" }, {},                { "keyword_separator", "positional_separator" }, {},     {},     "decorated_definition", "class_definition" },
+    { Lang::TypeScript, { "optional_parameter", {} },                    "required_parameter", { {}, {} },                                     {},     "this", {},                     {} },
 };
+// Is `def` a member of an `owner`-kind node: one of its first 3 ancestors (through a decorator wrapper and the class
+// body block) is `owner`, with no function in between — a def nested in a method's body is a closure, not a member.
+inline bool ownedBy( TSNode def, std::string_view owner ) noexcept
+{
+    TSNode p = ts_node_parent( def );
+    for( int hop = 0; hop < 3 && !ts_node_is_null( p ); ++hop, p = ts_node_parent( p ) )
+    {
+        const std::string_view t = ts_node_type( p );
+        if( t == owner )
+        {
+            return true;
+        }
+        if( t.find( "function" ) != std::string_view::npos )
+        {
+            return false;
+        }
+    }
+    return false;
+}
 inline bool paramKindIn( std::string_view t, const std::string_view ( &kinds )[2] ) noexcept
 {
     return ( !kinds[0].empty() && t == kinds[0] ) || ( !kinds[1].empty() && t == kinds[1] );
@@ -1510,7 +1533,7 @@ inline bool paramKindIn( std::string_view t, const std::string_view ( &kinds )[2
 //     optional parameter (`= v`, TS `x?`) — any of which makes the accepted arity a RANGE, not a point.
 // `minimum`: the fewest arguments a call can pass — the list's parameters minus its defaulted ones and minus what is
 // no parameter (kParamMinLangs). 0 = no lower bound known: no row, a variadic or implicit-self list, a receiver
-// parameter, a decorated def, or no list. The resolver takes the minimum over this def AND every declaration of
+// parameter, a decorated def, a Python method, or no list. The resolver takes the minimum over this def AND every declaration of
 // it (graph.h paramsMinAcrossDeclarations), because C++ may put the default on a separate prototype only.
 // A bounded pre-order scan of the FIRST parameter list mirrors countParams; deterministic.
 struct ParamShape
@@ -1619,8 +1642,9 @@ inline ParamShape cc_paramShape( TSNode defNode, Lang lang, SymKind kind, std::s
             const TSNode decoParent = ts_node_parent( defNode );
             const bool   decorated  = row != nullptr && !row->decoratedParent.empty() && !ts_node_is_null( decoParent )
                                    && std::string_view( ts_node_type( decoParent ) ) == row->decoratedParent;
+            const bool   method     = row != nullptr && !row->selfOwner.empty() && ownedBy( defNode, row->selfOwner );
             const bool   soleVoid   = row != nullptr && !row->soleVoid.empty() && named == 1 && nodeTextOf( lone, src ) == row->soleVoid;
-            if( row != nullptr && !elastic && !receiver && !decorated && !soleVoid )
+            if( row != nullptr && !elastic && !receiver && !decorated && !method && !soleVoid )
             {
                 ASSUME( defaulted + notParam <= named );   // each counted child is one of the named ones
                 shape.minimum = std::uint16_t( named - defaulted - notParam );

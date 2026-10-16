@@ -115,7 +115,7 @@ expect defmin   call_h1       "a.cpp:1"                   "[P] h(1): keeps h(int
 expect defmin   call_h0       "c.cpp:1"                   "[P] h(): drops h(int a, int b = 1) (one required) and the 4-parameter h"
 expect variadic call_v        "a.cpp:1 b.cpp:1"           "[P] v(1): drops v(a,b,c); the variadic v(a, b, ...) is never dropped"
 expect voidp    call_z        "a.cpp:1"                   "[P] z(): keeps z(void) (no parameter), drops z(a,b)"
-expect pyself   call_m        "a.py:2 b.py:2"             "[N] Python methods (implicit self) are never dropped"
+expect pyself   call_m        "a.py:2 b.py:2"             "[N] Python methods (implicit self) are never dropped: A.m(self, a) keeps beside B.m(self) (Python tags methods as functions)"
 expect pydef    call_g        "a.py:1"                    "[P] Python g(1): keeps g(x, y=1), drops g(x, y, z)"
 expect pydef    call_g2       "a.py:5"                    "[P] Python g2(1): the bare * separator is no parameter — keeps g2(x, *, y=1)"
 expect pydef    call_k        "a.py:14"                   "[P] Python k(1): a decorated def keeps (the decorator may supply arguments)"
