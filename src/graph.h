@@ -20,6 +20,7 @@
 #include "smallvec.h"            // rw::SmallVec — THE ONE ALIAS (src/smallvec.h picks the implementation)
 #include "resolve.h"             // P2-D one-hop type narrowing (Rule 1: class membership) — applied before the name-based fallback
 #include "receiverevidence.h"    // FE-B: typed receivers RESOLVE; a call nothing proves keeps its rows marked via="name"
+#include "langfacts.h"           // langFacts(l): the per-language facts the resolver reads instead of a Lang:: compare
 #include "scipoverlay.h"         // SCIP precision overlay (data struct only; parser lives in scip.h)
 #include "pincensus.h"           // eval-only per-call-site decision census (--pin-census); inert unless armed
 #include "externalnames.h"       // Phase 5: the committed builtin/stdlib tables behind the external-name veto
@@ -7269,7 +7270,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         subscriptCand.clear();
         const std::string& scope           = callerSelfScope( ing, r );
         bool               rubySelfDecided = false;
-        if( r.lang == Lang::Ruby )
+        if( langFacts( r.lang ).classObjectLookup )
         {
             const RubySideAnswer self = rubyClasses.selfCall( r );
             rubySelfDecided           = self.side.has_value();
@@ -7308,7 +7309,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             return false;
         }
         return narrowTo( narrower.rule1ClassMember( r, scope ), r, subscriptCand )
-            || narrowTo( narrower.rule1BaseWalk( r, scope, r.lang == Lang::Ruby ? rubyUp : chaUp, chaUpDeclared ), r, subscriptCand );
+            || narrowTo( narrower.rule1BaseWalk( r, scope, langFacts( r.lang ).mixinAncestry ? rubyUp : chaUp, chaUpDeclared ), r, subscriptCand );
     };
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/3: resolve loop (per reference)" );
@@ -7714,7 +7715,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // would hand the site to the caller's own class — the one class `super()` skips by definition.
         if( !scipPinned && !canonical && !narrowed && !rubySelfCall.side )
         {
-            narrowed = narrowTo( narrower.rule1BaseWalk( r, callerSelfScope( ing, r ), r.lang == Lang::Ruby ? rubyUp : chaUp, chaUpDeclared ), r, cand );
+            narrowed = narrowTo( narrower.rule1BaseWalk( r, callerSelfScope( ing, r ), langFacts( r.lang ).mixinAncestry ? rubyUp : chaUp, chaUpDeclared ), r, cand );
         }
         if( !scipPinned && !canonical && !narrowed && r.recv == RecvKind::SuperObj && bindingTier.empty() )
         {
