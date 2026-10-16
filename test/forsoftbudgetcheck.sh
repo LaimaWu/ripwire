@@ -148,8 +148,11 @@ def clauses( path ):
     if not com: sys.exit( 3 )
     out = set()
     for c in com:
-        # " est_tokens= prices…" is spliced after the last clause with a bare space (pre-existing): a clause boundary too
-        for seg in re.split( r'\s*(?:\[|\]|;\s|\.\s|\s—\s|\s(?=est_tokens= prices))\s*', c ):
+        # " est_tokens= prices…" is spliced after the last clause with a bare space (pre-existing): a clause boundary too.
+        # So are the two present-only <c> row readings (FE-B's via="name", attrib-multidef's prov="split"), which open with a
+        # bare space after whatever clause precedes them: without the boundary the clause before one reads as missing
+        # wherever the one between them (e= on a d row) is absent (train 28: the split reading rides this corpus)
+        for seg in re.split( r'\s*(?:\[|\]|;\s|\.\s|\s—\s|\s(?=est_tokens= prices)|\s(?=via="name" on a <c> row)|\s(?=prov="split" on a <c> row))\s*', c ):
             seg = re.sub( r'\d+', '#', re.sub( r'\s+', ' ', seg ) ).strip( ' .:;' )
             if len( seg ) >= 12: out.add( seg )
     return out
