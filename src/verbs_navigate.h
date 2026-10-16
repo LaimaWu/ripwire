@@ -201,11 +201,16 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // had none. count= stays the un-windowed total, so the cap costs no honesty. discloseCap is the
         // answer's OWN capped state, not a constant true — these verbs shipped uncapped for their whole
         // life, and THE TRUNCATION VOCABULARY names that shape conformant (its --skill-scan precedent).
-        const PageWindow  pw = pageWindow( result.size(), effectiveRowCap( cfg.pageLimit, rw::kCallHierarchyRowCap ), cfg.pageOffset );
+        // L8 (train 29): the cap is callHierarchyRowCap's — a total within the 1.25 x band (pageview.h) is served whole.
+        const PageWindow  pw = pageWindow( result.size(), rw::callHierarchyRowCap( cfg.pageLimit, result.size() ), cfg.pageOffset );
         const bool        chDiscloseCap = ( pw.end - pw.begin ) < result.size();
         char              pab[ kPageDisclosureCap ];
 
         const auto [ chNextSelector, chNextIsBare ] = rw::callHierarchyNextSelector( ing, chRows, sym, wantCallers );
+        // L8 (train 29): a callers page with rows after it hands over the NEXT PAGE as next= (the selector as typed, the caller's
+        // --limit and form kept — rw::pagedNext), and the uses verb moves to uses_next=. The last page and an uncut answer keep
+        // the uses verb as next=. Callees keep expand: the body already lists every callee.
+        const bool        chNextIsPage = wantCallers && pw.end < result.size();
 
         // CALLSITE-AT: each caller row on THIS page with its call sites as pasteable file:line tokens (editcheck.h
         // rowCallSites: the uses verb's call-role filters over the page's rows), computed once for every dialect below.
@@ -260,7 +265,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             {
                 chHasVia = chAttr.nameOnly( i );   // FE-B's via="name": every edge to the matches by name (defattrib.h, one pass)
             }
-            rw::emitTo( stdout, "{}{}{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar ).c_str(),
+            rw::emitTo( stdout, "{}{}{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar, chNextIsPage ).c_str(),
                          rw::capLegendClause( rw::computePageDisclosure( pw.end - pw.begin, result.size(), pw.end,
                                                                         cfg.pageLimit, cfg.pageOffset, chDiscloseCap ).active ),
                          rw::declinedCallsLegendForRows( chRows.declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0, !chDc.empty(),
@@ -283,7 +288,11 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // P3 (L7, nextverb.h): ONE follow-up, shared with MCP. Callers preserve SELECTOR unless a narrowed
         // selector has declined calls: the shared derivation then names their wider bare-name site list.
         // Callees keep expand on the original selector; nextFlag retains quoting and the 120-byte contract.
-        const std::string chNextAttr = rw::nextAttrXml( rw::nextFlag( wantCallers ? "--uses=" : "--expand=", chNextSelector ) );
+        const std::string chHintCall = rw::nextFlag( wantCallers ? "--uses=" : "--expand=", chNextSelector );
+        const std::string chNextAttr = chNextIsPage
+            ? rw::nextAttrXml( rw::pagedNext( rw::nextFlag( "--callers=", sym ) + ( cfg.columnar ? " --format=columnar" : "" ), cfg.pageLimit, pw.end ) )
+                + rw::nextAttrXml( chHintCall, "uses_next" )
+            : rw::nextAttrXml( chHintCall );
         // The tier-3 declines count= does not include (callhierarchy.h), on every dialect; absent at zero.
         const std::string chDeclinedAttr = rw::declinedCallsAttrXml( chRows.declinedCalls ) + rw::declinedSiteCutAttrXml( chDcCut )   // + the <dc> cut, beside the count it cuts
                                          + rw::declinedIfaceAttrXml( chRows.declinedIface );
