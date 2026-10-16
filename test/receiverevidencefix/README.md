@@ -57,3 +57,13 @@ The names are paraphrases of graded false rows; the code is minimal and is never
   (Python and Go also a local `super`), then calls `render` on it: never Base's render through the bases-only lookup.
   Kept: `super.render()`, Python `super().render()`, Go's promoted `p.Render()`, the typed local's own class. C#
   `base.Render()` is visible only (no C# tree reads `base` as a receiver root yet).
+- `callresult/{go,rust,cpp,java,kt,ts}/` — arm (L), call-result typing: a local initialised by a call to an in-tree function
+  whose DECLARED return type names an in-tree class (`Config`), beside a same-named method on another class (`Other`), so
+  the call on the local is name-only until the binding takes the callee's return type. Go: `(T, error)` with named results,
+  `(*T, error)`, `*T`, a positional pair, an interface result, a method callee, a reassignment, the package func `model.Get`
+  beside the method `Config.Get`. Rust: `Result<T,_>` + `?`, `Option<T>` + `?`, `Box<T>`, `&T`, `T`, a tuple element, an
+  associated fn `Book::load(..)?`, a `self` method callee, `.unwrap()`/`.expect()`. C++: `T`, `const T&`, `T*`,
+  `std::unique_ptr<T>`, a `using` alias, a method callee. Java `var`, Kotlin `val`/`var`, TS `const` and `await`. Near misses
+  (must stay unproven): two-def / overloaded callees, outside callees, wrappers outside the list (Go `Ref[T]`, Rust `Vec<T>` /
+  `HashMap`, C++ `std::reference_wrapper`, Java `Optional<T>`), type-parameter results, Go/Rust aliases, no written return
+  type, a shadowing inner binding. `UseWritten`/`useWritten` twins write the type (green before the lane).

@@ -129,6 +129,20 @@
 #            and Python's super() call, walk the bases only; a LOCAL spelled `base` (Python/JS/TS/Go/Java/Kotlin/Swift/C++/
 #            Ruby) or `super` (Go, C#, a Python name shadowing the builtin) never proves the base class's method — a typed
 #            one resolves to its own class, an untyped one is hedged. Twins: the keyword calls still prove the base.
+#   (L) call-result typing (train 29 lane call-result-typing; roots callresult/<lang>/): a binding initialised by a call —
+#            Go `x := f()` / `a, b := f()`, Rust `let x = f()?` / `let (a, _) = f()?` / `.unwrap()`, C++ `auto x = f()`, Java
+#            `var`, Kotlin `val`/`var`, TS `const x = [await] f()` — takes the callee's DECLARED return type when the callee binds
+#            exactly ONE in-tree definition with evidence (never by name alone) and that type, after the language's wrapper rows
+#            (Go `*T`, `(T, error)` by position incl. named results; Rust Result/Option/Box/&T, tuples by position; C++ T&, T*,
+#            std::unique_ptr<T>, a `using` alias through addTypeAliasBases; TS Promise<T> under await), names an in-tree class
+#            or interface. [P] RESOLVE (red before the lane); [N] near misses record NOTHING and stay as they were: an
+#            overloaded / two-def callee, an outside callee (os.Open, String::new, std::async, List.of), a wrapper outside the
+#            list (Go Ref[T], Rust Vec<T> / HashMap, C++ std::reference_wrapper, Java Optional<T>), a type-parameter result, a
+#            Go/Rust alias (no alias record: floor), a callee with no written return type (Kotlin `= expr`, TS inference), and
+#            a shadowing inner binding. A later reassignment `x = g()` keeps the declared type in these statically typed
+#            languages (Go UseReassigned, Kotlin useVar: still proven). One level: a callee whose receiver is itself typed by
+#            a call result is not followed (Rust use_path's `book.build()` result: floor, not gated). Twins marked `# guard`
+#            write the type and resolve before the lane (Rust has no such reader yet: no twin arm).
 #   (C) conservation: each root's census dispositions still sum to calls= with unaccounted=0 (no silent drop).
 #   (K) the predicates can fail: a planted unhedged false row fails notproven, a planted hedged row passes it and
 #            fails proven, marked rejects an unhedged row, a rootless or not-found answer is NOROOT, the MCP reader
@@ -142,7 +156,8 @@
 #     Zig, Dart, Elixir: no arm.
 #   * a computed member `ctx['onerror']()` records no call at all (pinned notproven, trivially).
 #   * return-type inference (`mode_screen = self.get_screen(); mode_screen.refresh()` → Screen.refresh, or a
-#     property's return) is not required: only the false single row is gated.
+#     property's return) is not required: only the false single row is gated. A DECLARED return type is (L)'s, for
+#     Go/Rust/C++/Java/Kotlin/TS only; Python's `-> T` annotation, Swift, C# and PHP rows: not gated here yet.
 #   * --uses / --dead-code / --safe-delete, and --for hop blocks of symbols other than the four named in (H): not
 #     gated here.
 #   * a Python `cls()` construction inside a classmethod is polymorphic (a subclass's override is a legitimate
@@ -1064,11 +1079,78 @@ proven    $SR/cpp callees src/panel.cpp:typed "method render src/shapes.h:11"   
 notproven $SR/rb callees lib/panel.rb:untyped "render lib/shapes.rb:2"
 proven    $SR/rb callees lib/panel.rb:typed "method render lib/shapes.rb:8"   # guard
 
+echo "=== (L) call-result typing (lane call-result-typing): a binding initialised by a call takes the callee's DECLARED return type ==="
+# [P] arms are RED before the lane (the receiver is name-only: hedged or declined); [N] arms are near misses that must
+# stay green — the rule records NOTHING for them (honest floor). Roots: callresult/<lang>/ (one tree each).
+CR=callresult
+# Go — Config.Get model.go:7, Other.Get :13, Config.Close :9, Other.Close :15, Packager.Package :18, func Get :54.
+for f in UseValue UsePtr UseOne UseMethod UseReassigned; do   # (T, error) named results, (*T, error), *T, a method callee, a reassignment (Go's static type stays)
+    proven    $CR/go callees "src/app/app.go:$f" "method Get src/model/model.go:7"      # [P]
+    notproven $CR/go callees "src/app/app.go:$f" "Get src/model/model.go:13"            # [N] the namesake is never proven
+done
+proven    $CR/go callees src/app/app.go:UsePair "method Get src/model/model.go:13"      # [P] the second result types the second name
+notproven $CR/go callees src/app/app.go:UsePair "Get src/model/model.go:7"              # [N]
+proven    $CR/go callees src/app/app.go:UseIface "method Package src/model/model.go:18" # [P] an interface result types the binding as the interface
+proven    $CR/go callees src/app/app.go:UseQualifiedFn "fn Get src/model/model.go:54"   # [P] `model.Get` reaches the package func, never a method (nfpm.Get)
+proven    $CR/go callees src/app/app.go:UseQualifiedFn "method Package src/model/model.go:18"   # [P] … and its result types pkg (nfpm-14 hop 1)
+notproven $CR/go callees src/app/app.go:NearExternal "Close src/model/model.go:9" "Close src/model/model.go:15"   # [N] outside callee (os.Open)
+for f in NearTwoDefs NearAlias NearWrapper NearGeneric; do   # two-def callee; a Go alias (no alias record: floor); Ref[T] outside the list; a type-parameter result
+    notproven $CR/go callees "src/app/app.go:$f" "Get src/model/model.go:7" "Get src/model/model.go:13"   # [N]
+done
+notproven $CR/go callees src/app/app.go:NearShadow "Close src/model/model.go:9" "Close src/model/model.go:15"    # [N] an inner `c :=` hides the typed outer c
+proven    $CR/go callees src/app/app.go:UseWritten "method Get src/model/model.go:7"    # guard: the written-type twin
+# Rust — Config::get model.rs:6, Other::get :13, Config::len :7, Other::len :14, Book::build :46.
+for f in use_try use_option use_box use_ref use_plain use_self use_unwrap; do   # Result<T,_> + ?, Option<T> + ?, Box<T>, &T, T, a self-method callee's tuple element 0, .unwrap() / .expect(..)
+    proven    $CR/rust callees "src/app.rs:$f" "method get src/model.rs:6"             # [P]
+    notproven $CR/rust callees "src/app.rs:$f" "get src/model.rs:13"                   # [N]
+done
+proven    $CR/rust callees src/app.rs:use_tuple "method get src/model.rs:13"           # [P] `let (_, o) = pair()?` — tuple element 1
+notproven $CR/rust callees src/app.rs:use_tuple "get src/model.rs:6"                   # [N]
+proven    $CR/rust callees src/app.rs:use_path "method build src/model.rs:46"          # [P] `let book = Book::load(..)?; book.build()` (mdbook-14 hop 1)
+notproven $CR/rust callees src/app.rs:use_path "get src/model.rs:13"                   # [N] (c = book.build() is one level further: floor, not gated)
+for f in near_external near_wrapper near_shadow; do   # String::new(); Vec<T> outside the list (the slice's len); a later `let c` rebinds c
+    notproven $CR/rust callees "src/app.rs:$f" "len src/model.rs:7" "len src/model.rs:14"   # [N]
+done
+for f in near_std_get near_two_defs near_alias near_generic; do   # a std HashMap result's get; two-def callee; a Rust alias (floor); generic T
+    notproven $CR/rust callees "src/app.rs:$f" "get src/model.rs:6" "get src/model.rs:13"   # [N]
+done
+# C++ — Config::get model.cpp:5, Other::get :7.
+for f in usePlain useRef usePtr useUnique useAlias useMethod; do   # T, const T&, T* (->), std::unique_ptr<T> (->), a using alias (addTypeAliasBases), a method callee
+    proven    $CR/cpp callees "src/app.cpp:$f" "method get src/model.cpp:5"            # [P]
+    notproven $CR/cpp callees "src/app.cpp:$f" "get src/model.cpp:7"                   # [N]
+done
+for f in nearOverload nearExternal nearWrapper nearGeneric nearShadow; do   # overloaded callee; std::async; std::reference_wrapper (its own get); template T; an inner `auto c`
+    notproven $CR/cpp callees "src/app.cpp:$f" "get src/model.cpp:5" "get src/model.cpp:7"   # [N]
+done
+proven    $CR/cpp callees src/app.cpp:useWritten "method get src/model.cpp:5"          # guard: the written-type twin
+# Java / Kotlin / TS (cheap rows) — Config.get vs Other.get.
+proven    $CR/java callees src/app/Use.java:useVar "method get src/app/Config.java:4"  # [P] `var c = Configs.make()`
+notproven $CR/java callees src/app/Use.java:useVar "get src/app/Other.java:4"          # [N]
+for f in nearExternal nearWrapper nearGeneric; do   # List.of(..).get; Optional<T> (its own get); <T> T
+    notproven $CR/java callees "src/app/Use.java:$f" "get src/app/Config.java:4" "get src/app/Other.java:4"   # [N]
+done
+proven    $CR/java callees src/app/Use.java:useWritten "method get src/app/Config.java:4"   # guard
+for f in useVal useVar; do   # `val c = makeConfig()`; `var c = …; c = …` (Kotlin's declared type stays)
+    proven    $CR/kt callees "src/app/Use.kt:$f" "fn get src/app/Model.kt:4"           # [P]
+    notproven $CR/kt callees "src/app/Use.kt:$f" "get src/app/Model.kt:8"              # [N]
+done
+notproven $CR/kt callees src/app/Use.kt:nearInferred "get src/app/Model.kt:4" "get src/app/Model.kt:8"   # [N] no written return type
+proven    $CR/kt callees src/app/Use.kt:useWritten "fn get src/app/Model.kt:4"         # guard
+for f in useConst useAwait; do   # `const c = makeConfig()`; `await loadConfig()` through Promise<T>
+    proven    $CR/ts callees "src/use.ts:$f" "method get src/model.ts:2"               # [P]
+    notproven $CR/ts callees "src/use.ts:$f" "get src/model.ts:6"                      # [N]
+done
+for f in nearUntyped nearMap; do   # no written return type (TS inference is not modelled); Object.freeze(new Map()).get
+    notproven $CR/ts callees "src/use.ts:$f" "get src/model.ts:2" "get src/model.ts:6"   # [N]
+done
+proven    $CR/ts callees src/use.ts:useWritten "method get src/model.ts:2"             # guard
+
 echo "=== (C) conservation: no call silently disappears ==="
-ROOTS="js ts py go java kt cs cpp swift rb"
+ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts"
 for r in $ROOTS; do
-    if ! rw "$r" --pin-census="$TMP/$r.tsv" >"$TMP/$r.map.xml"; then no "(C) ($r) the census run exited non-zero"; continue; fi
-    DL="$( grep -m1 '^# dispositions ' "$TMP/$r.tsv" 2>/dev/null )"
+    rf="$( printf '%s' "$r" | tr '/' '_' )"   # a nested root (callresult/go) writes a flat file name
+    if ! rw "$r" --pin-census="$TMP/$rf.tsv" >"$TMP/$rf.map.xml"; then no "(C) ($r) the census run exited non-zero"; continue; fi
+    DL="$( grep -m1 '^# dispositions ' "$TMP/$rf.tsv" 2>/dev/null )"
     if [ -z "$DL" ]; then no "(C) ($r) the census carries no '# dispositions' line"; continue; fi
     if python3 - "$DL" <<'PY'
 import re, sys
