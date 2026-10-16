@@ -373,6 +373,11 @@ inline constexpr std::string_view kMcpForBuildingBlocksLegend =
 static_assert( kMcpForBuildingBlocksLegend.find( kForZeroAbsentMcpNote ) != std::string_view::npos, "the MCP for zero reading is spelled once" );
 inline constexpr std::string_view kMcpForBundleSigsLegend =
     "; bundle=sigs: signatures only in this bundle, no inline bodies — fetch a symbol's full body with the fetch_body verb";
+// for-body-slot: the same sentence on an answer that carries the one owner body of an explanatory question (forowner.h); at least
+// as long as the sentence it replaces, so the sigs ledger's exemption of the difference never underflows
+inline constexpr std::string_view kMcpForBundleSigsOwnerLegend =
+    "; bundle=sigs: signatures, and no inline body but the ONE owner body below — fetch any other full body with the fetch_body verb";
+static_assert( kMcpForBundleSigsOwnerLegend.size() >= kMcpForBundleSigsLegend.size(), "the slot's bundle sentence replaces the plain one without shrinking" );
 inline constexpr std::string_view kMcpForLensColumnsLegend =
     "; lens=\"churn,amp,tested\": the three per-row quality columns the CLI for lens carries and this dialect"
     " does NOT (they need a git and a quality pass this server does not run per request); an absent column here"
@@ -781,9 +786,16 @@ inline constexpr const char* kImpactDepthColumnarLegend =
 // rollup whenever the reach set is non-empty (XML forms only: the JSON form carries it as "files", columnar not at all),
 // the umbrella sentence only beside importers_umbrella=. Shared by the CLI arm and the MCP twin, byte-identical.
 // fix27: `hedged` = a listed rf row carries via= or by_name= (a multi-definition selector only); its sentence rides then.
-inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged = false )
+// for-body-slot FIX1 R1: `importersCut` = the root carries importers_next= (sizeImportTier: the <f> listing was cut). Its
+// definition rides then, unless the umbrella sentence (which defines it too) already does — legendcoveragecheck (A).
+inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged = false, bool importersCut = false )
 {
     std::string out;
+    if( importersCut && !umbrella )
+    {
+        out += "importers_next=: the call listing every importer, beside importers_capped=\"1\" (the <f> rows are a most-imported "
+               "prefix of importers=). ";
+    }
     if( rollup )
     {
         out += "FILES (only beside a cut symbol window): the WHOLE reach set by file. files= in all, shown_files= listed; rf "

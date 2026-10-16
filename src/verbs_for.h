@@ -5,6 +5,7 @@
 
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 #include "forpage.h"    // L-W: the --for --limit=N file page, coverage=, the thin rule and the widening next=
+#include "forowner.h"   // the question's owner (owner-hop's found set) and the one owner body of an explanatory question
 #include <optional>          // the redaction-tally snapshots a degraded pre-render restores
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
@@ -554,6 +555,9 @@ struct ForLensHeaderParts
     bool             viaByOwnerOnly = false; // owner-hop: viaPresent holds ONLY because the owner rows joined the via question
                                             // (the six ranked hop ids alone answer no) — the via clause is then the owner
                                             // rows' disclosure, exempt from the sig trim exactly as the qword clause is
+    bool             bodySlotPresent = false; // for-body-slot: an explanatory question on the compact route named an owner
+                                            // (forowner.h forBodySlotOwner), so a <bodies> element rides — served, or skipped
+                                            // under a target with its next= — and the slot clause defines it (present-only)
 };
 
 // Splice a pre-formatted fragment in front of a structural boundary, or leave the document exactly as it
@@ -704,6 +708,24 @@ inline std::size_t ownerLegendExemptBytes( const ForLensHeaderParts& p, bool com
 }
 inline constexpr std::string_view kForCompactLegendBodies =
     "; b t= n= p= l= full bodies, c n= l= callee signatures";
+// for-body-slot: the compact dialect's reading of the ONE owner body (the full dialect's is forowner.h kForBodySlotLegend + the
+// root clause below), present-only (bodySlotPresent), right after the owner clause. No "--": it rides inside an XML comment.
+// FIX1 R3: it states what the full one states — what each pick= means and what reason=owner does NOT mean (the subject, the
+// whole answer): the default posture is this dialect, so this is the only reading most readers get.
+inline constexpr std::string_view kForCompactLegendBodySlot =
+    "; b t= n= p= l= full bodies, c n= l= callee signatures; bodies=1 reason=owner: ONE body, the question's owner by the rule "
+    "(pick=name: its name is a question word; pick=member: a method so named of a ranked class), chosen by name not resolved; "
+    "not necessarily the subject, not a claim it is the whole answer; shown=0 capped=1 next= when a budget skipped it";
+static_assert( kForCompactLegendBodySlot.starts_with( kForCompactLegendBodies ), "the slot's compact clause defines <b> as the bodies clause does" );
+inline constexpr std::string_view kForBodySlotRootClause = "; when it rides this root reads bodies=1 reason=owner";
+inline std::string bodySlotLegend( const ForLensHeaderParts& p, bool compact )
+{
+    if( !p.bodySlotPresent )
+    {
+        return {};
+    }
+    return compact ? std::string( kForCompactLegendBodySlot ) : std::string( rw::kForBodySlotLegend ) + std::string( kForBodySlotRootClause );
+}
 inline constexpr std::string_view kForCompactLegendTail =
     "; t p= file outside sigs (weaker), t sym= a file-page row: its top symbols, r= rank (gap = trimmed)";
 // R2-AF (round 2, S4): the COMPACT dialect's `<hdr p= of=/>` clause — verbatim, round-2 amendment §R7.
@@ -812,6 +834,7 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
         h += kForCompactLegendBodies;
     }
     h += ownerHopLegend( p, /*compact=*/true );   // owner-hop: present-only, right after the hops clause
+    h += bodySlotLegend( p, /*compact=*/true );   // for-body-slot: present-only, after the owner clause
     // The unconditionally-droppable-free tail of this dialect: five clauses that ride exactly when the bit beside
     // them is set, in THIS order, which is the contract a reader and every byte pin depend on. A table rather than
     // five identical ifs — the list has grown once per lane (hdr, compose, then train 9's lego and layer) and the
@@ -953,6 +976,7 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
         h.append( kForAutoBundleLegend );   // T3: present whenever auto mode is on, whatever the fit outcome — it explains bodies="0" too
     }
     h.append( ownerHopLegend( p, /*compact=*/false ) );   // owner-hop: present-only, right after the bundle clause
+    h.append( bodySlotLegend( p, /*compact=*/false ) );   // for-body-slot: present-only, after the owner clause
     if( p.tailLegend )
     {
         h.append( rw::kForFileTailLegend );   // deep-tail: defines r= and the <tail> element (sigs-charge-exempt, serialize.h)
@@ -2129,9 +2153,8 @@ inline std::vector<rw::NodeId> forCompactHopIds( const std::vector<rw::NodeId>& 
 // once (it is appended to the hop nodes only when it is not already one of the six). RIPWIRE_NO_OWNER_HOP=1 turns the
 // whole plan off — the A/B handle, the RIPWIRE_NO_DOCS_AFTER_CODE precedent.
 inline constexpr std::size_t kForOwnerHopRows = 3;
-inline constexpr std::string_view kOwnerCommonWords[] = {
-    "all", "call", "each", "from", "get", "has", "into", "new", "put", "read", "run", "set", "that", "then", "this",
-    "use", "when", "with", "write" };
+// kOwnerCommonWords, ownerFoldName, ownerQuestionWords and the found set itself (forOwnerCandidates) live in forowner.h: the
+// body slot (lane for-body-slot) and the MCP twin read the same owners.
 
 struct ForOwnerPlan
 {
@@ -2153,54 +2176,6 @@ struct ForSectionPromises
     const ForOwnerPlan* owners          = nullptr;   // nullptr ⇒ no owner rows (an empty plan reads the same)
 };
 
-// ASCII fold of one name or word, leading _ # $ @ removed (the owner match key)
-inline std::string ownerFoldName( std::string_view n )
-{
-    std::size_t i = 0;
-    while( i < n.size() && ( n[i] == '_' || n[i] == '#' || n[i] == '$' || n[i] == '@' ) )
-    {
-        ++i;
-    }
-    std::string out( n.substr( i ) );
-    for( char& c : out )
-    {
-        c = ( c >= 'A' && c <= 'Z' ) ? char( c - 'A' + 'a' ) : c;
-    }
-    return out;
-}
-
-// the question's distinct owner words, sorted (binary-searched below — any question length, no per-word scan)
-inline std::vector<std::string> ownerQuestionWords( std::string_view task )
-{
-    std::vector<std::string> words;
-    const auto isWordByte = []( unsigned char c ) noexcept
-    { return ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ) || c == '_' || c >= 0x80; };
-    std::size_t i = 0;
-    while( i < task.size() )
-    {
-        if( !isWordByte( static_cast<unsigned char>( task[i] ) ) )
-        {
-            ++i;
-            continue;
-        }
-        const std::size_t start = i;
-        while( i < task.size() && isWordByte( static_cast<unsigned char>( task[i] ) ) )
-        {
-            ++i;
-        }
-        std::string w = ownerFoldName( task.substr( start, i - start ) );
-        if( w.size() >= 3 && !rw::isRouteStopword( w ) )
-        {
-            words.push_back( std::move( w ) );
-        }
-    }
-    std::sort( words.begin(), words.end() );
-    words.erase( std::unique( words.begin(), words.end() ), words.end() );
-    return words;
-}
-
-static_assert( std::ranges::is_sorted( kOwnerCommonWords, rw::sortutil::svLess ), "kOwnerCommonWords is binary-searched: keep it sorted" );
-
 inline ForOwnerPlan forOwnerHopPlan( const rw::IngestResult& ing, const rw::Graph& g, std::string_view task,
                                      const std::vector<rw::NodeId>& lensSurfaceIds, const std::vector<float>& lensRank,
                                      const std::vector<rw::NodeId>& hopIds )
@@ -2210,52 +2185,8 @@ inline ForOwnerPlan forOwnerHopPlan( const rw::IngestResult& ing, const rw::Grap
     {
         return plan;
     }
-    const std::vector<std::string> words = ownerQuestionWords( task );
-    if( words.empty() )
-    {
-        return plan;
-    }
-    struct Owner
-    {
-        rw::NodeId  id;
-        std::size_t rank;   // 1-based position in the ranked surface
-        std::string word;
-    };
-    std::vector<Owner> found;
-    const std::size_t  pool = std::min( lensSurfaceIds.size(), std::size_t( rw::kForLensDefaultTopN ) );
-    for( std::size_t i = 0; i < pool; ++i )
-    {
-        const rw::NodeId id = lensSurfaceIds[i];
-        if( id >= ing.symbols.size() || lensRank[id] <= 0.0f )
-        {
-            continue;
-        }
-        const rw::Symbol& s = ing.symbols[id];
-        if( ( s.kind != rw::SymKind::Function && s.kind != rw::SymKind::Method ) || !rw::isDefinitionNotDeclaration( s ) || rw::isTestSymbol( ing, id ) )
-        {
-            continue;
-        }
-        std::string key = ownerFoldName( s.name );
-        if( std::binary_search( words.begin(), words.end(), key ) )
-        {
-            found.push_back( Owner{ id, i + 1, std::move( key ) } );
-        }
-    }
-    // the head-tier gate, per WORD: a word qualifies when one of its definitions ranks inside the head tier
-    std::vector<std::string> headWords;
-    for( const Owner& o : found )
-    {
-        if( o.rank <= rw::kForDocExcerptRankCount )
-        {
-            headWords.push_back( o.word );
-        }
-    }
-    std::sort( headWords.begin(), headWords.end() );
-    std::erase_if( found, [ & ]( const Owner& o ) { return !std::binary_search( headWords.begin(), headWords.end(), o.word ); } );
-    // rank order, common words after the rest (stable: rank order inside each group)
-    std::stable_partition( found.begin(), found.end(),
-                           []( const Owner& o ) { return !std::ranges::binary_search( kOwnerCommonWords, std::string_view( o.word ), rw::sortutil::svLess ); } );   // svLess: #345
-    for( Owner& o : found )
+    std::vector<rw::OwnerCandidate> found = rw::forOwnerCandidates( ing, rw::ownerQuestionWords( task ), lensSurfaceIds, lensRank );
+    for( rw::OwnerCandidate& o : found )
     {
         if( !rw::hopSlotHasProvenEdge( g.outOff, g.outNameOnly, o.id ) )
         {
@@ -3060,6 +2991,13 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         const ForOwnerPlan ownerPlan = ( autoBundleMode && plan.compact )
             ? forOwnerHopPlan( ing, g, cfg.forTask, lensSurfaceIds, lensRank, forCompactHopIds( lensSurfaceIds, lensRank ) )
             : ForOwnerPlan{};
+        // for-body-slot: THE ONE OWNER BODY of an explanatory question (forowner.h forBodySlotOwner), decided here for the same
+        // reason as the owner plan above: the header's slot clause reads it. The compact route only (an XML answer whose caller
+        // chose no body posture: autoBundleMode excludes --detail/--signatures-only, plan.compact excludes --auto-bodies and the
+        // name-exact route, which already serves the anchor's body).
+        const rw::ForBodySlotOwner slotOwner = ( autoBundleMode && plan.compact && !cfg.json && rw::forBodySlotAsked( cfg.forTask ) )
+            ? rw::forBodySlotOwner( ing, g.outOff, g.outTargets, cfg.forTask, lensSurfaceIds, lensRank )
+            : rw::ForBodySlotOwner{};
         bool forViaPresent = false;
         bool forViaByOwnerOnly = false;   // owner-hop: the six ranked hop ids alone answer no, the owner rows switch it on
         if( !g.outNameOnly.empty() )
@@ -3095,7 +3033,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                         /*tailLegend=*/true, /*idRouteLegend=*/true, flRootArg,
                                         /*hdrLegend=*/!forHdrRows.empty(), forScPresent, forComposePresent,
                                         forLegoPresent, forLayerPresent, forModScopePresent, forEndLinePresent, forViaPresent,
-                                        ownerPlan.any(), forViaByOwnerOnly };
+                                        ownerPlan.any(), forViaByOwnerOnly, slotOwner.any() };
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
         { return forLensHeaderText( headerParts, withRouteAttr, withTaskEcho, extraNotes ); };
         std::string headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
@@ -3370,8 +3308,11 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // on the same contract: exempt, so <sigs> is byte-identical with and without the owner rows (the rows ride on top of
         // the hop budget; their reading never costs a signature row). Gate: ownerhopcheck (S).
         const std::size_t ownerLegendEmitted = ownerLegendExemptBytes( headerParts, compactLegendOn );
+        // for-body-slot: the slot clause on the same contract — the body rides on top of the complete answer, so its reading never
+        // costs a signature row (forbodyslotcheck (D4): <sigs> byte-identical with RIPWIRE_NO_BODY_SLOT=1)
+        const std::size_t bodySlotLegendEmitted = bodySlotLegend( headerParts, compactLegendOn ).size();
         const std::size_t exemptBytes = adaptiveNote.size() + autoLegendBytes + confidenceExemptBytes + tailLegendEmitted + idRouteLegendEmitted
-                                      + endLineLegendEmitted + ownerLegendEmitted;
+                                      + endLineLegendEmitted + ownerLegendEmitted + bodySlotLegendEmitted;
         if( exemptBytes > headerStr.size() )
         {
             DISCLOSE( "runForLens: header exemptions exceed the emitted header — the sig ledger would underflow; charging the header whole" );
@@ -3398,7 +3339,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                               + confidenceEarlyAttrsBytes + confidenceEarlyNoteBytes + forAtAttrStr.size()
                                               + rw::kForFileTailLegend.size() + idRouteParts.bytes()
                                               + ( headerParts.endLinePresent ? rw::kForEndLineLegend.size() : 0u )
-                                              + ownerLegendExemptBytes( headerParts, /*compact=*/false );
+                                              + ownerLegendExemptBytes( headerParts, /*compact=*/false )
+                                              + bodySlotLegend( headerParts, /*compact=*/false ).size();
             std::size_t       fullCharged     = fullExempt > fullHeaderBytes ? fullHeaderBytes : fullHeaderBytes - fullExempt;
             fullCharged -= std::min( fullCharged, rw::forZeroNoteBytes( fullHeader ) );   // lean-answers: exempt, as above
             chargedHeaderBytes     = std::min( chargedHeaderBytes, fullCharged );
@@ -3809,6 +3751,41 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             enrich.attr = headerParts.compactBundle ? " bundle=\"compact\" bodies=\"0\" reason=\"degraded\"" : " bundle=\"auto\" bodies=\"0\" reason=\"degraded\"";
             headerStr   = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, kForDegradedBundleNote );
         }
+        // ── for-body-slot: THE ONE OWNER BODY, after the compact <hops> (forowner.h states the pick; the header carries its clause).
+        // DEFAULT regime: a required section of the complete answer, riding on top — <sigs>, <hops> and <tail> are byte-identical
+        // to RIPWIRE_NO_BODY_SLOT=1, est_tokens prices it at the body rate, the runaway guard never reads it. SOFT TARGET (reserve
+        // first): funded after the hops from what the rows AT THE CUT left of T; it rides only when its whole render fits that
+        // share, else it is SKIPPED — shown="0" capped="1" next= the call that serves it, root reason="budget" — and the tail's
+        // share and the rows' refill below both charge what it served, so the rows past the cut give way to it.
+        rw::BodySlotRender slot;
+        if( slotOwner.any() && autoBundleMode && sigsPreRendered && !enrich.surfaceOff )
+        {
+            const std::size_t slotSpent = rowsSpentBytes + plan.attrReserve + enrich.section.xml.size();   // the rows at the cut + the hops
+            slot = rw::renderForBodySlot( rw::BodySlotInputs{ ing, g.outOff, g.outTargets, g.outNameOnly, lensRank, flRootArg, redactPtr, notesPtr,
+                                                              headerParts.viaPresent, cfg.compress },
+                                          slotOwner, forSoftTarget ? std::optional<std::size_t>( rw::forSoftSectionsShare( bundleBudget, slotSpent ) )
+                                                                   : std::nullopt );
+            if( slot.served )
+            {
+                enrich.attr = " bundle=\"compact\" bodies=\"1\" reason=\"owner\"";   // never bodies="1" beside reason="compact-route"
+            }
+            else if( slot.skipped )
+            {
+                enrich.attr = " bundle=\"compact\" bodies=\"0\" reason=\"budget\"";
+            }
+            else
+            {
+                // the render's buffer failed: no body rides and nothing names one — the clause goes with it (the T3 degrade contract)
+                headerParts.bodySlotPresent = false;
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+            }
+        }
+        else if( headerParts.bodySlotPresent )
+        {
+            headerParts.bodySlotPresent = false;   // the compact section degraded (surfaceOff) or the rows were never measured
+            headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, enrich.surfaceOff ? std::string_view() : kForDegradedBundleNote );
+        }
+        ASSUME( !slot.served || headerParts.bodySlotPresent, "a served owner body rides with the clause that defines it" );
         const rw::ChargedSection& autoSection = enrich.section;
         const std::string&        autoAttr    = enrich.attr;
         if( enrich.hopsCutMarker )
@@ -3839,8 +3816,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // round C: the --detail bodies are the caller's own request under their own ceiling (--max-tokens / the pack budget), so
         // they neither fund nor are funded by the reserved sections: the tail's share and the rows' refill both leave them out,
         // and a body ceiling never moves a row (formaxtokenscheck (E))
-        const std::size_t tailSpentBytes = forSoftTarget ? rowsSpentBytes + autoSection.xml.size()
-                                                         : rowsSpentBytes + detailSection.xml.size() + autoSection.xml.size();
+        const std::size_t tailSpentBytes = forSoftTarget ? rowsSpentBytes + autoSection.xml.size() + slot.xml.size()
+                                                         : rowsSpentBytes + detailSection.xml.size() + autoSection.xml.size() + slot.xml.size();
         std::string       tailStr        = renderForFileTailXml( forFileTailShown, cfg.tokenBudget, bundleBudget, tailSpentBytes );
 
         // ── round C (owner decision 2026-10-14, RESERVE SECTIONS FIRST): the rows past the soft target's cut fill what the
@@ -3861,7 +3838,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                                                                 rw::kForFileTailShellReserve ),
                                                          rw::renderFileTailXml( forFileTail, forFileTail.paths.size(), tailEsc ).size() );
             const std::size_t sectionsServed = forHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size() + graphSection.xml.size()
-                                             + autoSection.xml.size() + tailReserve;   // not the --detail bodies (above)
+                                             + autoSection.xml.size() + slot.xml.size() + tailReserve;   // not the --detail bodies (above)
             const std::size_t rowDropFill    = rw::forSoftRowDropFill( bundleBudget, sectionsServed );
             if( rowDropFill < sigsBudgets.rowDrop )
             {
@@ -3921,9 +3898,10 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             // F2: everything OUTSIDE the header at the markup rate. enrich.markupBytes is the compact <hops> section,
             // folded in here rather than charged separately — one rate, one rounding (ForEnrichmentPlan).
             .nonHeaderMarkupBytes = forHdrXml.size() + sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size() + graphSection.xml.size()
-                                  + enrich.markupBytes + tailStr.size() + 6,   // + "</ctx>" (deep-tail: the tail at the markup rate)
-            // T3: the body-rate sections; enrich.bodyTokens is zero on the compact route (markup, above)
-            .bodyTokens           = detailSection.tokens + enrich.bodyTokens,
+                                  + enrich.markupBytes + tailStr.size() + slot.markupBytes + 6,   // + "</ctx>" (deep-tail: the tail at the markup rate)
+            // T3: the body-rate sections; enrich.bodyTokens is zero on the compact route (markup, above); for-body-slot: the
+            // owner body at the body rate (a skipped slot's element is markup, above)
+            .bodyTokens           = detailSection.tokens + enrich.bodyTokens + slot.bodyTokens,
             // forbudget-soft: a soft target is never "over" — budget_tokens= names a target, so it is not a ceiling this root
             // labels against; max_tokens= (the detail bodies' hard ceiling) still is, and the runaway guard's cut is the default's
             .tokenBudget          = 0,
@@ -4013,6 +3991,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             // contract for this optional enrichment, unlike --detail's explicit request (see the block above).
             std::fwrite( autoSection.xml.data(), 1, autoSection.xml.size(), stdout );
         }
+        // for-body-slot: the owner body (or its skip disclosure) after the hops, from the bytes est_tokens priced ("" when none)
+        std::fwrite( slot.xml.data(), 1, slot.xml.size(), stdout );
 
         // R8: --with-graph — a compact mermaid flowchart of the ranked bundle's anchor neighborhood,
         // right before </ctx>. Off by default (G5): omitted, this is a no-op and output is byte-identical.

@@ -20,6 +20,7 @@
 #include "filter.h"        // §P4: rankTierSymbolMultipliers — the fixture/present tier down-weight the CLI ranking lenses apply
 #include "redact.h"        // RedactCounts — the per-request redaction tally threaded through the body/doc verbs
 #include "forpage.h"    // L-W: the --for file page, coverage= and the thin rule — shared with the CLI twin
+#include "forowner.h"   // for-body-slot: the one owner body of an explanatory question — shared with the CLI twin
 #include "packtask.h"      // L4: the shared --pack-task / MCP explore+pack_task bundle assembler (packTaskBundleText)
 #include "partition.h"     // the explore verb's `partition` argument (packTaskPartitionText)
 #include "tracelocus.h"    // L4: the shared --from-trace / MCP from_trace bundle assembler (fromTraceBundleText)
@@ -1971,6 +1972,8 @@ struct McpForAssemblyInputs   // forTaskText's locals the assembly reads, by ref
                                                                //   decided once in forTaskText (the noRoute/task/budget verdicts live there)
     const std::vector<std::vector<NodeId>>&    implementors;   // train 26b: ix.g.implementors, for the count-floor lego re-render
     const LexTermEvidence&                     evidence;       // FOLD C: the term evidence the tail's page rows rank by
+    const Graph&                               g;              // for-body-slot: the owner body's <calls> edges
+    ForBodySlotOwner                           slotOwner;      // for-body-slot: the one owner body (forowner.h), none when not asked
 };
 // round C (owner decision 2026-10-14, RESERVE SECTIONS FIRST — the CLI twin's rule): under budget_tokens the sections are scoped and
 // served from the rows at the target cut, and the rows past the cut fill what the sections served before the tail (<hdr> rows,
@@ -2147,7 +2150,24 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
     // before the tail (<hdr> rows, <lego>, <compose>, <routes>) leave of T — never below the cut. The tail rides on top here,
     // as it always did on this twin. Re-rendered only when that narrows the rows; the first render's redaction count is
     // replaced, never added to.
-    mcpForSoftRefill( in, renderSigs, sigsStr, mcpSigsCut, &mcpSigsNext, mcpHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size(),
+    // for-body-slot (the CLI twin's rule, forowner.h): the one owner body. At the default it rides on top; under budget_tokens it
+    // is funded from what the rows at the cut and the sections before it left of T, rides only whole, else is skipped with its
+    // next=, and the rows' refill below charges what it served — so the rows past the cut give way to it.
+    BodySlotRender mcpSlot;
+    if( in.slotOwner.any() )
+    {
+        std::optional<std::size_t> share;
+        if( budgetTokens > 0 )
+        {
+            const std::size_t atCut = sigsStr.size() - std::min( sigsStr.size(), mcpSigsCut.pastTargetBytes );
+            share = forSoftSectionsShare( budgetBytesForTokens( budgetTokens ), mcpHdrXml.size() + atCut + legoStr.size() + composeStr.size() + routeStr.size() );
+        }
+        mcpSlot = renderForBodySlot( BodySlotInputs{ ing, in.g.outOff, in.g.outTargets, in.g.outNameOnly, lensRank, flRootArg, redact, notesPtr,
+                                                     /*viaLegendInHead=*/false, /*compress=*/false },
+                                     in.slotOwner, share );
+    }
+    mcpForSoftRefill( in, renderSigs, sigsStr, mcpSigsCut, &mcpSigsNext,
+                      mcpHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size() + mcpSlot.xml.size(),
                       redactBeforeSigs, redactAfterSigs );
     // A2: same insert-before-"-->" splice as the CLI twin (verbs_for.h) — absent entirely on the (overwhelming)
     // no-drop path, so headerStr's bytes are unchanged there (byte-identical to the pre-A2 output). Bare
@@ -2239,6 +2259,7 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
         const std::string tailStr = renderFileTailXml( mcpTail, mcpTail.paths.size(), tailEsc );   // every row computeFileTail collected
         std::fwrite( tailStr.data(), 1, tailStr.size(), mem );
     }
+    std::fwrite( mcpSlot.xml.data(), 1, mcpSlot.xml.size(), mem );   // for-body-slot: "" when no body rides
     rw::emitRaw( mem, "</ctx>" );
     std::optional<std::string> answer = mcpAnswerText( stream );
     if( !answer )
@@ -2612,6 +2633,15 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // resolution, both surfaces. Rows are emitted right after headerStr is flushed, below; the legend
     // clause (present-only, never ceiling-dropped — this dialect has no ceiling ladder at all) goes here.
     const std::vector<rw::ForNamedHeaderRow> mcpForHdrRows = rw::forNamedHeaderRows( ing, task );
+    // for-body-slot (the CLI twin's rule, forowner.h): an explanatory question on the conceptual route carries ONE owner body.
+    // The bundle sentence then says so (kMcpForBundleSigsOwnerLegend replaces "no inline bodies") and the slot clause rides; both
+    // are exempt from the sigs charge below exactly as far as they differ from the sentence they replace, so the served rows are
+    // byte-identical to RIPWIRE_NO_BODY_SLOT=1's.
+    const ForBodySlotOwner mcpSlotOwner = ( std::string_view( mcpRouteTag ) == "subtoken+body" && forBodySlotAsked( task ) )
+        ? forBodySlotOwner( ing, ix.g.outOff, ix.g.outTargets, task, lensSurfaceIds, lensRank )
+        : ForBodySlotOwner{};
+    const std::string_view mcpBundleLegend   = mcpSlotOwner.any() ? rw::kMcpForBundleSigsOwnerLegend : rw::kMcpForBundleSigsLegend;
+    const std::string_view mcpBodySlotLegend = mcpSlotOwner.any() ? rw::kForBodySlotLegend : std::string_view();
     std::string headerStr = rootOpenStr
                           + "<!-- ripwire lens for \"" + safeTask + "\"" + termsCapNote + mentionNote + boostNote + docMentionNote + floorNote
                           + std::string( rw::kMcpForBuildingBlocksLegend )
@@ -2619,7 +2649,8 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
                           // …and the route= code, present-only, exactly as the CLI twin appends it (forRouteAttrPresent):
                           // this dialect drops route= under no_route, and a reading with no attribute beside it is noise.
                           + std::string( mcpIdRouteParts.route )
-                          + std::string( rw::kMcpForBundleSigsLegend )
+                          + std::string( mcpBundleLegend )
+                          + std::string( mcpBodySlotLegend )   // for-body-slot: present-only
                           + std::string( mcpForConf.note )
                           + ( budgetTokens > 0 ? std::string( rw::kForSoftBudgetNote ) : std::string() )   // forbudget-soft: budget_tokens= is a soft target
                           // No "--" anywhere in this clause: it rides inside an XML comment, where a double
@@ -2686,6 +2717,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     const ForSectionStubPlan  mcpSigChargePlan = forSectionsSigChargePlan( sections, /*explicitCeiling=*/false, task, mcpLegoChargeIn, mcpComposeChargeIn );
     const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes - mcpIdRouteExemptBytes - mcpAtLegendExemptBytes
                                  - mcpEndLineExemptBytes
+                                 - ( mcpBundleLegend.size() + mcpBodySlotLegend.size() - rw::kMcpForBundleSigsLegend.size() )   // for-body-slot: 0 when not asked
                                  - rw::forZeroNoteBytes( headerStr )   // lean-answers: the zero reading never costs a row
                                  + mcpSigChargePlan.servedBytes( mcpLegoChargeIn, mcpComposeChargeIn ) + routeStr.size() + 6;   // + "</ctx>"
     // forbudget-soft: the CLI twin's two budgets (rw::forSigsBudgets) — the default target + the runaway guard, or a soft target
@@ -2712,7 +2744,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
                                            rw::forLensRules( !noRoute && !taskAsksAboutDocs( task ) && !std::getenv( "RIPWIRE_NO_DOCS_AFTER_CODE" )
                                                                  && rw::docsAfterCodeFitsCeiling( budgetTokens, /*bodyCeiling=*/false ),
                                                              rw::endLinesFitCeiling( budgetTokens, /*bodyCeiling=*/false ) ),   // LB-A, e=, docs reorder
-                                           ix.g.implementors, mcpEvidence };
+                                           ix.g.implementors, mcpEvidence, ix.g, mcpSlotOwner };
     // forbudget-soft: ONE assembly (the C3 unpaid/paid passes went with the hard ceiling they priced against)
     McpForAssembly chosen = assembleMcpFor( assemblyIn, headerStr, legoStr, composeStr, legoScoped, legoPreCapCount );
     if( !chosen.doc )
@@ -3078,7 +3110,7 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   declinedIfaceLegend( declinedIface > 0 ),                                          // likewise declined_iface=, as on the CLI
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
                     + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI
-                    + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ) ) ).c_str(),                  // idea #6, as on the CLI
+                    + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ), !imports.next.empty() ) ).c_str(),   // idea #6; FIX1 R1, as on the CLI
                   graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), renderDisclosure( prD, DiscloseAs::LegendClause ).c_str() );
     // r27-emitters §P2.1: the listing is capped at 40 by rank. Without shown=/capped= a 40-row answer to
     // "is it safe to change X?" reads as the WHOLE blast radius when it can be 3% of it. Same attributes,
