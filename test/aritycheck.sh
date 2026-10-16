@@ -13,16 +13,17 @@
 #   test/aritycheck.sh                       # uses build/ripwire on test/arityfix/{cpp,py,toomany}
 #   RIPWIRE_BIN=asan/ripwire test/aritycheck.sh
 #
-# Three fixtures:
+# Fixtures (the first three are the F1 gate; section 3b holds the minimum-arity arms):
 #   cpp/     — the audit's exact repro: f.h declares `f(int x, int y=5)` (proto only); a.cpp defines
 #              `f(int x, int y){...}` out-of-line (no default visible on the def ⇒ arityExact=1, params=2);
 #              b.cpp defines a genuine 1-arg overload `f(int x)`. caller.cpp calls `f(1)` (argCount=1 <
 #              params=2 on a.cpp). MUST bind both overloads (count=2 + amb=1) — never a lone confident pick
 #              that silently drops a.cpp.
-#   py/      — the same shape without any decl/def split, to prove the fix is applied to ALL languages, not
-#              just C++: a.py `f(x)` (params=1), b.py `f(x, y)` (params=2, no default ⇒ arityExact=1),
-#              caller.py calls `f(1)` (argCount=1 < params=2 on b.py). MUST also bind both (count=2 + amb=1)
-#              — the decided rule trades this bit of Python precision for the honesty guarantee.
+#   py/      — the same shape without any decl/def split: a.py `f(x)` (params=1), b.py `f(x, y)` (params=2, no
+#              default). REVERSED by the minimum-arity rule (train 29, arity-min): a 1-arg call to a 2-parameter
+#              Python function with no default is a TypeError, so b.py is provably not the callee and `f(1)` binds
+#              a.py ALONE (count=1). The C++ shape above still binds both: its default lives on the prototype, and
+#              the minimum is taken over the definition AND every declaration of it.
 #   toomany/ — the negative control: the exclusion must still fire for `argCount > params`. a.cpp `g(int x)`
 #              (params=1), b.cpp `g(int x,int y,int z)` (params=3). caller.cpp calls `g(1,2,3)`
 #              (argCount=3 > params=1 on a.cpp ⇒ still provably wrong). MUST resolve confidently to b.cpp
@@ -65,19 +66,15 @@ else
     printf '    %s\n' "$CC"
 fi
 
-# ── 2) py/: default-arg-shaped equivalent, no decl/def split — must ALSO bind both (all-languages rule) ──
+# ── 2) py/: no default, no declaration — the 2-parameter def cannot take 1 argument (minimum-arity rule) ──
 CP="$( callees "$FIX/py" call_f )"
 NP="$( callee_count "$FIX/py" call_f )"; NP="${NP:-0}"
-AP="$( hdr_amb "$FIX/py" )"; AP="${AP:-0}"
 HAS_PA="$( printf '%s' "$CP" | grep -c 'a\.py:1' )"     # a.py's f (params=1)
-HAS_PB="$( printf '%s' "$CP" | grep -c 'b\.py:1' )"     # b.py's f (params=2 — was wrongly excluded pre-fix)
+HAS_PB="$( printf '%s' "$CP" | grep -c 'b\.py:1' )"     # b.py's f (params=2, no default: needs 2 arguments)
 if [ "$NP" = "1" ] && [ "$HAS_PA" -ge 1 ] && [ "$HAS_PB" -eq 0 ]; then
-    no "REGRESSION (Python): f(1) resolves CONFIDENTLY to a.py alone — b.py's 2-param def silently dropped, amb=$AP"
-    printf '    %s\n' "$CP"
-elif [ "$NP" -ge 2 ] && [ "$HAS_PA" -ge 1 ] && [ "$HAS_PB" -ge 1 ] && [ "$AP" -ge 1 ]; then
-    ok "py: f(1) binds both overloads (count=$NP, amb=$AP) — the fix applies language-agnostically, not just C++"
+    ok "py: f(1) binds a.py alone (count=$NP) — the 2-parameter b.py def is provably not the callee"
 else
-    no "py: unexpected resolution shape (count=$NP, a=$HAS_PA, b=$HAS_PB, amb=$AP)"
+    no "py: f(1) still lists the 2-parameter def or lost a.py (count=$NP, a=$HAS_PA, b=$HAS_PB)"
     printf '    %s\n' "$CP"
 fi
 
@@ -94,23 +91,57 @@ else
     printf '    %s\n' "$CT"
 fi
 
+# ── 3b) minimum arity: a call with FEWER arguments than a candidate's REQUIRED parameters drops it ────────
+# required = params − defaulted, the minimum over the definition and every declaration of the same name and
+# parameter count (a default on either makes the shorter call legal). A variadic, implicit-self, JavaScript or
+# Kotlin candidate is never dropped this way. `expect DIR SYM "p= ..."` compares the callee p= set EXACTLY.
+expect(){
+    local got want
+    got="$( callees "$FIX/$1" "$2" | grep -oE '<s [^>]*p="[^"]*"' | grep -oE 'p="[^"]*"' | sed 's/^p="//; s/"$//' | sort | tr '\n' ' ' )"
+    want="$( printf '%s\n' $3 | sort | tr '\n' ' ' )"
+    if [ -z "$got" ]; then
+        no "$1 --callees=$2 returned no callee rows (want: $want) — $4"
+    elif [ "$got" = "$want" ]; then
+        ok "$1 --callees=$2 = { $got} — $4"
+    else
+        no "$1 --callees=$2 = { $got} want { $want} — $4"
+    fi
+}
+echo "── minimum arity (P = drops a provably-wrong overload; N = near miss that must keep it) ──"
+expect fewer    parse_default "u.cpp:2"                   "[P] C++ 3-arg call drops the 4-parameter no-default overload (ninja-26 shape)"
+expect protodef parse_proto   "u.cpp:2 u.cpp:6"           "[N] C++ default on the PROTOTYPE only keeps the 4-parameter def"
+expect defmin   call_h2       "a.cpp:1"                   "[P] h(1,2): keeps h(int a, int b = 1), drops the 4-parameter h"
+expect defmin   call_h1       "a.cpp:1"                   "[P] h(1): keeps h(int a, int b = 1), drops the 4-parameter h"
+expect defmin   call_h0       "c.cpp:1"                   "[P] h(): drops h(int a, int b = 1) (one required) and the 4-parameter h"
+expect variadic call_v        "a.cpp:1 b.cpp:1"           "[P] v(1): drops v(a,b,c); the variadic v(a, b, ...) is never dropped"
+expect voidp    call_z        "a.cpp:1"                   "[P] z(): keeps z(void) (no parameter), drops z(a,b)"
+expect pyself   call_m        "a.py:2 b.py:2"             "[N] Python methods (implicit self) are never dropped"
+expect pydef    call_g        "a.py:1"                    "[P] Python g(1): keeps g(x, y=1), drops g(x, y, z)"
+expect pydef    call_g2       "a.py:5"                    "[P] Python g2(1): the bare * separator is no parameter — keeps g2(x, *, y=1)"
+expect pydef    call_k        "a.py:14"                   "[P] Python k(1): a decorated def keeps (the decorator may supply arguments)"
+expect ts       call_t        "a.ts:2"                    "[P] TS t(1): keeps the optional-parameter t, drops t(a,b,c)"
+expect ts       call_d        "a.ts:3"                    "[P] TS d(1): keeps d(a, b = 2), drops d(a,b,c)"
+expect ts       call_w        "a.ts:4"                    "[P] TS w(1): the this-parameter is not passed — keeps w(this, a)"
+expect js       call_j        "a.js:1 b.js:1"             "[N] JavaScript: fewer arguments are legal — both kept"
+expect kt       callK         "A.kt:1 B.kt:1"             "[N] Kotlin: a default keeps its edge (no minimum-arity row)"
+
 # ── 4) determinism — byte-identical run-to-run over all three fixtures ──────────────────────────────
 echo "── determinism (byte-identical, two --no-cache runs) ──"
 detfail=0
-for d in "$FIX"/cpp "$FIX"/py "$FIX"/toomany; do
+for d in "$FIX"/*/; do
     "$BIN" "$d" --no-cache >"$TMP/r1" 2>/dev/null
     "$BIN" "$d" --no-cache >"$TMP/r2" 2>/dev/null
     cmp -s "$TMP/r1" "$TMP/r2" || { detfail=1; no "non-deterministic: $( basename "$d" )"; }
 done
-[ "$detfail" = 0 ] && ok "all three fixtures deterministic"
+[ "$detfail" = 0 ] && ok "every fixture deterministic"
 
 # ── 5) well-formed XML ───────────────────────────────────────────────────────────────────────────
 if command -v xmllint >/dev/null 2>&1; then
     ok_xml=1
-    for d in "$FIX"/cpp "$FIX"/py "$FIX"/toomany; do
+    for d in "$FIX"/*/; do
         "$BIN" "$d" --no-cache 2>/dev/null | xmllint --noout - 2>/dev/null || { ok_xml=0; no "xml malformed: $( basename "$d" )"; }
     done
-    [ "$ok_xml" = 1 ] && ok "xml well-formed (all three fixtures)"
+    [ "$ok_xml" = 1 ] && ok "xml well-formed (every fixture)"
 else
     ok "xml well-formed (xmllint absent — skipped)"
 fi
