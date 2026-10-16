@@ -56,9 +56,10 @@ cp "$TMP/out" "$TMP/map.xml"
 rows="$( grep -o "<s t=\"" "$TMP/map.xml" | wc -l | tr -d " " )"
 if [ "$map_rc" -eq 0 ] && [ "${rows:-0}" -ge 15 ]; then ok "(A0) map ran: rc=0, $rows rows"; else no "(A0) map rc=$map_rc rows=${rows:-0}: $( head -c 300 "$TMP/err" )"; fi
 
-# has_row KIND NAME SC → the map holds that row with exactly that sc= (SC empty = the row has NO sc= attribute)
-has_row(){
-    python3 -I - "$TMP/map.xml" "$1" "$2" "$3" <<'PY'
+# has_row KIND NAME SC (has_row_in FILE KIND NAME SC) → the map holds that row with exactly that sc= (SC empty = the row has NO sc= attribute)
+has_row(){ has_row_in "$TMP/map.xml" "$@"; }
+has_row_in(){
+    python3 -I - "$1" "$2" "$3" "$4" <<'PY'
 import re, sys
 xml, kind, name, sc = sys.argv[1:5]
 rows = re.findall(r'<s t="([^"]*)" n="([^"]*)"((?: [a-z_]+="[^"]*")*)', open(xml).read())
@@ -102,14 +103,19 @@ for spec in "method Push Stack" "method Size Stack" "method Close closer" \
     if has_row "$1" "$2" "$sc"; then ok "(C) t=$1 $2 $want"; else no "(C) t=$1 $2 wanted $want"; fi
 done
 
-echo "=== (I) receiver-list comment and interface alias (alias.go) ==="
+echo "=== (I) receiver-list comment and interface alias (written to a temp dir) ==="
 # I1: `func ( /* c */ n *Note) Body()` — the first named child of the receiver list is the comment, not the parameter.
 # I2: `type Sink = interface{ Flush() error }` — a type_alias owns its interface members as a type_spec does.
+# Written here, not committed under test/goscopefix: a Go `alias` row in the repo's own map pulls the Go type-kind legend
+# clause into every whole-repo map, which moves readmedriftcheck's --max-tokens=3000 head (G4) by two rows.
+mkdir -p "$TMP/goi"
+printf 'package scope\n\ntype Note struct{}\n\nfunc ( /* the note */ n *Note) Body() string { return "" }\n\ntype Sink = interface {\n\tFlush() error\n}\n' > "$TMP/goi/alias.go"
+"$BIN" "$TMP/goi" --no-cache >"$TMP/goi.xml" 2>/dev/null; irc=$?
 for spec in "method Body Note" "method Flush Sink" "struct Note -"; do
     set -- $spec
     sc="$3"; [ "$sc" = "-" ] && sc=""
     want="no sc="; [ -n "$sc" ] && want="sc=\"$sc\""
-    if has_row "$1" "$2" "$sc"; then ok "(I) t=$1 $2 $want"; else no "(I) t=$1 $2 wanted $want"; fi
+    if [ "$irc" -eq 0 ] && has_row_in "$TMP/goi.xml" "$1" "$2" "$sc"; then ok "(I) t=$1 $2 $want"; else no "(I) rc=$irc: t=$1 $2 wanted $want"; fi
 done
 
 echo "=== (D) the cache round-trips the scope ==="
