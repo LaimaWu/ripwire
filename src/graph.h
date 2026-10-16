@@ -13310,6 +13310,10 @@ inline std::size_t declinedCallsMadeBy( const Graph& g, std::span<const NodeId> 
 inline std::size_t inertDeclinedMadeBy( const Graph& g, std::span<const NodeId> sources ) noexcept
 {
     std::size_t n = 0;
+    if( g.inertDeclinedCaller.empty() )
+    {
+        return 0;   // no Elixir quote anywhere: the common case pays nothing
+    }
     for( const NodeId caller : g.inertDeclinedCaller )
     {
         n += std::ranges::contains( sources, caller ) ? 1u : 0u;

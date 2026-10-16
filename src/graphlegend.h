@@ -732,6 +732,14 @@ inline constexpr const char* kDeclinedSitesMcpLead =
     "declined_sites: each entry a call SITE the resolver declined to bind; NOT an edge and NOT a caller or callee claim (counted in declined_calls, never in count or a row above). cands=K: K in-tree definitions the call could have meant (K may be 1); the resolver proved none; not a claim this call reaches any of them (it may reach an out-of-tree, builtin or standard-library method). ";
 inline constexpr const char* kDeclinedSitesCalleesFormMcp =
     "{name, line, via=declined}: the called name and the line of the call, in the body of one of these definitions. ";
+inline constexpr const char* kDeclinedSitesOfDefCalleesMcp =
+    "of_def [K] on an entry: the definition (ix=K) making the call, a fact. ";
+inline constexpr const char* kDeclinedSitesOfDefCallersMcp =
+    "of_def [K~d] on an entry: its candidates include definition group K; never a claim it calls K. ";
+inline constexpr const char* kDeclinedSitesCutClauseMcp =
+    "dc_shown=N: the entries listed (the callers form cuts file-first: each file's first site before any file's second); dc_next is the call that lists every site. ";
+inline constexpr const char* kDeclinedSitesCandClauseMcp =
+    "candidates (legend full only): the candidate definitions as file:line, cand_more how many more. ";
 inline constexpr const char* kDeclinedSitesCallersFormMcp =
     "{in, file, line, via=declined}: the definition making the call and the call's file and line, listed because its candidates include a definition of this selector. ";
 inline std::string declinedSitesLegend( const DeclinedSitesLegendFlags& f, bool mcp = false )
@@ -744,9 +752,10 @@ inline std::string declinedSitesLegend( const DeclinedSitesLegendFlags& f, bool 
     out += f.callersForm ? ( mcp ? kDeclinedSitesCallersFormMcp : kDeclinedSitesCallersForm ) : ( mcp ? kDeclinedSitesCalleesFormMcp : kDeclinedSitesCalleesForm );
     out += f.side ? kDeclinedSitesSideClause : "";
     out += f.nameGate ? kDeclinedSitesNameGateClause : "";
-    out += f.ofDef ? ( f.callersForm ? kDeclinedSitesOfDefCallers : kDeclinedSitesOfDefCallees ) : "";
-    out += f.cut ? kDeclinedSitesCutClause : "";
-    out += f.cand ? kDeclinedSitesCandClause : "";
+    out += f.ofDef ? ( f.callersForm ? ( mcp ? kDeclinedSitesOfDefCallersMcp : kDeclinedSitesOfDefCallers )
+                                     : ( mcp ? kDeclinedSitesOfDefCalleesMcp : kDeclinedSitesOfDefCallees ) ) : "";
+    out += f.cut ? ( mcp ? kDeclinedSitesCutClauseMcp : kDeclinedSitesCutClause ) : "";
+    out += f.cand ? ( mcp ? kDeclinedSitesCandClauseMcp : kDeclinedSitesCandClause ) : "";
     return out;
 }
 

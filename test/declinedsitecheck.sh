@@ -555,13 +555,36 @@ os.makedirs( os.path.join( MIX, "ex" ) ); shutil.copy( os.path.join( EX, "run.ex
 x = ask( MIX, "callees", "quoted" )
 say( x.ok and x.a( "declined_calls" ) == "1" and not x.dc, "[L] l_mixed_inert",
      "beside Python records: --callees=quoted exit 0, declined_calls=\"1\", no <dc> row", x.why() )
-rc, out = run( MIX, "--callees=py/caller/use.py:load_twice", "--legend=full" )
+# a selector whose definitions made BOTH: a Python `quoted` with a declined store.fetch (rows) beside the Elixir quoted/0
+with open( os.path.join( MIX, "py", "caller", "q.py" ), "w", encoding = "utf-8" ) as f:
+    f.write( "def quoted(store, key):\n    return store.fetch(key)\n" )
+rc, out = run( MIX, "--callees=quoted", "--legend=full" )
 y = Answer( rc, out, "callees" )
-say( y.ok and len( y.dc ) >= 1 and "No <dc> row names those quoted sites" in out and "inert quote AST" in out, "[L] l_rows_legend",
-     "a Python answer with <dc> rows on a tree with quoted sites: rows, the inert clause and its no-row sentence", y.why() )
+say( y.ok and len( y.dc ) >= 1 and int( y.a( "declined_calls" ) or 0 ) == len( y.dc ) + 1
+     and "No <dc> row names those quoted sites" in out and "inert quote AST" in out, "[L] l_rows_legend",
+     "--callees=quoted over a Python and an Elixir definition: the Python rows, declined_calls= one more (the inert site), the inert clause and its no-row sentence", y.why() )
 rc, out = run( PYF, "--callees=caller/use.py:load_twice", "--legend=full" )
 say( rc == 0 and "No <dc> row names those quoted sites" not in out and "inert quote AST" not in out, "[L] l_rows_legend_neg",
      "the same answer on the Python tree alone carries neither sentence (present-only)" )
+
+# (L, CR pre-pass) the inert sentences ride only an answer whose OWN definitions made an inert quoted site: on the same mixed
+# tree a Python selector whose every declined call has its row carries neither (it was charged graph-wide before);
+# and the MCP map (analyze) defines the inert sites its declined= counts, as the CLI map does.
+rc, out = run( MIX, "--callees=load", "--legend=full" )
+y = Answer( rc, out, "callees" )
+say( y.ok and len( y.dc ) == int( y.a( "declined_calls" ) or -1 ) and "No <dc> row names those quoted sites" not in out and "inert quote AST" not in out,
+     "[L] l_rows_no_inert", "mixed tree, --callees=load: every declined call has its row, so neither inert sentence rides", y.why() )
+req = json.dumps( { "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} } ) + "\n" + json.dumps(
+    { "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "analyze", "arguments": { "path": EX, "legend": "full" } } } ) + "\n"
+an = ""
+try:
+    p = subprocess.run( [ BIN, "--mcp" ], input = req, capture_output = True, text = True, timeout = 240 )
+    for line in p.stdout.splitlines():
+        try: r = json.loads( line )
+        except ValueError: continue
+        if r.get( "id" ) == 2 and "result" in r: an = r[ "result" ][ "content" ][ 0 ][ "text" ]
+except ( subprocess.TimeoutExpired, KeyError, IndexError, TypeError ): an = ""
+say( "declined=" in an and "inert-quote-AST" in an, "[L] l_mcp_map", "MCP analyze on elixirfix: declined= and the inert map clause, as on the CLI", an[ :160 ] )
 
 # ── (M) train 28: the review's N1 (honesty-adjacent) and N3 ──────────────────────────────────────────────────────────
 # N1: both declined_calls= clauses said "two or more same-language definitions, none in the caller's file or directory"
@@ -581,6 +604,10 @@ m = mcp( "find_symbol", { "path": GO, "symbol": "doPackage" } ) or {}
 note = str( m.get( "declined_note", "" ) )
 say( bool( m.get( "declined_sites" ) ) and note.startswith( "declined_sites:" ) and "{name, line" in note and "<dc" not in note, "[M] m_mcp_note",
      "MCP find_symbol declined_note names the declined_sites keys, not <dc> attributes", note[ :160 ] )
+m = mcp( "find_symbol", { "path": PYF, "symbol": "load" } ) or {}
+note = str( m.get( "declined_note", "" ) )
+say( any( d.get( "of_def" ) for d in m.get( "declined_sites", [] ) ) and "of_def [K]" in note and "<dc" not in note, "[M] m_mcp_note_ofdef",
+     "MCP find_symbol on a multi-definition selector: the of_def clause speaks the entry keys too", note[ -200: ] )
 
 # ── (J) the predicates can fail ────────────────────────────────────────────────────────────────────────────────────
 print( "=== (J) the predicates reject what they must ===" )
