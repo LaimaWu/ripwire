@@ -325,6 +325,9 @@ constexpr std::uint32_t kParserVer    = 176;          // bump on any grammar/.sc
                                                       //   (slice 4a, rich 174), lane grep-carrier 173 (value refs through ?? || && / or and, rich 174),
                                                       //   lane ruby-pair 174 (subscript references + Ruby main-object mixins, rich 175), PR #380 145 (Elixir inert
                                                       //   regions, RefRole::Inert), the other lanes 171. Rich file tag 177.
+                                                      // 145 = PR #380 (issue #357, @LaimaWu; branch based on 143, 144 then main's rich tag): Elixir quote
+                                                      //   live holes and counted inert call candidates (RefRole::Inert, appended after ruby-pair's
+                                                      //   Subscript at the train, so its byte is 10, not the branch's 9).
                                                       // 173 = 2026-10-15 (slice 4a, #400): the Ruby mixin directives (`include` / `extend` / `prepend`)
                                                       //   move off the captureIncludes walk onto the shared base-relations path —
                                                       //   queries/ruby/tags.scm captures the directive as @reference.mixin and captureTagsFacts

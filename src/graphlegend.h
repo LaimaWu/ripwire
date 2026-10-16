@@ -620,6 +620,9 @@ inline constexpr const char* kDeclinedCallsGateClause =
 // (Graph::stdMemberDeclinedCalls), so a tree it never touched keeps its bytes. What it does NOT mean is in the same breath.
 inline constexpr const char* kDeclinedCallsStdClause =
     "It also counts a C++ call named like a member of a standard container, string, optional or smart pointer (v.push_back, s.size) on a receiver no rule tied to an in-tree class: the standard library's own member may be the one called, so no in-tree namesake is bound; it is not a claim that the receiver is a standard type. ";
+inline constexpr const char* kInertDeclinedCallsClause =
+    "In the callees form it also counts ordinary Elixir call candidates in inert quote AST after unquote/unquote_splicing re-entry. "
+    "These sites have no uses rows or target candidates, so they contribute no caller or impact declined_calls= candidate list. ";
 inline const char* declinedCallsLegend( bool on ) noexcept { return on ? kDeclinedCallsLegend : ""; }
 inline const char* declinedCallsGateLegend( bool on ) noexcept { return on ? kDeclinedCallsGateClause : ""; }
 inline const char* declinedCallsStdLegend( bool on ) noexcept { return on ? kDeclinedCallsStdClause : ""; }
@@ -632,11 +635,14 @@ inline const char* stdMemberCallsLegend( bool on ) noexcept { return on ? kStdMe
 inline constexpr const char* kDeclinedCallsTestGateLegend =
     "declined_calls=K (absent when 0): K call SITES the resolver declined to bind that could have reached the change or its radius (the map's declined=); a test behind one is in no row here. ";
 // The clause and, where the gate declined in this graph, its gate sentence — the one spelling every declined_calls= emitter uses.
-inline std::string declinedCallsLegendWithGate( bool on, bool gateDeclined ) { return std::string( declinedCallsLegend( on ) ) + declinedCallsGateLegend( on && gateDeclined ); }
-// The same, plus the C++ standard-member gate's sentence where that gate declined in this graph (graph.h StdMemberGate).
-inline std::string declinedCallsLegendWithGates( bool on, bool gateDeclined, bool stdDeclined )
+inline std::string declinedCallsLegendWithGate( bool on, bool gateDeclined, bool inertDeclined = false )
 {
-    return declinedCallsLegendWithGate( on, gateDeclined ) + declinedCallsStdLegend( on && stdDeclined );
+    return std::string( declinedCallsLegend( on ) ) + declinedCallsGateLegend( on && gateDeclined ) + ( on && inertDeclined ? kInertDeclinedCallsClause : "" );
+}
+// The same, plus the C++ standard-member gate's sentence where that gate declined in this graph (graph.h StdMemberGate).
+inline std::string declinedCallsLegendWithGates( bool on, bool gateDeclined, bool stdDeclined, bool inertDeclined = false )
+{
+    return declinedCallsLegendWithGate( on, gateDeclined, inertDeclined ) + declinedCallsStdLegend( on && stdDeclined );
 }
 
 // ── reference-as-value round (src/valuerefs.h, src/ingest_valuerefs.h) ─────────────────────────────────────────

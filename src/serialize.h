@@ -2335,6 +2335,8 @@ inline constexpr const char* kDeclinedGateMapLegend =
 inline constexpr const char* kDeclinedStdMapLegend =
     "<!-- hdr:declined=also-counts-C++-calls-named-like-a-std-container/string/optional/smart-pointer-member(v.push_back,s.size)-on-a-receiver-no-rule-tied-to-an-in-tree-class;"
     "the-std-member-may-be-the-one-called;not-a-claim-the-receiver-is-a-std-type -->";
+inline constexpr const char* kInertDeclinedMapLegend =
+    "<!-- hdr:declined=also-counts-ordinary-Elixir-call-sites-inside-inert-quote-AST-after-unquote/unquote_splicing-re-entry;no-edge;not-a-possible-callee -->";
 
 // #157: the default map's own nest-refused disclosure — before this, a refused file's absence carried no signal
 // on the map's own header at all, only in the skipped verb's own report (if a reader thought to ask). Charged
@@ -2890,7 +2892,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
                        const std::vector<std::uint8_t>* outNameOnly = nullptr,
                        // of declined=, the calls the C++ standard-member gate declined (graph.h g.stdMemberDeclinedCalls) →
                        // the kDeclinedStdMapLegend clause, absent when zero.
-                       std::size_t stdMemberDeclinedCalls = 0 )
+                       std::size_t stdMemberDeclinedCalls = 0,
+                       // of declined=, the Elixir call candidates inside inert quote AST (g.inertDeclinedCalls, #380) →
+                       // the kInertDeclinedMapLegend clause, absent when zero.
+                       std::size_t inertDeclinedCalls = 0 )
 {
     const std::size_t* changedCount = ann.changedCount;
     const std::string* mapAtStamp   = ann.atStamp;
@@ -3135,6 +3140,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     legend += declinedTotal > 0 ? kDeclinedMapLegend : "";               // charged to the map that carries declined=
     legend += gateDeclinedCalls > 0 ? kDeclinedGateMapLegend : "";       // only where the builtin-method gate declined a call
     legend += stdMemberDeclinedCalls > 0 ? kDeclinedStdMapLegend : "";   // only where the C++ standard-member gate declined a call
+    legend += inertDeclinedCalls > 0 ? kInertDeclinedMapLegend : "";     // only where an Elixir quote declined a call candidate
     if( outNameOnly && !stubbed && !ann.viaLegendStripped
         && namesOnlyOutAny( outOff, *outNameOnly, std::span<const NodeId>( order.data(), std::min( keep, order.size() ) ) ) )
     {

@@ -125,6 +125,10 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   kVrMaxDepth gains a depth-cut record; the remaining written key slots are capped) with quality.h's mirror; 145
 #   because 143's full-use file tag is 144. kQSnapCacheScheme 17 -> 18: the dead set moved (a function that only
 #   stores itself is no longer value-referenced). No assertion changed.
+# 2026-10-05, issue #357 lane: RE-DERIVED with UPDATE_GOLDEN=1. kParserVer 143 -> 145 for
+#   Elixir quote live holes and counted inert call candidates (144 is main's rich-family tag;
+#   train renumbers). quality.h's parser mirror moved with it. kQSnapCacheScheme stays 17:
+#   Snapshot meaning is unchanged and its key carries the extraction identity.
 # 2026-10-04, train 25 review fixes: RE-DERIVED with UPDATE_GOLDEN=1 (hash 32240f4552…2dafcc). kParserVer 141 -> 143 (two
 #   extraction changes: a declaration named like the JS global object is a JsShadow binding; value-reference slot text
 #   is cut on a UTF-8 boundary and JS string keys are capped) with quality.h's mirror; 143 because 141's full-use file
