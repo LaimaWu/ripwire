@@ -701,6 +701,28 @@ inline std::string calledByCutJson( std::string_view name, std::size_t total, co
 // tier-then-path order — and renders it with the same disclosures, paged through the same pageview.h
 // window every other paged MCP verb uses. `page` defaults to {} ⇒ the default cap, exactly as the CLI's
 // un-paged call behaves. Gates: test/mcpattrparitycheck.sh, test/mcpcontractcheck.sh's paging arm.
+// attrib-multidef (factored out of symbolQueryJson at train 28, byte-identical): the definition table listing the groups the
+// calledBy window names and, on find_symbol, the calls window too (all of them up to the cap), then its reading when it rides.
+// `callsWindow` is empty (begin == end) on find_referencing_symbols, which marks the calledBy window only.
+inline std::string symbolQueryDefTableJson( const IngestResult& ing, const DefGroups& groups, const RowDefTokens& calledByTokens,
+                                            const RowDefTokens& callsTokens, const PageWindow& calledByWindow, const PageWindow& callsWindow,
+                                            std::string_view rootPrefix )
+{
+    std::vector<char> named;
+    defTableMarkNamed( named, groups, calledByTokens, calledByWindow.begin, calledByWindow.end );
+    if( callsWindow.end > callsWindow.begin )
+    {
+        defTableMarkNamed( named, groups, callsTokens, callsWindow.begin, callsWindow.end );
+    }
+    const DefTableListing listing = defTableListing( groups, named );
+    std::string           out     = defTableJson( ing, groups, listing, rootPrefix, /*mcp=*/true );
+    if( groups.multi() )
+    {
+        out += nextFieldJson( defTableLegend( true, listing.cut ), "def_note" );   // its reading, only when the table rides
+    }
+    return out;
+}
+
 inline std::string symbolQueryJson( const std::string& root, const std::string& name, bool referencingOnly,
                                     McpPageArgs page = {} )
 {
@@ -834,22 +856,10 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     // which is where the disclosure has to be — the same posture bodyless_defs= already holds here.
     out += unprovenDefsKeyJson( chRows.unprovenDefs );
     out += crossKindKeyJson( chRows.crossKind );   // hono-07: the CLI root's cross_kind=, self-named like unproven_defs above
-    // attrib-multidef: the CLI root's <def> table, in this surface's row vocabulary, listing the groups either window names (all of
-    // them up to the cap). The `symbol` object above stays the first definition — def_table[0] — and this table rides beside it.
-    {
-        std::vector<char> named;
-        defTableMarkNamed( named, chRows.attr.groups, calledByAttr.tokens, ( referencingOnly ? pwPrimary : pwSecond ).begin, ( referencingOnly ? pwPrimary : pwSecond ).end );
-        if( !referencingOnly )
-        {
-            defTableMarkNamed( named, chRows.attr.groups, callsAttr.tokens, pwPrimary.begin, pwPrimary.end );
-        }
-        const DefTableListing listing = defTableListing( chRows.attr.groups, named );
-        out += defTableJson( ing, chRows.attr.groups, listing, sqRootPrefix, /*mcp=*/true );
-        if( chRows.attr.groups.multi() )
-        {
-            out += nextFieldJson( defTableLegend( true, listing.cut ), "def_note" );   // its reading, only when the table rides
-        }
-    }
+    // attrib-multidef: the CLI root's <def> table, in this surface's row vocabulary (symbolQueryDefTableJson). The `symbol` object
+    // above stays the first definition — def_table[0] — and this table rides beside it.
+    out += symbolQueryDefTableJson( ing, chRows.attr.groups, calledByAttr.tokens, callsAttr.tokens, referencingOnly ? pwPrimary : pwSecond,
+                                    referencingOnly ? PageWindow{} : pwPrimary, sqRootPrefix );
     out += pageDisclosure( pab, sizeof( pab ), pwPrimary.end - pwPrimary.begin, rowTotal, pwPrimary.end,
                            page.limit, page.offset, discloseCap, kJsonPageSyntax );
     if( !referencingOnly )

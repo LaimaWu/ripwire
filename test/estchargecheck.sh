@@ -271,6 +271,53 @@ if __name__ == "__main__":
     good, msg = verdict( sys.argv[ 1 ], sys.argv[ 2 ], sys.argv[ 3 ] if len( sys.argv ) > 3 else None )
     print( msg ); sys.exit( 0 if good else 1 )
 PY
+# #11 A7 sweep's one-pass judge and #18's rung-zero corpus writer: helper scripts in $TMP, written once here like soft_st.py
+# (moved out of est_11_sweep / est_18 unchanged at train 28, so each section reads as its arms)
+cat >"$TMP/a7s_judge.py" <<'PYS'
+import re, sys
+sys.path.insert( 0, sys.argv[ 2 ] )
+import soft_st
+runs = badn = cut = over = 0; bad = []; prev = {}
+for line in open( sys.argv[ 1 ] ):
+    label, n, rc, f, ref = line.split()
+    n = int( n ); runs += 1; why = []
+    d = open( f, encoding='utf-8', errors='replace' ).read()
+    root = re.search( r'^<ctx [^>]*>', d ); root = root.group( 0 ) if root else ''
+    est = re.search( r' est_tokens="(\d+)"', root )
+    if rc != '0' or not root or not est: why.append( 'exit-%s/no-root-or-est' % rc )
+    if ' over_ceiling=' in root or '[over_ceiling= is 1 on the root: ' in d: why.append( 'labelled' )
+    good, msg = soft_st.verdict( f, n, ref )
+    if not good: why.append( 'ST:[%s]' % msg )
+    rows = soft_st.row_ids( f )
+    if not rows or ( label in prev and rows[ :len( prev[ label ] ) ] != prev[ label ] ): why.append( 'not-monotone' )
+    prev[ label ] = rows
+    sigs = re.search( r'<sigs [^>]*>', d ); sigs = sigs.group( 0 ) if sigs else ''
+    sh = re.search( r' shown="(\d+)"', sigs ); tot = re.search( r' total="(\d+)"', sigs )
+    if sh and tot and int( sh.group( 1 ) ) < int( tot.group( 1 ) ):
+        cut += 1
+        if ' next="--for=' not in sigs: why.append( 'cut-without-next' )
+    if est and int( est.group( 1 ) ) > n: over += 1
+    if why:
+        badn += 1
+        if len( bad ) < 6: bad.append( '%s@%d:[%s]' % ( label, n, ' '.join( why ) ) )
+print( runs, badn, cut, over )
+for b in bad: print( b )
+PYS
+cat >"$TMP/rz_corpus.py" <<'PYRZ'
+import os, sys
+out   = sys.argv[ 1 ]
+lines = [ "def widgetPingBoxRouter( alpha, beta ):",
+          '    """Widget ping box router: route every alpha reading onto the beta box."""',
+          "    total = 0" ]
+for j in range( 26 ):
+    lines.append( f"    total = total + alpha * {j} - beta * {j} + widgetPingStep{j % 4}( total, {j} )" )
+lines.append( "    return total" )
+with open( os.path.join( out, "router.py" ), "w" ) as fh:
+    fh.write( "\n".join( lines ) + "\n" )
+with open( os.path.join( out, "steps.py" ), "w" ) as fh:
+    for j in range( 4 ):
+        fh.write( f'def widgetPingStep{j}( total, step ):\n    """Step {j}."""\n    return total + step\n\n' )
+PYRZ
 soft_rows(){ python3 "$TMP/soft_rows.py" "$1"; }
 soft_st(){ python3 "$TMP/soft_st.py" "$@"; }
 rows_prefix(){ [ -s "$1" ] && [ "$( head -n "$( wc -l < "$1" | tr -d ' ' )" "$2" )" = "$( cat "$1" )" ]; }
@@ -947,37 +994,7 @@ done
 # one pass over every rung: exit 0 + root + est_tokens; NOLBL (no root over_ceiling=, no last-rung note); ST (soft_st's verdict);
 # RP (each rung's rows a rank prefix of the next rung's, same spec); NX (shown < total carries next="--for=). Prints
 # "runs badn cut over", then up to six "label@N:[why]" lines.
-a7s_out="$( python3 - "$A7S/manifest" "$TMP" <<'PYS'
-import re, sys
-sys.path.insert( 0, sys.argv[ 2 ] )
-import soft_st
-runs = badn = cut = over = 0; bad = []; prev = {}
-for line in open( sys.argv[ 1 ] ):
-    label, n, rc, f, ref = line.split()
-    n = int( n ); runs += 1; why = []
-    d = open( f, encoding='utf-8', errors='replace' ).read()
-    root = re.search( r'^<ctx [^>]*>', d ); root = root.group( 0 ) if root else ''
-    est = re.search( r' est_tokens="(\d+)"', root )
-    if rc != '0' or not root or not est: why.append( 'exit-%s/no-root-or-est' % rc )
-    if ' over_ceiling=' in root or '[over_ceiling= is 1 on the root: ' in d: why.append( 'labelled' )
-    good, msg = soft_st.verdict( f, n, ref )
-    if not good: why.append( 'ST:[%s]' % msg )
-    rows = soft_st.row_ids( f )
-    if not rows or ( label in prev and rows[ :len( prev[ label ] ) ] != prev[ label ] ): why.append( 'not-monotone' )
-    prev[ label ] = rows
-    sigs = re.search( r'<sigs [^>]*>', d ); sigs = sigs.group( 0 ) if sigs else ''
-    sh = re.search( r' shown="(\d+)"', sigs ); tot = re.search( r' total="(\d+)"', sigs )
-    if sh and tot and int( sh.group( 1 ) ) < int( tot.group( 1 ) ):
-        cut += 1
-        if ' next="--for=' not in sigs: why.append( 'cut-without-next' )
-    if est and int( est.group( 1 ) ) > n: over += 1
-    if why:
-        badn += 1
-        if len( bad ) < 6: bad.append( '%s@%d:[%s]' % ( label, n, ' '.join( why ) ) )
-print( runs, badn, cut, over )
-for b in bad: print( b )
-PYS
-)"
+a7s_out="$( python3 "$TMP/a7s_judge.py" "$A7S/manifest" "$TMP" )"   # the one-pass judge: SHARED DEFINITIONS
 read -r a7s_runs a7s_badn a7s_cut a7s_over <<<"$( printf '%s\n' "$a7s_out" | head -1 )"
 a7s_bad="$( printf '%s\n' "$a7s_out" | tail -n +2 | tr '\n' ' ' )"
 { [ -n "$a7s_runs" ] && [ "$a7s_runs" -eq 66 ] && [ "$a7s_badn" -eq 0 ]; } 2>/dev/null \
@@ -2330,21 +2347,7 @@ est_18(){
 # est_tokens=1069 with no over_ceiling=, and the pre-fix rung dropped all three clauses and delivered 715.
 RZ="$TMP/rungzero"
 mkdir -p "$RZ/corpus"
-python3 - "$RZ/corpus" <<'PYRZ'
-import os, sys
-out   = sys.argv[ 1 ]
-lines = [ "def widgetPingBoxRouter( alpha, beta ):",
-          '    """Widget ping box router: route every alpha reading onto the beta box."""',
-          "    total = 0" ]
-for j in range( 26 ):
-    lines.append( f"    total = total + alpha * {j} - beta * {j} + widgetPingStep{j % 4}( total, {j} )" )
-lines.append( "    return total" )
-with open( os.path.join( out, "router.py" ), "w" ) as fh:
-    fh.write( "\n".join( lines ) + "\n" )
-with open( os.path.join( out, "steps.py" ), "w" ) as fh:
-    for j in range( 4 ):
-        fh.write( f'def widgetPingStep{j}( total, step ):\n    """Step {j}."""\n    return total + step\n\n' )
-PYRZ
+python3 "$TMP/rz_corpus.py" "$RZ/corpus"   # the git-less corpus writer: SHARED DEFINITIONS
 # L1 (2026-09-19): #18 counts the FULL legend's droppable clauses (confidence=/tail:/route= prose), so rz_run asks for the full legend.
 rz_run(){ ( cd "$RZ" && rwcall corpus --for="widget ping box router" --detail=1 --token-budget="$1" --no-cache --legend=full ) >"$RZ/o.xml" 2>/dev/null; }
 rz_est(){ grep -aoE 'est_tokens="[0-9]+"' "$RZ/o.xml" | head -1 | tr -dc '0-9'; }
