@@ -1473,8 +1473,8 @@ inline std::uint16_t countParams( TSNode defNode )   // A4-F25: NOT noexcept —
 //   * `soleVoid`           — a list whose ONLY parameter reads exactly this text has no parameter (C++ `f(void)`);
 //   * `receiverChild`      — a child holding a node of this kind is never passed (TS `this: T`) → NO minimum;
 //   * `decoratedParent`    — a def whose PARENT is this kind is decorated; a decorator may supply arguments → NO minimum;
-//   * `selfOwner`          — a def within 3 parents of this kind is a method whose first parameter (`self`/`cls`) the call
-//                            omits → NO minimum. Python tags every `def` @definition.function, so SymKind::Method never
+//   * `selfOwner`          — a def whose nearest enclosing class-or-function scope is this kind is a method whose first
+//                            parameter (`self`/`cls`) the call omits → NO minimum. Python tags every `def` @definition.function, so SymKind::Method never
 //                            marks a Python method and the kind gate below cannot see one; the parse tree can.
 // Every kind name is the vendored grammar's own (third_party/deps/<lang>/src/parser.c symbol table). Languages
 // WITHOUT a row, each for a stated reason: JavaScript (a call may legally pass fewer arguments than declared);
@@ -1498,12 +1498,13 @@ inline constexpr ParamMinLang kParamMinLangs[] = {
     { Lang::Python,     { "default_parameter", "typed_default_parameter" }, {},                { "keyword_separator", "positional_separator" }, {},     {},     "decorated_definition", "class_definition" },
     { Lang::TypeScript, { "optional_parameter", {} },                    "required_parameter", { {}, {} },                                     {},     "this", {},                     {} },
 };
-// Is `def` a member of an `owner`-kind node: one of its first 3 ancestors (through a decorator wrapper and the class
-// body block) is `owner`, with no function in between — a def nested in a method's body is a closure, not a member.
+// Is `def` a member of an `owner`-kind node: the nearest enclosing `owner` or function is `owner`. The walk has no
+// depth cap — a class body may hold a def under any number of `if`/`try`/`with`/`else` blocks and a decorator wrapper
+// (a fixed hop count missed `class A:\n  if X:\n    def m(self, a)`, counted `self` and dropped the real method); it
+// stops at the first function, since a def nested in a method's body is a closure, not a member.
 inline bool ownedBy( TSNode def, std::string_view owner ) noexcept
 {
-    TSNode p = ts_node_parent( def );
-    for( int hop = 0; hop < 3 && !ts_node_is_null( p ); ++hop, p = ts_node_parent( p ) )
+    for( TSNode p = ts_node_parent( def ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
     {
         const std::string_view t = ts_node_type( p );
         if( t == owner )
