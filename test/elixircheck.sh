@@ -214,6 +214,22 @@ assert 'declined_calls' not in callers.attrib, 'inert sites became possible call
 print('  PASS declined map/callees accounting, compact readings, and no possible callers')
 PYINERTVERBS
 
+# langfacts-fold (train 29): the inert-quote region is Elixir's alone (src/ingest_sidecap.h reads it from the language-facts
+# row). The same `quote do ... end` text in Ruby, and a Python lambda handed to a function named quote, stay live calls.
+mkdir -p "$TMP/inert-rb" "$TMP/inert-py"
+printf 'def inert(x)\n  x\nend\n\ndef run(x)\n  quote do\n    inert(x)\n  end\nend\n' > "$TMP/inert-rb/q.rb"
+printf 'def inert(x):\n    return x\n\n\ndef run(x):\n    quote = lambda f: f\n    return quote(lambda: inert(x))\n' > "$TMP/inert-py/q.py"
+for d in inert-rb inert-py; do
+    "$BIN" "$TMP/$d" --callees=run --no-cache > "$TMP/$d.xml"
+    python3 - "$TMP/$d.xml" "$d" <<'PYLIVE'
+import re, sys
+text = open(sys.argv[1]).read()
+assert re.search(r'<s t="[a-z]+" n="inert" p="q\.(rb|py):1"', text), (sys.argv[2], 'a call inside a non-Elixir quote form lost its edge', text[-400:])
+assert 'declined_calls' not in text, (sys.argv[2], 'a non-Elixir quote form was counted as an inert decline')
+print('  PASS near miss: %s keeps the live call inside a quote form (no inert region outside Elixir)' % sys.argv[2])
+PYLIVE
+done
+
 # A non-Elixir body may quote our legend markers as source text. Only real
 # comments outside CDATA may select the inert-decline reading.
 mkdir -p "$TMP/marker/src" "$TMP/marker/a" "$TMP/marker/b"
