@@ -647,5 +647,50 @@ else
     else no "[S] no split reading in the header of an answer that labels a split arm"; fi
 fi
 
+# [S] MCP twin (CR pre-pass A): the MCP for tool's slot body labels the same two rows, and defines the reading once beside
+# them (its header never does: splitLegendInHead is false there) — a duplicate or a missing definition goes red.
+printf '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}\n{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"%s","task":"how does ManifestParser ParseDefault work"}}}\n' \
+    "$FIX/cpp" | perl -e 'alarm 120; exec @ARGV' "$BIN" --mcp 2>"$DIR/s_mcp.err" | tail -1 >"$DIR/s_mcp.out"
+s_mcp="$( python3 -c '
+import json, re, sys
+try: t = json.loads( open( sys.argv[ 1 ] ).read() )[ "result" ][ "content" ][ 0 ][ "text" ]
+except Exception: print( "none" ); sys.exit( 0 )
+m = re.search( r"<bodies [^>]*pick=\"name\"[^>]*>(.*?)</bodies>", t, re.S )
+if not m: print( "none" ); sys.exit( 0 )
+rows = re.findall( r"<c n=\"CanonicalizePath\"[^>]*>", m.group( 1 ) )
+print( len( rows ), sum( "prov=\"split\"" in r for r in rows ), t.count( "prov=\"split\" on a <c> row" ) )
+' "$DIR/s_mcp.out" )"
+if [ "$s_mcp" = none ] || [ -z "$s_mcp" ]; then no "[S] MCP premise: no slot body in the MCP for answer"
+else
+    read -r m_all m_split m_def <<<"$s_mcp"
+    if [ "$m_all" -ge 1 ] && [ "$m_split" = "$m_all" ] && [ "$m_def" = 1 ]; then ok "[S] MCP for: the slot's $m_all CanonicalizePath rows carry prov=\"split\", the reading defined once"
+    else no "[S] MCP for: $m_split of $m_all rows carry prov=\"split\", the reading defined $m_def time(s) (want all, once)"; fi
+fi
+# [S2] (CR pre-pass A): a spent soft target serves the hops cut marker and no row carries prov="split", so the present-only
+# split reading leaves the header with them (the lane cleared it on the spent-ceiling switch forbudget-soft retired); at 500
+# the hop row rides and so does the reading (the control).
+for lg in compact full; do
+    for n in 100 500; do
+        ( cd "$FIX/cpp" && "$BIN" . --no-cache --for="how does ManifestParser ParseDefault work" --token-budget=$n --legend=$lg ) >"$DIR/s2_${n}_$lg.out" 2>/dev/null; s2_rc=$?
+        s2="$( python3 -c '
+import re, sys
+d = open( sys.argv[ 1 ], encoding="utf-8", errors="replace" ).read()
+head = d.split( "<sigs", 1 )[ 0 ]
+clause = int( "c prov=split" in head or "prov=\"split\" on a <c> row" in head )
+rows = len( re.findall( r"<c [^>]*prov=\"split\"", d ) )
+marker = int( bool( re.search( r"<hops shown=\"0\"[^>]*capped=\"1\"", d ) ) )
+print( rows, clause, marker )' "$DIR/s2_${n}_$lg.out" )"
+        read -r r2 c2 k2 <<<"$s2"
+        if [ "$s2_rc" -ne 0 ] || [ -z "$s2" ]; then no "[S2] $lg @$n: no answer (rc=$s2_rc)"
+        elif [ "$n" = 100 ]; then
+            if [ "$k2" = 1 ] && [ "$r2" = 0 ] && [ "$c2" = 0 ]; then ok "[S2] $lg @100: the hops cut marker, no split row, no split reading"
+            else no "[S2] $lg @100: marker=$k2 split rows=$r2 split reading=$c2 (want 1 0 0)"; fi
+        else
+            if [ "$r2" -ge 1 ] && [ "$c2" = 1 ]; then ok "[S2] $lg @500 control: $r2 split row(s) and the reading ride"
+            else no "[S2] $lg @500 control: split rows=$r2 reading=$c2 (want >=1 and 1)"; fi
+        fi
+    done
+done
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail

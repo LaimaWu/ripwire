@@ -2921,10 +2921,10 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         const ForEnrichmentPlan plan = planForEnrichment( autoBundleMode, conceptualRoute, cfg.autoBodies );
         // NOT const: the enrichment block below may drop the LEGEND (autoBundle/compactBundle=false) and
         // rebuild the header without it — the ladder's later rebuilds read this struct through
-        // buildForHeader and must honor that decision. Two distinct causes reach it: the chargeSection
-        // degrade (surfaceOff — no attribute either) and an exhausted explicit ceiling (legendOff — the
-        // root ATTRIBUTE is kept, paid for out of its own reserve). A tight explicit budget no longer
-        // turns the disclosure off on EITHER serving shape — test/fordisclosurecheck.sh.
+        // buildForHeader and must honor that decision. One cause reaches it now: the chargeSection degrade
+        // (surfaceOff — no attribute either); forbudget-soft retired the exhausted-ceiling switch (a soft target
+        // keeps the legend and, on the compact route, serves the hops cut marker instead — hopsCutMarker below).
+        // A tight explicit budget never turns the disclosure off — test/fordisclosurecheck.sh.
         // PR #215 review: does any row this bundle could serve carry sc=? Both dialects' sc= readings are
         // present-only on this, and the dropped-legend note names sc= only when there was a reading to lose.
         // Decided from the RANKED SET and before the header is built, because the un-budgeted path ships the
@@ -3738,11 +3738,10 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // ── T3: the terminal-by-default auto <bodies> section (pre-registered: docs/EVALS.md §4) ────────────
         // The decision + render live in buildForAutoBodies (above runForLens — this function is already one
         // of the largest in the file); this site only wires its verdict in: keep the section + attribute, or
-        // rebuild the header WITHOUT the legend when either off-switch fires, so the ladder's later rebuilds
-        // honor the decision too. TWO switches, and they differ in exactly one thing — the root attribute:
-        // surfaceOff (the chargeSection degrade) cleared it, legendOff (an exhausted explicit ceiling on
-        // either serving shape) KEPT it, so the exhausted case still discloses on the root while paying
-        // only the bytes it reserved up front.
+        // rebuild the header WITHOUT the legend when its off-switch fires, so the ladder's later rebuilds
+        // honor the decision too. One switch since forbudget-soft: surfaceOff (the chargeSection degrade), which
+        // clears the root attribute as well; a spent soft target keeps the legend and serves the hops cut marker
+        // (hopsCutMarker), whose clause rides and which clears the readings only hop rows could need.
         ForAutoBodiesResult enrich;   // .attr is spliced onto the <ctx> root after the ladder; its bytes are priced there
         if( autoBundleMode && sigsPreRendered )
         {
@@ -3812,11 +3811,15 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             sectionsStubNote += headerParts.compactLegend ? kForHopsBudgetCutLegendCompact : kForHopsBudgetCutLegend;
             // forbudget-soft: the marker carries no row, so the readings only hop rows could need (the via="name" and the
             // owner qword clauses) have nothing to define — cleared as the old attribute-only shape cleared them, so a
-            // spent target answers byte-identically with and without the owner plan (ownerhopcheck (B2)); the bundle legend stays
-            if( headerParts.viaPresent || headerParts.ownerPresent )
+            // spent target answers byte-identically with and without the owner plan (ownerhopcheck (B2)); the bundle legend stays.
+            // train 28 (CR pre-pass): attrib-multidef's prov="split" reading the same way — the lane cleared it on the retired
+            // spent-ceiling switch this marker replaced — unless a served body slot's rows lean on the header's definition
+            const bool splitOnlyHops = headerParts.splitPresent && !slot.served;
+            if( headerParts.viaPresent || headerParts.ownerPresent || splitOnlyHops )
             {
                 headerParts.viaPresent   = false;
                 headerParts.ownerPresent = false;
+                headerParts.splitPresent = headerParts.splitPresent && !splitOnlyHops;
                 headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
             }
         }
