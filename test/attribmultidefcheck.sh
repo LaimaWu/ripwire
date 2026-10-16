@@ -623,5 +623,29 @@ fi
 cmp -s "$DIR/g_det.out" "$DIR/a_cpp.out"; say $? "[C] determinism: --callers=empty byte-identical run to run" \
     "[C] --callers=empty differs run to run"
 
+# [S] train 28 (for-body-slot x attrib-multidef): the --for body slot's <calls> rows label a split arm prov="split" as every
+# other --for body does. "how does ManifestParser ParseDefault work" picks ParseDefault as the slot owner (pick="name"), and
+# its CanonicalizePath call is the fixture's split call: the hop row already carried prov="split"; the slot body's two
+# <c n="CanonicalizePath"> rows did not before the fix (the same arm read as a plain callee there).
+( cd "$FIX/cpp" && "$BIN" . --no-cache --for="how does ManifestParser ParseDefault work" ) >"$DIR/s_slot.out" 2>/dev/null; s_rc=$?
+s_counts="$( python3 -c '
+import re, sys
+d = open( sys.argv[ 1 ], encoding="utf-8", errors="replace" ).read()
+m = re.search( r"<bodies [^>]*pick=\"name\"[^>]*>(.*?)</bodies>", d, re.S )
+if not m: print( "none" ); sys.exit( 0 )
+rows = re.findall( r"<c n=\"CanonicalizePath\"[^>]*>", m.group( 1 ) )
+legend = d.split( "<sigs", 1 )[ 0 ]
+print( len( rows ), sum( "prov=\"split\"" in r for r in rows ), int( "c prov=split" in legend or "prov=\"split\" on a <c> row" in legend ) )
+' "$DIR/s_slot.out" )"
+if [ "$s_rc" -ne 0 ] || [ "$s_counts" = none ] || [ -z "$s_counts" ]; then
+    no "[S] premise: the slot did not ride (rc=$s_rc, no <bodies pick=\"name\">)"
+else
+    read -r s_all s_split s_leg <<<"$s_counts"
+    if [ "$s_all" -ge 1 ] && [ "$s_split" = "$s_all" ]; then ok "[S] the body slot labels its $s_all CanonicalizePath split-arm row(s) prov=\"split\""
+    else no "[S] the body slot's CanonicalizePath rows: $s_split of $s_all carry prov=\"split\""; fi
+    if [ "$s_leg" = 1 ]; then ok "[S] the header defines the split reading the slot's rows use"
+    else no "[S] no split reading in the header of an answer that labels a split arm"; fi
+fi
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
