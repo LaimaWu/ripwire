@@ -71,6 +71,7 @@
 #          from 3000 in Phase B: the reserve-first share the rows at the cut leave holds the 2.7 KB jwt body from N=4800 on
 #          this fixture; below it the slot is skipped and disclosed — E2, E3)
 #   E2 [P] --token-budget=400: bodies=0 reason=budget; the skipped slot discloses itself on <bodies … next=--expand=…jwt.ts:…>
+#   E2b [P] the same skip under a directory whose name holds a space: next= is quoted (nextFlag) and splits to one argument
 #   E3 [G/P] N sweep: rows monotone + rank prefix + <= slot-off; body bytes monotone; [P] at 1000000 body == default body
 #   E4 [P] T_REF at --token-budget=800 and MCP budget_tokens=800 (slot-off serves rows past the cut there, and the share
 #          the rows at the cut leave holds the small refresh body): the body is paid INSIDE N — rows(slot) < rows(off),
@@ -677,6 +678,13 @@ run --for="$T_D" --token-budget=400 >"$TMP/e400.xml"
 if r="$( chk rootattr "$TMP/e400.xml" bodies 0 )" && r2="$( chk rootattr "$TMP/e400.xml" reason budget )"; then ok "(E2) --token-budget=400: bodies=0 reason=budget"; else no "(E2) --token-budget=400: ${r:-} ${r2:-}"; fi
 if r="$( chk bodiesnext "$TMP/e400.xml" '^--expand=src/middleware/jwt/jwt\.ts:' )"; then ok "(E2) --token-budget=400: the skipped slot discloses itself, recoverable: $r"; else no "(E2) --token-budget=400: $r"; fi
 if r="$( chk prefix "$TMP/e400.xml" "$TMP/d.xml" )"; then ok "(E2) --token-budget=400: $r"; else no "(E2) --token-budget=400: $r"; fi
+# E2b (CodeRabbit, #413): the skipped slot's next= is built by nextFlag, so a path a shell would split pastes as ONE argument
+rm -rf "$TMP/spc"; cp -R "$FIX" "$TMP/spc" && mv "$TMP/spc/src/middleware/jwt" "$TMP/spc/src/middleware/j wt"
+"$BIN" "$TMP/spc" --no-cache --for="$T_D" --token-budget=400 >"$TMP/e400spc.xml" 2>/dev/null
+if r="$( chk bodiesnext "$TMP/e400spc.xml" "^--expand='src/middleware/j wt/jwt\.ts:[0-9]+:jwt'\$" )" \
+   && [ "$( python3 -c 'import html,re,shlex,sys; m=re.search(r"<bodies\b[^>]*\snext=\"([^\"]*)\"", open(sys.argv[1]).read()); print(len(shlex.split(html.unescape(m.group(1)))) if m else 0)' "$TMP/e400spc.xml" )" = 1 ]; then
+    ok "(E2b) a path with a space: the skipped slot's next= is quoted and splits to one argument: $r"
+else no "(E2b) a path with a space: ${r:-the next= splits into more than one argument}"; fi
 prev_rows=0; prev_b=0; mono=1; nflag=""
 for n in 300 500 800 1200 2000 3000 5000 8000 1000000; do
     run --for="$T_D" --token-budget=$n >"$TMP/s$n.xml"; runoff --for="$T_D" --token-budget=$n >"$TMP/s$n.off.xml"

@@ -359,7 +359,7 @@ inline std::string bodySlotSkippedXml( const IngestResult& ing, NodeId id, BodyS
     std::string       x = "<bodies shown=\"0\" total=\"1\" capped=\"1\" pick=\"";
     x += kBodySlotPickNames[std::size_t( pick )];
     x += "\" next=\"";
-    x += escapeXml( "--expand=" + path + ":" + std::to_string( s.line ) + ":" + s.name, esc );
+    x += escapeXml( nextFlag( "--expand=", path + ":" + std::to_string( s.line ) + ":" + s.name ), esc );   // quoted only where a shell would split it
     x += "\"></bodies>";
     return x;
 }
