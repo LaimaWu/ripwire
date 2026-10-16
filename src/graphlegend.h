@@ -780,9 +780,16 @@ inline constexpr const char* kImpactDepthColumnarLegend =
 // rollup whenever the reach set is non-empty (XML forms only: the JSON form carries it as "files", columnar not at all),
 // the umbrella sentence only beside importers_umbrella=. Shared by the CLI arm and the MCP twin, byte-identical.
 // fix27: `hedged` = a listed rf row carries via= or by_name= (a multi-definition selector only); its sentence rides then.
-inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged = false )
+// for-body-slot FIX1 R1: `importersCut` = the root carries importers_next= (sizeImportTier: the <f> listing was cut). Its
+// definition rides then, unless the umbrella sentence (which defines it too) already does — legendcoveragecheck (A).
+inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged = false, bool importersCut = false )
 {
     std::string out;
+    if( importersCut && !umbrella )
+    {
+        out += "importers_next=: the call listing every importer, beside importers_capped=\"1\" (the <f> rows are a most-imported "
+               "prefix of importers=). ";
+    }
     if( rollup )
     {
         out += "FILES (only beside a cut symbol window): the WHOLE reach set by file. files= in all, shown_files= listed; rf "
