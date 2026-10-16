@@ -2346,13 +2346,9 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 // whose immediate scope happens to spell a segment std also uses? See Symbol::scopeRootsStd.
                 d.scopeRootsStd = cppDefinitionRootsStd( nameNode, src ) ? std::uint8_t( 1 ) : std::uint8_t( 0 );
             }
-            else if( le.lang == Lang::Python )
-            { // P2-D Rule 1: enclosing class of a Python method → `self.m()` narrows to Class::m
-                d.scope = enclosingScopeOf( nameNode, src );
-            }
-            else if( le.lang == Lang::Rust )
-            { // H4: `impl Widget { fn new() }` → "Widget" — see rustEnclosingScopeOf
-                d.scope = rustEnclosingScopeOf( nameNode, src, /*includeModules=*/true );
+            else if( enumTableAt( kDefScopeWalkerOfLang, le.lang, DefScopeWalker::None ) != DefScopeWalker::None )
+            { // Python, Go, Rust, Kotlin: the language's row in ingest_names.h kDefScopeWalkerOfLang
+                d.scope = defScopeOf( le.lang, nameNode, src );
             }
             else if( le.lang == Lang::Elixir )
             {
@@ -2387,13 +2383,6 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 {
                     rubyNoteClassSideDef( defNode, fileId, d.name, src, binds );   // a class object's method (test/rubyclassrecvcheck.sh)
                 }
-            }
-            else if( le.lang == Lang::Kotlin )
-            { // enclosing class/object/companion-object → same P2-D Rule-1 narrowing Python/Ruby get;
-              // ALSO what keeps two classes' same-named methods from colliding under the new
-              // Kotlin<->Java langCompatible bridge (graph.h) — an unqualified name-only match is
-              // exactly the false-candidate risk that bridge's own comment names.
-                d.scope = kotlinEnclosingScopeOf( nameNode, src );
             }
             else if( ( le.lang == Lang::JavaScript || le.lang == Lang::TypeScript )
                      && defCapSv == "definition.protomethod" )
