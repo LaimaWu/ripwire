@@ -1494,17 +1494,6 @@ inline constexpr ParamMinLang kParamMinLangs[] = {
     { Lang::Python,     { "default_parameter", "typed_default_parameter" }, {},                { "keyword_separator", "positional_separator" }, {},     {},     "decorated_definition" },
     { Lang::TypeScript, { "optional_parameter", {} },                    "required_parameter", { {}, {} },                                     {},     "this", {} },
 };
-inline const ParamMinLang* paramMinLangOf( Lang lang ) noexcept
-{
-    for( const ParamMinLang& row : kParamMinLangs )
-    {
-        if( row.lang == lang )
-        {
-            return &row;
-        }
-    }
-    return nullptr;
-}
 inline bool paramKindIn( std::string_view t, const std::string_view ( &kinds )[2] ) noexcept
 {
     return ( !kinds[0].empty() && t == kinds[0] ) || ( !kinds[1].empty() && t == kinds[1] );
@@ -1542,7 +1531,7 @@ inline ParamShape cc_paramShape( TSNode defNode, Lang lang, SymKind kind, std::s
     {
         return {}; // implicit self/cls
     }
-    const ParamMinLang* row = paramMinLangOf( lang );
+    const ParamMinLang* row = findByField( kParamMinLangs, &ParamMinLang::lang, lang );   // nullptr = no row: no lower bound
 
     // an "elastic" (variadic / default / optional) node kind or token makes the arity a RANGE → not filterable.
     const auto isElastic = []( const char* t ) noexcept
