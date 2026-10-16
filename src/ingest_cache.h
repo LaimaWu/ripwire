@@ -320,13 +320,21 @@ constexpr std::uint32_t kCacheVersion = 31;           // 31: train 27 — lane l
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 173;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 176;          // bump on any grammar/.scm/extraction change
+                                                      // 176 = 2026-10-15 (train 28): strictly above every number a train-28 binary used — main 173
+                                                      //   (slice 4a, rich 174), lane grep-carrier 173 (value refs through ?? || && / or and, rich 174),
+                                                      //   lane ruby-pair 174 (top-level main-object mixins, rich 175), PR #380 145 (Elixir inert
+                                                      //   regions, RefRole::Inert), the other lanes 171. Rich file tag 177.
                                                       // 173 = 2026-10-15 (slice 4a, #400): the Ruby mixin directives (`include` / `extend` / `prepend`)
                                                       //   move off the captureIncludes walk onto the shared base-relations path —
                                                       //   queries/ruby/tags.scm captures the directive as @reference.mixin and captureTagsFacts
                                                       //   emits each constant's inherit reference through emitBaseRef (captureRubyMixinBases retired).
                                                       //   Output byte-identical; the extraction path changed, so the number moves. 173, not 172: 172 is
                                                       //   171's rich file tag. Rich file tag 174. kCacheVersion stays 31.
+                                                      // 173 = 2026-10-14 (train 28 lane grep-carrier): value-reference capture walks the
+                                                      //   value-preserving operators (JS ?? || &&, Python or/and, JS ??= ||= &&=), so the
+                                                      //   Value rows a cache holds change. 173, not 172: a lean 172 would read 171's rich
+                                                      //   blobs, and a concurrent lane may take 172 — the train renumbers. Rich file tag 174.
                                                       // 171 = 2026-10-13 (PR #349 lands, @tag-und-nacht): Clojure grammar, tags.scm and extraction
                                                       //   (ingest_clojure.h) and the qualified-call namespace in Reference::qualifier. The branch built
                                                       //   156, 158 and 169 (rich file tag 170); main is 167 (rich file tag 168). 171, not 168: a lean 168

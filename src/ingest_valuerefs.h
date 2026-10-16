@@ -66,6 +66,37 @@ inline constexpr std::size_t   kVrTextCap    = 96;    // a written slot / callee
 // truncateUtf8WithEllipsis's (that header is not reachable from the ingest side): "…" only when text was really cut —
 // a text of exactly kVrTextCap bytes is whole — and never inside a UTF-8 sequence (a lead byte without its
 // continuation bytes would reach into=/through= as an invalid character).
+// VALUE-PRESERVING OPERATORS (L4, train 28): a binary operator whose RESULT is one of its operands, so a function named
+// there lands in the slot the whole expression fills — `this.getPath = options.getPath ?? getPath` stores getPath.
+// One shared walk (transparent() below) reads this table, per family, as data:
+//   * leftLands: the LEFT operand can be the result. `f || g`, `f ?? g`, `f or g` yield f (a function is truthy and
+//     never nullish); `f && g`, `f and g` yield g, never f — a function on the left of && only decides, so it is no row.
+//   * the right operand always can.
+// Families with no row here, and why: C/C++ and Go `||` / `&&` yield a truth value (int or bool), never an operand, so
+// a function there is a test, not a stored value. The conditional `c ? f : g` (C, C++, JS/TS; Python `f if c else g`)
+// and parentheses are handled by transparent() for every family already. Value references are captured for the C, JS,
+// Python and Go families only (model.h kValueRefFamilyOfLang); Ruby, Java, C#, Swift, Rust, Bash have no
+// value-reference capture at all, so they have no operator to walk either. (Ruby `a || m` needs none: a bare `m` is a
+// call there and is already an edge; Ruby's function value is `method(:m)`, a different shape.)
+struct VrPassOp
+{
+    VrFam            fam;
+    std::string_view nodeKind;
+    std::string_view op;
+    bool             leftLands;
+};
+inline constexpr VrPassOp kVrPassOps[] = {
+    { VrFam::Js, "binary_expression", "??", true },
+    { VrFam::Js, "binary_expression", "||", true },
+    { VrFam::Js, "binary_expression", "&&", false },
+    { VrFam::Py, "boolean_operator",  "or", true },
+    { VrFam::Py, "boolean_operator",  "and", false },
+};
+// The JS logical ASSIGNMENTS (`x ??= f`, `x ||= f`, `x &&= f`) store the right operand into the left exactly as `=`
+// may: classify() reads them as an assignment. No other family has a value-preserving compound assignment
+// (C `x |= f` and Python `x |= f` are bitwise/set operators whose result is not f).
+inline constexpr std::string_view kVrJsLogicalAssignOps[] = { "\?\?=", "||=", "&&=" };   // escaped: unescaped, those three characters spell a trigraph
+
 inline std::string vrClean( std::string_view s )
 {
     std::string out;
@@ -975,7 +1006,26 @@ private:
             }
             return c.field != 0 && ( c.field == m_fConsequence || c.field == m_fAlternative );
         }
+        return c.field != 0 && passesOperator( p, c );
+    }
+
+    // A value-preserving binary operator (kVrPassOps) whose operand `c` can be the expression's result.
+    bool passesOperator( const VrAnc& p, const VrAnc& c ) const noexcept
+    {
+        for( const VrPassOp& po : kVrPassOps )
+        {
+            if( po.fam == m_fam && std::string_view( p.kind ) == po.nodeKind && opText( p.node ) == po.op )
+            {
+                return c.field == m_fRight || ( po.leftLands && c.field == m_fLeft );
+            }
+        }
         return false;
+    }
+
+    bool isLogicalAssignment( TSNode n ) const noexcept
+    {
+        const std::string_view op = opText( n );
+        return m_fam == VrFam::Js && std::ranges::find( kVrJsLogicalAssignOps, op ) != std::ranges::end( kVrJsLogicalAssignOps );
     }
 
     // The callee of the call whose argument list is anc[j] (the list itself), as written, plus its bare name.
@@ -1391,7 +1441,8 @@ private:
             s.scope = 'f';
             return !nm.empty();
         }
-        if( ( kindIs( pt, "assignment_expression" ) || kindIs( pt, "assignment" ) ) && c.field == m_fRight )
+        if( ( kindIs( pt, "assignment_expression" ) || kindIs( pt, "assignment" )
+              || ( kindIs( pt, "augmented_assignment_expression" ) && isLogicalAssignment( p.node ) ) ) && c.field == m_fRight )
         {
             const TSNode lhs = child( p.node, m_fLeft );
             const char*  lt  = ts_node_type( lhs );

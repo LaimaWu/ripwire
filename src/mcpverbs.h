@@ -24,6 +24,7 @@
 #include "partition.h"     // the explore verb's `partition` argument (packTaskPartitionText)
 #include "tracelocus.h"    // L4: the shared --from-trace / MCP from_trace bundle assembler (fromTraceBundleText)
 #include "countfloor.h"     // count-floor: a row's callers=/implementors= floor marker and its follow-up (CLI and MCP share it)
+#include "grepcarrier.h"    // L4: a grep enclosing row's carrier reads/vals (CLI and MCP share it)
 #include "editcheck.h"     // L4: the shared --edit-check / MCP edit_check contract-comparison core (editCheckBundleText)
 #include "callhierarchy.h"  // H14/M13: the shared 1-hop call-hierarchy computation — find_symbol / find_referencing_symbols
 #include "graphlegend.h"   // §H4 §3.4: the ONE counts_floor= marker + shared graph-count legend wording (CLI ≡ MCP)
@@ -887,11 +888,56 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
 // under --handles mints (search.h grepEncHandleCandidate decides WHICH row may carry one; handleFor mints it from the index's
 // own byte hash) — or `handle_omitted` with the CLI legend's reason. Before this a grep answer named enclosing symbols that
 // fetch_body could not take, so the agent re-read every file it had just searched.
-inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepHit> hits )
+// L4: the page's <enc> rows and their carrier verdict (grepcarrier.h), computed once by the caller (its next= reads them
+// too), plus the root spelling the carrier's paths take.
+struct GrepEncPageJson
 {
-    const IngestResult&           ing     = ix.ing;
-    const Graph&                  g       = ix.g;
-    const std::vector<GrepEncRow> encRows = grepEnclosingRows( ing, g, hits );
+    std::span<const GrepEncRow>  rows;
+    std::span<const GrepCarrier> carriers;   // parallel to rows
+    bool                         singleRoot = false;
+    std::string_view             rootPrefix;
+};
+
+// The L4 carrier keys of one enclosing row — the CLI <enc> reads=/reads_at=/vals=/vals_total= twins, from the same
+// grepCarrierText. "" on a row that is no carrier or carries neither.
+inline std::string grepCarrierJson( const GrepCarrier& c, bool singleRoot, std::string_view rootPrefix )
+{
+    if( !c.isCarrier )
+    {
+        return {};
+    }
+    const GrepCarrierText t = grepCarrierText( c, singleRoot, rootPrefix );
+    const auto jsonList = []( const std::vector<std::string>& items )
+    {
+        std::string list = "[";
+        for( std::size_t k = 0; k < items.size(); ++k )
+        {
+            list += ( k > 0 ? ",\"" : "\"" ) + mcpdetail::jsonEscape( items[k] ) + "\"";
+        }
+        return list + "]";
+    };
+    std::string out;
+    if( !t.readsAt.empty() )
+    {
+        out += ",\"reads\":" + std::to_string( c.reads ) + ",\"reads_at\":" + jsonList( t.readsAt );
+    }
+    if( !t.vals.empty() )
+    {
+        out += ",\"vals\":" + jsonList( t.vals );
+        if( c.valsTotal > c.vals.size() )
+        {
+            out += ",\"vals_total\":" + std::to_string( c.valsTotal );
+        }
+    }
+    return out;
+}
+
+inline std::string grepEnclosingJson( const McpIndex& ix, const GrepEncPageJson& page )
+{
+    const IngestResult&                ing      = ix.ing;
+    const Graph&                       g        = ix.g;
+    const std::span<const GrepEncRow>  encRows  = page.rows;
+    const std::span<const GrepCarrier> carriers = page.carriers;
     if( encRows.empty() )
     {
         return {};
@@ -905,6 +951,7 @@ inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepHi
     }
     const std::vector<CallerFloor> floors = callerFloors( ing, g, rowIds, &valueRefIndexOf( ix ) );
     ENSURES( floors.size() == encRows.size() );
+    EXPECTS( carriers.size() == encRows.size(), "the caller computed one carrier verdict per row (grepCarriers)" );
     std::string out = ",\"enclosing\":[";
     for( std::size_t r = 0; r < encRows.size(); ++r )
     {
@@ -926,6 +973,7 @@ inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepHi
         {
             out += ",\"cx\":" + std::to_string( row.cx );
         }
+        out += grepCarrierJson( carriers[r], page.singleRoot, page.rootPrefix );
         const char*  omitted = nullptr;
         const NodeId id      = grepEncHandleCandidate( ing, row, omitted );
         if( id == kNoNode )
@@ -1144,6 +1192,15 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
     const PageWindow           grepPage  = pageWindow( collected.raw.size(), effectiveRowCap( page.limit, grepRowCap ), page.offset );
     const std::size_t          rowCount  = grepPage.end - grepPage.begin;
     const std::vector<GrepHit> hits      = grepEnrich( ing, std::span<const GrepRawHit>( collected.raw ).subspan( grepPage.begin, rowCount ), 0, 0 );
+    // R1 <enc> rows and L4's carrier verdict, once, before the root: next= reads them (grepCarrierNext) and so does the
+    // enclosing block. The MCP index is the RICH family (mcpindex.h ingests with value uses), so its own references
+    // carry the reads — no second ingest here, unlike the lean CLI run. Reads are counted on the SAME pages the CLI counts
+    // them (grepCarriersWantReads: the top hit's carrier), so the two surfaces print the same reads on every page, single
+    // root or workspace, although this index could count them on every page.
+    const std::vector<GrepEncRow>  encRowsJ  = grepEnclosingRows( ing, ix.g, std::span<const GrepHit>( hits ) );
+    const std::vector<GrepCarrier> carriersJ = grepCarriers( ing, valueRefIndexOf( ix ), encRowsJ,
+                                                             grepCarriersWantReads( ing, hits, encRowsJ ) ? &ing : nullptr );
+    const std::string              carrierNextJ = grepCarrierNext( ing, hits, encRowsJ, carriersJ );
 
     // §R-J: the CLI's unindexed_files_scanned=/unindexed block twin (search.h grepCollectAux) — literal-only,
     // matching this verb. No --max-file-size equivalent on the MCP surface, so this uses the same
@@ -1219,6 +1276,8 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                     // P3 (L7): the CLI grep root's next= — the same three-way rule (verbs_grep.h), mcpclidiffcheck LENS2
                     + nextFieldJson( ( grepPage.end < collected.raw.size() || collected.isBudgetReached )
                                          ? nextFlag( "--grep=", pattern ) + " --offset=" + std::to_string( grepPage.end ) + " --legend=compact"
+                                     : !carrierNextJ.empty()
+                                         ? carrierNextJ
                                      : !collected.raw.empty() && grepPage.begin < collected.raw.size()
                                          ? nextFlag( "--at=", std::string( pathForJ( collected.raw[ grepPage.begin ].fileId ) ) + ":" + std::to_string( collected.raw[ grepPage.begin ].line ) )
                                          : nextFlag( "--for=", pattern ) )
@@ -1278,7 +1337,7 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                         singleRootJ, rootPrefixJ );
     // R1 (the 2026-08-12 usage mine): the CLI <enc>/<suggest> twins, appended AFTER "hits" so the
     // historic key order three other gates read (files,total,shown,capped) is byte-untouched.
-    out += grepEnclosingJson( ix, std::span<const GrepHit>( hits ) );
+    out += grepEnclosingJson( ix, GrepEncPageJson{ encRowsJ, carriersJ, singleRootJ, rootPrefixJ } );
     if( collected.raw.empty() )
     {
         out += grepSuggestJson( ing, pattern );

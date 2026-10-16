@@ -17,10 +17,10 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 253 | 98 | 149 | **104** |
+| 254 | 99 | 149 | **105** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 253 + 7 is the 260 constants this generator parses out of `src/`.
+are not counted as caps, and 254 + 7 is the 261 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -38,8 +38,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **139 of 253 caps are classified
-(49 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 114 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **139 of 254 caps are classified
+(49 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 115 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -89,7 +89,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 98 files that declare a cap — the 253 caps counted above, and no parameter.
+One table for each of the 99 files that declare a cap — the 254 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -368,6 +368,14 @@ Discloses: `importers_capped`
 | `kMaxRadius` | `12` | — | — |
 | `kMaxTerminals` | `16` | — | >16 is the CALLER's usage error; the core CLAMPS (never ASSUMEs on hostile input) |
 | `kMemberSpellingsShown` | `6` | OUTPUT | — |
+
+### `src/grepcarrier.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kGrepCarrierShown` | `3` | — | reads_at= sites and vals= entries printed per row (reads=/vals_total= count all) |
 
 ### `src/handlershape.h`
 
