@@ -51,6 +51,7 @@
 #   (M) R1 defect-shape: a new site whose text also sits in an UNCHANGED file keeps its gating row under P1 and P0.
 #   (N) R2 the changed set: an unchanged symlink, an export-ignore flip and an export-subst tree refuse by name (exit 5);
 #       an unchanged export-ignore attribute and a CMakeCache.txt-pruned directory answer like the full run.
+#       A git grep that FAILS (exit 128, through a PATH shim) refuses (exit 1), never "no export attribute".
 #   (O) R3 acks: a legacy-scheme ack on a name two files define (one changed) suppresses the same rows as the full run;
 #       on a name one file defines, the degraded answer names ack-healing as skipped and shows the row.
 #   (P) R4 cache isolation: P1 with the cache on leaves the HEAD ingest-cache blob untouched; a cached run after it is
@@ -458,6 +459,19 @@ printf 'def other():\n    # TODO: seen\n    return 1\n' >"$FC/py/mod.py"; g "$FC
 same_as_full "a changed file in a CMakeCache.txt-pruned directory" "$FC"
 if grep -q 'bld/x.py' "$WORK/nfA.xml" || grep -q 'bld/x.py' "$WORK/o"; then no "(N) CMakeCache premise/result: a row names the pruned bld/x.py"
 else ok "(N) CMakeCache: neither answer rows the pruned bld/x.py"; fi
+# the export-attribute read FAILED (CodeRabbit, #413): a git whose `grep` exits 128 leaves the attribute question unanswered,
+# and "could not read" is not "no attribute" — the degraded path refuses (exit 1, the git-could-not-list line), never a
+# changed-files answer. The shim fails only `grep`; everything else reaches the real git.
+GSHIM="$WORK/gshim"; mkdir -p "$GSHIM"; REALGIT="$( command -v git )"
+printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = grep ] && exit 128; done\nexec "%s" "$@"\n' "$REALGIT" >"$GSHIM/git"; chmod +x "$GSHIM/git"
+qdin "$FU" PATH="$GSHIM:$PATH" RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache
+if [ "$RC" = 1 ] && [ ! -s "$WORK/o" ] && grep -q '^ripwire: .*git could not list the changed files' "$WORK/e"; then
+    ok "(N) the export-attribute grep failed (exit 128): refused, never read as 'no attribute' (exit 1, nothing on stdout)"
+else no "(N) a failed export-attribute grep: rc=$RC (want 1) stdout=$( wc -c <"$WORK/o" | tr -d ' ' )B stderr: $( grep '^ripwire: [^c]' "$WORK/e" | head -c 300 )"; fi
+# its near miss, no shim: a pair with no .gitattributes at all, where git grep exits 1 (no hit) — still a clean answer
+qdin "$FC" RIPWIRE_TEST_MEMGUARD=project:1 "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache
+if [ -n "$( attr "$WORK/o" kinds_skipped )" ] && [ "$RC" = "$( degrc "$WORK/o" )" ]; then ok "(N) control: exit 1 from git grep (no hit) still answers degraded (rc=$RC)"
+else no "(N) control: rc=$RC kinds_skipped=$( attr "$WORK/o" kinds_skipped ) stderr: $( grep '^ripwire: [^c]' "$WORK/e" | head -c 200 )"; fi
 
 # ── (O) R3: ack identity healing reads tree-wide uniqueness, which the changed files cannot see ─────────────────
 # Legacy-scheme ack key of a scope-less name = fnv1a64( bare name ) (quality.h addSchemeAliases: canonicalId degrades to the

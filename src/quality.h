@@ -4498,15 +4498,16 @@ struct ChangedFiles
     bool                     ok = false;   // git answered every question this needed
     enum class DisclosureWhy : std::uint8_t
     {
-        GitFailed,   // a diff or ls-tree over the pair did not complete: the set is unknown, and the caller refuses
+        GitFailed,   // a diff, ls-tree or export-attribute grep over the pair did not complete: the set is unknown, and the caller refuses
     };
     void disclose( DisclosureWhy ) noexcept { ok = false; }
 };
 
-// Stream one git command's NUL-separated records into `onRecord`; true when git exited 0. Never holds the whole listing:
-// on a large tree `ls-tree -r` is tens of megabytes, and this runs exactly when memory is short.
+// Stream one git command's NUL-separated records into `onRecord`; true when git exited 0, or with the one other exit code
+// `alsoClean` names (git grep's 1 = no hit). Never holds the whole listing: on a large tree `ls-tree -r` is tens of
+// megabytes, and this runs exactly when memory is short.
 template<class OnRecord>
-inline bool forEachGitNulRecord( const std::string& root, const std::string& args, OnRecord&& onRecord )
+inline bool forEachGitNulRecord( const std::string& root, const std::string& args, OnRecord&& onRecord, int alsoClean = 0 )
 {
     const std::string cmd  = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " " + args + " 2>/dev/null";
     std::FILE*        pipe = os::popen( cmd.c_str(), "r" );
@@ -4537,7 +4538,8 @@ inline bool forEachGitNulRecord( const std::string& root, const std::string& arg
     {
         onRecord( std::string_view( record ) );
     }
-    return os::pclose( pipe ) == 0;
+    const int status = os::pclose( pipe );
+    return status == 0 || ( alsoClean != 0 && decodedExitCode( status ) == alsoClean );
 }
 
 // The changed files of `baseSha`..`targetSha` (two resolved commit names), with the refusals above decided.
@@ -4619,12 +4621,27 @@ inline ChangedFiles changedFilesBetween( const std::string& root, const std::str
         DISCLOSE( out, ChangedFiles::DisclosureWhy::GitFailed, "quality: git ls-tree over a commit of the pair failed — the changed files are unknown" );
         return out;
     }
-    // 3. export attributes: "<sha>:<path>\0<match>\n" per hit (exit 1 = no hit, a clean answer)
-    const auto exportAttrs = [ & ]( const std::string& sha, std::vector<std::string>& files )
+    // 3. export attributes: "<sha>:<path>\0<match>\n" per hit (exit 1 = no hit, a clean answer; any other exit — a bad
+    //    object, git missing — is a failed read, never "no attribute")
+    const auto exportAttrs = [ & ]( const std::string& sha, std::vector<std::string>& files ) -> bool
     {
-        const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " grep -I -z -o -e export-subst -e export-ignore "
-                              + shSingleQuote( sha ) + " -- " + shSingleQuote( "*.gitattributes" ) + " 2>/dev/null";
-        const std::string text = popenTrimmed( cmd );
+        std::string text;
+        bool        first = true;
+        const bool  ran   = forEachGitNulRecord( root, "grep -I -z -o -e export-subst -e export-ignore " + shSingleQuote( sha ) + " -- " + shSingleQuote( "*.gitattributes" ),
+                                                 [ & ]( std::string_view rec )
+                                                 {
+                                                     if( !first )
+                                                     {
+                                                         text += '\0';   // the records are rejoined: the parse below reads the line shape
+                                                     }
+                                                     first = false;
+                                                     text.append( rec );
+                                                 },
+                                                 /*alsoClean=*/1 );
+        if( !ran )
+        {
+            return false;
+        }
         for( std::size_t at = 0; at < text.size(); )
         {
             const std::size_t nl   = std::min( text.find( '\n', at ), text.size() );
@@ -4642,10 +4659,14 @@ inline ChangedFiles changedFilesBetween( const std::string& root, const std::str
             }
             at = nl + 1;
         }
+        return true;
     };
     std::vector<std::string> attrFiles;
-    exportAttrs( baseSha, attrFiles );
-    exportAttrs( targetSha, attrFiles );
+    if( !exportAttrs( baseSha, attrFiles ) || !exportAttrs( targetSha, attrFiles ) )
+    {
+        DISCLOSE( out, ChangedFiles::DisclosureWhy::GitFailed, "quality: git grep for export attributes over a commit of the pair failed — the changed files are unknown" );
+        return out;
+    }
     for( const std::string& p : changed )
     {
         if( out.refusal.empty() && std::find( attrFiles.begin(), attrFiles.end(), p ) != attrFiles.end() )
