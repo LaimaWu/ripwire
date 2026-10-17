@@ -4271,16 +4271,12 @@ inline void pushNamespace( BindCtx& cx, TSNode n, TSNode name, TSNode body )
     }
 }
 
-// The nodes that carry a call-result scope fact, per family (data rows): a namespace body the index has no symbol for, and
-// C++'s using-directives / using-declarations.
+// The nodes that carry a call-result scope fact, per family (data rows, read by bindsVisitNode): a namespace body the index
+// has no symbol for, and C++'s using-directives / using-declarations.
 inline constexpr struct { CallResultFamily family; std::string_view kind; } kScopeFactNodes[] = {
     { CallResultFamily::Cpp, "namespace_definition" }, { CallResultFamily::Cpp, "using_declaration" },
     { CallResultFamily::TypeScript, "internal_module" }, { CallResultFamily::TypeScript, "module" },
 };
-inline bool isScopeFactNode( CallResultFamily family, const char* t ) noexcept
-{
-    return std::ranges::any_of( kScopeFactNodes, [ & ]( const auto& row ) { return row.family == family && row.kind == t; } );
-}
 
 // A TS `namespace` / `module` body, a C++ `namespace` body (an `inline` namespace is transparent: its members are the
 // enclosing namespace's, so none is recorded), and a C++ namespace- or file-scope using-directive / using-declaration as a
@@ -6006,7 +6002,7 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
         } );
     }
     // (L) fix round 2: a namespace body, a C++ using-directive / using-declaration — the scope a bare result type resolves in
-    if( isScopeFactNode( callResultFamilyOf( lang ), t ) )
+    if( std::ranges::any_of( kScopeFactNodes, [ & ]( const auto& row ) { return row.family == callResultFamilyOf( lang ) && row.kind == t; } ) )
     {
         captureScopeFact( cx, n, t );
     }

@@ -995,11 +995,6 @@ struct CallResultTypes
             }
         }
     }
-    // does namespace path `path` start with `head` (`a::b` leads `a::b::c`)
-    static bool isPrefixPath( const std::vector<std::string_view>& head, const std::vector<std::string_view>& path ) noexcept
-    {
-        return std::mismatch( head.begin(), head.end(), path.begin(), path.end() ).first == head.end();
-    }
     // the namespace- and file-scope usings in force at byte `at` of file `f`: the file's own, declared before `at` in a scope
     // that holds it, and those of every in-tree header `f` includes (transitively) whose namespace path leads to `at`'s
     // (`calleePath`) — a header's `namespace cfg { using ext::Config; }` is in force in `namespace cfg` of the includer
@@ -1025,7 +1020,7 @@ struct CallResultTypes
                 if( !own )
                 {
                     namespacePathAt( file, b->startByte, usingPath );
-                    if( !isPrefixPath( usingPath, calleePath ) )
+                    if( std::mismatch( usingPath.begin(), usingPath.end(), calleePath.begin(), calleePath.end() ).first != usingPath.end() )
                     {
                         continue;
                     }
@@ -1099,7 +1094,7 @@ struct CallResultTypes
         }
         std::vector<std::string_view> classPath;
         namespacePathAt( ing.symbols[ c ].fileId, ing.symbols[ c ].sigStartByte, classPath );
-        if( isPrefixPath( classPath, calleePath ) )
+        if( std::mismatch( classPath.begin(), classPath.end(), calleePath.begin(), calleePath.end() ).first == classPath.end() )   // it leads the callee's
         {
             return c;
         }
@@ -1116,7 +1111,7 @@ struct CallResultTypes
             if( dir.size() <= classPath.size() && std::equal( dir.rbegin(), dir.rend(), classPath.rbegin() ) )
             {
                 const std::vector<std::string_view> head( classPath.begin(), classPath.end() - std::ptrdiff_t( dir.size() ) );
-                named = isPrefixPath( head, calleePath );
+                named = std::mismatch( head.begin(), head.end(), calleePath.begin(), calleePath.end() ).first == head.end();
             }
         } );
         return named ? c : kNoNode;
