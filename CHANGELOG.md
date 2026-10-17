@@ -84,7 +84,9 @@ the name (mentions are matched by name), and with no `--limit` the listing holds
 Every definition inside a Rust `impl` block whose header names the type is a user (rustfmt puts the header on its own
 line, where no definition sits), and a name reached through a standard-library path (Rust `std::`, `core::`, `alloc::`;
 C++ `std::`) is that library's type, so a local `Error` or `vector` no longer counts `std::io::Error` or `std::vector`
-users. Function impacts are byte-identical. Other languages record no type mentions yet (a floor, stated in the legend).
+users. `--format=columnar`, which carries no `<files>` rollup, marks each row reached only through a type mention in a
+`<by_type>` column (1; a call-reached row is 0), so a depth-1 type user never reads as a direct caller.
+Function impacts are byte-identical. Other languages record no type mentions yet (a floor, stated in the legend).
 Gate: `test/impacttypecheck.sh`.
 
 ### Changed — `--callers` and `--callees` serve up to 50 rows whole, and a capped `--callers` page names the next page

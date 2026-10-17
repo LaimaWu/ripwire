@@ -955,6 +955,17 @@ inline const char* impactDepthLegend( bool columnar ) noexcept
 {
     return columnar ? kImpactDepthColumnarLegend : kImpactDepthLegend;
 }
+// L7 (CodeRabbit 4303967681): the columnar form of a type impact has no <files> rollup, so its depth-1 rows would read as
+// direct callers. The <by_type> column marks the rows reached only through a type mention; said exactly when it rides.
+// Emitted INSIDE an XML comment: no double hyphen.
+inline constexpr const char* kImpactByTypeColumnarLegend =
+    "the by_type column (present when a shown row has it): 1 = that row is reached only through a type mention, so at depth 1 "
+    "it NAMES of= in a type position (a declaration, parameter, field, return type, base) and does not call it; deeper, it "
+    "calls such a row. 0 = some call chain reaches of=. ";
+inline const char* impactByTypeColumnarLegend( bool present ) noexcept
+{
+    return present ? kImpactByTypeColumnarLegend : "";
+}
 
 // ── #220 part 1 — imports_unresolved=, the FILE graph's own gauge (test/depsprecisecheck.sh, the #220 arms) ─────────
 // graph_unresolved= above is the CALL graph's resolver gauge; this is the include/import graph's. It counts the TS/JS

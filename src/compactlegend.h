@@ -618,6 +618,8 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // onKey impact: the only answer that prints them (full clause: graphlegend.h kImpactDepthLegend).
     { "d",                 "<s d=N>: hops to of= (1 = direct caller), set where it changes", true, "s", MapHeaderRead::No, {}, "impact" },
     { "fields",            "<depth> column: hops to of= (1 = direct caller)", true, "cols", MapHeaderRead::No, "depth", "impact" },
+    // L7 (CodeRabbit 4303967681): a type impact's columnar rows reached only through a type mention (graphlegend.h kImpactByTypeColumnarLegend)
+    { "fields",            "<by_type> column: 1 = reached only through a type mention (at depth 1 it names of= in a type position, not a call)", true, "cols", MapHeaderRead::No, "by_type", "impact" },
     { "by_depth",          "by_depth=k:n: n of reaches= at depth k, shallowest rows first", false, {}, MapHeaderRead::No, {}, "impact" },
     // The same lens on the signature rows (2026-09-12, the follow-up): serialize.h's two <d> row writers print tested="1" from
     // computeQMetrics' tested[] column, which the same isTestedByReach fills, and never a literal 0. main.cpp computes that column

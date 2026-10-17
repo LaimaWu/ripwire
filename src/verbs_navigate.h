@@ -2577,7 +2577,14 @@ struct ImpactView
     const rw::ImpactFileRollup&    fileRollup;      // idea #6: graph.h impactFileRollup over the FULL reach set
     const rw::ReachAttribution&    attrib;          // attrib-multidef (defattrib.h): the definition groups + each reached row's ties
     const rw::DefTableListing&     defListing;      // ... and the groups this page's table lists
+    const std::vector<char>&       typeOnly;        // L7 (typeuse.h ImpactReach::typeOnly): per node, reached only through a type mention; empty when unarmed
 };
+
+// L7: whether a row of this window is reached only through a type mention (the columnar <by_type> column and its legend clause)
+inline bool impactRowTypeOnly( const std::vector<char>& typeOnly, rw::NodeId n ) noexcept
+{
+    return n < typeOnly.size() && typeOnly[ n ] != 0;
+}
 
 // attrib-multidef: the window's of_def JSON keys in row order (indexed like `show`), "" where none
 inline std::vector<std::string> impactOfDefKeys( const ImpactView& v )
@@ -2655,8 +2662,16 @@ int emitImpactColumnar( const ImpactView& v )
         rowOfDef.push_back( at == SIZE_MAX ? std::string() : rw::ofDefColumnValue( v.attrib.groups, v.attrib.tokens, at ) );
     }
     const std::string defRows = rw::defTableXml( v.ing, v.attrib.groups, v.defListing, v.rootPrefix );
+    // CodeRabbit 4303967681: a type impact's depth-1 rows hold the symbols that NAME the type beside its callers; the XML and
+    // JSON forms say so through their <files> rollup (type_users=, via="type"), which this form does not carry. The
+    // <by_type> column marks each such row (1 = reached only through a type mention), present only when one is shown.
+    std::vector<char> rowType( rows.size(), 0 );
+    for( std::size_t i = 0; i < rows.size(); ++i )
+    {
+        rowType[ i ] = impactRowTypeOnly( v.typeOnly, rows[ i ] ) ? 1 : 0;
+    }
     emitColumnarSymbolRows( stdout, v.ing, "impact", attr.c_str(), rows, v.rootPrefix, v.testReach, &v.depth,
-                            rw::ColumnarRowExtras{ &rowVia, nullptr, nullptr, v.attrib.groups.multi() ? &rowOfDef : nullptr, &defRows, nullptr } );
+                            rw::ColumnarRowExtras{ &rowVia, nullptr, nullptr, v.attrib.groups.multi() ? &rowOfDef : nullptr, &defRows, nullptr, nullptr, &rowType } );
     return 0;
 }
 
@@ -2844,7 +2859,10 @@ std::optional<int> runImpact( const MainDispatch& d )
             // is what `anyModuleScopeRow`'s own contract asks for ("a page of rows, never the corpus").
             const bool imHasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( show ).subspan( imPage.begin, imPage.end - imPage.begin ) );
             rw::emitTo( stdout, "{}{}. {}{}{}{}{}{}{}{}{}{}{}{}{}-->", rw::kImpactLegendOpen, rw::kPageRaiseCapClause,
-                         reach.empty() ? "" : rw::impactDepthLegend( cfg.columnar ),   // 0.6.5: exactly when rows (d=) and by_depth= exist
+                         reach.empty() ? std::string()
+                                       : std::string( rw::impactDepthLegend( cfg.columnar ) )   // 0.6.5: exactly when rows (d=) and by_depth= exist
+                                             + rw::impactByTypeColumnarLegend( cfg.columnar && std::any_of( show.begin() + imPage.begin, show.begin() + imPage.end,   // L7: exactly when the <by_type> column rides
+                                                                                                        [ & ]( NodeId n ) { return impactRowTypeOnly( imWalk.typeOnly, n ); } ) ),
                          ( std::string( cfg.columnar ? rw::kImpactImportTierColumnarLegend : rw::kImpactImportTierLegend )
                            + rw::importersNextLegend( !imports.next.empty() && !cfg.columnar ) ).c_str(),   // cut-fix E: exactly when the root carries it
                          ( rw::impactTsImportLegend( imports.importsUnresolved, imports.tsconfigUnread )   // #220: exactly when the root carries them
@@ -2872,7 +2890,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                                imports, importPage, importLazyPage, prD, imSingleRoot, imRootPrefix, imRootAttr,
                                imSingleRoot ? cfg.roots[0] : std::string_view(), cfg.pageLimit, cfg.pageOffset,
                                &imTestReach, imRadiusTested, imRadiusUntested, imDeclinedCalls, imDeclinedIface, g, imDepth, imByDepth, imValueRefs,
-                               imProven, imFiles, imAttr, imListing };
+                               imProven, imFiles, imAttr, imListing, imWalk.typeOnly };
 
         if( cfg.columnar ) { return emitImpactColumnar( view ); }
         if( cfg.json     ) { return emitImpactJson( view ); }

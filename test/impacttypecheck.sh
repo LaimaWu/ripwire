@@ -47,6 +47,8 @@
 #          (`c: "Cell"`), a qualified Python base (`mod.Base`), a Go type satisfying an interface IMPLICITLY.
 #   (19) generic-parameter namesakes: every gp* file is absent from its language's rollup (arms 4, 5, 8, 9, 10b).
 #   (17) the first-hop band: 25 files naming a struct + its header = 26 rows listed with no --limit (default cap is 20).
+#   (22) --format=columnar: the <by_type> column marks the rows reached only through a type mention (the form has no
+#        <files> rollup), a call-reached row reads 0, both legends define it; a function impact carries neither.
 #
 # Usage: bash test/impacttypecheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/impacttypecheck.sh
 
@@ -540,6 +542,37 @@ if s21b.get("mine") == "1" and s21b.get("via_global") == "1" and not ({"sum_std"
     ok("(21b) C++ --impact=vector: mine and via_global at d=1, no std:: parameter")
 else:
     no("(21b) C++ --impact=vector rows %r" % srows(d21b))
+
+# (22) CodeRabbit 4303967681: --format=columnar carries no <files> rollup, so before the <by_type> column a type user sat at
+# depth 1 under "1 = direct caller". The column marks every row reached only through a type mention (1), a call-reached row
+# stays 0 (ctor.cpp's build_one CONSTRUCTS a Widget: a call edge), the compact legend defines the column, the full legend's
+# clause rides and stays well-formed, and a FUNCTION impact (no type tier) carries neither the column nor the clause.
+def cols(doc):
+    m = re.search(r'<cols n="\d+" fields="([^"]*)">(.*?)</cols>', doc)
+    if not m:
+        return None, {}
+    arr = dict(re.findall(r"<(\w+)>([^<]*)</\1>", m.group(2)))
+    return m.group(1).split(","), arr
+c22 = run("cpp", "--impact=Widget", "--format=columnar")
+f22, a22 = cols(c22)
+z22 = dict(zip(a22.get("name", "").split(","), a22.get("by_type", "").split(","))) if f22 else {}
+full22 = run("cpp", "--impact=Widget", "--format=columnar", "--legend=full")
+xml22 = subprocess.run(["xmllint", "--noout", "-"], input=full22, capture_output=True, text=True) if shutil.which("xmllint") else None
+fn22 = run("c", "--impact=a_set", "--format=columnar", "--legend=full")
+fails22 = []
+if not f22 or "by_type" not in f22: fails22.append("fields=%r has no by_type" % (f22,))
+if z22.get("build_one") != "0": fails22.append("build_one (a constructor CALL) by_type=%r, want 0" % z22.get("build_one"))
+for n in ("take", "Holder", "lookup", "Derived"):
+    if z22.get(n) != "1": fails22.append("%s (a type user) by_type=%r, want 1" % (n, z22.get(n)))
+if "<by_type> column: 1 = reached only through a type mention" not in c22: fails22.append("compact legend lacks the <by_type> definition")
+if "the by_type column (present when a shown row has it)" not in full22: fails22.append("full legend lacks the by_type clause")
+if xml22 is not None and xml22.returncode != 0: fails22.append("--legend=full answer is not well-formed XML: " + xml22.stderr[:160])
+if "by_type" in fn22: fails22.append("a FUNCTION impact (--impact=a_set) carries by_type")
+if fails22:
+    no("(22) columnar by_type: " + "; ".join(fails22) + " rows=%r" % (z22,))
+else:
+    ok("(22) --format=columnar type impact: <by_type> 1 on take/Holder/lookup/Derived, 0 on the constructor call build_one; both legends define it (xmllint %s); a function impact has none"
+       % ("clean" if xml22 is not None else "not installed"))
 
 # (16) determinism
 (ok if run("c", "--impact=cell") == run("c", "--impact=cell") else no)("(16) two runs byte-identical")
