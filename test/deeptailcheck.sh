@@ -115,6 +115,7 @@ TROWS="$( grep -vc SPLIT-FAIL "$TMP/rank1.txt" )"
 if [ "$TROWS" = "11" ]; then ok "tail serves 11 rank rows (the tail's prefix before page 0's remainder): the files outside the one-file head"; else no "tail rank rows: $TROWS (expected 11; $( head -1 "$TMP/rank1.txt" ))"; fi
 # 1t) TAIL-SYM (train 30): every rank row carries sym=, the SAME names the file page's row for that file prints
 #     (the page row's top[] reused, never recomputed); a rank row without sym= is the base behaviour (red there)
+#     (the fixture's 12 files all fit the 40-row page; forsoftbudgetcheck C1t reads a real corpus off the whole page)
 RS="$( python3 - "$TMP/for.xml" "$TMP/page40.xml" "$TMP/tail.py" <<'PY'
 import html, re, subprocess, sys
 want = { html.unescape( p ): html.unescape( y ) for p, y in re.findall( r'<f p="([^"]*)"[^>]*? sym="([^"]*)"', open( sys.argv[ 2 ] ).read() ) }

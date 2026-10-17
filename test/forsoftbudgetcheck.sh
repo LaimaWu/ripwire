@@ -634,12 +634,14 @@ PY
     else
         no "(C1) default tail: page rows $( lines "$TMP/c1.page" ) vs the page's $( lines "$TMP/c1.want" ), total=$C1T vs page $C1PT, $C1DUP rank row(s) in the head"
     fi
-    # (C1t) tail-sym (train 30): every rank row names sym=, the file page's own sym= for that file (a pointer, reused)
+    # (C1t) tail-sym (train 30): every rank row names sym=, the file page's own sym= for that file (a pointer, reused); a
+    #       rank-row file can sit past page row 40, so the names are read off the WHOLE page (--limit=total=)
+    "$BIN" "$CORPUS" --for="$Q" --limit="$C1T" "$CF" 2>/dev/null > "$TMP/c1.pageall"
     C1TS="$( python3 "$TMP/tail.py" "$TMP/def.xml" ranksym "$TMP/c1.pagexml" | python3 -c '
 import html, re, sys
 want = { html.unescape( p ): html.unescape( y ) for p, y in re.findall( r"<f p=\"([^\"]*)\"[^>]*? sym=\"([^\"]*)\"", open( sys.argv[ 1 ] ).read() ) }
 rows = [ l.rstrip( "\n" ).split( "\t" ) for l in sys.stdin if "\t" in l ]
-print( len( rows ), sum( 1 for p, y in rows if not y or want.get( p ) != y ) )' "$TMP/c1.pagexml" )"
+print( len( rows ), sum( 1 for p, y in rows if not y or want.get( p ) != y ) )' "$TMP/c1.pageall" )"
     case "$C1TS" in
         "0 "*|*" "[1-9]*) no "(C1t) tail-sym: rank rows / rows whose sym= is missing or differs from the page's = $C1TS" ;;
         *)                ok "(C1t) tail-sym: all $( printf '%s' "$C1TS" | cut -d' ' -f1 ) rank rows carry the file page's sym= for their file" ;;

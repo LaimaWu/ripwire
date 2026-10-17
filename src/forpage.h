@@ -694,6 +694,35 @@ inline std::string forFileRowSymNames( const IngestResult& ing, const ForFileRow
     return sym;
 }
 
+inline constexpr std::uint32_t kNoPageRow = UINT32_MAX;
+
+// fileId -> its row in `page`, kNoPageRow for a file holding no positive-score symbol
+inline std::vector<std::uint32_t> forPageRowOfFile( const ForFilePage& page, std::size_t fileCount )
+{
+    std::vector<std::uint32_t> rowOf( fileCount, kNoPageRow );
+    for( std::size_t r = 0; r < page.rows.size(); ++r )
+    {
+        if( page.rows[r].fileId < fileCount )
+        {
+            rowOf[ page.rows[r].fileId ] = std::uint32_t( r );
+        }
+    }
+    return rowOf;
+}
+
+// a rank row's sym=: the page row of file `f` (opened by the same lens walk at `ranked`, the file's best symbol), "" if none
+inline std::string forPageSymOfFile( const IngestResult& ing, const ForFilePage& page, const std::vector<std::uint32_t>& rowOf,
+                                     std::uint32_t f, NodeId ranked )
+{
+    if( f >= rowOf.size() || rowOf[f] == kNoPageRow )
+    {
+        return {};
+    }
+    const ForFileRow& row = page.rows[ rowOf[f] ];
+    ASSUME( row.top[0] == ranked, "forPageSymOfFile: the page row of a rank row's file does not open at the symbol that ranked it" );
+    return forFileRowSymNames( ing, row );
+}
+
 // 1. the rank rows: the best-symbol projection of the lens order, outside the shown head's files; marks each file it lists.
 //    tail-sym (train 30): each row's sym= is that file's page row's top symbols (`page` holds EVERY positive-score file and
 //    a rank row's file has a positive-score symbol, so its row exists) — reused from computeForFilePage, never recomputed.
@@ -702,17 +731,9 @@ inline std::string forFileRowSymNames( const IngestResult& ing, const ForFileRow
 inline void fileTailRankRows( FileTail& out, std::vector<char>& listed, const IngestResult& ing, const std::vector<float>& rank,
                               const ForFilePage& page, const std::vector<NodeId>& headIds, std::string_view rootArg )
 {
-    const std::size_t F = ing.files.size();
-    constexpr std::uint32_t kNoRow = UINT32_MAX;
-    std::vector<std::uint32_t> pageRowOf( F, kNoRow );   // fileId -> its page row (positive-score files only)
-    for( std::size_t r = 0; r < page.rows.size(); ++r )
-    {
-        if( page.rows[r].fileId < F )
-        {
-            pageRowOf[ page.rows[r].fileId ] = std::uint32_t( r );
-        }
-    }
-    std::vector<char> inHead( F, 0 );
+    const std::size_t                F         = ing.files.size();
+    const std::vector<std::uint32_t> pageRowOf = forPageRowOfFile( page, F );
+    std::vector<char>                inHead( F, 0 );
     for( NodeId sid : headIds )
     {
         if( sid < ing.symbols.size() && ing.symbols[ sid ].fileId < F )
@@ -736,9 +757,7 @@ inline void fileTailRankRows( FileTail& out, std::vector<char>& listed, const In
         }
         listed[f] = 1;
         out.paths.push_back( lensRowPath( ing, f, rootArg ) );
-        ASSUME( pageRowOf[f] == kNoRow || page.rows[ pageRowOf[f] ].top[0] == order[k],
-                "fileTailRankRows: the page row of a rank row's file does not open at the symbol that ranked it" );
-        out.syms.push_back( pageRowOf[f] != kNoRow ? forFileRowSymNames( ing, page.rows[ pageRowOf[f] ] ) : std::string() );
+        out.syms.push_back( forPageSymOfFile( ing, page, pageRowOf, f, order[k] ) );
         out.pageNext.push_back( 0 );
     }
 }
