@@ -2800,10 +2800,10 @@ std::optional<int> runImpact( const MainDispatch& d )
         const rw::PageWindow imPage = pageWindow( show.size(), effectiveRowCap( cfg.pageLimit, rw::kCallHierarchyRowCap ), cfg.pageOffset );
         // idea #6: the rollup rides only beside a CUT symbol window (graph.h impactFileRollup)
         // fix27: on a multi-definition selector the rows keep the symbol rows' via="name" hedge through the fold
-        const rw::ImpactTypeFold imTypeFold{ imType.defFiles, imType.scopeFiles, &imWalk.typeOnly, imType.users.size(), imType.typeDefs, imType.sitesCapped };
+        rw::ImpactTypeFold   imTypeFold;
         rw::ImpactFileRollup imFiles = rw::impactFileRollup( ing, reach, imDepth, cfg.pageLimit, cfg.impactSym,
                                                              imPage.end - imPage.begin < show.size(), seeds.size() > 1 ? imProven : rw::kNoImpactHedge,
-                                                             imType.armed ? &imTypeFold : nullptr );   // L7: a type impact always rolls up
+                                                             rw::impactTypeFold( imType, imWalk, imTypeFold ) );   // L7: a type impact always rolls up
         // attrib-multidef (defattrib.h): which definition each reached row (and rollup file) is a dependant of, and the table
         // this page lists — the groups its rows and rollup rows name, all of them up to the cap.
         const rw::ReachAttribution imAttr = rw::attributeReachAnswer( ing, g, seeds, reach );
@@ -2843,7 +2843,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                          rw::declinedIfaceLegend( imDeclinedIface > 0 ),                                             // likewise, exactly when declined_iface= is there
                          ( std::string( rw::modScopeLegend( imHasModScope ) )      // #60: likewise, exactly when a t="modscope" row is
                            + rw::impactRollupLegend( !imFiles.rows.empty() && !cfg.columnar, imports.umbrella, rw::impactRollupHedged( imFiles ),
-                                                     !imports.next.empty() && !cfg.columnar, imFiles.typed, imFiles.typeDefs, imFiles.typeCapped )   // idea #6; fix27; FIX1 R1: the XML root's importers_next= (columnar names it in lens=); L7
+                                                     !imports.next.empty() && !cfg.columnar, rw::impactRollupTypeClauses( imFiles ) )   // idea #6; fix27; FIX1 R1: the XML root's importers_next= (columnar names it in lens=); L7
                            + rw::defTableLegend( imAttr.groups.multi(), imListing.cut ) ).c_str(),   // attrib-multidef: exactly when the table rides
                          ( std::string( rw::valueRefsReachLegend( !imValueRefs.rows.empty() ) )   // exactly when the root carries value_refs=
                            + rw::valueRefsDepthLegendFor( imValueRefs ) ).c_str(),                 // ... and the depth disclosure

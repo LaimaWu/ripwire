@@ -136,6 +136,11 @@ def observe(store, def_key, tested):
     return False
 
 impact_rows = {}          # (name, file, line) -> tested (bool)
+# L7 (type-use impact): a TYPE seed's --impact (its <files> carries type_users=) also walks from the symbols that NAME the
+# type, which --test-gate's call-edge blast radius does not — by design, so the union may hold rows --test-gate lacks. Each
+# such row must come from a type impact's own rows; any other extra row is still a broken partition (assertion (1)).
+type_rows = set()         # (name, file) printed by a type seed's impact
+type_seeds = 0
 row_count_ok = True
 radius_sum_ok = True
 for name in seed_names:
@@ -168,8 +173,12 @@ for name in seed_names:
         no("--impact=%s:%s: radius_tested(%d) + radius_untested(%d) != reaches(%d)" % (SAMPLE_FILE, name, rt, ru, reaches))
     if attrs.get("capped") not in ("0", None):
         no("--impact=%s:%s: capped=%s at --limit=5000 — raise the limit in this script" % (SAMPLE_FILE, name, attrs.get("capped")))
+    is_type_seed = re.search(r'<files [^>]*type_users="', doc) is not None
+    type_seeds += int(is_type_seed)
     for rkind, rn, rp, rtested in rows:
         np = norm_path(rp)
+        if is_type_seed:
+            type_rows.add((rn, np))
         if np == SAMPLE_FILE:
             continue                       # the changed file's own symbols — excluded, as --test-gate excludes them
         if np in testgate_testfiles:
@@ -207,9 +216,11 @@ if mixed_overloads:
 
 # ── (1) SET EQUALITY ─────────────────────────────────────────────────────────────────────────────────
 missing = testgate_untested - impact_untested   # test-gate says untested, --impact disagrees (or never saw it)
-extra   = impact_untested - testgate_untested    # --impact says untested, test-gate does not list it
+extra_all = impact_untested - testgate_untested  # --impact says untested, test-gate does not list it
+extra   = extra_all - type_rows                  # ... and no type seed's walk explains it (L7, see type_rows)
 if not missing and not extra:
-    ok("SET EQUALITY: --impact's union of untested rows == --test-gate's <u> rows, exactly (%d rows)" % len(testgate_untested))
+    ok("SET EQUALITY: --impact's union of untested rows == --test-gate's <u> rows (%d rows), apart from %d row(s) only a type seed's "
+       "type-use walk reaches (%d type seed(s))" % (len(testgate_untested), len(extra_all), type_seeds))
 else:
     no("SET EQUALITY broken: %d in test-gate not in impact, %d in impact not in test-gate" % (len(missing), len(extra)))
     for k in list(missing)[:5]:

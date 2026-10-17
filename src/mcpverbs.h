@@ -3145,9 +3145,9 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     const ValueRefRows  imValueRefs = valueRefCallerRows( ing, valueRefIndexOf( ix ), seeds );
     const PageWindow    ipw         = pageWindow( show.size(), effectiveRowCap( page.limit, 40 ), page.offset );
     // idea #6: the CLI arm's rollup, under the same rule — it rides only beside a CUT symbol window
-    const ImpactTypeFold typeFold{ typeTier.defFiles, typeTier.scopeFiles, &walk.typeOnly, typeTier.users.size(), typeTier.typeDefs, typeTier.sitesCapped };
+    ImpactTypeFold   typeFold;
     ImpactFileRollup imFiles = impactFileRollup( ing, reach, depth, page.limit, symbol, ipw.end - ipw.begin < show.size(),
-                                                 seeds.size() > 1 ? proven : kNoImpactHedge, typeTier.armed ? &typeFold : nullptr );   // fix27; L7, as on the CLI
+                                                 seeds.size() > 1 ? proven : kNoImpactHedge, impactTypeFold( typeTier, walk, typeFold ) );   // fix27; L7, as on the CLI
     // attrib-multidef (defattrib.h): the CLI --impact's attribution, by the same calls
     const ReachAttribution imAttr = attributeReachAnswer( ing, g, seeds, reach );
     std::vector<char>      imNamed;
@@ -3171,7 +3171,7 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
                     + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI
                     + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ), !imports.next.empty(),
-                                          imFiles.typed, imFiles.typeDefs, imFiles.typeCapped )   // idea #6; FIX1 R1; L7, as on the CLI
+                                          impactRollupTypeClauses( imFiles ) )   // idea #6; FIX1 R1; L7, as on the CLI
                     + defTableLegend( imAttr.groups.multi(), imListing.cut ) ).c_str(),                                              // attrib-multidef, as on the CLI
                   graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), renderDisclosure( prD, DiscloseAs::LegendClause ).c_str() );
     // r27-emitters §P2.1: the listing is capped at 40 by rank. Without shown=/capped= a 40-row answer to

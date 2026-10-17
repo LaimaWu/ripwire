@@ -26,6 +26,7 @@
 #include "ingest.h"       // AstQuerySpec / AstQueryGroup / astQueryGrouped — the shared structural-query walk
 #include "flipimpact.h"   // buildSymbolLineIndex / innermostAtLine — the shared line → innermost-def lookup
 #include "lintrules.h"    // langOfPath — the file's language, the key the rows are matched on
+#include "graphlegend.h"  // ImpactRollupTypeClauses — the legend's view of the tier
 
 #include <algorithm>
 #include <cstddef>
@@ -67,8 +68,14 @@ inline constexpr TypeMentionRow kTypeMentionRows[] = {
 // Does `lang` have a row whose pattern is `node`?
 inline bool typeMentionRowFor( Lang lang, std::string_view node ) noexcept
 {
-    return std::any_of( std::begin( kTypeMentionRows ), std::end( kTypeMentionRows ),
-                        [ & ]( const TypeMentionRow& r ) { return r.lang == lang && r.node == node; } );
+    for( const TypeMentionRow& row : kTypeMentionRows )
+    {
+        if( row.lang == lang && row.node == node )
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 // The name a type mention spells: the final segment of a definition's name (`ns::Widget` → `Widget`). Empty when that
@@ -221,6 +228,24 @@ inline ImpactReach impactReachWithTypes( const Graph& g, std::span<const NodeId>
         r.typeOnly[n] = std::binary_search( byCalls.begin(), byCalls.end(), n ) ? 0 : 1;
     }
     return r;
+}
+
+// The rollup's view of the tier (graph.h ImpactFileRollup), or null when the tier is unarmed — `out` is the caller's storage
+// and must outlive the rollup call; its spans borrow `tier`, its typeOnly `walk`.
+inline const ImpactTypeFold* impactTypeFold( const TypeUseTier& tier, const ImpactReach& walk, ImpactTypeFold& out )
+{
+    if( !tier.armed )
+    {
+        return nullptr;
+    }
+    out = ImpactTypeFold{ tier.defFiles, tier.scopeFiles, &walk.typeOnly, tier.users.size(), tier.typeDefs, tier.sitesCapped };
+    return &out;
+}
+
+// The legend's view of a rollup's type tier (graphlegend.h impactRollupLegend).
+inline ImpactRollupTypeClauses impactRollupTypeClauses( const ImpactFileRollup& r ) noexcept
+{
+    return ImpactRollupTypeClauses{ r.typed, r.typeDefs, r.typeCapped };
 }
 
 } // namespace rw

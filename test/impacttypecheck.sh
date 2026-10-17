@@ -39,6 +39,7 @@
 #   (14) legend: --legend=full carries the TYPE IMPACT clause on a type impact only; no "--" inside the legend comment.
 #   (15) --limit=2 beats the first-hop band: shown_files="2" files_capped="1" with files_next=.
 #   (16) determinism: two runs byte-identical.
+#   (17) the first-hop band: 25 files naming a struct + its header = 26 rows listed with no --limit (default cap is 20).
 #
 # Usage: bash test/impacttypecheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/impacttypecheck.sh
 
@@ -227,6 +228,10 @@ mk java/Plain.java <<'EOF'
 public class Plain { static int plain( int x ) { return x + 1; } }
 EOF
 
+# band/: one struct and 25 files that each name it — more d=1 files than the rollup's default 20 (arm 17)
+mkdir -p "$TMP/band"; printf 'struct wide { int v; };\n' >"$TMP/band/wide.h"
+for i in $( seq -w 1 25 ); do printf 'int use_%s( struct wide *w ) { return w->v; }\n' "$i" >"$TMP/band/u$i.c"; done
+
 BIN="$BIN" FIX="$TMP" python3 - <<'PY'
 import json, os, re, shutil, subprocess, sys
 
@@ -378,6 +383,15 @@ if fa.get("shown_files") == "2" and fa.get("files_capped") == "1" and "--limit="
     ok("(15) --limit=2: shown_files=2 files_capped=1 files_next=%s" % fa.get("files_next"))
 else:
     no("(15) --limit=2 files %r rows=%d" % (fa, len(rf(l15))))
+
+# (17) the first-hop band: with no --limit every d<=1 file is listed, past the default 20
+b17 = run("band", "--impact=wide")
+fe = re.search(r"<files [^>]*>", b17)
+fa = dict(re.findall(r'(\w[\w-]*)="([^"]*)"', fe.group(0))) if fe else {}
+if fa.get("files") == "26" and fa.get("shown_files") == "26" and fa.get("files_capped") == "0":
+    ok("(17) 25 user files + the defining one: shown_files=26 files_capped=0 (the band, past the default 20)")
+else:
+    no("(17) band files %r" % fa)
 
 # (16) determinism
 (ok if run("c", "--impact=cell") == run("c", "--impact=cell") else no)("(16) two runs byte-identical")
