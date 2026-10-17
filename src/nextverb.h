@@ -182,10 +182,11 @@ inline std::string pagedNext( std::string_view invocation, int pageLimit, std::s
 
 // L8 (train 29): the NEXT PAGE of a callers listing — the CLI --callers root's next=, find_referencing_symbols' next and
 // find_symbol's calledBy_next all name this one call, so the three cannot spell the page differently. `selector` is the
-// selector as typed (a file:name narrowing is kept); `columnar` keeps --format=columnar so the page has the same form.
-inline std::string callersPageNext( std::string_view selector, int pageLimit, std::size_t nextOffset, bool columnar = false )
+// selector as typed (a file:name narrowing is kept); `columnar` keeps --format=columnar and `json` keeps --json, so the
+// page has the same form.
+inline std::string callersPageNext( std::string_view selector, int pageLimit, std::size_t nextOffset, bool columnar = false, bool json = false )
 {
-    return pagedNext( nextFlag( "--callers=", selector ) + ( columnar ? " --format=columnar" : "" ), pageLimit, nextOffset );
+    return pagedNext( nextFlag( "--callers=", selector ) + ( columnar ? " --format=columnar" : "" ) + ( json ? " --json" : "" ), pageLimit, nextOffset );
 }
 
 } // namespace rw

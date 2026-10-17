@@ -94,7 +94,8 @@ With no `--limit`, a call hierarchy of 41 to 50 rows is served whole instead of 
 page (`--callers=SYM --offset=40`, the selector quoted as one argument, `--limit` and `--format=columnar` replayed), and
 the `--uses` follow-up it used to name moves to `uses_next=`; the last page, an uncut answer and `--callees` (whose
 `next=` stays `--expand`) are unchanged. MCP `find_symbol` and `find_referencing_symbols` window each array the same way,
-and `find_referencing_symbols` carries the page in `next` and the uses follow-up in `uses_next`. `--impact`, `--owners`
+and `find_referencing_symbols` carries the page in `next` and the uses follow-up in `uses_next`; a `--json` page carries the
+same pair as `next` (with `--json` replayed) and `uses_next` keys. `--impact`, `--owners`
 and `--edit-check` windows keep the plain 40. Gate: `test/neighbourcapcheck.sh` arms 14-21.
 
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)

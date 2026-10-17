@@ -493,6 +493,16 @@ J45="$( rb --callers=band45Hub --json )"; J51="$( rb --callers=band51Hub --json 
   && [ "$( printf '%s' "$J51" | grep -o '"n":"b51c' | wc -l | tr -d ' ' )" = 40 ] && printf '%s' "$J51" | grep -q '"capped":true,"total":51,"has_more":true,"next_offset":40'; } \
     && ok "(18) --json: the band serves 45 uncut, 51 cuts at 40 with the paging keys" \
     || no "(18) --json band: 45 rows=$( printf '%s' "$J45" | grep -o '"n":"b45p' | wc -l ) 51 head=$( printf '%s' "$J51" | cut -c1-200 )"
+# (18b) CodeRabbit 4303967676: the --json page carried next_offset but neither the page call nor the uses verb the XML,
+# columnar and MCP forms name. The JSON page names both, its next replays --json (the page keeps its dialect), the pasted
+# page serves the 11 remaining rows as JSON, and an uncut answer and the last page add no next key (their bytes stand).
+J51N="$( printf '%s' "$J51" | grep -oE '"next":"[^"]*","uses_next":"[^"]*"' | head -1 )"
+J51P="$( rb --callers=band51Hub --json --offset=40 )"
+{ [ "$J51N" = '"next":"--callers=band51Hub --json --offset=40","uses_next":"--uses=band51Hub"' ] \
+  && [ "$( printf '%s' "$J51P" | head -c 1 )" = "{" ] && [ "$( printf '%s' "$J51P" | grep -o '"n":"b51c' | wc -l | tr -d ' ' )" = 11 ] \
+  && ! printf '%s' "$J51P" | grep -q '"next"' && ! printf '%s' "$J45" | grep -q '"next"'; } \
+    && ok "(18b) --json at 51: next is the JSON page (--callers=band51Hub --json --offset=40), uses_next the uses verb; the page serves 11 JSON rows; uncut and last pages carry no next" \
+    || no "(18b) --json page next: [${J51N:-none}] page2 rows=$( printf '%s' "$J51P" | grep -o '"n":"b51c' | wc -l | tr -d ' ' ) page2 next=$( printf '%s' "$J51P" | grep -c '"next"' ) uncut next=$( printf '%s' "$J45" | grep -c '"next"' )"
 C51="$( rb --callers=band51Hub --format=columnar )"; TC51="$( rootTag "$C51" callers )"
 [ "$( attr next "$TC51" )" = "--callers=band51Hub --format=columnar --offset=40" ] \
     && ok "(19) --format=columnar: the page next= keeps the form" \

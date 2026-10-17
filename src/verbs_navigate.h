@@ -368,9 +368,14 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                            + rw::declinedIfaceKeyJson( chRows.declinedIface )   // A6; then the XML root's declined_calls=/dc_shown=/dc_next=/declined_iface=
                            + rw::stdMemberCallsSpelling( chRows.stdCalls, /*json=*/true ),                                                           // and the XML <stdm> line
                          ( rw::valueRefsCountKeyJson( chRows.valueRefs.rows.size() ) + rw::valueRefsDepthKeyJson( ing, chRows.valueRefs.depthCut, chVr ) ) );
-            rw::emitTo( stdout, "{}{}", pageDisclosure( pab, sizeof( pab ), pw.end - pw.begin, result.size(), pw.end,
-                                        cfg.pageLimit, cfg.pageOffset, chDiscloseCap, kJsonPageSyntax ),
-                         rw::graphCountFloorAttrJson( g ).c_str() );   // §H4 §3.4 — the JSON dialect's spelling of the same marker
+            rw::emitTo( stdout, "{}{}{}", pageDisclosure( pab, sizeof( pab ), pw.end - pw.begin, result.size(), pw.end,
+                                          cfg.pageLimit, cfg.pageOffset, chDiscloseCap, kJsonPageSyntax ),
+                         rw::graphCountFloorAttrJson( g ).c_str(),   // §H4 §3.4 — the JSON dialect's spelling of the same marker
+                         // L8: a capped callers page names the next page and the uses verb, as the XML/columnar root and MCP
+                         // find_referencing_symbols do; the page replays --json. Any other answer keeps its JSON bytes.
+                         chNextIsPage ? rw::nextFieldJson( rw::callersPageNext( sym, cfg.pageLimit, pw.end, false, true ) )
+                                          + rw::nextFieldJson( chHintCall, "uses_next" )
+                                      : std::string() );
             rw::emitTo( stdout, ",\"{}\":[", tag );
             std::vector<char> chVia( result.size(), 0 );   // FE-B: the same hedge bit the XML rows carry
             std::vector<std::string> chAtKeys( result.size() );   // CALLSITE-AT: the rows' sites_at/sites_total keys, absent when none
