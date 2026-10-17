@@ -343,7 +343,7 @@ different layout, so this release takes 34). `kQSnapCacheScheme` 20 → 22:
 the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls, 21), and a Rust call
 named like a standard-type member no longer binds an in-tree namesake (22), so the dead kind can
 differ for an unchanged commit. Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=708fbf91ff0a70f7 entries=891`.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=03dafd43056d9967 entries=892`.
 
 
 ## [0.6.7] — 2026-10-11
