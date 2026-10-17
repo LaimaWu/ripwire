@@ -120,7 +120,7 @@ struct BinaryStaleResult
 // (no history for that path, git error) — a hard "don't know" that skips the pair rather than guess.
 inline std::string lastTouchingCommit( const std::string& root, const std::string& path )
 {
-    return quality::gitOneLine( root, "log -1 --format=%H -- " + shSingleQuote( path ) + " 2>/dev/null" );
+    return quality::gitOneLine( root, "log --no-ext-diff --no-textconv -1 --format=%H -- " + shSingleQuote( path ) + " 2>/dev/null" );
 }
 
 inline BinaryStaleResult computeBinaryStaleness( const std::string& root )

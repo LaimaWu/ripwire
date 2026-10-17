@@ -745,16 +745,23 @@ struct EditCheckTieResult
     bool          mayDefault;   // on Unproven: the declaration may carry a default (what defaults_untied= counts)
 };
 
+// The identity rule's parser-field half, read off the two symbols alone (no source read): a pair failing it is Different.
+// Callers that test many pairs (editcheck.h editCheckDeclFoldTargets) ask it FIRST, so a definition's signature is read
+// only for a declaration that could declare it (checklist 30(c): the source reads stay bounded by the candidate pairs).
+inline bool editCheckTieCandidate( const Symbol& d, const Symbol& f ) noexcept
+{
+    return d.name == f.name && d.scope == f.scope && langCompatible( d.lang, Lang::C ) && langCompatible( f.lang, Lang::C )
+        && !isDefinitionNotDeclaration( d ) && isDefinitionNotDeclaration( f ) && d.params == f.params
+        && ( f.internalLinkage == 0 || d.fileId == f.fileId );
+}
+
 // THE IDENTITY RULE, for one (declaration, definition) pair. `defSig` is the definition's own signature, read once.
 inline EditCheckTieResult editCheckTieDeclaration( const IngestResult& ing, EditCheckSources& sources, NodeId decl, NodeId def,
                                                    const EditCheckSignature& defSig )
 {
     const Symbol& d = ing.symbols[ decl ];
     const Symbol& f = ing.symbols[ def ];
-    const bool candidate = d.name == f.name && d.scope == f.scope && langCompatible( d.lang, Lang::C ) && langCompatible( f.lang, Lang::C )
-                        && !isDefinitionNotDeclaration( d ) && isDefinitionNotDeclaration( f ) && d.params == f.params
-                        && ( f.internalLinkage == 0 || d.fileId == f.fileId );
-    if( !candidate )
+    if( !editCheckTieCandidate( d, f ) )
     {
         return { EditCheckTie::Different, 0, false };
     }

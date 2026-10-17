@@ -164,7 +164,8 @@ SHOWN="$( attr shown "$OUT_W" )"
     && ok "--impact=Widget: shown=1 and exactly 1 <s> row — import rows are outside the paged listing" \
     || no "--impact=Widget: <s> rows=$S_ROWS vs shown=$SHOWN (expected 1 and 1)"
 # 0.6.5: the listing's first row states its hop depth (d="1": build calls Widget directly) — test/impactdepthcheck.sh.
-printf '%s' "$OUT_W" | grep -qE '<s t="fn" n="build" p="lib/user\.js:7" d="1"/>' \
+# attrib-multidef: Widget names several definitions, so the row also says which one it depends on (of_def=, defattrib.h)
+printf '%s' "$OUT_W" | grep -qE '<s t="fn" n="build" p="lib/user\.js:7" d="1"( of_def="[^"]*")?/>' \
     && ok "--impact=Widget: user.js appears as the SYMBOL build in the call tier" \
     || no "--impact=Widget: the call-reach row for build (lib/user.js:7) is gone"
 
@@ -437,10 +438,11 @@ for LG in py ts go; do
         no "multidef $LG: the single-definition corpus has no via=name symbol row — its near-miss arm is inert"
     fi
     O_RF="$( rfrow "$M_OUT" 'o_00\.[a-z]+' )"; X_RF="$( rfrow "$M_OUT" 'mixed\.[a-z]+' )"
-    printf '%s' "$O_RF" | grep -qE 'syms="1" d="1" via="name"/>' \
+    # attrib-multidef: the row's of_def= (which definitions its symbols depend on) rides after the fix27 hedge
+    printf '%s' "$O_RF" | grep -qE 'syms="1" d="1" via="name"( of_def="[^"]*")?/>' \
         && ok "multidef $LG: an all-by-name file keeps the hedge: $O_RF" \
         || no "multidef $LG: the o_00 rf row lost the symbol rows' via=\"name\": '$O_RF'"
-    { printf '%s' "$X_RF" | grep -qE 'syms="2" d="1" by_name="1"/>' && ! printf '%s' "$X_RF" | grep -q 'via='; } \
+    { printf '%s' "$X_RF" | grep -qE 'syms="2" d="1" by_name="1"( of_def="[^"]*")?/>' && ! printf '%s' "$X_RF" | grep -q 'via='; } \
         && ok "multidef $LG: a mixed file counts its hedged symbols: $X_RF" \
         || no "multidef $LG: the mixed rf row: '$X_RF' (want syms=2 by_name=1, no via=)"
     if [ $LG != ts ]; then
@@ -452,7 +454,7 @@ for LG in py ts go; do
     printf '%s' "$M_OUT" | grep -qF 'rf via="name": of= matched several definitions' \
         && ok "multidef $LG: the rf hedge sentence rides with the hedged rows" \
         || no "multidef $LG: legend lacks the rf via=/by_name= sentence"
-    perl -e 'alarm 30; exec @ARGV' "$BIN" "$MD" --impact=$SY --no-cache --json 2>/dev/null | grep -qE '"syms":1,"d":1,"via":"name"\}' \
+    perl -e 'alarm 30; exec @ARGV' "$BIN" "$MD" --impact=$SY --no-cache --json 2>/dev/null | grep -qE '"syms":1,"d":1,"via":"name"(,"of_def":\[[^]]*\])?\}' \
         && ok "multidef $LG: --json carries the same hedge" \
         || no "multidef $LG: --json rollup rows lack \"via\":\"name\""
     for NM in single qualified; do
@@ -472,7 +474,7 @@ for LG in py ts go; do
     [ $LG = py ] && {
         MCP_M="$( printf '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}\n{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact","arguments":{"path":"%s","symbol":"arrange"}}}\n' "$MD" \
                   | perl -e 'alarm 60; exec @ARGV' "$BIN" --mcp 2>/dev/null | tail -1 )"
-        printf '%s' "$MCP_M" | grep -qF 'syms=\"1\" d=\"1\" via=\"name\"/>' && printf '%s' "$MCP_M" | grep -qF 'by_name=\"1\"' \
+        printf '%s' "$MCP_M" | grep -qE 'syms=\\"1\\" d=\\"1\\" via=\\"name\\"( of_def=\\"[^\\]*\\")?/>' && printf '%s' "$MCP_M" | grep -qF 'by_name=\"1\"' \
             && ok "multidef py: the MCP impact twin keeps the same hedge" \
             || no "multidef py: MCP impact rollup rows lack via=/by_name="
     }

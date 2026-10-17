@@ -1805,7 +1805,7 @@ inline std::pair<std::uint32_t, std::uint32_t> resolveRubyConstant( const RubyCo
 // byName rule — the pre-scoping answer, never a guess in either direction — and is COUNTED by `disclosure` below
 // (RubyBaseScopeDisclosure), which buildGraph copies to Graph::rubyBasesUnscoped: the gauge attribute
 // ruby_bases_unscoped=N, absent at zero (graphlegend.h graphGaugeAttrXml/Json, test/rubyinheritcheck.sh).
-// Built only when the corpus holds a Ruby inherit reference; empty otherwise.
+// Built only when the corpus holds a Ruby inherit reference or a main-object mixin (LocalBindKind::RubyMainMixin); empty otherwise.
 //
 // The sink models Diagnostics::DisclosureSink: one reason, one count, read by the emitter as the gauge attribute.
 struct RubyBaseScopeDisclosure
@@ -2078,7 +2078,8 @@ inline RubyBaseScope buildRubyBaseScope( const IngestResult& ing )
 {
     RubyBaseScope sc;
     const auto isRubyBase = []( const Reference& r ) noexcept { return r.isInherit && r.lang == Lang::Ruby; };
-    if( std::none_of( ing.references.begin(), ing.references.end(), isRubyBase ) )
+    const auto isMainMixin = []( const Binding& b ) noexcept { return b.kind == LocalBindKind::RubyMainMixin; };   // graph.h rubyMainObjectMixins reads classesByFqn too
+    if( std::none_of( ing.references.begin(), ing.references.end(), isRubyBase ) && std::none_of( ing.bindings.begin(), ing.bindings.end(), isMainMixin ) )
     {
         return sc;
     }

@@ -373,6 +373,11 @@ inline constexpr std::string_view kMcpForBuildingBlocksLegend =
 static_assert( kMcpForBuildingBlocksLegend.find( kForZeroAbsentMcpNote ) != std::string_view::npos, "the MCP for zero reading is spelled once" );
 inline constexpr std::string_view kMcpForBundleSigsLegend =
     "; bundle=sigs: signatures only in this bundle, no inline bodies — fetch a symbol's full body with the fetch_body verb";
+// for-body-slot: the same sentence on an answer that carries the one owner body of an explanatory question (forowner.h); at least
+// as long as the sentence it replaces, so the sigs ledger's exemption of the difference never underflows
+inline constexpr std::string_view kMcpForBundleSigsOwnerLegend =
+    "; bundle=sigs: signatures, and no inline body but the ONE owner body below — fetch any other full body with the fetch_body verb";
+static_assert( kMcpForBundleSigsOwnerLegend.size() >= kMcpForBundleSigsLegend.size(), "the slot's bundle sentence replaces the plain one without shrinking" );
 inline constexpr std::string_view kMcpForLensColumnsLegend =
     "; lens=\"churn,amp,tested\": the three per-row quality columns the CLI for lens carries and this dialect"
     " does NOT (they need a git and a quality pass this server does not run per request); an absent column here"
@@ -381,6 +386,22 @@ inline constexpr std::string_view kMcpForLensColumnsLegend =
 // dialects (verbs_for.h, mcpverbs.h) spell the same sentence.
 inline constexpr std::string_view kForBudgetBytesNote =
     " [budget_bytes= is the default BYTE ceiling this ranked payload was shaped against; it bounds that payload, not the whole document est_tokens prices]";
+// forbudget-soft: the same attribute on an answer whose ranked head ran PAST it (sigs past_target=). There the number shaped
+// the row TEXT (signatures and doc excerpts shortened toward it) and removed no row, so calling it a ceiling would be false.
+// Says what it does not mean: not a bound on the rows. No "--" (it rides inside an XML comment, G4).
+inline constexpr std::string_view kForBudgetBytesTargetNote =
+    " [budget_bytes= is the default BYTE target this ranked payload was shaped toward: row text shortens toward it, no row of"
+    " the ranked head is removed for it (sigs past_target=)]";
+// forbudget-soft: <sigs past_target="K">, present only on a block whose ranked head passed the default target. The rows are
+// a rank prefix, so "the last K" names them exactly. Not a cut: nothing is missing.
+inline constexpr std::string_view kForPastTargetNote =
+    " [sigs past_target=K: the last K rows are past the budget_bytes target, served because they are rows of the ranked head;"
+    " none is cut]";
+// forbudget-soft: an EXPLICIT token budget on a task lens is a SOFT target (owner decision 2026-10-14) — the full dialect's
+// reading of budget_tokens= (the compact one rides its est_tokens clause). Says what it does NOT promise: a byte bound.
+inline constexpr std::string_view kForSoftBudgetNote =
+    " [budget_tokens=: the soft token target; rows stop once it is reached, the rank 1..4 rows and every disclosure always ship,"
+    " so est_tokens may exceed it]";
 // The prose of the two root-relative comments above, as the dictionary quotes it. Asserted to sit inside them, so the
 // wrapper constants and these cannot drift apart.
 inline constexpr std::string_view kForRootRelProse =
@@ -479,6 +500,13 @@ inline constexpr const char* kImpactLegendOpen =
 // require/import, a class-body or file-level receiver), so the dependency also holds at load.
 inline constexpr const char* kImpactImportTierLegend =
     "importers= is a SECOND, weaker reach: the files that directly include/import a file defining SYM, as <f via=\"import\" p=\"…\" lazy=\"0|1\"/> rows after the symbol rows — not call reach, never added to reaches= (different units, files vs symbols; an importer may use a different symbol from that file, or none at all). DIRECT (one hop), never the transitive include cone. lazy=\"1\" means every one of that importer's edges into SYM's file is written INSIDE A CLOSURE (a TS/JS require()/import() in a function body, a Ruby constant receiver or argument in a method/lambda/block, a Ruby autoload or rescue class), firing only if and when it runs; lazy=\"0\" means at least one edge is load-time. shown_importers=/importers_capped= disclose that listing's own truncation (importers= stays the full count); most-imported first; limit= sizes it, offset= windows the symbol rows only. ";
+
+// cut-fix E's importers_next= (graph.h sizeImportTier), present-only: it rides a CUT import listing alone, and the full
+// legend never defined it (legendcoveragecheck (A) found it once SYM's file passed 40 importers on this tree).
+inline const char* importersNextLegend( bool on ) noexcept
+{
+    return on ? "importers_next= (a cut importer listing only) is the call that lists every importer. " : "";
+}
 
 // The columnar form re-serializes the SYMBOL rows as parallel arrays and has no row shape for a second
 // listing, so it carries importers= alone. Said in band rather than left as a shape difference a reader
@@ -609,7 +637,7 @@ inline const char* capLegendClause( bool active ) noexcept
 // declinedCallsLegend( bool ) takes the emitter's own attribute-present condition, never a re-derivation. No
 // double hyphen anywhere, because it lands inside an XML comment.
 inline constexpr const char* kDeclinedCallsLegend =
-    "declined_calls=K (absent when 0) counts call SITES the resolver declined to bind: the called name has two or more same-language definitions, none in the caller's file or directory, and no qualifier, receiver type or include chose one, so no edge exists and no count or row here includes them (the map header's declined=). Callers form: declined calls that could have meant this selector's definitions; impact form: that could have reached SYM or a symbol in its radius; callees form: declined calls these definitions make. Each call counts once however many candidates it had; the uses verb on the called name lists the sites. ";
+    "declined_calls=K (absent when 0) counts call SITES the resolver declined to bind: the called name has two or more same-language definitions, none in the caller's file or directory, and no qualifier, receiver type or include chose one (tier 3); a name gate or Ruby's side/new rule may decline one (the callers and callees <dc> rows say which, gate=; a declined new carries none). No edge exists and no count or row here includes them (the map header's declined=). Callers form: declined calls that could have meant this selector's definitions; impact form: that could have reached SYM or a symbol in its radius; callees form: declined calls these definitions make. Each call counts once however many candidates it had; the uses verb on the called name lists the sites. ";
 // The builtin-method name gate's declines (graph.h BuiltinMethodGate) ride the same count with ONE definition possible;
 // this clause is charged only where the gate declined at least one call in the graph (Graph::gateDeclinedCalls), so an
 // answer on a tree the gate never touched keeps its bytes.
@@ -620,6 +648,9 @@ inline constexpr const char* kDeclinedCallsGateClause =
 // (Graph::stdMemberDeclinedCalls), so a tree it never touched keeps its bytes. What it does NOT mean is in the same breath.
 inline constexpr const char* kDeclinedCallsStdClause =
     "It also counts a C++ call named like a member of a standard container, string, optional or smart pointer (v.push_back, s.size) on a receiver no rule tied to an in-tree class: the standard library's own member may be the one called, so no in-tree namesake is bound; it is not a claim that the receiver is a standard type. ";
+inline constexpr const char* kInertDeclinedCallsClause =
+    "In the callees form it also counts ordinary Elixir call candidates in inert quote AST after unquote/unquote_splicing re-entry. "
+    "These sites have no uses rows or target candidates, so they contribute no caller or impact declined_calls= candidate list. ";
 inline const char* declinedCallsLegend( bool on ) noexcept { return on ? kDeclinedCallsLegend : ""; }
 inline const char* declinedCallsGateLegend( bool on ) noexcept { return on ? kDeclinedCallsGateClause : ""; }
 inline const char* declinedCallsStdLegend( bool on ) noexcept { return on ? kDeclinedCallsStdClause : ""; }
@@ -632,11 +663,100 @@ inline const char* stdMemberCallsLegend( bool on ) noexcept { return on ? kStdMe
 inline constexpr const char* kDeclinedCallsTestGateLegend =
     "declined_calls=K (absent when 0): K call SITES the resolver declined to bind that could have reached the change or its radius (the map's declined=); a test behind one is in no row here. ";
 // The clause and, where the gate declined in this graph, its gate sentence — the one spelling every declined_calls= emitter uses.
-inline std::string declinedCallsLegendWithGate( bool on, bool gateDeclined ) { return std::string( declinedCallsLegend( on ) ) + declinedCallsGateLegend( on && gateDeclined ); }
-// The same, plus the C++ standard-member gate's sentence where that gate declined in this graph (graph.h StdMemberGate).
-inline std::string declinedCallsLegendWithGates( bool on, bool gateDeclined, bool stdDeclined )
+inline std::string declinedCallsLegendWithGate( bool on, bool gateDeclined, bool inertDeclined = false )
 {
-    return declinedCallsLegendWithGate( on, gateDeclined ) + declinedCallsStdLegend( on && stdDeclined );
+    return std::string( declinedCallsLegend( on ) ) + declinedCallsGateLegend( on && gateDeclined ) + ( on && inertDeclined ? kInertDeclinedCallsClause : "" );
+}
+// The same, plus the C++ standard-member gate's sentence where that gate declined in this graph (graph.h StdMemberGate).
+inline std::string declinedCallsLegendWithGates( bool on, bool gateDeclined, bool stdDeclined, bool inertDeclined = false )
+{
+    return declinedCallsLegendWithGate( on, gateDeclined, inertDeclined ) + declinedCallsStdLegend( on && stdDeclined );
+}
+
+// ── lane declined-sites: the <dc> rows (declinedsites.h) ────────────────────────────────────────────────────────────
+// Where <dc> rows ride, the clause above cannot say "no count or row here includes them": the rows name those calls. This
+// twin says so instead (gates review R9) and is the one such an answer carries; everything else in it is the clause above.
+inline constexpr const char* kDeclinedCallsRowsLegend =
+    "declined_calls=K (absent when 0) counts call SITES the resolver declined to bind: the called name has two or more same-language definitions, none in the caller's file or directory, and no qualifier, receiver type or include chose one (tier 3); a name gate or Ruby's side/new rule may decline one, see gate= (a declined new carries none). No edge exists and no count here includes them; the <dc> rows below name them (the map header's declined=). Callers form: declined calls that could have meant this selector's definitions; impact form: that could have reached SYM or a symbol in its radius; callees form: declined calls these definitions make. Each call counts once however many candidates it had; the uses verb on the called name lists the sites. ";
+// Beside <dc> rows the rows clause says the rows name the declined calls; the inert quoted sites it also counts have none.
+inline constexpr const char* kInertNoDcRowClause = "No <dc> row names those quoted sites: they reach no decline site. ";
+// inertDeclined (#380): the callees form's Elixir inert quote sites ride the same count with no <dc> row (they never reach a
+// decline site), so their clause follows the gate sentences either way, exactly as declinedCallsLegendWithGates spells it.
+inline std::string declinedCallsLegendForRows( bool on, bool gateDeclined, bool stdDeclined, bool dcRows, bool inertDeclined = false )
+{
+    if( !dcRows )
+    {
+        return declinedCallsLegendWithGates( on, gateDeclined, stdDeclined, inertDeclined );
+    }
+    return std::string( kDeclinedCallsRowsLegend ) + declinedCallsGateLegend( gateDeclined ) + ( inertDeclined ? std::string( kInertDeclinedCallsClause ) + kInertNoDcRowClause : std::string() ) + declinedCallsStdLegend( stdDeclined );
+}
+// The <dc> clause, in the gates review's words (R10): what a row is, and above all what it is NOT. Each later sentence rides
+// only where its attribute does, so an answer pays for the vocabulary it prints.
+inline constexpr const char* kDeclinedSitesLegend =
+    "<dc>: a call SITE the resolver declined to bind; NOT an edge and NOT a caller or callee claim (counted in declined_calls=, never in count= or a row above). cands=K: K in-tree definitions the call could have meant (K may be 1); the resolver proved none; not a claim this call reaches any of them (it may reach an out-of-tree, builtin or standard-library method). ";
+inline constexpr const char* kDeclinedSitesCalleesForm =
+    "<dc n= l= via=\"declined\">: the called name and the line of the call, in the body of one of these definitions. ";
+inline constexpr const char* kDeclinedSitesCallersForm =
+    "<dc in= p= via=\"declined\">: the definition making the call and the call's file:line, listed because its candidates include a definition of this selector. ";
+inline constexpr const char* kDeclinedSitesSideClause =
+    "gate=side: a Ruby call whose in-reach definitions answer on the other side of self. ";
+inline constexpr const char* kDeclinedSitesNameGateClause =
+    "gate=builtin|std: declined by the builtin-method or the C++ standard-member name gate. ";
+inline constexpr const char* kDeclinedSitesOfDefCallees =
+    "of_def=K on a <dc>: the definition (ix=K) making the call, a fact. ";
+inline constexpr const char* kDeclinedSitesOfDefCallers =
+    "of_def=K~d on a <dc>: its candidates include definition group K; never a claim it calls K. ";
+inline constexpr const char* kDeclinedSitesCutClause =
+    "dc_shown=N: the <dc> rows printed (the callers form cuts file-first: each file's first site before any file's second); dc_next= is the call that lists every site. ";
+inline constexpr const char* kDeclinedSitesCandClause =
+    "cand= (legend full only): the candidate definitions as file:line, cand_more= how many more. ";
+// The impact answer prints no <dc> row (gates review Q4): where its declined_calls= rides, it names where the sites are listed.
+inline constexpr const char* kDeclinedSitesImpactPointer =
+    "The callers verb on SYM lists its declined first-hop calls as <dc> rows. ";
+inline const char* declinedSitesImpactPointer( bool on ) noexcept { return on ? kDeclinedSitesImpactPointer : ""; }
+// What one answer's <dc> rows carry, read off the rows it prints (never re-derived).
+struct DeclinedSitesLegendFlags
+{
+    bool any = false; // a <dc> row is printed
+    bool callersForm = false; // in= p= rows (callers, safe-delete) rather than n= l= (callees)
+    bool side = false; // a row says gate="side"
+    bool nameGate = false; // a row says gate="builtin" or gate="std"
+    bool ofDef = false; // a row carries of_def=
+    bool cut = false; // the root carries dc_shown= / dc_next=
+    bool cand = false; // a row carries cand= (legend full)
+};
+// train 28 (declined-sites review N3): the MCP twins carry the same sites as "declined_sites" entries with their own keys, so
+// their declined_note names those keys ({name, line, cands, via} / {in, file, line, cands}) instead of the XML attributes.
+inline constexpr const char* kDeclinedSitesMcpLead =
+    "declined_sites: each entry a call SITE the resolver declined to bind; NOT an edge and NOT a caller or callee claim (counted in declined_calls, never in count or a row above). cands: the number of in-tree definitions the call could have meant (it may be 1); the resolver proved none; not a claim this call reaches any of them (it may reach an out-of-tree, builtin or standard-library method). ";
+inline constexpr const char* kDeclinedSitesCalleesFormMcp =
+    "{name, line, via=declined}: the called name and the line of the call, in the body of one of these definitions. ";
+inline constexpr const char* kDeclinedSitesOfDefCalleesMcp =
+    "of_def [K] on an entry: the definition (ix=K) making the call, a fact. ";
+inline constexpr const char* kDeclinedSitesOfDefCallersMcp =
+    "of_def [K~d] on an entry: its candidates include definition group K; never a claim it calls K. ";
+inline constexpr const char* kDeclinedSitesCutClauseMcp =
+    "dc_shown: the entries listed (the callers form cuts file-first: each file's first site before any file's second); dc_next: the call that lists every site. ";
+inline constexpr const char* kDeclinedSitesCandClauseMcp =
+    "candidates (legend full only): the candidate definitions as file:line, cand_more how many more. ";
+inline constexpr const char* kDeclinedSitesCallersFormMcp =
+    "{in, file, line, via=declined}: the definition making the call and the call's file and line, listed because its candidates include a definition of this selector. ";
+inline std::string declinedSitesLegend( const DeclinedSitesLegendFlags& f, bool mcp = false )
+{
+    if( !f.any )
+    {
+        return {};
+    }
+    std::string out( mcp ? kDeclinedSitesMcpLead : kDeclinedSitesLegend );
+    out += f.callersForm ? ( mcp ? kDeclinedSitesCallersFormMcp : kDeclinedSitesCallersForm ) : ( mcp ? kDeclinedSitesCalleesFormMcp : kDeclinedSitesCalleesForm );
+    out += f.side ? kDeclinedSitesSideClause : "";
+    out += f.nameGate ? kDeclinedSitesNameGateClause : "";
+    out += f.ofDef ? ( f.callersForm ? ( mcp ? kDeclinedSitesOfDefCallersMcp : kDeclinedSitesOfDefCallers )
+                                     : ( mcp ? kDeclinedSitesOfDefCalleesMcp : kDeclinedSitesOfDefCallees ) )
+                   : "";
+    out += f.cut ? ( mcp ? kDeclinedSitesCutClauseMcp : kDeclinedSitesCutClause ) : "";
+    out += f.cand ? ( mcp ? kDeclinedSitesCandClauseMcp : kDeclinedSitesCandClause ) : "";
+    return out;
 }
 
 // ── reference-as-value round (src/valuerefs.h, src/ingest_valuerefs.h) ─────────────────────────────────────────
@@ -759,9 +879,16 @@ inline constexpr const char* kImpactDepthColumnarLegend =
 // rollup whenever the reach set is non-empty (XML forms only: the JSON form carries it as "files", columnar not at all),
 // the umbrella sentence only beside importers_umbrella=. Shared by the CLI arm and the MCP twin, byte-identical.
 // fix27: `hedged` = a listed rf row carries via= or by_name= (a multi-definition selector only); its sentence rides then.
-inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged = false )
+// for-body-slot FIX1 R1: `importersCut` = the root carries importers_next= (sizeImportTier: the <f> listing was cut). Its
+// definition rides then, unless the umbrella sentence (which defines it too) already does — legendcoveragecheck (A).
+inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged = false, bool importersCut = false )
 {
     std::string out;
+    if( importersCut && !umbrella )
+    {
+        out += "importers_next=: the call listing every importer, beside importers_capped=\"1\" (the <f> rows are a most-imported "
+               "prefix of importers=). ";
+    }
     if( rollup )
     {
         out += "FILES (only beside a cut symbol window): the WHOLE reach set by file. files= in all, shown_files= listed; rf "
@@ -904,6 +1031,40 @@ inline std::string crossKindKeyJson( const std::string& value )
     return value.empty() ? std::string() : ",\"cross_kind\":\"" + value + "\"";
 }
 
+// ── attrib-multidef (src/defattrib.h): the definition table, a row's of_def=, the split-arm prov=, an unbound --path endpoint ──
+// Each clause rides exactly when its attribute is in the answer (present-only), on the callers/callees/safe-delete/impact and
+// path legends, CLI and MCP alike. No double hyphen anywhere: every one lands inside an XML comment (checklist 25).
+inline constexpr const char* kDefTableLegend =
+    "<def ix= t= sc= p= bodyless=1> rows: the GROUPS the defs= definitions form, a definition with the declarations tied to it "
+    "(C family: the edit-check identity rule; TypeScript: its overload signatures); bodyless=1 a declaration tied to none of them "
+    "(another function, or the tie is unproven). of_def=K... on a row: the groups it belongs to, by ix. K = a resolved edge (the "
+    "resolver's binding, not a type check); K~s = its edge carries prov=split (a call along it was one arm of a call the resolver split "
+    "between same-named definitions); K~n = every call along it bound by name alone; K~t = a resolved edge into a primary template "
+    "while a specialisation of it is another group (which one the call reaches is unproven). On impact the tie is a chain of calls (a "
+    "by-name hop makes it ~n, else a split hop ~s) and an rf row unions its file's symbols. ~n/~s/~t do NOT mean the edge is false. ";
+inline constexpr const char* kDefsListedLegend =
+    "defs_listed=N: above 16 groups the table lists only the N that this page's rows name, and a row enumerates no by-name tie: "
+    "it prints its K, K~s and K~t tokens and one bare ~n when it also has ties by name alone; a row tied by name alone prints no "
+    "of_def (its via=name is the hedge). ";
+inline std::string defTableLegend( bool table, bool cut )
+{
+    std::string clause;
+    if( table )
+    {
+        clause = kDefTableLegend;
+        clause += cut ? kDefsListedLegend : "";
+    }
+    return clause;
+}
+inline constexpr const char* kSplitArmRowLegend =
+    "prov=\"split\" on a row: its edge to of= (on a path, the hop into it) carries the resolver's split label, a call along it was one "
+    "arm of a call split between same-named definitions, so the row may be another arm's; NOT a claim the edge is false. ";
+inline const char* splitArmLegend( bool on ) noexcept { return on ? kSplitArmRowLegend : ""; }
+inline constexpr const char* kPathUnboundLegend =
+    "An endpoint with several definitions that nothing bound prints no from_p or to_p: unreached, or (to) reached only through a "
+    "split or by-name hop. ";
+inline const char* pathUnboundLegend( bool on ) noexcept { return on ? kPathUnboundLegend : ""; }
+
 // ── issue #60: the module-scope owner's clause, emitted exactly when a t="modscope" ROW is in the answer ──
 // A file-scope call (a top-level statement, or a call inside an anonymous callback body) used to have no
 // caller node, so --callers/--impact answered with a row short. It now has one, and the row's t= is a kind
@@ -977,6 +1138,18 @@ inline constexpr std::string_view kForViaNameClause =
 inline std::string forViaNameClause()
 {
     return std::string( kForViaNameClause );
+}
+// attrib-multidef Q1: a <calls><c> row whose edge is one arm of a resolver split carries prov="split" — the same per-edge label
+// the map prints — on --for's bodies and hops. Defined in --for's FIRST-SCREEN legend on an over-approximated bit (serialize.h
+// splitArmsOutAny), as via="name" is, and as a comment beside the rows on a bundle whose head did not define it.
+inline constexpr std::string_view kForCompactSplitClause =
+    "; c prov=split: a resolver split arm; may be another arm's (NOT a claim the edge is false)";
+inline constexpr std::string_view kForSplitClause =
+    " prov=\"split\" on a <c> row: that callee's edge carries the resolver's split label (a call along it was one arm of a call split "
+    "between same-named definitions), so it may be another arm's. It does NOT mean the edge is false.";
+inline std::string splitArmCallsLegendComment()
+{
+    return "<!--" + std::string( kForSplitClause ) + " -->";
 }
 // …as its own comment node, for the surfaces whose legend is written beside the rows (a <bodies>/<hops> block's <calls>)
 inline std::string viaNameLegendComment()

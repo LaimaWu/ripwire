@@ -73,14 +73,35 @@ CHURN="$( printf '%s' "$OUT" | tr '<' '\n' | grep -c 'kind="short-horizon-churn"
     && ok "fixture produces $CHURN short-horizon-churn rows on one file (non-vacuous)" \
     || { no "fixture produced $CHURN churn rows — the memo check would be vacuous"; printf '%s' "$OUT" | tr '<' '\n' | grep '^r kind=' | head -5; }
 
-SPAWNS="$( grep -c 'diff --unified=0' "$LOG" )"
-PATHS="$( grep 'diff --unified=0' "$LOG" | sed 's/.* -- //' | sort -u | grep -c . )"
+# The spawn is matched by its SHAPE, not one exact spelling: the git subcommand `diff`, then only long options
+# (the binary passes its own neutralising options such as --no-ext-diff / --no-textconv here), then
+# --unified=0. A `-c diff.x=y` value, a `log -p --unified=0` or a `diff --stat` is not this spawn.
+DIFFRE='(^| )diff( --[^ ]+)* --unified=0( |$)'
+spawns_in(){ grep -cE "$DIFFRE" "$1"; }
+paths_in(){  grep -E "$DIFFRE" "$1" | sed 's/.* -- //' | sort -u | grep -c .; }
+
+# matcher control: a planted log with the pre-memo shape (three identical spawns for ONE path) plus near-miss
+# spawns that must not count. If the matcher cannot see the duplicates, the (b) arm below proves nothing.
+CTL="$WORK/ctl.txt"
+{ printf '%s\n' "-c core.quotepath=false -C /r diff --no-ext-diff --no-textconv --ignore-submodules=dirty --unified=0 --no-color HEAD -- src/f.cpp" \
+                 "-c core.quotepath=false -C /r diff --no-ext-diff --no-textconv --ignore-submodules=dirty --unified=0 --no-color HEAD -- src/f.cpp" \
+                 "-c core.quotepath=false -C /r diff --unified=0 --no-color HEAD -- src/f.cpp" \
+                 "-c diff.algorithm=myers -C /r log -p --unified=0 HEAD -- src/g.cpp" \
+                 "-C /r diff --stat HEAD -- src/h.cpp" \
+                 "-C /r diff-tree --unified=0 HEAD -- src/i.cpp"; } > "$CTL"
+CS="$( spawns_in "$CTL" )"; CP="$( paths_in "$CTL" )"
+[ "$CS" = 3 ] && [ "$CP" = 1 ] \
+    && ok "(control) the spawn matcher counts 3 pre-memo duplicates of one path and none of 3 near-miss spawns" \
+    || no "(control) the spawn matcher saw $CS spawn(s) / $CP path(s) in the planted log, expected 3 / 1"
+
+SPAWNS="$( spawns_in "$LOG" )"
+PATHS="$( paths_in "$LOG" )"
 [ "$SPAWNS" -gt 0 ] && ok "the churn SELF/AMBIENT classifier ran (${SPAWNS} unified=0 diff spawn(s) logged)" \
                     || no "no 'git diff --unified=0' spawn logged — the shim or the fixture is wrong"
 [ "$SPAWNS" -eq "$PATHS" ] \
     && ok "ONE spawn per PATH: $SPAWNS spawn(s) for $PATHS distinct path(s) — the run-scoped memo holds" \
     || { no "$SPAWNS spawns for only $PATHS distinct path(s) — the per-path memo is gone or bypassed"
-         grep 'diff --unified=0' "$LOG" | sort | uniq -c | sort -rn | head -3; }
+         grep -E "$DIFFRE" "$LOG" | sort | uniq -c | sort -rn | head -3; }
 [ "$CHURN" -gt "$SPAWNS" ] \
     && ok "the memo saved real work: $CHURN churn rows served by $SPAWNS spawn(s)" \
     || no "churn rows ($CHURN) <= spawns ($SPAWNS) — nothing was actually deduplicated"

@@ -177,6 +177,7 @@ struct PackTaskHeaderParts
                                         // must carry the SAME root as the pre-built rootOpenStr did.
     std::string_view runClause;        // M21(b)/E1: testmap.h's run=/run_unknown=/<g> clause — ROWS-GATED (empty when
                                         // the tests section kept no row), so a bundle that omits tests pays nothing
+    bool             softBudget = false;   // forbudget-soft: the caller's own budget — a soft target (kPackTaskSoftBudgetSentence)
 };
 
 // P10 (L7): the bundle legend's BODY, one constant, spliced by the standalone header (packTaskHeaderText) and
@@ -242,6 +243,17 @@ inline constexpr const char* kPackTaskBundleLegendBody =
          // F2: over_ceiling= is now the property those two numbers state, on every rung — not only the
          // last-rung case the old wording described. Same length class, one clause, unconditional as before.
          "budget_tokens= is the token target; over_ceiling= is 1 when est_tokens exceeds it (the bundle is then complete, not trimmed). ";
+// forbudget-soft (owner decision 2026-10-14): the reading of budget_tokens= on a bundle whose budget the CALLER passed — a SOFT
+// target. The section shares are the default's own cascade (an explicit 6000 serves the default's sections byte for byte), but
+// nothing is labelled over_ceiling and the header (task echo, route=) is never dropped for it. Replaces the legend body's last
+// sentence on such a bundle (packTaskHeaderText); the default (hard) bundle and the partitioned document keep that sentence.
+inline constexpr std::string_view kPackTaskHardBudgetSentence =
+    "budget_tokens= is the token target; over_ceiling= is 1 when est_tokens exceeds it (the bundle is then complete, not trimmed). ";
+inline constexpr std::string_view kPackTaskSoftBudgetSentence =
+    "budget_tokens= is the soft token target asked: each section stops once its share is reached; est_tokens may exceed it "
+    "(the header always ships; no over_ceiling). ";
+static_assert( std::string_view( kPackTaskBundleLegendBody ).ends_with( kPackTaskHardBudgetSentence ),
+               "the soft bundle swaps exactly the legend body's last sentence" );
 
 // r4/r6 (2026-09-10 lift-disclosure round): append the two experimental lift notes' JSON keys — same
 // absent-unless-present convention as the mention/boost/doc_mention keys beside them. Factored out (unlike
@@ -293,7 +305,18 @@ inline std::string packTaskHeaderText( const PackTaskHeaderParts& p, bool withRo
     h.append( p.sibliftNote );
     h.append( p.expandNote );
     h.append( p.docMentionNote );
-    h += kPackTaskBundleLegendBody;   // P10 (L7): the body is ONE constant — the partitioned document states it once for all slices
+    // P10 (L7): the body is ONE constant — the partitioned document states it once for all slices. forbudget-soft: a soft
+    // target's bundle swaps the body's last sentence (the hard budget's reading) for the soft one.
+    const std::string_view body( kPackTaskBundleLegendBody );
+    if( p.softBudget )
+    {
+        h.append( body.substr( 0, body.size() - kPackTaskHardBudgetSentence.size() ) );
+        h.append( kPackTaskSoftBudgetSentence );
+    }
+    else
+    {
+        h.append( body );
+    }
     h.append( p.runClause );          // M21(b)/E1: the <test> row's run=/run_unknown= rule and the <g> group row, testmap.h's ONE wording — rows-gated
     h.append( p.report );
     h.append( extraNotes );
@@ -548,6 +571,12 @@ struct PackTaskInputs
     // Where this bundle's section renders record a failure (see PackTaskRenderFaults). packTaskBundleText points it at
     // its own local; nullptr ⇒ a render failure is still returned as empty text, just not recorded.
     PackTaskRenderFaults*              renderFaults         = nullptr;
+
+    // forbudget-soft (owner decision 2026-10-14): the caller passed this budget (CLI --pack-task --token-budget, MCP explore
+    // budget_tokens) — a SOFT target. The section cascade is the default's, unchanged; the ceiling ladder does not run (the
+    // task echo and route= always ship) and nothing is labelled over_ceiling. false: the default budget (kPackTaskDefaultTokens)
+    // and the --partition slices, which keep the hard ceiling (packtaskcheck 4b, partitioncheck 5).
+    bool                               softTarget = false;
 
     // L1 fix round (rv-r1-L1 MED-4): the run's legend posture is compact, so the ceiling ladder's rungs (drop the task echo,
     // then route=, then label over_ceiling) are judged on the bytes the compact layer DELIVERS — the task echo lives in the
@@ -1998,7 +2027,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         // ceiling (the silence-means-nothing-happened convention route/mention/boost use above), never "not
         // measured". Measured on the FINISHED document, so the key's own bytes are part of what it reports on.
         constexpr std::size_t kOverCeilingKeyBytes = 22;   // `,"over_ceiling":true` + the closing brace
-        if( j.size() + kOverCeilingKeyBytes > rw::ceilingAllowanceBytes( budgetTokens ) )
+        if( !in.softTarget && j.size() + kOverCeilingKeyBytes > rw::ceilingAllowanceBytes( budgetTokens ) )   // forbudget-soft: never on a soft target
         {
             j += ",\"over_ceiling\":true";
         }
@@ -2082,7 +2111,7 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
     const std::string runClauseStr = rw::runHintClauseIfRows( tests.kept, rw::runsAreRootRelative( ing, in.rootArg ) );   // the ONE gate: the section's own kept count
     const PackTaskHeaderParts headerParts{ task, rootOpenStr, taskNote, mentionNote, boostNote,
                                             docMentionNote, sibliftNote, expandNote, report, droppedPositiveAttr, in.rootArg,
-                                            runClauseStr };
+                                            runClauseStr, /*softBudget=*/in.softTarget && !in.innerBundle };
     const auto buildHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
     {
         if( in.innerBundle )   // P10 (L7): a partition slice — the outer <ctx-partitions> legend speaks once for all of them
@@ -2146,7 +2175,8 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
             std::size_t       estTokens   = 0;
             std::string       attrs       = rw::pricedRootAttr( markupBytes, rw::kBytesPerTokenDefault, bodiesStr.size(), &estTokens );
             attrs += " budget_tokens=\"" + std::to_string( budgetTokens ) + "\"";
-            if( lastRungFired || ( budgetTokens > 0 && estTokens > budgetTokens ) ) { attrs += " over_ceiling=\"1\""; }
+            // forbudget-soft: a soft target (the caller's own budget) is never "over"; the default budget keeps the label
+            if( !in.softTarget && ( lastRungFired || ( budgetTokens > 0 && estTokens > budgetTokens ) ) ) { attrs += " over_ceiling=\"1\""; }
             if( in.isTrailingUncharged ) { attrs += " est_measured=\"0\""; }   // defined by the comment spliced in below
             return attrs;
         };
@@ -2168,7 +2198,9 @@ inline std::string packTaskBundleText( const IngestResult& ing, const Graph& g, 
         // judging the as-built header at the exact ceiling would take a rung whose note claims a drop the reader cannot
         // see. Under the compact posture the as-built answer stands when it fits the allowance; route= (a delivered root
         // attribute) and the over_ceiling rung keep their meaning (compactlegendcheck (FX4)).
-        const rw::CeilingLadderChoice chosen = in.compactLegend && !in.innerBundle
+        // forbudget-soft: a soft target climbs no ladder — the header as built ships (echo, route= and every clause)
+        const rw::CeilingLadderChoice chosen = in.softTarget ? rw::CeilingLadderChoice{ headerStr, rw::CeilingRung::AsBuilt }
+                                             : in.compactLegend && !in.innerBundle
             ? rw::climbCeilingLadderBy( buildHeader, headerStr, deliveredFits( rw::ceilingAllowanceBytes( budgetTokens ) ),
                                         deliveredFits( rw::ceilingAllowanceBytes( budgetTokens ) ), /*hasRouteAttr=*/!lr.routeNote.empty(), kNotes )
             : climbCeilingLadder( buildHeader, headerStr,

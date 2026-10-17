@@ -34,12 +34,30 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-15, train 28 (grep-carrier, ruby-pair, qd-memory-degrade, githarden-speed, git-child-hardening, PR #380, forbudget-soft,
+#   for-body-slot, attrib-multidef, declined-sites merged onto main 1bcb6540): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged
+#   tree (hash 279718355d…5ba2db). Watched text: kParserVer 173 -> 176 (main's slice 4a 173 / rich 174, lane grep-carrier 173,
+#   lane ruby-pair 174 / rich 175, PR #380 145; 176 / rich file tag 177 is above every live build), kCacheVersion 31 -> 32
+#   (RefRole gained Subscript 9 and Inert 10; see the kCacheVersion note), quality.h's two mirrors with them, kQSnapCacheScheme
+#   20 -> 21 (the dead set's call inputs moved; see the v21 note), and the lanes' own watched-text moves logged below
+#   (qd-memory-degrade's computeSnapshot / defectSitesOf).
 # 2026-10-15, slice 4a (#400, Ruby mixins onto the shared base-relations path): RE-DERIVED with UPDATE_GOLDEN=1.
 #   The only watched text that moved is the kParserVer declaration (and its mirror): 171 -> 173. Ruby's
 #   `include`/`extend`/`prepend` are captured by queries/ruby/tags.scm as @reference.mixin and read by
 #   captureTagsFacts instead of the retired captureRubyMixinBases; output is byte-identical, but the extraction
 #   path changed, so the number moves. 173, not 172: 172 is 171's rich file tag.
 #   kCacheVersion 31 and kQSnapCacheScheme 20 are unchanged.
+# 2026-10-14, lane/ruby-pair (train 28): RE-PINNED with UPDATE_GOLDEN=1. The only watched text that moved is the kParserVer
+#   declaration (and its mirror): 171 -> 174 (Ruby/Python subscript references and the Ruby main-object mixin binding; 172 is
+#   171's rich file tag; the train renumbers). kCacheVersion 31 and kQSnapCacheScheme 20 are unchanged: what a cached Snapshot
+#   represents is the same, and the parser version already keys every extraction fact it holds.
+# 2026-10-14, lane/qd-memory-degrade: RE-DERIVED with UPDATE_GOLDEN=1. Manifest text moved in computeSnapshot (a KindScope
+#   parameter: the dead set and the clone/construct/defect/body passes run only for the kinds asked; the dead set moved to
+#   addDeadSet, same keys, sorted as before) and defectSitesOf (cFamilyMacroNames factored out; an optional macro override).
+#   Every Snapshot a qsnap/qheadsnap blob holds is computed with the default scope (all kinds, no override), which builds
+#   the same records in the same sorted order, so what a cached Snapshot means is unchanged: kQSnapCacheScheme 20,
+#   kCacheVersion 31 and kParserVer stay. The forward declaration's default is spelled KindScope() — braces there read as a
+#   body to extract_fn.
 # 2026-10-13, PR #349 lands (maintainer renumber commit on the contributor's branch): RE-DERIVED with UPDATE_GOLDEN=1.
 #   The only watched text that moved is the kParserVer declaration (and its mirror): provisional 158 -> 171. The branch
 #   built 156, 158 and 169 (rich file tag 170); main is 167 (rich file tag 168); 171 / rich file tag 172 is above all of
@@ -114,6 +132,10 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   kVrMaxDepth gains a depth-cut record; the remaining written key slots are capped) with quality.h's mirror; 145
 #   because 143's full-use file tag is 144. kQSnapCacheScheme 17 -> 18: the dead set moved (a function that only
 #   stores itself is no longer value-referenced). No assertion changed.
+# 2026-10-05, issue #357 lane: RE-DERIVED with UPDATE_GOLDEN=1. kParserVer 143 -> 145 for
+#   Elixir quote live holes and counted inert call candidates (144 is main's rich-family tag;
+#   train renumbers). quality.h's parser mirror moved with it. kQSnapCacheScheme stays 17:
+#   Snapshot meaning is unchanged and its key carries the extraction identity.
 # 2026-10-04, train 25 review fixes: RE-DERIVED with UPDATE_GOLDEN=1 (hash 32240f4552…2dafcc). kParserVer 141 -> 143 (two
 #   extraction changes: a declaration named like the JS global object is a JsShadow binding; value-reference slot text
 #   is cut on a UTF-8 boundary and JS string keys are capped) with quality.h's mirror; 143 because 141's full-use file

@@ -83,6 +83,12 @@
 #   (L)  legend: the qword clause is present iff a qword row is, and says "by name" (not a resolution claim).
 #   (I)  RIPWIRE_BASE_BIN set: head + RIPWIRE_NO_OWNER_HOP=1 vs base on the --for / --json / MCP / budget answers,
 #        head (no knob) vs base on the no-owner questions, plus 12 out-of-scope argv — every binary's rc checked.
+#        BY-DESIGN BREAK (rule 4, lane for-body-slot FIX1 R4): the head side also runs with RIPWIRE_NO_BODY_SLOT=1. The
+#        body slot (forowner.h) is independent of RIPWIRE_NO_OWNER_HOP by design (forbodyslotcheck (EV1)), so on any
+#        base without the slot 4 of these 27 argv differed for the slot alone (H c "log walk the process tables",
+#        H py "Reactive work", H ts "relay forward a request", M ts) — not for owner-hop. The arm's premise is kept: the
+#        owner-hop knob is still the one under test, and a head whose RIPWIRE_NO_OWNER_HOP=1 stops restoring the base
+#        still differs here (checklist 28; forbodyslotcheck I0 pins the slot-off == base half separately).
 #
 # Exit: 0 all PASS (named SKIPs allowed), 1 any FAIL, 2 missing prerequisite.
 
@@ -379,7 +385,12 @@ missing = [ident(r) for r in base if ident(r) not in hd or not same(calls(r), ca
 gained = [r['n'] for r in base if ident(r) in hd and len(calls(hd[ident(r)])) > len(calls(r))]
 moved = [r['n'] for r in off['rows'] if ident(r) in owners]
 order_ok = [ident(r) for r in head if ident(r) in {ident(b) for b in base}] == [ident(r) for r in base if ident(r) in hd]
-premise = bool(gained) and bool(moved) if mode == 'prefix' else True
+# forbudget-soft (decision D-3; rule 4): the DEFAULT <hops> is no longer cut at its 1,000 B allowance, so the rows of the A/B handle
+# are already complete and a moved owner can free nothing — "gained" is then impossible by construction. The premise keeps
+# "an owner moved" and accepts either a gain or an A/B listing with no BUDGET-cut <calls> left to widen (a listing cut at the
+# 16-name row cap cannot gain either: the cap is not the budget).
+base_complete = all((r.get('ca') or {}).get('capped') != '1' or int((r.get('ca') or {}).get('shown', '0') or 0) >= 16 for r in base)   # only the 16-name row cap left
+premise = bool(moved) and (bool(gained) or base_complete) if mode == 'prefix' else True
 print('OK' if not missing and order_ok and off['rows'] and premise
       else 'BAD missing=%s order_ok=%s base_rows=%d gained=%s moved=%s' % (missing[:3], order_ok, len(off['rows']), gained, moved))
 PY
@@ -408,7 +419,20 @@ for spec in "compact|$QTS|" "compact|$QV|" "full|$QTS|--legend=full" "compact|$Q
         if [ "$non" -ge 1 ] && [ "$noff" = 0 ] && grep -q 'qword="gateway"' "$on"; then :
         else no "(S/$dia '$q'${extra:+ $extra}) premise: via clause head=$non A/B=$noff (want >=1 / 0) with the gateway owner row"; continue; fi
     fi
-    if [ "$( SECTS "$on" )" = "$( SECTS "$off" )" ] && [ "$( SECTS "$off" )" != "[]" ]; then
+    # forbudget-soft round C (owner decision 2026-10-14: RESERVE SECTIONS FIRST; rule 4): under an explicit --token-budget the
+    # owner rows are hop rows — a trailing section reserved before the rows past the target cut — so they may cost rows PAST
+    # the cut, never a row at it: the rows are then a rank prefix of the A/B handle's (the clause itself, a header disclosure,
+    # is still never charged). The default-regime specs keep the byte-identity.
+    if [ -n "$extra" ] && [ "$extra" != "--legend=full" ]; then
+        if python3 - "$on" "$off" <<'PY'
+import re, sys
+rows = lambda f: re.findall( r'<d [^>]*?\bp="([^"]*)"[^>]*?\bn="([^"]*)"|<d [^>]*?\bn="([^"]*)"[^>]*?\bp="([^"]*)"', open( f ).read().split( '</sigs>' )[ 0 ] )
+a, b = rows( sys.argv[ 1 ] ), rows( sys.argv[ 2 ] )
+sys.exit( 0 if a and b and b[ :len( a ) ] == a and 'over_ceiling="1"' not in open( sys.argv[ 1 ] ).read() else 1 )
+PY
+        then ok "(S/$dia '$q' $extra) soft target: the owner rows (a section, reserved first) leave <sigs> a rank prefix of the A/B handle's, no over_ceiling"
+        else no "(S/$dia '$q' $extra) soft target: <sigs> is not a rank prefix of the A/B handle's: $( grep -o '<sigs [^>]*>' "$on" | cut -c1-80 ) vs $( grep -o '<sigs [^>]*>' "$off" | cut -c1-80 )"; fi
+    elif [ "$( SECTS "$on" )" = "$( SECTS "$off" )" ] && [ "$( SECTS "$off" )" != "[]" ]; then
         ok "(S/$dia '$q'${extra:+ $extra}) the owner rows' via=\"name\" clause costs <sigs>/<tail> nothing (byte-identical to the A/B handle)"
     else no "(S/$dia '$q'${extra:+ $extra}) <sigs>/<tail> differ from the A/B handle: $( grep -o '<sigs [^>]*>' "$on" ) vs $( grep -o '<sigs [^>]*>' "$off" )"; fi
 done
@@ -422,7 +446,9 @@ done
 # ── (B) explicit budget: owner funded first; an exhausted ceiling adds nothing; a cut is disclosed (C7) ──────────────
 f="$TMP/ts.b.xml"; run ts "$f" "--for=$QTS" --token-budget=4500
 fo="$TMP/ts.b.off.xml"; runoff ts "$fo" "--for=$QTS" --token-budget=4500
-if ran_ok "$fo" "(B1) A/B" && ! grep -q 'reason="compact-route"' "$fo"; then no "(B1) premise: --token-budget=4500 no longer leaves the hops a budget on the A/B handle — re-tune"; fi
+# for-body-slot (train 28; rule 4, by design): an explanatory question's owner body now rides beside the hops, and a served one
+# turns the root's reason to "owner" — the premise "the hops kept a budget" reads either spelling (never "budget")
+if ran_ok "$fo" "(B1) A/B" && ! grep -qE 'reason="(compact-route|owner)"' "$fo"; then no "(B1) premise: --token-budget=4500 no longer leaves the hops a budget on the A/B handle — re-tune"; fi
 if ran_ok "$f" "(B1)"; then
     HJ "$f" "$TMP/ts.b.json" "(B1)"; H root "$f" >"$TMP/ts.b.root"
     first="$( J "d['rows'][0]['n'] if d['rows'] else None" <"$TMP/ts.b.json" )"
@@ -440,9 +466,11 @@ if ran_ok "$f" "(B1b)"; then
     if [ "$got" = row ] || [ "$got" = cut ] || grep -q 'reason="budget"' "$f"; then ok "(B1b) --token-budget=4000: the owner is first or disclosed ($got)"
     else no "(B1b) --token-budget=4000: gateway neither the first owner row nor named by qword_cut/next= ($got)"; fi
 fi
-on="$TMP/b2.on.xml"; off="$TMP/b2.off.xml"; run ts "$on" "--for=$QTS" --token-budget=1200; runoff ts "$off" "--for=$QTS" --token-budget=1200
+# forbudget-soft round C (rule 4): sections are funded from the rows at the soft target's cut (reserve first), so 1200 tokens
+# now leaves the hops a share; re-anchored at 700, the widest budget that still exhausts it (measured: 700 budget, 900 not)
+on="$TMP/b2.on.xml"; off="$TMP/b2.off.xml"; run ts "$on" "--for=$QTS" --token-budget=700; runoff ts "$off" "--for=$QTS" --token-budget=700
 if ran_ok "$on" "(B2)" && ran_ok "$off" "(B2) A/B"; then
-    grep -q 'reason="budget"' "$off" || no "(B2) premise: --token-budget=1200 no longer exhausts the ceiling (no reason=\"budget\") — re-tune"
+    grep -q 'reason="budget"' "$off" || no "(B2) premise: --token-budget=700 no longer exhausts the ceiling (no reason=\"budget\") — re-tune"
     if cmp -s "$on" "$off"; then ok "(B2) exhausted ceiling: byte-identical to the A/B handle (owner rows add nothing)"; else no "(B2) exhausted-ceiling answer changed"; fi
 fi
 # (B3) a budget sweep on the 105-callee owner: no budget may drop callee names silently
@@ -505,10 +533,10 @@ if [ -n "${RIPWIRE_BASE_BIN:-}" ] && [ -x "${RIPWIRE_BASE_BIN}" ]; then
         mode="${parts[0]}"; r="${parts[1]}"; args=( ${parts[@]+"${parts[@]:2}"} ); shown="${args[*]-}"
         n=$((n+1)); hf="$TMP/i.$n.h"; bf="$TMP/i.$n.b"
         if [ "$mode" = M ]; then
-            mcp "RIPWIRE_NO_OWNER_HOP=1" "$BIN" "$hf"; mcp "RIPWIRE_X=0" "$RIPWIRE_BASE_BIN" "$bf"
+            mcp "RIPWIRE_NO_OWNER_HOP=1 RIPWIRE_NO_BODY_SLOT=1" "$BIN" "$hf"; mcp "RIPWIRE_X=0" "$RIPWIRE_BASE_BIN" "$bf"   # R4: slot off on the head side
         else
             if [ "$mode" = K ]; then knob="RIPWIRE_NO_OWNER_HOP=1"; else knob="RIPWIRE_X=0"; fi
-            ( cd "$FIX/$r" && env "$knob" "$BIN" . --no-cache ${args[@]+"${args[@]}"} >"$hf" 2>"$hf.err" ); printf '%s' "$?" >"$hf.rc"
+            ( cd "$FIX/$r" && env "$knob" RIPWIRE_NO_BODY_SLOT=1 "$BIN" . --no-cache ${args[@]+"${args[@]}"} >"$hf" 2>"$hf.err" ); printf '%s' "$?" >"$hf.rc"   # R4
             ( cd "$FIX/$r" && "$RIPWIRE_BASE_BIN" . --no-cache ${args[@]+"${args[@]}"} >"$bf" 2>"$bf.err" ); printf '%s' "$?" >"$bf.rc"
         fi
         if ! ran_ok "$hf" "(I) head $mode $r $shown" || ! ran_ok "$bf" "(I) base $mode $r $shown"; then e=$((e+1)); continue; fi

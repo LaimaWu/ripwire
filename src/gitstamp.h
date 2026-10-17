@@ -123,7 +123,7 @@ inline std::string stampAt( const std::string& root )
     {
         return {}; // not a git repo / no HEAD
     }
-    const bool dirty = !quality::gitOneLine( root, "status --porcelain 2>/dev/null" ).empty();
+    const bool dirty = !quality::gitOneLine( root, "status --porcelain --ignore-submodules=dirty 2>/dev/null" ).empty();
     return sha.substr( 0, 9 ) + ( dirty ? "+dirty" : "" ) + ( isShallow( root ) ? "+shallow" : "" );
 }
 

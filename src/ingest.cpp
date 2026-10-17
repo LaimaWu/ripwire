@@ -194,6 +194,7 @@ extern "C"
 #include "ingest_docs.h"
 #include "ingest_names.h"
 #include "ingest_binds.h"
+#include "ingest_inert.h"
 #include "ingest_elixir.h"
 #include "ingest_clojure.h"
 #include "ingest_ruby.h"      // Ruby Rails/DSL capture lane (schema columns, Jbuilder typing, factories, class-side DSL walks) - carved verbatim 2026-10-12

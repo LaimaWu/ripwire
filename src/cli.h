@@ -324,6 +324,7 @@ struct Config
     bool             qualityAck      = false;              // --quality-ack[=REASON]: accept the current findings into .ripwire_quality_acks (per-finding ratchet); shares qualityDelta's baseline resolution
     std::string_view qualityAckReason;                     // the reason recorded next to each acked finding
     std::string_view qualityAckOnly;                       // --ack-only=SUBSTR[,SUBSTR]: ack only findings whose kind, canonical id or facet (e.g. format-arity) contains one of these (default: all)
+    std::string_view qualityKinds;                         // qd-memory-degrade --quality-kinds=K[,K]: run only these kinds of the range form (the names are validated in the verb)
     std::string_view qualityScope;                         // P1 --scope=GLOB[,GLOB...]: the OWNERSHIP partition for a shared working tree —
                                                             // findings outside it are printed but never gate, and --quality-ack refuses to write them.
                                                             // Grammar + floors: rw::quality's SCOPE block. Only with --quality-delta/--quality-ack (refused elsewhere)
@@ -343,7 +344,7 @@ struct Config
                                                             // computes — 1-hop callers, the transitive --impact blast radius, every --uses
                                                             // read/write/import/call/extends site, how much of the radius the tested= lens
                                                             // covers, and --dead-code's own zero-caller/internal-linkage shape at defs=1. FACTS only:
-                                                            // risk= names what was found (none-found/uses-exist/untested-radius/unmodelled), never a
+                                                            // risk= names what was found (none-found/possible-callers/uses-exist/untested-radius/unmodelled), never a
                                                             // go/no-go verdict. file:name disambiguates like --around/--lego.
     std::string_view sliceSpec;                            // --slice=SYM[:VAR] (lane/paper-slice): NAME-BASED intra-procedural def-use
                                                             // slice of VAR inside the ONE uniquely-resolved definition SYM (multiple defs
@@ -869,7 +870,7 @@ inline constexpr char kHelpHead[] =
         "                               answer is not worth cutting to fit — so the root DISCLOSES the overshoot instead,\n"
         "                               carrying over_ceiling=\"1\" beside max_tokens=N whenever est_tokens exceeds N. Reach\n"
         "                               for --token-budget=N when the whole DOCUMENT must be bounded; this flag SHAPES.\n"
-        "    --token-budget=N[K|M|G]    cap the whole document at N tokens — a hard gate on the map, a trim-to-fit on the task lenses\n"
+        "    --token-budget=N[K|M|G]    N tokens: a hard gate on the map, a soft row target on the task lenses\n"
         "                               two personalities depending on the verb:\n"
         "                                 - default map / --query / --recall: a CI GATE — exit 3 if the emitted DOCUMENT's\n"
         "                                   est_tokens exceeds N. That is the map PLUS every block appended after it\n"
@@ -895,17 +896,17 @@ inline constexpr char kHelpHead[] =
         "                                   9724 JSON, ~3% LARGER) — the crossover sits near top-k~100-150 here, so the\n"
         "                                   same N can pass or fail differently under --json depending on dialect AND\n"
         "                                   size — never assume one direction, measure the request you actually gate.\n"
-        "                                 - --for / --pack-task / --from-trace / --run-trace: SHAPES instead of gating — overrides that\n"
-        "                                   lens's own default payload budget and trims to fit, always exit 0. --for's\n"
-        "                                   header reports est_tokens=\"N\" so its fit is checkable; --pack-task/--from-trace\n"
-        "                                   report their budget ledger in the header report line instead. On --for's auto\n"
-        "                                   bundle the ceiling is SPLIT, not handed to the signatures first: the sig side's\n"
-        "                                   claim caps at the default sig budget and the rest flows to the inline bodies,\n"
-        "                                   so a wider ceiling never serves fewer of them (see --for below).\n"
-        "                                   Its VERBATIM task echo is bytes no trim can shrink, so past some task length the\n"
-        "                                   header floor alone exceeds the ceiling: the lens drops the comment's DUPLICATE echo\n"
-        "                                   first (task_echo: dropped (ceiling); task= keeps the verbatim copy), then labels it\n"
-        "                                   over_ceiling (--recall: over_ceiling=1) — never a trim it did not actually do.\n"
+        "                                 - --for / --pack-task / --from-trace / --run-trace: a SOFT TARGET, always exit 0 — rows\n"
+        "                                   stop once it is reached, never a promise of bytes. --for charges N against its\n"
+        "                                   ranked <sigs> rows only (never the header or a disclosure, so compact and full\n"
+        "                                   serve the same rows): rows are added in rank order while they fit, the rank 1..4\n"
+        "                                   rows always ship, and the cut names its continuation (<sigs next=>). The bodies,\n"
+        "                                   hops and tail fill from what the rows left. A target wider than the answer serves\n"
+        "                                   the default answer's rows. --pack-task keeps its section shares (an explicit 6000\n"
+        "                                   serves the default's sections); --from-trace its section pricing. No lens drops a\n"
+        "                                   legend clause or the task echo for it, and none labels itself over_ceiling for it:\n"
+        "                                   est_tokens= may exceed N (budget_tokens= says it is the target asked). --pack-task\n"
+        "                                   without the flag keeps its hard 6K default (over_ceiling when it cannot fit).\n"
         "    --help-task=TASK           describe a task, get ONE recommended command back — or an honest abstention\n"
         "                               deterministic enhanced help: recommend ONE executable Ripwire CLI command for this\n"
         "                               repository and task, or abstain when evidence/applicability is insufficient. Reports\n"
@@ -919,24 +920,28 @@ inline constexpr char kHelpHead[] =
         "                               Wrap it in backticks (task text: `F`) or write it in call form (F()) to route on\n"
         "                               it by name.\n"
         "    --for=TASK                 the task lens: say what you are doing, get the signatures and bodies to read first\n"
-        "                               the task lens: ranked signatures + metrics framed for reuse. The bundle enforces a\n"
+        "                               the task lens: ranked signatures + metrics framed for reuse. STOPS WHEN COMPLETE: the\n"
+        "                               ranked head (<sigs total=>: the relevance floor within the top 40, or --pack-top-n) is\n"
+        "                               the answer and every row of it ships. A ~7.5KB payload TARGET shortens row text toward\n"
+        "                               it (tail signatures and doc excerpts first; <sigs shown=S total=T capped=\"1\"> with S=T\n"
+        "                               marks a shrink); rows served past it carry past_target=\"K\" (the last K rows). Only a\n"
+        "                               runaway guard (30KB, a bug signal) cuts rows: over_ceiling=\"1\" and <sigs next=> serving\n"
+        "                               them all (S printed of the T rows handed to the trim). The r=1 (top-ranked)\n"
         // §B7.5 (CA4): this said <sigs payload="capped"> — the STRING ENUM the §P8 vocabulary migration
         // replaced with the boolean capped="1" every other truncating element spells (serialize.h's own
         // comment records the rename). No output the tool can emit has contained payload= since; --help was
         // the last place the dead spelling survived, and a reader grepping their bundle for it finds nothing.
-        "                               ~7.5KB default payload budget (tail entries trim first; <sigs shown=S total=T\n"
-        "                               capped=\"1\"> marks it: T rows handed to the trim, S printed). The r=1 (top-ranked)\n"
         "                               <d> row carries next=\"--expand=FILE:NAME\" — the one pasteable follow-up, the body\n"
         "                               that ends the search (defined here, not in the bundle's own header, which the\n"
         "                               token ladder does not charge). An explicit\n"
-        "                               --token-budget=N overrides the default at the conservative byte rate\n"
-        "                               (SHAPES, exit 0; see --token-budget above) and the header reports the delivered est_tokens.\n"
+        "                               --token-budget=N is a soft row target at the conservative byte rate\n"
+        "                               (exit 0; see --token-budget above) and the header reports the delivered est_tokens.\n"
         "                               TERMINAL BY DEFAULT: after the signatures, the top-ranked symbols' FULL bodies ride\n"
         "                               inline (CDATA + callee signatures, the --expand shape) under a fixed extra body allowance —\n"
         "                               whole-body-or-not-at-all, rank-first, capped at the --pack-task candidate cap (6). The <ctx>\n"
         "                               root discloses it: bundle=\"auto\" bodies=\"N\" (bodies=\"0\" reason=\"budget\" when none fit) —\n"
-        "                               on EVERY auto-mode run: a ceiling the signatures alone exhaust still carries the attribute\n"
-        "                               (legend and empty <bodies> shell dropped there; only the attribute has reserved bytes), and\n"
+        "                               on EVERY auto-mode run: a target the signatures alone exhaust still carries the attribute\n"
+        "                               (with its legend and the empty <bodies shown=\"0\"> shell), and\n"
         "                               --for --json, which serves no bodies by design, says so with \"bundle\":\"sigs\". Only the\n"
         "                               caller-chosen postures (--signatures-only, --detail=N) are attribute-free.\n"
         "                               ANCHOR-ONLY when the route names one: a query that NAMES a symbol gets THAT symbol's own\n"
@@ -945,23 +950,30 @@ inline constexpr char kHelpHead[] =
         "                               and says so, and the per-item over-budget comment names what was dropped.\n"
         "                               COMPACT ON THE CONCEPTUAL ROUTE: a query that anchors nothing (subtoken+body) gets the\n"
         "                               ranked map plus a <hops> section — the same candidate head's ONE-HOP callee signatures,\n"
-        "                               the <calls> block a body carries — and NO body CDATA, disclosed as bundle=\"compact\"\n"
+        "                               the <calls> block a body carries — and NO body CDATA (save the owner body below), disclosed as bundle=\"compact\"\n"
         "                               bodies=\"0\" reason=\"compact-route\". Read the map, then --expand=SYM the one you want.\n"
         "                               A ranked function or method whose whole name is a word of the query (by name, not\n"
         "                               resolved) gets the first <h qword=WORD> rows, past that head: up to 3, each listing its\n"
         "                               callees to 100 names (capped=1 next= past it); more are counted as qword_cut= with next=.\n"
-        "                               --auto-bodies restores the body walk there. That shape discloses on every run too: a\n"
-        "                               ceiling the signatures alone exhaust carries bundle=\"compact\" bodies=\"0\"\n"
-        "                               reason=\"budget\" — three distinct reasons, never collapsed (compact-route = the route\n"
-        "                               chose edges, no_candidates = nothing scored, budget = the ceiling was spent).\n"
-        "                               An explicit --token-budget=N is a hard ceiling, split so a wider ceiling never buys less:\n"
-        "                               the signature side's claim is capped at the DEFAULT ~7.5KB sig budget and every byte beyond\n"
-        "                               it flows to the enrichment — at any ceiling at or above the default's effective total the\n"
-        "                               <sigs> block is byte-identical to the default run's, so every body (or hop row) the default\n"
-        "                               serves still fits. An explicit --pack-top-n is an explicit SIG posture and keeps the\n"
-        "                               whole-ceiling sig claim. --compress composes: the served bodies (auto/anchor and\n"
+        "                               --auto-bodies restores the body walk there. The default serves every hop row.\n"
+        "                               OWNER BODY: an explanatory question (how does, what does, ...) also carries ONE body\n"
+        "                               after the hops, root bodies=\"1\" reason=\"owner\": a ranked callable whose whole name is a\n"
+        "                               query word (the one calling another such owner first), else a method a ranked class owns\n"
+        "                               (parser scope or span) named by a word, else no body - <bodies pick=\"name|member\">,\n"
+        "                               by name, not resolved, not the only relevant body.\n"
+        "                               Over 6000 B it is cut at a line end with next=. Under --token-budget it rides only when\n"
+        "                               the rows at the target's cut leave room for it whole, else <bodies shown=\"0\" capped=\"1\"\n"
+        "                               next=\"--expand=P:L:N\"> and reason=\"budget\". MCP for serves the same body, --json none;\n"
+        "                               RIPWIRE_NO_BODY_SLOT=1 turns it off (the A/B handle). That shape\n"
+        "                               discloses on every run too: a target the signatures alone exhaust carries bundle=\"compact\" bodies=\"0\"\n"
+        "                               reason=\"budget\" — four distinct reasons, never collapsed (compact-route = the route\n"
+        "                               chose edges, no_candidates = nothing scored, budget = the ceiling was spent, owner = the\n"
+        "                               owner body rides).\n"
+        "                               An explicit --token-budget=N is a soft target: the hop rows, bodies and file tail keep\n"
+        "                               the share a hard N left them, <sigs> rows fill the rest by rank; --pack-top-n sets the head\n"
+        "                               the target fills. --compress composes: the served bodies (auto/anchor and\n"
         "                               --detail=N alike) go through the same comment-strip --expand uses, disclosed as\n"
-        "                               compress=\"1\" on the <bodies> element (nothing to strip on the compact route).\n"
+        "                               compress=\"1\" on the <bodies> element (on the compact route, the owner body's).\n"
         "                               RANKING CONFIDENCE, disclosed not scored: the <ctx> root always carries\n"
         "                               confidence=\"high|low\" margin_pct=\"N\" — derived from the SAME relevance-cliff gap\n"
         "                               statistic --adaptive cuts at (no new scorer, no behavior change; the --json dialect\n"
@@ -1002,8 +1014,8 @@ inline constexpr char kHelpHead[] =
         "                               a counted stub by default — this IS the stub's own next= spelling, so pasting it back\n"
         "                               unchanged is enough. A comma-separated, order-insensitive, closed set (lego and/or\n"
         "                               compose, each named at most once); every other section of the bundle is unaffected —\n"
-        "                               the <sigs> budget is the stubbed answer's. Under an explicit --token-budget\n"
-        "                               the restored sections are charged in full, so <sigs> can carry fewer rows there.\n"
+        "                               the <sigs> budget is the stubbed answer's, under an explicit --token-budget too\n"
+        "                               (a soft target charges the <sigs> rows only).\n"
         "    --signatures-only          (with --for) signatures only: no automatic bodies in the bundle\n"
         "                               (with --for) opt out of the terminal-by-default bundle: no auto bodies, no bundle=\"auto\"\n"
         "                               attribute — the signatures-only lens exactly as before. Contradicts --detail=N (refused\n"
@@ -1143,7 +1155,10 @@ inline constexpr char kHelpHead[] =
         "                               who calls SYM (1-hop in-edges). file:name disambiguates a same-named symbol across files (like --around/--lego);\n"
         "                               Scope::name picks one scope's definition — the sym= spelling edit-check prints resolves everywhere.\n"
         "                               Each caller row's sites_at= lists its call sites as pasteable file:line tokens (16 at most: sites_total=)\n"
-        "    --callees=SYM              what SYM calls (1-hop out-edges). file:name disambiguates like --callers\n"
+        "                               A call the resolver DECLINED to bind whose candidates include SYM is a <dc in= p= via=\"declined\"> row:\n"
+        "                               a call site, never an edge or a count= row (16 at most, file-first: dc_shown=, dc_next=)\n"
+        "    --callees=SYM              what SYM calls (1-hop out-edges). file:name disambiguates like --callers; each call it makes that the\n"
+        "                               resolver declined to bind is a <dc n= l= via=\"declined\"> row, never an edge or a count= row\n"
         "    --uses=SYM                 show every place SYM is used, not just called — reads, writes, imports, extends\n"
         "                               the statically resolvable use-sites of SYM (role=call|macro|read|write|import|extends|type, file:line); external=\"1\" if SYM has no in-corpus def.\n"
         "                               file:name or a \"::\" spelling narrows defs= AND the role=\"call\" sites (kept only where the call RESOLVES to a chosen def —\n"
@@ -1797,6 +1812,19 @@ inline constexpr char kHelpHead[] =
         "                               No sidecar is read, written or deleted by this form, and at= is omitted: the two refs ARE the anchor. A==B is a legal, empty, exit-0 comparison.\n"
         "                               ONE KIND CANNOT BE MEASURED HERE and says so as churn=\"unavailable\": short-horizon-churn needs git history at the tree being judged, and both trees are\n"
         "                               materialized OUT of the repo into temp dirs. The other 10 kinds are computed exactly as the bare form computes them.\n"
+        "                               UNDER MEMORY PRESSURE IT ANSWERS PART OF THE QUESTION rather than nothing: when the guard stops either commit's full tree, or projects that the\n"
+        "                               target phase will not fit the limit, it ingests only both commits' CHANGED files and runs the kinds those decide; the header names the rest\n"
+        "                               (kinds_skipped=, ingest_scope=\"changed-files\", memory_need=, also_skipped=) and kinds_next= replays exactly them. Exit 2 when a row gates (the\n"
+        "                               skipped kinds only add rows), else 6 — partial, never 0; exit 5 only when even the changed files do not fit or cannot stand in for the trees\n"
+        "                               (a symlink, an export attribute). --quality-ack (it needs every kind's rows) skips the projection: only a real memory stop refuses it (exit 5, ledger untouched).\n"
+        "    --quality-kinds=K[,K...]   (with --quality-delta=A..B) run only the named kinds — the replay a partial answer hands back\n"
+        "                               (with --quality-delta=A..B) run ONLY the named kinds, comma-separated, of the twelve: api-surface, complexity, dead-code, defect-shape,\n"
+        "                               duplication, error-masking, nesting, new-clone-of-reused-helper, params, placeholder, short-horizon-churn, verbosity. A named kind's rows are\n"
+        "                               exactly its rows in a full answer (same code, same bars); the header names the others (kinds_skipped=, skipped_why=\"selector\"), stale acks are\n"
+        "                               judged for the named kinds only, and a pass no named kind needs does not run. An unknown name is refused (exit 1) naming the twelve; refused\n"
+        "                               beside --quality-ack or --quality-baseline and on the bare form (the working-tree form and the MCP quality_delta tool have no selector yet).\n"
+        "                               A selection the changed files cannot answer (whole-tree kinds, with or without defect-shape) is never pre-empted by the memory\n"
+        "                               projection: it runs in full, and only a real memory stop refuses it (exit 5) — so the kinds_next= replay is not degraded again.\n"
         "    --dmm[=REV|A..B]           score a change as ONE number in [0,1], so quality trends across commits\n"
         "                               the DELTA MAINTAINABILITY MODEL scalar: ONE comparable number in [0,1] for a change, so quality becomes TRENDABLE across commits instead of a per-kind list (di Biase, Rastogi, Bruntink and van Deursen, TechDebt 2019; thresholds and arithmetic from PyDriller's deltamaintainability reference implementation). Bare = the WORKING TREE vs git HEAD (what --quality-delta compares); =REV = that commit vs its FIRST PARENT (the per-commit scalar); =A..B = tree B vs tree A.\n"
         "                               A UNIT is a function/method definition with a body; its VOLUME is its line span. Per property a unit is LOW risk iff size: loc<=15, complexity: cyclomatic<=5, interfacing: params<=2. good = low-risk volume ADDED plus high-risk volume REMOVED; bad = low-risk REMOVED plus high-risk ADDED; dmm = good/(good+bad). So DELETING a god function scores 1.000 and GROWING one scores 0.000.\n"
@@ -1944,7 +1972,8 @@ inline constexpr char kHelpHead[] =
         "                               zero-caller/internal-linkage shape at defs=1 (dead_code_candidate=). ambiguous_callers= names callers\n"
         "                               whose own calls include an ambiguously-resolved one (g.ambOut) — a caveat, not a count of\n"
         "                               proven-wrong edges. FACTS only: risk= names what was found — none-found (zero callers AND\n"
-        "                               zero uses), untested-radius (a radius exists and none of it is test-covered), or\n"
+        "                               zero uses), possible-callers (none of either, but a call the resolver declined could have meant\n"
+        "                               SYM: its <dc> rows), untested-radius (a radius exists and none of it is test-covered), or\n"
         "                               uses-exist (a radius exists and some of it is tested) — never a go/no-go verdict; unmodelled\n"
         "                               when nothing was found for a kind used by reading or naming it (a variable, class, struct)\n"
         "                               whose uses those counts cannot see. callers_floor=/uses_floor= mark a count the index holds\n"
@@ -2526,8 +2555,14 @@ inline constexpr char kHelpTail[] =
         "                               children (neutralised=\"1\", and a stderr line carrying git_harden=fsmonitor-hook);\n"
         "                               the boolean forms need no override (neutralised=\"0\"). Independently of this row,\n"
         "                               every git command ripwire runs carries git's no-optional-locks and core.fsmonitor=false\n"
-        "                               so no monitor of either form runs for its read-only calls. Not a verdict on\n"
-        "                               your setup — ok=\"1\" always; the neutralisation is the verdict.\n"
+        "                               so no monitor of either form runs for its read-only calls. The same row counts\n"
+        "                               the filter drivers the repository's own config defines (filter_drivers=); when\n"
+        "                               there are any, filter_scope=\"local|all\" (all: a git older than 2.26 cannot report\n"
+        "                               scope, so your own drivers are pinned too) and filter_pinned=\"1\" (every git child\n"
+        "                               runs them with an empty command, so files are read as stored; stderr carries\n"
+        "                               git_harden=filter-driver) or \"refused\" (a name git's -c cannot spell: git is not\n"
+        "                               run at all). Not a verdict on your setup — ok=\"1\" always; the neutralisation\n"
+        "                               is the verdict.\n"
         "    --agent=codex|claude       (with --doctor) also inspect that agent's live integration with ripwire\n"
         "                               (with --doctor) also inspect that agent's LIVE CLI-first integration: PATH binary, exact\n"
         "                               installed-skill manifest parity, advisory hook executability, and the secondary\n"
@@ -2776,7 +2811,8 @@ inline constexpr char kHelpTail[] =
         "                               critical OS pressure stops them too. Every other verb (--html, --mermaid, --expand,\n"
         "                               --outline and, after a crawl stop, --in included) refuses a partial index, and so does any\n"
         "                               verb whose own internal ingest was cut; at the limit itself ripwire exits 5 with one\n"
-        "                               line naming it. Nothing derived from a partial ingest is cached. The\n"
+        "                               line naming it. --quality-delta=A..B alone answers from both commits' changed files instead\n"
+        "                               (exit 2 or 6, see its row). Nothing derived from a partial ingest is cached. The\n"
         "                               default is 65% of physical RAM (or of the cgroup's memory.max when lower); this flag,\n"
         "                               or RIPWIRE_MAX_MEMORY when the flag is absent, replaces it; below 64M is refused.\n"
         "    --refetch                  when the root is a git URL, clone it fresh instead of reusing the cached copy\n"
@@ -3380,6 +3416,8 @@ inline constexpr ViewFlag kViewFlags[] =
     // that reads as "everything is mine", which is the exact belief this flag exists to stop an agent
     // holding in a shared tree. `--scope=` (an unset shell variable) must never expand to a blanket ack.
     { "--scope=",          &Config::qualityScope    , EmptyValue::Refuse, "one or more path globs, comma-separated",          "--scope=src/quality.h" },
+    // qd-memory-degrade: `--quality-kinds=` (an unset variable) must not read as "every kind" — the caller asked for a subset
+    { "--quality-kinds=",  &Config::qualityKinds    , EmptyValue::Refuse, "one or more quality kinds, comma-separated",       "--quality-kinds=dead-code,duplication" },
     // --regex= sets the pattern AND the regex-mode bool; it already called refuseEmptyValue directly and the
     // table prints the SAME sentence, so this row is byte-identical to the arm it replaces.
     { "--regex=",          &Config::grep            , EmptyValue::Refuse, "a regular expression",                             "--regex='parse[A-Z]'",
@@ -3596,7 +3634,7 @@ inline constexpr IntFlag kIntFlags[] =
 //                              nowhere to keep)
 //   • a bare no-op / bare pair --route, --quality-ack (the =REASON form is a kViewFlags row)
 inline constexpr std::size_t kHandWrittenFlagArms = 26;   // +2 lane/lean-answers-068 (2026-10-07): --whereis-listing= and --mcp-legend= (closed-value arms, same shape as --grep-in=); +1 #350 (2026-09-28): --max-memory= (byte-size arm, same shape as --max-file-size=); +1: --color-by= (enum-value arm); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (repeatable-value arms, same shape as --exclude=); +1 R-H: --grep-in= (closed-value arm, same shape as --grep-scope=); +1 lane/flag-biggest-first (2026-09-23): --readability (deprecation-warning alias, same shape as --stable/--most-important-last/--no-auto-order) — its kBoolFlags row is renamed to --biggest-first (same Config::readability member), so the old spelling moves OUT of the table and becomes a hand-written arm, per the house rule that deprecation-warning aliases stay hand-written
-inline constexpr std::size_t kTotalFlagArms = 221;  // +1 lane/whereis-lean (2026-10-10, review C1): --whereis-full-text (kBoolFlags row) — the same --whereis page with every t= line whole, the <t_cut next=> replay; +1 lane/lean-trio (2026-10-10): --show-stale (kBoolFlags row) — prints the stale-ack rows a regression-free --quality-delta collapses; +1 lane/map-inventory-d7 (2026-10-08): --no-inventory (kBoolFlags row) — the default map without its <inv> tier; +1 knob-honesty-068 (2026-10-07): --lint-max-per-rule= (kIntFlags row) — the per-rule lint budget a floored answer's findings_next= names; +2 lane/lean-answers-068 (2026-10-07): --whereis-listing= and --mcp-legend= (hand-written closed-value arms, see kHandWrittenFlagArms); +1 lane/mcp-tool-profile-065 (2026-09-26): --mcp-tools= (kViewFlags row) — list only a subset of the MCP tools (names and/or the core/full profiles); +1 #350 (2026-09-28): --max-memory= (hand-written byte-size arm, see kHandWrittenFlagArms); +1 lane/flag-biggest-first (2026-09-23): --readability renamed to --biggest-first, kept working as a hand-written deprecated alias (see kHandWrittenFlagArms); +1 lane/r1-for-sections-stub (2026-09-19, L2/B1): --sections= (kViewFlags row) — the closed-set opt-in that restores the <lego>/<compose> sections --for collapses to a counted stub by default; +1 --lsp (kBoolFlags row, 2026-09-15): the navigation LSP server stdio entry point — Phase 1 PoC, docs/LSP.md; +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
+inline constexpr std::size_t kTotalFlagArms = 222;  // +1 lane/qd-memory-degrade (2026-10-14): --quality-kinds= (kViewFlags row) — run only the named quality kinds of the range form (the replay a degraded answer names); +1 lane/whereis-lean (2026-10-10, review C1): --whereis-full-text (kBoolFlags row) — the same --whereis page with every t= line whole, the <t_cut next=> replay; +1 lane/lean-trio (2026-10-10): --show-stale (kBoolFlags row) — prints the stale-ack rows a regression-free --quality-delta collapses; +1 lane/map-inventory-d7 (2026-10-08): --no-inventory (kBoolFlags row) — the default map without its <inv> tier; +1 knob-honesty-068 (2026-10-07): --lint-max-per-rule= (kIntFlags row) — the per-rule lint budget a floored answer's findings_next= names; +2 lane/lean-answers-068 (2026-10-07): --whereis-listing= and --mcp-legend= (hand-written closed-value arms, see kHandWrittenFlagArms); +1 lane/mcp-tool-profile-065 (2026-09-26): --mcp-tools= (kViewFlags row) — list only a subset of the MCP tools (names and/or the core/full profiles); +1 #350 (2026-09-28): --max-memory= (hand-written byte-size arm, see kHandWrittenFlagArms); +1 lane/flag-biggest-first (2026-09-23): --readability renamed to --biggest-first, kept working as a hand-written deprecated alias (see kHandWrittenFlagArms); +1 lane/r1-for-sections-stub (2026-09-19, L2/B1): --sections= (kViewFlags row) — the closed-set opt-in that restores the <lego>/<compose> sections --for collapses to a counted stub by default; +1 --lsp (kBoolFlags row, 2026-09-15): the navigation LSP server stdio entry point — Phase 1 PoC, docs/LSP.md; +1 lane/recent-scope (2026-09-12, C1-b): --in= (kViewFlags row) — the directory-scoped <recent scope=> block of --rank-by=churn-decay; +2 P4 (capture-audit 2026-09-04, lane L7): --zoom-levels= (kIntFlags row, the printed-levels ceiling) and --include-builtins (kBoolFlags row, the external-surface builtin opt-in); +1 P9 (capture-audit 2026-09-04, lane L8): --no-post-check (kBoolFlags row, the edit receipt's folded verification opt-out); +1 lane/ca-L2 (2026-09-04, H11): --allow-dirty (kBoolFlags row) — the explicit consent --quality-baseline needs before it pins a floor on a tree that differs from HEAD; +1 lane/n6-c (2026-09-03): --no-ignore (kBoolFlags row, the .gitignore-by-default escape hatch); +1 lane/af-scope (2026-08-29): --scope= (kViewFlags row, the quality-delta ownership partition); +1 --quality-delta= (kViewFlags, R-I ref-pair form); +1 --help-task= (kViewFlags); +2 VT-1: --run-trace= (kViewFlags) and --run-timeout= (kIntFlags); +1: --handoff (kBoolFlags row); +1 --readability (kBoolFlags row); +2 §CLIO: --cochange-groups (kBoolFlags), --cochange-recur= (kIntFlags); +1 --context-ratio (kBoolFlags row); +1 --nonlocal-state (kBoolFlags row); +2 --field-affinity (kBoolFlags) and --field-affinity= (kViewFlags); +1 --comment-coherence (kBoolFlags row); +2 --dmm (kBoolFlags) and --dmm= (kViewFlags); +2 --quality-panel (kBoolFlags) and --quality-panel= (kViewFlags); +1 --naming-consistency (kBoolFlags row); +1 --naming-locals (kBoolFlags row, local-variable-indexing plan Phase 2); +1 --skipped (kBoolFlags row, §P0.5d itemization); +1 --with-profile= (kViewFlags row, the --lint × #PROF_TSV heat join); +1 --color-by= (hand-written enum-value arm); +1 --sarif (kBoolFlags row, W1-SARIF: SARIF 2.1.0 export for --lint); +1 --signatures-only (kBoolFlags row, T3 terminal-by-default --for opt-out); +3 L7: --lint-catalog (kBoolFlags), --lint-select= and --lint-ignore= (kViewFlags); +3 G3 (2026-08-15 harvest): --and=/--not=/--grep-scope= (hand-written arms); +1 R-H: --grep-in= (hand-written arm); +1 R2: --pattern= (kViewFlags row, the code-shaped structural search); +1 lane/safe-delete (2026-08-21): --safe-delete= (kViewFlags row, the composed "can I delete this?" read); +1 lane/compact-conceptual (2026-08-22): --auto-bodies (kBoolFlags row, the compact-conceptual-serving opt-out); +5 CLI edit bridge (2026-08-27): --replace-symbol-body=/--insert-before-symbol=/--insert-after-symbol=/--edit-payload=/--edit-target-file= (kViewFlags rows); +1 --handles (kBoolFlags row, grep edit handles); +1 --legend= (kViewFlags row, compact schema dialect); +3 edit-plan: --edit-plan= (kViewFlags) and --dry-run/--apply (kBoolFlags rows); +1 --agent= (kViewFlags row, the --doctor Codex surface); +1 lane/paper-slice (2026-08-28): --slice= (kViewFlags row, the ARISE-motivated def-use slice); +1 lane/af-planlint (2026-08-29): --plan-lint= (kViewFlags row, the PLAN-format structure gate, P3.2); +2 lane/or-arise (2026-08-30): --slice-flow= (kViewFlags row) and --slice-depth= (kIntFlags row) — the ARISE rung-2 cross-statement data-flow slice; +1 lane/at-seed (2026-08-30): --at= (kViewFlags row) — the FILE:LINE enclosing-chain report, with the @FILE:LINE selector spelling resolved in graph.h (no flag arm of its own); +1 CARD-1 phase 2 (2026-08-31): --pin-census= (kViewFlags row) — the eval-only S6-C silent-pin census, written beside the map and never into it
 static_assert( std::size( kBoolFlags ) + std::size( kViewFlags ) + std::size( kIntFlags ) + kHandWrittenFlagArms == kTotalFlagArms,
                "a --flag arm was added or removed without updating the ledger above — count the arms in parseArgs and fix the counter" );
 
@@ -5280,6 +5318,21 @@ inline void validateConfig( Config& c ) noexcept
     if( !c.qualityScope.empty() && !c.qualityDelta )
     {
         rw::emitRaw( stderr, "ripwire: --scope=GLOB partitions --quality-delta by ownership — pass both (e.g. ripwire <dir> --quality-delta --scope=src/quality.h)\n" );
+        c.ok = false;
+    }
+
+    // qd-memory-degrade — --quality-kinds selects kinds of the RANGE form only: the working-tree form (and its MCP twin) has
+    // no selector yet, so there it would be a silently ignored flag. Beside --quality-ack it would accept a partial report as
+    // if it were the whole one; beside --quality-baseline it would pin a floor missing every unnamed kind. Refused by name.
+    if( !c.qualityKinds.empty() && ( c.qualityAck || c.qualityBaseline ) )
+    {
+        rw::emitTo( stderr, "ripwire: --quality-kinds runs a subset of the kinds, and {} needs every kind's rows — drop one of the two\n",
+                    c.qualityAck ? "--quality-ack" : "--quality-baseline" );
+        c.ok = false;
+    }
+    else if( !c.qualityKinds.empty() && c.qualityDeltaRange.empty() )
+    {
+        rw::emitRaw( stderr, "ripwire: --quality-kinds selects kinds of the range form --quality-delta=A..B (two commits); the working-tree --quality-delta has no kind selector\n" );
         c.ok = false;
     }
 

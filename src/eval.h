@@ -188,7 +188,10 @@ inline int runEval( const std::string& root, const IngestResult& ing, const Grap
     }
     for( const Reference& rf : ing.references )
     {
-        add( rf.fileId, rf.calleeName );
+        if( rf.role != RefRole::Subscript )   // an element access names an operator, not a name the source spells
+        {
+            add( rf.fileId, rf.calleeName );
+        }
     }
 
     double avgW = 0, avgS = 0;

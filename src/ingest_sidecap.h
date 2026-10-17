@@ -2051,6 +2051,28 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 if( nameTxt == "/" && elixirNodeIs( parent, "unary_operator" ) && nodeFieldText( parent, NodeField::Operator, src  ) == "&" ) { continue; }
             }
 
+            if( le.lang == Lang::Elixir && elixirInert( roleNode, src ) )
+            {
+                // Keep call/operator/named-capture candidates as declined facts, never edges. Heads,
+                // special forms and non-call operators already failed their syntax filters. Bare AST
+                // names remain variable-shaped syntax unless they explicitly name a function capture.
+                if( isRef && ( refCapSv == "reference.call" || refCapSv == "reference.operator"
+                               || ( refCapSv == "reference.bare" && elixir.namedCapture( nameNode ) ) ) )
+                {
+                    RawRef r;
+                    r.fileId    = fileId;
+                    r.startByte = ts_node_start_byte( roleNode );
+                    r.line      = nameRow + 1;
+                    r.lang      = Lang::Elixir;
+                    r.role      = RefRole::Inert;
+                    auto [ count, known ] = elixirCallArity( roleNode, nameNode, src );
+                    if( refCapSv == "reference.operator" ) { count = elixirNodeIs( roleNode, "binary_operator" ) ? 2 : 1; known = true; }
+                    r.name = known ? elixirFunctionName( nameTxt, count ) : std::string( nameTxt );
+                    refs.push_back( std::move( r ) );
+                }
+                continue;
+            }
+
             if( isDef )
             {
                 if( le.lang == Lang::Elixir && defCapSv == "definition.attribute" ) { kind = SymKind::Var; }
@@ -2407,6 +2429,16 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             }
             else if( isRef && full )
             {
+                // An element access: @name is its RECEIVER, and the site names the receiver class's subscript operator
+                // method (ingest_binds.h subscriptOperatorRef) — never a call by itself (RefRole::Subscript).
+                if( refCapSv == "reference.subscript" )
+                {
+                    if( std::optional<RawRef> sub = subscriptOperatorRef( roleNode, nameNode, fileId, le.lang, src ) )
+                    {
+                        refs.push_back( std::move( *sub ) );
+                    }
+                    continue;
+                }
                 // H4: a C++ cast keyword is not a call — see isCppCastKeyword. Valid input, skipped, no alert.
                 if( le.lang == Lang::Cpp && isCppCastKeyword( nameTxt ) )
                 {
@@ -2587,6 +2619,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
         captureRubyHelperMethods( root, fileId, src, binds );
         captureRubySingletonAccessors( root, fileId, src, binds );
         captureRubyClassMixins( root, fileId, src, binds );
+        captureRubyMainMixins( root, fileId, src, binds );
         if( le.ext == kJbuilderExt )
         {
             typeRubyJbuilderLocal( fileId, refs );

@@ -407,8 +407,8 @@ lc_est(){ grep -o 'est_tokens="[0-9]*"' "$1" | head -1 | grep -o '[0-9][0-9]*'; 
 lc_sigs(){ grep -o '<sigs .*</sigs>' "$1"; }
 "$BIN" test/legochargefix --no-cache --for="$LCQ" >"$TMP/lc_def.xml" 2>/dev/null;                                  rc_def=$?
 "$BIN" test/legochargefix --no-cache --for="$LCQ" --sections=lego,compose >"$TMP/lc_rest.xml" 2>/dev/null;         rc_rest=$?
-"$BIN" test/legochargefix --no-cache --for="$LCQ" --token-budget=3000 >"$TMP/lc_tb.xml" 2>/dev/null;               rc_tb=$?
-"$BIN" test/legochargefix --no-cache --for="$LCQ" --token-budget=3000 --sections=lego,compose >"$TMP/lc_tbrest.xml" 2>/dev/null; rc_tbrest=$?
+"$BIN" test/legochargefix --no-cache --for="$LCQ" --token-budget=6000 >"$TMP/lc_tb.xml" 2>/dev/null;               rc_tb=$?
+"$BIN" test/legochargefix --no-cache --for="$LCQ" --token-budget=6000 --sections=lego,compose >"$TMP/lc_tbrest.xml" 2>/dev/null; rc_tbrest=$?
 LC_DEF="$( lc_shown "$TMP/lc_def.xml" )"; LC_REST="$( lc_shown "$TMP/lc_rest.xml" )"
 LC_TB="$( lc_shown "$TMP/lc_tb.xml" )";   LC_TBREST="$( lc_shown "$TMP/lc_tbrest.xml" )"; LC_TBEST="$( lc_est "$TMP/lc_tbrest.xml" )"
 if [ "$rc_def$rc_rest$rc_tb$rc_tbrest" != "0000" ] || ! [[ "$LC_DEF" =~ ^[0-9]+$ && "$LC_REST" =~ ^[0-9]+$ && "$LC_TB" =~ ^[0-9]+$ && "$LC_TBREST" =~ ^[0-9]+$ && "$LC_TBEST" =~ ^[0-9]+$ ]]; then
@@ -427,23 +427,38 @@ else
     [[ "$LC_STUBTOTAL" =~ ^[0-9]+$ ]] && [ "$LC_IFACES" -eq "$(( LC_STUBTOTAL < 12 ? LC_STUBTOTAL : 12 ))" ] \
         && ok "(13c) the stub's total=$LC_STUBTOTAL matches the restored <lego> ($LC_IFACES <iface> rows, display cap 12)" \
         || no "(13c) the stub's total=\"$LC_STUBTOTAL\" vs $LC_IFACES restored <iface> rows (display cap 12)"
-    # (13d) NEAR-MISS: under an explicit ceiling, a section --sections= opts into is charged in full — the hard bound holds
-    # (its <lego> is then narrowed to the few rendered rows' files — here none of stages.h — so the bound is read off <sigs>)
-    [ "$LC_TBEST" -le 3000 ] && [ "$LC_TBREST" -lt "$LC_TB" ] \
-        && ok "(13d) --token-budget=3000 --sections=lego,compose: est_tokens=$LC_TBEST <= 3000, <sigs> $LC_TBREST < $LC_TB (the full <lego> was charged)" \
-        || no "(13d) --token-budget=3000 --sections=lego,compose: est_tokens=$LC_TBEST, <sigs> $LC_TBREST vs $LC_TB stubbed — the opted-in section was not charged in full under an explicit ceiling"
+    # (13d) forbudget-soft (owner decisions 2026-10-14; rule 4): an explicit --token-budget is a SOFT target. Round C (RESERVE
+    # SECTIONS FIRST, owner decision 2026-10-14): the trailing sections are served first and the rows past the target cut fill
+    # what they leave of T — so a section --sections= opts into rides WHOLE and its bytes come out of the rows past the cut,
+    # never out of the section. By-design break of round B's "the same rows with and without the opt-in" (sections were funded
+    # from what the rows left): what holds now is the full <lego>, no over_ceiling, and rows that do not GROW with the opt-in.
+    # (Re-anchored from 3000 to 6000 tokens: at 3000 the rows at the cut name no implementing file, so <lego> is empty either way.)
+    [ "$LC_TBREST" -le "$LC_TB" ] && ! grep -q 'over_ceiling="1"' "$TMP/lc_tbrest.xml" && grep -q '<lego><iface ' "$TMP/lc_tbrest.xml" \
+        && ok "(13d) --token-budget=6000 --sections=lego,compose: the opted-in <lego> rides whole, reserved before the rows past the cut ($LC_TBREST <= $LC_TB rows), no over_ceiling (est_tokens=$LC_TBEST)" \
+        || no "(13d) --token-budget=6000 --sections=lego,compose: <sigs> $LC_TBREST vs $LC_TB without it (or over_ceiling, or no full <lego>) — an opted-in section is reserved first under a soft target"
 fi
 if command -v python3 >/dev/null 2>&1; then
+    # lc_mcp ARGS: "<rows> <lego> <over>" — rows from <sigs shown=> (a cut bundle) or the <d> rows inside an uncut <sigs>,
+    # lego 1 when the full <lego><iface …> rides, over 1 on over_ceiling="1"
     lc_mcp(){ printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"for","arguments":{"path":"test/legochargefix","task":"%s"%s}}}\n' "$LCQ" "$1" \
                 | "$BIN" --mcp 2>/dev/null | python3 -c "
 import json,sys,re
 t = json.loads(sys.stdin.readline())['result']['content'][0]['text']
 m = re.search(r'<sigs shown=\"([0-9]+)\"', t)
-print(m.group(1) if m else 'none')"; }
-    LCM_DEF="$( lc_mcp '' )"; LCM_TB="$( lc_mcp ',"budget_tokens":3000' )"; LCM_TBREST="$( lc_mcp ',"budget_tokens":3000,"sections":"lego,compose"' )"
-    [[ "$LCM_DEF" =~ ^[0-9]+$ && "$LCM_TB" =~ ^[0-9]+$ && "$LCM_TBREST" =~ ^[0-9]+$ ]] && [ "$LCM_DEF" -ge 24 ] && [ "$LCM_TBREST" -lt "$LCM_TB" ] \
-        && ok "(13e) MCP for: the same charge — <sigs> $LCM_DEF rows by default; under budget_tokens + sections $LCM_TBREST < $LCM_TB" \
-        || no "(13e) MCP for: <sigs shown> default=$LCM_DEF budget=$LCM_TB budget+sections=$LCM_TBREST (want >= 24, and the last below the middle)"
+b = re.search(r'<sigs>(.*?)</sigs>', t, re.S)
+rows = m.group(1) if m else ( str( len( re.findall( r'<d ', b.group(1) ) ) ) if b else 'none' )
+print(rows, int('<lego><iface ' in t), int('over_ceiling=\"1\"' in t))"; }
+    read -r LCM_DEF _ _ <<< "$( lc_mcp '' )"
+    read -r LCM_TB _ _ <<< "$( lc_mcp ',"budget_tokens":6000' )"
+    read -r LCM_TBREST LCM_LEGO LCM_OVER <<< "$( lc_mcp ',"budget_tokens":6000,"sections":"lego,compose"' )"
+    # forbudget-soft round C (rule 4), re-anchored from 3000 to 6000 tokens as (13d) was (CodeRabbit, #413): at 3000 the
+    # opted-in sections render no <lego> at all, so "the same rows" held whether or not they were charged. What holds at
+    # 6000: the full <lego> rides, no over_ceiling, and the opted-in sections never ADD a row. (MCP `for` under
+    # budget_tokens serves the signatures bundle, uncut here, so the row counts are equal; the inequality is the contract.)
+    [[ "$LCM_DEF" =~ ^[0-9]+$ && "$LCM_TB" =~ ^[0-9]+$ && "$LCM_TBREST" =~ ^[0-9]+$ ]] && [ "$LCM_DEF" -ge 24 ] && [ "$LCM_TBREST" -le "$LCM_TB" ] \
+        && [ "${LCM_LEGO:-0}" = 1 ] && [ "${LCM_OVER:-1}" = 0 ] \
+        && ok "(13e) MCP for: <sigs> $LCM_DEF rows by default; under budget_tokens=6000 the opted-in <lego> rides whole, no over_ceiling, and adds no row ($LCM_TBREST <= $LCM_TB)" \
+        || no "(13e) MCP for: <sigs> default=$LCM_DEF budget=$LCM_TB budget+sections=$LCM_TBREST lego=${LCM_LEGO:-?} over=${LCM_OVER:-?} (want >= 24, the last <= the middle, a full <lego>, no over_ceiling)"
 else
     printf '  SKIP  %s\n' "(13e) python3 absent: the MCP twin of the lego charge is not checked"
 fi

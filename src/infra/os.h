@@ -503,6 +503,12 @@ struct dirwatch_event
 // seconds, plus once at each hard-line check between phases.
 // mem_footprint: bytes this process holds. macOS: TASK_VM_INFO phys_footprint (what Activity Monitor and the
 //   jetsam killer count — compressed and swapped pages included). Linux: resident pages from /proc/self/statm.
+// mem_footprint_peak: the most this process has held so far, in mem_footprint's own measure (qd-memory-degrade: the
+//   range form's projection reads the base phase's PEAK, which the readings between phases miss). macOS: TASK_VM_INFO
+//   ledger_phys_footprint_peak, read only when the kernel returned a structure long enough to hold it (rev3+); Linux:
+//   VmHWM from /proc/self/status (the resident high-water mark, the peak of what statm reports). 0 = unknown, and a
+//   caller then must not project from it. Never cgroup memory.peak: it is lifetime and leaf-wide (an earlier CI step's
+//   high-water mark), and it counts the page cache measuredFootprint deliberately leaves out.
 // mem_physical: bytes of physical RAM. macOS hw.memsize; Linux _SC_PHYS_PAGES x _SC_PAGESIZE.
 // mem_cgroup_max: the cgroup v2 memory.max of this process's OWN (leaf) cgroup (Linux; 0 = none, "max", or unreadable).
 //   Known floor: a limit set on an ANCESTOR cgroup (a systemd slice's MemoryMax) and cgroup v1's memory.limit_in_bytes
@@ -517,16 +523,30 @@ struct dirwatch_event
 //   reaches 20%, warning when "some avg10" does. Integer percent only — no float parse, no locale.
 
 #if defined( __APPLE__ )
-inline std::uint64_t mem_footprint()
+// the Mach reader the two footprint bodies below share. A static member of a struct, like the Linux branch's procfs: a
+// helper of those bodies, not a name of this layer (the Windows branch has no Mach to declare it for).
+struct machvm
 {
-    task_vm_info_data_t    info {};
-    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
-    if( ::task_info( ::mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>( &info ), &count ) != KERN_SUCCESS )
+    // TASK_VM_INFO's footprint: phys_footprint, or with `peak` ledger_phys_footprint_peak — read only when the kernel filled
+    // a structure long enough to hold it (rev3+): an older kernel's stops before the field, and a zero-filled read is not
+    // a peak. 0 when unknown.
+    static std::uint64_t footprint( bool peak )
     {
-        return 0;
+        task_vm_info_data_t    info {};
+        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+        if( ::task_info( ::mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>( &info ), &count ) != KERN_SUCCESS )
+        {
+            return 0;
+        }
+        if( !peak )
+        {
+            return std::uint64_t( info.phys_footprint );
+        }
+        return count >= TASK_VM_INFO_REV3_COUNT && info.ledger_phys_footprint_peak > 0 ? std::uint64_t( info.ledger_phys_footprint_peak ) : 0;
     }
-    return std::uint64_t( info.phys_footprint );
-}
+};
+inline std::uint64_t mem_footprint() { return machvm::footprint( false ); }
+inline std::uint64_t mem_footprint_peak() { return machvm::footprint( true ); }
 inline std::uint64_t mem_physical()
 {
     std::uint64_t bytes = 0;
@@ -634,6 +654,27 @@ inline std::uint64_t mem_footprint()
     const long      pageSize = ::sysconf( _SC_PAGESIZE );
     return pages > 0 && pageSize > 0 ? std::uint64_t( pages ) * std::uint64_t( pageSize ) : 0;
 }
+inline std::uint64_t mem_footprint_peak()
+{
+    char buf[ 4096 ];   // /proc/self/status is ~1.4 KiB; VmHWM sits in its first third
+    if( procfs::read_small( "/proc/self/status", buf, sizeof( buf ) ) == 0 )
+    {
+        return 0;
+    }
+    const std::string_view text( buf );
+    const std::size_t      at = text.find( "\nVmHWM:" );
+    if( at == std::string_view::npos )
+    {
+        return 0;
+    }
+    std::string_view rest = text.substr( at + 7 );
+    while( !rest.empty() && ( rest.front() == ' ' || rest.front() == '\t' ) )
+    {
+        rest.remove_prefix( 1 );
+    }
+    const long long kib = procfs::leading_int( rest );   // "VmHWM:\t  123456 kB"
+    return kib > 0 ? std::uint64_t( kib ) * 1024u : 0;
+}
 inline std::uint64_t mem_physical()
 {
     const long pages    = ::sysconf( _SC_PHYS_PAGES );
@@ -687,6 +728,7 @@ inline int mem_pressure()
 }
 #else
 inline std::uint64_t mem_footprint()  { return 0; }
+inline std::uint64_t mem_footprint_peak() { return 0; }
 inline std::uint64_t mem_physical()   { return 0; }
 inline std::uint64_t mem_cgroup_max() { return 0; }
 inline std::uint64_t mem_cgroup_unreclaimable() { return 0; }
@@ -1082,10 +1124,12 @@ int dirwatch_open();
 int dirwatch_add( int watchFd, int dirFd, dirwatch_event* change );
 int dirwatch_poll( int watchFd, dirwatch_event* events, int eventCount, const ::timespec* timeout );
 
-// ── memory (see the POSIX branch): PrivateUsage from GetProcessMemoryInfo, ullTotalPhys from GlobalMemoryStatusEx,
-// no cgroup (0, both cgroup helpers), and QueryMemoryResourceNotification on a low-memory notification object created
-// once (3 when the system signals low memory, else 1).
+// ── memory (see the POSIX branch): PrivateUsage from GetProcessMemoryInfo (its peak: PeakPagefileUsage, the same commit
+// charge's high-water mark), ullTotalPhys from GlobalMemoryStatusEx, no cgroup (0, both cgroup helpers), and
+// QueryMemoryResourceNotification on a low-memory notification object created once (3 when the system signals low
+// memory, else 1).
 std::uint64_t mem_footprint();
+std::uint64_t mem_footprint_peak();
 std::uint64_t mem_physical();
 [[gnu::always_inline]] inline std::uint64_t mem_cgroup_max() { return 0; }
 [[gnu::always_inline]] inline std::uint64_t mem_cgroup_unreclaimable() { return 0; }

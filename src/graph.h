@@ -45,6 +45,21 @@ namespace rw
 
 // ComposeEdge defined in model.h (so serialize.h can use it without including graph.h).
 
+// Which rule declined a call (Graph::declinedSiteKind): what a <dc> row's gate= says, and what train 29's interface-typed
+// dispatch rows (L6) will add a value to. One byte per declined call; the value is never ranked or counted, only read back.
+enum class DeclinedSiteKind : std::uint8_t
+{
+    Ladder,     // tier 3: two or more candidates, none in the caller's file or directory, no evidence chose one (no gate=)
+    Builtin,    // the builtin-method name gate (BuiltinMethodGate): gate="builtin"
+    Std,        // the C++ standard-member gate (StdMemberGate): gate="std"
+    RubySide,   // Ruby: in reach of self's method lookup, but on the other side of self (class vs instance): gate="side"
+    RubyNew,    // Ruby: `new` on a class object, the reachable `initialize` definitions unpicked (no gate=; the row names `new`)
+    Iface,      // RESERVED for L6 (interface-typed dispatch rows); nothing writes it yet
+};
+// A declined call whose candidate list internDeclinedList could not store (its uint32 offset ceiling): the record keeps the
+// call, with no list (no cands=, and no callers row — declinedCallsNaming cannot count it either).
+inline constexpr std::uint32_t kNoDeclinedList = UINT32_MAX;
+
 struct Graph
 {
     sparseCsr<float>           inEdges;     // N×N, row = target's in-neighbours (for PageRank)
@@ -72,6 +87,10 @@ struct Graph
     // lane lego-transitive fix 1: parallel to implementors — how each base→derived edge was BOUND (BaseBound). The direct rows
     // and every other reader keep reading implementors alone; only the --lego closure (legoImplementorClosure) walks this.
     std::vector<std::vector<std::uint8_t>> implementorBound;
+    // lane ruby-pair: the Ruby main object as an implementor — each top-level `include M` / `extend M` whose constant the
+    // tree opens (rubyMainObjectMixins), sorted by (base, fileId, line). Not in `implementors`: main is no symbol, so the
+    // graph's class readers (closure, CHA, ranks) never see it; only --lego's targeted answer lists it.
+    std::vector<RubyMainMixinRow> rubyMainMixins;
     std::vector<std::vector<NodeId>> mentions;       // code symbol id → markdown file-nodes that name it in a `backtick` (doc↔code)
     std::vector<std::uint32_t> ambOut;      // per-symbol: # outgoing calls that STILL resolved to MULTIPLE in-repo
                                             // defs AFTER canonical/narrow/locality resolution (the resolver could
@@ -136,9 +155,26 @@ struct Graph
     // stores what those calls could equally have meant ONCE PER DISTINCT candidate list (internDeclinedList): list k is declinedListCand[ off[k], off[k+1] ),
     // named by declinedListCallCount[k] calls — what the callers and impact answers read to count, once per call, the declines that could have meant THEIR symbols.
     std::vector<std::uint32_t> declinedOut;
+    std::size_t                inertDeclinedCalls = 0;   // quoted call sites counted in declinedOut, with no candidate list
+    // train 28 (PR #380 x lane declined-sites): the caller of each inert quoted site, in resolve-loop order. Those sites ride
+    // declinedOut with no candidate list and reach no decline site, so they write no declinedSite* record below; this column is
+    // what lets declinedSitesMadeBy state its record-count postcondition with them in it (records + inert == declined_calls=).
+    std::vector<NodeId>        inertDeclinedCaller;
     std::vector<std::uint32_t> declinedListOff{ 0u };   // the leading offset lives here, so a default Graph is already a valid zero-list CSR
     std::vector<NodeId>        declinedListCand;
     std::vector<std::size_t>   declinedListCallCount;
+    // lane declined-sites: ONE record per declined CALL, written beside every ++declinedOut (buildGraph's recordDecline), so
+    // the record count is the header's declined= and the records a selector's definitions made are its declined_calls=.
+    // Parallel columns in resolve-loop order (deterministic): the caller; the interned candidate list (kNoDeclinedList when
+    // internDeclinedList could not store it); the call's index into ing.references, from which the line, the file and the
+    // CALLED name are read (never off the candidates: a Ruby `new` declines with `initialize` candidates), and receiver and
+    // qualifier stay reachable for L6; and the rule that declined it. 13 B per declined call. Read by declinedSitesMadeBy /
+    // declinedSitesNaming below, the <dc> rows of the callers, callees and safe-delete answers. Built from the ingest each
+    // run like the rest of the Graph (never cached), so no cache version moves with it.
+    std::vector<NodeId>           declinedSiteCaller;
+    std::vector<std::uint32_t>    declinedSiteList;
+    std::vector<std::uint32_t>    declinedSiteRef;
+    std::vector<DeclinedSiteKind> declinedSiteKind;
     // 1 for a definition some call the builtin-method name gate DECLINED could have meant (BuiltinMethodGate below); empty
     // on a corpus with no such decline. Read by the dead-code predicate (quality.h isDeadCandidate): a definition a
     // declined `pool.get( k )` could have meant is not provably uncalled, which is what it was before the gate, when
@@ -377,44 +413,22 @@ inline bool pathHasNameOnlyHop( const Graph& g, std::span<const NodeId> path ) n
     return std::adjacent_find( path.begin(), path.end(), [ & ]( NodeId from, NodeId to ) { return edgeNameOnly( g, from, to ); } ) != path.end();
 }
 
-// FE-B: does the call edge from → to exist at all (the out-CSR is ascending within a source)
-inline bool edgeExists( const Graph& g, NodeId from, NodeId to ) noexcept
+// The out-CSR position of the call edge from → to, or SIZE_MAX when there is none (ascending within a source: buildGraph sorts
+// by (from, to)). The per-edge bytes (outNameOnly, outProv) are read at it; defattrib.h's row attribution reads both.
+inline std::size_t edgeIndex( const Graph& g, NodeId from, NodeId to ) noexcept
 {
     if( std::size_t( from ) + 1 >= g.outOff.size() )
     {
-        return false;
+        return SIZE_MAX;
     }
-    const auto b = g.outTargets.begin() + g.outOff[ from ];
-    const auto e = g.outTargets.begin() + g.outOff[ std::size_t( from ) + 1 ];
-    return std::binary_search( b, e, to );
+    const auto b  = g.outTargets.begin() + g.outOff[ from ];
+    const auto e  = g.outTargets.begin() + g.outOff[ std::size_t( from ) + 1 ];
+    const auto it = std::lower_bound( b, e, to );
+    return ( it != e && *it == to ) ? std::size_t( it - g.outTargets.begin() ) : SIZE_MAX;
 }
 
-// FE-B: a neighbour row of a selector that matched several definitions is via="name" iff EVERY edge joining it to one
-// of them is name-only — one proven edge makes the row proven. `towardMatches`: the row is a CALLER (row → match);
-// else a callee (match → row). false when no edge joins them, and on a graph with no name-only edge.
-inline bool rowNameOnly( const Graph& g, std::span<const NodeId> matches, NodeId row, bool towardMatches ) noexcept
-{
-    if( g.outNameOnly.empty() )
-    {
-        return false;
-    }
-    bool any = false;
-    for( const NodeId m : matches )
-    {
-        const NodeId from = towardMatches ? row : m;
-        const NodeId to   = towardMatches ? m : row;
-        if( !edgeExists( g, from, to ) )
-        {
-            continue;
-        }
-        if( !edgeNameOnly( g, from, to ) )
-        {
-            return false;
-        }
-        any = true;
-    }
-    return any;
-}
+// FE-B's per-row via="name" (EVERY edge joining a row to the selector's definitions is name-only) is defattrib.h's
+// OneHopAttribution::nameOnly now: the strongest tie the one attribution pass recorded is by name alone.
 
 // The via="name" spelling every XML row of a name-only edge carries (" via=\"name\"", 11 bytes), "" otherwise.
 inline const char* viaNameAttr( bool nameOnly ) noexcept
@@ -519,6 +533,8 @@ inline bool namespaceCompatible( RefRole role, SymKind kind ) noexcept
         }
         case RefRole::Call: case RefRole::Read: case RefRole::Write: case RefRole::Import:
         case RefRole::Value: case RefRole::Through:   // never in the call loop; graph.h valueRefIndex narrows by kind itself
+        case RefRole::Subscript:                      // the call loop's own receiver proof decides it (subscriptOperatorProven)
+        case RefRole::Inert:                          // Inert exits before the name ladder
         {
             return true;   // un-narrowed — see the doctrine above; a NEW role is a -Werror=switch decision here
         }
@@ -4995,7 +5011,7 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
         // a backtick mention in prose is not code evidence; a read/write USE-site is recorded only by the rich ingest (--uses,
         // MCP), so reading it here made the same call bind on MCP and decline on the CLI map — evidence must not depend on
         // which ingest ran (FE-B found it through mcpclidiffcheck's stanza on a Python `set().update()` beside a method)
-        if( !r.isDocLink && r.role != RefRole::Read && r.role != RefRole::Write )
+        if( !r.isDocLink && r.role != RefRole::Read && r.role != RefRole::Write && r.role != RefRole::Subscript )   // a subscript names an operator, and is a call only once proven
         {
             note( r.fileId, r.calleeName );
             note( r.fileId, r.recvVar );
@@ -5004,7 +5020,7 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
     }
     for( const Binding& b : ing.bindings )
     {
-        if( !isReceiverEvidenceKind( b.kind ) )   // FE-B's receiver evidence is read by ReceiverEvidence alone
+        if( !isReceiverEvidenceKind( b.kind ) && b.kind != LocalBindKind::RubyMainMixin )   // FE-B's receiver evidence is read by ReceiverEvidence alone; a main mixin by --lego alone
         {
             noteBindingClasses( gate, fileGated, b );
         }
@@ -5032,6 +5048,37 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
         std::sort( named.begin(), named.end() );
         named.erase( std::unique( named.begin(), named.end() ), named.end() );
     }
+}
+
+// The main object's mixins (LocalBindKind::RubyMainMixin, ingest_ruby.h captureRubyMainMixins) as implementor rows: the
+// constant a Ruby file's top level writes is read as Ruby reads it there — at the top level, so the path as written is the
+// fully-qualified constant (a leading `::` changes nothing) — and each class or module whose own open is that constant
+// (RubyBaseScope::classesByFqn) gets one row per directive. A constant the tree never opens (`include FileUtils`) lists
+// nothing: the module is outside the tree. Ruby-only by construction (no other language records the kind).
+inline std::vector<RubyMainMixinRow> rubyMainObjectMixins( const IngestResult& ing, const RubyBaseScope& bases )
+{
+    std::vector<RubyMainMixinRow> rows;
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind != LocalBindKind::RubyMainMixin )
+        {
+            continue;
+        }
+        const std::string_view written = std::string_view( b.typeName ).starts_with( "::" ) ? std::string_view( b.typeName ).substr( 2 ) : std::string_view( b.typeName );
+        const auto             it      = bases.classesByFqn.find( std::string( written ) );
+        if( it == bases.classesByFqn.end() )
+        {
+            continue;
+        }
+        for( const NodeId base : it->second )
+        {
+            rows.push_back( RubyMainMixinRow { base, b.fileId, b.spanStart } );
+        }
+    }
+    // ing.bindings is in (file, byte) order, so a stable sort by base leaves each base's rows in site order
+    std::ranges::stable_sort( rows, {}, &RubyMainMixinRow::base );
+    ENSURES( std::ranges::is_sorted( rows, {}, &RubyMainMixinRow::base ), "legoMainRowsOf binary-searches the rows by base" );
+    return rows;
 }
 
 inline BuiltinMethodGate buildBuiltinMethodGate( const IngestResult& ing, const ExternalVeto& veto, const ExternalVetoTables& vetoTables,
@@ -6158,7 +6205,7 @@ inline void fillImplementorBound( Graph& g, const std::vector<ImplementorBoundEd
     }
 }
 
-inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand );   // defined beside declinedCallsNaming, its one reader
+inline std::uint32_t internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand );   // defined beside declinedCallsNaming, its one reader
 inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = nullptr, bool census = false )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph: resolve refs + build CSR" );
@@ -6499,6 +6546,22 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     std::vector<NodeId>      cand, tier;
     HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>> declinedListsByHash;   // tier-3 declines: list hash → list numbers (internDeclinedList)
     declinedListsByHash.reserve( 4096 );
+    // Every decline site goes through here: the caller's count (declinedOut, the header's declined=), the candidate list
+    // (internDeclinedList, the callers answers' declined_calls=) and ONE site record (Graph::declinedSite*) — so the rows a
+    // callers or callees answer prints are exactly the calls its declined_calls= counts.
+    // `siteIndex` is the site's index in ing.references, carried by the resolve loop: a proven subscript runs the ladder on a
+    // COPY of its site (subscriptCall, role Call), so the address of `r` is not an element of ing.references there.
+    std::size_t siteIndex = 0;
+    const auto recordDecline = [ & ]( const Reference& r, std::span<const NodeId> declinedCand, DeclinedSiteKind kind )
+    {
+        EXPECTS( siteIndex < ing.references.size(), "the resolve loop's own reference" );
+        EXPECTS( r.fromSymbol < g.declinedOut.size(), "a declined call has a caller" );
+        ++g.declinedOut[ r.fromSymbol ];
+        g.declinedSiteList.push_back( internDeclinedList( g, declinedListsByHash, declinedCand ) );
+        g.declinedSiteCaller.push_back( r.fromSymbol );
+        g.declinedSiteRef.push_back( std::uint32_t( siteIndex ) );
+        g.declinedSiteKind.push_back( kind );
+    };
     std::vector<NodeId>      bindingTier;   // A4-R5 reused FFI-alias fallback candidate buffer
     std::string              bindKey;       // A4-R5 reused "<fileId>#var" key buffer for the ctypes-handle gate
     HashMap<std::uint64_t, char> bindingEdges;   // A4-R5 (from<<32|to) keys of edges resolved via an FFI alias —
@@ -7171,10 +7234,100 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             g.pinCensus.addOracleRow( nd.from, nd.calleeName, nd.kind );
         }
     }
+    // SUBSCRIPT = OPERATOR-METHOD CALL (RefRole::Subscript; ingest_binds.h subscriptOperatorRef; test/subscriptopcheck.sh).
+    // An element access `recv[ k ]` runs the receiver class's subscript operator method (Ruby `[]`/`[]=`, Python
+    // `__getitem__`/`__setitem__`) — but only a class the tree defines can make it a call into the tree, and the receiver
+    // of nearly every element access is a builtin Hash/Array/dict/list whose own operator runs. So the site is taken up
+    // as a call ONLY where a receiver rule PROVES the class: Ruby's lookup on self in a def (RubyClassObjects::selfCall,
+    // then RubySelfReach through the class's include/extend/superclass ancestry), a receiver the code builds
+    // (RubyTypedReceivers), a class constant's closed lookup (`Registry[ :x ]` reaching its `def self.[]`); Python's
+    // receiver evidence (`self` in a class and its bases, a typed parameter or local, a constructed receiver); and Rule 1
+    // with its base walk for `self`. Anything else — an untyped local, a literal, a parameter, an instance variable —
+    // is dropped HERE, before any tally: no edge, no hedge, no unresolved=/external=/declined= count, so an answer that
+    // holds no proven subscript is byte-identical to one built before this rule. The decision is never by name: no `[]`
+    // or `__getitem__` definition anywhere in the tree makes a site a call unless its receiver's class reaches it.
+    // A proven site then runs the ladder below as the call `recv.[]( k )` would (role Call on a copy): the same rules
+    // decide its candidates, so it lands where that call lands; the census leaves it out (pincensus.h's population).
+    Reference                subscriptCall;            // the site as the call it runs (role Call), reused per proven subscript
+    std::vector<NodeId>      subscriptCand;            // scratch: what the proof found (the ladder recomputes it)
+    CallDispositionCounts    subscriptDispositions {}; // a proven subscript's tally: outside the census's call population
+    // Python: `Registry[ k ]` / `cls[ k ]` subscripts the CLASS object, which runs its metaclass's `__getitem__` (or the
+    // class's `__class_getitem__`), never the instance method receiver evidence would read a class-name receiver's call as.
+    const auto subscriptOnClassObject = [ & ]( const Reference& r ) -> bool
+    {
+        const ReceiverEvidence::Chain ch = ReceiverEvidence::chainOf( r );
+        bool isStatic = false, superOnly = false;
+        return ch.valid && ch.path.empty() && ch.ctor.empty() && ( ch.root == "cls" || ( !recvEv.rootClass( r, ch, isStatic, superOnly ).empty() && isStatic ) );
+    };
+    const auto subscriptOperatorProven = [ & ]( const Reference& r ) -> bool
+    {
+        EXPECTS( r.role == RefRole::Call, "the proof reads the site as the call it runs" );
+        if( r.fromSymbol == kNoNode || !byName.contains( r.calleeName ) )
+        {
+            return false;   // no caller node, or no definition of the operator method anywhere: nothing to prove
+        }
+        subscriptCand.clear();
+        const std::string& scope           = callerSelfScope( ing, r );
+        bool               rubySelfDecided = false;
+        if( r.lang == Lang::Ruby )
+        {
+            const RubySideAnswer self = rubyClasses.selfCall( r );
+            rubySelfDecided           = self.side.has_value();
+            if( rubySelfDecided && narrowTo( self.hit, r, subscriptCand ) )
+            {
+                return true;
+            }
+            if( const std::string* typed = rubyTypes.classOf( r ); typed != nullptr )
+            {
+                const RubySideAnswer built = rubyClasses.typedLookup( r, *typed );
+                return ( built.side && narrowTo( built.hit, r, subscriptCand ) )
+                    || narrowTo( built.side ? rubyClasses.onSide( rubyTypes.lookup( r, *typed ), *built.side ) : rubyTypes.lookup( r, *typed ), r, subscriptCand );
+            }
+            if( const RubyClosedLookup closed = rubyClosedLookup( r, rubyTypes, rubyClasses ); closed.closed )
+            {
+                return narrowTo( closed.hit, r, subscriptCand );
+            }
+            if( r.recv == RecvKind::ThisObj && RubySelfReach::judges( r, scope ) )
+            {
+                const std::string& key = rubyReach.selfOf( ing, r );
+                for( NodeId c : byName.find( r.calleeName )->second )
+                {
+                    if( langCompatible( ing.symbols[ c ].lang, r.lang ) && sameRoot( c, r.fileId ) && rubyTop.proves( key, c ) )
+                    {
+                        return true;   // Ruby's own lookup on self reaches it (an included module's `def []`)
+                    }
+                }
+            }
+        }
+        else if( !subscriptOnClassObject( r ) && recvEv.narrow( r ) )
+        {
+            return true;   // a stated class: `self` in a class or its bases, a typed parameter or local, a constructed receiver
+        }
+        if( r.recv != RecvKind::ThisObj || rubySelfDecided )
+        {
+            return false;
+        }
+        return narrowTo( narrower.rule1ClassMember( r, scope ), r, subscriptCand )
+            || narrowTo( narrower.rule1BaseWalk( r, scope, r.lang == Lang::Ruby ? rubyUp : chaUp, chaUpDeclared ), r, subscriptCand );
+    };
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/3: resolve loop (per reference)" );
-    for( const Reference& r : ing.references )
+    for( siteIndex = 0; siteIndex < ing.references.size(); ++siteIndex )
     {
+        const Reference& site = ing.references[ siteIndex ];
+        // An element access is a call only where its receiver's class is proven (subscriptOperatorProven above); the
+        // rest of the loop reads it as that call.
+        const bool subscript = site.role == RefRole::Subscript;
+        if( subscript )
+        {
+            subscriptCall      = site;
+            subscriptCall.role = RefRole::Call;
+            if( !subscriptOperatorProven( subscriptCall ) )
+            {
+                continue;
+            }
+        }
+        const Reference& r = subscript ? subscriptCall : site;
         // inheritance / doc-mention / HAS-A → not a call. ABS-3: read/write/import use-sites are ALSO excluded
         // here — they live only in the use-site index, NEVER in the call graph CSR, so PageRank and the default
         // ranked map are unchanged by them (G5). Role Macro (the macro-edges round) IS admitted beside Call: an
@@ -7188,10 +7341,20 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // From here on every exit names its disposition and the tally counts it when the iteration ends,
         // whichever `continue` ends it. An exit that names nothing is counted Unaccounted (DispositionTally).
         CallDisposition        disposition = CallDisposition::Unaccounted;
-        const DispositionTally tally{ disposition, g.callDispositions };
+        const DispositionTally tally{ disposition, subscript ? subscriptDispositions : g.callDispositions };
         if( r.fromSymbol == kNoNode )
         {
             disposition = CallDisposition::FileScope;   // no caller node for an edge; the use-site index still lists the site
+            continue;
+        }
+        if( r.role == RefRole::Inert )
+        {
+            // The syntax is a call candidate, but quoted AST cannot execute it. Count the declined
+            // site on its caller; do not intern target candidates, since it could reach none of them.
+            ++g.declinedOut[ r.fromSymbol ];
+            ++g.inertDeclinedCalls;
+            g.inertDeclinedCaller.push_back( r.fromSymbol );   // no declinedSite* record: no candidate list, no decline site
+            disposition = CallDisposition::Declined;
             continue;
         }
         const auto it = byName.find( r.calleeName );
@@ -7537,8 +7700,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 disposition = vetoExternal( r );
                 continue;
             }
-            ++g.declinedOut[ r.fromSymbol ];
-            internDeclinedList( g, declinedListsByHash, std::span<const NodeId>( rubyReachable.data(), rubyReachable.size() ) );
+            recordDecline( r, std::span<const NodeId>( rubyReachable.data(), rubyReachable.size() ), DeclinedSiteKind::RubyNew );
             disposition = CallDisposition::Declined;
             continue;
         }
@@ -7733,8 +7895,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                     : RubyCut::Unchanged;
         if( rubyCut == RubyCut::Declined )
         {
-            ++g.declinedOut[ r.fromSymbol ];   // in reach, but on the other side of self: no edge, and no claim it is outside
-            internDeclinedList( g, declinedListsByHash, std::span<const NodeId>( rubyReachable.data(), rubyReachable.size() ) );
+            // in reach, but on the other side of self: no edge, and no claim it is outside
+            recordDecline( r, std::span<const NodeId>( rubyReachable.data(), rubyReachable.size() ), DeclinedSiteKind::RubySide );
             disposition = CallDisposition::Declined;
             continue;
         }
@@ -7865,8 +8027,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             cand.swap( filtScratch );
             if( cut == RubyCut::Declined )
             {
-                ++g.declinedOut[ r.fromSymbol ];
-                internDeclinedList( g, declinedListsByHash, cand );
+                recordDecline( r, cand, DeclinedSiteKind::RubySide );
                 disposition = CallDisposition::Declined;
                 continue;
             }
@@ -8091,8 +8252,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                     }
                     else
                     {
-                        ++g.declinedOut[ r.fromSymbol ];
-                        internDeclinedList( g, declinedListsByHash, cand );
+                        recordDecline( r, cand, DeclinedSiteKind::Ladder );
                         if( stdIndex != StdMemberGate::kNotStd && !stdReceiverKeeps( stdRecv, r.fromSymbol, cand ) )
                         {
                             g.stdMemberDeclines.emplace_back( r.fromSymbol, stdIndex );   // the <stdm> line names it too
@@ -8153,8 +8313,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                     // DECLINED. Still no edge and still no guess — that precision rule is the ladder's point. What is gone is the silence: the decline counts on the
                     // caller (declinedOut → the header's declined=, the callees answer's declined_calls=) and records the candidate list it could equally have meant
                     // (internDeclinedList → the callers and impact answers' declined_calls=), so a count="0" there says a call was declined. test/declinecheck.sh (A), (B).
-                    ++g.declinedOut[ r.fromSymbol ];
-                    internDeclinedList( g, declinedListsByHash, cand );
+                    recordDecline( r, cand, DeclinedSiteKind::Ladder );
                     disposition = CallDisposition::Declined;
                     continue;
                 }
@@ -8391,9 +8550,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                     continue;
                 }
                 std::sort( gateRefused.begin(), gateRefused.end() );   // one sequence per set, as internDeclinedList keys it
-                ++g.declinedOut[ r.fromSymbol ];
                 ++g.gateDeclinedCalls;
-                internDeclinedList( g, declinedListsByHash, gateRefused );
+                recordDecline( r, gateRefused, DeclinedSiteKind::Builtin );
                 g.gateDeclinedTarget.resize( N, 0 );   // no-op after the first decline
                 for( const NodeId c : gateRefused )
                 {
@@ -8432,9 +8590,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             if( !gateRefused.empty() && byName >= StdMemberGate::kMinInTreeCandidates )
             {
                 std::sort( gateRefused.begin(), gateRefused.end() );   // one sequence per set, as internDeclinedList keys it
-                ++g.declinedOut[ r.fromSymbol ];
                 ++g.stdMemberDeclinedCalls;
-                internDeclinedList( g, declinedListsByHash, gateRefused );
+                recordDecline( r, gateRefused, DeclinedSiteKind::Std );
                 g.gateDeclinedTarget.resize( N, 0 );   // no-op after the first decline: a definition a declined call could have meant is not dead
                 for( const NodeId c : gateRefused )
                 {
@@ -8528,7 +8685,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // Recorded HERE and nowhere else: this is the exact point where the resolver has finished deciding
         // and is about to commit the edge, so the row states what was committed and what committed it.
         // pincensus.h::classifyPin owns the precedence rule; this site only reports the stage outcomes.
-        if( census )
+        if( census && !subscript )
         {
             // `narrowed` is passed WITHOUT the import pin: it is a latch this loop sets so the receiver
             // rules below cannot append more candidates, and on the ES-import path it says nothing about
@@ -8707,6 +8864,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     }
     DASSERT( verifyCsr( g.inEdges, N ) );   // structural, so CHECKED in debug and not promised in release — see Diagnostics.h
     DASSERT( verifyOffsetCsr( g.declinedListOff, g.declinedListCand, g.declinedListCallCount.size(), N ) );
+    // One site record per declined call (recordDecline): at most one per reference, so the uint32 record and reference
+    // indices cannot wrap, and the four columns stay parallel.
+    ENSURES( g.declinedSiteCaller.size() <= ing.references.size() && g.declinedSiteList.size() == g.declinedSiteCaller.size()
+             && g.declinedSiteRef.size() == g.declinedSiteCaller.size() && g.declinedSiteKind.size() == g.declinedSiteCaller.size() );
     }
 
     // inheritance edges (Lego view): isInherit refs (derived → base name) → implementors[base] += derived.
@@ -8834,6 +8995,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         v.erase( std::unique( v.begin(), v.end() ), v.end() );
     }
     fillImplementorBound( g, boundEdges );
+    g.rubyMainMixins = rubyMainObjectMixins( ing, rubyBases );
 
     // doc↔code edges: isDocLink refs (markdown `backtick` → code name) → mentions[codeDef] += docFileNode.
     // Resolve the name to real DEFINITIONS (body present), any file; stored OUT of the call graph so a doc
@@ -11606,6 +11768,8 @@ struct ImpactFileRow
     std::uint32_t syms     = 0;
     std::uint32_t minDepth = 0;
     std::uint32_t nameOnly = 0;   // fix27: of syms, the via="name" rows (impactRowNameOnly) — counted only on a multi-def selector
+    std::string   ofDefXml;       // attrib-multidef (defattrib.h attachRollupOfDef): the row's of_def=, "" on a one-group selector
+    std::string   ofDefJson;      // ... and its JSON key
 };
 
 struct ImpactFileRollup
@@ -13053,12 +13217,14 @@ inline GaugeClauses graphGaugeClauses( const Graph& g ) noexcept
 // it, so a collision costs a compare, never a wrong share. List numbers are first-seen in the sequential resolve loop, and the
 // map is only probed and inserted into — neither reaches output.
 //
+// Returns the call's list number (Graph::declinedSiteList), or kNoDeclinedList when the list could not be stored.
+//
 // DEGRADE: the offsets are uint32. A new list that would carry the candidate array past UINT32_MAX entries is not recorded:
-// the call stays counted on its caller (declinedOut, the header's declined=), and declined_calls= on the callers and impact
-// answers can under-count, as the counts_floor="1" those answers carry already allows. A declined set holds at least one
+// the call stays counted on its caller (declinedOut, the header's declined=) and keeps its site record with no list, and
+// declined_calls= on the callers and impact answers can under-count, as the counts_floor="1" those answers carry already allows. A declined set holds at least one
 // candidate — tier 3's two or more, or the ONE lone method the builtin-method name gate (BuiltinMethodGate) refused to
 // bind by name — so the list count never exceeds the entry count and the uint32 list numbers cannot wrap first.
-inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand )
+inline std::uint32_t internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand )
 {
     EXPECTS( !cand.empty(), "tier 3 declines a set it could not narrow to one; the builtin-method gate a non-empty set it admitted none of" );
     std::uint64_t     hash  = 14695981039346656037ull;   // the FNV-1a 64-bit offset basis
@@ -13075,19 +13241,21 @@ inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<st
         if( listCount == cand.size() && std::memcmp( g.declinedListCand.data() + listOffset, cand.data(), cand.size_bytes() ) == 0 )
         {
             ++g.declinedListCallCount[ listIndex ];
-            return;
+            return listIndex;
         }
     }
     constexpr std::size_t kOffsetCeiling = UINT32_MAX;
     if( cand.size() > kOffsetCeiling - g.declinedListCand.size() )
     {
         DISCLOSE( "graph: the declined candidate lists would overflow their uint32 offsets — this call's list is not recorded, so declined_calls= can under-count" );
-        return;
+        return kNoDeclinedList;
     }
-    bucket.push_back( std::uint32_t( g.declinedListCallCount.size() ) );
+    const std::uint32_t listIndex = std::uint32_t( g.declinedListCallCount.size() );
+    bucket.push_back( listIndex );
     g.declinedListCand.insert( g.declinedListCand.end(), cand.begin(), cand.end() );
     g.declinedListOff.push_back( std::uint32_t( g.declinedListCand.size() ) );
     g.declinedListCallCount.push_back( 1 );
+    return listIndex;
 }
 
 // declined_calls= on the callers and impact answers: how many tier-3 declines named at least one of `targets`
@@ -13138,6 +13306,95 @@ inline std::size_t declinedCallsMadeBy( const Graph& g, std::span<const NodeId> 
         }
     }
     return callCount;
+}
+
+// lane declined-sites: the site records (Graph::declinedSite*) behind the two counts above, for the <dc> rows
+// (declinedsites.h). declinedSitesMadeBy: the declines `sources` made — one record per call declinedCallsMadeBy counts.
+// The inert quoted sites (#380) `sources` made: counted in declinedOut, never a record (Graph::inertDeclinedCaller).
+inline std::size_t inertDeclinedMadeBy( const Graph& g, std::span<const NodeId> sources ) noexcept
+{
+    std::size_t n = 0;
+    if( g.inertDeclinedCaller.empty() )
+    {
+        return 0;   // no Elixir quote anywhere: the common case pays nothing
+    }
+    for( const NodeId caller : g.inertDeclinedCaller )
+    {
+        n += std::ranges::contains( sources, caller ) ? 1u : 0u;
+    }
+    return n;
+}
+
+inline std::vector<std::uint32_t> declinedSitesMadeBy( const Graph& g, std::span<const NodeId> sources )
+{
+    std::vector<std::uint32_t> sites;
+    if( g.declinedSiteCaller.empty() || sources.empty() )
+    {
+        ENSURES( declinedCallsMadeBy( g, sources ) == inertDeclinedMadeBy( g, sources ),
+                 "no record, so no declined call but an inert quoted site: every decline site writes one" );
+        return sites;
+    }
+    std::vector<char> isSource( g.declinedOut.size(), 0 );
+    for( const NodeId s : sources )
+    {
+        if( s < isSource.size() )
+        {
+            isSource[ s ] = 1;
+        }
+    }
+    for( std::uint32_t site = 0; site < g.declinedSiteCaller.size(); ++site )
+    {
+        if( isSource[ g.declinedSiteCaller[ site ] ] )
+        {
+            sites.push_back( site );
+        }
+    }
+    ENSURES( sites.size() + inertDeclinedMadeBy( g, sources ) == declinedCallsMadeBy( g, sources ),
+             "every declined call a source made has its record, and no other does; an inert quoted site has none" );
+    return sites;
+}
+
+// declinedSitesNaming: the declined calls whose stored candidate LIST holds one of `targets` — list membership, never the
+// called name (the language and root filters split one name into several lists) — one record per call declinedCallsNaming
+// counts. Which lists hold a target is decided once per list (a bit), then the records are one pass: O(lists + records).
+inline std::vector<std::uint32_t> declinedSitesNaming( const Graph& g, std::span<const NodeId> targets )
+{
+    std::vector<std::uint32_t> sites;
+    if( g.declinedListCallCount.empty() || targets.empty() )
+    {
+        return sites;
+    }
+    std::vector<char> isTarget( g.declinedOut.size(), 0 );
+    for( const NodeId t : targets )
+    {
+        if( t < isTarget.size() )
+        {
+            isTarget[ t ] = 1;
+        }
+    }
+    std::vector<char> listHolds( g.declinedListCallCount.size(), 0 );
+    std::size_t       callCount = 0;   // declinedCallsNaming's own sum, for the postcondition
+    for( std::size_t listIndex = 0; listIndex < listHolds.size(); ++listIndex )
+    {
+        for( std::uint32_t slot = g.declinedListOff[ listIndex ]; slot < g.declinedListOff[ listIndex + 1 ]; ++slot )
+        {
+            if( isTarget[ g.declinedListCand[ slot ] ] )
+            {
+                listHolds[ listIndex ] = 1;
+                callCount += g.declinedListCallCount[ listIndex ];
+                break;
+            }
+        }
+    }
+    for( std::uint32_t site = 0; site < g.declinedSiteList.size(); ++site )
+    {
+        if( const std::uint32_t list = g.declinedSiteList[ site ]; list != kNoDeclinedList && listHolds[ list ] )
+        {
+            sites.push_back( site );
+        }
+    }
+    ENSURES( sites.size() == callCount, "each stored list counts exactly the calls whose records name it" );
+    return sites;
 }
 
 // The callees answer's <stdm> line: of the declines `sources` made (declinedCallsMadeBy), the C++ calls named like a
