@@ -4259,6 +4259,78 @@ inline void captureJvmTypeImport( BindCtx& cx, TSNode n, std::uint32_t at )
     pushTypeImport( cx, at, ts_node_is_null( alias ) ? item : nodeTextOf( alias, cx.src ), item, whole );
 }
 
+// ── lexical scopes (fix round 2): where a class a bare result type names is nested ─────────────────────────────────────────
+// One Namespace per C++ `namespace` / TS `namespace` / `module` body (model.h LocalBindKind::Namespace): the index has no
+// symbol for them, yet a class inside one is out of scope outside it (receiverevidence.h CallResultTypes::visibleAt).
+inline void pushNamespace( BindCtx& cx, TSNode n, TSNode name, TSNode body )
+{
+    if( !ts_node_is_null( body ) )
+    {
+        cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = ts_node_start_byte( n ), .lang = cx.lang, .kind = LocalBindKind::Namespace,
+                                      .spanStart = ts_node_start_byte( body ), .spanEnd = ts_node_end_byte( body ), .var = importPathText( name, cx.src ) } );
+    }
+}
+
+// C++: a `namespace` body (an `inline` namespace is transparent: its members are the enclosing namespace's, so none is
+// recorded) and a namespace- or file-scope using-directive / using-declaration as a TypeImport spanning the scope it is
+// declared in — what a callee's bare result type names (receiverevidence.h CallResultTypes::cppUnqualifiedClass). A using in
+// a block reaches no declared result (a return type sits outside every body) and one in a class is a member re-export
+// (resolve.h buildUsingReexports): neither is recorded.
+inline void captureCppScopeFact( BindCtx& cx, TSNode n, const char* t )
+{
+    if( kindIs( t, "namespace_definition" ) )
+    {
+        const bool isInline = ts_node_child_count( n ) > 0 && kindIs( ts_node_type( ts_node_child( n, 0 ) ), "inline" );
+        if( !isInline )
+        {
+            pushNamespace( cx, n, fieldChild( n, NodeField::Name ), fieldChild( n, NodeField::Body ) );
+        }
+        return;
+    }
+    std::uint32_t spanStart = 0;
+    std::uint32_t spanEnd   = 0;
+    for( TSNode up = ts_node_parent( n ); !ts_node_is_null( up ); up = ts_node_parent( up ) )
+    {
+        const char* ut = ts_node_type( up );
+        if( kindIs( ut, "translation_unit" ) )
+        {
+            spanEnd = 0xFFFFFFFFu;
+            break;
+        }
+        if( kindIs( ut, "declaration_list" ) && !ts_node_is_null( ts_node_parent( up ) ) && kindIs( ts_node_type( ts_node_parent( up ) ), "namespace_definition" ) )
+        {
+            spanStart = ts_node_start_byte( up );
+            spanEnd   = ts_node_end_byte( up );
+            break;
+        }
+        if( kindIs( ut, "compound_statement" ) || kindIs( ut, "field_declaration_list" ) )
+        {
+            return;
+        }
+    }
+    bool   directive = false;
+    TSNode path{};
+    for( std::uint32_t i = 0, k = ts_node_child_count( n ); i < k; ++i )
+    {
+        const TSNode c = ts_node_child( n, i );
+        directive      = directive || ( !ts_node_is_named( c ) && kindIs( ts_node_type( c ), "namespace" ) );
+        path           = ts_node_is_named( c ) ? c : path;
+    }
+    std::string whole = importPathText( path, cx.src );
+    if( whole.starts_with( "::" ) )
+    {
+        whole.erase( 0, 2 );
+    }
+    if( spanEnd == 0 || whole.empty() )
+    {
+        return;
+    }
+    const std::string_view item = directive ? std::string_view{} : namesplit::afterLast( whole, "::" );
+    cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = ts_node_start_byte( n ), .lang = cx.lang, .kind = LocalBindKind::TypeImport,
+                                  .spanStart = spanStart, .spanEnd = spanEnd, .var = directive ? std::string( "*" ) : std::string( item ),
+                                  .importedName = whole, .typeName = std::string( item ) } );
+}
+
 // Rust `use` trees, flattened: `use a::b::C;`, `use a::{b::C, D as E, self, f::*};` — one TypeImport per name bound, the
 // path rooted at `prefix` (`a::` inside a group). `self` in a group binds the group's own module.
 inline void captureRustUseTree( BindCtx& cx, std::uint32_t at, TSNode node, const std::string& prefix, int depth )
@@ -5552,6 +5624,11 @@ inline void captureJsEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32
     {
         captureDeclaredReturnType( cx, n );   // (L) call-result typing: a TS return annotation (JS writes none)
     }
+    else if( cx.lang == Lang::TypeScript && ( kindIs( t, "internal_module" ) || kindIs( t, "module" ) ) )
+    {
+        pushNamespace( cx, n, fieldChild( n, NodeField::Name ), fieldChild( n, NodeField::Body ) );   // (L) fix round 2: `namespace a { … }`
+        return;
+    }
     const Lang             lang = cx.lang;
     const std::string_view src  = cx.src;
     if( kindIs( t, "type_parameters" ) )
@@ -5871,6 +5948,11 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
             }
             return true;
         } );
+    }
+    // (L) fix round 2: a C++ namespace body, a using-directive / using-declaration — the scope a bare result type resolves in
+    if( callResultFamilyOf( lang ) == CallResultFamily::Cpp && ( kindIs( t, "namespace_definition" ) || kindIs( t, "using_declaration" ) ) )
+    {
+        captureCppScopeFact( cx, n, t );
     }
     // (L) a C++ function's declared result (a definition, or a declaration such as a header's prototype)
     if( callResultFamilyOf( lang ) == CallResultFamily::Cpp && ( kindIs( t, "function_definition" ) || kindIs( t, "declaration" ) || kindIs( t, "field_declaration" ) ) )

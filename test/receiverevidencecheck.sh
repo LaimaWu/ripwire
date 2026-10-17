@@ -141,7 +141,13 @@
 #            exactly ONE in-tree class: its imports (Java/Kotlin single-type imports, TS named / `import type` imports, Rust
 #            `use`), its qualifier (Go import alias → an in-tree package; Rust crate/self/super/an in-tree crate or module;
 #            C++ an in-tree namespace, std refused), else its own file, then its package (Go/Java/Kotlin: the directory) or
-#            namespace (C++). An outside import, an outside qualifier, a TS global, a name that resolves nowhere or twice
+#            namespace (C++) — all in the callee's LEXICAL scope (fix round 2): a class nested in a class, an inline Rust
+#            `mod`, a Kotlin `object` or a TS/C++ `namespace` counts only where that scope holds the callee; a package or
+#            module contributes top-level classes only; a JVM member type the callee's class inherits is not resolved; a
+#            C++ unqualified result takes a using-declaration in force (its file or an included header) first, else a
+#            class whose namespace encloses the callee's or a using-directive in force names. A JVM class-name receiver
+#            the caller imports from outside (`import ext.Util; Util.open()` / `Util::open`) never binds the in-tree
+#            namesake as proven. An outside import, an outside qualifier, a TS global, a name that resolves nowhere or twice
 #            records NOTHING. The typed local carries that CLASS (not its name): a member call on it reaches that class's own
 #            members (C++: a class name another in-tree class shares types nothing — Rule 2 keys members by name).
 #            [P] RESOLVE (red before the lane); [N] near misses record NOTHING and stay as they were: an overloaded /
