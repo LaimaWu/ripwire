@@ -729,7 +729,7 @@ inline std::string bodySlotLegend( const ForLensHeaderParts& p, bool compact )
     return compact ? std::string( kForCompactLegendBodySlot ) : std::string( rw::kForBodySlotLegend ) + std::string( kForBodySlotRootClause );
 }
 inline constexpr std::string_view kForCompactLegendTail =
-    "; t p= file outside sigs (weaker), t sym= a file-page row: its top symbols, r= rank (gap = trimmed)";
+    "; t p= file outside sigs (weaker), t sym= its top symbols (a pointer, not the answer), r= rank (gap = trimmed)";
 // R2-AF (round 2, S4): the COMPACT dialect's `<hdr p= of=/>` clause — verbatim, round-2 amendment §R7.
 // 96 B, present-only like every clause in this dialect (appendCompactForLegend below).
 inline constexpr std::string_view kForCompactLegendHdr =

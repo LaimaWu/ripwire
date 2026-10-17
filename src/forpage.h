@@ -658,7 +658,9 @@ inline std::string forHdrRowsXml( const IngestResult& ing, const std::vector<For
 // One model and one renderer for the CLI --for (XML + JSON) and the MCP `for` twin. The tail lists, in this order:
 //   1. RANK rows (deep-tail d2, unchanged): the files of positive-score symbols NOT among the shown sigs rows, in the
 //      best-symbol projection of the lens's own (score desc, id asc) order — the files of trimmed rows first; at most
-//      kForFileTailShownCap; paths only (`<t p=…/>`). H2H-Graft lane 2: a row the ranked head did not show lands here.
+//      kForFileTailShownCap; each `<t p=… sym=…/>` with the file's top symbols by lens rank (tail-sym, train 30: the page
+//      row's own top[], so a rank row and a page row of one file name the same symbols). H2H-Graft lane 2: a row the ranked
+//      head did not show lands here.
 //   2. PAGE rows (FOLD C): page 0 of `--for=TASK --limit=40` (computeForFilePage, the same ranking and term evidence),
 //      minus the files already listed above, each with sym= (its top symbols by lens rank). The measured arm M4 appended
 //      this page to the answer: 6 of 6 predicted rows reached an R0-missing item; the rank rows stay because two graded rows
@@ -670,7 +672,7 @@ static_assert( kForFileTailPageRows == std::size_t( kForPageRowsDefault ), "the 
 struct FileTail
 {
     std::vector<std::string>  paths;     // printed order: the rank rows, then the page rows (display form, R-R)
-    std::vector<std::string>  syms;      // a page row's sym= (comma-joined, unescaped); "" on a rank row
+    std::vector<std::string>  syms;      // a row's sym= (comma-joined, unescaped): the file's top lens symbols, either row kind
     std::vector<std::size_t>  pageNext;  // per row: the page offset continuing a tail that ends at it (0 on a rank row
                                          //   before any page row: the whole page continues it)
     std::size_t               total = 0; // every positive-score file: the page's total=
@@ -678,11 +680,38 @@ struct FileTail
     std::string               task;      // the --for task: a cut tail's next= names the page
 };
 
-// 1. the rank rows: the best-symbol projection of the lens order, outside the shown head's files; marks each file it lists
+// a file page row's sym= value: the file's top symbols by lens rank (row.top[], at most kForPageSymNameCount), comma-joined,
+// unescaped — "" for a row with none. The ONE spelling both tail row kinds print.
+inline std::string forFileRowSymNames( const IngestResult& ing, const ForFileRow& row )
+{
+    std::string sym;
+    for( std::size_t k = 0; k < kForPageSymNameCount && row.top[k] != kNoNode; ++k )
+    {
+        ASSUME( row.top[k] < ing.symbols.size(), "forFileRowSymNames: a page row names a symbol outside the index" );
+        sym += k > 0 ? "," : "";
+        sym += ing.symbols[ row.top[k] ].name;
+    }
+    return sym;
+}
+
+// 1. the rank rows: the best-symbol projection of the lens order, outside the shown head's files; marks each file it lists.
+//    tail-sym (train 30): each row's sym= is that file's page row's top symbols (`page` holds EVERY positive-score file and
+//    a rank row's file has a positive-score symbol, so its row exists) — reused from computeForFilePage, never recomputed.
+//    The same (score desc, id asc) walk opens the page row at the file's best symbol, so the first name is the symbol that
+//    ranked this row; the rest are the file's next symbols by lens rank. A pointer into the file, not the answer.
 inline void fileTailRankRows( FileTail& out, std::vector<char>& listed, const IngestResult& ing, const std::vector<float>& rank,
-                              const std::vector<NodeId>& headIds, std::string_view rootArg )
+                              const ForFilePage& page, const std::vector<NodeId>& headIds, std::string_view rootArg )
 {
     const std::size_t F = ing.files.size();
+    constexpr std::uint32_t kNoRow = UINT32_MAX;
+    std::vector<std::uint32_t> pageRowOf( F, kNoRow );   // fileId -> its page row (positive-score files only)
+    for( std::size_t r = 0; r < page.rows.size(); ++r )
+    {
+        if( page.rows[r].fileId < F )
+        {
+            pageRowOf[ page.rows[r].fileId ] = std::uint32_t( r );
+        }
+    }
     std::vector<char> inHead( F, 0 );
     for( NodeId sid : headIds )
     {
@@ -707,7 +736,9 @@ inline void fileTailRankRows( FileTail& out, std::vector<char>& listed, const In
         }
         listed[f] = 1;
         out.paths.push_back( lensRowPath( ing, f, rootArg ) );
-        out.syms.emplace_back();
+        ASSUME( pageRowOf[f] == kNoRow || page.rows[ pageRowOf[f] ].top[0] == order[k],
+                "fileTailRankRows: the page row of a rank row's file does not open at the symbol that ranked it" );
+        out.syms.push_back( pageRowOf[f] != kNoRow ? forFileRowSymNames( ing, page.rows[ pageRowOf[f] ] ) : std::string() );
         out.pageNext.push_back( 0 );
     }
 }
@@ -726,13 +757,7 @@ inline void fileTailPageRows( FileTail& out, std::vector<char>& listed, const In
         }
         listed[ row.fileId ] = 1;
         out.paths.push_back( lensRowPath( ing, row.fileId, rootArg ) );
-        std::string sym;
-        for( std::size_t k = 0; k < kForPageSymNameCount && row.top[k] != kNoNode; ++k )
-        {
-            sym += k > 0 ? "," : "";
-            sym += ing.symbols[ row.top[k] ].name;
-        }
-        out.syms.push_back( std::move( sym ) );
+        out.syms.push_back( forFileRowSymNames( ing, row ) );
         out.pageNext.push_back( r + 1 );
     }
 }
@@ -743,8 +768,9 @@ inline FileTail computeFileTail( const IngestResult& ing, const std::vector<floa
     FileTail          out;
     std::vector<char> listed( ing.files.size(), 0 );
     out.task = std::string( task );
-    fileTailRankRows( out, listed, ing, rank, headIds, rootArg );
-    fileTailPageRows( out, listed, ing, computeForFilePage( ing, rank, ev ), rootArg );
+    const ForFilePage page = computeForFilePage( ing, rank, ev );   // one ranking feeds both row kinds' sym=
+    fileTailRankRows( out, listed, ing, rank, page, headIds, rootArg );
+    fileTailPageRows( out, listed, ing, page, rootArg );
     ENSURES( out.paths.size() == out.syms.size() && out.paths.size() == out.pageNext.size() && out.paths.size() <= out.total,
              "computeFileTail: the rows, their sym= and their continuations disagree, or more rows than positive-score files" );
     return out;
@@ -778,7 +804,7 @@ inline std::string fileTailNextInvocation( const FileTail& t, std::size_t shown 
     return forPageInvocation( t.task, kForPageRowsDefault, int( offset ) );
 }
 
-// The XML shape: `<tail total="T" shown="K" capped="0|1"[ next="…"]><t p="…"/>…<t p="…" sym="…"/>…</tail>` — §P8 vocabulary, always
+// The XML shape: `<tail total="T" shown="K" capped="0|1"[ next="…"]><t p="…" sym="…"/>…</tail>` — §P8 vocabulary, always
 // emitted (a total of 0 means genuinely none remain, never not-computed — the B1.4 rule for elements). next= rides a cut
 // tail only (shown < total). `shownCap` lets the explicit-budget caller serve fewer rows than were collected.
 inline std::string renderFileTailXml( const FileTail& t, std::size_t shownCap, std::vector<char>& esc )
@@ -806,7 +832,7 @@ inline std::string renderFileTailXml( const FileTail& t, std::size_t shownCap, s
 }
 
 // The JSON twin: `"tail":{"total":T,"shown":K[,"next":"…"],"files":[…],"sym":[…]}` (the caller supplies the leading comma).
-// "sym" is index-aligned with "files", "" on a rank row (additive: a reader of the paths-only shape keeps reading "files").
+// "sym" is index-aligned with "files" (additive: a reader of the paths-only shape keeps reading "files").
 inline std::string renderFileTailJson( const FileTail& t, std::size_t shownCap )
 {
     const std::size_t shown = std::min( shownCap, t.paths.size() );

@@ -15,6 +15,17 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — `--for` tail rank rows name their file's top symbols
+
+The `<tail>` of a `--for` answer starts with up to 24 rank rows: the best-ranked files outside the shown signature rows.
+They used to print a bare path (`<t p="lib/schema-controller.js"/>`), while the page rows after them already carried
+`sym=`. A rank row now carries `sym=` too, with the same names the file page (`--for=TASK --limit=40`) prints for that
+file: its top 3 symbols by lens rank, the first being the symbol that ranked the row. A file with fewer symbols names
+only those. The names are a pointer into the file, not the answer; the legend says so. The JSON twin's `"sym"` array and
+the MCP `for` tail carry the same names. Nothing else in the answer moves: on 120 in-sample `--for` cells (60 questions,
+default and `--limit=100000`) every byte outside the tail, `est_tokens=` and the legend is unchanged, and the answers grow
+by 1.2 KB on average at the default limit (at most 1.9 KB).
+
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
 Ruby's `include`/`extend`/`prepend` are now captured by `queries/ruby/tags.scm` as `@reference.mixin` and turned into

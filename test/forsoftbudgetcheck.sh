@@ -573,13 +573,16 @@ else no "(P3) MCP explore budget_tokens=300: over_ceiling='$EOC'"; fi
 
 # ── ROUND C (owner decisions 2026-10-14) ─────────────────────────────────────────────────────────────────────
 # FOLD C: the default answer's <tail> carries the file page's first page (`--for=TASK --limit=40`): after the rank rows
-# (paths only: the positive-score files outside the shown sigs rows), the page's first 40 rows not already listed, each with
-# sym=; total= every positive-score file (the page's total=); a cut tail's next= is the page from its first unprinted page row.
+# (the positive-score files outside the shown sigs rows; sym= too since tail-sym, train 30), the page's first 40 rows not
+# already listed, each with sym=; total= every positive-score file (the page's total=); a cut tail's next= is the page from its first unprinted page row.
 # RESERVE SECTIONS FIRST: under an explicit --token-budget the trailing sections (<hops>, <lego>, <compose>, the tail) keep at
 # least the share the retired hard ceiling gave them, and the rows past its cut fill what they leave of T (ST above reads T - U).
 cat > "$TMP/tail.py" <<'PY'
-# tail.py FILE MODE: the <tail> of an answer — "rank" (paths of rows without sym=), "page" (p<TAB>sym of rows with sym=),
-# "all" (p<TAB>sym), "attrs" (total shown capped next). exit 3: no <tail>.
+# tail.py FILE MODE [PAGE]: the <tail> of an answer — "rank" (paths of the rank rows), "page" (p<TAB>sym of the page rows),
+# "ranksym" (p<TAB>sym of the rank rows), "all" (p<TAB>sym), "attrs" (total shown capped next). exit 3: no <tail>.
+# tail-sym (train 30): rank rows carry sym= too, so the split is structural against PAGE (the same task at --limit=40):
+# rank rows = the SHORTEST prefix after which the rows are exactly PAGE's rows not in it, in page order (a capped tail: a
+# prefix of them); no such prefix → "SPLIT-FAIL" (and the arm comparing it fails).
 import re, sys, html
 s = open( sys.argv[ 1 ] ).read()
 m = re.search( r'<tail\b([^>]*)>(.*?)</tail>', s, re.S )
@@ -588,9 +591,20 @@ a = dict( re.findall( r'(\w+)="([^"]*)"', m.group( 1 ) ) )
 rows = [ ( html.unescape( p ), html.unescape( y ), bool( h ) ) for p, h, y in re.findall( r'<t p="([^"]*)"( sym="([^"]*)")?/>', m.group( 2 ) ) ]
 mode = sys.argv[ 2 ]
 if mode == "attrs": print( a.get( "total", "" ), a.get( "shown", "" ), a.get( "capped", "" ), html.unescape( a.get( "next", "" ) ) )
-for p, y, h in rows:
-    if mode == "rank" and not h: print( p )
-    if mode == "page" and h: print( p + "\t" + y )
+k = 0
+if mode in ( "rank", "page", "ranksym" ):
+    page = [ html.unescape( q ) for q in re.findall( r'<f p="([^"]*)"', open( sys.argv[ 3 ] ).read() ) ]
+    paths = [ p for p, _y, _h in rows ]
+    k = -1
+    for j in range( len( paths ) + 1 ):
+        seen = set( paths[ :j ] ); rem = [ q for q in page if q not in seen ]
+        if paths[ j: ] == ( rem[ :len( paths ) - j ] if a.get( "capped" ) == "1" else rem ):
+            k = j; break
+    if k < 0: print( "SPLIT-FAIL" ); sys.exit( 0 )
+for i, ( p, y, h ) in enumerate( rows ):
+    if mode == "rank" and i < k: print( p )
+    if mode == "ranksym" and i < k: print( p + "\t" + y )
+    if mode == "page" and i >= k: print( p + "\t" + y )
     if mode == "all": print( p + "\t" + y )
 PY
 cat > "$TMP/page.py" <<'PY'
@@ -604,8 +618,9 @@ PY
 # (C1) the default answer's tail: rank rows outside the shown head, then page 0 of the file page, sym= equal
 if python3 "$TMP/tail.py" "$TMP/def.xml" attrs > "$TMP/c1.attrs"; then
     read -r C1T C1S C1C C1N < "$TMP/c1.attrs"
-    python3 "$TMP/tail.py" "$TMP/def.xml" rank > "$TMP/c1.rank"; python3 "$TMP/tail.py" "$TMP/def.xml" page > "$TMP/c1.page"
-    "$BIN" "$CORPUS" --for="$Q" --limit=40 "$CF" 2>/dev/null | python3 "$TMP/page.py" "$TMP/c1.rank" > "$TMP/c1.want"
+    "$BIN" "$CORPUS" --for="$Q" --limit=40 "$CF" 2>/dev/null > "$TMP/c1.pagexml"
+    python3 "$TMP/tail.py" "$TMP/def.xml" rank "$TMP/c1.pagexml" > "$TMP/c1.rank"; python3 "$TMP/tail.py" "$TMP/def.xml" page "$TMP/c1.pagexml" > "$TMP/c1.page"
+    python3 "$TMP/page.py" "$TMP/c1.rank" < "$TMP/c1.pagexml" > "$TMP/c1.want"
     C1PT="$( head -1 "$TMP/c1.want" | sed 's/total=//' )"; sed -i.bak '1d' "$TMP/c1.want"
     C1DUP="$( python3 - "$TMP/def.xml" "$TMP/c1.rank" <<'PY'
 import re, sys
@@ -613,11 +628,22 @@ head = set( re.findall( r'<d [^>]*?\bp="([^"]*)"', open( sys.argv[ 1 ] ).read() 
 print( sum( 1 for p in open( sys.argv[ 2 ] ).read().split( "\n" ) if p in head ) )
 PY
 )"
-    if [ -s "$TMP/c1.page" ] && cmp -s "$TMP/c1.page" "$TMP/c1.want" && [ "$C1T" = "$C1PT" ] && [ "$C1DUP" = 0 ] && [ "$( lines "$TMP/c1.rank" )" -le 24 ]; then
+    if [ -s "$TMP/c1.page" ] && cmp -s "$TMP/c1.page" "$TMP/c1.want" && [ "$C1T" = "$C1PT" ] && [ "$C1DUP" = 0 ] && [ "$( lines "$TMP/c1.rank" )" -le 24 ] \
+       && ! grep -q SPLIT-FAIL "$TMP/c1.rank"; then
         ok "(C1) default tail: $( lines "$TMP/c1.rank" ) rank rows outside the head, then the page's first rows ($( lines "$TMP/c1.page" ), sym= equal); total=$C1T == the page's"
     else
         no "(C1) default tail: page rows $( lines "$TMP/c1.page" ) vs the page's $( lines "$TMP/c1.want" ), total=$C1T vs page $C1PT, $C1DUP rank row(s) in the head"
     fi
+    # (C1t) tail-sym (train 30): every rank row names sym=, the file page's own sym= for that file (a pointer, reused)
+    C1TS="$( python3 "$TMP/tail.py" "$TMP/def.xml" ranksym "$TMP/c1.pagexml" | python3 -c '
+import html, re, sys
+want = { html.unescape( p ): html.unescape( y ) for p, y in re.findall( r"<f p=\"([^\"]*)\"[^>]*? sym=\"([^\"]*)\"", open( sys.argv[ 1 ] ).read() ) }
+rows = [ l.rstrip( "\n" ).split( "\t" ) for l in sys.stdin if "\t" in l ]
+print( len( rows ), sum( 1 for p, y in rows if not y or want.get( p ) != y ) )' "$TMP/c1.pagexml" )"
+    case "$C1TS" in
+        "0 "*|*" "[1-9]*) no "(C1t) tail-sym: rank rows / rows whose sym= is missing or differs from the page's = $C1TS" ;;
+        *)                ok "(C1t) tail-sym: all $( printf '%s' "$C1TS" | cut -d' ' -f1 ) rank rows carry the file page's sym= for their file" ;;
+    esac
     # (C2) a capped tail's next= is the page from its first unprinted page row, and it runs (rc 0, a <files> page at that offset)
     if [ "$C1C" = 1 ] && [ "$C1S" -lt "$C1T" ]; then
         C2OFF="$( printf '%s' "$C1N" | sed -nE "s/^--for='.*' --limit=40( --offset=([0-9]+))?\$/\2/p" )"
