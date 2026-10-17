@@ -1015,6 +1015,25 @@ inline constexpr SafeDeleteRiskReading kSafeDeleteRiskReadings[] = {
     { "possible-callers", "possible-callers: zero proven callers and zero uses, but declined_calls=K call sites (the <dc> rows) could have "
                           "meant this definition; not a safety reading. " },
 };
+// The risk= value in force, in precedence order. Without evidence: unmodelled (this kind's uses are not indexed), then
+// possible-callers (gates review Q3: never none-found beside a declined possible caller), then hedged (IX-3: never
+// none-found when a name template can name it), then none-found; with evidence: untested-radius, else uses-exist.
+inline const char* safeDeleteRisk( bool anyEvidence, bool usesFloor, bool declined, bool patterns, bool untestedRadius ) noexcept
+{
+    if( anyEvidence )
+    {
+        return untestedRadius ? "untested-radius" : "uses-exist";
+    }
+    if( usesFloor )
+    {
+        return "unmodelled";
+    }
+    if( declined )
+    {
+        return "possible-callers";
+    }
+    return patterns ? "hedged" : "none-found";
+}
 inline const char* safeDeleteRiskSentence( std::string_view risk ) noexcept
 {
     const auto it  = std::ranges::find( kSafeDeleteRiskReadings, risk, &SafeDeleteRiskReading::risk );
@@ -1264,12 +1283,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     // lane declined-sites: declined calls whose candidate lists hold a definition (as --callers counts and lists them) — the
     // <dc> rows, file-first, cut at the callers verb's own cap (one constant, gates review Q6).
     const auto [ sdDeclinedCalls, sdDeclinedSites ] = rw::declinedCallsAndSites( ing, g, defs, /*wantCallers=*/true );
-    const char* risk        = ( !anyEvidence && usesFloor )                   ? "unmodelled"
-                            : !anyEvidence && sdDeclinedCalls > 0             ? "possible-callers"   // gates review Q3: never none-found beside a declined possible caller
-                            : !anyEvidence && !sdPatterns.empty()             ? "hedged"             // IX-3: never none-found when a template can name it
-                            : !anyEvidence                                    ? "none-found"
-                            : ( !reach.empty() && radiusTested == 0 )         ? "untested-radius"
-                            :                                                   "uses-exist";
+    const char* risk        = safeDeleteRisk( anyEvidence, usesFloor, sdDeclinedCalls > 0, !sdPatterns.empty(), !reach.empty() && radiusTested == 0 );
 
     std::vector<char> esc;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };

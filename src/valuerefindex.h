@@ -99,14 +99,7 @@ public:
             }
             else if( r.role == RefRole::Pattern )
             {
-                if( scopeOf( r ) == 'w' )
-                {
-                    m_patternsWide.push_back( i );   // IX-3: a template with no usable literal side — a count, never a row
-                }
-                else
-                {
-                    m_patterns.push_back( i );
-                }
+                ( scopeOf( r ) == 'w' ? m_patternsWide : m_patterns ).push_back( i );   // IX-3: 'w' = too wide, a count, never a row
             }
             else if( r.role == RefRole::Through )
             {
@@ -224,25 +217,7 @@ public:
     // receiver is unnarrowed. A MAY-dispatch clue matched by name: never a call.
     std::vector<std::uint32_t> patternSitesTo( std::span<const NodeId> defs ) const
     {
-        std::vector<std::uint32_t> out;
-        for( const NodeId d : defs )
-        {
-            const Symbol& s = m_ing.symbols[d];
-            if( !isClassMember( s ) )
-            {
-                continue;
-            }
-            for( const std::uint32_t i : m_patterns )
-            {
-                if( patternReaches( m_ing.references[i], s ) )
-                {
-                    out.push_back( i );
-                }
-            }
-        }
-        std::ranges::sort( out );
-        out.erase( std::ranges::unique( out ).begin(), out.end() );
-        return out;
+        return sitesNaming( m_patterns, defs );   // m_patterns is in reference order, so the result is too, once each
     }
     // The class members Pattern site `refIdx` can name, in symbol order (the dispatcher's --callees side).
     std::vector<NodeId> patternTargets( std::uint32_t refIdx ) const
@@ -263,29 +238,19 @@ public:
     std::vector<std::uint32_t> patternSitesIn( std::span<const NodeId> fns ) const
     {
         std::vector<std::uint32_t> out;
-        for( const std::uint32_t i : m_patterns )
-        {
-            if( std::ranges::find( fns, m_ing.references[i].fromSymbol ) != fns.end() )
-            {
-                out.push_back( i );
-            }
-        }
+        std::ranges::copy_if( m_patterns, std::back_inserter( out ), [ & ]( std::uint32_t i ) { return std::ranges::find( fns, m_ing.references[i].fromSymbol ) != fns.end(); } );
         return out;
+    }
+    // The answer's Pattern rows: callers — the sites that may name `defs` and the too-wide count; callees — the sites in them.
+    std::pair<std::vector<std::uint32_t>, std::size_t> patternRows( std::span<const NodeId> defs, bool callersSide ) const
+    {
+        return callersSide ? std::pair( patternSitesTo( defs ), patternTooWideTo( defs ) ) : std::pair( patternSitesIn( defs ), std::size_t( 0 ) );
     }
     // Too-wide templates (`f"_{m}"`: no literal side of kVrPatternMinLiteral identifier characters) whose written sides
     // could name one of `defs`: pattern_too_wide=, a count beside the rows, never a row of its own.
     std::size_t patternTooWideTo( std::span<const NodeId> defs ) const
     {
-        std::size_t n = 0;
-        for( const std::uint32_t i : m_patternsWide )
-        {
-            n += std::ranges::any_of( defs, [ & ]( NodeId d )
-            {
-                const Symbol& s = m_ing.symbols[d];
-                return isClassMember( s ) && patternReaches( m_ing.references[i], s );
-            } ) ? 1u : 0u;
-        }
-        return n;
+        return sitesNaming( m_patternsWide, defs ).size();
     }
 
     // The resolved targets of value reference `refIdx` (an index into ing.references).
@@ -541,6 +506,16 @@ private:
         }
     }
 
+    // The Pattern sites of `sites` (reference order) that can name at least one class member of `defs`, in that order.
+    std::vector<std::uint32_t> sitesNaming( const std::vector<std::uint32_t>& sites, std::span<const NodeId> defs ) const
+    {
+        std::vector<std::uint32_t> out;
+        std::ranges::copy_if( sites, std::back_inserter( out ), [ & ]( std::uint32_t i )
+        {
+            return std::ranges::any_of( defs, [ & ]( NodeId d ) { return isClassMember( m_ing.symbols[d] ) && patternReaches( m_ing.references[i], m_ing.symbols[d] ); } );
+        } );
+        return out;
+    }
     // Can Pattern reference `r` name class member `s`? Same value-ref family; the literal sides around a non-empty hole;
     // a self/this/cls receiver inside a class keeps only that class's family.
     bool patternReaches( const Reference& r, const Symbol& s ) const

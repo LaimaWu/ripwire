@@ -338,8 +338,7 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
         const std::optional<ValueRefIndex> local = valueIndex == nullptr ? std::optional<ValueRefIndex>( std::in_place, ing ) : std::nullopt;
         const ValueRefIndex&               vri   = valueIndex != nullptr ? *valueIndex : *local;
         out.valueRefs = wantCallers ? valueRefCallerRows( ing, vri, out.matches ) : valueRefCalleeRows( ing, vri, out.matches );
-        out.patternSites   = wantCallers ? vri.patternSitesTo( out.matches ) : vri.patternSitesIn( out.matches );
-        out.patternTooWide = wantCallers ? vri.patternTooWideTo( out.matches ) : 0;
+        std::tie( out.patternSites, out.patternTooWide ) = vri.patternRows( out.matches, wantCallers );
     }
     if( wantCallers )
     {
