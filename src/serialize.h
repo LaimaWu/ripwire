@@ -1120,8 +1120,8 @@ inline constexpr std::size_t kForFileTailShellReserve = 48;
 inline constexpr std::string_view kForFileTailLegend =
     "; tail: file-grain rows, WEAKER evidence than the ranked rows: first the positive-score files NOT among the "
     "shown sigs rows, the files of trimmed rows first, best-symbol rank order; then the file page's first 40 rows "
-    "not listed above, file-first (the IDF share of the query's subtokens its top 8 symbols cover); t p= the file, "
-    "sym= its top symbols by lens rank on either kind (a pointer into the file, not the answer); "
+    "not listed above, file-first (the IDF share of the query's subtokens its top 8 symbols cover); "
+    "sym= its top symbols by lens rank (a pointer, not the answer); "
     "total=every positive-score file, shown=printed, capped=1 when they differ, next= the page from its first unprinted row. "
     "r= on a ranked row is its 1-based rank in this lens ranking, rows in r= order, p= the file (a gap = a budget-trimmed row)";
 

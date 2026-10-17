@@ -19,12 +19,17 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 The `<tail>` of a `--for` answer starts with up to 24 rank rows: the best-ranked files outside the shown signature rows.
 They used to print a bare path (`<t p="lib/schema-controller.js"/>`), while the page rows after them already carried
-`sym=`. A rank row now carries `sym=` too, with the same names the file page (`--for=TASK --limit=40`) prints for that
+`sym=`. A rank row now carries `sym=` too, with the same names the file page (`--for=TASK --limit=N`) prints for that
 file: its top 3 symbols by lens rank, the first being the symbol that ranked the row. A file with fewer symbols names
 only those. The names are a pointer into the file, not the answer; the legend says so. The JSON twin's `"sym"` array and
-the MCP `for` tail carry the same names. Nothing else in the answer moves: on 120 in-sample `--for` cells (60 questions,
-default and `--limit=100000`) every byte outside the tail, `est_tokens=` and the legend is unchanged, and the answers grow
-by 1.2 KB on average at the default limit (at most 1.9 KB).
+the MCP `for` tail carry the same names. Without `--token-budget`, nothing else in the answer moves: on 120 in-sample
+`--for` cells (60 questions, default and `--limit=100000`) every byte outside the tail, `est_tokens=` and the legend is
+unchanged, and the answers grow by 1.2 KB on average at the default limit (at most 1.9 KB). Under `--token-budget=N` the
+tail's names count against the budget, so a few of the lowest-ranked signature rows can move out of `<sigs>` and into the
+tail: on 6 questions at budgets 4000/6000/8000/12000, 5 of 24 points cut rows (tmux-02 at 6000: 40 to 32 rows,
+starlette-11 at 6000: 39 to 33, fastify-13 at 8000: 38 to 31, mdbook-13 at 6000: 32 to 27, fzf-11 at 6000: 40 to 37).
+Each cut is disclosed in the answer (`<sigs shown= total= capped="1" next_offset=>` and `dropped_positive=`), and the
+`<sigs>` `next=` and `--offset=` both bring every cut row back.
 
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 

@@ -3852,7 +3852,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             // the tail is charged at its RESERVE — its share, capped at the whole render of the head-scoped tail (forFileTail: the
             // rows outside the 40-row surface, the same at every N) — not at its filled bytes nor at the cut-scoped tail's size:
-            // both step with N (a whole row at a time; a file moving from the rank rows into the page rows gains its sym=), and
+            // both step with N (a whole row at a time, as a file moves between the rank rows and the page rows), and
             // the rows past the cut would then fall as N grows. With this reserve the rows are monotone in N.
             std::vector<char> tailEsc;
             const std::size_t tailReserve    = std::min( std::max<std::size_t>( bundleBudget > tailSpentBytes ? bundleBudget - tailSpentBytes : 0u,

@@ -642,9 +642,10 @@ import html, re, sys
 want = { html.unescape( p ): html.unescape( y ) for p, y in re.findall( r"<f p=\"([^\"]*)\"[^>]*? sym=\"([^\"]*)\"", open( sys.argv[ 1 ] ).read() ) }
 rows = [ l.rstrip( "\n" ).split( "\t" ) for l in sys.stdin if "\t" in l ]
 print( len( rows ), sum( 1 for p, y in rows if not y or want.get( p ) != y ) )' "$TMP/c1.pageall" )"
+    # an explicit PASS shape ("N 0", N >= 1): an empty or malformed reading (the reader crashed) fails, never passes
     case "$C1TS" in
-        "0 "*|*" "[1-9]*) no "(C1t) tail-sym: rank rows / rows whose sym= is missing or differs from the page's = $C1TS" ;;
-        *)                ok "(C1t) tail-sym: all $( printf '%s' "$C1TS" | cut -d' ' -f1 ) rank rows carry the file page's sym= for their file" ;;
+        [1-9]*" 0") ok "(C1t) tail-sym: all $( printf '%s' "$C1TS" | cut -d' ' -f1 ) rank rows carry the file page's sym= for their file" ;;
+        *)          no "(C1t) tail-sym: rank rows / rows whose sym= is missing or differs from the page's = '$C1TS'" ;;
     esac
     # (C2) a capped tail's next= is the page from its first unprinted page row, and it runs (rc 0, a <files> page at that offset)
     if [ "$C1C" = 1 ] && [ "$C1S" -lt "$C1T" ]; then
