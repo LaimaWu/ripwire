@@ -325,7 +325,10 @@ constexpr std::uint32_t kCacheVersion = 32;           // 32: train 28 — the Re
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 176;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 188;          // bump on any grammar/.scm/extraction change
+                                                      // 188 = 2026-10-17 (train 30 reservation, lane fcall-forward; train renumbers): JS/TS
+                                                      //   call forwarders (model.h kCallForwarders) — `f.call/f.apply` adds a call reference to a
+                                                      //   proven f, `f.bind` a value reference. Rich file tag 189.
                                                       // 176 = 2026-10-15 (train 28): strictly above every number a train-28 binary used — main 173
                                                       //   (slice 4a, rich 174), lane grep-carrier 173 (value refs through ?? || && / or and, rich 174),
                                                       //   lane ruby-pair 174 (subscript references + Ruby main-object mixins, rich 175), PR #380 145 (Elixir inert

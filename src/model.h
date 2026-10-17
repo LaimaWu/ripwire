@@ -446,6 +446,51 @@ inline ValueRefFamily valueRefFamily( Lang l ) noexcept
 {
     return enumTableAt( kValueRefFamilyOfLang, l, ValueRefFamily::None );
 }
+// CALL FORWARDERS (lane fcall-forward, parser version 188, train renumbers; gate test/fcallforwardcheck.sh): a builtin
+// method that, called on a FUNCTION, calls that function (kind Call) or returns it as a value (kind Value). JS/TS
+// `f.call( thisArg, a )` and `f.apply( thisArg, args )` run f; `f.bind( thisArg )` hands f on without running it. When
+// ingest_valuerefs.h proves the receiver `f` is a bare identifier bound to a function declaration of the file or to a
+// file-scope import from a RELATIVE module (and no parameter or local of the site shadows it), a Call row becomes a
+// call reference to `f` — the bare call `f( … )` it stands for, resolved by the ordinary tiers, so several candidate
+// definitions stay hedged exactly as a bare call does — and a Value row becomes a value reference to `f` at the slot
+// the whole `f.bind( … )` fills. The original member reference (name `call`/`apply`) is kept unchanged. A family-owned
+// sparse table: a language with no row is unchanged. Function.prototype's other methods (toString) are not forwarders.
+// Floors, by language: Ruby `proc.call` / `m.to_proc` and Python `functools.partial( f )` are the same concept with
+// different receivers (a Proc or Method object, not a declaration) and have no row; a receiver that is a member
+// (`obj.m.call`), a parenthesised or computed expression, a local `const f = () => …`, or a TS `import f = require()`
+// is not forwarded.
+enum class CallForwardKind : std::uint8_t { Call, Value };
+struct CallForwarder
+{
+    Lang             lang;
+    std::string_view name;
+    CallForwardKind  kind;
+    bool             argsAsArray;   // Call only: the forwarded arguments arrive as ONE array (`apply`), so the arity is unknown;
+                                    //   otherwise the first argument is the receiver and the rest are the call's own (`call`)
+};
+inline constexpr CallForwarder kCallForwarders[] = {
+    { Lang::JavaScript, "apply", CallForwardKind::Call, true }, { Lang::JavaScript, "bind", CallForwardKind::Value, false },
+    { Lang::JavaScript, "call", CallForwardKind::Call, false },
+    { Lang::TypeScript, "apply", CallForwardKind::Call, true }, { Lang::TypeScript, "bind", CallForwardKind::Value, false },
+    { Lang::TypeScript, "call", CallForwardKind::Call, false },
+};
+// The forwarder row for (lang, name), or nullptr when the language has none of that name.
+inline const CallForwarder* callForwarderOf( Lang lang, std::string_view name ) noexcept
+{
+    for( const CallForwarder& f : kCallForwarders )
+    {
+        if( f.lang == lang && f.name == name )
+        {
+            return &f;
+        }
+    }
+    return nullptr;
+}
+inline bool hasCallForwarders( Lang lang ) noexcept
+{
+    return std::ranges::any_of( kCallForwarders, [ lang ]( const CallForwarder& f ) { return f.lang == lang; } );
+}
+
 // The scope char (qualifier[0]) of a file's depth-cut Value record (see RefRole::Value above): written by
 // src/ingest_valuerefs.h, read by src/valuerefindex.h — distinct from every row scope (f l a p x).
 inline constexpr char kValueRefDepthCutScope = 'd';

@@ -248,6 +248,9 @@ public:
         m_fSubscript   = ts_language_field_id_for_name( tl, "subscript", 9 );
         m_fDesignator  = ts_language_field_id_for_name( tl, "designator", 10 );
         m_fAlias       = ts_language_field_id_for_name( tl, "alias", 5 );
+        m_fArguments   = fieldIdFor( tl, NodeField::Arguments );
+        m_fSource      = ts_language_field_id_for_name( tl, "source", 6 );
+        m_fwdArmed     = hasCallForwarders( m_lang );
 
         VrScope file;
         file.node = root;
@@ -303,6 +306,7 @@ public:
                 m_out.push_back( std::move( t ) );
             }
         }
+        emitForwardedCalls();
         if( m_depthCut.subtrees > 0 )
         {
             emitDepthCut();
@@ -905,6 +909,10 @@ private:
         {
             harvest( n, a.kind, m_scopes.back().decls );
         }
+        if( m_fwdArmed )
+        {
+            noteForwardProof( n, a.kind, m_anc.size() == 1 );
+        }
         m_anc.push_back( a );
         const std::size_t i = m_anc.size() - 1;
         if( m_fam == VrFam::Py && kindIs( a.kind, "decorated_definition" ) )
@@ -959,6 +967,220 @@ private:
         return 0;
     }
 
+    // ── call forwarders (model.h kCallForwarders) ───────────────────────────────────────────────────────
+    // Is `s` a module specifier inside the repository: relative, so the module it names is a file of this tree?
+    static bool isRelativeModule( std::string_view s ) noexcept
+    {
+        return s == "." || s == ".." || s.starts_with( "./" ) || s.starts_with( "../" );
+    }
+
+    // Record what proves that a bare name names a function: a function declaration (at any depth), or a FILE-SCOPE
+    // import from a relative module — `import f from './m'`, `import { g as f } from './m'`, `const f = require( './m' )`,
+    // `const { f } = require( './m' )`. A type-only import binds no value and is skipped; a namespace import binds a
+    // module object, never a function.
+    void noteForwardProof( TSNode n, const char* t, bool atFileScope )
+    {
+        if( kindIs( t, "function_declaration" ) || kindIs( t, "generator_function_declaration" ) )
+        {
+            const std::string_view nm = text( child( n, m_fName ) );
+            if( !nm.empty() )
+            {
+                m_fnDeclNames.push_back( nm );
+            }
+            return;
+        }
+        if( !atFileScope )
+        {
+            return;
+        }
+        if( kindIs( t, "import_statement" ) )
+        {
+            const std::string_view whole = text( n );
+            if( whole.starts_with( "import type " ) || whole.starts_with( "import type{" )
+                || !isRelativeModule( vrStringContent( text( child( n, m_fSource ) ) ) ) )
+            {
+                return;
+            }
+            ChildCursor c( n );
+            forEachNamedChild( n, c.cur, [ & ]( TSNode clause )
+            {
+                if( kindIs( ts_node_type( clause ), "import_clause" ) )
+                {
+                    noteImportClause( clause );
+                }
+                return true;
+            } );
+            return;
+        }
+        if( kindIs( t, "lexical_declaration" ) || kindIs( t, "variable_declaration" ) )
+        {
+            ChildCursor c( n );
+            forEachNamedChild( n, c.cur, [ & ]( TSNode d )
+            {
+                if( kindIs( ts_node_type( d ), "variable_declarator" ) && requiresRelativeModule( child( d, m_fValue ) ) )
+                {
+                    patternNames( child( d, m_fName ), m_relImportNames );
+                }
+                return true;
+            } );
+        }
+    }
+
+    // The value names one import clause binds: the default import and each named specifier's LOCAL name.
+    void noteImportClause( TSNode clause )
+    {
+        ChildCursor c( clause );
+        forEachNamedChild( clause, c.cur, [ & ]( TSNode k )
+        {
+            const char* kt = ts_node_type( k );
+            if( kindIs( kt, "identifier" ) )
+            {
+                m_relImportNames.push_back( text( k ) );
+            }
+            else if( kindIs( kt, "named_imports" ) )
+            {
+                ChildCursor s( k );
+                forEachNamedChild( k, s.cur, [ & ]( TSNode spec )
+                {
+                    if( kindIs( ts_node_type( spec ), "import_specifier" ) && !text( spec ).starts_with( "type " ) )
+                    {
+                        const TSNode alias = child( spec, m_fAlias );
+                        const std::string_view nm = text( ts_node_is_null( alias ) ? child( spec, m_fName ) : alias );
+                        if( !nm.empty() )
+                        {
+                            m_relImportNames.push_back( nm );
+                        }
+                    }
+                    return true;
+                } );
+            }
+            return true;
+        } );
+    }
+
+    // `require( './m' )` with exactly one relative string argument.
+    bool requiresRelativeModule( TSNode v ) const
+    {
+        if( ts_node_is_null( v ) || !kindIs( ts_node_type( v ), "call_expression" ) || text( child( v, m_fFunction ) ) != "require" )
+        {
+            return false;
+        }
+        const TSNode args = child( v, m_fArguments );
+        if( ts_node_is_null( args ) || ts_node_named_child_count( args ) != 1 )
+        {
+            return false;
+        }
+        const TSNode arg = ts_node_named_child( args, 0 );
+        return kindIs( ts_node_type( arg ), "string" ) && isRelativeModule( vrStringContent( text( arg ) ) );
+    }
+
+    // The forwarder row of the member expression `m` (`f.call`, `f.bind`) when its object is a bare identifier.
+    const CallForwarder* forwarderOfMember( TSNode m ) const noexcept
+    {
+        const TSNode obj = child( m, m_fObject );
+        if( ts_node_is_null( obj ) || !kindIs( ts_node_type( obj ), "identifier" ) )
+        {
+            return nullptr;
+        }
+        return callForwarderOf( m_lang, text( child( m, m_fProperty ) ) );
+    }
+
+    // anc[i] is the identifier `f` of a CALLED member `f.call( … )` / `f.apply( … )` (a Call forwarder): queue the call of
+    // f it stands for. The caller has already refused a name some enclosing parameter or local declares; the file-end
+    // filter (emitForwardedCalls) keeps the site only when the file proves f names a function.
+    bool forwardCallAt( std::size_t i, std::string_view name )
+    {
+        if( i < 2 || !kindIs( m_anc[i].kind, "identifier" ) || m_anc[i].field != m_fObject )
+        {
+            return false;
+        }
+        const VrAnc& member = m_anc[i - 1];
+        const VrAnc& call   = m_anc[i - 2];
+        if( !kindIs( member.kind, "member_expression" ) || !kindIs( call.kind, "call_expression" ) || member.field != m_fFunction )
+        {
+            return false;
+        }
+        const CallForwarder* fw = forwarderOfMember( member.node );
+        if( fw == nullptr || fw->kind != CallForwardKind::Call )
+        {
+            return false;
+        }
+        RawRef r;
+        r.fileId    = m_fileId;
+        r.startByte = ts_node_start_byte( m_anc[i].node );
+        r.line      = ts_node_start_point( m_anc[i].node ).row + 1;
+        r.lang      = m_lang;
+        r.role      = RefRole::Call;
+        r.name      = std::string( name );
+        const TSNode args = child( call.node, m_fArguments );
+        if( !fw->argsAsArray && !ts_node_is_null( args ) )
+        {
+            std::uint32_t n      = 0;
+            bool          spread = false;
+            ChildCursor   c( args );
+            forEachNamedChild( args, c.cur, [ & ]( TSNode a )
+            {
+                if( !ts_node_is_extra( a ) )
+                {
+                    ++n;
+                    spread = spread || kindIs( ts_node_type( a ), "spread_element" );
+                }
+                return true;
+            } );
+            r.argCount      = static_cast<std::uint16_t>( std::min<std::uint32_t>( n > 0 ? n - 1 : 0, 0xFFFFu ) );   // the first is the receiver
+            r.argCountKnown = !spread;
+        }
+        m_fwdSites.push_back( std::move( r ) );
+        return true;
+    }
+
+    // `.bind` (a Value forwarder) is a pass-through: `f.bind( x )` lands f in the slot the whole call fills. Step one is
+    // the identifier as the member's object, step two the member as the call's callee.
+    bool valueForwardStep( std::size_t i ) const noexcept
+    {
+        const VrAnc& p = m_anc[i - 1];
+        const VrAnc& c = m_anc[i];
+        const auto isValueForwarder = [ this ]( TSNode m )
+        {
+            const CallForwarder* fw = forwarderOfMember( m );
+            return fw != nullptr && fw->kind == CallForwardKind::Value;
+        };
+        if( kindIs( p.kind, "member_expression" ) )
+        {
+            return i >= 2 && c.field == m_fObject && kindIs( c.kind, "identifier" ) && p.field == m_fFunction
+                && kindIs( m_anc[i - 2].kind, "call_expression" ) && isValueForwarder( p.node );
+        }
+        return kindIs( p.kind, "call_expression" ) && c.field == m_fFunction && kindIs( c.kind, "member_expression" ) && isValueForwarder( c.node );
+    }
+
+    // File end: a queued call/apply site becomes a call of f when f is a relative import of the file, or a function the
+    // file declares that no file-scope variable of the same name rebinds. Anything else adds nothing (today's answer).
+    void emitForwardedCalls()
+    {
+        if( m_fwdSites.empty() )
+        {
+            return;
+        }
+        const auto sortUnique = []( std::vector<std::string_view>& v )
+        {
+            std::ranges::sort( v );
+            v.erase( std::ranges::unique( v ).begin(), v.end() );
+        };
+        sortUnique( m_fnDeclNames );
+        sortUnique( m_relImportNames );
+        const std::vector<std::string_view>& fileDecls = m_scopes.front().decls;
+        for( RawRef& r : m_fwdSites )
+        {
+            const std::string_view nm = r.name;
+            const bool imported = std::ranges::binary_search( m_relImportNames, nm );
+            const bool declared = std::ranges::binary_search( m_fnDeclNames, nm ) && std::ranges::find( fileDecls, nm ) == fileDecls.end();
+            if( imported || declared )
+            {
+                m_out.push_back( std::move( r ) );
+            }
+        }
+    }
+
     // ── value positions ────────────────────────────────────────────────────────────────────────────────
     struct Slot
     {
@@ -987,6 +1209,10 @@ private:
         const VrAnc& p = m_anc[i - 1];
         const VrAnc& c = m_anc[i];
         const char*  t = p.kind;
+        if( m_fwdArmed && valueForwardStep( i ) )
+        {
+            return true;
+        }
         if( kindIs( t, "parenthesized_expression" ) || kindIs( t, "as_expression" ) || kindIs( t, "satisfies_expression" )
             || kindIs( t, "non_null_expression" ) || kindIs( t, "literal_element" ) || kindIs( t, "expression_list" )
             || kindIs( t, "type_assertion" ) )
@@ -1223,6 +1449,10 @@ private:
         if( declaringScope( name ) != 0 )
         {
             return;   // a parameter or local of that name hides the function
+        }
+        if( m_fwdArmed && forwardCallAt( i, name ) )
+        {
+            return;   // `f.call( … )` / `f.apply( … )`: a call of f (decided at file end), never a value use
         }
         std::size_t j = i;
         while( j > 1 && transparent( j ) )
@@ -1729,6 +1959,14 @@ private:
     std::vector<std::string>       m_fileFed;
     std::vector<RawRef>            m_filePending;
     VrDepthCut                     m_depthCut;
+    // call forwarders (model.h kCallForwarders): the sites `f.call( … )` / `f.apply( … )` whose f no enclosing parameter or
+    // local declares, and the file's two proofs that a bare f names a function — its function declarations (any depth:
+    // a declaration is hoisted and the walk's scopes do not record it) and its file-scope relative imports.
+    bool                           m_fwdArmed = false;
+    std::vector<RawRef>            m_fwdSites;
+    std::vector<std::string_view>  m_fnDeclNames;
+    std::vector<std::string_view>  m_relImportNames;
+    TSFieldId m_fArguments = 0, m_fSource = 0;
     TSFieldId m_fValue = 0, m_fKey = 0, m_fLeft = 0, m_fRight = 0, m_fFunction = 0, m_fName = 0, m_fDeclarator = 0;
     TSFieldId m_fConsequence = 0, m_fAlternative = 0, m_fParameters = 0, m_fParameter = 0, m_fObject = 0, m_fProperty = 0, m_fField = 0;
     TSFieldId m_fArgument = 0, m_fOperand = 0, m_fAttribute = 0, m_fOperator = 0, m_fPattern = 0, m_fDefinition = 0;
