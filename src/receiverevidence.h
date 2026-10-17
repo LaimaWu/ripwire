@@ -1455,15 +1455,16 @@ struct CallResultTypes
         }
         std::vector<std::string_view> calleePath;
         namespacePathAt( f, at, calleePath );
-        const CppReach reach = cppReach( f, at, c, cls, calleePath );
-        return reach == CppReach::None || cppHiddenAt( f, at, c, cls, calleePath, reach ) ? kNoNode : c;
+        const CppReach reach = cppReach( f, at, c, calleePath );
+        return reach == CppReach::None || cppHiddenAt( f, at, c, calleePath, reach ) ? kNoNode : c;
     }
-    // how the class `c` (the only in-tree `cls`) is reached from byte `at` of file `f` (cppUnqualifiedClass): through a
+    // how the class `c` (the only in-tree class of its name) is reached from byte `at` of file `f` (cppUnqualifiedClass): through a
     // using-declaration of `cls` in force, as a nested / local class enclosing `at`, from a namespace leading the callee's,
     // through a using-directive — or not at all
     enum class CppReach : std::uint8_t { None, Declared, Nested, Leads, Directive };
-    CppReach cppReach( std::uint32_t f, std::uint32_t at, NodeId c, std::string_view cls, const std::vector<std::string_view>& calleePath ) const
+    CppReach cppReach( std::uint32_t f, std::uint32_t at, NodeId c, const std::vector<std::string_view>& calleePath ) const
     {
+        const std::string_view cls = ing.symbols[ c ].name;
         bool   declared = false;
         NodeId byDecl   = kNoNode;
         forEachCppUsing( f, at, calleePath, [ & ]( const Binding& b )
@@ -1507,16 +1508,17 @@ struct CallResultTypes
         } );
         return named ? CppReach::Directive : CppReach::None;
     }
-    // fix round 4: is the class `c` that `reach` found HIDDEN at byte `at` of file `f` by a binding of `cls` the index keeps
+    // fix round 4: is the class `c` that `reach` found HIDDEN at byte `at` of file `f` by a binding of its name the index keeps
     // no class for, in force there (forEachCppUsing's scope rule): a union, a forward declaration of `cls`, or a macro / parse
     // error, which may declare any name. Such a binding hides `c` when it is in an inner scope: a class or function body (unless it is a forward
     // declaration of `c` itself, inside it), or — for a namespace-scope `c` that leads the callee's namespace — a namespace
     // deeper than `c`'s own. A forward declaration in `c`'s own namespace declares `c`; a binding outside the scope `c` is
     // nested in is hidden BY `c`. A class reached through a using-declaration or a using-directive is hidden by any such
     // binding in force (C++ puts a directive's names at a namespace this reader does not compute).
-    bool cppHiddenAt( std::uint32_t f, std::uint32_t at, NodeId c, std::string_view cls, const std::vector<std::string_view>& calleePath, CppReach reach ) const
+    bool cppHiddenAt( std::uint32_t f, std::uint32_t at, NodeId c, const std::vector<std::string_view>& calleePath, CppReach reach ) const
     {
-        const Symbol&                 cs = ing.symbols[ c ];
+        const Symbol&                 cs  = ing.symbols[ c ];
+        const std::string_view        cls = cs.name;
         std::vector<std::string_view> classPath;
         std::vector<std::string_view> rowPath;
         namespacePathAt( cs.fileId, cs.sigStartByte, classPath );

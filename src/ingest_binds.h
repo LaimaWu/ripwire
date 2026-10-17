@@ -3722,7 +3722,7 @@ struct BindCtx
     std::string_view           src;
     std::vector<RawBind>*      binds = nullptr;
     std::vector<TypeParamScope> typeParams;   // FE-B: filled as the pre-order walk meets each parameter list
-    // (L) fix round 4: the Rust blocks captureUnparsed has read, as (start, end) — the enclosing ones of the walk's position
+    // (L) fix round 4: the Rust blocks captureRustUnparsed has read, as (start, end) — the enclosing ones of the walk's position
     std::vector<std::pair<std::uint32_t, std::uint32_t>> rustMacroBlocks;
 
     // L3 fn-pointer buffers. Positives collect here (not straight into binds) so the end-of-walk clobber
@@ -4441,51 +4441,56 @@ inline void captureShadowDecl( BindCtx& cx, TSNode n, const char* t )
 // and a statement- or item-position macro in such a block may expand to one — one row per such block, each block read
 // once per file (BindCtx::rustMacroBlocks: its ancestors, outermost first). (A C++ macro in a function body reads as a
 // call: a local class beside one is not covered.)
-inline void captureUnparsed( BindCtx& cx, TSNode n, const char* t )
+inline void pushUnparsed( BindCtx& cx, std::uint32_t at, std::uint32_t spanStart, std::uint32_t spanEnd )
 {
-    const auto push = [ & ]( std::uint32_t at, std::uint32_t spanStart, std::uint32_t spanEnd )
+    cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = at, .lang = cx.lang, .kind = LocalBindKind::TypeAlias, .spanStart = spanStart,
+                                  .spanEnd = spanEnd, .var = std::string( "!" ), .typeName = std::string( kTypeBindUnparsed ) } );
+}
+// does the region `n` spell an identifier (a pre-order walk of its subtree, stopped at the first identifier leaf)
+inline bool spellsIdentifier( TSNode n )
+{
+    ChildCursor walk( n );
+    for( bool down = true;; )
     {
-        cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = at, .lang = cx.lang, .kind = LocalBindKind::TypeAlias, .spanStart = spanStart,
-                                      .spanEnd = spanEnd, .var = std::string( "!" ), .typeName = std::string( kTypeBindUnparsed ) } );
-    };
-    if( callResultFamilyOf( cx.lang ) == CallResultFamily::Cpp )
+        const TSNode c = ts_tree_cursor_current_node( &walk.cur );
+        if( down && ts_tree_cursor_goto_first_child( &walk.cur ) )
+        {
+            continue;
+        }
+        if( ts_node_child_count( c ) == 0 && std::string_view( ts_node_type( c ) ).ends_with( "identifier" ) )
+        {
+            return true;
+        }
+        down = ts_tree_cursor_goto_next_sibling( &walk.cur );
+        while( !down && ts_tree_cursor_goto_parent( &walk.cur ) )
+        {
+            down = ts_tree_cursor_goto_next_sibling( &walk.cur );
+        }
+        if( !down )
+        {
+            return false;
+        }
+    }
+}
+inline void captureCppUnparsed( BindCtx& cx, TSNode n, const char* t )
+{
+    const TSNode parent = ts_node_parent( n );
+    const char*  pt     = ts_node_is_null( parent ) ? "" : ts_node_type( parent );
+    constexpr std::string_view kDeclOnly[] = { "declaration_list", "translation_unit", "field_declaration_list" };   // no statement stands here
+    const bool   broken = kindIs( t, "ERROR" ) || kindIs( t, "expression_statement" ) || ts_node_has_error( n );
+    if( !broken || std::ranges::find( kDeclOnly, std::string_view( pt ) ) == std::end( kDeclOnly ) || !spellsIdentifier( n ) )
     {
-        const TSNode parent = ts_node_parent( n );
-        const char*  pt     = ts_node_is_null( parent ) ? "" : ts_node_type( parent );
-        constexpr std::string_view kDeclOnly[] = { "declaration_list", "translation_unit", "field_declaration_list" };   // no statement stands here
-        const bool   broken = kindIs( t, "ERROR" ) || kindIs( t, "expression_statement" ) || ts_node_has_error( n );
-        if( !broken || std::ranges::find( kDeclOnly, std::string_view( pt ) ) == std::end( kDeclOnly ) )
-        {
-            return;
-        }
-        bool        spells = false;
-        ChildCursor walk( n );   // its first identifier leaf, if any (a pre-order walk of the region, stopped there)
-        for( bool down = true; !spells; )
-        {
-            const TSNode c = ts_tree_cursor_current_node( &walk.cur );
-            if( down && ts_tree_cursor_goto_first_child( &walk.cur ) )
-            {
-                continue;
-            }
-            spells = ts_node_child_count( c ) == 0 && std::string_view( ts_node_type( c ) ).ends_with( "identifier" );
-            down   = ts_tree_cursor_goto_next_sibling( &walk.cur );
-            while( !down && ts_tree_cursor_goto_parent( &walk.cur ) )
-            {
-                down = ts_tree_cursor_goto_next_sibling( &walk.cur );
-            }
-            if( !down )
-            {
-                break;
-            }
-        }
-        const auto [ spanStart, spanEnd ] = cppDeclScope( n, true );
-        if( spells && spanEnd != 0 )
-        {
-            push( ts_node_start_byte( n ), spanStart, spanEnd );
-        }
         return;
     }
-    // Rust: only a NESTED fn (one in a block) sees block items
+    const auto [ spanStart, spanEnd ] = cppDeclScope( n, true );
+    if( spanEnd != 0 )
+    {
+        pushUnparsed( cx, ts_node_start_byte( n ), spanStart, spanEnd );
+    }
+}
+// Rust: only a NESTED fn (one in a block) sees block items
+inline void captureRustUnparsed( BindCtx& cx, TSNode n )
+{
     const TSNode parent = ts_node_parent( n );
     if( ts_node_is_null( parent ) || !kindIs( ts_node_type( parent ), "block" ) )
     {
@@ -4518,7 +4523,7 @@ inline void captureUnparsed( BindCtx& cx, TSNode n, const char* t )
         } );
         if( macro )
         {
-            push( ts_node_start_byte( *b ), 0, 0 );
+            pushUnparsed( cx, ts_node_start_byte( *b ), 0, 0 );
         }
     }
 }
@@ -4527,17 +4532,9 @@ inline void captureUnparsed( BindCtx& cx, TSNode n, const char* t )
 // enclosing namespace's, so none is recorded), and a C++ using-directive / using-declaration at namespace, file or (fix
 // round 4) block scope as a TypeImport spanning the scope it is declared in — what a callee's bare result type names
 // (receiverevidence.h CallResultTypes::visibleAt / cppUnqualifiedClass): a block's is in force for a local class's members
-// only. One in a class is a member re-export (resolve.h buildUsingReexports) and is not recorded. Every other role of the
-// row (`role`, kScopeFactNodes) has its own reader.
-inline void captureScopeFact( BindCtx& cx, TSNode n, const char* t, ScopeFactRole role )
+// only. One in a class is a member re-export (resolve.h buildUsingReexports) and is not recorded.
+inline void captureScopeFact( BindCtx& cx, TSNode n, const char* t )
 {
-    switch( role )
-    {
-        case ScopeFactRole::Alias:    captureTypeAlias( cx, n, t ); return;
-        case ScopeFactRole::Shadow:   captureShadowDecl( cx, n, t ); return;
-        case ScopeFactRole::Unparsed: captureUnparsed( cx, n, t ); return;
-        case ScopeFactRole::Scope:    break;
-    }
     if( kindIs( t, "internal_module" ) || kindIs( t, "module" ) )
     {
         pushNamespace( cx, n, fieldChild( n, NodeField::Name ), fieldChild( n, NodeField::Body ) );
@@ -6294,9 +6291,16 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
         } );
     }
     // (L) fix round 2: a namespace body, a C++ using-directive / using-declaration — the scope a bare result type resolves in
+    // (fix round 3) an alias, (fix round 4) a declaration the index keeps no class for, or a region it cannot read
     if( const ScopeFactNode* row = scopeFactRow( lang, t ) )
     {
-        captureScopeFact( cx, n, t, row->role );
+        switch( row->role )
+        {
+            case ScopeFactRole::Scope:    captureScopeFact( cx, n, t ); break;
+            case ScopeFactRole::Alias:    captureTypeAlias( cx, n, t ); break;
+            case ScopeFactRole::Shadow:   captureShadowDecl( cx, n, t ); break;
+            case ScopeFactRole::Unparsed: lang == Lang::Rust ? captureRustUnparsed( cx, n ) : captureCppUnparsed( cx, n, t ); break;
+        }
     }
     // (L) a C++ function's declared result (a definition, or a declaration such as a header's prototype)
     if( callResultFamilyOf( lang ) == CallResultFamily::Cpp && ( kindIs( t, "function_definition" ) || kindIs( t, "declaration" ) || kindIs( t, "field_declaration" ) ) )
