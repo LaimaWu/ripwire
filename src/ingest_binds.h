@@ -4275,9 +4275,9 @@ inline void pushNamespace( BindCtx& cx, TSNode n, TSNode name, TSNode body )
 // another type — each family's alias forms (model.h LocalBindKind::TypeAlias) — and (fix round 4) every declaration that
 // binds a type name the index keeps NO class symbol for (Shadow: a Java record / @interface; C++ a union outside a
 // declaration, a bodiless struct / class / union), and the regions the parser cannot read as declarations (Unparsed: a C++
-// statement, parse error or broken declaration where a declaration must stand — a macro invocation; a Rust nested fn,
-// whose enclosing blocks' statement-position macros may declare items it sees).
-enum class ScopeFactRole : std::uint8_t { Scope, Alias, Shadow, Unparsed };
+// statement, parse error or broken declaration where a declaration must stand — a macro invocation; UnparsedBlocks: a Rust
+// nested fn, whose enclosing blocks' statement-position macros may declare items it sees).
+enum class ScopeFactRole : std::uint8_t { Scope, Alias, Shadow, Unparsed, UnparsedBlocks };
 struct ScopeFactNode
 {
     CallResultFamily family;
@@ -4294,7 +4294,7 @@ inline constexpr ScopeFactNode kScopeFactNodes[] = {
     { CallResultFamily::Cpp, "declaration", ScopeFactRole::Unparsed }, { CallResultFamily::Cpp, "field_declaration", ScopeFactRole::Unparsed },
     { CallResultFamily::TypeScript, "internal_module", ScopeFactRole::Scope }, { CallResultFamily::TypeScript, "module", ScopeFactRole::Scope },
     { CallResultFamily::TypeScript, "type_alias_declaration", ScopeFactRole::Alias }, { CallResultFamily::TypeScript, "import_alias", ScopeFactRole::Alias },
-    { CallResultFamily::Rust, "type_item", ScopeFactRole::Alias }, { CallResultFamily::Rust, "function_item", ScopeFactRole::Unparsed },
+    { CallResultFamily::Rust, "type_item", ScopeFactRole::Alias }, { CallResultFamily::Rust, "function_item", ScopeFactRole::UnparsedBlocks },
     { CallResultFamily::Jvm, "type_alias", ScopeFactRole::Alias }, { CallResultFamily::Jvm, "record_declaration", ScopeFactRole::Shadow },
     { CallResultFamily::Jvm, "annotation_type_declaration", ScopeFactRole::Shadow },
 };
@@ -6298,10 +6298,11 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
     {
         switch( row->role )
         {
-            case ScopeFactRole::Scope:    captureScopeFact( cx, n, t ); break;
-            case ScopeFactRole::Alias:    captureTypeAlias( cx, n, t ); break;
-            case ScopeFactRole::Shadow:   captureShadowDecl( cx, n, t ); break;
-            case ScopeFactRole::Unparsed: lang == Lang::Rust ? captureRustUnparsed( cx, n ) : captureCppUnparsed( cx, n, t ); break;
+            case ScopeFactRole::Scope:          captureScopeFact( cx, n, t ); break;
+            case ScopeFactRole::Alias:          captureTypeAlias( cx, n, t ); break;
+            case ScopeFactRole::Shadow:         captureShadowDecl( cx, n, t ); break;
+            case ScopeFactRole::Unparsed:       captureCppUnparsed( cx, n, t ); break;
+            case ScopeFactRole::UnparsedBlocks: captureRustUnparsed( cx, n ); break;
         }
     }
     // (L) a C++ function's declared result (a definition, or a declaration such as a header's prototype)
