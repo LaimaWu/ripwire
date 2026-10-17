@@ -11885,6 +11885,11 @@ inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<N
 // and folds byte-identically to before.
 inline const std::vector<char> kNoImpactHedge{};
 inline constexpr std::size_t kImpactFileRollupCap = 20;
+// L7 (typeuse.h): on a TYPE impact with no --limit, the listing holds the whole first-hop band — the defining file (d=0)
+// and every d=1 file a type mention reaches (isTypeBandRow) — however many there are, up to this runaway guard; past the
+// cut is disclosed (files_capped="1", files_next=) like any other. Measured: tmux `--impact=grid_cell` has 32 such files
+// (the 20-row default dropped 8 of the question's 32 gold files); a band in the hundreds would be a dump, not an index.
+inline constexpr std::size_t kImpactTypeRollupBandMax = 200;
 
 // the --impact row (provenCallerReach below)'s hedge: reached, but by no all-proven path
 inline bool impactRowNameOnly( const std::vector<char>& proven, NodeId n ) noexcept
@@ -11898,6 +11903,8 @@ struct ImpactFileRow
     std::uint32_t syms     = 0;
     std::uint32_t minDepth = 0;
     std::uint32_t nameOnly = 0;   // fix27: of syms, the via="name" rows (impactRowNameOnly) — counted only on a multi-def selector
+    std::uint32_t typeOnly = 0;   // L7: of syms, the ones only the type tier reaches (typeuse.h ImpactReach::typeOnly)
+    bool          typeScope = false;   // L7: the file names the type outside every indexed definition (syms may be 0)
     std::string   ofDefXml;       // attrib-multidef (defattrib.h attachRollupOfDef): the row's of_def=, "" on a one-group selector
     std::string   ofDefJson;      // ... and its JSON key
 };
@@ -11908,18 +11915,113 @@ struct ImpactFileRollup
     std::size_t                shown  = 0;
     bool                       capped = false;
     std::string                next;     // the call listing every row; empty when uncut
+    bool                       typed       = false;   // L7: SYM is a type and its type tier ran (the <files> type_users= rides)
+    std::size_t                typeUsers   = 0;       // L7: symbols seeded by a type mention
+    std::size_t                typeDefs    = 0;       // L7: indexed type definitions sharing the spelled name (said when > 1)
+    bool                       typeCapped  = false;   // L7: the mention walk hit its budget — type rows are a floor
 };
+
+// L7 type-use impact (typeuse.h): what the type tier adds to the rollup. Default (null `typeOnly`) ⇒ no tier, the
+// rollup is byte-identical to before. Spans borrow the caller's TypeUseTier.
+struct ImpactTypeFold
+{
+    std::span<const std::uint32_t> defFiles;              // d="0" rows: the files defining SYM
+    std::span<const std::uint32_t> scopeFiles;            // files naming SYM outside every indexed definition (d="1", syms may be 0)
+    const std::vector<char>*       typeOnly   = nullptr;  // per node: reached only through the type tier
+    std::size_t                    users      = 0;
+    std::size_t                    typeDefs   = 0;
+    bool                           sitesCapped = false;
+};
+
+// L7: a TYPE impact (`type` non-null) rolls up even beside an uncut window — its d="0" row (the defining file) and the
+// via="type" marks are facts the symbol rows do not carry.
+// L7: the type tier's own rows, before the reach folds in — the defining files at d=0, then the files naming the type
+// outside every indexed definition at d=1 (syms=0 until a reached symbol lands there). Copies the tier's counts.
+// A null `fold` (no type tier) adds nothing.
+inline void seedTypeRollupRows( ImpactFileRollup& r, std::vector<std::uint32_t>& rowOfFile, const ImpactTypeFold* fold )
+{
+    if( fold == nullptr )
+    {
+        return;
+    }
+    const ImpactTypeFold& type = *fold;
+    r.typed      = true;
+    r.typeUsers  = type.users;
+    r.typeDefs   = type.typeDefs;
+    r.typeCapped = type.sitesCapped;
+    const auto add = [ & ]( std::span<const std::uint32_t> files, std::uint32_t d, bool scope )
+    {
+        for( const std::uint32_t f : files )
+        {
+            if( f < rowOfFile.size() && rowOfFile[f] == UINT32_MAX )
+            {
+                rowOfFile[f] = std::uint32_t( r.rows.size() );
+                r.rows.push_back( ImpactFileRow{ f, 0, d } );
+                r.rows.back().typeScope = scope;
+            }
+        }
+    };
+    add( type.defFiles, 0, false );
+    add( type.scopeFiles, 1, true );
+}
+
+// L7: after the reach folds in, each row's typeOnly = its reached symbols only the type tier reaches. Null ⇒ nothing.
+inline void foldTypeOnlyCounts( ImpactFileRollup& r, const std::vector<std::uint32_t>& rowOfFile, const IngestResult& ing,
+                                std::span<const NodeId> reach, const ImpactTypeFold* fold )
+{
+    if( fold == nullptr || fold->typeOnly == nullptr )
+    {
+        return;
+    }
+    const std::vector<char>& typeOnly = *fold->typeOnly;
+    for( const NodeId n : reach )
+    {
+        if( n < ing.symbols.size() && n < typeOnly.size() && typeOnly[n] != 0 )
+        {
+            ++r.rows[ rowOfFile[ ing.symbols[n].fileId ] ].typeOnly;
+        }
+    }
+}
+
+// Does the rollup ride? Beside a cut symbol window (idea #6), and (L7) on every type impact.
+inline bool impactRollupRides( bool windowCut, const ImpactTypeFold* type ) noexcept
+{
+    return windowCut || type != nullptr;
+}
+
+// L7: a row of the first-hop TYPE band — the defining file (d=0), or a d=1 file a type mention reaches (a type user or
+// a file-scope mention). A d=1 file reached only as a direct CALLER (a constructor call, or a namesake function of a
+// multi-definition selector) is not in the band: it keeps the ordinary 20-row window, so a selector that is mostly a
+// function (textual `query_one`: a class and four methods) does not grow to a 200-row listing.
+inline bool isTypeBandRow( const ImpactFileRow& row ) noexcept
+{
+    return row.minDepth == 0 || ( row.minDepth == 1 && ( row.typeOnly > 0 || row.typeScope ) );
+}
+
+// The rollup's default window: kImpactFileRollupCap, --limit when given; L7: a type impact with no --limit widens it to
+// the whole first-hop type band (isTypeBandRow), up to kImpactTypeRollupBandMax. `rows` is ranked (d= ascending).
+inline std::size_t impactRollupCap( std::span<const ImpactFileRow> rows, int pageLimit, bool typed )
+{
+    const std::size_t cap = std::size_t( rw::effectiveRowCap( pageLimit, int( kImpactFileRollupCap ) ) );
+    if( !typed || pageLimit > 0 )
+    {
+        return cap;
+    }
+    const std::size_t band = std::size_t( std::count_if( rows.begin(), rows.end(), []( const ImpactFileRow& row ) { return isTypeBandRow( row ); } ) );
+    return std::max( cap, std::min( band, kImpactTypeRollupBandMax ) );
+}
 
 inline ImpactFileRollup impactFileRollup( const IngestResult& ing, std::span<const NodeId> reach, const std::vector<std::uint32_t>& depth,
                                           int pageLimit, std::string_view sym, bool windowCut,
-                                          const std::vector<char>& hedgeProven = kNoImpactHedge )
+                                          const std::vector<char>& hedgeProven = kNoImpactHedge, const ImpactTypeFold* type = nullptr )
 {
     ImpactFileRollup          r;
-    if( !windowCut )
+    if( !impactRollupRides( windowCut, type ) )
     {
         return r;   // the rows name every reached file already (see the block comment); nothing to roll up
     }
     std::vector<std::uint32_t> rowOfFile( ing.files.size(), UINT32_MAX );
+    seedTypeRollupRows( r, rowOfFile, type );
     for( const NodeId n : reach )
     {
         if( n >= ing.symbols.size() )
@@ -11938,13 +12040,14 @@ inline ImpactFileRollup impactFileRollup( const IngestResult& ing, std::span<con
         row.minDepth = std::min( row.minDepth, d );
         row.nameOnly += std::uint32_t( impactRowNameOnly( hedgeProven, n ) );   // never on kNoImpactHedge (empty: no row hedged)
     }
+    foldTypeOnlyCounts( r, rowOfFile, ing, reach, type );
     std::sort( r.rows.begin(), r.rows.end(), [ & ]( const ImpactFileRow& a, const ImpactFileRow& b )
                {
                    if( a.minDepth != b.minDepth ) { return a.minDepth < b.minDepth; }
                    if( a.syms != b.syms ) { return a.syms > b.syms; }
                    return ing.files[a.fileId] < ing.files[b.fileId];
                } );
-    r.shown  = std::min( r.rows.size(), std::size_t( rw::effectiveRowCap( pageLimit, int( kImpactFileRollupCap ) ) ) );
+    r.shown  = std::min( r.rows.size(), impactRollupCap( r.rows, pageLimit, r.typed ) );
     r.capped = r.shown < r.rows.size();
     if( r.capped && !sym.empty() )
     {
@@ -12208,26 +12311,18 @@ inline std::vector<NodeId> shortestPath( const Graph& g, NodeId src, NodeId dst 
 // tests-to-run row say hops="1" (the test calls a changed symbol directly) rather than merely "reaches". ONE
 // walk, not a second BFS: a depth that disagreed with reachability by one edge would be invisible to every
 // gate that only checks the reached SET.
-inline std::vector<NodeId> transitiveCallersDepth( const Graph& g, std::span<const NodeId> seeds, std::vector<std::uint32_t>* depthOut )
+// L7 type-use impact (typeuse.h): `firstHop` (default empty ⇒ the plain call walk, unchanged) enters the walk at depth 1
+// beside the seeds' direct callers — the symbols that NAME a type seed — and is reached like any caller (in the output,
+// their own callers at depth 2). Queued after the seeds and before any expansion, so the BFS stays depth-monotone.
+// One BFS stretch of the caller walk: expands q[head..) (stopping before `end`, or when the queue drains) by in-edges,
+// appending each unseen caller at its parent's depth + 1. Returns where it stopped.
+inline std::size_t expandCallers( const Graph& g, std::vector<NodeId>& q, std::size_t head, std::size_t end, std::vector<char>& seen,
+                                  std::vector<std::uint32_t>& depth )
 {
-    const std::size_t          N = g.wOutDeg.size();
-    std::vector<char>          seen( N, 0 );
-    std::vector<NodeId>        q;
-    std::vector<std::uint32_t> localDepth;                                  // the walk always keeps depth; a caller that
-    std::vector<std::uint32_t>& depth = depthOut ? *depthOut : localDepth;  // wants it hands in the vector it lands in
-    depth.assign( N, 0 );
-    for( NodeId s : seeds )
-    {
-        if( s < N && !seen[s] )
-        {
-            seen[s] = 1;
-            q.push_back( s );
-        }
-    }
-    const std::size_t nSeed = q.size();
-    const auto*       ro    = g.inEdges.rowOffsets();
-    const auto*       ci    = g.inEdges.colIndices();
-    for( std::size_t head = 0; head < q.size(); ++head )
+    const std::size_t N  = seen.size();
+    const auto*       ro = g.inEdges.rowOffsets();
+    const auto*       ci = g.inEdges.colIndices();
+    for( ; head < q.size() && head < end; ++head )
     {
         const NodeId u = q[ head ];
         for( std::uint32_t k = ro[u]; k < ro[u + 1]; ++k )
@@ -12241,6 +12336,38 @@ inline std::vector<NodeId> transitiveCallersDepth( const Graph& g, std::span<con
             }
         }
     }
+    return head;
+}
+
+// Queue every not-yet-seen node of `nodes` at depth `d` (the walk's seeds at 0, L7's first hop at 1).
+inline void enqueueUnseen( std::span<const NodeId> nodes, std::uint32_t d, std::vector<char>& seen, std::vector<std::uint32_t>& depth,
+                           std::vector<NodeId>& q )
+{
+    for( const NodeId n : nodes )
+    {
+        if( n < seen.size() && !seen[n] )
+        {
+            seen[n]  = 1;
+            depth[n] = d;
+            q.push_back( n );
+        }
+    }
+}
+
+inline std::vector<NodeId> transitiveCallersDepth( const Graph& g, std::span<const NodeId> seeds, std::vector<std::uint32_t>* depthOut,
+                                                   std::span<const NodeId> firstHop = {} )
+{
+    const std::size_t          N = g.wOutDeg.size();
+    std::vector<char>          seen( N, 0 );
+    std::vector<NodeId>        q;
+    std::vector<std::uint32_t> localDepth;                                  // the walk always keeps depth; a caller that
+    std::vector<std::uint32_t>& depth = depthOut ? *depthOut : localDepth;  // wants it hands in the vector it lands in
+    depth.assign( N, 0 );
+    enqueueUnseen( seeds, 0, seen, depth, q );
+    const std::size_t nSeed = q.size();
+    const std::size_t head  = expandCallers( g, q, 0, nSeed, seen, depth );   // the seeds first: a direct caller and a first-hop node share d=1
+    enqueueUnseen( firstHop, 1, seen, depth, q );
+    expandCallers( g, q, head, SIZE_MAX, seen, depth );
     std::vector<NodeId> out( q.begin() + nSeed, q.end() );   // reached, minus the seeds
     std::sort( out.begin(), out.end() );
     return out;

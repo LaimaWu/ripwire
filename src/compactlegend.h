@@ -509,6 +509,12 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // idea #6 (lane lean-trio): the reach set's per-file rollup element and the umbrella-header count, present-only
     { "importers_umbrella", "importers_umbrella=1: SYM's file is imported by half the files that import anything (and over 40); importers are a count, importers_next= lists them", true, "impact" },
     { "shown_files", "files files=/shown_files=: files the WHOLE reach set touches (rides beside a cut symbol window) / listed; rf syms= reached symbols there, d= fewest hops; files_capped=1 + files_next= when cut", true, "files", MapHeaderRead::No, {}, "impact" },
+    // L7 type-use impact (typeuse.h): present only on a TYPE impact (of= a class/struct/named type/interface), whose rollup rides cut or not
+    { "type_users",  "files type_users=N: symbols that NAME the type (a parser-read type position) seed the walk at d=1 beside its callers; rf d=0 = the file defining it; with no limit= every d=0 file and every d=1 file a type mention reaches is listed (up to 200)", true, "files", MapHeaderRead::No, {}, "impact" },
+    { "type_defs",   "type_defs=K: K indexed type definitions share the spelled name, so a type row may depend on a namesake", true, "files", MapHeaderRead::No, {}, "impact" },
+    { "type_capped", "type_capped=1: the type-mention walk stopped at its budget; type rows are a floor", true, "files", MapHeaderRead::No, {}, "impact" },
+    { "via",         "rf via=type: every reached symbol in that file is reached only through a type mention (syms=0: the file names the type outside any indexed definition)", true, "rf", MapHeaderRead::No, "type" },
+    { "by_type",     "rf by_type=K: K of its syms= are reached only through a type mention", true, "rf" },
     { "shown_bridges",     "shown_bridges=/bridges=: <bridge> rows printed (the 12 heaviest) / all pairs", false, "zoom", MapHeaderRead::No, {}, "zoom" },
     { "shown_symbols",     "shown_symbols=: <s> rows printed", false, "tree", MapHeaderRead::No, {}, "tree" },
     // THE SWEEP'S LAST PASS (2026-09-12) listed every attribute the compact --impact, --safe-delete, --communities,

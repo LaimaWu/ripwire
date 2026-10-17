@@ -69,6 +69,20 @@ C/C++ argument that is a macro expanding to several arguments is counted as one,
 declaration ripwire does not index (a `.inl`/`.ipp` header, a header outside the tree) is not seen. `kParserVer` and `kCacheVersion` move
 (a definition record gains `paramsMin`; 184 and 34 in this release, see the versions note). Gate: `test/aritycheck.sh` §3b.
 
+### Changed — `--impact` of a type starts from the symbols that name it
+
+`--impact` walked call edges only, so a struct (which has no callers) answered `reaches="0"` however widely it was used,
+and a class never listed the file defining it. When the selector names a class, struct, named type or interface, the
+walk now also starts from every symbol that names the type in a type position — a declaration, parameter, field,
+return type, cast, template argument, base or implements clause (TS/JS also `instanceof` and `extends`; Python
+annotations and base classes) — read by the parser, for C, C++, ObjC, Go, Rust, Java, TS/JS and Python. Those symbols
+sit at `d="1"` beside the direct callers and their callers follow. The per-file `<files>` rollup rides on every type
+impact: `rf d="0"` is the defining file, `via="type"` marks a file reached only through a type mention (`by_type=K`
+when K of its symbols are), `type_users=` counts the seeded symbols, `type_defs=K` says when K type definitions share
+the name (mentions are matched by name), and with no `--limit` the listing holds every `d="0"` file and every `d="1"` file a type mention reaches, up to 200.
+Function impacts are byte-identical. Other languages record no type mentions yet (a floor, stated in the legend).
+Gate: `test/impacttypecheck.sh`.
+
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
 Ruby's `include`/`extend`/`prepend` are now captured by `queries/ruby/tags.scm` as `@reference.mixin` and turned into

@@ -885,8 +885,41 @@ inline constexpr const char* kImpactDepthColumnarLegend =
 // fix27: `hedged` = a listed rf row carries via= or by_name= (a multi-definition selector only); its sentence rides then.
 // for-body-slot FIX1 R1: `importersCut` = the root carries importers_next= (sizeImportTier: the <f> listing was cut). Its
 // definition rides then, unless the umbrella sentence (which defines it too) already does — legendcoveragecheck (A).
-inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged = false, bool importersCut = false )
+// L7 (typeuse.h): what the <files> element says about the type tier — `typed` = of= is a type and its tier ran (the rollup
+// rides on every type impact, cut or not); typeDefs > 1 / typeCapped exactly when it carries type_defs= / type_capped=.
+struct ImpactRollupTypeClauses
 {
+    bool typed = false;
+    std::size_t typeDefs = 0;
+    bool typeCapped = false;
+};
+
+inline std::string impactTypeRollupLegend( const ImpactRollupTypeClauses& t )
+{
+    std::string out = "TYPE IMPACT (of= is a class, struct, named type or interface): the walk also starts from every symbol that NAMES it, "
+                      "read by the parser in a type position (a declaration, parameter, field, return type, cast, template argument, base or "
+                      "implements clause; TS/JS also instanceof and extends; Python annotations and base classes), so d=1 holds those beside "
+                      "its callers and their callers follow; type_users= counts them. rf d=\"0\": the file defining of=; via=\"type\": every "
+                      "reached symbol there is reached only through a type mention (with syms=\"0\": the file names the type outside every "
+                      "indexed definition); by_type=K: K of its syms= are. With no limit= the listing holds every d=\"0\" file and every d=\"1\" file a type mention reaches (up to 200), then cuts as above. A mention is matched by its spelled name; inside a generic that declares a "
+                      "type parameter of that name (C++, Rust, TS, Go, Java) the name is the parameter and is skipped. Captured for C, C++, ObjC, "
+                      "Go, Rust, Java, TS/JS and Python; other languages add no type users, nor do a Python string annotation (\"Cell\"), "
+                      "a qualified Python base (mod.Base) or a Go type that satisfies an interface implicitly (no clause names it): floors. ";
+    if( t.typeDefs > 1 )
+    {
+        out += "type_defs=K: K indexed type definitions share that name, so a type row may depend on a namesake. ";
+    }
+    if( t.typeCapped )
+    {
+        out += "type_capped=\"1\": the type-mention walk stopped at its 50000-match budget, which no flag raises; the type rows are a floor. ";
+    }
+    return out;
+}
+
+inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged = false, bool importersCut = false,
+                                       const ImpactRollupTypeClauses& type = {} )
+{
+    const bool typed = type.typed;
     std::string out;
     if( importersCut && !umbrella )
     {
@@ -895,8 +928,13 @@ inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged =
     }
     if( rollup )
     {
-        out += "FILES (only beside a cut symbol window): the WHOLE reach set by file. files= in all, shown_files= listed; rf "
+        out += typed ? "FILES (beside a cut symbol window, and on every type impact): " : "FILES (only beside a cut symbol window): ";
+        out += "the WHOLE reach set by file. files= in all, shown_files= listed; rf "
                "syms= reached symbols there, d= fewest hops; by d=, syms=, path; files_capped=\"1\" with files_next= (lists all) when cut. ";
+    }
+    if( rollup && typed )
+    {
+        out += impactTypeRollupLegend( type );
     }
     if( rollup && hedged )
     {
