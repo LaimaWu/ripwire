@@ -325,7 +325,11 @@ constexpr std::uint32_t kCacheVersion = 32;           // 32: train 28 — the Re
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 176;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 190;          // bump on any grammar/.scm/extraction change
+                                                      // 190 = 2026-10-17 (train 30, lane go-local-var): Go var/const, Rust const/static and GDScript const
+                                                      //   captures are anchored to their item/package scope, so a function-local declaration is no
+                                                      //   longer a symbol; Go package-level `var ( … )` groups are captured. Train-30 reservation
+                                                      //   190 / rich file tag 191; the train renumbers. kCacheVersion unchanged.
                                                       // 176 = 2026-10-15 (train 28): strictly above every number a train-28 binary used — main 173
                                                       //   (slice 4a, rich 174), lane grep-carrier 173 (value refs through ?? || && / or and, rich 174),
                                                       //   lane ruby-pair 174 (subscript references + Ruby main-object mixins, rich 175), PR #380 145 (Elixir inert
