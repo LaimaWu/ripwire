@@ -38,8 +38,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **139 of 261 caps are classified
-(49 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 122 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **140 of 261 caps are classified
+(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 121 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -1013,7 +1013,7 @@ Discloses: `type_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
-| `kTypeMentionMatchBudget` | `50000` | — | — |
+| `kTypeMentionMatchBudget` | `50000` | INDEXING | per pattern; no flag raises it — type_capped="1" marks the floor |
 
 ### `src/valuerefs.h`
 

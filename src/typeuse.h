@@ -65,6 +65,20 @@ inline constexpr TypeMentionRow kTypeMentionRows[] = {
     { Lang::Python,     "(class_definition superclasses: (argument_list (identifier) @t))" },   // `class S( Base ):`
 };
 
+// One row per language whose generics can DECLARE a type parameter spelled like the type. `node` captures the whole
+// declaring scope (a template, a generic function / struct / impl / method) and, as @t, the parameter's name; the query
+// wraps it with the same #eq?. Inside that scope the name is the PARAMETER, so a mention there is not a type user (C++
+// `template <class Cell> f( Cell )`, Rust `fn f<Cell>( c: Cell )`, TS `function f<Cell>`, Go `func f[Cell any]`, Java
+// `<Cell> Cell f`). Matched on byte ranges, so a nested scope's own mention is shadowed exactly as the language reads it.
+inline constexpr TypeMentionRow kTypeParamScopeRows[] = {
+    { Lang::Cpp,        "(template_declaration parameters: (template_parameter_list [(type_parameter_declaration (type_identifier) @t) "
+                        "(optional_type_parameter_declaration name: (type_identifier) @t)])) @s" },
+    { Lang::Rust,       "(_ type_parameters: (type_parameters [(type_identifier) @t (constrained_type_parameter left: (type_identifier) @t)])) @s" },
+    { Lang::TypeScript, "(_ type_parameters: (type_parameters (type_parameter name: (type_identifier) @t))) @s" },
+    { Lang::Go,         "(_ type_parameters: (type_parameter_list (type_parameter_declaration name: (identifier) @t))) @s" },
+    { Lang::Java,       "(_ type_parameters: (type_parameters (type_parameter (type_identifier) @t))) @s" },
+};
+
 // The name a type mention spells: the final segment of a definition's name (`ns::Widget` → `Widget`). Empty when that
 // segment is not a plain identifier, which the #eq? literal could not carry safely — the tier then stays unarmed.
 inline std::string_view typeMentionName( std::string_view name ) noexcept
@@ -98,7 +112,7 @@ struct TypeUseTier
 
 // The per-pattern match budget. A type named on every line of a large tree is the only way to reach it; reaching it
 // is disclosed (type_capped="1"), never silent.
-inline constexpr std::size_t kTypeMentionMatchBudget = 50000;
+inline constexpr std::size_t kTypeMentionMatchBudget = 50000;   // per pattern; no flag raises it — type_capped="1" marks the floor
 
 inline TypeUseTier typeUseTier( const IngestResult& ing, std::span<const NodeId> seeds )
 {
@@ -132,10 +146,12 @@ inline TypeUseTier typeUseTier( const IngestResult& ing, std::span<const NodeId>
 
     // One spec per DISTINCT pattern; the spec's tag is the pattern itself, so a hit is matched back to its rows.
     // specLangs[i] holds one bit per Lang whose row names spec i's pattern — a hit counts only in those languages.
+    // The type-parameter scopes ride the same walk; specScope[i] marks them (their hits shadow, never name a user).
     std::vector<AstQuerySpec>  specs;
     std::vector<std::uint64_t> specLangs;
+    std::vector<char>          specScope;
     static_assert( kLangCount <= 64, "specLangs keeps one bit per Lang" );
-    for( const TypeMentionRow& row : kTypeMentionRows )
+    const auto addRow = [ & ]( const TypeMentionRow& row, bool scope )
     {
         const auto at = std::find_if( specs.begin(), specs.end(), [ & ]( const AstQuerySpec& sp ) { return sp.tag == row.node; } );
         const std::size_t i = std::size_t( at - specs.begin() );
@@ -143,9 +159,12 @@ inline TypeUseTier typeUseTier( const IngestResult& ing, std::span<const NodeId>
         {
             specs.push_back( AstQuerySpec{ "(" + std::string( row.node ) + " (#eq? @t \"" + name + "\"))", std::string( row.node ) } );
             specLangs.push_back( 0 );
+            specScope.push_back( char( scope ) );
         }
         specLangs[i] |= std::uint64_t( 1 ) << static_cast<unsigned>( row.lang );
-    }
+    };
+    for( const TypeMentionRow& row : kTypeMentionRows ) { addRow( row, false ); }
+    for( const TypeMentionRow& row : kTypeParamScopeRows ) { addRow( row, true ); }
     AstQueryGroup group;
     group.specs       = &specs;
     group.maxMatches  = kTypeMentionMatchBudget;
@@ -160,15 +179,33 @@ inline TypeUseTier typeUseTier( const IngestResult& ing, std::span<const NodeId>
     {
         if( s < isSeed.size() ) { isSeed[s] = 1; }
     }
-    for( const AstMatch& m : got[0] )
+    // Each hit's spec, or specs.size() when its language has no row naming that pattern (it compiled in another grammar).
+    std::vector<std::size_t> specOf( got[0].size(), specs.size() );
+    std::vector<const AstMatch*> shadows;   // type-parameter scopes (and their @t names), in walk order
+    for( std::size_t h = 0; h < got[0].size(); ++h )
     {
+        const AstMatch& m = got[0][h];
         const std::size_t i = std::size_t( std::find_if( specs.begin(), specs.end(), [ & ]( const AstQuerySpec& sp ) { return sp.tag == m.tag; } ) - specs.begin() );
         ASSUME( i < specs.size(), "every hit carries the tag of a spec this call built" );
         ++perTag[i];
         const std::uint64_t langBit = m.fileId < ing.files.size() ? std::uint64_t( 1 ) << static_cast<unsigned>( langOfPath( ing.files[m.fileId] ) ) : 0;
-        if( ( specLangs[i] & langBit ) == 0 )
+        if( ( specLangs[i] & langBit ) != 0 )
         {
-            continue;   // the pattern compiled in a grammar no row names for this file's language
+            specOf[h] = i;
+            if( specScope[i] != 0 ) { shadows.push_back( &m ); }
+        }
+    }
+    const auto shadowed = [ & ]( const AstMatch& m )
+    {
+        return std::any_of( shadows.begin(), shadows.end(), [ & ]( const AstMatch* sc )
+                            { return sc->fileId == m.fileId && sc->startByte <= m.startByte && m.endByte <= sc->endByte; } );
+    };
+    for( std::size_t h = 0; h < got[0].size(); ++h )
+    {
+        const AstMatch& m = got[0][h];
+        if( specOf[h] == specs.size() || specScope[specOf[h]] != 0 || shadowed( m ) )
+        {
+            continue;   // another grammar's compile, a scope row itself, or a mention of a same-named type PARAMETER
         }
         const NodeId host = flipimpact::innermostAtLine( ing, lines, m.fileId, m.line );
         if( host == kNoNode )

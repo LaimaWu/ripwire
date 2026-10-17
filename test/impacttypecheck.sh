@@ -21,6 +21,9 @@
 #          extends and throw-new users; fnonly.ts.
 #   js/    class Base; inst.js (instanceof), sub.js (extends).
 #   go/ rs/ py/ java/: a type, a function taking it, a function-only file.
+#   gp*: a GENERIC TYPE PARAMETER spelled like the type (C++ `template <class Widget>`, Rust `fn g<Cell>`, TS
+#          `function g<Router>`, Go `func g[Cell any]`, Java `<Cell> Cell g`) — inside that scope the name is the
+#          parameter, not the type, so the file is never listed (arm 19).
 #
 # ARMS
 #   (1) C struct: rf rows cell.h d="0", a.c b.c c.c d="1" via="type"; fnonly.c and comment.c absent; reaches>0; the
@@ -40,6 +43,9 @@
 #   (15) --limit=2 beats the first-hop band: shown_files="2" files_capped="1" with files_next=.
 #   (16) determinism: two runs byte-identical.
 #   (18) a class only CONSTRUCTED from 25 files (call edges, no type mention) keeps the 20-row default window.
+#   FLOORS (no row, no arm: the tier has no clause to read; the legend names them): a Python STRING annotation
+#          (`c: "Cell"`), a qualified Python base (`mod.Base`), a Go type satisfying an interface IMPLICITLY.
+#   (19) generic-parameter namesakes: every gp* file is absent from its language's rollup (arms 4, 5, 8, 9, 10b).
 #   (17) the first-hop band: 25 files naming a struct + its header = 26 rows listed with no --limit (default cap is 20).
 #
 # Usage: bash test/impacttypecheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/impacttypecheck.sh
@@ -194,6 +200,24 @@ mk rs/use_cell.rs <<'EOF'
 use crate::Cell;
 pub fn use_cell( c: &Cell ) -> i32 { c.x }
 EOF
+mk rs/gp.rs <<'EOF'
+pub fn generic_rs<Cell>( c: Cell ) -> Cell { c }
+pub struct Wrap<Cell: Clone> { pub inner: Cell }
+EOF
+mk cpp/gp.cpp <<'EOF'
+template <class Widget> int genericW( Widget w ) { return 0; }
+template <typename Widget = int> struct Box { Widget held; };
+EOF
+mk ts/gp.ts <<'EOF'
+export function genericTs<Router>( r: Router ): Router { return r; }
+EOF
+mk go/gp.go <<'EOF'
+package cells
+func GenericGo[Cell any]( c Cell ) Cell { return c }
+EOF
+mk java/Gp.java <<'EOF'
+public class Gp { static <Cell> Cell g( Cell c ) { return c; } }
+EOF
 mk rs/fnonly.rs <<'EOF'
 pub fn plain( x: i32 ) -> i32 { x + 1 }
 EOF
@@ -322,14 +346,14 @@ if (root(d3) or {}).get("defs") != "3":
 else:
     ok("(3b) defs=\"3\": every definition seeds; only the struct's mentions are via=\"type\"")
 
-typed_arm("(4) C++ class", "cpp", "Widget", ["w.h"], ["p.cpp", "m.cpp", "r.cpp", "d.cpp"], ["nm.cpp"], untyped=["ctor.cpp"])
-typed_arm("(5) TS interface + implementor", "ts", "Router", ["router.ts"], ["impl.ts", "use.ts"], ["fnonly.ts", "err.ts"])
+typed_arm("(4) C++ class", "cpp", "Widget", ["w.h"], ["p.cpp", "m.cpp", "r.cpp", "d.cpp"], ["nm.cpp", "gp.cpp"], untyped=["ctor.cpp"])
+typed_arm("(5) TS interface + implementor", "ts", "Router", ["router.ts"], ["impl.ts", "use.ts"], ["fnonly.ts", "err.ts", "gp.ts"])
 typed_arm("(6) TS class", "ts", "HttpErr", ["err.ts"], ["inst.ts", "sub.ts"], ["fnonly.ts", "router.ts"])
 typed_arm("(7) JS class", "js", "Base", ["base.js"], ["inst.js", "sub.js"], [])
-typed_arm("(8) Go struct", "go", "Cell", ["cell.go"], ["use.go"], ["fnonly.go"])
-typed_arm("(9) Rust struct", "rs", "Cell", ["lib.rs"], ["use_cell.rs"], ["fnonly.rs"])
+typed_arm("(8) Go struct", "go", "Cell", ["cell.go"], ["use.go"], ["fnonly.go", "gp.go"])
+typed_arm("(9) Rust struct", "rs", "Cell", ["lib.rs"], ["use_cell.rs"], ["fnonly.rs", "gp.rs"])
 typed_arm("(10) Python class", "py", "Cell", ["cell.py"], ["use.py", "sub.py"], ["fnonly.py"])
-typed_arm("(10b) Java class", "java", "Cell", ["Cell.java"], ["Use.java"], ["Plain.java"])
+typed_arm("(10b) Java class", "java", "Cell", ["Cell.java"], ["Use.java"], ["Plain.java", "Gp.java"])
 
 # (11) the MCP twin
 req = "\n".join([json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}),

@@ -897,15 +897,17 @@ inline std::string impactTypeRollupLegend( const ImpactRollupTypeClauses& t )
                       "implements clause; TS/JS also instanceof and extends; Python annotations and base classes), so d=1 holds those beside "
                       "its callers and their callers follow; type_users= counts them. rf d=\"0\": the file defining of=; via=\"type\": every "
                       "reached symbol there is reached only through a type mention (with syms=\"0\": the file names the type outside every "
-                      "indexed definition); by_type=K: K of its syms= are. With no limit= the listing holds every d=\"0\" file and every d=\"1\" file a type mention reaches (up to 200), then cuts as above. A mention is matched by its spelled name. Captured for C, C++, ObjC, "
-                      "Go, Rust, Java, TS/JS and Python; other languages add no type users (a floor). ";
+                      "indexed definition); by_type=K: K of its syms= are. With no limit= the listing holds every d=\"0\" file and every d=\"1\" file a type mention reaches (up to 200), then cuts as above. A mention is matched by its spelled name; inside a generic that declares a "
+                      "type parameter of that name (C++, Rust, TS, Go, Java) the name is the parameter and is skipped. Captured for C, C++, ObjC, "
+                      "Go, Rust, Java, TS/JS and Python; other languages add no type users, nor do a Python string annotation (\"Cell\"), "
+                      "a qualified Python base (mod.Base) or a Go type that satisfies an interface implicitly (no clause names it): floors. ";
     if( t.typeDefs > 1 )
     {
         out += "type_defs=K: K indexed type definitions share that name, so a type row may depend on a namesake. ";
     }
     if( t.typeCapped )
     {
-        out += "type_capped=\"1\": the type-mention walk stopped at its budget; the type rows are a floor. ";
+        out += "type_capped=\"1\": the type-mention walk stopped at its 50000-match budget, which no flag raises; the type rows are a floor. ";
     }
     return out;
 }
