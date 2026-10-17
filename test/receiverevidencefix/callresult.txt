@@ -501,6 +501,18 @@ type fileHolder struct {
 func (s *fileHolder) NearOSField() error {
 	return s.f.Close()
 }
+
+// UseNamedType: a result of a named non-struct type (`type Shape int`) types the local.
+func UseNamedType() bool {
+	s := nest.MakeShape()
+	return s.HasTop()
+}
+
+// UseFieldPath: a field path below a call-typed local whose class name is unique in the tree (Wrap.Cfg → *Config).
+func UseFieldPath() int {
+	w := nest.MakeWrap()
+	return w.Cfg.Size()
+}
 @@@ go/src/app/renamed.go
 package app
 
@@ -628,6 +640,20 @@ func (c *Config) Size() int { return 0 }
 type Other struct{}
 
 func (o *Other) Size() int { return 1 }
+
+// Shape: a named non-struct type with a method (fzf's `type BorderShape int`).
+type Shape int
+
+func (s Shape) HasTop() bool { return s > 0 }
+
+func MakeShape() Shape { return Shape(1) }
+
+// Wrap: a uniquely named struct whose field holds a Config.
+type Wrap struct {
+	Cfg *Config
+}
+
+func MakeWrap() *Wrap { return &Wrap{} }
 @@@ java/src/app/Box.java
 package app;
 
@@ -1028,6 +1054,12 @@ pub fn near_hedged_hop() -> u32 {
     let c = g.build();
     c.get("x")
 }
+
+// use_reexport: a result type named through a re-export resolves to the module that defines it.
+pub fn use_reexport() -> nest::Config {
+    let h = plainuse::via_reexport();
+    h.get()
+}
 @@@ rust/src/lib.rs
 pub mod app;
 pub mod model;
@@ -1035,6 +1067,7 @@ pub mod osfile;
 pub mod nest;
 pub mod plainuse;
 pub mod fix1;
+pub use nest::Holder;
 @@@ rust/src/model.rs
 use std::collections::HashMap;
 
@@ -1149,6 +1182,9 @@ use std::fs::File;
 pub fn open_plain_use() -> File { File::open("x").unwrap() }
 
 pub fn open_result() -> std::io::Result<File> { File::open("x") }
+
+// via_reexport names the crate root's re-export `crate::Holder` (lib.rs `pub use nest::Holder;`).
+pub fn via_reexport() -> crate::Holder { crate::nest::holder() }
 @@@ ts/src/holder.ts
 export class Holder {
   get(): number { return 0; }

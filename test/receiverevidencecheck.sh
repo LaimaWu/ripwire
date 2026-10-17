@@ -1290,6 +1290,11 @@ notproven $CR/kt   callees src/app/Use2.kt:useChain         "size src/app/Model2
 proven    $CR/ts   callees src/use2.ts:useChain             "method size src/nest.ts:7"                 # [P]
 notproven $CR/ts   callees src/use2.ts:useChain             "size src/nest.ts:2"                        # [N]
 notproven $CR/rust callees src/fix1.rs:near_hedged_hop      "get src/model.rs:6" "get src/model.rs:13"  # [N] `g.build()` on an untyped g
+# Shapes the identity rule keeps (census-driven, fix round 1): a named non-struct result type (Go `type Shape int`), a field
+# path below a call-typed local whose class name no other in-tree class shares, a result type named through a re-export.
+proven    $CR/go   callees src/app/fix1.go:UseNamedType     "method HasTop src/nest/nest.go:22"         # [P]
+proven    $CR/go   callees src/app/fix1.go:UseFieldPath     "method Size src/nest/nest.go:13"           # [P]
+proven    $CR/rust callees src/fix1.rs:use_reexport         "method get src/nest.rs:4"                  # [P]
 notproven $CR/cpp  callees src/fix1.cpp:nearOverloadHop     "size src/nest.cpp:5" "size src/nest.cpp:7" # [N] `p.pick( 1 )` is overloaded
 
 

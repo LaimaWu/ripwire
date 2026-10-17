@@ -333,7 +333,7 @@ struct CallResultTypes
             return kNoNode;
         }
         const bool modules = goPackages != nullptr && !goPackages->known.empty();
-        return onlyClass( cls, CallResultFamily::Go, [ & ]( NodeId c )
+        return onlyPackageClass( cls, [ & ]( NodeId c )
         {
             return modules ? goPackages->names( ing.symbols[ c ].fileId, path ) : endsWithDir( path, dirOf( ing.symbols[ c ].fileId ) );
         } );
@@ -345,7 +345,31 @@ struct CallResultTypes
             return goQualifiedClass( fileId, whole, cls );
         }
         const std::string_view dir = dirOf( fileId );   // one package is one directory
-        return onlyClass( cls, CallResultFamily::Go, [ & ]( NodeId c ) { return dirOf( ing.symbols[ c ].fileId ) == dir; } );
+        return onlyPackageClass( cls, [ & ]( NodeId c ) { return dirOf( ing.symbols[ c ].fileId ) == dir; } );
+    }
+    // Go: the class `cls` of the ONE package directory `keep` admits — a type a package defines once per build-tag file
+    // (`Executor` in util_unix.go and util_windows.go) is one class to the member rule (PackageDir), so its first
+    // definition stands for it; two packages' namesakes are kNoNode
+    template <class Keep>
+    NodeId onlyPackageClass( std::string_view cls, Keep&& keep ) const
+    {
+        NodeId           first = kNoNode;
+        std::string_view dir;
+        bool             one   = true;
+        NodeId           last  = kNoNode;
+        classesNamed( cls, CallResultFamily::Go, [ & ]( NodeId c )
+        {
+            if( !keep( c ) )
+            {
+                return false;
+            }
+            const std::string_view d = dirOf( ing.symbols[ c ].fileId );
+            one   = one && ( first == kNoNode || d == dir );
+            first = first == kNoNode ? c : first;
+            dir   = first == c ? d : dir;
+            return true;
+        }, last );
+        return one ? first : kNoNode;
     }
 
     // Java / Kotlin: a single-type import of the name (Kotlin's `as` alias included) decides, then the file's own class, then
@@ -593,19 +617,43 @@ struct CallResultTypes
         return rustModuleExists( crate, module );
     }
     // the ONE Rust class `cls` module `modPath` (seen from `f`) defines
-    NodeId rustClassAt( std::uint32_t f, std::string_view modPath, std::string_view cls ) const
+    // the ONE Rust class `cls` module `modPath` (seen from `f`) defines — or re-exports: a module file's own `use` of the
+    // name (`pub use mdbook::MDBook;` in lib.rs) is followed to the module it names (depth-bounded)
+    NodeId rustClassAt( std::uint32_t f, std::string_view modPath, std::string_view cls, int depth = 0 ) const
     {
         std::uint32_t crate = kNoCrate;
         std::string   module;
-        if( !rustModuleOf( f, modPath, crate, module, 0 ) )
+        if( depth > 4 || !rustModuleOf( f, modPath, crate, module, 0 ) )
         {
             return kNoNode;
         }
-        return onlyClass( cls, CallResultFamily::Rust, [ & ]( NodeId c )
+        NodeId            one = kNoNode;
+        const std::size_t n   = classesNamed( cls, CallResultFamily::Rust, [ & ]( NodeId c )
         {
             const std::uint32_t cf = ing.symbols[ c ].fileId;
             return cf < rust.crateOf.size() && rust.crateOf[ cf ] == crate && rust.moduleOf[ cf ] == module;
-        } );
+        }, one );
+        return n > 0 ? ( n == 1 ? one : kNoNode ) : rustReexport( crate, module, cls, depth );
+    }
+    NodeId rustReexport( std::uint32_t crate, const std::string& module, std::string_view cls, int depth ) const
+    {
+        const auto files = rust.filesOf.find( std::to_string( crate ) + "#" + module );
+        NodeId     hit   = kNoNode;
+        bool       seen  = false;
+        for( std::uint32_t mf : files == rust.filesOf.end() ? std::vector<std::uint32_t>{} : files->second )
+        {
+            forEachImport( mf, cls, [ & ]( const Binding& b )
+            {
+                if( b.kind == LocalBindKind::TypeImport )
+                {
+                    const auto [ modPath, item ] = splitLast( b.importedName, "::" );
+                    const NodeId c = modPath.empty() ? kNoNode : rustClassAt( mf, modPath, item, depth + 1 );
+                    hit  = seen ? kNoNode : c;
+                    seen = true;
+                }
+            } );
+        }
+        return hit;
     }
     // (L) a qualified Rust call whose qualifier is a module path reaching `target`'s own module (`model::load()`,
     // `crate::nest::holder()`, a `use`d `nest::holder()`): the evidence the canonical tier, keyed by type scopes, lacks
@@ -840,7 +888,10 @@ struct ReceiverEvidence
             if( classLike( s.kind ) )
             {
                 classesByFile[ s.fileId ].push_back( s.id );
-                types.noteClass( s );
+            }
+            if( classLike( s.kind ) || s.kind == SymKind::NamedType )
+            {
+                types.noteClass( s );   // a Go `type N int` has methods too: a result or field type may name it
             }
             if( callableKind( s.kind ) )
             {
@@ -1505,9 +1556,9 @@ struct ReceiverEvidence
         bool isStatic = false, superOnly = false;
         NodeId           cls  = kNoNode;
         std::string_view type = rootClass( r, ch, isStatic, superOnly, &cls );
-        if( type.empty() || ( cls != kNoNode && !ch.path.empty() ) )
+        if( type.empty() || ( cls != kNoNode && !ch.path.empty() && types.sameNamedClasses( cls ) != 1 ) )
         {
-            return false;   // a field path below a call result's class is read by NAME (memberType): a floor, not a guess
+            return false;   // a field path is read by NAME (memberType): below a class another in-tree class names too, a floor
         }
         // the side the receiver names: the class object (a class-name receiver, or `this`/`super` inside a static member),
         // else an instance; a stated field below always holds an instance
