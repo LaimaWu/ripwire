@@ -31,7 +31,7 @@ every definition. On fzf, `--path=Matcher::Loop,Pattern::extendedMatch` was "end
 
 Known floors: struct fields are not Go definitions, so nothing scopes to a struct; a member of an anonymous interface in
 a struct field scopes to the struct. Rust and Kotlin keep their own scope walkers; C++ and Python output is byte-identical.
-`kParserVer` moves (182 in this train's reservation; the train renumbers).
+`kParserVer` moves (184 in this release, see the versions note).
 
 ### Changed — a Rust call named like a standard collection, string or Option member binds no in-tree namesake by name (#405)
 
@@ -66,8 +66,8 @@ The too-few check runs after the too-many check and only when it leaves a candid
 overload the too-many check dropped. A call with a spread, splat or C++ pack expansion (`f( t... )`) has an unknown
 argument count. Fewer calls stay ambiguous, so `ambiguous=` and `graph_ambiguous=` drop. Two residual limits stay: a
 C/C++ argument that is a macro expanding to several arguments is counted as one, and a default written only on a
-declaration ripwire does not index (a `.inl`/`.ipp` header, a header outside the tree) is not seen. `kParserVer` 178 and `kCacheVersion` 33
-(a definition record gains `paramsMin`; the train renumbers). Gate: `test/aritycheck.sh` §3b.
+declaration ripwire does not index (a `.inl`/`.ipp` header, a header outside the tree) is not seen. `kParserVer` and `kCacheVersion` move
+(a definition record gains `paramsMin`; 184 and 34 in this release, see the versions note). Gate: `test/aritycheck.sh` §3b.
 
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
@@ -77,7 +77,7 @@ Ruby-only `captureRubyMixinBases` and its `captureIncludes` call site are gone; 
 the C++ reader keeps the two guards a tags pattern cannot state (the directive's text, and its class-body position).
 Output is byte-identical: the map, `--deps --limit=100000`, `--skipped`, `--callers`, `--callees`, `--impact` and
 `--uses` all match the base build over a real Rails corpus and the Ruby fixtures, and `--lego` lists the same
-implementors. `kParserVer` moves (the extraction path changed; 176 in this release, see the versions note).
+implementors. `kParserVer` moves (the extraction path changed; 184 in this release, see the versions note).
 
 ### Fixed — a function stored through `??`, `||`, `&&`, `or` or `and` is a value use
 
@@ -87,7 +87,7 @@ value-reference capture walked parentheses and ternary branches but stopped at a
 value-preserving operators — JS/TS `??`, `||`, `&&` and the logical assignments `??=`, `||=`, `&&=`; Python `or`,
 `and` — in every position it already read (assignment, return, argument, parameter default). The left operand of
 `&&`/`and` only decides and stays no row; C/C++ and Go `||`/`&&` yield a truth value and stay no row. Parser version
-176 in this release (caches re-parse once; see the versions note). Gate: `test/recallshapecheck.sh` arms OP1–OP17.
+184 in this release (caches re-parse once; see the versions note). Gate: `test/recallshapecheck.sh` arms OP1–OP17.
 
 ### Added — `--grep` names what a hit's variable carries and who reads it
 
@@ -119,7 +119,7 @@ edge, no `via="name"` hedge and no count: a `[]` or `__getitem__` definition els
 name. It does NOT mean every subscript of an in-tree class is found: a Ruby instance variable receiver is not typed, a
 compound assignment (`h[ k ] ||= v`) is recorded as the read form, and `del o[ k ]`, a multiple-assignment target and an
 annotation record nothing. On rake 93 callers of `[]` appear; on textual 42 of `__getitem__`. C++ `operator[]` could
-share the path and is not armed. `--uses` lists no subscript site. Parser version 176 in this release (see the versions note). Gate:
+share the path and is not armed. `--uses` lists no subscript site. Parser version 184 in this release (see the versions note). Gate:
 `test/subscriptopcheck.sh`.
 
 ### Added — `--lego=M` lists Ruby's main object when a file's top level mixes M in
@@ -299,13 +299,18 @@ server, when the cgroup's charge is the larger reading: restarting the server do
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 167 → 176: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
+`kParserVer` 167 → 184: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
 `??`/`||`/`&&`/`or`/`and` carried 173 on its branch, the Ruby/Python subscript references and Ruby's main-object mixins
-174 (file tag 175), and the Elixir quote live holes (#380) 145 on theirs. They land together at 176, above every number a
-branch build has used, so no cache such a build wrote is read as this release's; its full-use file tag is 177.
-`kCacheVersion` 31 → 32: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
-numbered 9 on #380's branch, which predates the subscript role), and the binding kind byte one (Ruby's main-object mixin); no record changes shape. `kQSnapCacheScheme` 20 → 21:
-the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls), so the dead kind can
+174 (file tag 175), and the Elixir quote live holes (#380) 145 on theirs; they landed together at 176 (file tag 177). The
+minimum-arity field (`paramsMin`) carried 178 (file tag 179) on its branch, the Go receiver scope (#403) 182 (file tag 183), and
+a receiver-typing branch not in this release 180 (file tag 181). This release is 184, above every number a branch build has used,
+so no cache such a build wrote is read as this release's; its full-use file tag is 185.
+`kCacheVersion` 31 → 34: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
+numbered 9 on #380's branch, which predates the subscript role), and the binding kind byte one (Ruby's main-object mixin) (32);
+a definition record gained `paramsMin`, the fewest arguments a call can pass (33 on its branch, and on another branch for a
+different layout, so this release takes 34). `kQSnapCacheScheme` 20 → 22:
+the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls, 21), and a Rust call
+named like a standard-type member no longer binds an in-tree namesake (22), so the dead kind can
 differ for an unchanged commit. Every ingest cache written by an earlier build is refused and re-indexed once, and every
 cached quality snapshot is recomputed. The session legend dictionary is `dictv=f83935bb22c0b728 entries=885`.
 
