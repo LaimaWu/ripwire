@@ -4320,14 +4320,18 @@ inline void captureScopeFact( BindCtx& cx, TSNode n, const char* t )
             return;
         }
     }
-    bool   directive = false;
-    TSNode path{};
-    for( std::uint32_t i = 0, k = ts_node_child_count( n ); i < k; ++i )
+    // one cursor pass (a using's child list is input-sized: every comment in it is a child — test/childwalkscalecheck.sh
+    // B22), keeping the `namespace` keyword and the last named child that is not a comment (the name used)
+    bool        directive = false;
+    TSNode      path{};
+    ChildCursor cursor( n );
+    forEachChild( n, cursor.cur, [ & ]( TSNode c )
     {
-        const TSNode c = ts_node_child( n, i );
-        directive      = directive || ( !ts_node_is_named( c ) && kindIs( ts_node_type( c ), "namespace" ) );
-        path           = ts_node_is_named( c ) ? c : path;
-    }
+        const char* ct = ts_node_type( c );
+        directive      = directive || ( !ts_node_is_named( c ) && kindIs( ct, "namespace" ) );
+        path           = ts_node_is_named( c ) && !kindIs( ct, "comment" ) ? c : path;
+        return true;
+    } );
     std::string whole = importPathText( path, cx.src );
     if( whole.starts_with( "::" ) )
     {
