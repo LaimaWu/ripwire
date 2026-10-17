@@ -244,6 +244,7 @@ struct CallResultTypes
     mutable std::string                                   nameKey;    // classesNamed's lookup buffer
     mutable std::string                                   aliasKey;   // importPathOf's / the TS pin lookup's
     mutable std::vector<std::string_view>                 usingPath;  // forEachCppUsing's per-row namespace path
+    mutable std::string                                   moduleKey;  // rustModuleKey's buffer
 
     explicit CallResultTypes( const IngestResult& i ) : ing( i ) {}
 
@@ -711,9 +712,15 @@ struct CallResultTypes
     {
         return module.empty() ? std::string( seg ) : std::string( module ).append( "::" ).append( seg );
     }
+    // "<crate>#<module>", RustLayout::filesOf's key, built in the reused buffer
+    const std::string& rustModuleKey( std::uint32_t crate, std::string_view module ) const
+    {
+        moduleKey.assign( std::to_string( crate ) ).append( 1, '#' ).append( module );
+        return moduleKey;
+    }
     bool rustModuleExists( std::uint32_t crate, const std::string& module ) const
     {
-        return rust.filesOf.contains( std::to_string( crate ) + "#" + module );
+        return rust.filesOf.contains( rustModuleKey( crate, module ) );
     }
     // the (crate, module) `modPath` (`crate::model`, `super::x`, `mdbook_core::book`, a `use`d `model`) names from file `f`
     bool rustModuleOf( std::uint32_t f, std::string_view modPath, std::uint32_t& crate, std::string& module, int depth ) const
@@ -801,7 +808,6 @@ struct CallResultTypes
         }
         return rustModuleExists( crate, module );
     }
-    // the ONE Rust class `cls` module `modPath` (seen from `f`) defines
     // the ONE Rust class `cls` module `modPath` (seen from `f`) defines — or re-exports: a module file's own `use` of the
     // name (`pub use mdbook::MDBook;` in lib.rs) is followed to the module it names (depth-bounded)
     NodeId rustClassAt( std::uint32_t f, std::string_view modPath, std::string_view cls, int depth = 0 ) const
@@ -822,10 +828,14 @@ struct CallResultTypes
     }
     NodeId rustReexport( std::uint32_t crate, const std::string& module, std::string_view cls, int depth ) const
     {
-        const auto files = rust.filesOf.find( std::to_string( crate ) + "#" + module );
+        const auto files = rust.filesOf.find( rustModuleKey( crate, module ) );
         NodeId     hit   = kNoNode;
         bool       seen  = false;
-        for( std::uint32_t mf : files == rust.filesOf.end() ? std::vector<std::uint32_t>{} : files->second )
+        if( files == rust.filesOf.end() )
+        {
+            return kNoNode;
+        }
+        for( std::uint32_t mf : files->second )   // by reference: the layout's own list, never a copy
         {
             forEachImport( mf, cls, [ & ]( const Binding& b )
             {

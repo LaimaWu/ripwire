@@ -6699,20 +6699,29 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // local then carries. The uses that follow in (file, byte) order read it through the receiver-evidence tables, so a
     // proven call ON a call-typed local types the next local in turn: chaining, in source order, inside this one pass (no
     // fixpoint; a hop bound by name alone or split stops it — test/receiverevidencecheck.sh (L) UseChain / use_chain).
-    HashMap<std::uint64_t, std::vector<std::uint32_t>> callResultAt;
-    HashMap<std::uint64_t, std::vector<std::uint32_t>> returnTypesAt;
+    // Both are flat (key, binding index) lists sorted by key then index — one record per binding, no per-key allocation
+    // (fix round 2, memory); equal_range reads a key's records in binding order.
+    using KeyedBinding = std::pair<std::uint64_t, std::uint32_t>;
+    std::vector<KeyedBinding> callResultAt;
+    std::vector<KeyedBinding> returnTypesAt;
     for( std::uint32_t bi = 0; bi < ing.bindings.size(); ++bi )
     {
         const Binding& b = ing.bindings[ bi ];
         if( b.kind == LocalBindKind::CallResult && !b.var.empty() )
         {
-            callResultAt[ ( std::uint64_t( b.fileId ) << 32 ) | b.startByte ].push_back( bi );
+            callResultAt.emplace_back( ( std::uint64_t( b.fileId ) << 32 ) | b.startByte, bi );
         }
         else if( b.kind == LocalBindKind::ReturnType && !b.typeName.empty() )
         {
-            returnTypesAt[ ( std::uint64_t( b.fileId ) << 32 ) | b.startByte ].push_back( bi );
+            returnTypesAt.emplace_back( ( std::uint64_t( b.fileId ) << 32 ) | b.startByte, bi );
         }
     }
+    std::sort( callResultAt.begin(), callResultAt.end() );
+    std::sort( returnTypesAt.begin(), returnTypesAt.end() );
+    const auto recordsAt = []( const std::vector<KeyedBinding>& list, std::uint64_t key )
+    {
+        return std::equal_range( list.begin(), list.end(), KeyedBinding{ key, 0u }, []( const KeyedBinding& a, const KeyedBinding& b ) { return a.first < b.first; } );
+    };
     // C++ (Rule 2's tables are its receiver evidence): an `auto` declaration's type — the lexical table's declaration at the
     // record's own declaration point when the name has one there and it is untyped, else the flat table's entry when it still
     // holds this declaration's constructor-shaped guess (the callee's name, which no class carries) or nothing. A tombstoned
@@ -6789,29 +6798,30 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // and unwrap depth) with the class the callee's declared type resolves to
     const auto typeCallResults = [ & ]( const Reference& r, NodeId callee, std::size_t site )
     {
-        const auto at = callResultAt.find( ( std::uint64_t( r.fileId ) << 32 ) | r.startByte );
-        if( at == callResultAt.end() )
+        const auto [ crLo, crHi ] = recordsAt( callResultAt, ( std::uint64_t( r.fileId ) << 32 ) | r.startByte );
+        if( crLo == crHi )
         {
             return;
         }
-        const Symbol& cs  = ing.symbols[ callee ];
-        const auto    rts = returnTypesAt.find( ( std::uint64_t( cs.fileId ) << 32 ) | cs.sigStartByte );
-        if( rts == returnTypesAt.end() || sharesCallKey( site ) )
+        const Symbol& cs             = ing.symbols[ callee ];
+        const auto    [ rtLo, rtHi ] = recordsAt( returnTypesAt, ( std::uint64_t( cs.fileId ) << 32 ) | cs.sigStartByte );
+        if( rtLo == rtHi || sharesCallKey( site ) )
         {
             return;
         }
         const bool rule2Sink = callResultFamilyOf( r.lang ) == CallResultFamily::Cpp;
-        for( std::uint32_t bi : at->second )
+        for( auto crIt = crLo; crIt != crHi; ++crIt )
         {
-            const Binding& cr = ing.bindings[ bi ];
+            const Binding& cr = ing.bindings[ crIt->second ];
             if( cr.typeName != r.calleeName )
             {
                 continue;   // another call starting at the same byte
             }
-            for( std::uint32_t ri : rts->second )
+            for( auto rtIt = rtLo; rtIt != rtHi; ++rtIt )
             {
-                const Binding& rt    = ing.bindings[ ri ];
-                const bool     match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth );
+                const std::uint32_t ri = rtIt->second;
+                const Binding&      rt = ing.bindings[ ri ];
+                const bool          match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth );
                 if( !match )
                 {
                     continue;
@@ -8913,8 +8923,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             ( nameOnly ? nameOnlyEdges : provenEdges )[ ekey ] = 1;   // FE-B: a proven site wins the merged row (Graph::outNameOnly)
         }
         // (L) the call committed exactly ONE unsplit target WITH evidence — a receiver rule, a resolved qualifier, the language's
-        // own lookup, an import or SCIP pin, never a pick by name alone (a qualified call the canonical tier could not place
-        // falls to the ladder unhedged: C++ `ext::onlyOne()`), and never a qualified written type's final segment
+        // own lookup, an import or SCIP pin, or the ladder's unhedged pick of the one definition a hedge-eligible call reaches by
+        // name (the tool's usual standard for an unhedged edge; a qualified call the canonical tier could not place falls to the
+        // ladder unhedged but is not hedge-eligible: C++ `ext::onlyOne()`), and never a qualified written type's final segment
         // (prov="final-segment") — so the locals its result binds take the target's declared type. A recursive call (the only
         // target is the caller) types nothing: a floor.
         // A Rust module path (`model::load()`) is a qualifier the canonical tier cannot place but the crate layout can.

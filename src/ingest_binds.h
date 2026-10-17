@@ -5615,6 +5615,41 @@ inline void captureRustEvidence( BindCtx& cx, TSNode n, const char* t, std::uint
     }
 }
 
+// (L) fix round 2 (memory): a Rust tombstone — the untyped RecvType of a `let`, parameter, closure, `for`, `if let` or match
+// arm name — only ever HIDES a call-typed fact of the same name where both are visible: Rust records no other typed local,
+// and its receivers read no other local fact (Rust is no class-name-receiver language and records no module alias). So a
+// file keeps a tombstone only when one of its CallResult records binds the same name over a span that overlaps the
+// tombstone's, and drops the rest before they are cached or merged (nushell: 98 740 tombstones → 21 091).
+inline void pruneRustTombstones( std::vector<RawBind>& binds, std::size_t first )
+{
+    struct Typed
+    {
+        std::string   var;   // owned: remove_if below moves the records the names came from
+        std::uint32_t start = 0;
+        std::uint32_t end   = 0;
+        bool operator<( const Typed& o ) const { return var < o.var; }
+    };
+    std::vector<Typed> typed;
+    for( std::size_t i = first; i < binds.size(); ++i )
+    {
+        if( binds[ i ].kind == LocalBindKind::CallResult )
+        {
+            typed.push_back( { binds[ i ].var, binds[ i ].spanStart, binds[ i ].spanEnd } );
+        }
+    }
+    std::sort( typed.begin(), typed.end() );
+    const auto hidesNothing = [ & ]( const RawBind& b )
+    {
+        if( b.kind != LocalBindKind::RecvType || !b.typeName.empty() )
+        {
+            return false;
+        }
+        const auto [ lo, hi ] = std::equal_range( typed.begin(), typed.end(), Typed{ b.var, 0, 0 } );
+        return std::none_of( lo, hi, [ & ]( const Typed& t ) { return b.spanStart < t.end && t.start < b.spanEnd; } );
+    };
+    binds.erase( std::remove_if( binds.begin() + std::ptrdiff_t( first ), binds.end(), hidesNothing ), binds.end() );
+}
+
 // FE-B: JS/TS receiver evidence — constructed / typed locals and parameters, `this.x` and TS field types, `static` members,
 // prototype methods; (review B4) every other name a function binds (an untyped parameter, a destructuring, a for-in/of
 // variable, a catch parameter, a reassignment), each visible where the language scopes it, and TS type parameters.

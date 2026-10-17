@@ -1717,6 +1717,10 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
         if( arms.bind != nullptr )
         {
             bindsFinalize( bindCtx );   // L3 noise gates + clobber sweep — the tail of the old captureBindings
+            if( le.lang == Lang::Rust )
+            {
+                pruneRustTombstones( binds, firstBindOfFile );   // (L) only a call-typed name's tombstones hide anything
+            }
         }
         refs.insert( refs.end(), std::make_move_iterator( aliasCtx.out.begin() ), std::make_move_iterator( aliasCtx.out.end() ) );
 
