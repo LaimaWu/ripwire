@@ -67,7 +67,8 @@ overload the too-many check dropped. A call with a spread, splat or C++ pack exp
 argument count. Fewer calls stay ambiguous, so `ambiguous=` and `graph_ambiguous=` drop. Two residual limits stay: a
 C/C++ argument that is a macro expanding to several arguments is counted as one, and a default written only on a
 declaration ripwire does not index (a `.inl`/`.ipp` header, a header outside the tree) is not seen. `kParserVer` and `kCacheVersion` move
-(a definition record gains `paramsMin`; 184 and 34 in this release, see the versions note). Gate: `test/aritycheck.sh` §3b.
+(a definition record gains `paramsMin`; 184 and 34 in this release, see the versions note). A cached definition whose
+minimum exceeds its parameter count is refused and that file reparses (`test/cachefuzzcheck.sh` Part 3). Gate: `test/aritycheck.sh` §3b.
 
 ### Changed — `--impact` of a type starts from the symbols that name it
 
