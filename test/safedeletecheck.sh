@@ -197,5 +197,97 @@ else
     no "(8) non-call references printed as call sites: every sites_at= is \"$SD8_ALL\", want \"n.c:11\""
 fi
 
+# (9)-(13) IX-3 name-template dispatch (lane name-template-dispatch): a method a template lookup can name is no
+#     none-found. RED on main (risk="none-found", no pattern_dispatch=). Python: getattr with an f-string prefix
+#     (the textual watch_ shape), a self receiver narrowed to the class family, a bare-variable getattr (no row), a
+#     literal getattr (no template, no row), a too-wide f"_{m}" (pattern_too_wide=1, no row); JS: this['compile' + t]
+#     (the nunjucks shape). Dead-code membership is unchanged: dead_code_candidate= is not read from these rows.
+PD="$WORK/pd"; mkdir -p "$PD"
+cat > "$PD/react.py" <<'PDEOF'
+class Node:
+    pass
+
+def check_watchers(obj, name):
+    fn = getattr(obj, f"watch_{name}", None)
+    return fn
+
+def bare_lookup(obj, name):
+    return getattr(obj, name)
+
+def literal_lookup(obj):
+    return getattr(obj, "plain_handler")
+
+def wide_lookup(obj, m):
+    return getattr(obj, f"_{m}")
+
+class Builder:
+    def run(self, rule):
+        return getattr(self, f"process_{rule}", None)
+
+    def process_color(self):
+        return 1
+
+class Unrelated:
+    def process_width(self):
+        return 2
+
+class Widget(Node):
+    def watch_value(self, v):
+        return v
+
+    def bare_target(self):
+        return 0
+
+    def plain_handler(self):
+        return 0
+
+    def _hidden(self):
+        return 0
+PDEOF
+cat > "$PD/comp.js" <<'PDEOF'
+class Compiler {
+  compile(node) {
+    var fn = this['compile' + node.typename];
+    return fn.call(this, node);
+  }
+  compileSuper(node) {
+    return node;
+  }
+}
+module.exports = { Compiler };
+PDEOF
+pdsd(){ "$BIN" "$PD" --no-cache --safe-delete="$1" 2>/dev/null | sed 's/<!--.*-->//'; }
+PD9="$( pdsd react.py:watch_value )"
+if printf '%s' "$PD9" | grep -q 'risk="hedged" pattern_dispatch="1"' && printf '%s' "$PD9" | grep -q '<pd in="check_watchers" p="react.py:5" pattern="watch_\*"/>'; then
+    ok "(9) getattr(obj, f\"watch_{name}\") names watch_value: risk=hedged, pattern_dispatch=1, <pd> at react.py:5"
+else
+    no "(9) watch_value is not hedged by the template lookup: $PD9"
+fi
+PD10a="$( pdsd Builder.process_color )"; PD10b="$( pdsd Unrelated.process_width )"
+if printf '%s' "$PD10a" | grep -q 'pattern_dispatch="1"' && printf '%s' "$PD10b" | grep -q 'risk="none-found"' && ! printf '%s' "$PD10b" | grep -q 'pattern_dispatch='; then
+    ok "(10) a self receiver keeps only the class family: Builder.process_color hedged, Unrelated.process_width not"
+else
+    no "(10) self-receiver family narrowing: in-family=[$PD10a] out-of-family=[$PD10b]"
+fi
+PD11a="$( pdsd Widget.bare_target )"; PD11b="$( pdsd Widget.plain_handler )"
+if printf '%s' "$PD11a$PD11b" | grep -q 'pattern_dispatch='; then
+    no "(11) a bare-variable or literal getattr made a template row: [$PD11a] [$PD11b]"
+else
+    ok "(11) near miss: getattr(obj, name) and getattr(obj, \"plain_handler\") make no pattern row"
+fi
+PD12="$( pdsd Widget._hidden )"
+if printf '%s' "$PD12" | grep -q 'pattern_too_wide="1"' && ! printf '%s' "$PD12" | grep -q 'pattern_dispatch=\|<pd '; then
+    ok "(12) f\"_{m}\" is too wide: pattern_too_wide=1, no row"
+else
+    no "(12) the too-wide template: $PD12"
+fi
+PD13="$( pdsd compileSuper )"
+PD13c="$( "$BIN" "$PD" --no-cache --callees=comp.js:compile 2>/dev/null | sed 's/<!--.*-->//' )"
+if printf '%s' "$PD13" | grep -q 'risk="hedged" pattern_dispatch="1"' && printf '%s' "$PD13c" | grep -q '<pd l="3" pattern="compile\*" cands="1" shown="1"><t n="compileSuper" p="comp.js:6"/></pd>'; then
+    ok "(13) JS this['compile' + t]: compileSuper hedged; --callees=compile lists it as a <pd> candidate"
+else
+    no "(13) the JS computed-member template: safe-delete=[$PD13] callees=[$PD13c]"
+fi
+
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'
 exit "$fail"

@@ -139,6 +139,27 @@ inline void vrSortUnique( std::vector<std::string>& v )
     v.erase( std::ranges::unique( v ).begin(), v.end() );
 }
 
+// IX-3 name-template dispatch: the dynamic-lookup FORMS per value-ref family, as data (one row per form; no Lang compare in
+// the walk). A Python row names a callee (`getattr( o, NAME )`, nameArg = the NAME position) or, dictGet, the attribute
+// `X.__dict__.get( NAME )` (callee = "__dict__"); a computedMember row arms `o[ NAME ]` (JS/TS). Ruby send/public_send and
+// PHP `$o->{…}` are not armed: neither language has a value-ref family yet (model.h kValueRefFamilyOfLang).
+struct VrPatternLookup
+{
+    VrFam            fam;
+    std::string_view callee;
+    std::uint8_t     nameArg        = 0;
+    bool             dictGet        = false;
+    bool             computedMember = false;
+};
+inline constexpr VrPatternLookup kVrPatternLookups[] = {
+    { VrFam::Py, "getattr", 1, false, false },
+    { VrFam::Py, "hasattr", 1, false, false },
+    { VrFam::Py, "__dict__", 0, true, false },
+    { VrFam::Js, "", 0, false, true },
+};
+// A template's literal side must hold this many identifier characters to be matched (`f"_{m}"` is too wide).
+inline constexpr std::size_t kVrPatternMinLiteral = 3;
+
 // The content of a string literal as written: prefix letters (b, f, r, u) and the quote pair stripped.
 inline std::string_view vrStringContent( std::string_view s ) noexcept
 {
@@ -248,6 +269,7 @@ public:
         m_fSubscript   = ts_language_field_id_for_name( tl, "subscript", 9 );
         m_fDesignator  = ts_language_field_id_for_name( tl, "designator", 10 );
         m_fAlias       = ts_language_field_id_for_name( tl, "alias", 5 );
+        m_fArguments   = fieldIdFor( tl, NodeField::Arguments );
 
         VrScope file;
         file.node = root;
@@ -918,6 +940,11 @@ private:
         else if( isCallKind( a.kind ) )
         {
             throughAt( n );
+            patternAtCall( n );
+        }
+        else if( m_fam == VrFam::Js && kindIs( a.kind, "subscript_expression" ) )
+        {
+            patternAtSubscript( n );
         }
     }
 
@@ -1672,6 +1699,205 @@ private:
         emitThrough( call, obj, f, std::move( key ), kindIs( ft, "identifier" ) );
     }
 
+    // ── name-template dispatch (IX-3) ─────────────────────────────────────────────────────────────────
+    // A lookup whose NAME is built from a template with a visible literal side: the per-family forms are DATA
+    // (kVrPatternLookups); the template shapes are an f-string / JS template literal (its holes are interpolation /
+    // template_substitution children) or a `+` with exactly one string-literal operand. A literal name is no template
+    // (an ordinary by-name lookup) and a bare variable has no literal side: neither records anything.
+    struct VrTemplate
+    {
+        bool        isTemplate = false;
+        std::string prefix;
+        std::string suffix;
+    };
+    bool isPlainStringNode( TSNode n ) const noexcept
+    {
+        if( ts_node_is_null( n ) || !kindIs( ts_node_type( n ), "string" ) )
+        {
+            return false;
+        }
+        const std::uint32_t k = ts_node_named_child_count( n );
+        for( std::uint32_t i = 0; i < k; ++i )
+        {
+            if( kindIs( ts_node_type( ts_node_named_child( n, i ) ), "interpolation" ) )
+            {
+                return false;   // a Python f-string is a `string` with interpolation children
+            }
+        }
+        return true;
+    }
+    VrTemplate templateOf( TSNode n ) const
+    {
+        VrTemplate out;
+        if( ts_node_is_null( n ) )
+        {
+            return out;
+        }
+        const char* k = ts_node_type( n );
+        if( kindIs( k, "binary_operator" ) || kindIs( k, "binary_expression" ) )
+        {
+            const TSNode op = child( n, m_fOperator );
+            if( ts_node_is_null( op ) || text( op ) != "+" )
+            {
+                return out;
+            }
+            const TSNode l  = child( n, m_fLeft );
+            const TSNode r  = child( n, m_fRight );
+            const bool   ls = isPlainStringNode( l );
+            const bool   rs = isPlainStringNode( r );
+            if( ls == rs )
+            {
+                return out;   // two literals are a constant name; no literal operand leaves no visible side
+            }
+            out.isTemplate = true;
+            ( ls ? out.prefix : out.suffix ) = std::string( vrStringContent( text( ls ? l : r ) ) );
+            return out;
+        }
+        const bool py = kindIs( k, "string" );
+        if( !py && !kindIs( k, "template_string" ) )
+        {
+            return out;
+        }
+        const auto isHole = [ py ]( const char* ck ) { return py ? kindIs( ck, "interpolation" ) : kindIs( ck, "template_substitution" ); };
+        const std::uint32_t cnt = ts_node_named_child_count( n );
+        TSNode first {}, last {}, open {}, close {};
+        for( std::uint32_t i = 0; i < cnt; ++i )
+        {
+            const TSNode c  = ts_node_named_child( n, i );
+            const char*  ck = ts_node_type( c );
+            if( isHole( ck ) )
+            {
+                if( ts_node_is_null( first ) )
+                {
+                    first = c;
+                }
+                last = c;
+            }
+            else if( kindIs( ck, "string_start" ) )
+            {
+                open = c;
+            }
+            else if( kindIs( ck, "string_end" ) )
+            {
+                close = c;
+            }
+        }
+        if( ts_node_is_null( first ) )
+        {
+            return out;   // no hole: a literal
+        }
+        // byte spans: the literal text between the opening delimiter and the first hole, and after the last hole
+        const std::uint32_t b0 = py ? ( ts_node_is_null( open ) ? ts_node_end_byte( n ) : ts_node_end_byte( open ) ) : ts_node_start_byte( n ) + 1;
+        const std::uint32_t e1 = py ? ( ts_node_is_null( close ) ? ts_node_start_byte( n ) : ts_node_start_byte( close ) ) : ts_node_end_byte( n ) - 1;
+        const std::uint32_t h0 = ts_node_start_byte( first );
+        const std::uint32_t h1 = ts_node_end_byte( last );
+        if( b0 > h0 || h1 > e1 || e1 > m_src.size() )
+        {
+            return out;   // a delimiter shape this reading does not know: no claim
+        }
+        out.isTemplate = true;
+        out.prefix     = std::string( m_src.substr( b0, h0 - b0 ) );
+        out.suffix     = std::string( m_src.substr( h1, e1 - h1 ) );
+        return out;
+    }
+    // A literal side the template can be matched on: >= kVrPatternMinLiteral identifier characters and nothing else.
+    static bool patternSideUsable( std::string_view s ) noexcept
+    {
+        return s.size() >= kVrPatternMinLiteral && std::ranges::all_of( s, []( char c )
+        {
+            return ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ) || c == '_' || c == '$';
+        } );
+    }
+    void emitPattern( TSNode site, TSNode recv, const VrTemplate& t )
+    {
+        if( !t.isTemplate )
+        {
+            return;
+        }
+        const bool pre = patternSideUsable( t.prefix );
+        const bool suf = patternSideUsable( t.suffix );
+        RawRef r;
+        r.fileId     = m_fileId;
+        r.startByte  = ts_node_start_byte( site );
+        r.line       = ts_node_start_point( site ).row + 1;
+        r.lang       = m_lang;
+        r.role       = RefRole::Pattern;
+        r.qualifier  = pre || suf ? "" : "w";   // too wide: counted, never matched
+        // an unusable side is no constraint: a template `x_{a}.{b}` keeps only its usable prefix; a too-wide one keeps
+        // both sides as written (valuerefindex.h counts the members they could name, pattern_too_wide=)
+        r.fieldName  = pre || !suf ? t.prefix : std::string();
+        r.composeRel = suf || !pre ? t.suffix : std::string();
+        r.name       = r.fieldName + "*" + r.composeRel;
+        r.recvVar    = ts_node_is_null( recv ) ? std::string() : vrClean( text( recv ) );
+        m_out.push_back( std::move( r ) );
+    }
+    void patternAtCall( TSNode call )
+    {
+        const TSNode f    = child( call, m_fFunction );
+        const TSNode args = child( call, m_fArguments );
+        if( ts_node_is_null( f ) || ts_node_is_null( args ) )
+        {
+            return;
+        }
+        for( const VrPatternLookup& form : kVrPatternLookups )
+        {
+            if( form.fam != m_fam || form.computedMember )
+            {
+                continue;
+            }
+            TSNode recv {};
+            const char* ft = ts_node_type( f );
+            if( form.dictGet )
+            {
+                // `X.__dict__.get( name )`: attribute `get` on attribute `__dict__` of the receiver
+                if( !kindIs( ft, "attribute" ) || text( child( f, m_fAttribute ) ) != "get" )
+                {
+                    continue;
+                }
+                const TSNode d = child( f, m_fObject );
+                if( ts_node_is_null( d ) || !kindIs( ts_node_type( d ), "attribute" ) || text( child( d, m_fAttribute ) ) != form.callee )
+                {
+                    continue;
+                }
+                recv = child( d, m_fObject );
+            }
+            else if( !kindIs( ft, "identifier" ) || text( f ) != form.callee )
+            {
+                continue;
+            }
+            // the positional arguments, keyword arguments and comments skipped
+            std::vector<TSNode> pos;
+            const std::uint32_t cnt = ts_node_named_child_count( args );
+            for( std::uint32_t i = 0; i < cnt; ++i )
+            {
+                const TSNode a = ts_node_named_child( args, i );
+                const char*  ak = ts_node_type( a );
+                if( !kindIs( ak, "comment" ) && !kindIs( ak, "keyword_argument" ) )
+                {
+                    pos.push_back( a );
+                }
+            }
+            if( pos.size() <= form.nameArg )
+            {
+                return;
+            }
+            if( !form.dictGet )
+            {
+                recv = pos[0];
+            }
+            emitPattern( call, recv, templateOf( pos[ form.nameArg ] ) );
+            return;
+        }
+    }
+    void patternAtSubscript( TSNode sub )
+    {
+        if( std::ranges::none_of( kVrPatternLookups, [ & ]( const VrPatternLookup& form ) { return form.fam == m_fam && form.computedMember; } ) )
+        {
+            return;
+        }
+        emitPattern( sub, child( sub, m_fObject ), templateOf( child( sub, m_fIndex ) ) );
+    }
+
     // Record one call through the container `obj` (written callee `f`), routed by where `obj` is declared.
     void emitThrough( TSNode call, TSNode obj, TSNode f, std::string key, bool bareCall )
     {
@@ -1733,6 +1959,7 @@ private:
     TSFieldId m_fConsequence = 0, m_fAlternative = 0, m_fParameters = 0, m_fParameter = 0, m_fObject = 0, m_fProperty = 0, m_fField = 0;
     TSFieldId m_fArgument = 0, m_fOperand = 0, m_fAttribute = 0, m_fOperator = 0, m_fPattern = 0, m_fDefinition = 0;
     TSFieldId m_fConstructor = 0, m_fType = 0, m_fIndex = 0, m_fSubscript = 0, m_fDesignator = 0, m_fAlias = 0;
+    TSFieldId m_fArguments = 0;
 };
 
 // The pass's entry point: one file's value references and calls-through-a-value, appended to `refs`. Inert on a

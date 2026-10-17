@@ -535,6 +535,7 @@ inline bool namespaceCompatible( RefRole role, SymKind kind ) noexcept
         case RefRole::Value: case RefRole::Through:   // never in the call loop; graph.h valueRefIndex narrows by kind itself
         case RefRole::Subscript:                      // the call loop's own receiver proof decides it (subscriptOperatorProven)
         case RefRole::Inert:                          // Inert exits before the name ladder
+        case RefRole::Pattern:                        // a name-template clue, never in the call loop (valuerefindex.h joins it)
         {
             return true;   // un-narrowed — see the doctrine above; a NEW role is a -Werror=switch decision here
         }

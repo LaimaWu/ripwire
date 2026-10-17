@@ -140,7 +140,10 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 32;           // 32: train 28 — the RefRole byte a record holds gained two appended values: lane
+constexpr std::uint32_t kCacheVersion = 35;           // 35: train 30 lane name-template-dispatch (train renumbers) — RefRole gained
+                                                      //    Pattern (11, appended): an older binary would reject the byte, a newer must not read a blob that
+                                                      //    predates it as complete.
+                                                      // 32: train 28 — the RefRole byte a record holds gained two appended values: lane
                                                       //    ruby-pair's Subscript (9) and PR #380's Inert (10; 9 on the PR's branch, which predates
                                                       //    Subscript). readRef validates the byte against kRefRoleCount, so no record changes
                                                       //    shape, but a branch build's blob would read its role 9 as the other role here; 32
@@ -325,7 +328,9 @@ constexpr std::uint32_t kCacheVersion = 32;           // 32: train 28 — the Re
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 176;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 192;          // bump on any grammar/.scm/extraction change
+                                                      // 192 = 2026-10-17 (train 30 lane name-template-dispatch, IX-3; train renumbers): RefRole::Pattern
+                                                      //   records at Python getattr/hasattr/__dict__.get and JS/TS computed-member name templates. Rich 193.
                                                       // 176 = 2026-10-15 (train 28): strictly above every number a train-28 binary used — main 173
                                                       //   (slice 4a, rich 174), lane grep-carrier 173 (value refs through ?? || && / or and, rich 174),
                                                       //   lane ruby-pair 174 (subscript references + Ruby main-object mixins, rich 175), PR #380 145 (Elixir inert
