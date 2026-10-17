@@ -129,29 +129,43 @@
 #            and Python's super() call, walk the bases only; a LOCAL spelled `base` (Python/JS/TS/Go/Java/Kotlin/Swift/C++/
 #            Ruby) or `super` (Go, C#, a Python name shadowing the builtin) never proves the base class's method — a typed
 #            one resolves to its own class, an untyped one is hedged. Twins: the keyword calls still prove the base.
-#   (L) call-result typing (train 29 lane call-result-typing; roots callresult/<lang>/): a binding initialised by a call —
-#            Go `x := f()` / `a, b := f()`, Rust `let x = f()?` / `let (a, _) = f()?` / `.unwrap()`, C++ `auto x = f()`, Java
-#            `var`, Kotlin `val`/`var`, TS `const x = [await] f()` — takes the callee's DECLARED return type when the callee binds
-#            exactly ONE in-tree definition with evidence (never by name alone) and that type, after the language's wrapper rows
-#            (Go `*T`, `(T, error)` by position incl. named results, grouped names `(a, b T)` one position per NAME; Rust
-#            Result/Option/Box/&T, tuples by position; C++ T&, T*,
-#            std::unique_ptr<T> (its pointee under `->` only); TS Promise<T> under await), names an in-tree class
-#            or interface. [P] RESOLVE (red before the lane); [N] near misses record NOTHING and stay as they were: an
-#            overloaded / two-def callee, an outside callee (os.Open, String::new, std::async, List.of), a wrapper outside the
-#            list (Go Ref[T], Rust Vec<T> / HashMap, C++ std::reference_wrapper, Java Optional<T>), a type-parameter result, a
-#            Go/Rust alias (no alias record: floor), a callee with no written return type (Kotlin `= expr`, TS inference), and
-#            a shadowing inner binding. A later reassignment `x = g()` keeps the declared type in these statically typed
-#            languages (Go UseReassigned, Kotlin useVar: still proven). One level: a callee whose receiver is itself typed by
-#            a call result is not followed (Rust use_path's `book.build()` result: floor, not gated). Twins marked `# guard`
+#   (L) call-result typing (train 29 lane call-result-typing; roots callresult/<lang>/, unpacked from callresult.txt): a
+#            binding initialised by a call — Go `x := f()` / `a, b := f()`, Rust `let x = f()?` / `let (a, _) = f()?` /
+#            `.unwrap()`, C++ `auto x = f()`, Java `var`, Kotlin `val`/`var`, TS `const x = [await] f()` — takes the callee's
+#            DECLARED return type when (1) the call commits exactly ONE target WITH evidence (a receiver rule, a resolved
+#            qualifier, the language's own lookup, an import pin — never a pick by name alone, never a qualified written
+#            type's final segment) and is not one of two nested same-named calls sharing its start (`h.get().get()`), and
+#            (2) that type, after the language's wrapper rows (Go `*T`, `(T, error)` by position incl. named results, grouped
+#            names `(a, b T)` one position per NAME; Rust Result/Option/Box/&T, tuples by position; C++ T&, T*,
+#            std::unique_ptr<T> (its pointee under `->` only); TS Promise<T> under await), RESOLVES in the callee's file to
+#            exactly ONE in-tree class: its imports (Java/Kotlin single-type imports, TS named / `import type` imports, Rust
+#            `use`), its qualifier (Go import alias → an in-tree package; Rust crate/self/super/an in-tree crate or module;
+#            C++ an in-tree namespace, std refused), else its own file, then its package (Go/Java/Kotlin: the directory) or
+#            namespace (C++). An outside import, an outside qualifier, a TS global, a name that resolves nowhere or twice
+#            records NOTHING. The typed local carries that CLASS (not its name): a member call on it reaches that class's own
+#            members (C++: a class name another in-tree class shares types nothing — Rule 2 keys members by name).
+#            [P] RESOLVE (red before the lane); [N] near misses record NOTHING and stay as they were: an overloaded /
+#            two-def callee, an outside callee (os.Open, String::new, std::async, List.of), a wrapper outside the list (Go
+#            Ref[T], Rust Vec<T> / HashMap, C++ std::reference_wrapper, Java Optional<T>), a type-parameter result, a Go/Rust
+#            alias (no alias record: floor), a callee with no written return type (Kotlin `= expr`, TS inference), and a
+#            shadowing inner binding. A later reassignment `x = g()` keeps the declared type in these statically typed
+#            languages (Go UseReassigned, Kotlin useVar: still proven). CHAINING: a call on a call-typed local, when proven,
+#            types the next local in turn — in source order, inside the one resolve pass, no fixpoint (Rust use_path /
+#            use_chain, Go/C++/Java/Kotlin/TS UseChain); a hop bound by name alone or split stops it. FLOORS (a typed shape
+#            that proves no member, not gated): an INTERFACE result (Go UseIface — the bodyless signature is the ladder's,
+#            L6) and a C++ `using` alias result (useAlias — Rule 2 reads no member through an alias). Twins marked `# guard`
 #            write the type and resolve before the lane (Rust has no such reader yet: no twin arm).
 #            Proven-only near misses with a WRONG namesake in tree: an outside callee beside an in-tree def of the same name
 #            (os.Open/model.Open, String::new/model::new, std::async/cfg::async, List.of/Configs.of, Object.freeze/freeze);
-#            a QUALIFIED outside result type whose last segment names an in-tree class (Go `*os.File`, Rust std::fs::File vs
-#            an in-tree File) — the qualifier must name an in-tree package/module, and the Go written/param twin is held to
-#            the same rule; a wrapper without its operator (C++ `u.get()` on unique_ptr; Rust Option without `?`, one `?`
-#            on Result<Option<T>>, a trailing method that is not unwrap/expect); a type parameter spelled like an in-tree
-#            class; both overloads of a C++ callee. Go `pkg.F` (an import name, renamed or not) reaches package-level funcs
-#            only, never a method; a LOCAL spelled like the import is not the package.
+#            an outside result type whose last segment names an in-tree class (Go `*os.File`, Rust std::fs::File / `use
+#            std::fs::File`, C++ ext::Config, Java/Kotlin `import java.io.File`, TS `ext-config` / `other-lib` / the global
+#            Response) — the Go written/param/FIELD twins are held to the same qualifier rule; a nested same-named call; an
+#            interface in one package beside a struct of the same name in another; a commit by name alone (C++
+#            `ext::onlyOne()`) or by a written type's final segment (`ext::Factory f; f.make()`); a wrapper without its
+#            operator (C++ `u.get()` on unique_ptr; Rust Option without `?`, one `?` on Result<Option<T>>, a trailing method
+#            that is not unwrap/expect); a type parameter spelled like an in-tree class; both overloads of a C++ callee. Go
+#            `pkg.F` (an import name, renamed or not) reaches package-level funcs only, never a method; a LOCAL spelled like
+#            the import is not the package.
 #   (C) conservation: each root's census dispositions still sum to calls= with unaccounted=0 (no silent drop).
 #   (K) the predicates can fail: a planted unhedged false row fails notproven, a planted hedged row passes it and
 #            fails proven, marked rejects an unhedged row, a rootless or not-found answer is NOROOT, the MCP reader
@@ -1154,7 +1168,7 @@ done
 proven    $CR/rust callees src/app.rs:use_tuple "method get src/model.rs:13"           # [P] `let (_, o) = pair()?` — tuple element 1
 notproven $CR/rust callees src/app.rs:use_tuple "get src/model.rs:6"                   # [N]
 proven    $CR/rust callees src/app.rs:use_path "method build src/model.rs:46"          # [P] `let book = Book::load(..)?; book.build()` (mdbook-14 hop 1)
-notproven $CR/rust callees src/app.rs:use_path "get src/model.rs:13"                   # [N] (c = book.build() is one level further: floor, not gated)
+notproven $CR/rust callees src/app.rs:use_path "get src/model.rs:13"                   # [N] (c = book.build() types c in turn: the chaining arms below)
 for f in near_external near_wrapper near_shadow; do   # String::new() beside the in-tree model::new; Vec<T> outside the list (the slice's len); a later `let c` rebinds c
     notproven $CR/rust callees "src/app.rs:$f" "len src/model.rs:7" "len src/model.rs:14"   # [N]
 done
@@ -1213,6 +1227,71 @@ done
 notproven $CR/ts callees src/use.ts:nearUntyped "get src/model.ts:6"                   # [N] no written return type (TS inference is not modelled) — truth Config.get :2 (floor)
 notproven $CR/ts callees src/use.ts:nearMap "get src/model.ts:2" "get src/model.ts:6"  # [N] Object.freeze beside the in-tree freeze(): Map.get
 proven    $CR/ts callees src/use.ts:useWritten "method get src/model.ts:2"             # guard
+# ── fix round 1 (rv-/rv2-call-result-typing): the typed fact carries the ONE in-tree class the result type resolves to ──
+# B1 a nested same-named call: `x = h.get().get()` types x from the OUTER call only — never from the inner call, whose
+#    (file, start byte, name) it shares. The outer call's own receiver is a call, so x stays untyped: the truth (Leaf /
+#    Other's size) is a floor, not gated.
+notproven $CR/go   callees src/app/fix1.go:NearNestedSame   "Size src/nest/nest.go:13"                  # [N] (*Config).Size, the inner result's
+notproven $CR/rust callees src/fix1.rs:near_nested_same     "size src/nest.rs:11"                       # [N] Config::size
+for f in nearNestedSame nearNestedWritten; do
+    notproven $CR/cpp callees "src/fix1.cpp:$f"             "size src/nest.cpp:7"                       # [N] Item::size
+done
+notproven $CR/java callees src/app/Use2.java:nearNestedSame "size src/app/Item.java:5"                  # [N] Item.size
+notproven $CR/kt   callees src/app/Use2.kt:nearNestedSame   "size src/app/Model2.kt:14"                 # [N] Item.size
+notproven $CR/ts   callees src/use2.ts:nearNestedSame       "size src/nest.ts:7"                        # [N] Item.size
+# B2 an unqualified result type the callee's file IMPORTS from outside (Java/Kotlin single-type import, TS named and
+#    `import type` import, a TS global, Rust `use std::…`) or an outside qualifier (C++ `ext::Config`) never names the
+#    in-tree namesake: nothing is recorded (the outside class's own member is a floor).
+notproven $CR/java callees src/app/Use2.java:nearImported   "delete src/app/File.java:5"                # [N] java.io.File, not app.File
+notproven $CR/kt   callees src/app/Use2.kt:nearImported     "delete src/app/File.kt:5"                  # [N] java.io.File, not app.File
+notproven $CR/ts   callees src/use2.ts:nearLoadExt          "get src/model.ts:2" "get src/model.ts:6"   # [N] ext-config's Config
+notproven $CR/ts   callees src/use2.ts:nearTypeOnly         "get src/holder.ts:2"                       # [N] `import type { Holder } from 'other-lib'`
+notproven $CR/ts   callees src/use2.ts:nearGlobal           "json src/response.ts:2"                    # [N] the global Response
+for f in near_plain_use near_plain_use_result; do   # `use std::fs::File; fn f() -> File` / `-> std::io::Result<File>` + unwrap
+    notproven $CR/rust callees "src/fix1.rs:$f"             "sync_all src/osfile.rs:5"                  # [N] std's File, not osfile::File
+done
+notproven $CR/cpp  callees src/fix1.cpp:nearLoadExt         "get src/model.cpp:5" "get src/model.cpp:7" # [N] ext::Config, not cfg::Config
+# B3 the typed fact is the CLASS, not its name: package a's interface Client never reaches package b's struct Client.Do
+#    (an interface result proves no member at all: the bodyless signature is the ladder's, L6), and the in-repo shape
+#    (declinedsitefix's `pkg, err := pkgr.Get(..)` → the pkgr.Packager interface, beside forbodyslotfix's struct Packager)
+#    is pinned on a temp copy of those two trees.
+notproven $CR/go   callees src/app/fix1.go:NearIfaceNamesake "Do src/b/b.go:5"                          # [N]
+mkdir -p "$TMP/b3real" && cp -R "$ROOT/test/declinedsitefix/go" "$TMP/b3real/dsf" && cp -R "$ROOT/test/forbodyslotfix/src/go" "$TMP/b3real/fbs"
+( cd "$TMP/b3real" && "$BIN" . --no-cache --callees=doPackage 2>/dev/null ) >"$TMP/b3real.xml"
+if P rows "$TMP/b3real.xml"; then
+    if [ "$PARSED" = "NOROOT" ] || [ -z "$PARSED" ]; then no "(L) B3 real: --callees=doPackage gave no rows"
+    elif printf '%s\n' "$PARSED" | awk '$2=="Package" && $3=="fbs/packager.go" && $5=="-"' | grep -q .; then no "(L) B3 real: pkg.Package proves forbodyslotfix's struct Packager.Package (another package's namesake)"
+    else ok "(L) B3 real: pkg.Package (pkgr.Packager interface) never proves another package's struct Packager"; fi
+fi
+# B5 typing needs a commit WITH evidence: `ext::onlyOne()` binds the in-tree cfg::onlyOne by name alone, and
+#    `ext::Factory f; f.make()` reaches cfg::Factory::make by its final segment only (prov="final-segment", itself a
+#    disclosed base floor) — neither types its local.
+for f in nearExtCall nearExtSubCall; do
+    notproven $CR/cpp callees "src/fix1.cpp:$f"             "size src/model.cpp:6" "size src/model.cpp:8"   # [N]
+done
+notproven $CR/cpp  callees src/fix1.cpp:nearExtWritten      "get src/model.cpp:5" "get src/model.cpp:7" # [N]
+# The written/param twin's sibling, a struct FIELD written `*os.File` beside the in-tree model.File (a base false claim the
+# same qualifier rule fixes): `s.f.Close()` is os.File's.
+notproven $CR/go   callees src/app/fix1.go:NearOSField      "Close src/model/extra.go:8"                # [N]
+# CHAINING (kept): a local typed by a call result is a typed receiver, so the call on it — proven — types the next local,
+# in source order, in the one resolve pass (no fixpoint). [P] pins it; [N] a hop that binds by name alone (an untyped
+# receiver) or splits (an overloaded callee) stops the chain.
+proven    $CR/rust callees src/app.rs:use_path              "method get src/model.rs:6"                 # [P] `let c = book.build(); c.get(..)`
+proven    $CR/rust callees src/fix1.rs:use_chain            "method get src/nest.rs:10"                 # [P] nest's Config, not model's
+notproven $CR/rust callees src/fix1.rs:use_chain            "get src/model.rs:6" "get src/model.rs:13"  # [N]
+proven    $CR/go   callees src/app/fix1.go:UseChain         "method Get src/nest/nest.go:11"            # [P] nest's Config, not model's
+notproven $CR/go   callees src/app/fix1.go:UseChain         "Get src/model/model.go:7"                  # [N]
+proven    $CR/cpp  callees src/fix1.cpp:useChain            "method get src/model.cpp:5"                # [P]
+notproven $CR/cpp  callees src/fix1.cpp:useChain            "get src/model.cpp:7"                       # [N]
+proven    $CR/java callees src/app/Use2.java:useChain       "method size src/app/Item.java:5"           # [P]
+notproven $CR/java callees src/app/Use2.java:useChain       "size src/app/Leaf.java:4"                  # [N]
+proven    $CR/kt   callees src/app/Use2.kt:useChain         "fn size src/app/Model2.kt:14"              # [P]
+notproven $CR/kt   callees src/app/Use2.kt:useChain         "size src/app/Model2.kt:18"                 # [N]
+proven    $CR/ts   callees src/use2.ts:useChain             "method size src/nest.ts:7"                 # [P]
+notproven $CR/ts   callees src/use2.ts:useChain             "size src/nest.ts:2"                        # [N]
+notproven $CR/rust callees src/fix1.rs:near_hedged_hop      "get src/model.rs:6" "get src/model.rs:13"  # [N] `g.build()` on an untyped g
+notproven $CR/cpp  callees src/fix1.cpp:nearOverloadHop     "size src/nest.cpp:5" "size src/nest.cpp:7" # [N] `p.pick( 1 )` is overloaded
+
 
 echo "=== (C) conservation: no call silently disappears ==="
 ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts"

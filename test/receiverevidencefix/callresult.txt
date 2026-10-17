@@ -119,6 +119,70 @@ int useAliasWritten()
     cfg::ConfigAlias a = cfg::makeAlias();
     return a.get();
 }
+@@@ cpp/src/fix1.cpp
+#include "model.h"
+#include "nest.h"
+#include <ext/lib.h>
+
+// nearNestedSame: `h.get().get()` — x is the OUTER call's result (Leaf), never the inner call's (Item) (fix round 1, B1).
+int nearNestedSame()
+{
+    auto h = nest::makeBox();
+    auto x = h.get().get();
+    return x.size();
+}
+
+// nearNestedWritten: the same with the holder's type written.
+int nearNestedWritten()
+{
+    nest::Box h;
+    auto x = h.get().get();
+    return x.size();
+}
+
+// nearLoadExt: `ext::Config` is an outside class whose last segment names the in-tree cfg::Config (B2; second lens B1).
+int nearLoadExt()
+{
+    auto c = cfg::loadExt();
+    return c.get();
+}
+
+// nearExtCall / nearExtSubCall: `ext::onlyOne()` reaches the in-tree cfg::onlyOne by its name alone — no evidence (B5).
+int nearExtCall()
+{
+    auto x = ext::onlyOne();
+    return x.size();
+}
+
+int nearExtSubCall()
+{
+    auto x = ext::sub::onlyOne();
+    return x.size();
+}
+
+// nearExtWritten: `ext::Factory f; f.make()` reaches cfg::Factory::make by its final segment only — it types nothing (B5).
+int nearExtWritten()
+{
+    ext::Factory f;
+    auto c = f.make();
+    return c.get();
+}
+
+// useChain: f is typed by makeFactory()'s result, then the proven `f.make()` types c.
+int useChain()
+{
+    auto f = cfg::makeFactory();
+    auto c = f.make();
+    return c.get();
+}
+
+// nearOverloadHop: `p.pick( 1 )` is overloaded, so the chain stops at that hop.
+int nearOverloadHop()
+{
+    auto p = nest::makePicker();
+    auto c = p.pick( 1 );
+    return c.size();
+}
 @@@ cpp/src/model.cpp
 #include "model.h"
 
@@ -142,6 +206,12 @@ Config Factory::make() const { return {}; }
 namespace cfg
 {
 Config async( int ) { return {}; }
+}
+
+namespace cfg
+{
+Config  onlyOne() { return {}; }
+Factory makeFactory() { return {}; }
 }
 @@@ cpp/src/model.h
 #pragma once
@@ -186,10 +256,68 @@ namespace cfg
 Config                        async( int which );   // an in-tree namesake of std::async
 template<class Config> Config create2();            // a template parameter named after the in-tree Config
 }
+
+#include <ext/config.h>
+
+namespace cfg
+{
+ext::Config loadExt();       // an OUTSIDE qualified result whose last segment names the in-tree cfg::Config
+Config      onlyOne();       // an in-tree namesake of an outside ext::onlyOne
+Factory     makeFactory();
+}
+@@@ cpp/src/nest.cpp
+#include "nest.h"
+
+namespace nest
+{
+int    Leaf::size() const { return 0; }
+Leaf   Item::get() const { return {}; }
+int    Item::size() const { return 1; }
+Item   Box::get() const { return {}; }
+Box    makeBox() { return {}; }
+Item   Picker::pick( int ) const { return {}; }
+Leaf   Picker::pick( const char* ) const { return {}; }
+Picker makePicker() { return {}; }
+}
+@@@ cpp/src/nest.h
+#pragma once
+
+namespace nest
+{
+struct Leaf
+{
+    int size() const;
+};
+struct Item
+{
+    Leaf get() const;
+    int  size() const;
+};
+struct Box
+{
+    Item get() const;
+};
+struct Picker
+{
+    Item pick( int which ) const;
+    Leaf pick( const char* name ) const;
+};
+Box    makeBox();
+Picker makePicker();
+}
 @@@ go/go.mod
 module example.com/cr
 
 go 1.22
+@@@ go/src/a/a.go
+package a
+
+// Client is an INTERFACE here; package b holds a STRUCT of the same name whose Do has a body.
+type Client interface {
+	Do() error
+}
+
+func New() Client { return nil }
 @@@ go/src/app/app.go
 package app
 
@@ -335,6 +463,44 @@ func NearShadowPkg() {
 func UseIfaceWritten(p model.Packager, info *model.Info) {
 	p.Package(info)
 }
+@@@ go/src/app/fix1.go
+package app
+
+import (
+	"os"
+
+	"example.com/cr/src/a"
+	"example.com/cr/src/nest"
+)
+
+// NearIfaceNamesake: `a.New()` returns the INTERFACE a.Client; package b's struct Client is another class (fix round 1, B3).
+func NearIfaceNamesake() error {
+	c := a.New()
+	return c.Do()
+}
+
+// NearNestedSame: `h.Get().Get()` — x is the OUTER call's result (*Other), never the inner call's (*Config) (B1).
+func NearNestedSame() int {
+	h := nest.MakeHolder()
+	x := h.Get().Get()
+	return x.Size()
+}
+
+// UseChain: h is typed by MakeHolder's result, then the proven `h.Get()` types c — nest's Config, not model's.
+func UseChain() *nest.Other {
+	h := nest.MakeHolder()
+	c := h.Get()
+	return c.Get()
+}
+
+// fileHolder: a struct FIELD written `*os.File` beside the in-tree model.File.
+type fileHolder struct {
+	f *os.File
+}
+
+func (s *fileHolder) NearOSField() error {
+	return s.f.Close()
+}
 @@@ go/src/app/renamed.go
 package app
 
@@ -347,6 +513,12 @@ func UseRenamedImport(info *m.Info) {
 	pkg, _ := m.Get("rpm")
 	pkg.Package(info)
 }
+@@@ go/src/b/b.go
+package b
+
+type Client struct{}
+
+func (c *Client) Do() error { return nil }
 @@@ go/src/model/extra.go
 package model
 
@@ -438,6 +610,31 @@ func (m *Maker) Build() *Other { return &Other{} }
 
 // Get: a package-level func beside the method Config.Get (nfpm's `nfpm.Get` beside `(*Config).Get`).
 func Get(format string) (Packager, error) { return nil, nil }
+@@@ go/src/nest/nest.go
+package nest
+
+type Holder struct{}
+
+func MakeHolder() *Holder { return &Holder{} }
+
+func (h *Holder) Get() *Config { return &Config{} }
+
+type Config struct{}
+
+func (c *Config) Get() *Other { return &Other{} }
+
+func (c *Config) Size() int { return 0 }
+
+type Other struct{}
+
+func (o *Other) Size() int { return 1 }
+@@@ java/src/app/Box.java
+package app;
+
+public class Box {
+    public static Box make() { return new Box(); }
+    public Item get() { return new Item(); }
+}
 @@@ java/src/app/Config.java
 package app;
 
@@ -455,6 +652,26 @@ public final class Configs {
     public static <T> T create() { return null; }
     public static Config of() { return new Config(); }
     public static <Config> Config create2() { return null; }
+}
+@@@ java/src/app/File.java
+package app;
+
+// File: an in-tree namesake of java.io.File.
+public class File {
+    public boolean delete() { return true; }
+}
+@@@ java/src/app/Item.java
+package app;
+
+public class Item {
+    public Leaf get() { return new Leaf(); }
+    public int size() { return 1; }
+}
+@@@ java/src/app/Leaf.java
+package app;
+
+public class Leaf {
+    public int size() { return 0; }
 }
 @@@ java/src/app/Other.java
 package app;
@@ -504,6 +721,46 @@ public class Use {
         return g.get();
     }
 }
+@@@ java/src/app/Use2.java
+package app;
+
+public class Use2 {
+    // nearImported: Util.open() returns java.io.File, never the in-tree app.File.
+    boolean nearImported() {
+        var f = Util.open();
+        return f.delete();
+    }
+
+    // nearNestedSame: `h.get().get()` — x is the OUTER call's result (Leaf), never the inner call's (Item).
+    int nearNestedSame() {
+        var h = Box.make();
+        var x = h.get().get();
+        return x.size();
+    }
+
+    // useChain: h is typed by Box.make(), then the proven `h.get()` types i.
+    int useChain() {
+        var h = Box.make();
+        var i = h.get();
+        return i.size();
+    }
+}
+@@@ java/src/app/Util.java
+package app;
+
+import java.io.File;
+
+public final class Util {
+    // open: `File` here is java.io.File — the single-type import shadows the same-package app.File (fix round 1, B2).
+    public static File open() { return new File("x"); }
+}
+@@@ kt/src/app/File.kt
+package app
+
+// File: an in-tree namesake of java.io.File.
+class File {
+    fun delete(): Boolean = true
+}
 @@@ kt/src/app/Model.kt
 package app
 
@@ -518,6 +775,28 @@ class Other {
 fun makeConfig(): Config = Config()
 
 fun makeLazy() = Config()
+@@@ kt/src/app/Model2.kt
+package app
+
+import java.io.File
+
+// openFile: `File` is java.io.File through the import, never the in-tree app.File (fix round 1, B2).
+fun openFile(): File = File("x")
+
+class Box {
+    fun get(): Item = Item()
+}
+
+class Item {
+    fun get(): Leaf = Leaf()
+    fun size(): Int = 1
+}
+
+class Leaf {
+    fun size(): Int = 0
+}
+
+fun makeBox(): Box = Box()
 @@@ kt/src/app/Use.kt
 package app
 
@@ -544,6 +823,28 @@ fun nearInferred(): Int {
 fun useWritten(): Int {
     val c: Config = makeConfig()
     return c.get()
+}
+@@@ kt/src/app/Use2.kt
+package app
+
+// nearImported: openFile() returns java.io.File, never the in-tree app.File.
+fun nearImported(): Boolean {
+    val f = openFile()
+    return f.delete()
+}
+
+// nearNestedSame: `h.get().get()` — x is the OUTER call's result (Leaf), never the inner call's (Item).
+fun nearNestedSame(): Int {
+    val h = makeBox()
+    val x = h.get().get()
+    return x.size()
+}
+
+// useChain: h is typed by makeBox(), then the proven `h.get()` types i.
+fun useChain(): Int {
+    val h = makeBox()
+    val i = h.get()
+    return i.size()
 }
 @@@ rust/Cargo.toml
 [package]
@@ -692,10 +993,48 @@ pub fn near_type_param_named() -> u32 {
     let g = model::generic2::<model::Other>();
     g.get("p")
 }
+@@@ rust/src/fix1.rs
+use crate::model::{self, Book};
+use crate::{nest, plainuse};
+
+// near_nested_same: `h.get().get()` — x is the OUTER call's result (Other), never the inner call's (Config) (B1).
+pub fn near_nested_same() -> usize {
+    let h = nest::holder();
+    let x = h.get().get();
+    x.size()
+}
+
+// use_chain: h is typed by holder()'s result, then the proven `h.get()` types c — nest's Config, not model's.
+pub fn use_chain() -> nest::Other {
+    let h = nest::holder();
+    let c = h.get();
+    c.get()
+}
+
+// near_plain_use / near_plain_use_result: `use std::fs::File` names std's File (B2).
+pub fn near_plain_use() -> u32 {
+    let f = plainuse::open_plain_use();
+    f.sync_all()
+}
+
+pub fn near_plain_use_result() -> u32 {
+    let f = plainuse::open_result().unwrap();
+    f.sync_all()
+}
+
+// near_hedged_hop: g is untyped (a generic result), so `g.build()` binds by name alone and types nothing.
+pub fn near_hedged_hop() -> u32 {
+    let g = model::generic::<Book>();
+    let c = g.build();
+    c.get("x")
+}
 @@@ rust/src/lib.rs
 pub mod app;
 pub mod model;
 pub mod osfile;
+pub mod nest;
+pub mod plainuse;
+pub mod fix1;
 @@@ rust/src/model.rs
 use std::collections::HashMap;
 
@@ -771,6 +1110,27 @@ pub fn nested() -> Result<Option<Config>, Error> { Ok(Some(Config)) }
 
 // generic2 names its type parameter after the in-tree Config.
 pub fn generic2<Config: Default>() -> Config { Config::default() }
+@@@ rust/src/nest.rs
+pub struct Holder;
+
+impl Holder {
+    pub fn get(&self) -> Config { Config }
+}
+
+pub struct Config;
+
+impl Config {
+    pub fn get(&self) -> Other { Other }
+    pub fn size(&self) -> usize { 0 }
+}
+
+pub struct Other;
+
+impl Other {
+    pub fn size(&self) -> usize { 1 }
+}
+
+pub fn holder() -> Holder { Holder }
 @@@ rust/src/osfile.rs
 // File: an in-tree namesake of std::fs::File — a qualified outside result type never types a binding by its last segment.
 pub struct File;
@@ -782,6 +1142,29 @@ impl File {
 pub fn open_std() -> std::io::Result<std::fs::File> { std::fs::File::open("x") }
 
 pub fn open_fs() -> std::fs::File { std::fs::File::open("x").unwrap() }
+@@@ rust/src/plainuse.rs
+use std::fs::File;
+
+// open_plain_use names `File` through `use std::fs::File`: std's File, never the in-tree osfile::File (fix round 1, B2).
+pub fn open_plain_use() -> File { File::open("x").unwrap() }
+
+pub fn open_result() -> std::io::Result<File> { File::open("x") }
+@@@ ts/src/holder.ts
+export class Holder {
+  get(): number { return 0; }
+}
+@@@ ts/src/loader.ts
+import { Config } from "ext-config";
+import type { Holder } from "other-lib";
+
+// loadExt: `Config` is the OUTSIDE ext-config's, never the in-tree model.ts Config (fix round 1, B2).
+export function loadExt(): Config { return {} as Config; }
+
+// holderOf: a type-only import of an outside Holder, beside the in-tree holder.ts Holder.
+export function holderOf(): Holder { return {} as Holder; }
+
+// fetchIt: the global Response, beside the in-tree response.ts Response.
+export function fetchIt(): Response { return new Response(); }
 @@@ ts/src/model.ts
 export class Config {
   get(): number { return 0; }
@@ -798,6 +1181,25 @@ export function makeUntyped() { return new Config(); }
 export async function loadConfig(): Promise<Config> { return new Config(); }
 
 export function freeze(): Config { return new Config(); }
+@@@ ts/src/nest.ts
+export class Leaf {
+  size(): number { return 0; }
+}
+
+export class Item {
+  get(): Leaf { return new Leaf(); }
+  size(): number { return 1; }
+}
+
+export class Box {
+  get(): Item { return new Item(); }
+}
+
+export function makeBox(): Box { return new Box(); }
+@@@ ts/src/response.ts
+export class Response {
+  json(): number { return 0; }
+}
 @@@ ts/src/use.ts
 import { Config, makeConfig, makeUntyped, loadConfig } from "./model";
 
@@ -829,4 +1231,36 @@ export function nearMap(): number | undefined {
 export function useWritten(): number {
   const c: Config = makeConfig();
   return c.get();
+}
+@@@ ts/src/use2.ts
+import { loadExt, holderOf, fetchIt } from "./loader";
+import { makeBox } from "./nest";
+
+export function nearLoadExt(): number {
+  const c = loadExt();
+  return c.get();
+}
+
+export function nearTypeOnly(): number {
+  const h = holderOf();
+  return h.get();
+}
+
+export function nearGlobal(): number {
+  const r = fetchIt();
+  return r.json();
+}
+
+// nearNestedSame: `h.get().get()` — x is the OUTER call's result (Leaf), never the inner call's (Item).
+export function nearNestedSame(): number {
+  const h = makeBox();
+  const x = h.get().get();
+  return x.size();
+}
+
+// useChain: h is typed by makeBox(), then the proven `h.get()` types i.
+export function useChain(): number {
+  const h = makeBox();
+  const i = h.get();
+  return i.size();
 }
