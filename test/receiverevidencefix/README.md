@@ -57,14 +57,21 @@ The names are paraphrases of graded false rows; the code is minimal and is never
   (Python and Go also a local `super`), then calls `render` on it: never Base's render through the bases-only lookup.
   Kept: `super.render()`, Python `super().render()`, Go's promoted `p.Render()`, the typed local's own class. C#
   `base.Render()` is visible only (no C# tree reads `base` as a receiver root yet).
-- `callresult.txt` — arm (L), call-result typing: six source trees (`go`, `rust`, `cpp`, `java`, `kt`, `ts`) in ONE text bundle that
-  the gate unpacks into its temp dir (committed as source trees they would join the repo's own indexed map): a local initialised by a call to an in-tree function
-  whose DECLARED return type names an in-tree class (`Config`), beside a same-named method on another class (`Other`), so
-  the call on the local is name-only until the binding takes the callee's return type. Go: `(T, error)` with named results,
-  `(*T, error)`, `*T`, a positional pair, an interface result, a method callee, a reassignment, the package func `model.Get`
-  beside the method `Config.Get`. Rust: `Result<T,_>` + `?`, `Option<T>` + `?`, `Box<T>`, `&T`, `T`, a tuple element, an
-  associated fn `Book::load(..)?`, a `self` method callee, `.unwrap()`/`.expect()`. C++: `T`, `const T&`, `T*`,
-  `std::unique_ptr<T>`, a `using` alias, a method callee. Java `var`, Kotlin `val`/`var`, TS `const` and `await`. Near misses
-  (must stay unproven): two-def / overloaded callees, outside callees, wrappers outside the list (Go `Ref[T]`, Rust `Vec<T>` /
-  `HashMap`, C++ `std::reference_wrapper`, Java `Optional<T>`), type-parameter results, Go/Rust aliases, no written return
-  type, a shadowing inner binding. `UseWritten`/`useWritten` twins write the type (green before the lane).
+- `callresult.txt` — arm (L), call-result typing: six source trees (`go`, `rust`, `cpp`, `java`, `kt`, `ts`) in ONE text
+  bundle that the gate unpacks into its temp dir (committed as source trees they would join the repo's own indexed map): a
+  local initialised by a call to an in-tree function whose DECLARED return type names an in-tree class (`Config`), beside a
+  same-named method on another class (`Other`), so the call on the local is name-only until the binding takes the callee's
+  return type. Shapes that RESOLVE: Go `(T, error)` with named results, `(*T, error)`, `*T`, a positional pair, a method
+  callee, a reassignment, the package func `model.Get` beside the method `Config.Get`; Rust `Result<T,_>` + `?`,
+  `Option<T>` + `?`, `Box<T>`, `&T`, `T`, a tuple element, an associated fn `Book::load(..)?`, a `self` method callee,
+  `.unwrap()`/`.expect()`; C++ `T`, `const T&`, `T*`, `std::unique_ptr<T>`, a method callee; Java `var`, Kotlin
+  `val`/`var`, TS `const` and `await`; and a CHAIN (`h = make(); c = h.get(); c.m()`, every language). Shapes typed but
+  proving NO member (floors, not resolutions): a Go INTERFACE result (its bodyless signature is the ladder's) and a C++
+  `using` alias result (Rule 2 reads no member through an alias). Near misses (must stay unproven): two-def / overloaded
+  callees, outside callees, wrappers outside the list (Go `Ref[T]`, Rust `Vec<T>` / `HashMap`, C++
+  `std::reference_wrapper`, Java `Optional<T>`), type-parameter results, Go/Rust aliases, no written return type, a
+  shadowing inner binding; fix round 1: a nested same-named call (`h.get().get()`), an outside import or qualifier naming an
+  in-tree namesake (Java/Kotlin `import java.io.File`, TS `ext-config` / `import type` / the global `Response`, Rust `use
+  std::fs::File`, C++ `ext::Config`), an interface in one Go package beside a same-named struct in another, a commit by name
+  alone (`ext::onlyOne()`) or by a written type's last name (`ext::Factory f`), a Go field `f *os.File`, and a chain hop that
+  binds by name alone or splits. `UseWritten`/`useWritten` twins write the type (green before the lane).

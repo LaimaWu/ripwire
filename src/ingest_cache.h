@@ -332,10 +332,12 @@ constexpr std::uint32_t kCacheVersion = 33;           // 33: train 29 lane call-
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
 constexpr std::uint32_t kParserVer    = 180;          // bump on any grammar/.scm/extraction change
                                                       // 180 = 2026-10-16 (train 29 lane call-result-typing; the train renumbers — reservation 180/181):
-                                                      //   Go and Rust record LocalBindKind::CallResult for a local bound to a call's result and
-                                                      //   LocalBindKind::ReturnType for each declared result (ingest_binds.h captureCallResult,
-                                                      //   captureReturnTypes); Rust records a RecvType tombstone for every `let` name and member
-                                                      //   calls carry FE-B's receiver path. Rich file tag 181. kCacheVersion 33.
+                                                      //   Go, Rust, C++, Java, Kotlin and TS (never JS) record LocalBindKind::CallResult for a
+                                                      //   local bound to a call's result and LocalBindKind::ReturnType for each declared result
+                                                      //   (ingest_binds.h pushCallResult, pushReturnType); Java, Kotlin and Rust record a
+                                                      //   TypeImport per imported name, and a Go field keeps its `pkg.T` qualifier; Rust records a
+                                                      //   RecvType tombstone for every `let` name and member calls carry FE-B's receiver path.
+                                                      //   Rich file tag 181. kCacheVersion 33.
                                                       // 176 = 2026-10-15 (train 28): strictly above every number a train-28 binary used — main 173
                                                       //   (slice 4a, rich 174), lane grep-carrier 173 (value refs through ?? || && / or and, rich 174),
                                                       //   lane ruby-pair 174 (subscript references + Ruby main-object mixins, rich 175), PR #380 145 (Elixir inert

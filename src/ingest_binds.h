@@ -4192,6 +4192,131 @@ inline void pushReturnType( BindCtx& cx, std::uint32_t defStart, std::uint8_t in
     }
 }
 
+// ── type imports (fix round 1): what a callee's file means by a bare result type name ─────────────────────────────────────
+// One TypeImport per name an import binds (model.h LocalBindKind::TypeImport). graph.h reads them to resolve a declared
+// result type in its callee's file: a name imported from outside names no in-tree class, however it is spelled.
+inline void pushTypeImport( BindCtx& cx, std::uint32_t at, std::string_view var, std::string_view item, std::string_view path )
+{
+    if( !var.empty() && !path.empty() )
+    {
+        cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = at, .lang = cx.lang, .kind = LocalBindKind::TypeImport,
+                                      .var = std::string( var ), .importedName = std::string( path ), .typeName = std::string( item ) } );
+    }
+}
+
+// a written path as one spelling: every space and line break removed (`crate :: a` → `crate::a`, `std ::map` → `std::map`)
+inline std::string withoutBlanks( std::string text )
+{
+    std::erase_if( text, []( char c ) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; } );
+    return text;
+}
+inline std::string importPathText( TSNode n, std::string_view src )
+{
+    return withoutBlanks( std::string( ts_node_is_null( n ) ? std::string_view{} : nodeTextOf( n, src ) ) );
+}
+
+// the last segment of a `sep`-joined path (`File` of `java.io.File`, `File` of `std::fs::File`)
+inline std::string_view lastPathSegment( std::string_view path, std::string_view sep )
+{
+    const std::size_t at = path.rfind( sep );
+    return at == std::string_view::npos ? path : path.substr( at + sep.size() );
+}
+
+// Java `import a.b.C;` / `import a.b.*;` and Kotlin `import a.b.C [as D]` / `import a.b.*`. A Java `import static`
+// brings a MEMBER, not a type: nothing is recorded for it.
+inline void captureJvmTypeImport( BindCtx& cx, TSNode n, std::uint32_t at )
+{
+    TSNode path{};
+    TSNode alias{};
+    bool   wildcard = false;
+    bool   member   = false;
+    ChildCursor cursor( n );
+    forEachChild( n, cursor.cur, [ & ]( TSNode c )
+    {
+        const char* t = ts_node_type( c );
+        if( kindIs( t, "static" ) )
+        {
+            member = true;
+        }
+        else if( kindIs( t, "asterisk" ) || kindIs( t, "wildcard_import" ) )
+        {
+            wildcard = true;
+        }
+        else if( kindIs( t, "import_alias" ) )
+        {
+            alias = namedChildOfKind( c, { "type_identifier", "simple_identifier" } );
+        }
+        else if( ts_node_is_null( path ) && ts_node_is_named( c ) && ( kindIs( t, "scoped_identifier" ) || kindIs( t, "identifier" ) ) )
+        {
+            path = c;
+        }
+        return true;
+    } );
+    if( member || ts_node_is_null( path ) )
+    {
+        return;
+    }
+    const std::string whole = importPathText( path, cx.src );
+    if( wildcard )
+    {
+        pushTypeImport( cx, at, "*", {}, whole );
+        return;
+    }
+    const std::string_view item = lastPathSegment( whole, "." );
+    pushTypeImport( cx, at, ts_node_is_null( alias ) ? item : nodeTextOf( alias, cx.src ), item, whole );
+}
+
+// Rust `use` trees, flattened: `use a::b::C;`, `use a::{b::C, D as E, self, f::*};` — one TypeImport per name bound, the
+// path rooted at `prefix` (`a::` inside a group). `self` in a group binds the group's own module.
+inline void captureRustUseTree( BindCtx& cx, std::uint32_t at, TSNode node, const std::string& prefix, int depth )
+{
+    if( ts_node_is_null( node ) || depth > 8 )
+    {
+        return;
+    }
+    const char* t = ts_node_type( node );
+    if( kindIs( t, "use_list" ) )
+    {
+        for( std::uint32_t i = 0, k = ts_node_named_child_count( node ); i < k; ++i )
+        {
+            captureRustUseTree( cx, at, ts_node_named_child( node, i ), prefix, depth + 1 );
+        }
+        return;
+    }
+    if( kindIs( t, "scoped_use_list" ) )
+    {
+        const TSNode p = fieldChild( node, NodeField::Path );
+        captureRustUseTree( cx, at, namedChildOfKind( node, { "use_list" } ), ts_node_is_null( p ) ? prefix : prefix + importPathText( p, cx.src ) + "::", depth + 1 );
+        return;
+    }
+    if( kindIs( t, "use_wildcard" ) )
+    {
+        const TSNode p    = ts_node_named_child_count( node ) > 0 ? ts_node_named_child( node, 0 ) : TSNode{};
+        std::string  glob = prefix + importPathText( p, cx.src );
+        if( glob.ends_with( "::" ) )
+        {
+            glob.resize( glob.size() - 2 );
+        }
+        pushTypeImport( cx, at, "*", {}, glob );
+        return;
+    }
+    if( kindIs( t, "use_as_clause" ) )
+    {
+        const std::string whole = prefix + importPathText( fieldChild( node, NodeField::Path ), cx.src );
+        pushTypeImport( cx, at, importPathText( fieldChild( node, NodeField::Alias ), cx.src ), lastPathSegment( whole, "::" ), whole );
+        return;
+    }
+    const std::string text = importPathText( node, cx.src );   // an identifier, `crate`/`self`/`super`, or a scoped path
+    if( text == "self" && prefix.size() > 2 )
+    {
+        const std::string module = prefix.substr( 0, prefix.size() - 2 );
+        pushTypeImport( cx, at, lastPathSegment( module, "::" ), lastPathSegment( module, "::" ), module );
+        return;
+    }
+    const std::string whole = prefix + text;
+    pushTypeImport( cx, at, lastPathSegment( whole, "::" ), lastPathSegment( whole, "::" ), whole );
+}
+
 // Is `name` one of the type parameters the identifiers under `node` declare (Go `[T any]`, a generic receiver's `Ref[T]`)?
 inline bool declaresTypeName( TSNode node, std::string_view name, std::string_view src )
 {
@@ -4338,13 +4463,22 @@ inline std::string_view goQualifiedWhole( TSNode type, std::string_view src )
     return {};
 }
 
+// C++: a written qualified type as one spelling — `qualifiedNameText`'s (a leading global `::` dropped) without blanks, so
+// `::std::map`, `std ::map` and `std::map` all read `std::map`; "" for an unqualified name
+inline std::string cppQualifiedSpelling( TSNode type, std::string_view src )
+{
+    return withoutBlanks( qualifiedNameText( type, src ) );
+}
+
 // C++ (train 29 call-result typing): the class a function's written result names — `T`, `T&`, `T*`, `const T&`, `ns::T`
-// (Rule 2's own final-segment reading) — with `arrow` set for a std smart pointer / optional (externalnames.h
-// kCppStdArrowTemplates: the class is its `->` pointee, never its `.` members). "" for `auto`, a `std::` class, any other
-// template (`std::reference_wrapper<T>`, `std::vector<T>`) or a template parameter of the enclosing template.
-inline std::string_view cppResultClass( TSNode fn, std::string_view src, bool& arrow )
+// — with `arrow` set for a std smart pointer / optional (externalnames.h kCppStdArrowTemplates: the class is its `->`
+// pointee, never its `.` members) and `whole` the qualified spelling (`ext::Config`; "" when written bare), which graph.h
+// resolves to one in-tree class or refuses. "" for `auto`, a `std::` class (however spelled), any other template
+// (`std::reference_wrapper<T>`, `std::vector<T>`) or a template parameter of the enclosing template.
+inline std::string_view cppResultClass( TSNode fn, std::string_view src, bool& arrow, std::string& whole )
 {
     arrow = false;
+    whole.clear();
     const TSNode type = fieldChild( fn, NodeField::Type );
     if( ts_node_is_null( type ) )
     {
@@ -4361,41 +4495,39 @@ inline std::string_view cppResultClass( TSNode fn, std::string_view src, bool& a
         const std::string_view name = nodeTextOf( type, src );
         return param( name ) ? std::string_view{} : name;
     }
-    if( kindIs( t, "qualified_identifier" ) || kindIs( t, "template_type" ) )
+    if( !kindIs( t, "qualified_identifier" ) && !kindIs( t, "template_type" ) )
     {
-        const std::string_view text = nodeTextOf( type, src );
-        if( kindIs( t, "template_type" ) || text.find( '<' ) != std::string_view::npos )
-        {
-            // `std::unique_ptr<T>`: a std arrow template whose ONE argument is a plain class
-            const TSNode tt   = kindIs( t, "template_type" ) ? type : namedChildOfKind( type, { "template_type" }, true );
-            const TSNode name = ts_node_is_null( tt ) ? TSNode{} : fieldChild( tt, NodeField::Name );
-            const TSNode args = ts_node_is_null( tt ) ? TSNode{} : namedChildOfKind( tt, { "template_argument_list" } );
-            if( ts_node_is_null( name ) || ts_node_is_null( args ) || ts_node_named_child_count( args ) != 1 || !text.starts_with( "std::" )
-                || !std::binary_search( std::begin( externalnames::kCppStdArrowTemplates ), std::end( externalnames::kCppStdArrowTemplates ), nodeTextOf( name, src ) ) )
-            {
-                return {};
-            }
-            const TSNode arg = ts_node_named_child( args, 0 );
-            const TSNode cls = kindIs( ts_node_type( arg ), "type_descriptor" ) ? fieldChild( arg, NodeField::Type ) : arg;
-            if( ts_node_is_null( cls ) || !( kindIs( ts_node_type( cls ), "type_identifier" ) || kindIs( ts_node_type( cls ), "qualified_identifier" ) ) )
-            {
-                return {};
-            }
-            const std::string_view inner = nodeTextOf( lastNameNode( cls ), src );
-            if( inner.empty() || nodeTextOf( cls, src ).starts_with( "std::" ) || param( inner ) )
-            {
-                return {};
-            }
-            arrow = true;
-            return inner;
-        }
-        if( text.starts_with( "std::" ) )
-        {
-            return {};
-        }
-        return nodeTextOf( lastNameNode( type ), src );
+        return {};
     }
-    return {};
+    const TSNode tt = kindIs( t, "template_type" ) ? type : namedChildOfKind( type, { "template_type" }, true );
+    if( ts_node_is_null( tt ) )
+    {
+        whole = cppQualifiedSpelling( type, src );   // `ns::T`
+        return whole.starts_with( "std::" ) ? std::string_view{} : nodeTextOf( lastNameNode( type ), src );
+    }
+    // `std::unique_ptr<T>`: a std arrow template whose ONE argument is a plain class
+    const TSNode name = fieldChild( tt, NodeField::Name );
+    const TSNode args = namedChildOfKind( tt, { "template_argument_list" } );
+    if( ts_node_is_null( name ) || ts_node_is_null( args ) || ts_node_named_child_count( args ) != 1 || !cppQualifiedSpelling( type, src ).starts_with( "std::" )
+        || !std::binary_search( std::begin( externalnames::kCppStdArrowTemplates ), std::end( externalnames::kCppStdArrowTemplates ), nodeTextOf( name, src ) ) )
+    {
+        return {};
+    }
+    const TSNode arg = ts_node_named_child( args, 0 );
+    const TSNode cls = kindIs( ts_node_type( arg ), "type_descriptor" ) ? fieldChild( arg, NodeField::Type ) : arg;
+    if( ts_node_is_null( cls ) || !( kindIs( ts_node_type( cls ), "type_identifier" ) || kindIs( ts_node_type( cls ), "qualified_identifier" ) ) )
+    {
+        return {};
+    }
+    const std::string_view inner = nodeTextOf( lastNameNode( cls ), src );
+    whole                        = cppQualifiedSpelling( cls, src );
+    if( inner.empty() || whole.starts_with( "std::" ) || param( inner ) )
+    {
+        whole.clear();
+        return {};
+    }
+    arrow = true;
+    return inner;
 }
 
 // C++: the ReturnType of a function definition or declaration (`Config make();` in a header is the symbol a call may bind
@@ -4411,19 +4543,10 @@ inline void captureCppReturnType( BindCtx& cx, TSNode fn )
     {
         return;   // a variable, not a function
     }
-    bool arrow = false;
-    const std::string_view cls = cppResultClass( fn, cx.src, arrow );
-    pushReturnType( cx, ts_node_start_byte( fn ), 0, cls, {}, arrow ? 1 : 0 );
-}
-
-// the languages whose function definitions and declarations record a C++-shaped ReturnType (captureCppReturnType)
-inline bool cppReturnTypeLang( Lang l ) noexcept
-{
-    switch( l )
-    {
-        case Lang::Cpp: case Lang::ObjC: return true;
-        default:                         return false;
-    }
+    bool        arrow = false;
+    std::string whole;
+    const std::string_view cls = cppResultClass( fn, cx.src, arrow, whole );
+    pushReturnType( cx, ts_node_start_byte( fn ), 0, cls, whole, arrow ? 1 : 0 );
 }
 
 // C++: the variable a declarator names under `&` / `*` / `&&` (`const auto& c`, `auto* p`); null for anything else
@@ -4868,6 +4991,11 @@ inline void captureTypedDeclEvidence( BindCtx& cx, TSNode n, const char* t )
         noteTypeParameters( cx, n );
         return;
     }
+    if( ( kindIs( t, "import_declaration" ) || kindIs( t, "import_header" ) ) && callResultFamilyOf( cx.lang ) == CallResultFamily::Jvm )
+    {
+        captureJvmTypeImport( cx, n, ts_node_start_byte( n ) );   // (L) fix round 1: what a bare result type names in this file
+        return;
+    }
     if( kindIs( t, "method_declaration" ) || kindIs( t, "function_declaration" ) )
     {
         captureDeclaredReturnType( cx, n );   // (L) call-result typing: Java's `type`, Kotlin's type after the parameters (C#/Swift: none read)
@@ -5149,6 +5277,7 @@ inline void captureGoEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32
     else if( kindIs( t, "field_declaration" ) )
     {
         const std::string_view written = annotatedClass( fieldChild( n, NodeField::Type ), src );
+        const std::string_view whole   = goQualifiedWhole( fieldChild( n, NodeField::Type ), src );   // `f *os.File`: the qualifier build() checks
         const bool             param   = !written.empty() && namesTypeParameter( cx, written, at );
         const std::string_view type    = param ? std::string_view{} : written;
         bool named = false;
@@ -5165,14 +5294,14 @@ inline void captureGoEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32
                 }
                 else
                 {
-                    pushEvidenceBind( cx, LocalBindKind::MemberType, nodeTextOf( c, src ), type, {}, at, false );
+                    pushEvidenceBind( cx, LocalBindKind::MemberType, nodeTextOf( c, src ), type, whole, at, false );
                 }
             }
             return true;
         } );
         if( !named && !param )
         {
-            pushEvidenceBind( cx, LocalBindKind::MemberType, type, type, {}, at, true );   // an embedded field: its methods are promoted
+            pushEvidenceBind( cx, LocalBindKind::MemberType, type, type, whole, at, true );   // an embedded field: its methods are promoted
         }
     }
 }
@@ -5181,7 +5310,8 @@ inline void captureGoEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32
 // The wrapper ROWS a declared Rust result is read through: a transparent one (auto-deref: the class is its argument) or a
 // LAYER that needs one unwrap operator at the call site (`?`, `.unwrap()`, `.expect(..)`). Matched on the wrapper's last
 // segment, so `std::result::Result`, `io::Result` and a crate's one-argument `Result<T>` alias all read as Result. Any other
-// generic (Vec, HashMap, Rc, a user type) names no class: nothing is recorded.
+// generic (Vec, HashMap, Rc, a user type) names no class: nothing is recorded. A reader of a WRITTEN local type
+// (`let x: Option<T>`, the rust-receivers lane) takes the class only at depth 0: a Layer there means the local is NOT a T.
 enum class RustWrap : std::uint8_t { None, Transparent, Layer };
 struct RustWrapperRow
 {
@@ -5210,10 +5340,10 @@ inline std::string_view rustImplSelf( TSNode n, std::string_view src )
 }
 
 // Rust: the class one written type names after its transparent wrappers (`&T`, `&mut T`, `Box<T>`), counting the LAYERS it
-// passes (`Result<T, E>`, `Option<T>`) into `depth`: `T`, `Self` (the impl's type), `crate::` / `self::` / `super::`-rooted
-// paths. Another qualified path (`std::fs::File`, `io::Error`, `model::Config`) is returned with `whole` set: graph.h keeps
-// it only when its qualifier names an in-tree package, which no Rust record does today (a floor). `tuple` receives a tuple
-// type left at the core (positions are the caller's). "" for anything else, or a type parameter of `fn`.
+// passes (`Result<T, E>`, `Option<T>`) into `depth`: `T`, `Self` (the impl's type), or a path's last segment with `whole`
+// set to the path as written (`crate::model::Config`, `std::fs::File`), which graph.h resolves to an in-tree module's
+// class or refuses (receiverevidence.h rustResultClass). `tuple` receives a tuple type left at the core (positions are the
+// caller's). "" for anything else, or a type parameter of `fn`.
 inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_view src, std::uint8_t& depth, std::string_view& whole, TSNode* tuple )
 {
     whole = {};
@@ -5268,10 +5398,7 @@ inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_vie
             {
                 return {};
             }
-            if( !( text.starts_with( "crate::" ) || text.starts_with( "self::" ) || text.starts_with( "super::" ) ) )
-            {
-                whole = text;
-            }
+            whole = text;   // graph.h resolves the path (crate / self / super / an in-tree crate or module) or refuses it
             return nodeTextOf( name, src );
         }
         return {};
@@ -5362,6 +5489,10 @@ inline void captureRustEvidence( BindCtx& cx, TSNode n, const char* t, std::uint
     if( kindIs( t, "function_item" ) )
     {
         captureRustReturnTypes( cx, n );
+    }
+    else if( kindIs( t, "use_declaration" ) )
+    {
+        captureRustUseTree( cx, at, fieldChild( n, NodeField::Argument ), std::string{}, 0 );   // (L) fix round 1: `use` names
     }
     else if( kindIs( t, "let_declaration" ) )
     {
@@ -5483,9 +5614,9 @@ inline void captureJsEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32
             // (L) `const x = f()` / `const x = await f()`: the callee's declared result types x (an await unwraps a Promise)
             const bool   awaited = !ts_node_is_null( value ) && kindIs( ts_node_type( value ), "await_expression" ) && ts_node_named_child_count( value ) == 1;
             const TSNode call    = awaited ? ts_node_named_child( value, 0 ) : value;
-            if( !ts_node_is_null( call ) && kindIs( ts_node_type( call ), "call_expression" ) )
+            if( !ts_node_is_null( call ) && kindIs( ts_node_type( call ), "call_expression" ) && callResultFamilyOf( cx.lang ) != CallResultFamily::None )
             {
-                pushCallResult( cx, name, call, 0, awaited ? 1 : 0, site );
+                pushCallResult( cx, name, call, 0, awaited ? 1 : 0, site );   // TS only: JavaScript declares no result type
             }
         }
     }
@@ -5749,7 +5880,7 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
         } );
     }
     // (L) a C++ function's declared result (a definition, or a declaration such as a header's prototype)
-    if( cppReturnTypeLang( lang ) && ( kindIs( t, "function_definition" ) || kindIs( t, "declaration" ) || kindIs( t, "field_declaration" ) ) )
+    if( callResultFamilyOf( lang ) == CallResultFamily::Cpp && ( kindIs( t, "function_definition" ) || kindIs( t, "declaration" ) || kindIs( t, "field_declaration" ) ) )
     {
         captureCppReturnType( cx, n );
     }

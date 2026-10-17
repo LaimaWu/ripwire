@@ -1129,15 +1129,38 @@ enum class LocalBindKind : std::uint8_t
                    //     after the language's transparent wrappers (Go `*T`, Rust `Box<T>` / `&T`), importedName = the type
                    //     written WHOLE when it is qualified (`os.File`, `std::fs::File`), else "", unwrapDepth = the
                    //     Result/Option layers above it (each needs one unwrap operator at the call site). var stays empty.
+                   //     C++ writes importedName only for a non-std qualified result (`ext::Config`), which graph.h resolves.
+    TypeImport,    // fix round 1: a file's import of a TYPE name (Java/Kotlin `import a.b.C [as D]`, Rust `use a::b::C [as D]`,
+                   //     brace groups flattened): var = the local name it binds (`C` / `D`; "*" for a wildcard or glob),
+                   //     typeName = the imported item's own name ("" for "*"), importedName = the path as written
+                   //     (`java.io.File`, `std::fs::File`, `crate::model` for a glob). Read by graph.h's call-result type
+                   //     resolution (receiverevidence.h ReceiverEvidence::resultClassOf) ONLY. APPENDED (cache u8).
 };
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::ReturnType ) + 1;
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::TypeImport ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {
-    // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result pair after RubyMainMixin
+    // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result three (CallResult .. TypeImport) after RubyMainMixin
     static_assert( std::uint8_t( LocalBindKind::StaticMember ) - std::uint8_t( LocalBindKind::RecvType ) == 4, "FE-B's five receiver-evidence kinds stay one run" );
-    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || k == LocalBindKind::CallResult || k == LocalBindKind::ReturnType;
+    static_assert( std::uint8_t( LocalBindKind::TypeImport ) - std::uint8_t( LocalBindKind::CallResult ) == 2, "the call-result kinds stay one run" );
+    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::TypeImport );
+}
+// The language family whose call results take a callee's declared result type (train 29 call-result typing), ONE row read
+// by ingest (which records CallResult / ReturnType / TypeImport) and by graph.h (where the type resolves, and which
+// receiver tables the typed local lands in). None: the language records nothing (JavaScript, Python, …).
+enum class CallResultFamily : std::uint8_t { None, Go, Rust, Cpp, Jvm, TypeScript };
+inline CallResultFamily callResultFamilyOf( Lang l ) noexcept
+{
+    switch( l )
+    {
+        case Lang::Go:                     return CallResultFamily::Go;
+        case Lang::Rust:                   return CallResultFamily::Rust;
+        case Lang::Cpp: case Lang::ObjC:   return CallResultFamily::Cpp;    // Rule 2's varType / scopedRecvDecls are the sink
+        case Lang::Java: case Lang::Kotlin: return CallResultFamily::Jvm;
+        case Lang::TypeScript:             return CallResultFamily::TypeScript;
+        default:                           return CallResultFamily::None;
+    }
 }
 // Binding::resultIndex of a record about a WHOLE result (a single non-tuple result; a Rust `let t = pair()?` binding all of it).
 inline constexpr std::uint8_t kWholeResult = 0xFF;

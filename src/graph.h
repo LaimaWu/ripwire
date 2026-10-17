@@ -6670,20 +6670,33 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     std::vector<NodeId>      filtScratch;  // reused per-call survivor buffer for CHA-lite / arity filtering
     rw::SmallVec<NodeId, 2>  reachScratch; // reused per-call buffer: the candidates a call can reach by name (reachableByName)
     // FE-B (receiverevidence.h): the receiver-evidence tables, the per-edge hedge sets and the reused per-call buffers.
+    // (L) fix round 1: "<fileId>#<local>" → the in-tree CLASS a TS named import pins (buildJsImportTables), for resultClassOf
+    HashMap<std::string, NodeId> jsPinnedClasses;
+    for( const auto& [ key, target ] : jsImports.targets )
+    {
+        if( target.outcome == JsImportOutcome::Pinned && target.node != kNoNode && ReceiverEvidence::classLike( ing.symbols[ target.node ].kind ) )
+        {
+            jsPinnedClasses.try_emplace( key, target.node );
+        }
+    }
     ReceiverEvidence         recvEv( ing, chaUp, classNames );
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/2i: receiver-evidence tables" );
         recvEv.localNames = &fieldNarrow.localNameSet;
         recvEv.goPackages = &falseEdges.goPackages;
+        recvEv.classIds   = &classIds;          // (L) a C++ call result's class: unique by name, scoped by its qualifier
+        recvEv.jsPinnedClasses = &jsPinnedClasses;   // (L) a TS call result's imported class
         recvEv.build();
     }
     // (L) call-result typing (train 29 lane call-result-typing; test/receiverevidencecheck.sh (L)): each LocalBindKind::CallResult
-    // by its call's key — (file << 32 | the callee name's byte), the call Reference's own — and each definition's declared
-    // results (LocalBindKind::ReturnType) by (file << 32 | its start byte), which Symbol::sigStartByte joins. The resolve loop
-    // types a CallResult's local from the ONE proven target its own call commits — no second ladder: the loop's decision IS the
-    // input, so the two cannot disagree (review R7) — and the uses that follow it in (file, byte) order read the type through
-    // the receiver-evidence tables. One level: a call whose receiver is itself call-result typed resolves before or after its
-    // own record by order alone, and is not iterated (floor, test/receiverevidencecheck.sh (L) use_path).
+    // by its call's key — (file << 32 | the CALL's start byte), the call Reference's own (ingest_binds.h pushCallResult) — and
+    // each definition's declared results (LocalBindKind::ReturnType) by (file << 32 | its start byte), which
+    // Symbol::sigStartByte joins. The resolve loop types a CallResult's local from the ONE target its own call commits WITH
+    // evidence — no second ladder: the loop's decision IS the input, so the two cannot disagree (review R7) — and only when
+    // the declared type resolves in the callee's file to ONE in-tree class (ReceiverEvidence::resultClassOf), which the typed
+    // local then carries. The uses that follow in (file, byte) order read it through the receiver-evidence tables, so a
+    // proven call ON a call-typed local types the next local in turn: chaining, in source order, inside this one pass (no
+    // fixpoint; a hop bound by name alone or split stops it — test/receiverevidencecheck.sh (L) UseChain / use_chain).
     HashMap<std::uint64_t, std::vector<std::uint32_t>> callResultAt;
     HashMap<std::uint64_t, std::vector<std::uint32_t>> returnTypesAt;
     for( std::uint32_t bi = 0; bi < ing.bindings.size(); ++bi )
@@ -6698,39 +6711,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             returnTypesAt[ ( std::uint64_t( b.fileId ) << 32 ) | b.startByte ].push_back( bi );
         }
     }
-    // is the class a callee's declared result names (`whole`: written qualified) one of THIS tree's, where the language looks
-    // it up: qualified — the qualifier must be an import of an in-tree package (receiverevidence.h qualifiedClassInTree);
-    // unqualified — a class of the callee's own scope (callResultScopeOf). Anything else types nothing.
-    const auto resultClassInTree = [ & ]( const Binding& rt, NodeId callee ) -> bool
-    {
-        if( !rt.importedName.empty() )
-        {
-            return recvEv.qualifiedClassInTree( rt.fileId, rt.importedName, rt.typeName );
-        }
-        const auto it = byName.find( rt.typeName );
-        if( it == byName.end() )
-        {
-            return false;
-        }
-        const ResultTypeScope scope = callResultScopeOf( ing.symbols[ callee ].lang );
-        for( NodeId c : it->second )
-        {
-            const Symbol& cs = ing.symbols[ c ];
-            if( !ReceiverEvidence::classLike( cs.kind ) || cs.lang != ing.symbols[ callee ].lang )
-            {
-                continue;
-            }
-            if( scope == ResultTypeScope::Tree || ( scope == ResultTypeScope::PackageDir && fileDir[ cs.fileId ] == fileDir[ ing.symbols[ callee ].fileId ] ) )
-            {
-                return true;
-            }
-        }
-        return false;
-    };
     // C++ (Rule 2's tables are its receiver evidence): an `auto` declaration's type — the lexical table's declaration at the
     // record's own declaration point when the name has one there and it is untyped, else the flat table's entry when it still
     // holds this declaration's constructor-shaped guess (the callee's name, which no class carries) or nothing. A tombstoned
     // entry (two declarations disagree) stays tombstoned. `arrowOnly`: a std smart pointer's pointee, reached by `->` alone.
+    // The class is the ONLY in-tree class of its name (resultClassOf), so Rule 2's name-keyed members are that class's.
     std::string crKey;
     const auto typeRule2CallResult = [ & ]( const Binding& cr, std::uint32_t rtIndex, bool arrowOnly )
     {
@@ -6748,7 +6733,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                 && !classNames.contains( cr.typeName );   // the declaration's own constructor-shaped guess
                 if( d.spanStart == cr.spanStart && ( d.typeBinding == kRecvDeclUntyped || guess ) && !arrowOnly )
                 {
-                    d.typeBinding = rtIndex;   // its typeName is the class; importedName "" (an unqualified fact)
+                    d.typeBinding = rtIndex;   // its typeName is the class (resolve.h recvVarType reads a ReturnType as resolved)
                 }
             }
             return;
@@ -6763,8 +6748,44 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             vit->second = FlatRecvType{ rt.typeName, false, arrowOnly };
         }
     };
-    // the call `r` committed ONE proven edge to `callee`: type every local its result binds (by position and unwrap depth)
-    const auto typeCallResults = [ & ]( const Reference& r, NodeId callee )
+    // is the call at `site` one of two nested same-named calls sharing its start byte (`h.get().get()`, review B1)? Then its
+    // record cannot say which call it is: the inner and outer Reference share (file, start, name), so nothing is typed.
+    const auto sharesCallKey = [ & ]( std::size_t site ) -> bool
+    {
+        const Reference& r = ing.references[ site ];
+        const auto same = [ & ]( std::size_t j )
+        {
+            const Reference& o = ing.references[ j ];
+            return o.fileId == r.fileId && o.startByte == r.startByte && o.calleeName == r.calleeName;
+        };
+        std::size_t calls = 0;
+        for( std::size_t j = site; j > 0 && same( j - 1 ); --j )
+        {
+            calls += isResolvableCallReference( ing.references[ j - 1 ] ) ? 1u : 0u;
+        }
+        for( std::size_t j = site + 1; j < ing.references.size() && same( j ); ++j )
+        {
+            calls += isResolvableCallReference( ing.references[ j ] ) ? 1u : 0u;
+        }
+        return calls > 0;
+    };
+    // a C++ member call Rule 2 decided by a QUALIFIED written receiver type's last name (prov="final-segment"): is that
+    // qualifier the scope of the class `to` belongs to (`cfg::Factory f; f.make()` — yes; `ext::Factory f` beside an in-tree
+    // cfg::Factory — no)? Only then is the commit evidence enough to type the result.
+    const auto qualifiedReceiverResolves = [ & ]( const Reference& r, NodeId to ) -> bool
+    {
+        const RecvVarType t = narrower.recvVarType( r );
+        if( !t.writtenQualified || t.name.empty() )
+        {
+            return false;
+        }
+        const auto [ known, written ] = narrower.writtenQualifier( t, classIds );   // the lexical record's text, else the flat table's
+        const NodeId cls = known && !written.empty() ? recvEv.cppResultClass( written, t.name ) : kNoNode;
+        return cls != kNoNode && ing.symbols[ to ].scope == ing.symbols[ cls ].name;
+    };
+    // the call `r` (reference `site`) committed ONE proven edge to `callee`: type every local its result binds (by position
+    // and unwrap depth) with the class the callee's declared type resolves to
+    const auto typeCallResults = [ & ]( const Reference& r, NodeId callee, std::size_t site )
     {
         const auto at = callResultAt.find( ( std::uint64_t( r.fileId ) << 32 ) | r.startByte );
         if( at == callResultAt.end() )
@@ -6773,10 +6794,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         }
         const Symbol& cs  = ing.symbols[ callee ];
         const auto    rts = returnTypesAt.find( ( std::uint64_t( cs.fileId ) << 32 ) | cs.sigStartByte );
-        if( rts == returnTypesAt.end() )
+        if( rts == returnTypesAt.end() || sharesCallKey( site ) )
         {
             return;
         }
+        const bool rule2Sink = callResultFamilyOf( r.lang ) == CallResultFamily::Cpp;
         for( std::uint32_t bi : at->second )
         {
             const Binding& cr = ing.bindings[ bi ];
@@ -6786,20 +6808,22 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
             for( std::uint32_t ri : rts->second )
             {
-                const Binding& rt = ing.bindings[ ri ];
-                if( callResultSinkIsRule2( r.lang ) )
+                const Binding& rt    = ing.bindings[ ri ];
+                const bool     match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth );
+                if( !match )
                 {
-                    if( rt.resultIndex == cr.resultIndex && rt.unwrapDepth <= 1 && resultClassInTree( rt, callee ) )
-                    {
-                        typeRule2CallResult( cr, ri, rt.unwrapDepth == 1 );
-                        break;
-                    }
+                    continue;
                 }
-                else if( rt.resultIndex == cr.resultIndex && rt.unwrapDepth == cr.unwrapDepth && resultClassInTree( rt, callee ) )
+                const NodeId cls = recvEv.resultClassOf( rt, cs.lang );
+                if( cls != kNoNode && rule2Sink )
                 {
-                    recvEv.typeCallResult( cr, rt.typeName );
-                    break;
+                    typeRule2CallResult( cr, ri, rt.unwrapDepth == 1 );
                 }
+                else if( cls != kNoNode )
+                {
+                    recvEv.typeCallResult( cr, ing.symbols[ cls ].name, cls );
+                }
+                break;
             }
         }
     };
@@ -8882,14 +8906,20 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
             ( nameOnly ? nameOnlyEdges : provenEdges )[ ekey ] = 1;   // FE-B: a proven site wins the merged row (Graph::outNameOnly)
         }
-        // (L) the call committed exactly ONE proven, unsplit target: the locals its result binds take that target's declared type
+        // (L) the call committed exactly ONE unsplit target WITH evidence — a receiver rule, a resolved qualifier, the language's
+        // own lookup, an import or SCIP pin, never a pick by name alone (a qualified call the canonical tier could not place
+        // falls to the ladder unhedged: C++ `ext::onlyOne()`), and never a qualified written type's final segment
+        // (prov="final-segment") — so the locals its result binds take the target's declared type. A recursive call (the only
+        // target is the caller) types nothing: a floor.
+        // A Rust module path (`model::load()`) is a qualifier the canonical tier cannot place but the crate layout can.
+        const bool evidenced = scipPinned || canonical || narrowed || jsImportPinned || languageLookupProved || ( hedgeEligible && !nameOnly );
         if( !callResultAt.empty() && nReal == 1 && !nameOnly && !splitPick && !bindingPinned && !subscript )
         {
             for( NodeId to : tier )
             {
-                if( to != r.fromSymbol )
+                if( to != r.fromSymbol && ( evidenced || recvEv.rustQualifierReaches( r, to ) ) && ( !finalSegmentType || qualifiedReceiverResolves( r, to ) ) )
                 {
-                    typeCallResults( r, to );
+                    typeCallResults( r, to, siteIndex );
                 }
             }
         }

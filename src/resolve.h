@@ -6911,6 +6911,10 @@ struct Narrower
                 return RecvVarType{};   // no declaration in scope (a field or global of the name), a tie, or untyped/conflicted
             }
             const Binding& declared = ( *scopedDecls.bindings )[ innermost->typeBinding ];
+            if( declared.kind == LocalBindKind::ReturnType )   // a call result's class, resolved to the one in-tree class (graph.h)
+            {
+                return RecvVarType{ declared.typeName, false, &declared };
+            }
             return namesStdType( declared.importedName ) ? RecvVarType{} : RecvVarType{ declared.typeName, !declared.importedName.empty(), &declared };
         }
         const auto vit = varType.find( keyBind );
@@ -6927,7 +6931,8 @@ struct Narrower
     {
         if( bound.declared != nullptr )
         {
-            return { true, bound.declared->importedName };
+            // a call result's written qualifier (`ns::T`) was already resolved to its one class: no final-segment question left
+            return { true, bound.declared->kind == LocalBindKind::ReturnType ? std::string_view{} : std::string_view( bound.declared->importedName ) };
         }
         const auto flat = ids.flatQualifier.find( keyBind );
         if( flat == ids.flatQualifier.end() )
