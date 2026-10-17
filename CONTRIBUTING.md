@@ -1026,6 +1026,14 @@ round. Each takes minutes to check; each miss costs a review round.
 23. **A new rule that repeats a reviewed helper reuses it.** Before you write a new predicate or rule (a scope, an
     owner, a tie-break, a gate), look for the one that already exists (`ripwire . --exemplar=…`, `--grep=…`, or the
     `ripwire-reuse-first` skill). Name the helper you reuse, or say why none fits.
+24. **An index comes from the caller, not from an address.** A helper that turns a reference into an index by
+    pointer subtraction (`&r - v.data()`) breaks when a caller hands it a copy of the element (a rewritten site, a
+    cloned row). Take the index as a parameter instead, and after a merge check every caller that may pass a copy.
+    Arm: the copy path reaches the helper.
+25. **A continuation is built by `rw::nextFlag` and replays clean.** Every `next=` or other continuation value is
+    built by `rw::nextFlag` / `nextAttrXml`, never by concatenating flag text, and the knob value it names clears
+    every predicate that refused or degraded the original run. Arm: a path with a space round-trips as one argv
+    word, and the replay at the named value is not degraded again.
 
 **The gate count is a build product.** It is stated in `README.md`, `docs/EVALS.md` and
 `present/deck5_ripwire_build.js` — eight sites — and every one of them is written by
