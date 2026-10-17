@@ -1134,7 +1134,7 @@ private:
         }
         const auto sortUnique = []( std::vector<std::string_view>& v )
         {
-            std::ranges::sort( v );
+            std::ranges::sort( v, rw::sortutil::svLess );   // never the default: libstdc++ debug aborts on string_view operator< (portablebuildcheck #6b)
             v.erase( std::ranges::unique( v ).begin(), v.end() );
         };
         sortUnique( m_fnDeclNames );
@@ -1143,8 +1143,8 @@ private:
         for( RawRef& r : m_fwdSites )
         {
             const std::string_view nm = r.name;
-            const bool imported = std::ranges::binary_search( m_relImportNames, nm );
-            const bool declared = std::ranges::binary_search( m_fnDeclNames, nm ) && std::ranges::find( fileDecls, nm ) == fileDecls.end();
+            const bool imported = std::ranges::binary_search( m_relImportNames, nm, rw::sortutil::svLess );
+            const bool declared = std::ranges::binary_search( m_fnDeclNames, nm, rw::sortutil::svLess ) && std::ranges::find( fileDecls, nm ) == fileDecls.end();
             if( imported || declared )
             {
                 m_out.push_back( std::move( r ) );
