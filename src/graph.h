@@ -6684,8 +6684,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         PROFILE_SCOPE_DESCRIBE( "buildGraph/2i: receiver-evidence tables" );
         recvEv.localNames = &fieldNarrow.localNameSet;
         recvEv.goPackages = &falseEdges.goPackages;
-        recvEv.classIds   = &classIds;          // (L) a C++ call result's class: unique by name, scoped by its qualifier
-        recvEv.jsPinnedClasses = &jsPinnedClasses;   // (L) a TS call result's imported class
+        recvEv.types.classIds        = &classIds;          // (L) a C++ call result's class: unique by name, scoped by its qualifier
+        recvEv.types.jsPinnedClasses = &jsPinnedClasses;   // (L) a TS call result's imported class
         recvEv.build();
     }
     // (L) call-result typing (train 29 lane call-result-typing; test/receiverevidencecheck.sh (L)): each LocalBindKind::CallResult
@@ -6780,7 +6780,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             return false;
         }
         const auto [ known, written ] = narrower.writtenQualifier( t, classIds );   // the lexical record's text, else the flat table's
-        const NodeId cls = known && !written.empty() ? recvEv.cppResultClass( written, t.name ) : kNoNode;
+        const NodeId cls = known && !written.empty() ? recvEv.types.cppResultClass( written, t.name ) : kNoNode;
         return cls != kNoNode && ing.symbols[ to ].scope == ing.symbols[ cls ].name;
     };
     // the call `r` (reference `site`) committed ONE proven edge to `callee`: type every local its result binds (by position
@@ -6814,7 +6814,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 {
                     continue;
                 }
-                const NodeId cls = recvEv.resultClassOf( rt, cs.lang );
+                const NodeId cls = recvEv.types.resultClassOf( rt, cs.lang );
                 if( cls != kNoNode && rule2Sink )
                 {
                     typeRule2CallResult( cr, ri, rt.unwrapDepth == 1 );
@@ -8917,7 +8917,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         {
             for( NodeId to : tier )
             {
-                if( to != r.fromSymbol && ( evidenced || recvEv.rustQualifierReaches( r, to ) ) && ( !finalSegmentType || qualifiedReceiverResolves( r, to ) ) )
+                if( to != r.fromSymbol && ( evidenced || recvEv.types.rustQualifierReaches( r, to ) ) && ( !finalSegmentType || qualifiedReceiverResolves( r, to ) ) )
                 {
                     typeCallResults( r, to, siteIndex );
                 }

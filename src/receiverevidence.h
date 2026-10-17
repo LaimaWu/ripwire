@@ -205,47 +205,21 @@ inline NodeId innermostEnclosingFn( const IngestResult& ing, const std::vector<s
     return best;
 }
 
-struct ReceiverEvidence
+// (L) fix round 1 — CallResultTypes: what a declared result type names, decided in its callee's file.
+// A type is recorded for a call result only when its written text RESOLVES, through the callee file's own context —
+// its imports, its qualifier, its own file, then its package / module / namespace — to exactly ONE in-tree class;
+// the typed local then carries that class (LocalFact::cls), never its name alone. A name imported from outside, an
+// outside qualifier, a global, a name that resolves nowhere or to two classes: kNoNode, nothing recorded. The import
+// and qualifier readers differ per family (the rows below); the rule is one.
+struct CallResultTypes
 {
-    static constexpr std::size_t kWalkCap = 64;   // classes visited per base walk; deterministic (sorted chaUp)
-
     const IngestResult&                                   ing;
-    const HashMap<std::string, std::vector<std::string>>& chaUp;       // class name → its direct base names (sorted)
-    const HashMap<std::string, char>&                     classNames;  // every in-repo class-like name
-    std::vector<std::string>                              ownerClass;  // per symbol: the class that owns it, "" none
-    std::vector<std::uint8_t>                             staticMember;    // per symbol: 1 = a JS/TS `static` member (the CLASS side)
-    HashMap<std::string, rw::SmallVec<NodeId, 2>>         methodsByType;   // "Class::name" → its callables
-    HashMap<std::string, std::string>                     memberType;      // "Class#field" → field class ("" = tombstone)
-    HashMap<std::string, std::vector<std::string>>        embeds;          // "Class" → its other bases: Go embedded classes (promotion)
-    HashMap<std::string, std::string>                     nameAlias;       // "<fileId>#local" → the class name it imports
-    // FE-B (review B4): one binding of a local name — the class it names ("" = unknown: it hides an outer binding of the
-    // name and proves nothing) and the bytes it is visible in. end == 0: a record with no span (a Python name, a reassignment,
-    // a base pass Type record): somewhere in its definition, extent unknown.
-    struct LocalFact
-    {
-        std::uint32_t start = 0;
-        std::uint32_t end   = 0;
-        std::string   type;
-        NodeId        cls   = kNoNode;   // (L) fix round 1: the ONE in-tree class `type` resolved to (kNoNode: the name alone)
-        bool same( const LocalFact& g ) const noexcept { return start == g.start && end == g.end && type == g.type && cls == g.cls; }
-    };
-    HashMap<std::string, std::vector<LocalFact>>          localType;       // "<fromSymbol>#var" → its bindings
-    HashMap<std::string, std::pair<std::string, std::string>> methodAlias; // "<fromSymbol>#var" → ( object var, method )
-    HashMap<std::string, std::string>                     moduleAlias;     // "<fileId>#name" → module as written ("" = tombstone)
-    std::vector<std::vector<NodeId>>                      fnsByFile;       // fileId → functions/methods sorted by start (enclosing walk)
-    std::vector<std::vector<NodeId>>                      classesByFile;   // fileId → class-like symbols sorted by start
-    mutable std::string                                   key;
-    mutable std::vector<std::string_view>                 frontier;
-    mutable rw::SmallVec<NodeId, 2>                       found;
-    bool                                                  active = false;
-    const HashMap<std::string, char>*                     localNames = nullptr;   // graph.h FieldNarrowTables::localNameSet
-    const GoPackagePaths*                                 goPackages = nullptr;   // graph.h FalseEdgeRules::goPackages
-    // (L) fix round 1 — what a declared result type names, decided in its callee's file (resultClassOf):
-    HashMap<std::string, rw::SmallVec<NodeId, 2>>         classDefsByName;          // class-like name → its definitions, id order
-    std::vector<std::vector<const Binding*>>              importsByFile;            // fileId → its TypeImport / JsImport records
-    HashMap<std::string, std::uint32_t>                   callResultDecls;          // "<scope>#var" → its CallResult records (typeCallResult)
-    const HashMap<std::string, NodeId>*                   jsPinnedClasses = nullptr;   // graph.h: "<fileId>#<local>" → the class a TS import pins
-    const ClassIdentity*                                  classIds     = nullptr;   // graph.h: C-family class identity (resolve.h)
+    HashMap<std::string, rw::SmallVec<NodeId, 2>>         classDefsByName;            // class-like name → its definitions, id order
+    std::vector<std::vector<const Binding*>>              importsByFile;              // fileId → its TypeImport / JsImport records
+    const HashMap<std::string, std::string>*              moduleAlias     = nullptr;  // ReceiverEvidence's "<fileId>#name" → module
+    const GoPackagePaths*                                 goPackages      = nullptr;  // graph.h FalseEdgeRules::goPackages
+    const HashMap<std::string, NodeId>*                   jsPinnedClasses = nullptr;  // graph.h: "<fileId>#<local>" → the class a TS import pins
+    const ClassIdentity*                                  classIds        = nullptr;  // graph.h: C-family class identity (resolve.h)
     // Rust crate/module layout, built on the first Rust resolution: a file's crate (its nearest `lib.rs` / `main.rs`
     // directory) and module path (`a::b` for src/a/b.rs or src/a/b/mod.rs), the crates by name (`mdbook_core` for
     // crates/mdbook-core/src), and each module's files
@@ -259,294 +233,37 @@ struct ReceiverEvidence
     };
     static constexpr std::uint32_t                        kNoCrate = 0xFFFFFFFFu;
     mutable RustLayout                                    rust;
+    mutable std::string                                   nameKey;    // classesNamed's lookup buffer
+    mutable std::string                                   aliasKey;   // importPathOf's / the TS pin lookup's
 
-    ReceiverEvidence( const IngestResult& i, const HashMap<std::string, std::vector<std::string>>& up, const HashMap<std::string, char>& classes )
-        : ing( i ), chaUp( up ), classNames( classes ) {}
+    explicit CallResultTypes( const IngestResult& i ) : ing( i ) {}
 
-    static bool classLike( SymKind k ) noexcept
+    // the index build: every class-like definition by name, and each file's import records
+    void noteClass( const Symbol& s ) { classDefsByName[ s.name ].push_back( s.id ); }
+    void noteImport( const Binding& b )
     {
-        return k == SymKind::Class || k == SymKind::Struct || k == SymKind::Interface;
-    }
-    static bool callableKind( SymKind k ) noexcept
-    {
-        return k == SymKind::Method || k == SymKind::Function;
-    }
-    const std::string& keyOf( std::uint32_t id, char sep, std::string_view name ) const
-    {
-        key.clear();
-        key.append( std::to_string( id ) );
-        key.push_back( sep );
-        key.append( name );
-        return key;
-    }
-    const std::string& typeKey( std::string_view type, std::string_view sep, std::string_view name ) const
-    {
-        key.assign( type );
-        key.append( sep );
-        key.append( name );
-        return key;
-    }
-
-    // ── build ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-    static void tombstoneInsert( HashMap<std::string, std::string>& m, const std::string& k, std::string_view v )
-    {
-        const auto [ it, fresh ] = m.try_emplace( k, std::string( v ) );
-        if( !fresh && it->second != v )
+        if( ( b.kind == LocalBindKind::TypeImport || b.kind == LocalBindKind::JsImport ) && b.fileId < importsByFile.size() && !b.var.empty() )
         {
-            it->second.clear();   // two different classes for one name: decide nothing
+            importsByFile[ b.fileId ].push_back( &b );
         }
-    }
-
-    void addLocalFact( const std::string& k, const Binding& b ) { addTypedFact( k, b, b.typeName, kNoNode ); }
-    // the same fact naming `type` instead of the binding's own (a qualified written type refused: ""), and the one class it
-    // resolved to (kNoNode: the name alone)
-    void addTypedFact( const std::string& k, const Binding& b, std::string_view type, NodeId cls )
-    {
-        const bool                  spanned = b.spanEnd > b.spanStart;
-        LocalFact                   f{ spanned ? b.spanStart : 0u, spanned ? b.spanEnd : 0u, std::string( type ), cls };
-        std::vector<LocalFact>&     facts = localType[ k ];
-        if( std::none_of( facts.begin(), facts.end(), [ & ]( const LocalFact& g ) { return g.same( f ); } ) )
-        {
-            facts.push_back( std::move( f ) );
-        }
-    }
-
-    void buildOwners()
-    {
-        const std::size_t N = ing.symbols.size();
-        ownerClass.assign( N, {} );
-        // the classes of each file by start; a symbol's owner is the innermost class whose span holds it
-        classesByFile.assign( ing.files.size(), {} );
-        fnsByFile.assign( ing.files.size(), {} );
-        for( const Symbol& s : ing.symbols )
-        {
-            if( s.fileId >= ing.files.size() )
-            {
-                continue;
-            }
-            if( classLike( s.kind ) )
-            {
-                classesByFile[ s.fileId ].push_back( s.id );
-                classDefsByName[ s.name ].push_back( s.id );
-            }
-            if( callableKind( s.kind ) )
-            {
-                fnsByFile[ s.fileId ].push_back( s.id );
-            }
-        }
-        const auto byStart = [ & ]( NodeId a, NodeId b ) { return ing.symbols[ a ].sigStartByte != ing.symbols[ b ].sigStartByte
-                                                                  ? ing.symbols[ a ].sigStartByte < ing.symbols[ b ].sigStartByte : a < b; };
-        for( std::vector<NodeId>& v : classesByFile ) { std::sort( v.begin(), v.end(), byStart ); }
-        for( std::vector<NodeId>& v : fnsByFile )     { std::sort( v.begin(), v.end(), byStart ); }
-        for( const Symbol& s : ing.symbols )
-        {
-            if( !s.scope.empty() )
-            {
-                ownerClass[ s.id ] = s.scope;   // the extractor's own scope (Python, C++, Kotlin, Ruby, JS prototype members)
-                continue;
-            }
-            if( s.fileId >= ing.files.size() || classLike( s.kind ) )
-            {
-                continue;
-            }
-            if( const NodeId best = classAt( s.fileId, s.sigStartByte, s.endByte, s.id ); best != kNoNode )
-            {
-                ownerClass[ s.id ] = ing.symbols[ best ].name;
-            }
-        }
-        // Go spells a method's class only on its receiver: the RecvType record that sets isFromAssignment
-        for( const Binding& b : ing.bindings )
-        {
-            if( b.kind == LocalBindKind::RecvType && b.isFromAssignment && b.fromSymbol < N && !b.typeName.empty() )
-            {
-                ownerClass[ b.fromSymbol ] = b.typeName;
-            }
-        }
-        ENSURES( ownerClass.size() == N && fnsByFile.size() == ing.files.size() && classesByFile.size() == ing.files.size(),
-                 "one owner per symbol, one sorted list per file" );
-    }
-
-    // the innermost class-like symbol of `fileId` whose span holds [start, end) (never `self`); kNoNode when none
-    NodeId classAt( std::uint32_t fileId, std::uint32_t start, std::uint32_t end, NodeId self = kNoNode ) const
-    {
-        NodeId best = kNoNode;
-        if( fileId >= classesByFile.size() )
-        {
-            return best;
-        }
-        for( NodeId c : classesByFile[ fileId ] )
-        {
-            const Symbol& cs = ing.symbols[ c ];
-            if( cs.sigStartByte > start )
-            {
-                break;
-            }
-            if( cs.id != self && cs.endByte >= end )
-            {
-                best = c;   // later starts are more inner
-            }
-        }
-        return best;
-    }
-    void addBase( const std::string& owner, std::string_view base )
-    {
-        std::vector<std::string>& e = embeds[ owner ];
-        if( std::find( e.begin(), e.end(), base ) == e.end() )
-        {
-            e.emplace_back( base );
-            std::sort( e.begin(), e.end() );
-        }
-    }
-    void build()
-    {
-        buildOwners();
-        staticMember.assign( ing.symbols.size(), 0u );
-        for( const Symbol& s : ing.symbols )
-        {
-            // a BODIED callable only: an interface's or an abstract class's bodyless signature is the contract a call
-            // dispatches through, never the body it reaches — that call stays with the ladder (declined_iface= reads it)
-            if( callableKind( s.kind ) && !ownerClass[ s.id ].empty() && receiverHedgeLang( s.lang ) && s.endByte > s.sigEndByte )
-            {
-                methodsByType[ typeKey( ownerClass[ s.id ], "::", s.name ) ].push_back( s.id );
-            }
-        }
-        const std::size_t N = ing.symbols.size();
-        std::vector<const Binding*> qualified;          // typed locals written `pkg.T`: decided once every import alias is known
-        std::vector<const Binding*> qualifiedMembers;   // the same for a field written `pkg.T` (Go `f *os.File`)
-        importsByFile.assign( ing.files.size(), {} );
-        for( const Binding& b : ing.bindings )
-        {
-            if( ( b.kind == LocalBindKind::TypeImport || b.kind == LocalBindKind::JsImport ) && b.fileId < importsByFile.size() && !b.var.empty() )
-            {
-                importsByFile[ b.fileId ].push_back( &b );   // (L) what a bare result type names in this file
-            }
-            if( b.kind == LocalBindKind::CallResult && b.fromSymbol < ing.symbols.size() && !b.var.empty() )
-            {
-                ++callResultDecls[ keyOf( factScope( b ), '#', b.var ) ];
-            }
-            if( b.kind == LocalBindKind::ModuleAlias && b.fromSymbol == kNoNode && !b.var.empty() && !b.isFromAssignment )
-            {
-                tombstoneInsert( moduleAlias, keyOf( b.fileId, '#', b.var ), b.typeName );
-                continue;
-            }
-            if( b.kind == LocalBindKind::NameAlias && !b.var.empty() )
-            {
-                tombstoneInsert( nameAlias, keyOf( b.fileId, '#', b.var ), b.typeName );
-                continue;
-            }
-            if( b.kind == LocalBindKind::JsImport && !b.var.empty() && !b.importedName.empty() && b.importedName != b.var )
-            {
-                tombstoneInsert( nameAlias, keyOf( b.fileId, '#', b.var ), b.importedName );   // `import { Context as Ctx }`
-                continue;
-            }
-            if( b.fromSymbol >= N )
-            {
-                continue;
-            }
-            const NodeId from = factScope( b );
-            const bool typedLocal = b.kind == LocalBindKind::RecvType
-                                 || ( b.kind == LocalBindKind::Type && ( ing.symbols[ b.fromSymbol ].lang == Lang::TypeScript
-                                                                         || ing.symbols[ b.fromSymbol ].lang == Lang::Python ) );
-            if( b.kind == LocalBindKind::StaticMember )
-            {
-                if( ing.symbols[ from ].name == b.var )   // recorded inside the member's body: the member itself
-                {
-                    staticMember[ from ] = 1;
-                }
-            }
-            else if( typedLocal && !b.var.empty() && b.kind == LocalBindKind::RecvType && !b.importedName.empty() )
-            {
-                qualified.push_back( &b );
-            }
-            else if( typedLocal && !b.var.empty() )
-            {
-                addLocalFact( keyOf( from, '#', b.var ), b );
-            }
-            else if( b.kind == LocalBindKind::MemberType && !b.var.empty() && !b.importedName.empty() )
-            {
-                qualifiedMembers.push_back( &b );
-            }
-            else if( b.kind == LocalBindKind::MemberType && !b.var.empty() )
-            {
-                const Symbol&      from  = ing.symbols[ b.fromSymbol ];
-                const std::string& owner = classLike( from.kind ) ? from.name : ownerClass[ b.fromSymbol ];
-                if( owner.empty() )
-                {
-                    continue;
-                }
-                tombstoneInsert( memberType, typeKey( owner, "#", b.var ), b.typeName );
-                if( b.isFromAssignment )
-                {
-                    addBase( owner, b.typeName );
-                }
-            }
-            else if( b.kind == LocalBindKind::MethodAlias && !b.var.empty() )
-            {
-                const auto [ it, fresh ] = methodAlias.try_emplace( keyOf( from, '#', b.var ), b.typeName, b.importedName );
-                if( !fresh && ( it->second.first != b.typeName || it->second.second != b.importedName ) )
-                {
-                    it->second.first.clear();   // rebound to something else: decide nothing
-                }
-            }
-        }
-        // a written type `pkg.T` (the Go capture is its only writer: importedName = the qualified text) names a class of THIS
-        // tree only when `pkg` is an import of an in-tree package: `f *os.File` beside an in-tree `File` is os's File, never
-        // ours (test/receiverevidencecheck.sh (L) NearOSParam). Anything else keeps the name as a tombstone: it proves nothing.
-        for( const Binding* q : qualified )
-        {
-            const NodeId cls = goQualifiedClass( q->fileId, q->importedName, q->typeName );
-            addTypedFact( keyOf( factScope( *q ), '#', q->var ), *q, cls != kNoNode ? std::string_view( q->typeName ) : std::string_view{}, cls );
-        }
-        // the same rule for a FIELD written `pkg.T`: an outside package's class is a tombstone (unknown), never an in-tree namesake
-        for( const Binding* q : qualifiedMembers )
-        {
-            const Symbol&      from  = ing.symbols[ q->fromSymbol ];
-            const std::string& owner = classLike( from.kind ) ? from.name : ownerClass[ q->fromSymbol ];
-            if( owner.empty() )
-            {
-                continue;
-            }
-            const bool inTree = goQualifiedClass( q->fileId, q->importedName, q->typeName ) != kNoNode;
-            tombstoneInsert( memberType, typeKey( owner, "#", q->var ), inTree ? std::string_view( q->typeName ) : std::string_view{} );
-            if( inTree && q->isFromAssignment )
-            {
-                addBase( owner, q->typeName );
-            }
-        }
-        active = true;
-    }
-    // the definition a local binding belongs to: a typed local the extractor also indexed as a symbol of its own (a Go
-    // `var c T` inside a function) belongs to the function that declares it
-    NodeId factScope( const Binding& b ) const
-    {
-        NodeId from = b.fromSymbol;
-        if( from < ing.symbols.size() && !callableKind( ing.symbols[ from ].kind ) && !classLike( ing.symbols[ from ].kind ) )
-        {
-            if( const NodeId fn = enclosingFn( from ); fn != kNoNode )
-            {
-                from = fn;
-            }
-        }
-        return from;
     }
     // the import path the file-scope name `name` binds in file `fileId` ("" when none, or rebound)
     std::string_view importPathOf( std::uint32_t fileId, std::string_view name ) const
     {
-        const auto it = moduleAlias.find( keyOf( fileId, '#', name ) );
-        return it == moduleAlias.end() ? std::string_view{} : std::string_view( it->second );
+        if( moduleAlias == nullptr )
+        {
+            return {};
+        }
+        aliasKey.assign( std::to_string( fileId ) ).append( 1, '#' ).append( name );
+        const auto it = moduleAlias->find( aliasKey );
+        return it == moduleAlias->end() ? std::string_view{} : std::string_view( it->second );
     }
-    // ── (L) fix round 1: what a declared result type names, decided in its callee's file ──────────────────────────────
-    // A type is recorded for a call result only when its written text RESOLVES, through the callee file's own context —
-    // its imports, its qualifier, its own file, then its package / module / namespace — to exactly ONE in-tree class;
-    // the typed local then carries that class (LocalFact::cls), never its name alone. A name imported from outside, an
-    // outside qualifier, a global, a name that resolves nowhere or to two classes: kNoNode, nothing recorded. The import
-    // and qualifier readers differ per family (the rows below); the rule is one.
-    mutable std::string nameKey;   // classesNamed's lookup buffer (`key` is keyOf's, which a `keep` predicate may call)
     std::string_view dirOf( std::uint32_t fileId ) const { return includerDir( rootRelPath( ing, fileId ) ); }
-    // is `dir` the directory `tail` names, read from its end and segment-aligned (`a/b/model` ends `b/model`, not `del`)
+    // is `dir` the directory `tail` names, read from its end and segment-aligned (`a/b/model` ends `b/model`, not `del`):
+    // resolve.h's tsimport::fileNamed, refusing an empty tail (the repository root names no package)
     static bool endsWithDir( std::string_view dir, std::string_view tail ) noexcept
     {
-        return !tail.empty() && dir.ends_with( tail ) && ( dir.size() == tail.size() || dir[ dir.size() - tail.size() - 1 ] == '/' );
+        return !tail.empty() && tsimport::fileNamed( dir, tail );
     }
     // the in-tree class-likes named `name` of family `fam` that `keep` admits: their count, and the last one in `one`
     template <class Keep>
@@ -693,7 +410,8 @@ struct ReceiverEvidence
             {
                 return kNoNode;
             }
-            const auto it = jsPinnedClasses->find( keyOf( fileId, '#', cls ) );
+            aliasKey.assign( std::to_string( fileId ) ).append( 1, '#' ).append( cls );
+            const auto it = jsPinnedClasses->find( aliasKey );
             return it == jsPinnedClasses->end() ? kNoNode : it->second;
         }
         bool own = false;
@@ -779,15 +497,10 @@ struct ReceiverEvidence
             }
         }
     }
+    // `a::b` + `c` → `a::b::c`; the crate root ("") + `c` → `c`
     static std::string joinModule( std::string_view module, std::string_view seg )
     {
-        std::string out( module );
-        if( !out.empty() )
-        {
-            out.append( "::" );
-        }
-        out.append( seg );
-        return out;
+        return module.empty() ? std::string( seg ) : std::string( module ).append( "::" ).append( seg );
     }
     bool rustModuleExists( std::uint32_t crate, const std::string& module ) const
     {
@@ -907,10 +620,11 @@ struct ReceiverEvidence
         const std::uint32_t tf = ing.symbols[ target ].fileId;
         return tf < rust.crateOf.size() && rust.crateOf[ tf ] == crate && rust.moduleOf[ tf ] == module;
     }
+    // `a::b::C` → ( `a::b`, `C` ); `C` → ( "", `C` ) — the last segment is namesplit::afterLast's
     static std::pair<std::string_view, std::string_view> splitLast( std::string_view path, std::string_view sep ) noexcept
     {
-        const std::size_t at = path.rfind( sep );
-        return at == std::string_view::npos ? std::pair{ std::string_view{}, path } : std::pair{ path.substr( 0, at ), path.substr( at + sep.size() ) };
+        const std::string_view last = namesplit::afterLast( path, sep );
+        return { last.size() == path.size() ? std::string_view{} : path.substr( 0, path.size() - last.size() - sep.size() ), last };
     }
     NodeId rustResultClass( std::uint32_t fileId, std::string_view whole, std::string_view cls ) const
     {
@@ -1013,6 +727,321 @@ struct ReceiverEvidence
         }
     }
 
+    // the in-tree class-likes of `cls`'s language sharing its name (cls included)
+    std::size_t sameNamedClasses( NodeId cls ) const
+    {
+        NodeId one = kNoNode;
+        return classesNamed( ing.symbols[ cls ].name, callResultFamilyOf( ing.symbols[ cls ].lang ), []( NodeId ) { return true; }, one );
+    }
+};
+
+struct ReceiverEvidence
+{
+    static constexpr std::size_t kWalkCap = 64;   // classes visited per base walk; deterministic (sorted chaUp)
+
+    const IngestResult&                                   ing;
+    const HashMap<std::string, std::vector<std::string>>& chaUp;       // class name → its direct base names (sorted)
+    const HashMap<std::string, char>&                     classNames;  // every in-repo class-like name
+    std::vector<std::string>                              ownerClass;  // per symbol: the class that owns it, "" none
+    std::vector<std::uint8_t>                             staticMember;    // per symbol: 1 = a JS/TS `static` member (the CLASS side)
+    HashMap<std::string, rw::SmallVec<NodeId, 2>>         methodsByType;   // "Class::name" → its callables
+    HashMap<std::string, std::string>                     memberType;      // "Class#field" → field class ("" = tombstone)
+    HashMap<std::string, std::vector<std::string>>        embeds;          // "Class" → its other bases: Go embedded classes (promotion)
+    HashMap<std::string, std::string>                     nameAlias;       // "<fileId>#local" → the class name it imports
+    // FE-B (review B4): one binding of a local name — the class it names ("" = unknown: it hides an outer binding of the
+    // name and proves nothing) and the bytes it is visible in. end == 0: a record with no span (a Python name, a reassignment,
+    // a base pass Type record): somewhere in its definition, extent unknown.
+    struct LocalFact
+    {
+        std::uint32_t start = 0;
+        std::uint32_t end   = 0;
+        std::string   type;
+        NodeId        cls   = kNoNode;   // (L) fix round 1: the ONE in-tree class `type` resolved to (kNoNode: the name alone)
+        bool operator==( const LocalFact& ) const = default;
+    };
+    HashMap<std::string, std::vector<LocalFact>>          localType;       // "<fromSymbol>#var" → its bindings
+    HashMap<std::string, std::pair<std::string, std::string>> methodAlias; // "<fromSymbol>#var" → ( object var, method )
+    HashMap<std::string, std::string>                     moduleAlias;     // "<fileId>#name" → module as written ("" = tombstone)
+    std::vector<std::vector<NodeId>>                      fnsByFile;       // fileId → functions/methods sorted by start (enclosing walk)
+    std::vector<std::vector<NodeId>>                      classesByFile;   // fileId → class-like symbols sorted by start
+    mutable std::string                                   key;
+    mutable std::vector<std::string_view>                 frontier;
+    mutable rw::SmallVec<NodeId, 2>                       found;
+    bool                                                  active = false;
+    const HashMap<std::string, char>*                     localNames = nullptr;   // graph.h FieldNarrowTables::localNameSet
+    const GoPackagePaths*                                 goPackages = nullptr;   // graph.h FalseEdgeRules::goPackages
+    HashMap<std::string, std::uint32_t>                   callResultDecls;          // "<scope>#var" → its CallResult records (typeCallResult)
+    CallResultTypes                                       types;                    // (L) fix round 1: a declared result type's ONE class
+
+    ReceiverEvidence( const IngestResult& i, const HashMap<std::string, std::vector<std::string>>& up, const HashMap<std::string, char>& classes )
+        : ing( i ), chaUp( up ), classNames( classes ), types( i ) {}
+
+    static bool classLike( SymKind k ) noexcept
+    {
+        return k == SymKind::Class || k == SymKind::Struct || k == SymKind::Interface;
+    }
+    static bool callableKind( SymKind k ) noexcept
+    {
+        return k == SymKind::Method || k == SymKind::Function;
+    }
+    const std::string& keyOf( std::uint32_t id, char sep, std::string_view name ) const
+    {
+        key.clear();
+        key.append( std::to_string( id ) );
+        key.push_back( sep );
+        key.append( name );
+        return key;
+    }
+    const std::string& typeKey( std::string_view type, std::string_view sep, std::string_view name ) const
+    {
+        key.assign( type );
+        key.append( sep );
+        key.append( name );
+        return key;
+    }
+
+    // ── build ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+    static void tombstoneInsert( HashMap<std::string, std::string>& m, const std::string& k, std::string_view v )
+    {
+        const auto [ it, fresh ] = m.try_emplace( k, std::string( v ) );
+        if( !fresh && it->second != v )
+        {
+            it->second.clear();   // two different classes for one name: decide nothing
+        }
+    }
+
+    void addLocalFact( const std::string& k, const Binding& b ) { addTypedFact( k, b, b.typeName, kNoNode ); }
+    // the same fact naming `type` instead of the binding's own (a qualified written type refused: ""), and the one class it
+    // resolved to (kNoNode: the name alone)
+    void addTypedFact( const std::string& k, const Binding& b, std::string_view type, NodeId cls )
+    {
+        const bool                  spanned = b.spanEnd > b.spanStart;
+        LocalFact                   f{ spanned ? b.spanStart : 0u, spanned ? b.spanEnd : 0u, std::string( type ), cls };
+        std::vector<LocalFact>&     facts = localType[ k ];
+        if( std::none_of( facts.begin(), facts.end(), [ & ]( const LocalFact& g ) { return g == f; } ) )
+        {
+            facts.push_back( std::move( f ) );
+        }
+    }
+
+    void buildOwners()
+    {
+        const std::size_t N = ing.symbols.size();
+        ownerClass.assign( N, {} );
+        // the classes of each file by start; a symbol's owner is the innermost class whose span holds it
+        classesByFile.assign( ing.files.size(), {} );
+        fnsByFile.assign( ing.files.size(), {} );
+        for( const Symbol& s : ing.symbols )
+        {
+            if( s.fileId >= ing.files.size() )
+            {
+                continue;
+            }
+            if( classLike( s.kind ) )
+            {
+                classesByFile[ s.fileId ].push_back( s.id );
+                types.noteClass( s );
+            }
+            if( callableKind( s.kind ) )
+            {
+                fnsByFile[ s.fileId ].push_back( s.id );
+            }
+        }
+        const auto byStart = [ & ]( NodeId a, NodeId b ) { return ing.symbols[ a ].sigStartByte != ing.symbols[ b ].sigStartByte
+                                                                  ? ing.symbols[ a ].sigStartByte < ing.symbols[ b ].sigStartByte : a < b; };
+        for( std::vector<NodeId>& v : classesByFile ) { std::sort( v.begin(), v.end(), byStart ); }
+        for( std::vector<NodeId>& v : fnsByFile )     { std::sort( v.begin(), v.end(), byStart ); }
+        for( const Symbol& s : ing.symbols )
+        {
+            if( !s.scope.empty() )
+            {
+                ownerClass[ s.id ] = s.scope;   // the extractor's own scope (Python, C++, Kotlin, Ruby, JS prototype members)
+                continue;
+            }
+            if( s.fileId >= ing.files.size() || classLike( s.kind ) )
+            {
+                continue;
+            }
+            if( const NodeId best = classAt( s.fileId, s.sigStartByte, s.endByte, s.id ); best != kNoNode )
+            {
+                ownerClass[ s.id ] = ing.symbols[ best ].name;
+            }
+        }
+        // Go spells a method's class only on its receiver: the RecvType record that sets isFromAssignment
+        for( const Binding& b : ing.bindings )
+        {
+            if( b.kind == LocalBindKind::RecvType && b.isFromAssignment && b.fromSymbol < N && !b.typeName.empty() )
+            {
+                ownerClass[ b.fromSymbol ] = b.typeName;
+            }
+        }
+        ENSURES( ownerClass.size() == N && fnsByFile.size() == ing.files.size() && classesByFile.size() == ing.files.size(),
+                 "one owner per symbol, one sorted list per file" );
+    }
+
+    // the innermost class-like symbol of `fileId` whose span holds [start, end) (never `self`); kNoNode when none
+    NodeId classAt( std::uint32_t fileId, std::uint32_t start, std::uint32_t end, NodeId self = kNoNode ) const
+    {
+        NodeId best = kNoNode;
+        if( fileId >= classesByFile.size() )
+        {
+            return best;
+        }
+        for( NodeId c : classesByFile[ fileId ] )
+        {
+            const Symbol& cs = ing.symbols[ c ];
+            if( cs.sigStartByte > start )
+            {
+                break;
+            }
+            if( cs.id != self && cs.endByte >= end )
+            {
+                best = c;   // later starts are more inner
+            }
+        }
+        return best;
+    }
+    void addBase( const std::string& owner, std::string_view base )
+    {
+        std::vector<std::string>& e = embeds[ owner ];
+        if( std::find( e.begin(), e.end(), base ) == e.end() )
+        {
+            e.emplace_back( base );
+            std::sort( e.begin(), e.end() );
+        }
+    }
+    void build()
+    {
+        buildOwners();
+        staticMember.assign( ing.symbols.size(), 0u );
+        for( const Symbol& s : ing.symbols )
+        {
+            // a BODIED callable only: an interface's or an abstract class's bodyless signature is the contract a call
+            // dispatches through, never the body it reaches — that call stays with the ladder (declined_iface= reads it)
+            if( callableKind( s.kind ) && !ownerClass[ s.id ].empty() && receiverHedgeLang( s.lang ) && s.endByte > s.sigEndByte )
+            {
+                methodsByType[ typeKey( ownerClass[ s.id ], "::", s.name ) ].push_back( s.id );
+            }
+        }
+        const std::size_t N = ing.symbols.size();
+        std::vector<const Binding*> qualified;   // locals, parameters and fields written `pkg.T`: decided once every import alias is known
+        types.importsByFile.assign( ing.files.size(), {} );
+        types.moduleAlias = &moduleAlias;
+        types.goPackages  = goPackages;
+        for( const Binding& b : ing.bindings )
+        {
+            noteCallResultFacts( b );
+            if( b.kind == LocalBindKind::ModuleAlias && b.fromSymbol == kNoNode && !b.var.empty() && !b.isFromAssignment )
+            {
+                tombstoneInsert( moduleAlias, keyOf( b.fileId, '#', b.var ), b.typeName );
+                continue;
+            }
+            if( b.kind == LocalBindKind::NameAlias && !b.var.empty() )
+            {
+                tombstoneInsert( nameAlias, keyOf( b.fileId, '#', b.var ), b.typeName );
+                continue;
+            }
+            if( b.kind == LocalBindKind::JsImport && !b.var.empty() && !b.importedName.empty() && b.importedName != b.var )
+            {
+                tombstoneInsert( nameAlias, keyOf( b.fileId, '#', b.var ), b.importedName );   // `import { Context as Ctx }`
+                continue;
+            }
+            if( b.fromSymbol >= N )
+            {
+                continue;
+            }
+            const NodeId from = factScope( b );
+            const bool typedLocal = b.kind == LocalBindKind::RecvType
+                                 || ( b.kind == LocalBindKind::Type && ( ing.symbols[ b.fromSymbol ].lang == Lang::TypeScript
+                                                                         || ing.symbols[ b.fromSymbol ].lang == Lang::Python ) );
+            if( b.kind == LocalBindKind::StaticMember )
+            {
+                if( ing.symbols[ from ].name == b.var )   // recorded inside the member's body: the member itself
+                {
+                    staticMember[ from ] = 1;
+                }
+            }
+            else if( ( b.kind == LocalBindKind::RecvType || b.kind == LocalBindKind::MemberType ) && !b.var.empty() && !b.importedName.empty() )
+            {
+                qualified.push_back( &b );
+            }
+            else if( typedLocal && !b.var.empty() )
+            {
+                addLocalFact( keyOf( from, '#', b.var ), b );
+            }
+            else if( b.kind == LocalBindKind::MemberType && !b.var.empty() )
+            {
+                noteMemberType( b, b.typeName );
+            }
+            else if( b.kind == LocalBindKind::MethodAlias && !b.var.empty() )
+            {
+                const auto [ it, fresh ] = methodAlias.try_emplace( keyOf( from, '#', b.var ), b.typeName, b.importedName );
+                if( !fresh && ( it->second.first != b.typeName || it->second.second != b.importedName ) )
+                {
+                    it->second.first.clear();   // rebound to something else: decide nothing
+                }
+            }
+        }
+        for( const Binding* q : qualified )
+        {
+            noteQualifiedWritten( *q );
+        }
+        active = true;
+    }
+    // (L) the call-result facts one binding feeds: the file's imports (CallResultTypes) and the function's call-initialised
+    // bindings of each name (typeCallResult's TS guess rule)
+    void noteCallResultFacts( const Binding& b )
+    {
+        types.noteImport( b );
+        if( b.kind == LocalBindKind::CallResult && b.fromSymbol < ing.symbols.size() && !b.var.empty() )
+        {
+            ++callResultDecls[ keyOf( factScope( b ), '#', b.var ) ];
+        }
+    }
+    // a field's class on its owner (`type` "": unknown, a tombstone); an embedded field (Go) is also a base
+    void noteMemberType( const Binding& b, std::string_view type )
+    {
+        const Symbol&      from  = ing.symbols[ b.fromSymbol ];
+        const std::string& owner = classLike( from.kind ) ? from.name : ownerClass[ b.fromSymbol ];
+        if( owner.empty() )
+        {
+            return;
+        }
+        tombstoneInsert( memberType, typeKey( owner, "#", b.var ), type );
+        if( b.isFromAssignment && !type.empty() )
+        {
+            addBase( owner, type );
+        }
+    }
+    // a local, parameter or field written `pkg.T` (the Go capture is its only writer: importedName = the qualified text) names
+    // a class of THIS tree only when `pkg` imports an in-tree package defining it (CallResultTypes::goQualifiedClass): `f
+    // *os.File` beside an in-tree `File` is os's File, never ours (test/receiverevidencecheck.sh (L) NearOSParam, NearOSField).
+    // Anything else keeps the name as a tombstone: it proves nothing. A local carries the class it resolved to.
+    void noteQualifiedWritten( const Binding& q )
+    {
+        const NodeId           cls  = types.goQualifiedClass( q.fileId, q.importedName, q.typeName );
+        const std::string_view type = cls != kNoNode ? std::string_view( q.typeName ) : std::string_view{};
+        if( q.kind == LocalBindKind::MemberType )
+        {
+            noteMemberType( q, type );
+            return;
+        }
+        addTypedFact( keyOf( factScope( q ), '#', q.var ), q, type, cls );
+    }
+    // the definition a local binding belongs to: a typed local the extractor also indexed as a symbol of its own (a Go
+    // `var c T` inside a function) belongs to the function that declares it
+    NodeId factScope( const Binding& b ) const
+    {
+        NodeId from = b.fromSymbol;
+        if( from < ing.symbols.size() && !callableKind( ing.symbols[ from ].kind ) && !classLike( ing.symbols[ from ].kind ) )
+        {
+            if( const NodeId fn = enclosingFn( from ); fn != kNoNode )
+            {
+                from = fn;
+            }
+        }
+        return from;
+    }
     // (L) call-result typing: the local `b` (a LocalBindKind::CallResult) holds class `cls` (the definition `id`) over its
     // span — the class REPLACES the empty tombstone its own declaration recorded there (the same span), so no other binding
     // of the name changes. TS: the declaration records no tombstone; its base-pass Type record (unspanned) read the call
@@ -1072,31 +1101,30 @@ struct ReceiverEvidence
     // FE-B (review B4): the class local `var` holds at byte `site` of definition `scope`, by lexical scope — the innermost
     // spanned binding that holds the site (a later start is more inner; a tie of two classes is unknown), checked against
     // every binding with no span (its extent is unknown, so a disagreement is unknown). nullopt: no binding of `var` is
-    // visible there; "": one is, and it names no single class. `cls` (when asked) receives the ONE class definition the
-    // binding resolved to (a call result's, fix round 1), kNoNode for a name alone — two facts that agree on the name but not
-    // on the definition disagree.
-    std::optional<std::string_view> visibleLocal( NodeId scope, std::string_view var, std::uint32_t site, NodeId* cls = nullptr ) const
+    // visible there; "": one is, and it names no single class. SeenLocal::cls (fix round 1): the ONE class definition the
+    // binding resolved to (a call result's), kNoNode for a name alone — two facts that agree on the name but not on the
+    // definition disagree.
+    struct SeenLocal
     {
-        if( cls != nullptr )
-        {
-            *cls = kNoNode;
-        }
+        std::string_view type;
+        NodeId           cls = kNoNode;
+        bool operator==( const SeenLocal& ) const = default;
+    };
+    std::optional<SeenLocal> seenLocal( NodeId scope, std::string_view var, std::uint32_t site ) const
+    {
         const auto it = localType.find( keyOf( scope, '#', var ) );
         if( it == localType.end() )
         {
             return std::nullopt;
         }
-        const LocalFact* inner = nullptr;
-        bool             innerSplit = false;
-        std::optional<std::string_view> whole;
-        NodeId                          wholeCls = kNoNode;
+        const LocalFact*         inner = nullptr;
+        bool                     innerSplit = false;
+        std::optional<SeenLocal> whole;
         for( const LocalFact& f : it->second )
         {
             if( f.end == 0 )
             {
-                const bool agree = !whole.has_value() || ( *whole == f.type && wholeCls == f.cls );
-                whole    = agree ? std::string_view( f.type ) : std::string_view{};
-                wholeCls = agree ? f.cls : kNoNode;
+                whole = ( whole.has_value() && *whole != SeenLocal{ f.type, f.cls } ) ? SeenLocal{} : SeenLocal{ f.type, f.cls };
                 continue;
             }
             if( site < f.start || site >= f.end )
@@ -1108,40 +1136,38 @@ struct ReceiverEvidence
                 inner      = &f;
                 innerSplit = false;
             }
-            else if( f.start == inner->start && f.end == inner->end && ( f.type != inner->type || f.cls != inner->cls ) )
+            else if( f.start == inner->start && f.end == inner->end && SeenLocal{ f.type, f.cls } != SeenLocal{ inner->type, inner->cls } )
             {
                 innerSplit = true;
             }
         }
         if( inner == nullptr )
         {
-            if( cls != nullptr && whole.has_value() && !whole->empty() )
-            {
-                *cls = wholeCls;
-            }
             return whole;
         }
-        const std::string_view seen = innerSplit ? std::string_view{} : std::string_view( inner->type );
-        if( whole.has_value() && ( *whole != seen || wholeCls != inner->cls ) )
-        {
-            return std::string_view{};
-        }
-        if( cls != nullptr && !seen.empty() )
-        {
-            *cls = inner->cls;
-        }
-        return seen;
+        const SeenLocal seen = innerSplit ? SeenLocal{} : SeenLocal{ inner->type, inner->cls };
+        return ( whole.has_value() && *whole != seen ) ? SeenLocal{} : seen;
+    }
+    std::optional<std::string_view> visibleLocal( NodeId scope, std::string_view var, std::uint32_t site ) const
+    {
+        const std::optional<SeenLocal> seen = seenLocal( scope, var, site );
+        return seen.has_value() ? std::optional<std::string_view>( seen->type ) : std::nullopt;
     }
     // the local `var` visible at byte `site` of `from` or of a function enclosing it (the innermost that has one)
-    std::optional<std::string_view> localAt( NodeId from, std::string_view var, std::uint32_t site, NodeId* cls = nullptr ) const
+    std::optional<SeenLocal> localSeenAt( NodeId from, std::string_view var, std::uint32_t site ) const
     {
-        std::optional<std::string_view> hit;
+        std::optional<SeenLocal> hit;
         walkScopes( from, [ & ]( NodeId scope )
         {
-            hit = visibleLocal( scope, var, site, cls );
+            hit = seenLocal( scope, var, site );
             return hit.has_value();
         } );
         return hit;
+    }
+    std::optional<std::string_view> localAt( NodeId from, std::string_view var, std::uint32_t site ) const
+    {
+        const std::optional<SeenLocal> seen = localSeenAt( from, var, site );
+        return seen.has_value() ? std::optional<std::string_view>( seen->type ) : std::nullopt;
     }
     // the ( object var, method ) a method alias `var` names in `from` or a function enclosing it; `scope` = where it is bound
     const std::pair<std::string, std::string>* aliasedMethod( NodeId from, std::string_view var, NodeId& scope ) const
@@ -1274,7 +1300,7 @@ struct ReceiverEvidence
         {
             return false;
         }
-        const bool basesByName = cls == kNoNode || sameNamedClasses( cls ) == 1;
+        const bool basesByName = cls == kNoNode || types.sameNamedClasses( cls ) == 1;
         const bool stopped     = walkBaseLevels( type, [ & ]( const std::vector<std::string_view>& level, std::size_t depth )
         {
             if( ( superOnly && depth == 0 ) || ( depth > 0 && !basesByName ) )
@@ -1283,26 +1309,25 @@ struct ReceiverEvidence
             }
             for( std::string_view t : level )
             {
-                if( const auto it = methodsByType.find( typeKey( t, "::", name ) ); it != methodsByType.end() )
-                {
-                    for( NodeId c : it->second )
-                    {
-                        if( depth > 0 || cls == kNoNode || ownedBy( c, cls ) )
-                        {
-                            found.push_back( c );
-                        }
-                    }
-                }
+                collectMethods( t, name, depth == 0 ? cls : kNoNode );
             }
             return !found.empty();
         } );
         return stopped && !found.empty();   // a walk stopped at an unwalkable base level found nothing
     }
-    // the in-tree class-likes of `cls`'s language sharing its name (cls included)
-    std::size_t sameNamedClasses( NodeId cls ) const
+    // `type`'s own callables named `name` into `found` — only those class `cls` owns, when it is a definition
+    void collectMethods( std::string_view type, std::string_view name, NodeId cls ) const
     {
-        NodeId one = kNoNode;
-        return classesNamed( ing.symbols[ cls ].name, callResultFamilyOf( ing.symbols[ cls ].lang ), []( NodeId ) { return true; }, one );
+        if( const auto it = methodsByType.find( typeKey( type, "::", name ) ); it != methodsByType.end() )
+        {
+            for( NodeId c : it->second )
+            {
+                if( cls == kNoNode || ownedBy( c, cls ) )
+                {
+                    found.push_back( c );
+                }
+            }
+        }
     }
     // does class `cls` own member `m` (memberOwnerRuleOf)
     bool ownedBy( NodeId m, NodeId cls ) const
@@ -1311,8 +1336,8 @@ struct ReceiverEvidence
         const Symbol& cs = ing.symbols[ cls ];
         switch( memberOwnerRuleOf( cs.lang ) )
         {
-            case MemberOwnerRule::PackageDir:   return dirOf( ms.fileId ) == dirOf( cs.fileId );
-            case MemberOwnerRule::FileOrUnique: return ms.fileId == cs.fileId || sameNamedClasses( cls ) == 1;
+            case MemberOwnerRule::PackageDir:   return types.dirOf( ms.fileId ) == types.dirOf( cs.fileId );
+            case MemberOwnerRule::FileOrUnique: return ms.fileId == cs.fileId || types.sameNamedClasses( cls ) == 1;
             case MemberOwnerRule::Lexical:
             default:
             {
@@ -1381,14 +1406,21 @@ struct ReceiverEvidence
         }
         return name;
     }
+    // `rootCls` (when asked, and left as the caller set it otherwise): the ONE class a call-result-typed local resolved to
+    // a typed local's class as the caller reads it: a call result's resolved class as it is (its callee's file decided it,
+    // so the caller's import aliases do not apply), any other through the caller's import alias
+    std::string_view typedLocalClass( const Reference& r, const SeenLocal& t, NodeId* rootCls ) const
+    {
+        if( rootCls != nullptr && t.cls != kNoNode )
+        {
+            *rootCls = t.cls;
+        }
+        return t.cls != kNoNode ? t.type : unalias( r.fileId, t.type );
+    }
     std::string_view rootClass( const Reference& r, const Chain& ch, bool& isStatic, bool& superOnly, NodeId* rootCls = nullptr ) const
     {
         isStatic  = false;
         superOnly = false;
-        if( rootCls != nullptr )
-        {
-            *rootCls = kNoNode;
-        }
         if( !ch.ctor.empty() )
         {
             return unalias( r.fileId, ch.ctor );
@@ -1403,18 +1435,9 @@ struct ReceiverEvidence
             superOnly = true;
             return callerClass( r.fromSymbol );
         }
-        NodeId local = kNoNode;
-        if( const std::optional<std::string_view> t = localAt( r.fromSymbol, root, r.startByte, &local ); t.has_value() && !t->empty() )
+        if( const std::optional<SeenLocal> t = localSeenAt( r.fromSymbol, root, r.startByte ); t.has_value() && !t->type.empty() )
         {
-            if( local != kNoNode )   // a call result's class, resolved in its callee's file: the caller's import aliases do not apply
-            {
-                if( rootCls != nullptr )
-                {
-                    *rootCls = local;
-                }
-                return *t;
-            }
-            return unalias( r.fileId, *t );
+            return typedLocalClass( r, *t, rootCls );
         }
         // Java/C#/Kotlin/Swift (the implicit-receiver languages but C++, whose Rule 2b reads fields, and Ruby, whose fields
         // are @ivars): a bare `field.m()` inside a method is `this.field.m()` — the field the caller's class (or a base)
@@ -1531,9 +1554,8 @@ struct ReceiverEvidence
         {
             return false;
         }
-        NodeId                                cls = kNoNode;
-        const std::optional<std::string_view> t   = localAt( r.fromSymbol, ch.root, r.startByte, &cls );
-        return t.has_value() && !t->empty() && methodOf( *t, r.calleeName, false, cls );
+        const std::optional<SeenLocal> t = localSeenAt( r.fromSymbol, ch.root, r.startByte );
+        return t.has_value() && !t->type.empty() && methodOf( t->type, r.calleeName, false, t->cls );
     }
 
     // Python `feed = parser.feed; … feed( data )`: the alias names a typed object's method

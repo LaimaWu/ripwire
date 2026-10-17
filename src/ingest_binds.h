@@ -4215,13 +4215,6 @@ inline std::string importPathText( TSNode n, std::string_view src )
     return withoutBlanks( std::string( ts_node_is_null( n ) ? std::string_view{} : nodeTextOf( n, src ) ) );
 }
 
-// the last segment of a `sep`-joined path (`File` of `java.io.File`, `File` of `std::fs::File`)
-inline std::string_view lastPathSegment( std::string_view path, std::string_view sep )
-{
-    const std::size_t at = path.rfind( sep );
-    return at == std::string_view::npos ? path : path.substr( at + sep.size() );
-}
-
 // Java `import a.b.C;` / `import a.b.*;` and Kotlin `import a.b.C [as D]` / `import a.b.*`. A Java `import static`
 // brings a MEMBER, not a type: nothing is recorded for it.
 inline void captureJvmTypeImport( BindCtx& cx, TSNode n, std::uint32_t at )
@@ -4262,7 +4255,7 @@ inline void captureJvmTypeImport( BindCtx& cx, TSNode n, std::uint32_t at )
         pushTypeImport( cx, at, "*", {}, whole );
         return;
     }
-    const std::string_view item = lastPathSegment( whole, "." );
+    const std::string_view item = namesplit::afterLast( whole, "." );
     pushTypeImport( cx, at, ts_node_is_null( alias ) ? item : nodeTextOf( alias, cx.src ), item, whole );
 }
 
@@ -4303,18 +4296,18 @@ inline void captureRustUseTree( BindCtx& cx, std::uint32_t at, TSNode node, cons
     if( kindIs( t, "use_as_clause" ) )
     {
         const std::string whole = prefix + importPathText( fieldChild( node, NodeField::Path ), cx.src );
-        pushTypeImport( cx, at, importPathText( fieldChild( node, NodeField::Alias ), cx.src ), lastPathSegment( whole, "::" ), whole );
+        pushTypeImport( cx, at, importPathText( fieldChild( node, NodeField::Alias ), cx.src ), namesplit::afterLast( whole, "::" ), whole );
         return;
     }
     const std::string text = importPathText( node, cx.src );   // an identifier, `crate`/`self`/`super`, or a scoped path
     if( text == "self" && prefix.size() > 2 )
     {
         const std::string module = prefix.substr( 0, prefix.size() - 2 );
-        pushTypeImport( cx, at, lastPathSegment( module, "::" ), lastPathSegment( module, "::" ), module );
+        pushTypeImport( cx, at, namesplit::afterLast( module, "::" ), namesplit::afterLast( module, "::" ), module );
         return;
     }
     const std::string whole = prefix + text;
-    pushTypeImport( cx, at, lastPathSegment( whole, "::" ), lastPathSegment( whole, "::" ), whole );
+    pushTypeImport( cx, at, namesplit::afterLast( whole, "::" ), namesplit::afterLast( whole, "::" ), whole );
 }
 
 // Is `name` one of the type parameters the identifiers under `node` declare (Go `[T any]`, a generic receiver's `Ref[T]`)?
