@@ -18,6 +18,7 @@
 #include "valuerefindex.h"      // ValueRefIndex, the rows, the --uses filter (the resolution core)
 #include "graphlegend.h"       // countFieldOrEmpty — the absent-at-zero count spelling
 #include "model.h"
+#include "nextverb.h"     // nextFlag — the <pd> callees row's next=
 #include "sarif.h"
 #include "serialize.h"   // escapeXml / jsonStr
 
@@ -244,7 +245,7 @@ inline std::string patternCalleesXml( const IngestResult& ing, const ValueRefInd
              + "\" shown=\"" + std::to_string( shown ) + "\"";
         if( shown < cands.size() )
         {
-            out += " next=\"" + ex( "--grep=" + ( r.fieldName.empty() ? r.composeRel : r.fieldName ) ) + "\"";
+            out += " next=\"" + ex( nextFlag( "--grep=", r.fieldName.empty() ? r.composeRel : r.fieldName ) ) + "\"";   // checklist 34: through nextFlag
         }
         out += ">";
         for( std::size_t k = 0; k < shown; ++k )
@@ -268,12 +269,12 @@ inline const char* patternDispatchLegend( bool any, bool callersSide ) noexcept
     {
         return "pattern_dispatch=N (absent when 0): N lookups in this body build a NAME from a template (Python getattr/hasattr/"
                "__dict__.get with an f-string or +, a JS/TS o['p' + x] / o[`p${x}`]); each <pd l= pattern= cands=K shown=> lists the "
-               "class members whose names match it (a self/this/cls receiver: the class family only), first 8 as <t n= p=>, next= the "
+               "class members whose names match it (a self/this/cls receiver in a method the index places in a class: that class family only), first 8 as <t n= p=>, next= the "
                "literal scan for the rest. MAY be invoked; matched by name, not a proven call: never in count=. ";
     }
     return any ? "pattern_dispatch=N (absent when 0): N lookups build a NAME from a template (Python getattr/hasattr/__dict__.get with an "
                  "f-string or +, a JS/TS o['p' + x] / o[`p${x}`]) whose literal prefix/suffix this method's name matches; a self/this/cls "
-                 "receiver keeps only the class family (ancestors and subclasses). MAY be invoked through that name; matched by name, "
+                 "receiver in a method the index places in a class keeps only that class family (ancestors and subclasses, by base name). MAY be invoked through that name; matched by name, "
                  "not a proven call: never in callers=/impact_reaches=/count=, and the dead-code list is unchanged. <pds>/<pd in= p= "
                  "pattern=> list them. pattern_too_wide=K: K templates whose literal side is under 3 identifier characters "
                  "(f\"_{m}\") could also name it; no row. "

@@ -219,7 +219,9 @@ public:
     // The Pattern sites (indices into ing.references, in reference order) whose template can name one of `defs`: a
     // class member of the site's value-ref family whose name holds the literal prefix and suffix around a non-empty
     // hole. A `self` / `this` / `cls` receiver narrows the members to the site's class family (its ancestors and its
-    // subclasses, by base name); any other receiver is unnarrowed. A MAY-dispatch clue matched by name: never a call.
+    // subclasses, by base name) when the site's method has a class scope (Python today; a JS/TS method's scope is empty in
+    // this index, so a `this` site there is unnarrowed — the nunjucks census family equals the whole tree's 50); any other
+    // receiver is unnarrowed. A MAY-dispatch clue matched by name: never a call.
     std::vector<std::uint32_t> patternSitesTo( std::span<const NodeId> defs ) const
     {
         std::vector<std::uint32_t> out;
