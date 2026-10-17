@@ -227,6 +227,7 @@ struct CallResultTypes
     // namespace- or file-scope using (sorted), and each class's innermost enclosing symbol as first asked (kNoNode: file scope)
     std::vector<const Binding*>                           namespaces;
     std::vector<std::uint32_t>                            cppUsingFiles;
+    HashMap<std::string, char>                            jvmPackages;     // the Java / Kotlin packages the tree declares
     mutable HashMap<NodeId, NodeId>                       enclosingMemo;
     // Rust crate/module layout, built on the first Rust resolution: a file's crate (its nearest `lib.rs` / `main.rs`
     // directory) and module path (`a::b` for src/a/b.rs or src/a/b/mod.rs), the crates by name (`mdbook_core` for
@@ -252,6 +253,11 @@ struct CallResultTypes
     void noteClass( const Symbol& s ) { classDefsByName[ s.name ].push_back( s.id ); }
     void noteImport( const Binding& b )
     {
+        if( b.kind == LocalBindKind::Namespace && b.spanEnd == 0 )
+        {
+            jvmPackages.try_emplace( b.var, char( 1 ) );   // a Java / Kotlin `package` declaration (model.h)
+            return;
+        }
         if( b.kind == LocalBindKind::Namespace )
         {
             namespaces.push_back( &b );
@@ -576,8 +582,9 @@ struct CallResultTypes
         return onlyClass( cls, CallResultFamily::Jvm, [ & ]( NodeId c ) { return dirOf( ing.symbols[ c ].fileId ) == dir && visibleAt( c, fileId, at ); } );
     }
     // D3: does file `fileId` import the simple name `name` (a single-type import, Kotlin's `as` alias included) from OUTSIDE
-    // the tree — a path whose package no in-tree directory ends with, at any depth (`lib.Outer.Inner` reaches the nested
-    // Inner of in-tree lib.Outer)? A class-name receiver spelled `name` is then that outside class, never an in-tree namesake.
+    // the tree — a path no package the tree DECLARES leads (`package` records: a Kotlin file's package need not match its
+    // directory), read at any depth: `lib.Outer.Inner` is in tree when `lib` is declared and holds a class `Outer`. A
+    // class-name receiver spelled `name` is then that outside class, never an in-tree namesake.
     bool importsFromOutside( std::uint32_t fileId, std::string_view name ) const
     {
         bool outside = false;
@@ -587,14 +594,14 @@ struct CallResultTypes
             {
                 return;   // a Java / Kotlin import names a dotted path; a root-package name is no outside evidence
             }
-            std::string pkg( b.importedName );
-            std::replace( pkg.begin(), pkg.end(), '.', '/' );
-            bool inTree = false;
-            for( std::size_t slash = pkg.rfind( '/' ); slash != std::string::npos && slash > 0 && !inTree; slash = pkg.rfind( '/', slash - 1 ) )
+            const std::string_view path = b.importedName;
+            bool                   inTree = false;
+            for( std::size_t dot = path.rfind( '.' ); dot != std::string_view::npos && dot > 0 && !inTree; dot = path.rfind( '.', dot - 1 ) )
             {
-                pkg.resize( slash );
+                const std::string_view next = namesplit::afterLast( path.substr( 0, path.find( '.', dot + 1 ) ), "." );   // the class the package holds
                 NodeId one = kNoNode;
-                inTree = classesNamed( b.typeName, CallResultFamily::Jvm, [ & ]( NodeId c ) { return endsWithDir( dirOf( ing.symbols[ c ].fileId ), pkg ); }, one ) > 0;
+                inTree = jvmPackages.contains( std::string( path.substr( 0, dot ) ) )
+                      && classesNamed( next, CallResultFamily::Jvm, []( NodeId ) { return true; }, one ) > 0;
             }
             outside = outside || !inTree;
         } );
@@ -923,9 +930,9 @@ struct CallResultTypes
     }
 
     // C++ / ObjC: Rule 2 keys a member by its class's NAME, so the class must be the ONLY in-tree class definition of that
-    // name; a qualified result (`ns::T`) must also name its scope — an enclosing class of that name, or a namespace its
-    // file declares non-members in — so an outside `ext::Config` never names the in-tree `cfg::Config`. An unqualified
-    // result is cppUnqualifiedClass's.
+    // name; a qualified result (`ns::T`) must also name its scope — an enclosing class of that name, the namespace path the
+    // class is declared in, or a namespace its file declares non-members in — so an outside `ext::Config` never names the
+    // in-tree `cfg::Config`. An unqualified result is cppUnqualifiedClass's.
     NodeId cppResultClass( std::string_view whole, std::string_view cls ) const
     {
         if( classIds == nullptr )
@@ -945,6 +952,16 @@ struct CallResultTypes
         }
         const NodeId outer = c < classIds->enclosingClass.size() ? classIds->enclosingClass[ c ] : kNoNode;
         if( outer != kNoNode && ing.symbols[ outer ].name == splitLast( scope, "::" ).second )
+        {
+            return c;
+        }
+        // (fix round 2) the class's own namespace path (its file's Namespace records) ends with the written scope,
+        // segment-aligned: `net::wire::Frame` or `wire::Frame` for a Frame declared in namespace net::wire
+        std::vector<std::string_view> classPath;
+        std::vector<std::string_view> written;
+        namespacePathAt( ing.symbols[ c ].fileId, ing.symbols[ c ].sigStartByte, classPath );
+        appendSegments( scope, written );
+        if( outer == kNoNode && written.size() <= classPath.size() && std::equal( written.rbegin(), written.rend(), classPath.rbegin() ) )
         {
             return c;
         }

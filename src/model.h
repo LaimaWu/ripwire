@@ -1142,7 +1142,9 @@ enum class LocalBindKind : std::uint8_t
     Namespace,     // fix round 2: a lexical scope the index has no symbol for — a C++ `namespace` (not `inline`), a TS
                    //     `namespace` / `module` — var = its name as written (`a::b`, `a.b`; "" when anonymous), spanStart/
                    //     spanEnd = its body. Read by graph.h's call-result type resolution ONLY: a class nested in one is
-                   //     not in scope outside it, and a C++ class is visible from the namespaces its own encloses. APPENDED.
+                   //     not in scope outside it, and a C++ class is visible from the namespaces its own encloses. A Java /
+                   //     Kotlin file's `package a.b` is one with NO span ({0,0}: it scopes nothing lexically) — the packages
+                   //     the tree declares, whatever directory holds them (an import of another one is from outside). APPENDED.
 };
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
 inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::Namespace ) + 1;

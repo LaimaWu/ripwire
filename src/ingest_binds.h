@@ -5061,6 +5061,15 @@ inline void captureTypedDeclEvidence( BindCtx& cx, TSNode n, const char* t )
         captureJvmTypeImport( cx, n, ts_node_start_byte( n ) );   // (L) fix round 1: what a bare result type names in this file
         return;
     }
+    if( ( kindIs( t, "package_declaration" ) || kindIs( t, "package_header" ) ) && callResultFamilyOf( cx.lang ) == CallResultFamily::Jvm )
+    {
+        // (L) fix round 2 (D3): the file's declared package — a Namespace with no span (it scopes nothing lexically): which
+        // packages this tree declares, whatever directory holds them, so an import of any other package is from outside
+        const TSNode path = namedChildOfKind( n, { "scoped_identifier", "identifier" } );
+        cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = ts_node_start_byte( n ), .lang = cx.lang, .kind = LocalBindKind::Namespace,
+                                      .var = importPathText( path, cx.src ) } );
+        return;
+    }
     if( kindIs( t, "method_declaration" ) || kindIs( t, "function_declaration" ) )
     {
         captureDeclaredReturnType( cx, n );   // (L) call-result typing: Java's `type`, Kotlin's type after the parameters (C#/Swift: none read)
