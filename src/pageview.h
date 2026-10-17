@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/Diagnostics.h" // ENSURES (callHierarchyRowCap)
 
 
 // pageview.h — §P8 ("Contract-level" bullets 1+2): the ONE paging window
@@ -163,6 +164,22 @@ inline int effectiveRowCap( int pageLimit, int historicCap ) noexcept
 // answer discloses shown=/capped= plus has_more=/next_offset= so a paging loop terminates.
 inline constexpr int kCallHierarchyRowCap = 40;
 inline constexpr int kUseSiteRowCap       = 100;
+// L8 callers cap band (train 29): a call-hierarchy answer whose WHOLE row total is at most 1.25 × the cap (50) is served
+// whole rather than cut a handful of rows short — ninja's `--callers=Stat` was 40 of 44, the four hidden rows costing an
+// agent a second call for ~0.5 KB. Above the band the cap is unchanged (40), disclosed, and the callers root's next= is
+// the next PAGE. The band reads the total, never the language or the file, so it is the same rule on every tree.
+inline constexpr int kCallHierarchyBandMax = kCallHierarchyRowCap + kCallHierarchyRowCap / 4;
+
+// The row cap --callers/--callees and their MCP twins apply: an explicit --limit wins (effectiveRowCap); without one,
+// a total inside the band is its own cap, anything larger keeps kCallHierarchyRowCap.
+inline int callHierarchyRowCap( int pageLimit, std::size_t rowTotal ) noexcept
+{
+    const int cap = ( pageLimit <= 0 && rowTotal > std::size_t( kCallHierarchyRowCap ) && rowTotal <= std::size_t( kCallHierarchyBandMax ) )
+                        ? int( rowTotal )
+                        : effectiveRowCap( pageLimit, kCallHierarchyRowCap );
+    ENSURES( cap > 0, "a call-hierarchy window always holds at least one row: the band, an explicit --limit or the default 40" );
+    return cap;
+}
 // M13 (capture-audit 2026-09-04): --cochange's per-file partner cap. It was a bare `30` literal inside
 // verbs_report.h's --cochange arm and NOTHING at all on the MCP twin, which served every partner uncapped
 // — the two surfaces disagreeing about the size of one answer. Named here for the same reason as the two

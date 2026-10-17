@@ -581,6 +581,9 @@ inline constexpr const char* kCallHierarchyLegendCalleesOnly =
 // one the emitter printed, and callHierarchyLegendOpen repeats that decision rather than re-deriving it.
 inline constexpr const char* kCallersNextSelectorLegend = "next= is the one pasteable follow-up (the uses verb on this selector: the call sites). ";
 inline constexpr const char* kCallersNextBareNameLegend = "next= is the one pasteable follow-up (the uses verb on the called name: all same-named definitions' call sites, including sites bound to other definitions, because a declined call names no single definition). ";
+// L8 (train 29): the same two readings when next= is the NEXT PAGE of a capped callers answer and the uses verb rides as uses_next=.
+inline constexpr const char* kCallersNextPageLegend = "next= is the one pasteable follow-up: the next page of this capped answer (the same call at next_offset=); uses_next= is the uses verb on this selector (the call sites). ";
+inline constexpr const char* kCallersNextPageBareNameLegend = "next= is the one pasteable follow-up: the next page of this capped answer (the same call at next_offset=); uses_next= is the uses verb on the called name (all same-named definitions' call sites, including sites bound to other definitions, because a declined call names no single definition). ";
 
 // The tested lens's reading for the form a document takes: an XML row omits a false tested=, the columnar array prints 0.
 // ONE choice for --callers/--callees (callHierarchyLegendOpen below) and --impact (verbs_navigate.h runImpact), so the verbs
@@ -592,9 +595,10 @@ inline constexpr const char* testedLensLegend( bool isColumnar ) noexcept
 
 // The composed opener, one call for the caller — keeps the wantCallers/callees branch out of
 // runCallHierarchy (already this file's largest dispatcher) rather than adding a ternary at the call site.
-inline std::string callHierarchyLegendOpen( bool wantCallers, bool nextUsesBareName, bool isColumnar )
+inline std::string callHierarchyLegendOpen( bool wantCallers, bool nextUsesBareName, bool isColumnar, bool nextIsPage = false )
 {
-    const char* const callersNextClause = nextUsesBareName ? kCallersNextBareNameLegend : kCallersNextSelectorLegend;
+    const char* const callersNextClause = nextIsPage ? ( nextUsesBareName ? kCallersNextPageBareNameLegend : kCallersNextPageLegend )
+                                                     : ( nextUsesBareName ? kCallersNextBareNameLegend : kCallersNextSelectorLegend );
     const char* const testedClause = testedLensLegend( isColumnar );
     // F-02: the blind-spot clause rides with hop_tested=/hop_untested=, which both forms always carry.
     // P3 (L7): next= defined where the reader meets it — callers hand over the SITES (the uses verb on the same

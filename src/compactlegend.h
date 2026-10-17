@@ -653,6 +653,8 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // a head read fired on every --lego answer (compactlegendcheck (D7) caught it on --lego=Point).
     { "caveat",            "methods=0 caveat=not-extracted-for-lang: no <m> contract read for this language", true, "iface" },
     { "next",              "next=: the one pasteable follow-up", true },
+    // L8 (train 29): a capped callers page's next= is the next page, and the uses verb rides beside it here (present-only)
+    { "uses_next",         "uses_next=: the uses verb on this selector (the call sites), beside a capped callers page's next=", true },
     { "scrubbed",          "scrubbed=1: this CDATA is not the bytes (]]> split or C0 replaced)", true },
     // lane/cutfix-bodies (2026-09-23): a body cut at the byte budget used to say so only INSIDE its CDATA; the cut is now
     // three attributes on the <b> (serialize.h kTruncatedBodyLegend is the full reading). ELEMENT-qualified: pr-context's
