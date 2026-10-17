@@ -254,7 +254,6 @@ struct CallResultTypes
     std::vector<std::string_view>                         filePackage;
     HashMap<std::string, std::vector<std::uint32_t>>      packageFiles;
     HashMap<std::string, std::vector<const Binding*>>     aliasesByName;
-    HashMap<std::string, char>                            unrecordedCpp;   // fix round 5: C++ class names a macro-written declaration spells
     // Rust crate/module layout, built on the first Rust resolution: a file's crate (its nearest `lib.rs` / `main.rs`
     // directory) and module path (`a::b` for src/a/b.rs or src/a/b/mod.rs), the crates by name (`mdbook_core` for
     // crates/mdbook-core/src), and each module's files
@@ -296,11 +295,6 @@ struct CallResultTypes
             return;
         }
         const bool alias = b.kind == LocalBindKind::TypeAlias;
-        if( alias && b.typeName == kTypeBindUnrecorded )
-        {
-            unrecordedCpp.try_emplace( b.var, char( 1 ) );   // no scope: a class of that name exists somewhere in the tree
-            return;
-        }
         if( ( b.kind == LocalBindKind::TypeImport || b.kind == LocalBindKind::JsImport || alias ) && b.fileId < importsByFile.size() && !b.var.empty() )
         {
             importsByFile[ b.fileId ].push_back( &b );
@@ -1305,8 +1299,11 @@ struct CallResultTypes
     NodeId onlyCppClass( std::string_view cls ) const
     {
         const std::string key( cls );
-        const auto        it = classIds->classesByName.find( key );
-        return it == classIds->classesByName.end() || it->second.size() != 1 || unrecordedCpp.contains( key ) ? kNoNode : it->second[ 0 ];
+        const auto        it  = classIds->classesByName.find( key );
+        const auto        rec = aliasesByName.find( key );   // the "unrecorded" rows ride the alias index (no span: no scope row)
+        const bool unrecorded = rec != aliasesByName.end()
+                             && std::ranges::any_of( rec->second, []( const Binding* b ) { return b->typeName == kTypeBindUnrecorded; } );
+        return it == classIds->classesByName.end() || it->second.size() != 1 || unrecorded ? kNoNode : it->second[ 0 ];
     }
     // C++ / ObjC: Rule 2 keys a member by its class's NAME, so the class must be the ONLY in-tree class definition of that
     // name; a qualified result (`ns::T`) must also name its scope — an enclosing class of that name, the namespace path the
