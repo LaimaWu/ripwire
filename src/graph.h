@@ -8603,6 +8603,25 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
         }
 
+        // lane fcall-forward fix 1 (B1, test/fcallforwardcheck.sh N7 N8 N10 N11 H): a FORWARDED call — `f.call( … )` standing
+        // for the bare `f( … )` the source never writes (model.h Reference::forwarded) — is kept only where the tiers above
+        // PROVE a function or method. An import proves a binding, not a function: a by-name-only answer, or a proven class,
+        // const or object target, adds nothing, and the site keeps only its own member reference, as before the forwarders.
+        // Undefined, not a gauge bucket: the forward is no call the code makes, so it may not move unresolved= or declined=.
+        if( r.forwarded )
+        {
+            if( nameOnly )
+            {
+                tier.clear();
+            }
+            std::erase_if( tier, [ & ]( NodeId c ) { return ing.symbols[ c ].kind != SymKind::Function && ing.symbols[ c ].kind != SymKind::Method; } );
+            if( tier.empty() )
+            {
+                disposition = CallDisposition::Undefined;
+                continue;
+            }
+        }
+
         // ambiguity clue (S6-C): count when, AFTER all narrowing (canonical / Rule-1 / locality), the call STILL
         // resolves to >1 in-repo target — every one of which receives a 1/k-split edge below — excluding a
         // self-loop. HONESTY INVARIANT: the amb count must reflect EXACTLY the multi-way pick the edge emission

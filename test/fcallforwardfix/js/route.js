@@ -2,6 +2,9 @@
 const handleRequest = require('./handle-request.js')
 const { helperA } = require('./helpers.js')
 const vendor = require('vendorpkg')
+const rpc = require('./rpc.js')
+const patch = require('./patchmod.js')
+const { Klass, makeKlass } = require('./klass.js')
 
 const notFn = { call () { return 0 } }
 
@@ -75,4 +78,29 @@ function outer2 () { function dup () { return 2 } return dup() }
 function dupForwarded () { return dup.call(this) }
 function dupBare () { return dup() }
 
-module.exports = { routeHandler, viaApply, helperUser, nearParam, nearMember, nearNonFunc, nearExternal, nearLoop, nearGlobal, binder, outer1, outer2, dupForwarded, dupBare }
+// [B1a] an imported module OBJECT whose method is named call / apply: no forwarded call (the import proves no function)
+function nearObjImport (doc) {
+  rpc.call('x', 1)
+  return patch.apply(doc)
+}
+
+// [B1c] an imported class: no forwarded call; [P] the function imported beside it: an edge
+function nearClassImport () {
+  Klass.call(this)
+  return makeKlass.call(this)
+}
+
+// [M2] a file-scope variable rebinds a declared function's name: no forwarded call
+function fv () { return 15 }
+var fv = 3
+function nearRebound () {
+  return fv.call(this)
+}
+
+// [q10] a function declared only inside a SIBLING scope: the bare name is unbound here, so no forwarded call
+function hostA () { function nestedOnly () { return 16 } return nestedOnly() }
+function nearNested () {
+  return nestedOnly.call(this)
+}
+
+module.exports = { routeHandler, viaApply, helperUser, nearParam, nearMember, nearNonFunc, nearExternal, nearLoop, nearGlobal, binder, outer1, outer2, dupForwarded, dupBare, nearObjImport, nearClassImport, nearRebound, hostA, nearNested }

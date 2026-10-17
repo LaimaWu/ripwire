@@ -89,6 +89,7 @@ struct RawRef
     std::string   memberCtor;          // FE-B: the class a constructed receiver names (`new X().m()`, Go `X{}.m()`); see model.h
     std::string   memberVia;           // FE-B on #373: the method a Ruby typed receiver was built by (`new`, a finder); see model.h
     bool          memberFactory = false;   // FE-B on #373: memberCtor names a FactoryBot factory, not a class
+    bool          forwarded = false;       // lane fcall-forward fix 1: a JS/TS `f.call/f.apply` site standing for `f( … )` (model.h Reference::forwarded)
     std::uint32_t baseBind = 0;          // lane lego-transitive fix 1, an inherit ref only: 1 + the name byte of the same-file
                                          //   declaration the base binds to (ingest_relations.h localBaseBinding); 0 none, ~0u unknown
 };
@@ -140,7 +141,10 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 32;           // 32: train 28 — the RefRole byte a record holds gained two appended values: lane
+constexpr std::uint32_t kCacheVersion = 33;           // 33: train 30 (lane fcall-forward fix 1; train renumbers) — a RawRef record appends
+                                                      //    `forwarded` (u8) after memberFactory; the lane's 52d773b3 builds wrote parserVer-188
+                                                      //    blobs at 32 without it, so 32 must not read as this shape.
+                                                      // 32: train 28 — the RefRole byte a record holds gained two appended values: lane
                                                       //    ruby-pair's Subscript (9) and PR #380's Inert (10; 9 on the PR's branch, which predates
                                                       //    Subscript). readRef validates the byte against kRefRoleCount, so no record changes
                                                       //    shape, but a branch build's blob would read its role 9 as the other role here; 32
@@ -2339,7 +2343,7 @@ inline void writeDef( ByteW& w, const RawDef& d, bool withLex, std::size_t fileD
         }
     }
 }
-inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8( std::uint8_t( r.lang ) ); w.str( r.name ); w.u8( r.isInherit ? 1 : 0 ); w.u8( r.isDocLink ? 1 : 0 ); w.str( r.qualifier ); w.u8( std::uint8_t( r.recv ) ); w.str( r.recvVar ); w.u8( r.isCompose ? 1 : 0 ); w.str( r.fieldName ); w.str( r.composeRel ); w.u8( std::uint8_t( r.role ) ); w.u32( r.line ); w.u32( r.argCount ); w.u8( r.argCountKnown ? 1 : 0 ); w.u8( r.viaArrow ? 1 : 0 ); w.u8( r.qualifierRootsStd ? 1 : 0 ); w.u8( r.memberCall ? 1 : 0 ); w.str( r.memberRoot ); w.str( r.memberPath ); w.str( r.memberCtor ); w.str( r.memberVia ); w.u8( r.memberFactory ? 1 : 0 ); if( r.isInherit ) { w.u32( r.baseBind ); } }
+inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8( std::uint8_t( r.lang ) ); w.str( r.name ); w.u8( r.isInherit ? 1 : 0 ); w.u8( r.isDocLink ? 1 : 0 ); w.str( r.qualifier ); w.u8( std::uint8_t( r.recv ) ); w.str( r.recvVar ); w.u8( r.isCompose ? 1 : 0 ); w.str( r.fieldName ); w.str( r.composeRel ); w.u8( std::uint8_t( r.role ) ); w.u32( r.line ); w.u32( r.argCount ); w.u8( r.argCountKnown ? 1 : 0 ); w.u8( r.viaArrow ? 1 : 0 ); w.u8( r.qualifierRootsStd ? 1 : 0 ); w.u8( r.memberCall ? 1 : 0 ); w.str( r.memberRoot ); w.str( r.memberPath ); w.str( r.memberCtor ); w.str( r.memberVia ); w.u8( r.memberFactory ? 1 : 0 ); w.u8( r.forwarded ? 1 : 0 ); if( r.isInherit ) { w.u32( r.baseBind ); } }
 
 // loadCache's countFits() bounds a corrupt on-disk record COUNT against remaining bytes /
 // minRecordBytes BEFORE reserve() — the guard that keeps a hostile blob's 0xFFFFFFFF count from reaching
@@ -2359,13 +2363,14 @@ inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8
 // str(len u32) fields = 3*4 + 8*1 + 5*4 = 40 bytes (39 until the `viaArrow` u8, kCacheVersion 23; #150's
 // `qualifierRootsStd` u8 then added a 9th u8 — 40 -> 41, kCacheVersion 25; FE-A's `memberCall` u8 and `memberRoot`
 // str then added a 10th u8 and a 6th str — 41 -> 46, kCacheVersion 28; FE-B's `memberPath` and `memberCtor` strs then
-// added a 7th and 8th str — 46 -> 54, kCacheVersion 29).
+// added a 7th and 8th str — 46 -> 54, kCacheVersion 29; fcall-forward fix 1's `forwarded` u8 then added a 12th u8 —
+// 59 -> 60, kCacheVersion 33).
 // verifyCacheRecordMinimaTripwire() below derives these
 // same numbers from the REAL writer functions at runtime so the next field added to writeDef/writeRef
 // can't silently stale them.
 inline constexpr std::size_t kMinDefRecordBytesLean      = 88;   // 16×u32 + 16×u8 + 2×str(len u32, empty)
 inline constexpr std::size_t kMinDefRecordBytesRichExtra =  9;   // v10 rich withLex extra: dlWeighted u32 + tokenCount u32 + tfWidth u8
-inline constexpr std::size_t kMinRefRecordBytes          = 59;   // 3×u32 + 11×u8 + 9×str(len u32, empty)
+inline constexpr std::size_t kMinRefRecordBytes          = 60;   // 3×u32 + 12×u8 + 9×str(len u32, empty)
 
 inline std::size_t minDefRecordBytes( bool captureValueUses ) noexcept
 {
@@ -2473,7 +2478,7 @@ inline RawDef readDef( ByteR& r, bool withLex, const std::vector<std::uint64_t>&
     }
     return d;
 }
-inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = r.enumU8<Lang>( kLangCount ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = r.enumU8<RecvKind>( kRecvKindCount ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = r.enumU8<RefRole>( kRefRoleCount ); x.line = r.u32(); x.argCount = r.u16Of32(); x.argCountKnown = r.u8() != 0; x.viaArrow = r.u8() != 0; x.qualifierRootsStd = r.u8() != 0; x.memberCall = r.u8() != 0; x.memberRoot = r.str(); x.memberPath = r.str(); x.memberCtor = r.str(); x.memberVia = r.str(); x.memberFactory = r.u8() != 0; if( x.isInherit ) { x.baseBind = r.u32(); } return x; }
+inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = r.enumU8<Lang>( kLangCount ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = r.enumU8<RecvKind>( kRecvKindCount ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = r.enumU8<RefRole>( kRefRoleCount ); x.line = r.u32(); x.argCount = r.u16Of32(); x.argCountKnown = r.u8() != 0; x.viaArrow = r.u8() != 0; x.qualifierRootsStd = r.u8() != 0; x.memberCall = r.u8() != 0; x.memberRoot = r.str(); x.memberPath = r.str(); x.memberCtor = r.str(); x.memberVia = r.str(); x.memberFactory = r.u8() != 0; x.forwarded = r.u8() != 0; if( x.isInherit ) { x.baseBind = r.u32(); } return x; }
 inline void   writeBind( ByteW& w, const RawBind& b ) { w.u32( b.startByte ); w.u8( std::uint8_t( b.lang ) ); w.u8( std::uint8_t( b.kind ) ); w.u8( b.isFromAssignment ? 1 : 0 ); w.u32( b.spanStart ); w.u32( b.spanEnd ); w.str( b.var ); w.str( b.typeName ); w.str( b.importedName ); }
 inline RawBind readBind( ByteR& r ) { RawBind b; b.startByte = r.u32(); b.lang = r.enumU8<Lang>( kLangCount ); b.kind = r.enumU8<LocalBindKind>( kLocalBindKindCount ); b.isFromAssignment = r.u8() != 0; b.spanStart = r.u32(); b.spanEnd = r.u32(); b.var = r.str(); b.typeName = r.str(); b.importedName = r.str(); return b; }
 inline void   writeFfi( ByteW& w, const BindingAlias& a ) { w.u8( std::uint8_t( a.kind ) ); w.u8( a.lowConf ? 1 : 0 ); w.str( a.aliasName ); w.str( a.targetName ); w.str( a.targetScope ); }

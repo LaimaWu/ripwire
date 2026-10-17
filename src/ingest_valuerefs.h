@@ -1078,6 +1078,7 @@ private:
         r.line      = ts_node_start_point( m_anc[i].node ).row + 1;
         r.lang      = m_lang;
         r.role      = RefRole::Call;
+        r.forwarded = true;   // graph.h keeps it only at a proven Function/Method (an import proves no function)
         r.name      = std::string( name );
         const TSNode args = child( call.node, m_fArguments );
         if( !fw->argsAsArray && !ts_node_is_null( args ) )

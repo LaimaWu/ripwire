@@ -872,6 +872,12 @@ struct Reference
     //   memberFactory), memberVia = the method that built it. recvVar is then empty. Read through rubyTypedRecvOf.
     std::string   memberVia;
     bool          memberFactory = false;
+    // lane fcall-forward fix 1 (test/fcallforwardcheck.sh N7 N8 N10 N11 H): a JS/TS call reference the value-ref walk
+    //   FORWARDED from `f.call( … )` / `f.apply( … )` (ingest_valuerefs.h forwardCallAt) — it stands for the bare call
+    //   `f( … )`, which the source never writes. graph.h buildGraph keeps its edges only where the resolver PROVES a
+    //   Function/Method (no via="name", no class/const/object target): an import proves a binding, not a function.
+    //   Sits beside memberFactory in the alignment padding before baseBind: sizeof(Reference) is unchanged.
+    bool          forwarded = false;
     // lane lego-transitive fix 1 (test/legotransitivecheck.sh NS arms), an INHERIT ref only (isInherit): the same-file declaration
     //   the base name binds to by the language's lexical lookup, as 1 + the byte its name starts at (ingest_relations.h
     //   localBaseBinding; 0 = no enclosing scope declares it, 0xFFFFFFFF = a scope too large to read, nothing proven). On an

@@ -2,6 +2,7 @@ import { target as tgt } from './lib';
 import defaultFn from './lib2';
 import * as ns from './lib';
 import type { TypeOnly } from './lib';
+import { type typeOnlyFn } from './lib';
 
 // [T1] `.call` on an aliased named import; [T2] `.apply` on a default import
 export function tsUser(): number {
@@ -30,4 +31,9 @@ export function tsBind(): () => number {
 export function tsLocalArrow(): number {
   const run = (): number => 5;
   return run.call(null);
+}
+
+// [M4] an inline `type` specifier binds no value: no forwarded call
+export function tsTypeSpec(): number {
+  return typeOnlyFn.call(null);
 }
