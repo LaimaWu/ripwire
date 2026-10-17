@@ -205,12 +205,12 @@ if python3 - "$TMP/pn.fresh" "$TMP/pn.bin" "$ROOT" <<'PY'
 import copy, pathlib, re, struct, sys, xml.etree.ElementTree as ET
 from collections import Counter
 
-# readFileRecord/writeBind in ingest_cache.h, lean cache v32 (train 28: 31 -> 32 moved the number only — two appended
-# RefRole values and one appended bind kind; no record changes shape). No heuristic string searches:
+# readFileRecord/writeBind in ingest_cache.h, lean cache v33 (train 30, fcall-forward: a RawRef appends the `forwarded` u8
+# after memberFactory; train 28's 31 -> 32 moved the number only — two appended RefRole values and one appended bind kind). No heuristic string searches:
 # walk the counted arrays and require complete file coverage, clean parse health and exact EOF.
 blob = pathlib.Path(sys.argv[2]).read_bytes()
 endian = '<' if sys.byteorder == 'little' else '>'
-assert blob[:4] == b'CTPK' and struct.unpack_from(endian + 'I', blob, 4)[0] == 32, 'update the cache walker for a new layout'
+assert blob[:4] == b'CTPK' and struct.unpack_from(endian + 'I', blob, 4)[0] == 33, 'update the cache walker for a new layout'
 table, count = struct.unpack_from(endian + 'QI', blob, len(blob) - 24)
 assert count == 5 == struct.unpack_from(endian + 'I', blob, 21)[0], 'all five fixtures must be cached'
 assert table + count * 32 == len(blob) - 24, 'cache table bounds'
@@ -240,7 +240,7 @@ for i in range(count):
         string(); string(); take(13)  # argCount is serialized u32, narrowed by u16Of32 on read
         for _ in range(4):
             string()  # memberRoot/memberPath/memberCtor/memberVia
-        take(1)  # memberFactory
+        take(2)  # memberFactory, forwarded (fcall-forward)
         if inherit:
             take(4)  # baseBind
     incs = []
