@@ -477,7 +477,7 @@ struct CallResultTypes
         std::uint32_t start = 0;
         std::uint32_t end   = 0xFFFFFFFFu;
         NodeId        sym   = kNoNode;
-        bool          file() const noexcept { return start == 0 && end == 0xFFFFFFFFu && sym == kNoNode; }
+        bool          wholeFile() const noexcept { return start == 0 && end == 0xFFFFFFFFu && sym == kNoNode; }
         bool          operator==( const Level& ) const = default;
     };
     // The votes of one level (or tier): each binding of the spelling there names one in-tree class, or kNoNode (outside,
@@ -524,7 +524,7 @@ struct CallResultTypes
         Level        best = s == kNoNode ? Level{} : Level{ ing.symbols[ s ].sigStartByte, ing.symbols[ s ].endByte, s };
         for( const Binding* ns : namespacesOf( f ) )
         {
-            if( ns->spanStart <= pos && pos < ns->spanEnd && ( best.file() || ns->spanStart > best.start ) )
+            if( ns->spanStart <= pos && pos < ns->spanEnd && ( best.wholeFile() || ns->spanStart > best.start ) )
             {
                 best = { ns->spanStart, ns->spanEnd, kNoNode };
             }
@@ -562,7 +562,7 @@ struct CallResultTypes
         Level         best  = outer == kNoNode ? Level{} : Level{ ing.symbols[ outer ].sigStartByte, ing.symbols[ outer ].endByte, outer };
         for( const Binding* ns : namespacesOf( cs.fileId ) )
         {
-            if( ns->spanStart <= cs.sigStartByte && cs.sigStartByte < ns->spanEnd && ( best.file() || ns->spanStart > best.start ) )
+            if( ns->spanStart <= cs.sigStartByte && cs.sigStartByte < ns->spanEnd && ( best.wholeFile() || ns->spanStart > best.start ) )
             {
                 best = { ns->spanStart, ns->spanEnd, kNoNode };
             }
@@ -679,7 +679,7 @@ struct CallResultTypes
         NodeId            one = kNoNode;
         const std::size_t n   = classesNamed( name, CallResultFamily::Jvm, [ & ]( NodeId c )
         {
-            return std::ranges::find( files->second, ing.symbols[ c ].fileId ) != files->second.end() && levelOfClass( c ).file();
+            return std::ranges::find( files->second, ing.symbols[ c ].fileId ) != files->second.end() && levelOfClass( c ).wholeFile();
         }, one );
         supplies = n > 0;
         return n == 1 ? one : kNoNode;
@@ -719,7 +719,7 @@ struct CallResultTypes
             }, one );
             forEachImport( f, name, [ & ]( const Binding& b )
             {
-                const bool here = rules->importsAtAnyLevel || b.kind == LocalBindKind::TypeAlias ? levelAt( f, b.startByte ) == lv : lv.file();
+                const bool here = rules->importsAtAnyLevel || b.kind == LocalBindKind::TypeAlias ? levelAt( f, b.startByte ) == lv : lv.wholeFile();
                 if( here && b.kind == LocalBindKind::TypeAlias )
                 {
                     named.vote( kNoNode );
@@ -754,7 +754,7 @@ struct CallResultTypes
                     return globs.verdict();
                 }
             }
-            if( rules->modIsBarrier && ( lv.file() || kind == SymKind::Other ) )
+            if( rules->modIsBarrier && ( lv.wholeFile() || kind == SymKind::Other ) )
             {
                 return kNoNode;   // a Rust module: the name is the prelude's, an outside crate's, or unresolved
             }
@@ -766,7 +766,7 @@ struct CallResultTypes
             classesNamed( name, fam, [ & ]( NodeId c )
             {
                 const std::uint32_t g = ing.symbols[ c ].fileId;
-                if( g != f && samePackage( f, g ) && levelOfClass( c ).file() )
+                if( g != f && samePackage( f, g ) && levelOfClass( c ).wholeFile() )
                 {
                     pkg.vote( c );
                 }
@@ -778,7 +778,7 @@ struct CallResultTypes
                 for( const Binding* b : aliases->second )
                 {
                     const bool declared = b->fileId < filePackage.size() && !filePackage[ b->fileId ].empty();   // a JVM file's own package
-                    if( b->fileId != f && declared && samePackage( f, b->fileId ) && levelAt( b->fileId, b->startByte ).file() )
+                    if( b->fileId != f && declared && samePackage( f, b->fileId ) && levelAt( b->fileId, b->startByte ).wholeFile() )
                     {
                         pkg.vote( kNoNode );   // a Kotlin `typealias` of the package
                     }
@@ -882,14 +882,14 @@ struct CallResultTypes
             }
             return onlyClass( cls, CallResultFamily::Jvm, [ & ]( NodeId c )
             {
-                return std::ranges::find( files->second, ing.symbols[ c ].fileId ) != files->second.end() && levelOfClass( c ).file();
+                return std::ranges::find( files->second, ing.symbols[ c ].fileId ) != files->second.end() && levelOfClass( c ).wholeFile();
             } );
         }
         std::string pkgDir( path.substr( 0, dot ) );
         std::replace( pkgDir.begin(), pkgDir.end(), '.', '/' );
         return onlyClass( cls, CallResultFamily::Jvm, [ & ]( NodeId c )
         {
-            return endsWithDir( dirOf( ing.symbols[ c ].fileId ), pkgDir ) && levelOfClass( c ).file();   // a top-level class
+            return endsWithDir( dirOf( ing.symbols[ c ].fileId ), pkgDir ) && levelOfClass( c ).wholeFile();   // a top-level class
         } );
     }
     // Java / Kotlin (fix round 3: bareClassAt's rows), the order the languages scope a simple type name in: a class nested in
@@ -1072,7 +1072,7 @@ struct CallResultTypes
                     fn( b );
                 }
             } );
-            if( found || lv.file() || kind == SymKind::Other )
+            if( found || lv.wholeFile() || kind == SymKind::Other )
             {
                 return;
             }
@@ -1187,7 +1187,7 @@ struct CallResultTypes
         const Level  level     = rustModuleLevel( inlineMod );
         const auto   atLevel   = [ & ]( std::uint32_t file, std::uint32_t pos )
         {
-            return inlineMod == kNoNode ? file < rust.crateOf.size() && rust.crateOf[ file ] == crate && rust.moduleOf[ file ] == module && levelAt( file, pos ).file()
+            return inlineMod == kNoNode ? file < rust.crateOf.size() && rust.crateOf[ file ] == crate && rust.moduleOf[ file ] == module && levelAt( file, pos ).wholeFile()
                                         : file == ing.symbols[ inlineMod ].fileId && levelAt( file, pos ) == level;
         };
         NodeId            one = kNoNode;
