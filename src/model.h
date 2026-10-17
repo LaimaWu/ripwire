@@ -1162,11 +1162,15 @@ enum class LocalBindKind : std::uint8_t
                    //     "unparsed" a region the parser cannot read as declarations, which may declare ANY name (var "!": a
                    //     C++ macro invocation or parse error where a declaration must stand, with its scope's span; a Rust
                    //     block enclosing a nested fn that holds a statement- or item-position macro, at the block's start).
+                   //     Fix round 5: "unrecorded" a C++ class declaration only a macro can have written, which tree-sitter-cpp
+                   //     reads as a function or a variable (`class API S {…}`, `struct API S;`): one row per identifier its head
+                   //     spells (S among them), no span — a class of that name the index does not record exists in the tree.
 };
 // fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
 inline constexpr std::string_view kTypeBindForward  = "forward";
 inline constexpr std::string_view kTypeBindShadow   = "shadow";
 inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
+inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
 inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::TypeAlias ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).

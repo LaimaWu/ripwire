@@ -254,6 +254,7 @@ struct CallResultTypes
     std::vector<std::string_view>                         filePackage;
     HashMap<std::string, std::vector<std::uint32_t>>      packageFiles;
     HashMap<std::string, std::vector<const Binding*>>     aliasesByName;
+    HashMap<std::string, char>                            unrecordedCpp;   // fix round 5: C++ class names a macro-written declaration spells
     // Rust crate/module layout, built on the first Rust resolution: a file's crate (its nearest `lib.rs` / `main.rs`
     // directory) and module path (`a::b` for src/a/b.rs or src/a/b/mod.rs), the crates by name (`mdbook_core` for
     // crates/mdbook-core/src), and each module's files
@@ -295,6 +296,11 @@ struct CallResultTypes
             return;
         }
         const bool alias = b.kind == LocalBindKind::TypeAlias;
+        if( alias && b.typeName == kTypeBindUnrecorded )
+        {
+            unrecordedCpp.try_emplace( b.var, char( 1 ) );   // no scope: a class of that name exists somewhere in the tree
+            return;
+        }
         if( ( b.kind == LocalBindKind::TypeImport || b.kind == LocalBindKind::JsImport || alias ) && b.fileId < importsByFile.size() && !b.var.empty() )
         {
             importsByFile[ b.fileId ].push_back( &b );
@@ -1294,6 +1300,14 @@ struct CallResultTypes
         return bareClassAt( CallResultFamily::Rust, fileId, at, cls );
     }
 
+    // C++: the ONLY in-tree class named `cls` — none when two are, or (fix round 5) when a declaration only a macro can have
+    // written (`class API cls {…}`) spells the name: the tree holds a class of it the index does not record
+    NodeId onlyCppClass( std::string_view cls ) const
+    {
+        const std::string key( cls );
+        const auto        it = classIds->classesByName.find( key );
+        return it == classIds->classesByName.end() || it->second.size() != 1 || unrecordedCpp.contains( key ) ? kNoNode : it->second[ 0 ];
+    }
     // C++ / ObjC: Rule 2 keys a member by its class's NAME, so the class must be the ONLY in-tree class definition of that
     // name; a qualified result (`ns::T`) must also name its scope — an enclosing class of that name, the namespace path the
     // class is declared in, or a namespace its file declares non-members in — so an outside `ext::Config` never names the
@@ -1304,12 +1318,11 @@ struct CallResultTypes
         {
             return kNoNode;
         }
-        const auto it = classIds->classesByName.find( std::string( cls ) );
-        if( it == classIds->classesByName.end() || it->second.size() != 1 )
+        const NodeId c = onlyCppClass( cls );
+        if( c == kNoNode )
         {
             return kNoNode;
         }
-        const NodeId c = it->second[ 0 ];
         const auto [ scope, last ] = splitLast( whole, "::" );
         if( last != cls || scope.empty() )
         {
@@ -1436,12 +1449,11 @@ struct CallResultTypes
         {
             return kNoNode;
         }
-        const auto it = classIds->classesByName.find( std::string( cls ) );
-        if( it == classIds->classesByName.end() || it->second.size() != 1 )
+        const NodeId c = onlyCppClass( cls );
+        if( c == kNoNode )
         {
             return kNoNode;
         }
-        const NodeId c = it->second[ 0 ];
         // fix round 3: a member type a base of an enclosing class declares (a nested class, a member alias) is in scope
         // there and is not followed — the spelling names nothing
         std::vector<Level> chain;

@@ -3722,8 +3722,8 @@ struct BindCtx
     std::string_view           src;
     std::vector<RawBind>*      binds = nullptr;
     std::vector<TypeParamScope> typeParams;   // FE-B: filled as the pre-order walk meets each parameter list
-    // (L) fix round 4: the Rust blocks captureRustUnparsed has read, as (start, end) — the enclosing ones of the walk's position
-    std::vector<std::pair<std::uint32_t, std::uint32_t>> rustMacroBlocks;
+    // (L) fix round 4: the blocks captureUnparsedBlocks has read, as (start, end) — the enclosing ones of the walk's position
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> macroBlocks;
 
     // L3 fn-pointer buffers. Positives collect here (not straight into binds) so the end-of-walk clobber
     // sweep can ask "does this var have a fn binding in this file?" — a clobbering assignment
@@ -4292,6 +4292,7 @@ inline constexpr ScopeFactNode kScopeFactNodes[] = {
     { CallResultFamily::Cpp, "class_specifier", ScopeFactRole::Shadow },
     { CallResultFamily::Cpp, "expression_statement", ScopeFactRole::Unparsed }, { CallResultFamily::Cpp, "ERROR", ScopeFactRole::Unparsed },
     { CallResultFamily::Cpp, "declaration", ScopeFactRole::Unparsed }, { CallResultFamily::Cpp, "field_declaration", ScopeFactRole::Unparsed },
+    { CallResultFamily::Cpp, "function_definition", ScopeFactRole::Unparsed }, { CallResultFamily::Cpp, "field_declaration_list", ScopeFactRole::UnparsedBlocks },
     { CallResultFamily::TypeScript, "internal_module", ScopeFactRole::Scope }, { CallResultFamily::TypeScript, "module", ScopeFactRole::Scope },
     { CallResultFamily::TypeScript, "type_alias_declaration", ScopeFactRole::Alias }, { CallResultFamily::TypeScript, "import_alias", ScopeFactRole::Alias },
     { CallResultFamily::Rust, "type_item", ScopeFactRole::Alias }, { CallResultFamily::Rust, "function_item", ScopeFactRole::UnparsedBlocks },
@@ -4444,10 +4445,11 @@ inline void captureShadowDecl( BindCtx& cx, TSNode n, const char* t )
 // fix round 4: a region the parser cannot read as declarations may declare ANY name — an "unparsed" TypeAlias row (var "!",
 // model.h kTypeBind* constants). C++: a statement, a parse error, or a declaration holding one, standing where only declarations
 // may (a namespace / file / class body) and spelling at least one identifier — a macro invocation (`DECL(S)`,
-// `REGISTER(A, B);`, `DECLARE_ALL()`), with its scope's span. Rust: a nested fn sees the items of every block enclosing it,
-// and a statement- or item-position macro in such a block may expand to one — one row per such block, each block read
-// once per file (BindCtx::rustMacroBlocks: its ancestors, outermost first). (A C++ macro in a function body reads as a
-// call: a local class beside one is not covered.)
+// `REGISTER(A, B);`, `DECLARE_ALL()`) or (fix round 5) a type-less function-style declaration (cppMacroShape Invocation),
+// with its scope's span; a class declaration only a macro can have written (DeclaresClass) is an "unrecorded" row per name
+// its head spells instead. Blocks (captureUnparsedBlocks): a Rust fn in a fn body — nested, or a method of an `impl`
+// there — and a C++ local class see the items of every block enclosing them, and a statement there may be a macro that
+// declares one — one row per such block, each block read once per file (BindCtx::macroBlocks: its ancestors, outermost first).
 // does the region `n` spell an identifier (a pre-order walk of its subtree, stopped at the first identifier leaf)
 inline bool spellsIdentifier( TSNode n )
 {
@@ -4474,13 +4476,95 @@ inline bool spellsIdentifier( TSNode n )
         }
     }
 }
+// fix round 5: a C++ declaration tree-sitter-cpp reads WELL-FORMED that only a macro can have written — no error node marks
+// it. DeclaresClass: a function definition whose declarator is a bare name (`class API S {…}`, `struct API S final {…}`,
+// `API struct S {…}`, `MKSTRUCT S {…}`: a function needs a parameter list), an elaborated class-key declaring a bare name
+// (`struct API S;` — also `struct stat st;`, which hedges the spelling `st` with it). Invocation: a type-less function-style
+// declaration that is no constructor (`MK(S);`, `DISALLOW_COPY(X);` in a class body: a constructor bears its class's name).
+enum class CppMacroShape : std::uint8_t { None, DeclaresClass, Invocation };
+inline CppMacroShape cppMacroShape( TSNode n, const char* t, TSNode scope, std::string_view src )
+{
+    const TSNode decl     = fieldChild( n, NodeField::Declarator );
+    const char*  dt       = ts_node_is_null( decl ) ? "" : ts_node_type( decl );
+    const bool   bareName = kindIs( dt, "identifier" ) || kindIs( dt, "field_identifier" );
+    const TSNode type     = fieldChild( n, NodeField::Type );
+    if( kindIs( t, "function_definition" ) || !ts_node_is_null( type ) )
+    {
+        constexpr std::string_view kClassKeys[] = { "struct_specifier", "class_specifier", "union_specifier" };
+        const bool elaborated = !ts_node_is_null( type ) && std::ranges::find( kClassKeys, std::string_view( ts_node_type( type ) ) ) != std::end( kClassKeys )
+                             && ts_node_is_null( fieldChild( type, NodeField::Body ) );
+        return bareName && ( kindIs( t, "function_definition" ) || elaborated ) ? CppMacroShape::DeclaresClass : CppMacroShape::None;
+    }
+    const TSNode callee = kindIs( dt, "function_declarator" ) ? fieldChild( decl, NodeField::Declarator ) : TSNode{};
+    if( ts_node_is_null( callee ) || !kindIs( ts_node_type( callee ), "identifier" ) )
+    {
+        return CppMacroShape::None;   // a destructor, a conversion operator, a qualified name
+    }
+    const TSNode owner = kindIs( ts_node_type( scope ), "field_declaration_list" ) ? ts_node_parent( scope ) : TSNode{};
+    TSNode       cls   = ts_node_is_null( owner ) ? TSNode{} : fieldChild( owner, NodeField::Name );
+    if( !ts_node_is_null( cls ) && kindIs( ts_node_type( cls ), "template_type" ) )
+    {
+        cls = fieldChild( cls, NodeField::Name );
+    }
+    return ts_node_is_null( cls ) || nodeTextOf( callee, src ) != nodeTextOf( cls, src ) ? CppMacroShape::Invocation : CppMacroShape::None;
+}
+// one "unrecorded" row per identifier the head of `n` spells (every child but its body): the class it declares is among them
+inline void pushUnrecordedNames( BindCtx& cx, TSNode n )
+{
+    const TSNode body = fieldChild( n, NodeField::Body );
+    ChildCursor  cursor( n );
+    forEachChild( n, cursor.cur, [ & ]( TSNode c )
+    {
+        if( ts_node_eq( c, body ) )
+        {
+            return true;
+        }
+        ChildCursor walk( c );
+        for( bool down = true;; )
+        {
+            const TSNode leaf = ts_tree_cursor_current_node( &walk.cur );
+            if( down && ts_tree_cursor_goto_first_child( &walk.cur ) )
+            {
+                continue;
+            }
+            if( ts_node_child_count( leaf ) == 0 && std::string_view( ts_node_type( leaf ) ).ends_with( "identifier" ) )
+            {
+                pushTypeBind( cx, ts_node_start_byte( n ), { 0u, 0u }, nodeTextOf( leaf, cx.src ), kTypeBindUnrecorded );
+            }
+            down = ts_tree_cursor_goto_next_sibling( &walk.cur );
+            while( !down && ts_tree_cursor_goto_parent( &walk.cur ) )
+            {
+                down = ts_tree_cursor_goto_next_sibling( &walk.cur );
+            }
+            if( !down )
+            {
+                return true;
+            }
+        }
+    } );
+}
 inline void captureCppUnparsed( BindCtx& cx, TSNode n, const char* t )
 {
-    const TSNode parent = ts_node_parent( n );
-    const char*  pt     = ts_node_is_null( parent ) ? "" : ts_node_type( parent );
+    TSNode scope = ts_node_parent( n );
+    while( !ts_node_is_null( scope ) && kindIs( ts_node_type( scope ), "template_declaration" ) )
+    {
+        scope = ts_node_parent( scope );   // a template's declaration stands in the template's scope
+    }
+    const char* pt = ts_node_is_null( scope ) ? "" : ts_node_type( scope );
     constexpr std::string_view kDeclOnly[] = { "declaration_list", "translation_unit", "field_declaration_list" };   // no statement stands here
-    const bool   broken = kindIs( t, "ERROR" ) || kindIs( t, "expression_statement" ) || ts_node_has_error( n );
-    if( !broken || std::ranges::find( kDeclOnly, std::string_view( pt ) ) == std::end( kDeclOnly ) || !spellsIdentifier( n ) )
+    if( std::ranges::find( kDeclOnly, std::string_view( pt ) ) == std::end( kDeclOnly ) )
+    {
+        return;
+    }
+    const CppMacroShape shape = cppMacroShape( n, t, scope, cx.src );
+    if( shape == CppMacroShape::DeclaresClass )
+    {
+        pushUnrecordedNames( cx, n );
+        return;
+    }
+    const bool function = kindIs( t, "function_definition" );   // its body's own errors are the body's
+    const bool broken   = kindIs( t, "ERROR" ) || kindIs( t, "expression_statement" ) || ( !function && ts_node_has_error( n ) ) || shape == CppMacroShape::Invocation;
+    if( !broken || !spellsIdentifier( n ) )
     {
         return;
     }
@@ -4490,24 +4574,49 @@ inline void captureCppUnparsed( BindCtx& cx, TSNode n, const char* t )
         pushTypeBind( cx, ts_node_start_byte( n ), span, "!", kTypeBindUnparsed );
     }
 }
-// Rust: only a NESTED fn (one in a block) sees block items
-inline void captureRustUnparsed( BindCtx& cx, TSNode n )
+// may the statement `c` of an enclosing block be a macro invocation that declares an item there — Rust: a statement- or
+// item-position macro; C++ (fix round 5): any expression statement, parse error or broken declaration (a macro reads as a call)
+inline bool rustMacroStatement( TSNode c )
 {
-    const TSNode parent = ts_node_parent( n );
-    if( ts_node_is_null( parent ) || !kindIs( ts_node_type( parent ), "block" ) )
+    const TSNode inner = kindIs( ts_node_type( c ), "expression_statement" ) && ts_node_named_child_count( c ) > 0 ? ts_node_named_child( c, 0 ) : c;
+    return kindIs( ts_node_type( inner ), "macro_invocation" );
+}
+inline bool cppMacroStatement( TSNode c )
+{
+    return ( kindIs( ts_node_type( c ), "ERROR" ) || kindIs( ts_node_type( c ), "expression_statement" ) || ts_node_has_error( c ) ) && spellsIdentifier( c );
+}
+// the blocks whose items a nested declaration sees, per family (data rows): Rust — every block enclosing a fn (a nested fn,
+// or (fix round 5) a method of an `impl` written in a fn body), up to its module; C++ (fix round 5) — every function body
+// enclosing a class body (a local class's members). A C++ row carries the block's span (its members are inside it).
+struct UnparsedBlockRule
+{
+    CallResultFamily family;
+    std::string_view block;
+    std::string_view stop;
+    bool             spanned;
+    bool ( *mayDeclare )( TSNode );
+};
+inline constexpr UnparsedBlockRule kUnparsedBlockRules[] = {
+    { CallResultFamily::Rust, "block", "mod_item", false, &rustMacroStatement },
+    { CallResultFamily::Cpp, "compound_statement", "translation_unit", true, &cppMacroStatement },
+};
+inline void captureUnparsedBlocks( BindCtx& cx, TSNode n )
+{
+    const auto rule = std::ranges::find( kUnparsedBlockRules, callResultFamilyOf( cx.lang ), &UnparsedBlockRule::family );
+    if( rule == std::end( kUnparsedBlockRules ) )
     {
         return;
     }
     const std::uint32_t at = ts_node_start_byte( n );
-    auto& seen = cx.rustMacroBlocks;
+    auto& seen = cx.macroBlocks;
     while( !seen.empty() && seen.back().second <= at )
     {
         seen.pop_back();   // blocks the walk has left (the walk is in source order)
     }
     std::vector<TSNode> blocks;   // the enclosing blocks not yet read, innermost first; the walk stops at the module
-    for( TSNode up = parent; !ts_node_is_null( up ) && !kindIs( ts_node_type( up ), "mod_item" ); up = ts_node_parent( up ) )
+    for( TSNode up = ts_node_parent( n ); !ts_node_is_null( up ) && ts_node_type( up ) != rule->stop; up = ts_node_parent( up ) )
     {
-        if( kindIs( ts_node_type( up ), "block" ) && std::ranges::none_of( seen, [ & ]( const auto& b ) { return b.first == ts_node_start_byte( up ); } ) )
+        if( ts_node_type( up ) == rule->block && std::ranges::none_of( seen, [ & ]( const auto& b ) { return b.first == ts_node_start_byte( up ); } ) )
         {
             blocks.push_back( up );
         }
@@ -4519,13 +4628,12 @@ inline void captureRustUnparsed( BindCtx& cx, TSNode n )
         bool macro = false;
         forEachChild( *b, cursor.cur, [ & ]( TSNode c )
         {
-            const TSNode inner = kindIs( ts_node_type( c ), "expression_statement" ) && ts_node_named_child_count( c ) > 0 ? ts_node_named_child( c, 0 ) : c;
-            macro = kindIs( ts_node_type( inner ), "macro_invocation" );
+            macro = rule->mayDeclare( c );
             return !macro;
         } );
         if( macro )
         {
-            pushTypeBind( cx, ts_node_start_byte( *b ), { 0u, 0u }, "!", kTypeBindUnparsed );
+            pushTypeBind( cx, ts_node_start_byte( *b ), rule->spanned ? std::pair{ ts_node_start_byte( *b ), ts_node_end_byte( *b ) } : std::pair{ 0u, 0u }, "!", kTypeBindUnparsed );
         }
     }
 }
@@ -6302,7 +6410,7 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
             case ScopeFactRole::Alias:          captureTypeAlias( cx, n, t ); break;
             case ScopeFactRole::Shadow:         captureShadowDecl( cx, n, t ); break;
             case ScopeFactRole::Unparsed:       captureCppUnparsed( cx, n, t ); break;
-            case ScopeFactRole::UnparsedBlocks: captureRustUnparsed( cx, n ); break;
+            case ScopeFactRole::UnparsedBlocks: captureUnparsedBlocks( cx, n ); break;
         }
     }
     // (L) a C++ function's declared result (a definition, or a declaration such as a header's prototype)
