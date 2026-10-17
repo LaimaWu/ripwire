@@ -65,19 +65,6 @@ inline constexpr TypeMentionRow kTypeMentionRows[] = {
     { Lang::Python,     "(class_definition superclasses: (argument_list (identifier) @t))" },   // `class S( Base ):`
 };
 
-// Does `lang` have a row whose pattern is `node`?
-inline bool typeMentionRowFor( Lang lang, std::string_view node ) noexcept
-{
-    for( const TypeMentionRow& row : kTypeMentionRows )
-    {
-        if( row.lang == lang && row.node == node )
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
 // The name a type mention spells: the final segment of a definition's name (`ns::Widget` → `Widget`). Empty when that
 // segment is not a plain identifier, which the #eq? literal could not carry safely — the tier then stays unarmed.
 inline std::string_view typeMentionName( std::string_view name ) noexcept
@@ -144,13 +131,20 @@ inline TypeUseTier typeUseTier( const IngestResult& ing, std::span<const NodeId>
     }
 
     // One spec per DISTINCT pattern; the spec's tag is the pattern itself, so a hit is matched back to its rows.
-    std::vector<AstQuerySpec> specs;
-    for( const TypeMentionRow& r : kTypeMentionRows )
+    // specLangs[i] holds one bit per Lang whose row names spec i's pattern — a hit counts only in those languages.
+    std::vector<AstQuerySpec>  specs;
+    std::vector<std::uint64_t> specLangs;
+    static_assert( kLangCount <= 64, "specLangs keeps one bit per Lang" );
+    for( const TypeMentionRow& row : kTypeMentionRows )
     {
-        if( std::none_of( specs.begin(), specs.end(), [ & ]( const AstQuerySpec& sp ) { return sp.tag == r.node; } ) )
+        const auto at = std::find_if( specs.begin(), specs.end(), [ & ]( const AstQuerySpec& sp ) { return sp.tag == row.node; } );
+        const std::size_t i = std::size_t( at - specs.begin() );
+        if( at == specs.end() )
         {
-            specs.push_back( AstQuerySpec{ "(" + std::string( r.node ) + " (#eq? @t \"" + name + "\"))", std::string( r.node ) } );
+            specs.push_back( AstQuerySpec{ "(" + std::string( row.node ) + " (#eq? @t \"" + name + "\"))", std::string( row.node ) } );
+            specLangs.push_back( 0 );
         }
+        specLangs[i] |= std::uint64_t( 1 ) << static_cast<unsigned>( row.lang );
     }
     AstQueryGroup group;
     group.specs       = &specs;
@@ -168,11 +162,11 @@ inline TypeUseTier typeUseTier( const IngestResult& ing, std::span<const NodeId>
     }
     for( const AstMatch& m : got[0] )
     {
-        for( std::size_t i = 0; i < specs.size(); ++i )
-        {
-            perTag[i] += std::size_t( specs[i].tag == m.tag );
-        }
-        if( m.fileId >= ing.files.size() || !typeMentionRowFor( langOfPath( ing.files[m.fileId] ), m.tag ) )
+        const std::size_t i = std::size_t( std::find_if( specs.begin(), specs.end(), [ & ]( const AstQuerySpec& sp ) { return sp.tag == m.tag; } ) - specs.begin() );
+        ASSUME( i < specs.size(), "every hit carries the tag of a spec this call built" );
+        ++perTag[i];
+        const std::uint64_t langBit = m.fileId < ing.files.size() ? std::uint64_t( 1 ) << static_cast<unsigned>( langOfPath( ing.files[m.fileId] ) ) : 0;
+        if( ( specLangs[i] & langBit ) == 0 )
         {
             continue;   // the pattern compiled in a grammar no row names for this file's language
         }
@@ -240,12 +234,6 @@ inline const ImpactTypeFold* impactTypeFold( const TypeUseTier& tier, const Impa
     }
     out = ImpactTypeFold{ tier.defFiles, tier.scopeFiles, &walk.typeOnly, tier.users.size(), tier.typeDefs, tier.sitesCapped };
     return &out;
-}
-
-// The legend's view of a rollup's type tier (graphlegend.h impactRollupLegend).
-inline ImpactRollupTypeClauses impactRollupTypeClauses( const ImpactFileRollup& r ) noexcept
-{
-    return ImpactRollupTypeClauses{ r.typed, r.typeDefs, r.typeCapped };
 }
 
 } // namespace rw

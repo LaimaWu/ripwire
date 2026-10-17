@@ -11807,8 +11807,14 @@ struct ImpactTypeFold
 // via="type" marks are facts the symbol rows do not carry.
 // L7: the type tier's own rows, before the reach folds in — the defining files at d=0, then the files naming the type
 // outside every indexed definition at d=1 (syms=0 until a reached symbol lands there). Copies the tier's counts.
-inline void seedTypeRollupRows( ImpactFileRollup& r, std::vector<std::uint32_t>& rowOfFile, const ImpactTypeFold& type )
+// A null `fold` (no type tier) adds nothing.
+inline void seedTypeRollupRows( ImpactFileRollup& r, std::vector<std::uint32_t>& rowOfFile, const ImpactTypeFold* fold )
 {
+    if( fold == nullptr )
+    {
+        return;
+    }
+    const ImpactTypeFold& type = *fold;
     r.typed      = true;
     r.typeUsers  = type.users;
     r.typeDefs   = type.typeDefs;
@@ -11829,6 +11835,30 @@ inline void seedTypeRollupRows( ImpactFileRollup& r, std::vector<std::uint32_t>&
     add( type.scopeFiles, 1, true );
 }
 
+// L7: after the reach folds in, each row's typeOnly = its reached symbols only the type tier reaches. Null ⇒ nothing.
+inline void foldTypeOnlyCounts( ImpactFileRollup& r, const std::vector<std::uint32_t>& rowOfFile, const IngestResult& ing,
+                                std::span<const NodeId> reach, const ImpactTypeFold* fold )
+{
+    if( fold == nullptr || fold->typeOnly == nullptr )
+    {
+        return;
+    }
+    const std::vector<char>& typeOnly = *fold->typeOnly;
+    for( const NodeId n : reach )
+    {
+        if( n < ing.symbols.size() && n < typeOnly.size() && typeOnly[n] != 0 )
+        {
+            ++r.rows[ rowOfFile[ ing.symbols[n].fileId ] ].typeOnly;
+        }
+    }
+}
+
+// Does the rollup ride? Beside a cut symbol window (idea #6), and (L7) on every type impact.
+inline bool impactRollupRides( bool windowCut, const ImpactTypeFold* type ) noexcept
+{
+    return windowCut || type != nullptr;
+}
+
 // The rollup's default window: kImpactFileRollupCap, --limit when given; L7: a type impact with no --limit widens it to
 // the whole first-hop band (rows at d<=1), up to kImpactTypeRollupBandMax. `rows` is ranked (d= ascending).
 inline std::size_t impactRollupCap( std::span<const ImpactFileRow> rows, int pageLimit, bool typed )
@@ -11847,16 +11877,12 @@ inline ImpactFileRollup impactFileRollup( const IngestResult& ing, std::span<con
                                           const std::vector<char>& hedgeProven = kNoImpactHedge, const ImpactTypeFold* type = nullptr )
 {
     ImpactFileRollup          r;
-    if( !windowCut && type == nullptr )
+    if( !impactRollupRides( windowCut, type ) )
     {
         return r;   // the rows name every reached file already (see the block comment); nothing to roll up
     }
     std::vector<std::uint32_t> rowOfFile( ing.files.size(), UINT32_MAX );
-    const std::vector<char>*   typeOnly = type != nullptr ? type->typeOnly : nullptr;
-    if( type != nullptr )
-    {
-        seedTypeRollupRows( r, rowOfFile, *type );
-    }
+    seedTypeRollupRows( r, rowOfFile, type );
     for( const NodeId n : reach )
     {
         if( n >= ing.symbols.size() )
@@ -11874,8 +11900,8 @@ inline ImpactFileRollup impactFileRollup( const IngestResult& ing, std::span<con
         ++row.syms;
         row.minDepth = std::min( row.minDepth, d );
         row.nameOnly += std::uint32_t( impactRowNameOnly( hedgeProven, n ) );   // never on kNoImpactHedge (empty: no row hedged)
-        row.typeOnly += std::uint32_t( typeOnly != nullptr && n < typeOnly->size() && ( *typeOnly )[n] != 0 );
     }
+    foldTypeOnlyCounts( r, rowOfFile, ing, reach, type );
     std::sort( r.rows.begin(), r.rows.end(), [ & ]( const ImpactFileRow& a, const ImpactFileRow& b )
                {
                    if( a.minDepth != b.minDepth ) { return a.minDepth < b.minDepth; }
