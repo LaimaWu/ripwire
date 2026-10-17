@@ -4401,6 +4401,14 @@ inline void captureTypeAlias( BindCtx& cx, TSNode n, const char* t )
 // union inside a `declaration` (`union U {…} u;`) and every struct / class with a body are class symbols (queries/cpp/tags.scm);
 // a bodiless one counts only as a declaration of its own (namespace, file, class or block scope) — an elaborated type in a
 // declaration, a parameter, a friend or a template declares nothing this reader follows.
+// one TypeAlias row binding `var` with no alias target, marked `mark` (model.h kTypeBind* constants), over `span` (C++)
+inline void pushTypeBind( BindCtx& cx, std::uint32_t at, std::pair<std::uint32_t, std::uint32_t> span, std::string_view var, std::string_view mark )
+{
+    RawBind row{ .fileId = cx.fileId, .startByte = at, .lang = cx.lang, .kind = LocalBindKind::TypeAlias, .spanStart = span.first, .spanEnd = span.second };
+    row.var.assign( var );
+    row.typeName.assign( mark );
+    cx.binds->push_back( std::move( row ) );
+}
 inline void captureShadowDecl( BindCtx& cx, TSNode n, const char* t )
 {
     const TSNode name = fieldChild( n, NodeField::Name );
@@ -4430,8 +4438,7 @@ inline void captureShadowDecl( BindCtx& cx, TSNode n, const char* t )
             return;
         }
     }
-    cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = ts_node_start_byte( n ), .lang = cx.lang, .kind = LocalBindKind::TypeAlias,
-                                  .spanStart = spanStart, .spanEnd = spanEnd, .var = std::string( nodeTextOf( name, cx.src ) ), .typeName = std::string( mark ) } );
+    pushTypeBind( cx, ts_node_start_byte( n ), { spanStart, spanEnd }, nodeTextOf( name, cx.src ), mark );
 }
 
 // fix round 4: a region the parser cannot read as declarations may declare ANY name — an "unparsed" TypeAlias row (var "!",
@@ -4441,11 +4448,6 @@ inline void captureShadowDecl( BindCtx& cx, TSNode n, const char* t )
 // and a statement- or item-position macro in such a block may expand to one — one row per such block, each block read
 // once per file (BindCtx::rustMacroBlocks: its ancestors, outermost first). (A C++ macro in a function body reads as a
 // call: a local class beside one is not covered.)
-inline void pushUnparsed( BindCtx& cx, std::uint32_t at, std::uint32_t spanStart, std::uint32_t spanEnd )
-{
-    cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = at, .lang = cx.lang, .kind = LocalBindKind::TypeAlias, .spanStart = spanStart,
-                                  .spanEnd = spanEnd, .var = std::string( "!" ), .typeName = std::string( kTypeBindUnparsed ) } );
-}
 // does the region `n` spell an identifier (a pre-order walk of its subtree, stopped at the first identifier leaf)
 inline bool spellsIdentifier( TSNode n )
 {
@@ -4482,10 +4484,10 @@ inline void captureCppUnparsed( BindCtx& cx, TSNode n, const char* t )
     {
         return;
     }
-    const auto [ spanStart, spanEnd ] = cppDeclScope( n, true );
-    if( spanEnd != 0 )
+    const auto span = cppDeclScope( n, true );
+    if( span.second != 0 )
     {
-        pushUnparsed( cx, ts_node_start_byte( n ), spanStart, spanEnd );
+        pushTypeBind( cx, ts_node_start_byte( n ), span, "!", kTypeBindUnparsed );
     }
 }
 // Rust: only a NESTED fn (one in a block) sees block items
@@ -4523,7 +4525,7 @@ inline void captureRustUnparsed( BindCtx& cx, TSNode n )
         } );
         if( macro )
         {
-            pushUnparsed( cx, ts_node_start_byte( *b ), 0, 0 );
+            pushTypeBind( cx, ts_node_start_byte( *b ), { 0u, 0u }, "!", kTypeBindUnparsed );
         }
     }
 }
