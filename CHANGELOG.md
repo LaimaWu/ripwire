@@ -25,7 +25,7 @@ annotations and base classes) — read by the parser, for C, C++, ObjC, Go, Rust
 sit at `d="1"` beside the direct callers and their callers follow. The per-file `<files>` rollup rides on every type
 impact: `rf d="0"` is the defining file, `via="type"` marks a file reached only through a type mention (`by_type=K`
 when K of its symbols are), `type_users=` counts the seeded symbols, `type_defs=K` says when K type definitions share
-the name (mentions are matched by name), and with no `--limit` the listing holds every `d="0"`/`d="1"` file, up to 200.
+the name (mentions are matched by name), and with no `--limit` the listing holds every `d="0"` file and every `d="1"` file a type mention reaches, up to 200.
 Function impacts are byte-identical. Other languages record no type mentions yet (a floor, stated in the legend).
 Gate: `test/impacttypecheck.sh`.
 

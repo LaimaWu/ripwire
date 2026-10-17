@@ -11756,7 +11756,7 @@ inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<N
 inline const std::vector<char> kNoImpactHedge{};
 inline constexpr std::size_t kImpactFileRollupCap = 20;
 // L7 (typeuse.h): on a TYPE impact with no --limit, the listing holds the whole first-hop band — the defining file (d=0)
-// and every file at d=1 (naming the type, or calling it) — however many there are, up to this runaway guard; past it the
+// and every d=1 file a type mention reaches (isTypeBandRow) — however many there are, up to this runaway guard; past the
 // cut is disclosed (files_capped="1", files_next=) like any other. Measured: tmux `--impact=grid_cell` has 32 such files
 // (the 20-row default dropped 8 of the question's 32 gold files); a band in the hundreds would be a dump, not an index.
 inline constexpr std::size_t kImpactTypeRollupBandMax = 200;
@@ -11859,8 +11859,17 @@ inline bool impactRollupRides( bool windowCut, const ImpactTypeFold* type ) noex
     return windowCut || type != nullptr;
 }
 
+// L7: a row of the first-hop TYPE band — the defining file (d=0), or a d=1 file a type mention reaches (a type user or
+// a file-scope mention). A d=1 file reached only as a direct CALLER (a constructor call, or a namesake function of a
+// multi-definition selector) is not in the band: it keeps the ordinary 20-row window, so a selector that is mostly a
+// function (textual `query_one`: a class and four methods) does not grow to a 200-row listing.
+inline bool isTypeBandRow( const ImpactFileRow& row ) noexcept
+{
+    return row.minDepth == 0 || ( row.minDepth == 1 && ( row.typeOnly > 0 || row.typeScope ) );
+}
+
 // The rollup's default window: kImpactFileRollupCap, --limit when given; L7: a type impact with no --limit widens it to
-// the whole first-hop band (rows at d<=1), up to kImpactTypeRollupBandMax. `rows` is ranked (d= ascending).
+// the whole first-hop type band (isTypeBandRow), up to kImpactTypeRollupBandMax. `rows` is ranked (d= ascending).
 inline std::size_t impactRollupCap( std::span<const ImpactFileRow> rows, int pageLimit, bool typed )
 {
     const std::size_t cap = std::size_t( rw::effectiveRowCap( pageLimit, int( kImpactFileRollupCap ) ) );
@@ -11868,7 +11877,7 @@ inline std::size_t impactRollupCap( std::span<const ImpactFileRow> rows, int pag
     {
         return cap;
     }
-    const std::size_t band = std::size_t( std::count_if( rows.begin(), rows.end(), []( const ImpactFileRow& row ) { return row.minDepth <= 1; } ) );
+    const std::size_t band = std::size_t( std::count_if( rows.begin(), rows.end(), []( const ImpactFileRow& row ) { return isTypeBandRow( row ); } ) );
     return std::max( cap, std::min( band, kImpactTypeRollupBandMax ) );
 }
 

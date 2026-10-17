@@ -897,7 +897,7 @@ inline std::string impactTypeRollupLegend( const ImpactRollupTypeClauses& t )
                       "implements clause; TS/JS also instanceof and extends; Python annotations and base classes), so d=1 holds those beside "
                       "its callers and their callers follow; type_users= counts them. rf d=\"0\": the file defining of=; via=\"type\": every "
                       "reached symbol there is reached only through a type mention (with syms=\"0\": the file names the type outside every "
-                      "indexed definition); by_type=K: K of its syms= are. With no limit= the listing holds every d=\"0\" and d=\"1\" file (up to 200), then cuts as above. A mention is matched by its spelled name. Captured for C, C++, ObjC, "
+                      "indexed definition); by_type=K: K of its syms= are. With no limit= the listing holds every d=\"0\" file and every d=\"1\" file a type mention reaches (up to 200), then cuts as above. A mention is matched by its spelled name. Captured for C, C++, ObjC, "
                       "Go, Rust, Java, TS/JS and Python; other languages add no type users (a floor). ";
     if( t.typeDefs > 1 )
     {
