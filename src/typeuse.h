@@ -223,10 +223,22 @@ inline TypeUseTier typeUseTier( const IngestResult& ing, std::span<const NodeId>
             if( specRole[i] == SpecRole::Shadow ) { shadows.push_back( &m ); }
         }
     }
+    // Sorted by ( file, start ) so a hit reads only its own file's shadows that open at or before it — the scan was every
+    // shadow in the corpus per hit, O( hits x shadows ) with both up to the match budget. The containment test is unchanged
+    // and a hit is shadowed by ANY container, so the order inside a run of equal starts cannot change the answer.
+    std::sort( shadows.begin(), shadows.end(), []( const AstMatch* a, const AstMatch* b )
+               { return a->fileId != b->fileId ? a->fileId < b->fileId : a->startByte < b->startByte; } );
     const auto shadowed = [ & ]( const AstMatch& m )
     {
-        return std::any_of( shadows.begin(), shadows.end(), [ & ]( const AstMatch* sc )
-                            { return sc->fileId == m.fileId && sc->startByte <= m.startByte && m.endByte <= sc->endByte; } );
+        auto it = std::lower_bound( shadows.begin(), shadows.end(), m.fileId, []( const AstMatch* sc, std::uint32_t f ) { return sc->fileId < f; } );
+        for( ; it != shadows.end() && ( *it )->fileId == m.fileId && ( *it )->startByte <= m.startByte; ++it )
+        {
+            if( m.endByte <= ( *it )->endByte )
+            {
+                return true;
+            }
+        }
+        return false;
     };
     for( std::size_t h = 0; h < got[0].size(); ++h )
     {
