@@ -2401,9 +2401,11 @@ std::optional<int> runPath( const MainDispatch& d )
         // attrib-multidef (defattrib.h): from_p=/to_p= only for an endpoint the path bound; prov="split" on a split-arm hop
         const rw::PathEndpointBinding pthBound = rw::pathEndpointBinding( g, rw::endpointDefinitionCount( ing, srcDefs ), rw::endpointDefinitionCount( ing, dstDefs ), path );
         const bool                    pthHasSplit = pthBound.splitHop;
+        const std::vector<std::string_view> pthOwners = rw::pathHopOwners( ing, path );   // PATH-OWNERS: n="Owner.name" per hop
         rw::emitTo( stdout, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                      "graph holds none. {}{}{}{}-->{}", ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
-                                                         + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to ) ).c_str(),
+                                                         + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to )
+                                                         + rw::pathOwnerLegend( rw::anyPathHopOwner( pthOwners ) ) ).c_str(),
                      ( std::string( rw::toValueRefsLegend( pthToValueRefs.count > 0 ) ) + rw::valueRefsDepthLegend( pthToValueRefs.depthCut.files > 0 ) ).c_str(),
                      rw::pathGapsLegend( pthGaps.any() ),
                      rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rw::rootRelPathsLegend( pthSingleRoot ) );
@@ -2424,14 +2426,8 @@ std::optional<int> runPath( const MainDispatch& d )
                                       ( srcDefs.size() > 1 || dstDefs.size() > 1 ) ? "; several defs share these names — qualify as file:name to pick one" : "" } )
             : rw::PathGapsXml{};
         rw::emitTo( stdout, "{}>{}", pthUnreached.rootAttrs, pthUnreached.rows );
-        for( std::size_t i = 0; i < path.size(); ++i )
-        {
-            const Symbol&           s  = ing.symbols[ path[i] ];
-            const std::string_view  rp = pthSingleRoot ? rw::sarif::rootRelativeUri( ing.files[ s.fileId ], pthRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
-            // FE-B: a hop whose edge INTO it is name-only says so on its row (the first row is no hop)
-            rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
-                         viaNameAttr( i > 0 && edgeNameOnly( g, path[ i - 1 ], path[ i ] ) ), rw::splitArmAttrXml( rw::pathHopSplitArm( g, path, i ) ) );
-        }
+        // FE-B via="name", attrib-multidef prov="split", PATH-OWNERS n="Owner.name": one emitter, shared with MCP path_between
+        rw::emitPathHopRows( stdout, ing, g, path, pthOwners, pthSingleRoot, pthRootPrefix );
         rw::emitTo( stdout, "</path>" );
         return 0;
     }
