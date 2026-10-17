@@ -976,8 +976,9 @@ private:
         return m.starts_with( "./" ) || m.starts_with( "../" );
     }
 
-    // Record what proves that a bare name names a function, as the walk enters each node (anc = its ancestors, root
-    // first): a function declaration at any depth, or a binding of a FILE-SCOPE import from a relative module —
+    // Record what lets a bare name stand for a callable binding, as the walk enters each node (anc = its ancestors, root
+    // first): a function declaration at any depth, or a binding of a FILE-SCOPE import from a relative module (a BINDING
+    // only — whether it is a function graph.h decides, Reference::forwarded) —
     // `import f from './m'` (anc: program, import_statement, import_clause), `import { g as f } from './m'` (… named_imports),
     // `const f = require( './m' )` / `const { f } = require( './m' )` (anc: program, lexical/variable declaration). A
     // type-only import binds no value; a namespace import binds a module object, never a function.
@@ -1054,7 +1055,8 @@ private:
 
     // anc[i] is the identifier `f` of a CALLED member `f.call( … )` / `f.apply( … )` (a Call forwarder): queue the call of
     // f it stands for. The caller has already refused a name some enclosing parameter or local declares; the file-end
-    // filter (emitForwardedCalls) keeps the site only when the file proves f names a function.
+    // filter (emitForwardedCalls) keeps the site only when the file declares or imports f; graph.h keeps its call only at a
+    // proven Function/Method.
     bool forwardCallAt( std::size_t i, std::string_view name )
     {
         if( i < 2 || !kindIs( m_anc[i].kind, "identifier" ) || m_anc[i].field != m_fObject )
@@ -1121,8 +1123,9 @@ private:
         return kindIs( p.kind, "call_expression" ) && c.field == m_fFunction && kindIs( c.kind, "member_expression" ) && isValueForwarder( c.node );
     }
 
-    // File end: a queued call/apply site becomes a call of f when f is a relative import of the file, or a function the
-    // file declares that no file-scope variable of the same name rebinds. Anything else adds nothing (today's answer).
+    // File end: a queued call/apply site becomes a FORWARDED call of f when f is a relative import of the file, or a function
+    // the file declares that no file-scope variable of the same name rebinds. Anything else adds nothing (today's answer).
+    // An import proves a binding, not a function: graph.h buildGraph keeps the call only at a proven Function/Method.
     void emitForwardedCalls()
     {
         if( m_fwdSites.empty() )

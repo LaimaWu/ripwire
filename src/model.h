@@ -451,16 +451,20 @@ inline ValueRefFamily valueRefFamily( Lang l ) noexcept
 // CALL FORWARDERS (lane fcall-forward, parser version 188, train renumbers; gate test/fcallforwardcheck.sh): a builtin
 // method that, called on a FUNCTION, calls that function (kind Call) or returns it as a value (kind Value). JS/TS
 // `f.call( thisArg, a )` and `f.apply( thisArg, args )` run f; `f.bind( thisArg )` hands f on without running it. When
-// ingest_valuerefs.h proves the receiver `f` is a bare identifier bound to a function declaration of the file or to a
+// ingest_valuerefs.h finds the receiver `f` is a bare identifier bound to a function declaration of the file or to a
 // file-scope import from a RELATIVE module (and no parameter or local of the site shadows it), a Call row becomes a
-// call reference to `f` — the bare call `f( … )` it stands for, resolved by the ordinary tiers, so several candidate
-// definitions stay hedged exactly as a bare call does — and a Value row becomes a value reference to `f` at the slot
-// the whole `f.bind( … )` fills. The original member reference (name `call`/`apply`) is kept unchanged. A family-owned
+// FORWARDED call reference to `f` (Reference::forwarded) — the bare call `f( … )` it stands for, resolved by the ordinary
+// tiers and then kept only where they PROVE a Function or Method (graph.h buildGraph; fix round 1): an import proves a
+// binding, not a function, so an imported object, const or class, and a by-name-only answer, add nothing — and a Value
+// row becomes a value reference to `f` at the slot the whole `f.bind( … )` fills. The original member reference (name `call`/`apply`) is kept unchanged. A family-owned
 // sparse table: a language with no row is unchanged. Function.prototype's other methods (toString) are not forwarders.
 // Floors, by language: Ruby `proc.call` / `m.to_proc` and Python `functools.partial( f )` are the same concept with
 // different receivers (a Proc or Method object, not a declaration) and have no row; a receiver that is a member
 // (`obj.m.call`), a parenthesised or computed expression, a local `const f = () => …`, or a TS `import f = require()`
-// is not forwarded.
+// is not forwarded. Shared with the bare call `f()` (the forward binds exactly as it does): a function-local `var f` /
+// `let f` declared AFTER the site does not shadow (scope declarations are read on scope entry), and a re-assignment
+// `f = …` is not followed. The declaration proof is file + name at any depth; a declaration only in a SIBLING scope
+// leaves the bare call by name alone, so that forward is dropped.
 enum class CallForwardKind : std::uint8_t { Call, Value };
 struct CallForwarder
 {

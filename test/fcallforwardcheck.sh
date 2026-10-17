@@ -45,6 +45,7 @@
 #   (N11) an ESM import of a const object `notAFn.call`: no call; (P11) its twin realFn.call → realFn    N11 RED on 52d773b3
 #   (N9) a file-scope `var fv` rebinding a declared function: no call (pins the rebinding guard)
 #   (N10) a function declared only in a sibling scope (`nestedOnly`): no call                             RED on 52d773b3
+#   (U1) --uses lists no call site for a dropped forward; (U2) it lists a kept one (Graph::keptForwards)    U1 RED on 52d773b3
 #   (T7) TS `import { type typeOnlyFn }`: an inline type specifier binds no value — no call (pins the type guard)
 #   (K)  the member reference itself is unchanged: runPreParsing keeps its `call` row via="name" (the fixture's
 #        object-literal method named call), as on the pre-change binary
@@ -156,6 +157,14 @@ for nm in rpc patch notAFn nestedOnly fv; do
     if [ -n "$C" ] && [ "$( attr "$C" count )" = 0 ]; then ok "(N) other.js:$nm has no caller"; else no "(N) other.js:$nm should have count=0: ${C:-$D}"; fi
 done
 
+# U: the use-site index follows the resolver — a dropped forward is no call site, a kept one is
+for nm in rpc patch Klass nestedOnly dup; do
+    D="$( run js --uses="$nm" )"
+    if has_root "$D" uses && ! printf '%s' "$D" | grep -qE '<u role="call" p="route.js:[0-9]+" in_id="(nearObjImport|nearClassImport|nearNested|dupForwarded)"'; then ok "(U1) --uses=$nm lists no call site for its dropped forward"; else no "(U1) --uses=$nm lists a dropped forward as a call site: ${D:0:300}"; fi
+done
+LAPPLY="$( grep -n 'localDecl.apply(' "$CORPUS/js/route.js" | head -1 | cut -d: -f1 )"
+D="$( run js --uses=localDecl )"
+if printf '%s' "$D" | grep -qF "<u role=\"call\" p=\"route.js:$LAPPLY\" in_id=\"viaApply\"/>"; then ok "(U2) --uses=localDecl lists the kept forward localDecl.apply as a call site"; else no "(U2) --uses=localDecl should list route.js:$LAPPLY as a call site: ${D:0:300}"; fi
 LCALL="$( grep -n 'handleRequest.call(' "$CORPUS/js/route.js" | head -1 | cut -d: -f1 )"
 LBIND="$( grep -n 'onlyBound.bind(' "$CORPUS/js/route.js" | head -1 | cut -d: -f1 )"
 D="$( run js --callers=handleRequest )"; C="$( root_tag "$D" callers )"

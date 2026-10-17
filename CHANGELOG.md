@@ -15,6 +15,17 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — `f.call( … )` and `f.apply( … )` on a proven function are calls of `f`
+
+`handleRequest.call( request.server, null, request, reply )` used to be recorded only as a member call named `call`, so
+`--path`, `--callees` and `--callers` lost the edge to `handleRequest` (on a real web framework, the request pipeline
+answered `reachable="0"`). In JavaScript and TypeScript, a `f.call( … )` / `f.apply( … )` whose receiver is a bare name
+the file declares as a function, or imports from a relative module, now stands for the call `f( … )`. It is kept only
+where the resolver proves a function or method: an imported object, const or class (`rpc.call()` on a required
+module object, `Klass.call( this )`) and a name bound by name alone add nothing. `f.bind( … )` is a value use of `f`,
+never a call. Floors, shared with the bare call `f()`: a function-local `var f` / `let f` declared after the site does not
+shadow it, and a re-assignment `f = …` is not followed. `kParserVer` and `kCacheVersion` move (the release renumbers).
+
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
 Ruby's `include`/`extend`/`prepend` are now captured by `queries/ruby/tags.scm` as `@reference.mixin` and turned into

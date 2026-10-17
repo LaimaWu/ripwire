@@ -187,6 +187,10 @@ struct Graph
     // ( caller, kCppStdMemberNames index ), sorted after the resolve loop: the callees answer's <stdm> line.
     std::size_t                                    stdMemberDeclinedCalls = 0;
     std::vector<std::pair<NodeId, std::uint16_t>>  stdMemberDeclines;
+    // lane fcall-forward fix 1: the ing.references indices (ascending) of the FORWARDED call references (model.h
+    // Reference::forwarded) whose call the resolve loop kept — bound, proven, to a function or method. Every other forwarded
+    // reference stands for no call the code makes, so the use-site index skips it too (verbs_navigate.h collectUseSites).
+    std::vector<std::uint32_t> keptForwards;
     // Every call reference's disposition (pincensus.h CallDisposition), one bucket per reference. Read by buildGraph's
     // unaccounted alert and copied into pinCensus when a census is armed; its external/unresolved/declined buckets
     // equal those header gauges by construction.
@@ -8774,6 +8778,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 finalSegmentEdges[ekey] = 1;   // remember (from,to) for prov="final-segment"
             }
             ( nameOnly ? nameOnlyEdges : provenEdges )[ ekey ] = 1;   // FE-B: a proven site wins the merged row (Graph::outNameOnly)
+        }
+        if( r.forwarded )
+        {
+            g.keptForwards.push_back( std::uint32_t( siteIndex ) );   // ascending: the loop walks the references in order
         }
         disposition = CallDisposition::Bound;
     }

@@ -637,9 +637,13 @@ struct UseSite { std::uint32_t fileId; std::uint32_t line; rw::RefRole role; std
 // stored, already-labeled spelling verbatim). Before this parameter existed, `in` was built from the RAW
 // ing.files[...] path, so a relative-root run's in_id carried a leading "./" (`in_id="./src/eval.h::…"`)
 // that never matched the row's own root-relative p=, the map's id=, or a git path — the M6/L1/M0-5 finding.
+//
+// `keptForwards` is Graph::keptForwards: a FORWARDED call reference (`f.call( … )` standing for `f( … )`) is a use-site only
+// where the resolver kept its call; a caller with no graph passes none, and every forwarded reference stays out, as before.
 inline std::pair<std::vector<UseSite>, std::size_t>
 collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span<const char> isChosenCaller,
-                 std::string_view rootForId = {}, std::span<const rw::NodeId> valueDefs = {}, const rw::ValueRefIndex* valueIndex = nullptr )
+                 std::string_view rootForId = {}, std::span<const rw::NodeId> valueDefs = {}, const rw::ValueRefIndex* valueIndex = nullptr,
+                 std::span<const std::uint32_t> keptForwards = {} )
 {
     using namespace rw;
     std::vector<UseSite> sites;
@@ -663,6 +667,10 @@ collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span
         if( r.isCompose || r.isDocLink )
         {
             continue; // type edge / doc mention — not a use-site
+        }
+        if( r.forwarded && !std::ranges::binary_search( keptForwards, refIndex ) )
+        {
+            continue; // a forwarded call the resolver did not keep — no call the code makes
         }
         if( r.lang == Lang::Markdown )
         {
@@ -780,7 +788,7 @@ std::optional<int> runUses( const MainDispatch& d )
         // SAME index the role="value" rows come from: a file nested past the walk's cap holds a use below it that no row shows.
         const rw::ValueRefIndex usVri( ing );
         auto [ sites, callSitesOfName ] = collectUseSites( ing, sel, isChosenCaller,
-                                                           usSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, &usVri );
+                                                           usSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, &usVri, g.keptForwards );
         const rw::ValueRefIndex::DepthCuts usDepthCut = usVri.depthCutsFor( defs );
         rw::rankUseSites( ing, g, sites );   // cut-fix C: most-depended-on sites first, so the cap drops the lightest
 
@@ -1163,7 +1171,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     const UsesSelector        sel            = resolveUsesSelector( ing, cfg.safeDeleteSym, defs );
     const std::vector<char>   isChosenCaller = ( sel.fileQualified || sel.scopeNarrowed ) ? usesChosenCallers( ing, g, defs ) : std::vector<char>{};
     const auto                sitesPair      = collectUseSites( ing, sel, isChosenCaller,
-                                                                 sdSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs );
+                                                                 sdSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, nullptr, g.keptForwards );
                                                                                                // .second (the un-narrowed
                                                                                                // call-site total) is not read here;
                                                                                                // .in_id is unused on this verb too, root
@@ -1945,7 +1953,7 @@ std::optional<int> runVerify( const MainDispatch& d )
         const UsesSelector        sel  = resolveUsesSelector( ing, sym, defs );
         const std::vector<char>   isChosenCaller = ( sel.fileQualified || sel.scopeNarrowed ) ? usesChosenCallers( ing, g, defs ) : std::vector<char>{};
         const auto [ sites, callSitesOfName ]    = collectUseSites( ing, sel, isChosenCaller,
-                                                                     verSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs );
+                                                                     verSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, nullptr, g.keptForwards );
         (void) callSitesOfName;
         if( defs.empty() && sites.empty() )
         {
