@@ -75,3 +75,9 @@ The names are paraphrases of graded false rows; the code is minimal and is never
   std::fs::File`, C++ `ext::Config`), an interface in one Go package beside a same-named struct in another, a commit by name
   alone (`ext::onlyOne()`) or by a written type's last name (`ext::Factory f`), a Go field `f *os.File`, and a chain hop that
   binds by name alone or splits. `UseWritten`/`useWritten` twins write the type (green before the lane).
+  Fix round 3: `rust3` / `cpp3` / `java4` / `kt4` are the delta review's D4–D6 shapes (a Rust inline `mod` scope, a C++
+  alias / typedef, a JVM on-demand import — receiver and result).
+- `callresult_matrix.txt` — arm (L)'s BINDING-FORM MATRIX (Python, kept as text for the same reason): it writes one tree per
+  language (`mx_rust`, `mx_cpp`, `mx_java`, `mx_kt`, `mx_ts`, `mx_go`) and lists every cell — language × binding form ×
+  scope level × target (in-tree unique / outside / unresolved / two in-tree) — with its expected verdict, plus the N/A
+  rows a language cannot write. Its header defines the cells.

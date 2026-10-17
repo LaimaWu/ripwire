@@ -1343,9 +1343,62 @@ notproven $CR/java3 callees src/app/Use.java:nearOutsideMethodRef "open src/lib/
 # its directory (envoy mobile: package io.envoyproxy.envoymobile in …/envoymobile/filters/), so its import stays in tree.
 proven    $CR/kt3  callees src/app/Use.kt:useImportedPackage "fn open src/core/impl/Util.kt:4"         # [P] # guard (green on base)
 
+# ── fix round 3 (rv-call-result-typing-delta2 D4–D6): every binding of the spelling visible at the callee counts ──
+# D4 a Rust `mod` is a fresh scope: the file's items are not in scope inside it, and its own `use` / items decide there;
+#    `super::` / `self::` written inside an inline mod are relative to that mod (rust3: the reviewer's rs2 / rs1 shapes).
+notproven $CR/rust3 callees src/use_it.rs:r_inline_use_outside "spin src/n2.rs:3" "spin src/other.rs:3"  # [N] `use ext_crate::Gadget;` in `mod outer`
+notproven $CR/rust3 callees src/use_it.rs:r_nested_bare        "width src/n.rs:2" "width src/n.rs:7"     # [N] nothing in `mod bare` binds Top (the split)
+notproven $CR/rust3 callees src/use_it.rs:r_nested_use_in_mod  "width src/n.rs:2" "width src/n.rs:7"     # [N] # guard
+proven    $CR/rust3 callees src/use_it.rs:r_super_path         "method spin src/n2.rs:3"                 # [P] `super::Gadget` from `mod plain`: the file's own
+proven    $CR/rust3 callees src/use_it.rs:r_own_mod_item       "method turn src/n3.rs:9"                 # [P] the mod's own Widget hides nothing
+notproven $CR/rust3 callees src/use_it.rs:r_own_mod_item       "turn src/n3.rs:3"                        # [N] the file's Widget is not in scope in `mod own`
+# D5 a C++ alias-declaration / typedef is a binding of the spelling (file, namespace or class scope): an outside target names
+#    nothing; an in-tree target is a FLOOR (Rule 2 keys members by the written name, so the alias's target is not followed).
+#    An alias in a namespace that does not hold the callee is not in force (callElsewhere: the global Settings, a guard).
+notproven $CR/cpp3 callees src/use.cpp:callAlias               "count src/list.cpp:2" "count src/list.cpp:5" "count src/list.cpp:8"   # [N] `using List = ext::IntList;`
+notproven $CR/cpp3 callees src/use.cpp:callTypedef             "count src/list.cpp:2" "count src/list.cpp:5" "count src/list.cpp:8"   # [N] `typedef ext::IntList List2;`
+notproven $CR/cpp3 callees src/use.cpp:callNsAlias             "count src/ns.cpp:2"                      # [N] cfg5's alias hides ::Settings
+notproven $CR/cpp3 callees src/use.cpp:callNsTypedef           "count src/ns.cpp:2"                      # [N] cfg6's typedef twin
+proven    $CR/cpp3 callees src/use.cpp:callElsewhere           "method count src/ns.cpp:2"               # [P] # guard: cfg8's alias is not in force in cfg7
+# D6 a JVM class-name receiver binds the in-tree class only where the caller's file SEES it (its package, a single-type import
+#    naming it, an on-demand import of its package); `import ext.*` alone leaves lib.Util unseen. An in-tree on-demand import
+#    is a binding of the result type too (Java `import lib.*`, Kotlin `import lib.*`).
+notproven $CR/java4 callees src/app3/UseWild.java:d6Wildcard   "open src/lib/Util.java:3" "size src/lib/Thing.java:2" "size src/lib/Other.java:2"   # [N] (open: a base false claim)
+notproven $CR/java4 callees src/app5/UseBoth.java:d6WildPlusExplicit "open src/lib/Util.java:3" "size src/lib/Thing.java:2"   # [N] # guard
+proven    $CR/java4 callees src/app6/UseLib.java:pLibWild      "method open src/lib/Util.java:3" "method size src/lib/Thing.java:2"   # [P] # guard
+proven    $CR/java4 callees src/app7/UseLoader.java:pOnDemandResult "method size src/lib/Thing.java:2"   # [P] the callee's `import lib.*`
+notproven $CR/kt4  callees src/app2/Use.kt:d6KotlinWild        "open src/lib/Util.kt:4" "size src/lib/Util.kt:8" "size src/lib/Util.kt:12"   # [N] (open: a base false claim)
+proven    $CR/kt4  callees src/app/Use.kt:pStarResult          "fn size src/lib/Util.kt:8"               # [P] the callee's `import lib.*`
+# ── the BINDING-FORM MATRIX (fix round 3: close the class, not the shapes) ──
+# callresult_matrix.txt writes one tree per language (mx_rust, mx_cpp, mx_java, mx_kt, mx_ts, mx_go) and lists its cells:
+# language x binding form x scope level x target (header of that file). Each cell is one --callees run on `cell<k>`: a U cell
+# must show its tagged hit<k> as the ONE proven row; an O / X / 2 / FLOOR cell must prove no hit<k> at all. NA rows (a
+# shape the language cannot write) are listed, never run.
+MXCELLS="$TMP/mx.cells.txt"
+if ! python3 -I "$CORPUS/callresult_matrix.txt" "$TMP/fix/$CR" >"$MXCELLS" 2>"$TMP/mx.err"; then no "(L) matrix: the generator failed: $( head -c 300 "$TMP/mx.err" )"; fi
+mxn=0; mxred=0
+while read -r tag id lang form scope target root sel verdict a b c; do
+    [ "$tag" = "CELL" ] || continue
+    mxn=$(( mxn + 1 ))
+    label="(L) matrix #$id $lang $form @$scope target=$target"
+    if ! getrows "$CR/$root" callees "$sel"; then mxred=$(( mxred + 1 )); continue; fi
+    if [ "$verdict" = "P" ]; then
+        f="${c%:*}"; l="${c##*:}"
+        want="$( printf '%s\n' "$GOT" | awk -v t="$a" -v n="$b" -v f="$f" -v l="$l" '$1 == t && $2 == n && $3 == f && $4 == l && $5 != "name"' )"
+        extra="$( printf '%s\n' "$GOT" | awk -v n="$b" -v f="$f" -v l="$l" '$2 == n && $5 != "name" && !( $3 == f && $4 == l )' )"
+        if [ -n "$want" ] && [ -z "$extra" ]; then ok "$label proves exactly [$b $c]"
+        else no "$label: expected exactly the proven row [$a $b $c]: $( show )"; mxred=$(( mxred + 1 )); fi
+    else
+        hits="$( printf '%s\n' "$GOT" | awk -v n="$a" '$2 == n && $5 != "name"' )"
+        if [ -z "$hits" ]; then ok "$label proves no [$a]${b:+ ($b)}"
+        else no "$label shows [$a] as a PROVEN edge${b:+ (a $b cell must hedge)}: $( show )"; mxred=$(( mxred + 1 )); fi
+    fi
+done <"$MXCELLS"
+if [ "$mxn" -ge 200 ]; then ok "(L) matrix: $mxn cells run, $mxred red, $( grep -c '^NA ' "$MXCELLS" ) N/A rows listed"
+else no "(L) matrix: only $mxn cells were generated (expected >= 200)"; fi
 
 echo "=== (C) conservation: no call silently disappears ==="
-ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3"
+ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go"
 for r in $ROOTS; do
     rf="$( printf '%s' "$r" | tr '/' '_' )"   # a nested root (callresult/go) writes a flat file name
     if ! rw "$r" --pin-census="$TMP/$rf.tsv" >"$TMP/$rf.map.xml"; then no "(C) ($r) the census run exited non-zero"; continue; fi

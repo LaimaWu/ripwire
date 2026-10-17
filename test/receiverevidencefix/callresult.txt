@@ -1775,3 +1775,255 @@ export function nearNamespaced() {
     const r = fetchIt();
     return r.json();
 }
+@@@ rust3/Cargo.toml
+[package]
+name = "rust3"
+version = "0.1.0"
+@@@ rust3/src/lib.rs
+pub mod n;
+pub mod n2;
+pub mod n3;
+pub mod other;
+pub mod use_it;
+@@@ rust3/src/n.rs
+pub struct Top;
+impl Top { pub fn width(&self) -> usize { 3 } }
+pub mod outer {
+    use ext_crate::Top;
+    pub mod inner {
+        pub struct Top;
+        impl Top { pub fn width(&self) -> usize { 4 } }
+    }
+    pub fn load_in_outer() -> Top { ext_crate::mk() }
+}
+pub mod bare {
+    pub fn load_bare() -> Top { todo!() }
+}
+@@@ rust3/src/n2.rs
+pub struct Gadget;
+impl Gadget {
+    pub fn spin(&self) -> usize { 1 }
+}
+
+pub mod outer {
+    use ext_crate::Gadget;
+
+    pub fn load_gadget() -> Gadget {
+        ext_crate::make()
+    }
+}
+
+pub mod plain {
+    pub fn load_plain() -> super::Gadget {
+        super::Gadget
+    }
+}
+@@@ rust3/src/n3.rs
+pub struct Widget;
+impl Widget {
+    pub fn turn(&self) -> usize { 1 }
+}
+
+pub mod own {
+    pub struct Widget;
+    impl Widget {
+        pub fn turn(&self) -> usize { 5 }
+    }
+    pub fn load_own() -> Widget {
+        Widget
+    }
+}
+@@@ rust3/src/other.rs
+pub struct Spinner;
+impl Spinner {
+    pub fn spin(&self) -> usize { 2 }
+    pub fn turn(&self) -> usize { 2 }
+}
+@@@ rust3/src/use_it.rs
+use crate::n::bare;
+use crate::n::outer as nouter;
+use crate::n2::outer;
+use crate::n2::plain;
+use crate::n3::own;
+// r_inline_use_outside (D4): `use ext_crate::Gadget;` inside `mod outer` — ext_crate's Gadget, never the file's n2::Gadget
+pub fn r_inline_use_outside() -> usize {
+    let g = outer::load_gadget();
+    g.spin()
+}
+// r_super_path: `super::Gadget` written inside `mod plain` is the file's own Gadget (n2.rs:3)
+pub fn r_super_path() -> usize {
+    let g = plain::load_plain();
+    g.spin()
+}
+// r_own_mod_item: the struct `mod own` declares is the one in scope there (n3.rs:9), never the file's n3::Widget
+pub fn r_own_mod_item() -> usize {
+    let w = own::load_own();
+    w.turn()
+}
+// r_nested_use_in_mod (D4 split twin): `use ext_crate::Top;` in `mod outer` — neither n::Top nor outer::inner::Top
+pub fn r_nested_use_in_mod() -> usize {
+    let t = nouter::load_in_outer();
+    t.width()
+}
+// r_nested_bare: nothing in `mod bare` binds Top (the file's Top is not in scope there)
+pub fn r_nested_bare() -> usize {
+    let t = bare::load_bare();
+    t.width()
+}
+@@@ cpp3/src/alias.cpp
+#include "alias.h"
+List loadList() { return {}; }
+List2 loadList2() { return {}; }
+@@@ cpp3/src/alias.h
+#pragma once
+#include <ext/lists.h>
+using List = ext::IntList;
+List loadList();
+typedef ext::IntList List2;
+List2 loadList2();
+@@@ cpp3/src/list.cpp
+struct List {
+    int count() const { return 1; }
+};
+struct List2 {
+    int count() const { return 6; }
+};
+struct Bag {
+    int count() const { return 2; }
+};
+@@@ cpp3/src/ns.cpp
+#include "ns.h"
+int Settings::count() const { return 4; }
+namespace cfg5 {
+Settings loadAlias() { return {}; }
+}
+namespace cfg6 {
+Settings loadTypedef() { return {}; }
+}
+namespace cfg7 {
+Settings loadElsewhere() { return {}; }
+}
+@@@ cpp3/src/ns.h
+#pragma once
+#include <ext/settings.h>
+struct Settings {
+    int count() const;
+};
+namespace cfg5 {
+using Settings = ext::Settings;
+Settings loadAlias();
+}
+namespace cfg6 {
+typedef ext::Settings Settings;
+Settings loadTypedef();
+}
+namespace cfg8 {
+using Settings = ext::Settings;
+}
+namespace cfg7 {
+Settings loadElsewhere();
+}
+@@@ cpp3/src/use.cpp
+#include "alias.h"
+#include "ns.h"
+// callAlias (D5): `using List = ext::IntList;` — ext::IntList::count, never the in-tree List (list.cpp:2)
+int callAlias() { auto l = loadList(); return l.count(); }
+// callTypedef: `typedef ext::IntList List2;` — never the in-tree List2 (list.cpp:5)
+int callTypedef() { auto l = loadList2(); return l.count(); }
+// callNsAlias: `using Settings = ext::Settings;` inside cfg5 hides the global ::Settings
+int callNsAlias() { auto s = cfg5::loadAlias(); return s.count(); }
+// callNsTypedef: the typedef twin in cfg6
+int callNsTypedef() { auto s = cfg6::loadTypedef(); return s.count(); }
+// callElsewhere: cfg8's alias is not in force in cfg7 — the global ::Settings (ns.cpp:2)
+int callElsewhere() { auto s = cfg7::loadElsewhere(); return s.count(); }
+@@@ java4/src/app3/UseWild.java
+package app3;
+
+import ext.*;
+
+public class UseWild {
+    // d6Wildcard (D6): `import ext.*;` — lib.Util is not visible here: the receiver is ext's Util
+    int d6Wildcard() { var c = Util.open(); return c.size(); }
+}
+@@@ java4/src/app5/UseBoth.java
+package app5;
+
+import lib.*;
+import ext.Util;
+
+public class UseBoth {
+    int d6WildPlusExplicit() { var c = Util.open(); return c.size(); }
+}
+@@@ java4/src/app6/UseLib.java
+package app6;
+
+import lib.*;
+
+public class UseLib {
+    // pLibWild: `import lib.*;` makes lib.Util visible — open and the typed size are lib's
+    int pLibWild() { var c = Util.open(); return c.size(); }
+}
+@@@ java4/src/app7/Loader.java
+package app7;
+
+import lib.*;
+
+public class Loader {
+    // the result type Thing is lib.Thing through the on-demand import
+    public static Thing load() { return new Thing(); }
+}
+@@@ java4/src/app7/UseLoader.java
+package app7;
+
+public class UseLoader {
+    int pOnDemandResult() { var c = Loader.load(); return c.size(); }
+}
+@@@ java4/src/lib/Other.java
+package lib;
+public class Other { public int size() { return 4; } }
+@@@ java4/src/lib/Thing.java
+package lib;
+public class Thing { public int size() { return 3; } }
+@@@ java4/src/lib/Util.java
+package lib;
+public class Util {
+    public static Thing open() { return new Thing(); }
+}
+@@@ kt4/src/app/Loader.kt
+package app
+
+import lib.*
+
+fun loadThing(): Thing = Thing()
+@@@ kt4/src/app/Use.kt
+package app
+
+// pStarResult: the result type Thing is lib.Thing through the star import
+fun pStarResult(): Int {
+    val c = loadThing()
+    return c.size()
+}
+@@@ kt4/src/app2/Use.kt
+package app2
+
+import ext.*
+
+// d6KotlinWild (D6): `import ext.*` — lib.Util is not visible here
+fun d6KotlinWild(): Int {
+    val c = Util.open()
+    return c.size()
+}
+@@@ kt4/src/lib/Util.kt
+package lib
+
+object Util {
+    fun open(): Thing = Thing()
+}
+
+class Thing {
+    fun size(): Int = 3
+}
+
+class Other {
+    fun size(): Int = 4
+}
