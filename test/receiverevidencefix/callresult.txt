@@ -1,0 +1,832 @@
+# arm (L) call-result typing inputs, unpacked by test/receiverevidencecheck.sh into its temp dir (kept out of the
+# indexed tree: committed source trees move the repo's own map). Each file starts at a line `@@@ <root>/<path>`.
+@@@ cpp/src/app.cpp
+#include "model.h"
+
+// usePlain: `auto x = f()` with a value result.
+int usePlain()
+{
+    auto c = cfg::makeConfig();
+    return c.get();
+}
+
+// useRef: `T&` result.
+int useRef()
+{
+    const auto& c = cfg::configRef();
+    return c.get();
+}
+
+// usePtr: `T*` result through `->`.
+int usePtr()
+{
+    auto p = cfg::configPtr();
+    return p->get();
+}
+
+// useUnique: std::unique_ptr<T> through `->`.
+int useUnique()
+{
+    auto u = cfg::ownConfig();
+    return u->get();
+}
+
+// useAlias: the result names a `using` alias of an in-tree class.
+int useAlias()
+{
+    auto a = cfg::makeAlias();
+    return a.get();
+}
+
+// useMethod: the callee is a method on a typed local.
+int useMethod()
+{
+    cfg::Factory f;
+    auto c = f.make();
+    return c.get();
+}
+
+// nearOverload: the callee is overloaded (two definitions).
+int nearOverload()
+{
+    auto x = cfg::pick( 1 );
+    return x.get();
+}
+
+// nearExternal: an outside callee whose result has a same-named member.
+int nearExternal()
+{
+    auto fut = std::async( [] { return 1; } );
+    return fut.get();
+}
+
+// nearWrapper: std::reference_wrapper is outside the list; its own get() runs.
+int nearWrapper()
+{
+    auto r = cfg::wrapRef();
+    return r.get().size();
+}
+
+// nearGeneric: a template-parameter result.
+int nearGeneric()
+{
+    auto g = cfg::create<cfg::Config>();
+    return g.get();
+}
+
+// nearShadow: an inner `c` hides the typed outer one.
+int nearShadow()
+{
+    auto c = cfg::makeConfig();
+    {
+        auto c = std::async( [] { return 2; } );
+        return c.get();
+    }
+}
+
+// useWritten (twin): the same call with the type written.
+int useWritten()
+{
+    cfg::Config c = cfg::makeConfig();
+    return c.get();
+}
+
+// nearOverloadName: the other overload — its truth is Other::get, so a first-definition bug shows here.
+int nearOverloadName()
+{
+    auto x = cfg::pick( "name" );
+    return x.get();
+}
+
+// nearUniqueDot: `u.get()` on a std::unique_ptr result is unique_ptr::get — the arrow templates unwrap under `->` only.
+int nearUniqueDot()
+{
+    auto u = cfg::ownConfig();
+    return u.get() != nullptr;
+}
+
+// nearTypeParamNamed: a template parameter named after the in-tree Config, instantiated with Other.
+int nearTypeParamNamed()
+{
+    auto g = cfg::create2<cfg::Other>();
+    return g.get();
+}
+
+// useAliasWritten (twin): the alias written — Rule 2 reaches no member through a `using` alias today, so neither the
+// written nor the call-result-typed binding proves Config::get (a floor both share); Other::get is never proven.
+int useAliasWritten()
+{
+    cfg::ConfigAlias a = cfg::makeAlias();
+    return a.get();
+}
+@@@ cpp/src/model.cpp
+#include "model.h"
+
+namespace cfg
+{
+int Config::get() const { return 0; }
+int Config::size() const { return 0; }
+int Other::get() const { return 1; }
+int Other::size() const { return 1; }
+Config makeConfig() { return {}; }
+const Config& configRef() { static Config c; return c; }
+Config* configPtr() { return nullptr; }
+std::unique_ptr<Config> ownConfig() { return {}; }
+ConfigAlias makeAlias() { return {}; }
+Config pick( int ) { return {}; }
+Other pick( const char* ) { return {}; }
+std::reference_wrapper<Config> wrapRef() { static Config c; return c; }
+Config Factory::make() const { return {}; }
+}
+
+namespace cfg
+{
+Config async( int ) { return {}; }
+}
+@@@ cpp/src/model.h
+#pragma once
+#include <functional>
+#include <future>
+#include <memory>
+
+namespace cfg
+{
+struct Config
+{
+    int get() const;
+    int size() const;
+};
+
+struct Other
+{
+    int get() const;
+    int size() const;
+};
+
+using ConfigAlias = Config;
+
+Config                  makeConfig();
+const Config&           configRef();
+Config*                 configPtr();
+std::unique_ptr<Config> ownConfig();
+ConfigAlias             makeAlias();
+Config                  pick( int which );
+Other                   pick( const char* name );
+std::reference_wrapper<Config> wrapRef();
+template<class T> T     create();
+
+struct Factory
+{
+    Config make() const;
+};
+}
+
+namespace cfg
+{
+Config                        async( int which );   // an in-tree namesake of std::async
+template<class Config> Config create2();            // a template parameter named after the in-tree Config
+}
+@@@ go/go.mod
+module example.com/cr
+
+go 1.22
+@@@ go/src/app/app.go
+package app
+
+import (
+	"os"
+
+	"example.com/cr/src/model"
+)
+
+// UseValue: a value result through named results (nfpm's `config, err := nfpm.ParseFile(..)`).
+func UseValue(path string) {
+	config, err := model.ParseFile(path)
+	_ = err
+	config.Get("deb")
+}
+
+// UsePtr: `(*T, error)`.
+func UsePtr(path string) {
+	c, _ := model.Load(path)
+	c.Get("rpm")
+}
+
+// UseOne: a single `*T` result.
+func UseOne() {
+	c := model.Make()
+	c.Get("apk")
+}
+
+// UsePair: the second result binds the second name.
+func UsePair() {
+	_, o := model.Pair()
+	o.Get("ipk")
+}
+
+// UseIface: an interface result types the binding as the interface.
+func UseIface(info *model.Info) {
+	pkg, _ := model.Lookup("deb")
+	pkg.Package(info)
+}
+
+// UseMethod: the callee is a method on a typed receiver.
+func UseMethod(b *model.Builder) {
+	c := b.Build()
+	c.Get("arch")
+}
+
+// UseReassigned: Go is statically typed; `c = …` keeps c's type.
+func UseReassigned() {
+	c := model.Make()
+	c = model.Make()
+	c.Get("deb")
+}
+
+// NearExternal: an outside callee types nothing.
+func NearExternal() {
+	f, _ := os.Open("x")
+	f.Close()
+}
+
+// NearTwoDefs: the callee binds two definitions (an untyped receiver).
+func NearTwoDefs(factory interface{ Build() }) {
+	x := factory.Build()
+	x.Get("deb")
+}
+
+// NearAlias: a Go alias emits no alias record today.
+func NearAlias() {
+	a := model.MakeAlias()
+	a.Get("deb")
+}
+
+// NearWrapper: a wrapper outside the list.
+func NearWrapper() {
+	r := model.Wrap()
+	r.Get("deb")
+}
+
+// NearGeneric: a type-parameter result.
+func NearGeneric() {
+	g := model.Generic[model.Config]()
+	g.Get("deb")
+}
+
+// NearShadow: an inner `c` hides the typed outer one.
+func NearShadow() {
+	c := model.Make()
+	_ = c
+	{
+		c, _ := os.Open("y")
+		c.Close()
+	}
+}
+
+// UseWritten (twin): the same call with the type written — the record the receiver rules already read.
+func UseWritten() {
+	var c *model.Config = model.Make()
+	c.Get("deb")
+}
+
+// UseQualifiedFn: `model.Get` reaches the package-level func only, never the method (nfpm's `pkg, err := nfpm.Get(..)`).
+func UseQualifiedFn(info *model.Info) {
+	pkg, _ := model.Get("deb")
+	pkg.Package(info)
+}
+
+// NearQualified: an in-tree callee returning an OUTSIDE qualified type (*os.File) whose final segment names the
+// in-tree model.File: the qualifier resolves to no in-tree package, so nothing is recorded.
+func NearQualified() {
+	f, _ := model.OpenOS()
+	f.Close()
+}
+
+// NearOSParam: the written twin of the same outside type (a parameter): f.Close is os.File's.
+func NearOSParam(f *os.File) {
+	f.Close()
+}
+
+// UseGrouped / UseGroupedLast: grouped named results `(a, b *Config, o *Other)` count one position per NAME.
+func UseGrouped() {
+	_, y, _ := model.Triple()
+	y.Get("deb")
+}
+
+func UseGroupedLast() {
+	_, _, z := model.Triple()
+	z.Get("rpm")
+}
+
+// NearTypeParamNamed: a type parameter named after the in-tree Config, instantiated with Other.
+func NearTypeParamNamed() {
+	g := model.Generic2[model.Other]()
+	g.Get("deb")
+}
+
+// NearShadowPkg: a local spelled like the import is not the package — `model.Get` here is a method call on the local.
+func NearShadowPkg() {
+	model := model.Make()
+	model.Get("x")
+}
+
+// UseIfaceWritten (twin): the interface type written on a parameter — an interface-typed binding, written or call-result
+// typed, answers the same: the interface's bodyless signature is a dispatch contract the ladder keeps (FE-B), never a body.
+func UseIfaceWritten(p model.Packager, info *model.Info) {
+	p.Package(info)
+}
+@@@ go/src/app/renamed.go
+package app
+
+import (
+	m "example.com/cr/src/model"
+)
+
+// UseRenamedImport: a renamed import `m.Get(..)` binds the package func, never the method Config.Get.
+func UseRenamedImport(info *m.Info) {
+	pkg, _ := m.Get("rpm")
+	pkg.Package(info)
+}
+@@@ go/src/model/extra.go
+package model
+
+import "os"
+
+// File: an in-tree namesake of os.File (R3: a qualified outside type never types a binding by its final segment).
+type File struct{}
+
+func (f *File) Close() error { return nil }
+
+// OpenOS returns an OUTSIDE qualified type whose final segment names the in-tree File.
+func OpenOS() (*os.File, error) { return nil, nil }
+
+// Open: an in-tree namesake of os.Open (R4).
+func Open(name string) (*Config, error) { return &Config{}, nil }
+
+// Get on Ref[T]: NearWrapper's `r.Get` is Ref.Get, neither Config's nor Other's.
+func (r Ref[T]) Get(format string) *Info { return nil }
+
+// Generic2 names its type parameter after the in-tree Config (R2: the type-parameter guard can fail).
+func Generic2[Config any]() Config {
+	var zero Config
+	return zero
+}
+
+// Triple: grouped named results — a and b are both *Config (positions 0 and 1), o is *Other (position 2).
+func Triple() (a, b *Config, o *Other) { return }
+
+// Deb and Rpm implement Packager: an interface-typed binding proves the interface's own method, never an implementor.
+type Deb struct{}
+
+func (d *Deb) Package(info *Info) error { return nil }
+
+type Rpm struct{}
+
+func (r *Rpm) Package(info *Info) error { return nil }
+@@@ go/src/model/model.go
+package model
+
+type Info struct{}
+
+type Config struct{}
+
+func (c *Config) Get(format string) *Info { return nil }
+
+func (c *Config) Close() error { return nil }
+
+type Other struct{}
+
+func (o *Other) Get(format string) *Info { return nil }
+
+func (o *Other) Close() error { return nil }
+
+type Packager interface {
+	Package(info *Info) error
+}
+
+type Alias = Config
+
+type Ref[T any] struct{ v T }
+
+// ParseFile names its results: `(config Config, err error)`.
+func ParseFile(path string) (config Config, err error) { return }
+
+func Load(path string) (*Config, error) { return &Config{}, nil }
+
+func Make() *Config { return &Config{} }
+
+func Pair() (*Config, *Other) { return &Config{}, &Other{} }
+
+func Lookup(format string) (Packager, error) { return nil, nil }
+
+func MakeAlias() Alias { return Alias{} }
+
+func Wrap() Ref[Config] { return Ref[Config]{} }
+
+func Generic[T any]() T {
+	var zero T
+	return zero
+}
+
+type Builder struct{}
+
+func (b *Builder) Build() *Config { return &Config{} }
+
+type Maker struct{}
+
+func (m *Maker) Build() *Other { return &Other{} }
+
+// Get: a package-level func beside the method Config.Get (nfpm's `nfpm.Get` beside `(*Config).Get`).
+func Get(format string) (Packager, error) { return nil, nil }
+@@@ java/src/app/Config.java
+package app;
+
+public class Config {
+    public int get() { return 0; }
+}
+@@@ java/src/app/Configs.java
+package app;
+
+import java.util.Optional;
+
+public final class Configs {
+    public static Config make() { return new Config(); }
+    public static Optional<Config> find() { return Optional.of(new Config()); }
+    public static <T> T create() { return null; }
+    public static Config of() { return new Config(); }
+    public static <Config> Config create2() { return null; }
+}
+@@@ java/src/app/Other.java
+package app;
+
+public class Other {
+    public int get() { return 1; }
+}
+@@@ java/src/app/Use.java
+package app;
+
+public class Use {
+    // useVar: `var x = f()`.
+    int useVar() {
+        var c = Configs.make();
+        return c.get();
+    }
+
+    // nearExternal: an outside callee (List.of, beside the in-tree Configs.of) whose result has a same-named member.
+    int nearExternal() {
+        var l = java.util.List.of(new Config());
+        l.get(0);
+        return 0;
+    }
+
+    // nearWrapper: Optional<T> is outside the Java list; its own get() runs.
+    int nearWrapper() {
+        var o = Configs.find();
+        o.get();
+        return 0;
+    }
+
+    // nearGeneric: a type-parameter result.
+    int nearGeneric() {
+        var g = Configs.<Config>create();
+        return g.get();
+    }
+
+    // useWritten (twin): the same call with the type written.
+    int useWritten() {
+        Config c = Configs.make();
+        return c.get();
+    }
+
+    // nearTypeParamNamed: a type parameter named after the in-tree Config, instantiated with Other.
+    int nearTypeParamNamed() {
+        var g = Configs.<Other>create2();
+        return g.get();
+    }
+}
+@@@ kt/src/app/Model.kt
+package app
+
+class Config {
+    fun get(): Int = 0
+}
+
+class Other {
+    fun get(): Int = 1
+}
+
+fun makeConfig(): Config = Config()
+
+fun makeLazy() = Config()
+@@@ kt/src/app/Use.kt
+package app
+
+// useVal: `val x = f()` with a declared return type.
+fun useVal(): Int {
+    val c = makeConfig()
+    return c.get()
+}
+
+// useVar: `var x = f()`, reassigned with the same type.
+fun useVar(): Int {
+    var c = makeConfig()
+    c = makeConfig()
+    return c.get()
+}
+
+// nearInferred: an expression-bodied function with no written return type.
+fun nearInferred(): Int {
+    val c = makeLazy()
+    return c.get()
+}
+
+// useWritten (twin): the same call with the type written.
+fun useWritten(): Int {
+    val c: Config = makeConfig()
+    return c.get()
+}
+@@@ rust/Cargo.toml
+[package]
+name = "cr"
+version = "0.1.0"
+edition = "2021"
+@@@ rust/src/app.rs
+use crate::model::{self, Book, Config};
+
+// use_try: `let x = f()?` through Result<T, _>.
+pub fn use_try(path: &str) -> Result<u32, model::Error> {
+    let c = model::load(path)?;
+    Ok(c.get("a"))
+}
+
+// use_option: Option<T> with `?`.
+pub fn use_option() -> Option<u32> {
+    let c = model::find("k")?;
+    Some(c.get("b"))
+}
+
+// use_box: Box<T>.
+pub fn use_box() -> u32 {
+    let c = model::boxed();
+    c.get("c")
+}
+
+// use_ref: &T.
+pub fn use_ref(base: &Config) -> u32 {
+    let c = model::borrowed(base);
+    c.get("d")
+}
+
+// use_plain: T.
+pub fn use_plain() -> u32 {
+    let c = model::make();
+    c.get("e")
+}
+
+// use_tuple: the second element of a tuple result (mdbook's `let (book, _) = self.preprocess_book(..)?`).
+pub fn use_tuple() -> Result<u32, model::Error> {
+    let (_, o) = model::pair()?;
+    Ok(o.get("f"))
+}
+
+// use_path: an associated function on an in-tree type (`MDBook::load(..)?`).
+pub fn use_path() -> Result<u32, model::Error> {
+    let book = Book::load("root")?;
+    let c = book.build();
+    Ok(c.get("g"))
+}
+
+impl Book {
+    // use_self: the callee is a method on self.
+    pub fn use_self(&self) -> Result<u32, model::Error> {
+        let (c, _) = self.preprocess()?;
+        Ok(c.get("h"))
+    }
+}
+
+// near_external: an outside callee.
+pub fn near_external() -> usize {
+    let s = String::new();
+    s.len()
+}
+
+// near_std_get: a std container result whose method shares an in-tree name.
+pub fn near_std_get() -> Option<u32> {
+    let m = model::table();
+    m.get("k").copied()
+}
+
+// near_wrapper: Vec<T> is outside the list: `v.get(0)` is the slice's get.
+pub fn near_wrapper() -> usize {
+    let v = model::configs();
+    v.len()
+}
+
+// near_two_defs: the callee binds two definitions (an untyped receiver).
+pub fn near_two_defs<F>(f: F) -> u32 {
+    let x = f.produce();
+    x.get("i")
+}
+
+// near_alias: a Rust alias emits no alias record today.
+pub fn near_alias() -> u32 {
+    let a = model::alias();
+    a.get("j")
+}
+
+// near_generic: a type-parameter result.
+pub fn near_generic() -> u32 {
+    let g = model::generic::<Config>();
+    g.get("k")
+}
+
+// near_shadow: a later `let` rebinds the name to an outside value.
+pub fn near_shadow() -> usize {
+    let c = model::make();
+    let c = String::from("x");
+    c.len()
+}
+
+// use_written (twin): the same call with the type written.
+pub fn use_written() -> u32 {
+    let c: Config = model::make();
+    c.get("w")
+}
+
+// use_unwrap: `.unwrap()` / `.expect(..)` on a Result/Option result (the test-suite shape: `MDBook::load(..).unwrap()`).
+pub fn use_unwrap(path: &str) -> u32 {
+    let c = model::load(path).unwrap();
+    let d = model::find("k").expect("present");
+    c.get("u") + d.get("v")
+}
+
+// near_qualified: an in-tree callee returning std's File (written qualified) beside the in-tree osfile::File.
+pub fn near_qualified() -> std::io::Result<()> {
+    let f = crate::osfile::open_std()?;
+    f.sync_all()?;
+    let g = crate::osfile::open_fs();
+    g.sync_all()?;
+    Ok(())
+}
+
+// near_no_try: Option<T> without `?` — `r.iter()` is Option::iter, never Config::iter.
+pub fn near_no_try() -> usize {
+    let r = model::find("k");
+    r.iter().count()
+}
+
+// near_nested: Result<Option<T>, _> with ONE `?` leaves Option<T>: `c.iter()` is Option::iter.
+pub fn near_nested() -> Result<usize, model::Error> {
+    let c = model::nested()?;
+    Ok(c.iter().count())
+}
+
+// near_method_tail: a trailing method other than unwrap/expect is not stripped: o is Other (one level further: floor).
+pub fn near_method_tail() -> u32 {
+    let o = model::make().into_other();
+    o.get("o")
+}
+
+// near_type_param_named: a type parameter named after the in-tree Config, instantiated with Other.
+pub fn near_type_param_named() -> u32 {
+    let g = model::generic2::<model::Other>();
+    g.get("p")
+}
+@@@ rust/src/lib.rs
+pub mod app;
+pub mod model;
+pub mod osfile;
+@@@ rust/src/model.rs
+use std::collections::HashMap;
+
+pub struct Config;
+
+impl Config {
+    pub fn get(&self, key: &str) -> u32 { 0 }
+    pub fn len(&self) -> usize { 0 }
+}
+
+pub struct Other;
+
+impl Other {
+    pub fn get(&self, key: &str) -> u32 { 1 }
+    pub fn len(&self) -> usize { 1 }
+}
+
+pub type Alias = Config;
+
+pub struct Error;
+
+pub fn load(path: &str) -> Result<Config, Error> { Ok(Config) }
+
+pub fn find(key: &str) -> Option<Config> { Some(Config) }
+
+pub fn boxed() -> Box<Config> { Box::new(Config) }
+
+pub fn borrowed(c: &Config) -> &Config { c }
+
+pub fn make() -> Config { Config }
+
+pub fn pair() -> Result<(Config, Other), Error> { Ok((Config, Other)) }
+
+pub fn alias() -> Alias { Config }
+
+pub fn configs() -> Vec<Config> { vec![Config] }
+
+pub fn generic<T: Default>() -> T { T::default() }
+
+pub fn table() -> HashMap<String, u32> { HashMap::new() }
+
+pub struct Book;
+
+impl Book {
+    pub fn load(root: &str) -> Result<Book, Error> { Ok(Book) }
+    pub fn preprocess(&self) -> Result<(Config, Other), Error> { Ok((Config, Other)) }
+    pub fn build(&self) -> Config { Config }
+}
+
+pub struct Factory;
+
+impl Factory {
+    pub fn produce(&self) -> Config { Config }
+}
+
+pub struct Mill;
+
+impl Mill {
+    pub fn produce(&self) -> Other { Other }
+}
+
+// new: an in-tree namesake of String::new (an outside callee never types through it).
+pub fn new() -> Config { Config }
+
+// Config::iter (mdbook's Book::iter beside Option::iter) and a non-unwrap method returning Other.
+impl Config {
+    pub fn iter(&self) -> usize { 0 }
+    pub fn into_other(&self) -> Other { Other }
+}
+
+// nested: one `?` strips ONE layer — the binding is Option<Config>, not Config.
+pub fn nested() -> Result<Option<Config>, Error> { Ok(Some(Config)) }
+
+// generic2 names its type parameter after the in-tree Config.
+pub fn generic2<Config: Default>() -> Config { Config::default() }
+@@@ rust/src/osfile.rs
+// File: an in-tree namesake of std::fs::File — a qualified outside result type never types a binding by its last segment.
+pub struct File;
+
+impl File {
+    pub fn sync_all(&self) -> u32 { 0 }
+}
+
+pub fn open_std() -> std::io::Result<std::fs::File> { std::fs::File::open("x") }
+
+pub fn open_fs() -> std::fs::File { std::fs::File::open("x").unwrap() }
+@@@ ts/src/model.ts
+export class Config {
+  get(): number { return 0; }
+}
+
+export class Other {
+  get(): number { return 1; }
+}
+
+export function makeConfig(): Config { return new Config(); }
+
+export function makeUntyped() { return new Config(); }
+
+export async function loadConfig(): Promise<Config> { return new Config(); }
+
+export function freeze(): Config { return new Config(); }
+@@@ ts/src/use.ts
+import { Config, makeConfig, makeUntyped, loadConfig } from "./model";
+
+// useConst: `const x = f()` with an annotated return type.
+export function useConst(): number {
+  const c = makeConfig();
+  return c.get();
+}
+
+// useAwait: `const x = await f()` through Promise<T>.
+export async function useAwait(): Promise<number> {
+  const c = await loadConfig();
+  return c.get();
+}
+
+// nearUntyped: no written return type (TS inference is not modelled).
+export function nearUntyped(): number {
+  const c = makeUntyped();
+  return c.get();
+}
+
+// nearMap: an outside callee whose result has a same-named member.
+export function nearMap(): number | undefined {
+  const m = Object.freeze(new Map<string, number>());
+  return m.get("a");
+}
+
+// useWritten (twin): the same call with the type written.
+export function useWritten(): number {
+  const c: Config = makeConfig();
+  return c.get();
+}

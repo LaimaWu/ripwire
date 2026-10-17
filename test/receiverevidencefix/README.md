@@ -57,7 +57,8 @@ The names are paraphrases of graded false rows; the code is minimal and is never
   (Python and Go also a local `super`), then calls `render` on it: never Base's render through the bases-only lookup.
   Kept: `super.render()`, Python `super().render()`, Go's promoted `p.Render()`, the typed local's own class. C#
   `base.Render()` is visible only (no C# tree reads `base` as a receiver root yet).
-- `callresult/{go,rust,cpp,java,kt,ts}/` — arm (L), call-result typing: a local initialised by a call to an in-tree function
+- `callresult.txt` — arm (L), call-result typing: six source trees (`go`, `rust`, `cpp`, `java`, `kt`, `ts`) in ONE text bundle that
+  the gate unpacks into its temp dir (committed as source trees they would join the repo's own indexed map): a local initialised by a call to an in-tree function
   whose DECLARED return type names an in-tree class (`Config`), beside a same-named method on another class (`Other`), so
   the call on the local is name-only until the binding takes the callee's return type. Go: `(T, error)` with named results,
   `(*T, error)`, `*T`, a positional pair, an interface result, a method callee, a reassignment, the package func `model.Get`

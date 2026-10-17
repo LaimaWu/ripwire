@@ -191,8 +191,26 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 echo "receiverevidencecheck: BIN=$BIN  CORPUS=$CORPUS"
 
+# arm (L)'s roots (callresult/<lang>) live in one text bundle unpacked into the temp dir: committed as source trees they
+# joined the repo's own indexed map (readmedriftcheck G4's --max-tokens=3000 head lost two rows)
+CRBUNDLE="$CORPUS/callresult.txt"
+[ -f "$CRBUNDLE" ] || { echo "fixture missing: $CRBUNDLE"; exit 2; }
+python3 -I - "$CRBUNDLE" "$TMP/fix/callresult" <<'PY' || { echo "could not unpack $CRBUNDLE"; exit 2; }
+import os, sys
+out, cur, n = sys.argv[ 2 ], None, 0
+for line in open( sys.argv[ 1 ], encoding="utf-8" ):
+    if line.startswith( "@@@ " ):
+        if cur: cur.close()
+        path = os.path.join( out, line[ 4: ].strip() )
+        os.makedirs( os.path.dirname( path ), exist_ok=True )
+        cur = open( path, "w", encoding="utf-8" ); n += 1
+    elif cur:
+        cur.write( line )
+if cur: cur.close()
+sys.exit( 0 if n > 0 else 1 )
+PY
 # rw ROOT ARGS… — run against one fixture root (every selector below is relative to that root's `.`)
-rw(){ local r="$1"; shift; ( cd "$CORPUS/$r" && "$BIN" . --no-cache "$@" 2>/dev/null ); }
+rw(){ local r="$1" d="$CORPUS/$1"; shift; case "$r" in callresult/*) d="$TMP/fix/$r" ;; esac; ( cd "$d" && "$BIN" . --no-cache "$@" 2>/dev/null ); }
 
 # ── the one reader every predicate shares ─────────────────────────────────────────────────────────────────────
 # parse.py MODE FILE [ARGS] — prints one line per row; NOROOT when the document has no answer about a symbol.
