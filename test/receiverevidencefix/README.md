@@ -77,7 +77,12 @@ The names are paraphrases of graded false rows; the code is minimal and is never
   binds by name alone or splits. `UseWritten`/`useWritten` twins write the type (green before the lane).
   Fix round 3: `rust3` / `cpp3` / `java4` / `kt4` are the delta review's D4–D6 shapes (a Rust inline `mod` scope, a C++
   alias / typedef, a JVM on-demand import — receiver and result).
+  Fix round 4: `java5` / `kt5` / `cpp4` / `rust4` are the delta-3 review's E1–E3 probes (a Java nested `record` /
+  `@interface` / single-static-import; C++ union / forward declaration / macro / block-scope using beside a local class;
+  a Rust macro in an enclosing fn body) with their guards (a nested enum, Kotlin's nested forms, a forward declaration of
+  the in-tree class, a local class with nothing in its block, a nested fn with no macro).
 - `callresult_matrix.txt` — arm (L)'s BINDING-FORM MATRIX (Python, kept as text for the same reason): it writes one tree per
   language (`mx_rust`, `mx_cpp`, `mx_java`, `mx_kt`, `mx_ts`, `mx_go`) and lists every cell — language × binding form ×
-  scope level × target (in-tree unique / outside / unresolved / two in-tree) — with its expected verdict, plus the N/A
-  rows a language cannot write. Its header defines the cells.
+  scope level × target (in-tree unique / outside / unresolved / two in-tree), and (fix round 4) × declaration kind
+  (recorded class / unrecorded type-binding node / macro-unparsed) — with its expected verdict, plus the N/A rows a
+  language cannot write. Its header defines the cells.

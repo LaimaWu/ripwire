@@ -143,8 +143,13 @@
 #            C++ an in-tree namespace, std refused), else its own file, then its package (Go/Java/Kotlin: the directory) or
 #            namespace (C++) — by ONE rule (fix round 3): walk the callee's lexical scopes innermost first and collect
 #            EVERY binding of the spelling at each (a class declared there, an alias / typedef / `namespace a = b` /
-#            Rust `type` / Kotlin `typealias` / TS `type` and `import A = n.T`, an import binding there, a member type a
-#            base of an enclosing class declares); the first scope with any binding decides — one in-tree class types,
+#            Rust `type` / Kotlin `typealias` / TS `type` and `import A = n.T`, an import binding there (a Java single-
+#            static-import too), a member type a base of an enclosing class declares, and (fix round 4) a declaration the
+#            index keeps NO class for — a Java `record` / `@interface`, a C++ union or forward declaration (in the class's
+#            own namespace it declares that class), a C++ block-scope binding in force in a local class — or a region the
+#            parser cannot read that may declare ANY name: a C++ macro / parse error where a declaration must stand
+#            (namespace, file or class scope), a Rust statement- or item-position macro in a block enclosing a nested fn);
+#            the first scope with any binding decides — one in-tree class types,
 #            an outside / unresolved binding, an alias, or two that disagree record nothing. A Rust `mod` is a fresh scope
 #            (`super::` / `self::` inside it are relative to it); a package (the one the JVM files DECLARE) or module
 #            contributes top-level classes only, then JVM on-demand imports (an outside one leaves the name unresolved);
@@ -184,7 +189,16 @@
 #            tagged row, every other cell proves none. FLOOR cells (U by the language, hedged here): an alias of an
 #            in-tree type (Rust `type`, C++ alias / typedef, Kotlin `typealias`, TS `type` / `import A = n.T`, Go
 #            `type A = t.T`), a Go dot import, a member type inherited from a base (Java, C++), two in-tree C++ classes of
-#            one name (Rule 2 keys members by name).
+#            one name (Rule 2 keys members by name). Fix round 4 adds the DECLARATION-KIND axis (recorded class /
+#            unrecorded type-binding node "unrec:" / macro-unparsed "unparsed:"; the form column reads <kind>:<form>):
+#            a Java record / @interface / single-static-import / static-import-on-demand, a C++ union / forward
+#            declaration / macro (spelling the name, another name, or none) / block-scope using, alias, typedef, union
+#            and forward declaration in force in a local class, a Rust macro in an enclosing fn body (and a guard each:
+#            the callee's own body, a sibling fn), Java / Kotlin local classes — 268 cells in all. More FLOOR cells: a
+#            Java record (in-tree, but the index keeps no class for it), a C++ local class beside a global namesake (two
+#            classes of one name). LIMIT (not a cell, not gated): a C++ macro in a FUNCTION body reads as a call, so a
+#            local class beside one is not covered. A C++ macro at namespace / class scope that declares nothing hedges
+#            too (any macro may declare the name: an honest loss, measured at 5 envoy sites).
 #   (C) conservation: each root's census dispositions still sum to calls= with unaccounted=0 (no silent drop).
 #   (K) the predicates can fail: a planted unhedged false row fails notproven, a planted hedged row passes it and
 #            fails proven, marked rejects an unhedged row, a rootless or not-found answer is NOROOT, the MCP reader
@@ -1382,6 +1396,34 @@ proven    $CR/java4 callees src/app6/UseLib.java:pLibWild      "method open src/
 proven    $CR/java4 callees src/app7/UseLoader.java:pOnDemandResult "method size src/lib/Thing.java:2"   # [P] the callee's `import lib.*`
 notproven $CR/kt4  callees src/app2/Use.kt:d6KotlinWild        "open src/lib/Util.kt:4" "size src/lib/Util.kt:8" "size src/lib/Util.kt:12"   # [N] (open: a base false claim)
 proven    $CR/kt4  callees src/app/Use.kt:pStarResult          "fn size src/lib/Util.kt:8"               # [P] the callee's `import lib.*`
+# ── fix round 4 (rv-call-result-typing-delta3 E1–E3): a declaration the index keeps no class for still binds the spelling ──
+# E1 a Java nested `record` (and an `@interface`) is a type declared at that level: it hides the package's namesake.
+notproven $CR/java5 callees src/app/C4.java:cell4 "hit4 src/app/S4.java:3"                       # [N] `record S4` nested in C4
+notproven $CR/java5 callees src/app/C9.java:cell9 "hit9 src/app/S9.java:3"                       # [N] `@interface S9` nested in C9
+proven    $CR/java5 callees src/app/C3.java:cell3 "method hit3 src/app/C3.java:3"                # [P] # guard: a nested enum is a class
+# E2 a Java single-static-import of a type (JLS 6.4.1: it shadows the package's types) names that member, never the package's.
+notproven $CR/java5 callees src/app/C1.java:cell1 "hit1 src/app/S1.java:3"                       # [N] `import static ext.Holder.S1;`
+proven    $CR/java5 callees src/app/C7.java:cell7 "method hit7 src/app/S7.java:3"                # [P] a static import of ANOTHER name, and a static
+#                                                                                                       on-demand import (never shadows the package) hide nothing
+# the Kotlin nested forms the index records (companion member, enum class, object, data class): guards
+proven    $CR/kt5  callees src/app/C1.kt:cell1  "fn hit1 src/app/C1.kt:4"                        # [P] # guard
+proven    $CR/kt5  callees src/app/C3.kt:cell3  "fn hit3 src/app/C3.kt:3"                        # [P] # guard
+proven    $CR/kt5  callees src/app/C4.kt:cell4  "fn hit4 src/app/C4.kt:3"                        # [P] # guard
+proven    $CR/kt5  callees src/app/C5.kt:cell5  "fn hit5 src/app/C5.kt:3"                        # [P] # guard
+# E3 C++: a union, a bodiless (forward) declaration, a macro (any: the parser cannot see what it declares), a block-scope
+#    using in force in a local class — each binds the spelling in its scope and hides the global namesake; a forward
+#    declaration of the in-tree class itself and a local class with nothing in its block stay proven.
+notproven $CR/cpp4 callees src/use.cpp:cell1  "hit1 src/traps.h:2"                               # [N] `struct S1;` in a1
+proven    $CR/cpp4 callees src/use.cpp:cell2  "method hit2 src/fwd2.h:3"                         # [P] # guard: the forward-declared class is in tree
+notproven $CR/cpp4 callees src/use.cpp:cell12 "hit12 src/traps.h:7"                              # [N] `union S12` in a12
+notproven $CR/cpp4 callees src/use.cpp:cell5  "hit5 src/traps.h:4"                               # [N] `DECL5(S5)` in a5
+notproven $CR/cpp4 callees src/use.cpp:cell3  "hit3 src/traps.h:3"                               # [N] ANY macro in force may declare it (`REG3(Other3)` does not: an honest loss)
+notproven $CR/cpp4 callees src/use.cpp:cell6  "hit6 src/traps.h:5"                               # [N] block `using ext::S6;` + local class
+proven    $CR/cpp4 callees src/use.cpp:cell7  "method hit7 src/traps.h:6"                        # [P] # guard: a local class, nothing in its block
+# E3 Rust: a statement-position macro in an enclosing fn body may declare the item there (`mk14!()` does): the module's
+#    namesake is not proven; the same nested fn with no macro in its enclosing block stays proven.
+notproven $CR/rust4 callees src/c14.rs:cell14 "hit14 src/c14.rs:3"                               # [N] `mk14!();` in cell14's body
+proven    $CR/rust4 callees src/c15.rs:cell15 "method hit15 src/c15.rs:3"                        # [P] # guard
 # ── the BINDING-FORM MATRIX (fix round 3: close the class, not the shapes) ──
 # callresult_matrix.txt writes one tree per language (mx_rust, mx_cpp, mx_java, mx_kt, mx_ts, mx_go) and lists its cells:
 # language x binding form x scope level x target (header of that file). Each cell is one --callees run on `cell<k>`: a U cell
@@ -1411,7 +1453,7 @@ if [ "$mxn" -ge 200 ]; then ok "(L) matrix: $mxn cells run, $mxred red, $( grep 
 else no "(L) matrix: only $mxn cells were generated (expected >= 200)"; fi
 
 echo "=== (C) conservation: no call silently disappears ==="
-ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go"
+ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/java5 callresult/kt5 callresult/cpp4 callresult/rust4 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go"
 for r in $ROOTS; do
     rf="$( printf '%s' "$r" | tr '/' '_' )"   # a nested root (callresult/go) writes a flat file name
     if ! rw "$r" --pin-census="$TMP/$rf.tsv" >"$TMP/$rf.map.xml"; then no "(C) ($r) the census run exited non-zero"; continue; fi

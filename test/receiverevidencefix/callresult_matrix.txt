@@ -206,7 +206,6 @@ k = new_id(); cp_cell( "none", "global", "X", k, "namespace o%d {\n" % k + cp_cl
 k = new_id(); cp_cell( "none", "namespace", "X", k, "namespace o%d {\n" % k + cp_class( "S%d" % k, k ) + "}\n", "", "N" )
 k = new_id(); cp_cell( "none", "namespace", "2", k, "namespace n%d {\n" % k + cp_class( "S%d" % k, k ) + "}\nnamespace o%d {\n" % k + cp_class( "S%d" % k, k ) + "}\n", "", "N", floor=True )
 na( "cpp", "none", "class", "X", "a class member is in tree; the class-scope traps are the alias/typedef/inherited rows" )
-na( "cpp", "*", "fn", "*", "a block-scope binding never reaches a declared result (a return type sits outside every body): the block-using row pins that it is not in force" )
 # using-declaration
 for scope in ( "global", "namespace", "nested-ns" ):
     k = new_id(); cp_cell( "using-decl", scope, "U", k, "namespace lib%d {\n" % k + cp_class( "S%d" % k, k, True ) + "}\n", "using lib%d::S%d;\n" % ( k, k ), "P" )
@@ -316,7 +315,7 @@ k = new_id(); jv_put_class( "lib%d" % k, "S%d" % k, k, True ); jv_put_class( "p%
 jv_cell( "qualified", "file", "U", k, "", "lib%d.S%d" % ( k, k ), "P" )
 k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k )
 jv_cell( "qualified", "file", "O", k, "", "ext.S%d" % k, "N" )
-na( "java", "*", "fn", "*", "a local class's type cannot be a callee's declared result outside that body; the nested rows carry the lexical rule" )
+na( "java", "*", "fn", "*", "a callee in a function body is a LOCAL class's member: those cells are the decl-kind section's (fix round 4); a local type is never a result outside its body" )
 
 # JVM class-name RECEIVERS (D3 / D6): `R.open()` binds the in-tree R only when R is visible in the CALLER's file
 def jv_recv( form, target, k, imports, expect, rpkg ):
@@ -404,7 +403,7 @@ kt_cell( "qualified", "file", "U", k, "", "lib%d.S%d" % ( k, k ), "P" )
 k = new_id(); kt_put( "p%d" % k, "S%d" % k, k )
 kt_cell( "qualified", "file", "O", k, "", "ext.S%d" % k, "N" )
 na( "kotlin", "import", "*", "2", "two explicit imports of one name are ambiguous when used" )
-na( "kotlin", "*", "fn", "*", "a local class's type cannot be a callee's declared result outside that body" )
+na( "kotlin", "*", "fn", "*", "a callee in a function body is a LOCAL class's member: those cells are the decl-kind section's (fix round 4); a local type is never a result outside its body" )
 
 def kt_recv( form, target, k, imports, expect, rpkg ):
     q = "q%d" % k
@@ -522,6 +521,116 @@ go_cell( "receiver-type-param", "O", k, "package c%d\n\ntype S%d struct{}\n\nfun
 na( "go", "*", "nested/fn", "*", "Go has no nested scopes for types a named function can return: a function-local type cannot be a declared result" )
 na( "go", "dot import", "package", "O", "a dot-imported outside name beside a package-level type of that name does not compile (redeclared)" )
 put( GO, "src/use/use.go", "package use\n\nimport (\n" + "".join( go_use_imports ) + ")\n\n" + "".join( go_use_body ) )
+
+# ─────────────────────────────────── fix round 4: the DECLARATION-KIND axis (rv-call-result-typing-delta3 E1–E3) ────────────
+# Every cell above binds the spelling with a declaration the index RECORDS (a class, an import, an alias). These cells bind
+# it with one the index keeps NO class symbol for — kind "unrec" (a Java record / @interface / single-static-import, a C++
+# union / forward declaration / block-scope binding in force in a local class) — or one the parser cannot see — kind
+# "unparsed" (a macro: C++ at namespace / class scope when it spells the name, Rust in an enclosing fn body). Such a
+# binding decides its level like any other: it names no in-tree class, so the outer namesake (the trap) is never proven.
+# The form column reads <decl kind>:<form>; the earlier cells are decl kind "recorded".
+# Rust: a statement- or item-position macro in an ENCLOSING fn body may declare the spelling there.
+def rs_macro( k, body ):
+    return "macro_rules! mk%d {\n    () => { %s };\n}\n" % ( k, body )
+for form, bind in ( ( "unparsed:stmt-macro", "mk%d!();\n" ), ( "unparsed:item-macro", "mk%d! {}\n" ), ( "unparsed:macro-after", None ) ):
+    k = new_id(); S = "S%d" % k
+    outer = rs_class( S, k ) + rs_macro( k, "struct %s; impl %s { fn hit%d(&self) -> usize { 2 } }" % ( S, S, k ) )
+    if bind is None:   # items of a block are in scope throughout it: a macro written AFTER the nested fn counts too
+        rs_mod( k, "c%d" % k, outer + "pub fn cell%d() -> usize {\n    fn load%d() -> %s { todo!() }\n    let x = load%d();\n    mk%d!();\n    x.hit%d()\n}\n" % ( k, k, S, k, k, k ) )
+        cell( "rust", form, "fn", "X", RS, "src/c%d.rs:cell%d" % ( k, k ), k, "N" )
+    else:
+        rs_cell( form, "fn", "X", k, bind % k, "", outer, "N" )
+# guards: a macro in the callee's OWN body (not in scope at its signature) or in a sibling fn hides nothing
+k = new_id(); S = "S%d" % k
+rs_mod( k, "c%d" % k, rs_class( S, k, True ) + rs_macro( k, "struct %s;" % S )
+        + "pub fn cell%d() -> usize {\n    fn load%d() -> %s { mk%d!(); todo!() }\n    let x = load%d();\n    x.hit%d()\n}\n" % ( k, k, S, k, k, k ) )
+cell( "rust", "unparsed:macro-in-callee", "fn", "U", RS, "src/c%d.rs:cell%d" % ( k, k ), k, "P" )
+k = new_id(); S = "S%d" % k
+rs_mod( k, "c%d" % k, rs_class( S, k, True ) + rs_macro( k, "struct %s;" % S ) + "pub fn other%d() { mk%d!(); }\n" % ( k, k )
+        + "pub fn cell%d() -> usize {\n    fn load%d() -> %s { todo!() }\n    let x = load%d();\n    x.hit%d()\n}\n" % ( k, k, S, k, k ) )
+cell( "rust", "unparsed:macro-in-sibling", "fn", "U", RS, "src/c%d.rs:cell%d" % ( k, k ), k, "P" )
+na( "rust", "unparsed:macro", "file/mod/nested", "*", "an item macro at module level whose expansion names the spelling beside a binding of it there does not compile (E0428 item, E0255 use, E0659 glob), and with no binding the module is already silent (unresolved)" )
+na( "rust", "unrec:*", "*", "*", "every Rust type-binding item (struct, enum, union, trait, type) is recorded" )
+put( RS, "src/lib.rs", "".join( "pub mod %s;\n" % m for m in rs_mods if ( "pub mod %s;\n" % m ) not in files[ RS ][ "src/lib.rs" ] ) )
+# C++: a union / forward declaration / spelling macro in the callee's namespace or class hides the global namesake
+for scope in ( "namespace", "nested-ns", "class" ):
+    k = new_id(); cp_cell( "unrec:union", scope, "O", k, cp_class( "S%d" % k, k ), "union S%d { int v; int hit%d() const { return v; } };\n" % ( k, k ), "N" )
+    k = new_id(); cp_cell( "unparsed:macro", scope, "X", k, cp_class( "S%d" % k, k ) + "#define DECLM%d(n) struct n { int hit%d() const { return 2; } };\n" % ( k, k ),
+                           "DECLM%d(S%d)\n" % ( k, k ), "N" )
+for scope in ( "namespace", "nested-ns" ):
+    k = new_id(); cp_cell( "unrec:forward-decl", scope, "X", k, cp_class( "S%d" % k, k ), "struct S%d;\n" % k, "N" )
+    k = new_id(); cp_cell( "unrec:forward-decl(class)", scope, "X", k, cp_class( "S%d" % k, k ), "class S%d;\n" % k, "N" )
+# guards: a forward declaration OF the in-tree class (the same scope) names it; a macro spelling another name hides nothing
+k = new_id(); cp_cell( "unrec:forward-decl", "namespace", "U", k, "", "struct S%d;\n" % k, "P" )
+files[ CP ][ "src/c%d.h" % k ] += "namespace n%d {\n" % k + cp_class( "S%d" % k, k, True ) + "}\n"
+k = new_id(); cp_cell( "unrec:forward-decl", "global", "U", k, "struct S%d;\n" % k + cp_class( "S%d" % k, k, True ), "", "P" )
+k = new_id(); cp_cell( "unparsed:macro(other name)", "namespace", "X", k, cp_class( "S%d" % k, k ) + "#define REGM%d(n) int reg_##n = 0;\n" % k, "REGM%d(Other%d)\n" % ( k, k ), "N" )
+na( "cpp", "unrec:union", "global", "*", "a union and a class of one name in one scope do not compile" )
+na( "cpp", "unrec:forward-decl", "class", "*", "a nested forward declaration's out-of-line definition beside the global namesake is two in-tree classes of one name (the two-class floor)" )
+for scope in ( "namespace", "class" ):   # a macro that declares the spelling without writing it: ANY macro in force hedges
+    k = new_id(); cp_cell( "unparsed:macro(silent)", scope, "X", k, cp_class( "S%d" % k, k ) + "#define DECLALL%d() struct S%d { int hit%d() const { return 2; } };\n" % ( k, k, k ),
+                           "DECLALL%d()\n" % k, "N" )
+na( "cpp", "unparsed:macro", "fn", "*", "LIMIT (gate header): a macro in a function body reads as a call, so a local class beside one is not covered" )
+# C++ function body (the "fn" scope): a local class's member result sits INSIDE the block, so the block's bindings are in force
+def cp_local( form, target, k, block, expect, tag=False, floor=False ):
+    S = "S%d" % k
+    put( CP, "src/c%d.h" % k, "#pragma once\n#include <ext/things.h>\n" + cp_class( S, k, tag ) )
+    put( CP, "src/c%d.cpp" % k, '#include "c%d.h"\nint cell%d() {\n' % ( k, k ) + ind( block, 4 )
+         + "    struct L%d {\n        %s load%d() { return {}; }\n    };\n    L%d l;\n    auto x = l.load%d();\n    return x.hit%d();\n}\n" % ( k, S, k, k, k, k ) )
+    put( CP, "src/decoy.cpp", cp_class( "D%d" % k, k ) )
+    cell( "cpp", form, "fn", target, CP, "src/c%d.cpp:cell%d" % ( k, k ), k, expect, floor=floor )
+k = new_id(); cp_local( "none", "U", k, "", "P", tag=True )
+k = new_id(); cp_local( "using-decl", "O", k, "using ext::S%d;\n" % k, "N" )
+k = new_id(); cp_local( "alias", "O", k, "using S%d = ext::IntList;\n" % k, "N" )
+k = new_id(); cp_local( "typedef", "O", k, "typedef ext::IntList S%d;\n" % k, "N" )
+k = new_id(); cp_local( "unrec:forward-decl", "X", k, "struct S%d;\n" % k, "N" )
+k = new_id(); cp_local( "unrec:union", "O", k, "union S%d { int v; int hit%d() const { return v; } };\n" % ( k, k ), "N" )
+k = new_id(); cp_local( "item (local class)", "2", k, "struct S%d { int hit%d() const { return 3; } };\n" % ( k, k ), "N", floor=True )
+# Java: a nested record / @interface is a type of that level; a single-static-import of a type shadows the package (JLS 6.4.1)
+for scope in ( "file", "nested" ):
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k )
+    jv_cell( "unrec:record", scope, "O", k, "", "S%d" % k, "N", members="record S%d(int v) {\n    int hit%d() { return v; }\n}\n" % ( k, k ) )
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k )
+    jv_cell( "unrec:annotation", scope, "O", k, "", "S%d" % k, "N", members="@interface S%d {\n    int hit%d();\n}\n" % ( k, k ) )
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k )
+    jv_cell( "unrec:static-import", scope, "O", k, "import static ext.Holder.S%d;\n" % k, "S%d" % k, "N" )
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k, True )
+    jv_cell( "unrec:static-import(other name)", scope, "U", k, "import static ext.Holder.helper%d;\n" % k, "S%d" % k, "P" )
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k, True )   # JLS 6.4.1: a static-import-on-demand never shadows the package
+    jv_cell( "unrec:static-on-demand+package", scope, "U", k, "import static ext.Holder.*;\n", "S%d" % k, "P" )
+    k = new_id(); jv_put_class( "lib%d" % k, "S%d" % k, k )   # an on-demand tier with an outside static on-demand: unresolved
+    jv_cell( "unrec:static-on-demand+on-demand", scope, "X", k, "import lib%d.*;\nimport static ext.Holder.*;\n" % k, "S%d" % k, "N" )
+# an in-tree record is U by the language, but the index keeps no class for it: a FLOOR (hedges, never proves)
+k = new_id(); jv_put_class( "w%d" % k, "S%d" % k, k )
+jv_cell( "unrec:record (own file)", "file", "U", k, "", "S%d" % k, "N", own="\nrecord S%d(int v) {\n    int hit%d() { return v; }\n}\n" % ( k, k ), floor=True )
+k = new_id(); jv_put_class( "lib%d" % k, "S%d" % k, k )
+put( JV, "src/p%d/S%d.java" % ( k, k ), "package p%d;\n\npublic record S%d(int v) {\n    public int hit%d() { return v; }\n}\n" % ( k, k, k ) )
+jv_cell( "unrec:record (package) + on-demand", "file", "U", k, "import lib%d.*;\n" % k, "S%d" % k, "N", floor=True )
+# Java / Kotlin function body: a LOCAL class's member (Kotlin: a local fun) has its result inside the body, so the body's
+# declarations are in force there
+def jv_local( form, target, k, block, expect ):
+    p = "p%d" % k
+    put( JV, "src/%s/U%d.java" % ( p, k ), "package %s;\n\npublic class U%d {\n    int cell%d() {\n%s        class L%d {\n            S%d load%d() { return null; }\n        }\n"
+         % ( p, k, k, ind( block, 8 ), k, k, k ) + "        var x = new L%d().load%d();\n        return x.hit%d();\n    }\n}\n" % ( k, k, k ) )
+    put( JV, "src/decoy/D%d.java" % k, jv_class( "decoy", "D%d" % k, k ) )
+    cell( "java", form, "fn", target, JV, "src/%s/U%d.java:cell%d" % ( p, k, k ), k, expect )
+k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k, True ); jv_local( "package", "U", k, "", "P" )
+k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k ); jv_local( "item (local class)", "U", k, "class S%d {\n    int hit%d() { return 3; } // @T%d\n}\n" % ( k, k, k ), "P" )
+k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k ); jv_local( "unrec:record (local)", "O", k, "record S%d(int v) {\n    int hit%d() { return v; }\n}\n" % ( k, k ), "N" )
+na( "java", "unparsed:*", "*", "*", "Java has no macros; an annotation processor's generated source is source the tree holds or lacks" )
+na( "kotlin", "unrec:*", "*", "*", "every Kotlin type declaration (class, interface, enum class, object, companion, data class) is recorded; a typealias is the alias row" )
+def kt_local( form, target, k, block, expect ):
+    p = "p%d" % k
+    put( KT, "src/%s/Use%d.kt" % ( p, k ), "package %s\n\nfun cell%d(): Int {\n%s    fun load%d(): S%d = TODO()\n    val x = load%d()\n    return x.hit%d()\n}\n"
+         % ( p, k, ind( block, 4 ), k, k, k, k ) )   # a local fun: the callee sits in the body
+    put( KT, "src/decoy/D%d.kt" % k, kt_class( "decoy", "D%d" % k, k ) )
+    cells.append( ( k, "kotlin", form, "fn", target, KT, "src/%s/Use%d.kt:cell%d" % ( p, k, k ), expect, "fn", "hit%d" % k, "@T%d" % k, False ) )
+k = new_id(); kt_put( "p%d" % k, "S%d" % k, k, True ); kt_local( "package", "U", k, "", "P" )
+k = new_id(); kt_put( "p%d" % k, "S%d" % k, k ); kt_local( "item (local class)", "U", k, "class S%d {\n    fun hit%d(): Int = 3 // @T%d\n}\n" % ( k, k, k ), "P" )
+na( "kotlin", "unparsed:*", "*", "*", "Kotlin has no macros" )
+na( "ts", "unrec:*", "*", "*", "every TS type declaration (class, abstract class, interface, enum) is recorded; a type alias / import-equals is the alias row" )
+na( "ts", "unparsed:*", "*", "*", "TypeScript has no macros (a decorator declares no type name)" )
+na( "go", "unrec:* / unparsed:*", "*", "*", "every Go type declaration is recorded and Go has no macros (go:generate output is source)" )
 
 # ───────────────────────────────────────────────────────────── write + list ─────────────────────────────────────────────────
 for root, fs in files.items():

@@ -2027,3 +2027,232 @@ class Thing {
 class Other {
     fun size(): Int = 4
 }
+@@@ java5/src/app/C4.java
+package app;
+public class C4 {
+    record S4(int v) { int hit4() { return v; } }
+    S4 load4() { return new S4(4); }
+    int cell4() { var x = load4(); return x.hit4(); }
+}
+@@@ java5/src/app/S4.java
+package app;
+public class S4 {
+    public int hit4() { return 1; }
+}
+@@@ java5/src/app/C1.java
+package app;
+import static ext.Holder.S1;
+public class C1 {
+    S1 load1() { return null; }
+    int cell1() { var x = load1(); return x.hit1(); }
+}
+@@@ java5/src/app/S1.java
+package app;
+public class S1 {
+    public int hit1() { return 1; }
+}
+@@@ java5/src/app/C9.java
+package app;
+public class C9 {
+    @interface S9 { int hit9(); }
+    S9 load9() { return null; }
+    int cell9() { var x = load9(); return x.hit9(); }
+}
+@@@ java5/src/app/S9.java
+package app;
+public class S9 {
+    public int hit9() { return 1; }
+}
+@@@ java5/src/app/C3.java
+package app;
+public class C3 {
+    enum S3 { A; int hit3() { return 3; } }
+    S3 load3() { return S3.A; }
+    int cell3() { var x = load3(); return x.hit3(); }
+}
+@@@ java5/src/app/S3.java
+package app;
+public class S3 {
+    public int hit3() { return 1; }
+}
+@@@ java5/src/app/C7.java
+package app;
+import static app.Util7.helper7;
+import static ext.Holder.*;
+public class C7 {
+    S7 load7() { return null; }
+    int cell7() { var x = load7(); return x.hit7() + helper7(); }
+}
+@@@ java5/src/app/S7.java
+package app;
+public class S7 {
+    public int hit7() { return 7; }
+}
+@@@ java5/src/app/Util7.java
+package app;
+public class Util7 {
+    public static int helper7() { return 0; }
+}
+@@@ java5/src/decoy/D.java
+package decoy;
+public class D {
+    public int hit1() { return 0; }
+    public int hit3() { return 0; }
+    public int hit4() { return 0; }
+    public int hit7() { return 0; }
+    public int hit9() { return 0; }
+}
+@@@ kt5/src/app/C1.kt
+package app
+class C1 {
+    companion object {
+        class S1 { fun hit1(): Int = 10 }
+    }
+    fun load1(): S1 = S1()
+    fun cell1(): Int { val x = load1(); return x.hit1() }
+}
+@@@ kt5/src/app/C3.kt
+package app
+class C3 {
+    enum class S3 { A; fun hit3(): Int = 3 }
+    fun load3(): S3 = S3.A
+    fun cell3(): Int { val x = load3(); return x.hit3() }
+}
+@@@ kt5/src/app/C4.kt
+package app
+class C4 {
+    object S4 { fun hit4(): Int = 4 }
+    fun load4(): S4 = S4
+    fun cell4(): Int { val x = load4(); return x.hit4() }
+}
+@@@ kt5/src/app/C5.kt
+package app
+class C5 {
+    data class S5(val v: Int) { fun hit5(): Int = v }
+    fun load5(): S5 = S5(5)
+    fun cell5(): Int { val x = load5(); return x.hit5() }
+}
+@@@ kt5/src/app/S.kt
+package app
+class S1 { fun hit1(): Int = 1 }
+class S3 { fun hit3(): Int = 1 }
+class S4 { fun hit4(): Int = 1 }
+class S5 { fun hit5(): Int = 1 }
+@@@ kt5/src/decoy/D.kt
+package decoy
+class D {
+    fun hit1(): Int = 0
+    fun hit3(): Int = 0
+    fun hit4(): Int = 0
+    fun hit5(): Int = 0
+}
+@@@ cpp4/src/traps.h
+#pragma once
+struct S1 { int hit1() const { return 1; } };
+struct S3 { int hit3() const { return 1; } };
+struct S5 { int hit5() const { return 1; } };
+struct S6 { int hit6() const { return 1; } };
+struct S7 { int hit7() const { return 1; } };
+struct S12 { int hit12() const { return 1; } };
+@@@ cpp4/src/decoy.h
+#pragma once
+struct D {
+    int hit1() const { return 0; }
+    int hit2() const { return 0; }
+    int hit3() const { return 0; }
+    int hit5() const { return 0; }
+    int hit6() const { return 0; }
+    int hit7() const { return 0; }
+    int hit12() const { return 0; }
+};
+@@@ cpp4/src/fwd1.h
+#pragma once
+namespace a1 { struct S1; S1 load1(); }
+@@@ cpp4/src/fwd2.h
+#pragma once
+namespace a2 { struct S2; S2 load2(); }
+namespace a2 { struct S2 { int hit2() const { return 2; } }; }
+@@@ cpp4/src/u12.h
+#pragma once
+namespace a12 { union S12 { int v; int hit12() const { return v; } }; S12 load12(); }
+@@@ cpp4/src/m5.h
+#pragma once
+#define DECL5(n) struct n { int hit5() const { return 5; } };
+namespace a5 { DECL5(S5) S5 load5(); }
+@@@ cpp4/src/m3.h
+#pragma once
+#define REG3(n) int registered_##n = 0;
+namespace a3 { REG3(Other3) S3 load3(); }
+@@@ cpp4/src/lib.cpp
+#include "traps.h"
+#include "fwd1.h"
+#include "fwd2.h"
+#include "u12.h"
+#include "m5.h"
+#include "m3.h"
+namespace a1 { S1 load1() { return {}; } }
+namespace a2 { S2 load2() { return {}; } }
+namespace a12 { S12 load12() { return {}; } }
+namespace a5 { S5 load5() { return {}; } }
+namespace a3 { S3 load3() { return {}; } }
+@@@ cpp4/src/use.cpp
+#include "decoy.h"
+#include "traps.h"
+#include "fwd1.h"
+#include "fwd2.h"
+#include "u12.h"
+#include "m5.h"
+#include "m3.h"
+#include <ext/s6.h>
+// cell1: `struct S1;` in a1 declares a1::S1 (defined outside the tree) — never the global ::S1 (traps.h:2)
+int cell1() { auto x = a1::load1(); return x.hit1(); }
+// cell2 [P]: a forward declaration of the in-tree a2::S2 names that class (fwd2.h:3)
+int cell2() { auto x = a2::load2(); return x.hit2(); }
+// cell12: `union S12` in a12 hides the global ::S12 (traps.h:7)
+int cell12() { auto x = a12::load12(); return x.hit12(); }
+// cell5: a macro in a5 spells S5 — it may declare a5::S5 (it does): never the global ::S5 (traps.h:4)
+int cell5() { auto x = a5::load5(); return x.hit5(); }
+// cell3: ANY macro in force in a3 may declare a3::S3 (`REG3(Other3)` does not): the global ::S3 (traps.h:3) is not proven — an honest loss
+int cell3() { auto x = a3::load3(); return x.hit3(); }
+// cell6: a block-scope `using ext::S6;` is in force in the local class's member: never the global ::S6 (traps.h:5)
+int cell6() { using ext::S6; struct L { S6 load6() { return {}; } }; L l; auto x = l.load6(); return x.hit6(); }
+// cell7 [P]: a local class's member result with nothing in the block binding S7: the global ::S7 (traps.h:6)
+int cell7() { struct L7 { S7 load7() { return {}; } }; L7 l; auto x = l.load7(); return x.hit7(); }
+@@@ rust4/Cargo.toml
+[package]
+name = "rust4"
+version = "0.1.0"
+@@@ rust4/src/lib.rs
+pub mod c14;
+pub mod c15;
+pub mod decoy;
+@@@ rust4/src/c14.rs
+pub struct S14;
+impl S14 {
+    pub fn hit14(&self) -> usize { 14 }
+}
+macro_rules! mk14 {
+    () => { struct S14; impl S14 { fn hit14(&self) -> usize { 140 } } };
+}
+pub fn cell14() -> usize {
+    mk14!();
+    fn load14() -> S14 { S14 }
+    let x = load14();
+    x.hit14()
+}
+@@@ rust4/src/c15.rs
+pub struct S15;
+impl S15 {
+    pub fn hit15(&self) -> usize { 15 }
+}
+pub fn cell15() -> usize {
+    fn load15() -> S15 { S15 }
+    let x = load15();
+    x.hit15()
+}
+@@@ rust4/src/decoy.rs
+pub struct D;
+impl D {
+    pub fn hit14(&self) -> usize { 0 }
+    pub fn hit15(&self) -> usize { 0 }
+}
