@@ -311,7 +311,8 @@ struct CallResultTypes
     // a C++ using-directive / using-declaration, or (fix round 3) a C++ alias: the rows that carry their scope's span (model.h)
     static bool isCppScopeRow( const Binding& b ) noexcept
     {
-        return ( b.kind == LocalBindKind::TypeImport || b.kind == LocalBindKind::TypeAlias ) && b.spanEnd != 0;
+        constexpr LocalBindKind kSpanned[] = { LocalBindKind::TypeImport, LocalBindKind::TypeAlias };   // the kinds a C++ scope span rides on
+        return b.spanEnd != 0 && std::ranges::find( kSpanned, b.kind ) != std::end( kSpanned );
     }
     // after the last noteImport: the two lists in (file, start) / file order
     void finishIndex()
@@ -477,7 +478,7 @@ struct CallResultTypes
         std::uint32_t end   = 0xFFFFFFFFu;
         NodeId        sym   = kNoNode;
         bool          file() const noexcept { return start == 0 && end == 0xFFFFFFFFu && sym == kNoNode; }
-        bool          operator==( const Level& o ) const noexcept { return start == o.start && end == o.end; }
+        bool          operator==( const Level& ) const = default;
     };
     // The votes of one level (or tier): each binding of the spelling there names one in-tree class, or kNoNode (outside,
     // unresolved, an alias). ONE class decides; anything else — an outside or unresolved binding, two that disagree — names
@@ -495,11 +496,6 @@ struct CallResultTypes
         }
         NodeId verdict() const noexcept { return any && !split ? cls : kNoNode; }
     };
-    static const BareNameRules* bareNameRulesOf( CallResultFamily fam ) noexcept
-    {
-        const auto it = std::ranges::find( kBareNameRules, fam, &BareNameRules::family );
-        return it == std::end( kBareNameRules ) ? nullptr : it;
-    }
     // the symbol ids of file `f` (ids ascend by file)
     std::pair<NodeId, NodeId> symbolsOf( std::uint32_t f ) const
     {
@@ -507,19 +503,25 @@ struct CallResultTypes
         const auto run    = std::ranges::equal_range( ing.symbols, f, std::ranges::less{}, byFile );
         return { NodeId( run.begin() - ing.symbols.begin() ), NodeId( run.end() - ing.symbols.begin() ) };
     }
-    // the innermost level of file `f` holding byte `pos` — a symbol (strictly inside it) or a Namespace body; the file when none
-    Level levelAt( std::uint32_t f, std::uint32_t pos ) const
+    // the innermost symbol of file `f` that `keep` admits and whose span strictly holds byte `pos`; kNoNode when none
+    template <class Keep>
+    NodeId innermostHolding( std::uint32_t f, std::uint32_t pos, Keep&& keep ) const
     {
-        Level      best;
+        NodeId     best = kNoNode;
         const auto [ lo, hi ] = symbolsOf( f );
         for( NodeId s = lo; s < hi; ++s )
         {
-            const Symbol& o = ing.symbols[ s ];
-            if( o.kind != SymKind::ModuleScope && o.sigStartByte < pos && pos < o.endByte && ( best.file() || o.sigStartByte > best.start ) )
-            {
-                best = { o.sigStartByte, o.endByte, s };
-            }
+            const Symbol& o     = ing.symbols[ s ];
+            const bool    holds = o.sigStartByte < pos && pos < o.endByte && keep( o.kind );
+            best = holds && ( best == kNoNode || o.sigStartByte > ing.symbols[ best ].sigStartByte ) ? s : best;
         }
+        return best;
+    }
+    // the innermost level of file `f` holding byte `pos` — a symbol (strictly inside it) or a Namespace body; the file when none
+    Level levelAt( std::uint32_t f, std::uint32_t pos ) const
+    {
+        const NodeId s    = innermostHolding( f, pos, []( SymKind k ) { return k != SymKind::ModuleScope; } );
+        Level        best = s == kNoNode ? Level{} : Level{ ing.symbols[ s ].sigStartByte, ing.symbols[ s ].endByte, s };
         for( const Binding* ns : namespacesOf( f ) )
         {
             if( ns->spanStart <= pos && pos < ns->spanEnd && ( best.file() || ns->spanStart > best.start ) )
@@ -569,20 +571,7 @@ struct CallResultTypes
     }
     static bool classKind( SymKind k ) noexcept { return k == SymKind::Class || k == SymKind::Struct || k == SymKind::Interface; }
     // the innermost class of file `f` whose span holds byte `pos` (a member declaration's class); kNoNode when none
-    NodeId classHolding( std::uint32_t f, std::uint32_t pos ) const
-    {
-        NodeId     best = kNoNode;
-        const auto [ lo, hi ] = symbolsOf( f );
-        for( NodeId s = lo; s < hi; ++s )
-        {
-            const Symbol& o = ing.symbols[ s ];
-            if( classKind( o.kind ) && o.sigStartByte < pos && pos < o.endByte && ( best == kNoNode || o.sigStartByte > ing.symbols[ best ].sigStartByte ) )
-            {
-                best = s;
-            }
-        }
-        return best;
-    }
+    NodeId classHolding( std::uint32_t f, std::uint32_t pos ) const { return innermostHolding( f, pos, &classKind ); }
     // JVM / C++: does a base of class `holder` — through in-tree bases, transitively (a visited set: a diamond is walked
     // once) — declare a member type `name` (a nested class, or a C++ member alias)? Such a member type is in scope inside
     // `holder` and is not followed here: the spelling names nothing.
@@ -700,8 +689,8 @@ struct CallResultTypes
     // scope); past the file the JVM reads its package's top-level classes and aliases, then the file's on-demand imports.
     NodeId bareClassAt( CallResultFamily fam, std::uint32_t f, std::uint32_t at, std::string_view name ) const
     {
-        const BareNameRules* rules = bareNameRulesOf( fam );
-        if( rules == nullptr || f >= importsByFile.size() )
+        const auto rules = std::ranges::find( kBareNameRules, fam, &BareNameRules::family );   // the family's data row
+        if( rules == std::end( kBareNameRules ) || f >= importsByFile.size() )
         {
             return kNoNode;
         }
@@ -1560,10 +1549,7 @@ struct ReceiverEvidence
     ReceiverEvidence( const IngestResult& i, const HashMap<std::string, std::vector<std::string>>& up, const HashMap<std::string, char>& classes )
         : ing( i ), chaUp( up ), classNames( classes ), types( i ) {}
 
-    static bool classLike( SymKind k ) noexcept
-    {
-        return k == SymKind::Class || k == SymKind::Struct || k == SymKind::Interface;
-    }
+    static bool classLike( SymKind k ) noexcept { return CallResultTypes::classKind( k ); }
     static bool callableKind( SymKind k ) noexcept
     {
         return k == SymKind::Method || k == SymKind::Function;

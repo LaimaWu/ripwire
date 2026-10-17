@@ -4274,19 +4274,13 @@ inline void pushNamespace( BindCtx& cx, TSNode n, TSNode name, TSNode body )
 // The nodes that carry a call-result scope fact, per family (data rows, read by bindsVisitNode): a namespace body the index
 // has no symbol for, C++'s using-directives / using-declarations, and (fix round 3) every declaration that binds a type
 // name to another type — each family's alias forms (model.h LocalBindKind::TypeAlias).
-inline constexpr struct { CallResultFamily family; std::string_view kind; } kScopeFactNodes[] = {
-    { CallResultFamily::Cpp, "namespace_definition" }, { CallResultFamily::Cpp, "using_declaration" },
-    { CallResultFamily::Cpp, "alias_declaration" }, { CallResultFamily::Cpp, "type_definition" }, { CallResultFamily::Cpp, "namespace_alias_definition" },
-    { CallResultFamily::TypeScript, "internal_module" }, { CallResultFamily::TypeScript, "module" },
-    { CallResultFamily::TypeScript, "type_alias_declaration" }, { CallResultFamily::TypeScript, "import_alias" },
-    { CallResultFamily::Rust, "type_item" }, { CallResultFamily::Jvm, "type_alias" },
+inline constexpr struct { CallResultFamily family; std::string_view kind; bool alias; } kScopeFactNodes[] = {
+    { CallResultFamily::Cpp, "namespace_definition", false }, { CallResultFamily::Cpp, "using_declaration", false },
+    { CallResultFamily::Cpp, "alias_declaration", true }, { CallResultFamily::Cpp, "type_definition", true }, { CallResultFamily::Cpp, "namespace_alias_definition", true },
+    { CallResultFamily::TypeScript, "internal_module", false }, { CallResultFamily::TypeScript, "module", false },
+    { CallResultFamily::TypeScript, "type_alias_declaration", true }, { CallResultFamily::TypeScript, "import_alias", true },
+    { CallResultFamily::Rust, "type_item", true }, { CallResultFamily::Jvm, "type_alias", true },
 };
-// the alias rows of kScopeFactNodes (the rest are scopes and C++ usings)
-inline bool isTypeAliasNode( const char* t ) noexcept
-{
-    return kindIs( t, "alias_declaration" ) || kindIs( t, "type_definition" ) || kindIs( t, "namespace_alias_definition" ) || kindIs( t, "type_alias_declaration" )
-        || kindIs( t, "import_alias" ) || kindIs( t, "type_item" ) || kindIs( t, "type_alias" );
-}
 
 // the C++ scope a namespace- / file- / class-scope declaration `n` is in force over: a namespace body, a class body (only
 // when `classScope` admits one), or the whole file (0 .. 0xFFFFFFFF); {0,0} for a block (a body binds no declared result)
@@ -4386,7 +4380,7 @@ inline void captureTypeAlias( BindCtx& cx, TSNode n, const char* t )
 // outside every body) and one in a class is a member re-export (resolve.h buildUsingReexports): neither is recorded.
 inline void captureScopeFact( BindCtx& cx, TSNode n, const char* t )
 {
-    if( isTypeAliasNode( t ) )
+    if( std::ranges::any_of( kScopeFactNodes, [ & ]( const auto& row ) { return row.alias && row.kind == t; } ) )   // an alias row
     {
         captureTypeAlias( cx, n, t );
         return;
