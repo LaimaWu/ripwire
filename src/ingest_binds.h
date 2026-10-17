@@ -4271,13 +4271,29 @@ inline void pushNamespace( BindCtx& cx, TSNode n, TSNode name, TSNode body )
     }
 }
 
-// C++: a `namespace` body (an `inline` namespace is transparent: its members are the enclosing namespace's, so none is
-// recorded) and a namespace- or file-scope using-directive / using-declaration as a TypeImport spanning the scope it is
-// declared in — what a callee's bare result type names (receiverevidence.h CallResultTypes::cppUnqualifiedClass). A using in
-// a block reaches no declared result (a return type sits outside every body) and one in a class is a member re-export
-// (resolve.h buildUsingReexports): neither is recorded.
-inline void captureCppScopeFact( BindCtx& cx, TSNode n, const char* t )
+// The nodes that carry a call-result scope fact, per family (data rows): a namespace body the index has no symbol for, and
+// C++'s using-directives / using-declarations.
+inline constexpr struct { CallResultFamily family; std::string_view kind; } kScopeFactNodes[] = {
+    { CallResultFamily::Cpp, "namespace_definition" }, { CallResultFamily::Cpp, "using_declaration" },
+    { CallResultFamily::TypeScript, "internal_module" }, { CallResultFamily::TypeScript, "module" },
+};
+inline bool isScopeFactNode( CallResultFamily family, const char* t ) noexcept
 {
+    return std::ranges::any_of( kScopeFactNodes, [ & ]( const auto& row ) { return row.family == family && row.kind == t; } );
+}
+
+// A TS `namespace` / `module` body, a C++ `namespace` body (an `inline` namespace is transparent: its members are the
+// enclosing namespace's, so none is recorded), and a C++ namespace- or file-scope using-directive / using-declaration as a
+// TypeImport spanning the scope it is declared in — what a callee's bare result type names (receiverevidence.h
+// CallResultTypes::visibleAt / cppUnqualifiedClass). A using in a block reaches no declared result (a return type sits
+// outside every body) and one in a class is a member re-export (resolve.h buildUsingReexports): neither is recorded.
+inline void captureScopeFact( BindCtx& cx, TSNode n, const char* t )
+{
+    if( kindIs( t, "internal_module" ) || kindIs( t, "module" ) )
+    {
+        pushNamespace( cx, n, fieldChild( n, NodeField::Name ), fieldChild( n, NodeField::Body ) );
+        return;
+    }
     if( kindIs( t, "namespace_definition" ) )
     {
         const bool isInline = ts_node_child_count( n ) > 0 && kindIs( ts_node_type( ts_node_child( n, 0 ) ), "inline" );
@@ -5668,11 +5684,7 @@ inline void captureJsEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32
     {
         captureDeclaredReturnType( cx, n );   // (L) call-result typing: a TS return annotation (JS writes none)
     }
-    else if( callResultFamilyOf( cx.lang ) == CallResultFamily::TypeScript && ( kindIs( t, "internal_module" ) || kindIs( t, "module" ) ) )
-    {
-        pushNamespace( cx, n, fieldChild( n, NodeField::Name ), fieldChild( n, NodeField::Body ) );   // (L) fix round 2: `namespace a { … }`
-        return;
-    }
+
     const Lang             lang = cx.lang;
     const std::string_view src  = cx.src;
     if( kindIs( t, "type_parameters" ) )
@@ -5993,10 +6005,10 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
             return true;
         } );
     }
-    // (L) fix round 2: a C++ namespace body, a using-directive / using-declaration — the scope a bare result type resolves in
-    if( callResultFamilyOf( lang ) == CallResultFamily::Cpp && ( kindIs( t, "namespace_definition" ) || kindIs( t, "using_declaration" ) ) )
+    // (L) fix round 2: a namespace body, a C++ using-directive / using-declaration — the scope a bare result type resolves in
+    if( isScopeFactNode( callResultFamilyOf( lang ), t ) )
     {
-        captureCppScopeFact( cx, n, t );
+        captureScopeFact( cx, n, t );
     }
     // (L) a C++ function's declared result (a definition, or a declaration such as a header's prototype)
     if( callResultFamilyOf( lang ) == CallResultFamily::Cpp && ( kindIs( t, "function_definition" ) || kindIs( t, "declaration" ) || kindIs( t, "field_declaration" ) ) )

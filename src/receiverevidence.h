@@ -349,9 +349,8 @@ struct CallResultTypes
     // the Namespace records of file `f`, outermost first
     std::span<const Binding* const> namespacesOf( std::uint32_t f ) const
     {
-        const auto lo = std::lower_bound( namespaces.begin(), namespaces.end(), f, []( const Binding* b, std::uint32_t v ) { return b->fileId < v; } );
-        const auto hi = std::upper_bound( lo, namespaces.end(), f, []( std::uint32_t v, const Binding* b ) { return v < b->fileId; } );
-        return { lo, hi };
+        const auto run = std::ranges::equal_range( namespaces, f, std::ranges::less{}, []( const Binding* b ) { return b->fileId; } );
+        return { run.begin(), run.end() };
     }
     // the innermost symbol of `c`'s file whose span strictly holds `c`'s — the class, module or function it is nested in;
     // kNoNode at file scope. Symbol ids ascend by (file, line), so a holder sits before `c` or after it on `c`'s own line.
@@ -722,7 +721,7 @@ struct CallResultTypes
     // "<crate>#<module>", RustLayout::filesOf's key, built in the reused buffer
     const std::string& rustModuleKey( std::uint32_t crate, std::string_view module ) const
     {
-        moduleKey.assign( std::to_string( crate ) ).append( 1, '#' ).append( module );
+        buildShadowKey( moduleKey, crate, module );   // model.h's "<id>#<name>" key, the layout's own spelling
         return moduleKey;
     }
     bool rustModuleExists( std::uint32_t crate, const std::string& module ) const
@@ -996,9 +995,10 @@ struct CallResultTypes
             }
         }
     }
+    // does namespace path `path` start with `head` (`a::b` leads `a::b::c`)
     static bool isPrefixPath( const std::vector<std::string_view>& head, const std::vector<std::string_view>& path ) noexcept
     {
-        return head.size() <= path.size() && std::equal( head.begin(), head.end(), path.begin() );
+        return std::mismatch( head.begin(), head.end(), path.begin(), path.end() ).first == head.end();
     }
     // the namespace- and file-scope usings in force at byte `at` of file `f`: the file's own, declared before `at` in a scope
     // that holds it, and those of every in-tree header `f` includes (transitively) whose namespace path leads to `at`'s
