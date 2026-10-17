@@ -1043,6 +1043,12 @@ public class Use {
         var c = Util.open();
         return c.size();
     }
+
+    // nearOutsideMethodRef: `Util::open` names the imported ext.Util, never lib.Util
+    Object nearOutsideMethodRef() {
+        java.util.function.Supplier<Object> s = Util::open;
+        return s.get();
+    }
 }
 @@@ java3/src/lib/Config.java
 package lib;

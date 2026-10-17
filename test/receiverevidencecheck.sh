@@ -1327,6 +1327,7 @@ done
 #    namesake: the call is not bound to lib.Util.open as proven, and its result types nothing.
 notproven $CR/java3 callees src/app/Use.java:nearOutsideClassReceiver "size src/lib/Config.java:4" "size src/lib/Other.java:4"   # [N]
 notproven $CR/java3 callees src/app/Use.java:nearOutsideClassReceiver "open src/lib/Util.java:4"      # [N] the base false claim
+notproven $CR/java3 callees src/app/Use.java:nearOutsideMethodRef "open src/lib/Util.java:4"          # [N] the method-reference sibling (base false claim)
 
 
 echo "=== (C) conservation: no call silently disappears ==="
