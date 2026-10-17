@@ -24,12 +24,14 @@
 #   G4 --whereis: the local var line is not kind="def"; `sharedName` has exactly one def, the package line
 #   G5 --dead-code: no local name listed (a guard: --dead-code lists functions, so this is green on base too)
 #   R1/R2 Rust map: fn / method / closure const and static absent; crate, mod, impl, trait, trait-impl, extern present
+#   R3 Rust map: a const in a `mod` declared inside a fn body is kept once (an item scope); a const beside it is not
 #   D1/D2 GDScript map: func const absent; script and inner-class const / var present
 #   Z  determinism: two map runs byte-identical
 #
 # Usage: bash test/localdeclcheck.sh [BIN]   (BIN defaults to $RIPWIRE_BIN, then build/ripwire)
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
+. "$ROOT/test/lib/clean-env.sh"   # this gate builds a git repo: GIT_DIR/GIT_WORK_TREE unset (gitenvhermeticcheck D)
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$PWD/$BIN"
 echo "localdeclcheck: BIN=$BIN"
@@ -118,6 +120,11 @@ if run rust; then
     for n in MODULE_LIMIT MODULE_NAME INNER_LIMIT INNER_NAME ASSOC_LIMIT EXTERN_ERRNO; do
         if hasRow var "$n"; then ok "R2 item-scope '$n' present"; else no "R2 item-scope '$n' missing"; fi
     done
+    # R3 a `mod` declared INSIDE a fn body is still an item scope: its const is a real item with a path
+    # (fn_mod::FN_MOD_LIMIT), so it stays indexed — exactly once — while a const beside it in the fn body does not.
+    if printf '%s' "$OUT" | grep -q 'n="BESIDE_MOD_LOCAL"'; then no "R3 fn-body const beside a nested mod is a map symbol"; else ok "R3 fn-body BESIDE_MOD_LOCAL absent"; fi
+    m="$( countOf '<s t="var" n="FN_MOD_LIMIT"' )"
+    if [ "$m" = 1 ]; then ok "R3 const in a mod declared inside a fn: FN_MOD_LIMIT present once"; else no "R3 FN_MOD_LIMIT rows=$m (want 1)"; fi
     t="$( countOf '<s t="var" n="TRAIT_SIDES"' )"
     if [ "$t" = 2 ]; then ok "R2 TRAIT_SIDES: trait and trait-impl both present"; else no "R2 TRAIT_SIDES rows=$t (want 2)"; fi
 fi

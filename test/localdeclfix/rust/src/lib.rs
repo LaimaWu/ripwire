@@ -38,3 +38,11 @@ pub fn fn_local() -> usize {
     };
     FN_LOCAL_LIMIT + FN_LOCAL_NAME.len() + closure() + MODULE_LIMIT
 }
+
+pub fn fn_with_mod() -> usize {
+    const BESIDE_MOD_LOCAL: usize = 5;
+    mod fn_mod {
+        pub const FN_MOD_LIMIT: usize = 7;
+    }
+    fn_mod::FN_MOD_LIMIT + BESIDE_MOD_LOCAL
+}
