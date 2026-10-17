@@ -80,8 +80,21 @@ sit at `d="1"` beside the direct callers and their callers follow. The per-file 
 impact: `rf d="0"` is the defining file, `via="type"` marks a file reached only through a type mention (`by_type=K`
 when K of its symbols are), `type_users=` counts the seeded symbols, `type_defs=K` says when K type definitions share
 the name (mentions are matched by name), and with no `--limit` the listing holds every `d="0"` file and every `d="1"` file a type mention reaches, up to 200.
-Function impacts are byte-identical. Other languages record no type mentions yet (a floor, stated in the legend).
+Every definition inside a Rust `impl` block whose header names the type is a user (rustfmt puts the header on its own
+line, where no definition sits), and a name reached through a standard-library path (Rust `std::`, `core::`, `alloc::`;
+C++ `std::`) is that library's type, so a local `Error` or `vector` no longer counts `std::io::Error` or `std::vector`
+users. Function impacts are byte-identical. Other languages record no type mentions yet (a floor, stated in the legend).
 Gate: `test/impacttypecheck.sh`.
+
+### Changed — `--callers` and `--callees` serve up to 50 rows whole, and a capped `--callers` page names the next page
+
+With no `--limit`, a call hierarchy of 41 to 50 rows is served whole instead of cut at 40 (`src/pageview.h`
+`kCallHierarchyBandMax`, 40 + 40/4); above 50 the 40-row window holds. A cut `--callers` root's `next=` is now the next
+page (`--callers=SYM --offset=40`, the selector quoted as one argument, `--limit` and `--format=columnar` replayed), and
+the `--uses` follow-up it used to name moves to `uses_next=`; the last page, an uncut answer and `--callees` (whose
+`next=` stays `--expand`) are unchanged. MCP `find_symbol` and `find_referencing_symbols` window each array the same way,
+and `find_referencing_symbols` carries the page in `next` and the uses follow-up in `uses_next`. `--impact`, `--owners`
+and `--edit-check` windows keep the plain 40. Gate: `test/neighbourcapcheck.sh` arms 14-21.
 
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 

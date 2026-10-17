@@ -222,6 +222,84 @@ mk rs/fnonly.rs <<'EOF'
 pub fn plain( x: i32 ) -> i32 { x + 1 }
 EOF
 
+# rsimpl/: a trait and a struct whose `impl` headers sit on their own line (the rustfmt shape): the header names the type,
+# but no indexed definition covers that line — the methods inside the block are the users.
+mk rsimpl/lib.rs <<'EOF'
+pub trait Shape {
+    fn area(&self) -> i32;
+}
+
+pub struct Sq {
+    s: i32,
+}
+
+impl Shape for Sq {
+    fn area(&self) -> i32 {
+        self.s * self.s
+    }
+}
+
+impl Sq {
+    fn side(&self) -> i32 {
+        self.s
+    }
+}
+EOF
+mk rsimpl/tri.rs <<'EOF'
+use crate::Shape;
+pub struct Tri {
+    b: i32,
+}
+
+impl Shape for Tri {
+    fn area(&self) -> i32 {
+        self.b / 2
+    }
+}
+EOF
+mk rsimpl/empty.rs <<'EOF'
+pub struct Marker;
+impl crate::Shape for Marker {}
+EOF
+
+# rsstd/ cppstd/: a local type named like a standard-library type. A path rooted at the standard library (std::io::Error,
+# std::fmt::Error, std::vector) never names the in-tree type; a crate-rooted or bare spelling does.
+mk rsstd/lib.rs <<'EOF'
+pub struct Error {
+    code: i32,
+}
+
+pub fn read_it() -> std::io::Error {
+    std::io::Error::other("x")
+}
+
+pub fn fmt_it(e: &std::fmt::Error) -> i32 {
+    0
+}
+
+pub fn core_it(e: core::fmt::Error) -> i32 {
+    0
+}
+
+pub fn mine(e: &Error) -> i32 {
+    e.code
+}
+
+pub fn via_crate(e: &crate::Error) -> i32 {
+    e.code
+}
+EOF
+mk cppstd/v.h <<'EOF'
+struct vector { int n; };
+EOF
+mk cppstd/use.cpp <<'EOF'
+#include "v.h"
+int sum_std( const std::vector<int>& v ) { return 0; }
+int sum_chrono( std::chrono::duration<int> d ) { return 0; }
+int mine( const vector& v ) { return v.n; }
+int via_global( const ::vector& v ) { return v.n; }
+EOF
+
 mk py/cell.py <<'EOF'
 class Cell:
     x = 1
@@ -429,6 +507,39 @@ if fa.get("files") == "26" and fa.get("shown_files") == "20" and fa.get("files_c
     ok("(18) constructor-only callers: files=26 shown_files=20 files_capped=1 type_users=0 (the band is the type-reached files only)")
 else:
     no("(18) callband files %r" % fa)
+
+# (20) Rust impl blocks: a multi-line `impl Shape for Sq {` / `impl Sq {` header names the type on a line no indexed
+# definition covers; the methods inside the block are the users (same file and another file), and an empty impl block
+# still lists its file
+d20 = run("rsimpl", "--impact=Shape")
+r20, s20 = rf(d20), srows(d20)
+areas = [d for n, d in s20 if n == "area" and d == "1"]
+if len(areas) >= 2 and r20.get("tri.rs", {}).get("via") == "type" and r20.get("tri.rs", {}).get("syms", "0") != "0" and "empty.rs" in r20:
+    ok("(20) --impact=Shape: both impl methods `area` at d=1 (lib.rs and tri.rs), tri.rs via=type syms=%s, empty.rs listed" % r20["tri.rs"].get("syms"))
+else:
+    no("(20) --impact=Shape rows %r rf %r" % (s20, r20))
+d20b = run("rsimpl", "--impact=Sq")
+s20b = dict(srows(d20b))
+if s20b.get("side") == "1" and s20b.get("area") == "1":
+    ok("(20b) --impact=Sq: the inherent impl's side and the trait impl's area at d=1")
+else:
+    no("(20b) --impact=Sq rows %r" % srows(d20b))
+
+# (21) a standard-library path never names the in-tree namesake: std::io::Error / std::fmt::Error / core::fmt::Error and
+# std::vector / std::chrono::duration are not users; a bare, crate-rooted or global-rooted spelling is
+d21 = run("rsstd", "--impact=Error")
+s21 = dict(srows(d21))
+fe = re.search(r"<files [^>]*>", d21)
+if s21.get("mine") == "1" and s21.get("via_crate") == "1" and not ({"read_it", "fmt_it", "core_it"} & set(s21)) and fe and 'type_users="2"' in fe.group(0):
+    ok("(21) Rust --impact=Error: mine and via_crate at d=1, no std/core-path function, type_users=\"2\"")
+else:
+    no("(21) Rust --impact=Error rows %r files %r" % (srows(d21), fe and fe.group(0)))
+d21b = run("cppstd", "--impact=vector")
+s21b = dict(srows(d21b))
+if s21b.get("mine") == "1" and s21b.get("via_global") == "1" and not ({"sum_std", "sum_chrono"} & set(s21b)):
+    ok("(21b) C++ --impact=vector: mine and via_global at d=1, no std:: parameter")
+else:
+    no("(21b) C++ --impact=vector rows %r" % srows(d21b))
 
 # (16) determinism
 (ok if run("c", "--impact=cell") == run("c", "--impact=cell") else no)("(16) two runs byte-identical")

@@ -79,6 +79,30 @@ inline constexpr TypeMentionRow kTypeParamScopeRows[] = {
     { Lang::Java,       "(_ type_parameters: (type_parameters (type_parameter (type_identifier) @t))) @s" },
 };
 
+// One row per language whose standard library is spelled by a path root: a type named through it (Rust `std::io::Error`,
+// `core::fmt::Error`, `alloc::…`; C++ `std::vector`, `std::pmr::vector`) is the library's type, never an in-tree namesake,
+// so its name segment shadows like a type parameter. Any other qualified spelling (`crate::Error`, `ns::Widget`) is still
+// matched by its last segment (the legend says so).
+inline constexpr TypeMentionRow kStdPathShadowRows[] = {
+    { Lang::Rust, "(scoped_type_identifier path: (_) @r name: (type_identifier) @t) (#match? @r \"^(std|core|alloc)(::|$)\")" },
+    { Lang::Cpp,  "(qualified_identifier scope: (namespace_identifier) @r name: [(type_identifier) @t (template_type name: (type_identifier) @t) "
+                  "(qualified_identifier name: [(type_identifier) @t (template_type name: (type_identifier) @t)])]) (#eq? @r \"std\")" },
+};
+
+// One row per language whose methods live in a block that names the type in its HEADER (Rust `impl Shape for Sq {`,
+// `impl Sq {`). rustfmt puts the header on its own line, which no indexed definition covers, so the mention there names no
+// user; instead every definition inside the block (@s) is one: it implements or extends the type, and a change to the
+// type reaches it. A header spelled through a path (`impl crate::Shape for X`) is matched only when the path is rooted at
+// the crate (crate/self/super); any other path keeps its file-scope mention (the file is listed with syms="0").
+inline constexpr TypeMentionRow kTypeBlockRows[] = {
+    { Lang::Rust, "(impl_item trait: [(type_identifier) @t (generic_type type: (type_identifier) @t)]) @s" },
+    { Lang::Rust, "(impl_item type: [(type_identifier) @t (generic_type type: (type_identifier) @t)]) @s" },
+    { Lang::Rust, "(impl_item trait: [(scoped_type_identifier path: (_) @p name: (type_identifier) @t) "
+                  "(generic_type type: (scoped_type_identifier path: (_) @p name: (type_identifier) @t))]) @s (#match? @p \"^(crate|self|super)(::|$)\")" },
+    { Lang::Rust, "(impl_item type: [(scoped_type_identifier path: (_) @p name: (type_identifier) @t) "
+                  "(generic_type type: (scoped_type_identifier path: (_) @p name: (type_identifier) @t))]) @s (#match? @p \"^(crate|self|super)(::|$)\")" },
+};
+
 // The name a type mention spells: the final segment of a definition's name (`ns::Widget` → `Widget`). Empty when that
 // segment is not a plain identifier, which the #eq? literal could not carry safely — the tier then stays unarmed.
 inline std::string_view typeMentionName( std::string_view name ) noexcept
@@ -146,12 +170,14 @@ inline TypeUseTier typeUseTier( const IngestResult& ing, std::span<const NodeId>
 
     // One spec per DISTINCT pattern; the spec's tag is the pattern itself, so a hit is matched back to its rows.
     // specLangs[i] holds one bit per Lang whose row names spec i's pattern — a hit counts only in those languages.
-    // The type-parameter scopes ride the same walk; specScope[i] marks them (their hits shadow, never name a user).
+    // The type-parameter scopes and standard-library paths ride the same walk; specRole[i] marks them (their hits
+    // shadow, never name a user), and the impl blocks (their hits name every definition inside the block).
+    enum class SpecRole : char { Mention, Shadow, Block };
     std::vector<AstQuerySpec>  specs;
     std::vector<std::uint64_t> specLangs;
-    std::vector<char>          specScope;
+    std::vector<SpecRole>      specRole;
     static_assert( kLangCount <= 64, "specLangs keeps one bit per Lang" );
-    const auto addRow = [ & ]( const TypeMentionRow& row, bool scope )
+    const auto addRow = [ & ]( const TypeMentionRow& row, SpecRole role )
     {
         const auto at = std::find_if( specs.begin(), specs.end(), [ & ]( const AstQuerySpec& sp ) { return sp.tag == row.node; } );
         const std::size_t i = std::size_t( at - specs.begin() );
@@ -159,12 +185,14 @@ inline TypeUseTier typeUseTier( const IngestResult& ing, std::span<const NodeId>
         {
             specs.push_back( AstQuerySpec{ "(" + std::string( row.node ) + " (#eq? @t \"" + name + "\"))", std::string( row.node ) } );
             specLangs.push_back( 0 );
-            specScope.push_back( char( scope ) );
+            specRole.push_back( role );
         }
         specLangs[i] |= std::uint64_t( 1 ) << static_cast<unsigned>( row.lang );
     };
-    for( const TypeMentionRow& row : kTypeMentionRows ) { addRow( row, false ); }
-    for( const TypeMentionRow& row : kTypeParamScopeRows ) { addRow( row, true ); }
+    for( const TypeMentionRow& row : kTypeMentionRows ) { addRow( row, SpecRole::Mention ); }
+    for( const TypeMentionRow& row : kTypeParamScopeRows ) { addRow( row, SpecRole::Shadow ); }
+    for( const TypeMentionRow& row : kStdPathShadowRows ) { addRow( row, SpecRole::Shadow ); }
+    for( const TypeMentionRow& row : kTypeBlockRows ) { addRow( row, SpecRole::Block ); }
     AstQueryGroup group;
     group.specs       = &specs;
     group.maxMatches  = kTypeMentionMatchBudget;
@@ -192,7 +220,7 @@ inline TypeUseTier typeUseTier( const IngestResult& ing, std::span<const NodeId>
         if( ( specLangs[i] & langBit ) != 0 )
         {
             specOf[h] = i;
-            if( specScope[i] != 0 ) { shadows.push_back( &m ); }
+            if( specRole[i] == SpecRole::Shadow ) { shadows.push_back( &m ); }
         }
     }
     const auto shadowed = [ & ]( const AstMatch& m )
@@ -203,9 +231,26 @@ inline TypeUseTier typeUseTier( const IngestResult& ing, std::span<const NodeId>
     for( std::size_t h = 0; h < got[0].size(); ++h )
     {
         const AstMatch& m = got[0][h];
-        if( specOf[h] == specs.size() || specScope[specOf[h]] != 0 || shadowed( m ) )
+        if( specOf[h] == specs.size() || specRole[specOf[h]] == SpecRole::Shadow || shadowed( m ) )
         {
-            continue;   // another grammar's compile, a scope row itself, or a mention of a same-named type PARAMETER
+            continue;   // another grammar's compile, a shadow row itself, a same-named type PARAMETER or a std-path name
+        }
+        if( specRole[specOf[h]] == SpecRole::Block )
+        {
+            // Every definition inside the block is a user (the @t / @p captures are a name and a path: none fits there).
+            // A linear pass over the file's definitions per block hit: a file holds few impl blocks naming one type.
+            if( m.fileId < lines.byFile.size() )
+            {
+                for( const NodeId id : lines.byFile[m.fileId] )
+                {
+                    const Symbol& sym = ing.symbols[id];
+                    if( !isSeed[id] && sym.sigStartByte >= m.startByte && sym.endByte <= m.endByte && sym.sigStartByte < sym.endByte )
+                    {
+                        tier.users.push_back( id );
+                    }
+                }
+            }
+            continue;
         }
         const NodeId host = flipimpact::innermostAtLine( ing, lines, m.fileId, m.line );
         if( host == kNoNode )

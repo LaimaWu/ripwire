@@ -60,6 +60,7 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
+echo "impactpartitioncheck: BIN=$BIN"
 
 cd "$ROOT"
 

@@ -898,10 +898,12 @@ inline std::string impactTypeRollupLegend( const ImpactRollupTypeClauses& t )
 {
     std::string out = "TYPE IMPACT (of= is a class, struct, named type or interface): the walk also starts from every symbol that NAMES it, "
                       "read by the parser in a type position (a declaration, parameter, field, return type, cast, template argument, base or "
-                      "implements clause; TS/JS also instanceof and extends; Python annotations and base classes), so d=1 holds those beside "
+                      "implements clause; TS/JS also instanceof and extends; Python annotations and base classes; every definition inside a Rust impl block "
+                      "whose header names it), so d=1 holds those beside "
                       "its callers and their callers follow; type_users= counts them. rf d=\"0\": the file defining of=; via=\"type\": every "
                       "reached symbol there is reached only through a type mention (with syms=\"0\": the file names the type outside every "
-                      "indexed definition); by_type=K: K of its syms= are. With no limit= the listing holds every d=\"0\" file and every d=\"1\" file a type mention reaches (up to 200), then cuts as above. A mention is matched by its spelled name; inside a generic that declares a "
+                      "indexed definition); by_type=K: K of its syms= are. With no limit= the listing holds every d=\"0\" file and every d=\"1\" file a type mention reaches (up to 200), then cuts as above. A mention is matched by its spelled name (a qualified one by its last segment); a name reached through a "
+                      "standard-library path (Rust std::, core::, alloc::; C++ std::) is that library's type and is skipped; inside a generic that declares a "
                       "type parameter of that name (C++, Rust, TS, Go, Java) the name is the parameter and is skipped. Captured for C, C++, ObjC, "
                       "Go, Rust, Java, TS/JS and Python; other languages add no type users, nor do a Python string annotation (\"Cell\"), "
                       "a qualified Python base (mod.Base) or a Go type that satisfies an interface implicitly (no clause names it): floors. ";
