@@ -32,7 +32,7 @@
 # Corpus test/attribmultideffix (in-tree, outside test/fixture); the stand-in dir per known-items row in [brackets]:
 #   cpp/  [ninja-07] StringPiece::empty vs EvalString::empty (UsesPiece/UsesEval/UsesBoth, DrivePiece/DriveEval at depth 2
 #         in their own files; UsesStd, a std::string::empty confounder), [ninja-26] ManifestParser::ParseDefault (decl +
-#         def) calling the CanonicalizePath overload pair (a split call), near misses in fmt.{h,cc}: Fmt::put overloads in
+#         def) calling the CanonicalizePath overload pair (proven by arity since train 29) and the Normalize pair (a split call), near misses in fmt.{h,cc}: Fmt::put overloads in
 #         ONE class (split), outer::run vs outer::inner::run (nested namespace), Box<T>::get vs the Box<int>
 #         specialisation; ReadPath decl + def; detail.{h,cc}: a::detail::tally declared, b::detail::tally defined (same
 #         leaf scope, another chain: a foreign declaration).
@@ -274,27 +274,39 @@ if mcp a_mcps cpp calledBy find_symbol '"symbol":"empty"'; then
         "[P] a_mcps: def_table rows=$( groups a_mcps ), want 2"
 fi
 
-# ── (B) ninja-26 shape, C++ callees: a declaration + its definition = ONE group; the split overload arms are hedged ──
-echo "(B) C++ --callees=ParseDefault (decl + def; CanonicalizePath overload split)"
+# ── (B) ninja-26 shape, C++ callees: a declaration + its definition = ONE group; a split overload's arms are hedged ──
+# train 29 (arity-min): the ninja-26 call `CanonicalizePath(&path, &bits)` passes 2 arguments, so the resolver now drops the
+# 3-parameter overload (test/aritycheck.sh section 3b) and the call is PROVEN — it no longer serves as this gate's split. The split
+# premise moved to `Normalize(&path)`: two 1-parameter overloads arity cannot tell apart, declared in util.h, defined in util.cc.
+echo "(B) C++ --callees=ParseDefault (decl + def; CanonicalizePath proven by arity, Normalize overload split)"
 if ans b_cpp cpp callees s xml -- --callees=ParseDefault; then
     plain N b_cpp split
-    for n in CanonicalizePath; do
+    for n in Normalize; do
         n_split="$( awk -F'\t' -v n="$n" '$1=="ROW" && $2==n && $4 ~ /prov=split/' "$DIR/b_cpp.rows" | wc -l | tr -d ' ' )"
-        [ "$n_split" = 2 ]; say $? "[P] b_cpp: both CanonicalizePath arms carry prov=\"split\"" \
-            "[P] b_cpp: $n_split of 2 CanonicalizePath rows carry prov=\"split\""
+        [ "$n_split" = 2 ]; say $? "[P] b_cpp: both $n arms carry prov=\"split\"" \
+            "[P] b_cpp: $n_split of 2 $n rows carry prov=\"split\""
     done
-    for n in empty ReadPath; do
+    for n in empty ReadPath CanonicalizePath; do
         [ -z "$( rowflags b_cpp "$n" )" ]; say $? "[N] b_cpp: proven callee $n carries no hedge" \
             "[N] b_cpp: proven callee $n hedged '$( rowflags b_cpp "$n" )'"
     done
+    n_canon="$( awk -F'\t' '$1=="ROW" && $2=="CanonicalizePath"' "$DIR/b_cpp.rows" | wc -l | tr -d ' ' )"
+    [ "$n_canon" = 1 ]; say $? "[N] b_cpp: CanonicalizePath lists ONE overload (the 3-parameter one cannot take 2 arguments)" \
+        "[N] b_cpp: CanonicalizePath lists $n_canon overload rows, want 1"
 fi
 if ans b_cpp2 cpp callers s xml -- --callers=CanonicalizePath; then
     # two overloads, each declared in util.h and defined in util.cc: the declarations fold into their definitions
     [ "$( groups b_cpp2 )" = 2 ]; say $? "[N] b_cpp2: two groups (each util.h declaration folds into its util.cc definition)" \
         "[N] b_cpp2: <def> rows=$( groups b_cpp2 ), want 2"
-    hedged P b_cpp2 ParseDefault "util.cc:2 util.cc:6"
+    # ParseDefault's 2-argument call binds the 2-parameter overload alone, proven (it was hedged over both before train 29)
+    expect N b_cpp2 ParseDefault util.cc:2
     # the string* overload's own call passes three arguments: the resolver binds it to the 3-parameter overload, proven
     expect N b_cpp2 CanonicalizePath util.cc:6
+fi
+if ans b_norm cpp callers s xml -- --callers=Normalize; then
+    [ "$( groups b_norm )" = 2 ]; say $? "[N] b_norm: two groups (each util.h declaration folds into its util.cc definition)" \
+        "[N] b_norm: <def> rows=$( groups b_norm ), want 2"
+    hedged P b_norm ParseDefault "util.cc:9 util.cc:12"
 fi
 if ans b_rp cpp callers s xml -- --callers=ReadPath; then plain N b_rp; fi
 # UsesPiece is declared in piece_user.cc with no #include that ties it to parser.cc's definition: the identity rule answers
@@ -654,15 +666,15 @@ cmp -s "$DIR/g_det.out" "$DIR/a_cpp.out"; say $? "[C] determinism: --callers=emp
 
 # [S] train 28 (for-body-slot x attrib-multidef): the --for body slot's <calls> rows label a split arm prov="split" as every
 # other --for body does. "how does ManifestParser ParseDefault work" picks ParseDefault as the slot owner (pick="name"), and
-# its CanonicalizePath call is the fixture's split call: the hop row already carried prov="split"; the slot body's two
-# <c n="CanonicalizePath"> rows did not before the fix (the same arm read as a plain callee there).
+# its Normalize call is the fixture's split call (CanonicalizePath until train 29 made that call proven by arity): the hop row already carried prov="split"; the slot body's two
+# <c n="..."> split rows did not before the fix (the same arm read as a plain callee there).
 ( cd "$FIX/cpp" && "$BIN" . --no-cache --for="how does ManifestParser ParseDefault work" ) >"$DIR/s_slot.out" 2>/dev/null; s_rc=$?
 s_counts="$( python3 -c '
 import re, sys
 d = open( sys.argv[ 1 ], encoding="utf-8", errors="replace" ).read()
 m = re.search( r"<bodies [^>]*pick=\"name\"[^>]*>(.*?)</bodies>", d, re.S )
 if not m: print( "none" ); sys.exit( 0 )
-rows = re.findall( r"<c n=\"CanonicalizePath\"[^>]*>", m.group( 1 ) )
+rows = re.findall( r"<c n=\"Normalize\"[^>]*>", m.group( 1 ) )
 legend = d.split( "<sigs", 1 )[ 0 ]
 print( len( rows ), sum( "prov=\"split\"" in r for r in rows ), int( "c prov=split" in legend or "prov=\"split\" on a <c> row" in legend ) )
 ' "$DIR/s_slot.out" )"
@@ -670,8 +682,8 @@ if [ "$s_rc" -ne 0 ] || [ "$s_counts" = none ] || [ -z "$s_counts" ]; then
     no "[S] premise: the slot did not ride (rc=$s_rc, no <bodies pick=\"name\">)"
 else
     read -r s_all s_split s_leg <<<"$s_counts"
-    if [ "$s_all" -ge 1 ] && [ "$s_split" = "$s_all" ]; then ok "[S] the body slot labels its $s_all CanonicalizePath split-arm row(s) prov=\"split\""
-    else no "[S] the body slot's CanonicalizePath rows: $s_split of $s_all carry prov=\"split\""; fi
+    if [ "$s_all" -ge 1 ] && [ "$s_split" = "$s_all" ]; then ok "[S] the body slot labels its $s_all Normalize split-arm row(s) prov=\"split\""
+    else no "[S] the body slot's Normalize rows: $s_split of $s_all carry prov=\"split\""; fi
     if [ "$s_leg" = 1 ]; then ok "[S] the header defines the split reading the slot's rows use"
     else no "[S] no split reading in the header of an answer that labels a split arm"; fi
 fi
@@ -686,13 +698,13 @@ try: t = json.loads( open( sys.argv[ 1 ] ).read() )[ "result" ][ "content" ][ 0 
 except Exception: print( "none" ); sys.exit( 0 )
 m = re.search( r"<bodies [^>]*pick=\"name\"[^>]*>(.*?)</bodies>", t, re.S )
 if not m: print( "none" ); sys.exit( 0 )
-rows = re.findall( r"<c n=\"CanonicalizePath\"[^>]*>", m.group( 1 ) )
+rows = re.findall( r"<c n=\"Normalize\"[^>]*>", m.group( 1 ) )
 print( len( rows ), sum( "prov=\"split\"" in r for r in rows ), t.count( "prov=\"split\" on a <c> row" ) )
 ' "$DIR/s_mcp.out" )"
 if [ "$s_mcp" = none ] || [ -z "$s_mcp" ]; then no "[S] MCP premise: no slot body in the MCP for answer"
 else
     read -r m_all m_split m_def <<<"$s_mcp"
-    if [ "$m_all" -ge 1 ] && [ "$m_split" = "$m_all" ] && [ "$m_def" = 1 ]; then ok "[S] MCP for: the slot's $m_all CanonicalizePath rows carry prov=\"split\", the reading defined once"
+    if [ "$m_all" -ge 1 ] && [ "$m_split" = "$m_all" ] && [ "$m_def" = 1 ]; then ok "[S] MCP for: the slot's $m_all Normalize rows carry prov=\"split\", the reading defined once"
     else no "[S] MCP for: $m_split of $m_all rows carry prov=\"split\", the reading defined $m_def time(s) (want all, once)"; fi
 fi
 # [S2] (CR pre-pass A): a spent soft target serves the hops cut marker and no row carries prov="split", so the present-only

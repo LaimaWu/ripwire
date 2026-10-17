@@ -43,6 +43,7 @@ struct RawDef
     std::uint16_t ev        = 0;   // essential complexity, a FLOOR (see model.h Symbol::ev); 0 outside evCountedLang
     std::array<std::uint8_t, kEvWhyTagCount> evWhy{};   // per-tag contributing-jump counts (model.h kEvWhyTagTable)
     std::uint16_t params    = 0;   // Q4: parameter count (from the def's parameter-list child); fns/methods
+    std::uint16_t paramsMin = 0;   // B2.2: the fewest arguments a call can pass (params − defaulted); 0 = no lower bound known
     std::uint8_t  maxNest   = 0;   // Q4: max control-structure nesting depth inside the def (from cc_walk)
     std::uint8_t  arityExact = 0;  // B2.2: 1 ⇒ params is a fixed call-comparable arity (no variadic/default, not implicit-self)
     std::uint8_t  testScope = 0;   // L8: 1 ⇒ an IN-FILE test convention encloses this def (see inFileTestScope)
@@ -140,7 +141,11 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 32;           // 32: train 28 — the RefRole byte a record holds gained two appended values: lane
+constexpr std::uint32_t kCacheVersion = 34;           // 34: train 29 — lane arity-min's paramsMin def field (its branch used 33, as did lane
+                                                      //    call-result-typing's; 34 sits above both, so no blob a branch build wrote is read here).
+                                                      // 33: train 29 lane arity-min — a def record appends `paramsMin` (u32 after params:
+                                                      //    the fewest arguments a call can pass) — a FORMAT change → reject v32 blobs. The train renumbers.
+                                                      // 32: train 28 — the RefRole byte a record holds gained two appended values: lane
                                                       //    ruby-pair's Subscript (9) and PR #380's Inert (10; 9 on the PR's branch, which predates
                                                       //    Subscript). readRef validates the byte against kRefRoleCount, so no record changes
                                                       //    shape, but a branch build's blob would read its role 9 as the other role here; 32
@@ -325,10 +330,15 @@ constexpr std::uint32_t kCacheVersion = 32;           // 32: train 28 — the Re
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 182;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 184;          // bump on any grammar/.scm/extraction change
+                                                      // 184 = 2026-10-17 (train 29): strictly above every number a train-29 binary used — lane arity-min 178
+                                                      //   (rich 179), lane call-result-typing 180 (rich 181; carried to train 30), lane go-scope 182 (rich 183);
+                                                      //   the other train-29 lanes kept 176. Rich file tag 185. kCacheVersion 34 (see its note).
                                                       // 182 = 2026-10-16 (train 29 reservation L5 go-scope, #403; the train renumbers): Go methods
                                                       //   carry their receiver type as scope and interface members their interface's name
                                                       //   (ingest_names.h kScopeOwners), so Go canonical ids change. Rich file tag 183.
+                                                      // 178 = train 29 lane arity-min (reservation 178, rich 179; the train renumbers): defs extract
+                                                      //   paramsMin (cc_paramShape + kParamMinLangs) for the B2.2 minimum-arity exclusion.
                                                       // 176 = 2026-10-15 (train 28): strictly above every number a train-28 binary used — main 173
                                                       //   (slice 4a, rich 174), lane grep-carrier 173 (value refs through ?? || && / or and, rich 174),
                                                       //   lane ruby-pair 174 (subscript references + Ruby main-object mixins, rich 175), PR #380 145 (Elixir inert
@@ -2254,7 +2264,7 @@ inline unsigned lexDictIndexWidth( std::size_t dictCount ) noexcept
 }
 inline void writeDef( ByteW& w, const RawDef& d, bool withLex, std::size_t fileDictCount, const std::uint32_t* rowDictIndex )
 {
-    w.u32( d.line ); w.u32( d.startByte ); w.u32( d.endByte ); w.u32( d.nameByte ); w.u32( d.bodyByte ); w.u32( d.cx ); w.u32( d.ccx ); w.u32( d.loc ); w.u32( d.locals ); w.u32( d.ppAlt ); w.u32( d.humps ); w.u32( d.deepLoc ); w.u32( d.ev ); w.u32( d.params ); w.u8( d.maxNest ); w.u8( d.arityExact ); w.u8( d.testScope ); w.u8( d.recovered ); w.u8( d.internalLinkage ); w.u8( d.scopeRootsStd ); w.u32( d.fnScopeStart ); w.u32( d.fnScopeEnd ); w.u8( std::uint8_t( d.kind ) ); w.u8( std::uint8_t( d.lang ) ); w.str( d.name ); w.str( d.scope );
+    w.u32( d.line ); w.u32( d.startByte ); w.u32( d.endByte ); w.u32( d.nameByte ); w.u32( d.bodyByte ); w.u32( d.cx ); w.u32( d.ccx ); w.u32( d.loc ); w.u32( d.locals ); w.u32( d.ppAlt ); w.u32( d.humps ); w.u32( d.deepLoc ); w.u32( d.ev ); w.u32( d.params ); w.u32( d.paramsMin ); w.u8( d.maxNest ); w.u8( d.arityExact ); w.u8( d.testScope ); w.u8( d.recovered ); w.u8( d.internalLinkage ); w.u8( d.scopeRootsStd ); w.u32( d.fnScopeStart ); w.u32( d.fnScopeEnd ); w.u8( std::uint8_t( d.kind ) ); w.u8( std::uint8_t( d.lang ) ); w.str( d.name ); w.str( d.scope );
     for( const std::uint8_t tagCount : d.evWhy ) { w.u8( tagCount ); }   // 8×u8, fixed order (model.h kEvWhyTagTable)
     if( withLex )
     {
@@ -2363,7 +2373,7 @@ inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8
 // verifyCacheRecordMinimaTripwire() below derives these
 // same numbers from the REAL writer functions at runtime so the next field added to writeDef/writeRef
 // can't silently stale them.
-inline constexpr std::size_t kMinDefRecordBytesLean      = 88;   // 16×u32 + 16×u8 + 2×str(len u32, empty)
+inline constexpr std::size_t kMinDefRecordBytesLean      = 92;   // 17×u32 + 16×u8 + 2×str(len u32, empty) (paramsMin u32: 88 -> 92, kCacheVersion 33)
 inline constexpr std::size_t kMinDefRecordBytesRichExtra =  9;   // v10 rich withLex extra: dlWeighted u32 + tokenCount u32 + tfWidth u8
 inline constexpr std::size_t kMinRefRecordBytes          = 59;   // 3×u32 + 11×u8 + 9×str(len u32, empty)
 
@@ -2393,7 +2403,7 @@ inline void verifyCacheRecordMinimaTripwire() noexcept
 
 inline RawDef readDef( ByteR& r, bool withLex, const std::vector<std::uint64_t>& fileDict )
 {
-    RawDef d; d.line = r.u32(); d.startByte = r.u32(); d.endByte = r.u32(); d.nameByte = r.u32(); d.bodyByte = r.u32(); d.cx = r.u32(); d.ccx = r.u32(); d.loc = r.u32(); d.locals = r.u32(); d.ppAlt = r.u16Of32(); d.humps = r.u16Of32(); d.deepLoc = r.u16Of32(); d.ev = r.u16Of32(); d.params = r.u16Of32(); d.maxNest = r.u8(); d.arityExact = r.u8(); d.testScope = r.u8(); d.recovered = r.u8(); d.internalLinkage = r.u8(); d.scopeRootsStd = r.u8(); d.fnScopeStart = r.u32(); d.fnScopeEnd = r.u32(); d.kind = r.enumU8<SymKind>( kSymKindCount ); d.lang = r.enumU8<Lang>( kLangCount ); d.name = r.str(); d.scope = r.str();
+    RawDef d; d.line = r.u32(); d.startByte = r.u32(); d.endByte = r.u32(); d.nameByte = r.u32(); d.bodyByte = r.u32(); d.cx = r.u32(); d.ccx = r.u32(); d.loc = r.u32(); d.locals = r.u32(); d.ppAlt = r.u16Of32(); d.humps = r.u16Of32(); d.deepLoc = r.u16Of32(); d.ev = r.u16Of32(); d.params = r.u16Of32(); d.paramsMin = r.u16Of32(); d.maxNest = r.u8(); d.arityExact = r.u8(); d.testScope = r.u8(); d.recovered = r.u8(); d.internalLinkage = r.u8(); d.scopeRootsStd = r.u8(); d.fnScopeStart = r.u32(); d.fnScopeEnd = r.u32(); d.kind = r.enumU8<SymKind>( kSymKindCount ); d.lang = r.enumU8<Lang>( kLangCount ); d.name = r.str(); d.scope = r.str();
     for( std::uint8_t& tagCount : d.evWhy ) { tagCount = r.u8(); }   // mirrors writeDef's fixed 8×u8 order
     if( withLex && r.ok )
     {

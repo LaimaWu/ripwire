@@ -38,6 +38,10 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   text that moved is the kParserVer declaration (and its quality.h mirror): 176 -> 182 (Go methods scope to their receiver
 #   type, interface members to their interface, so the cached def facts change; 182 / rich 183 is train 29's L5 reservation,
 #   the train renumbers). kCacheVersion 32 and kQSnapCacheScheme 21 are unchanged.
+# 2026-10-16, lane/arity-min (train 29): RE-PINNED with UPDATE_GOLDEN=1. The only watched text that moved is the kParserVer
+#   declaration 176 -> 178 (reservation 178 / rich 179; the train renumbers) and kCacheVersion 32 -> 33 (a def record gains
+#   paramsMin, the fewest arguments a call can pass), quality.h's two mirrors with them. kQSnapCacheScheme 21 is unchanged: what a
+#   cached Snapshot represents is the same, and the two versions already key every extraction fact it holds.
 # 2026-10-15, train 28 (grep-carrier, ruby-pair, qd-memory-degrade, githarden-speed, git-child-hardening, PR #380, forbudget-soft,
 #   for-body-slot, attrib-multidef, declined-sites merged onto main 1bcb6540): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged
 #   tree (hash 279718355d…5ba2db). Watched text: kParserVer 173 -> 176 (main's slice 4a 173 / rich 174, lane grep-carrier 173,

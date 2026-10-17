@@ -2267,7 +2267,11 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                                                                               : paramCountOf( metricNode, literalBound ) ) : std::uint16_t( 0 );
             // LB-E: a testmacroblock's parameter surface is the MACRO's business, not visible here — claim
             // inexact so the resolver's arity narrowing never trusts params=0 on a test-title symbol.
-            d.arityExact = ( fnOrMethod && !isTestMacroBlock && le.lang != Lang::Clojure ) ? std::uint8_t( cc_paramArityExact( metricNode, le.lang, kind ) ? 1 : 0 ) : std::uint8_t( 0 );   // B2.2
+            // B2.2: the fixed-arity bit and the minimum (fewest arguments a call can pass) come from ONE scan of the list.
+            // A minimum above the counted params (a literal-bound bare parameter countParams cannot see) is not trusted.
+            const ParamShape shape = ( fnOrMethod && !isTestMacroBlock && le.lang != Lang::Clojure ) ? cc_paramShape( metricNode, le.lang, kind, src ) : ParamShape{};
+            d.arityExact = shape.exact ? std::uint8_t( 1 ) : std::uint8_t( 0 );
+            d.paramsMin  = shape.minimum <= d.params ? shape.minimum : std::uint16_t( 0 );
             // L8: the in-file test-scope bit, for EVERY kind (a `#[cfg(test)] mod` and a `class TestFoo`
             // are themselves symbols, and dropping the members while keeping the shell would be a worse
             // answer than either). Runs on defNode, whose ancestors are the enclosing scopes.
@@ -2358,7 +2362,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                     d.name = elixirFunctionName( nameTxt, d.params );
                     // B2.2 for Elixir: a clause's arity IS its parameter count (no variadic form), so `params`
                     // is call-comparable unless a `\\` default widens the callable to more than one arity.
-                    // cc_paramArityExact's language gate leaves this at 0, which made every Elixir caller
+                    // cc_paramShape's language gate leaves this at 0, which made every Elixir caller
                     // unflaggable by --edit-check (test/elixirnamearitycheck.sh arm C: run(x) -> run(x, y)
                     // must flag run(x) callers; run(x, y \\ 1) must flag none).
                     d.arityExact = elixirHeadDefaultCount( roleNode, src ) == 0 ? std::uint8_t( 1 ) : std::uint8_t( 0 );

@@ -2335,10 +2335,14 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 32;   // MUST equal ingest.cpp's kCacheVersion (gated); 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 182;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 34;   // MUST equal ingest.cpp's kCacheVersion (gated); 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
+constexpr std::uint32_t kIngestParserVerMirror    = 184;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 184 = 2026-10-17 (train 29: above arity-min 178/179, call-result-typing
+                                                          //   180/181, go-scope 182/183; see the kParserVer note)
                                                           // 182 = 2026-10-16 (train 29 L5 go-scope reservation, #403: Go method /
                                                           //   interface-member scope; the train renumbers)
+                                                          // 178 = train 29 lane arity-min (reservation 178/179; the train renumbers):
+                                                          //   defs extract paramsMin for the B2.2 minimum-arity exclusion
                                                           // 176 = 2026-10-15 (train 28: above main 173/174, grep-carrier 173/174,
                                                           //   ruby-pair 174/175, #380 145, the other lanes 171; see the kParserVer note)
                                                           // 173 = 2026-10-15 (slice 4a, #400): Ruby's mixin directives onto the shared
