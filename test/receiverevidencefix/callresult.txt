@@ -346,6 +346,16 @@ int useEnclosing()
     auto p = parts::makeLocal();
     return p.weight();
 }
+@@@ cpp2/src/app3.cpp
+#include "helper.h"
+
+// useQualifiedUsingDecl: `using ::net::wire::Frame;` names the in-tree net::wire::Frame (its namespace path, read from the
+// header's own namespace records — the header declares no free function there)
+int useQualifiedUsingDecl()
+{
+    auto f = net::readFrame();
+    return f.kind();
+}
 @@@ cpp2/src/decl.cpp
 #include "decl.h"
 
@@ -368,6 +378,37 @@ namespace cfg3
 {
 using ext::Settings;
 Settings loadSettings();
+}
+@@@ cpp2/src/frame.h
+#pragma once
+
+namespace net
+{
+namespace wire
+{
+struct Frame
+{
+    int kind() const;
+};
+}
+}
+@@@ cpp2/src/helper.cpp
+#include "helper.h"
+
+int net::wire::Frame::kind() const { return 5; }
+
+namespace net
+{
+Frame readFrame() { return Frame(); }
+}
+@@@ cpp2/src/helper.h
+#pragma once
+#include "frame.h"
+
+namespace net
+{
+using ::net::wire::Frame;
+Frame readFrame();
 }
 @@@ cpp2/src/model.cpp
 #include "model.h"

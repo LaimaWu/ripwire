@@ -1329,6 +1329,11 @@ notproven $CR/cpp2 callees src/app2.cpp:nearUsingDeclGlobal "load src/decl.cpp:3
 for f in useDirective useEnclosing; do   # `using namespace parts;` in the callee's namespace (its header); the callee's own namespace
     proven    $CR/cpp2 callees "src/app2.cpp:$f"            "method weight src/pos.cpp:3"               # [P] # guard
 done
+# a using-declaration written fully qualified (`using ::net::wire::Frame;`) names the class its own namespace records place
+# there, though that header declares no free function in the namespace (envoy's `using ::Envoy::Http::Http2::Http2Frame;`).
+# FLOOR (not gated): a callee whose file's parse lost its namespace nesting (envoy's TRY_NEEDS_AUDIT … END_TRY macros end
+# the namespace early) is in no namespace that encloses the class: it types nothing, as on base.
+proven    $CR/cpp2 callees src/app3.cpp:useQualifiedUsingDecl "method kind src/helper.cpp:3"            # [P]
 # D3 a JVM class-name receiver the caller IMPORTS from outside (`import ext.Util; Util.open()`) is not the in-tree
 #    namesake: the call is not bound to lib.Util.open as proven, and its result types nothing.
 notproven $CR/java3 callees src/app/Use.java:nearOutsideClassReceiver "size src/lib/Config.java:4" "size src/lib/Other.java:4"   # [N]
