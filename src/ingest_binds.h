@@ -5668,7 +5668,7 @@ inline void captureJsEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32
     {
         captureDeclaredReturnType( cx, n );   // (L) call-result typing: a TS return annotation (JS writes none)
     }
-    else if( cx.lang == Lang::TypeScript && ( kindIs( t, "internal_module" ) || kindIs( t, "module" ) ) )
+    else if( callResultFamilyOf( cx.lang ) == CallResultFamily::TypeScript && ( kindIs( t, "internal_module" ) || kindIs( t, "module" ) ) )
     {
         pushNamespace( cx, n, fieldChild( n, NodeField::Name ), fieldChild( n, NodeField::Body ) );   // (L) fix round 2: `namespace a { … }`
         return;
