@@ -1145,16 +1145,24 @@ enum class LocalBindKind : std::uint8_t
                    //     not in scope outside it, and a C++ class is visible from the namespaces its own encloses. A Java /
                    //     Kotlin file's `package a.b` is one with NO span ({0,0}: it scopes nothing lexically) — the packages
                    //     the tree declares, whatever directory holds them (an import of another one is from outside). APPENDED.
+    TypeAlias,     // fix round 3: a declaration that binds a TYPE NAME to another type — C++ `using A = T;` / `typedef T A;` /
+                   //     `namespace a = b;`, Rust `type A = T;`, Kotlin `typealias A = T`, TS `type A = T` / `import A = n.T`:
+                   //     var = the name bound, importedName = the target as written (blanks removed), startByte = the
+                   //     declaration's start. C++ rows carry the scope they are declared in as spanStart/spanEnd (a
+                   //     namespace or class body, or the whole file: 0 .. 0xFFFFFFFF) like a using row; the other families'
+                   //     rows carry none ({0,0}): their scope is the innermost one holding startByte. Read by graph.h's
+                   //     call-result type resolution ONLY: an alias of the spelling in force at a callee is a binding the
+                   //     result type is never resolved past (an outside target names nothing; an in-tree one is a floor). APPENDED.
 };
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::Namespace ) + 1;
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::TypeAlias ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {
-    // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result four (CallResult .. Namespace) after RubyMainMixin
+    // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result five (CallResult .. TypeAlias) after RubyMainMixin
     static_assert( std::uint8_t( LocalBindKind::StaticMember ) - std::uint8_t( LocalBindKind::RecvType ) == 4, "FE-B's five receiver-evidence kinds stay one run" );
-    static_assert( std::uint8_t( LocalBindKind::Namespace ) - std::uint8_t( LocalBindKind::CallResult ) == 3, "the call-result kinds stay one run" );
-    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::Namespace );
+    static_assert( std::uint8_t( LocalBindKind::TypeAlias ) - std::uint8_t( LocalBindKind::CallResult ) == 4, "the call-result kinds stay one run" );
+    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::TypeAlias );
 }
 // The language family whose call results take a callee's declared result type (train 29 call-result typing), ONE row read
 // by ingest (which records CallResult / ReturnType / TypeImport) and by graph.h (where the type resolves, and which

@@ -7568,8 +7568,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         if( !scipPinned && r.recv == RecvKind::JavaTypeCandidate )
         {
             javaProvenType = javaProvenTypeReceiver( r, classNames, fieldNarrow, qkey );
-            // (L) fix round 2 (D3): `import ext.Util; … Util::open` names the outside Util, never an in-tree namesake
-            if( javaProvenType.empty() || recvEv.types.importsFromOutside( r.fileId, r.recvVar.substr( 0, std::min( r.recvVar.find( '.' ), r.recvVar.size() ) ) ) )
+            // (L) fix round 2 / 3 (D3, D6): `import ext.Util; … Util::open` (or `import ext.*;` alone) names the outside Util
+            if( javaProvenType.empty() || recvEv.types.jvmHides( r.fileId, r.startByte, r.recvVar.substr( 0, std::min( r.recvVar.find( '.' ), r.recvVar.size() ) ) ) )
             {
                 disposition = javaCandidateRefused( g, r, it != byName.end() );
                 continue;
@@ -7928,10 +7928,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         }
         // P2-D Rule 2c (CLASS-NAME receiver, Phase 4b): `Cls.m()` resolves to `Cls::m` (or the shallowest base defining `m`) when Cls is an in-repo class that no
         // local and no C++ member of the caller's class or its bases hides (then 2b reads the member). After Rule 2, before 2b. See Narrower::rule2cClassNameRecv.
-        // (L) fix round 2 (D3): a JVM receiver the caller imports from OUTSIDE (`import ext.Util; Util.open()`) is that class,
-        // never an in-tree namesake — the call falls to the ladder, which hedges it.
+        // (L) fix round 2 / 3 (D3, D6): a JVM receiver the caller does not SEE in the tree (`import ext.Util;`, `import ext.*;`
+        // alone) is an outside class, never an in-tree namesake — the call falls to the ladder, which hedges it.
         if( !scipPinned && !canonical && !narrowed
-            && !( callResultFamilyOf( r.lang ) == CallResultFamily::Jvm && recvEv.types.importsFromOutside( r.fileId, r.recvVar ) ) )
+            && !( callResultFamilyOf( r.lang ) == CallResultFamily::Jvm
+                  && recvEv.types.jvmHides( r.fileId, r.startByte, std::string_view( r.recvVar ).substr( 0, std::min( r.recvVar.find( '.' ), r.recvVar.size() ) ) ) ) )
         {
             narrowed = narrowTo( narrower.rule2cClassNameRecv( r, ing.symbols[ r.fromSymbol ].scope, { classNames, fieldNarrow.localNameSet, memberFields }, chaUp ), r, cand );
         }

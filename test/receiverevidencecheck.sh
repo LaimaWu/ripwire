@@ -141,13 +141,17 @@
 #            exactly ONE in-tree class: its imports (Java/Kotlin single-type imports, TS named / `import type` imports, Rust
 #            `use`), its qualifier (Go import alias → an in-tree package; Rust crate/self/super/an in-tree crate or module;
 #            C++ an in-tree namespace, std refused), else its own file, then its package (Go/Java/Kotlin: the directory) or
-#            namespace (C++) — all in the callee's LEXICAL scope (fix round 2): a class nested in a class, an inline Rust
-#            `mod`, a Kotlin `object` or a TS/C++ `namespace` counts only where that scope holds the callee; a package or
-#            module contributes top-level classes only; a JVM member type the callee's class inherits is not resolved; a
-#            C++ unqualified result takes a using-declaration in force (its file or an included header) first, else a
-#            class whose namespace encloses the callee's or a using-directive in force names. A JVM class-name receiver
-#            the caller imports from outside (`import ext.Util; Util.open()` / `Util::open`) never binds the in-tree
-#            namesake as proven. An outside import, an outside qualifier, a TS global, a name that resolves nowhere or twice
+#            namespace (C++) — by ONE rule (fix round 3): walk the callee's lexical scopes innermost first and collect
+#            EVERY binding of the spelling at each (a class declared there, an alias / typedef / `namespace a = b` /
+#            Rust `type` / Kotlin `typealias` / TS `type` and `import A = n.T`, an import binding there, a member type a
+#            base of an enclosing class declares); the first scope with any binding decides — one in-tree class types,
+#            an outside / unresolved binding, an alias, or two that disagree record nothing. A Rust `mod` is a fresh scope
+#            (`super::` / `self::` inside it are relative to it); a package (the one the JVM files DECLARE) or module
+#            contributes top-level classes only, then JVM on-demand imports (an outside one leaves the name unresolved);
+#            a C++ unqualified result takes a using-declaration in force (its file or an included header) first, else a
+#            class whose namespace encloses the callee's or a using-directive in force names; a type parameter of an
+#            enclosing generic names no class. A JVM class-name receiver binds an in-tree class only where the CALLER's
+#            file sees it by the same rule (`import ext.Util;` / `import ext.*;` alone: never the in-tree namesake). An outside import, an outside qualifier, a TS global, a name that resolves nowhere or twice
 #            records NOTHING. The typed local carries that CLASS (not its name): a member call on it reaches that class's own
 #            members (C++: a class name another in-tree class shares types nothing — Rule 2 keys members by name).
 #            [P] RESOLVE (red before the lane); [N] near misses record NOTHING and stay as they were: an overloaded /
@@ -159,7 +163,9 @@
 #            types the next local in turn — in source order, inside the one resolve pass, no fixpoint (Rust use_path /
 #            use_chain, Go/C++/Java/Kotlin/TS UseChain); a hop bound by name alone or split stops it. FLOORS (a typed shape
 #            that proves no member, not gated): an INTERFACE result (Go UseIface — the bodyless signature is the ladder's,
-#            L6) and a C++ `using` alias result (useAlias — Rule 2 reads no member through an alias). Twins marked `# guard`
+#            L6) and an alias of an IN-TREE type (useAlias; every family's alias forms: the alias is not followed). An
+#            alias of an OUTSIDE type spelled like an in-tree class is NOT a floor: it was a false proof before fix round 3
+#            (D5) and is gated as a near miss (cpp3, matrix alias / typedef rows). Twins marked `# guard`
 #            write the type and resolve before the lane (Rust has no such reader yet: no twin arm).
 #            Proven-only near misses with a WRONG namesake in tree: an outside callee beside an in-tree def of the same name
 #            (os.Open/model.Open, String::new/model::new, std::async/cfg::async, List.of/Configs.of, Object.freeze/freeze);
@@ -172,6 +178,13 @@
 #            that is not unwrap/expect); a type parameter spelled like an in-tree class; both overloads of a C++ callee. Go
 #            `pkg.F` (an import name, renamed or not) reaches package-level funcs only, never a method; a LOCAL spelled like
 #            the import is not the package.
+#            MATRIX (fix round 3, callresult_matrix.txt): language (Rust, C++, Java, Kotlin, TS, Go) x binding form x
+#            scope level (file, namespace / module, nested, function body) x target (in-tree unique / outside /
+#            unresolved / two in-tree), 222 cells + the N/A rows a language cannot write; a U cell proves exactly its
+#            tagged row, every other cell proves none. FLOOR cells (U by the language, hedged here): an alias of an
+#            in-tree type (Rust `type`, C++ alias / typedef, Kotlin `typealias`, TS `type` / `import A = n.T`, Go
+#            `type A = t.T`), a Go dot import, a member type inherited from a base (Java, C++), two in-tree C++ classes of
+#            one name (Rule 2 keys members by name).
 #   (C) conservation: each root's census dispositions still sum to calls= with unaccounted=0 (no silent drop).
 #   (K) the predicates can fail: a planted unhedged false row fails notproven, a planted hedged row passes it and
 #            fails proven, marked rejects an unhedged row, a rootless or not-found answer is NOROOT, the MCP reader

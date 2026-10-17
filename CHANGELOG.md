@@ -24,20 +24,30 @@ Kotlin `val`/`var`, TS `const x = [await] f()` — now takes the callee's DECLAR
 to exactly one definition with evidence (not a pick by name alone, not a qualified written type's last name), and the
 result type — through `*T`, `&T`, `Box<T>`, a `?` per `Result`/`Option` layer, `await` for `Promise<T>`, a std smart
 pointer's pointee under `->` only — resolves in the callee's own file to exactly ONE class of this tree: through its
-imports (Java/Kotlin, TS, Rust `use`, C++ using-declarations and using-directives), its qualifier (a Go import, a Rust
-crate or module path, a C++ namespace), its own file, then its package or namespace — in the callee's LEXICAL scope: a
-class nested in a class, an inline `mod`, a Kotlin `object` or a TS/C++ `namespace` counts only where that scope holds the
-callee, a package or module contributes its top-level classes only, a Java/Kotlin member type the callee's class inherits
-is not resolved, and a C++ class counts only when its namespace encloses the callee's or a using in force names it. The
-local then holds that class, so a call on it reaches that class's own members and
+imports (Java/Kotlin single-type and on-demand, TS, Rust `use` and globs, C++ using-declarations and using-directives),
+its qualifier (a Go import, a Rust crate or module path, a C++ namespace), its own file, then its package or namespace. ONE
+rule decides every family's bare name: walk the callee's lexical scopes innermost first and collect EVERY binding of the
+spelling at each — a class declared there, an alias or typedef (C++ `using A = T;` / `typedef T A;` / `namespace a = b;`,
+Rust `type`, Kotlin `typealias`, TS `type` / `import A = n.T`), an import binding there, a member type a base of an
+enclosing class declares — and the first scope with any binding decides: one in-tree class types the local; an outside
+or unresolved binding, an alias, or two bindings that disagree record nothing. A Rust `mod` is a fresh scope (the file's
+items and `use`s are not in force inside it; `super::` / `self::` there are relative to the mod); a class nested in a
+class, a Kotlin `object` or a TS/C++ `namespace` counts only where that scope holds the callee; a Java/Kotlin package is
+the one the files DECLARE, and an on-demand import of an outside package leaves the name unresolved; a type parameter of
+an enclosing generic (`class Box<T> { T get() }`, `impl<T> H<T>`, a C++ class template) names no class. The local then
+holds that class, so a call on it reaches that class's own members and
 never a same-named class elsewhere; a call on that local can type the next local in turn, in source order. A name imported
 from outside the tree, a TS global, an outside qualifier (`std::`, `ext::`), a type parameter, a name two classes share
 (C++: any shared class name) or a nested same-named call (`h.get().get()`) records nothing, and the call stays hedged. Not
-read through (no member proven): an interface result, a C++ `using` alias, a field path below the typed local. Go's
+read through (no member proven): an interface result, an alias of an in-tree type (any family's alias forms above: the
+alias is not followed), a member type inherited from a base, a field path below the typed local. (A C++ `using` alias
+of an OUTSIDE type spelled like an in-tree class was not a floor before fix round 3 but a false proof of that class;
+it now names nothing.) Go's
 `pkg.F()` now reaches package-level functions only, never a same-named method, and a Go parameter, local or struct field
 written `*os.File` no longer resolves to an in-tree type that happens to be called `File`. A Java/Kotlin class-name
-receiver the file imports from outside the tree (`import ext.Util; Util.open()`, `Util::open`) no longer binds an in-tree
-`Util` as proven. `kParserVer` and the cache version move.
+receiver binds an in-tree class only where the caller's file sees it — its package, a single-type import naming it, an
+on-demand import of its package (`import ext.Util; Util.open()`, `import ext.*; Util.open()`, `Util::open` no longer bind
+an in-tree `Util` as proven). `kParserVer` and the cache version move.
 
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 

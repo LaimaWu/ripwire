@@ -4272,11 +4272,112 @@ inline void pushNamespace( BindCtx& cx, TSNode n, TSNode name, TSNode body )
 }
 
 // The nodes that carry a call-result scope fact, per family (data rows, read by bindsVisitNode): a namespace body the index
-// has no symbol for, and C++'s using-directives / using-declarations.
+// has no symbol for, C++'s using-directives / using-declarations, and (fix round 3) every declaration that binds a type
+// name to another type — each family's alias forms (model.h LocalBindKind::TypeAlias).
 inline constexpr struct { CallResultFamily family; std::string_view kind; } kScopeFactNodes[] = {
     { CallResultFamily::Cpp, "namespace_definition" }, { CallResultFamily::Cpp, "using_declaration" },
+    { CallResultFamily::Cpp, "alias_declaration" }, { CallResultFamily::Cpp, "type_definition" }, { CallResultFamily::Cpp, "namespace_alias_definition" },
     { CallResultFamily::TypeScript, "internal_module" }, { CallResultFamily::TypeScript, "module" },
+    { CallResultFamily::TypeScript, "type_alias_declaration" }, { CallResultFamily::TypeScript, "import_alias" },
+    { CallResultFamily::Rust, "type_item" }, { CallResultFamily::Jvm, "type_alias" },
 };
+// the alias rows of kScopeFactNodes (the rest are scopes and C++ usings)
+inline bool isTypeAliasNode( const char* t ) noexcept
+{
+    return kindIs( t, "alias_declaration" ) || kindIs( t, "type_definition" ) || kindIs( t, "namespace_alias_definition" ) || kindIs( t, "type_alias_declaration" )
+        || kindIs( t, "import_alias" ) || kindIs( t, "type_item" ) || kindIs( t, "type_alias" );
+}
+
+// the C++ scope a namespace- / file- / class-scope declaration `n` is in force over: a namespace body, a class body (only
+// when `classScope` admits one), or the whole file (0 .. 0xFFFFFFFF); {0,0} for a block (a body binds no declared result)
+inline std::pair<std::uint32_t, std::uint32_t> cppDeclScope( TSNode n, bool classScope )
+{
+    for( TSNode up = ts_node_parent( n ); !ts_node_is_null( up ); up = ts_node_parent( up ) )
+    {
+        const char* ut = ts_node_type( up );
+        if( kindIs( ut, "translation_unit" ) )
+        {
+            return { 0u, 0xFFFFFFFFu };
+        }
+        const TSNode owner = ts_node_parent( up );
+        if( kindIs( ut, "declaration_list" ) && !ts_node_is_null( owner ) && kindIs( ts_node_type( owner ), "namespace_definition" ) )
+        {
+            return { ts_node_start_byte( up ), ts_node_end_byte( up ) };
+        }
+        if( kindIs( ut, "field_declaration_list" ) )
+        {
+            return classScope ? std::pair{ ts_node_start_byte( up ), ts_node_end_byte( up ) } : std::pair{ 0u, 0u };
+        }
+        if( kindIs( ut, "compound_statement" ) )
+        {
+            return { 0u, 0u };
+        }
+    }
+    return { 0u, 0u };
+}
+
+// fix round 3: one TypeAlias per name an alias declaration binds (model.h). The name and the target per form: C++
+// `using A = T;` (name / type) and `namespace a = b;` (name / the last named child), `typedef T A, *PA;` (every
+// declarator's identifier / type); Rust `type A = T;` and TS `type A = T` (name / type or value); Kotlin `typealias A = T`
+// and TS `import A = n.T` (the first identifier / the last named child). A C++ row carries its scope's span.
+inline void captureTypeAlias( BindCtx& cx, TSNode n, const char* t )
+{
+    std::uint32_t spanStart = 0;
+    std::uint32_t spanEnd   = 0;
+    if( callResultFamilyOf( cx.lang ) == CallResultFamily::Cpp )
+    {
+        std::tie( spanStart, spanEnd ) = cppDeclScope( n, true );
+        if( spanEnd == 0 )
+        {
+            return;
+        }
+    }
+    const auto push = [ & ]( std::string_view name, TSNode target )
+    {
+        if( !name.empty() )
+        {
+            cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = ts_node_start_byte( n ), .lang = cx.lang, .kind = LocalBindKind::TypeAlias,
+                                          .spanStart = spanStart, .spanEnd = spanEnd, .var = std::string( name ), .importedName = importPathText( target, cx.src ) } );
+        }
+    };
+    if( kindIs( t, "type_definition" ) )
+    {
+        const TSNode type = fieldChild( n, NodeField::Type );
+        ChildCursor  cursor( n );
+        forEachChild( n, cursor.cur, [ & ]( TSNode c )
+        {
+            // each declarator (`A`, `*PA`, `(*Fn)( int )`): its innermost identifier
+            TSNode d = c;
+            for( int guard = 0; guard < 8 && ts_node_is_named( c ) && !ts_node_eq( c, type ) && !ts_node_is_null( d ) && !kindIs( ts_node_type( d ), "type_identifier" ); ++guard )
+            {
+                d = fieldChild( d, NodeField::Declarator );
+            }
+            if( ts_node_is_named( c ) && !ts_node_eq( c, type ) && !ts_node_is_null( d ) && kindIs( ts_node_type( d ), "type_identifier" ) )
+            {
+                push( nodeTextOf( d, cx.src ), type );
+            }
+            return true;
+        } );
+        return;
+    }
+    TSNode name   = fieldChild( n, NodeField::Name );
+    TSNode target = fieldChild( n, NodeField::Type );
+    if( ts_node_is_null( target ) )
+    {
+        target = fieldChild( n, NodeField::Value );
+    }
+    if( ts_node_is_null( name ) )   // Kotlin `typealias`, TS `import A = n.T`: no fields
+    {
+        name = namedChildOfKind( n, { "type_identifier", "identifier", "simple_identifier" } );
+    }
+    if( ts_node_is_null( target ) )
+    {
+        target = ts_node_named_child_count( n ) > 1 ? namedChildOfKind( n, { "user_type", "nullable_type", "function_type", "parenthesized_type", "nested_identifier",
+                                                                               "identifier", "namespace_identifier", "nested_namespace_specifier", "type_identifier" }, true )
+                                                    : TSNode{};
+    }
+    push( ts_node_is_null( name ) ? std::string_view{} : nodeTextOf( name, cx.src ), target );
+}
 
 // A TS `namespace` / `module` body, a C++ `namespace` body (an `inline` namespace is transparent: its members are the
 // enclosing namespace's, so none is recorded), and a C++ namespace- or file-scope using-directive / using-declaration as a
@@ -4285,6 +4386,11 @@ inline constexpr struct { CallResultFamily family; std::string_view kind; } kSco
 // outside every body) and one in a class is a member re-export (resolve.h buildUsingReexports): neither is recorded.
 inline void captureScopeFact( BindCtx& cx, TSNode n, const char* t )
 {
+    if( isTypeAliasNode( t ) )
+    {
+        captureTypeAlias( cx, n, t );
+        return;
+    }
     if( kindIs( t, "internal_module" ) || kindIs( t, "module" ) )
     {
         pushNamespace( cx, n, fieldChild( n, NodeField::Name ), fieldChild( n, NodeField::Body ) );
@@ -4299,27 +4405,7 @@ inline void captureScopeFact( BindCtx& cx, TSNode n, const char* t )
         }
         return;
     }
-    std::uint32_t spanStart = 0;
-    std::uint32_t spanEnd   = 0;
-    for( TSNode up = ts_node_parent( n ); !ts_node_is_null( up ); up = ts_node_parent( up ) )
-    {
-        const char* ut = ts_node_type( up );
-        if( kindIs( ut, "translation_unit" ) )
-        {
-            spanEnd = 0xFFFFFFFFu;
-            break;
-        }
-        if( kindIs( ut, "declaration_list" ) && !ts_node_is_null( ts_node_parent( up ) ) && kindIs( ts_node_type( ts_node_parent( up ) ), "namespace_definition" ) )
-        {
-            spanStart = ts_node_start_byte( up );
-            spanEnd   = ts_node_end_byte( up );
-            break;
-        }
-        if( kindIs( ut, "compound_statement" ) || kindIs( ut, "field_declaration_list" ) )
-        {
-            return;
-        }
-    }
+    const auto [ spanStart, spanEnd ] = cppDeclScope( n, false );
     // one cursor pass (a using's child list is input-sized: every comment in it is a child — test/childwalkscalecheck.sh
     // B22), keeping the `namespace` keyword and the last named child that is not a comment (the name used)
     bool        directive = false;
@@ -4418,6 +4504,60 @@ inline bool declaresTypeName( TSNode node, std::string_view name, std::string_vi
         for( std::uint32_t i = 0, k = ts_node_named_child_count( n ); i < k; ++i )
         {
             pending.push_back( ts_node_named_child( n, i ) );
+        }
+    }
+    return false;
+}
+
+// The declarations whose type parameters scope their members (data row: grammar node kinds; a C++ class template's are its
+// `template_declaration` parent's). Only these are asked — never a container such as a translation unit, whose child list
+// is input-sized (test/childwalkscalecheck.sh).
+inline constexpr std::string_view kGenericOwnerKinds[] = {
+    "class_declaration", "interface_declaration", "object_declaration", "record_declaration", "enum_declaration", "abstract_class_declaration",
+    "class", "impl_item", "trait_item", "struct_item", "enum_item", "template_declaration",
+};
+// does the parameter LIST `list` declare the type parameter `name` — each parameter's own name (its first identifier: `T` in
+// `<@A T extends Config>`, Rust `T: Bound`, C++ `class T`), never a bound
+inline bool namesTypeParam( TSNode list, std::string_view name, std::string_view src )
+{
+    bool hit = false;
+    if( ts_node_is_null( list ) )
+    {
+        return false;
+    }
+    ChildCursor cursor( list );
+    forEachChild( list, cursor.cur, [ & ]( TSNode p )
+    {
+        TSNode id = kindIs( ts_node_type( p ), "identifier" ) || kindIs( ts_node_type( p ), "type_identifier" ) ? p : TSNode{};
+        for( std::uint32_t i = 0, k = ts_node_is_null( id ) && ts_node_is_named( p ) ? std::min( ts_node_named_child_count( p ), 4u ) : 0u; i < k && ts_node_is_null( id ); ++i )
+        {
+            const TSNode c = ts_node_named_child( p, i );
+            id = kindIs( ts_node_type( c ), "identifier" ) || kindIs( ts_node_type( c ), "type_identifier" ) ? c : TSNode{};
+        }
+        hit = hit || ( !ts_node_is_null( id ) && nodeTextOf( id, src ) == name );
+        return !hit;
+    } );
+    return hit;
+}
+// fix round 3: is `name` a type parameter of a generic that ENCLOSES `fn` — a class / interface / object / impl / trait
+// (`class Box<S> { S get() }`, `impl<S> H<S> { fn load() -> S }`) or a C++ class template (`template <class S> struct H {
+// S load(); }`)? Such a result names the parameter, never a class of that name. The callee's own parameters are each
+// reader's own check.
+inline bool enclosingGenericDeclares( TSNode fn, std::string_view name, std::string_view src )
+{
+    TSNode a = ts_node_is_null( fn ) ? TSNode{} : ts_node_parent( fn );
+    for( int guard = 0; guard < 64 && !ts_node_is_null( a ); ++guard, a = ts_node_parent( a ) )
+    {
+        const std::string_view kind = ts_node_type( a );
+        if( std::ranges::find( kGenericOwnerKinds, kind ) == std::end( kGenericOwnerKinds ) )
+        {
+            continue;
+        }
+        if( kind == "template_declaration" ? namesTypeParam( fieldChild( a, NodeField::Parameters ), name, src )
+                                           : namesTypeParam( fieldChild( a, NodeField::TypeParameters ), name, src )
+                                             || namesTypeParam( namedChildOfKind( a, { "type_parameters", "type_parameter_list" } ), name, src ) )
+        {
+            return true;
         }
     }
     return false;
@@ -4568,7 +4708,8 @@ inline std::string_view cppResultClass( TSNode fn, std::string_view src, bool& a
     const TSNode tmpl  = ancestorOfKind( fn, { "template_declaration" } );
     const auto   param = [ & ]( std::string_view name )
     {
-        return !ts_node_is_null( tmpl ) && ts_node_eq( ts_node_parent( fn ), tmpl ) && declaresTypeName( fieldChild( tmpl, NodeField::Parameters ), name, src );
+        return ( !ts_node_is_null( tmpl ) && ts_node_eq( ts_node_parent( fn ), tmpl ) && declaresTypeName( fieldChild( tmpl, NodeField::Parameters ), name, src ) )
+            || enclosingGenericDeclares( fn, name, src );   // fix round 3: a class template's parameter (`template <class S> struct H { S load(); }`)
     };
     const char* t = ts_node_type( type );
     if( kindIs( t, "type_identifier" ) )
@@ -4690,7 +4831,7 @@ inline std::string_view declaredResultClass( TSNode type, TSNode fn, std::string
         {
             const std::string_view name = nodeTextOf( type, src );
             return declaresTypeName( fieldChild( fn, NodeField::TypeParameters ), name, src )
-                    || declaresTypeName( namedChildOfKind( fn, { "type_parameters" } ), name, src ) ? std::string_view{} : name;
+                    || declaresTypeName( namedChildOfKind( fn, { "type_parameters" } ), name, src ) || enclosingGenericDeclares( fn, name, src ) ? std::string_view{} : name;
         }
         if( kindIs( t, "scoped_type_identifier" ) || kindIs( t, "nested_type_identifier" ) || kindIs( t, "user_type" ) )
         {
@@ -5474,7 +5615,7 @@ inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_vie
         if( kindIs( t, "type_identifier" ) )
         {
             const std::string_view name = nodeTextOf( type, src );
-            return declaresTypeName( fieldChild( fn, NodeField::TypeParameters ), name, src ) ? std::string_view{} : name;
+            return declaresTypeName( fieldChild( fn, NodeField::TypeParameters ), name, src ) || enclosingGenericDeclares( fn, name, src ) ? std::string_view{} : name;
         }
         if( kindIs( t, "self" ) || ( kindIs( t, "identifier" ) && nodeTextOf( type, src ) == "Self" ) )
         {

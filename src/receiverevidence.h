@@ -206,6 +206,26 @@ inline NodeId innermostEnclosingFn( const IngestResult& ing, const std::vector<s
     return best;
 }
 
+// (L) fix round 3 — how a bare type name is looked up, per family (data rows read by CallResultTypes::bareClassAt): which
+// scopes are levels of the lexical chain, where a family's imports bind, and which tiers follow the file. Every other
+// family (Go: its package directory; C++: namespaces and includes, cppUnqualifiedClass) has its own reader.
+struct BareNameRules
+{
+    CallResultFamily family;
+    bool             itemScopesOnly;     // Rust: only a fn body or a `mod` is a level — a struct / trait / impl scopes no items
+    bool             modIsBarrier;       // Rust: a `mod` (the file is one) is a fresh scope: no level outside it is read
+    bool             importsAtAnyLevel;  // Rust: a `use` binds at the level it is written at (JVM / TS imports: the file level)
+    bool             levelWildcards;     // Rust: a level's globs are read after its named bindings
+    bool             inheritedMembers;   // JVM: a member type a base of an enclosing class declares (not followed: unresolved)
+    bool             packageTier;        // JVM: past the file, the declared package's top-level classes and aliases
+    bool             fileWildcards;      // JVM: last, the file's on-demand / star imports
+};
+inline constexpr BareNameRules kBareNameRules[] = {
+    { CallResultFamily::Rust,       true,  true,  true,  true,  false, false, false },
+    { CallResultFamily::Jvm,        false, false, false, false, true,  true,  true  },
+    { CallResultFamily::TypeScript, false, false, false, false, false, false, false },
+};
+
 // (L) fix round 1 — CallResultTypes: what a declared result type names, decided in its callee's file.
 // A type is recorded for a call result only when its written text RESOLVES, through the callee file's own context —
 // its imports, its qualifier, its own file, then its package / module / namespace — to exactly ONE in-tree class;
@@ -229,6 +249,11 @@ struct CallResultTypes
     std::vector<std::uint32_t>                            cppUsingFiles;
     HashMap<std::string, char>                            jvmPackages;     // the Java / Kotlin packages the tree declares
     mutable HashMap<NodeId, NodeId>                       enclosingMemo;
+    // fix round 3: each JVM file's declared package ("" none), the files of each declared package, and every TypeAlias row
+    // by the name it binds (a C++ base class's member alias)
+    std::vector<std::string_view>                         filePackage;
+    HashMap<std::string, std::vector<std::uint32_t>>      packageFiles;
+    HashMap<std::string, std::vector<const Binding*>>     aliasesByName;
     // Rust crate/module layout, built on the first Rust resolution: a file's crate (its nearest `lib.rs` / `main.rs`
     // directory) and module path (`a::b` for src/a/b.rs or src/a/b/mod.rs), the crates by name (`mdbook_core` for
     // crates/mdbook-core/src), and each module's files
@@ -239,6 +264,7 @@ struct CallResultTypes
         std::vector<std::string>                          moduleOf;   // fileId → module path ("" = the crate root)
         HashMap<std::string, std::uint32_t>               crateByName;
         HashMap<std::string, std::vector<std::uint32_t>>  filesOf;    // "<crate>#<module>" → its files
+        HashMap<std::string, NodeId>                      inlineMods; // fix round 3: "<crate>#<module>" → an inline `mod` symbol
     };
     static constexpr std::uint32_t                        kNoCrate = 0xFFFFFFFFu;
     mutable RustLayout                                    rust;
@@ -256,6 +282,11 @@ struct CallResultTypes
         if( b.kind == LocalBindKind::Namespace && b.spanEnd == 0 )
         {
             jvmPackages.try_emplace( b.var, char( 1 ) );   // a Java / Kotlin `package` declaration (model.h)
+            if( b.fileId < filePackage.size() )
+            {
+                filePackage[ b.fileId ] = b.var;
+                packageFiles[ b.var ].push_back( b.fileId );
+            }
             return;
         }
         if( b.kind == LocalBindKind::Namespace )
@@ -263,17 +294,25 @@ struct CallResultTypes
             namespaces.push_back( &b );
             return;
         }
-        if( ( b.kind == LocalBindKind::TypeImport || b.kind == LocalBindKind::JsImport ) && b.fileId < importsByFile.size() && !b.var.empty() )
+        const bool alias = b.kind == LocalBindKind::TypeAlias;
+        if( ( b.kind == LocalBindKind::TypeImport || b.kind == LocalBindKind::JsImport || alias ) && b.fileId < importsByFile.size() && !b.var.empty() )
         {
             importsByFile[ b.fileId ].push_back( &b );
-            if( isCppUsing( b ) && ( cppUsingFiles.empty() || cppUsingFiles.back() != b.fileId ) )
+            if( alias )
+            {
+                aliasesByName[ b.var ].push_back( &b );
+            }
+            if( isCppScopeRow( b ) && ( cppUsingFiles.empty() || cppUsingFiles.back() != b.fileId ) )
             {
                 cppUsingFiles.push_back( b.fileId );
             }
         }
     }
-    // a C++ using-directive / using-declaration: the one TypeImport that carries its scope's span (model.h)
-    static bool isCppUsing( const Binding& b ) noexcept { return b.kind == LocalBindKind::TypeImport && b.spanEnd != 0; }
+    // a C++ using-directive / using-declaration, or (fix round 3) a C++ alias: the rows that carry their scope's span (model.h)
+    static bool isCppScopeRow( const Binding& b ) noexcept
+    {
+        return ( b.kind == LocalBindKind::TypeImport || b.kind == LocalBindKind::TypeAlias ) && b.spanEnd != 0;
+    }
     // after the last noteImport: the two lists in (file, start) / file order
     void finishIndex()
     {
@@ -379,6 +418,18 @@ struct CallResultTypes
         enclosingMemo.try_emplace( c, best );
         return best;
     }
+    // Rust: the innermost item scope — a `mod` (SymKind::Other) or a fn body — enclosing symbol `s`; kNoNode at its file's
+    // own level (through enclosingSymbol: an `impl` block is no symbol, so its methods sit in the scope that holds it)
+    NodeId innermostItemScope( NodeId s ) const
+    {
+        NodeId up = enclosingSymbol( s );
+        for( int guard = 0; guard < 64 && up != kNoNode && ing.symbols[ up ].kind != SymKind::Other && ing.symbols[ up ].kind != SymKind::Function
+                                                       && ing.symbols[ up ].kind != SymKind::Method; ++guard )
+        {
+            up = enclosingSymbol( up );
+        }
+        return up;
+    }
     // does a Namespace record of `c`'s file hold `c`
     bool inNamespace( NodeId c ) const
     {
@@ -418,52 +469,348 @@ struct CallResultTypes
         }
         return true;
     }
-    // the unqualified `name` in scope at byte `at` of `fileId` itself (visibleAt): kNoNode with `found` false when none is;
-    // several → kNoNode, found. `nestedOnly` keeps only classes nested in a scope that holds the callee.
-    NodeId inOwnFile( std::uint32_t fileId, std::uint32_t at, std::string_view name, CallResultFamily fam, bool& found, bool nestedOnly = false ) const
+    // ── fix round 3: ONE rule for a bare type name — every binding of the spelling visible where it is written decides ──
+    // A level of the lexical chain: a symbol's span (`sym`), a Namespace record's body (sym kNoNode), or the whole file.
+    struct Level
     {
-        NodeId one = kNoNode;
-        const std::size_t n = classesNamed( name, fam, [ & ]( NodeId c )
+        std::uint32_t start = 0;
+        std::uint32_t end   = 0xFFFFFFFFu;
+        NodeId        sym   = kNoNode;
+        bool          file() const noexcept { return start == 0 && end == 0xFFFFFFFFu && sym == kNoNode; }
+        bool          operator==( const Level& o ) const noexcept { return start == o.start && end == o.end; }
+    };
+    // The votes of one level (or tier): each binding of the spelling there names one in-tree class, or kNoNode (outside,
+    // unresolved, an alias). ONE class decides; anything else — an outside or unresolved binding, two that disagree — names
+    // nothing.
+    struct Ballot
+    {
+        bool   any   = false;
+        bool   split = false;
+        NodeId cls   = kNoNode;
+        void   vote( NodeId c ) noexcept
         {
-            return ing.symbols[ c ].fileId == fileId && ( !nestedOnly || enclosingSymbol( c ) != kNoNode ) && visibleAt( c, fileId, at );
-        }, one );
-        found = n > 0;
-        return n == 1 ? one : kNoNode;
-    }
-    // Java / Kotlin: does a class enclosing the callee inherit — through an in-tree base, transitively — a nested class
-    // `name`? Such a member type hides the package's and an import's class of that name, and is not resolved here.
-    bool inheritsNested( std::uint32_t f, std::uint32_t at, std::string_view name ) const
+            split = split || c == kNoNode || ( any && c != cls );
+            cls   = c;
+            any   = true;
+        }
+        NodeId verdict() const noexcept { return any && !split ? cls : kNoNode; }
+    };
+    static const BareNameRules* bareNameRulesOf( CallResultFamily fam ) noexcept
     {
-        NodeId one = kNoNode;
-        if( chaUp == nullptr || classesNamed( name, CallResultFamily::Jvm, [ & ]( NodeId c ) { return enclosingSymbol( c ) != kNoNode; }, one ) == 0 )
+        const auto it = std::ranges::find( kBareNameRules, fam, &BareNameRules::family );
+        return it == std::end( kBareNameRules ) ? nullptr : it;
+    }
+    // the symbol ids of file `f` (ids ascend by file)
+    std::pair<NodeId, NodeId> symbolsOf( std::uint32_t f ) const
+    {
+        const auto byFile = []( const Symbol& o ) { return o.fileId; };
+        const auto run    = std::ranges::equal_range( ing.symbols, f, std::ranges::less{}, byFile );
+        return { NodeId( run.begin() - ing.symbols.begin() ), NodeId( run.end() - ing.symbols.begin() ) };
+    }
+    // the innermost level of file `f` holding byte `pos` — a symbol (strictly inside it) or a Namespace body; the file when none
+    Level levelAt( std::uint32_t f, std::uint32_t pos ) const
+    {
+        Level      best;
+        const auto [ lo, hi ] = symbolsOf( f );
+        for( NodeId s = lo; s < hi; ++s )
+        {
+            const Symbol& o = ing.symbols[ s ];
+            if( o.kind != SymKind::ModuleScope && o.sigStartByte < pos && pos < o.endByte && ( best.file() || o.sigStartByte > best.start ) )
+            {
+                best = { o.sigStartByte, o.endByte, s };
+            }
+        }
+        for( const Binding* ns : namespacesOf( f ) )
+        {
+            if( ns->spanStart <= pos && pos < ns->spanEnd && ( best.file() || ns->spanStart > best.start ) )
+            {
+                best = { ns->spanStart, ns->spanEnd, kNoNode };
+            }
+        }
+        return best;
+    }
+    // every level holding byte `at` of file `f`, innermost first, the file last
+    void chainAt( std::uint32_t f, std::uint32_t at, std::vector<Level>& out ) const
+    {
+        out.clear();
+        const auto [ lo, hi ] = symbolsOf( f );
+        for( NodeId s = lo; s < hi; ++s )
+        {
+            const Symbol& o = ing.symbols[ s ];
+            if( o.kind != SymKind::ModuleScope && o.sigStartByte < at && at < o.endByte )
+            {
+                out.push_back( { o.sigStartByte, o.endByte, s } );
+            }
+        }
+        for( const Binding* ns : namespacesOf( f ) )
+        {
+            if( ns->spanStart <= at && at < ns->spanEnd )
+            {
+                out.push_back( { ns->spanStart, ns->spanEnd, kNoNode } );
+            }
+        }
+        std::ranges::sort( out, []( const Level& a, const Level& b ) { return a.start != b.start ? a.start > b.start : a.end < b.end; } );
+        out.push_back( Level{} );
+    }
+    // the level class `c` is declared in: its enclosing symbol, or a Namespace record holding it, whichever is innermost
+    Level levelOfClass( NodeId c ) const
+    {
+        const Symbol& cs    = ing.symbols[ c ];
+        const NodeId  outer = enclosingSymbol( c );
+        Level         best  = outer == kNoNode ? Level{} : Level{ ing.symbols[ outer ].sigStartByte, ing.symbols[ outer ].endByte, outer };
+        for( const Binding* ns : namespacesOf( cs.fileId ) )
+        {
+            if( ns->spanStart <= cs.sigStartByte && cs.sigStartByte < ns->spanEnd && ( best.file() || ns->spanStart > best.start ) )
+            {
+                best = { ns->spanStart, ns->spanEnd, kNoNode };
+            }
+        }
+        return best;
+    }
+    static bool classKind( SymKind k ) noexcept { return k == SymKind::Class || k == SymKind::Struct || k == SymKind::Interface; }
+    // the innermost class of file `f` whose span holds byte `pos` (a member declaration's class); kNoNode when none
+    NodeId classHolding( std::uint32_t f, std::uint32_t pos ) const
+    {
+        NodeId     best = kNoNode;
+        const auto [ lo, hi ] = symbolsOf( f );
+        for( NodeId s = lo; s < hi; ++s )
+        {
+            const Symbol& o = ing.symbols[ s ];
+            if( classKind( o.kind ) && o.sigStartByte < pos && pos < o.endByte && ( best == kNoNode || o.sigStartByte > ing.symbols[ best ].sigStartByte ) )
+            {
+                best = s;
+            }
+        }
+        return best;
+    }
+    // JVM / C++: does a base of class `holder` — through in-tree bases, transitively (a visited set: a diamond is walked
+    // once) — declare a member type `name` (a nested class, or a C++ member alias)? Such a member type is in scope inside
+    // `holder` and is not followed here: the spelling names nothing.
+    bool inheritsMemberType( NodeId holder, std::string_view name, CallResultFamily fam ) const
+    {
+        if( chaUp == nullptr )
         {
             return false;
         }
-        std::vector<std::string_view> cone;   // the bases of every class enclosing the callee
-        const auto lo = std::lower_bound( ing.symbols.begin(), ing.symbols.end(), f, []( const Symbol& o, std::uint32_t v ) { return o.fileId < v; } );
-        for( auto it = lo; it != ing.symbols.end() && it->fileId == f; ++it )
+        std::vector<std::string_view> cone;
+        nameKey.assign( ing.symbols[ holder ].name );
+        if( const auto it = chaUp->find( nameKey ); it != chaUp->end() )
         {
-            if( it->sigStartByte < at && at < it->endByte && ( it->kind == SymKind::Class || it->kind == SymKind::Interface ) )
-            {
-                cone.push_back( it->name );
-            }
+            cone.assign( it->second.begin(), it->second.end() );
         }
-        for( std::size_t i = 0; i < cone.size() && i < 64; ++i )
+        for( std::size_t i = 0; i < cone.size() && cone.size() < 64; ++i )
         {
-            if( const auto it = chaUp->find( std::string( cone[ i ] ) ); it != chaUp->end() )
+            nameKey.assign( cone[ i ] );
+            if( const auto it = chaUp->find( nameKey ); it != chaUp->end() )
             {
                 for( const std::string& b : it->second )
                 {
-                    cone.push_back( b );
+                    if( std::ranges::find( cone, std::string_view( b ) ) == cone.end() )
+                    {
+                        cone.push_back( b );
+                    }
                 }
             }
         }
-        return classesNamed( name, CallResultFamily::Jvm, [ & ]( NodeId c )
+        if( cone.empty() )
         {
-            const NodeId outer = enclosingSymbol( c );
-            return outer != kNoNode && std::find( cone.begin(), cone.end(), std::string_view( ing.symbols[ outer ].name ) ) != cone.end()
-                && !( ing.symbols[ outer ].fileId == f && ing.symbols[ outer ].sigStartByte < at && at < ing.symbols[ outer ].endByte );
-        }, one ) > 0;
+            return false;
+        }
+        const auto inCone = [ & ]( NodeId owner ) { return owner != kNoNode && std::ranges::find( cone, std::string_view( ing.symbols[ owner ].name ) ) != cone.end(); };
+        NodeId one = kNoNode;
+        if( classesNamed( name, fam, [ & ]( NodeId c ) { return inCone( enclosingSymbol( c ) ); }, one ) > 0 )
+        {
+            return true;
+        }
+        nameKey.assign( name );
+        const auto aliases = aliasesByName.find( nameKey );
+        return aliases != aliasesByName.end() && std::ranges::any_of( aliases->second, [ & ]( const Binding* b ) { return inCone( classHolding( b->fileId, b->startByte ) ); } );
+    }
+    // the JVM files of one package as `f` sees it: the same declared package, or (neither declares one) the same directory
+    bool samePackage( std::uint32_t f, std::uint32_t g ) const
+    {
+        const std::string_view pf = f < filePackage.size() ? filePackage[ f ] : std::string_view{};
+        const std::string_view pg = g < filePackage.size() ? filePackage[ g ] : std::string_view{};
+        return pf.empty() && pg.empty() ? dirOf( f ) == dirOf( g ) : pf == pg;
+    }
+    // the ONE in-tree class a named import row `b` of file `f` binds (kNoNode: outside, unresolved, or two)
+    NodeId importedClass( CallResultFamily fam, std::uint32_t f, const Binding& b ) const
+    {
+        switch( fam )
+        {
+            case CallResultFamily::Rust:
+            {
+                const auto [ modPath, item ] = splitLast( b.importedName, "::" );
+                return modPath.empty() ? kNoNode : rustClassAt( f, b.startByte, modPath, item );
+            }
+            case CallResultFamily::Jvm:        return jvmClassIn( b.importedName, b.typeName );
+            case CallResultFamily::TypeScript:
+            {
+                if( jsPinnedClasses == nullptr )
+                {
+                    return kNoNode;
+                }
+                aliasKey.assign( std::to_string( f ) ).append( 1, '#' ).append( b.var );
+                const auto it = jsPinnedClasses->find( aliasKey );
+                return it == jsPinnedClasses->end() ? kNoNode : it->second;
+            }
+            default:                           return kNoNode;
+        }
+    }
+    // a named (non-wildcard) import row of the family
+    static bool namedImport( CallResultFamily fam, const Binding& b ) noexcept
+    {
+        return fam == CallResultFamily::TypeScript ? b.kind == LocalBindKind::JsImport : b.kind == LocalBindKind::TypeImport && b.var != "*";
+    }
+    // a wildcard row `b` (Rust `use m::*`, JVM `import p.*`) seen from file `f`: the class `name` it supplies; `supplies`
+    // false when it supplies none — an outside or unresolved wildcard MAY supply it (kNoNode, supplies true)
+    NodeId wildcardSupplies( CallResultFamily fam, std::uint32_t f, const Binding& b, std::string_view name, bool& supplies ) const
+    {
+        supplies = true;
+        if( fam == CallResultFamily::Rust )
+        {
+            std::uint32_t crate = kNoCrate;
+            std::string   module;
+            if( !rustModuleOf( f, b.startByte, b.importedName, crate, module, 0 ) )
+            {
+                return kNoNode;
+            }
+            return rustItemAt( crate, module, name, 0, supplies );
+        }
+        nameKey.assign( b.importedName );
+        const auto files = packageFiles.find( nameKey );
+        if( files == packageFiles.end() )
+        {
+            return kNoNode;   // a package the tree does not declare (or a class's members: `import p.Obj.*`)
+        }
+        NodeId            one = kNoNode;
+        const std::size_t n   = classesNamed( name, CallResultFamily::Jvm, [ & ]( NodeId c )
+        {
+            return std::ranges::find( files->second, ing.symbols[ c ].fileId ) != files->second.end() && levelOfClass( c ).file();
+        }, one );
+        supplies = n > 0;
+        return n == 1 ? one : kNoNode;
+    }
+    // THE RULE (fix round 3). The bare type name `name` written at byte `at` of file `f` (a callee's declared result, or a
+    // JVM class-name receiver at its call) names the ONE in-tree class the language's own lookup reaches: walk the lexical
+    // chain innermost first; at each level collect EVERY binding of the spelling there — a class declared in it, an alias
+    // (always kNoNode: not followed), a named import binding there (Rust: at any level; JVM / TS: the file), a member type a
+    // base of the level's class declares (JVM: kNoNode) — and the first level with any binding decides by its Ballot; a
+    // level's wildcards (Rust globs) vote only when its named bindings are silent. Rust stops at its module (a fresh
+    // scope); past the file the JVM reads its package's top-level classes and aliases, then the file's on-demand imports.
+    NodeId bareClassAt( CallResultFamily fam, std::uint32_t f, std::uint32_t at, std::string_view name ) const
+    {
+        const BareNameRules* rules = bareNameRulesOf( fam );
+        if( rules == nullptr || f >= importsByFile.size() )
+        {
+            return kNoNode;
+        }
+        std::vector<Level> chain;
+        chainAt( f, at, chain );
+        for( const Level& lv : chain )
+        {
+            const SymKind kind = lv.sym == kNoNode ? SymKind::Other : ing.symbols[ lv.sym ].kind;
+            if( rules->itemScopesOnly && lv.sym != kNoNode && kind != SymKind::Function && kind != SymKind::Method && kind != SymKind::Other )
+            {
+                continue;   // a Rust struct / trait / enum declares no item in scope (an associated type is `Self::T`)
+            }
+            Ballot     named;
+            NodeId     one = kNoNode;
+            classesNamed( name, fam, [ & ]( NodeId c )
+            {
+                if( ing.symbols[ c ].fileId == f && levelOfClass( c ) == lv )
+                {
+                    named.vote( c );
+                }
+                return false;
+            }, one );
+            forEachImport( f, name, [ & ]( const Binding& b )
+            {
+                const bool here = rules->importsAtAnyLevel || b.kind == LocalBindKind::TypeAlias ? levelAt( f, b.startByte ) == lv : lv.file();
+                if( here && b.kind == LocalBindKind::TypeAlias )
+                {
+                    named.vote( kNoNode );
+                }
+                else if( here && namedImport( fam, b ) )
+                {
+                    named.vote( importedClass( fam, f, b ) );
+                }
+            } );
+            if( !named.any && rules->inheritedMembers && lv.sym != kNoNode && classKind( kind ) && inheritsMemberType( lv.sym, name, fam ) )
+            {
+                named.vote( kNoNode );
+            }
+            if( named.any )
+            {
+                return named.verdict();
+            }
+            if( rules->levelWildcards )
+            {
+                Ballot globs;
+                forEachImport( f, "*", [ & ]( const Binding& b )
+                {
+                    bool supplies = false;
+                    const NodeId c = b.kind == LocalBindKind::TypeImport && levelAt( f, b.startByte ) == lv ? wildcardSupplies( fam, f, b, name, supplies ) : kNoNode;
+                    if( supplies )
+                    {
+                        globs.vote( c );
+                    }
+                } );
+                if( globs.any )
+                {
+                    return globs.verdict();
+                }
+            }
+            if( rules->modIsBarrier && ( lv.file() || kind == SymKind::Other ) )
+            {
+                return kNoNode;   // a Rust module: the name is the prelude's, an outside crate's, or unresolved
+            }
+        }
+        if( rules->packageTier )
+        {
+            Ballot     pkg;
+            NodeId     one = kNoNode;
+            classesNamed( name, fam, [ & ]( NodeId c )
+            {
+                const std::uint32_t g = ing.symbols[ c ].fileId;
+                if( g != f && samePackage( f, g ) && levelOfClass( c ).file() )
+                {
+                    pkg.vote( c );
+                }
+                return false;
+            }, one );
+            nameKey.assign( name );
+            if( const auto aliases = aliasesByName.find( nameKey ); aliases != aliasesByName.end() )
+            {
+                for( const Binding* b : aliases->second )
+                {
+                    const bool declared = b->fileId < filePackage.size() && !filePackage[ b->fileId ].empty();   // a JVM file's own package
+                    if( b->fileId != f && declared && samePackage( f, b->fileId ) && levelAt( b->fileId, b->startByte ).file() )
+                    {
+                        pkg.vote( kNoNode );   // a Kotlin `typealias` of the package
+                    }
+                }
+            }
+            if( pkg.any )
+            {
+                return pkg.verdict();
+            }
+        }
+        if( rules->fileWildcards )
+        {
+            Ballot wild;
+            forEachImport( f, "*", [ & ]( const Binding& b )
+            {
+                bool supplies = false;
+                const NodeId c = b.kind == LocalBindKind::TypeImport ? wildcardSupplies( fam, f, b, name, supplies ) : kNoNode;
+                if( supplies )
+                {
+                    wild.vote( c );
+                }
+            } );
+            return wild.verdict();
+        }
+        return kNoNode;
     }
 
     // Go: `pkg.T` names a class of THIS tree only when `pkg` imports an in-tree package and that package defines exactly one
@@ -522,8 +869,9 @@ struct CallResultTypes
         return one ? first : kNoNode;
     }
 
-    // Java / Kotlin: a single-type import of the name (Kotlin's `as` alias included) decides, then the file's own class, then
-    // the package (its directory). An imported or qualified `a.b.T` names an in-tree class only in a directory ending `a/b`.
+    // Java / Kotlin: an imported or qualified `a.b.T` names the in-tree top-level class `T` of the package `a.b` the tree
+    // DECLARES (fix round 3: a Kotlin file's package need not match its directory); a tree that declares no package reads
+    // the directory ending `a/b`. A nested `a.b.Outer.T` is not followed (kNoNode).
     NodeId jvmClassIn( std::string_view path, std::string_view cls ) const
     {
         const std::size_t dot = path.rfind( '.' );
@@ -531,107 +879,52 @@ struct CallResultTypes
         {
             return kNoNode;
         }
+        if( !jvmPackages.empty() )
+        {
+            nameKey.assign( path.substr( 0, dot ) );
+            const auto files = packageFiles.find( nameKey );
+            if( files == packageFiles.end() )
+            {
+                return kNoNode;   // a package the tree does not declare: outside
+            }
+            return onlyClass( cls, CallResultFamily::Jvm, [ & ]( NodeId c )
+            {
+                return std::ranges::find( files->second, ing.symbols[ c ].fileId ) != files->second.end() && levelOfClass( c ).file();
+            } );
+        }
         std::string pkgDir( path.substr( 0, dot ) );
         std::replace( pkgDir.begin(), pkgDir.end(), '.', '/' );
         return onlyClass( cls, CallResultFamily::Jvm, [ & ]( NodeId c )
         {
-            return endsWithDir( dirOf( ing.symbols[ c ].fileId ), pkgDir ) && enclosingSymbol( c ) == kNoNode && !inNamespace( c );   // a top-level class
+            return endsWithDir( dirOf( ing.symbols[ c ].fileId ), pkgDir ) && levelOfClass( c ).file();   // a top-level class
         } );
     }
-    // Java / Kotlin (fix round 2), the order the languages scope a simple type name in: a class nested in a scope that holds
-    // the callee, a member type the callee's classes inherit (not resolved: nothing), a single-type import, the file's own
-    // top-level class, then the package's top-level classes.
+    // Java / Kotlin (fix round 3: bareClassAt's rows), the order the languages scope a simple type name in: a class nested in
+    // a scope that holds the callee or a member type its classes inherit, the file's single-type imports / own top-level
+    // classes / aliases, the package's top-level classes and aliases, then the on-demand imports.
     NodeId jvmResultClass( std::uint32_t fileId, std::uint32_t at, std::string_view whole, std::string_view cls ) const
     {
-        if( !whole.empty() )
-        {
-            return jvmClassIn( whole, cls );
-        }
-        bool         nested = false;
-        const NodeId inner  = inOwnFile( fileId, at, cls, CallResultFamily::Jvm, nested, true );
-        if( nested )
-        {
-            return inner;
-        }
-        if( inheritsNested( fileId, at, cls ) )
-        {
-            return kNoNode;
-        }
-        bool   imported = false;
-        NodeId hit      = kNoNode;
-        forEachImport( fileId, cls, [ & ]( const Binding& b )
-        {
-            if( b.kind == LocalBindKind::TypeImport )
-            {
-                hit      = imported ? kNoNode : jvmClassIn( b.importedName, b.typeName );
-                imported = true;
-            }
-        } );
-        if( imported )
-        {
-            return hit;
-        }
-        bool         own   = false;
-        const NodeId local = inOwnFile( fileId, at, cls, CallResultFamily::Jvm, own );
-        if( own )
-        {
-            return local;
-        }
-        const std::string_view dir = dirOf( fileId );
-        return onlyClass( cls, CallResultFamily::Jvm, [ & ]( NodeId c ) { return dirOf( ing.symbols[ c ].fileId ) == dir && visibleAt( c, fileId, at ); } );
+        return whole.empty() ? bareClassAt( CallResultFamily::Jvm, fileId, at, cls ) : jvmClassIn( whole, cls );
     }
-    // D3: does file `fileId` import the simple name `name` (a single-type import, Kotlin's `as` alias included) from OUTSIDE
-    // the tree — a path no package the tree DECLARES leads (`package` records: a Kotlin file's package need not match its
-    // directory), read at any depth: `lib.Outer.Inner` is in tree when `lib` is declared and holds a class `Outer`. A
-    // class-name receiver spelled `name` is then that outside class, never an in-tree namesake.
-    bool importsFromOutside( std::uint32_t fileId, std::string_view name ) const
+    // D3 / D6: a JVM class-name receiver spelled `name` at byte `at` of the caller's file `fileId` names an in-tree class only
+    // when the caller's file SEES one by that name (bareClassAt: its package, a single-type import naming it, an on-demand
+    // import of its package, a nested class in scope): `import ext.Util;` or `import ext.*;` alone hides every in-tree
+    // Util. True when the tree defines a class `name` the caller does not see.
+    bool jvmHides( std::uint32_t fileId, std::uint32_t at, std::string_view name ) const
     {
-        bool outside = false;
-        forEachImport( fileId, name, [ & ]( const Binding& b )
-        {
-            if( b.kind != LocalBindKind::TypeImport || b.typeName.empty() || b.importedName.find( '.' ) == std::string::npos )
-            {
-                return;   // a Java / Kotlin import names a dotted path; a root-package name is no outside evidence
-            }
-            const std::string_view path = b.importedName;
-            bool                   inTree = false;
-            for( std::size_t dot = path.rfind( '.' ); dot != std::string_view::npos && dot > 0 && !inTree; dot = path.rfind( '.', dot - 1 ) )
-            {
-                const std::string_view next = namesplit::afterLast( path.substr( 0, path.find( '.', dot + 1 ) ), "." );   // the class the package holds
-                NodeId one = kNoNode;
-                inTree = jvmPackages.contains( std::string( path.substr( 0, dot ) ) )
-                      && classesNamed( next, CallResultFamily::Jvm, []( NodeId ) { return true; }, one ) > 0;
-            }
-            outside = outside || !inTree;
-        } );
-        return outside;
+        NodeId one = kNoNode;
+        return classesNamed( name, CallResultFamily::Jvm, []( NodeId ) { return true; }, one ) > 0 && bareClassAt( CallResultFamily::Jvm, fileId, at, name ) == kNoNode;
     }
 
     // TypeScript: a name imported by name (`import { T }`, `import { U as T }`) names the ONE in-tree class graph.h's import
     // tables pin for it (buildJsImportTables: the module resolved, the export found) — an outside module, a type-only import
     // the tables do not pin, or a re-export they cannot follow names nothing; else a class of the file itself; else nothing:
     // a module neighbour is never in scope without an import, and an unimported name is a global (`Response`). A class inside
-    // a `namespace` (a Namespace record) is in scope only within it. A namespace-qualified `ns.T` is not resolved (a floor).
+    // a `namespace` or a function is in scope only within it, and an alias there (`type T = …`, `import T = n.U`) hides any
+    // outer class (bareClassAt). A namespace-qualified `ns.T` is not resolved (a floor).
     NodeId tsResultClass( std::uint32_t fileId, std::uint32_t at, std::string_view whole, std::string_view cls ) const
     {
-        if( !whole.empty() )
-        {
-            return kNoNode;
-        }
-        bool imported = false;
-        forEachImport( fileId, cls, [ & ]( const Binding& b ) { imported = imported || b.kind == LocalBindKind::JsImport; } );
-        if( imported )
-        {
-            if( jsPinnedClasses == nullptr )
-            {
-                return kNoNode;
-            }
-            aliasKey.assign( std::to_string( fileId ) ).append( 1, '#' ).append( cls );
-            const auto it = jsPinnedClasses->find( aliasKey );
-            return it == jsPinnedClasses->end() ? kNoNode : it->second;
-        }
-        bool own = false;
-        return inOwnFile( fileId, at, cls, CallResultFamily::TypeScript, own );
+        return whole.empty() ? bareClassAt( CallResultFamily::TypeScript, fileId, at, cls ) : kNoNode;
     }
 
     // Rust: the crate layout (RustLayout above), then a path's module seen from a file — `crate::`, `self::`, `super::`, an
@@ -712,6 +1005,41 @@ struct CallResultTypes
                 }
             }
         }
+        // fix round 3: every inline `mod m { … }` (SymKind::Other) is a module of its own, `<file module>::…::m` — never the
+        // file of a `mod m;` declaration, whose module is that file's
+        for( const Symbol& m : ing.symbols )
+        {
+            if( m.kind != SymKind::Other || callResultFamilyOf( m.lang ) != CallResultFamily::Rust || m.fileId >= files || rust.crateOf[ m.fileId ] == kNoCrate )
+            {
+                continue;
+            }
+            std::string module;
+            rustModuleAt( m.fileId, m.sigStartByte, module );
+            module = joinModule( module, m.name );
+            if( !rust.filesOf.contains( rustModuleKey( rust.crateOf[ m.fileId ], module ) ) )
+            {
+                rust.inlineMods.try_emplace( rustModuleKey( rust.crateOf[ m.fileId ], module ), m.id );
+            }
+        }
+    }
+    // the module byte `at` of Rust file `f` sits in: the file's module, then each inline `mod` holding `at`, outermost first
+    void rustModuleAt( std::uint32_t f, std::uint32_t at, std::string& module ) const
+    {
+        module = f < rust.moduleOf.size() ? rust.moduleOf[ f ] : std::string{};
+        const auto [ lo, hi ] = symbolsOf( f );
+        for( NodeId s = lo; s < hi; ++s )   // ids ascend by line: an outer mod precedes the mods it holds
+        {
+            const Symbol& o = ing.symbols[ s ];
+            if( o.kind == SymKind::Other && o.sigStartByte < at && at < o.endByte )
+            {
+                module = joinModule( module, o.name );
+            }
+        }
+    }
+    // the level of a module's own items: an inline mod's span, or (a file module) the file
+    Level rustModuleLevel( NodeId inlineMod ) const
+    {
+        return inlineMod == kNoNode ? Level{} : Level{ ing.symbols[ inlineMod ].sigStartByte, ing.symbols[ inlineMod ].endByte, inlineMod };
     }
     // `a::b` + `c` → `a::b::c`; the crate root ("") + `c` → `c`
     static std::string joinModule( std::string_view module, std::string_view seg )
@@ -726,10 +1054,41 @@ struct CallResultTypes
     }
     bool rustModuleExists( std::uint32_t crate, const std::string& module ) const
     {
-        return rust.filesOf.contains( rustModuleKey( crate, module ) );
+        return rust.filesOf.contains( rustModuleKey( crate, module ) ) || rust.inlineMods.contains( rustModuleKey( crate, module ) );
     }
-    // the (crate, module) `modPath` (`crate::model`, `super::x`, `mdbook_core::book`, a `use`d `model`) names from file `f`
-    bool rustModuleOf( std::uint32_t f, std::string_view modPath, std::uint32_t& crate, std::string& module, int depth ) const
+    // the `use` rows binding `name` in force at byte `at` of file `f`: those of the innermost level (a fn body, then the
+    // module) that holds one — a `use` binds where it is written (fix round 3), never file-wide
+    template <class Fn>
+    void forEachRustUseAt( std::uint32_t f, std::uint32_t at, std::string_view name, Fn&& fn ) const
+    {
+        std::vector<Level> chain;
+        chainAt( f, at, chain );
+        for( const Level& lv : chain )
+        {
+            const SymKind kind = lv.sym == kNoNode ? SymKind::Other : ing.symbols[ lv.sym ].kind;
+            if( lv.sym != kNoNode && kind != SymKind::Function && kind != SymKind::Method && kind != SymKind::Other )
+            {
+                continue;
+            }
+            bool found = false;
+            forEachImport( f, name, [ & ]( const Binding& b )
+            {
+                if( b.kind == LocalBindKind::TypeImport && levelAt( f, b.startByte ) == lv )
+                {
+                    found = true;
+                    fn( b );
+                }
+            } );
+            if( found || lv.file() || kind == SymKind::Other )
+            {
+                return;
+            }
+        }
+    }
+    // the (crate, module) `modPath` (`crate::model`, `super::x`, `mdbook_core::book`, a `use`d `model`) names at byte `at` of
+    // file `f` — relative to the module `at` sits in, an inline `mod` included (fix round 3: `super::` inside `mod m` is the
+    // file's module, `self::` is m)
+    bool rustModuleOf( std::uint32_t f, std::uint32_t at, std::string_view modPath, std::uint32_t& crate, std::string& module, int depth ) const
     {
         if( !rust.built )
         {
@@ -750,8 +1109,8 @@ struct CallResultTypes
             }
             at = sep + 2;
         }
-        crate  = rust.crateOf[ f ];
-        module = rust.moduleOf[ f ];
+        crate = rust.crateOf[ f ];
+        rustModuleAt( f, at, module );
         std::size_t i = 1;
         if( segs[ 0 ] == "crate" )
         {
@@ -771,16 +1130,15 @@ struct CallResultTypes
         }
         else if( segs[ 0 ] != "self" )
         {
-            // a `use` binding of the name shadows a crate of that name; two `use`s of one name decide nothing
-            std::size_t uses = 0;
-            std::string usedPath;
-            forEachImport( f, segs[ 0 ], [ & ]( const Binding& b )
+            // a `use` binding of the name in force there shadows a crate of that name; two `use`s of one name decide nothing
+            std::size_t     uses = 0;
+            std::string     usedPath;
+            std::uint32_t   usedAt = 0;
+            forEachRustUseAt( f, at, segs[ 0 ], [ & ]( const Binding& b )
             {
-                if( b.kind == LocalBindKind::TypeImport )
-                {
-                    ++uses;
-                    usedPath = b.importedName;
-                }
+                ++uses;
+                usedPath = b.importedName;
+                usedAt   = b.startByte;
             } );
             const auto byName = rust.crateByName.find( std::string( segs[ 0 ] ) );
             if( uses > 1 )
@@ -789,7 +1147,7 @@ struct CallResultTypes
             }
             if( uses == 1 )
             {
-                if( !rustModuleOf( f, usedPath, crate, module, depth + 1 ) )
+                if( !rustModuleOf( f, usedAt, usedPath, crate, module, depth + 1 ) )
                 {
                     return false;
                 }
@@ -814,45 +1172,73 @@ struct CallResultTypes
         }
         return rustModuleExists( crate, module );
     }
-    // the ONE Rust class `cls` module `modPath` (seen from `f`) defines — or re-exports: a module file's own `use` of the
-    // name (`pub use mdbook::MDBook;` in lib.rs) is followed to the module it names (depth-bounded)
-    NodeId rustClassAt( std::uint32_t f, std::string_view modPath, std::string_view cls, int depth = 0 ) const
+    // the ONE Rust class `cls` module `modPath` (seen from byte `at` of `f`) defines — or re-exports: a `use` of the name at
+    // the module's own level (`pub use mdbook::MDBook;` in lib.rs) is followed to the module it names (depth-bounded)
+    NodeId rustClassAt( std::uint32_t f, std::uint32_t at, std::string_view modPath, std::string_view cls, int depth = 0 ) const
     {
         std::uint32_t crate = kNoCrate;
         std::string   module;
-        if( depth > 4 || !rustModuleOf( f, modPath, crate, module, 0 ) )
+        bool          found = false;
+        if( depth > 4 || !rustModuleOf( f, at, modPath, crate, module, 0 ) )
         {
             return kNoNode;
         }
+        return rustItemAt( crate, module, cls, depth, found );
+    }
+    // the item `cls` of module (crate, module): a class declared at the module's own level (a file module's file level, an
+    // inline mod's body), else a re-export there; an alias there names nothing. `found` false when the module has none.
+    NodeId rustItemAt( std::uint32_t crate, const std::string& module, std::string_view cls, int depth, bool& found ) const
+    {
+        const auto   inl       = rust.inlineMods.find( rustModuleKey( crate, module ) );
+        const NodeId inlineMod = inl == rust.inlineMods.end() ? kNoNode : inl->second;
+        const Level  level     = rustModuleLevel( inlineMod );
+        const auto   atLevel   = [ & ]( std::uint32_t file, std::uint32_t pos )
+        {
+            return inlineMod == kNoNode ? file < rust.crateOf.size() && rust.crateOf[ file ] == crate && rust.moduleOf[ file ] == module && levelAt( file, pos ).file()
+                                        : file == ing.symbols[ inlineMod ].fileId && levelAt( file, pos ) == level;
+        };
         NodeId            one = kNoNode;
         const std::size_t n   = classesNamed( cls, CallResultFamily::Rust, [ & ]( NodeId c )
         {
-            const std::uint32_t cf = ing.symbols[ c ].fileId;   // an item of the module file itself, never of an inline `mod` in it
-            return cf < rust.crateOf.size() && rust.crateOf[ cf ] == crate && rust.moduleOf[ cf ] == module && enclosingSymbol( c ) == kNoNode;
+            const std::uint32_t cf = ing.symbols[ c ].fileId;   // an item of the module's own level, never of a mod or fn in it
+            return inlineMod == kNoNode ? cf < rust.crateOf.size() && rust.crateOf[ cf ] == crate && rust.moduleOf[ cf ] == module && enclosingSymbol( c ) == kNoNode
+                                        : enclosingSymbol( c ) == inlineMod;
         }, one );
-        return n > 0 ? ( n == 1 ? one : kNoNode ) : rustReexport( crate, module, cls, depth );
-    }
-    NodeId rustReexport( std::uint32_t crate, const std::string& module, std::string_view cls, int depth ) const
-    {
-        const auto files = rust.filesOf.find( rustModuleKey( crate, module ) );
-        NodeId     hit   = kNoNode;
-        bool       seen  = false;
-        if( files == rust.filesOf.end() )
+        bool aliased = false;
+        nameKey.assign( cls );
+        if( const auto aliases = aliasesByName.find( nameKey ); aliases != aliasesByName.end() )
         {
-            return kNoNode;
+            aliased = std::ranges::any_of( aliases->second, [ & ]( const Binding* b ) { return atLevel( b->fileId, b->startByte ); } );   // a Rust file's (atLevel)
         }
-        for( std::uint32_t mf : files->second )   // by reference: the layout's own list, never a copy
+        if( n > 0 || aliased )
+        {
+            found = true;
+            return n == 1 && !aliased ? one : kNoNode;
+        }
+        const auto files = rust.filesOf.find( rustModuleKey( crate, module ) );
+        const std::vector<std::uint32_t> none;
+        const std::vector<std::uint32_t>& of = inlineMod != kNoNode ? none : files == rust.filesOf.end() ? none : files->second;
+        NodeId hit = kNoNode;
+        const auto follow = [ & ]( std::uint32_t mf )
         {
             forEachImport( mf, cls, [ & ]( const Binding& b )
             {
-                if( b.kind == LocalBindKind::TypeImport )
+                if( b.kind == LocalBindKind::TypeImport && atLevel( mf, b.startByte ) )
                 {
                     const auto [ modPath, item ] = splitLast( b.importedName, "::" );
-                    const NodeId c = modPath.empty() ? kNoNode : rustClassAt( mf, modPath, item, depth + 1 );
-                    hit  = seen ? kNoNode : c;
-                    seen = true;
+                    const NodeId c = modPath.empty() ? kNoNode : rustClassAt( mf, b.startByte, modPath, item, depth + 1 );
+                    hit   = found ? kNoNode : c;
+                    found = true;
                 }
             } );
+        };
+        for( std::uint32_t mf : of )   // by reference: the layout's own list, never a copy
+        {
+            follow( mf );
+        }
+        if( inlineMod != kNoNode )
+        {
+            follow( ing.symbols[ inlineMod ].fileId );
         }
         return hit;
     }
@@ -862,12 +1248,14 @@ struct CallResultTypes
     {
         std::uint32_t crate = kNoCrate;
         std::string   module;
-        if( callResultFamilyOf( r.lang ) != CallResultFamily::Rust || r.qualifier.empty() || !rustModuleOf( r.fileId, r.qualifier, crate, module, 0 ) )
+        if( callResultFamilyOf( r.lang ) != CallResultFamily::Rust || r.qualifier.empty() || !rustModuleOf( r.fileId, r.startByte, r.qualifier, crate, module, 0 ) )
         {
             return false;
         }
         const std::uint32_t tf = ing.symbols[ target ].fileId;
-        return tf < rust.crateOf.size() && rust.crateOf[ tf ] == crate && rust.moduleOf[ tf ] == module;
+        std::string         targetModule;
+        rustModuleAt( tf, ing.symbols[ target ].sigStartByte, targetModule );
+        return tf < rust.crateOf.size() && rust.crateOf[ tf ] == crate && targetModule == module;
     }
     // `a::b::C` → ( `a::b`, `C` ); `C` → ( "", `C` ) — the last segment is namesplit::afterLast's
     static std::pair<std::string_view, std::string_view> splitLast( std::string_view path, std::string_view sep ) noexcept
@@ -875,57 +1263,20 @@ struct CallResultTypes
         const std::size_t at = path.rfind( sep );
         return { at == std::string_view::npos ? std::string_view{} : path.substr( 0, at ), namesplit::afterLast( path, sep ) };
     }
+    // Rust (fix round 3: bareClassAt's rows): a bare name resolves at the callee's own level — its fn bodies, then its
+    // module (a file, or an inline `mod`: a fresh scope, never the file's) — items, aliases and `use`s there first, then
+    // the level's globs; a written path is relative to the module the callee sits in.
     NodeId rustResultClass( std::uint32_t fileId, std::uint32_t at, std::string_view whole, std::string_view cls ) const
     {
         if( !whole.empty() )
         {
-            return rustClassAt( fileId, splitLast( whole, "::" ).first, cls );
+            return rustClassAt( fileId, at, splitLast( whole, "::" ).first, cls );
         }
-        bool         own   = false;
-        const NodeId local = inOwnFile( fileId, at, cls, CallResultFamily::Rust, own );
-        if( own )
+        if( !rust.built )
         {
-            return local;
+            buildRustLayout();
         }
-        bool   used = false;
-        NodeId hit  = kNoNode;
-        forEachImport( fileId, cls, [ & ]( const Binding& b )
-        {
-            if( b.kind == LocalBindKind::TypeImport )
-            {
-                const auto [ modPath, item ] = splitLast( b.importedName, "::" );
-                hit  = used ? kNoNode : rustClassAt( fileId, modPath, item );
-                used = true;
-            }
-        } );
-        if( used )
-        {
-            return hit;
-        }
-        // globs (`use super::*;`): every one must stay in the tree, and exactly one class of the name across them
-        NodeId globHit = kNoNode;
-        bool   decided = true;
-        forEachImport( fileId, "*", [ & ]( const Binding& b )
-        {
-            if( b.kind != LocalBindKind::TypeImport )
-            {
-                return;
-            }
-            std::uint32_t crate = kNoCrate;
-            std::string   module;
-            if( !rustModuleOf( fileId, b.importedName, crate, module, 0 ) )
-            {
-                decided = false;   // an outside glob may supply the name
-                return;
-            }
-            const NodeId c = rustClassAt( fileId, b.importedName, cls );
-            if( c != kNoNode )
-            {
-                decided = decided && globHit == kNoNode;
-                globHit = c;
-            }
-        } );
-        return decided ? globHit : kNoNode;
+        return bareClassAt( CallResultFamily::Rust, fileId, at, cls );
     }
 
     // C++ / ObjC: Rule 2 keys a member by its class's NAME, so the class must be the ONLY in-tree class definition of that
@@ -1009,13 +1360,17 @@ struct CallResultTypes
             }
             for( const Binding* b : importsByFile[ file ] )
             {
-                if( !isCppUsing( *b ) )
+                if( !isCppScopeRow( *b ) )
                 {
                     continue;
                 }
                 if( own && !( b->startByte < at && b->spanStart <= at && at < b->spanEnd ) )
                 {
                     continue;   // declared after the callee, or in a namespace that does not hold it
+                }
+                if( !own && classHolding( file, b->startByte ) != kNoNode )
+                {
+                    continue;   // fix round 3: a class-scope alias is in force in its own class only
                 }
                 if( !own )
                 {
@@ -1071,15 +1426,26 @@ struct CallResultTypes
             return kNoNode;
         }
         const NodeId c = it->second[ 0 ];
+        // fix round 3: a member type a base of an enclosing class declares (a nested class, a member alias) is in scope
+        // there and is not followed — the spelling names nothing
+        std::vector<Level> chain;
+        chainAt( f, at, chain );
+        for( const Level& lv : chain )
+        {
+            if( lv.sym != kNoNode && classKind( ing.symbols[ lv.sym ].kind ) && inheritsMemberType( lv.sym, cls, CallResultFamily::Cpp ) )
+            {
+                return kNoNode;
+            }
+        }
         std::vector<std::string_view> calleePath;
         namespacePathAt( f, at, calleePath );
         bool   declared = false;
         NodeId byDecl   = kNoNode;
         forEachCppUsing( f, at, calleePath, [ & ]( const Binding& b )
         {
-            if( b.var == cls )
+            if( b.var == cls )   // a using-declaration resolves as a written `ns::T`; an alias / typedef (fix round 3) names nothing
             {
-                const NodeId named = cppResultClass( b.importedName, cls );
+                const NodeId named = b.kind == LocalBindKind::TypeAlias ? kNoNode : cppResultClass( b.importedName, cls );
                 byDecl   = declared && named != byDecl ? kNoNode : named;
                 declared = true;
             }
@@ -1117,6 +1483,18 @@ struct CallResultTypes
         return named ? c : kNoNode;
     }
 
+    // C++ (fix round 3): does the first segment of a qualified result (`lib` in `lib::T`) name a namespace alias (or any
+    // alias) in force at byte `at` of `f` — `namespace lib = ext;` makes `lib::T` ext's, never an in-tree namespace lib's
+    bool cppQualifierAliased( std::uint32_t f, std::uint32_t at, std::string_view whole ) const
+    {
+        const std::string_view head = whole.substr( 0, whole.find( "::" ) );
+        std::vector<std::string_view> calleePath;
+        namespacePathAt( f, at, calleePath );
+        bool aliased = false;
+        forEachCppUsing( f, at, calleePath, [ & ]( const Binding& b ) { aliased = aliased || ( b.kind == LocalBindKind::TypeAlias && b.var == head ); } );
+        return aliased;
+    }
+
     // the class a ReturnType record's written type resolves to in its own (the callee's) file — kNoNode for none or several
     NodeId resultClassOf( const Binding& rt, Lang lang ) const
     {
@@ -1127,7 +1505,8 @@ struct CallResultTypes
             case CallResultFamily::TypeScript: return tsResultClass( rt.fileId, rt.startByte, rt.importedName, rt.typeName );
             case CallResultFamily::Rust:       return rustResultClass( rt.fileId, rt.startByte, rt.importedName, rt.typeName );
             case CallResultFamily::Cpp:        return rt.importedName.empty() ? cppUnqualifiedClass( rt.fileId, rt.startByte, rt.typeName )
-                                                                              : cppResultClass( rt.importedName, rt.typeName );
+                                                    : cppQualifierAliased( rt.fileId, rt.startByte, rt.importedName ) ? kNoNode
+                                                                                                                      : cppResultClass( rt.importedName, rt.typeName );
             default:                           return kNoNode;
         }
     }
@@ -1334,6 +1713,7 @@ struct ReceiverEvidence
         const std::size_t N = ing.symbols.size();
         std::vector<const Binding*> qualified;   // locals, parameters and fields written `pkg.T`: decided once every import alias is known
         types.importsByFile.assign( ing.files.size(), {} );
+        types.filePackage.assign( ing.files.size(), {} );
         types.moduleAlias = &moduleAlias;
         types.goPackages  = goPackages;
         for( const Binding& b : ing.bindings )
@@ -1628,11 +2008,12 @@ struct ReceiverEvidence
     }
     // a receiver root that names a CLASS at this site: a class-name receiver language, a class of that name, and no local
     // of the caller hiding it (`Interval = make(); Interval.validate( v )`)
-    // (L) fix round 2 (D3): a JVM caller's single-type import of `root` from outside the tree makes it that outside class
+    // (L) fix round 2 / 3 (D3, D6): a JVM caller that does not SEE an in-tree class `root` (an import of an outside one, an
+    // outside on-demand import alone, no import at all) names an outside class — never an in-tree namesake
     bool namesClass( const Reference& r, std::string_view root, std::string_view cls ) const
     {
         return classNameReceiverLang( r.lang ) && classNames.contains( std::string( cls ) ) && !isLocalName( r.fromSymbol, root )
-            && !types.importsFromOutside( r.fileId, root );
+            && !( callResultFamilyOf( r.lang ) == CallResultFamily::Jvm && types.jvmHides( r.fileId, r.startByte, root ) );
     }
     // the class owning the caller — the caller's own owner, else the nearest enclosing function's (a closure in a method)
     std::string_view callerClass( NodeId from ) const
@@ -1750,7 +2131,8 @@ struct ReceiverEvidence
         switch( memberOwnerRuleOf( cs.lang ) )
         {
             case MemberOwnerRule::PackageDir:   return types.dirOf( ms.fileId ) == types.dirOf( cs.fileId );
-            case MemberOwnerRule::FileOrUnique: return ms.fileId == cs.fileId || types.sameNamedClasses( cls ) == 1;
+            case MemberOwnerRule::FileOrUnique:   // fix round 3: in the type's own file, the impl sits in the type's own item scope
+                return ( ms.fileId == cs.fileId && types.innermostItemScope( m ) == types.innermostItemScope( cls ) ) || types.sameNamedClasses( cls ) == 1;
             case MemberOwnerRule::Lexical:
             default:
             {
