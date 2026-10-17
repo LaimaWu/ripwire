@@ -124,6 +124,8 @@ QUERY="frobnicate widget cache"
 # ranking, body or anchor byte moved (anchor-neutrality, this golden's purpose, untouched).
 # L1 (2026-09-19): the CLI default legend is compact; this arm compares against a golden recorded from the full default, so it asks for it.
 "$BIN" anchorfix --no-cache --for="$QUERY" --no-route --legend=full >"$TMP/plain_full.xml" 2>/dev/null
+# RE-PIN 2026-10-15 (forbudget-soft round C, FOLD C; rule 4): golden_for.xml re-captured — the ONLY bytes that moved are the
+# <tail> (page rows with sym= after the rank rows; total= every positive-score file), the tail legend clause and est_tokens=.
 diff -q "$TMP/plain_full.xml" "$ROOT/test/anchorfix/golden_for.xml" >/dev/null \
     && ok "golden-neutral: plain --for --no-route byte-identical to the pre---anchor golden" \
     || no "plain --for --no-route drifted from test/anchorfix/golden_for.xml (--anchor leaked into the default lens)"

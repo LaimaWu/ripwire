@@ -17,10 +17,10 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 253 | 98 | 149 | **104** |
+| 259 | 102 | 151 | **108** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 253 + 7 is the 260 constants this generator parses out of `src/`.
+are not counted as caps, and 259 + 7 is the 266 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -38,8 +38,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **139 of 253 caps are classified
-(49 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 114 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **139 of 259 caps are classified
+(49 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 120 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -89,7 +89,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 98 files that declare a cap — the 253 caps counted above, and no parameter.
+One table for each of the 102 files that declare a cap — the 259 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -203,6 +203,23 @@ Discloses: `capped`, `reads_capped`
 | `kMaxAliasDepth` | `8` | INDEXING | — |
 | `kMaxEnvNameLen` | `128` | BOUNDARY | longest plausible environment-variable name |
 | `kMaxSitesShown` | `8` | OUTPUT | <read> sites per gate; a DEFAULT, raisable by --limit=N (effectiveRowCap), lifted by --detail |
+
+### `src/declinedsites.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kDeclinedSiteCandCap` | `8` | — | cand= entries per row on --legend=full; cand_more= counts the rest |
+| `kDeclinedSiteCap` | `16` | — | <dc> rows per answer by default; --limit=N raises it (dc_next= does) |
+
+### `src/defattrib.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kDefTableCap` | `16` | — | — |
 
 ### `src/didyoumean.h`
 
@@ -324,6 +341,14 @@ Discloses: `capped`, `hosts_capped`
 | `kMaxFlipRows` | `25` | OUTPUT | per emitted list; a DEFAULT --limit=N raises and --detail lifts |
 | `kMaxNearMisses` | `5` | OUTPUT | "did you mean" suggestions on an unknown gate name; --limit=N raises it |
 
+### `src/forowner.h`
+
+Discloses: `capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kForBodySlotMaxBytes` | `6000` | — | — |
+
 ### `src/forpage.h`
 
 Discloses: `capped`
@@ -368,6 +393,14 @@ Discloses: `importers_capped`
 | `kMaxRadius` | `12` | — | — |
 | `kMaxTerminals` | `16` | — | >16 is the CALLER's usage error; the core CLAMPS (never ASSUMEs on hostile input) |
 | `kMemberSpellingsShown` | `6` | OUTPUT | — |
+
+### `src/grepcarrier.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kGrepCarrierShown` | `3` | — | reads_at= sites and vals= entries printed per row (reads=/vals_total= count all) |
 
 ### `src/handlershape.h`
 
@@ -893,7 +926,8 @@ Discloses: `capped`, `calls_capped`, `entries_capped`, `files_capped`, `importer
 | `kForAutoBodyBudgetBytes` | `6000` | — | — |
 | `kForCapTailSigBytes` | `96` | — | — |
 | `kForCompactSurfaceBudgetBytes` | `1000` | — | — |
-| `kForFileTailShownCap` | `24` | — | — |
+| `kForFileTailPageRows` | `40` | — | FOLD C: page 0 of the file page (forpage.h kForPageRowsDefault) |
+| `kForFileTailShownCap` | `24` | — | the rank rows (deep-tail d2): files outside the shown head |
 | `kForLensDefaultTopN` | `40` | — | — |
 | `kForPayloadBudgetBytes` | `7500` | — | — |
 | `kLegoClosureRowCap` | `200` | OUTPUT | — |

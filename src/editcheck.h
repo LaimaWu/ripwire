@@ -184,12 +184,23 @@ inline std::size_t editCheckDeclTargetGroup( const IngestResult& ing, const Edit
     return target;
 }
 
-inline void editCheckFoldDeclGroups( const IngestResult& ing, EditCheckGroupKeys& gk )
+// The fold's verdict for every group: the index of the group it folds into, or its own index when it is kept. ONE rule
+// with two readers: editCheckFoldDeclGroups below drops the folded groups (a prototype and its definition are one
+// contract), and defattrib.h's definition groups (the per-row attribution of --callers/--callees/--impact) join a folded
+// declaration to the definition it declares — so "which declarations are this definition" cannot mean two things.
+// A pair is tried only when editCheckTieCandidate (parser fields alone) admits it, so a definition's signature is read
+// only for a declaration that could declare it.
+inline std::vector<std::size_t> editCheckDeclFoldTargets( const IngestResult& ing, const EditCheckGroupKeys& gk )
 {
-    const std::size_t groupCount = gk.keys.size();
+    const std::size_t        groupCount = gk.keys.size();
+    std::vector<std::size_t> target( groupCount );
+    for( std::size_t groupIndex = 0; groupIndex < groupCount; ++groupIndex )
+    {
+        target[ groupIndex ] = groupIndex;
+    }
     if( groupCount < 2 )
     {
-        return;
+        return target;
     }
     EditCheckSources                                  sources( ing, EditCheckSpliced{} );
     std::deque<std::pair<NodeId, EditCheckSignature>> defSigs;   // each definition's signature, read once (a deque: stable refs)
@@ -205,13 +216,34 @@ inline void editCheckFoldDeclGroups( const IngestResult& ing, EditCheckGroupKeys
     };
     const auto declares = [ & ]( NodeId decl, NodeId def )
     {
-        return editCheckTieDeclaration( ing, sources, decl, def, defSigOf( def ) ).tie == EditCheckTie::Declares;
+        return editCheckTieCandidate( ing.symbols[ decl ], ing.symbols[ def ] )
+            && editCheckTieDeclaration( ing, sources, decl, def, defSigOf( def ) ).tie == EditCheckTie::Declares;
     };
-
-    EditCheckGroupKeys kept;
     for( std::size_t groupIndex = 0; groupIndex < groupCount; ++groupIndex )
     {
-        if( editCheckDeclOnlyGroup( ing, gk.members[ groupIndex ] ) && editCheckDeclTargetGroup( ing, gk, groupIndex, declares ) < groupCount )
+        if( editCheckDeclOnlyGroup( ing, gk.members[ groupIndex ] ) )
+        {
+            const std::size_t into = editCheckDeclTargetGroup( ing, gk, groupIndex, declares );
+            target[ groupIndex ] = into < groupCount ? into : groupIndex;
+        }
+    }
+    const bool targetsKept = std::all_of( target.begin(), target.end(), [ & ]( std::size_t t ) { return t < groupCount && target[ t ] == t; } );
+    ENSURES( targetsKept, "a folded group names a kept one (a fold target holds a definition, so it never folds itself)" );
+    return target;
+}
+
+inline void editCheckFoldDeclGroups( const IngestResult& ing, EditCheckGroupKeys& gk )
+{
+    const std::size_t groupCount = gk.keys.size();
+    if( groupCount < 2 )
+    {
+        return;
+    }
+    const std::vector<std::size_t> target = editCheckDeclFoldTargets( ing, gk );
+    EditCheckGroupKeys              kept;
+    for( std::size_t groupIndex = 0; groupIndex < groupCount; ++groupIndex )
+    {
+        if( target[ groupIndex ] != groupIndex )
         {
             continue;   // folded into the definition group it declares
         }

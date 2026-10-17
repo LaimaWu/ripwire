@@ -1169,9 +1169,21 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
         // M11: the root's machine-readable price, defined beside the ledger prose.
         // F5: "it" used to have three possible referents on this root. over_ceiling= names the ONE comparison
         // it is: est_tokens against the smallest ceiling this root prints.
-        h += "On the root: est_tokens= prices the delivered bundle in tokens, budget_tokens= is the token target you passed (absent "
-             "when none), max_tokens= is the body ceiling you passed via the max_tokens flag (absent when none); over_ceiling= is 1 when "
-             "est_tokens exceeds the smallest ceiling named here (the bundle is then complete, not trimmed).";
+        // forbudget-soft (decision D-5): the caller's budget_tokens= is a SOFT target — sections are shaped toward it, nothing is
+        // labelled over it and the header is never dropped for it; max_tokens= stays the hard body ceiling. A bundle without a
+        // budget of the caller's keeps its reading byte for byte.
+        if( in.budgetTokens > 0 )
+        {
+            h += "On the root: est_tokens= prices the delivered bundle in tokens, budget_tokens= is the soft token target you passed "
+                 "(est_tokens may exceed it, the header always ships), max_tokens= is the body ceiling you passed via the max_tokens "
+                 "flag (absent when none); over_ceiling= is 1 when est_tokens exceeds max_tokens (the bundle is then complete, not trimmed).";
+        }
+        else
+        {
+            h += "On the root: est_tokens= prices the delivered bundle in tokens, budget_tokens= is the token target you passed (absent "
+                 "when none), max_tokens= is the body ceiling you passed via the max_tokens flag (absent when none); over_ceiling= is 1 when "
+                 "est_tokens exceeds the smallest ceiling named here (the bundle is then complete, not trimmed).";
+        }
         h += extraNotes;
         if( in.notesDegraded )
         {
@@ -1292,9 +1304,8 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
         // nothing else, so the attribute and the numbers beside it can always be reconciled by subtraction.
         // 0 = the caller named none (the working budget is the lens's own default, stated in the ledger prose
         // in bytes) and the label is then withheld rather than pointed at a number the root does not carry.
-        std::size_t namedCeiling = 0;
-        if( in.budgetTokens > 0 ) { namedCeiling = in.budgetTokens; }
-        if( in.maxTokens > 0 )    { namedCeiling = namedCeiling > 0 ? std::min( namedCeiling, in.maxTokens ) : in.maxTokens; }
+        // forbudget-soft (D-5): budget_tokens= is a soft target, never a ceiling this root labels against — max_tokens= is
+        const std::size_t namedCeiling = in.maxTokens;
         const auto rootAttrsFor = [ & ]( const std::string& doc, bool widestSpelling ) -> std::string
         {
             std::size_t est   = 0;
@@ -1322,7 +1333,9 @@ inline FromTraceResult fromTraceBundleText( const IngestResult& ing, const Graph
             spliceRootAttrs( candidate, rootAttrsFor( candidate, /*widestSpelling=*/true ) );
             return pricedBytesOf( traceDeliveredBytes( candidate ) );
         };
-        const CeilingLadderChoice chosen = in.compactLegend
+        // forbudget-soft (D-5): under the caller's soft budget no ladder runs — the src echo always ships
+        const CeilingLadderChoice chosen = in.budgetTokens > 0 ? CeilingLadderChoice{ headerStr, CeilingRung::AsBuilt }
+                                         : in.compactLegend
             ? climbDeliveredLadder( buildRung, headerStr, whole.substr( headerStr.size() ), deliveredOf,
                                     ceilingAllowanceFromBudgetBytes( bundleBudget ), kNotes )
             : climbCeilingLadder( buildRung,

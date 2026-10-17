@@ -65,6 +65,14 @@
         attribute: (identifier) @name)
   ]) @reference.call
 
+; An element access `obj[ k ]` is a call of the receiver class's subscript operator method — `__getitem__`, or
+; `__setitem__` as an assignment's target — WHEN a receiver rule proves that class (`self[ k ]` in a class, a typed
+; parameter or local, a constructed receiver). @name is the RECEIVER here, not a callee name: ingest_binds.h
+; subscriptOperatorRef names the operator from the language's table (kSubscriptOperatorMethods) and records the site
+; as RefRole::Subscript, which graph.h's resolve loop admits only on that proof (test/subscriptopcheck.sh).
+(subscript
+  value: (_) @name) @reference.subscript
+
 ; Shared import vocabulary (#358). The dependency target is still ONE per statement: the first
 ; name of a plain import (including its alias spelling), or the module_name of a from-import.
 ; The child anchor captures only the first plain-import name. The C++ side (ingest_importcap.h)

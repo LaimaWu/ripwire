@@ -676,6 +676,42 @@ inline void captureRubyClassMixins( TSNode root, std::uint32_t fileId, std::stri
     } );
 }
 
+// Parser version 174 (lane ruby-pair; test/subscriptopcheck.sh): a TOP-LEVEL `include M` / `extend M` / `self.extend M`.
+// Outside every class and module, self is Ruby's main object, and these make it answer M's methods — rake extends main
+// with Rake::DSL so a Rakefile's bare `task` / `file` reach it. graph.h lists main as M's implementor (`<impl t="object"
+// n="main">`). Ruby-only: main is Ruby's top-level self; no other indexed language has an object that a file's top level
+// mixes a module into (Python/JS module scope is a namespace, not an instance). Read: a statement of the program itself,
+// receiver-less or on `self`, and each constant argument. Not read (stated floors, test/subscriptopcheck.sh): a
+// directive inside a top-level `if` / `begin` or a block, `prepend` (main has none), a non-constant argument.
+inline void captureRubyMainMixins( TSNode root, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
+{
+    if( ts_node_is_null( root ) || ( src.find( "extend" ) == std::string_view::npos && src.find( "include" ) == std::string_view::npos ) )
+    {
+        return;
+    }
+    ChildCursor cursor( root );
+    forEachNamedChild( root, cursor.cur, [ & ]( TSNode n )
+    {
+        if( !kindIs( ts_node_type( n ), "call" ) )
+        {
+            return true;
+        }
+        const TSNode           recv = fieldChild( n, NodeField::Receiver );
+        const std::string_view verb = fieldIdentifierText( n, NodeField::Method, src );
+        if( ( verb != "include" && verb != "extend" ) || !( ts_node_is_null( recv ) || kindIs( ts_node_type( recv ), "self" ) ) )
+        {
+            return true;
+        }
+        for( const TSNode c : rubyConstantArguments( n ) )
+        {
+            binds.push_back( RawBind { .fileId = fileId, .startByte = ts_node_start_byte( c ), .lang = Lang::Ruby, .kind = LocalBindKind::RubyMainMixin,
+                                       .spanStart = ts_node_start_point( c ).row + 1, .importedName = std::string( verb ),
+                                       .typeName = rubyConstantText( c, src ) } );
+        }
+        return true;
+    } );
+}
+
 // ─── FactoryBot's factory definitions (parser version 132, test/rubytypedrecvcheck.sh) ─────────────────────────────────
 // `factory :user do … end` inside a `FactoryBot.define` (or `FactoryGirl.define`) block defines what `create( :user )`
 // builds, and its class is FactoryBot's own rule: the `class:` option as written — a constant, or a string naming one (its

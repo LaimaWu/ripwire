@@ -140,7 +140,10 @@ MISSING=$( comm -23 "$TMP/set_def" "$TMP/set_8k" | tr '\n' ' ' )
 sigsblock "$TMP/def"  >"$TMP/sigs_def"
 sigsblock "$TMP/tb8k" >"$TMP/sigs_8k"
 [ -s "$TMP/sigs_def" ] || no "#1 presence: could not extract a <sigs> block from the default run"
-diff -q "$TMP/sigs_def" "$TMP/sigs_8k" >/dev/null \
+# forbudget-soft (rule 4): the default answer discloses the rows it serves past its 7.5 KB target (<sigs past_target="K">);
+# a soft target names none (its rows are inside its own target). Everything else — every row, its text tier, the
+# continuation — must still be the default's byte for byte: the frozen-share invariant, minus that one disclosure.
+diff -q <( sed 's/ past_target="[0-9]*"//' "$TMP/sigs_def" ) "$TMP/sigs_8k" >/dev/null \
     && ok "#1 the sig section at the explicit ceiling is byte-identical to the default's (frozen share)" \
     || no "#1 the explicit ceiling re-inflated the sig section (default $( wc -c <"$TMP/sigs_def" | tr -d ' ' ) B vs 8000 $( wc -c <"$TMP/sigs_8k" | tr -d ' ' ) B)"
 
@@ -183,7 +186,10 @@ grep -q 'bundle="compact"' "$TMP/cdef" \
 sigsblock "$TMP/cdef" >"$TMP/sigs_cdef"
 sigsblock "$TMP/c8k"  >"$TMP/sigs_c8k"
 [ -s "$TMP/sigs_cdef" ] || no "#5 presence: could not extract a <sigs> block from the compact default run"
-diff -q "$TMP/sigs_cdef" "$TMP/sigs_c8k" >/dev/null \
+# forbudget-soft (rule 4): the default answer discloses the rows it serves past its 7.5 KB target (<sigs past_target="K">);
+# a soft target names none (its rows are inside its own target). Everything else — every row, its text tier, the
+# continuation — must still be the default's byte for byte: the frozen-share invariant, minus that one disclosure.
+diff -q <( sed 's/ past_target="[0-9]*"//' "$TMP/sigs_cdef" ) "$TMP/sigs_c8k" >/dev/null \
     && ok "#5 the compact route's sig section is byte-identical at the explicit ceiling (frozen share)" \
     || no "#5 the explicit ceiling re-inflated the COMPACT route's sig section (default $( wc -c <"$TMP/sigs_cdef" | tr -d ' ' ) B vs 8000 $( wc -c <"$TMP/sigs_c8k" | tr -d ' ' ) B)"
 

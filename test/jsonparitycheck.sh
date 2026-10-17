@@ -362,7 +362,8 @@ XML_ROUTES="$( "$BIN" "$ROOT/test/routeedgefix" --for="$RQ" --no-cache 2>/dev/nu
 # that sweep is what still holds the line. Three clauses, per rung:
 #   • budget_tokens is on the JSON root whenever it is on the XML root, and names the SAME N;
 #   • est_tokens is served in both (the price a budget shapes against is never withheld);
-#   • est_tokens > N implies over_ceiling in that dialect's own spelling — ONE unit, both dialects.
+#   • est_tokens > N implies over_ceiling in that dialect's own spelling — ONE unit, both dialects. (forbudget-soft: N is a
+#     soft target now; the clause is "neither dialect labels it, both continue the cut" — still one rule, both dialects.)
 # The XML side is asserted here too rather than assumed: this is a PARITY arm, and a parity that only ever
 # reads one side cannot tell a fixed dialect from a regressed reference.
 echo
@@ -389,12 +390,18 @@ for BTB in 880 900 1500; do
     else
         no "R1: budget=$BTB — est_tokens missing (xml='$XE' json='$JE'); a budget that shapes a bundle must price it"
     fi
-    { [ -n "$XE" ] && { [ "$XE" -le "$BTB" ] || [ "$XL" -eq 1 ]; }; } 2>/dev/null \
-        && ok "R1: budget=$BTB xml — est_tokens=$XE is inside the ceiling or labelled (over_ceiling=$XL)" \
-        || no "R1: budget=$BTB xml — est_tokens=$XE exceeds the stated ceiling with NO over_ceiling"
-    { [ -n "$JE" ] && { [ "$JE" -le "$BTB" ] || [ "$JL" -eq 1 ]; }; } 2>/dev/null \
-        && ok "R1: budget=$BTB json — est_tokens=$JE is inside the ceiling or labelled (over_ceiling=$JL)" \
-        || no "R1: budget=$BTB json — est_tokens=$JE exceeds the stated ceiling with NO over_ceiling — the XML twin's unit did not reach this dialect"
+    # forbudget-soft (owner decisions 2026-10-14; rule 4): budget_tokens= on --for is a SOFT target — est_tokens may exceed it
+    # by contract and NEITHER dialect labels it over_ceiling (one rule, both dialects: the parity this arm exists for). The
+    # cut the target makes is continued in both: <sigs next=> / "sigs_next".
+    XN=0; JN=0
+    case "$BX" in *'<sigs '*' next="'*) XN=1 ;; esac
+    case "$BJ" in *'"sigs_next":'*) JN=1 ;; esac
+    { [ -n "$XE" ] && [ "$XL" -eq 0 ] && [ "$XN" -eq 1 ]; } 2>/dev/null \
+        && ok "R1: budget=$BTB xml — soft target: no over_ceiling (est_tokens=$XE), the cut continued (<sigs next=>)" \
+        || no "R1: budget=$BTB xml — over_ceiling=$XL on a soft target, or the cut carries no next= (est_tokens=$XE next=$XN)"
+    { [ -n "$JE" ] && [ "$JL" -eq 0 ] && [ "$JN" -eq 1 ]; } 2>/dev/null \
+        && ok "R1: budget=$BTB json — soft target: no over_ceiling (est_tokens=$JE), the cut continued (\"sigs_next\")" \
+        || no "R1: budget=$BTB json — over_ceiling=$JL on a soft target, or no \"sigs_next\" (est_tokens=$JE) — the twins disagree"
 done
 
 echo

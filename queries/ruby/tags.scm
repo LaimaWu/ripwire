@@ -79,6 +79,13 @@
 ; raises in a class and in a module) and defines nothing.
 (call
   method: (identifier) @name) @reference.call
+; An element access `recv[ k ]` is a call of the receiver class's `[]` — `[]=` as an assignment's target — WHEN a
+; receiver rule proves that class (`self[ k ]` in a def, through the class's include/extend ancestry; a receiver the
+; code builds; a class constant's own `def self.[]`). @name is the RECEIVER here, not a callee name: ingest_binds.h
+; subscriptOperatorRef names the operator from the language's table (kSubscriptOperatorMethods) and records the site
+; as RefRole::Subscript, which graph.h's resolve loop admits only on that proof (test/subscriptopcheck.sh).
+(element_reference
+  object: (_) @name) @reference.subscript
 ; The Rails schema capture (test/rubyschemacheck.sh): a file whose tree holds a
 ; `create_table "x", … do |t| … end` call is a rendered db/schema.rb (content-gated — path plays no
 ; part), and each `t.<type> "name"` / `t.<type> :name` in the table block mints ONE data-kind def

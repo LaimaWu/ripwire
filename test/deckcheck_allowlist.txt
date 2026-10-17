@@ -135,3 +135,6 @@
 --langs	test/langidentitycheck.sh's own option ("langidentitycheck.sh BASE HEAD --langs=<touched languages>", the language tags whose fixtures run) quoted in CONTRIBUTING.md's common-code Definition of done, not a ripwire flag
 --syms	test/langidentitycheck.sh's own option ("--syms=FILE", the symbols a slice touched) quoted in the same CONTRIBUTING.md command as --langs above, not a ripwire flag
 --intended	test/langidentitycheck.sh's own option ("--intended" rows that waive a DIFF) quoted in the same CONTRIBUTING.md paragraph as --langs above, not a ripwire flag
+--no-ext-diff	git's own flag, named in the CHANGELOG's git-subprocess hardening entry as an option ripwire passes to its own git diff/log/show/blame children, not a ripwire flag
+--no-textconv	git's own flag, same CHANGELOG hardening entry as --no-ext-diff above, not a ripwire flag
+--ignore-submodules	git's own flag ("--ignore-submodules=dirty" on status/diff), same CHANGELOG hardening entry as --no-ext-diff above, not a ripwire flag

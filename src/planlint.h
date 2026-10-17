@@ -119,6 +119,7 @@
 #include "gitmine.h"      // gitRepoToplevel
 #include "quality.h"      // quality::gitBlameConfigPins / quality::gitOneLine — the shared git-blame plumbing
 #include "gitstamp.h"     // gitstamp::stampAt — the at="<sha>[+dirty]" anchor
+#include "githarden.h"    // githarden::hardenLateRoot — FILE's repository is probed like a request-named root
 #include "serialize.h"    // escapeXml / appendCdataSafe
 
 #include <algorithm>
@@ -385,7 +386,7 @@ inline std::string gitBlameLineSha( const std::string& repoRoot, const std::stri
         return {};
     }
     const std::string cmd = gitCmd( " -c core.quotepath=false" ) + quality::gitBlameConfigPins( repoRoot )
-                           + " -C " + shSingleQuote( repoRoot ) + " blame --porcelain -L "
+                           + " -C " + shSingleQuote( repoRoot ) + " blame --no-ext-diff --no-textconv --porcelain -L "
                            + std::to_string( lineNo1 ) + ",+1 HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
@@ -565,6 +566,9 @@ inline LintResult computePlanLint( const std::string& fileArg )
     }
     if( res.gitAvailable )
     {
+        // FILE's repository need not be a crawl root, so main's startup probe never saw it: probe it here, before the first
+        // git child that reads its config (status for the stamp, blame below), as a server probes a request-named root.
+        githarden::hardenLateRoot( repoRoot );
         res.atStamp = gitstamp::stampAt( repoRoot );
     }
 

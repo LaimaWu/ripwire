@@ -103,12 +103,14 @@ fi
 # the core sentence, not the reference guide's restatement of it in §5. That is E9's failure one arm
 # over: a second copy of a gated number, free to drift alone. EVERY occurrence is checked now, and a
 # failure names the line. The loop reads a here-doc, not a pipeline, so `no` sets fail in THIS shell.
-b_lines="$( grep -nE '[0-9]+ long flags advertised' "$README" || true )"
+# 2026-10-16 (CodeRabbit, #413): the section summary `<b>N long flags</b>` restates it too, and drifted (190 vs 192) —
+# it is a third site, read by the same loop.
+b_lines="$( grep -nE '[0-9]+ long flags( advertised|</b>)' "$README" || true )"
 b_seen=0; b_bad=""
 while IFS= read -r b_ln; do
     [ -z "$b_ln" ] && continue
     b_seen=$(( b_seen + 1 ))
-    b_num="$( printf '%s' "$b_ln" | grep -oE '[0-9]+ long flags advertised' | head -1 | grep -oE '^[0-9]+' )"
+    b_num="$( printf '%s' "$b_ln" | grep -oE '[0-9]+ long flags( advertised|</b>)' | head -1 | grep -oE '^[0-9]+' )"
     [ "$b_num" = "$derived" ] || b_bad="$b_bad README.md:${b_ln%%:*}(states $b_num)"
 done <<EOF
 $b_lines
@@ -118,7 +120,7 @@ if [ "$b_seen" -eq 0 ]; then
 elif [ -n "$b_bad" ]; then
     no "(B) --help has $derived distinct flags; README.md disagrees at:$b_bad"
 else
-    ok "(B) all $b_seen '<N> long flags advertised' site(s) in README.md state $derived, matching the derived count"
+    ok "(B) all $b_seen '<N> long flags advertised' / '<b>N long flags</b>' site(s) in README.md state $derived, matching the derived count"
 fi
 
 # ── (C) mutation control — a wrong count in a COPY must be caught ───────────────────────────────────

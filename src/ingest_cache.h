@@ -140,7 +140,12 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 31;           // 31: train 27 — lane lego-transitive's record format below (the lane numbered it 30;
+constexpr std::uint32_t kCacheVersion = 32;           // 32: train 28 — the RefRole byte a record holds gained two appended values: lane
+                                                      //    ruby-pair's Subscript (9) and PR #380's Inert (10; 9 on the PR's branch, which predates
+                                                      //    Subscript). readRef validates the byte against kRefRoleCount, so no record changes
+                                                      //    shape, but a branch build's blob would read its role 9 as the other role here; 32
+                                                      //    sits above every live value (31 on main and every lane).
+                                                      // 31: train 27 — lane lego-transitive's record format below (the lane numbered it 30;
                                                       //    31 is above every live value: the lane's branch builds wrote c30 blobs at 162).
                                                       // 30: lane lego-transitive fix 1 — an INHERIT RawRef appends `baseBind` (u32: the
                                                       //    same-file declaration its base binds to, ingest_relations.h localBaseBinding);
@@ -320,13 +325,30 @@ constexpr std::uint32_t kCacheVersion = 31;           // 31: train 27 — lane l
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 173;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 176;          // bump on any grammar/.scm/extraction change
+                                                      // 176 = 2026-10-15 (train 28): strictly above every number a train-28 binary used — main 173
+                                                      //   (slice 4a, rich 174), lane grep-carrier 173 (value refs through ?? || && / or and, rich 174),
+                                                      //   lane ruby-pair 174 (subscript references + Ruby main-object mixins, rich 175), PR #380 145 (Elixir inert
+                                                      //   regions, RefRole::Inert), the other lanes 171. Rich file tag 177.
+                                                      // 145 = PR #380 (issue #357, @LaimaWu; branch based on 143, 144 then main's rich tag): Elixir quote
+                                                      //   live holes and counted inert call candidates (RefRole::Inert, appended after ruby-pair's
+                                                      //   Subscript at the train, so its byte is 10, not the branch's 9).
                                                       // 173 = 2026-10-15 (slice 4a, #400): the Ruby mixin directives (`include` / `extend` / `prepend`)
                                                       //   move off the captureIncludes walk onto the shared base-relations path —
                                                       //   queries/ruby/tags.scm captures the directive as @reference.mixin and captureTagsFacts
                                                       //   emits each constant's inherit reference through emitBaseRef (captureRubyMixinBases retired).
                                                       //   Output byte-identical; the extraction path changed, so the number moves. 173, not 172: 172 is
                                                       //   171's rich file tag. Rich file tag 174. kCacheVersion stays 31.
+                                                      // 173 = 2026-10-14 (train 28 lane grep-carrier): value-reference capture walks the
+                                                      //   value-preserving operators (JS ?? || &&, Python or/and, JS ??= ||= &&=), so the
+                                                      //   Value rows a cache holds change. 173, not 172: a lean 172 would read 171's rich
+                                                      //   blobs, and a concurrent lane may take 172 — the train renumbers. Rich file tag 174.
+                                                      // 174 = lane ruby-pair (train 28, 2026-10-14; the train renumbers): Ruby and Python element
+                                                      //   accesses record RefRole::Subscript references (tags.scm @reference.subscript, ingest_binds.h
+                                                      //   subscriptOperatorRef; a NEW role byte, which readRef validates against kRefRoleCount), the
+                                                      //   Ruby typing walk types their receivers, and a Ruby file's top-level `include M` / `extend M`
+                                                      //   records LocalBindKind::RubyMainMixin (an appended kind). 172/173 skipped: rich file tag 172
+                                                      //   is 171's. Rich file tag 175. kCacheVersion stays 31.
                                                       // 171 = 2026-10-13 (PR #349 lands, @tag-und-nacht): Clojure grammar, tags.scm and extraction
                                                       //   (ingest_clojure.h) and the qualified-call namespace in Reference::qualifier. The branch built
                                                       //   156, 158 and 169 (rich file tag 170); main is 167 (rich file tag 168). 171, not 168: a lean 168

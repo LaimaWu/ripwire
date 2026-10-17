@@ -1,0 +1,98 @@
+# softbudget.py — the soft --token-budget readers' shared helpers (lane forbudget-soft; CHECKLIST 32: one copy, not five).
+#
+# Five gates read a soft-target answer's ST invariant (fornotesbudgetcheck, forsoftbudgetcheck, compactlegendcheck,
+# estchargecheck, forsigspancheck). Each keeps its own row reader (their dialects and row charges differ); what they share
+# lives here. The gates export RIPWIRE_TESTLIB="$ROOT/test/lib" and import this file (sys.path insert), as crashsweepcheck
+# does shardmatch.py. No state; pure functions of the answer text.
+import json, re
+
+
+def tail_size( t ):
+    """Bytes of the answer's tail: XML, the whole <tail>…</tail> element; JSON, the compact "tail" object.
+
+    FIX1 R1: the refill reserves the tail at its HEAD-scoped size (the tail of the no-budget answer) when that is what binds,
+    so maximality counts the tail at no less than the reference tail (an upper bound on the reserve: the check stays a bound).
+    """
+    if t.lstrip().startswith( "{" ):
+        try: return len( json.dumps( json.loads( t ).get( "tail", {} ), separators=( ",", ":" ), ensure_ascii=False ).encode() )
+        except ValueError: return 0
+    m = re.search( r"<tail\b.*?</tail>", t, re.S )
+    return len( m.group( 0 ).encode() ) if m else 0
+
+
+# ── FIX2 C1 (review rv-forbudget-soft-fix1; rule 4, CHECKLIST 1): the UPPER-bound twin of the relaxed maximality ──────────────
+# FIX1 floored maximality's tail at the reference (no-budget) answer's tail: that only loosened the LOWER bound. Its twin bounds
+# the rows from above: a cut served past the rank floor stops where T, less the other sections and the tail's reserve, runs out.
+# A binary that ignores the tail's reserve (reserve = 0) serves rows into the bytes the tail was promised: RED here, while the
+# lower bound and fits (rows <= T) both stay green on it. What bounds the rows (src/verbs_for.h, the soft refill and the tail's
+# share; src/serialize.h forSigsBudgets / forSoftRowDropFill):
+#   XML    rows = max(the cut, the refill). The refill charges every served section and the tail's reserve, min(its share, the
+#          head-scoped tail): rows' charge <= T - sections - reserve + 13 (the "<sigs></sigs>" frame). At the cut, the tail's
+#          share is T less the cut's PRINTED rows and the sections, and the tail fills that share (its last row may cross it). So
+#          in both cases the PRINTED rows (the bytes inside <sigs>, without the zero cx=/ccx=/in= the ladder also charges) are
+#          <= T - sections - min(served tail, ref tail) + the served tail's last row + 13. "sections" is the reader's U less the
+#          tail: U here carries FIX1's floor (= sections + max(served, ref tail)), so sections = U - max(served tail, ref tail).
+#   JSON   rows = max(the cut, the refill). The refill reserves only the tail; the cut is T less the stanzas the sigs budget
+#          charges (header, surface counts, notes: the keys below that are neither the rows, the tail, nor the cut's own
+#          disclosure). So rows <= T - min(those stanzas, min(served tail, ref tail)) + the tail's last row + 13.
+JSON_UNCHARGED_KEYS = frozenset( ( "sigs", "tail", "sigs_shown", "sigs_total", "sigs_next", "sigs_next_offset", "sigs_past_target",
+                                   "capped", "dropped_positive", "budget_tokens", "budget_bytes", "est_tokens", "over_ceiling" ) )
+SIGS_FRAME_BYTES = 13   # "<sigs>" + "</sigs>": forSoftRowDropFill adds it to the rows' budget (serialize.h kSigsWrapperBytes)
+
+
+def _jlen( v ):
+    return len( json.dumps( v, separators=( ",", ":" ), ensure_ascii=False ).encode() )
+
+
+def rows_printed( t ):
+    """The rows as printed: XML, the bytes inside <sigs>; JSON, each "sigs" entry's compact bytes plus its comma. None when absent."""
+    if t.lstrip().startswith( "{" ):
+        try: d = json.loads( t )
+        except ValueError: return None
+        return sum( _jlen( e ) + 1 for e in d[ "sigs" ] ) if isinstance( d.get( "sigs" ), list ) else None
+    m = re.search( r"<sigs\b[^>]*>(.*?)</sigs>", t, re.S )
+    return len( m.group( 1 ).encode() ) if m else None
+
+
+def tail_last_row( t ):
+    """Bytes of the served tail's LAST row, the one that may cross the tail's share. XML: the last <t .../>; JSON: the last
+    "files" entry plus its "sym" entry (each with its comma)."""
+    if t.lstrip().startswith( "{" ):
+        try: tl = json.loads( t ).get( "tail", {} )
+        except ValueError: return 0
+        f, s = tl.get( "files" ) or [], tl.get( "sym" ) or []
+        return ( _jlen( f[ -1 ] ) + 1 if f else 0 ) + ( _jlen( s[ -1 ] ) + 1 if s else 0 )
+    m = re.search( r"<tail\b.*?</tail>", t, re.S )
+    rows = re.findall( r"<t [^>]*/>", m.group( 0 ) ) if m else []
+    return len( rows[ -1 ].encode() ) if rows else 0
+
+
+def json_charged_stanzas( t ):
+    """Bytes of a JSON answer's stanzas the sigs budget charges: every top-level key (with its quotes, colon and comma) but the
+    rows, the tail and the cut's own disclosure keys (JSON_UNCHARGED_KEYS)."""
+    try: d = json.loads( t )
+    except ValueError: return 0
+    return sum( len( k.encode() ) + 4 + _jlen( v ) for k, v in d.items() if k not in JSON_UNCHARGED_KEYS )
+
+
+def upper_bound( answer, ref, T, k, total, u_floored ):
+    """The upper-bound twin. Returns (ok, detail). Applies only to a cut (k < total) served past the rank floor (k > 4).
+    `u_floored` is the reader's U including FIX1's tail floor (XML; ignored for JSON). A missing <sigs> is not ok.
+    Resolution (forbudget-soft fix-1 review, F1): the XML twin carries about 1.8-2.8 rows of slack (measured on the fornotes
+    corpus), because at a cut the tail fills less than its share and that unused share is real headroom the answer does not
+    show, so this reader cannot recover it. A 1-row over-serve is therefore NOT caught in XML; JSON, which states its tail,
+    catches it at most rungs. A tighter XML twin needs the cut disclosed in the answer."""
+    if k >= total or k <= 4:
+        return True, "upper=n/a"
+    rows = rows_printed( answer )
+    if rows is None:
+        return False, "upper: no rows to measure (premise)"
+    st, rt = tail_size( answer ), tail_size( ref )
+    if answer.lstrip().startswith( "{" ):
+        room = T - min( json_charged_stanzas( answer ), min( st, rt ) )
+    else:
+        room = T - ( u_floored - max( st, rt ) ) - min( st, rt )
+    slack = tail_last_row( answer ) + SIGS_FRAME_BYTES
+    ok = rows <= room + slack
+    return ok, "upper: rows printed %d B %s room %d B + %d B slack (served tail %d, ref tail %d)" % (
+        rows, "<=" if ok else ">", room, slack, st, rt )

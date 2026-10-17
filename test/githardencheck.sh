@@ -53,6 +53,16 @@
 #       regular-file-only open, so the run finishes, and nothing is disclosed from a file it could not read. A
 #       blocking `cat` of the same FIFO under the same timeout harness is the contrast that shows the harness
 #       detects a stall.
+#   (O) the startup scan finds the governing config from the filesystem alone, a superset of git's discovery: an
+#       invalid .git dir skipped for the hooked parent, a commondir planted in an ordinary .git, a bare root, a
+#       symlinked root (git walks the physical path), a symlinked .git/config (git reads through it), a NUL byte
+#       inside a .git gitdir file or a commondir file (git cuts the path at the NUL, so the scan defers to git), and a
+#       .git pointer file behind a symlink (the scan defers to git; the shim sees that child). Each shape first proves
+#       plain git reads the hook value there.
+#   (Q) no stale answer: a repo whose config gains the hook (directly, then only via include.path) between two
+#       calls is disclosed on the next call.
+#   (P) the cost, counted through a PATH shim: a plain repo's run starts no startup-scan git child; with GIT_DIR
+#       set the same shim sees the rev-parse child (control).
 #   (G) determinism: two `--situ` stdouts are byte-identical.
 #
 # Usage: RIPWIRE_BIN=build/ripwire bash test/githardencheck.sh
@@ -422,6 +432,135 @@ if [ -p "$FF/.git/config.worktree" ]; then
 else
     no "(N) the FIFO at .git/config.worktree was replaced or removed"
 fi
+
+# ── (O) the startup scan finds the governing config without asking git (githarden.h discoveryConfigSuperset) ──
+# The scan unions every config file git's discovery COULD pick — every ancestor's .git dir or gitdir: file, every
+# ancestor that is itself a gitdir, each one's commondir — and runs `git config --get` only when one of them could
+# carry the key. Each shape below first proves plain git governs the root with the hook value (presence), then
+# requires the disclosure and zero firings. (O1) and (O2) also held when git resolved the dirs; (O3)-(O5) were
+# missed before (the pre-check walked the LOGICAL path looking only for a `.git` entry, so a bare root and a
+# symlinked root never reached git; a linked config was read no-follow and skipped) — red on the base binary.
+# discloses TAG ROOT: one default-map run; rc 0, git_harden=fsmonitor-hook on stderr, the hook never ran.
+discloses(){
+    otag="$1"; oroot="$2"
+    rm -f "$TMP/MARK"
+    "$BIN" "$oroot" > "$TMP/o-$otag.out" 2> "$TMP/o-$otag.err"
+    orc=$?
+    if [ "$orc" -eq 0 ] && grep -q 'git_harden=fsmonitor-hook' "$TMP/o-$otag.err" && [ "$( fired )" -eq 0 ]; then
+        ok "(O) $otag: disclosed (git_harden=fsmonitor-hook), hook unfired, rc 0"
+    else
+        no "(O) $otag: rc=$orc disclosure=$( grep -c git_harden= "$TMP/o-$otag.err" ) fired=$( fired ): $( head -c 200 "$TMP/o-$otag.err" )"
+    fi
+    return 0
+}
+# governs TAG ROOT: plain git reads the hook value at ROOT — the premise each (O) shape depends on.
+governs(){
+    gtag="$1"; groot="$2"
+    [ "$( "$REALGIT" -C "$groot" config --get core.fsmonitor 2>/dev/null )" = "$TMP/hook.sh" ] \
+        && ok "(O) $gtag presence: plain git at the root reads core.fsmonitor = the hook" \
+        || no "(O) $gtag presence: plain git at the root does not read the hook value — the shape cannot conclude"
+    return 0
+}
+newrepo(){ ( mkdir -p "$1" && cd "$1" && "$REALGIT" init -q && printf 'int f;\n' > f.c && "$REALGIT" add -A && "$REALGIT" -c user.name=g -c user.email=g@g commit -qm init ) >/dev/null 2>&1; }
+
+# (O1) an invalid .git directory in the root: git skips it and the walk goes on to the hooked parent repo.
+FO1="$TMP/o1"; cp -R "$FX" "$FO1"; mkdir -p "$FO1/sub/.git"
+governs "O1-invalid-dotgit" "$FO1/sub"
+discloses "O1-invalid-dotgit" "$FO1/sub"
+# (O2) a commondir planted in an ordinary .git: git takes the shared config from the dir it names.
+newrepo "$TMP/o2"; newrepo "$TMP/o2common"; "$REALGIT" -C "$TMP/o2common" config core.fsmonitor "$TMP/hook.sh"
+printf '../../o2common/.git\n' > "$TMP/o2/.git/commondir"
+grep -qiE 'fsmonitor|include' "$TMP/o2/.git/config" \
+    && no "(O) O2-commondir fixture: o2/.git/config itself spells the key — the arm would not test the commondir" \
+    || ok "(O) O2-commondir fixture: o2/.git/config spells neither fsmonitor nor include"
+governs "O2-commondir" "$TMP/o2"
+discloses "O2-commondir" "$TMP/o2"
+# (O3) a bare repository as the root: the root is the gitdir itself.
+( "$REALGIT" init -q --bare "$TMP/o3.git" && "$REALGIT" -C "$TMP/o3.git" config core.fsmonitor "$TMP/hook.sh" ) >/dev/null 2>&1
+governs "O3-bare" "$TMP/o3.git"
+discloses "O3-bare" "$TMP/o3.git"
+# (O4) a symlink to a subdirectory of the hooked checkout: git walks the PHYSICAL path.
+ln -s "$FX/sub" "$TMP/o4link"
+governs "O4-symlinked-root" "$TMP/o4link"
+discloses "O4-symlinked-root" "$TMP/o4link"
+# (O5) .git/config is a symlink to the hooked file: git reads through it; the no-follow scan must not call it clean.
+newrepo "$TMP/o5"; cp "$TMP/o5/.git/config" "$TMP/o5.cfg"
+printf '[core]\n\tfsmonitor = %s\n' "$TMP/hook.sh" >> "$TMP/o5.cfg"
+rm -f "$TMP/o5/.git/config"; ln -s "$TMP/o5.cfg" "$TMP/o5/.git/config"
+if [ -L "$TMP/o5/.git/config" ]; then ok "(O) O5-symlinked-config fixture: .git/config is a symlink"; else no "(O) O5-symlinked-config fixture: .git/config is not a symlink"; fi
+governs "O5-symlinked-config" "$TMP/o5"
+discloses "O5-symlinked-config" "$TMP/o5"
+# (O6) a .git gitdir: file with a NUL inside the path: git reads it as a C string, cut at the NUL, so it governs with
+# the hooked gitdir before the NUL; a scan that keeps the NUL in the path opens nothing and must not call it clean.
+newrepo "$TMP/o6src"; "$REALGIT" -C "$TMP/o6src" config core.fsmonitor "$TMP/hook.sh"
+mkdir -p "$TMP/o6" && printf 'int f;\n' > "$TMP/o6/f.c" && printf 'gitdir: %s/o6src/.git\000junk\n' "$TMP" > "$TMP/o6/.git"
+if od -An -c "$TMP/o6/.git" | grep -q '\\0'; then ok "(O) O6-nul-gitdir fixture: o6/.git holds a NUL byte"; else no "(O) O6-nul-gitdir fixture: o6/.git holds no NUL byte"; fi
+governs "O6-nul-gitdir" "$TMP/o6"
+discloses "O6-nul-gitdir" "$TMP/o6"
+# (O7) a commondir with a NUL inside the path: the same cut, for the shared config.
+newrepo "$TMP/o7"; newrepo "$TMP/o7common"; "$REALGIT" -C "$TMP/o7common" config core.fsmonitor "$TMP/hook.sh"
+printf '%s/o7common/.git\000junk\n' "$TMP" > "$TMP/o7/.git/commondir"
+if od -An -c "$TMP/o7/.git/commondir" | grep -q '\\0'; then ok "(O) O7-nul-commondir fixture: commondir holds a NUL byte"; else no "(O) O7-nul-commondir fixture: commondir holds no NUL byte"; fi
+governs "O7-nul-commondir" "$TMP/o7"
+discloses "O7-nul-commondir" "$TMP/o7"
+# (O8) the root's .git is a symlink to a gitdir: file: git reads through it; the scan defers to git, so the disclosure
+# comes from the git-resolved fallback — the shim must see its rev-parse child.
+newrepo "$TMP/o8src"; "$REALGIT" -C "$TMP/o8src" config core.fsmonitor "$TMP/hook.sh"
+printf 'gitdir: %s/o8src/.git\n' "$TMP" > "$TMP/o8.ptr"
+mkdir -p "$TMP/o8" && printf 'int f;\n' > "$TMP/o8/f.c" && ln -s "$TMP/o8.ptr" "$TMP/o8/.git"
+if [ -L "$TMP/o8/.git" ]; then ok "(O) O8-symlinked-pointer fixture: o8/.git is a symlink"; else no "(O) O8-symlinked-pointer fixture: o8/.git is not a symlink"; fi
+governs "O8-symlinked-pointer" "$TMP/o8"
+discloses "O8-symlinked-pointer" "$TMP/o8"
+mkdir -p "$TMP/shimo8"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/shimo8.log"\nexec "%s" "$@"\n' "$TMP" "$REALGIT" > "$TMP/shimo8/git"
+chmod +x "$TMP/shimo8/git"
+rm -f "$TMP/shimo8.log"; PATH="$TMP/shimo8:$PATH" "$BIN" "$TMP/o8" >/dev/null 2>&1; o8rc=$?
+O8RES="$( grep -c 'rev-parse --absolute-git-dir' "$TMP/shimo8.log" 2>/dev/null )"; O8RES="${O8RES:-0}"
+[ "$o8rc" -eq 0 ] && [ "$O8RES" -ge 1 ] \
+    && ok "(O) O8-symlinked-pointer: the scan deferred to git (rev-parse --absolute-git-dir x$O8RES), rc 0" \
+    || no "(O) O8-symlinked-pointer: rc=$o8rc, rev-parse --absolute-git-dir x$O8RES — the git fallback was not taken"
+
+# ── (Q) no stale answer: a config that gains the key between two calls is hardened on the second ──────────────
+# Nothing about the scan is kept across processes; this pins it. The first (warm-cache) call sees a plain repo; then
+# the config gains the hook, directly and (on a third call) only through an include.
+newrepo "$TMP/q"
+"$BIN" "$TMP/q" >/dev/null 2> "$TMP/q1.err"; rc1=$?
+[ "$rc1" -eq 0 ] && ! grep -q 'git_harden=' "$TMP/q1.err" \
+    && ok "(Q) call 1 on the plain repo: rc 0, no disclosure (nothing to neutralise)" \
+    || no "(Q) call 1 on the plain repo: rc=$rc1, disclosure=$( grep -c git_harden= "$TMP/q1.err" )"
+"$REALGIT" -C "$TMP/q" config core.fsmonitor "$TMP/hook.sh"
+governs "Q-gains-key" "$TMP/q"
+discloses "Q-gains-key (call 2, same repo, warm cache)" "$TMP/q"
+"$REALGIT" -C "$TMP/q" config --unset core.fsmonitor; "$REALGIT" -C "$TMP/q" config include.path "$TMP/hidden.inc"
+governs "Q-gains-include" "$TMP/q"
+discloses "Q-gains-include (call 3, the key only behind include.path)" "$TMP/q"
+
+# ── (P) the cost: no git child for a root whose config cannot carry the key, counted through a PATH shim ──────
+# Timing-free: the startup scan used to run `git rev-parse --absolute-git-dir --git-common-dir` once per root on
+# EVERY call. Control: with GIT_DIR set the filesystem cannot speak for git, so the same shim must see that child.
+newrepo "$TMP/p"
+mkdir -p "$TMP/shimp"
+cat > "$TMP/shimp/git" <<EOF
+#!/bin/bash
+printf '%s\\n' "\$*" >> "$TMP/shimp.log"
+exec "$REALGIT" "\$@"
+EOF
+chmod +x "$TMP/shimp/git"
+rm -f "$TMP/shimp.log"; PATH="$TMP/shimp:$PATH" "$BIN" "$TMP/p" >/dev/null 2>&1; prc=$?
+PTOTAL="$( wc -l < "$TMP/shimp.log" 2>/dev/null | tr -d ' ' )"; PTOTAL="${PTOTAL:-0}"
+PRES="$( grep -c 'rev-parse --absolute-git-dir' "$TMP/shimp.log" 2>/dev/null )"; PRES="${PRES:-0}"
+PCFG="$( grep -c 'config --get core.fsmonitor' "$TMP/shimp.log" 2>/dev/null )"; PCFG="${PCFG:-0}"
+[ "$prc" -eq 0 ] && [ "$PTOTAL" -ge 1 ] \
+    && ok "(P) presence: rc 0 and the shim logged $PTOTAL git child(ren) for the default map — it sees ripwire's git" \
+    || no "(P) presence: rc=$prc, $PTOTAL git children logged — the arm cannot conclude"
+[ "$PRES" -eq 0 ] && [ "$PCFG" -eq 0 ] \
+    && ok "(P) the startup trust scan started no git child (rev-parse --absolute-git-dir: 0, config --get core.fsmonitor: 0)" \
+    || no "(P) the startup trust scan still spawns git on a plain repo: rev-parse --absolute-git-dir x$PRES, config --get x$PCFG"
+rm -f "$TMP/shimp.log"; PATH="$TMP/shimp:$PATH" GIT_DIR="$TMP/p/.git" GIT_WORK_TREE="$TMP/p" "$BIN" "$TMP/p" >/dev/null 2>&1
+PENV="$( grep -c 'rev-parse --absolute-git-dir' "$TMP/shimp.log" 2>/dev/null )"; PENV="${PENV:-0}"
+[ "$PENV" -ge 1 ] \
+    && ok "(P) control: with GIT_DIR set git is asked (rev-parse --absolute-git-dir x$PENV) — the count above can see that child" \
+    || no "(P) control: with GIT_DIR set no rev-parse --absolute-git-dir was logged — the shim cannot see the startup child"
 
 # ── (G) determinism ─────────────────────────────────────────────────────────────────────────────────────
 "$BIN" "$FX" --situ > "$TMP/situ2.out" 2>/dev/null

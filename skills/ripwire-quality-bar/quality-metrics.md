@@ -83,6 +83,12 @@ degrades on (large-N studies):
   prompt, complexity/static-analysis findings measurably fix things (Pass@1 35.7% vs 12.5% baseline;
   security issues cut from >40%→13% over iterations) — `ripwire-quality-bar`'s loop **is** that mechanism.
 
+## When the range form answers only part of the question (memory)
+On a repository too large for the memory limit, `--quality-delta=A..B` answers from both commits' changed files instead
+of refusing: the header says `ingest_scope="changed-files"`, `kinds_skipped=` names what did not run, and `kinds_next=`
+is the call that runs exactly those kinds (`--quality-kinds=K[,K]` with more `--max-memory`). Exit 2 still means a row
+gates; exit 6 means a partial answer with no gating row — not a pass. Run `kinds_next=` before you call it clean.
+
 ## The three steering rules (why this beats a linter)
 1. **Delta, not absolute.** The regression *you introduced* is the signal. A file that was already a hotspot
    is not your bug; a function you pushed from `ccx=12` to `ccx=22` is. Compare before vs after your change.

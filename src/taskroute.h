@@ -1248,6 +1248,16 @@ inline constexpr std::string_view kCalendarWords[] = {
 inline constexpr std::string_view kExplanatoryCues[] = {
     "how does", "how do", "how is", "how are", "what does", "implementation of",
 };
+// Does the (lower-cased) task carry an explanatory cue, word-bounded? The history router's veto below and the --for body slot
+// (forowner.h forBodySlotAsked) read the one predicate.
+inline bool hasExplanatoryCue( std::string_view lower ) noexcept
+{
+    // the house cue scorer (cueScore), word-bounded, over the six cues — any hit is a cue
+    static_assert( std::size( kExplanatoryCues ) == 6, "hasExplanatoryCue lists every explanatory cue" );
+    return cueScore( lower, CueMatch::WordBounded,
+                     { { kExplanatoryCues[0], 1 }, { kExplanatoryCues[1], 1 }, { kExplanatoryCues[2], 1 },
+                       { kExplanatoryCues[3], 1 }, { kExplanatoryCues[4], 1 }, { kExplanatoryCues[5], 1 } } ) > 0;
+}
 
 // `since Monday`, `since 2026-09-01` — structural, because a date has no paraphrase (the same reasoning
 // firstFileLineToken is built on). Word-bounded, so `sincerely` is not a window.
@@ -1309,8 +1319,7 @@ inline std::optional<RouteChoice> recencyTaskChoice( std::string_view task, std:
     // read as history. Recognised as the phrase it is, and only in the question forms that mean it.
     const bool newInPhrase = has( lower, "what is new in" ) || has( lower, "what's new in" )
                           || has( lower, "whats new in" ) || has( lower, "anything new in" );
-    const bool explanatory = std::any_of( std::begin( kExplanatoryCues ), std::end( kExplanatoryCues ),
-                                          [lower]( const std::string_view cue ) { return boundedFind( lower, cue ) != std::string_view::npos; } );
+    const bool explanatory = hasExplanatoryCue( lower );
     if( ( ( timeScore < 5 || motionScore < 6 ) && !newInPhrase ) || explanatory )
     {
         return std::nullopt;

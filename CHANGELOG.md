@@ -23,11 +23,155 @@ Ruby-only `captureRubyMixinBases` and its `captureIncludes` call site are gone; 
 the C++ reader keeps the two guards a tags pattern cannot state (the directive's text, and its class-body position).
 Output is byte-identical: the map, `--deps --limit=100000`, `--skipped`, `--callers`, `--callees`, `--impact` and
 `--uses` all match the base build over a real Rails corpus and the Ruby fixtures, and `--lego` lists the same
-implementors. `kParserVer` moves 171 -> 173 (the extraction path changed; 172 is 171's rich file tag).
+implementors. `kParserVer` moves (the extraction path changed; 176 in this release, see the versions note).
+
+### Fixed — a function stored through `??`, `||`, `&&`, `or` or `and` is a value use
+
+`this.getPath = (strict ?? true) ? (options.getPath ?? getPath) : getPathNoStrict` recorded only `getPathNoStrict`:
+value-reference capture walked parentheses and ternary branches but stopped at a logical operator, so `--callers`,
+`--impact`, `--safe-delete` and `--dead-code` never saw `getPath` stored there. The walk now climbs the
+value-preserving operators — JS/TS `??`, `||`, `&&` and the logical assignments `??=`, `||=`, `&&=`; Python `or`,
+`and` — in every position it already read (assignment, return, argument, parameter default). The left operand of
+`&&`/`and` only decides and stays no row; C/C++ and Go `||`/`&&` yield a truth value and stay no row. Parser version
+176 in this release (caches re-parse once; see the versions note). Gate: `test/recallshapecheck.sh` arms OP1–OP17.
+
+### Added — `--grep` names what a hit's variable carries and who reads it
+
+When a hit sits inside a variable, constant or initialiser (its enclosing definition's kind is a variable), the `<enc>`
+row now says where that value goes instead of only a call count nobody can satisfy: `reads=N reads_at=` are the
+uses verb's read sites for the name (first three, in tier, path, line order — not the order the uses verb prints; only where that verb indexes reads —
+Python, C++ and ObjC outside headers — and absent, never zero, elsewhere), and `vals=` names up to three function
+values the carrier stores, as `slot=fn@line` of the one definition each resolves to (`vals_total=` beyond three).
+When the top hit's carrier has reads, the root `next=` is `--uses=<carrier>`. The MCP `grep` verb's `enclosing`
+rows carry the same `reads`/`reads_at`/`vals` keys (`src/grepcarrier.h`, shared). Reads are rich-family facts, so a
+lean `--grep` run counts them only when the TOP hit sits in such a carrier (the row that decides `next=`): it then
+ingests the same root(s) once more through the rich warm cache — per root on a workspace run, so the CLI and the MCP
+workspace print the same reads — or uncached when `--cache=F` names the cache (F keeps the lean blob; no other cache file
+is written). Any other page costs nothing extra; a lower carrier keeps `floor_next="--uses=<name>"` as its clue. The
+second ingest runs under the memory guard (`--max-memory`, then the hard line): a stop keeps the lean answer and the
+root says so with `reads_skipped=memory_stop|hard_limit` and `reads_next=--uses=<carrier>`. Gate:
+`test/countfloorcheck.sh` arm P (P/top, P/mem, P/cache, P/ws).
+
+### Added — an element access is a call of the receiver class's subscript operator, where the receiver is proven (Ruby, Python)
+
+Ruby `recv[ k ]` runs the receiver class's `[]` (`[]=` as an assignment's target), and Python `obj[ k ]` its
+`__getitem__` (`__setitem__`). Neither was a call before, so rake's `--callees=invoke_task` missed `t = self[ name ]`,
+which runs TaskManager#[] through Application's `include TaskManager`. The site is now a call **only where a receiver
+rule proves the class**: Ruby's lookup on `self` in a def (through include/extend ancestry), a receiver the code builds
+(`r = Registry.new`, `Registry.new[ k ]`), a class constant's own `def self.[]` (`Rake::Task[ name ]`); Python's receiver
+evidence (`self` in a class or its bases, a typed parameter, a constructed local, a field the class assigns). Every
+other element access — a Hash/Array/dict/list local, a literal, an untyped parameter, a Python class object — makes no
+edge, no `via="name"` hedge and no count: a `[]` or `__getitem__` definition elsewhere in the tree never decides it by
+name. It does NOT mean every subscript of an in-tree class is found: a Ruby instance variable receiver is not typed, a
+compound assignment (`h[ k ] ||= v`) is recorded as the read form, and `del o[ k ]`, a multiple-assignment target and an
+annotation record nothing. On rake 93 callers of `[]` appear; on textual 42 of `__getitem__`. C++ `operator[]` could
+share the path and is not armed. `--uses` lists no subscript site. Parser version 176 in this release (see the versions note). Gate:
+`test/subscriptopcheck.sh`.
+
+### Added — `--lego=M` lists Ruby's main object when a file's top level mixes M in
+
+A top-level `include M`, `extend M` or `self.extend M` makes Ruby's main object answer M's methods (rake's
+dsl_definition.rb ends with `self.extend Rake::DSL`). `--lego=M` now lists it as `<impl t="object" n="main"
+p="FILE:LINE">`, one row per directive, counted once in `implementors=` (every directive mixes into the same object),
+with a present-only legend clause. Ruby-only: no other indexed language has
+an object that a file's top level mixes a module into. Not read: a directive inside a top-level `if`/`begin` or a block,
+`prepend`, a mixin onto another object, and a module the tree never opens. The ranked `--for` lego section is unchanged.
+Gate: `test/subscriptopcheck.sh` (L arms).
+
+### Changed — ripwire neutralises repository-configured filter and diff programs for its own git children
+
+Every git command ripwire runs now pins the filter drivers the repository's own config defines to an empty command, carries `--no-ext-diff --no-textconv` on `diff`/`log`/`show`/`blame` and `--ignore-submodules=dirty` on `status`/`diff`, and keeps signature display off; stderr discloses the pinning as `git_harden=filter-driver`, and `--doctor`'s `git-config-trust` row reports it (`filter_drivers=`, `filter_scope=`, `filter_pinned=`). Visible effects: files behind a repository-local filter (git-crypt, a per-repository LFS driver) are seen unfiltered, as stored; edits inside a submodule no longer mark the stamp `+dirty`; a user's own textconv no longer shapes `--numstat` (such binary rows read `-`); and a pinned driver name applies to every root in the same run. Gate: `test/gitchildoptscheck.sh`.
+
+### Fixed — an Elixir call inside `unquote(...)` under `quote` is a call again; quoted call sites are counted (#357, PR #380 by @LaimaWu)
+
+Everything under a `quote` used to be dropped, so a helper called only from `unquote(...)` or `unquote_splicing(...)`
+inside a macro's quote had no caller edge from that macro. The quoted body is now read through one shared walk
+(`src/ingest_inert.h`, `inInertRegion`), with Elixir deciding per ancestor whether a region is inert or a live hole
+(`src/ingest_elixir.h`): calls inside `unquote(...)`/`unquote_splicing(...)` are live, as are `bind_quoted:` option
+expressions; `bind_quoted` turns unquoting off unless `unquote: true` turns it back on, and `unquote: false` keeps the
+argument inert; a nested quote inside a live hole is inert again. Ordinary call, operator and named-capture candidates
+that stay inert mint no edge and are counted: the map's `declined=` includes them (its full legend says so where any were
+counted) and `--callees` counts them in `declined_calls=` on their enclosing function. They are not possible callers:
+`--callers`, `--uses` and `--impact` of a function called only from inert quoted code still read zero. Not read yet: a
+bracketed options list (`quote [unquote: false] do`), under which a hole is taken as live. Gate: `test/elixircheck.sh`.
+
+### Added — the call sites the resolver declined are named, as hedged `<dc>` rows
+
+A call the resolver declines to bind (two or more same-language candidates and no evidence to choose one, the builtin-method
+and C++ standard-member name gates, Ruby's class-versus-instance side cut and `new`) gets no edge, and `declined_calls=` counted
+it without naming it: "what does doPackage call" missed a call through a Go interface value, and "who calls
+TaskManager#define_task" missed the tests that call it on an untyped receiver. `--callees` now lists each such call the
+definitions make as `<dc n= l= cands= via="declined"/>`, and `--callers` lists each declined call whose candidates include the
+selector's definition as `<dc in= p= cands= via="declined"/>` (by the stored candidate list, never by the called name).
+`gate="builtin"|"std"|"side"` names the rule that declined it; candidates (`cand=`) print only with `--legend=full`. A row is a
+call SITE, never an edge: it is not in `count=`, the `<s>` rows, `hop_tested=`/`hop_untested=` or any reach, and the legend says
+the call may reach none of its `cands=` definitions. 16 rows by default (`--limit` raises it; the callers form is cut
+file-first), with `dc_shown=`/`dc_next=` past the cap. The same rows ride `--json` (`"dc"`), `--format=columnar` and the MCP
+twins (`"declined_sites"`). `--safe-delete` now reads `risk="possible-callers"` (not `none-found`) for a definition only a
+declined call could have meant, and lists those calls; `--impact` prints no rows and its legend names `--callers` as where the
+first-hop sites are listed. One record per declined call (13 B); the graph is rebuilt every run, so no cache version moves.
+
+### Changed — a multi-definition answer says which definition each row belongs to
+
+A selector that names several same-named definitions (`--callers=empty` over two classes' `empty`) used to answer with the
+union of their callers, callees or dependants, and only `defs=` said there was more than one. `--callers`, `--callees`,
+`--safe-delete`, `--impact` (and its file rollup) and their MCP twins now list the definition GROUPS as
+`<def ix= t= sc= p= [bodyless="1"]/>` rows (JSON `def_table`) and tag every row with `of_def="K..."`: `K` a resolved edge
+ties the row to group K, `K~s` its edge carries the resolver's `split` label, `K~n` by name alone, `K~t` a resolved edge into a
+primary template while a specialisation of it is another group. A group is a definition with the declarations tied to it — the
+C/C++/ObjC declaration identity `--edit-check` already uses, and a TypeScript implementation with its overload signatures; a
+declaration that identity rule cannot tie stays silent unless a row names it. Above 16 groups the table lists the ones the
+page's rows name (`defs_listed=`). Labels come from the call graph's own edge provenance; they are the resolver's binding, not
+a type check, and a hedged token does not mean the edge is false.
+Two by-design byte changes ride along: a row (or a `--path` hop) whose edge to the selector is one arm of a resolver split
+carries `prov="split"` on every answer, single-definition ones included; and `--path` leaves out `to_p=` (`from_p=`) when that
+endpoint has several definitions and no proven hop bound one. Measured base vs head on 217 CLI argv over 7 repositories and
+16 MCP requests (single-definition selectors, prototype + definition pairs, every dialect): 212 and 16 byte-identical; the
+other five are the split-arm break above (2) and one C++ prototype whose parameter types are spelled differently from its
+definition (`std::string` vs `string`), which the declaration identity rule reads as another function (3).
+On `--for`, a body's or a hop's `<calls>` row whose edge is a resolver split arm carries the same `prov="split"`, defined in the
+bundle's first-screen legend when any listed callee edge can carry it (the `via="name"` rule's over-approximation).
 
 ### Added — Clojure (`.clj`/`.cljs`/`.cljc`/`.bb`)
 
 Vendored Yogthos' ABI-15 `tree-sitter-clojure` parser and added syntax-level definitions and direct-call captures for the four Clojure-family extensions. The grammar comparison parsed 4,930 of 4,933 files (99.94%, 55.5 MB) from Metabase, clojure-lsp, clj-kondo and Babashka checkouts in 2.24 seconds; two failures were intentionally invalid clj-kondo fixtures and one was a Metabase test. This measures parser completion on that corpus, not semantic call-resolution accuracy. Namespace/import resolution, macro expansion and exact multi-arity matching remain outside this first pass; see `docs/ARCHITECTURE.md` for the extraction limits.
+
+### Changed — `--quality-delta=A..B` answers the kinds it can under memory pressure, and exits 6 when that answer has no gating row (#387 follow-up)
+
+A tripped memory guard in the range form used to give exit 5 and nothing, so on a large repository a four-file change
+could not get even the findings those four files decide. Now, when the guard stops either commit's full tree (a crawl
+or parse stop, or the hard limit), or when a projection after the base commit says the target phase will not fit the
+limit, the range form releases what it loaded and ingests only both commits' **changed files** (never through a cache).
+There it runs the kinds those files decide — api-surface, complexity, error-masking, nesting, params, placeholder,
+verbosity, and defect-shape when the changed files define the same C-family macro names on both sides (and either the
+base's whole macro set was read or no changed file is C++) — with the same code and bars as a full answer, so their
+rows are the full answer's rows of those kinds. dead-code, duplication and new-clone-of-reused-helper need every file
+and are skipped. Every cut is named in the header: `kinds_skipped=`, `skipped_why="memory"`,
+`ingest_scope="changed-files"`, `memory_limit=`, `memory_need=` (the projected need, or `"unmeasured"` after a stop,
+with `memory_stop=` naming it), `also_skipped=` (config-warnings, stale-acks, and ack-healing when the ledger is not
+empty: there acks match by their recorded key only), and `kinds_next=`, the call that runs exactly the skipped kinds on
+the same two commits. One stderr line says the same.
+
+- **Exit codes.** A partial answer exits **2** when a row of a kind that ran gates (the skipped kinds can only add
+  rows, so that verdict is final — except, with ack-healing skipped, for a row only an identity-healed ack hides in the
+  full answer) and **6** (new) otherwise — a partial answer is never a clean exit 0. Exit **5** now
+  means, for this form, that even the changed files did not fit, or that they cannot stand in for the trees (a symlink
+  anywhere, an export-subst attribute, or a changed `.gitattributes` with an export attribute), on one line naming why.
+  Exit 6 also when every selected kind ran: the `also_skipped=` facts are still missing. `--quality-ack` needs every
+  kind's rows, so the projection never pre-empts it: it runs in full, and only a real memory stop refuses it (exit 5,
+  ledger untouched). A refusal whose process still held more than the limit after releasing the full tree says the
+  changed files were not tried.
+- **`--quality-kinds=K[,K…]`** (new, range form only) runs only the named kinds — the replay `kinds_next=` names. A
+  named kind's rows are its rows in a full answer; under pressure the kinds it left out stay the caller's
+  (`skipped_why="selector,memory"`, with `memory_skipped=` naming memory's share, which `kinds_next=` replays); stale acks are judged for the named kinds only; passes no named kind
+  needs (the clone passes, the dead-code evidence) do not run. Refused beside `--quality-ack`/`--quality-baseline`
+  and on the working-tree form; the MCP `quality_delta` tool (working-tree form) has no selector yet.
+- **`memory_peak=`** (new, present-only) on any range answer whose peak footprint went over the limit after the guard's
+  last reading, with one stderr line; the exit code is unchanged.
+- **Behaviour change, by design:** `test/memguardcheck.sh` B23 pinned "a cut base ingest → exit 5 and nothing". That is
+  the refusal this change replaces: the cut tree is still never scored (one cut ingest, then two changed-file ingests,
+  and no row names a file outside the diff), and a twin arm keeps the exit-5 refusal when even the changed files are cut.
+  When memory suffices the answer is byte-identical to before. Gate: `test/qddegradecheck.sh`.
 
 ### Fixed — `--quality-delta=A..B` indexed the working tree it never reads (#387)
 
@@ -98,6 +242,18 @@ so no other gate's charge decides it and its 320 MiB counts against no other gat
 memory puts the leaf over `--max-memory=256M` (exit 5; the 0.6.7 rule answers, exit 0), and 320 MiB of page cache
 does not (exit 0). `--help` says what is measured, and the MCP refusal at the hard line names the cgroup, not this
 server, when the cgroup's charge is the larger reading: restarting the server does not help there.
+
+### Changed — the versions this release moves, stated once
+
+`kParserVer` 167 → 176: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
+`??`/`||`/`&&`/`or`/`and` carried 173 on its branch, the Ruby/Python subscript references and Ruby's main-object mixins
+174 (file tag 175), and the Elixir quote live holes (#380) 145 on theirs. They land together at 176, above every number a
+branch build has used, so no cache such a build wrote is read as this release's; its full-use file tag is 177.
+`kCacheVersion` 31 → 32: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
+numbered 9 on #380's branch, which predates the subscript role), and the binding kind byte one (Ruby's main-object mixin); no record changes shape. `kQSnapCacheScheme` 20 → 21:
+the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls), so the dead kind can
+differ for an unchanged commit. Every ingest cache written by an earlier build is refused and re-indexed once, and every
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=f83935bb22c0b728 entries=885`.
 
 
 ## [0.6.7] — 2026-10-11
