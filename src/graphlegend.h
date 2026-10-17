@@ -885,9 +885,9 @@ inline constexpr const char* kImpactDepthColumnarLegend =
 // rides on every type impact, cut or not); typeDefs > 1 / typeCapped exactly when it carries type_defs= / type_capped=.
 struct ImpactRollupTypeClauses
 {
-    bool        typed      = false;
-    std::size_t typeDefs   = 0;
-    bool        typeCapped = false;
+    bool typed = false;
+    std::size_t typeDefs = 0;
+    bool typeCapped = false;
 };
 
 inline std::string impactTypeRollupLegend( const ImpactRollupTypeClauses& t )
