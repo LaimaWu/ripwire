@@ -367,6 +367,24 @@ if ans c_hlp c callers s xml -- --callers=helper; then
 fi
 if ans c_lost c callers s xml -- --callers=lost; then plain N c_lost; fi          # C prototype + definition: one group
 if ans c_pick ts callers s xml -- --callers=pick; then plain N c_pick; fi         # TS overload signatures + implementation
+# langfacts-fold (train 29) pins, green on the build before the fold and after it: the TS overload-signature rule names TypeScript
+# alone (src/defattrib.h). A TS method overload set is one group; a TS abstract / ambient member is a contract, a group of its
+# own; and the same bodyless shape in Java, Go and Rust is never folded (a Java or Go interface method is its own group; a Rust
+# trait requirement is no definition at all).
+if ans lf_stash lf callers s xml -- --callers=stash; then
+    plain N lf_stash; [ "$( rootf lf_stash defs )" = 3 ]; say $? "[N] lf_stash: a TS class method's three overload declarations are ONE group (defs=3, no table)" \
+        "[N] lf_stash: defs=$( rootf lf_stash defs ), want 3"
+fi
+for c in measure:box.ts:7:box.ts:8 ring:box.ts:9:box.ts:10 doIt:Doer.java:2:Doer.java:3 Foo:fooer.go:4:fooer.go:7; do
+    IFS=: read -r sym p1 l1 p2 l2 <<<"$c"; tg="lf_$sym"
+    if ans "$tg" lf callers s xml -- --callers="$sym"; then
+        [ "$( groups "$tg" )" = 2 ]; say $? "[N] $tg: the bodyless $sym and its implementation are TWO groups (a contract is never an overload signature)" \
+            "[N] $tg: <def> rows=$( groups "$tg" ), want 2"
+        defbody N "$tg" "$p1:$l1" 1
+        defbody N "$tg" "$p2:$l2" 0
+    fi
+done
+if ans lf_baz lf callers s xml -- --callers=baz; then plain N lf_baz; fi   # a Rust trait requirement is no definition: one def, one group
 if ( cd "$FIX/cpp" && "$BIN" . --no-cache --for=empty ) >"$DIR/c_for.out" 2>/dev/null; then
     n_d="$( grep -oE '<d [^>]*n="empty"[^>]*>' "$DIR/c_for.out" | grep -c 'sc="' )"
     [ "$n_d" -ge 2 ]; say $? "[C] c_for: --for=empty serves each definition as its own row with sc= ($n_d)" \

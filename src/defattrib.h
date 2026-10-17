@@ -41,6 +41,7 @@
 
 #include "editcheck.h"   // editCheckGroupKeys' fold (editCheckDeclFoldTargets) — the C-family declaration identity
 #include "graph.h"
+#include "langfacts.h"   // langFacts(l).overloadSignatures — the TypeScript overload-signature rule, as a column
 #include "model.h"
 #include "pageview.h"
 #include "sarif.h"       // rootRelativeUri: the table's p= in the rows' own path dialect
@@ -109,7 +110,7 @@ inline std::vector<NodeId> tsContractSignatures( const IngestResult& ing )
     for( NodeId id = 0; id < ing.symbols.size(); ++id )
     {
         const Symbol& s = ing.symbols[id];
-        if( s.lang != Lang::TypeScript )
+        if( !langFacts( s.lang ).overloadSignatures )
         {
             continue;
         }
@@ -191,7 +192,7 @@ inline std::size_t defGroupTsImplementation( const IngestResult& ing, std::span<
     for( std::size_t j = 0; j < matches.size(); ++j )
     {
         const Symbol& f = ing.symbols[ matches[j] ];
-        if( j == i || f.lang != Lang::TypeScript || f.fileId != d.fileId || f.kind != d.kind || f.name != d.name || f.scope != d.scope
+        if( j == i || !langFacts( f.lang ).overloadSignatures || f.fileId != d.fileId || f.kind != d.kind || f.name != d.name || f.scope != d.scope
             || !isDefinitionNotDeclaration( f ) || f.sigStartByte < d.endByte )
         {
             continue;
@@ -216,7 +217,7 @@ inline std::vector<std::size_t> defGroupTargets( const IngestResult& ing, std::s
         const Symbol& s  = ing.symbols[ matches[i] ];
         const bool    bodyless = !isDefinitionNotDeclaration( s );
         anyCDecl  = anyCDecl || ( bodyless && langCompatible( s.lang, Lang::C ) );
-        anyTsDecl = anyTsDecl || ( bodyless && s.lang == Lang::TypeScript && ( s.kind == SymKind::Function || s.kind == SymKind::Method ) );
+        anyTsDecl = anyTsDecl || ( bodyless && langFacts( s.lang ).overloadSignatures && ( s.kind == SymKind::Function || s.kind == SymKind::Method ) );
     }
     if( anyCDecl )
     {
@@ -237,7 +238,7 @@ inline std::vector<std::size_t> defGroupTargets( const IngestResult& ing, std::s
         for( std::size_t i = 0; i < matches.size(); ++i )
         {
             const Symbol& s = ing.symbols[ matches[i] ];
-            if( s.lang == Lang::TypeScript && !isDefinitionNotDeclaration( s ) && ( s.kind == SymKind::Function || s.kind == SymKind::Method ) )
+            if( langFacts( s.lang ).overloadSignatures && !isDefinitionNotDeclaration( s ) && ( s.kind == SymKind::Function || s.kind == SymKind::Method ) )
             {
                 target[i] = defGroupTsImplementation( ing, matches, i, contracts );
             }

@@ -2049,7 +2049,7 @@ inline std::optional<RawRef> subscriptOperatorRef( TSNode access, TSNode recv, s
         return std::nullopt;
     }
     RecvShape rs = classifyReceiver( recv, lang, src, /*allowChain=*/ true );
-    if( rs.kind == RecvKind::None && lang != Lang::Ruby )
+    if( rs.kind == RecvKind::None && !langFacts( lang ).keepsUnshapedSubscript )
     {
         return std::nullopt;
     }
@@ -2063,7 +2063,7 @@ inline std::optional<RawRef> subscriptOperatorRef( TSNode access, TSNode recv, s
     r.recv      = rs.kind == RecvKind::None ? RecvKind::FieldOfVar : rs.kind;   // receiverOf's "too rich" member shape
     r.recvVar   = std::move( rs.var );
     r.fieldName = std::move( rs.field );
-    if( lang == Lang::Ruby && r.recv == RecvKind::NamedVar )
+    if( langFacts( lang ).constantPathReceiver && r.recv == RecvKind::NamedVar )
     {
         r.fieldName = rubyWrittenPathOfReceiver( recv, r.recvVar, src );   // a constant's path as written (parser version 137)
     }
