@@ -33,6 +33,22 @@ Known floors: struct fields are not Go definitions, so nothing scopes to a struc
 a struct field scopes to the struct. Rust and Kotlin keep their own scope walkers; C++ and Python output is byte-identical.
 `kParserVer` moves (182 in this train's reservation; the train renumbers).
 
+### Changed — a Rust call named like a standard collection, string or Option member binds no in-tree namesake by name (#405)
+
+The standard-member name gate is now one table with a row per language (`graph.h` `kStdMemberNames`). The C++ row is
+unchanged; a Rust row (`src/externalnames.h` `kRustStdMemberNames`, 40 names written from the Rust standard library
+documentation: `push`, `insert`, `iter`, `len`, `to_owned`, `unwrap` and the like, minus names in-tree types commonly
+define themselves, such as `next`, `get`, `map`, `clone`, `write`, `expect`, and trait methods in-tree types implement,
+such as `into_iter`, `extend`, `as_ref`, `borrow`) makes a Rust member call whose receiver no
+rule typed decline instead of binding every same-named in-tree method: no edge, counted in `declined_calls=`, named on
+the caller's `--callees` answer in a `<stdm>` line. A call the language itself proves (`self.iter()` inside the type
+that defines `iter`) keeps its edge. On rust-lang/mdBook, `--callers=iter` no longer lists six functions whose `.iter()`
+is on a `Vec` or a map, and `--callees=make_data` shows `<stdm n="insert,iter,push,to_owned" calls="72"/>` instead of
+three in-tree methods it never calls. Stated floor: Rust records no parameter, local or field type yet, so a receiver
+written as an in-tree type (`s: &mut Stack`, an extension-trait method on a foreign type, a call result) is declined too —
+counted and disclosed, not bound. Go keeps an empty row: `Len`, `Write`, `String` are methods in-tree types implement on
+purpose. The legend clauses now say "a standard-type member of its language". No cached content changes.
+
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
 Ruby's `include`/`extend`/`prepend` are now captured by `queries/ruby/tags.scm` as `@reference.mixin` and turned into

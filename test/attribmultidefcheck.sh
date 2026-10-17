@@ -43,7 +43,8 @@
 #         py/ also draw_mixed: a proven Widget.render call and a by-name thing.render call in one row. [kysely-06] ts/;
 #         ts/overloads.ts: overload signatures of differing arity + one implementation (one group).
 #   js/rb/  two same-named methods of two classes, constructor-typed receivers.
-#   rs/   [mdbook-06] Book::iter vs Shelf::iter on param-typed receivers (by name + split today: hedged tokens).
+#   rs/   [mdbook-06] Book::walk vs Shelf::walk on param-typed receivers (by name + split today: hedged tokens); Book::iter /
+#         Shelf::iter, the original shape, are declined by the standard-member gate's Rust row since #405 (twin f_rs_iter).
 #   objc/ two -area methods, typed message receivers (split today: hedged tokens).
 #   u2/   [final review R1] scan_tok defined in prog1/util.c, an untied prototype in prog2/main.c (no #include proves the
 #         tie), a static namesake in prog3/other.c: a printed table lists all three groups (the prototype bodyless=1).
@@ -484,11 +485,21 @@ if ans f_rb rb callers s xml -- --callers=area; then
     expect P f_rb circle_area shapes.rb:2; expect P f_rb square_area shapes.rb:7
     rowset C f_rb 2 "circle_area square_area"
 fi
-if ans f_rs rs callers s xml -- --callers=iter; then
-    hedged P f_rs count_items "src/lib.rs:3 src/lib.rs:7"
-    hedged P f_rs count_books "src/lib.rs:3 src/lib.rs:7"
-    case "$( rowflags f_rs count_items )" in *via=name*) ok "[N] f_rs: the existing via=\"name\" row hedge stays" ;; *) no "[N] f_rs: via=\"name\" lost on count_items" ;; esac
-    rowset C f_rs 2 "count_books count_items"
+# Re-anchored (lane rust-std-rows, #405): `iter` is in the standard-member gate's Rust row, so `b.iter()` on a `&Book` is now
+# DECLINED (graph.h StdMemberGate's stated floor: Rust records no parameter type yet) and the multi-definition hedge this arm
+# pins moved to `walk`, the same two-impl shape under a name no table holds. The iter twin below keeps the old premise visible.
+if ans f_rs rs callers s xml -- --callers=walk; then
+    hedged P f_rs walk_items "src/lib.rs:12 src/lib.rs:15"
+    hedged P f_rs walk_books "src/lib.rs:12 src/lib.rs:15"
+    case "$( rowflags f_rs walk_items )" in *via=name*) ok "[N] f_rs: the existing via=\"name\" row hedge stays" ;; *) no "[N] f_rs: via=\"name\" lost on walk_items" ;; esac
+    rowset C f_rs 2 "walk_books walk_items"
+fi
+if ans f_rs_iter rs callers s xml -- --callers=iter; then
+    if [ "$( nrows f_rs_iter )" = 0 ] && grep -q 'declined_calls="2"' "$DIR/f_rs_iter.out"; then
+        ok "[N] f_rs_iter: b.iter() / s.iter() on Book / Shelf parameters are declined by the Rust standard-member row (declined_calls=2, no row)"
+    else
+        no "[N] f_rs_iter: want no row and declined_calls=\"2\" (test/stdmembergatecheck.sh arm R floor); got $( nrows f_rs_iter ) row(s): $( head -c 300 "$DIR/f_rs_iter.out" )"
+    fi
 fi
 if ans f_objc objc callers s xml -- --callers=area; then
     hedged P f_objc circleArea "Shapes.m:6 Shapes.m:12"
