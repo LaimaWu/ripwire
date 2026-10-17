@@ -81,6 +81,10 @@ The names are paraphrases of graded false rows; the code is minimal and is never
   `@interface` / single-static-import; C++ union / forward declaration / macro / block-scope using beside a local class;
   a Rust macro in an enclosing fn body) with their guards (a nested enum, Kotlin's nested forms, a forward declaration of
   the in-tree class, a local class with nothing in its block, a nested fn with no macro).
+  Fix round 5: `cpp5` / `rust5` are the delta-4 review's B1–B4 probes — macros the parser reads as well-formed code (a C++
+  export macro between the class-key and the name, a class-body `MK(S);`, a function-body macro beside a local class; a
+  Rust `impl` method in a fn body holding a macro) — with guards (constructors / a destructor, a function-body macro with
+  no local class, the own-namespace forward declaration reached through a using-declaration).
 - `callresult_matrix.txt` — arm (L)'s BINDING-FORM MATRIX (Python, kept as text for the same reason): it writes one tree per
   language (`mx_rust`, `mx_cpp`, `mx_java`, `mx_kt`, `mx_ts`, `mx_go`) and lists every cell — language × binding form ×
   scope level × target (in-tree unique / outside / unresolved / two in-tree), and (fix round 4) × declaration kind

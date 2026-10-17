@@ -196,9 +196,16 @@
 #            and forward declaration in force in a local class, a Rust macro in an enclosing fn body (and a guard each:
 #            the callee's own body, a sibling fn), Java / Kotlin local classes — 268 cells in all. More FLOOR cells: a
 #            Java record (in-tree, but the index keeps no class for it), a C++ local class beside a global namesake (two
-#            classes of one name). LIMIT (not a cell, not gated): a C++ macro in a FUNCTION body reads as a call, so a
-#            local class beside one is not covered. A C++ macro at namespace / class scope that declares nothing hedges
-#            too (any macro may declare the name: an honest loss, measured at 5 envoy sites).
+#            classes of one name). A C++ macro at namespace / class scope that declares nothing hedges too (any macro
+#            may declare the name: an honest loss, measured at 5 envoy sites). Fix round 5 (cells 269-288, arms cpp5 /
+#            rust5): macros tree-sitter parses as WELL-FORMED code — a C++ class declaration only a macro can have
+#            written (`class API S {…}`, `struct API S final {…}`, `struct API S;`, `API struct S {…}`, `MKSTRUCT S {…}`:
+#            a bare-name function definition or class-key declaration — every name its head spells is a class the index
+#            does not record, so no C++ result spelled so resolves), a class-body `MK(S);` (a type-less non-constructor
+#            declaration: ANY name in that class), a C++ function-body statement beside a local class (any expression
+#            statement: ANY name for that class's members), a Rust `impl` method in a fn body holding a macro; guards:
+#            constructors / a destructor, a function-body macro with no local class, the own-namespace forward
+#            declaration reached through a using-declaration.
 #   (C) conservation: each root's census dispositions still sum to calls= with unaccounted=0 (no silent drop).
 #   (K) the predicates can fail: a planted unhedged false row fails notproven, a planted hedged row passes it and
 #            fails proven, marked rejects an unhedged row, a rootless or not-found answer is NOROOT, the MCP reader

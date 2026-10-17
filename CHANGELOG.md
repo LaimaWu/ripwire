@@ -32,8 +32,9 @@ Rust `type`, Kotlin `typealias`, TS `type` / `import A = n.T`), an import bindin
 `import static a.B.S;` too), a member type a base of an enclosing class declares, a type declaration the index keeps no
 class for (a Java `record` / `@interface`, a C++ `union`, a forward declaration `struct S;` — which, in the class's own
 namespace, declares that class), a C++ block-scope binding in force in a local class's members, and a region the parser
-cannot read that may declare it (a C++ macro or parse error at namespace or class scope that spells the name; a Rust
-statement- or item-position macro in a block enclosing a nested fn) — and the first scope with any binding decides: one in-tree class types the local; an outside
+cannot read that may declare it (a C++ macro or parse error at namespace or class scope, a class-body `MK(S);`, any
+statement of a function body enclosing a local class; a Rust statement- or item-position macro in a block enclosing a
+nested fn or an `impl` method written in a fn body) — and the first scope with any binding decides: one in-tree class types the local; an outside
 or unresolved binding, an alias, or two bindings that disagree record nothing. A Rust `mod` is a fresh scope (the file's
 items and `use`s are not in force inside it; `super::` / `self::` there are relative to the mod); a class nested in a
 class, a Kotlin `object` or a TS/C++ `namespace` counts only where that scope holds the callee; a Java/Kotlin package is
@@ -44,8 +45,9 @@ never a same-named class elsewhere; a call on that local can type the next local
 from outside the tree, a TS global, an outside qualifier (`std::`, `ext::`), a type parameter, a name two classes share
 (C++: any shared class name) or a nested same-named call (`h.get().get()`) records nothing, and the call stays hedged. Not
 read through (no member proven): an interface result, an alias of an in-tree type (any family's alias forms above: the
-alias is not followed), a member type inherited from a base, a field path below the typed local, a Java record. Not seen
-(a limit): a C++ macro at namespace or class scope that declares a type without writing its name. (A C++ `using` alias
+alias is not followed), a member type inherited from a base, a field path below the typed local, a Java record. A C++
+class declaration only a macro can have written (`class API S {…}`, `struct API S;`, read by the parser as a function or
+a variable) makes every name it spells a class the index does not record: no C++ result spelled so resolves. (A C++ `using` alias
 of an OUTSIDE type spelled like an in-tree class was not a floor before fix round 3 but a false proof of that class;
 it now names nothing.) Go's
 `pkg.F()` now reaches package-level functions only, never a same-named method, and a Go parameter, local or struct field
