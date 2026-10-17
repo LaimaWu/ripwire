@@ -314,6 +314,13 @@ struct CallResultTypes
         constexpr LocalBindKind kSpanned[] = { LocalBindKind::TypeImport, LocalBindKind::TypeAlias };   // the kinds a C++ scope span rides on
         return b.spanEnd != 0 && std::ranges::find( kSpanned, b.kind ) != std::end( kSpanned );
     }
+    // fix round 4: a TypeAlias row that binds its spelling with no alias target — a forward declaration, a type declaration
+    // the index keeps no class for, an unparsed region (model.h kTypeBind* constants)
+    static bool bindsWithoutTarget( const Binding& b ) noexcept
+    {
+        constexpr std::string_view kMarks[] = { kTypeBindForward, kTypeBindShadow, kTypeBindUnparsed };
+        return b.kind == LocalBindKind::TypeAlias && std::ranges::find( kMarks, std::string_view( b.typeName ) ) != std::end( kMarks );
+    }
     // after the last noteImport: the two lists in (file, start) / file order
     void finishIndex()
     {
@@ -569,6 +576,7 @@ struct CallResultTypes
         }
         return best;
     }
+    static bool notModule( SymKind k ) noexcept { return k != SymKind::ModuleScope; }
     static bool classKind( SymKind k ) noexcept
     {
         constexpr SymKind kClassKinds[] = { SymKind::Class, SymKind::Struct, SymKind::Interface };   // the class-like kinds
@@ -617,7 +625,11 @@ struct CallResultTypes
         }
         nameKey.assign( name );
         const auto aliases = aliasesByName.find( nameKey );
-        return aliases != aliasesByName.end() && std::ranges::any_of( aliases->second, [ & ]( const Binding* b ) { return inCone( classHolding( b->fileId, b->startByte ) ); } );
+        return aliases != aliasesByName.end() && std::ranges::any_of( aliases->second, [ & ]( const Binding* b )
+        {
+            const NodeId holder = classHolding( b->fileId, b->startByte );   // fix round 4: a member of the class, not of one of its bodies
+            return inCone( holder ) && innermostHolding( b->fileId, b->startByte, &notModule ) == holder;
+        } );
     }
     // the JVM files of one package as `f` sees it: the same declared package, or (neither declares one) the same directory
     bool samePackage( std::uint32_t f, std::uint32_t g ) const
@@ -732,6 +744,16 @@ struct CallResultTypes
             if( !named.any && rules->inheritedMembers && lv.sym != kNoNode && classKind( kind ) && inheritsMemberType( lv.sym, name, fam ) )
             {
                 named.vote( kNoNode );
+            }
+            if( !named.any )   // fix round 4: an unparsed region of this level (a Rust block's macro) may declare the name here
+            {
+                forEachImport( f, "!", [ & ]( const Binding& b )
+                {
+                    if( bindsWithoutTarget( b ) && levelAt( f, b.startByte ) == lv )
+                    {
+                        named.vote( kNoNode );
+                    }
+                } );
             }
             if( named.any )
             {
@@ -1361,9 +1383,9 @@ struct CallResultTypes
                 {
                     continue;   // declared after the callee, or in a namespace that does not hold it
                 }
-                if( !own && classHolding( file, b->startByte ) != kNoNode )
+                if( !own && innermostHolding( file, b->startByte, &notModule ) != kNoNode )
                 {
-                    continue;   // fix round 3: a class-scope alias is in force in its own class only
+                    continue;   // a class-scope alias (fix round 3) or a block-scope row (fix round 4) is in force in its own class / body only
                 }
                 if( !own )
                 {
@@ -1406,7 +1428,8 @@ struct CallResultTypes
     // `ns::T` would — an outside `using ext::T;` names nothing); else a nested or local class must enclose the declaration
     // (visibleAt), and a namespace-scope class's namespace must enclose the declaration's own namespace or be named by a
     // using-directive in force there. An outside using-directive cannot make the in-tree class wrong — `T` would then be
-    // ambiguous — so it never needs a refusal of its own.
+    // ambiguous — so it never needs a refusal of its own. Fix round 4: then a binding of `T` the index keeps no class for
+    // (cppHiddenAt) may still hide the class.
     NodeId cppUnqualifiedClass( std::uint32_t f, std::uint32_t at, std::string_view cls ) const
     {
         if( classIds == nullptr )
@@ -1432,11 +1455,20 @@ struct CallResultTypes
         }
         std::vector<std::string_view> calleePath;
         namespacePathAt( f, at, calleePath );
+        const CppReach reach = cppReach( f, at, c, cls, calleePath );
+        return reach == CppReach::None || cppHiddenAt( f, at, c, cls, calleePath, reach ) ? kNoNode : c;
+    }
+    // how the class `c` (the only in-tree `cls`) is reached from byte `at` of file `f` (cppUnqualifiedClass): through a
+    // using-declaration of `cls` in force, as a nested / local class enclosing `at`, from a namespace leading the callee's,
+    // through a using-directive — or not at all
+    enum class CppReach : std::uint8_t { None, Declared, Nested, Leads, Directive };
+    CppReach cppReach( std::uint32_t f, std::uint32_t at, NodeId c, std::string_view cls, const std::vector<std::string_view>& calleePath ) const
+    {
         bool   declared = false;
         NodeId byDecl   = kNoNode;
         forEachCppUsing( f, at, calleePath, [ & ]( const Binding& b )
         {
-            if( b.var == cls )   // a using-declaration resolves as a written `ns::T`; an alias / typedef (fix round 3) names nothing
+            if( b.var == cls && !bindsWithoutTarget( b ) )   // a using-declaration resolves as a written `ns::T`; an alias (fix round 3) names nothing
             {
                 const NodeId named = b.kind == LocalBindKind::TypeAlias ? kNoNode : cppResultClass( b.importedName, cls );
                 byDecl   = declared && named != byDecl ? kNoNode : named;
@@ -1445,17 +1477,17 @@ struct CallResultTypes
         } );
         if( declared )
         {
-            return byDecl;
+            return byDecl == c ? CppReach::Declared : CppReach::None;
         }
         if( enclosingSymbol( c ) != kNoNode )
         {
-            return visibleAt( c, f, at ) ? c : kNoNode;
+            return visibleAt( c, f, at ) ? CppReach::Nested : CppReach::None;
         }
         std::vector<std::string_view> classPath;
         namespacePathAt( ing.symbols[ c ].fileId, ing.symbols[ c ].sigStartByte, classPath );
         if( std::mismatch( classPath.begin(), classPath.end(), calleePath.begin(), calleePath.end() ).first == classPath.end() )   // it leads the callee's
         {
-            return c;
+            return CppReach::Leads;
         }
         bool named = false;
         forEachCppUsing( f, at, calleePath, [ & ]( const Binding& b )
@@ -1473,7 +1505,43 @@ struct CallResultTypes
                 named = std::mismatch( head.begin(), head.end(), calleePath.begin(), calleePath.end() ).first == head.end();
             }
         } );
-        return named ? c : kNoNode;
+        return named ? CppReach::Directive : CppReach::None;
+    }
+    // fix round 4: is the class `c` that `reach` found HIDDEN at byte `at` of file `f` by a binding of `cls` the index keeps
+    // no class for, in force there (forEachCppUsing's scope rule): a union, a forward declaration of `cls`, or a macro / parse
+    // error, which may declare any name. Such a binding hides `c` when it is in an inner scope: a class or function body (unless it is a forward
+    // declaration of `c` itself, inside it), or — for a namespace-scope `c` that leads the callee's namespace — a namespace
+    // deeper than `c`'s own. A forward declaration in `c`'s own namespace declares `c`; a binding outside the scope `c` is
+    // nested in is hidden BY `c`. A class reached through a using-declaration or a using-directive is hidden by any such
+    // binding in force (C++ puts a directive's names at a namespace this reader does not compute).
+    bool cppHiddenAt( std::uint32_t f, std::uint32_t at, NodeId c, std::string_view cls, const std::vector<std::string_view>& calleePath, CppReach reach ) const
+    {
+        const Symbol&                 cs = ing.symbols[ c ];
+        std::vector<std::string_view> classPath;
+        std::vector<std::string_view> rowPath;
+        namespacePathAt( cs.fileId, cs.sigStartByte, classPath );
+        bool hidden = false;
+        forEachCppUsing( f, at, calleePath, [ & ]( const Binding& b )
+        {
+            if( hidden || !bindsWithoutTarget( b ) || ( b.typeName != kTypeBindUnparsed && b.var != cls ) )   // an unparsed region may declare any name
+            {
+                return;
+            }
+            const bool forward = b.typeName == kTypeBindForward;
+            if( innermostHolding( b.fileId, b.startByte, &notModule ) != kNoNode )   // a class or function body (own file only)
+            {
+                hidden = !( forward && b.fileId == cs.fileId && b.spanStart <= cs.sigStartByte && cs.sigStartByte < b.spanEnd );
+                return;
+            }
+            namespacePathAt( b.fileId, b.startByte, rowPath );
+            switch( reach )
+            {
+                case CppReach::Nested: return;   // `c` is nested in a class or body: deeper than any namespace
+                case CppReach::Leads:  hidden = rowPath.size() > classPath.size(); return;   // both lead the callee's: longer is deeper
+                default:               hidden = !( forward && rowPath == classPath ); return;
+            }
+        } );
+        return hidden;
     }
 
     // C++ (fix round 3): does the first segment of a qualified result (`lib` in `lib::T`) name a namespace alias (or any

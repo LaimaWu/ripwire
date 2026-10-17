@@ -1137,8 +1137,11 @@ enum class LocalBindKind : std::uint8_t
                    //     resolution (receiverevidence.h ReceiverEvidence::resultClassOf) ONLY. APPENDED (cache u8).
                    //     C++ (fix round 2): a using-declaration `using a::C;` (var `C`) and a using-directive `using namespace
                    //     a;` (var "*", importedName `a`), with spanStart/spanEnd = the scope it is declared in (a namespace
-                   //     body, or the whole file: 0 .. 0xFFFFFFFF) — the span marks a C++ row: Java/Kotlin/Rust rows carry
-                   //     none ({0,0}). A block- or class-scope using records nothing.
+                   //     body, a function body (fix round 4: a local class's member result sits inside it), or the whole
+                   //     file: 0 .. 0xFFFFFFFF) — the span marks a C++ row: Java/Kotlin/Rust rows carry none ({0,0}). A
+                   //     class-scope using records nothing. Java (fix round 4): a single-static-import `import static a.B.N;`
+                   //     (var `N`: it imports every static member named N, a member TYPE included) and a static-import-on-
+                   //     demand (var "*", importedName `a.B`).
     Namespace,     // fix round 2: a lexical scope the index has no symbol for — a C++ `namespace` (not `inline`), a TS
                    //     `namespace` / `module` — var = its name as written (`a::b`, `a.b`; "" when anonymous), spanStart/
                    //     spanEnd = its body. Read by graph.h's call-result type resolution ONLY: a class nested in one is
@@ -1153,7 +1156,17 @@ enum class LocalBindKind : std::uint8_t
                    //     rows carry none ({0,0}): their scope is the innermost one holding startByte. Read by graph.h's
                    //     call-result type resolution ONLY: an alias of the spelling in force at a callee is a binding the
                    //     result type is never resolved past (an outside target names nothing; an in-tree one is a floor). APPENDED.
+                   //     Fix round 4: typeName marks the rows that bind a spelling WITHOUT an alias target (kTypeBind* constants):
+                   //     "forward" a C++ bodiless `struct S;` / `class S;` / `union S;`, "shadow" a type declaration the index
+                   //     keeps no class symbol for (a Java `record` / `@interface`, a C++ union defined outside a declaration),
+                   //     "unparsed" a region the parser cannot read as declarations, which may declare ANY name (var "!": a
+                   //     C++ macro invocation or parse error where a declaration must stand, with its scope's span; a Rust
+                   //     block enclosing a nested fn that holds a statement- or item-position macro, at the block's start).
 };
+// fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
+inline constexpr std::string_view kTypeBindForward  = "forward";
+inline constexpr std::string_view kTypeBindShadow   = "shadow";
+inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
 inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::TypeAlias ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).

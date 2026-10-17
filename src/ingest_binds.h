@@ -3722,6 +3722,8 @@ struct BindCtx
     std::string_view           src;
     std::vector<RawBind>*      binds = nullptr;
     std::vector<TypeParamScope> typeParams;   // FE-B: filled as the pre-order walk meets each parameter list
+    // (L) fix round 4: the Rust blocks captureUnparsed has read, as (start, end) — the enclosing ones of the walk's position
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> rustMacroBlocks;
 
     // L3 fn-pointer buffers. Positives collect here (not straight into binds) so the end-of-walk clobber
     // sweep can ask "does this var have a fn binding in this file?" — a clobbering assignment
@@ -4215,23 +4217,20 @@ inline std::string importPathText( TSNode n, std::string_view src )
     return withoutBlanks( std::string( ts_node_is_null( n ) ? std::string_view{} : nodeTextOf( n, src ) ) );
 }
 
-// Java `import a.b.C;` / `import a.b.*;` and Kotlin `import a.b.C [as D]` / `import a.b.*`. A Java `import static`
-// brings a MEMBER, not a type: nothing is recorded for it.
+// Java `import a.b.C;` / `import a.b.*;` and Kotlin `import a.b.C [as D]` / `import a.b.*`. A Java `import static a.B.N;`
+// (fix round 4) imports every static member named N — a member TYPE among them, and JLS 6.4.1 lets it shadow the package's
+// types — so it is recorded like a single-type import (its path names a class's member: never an in-tree top-level class);
+// `import static a.B.*;` is an on-demand row like `import a.B.*;`.
 inline void captureJvmTypeImport( BindCtx& cx, TSNode n, std::uint32_t at )
 {
     TSNode path{};
     TSNode alias{};
     bool   wildcard = false;
-    bool   member   = false;
     ChildCursor cursor( n );
     forEachChild( n, cursor.cur, [ & ]( TSNode c )
     {
         const char* t = ts_node_type( c );
-        if( kindIs( t, "static" ) )
-        {
-            member = true;
-        }
-        else if( kindIs( t, "asterisk" ) || kindIs( t, "wildcard_import" ) )
+        if( kindIs( t, "asterisk" ) || kindIs( t, "wildcard_import" ) )
         {
             wildcard = true;
         }
@@ -4245,7 +4244,7 @@ inline void captureJvmTypeImport( BindCtx& cx, TSNode n, std::uint32_t at )
         }
         return true;
     } );
-    if( member || ts_node_is_null( path ) )
+    if( ts_node_is_null( path ) )
     {
         return;
     }
@@ -4272,18 +4271,42 @@ inline void pushNamespace( BindCtx& cx, TSNode n, TSNode name, TSNode body )
 }
 
 // The nodes that carry a call-result scope fact, per family (data rows, read by bindsVisitNode): a namespace body the index
-// has no symbol for, C++'s using-directives / using-declarations, and (fix round 3) every declaration that binds a type
-// name to another type — each family's alias forms (model.h LocalBindKind::TypeAlias).
-inline constexpr struct { CallResultFamily family; std::string_view kind; bool alias; } kScopeFactNodes[] = {
-    { CallResultFamily::Cpp, "namespace_definition", false }, { CallResultFamily::Cpp, "using_declaration", false },
-    { CallResultFamily::Cpp, "alias_declaration", true }, { CallResultFamily::Cpp, "type_definition", true }, { CallResultFamily::Cpp, "namespace_alias_definition", true },
-    { CallResultFamily::TypeScript, "internal_module", false }, { CallResultFamily::TypeScript, "module", false },
-    { CallResultFamily::TypeScript, "type_alias_declaration", true }, { CallResultFamily::TypeScript, "import_alias", true },
-    { CallResultFamily::Rust, "type_item", true }, { CallResultFamily::Jvm, "type_alias", true },
+// has no symbol for, C++'s using-directives / using-declarations, (fix round 3) every declaration that binds a type name to
+// another type — each family's alias forms (model.h LocalBindKind::TypeAlias) — and (fix round 4) every declaration that
+// binds a type name the index keeps NO class symbol for (Shadow: a Java record / @interface; C++ a union outside a
+// declaration, a bodiless struct / class / union), and the regions the parser cannot read as declarations (Unparsed: a C++
+// statement, parse error or broken declaration where a declaration must stand — a macro invocation; a Rust nested fn,
+// whose enclosing blocks' statement-position macros may declare items it sees).
+enum class ScopeFactRole : std::uint8_t { Scope, Alias, Shadow, Unparsed };
+struct ScopeFactNode
+{
+    CallResultFamily family;
+    std::string_view kind;
+    ScopeFactRole    role;
 };
+inline constexpr ScopeFactNode kScopeFactNodes[] = {
+    { CallResultFamily::Cpp, "namespace_definition", ScopeFactRole::Scope }, { CallResultFamily::Cpp, "using_declaration", ScopeFactRole::Scope },
+    { CallResultFamily::Cpp, "alias_declaration", ScopeFactRole::Alias }, { CallResultFamily::Cpp, "type_definition", ScopeFactRole::Alias },
+    { CallResultFamily::Cpp, "namespace_alias_definition", ScopeFactRole::Alias },
+    { CallResultFamily::Cpp, "union_specifier", ScopeFactRole::Shadow }, { CallResultFamily::Cpp, "struct_specifier", ScopeFactRole::Shadow },
+    { CallResultFamily::Cpp, "class_specifier", ScopeFactRole::Shadow },
+    { CallResultFamily::Cpp, "expression_statement", ScopeFactRole::Unparsed }, { CallResultFamily::Cpp, "ERROR", ScopeFactRole::Unparsed },
+    { CallResultFamily::Cpp, "declaration", ScopeFactRole::Unparsed }, { CallResultFamily::Cpp, "field_declaration", ScopeFactRole::Unparsed },
+    { CallResultFamily::TypeScript, "internal_module", ScopeFactRole::Scope }, { CallResultFamily::TypeScript, "module", ScopeFactRole::Scope },
+    { CallResultFamily::TypeScript, "type_alias_declaration", ScopeFactRole::Alias }, { CallResultFamily::TypeScript, "import_alias", ScopeFactRole::Alias },
+    { CallResultFamily::Rust, "type_item", ScopeFactRole::Alias }, { CallResultFamily::Rust, "function_item", ScopeFactRole::Unparsed },
+    { CallResultFamily::Jvm, "type_alias", ScopeFactRole::Alias }, { CallResultFamily::Jvm, "record_declaration", ScopeFactRole::Shadow },
+    { CallResultFamily::Jvm, "annotation_type_declaration", ScopeFactRole::Shadow },
+};
+// the scope-fact row for node kind `t` in language `lang`; nullptr when none
+inline const ScopeFactNode* scopeFactRow( Lang lang, const char* t )
+{
+    const auto row = std::ranges::find_if( kScopeFactNodes, [ & ]( const ScopeFactNode& r ) { return r.family == callResultFamilyOf( lang ) && r.kind == t; } );
+    return row == std::end( kScopeFactNodes ) ? nullptr : &*row;
+}
 
-// the C++ scope a namespace- / file- / class-scope declaration `n` is in force over: a namespace body, a class body (only
-// when `classScope` admits one), or the whole file (0 .. 0xFFFFFFFF); {0,0} for a block (a body binds no declared result)
+// the C++ scope a declaration `n` is in force over: a namespace body, a class body (only when `classScope` admits one), a
+// function body (fix round 4: a local class's member result is declared inside it), or the whole file (0 .. 0xFFFFFFFF)
 inline std::pair<std::uint32_t, std::uint32_t> cppDeclScope( TSNode n, bool classScope )
 {
     for( TSNode up = ts_node_parent( n ); !ts_node_is_null( up ); up = ts_node_parent( up ) )
@@ -4304,7 +4327,7 @@ inline std::pair<std::uint32_t, std::uint32_t> cppDeclScope( TSNode n, bool clas
         }
         if( kindIs( ut, "compound_statement" ) )
         {
-            return { 0u, 0u };
+            return { ts_node_start_byte( up ), ts_node_end_byte( up ) };   // fix round 4: in force in that body (a local class's members)
         }
     }
     return { 0u, 0u };
@@ -4373,17 +4396,147 @@ inline void captureTypeAlias( BindCtx& cx, TSNode n, const char* t )
     push( ts_node_is_null( name ) ? std::string_view{} : nodeTextOf( name, cx.src ), target );
 }
 
-// A TS `namespace` / `module` body, a C++ `namespace` body (an `inline` namespace is transparent: its members are the
-// enclosing namespace's, so none is recorded), and a C++ namespace- or file-scope using-directive / using-declaration as a
-// TypeImport spanning the scope it is declared in — what a callee's bare result type names (receiverevidence.h
-// CallResultTypes::visibleAt / cppUnqualifiedClass). A using in a block reaches no declared result (a return type sits
-// outside every body) and one in a class is a member re-export (resolve.h buildUsingReexports): neither is recorded.
-inline void captureScopeFact( BindCtx& cx, TSNode n, const char* t )
+// fix round 4: a type declaration the index keeps no class symbol for, or a C++ bodiless (forward) declaration — a TypeAlias
+// row marked "shadow" / "forward" (model.h kTypeBind* constants): var = the name it binds, C++ rows with their scope's span. A C++
+// union inside a `declaration` (`union U {…} u;`) and every struct / class with a body are class symbols (queries/cpp/tags.scm);
+// a bodiless one counts only as a declaration of its own (namespace, file, class or block scope) — an elaborated type in a
+// declaration, a parameter, a friend or a template declares nothing this reader follows.
+inline void captureShadowDecl( BindCtx& cx, TSNode n, const char* t )
 {
-    if( std::ranges::any_of( kScopeFactNodes, [ & ]( const auto& row ) { return row.alias && row.kind == t; } ) )   // an alias row
+    const TSNode name = fieldChild( n, NodeField::Name );
+    if( ts_node_is_null( name ) || !( kindIs( ts_node_type( name ), "identifier" ) || kindIs( ts_node_type( name ), "type_identifier" ) ) )
     {
-        captureTypeAlias( cx, n, t );
         return;
+    }
+    std::string_view mark          = kTypeBindShadow;
+    std::uint32_t    spanStart     = 0;
+    std::uint32_t    spanEnd       = 0;
+    if( callResultFamilyOf( cx.lang ) == CallResultFamily::Cpp )
+    {
+        const TSNode      parent   = ts_node_parent( n );
+        const char*       pt       = ts_node_is_null( parent ) ? "" : ts_node_type( parent );
+        const bool        bodiless = ts_node_is_null( fieldChild( n, NodeField::Body ) );
+        constexpr std::string_view kDeclScopes[] = { "declaration_list", "translation_unit", "compound_statement" };   // a statement of its own
+        const bool own = std::ranges::find( kDeclScopes, std::string_view( pt ) ) != std::end( kDeclScopes )
+                      || ( kindIs( pt, "field_declaration" ) && ts_node_is_null( fieldChild( parent, NodeField::Declarator ) ) );
+        if( bodiless ? !own : !kindIs( t, "union_specifier" ) || kindIs( pt, "declaration" ) )
+        {
+            return;
+        }
+        mark = bodiless ? kTypeBindForward : kTypeBindShadow;
+        std::tie( spanStart, spanEnd ) = cppDeclScope( n, true );
+        if( spanEnd == 0 )
+        {
+            return;
+        }
+    }
+    cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = ts_node_start_byte( n ), .lang = cx.lang, .kind = LocalBindKind::TypeAlias,
+                                  .spanStart = spanStart, .spanEnd = spanEnd, .var = std::string( nodeTextOf( name, cx.src ) ), .typeName = std::string( mark ) } );
+}
+
+// fix round 4: a region the parser cannot read as declarations may declare ANY name — an "unparsed" TypeAlias row (var "!",
+// model.h kTypeBind* constants). C++: a statement, a parse error, or a declaration holding one, standing where only declarations
+// may (a namespace / file / class body) and spelling at least one identifier — a macro invocation (`DECL(S)`,
+// `REGISTER(A, B);`, `DECLARE_ALL()`), with its scope's span. Rust: a nested fn sees the items of every block enclosing it,
+// and a statement- or item-position macro in such a block may expand to one — one row per such block, each block read
+// once per file (BindCtx::rustMacroBlocks: its ancestors, outermost first). (A C++ macro in a function body reads as a
+// call: a local class beside one is not covered.)
+inline void captureUnparsed( BindCtx& cx, TSNode n, const char* t )
+{
+    const auto push = [ & ]( std::uint32_t at, std::uint32_t spanStart, std::uint32_t spanEnd )
+    {
+        cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = at, .lang = cx.lang, .kind = LocalBindKind::TypeAlias, .spanStart = spanStart,
+                                      .spanEnd = spanEnd, .var = std::string( "!" ), .typeName = std::string( kTypeBindUnparsed ) } );
+    };
+    if( callResultFamilyOf( cx.lang ) == CallResultFamily::Cpp )
+    {
+        const TSNode parent = ts_node_parent( n );
+        const char*  pt     = ts_node_is_null( parent ) ? "" : ts_node_type( parent );
+        constexpr std::string_view kDeclOnly[] = { "declaration_list", "translation_unit", "field_declaration_list" };   // no statement stands here
+        const bool   broken = kindIs( t, "ERROR" ) || kindIs( t, "expression_statement" ) || ts_node_has_error( n );
+        if( !broken || std::ranges::find( kDeclOnly, std::string_view( pt ) ) == std::end( kDeclOnly ) )
+        {
+            return;
+        }
+        bool        spells = false;
+        ChildCursor walk( n );   // its first identifier leaf, if any (a pre-order walk of the region, stopped there)
+        for( bool down = true; !spells; )
+        {
+            const TSNode c = ts_tree_cursor_current_node( &walk.cur );
+            if( down && ts_tree_cursor_goto_first_child( &walk.cur ) )
+            {
+                continue;
+            }
+            spells = ts_node_child_count( c ) == 0 && std::string_view( ts_node_type( c ) ).ends_with( "identifier" );
+            down   = ts_tree_cursor_goto_next_sibling( &walk.cur );
+            while( !down && ts_tree_cursor_goto_parent( &walk.cur ) )
+            {
+                down = ts_tree_cursor_goto_next_sibling( &walk.cur );
+            }
+            if( !down )
+            {
+                break;
+            }
+        }
+        const auto [ spanStart, spanEnd ] = cppDeclScope( n, true );
+        if( spells && spanEnd != 0 )
+        {
+            push( ts_node_start_byte( n ), spanStart, spanEnd );
+        }
+        return;
+    }
+    // Rust: only a NESTED fn (one in a block) sees block items
+    const TSNode parent = ts_node_parent( n );
+    if( ts_node_is_null( parent ) || !kindIs( ts_node_type( parent ), "block" ) )
+    {
+        return;
+    }
+    const std::uint32_t at = ts_node_start_byte( n );
+    auto& seen = cx.rustMacroBlocks;
+    while( !seen.empty() && seen.back().second <= at )
+    {
+        seen.pop_back();   // blocks the walk has left (the walk is in source order)
+    }
+    std::vector<TSNode> blocks;   // the enclosing blocks not yet read, innermost first; the walk stops at the module
+    for( TSNode up = parent; !ts_node_is_null( up ) && !kindIs( ts_node_type( up ), "mod_item" ); up = ts_node_parent( up ) )
+    {
+        if( kindIs( ts_node_type( up ), "block" ) && std::ranges::none_of( seen, [ & ]( const auto& b ) { return b.first == ts_node_start_byte( up ); } ) )
+        {
+            blocks.push_back( up );
+        }
+    }
+    ChildCursor cursor( n );
+    for( auto b = blocks.rbegin(); b != blocks.rend(); ++b )
+    {
+        seen.emplace_back( ts_node_start_byte( *b ), ts_node_end_byte( *b ) );
+        bool macro = false;
+        forEachChild( *b, cursor.cur, [ & ]( TSNode c )
+        {
+            const TSNode inner = kindIs( ts_node_type( c ), "expression_statement" ) && ts_node_named_child_count( c ) > 0 ? ts_node_named_child( c, 0 ) : c;
+            macro = kindIs( ts_node_type( inner ), "macro_invocation" );
+            return !macro;
+        } );
+        if( macro )
+        {
+            push( ts_node_start_byte( *b ), 0, 0 );
+        }
+    }
+}
+
+// A TS `namespace` / `module` body, a C++ `namespace` body (an `inline` namespace is transparent: its members are the
+// enclosing namespace's, so none is recorded), and a C++ using-directive / using-declaration at namespace, file or (fix
+// round 4) block scope as a TypeImport spanning the scope it is declared in — what a callee's bare result type names
+// (receiverevidence.h CallResultTypes::visibleAt / cppUnqualifiedClass): a block's is in force for a local class's members
+// only. One in a class is a member re-export (resolve.h buildUsingReexports) and is not recorded. Every other role of the
+// row (`role`, kScopeFactNodes) has its own reader.
+inline void captureScopeFact( BindCtx& cx, TSNode n, const char* t, ScopeFactRole role )
+{
+    switch( role )
+    {
+        case ScopeFactRole::Alias:    captureTypeAlias( cx, n, t ); return;
+        case ScopeFactRole::Shadow:   captureShadowDecl( cx, n, t ); return;
+        case ScopeFactRole::Unparsed: captureUnparsed( cx, n, t ); return;
+        case ScopeFactRole::Scope:    break;
     }
     if( kindIs( t, "internal_module" ) || kindIs( t, "module" ) )
     {
@@ -6141,9 +6294,9 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
         } );
     }
     // (L) fix round 2: a namespace body, a C++ using-directive / using-declaration — the scope a bare result type resolves in
-    if( std::ranges::any_of( kScopeFactNodes, [ & ]( const auto& row ) { return row.family == callResultFamilyOf( lang ) && row.kind == t; } ) )
+    if( const ScopeFactNode* row = scopeFactRow( lang, t ) )
     {
-        captureScopeFact( cx, n, t );
+        captureScopeFact( cx, n, t, row->role );
     }
     // (L) a C++ function's declared result (a definition, or a declaration such as a header's prototype)
     if( callResultFamilyOf( lang ) == CallResultFamily::Cpp && ( kindIs( t, "function_definition" ) || kindIs( t, "declaration" ) || kindIs( t, "field_declaration" ) ) )
