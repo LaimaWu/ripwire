@@ -9839,17 +9839,45 @@ inline void emitImportRowsXml( std::FILE* out, const IngestResult& ing,
 
 // fix27: an rf row's hedge on a multi-definition selector (graph.h impactFileRollup counts nameOnly only there): via="name"
 // when every reached symbol in the file is a via="name" row, by_name=K when K of its syms= are; nothing when none is.
+// L7 (typeuse.h): on a TYPE impact, via="type" when the file is reached only through the type tier — every reached symbol
+// there names the type or reaches one that does (or, syms="0", the file names it outside every indexed definition) — and
+// by_type=K when K of its syms= are. The d="0" row (the defining file) never says via="type": it is the definition, not a
+// dependant; it says by_type=K when it also holds type users. One via= per row: a via="name" row says its type count as
+// by_type=K. A non-type rollup has typeOnly 0 and typeScope false on every row, so it prints exactly what it did.
+template<class RowT>
+inline bool impactRollupAllType( const RowT& row ) noexcept
+{
+    return row.minDepth > 0 && ( row.syms == 0 ? row.typeScope : row.typeOnly == row.syms );
+}
 template<class RowT>
 inline std::string impactRollupHedgeXml( const RowT& row )
 {
-    if( row.nameOnly == 0 ) { return std::string(); }
-    return row.nameOnly == row.syms ? std::string( " via=\"name\"" ) : " by_name=\"" + std::to_string( row.nameOnly ) + "\"";
+    const bool  viaName = row.nameOnly > 0 && row.nameOnly == row.syms;
+    std::string out     = row.nameOnly == 0 ? std::string() : viaName ? std::string( " via=\"name\"" ) : " by_name=\"" + std::to_string( row.nameOnly ) + "\"";
+    if( impactRollupAllType( row ) && !viaName ) { out += " via=\"type\""; }
+    else if( row.typeOnly > 0 ) { out += " by_type=\"" + std::to_string( row.typeOnly ) + "\""; }
+    return out;
 }
 template<class RowT>
 inline std::string impactRollupHedgeJson( const RowT& row )
 {
-    if( row.nameOnly == 0 ) { return std::string(); }
-    return row.nameOnly == row.syms ? std::string( ",\"via\":\"name\"" ) : ",\"by_name\":" + std::to_string( row.nameOnly );
+    const bool  viaName = row.nameOnly > 0 && row.nameOnly == row.syms;
+    std::string out     = row.nameOnly == 0 ? std::string() : viaName ? std::string( ",\"via\":\"name\"" ) : ",\"by_name\":" + std::to_string( row.nameOnly );
+    if( impactRollupAllType( row ) && !viaName ) { out += ",\"via\":\"type\""; }
+    else if( row.typeOnly > 0 ) { out += ",\"by_type\":" + std::to_string( row.typeOnly ); }
+    return out;
+}
+
+// L7: the <files> element's type-tier counts — type_users= on every type impact, type_defs= when several indexed type
+// definitions share the spelled name, type_capped="1" when the mention walk hit its budget. Nothing on a non-type rollup.
+template<class RollupT>
+inline std::string impactRollupTypeAttrs( const RollupT& r, bool json )
+{
+    if( !r.typed ) { return std::string(); }
+    std::string out = json ? ",\"type_users\":" + std::to_string( r.typeUsers ) : " type_users=\"" + std::to_string( r.typeUsers ) + "\"";
+    if( r.typeDefs > 1 ) { out += json ? ",\"type_defs\":" + std::to_string( r.typeDefs ) : " type_defs=\"" + std::to_string( r.typeDefs ) + "\""; }
+    if( r.typeCapped )   { out += json ? std::string( ",\"type_capped\":true" ) : std::string( " type_capped=\"1\"" ); }
+    return out;
 }
 
 // idea #6: the reach set's per-file rollup (graph.h impactFileRollup), BEFORE the symbol window: <files files=
@@ -9865,8 +9893,8 @@ inline void emitImpactFileRollupXml( std::FILE* out, const IngestResult& ing, co
         return;
     }
     std::vector<char> esc;
-    rw::emitTo( out, "<files files=\"{}\" shown_files=\"{}\" files_capped=\"{}\"{}>", r.rows.size(), r.shown, r.capped ? "1" : "0",
-                rw::nextAttrXml( r.next, "files_next" ) );
+    rw::emitTo( out, "<files files=\"{}\" shown_files=\"{}\" files_capped=\"{}\"{}{}>", r.rows.size(), r.shown, r.capped ? "1" : "0",
+                rw::nextAttrXml( r.next, "files_next" ), impactRollupTypeAttrs( r, /*json=*/false ) );   // L7
     for( std::size_t i = 0; i < r.shown; ++i )
     {
         const std::string_view raw = ing.files[ r.rows[i].fileId ];
@@ -9886,8 +9914,9 @@ inline void emitImpactFileRollupJson( std::FILE* out, const IngestResult& ing, c
     {
         return;
     }
-    rw::emitTo( out, ",\"files\":{{\"files\":{},\"shown_files\":{},\"files_capped\":{}{},\"rows\":[", r.rows.size(), r.shown,
-                r.capped ? "true" : "false", r.next.empty() ? std::string() : ",\"files_next\":\"" + jsonStr( r.next ) + "\"" );
+    rw::emitTo( out, ",\"files\":{{\"files\":{},\"shown_files\":{},\"files_capped\":{}{}{},\"rows\":[", r.rows.size(), r.shown,
+                r.capped ? "true" : "false", r.next.empty() ? std::string() : ",\"files_next\":\"" + jsonStr( r.next ) + "\"",
+                impactRollupTypeAttrs( r, /*json=*/true ) );   // L7
     for( std::size_t i = 0; i < r.shown; ++i )
     {
         const std::string_view raw = ing.files[ r.rows[i].fileId ];

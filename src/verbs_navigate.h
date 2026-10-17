@@ -4,6 +4,7 @@
 #endif
 
 #include "infra/emit.h" // rw::emitTo — THE emitter (std::print, or std::format+fputs where <print> is absent)
+#include "typeuse.h"   // L7: --impact of a type seeds its walk from the symbols that name it
 #include <string_view>       // std::string_view — the %.*s (precision, pointer) pair collapses to one view
 
 // verbs_navigate.h — the navigate family, moved VERBATIM from main.cpp in the 2026-08-29 split:
@@ -2759,9 +2760,12 @@ std::optional<int> runImpact( const MainDispatch& d )
                                              "ripwire: --impact symbol not found: ", cfg.impactSym, "--impact=" );   // §B4.2
         }
         // 0.6.5: the SAME walk, keeping each node's hop depth — the rows' d= and the root's by_depth=.
-        std::vector<std::uint32_t>       imDepth;
-        const std::vector<NodeId>        reach = rw::transitiveCallersDepth( g, seeds, &imDepth );
-        const std::vector<char>          imProven = rw::provenCallerReach( g, seeds );   // FE-B (D3): the all-proven part of the reach
+        // L7 (typeuse.h): a TYPE seed's walk also starts from the symbols that name it; a function's walk is unchanged.
+        const rw::TypeUseTier            imType   = rw::typeUseTier( ing, seeds );
+        rw::ImpactReach                  imWalk   = rw::impactReachWithTypes( g, seeds, imType );
+        std::vector<std::uint32_t>&      imDepth  = imWalk.depth;
+        const std::vector<NodeId>&       reach    = imWalk.reach;
+        const std::vector<char>&         imProven = imWalk.proven;   // FE-B (D3): the all-proven part of the reach
         const auto [ rank, prIters, prConverged ] = rankGraph( g );
         const rw::RankDisclosure         prD{ prIters, prConverged, true };   // W2-F: the listing is PageRank-ordered within a depth
         std::vector<NodeId>              show  = reach;
@@ -2796,8 +2800,10 @@ std::optional<int> runImpact( const MainDispatch& d )
         const rw::PageWindow imPage = pageWindow( show.size(), effectiveRowCap( cfg.pageLimit, rw::kCallHierarchyRowCap ), cfg.pageOffset );
         // idea #6: the rollup rides only beside a CUT symbol window (graph.h impactFileRollup)
         // fix27: on a multi-definition selector the rows keep the symbol rows' via="name" hedge through the fold
+        const rw::ImpactTypeFold imTypeFold{ imType.defFiles, imType.scopeFiles, &imWalk.typeOnly, imType.users.size(), imType.typeDefs, imType.sitesCapped };
         rw::ImpactFileRollup imFiles = rw::impactFileRollup( ing, reach, imDepth, cfg.pageLimit, cfg.impactSym,
-                                                             imPage.end - imPage.begin < show.size(), seeds.size() > 1 ? imProven : rw::kNoImpactHedge );
+                                                             imPage.end - imPage.begin < show.size(), seeds.size() > 1 ? imProven : rw::kNoImpactHedge,
+                                                             imType.armed ? &imTypeFold : nullptr );   // L7: a type impact always rolls up
         // attrib-multidef (defattrib.h): which definition each reached row (and rollup file) is a dependant of, and the table
         // this page lists — the groups its rows and rollup rows name, all of them up to the cap.
         const rw::ReachAttribution imAttr = rw::attributeReachAnswer( ing, g, seeds, reach );
@@ -2837,7 +2843,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                          rw::declinedIfaceLegend( imDeclinedIface > 0 ),                                             // likewise, exactly when declined_iface= is there
                          ( std::string( rw::modScopeLegend( imHasModScope ) )      // #60: likewise, exactly when a t="modscope" row is
                            + rw::impactRollupLegend( !imFiles.rows.empty() && !cfg.columnar, imports.umbrella, rw::impactRollupHedged( imFiles ),
-                                                     !imports.next.empty() && !cfg.columnar )   // idea #6; fix27; FIX1 R1: the XML root's importers_next= (columnar names it in lens=)
+                                                     !imports.next.empty() && !cfg.columnar, imFiles.typed, imFiles.typeDefs, imFiles.typeCapped )   // idea #6; fix27; FIX1 R1: the XML root's importers_next= (columnar names it in lens=); L7
                            + rw::defTableLegend( imAttr.groups.multi(), imListing.cut ) ).c_str(),   // attrib-multidef: exactly when the table rides
                          ( std::string( rw::valueRefsReachLegend( !imValueRefs.rows.empty() ) )   // exactly when the root carries value_refs=
                            + rw::valueRefsDepthLegendFor( imValueRefs ) ).c_str(),                 // ... and the depth disclosure

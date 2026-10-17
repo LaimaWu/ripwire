@@ -32,6 +32,7 @@
 #include "crossref.h"      // the shared cross-branch content index (whereis / stray_content)
 #include "darkflags.h"     // the shared dark-content gate harvest (flags)
 #include "flipimpact.h"    // the flags verb's `symbol` argument: one gate's flip blast radius
+#include "typeuse.h"       // L7: the impact verb's type tier (CLI ≡ MCP)
 #include "docdrift.h"      // the shared doc-anchor verifier (doc_drift)
 #include "exemplar.h"      // §B6 M2: selectExemplar + kExemplarSelectionRule — the ONE selector/wording both surfaces use
 #include "mcprefusal.h"    // §B6 M7/M8/M9: the shared verb+field refusal table both MCP arms speak
@@ -3096,9 +3097,12 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     }
 
     // 0.6.5: the CLI --impact's walk, keeping each node's hop depth, and its order (graph.h orderByDepthThenRank).
-    std::vector<std::uint32_t>       depth;
-    const std::vector<NodeId>        reach = transitiveCallersDepth( g, seeds, &depth );
-    const std::vector<char>          proven = provenCallerReach( g, seeds );   // FE-B (D3): as on the CLI
+    // L7 (typeuse.h): the CLI's type tier, by the same calls — a type seed's walk also starts from the symbols naming it
+    const TypeUseTier                typeTier = typeUseTier( ing, seeds );
+    ImpactReach                      walk     = impactReachWithTypes( g, seeds, typeTier );
+    std::vector<std::uint32_t>&      depth    = walk.depth;
+    const std::vector<NodeId>&       reach    = walk.reach;
+    const std::vector<char>&         proven   = walk.proven;   // FE-B (D3): as on the CLI
     const auto [ rank, prIters, prConverged ] = rankGraph( g );
     const RankDisclosure             prD{ prIters, prConverged, true };   // W2-F: CLI --impact discloses this; so does its twin
     std::vector<NodeId>              show  = reach;
@@ -3141,8 +3145,9 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     const ValueRefRows  imValueRefs = valueRefCallerRows( ing, valueRefIndexOf( ix ), seeds );
     const PageWindow    ipw         = pageWindow( show.size(), effectiveRowCap( page.limit, 40 ), page.offset );
     // idea #6: the CLI arm's rollup, under the same rule — it rides only beside a CUT symbol window
+    const ImpactTypeFold typeFold{ typeTier.defFiles, typeTier.scopeFiles, &walk.typeOnly, typeTier.users.size(), typeTier.typeDefs, typeTier.sitesCapped };
     ImpactFileRollup imFiles = impactFileRollup( ing, reach, depth, page.limit, symbol, ipw.end - ipw.begin < show.size(),
-                                                 seeds.size() > 1 ? proven : kNoImpactHedge );   // fix27, as on the CLI
+                                                 seeds.size() > 1 ? proven : kNoImpactHedge, typeTier.armed ? &typeFold : nullptr );   // fix27; L7, as on the CLI
     // attrib-multidef (defattrib.h): the CLI --impact's attribution, by the same calls
     const ReachAttribution imAttr = attributeReachAnswer( ing, g, seeds, reach );
     std::vector<char>      imNamed;
@@ -3165,7 +3170,8 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   declinedIfaceLegend( declinedIface > 0 ),                                          // likewise declined_iface=, as on the CLI
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
                     + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI
-                    + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ), !imports.next.empty() )   // idea #6; FIX1 R1, as on the CLI
+                    + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ), !imports.next.empty(),
+                                          imFiles.typed, imFiles.typeDefs, imFiles.typeCapped )   // idea #6; FIX1 R1; L7, as on the CLI
                     + defTableLegend( imAttr.groups.multi(), imListing.cut ) ).c_str(),                                              // attrib-multidef, as on the CLI
                   graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), renderDisclosure( prD, DiscloseAs::LegendClause ).c_str() );
     // r27-emitters §P2.1: the listing is capped at 40 by rank. Without shown=/capped= a 40-row answer to
