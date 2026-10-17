@@ -623,8 +623,8 @@ struct CallResultTypes
     // `a::b::C` → ( `a::b`, `C` ); `C` → ( "", `C` ) — the last segment is namesplit::afterLast's
     static std::pair<std::string_view, std::string_view> splitLast( std::string_view path, std::string_view sep ) noexcept
     {
-        const std::string_view last = namesplit::afterLast( path, sep );
-        return { last.size() == path.size() ? std::string_view{} : path.substr( 0, path.size() - last.size() - sep.size() ), last };
+        const std::size_t at = path.rfind( sep );
+        return { at == std::string_view::npos ? std::string_view{} : path.substr( 0, at ), namesplit::afterLast( path, sep ) };
     }
     NodeId rustResultClass( std::uint32_t fileId, std::string_view whole, std::string_view cls ) const
     {
@@ -1148,10 +1148,13 @@ struct ReceiverEvidence
         const SeenLocal seen = innerSplit ? SeenLocal{} : SeenLocal{ inner->type, inner->cls };
         return ( whole.has_value() && *whole != seen ) ? SeenLocal{} : seen;
     }
+    static std::optional<std::string_view> typeOf( const std::optional<SeenLocal>& seen ) noexcept
+    {
+        return seen.has_value() ? std::optional<std::string_view>( seen->type ) : std::nullopt;
+    }
     std::optional<std::string_view> visibleLocal( NodeId scope, std::string_view var, std::uint32_t site ) const
     {
-        const std::optional<SeenLocal> seen = seenLocal( scope, var, site );
-        return seen.has_value() ? std::optional<std::string_view>( seen->type ) : std::nullopt;
+        return typeOf( seenLocal( scope, var, site ) );
     }
     // the local `var` visible at byte `site` of `from` or of a function enclosing it (the innermost that has one)
     std::optional<SeenLocal> localSeenAt( NodeId from, std::string_view var, std::uint32_t site ) const
@@ -1166,8 +1169,7 @@ struct ReceiverEvidence
     }
     std::optional<std::string_view> localAt( NodeId from, std::string_view var, std::uint32_t site ) const
     {
-        const std::optional<SeenLocal> seen = localSeenAt( from, var, site );
-        return seen.has_value() ? std::optional<std::string_view>( seen->type ) : std::nullopt;
+        return typeOf( localSeenAt( from, var, site ) );
     }
     // the ( object var, method ) a method alias `var` names in `from` or a function enclosing it; `scope` = where it is bound
     const std::pair<std::string, std::string>* aliasedMethod( NodeId from, std::string_view var, NodeId& scope ) const
