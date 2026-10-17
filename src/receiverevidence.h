@@ -569,7 +569,11 @@ struct CallResultTypes
         }
         return best;
     }
-    static bool classKind( SymKind k ) noexcept { return k == SymKind::Class || k == SymKind::Struct || k == SymKind::Interface; }
+    static bool classKind( SymKind k ) noexcept
+    {
+        constexpr SymKind kClassKinds[] = { SymKind::Class, SymKind::Struct, SymKind::Interface };   // the class-like kinds
+        return std::ranges::find( kClassKinds, k ) != std::end( kClassKinds );
+    }
     // the innermost class of file `f` whose span holds byte `pos` (a member declaration's class); kNoNode when none
     NodeId classHolding( std::uint32_t f, std::uint32_t pos ) const { return innermostHolding( f, pos, &classKind ); }
     // JVM / C++: does a base of class `holder` — through in-tree bases, transitively (a visited set: a diamond is walked
