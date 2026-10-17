@@ -2580,11 +2580,6 @@ struct ImpactView
     const std::vector<char>&       typeOnly;        // L7 (typeuse.h ImpactReach::typeOnly): per node, reached only through a type mention; empty when unarmed
 };
 
-// L7: whether a row of this window is reached only through a type mention (the columnar <by_type> column and its legend clause)
-inline bool impactRowTypeOnly( const std::vector<char>& typeOnly, rw::NodeId n ) noexcept
-{
-    return n < typeOnly.size() && typeOnly[ n ] != 0;
-}
 
 // attrib-multidef: the window's of_def JSON keys in row order (indexed like `show`), "" where none
 inline std::vector<std::string> impactOfDefKeys( const ImpactView& v )
@@ -2668,7 +2663,7 @@ int emitImpactColumnar( const ImpactView& v )
     std::vector<char> rowType( rows.size(), 0 );
     for( std::size_t i = 0; i < rows.size(); ++i )
     {
-        rowType[ i ] = impactRowTypeOnly( v.typeOnly, rows[ i ] ) ? 1 : 0;
+        rowType[ i ] = rows[ i ] < v.typeOnly.size() ? v.typeOnly[ rows[ i ] ] : char( 0 );   // empty typeOnly: an unarmed tier, every row 0
     }
     emitColumnarSymbolRows( stdout, v.ing, "impact", attr.c_str(), rows, v.rootPrefix, v.testReach, &v.depth,
                             rw::ColumnarRowExtras{ &rowVia, nullptr, nullptr, v.attrib.groups.multi() ? &rowOfDef : nullptr, &defRows, nullptr, nullptr, &rowType } );
@@ -2862,7 +2857,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                          reach.empty() ? std::string()
                                        : std::string( rw::impactDepthLegend( cfg.columnar ) )   // 0.6.5: exactly when rows (d=) and by_depth= exist
                                              + rw::impactByTypeColumnarLegend( cfg.columnar && std::any_of( show.begin() + imPage.begin, show.begin() + imPage.end,   // L7: exactly when the <by_type> column rides
-                                                                                                        [ & ]( NodeId n ) { return impactRowTypeOnly( imWalk.typeOnly, n ); } ) ),
+                                                                                                        [ & ]( NodeId n ) { return n < imWalk.typeOnly.size() && imWalk.typeOnly[ n ] != 0; } ) ),
                          ( std::string( cfg.columnar ? rw::kImpactImportTierColumnarLegend : rw::kImpactImportTierLegend )
                            + rw::importersNextLegend( !imports.next.empty() && !cfg.columnar ) ).c_str(),   // cut-fix E: exactly when the root carries it
                          ( rw::impactTsImportLegend( imports.importsUnresolved, imports.tsconfigUnread )   // #220: exactly when the root carries them
