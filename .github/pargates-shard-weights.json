@@ -217,6 +217,7 @@
 "goinstcheck.sh": 0.2,
 "gointerfacecheck.sh": 0.4,
 "gokindcheck.sh": 0.6,
+"goscopecheck.sh": 0.5,
 "graphlegendbudgetcheck.sh": 2.5,
 "graphqueryrefusecheck.sh": 1.9,
 "grepandcheck.sh": 8.8,

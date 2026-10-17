@@ -8,7 +8,8 @@
 #   qd-memory-degrade +1, #380 +1, attrib-multidef/declined-sites +3). Train 29 folded them into src/langfacts.h columns,
 #   byte-identical, and lowered the ceiling below 352. The waiver is not a precedent: the rule above (may fall, never rise)
 #   holds for every change.
-ceiling	350
+# 350 -> 347 (#403): captureTagsFacts' Python, Rust and Kotlin scope arms became rows of kDefScopeWalkerOfLang (ingest_names.h).
+ceiling	347
 perlang	ingest_elixir.h
 perlang	elixir_resolve.h
 perlang	ingest_clojure.h

@@ -976,21 +976,125 @@ inline std::string rustQualifierOf( TSNode nameNode, std::string_view src )
     return qualifier;
 }
 
+// The name a written type ends in: `Deb`, `*Deb` → "Deb"; `Stack[T]`, `*Stack[T]`, `Foo<T>` → the name, never the
+// argument list; Go `pkg.T` → "T"; a TS `a.b.C` member chain → "C". "" for any other form (a slice, map, func type).
+// Shared by the receiver evidence in ingest_binds.h and the Go receiver row of kScopeOwners below.
+inline std::string_view finalTypeSegment( TSNode typeNode, std::string_view src )
+{
+    for( int guard = 0; guard < 8 && !ts_node_is_null( typeNode ); ++guard )
+    {
+        const char* t = ts_node_type( typeNode );
+        if( kindIs( t, "type_identifier" ) || kindIs( t, "identifier" ) || kindIs( t, "simple_identifier" ) )
+        {
+            return pattern::nodeText( typeNode, src );
+        }
+        if( kindIs( t, "qualified_type" ) )                  // Go `pkg.T`
+        {
+            typeNode = fieldChild( typeNode, NodeField::Name );
+        }
+        else if( kindIs( t, "pointer_type" ) || kindIs( t, "generic_type" ) || kindIs( t, "parenthesized_type" ) )
+        {
+            typeNode = ts_node_named_child_count( typeNode ) > 0 ? ts_node_named_child( typeNode, ts_node_named_child_count( typeNode ) - 1 ) : TSNode{};
+            if( !ts_node_is_null( typeNode ) && kindIs( t, "generic_type" ) )
+            {
+                typeNode = ts_node_named_child( ts_node_parent( typeNode ), 0 );   // `Foo<T>`: the name, never the argument list
+            }
+        }
+        else if( kindIs( t, "member_expression" ) || kindIs( t, "scoped_type_identifier" ) || kindIs( t, "nested_identifier" ) )
+        {
+            const std::uint32_t n = ts_node_named_child_count( typeNode );
+            typeNode = n > 0 ? ts_node_named_child( typeNode, n - 1 ) : TSNode{};
+            if( !ts_node_is_null( typeNode ) && kindIs( ts_node_type( typeNode ), "property_identifier" ) )
+            {
+                return pattern::nodeText( typeNode, src );
+            }
+        }
+        else
+        {
+            return {};
+        }
+    }
+    return {};
+}
+
+// Slice 9a: the enclosing-scope walker as ROWS. A row names a scope-owner node kind, how the owner's name is read, and
+// which definitions under it the owner scopes. The kinds are grammar spellings, and a kind another grammar also spells
+// would silently scope that grammar too; so only the grammars whose owner kinds collide with no other routed grammar sit
+// here (C++, Python, Go — see kDefScopeWalkerOfLang). Rust, Kotlin and Ruby keep their own walkers for the reasons in
+// the notes above each (Kotlin's and Ruby's kinds collide with Java/Swift/TS/JS; Rust's impl/trait/mod reading differs).
+enum class ScopeNameRead : std::uint8_t
+{
+    NameField,      // the owner's `name:` field, through cppScopeNameText (C++ template ids; every other name verbatim)
+    ReceiverType,   // Go method_declaration: the receiver parameter's type with `*` and type arguments stripped
+};
+enum class ScopeReach : std::uint8_t
+{
+    SelfAndInside,   // C++/Python: every def under the owner, the owner's own name included (`class Foo` sc="Foo", kept as is)
+    InsideOnly,      // Go type_spec / type_alias: its members (an interface's method_elem), never the type's own name
+    SelfOnly,        // Go method_declaration: the method's own name; a def in its body (a local var, a func literal) is a local
+};
+struct ScopeOwnerRow
+{
+    std::string_view kind;
+    ScopeNameRead    read;
+    ScopeReach       reach;
+};
+inline constexpr std::array<ScopeOwnerRow, 7> kScopeOwners = { {
+    { "class_specifier", ScopeNameRead::NameField, ScopeReach::SelfAndInside },        // C++
+    { "struct_specifier", ScopeNameRead::NameField, ScopeReach::SelfAndInside },       // C++
+    { "namespace_definition", ScopeNameRead::NameField, ScopeReach::SelfAndInside },   // C++
+    { "class_definition", ScopeNameRead::NameField, ScopeReach::SelfAndInside },       // Python
+    { "method_declaration", ScopeNameRead::ReceiverType, ScopeReach::SelfOnly },       // Go (test/goscopecheck.sh)
+    { "type_spec", ScopeNameRead::NameField, ScopeReach::InsideOnly },                 // Go (test/goscopecheck.sh)
+    { "type_alias", ScopeNameRead::NameField, ScopeReach::InsideOnly },                // Go `type A = interface{…}` (arm I)
+} };
+
+// Does owner `p` (matched to `row`) scope the definition named by `node`? The reach column: a Go type's own name and a
+// def inside a method body are NOT its members.
+inline bool ownerScopes( const ScopeOwnerRow& row, TSNode p, TSNode node ) noexcept
+{
+    if( row.reach == ScopeReach::SelfAndInside )
+    {
+        return true;
+    }
+    const bool self = ts_node_eq( fieldChild( p, NodeField::Name ), node );
+    return self == ( row.reach == ScopeReach::SelfOnly );
+}
+
+// Go `func (d *Deb) m()` / `func (Stack[T]) m()`: the receiver's type name; "" when the declaration has no receiver.
+inline std::string_view receiverTypeName( TSNode method, std::string_view src )
+{
+    const TSNode list = fieldChild( method, NodeField::Receiver );
+    // the parameter_declaration, not named child 0: a comment in the list is a named child too (arm I)
+    const TSNode decl = ts_node_is_null( list ) ? TSNode{} : firstChildOfKind( list, /*namedOnly=*/true, { "parameter_declaration" } );
+    return ts_node_is_null( decl ) ? std::string_view{} : finalTypeSegment( fieldChild( decl, NodeField::Type ), src );
+}
+
+// The nearest owner row that scopes `node` (a definition's name node), read per its row; "" at file level and for an
+// anonymous C++/Python owner. The scope is what canonical resolution and P2-D Rule-1 narrowing key on (a
+// `self.m()`/`this->m()`/bare member call resolves to scope::m) and what a `Type::m` selector matches.
 inline std::string enclosingScopeOf( TSNode node, std::string_view src )
 {
     for( TSNode p = ts_node_parent( node ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
     {
-        const char* t = ts_node_type( p );
-        // class/struct/namespace owners across grammars (names don't collide between grammars):
-        //   C++: class_specifier/struct_specifier/namespace_definition · Python: class_definition.
-        // Each exposes a `name` field; the nearest one is the enclosing scope used for canonical resolution
-        // and P2-D Rule-1 narrowing (a `self.m()`/`this->m()`/bare member call resolves to scope::m).
-        const bool scopeOwner =    kindIs( t, "class_specifier" ) || kindIs( t, "struct_specifier" )
-                                || kindIs( t, "namespace_definition" ) || kindIs( t, "class_definition" );
-        if( scopeOwner )
+        const std::string_view kind( ts_node_type( p ) );   // one strlen per ancestor, then a compare per row
+        for( const ScopeOwnerRow& row : kScopeOwners )
         {
-            // `struct Slot<bool>` → "Slot"; every non-template name keeps its written text; anonymous (no `name:`) → ""
-            return cppScopeNameText( fieldChild( p, NodeField::Name ), src );
+            if( row.kind != kind || !ownerScopes( row, p, node ) )
+            {
+                continue;
+            }
+            if( row.read == ScopeNameRead::NameField )
+            {
+                // `struct Slot<bool>` → "Slot"; every non-template name keeps its written text; anonymous (no `name:`) → ""
+                return cppScopeNameText( fieldChild( p, NodeField::Name ), src );
+            }
+            const std::string_view recv = receiverTypeName( p, src );
+            if( !recv.empty() )
+            {
+                return std::string( recv );
+            }
+            // no receiver read: not this row's shape (another grammar's method_declaration), so the walk goes on
         }
     }
     return {};
@@ -1025,6 +1129,36 @@ inline std::string kotlinEnclosingScopeOf( TSNode nameNode, std::string_view src
                          // IS the definition being scoped (its scope is what encloses it) — same outcome
         }
         return std::string( nodeTextOf( nm, src ) );
+    }
+    return {};
+}
+
+// Which walker gives a definition its scope at capture (ingest_sidecap.h captureTagsFacts), one row per language. None =
+// the language has no row here: C++ (an out-of-line qualifier comes first, then this walker), Ruby, Elixir and the JS/TS
+// built-in prototype methods keep their own arms there; every other language records no scope.
+enum class DefScopeWalker : std::uint8_t { None, Shared, Rust, Kotlin };
+inline constexpr std::array<DefScopeWalker, kLangCount> kDefScopeWalkerOfLang = []
+{
+    std::array<DefScopeWalker, kLangCount> table {};   // value-initialised: every language None unless routed below
+    table[ static_cast<std::size_t>( Lang::Python ) ] = DefScopeWalker::Shared;   // P2-D Rule 1: `self.m()` narrows to Class::m
+    table[ static_cast<std::size_t>( Lang::Go ) ]     = DefScopeWalker::Shared;   // a method's receiver type, an interface's members
+    table[ static_cast<std::size_t>( Lang::Rust ) ]   = DefScopeWalker::Rust;     // H4: `impl Widget { fn new() }` → "Widget"
+    // Kotlin: enclosing class/object/companion object → the same Rule-1 narrowing; ALSO what keeps two classes'
+    // same-named methods from colliding under the Kotlin<->Java langCompatible bridge (graph.h) — an unqualified
+    // name-only match is exactly the false-candidate risk that bridge's own comment names.
+    table[ static_cast<std::size_t>( Lang::Kotlin ) ] = DefScopeWalker::Kotlin;
+    return table;
+}();
+
+// The scope the language's walker gives the definition named by `nameNode`; "" for a language with no row.
+inline std::string defScopeOf( Lang lang, TSNode nameNode, std::string_view src )
+{
+    switch( enumTableAt( kDefScopeWalkerOfLang, lang, DefScopeWalker::None ) )
+    {
+    case DefScopeWalker::Shared: return enclosingScopeOf( nameNode, src );
+    case DefScopeWalker::Rust:   return rustEnclosingScopeOf( nameNode, src, /*includeModules=*/true );
+    case DefScopeWalker::Kotlin: return kotlinEnclosingScopeOf( nameNode, src );
+    case DefScopeWalker::None:   break;
     }
     return {};
 }

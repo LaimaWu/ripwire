@@ -325,7 +325,10 @@ constexpr std::uint32_t kCacheVersion = 32;           // 32: train 28 — the Re
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 176;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 182;          // bump on any grammar/.scm/extraction change
+                                                      // 182 = 2026-10-16 (train 29 reservation L5 go-scope, #403; the train renumbers): Go methods
+                                                      //   carry their receiver type as scope and interface members their interface's name
+                                                      //   (ingest_names.h kScopeOwners), so Go canonical ids change. Rich file tag 183.
                                                       // 176 = 2026-10-15 (train 28): strictly above every number a train-28 binary used — main 173
                                                       //   (slice 4a, rich 174), lane grep-carrier 173 (value refs through ?? || && / or and, rich 174),
                                                       //   lane ruby-pair 174 (subscript references + Ruby main-object mixins, rich 175), PR #380 145 (Elixir inert
