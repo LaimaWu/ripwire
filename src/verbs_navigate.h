@@ -664,17 +664,10 @@ collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span
         {
             continue;
         }
-        if( r.isCompose || r.isDocLink )
+        // not a use-site: a type edge, a doc mention, a markdown [[wikilink]], or a forwarded call the resolver did not keep
+        if( r.isCompose || r.isDocLink || r.lang == Lang::Markdown || ( r.forwarded && !std::ranges::binary_search( keptForwards, refIndex ) ) )
         {
-            continue; // type edge / doc mention — not a use-site
-        }
-        if( r.forwarded && !std::ranges::binary_search( keptForwards, refIndex ) )
-        {
-            continue; // a forwarded call the resolver did not keep — no call the code makes
-        }
-        if( r.lang == Lang::Markdown )
-        {
-            continue; // markdown [[wikilink]] — not a code use-site
+            continue;
         }
         if( r.role == RefRole::Call )
         {
