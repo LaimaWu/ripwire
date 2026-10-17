@@ -912,7 +912,7 @@ private:
         }
         if( m_fwdArmed )
         {
-            noteForwardProof( n, a.kind, m_anc.size() == 1 );
+            noteForwardProof( n, a.kind );
         }
         m_anc.push_back( a );
         const std::size_t i = m_anc.size() - 1;
@@ -976,12 +976,14 @@ private:
         return m.starts_with( "./" ) || m.starts_with( "../" );
     }
 
-    // Record what proves that a bare name names a function: a function declaration (at any depth), or a FILE-SCOPE
-    // import from a relative module — `import f from './m'`, `import { g as f } from './m'`, `const f = require( './m' )`,
-    // `const { f } = require( './m' )`. A type-only import binds no value and is skipped; a namespace import binds a
-    // module object, never a function.
-    void noteForwardProof( TSNode n, const char* t, bool atFileScope )
+    // Record what proves that a bare name names a function, as the walk enters each node (anc = its ancestors, root
+    // first): a function declaration at any depth, or a binding of a FILE-SCOPE import from a relative module —
+    // `import f from './m'` (anc: program, import_statement, import_clause), `import { g as f } from './m'` (… named_imports),
+    // `const f = require( './m' )` / `const { f } = require( './m' )` (anc: program, lexical/variable declaration). A
+    // type-only import binds no value; a namespace import binds a module object, never a function.
+    void noteForwardProof( TSNode n, const char* t )
     {
+        const std::size_t depth = m_anc.size();
         if( kindIs( t, "function_declaration" ) || kindIs( t, "generator_function_declaration" ) )
         {
             const std::string_view nm = text( child( n, m_fName ) );
@@ -990,84 +992,37 @@ private:
                 m_fnDeclNames.push_back( nm );
             }
         }
-        else if( atFileScope && kindIs( t, "import_statement" ) )
+        else if( depth == 2 && kindIs( t, "variable_declarator" )
+                 && ( kindIs( m_anc[1].kind, "lexical_declaration" ) || kindIs( m_anc[1].kind, "variable_declaration" ) )
+                 && requiresRelativeModule( child( n, m_fValue ) ) )
         {
-            noteImportStatement( n );
+            patternNames( child( n, m_fName ), m_relImportNames );
         }
-        else if( atFileScope && ( kindIs( t, "lexical_declaration" ) || kindIs( t, "variable_declaration" ) ) )
+        else if( depth == 3 && kindIs( t, "identifier" ) && kindIs( m_anc[2].kind, "import_clause" ) && relativeValueImport( m_anc[1] ) )
         {
-            noteRequireDeclaration( n );
+            m_relImportNames.push_back( text( n ) );
         }
-    }
-
-    void noteImportStatement( TSNode n )
-    {
-        const std::string_view whole = text( n );
-        if( whole.starts_with( "import type " ) || whole.starts_with( "import type{" ) || !relativeModuleString( child( n, m_fSource ) ) )
+        else if( depth == 4 && kindIs( t, "import_specifier" ) && kindIs( m_anc[3].kind, "named_imports" ) && relativeValueImport( m_anc[1] )
+                 && !text( n ).starts_with( "type " ) )
         {
-            return;
-        }
-        ChildCursor c( n );
-        forEachNamedChild( n, c.cur, [ & ]( TSNode clause )
-        {
-            if( kindIs( ts_node_type( clause ), "import_clause" ) )
-            {
-                noteImportClause( clause );
-            }
-            return true;
-        } );
-    }
-
-    // The value names one import clause binds: the default import and each named specifier's LOCAL name.
-    void noteImportClause( TSNode clause )
-    {
-        ChildCursor c( clause );
-        forEachNamedChild( clause, c.cur, [ & ]( TSNode k )
-        {
-            const char* kt = ts_node_type( k );
-            if( kindIs( kt, "identifier" ) )
-            {
-                m_relImportNames.push_back( text( k ) );
-            }
-            else if( kindIs( kt, "named_imports" ) )
-            {
-                noteNamedImports( k );
-            }
-            return true;
-        } );
-    }
-
-    void noteNamedImports( TSNode list )
-    {
-        ChildCursor s( list );
-        forEachNamedChild( list, s.cur, [ & ]( TSNode spec )
-        {
-            if( !kindIs( ts_node_type( spec ), "import_specifier" ) || text( spec ).starts_with( "type " ) )
-            {
-                return true;
-            }
-            const TSNode           alias = child( spec, m_fAlias );
-            const std::string_view nm    = text( ts_node_is_null( alias ) ? child( spec, m_fName ) : alias );
+            const TSNode alias = child( n, m_fAlias );
+            const std::string_view nm = text( ts_node_is_null( alias ) ? child( n, m_fName ) : alias );
             if( !nm.empty() )
             {
                 m_relImportNames.push_back( nm );
             }
-            return true;
-        } );
+        }
     }
 
-    // `const f = require( './m' )` / `const { f } = require( './m' )`: the names each declarator binds from a relative module.
-    void noteRequireDeclaration( TSNode n )
+    // A file-scope import statement that binds VALUES from a module of this tree.
+    bool relativeValueImport( const VrAnc& stmt ) const
     {
-        ChildCursor c( n );
-        forEachNamedChild( n, c.cur, [ & ]( TSNode d )
+        if( !kindIs( stmt.kind, "import_statement" ) )
         {
-            if( kindIs( ts_node_type( d ), "variable_declarator" ) && requiresRelativeModule( child( d, m_fValue ) ) )
-            {
-                patternNames( child( d, m_fName ), m_relImportNames );
-            }
-            return true;
-        } );
+            return false;
+        }
+        const std::string_view whole = text( stmt.node );
+        return !whole.starts_with( "import type " ) && !whole.starts_with( "import type{" ) && relativeModuleString( child( stmt.node, m_fSource ) );
     }
 
     // `require( './m' )` with exactly one relative string argument.
