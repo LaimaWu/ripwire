@@ -1296,10 +1296,41 @@ proven    $CR/go   callees src/app/fix1.go:UseNamedType     "method HasTop src/n
 proven    $CR/go   callees src/app/fix1.go:UseFieldPath     "method Size src/nest/nest.go:13"           # [P]
 proven    $CR/rust callees src/fix1.rs:use_reexport         "method get src/nest.rs:4"                  # [P]
 notproven $CR/cpp  callees src/fix1.cpp:nearOverloadHop     "size src/nest.cpp:5" "size src/nest.cpp:7" # [N] `p.pick( 1 )` is overloaded
+# ── fix round 2 (rv-call-result-typing-delta D1–D3): the written type resolves in the callee's LEXICAL scope ──
+# D1 a class is in scope at the callee only when every scope enclosing it — an indexed class / module / function, or a
+#    namespace that is no symbol (TS `namespace`, C++ `namespace`) — also holds the callee; from another file (the package,
+#    the module) only a class at file scope is. A nested namesake never wins over the class the name really reaches.
+notproven $CR/rust2 callees src/user.rs:near_inline_mod     "size src/scoped.rs:6"                      # [N] helpers::Config (truth other_crate's)
+notproven $CR/rust2 callees src/user2.rs:near_module_nested "size src/reexp.rs:6"                       # [N] reexp's item is the re-export, not helpers::Config
+proven    $CR/java2 callees src/scoped/Use.java:nearNestedOther "method size src/scoped/Config.java:4"  # [P] the package's Config
+notproven $CR/java2 callees src/scoped/Use.java:nearNestedOther "size src/scoped/Util.java:8"           # [N] Util.Fixtures.Config
+proven    $CR/java2 callees src/scoped/Use2.java:useNestedInScope "method weight src/scoped/Util2.java:5"   # [P] Util2.Entry encloses make() # guard
+notproven $CR/java2 callees src/scoped/Use2.java:useNestedInScope "weight src/scoped/Entry.java:4"     # [N] # guard
+notproven $CR/java2 callees src/scoped2/Use3.java:nearNestedPackage "size src/scoped2/Holder.java:5"  # [N] a nested class is no bare package name
+notproven $CR/java2 callees src/inh/Use4.java:nearInheritedNested "size src/inh/Config.java:4"         # [N] Util4 inherits Base.Config # guard
+proven    $CR/kt2  callees src/app/Use.kt:nearNestedOther   "fn size src/app/Model.kt:4"                # [P] the package's Config
+notproven $CR/kt2  callees src/app/Use.kt:nearNestedOther   "size src/app/Util.kt:7" "size src/app/Registry.kt:5"   # [N] Fixtures.Config, object Registry's Config
+proven    $CR/kt2  callees src/app/Use2.kt:useCompanion     "fn weight src/app/Maker.kt:9"              # [P] a companion's callee sees Maker.Part # guard
+notproven $CR/kt2  callees src/app/Use2.kt:useCompanion     "weight src/app/Part.kt:4"                  # [N] # guard
+notproven $CR/ts2  callees src/use.ts:nearNamespaced        "json src/globals.ts:7"                     # [N] mock.Response (truth the global Response)
+# D2 a C++ unqualified result: a using-declaration of the name visible at the callee (its file or a header it includes)
+#    decides; else the class's namespace must enclose the callee's, or a visible using-directive name it. An outside
+#    `using` never hands the result to the in-tree namesake.
+for f in nearUsingNs nearUsingDecl; do   # `using namespace ext;` / `using ext::Config;` beside the in-tree other::Config
+    notproven $CR/cpp2 callees "src/app.cpp:$f"             "get src/model.cpp:3" "get src/model.cpp:4" # [N]
+done
+notproven $CR/cpp2 callees src/app2.cpp:nearUsingDeclGlobal "load src/decl.cpp:3"                       # [N] `using ext::Settings;` hides the global ::Settings
+for f in useDirective useEnclosing; do   # `using namespace parts;` in the callee's namespace (its header); the callee's own namespace
+    proven    $CR/cpp2 callees "src/app2.cpp:$f"            "method weight src/pos.cpp:3"               # [P] # guard
+done
+# D3 a JVM class-name receiver the caller IMPORTS from outside (`import ext.Util; Util.open()`) is not the in-tree
+#    namesake: the call is not bound to lib.Util.open as proven, and its result types nothing.
+notproven $CR/java3 callees src/app/Use.java:nearOutsideClassReceiver "size src/lib/Config.java:4" "size src/lib/Other.java:4"   # [N]
+notproven $CR/java3 callees src/app/Use.java:nearOutsideClassReceiver "open src/lib/Util.java:4"      # [N] the base false claim
 
 
 echo "=== (C) conservation: no call silently disappears ==="
-ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts"
+ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2"
 for r in $ROOTS; do
     rf="$( printf '%s' "$r" | tr '/' '_' )"   # a nested root (callresult/go) writes a flat file name
     if ! rw "$r" --pin-census="$TMP/$rf.tsv" >"$TMP/$rf.map.xml"; then no "(C) ($r) the census run exited non-zero"; continue; fi

@@ -305,6 +305,148 @@ struct Picker
 Box    makeBox();
 Picker makePicker();
 }
+@@@ cpp2/src/app.cpp
+#include "model.h"
+
+// nearUsingNs: `using namespace ext;` brings the result's Config in from outside (ext::Config), never other::Config.
+int nearUsingNs()
+{
+    auto c = cfg::loadUsingNs();
+    return c.get();
+}
+
+// nearUsingDecl: `using ext::Config;` in the callee's namespace — ext::Config, never other::Config.
+int nearUsingDecl()
+{
+    auto c = cfg2::loadUsingDecl();
+    return c.get();
+}
+@@@ cpp2/src/app2.cpp
+#include "decl.h"
+#include "pos.h"
+
+// nearUsingDeclGlobal: the callee's namespace declares `using ext::Settings;` (in its header), which hides the in-tree
+// global Settings — ext::Settings, never ::Settings.
+int nearUsingDeclGlobal()
+{
+    auto s = cfg3::loadSettings();
+    return s.load();
+}
+
+// useDirective: `using namespace parts;` in the callee's namespace (in its header) — parts::Part.
+int useDirective()
+{
+    auto p = mk::makePart();
+    return p.weight();
+}
+
+// useEnclosing: the class's namespace is the callee's own — parts::Part.
+int useEnclosing()
+{
+    auto p = parts::makeLocal();
+    return p.weight();
+}
+@@@ cpp2/src/decl.cpp
+#include "decl.h"
+
+int Settings::load() const { return 3; }
+
+namespace cfg3
+{
+Settings loadSettings() { return Settings(); }
+}
+@@@ cpp2/src/decl.h
+#pragma once
+#include <ext/settings.h>
+
+struct Settings
+{
+    int load() const;
+};
+
+namespace cfg3
+{
+using ext::Settings;
+Settings loadSettings();
+}
+@@@ cpp2/src/model.cpp
+#include "model.h"
+
+int other::Config::get() const { return 1; }
+int other::Other::get() const { return 2; }
+
+namespace cfg
+{
+Config loadUsingNs() { return Config(); }
+}
+
+namespace cfg2
+{
+Config loadUsingDecl() { return Config(); }
+}
+@@@ cpp2/src/model.h
+#pragma once
+#include <ext/config.h>
+
+namespace other
+{
+struct Config
+{
+    int get() const;
+};
+struct Other
+{
+    int get() const;
+};
+}
+
+using namespace ext;
+
+namespace cfg
+{
+Config loadUsingNs();
+}
+
+namespace cfg2
+{
+using ext::Config;
+Config loadUsingDecl();
+}
+@@@ cpp2/src/pos.cpp
+#include "pos.h"
+
+int parts::Part::weight() const { return 4; }
+
+namespace mk
+{
+Part makePart() { return Part(); }
+}
+
+namespace parts
+{
+Part makeLocal() { return Part(); }
+}
+@@@ cpp2/src/pos.h
+#pragma once
+
+namespace parts
+{
+struct Part
+{
+    int weight() const;
+};
+}
+
+namespace mk
+{
+using namespace parts;
+Part makePart();
+}
+
+namespace parts
+{
+Part makeLocal();
+}
 @@@ go/go.mod
 module example.com/cr
 
@@ -780,6 +922,146 @@ public final class Util {
     // open: `File` here is java.io.File — the single-type import shadows the same-package app.File (fix round 1, B2).
     public static File open() { return new File("x"); }
 }
+@@@ java2/src/inh/Base.java
+package inh;
+
+public class Base {
+    public static class Config {
+        int size() { return 0; }
+    }
+}
+@@@ java2/src/inh/Config.java
+package inh;
+
+public class Config {
+    int size() { return 1; }
+}
+@@@ java2/src/inh/Use4.java
+package inh;
+
+public class Use4 {
+    // nearInheritedNested: Util4 inherits Base.Config, which hides the package's Config
+    int nearInheritedNested() {
+        var c = Util4.open();
+        return c.size();
+    }
+}
+@@@ java2/src/inh/Util4.java
+package inh;
+
+public class Util4 extends Base {
+    public static Config open() { return new Config(); }
+}
+@@@ java2/src/scoped/Config.java
+package scoped;
+
+public class Config {
+    int size() { return 1; }
+}
+@@@ java2/src/scoped/Entry.java
+package scoped;
+
+public class Entry {
+    int weight() { return 1; }
+}
+@@@ java2/src/scoped/Use.java
+package scoped;
+
+public class Use {
+    // nearNestedOther: Fixtures.Config is not in scope at open(); its result is the package's Config
+    int nearNestedOther() {
+        var c = Util.open();
+        return c.size();
+    }
+}
+@@@ java2/src/scoped/Use2.java
+package scoped;
+
+public class Use2 {
+    // useNestedInScope: make() sits inside Util2, so Util2.Entry is in scope — never the package's Entry
+    int useNestedInScope() {
+        var e = Util2.make();
+        return e.weight();
+    }
+}
+@@@ java2/src/scoped/Util.java
+package scoped;
+
+public class Util {
+    public static Config open() { return new Config(); }
+
+    static class Fixtures {
+        static class Config {
+            int size() { return 0; }
+        }
+    }
+}
+@@@ java2/src/scoped/Util2.java
+package scoped;
+
+public class Util2 {
+    static class Entry {
+        int weight() { return 0; }
+    }
+
+    static Entry make() { return new Entry(); }
+}
+@@@ java2/src/scoped2/Holder.java
+package scoped2;
+
+public class Holder {
+    static class Config {
+        int size() { return 0; }
+    }
+}
+@@@ java2/src/scoped2/Use3.java
+package scoped2;
+
+public class Use3 {
+    // nearNestedPackage: Holder.Config is nested, so no bare `Config` of the package names it — ext.Config (on demand)
+    int nearNestedPackage() {
+        var c = Util3.open();
+        return c.size();
+    }
+}
+@@@ java2/src/scoped2/Util3.java
+package scoped2;
+
+import ext.*;
+
+public class Util3 {
+    public static Config open() { return null; }
+}
+@@@ java3/src/app/Use.java
+package app;
+
+import ext.Util;
+
+public class Use {
+    // nearOutsideClassReceiver: the caller imports ext.Util — Util.open() is never lib.Util's
+    int nearOutsideClassReceiver() {
+        var c = Util.open();
+        return c.size();
+    }
+}
+@@@ java3/src/lib/Config.java
+package lib;
+
+public class Config {
+    public int size() { return 1; }
+}
+@@@ java3/src/lib/Other.java
+package lib;
+
+public class Other {
+    public int size() { return 2; }
+}
+@@@ java3/src/lib/Util.java
+package lib;
+
+public class Util {
+    public static Config open() { return new Config(); }
+}
 @@@ kt/src/app/File.kt
 package app
 
@@ -871,6 +1153,64 @@ fun useChain(): Int {
     val h = makeBox()
     val i = h.get()
     return i.size()
+}
+@@@ kt2/src/app/Maker.kt
+package app
+
+class Maker {
+    companion object {
+        fun make(): Part = Part()
+    }
+
+    class Part {
+        fun weight(): Int = 0
+    }
+}
+@@@ kt2/src/app/Model.kt
+package app
+
+class Config {
+    fun size(): Int = 1
+}
+@@@ kt2/src/app/Part.kt
+package app
+
+class Part {
+    fun weight(): Int = 1
+}
+@@@ kt2/src/app/Registry.kt
+package app
+
+object Registry {
+    class Config {
+        fun size(): Int = 2
+    }
+}
+@@@ kt2/src/app/Use.kt
+package app
+
+// nearNestedOther: Fixtures.Config is not in scope at openNested(); its result is the package's Config
+fun nearNestedOther(): Int {
+    val c = openNested()
+    return c.size()
+}
+@@@ kt2/src/app/Use2.kt
+package app
+
+// useCompanion: make() sits in Maker's companion, so Maker.Part is in scope — never the package's Part
+fun useCompanion(): Int {
+    val p = Maker.make()
+    return p.weight()
+}
+@@@ kt2/src/app/Util.kt
+package app
+
+fun openNested(): Config = Config()
+
+class Fixtures {
+    class Config {
+        fun size(): Int = 0
+    }
 }
 @@@ rust/Cargo.toml
 [package]
@@ -1185,6 +1525,61 @@ pub fn open_result() -> std::io::Result<File> { File::open("x") }
 
 // via_reexport names the crate root's re-export `crate::Holder` (lib.rs `pub use nest::Holder;`).
 pub fn via_reexport() -> crate::Holder { crate::nest::holder() }
+@@@ rust2/Cargo.toml
+[package]
+name = "rtwo"
+version = "0.1.0"
+edition = "2021"
+@@@ rust2/src/lib.rs
+pub mod scoped;
+pub mod user;
+pub mod reexp;
+pub mod viareexp;
+pub mod user2;
+@@@ rust2/src/reexp.rs
+pub use other_crate::Config;
+
+pub mod helpers {
+    pub struct Config;
+    impl Config {
+        pub fn size(&self) -> usize { 0 }
+    }
+}
+@@@ rust2/src/scoped.rs
+use other_crate::Config;
+
+pub mod helpers {
+    pub struct Config;
+    impl Config {
+        pub fn size(&self) -> usize { 0 }
+    }
+}
+
+pub fn load() -> Config {
+    Config::default()
+}
+@@@ rust2/src/user.rs
+use crate::scoped;
+
+// near_inline_mod: helpers::Config is not in scope at load(); its result is other_crate's Config
+pub fn near_inline_mod() -> usize {
+    let c = scoped::load();
+    c.size()
+}
+@@@ rust2/src/user2.rs
+use crate::viareexp;
+
+// near_module_nested: `crate::reexp::Config` is reexp's own item (other_crate's, re-exported), never helpers::Config
+pub fn near_module_nested() -> usize {
+    let c = viareexp::load();
+    c.size()
+}
+@@@ rust2/src/viareexp.rs
+use crate::reexp::Config;
+
+pub fn load() -> Config {
+    Config::default()
+}
 @@@ ts/src/holder.ts
 export class Holder {
   get(): number { return 0; }
@@ -1299,4 +1694,22 @@ export function useChain(): number {
   const h = makeBox();
   const i = h.get();
   return i.size();
+}
+@@@ ts2/src/globals.ts
+export function fetchIt(): Response {
+    return fetch('x') as any;
+}
+
+namespace mock {
+    export class Response {
+        json(): unknown { return null; }
+    }
+}
+@@@ ts2/src/use.ts
+import { fetchIt } from './globals';
+
+// nearNamespaced: mock.Response is not in scope at fetchIt(); its result is the global Response
+export function nearNamespaced() {
+    const r = fetchIt();
+    return r.json();
 }
