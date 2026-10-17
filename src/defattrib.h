@@ -991,9 +991,11 @@ inline PathEndpointBinding pathEndpointBinding( const Graph& g, std::size_t srcD
 // a language whose defs carry no sc= (TS/JS, Java, C#, Swift, Kotlin `object`) keeps bare rows — a floor, not a claim.
 // The kinds a scope must be defined as to print as an owner — and the kinds of a hop that is itself an owner (a type hop is
 // never printed as Box.Box: a class carries its own name as sc=).
+// Reuse-first: the type half is graph.h namespaceCompatible's Type rule (the one statement of "a type definition"), plus a
+// module (SymKind::Other).
 inline bool isMemberOwnerKind( SymKind k ) noexcept
 {
-    return k == SymKind::Class || k == SymKind::Interface || k == SymKind::Other || isStructOrNamedType( k );
+    return k == SymKind::Other || namespaceCompatible( RefRole::Type, k );
 }
 // The last segment of a scope as written ("outer::Scanner" or "pkg.Outer" -> the innermost owner): the spelling the selector
 // resolves as Owner.name (graph.h scopeSuffixMatches).
@@ -1004,6 +1006,24 @@ inline std::string_view scopeLastSegment( std::string_view sc ) noexcept
     const std::size_t cut    = colons == std::string_view::npos ? ( dot == std::string_view::npos ? 0 : dot + 1 )
                                                                 : ( dot == std::string_view::npos || dot < colons ? colons + 2 : dot + 1 );
     return sc.substr( cut );
+}
+// Clears every candidate owner the index does not DEFINE as a member owner in that hop's language: one pass over the symbols,
+// each checked against the path's handful of candidates.
+inline void keepDefinedOwners( const IngestResult& ing, std::span<const NodeId> path, std::vector<std::string_view>& owner )
+{
+    EXPECTS( owner.size() == path.size(), "one candidate slot per hop" );
+    std::vector<char> defined( path.size(), 0 );
+    for( const Symbol& t : ing.symbols )
+    {
+        for( std::size_t i = 0; i < path.size() && isMemberOwnerKind( t.kind ); ++i )
+        {
+            defined[i] = char( defined[i] || ( !owner[i].empty() && t.name == owner[i] && t.lang == ing.symbols[ path[i] ].lang ) );
+        }
+    }
+    for( std::size_t i = 0; i < path.size(); ++i )
+    {
+        owner[i] = defined[i] ? owner[i] : std::string_view();
+    }
 }
 // Per hop, the owner its row prints ("" = bare). One pass over the symbols, and only when some hop has a scope at all: a
 // free-function path costs nothing. The candidate set is the path's hops (a handful), so the pass is O(symbols x hops).
@@ -1024,28 +1044,7 @@ inline std::vector<std::string_view> pathHopOwners( const IngestResult& ing, std
     {
         return owner;
     }
-    std::vector<char> defined( path.size(), 0 );
-    for( const Symbol& t : ing.symbols )
-    {
-        if( !isMemberOwnerKind( t.kind ) )
-        {
-            continue;
-        }
-        for( std::size_t i = 0; i < path.size(); ++i )
-        {
-            if( !defined[i] && !owner[i].empty() && t.name == owner[i] && t.lang == ing.symbols[ path[i] ].lang )
-            {
-                defined[i] = 1;
-            }
-        }
-    }
-    for( std::size_t i = 0; i < path.size(); ++i )
-    {
-        if( !defined[i] )
-        {
-            owner[i] = {};
-        }
-    }
+    keepDefinedOwners( ing, path, owner );
     ENSURES( owner.size() == path.size(), "one owner slot per hop" );
     return owner;
 }

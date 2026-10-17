@@ -410,8 +410,9 @@ fi
 if ans e_sp cpp path s xml -- --path=PutInt,put; then
     # the hop into put is one arm of a split call (Fmt::put(int) vs Fmt::put(const char*)): the row that ends the path says
     # so, and the root does not claim the arm the BFS happened to take as the definition put was bound to
-    case "$( rowflags e_sp put )" in *prov=split*) ok "[P] e_sp: the split hop into a multi-definition to= carries prov=\"split\"" ;;
-        *) no "[P] e_sp: the hop into put is a split arm but carries '$( rowflags e_sp put )'" ;; esac
+    # path-owners (train 30): a member hop names its owner, so the hop into Fmt::put reads n="Fmt.put" (pathownercheck)
+    case "$( rowflags e_sp Fmt.put )" in *prov=split*) ok "[P] e_sp: the split hop into a multi-definition to= carries prov=\"split\"" ;;
+        *) no "[P] e_sp: the hop into Fmt.put is a split arm but carries '$( rowflags e_sp Fmt.put )'" ;; esac
     [ "$( rootf e_sp to_p )" = "-" ]; say $? "[P] e_sp: a to= bound only by a split hop carries no to_p" \
         "[P] e_sp: to_p=\"$( rootf e_sp to_p )\" claimed for a to= the path reached by a split arm"
     [ "$( rootf e_sp from_p )" = "fmt.cc:6" ]; say $? "[N] e_sp: the single-definition from= keeps from_p" \
