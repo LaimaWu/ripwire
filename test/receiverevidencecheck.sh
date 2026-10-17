@@ -1334,10 +1334,13 @@ done
 notproven $CR/java3 callees src/app/Use.java:nearOutsideClassReceiver "size src/lib/Config.java:4" "size src/lib/Other.java:4"   # [N]
 notproven $CR/java3 callees src/app/Use.java:nearOutsideClassReceiver "open src/lib/Util.java:4"      # [N] the base false claim
 notproven $CR/java3 callees src/app/Use.java:nearOutsideMethodRef "open src/lib/Util.java:4"          # [N] the method-reference sibling (base false claim)
+# … and "outside" is read from the packages the tree DECLARES, not its directories: a Kotlin file's package need not match
+# its directory (envoy mobile: package io.envoyproxy.envoymobile in …/envoymobile/filters/), so its import stays in tree.
+proven    $CR/kt3  callees src/app/Use.kt:useImportedPackage "fn open src/core/impl/Util.kt:4"         # [P] # guard (green on base)
 
 
 echo "=== (C) conservation: no call silently disappears ==="
-ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2"
+ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3"
 for r in $ROOTS; do
     rf="$( printf '%s' "$r" | tr '/' '_' )"   # a nested root (callresult/go) writes a flat file name
     if ! rw "$r" --pin-census="$TMP/$rf.tsv" >"$TMP/$rf.map.xml"; then no "(C) ($r) the census run exited non-zero"; continue; fi

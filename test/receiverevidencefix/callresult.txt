@@ -1218,6 +1218,21 @@ class Fixtures {
         fun size(): Int = 0
     }
 }
+@@@ kt3/src/app/Use.kt
+package app
+
+import core.Util
+
+// useImportedPackage: `core.Util` is declared in tree (package core) though its file sits in core/impl/ — never outside
+fun useImportedPackage(): Int {
+    return Util.open()
+}
+@@@ kt3/src/core/impl/Util.kt
+package core
+
+object Util {
+    fun open(): Int = 1
+}
 @@@ rust/Cargo.toml
 [package]
 name = "cr"
