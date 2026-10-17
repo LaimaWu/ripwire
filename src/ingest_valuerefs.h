@@ -250,7 +250,8 @@ public:
         m_fAlias       = ts_language_field_id_for_name( tl, "alias", 5 );
         m_fArguments   = fieldIdFor( tl, NodeField::Arguments );
         m_fSource      = ts_language_field_id_for_name( tl, "source", 6 );
-        m_fwdArmed     = hasCallForwarders( m_lang );
+        m_fwd          = callForwardersOf( m_lang );
+        m_fwdArmed     = !m_fwd.empty();
 
         VrScope file;
         file.node = root;
@@ -968,10 +969,11 @@ private:
     }
 
     // ── call forwarders (model.h kCallForwarders) ───────────────────────────────────────────────────────
-    // Is `s` a module specifier inside the repository: relative, so the module it names is a file of this tree?
-    static bool isRelativeModule( std::string_view s ) noexcept
+    // Is the string node `str` a module specifier inside the repository — relative, so it names a file of this tree?
+    bool relativeModuleString( TSNode str ) const
     {
-        return s == "." || s == ".." || s.starts_with( "./" ) || s.starts_with( "../" );
+        const std::string_view m = vrStringContent( text( str ) );
+        return m.starts_with( "./" ) || m.starts_with( "../" );
     }
 
     // Record what proves that a bare name names a function: a function declaration (at any depth), or a FILE-SCOPE
@@ -987,43 +989,33 @@ private:
             {
                 m_fnDeclNames.push_back( nm );
             }
-            return;
         }
-        if( !atFileScope )
+        else if( atFileScope && kindIs( t, "import_statement" ) )
+        {
+            noteImportStatement( n );
+        }
+        else if( atFileScope && ( kindIs( t, "lexical_declaration" ) || kindIs( t, "variable_declaration" ) ) )
+        {
+            noteRequireDeclaration( n );
+        }
+    }
+
+    void noteImportStatement( TSNode n )
+    {
+        const std::string_view whole = text( n );
+        if( whole.starts_with( "import type " ) || whole.starts_with( "import type{" ) || !relativeModuleString( child( n, m_fSource ) ) )
         {
             return;
         }
-        if( kindIs( t, "import_statement" ) )
+        ChildCursor c( n );
+        forEachNamedChild( n, c.cur, [ & ]( TSNode clause )
         {
-            const std::string_view whole = text( n );
-            if( whole.starts_with( "import type " ) || whole.starts_with( "import type{" )
-                || !isRelativeModule( vrStringContent( text( child( n, m_fSource ) ) ) ) )
+            if( kindIs( ts_node_type( clause ), "import_clause" ) )
             {
-                return;
+                noteImportClause( clause );
             }
-            ChildCursor c( n );
-            forEachNamedChild( n, c.cur, [ & ]( TSNode clause )
-            {
-                if( kindIs( ts_node_type( clause ), "import_clause" ) )
-                {
-                    noteImportClause( clause );
-                }
-                return true;
-            } );
-            return;
-        }
-        if( kindIs( t, "lexical_declaration" ) || kindIs( t, "variable_declaration" ) )
-        {
-            ChildCursor c( n );
-            forEachNamedChild( n, c.cur, [ & ]( TSNode d )
-            {
-                if( kindIs( ts_node_type( d ), "variable_declarator" ) && requiresRelativeModule( child( d, m_fValue ) ) )
-                {
-                    patternNames( child( d, m_fName ), m_relImportNames );
-                }
-                return true;
-            } );
-        }
+            return true;
+        } );
     }
 
     // The value names one import clause binds: the default import and each named specifier's LOCAL name.
@@ -1039,20 +1031,40 @@ private:
             }
             else if( kindIs( kt, "named_imports" ) )
             {
-                ChildCursor s( k );
-                forEachNamedChild( k, s.cur, [ & ]( TSNode spec )
-                {
-                    if( kindIs( ts_node_type( spec ), "import_specifier" ) && !text( spec ).starts_with( "type " ) )
-                    {
-                        const TSNode alias = child( spec, m_fAlias );
-                        const std::string_view nm = text( ts_node_is_null( alias ) ? child( spec, m_fName ) : alias );
-                        if( !nm.empty() )
-                        {
-                            m_relImportNames.push_back( nm );
-                        }
-                    }
-                    return true;
-                } );
+                noteNamedImports( k );
+            }
+            return true;
+        } );
+    }
+
+    void noteNamedImports( TSNode list )
+    {
+        ChildCursor s( list );
+        forEachNamedChild( list, s.cur, [ & ]( TSNode spec )
+        {
+            if( !kindIs( ts_node_type( spec ), "import_specifier" ) || text( spec ).starts_with( "type " ) )
+            {
+                return true;
+            }
+            const TSNode           alias = child( spec, m_fAlias );
+            const std::string_view nm    = text( ts_node_is_null( alias ) ? child( spec, m_fName ) : alias );
+            if( !nm.empty() )
+            {
+                m_relImportNames.push_back( nm );
+            }
+            return true;
+        } );
+    }
+
+    // `const f = require( './m' )` / `const { f } = require( './m' )`: the names each declarator binds from a relative module.
+    void noteRequireDeclaration( TSNode n )
+    {
+        ChildCursor c( n );
+        forEachNamedChild( n, c.cur, [ & ]( TSNode d )
+        {
+            if( kindIs( ts_node_type( d ), "variable_declarator" ) && requiresRelativeModule( child( d, m_fValue ) ) )
+            {
+                patternNames( child( d, m_fName ), m_relImportNames );
             }
             return true;
         } );
@@ -1071,7 +1083,7 @@ private:
             return false;
         }
         const TSNode arg = ts_node_named_child( args, 0 );
-        return kindIs( ts_node_type( arg ), "string" ) && isRelativeModule( vrStringContent( text( arg ) ) );
+        return kindIs( ts_node_type( arg ), "string" ) && relativeModuleString( arg );
     }
 
     // The forwarder row of the member expression `m` (`f.call`, `f.bind`) when its object is a bare identifier.
@@ -1082,7 +1094,7 @@ private:
         {
             return nullptr;
         }
-        return callForwarderOf( m_lang, text( child( m, m_fProperty ) ) );
+        return findByField( m_fwd, &CallForwarder::name, text( child( m, m_fProperty ) ) );
     }
 
     // anc[i] is the identifier `f` of a CALLED member `f.call( … )` / `f.apply( … )` (a Call forwarder): queue the call of
@@ -1962,6 +1974,7 @@ private:
     // call forwarders (model.h kCallForwarders): the sites `f.call( … )` / `f.apply( … )` whose f no enclosing parameter or
     // local declares, and the file's two proofs that a bare f names a function — its function declarations (any depth:
     // a declaration is hoisted and the walk's scopes do not record it) and its file-scope relative imports.
+    std::span<const CallForwarder> m_fwd;
     bool                           m_fwdArmed = false;
     std::vector<RawRef>            m_fwdSites;
     std::vector<std::string_view>  m_fnDeclNames;

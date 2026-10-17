@@ -10,6 +10,7 @@
 
 #include "infra/profileScope.h"
 #include "infra/enumcount.h"   // rw::enumCountIsExact — the compile-time proof beside each k*Count a cache reader validates against
+#include "infra/tablelookup.h"   // rw::findByField — kCallForwarders below
 #include "infra/sortutil.h"  // svLess — JS/TS builtin-member tables below (binary_search, no signed-char wrap)
 #include "smallvec.h"   // rw::SmallVec — THE ONE ALIAS; the per-key span lists and per-file id buckets below
 #include "structlayout.h"   // cross-translation-unit sizeof/alignof tripwire for the shared model
@@ -20,6 +21,7 @@
 #include <cstdint>
 #include <optional>    // rubyTypedRecvOf — a Ruby reference's built receiver type, or none
 #include <string>
+#include <span>        // CallForwarderLang::forwarders
 #include <string_view>
 #include <type_traits>   // std::is_trivially_copyable_v — the VarSpan layout pin below
 #include <vector>
@@ -462,33 +464,29 @@ inline ValueRefFamily valueRefFamily( Lang l ) noexcept
 enum class CallForwardKind : std::uint8_t { Call, Value };
 struct CallForwarder
 {
-    Lang             lang;
     std::string_view name;
     CallForwardKind  kind;
     bool             argsAsArray;   // Call only: the forwarded arguments arrive as ONE array (`apply`), so the arity is unknown;
                                     //   otherwise the first argument is the receiver and the rest are the call's own (`call`)
 };
-inline constexpr CallForwarder kCallForwarders[] = {
-    { Lang::JavaScript, "apply", CallForwardKind::Call, true }, { Lang::JavaScript, "bind", CallForwardKind::Value, false },
-    { Lang::JavaScript, "call", CallForwardKind::Call, false },
-    { Lang::TypeScript, "apply", CallForwardKind::Call, true }, { Lang::TypeScript, "bind", CallForwardKind::Value, false },
-    { Lang::TypeScript, "call", CallForwardKind::Call, false },
+// Function.prototype's forwarders, shared by the two languages that run on it.
+inline constexpr CallForwarder kJsCallForwarders[] = {
+    { "apply", CallForwardKind::Call, true }, { "bind", CallForwardKind::Value, false }, { "call", CallForwardKind::Call, false },
 };
-// The forwarder row for (lang, name), or nullptr when the language has none of that name.
-inline const CallForwarder* callForwarderOf( Lang lang, std::string_view name ) noexcept
+struct CallForwarderLang
 {
-    for( const CallForwarder& f : kCallForwarders )
-    {
-        if( f.lang == lang && f.name == name )
-        {
-            return &f;
-        }
-    }
-    return nullptr;
-}
-inline bool hasCallForwarders( Lang lang ) noexcept
+    Lang                               lang;
+    std::span<const CallForwarder>     forwarders;
+};
+inline constexpr CallForwarderLang kCallForwarders[] = {
+    { Lang::JavaScript, kJsCallForwarders },
+    { Lang::TypeScript, kJsCallForwarders },
+};
+// The language's forwarder rows — empty when it has none (the mechanism is then inert).
+inline std::span<const CallForwarder> callForwardersOf( Lang lang ) noexcept
 {
-    return std::ranges::any_of( kCallForwarders, [ lang ]( const CallForwarder& f ) { return f.lang == lang; } );
+    const CallForwarderLang* row = findByField( kCallForwarders, &CallForwarderLang::lang, lang );
+    return row != nullptr ? row->forwarders : std::span<const CallForwarder>{};
 }
 
 // The scope char (qualifier[0]) of a file's depth-cut Value record (see RefRole::Value above): written by
