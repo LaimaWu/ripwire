@@ -1424,6 +1424,30 @@ proven    $CR/cpp4 callees src/use.cpp:cell7  "method hit7 src/traps.h:6"       
 #    namesake is not proven; the same nested fn with no macro in its enclosing block stays proven.
 notproven $CR/rust4 callees src/c14.rs:cell14 "hit14 src/c14.rs:3"                               # [N] `mk14!();` in cell14's body
 proven    $CR/rust4 callees src/c15.rs:cell15 "method hit15 src/c15.rs:3"                        # [P] # guard
+# fix round 5 (rv-call-result-typing-delta4 B1–B4 + M4): C++ — a macro the parser reads as a well-formed declaration: an
+#    export / annotation macro between the class-key and the name (`class API S {…}`, `struct API S final {…}`, `struct
+#    API S;`, `API struct S {…}`), a class-body invocation ending in `;` (`MK(S);`, read as a constructor), a function-body
+#    macro beside a local class — each hides EVERY name in its scope (the parser cannot see what it declares); guards: real
+#    constructors / a destructor, a function-body macro with no local class (namespace scope unaffected), and a forward
+#    declaration in the class's own namespace reached through a using-declaration (the M4 exemption).
+notproven $CR/cpp5 callees src/use.cpp:cell6  "hit6 src/traps.h:2"                               # [N] `class API6 S6 {…}` in a6
+notproven $CR/cpp5 callees src/use.cpp:cell7  "hit7 src/traps.h:3"                               # [N] `struct API6 S7 final {…}` in a7
+notproven $CR/cpp5 callees src/use.cpp:cell18 "hit18 src/traps.h:4"                              # [N] `struct API6 S18;` in a18
+notproven $CR/cpp5 callees src/use.cpp:cell23 "hit23 src/traps.h:5"                              # [N] `API6 struct S23 {…}` in a23
+notproven $CR/cpp5 callees src/use.cpp:cell27 "hit27 src/traps.h:6"                              # [N] `MK(S27);` in O27's body
+notproven $CR/cpp5 callees src/use.cpp:cell29 "hit29 src/traps.h:7"                              # [N] `MK2(S29, int);` in O29's body
+notproven $CR/cpp5 callees src/use.cpp:cell12 "hit12 src/traps.h:8"                              # [N] `DECL12(S12)` beside the local class
+proven    $CR/cpp5 callees src/use.cpp:cell40 "method hit40 src/traps.h:9"                       # [P] # guard: constructors, a destructor
+proven    $CR/cpp5 callees src/use.cpp:cell41 "method hit41 src/traps.h:10"                      # [P] # guard: a fn-body macro, no local class
+proven    $CR/cpp5 callees src/use.cpp:cell32 "method hit32 src/f32.h:3"                         # [P] # guard (M4): own-namespace forward decl via using a32::S32
+# fix round 5 Rust (B1): a method of an `impl` written inside a fn body sees that body's items, so a macro there hides the
+#    module's namesake — the impl directly in the block, after an item-position macro, in an inner block, and an impl of
+#    a module-level struct; guard: an impl in a block with no macro.
+notproven $CR/rust5 callees src/c1.rs:cell1   "hit1 src/c1.rs:3"                                 # [N] `mk1!();` + impl in the block
+notproven $CR/rust5 callees src/c3.rs:cell3   "hit3 src/c3.rs:3"                                 # [N] `mk3! {}` + impl in the block
+notproven $CR/rust5 callees src/c4.rs:cell4   "hit4 src/c4.rs:3"                                 # [N] `mk4!();` + impl in an inner block
+notproven $CR/rust5 callees src/c5.rs:cell5   "hit5 src/c5.rs:3"                                 # [N] `mk5!();` + impl of a module-level struct
+proven    $CR/rust5 callees src/c6.rs:cell6   "method hit6 src/c6.rs:3"                          # [P] # guard: impl in a block, no macro
 # ── the BINDING-FORM MATRIX (fix round 3: close the class, not the shapes) ──
 # callresult_matrix.txt writes one tree per language (mx_rust, mx_cpp, mx_java, mx_kt, mx_ts, mx_go) and lists its cells:
 # language x binding form x scope level x target (header of that file). Each cell is one --callees run on `cell<k>`: a U cell
@@ -1453,7 +1477,7 @@ if [ "$mxn" -ge 200 ]; then ok "(L) matrix: $mxn cells run, $mxred red, $( grep 
 else no "(L) matrix: only $mxn cells were generated (expected >= 200)"; fi
 
 echo "=== (C) conservation: no call silently disappears ==="
-ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/java5 callresult/kt5 callresult/cpp4 callresult/rust4 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go"
+ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/java5 callresult/kt5 callresult/cpp4 callresult/rust4 callresult/cpp5 callresult/rust5 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go"
 for r in $ROOTS; do
     rf="$( printf '%s' "$r" | tr '/' '_' )"   # a nested root (callresult/go) writes a flat file name
     if ! rw "$r" --pin-census="$TMP/$rf.tsv" >"$TMP/$rf.map.xml"; then no "(C) ($r) the census run exited non-zero"; continue; fi

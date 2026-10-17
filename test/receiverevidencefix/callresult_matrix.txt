@@ -570,7 +570,6 @@ na( "cpp", "unrec:forward-decl", "class", "*", "a nested forward declaration's o
 for scope in ( "namespace", "class" ):   # a macro that declares the spelling without writing it: ANY macro in force hedges
     k = new_id(); cp_cell( "unparsed:macro(silent)", scope, "X", k, cp_class( "S%d" % k, k ) + "#define DECLALL%d() struct S%d { int hit%d() const { return 2; } };\n" % ( k, k, k ),
                            "DECLALL%d()\n" % k, "N" )
-na( "cpp", "unparsed:macro", "fn", "*", "LIMIT (gate header): a macro in a function body reads as a call, so a local class beside one is not covered" )
 # C++ function body (the "fn" scope): a local class's member result sits INSIDE the block, so the block's bindings are in force
 def cp_local( form, target, k, block, expect, tag=False, floor=False ):
     S = "S%d" % k
@@ -631,6 +630,53 @@ na( "kotlin", "unparsed:*", "*", "*", "Kotlin has no macros" )
 na( "ts", "unrec:*", "*", "*", "every TS type declaration (class, abstract class, interface, enum) is recorded; a type alias / import-equals is the alias row" )
 na( "ts", "unparsed:*", "*", "*", "TypeScript has no macros (a decorator declares no type name)" )
 na( "go", "unrec:* / unparsed:*", "*", "*", "every Go type declaration is recorded and Go has no macros (go:generate output is source)" )
+
+# ──────────────────────── fix round 5: macros the parser reads as WELL-FORMED code (rv-call-result-typing-delta4 B1–B4) ────────
+# C++ — kind "unparsed" also covers a macro tree-sitter-cpp parses without an error node: a function definition whose
+# declarator is a bare name (`class API S {…}`, `struct API S final {…}`, `API struct S {…}`, `MKSTRUCT S {…}`), an
+# elaborated class-key declaration of a bare name (`struct API S;`), a type-less function-style declaration that is not a
+# constructor (`MK(S);` in a class body), and — for a local class's members — any statement of an enclosing function body
+# that may be a macro invocation. Each may declare ANY name in its scope, so it hides every in-tree namesake there.
+for scope in ( "namespace", "nested-ns", "class" ):
+    k = new_id(); cp_cell( "unparsed:export-macro", scope, "X", k, cp_class( "S%d" % k, k ) + "#define APIM%d\n" % k,
+                           "class APIM%d S%d { public: int hit%d() const { return 2; } };\n" % ( k, k, k ), "N" )
+k = new_id(); cp_cell( "unparsed:export-macro(final)", "namespace", "X", k, cp_class( "S%d" % k, k ) + "#define APIM%d\n" % k,
+                       "struct APIM%d S%d final { int hit%d() const { return 2; } };\n" % ( k, k, k ), "N" )
+k = new_id(); cp_cell( "unparsed:export-macro(forward)", "namespace", "X", k, cp_class( "S%d" % k, k ) + "#define APIM%d\n" % k, "struct APIM%d S%d;\n" % ( k, k ), "N" )
+k = new_id(); cp_cell( "unparsed:export-macro(leading)", "namespace", "X", k, cp_class( "S%d" % k, k ) + "#define APIM%d\n" % k,
+                       "APIM%d struct S%d { int hit%d() const { return 2; } };\n" % ( k, k, k ), "N" )
+k = new_id(); cp_cell( "unparsed:class-key-macro", "namespace", "X", k, cp_class( "S%d" % k, k ) + "#define MKS%d struct\n" % k,
+                       "MKS%d S%d { int hit%d() const { return 2; } };\n" % ( k, k, k ), "N" )
+for form, bind in ( ( "unparsed:class-body-macro", "MKC%d(S%d);\n" ), ( "unparsed:class-body-macro(2 args)", "MKC%d(S%d, int);\n" ) ):
+    k = new_id(); cp_cell( form, "class", "X", k, cp_class( "S%d" % k, k ) + "#define MKC%d(...) struct S%d { int hit%d() const { return 2; } };\n" % ( k, k, k ), bind % ( k, k ), "N" )
+# guard: constructors and a destructor are type-less declarations too — they declare no name
+k = new_id(); cp_cell( "unparsed:none(constructors)", "class", "U", k, cp_class( "S%d" % k, k, True ), "H%d();\nexplicit H%d( int );\n~H%d();\n" % ( k, k, k ), "P" )
+# C++ function body: a statement that may be a macro (any call statement) is in force for a local class's members
+for form, block in ( ( "unparsed:fn-macro", "DECLF%d(S%d)\n" ), ( "unparsed:fn-macro;", "DECLF%d(S%d);\n" ), ( "unparsed:fn-macro(other name)", "REGF%d(Other%d);\n" ) ):
+    k = new_id(); cp_local( form, "X", k, block % ( k, k ), "N" )
+# guard: a function-body macro hides nothing outside that body (no local class: the namespace-scope callee is proven)
+k = new_id(); cp_cell( "unparsed:fn-macro(no local class)", "namespace", "U", k, cp_class( "S%d" % k, k, True ) + "inline int helperF%d() { DECLF%d(S%d); return 0; }\n" % ( k, k, k ), "", "P" )
+# guard (delta-4 M4): a forward declaration in the class's OWN namespace, reached through a using-declaration, declares that class
+k = new_id(); S = "S%d" % k
+put( CP, "src/c%d.h" % k, "#pragma once\nnamespace n%d {\nstruct %s;\nnamespace inner {\nusing n%d::%s;\n%s load%d();\n}\n}\nnamespace n%d {\n" % ( k, S, k, S, S, k, k )
+     + cp_class( S, k, True ) + "}\n" )
+put( CP, "src/c%d.cpp" % k, '#include "c%d.h"\nnamespace n%d {\nnamespace inner {\n%s load%d() { return {}; }\n}\n}\nint cell%d() { auto x = n%d::inner::load%d(); return x.hit%d(); }\n' % ( k, k, S, k, k, k, k, k ) )
+put( CP, "src/decoy.cpp", cp_class( "D%d" % k, k ) )
+cell( "cpp", "unrec:forward-decl+using-decl", "nested-ns", "U", CP, "src/c%d.cpp:cell%d" % ( k, k ), k, "P" )
+# Rust — a method of an `impl` written in a fn body (directly, in an inner block, or of a module-level struct) sees that
+# body's items, so a macro there may declare the spelling
+def rs_impl_cell( form, k, body, expect, tag=False ):
+    S = "S%d" % k
+    rs_mod( k, "c%d" % k, rs_class( S, k, tag ) + ( "" if tag else rs_macro( k, "struct %s; impl %s { fn hit%d(&self) -> usize { 2 } }" % ( S, S, k ) ) ) + body % { "k": k, "S": S } )
+    cell( "rust", form, "fn", "U" if tag else "X", RS, "src/c%d.rs:cell%d" % ( k, k ), k, expect )
+IMPL = "    struct L%(k)d;\n    impl L%(k)d { fn load%(k)d() -> %(S)s { todo!() } }\n    let x = L%(k)d::load%(k)d();\n    x.hit%(k)d()\n"
+k = new_id(); rs_impl_cell( "unparsed:impl-in-block", k, "pub fn cell%(k)d() -> usize {\n    mk%(k)d!();\n" + IMPL + "}\n", "N" )
+k = new_id(); rs_impl_cell( "unparsed:impl-in-block(item macro)", k, "pub fn cell%(k)d() -> usize {\n    mk%(k)d! {}\n" + IMPL + "}\n", "N" )
+k = new_id(); rs_impl_cell( "unparsed:impl-in-inner-block", k, "pub fn cell%(k)d() -> usize {\n    mk%(k)d!();\n    {\n" + ind( IMPL, 4 ) + "    }\n}\n", "N" )
+k = new_id(); rs_impl_cell( "unparsed:impl-of-module-struct", k, "pub struct L%(k)d;\npub fn cell%(k)d() -> usize {\n    mk%(k)d!();\n"
+                            "    impl L%(k)d { fn load%(k)d() -> %(S)s { todo!() } }\n    let x = L%(k)d::load%(k)d();\n    x.hit%(k)d()\n}\n", "N" )
+k = new_id(); rs_impl_cell( "unparsed:none(impl-in-block)", k, "pub fn cell%(k)d() -> usize {\n" + IMPL + "}\n", "P", tag=True )
+put( RS, "src/lib.rs", "".join( "pub mod %s;\n" % m for m in rs_mods if ( "pub mod %s;\n" % m ) not in files[ RS ][ "src/lib.rs" ] ) )
 
 # ───────────────────────────────────────────────────────────── write + list ─────────────────────────────────────────────────
 for root, fs in files.items():

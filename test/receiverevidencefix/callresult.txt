@@ -2256,3 +2256,179 @@ impl D {
     pub fn hit14(&self) -> usize { 0 }
     pub fn hit15(&self) -> usize { 0 }
 }
+@@@ cpp5/src/traps.h
+#pragma once
+struct S6 { int hit6() const { return 1; } };
+struct S7 { int hit7() const { return 1; } };
+struct S18 { int hit18() const { return 1; } };
+struct S23 { int hit23() const { return 1; } };
+struct S27 { int hit27() const { return 1; } };
+struct S29 { int hit29() const { return 1; } };
+struct S12 { int hit12() const { return 1; } };
+struct S40 { int hit40() const { return 40; } };
+struct S41 { int hit41() const { return 41; } };
+@@@ cpp5/src/decoy.h
+#pragma once
+struct D {
+    int hit6() const { return 0; }
+    int hit7() const { return 0; }
+    int hit18() const { return 0; }
+    int hit23() const { return 0; }
+    int hit27() const { return 0; }
+    int hit29() const { return 0; }
+    int hit12() const { return 0; }
+    int hit32() const { return 0; }
+    int hit40() const { return 0; }
+    int hit41() const { return 0; }
+};
+@@@ cpp5/src/m.h
+#pragma once
+#define API6
+#define MK(n) struct n { int hit27() const { return 27; } };
+#define MK2(n, t) struct n { t v; int hit29() const { return 29; } };
+#define DECL12(n) struct n { int hit12() const { return 12; } };
+#define DECL41(n) struct n { int hit41() const { return 41; } };
+@@@ cpp5/src/e.h
+#pragma once
+#include "m.h"
+namespace a6 { class API6 S6 { public: int hit6() const { return 6; } }; S6 load6(); }
+namespace a7 { struct API6 S7 final { int hit7() const { return 7; } }; S7 load7(); }
+namespace a18 { struct API6 S18; S18 load18(); }
+namespace a23 { API6 struct S23 { int hit23() const { return 23; } }; S23 load23(); }
+@@@ cpp5/src/k.h
+#pragma once
+#include "m.h"
+struct O27 { MK(S27); S27 load27() { return {}; } };
+struct O29 { MK2(S29, int); S29 load29() { return {}; } };
+struct O40 { O40(); explicit O40( int ); ~O40(); S40 load40() { return {}; } };
+inline int helper41() { DECL41(S41); return 0; }
+namespace a41 { S41 load41(); }
+@@@ cpp5/src/f32.h
+#pragma once
+namespace a32 { struct S32; namespace i { using a32::S32; S32 load32(); } }
+namespace a32 { struct S32 { int hit32() const { return 32; } }; }
+@@@ cpp5/src/lib.cpp
+#include "traps.h"
+#include "e.h"
+#include "k.h"
+#include "f32.h"
+namespace a6 { S6 load6() { return {}; } }
+namespace a7 { S7 load7() { return {}; } }
+namespace a18 { S18 load18() { return {}; } }
+namespace a23 { S23 load23() { return {}; } }
+namespace a41 { S41 load41() { return {}; } }
+namespace a32 { namespace i { S32 load32() { return {}; } } }
+@@@ cpp5/src/use.cpp
+#include "decoy.h"
+#include "traps.h"
+#include "e.h"
+#include "k.h"
+#include "f32.h"
+// B2: an export / annotation macro between the class-key and the name declares a6::S6 (… a23::S23) — never the global namesake
+int cell6() { auto x = a6::load6(); return x.hit6(); }
+int cell7() { auto x = a7::load7(); return x.hit7(); }
+int cell18() { auto x = a18::load18(); return x.hit18(); }
+int cell23() { auto x = a23::load23(); return x.hit23(); }
+// B3: a class-body macro invocation ending in `;` may declare a member type O27::S27 / O29::S29
+int cell27() { O27 o; auto x = o.load27(); return x.hit27(); }
+int cell29() { O29 o; auto x = o.load29(); return x.hit29(); }
+// B4: a function-body macro beside a local class may declare the local S12
+int cell12() { DECL12(S12) struct L { S12 load12() { return {}; } }; L l; auto x = l.load12(); return x.hit12(); }
+// guards [P]: constructors / a destructor are no macro; a function-body macro with no local class hides nothing at namespace
+// scope; a forward declaration in the class's own namespace reached by a using-declaration declares that class (M4)
+int cell40() { O40 o; auto x = o.load40(); return x.hit40(); }
+int cell41() { auto x = a41::load41(); return x.hit41(); }
+int cell32() { auto x = a32::i::load32(); return x.hit32(); }
+@@@ rust5/Cargo.toml
+[package]
+name = "rust5"
+version = "0.1.0"
+@@@ rust5/src/lib.rs
+pub mod c1;
+pub mod c3;
+pub mod c4;
+pub mod c5;
+pub mod c6;
+pub mod decoy;
+@@@ rust5/src/c1.rs
+pub struct S1;
+impl S1 {
+    pub fn hit1(&self) -> usize { 1 }
+}
+macro_rules! mk1 {
+    () => { struct S1; impl S1 { fn hit1(&self) -> usize { 10 } } };
+}
+pub fn cell1() -> usize {
+    mk1!();
+    struct L1;
+    impl L1 { fn load1() -> S1 { S1 } }
+    let x = L1::load1();
+    x.hit1()
+}
+@@@ rust5/src/c3.rs
+pub struct S3;
+impl S3 {
+    pub fn hit3(&self) -> usize { 3 }
+}
+macro_rules! mk3 {
+    () => { struct S3; impl S3 { fn hit3(&self) -> usize { 30 } } };
+}
+pub fn cell3() -> usize {
+    mk3! {}
+    struct L3;
+    impl L3 { fn load3() -> S3 { S3 } }
+    let x = L3::load3();
+    x.hit3()
+}
+@@@ rust5/src/c4.rs
+pub struct S4;
+impl S4 {
+    pub fn hit4(&self) -> usize { 4 }
+}
+macro_rules! mk4 {
+    () => { struct S4; impl S4 { fn hit4(&self) -> usize { 40 } } };
+}
+pub fn cell4() -> usize {
+    mk4!();
+    {
+        struct L4;
+        impl L4 { fn load4() -> S4 { S4 } }
+        let x = L4::load4();
+        x.hit4()
+    }
+}
+@@@ rust5/src/c5.rs
+pub struct S5;
+impl S5 {
+    pub fn hit5(&self) -> usize { 5 }
+}
+macro_rules! mk5 {
+    () => { struct S5; impl S5 { fn hit5(&self) -> usize { 50 } } };
+}
+pub struct L5;
+pub fn cell5() -> usize {
+    mk5!();
+    impl L5 { fn load5() -> S5 { S5 } }
+    let x = L5::load5();
+    x.hit5()
+}
+@@@ rust5/src/c6.rs
+pub struct S6;
+impl S6 {
+    pub fn hit6(&self) -> usize { 6 }
+}
+pub fn cell6() -> usize {
+    struct L6;
+    impl L6 { fn load6() -> S6 { S6 } }
+    let x = L6::load6();
+    x.hit6()
+}
+@@@ rust5/src/decoy.rs
+pub struct D;
+impl D {
+    pub fn hit1(&self) -> usize { 0 }
+    pub fn hit3(&self) -> usize { 0 }
+    pub fn hit4(&self) -> usize { 0 }
+    pub fn hit5(&self) -> usize { 0 }
+    pub fn hit6(&self) -> usize { 0 }
+}
