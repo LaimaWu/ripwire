@@ -523,11 +523,16 @@ cfield(){ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); v=d.get(sys.ar
 # still next=; (9f) pins that the fold answer carries the same call as sigs_next= with its renamed clause.
 C1="$( cd "$TMP" && RIPWIRE_NO_BODY_FOLD=1 "$BIN" fxcut --for="gadget assembler" --no-cache 2>/dev/null | cut_arm )"
 C1F="$( cd "$TMP" && "$BIN" fxcut --for="gadget assembler" --no-cache 2>/dev/null )"
-C1FN="$( printf '%s' "$C1F" | python3 -c 'import re,sys,html; s=sys.stdin.read(); t=re.search(r"<sigs\b[^>]*>", s); m=re.search(r" sigs_next=\"([^\"]*)\"", t.group(0)) if t else None; print(html.unescape(m.group(1)) if m else "")' )"
-if [ -n "$C1FN" ] && [ "$C1FN" = "$( cfield "$C1" next )" ] && printf '%s' "$C1F" | grep -q '\[sigs sigs_next=: one call serving all total= rows uncut\]'; then
-    ok "(9f) fold on: the same signatures-only call rides as sigs_next= with its renamed reading"
+# a fold that skipped a body moves the call to sigs_next= (renamed reading); one that skipped none leaves <sigs next=> as it was
+C1FN="$( printf '%s' "$C1F" | python3 -c 'import re,sys,html; s=sys.stdin.read(); t=re.search(r"<sigs\b[^>]*>", s); f=re.search(r"<fold .*?</fold>", s, re.S)
+k = "sigs_next" if f and "<skip " in f.group(0) else "next"
+m=re.search(r" %s=\"([^\"]*)\"" % k, t.group(0)) if t else None; print(k + " " + (html.unescape(m.group(1)) if m else ""))' )"
+C1FK="${C1FN%% *}"; C1FV="${C1FN#* }"
+if printf '%s' "$C1F" | grep -q '<fold kind="bodies"' && [ "$C1FV" = "$( cfield "$C1" next )" ] \
+   && { [ "$C1FK" = next ] || printf '%s' "$C1F" | grep -q '\[sigs sigs_next=: one call serving all total= rows uncut\]'; }; then
+    ok "(9f) fold on: the same signatures-only call rides as $C1FK= (a skip moves it to sigs_next= with its reading)"
 else
-    no "(9f) fold on: sigs_next='$C1FN' vs the fold-off next='$( cfield "$C1" next )', or the [sigs sigs_next=: …] reading is missing"
+    no "(9f) fold on: $C1FK='$C1FV' vs the fold-off next='$( cfield "$C1" next )', no fold, or the [sigs sigs_next=: …] reading is missing"
 fi
 if [ "$( cfield "$C1" capped )" = true ] && [ "$( cfield "$C1" shown )" = "$( cfield "$C1" total )" ] && [ "$( cfield "$C1" past_target )" -gt 0 ]; then
     ok "(9) presence guard: the default ships the whole head past its target, shrunk ($( cfield "$C1" shown ) of $( cfield "$C1" total ), past_target=$( cfield "$C1" past_target ))"
