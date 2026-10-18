@@ -2432,3 +2432,103 @@ impl D {
     pub fn hit5(&self) -> usize { 0 }
     pub fn hit6(&self) -> usize { 0 }
 }
+@@@ rust6/Cargo.toml
+[package]
+name = "rust6"
+version = "0.1.0"
+@@@ rust6/src/lib.rs
+pub mod c50;
+pub mod c51;
+pub mod c52;
+pub mod c53;
+pub mod c56;
+pub mod decoy;
+@@@ rust6/src/c50.rs
+pub struct S50;
+impl S50 {
+    pub fn hit50(&self) -> usize { 50 }
+}
+macro_rules! mk50 {
+    () => { struct S50; impl S50 { fn hit50(&self) -> usize { 500 } } };
+}
+const _: () = {
+    mk50!();
+    struct L50;
+    impl L50 {
+        fn load50() -> S50 { todo!() }
+        #[allow(dead_code)]
+        fn cell50() -> usize { let x = Self::load50(); x.hit50() }
+    }
+};
+@@@ rust6/src/c51.rs
+pub struct S51;
+impl S51 {
+    pub fn hit51(&self) -> usize { 51 }
+}
+macro_rules! mk51 {
+    () => { struct S51; impl S51 { fn hit51(&self) -> usize { 510 } } };
+}
+static X51: () = {
+    mk51!();
+    struct L51;
+    impl L51 {
+        fn load51() -> S51 { todo!() }
+        #[allow(dead_code)]
+        fn cell51() -> usize { let x = Self::load51(); x.hit51() }
+    }
+};
+@@@ rust6/src/c52.rs
+pub struct S52;
+impl S52 {
+    pub fn hit52(&self) -> usize { 52 }
+}
+macro_rules! mk52 {
+    () => { struct S52; impl S52 { fn hit52(&self) -> usize { 520 } } };
+}
+pub fn outer52() {
+    const _: () = {
+        mk52!();
+        struct L52;
+        impl L52 {
+            fn load52() -> S52 { todo!() }
+            #[allow(dead_code)]
+            fn cell52() -> usize { let x = Self::load52(); x.hit52() }
+        }
+    };
+}
+@@@ rust6/src/c53.rs
+pub struct S53;
+impl S53 {
+    pub fn hit53(&self) -> usize { 53 }
+}
+const _: () = {
+    struct L53;
+    impl L53 {
+        fn load53() -> S53 { todo!() }
+        #[allow(dead_code)]
+        fn cell53() -> usize { let x = Self::load53(); x.hit53() }
+    }
+};
+@@@ rust6/src/c56.rs
+pub struct S56;
+impl S56 {
+    pub fn hit56(&self) -> usize { 56 }
+}
+const _: () = {
+    use std::fmt::Error as S56;
+    struct L56;
+    impl L56 {
+        fn load56() -> S56 { todo!() }
+        #[allow(dead_code)]
+        fn cell56() -> usize { let x = Self::load56(); x.hit56() }
+    }
+};
+@@@ rust6/src/decoy.rs
+pub struct D;
+impl D {
+    pub fn hit50(&self) -> usize { 0 }
+    pub fn hit51(&self) -> usize { 0 }
+    pub fn hit52(&self) -> usize { 0 }
+    pub fn hit53(&self) -> usize { 0 }
+    pub fn hit56(&self) -> usize { 0 }
+}

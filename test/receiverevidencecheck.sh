@@ -1455,6 +1455,14 @@ notproven $CR/rust5 callees src/c3.rs:cell3   "hit3 src/c3.rs:3"                
 notproven $CR/rust5 callees src/c4.rs:cell4   "hit4 src/c4.rs:3"                                 # [N] `mk4!();` + impl in an inner block
 notproven $CR/rust5 callees src/c5.rs:cell5   "hit5 src/c5.rs:3"                                 # [N] `mk5!();` + impl of a module-level struct
 proven    $CR/rust5 callees src/c6.rs:cell6   "method hit6 src/c6.rs:3"                          # [P] # guard: impl in a block, no macro
+# fix round 6 (rv-call-result-typing-delta5 B3): a `const` / `static` item's value block is an item scope too — the impl
+#    methods written in it see the block's items, so a macro there hides the module's namesake (at module level, in a
+#    static, in a fn body); the block's own `use` decides there; guard: a const block with neither.
+notproven $CR/rust6 callees src/c50.rs:cell50 "hit50 src/c50.rs:3"                               # [N] `mk50!();` in `const _: () = {…}`
+notproven $CR/rust6 callees src/c51.rs:cell51 "hit51 src/c51.rs:3"                               # [N] `mk51!();` in `static X51: () = {…}`
+notproven $CR/rust6 callees src/c52.rs:cell52 "hit52 src/c52.rs:3"                               # [N] `mk52!();` in a const block in a fn body
+notproven $CR/rust6 callees src/c56.rs:cell56 "hit56 src/c56.rs:3"                               # [N] the const block's `use … as S56` (outside)
+proven    $CR/rust6 callees src/c53.rs:cell53 "method hit53 src/c53.rs:3"                        # [P] # guard: a const block, no macro
 # ── the BINDING-FORM MATRIX (fix round 3: close the class, not the shapes) ──
 # callresult_matrix.txt writes one tree per language (mx_rust, mx_cpp, mx_java, mx_kt, mx_ts, mx_go) and lists its cells:
 # language x binding form x scope level x target (header of that file). Each cell is one --callees run on `cell<k>`: a U cell
@@ -1484,7 +1492,7 @@ if [ "$mxn" -ge 200 ]; then ok "(L) matrix: $mxn cells run, $mxred red, $( grep 
 else no "(L) matrix: only $mxn cells were generated (expected >= 200)"; fi
 
 echo "=== (C) conservation: no call silently disappears ==="
-ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/java5 callresult/kt5 callresult/cpp4 callresult/rust4 callresult/cpp5 callresult/rust5 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go"
+ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/java5 callresult/kt5 callresult/cpp4 callresult/rust4 callresult/cpp5 callresult/rust5 callresult/rust6 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go"
 for r in $ROOTS; do
     rf="$( printf '%s' "$r" | tr '/' '_' )"   # a nested root (callresult/go) writes a flat file name
     if ! rw "$r" --pin-census="$TMP/$rf.tsv" >"$TMP/$rf.map.xml"; then no "(C) ($r) the census run exited non-zero"; continue; fi

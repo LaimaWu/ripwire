@@ -676,6 +676,20 @@ k = new_id(); rs_impl_cell( "unparsed:impl-in-inner-block", k, "pub fn cell%(k)d
 k = new_id(); rs_impl_cell( "unparsed:impl-of-module-struct", k, "pub struct L%(k)d;\npub fn cell%(k)d() -> usize {\n    mk%(k)d!();\n"
                             "    impl L%(k)d { fn load%(k)d() -> %(S)s { todo!() } }\n    let x = L%(k)d::load%(k)d();\n    x.hit%(k)d()\n}\n", "N" )
 k = new_id(); rs_impl_cell( "unparsed:none(impl-in-block)", k, "pub fn cell%(k)d() -> usize {\n" + IMPL + "}\n", "P", tag=True )
+# fix round 6 (rv-call-result-typing-delta5 B3): a `const` / `static` item's value block is an item scope as well — the methods
+# of an impl written in it see its items (a macro there, its own `use`); a const block with neither is no barrier (its own
+# struct beside a module namesake splits: Rule 2 keys members by name — hedged, so no cell)
+CIMPL = "    struct L%(k)d;\n    impl L%(k)d {\n        fn load%(k)d() -> %(S)s { todo!() }\n        #[allow(dead_code)]\n        fn cell%(k)d() -> usize { let x = Self::load%(k)d(); x.hit%(k)d() }\n    }\n"
+def rs_const_cell( form, k, body, expect, tag=False, macro=True ):
+    S = "S%d" % k
+    rs_mod( k, "c%d" % k, rs_class( S, k, tag ) + ( rs_macro( k, "struct %s; impl %s { fn hit%d(&self) -> usize { 2 } }" % ( S, S, k ) ) if macro else "" ) + body % { "k": k, "S": S } )
+    cells.append( ( k, "rust", form, "const-block", "U" if tag or expect == "P" else "X", RS, "src/c%d.rs:cell%d" % ( k, k ), expect, "method", "hit%d" % k, "@T%d" % k, False ) )
+k = new_id(); rs_const_cell( "unparsed:const-block", k, "const _: () = {\n    mk%(k)d!();\n" + CIMPL + "};\n", "N" )
+k = new_id(); rs_const_cell( "unparsed:static-block", k, "static X%(k)d: () = {\n    mk%(k)d!();\n" + CIMPL + "};\n", "N" )
+k = new_id(); rs_const_cell( "unparsed:const-block-in-fn", k, "pub fn outer%(k)d() {\n    const _: () = {\n        mk%(k)d!();\n" + ind( CIMPL, 4 ) + "    };\n}\n", "N" )
+k = new_id(); rs_const_cell( "unparsed:const-block(item macro)", k, "const C%(k)d: () = {\n    mk%(k)d! {}\n" + CIMPL + "};\n", "N" )
+k = new_id(); rs_const_cell( "use:const-block-outside", k, "const _: () = {\n    use std::fmt::Error as %(S)s;\n" + CIMPL + "};\n", "N", macro=False )
+k = new_id(); rs_const_cell( "unparsed:none(const-block)", k, "const _: () = {\n" + CIMPL + "};\n", "P", tag=True, macro=False )
 put( RS, "src/lib.rs", "".join( "pub mod %s;\n" % m for m in rs_mods if ( "pub mod %s;\n" % m ) not in files[ RS ][ "src/lib.rs" ] ) )
 
 # ───────────────────────────────────────────────────────────── write + list ─────────────────────────────────────────────────
