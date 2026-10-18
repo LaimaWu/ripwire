@@ -1230,13 +1230,12 @@ inline constexpr std::string_view kMapViaNameLegend =
 inline constexpr std::string_view kMapViaLinkLegend =
     "<!-- via=\"link\": a markdown link, not a call. A real call on the same pair stays unmarked -->";
 // …and MCP's spelling: the same sentence as the `via_note` key of an answer one of whose entries carries "via":"name".
-inline std::string viaNameNoteJson()
+inline std::string viaFactNoteJson( std::string text, std::string_view from, std::string_view jsonSpelling, std::string_view key )
 {
-    std::string text = kViaNameLegend;
-    for( std::size_t at = text.find( "via=\"name\"" ); at != std::string::npos; at = text.find( "via=\"name\"", at ) )
+    for( std::size_t at = text.find( from ); at != std::string::npos; at = text.find( from, at ) )
     {
-        text.replace( at, 10, "\\\"via\\\":\\\"name\\\"" ); // via="name" -> \"via\":\"name\" inside the JSON string
-        at += 16;
+        text.replace( at, from.size(), jsonSpelling );
+        at += jsonSpelling.size();
     }
     if( const std::size_t at = text.find( "on a row" ); at != std::string::npos )
     {
@@ -1246,7 +1245,15 @@ inline std::string viaNameNoteJson()
     {
         text.pop_back();
     }
-    return ",\"via_note\":\"" + text + "\"";
+    return ",\"" + std::string( key ) + "\":\"" + text + "\"";
+}
+inline std::string viaNameNoteJson()
+{
+    return viaFactNoteJson( kViaNameLegend, "via=\"name\"", "\\\"via\\\":\\\"name\\\"", "via_note" );
+}
+inline std::string viaLinkNoteJson()
+{
+    return viaFactNoteJson( kViaLinkLegend, "via=\"link\"", "\\\"via\\\":\\\"link\\\"", "via_link_note" );
 }
 
 // The same fact in --for's two dialects, which are prose strips joined by ';' and ':' rather than XML comment

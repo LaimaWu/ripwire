@@ -754,10 +754,16 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     const HopTestedPartition chTested = computeHopTestedPartition( ing, g, referencingOnly ? calledBy : calls );
 
     bool anyVia = false;   // FE-B: an entry carried "via":"name" — the answer then carries via_note, its reading
+    bool anyLink = false;   // an entry carried "via":"link" — the answer then carries via_link_note
+    const std::span<const NodeId> callerMatches( referencingOnly ? chRows.matches : chCallers.matches );
+    const std::span<const NodeId> calleeMatches( chRows.matches );
+    NodeId linkRow = kNoNode;
+    bool   linkToward = false;
     RowCallSites calledBySites{};   // CALLSITE-AT: the calledBy window's sites (set once the window is known, below)
     const auto symObj = [ & ]( NodeId id, bool via, const std::string& attrib = std::string() ) -> std::string
     {
         anyVia = anyVia || via;
+        const char* linkFrag = linkJsonFrag( g, callerMatches, calleeMatches, id, linkRow, linkToward, anyVia, anyLink );
         const Symbol& s = ing.symbols[id];
         // T4: attach the stable content-handle so the agent can `fetch_body{handle}` instead of us re-sending
         // the body. Names/signatures by default (this verb); bodies by handle on request.
@@ -771,6 +777,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
              + ",\"handle\":\"" + mcpdetail::jsonEscape( handleFor( ix, id ) ) + "\""
              + ( rw::isTestedByReach( ing, chTested.testReach, id ) ? ",\"tested\":true" : "" )
              + ( via ? ",\"via\":\"name\"" : "" )   // FE-B: the CLI row's via="name", the same edge bit (defattrib.h, one pass)
+             + linkFrag
              + attrib                                  // attrib-multidef: the CLI row's of_def= / prov="split"
              + "}";
     };
@@ -786,6 +793,8 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
         {
             if( i != w.begin ) { a += ","; }
             anySplit = anySplit || at.splitArm( i );
+            linkRow = ids[ i ];
+            linkToward = callersSide;
             // CALLSITE-AT: a calledBy row carries its call sites (the CLI --callers row's sites_at=); a calls row never does.
             a += withRowSites( symObj( ids[i], at.nameOnly( i ), ofDefKeyJson( at.groups, at.tokens, i ) + splitArmKeyJson( at.splitArm( i ) ) ),
                                calledBySites, i - w.begin, callersSide );
@@ -878,6 +887,10 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     if( anyVia )
     {
         out += rw::viaNameNoteJson();   // FE-B: the reading of "via":"name", only in an answer that carries it
+    }
+    if( anyLink )
+    {
+        out += rw::viaLinkNoteJson();
     }
     out += nextFieldJson( splitArmLegend( anySplit ), "split_note" );   // attrib-multidef Q1: likewise for "prov":"split"
     out += declinedSitesJson( sqDc, referencingOnly, /*mcp=*/true );   // lane declined-sites: the CLI <dc> rows, never in calls/calledBy or count

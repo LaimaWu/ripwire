@@ -494,6 +494,46 @@ inline const char* viaEdgeAttr( bool nameOnly, bool link ) noexcept
     return link ? " via=\"link\"" : viaNameAttr( nameOnly );
 }
 
+// The JSON twin of viaEdgeAttr. Link wins. Empty when the row is a plain call.
+inline const char* viaJsonAttr( bool nameOnly, bool link ) noexcept
+{
+    return link ? ",\"via\":\"link\"" : ( nameOnly ? ",\"via\":\"name\"" : "" );
+}
+
+// oneHopRowIsLink plus the name hedge, and the two answer-level bits the notes read. The branch stays here so
+// symbolQueryJson does not grow one.
+inline const char* viaJsonForRow( const Graph& g, std::span<const NodeId> matches, NodeId row, bool towardMatches, bool nameOnly,
+                                  bool& anyName, bool& anyLink ) noexcept
+{
+    const bool link = oneHopRowIsLink( g, matches, row, towardMatches );
+    if( link )
+    {
+        anyLink = true;
+    }
+    else if( nameOnly )
+    {
+        anyName = true;
+    }
+    return viaJsonAttr( nameOnly, link );
+}
+
+inline const char* viaJsonForSide( const Graph& g, std::span<const NodeId> callerMatches, std::span<const NodeId> calleeMatches, NodeId row,
+                                   bool callersSide, bool nameOnly, bool& anyName, bool& anyLink ) noexcept
+{
+    return viaJsonForRow( g, callersSide ? callerMatches : calleeMatches, row, callersSide, nameOnly, anyName, anyLink );
+}
+
+// Empty unless id is the row the caller just selected. nameOnly stays false: the name fragment is the caller's own bit.
+inline const char* linkJsonFrag( const Graph& g, std::span<const NodeId> callerMatches, std::span<const NodeId> calleeMatches, NodeId id,
+                                 NodeId linkRow, bool callersSide, bool& anyName, bool& anyLink ) noexcept
+{
+    if( id != linkRow )
+    {
+        return "";
+    }
+    return viaJsonForSide( g, callerMatches, calleeMatches, id, callersSide, false, anyName, anyLink );
+}
+
 // The prov= VOCABULARY, spelled once. serialize's XML and serializeJson's JSON must emit identical
 // words for identical edges — test/mcpclidiffcheck.sh is the gate that says so — and two ternary
 // chains over the same integers is precisely how two dialects drift apart. Returns "" for 0 (a
@@ -6348,7 +6388,7 @@ inline void fillImplementorBound( Graph& g, const std::vector<ImplementorBoundEd
 struct MdLinkIndex
 {
     struct Heading { std::uint32_t fileId; std::uint32_t startByte; NodeId id; std::string slug; };
-    HashMap<std::string, std::uint32_t> fileByPath;   // every .md/.markdown file, by root-relative path
+    HashMap<std::string, std::uint32_t> fileByPath;   // every .md/.markdown file, by lexicalNormalize(ing.files). A `.`-rooted crawl stores `./docs/a.md`; the lookup key does not. An absolute root stores the absolute path, and the lookup joins to that same absolute path.
     std::vector<Heading>                headings;     // sorted (fileId, slug, startByte, id): the first of a slug is its heading
     std::vector<NodeId>                 wholeFile;    // per file: the file-level Section node, kNoNode when none
 };
@@ -6449,7 +6489,7 @@ inline MdLinkIndex buildMdLinkIndex( const IngestResult& ing )
     {
         if( ing.files[ f ].ends_with( ".md" ) || ing.files[ f ].ends_with( ".markdown" ) )
         {
-            ix.fileByPath.try_emplace( ing.files[ f ], f );
+            ix.fileByPath.try_emplace( lexicalNormalize( ing.files[ f ] ), f );
         }
     }
     indexMarkdownSections( ix, ing );

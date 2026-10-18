@@ -382,10 +382,12 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                                       : std::string() );
             rw::emitTo( stdout, ",\"{}\":[", tag );
             std::vector<char> chVia( result.size(), 0 );   // FE-B: the same hedge bit the XML rows carry
+            bool chHasLink = false;
             std::vector<std::string> chAtKeys( result.size() );   // CALLSITE-AT: the rows' sites_at/sites_total keys, absent when none
             for( std::size_t i = pw.begin; i < pw.end; ++i )
             {
                 chVia[ i ] = oneHopRowIsLink( g, matches, result[ i ], wantCallers ) ? 2 : ( chAttr.nameOnly( i ) ? 1 : 0 );
+                chHasLink = chHasLink || ( chVia[ i ] == 2 );
                 if( chSites.any )
                 {
                     chAtKeys[ i ] = rw::callSitesKeyJson( chSites.tokens[ i - pw.begin ], chSites.totals[ i - pw.begin ] );
@@ -393,8 +395,9 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                 chAtKeys[ i ] += rw::ofDefKeyJson( chAttr.groups, chAttr.tokens, i ) + rw::splitArmKeyJson( chAttr.splitArm( i ) );   // attrib-multidef
             }
             printJsonSymbolRows( ing, result, pw.begin, pw.end, chRootPrefix, &chTested.testReach, nullptr, &chVia, &chAtKeys );
-            rw::emitTo( stdout, "]{}{}}}", rw::declinedSitesJson( chDc, wantCallers, /*mcp=*/false ),   // the XML <dc> rows, keys = its attribute names
-                         rw::valueRefsJson( ing, chRows.valueRefs, wantCallers, chVr, "vrs", chVrNext ) );
+            rw::emitTo( stdout, "]{}{}{}}}", rw::declinedSitesJson( chDc, wantCallers, /*mcp=*/false ),   // the XML <dc> rows, keys = its attribute names
+                         rw::valueRefsJson( ing, chRows.valueRefs, wantCallers, chVr, "vrs", chVrNext ),
+                         chHasLink ? rw::viaLinkNoteJson() : std::string() );
             return 0;
         }
 

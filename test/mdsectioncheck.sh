@@ -406,6 +406,11 @@ for m in rows:
         ok = False
 sys.exit(0 if ok else 1)
 '; then ok "the .py do_work is a matched def only — the caller edge belongs to the section and is via=link"; else no "the doc link leaked onto the .py function, or the section row lacks via=link"; fi
+if ( cd "$AFIX" && $BIN . --no-cache --callers=do_work --legend=compact ) 2>/dev/null | grep -q 'n="Func Name"[^>]*via="link"'; then
+    ok "a dot crawl root still pins the markdown link (./docs/... matches docs/...)"
+else
+    no "a dot crawl root dropped the markdown link pin"
+fi
 if $BIN "$AFIX" --no-cache --callers='docs/a/tools.py:do_work' --legend=compact 2>/dev/null | grep -q 'via="link"'; then
     no "a real function's callers carry via=link"
 else
@@ -421,6 +426,42 @@ if $BIN "$AFIX" --no-cache --json --callees='Self Collision' 2>/dev/null | grep 
 else
     no "the JSON callee row lacks via=link"
 fi
+if $BIN "$AFIX" --no-cache --json --callers=do_work 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+rows = d.get("callers", [])
+sec = any(r.get("t") == "sec" and r.get("via") == "link" for r in rows)
+fn = any(r.get("t") == "fn" and r.get("via") == "link" for r in rows)
+sys.exit(0 if sec and d.get("via_link_note") and not fn else 1)
+'; then ok "the JSON callers answer marks the section row and carries via_link_note"; else no "the JSON callers answer lacks via_link_note, or the function row is marked via=link"; fi
+mcp_text(){
+    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' "$1" \
+        | "$BIN" --mcp 2>/dev/null | tail -1 | python3 -c '
+import sys, json
+r = json.load(sys.stdin)
+print("__ERROR__:" + r["error"].get("message", "") if "error" in r else r["result"]["content"][0]["text"])
+'
+}
+call(){ printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"%s","arguments":%s}}' "$1" "$2"; }
+M="$( mcp_text "$( call find_referencing_symbols '{"path":"'"$AFIX"'","symbol":"do_work"}' )" )"
+printf '%s' "$M" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+rows = d.get("calledBy", [])
+sec = any(r.get("kind") == "sec" and r.get("via") == "link" for r in rows)
+fn = any("tools.py" in r.get("file", "") and r.get("via") == "link" for r in rows)
+sys.exit(0 if sec and d.get("via_link_note") and not fn else 1)
+' && ok "find_referencing_symbols marks the section row via=link and carries via_link_note" \
+  || no "find_referencing_symbols lacks via=link on the section row, or marks the .py caller"
+M="$( mcp_text "$( call find_symbol '{"path":"'"$AFIX"'","symbol":"Self Collision"}' )" )"
+printf '%s' "$M" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+rows = d.get("calls", [])
+hit = any(r.get("name") == "Install" and r.get("via") == "link" for r in rows)
+sys.exit(0 if hit and d.get("via_link_note") else 1)
+' && ok "find_symbol marks Install via=link and carries via_link_note" \
+  || no "find_symbol lacks via=link on Install or lacks via_link_note"
 
 echo "--- warm == cold after editing ONLY the target file (the cached ref must stay unbound) ---"
 cp -R "$AFIX" "$TMP/anchorcopy"
