@@ -194,7 +194,11 @@ inline int callHierarchyRowCap( int pageLimit, std::size_t rowTotal, std::size_t
     const int  cap = ( pageLimit <= 0 && rowTotal > std::size_t( kCallHierarchyRowCap ) && ( inRowBand || inByteBand ) )
                         ? int( rowTotal )
                         : effectiveRowCap( pageLimit, kCallHierarchyRowCap );
-    ENSURES( cap > 0, "a call-hierarchy window always holds at least one row: a band, an explicit --limit or the default 40" );
+    // DASSERT, not ENSURES (SEGV round, train 31): as a release [[assume( cap > 0 )]] over this ?:, gcc 14.2 (ubuntu-24.04's
+    // g++-14) with -O2 -flto made MCP find_symbol / find_referencing_symbols serve a 40-row window over a 3-row list — rows
+    // read past the vector's end, rc=139 on every call. The same commit with only this line removed answers rc=0 (debug run
+    // 39134346019). gcc 14.4, gcc 16 and clang build it correctly. The check stays in debug builds, where it costs nothing.
+    DASSERT( cap > 0, "a call-hierarchy window always holds at least one row: a band, an explicit --limit or the default 40" );
     return cap;
 }
 // M13 (capture-audit 2026-09-04): --cochange's per-file partner cap. It was a bare `30` literal inside
