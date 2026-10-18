@@ -23,6 +23,9 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   `else if (…) {` read as a function named `if`) is no longer a closure (a `langfacts.h` column, no language compare).
 - A `<bridge>` no longer routes through a test, bench, demo, generated or minified symbol (it may still start or end at
   one), and a chain longer than 8 hops is not shown.
+- A `<bridge>` no longer crosses a declined member call spelled like a builtin type's method (`ids.join( "," )`,
+  `keys.push( k )`, `d.get( k )`, Ruby `each`): the builtin-method gate's per-language tables decide, and on a 42-query
+  hand-check every such crossing was a false chain.
 
 ### Added — `--path` offers a hedged bridge (`<bridge proven="0">`) and glob endpoints
 

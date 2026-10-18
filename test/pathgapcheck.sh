@@ -53,7 +53,8 @@
 #        refused; G3 a plain endpoint carries no glob attribute. (M) compares <bridge> and the glob root MCP vs CLI.
 #   (H1-H4) hedge-quality fixes the acceptance hand-check found: H1 `compile: function compile` (one definition spelled
 #        twice) is no closure; H2 C has no named nested function, so a nested span is never a closure; H3 a bridge never
-#        routes through a test/bench/demo/generated/minified symbol; H4 a chain past 8 hops is no bridge.
+#        routes through a test/bench/demo/generated/minified symbol; H4 a chain past 8 hops is no bridge; H5 a declined member
+#        call spelled like a builtin type's method (`ids.join`) is not crossed, H6 its non-builtin twin is.
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -737,6 +738,16 @@ else
 fi
 brArm "(H3) a bridge never routes through a test file (the only scan that reaches sink is under tests/)" "$TMP/brtest" "start,sink" ""
 brArm "(H4) a chain longer than 8 hops is no bridge (start ⊃ inner → h1 … h9 → target: 11 hops)" "$TMP/brlong" "start,target" ""
+
+for nm in join combine; do
+    mkdir -p "$TMP/brb_$nm/core" "$TMP/brb_$nm/a" "$TMP/brb_$nm/b"
+    printf 'function start(ids) { return ids.%s(","); }\nmodule.exports = { start };\n' "$nm" > "$TMP/brb_$nm/core/m.js"
+    printf 'function sink() { return 0; }\nfunction %s(arr) { return sink(); }\nmodule.exports = { %s, sink };\n' "$nm" "$nm" > "$TMP/brb_$nm/a/x.js"
+    printf 'function %s(arr) { return 1; }\nmodule.exports = { %s };\n' "$nm" "$nm" > "$TMP/brb_$nm/b/y.js"
+done
+brArm "(H5) a declined member call spelled like a builtin method (ids.join) is not crossed" "$TMP/brb_join" "start,sink" ""
+brArm "(H6) the same shape under a non-builtin name (ids.combine) is crossed" "$TMP/brb_combine" "start,sink" \
+    '<bridge proven="0" crossings="1" hops="2"><s t="fn" n="start" p="core/m.js:1"/><s t="fn" n="combine" p="a/x.js:2" via="declined" cands="2"/><s t="fn" n="sink" p="a/x.js:1"/></bridge>'
 
 echo "(M) MCP path_between carries the same clause"
 # Two MCP legend postures (lean-answers): the unchanged assertions run on --mcp-legend=inline, the pre-posture spelling

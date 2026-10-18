@@ -959,6 +959,15 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
                 {
                     continue;   // a call with no stored candidate list names nothing to cross to
                 }
+                // a member call spelled like a builtin type's method (`ids.join( "," )`, `keys.push( k )`, `d.get( k )` — the
+                // builtin-method gate's per-language tables) is far more often the builtin than an in-tree candidate: the
+                // acceptance hand-check rejected every such crossing, so it is not one to cross
+                const Reference&                        call  = ing.references[ g.declinedSiteRef[ it->second ] ];
+                const std::span<const std::string_view> table = BuiltinMethodGate::tableFor( call.lang );
+                if( call.qualifier.empty() && std::binary_search( table.begin(), table.end(), std::string_view( call.calleeName ), sortutil::svLess ) )
+                {
+                    continue;
+                }
                 const std::size_t fan = g.declinedListOff[list + 1] - g.declinedListOff[list];
                 for( std::uint32_t slot = g.declinedListOff[list]; fan <= kBridgeFanOut && slot < g.declinedListOff[list + 1]; ++slot )
                 {
@@ -1026,7 +1035,8 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
 
 inline constexpr std::string_view kPathBridgeLegend =
     "<bridge proven=\"0\" crossings= hops=>: a HEDGED chain from= to to= of at most 8 hops that crosses at most 2 the graph holds no "
-    "edge for, each fanning out to at most 16 candidates, and runs through no test, bench, demo, generated or minified symbol; its <s> rows read like a path's, and via= on a row names the crossing INTO it: declined = "
+    "edge for, each fanning out to at most 16 candidates (a declined call spelled like a builtin type's method is not crossed), and "
+    "runs through no test, bench, demo, generated or minified symbol; its <s> rows read like a path's, and via= on a row names the crossing INTO it: declined = "
     "one of cands= candidates of a declined call in the previous row, value = a function the previous row stores or passes as a value, "
     "closure = a function written in the previous row's body, namesake = another same-language definition of a name the previous row "
     "calls by name alone (via=name rows are proven edges bound by name). Fewest crossings first. It is NOT a path: reachable= and "
