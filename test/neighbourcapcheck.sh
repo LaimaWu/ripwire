@@ -405,5 +405,138 @@ NEXT_NAMES="$( rr --callers=rankHubFn --offset=40 --json | grep -oE '"n":"[^"]*"
     && ok "(13e) an uncut calledBy array pays no bytes for the disclosure (absent, rule 3's --skill-scan shape)" \
     || no "(13e) an uncut calledBy array still carries calledBy_total"
 
+# ═══════════════════════════════════════════════════════════════════════════
+echo "=== (14)-(21) L8 callers cap band: a total within 1.25 x the cap is served whole; above it next= is the PAGE ==="
+# ═══════════════════════════════════════════════════════════════════════════
+# train 29 L8 (pageview.h kCallHierarchyBandMax / callHierarchyRowCap): ninja's --callers=Stat printed 40 of 44 and the
+# four hidden rows cost a second call. A total in (40, 50] is now its own cap; at 51 and above the cap stays 40 and the
+# callers root's next= is the next page (--callers=SEL --offset=40, the caller's --limit kept), with the uses verb moved
+# to uses_next=. Hubs in C AND Python: the band reads only the row total, so both languages take the same rule.
+BB="$TMP/band sandbox"
+mkdir -p "$BB/c dir" "$BB/py"
+python3 - "$BB" <<'PY'
+import sys, os
+d = sys.argv[1]
+def cHub( n ):
+    with open( os.path.join( d, "c dir", "b%d.c" % n ), "w" ) as fh:
+        fh.write( "int band%dHub( int a ) { return a + 1; }\n" % n )
+        for i in range( n ):
+            fh.write( "int b%dc%03d( int x ) { return band%dHub( x ); }\n" % ( n, i, n ) )
+def pyHub( n ):
+    with open( os.path.join( d, "py", "b%d.py" % n ), "w" ) as fh:
+        fh.write( "def band%dHub( a ):\n    return a + 1\n\n" % n )
+        for i in range( n ):
+            fh.write( "def b%dp%03d( x ):\n    return band%dHub( x )\n\n" % ( n, i, n ) )
+for n in ( 41, 50, 51 ):
+    cHub( n )
+for n in ( 40, 45, 400 ):
+    pyHub( n )
+# a CALLEES hub: one function calling 45 distinct functions (the shared call-hierarchy cap, other direction)
+with open( os.path.join( d, "c dir", "fan.c" ), "w" ) as fh:
+    for i in range( 45 ):
+        fh.write( "int fanLeaf%02d( int x ) { return x + %d; }\n" % ( i, i ) )
+    fh.write( "int fanOut45( int x ) {\n    int s = 0;\n" )
+    for i in range( 45 ):
+        fh.write( "    s += fanLeaf%02d( x );\n" % i )
+    fh.write( "    return s;\n}\n" )
+PY
+rb(){ "$BIN" "$BB" --no-cache "$@" 2>/dev/null; }
+bandRows(){ printf '%s' "$1" | grep -oE '<s t="[^"]*" n="' | wc -l | tr -d ' '; }   # real rows only: the compact legend spells <s t= n= p=> too
+rootTag(){ printf '%s' "$1" | grep -oE "<$2 [^>]*>" | head -1; }
+for n in 41 45 50; do
+    A="$( rb --callers=band${n}Hub )"; T="$( rootTag "$A" callers )"
+    r="$( bandRows "$A" )"; c="$( attr count "$T" )"; cp="$( attr capped "$T" )"
+    if [ "$r" = "$n" ] && [ "$c" = "$n" ] && [ "${cp:-0}" = "0" ] && [ "$( attr next "$T" )" = "--uses=band${n}Hub" ]; then
+        ok "(14) total $n is inside the band: all $r rows, capped=${cp:-absent} (uncut), next= stays the uses verb"
+    else
+        no "(14) total $n: rows=$r count=$c capped=${cp:-absent} next=$( attr next "$T" ) (want $n rows, uncut)"
+    fi
+done
+A40="$( rb --callers=band40Hub )"; T40="$( rootTag "$A40" callers )"
+{ [ "$( bandRows "$A40" )" = 40 ] && [ -z "$( attr capped "$T40" )" ] && [ "$( attr next "$T40" )" = "--uses=band40Hub" ] && [ -z "$( attr uses_next "$T40" )" ]; } \
+    && ok "(15) total exactly 40: 40 rows, no cap vocabulary, next= the uses verb, no uses_next= (the pre-band shape)" \
+    || no "(15) total 40 moved: $T40"
+A51="$( rb --callers=band51Hub )"; T51="$( rootTag "$A51" callers )"
+{ [ "$( bandRows "$A51" )" = 40 ] && [ "$( attr capped "$T51" )" = 1 ] && [ "$( attr next_offset "$T51" )" = 40 ] \
+  && [ "$( attr next "$T51" )" = "--callers=band51Hub --offset=40" ] && [ "$( attr uses_next "$T51" )" = "--uses=band51Hub" ]; } \
+    && ok "(16) total 51 is past the band: 40 rows, capped=1, next= the page (--callers=band51Hub --offset=40), uses_next= the uses verb" \
+    || no "(16) total 51: $T51"
+P51="$( rb --callers=band51Hub --offset=40 )"; TP51="$( rootTag "$P51" callers )"
+{ [ "$( bandRows "$P51" )" = 11 ] && [ "$( attr has_more "$TP51" )" = 0 ] && [ "$( attr next "$TP51" )" = "--uses=band51Hub" ]; } \
+    && ok "(16b) the pasted page serves rows 41-51 (11 rows), has_more=0, and its next= is the uses verb again" \
+    || no "(16b) page 2 of 51: rows=$( bandRows "$P51" ) $TP51"
+A400="$( rb --callers=band400Hub )"; T400="$( rootTag "$A400" callers )"
+{ [ "$( bandRows "$A400" )" = 40 ] && [ "$( attr count "$T400" )" = 400 ] && [ "$( attr next_offset "$T400" )" = 40 ] \
+  && [ "$( attr next "$T400" )" = "--callers=band400Hub --offset=40" ]; } \
+    && ok "(17) a 400-caller symbol still caps at 40 with next_offset=40 and the page as next=" \
+    || no "(17) total 400: rows=$( bandRows "$A400" ) $T400"
+L400="$( rootTag "$( rb --callers=band400Hub --limit=10 --offset=20 )" callers )"
+[ "$( attr next "$L400" )" = "--callers=band400Hub --limit=10 --offset=30" ] \
+    && ok "(17b) an explicit --limit rides the page next= (--limit=10 --offset=30), so the pages line up" \
+    || no "(17b) --limit page next=: $( attr next "$L400" )"
+E400="$( rb --callers=band400Hub --offset=360 )"; TE400="$( rootTag "$E400" callers )"
+{ [ "$( bandRows "$E400" )" = 40 ] && [ "$( attr has_more "$TE400" )" = 0 ] && [ "$( attr next "$TE400" )" = "--uses=band400Hub" ]; } \
+    && ok "(17c) the last page of 400 (offset 360) has no further page: next= is the uses verb" \
+    || no "(17c) last page of 400: $TE400"
+L50="$( rb --callers=band50Hub --limit=45 )"
+[ "$( bandRows "$L50" )" = 45 ] \
+    && ok "(17d) an explicit --limit beats the band (45 of 50 under --limit=45)" \
+    || no "(17d) --limit=45 on 50 served $( bandRows "$L50" ) rows"
+SP="$( rootTag "$( rb '--callers=c dir/b51.c:band51Hub' )" callers )"
+NX="$( attr next "$SP" | sed "s/&apos;/'/g" )"
+NXROWS="$( eval "set -- $NX"; [ "$#" = 2 ] && bandRows "$( rb "$1" "$2" )" )"
+{ [ "$NX" = "--callers='c dir/b51.c:band51Hub' --offset=40" ] && [ "$NXROWS" = 11 ]; } \
+    && ok "(17e) a selector with a space: next= quotes it as ONE argv word and the replay serves the 11 remaining rows" \
+    || no "(17e) spaced selector next=: [$NX] replay rows=${NXROWS:-none}"
+J45="$( rb --callers=band45Hub --json )"; J51="$( rb --callers=band51Hub --json )"
+{ [ "$( printf '%s' "$J45" | grep -o '"n":"b45p' | wc -l | tr -d ' ' )" = 45 ] && ! printf '%s' "$J45" | grep -q '"capped"' \
+  && [ "$( printf '%s' "$J51" | grep -o '"n":"b51c' | wc -l | tr -d ' ' )" = 40 ] && printf '%s' "$J51" | grep -q '"capped":true,"total":51,"has_more":true,"next_offset":40'; } \
+    && ok "(18) --json: the band serves 45 uncut, 51 cuts at 40 with the paging keys" \
+    || no "(18) --json band: 45 rows=$( printf '%s' "$J45" | grep -o '"n":"b45p' | wc -l ) 51 head=$( printf '%s' "$J51" | cut -c1-200 )"
+# (18b) CodeRabbit 4303967676: the --json page carried next_offset but neither the page call nor the uses verb the XML,
+# columnar and MCP forms name. The JSON page names both, its next replays --json (the page keeps its dialect), the pasted
+# page serves the 11 remaining rows as JSON, and an uncut answer and the last page add no next key (their bytes stand).
+J51N="$( printf '%s' "$J51" | grep -oE '"next":"[^"]*","uses_next":"[^"]*"' | head -1 )"
+J51P="$( rb --callers=band51Hub --json --offset=40 )"
+{ [ "$J51N" = '"next":"--callers=band51Hub --json --offset=40","uses_next":"--uses=band51Hub"' ] \
+  && [ "$( printf '%s' "$J51P" | head -c 1 )" = "{" ] && [ "$( printf '%s' "$J51P" | grep -o '"n":"b51c' | wc -l | tr -d ' ' )" = 11 ] \
+  && ! printf '%s' "$J51P" | grep -q '"next"' && ! printf '%s' "$J45" | grep -q '"next"'; } \
+    && ok "(18b) --json at 51: next is the JSON page (--callers=band51Hub --json --offset=40), uses_next the uses verb; the page serves 11 JSON rows; uncut and last pages carry no next" \
+    || no "(18b) --json page next: [${J51N:-none}] page2 rows=$( printf '%s' "$J51P" | grep -o '"n":"b51c' | wc -l | tr -d ' ' ) page2 next=$( printf '%s' "$J51P" | grep -c '"next"' ) uncut next=$( printf '%s' "$J45" | grep -c '"next"' )"
+C51="$( rb --callers=band51Hub --format=columnar )"; TC51="$( rootTag "$C51" callers )"
+[ "$( attr next "$TC51" )" = "--callers=band51Hub --format=columnar --offset=40" ] \
+    && ok "(19) --format=columnar: the page next= keeps the form" \
+    || no "(19) columnar next=: $( attr next "$TC51" )"
+F45="$( rb --callees=fanOut45 )"
+[ "$( bandRows "$F45" )" = 45 ] \
+    && ok "(20) --callees takes the same band (45 callees, one shared cap)" \
+    || no "(20) --callees=fanOut45 served $( bandRows "$F45" ) of 45"
+MB="$( python3 - "$BIN" "$BB" <<'PY'
+import json, subprocess, sys, threading
+p = subprocess.Popen( [ sys.argv[1], sys.argv[2], "--mcp" ], stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.DEVNULL )
+watchdog = threading.Timer( 300, p.kill ); watchdog.daemon = True; watchdog.start()
+def tool( n, name, args ):
+    p.stdin.write( ( json.dumps( { "jsonrpc": "2.0", "id": n, "method": "tools/call", "params": { "name": name, "arguments": args } } ) + "\n" ).encode() )
+    p.stdin.flush()
+    return json.loads( json.loads( p.stdout.readline() )[ "result" ][ "content" ][ 0 ][ "text" ] )
+r45 = tool( 1, "find_referencing_symbols", { "symbol": "band45Hub" } )
+r51 = tool( 2, "find_referencing_symbols", { "symbol": "band51Hub" } )
+f45 = tool( 3, "find_symbol", { "symbol": "band45Hub" } )
+p.stdin.close(); p.wait( 20 )
+print( "R45 %d %s %s" % ( len( r45[ "calledBy" ] ), r45.get( "capped" ), r45.get( "next" ) ) )
+print( "R51 %d %s %s|%s" % ( len( r51[ "calledBy" ] ), r51.get( "capped" ), r51.get( "next" ), r51.get( "uses_next" ) ) )
+print( "F45 %d %s" % ( len( f45[ "calledBy" ] ), "calledBy_total" in f45 ) )
+PY
+)"
+[ "$( printf '%s\n' "$MB" | sed -n 's/^R45 //p' )" = "45 None --uses=band45Hub" ] \
+    && ok "(21) MCP find_referencing_symbols: the band serves 45 of 45 uncut, next the uses verb (CLI parity)" \
+    || no "(21) MCP band 45: $( printf '%s\n' "$MB" | sed -n 's/^R45 //p' )"
+[ "$( printf '%s\n' "$MB" | sed -n 's/^R51 //p' )" = "40 True --callers=band51Hub --offset=40|--uses=band51Hub" ] \
+    && ok "(21b) MCP at 51: 40 rows, capped, next the page and uses_next the uses verb, as the CLI root says" \
+    || no "(21b) MCP 51: $( printf '%s\n' "$MB" | sed -n 's/^R51 //p' )"
+[ "$( printf '%s\n' "$MB" | sed -n 's/^F45 //p' )" = "45 False" ] \
+    && ok "(21c) MCP find_symbol's calledBy array takes the band too (45 rows, no cut keys)" \
+    || no "(21c) find_symbol calledBy band: $( printf '%s\n' "$MB" | sed -n 's/^F45 //p' )"
+
 echo
 [ "$fail" = 0 ] && { echo "neighbourcapcheck: PASS"; exit 0; } || { echo "neighbourcapcheck: FAIL"; exit 1; }

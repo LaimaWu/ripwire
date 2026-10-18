@@ -20,6 +20,7 @@
 #include "smallvec.h"            // rw::SmallVec — THE ONE ALIAS (src/smallvec.h picks the implementation)
 #include "resolve.h"             // P2-D one-hop type narrowing (Rule 1: class membership) — applied before the name-based fallback
 #include "receiverevidence.h"    // FE-B: typed receivers RESOLVE; a call nothing proves keeps its rows marked via="name"
+#include "langfacts.h"           // langFacts(l): the per-language facts the resolver reads instead of a Lang:: compare
 #include "scipoverlay.h"         // SCIP precision overlay (data struct only; parser lives in scip.h)
 #include "pincensus.h"           // eval-only per-call-site decision census (--pin-census); inert unless armed
 #include "externalnames.h"       // Phase 5: the committed builtin/stdlib tables behind the external-name veto
@@ -51,7 +52,7 @@ enum class DeclinedSiteKind : std::uint8_t
 {
     Ladder,     // tier 3: two or more candidates, none in the caller's file or directory, no evidence chose one (no gate=)
     Builtin,    // the builtin-method name gate (BuiltinMethodGate): gate="builtin"
-    Std,        // the C++ standard-member gate (StdMemberGate): gate="std"
+    Std,        // the standard-member gate (StdMemberGate; C++ and Rust rows): gate="std"
     RubySide,   // Ruby: in reach of self's method lookup, but on the other side of self (class vs instance): gate="side"
     RubyNew,    // Ruby: `new` on a class object, the reachable `initialize` definitions unpicked (no gate=; the row names `new`)
     Iface,      // RESERVED for L6 (interface-typed dispatch rows); nothing writes it yet
@@ -181,10 +182,10 @@ struct Graph
     // that call bound to it by name.
     std::vector<char>          gateDeclinedTarget;
     std::size_t                gateDeclinedCalls = 0;   // of the header's declined=, the calls the builtin-method name gate declined
-    // Of the header's declined=, the C++ calls the standard-member gate declined (StdMemberGate below): its own legend clause
-    // rides where this is >0, so a tree with none keeps its bytes. stdMemberDeclines is one entry per DECLINED C++ call named
+    // Of the header's declined=, the calls the standard-member gate declined (StdMemberGate below): its own legend clause
+    // rides where this is >0, so a tree with none keeps its bytes. stdMemberDeclines is one entry per DECLINED call named
     // like a standard member on a receiver no rule tied to an in-tree class — by that gate or by the ladder's own tier-3 decline — as
-    // ( caller, kCppStdMemberNames index ), sorted after the resolve loop: the callees answer's <stdm> line.
+    // ( caller, kStdMemberNames flat index ), sorted after the resolve loop: the callees answer's <stdm> line.
     std::size_t                                    stdMemberDeclinedCalls = 0;
     std::vector<std::pair<NodeId, std::uint16_t>>  stdMemberDeclines;
     // Every call reference's disposition (pincensus.h CallDisposition), one bucket per reference. Read by buildGraph's
@@ -3109,7 +3110,7 @@ inline std::string_view stdElementType( std::string_view written ) noexcept
     return argIndex < 0 ? std::string_view{} : stdTemplateArgClass( written, open, argIndex );
 }
 
-// THE C++ STANDARD-MEMBER GATE (test/stdmembergatecheck.sh; the names are data: externalnames.h kCppStdMemberNames).
+// THE STANDARD-MEMBER GATE (test/stdmembergatecheck.sh; the names are data, one row per language: kStdMemberNames below).
 // A C++ member call whose receiver no rule typed — `out.push_back( c )` on a `std::vector<char>&` parameter, `s.size()`,
 // `getV().empty()` — is NAME-ONLY (FE-B): it keeps every same-file, same-directory and included-file definition of the
 // name, each hedged via="name". When the name is a standard container or string member, those rows were overwhelmingly
@@ -3156,11 +3157,72 @@ inline std::string_view stdElementType( std::string_view written ) noexcept
 // cone's class NAMES, as CHA-lite matches it, and a namespace-scope variable by its name — those declared in the caller's
 // file or a file it includes, else every one in the tree; (4) generic names and iostream/filesystem/atomic/thread members are
 // not in the table (externalnames.h says which and why), so their calls keep the ladder.
-// LANGUAGE SCOPE (each probed): C has no member functions. Rust receivers carry no declared type (`let s = Stack{..};
-// s.push()` splits by name today), so a gate would decline typed true edges with the false ones. Go, Java, Kotlin, C# and
-// Swift name their standard members after interfaces in-tree types implement on purpose (Len/Write/String/Close, add/size,
-// Add, append), so an unproven receiver may dispatch into the tree. ObjC message sends carry no receiver shape.
-// Python/JS/TS/Ruby: BuiltinMethodGate above.
+// LANGUAGE SCOPE (each probed; a language is gated exactly when kStdMemberNames has a non-empty row for it): C++ as above.
+// RUST (externalnames.h kRustStdMemberNames; arm R): the same rule — `v.push( x )` on a `&mut Vec<i32>` parameter, `xs.iter()`,
+// `m.insert( k, v )` left NAME-ONLY are declined; a call the language's own lookup proves (`self.iter()` inside the impl
+// that defines iter) is not name-only and keeps its edge. The receiver exception reads nothing for Rust (stdReceiverOf reads
+// C++ written types only), so its STATED FLOOR is wider than C++'s: a receiver written as an in-tree type — a parameter
+// `s: &mut Stack<i32>`, a local `let s = Stack { .. }`, a field `self.inner` declared `Stack<i32>`, `book: &Book` where Book
+// defines iter — is declined with the false edges, because Rust records no parameter, local or field type for a call yet.
+// Such a call is counted (declined_calls=, <stdm>), never silently dropped; it keeps its edge once Rust receiver evidence
+// types it (the call is then no longer name-only). C has no member functions. GO has an EMPTY row: its common member names
+// (Len, Write, String, Error, Reset, Lock, Unlock) are methods in-tree types implement on purpose to satisfy an interface,
+// so an unproven receiver may well dispatch into the tree; a Go gate needs typed receivers, not a name list. Java, Kotlin,
+// C# and Swift likewise (add/size, Add, append). ObjC message sends carry no receiver shape. Python/JS/TS/Ruby:
+// BuiltinMethodGate above.
+// One language's row: a pointer and a count, not a std::span — libstdc++ 13.2/13.3 cannot evaluate a value-initialised
+// std::span (its dynamic __extent_storage has no default constructor) inside a constant expression, so a constexpr array of
+// spans failed to compile under gcc-13 and clang-on-libstdc++ (CI 2026-10-16). span() builds the view at run time.
+struct StdMemberRow
+{
+    const std::string_view* names = nullptr;
+    std::size_t             count = 0;
+    constexpr std::span<const std::string_view> span() const noexcept { return { names, count }; }
+};
+template<std::size_t N>
+constexpr StdMemberRow stdMemberRow( const std::string_view ( &table )[ N ] ) noexcept
+{
+    return { table, N };
+}
+inline constexpr std::array<StdMemberRow, kLangCount> kStdMemberNames = []
+{
+    std::array<StdMemberRow, kLangCount> rows {};   // value-initialised: a language with no row is not gated
+    rows[ std::size_t( Lang::Cpp ) ]  = stdMemberRow( externalnames::kCppStdMemberNames );
+    rows[ std::size_t( Lang::Rust ) ] = stdMemberRow( externalnames::kRustStdMemberNames );
+    rows[ std::size_t( Lang::Go ) ]   = {};   // EMPTY on purpose: see LANGUAGE SCOPE above
+    return rows;
+}();
+// Where each language's row starts in the ONE flat index the gate records (Graph::stdMemberDeclines packs it into 16 bits):
+// row l holds indices [ kStdMemberRowStart[ l ], kStdMemberRowStart[ l + 1 ] ). C++ is Lang 0, so a C++ index is its
+// kCppStdMemberNames index, as before.
+inline constexpr std::array<std::size_t, kLangCount + 1> kStdMemberRowStart = []
+{
+    std::array<std::size_t, kLangCount + 1> start {};
+    for( std::size_t l = 0; l < kLangCount; ++l )
+    {
+        start[ l + 1 ] = start[ l ] + kStdMemberNames[ l ].count;
+    }
+    return start;
+}();
+static_assert( kStdMemberRowStart[ kLangCount ] < 0xFFFFu, "StdMemberGate packs a kStdMemberNames flat index into 16 bits, 0xFFFF = none" );
+// Every row strictly sorted (tableIndexOf binary-searches it), proven HERE over the rows themselves, so a row added above
+// without its own externalnames.h assert cannot slip in unsorted. Walks the pointer and count, never a std::span (the
+// libstdc++ 13 note above).
+constexpr bool stdMemberRowsStrictlySorted() noexcept
+{
+    for( const StdMemberRow& row : kStdMemberNames )
+    {
+        for( std::size_t i = 1; i < row.count; ++i )
+        {
+            if( !rw::sortutil::svLess( row.names[ i - 1 ], row.names[ i ] ) )
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+static_assert( stdMemberRowsStrictlySorted(), "every kStdMemberNames row is strictly sorted (binary search)" );
 struct StdMemberGate
 {
     static constexpr std::uint16_t kNotStd = 0xFFFFu;
@@ -3169,19 +3231,33 @@ struct StdMemberGate
     // std::string bound to a repository's only `append` (one definition, one by-name edge) is the case this gate exists for.
     static constexpr std::size_t   kMinInTreeCandidates = 1;
 
-    // The table index of a call the gate is about — C++, a call, unqualified, written on a receiver, a table name — else
-    // kNotStd. Whether the resolve loop left it name-only, and its receiver's written type, are the caller's to add.
+    // The flat table index of a call the gate is about — a language with a row, a call, unqualified, written on a receiver,
+    // a name in its language's row — else kNotStd. Whether the resolve loop left it name-only, and its receiver's written
+    // type, are the caller's to add.
     static std::uint16_t tableIndexOf( const Reference& r ) noexcept
     {
-        if( r.lang != Lang::Cpp || r.role != RefRole::Call || !r.qualifier.empty() || !isMemberCallRef( r ) )
+        const std::span<const std::string_view> table = enumTableAt( kStdMemberNames, r.lang, StdMemberRow{} ).span();   // strictly sorted: static_assert
+        if( table.empty() || r.role != RefRole::Call || !r.qualifier.empty() || !isMemberCallRef( r ) )
         {
             return kNotStd;
         }
-        const std::span<const std::string_view> table( externalnames::kCppStdMemberNames );   // strictly sorted: static_assert
-        const auto                              it = std::lower_bound( table.begin(), table.end(), std::string_view( r.calleeName ), rw::sortutil::svLess );
-        const std::uint16_t                     index = ( it != table.end() && *it == r.calleeName ) ? std::uint16_t( it - table.begin() ) : kNotStd;
-        ENSURES( index == kNotStd || index < table.size(), "a table index, or none" );
-        return index;
+        const auto it = std::lower_bound( table.begin(), table.end(), std::string_view( r.calleeName ), rw::sortutil::svLess );
+        if( it == table.end() || *it != r.calleeName )
+        {
+            return kNotStd;
+        }
+        const std::size_t index = kStdMemberRowStart[ std::size_t( r.lang ) ] + std::size_t( it - table.begin() );
+        ENSURES( index < kStdMemberRowStart[ std::size_t( r.lang ) + 1 ], "a flat index inside the call's own language row" );
+        return std::uint16_t( index );
+    }
+    // The name a flat index records (tableIndexOf's inverse): the callees answer's <stdm> line spells it.
+    static std::string_view nameAt( std::uint16_t index ) noexcept
+    {
+        EXPECTS( index < kStdMemberRowStart[ kLangCount ], "a flat index tableIndexOf returned" );
+        const auto        next = std::upper_bound( kStdMemberRowStart.begin(), kStdMemberRowStart.end(), std::size_t( index ) );
+        const std::size_t lang = std::size_t( next - kStdMemberRowStart.begin() ) - 1;
+        ASSUME( lang < kLangCount, "an index below the last row start lies inside one row" );
+        return kStdMemberNames[ lang ].names[ index - kStdMemberRowStart[ lang ] ];
     }
 
     // What the receiver exception read off a call's receiver (buildGraph's stdReceiverOf): the written class names whose cone
@@ -6205,6 +6281,49 @@ inline void fillImplementorBound( Graph& g, const std::vector<ImplementorBoundEd
     }
 }
 
+// B2.2 MINIMUM ARITY ACROSS DECLARATIONS: per symbol, the fewest arguments a call can pass to it — its own paramsMin
+// (ingest_metrics.h cc_paramShape) lowered to the lowest paramsMin of any DECLARATION with the same name and the same
+// parameter count. C++ may write a default on a separate prototype only (`int f( int x, int y = 5 );` in a header,
+// `int f( int x, int y ){…}` out of line), and a default on either makes the shorter call legal, so a definition is
+// judged on the minimum over itself and every declaration of it. The pairing is deliberately LOOSE (name + params,
+// any scope, any language): a declaration joined to a definition it does not declare can only LOWER the minimum,
+// which keeps a candidate the resolver could have dropped (a lost hedge) — it never drops one and never adds an edge.
+// Read off `byName` BEFORE the decl/def collapse folds declarations away. A symbol outside byName keeps 0 (no bound).
+inline std::vector<std::uint16_t> paramsMinAcrossDeclarations( const IngestResult& ing, const HashMap<std::string, rw::SmallVec<NodeId, 2>>& byName )
+{
+    std::vector<std::uint16_t> out( ing.symbols.size(), 0 );
+    std::vector<std::pair<std::uint16_t, std::uint16_t>> declMin;   // ( params, paramsMin ) of the name's declarations
+    for( const auto& [ name, ids ] : byName )
+    {
+        declMin.clear();
+        for( const NodeId id : ids )
+        {
+            const Symbol& s = ing.symbols[ id ];
+            out[ id ] = s.paramsMin;
+            if( !isDefinitionNotDeclaration( s ) )
+            {
+                declMin.push_back( { s.params, s.paramsMin } );
+            }
+        }
+        if( declMin.empty() )
+        {
+            continue;
+        }
+        std::sort( declMin.begin(), declMin.end() );   // per params value, its lowest declared minimum sorts first
+        for( const NodeId id : ids )
+        {
+            const Symbol& s  = ing.symbols[ id ];
+            const auto    it = std::lower_bound( declMin.begin(), declMin.end(), std::pair<std::uint16_t, std::uint16_t>{ s.params, 0 } );
+            if( it != declMin.end() && it->first == s.params )
+            {
+                out[ id ] = std::min( out[ id ], it->second );
+            }
+        }
+    }
+    ENSURES( out.size() == ing.symbols.size() );
+    return out;
+}
+
 inline std::uint32_t internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand );   // defined beside declinedCallsNaming, its one reader
 inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = nullptr, bool census = false )
 {
@@ -6308,6 +6427,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             byName[ s.name ].push_back( s.id );
         }
     }
+
+    // B2.2 minimum arity: read every declaration's minimum BEFORE the collapse below folds declarations away.
+    const std::vector<std::uint16_t> paramsMinOf = paramsMinAcrossDeclarations( ing, byName );
 
     // decl/def collapse (adversarial-review #1) — collapseDeclarationsOfName carries the rule, its per-root and per-family
     // keys, and why a Kotlin body never evicts a Java declaration (or the reverse).
@@ -7269,7 +7391,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         subscriptCand.clear();
         const std::string& scope           = callerSelfScope( ing, r );
         bool               rubySelfDecided = false;
-        if( r.lang == Lang::Ruby )
+        if( langFacts( r.lang ).classObjectLookup )
         {
             const RubySideAnswer self = rubyClasses.selfCall( r );
             rubySelfDecided           = self.side.has_value();
@@ -7308,7 +7430,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             return false;
         }
         return narrowTo( narrower.rule1ClassMember( r, scope ), r, subscriptCand )
-            || narrowTo( narrower.rule1BaseWalk( r, scope, r.lang == Lang::Ruby ? rubyUp : chaUp, chaUpDeclared ), r, subscriptCand );
+            || narrowTo( narrower.rule1BaseWalk( r, scope, langFacts( r.lang ).mixinAncestry ? rubyUp : chaUp, chaUpDeclared ), r, subscriptCand );
     };
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/3: resolve loop (per reference)" );
@@ -7714,7 +7836,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // would hand the site to the caller's own class — the one class `super()` skips by definition.
         if( !scipPinned && !canonical && !narrowed && !rubySelfCall.side )
         {
-            narrowed = narrowTo( narrower.rule1BaseWalk( r, callerSelfScope( ing, r ), r.lang == Lang::Ruby ? rubyUp : chaUp, chaUpDeclared ), r, cand );
+            narrowed = narrowTo( narrower.rule1BaseWalk( r, callerSelfScope( ing, r ), langFacts( r.lang ).mixinAncestry ? rubyUp : chaUp, chaUpDeclared ), r, cand );
         }
         if( !scipPinned && !canonical && !narrowed && r.recv == RecvKind::SuperObj && bindingTier.empty() )
         {
@@ -8162,7 +8284,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 }
             }
         }
-        // StdMemberGate: a NAME-ONLY C++ member call named like a standard container or string member — its table index, else
+        // StdMemberGate: a NAME-ONLY member call named in its language's standard-member row — its flat table index, else
         // kNotStd — and what its receiver's written types say (stdReceiverOf). Decided once here: the ladder's own
         // tier-3 decline and the post-filter below both read them.
         const std::uint16_t    stdIndex    = nameOnly ? StdMemberGate::tableIndexOf( r ) : StdMemberGate::kNotStd;
@@ -8367,38 +8489,46 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
 
             // B2.2 arity filter: when the call site has a reliably-counted positional-argument list, drop any
-            // same-name candidate whose declared parameter count is a FIXED, call-comparable arity (arityExact)
-            // and cannot possibly accept that many args — a provably-wrong overload. Strictly conservative: a
-            // variadic / default-argument / implicit-self candidate (arityExact==0) is NEVER dropped, nor is
-            // any candidate when the call-site count is unknown. Degrade rather than empty the tier.
-            //
-            // Decided: only `argCount > params` is provably wrong.
-            // arityExact is computed from the DEFINITION node only (cc_paramArityExact); a C++ default argument
-            // written ONLY on a separate header PROTOTYPE (`void f( int x = 5 );`) is invisible there, so an
-            // out-of-line def whose default lives in the decl reads as a fixed arity==params. An
-            // (params-1)-arg call against such a def is legal (the default fills the gap) but used to fail
-            // `params != argCount` and get "provably" excluded — dropping the correct edge AND silently
-            // suppressing the amb= honesty counter when a sibling overload happened to survive. No default
-            // argument can ever rescue a call with MORE args than the def declares, so `argCount > params`
-            // stays a sound exclusion in every language; `argCount < params` no longer excludes — the def
-            // stays a candidate and correctly re-enters amb= when multiple defs still survive. Trades a little
-            // precision for honesty (decided acceptance); the fuller decl/def arityExact merge is deferred.
+            // same-name candidate that provably cannot accept that many args — a provably-wrong overload — in
+            // either direction:
+            //   * TOO MANY: `argCount > params` on a FIXED, call-comparable arity (arityExact). No default can
+            //     rescue a call with more args than the def declares, so this is sound in every language. A
+            //     variadic / default-argument / implicit-self candidate (arityExact==0) is never dropped this way.
+            //   * TOO FEW: `argCount < paramsMinOf[c]` — the fewest arguments the candidate can take, the minimum
+            //     over its definition AND every declaration of it (paramsMinAcrossDeclarations: a C++ default
+            //     written only on the header PROTOTYPE still makes the shorter call legal and keeps the def).
+            //     paramsMin is 0 — no lower bound — for a variadic, implicit-self, receiver-parameter or
+            //     decorated def and for every language without a kParamMinLangs row (JavaScript, where a call
+            //     may pass fewer arguments; Kotlin; …), so those are never dropped for too few arguments.
+            //     Residual floors (disclosed, not handled): a C/C++ argument that is a macro expanding to several
+            //     arguments (`f( PAIR )`) is counted as one, so it reads as a shorter call than it is; and a default
+            //     written only on a declaration ripwire does not index (a `.inl`/`.ipp` header, a header outside the
+            //     tree) is invisible, so the definition is judged on its own minimum.
+            // Strictly conservative otherwise: no candidate is filtered when the call-site count is unknown, and
+            // each stage degrades (leaves the tier untouched) rather than empty it. The stages run IN ORDER — too
+            // many first, exactly as before the minimum existed, then too few on what survives — so a tier that the
+            // too-few stage would empty keeps the too-many stage's result: a candidate dropped for too many
+            // arguments never comes back (one combined pass restored the whole tier and re-added it).
             if( r.argCountKnown && tier.size() > 1 )
             {
-                filtScratch.clear();
-                for( NodeId c : tier )
+                for( const bool fewStage : { false, true } )
                 {
-                    const Symbol& cs = ing.symbols[ c ];
-                    const bool provablyWrong = ( cs.arityExact != 0 ) && ( r.argCount > cs.params );
-                    if( !provablyWrong )
+                    filtScratch.clear();
+                    for( NodeId c : tier )
                     {
-                        filtScratch.push_back( c );
+                        const Symbol& cs = ing.symbols[ c ];
+                        const bool provablyWrong = fewStage ? r.argCount < paramsMinOf[ c ]
+                                                            : ( cs.arityExact != 0 ) && ( r.argCount > cs.params );
+                        if( !provablyWrong )
+                        {
+                            filtScratch.push_back( c );
+                        }
                     }
-                }
-                if( !filtScratch.empty() && filtScratch.size() < tier.size() )
-                {
-                    tier.swap( filtScratch );
-                    censusArity = true;
+                    if( !filtScratch.empty() && filtScratch.size() < tier.size() )
+                    {
+                        tier.swap( filtScratch );
+                        censusArity = true;
+                    }
                 }
             }
         }
@@ -8562,14 +8692,14 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
         }
 
-        // ---- the C++ standard-member gate (StdMemberGate above) — it only ever removes an edge -------------------------
+        // ---- the standard-member gate (StdMemberGate above) — it only ever removes an edge -----------------------------
         // The ladder decided this name-only call as it decides every other; when the name is a standard container or string
         // member and no written non-std type of the receiver reaches them, the in-tree definitions it reached by NAME are declined
         // instead of bound: the standard library's own member is the call's other candidate. A self-only tier is left to the
         // Self exit, exactly as the builtin-method gate leaves it.
         if( stdIndex != StdMemberGate::kNotStd && !bindingPinned && !identityClaim && !stdReceiverKeeps( stdRecv, r.fromSymbol, tier ) )
         {
-            ASSUME( stdIndex < std::size( externalnames::kCppStdMemberNames ), "tableIndexOf returns a table index or kNotStd" );
+            ASSUME( stdIndex < kStdMemberRowStart[ kLangCount ], "tableIndexOf returns a flat table index or kNotStd" );
             gateRefused.clear();
             for( const NodeId c : tier )
             {
@@ -11755,6 +11885,11 @@ inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<N
 // and folds byte-identically to before.
 inline const std::vector<char> kNoImpactHedge{};
 inline constexpr std::size_t kImpactFileRollupCap = 20;
+// L7 (typeuse.h): on a TYPE impact with no --limit, the listing holds the whole first-hop band — the defining file (d=0)
+// and every d=1 file a type mention reaches (isTypeBandRow) — however many there are, up to this runaway guard; past the
+// cut is disclosed (files_capped="1", files_next=) like any other. Measured: tmux `--impact=grid_cell` has 32 such files
+// (the 20-row default dropped 8 of the question's 32 gold files); a band in the hundreds would be a dump, not an index.
+inline constexpr std::size_t kImpactTypeRollupBandMax = 200;
 
 // the --impact row (provenCallerReach below)'s hedge: reached, but by no all-proven path
 inline bool impactRowNameOnly( const std::vector<char>& proven, NodeId n ) noexcept
@@ -11768,6 +11903,8 @@ struct ImpactFileRow
     std::uint32_t syms     = 0;
     std::uint32_t minDepth = 0;
     std::uint32_t nameOnly = 0;   // fix27: of syms, the via="name" rows (impactRowNameOnly) — counted only on a multi-def selector
+    std::uint32_t typeOnly = 0;   // L7: of syms, the ones only the type tier reaches (typeuse.h ImpactReach::typeOnly)
+    bool          typeScope = false;   // L7: the file names the type outside every indexed definition (syms may be 0)
     std::string   ofDefXml;       // attrib-multidef (defattrib.h attachRollupOfDef): the row's of_def=, "" on a one-group selector
     std::string   ofDefJson;      // ... and its JSON key
 };
@@ -11778,18 +11915,113 @@ struct ImpactFileRollup
     std::size_t                shown  = 0;
     bool                       capped = false;
     std::string                next;     // the call listing every row; empty when uncut
+    bool                       typed       = false;   // L7: SYM is a type and its type tier ran (the <files> type_users= rides)
+    std::size_t                typeUsers   = 0;       // L7: symbols seeded by a type mention
+    std::size_t                typeDefs    = 0;       // L7: indexed type definitions sharing the spelled name (said when > 1)
+    bool                       typeCapped  = false;   // L7: the mention walk hit its budget — type rows are a floor
 };
+
+// L7 type-use impact (typeuse.h): what the type tier adds to the rollup. Default (null `typeOnly`) ⇒ no tier, the
+// rollup is byte-identical to before. Spans borrow the caller's TypeUseTier.
+struct ImpactTypeFold
+{
+    std::span<const std::uint32_t> defFiles;              // d="0" rows: the files defining SYM
+    std::span<const std::uint32_t> scopeFiles;            // files naming SYM outside every indexed definition (d="1", syms may be 0)
+    const std::vector<char>*       typeOnly   = nullptr;  // per node: reached only through the type tier
+    std::size_t                    users      = 0;
+    std::size_t                    typeDefs   = 0;
+    bool                           sitesCapped = false;
+};
+
+// L7: a TYPE impact (`type` non-null) rolls up even beside an uncut window — its d="0" row (the defining file) and the
+// via="type" marks are facts the symbol rows do not carry.
+// L7: the type tier's own rows, before the reach folds in — the defining files at d=0, then the files naming the type
+// outside every indexed definition at d=1 (syms=0 until a reached symbol lands there). Copies the tier's counts.
+// A null `fold` (no type tier) adds nothing.
+inline void seedTypeRollupRows( ImpactFileRollup& r, std::vector<std::uint32_t>& rowOfFile, const ImpactTypeFold* fold )
+{
+    if( fold == nullptr )
+    {
+        return;
+    }
+    const ImpactTypeFold& type = *fold;
+    r.typed      = true;
+    r.typeUsers  = type.users;
+    r.typeDefs   = type.typeDefs;
+    r.typeCapped = type.sitesCapped;
+    const auto add = [ & ]( std::span<const std::uint32_t> files, std::uint32_t d, bool scope )
+    {
+        for( const std::uint32_t f : files )
+        {
+            if( f < rowOfFile.size() && rowOfFile[f] == UINT32_MAX )
+            {
+                rowOfFile[f] = std::uint32_t( r.rows.size() );
+                r.rows.push_back( ImpactFileRow{ f, 0, d } );
+                r.rows.back().typeScope = scope;
+            }
+        }
+    };
+    add( type.defFiles, 0, false );
+    add( type.scopeFiles, 1, true );
+}
+
+// L7: after the reach folds in, each row's typeOnly = its reached symbols only the type tier reaches. Null ⇒ nothing.
+inline void foldTypeOnlyCounts( ImpactFileRollup& r, const std::vector<std::uint32_t>& rowOfFile, const IngestResult& ing,
+                                std::span<const NodeId> reach, const ImpactTypeFold* fold )
+{
+    if( fold == nullptr || fold->typeOnly == nullptr )
+    {
+        return;
+    }
+    const std::vector<char>& typeOnly = *fold->typeOnly;
+    for( const NodeId n : reach )
+    {
+        if( n < ing.symbols.size() && n < typeOnly.size() && typeOnly[n] != 0 )
+        {
+            ++r.rows[ rowOfFile[ ing.symbols[n].fileId ] ].typeOnly;
+        }
+    }
+}
+
+// Does the rollup ride? Beside a cut symbol window (idea #6), and (L7) on every type impact.
+inline bool impactRollupRides( bool windowCut, const ImpactTypeFold* type ) noexcept
+{
+    return windowCut || type != nullptr;
+}
+
+// L7: a row of the first-hop TYPE band — the defining file (d=0), or a d=1 file a type mention reaches (a type user or
+// a file-scope mention). A d=1 file reached only as a direct CALLER (a constructor call, or a namesake function of a
+// multi-definition selector) is not in the band: it keeps the ordinary 20-row window, so a selector that is mostly a
+// function (textual `query_one`: a class and four methods) does not grow to a 200-row listing.
+inline bool isTypeBandRow( const ImpactFileRow& row ) noexcept
+{
+    return row.minDepth == 0 || ( row.minDepth == 1 && ( row.typeOnly > 0 || row.typeScope ) );
+}
+
+// The rollup's default window: kImpactFileRollupCap, --limit when given; L7: a type impact with no --limit widens it to
+// the whole first-hop type band (isTypeBandRow), up to kImpactTypeRollupBandMax. `rows` is ranked (d= ascending).
+inline std::size_t impactRollupCap( std::span<const ImpactFileRow> rows, int pageLimit, bool typed )
+{
+    const std::size_t cap = std::size_t( rw::effectiveRowCap( pageLimit, int( kImpactFileRollupCap ) ) );
+    if( !typed || pageLimit > 0 )
+    {
+        return cap;
+    }
+    const std::size_t band = std::size_t( std::count_if( rows.begin(), rows.end(), []( const ImpactFileRow& row ) { return isTypeBandRow( row ); } ) );
+    return std::max( cap, std::min( band, kImpactTypeRollupBandMax ) );
+}
 
 inline ImpactFileRollup impactFileRollup( const IngestResult& ing, std::span<const NodeId> reach, const std::vector<std::uint32_t>& depth,
                                           int pageLimit, std::string_view sym, bool windowCut,
-                                          const std::vector<char>& hedgeProven = kNoImpactHedge )
+                                          const std::vector<char>& hedgeProven = kNoImpactHedge, const ImpactTypeFold* type = nullptr )
 {
     ImpactFileRollup          r;
-    if( !windowCut )
+    if( !impactRollupRides( windowCut, type ) )
     {
         return r;   // the rows name every reached file already (see the block comment); nothing to roll up
     }
     std::vector<std::uint32_t> rowOfFile( ing.files.size(), UINT32_MAX );
+    seedTypeRollupRows( r, rowOfFile, type );
     for( const NodeId n : reach )
     {
         if( n >= ing.symbols.size() )
@@ -11808,13 +12040,14 @@ inline ImpactFileRollup impactFileRollup( const IngestResult& ing, std::span<con
         row.minDepth = std::min( row.minDepth, d );
         row.nameOnly += std::uint32_t( impactRowNameOnly( hedgeProven, n ) );   // never on kNoImpactHedge (empty: no row hedged)
     }
+    foldTypeOnlyCounts( r, rowOfFile, ing, reach, type );
     std::sort( r.rows.begin(), r.rows.end(), [ & ]( const ImpactFileRow& a, const ImpactFileRow& b )
                {
                    if( a.minDepth != b.minDepth ) { return a.minDepth < b.minDepth; }
                    if( a.syms != b.syms ) { return a.syms > b.syms; }
                    return ing.files[a.fileId] < ing.files[b.fileId];
                } );
-    r.shown  = std::min( r.rows.size(), std::size_t( rw::effectiveRowCap( pageLimit, int( kImpactFileRollupCap ) ) ) );
+    r.shown  = std::min( r.rows.size(), impactRollupCap( r.rows, pageLimit, r.typed ) );
     r.capped = r.shown < r.rows.size();
     if( r.capped && !sym.empty() )
     {
@@ -12078,26 +12311,18 @@ inline std::vector<NodeId> shortestPath( const Graph& g, NodeId src, NodeId dst 
 // tests-to-run row say hops="1" (the test calls a changed symbol directly) rather than merely "reaches". ONE
 // walk, not a second BFS: a depth that disagreed with reachability by one edge would be invisible to every
 // gate that only checks the reached SET.
-inline std::vector<NodeId> transitiveCallersDepth( const Graph& g, std::span<const NodeId> seeds, std::vector<std::uint32_t>* depthOut )
+// L7 type-use impact (typeuse.h): `firstHop` (default empty ⇒ the plain call walk, unchanged) enters the walk at depth 1
+// beside the seeds' direct callers — the symbols that NAME a type seed — and is reached like any caller (in the output,
+// their own callers at depth 2). Queued after the seeds and before any expansion, so the BFS stays depth-monotone.
+// One BFS stretch of the caller walk: expands q[head..) (stopping before `end`, or when the queue drains) by in-edges,
+// appending each unseen caller at its parent's depth + 1. Returns where it stopped.
+inline std::size_t expandCallers( const Graph& g, std::vector<NodeId>& q, std::size_t head, std::size_t end, std::vector<char>& seen,
+                                  std::vector<std::uint32_t>& depth )
 {
-    const std::size_t          N = g.wOutDeg.size();
-    std::vector<char>          seen( N, 0 );
-    std::vector<NodeId>        q;
-    std::vector<std::uint32_t> localDepth;                                  // the walk always keeps depth; a caller that
-    std::vector<std::uint32_t>& depth = depthOut ? *depthOut : localDepth;  // wants it hands in the vector it lands in
-    depth.assign( N, 0 );
-    for( NodeId s : seeds )
-    {
-        if( s < N && !seen[s] )
-        {
-            seen[s] = 1;
-            q.push_back( s );
-        }
-    }
-    const std::size_t nSeed = q.size();
-    const auto*       ro    = g.inEdges.rowOffsets();
-    const auto*       ci    = g.inEdges.colIndices();
-    for( std::size_t head = 0; head < q.size(); ++head )
+    const std::size_t N  = seen.size();
+    const auto*       ro = g.inEdges.rowOffsets();
+    const auto*       ci = g.inEdges.colIndices();
+    for( ; head < q.size() && head < end; ++head )
     {
         const NodeId u = q[ head ];
         for( std::uint32_t k = ro[u]; k < ro[u + 1]; ++k )
@@ -12111,6 +12336,38 @@ inline std::vector<NodeId> transitiveCallersDepth( const Graph& g, std::span<con
             }
         }
     }
+    return head;
+}
+
+// Queue every not-yet-seen node of `nodes` at depth `d` (the walk's seeds at 0, L7's first hop at 1).
+inline void enqueueUnseen( std::span<const NodeId> nodes, std::uint32_t d, std::vector<char>& seen, std::vector<std::uint32_t>& depth,
+                           std::vector<NodeId>& q )
+{
+    for( const NodeId n : nodes )
+    {
+        if( n < seen.size() && !seen[n] )
+        {
+            seen[n]  = 1;
+            depth[n] = d;
+            q.push_back( n );
+        }
+    }
+}
+
+inline std::vector<NodeId> transitiveCallersDepth( const Graph& g, std::span<const NodeId> seeds, std::vector<std::uint32_t>* depthOut,
+                                                   std::span<const NodeId> firstHop = {} )
+{
+    const std::size_t          N = g.wOutDeg.size();
+    std::vector<char>          seen( N, 0 );
+    std::vector<NodeId>        q;
+    std::vector<std::uint32_t> localDepth;                                  // the walk always keeps depth; a caller that
+    std::vector<std::uint32_t>& depth = depthOut ? *depthOut : localDepth;  // wants it hands in the vector it lands in
+    depth.assign( N, 0 );
+    enqueueUnseen( seeds, 0, seen, depth, q );
+    const std::size_t nSeed = q.size();
+    const std::size_t head  = expandCallers( g, q, 0, nSeed, seen, depth );   // the seeds first: a direct caller and a first-hop node share d=1
+    enqueueUnseen( firstHop, 1, seen, depth, q );
+    expandCallers( g, q, head, SIZE_MAX, seen, depth );
     std::vector<NodeId> out( q.begin() + nSeed, q.end() );   // reached, minus the seeds
     std::sort( out.begin(), out.end() );
     return out;
@@ -13397,9 +13654,9 @@ inline std::vector<std::uint32_t> declinedSitesNaming( const Graph& g, std::span
     return sites;
 }
 
-// The callees answer's <stdm> line: of the declines `sources` made (declinedCallsMadeBy), the C++ calls named like a
-// standard container or string member on a receiver no rule tied to an in-tree class (Graph::stdMemberDeclines) — the names,
-// each once in table (byte) order and comma-joined, and how many calls. Empty on a graph with none, so every other answer
+// The callees answer's <stdm> line: of the declines `sources` made (declinedCallsMadeBy), the calls named in their
+// language's standard-member row on a receiver no rule tied to an in-tree class (Graph::stdMemberDeclines) — the names,
+// each once in flat-table order (kStdMemberRowStart: C++ row first, each row by byte) and comma-joined, and how many calls. Empty on a graph with none, so every other answer
 // keeps its bytes. The names are table literals (identifier characters only): neither dialect needs to escape them.
 struct StdMemberCallsMade
 {
@@ -13414,13 +13671,13 @@ inline StdMemberCallsMade stdMemberCallsMadeBy( const Graph& g, std::span<const 
         return out;
     }
     EXPECTS( std::is_sorted( g.stdMemberDeclines.begin(), g.stdMemberDeclines.end() ), "buildGraph sorts the declines after its resolve loop" );
-    std::vector<char> named( std::size( externalnames::kCppStdMemberNames ), 0 );
+    std::vector<char> named( kStdMemberRowStart[ kLangCount ], 0 );
     for( const NodeId s : sources )
     {
         const auto lo = std::lower_bound( g.stdMemberDeclines.begin(), g.stdMemberDeclines.end(), std::pair<NodeId, std::uint16_t>( s, 0 ) );
         for( auto it = lo; it != g.stdMemberDeclines.end() && it->first == s; ++it )
         {
-            ASSUME( it->second < named.size(), "the resolve loop records a kCppStdMemberNames index" );
+            ASSUME( it->second < named.size(), "the resolve loop records a kStdMemberNames flat index" );
             named[ it->second ] = 1;
             ++out.calls;
         }
@@ -13429,7 +13686,7 @@ inline StdMemberCallsMade stdMemberCallsMadeBy( const Graph& g, std::span<const 
     {
         if( named[ i ] != 0 )
         {
-            out.names.append( out.names.empty() ? "" : "," ).append( externalnames::kCppStdMemberNames[ i ] );
+            out.names.append( out.names.empty() ? "" : "," ).append( StdMemberGate::nameAt( std::uint16_t( i ) ) );
         }
     }
     ENSURES( out.names.empty() == ( out.calls == 0 ), "a named call and a listed name come together" );

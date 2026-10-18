@@ -15,6 +15,91 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — Go methods carry their receiver type as scope (#403, slice 9a)
+
+Go methods now carry their receiver type as scope (`sc=`), with `*` and type arguments stripped (`*Stack[T]` → `Stack`),
+and interface members carry their interface (a `type A = interface{…}` alias included). `Type::method` and `Type.method`
+selectors now work on `--callers`, `--callees`, `--path`, `--impact`, `--uses` and `--expand`; a bare name still answers
+every definition. On fzf, `--path=Matcher::Loop,Pattern::extendedMatch` was "endpoint not found" and is now a 5-hop chain.
+
+**One-time id change for Go.** The canonical id of a Go method or interface member is now `file::Type::method`, so:
+- quality-baseline and `.ripwire_quality_acks` rows, and `.ripwire_notes` pinned to a Go method, stop matching. Re-pin
+  them. `--notes` lists an old note with `dangling="1"`, and `--note-add` with the same target stores the new id;
+- same-named methods of different receiver types in one file are now separate map rows, not one `overloads=N` row (Go
+  has no overloading);
+- `--uses` prints the scoped id in `in_id=`, and `--expand` of a bare name lists each receiver's definition.
+
+Known floors: struct fields are not Go definitions, so nothing scopes to a struct; a member of an anonymous interface in
+a struct field scopes to the struct. Rust and Kotlin keep their own scope walkers; C++ and Python output is byte-identical.
+`kParserVer` moves (184 in this release, see the versions note).
+
+### Changed — a Rust call named like a standard collection, string or Option member binds no in-tree namesake by name (#405)
+
+The standard-member name gate is now one table with a row per language (`graph.h` `kStdMemberNames`). The C++ row is
+unchanged; a Rust row (`src/externalnames.h` `kRustStdMemberNames`, 40 names written from the Rust standard library
+documentation: `push`, `insert`, `iter`, `len`, `to_owned`, `unwrap` and the like, minus names in-tree types commonly
+define themselves, such as `next`, `get`, `map`, `clone`, `write`, `expect`, and trait methods in-tree types implement,
+such as `into_iter`, `extend`, `as_ref`, `borrow`) makes a Rust member call whose receiver no
+rule typed decline instead of binding every same-named in-tree method: no edge, counted in `declined_calls=`, named on
+the caller's `--callees` answer in a `<stdm>` line. A call the language itself proves (`self.iter()` inside the type
+that defines `iter`) keeps its edge. On rust-lang/mdBook, `--callers=iter` no longer lists six functions whose `.iter()`
+is on a `Vec` or a map, and `--callees=make_data` shows `<stdm n="insert,iter,push,to_owned" calls="72"/>` instead of
+three in-tree methods it never calls. Stated floor: Rust records no parameter, local or field type yet, so a receiver
+written as an in-tree type (`s: &mut Stack`, an extension-trait method on a foreign type, a call result) is declined too —
+counted and disclosed, not bound. Go keeps an empty row: `Len`, `Write`, `String` are methods in-tree types implement on
+purpose. The legend clauses now say "a standard-type member of its language". No cached content changes.
+
+### Fixed — a call with fewer arguments than an overload requires no longer lists that overload
+
+A three-argument call `canon( p, b, e )` listed both `canon` overloads under `--callees`, including the
+four-parameter one with no default that the call cannot reach. The
+resolver's arity filter dropped a candidate only for too MANY arguments; it now also drops one for too FEW: each
+definition records the fewest arguments a call can pass (its parameters minus the defaulted ones), and the resolver
+judges it on the minimum over the definition and every declaration of the same name and parameter count, so a C++
+default written only on a header prototype still keeps the out-of-line definition. Defaulted parameters are read
+from a per-language table (C++, Python, TypeScript, and Java with no default form); a variadic, implicit-self,
+TypeScript `this:` or decorated Python definition is never dropped this way, and neither is any candidate in a
+language without a row — JavaScript (a call may pass fewer arguments), Swift (trailing closures), Kotlin and the rest.
+A TypeScript arrow or function expression whose binding carries a type annotation or a cast, or whose parameters are
+untyped (contextually typed), and a Python lambda, get no minimum: their optional parameters live in a type elsewhere.
+The too-few check runs after the too-many check and only when it leaves a candidate, so it never brings back an
+overload the too-many check dropped. A call with a spread, splat or C++ pack expansion (`f( t... )`) has an unknown
+argument count. Fewer calls stay ambiguous, so `ambiguous=` and `graph_ambiguous=` drop. Two residual limits stay: a
+C/C++ argument that is a macro expanding to several arguments is counted as one, and a default written only on a
+declaration ripwire does not index (a `.inl`/`.ipp` header, a header outside the tree) is not seen. `kParserVer` and `kCacheVersion` move
+(a definition record gains `paramsMin`; 184 and 34 in this release, see the versions note). A cached definition whose
+minimum exceeds its parameter count is refused and that file reparses (`test/cachefuzzcheck.sh` Part 3). Gate: `test/aritycheck.sh` §3b.
+
+### Changed — `--impact` of a type starts from the symbols that name it
+
+`--impact` walked call edges only, so a struct (which has no callers) answered `reaches="0"` however widely it was used,
+and a class never listed the file defining it. When the selector names a class, struct, named type or interface, the
+walk now also starts from every symbol that names the type in a type position — a declaration, parameter, field,
+return type, cast, template argument, base or implements clause (TS/JS also `instanceof` and `extends`; Python
+annotations and base classes) — read by the parser, for C, C++, ObjC, Go, Rust, Java, TS/JS and Python. Those symbols
+sit at `d="1"` beside the direct callers and their callers follow. The per-file `<files>` rollup rides on every type
+impact: `rf d="0"` is the defining file, `via="type"` marks a file reached only through a type mention (`by_type=K`
+when K of its symbols are), `type_users=` counts the seeded symbols, `type_defs=K` says when K type definitions share
+the name (mentions are matched by name), and with no `--limit` the listing holds every `d="0"` file and every `d="1"` file a type mention reaches, up to 200.
+Every definition inside a Rust `impl` block whose header names the type is a user (rustfmt puts the header on its own
+line, where no definition sits), and a name reached through a standard-library path (Rust `std::`, `core::`, `alloc::`;
+C++ `std::`) is that library's type, so a local `Error` or `vector` no longer counts `std::io::Error` or `std::vector`
+users. `--format=columnar`, which carries no `<files>` rollup, marks each row reached only through a type mention in a
+`<by_type>` column (1; a call-reached row is 0), so a depth-1 type user never reads as a direct caller.
+Function impacts are byte-identical. Other languages record no type mentions yet (a floor, stated in the legend).
+Gate: `test/impacttypecheck.sh`.
+
+### Changed — `--callers` and `--callees` serve up to 50 rows whole, and a capped `--callers` page names the next page
+
+With no `--limit`, a call hierarchy of 41 to 50 rows is served whole instead of cut at 40 (`src/pageview.h`
+`kCallHierarchyBandMax`, 40 + 40/4); above 50 the 40-row window holds. A cut `--callers` root's `next=` is now the next
+page (`--callers=SYM --offset=40`, the selector quoted as one argument, `--limit` and `--format=columnar` replayed), and
+the `--uses` follow-up it used to name moves to `uses_next=`; the last page, an uncut answer and `--callees` (whose
+`next=` stays `--expand`) are unchanged. MCP `find_symbol` and `find_referencing_symbols` window each array the same way,
+and `find_referencing_symbols` carries the page in `next` and the uses follow-up in `uses_next`; a `--json` page carries the
+same pair as `next` (with `--json` replayed) and `uses_next` keys. `--impact`, `--owners`
+and `--edit-check` windows keep the plain 40. Gate: `test/neighbourcapcheck.sh` arms 14-21.
+
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
 Ruby's `include`/`extend`/`prepend` are now captured by `queries/ruby/tags.scm` as `@reference.mixin` and turned into
@@ -23,7 +108,7 @@ Ruby-only `captureRubyMixinBases` and its `captureIncludes` call site are gone; 
 the C++ reader keeps the two guards a tags pattern cannot state (the directive's text, and its class-body position).
 Output is byte-identical: the map, `--deps --limit=100000`, `--skipped`, `--callers`, `--callees`, `--impact` and
 `--uses` all match the base build over a real Rails corpus and the Ruby fixtures, and `--lego` lists the same
-implementors. `kParserVer` moves (the extraction path changed; 176 in this release, see the versions note).
+implementors. `kParserVer` moves (the extraction path changed; 184 in this release, see the versions note).
 
 ### Fixed — a function stored through `??`, `||`, `&&`, `or` or `and` is a value use
 
@@ -33,7 +118,7 @@ value-reference capture walked parentheses and ternary branches but stopped at a
 value-preserving operators — JS/TS `??`, `||`, `&&` and the logical assignments `??=`, `||=`, `&&=`; Python `or`,
 `and` — in every position it already read (assignment, return, argument, parameter default). The left operand of
 `&&`/`and` only decides and stays no row; C/C++ and Go `||`/`&&` yield a truth value and stay no row. Parser version
-176 in this release (caches re-parse once; see the versions note). Gate: `test/recallshapecheck.sh` arms OP1–OP17.
+184 in this release (caches re-parse once; see the versions note). Gate: `test/recallshapecheck.sh` arms OP1–OP17.
 
 ### Added — `--grep` names what a hit's variable carries and who reads it
 
@@ -65,7 +150,7 @@ edge, no `via="name"` hedge and no count: a `[]` or `__getitem__` definition els
 name. It does NOT mean every subscript of an in-tree class is found: a Ruby instance variable receiver is not typed, a
 compound assignment (`h[ k ] ||= v`) is recorded as the read form, and `del o[ k ]`, a multiple-assignment target and an
 annotation record nothing. On rake 93 callers of `[]` appear; on textual 42 of `__getitem__`. C++ `operator[]` could
-share the path and is not armed. `--uses` lists no subscript site. Parser version 176 in this release (see the versions note). Gate:
+share the path and is not armed. `--uses` lists no subscript site. Parser version 184 in this release (see the versions note). Gate:
 `test/subscriptopcheck.sh`.
 
 ### Added — `--lego=M` lists Ruby's main object when a file's top level mixes M in
@@ -245,15 +330,20 @@ server, when the cgroup's charge is the larger reading: restarting the server do
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 167 → 176: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
+`kParserVer` 167 → 184: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
 `??`/`||`/`&&`/`or`/`and` carried 173 on its branch, the Ruby/Python subscript references and Ruby's main-object mixins
-174 (file tag 175), and the Elixir quote live holes (#380) 145 on theirs. They land together at 176, above every number a
-branch build has used, so no cache such a build wrote is read as this release's; its full-use file tag is 177.
-`kCacheVersion` 31 → 32: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
-numbered 9 on #380's branch, which predates the subscript role), and the binding kind byte one (Ruby's main-object mixin); no record changes shape. `kQSnapCacheScheme` 20 → 21:
-the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls), so the dead kind can
+174 (file tag 175), and the Elixir quote live holes (#380) 145 on theirs; they landed together at 176 (file tag 177). The
+minimum-arity field (`paramsMin`) carried 178 (file tag 179) on its branch, the Go receiver scope (#403) 182 (file tag 183), and
+a receiver-typing branch not in this release 180 (file tag 181). This release is 184, above every number a branch build has used,
+so no cache such a build wrote is read as this release's; its full-use file tag is 185.
+`kCacheVersion` 31 → 34: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
+numbered 9 on #380's branch, which predates the subscript role), and the binding kind byte one (Ruby's main-object mixin) (32);
+a definition record gained `paramsMin`, the fewest arguments a call can pass (33 on its branch, and on another branch for a
+different layout, so this release takes 34). `kQSnapCacheScheme` 20 → 22:
+the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls, 21), and a Rust call
+named like a standard-type member no longer binds an in-tree namesake (22), so the dead kind can
 differ for an unchanged commit. Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=f83935bb22c0b728 entries=885`.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=03dafd43056d9967 entries=892`.
 
 
 ## [0.6.7] — 2026-10-11

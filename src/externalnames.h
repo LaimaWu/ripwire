@@ -276,7 +276,8 @@ inline constexpr std::string_view kGoBuiltinNames[] = {
 //       .select{|n| n =~ /\A[a-z_][A-Za-z0-9_]*[?!=]?\z/}.uniq.sort'
 //     233 names.
 // NO TABLE HERE for the other indexed languages — each reason is recorded in graph.h beside BuiltinMethodGate and
-// StdMemberGate. C++ has its own table below (kCppStdMemberNames), read by a different rule: StdMemberGate.
+// StdMemberGate. C++ and Rust have their own tables below (kCppStdMemberNames, kRustStdMemberNames), read by a different
+// rule: StdMemberGate (graph.h kStdMemberNames holds one row per language).
 inline constexpr std::string_view kPythonBuiltinMethodNames[] = {
     "add", "append", "capitalize", "casefold", "center", "clear", "copy", "count", "decode", "difference", "difference_update", "discard", "encode",
     "endswith", "expandtabs", "extend", "find", "format", "format_map", "fromhex", "fromkeys", "get", "hex", "index", "insert", "intersection",
@@ -350,6 +351,30 @@ inline constexpr std::string_view kCppStdMemberNames[] = {
     "starts_with", "subspan", "substr", "try_emplace", "upper_bound", "use_count", "value_comp", "value_or"
 };
 
+// ── THE RUST STANDARD-MEMBER TABLE (graph.h kStdMemberNames' Rust row; gate test/stdmembergatecheck.sh arm R). The same
+// defect in Rust: `v.push( x )` on a `&mut Vec<T>` parameter, `m.insert( k, v )` on a map, `xs.iter()` bound by NAME to an
+// in-tree `push` / `insert` / `iter` (on rust-lang/mdBook, 6 of the 8 printed callers of `iter` were `.iter()` on a Vec or a
+// HashMap). Rust has no inheritance and these std types are concrete, so a receiver of std type never dispatches into the
+// tree; a trait method an in-tree type implements is the other case, and every such name is left OUT below.
+// PROVENANCE: written from the Rust standard library documentation's inherent methods of Vec / slice, String / str,
+// HashMap / BTreeMap / HashSet and their Entry, Option / Result, and the Iterator / ToOwned / ToString trait methods those
+// types are almost always reached through — MINUS every name an in-tree type commonly defines for itself: trait methods
+// in-tree types implement on purpose (next, read, write, flush, clone, fmt, from, into, default, eq, cmp, hash, drop, deref,
+// index, and the conversion/collection traits into_iter extend as_ref as_mut borrow borrow_mut — over 311 crates of
+// crates.io source their in-tree definitions are mostly trait impls: into_iter 195 of 201, extend 87/106, as_ref 180/226,
+// as_mut 26/43, borrow_mut 6/8, and borrow is defined in 32 crates (95 defs, RefCell-style wrappers); rust-lang/mdBook
+// defines none of the six, so dropping them moved no row there), generic verbs (get, set, map, remove, clear, take,
+// replace, find, filter, run, build, lock, join, send, close, first, last, sort), and `expect` (a parser's own
+// `expect( token )` is common). Unlike C++ the receiver exception has no Rust written type to read yet (no parameter,
+// local or field type is recorded), so a receiver written as an in-tree type is declined too: graph.h's stated floor.
+// 40 names; sorted by byte.
+inline constexpr std::string_view kRustStdMemberNames[] = {
+    "and_then", "as_bytes", "as_slice", "as_str", "chars", "collect", "contains", "contains_key", "drain", "ends_with", "entry",
+    "extend_from_slice", "get_mut", "insert", "is_empty", "is_none", "is_some", "iter", "iter_mut", "keys", "len", "ok_or",
+    "or_insert", "or_insert_with", "pop", "push", "push_str", "retain", "starts_with", "to_lowercase", "to_owned", "to_string",
+    "to_uppercase", "to_vec", "trim", "unwrap", "unwrap_or", "unwrap_or_default", "unwrap_or_else", "values"
+};
+
 // The standard templates whose `->` reaches their FIRST template argument, so a `->` call through a declaration written
 // `std::unique_ptr<ns::List>` / `std::shared_ptr<…>` / `std::optional<…>` may be a member of that argument (graph.h
 // StdMemberGate::stdArrowPointee reads the declaration's recorded text). std::weak_ptr and std::reference_wrapper have no
@@ -377,7 +402,7 @@ static_assert( isStrictlySortedTable( kPythonBuiltinMethodNames ), "kPythonBuilt
 static_assert( isStrictlySortedTable( kJsBuiltinMethodNames ), "kJsBuiltinMethodNames must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kRubyBuiltinMethodNames ), "kRubyBuiltinMethodNames must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kCppStdMemberNames ), "kCppStdMemberNames must be strictly sorted (binary search)" );
-static_assert( std::size( kCppStdMemberNames ) <= 0xFFFFu, "StdMemberGate packs a kCppStdMemberNames index into 16 bits" );
+static_assert( isStrictlySortedTable( kRustStdMemberNames ), "kRustStdMemberNames must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kCppStdArrowTemplates ), "kCppStdArrowTemplates must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kCppStdElementFirstArg ), "kCppStdElementFirstArg must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kCppStdElementSecondArg ), "kCppStdElementSecondArg must be strictly sorted (binary search)" );

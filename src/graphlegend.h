@@ -581,6 +581,9 @@ inline constexpr const char* kCallHierarchyLegendCalleesOnly =
 // one the emitter printed, and callHierarchyLegendOpen repeats that decision rather than re-deriving it.
 inline constexpr const char* kCallersNextSelectorLegend = "next= is the one pasteable follow-up (the uses verb on this selector: the call sites). ";
 inline constexpr const char* kCallersNextBareNameLegend = "next= is the one pasteable follow-up (the uses verb on the called name: all same-named definitions' call sites, including sites bound to other definitions, because a declined call names no single definition). ";
+// L8 (train 29): the same two readings when next= is the NEXT PAGE of a capped callers answer and the uses verb rides as uses_next=.
+inline constexpr const char* kCallersNextPageLegend = "next= is the one pasteable follow-up: the next page of this capped answer (the same call at next_offset=); uses_next= is the uses verb on this selector (the call sites). ";
+inline constexpr const char* kCallersNextPageBareNameLegend = "next= is the one pasteable follow-up: the next page of this capped answer (the same call at next_offset=); uses_next= is the uses verb on the called name (all same-named definitions' call sites, including sites bound to other definitions, because a declined call names no single definition). ";
 
 // The tested lens's reading for the form a document takes: an XML row omits a false tested=, the columnar array prints 0.
 // ONE choice for --callers/--callees (callHierarchyLegendOpen below) and --impact (verbs_navigate.h runImpact), so the verbs
@@ -592,9 +595,10 @@ inline constexpr const char* testedLensLegend( bool isColumnar ) noexcept
 
 // The composed opener, one call for the caller — keeps the wantCallers/callees branch out of
 // runCallHierarchy (already this file's largest dispatcher) rather than adding a ternary at the call site.
-inline std::string callHierarchyLegendOpen( bool wantCallers, bool nextUsesBareName, bool isColumnar )
+inline std::string callHierarchyLegendOpen( bool wantCallers, bool nextUsesBareName, bool isColumnar, bool nextIsPage = false )
 {
-    const char* const callersNextClause = nextUsesBareName ? kCallersNextBareNameLegend : kCallersNextSelectorLegend;
+    const char* const callersNextClause = nextIsPage ? ( nextUsesBareName ? kCallersNextPageBareNameLegend : kCallersNextPageLegend )
+                                                     : ( nextUsesBareName ? kCallersNextBareNameLegend : kCallersNextSelectorLegend );
     const char* const testedClause = testedLensLegend( isColumnar );
     // F-02: the blind-spot clause rides with hop_tested=/hop_untested=, which both forms always carry.
     // P3 (L7): next= defined where the reader meets it — callers hand over the SITES (the uses verb on the same
@@ -643,11 +647,11 @@ inline constexpr const char* kDeclinedCallsLegend =
 // answer on a tree the gate never touched keeps its bytes.
 inline constexpr const char* kDeclinedCallsGateClause =
     "It also counts a call named like a builtin-type method (dict.get, list.append) whose bound definitions' classes the caller's file never names. ";
-// The C++ standard-member gate's declines (graph.h StdMemberGate) ride the same count, with ONE definition possible and in
+// The standard-member gate's declines (graph.h StdMemberGate, one name row per language) ride the same count, with ONE definition possible and in
 // the caller's own file or directory too; charged only where that gate declined at least one call in the graph
 // (Graph::stdMemberDeclinedCalls), so a tree it never touched keeps its bytes. What it does NOT mean is in the same breath.
 inline constexpr const char* kDeclinedCallsStdClause =
-    "It also counts a C++ call named like a member of a standard container, string, optional or smart pointer (v.push_back, s.size) on a receiver no rule tied to an in-tree class: the standard library's own member may be the one called, so no in-tree namesake is bound; it is not a claim that the receiver is a standard type. ";
+    "It also counts a call named like a standard-type member of its language (per-language name lists: C++ containers, strings, optional, smart pointers, v.push_back, s.size; Rust collections, strings, Option, Result, v.push, xs.iter) on a receiver no rule tied to an in-tree class: the standard library's own member may be the one called, so no in-tree namesake is bound; it is not a claim that the receiver is a standard type, and a Rust receiver written as an in-tree type is declined too (Rust records no receiver type yet). ";
 inline constexpr const char* kInertDeclinedCallsClause =
     "In the callees form it also counts ordinary Elixir call candidates in inert quote AST after unquote/unquote_splicing re-entry. "
     "These sites have no uses rows or target candidates, so they contribute no caller or impact declined_calls= candidate list. ";
@@ -656,7 +660,7 @@ inline const char* declinedCallsGateLegend( bool on ) noexcept { return on ? kDe
 inline const char* declinedCallsStdLegend( bool on ) noexcept { return on ? kDeclinedCallsStdClause : ""; }
 // The callees answer's <stdm> line (graph.h stdMemberCallsMadeBy): rides exactly when the line does.
 inline constexpr const char* kStdMemberCallsLegend =
-    "<stdm n= calls=>: of declined_calls=, the calls these definitions make that are named like a member of a C++ standard container, string, optional or smart pointer (n=, each name once) on a receiver no rule tied to an in-tree class; calls= how many. No edge and no row: the standard library's own member may be the one called, and so may an in-tree namesake. It does not list every standard-library call the body makes: a name with no in-tree definition never had a candidate to decline. ";
+    "<stdm n= calls=>: of declined_calls=, the calls these definitions make that are named like a standard-type member of their language (C++ containers, strings, optional, smart pointers; Rust collections, strings, Option, Result; n=, each name once) on a receiver no rule tied to an in-tree class; calls= how many. No edge and no row: the standard library's own member may be the one called, and so may an in-tree namesake. It is not a claim that the receiver is a standard type, and a Rust receiver written as an in-tree type is listed too (Rust records no receiver type yet). It does not list every standard-library call the body makes: a name with no in-tree definition never had a candidate to decline. ";
 inline const char* stdMemberCallsLegend( bool on ) noexcept { return on ? kStdMemberCallsLegend : ""; }
 // --test-gate's own short form: the same attribute and unit, sized for a verb whose legend has an absolute byte budget
 // (test/testgatelegendbudgetcheck.sh), so it defines the one form it emits rather than all three.
@@ -667,7 +671,7 @@ inline std::string declinedCallsLegendWithGate( bool on, bool gateDeclined, bool
 {
     return std::string( declinedCallsLegend( on ) ) + declinedCallsGateLegend( on && gateDeclined ) + ( on && inertDeclined ? kInertDeclinedCallsClause : "" );
 }
-// The same, plus the C++ standard-member gate's sentence where that gate declined in this graph (graph.h StdMemberGate).
+// The same, plus the standard-member gate's sentence where that gate declined in this graph (graph.h StdMemberGate).
 inline std::string declinedCallsLegendWithGates( bool on, bool gateDeclined, bool stdDeclined, bool inertDeclined = false )
 {
     return declinedCallsLegendWithGate( on, gateDeclined, inertDeclined ) + declinedCallsStdLegend( on && stdDeclined );
@@ -701,7 +705,7 @@ inline constexpr const char* kDeclinedSitesCallersForm =
 inline constexpr const char* kDeclinedSitesSideClause =
     "gate=side: a Ruby call whose in-reach definitions answer on the other side of self. ";
 inline constexpr const char* kDeclinedSitesNameGateClause =
-    "gate=builtin|std: declined by the builtin-method or the C++ standard-member name gate. ";
+    "gate=builtin|std: declined by the builtin-method or the standard-member name gate (per-language name lists, C++ and Rust). ";
 inline constexpr const char* kDeclinedSitesOfDefCallees =
     "of_def=K on a <dc>: the definition (ix=K) making the call, a fact. ";
 inline constexpr const char* kDeclinedSitesOfDefCallers =
@@ -881,8 +885,43 @@ inline constexpr const char* kImpactDepthColumnarLegend =
 // fix27: `hedged` = a listed rf row carries via= or by_name= (a multi-definition selector only); its sentence rides then.
 // for-body-slot FIX1 R1: `importersCut` = the root carries importers_next= (sizeImportTier: the <f> listing was cut). Its
 // definition rides then, unless the umbrella sentence (which defines it too) already does — legendcoveragecheck (A).
-inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged = false, bool importersCut = false )
+// L7 (typeuse.h): what the <files> element says about the type tier — `typed` = of= is a type and its tier ran (the rollup
+// rides on every type impact, cut or not); typeDefs > 1 / typeCapped exactly when it carries type_defs= / type_capped=.
+struct ImpactRollupTypeClauses
 {
+    bool typed = false;
+    std::size_t typeDefs = 0;
+    bool typeCapped = false;
+};
+
+inline std::string impactTypeRollupLegend( const ImpactRollupTypeClauses& t )
+{
+    std::string out = "TYPE IMPACT (of= is a class, struct, named type or interface): the walk also starts from every symbol that NAMES it, "
+                      "read by the parser in a type position (a declaration, parameter, field, return type, cast, template argument, base or "
+                      "implements clause; TS/JS also instanceof and extends; Python annotations and base classes; every definition inside a Rust impl block "
+                      "whose header names it), so d=1 holds those beside "
+                      "its callers and their callers follow; type_users= counts them. rf d=\"0\": the file defining of=; via=\"type\": every "
+                      "reached symbol there is reached only through a type mention (with syms=\"0\": the file names the type outside every "
+                      "indexed definition); by_type=K: K of its syms= are. With no limit= the listing holds every d=\"0\" file and every d=\"1\" file a type mention reaches (up to 200), then cuts as above. A mention is matched by its spelled name (a qualified one by its last segment); a name reached through a "
+                      "standard-library path (Rust std::, core::, alloc::; C++ std::) is that library's type and is skipped; inside a generic that declares a "
+                      "type parameter of that name (C++, Rust, TS, Go, Java) the name is the parameter and is skipped. Captured for C, C++, ObjC, "
+                      "Go, Rust, Java, TS/JS and Python; other languages add no type users, nor do a Python string annotation (\"Cell\"), "
+                      "a qualified Python base (mod.Base) or a Go type that satisfies an interface implicitly (no clause names it): floors. ";
+    if( t.typeDefs > 1 )
+    {
+        out += "type_defs=K: K indexed type definitions share that name, so a type row may depend on a namesake. ";
+    }
+    if( t.typeCapped )
+    {
+        out += "type_capped=\"1\": the type-mention walk stopped at its 50000-match budget, which no flag raises; the type rows are a floor. ";
+    }
+    return out;
+}
+
+inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged = false, bool importersCut = false,
+                                       const ImpactRollupTypeClauses& type = {} )
+{
+    const bool typed = type.typed;
     std::string out;
     if( importersCut && !umbrella )
     {
@@ -891,8 +930,13 @@ inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged =
     }
     if( rollup )
     {
-        out += "FILES (only beside a cut symbol window): the WHOLE reach set by file. files= in all, shown_files= listed; rf "
+        out += typed ? "FILES (beside a cut symbol window, and on every type impact): " : "FILES (only beside a cut symbol window): ";
+        out += "the WHOLE reach set by file. files= in all, shown_files= listed; rf "
                "syms= reached symbols there, d= fewest hops; by d=, syms=, path; files_capped=\"1\" with files_next= (lists all) when cut. ";
+    }
+    if( rollup && typed )
+    {
+        out += impactTypeRollupLegend( type );
     }
     if( rollup && hedged )
     {
@@ -910,6 +954,17 @@ inline std::string impactRollupLegend( bool rollup, bool umbrella, bool hedged =
 inline const char* impactDepthLegend( bool columnar ) noexcept
 {
     return columnar ? kImpactDepthColumnarLegend : kImpactDepthLegend;
+}
+// L7 (CodeRabbit 4303967681): the columnar form of a type impact has no <files> rollup, so its depth-1 rows would read as
+// direct callers. The <by_type> column marks the rows reached only through a type mention; said exactly when it rides.
+// Emitted INSIDE an XML comment: no double hyphen.
+inline constexpr const char* kImpactByTypeColumnarLegend =
+    "the by_type column (present when a shown row has it): 1 = that row is reached only through a type mention, so at depth 1 "
+    "it NAMES of= in a type position (a declaration, parameter, field, return type, base) and does not call it; deeper, it "
+    "calls such a row. 0 = some call chain reaches of=. ";
+inline const char* impactByTypeColumnarLegend( bool present ) noexcept
+{
+    return present ? kImpactByTypeColumnarLegend : "";
 }
 
 // ── #220 part 1 — imports_unresolved=, the FILE graph's own gauge (test/depsprecisecheck.sh, the #220 arms) ─────────

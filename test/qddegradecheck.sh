@@ -284,6 +284,25 @@ else
     no "(E2) rc=$e2rc (want $( degrc "$WORK/E2.xml" )) kinds_skipped=$( attr "$WORK/E2.xml" kinds_skipped ) unpressured defect rows=$( rows "$WORK/E2a.xml" defect-shape | grep -c . )"
 fi
 
+# (E3) langfacts-fold (train 29): which changed file extensions need the base's whole macro set. Only a C++-family file does
+# (.cc / .hpp / .h read as C++): a changed C file (.c) or Objective-C file (.m) leaves defect-shape local under P0.
+# Pinned as the answer today; src/verbs_quality.h reads it from the language-facts row (defectShapeNeedsMacroSet).
+for ext in c m h cc hpp; do
+    FX3="$WORK/fx3$ext"; rm -rf "$FX3"; mkdir -p "$FX3/src" "$FX3/py"; git -C "$FX3" init -q
+    for k in 1 2 3 4 5 6; do
+        printf 'int keep_%s( int v ) { return v + %s; }\n' "$k" "$k" >"$FX3/src/u$k.cpp"
+        printf 'def keep_%s(v):\n    return v * %s\n' "$k" "$k" >"$FX3/py/u$k.py"
+    done
+    printf 'int one( int v ) { return v; }\n' >"$FX3/src/x.$ext"; g "$FX3" add -A; g "$FX3" commit -qm base
+    printf 'int one( int v ) { return v + 1; }\n' >"$FX3/src/x.$ext"; g "$FX3" add -A; g "$FX3" commit -qm target
+    ( cd "$FX3" && TMPDIR="$WORK/tmp" RIPWIRE_TEST_MEMGUARD=crawl:12 "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache >"$WORK/E3.xml" 2>/dev/null )
+    want="$WHOLE_KINDS"; why="defect-shape stays local"
+    case "$ext" in c|m) ;; *) want="dead-code,defect-shape,duplication,new-clone-of-reused-helper"; why="defect-shape needs the whole macro set" ;; esac
+    if [ "$( attr "$WORK/E3.xml" kinds_skipped )" = "$want" ]; then
+        ok "(E3) P0, a changed .$ext file: kinds_skipped=\"$want\" ($why)"
+    else no "(E3) P0, a changed .$ext file: kinds_skipped=\"$( attr "$WORK/E3.xml" kinds_skipped )\", want \"$want\""; fi
+done
+
 # ── (F) even the changed files do not fit ──────────────────────────────────────────────────────────────────────
 qd RIPWIRE_TEST_MEMGUARD=hard:1 "$BIN" . --quality-delta=HEAD~1..HEAD --no-cache; FRC=$RC
 if [ "$FRC" = 5 ] && [ ! -s "$WORK/o" ] && [ "$( grep -c '^ripwire: [^c]' "$WORK/e" )" = 1 ] \

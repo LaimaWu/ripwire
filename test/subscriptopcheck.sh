@@ -247,6 +247,62 @@ def annotated(x: "dict[str, int]") -> None:
     return y
 PY
 
+# langfacts-fold (train 29): two more files, so the lines above stay where the arms read them
+cat > "$RB/scoped.rb" <<'RUBY'
+module Outer
+  class Cache
+    def self.[](key)
+      key
+    end
+  end
+end
+
+class Cache
+  def self.[](key)
+    key
+  end
+end
+
+class ScopedUser
+  def pick(name)
+    Outer::Cache[name]
+  end
+
+  def pick_top(name)
+    ::Cache[name]
+  end
+
+  def pick_bare(name)
+    Cache[name]
+  end
+
+  def pick_call(name)
+    build_cache[name]
+  end
+
+  def build_cache
+    Cache.new
+  end
+end
+RUBY
+cat > "$PY/callres.py" <<'PY'
+class Reg:
+    def __getitem__(self, key):
+        return key
+
+
+def make():
+    return Reg()
+
+
+def use_callres():
+    return make()["z"]
+
+
+def use_attr(reg: Reg):
+    return reg.items["k"]
+PY
+
 line_of(){ grep -n -- "$2" "$1" | head -1 | cut -d: -f1; }
 RGET=$( line_of "$RB/registry.rb" 'def \[\](name)' )
 RSET=$( line_of "$RB/registry.rb" 'def \[\]=(name, value)' )
@@ -376,6 +432,25 @@ neg_py class_side  q6 "a class-object subscript runs the metaclass"
 neg_py by_cls      q7 "cls[ k ] in a classmethod is the class object too"
 neg_py multi       q8 "floor: a multiple-assignment target records nothing"
 neg_py annotated   q9 "an annotation is a type, not a value"
+
+echo "== langfacts-fold pins: the subscript record's two Ruby-only rules (src/ingest_binds.h subscriptOperatorRef), as they answer today"
+# A Ruby receiver the shape rules cannot classify stays a FieldOfVar site (the typing walk may still type it); a Python one
+# (a call result) records nothing. A Ruby constant receiver keeps its path as written, so a scoped constant reaches its own
+# class's def self.[] and a bare or top-level one the top-level class's.
+rows_are(){ [ "$( grep -c 'n="\[\]"' "$DIR/$1.rows" )" = 1 ] && has_row "$1" '[]' "$2" && ! grep -q 'prov=\|via=' "$DIR/$1.rows"; }
+for trip in pick:lf1:3:"Outer::Cache[ k ] reaches Outer::Cache.[]" pick_top:lf2:10:"::Cache[ k ] reaches the top-level Cache.[]" pick_bare:lf3:10:"Cache[ k ] reaches the top-level Cache.[]"; do
+    IFS=: read -r nm tg ln what <<<"$trip"
+    if callees "$RB" "$nm" "$tg"; then
+        if rows_are "$tg" "scoped.rb:$ln"; then ok "LF R $what (scoped.rb:$ln, one row, proven)"
+        else no "LF R $what: $( tr '\n' ' ' < "$DIR/$tg.rows" )"; fi
+    fi
+done
+if callees "$RB" pick_call lf4; then
+    if no_op_row lf4; then ok "LF R build_cache[ k ]: a call-result receiver makes no []-edge (the call to build_cache is the only row)"
+    else no "LF R build_cache[ k ]: $( tr '\n' ' ' < "$DIR/lf4.rows" )"; fi
+fi
+neg_py use_callres lf5 "a call result (make()[ k ]) in Python: the receiver cannot be shaped, so nothing is recorded (Ruby keeps such a site)"
+neg_py use_attr    lf6 "a field of a typed parameter (reg.items[ k ]): no edge"
 
 echo "== the site is a use only as the call it is (--uses lists no subscript rows)"
 "$BIN" "$PY" --uses=__getitem__ --no-cache > "$DIR/u.xml" 2>/dev/null; urc=$?

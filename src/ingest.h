@@ -670,6 +670,11 @@ struct AstQueryGroup
     // Without them the legacy contract holds for that group: a refused or undecided predicate filters NOTHING.
     std::vector<std::string>*        regexRefusedOut   = nullptr;
     AstRegexUndecided*               regexUndecidedOut = nullptr;
+
+    // L7 (typeuse.h): a file whose bytes do not contain this text is not parsed for this group — a literal every hit must
+    // spell (an #eq? name). Empty (the default) ⇒ every file, as before. The walk is shared, so a file is skipped only
+    // when EVERY group names a mustContain and the file holds none of them.
+    std::string_view                 mustContain {};
 };
 
 // keptBytesOut (optional): the walk is where the corpus gets READ, so a pass that runs after it and needs

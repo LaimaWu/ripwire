@@ -3,7 +3,7 @@
 // spellings (XML, the CLI's --json, the MCP twins' JSON), shared by --callers/--callees (callhierarchy.h selects the
 // records once for both surfaces) and --safe-delete.
 //
-// THE GAP IT CLOSES. A declined call (tier 3, the builtin-method and C++ standard-member name gates, Ruby's side cut and
+// THE GAP IT CLOSES. A declined call (tier 3, the builtin-method and standard-member name gates, Ruby's side cut and
 // `new`) gets no edge, and declined_calls= counted it without naming it: "what does doPackage call" missed
 // `pkg.Package( info, f )` through an interface value, "who calls TaskManager#define_task" missed every test that calls
 // it on an untyped receiver. buildGraph now keeps one record per declined call (graph.h Graph::declinedSite*), and these

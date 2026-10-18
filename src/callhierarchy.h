@@ -91,7 +91,7 @@ struct CallHierarchyRows
     std::string         crossKind;            // cross_kind= value ("fn:1,method:10"), "" unless defs span 2+ kinds
     std::size_t         declinedIface = 0;   // callers only: declinedIfaceCallsNaming below, the root's declined_iface=
     ValueRefRows        valueRefs;     // reference-as-value round: <vr> rows, never in `rows` or any count above
-    StdMemberCallsMade  stdCalls;      // callees only: of declinedCalls, the C++ standard-member ones (graph.h stdMemberCallsMadeBy)
+    StdMemberCallsMade  stdCalls;      // callees only: of declinedCalls, the standard-member ones (graph.h stdMemberCallsMadeBy)
     OneHopAttribution   attr;          // attrib-multidef (defattrib.h): the definition groups + each row's ties, parallel to `rows`
     // lane declined-sites (declinedsites.h): the records behind declinedCalls, in served order (callers file-first, callees
     // file and line) — the <dc> rows, never in `rows` or any count above; uncut, declinedSites.size() == declinedCalls.

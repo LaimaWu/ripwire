@@ -243,6 +243,7 @@ struct ColumnarRowExtras
     const std::string*                           defRows  = nullptr;
     const std::vector<char>*                     splitArm = nullptr;
     const std::string*                           tailRows = nullptr;   // XML rows kept verbatim after </cols> (lane declined-sites: <dc>)
+    const std::vector<char>*                     byType   = nullptr;   // L7 --impact: the dense 0/1 `<by_type>` column (reached only through a type mention), present-only
 };
 inline std::string columnarExtraFields( const ColumnarRowExtras& extras )
 {
@@ -253,6 +254,7 @@ inline std::string columnarExtraFields( const ColumnarRowExtras& extras )
     }
     fields += extras.ofDef != nullptr ? ",of_def" : "";
     fields += columnarViaPresent( extras.splitArm ) ? ",split" : "";
+    fields += columnarViaPresent( extras.byType ) ? ",by_type" : "";
     return fields;
 }
 // the of_def column: each row's tokens, comma-separated rows (a token holds no comma)
@@ -302,6 +304,10 @@ inline void emitColumnarOptionalColumns( std::FILE* out, const IngestResult& ing
     if( columnarViaPresent( extras.splitArm ) )
     {
         emitColumnarFlagColumn( out, "split", rows.size(), [ & ]( std::size_t i ) { return i < extras.splitArm->size() && ( *extras.splitArm )[ i ] != 0; } );
+    }
+    if( columnarViaPresent( extras.byType ) )
+    {
+        emitColumnarFlagColumn( out, "by_type", rows.size(), [ & ]( std::size_t i ) { return i < extras.byType->size() && ( *extras.byType )[ i ] != 0; } );
     }
 }
 

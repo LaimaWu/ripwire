@@ -36,6 +36,21 @@
 #       equality check is re-run against that copy, proving assertion (1) can actually FAIL and is not
 #       comparing two accidentally-always-equal sets.
 #
+# L7 (type-use impact). A TYPE seed's --impact (its <files> carries type_users=) also walks from the symbols that NAME
+# the type, which --test-gate's call-edge blast radius does not, so its rows may be ones <u> lacks. Assertion (1) is
+# split so that never loosens the FUNCTION path:
+#   (1-fn)   EXACT, no exemption: the untested rows of the FUNCTION seeds alone (no type_users=) are a subset of <u>;
+#            `missing` (<u> rows no seed printed) is still computed on the full union.
+#   (1-type) TIGHT, per seed and per file: a row (name, F) <u> lacks is excused only when THAT type seed printed it, its
+#            uncut rollup (files_capped="0") marks F via="type" or by_type=K, and the seed excuses at most K rows in F
+#            (syms= for via="type"). Every other extra row FAILs; a function seed's extra row is never excused by a type seed.
+#   (1-mention) the type users themselves (a type seed's d=1 rows in F) are at most the number of times F spells the
+#            name — an independent bound, so a type tier that names more users than the source has mentions FAILs
+#            even when its own by_type= count agrees with it.
+#   (3) runs on the POST-exemption set, and a planted extra row in a file with no via=/by_type= must FAIL (1-type).
+# FLOORS this gate cannot see (the type tier has no clause to read, so no row and no extra): a Python STRING annotation
+# (`c: "Cell"`), a Go type satisfying an interface IMPLICITLY (no implements clause), a qualified Python base (`mod.Base`).
+#
 # Usage:  bash test/impactpartitioncheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/impactpartitioncheck.sh
 # Exits non-zero on any failure; prints PASS/FAIL per check, ALL PASS on success.
 
@@ -45,6 +60,7 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
+echo "impactpartitioncheck: BIN=$BIN"
 
 cd "$ROOT"
 
@@ -136,6 +152,10 @@ def observe(store, def_key, tested):
     return False
 
 impact_rows = {}          # (name, file, line) -> tested (bool)
+fn_rows = {}              # the same, from FUNCTION seeds only — assertion (1-fn), exact
+# L7: per TYPE seed (its <files> carries type_users=), what (1-type) and (1-mention) read: its name, its rollup row
+# per file, its compared rows (after the exclusions below) and its d=1 rows per file (every file, none excluded).
+type_seed_recs = []
 row_count_ok = True
 radius_sum_ok = True
 for name in seed_names:
@@ -168,6 +188,26 @@ for name in seed_names:
         no("--impact=%s:%s: radius_tested(%d) + radius_untested(%d) != reaches(%d)" % (SAMPLE_FILE, name, rt, ru, reaches))
     if attrs.get("capped") not in ("0", None):
         no("--impact=%s:%s: capped=%s at --limit=5000 — raise the limit in this script" % (SAMPLE_FILE, name, attrs.get("capped")))
+    files_hdr = re.search(r'<files ([^>]*)>', doc)
+    files_attrs = dict(re.findall(r'(\w[\w-]*)="([^"]*)"', files_hdr.group(1))) if files_hdr else {}
+    is_type_seed = "type_users" in files_attrs
+    rec = None
+    if is_type_seed:
+        if files_attrs.get("files_capped") != "0":
+            no("--impact=%s:%s: a type seed's rollup is cut (files_capped=%s) at --limit=5000 — (1-type) needs every rf row" % (SAMPLE_FILE, name, files_attrs.get("files_capped")))
+        rf = {}
+        for m in re.finditer(r'<rf ([^>]*)/>', doc):
+            a = dict(re.findall(r'(\w[\w-]*)="([^"]*)"', m.group(1)))
+            rf[html.unescape(a.get("p", ""))] = a
+        rec = { "seed": name, "rf": rf, "rows": [], "d1": {} }
+        type_seed_recs.append(rec)
+    depth = None
+    for m in re.finditer(r'<s t="(\w+)" n="([^"]+)" p="([^"]+)"(?: d="(\d+)")?( tested="1")?', doc):
+        if m.group(4):
+            depth = int(m.group(4))      # run-length: d= is set where it changes
+        if rec is not None and depth == 1:
+            f1 = norm_path(m.group(3))
+            rec["d1"][f1] = rec["d1"].get(f1, 0) + 1
     for rkind, rn, rp, rtested in rows:
         np = norm_path(rp)
         if np == SAMPLE_FILE:
@@ -189,6 +229,10 @@ for name in seed_names:
         previous = impact_rows.get(def_key)
         if observe(impact_rows, def_key, tested):
             no("internal inconsistency: %s is tested=%s from one seed and tested=%s from another" % (str(def_key), previous, tested))
+        if rec is not None:
+            rec["rows"].append((rn, np, tested))
+        else:
+            observe(fn_rows, def_key, tested)
 
 if row_count_ok:
     ok("row-count invariance: every --impact call's printed row count equals its own reaches=")
@@ -196,26 +240,85 @@ if radius_sum_ok:
     ok("row-count invariance: radius_tested= + radius_untested= == reaches= on every call")
 
 # the (name, file) projection --test-gate's <u> can be compared with (see the keying note above the loop)
-impact_by_file = {}
-for (n, f, _line), t in impact_rows.items():
-    impact_by_file.setdefault((n, f), []).append(t)
-impact_untested = set(k for k, ts in impact_by_file.items() if not all(ts))   # any overload untested
-impact_tested    = set(k for k, ts in impact_by_file.items() if all(ts))      # every overload tested
-mixed_overloads = sorted(k for k, ts in impact_by_file.items() if any(ts) and not all(ts))
+def project(rows):
+    """(untested, tested, mixed) (name, file) keys: untested when ANY overload is, tested only when ALL are"""
+    by_file = {}
+    for (n, f, _line), t in rows.items():
+        by_file.setdefault((n, f), []).append(t)
+    return (set(k for k, ts in by_file.items() if not all(ts)),
+            set(k for k, ts in by_file.items() if all(ts)),
+            sorted(k for k, ts in by_file.items() if any(ts) and not all(ts)))
+
+impact_untested, impact_tested, mixed_overloads = project(impact_rows)
+impact_untested_fn = project(fn_rows)[0]
 if mixed_overloads:
     print("  INFO  %d (name,file) key(s) hold overloads with DIFFERENT tested= (e.g. %s) — compared per definition above, projected as untested below" % (len(mixed_overloads), str(mixed_overloads[0])))
 
+def tight_exempt(recs, extra_rows):
+    """(1-type): the extra rows each type seed may excuse, per file, bounded by ITS rollup row there. -> (exempt, violations)"""
+    exempt, violations = set(), []
+    for rec in recs:
+        per_file = {}
+        for rn, np, _t in rec["rows"]:
+            if (rn, np) in extra_rows:
+                per_file.setdefault(np, set()).add((rn, np))
+        for f, keys in sorted(per_file.items()):
+            a = rec["rf"].get(f, {})
+            bound = int(a.get("syms", "0")) if a.get("via") == "type" else int(a.get("by_type", "0"))
+            if len(keys) <= bound:
+                exempt |= keys
+            else:
+                violations.append("%s: %d extra row(s) in %s, rollup allows %d (rf %s)" % (rec["seed"], len(keys), f, bound,
+                                  " ".join("%s=%s" % kv for kv in sorted(a.items()) if kv[0] != "p") or "absent"))
+    return exempt, violations
+
+def mention_violations(recs):
+    """(1-mention): a type seed's d=1 rows in F never outnumber F's spellings of the name"""
+    out, texts = [], {}
+    for rec in recs:
+        pat = re.compile(r'(?<![\w$])%s(?![\w$])' % re.escape(rec["seed"].split("::")[-1]))
+        for f, n in sorted(rec["d1"].items()):
+            if f not in texts:
+                try:
+                    texts[f] = open(f, encoding="utf-8", errors="replace").read()
+                except OSError:
+                    texts[f] = ""
+            spelled = len(pat.findall(texts[f]))
+            if n > spelled:
+                out.append("%s: %d d=1 row(s) in %s, the file spells the name %d time(s)" % (rec["seed"], n, f, spelled))
+    return out
+
 # ── (1) SET EQUALITY ─────────────────────────────────────────────────────────────────────────────────
-missing = testgate_untested - impact_untested   # test-gate says untested, --impact disagrees (or never saw it)
-extra   = impact_untested - testgate_untested    # --impact says untested, test-gate does not list it
-if not missing and not extra:
-    ok("SET EQUALITY: --impact's union of untested rows == --test-gate's <u> rows, exactly (%d rows)" % len(testgate_untested))
+missing  = testgate_untested - impact_untested      # test-gate says untested, --impact disagrees (or never saw it) — FULL union
+extra_fn = impact_untested_fn - testgate_untested   # (1-fn) a FUNCTION seed's untested row test-gate does not list: never excused
+extra_all = impact_untested - testgate_untested     # every seed's
+exempt_tight, type_violations = tight_exempt(type_seed_recs, extra_all)
+extra = extra_all - exempt_tight                    # (1-type) what no type seed's own rollup bounds
+if not missing and not extra_fn:
+    ok("SET EQUALITY (1-fn): the FUNCTION seeds' untested rows are exactly --test-gate's (no exemption), and every one of its %d <u> rows is printed" % len(testgate_untested))
 else:
-    no("SET EQUALITY broken: %d in test-gate not in impact, %d in impact not in test-gate" % (len(missing), len(extra)))
-    for k in list(missing)[:5]:
+    no("SET EQUALITY broken: %d in test-gate not in impact, %d from a FUNCTION seed's impact not in test-gate" % (len(missing), len(extra_fn)))
+    for k in sorted(missing)[:5]:
         print("    test-gate-only:", k)
-    for k in list(extra)[:5]:
+    for k in sorted(extra_fn)[:5]:
+        print("    fn-impact-only:", k)
+if not extra and not type_violations:
+    ok("SET EQUALITY (1-type): %d row(s) beyond <u>, every one bounded by its own type seed's rollup row (via=\"type\" syms= / by_type=) — %d type seed(s)"
+       % (len(exempt_tight), len(type_seed_recs)))
+else:
+    no("SET EQUALITY (1-type) broken: %d extra row(s) no type seed's rollup bounds, %d file(s) over their bound" % (len(extra), len(type_violations)))
+    for v in type_violations[:8]:
+        print("    over-bound:    ", v)
+    for k in sorted(extra)[:5]:
         print("    impact-only:   ", k)
+mention_bad = mention_violations(type_seed_recs)
+d1_total = sum(sum(r["d1"].values()) for r in type_seed_recs)
+if not mention_bad:
+    ok("(1-mention): %d d=1 row(s) over %d type seed(s), no file holding more than it spells the type's name" % (d1_total, len(type_seed_recs)))
+else:
+    no("(1-mention) broken: %d (seed, file) pair(s) name more type users than the file spells the name" % len(mention_bad))
+    for v in mention_bad[:8]:
+        print("    over-mention:  ", v)
 
 overlap = impact_tested & testgate_untested
 if not overlap:
@@ -223,17 +326,36 @@ if not overlap:
 else:
     no("complementary check broken: %d rows --impact marks tested=1 are in --test-gate's untested list" % len(overlap))
 
-# ── (3) MUTATION CONTROL — prove the equality check above can actually fail ─────────────────────────────
+# ── (3) MUTATION CONTROL — prove the equality checks above can actually fail ────────────────────────────
+# On the POST-exemption set: before L7 this compared against the raw union, which a type seed's extra rows already made
+# unequal, so it could never fire.
 if testgate_untested:
     mutated = set(testgate_untested)
-    dropped = mutated.pop()
-    still_equal = (mutated == impact_untested)
+    dropped = sorted(mutated)[0]
+    mutated.discard(dropped)
+    still_equal = (mutated == (impact_untested - exempt_tight))
     if not still_equal:
-        ok("MUTATION CONTROL: dropping one row (%s) from the untested set makes the equality check FAIL, as expected" % str(dropped))
+        ok("MUTATION CONTROL: dropping one row (%s) from the untested set makes the post-exemption equality FAIL, as expected" % str(dropped))
     else:
         no("MUTATION CONTROL: dropping a row did NOT break equality — the assertion above is vacuous")
 else:
     no("MUTATION CONTROL: testgate_untested is empty, nothing to mutate — the sample is not exercising real cases")
+if type_seed_recs:
+    planted = dict(type_seed_recs[0])
+    planted["rows"] = list(planted["rows"]) + [("plantedExtra", "src/planted_no_type_row.h", False)]
+    _ex, pv = tight_exempt([planted], extra_all | {("plantedExtra", "src/planted_no_type_row.h")})
+    if pv:
+        ok("MUTATION CONTROL (1-type): a planted extra row in a file the seed's rollup does not mark is NOT excused")
+    else:
+        no("MUTATION CONTROL (1-type): a planted extra row was excused — the type exemption is unbounded")
+    inflated = dict(type_seed_recs[0])
+    inflated["d1"] = { "src/graph.h": 10 ** 6 }
+    if mention_violations([inflated]):
+        ok("MUTATION CONTROL (1-mention): a seed naming more users than the file spells is flagged")
+    else:
+        no("MUTATION CONTROL (1-mention): an inflated d=1 count passed — the mention bound is vacuous")
+else:
+    no("MUTATION CONTROL (1-type): no type seed in the sample — the type arms measured nothing")
 
 # ── (3b) OVERLOAD CONTROL — the per-definition key tells one definition from two overloads ───────────────
 # The same observe() the loop uses, fed planted rows: one definition seen tested and then untested MUST be an

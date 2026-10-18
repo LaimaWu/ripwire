@@ -32,6 +32,7 @@
 #include "crossref.h"      // the shared cross-branch content index (whereis / stray_content)
 #include "darkflags.h"     // the shared dark-content gate harvest (flags)
 #include "flipimpact.h"    // the flags verb's `symbol` argument: one gate's flip blast radius
+#include "typeuse.h"       // L7: the impact verb's type tier (CLI ≡ MCP)
 #include "docdrift.h"      // the shared doc-anchor verifier (doc_drift)
 #include "exemplar.h"      // §B6 M2: selectExemplar + kExemplarSelectionRule — the ONE selector/wording both surfaces use
 #include "mcprefusal.h"    // §B6 M7/M8/M9: the shared verb+field refusal table both MCP arms speak
@@ -676,8 +677,7 @@ inline std::string calledByCutJson( std::string_view name, std::size_t total, co
                     + ",\"calledBy_capped\":true";
     if( window.end < total )
     {
-        const std::string next = nextFlag( "--callers=", name ) + ( pageLimit > 0 ? " --limit=" + std::to_string( pageLimit ) : std::string() )
-                               + " --offset=" + std::to_string( window.end );
+        const std::string next = callersPageNext( name, pageLimit, window.end );
         out += ",\"calledBy_next\":\"" + mcpdetail::jsonEscape( next ) + "\"";
     }
     return out;
@@ -796,9 +796,11 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
 
     // The page window applies to the direction the root's count= describes; find_symbol's second array is
     // windowed by the same limit so one `limit` never means two different sizes in one answer.
-    const int        rowCap    = effectiveRowCap( page.limit, rw::kCallHierarchyRowCap );
+    // L8 (train 29): each array takes the CLI's callHierarchyRowCap over its own total (the 1.25 x band, pageview.h); an
+    // explicit limit still sizes both arrays alike.
+    const int        rowCap    = callHierarchyRowCap( page.limit, referencingOnly ? calledBy.size() : calls.size() );
     const PageWindow pwPrimary = pageWindow( referencingOnly ? calledBy.size() : calls.size(), rowCap, page.offset );
-    const PageWindow pwSecond  = pageWindow( calledBy.size(), rowCap, page.offset );
+    const PageWindow pwSecond  = pageWindow( calledBy.size(), callHierarchyRowCap( page.limit, calledBy.size() ), page.offset );
     const std::size_t rowTotal = referencingOnly ? calledBy.size() : calls.size();
     const bool  discloseCap    = ( pwPrimary.end - pwPrimary.begin ) < rowTotal;
     // CALLSITE-AT: the calledBy window's rows with their call sites — editcheck.h rowCallSites, the CLI --callers pass and path spelling.
@@ -810,7 +812,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     // declines its definitions make; find_referencing_symbols: the declined calls that could have meant them), cut by the
     // same `limit` the rows take — one computation (callhierarchy.h ordered them), the CLI's own row builder.
     const DeclinedSiteCut sqDcCut = declinedSiteCut( chRows.declinedSites.size(), page.limit, referencingOnly ? "--callers=" : "--callees=", name,
-                                                     std::size_t( rowCap ) );
+                                                     std::size_t( effectiveRowCap( page.limit, rw::kCallHierarchyRowCap ) ) );   // the CLI's <dc> cut: no band
     const std::vector<DeclinedSiteView> sqDc = declinedSiteViews( ing, g, std::span<const std::uint32_t>( chRows.declinedSites ).first( sqDcCut.shown ),
                                                                   referencingOnly, chRows.matches, chRows.attr.groups, VrRender{ sqSingleRoot, sqRootPrefix },
                                                                   /*candidates=*/false );
@@ -838,7 +840,9 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
          + declinedSiteCutKeyJson( sqDcCut )              // the CLI root's dc_shown= / dc_next=, absent when nothing was cut
          + declinedIfaceKeyJson( chRows.declinedIface )   // the CLI root's declined_iface= (callers direction only)
          + stdMemberCallsSpelling( chRows.stdCalls, /*json=*/true )       // the CLI callees answer's <stdm> line (callees direction only; absent when none)
-         + nextFieldJson( nextFlag( referencingOnly ? "--uses=" : "--expand=", chNextSelector ) );   // P3 (L7): the CLI root's next= (mcpattrparitycheck)
+         + ( referencingOnly && pwPrimary.end < rowTotal   // L8: a capped callers page names the next page, the uses verb as uses_next (the CLI root's pair)
+                 ? nextFieldJson( callersPageNext( name, page.limit, pwPrimary.end ) ) + nextFieldJson( nextFlag( "--uses=", chNextSelector ), "uses_next" )
+                 : nextFieldJson( nextFlag( referencingOnly ? "--uses=" : "--expand=", chNextSelector ) ) );   // P3 (L7): the CLI root's next= (mcpattrparitycheck)
     if( !referencingOnly && chRows.bodylessDefs > 0 )
     {
         out += ",\"bodyless_defs\":" + std::to_string( chRows.bodylessDefs );
@@ -3096,9 +3100,12 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     }
 
     // 0.6.5: the CLI --impact's walk, keeping each node's hop depth, and its order (graph.h orderByDepthThenRank).
-    std::vector<std::uint32_t>       depth;
-    const std::vector<NodeId>        reach = transitiveCallersDepth( g, seeds, &depth );
-    const std::vector<char>          proven = provenCallerReach( g, seeds );   // FE-B (D3): as on the CLI
+    // L7 (typeuse.h): the CLI's type tier, by the same calls — a type seed's walk also starts from the symbols naming it
+    const TypeUseTier                typeTier = typeUseTier( ing, seeds );
+    ImpactReach                      walk     = impactReachWithTypes( g, seeds, typeTier );
+    std::vector<std::uint32_t>&      depth    = walk.depth;
+    const std::vector<NodeId>&       reach    = walk.reach;
+    const std::vector<char>&         proven   = walk.proven;   // FE-B (D3): as on the CLI
     const auto [ rank, prIters, prConverged ] = rankGraph( g );
     const RankDisclosure             prD{ prIters, prConverged, true };   // W2-F: CLI --impact discloses this; so does its twin
     std::vector<NodeId>              show  = reach;
@@ -3141,8 +3148,9 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     const ValueRefRows  imValueRefs = valueRefCallerRows( ing, valueRefIndexOf( ix ), seeds );
     const PageWindow    ipw         = pageWindow( show.size(), effectiveRowCap( page.limit, 40 ), page.offset );
     // idea #6: the CLI arm's rollup, under the same rule — it rides only beside a CUT symbol window
+    ImpactTypeFold   typeFold;
     ImpactFileRollup imFiles = impactFileRollup( ing, reach, depth, page.limit, symbol, ipw.end - ipw.begin < show.size(),
-                                                 seeds.size() > 1 ? proven : kNoImpactHedge );   // fix27, as on the CLI
+                                                 seeds.size() > 1 ? proven : kNoImpactHedge, impactTypeFold( typeTier, walk, typeFold ) );   // fix27; L7, as on the CLI
     // attrib-multidef (defattrib.h): the CLI --impact's attribution, by the same calls
     const ReachAttribution imAttr = attributeReachAnswer( ing, g, seeds, reach );
     std::vector<char>      imNamed;
@@ -3165,7 +3173,8 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   declinedIfaceLegend( declinedIface > 0 ),                                          // likewise declined_iface=, as on the CLI
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
                     + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI
-                    + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ), !imports.next.empty() )   // idea #6; FIX1 R1, as on the CLI
+                    + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ), !imports.next.empty(),
+                                          ImpactRollupTypeClauses{ imFiles.typed, imFiles.typeDefs, imFiles.typeCapped } )   // idea #6; FIX1 R1; L7, as on the CLI
                     + defTableLegend( imAttr.groups.multi(), imListing.cut ) ).c_str(),                                              // attrib-multidef, as on the CLI
                   graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), renderDisclosure( prD, DiscloseAs::LegendClause ).c_str() );
     // r27-emitters §P2.1: the listing is capped at 40 by rank. Without shown=/capped= a 40-row answer to
