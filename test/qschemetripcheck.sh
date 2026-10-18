@@ -34,6 +34,9 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-18, train 31 lane h1-annot (the train renumbers): RE-DERIVED with UPDATE_GOLDEN=1. Watched text: kParserVer 180 -> 194
+#   (reservation 194/195; Python/TS qualified annotations keep their qualifier, two appended LocalBindKinds), with quality.h's
+#   kIngestParserVerMirror moved in the same diff; kCacheVersion stays 33. What a cached Snapshot means is unchanged: kQSnapCacheScheme stays.
 # 2026-10-16, train 29 lane call-result-typing (the train renumbers): RE-DERIVED with UPDATE_GOLDEN=1. Watched text: kParserVer
 #   176 -> 180 (reservation 180/181) and kCacheVersion 32 -> 33 (RawBind gains resultIndex + unwrapDepth), with quality.h's
 #   kIngest*Mirror moved in the same diff. What a cached Snapshot means is unchanged: kQSnapCacheScheme stays.
