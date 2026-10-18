@@ -1126,15 +1126,92 @@ enum class LocalBindKind : std::uint8_t
                    //     the directive ("include" / "extend"), spanStart = the constant's 1-based line; var stays EMPTY and the
                    //     record is file-scope, so no local-name table reads it. Read by graph.h rubyMainObjectMixins ONLY
                    //     (--lego's `<impl t="object" n="main">` row). APPENDED (cache u8).
+    // Train 29 lane call-result-typing (test/receiverevidencecheck.sh (L)): a binding initialised by a CALL takes the callee's
+    // DECLARED return type. Both kinds are receiver evidence (isReceiverEvidenceKind): graph.h's resolve loop alone reads them.
+    CallResult,    // a local bound to a call's result (Go `x := f()` / `a, b := f()`, Rust `let x = f()?` / `let (a, _) = f()?`):
+                   //     var = the bound name, typeName = the callee's final name, startByte = the CALL's start byte (the call
+                   //     Reference's own; with typeName it names one call), spanStart/spanEnd = where the name is visible (the same span as the name's RecvType
+                   //     tombstone, which the typed fact replaces), resultIndex = the position it binds (kWholeResult: the whole
+                   //     value), unwrapDepth = the unwrap operators applied before binding (Rust `?` / `.unwrap()` / `.expect()`).
+    ReturnType,    // one DECLARED result of a function definition, at startByte = the def's own start (Symbol::sigStartByte):
+                   //     resultIndex = its position (kWholeResult: a single non-tuple result), typeName = the class it names
+                   //     after the language's transparent wrappers (Go `*T`, Rust `Box<T>` / `&T`), importedName = the type
+                   //     written WHOLE when it is qualified (`os.File`, `std::fs::File`), else "", unwrapDepth = the
+                   //     Result/Option layers above it (each needs one unwrap operator at the call site). var stays empty.
+                   //     C++ writes importedName only for a non-std qualified result (`ext::Config`), which graph.h resolves.
+    TypeImport,    // fix round 1: a file's import of a TYPE name (Java/Kotlin `import a.b.C [as D]`, Rust `use a::b::C [as D]`,
+                   //     brace groups flattened): var = the local name it binds (`C` / `D`; "*" for a wildcard or glob),
+                   //     typeName = the imported item's own name ("" for "*"), importedName = the path as written
+                   //     (`java.io.File`, `std::fs::File`, `crate::model` for a glob). Read by graph.h's call-result type
+                   //     resolution (receiverevidence.h ReceiverEvidence::resultClassOf) ONLY. APPENDED (cache u8).
+                   //     C++ (fix round 2): a using-declaration `using a::C;` (var `C`) and a using-directive `using namespace
+                   //     a;` (var "*", importedName `a`), with spanStart/spanEnd = the scope it is declared in (a namespace
+                   //     body, a function body (fix round 4: a local class's member result sits inside it), or the whole
+                   //     file: 0 .. 0xFFFFFFFF) — the span marks a C++ row: Java/Kotlin/Rust rows carry none ({0,0}). A
+                   //     class-scope using records nothing. Java (fix round 4): a single-static-import `import static a.B.N;`
+                   //     (var `N`: it imports every static member named N, a member TYPE included) and a static-import-on-
+                   //     demand (var "*", importedName `a.B`).
+    Namespace,     // fix round 2: a lexical scope the index has no symbol for — a C++ `namespace` (not `inline`), a TS
+                   //     `namespace` / `module` — var = its name as written (`a::b`, `a.b`; "" when anonymous), spanStart/
+                   //     spanEnd = its body. Read by graph.h's call-result type resolution ONLY: a class nested in one is
+                   //     not in scope outside it, and a C++ class is visible from the namespaces its own encloses. A Java /
+                   //     Kotlin file's `package a.b` is one with NO span ({0,0}: it scopes nothing lexically) — the packages
+                   //     the tree declares, whatever directory holds them (an import of another one is from outside). APPENDED.
+    TypeAlias,     // fix round 3: a declaration that binds a TYPE NAME to another type — C++ `using A = T;` / `typedef T A;` /
+                   //     `namespace a = b;`, Rust `type A = T;`, Kotlin `typealias A = T`, TS `type A = T` / `import A = n.T`:
+                   //     var = the name bound, importedName = the target as written (blanks removed), startByte = the
+                   //     declaration's start. C++ rows carry the scope they are declared in as spanStart/spanEnd (a
+                   //     namespace or class body, or the whole file: 0 .. 0xFFFFFFFF) like a using row; the other families'
+                   //     rows carry none ({0,0}): their scope is the innermost one holding startByte. Read by graph.h's
+                   //     call-result type resolution ONLY: an alias of the spelling in force at a callee is a binding the
+                   //     result type is never resolved past (an outside target names nothing; an in-tree one is a floor). APPENDED.
+                   //     Fix round 4: typeName marks the rows that bind a spelling WITHOUT an alias target (kTypeBind* constants):
+                   //     "forward" a C++ bodiless `struct S;` / `class S;` / `union S;`, "shadow" a type declaration the index
+                   //     keeps no class symbol for (a Java `record` / `@interface`, a C++ union defined outside a declaration),
+                   //     "unparsed" a region the parser cannot read as declarations, which may declare ANY name (var "!": a
+                   //     C++ macro invocation or parse error where a declaration must stand, with its scope's span; a Rust
+                   //     block enclosing a nested fn that holds a statement- or item-position macro, at the block's start).
+                   //     Fix round 5: "unrecorded" a C++ class declaration only a macro can have written, which tree-sitter-cpp
+                   //     reads as a function or a variable (`class API S {…}`, `struct API S;`): one row per identifier its head
+                   //     spells (S among them), no span — a class of that name the index does not record exists in the tree.
 };
+// fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
+inline constexpr std::string_view kTypeBindForward  = "forward";
+inline constexpr std::string_view kTypeBindShadow   = "shadow";
+inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
+inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::RubyMainMixin ) + 1;
-// FE-B: the five kinds only graph.h ReceiverEvidence reads (see RecvType above).
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::TypeAlias ) + 1;
+// FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {
-    return k == LocalBindKind::RecvType || k == LocalBindKind::MemberType || k == LocalBindKind::MethodAlias || k == LocalBindKind::NameAlias
-        || k == LocalBindKind::StaticMember;
+    // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result five (CallResult .. TypeAlias) after RubyMainMixin
+    static_assert( std::uint8_t( LocalBindKind::StaticMember ) - std::uint8_t( LocalBindKind::RecvType ) == 4, "FE-B's five receiver-evidence kinds stay one run" );
+    static_assert( std::uint8_t( LocalBindKind::TypeAlias ) - std::uint8_t( LocalBindKind::CallResult ) == 4, "the call-result kinds stay one run" );
+    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::TypeAlias );
 }
+// The language family whose call results take a callee's declared result type (train 29 call-result typing), ONE row read
+// by ingest (which records CallResult / ReturnType / TypeImport) and by graph.h (where the type resolves, and which
+// receiver tables the typed local lands in). None: the language records nothing (JavaScript, Python, …).
+enum class CallResultFamily : std::uint8_t { None, Go, Rust, Cpp, Jvm, TypeScript };
+inline CallResultFamily callResultFamilyOf( Lang l ) noexcept
+{
+    switch( l )
+    {
+        case Lang::Go:                     return CallResultFamily::Go;
+        case Lang::Rust:                   return CallResultFamily::Rust;
+        // C++ / ObjC OFF (owner 2026-10-17, fix round 6): a macro the parser reads as code (an export macro in a class head, an
+        // `#if` around a declaration, a namespace-opening macro, …) can declare the result's name unseen, so no C++ call result
+        // is typed yet — base behaviour. CallResultFamily::Cpp's readers (Rule 2's varType / scopedRecvDecls are its sink) stay
+        // for the macro-aware C++ card; mapping this row back to Cpp turns them on.
+        case Lang::Cpp: case Lang::ObjC:   return CallResultFamily::None;
+        case Lang::Java: case Lang::Kotlin: return CallResultFamily::Jvm;
+        case Lang::TypeScript:             return CallResultFamily::TypeScript;
+        default:                           return CallResultFamily::None;
+    }
+}
+// Binding::resultIndex of a record about a WHOLE result (a single non-tuple result; a Rust `let t = pair()?` binding all of it).
+inline constexpr std::uint8_t kWholeResult = 0xFF;
 // The importedName of a Ruby class-object binding that acts on each class INCLUDING the module, not on the module
 // (LocalBindKind::RubySingletonDef, RubyClassMixin; parser version 145): written in a concern's `included do`, or a def
 // in its `class_methods do`.
@@ -1163,6 +1240,8 @@ struct Binding
                                               // kind==Type: read off a C++ ASSIGNMENT's callee (`x = f( … )`), not a declaration —
                                               //   a function's name as often as a class's, so buildGraph drops it unless a class of
                                               //   that name exists (resolve.h assignmentNamesNoClass). Rides the padding after `kind`.
+    std::uint8_t  resultIndex = kWholeResult; // kind==CallResult/ReturnType: the result position (see LocalBindKind). Rides the padding.
+    std::uint8_t  unwrapDepth = 0;            // kind==CallResult/ReturnType: unwrap operators / layers (see LocalBindKind). Rides the padding.
     std::uint32_t startByte  = 0;         // the record's own position (RawBind::startByte). ONE declaration's
                                           //   VarDecl and its typed record (Type or ParamType) carry the SAME
                                           //   value — that shared byte is how Rule 2's lexical receiver lookup
@@ -1185,7 +1264,7 @@ struct Binding
                                           //   name as written minus `&` (`alpha`, `ns::alpha`), or a sentinel.
 };
 static_assert( sizeof( Binding ) == 6 * sizeof( std::uint32_t ) + 3 * sizeof( std::string ),
-               "Binding's scalars are five u32, a u8 kind and a bool in 24 bytes — both ride one u32 slot" );
+               "Binding's scalars are five u32, a u8 kind, a bool and two u8 in 24 bytes — the four ride one u32 slot" );
 
 // R5 cross-language FFI binding alias. A language-binding DECLARATION found in a C/C++ file (or a
 // ctypes-handle assignment in a Python file) that makes a C/C++ definition reachable under a DIFFERENT

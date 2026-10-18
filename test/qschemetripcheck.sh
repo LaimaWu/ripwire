@@ -49,6 +49,9 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   declaration 176 -> 178 (reservation 178 / rich 179; the train renumbers) and kCacheVersion 32 -> 33 (a def record gains
 #   paramsMin, the fewest arguments a call can pass), quality.h's two mirrors with them. kQSnapCacheScheme 21 is unchanged: what a
 #   cached Snapshot represents is the same, and the two versions already key every extraction fact it holds.
+# 2026-10-16, train 29 lane call-result-typing (the train renumbers): RE-DERIVED with UPDATE_GOLDEN=1. Watched text: kParserVer
+#   176 -> 180 (reservation 180/181) and kCacheVersion 32 -> 33 (RawBind gains resultIndex + unwrapDepth), with quality.h's
+#   kIngest*Mirror moved in the same diff. What a cached Snapshot means is unchanged: kQSnapCacheScheme stays.
 # 2026-10-15, train 28 (grep-carrier, ruby-pair, qd-memory-degrade, githarden-speed, git-child-hardening, PR #380, forbudget-soft,
 #   for-body-slot, attrib-multidef, declined-sites merged onto main 1bcb6540): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged
 #   tree (hash 279718355d…5ba2db). Watched text: kParserVer 173 -> 176 (main's slice 4a 173 / rich 174, lane grep-carrier 173,

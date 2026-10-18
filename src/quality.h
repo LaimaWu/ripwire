@@ -2335,12 +2335,17 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 34;   // MUST equal ingest.cpp's kCacheVersion (gated); 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 184;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 36;   // MUST equal ingest.cpp's kCacheVersion (gated); 36 = train 30 (above call-result-typing's and fcall-forward's 33, name-template-dispatch's 35, main's 34), 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 33 = lane call-result-typing: RawBind resultIndex + unwrapDepth, 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
+constexpr std::uint32_t kIngestParserVerMirror    = 196;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 196 = 2026-10-18 (train 30: above call-result-typing 180/181, fcall-forward
+                                                          //   188/189, go-local-var 190/191, name-template-dispatch 192/193, h1-annot
+                                                          //   194/195; see the kParserVer note)
                                                           // 184 = 2026-10-17 (train 29: above arity-min 178/179, call-result-typing
                                                           //   180/181, go-scope 182/183; see the kParserVer note)
                                                           // 182 = 2026-10-16 (train 29 L5 go-scope reservation, #403: Go method /
                                                           //   interface-member scope; the train renumbers)
+                                                          // 180 = lane call-result-typing (reservation 180/181; the train renumbers):
+                                                          //   call-result / return-type binds
                                                           // 178 = train 29 lane arity-min (reservation 178/179; the train renumbers):
                                                           //   defs extract paramsMin for the B2.2 minimum-arity exclusion
                                                           // 176 = 2026-10-15 (train 28: above main 173/174, grep-carrier 173/174,
