@@ -20,6 +20,7 @@
 // What it does NOT do: infer a function's return type (`s = self.get_screen(); s.refresh()`), follow a property, or type
 // a value that crossed a call boundary. Those receivers stay name-only — the honest answer, not a guess.
 
+#include "infra/sortutil.h"   // svLess: the explicit byte order the operatorResult sort takes (portablebuildcheck #6)
 #include "model.h"
 #include "resolve.h"   // includerDir; HashMap / SmallVec through it; extent::inSet (extentsuspect.h) through it
 #include "smallvec.h"
@@ -1881,7 +1882,8 @@ struct ReceiverEvidence
         {
             noteQualifiedWritten( *q );
         }
-        std::ranges::sort( operatorResult );
+        std::ranges::sort( operatorResult, []( const std::pair<NodeId, std::string_view>& a, const std::pair<NodeId, std::string_view>& b )
+                           { return a.first != b.first ? a.first < b.first : sortutil::svLess( a.second, b.second ); } );
         active = true;
         for( const Binding* a : augAssigns )
         {
@@ -1991,7 +1993,8 @@ struct ReceiverEvidence
         {
             return false;
         }
-        const auto row = std::ranges::lower_bound( operatorResult, std::pair<NodeId, std::string_view>{ found[ 0 ], {} } );
+        const auto row = std::ranges::lower_bound( operatorResult, found[ 0 ], []( NodeId a, NodeId b ) { return a < b; },
+                                                   &std::pair<NodeId, std::string_view>::first );
         return row != operatorResult.end() && row->first == found[ 0 ] && ( row->second == "self" || row->second == cls );
     }
     // Python / TS (h1-annot): is the qualifier of the written type `whole` (`requests.Session`, `a.b.T`, `ns.T`) — its ROOT,

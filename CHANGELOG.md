@@ -69,9 +69,12 @@ the in-tree class `T` only when the file's imports bind `q` to an in-tree module
 `import pkg.store`, `from pkg import store`; TS `import * as`, default, named and `require` bindings), or `q` — bound by no
 import — names an in-tree class (`Outer.Inner`) or a TS namespace. An outside qualifier, a global such as `NodeJS.T`, or an
 unbound name proves nothing: the call keeps its rows marked `via="name"`. `T` itself is still matched by its last name.
+Floor: a Python import the resolver cannot pin to one file but whose first name matches a `.py` file or directory anywhere
+in the tree (import verdict `u`, e.g. `import requests` beside an unrelated `lib/requests.py`) still counts as in-tree.
 Python and JavaScript `x op= v` rebinds `x`: after `x = Num(); x += 1`, `x.bump()` no longer proves `Num.bump` unless the
 method Python calls — `Num`'s in-place `__iadd__` (its own or the nearest base's), else its `__add__` — returns `self` on
-every path or declares `-> Self` / `-> Num`. Measured: 0 call sites change on textual, hono, starlette, flake8, kysely and
+every path (every `return` returns `self` bare, at least one does, and the body cannot fall off its end into an implicit
+`return None`) or declares `-> Self` / `-> Num`. Measured: 0 call sites change on textual, hono, starlette, flake8, kysely and
 fastify (`--pin-census`, base vs head); the false proofs reproduce on minimal fixtures (test/receiverevidencecheck.sh arm Q).
 
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)

@@ -334,8 +334,10 @@ constexpr std::uint32_t kParserVer    = 194;          // bump on any grammar/.sc
                                                       // 194 = 2026-10-18 (lane h1-annot, train 31; the train renumbers — reservation 194/195):
                                                       //   a Python / TS parameter, annotated local or TS field written `mod.T` / `ns.T<…>` keeps the
                                                       //   qualified text in its RecvType / MemberType importedName; Python records LocalBindKind::
-                                                      //   AugAssign for `x op= v` and ReturnsSelf in an in-place method that returns self; a JS
-                                                      //   `x op= v` records a RecvType tombstone. Rich file tag 195. kCacheVersion unchanged.
+                                                      //   AugAssign for `x op= v` and OperatorResult in an operator method (in-place or binary) whose
+                                                      //   result is provably its receiver's class ("self" on every path, or `-> Self` / `-> C`); a JS
+                                                      //   `x op= v` records constructedBy( rhs ) like a plain reassignment (`x ||= new B()` names B).
+                                                      //   Rich file tag 195. kCacheVersion unchanged.
                                                       // 180 = 2026-10-16 (train 29 lane call-result-typing; the train renumbers — reservation 180/181):
                                                       //   Go, Rust, C++, Java, Kotlin and TS (never JS) record LocalBindKind::CallResult for a
                                                       //   local bound to a call's result and LocalBindKind::ReturnType for each declared result

@@ -1535,11 +1535,13 @@ for f in keep_from_mod keep_dotted keep_bare keep_alias; do                     
 done
 proven    $QA/py callees keep.py:keep_nested    "fn close model.py:10"            # [P] guard: an in-tree class qualifier `Outer.Inner`
 proven    $QA/py callees keep.py:keep_same_file "fn close keep.py:39"             # [P] guard: a same-file class
+proven    $QA/py callees keep.py:keep_nested_same_file "fn close keep.py:48"      # [P] guard (fix round 1, mutant MA): a same-file `Wrap.Part`, no import
 # TS — model.ts: Session.close :1, Other.close :2; store.ts: Store.close :1, Box.close :2; keep.ts: Local.Thing.close :14.
 for f in useParam usePlain useOptional useDefault useNamed useRequire useGlobal useDeclared useLocal; do
     notproven $QA/ts callees "app.ts:$f" "close model.ts:1"                       # [N] (useDeclared / useLocal: guards, name-only before)
 done
 notproven $QA/ts callees app.ts:run "close model.ts:1"                     # [N] a field `s: ext.Session`
+notproven $QA/ts callees app.ts:useDup "close store.ts:1"                  # [N] (fix round 1, mutant MD): `dup` bound in-tree AND foreign
 for f in keepNs keepBare keepDefault; do
     proven    $QA/ts callees "keep.ts:$f" "method close store.ts:1"               # [P] guard: `import * as store`, `import { Store }`, a default import
 done
@@ -1557,6 +1559,8 @@ proven    $QA/py callees aug.py:aug_inherited "fn bump aug.py:11"               
 proven    $QA/py callees aug.py:aug_none      "fn bump aug.py:11"                 # guard: no augmented assignment
 proven    $QA/py callees aug.py:aug_binary_annotated "fn bump aug.py:91"          # [P] guard: no __iadd__, but `__add__( … ) -> Tint` (textual Color)
 notproven $QA/py callees aug.py:aug_binary_base_annotated "bump aug.py:95"        # [N] Shade inherits `__add__ -> Tint`: x becomes a Tint
+notproven $QA/py callees aug.py:aug_fallthrough "bump aug.py:114"                # [N] (fix round 1) `if o: return self`, then an implicit None
+proven    $QA/py callees aug.py:aug_both_branches "fn bump aug.py:123"            # [P] guard: if / else, both return self
 notproven $QA/js callees aug.js:augJs  "bump aug.js:1"                            # [N] JS `x += 1` leaves a primitive
 proven    $QA/js callees aug.js:augNone "method bump aug.js:1"                    # guard
 

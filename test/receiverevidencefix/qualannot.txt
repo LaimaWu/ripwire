@@ -130,6 +130,15 @@ class Local:
 
 def keep_same_file(s: Local):
     s.close()
+
+
+class Wrap:
+    class Part:
+        def close(self): pass
+
+
+def keep_nested_same_file(s: Wrap.Part):
+    s.close()
 @@@ py/aug.py
 class Num:
     def __iadd__(self, o):
@@ -238,6 +247,34 @@ def aug_binary_base_annotated():
     x = Shade()
     x += Tint()
     x.bump()
+
+
+class Fall:
+    def __iadd__(self, o):
+        if o:
+            return self
+    def bump(self): pass
+
+
+class Both:
+    def __iadd__(self, o):
+        if o:
+            return self
+        else:
+            return self
+    def bump(self): pass
+
+
+def aug_fallthrough():
+    x = Fall()
+    x += 1
+    x.bump()
+
+
+def aug_both_branches():
+    x = Both()
+    x += 1
+    x.bump()
 @@@ ts/model.ts
 export class Session { close(): void {} }
 export class Other { close(): void {} }
@@ -283,6 +320,11 @@ export function useOptional(s?: ext.Session) {
 }
 export function useDeclared() {
   let s: ext.Session;
+  s.close();
+}
+import * as dup from './store';
+import dup from 'outside-dup';
+export function useDup(s: dup.Store) {
   s.close();
 }
 @@@ ts/keep.ts

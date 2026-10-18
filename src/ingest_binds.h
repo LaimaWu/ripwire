@@ -5555,7 +5555,80 @@ inline constexpr std::array<PythonInPlaceOp, 13> kPythonInPlaceMethods = { {
     { "**=", "__ipow__", "__pow__" }, { "<<=", "__ilshift__", "__lshift__" }, { ">>=", "__irshift__", "__rshift__" },
     { "&=", "__iand__", "__and__" }, { "^=", "__ixor__", "__xor__" }, { "|=", "__ior__", "__or__" },
 } };
-// does `def` (a Python function_definition) return its first parameter BARE on every `return` — at least one, no `yield`;
+// can a Python block NOT fall off its end (fix round 1: an implicit `return None` is not self)? Its last statement is a
+// `return` / `raise`, a `with` whose body cannot, or an `if` with an `else` where no branch can. Anything else (a loop, a
+// `try`, a `match`) is read as "may fall through" — the hedge. Bounded by `depth`.
+inline bool pythonBlockTerminates( TSNode block, int depth = 0 )
+{
+    if( ts_node_is_null( block ) || depth > 32 )
+    {
+        return false;
+    }
+    TSNode last{};
+    for( std::uint32_t i = ts_node_named_child_count( block ); i > 0; --i )
+    {
+        const TSNode c = ts_node_named_child( block, i - 1 );
+        if( !kindIs( ts_node_type( c ), "comment" ) )
+        {
+            last = c;
+            break;
+        }
+    }
+    if( ts_node_is_null( last ) )
+    {
+        return false;
+    }
+    const char* t = ts_node_type( last );
+    if( kindIs( t, "return_statement" ) || kindIs( t, "raise_statement" ) )
+    {
+        return true;
+    }
+    if( kindIs( t, "with_statement" ) )
+    {
+        return pythonBlockTerminates( fieldChild( last, NodeField::Body ), depth + 1 );
+    }
+    if( !kindIs( t, "if_statement" ) )
+    {
+        return false;
+    }
+    bool hasElse = false;
+    for( std::uint32_t i = 0, k = ts_node_named_child_count( last ); i < k; ++i )
+    {
+        const TSNode c  = ts_node_named_child( last, i );
+        const char*  ct = ts_node_type( c );
+        TSNode       branch{};
+        if( kindIs( ct, "block" ) )
+        {
+            branch = c;
+        }
+        else if( kindIs( ct, "elif_clause" ) || kindIs( ct, "else_clause" ) )
+        {
+            hasElse = hasElse || kindIs( ct, "else_clause" );
+            for( std::uint32_t j = 0, m = ts_node_named_child_count( c ); j < m; ++j )
+            {
+                if( kindIs( ts_node_type( ts_node_named_child( c, j ) ), "block" ) )
+                {
+                    branch = ts_node_named_child( c, j );
+                }
+            }
+            if( ts_node_is_null( branch ) )
+            {
+                return false;
+            }
+        }
+        else
+        {
+            continue;   // the condition
+        }
+        if( !pythonBlockTerminates( branch, depth + 1 ) )
+        {
+            return false;
+        }
+    }
+    return hasElse;
+}
+// does `def` (a Python function_definition) return its first parameter BARE on every path — every `return` returns it, the
+// body cannot fall off its end (pythonBlockTerminates; fix round 1), no `yield`;
 // a nested def, lambda or class is another scope and is not read. Bounded: a body past 4096 nodes proves nothing.
 inline bool pythonReturnsFirstParameter( TSNode def, std::string_view src )
 {
@@ -5570,7 +5643,12 @@ inline bool pythonReturnsFirstParameter( TSNode def, std::string_view src )
     {
         return false;
     }
-    std::vector<TSNode> pending{ fieldChild( def, NodeField::Body ) };
+    const TSNode body = fieldChild( def, NodeField::Body );
+    if( !pythonBlockTerminates( body ) )
+    {
+        return false;   // `if o: return self` then an implicit `return None`: not self on every path
+    }
+    std::vector<TSNode> pending{ body };
     std::size_t         returns = 0;
     for( std::size_t visited = 0; !pending.empty(); ++visited )
     {
