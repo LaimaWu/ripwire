@@ -2412,6 +2412,8 @@ std::optional<int> runPath( const MainDispatch& d )
         }
         const rw::ToValueRefs pthToValueRefs = path.empty() ? rw::toValueRefs( ing, true, dstDefs, &*pthValueIdx ) : rw::ToValueRefs{};
         const rw::PathSearchGaps pthGaps = path.empty() ? rw::pathSearchGaps( ing, g, srcDefs, *pthValueIdx ) : rw::PathSearchGaps{};
+        // ix2-slice: the sink-side frontier beside the forward gap rows (src/pathgaps.h pathNearSink), reachable="0" only
+        const rw::PathNearSink   pthNear = path.empty() ? rw::pathNearSink( ing, g, dstDefs, pthGaps.cone, *pthValueIdx ) : rw::PathNearSink{};
         const bool pthHasVia = rw::pathHasNameOnlyHop( g, path );   // FE-B: exactly when a hop of THIS path is via="name"
         // attrib-multidef (defattrib.h): from_p=/to_p= only for an endpoint the path bound; prov="split" on a split-arm hop
         const rw::PathEndpointBinding pthBound = rw::pathEndpointBinding( g, rw::endpointDefinitionCount( ing, srcDefs ), rw::endpointDefinitionCount( ing, dstDefs ), path );
@@ -2420,7 +2422,7 @@ std::optional<int> runPath( const MainDispatch& d )
                      "graph holds none. {}{}{}{}-->{}", ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to ) ).c_str(),
                      ( std::string( rw::toValueRefsLegend( pthToValueRefs.count > 0 ) ) + rw::valueRefsDepthLegend( pthToValueRefs.depthCut.files > 0 ) ).c_str(),
-                     rw::pathGapsLegend( pthGaps.any() ),
+                     ( std::string( rw::pathGapsLegend( pthGaps.any() ) ) + std::string( rw::nearSinkLegend( !pthNear.rows.empty() ) ) ).c_str(),
                      rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rw::rootRelPathsLegend( pthSingleRoot ) );
         rw::emitTo( stdout, "<path from=\"{}\" to=\"{}\"{}{} from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
                      ex( srcN ).c_str(), ex( dstN ).c_str(), pthBound.from ? " from_p=\"" + loc( srcUsed ) + "\"" : std::string(),
@@ -2438,7 +2440,7 @@ std::optional<int> runPath( const MainDispatch& d )
                                     { "--connect=" + std::string( srcN ) + "," + std::string( dstN ), "--uses/--impact",
                                       ( srcDefs.size() > 1 || dstDefs.size() > 1 ) ? "; several defs share these names — qualify as file:name to pick one" : "" } )
             : rw::PathGapsXml{};
-        rw::emitTo( stdout, "{}>{}", pthUnreached.rootAttrs, pthUnreached.rows );
+        rw::emitTo( stdout, "{}>{}{}", pthUnreached.rootAttrs, pthUnreached.rows, rw::pathNearSinkXml( ing, pthNear, pthSingleRoot, pthRootPrefix ) );
         for( std::size_t i = 0; i < path.size(); ++i )
         {
             const Symbol&           s  = ing.symbols[ path[i] ];

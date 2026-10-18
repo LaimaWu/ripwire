@@ -15,6 +15,18 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — `--path` names the sink side of an unreached path (`<near_sink>`)
+
+A `--path=A,B` answer with `reachable="0"` (and the MCP `path_between` twin) now carries `<near_sink depth= callers= rows=>`
+beside the forward `<gap>` rows: B's proven callers walked back over resolved call edges up to 2 hops, each `<ns>` row
+classified by how it may also be entered with no edge — `why=` `declined` (a declined call lists it as a candidate),
+`value`, `through` (a call through a parameter or slot is matched to that value), `name` (a by-name call went to a
+namesake), or `external` (no indexed way in was found) — with one such site (`in=`, `site=`) and `met="1"` when the
+forward search reached that site. Rows are hedges, never hops; at most 4 are shown (`rows=` counts them all) and `next=`
+lists the first row's callers. On htop, `--path=ScreenManager_run,LinuxMachine_scanCPUTime` now names the Linux
+`Machine_scan` (the sink's only caller) and the declined call in `checkRecalculation` that could have meant it. Every
+`reachable="1"` answer is byte-identical; the reachable="0" hint and gap clause are unchanged.
+
 ### Changed — Go methods carry their receiver type as scope (#403, slice 9a)
 
 Go methods now carry their receiver type as scope (`sc=`), with `*` and type arguments stripped (`*Stack[T]` → `Stack`),

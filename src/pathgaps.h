@@ -72,6 +72,7 @@ struct PathSearchGaps
     std::size_t             calls    = 0;   // every gap in the cone: the sum of totals
     PathGapCounts           totals{};
     std::vector<PathGapSym> syms;           // cone symbols carrying >= 1 gap: nearest first, then more gaps, then id
+    std::vector<NodeId>     cone;           // every searched symbol, BFS order (searched == cone.size()): the near-sink rows' met=
 
     bool any() const noexcept { return calls > 0; }
 };
@@ -263,22 +264,31 @@ inline PathSearchGaps pathSearchGaps( const IngestResult& ing, const Graph& g, s
         }
         return a.id < b.id;
     } );
+    out.cone = std::move( queue );
     ENSURES( out.any() == !out.syms.empty(), "a non-zero total is carried by at least one cone symbol, and only then" );
+    ENSURES( out.cone.size() == out.searched, "the cone is exactly the searched symbols" );
     return out;
+}
+
+// "kind:N,kind:N" over a per-kind count table — zero entries left out, table order. One spelling for gaps= and why=.
+template<std::size_t K>
+inline std::string kindCountsValue( const std::array<std::size_t, K>& c, const std::array<std::string_view, K>& names )
+{
+    std::string v;
+    for( std::size_t k = 0; k < K; ++k )
+    {
+        if( c[k] > 0 )
+        {
+            v += ( v.empty() ? "" : "," ) + std::string( names[k] ) + ":" + std::to_string( c[k] );
+        }
+    }
+    return v;
 }
 
 // gaps="declined:D,unresolved:U,value:V,through:T,name:M" — zero entries left out, table order.
 inline std::string pathGapCountsValue( const PathGapCounts& c )
 {
-    std::string v;
-    for( std::size_t k = 0; k < kPathGapKindCount; ++k )
-    {
-        if( c[k] > 0 )
-        {
-            v += ( v.empty() ? "" : "," ) + std::string( kPathGapKindNames[k] ) + ":" + std::to_string( c[k] );
-        }
-    }
-    return v;
+    return kindCountsValue( c, kPathGapKindNames );
 }
 
 // The legend sentence, carried only by an answer that prints the clause (absent otherwise: byte-identical).
@@ -341,6 +351,376 @@ inline PathGapsXml pathUnreachedXml( const IngestResult& ing, const PathSearchGa
                   + " hint=\"no path through resolved call edges, but the search is incomplete: it met calls or hand-offs it could not follow in full (gaps=) — read the gap rows, or try "
                   + ex( say.connect ) + " (undirected: finds a shared caller)" + std::string( say.tail ) + "\"" + nextAttrXml( nextFlag( "--expand=", nextSelectors ) );
     return out;
+}
+
+// ── SINK-SIDE FRONTIER (lane ix2-slice, commit 1): the reachable="0" answer's <near_sink> block ──────────────────────────
+// THE GAP. The <gap> rows above are FORWARD-only: where the search from from= went blind. A reader closing the gap by hand
+// also walks BACK from to=: who calls it, who calls those, and how the last of them is entered when nothing proven calls it.
+// htop's `--path=ScreenManager_run,LinuxMachine_scanCPUTime` met a declined call in checkRecalculation, but nothing named
+// the platform build Machine_scan (linux/LinuxMachine.c), the sink's only caller — the hop the declined call could have meant.
+// (Mechanism learned from a peer's failure diagnosis, which reports the backward frontier beside the forward one; no code copied.)
+//
+// THE CONTRACT. pathNearSink walks the sink's PROVEN callers back over resolved call edges to depth kNearSinkDepth, and
+// classifies, for every symbol it meets (to= itself included), how that symbol may ALSO be entered without an edge:
+//   declined  a declined call (several candidates, none chosen) whose candidate list holds it (the callers verb's <dc> rows);
+//   value     it is stored or passed as a value, and no call through a parameter or slot is matched to that hand-off;
+//   through   it is passed as a value that a call through a parameter or slot is matched to (the invoker is named);
+//   name      a call bound by name alone (via=name) went to a same-language, same-kind namesake and has no edge to it;
+//   external  none of those and no proven caller either: no indexed way in was found (an entry point, a caller outside
+//             the tree, a framework hook, a hand-off the index does not record — koa's local `.then( handleResponse )` — or dead).
+// Each row names ONE such site (in= its enclosing definition, site= its file:line): a site whose enclosing definition the
+// forward search reached comes first (met="1": the search met that hand-off and could not follow it), then by kind, then by
+// path and line. The rows: every proven caller at depth 1..kNearSinkDepth, plus a to= definition that carries a reason; the
+// ones carrying a reason first (met before not), then depth, then id; kNearSinkRows shown, rows= counts them all.
+//
+// What it does NOT mean: a row is not a hop of a path and not evidence that one exists; why= says how the row MAY be entered
+// that the graph holds no edge for (the classification is a floor: unresolved calls carry no per-name record, and calls to
+// names defined nowhere are not counted). met="1" is the closest thing to a bridge this answer offers, and it is a hedge.
+// A reachable="1" answer never carries the block (byte-identical); the hint and the forward clause above are unchanged.
+inline constexpr std::uint32_t kNearSinkDepth = 2;   // proven caller hops back from to= (1 = a direct caller)
+inline constexpr std::size_t   kNearSinkRows  = 4;   // <ns> rows printed; rows= counts them all, rows_capped="1" says so
+
+// The four un-edged reach kinds, in the order why= lists them (external is their absence, with no proven caller).
+enum class NearSinkKind : std::uint8_t { Declined, Value, Through, Name };
+inline constexpr std::size_t                                     kNearSinkKindCount = 4;
+inline constexpr std::array<std::string_view, kNearSinkKindCount> kNearSinkKindNames = { "declined", "value", "through", "name" };
+using NearSinkCounts = std::array<std::size_t, kNearSinkKindCount>;
+
+struct NearSinkSite
+{
+    std::uint32_t ref  = UINT32_MAX;   // the site's reference (ing.references); UINT32_MAX = none chosen
+    NodeId        in   = kNoNode;      // its enclosing definition (kNoNode: file scope)
+    NearSinkKind  kind = NearSinkKind::Declined;
+    bool          met  = false;        // the forward search reached `in`
+};
+
+struct NearSinkRow
+{
+    NodeId         id      = kNoNode;
+    std::uint32_t  depth   = 0;   // proven call hops back from the nearest to= definition (0 = to= itself)
+    std::size_t    callers = 0;   // its proven callers (in-edges), any depth
+    NearSinkCounts counts{};
+    NearSinkSite   site;          // the one site the row names (none when counts are all 0)
+
+    bool reasoned() const noexcept { return site.ref != UINT32_MAX || callers == 0; }   // a why= (external included)
+};
+
+struct PathNearSink
+{
+    std::size_t              callers = 0;   // the sink's proven callers within kNearSinkDepth hops (to= excluded)
+    std::vector<NearSinkRow> rows;          // served order, uncut (the emitter shows kNearSinkRows)
+};
+
+// Is site a preferred over site b for one row? met first, then kind (table order), then path, line, reference index.
+inline bool nearSinkSiteBetter( const IngestResult& ing, const NearSinkSite& a, const NearSinkSite& b )
+{
+    if( b.ref == UINT32_MAX )
+    {
+        return a.ref != UINT32_MAX;
+    }
+    if( a.ref == UINT32_MAX )
+    {
+        return false;
+    }
+    if( a.met != b.met )
+    {
+        return a.met;
+    }
+    if( a.kind != b.kind )
+    {
+        return a.kind < b.kind;
+    }
+    const Reference& ra = ing.references[ a.ref ];
+    const Reference& rb = ing.references[ b.ref ];
+    if( ra.fileId != rb.fileId )
+    {
+        return ing.files[ ra.fileId ] < ing.files[ rb.fileId ];
+    }
+    return ra.line != rb.line ? ra.line < rb.line : a.ref < b.ref;
+}
+
+// The backward frontier of `dstDefs` (see the block comment above). `forwardCone` = PathSearchGaps::cone, the symbols the
+// forward search reached. Deterministic: BFS in in-edge order from the to= definitions in the order given, one pass over the
+// declined records, the value index in reference order, one pass over the name-only edges, and a total order on the rows.
+inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::span<const NodeId> dstDefs, std::span<const NodeId> forwardCone,
+                                  const ValueRefIndex& values )
+{
+    constexpr std::uint32_t kNone = std::numeric_limits<std::uint32_t>::max();
+    const std::size_t       S     = ing.symbols.size();
+    PathNearSink            out;
+    std::vector<std::uint32_t> rowOf( S, kNone );   // symbol → its index in out.rows
+    std::vector<char>          met( S, 0 );
+    for( const NodeId u : forwardCone )
+    {
+        if( u < S )
+        {
+            met[u] = 1;
+        }
+    }
+    const auto* ro = g.inEdges.rowOffsets();
+    const auto* ci = g.inEdges.colIndices();
+    EXPECTS( g.inEdges.rows() >= S, "the in-edge CSR has a row per symbol" );
+    for( const NodeId t : dstDefs )
+    {
+        if( t < S && rowOf[t] == kNone )
+        {
+            rowOf[t] = std::uint32_t( out.rows.size() );
+            out.rows.push_back( NearSinkRow{ t, 0, 0, {}, {} } );
+        }
+    }
+    for( std::size_t head = 0; head < out.rows.size(); ++head )   // BFS: out.rows grows behind `head`, in depth order
+    {
+        const NodeId        u = out.rows[head].id;
+        const std::uint32_t d = out.rows[head].depth;
+        for( std::uint32_t k = ro[u]; k < ro[u + 1]; ++k )
+        {
+            const NodeId c = ci[k];
+            if( c >= S || c == u )
+            {
+                continue;   // a non-symbol node (a doc file) is no caller
+            }
+            ++out.rows[head].callers;
+            if( d < kNearSinkDepth && rowOf[c] == kNone )
+            {
+                rowOf[c] = std::uint32_t( out.rows.size() );
+                out.rows.push_back( NearSinkRow{ c, d + 1, 0, {}, {} } );
+            }
+        }
+    }
+    out.callers = out.rows.size() - std::size_t( std::ranges::count_if( out.rows, []( const NearSinkRow& r ) { return r.depth == 0; } ) );
+    const auto offer = [ & ]( std::uint32_t row, NearSinkKind kind, std::uint32_t ref, NodeId in )
+    {
+        NearSinkRow& r = out.rows[row];
+        ++r.counts[ std::size_t( kind ) ];
+        const NearSinkSite cand{ ref, in, kind, in < S && met[in] != 0 };
+        if( nearSinkSiteBetter( ing, cand, r.site ) )
+        {
+            r.site = cand;
+        }
+    };
+
+    // DECLINED: one pass over the stored candidate lists (which rows each list holds), then one over the records.
+    std::vector<std::vector<std::uint32_t>> rowsOfList( g.declinedListCallCount.size() );
+    for( std::size_t list = 0; list < rowsOfList.size(); ++list )
+    {
+        for( std::uint32_t slot = g.declinedListOff[list]; slot < g.declinedListOff[list + 1]; ++slot )
+        {
+            if( const NodeId cand = g.declinedListCand[slot]; cand < S && rowOf[cand] != kNone )
+            {
+                rowsOfList[list].push_back( rowOf[cand] );
+            }
+        }
+    }
+    for( std::uint32_t site = 0; site < g.declinedSiteList.size(); ++site )
+    {
+        const std::uint32_t list = g.declinedSiteList[site];
+        if( list == kNoDeclinedList || list >= rowsOfList.size() )
+        {
+            continue;
+        }
+        for( const std::uint32_t row : rowsOfList[list] )
+        {
+            if( g.declinedSiteCaller[site] != out.rows[row].id )   // a declined self-call is no way in
+            {
+                offer( row, NearSinkKind::Declined, g.declinedSiteRef[site], g.declinedSiteCaller[site] );
+            }
+        }
+    }
+
+    // VALUE / THROUGH: each value reference to a row; one matched to a call through a parameter or slot is a THROUGH site
+    // there (the invoker), else a VALUE site where it is handed off. A reference made inside the row itself is no way in.
+    for( std::uint32_t row = 0; row < out.rows.size(); ++row )
+    {
+        const NodeId u = out.rows[row].id;
+        for( const std::uint32_t v : values.valueRefsTo( std::span<const NodeId>( &u, 1 ) ) )
+        {
+            const Reference& vr = ing.references[v];
+            if( vr.fromSymbol == u )
+            {
+                continue;
+            }
+            const std::vector<std::uint32_t> throughs = values.throughsFor( v );
+            if( throughs.empty() )
+            {
+                offer( row, NearSinkKind::Value, v, vr.fromSymbol );
+            }
+            for( const std::uint32_t t : throughs )
+            {
+                offer( row, NearSinkKind::Through, t, ing.references[t].fromSymbol );
+            }
+        }
+    }
+
+    // NAME: a caller whose call reached a same-language, same-kind namesake of a row by name alone, with no edge to the row.
+    // Counted once per (row, caller); the site is that caller's call of the name, found in one reference pass below.
+    if( !g.outNameOnly.empty() )
+    {
+        EXPECTS( g.outNameOnly.size() == g.outTargets.size(), "buildGraph allocates the hedge bits one per flattened edge" );
+        struct Key
+        {
+            Lang             lang;
+            SymKind          kind;
+            std::string_view name;
+            std::uint32_t    row;
+        };
+        const auto keyLess = []( const Key& a, const Key& b )
+        {
+            if( a.lang != b.lang )
+            {
+                return a.lang < b.lang;
+            }
+            if( a.kind != b.kind )
+            {
+                return a.kind < b.kind;
+            }
+            return sortutil::svLess( a.name, b.name );
+        };
+        std::vector<Key> keys;
+        keys.reserve( out.rows.size() );
+        for( std::uint32_t row = 0; row < out.rows.size(); ++row )
+        {
+            const Symbol& s = ing.symbols[ out.rows[row].id ];
+            keys.push_back( Key{ s.lang, s.kind, s.name, row } );
+        }
+        std::ranges::stable_sort( keys, keyLess );
+        std::vector<std::pair<NodeId, std::uint32_t>> nameHits;   // (caller, row)
+        const std::size_t N = g.outOff.empty() ? 0 : g.outOff.size() - 1;
+        for( NodeId c = 0; c < N && c < S; ++c )
+        {
+            for( std::uint32_t k = g.outOff[c]; k < g.outOff[c + 1]; ++k )
+            {
+                const NodeId w = g.outTargets[k];
+                if( g.outNameOnly[k] == 0 || w >= S )
+                {
+                    continue;
+                }
+                const Symbol& ws = ing.symbols[w];
+                const Key     probe{ ws.lang, ws.kind, ws.name, 0 };
+                for( auto it = std::ranges::lower_bound( keys, probe, keyLess ); it != keys.end() && !keyLess( probe, *it ); ++it )
+                {
+                    const NodeId u = out.rows[ it->row ].id;
+                    const auto   from = g.outTargets.begin() + g.outOff[c];
+                    const auto   to   = g.outTargets.begin() + g.outOff[c + 1];
+                    if( u != w && u != c && !std::binary_search( from, to, u ) )   // outTargets ascend within a source
+                    {
+                        nameHits.emplace_back( c, it->row );
+                    }
+                }
+            }
+        }
+        std::ranges::sort( nameHits );
+        nameHits.erase( std::ranges::unique( nameHits ).begin(), nameHits.end() );
+        if( !nameHits.empty() )
+        {
+            // the call site: the caller's first call reference of the row's name (reference order)
+            std::vector<std::pair<NodeId, std::uint32_t>> firstCall;   // (caller, ref), sorted by caller then ref
+            std::vector<char> isCaller( S, 0 );
+            for( const auto& [ c, row ] : nameHits )
+            {
+                isCaller[c] = 1;
+            }
+            for( std::uint32_t i = 0; i < ing.references.size(); ++i )
+            {
+                const Reference& r = ing.references[i];
+                if( r.role == RefRole::Call && r.fromSymbol < S && isCaller[ r.fromSymbol ] != 0 )
+                {
+                    firstCall.emplace_back( r.fromSymbol, i );
+                }
+            }
+            std::ranges::sort( firstCall );
+            for( const auto& [ c, row ] : nameHits )
+            {
+                const std::string_view name = ing.symbols[ out.rows[row].id ].name;
+                std::uint32_t          ref  = UINT32_MAX;
+                for( auto it = std::ranges::lower_bound( firstCall, std::pair<NodeId, std::uint32_t>( c, 0u ) ); it != firstCall.end() && it->first == c; ++it )
+                {
+                    if( ing.references[ it->second ].calleeName == name )
+                    {
+                        ref = it->second;
+                        break;
+                    }
+                }
+                if( ref != UINT32_MAX )   // a hedged edge is always some call reference's; none found ⇒ no row claim
+                {
+                    offer( row, NearSinkKind::Name, ref, c );
+                }
+            }
+        }
+    }
+
+    std::ranges::sort( out.rows, []( const NearSinkRow& a, const NearSinkRow& b )
+    {
+        if( a.reasoned() != b.reasoned() )
+        {
+            return a.reasoned();
+        }
+        if( a.site.met != b.site.met )
+        {
+            return a.site.met;
+        }
+        if( a.depth != b.depth )
+        {
+            return a.depth < b.depth;
+        }
+        return a.id < b.id;
+    } );
+    // a to= definition with proven callers and no other way in is to_p= itself, not a frontier row; a to= DECLARATION (a
+    // prototype: no body) is no frontier either — it is entered through the definition it declares, whose callers it shares
+    std::erase_if( out.rows, [ & ]( const NearSinkRow& r ) { return r.depth == 0 && ( !r.reasoned() || !isDefinitionNotDeclaration( ing.symbols[ r.id ] ) ); } );
+    ENSURES( out.rows.size() >= out.callers, "every proven caller within the depth is a row" );
+    return out;
+}
+
+inline constexpr std::string_view kNearSinkLegend =
+    "<near_sink callers= rows=>: the SINK-SIDE frontier — to='s proven callers walked back over resolved call edges up to depth= hops "
+    "(callers= counts them), each <ns d= t= n= p=> row with callers= its own proven callers (absent at 0) and why= how it may ALSO be "
+    "entered with no edge: declined = a declined call lists it as a candidate, value = it is stored or passed as a value, through = a "
+    "call through a parameter or slot is matched to that value, name = a by-name call went to a namesake and has no edge to it, "
+    "external = none of those and no proven caller: no indexed way in was found (an entry point, an out-of-tree or framework caller, "
+    "a hand-off the index does not record, or dead); in= site= name one such site (its enclosing definition, file:line), met=1 when the forward search reached in= (it met that "
+    "hand-off and could not follow it). A row is where the backward search could not see, never a hop and not proof a path exists; "
+    "rows= counts them, rows_capped=1 = more than shown; next= on the block lists the first row's callers and declined sites. ";
+inline std::string_view nearSinkLegend( bool on ) noexcept
+{
+    return on ? kNearSinkLegend : std::string_view();
+}
+
+// The <near_sink> block (empty string when there is no row). `rootPrefix` empty ⇒ p= stays as indexed (multi-root).
+inline std::string pathNearSinkXml( const IngestResult& ing, const PathNearSink& ns, bool singleRoot, std::string_view rootPrefix )
+{
+    if( ns.rows.empty() )
+    {
+        return {};
+    }
+    std::vector<char> esc;
+    const auto ex  = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
+    const auto rel = [ & ]( std::uint32_t fileId ) -> std::string_view
+    { return singleRoot ? sarif::rootRelativeUri( ing.files[ fileId ], rootPrefix ) : std::string_view( ing.files[ fileId ] ); };
+    const std::size_t shown = std::min( ns.rows.size(), kNearSinkRows );
+    std::string       rows;
+    for( std::size_t i = 0; i < shown; ++i )
+    {
+        const NearSinkRow& r   = ns.rows[i];
+        const Symbol&      s   = ing.symbols[ r.id ];
+        // why="declined:D,value:V,through:T,name:M" (table order), "external" with no proven caller and no other way in,
+        // nothing with proven callers only
+        const std::string  counted = kindCountsValue( r.counts, kNearSinkKindNames );
+        const std::string  why     = counted.empty() && r.callers == 0 ? std::string( "external" ) : counted;
+        rows += "<ns d=\"" + std::to_string( r.depth ) + "\" t=\"" + std::string( symTag( s.kind ) ) + "\" n=\"" + ex( s.name ) + "\" p=\""
+              + ex( rel( s.fileId ) ) + ":" + std::to_string( s.line ) + "\"" + ( r.callers > 0 ? " callers=\"" + std::to_string( r.callers ) + "\"" : std::string() )
+              + ( why.empty() ? std::string() : " why=\"" + why + "\"" );
+        if( r.site.ref != UINT32_MAX )
+        {
+            const Reference& sr = ing.references[ r.site.ref ];
+            rows += ( r.site.in < ing.symbols.size() ? " in=\"" + ex( ing.symbols[ r.site.in ].name ) + "\"" : std::string() ) + " site=\""
+                  + ex( rel( sr.fileId ) ) + ":" + std::to_string( sr.line ) + "\"" + ( r.site.met ? " met=\"1\"" : "" );
+        }
+        rows += "/>";
+    }
+    const Symbol& first = ing.symbols[ ns.rows.front().id ];
+    return "<near_sink depth=\"" + std::to_string( kNearSinkDepth ) + "\" callers=\"" + std::to_string( ns.callers ) + "\" rows=\""
+         + std::to_string( ns.rows.size() ) + "\"" + ( ns.rows.size() > shown ? " rows_capped=\"1\"" : "" )
+         + nextAttrXml( nextFlag( "--callers=", std::string( rel( first.fileId ) ) + ":" + first.name ) ) + ">" + rows + "</near_sink>";
 }
 
 }   // namespace rw

@@ -34,6 +34,12 @@
 #   (N3) above doubles as the name-gap near miss: run's obj.process() is via="name" too, but it has an edge to EVERY
 #        same-language definition of process, so nothing was left unsearched.
 #   (M)  MCP path_between carries the same searched/gaps/gap_syms/rows/next as the CLI (P1-P3, P7), and the same no-gap hint shape.
+#   (S1-S12) the SINK-SIDE frontier (lane ix2-slice): every reachable="0" answer carries <near_sink depth= callers= rows= next=>
+#        — to='s proven callers walked back to depth 2, each <ns> row classified (why= declined/value/through/name/external)
+#        with one site (in= site=, met="1" when the forward search reached in=): S1 declined (htop shape: the platform build
+#        the declined call could mean), S2 value (koa shape), S3 through (to= itself), S4 name, S5 external + row order,
+#        S6 depth cap, S7 row cap, S8 near miss (another name's declined list), S9 a disconnected pair keeps its plain hint,
+#        S10 a found path carries no block, S11 next= pastes, S12 both legends; (M) compares the block byte for byte.
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -372,6 +378,95 @@ else
     no "(N7) premise: helper lists only other/B.process by name and run reaches pkg/x/A.process (rc=$fh_rc/$fr_rc): $( grep -o '<callees .*' "$f" | head -c 300 ) | $( grep -o '<callees .*' "$f2" | head -c 300 )"
 fi
 
+echo "(S) sink-side frontier: <near_sink> on every reachable=0 answer (lane ix2-slice)"
+# fixtures: a 4-deep chain (depth cap) and a sink with six caller-less callers (row cap)
+mkdir -p "$TMP/deep" "$TMP/wide"
+cat > "$TMP/deep/d.c" <<'EOF'
+static int sink( void ) { return 1; }
+static int z( void ) { return sink(); }
+static int y( void ) { return z(); }
+static int x( void ) { return y(); }
+int w( void ) { return x(); }
+int lone( void ) { return 0; }
+EOF
+cat > "$TMP/wide/w.c" <<'EOF'
+static int sink( void ) { return 1; }
+int c1( void ) { return sink(); }
+int c2( void ) { return sink(); }
+int c3( void ) { return sink(); }
+int c4( void ) { return sink(); }
+int c5( void ) { return sink(); }
+int c6( void ) { return sink(); }
+int lone( void ) { return 0; }
+EOF
+nsblock(){ grep -o '<near_sink [^>]*>.*</near_sink>' "$1"; }
+nshead(){ grep -o '<near_sink [^>]*>' "$1"; }
+nsrows(){ grep -o '<ns [^>]*/>' "$1"; }
+nsArm(){   # $1 label, $2 dir, $3 FROM,TO, $4 expected <near_sink …> head, $5 expected rows (concatenated, exact)
+    local f="$TMP/S$( echo "$1" | tr -cd 'A-Za-z0-9' ).xml" rc
+    path "$2" "$3" "$f"; rc=$?
+    premise "$1" "$rc" "$f" || return
+    local h r; h="$( nshead "$f" )"; r="$( nsrows "$f" | tr -d '\n' )"
+    if [ "$( attr "$f" reachable )" = "0" ] && [ "$h" = "$4" ] && [ "$r" = "$5" ]; then
+        ok "$1 $h $r"
+    else
+        no "$1 want [$4][$5]; got [$h][$r]"
+    fi
+}
+nsArm "(S1) declined: the sink's caller is a candidate of the declined call the search met (htop shape)" "$TMP/decl" "Machine_run,Process_update" \
+    '<near_sink depth="2" callers="1" rows="1" next="--callers=linux/scan.c:Machine_scan">' \
+    '<ns d="1" t="fn" n="Machine_scan" p="linux/scan.c:2" why="declined:1" in="Machine_run" site="core/machine.c:2" met="1"/>'
+nsArm "(S2) value: the sink's caller is handed to .then() where the search went (koa shape)" "$TMP/val" "listen,respond" \
+    '<near_sink depth="2" callers="1" rows="1" next="--callers=app.js:handleResponse">' \
+    '<ns d="1" t="fn" n="handleResponse" p="app.js:2" why="value:1" in="handleRequest" site="app.js:4" met="1"/>'
+nsArm "(S3) through: to= itself, invoked through apply's parameter" "$TMP/thr" "start,target" \
+    '<near_sink depth="2" callers="0" rows="1" next="--callers=t.py:target">' \
+    '<ns d="0" t="fn" n="target" p="t.py:1" why="through:1" in="apply" site="t.py:5" met="1"/>'
+nsArm "(S4) name: a by-name call went to the namesake A.process, not to the sink's caller B.process" "$TMP/lpy" "run,target" \
+    '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:process">' \
+    '<ns d="1" t="fn" n="process" p="other/b.py:5" why="name:1" in="run" site="pkg/x/c.py:2" met="1"/>'
+nsArm "(S5) external: the frontier row first, then the proven caller it reaches to= through" "$TMP/clean" "a,d" \
+    '<near_sink depth="2" callers="2" rows="2" next="--callers=c.c:z">' \
+    '<ns d="2" t="fn" n="z" p="c.c:5" why="external"/><ns d="1" t="fn" n="c" p="c.c:2" callers="1"/>'
+nsArm "(S6) depth cap: callers at depth 1 and 2 only (x, at depth 3, is not a row)" "$TMP/deep" "lone,sink" \
+    '<near_sink depth="2" callers="2" rows="2" next="--callers=d.c:z">' \
+    '<ns d="1" t="fn" n="z" p="d.c:2" callers="1"/><ns d="2" t="fn" n="y" p="d.c:3" callers="1"/>'
+nsArm "(S7) row cap: six caller-less callers, four rows, the cut disclosed" "$TMP/wide" "lone,sink" \
+    '<near_sink depth="2" callers="6" rows="6" rows_capped="1" next="--callers=w.c:c1">' \
+    '<ns d="1" t="fn" n="c1" p="w.c:2" why="external"/><ns d="1" t="fn" n="c2" p="w.c:3" why="external"/><ns d="1" t="fn" n="c3" p="w.c:4" why="external"/><ns d="1" t="fn" n="c4" p="w.c:5" why="external"/>'
+nsArm "(S8) near miss: a declined call whose candidates are another name gives no declined reason (N2's fixture)" "$TMP/out" "start,sink" \
+    '<near_sink depth="2" callers="1" rows="1" next="--callers=core/m.c:elsewhere">' \
+    '<ns d="1" t="fn" n="elsewhere" p="core/m.c:6" why="external"/>'
+f="$TMP/SN1.xml"; path "$TMP/clean" "a,d" "$f"; rc=$?
+if premise "(S9)" "$rc" "$f"; then
+    if grep -q 'hint="no directed call path' "$f" && [ -z "$( attr "$f" gaps )" ] && [ -n "$( nsblock "$f" )" ]; then
+        ok "(S9) a disconnected pair keeps \"no directed call path\" (no gap clause) beside its <near_sink>"
+    else
+        no "(S9) the disconnected pair lost its plain hint or its block: $( grep -o '<path .*' "$f" | head -c 600 )"
+    fi
+fi
+f="$TMP/found.xml"
+if [ -s "$f" ] && [ "$( attr "$f" reachable )" = "1" ] && ! grep -q 'near_sink' "$f"; then
+    ok "(S10) a found path (N4) carries no <near_sink> and no legend clause for it"
+else
+    no "(S10) found path carries near_sink or did not run: $( grep -o '<path .*' "$f" | head -c 400 )"
+fi
+f="$TMP/SS1declinedthesinkscallerisacandidateofthedeclinedcallthesearchmethtopshape.xml"
+nx="$( python3 -c 'import re,sys,html; t=open(sys.argv[1]).read(); m=re.search(r"<near_sink [^>]*next=\"([^\"]*)\"",t); print(html.unescape(m.group(1)) if m else "")' "$f" )"
+# shellcheck disable=SC2086
+if [ -n "$nx" ] && "$BIN" "$TMP/decl" --no-cache $nx > "$TMP/Snext.xml" 2>&1 && grep -q '<dc in="Machine_run" p="core/machine.c:2"' "$TMP/Snext.xml"; then
+    ok "(S11) the block's next=\"$nx\" pastes and lists the declined site in Machine_run"
+else
+    no "(S11) next=[$nx] did not serve the <dc in=Machine_run> row: $( head -c 400 "$TMP/Snext.xml" 2>/dev/null )"
+fi
+"$BIN" "$TMP/decl" --no-cache --path=Machine_run,Process_update --legend=full > "$TMP/Sfull.xml" 2>&1
+if grep -q '<near_sink callers= rows=>: the SINK-SIDE frontier' "$TMP/Sfull.xml" && grep -q 'never a hop and not proof a path exists' "$TMP/Sfull.xml" \
+   && grep -q 'ns d= t= n= p= callers= why=' "$f" && grep -q 'ns in= site=' "$f" && grep -q 'near_sink depth= callers= rows=' "$f"; then
+    ok "(S12) both legends define the block (full: never a hop, not proof a path exists; compact: near_sink/ns readings)"
+else
+    no "(S12) a legend lacks the near_sink clause (full: $( grep -c 'SINK-SIDE' "$TMP/Sfull.xml" ), compact: $( grep -c 'ns in= site=' "$f" ))"
+fi
+
 echo "(M) MCP path_between carries the same clause"
 # Two MCP legend postures (lean-answers): the unchanged assertions run on --mcp-legend=inline, the pre-posture spelling
 # where every answer carries its root facts on <path>; a TWIN runs the default session posture, whose answers after the
@@ -417,6 +512,10 @@ for i, ( d, a, b, gap ) in enumerate( cases ):
             print( "  %s: %s= MCP %r vs CLI %r" % ( d, name, pick( mcp, name ), pick( cli, name ) ) ); bad = 1
     if re.findall( r'<gap [^>]*/>', mcp ) != re.findall( r'<gap [^>]*/>', cli ):
         print( "  %s: gap rows differ" % d ); bad = 1
+    # ix2-slice: the sink-side frontier block, byte for byte (one emitter, two transports)
+    nsm, nsc = re.findall( r'<near_sink .*?</near_sink>', mcp ), re.findall( r'<near_sink .*?</near_sink>', cli )
+    if nsm != nsc or len( nsc ) != 1:
+        print( "  %s: near_sink differs or is missing: MCP %r vs CLI %r" % ( d, nsm, nsc ) ); bad = 1
     if gap and ( "no directed call path" in mcp or "search is incomplete" not in mcp ):
         print( "  %s: MCP hint still claims no path" % d ); bad = 1
     if not gap and "no directed call path" not in mcp:
@@ -430,7 +529,7 @@ sys.exit( bad )
 PY
 mrc=$?
 if [ "$mrc" -eq 0 ]; then
-    ok "(M) path_between ($MPOST legend posture): same searched/gaps/gap_syms/rows/next as the CLI on P1-P3 and P7, plain hint on N1"
+    ok "(M) path_between ($MPOST legend posture): same searched/gaps/gap_syms/rows/next and <near_sink> as the CLI on P1-P3 and P7, plain hint on N1"
 else
     no "(M) MCP path_between ($MPOST legend posture) disagrees with the CLI or the helper crashed (rc=$mrc, details above)"
 fi
