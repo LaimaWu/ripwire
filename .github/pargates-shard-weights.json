@@ -291,6 +291,7 @@
 "lintrulescheck.sh": 5.5,
 "lintscopecheck.sh": 1.8,
 "lintselectcheck.sh": 6.2,
+"localdeclcheck.sh": 30.0,
 "localitycheck.sh": 1.9,
 "localscountcheck.sh": 2.5,
 "loopconservationcheck.sh": 2.1,

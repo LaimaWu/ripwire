@@ -343,6 +343,10 @@ constexpr std::uint32_t kParserVer    = 196;          // bump on any grammar/.sc
                                                       //   lane call-result-typing 180 (rich 181), lane fcall-forward 188 (189), lane go-local-var 190 (191),
                                                       //   lane name-template-dispatch 192 (193), lane h1-annot (train 31) 194 (195); tail-sym and
                                                       //   path-owners kept 176. Rich file tag 197. kCacheVersion 36 (see its note).
+                                                      // 190 = 2026-10-17 (train 30, lane go-local-var): Go var/const, Rust const/static and GDScript const
+                                                      //   captures are anchored to their item/package scope, so a function-local declaration is no
+                                                      //   longer a symbol; Go package-level `var ( … )` groups are captured. Train-30 reservation
+                                                      //   190 / rich file tag 191; the train renumbers. kCacheVersion unchanged.
                                                       // 184 = 2026-10-17 (train 29): strictly above every number a train-29 binary used — lane arity-min 178
                                                       //   (rich 179), lane call-result-typing 180 (rich 181; carried to train 30), lane go-scope 182 (rich 183);
                                                       //   the other train-29 lanes kept 176. Rich file tag 185. kCacheVersion 34 (see its note).

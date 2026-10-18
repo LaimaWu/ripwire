@@ -2340,6 +2340,8 @@ constexpr std::uint32_t kIngestParserVerMirror    = 196;  // MUST equal ingest.c
                                                           // 196 = 2026-10-18 (train 30: above call-result-typing 180/181, fcall-forward
                                                           //   188/189, go-local-var 190/191, name-template-dispatch 192/193, h1-annot
                                                           //   194/195; see the kParserVer note)
+                                                          // 190 = lane go-local-var (reservation 190/191; the train renumbers):
+                                                          //   Go/Rust/GDScript var and const captures anchored to item/package scope
                                                           // 184 = 2026-10-17 (train 29: above arity-min 178/179, call-result-typing
                                                           //   180/181, go-scope 182/183; see the kParserVer note)
                                                           // 182 = 2026-10-16 (train 29 L5 go-scope reservation, #403: Go method /
