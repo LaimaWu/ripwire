@@ -34,6 +34,13 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-18, train 30 (call-result-typing, go-local-var, fcall-forward, name-template-dispatch, tail-sym, path-owners merged
+#   onto main b59b0824): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (hash 5af7514356…3726b4). Watched text:
+#   kParserVer -> 196 (lanes call-result-typing 180 / rich 181, fcall-forward 188 / 189, go-local-var 190 / 191,
+#   name-template-dispatch 192 / 193, and a train-31 lane's 194 / 195; 196 / rich file tag 197 is above every live build),
+#   kCacheVersion -> 36 (lane values 33, 33, 35; main 34), quality.h's two mirrors with them. kQSnapCacheScheme stays 22: what
+#   a cached Snapshot represents is the same, and the qsnap key folds the extraction identity, so no lane blob is named.
+#   The lane entries below are kept as written; their hashes are superseded by this one.
 # 2026-10-17, train 29 (langfacts-fold, go-scope, rust-std-rows, arity-min, callers-band, type-use-impact merged onto main
 #   7e589352): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (hash 2d60557b1f…bbe560). Watched text: kParserVer
 #   -> 184 (lane arity-min 178 / rich 179, lane go-scope 182 / rich 183, a receiver-typing lane 180 / rich 181 not in this train;

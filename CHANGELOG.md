@@ -143,7 +143,7 @@ it now names nothing.) Go's
 written `*os.File` no longer resolves to an in-tree type that happens to be called `File`. A Java/Kotlin class-name
 receiver binds an in-tree class only where the caller's file sees it — its package, a single-type import naming it, an
 on-demand import of its package (`import ext.Util; Util.open()`, `import ext.*; Util.open()`, `Util::open` no longer bind
-an in-tree `Util` as proven). `kParserVer` and the cache version move.
+an in-tree `Util` as proven). `kParserVer` and `kCacheVersion` move (196 and 36 in this release, see the versions note).
 ### Fixed — `f.call( … )` and `f.apply( … )` on a proven function are calls of `f`
 
 `handleRequest.call( request.server, null, request, reply )` used to be recorded only as a member call named `call`, so
@@ -153,7 +153,7 @@ the file declares as a function, or imports from a relative module, now stands f
 where the resolver proves a function or method: an imported object, const or class (`rpc.call()` on a required
 module object, `Klass.call( this )`) and a name bound by name alone add nothing. `f.bind( … )` is a value use of `f`,
 never a call. Floors, shared with the bare call `f()`: a function-local `var f` / `let f` declared after the site does not
-shadow it, and a re-assignment `f = …` is not followed. `kParserVer` and `kCacheVersion` move (the release renumbers).
+shadow it, and a re-assignment `f = …` is not followed. `kParserVer` and `kCacheVersion` move (196 and 36 in this release, see the versions note).
 ### Fixed — a method a name-template lookup can name no longer reads `risk="none-found"`
 
 `getattr(obj, f"watch_{name}")`, `hasattr`, `cls.__dict__.get(f"on_{n}")` and JS/TS `this['compile' + node.typename]`
@@ -167,8 +167,8 @@ each template's candidates (`<pd cands= shown=>`, first 8, `next=` for the rest)
 `--safe-delete`, when nothing else was found, it still makes `risk="hedged"` and names its site as a `<pdw>` row. A template with no literal side at all (`codes[sc + '']`, `f"{m}"`) carries no
 name and records nothing, like a bare `obj[k]`. Matched
 by name, never a proven call: `callers=`, `impact_reaches=`, `count=` and the `--dead-code` list are unchanged. JSON and
-MCP transports do not carry the rows yet. Cache format and parser version move (the reference role set grew; the train
-renumbers). Gate: `test/safedeletecheck.sh` arms 9–18.
+MCP transports do not carry the rows yet. Cache format and parser version move (the reference role set grew; 36 and 196 in this release, see the versions
+note). Gate: `test/safedeletecheck.sh` arms 9–18.
 ### Changed — `--for` tail rank rows name their file's top symbols
 
 The `<tail>` of a `--for` answer starts with up to 24 rank rows: the best-ranked files outside the shown signature rows.
@@ -184,6 +184,28 @@ tail: on 6 questions at budgets 4000/6000/8000/12000, 5 of 24 points cut rows (t
 starlette-11 at 6000: 39 to 33, fastify-13 at 8000: 38 to 31, mdbook-13 at 6000: 32 to 27, fzf-11 at 6000: 40 to 37).
 Each cut is disclosed in the answer (`<sigs shown= total= capped="1" next_offset=>` and `dropped_positive=`), and the
 `<sigs>` `next=` and `--offset=` both bring every cut row back.
+
+### Fixed — a function-local Go `var` / `const`, Rust `const` / `static` or GDScript `const` is no longer a symbol
+
+A `var cfg = load()` or `const k = 3` written inside a Go function was indexed as a top-level `var` / constant symbol, and
+as the nearest enclosing symbol of its initializer it took that call: `--callers=Make` could name `var localCfg` instead
+of the function holding it. The definition captures are now anchored to their scope in the queries
+(`queries/go/tags.scm`, `queries/rust/tags.scm`, `queries/gdscript/tags.scm`): a Go `var` / `const` is a symbol at package
+scope only, a Rust `const` / `static` at module, `impl`, trait or `extern` level, and a GDScript `const` at script or class
+level; a call in a function-local initializer belongs to the enclosing function. Package-level grouped Go declarations,
+`var ( a = …; b = … )`, which were missed, are now one symbol per name. On fzf, gotestsum and nfpm (Go), 574
+function-local symbols leave the map, no package-level one is lost, and 87 grouped names are added. `kParserVer` moves
+(196 in this release, see the versions note). Gate: `test/localdeclcheck.sh`.
+
+### Changed — `--path` hop rows name a member by its owner (`Owner.name`)
+
+`--path` and MCP `path_between` printed every hop as its bare name, so a path through two same-named methods read
+`n="go" n="go"`. A hop whose definition scope names a type or module the index holds in the same language (a class,
+struct, interface or named type; a Rust `mod` or Ruby module) now prints `n="Owner.name"`, the spelling `--callers=Owner.name`
+resolves: a fzf chain reads `Matcher.Loop`, and C++, Python, Rust, Ruby and Go methods are gated. A free function, a
+member of a scope the index holds no such definition for (a C++ namespace) and a type hop itself stay bare; the legend
+clause rides only when a row carries an owner, so an owner-free answer is byte-identical. `--callers` and `--callees`
+rows are unchanged; the CLI and MCP print the same rows. Gate: `test/pathownercheck.sh`.
 
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
@@ -420,16 +442,20 @@ server, when the cgroup's charge is the larger reading: restarting the server do
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 167 → 184: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
+`kParserVer` 167 → 196: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
 `??`/`||`/`&&`/`or`/`and` carried 173 on its branch, the Ruby/Python subscript references and Ruby's main-object mixins
 174 (file tag 175), and the Elixir quote live holes (#380) 145 on theirs; they landed together at 176 (file tag 177). The
-minimum-arity field (`paramsMin`) carried 178 (file tag 179) on its branch, the Go receiver scope (#403) 182 (file tag 183), and
-a receiver-typing branch not in this release 180 (file tag 181). This release is 184, above every number a branch build has used,
-so no cache such a build wrote is read as this release's; its full-use file tag is 185.
-`kCacheVersion` 31 → 34: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
+minimum-arity field (`paramsMin`) carried 178 (file tag 179) on its branch and the Go receiver scope (#403) 182 (file tag 183);
+those landed at 184 (file tag 185). Call-result typing carried 180 (file tag 181), the `f.call` / `f.apply` forwarders 188
+(189), the function-local Go / Rust / GDScript declarations 190 (191) and the name-template references 192 (193) on their
+branches, and a branch not in this release 194 (195). This release is 196, above every number a branch build has used, so
+no cache such a build wrote is read as this release's; its full-use file tag is 197.
+`kCacheVersion` 31 → 36: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
 numbered 9 on #380's branch, which predates the subscript role), and the binding kind byte one (Ruby's main-object mixin) (32);
-a definition record gained `paramsMin`, the fewest arguments a call can pass (33 on its branch, and on another branch for a
-different layout, so this release takes 34). `kQSnapCacheScheme` 20 → 22:
+a definition record gained `paramsMin`, the fewest arguments a call can pass (33 on its branch, 34 in the train that landed
+it); a binding record gained the call-result position and unwrap depth (33 on its branch), a reference record the
+`forwarded` byte (33 on its branch) and the role byte the name-template role (11; 35 on its branch), so this release takes
+36. `kQSnapCacheScheme` 20 → 22:
 the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls, 21), and a Rust call
 named like a standard-type member no longer binds an in-tree namesake (22), so the dead kind can
 differ for an unchanged commit. Every ingest cache written by an earlier build is refused and re-indexed once, and every
