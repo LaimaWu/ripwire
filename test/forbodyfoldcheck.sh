@@ -5,8 +5,9 @@
 # negatives that hold on both binaries and must keep holding — PROCESS rule 4, no gate erosion):
 #
 #   TRIGGER  CLI --for (XML, compact and full legends) on the compact route (root bundle="compact"), in the DEFAULT regime.
-#            No fold: --signatures-only, --json, --auto-bodies, --detail=N, an explicit --token-budget=N or --max-tokens=N,
-#            the name-exact route, RIPWIRE_NO_BODY_FOLD=1 (the A/B handle) — each byte-identical to the fold-off answer.
+#            No fold: --signatures-only, --json, --auto-bodies, --detail=N, an explicit --token-budget=N, the name-exact route,
+#            RIPWIRE_NO_BODY_FOLD=1 (the A/B handle) — each byte-identical to the fold-off answer. --max-tokens=N is not read by
+#            this answer (its notice says so): the fold rides and the answer is the flagless one byte for byte (FIX1 B1).
 #   WHAT     after the unchanged answer: <fold kind="bodies" budget_bytes="4000" served=K total=T>, T = the first three ranked
 #            <d> rows not already bodied (the body slot's owner never twice) that have a body. In rank order each body is whole
 #            or not served: a body whose element fits what is left of 4000 B is a <b t= l= p= n=> in the --expand shape WITHOUT
@@ -26,6 +27,14 @@
 #          question word (drain), never one without (counter_00), source order; then the class's own <skip bytes= next=>
 #   S2 [G] slice members whole (their definitions' source text), the fold <= 4000 B, no body twice
 #   S3 [P] of= counts the class's direct members only (a function nested in a member is inside that member's text)
+#   S4 [G] (FIX1 N4, kills mutant M2) a TS class whose constructor is NOT a ranked row and holds no question word: the slice still
+#          serves the constructor first (by name), then lineOfDay (a question word in its body), never member00
+#   S5 [P] (FIX1 N3) a Go struct whose methods all carry the receiver (s *Scheduler): a question naming the scheduler slices only the
+#          members whose name or body past the signature holds a question word — never Counter01 (r5, not a fold candidate), never all of them (members < of=)
+#   N1 [P] (FIX1 N2) each text once: no fold body (top-level or slice member) lies inside another fold body — a class and its own
+#          method both ranked (nest/lane.py Lane + schedule_lane) ride as the class alone, served= still counting both
+#   L1 [P] (FIX1 B2) the fold's legend coverage, both dialects: the legend defines b t= n= p= l= and every attribute of the
+#          <fold>, <slice> and <skip> elements the answer carries
 #   F1 [P] the router question: a <fold> holds SmartRouter's whole body (router.match.bind(router), UnsupportedPathError)
 #   F2 [P] the respond question: respond's body served, the 7.5 KB renderResponseBodyPage SKIPPED with bytes= > 4000 and
 #          next=--expand=lib/render.js:6:renderResponseBodyPage, and Application (r3) still served after the skip;
@@ -39,7 +48,8 @@
 #   F6 [P] est_tokens(fold) - est_tokens(off) >= 0.9 x the served body bytes / 3.80 (the body rate)
 #   F7 [P] the fold clause rides in both legends when the fold does, and never when it does not
 #   F8 [G] no fold, byte-identical to RIPWIRE_NO_BODY_FOLD=1: --signatures-only, --json, --auto-bodies, --detail=1,
-#          --token-budget=3000, --max-tokens=3000, the name-exact route (--for=SmartRouter)
+#          --token-budget=3000, the name-exact route (--for=SmartRouter)
+#   F8m [P] (FIX1 B1) --max-tokens=3000 is inert on this answer, as its notice says: byte-identical to the flagless answer
 #   F9 [G] the body slot's owner (bodies="1" reason="owner") is never repeated in the fold
 #   R1 [P] the dispatcher question: <h n=dispatchRequest><calls total=20 shown=16 capped=1 next="--callees=src/dispatch.ts:dispatchRequest">
 #          and the pasted next= lists all 20 callees;  R1b [G] an uncut <calls> carries no next=;  R1c [P] its legend clause
@@ -238,6 +248,38 @@ elif cmd == "hopnext":           # FILE BIN DIR NAME TOTAL
     for mm in re.finditer(r'<calls ([^>]*)>', t):
         ca = attrs(mm.group(1))
         if ca.get("capped") != "1" and "next" in ca: fail(f"an uncut <calls> carries next=: {ca}")
+elif cmd == "nested":           # FILE DIR : no fold body's source text lies inside another fold body's (each text once)
+    t = load(args[0]); a, x, _ = fold(t)
+    if a is None: fail("no <fold>")
+    spans = []
+    for ba, cd, _ in bodies(x):
+        src = open(args[1] + "/" + ba["p"], encoding="utf-8").read(); k = src.find(cd)
+        if k < 0: fail(f"{ba['p']}:{ba['n']} is not its source text")
+        spans.append((ba["p"], k, k + len(cd), ba["n"]))
+    for i, (p1, s1, e1, n1) in enumerate(spans):
+        for j, (p2, s2, e2, n2) in enumerate(spans):
+            if i != j and p1 == p2 and s2 <= s1 and e1 <= e2: fail(f"{n1} rides inside {n2} as well as on its own")
+elif cmd == "cover":            # FILE : the legend defines what the fold carries
+    t = load(args[0]); a, x, el = fold(t)
+    if a is None: fail("no <fold>")
+    leg = legend(t)
+    if not re.search(r'(?<![\w])b t= n= p= l=', leg): fail("the legend does not define b t= n= p= l=")
+    for name in ("fold", "slice", "skip"):
+        for m in re.finditer(r'<' + name + r' ([^>]*)>', el):
+            if not re.search(r'(?<![\w])' + name + r'\b', leg): fail(f"<{name}> is not named by the legend")
+            for k in attrs(m.group(1)):
+                if not re.search(r'(?<![\w])' + k + '=', leg): fail(f"<{name} {k}=> is not defined by the legend")
+elif cmd == "noword":           # FILE CLASS DROP : CLASS is skipped and DROP (no question word past its signature) is in no slice of it
+    t = load(args[0]); a, x, _ = fold(t)
+    if a is None: fail("no <fold>")
+    if not [s for s in skips(x) if s.get("n") == args[0 + 1]]: fail(f"{args[1]} is not skipped: the premise (a class too big) is gone")
+    for m in re.finditer(r'<slice ([^>]*)>(.*?)</slice>', x, re.S):
+        sa = attrs(m.group(1)); names = [b[0].get("n") for b in bodies(m.group(2))]
+        if sa.get("n") == args[1] and args[2] in names: fail(f"{args[2]} (no question word past its signature) is in the slice: members={sa.get('members')} of={sa.get('of')}")
+        if sa.get("n") == args[1] and int(sa["members"]) >= int(sa["of"]): fail(f"members={sa['members']} of={sa['of']}: every member matched")
+elif cmd == "unranked":         # FILE NAME : NAME is not one of the first three ranked <d> rows (the premise of S4)
+    names = [attrs(m.group(1)).get("n") for m in re.finditer(r'<d ([^>]*)>', load(args[0]))][:3]
+    if args[1] in names: fail(f"{args[1]} is a top-3 ranked row here: {names}")
 elif cmd == "pagelegend":
     if "sibs_total=" not in legend(load(args[0])): fail("the file page legend lacks the n= vs sibs_total= reading")
 elif cmd == "nodash":
@@ -256,6 +298,13 @@ run "$TMP/respf"  --for="$T_RESP" --legend=full; off "$TMP/respf.off" --for="$T_
 run "$TMP/slot"   --for="$T_SLOT";              off "$TMP/slot.off"   --for="$T_SLOT"
 run "$TMP/hops"   --for="$T_HOPS"
 ROOTDIR="$FIXPY" run "$TMP/slice" --for="$T_SLICE"; ROOTDIR="$FIXPY" off "$TMP/slice.off" --for="$T_SLICE"
+FIXCTOR="test/forbodyfoldfix/ctor"; FIXGO="test/forbodyfoldfix/go"; FIXNEST="test/forbodyfoldfix/nest"   # FIX1: one root each
+T_CTOR="How are the ledger totals reconciled?"
+T_GO="what state fields does the scheduler struct keep and what are the counters"
+T_NEST="How does a lane schedule its jobs?"
+ROOTDIR="$FIXCTOR" run "$TMP/ctor" --for="$T_CTOR"
+ROOTDIR="$FIXGO"   run "$TMP/go"   --for="$T_GO"
+ROOTDIR="$FIXNEST" run "$TMP/nest" --for="$T_NEST"
 
 # F1
 if r=$( chk has_body "$TMP/router" SmartRouter "router.match.bind(router)" "UnsupportedPathError" ); then ok "(F1) the router question folds SmartRouter's whole body"; else no "(F1) $r"; fi
@@ -263,6 +312,24 @@ if r=$( chk has_body "$TMP/router" SmartRouter "router.match.bind(router)" "Unsu
 if r=$( chk slice "$TMP/slice" JobScheduler __init__ drain counter_00 ); then ok "(S1) the over-budget class is served as a member slice (constructor first, the question-word members, source order) and skipped whole"; else no "(S1) $r"; fi
 if r=$( chk whole "$TMP/slice" "$BIN" "$FIXPY" ); then ok "(S2) slice members whole, the fold <= 4000 B, no body twice"; else no "(S2) $r"; fi
 if grep -q '<slice p="scheduler.py" n="JobScheduler" l="1" members="[0-9]*" of="49">' "$TMP/slice"; then ok "(S3) of= counts the class's 49 direct members: hand_off, nested in drain, is not one"; else no "(S3) of= is not 49 (a nested function counted as a member?)"; fi
+# S4 (N4): the constructor by name, not by rank
+if r=$( chk unranked "$TMP/ctor" constructor ) && r=$( chk slice "$TMP/ctor" LedgerBook constructor lineOfDay member00 ); then
+    ok "(S4) an unranked constructor with no question word still leads LedgerBook's slice (by name), then lineOfDay; never member00"
+else no "(S4) $r"; fi
+# S5 (N3): the receiver and parameter names are the signature's, not the body's
+if r=$( chk noword "$TMP/go" Scheduler Counter01 ); then ok "(S5) the Go receiver (s *Scheduler) no longer makes every method a question-word member"; else no "(S5) $r"; fi
+# N1 (N2): each text once
+for q in router resp slot slice ctor go nest; do
+    d="$FIX"; case $q in slice) d="$FIXPY";; ctor) d="$FIXCTOR";; go) d="$FIXGO";; nest) d="$FIXNEST";; esac
+    if r=$( chk nested "$TMP/$q" "$d" ); then ok "(N1) $q: no fold body rides inside another"; else no "(N1) $q: $r"; fi
+done
+if grep -q '<fold kind="bodies" budget_bytes="4000" served="3" total="3"><b t="cls" l="1" p="lane.py" n="Lane">' "$TMP/nest"; then
+    ok "(N1b) nest: Lane rides once with schedule_lane inside it, served= counts both"
+else no "(N1b) nest: the fold does not open with Lane served once (served=3 of 3)"; fi
+# L1 (B2): the legend defines every part of the fold, in both dialects
+for q in router resp respf slice ctor; do
+    if r=$( chk cover "$TMP/$q" ); then ok "(L1) $q: the legend defines b t= n= p= l= and every fold/slice/skip attribute"; else no "(L1) $q: $r"; fi
+done
 # F2
 if r=$( chk skip_then_serve "$TMP/resp" renderResponseBodyPage Application ); then
     ok "(F2) renderResponseBodyPage skipped with bytes>4000 and its --expand next=; Application still served after it"
@@ -308,9 +375,11 @@ done <<ARGV
 --for=$T_RESP|--auto-bodies
 --for=$T_RESP|--detail=1
 --for=$T_RESP|--token-budget=3000
---for=$T_RESP|--max-tokens=3000
 --for=SmartRouter
 ARGV
+# F8m (B1): --max-tokens is not read by this answer, so it changes no byte of it
+run "$TMP/mt" --for="$T_RESP" --max-tokens=3000
+if [ -s "$TMP/mt" ] && cmp -s "$TMP/mt" "$TMP/resp"; then ok "(F8m) --max-tokens=3000 is inert, as its notice says: the flagless answer, fold included"; else no "(F8m) --max-tokens=3000 changed the answer its notice says it does not read"; fi
 # F9
 if r=$( chk slot "$TMP/slot" ); then ok "(F9) the body slot's owner is not repeated in the fold"; else no "(F9) $r"; fi
 # R1

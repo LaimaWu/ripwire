@@ -199,27 +199,34 @@ growth_fail=0
 # bodies appended after the unchanged answer (forbodyfoldcheck (F5) pins that nothing before it moved). The band reads the answer
 # WITHOUT those additions: the fold element, its legend clause, the hop-calls next= clause and the <sigs> continuation pair
 # (sigs_next= renamed from next=, next= the first skip). fold_exempt prints their bytes; nothing else is exempt.
+# FIX1: the regexes spell the double quote \x22 — a bare " inside this single-quoted python made line 7 a SyntaxError, so
+# fold_exempt printed nothing, the $(( now - )) below aborted the ledger loops and (3) PASSED having checked no query; a
+# failed exemption read is now a FAIL (exempt_ok), never an empty operand.
 fold_exempt(){ python3 -c '
 import re, sys
 s = sys.stdin.read(); n = 0
 f = re.search( r"<fold .*?</fold>", s, re.S ); n += len( f.group( 0 ).encode() ) if f else 0
 c = re.search( r"; fold kind=bodies:.*?sigs_next= the signatures-only re-call", s, re.S ); n += len( c.group( 0 ).encode() ) if c else 0
 h = re.search( r"; (h calls capped=1 next= the call listing every callee|a hop row.s cut calls listing \(capped=1\) carries next=, the call that lists every callee)", s ); n += len( h.group( 0 ).encode() ) if h else 0
-n += sum( len( x.encode() ) for x in re.findall( r" next="--callees=[^"]*"", "".join( re.findall( r"<calls [^>]*>", s ) ) ) )
+# FIX1 N5: only a RANKED hop row cut listing (an <h> without qword=); an owner row next= predates the fold and is not exempt
+n += sum( len( x.encode() ) for x in re.findall( r" next=\x22--callees=[^\x22]*\x22", "".join( c for h, c in re.findall( r"<h ([^>]*)><calls ([^>]*)>", s ) if " qword=" not in " " + h ) ) )
 t = re.search( r"<sigs\b[^>]*>", s )
-if t and " sigs_next=\"" in t.group( 0 ):
-    n += 5 + sum( len( x.encode() ) for x in re.findall( r" next="[^"]*"", t.group( 0 ) ) )
+if t and " sigs_next=\x22" in t.group( 0 ):
+    n += 5 + sum( len( x.encode() ) for x in re.findall( r" next=\x22[^\x22]*\x22", t.group( 0 ) ) )
     n += len( "[sigs sigs_next=: one" ) - len( "[sigs next=: one" ) if "[sigs sigs_next=: one" in s else 0
 elif t:
-    n += sum( len( x.encode() ) for x in re.findall( r" next="--expand=[^"]*"", t.group( 0 ) ) )
+    n += sum( len( x.encode() ) for x in re.findall( r" next=\x22--expand=[^\x22]*\x22", t.group( 0 ) ) )
 print( n )'; }
+# exempt_ok N: in THIS shell (never inside a $( ), where no()'s fail=1 would be lost) — a non-number is a FAIL and counts 0
+exempt_ok(){ case "$1" in ''|*[!0-9]*) no "(3) fold_exempt could not read an answer (got '$1')"; growth_fail=1; return 1;; esac; return 0; }
 echo "  ledger: the ten reference queries (this repo, full legend) — base bytes @8eb669ff (q5 @cap-followup-2026-09-10) → now, shown=/total="
 i=0
 for q in "${REPO_Q[@]}"; do
     base="${REPO_BASE[$i]}"; i=$(( i + 1 ))
     out="$( "$BIN" . --for="$q" 2>/dev/null )"
     now="$( printf '%s' "$out" | wc -c | tr -d ' ' )"
-    now=$(( now - $( printf '%s' "$out" | fold_exempt ) ))   # body-fold: the band reads the answer before its fold additions
+    ex="$( printf '%s' "$out" | fold_exempt )"; exempt_ok "$ex" || ex=0
+    now=$(( now - ex ))   # body-fold: the band reads the answer before its fold additions
     marker="$( printf '%s' "$out" | grep -o '<sigs[^>]*>' | head -1 )"
     # forbudget-soft (stop when complete; PROCESS rule 5's stair-step target): rows served past the 7.5 KB target are disclosed
     # (<sigs past_target="K">: the last K rows) and are what the answer needs, so the band applies to the answer WITHOUT them —
@@ -266,7 +273,8 @@ hostilefix|parse the config and load it|3380"
 echo "  ledger: nine fixture bundles — base bytes @d5ac29a7 → now"
 while IFS='|' read -r fx q base; do
     fxout="$( cd "$TMP" && "$BIN" "$fx" --for="$q" 2>/dev/null )"
-    now=$(( $( printf '%s' "$fxout" | wc -c | tr -d ' ' ) - $( printf '%s' "$fxout" | fold_exempt ) ))   # body-fold: as above
+    ex="$( printf '%s' "$fxout" | fold_exempt )"; exempt_ok "$ex" || ex=0
+    now=$(( $( printf '%s' "$fxout" | wc -c | tr -d ' ' ) - ex ))   # body-fold: as above
     pct="$( python3 -c "print( '%+.2f' % ( ( $now - $base ) * 100.0 / $base ) )" )"
     printf '    %-10s %-36s %5d → %5d  (%s%%)\n' "$fx" "'$q'" "$base" "$now" "$pct"
     if [ "$now" -gt $(( base * 104 / 100 )) ]; then

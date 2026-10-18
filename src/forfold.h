@@ -13,15 +13,16 @@
 // body to slice (never a module scope). Each body is whole or not served: in rank order, a body whose rendered element fits
 // what is left of kForBodyFoldBudgetBytes is served; one that does not is listed as <skip p= n= l= bytes= next="--expand=…">,
 // the call that serves it, and the walk goes on to the next row (a later, smaller body can still fit). A body here is the
-// --expand body element (<b t= l= p= n=> with its CDATA) WITHOUT the --expand file context (sibs=, inc=) and WITHOUT callee
-// <calls> rows: the one-hop edges are the answer's <hops>, and the next-hop false adds a reader drew from callee rows of
+// --expand body element (<b t= l= p= n=> with its CDATA) WITHOUT the --expand file context (sibs=, inc=), WITHOUT the row's field
+// note (it rides on the <d> row already: one note, once) and WITHOUT callee <calls> rows: the one-hop edges are the answer's <hops>, and the next-hop false adds a reader drew from callee rows of
 // expanded bodies were the measured risk (dn-compound F2). The bodies are by rank, not a claim they are the answer.
 // THE MEMBER SLICE (owner-approved variant V1, the STEP-0 pick): a CLASS/struct/interface row whose whole body does not fit what is
 // left is not just skipped — its constructor (constructor, __init__, ctor, initialize, init, new, or the class's own name) and every
-// member whose name or body text holds a question word (the query's subtokens less the stopword lists) are served, each whole or not
-// at all, in source order, inside <slice p= n= l= members= of=>, and the class itself is still the <skip> that names the whole body.
+// member whose name, or body text past its signature (never the receiver or parameter names), holds a question word (the query's
+// subtokens less the stopword lists) are served, each whole or not at all, in source order, inside <slice p= n= l= members= of=>, and the class itself is still the <skip> that names the whole body.
 // A member is the parser's (isParsedMemberOf: its scope names the class, or the class's span holds it), never one nested in another
-// member (that text is already inside the outer member). Measured on the 53 round-5 --for rows: +1 Rule-C row over the plain fold
+// member (that text is already inside the outer member). Each text rides once: a ranked row inside a body the fold already serves
+// is counted as served, and a ranked body holding served ranked bodies replaces them. Measured on the 53 round-5 --for rows: +1 Rule-C row over the plain fold
 // (koa-02: the Application slice), 0 lost, +0.8 KB median.
 // Funding: the DEFAULT regime only — an explicit --token-budget is a size the caller named, and the fold does not ride there
 // (that answer is byte-identical to before); --json, --signatures-only, --detail=N, --auto-bodies and the name-exact route
@@ -29,9 +30,8 @@
 // RIPWIRE_NO_BODY_FOLD (any value) turns the fold off — the A/B handle, the RIPWIRE_NO_BODY_SLOT precedent.
 
 #include "commentcoherence.h"   // isCommentStopword — the member slice's question words
-#include "docparse.h"   // docparse::detail::readWholeFile — a sliced class's member text
 #include "forowner.h"   // isParsedMemberOf — a class's members BY THE PARSER (the body slot's member reading)
-#include "lexical.h"    // subtokens, isRouteStopword
+#include "lexical.h"    // subtokens, isRouteStopword, lexicalScanText — a sliced class's member text, read as the index read it
 #include "model.h"
 #include "nextverb.h"   // nextFlag
 #include "receiverevidence.h"   // ReceiverEvidence::classLike — the one class/struct/interface kind test
@@ -42,9 +42,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace rw
@@ -93,13 +95,18 @@ inline std::vector<NodeId> forBodyFoldCandidates( const IngestResult& ing, const
 inline constexpr std::string_view kForBodyFoldLegend =
     "; fold kind=bodies: whole bodies of the top ranked rows not already bodied, by rank, not a claim they are the answer "
     "(b t= n= p= l=, no sibs= or calls); served= of total=, each whole within budget_bytes=, on top of the unchanged answer; "
-    "slice members= of=: a class too big for the rest, its constructor and the members holding a question word; "
-    "skip bytes= its source size, next= serves it; when a body was skipped, sigs next= is the first skip and sigs_next= the "
+    "slice/skip p= n= l= name the row; slice members= of=: a class too big for the rest, its constructor and question-word "
+    "members; skip bytes= its source size, next= serves it; a skipped body makes sigs next= the first skip, sigs_next= the "
     "signatures-only re-call";
+// FIX1 B2: the compact clause defines the <b> it carries (b t= n= p= l=) itself — the compact route's hops clause does not, and
+// the slot's clause rides only beside the slot — and the p= n= l= of its slice and skip rows; terse (compact 286 B, full 496 B).
 inline constexpr std::string_view kForCompactBodyFoldLegend =
-    "; fold kind=bodies: top ranked rows' whole bodies by rank, not the answer; served= of total= in budget_bytes=; slice "
-    "members= of=: a big class's constructor and question-word members; skip bytes= next=; a skip makes sigs next= it, sigs_next= "
-    "the signatures-only re-call";
+    "; fold kind=bodies: b t= n= p= l= top ranked rows' whole bodies, not the answer; served= of total= in budget_bytes=; "
+    "slice/skip p= n= l=; slice members= of=: a big class's ctor, question-word members; skip bytes= next=; "
+    "a skip makes sigs next= it, sigs_next= the signatures-only re-call";
+static_assert( kForCompactBodyFoldLegend.find( "b t= n= p= l=" ) != std::string_view::npos
+                   && kForBodyFoldLegend.find( "b t= n= p= l=" ) != std::string_view::npos,
+               "both fold clauses define the <b> element the fold carries (FIX1 B2)" );
 
 struct BodyFoldInputs
 {
@@ -108,8 +115,7 @@ struct BodyFoldInputs
     NodeId                  bodied;       // the body slot's owner (kNoNode: none) — already served, never repeated
     const std::vector<float>& lensRank;   // orders nothing here (no <calls>); threaded so a body renders as every --for body
     std::string_view        rootArg;
-    RedactCounts*           redact;
-    const notes::NoteIndex* notes;
+    RedactCounts*           redact;       // no NoteIndex: a ranked row's note rides on its <d> row once, never again in the fold
     bool                    compress;     // --compress (the CLI only)
 };
 
@@ -166,7 +172,7 @@ inline std::optional<std::string> renderOneBody( const BodyFoldInputs& in, NodeI
     static const std::vector<std::uint8_t>  kNoNameOnly;
     ChargedSection sec = chargeSection( [ & ]( std::FILE* f )
         { packBodies( f, in.ing, { id }, /*budgetBytes=*/0, kNoOff, kNoTargets, CalleeEdgeBytes( kNoNameOnly ), in.compress, in.redact,
-                      /*ranges=*/nullptr, in.notes, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/false,
+                      /*ranges=*/nullptr, /*notes=*/nullptr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/false,
                       /*withFileContext=*/false, in.rootArg, &in.lensRank, {} ); },
         kBytesPerTokenBody );
     if( !sec.isRendered )
@@ -202,9 +208,86 @@ inline std::string skipRow( const BodyFoldInputs& in, NodeId id, std::string& es
     return x;
 }
 
-// THE MEMBER SLICE of one class row that did not fit: its constructor first, then the members whose name or body holds a question
-// word, each whole within `room` bytes (a member that does not fit what is left is passed over, the walk goes on), emitted in source
-// order. Empty xml when no member fits (the class's skip row alone then stands for it).
+// does a's text lie inside b's: the same file and b's span holds a's (two equal spans: the later id is the inner one). A body
+// inside another the answer serves is already there — the fold serves each text once (FIX1 N2).
+inline bool spanInside( const IngestResult& ing, NodeId a, NodeId b ) noexcept
+{
+    const Symbol& x = ing.symbols[a];
+    const Symbol& y = ing.symbols[b];
+    return a != b && x.fileId == y.fileId && y.sigStartByte <= x.sigStartByte && x.endByte <= y.endByte
+        && ( y.sigStartByte < x.sigStartByte || x.endByte < y.endByte || b < a );
+}
+inline bool insideAny( const IngestResult& ing, NodeId a, const std::vector<NodeId>& ids ) noexcept
+{
+    return std::ranges::any_of( ids, [ & ]( NodeId b ) { return a == b || spanInside( ing, a, b ); } );
+}
+
+// a class's direct members by the parser (isParsedMemberOf), in source order; one nested in another member is inside that
+// member's text, so it is not a member of its own
+inline std::vector<NodeId> sliceMembers( const IngestResult& ing, const Symbol& c )
+{
+    std::vector<NodeId> members;
+    for( NodeId m = 0; m < ing.symbols.size(); ++m )
+    {
+        const Symbol& ms = ing.symbols[m];
+        if( ms.kind != SymKind::ModuleScope && ms.endByte > ms.sigStartByte && isParsedMemberOf( ms, c ) )
+        {
+            members.push_back( m );
+        }
+    }
+    std::erase_if( members, [ & ]( NodeId a ) { return std::ranges::any_of( members, [ & ]( NodeId b ) { return spanInside( ing, a, b ); } ); } );
+    std::ranges::sort( members, [ & ]( NodeId a, NodeId b )
+    {
+        const Symbol& x = ing.symbols[a];
+        const Symbol& y = ing.symbols[b];
+        return x.fileId != y.fileId ? x.fileId < y.fileId : ( x.sigStartByte != y.sigStartByte ? x.sigStartByte < y.sigStartByte : a < b );
+    } );
+    return members;
+}
+
+// the slice's picks: the constructor first, then every member whose name, or whose body PAST ITS SIGNATURE, holds a question word.
+// Past the signature (FIX1 N3): a Go method's receiver (s *Scheduler) and a member's parameter names are written on its declaration
+// line, so a question naming the class no longer matches every method (a parameter list wrapped onto later lines still reads as
+// body: no per-language signature grammar here). The text is the one the index scanned (lexicalScanText), one read
+// per file (a C++ out-of-line member lives in another file than its class).
+inline std::vector<NodeId> slicePicks( const IngestResult& ing, const std::vector<NodeId>& members, std::string_view cls,
+                                       const std::vector<std::string>& words )
+{
+    std::vector<std::pair<std::uint32_t, std::string>> files;
+    const auto bodyOf = [ & ]( const Symbol& ms ) -> std::string_view
+    {
+        auto it = std::ranges::find_if( files, [ & ]( const auto& f ) { return f.first == ms.fileId; } );
+        if( it == files.end() )
+        {
+            std::string scratch;
+            const std::string* text = lexicalScanText( ing, ms.fileId, scratch );
+            files.emplace_back( ms.fileId, text == &scratch ? std::move( scratch ) : *text );
+            it = files.end() - 1;
+        }
+        const std::string& src = it->second;
+        if( ms.endByte > src.size() || ms.sigStartByte >= ms.endByte )
+        {
+            return {};
+        }
+        // the body starts at the parser's body start or the end of the declaration's first line, whichever is first: a Python
+        // block starts at its first statement, so a leading comment line would otherwise read as signature
+        const std::size_t eol  = src.find( '\n', ms.sigStartByte );
+        const std::size_t from = std::min<std::size_t>( { std::max( ms.sigStartByte, ms.sigEndByte ), eol, ms.endByte } );
+        return std::string_view( src ).substr( from, ms.endByte - from );
+    };
+    std::vector<NodeId> chosen;
+    std::ranges::copy_if( members, std::back_inserter( chosen ), [ & ]( NodeId m ) { return isConstructorName( ing.symbols[m].name, cls ); } );
+    std::ranges::copy_if( members, std::back_inserter( chosen ), [ & ]( NodeId m )
+    {
+        const Symbol& ms = ing.symbols[m];
+        return !isConstructorName( ms.name, cls ) && ( holdsWord( ms.name, words ) || holdsWord( bodyOf( ms ), words ) );
+    } );
+    return chosen;
+}
+
+// THE MEMBER SLICE of one class row that did not fit: its picks (slicePicks), each whole within `room` bytes (a member that does not
+// fit what is left is passed over, the walk goes on), emitted in source order. Empty xml when no member fits (the class's skip row
+// alone then stands for it).
 struct SliceRender
 {
     std::string xml;
@@ -213,67 +296,16 @@ struct SliceRender
 inline SliceRender renderSlice( const BodyFoldInputs& in, NodeId clsId, const std::vector<std::string>& words, std::size_t room,
                                 std::vector<NodeId>& served )   // in: the bodies the fold (and the slot) already carry; out: + this slice's
 {
-    SliceRender   out;
-    const Symbol& c = in.ing.symbols[clsId];
-    std::vector<NodeId> members;
-    for( NodeId m = 0; m < in.ing.symbols.size(); ++m )
-    {
-        const Symbol& ms = in.ing.symbols[m];
-        if( ms.kind != SymKind::ModuleScope && ms.endByte > ms.sigStartByte && isParsedMemberOf( ms, c ) )
-        {
-            members.push_back( m );
-        }
-    }
-    const auto inside = [ & ]( NodeId a, NodeId b )   // a's text lies in member b's
-    {
-        const Symbol& x = in.ing.symbols[a];
-        const Symbol& y = in.ing.symbols[b];
-        return a != b && x.fileId == y.fileId && y.sigStartByte <= x.sigStartByte && x.endByte <= y.endByte
-            && ( y.sigStartByte < x.sigStartByte || x.endByte < y.endByte || b < a );
-    };
-    std::erase_if( members, [ & ]( NodeId a ) { return std::ranges::any_of( members, [ & ]( NodeId b ) { return inside( a, b ); } ); } );
-    std::ranges::sort( members, [ & ]( NodeId a, NodeId b )
-    {
-        const Symbol& x = in.ing.symbols[a];
-        const Symbol& y = in.ing.symbols[b];
-        return x.fileId != y.fileId ? x.fileId < y.fileId : ( x.sigStartByte != y.sigStartByte ? x.sigStartByte < y.sigStartByte : a < b );
-    } );
-    // the member texts, one read per file (a C++ out-of-line member lives in another file than its class)
-    std::vector<std::pair<std::uint32_t, std::string>> files;
-    const auto textOf = [ & ]( const Symbol& ms ) -> std::string_view
-    {
-        auto it = std::ranges::find_if( files, [ & ]( const auto& f ) { return f.first == ms.fileId; } );
-        if( it == files.end() )
-        {
-            files.emplace_back( ms.fileId, docparse::detail::readWholeFile( diskPath( in.ing, ms.fileId ) ).value_or( std::string() ) );
-            it = files.end() - 1;
-        }
-        const std::string& src = it->second;
-        return ms.endByte <= src.size() ? std::string_view( src ).substr( ms.sigStartByte, ms.endByte - ms.sigStartByte ) : std::string_view();
-    };
-    std::vector<NodeId> chosen;
-    for( const NodeId m : members )
-    {
-        if( isConstructorName( in.ing.symbols[m].name, c.name ) )
-        {
-            chosen.push_back( m );
-        }
-    }
-    for( const NodeId m : members )
-    {
-        const Symbol& ms = in.ing.symbols[m];
-        if( !isConstructorName( ms.name, c.name ) && ( holdsWord( ms.name, words ) || holdsWord( textOf( ms ), words ) ) )
-        {
-            chosen.push_back( m );
-        }
-    }
+    SliceRender               out;
+    const Symbol&             c       = in.ing.symbols[clsId];
+    const std::vector<NodeId> members = sliceMembers( in.ing, c );
     std::vector<std::pair<std::size_t, std::string>> kept;   // (source-order index, element)
-    for( const NodeId m : chosen )
+    for( const NodeId m : slicePicks( in.ing, members, c.name, words ) )
     {
         const Symbol& ms = in.ing.symbols[m];
-        if( std::ranges::find( served, m ) != served.end() )
+        if( insideAny( in.ing, m, served ) || std::ranges::any_of( served, [ & ]( NodeId b ) { return spanInside( in.ing, b, m ); } ) )
         {
-            continue;   // already a body of this answer (a ranked row the fold served, or the slot's owner): never twice
+            continue;   // its text, or a body inside it, is already in this answer (a ranked row, the slot's owner): never twice
         }
         if( out.bodyBytes + ( ms.endByte - ms.sigStartByte ) > room )
         {
@@ -311,10 +343,41 @@ inline SliceRender renderSlice( const BodyFoldInputs& in, NodeId clsId, const st
     out.xml += "</slice>";
     return out;
 }
+
+// One served piece of the fold, in walk order: a ranked row's body (id = the row) or a member slice (id = kNoNode, never replaced).
+struct FoldPiece
+{
+    NodeId      id = kNoNode;
+    std::string xml;
+    std::size_t bodyBytes = 0;
+};
+// FIX1 N2: a ranked body that holds bodies the fold already served (a class after its own method) replaces them — its text carries
+// theirs. The bytes it would charge net of theirs, or nullopt when it holds a slice member (a slice is never cut apart). The slot's
+// owner is its own element outside the fold, before it: an outer body beside it is served as before.
+inline std::optional<std::size_t> refundOfInner( const IngestResult& ing, NodeId outer, const std::vector<FoldPiece>& pieces,
+                                                 const std::vector<NodeId>& served, NodeId slotOwner )
+{
+    std::size_t refund = 0;
+    for( const NodeId b : served )
+    {
+        if( b == slotOwner || !spanInside( ing, b, outer ) )
+        {
+            continue;
+        }
+        const auto it = std::ranges::find( pieces, b, &FoldPiece::id );
+        if( it == pieces.end() )
+        {
+            return std::nullopt;   // a slice member: it stays, so the outer body would repeat it
+        }
+        refund += it->bodyBytes;
+    }
+    return refund;
+}
 }   // namespace fold_detail
 
 // THE FOLD'S RENDER: the walk the header comment states. A body that does not fit is never rendered into the answer, and the
-// redaction count its render added is taken back (it is not served).
+// redaction count its render added is taken back (it is not served). Each text is served once (FIX1 N2): a candidate inside a body
+// already served counts as served; one that holds served ranked bodies replaces them.
 inline BodyFoldRender renderForBodyFold( const BodyFoldInputs& in, const std::vector<NodeId>& candidates )
 {
     BodyFoldRender out;
@@ -323,7 +386,8 @@ inline BodyFoldRender renderForBodyFold( const BodyFoldInputs& in, const std::ve
     {
         return out;
     }
-    std::string bodies, skips;
+    std::vector<fold_detail::FoldPiece> pieces;
+    std::string skips;
     std::size_t used = 0;
     std::optional<std::vector<std::string>> words;   // the member slice's question words, split on the first slice
     std::vector<NodeId> served;                       // every body this answer carries: the slot's owner, then the fold's
@@ -333,24 +397,26 @@ inline BodyFoldRender renderForBodyFold( const BodyFoldInputs& in, const std::ve
     }
     for( const NodeId id : candidates )
     {
-        if( std::ranges::find( served, id ) != served.end() )
+        EXPECTS( id < in.ing.symbols.size(), "a fold candidate is an indexed symbol (forBodyFoldCandidates)" );
+        if( fold_detail::insideAny( in.ing, id, served ) )
         {
-            ++out.served;   // a ranked row an earlier slice already served whole: counted, never repeated
+            ++out.served;   // a ranked row whose text an earlier body or slice already serves whole: counted, never repeated
             continue;
         }
-        EXPECTS( id < in.ing.symbols.size(), "a fold candidate is an indexed symbol (forBodyFoldCandidates)" );
         const Symbol&     s       = in.ing.symbols[id];
         const std::size_t span    = s.endByte - s.sigStartByte;
+        const std::optional<std::size_t> refund = fold_detail::refundOfInner( in.ing, id, pieces, served, in.bodied );
         std::string       next;
         // the source span is a lower bound of the element (markup only adds bytes), so a span over what is left skips unrendered
-        if( used + span <= kForBodyFoldBudgetBytes )
+        if( refund && used - *refund + span <= kForBodyFoldBudgetBytes )
         {
             const std::optional<RedactCounts> before = in.redact != nullptr ? std::optional<RedactCounts>( *in.redact ) : std::nullopt;
             const std::optional<std::string>  piece  = fold_detail::renderOneBody( in, id );
-            if( piece && used + piece->size() <= kForBodyFoldBudgetBytes )
+            if( piece && used - *refund + piece->size() <= kForBodyFoldBudgetBytes )
             {
-                bodies += *piece;
-                used += piece->size();
+                std::erase_if( pieces, [ & ]( const fold_detail::FoldPiece& p ) { return p.id != kNoNode && fold_detail::spanInside( in.ing, p.id, id ); } );
+                pieces.push_back( { id, *piece, piece->size() } );
+                used = used - *refund + piece->size();
                 ++out.served;
                 served.push_back( id );
                 continue;
@@ -363,16 +429,24 @@ inline BodyFoldRender renderForBodyFold( const BodyFoldInputs& in, const std::ve
             {
                 words = fold_detail::sliceWords( in.task );
             }
-            const fold_detail::SliceRender slice = fold_detail::renderSlice( in, id, *words, kForBodyFoldBudgetBytes - used, served );
-            bodies += slice.xml;
+            fold_detail::SliceRender slice = fold_detail::renderSlice( in, id, *words, kForBodyFoldBudgetBytes - used, served );
             used += slice.bodyBytes;
             out.slices += slice.bodyBytes > 0 ? 1u : 0u;
+            if( !slice.xml.empty() )
+            {
+                pieces.push_back( { kNoNode, std::move( slice.xml ), slice.bodyBytes } );
+            }
         }
         skips += fold_detail::skipRow( in, id, next );
         if( out.firstSkipNext.empty() )
         {
             out.firstSkipNext = next;
         }
+    }
+    std::string bodies;
+    for( const fold_detail::FoldPiece& p : pieces )
+    {
+        bodies += p.xml;
     }
     const std::string open = "<fold kind=\"bodies\" budget_bytes=\"" + std::to_string( kForBodyFoldBudgetBytes ) + "\" served=\""
                            + std::to_string( out.served ) + "\" total=\"" + std::to_string( out.total ) + "\">";

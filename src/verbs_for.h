@@ -3093,10 +3093,11 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                         ownerPlan.any(), forViaByOwnerOnly, slotOwner.any() };
         headerParts.splitPresent = forSplitPresent;   // attrib-multidef Q1 (a trailing member: the aggregate above keeps its order)
         // body-fold (forfold.h): the bodies of the top ranked rows, appended — decided here because the header's fold clause reads it.
-        // The compact route's XML answer in the DEFAULT regime only: an explicit --token-budget / --max-tokens is a size the caller
-        // named (that answer stays byte-identical), and autoBundleMode already excludes --detail/--signatures-only/--auto-bodies.
-        const std::vector<rw::NodeId> foldIds = ( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && cfg.maxTokens <= 0
-                                                  && rw::forBodyFoldOn() )
+        // The compact route's XML answer in the DEFAULT regime only: an explicit --token-budget is a size the caller named (that
+        // answer stays byte-identical), and autoBundleMode already excludes --detail/--signatures-only/--auto-bodies. --max-tokens is
+        // NOT read here (FIX1 B1: --for's notice says this answer ignores it — the detail bodies' ceiling — so it must not turn the
+        // fold off either; shapingflagcheck (A)/(F)).
+        const std::vector<rw::NodeId> foldIds = ( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forBodyFoldOn() )
             ? rw::forBodyFoldCandidates( ing, lensSurfaceIds, lensRank, std::size_t( std::max( forTopN, 0 ) ), slotOwner.id )
             : std::vector<rw::NodeId>{};
         headerParts.bodyFoldPresent = !foldIds.empty();
@@ -3875,7 +3876,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             if( sigsPreRendered && !enrich.surfaceOff && !enrich.hopsCutMarker )
             {
-                fold = rw::renderForBodyFold( rw::BodyFoldInputs{ ing, cfg.forTask, slot.served ? slotOwner.id : rw::kNoNode, lensRank, flRootArg, redactPtr, notesPtr, cfg.compress }, foldIds );
+                fold = rw::renderForBodyFold( rw::BodyFoldInputs{ ing, cfg.forTask, slot.served ? slotOwner.id : rw::kNoNode, lensRank, flRootArg, redactPtr, cfg.compress }, foldIds );
             }
             if( fold.xml.empty() )
             {
