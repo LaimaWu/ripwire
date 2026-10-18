@@ -203,7 +203,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // answer's OWN capped state, not a constant true — these verbs shipped uncapped for their whole
         // life, and THE TRUNCATION VOCABULARY names that shape conformant (its --skill-scan precedent).
         // L8 (train 29): the cap is callHierarchyRowCap's — a total within the 1.25 x band (pageview.h) is served whole.
-        // C2 (train 31): so is a CALLERS list whose estimated row bytes fit kCallersBandBytes (callhierarchy.h callersByteBand,
+        // C2 (train 31): so is a CALLERS list whose estimated row bytes fit kCallersBandMaxBytes (callhierarchy.h callersByteBand,
         // whose site pass the page below reuses when it serves every row).
         rw::CallersByteBand chBand = wantCallers ? rw::callersByteBand( ing, matches, result, rw::VrRender{ chSingleRoot, chRootPrefix }, cfg.pageLimit,
                                                                            chTested.testReach, chRows.attr )

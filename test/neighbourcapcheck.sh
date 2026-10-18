@@ -88,7 +88,7 @@ with open( os.path.join( d, "zsrc", "prod.py" ), "w" ) as fh:
     for i in range( 3 ):
         fh.write( "def prodCaller%02d( ):\n    return neighbourHubFn( %d, 1 )\n\n" % ( i, i ) )
 # 60 TEST callers. C2 (train 31): each name carries a long tail so the 64 rows' bytes (~21 KB) are past the callers byte band
-# (pageview.h kCallersBandBytes, 16,000 B) — the default cap must still fire here; arm (22) covers a list that fits the band.
+# (pageview.h kCallersBandMaxBytes, 16,000 B) — the default cap must still fire here; arm (22) covers a list that fits the band.
 with open( os.path.join( d, "tests", "test_hub.py" ), "w" ) as fh:
     for i in range( 60 ):
         fh.write( "def test_hub_%02d_%s( ):\n    assert neighbourHubFn( %d, 1 )\n\n" % ( i, "p" * 240, i ) )
@@ -551,7 +551,7 @@ PY
 
 echo "=== (22)-(25) C2 callers BYTE band: a callers list whose rows fit 16,000 B is served whole; a capped callees page pages ==="
 # ═══════════════════════════════════════════════════════════════════════════
-# train 31 C2 (pageview.h kCallersBandBytes, callhierarchy.h callersByteBand): tmux's --callers=options_get_number was 40 of
+# train 31 C2 (pageview.h kCallersBandMaxBytes, callhierarchy.h callersByteBand): tmux's --callers=options_get_number was 40 of
 # 121 rows at ~10.8 KB for the whole list. A CALLERS answer whose estimated row bytes fit the band is now its own cap on every
 # surface; past it (arms 2, 16, 17: the same row counts with heavier rows) the 40-row page and next= page stay. The byte band
 # is callers-only: --callees keeps the row band, and a capped callees page now names the next page as next= with expand

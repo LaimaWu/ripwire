@@ -17,10 +17,10 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 261 | 103 | 153 | **108** |
+| 262 | 103 | 154 | **108** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 261 + 7 is the 268 constants this generator parses out of `src/`.
+are not counted as caps, and 262 + 7 is the 269 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -38,8 +38,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **140 of 261 caps are classified
-(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 121 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **140 of 262 caps are classified
+(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 122 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -89,7 +89,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 103 files that declare a cap — the 261 caps counted above, and no parameter.
+One table for each of the 103 files that declare a cap — the 262 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -758,6 +758,7 @@ Discloses: `capped`, `count_capped`, `findings_capped`, `hits_capped`, `importer
 | --- | --- | --- | --- |
 | `kCallHierarchyRowCap` | `40` | — | — |
 | `kCallSitesPerRowCap` | `16` | — | — |
+| `kCallersBandMaxBytes` | `16000` | — | callers rows served whole while their estimated bytes fit (tmux 121 rows = 10.8 KB) |
 | `kCochangePartnerCap` | `30` | — | — |
 | `kExternalSurfaceRowCap` | `100` | — | names, by ref count (≈ 5.2 KB on this repo) |
 | `kImportReachRowCap` | `40` | — | — |

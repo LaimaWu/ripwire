@@ -178,18 +178,18 @@ inline constexpr int kCallHierarchyBandMax = kCallHierarchyRowCap + kCallHierarc
 // stays paged). Callers only: --callees keeps the row band (its next= is the body) and --impact its 40-row page. Above
 // the band the 40-row page, its next= page and uses_next= are unchanged. A runaway guard as well as a stair step: it
 // bounds the bytes a default call can add, never the rows an explicit --limit asks for.
-inline constexpr std::size_t kCallersBandBytes = 16000;
-// The smallest row a callers answer can print (`<s t="fn" n="x" p="f:1"/>`): a total past kCallersBandBytes / this many
+inline constexpr std::size_t kCallersBandMaxBytes = 16000;   // callers rows served whole while their estimated bytes fit (tmux 121 rows = 10.8 KB)
+// The smallest row a callers answer can print (`<s t="fn" n="x" p="f:1"/>`): a total past kCallersBandMaxBytes / this many
 // rows cannot fit the band, so the estimate (one site pass over every row) is skipped for it.
 inline constexpr std::size_t kCallerRowMinBytes = 30;
 
 // The row cap --callers/--callees and their MCP twins apply: an explicit --limit wins (effectiveRowCap); without one,
 // a total inside the band is its own cap, and so is a callers list whose estimated row bytes (callersRowBytes > 0, the
-// callers side only) fit kCallersBandBytes; anything larger keeps kCallHierarchyRowCap.
+// callers side only) fit kCallersBandMaxBytes; anything larger keeps kCallHierarchyRowCap.
 inline int callHierarchyRowCap( int pageLimit, std::size_t rowTotal, std::size_t callersRowBytes = 0 ) noexcept
 {
     const bool inRowBand  = rowTotal <= std::size_t( kCallHierarchyBandMax );
-    const bool inByteBand = callersRowBytes > 0 && callersRowBytes <= kCallersBandBytes;
+    const bool inByteBand = callersRowBytes > 0 && callersRowBytes <= kCallersBandMaxBytes;
     const int  cap = ( pageLimit <= 0 && rowTotal > std::size_t( kCallHierarchyRowCap ) && ( inRowBand || inByteBand ) )
                         ? int( rowTotal )
                         : effectiveRowCap( pageLimit, kCallHierarchyRowCap );

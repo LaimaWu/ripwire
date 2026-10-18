@@ -22,7 +22,7 @@
 
 #include "declinedsites.h"   // the <dc> rows: the declined call sites, ordered here once for every surface
 #include "editcheck.h" // rowCallSites / callSitesAttrXml — the C2 byte band estimates the rows it serves
-#include "pageview.h"  // kCallersBandBytes / kCallerRowMinBytes / kCallHierarchyBandMax
+#include "pageview.h"  // kCallersBandMaxBytes / kCallerRowMinBytes / kCallHierarchyBandMax
 #include "defattrib.h" // the per-row definition attribution every surface of these rows serves (and tsContractSignatures)
 #include "filter.h"    // pathTierIndexOver / compareTierThenPath — the tier-then-path row order both surfaces serve
 #include "graph.h"     // resolveAllByNameQualified, the CSR, testSymbolForwardReach / countTestedIn / isTestedByReach
@@ -347,7 +347,7 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
     return withOneHopAttribution( ing, g, std::move( out ), wantCallers );
 }
 
-// C2 callers byte band (pageview.h kCallersBandBytes): the estimated bytes of EVERY row of a callers answer, so
+// C2 callers byte band (pageview.h kCallersBandMaxBytes): the estimated bytes of EVERY row of a callers answer, so
 // callHierarchyRowCap can serve the whole list when it fits, plus the site pass that estimate needed (the emitter reuses it
 // instead of walking the reference table twice). The estimate is the XML row each caller prints — `<s t= n= p=file:line/>`
 // with its tested=, via=, prov=, of_def= and sites_at=/sites_total= — without escaping or a macro row's role=, so it reads at
@@ -365,7 +365,7 @@ inline CallersByteBand callersByteBand( const IngestResult& ing, std::span<const
                                         const std::vector<char>& testReach, const OneHopAttribution& attr )
 {
     CallersByteBand out{};
-    if( pageLimit > 0 || rows.size() <= std::size_t( kCallHierarchyBandMax ) || rows.size() > kCallersBandBytes / kCallerRowMinBytes )
+    if( pageLimit > 0 || rows.size() <= std::size_t( kCallHierarchyBandMax ) || rows.size() > kCallersBandMaxBytes / kCallerRowMinBytes )
     {
         return out;
     }
