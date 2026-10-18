@@ -192,8 +192,8 @@ as the nearest enclosing symbol of its initializer it took that call: `--callers
 of the function holding it. The definition captures are now anchored to their scope in the queries
 (`queries/go/tags.scm`, `queries/rust/tags.scm`, `queries/gdscript/tags.scm`): a Go `var` / `const` is a symbol at package
 scope only, a Rust `const` / `static` at module, `impl`, trait or `extern` level, and a GDScript `const` at script or class
-level; a call in a function-local initializer belongs to the enclosing function. Package-level grouped Go declarations,
-`var ( a = …; b = … )`, which were missed, are now one symbol per name. On fzf, gotestsum and nfpm (Go), 574
+level; a call in a function-local initializer belongs to the enclosing function. Package-level grouped Go `var ( a = …;
+b = … )` declarations, which were missed (grouped `const` was already read), are now one symbol per name. On fzf, gotestsum and nfpm (Go), 574
 function-local symbols leave the map, no package-level one is lost, and 87 grouped names are added. `kParserVer` moves
 (196 in this release, see the versions note). Gate: `test/localdeclcheck.sh`.
 

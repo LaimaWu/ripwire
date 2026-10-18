@@ -360,5 +360,10 @@ else
     no "(18) a zero-literal template made a pattern ref: [$PD18a] [$PD18b] callees=[$PD18c]"
 fi
 
+# (19) train 30 CR pre-pass A3: a name template is a glob, never a name — --external-surface lists no `watch_*` / `compile*`
+PD19="$( "$BIN" "$PD" --no-cache --external-surface 2>/dev/null | sed 's/<!--.*-->//' )"
+if [ -n "$PD19" ] && ! printf '%s' "$PD19" | grep -qE '<x n="[^"]*\*"'; then ok "(19) --external-surface lists no name template as an external name"
+else no "(19) --external-surface lists a template glob (or produced nothing): $( printf '%s' "$PD19" | grep -oE '<x n="[^"]*\*"[^>]*>' | head -3 )"; fi
+
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'
 exit "$fail"

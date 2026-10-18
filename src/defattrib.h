@@ -988,7 +988,7 @@ inline PathEndpointBinding pathEndpointBinding( const Graph& g, std::size_t srcD
 // DEFINES that scope as a member owner in the hop's language — a class, struct, interface or named type, or a module
 // (`@definition.module` is SymKind::Other: Rust `mod`, Ruby `module`, Elixir `defmodule`). A C++ namespace is no indexed
 // definition, so a namespace-scope function stays bare, exactly like a free function. Language-neutral: every language whose
-// defs carry sc= gets owners by this one rule (today C/C++, Python, Rust, Ruby, Kotlin classes; Go once receiver scopes land);
+// defs carry sc= gets owners by this one rule (today C/C++, Python, Rust, Ruby, Kotlin classes; Go since go-scope (#403));
 // a language whose defs carry no sc= (TS/JS, Java, C#, Swift, Kotlin `object`) keeps bare rows — a floor, not a claim.
 // The kinds a scope must be defined as to print as an owner — and the kinds of a hop that is itself an owner (a type hop is
 // never printed as Box.Box: a class carries its own name as sc=).

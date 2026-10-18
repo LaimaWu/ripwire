@@ -3459,9 +3459,9 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
         {
             continue;
         }
-        if( r.isCompose || r.isDocLink )
+        if( r.isCompose || r.isDocLink || !forwardCounts( r, refIndex, ix.g.keptForwards ) )
         {
-            continue; // type edge / doc mention — not a use-site
+            continue; // type edge / doc mention / a forwarded call buildGraph dropped (model.h forwardCounts, the CLI --uses' rule) — not a use-site
         }
         if( r.lang == Lang::Markdown )
         {

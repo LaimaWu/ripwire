@@ -217,5 +217,21 @@ for pair in S2:kfn.js:FwdK S3:gname.js:notThere; do
     else no "($arm) --safe-delete=$sel should carry no callers_floor=: ${C:-$D}"; fi
 done
 
+# (S4) train 30 CR pre-pass A1: MCP `uses` reads the same kept-forward rule — the dropped forwards of S1-S3 are no use-site there
+MU="$( cd "$CORPUS/sites" && python3 -c '
+import json, subprocess, sys
+reqs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} } ]
+for i, s in enumerate( ( "fwdNested", "FwdK", "notThere" ) ):
+    reqs.append( { "jsonrpc": "2.0", "id": i + 2, "method": "tools/call", "params": { "name": "uses", "arguments": { "path": ".", "symbol": s } } } )
+p = subprocess.run( [ sys.argv[ 1 ], "--mcp", "--mcp-legend=inline" ], input = "".join( json.dumps( r ) + "\n" for r in reqs ), capture_output = True, text = True, timeout = 120 )
+for line in p.stdout.splitlines():
+    try: r = json.loads( line )
+    except ValueError: continue
+    if r.get( "id", 0 ) >= 2:
+        print( r[ "id" ], json.dumps( r.get( "result", r.get( "error" ) ) ) )
+' "$BIN" 2>/dev/null )"
+if [ "$( printf '%s\n' "$MU" | grep -c '^[234] ' )" = 3 ] && ! printf '%s' "$MU" | grep -qE 'caller\.js:4|kuser\.js:2|gfwd\.js:2'; then ok "(S4) MCP uses lists none of the dropped forwards (caller.js:4, kuser.js:2, gfwd.js:2)"
+else no "(S4) MCP uses should answer 3 calls and list no dropped forward: ${MU:0:600}"; fi
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "SOME FAILED"
 exit "$fail"
