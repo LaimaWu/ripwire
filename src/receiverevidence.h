@@ -21,7 +21,7 @@
 // a value that crossed a call boundary. Those receivers stay name-only — the honest answer, not a guess.
 
 #include "model.h"
-#include "resolve.h"   // includerDir; HashMap / SmallVec through it
+#include "resolve.h"   // includerDir; HashMap / SmallVec through it; extent::inSet (extentsuspect.h) through it
 #include "smallvec.h"
 
 #include <algorithm>
@@ -223,11 +223,8 @@ struct BareNameRules
 };
 // Rust: the symbols whose body is an item scope (a nested item, `use` or macro there is in force for what it holds) — a fn
 // body, a `mod` (Other), and (fix round 6) a `const` / `static` item's value block (`const _: () = { … impl … };`, Var)
-inline constexpr std::array kRustItemScopeKinds = { SymKind::Function, SymKind::Method, SymKind::Var, SymKind::Other };
-inline constexpr bool rustScopesItems( SymKind k ) noexcept
-{
-    return std::ranges::find( kRustItemScopeKinds, k ) != kRustItemScopeKinds.end();
-}
+inline constexpr std::array<SymKind, 4> kRustItemScopeKinds = { SymKind::Function, SymKind::Method, SymKind::Var, SymKind::Other };
+inline bool rustScopesItems( SymKind k ) noexcept { return extent::inSet( kRustItemScopeKinds, k ); }   // the shared membership test
 inline constexpr BareNameRules kBareNameRules[] = {
     { CallResultFamily::Rust,       true,  true,  true,  true,  false, false, false },
     { CallResultFamily::Jvm,        false, false, false, false, true,  true,  true  },
