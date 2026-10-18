@@ -383,8 +383,24 @@ want "$AFIX" "Dup Link"          'Notes@docs/b/dup.md'            "#notes over t
 want "$AFIX" "Func Name"         'do_work@docs/b/partner.md'      "a heading named like a .py function binds the section, never the function"
 want "$AFIX" "Missing Anchor"    'partner@docs/b/partner.md'      "#no-such-heading falls back to the file (stem) edge"
 want "$AFIX" "Fence Only"        ''                               "a link inside a fenced block makes no edge"
-n="$( $BIN "$AFIX" --no-cache --callers=do_work --legend=compact 2>/dev/null | grep -c 'p="docs/a/tools.py' )"
-[ "$n" = "0" ] && ok "the .py do_work has no caller edge from the doc link" || no "the doc link leaked onto the .py function (rows naming tools.py: $n)"
+# --callers lists every matched def in <def ix= t= p=> (cross_kind when a heading and a function share the name).
+# The edge is the <s> row: it must name the section, never the .py function.
+if $BIN "$AFIX" --no-cache --callers=do_work --legend=compact 2>/dev/null | python3 -c '
+import sys, re
+xml = sys.stdin.read()
+kind = { m.group(1): m.group(2) for m in re.finditer(r"<def ix=\"(\d+)\" t=\"([a-z]+)\"", xml) }
+rows = list(re.finditer(r"<s\b([^>]*)/?>", xml))
+ok = bool(rows) and "fn" in kind.values() and "sec" in kind.values()
+for m in rows:
+    attrs = m.group(1)
+    p = re.search(r" p=\"([^\"]*)\"", attrs)
+    of = re.search(r"of_def=\"(\d+)", attrs)
+    if p and "tools.py" in p.group(1):
+        ok = False
+    if of and kind.get(of.group(1)) == "fn":
+        ok = False
+sys.exit(0 if ok else 1)
+'; then ok "the .py do_work is a matched def only — the caller edge belongs to the section"; else no "the doc link leaked onto the .py function"; fi
 
 echo "--- warm == cold after editing ONLY the target file (the cached ref must stay unbound) ---"
 cp -R "$AFIX" "$TMP/anchorcopy"
