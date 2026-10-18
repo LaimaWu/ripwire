@@ -4839,8 +4839,10 @@ inline constexpr std::size_t kHeadRoundRobinRows = 8;
 // The new order of a score-ordered sequence of n rows (indices into it): `fileOf(i)` / `nameOf(i)` read row i. One selection
 // for both dialects' rendered rows (reorderHeadRoundRobin in packSignatures and packSignaturesJson). The --for body-tail fold
 // and the compact hops do NOT follow it: they walk the surface in score order (verbs_for.h, measured there).
-template< class FileOf, class NameOf >
-inline std::vector<std::size_t> headRoundRobinOrder( std::size_t n, FileOf&& fileOf, NameOf&& nameOf )
+// `mayOpen(i)`: may row i open a file in the head? (false for a doc row when the docs reorder runs after: it would move that row
+// back below the code rows, so lifting it would only spend a head slot and add a second reading.)
+template< class FileOf, class NameOf, class MayOpen >
+inline std::vector<std::size_t> headRoundRobinOrder( std::size_t n, FileOf&& fileOf, NameOf&& nameOf, MayOpen&& mayOpen )
 {
     std::vector<std::size_t>      order;
     std::vector<char>             taken( n, 0 );
@@ -4851,7 +4853,7 @@ inline std::vector<std::size_t> headRoundRobinOrder( std::size_t n, FileOf&& fil
     {
         const std::uint32_t    f  = fileOf( i );
         const std::string_view nm = nameOf( i );
-        if( std::ranges::find( headFiles, f ) != headFiles.end() || std::ranges::find( headNames, nm ) != headNames.end() )
+        if( !mayOpen( i ) || std::ranges::find( headFiles, f ) != headFiles.end() || std::ranges::find( headNames, nm ) != headNames.end() )
         {
             continue;
         }
@@ -4875,8 +4877,8 @@ inline std::vector<std::size_t> headRoundRobinOrder( std::size_t n, FileOf&& fil
 // The rendered rows' reorder, after the ladder (the shown set is final): returns how many shown rows changed rank (0 ⇒ the
 // head already named distinct files — byte-identical). Runs BEFORE reorderDocsAfterCode, which then moves any doc row below
 // the code rows and keeps the code rows' round-robin order.
-template< class EntryT, class FileOf, class NameOf, class Rehead >
-inline std::size_t reorderHeadRoundRobin( std::vector<EntryT>& entries, FileOf&& fileOf, NameOf&& nameOf, Rehead&& rehead )
+template< class EntryT, class FileOf, class NameOf, class MayOpen, class Rehead >
+inline std::size_t reorderHeadRoundRobin( std::vector<EntryT>& entries, FileOf&& fileOf, NameOf&& nameOf, MayOpen&& mayOpen, Rehead&& rehead )
 {
     std::vector<std::size_t> live;
     for( std::size_t i = 0; i < entries.size(); ++i )
@@ -4887,7 +4889,8 @@ inline std::size_t reorderHeadRoundRobin( std::vector<EntryT>& entries, FileOf&&
         }
     }
     const std::vector<std::size_t> pos = headRoundRobinOrder( live.size(), [ & ]( std::size_t k ) { return fileOf( entries[ live[k] ] ); },
-                                                              [ & ]( std::size_t k ) { return nameOf( entries[ live[k] ] ); } );
+                                                              [ & ]( std::size_t k ) { return nameOf( entries[ live[k] ] ); },
+                                                              [ & ]( std::size_t k ) { return mayOpen( entries[ live[k] ] ); } );
     std::size_t              moved = 0;
     std::vector<std::size_t> newOrder;
     newOrder.reserve( pos.size() );
@@ -6040,8 +6043,10 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
                                                        spelling.elideZeroMetrics }, esc, rootArg ); };
         if( hasSigLensRule( lensRules, SigLensRules::HeadRoundRobin ) )
         {
+            const bool docsLast = hasSigLensRule( lensRules, SigLensRules::DocsAfterCode );
             cut.filesFirst = reorderHeadRoundRobin( entries, [ & ]( const SigEntry& e ) { return ing.symbols[ e.id ].fileId; },
-                                                    [ & ]( const SigEntry& e ) { return std::string_view( ing.symbols[ e.id ].name ); }, reheadXml );
+                                                    [ & ]( const SigEntry& e ) { return std::string_view( ing.symbols[ e.id ].name ); },
+                                                    [ & ]( const SigEntry& e ) { return !docsLast || ing.symbols[ e.id ].lang != Lang::Markdown; }, reheadXml );
         }
         if( hasSigLensRule( lensRules, SigLensRules::DocsAfterCode ) )
         {
@@ -11306,7 +11311,9 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
         if( lens.headRoundRobin )
         {
             cut.filesFirst = reorderHeadRoundRobin( entries, [ & ]( const JsonSigEntry& e ) { return ing.symbols[ e.id ].fileId; },
-                                                    [ & ]( const JsonSigEntry& e ) { return std::string_view( ing.symbols[ e.id ].name ); }, reheadJson );
+                                                    [ & ]( const JsonSigEntry& e ) { return std::string_view( ing.symbols[ e.id ].name ); },
+                                                    [ & ]( const JsonSigEntry& e ) { return !lens.docsAfterCode || ing.symbols[ e.id ].lang != Lang::Markdown; },
+                                                    reheadJson );
         }
         if( lens.docsAfterCode )
         {

@@ -328,6 +328,10 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # --for file page (rows with sym=), its full legend clause defines them, and est_tokens= prices them, 4111 -> 4500 B. Checked
 # mechanically: with the <tail> element, the tail clause and est_tokens= masked, the new answer equals the previous pin byte for
 # byte (at= masked). The six other pins are unchanged.
+# RE-ANCHORED BY HAND 2026-10-18 (lane hrr, head round-robin, by design), for.xml only: ranks 1..8 now name each file's best
+# row first, so the seven <d> rows reorder (same rows, same text, r= renumbered), <sigs> gains files_first="3" and the full
+# legend its present-only files_first= reading; est_tokens= prices the reading, 5497 -> 5658 B. Checked mechanically: the same
+# binary with RIPWIRE_NO_HEAD_RR=1 prints the previous pin byte for byte (at= masked). The six other pins are unchanged.
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
 # sed does not): at="…" masked, trailing newlines dropped.
