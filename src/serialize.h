@@ -880,8 +880,8 @@ inline constexpr std::string_view kForDocsAfterCodeNote =
 
 // The head round-robin's reading (reorderHeadRoundRobin), present-only on a tag that carries files_first=. No "--" (G4).
 inline constexpr std::string_view kForFilesFirstNote =
-    " [files_first=N: N shown rows changed rank so ranks 1..8 name each file's best row first, in score order (a name already "
-    "in the head counts once); same rows, reordered, none added or removed]";
+    " [files_first=N: N rows moved so r=1..8 are distinct files' best rows, score order, a repeated name once; same rows; "
+    "fold, hops keep score order]";
 
 //   • next= on <sigs> (knob-honesty-068): the call that serves the block uncut (sigsCutNextInvocation). Not the r=1 row's
 //     next= (a body or the widening page), so it says which rows it serves.
@@ -4836,9 +4836,9 @@ inline std::size_t reorderDocsAfterCode( std::vector<EntryT>& entries, IsDoc&& i
 // take the remaining rows in score order. Rank 1 never moves (the first row is its own file's best).
 inline constexpr std::size_t kHeadRoundRobinRows = 8;
 
-// The new order of a score-ordered sequence of n rows (indices into it): `fileOf(i)` / `nameOf(i)` read row i. One
-// selection for every consumer — the rendered <sigs> rows (reorderHeadRoundRobin) and the surface ids the fold and the
-// hops walk (headRoundRobinIds) — so the head the reader sees and the bodies served for it cannot disagree.
+// The new order of a score-ordered sequence of n rows (indices into it): `fileOf(i)` / `nameOf(i)` read row i. One selection
+// for both dialects' rendered rows (reorderHeadRoundRobin in packSignatures and packSignaturesJson). The --for body-tail fold
+// and the compact hops do NOT follow it: they walk the surface in score order (verbs_for.h, measured there).
 template< class FileOf, class NameOf >
 inline std::vector<std::size_t> headRoundRobinOrder( std::size_t n, FileOf&& fileOf, NameOf&& nameOf )
 {
@@ -4901,29 +4901,6 @@ inline std::size_t reorderHeadRoundRobin( std::vector<EntryT>& entries, FileOf&&
         applyShownOrder( entries, live, newOrder, rehead );
     }
     return moved;
-}
-
-// The surface ids (score order) in the same head order, for the consumers that walk the head before <sigs> renders: the
-// body-tail fold's top rows and the compact route's hops. Same rows; the zero-score tail stays where it is (the fold and the
-// hops skip it).
-inline std::vector<NodeId> headRoundRobinIds( const IngestResult& ing, const std::vector<NodeId>& surface, const std::vector<float>& rank )
-{
-    std::size_t n = 0;
-    while( n < surface.size() && surface[n] < rank.size() && rank[ surface[n] ] > 0.0f )
-    {
-        ++n;
-    }
-    const std::vector<std::size_t> pos = headRoundRobinOrder( n, [ & ]( std::size_t k ) { return ing.symbols[ surface[k] ].fileId; },
-                                                              [ & ]( std::size_t k ) { return std::string_view( ing.symbols[ surface[k] ].name ); } );
-    std::vector<NodeId> out;
-    out.reserve( surface.size() );
-    for( const std::size_t k : pos )
-    {
-        out.push_back( surface[k] );
-    }
-    out.insert( out.end(), surface.begin() + std::ptrdiff_t( n ), surface.end() );
-    ENSURES( out.size() == surface.size(), "the same surface, reordered" );
-    return out;
 }
 
 // ── LB-A (r10 GitNexus round) — THE RELEVANCE FLOOR ──────────────────────────────────────────────────

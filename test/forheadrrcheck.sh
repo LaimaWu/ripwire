@@ -12,7 +12,8 @@
 #   WHO      the routed subtoken+body answer (CLI XML, CLI --json, MCP `for`). Exempt, byte-identical to RIPWIRE_NO_HEAD_RR=1
 #            (the A/B handle): the name-exact route, --no-route, a question that names an indexed file, a tight explicit
 #            --token-budget (the reading is uncharged, the docs_after_code= rule).
-#   FOLD     the body-tail fold's top rows and the compact hops walk the same head (the bodies served are r=1..3's).
+#   FOLD     the body-tail fold and the compact hops keep SCORE order (the bodies served are the score top three, the
+#            RIPWIRE_NO_HEAD_RR=1 answer's r=1..3) — measured: following the reordered head lost graded rows; the reading says so.
 #   TIER     a .d.ts/.pyi row is ranked x0.7 when its PACKAGE (nearest package.json / pyproject.toml / setup.py / setup.cfg
 #            directory, else the root) holds an implementation of its family; a types-only package keeps 1.0.
 #
@@ -20,7 +21,7 @@
 #   H1 [P] one file holding most matching rows (mono): ON order == the round-robin of the OFF order (the model below), the same
 #          rows, more distinct files in the head-8 (a file the OFF head-8 left out enters it), r=1 unchanged, files_first= == the rows whose rank changed, reading present
 #   H2 [P] a C typedef/struct pair (pair): the same, and the fixture exercises the name rule (the model without it differs)
-#   H3 [G] the fold serves the first three head rows of the ON answer (mono, pair)
+#   H3 [G] the fold serves the score top three: the first three rows of the RIPWIRE_NO_HEAD_RR=1 answer (mono, pair)
 #   H4 [P] --json: the rows in the XML ON order, "files_first" present;  H4m [P] MCP `for`: the same order, files_first= present
 #   H5 [G] exempt, byte-identical to RIPWIRE_NO_HEAD_RR=1: the name-exact route, --no-route, a question naming src/scheduler.ts,
 #          --token-budget=1200
@@ -100,11 +101,13 @@ if cmd == "rr":            # ON OFF [names] — ON is the round-robin of OFF; fi
     if "files_first" in sigs(off) or "files_first=N:" in legend(off): fail("the RIPWIRE_NO_HEAD_RR=1 answer carries files_first=")
     if "names" in args[2:] and model(roff, names=False) == want: fail("the fixture does not exercise the name rule")
     print("head-8 files %d -> %d, files_first=%s" % (len({p for p, n in roff[:8]}), len({p for p, n in ron[:8]}), ff))
-elif cmd == "fold":        # ON — the fold's rows are the first three head rows
+elif cmd == "fold":        # ON OFF — the fold's rows are the score top three (OFF's first three rows), and ON's fold is OFF's
     t = load(args[0]); m = re.search(r'<fold [^>]*>(.*?)</fold>', t, re.S)
     if not m: fail("no <fold>")
     got = [attrs(x.group(1)).get("n") for x in re.finditer(r'<(?:b|skip|slice) ([^>]*)>', m.group(1))]
-    want = [n for p, n in rows(t)[:3]]
+    want = [n for p, n in rows(load(args[1]))[:3]]
+    mo = re.search(r'<fold [^>]*>.*?</fold>', load(args[1]), re.S)
+    if not mo or mo.group(0) != m.group(0): fail("the fold differs from the RIPWIRE_NO_HEAD_RR=1 answer's")
     if got != want: fail("fold rows %s, head rows %s" % (got, want))
     print("fold %s" % got)
 elif cmd == "json":        # JSON XMLON — the JSON rows in the XML order, files_first key present
@@ -158,12 +161,12 @@ chk(){ local label="$1"; shift; local msg; if msg="$( python3 "$TMP/chk.py" "$@"
 run "$TMP/mono.on" "$FIX/mono" 0 --for="$Q_MONO"; run "$TMP/mono.off" "$FIX/mono" 1 --for="$Q_MONO"
 if ran "$TMP/mono.on" H1 && ran "$TMP/mono.off" "H1 (twin)"; then
     chk "H1 one file holds most rows: the head names each file first" rr "$TMP/mono.on" "$TMP/mono.off" morefiles
-    chk "H3 mono: the fold serves the first three head rows" fold "$TMP/mono.on"
+    chk "H3 mono: the fold serves the score top three" fold "$TMP/mono.on" "$TMP/mono.off"
 fi
 run "$TMP/pair.on" "$FIX/pair" 0 --for="$Q_PAIR"; run "$TMP/pair.off" "$FIX/pair" 1 --for="$Q_PAIR"
 if ran "$TMP/pair.on" H2 && ran "$TMP/pair.off" "H2 (twin)"; then
     chk "H2 a typedef/struct pair counts once" rr "$TMP/pair.on" "$TMP/pair.off" names
-    chk "H3 pair: the fold serves the first three head rows (job_sched once)" fold "$TMP/pair.on"
+    chk "H3 pair: the fold serves the score top three" fold "$TMP/pair.on" "$TMP/pair.off"
 fi
 
 # ── H4: the --json and MCP twins ──────────────────────────────────────────────────────────────────────────────────────────

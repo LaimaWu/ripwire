@@ -210,6 +210,10 @@ c = re.search( r"; fold kind=bodies:.*?sigs_next= the signatures-only re-call", 
 h = re.search( r"; (h calls capped=1 next= the call listing every callee|a hop row.s cut calls listing \(capped=1\) carries next=, the call that lists every callee)", s ); n += len( h.group( 0 ).encode() ) if h else 0
 # FIX1 N5: only a RANKED hop row cut listing (an <h> without qword=); an owner row next= predates the fold and is not exempt
 n += sum( len( x.encode() ) for x in re.findall( r" next=\x22--callees=[^\x22]*\x22", "".join( c for h, c in re.findall( r"<h ([^>]*)><calls ([^>]*)>", s ) if " qword=" not in " " + h ) ) )
+# head round-robin (lane hrr, train 31): its disclosure is a reorder reading, uncharged like docs_after_code= — the rows are the
+# same rows (forheadrrcheck owns that contract), so the band reads the answer without the attribute and its legend clause
+r = re.search( r" files_first=\x22[0-9]+\x22", s ); n += len( r.group( 0 ).encode() ) if r else 0
+r = re.search( r" \[files_first=N:[^\]]*\]", s ); n += len( r.group( 0 ).encode() ) if r else 0
 t = re.search( r"<sigs\b[^>]*>", s )
 if t and " sigs_next=\x22" in t.group( 0 ):
     n += 5 + sum( len( x.encode() ) for x in re.findall( r" next=\x22[^\x22]*\x22", t.group( 0 ) ) )
@@ -461,7 +465,8 @@ if shrunk != ( "[sigs capped=1 with shown=total:" in s ): print( "FAIL the shrun
 print( "OK docs_dropped=%d rows=%d %s" % ( got, len( rows ), "<sigs%s>" % m.group( 1 ) ) )'; }
 if v="$( cd "$TMP" && "$BIN" fxdocs --for="widget helper" --no-cache 2>/dev/null | docs_arm )"; then
     case "$v" in
-        *'docs_dropped=16 rows=40 <sigs docs_dropped="16">'*) ok "(8) uncapped: the r>24 tier is disclosed: $v" ;;
+        # head round-robin (lane hrr): the tag may also carry files_first= (the reorder's reading; forheadrrcheck)
+        *'docs_dropped=16 rows=40 <sigs docs_dropped="16">'*|*'docs_dropped=16 rows=40 <sigs docs_dropped="16" files_first="'[0-9]*'">'*) ok "(8) uncapped: the r>24 tier is disclosed: $v" ;;
         *) no "(8) uncapped fixture: want docs_dropped=16 of 40 on an uncapped tag, got: $v" ;;
     esac
 else
@@ -655,14 +660,28 @@ for line in sys.stdin:
     if not line: continue
     d=json.loads(line)
     if d.get("id")==1: print(d["result"]["content"][0]["text"])' 2>/dev/null | cut_arm; }
+# head round-robin (lane hrr, train 31; rule 4, by design): the head is reordered WITHIN each answer's shown rows, so a budgeted
+# answer's ORDER is a prefix of the default's only in score order — the twin below runs this arm unchanged with
+# RIPWIRE_NO_HEAD_RR=1, and (10h) asserts what still holds with it on: the budgeted rows are the default's first rows as a SET
+# (score ranks 1..K, so the next_budget_tokens= re-call continues without a gap or a repeat).
+M1T="$( RIPWIRE_NO_HEAD_RR=1 mcpfor '' )"
 prev_names='[]'
 for bt in 2000 2600 3800; do
-    MB="$( mcprel "$bt" )"
+    MBH="$( mcprel "$bt" )"
+    vh="$( python3 -c 'import json,sys
+b=json.loads(sys.argv[1]); d=json.loads(sys.argv[2])
+ok = sorted(b["names"]) == sorted(d["names"][:len(b["names"])]) and not b["over"] and ( b["shown"] == b["total"] or b["next_budget_tokens"] is not None )
+print(("OK" if ok else "BAD"), b["shown"], b["total"], b["over"], b["next_budget_tokens"])' "${MBH:-{\}}" "${M1T:-{\}}" 2>/dev/null )"
+    case "$vh" in
+        OK*) ok "(10h) MCP budget_tokens=$bt, head round-robin on: the default's first rows as a set, the cut continued ($vh)" ;;
+        *)   no "(10h) MCP budget_tokens=$bt, head round-robin on: ${vh:-<no output>} — want the default's first rows (score ranks 1..K) as a set" ;;
+    esac
+    MB="$( RIPWIRE_NO_HEAD_RR=1 mcprel "$bt" )"
     v="$( python3 -c 'import json,sys
 b=json.loads(sys.argv[1]); d=json.loads(sys.argv[2]); p=json.loads(sys.argv[3])
 ok = b["names"] == d["names"][:len(b["names"])] and b["names"][:len(p)] == p and not b["over"] \
      and ( b["shown"] == b["total"] or b["next_budget_tokens"] is not None )
-print(("OK" if ok else "BAD"), b["shown"], b["total"], b["over"], b["next_budget_tokens"])' "${MB:-{\}}" "${M1:-{\}}" "$prev_names" 2>/dev/null )"
+print(("OK" if ok else "BAD"), b["shown"], b["total"], b["over"], b["next_budget_tokens"])' "${MB:-{\}}" "${M1T:-{\}}" "$prev_names" 2>/dev/null )"
     case "$v" in
         OK*) ok "(10) MCP budget_tokens=$bt: a rank prefix of the whole head, monotone, the cut continued, no over_ceiling ($v)" ;;
         *)   no "(10) MCP budget_tokens=$bt: ${v:-<no output>} — want a monotone rank prefix, next_budget_tokens= on a cut, no over_ceiling" ;;

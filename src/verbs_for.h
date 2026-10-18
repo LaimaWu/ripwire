@@ -2955,10 +2955,11 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         const std::vector<rw::ForNamedHeaderRow> forHdrRows = rw::forNamedHeaderRows( ing, cfg.forTask );
         const std::string                        forHdrXml  = renderForHdrRowsXml( ing, forHdrRows, flRootArg );
         // HEAD ROUND-ROBIN (serialize.h reorderHeadRoundRobin): the routed subtoken+body answer to a question that names no
-        // indexed file. The shown <sigs> rows reorder; the fold and the hops walk the same head (forHeadSurfaceIds).
+        // indexed file. Only the shown <sigs> rows reorder: the fold and the hops keep walking lensSurfaceIds in score order —
+        // measured on the rank-gates 44 rows (lane hrr report): hops and fold that followed the reordered head lost two graded
+        // ✓ rows (their strongest rows' callees and bodies left the hop window); in score order they lose none.
         const bool forHeadRR = rw::forHeadRoundRobinOn( conceptualRoute, rw::taskNamesIndexedFile( ing, cfg.forTask ),
                                                         cfg.tokenBudget > 0 ? std::size_t( cfg.tokenBudget ) : 0u, forBodyCeiling );
-        const std::vector<NodeId> forHeadSurfaceIds = forHeadRR ? rw::headRoundRobinIds( ing, lensSurfaceIds, lensRank ) : lensSurfaceIds;
 
         // H1 (B0 r2): the bundle is emitted under a GLOBAL payload budget (serialize.h kForPayloadBudgetBytes; an
         // EXPLICIT --token-budget=N overrides it at the same conservative byte rate the --max-tokens fitter uses).
@@ -3055,7 +3056,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // owner-hop: THE QUESTION'S OWNER plan (forOwnerHopPlan), decided here, before the header, because the header's
         // qword clause and its via="name" question both read it; the compact route's <hops> renders exactly this plan.
         const ForOwnerPlan ownerPlan = ( autoBundleMode && plan.compact )
-            ? forOwnerHopPlan( ing, g, cfg.forTask, lensSurfaceIds, lensRank, forCompactHopIds( forHeadSurfaceIds, lensRank ) )
+            ? forOwnerHopPlan( ing, g, cfg.forTask, lensSurfaceIds, lensRank, forCompactHopIds( lensSurfaceIds, lensRank ) )
             : ForOwnerPlan{};
         // for-body-slot: THE ONE OWNER BODY of an explanatory question (forowner.h forBodySlotOwner), decided here for the same
         // reason as the owner plan above: the header's slot clause reads it. The compact route only (an XML answer whose caller
@@ -3075,7 +3076,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                 // only the hops packHops gives a slot can carry a row (the hop-slot rule drops a hop whose every callee
                 // edge is name-only, so its via="name" rows never print)
                 const auto unslotted = [ & ]( rw::NodeId id ) { return !rw::hopSlotHasProvenEdge( g.outOff, g.outNameOnly, id ); };
-                viaIds = forCompactHopIds( forHeadSurfaceIds, lensRank );
+                viaIds = forCompactHopIds( lensSurfaceIds, lensRank );
                 std::erase_if( viaIds, unslotted );
                 const bool rankedVia = rw::namesOnlyOutAny( g.outOff, g.outNameOnly, viaIds );   // the question without owners
                 std::vector<rw::NodeId> ownerViaIds = ownerPlan.rowIds;   // owner rows carry <calls> too
@@ -3109,7 +3110,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // NOT read here (FIX1 B1: --for's notice says this answer ignores it — the detail bodies' ceiling — so it must not turn the
         // fold off either; shapingflagcheck (A)/(F)).
         const std::vector<rw::NodeId> foldIds = ( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forBodyFoldOn() )
-            ? rw::forBodyFoldCandidates( ing, forHeadSurfaceIds, lensRank, std::size_t( std::max( forTopN, 0 ) ), slotOwner.id )
+            ? rw::forBodyFoldCandidates( ing, lensSurfaceIds, lensRank, std::size_t( std::max( forTopN, 0 ) ), slotOwner.id )
             : std::vector<rw::NodeId>{};
         headerParts.bodyFoldPresent = !foldIds.empty();
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
@@ -3818,7 +3819,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             // the DEFAULT regime funds the bodies from the bundle at its target (sigsFundedBytes) — the tail rides on top there and
             // the bodies stay what they were; a soft target funds them from the rows' leftover (headerSpentBytes is 0)
-            enrich = buildForEnrichment( cfg, ing, g, forHeadSurfaceIds, lensRank, plan, routeAnchorDefs, redactPtr,
+            enrich = buildForEnrichment( cfg, ing, g, lensSurfaceIds, lensRank, plan, routeAnchorDefs, redactPtr,
                                           headerSpentBytes + rowsSpentBytes,
                                           bundleBudget, ForSectionPromises{ headerParts.viaPresent, &ownerPlan, headerParts.splitPresent } );
             if( enrich.surfaceOff )
