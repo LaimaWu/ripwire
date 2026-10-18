@@ -28,6 +28,11 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   hand-check every such crossing was a false chain.
 - `<near_sink>` reads neither such a builtin-spelled declined call nor a wrapper decorator (`@property`, `@classmethod`,
   `@overload`: the dead-code rule's own list) as a way into a row.
+- By-name hedges (`<near_sink>` `why="name"`, a `<bridge>` `via="namesake"` crossing) now need a call of the name that
+  is not spelled like a builtin type's method (`prerequisites.clear`, `self._invalid_css.update( … )`) AND a namesake
+  whose owner (its class in its file, or its file for a free function) owns something the forward search reached. On the
+  24-row near_sink hand-check sample this removes all 5 by-name rejects and no accepted row; it is a hedge filter, not
+  proof that a dropped namesake is never the one called.
 
 ### Added — `--path` offers a hedged bridge (`<bridge proven="0">`) and glob endpoints
 
