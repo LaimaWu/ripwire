@@ -103,7 +103,7 @@ ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 unset RIPWIRE_NO_BODY_SLOT RIPWIRE_NO_OWNER_HOP
 # body-fold (train 31; rule 4, by design): a compact answer now ends with <fold kind="bodies"> — the top ranked bodies, which may be a
 # class, a .d.ts or a test body by rank (forbodyfoldcheck owns that contract). Every arm here is about the ONE owner body, so the
-# answers are read fold-off; arm (FX) at the end pins that the fold changes nothing of the slot on the default answer.
+# answers are read fold-off; arm (FX), before the optional (I) arms, pins that the fold changes nothing of the slot on the default answer.
 export RIPWIRE_NO_BODY_FOLD=1
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
@@ -783,6 +783,21 @@ for f in d d.c big hyd e400; do
 done
 
 # ── I: optional byte identity against the pre-change binary where the slot must not fire ─────────────────────
+# (FX) [G] body-fold: with the fold on (the default), the slot's <bodies> element is byte-identical to the fold-off answer's and the
+#      owner's body is never repeated inside the <fold>
+( unset RIPWIRE_NO_BODY_FOLD; "$BIN" "$FIX" --no-cache --for="$T_D" ) >"$TMP/fx.on" 2>/dev/null
+"$BIN" "$FIX" --no-cache --for="$T_D" >"$TMP/fx.off" 2>/dev/null
+if python3 - "$TMP/fx.on" "$TMP/fx.off" <<'PYFX'
+import re, sys
+on, off = open(sys.argv[1]).read(), open(sys.argv[2]).read()
+b_on, b_off = re.search(r'<bodies .*?</bodies>', on, re.S), re.search(r'<bodies .*?</bodies>', off, re.S)
+f = re.search(r'<fold .*?</fold>', on, re.S)
+if not (b_on and b_off and f) or b_on.group(0) != b_off.group(0): sys.exit(1)
+own = re.search(r'<b t="[^"]*" l="(\d+)" p="([^"]*)"', b_on.group(0))
+sys.exit(1 if own and f'l="{own.group(1)}" p="{own.group(2)}"' in f.group(0) else 0)
+PYFX
+then ok "(FX) fold on: the slot's <bodies> is the fold-off answer's byte for byte, and the owner is not repeated in the fold"; else no "(FX) the fold changed the slot's <bodies>, repeated the owner, or rode no <fold>"; fi
+
 if [ -n "${RIPWIRE_BASE_BIN:-}" ] && [ -x "${RIPWIRE_BASE_BIN}" ]; then
     RIPWIRE_NO_BODY_SLOT=1 "$BIN" "$FIX" --no-cache --for="$T_D" 2>/dev/null | strip_at >"$TMP/i.head"
     "$RIPWIRE_BASE_BIN" "$FIX" --no-cache --for="$T_D" 2>/dev/null | strip_at >"$TMP/i.base"
@@ -812,20 +827,5 @@ ARGV
 else
     skip "(I) RIPWIRE_BASE_BIN unset or not executable — base-binary byte identity not run here"
 fi
-
-# (FX) [G] body-fold: with the fold on (the default), the slot's <bodies> element is byte-identical to the fold-off answer's and the
-#      owner's body is never repeated inside the <fold>
-( unset RIPWIRE_NO_BODY_FOLD; "$BIN" "$FIX" --no-cache --for="$T_D" ) >"$TMP/fx.on" 2>/dev/null
-"$BIN" "$FIX" --no-cache --for="$T_D" >"$TMP/fx.off" 2>/dev/null
-if python3 - "$TMP/fx.on" "$TMP/fx.off" <<'PYFX'
-import re, sys
-on, off = open(sys.argv[1]).read(), open(sys.argv[2]).read()
-b_on, b_off = re.search(r'<bodies .*?</bodies>', on, re.S), re.search(r'<bodies .*?</bodies>', off, re.S)
-f = re.search(r'<fold .*?</fold>', on, re.S)
-if not (b_on and b_off and f) or b_on.group(0) != b_off.group(0): sys.exit(1)
-own = re.search(r'<b t="[^"]*" l="(\d+)" p="([^"]*)"', b_on.group(0))
-sys.exit(1 if own and f'l="{own.group(1)}" p="{own.group(2)}"' in f.group(0) else 0)
-PYFX
-then ok "(FX) fold on: the slot's <bodies> is the fold-off answer's byte for byte, and the owner is not repeated in the fold"; else no "(FX) the fold changed the slot's <bodies>, repeated the owner, or rode no <fold>"; fi
 
 exit $fail
