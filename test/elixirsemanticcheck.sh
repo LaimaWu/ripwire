@@ -2,7 +2,8 @@
 # Static Elixir name resolution: every positive has same-name decoys and scope/arity negatives.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="${RIPWIRE_BIN:-$ROOT/build/ripwire}"
+BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
+[ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 python3 - "$BIN" <<'PY'
 import json, os, pathlib, subprocess, sys, tempfile, xml.etree.ElementTree as ET
 

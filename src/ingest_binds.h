@@ -124,44 +124,6 @@ struct MemberChain
     std::string ctor;
 };
 
-inline std::string_view finalTypeSegment( TSNode typeNode, std::string_view src )
-{
-    for( int guard = 0; guard < 8 && !ts_node_is_null( typeNode ); ++guard )
-    {
-        const char* t = ts_node_type( typeNode );
-        if( kindIs( t, "type_identifier" ) || kindIs( t, "identifier" ) || kindIs( t, "simple_identifier" ) )
-        {
-            return pattern::nodeText( typeNode, src );
-        }
-        if( kindIs( t, "qualified_type" ) )                  // Go `pkg.T`
-        {
-            typeNode = fieldChild( typeNode, NodeField::Name );
-        }
-        else if( kindIs( t, "pointer_type" ) || kindIs( t, "generic_type" ) || kindIs( t, "parenthesized_type" ) )
-        {
-            typeNode = ts_node_named_child_count( typeNode ) > 0 ? ts_node_named_child( typeNode, ts_node_named_child_count( typeNode ) - 1 ) : TSNode{};
-            if( !ts_node_is_null( typeNode ) && kindIs( t, "generic_type" ) )
-            {
-                typeNode = ts_node_named_child( ts_node_parent( typeNode ), 0 );   // `Foo<T>`: the name, never the argument list
-            }
-        }
-        else if( kindIs( t, "member_expression" ) || kindIs( t, "scoped_type_identifier" ) || kindIs( t, "nested_identifier" ) )
-        {
-            const std::uint32_t n = ts_node_named_child_count( typeNode );
-            typeNode = n > 0 ? ts_node_named_child( typeNode, n - 1 ) : TSNode{};
-            if( !ts_node_is_null( typeNode ) && kindIs( ts_node_type( typeNode ), "property_identifier" ) )
-            {
-                return pattern::nodeText( typeNode, src );
-            }
-        }
-        else
-        {
-            return {};
-        }
-    }
-    return {};
-}
-
 // the class a constructed receiver names, final segment; "" when `node` constructs nothing this rule reads
 inline std::string_view constructedClass( TSNode node, Lang lang, std::string_view src )
 {
@@ -2049,7 +2011,7 @@ inline std::optional<RawRef> subscriptOperatorRef( TSNode access, TSNode recv, s
         return std::nullopt;
     }
     RecvShape rs = classifyReceiver( recv, lang, src, /*allowChain=*/ true );
-    if( rs.kind == RecvKind::None && lang != Lang::Ruby )
+    if( rs.kind == RecvKind::None && !langFacts( lang ).keepsUnshapedSubscript )
     {
         return std::nullopt;
     }
@@ -2063,7 +2025,7 @@ inline std::optional<RawRef> subscriptOperatorRef( TSNode access, TSNode recv, s
     r.recv      = rs.kind == RecvKind::None ? RecvKind::FieldOfVar : rs.kind;   // receiverOf's "too rich" member shape
     r.recvVar   = std::move( rs.var );
     r.fieldName = std::move( rs.field );
-    if( lang == Lang::Ruby && r.recv == RecvKind::NamedVar )
+    if( langFacts( lang ).constantPathReceiver && r.recv == RecvKind::NamedVar )
     {
         r.fieldName = rubyWrittenPathOfReceiver( recv, r.recvVar, src );   // a constant's path as written (parser version 137)
     }

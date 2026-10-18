@@ -343,7 +343,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "declined_iface",    "declined_iface=K: K declined TS calls sharing a name with an interface/abstract signature, by name only (MAY go through it); not a subset of declined_calls=" },
     // graph.h StdMemberGate: the callees answer's <stdm> line, absent when the definitions made no such call (graphlegend.h kStdMemberCallsLegend).
     // Keyed on n= (read on <stdm> only): the attribute the full clause opens with, which compactlegendcheck (S) reads.
-    { "n",                 "stdm n= calls=: of declined_calls=, calls named like a C++ std container/string/optional/smart-pointer member (n=) on a receiver no rule tied to an in-tree class; no edge or row (may be the std member)", false, "stdm" },
+    { "n",                 "stdm n= calls=: of declined_calls=, calls named like a standard-type member of their language (C++ container/string/optional/smart pointer, Rust collection/string/Option/Result; n=) on a receiver no rule tied to an in-tree class (Rust: one written as an in-tree type too, until Rust records receiver types); no edge or row (may be the std member)", false, "stdm" },
     // Reference-as-value round (graphlegend.h kValueRefs*Legend, src/valuerefs.h): every term absent at zero, present-only.
     // Each says what a value row does NOT mean in the same breath (checklist 3): matched by name, not a proven call.
     { "value_refs",        "value_refs=N: N vr rows, the function used as a VALUE (stored or passed), matched by name; not a proven call, in no count or reach" },
@@ -509,6 +509,12 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // idea #6 (lane lean-trio): the reach set's per-file rollup element and the umbrella-header count, present-only
     { "importers_umbrella", "importers_umbrella=1: SYM's file is imported by half the files that import anything (and over 40); importers are a count, importers_next= lists them", true, "impact" },
     { "shown_files", "files files=/shown_files=: files the WHOLE reach set touches (rides beside a cut symbol window) / listed; rf syms= reached symbols there, d= fewest hops; files_capped=1 + files_next= when cut", true, "files", MapHeaderRead::No, {}, "impact" },
+    // L7 type-use impact (typeuse.h): present only on a TYPE impact (of= a class/struct/named type/interface), whose rollup rides cut or not
+    { "type_users",  "files type_users=N: symbols that NAME the type (a parser-read type position) seed the walk at d=1 beside its callers; rf d=0 = the file defining it; with no limit= every d=0 file and every d=1 file a type mention reaches is listed (up to 200)", true, "files", MapHeaderRead::No, {}, "impact" },
+    { "type_defs",   "type_defs=K: K indexed type definitions share the spelled name, so a type row may depend on a namesake", true, "files", MapHeaderRead::No, {}, "impact" },
+    { "type_capped", "type_capped=1: the type-mention walk stopped at its budget; type rows are a floor", true, "files", MapHeaderRead::No, {}, "impact" },
+    { "via",         "rf via=type: every reached symbol in that file is reached only through a type mention (syms=0: the file names the type outside any indexed definition)", true, "rf", MapHeaderRead::No, "type" },
+    { "by_type",     "rf by_type=K: K of its syms= are reached only through a type mention", true, "rf" },
     { "shown_bridges",     "shown_bridges=/bridges=: <bridge> rows printed (the 12 heaviest) / all pairs", false, "zoom", MapHeaderRead::No, {}, "zoom" },
     { "shown_symbols",     "shown_symbols=: <s> rows printed", false, "tree", MapHeaderRead::No, {}, "tree" },
     // THE SWEEP'S LAST PASS (2026-09-12) listed every attribute the compact --impact, --safe-delete, --communities,
@@ -612,6 +618,8 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // onKey impact: the only answer that prints them (full clause: graphlegend.h kImpactDepthLegend).
     { "d",                 "<s d=N>: hops to of= (1 = direct caller), set where it changes", true, "s", MapHeaderRead::No, {}, "impact" },
     { "fields",            "<depth> column: hops to of= (1 = direct caller)", true, "cols", MapHeaderRead::No, "depth", "impact" },
+    // L7 (CodeRabbit 4303967681): a type impact's columnar rows reached only through a type mention (graphlegend.h kImpactByTypeColumnarLegend)
+    { "fields",            "<by_type> column: 1 = reached only through a type mention (at depth 1 it names of= in a type position, not a call)", true, "cols", MapHeaderRead::No, "by_type", "impact" },
     { "by_depth",          "by_depth=k:n: n of reaches= at depth k, shallowest rows first", false, {}, MapHeaderRead::No, {}, "impact" },
     // The same lens on the signature rows (2026-09-12, the follow-up): serialize.h's two <d> row writers print tested="1" from
     // computeQMetrics' tested[] column, which the same isTestedByReach fills, and never a literal 0. main.cpp computes that column
@@ -653,6 +661,8 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // a head read fired on every --lego answer (compactlegendcheck (D7) caught it on --lego=Point).
     { "caveat",            "methods=0 caveat=not-extracted-for-lang: no <m> contract read for this language", true, "iface" },
     { "next",              "next=: the one pasteable follow-up", true },
+    // L8 (train 29): a capped callers page's next= is the next page, and the uses verb rides beside it here (present-only)
+    { "uses_next",         "uses_next=: the uses verb on this selector (the call sites), beside a capped callers page's next=", true },
     { "scrubbed",          "scrubbed=1: this CDATA is not the bytes (]]> split or C0 replaced)", true },
     // lane/cutfix-bodies (2026-09-23): a body cut at the byte budget used to say so only INSIDE its CDATA; the cut is now
     // three attributes on the <b> (serialize.h kTruncatedBodyLegend is the full reading). ELEMENT-qualified: pr-context's

@@ -144,6 +144,7 @@ kTestHopBasenameRowCap	OUTPUT
 kTestHopCalleeRowCap	OUTPUT
 kType3MaxBucket	INDEXING
 kType3MaxTokensForLcs	INDEXING
+kTypeMentionMatchBudget	INDEXING
 kUnitComplexityLowRiskMax	BOUNDARY
 kUnitInterfacingLowRiskMax	BOUNDARY
 kUnitSizeLowRiskMax	BOUNDARY

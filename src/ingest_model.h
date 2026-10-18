@@ -430,6 +430,7 @@ inline void assignSymbols( IngestResult& result, std::vector<RawDef>& rawDefs, b
         s.locals       = d.locals;   // Phase 1: local-decl floor count (C/C++ only; model.h localsCountedLang)
         s.ppAlt        = d.ppAlt;    // ppalt disclosure: preproc alternative branches in the body (model.h)
         s.params       = d.params;   // Q4: parameter count (fns/methods)
+        s.paramsMin    = std::uint8_t( d.paramsMin < 15 ? d.paramsMin : 15 );   // B2.2: fewest arguments a call can pass (0 = no bound); a 4-bit field — saturating LOWERS it, which only keeps candidates
         s.arityExact   = d.arityExact;   // B2.2: params is a fixed call-comparable arity
         // Both are 1-bit fields on Symbol, so this assignment is where a RawDef byte gets TRUNCATED: a cached blob that
         // carries 2 would read as 0. Coerce "any non-zero" to 1 here — testScope's reading has always been "non-zero

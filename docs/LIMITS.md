@@ -17,10 +17,10 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 259 | 102 | 151 | **108** |
+| 261 | 103 | 153 | **108** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 259 + 7 is the 266 constants this generator parses out of `src/`.
+are not counted as caps, and 261 + 7 is the 268 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -38,8 +38,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **139 of 259 caps are classified
-(49 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 120 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **140 of 261 caps are classified
+(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 121 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -89,7 +89,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 102 files that declare a cap — the 259 caps counted above, and no parameter.
+One table for each of the 103 files that declare a cap — the 261 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -382,12 +382,13 @@ Discloses: **none**
 
 ### `src/graph.h`
 
-Discloses: `importers_capped`
+Discloses: `files_capped`, `importers_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kChaConeCap` | `4096` | INDEXING | per-walk discovery cap, unchanged from the per-call walk |
 | `kImpactFileRollupCap` | `20` | — | — |
+| `kImpactTypeRollupBandMax` | `200` | — | — |
 | `kMaxEdges` | `256` | — | total emitted edge cap |
 | `kMaxNodes` | `96` | — | total emitted node cap (§3 size caps) |
 | `kMaxRadius` | `12` | — | — |
@@ -917,7 +918,7 @@ Discloses: **none**
 
 ### `src/serialize.h`
 
-Discloses: `capped`, `calls_capped`, `entries_capped`, `files_capped`, `importers_capped`, `inc_capped`, `names_capped`, `sibs_capped`
+Discloses: `capped`, `calls_capped`, `entries_capped`, `files_capped`, `importers_capped`, `inc_capped`, `names_capped`, `sibs_capped`, `type_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
@@ -1005,6 +1006,14 @@ Discloses: `name_ladder_capped`
 | `kNameCandidateCap` | `8` | OUTPUT | — |
 | `kTestHopBasenameRowCap` | `3` | OUTPUT | — |
 | `kTestHopCalleeRowCap` | `5` | OUTPUT | — |
+
+### `src/typeuse.h`
+
+Discloses: `type_capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kTypeMentionMatchBudget` | `50000` | INDEXING | per pattern; no flag raises it — type_capped="1" marks the floor |
 
 ### `src/valuerefs.h`
 

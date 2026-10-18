@@ -204,7 +204,7 @@ inline std::vector<ReadHit> readSitesOf( const IngestResult& rd, std::span<const
     std::vector<ReadHit>             hits;
     for( const Reference& r : rd.references )
     {
-        if( r.role != RefRole::Read || r.isCompose || r.isDocLink || r.lang == Lang::Markdown )
+        if( r.role != RefRole::Read || r.isCompose || r.isDocLink )
         {
             continue;
         }

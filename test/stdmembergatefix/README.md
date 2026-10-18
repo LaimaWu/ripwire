@@ -14,8 +14,14 @@ and `StdMap`, an alias of a standard map.
   declined and disclosed (declined_calls=, the callees answer's `<stdm>` line), never bound to an in-tree namesake.
 
 Controls: a name outside the table (`grow`) keeps the ladder; a bare call `size( b )` reaches the free function; `c/`
-holds a C function-pointer call (C has no member functions, so no gate); `rs/` is the Rust stated scope (no declared
-receiver types there yet), whose by-name split must stay unchanged. `far/` calls `w.empty()` where no namesake is in
+holds a C function-pointer call (C has no member functions, so no gate); `gogate/` holds a Go `f().Len()` (Go's row is
+empty, so the ladder is unchanged).
+
+`rsgate/` (with the older `rs/`) is the Rust row: `Stack<T>` (`push`, `len`, `frobnicate`), `Holder` (a field written
+`Stack<i32>`) and `Book` (its own `iter`). `v.push()` / `v.iter()` on Vec parameters and a parameter of a type the tree does
+not define are declined with a `<stdm>` line; `self.iter()` inside `Book` stays proven; a name outside the table
+(`frobnicate`) and a name with no in-tree definition (`insert`) are untouched; a parameter, local or field written as the
+in-tree `Stack` / `Book` is the stated floor (declined: Rust records no receiver type yet). `far/` calls `w.empty()` where no namesake is in
 reach, so the ladder itself declines it (tier 3), and the `<stdm>` line still names it.
 
 `sib/` holds the field and expression receivers: a field written as the in-tree `Vec` (`this->items_`, `b.items_` on a

@@ -8,6 +8,7 @@ bool ManifestParser::ParseDefault(std::string* err) {
   std::string path = "x";
   unsigned long bits;
   CanonicalizePath(&path, &bits);
+  Normalize(&path);
   return true;
 }
 bool UsesPiece(StringPiece sp) {
