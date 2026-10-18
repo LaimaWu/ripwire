@@ -195,12 +195,31 @@ FX_Q=( "geometry area of a shape" "call a native function from python" "parse th
 
 # ── (3) byte growth ≤ 4% against the registered sizes ─────────────────────────────────────────────────────
 growth_fail=0
+# body-fold (train 31; rule 4, by design — the FOLD C precedent): a compact answer now ends with <fold kind="bodies">, the top ranked
+# bodies appended after the unchanged answer (forbodyfoldcheck (F5) pins that nothing before it moved). The band reads the answer
+# WITHOUT those additions: the fold element, its legend clause, the hop-calls next= clause and the <sigs> continuation pair
+# (sigs_next= renamed from next=, next= the first skip). fold_exempt prints their bytes; nothing else is exempt.
+fold_exempt(){ python3 -c '
+import re, sys
+s = sys.stdin.read(); n = 0
+f = re.search( r"<fold .*?</fold>", s, re.S ); n += len( f.group( 0 ).encode() ) if f else 0
+c = re.search( r"; fold kind=bodies:.*?sigs_next= the signatures-only re-call", s, re.S ); n += len( c.group( 0 ).encode() ) if c else 0
+h = re.search( r"; (h calls capped=1 next= the call listing every callee|a hop row.s cut calls listing \(capped=1\) carries next=, the call that lists every callee)", s ); n += len( h.group( 0 ).encode() ) if h else 0
+n += sum( len( x.encode() ) for x in re.findall( r" next="--callees=[^"]*"", "".join( re.findall( r"<calls [^>]*>", s ) ) ) )
+t = re.search( r"<sigs\b[^>]*>", s )
+if t and " sigs_next=\"" in t.group( 0 ):
+    n += 5 + sum( len( x.encode() ) for x in re.findall( r" next="[^"]*"", t.group( 0 ) ) )
+    n += len( "[sigs sigs_next=: one" ) - len( "[sigs next=: one" ) if "[sigs sigs_next=: one" in s else 0
+elif t:
+    n += sum( len( x.encode() ) for x in re.findall( r" next="--expand=[^"]*"", t.group( 0 ) ) )
+print( n )'; }
 echo "  ledger: the ten reference queries (this repo, full legend) — base bytes @8eb669ff (q5 @cap-followup-2026-09-10) → now, shown=/total="
 i=0
 for q in "${REPO_Q[@]}"; do
     base="${REPO_BASE[$i]}"; i=$(( i + 1 ))
     out="$( "$BIN" . --for="$q" 2>/dev/null )"
     now="$( printf '%s' "$out" | wc -c | tr -d ' ' )"
+    now=$(( now - $( printf '%s' "$out" | fold_exempt ) ))   # body-fold: the band reads the answer before its fold additions
     marker="$( printf '%s' "$out" | grep -o '<sigs[^>]*>' | head -1 )"
     # forbudget-soft (stop when complete; PROCESS rule 5's stair-step target): rows served past the 7.5 KB target are disclosed
     # (<sigs past_target="K">: the last K rows) and are what the answer needs, so the band applies to the answer WITHOUT them —
@@ -246,7 +265,8 @@ hostilefix|call a native function from python|2106
 hostilefix|parse the config and load it|3380"
 echo "  ledger: nine fixture bundles — base bytes @d5ac29a7 → now"
 while IFS='|' read -r fx q base; do
-    now="$( cd "$TMP" && "$BIN" "$fx" --for="$q" 2>/dev/null | wc -c | tr -d ' ' )"
+    fxout="$( cd "$TMP" && "$BIN" "$fx" --for="$q" 2>/dev/null )"
+    now=$(( $( printf '%s' "$fxout" | wc -c | tr -d ' ' ) - $( printf '%s' "$fxout" | fold_exempt ) ))   # body-fold: as above
     pct="$( python3 -c "print( '%+.2f' % ( ( $now - $base ) * 100.0 / $base ) )" )"
     printf '    %-10s %-36s %5d → %5d  (%s%%)\n' "$fx" "'$q'" "$base" "$now" "$pct"
     if [ "$now" -gt $(( base * 104 / 100 )) ]; then
@@ -498,7 +518,17 @@ for k in ( "est_tokens", "budget_tokens" ):
 out[ "over" ] = "over_ceiling=\"1\"" in r
 print( json.dumps( out ) )'; }
 cfield(){ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); v=d.get(sys.argv[2]); print(json.dumps(v) if isinstance(v,(list,dict,bool)) or v is None else v)' "$1" "$2"; }
-C1="$( cd "$TMP" && "$BIN" fxcut --for="gadget assembler" --no-cache 2>/dev/null | cut_arm )"
+# body-fold (train 31; rule 4, by design — C3): on an answer that carries the fold, the signatures-only re-call moves from <sigs next=>
+# to sigs_next= (next= names the first skipped body). This arm's subject is that re-call, so it reads the fold-off twin, where it is
+# still next=; (9f) pins that the fold answer carries the same call as sigs_next= with its renamed clause.
+C1="$( cd "$TMP" && RIPWIRE_NO_BODY_FOLD=1 "$BIN" fxcut --for="gadget assembler" --no-cache 2>/dev/null | cut_arm )"
+C1F="$( cd "$TMP" && "$BIN" fxcut --for="gadget assembler" --no-cache 2>/dev/null )"
+C1FN="$( printf '%s' "$C1F" | python3 -c 'import re,sys,html; s=sys.stdin.read(); t=re.search(r"<sigs\b[^>]*>", s); m=re.search(r" sigs_next=\"([^\"]*)\"", t.group(0)) if t else None; print(html.unescape(m.group(1)) if m else "")' )"
+if [ -n "$C1FN" ] && [ "$C1FN" = "$( cfield "$C1" next )" ] && printf '%s' "$C1F" | grep -q '\[sigs sigs_next=: one call serving all total= rows uncut\]'; then
+    ok "(9f) fold on: the same signatures-only call rides as sigs_next= with its renamed reading"
+else
+    no "(9f) fold on: sigs_next='$C1FN' vs the fold-off next='$( cfield "$C1" next )', or the [sigs sigs_next=: …] reading is missing"
+fi
 if [ "$( cfield "$C1" capped )" = true ] && [ "$( cfield "$C1" shown )" = "$( cfield "$C1" total )" ] && [ "$( cfield "$C1" past_target )" -gt 0 ]; then
     ok "(9) presence guard: the default ships the whole head past its target, shrunk ($( cfield "$C1" shown ) of $( cfield "$C1" total ), past_target=$( cfield "$C1" past_target ))"
 else
