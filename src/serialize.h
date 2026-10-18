@@ -4833,7 +4833,8 @@ inline std::size_t reorderDocsAfterCode( std::vector<EntryT>& entries, IsDoc&& i
 // row text — ranks 1..kHeadRoundRobinRows take each distinct file's best row first, in score order; the rows that gives
 // up keep score order after them. A row whose NAME a head row already holds does not open a new file (overloads, a C
 // typedef/struct pair, a vendored copy are one answer, not two files). Fewer distinct files than slots: the free slots
-// take the remaining rows in score order. Rank 1 never moves (the first row is its own file's best).
+// take the remaining rows in score order. Rank 1 never moves (the first row is its own file's best) unless it may not open a
+// file (a doc row while the docs reorder runs: that reorder moves it below the code rows anyway).
 inline constexpr std::size_t kHeadRoundRobinRows = 8;
 
 // The new order of a score-ordered sequence of n rows (indices into it): `fileOf(i)` / `nameOf(i)` read row i. One selection
@@ -4870,7 +4871,7 @@ inline std::vector<std::size_t> headRoundRobinOrder( std::size_t n, FileOf&& fil
         }
     }
     ENSURES( order.size() == n, "a reorder: every row once, none added or removed" );
-    ENSURES( n == 0 || order.front() == 0, "rank 1 never moves" );
+    ENSURES( n == 0 || order.front() == 0 || !mayOpen( 0 ), "rank 1 moves only when it may not open a file (a doc row the docs reorder moves anyway)" );
     return order;
 }
 
