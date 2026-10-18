@@ -203,23 +203,28 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // answer's OWN capped state, not a constant true — these verbs shipped uncapped for their whole
         // life, and THE TRUNCATION VOCABULARY names that shape conformant (its --skill-scan precedent).
         // L8 (train 29): the cap is callHierarchyRowCap's — a total within the 1.25 x band (pageview.h) is served whole.
-        const PageWindow  pw = pageWindow( result.size(), rw::callHierarchyRowCap( cfg.pageLimit, result.size() ), cfg.pageOffset );
+        // C2 (train 31): so is a CALLERS list whose estimated row bytes fit kCallersBandBytes (callhierarchy.h callersByteBand,
+        // whose site pass the page below reuses when it serves every row).
+        rw::CallersByteBand chBand = wantCallers ? rw::callersByteBand( ing, matches, result, rw::VrRender{ chSingleRoot, chRootPrefix }, cfg.pageLimit,
+                                                                           chTested.testReach, chRows.attr )
+                                                 : rw::CallersByteBand{};
+        const PageWindow  pw = pageWindow( result.size(), rw::callHierarchyRowCap( cfg.pageLimit, result.size(), chBand.rowBytes ), cfg.pageOffset );
         const bool        chDiscloseCap = ( pw.end - pw.begin ) < result.size();
         char              pab[ kPageDisclosureCap ];
 
         const auto [ chNextSelector, chNextIsBare ] = rw::callHierarchyNextSelector( ing, chRows, sym, wantCallers );
         // L8 (train 29): a callers page with rows after it hands over the NEXT PAGE as next= (the selector as typed, the caller's
         // --limit and form kept — rw::pagedNext), and the uses verb moves to uses_next=. The last page and an uncut answer keep
-        // the uses verb as next=. Callees keep expand: the body already lists every callee.
-        const bool        chNextIsPage = wantCallers && pw.end < result.size();
+        // the uses verb as next=. C2 rider (train 31): a capped callees page does the same, its expand moving to expand_next=.
+        const bool        chNextIsPage = pw.end < result.size();
 
         // CALLSITE-AT: each caller row on THIS page with its call sites as pasteable file:line tokens (editcheck.h
         // rowCallSites: the uses verb's call-role filters over the page's rows), computed once for every dialect below.
         // Callers only: a callee row's sites are the callee's own body, which is the expand next= already names.
         const std::span<const NodeId> chPage = std::span<const NodeId>( result ).subspan( pw.begin, pw.end - pw.begin );
-        const rw::RowCallSites chSites = wantCallers
-            ? rw::rowCallSites( ing, matches, chPage, rw::VrRender{ chSingleRoot, chRootPrefix } )
-            : rw::RowCallSites{};
+        const rw::RowCallSites chSites = !wantCallers ? rw::RowCallSites{}
+                                       : ( chBand.rowBytes > 0 && pw.begin == 0 && chPage.size() == result.size() ) ? std::move( chBand.sites )   // C2: the band's pass
+                                                                                                                       : rw::rowCallSites( ing, matches, chPage, rw::VrRender{ chSingleRoot, chRootPrefix } );
         // attrib-multidef (defattrib.h): the definition table this page lists (every group up to the cap, else the ones its rows
         // name) and whether a row on it is a split arm of a one-group answer (Q1) — computed once for every dialect below.
         const rw::OneHopAttribution& chAttr = chRows.attr;
@@ -291,8 +296,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // Callees keep expand on the original selector; nextFlag retains quoting and the 120-byte contract.
         const std::string chHintCall = rw::nextFlag( wantCallers ? "--uses=" : "--expand=", chNextSelector );
         const std::string chNextAttr = chNextIsPage
-            ? rw::nextAttrXml( rw::callersPageNext( sym, cfg.pageLimit, pw.end, cfg.columnar ) )
-                + rw::nextAttrXml( chHintCall, "uses_next" )
+            ? rw::nextAttrXml( rw::callHierarchyPageNext( wantCallers, sym, cfg.pageLimit, pw.end, cfg.columnar ) )
+                + rw::nextAttrXml( chHintCall, rw::callHierarchyHintAttr( wantCallers ) )
             : rw::nextAttrXml( chHintCall );
         // The tier-3 declines count= does not include (callhierarchy.h), on every dialect; absent at zero.
         const std::string chDeclinedAttr = rw::declinedCallsAttrXml( chRows.declinedCalls ) + rw::declinedSiteCutAttrXml( chDcCut )   // + the <dc> cut, beside the count it cuts
@@ -373,8 +378,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                          rw::graphCountFloorAttrJson( g ).c_str(),   // §H4 §3.4 — the JSON dialect's spelling of the same marker
                          // L8: a capped callers page names the next page and the uses verb, as the XML/columnar root and MCP
                          // find_referencing_symbols do; the page replays --json. Any other answer keeps its JSON bytes.
-                         chNextIsPage ? rw::nextFieldJson( rw::callersPageNext( sym, cfg.pageLimit, pw.end, false, true ) )
-                                          + rw::nextFieldJson( chHintCall, "uses_next" )
+                         chNextIsPage ? rw::nextFieldJson( rw::callHierarchyPageNext( wantCallers, sym, cfg.pageLimit, pw.end, false, true ) )
+                                          + rw::nextFieldJson( chHintCall, rw::callHierarchyHintAttr( wantCallers ) )
                                       : std::string() );
             rw::emitTo( stdout, ",\"{}\":[", tag );
             std::vector<char> chVia( result.size(), 0 );   // FE-B: the same hedge bit the XML rows carry
