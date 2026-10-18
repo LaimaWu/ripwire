@@ -26,6 +26,8 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 - A `<bridge>` no longer crosses a declined member call spelled like a builtin type's method (`ids.join( "," )`,
   `keys.push( k )`, `d.get( k )`, Ruby `each`): the builtin-method gate's per-language tables decide, and on a 42-query
   hand-check every such crossing was a false chain.
+- `<near_sink>` reads neither such a builtin-spelled declined call nor a wrapper decorator (`@property`, `@classmethod`,
+  `@overload`: the dead-code rule's own list) as a way into a row.
 
 ### Added — `--path` offers a hedged bridge (`<bridge proven="0">`) and glob endpoints
 

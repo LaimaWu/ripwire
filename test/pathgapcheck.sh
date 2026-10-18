@@ -55,6 +55,7 @@
 #        twice) is no closure; H2 C has no named nested function, so a nested span is never a closure; H3 a bridge never
 #        routes through a test/bench/demo/generated/minified symbol; H4 a chain past 8 hops is no bridge; H5 a declined member
 #        call spelled like a builtin type's method (`ids.join`) is not crossed, H6 its non-builtin twin is.
+#        H7/H8 (near_sink): a builtin-spelled declined call and a wrapper decorator (@property) are no way in either.
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -748,6 +749,37 @@ done
 brArm "(H5) a declined member call spelled like a builtin method (ids.join) is not crossed" "$TMP/brb_join" "start,sink" ""
 brArm "(H6) the same shape under a non-builtin name (ids.combine) is crossed" "$TMP/brb_combine" "start,sink" \
     '<bridge proven="0" crossings="1" hops="2"><s t="fn" n="start" p="core/m.js:1"/><s t="fn" n="combine" p="a/x.js:2" via="declined" cands="2"/><s t="fn" n="sink" p="a/x.js:1"/></bridge>'
+
+mkdir -p "$TMP/nsprop"
+cat > "$TMP/nsprop/m.py" <<'EOF'
+def target():
+    return 1
+
+class C:
+    @property
+    def size(self):
+        return target()
+
+def start():
+    return 0
+EOF
+f="$TMP/H7.xml"; path "$TMP/brb_join" "start,sink" "$f"; rc=$?
+if premise "(H7)" "$rc" "$f"; then
+    if nsrows "$f" | grep -q '<ns d="1" t="fn" n="join" p="a/x.js:2"' && ! nsrows "$f" | grep -q 'n="join"[^>]*declined'; then
+        ok "(H7) near_sink: a declined ids.join (builtin-spelled) is no way in to the in-tree join"
+    else
+        no "(H7) near_sink still reads ids.join as a way in: $( nsrows "$f" | tr -d '\n' )"
+    fi
+fi
+f="$TMP/H8.xml"; path "$TMP/nsprop" "start,target" "$f"; rc=$?
+if premise "(H8)" "$rc" "$f"; then
+    r="$( nsrows "$f" | tr -d '\n' )"
+    if echo "$r" | grep -q 'n="size"' && ! echo "$r" | grep -q 'why="value'; then
+        ok "(H8) near_sink: @property is a wrapper decorator, not a value hand-off ($r)"
+    else
+        no "(H8) a wrapper decorator read as a value way in: $r"
+    fi
+fi
 
 echo "(M) MCP path_between carries the same clause"
 # Two MCP legend postures (lean-answers): the unchanged assertions run on --mcp-legend=inline, the pre-posture spelling

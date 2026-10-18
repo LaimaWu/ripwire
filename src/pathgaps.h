@@ -420,6 +420,15 @@ struct PathNearSink
     std::vector<NearSinkRow> rows;          // served order, uncut (the emitter shows kNearSinkRows)
 };
 
+// A member call spelled like a builtin type's method (`ids.join( "," )`, `keys.push( k )`, `d.get( k )`, Ruby `x.to_s`) — the
+// builtin-method gate's per-language tables (graph.h BuiltinMethodGate::tableFor) — is far more often the builtin than an in-tree
+// candidate the resolver declined between: the acceptance hand-check rejected every such declined site as a way in or a crossing.
+inline bool builtinSpelledCall( const Reference& call ) noexcept
+{
+    const std::span<const std::string_view> table = BuiltinMethodGate::tableFor( call.lang );
+    return call.qualifier.empty() && std::binary_search( table.begin(), table.end(), std::string_view( call.calleeName ), sortutil::svLess );
+}
+
 // Is site a preferred over site b for one row? met first, then kind (table order), then path, line, order.
 inline bool nearSinkSiteBetter( const IngestResult& ing, const NearSinkSite& a, const NearSinkSite& b )
 {
@@ -540,7 +549,8 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
         }
         for( const std::uint32_t row : rowsOfList[list] )
         {
-            if( g.declinedSiteCaller[site] != out.rows[row].id )   // a declined self-call is no way in
+            // a declined self-call is no way in, nor a call spelled like a builtin type's method
+            if( g.declinedSiteCaller[site] != out.rows[row].id && !builtinSpelledCall( ing.references[ g.declinedSiteRef[site] ] ) )
             {
                 offer( row, NearSinkKind::Declined, g.declinedSiteRef[site], g.declinedSiteCaller[site] );
             }
@@ -555,7 +565,10 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
         for( const std::uint32_t v : values.valueRefsTo( std::span<const NodeId>( &u, 1 ) ) )
         {
             const Reference& vr = ing.references[v];
-            if( vr.fromSymbol == u )
+            // a reference inside the row itself is no way in; nor is a WRAPPER decorator (`@property`, `@classmethod`,
+            // `@overload` — valuerefindex.h vrIsWrapperDecorator, the dead-set's own rule): it hands the function back under its
+            // own name, which is then read or called by name, not handed off
+            if( vr.fromSymbol == u || vrIsWrapperDecorator( vr.fieldName ) )
             {
                 continue;
             }
@@ -699,7 +712,8 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
 inline constexpr std::string_view kNearSinkLegend =
     "<near_sink callers= rows=>: the SINK-SIDE frontier — to='s proven callers walked back over resolved call edges up to depth= hops "
     "(callers= counts them), each <ns d= t= n= p=> row with callers= its own proven callers (absent at 0) and why= how it may ALSO be "
-    "entered with no edge: declined = a declined call lists it as a candidate, value = it is stored or passed as a value, through = a "
+    "entered with no edge: declined = a declined call lists it as a candidate (not one spelled like a builtin type's method), value = "
+    "it is stored or passed as a value (not by a wrapper decorator such as @property), through = a "
     "call through a parameter or slot is matched to that value, name = a by-name call went to a namesake and has no edge to it, "
     "closure = it is a named function written inside in='s body (site= its own definition: in= runs it or hands it on), "
     "external = none of those and no proven caller: no indexed way in was found (an entry point, an out-of-tree or framework caller, "
@@ -959,14 +973,9 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
                 {
                     continue;   // a call with no stored candidate list names nothing to cross to
                 }
-                // a member call spelled like a builtin type's method (`ids.join( "," )`, `keys.push( k )`, `d.get( k )` — the
-                // builtin-method gate's per-language tables) is far more often the builtin than an in-tree candidate: the
-                // acceptance hand-check rejected every such crossing, so it is not one to cross
-                const Reference&                        call  = ing.references[ g.declinedSiteRef[ it->second ] ];
-                const std::span<const std::string_view> table = BuiltinMethodGate::tableFor( call.lang );
-                if( call.qualifier.empty() && std::binary_search( table.begin(), table.end(), std::string_view( call.calleeName ), sortutil::svLess ) )
+                if( builtinSpelledCall( ing.references[ g.declinedSiteRef[ it->second ] ] ) )
                 {
-                    continue;
+                    continue;   // not a hand-off to cross (builtinSpelledCall)
                 }
                 const std::size_t fan = g.declinedListOff[list + 1] - g.declinedListOff[list];
                 for( std::uint32_t slot = g.declinedListOff[list]; fan <= kBridgeFanOut && slot < g.declinedListOff[list + 1]; ++slot )
@@ -976,6 +985,10 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
             }
             for( auto it = std::ranges::lower_bound( valueBy, lo ); it != valueBy.end() && *it <= hi; ++it )
             {
+                if( vrIsWrapperDecorator( ing.references[ it->second ].fieldName ) )
+                {
+                    continue;   // a wrapper decorator hands the function back under its own name: no hand-off
+                }
                 const std::vector<NodeId> targets = values.targetsOf( it->second );
                 for( std::size_t t = 0; targets.size() <= kBridgeFanOut && t < targets.size(); ++t )
                 {
