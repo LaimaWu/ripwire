@@ -166,8 +166,8 @@ each template's candidates (`<pd cands= shown=>`, first 8, `next=` for the rest)
 3 identifier characters (`f"_{m}"`) is too wide for a candidate list: it rides as `pattern_too_wide=K`, and on
 `--safe-delete`, when nothing else was found, it still makes `risk="hedged"` and names its site as a `<pdw>` row. A template with no literal side at all (`codes[sc + '']`, `f"{m}"`) carries no
 name and records nothing, like a bare `obj[k]`. Matched
-by name, never a proven call: `callers=`, `impact_reaches=`, `count=` and the `--dead-code` list are unchanged. JSON and
-MCP transports do not carry the rows yet. Cache format and parser version move (the reference role set grew; 36 and 196 in this release, see the versions
+by name, never a proven call: `callers=`, `impact_reaches=`, `count=` and the `--dead-code` list are unchanged. The
+`--json` and `--format=columnar` roots carry both counts but not the rows; the MCP transport carries neither yet. Cache format and parser version move (the reference role set grew; 36 and 196 in this release, see the versions
 note). Gate: `test/safedeletecheck.sh` arms 9–18.
 ### Changed — `--for` tail rank rows name their file's top symbols
 
