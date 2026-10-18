@@ -55,7 +55,7 @@ ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 # owns the fold). FIX1 B2 (rule 4): every arm reads the DEFAULT answer, fold on — the gate's premise is that the default answer's
 # legend fits its pin and defines what it carries, so the fold's clause is billed by (U)/(L) like any other reading (re-pins below,
 # measured); (FOLD-L) at the end also bills the fold clause alone in both dialects.
-unset RIPWIRE_NO_BODY_FOLD
+unset RIPWIRE_NO_BODY_FOLD RIPWIRE_NO_HEAD_RR   # lane hrr: the head reorder is ON unless a twin sets it
 export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py: the soft-target readers, shared helpers (CHECKLIST 32)
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
@@ -1167,7 +1167,12 @@ fi
 #          also when the sigs next= rides unpaid") in the legend;
 #   NX     a cut (rows < total) is capped="1" and carries next= on <sigs>, and its next_offset= (when printed) is the row count;
 #   HL     nothing is dropped "(ceiling)", no "task_echo: dropped", the root keeps route= and task= verbatim.
-# softp.py FILE N TASK ROWSOUT [REF] prints ONE line "OK|BAD rows= total= charged= T= est= over= next= fits= maximal= upper= rp= hl=";
+# head round-robin (lane hrr, train 31; PROCESS rule 4, orchestrator ruling FIX1 §4(a)): the no-budget answer reorders its first 8
+# rows (files_first=) while a budgeted one keeps score order, so RP holds as an ORDER prefix only on the RIPWIRE_NO_HEAD_RR=1
+# twin. spRef also writes the twin reference (sp.ref.LAB.DIAL.so); softPair runs every call twice — the twin (env set, read by
+# this reader unchanged against the twin reference: an invariant broken there is reported "[RIPWIRE_NO_HEAD_RR=1 twin]") and
+# the answer as served, whose RP is the SET prefix (softp.py's 6th argument, OFFREF).
+# softp.py FILE N TASK ROWSOUT [REF [OFFREF]] prints ONE line "OK|BAD rows= total= charged= T= est= over= next= fits= maximal= upper= rp= hl=";
 # exit 3 = no <ctx> root or no <sigs> block (a missing premise: the caller FAILs it, never skips). ROWSOUT gets the rows.
 cat > "$TMP/softp.py" <<'PY'
 import html, json, re, sys
@@ -1229,6 +1234,13 @@ if len( sys.argv ) > 5:
     from softbudget import upper_bound
     upper = upper_bound( a[ "s" ], ref[ "s" ], X, k, a[ "total" ], U )[ 0 ]
     rp = k > 0 and [ x[ 1 ] for x in a[ "rows" ] ] == [ x[ 1 ] for x in ref[ "rows" ] ][ :k ]
+    if len( sys.argv ) > 6:
+        # head round-robin (lane hrr, rule 4): REF is the reordered no-budget answer, argv[6] its RIPWIRE_NO_HEAD_RR=1 twin — the
+        # rows are a SET prefix (score ranks 1..k of the twin; test/lib/softbudget.py set_prefix) rather than an order prefix
+        from softbudget import set_prefix
+        off = read( sys.argv[ 6 ] )
+        if off is None: sys.exit( 3 )
+        rp = k > 0 and set_prefix( [ x[ 1 ] for x in a[ "rows" ] ], [ x[ 1 ] for x in ref[ "rows" ] ], [ x[ 1 ] for x in off[ "rows" ] ] )
 ok = a[ "est" ] != "-" and fits and maximal and upper and rp and nxt and not a[ "over" ] and a[ "hl" ]
 print( "%s rows=%d total=%d charged=%d T=%d est=%s over=%d next=%d fits=%d maximal=%d upper=%d rp=%d hl=%d"
        % ( "OK" if ok else "BAD", k, a[ "total" ], a[ "charged" ], X, a[ "est" ], int( a[ "over" ] ), int( nxt ), int( fits ),
@@ -1241,6 +1253,9 @@ spRef(){
         rm -f "$TMP/sp.ref.$1.$d.rows"
         ( cd "$2" && "$BIN" "$3" --for="$4" --legend=$d ) >"$TMP/sp.ref.$1.$d" 2>/dev/null
         python3 "$TMP/softp.py" "$TMP/sp.ref.$1.$d" 0 "$4" "$TMP/sp.ref.$1.$d.rows" >/dev/null
+        rm -f "$TMP/sp.ref.$1.$d.so.rows"   # lane hrr: the RIPWIRE_NO_HEAD_RR=1 twin reference
+        ( cd "$2" && RIPWIRE_NO_HEAD_RR=1 "$BIN" "$3" --for="$4" --legend=$d ) >"$TMP/sp.ref.$1.$d.so" 2>/dev/null
+        python3 "$TMP/softp.py" "$TMP/sp.ref.$1.$d.so" 0 "$4" "$TMP/sp.ref.$1.$d.so.rows" >/dev/null
     done
 }
 # softPair LAB DIR ROOTARG TASK N — both dialects at --token-budget=N (each asked by name, so it reads the same dialect on any
@@ -1251,9 +1266,16 @@ softPair(){
     spWhy=""; spLine_compact=""; spLine_full=""
     for d in compact full; do
         rm -f "$TMP/sp.$d.rows"
+        rm -f "$TMP/sp.$d.so.rows"
+        ( cd "$dir" && RIPWIRE_NO_HEAD_RR=1 "$BIN" "$rootarg" --for="$task" --token-budget="$tb" --legend=$d ) >"$TMP/sp.$d.so" 2>/dev/null; rc=$?
+        if [ "$rc" -ne 0 ]; then spWhy="$spWhy $d [RIPWIRE_NO_HEAD_RR=1 twin]: exit $rc;"
+        else
+            line="$( python3 "$TMP/softp.py" "$TMP/sp.$d.so" "$tb" "$task" "$TMP/sp.$d.so.rows" "$TMP/sp.ref.$lab.$d.so" )"
+            case "$line" in OK*) ;; *) spWhy="$spWhy $d [RIPWIRE_NO_HEAD_RR=1 twin]: ${line:-no <ctx>/<sigs> in the answer or its no-budget reference};" ;; esac
+        fi
         ( cd "$dir" && "$BIN" "$rootarg" --for="$task" --token-budget="$tb" --legend=$d ) >"$TMP/sp.$d" 2>/dev/null; rc=$?
         if [ "$rc" -ne 0 ]; then spWhy="$spWhy $d: exit $rc;"; continue; fi
-        line="$( python3 "$TMP/softp.py" "$TMP/sp.$d" "$tb" "$task" "$TMP/sp.$d.rows" "$TMP/sp.ref.$lab.$d" )"
+        line="$( python3 "$TMP/softp.py" "$TMP/sp.$d" "$tb" "$task" "$TMP/sp.$d.rows" "$TMP/sp.ref.$lab.$d" "$TMP/sp.ref.$lab.$d.so" )"
         case "$line" in OK*) ;; *) spWhy="$spWhy $d: ${line:-no <ctx>/<sigs> in the answer or its no-budget reference};" ;; esac
         eval "spLine_$d=\"\$line\""
     done
@@ -1405,7 +1427,18 @@ for tb in 500 900; do
                     ( cd "$P4" && printf '%s\n' "$nargv" | tr '\n' '\0' | xargs -0 "$BIN" . ) >"$TMP/p4n.out" 2>/dev/null
                     nl="$( python3 "$TMP/softp.py" "$TMP/p4n.out" "$nb" "widget routine dispatcher" "$TMP/p4n.rows" )"
                     nr="$( spfield "$nl" rows )"; nt="$( spfield "$nl" total )"
-                    if printf '%s' "$nr$nt" | grep -qE '^[0-9]+$' && [ "$nr" -eq "$nt" ] && cmp -s "$TMP/p4n.rows" "$TMP/sp.ref.p4.compact.rows" \
+                    # lane hrr (rule 4): the twin — the RIPWIRE_NO_HEAD_RR=1 cut's next=, run with it set — must serve the twin's
+                    # no-budget head in ORDER (unchanged); the answer as served must serve the no-budget head as a SET
+                    nargvT="$( grep -oE '<sigs( [^>]*)?>' "$TMP/sp.compact.so" | head -1 | python3 -c 'import sys,re,html,shlex; m=re.search(r"\snext=\"([^\"]+)\"",sys.stdin.read()); print("\n".join(shlex.split(html.unescape(m.group(1)))) if m else "")' )"
+                    ( cd "$P4" && printf '%s\n' "$nargvT" | tr '\n' '\0' | RIPWIRE_NO_HEAD_RR=1 xargs -0 "$BIN" . ) >"$TMP/p4n.so.out" 2>/dev/null
+                    python3 "$TMP/softp.py" "$TMP/p4n.so.out" "$nb" "widget routine dispatcher" "$TMP/p4n.so.rows" >/dev/null
+                    rT="$( wc -l <"$TMP/sp.compact.so.rows" 2>/dev/null | tr -d ' ' )"
+                    if [ -n "$nargvT" ] && cmp -s "$TMP/p4n.so.rows" "$TMP/sp.ref.p4.compact.so.rows" && head -n "${rT:-0}" "$TMP/p4n.so.rows" | cmp -s - "$TMP/sp.compact.so.rows"; then
+                        p4facts="$p4facts [RIPWIRE_NO_HEAD_RR=1 twin] the 500 cut's next= serves the no-budget head in order, the cut its prefix;"
+                    else
+                        p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) [RIPWIRE_NO_HEAD_RR=1 twin] --token-budget=500: the cut's next= did not serve the twin's no-budget head in order with the cut's rows as its prefix"
+                    fi
+                    if printf '%s' "$nr$nt" | grep -qE '^[0-9]+$' && [ "$nr" -eq "$nt" ] && python3 "$RIPWIRE_TESTLIB/softbudget.py" setprefix "$TMP/p4n.rows" "$TMP/sp.ref.p4.compact.rows" "$TMP/sp.ref.p4.compact.so.rows" \
                        && head -n "$r" "$TMP/p4n.rows" | cmp -s - "$TMP/sp.compact.rows"; then
                         p4facts="$p4facts the 500 cut's next= ($( printf '%s' "$nargv" | tr '\n' ' ')) serves $nr of $nt rows, the no-budget head;"
                     else
@@ -1419,7 +1452,12 @@ for tb in 500 900; do
             # What holds: the rows are a rank prefix of the no-budget answer's, and a cut carries capped + next=.
             case "$sigs" in *' capped="1"'*) capd=1 ;; *) capd=0 ;; esac
             case "$sigs" in *' next="'*) nxd=1 ;; *) nxd=0 ;; esac
-            if ! head -n "$r" "$TMP/sp.ref.p4.$lg.rows" | cmp -s - "$TMP/sp.$lg.rows" || { [ "$r" -lt "$t" ] && [ $(( capd * nxd )) -ne 1 ]; }; then
+            # lane hrr (rule 4): the order-prefix clause runs unchanged on the RIPWIRE_NO_HEAD_RR=1 twin; as served, a SET prefix
+            rT="$( wc -l <"$TMP/sp.$lg.so.rows" 2>/dev/null | tr -d ' ' )"
+            if [ "${rT:-0}" -eq 0 ] || ! head -n "$rT" "$TMP/sp.ref.p4.$lg.so.rows" | cmp -s - "$TMP/sp.$lg.so.rows"; then
+                p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) [RIPWIRE_NO_HEAD_RR=1 twin] --token-budget=900 --legend=$lg: ${rT:-?} rows — not a rank prefix of the twin's no-budget answer"
+            fi
+            if ! python3 "$RIPWIRE_TESTLIB/softbudget.py" setprefix "$TMP/sp.$lg.rows" "$TMP/sp.ref.p4.$lg.rows" "$TMP/sp.ref.p4.$lg.so.rows" || { [ "$r" -lt "$t" ] && [ $(( capd * nxd )) -ne 1 ]; }; then
                 p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=900 --legend=$lg: $r of $t rows, capped=$capd next=$nxd — the rows must be a rank prefix of the no-budget answer's, and a cut must carry capped + next="
             fi
         fi
@@ -1539,17 +1577,24 @@ echo
 # the train's phase-A head, 7,688 with receiver evidence merged (its present-only via= readings; under the old ceiling),
 # 7,711 with lean-answers merged: +23 B, all on the --for probe, the " (absent cx/ccx/in = 0)" reading the lane pinned
 # in the ripwire.for/v1 row. The other verbs are unmoved by that step. Same rule: the next multiple of 100 B.
-echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 8,200 B (34,716 B in full on the fixture) ==="
-loopBytes=0; fullBytes=0
+# RE-ANCHORED 2026-10-18 (lane hrr FIX1, by design; rule 4 twin): 8,200 → 8,400 B, measured 8,302. The +145 B is the loop's
+# --for probe: its routed default answer now reorders its head and carries files_first= with its present-only compact clause
+# (kForFilesFirstNote); the other nine verbs unmoved. The old bar is kept as the twin: with RIPWIRE_NO_HEAD_RR=1 the same loop
+# still pays <= 8,200 B (LT). Same rule: the next multiple of 100 B.
+echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 8,400 B (34,716 B in full on the fixture) ==="
+loopBytes=0; fullBytes=0; loopBytesT=0
 for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--uses=distance" "--edit-check=total_area" \
          "--quality-delta" "--test-gate=geometry.cpp" "--affected=geometry.cpp" "--safe-delete=total_area" "--slice=total_area"; do
     rrun "$v" --legend=compact >"$TMP/l.c"; rrun "$v" --legend=full >"$TMP/l.f"   # L1: the full bill is asked for by name
     [ -s "$TMP/l.c" ] || no "(L) $v --legend=compact answered NOTHING (a refusal is not a 0 B legend): $( head -c 120 "$TMP/rerr" )"
     b="$( leg bytes "$TMP/l.c" )"; f="$( leg bytes "$TMP/l.f" )"
     loopBytes=$(( loopBytes + b )); fullBytes=$(( fullBytes + f ))
+    RIPWIRE_NO_HEAD_RR=1 rrun "$v" --legend=compact >"$TMP/l.ct"; loopBytesT=$(( loopBytesT + $( leg bytes "$TMP/l.ct" ) ))
 done
-[ "$loopBytes" -le 8200 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
-                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 8,200 B; full: $fullBytes B)"
+[ "$loopBytes" -le 8400 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
+                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 8,400 B; full: $fullBytes B)"
+[ "$loopBytesT" -le 8200 ] && ok "(LT) [RIPWIRE_NO_HEAD_RR=1 twin] ten-verb loop: $loopBytesT B of compact legend (the pre-hrr bar, 8,200 B)" \
+                           || no "(LT) [RIPWIRE_NO_HEAD_RR=1 twin] ten-verb loop pays $loopBytesT B of compact legend (> 8,200 B)"
 
 echo
 echo "=== (M) MCP: legend:\"compact\" on edit_check answers in ≤ 900 B on a clean tree; every XML verb takes the argument, within its per-verb legend pin ==="

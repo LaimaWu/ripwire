@@ -202,6 +202,7 @@ set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
 export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py: the soft-target readers, shared helpers (CHECKLIST 32)
+unset RIPWIRE_NO_HEAD_RR                  # lane hrr: the head reorder is ON here unless the RP twin sets it
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "fornotesbudgetcheck: BIN=$BIN"
@@ -364,6 +365,20 @@ print( "%s rows=%d total=%d charged=%d T=%d est=%s over=%d echo=%d next=%d notes
            int( nxt ), sum( x[ 3 ] for x in a[ 'rows' ] ), int( fits ), int( maximal ), int( upper ), int( rp ) ) )
 PY
 soft(){ python3 "$TMP/soft.py" "$@"; }
+# head round-robin (lane hrr, train 31; PROCESS rule 4, orchestrator ruling FIX1 §4(a)): the no-budget answer reorders its first 8
+# rows (files_first=) while a budgeted one keeps score order, so RP's "a rank prefix of the no-budget rows" holds only in score
+# order. RP runs UNCHANGED on the RIPWIRE_NO_HEAD_RR=1 twin of every sweep call (against the twin's no-budget reference), and
+# (RPh) asserts with the reorder on: the rows are the no-budget answer's first rows as a SET (score ranks 1..K, read off the
+# twin: softbudget.py set_prefix) and rows(N-10) are an order prefix of rows(N) (monotone; both budgeted, both score order).
+cat > "$TMP/rph.py" <<'PY'
+import os, sys
+sys.path.insert( 0, os.environ[ "RIPWIRE_TESTLIB" ] ); from softbudget import set_prefix
+rd = lambda p: [ x for x in open( p ).read().split( "\n" ) if x ] if p and os.path.exists( p ) else None
+cur, on, off = rd( sys.argv[ 1 ] ), rd( sys.argv[ 2 ] ), rd( sys.argv[ 3 ] )
+prv = rd( sys.argv[ 4 ] ) if len( sys.argv ) > 4 and sys.argv[ 4 ] else []
+ok = cur is not None and on is not None and off is not None and prv is not None and set_prefix( cur, on, off ) and cur[ :len( prv ) ] == prv
+sys.exit( 0 if ok else 1 )
+PY
 field(){ local re=" $2=([^ ]*)"; [[ " $1 " =~ $re ]] && printf '%s' "${BASH_REMATCH[1]}"; }   # field LINE KEY: one key= of a soft line
 isnum(){ case "${1:-}" in ''|*[!0-9]*) return 1;; esac; return 0; }
 
@@ -372,7 +387,11 @@ isnum(){ case "${1:-}" in ''|*[!0-9]*) return 1;; esac; return 0; }
 "$BIN" "$CORPUS" --for="$TASK"                  > "$TMP/def.xml"     2>/dev/null
 "$BIN" "$CORPUS" --for="$TASK" --legend=compact > "$TMP/def.compact" 2>/dev/null
 "$BIN" "$CORPUS" --for="$TASK" --json           > "$TMP/def.json"    2>/dev/null
+RIPWIRE_NO_HEAD_RR=1 "$BIN" "$CORPUS" --for="$TASK"                  > "$TMP/def_so.xml"     2>/dev/null   # lane hrr: the RP twin's references
+RIPWIRE_NO_HEAD_RR=1 "$BIN" "$CORPUS" --for="$TASK" --legend=compact > "$TMP/def_so.compact" 2>/dev/null
+RIPWIRE_NO_HEAD_RR=1 "$BIN" "$CORPUS" --for="$TASK" --json           > "$TMP/def_so.json"    2>/dev/null
 for dialect in xml compact json; do
+  soft "$TMP/def_so.$dialect" 0 "$TMP/def_so_$dialect.rows" >/dev/null || no "the RIPWIRE_NO_HEAD_RR=1 no-budget answer ($dialect) has no <sigs> block — the RP twin lacks its reference"
   dl="$( soft "$TMP/def.$dialect" 0 "$TMP/def_$dialect.rows" )" || { no "no-budget answer ($dialect) has no <sigs> block — every soft arm below lacks its reference"; continue; }
   dr="$( field "$dl" rows )"
   isnum "$dr" && [ "$dr" -ge 5 ] || no "no-budget answer ($dialect) serves '$dr' rows — the reference cannot measure a cut past the floor"
@@ -517,7 +536,7 @@ else no "a surviving note lost its tail — notes must be charged, never trimmed
 # rung a single sample happens to sit on is exactly what made the defect survive four earlier re-anchors of
 # the middle rung above: 1550 and 1600 are both inside a FLAT stretch, and the edge is at ~1610.
 sweepRungs=0; sweepEchoFail=0; sweepEchoFirst=""
-stFail=0; stFirst=""; lblFail=0; lblFirst=""; rpFail=0; rpFirst=""; cfFail=0; cfFirst=""; sweepCut=0; upFail=0; upFirst=""
+stFail=0; stFirst=""; lblFail=0; lblFirst=""; rpFail=0; rpFirst=""; rphFail=0; rphFirst=""; cfFail=0; cfFirst=""; sweepCut=0; upFail=0; upFirst=""
 tb=700
 while [ "$tb" -le 2000 ]; do
   sweepRungs=$(( sweepRungs + 1 ))
@@ -529,6 +548,18 @@ while [ "$tb" -le 2000 ]; do
     esac
     cur="$TMP/sw_$(( sweepRungs % 2 ))_$dialect.rows"; prv="$TMP/sw_$(( ( sweepRungs + 1 ) % 2 ))_$dialect.rows"
     [ "$tb" -eq 700 ] && prv=""
+    # RP's RIPWIRE_NO_HEAD_RR=1 twin (lane hrr): the same call and the same soft reader, against the twin's no-budget reference
+    case "$dialect" in
+      xml)     RIPWIRE_NO_HEAD_RR=1 "$BIN" "$CORPUS" --for="$TASK" --token-budget="$tb"                  > "$TMP/swt.$dialect" 2>/dev/null ;;
+      compact) RIPWIRE_NO_HEAD_RR=1 "$BIN" "$CORPUS" --for="$TASK" --token-budget="$tb" --legend=compact > "$TMP/swt.$dialect" 2>/dev/null ;;
+      json)    RIPWIRE_NO_HEAD_RR=1 "$BIN" "$CORPUS" --for="$TASK" --token-budget="$tb" --json           > "$TMP/swt.$dialect" 2>/dev/null ;;
+    esac
+    curt="$TMP/swt_$(( sweepRungs % 2 ))_$dialect.rows"; prvt="$TMP/swt_$(( ( sweepRungs + 1 ) % 2 ))_$dialect.rows"
+    [ "$tb" -eq 700 ] && prvt=""
+    slt="$( soft "$TMP/swt.$dialect" "$tb" "$curt" "$TMP/def_so.$dialect" "$prvt" )"
+    case "$slt" in *" rp=1"*) ;; *)
+      rpFail=$(( rpFail + 1 ))
+      [ -z "$rpFirst" ] && rpFirst="budget=$tb ($dialect) [RIPWIRE_NO_HEAD_RR=1 twin]: the rows are not a rank prefix of the no-budget rows, or rows(N=$(( tb - 10 ))) are not a prefix of them — $slt" ;; esac
     if ! sl="$( soft "$TMP/sw.$dialect" "$tb" "$cur" "$TMP/def.$dialect" "$prv" )"; then
       no "sweep budget=$tb ($dialect): no <sigs> block in the answer or its reference — the price and the rows a budget shapes must always be served"
       stFail=$(( stFail + 1 )); continue
@@ -545,9 +576,10 @@ while [ "$tb" -le 2000 ]; do
     case "$sl" in *" over=0 "*) ;; *)
       lblFail=$(( lblFail + 1 ))
       [ -z "$lblFirst" ] && lblFirst="budget=$tb ($dialect) $sl" ;; esac
-    case "$sl" in *" rp=1"*) ;; *)
-      rpFail=$(( rpFail + 1 ))
-      [ -z "$rpFirst" ] && rpFirst="budget=$tb ($dialect): the rows are not a rank prefix of the no-budget rows, or rows(N=$(( tb - 10 ))) are not a prefix of them — $sl" ;; esac
+    if ! python3 "$TMP/rph.py" "$cur" "$TMP/def_$dialect.rows" "$TMP/def_so_$dialect.rows" "$prv"; then
+      rphFail=$(( rphFail + 1 ))
+      [ -z "$rphFirst" ] && rphFirst="budget=$tb ($dialect): the rows are not a SET prefix of the no-budget rows, or rows(N=$(( tb - 10 ))) are not an order prefix of them — $sl"
+    fi
     [ "$( field "$sl" rows )" != "$( field "$sl" total )" ] && sweepCut=$(( sweepCut + 1 ))
   done
   if ! cmp -s "$TMP/sw_$(( sweepRungs % 2 ))_xml.rows" "$TMP/sw_$(( sweepRungs % 2 ))_compact.rows"; then
@@ -568,8 +600,10 @@ if [ "$upFail" -eq 0 ]; then ok "(UP) sweep 700..2000 step 10 x 3 dialects ($run
 else no "(UP) sweep 700..2000 step 10 x 3 dialects: $upFail run(s) served rows past T less the sections and the tail reserve — first: $upFirst"; fi
 if [ "$lblFail" -eq 0 ]; then ok "(NOLBL) sweep 700..2000 step 10 x 3 dialects ($runs runs): no over_ceiling= on any soft target"
 else no "(NOLBL) sweep 700..2000 step 10 x 3 dialects: $lblFail run(s) labelled a soft target over_ceiling= — first: $lblFirst"; fi
-if [ "$rpFail" -eq 0 ]; then ok "(RP) sweep 700..2000 step 10 x 3 dialects ($runs runs): rows are a rank prefix of the no-budget rows, monotone in N"
-else no "(RP) sweep 700..2000 step 10 x 3 dialects: $rpFail run(s) broke the rank prefix — first: $rpFirst"; fi
+if [ "$rpFail" -eq 0 ]; then ok "(RP) [RIPWIRE_NO_HEAD_RR=1 twin] sweep 700..2000 step 10 x 3 dialects ($runs runs): rows are a rank prefix of the no-budget rows, monotone in N"
+else no "(RP) [RIPWIRE_NO_HEAD_RR=1 twin] sweep 700..2000 step 10 x 3 dialects: $rpFail run(s) broke the rank prefix — first: $rpFirst"; fi
+if [ "$rphFail" -eq 0 ]; then ok "(RPh) head round-robin on, sweep 700..2000 step 10 x 3 dialects ($runs runs): rows are a SET prefix of the no-budget rows (score ranks 1..K), monotone in N"
+else no "(RPh) head round-robin on, sweep 700..2000 step 10 x 3 dialects: $rphFail run(s) broke the set prefix — first: $rphFirst"; fi
 if [ "$cfFail" -eq 0 ]; then ok "(CF) sweep 700..2000 step 10: the default and --legend=compact dialects serve the same rows on all $sweepRungs rungs"
 else no "(CF) sweep 700..2000 step 10: $cfFail rung(s) where the legend changed the rows — first: $cfFirst"; fi
 if [ "$sweepEchoFail" -eq 0 ]; then
