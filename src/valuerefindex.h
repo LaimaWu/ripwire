@@ -680,10 +680,11 @@ public:
         return out;
     }
     // Too-wide templates (`f"_{m}"`: no literal side of kVrPatternMinLiteral identifier characters) whose written sides
-    // could name one of `defs`: pattern_too_wide=, a count beside the rows, never a row of its own.
-    std::size_t tooWideTo( std::span<const NodeId> defs ) const
+    // could name one of `defs`, in reference order: pattern_too_wide= counts them; never a candidate list. --safe-delete
+    // names them as <pdw> rows when they are what keeps risk= from none-found.
+    std::vector<std::uint32_t> wideSitesTo( std::span<const NodeId> defs ) const
     {
-        return sitesNaming( m_patternsWide, defs ).size();
+        return sitesNaming( m_patternsWide, defs );
     }
 
 private:
@@ -813,7 +814,7 @@ struct ValueRefRows
     std::vector<ValueRefRow> rows;      // every row, served order; the window is the caller's
     ValueRefIndex::DepthCuts depthCut;  // the walk's depth cut over the answered defs' families (value_refs_depth_capped=)
     std::vector<std::uint32_t> patternSites;   // IX-3 (the PatternIndex overloads): callers — template lookups that may name the defs; callees — the templates in them
-    std::size_t              patternTooWide = 0;   // IX-3 (callers): too-wide templates whose sides could name the defs
+    std::vector<std::uint32_t> patternWideSites;   // IX-3 (callers): too-wide templates whose sides could name the defs
 };
 
 // --callers side: every value reference resolving to one of `defs`.
@@ -988,7 +989,7 @@ inline ValueRefRows valueRefCalleeRows( const IngestResult& ing, const ValueRefI
 inline ValueRefRows withPatternRows( ValueRefRows rows, const PatternIndex& pix, std::span<const NodeId> ids, bool callersSide )
 {
     rows.patternSites   = callersSide ? pix.sitesTo( ids ) : pix.sitesIn( ids );
-    rows.patternTooWide = callersSide ? pix.tooWideTo( ids ) : 0;
+    rows.patternWideSites = callersSide ? pix.wideSitesTo( ids ) : std::vector<std::uint32_t>();
     return rows;
 }
 

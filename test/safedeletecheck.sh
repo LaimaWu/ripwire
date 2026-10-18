@@ -197,11 +197,14 @@ else
     no "(8) non-call references printed as call sites: every sites_at= is \"$SD8_ALL\", want \"n.c:11\""
 fi
 
-# (9)-(13) IX-3 name-template dispatch (lane name-template-dispatch): a method a template lookup can name is no
+# (9)-(17) IX-3 name-template dispatch (lane name-template-dispatch): a method a template lookup can name is no
 #     none-found. RED on main (risk="none-found", no pattern_dispatch=). Python: getattr with an f-string prefix
 #     (the textual watch_ shape), a self receiver narrowed to the class family, a bare-variable getattr (no row), a
 #     literal getattr (no template, no row), a too-wide f"_{m}" (pattern_too_wide=1, no row); JS: this['compile' + t]
 #     (the nunjucks shape). Dead-code membership is unchanged: dead_code_candidate= is not read from these rows.
+#     (14)/(15) the same rows on --callers / --impact (red on main: count 0, no hedge); (16) --callers of a too-wide-only
+#     method carries pattern_too_wide=1 and no row; (17) a too-wide-only method WITH a caller keeps its evidence reading
+#     (no <pdw>, risk unchanged) — (12) is the honesty fix: too wide for a candidate list is still never none-found.
 PD="$WORK/pd"; mkdir -p "$PD"
 cat > "$PD/react.py" <<'PDEOF'
 class Node:
@@ -243,6 +246,12 @@ class Widget(Node):
 
     def _hidden(self):
         return 0
+
+    def _called(self):
+        return 0
+
+def call_it(w):
+    return w._called()
 PDEOF
 cat > "$PD/comp.js" <<'PDEOF'
 class Compiler {
@@ -276,10 +285,11 @@ else
     ok "(11) near miss: getattr(obj, name) and getattr(obj, \"plain_handler\") make no pattern row"
 fi
 PD12="$( pdsd Widget._hidden )"
-if printf '%s' "$PD12" | grep -q 'pattern_too_wide="1"' && ! printf '%s' "$PD12" | grep -q 'pattern_dispatch=\|<pd '; then
-    ok "(12) f\"_{m}\" is too wide: pattern_too_wide=1, no row"
+if printf '%s' "$PD12" | grep -q 'risk="hedged" pattern_too_wide="1"' && printf '%s' "$PD12" | grep -q '<pdws total="1" shown="1"><pdw in="wide_lookup" p="react.py:15" pattern="_\*"/></pdws>' \
+    && ! printf '%s' "$PD12" | grep -q 'pattern_dispatch=\|<pd '; then
+    ok "(12) f\"_{m}\" is too wide: risk=hedged, pattern_too_wide=1, the site as <pdw> at react.py:15, no candidate list"
 else
-    no "(12) the too-wide template: $PD12"
+    no "(12) the too-wide template must hedge (never none-found) and name its site: $PD12"
 fi
 PD13="$( pdsd compileSuper )"
 PD13c="$( "$BIN" "$PD" --no-cache --callees=comp.js:compile 2>/dev/null | sed 's/<!--.*-->//' )"
@@ -287,6 +297,32 @@ if printf '%s' "$PD13" | grep -q 'risk="hedged" pattern_dispatch="1"' && printf 
     ok "(13) JS this['compile' + t]: compileSuper hedged; --callees=compile lists it as a <pd> candidate"
 else
     no "(13) the JS computed-member template: safe-delete=[$PD13] callees=[$PD13c]"
+fi
+
+PD14="$( "$BIN" "$PD" --no-cache --callers=compileSuper 2>/dev/null | sed 's/<!--.*-->//' )"
+PDROWS='<pds total="1" shown="1"><pd in="compile" p="comp.js:3" pattern="compile\*"/></pds>'
+if printf '%s' "$PD14" | grep -q 'count="0"' && printf '%s' "$PD14" | grep -q 'pattern_dispatch="1"' && printf '%s' "$PD14" | grep -q "$PDROWS"; then
+    ok "(14) --callers=compileSuper: count=0 plus pattern_dispatch=1 and the <pd> row naming compile at comp.js:3"
+else
+    no "(14) --callers=compileSuper lost the template-lookup hedge: $PD14"
+fi
+PD15="$( "$BIN" "$PD" --no-cache --impact=compileSuper 2>/dev/null | sed 's/<!--.*-->//' )"
+if printf '%s' "$PD15" | grep -q 'reaches="0"' && printf '%s' "$PD15" | grep -q 'pattern_dispatch="1"' && printf '%s' "$PD15" | grep -q "$PDROWS"; then
+    ok "(15) --impact=compileSuper: reaches=0 plus pattern_dispatch=1 and the <pd> row"
+else
+    no "(15) --impact=compileSuper lost the template-lookup hedge: $PD15"
+fi
+PD16="$( "$BIN" "$PD" --no-cache --callers=Widget._hidden 2>/dev/null | sed 's/<!--.*-->//' )"
+if printf '%s' "$PD16" | grep -q 'pattern_too_wide="1"' && ! printf '%s' "$PD16" | grep -q 'pattern_dispatch=\|<pd \|<pdw '; then
+    ok "(16) --callers=Widget._hidden: pattern_too_wide=1, no row"
+else
+    no "(16) --callers of a too-wide-only method: $PD16"
+fi
+PD17="$( pdsd Widget._called )"
+if printf '%s' "$PD17" | grep -q 'pattern_too_wide="1"' && ! printf '%s' "$PD17" | grep -q 'risk="hedged"\|risk="none-found"\|<pdw'; then
+    ok "(17) near miss: a too-wide-only method with a caller keeps its evidence reading, no <pdw>"
+else
+    no "(17) a too-wide site overrode real evidence: $PD17"
 fi
 
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'

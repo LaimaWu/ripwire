@@ -214,20 +214,22 @@ inline std::string patternSiteAttrs( const IngestResult& ing, const Reference& r
     out += " p=\"" + ex( vrPath( ing, r.fileId, rr ) ) + ":" + std::to_string( r.line ) + "\" pattern=\"" + ex( r.calleeName ) + "\"";
     return out;
 }
-inline std::string patternDispatchXml( const IngestResult& ing, std::span<const std::uint32_t> sites, const VrRender& rr )
+// `wide`: the too-wide sites (--safe-delete, when they back risk=hedged) as <pdws>/<pdw>: the site only, no candidate list.
+inline std::string patternDispatchXml( const IngestResult& ing, std::span<const std::uint32_t> sites, const VrRender& rr, bool wide = false )
 {
     if( sites.empty() )
     {
         return {};
     }
-    const std::size_t shown = std::min( sites.size(), kPatternRowCap );
+    const std::string_view tag   = wide ? "pdw" : "pd";
+    const std::size_t      shown = std::min( sites.size(), kPatternRowCap );
     std::vector<char> esc;
-    std::string out = "<pds total=\"" + std::to_string( sites.size() ) + "\" shown=\"" + std::to_string( shown ) + "\">";
+    std::string out = "<" + std::string( tag ) + "s total=\"" + std::to_string( sites.size() ) + "\" shown=\"" + std::to_string( shown ) + "\">";
     for( std::size_t i = 0; i < shown; ++i )
     {
-        out += "<pd" + patternSiteAttrs( ing, ing.references[ sites[i] ], rr, esc ) + "/>";
+        out += "<" + std::string( tag ) + patternSiteAttrs( ing, ing.references[ sites[i] ], rr, esc ) + "/>";
     }
-    return out + "</pds>";
+    return out + "</" + std::string( tag ) + "s>";
 }
 // The dispatcher side (--callees of the function that holds the template): one <pd> per site with cands= (every member
 // it can name), the first kPatternRowCap of them as <t> rows, and next= (the callers verb on one of them) when cut.
@@ -262,8 +264,17 @@ inline std::string patternDispatchAttrXml( std::size_t n, std::size_t tooWide )
 {
     return countFieldOrEmpty( "pattern_dispatch", n, /*json=*/false ) + countFieldOrEmpty( "pattern_too_wide", tooWide, /*json=*/false );
 }
-// The legend clause, exactly when an answer carries pattern_dispatch= or pattern_too_wide=.
-inline const char* patternDispatchLegend( bool any, bool callersSide ) noexcept
+// The callers-side clause up to its too-wide tail: one copy for both tails.
+inline constexpr std::string_view kPatternDispatchCallersLegend =
+    "pattern_dispatch=N (absent when 0): N lookups build a NAME from a template (Python getattr/hasattr/__dict__.get with an "
+    "f-string or +, a JS/TS o['p' + x] / o[`p${x}`]) whose literal prefix/suffix this method's name matches; a self/this/cls "
+    "receiver in a method the index places in a class keeps only that class family (ancestors and subclasses, by base name). MAY be invoked through that name; matched by name, "
+    "not a proven call: never in callers=/impact_reaches=/count=, and the dead-code list is unchanged. <pds>/<pd in= p= "
+    "pattern=> list them. pattern_too_wide=K: K templates whose literal side is under 3 identifier characters "
+    "(f\"_{m}\") could also name it; ";
+// The legend clause, exactly when an answer carries pattern_dispatch= or pattern_too_wide=. `wideRows`: the answer lists
+// the too-wide sites as <pdw> rows (--safe-delete, risk=hedged).
+inline std::string patternDispatchLegend( bool any, bool callersSide, bool wideRows = false )
 {
     if( any && !callersSide )
     {
@@ -272,13 +283,13 @@ inline const char* patternDispatchLegend( bool any, bool callersSide ) noexcept
                "class members whose names match it (a self/this/cls receiver in a method the index places in a class: that class family only), first 8 as <t n= p=>, next= the "
                "literal scan for the rest. MAY be invoked; matched by name, not a proven call: never in count=. ";
     }
-    return any ? "pattern_dispatch=N (absent when 0): N lookups build a NAME from a template (Python getattr/hasattr/__dict__.get with an "
-                 "f-string or +, a JS/TS o['p' + x] / o[`p${x}`]) whose literal prefix/suffix this method's name matches; a self/this/cls "
-                 "receiver in a method the index places in a class keeps only that class family (ancestors and subclasses, by base name). MAY be invoked through that name; matched by name, "
-                 "not a proven call: never in callers=/impact_reaches=/count=, and the dead-code list is unchanged. <pds>/<pd in= p= "
-                 "pattern=> list them. pattern_too_wide=K: K templates whose literal side is under 3 identifier characters "
-                 "(f\"_{m}\") could also name it; no row. "
-               : "";
+    if( !any )
+    {
+        return {};
+    }
+    return std::string( kPatternDispatchCallersLegend )
+         + ( wideRows ? "no candidate list, but with no other evidence they keep risk= from none-found and <pdws>/<pdw in= p= pattern=> name each site. "
+                      : "no row. " );
 }
 
 inline std::string valueRefsCountAttrXml( std::size_t n ) { return countFieldOrEmpty( "value_refs", n, /*json=*/false ); }

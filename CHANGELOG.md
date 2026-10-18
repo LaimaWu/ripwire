@@ -15,6 +15,21 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — a method a name-template lookup can name no longer reads `risk="none-found"`
+
+`getattr(obj, f"watch_{name}")`, `hasattr`, `cls.__dict__.get(f"on_{n}")` and JS/TS `this['compile' + node.typename]`
+call a method by a constructed name, so `--safe-delete` printed `risk="none-found"` for real dispatch targets (textual's
+`watch_*` watchers, nunjucks' `compile*` node compilers). These lookups are now recorded as name templates (literal
+prefix and suffix around one hole; a `self`/`this`/`cls` receiver inside a Python class keeps only that class family).
+`--callers`, `--impact` and `--safe-delete` of a method a template can name carry `pattern_dispatch=N` and one
+`<pd in= p= pattern=>` row per site; `--safe-delete` reads the new `risk="hedged"`; `--callees` of the dispatcher lists
+each template's candidates (`<pd cands= shown=>`, first 8, `next=` for the rest). A template whose literal side is under
+3 identifier characters (`f"_{m}"`) is too wide for a candidate list: it rides as `pattern_too_wide=K`, and on
+`--safe-delete`, when nothing else was found, it still makes `risk="hedged"` and names its site as a `<pdw>` row. Matched
+by name, never a proven call: `callers=`, `impact_reaches=`, `count=` and the `--dead-code` list are unchanged. JSON and
+MCP transports do not carry the rows yet. Cache format and parser version move (the reference role set grew; the train
+renumbers). Gate: `test/safedeletecheck.sh` arms 9–17.
+
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
 Ruby's `include`/`extend`/`prepend` are now captured by `queries/ruby/tags.scm` as `@reference.mixin` and turned into
