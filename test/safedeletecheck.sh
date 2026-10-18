@@ -365,5 +365,40 @@ PD19="$( "$BIN" "$PD" --no-cache --external-surface 2>/dev/null | sed 's/<!--.*-
 if [ -n "$PD19" ] && ! printf '%s' "$PD19" | grep -qE '<x n="[^"]*\*"'; then ok "(19) --external-surface lists no name template as an external name"
 else no "(19) --external-surface lists a template glob (or produced nothing): $( printf '%s' "$PD19" | grep -oE '<x n="[^"]*\*"[^>]*>' | head -3 )"; fi
 
+# (20) train 30 CodeRabbit: the pattern counts ride on EVERY dialect of --callers/--impact, and --impact carries the too-wide
+#     count. RED on ad8af71e: the --json roots had no pattern_dispatch/pattern_too_wide key (a silent count 0), the
+#     columnar --impact root had neither attribute, and --impact passed a literal 0 for pattern_too_wide (a too-wide-only
+#     method read reaches="0" with no hedge and no legend clause). Near miss: a literal getattr makes no key.
+pdjson(){ "$BIN" "$PD" --no-cache "$@" --json 2>/dev/null | python3 -c '
+import json, sys
+try: d = json.load( sys.stdin )
+except ValueError: print( "NOT-JSON" ); sys.exit( 0 )
+print( "count=%s reaches=%s pd=%s pw=%s" % ( d.get( "count", "-" ), d.get( "reaches", "-" ), d.get( "pattern_dispatch", "-" ), d.get( "pattern_too_wide", "-" ) ) )'; }
+PD20a="$( pdjson --callers=compileSuper )"
+[ "$PD20a" = "count=0 reaches=- pd=1 pw=-" ] && ok "(20a) --callers=compileSuper --json: count 0 plus pattern_dispatch 1 ($PD20a)" \
+                                          || no "(20a) --callers=compileSuper --json lost the template-lookup count: $PD20a"
+PD20b="$( pdjson --impact=compileSuper )"
+[ "$PD20b" = "count=- reaches=0 pd=1 pw=-" ] && ok "(20b) --impact=compileSuper --json: reaches 0 plus pattern_dispatch 1 ($PD20b)" \
+                                           || no "(20b) --impact=compileSuper --json lost the template-lookup count: $PD20b"
+PD20c="$( "$BIN" "$PD" --no-cache --impact=compileSuper --format=columnar 2>/dev/null | grep -o '<impact [^>]*>' )"
+case "$PD20c" in *' reaches="0" '*'pattern_dispatch="1"'*) ok "(20c) --impact=compileSuper --format=columnar: the root carries pattern_dispatch=1" ;;
+                 *) no "(20c) columnar --impact root lost pattern_dispatch=: ${PD20c:-no root}" ;; esac
+PD20d="$( "$BIN" "$PD" --no-cache --legend=full --impact=Widget._hidden 2>/dev/null )"; pdrc=$?
+if [ "$pdrc" -eq 0 ] && printf '%s' "$PD20d" | grep -q '<impact [^>]* reaches="0"[^>]* pattern_too_wide="1"' && printf '%s' "$PD20d" | grep -q 'pattern_too_wide=K: K templates' \
+   && ! printf '%s' "$PD20d" | grep -q 'pattern_dispatch="\|<pd \|<pdw '; then ok "(20d) --impact=Widget._hidden: pattern_too_wide=1 and its legend clause, no row"
+else no "(20d) --impact of a too-wide-only method (rc=$pdrc): $( printf '%s' "$PD20d" | grep -o '<impact [^>]*>' )"; fi
+if command -v xmllint > /dev/null 2>&1; then
+    printf '%s' "$PD20d" > "$WORK/pd20d.xml"
+    if xmllint --noout "$WORK/pd20d.xml" 2> "$WORK/pd20d.err"; then ok "(20d) xmllint parses the --legend=full answer"; else no "(20d) xmllint: $( head -c 300 "$WORK/pd20d.err" )"; fi
+else
+    printf '  SKIP  (20d) xmllint not installed — XML parse not checked\n'
+fi
+PD20e="$( pdjson --impact=Widget._hidden )"; PD20f="$( "$BIN" "$PD" --no-cache --impact=Widget._hidden --format=columnar 2>/dev/null | grep -o '<impact [^>]*>' )"
+case "$PD20e|$PD20f" in "count=- reaches=0 pd=- pw=1|"*'pattern_too_wide="1"'*) ok "(20e) --impact=Widget._hidden: pattern_too_wide on the --json and columnar roots too ($PD20e)" ;;
+                         *) no "(20e) --impact too-wide count missing on --json/columnar: [$PD20e] [${PD20f:-no root}]" ;; esac
+PD20g="$( pdjson --callers=Widget.plain_handler )"
+[ "$PD20g" = "count=0 reaches=- pd=- pw=-" ] && ok "(20g) near miss: a literal getattr makes no pattern key on --json ($PD20g)" \
+                                           || no "(20g) --callers=Widget.plain_handler --json: expected count 0 and no pattern keys, got $PD20g"
+
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'
 exit "$fail"

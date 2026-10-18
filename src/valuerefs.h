@@ -264,6 +264,11 @@ inline std::string patternDispatchAttrXml( std::size_t n, std::size_t tooWide )
 {
     return countFieldOrEmpty( "pattern_dispatch", n, /*json=*/false ) + countFieldOrEmpty( "pattern_too_wide", tooWide, /*json=*/false );
 }
+// The --json twin: the same two counts, absent at zero, beside value_refs on the --callers/--impact JSON roots.
+inline std::string patternDispatchKeyJson( std::size_t n, std::size_t tooWide )
+{
+    return countFieldOrEmpty( "pattern_dispatch", n, /*json=*/true ) + countFieldOrEmpty( "pattern_too_wide", tooWide, /*json=*/true );
+}
 // The callers-side clause up to its too-wide tail: one copy for both tails.
 inline constexpr std::string_view kPatternDispatchCallersLegend =
     "pattern_dispatch=N (absent when 0): N lookups build a NAME from a template (Python getattr/hasattr/__dict__.get with an "
