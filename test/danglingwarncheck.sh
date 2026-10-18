@@ -177,12 +177,18 @@ done
 if [ -z "$CT" ] || [ -z "$GATING" ]; then
     skip "clang-tidy 22 not found: the D (escaping [&]) and B arms of the tidy gate are not proved here"
 else
-    for p in D B; do
+    # Each plant must be refused BY NAME by the check that holds it (the table above): a non-zero tidy exit for any
+    # other reason — a compile error in the plant, a missing header, a renamed check — proves nothing and is a FAIL.
+    for pc in D:clang-analyzer-core.StackAddressEscape B:bugprone-dangling-handle; do
+        p="${pc%%:*}"; chk="${pc#*:}"
         if "$CT" --quiet --checks="-*,$GATING" --warnings-as-errors='*' "$TMP/$p.cpp" -- -std=c++23 -I "$ROOT/src" -I "$TMP" \
                "${extra[@]+"${extra[@]}"}" >"$TMP/$p.tidy.log" 2>&1; then
             no "clang-tidy gating subset passed planted $p"
+        elif grep -qF "[$chk" "$TMP/$p.tidy.log"; then
+            ok "clang-tidy gating subset refuses planted $p ([$chk])"
         else
-            ok "clang-tidy gating subset refuses planted $p ($( grep -oE '\[[a-z][a-zA-Z.-]+(,-warnings-as-errors)?\]' "$TMP/$p.tidy.log" | grep -v clang-diagnostic | head -1 ))"
+            no "clang-tidy refused planted $p but not by $chk — not proof the gate holds it:"
+            grep -m5 'warning:\|error:' "$TMP/$p.tidy.log" | sed 's/^/        /'
         fi
     done
     if "$CT" --quiet --checks="-*,$GATING" --warnings-as-errors='*' "$TMP/neg.cpp" -- -std=c++23 -I "$ROOT/src" -I "$TMP" \
@@ -193,6 +199,6 @@ else
     fi
 fi
 
-[ "$ran" = 1 ] || { skip "no C++ compiler found on PATH: nothing was proved"; exit 0; }
+[ "$ran" = 1 ] || { skip "no C++ compiler found on PATH: the planted arms were not proved"; exit "$fail"; }   # a lost fence flag still fails
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'
 exit "$fail"

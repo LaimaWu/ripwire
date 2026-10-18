@@ -110,7 +110,9 @@ differ from macOS enough to cost you an afternoon if nobody says them out loud.
 
 **Source builds support gcc 13+, so never rely on C++23 P2718 range-for lifetime extension:** `for( x : makeRow().items() )`
 is correct on clang ≥ 19 and gcc ≥ 15 and reads a dead temporary on gcc 13/14, so name the temporary first; the gcc-14 CI
-leg is the canary, and `-Werror=dangling-reference` plus `portablebuildcheck` #7 hold the shape on every host.
+leg is the canary, and `-Werror=dangling-reference` plus `portablebuildcheck` #7 hold the shape on every host. #7's blind
+spot: a reference-returning callee that takes the temporary as an argument (`for( v : std::get<0>( makeTup() ) )`) is held
+only by the gcc-14 leg's `-Werror=dangling-reference`.
 
 **Memory, not cores, sizes `-j`.** `src/main.cpp` is one very large translation unit (since the
 2026-08-29 split its verb families live in `src/verbs_*.h` sections included into that one TU — the

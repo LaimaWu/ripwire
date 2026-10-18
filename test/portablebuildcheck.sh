@@ -1265,7 +1265,12 @@ fi
 # the viewed data), and std's reference accessors (front/back/at/value/…) on a member chain. A callee the tree does
 # not declare is a finding: unknown is not safe. Stated blind spots — zero findings means "none found", not "none
 # exists": a by-value result whose ELEMENTS view a temporary argument (`for( v : split( std::string( s ) ) )`), `->`
-# through a temporary smart pointer, and an overloaded callee whose overloads disagree are not modelled. The
+# through a temporary smart pointer, and an overloaded callee whose overloads disagree are not modelled; nor is a
+# reference-returning callee that takes the temporary as an ARGUMENT (`for( v : std::get<0>( makeTup() ) )`,
+# `for( v : pass( makeVec() ) )`) — no method is called on the temporary, so the pass reads 0. That shape is held
+# only by GCC 13/14's -Wdangling-reference, i.e. the gcc-14 CI leg under the GCC fence's -Werror=dangling-reference,
+# not on every host (graph.h's `fqnAncestors( std::string( head ) )` is this shape, safe only because it returns
+# into a memo keyed by a copy). The
 # 2026-10-18 clang-query audit (cxxForRangeStmt whose range-init has a MaterializeTemporaryExpr under a call) found
 # 20 such range-fors over the 10 owned TUs, all safe; this text pass finds 0 of the C shape in src/.
 RFSCAN="$TMP/rangefor.py"
