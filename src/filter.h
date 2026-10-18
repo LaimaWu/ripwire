@@ -383,17 +383,24 @@ namespace decltwin_detail
 {
 inline bool endsWithAny( std::string_view p, std::span<const std::string_view> suffixes ) noexcept
 {
-    return std::ranges::any_of( suffixes, [ & ]( std::string_view x ) { return p.ends_with( x ); } );
+    for( const std::string_view suffix : suffixes )
+    {
+        if( p.ends_with( suffix ) )
+        {
+            return true;
+        }
+    }
+    return false;
 }
-inline std::string_view dirOf( std::string_view p ) noexcept   // "" for a root-level file; else the directory with its '/'
+inline std::string_view baseOf( std::string_view p ) noexcept   // the file name: everything after the last '/'
 {
-    const std::size_t slash = p.rfind( '/' );
-    return slash == std::string_view::npos ? std::string_view() : p.substr( 0, slash + 1 );
+    const std::string_view d = pathDirOf( p );
+    return d.empty() ? p : p.substr( d.size() + 1 );
 }
 // the package directory of `p`: the longest manifest directory (sorted `manifestDirs`) that encloses it, else "" (the root)
 inline std::string_view packageDirOf( std::string_view p, const std::vector<std::string_view>& manifestDirs ) noexcept
 {
-    for( std::string_view d = dirOf( p ); !d.empty(); d = dirOf( d.substr( 0, d.size() - 1 ) ) )
+    for( std::string_view d = pathDirOf( p ); !d.empty(); d = pathDirOf( d ) )
     {
         if( std::binary_search( manifestDirs.begin(), manifestDirs.end(), d, sortutil::svLess ) )
         {
@@ -416,10 +423,10 @@ inline std::vector<float> declarationTwinFileMultipliers( const IngestResult& in
         for( std::uint32_t f = 0; f < ing.files.size(); ++f )
         {
             const std::string_view p    = rootRelPath( ing, f );
-            const std::string_view base = p.substr( dirOf( p ).size() );
+            const std::string_view base = baseOf( p );
             if( std::ranges::find( row.manifests, base ) != row.manifests.end() )
             {
-                manifestDirs.push_back( dirOf( p ) );
+                manifestDirs.push_back( pathDirOf( p ) );
             }
             if( endsWithAny( p, row.declSuffixes ) )
             {
@@ -434,7 +441,7 @@ inline std::vector<float> declarationTwinFileMultipliers( const IngestResult& in
         for( std::uint32_t f = 0; f < ing.files.size(); ++f )
         {
             const std::string_view p    = rootRelPath( ing, f );
-            const std::string_view base = p.substr( dirOf( p ).size() );
+            const std::string_view base = baseOf( p );
             if( endsWithAny( p, row.implSuffixes ) && !endsWithAny( p, row.declSuffixes )
                 && std::ranges::find( row.notImplBaseNames, base ) == row.notImplBaseNames.end() )
             {

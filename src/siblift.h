@@ -69,8 +69,7 @@ namespace siblift_detail
 {
 inline std::string_view dirOf( std::string_view path ) noexcept
 {
-    const std::size_t slash = path.rfind( '/' );
-    return slash == std::string_view::npos ? std::string_view() : path.substr( 0, slash );
+    return pathDirOf( path );   // model.h: the one "directory of a path" primitive (filter.h's declaration-twin tier reads it too)
 }
 } // namespace siblift_detail
 
