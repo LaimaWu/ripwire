@@ -3604,8 +3604,10 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     // H1: each endpoint's decl→def residue, summed onto the root exactly as the CLI --path sums it.
     std::size_t               srcUnprovenDefs = 0;
     std::size_t               dstUnprovenDefs = 0;
-    const std::vector<NodeId> srcDefs         = resolveAllByNameQualified( ing, from, &srcUnprovenDefs );
-    const std::vector<NodeId> dstDefs         = resolveAllByNameQualified( ing, to, &dstUnprovenDefs );
+    bool                      srcGlob         = false;   // ix2-slice (IX-2 P4): a `*` endpoint, as on the CLI
+    bool                      dstGlob         = false;
+    const std::vector<NodeId> srcDefs         = resolvePathEndpoint( ing, from, &srcUnprovenDefs, &srcGlob );
+    const std::vector<NodeId> dstDefs         = resolvePathEndpoint( ing, to, &dstUnprovenDefs, &dstGlob );
     const std::size_t         unprovenDefs    = srcUnprovenDefs + dstUnprovenDefs;
     if( srcDefs.empty() || dstDefs.empty() )
     {
@@ -3642,6 +3644,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     // PATH-GAP: the CLI --path's gap clause, by the same analysis and emitter (src/pathgaps.h).
     const PathSearchGaps ptGaps = pth.empty() ? pathSearchGaps( ing, g, srcDefs, valueRefIndexOf( ix ) ) : PathSearchGaps{};
     const PathNearSink   ptNear = pth.empty() ? pathNearSink( ing, g, dstDefs, ptGaps.cone, valueRefIndexOf( ix ) ) : PathNearSink{};   // ix2-slice, as on the CLI
+    const PathBridge     ptBridge = pth.empty() ? pathBridge( ing, g, srcDefs, dstDefs, valueRefIndexOf( ix ) ) : PathBridge{};      // ix2-slice, as on the CLI
     const bool ptHasVia = pathHasNameOnlyHop( g, pth );   // FE-B: exactly when a hop of this path is via="name", as on the CLI
     const PathEndpointBinding ptBound    = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), pth );   // attrib-multidef, as on the CLI
     const bool                ptHasSplit = ptBound.splitHop;
@@ -3649,12 +3652,13 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
                        "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + viaNameLegend( ptHasVia )
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
-                  ( std::string( pathGapsLegend( ptGaps.any() ) ) + std::string( nearSinkLegend( !ptNear.rows.empty() ) ) ).c_str(),
+                  ( std::string( pathGapsLegend( ptGaps.any() ) ) + std::string( pathBridgeLegend( ptBridge.found() ) )
+                    + std::string( nearSinkLegend( !ptNear.rows.empty() ) ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
                   graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rootRelPathsLegend( ptSingleRoot ) );
     rw::emitTo( mem, "<path from=\"{}\" to=\"{}\"{}{} from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
                   ex( from ).c_str(), ex( to ).c_str(), ptBound.from ? " from_p=\"" + loc( srcUsed ) + "\"" : std::string(),
                   ptBound.to ? " to_p=\"" + loc( dstUsed ) + "\"" : std::string(),
-                  srcDefs.size(), dstDefs.size(), unprovenDefsAttrXml( unprovenDefs ).c_str(),   // H1: as the CLI root carries it
+                  srcDefs.size(), dstDefs.size(), ( unprovenDefsAttrXml( unprovenDefs ) + pathGlobAttrXml( srcGlob, dstGlob ) ).c_str(),   // H1: as the CLI root carries it; ix2-slice: a glob endpoint
                   pth.empty() ? 0 : 1, pth.empty() ? std::size_t( 0 ) : pth.size() - 1, ptRootAttr.c_str(),
                   graphCountFloorAttrXml( g ).c_str()  );   // M15: gauge + marker
     rw::emitTo( mem, "{}{}", countAttrXmlOrEmpty( "to_value_refs", ptToValueRefs.count ),   // absent at zero, as on the CLI
@@ -3662,7 +3666,8 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     const PathGapsXml ptUnreached = pth.empty()
         ? pathUnreachedXml( ing, ptGaps, ptSingleRoot, ptRootPrefix, { "the connect verb on " + from + "," + to, "uses/impact", "" } )
         : PathGapsXml{};
-    rw::emitTo( mem, "{}>{}{}", ptUnreached.rootAttrs, ptUnreached.rows, pathNearSinkXml( ing, ptNear, ptSingleRoot, ptRootPrefix ) );
+    rw::emitTo( mem, "{}>{}{}{}", ptUnreached.rootAttrs, ptUnreached.rows, pathBridgeXml( ing, g, ptBridge, ptSingleRoot, ptRootPrefix ),
+                  pathNearSinkXml( ing, ptNear, ptSingleRoot, ptRootPrefix ) );
     for( std::size_t i = 0; i < pth.size(); ++i )
     { const Symbol&           s  = ing.symbols[ pth[i] ];
       const std::string_view  rp = ptSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], ptRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
@@ -3680,8 +3685,10 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
 // returns nothing.
 inline std::string pathEndpointRefusal( const IngestResult& ing, const std::string& from, const std::string& to )
 {
-    const bool fromOk = !resolveAllByNameQualified( ing, from ).empty();
-    const bool toOk   = !resolveAllByNameQualified( ing, to ).empty();
+    std::size_t unused = 0;
+    bool        glob   = false;   // ix2-slice: a `*` endpoint that matches resolves, exactly as pathText resolves it
+    const bool fromOk = !resolvePathEndpoint( ing, from, &unused, &glob ).empty();
+    const bool toOk   = !resolvePathEndpoint( ing, to, &unused, &glob ).empty();
     if( fromOk && toOk )
     {
         return {};

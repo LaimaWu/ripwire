@@ -2379,8 +2379,12 @@ std::optional<int> runPath( const MainDispatch& d )
         // reader as a bare reachable="0".
         std::size_t               srcUnprovenDefs = 0;
         std::size_t               dstUnprovenDefs = 0;
-        const std::vector<NodeId> srcDefs         = resolveAllByNameQualified( ing, srcN, &srcUnprovenDefs );
-        const std::vector<NodeId> dstDefs         = resolveAllByNameQualified( ing, dstN, &dstUnprovenDefs );
+        // ix2-slice (IX-2 P4, src/pathgaps.h): an endpoint naming no definition that holds a `*` stands for every function or
+        // method definition whose name fits it (from_glob=/to_glob= say so); every resolvable spelling resolves as before
+        bool                      srcGlob         = false;
+        bool                      dstGlob         = false;
+        const std::vector<NodeId> srcDefs         = rw::resolvePathEndpoint( ing, srcN, &srcUnprovenDefs, &srcGlob );
+        const std::vector<NodeId> dstDefs         = rw::resolvePathEndpoint( ing, dstN, &dstUnprovenDefs, &dstGlob );
         const std::size_t         pthUnprovenDefs = srcUnprovenDefs + dstUnprovenDefs;
         if( srcDefs.empty() || dstDefs.empty() )
         {
@@ -2426,6 +2430,8 @@ std::optional<int> runPath( const MainDispatch& d )
         const rw::PathSearchGaps pthGaps = path.empty() ? rw::pathSearchGaps( ing, g, srcDefs, *pthValueIdx ) : rw::PathSearchGaps{};
         // ix2-slice: the sink-side frontier beside the forward gap rows (src/pathgaps.h pathNearSink), reachable="0" only
         const rw::PathNearSink   pthNear = path.empty() ? rw::pathNearSink( ing, g, dstDefs, pthGaps.cone, *pthValueIdx ) : rw::PathNearSink{};
+        // ix2-slice (IX-2 P1): the hedged bridge — the fewest-crossings chain over declined / value / closure / namesake hops
+        const rw::PathBridge     pthBridge = path.empty() ? rw::pathBridge( ing, g, srcDefs, dstDefs, *pthValueIdx ) : rw::PathBridge{};
         const bool pthHasVia = rw::pathHasNameOnlyHop( g, path );   // FE-B: exactly when a hop of THIS path is via="name"
         // attrib-multidef (defattrib.h): from_p=/to_p= only for an endpoint the path bound; prov="split" on a split-arm hop
         const rw::PathEndpointBinding pthBound = rw::pathEndpointBinding( g, rw::endpointDefinitionCount( ing, srcDefs ), rw::endpointDefinitionCount( ing, dstDefs ), path );
@@ -2434,12 +2440,13 @@ std::optional<int> runPath( const MainDispatch& d )
                      "graph holds none. {}{}{}{}-->{}", ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to ) ).c_str(),
                      ( std::string( rw::toValueRefsLegend( pthToValueRefs.count > 0 ) ) + rw::valueRefsDepthLegend( pthToValueRefs.depthCut.files > 0 ) ).c_str(),
-                     ( std::string( rw::pathGapsLegend( pthGaps.any() ) ) + std::string( rw::nearSinkLegend( !pthNear.rows.empty() ) ) ).c_str(),
+                     ( std::string( rw::pathGapsLegend( pthGaps.any() ) ) + std::string( rw::pathBridgeLegend( pthBridge.found() ) )
+                       + std::string( rw::nearSinkLegend( !pthNear.rows.empty() ) ) + std::string( rw::pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
                      rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rw::rootRelPathsLegend( pthSingleRoot ) );
         rw::emitTo( stdout, "<path from=\"{}\" to=\"{}\"{}{} from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
                      ex( srcN ).c_str(), ex( dstN ).c_str(), pthBound.from ? " from_p=\"" + loc( srcUsed ) + "\"" : std::string(),
                      pthBound.to ? " to_p=\"" + loc( dstUsed ) + "\"" : std::string(),
-                     srcDefs.size(), dstDefs.size(), rw::unprovenDefsAttrXml( pthUnprovenDefs ).c_str(),   // H1: beside the defs counts it is not in
+                     srcDefs.size(), dstDefs.size(), ( rw::unprovenDefsAttrXml( pthUnprovenDefs ) + rw::pathGlobAttrXml( srcGlob, dstGlob ) ).c_str(),   // H1: beside the defs counts it is not in; ix2-slice: a glob endpoint
                      path.empty() ? 0 : 1, path.empty() ? std::size_t( 0 ) : path.size() - 1, pthRootAttr.c_str(),
                      rw::graphCountFloorAttrXml( g ).c_str() );
         // absent at zero: byte-identical otherwise; the depth cut beside it makes the count (or its absence) a floor
@@ -2452,7 +2459,8 @@ std::optional<int> runPath( const MainDispatch& d )
                                     { "--connect=" + std::string( srcN ) + "," + std::string( dstN ), "--uses/--impact",
                                       ( srcDefs.size() > 1 || dstDefs.size() > 1 ) ? "; several defs share these names — qualify as file:name to pick one" : "" } )
             : rw::PathGapsXml{};
-        rw::emitTo( stdout, "{}>{}{}", pthUnreached.rootAttrs, pthUnreached.rows, rw::pathNearSinkXml( ing, pthNear, pthSingleRoot, pthRootPrefix ) );
+        rw::emitTo( stdout, "{}>{}{}{}", pthUnreached.rootAttrs, pthUnreached.rows, rw::pathBridgeXml( ing, g, pthBridge, pthSingleRoot, pthRootPrefix ),
+                     rw::pathNearSinkXml( ing, pthNear, pthSingleRoot, pthRootPrefix ) );
         for( std::size_t i = 0; i < path.size(); ++i )
         {
             const Symbol&           s  = ing.symbols[ path[i] ];

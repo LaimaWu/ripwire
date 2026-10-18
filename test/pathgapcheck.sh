@@ -45,6 +45,12 @@
 #        closure's own callees — C1 nunjucks shape (createTemplate → Template), C2 the block is in no count=, C3 Python
 #        nested defs at depth 1 and 2, C4 near miss (a class member inside a function is no closure), C5 a closure-free
 #        answer carries none of it, C6 --json, C7 both legends, C8 near_sink why=closure (koa shape).
+#   (B1-B10) the HEDGED BRIDGE (IX-2 P1): on reachable="0", <bridge proven="0" crossings= hops=> — the fewest-crossings chain
+#        over at most 2 hops with no edge (declined / value / closure / namesake), each fanning out to at most 16 — B1 htop
+#        shape, B2 koa shape (two closures), B3 value, B4 namesake, B5 three crossings needed (none), B6/B7 fan-out 17 (none)
+#        vs 16 (crossed), B8 a disconnected pair, B9 a found path, B10 both legends. (G1-G3) GLOB endpoints (IX-2 P4): a `*`
+#        endpoint naming no definition stands for every function/method definition fitting it (to_glob="1"); G2 no match is
+#        refused; G3 a plain endpoint carries no glob attribute. (M) compares <bridge> and the glob root MCP vs CLI.
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -578,6 +584,117 @@ nsArm "(C8) near_sink why=closure: the sink's only caller is a closure of handle
     '<near_sink depth="2" callers="1" rows="1" next="--callers=app.js:handleResponse">' \
     '<ns d="1" t="fn" n="handleResponse" p="app.js:4" why="closure:1" in="handleRequest" site="app.js:4"/>'
 
+echo "(B) hedged bridge <bridge proven=\"0\"> and (G) glob endpoints (lane ix2-slice, IX-2 P1/P4)"
+mkdir -p "$TMP/brkoa" "$TMP/brdeep" "$TMP/glob"
+cat > "$TMP/brkoa/app.js" <<'EOF'
+function respond(ctx) { return ctx; }
+class App {
+  listen() { return this.callback(); }
+  callback() {
+    const handler = (req) => { return this.handleRequest(req); };
+    return handler;
+  }
+  handleRequest(ctx) {
+    const handleResponse = () => respond(ctx);
+    return handleResponse;
+  }
+}
+module.exports = { App };
+EOF
+# three closure crossings needed: past the bound, so no bridge
+cat > "$TMP/brdeep/m.py" <<'EOF'
+def target():
+    return 1
+
+def outer():
+    def m1():
+        def m2():
+            def m3():
+                return target()
+            return m3
+        return m2
+    return m1
+EOF
+# fan-out: a declined scan() with 17 candidates (past the bound) and, in wide16, 16 (inside it)
+for n in 16 17; do
+    mkdir -p "$TMP/fan$n/core"
+    printf 'void scan( void );\nvoid start( void ) { scan(); }\n' > "$TMP/fan$n/core/m.c"
+    i=1; while [ "$i" -le "$n" ]; do
+        mkdir -p "$TMP/fan$n/p$i"
+        if [ "$i" -eq 1 ]; then printf 'void sink( void ) { }\nvoid scan( void ) { sink(); }\n' > "$TMP/fan$n/p$i/s.c"; else printf 'void scan( void ) { }\n' > "$TMP/fan$n/p$i/s.c"; fi
+        i=$(( i + 1 ))
+    done
+done
+cat > "$TMP/glob/h.py" <<'EOF'
+def on_click():
+    return 1
+
+def on_key():
+    return 2
+
+def dispatch():
+    return on_key()
+
+def post():
+    return dispatch()
+EOF
+brblock(){ grep -o '<bridge [^>]*>.*</bridge>' "$1"; }
+brArm(){   # $1 label, $2 dir, $3 FROM,TO, $4 expected <bridge>…</bridge> block exactly ("" = none)
+    local f="$TMP/B$( echo "$1" | tr -cd 'A-Za-z0-9' ).xml" rc
+    path "$2" "$3" "$f"; rc=$?
+    premise "$1" "$rc" "$f" || return
+    local b; b="$( brblock "$f" )"
+    if [ "$( attr "$f" reachable )" = "0" ] && [ "$( attr "$f" hops )" = "0" ] && [ "$b" = "$4" ]; then
+        ok "$1 ${b:-<no bridge>}"
+    else
+        no "$1 want [$4]; got reachable=$( attr "$f" reachable ) [$b]"
+    fi
+}
+brArm "(B1) declined crossing to the platform build that reaches the sink (htop shape)" "$TMP/decl" "Machine_run,Process_update" \
+    '<bridge proven="0" crossings="1" hops="2"><s t="fn" n="Machine_run" p="core/machine.c:2"/><s t="fn" n="Machine_scan" p="linux/scan.c:2" via="declined" cands="2"/><s t="fn" n="Process_update" p="linux/scan.c:1"/></bridge>'
+brArm "(B2) two closure crossings: listen → callback ⊃ handler → handleRequest ⊃ handleResponse → respond (koa shape)" "$TMP/brkoa" "listen,respond" \
+    '<bridge proven="0" crossings="2" hops="5"><s t="method" n="listen" p="app.js:3"/><s t="method" n="callback" p="app.js:4"/><s t="fn" n="handler" p="app.js:5" via="closure" cands="1"/><s t="method" n="handleRequest" p="app.js:8"/><s t="fn" n="handleResponse" p="app.js:9" via="closure" cands="1"/><s t="fn" n="respond" p="app.js:1"/></bridge>'
+brArm "(B3) value crossing: the callback handed to .then()" "$TMP/val" "listen,respond" \
+    '<bridge proven="0" crossings="1" hops="3"><s t="fn" n="listen" p="app.js:5"/><s t="fn" n="handleRequest" p="app.js:4"/><s t="fn" n="handleResponse" p="app.js:2" via="value" cands="1"/><s t="fn" n="respond" p="app.js:1"/></bridge>'
+brArm "(B4) namesake crossing: run's by-name obj.process() to the unsearched B.process" "$TMP/lpy" "run,target" \
+    '<bridge proven="0" crossings="1" hops="2"><s t="fn" n="run" p="pkg/x/c.py:1"/><s t="fn" n="process" p="other/b.py:5" via="namesake" cands="1"/><s t="fn" n="target" p="other/b.py:1"/></bridge>'
+brArm "(B5) three crossings needed: past the bound, no bridge" "$TMP/brdeep" "outer,target" ""
+brArm "(B6) a declined call with 17 candidates is not crossed (fan-out bound 16)" "$TMP/fan17" "start,sink" ""
+brArm "(B7) the same shape with 16 candidates is crossed" "$TMP/fan16" "start,sink" \
+    '<bridge proven="0" crossings="1" hops="2"><s t="fn" n="start" p="core/m.c:2"/><s t="fn" n="scan" p="p1/s.c:2" via="declined" cands="16"/><s t="fn" n="sink" p="p1/s.c:1"/></bridge>'
+brArm "(B8) a disconnected pair has no bridge (no crossing to take)" "$TMP/clean" "a,d" ""
+if [ -s "$TMP/found.xml" ] && ! grep -q '<bridge' "$TMP/found.xml"; then
+    ok "(B9) a found path (N4) carries no <bridge>"
+else
+    no "(B9) a found path carries a bridge or did not run"
+fi
+"$BIN" "$TMP/decl" --no-cache --path=Machine_run,Process_update --legend=full > "$TMP/Bfull.xml" 2>&1
+if grep -q 'a HEDGED chain from= to to= that crosses at most 2 hops' "$TMP/Bfull.xml" && grep -q 'It is NOT a path' "$TMP/Bfull.xml" \
+   && grep -q 'bridge proven=0 crossings= hops=: a HEDGED chain, NOT a path' "$TMP/BB1declinedcrossingtotheplatformbuildthatreachesthesinkhtopshape.xml"; then
+    ok "(B10) both legends define <bridge> and say it is not a path"
+else
+    no "(B10) a legend lacks the bridge clause"
+fi
+f="$TMP/G1.xml"; path "$TMP/glob" 'post,on_*' "$f"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$( attr "$f" to_glob )" = "1" ] && [ "$( attr "$f" to_defs )" = "2" ] && [ "$( attr "$f" reachable )" = "1" ] \
+   && [ "$( grep -o '<s [^>]*/>' "$f" | sed 's/.* n="\([^"]*\)".*/\1/' | tr '\n' ' ' )" = "post dispatch on_key " ] && grep -q 'to_glob=1' "$f"; then
+    ok "(G1) --path=post,on_* (textual shape): rc=0, to_glob=\"1\" to_defs=\"2\", the path post → dispatch → on_key"
+else
+    no "(G1) glob endpoint: rc=$rc $( grep -o '<path .*' "$f" | head -c 500 )"
+fi
+f="$TMP/G2.xml"; "$BIN" "$TMP/glob" --no-cache '--path=post,zz_*' > "$f" 2>&1; rc=$?
+if [ "$rc" -ne 0 ] && ! grep -q 'to_glob' "$f"; then
+    ok "(G2) a pattern matching no definition is still refused (rc=$rc)"
+else
+    no "(G2) zz_* answered rc=$rc: $( head -c 300 "$f" )"
+fi
+f="$TMP/G3.xml"; path "$TMP/glob" 'post,dispatch' "$f"; rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q '_glob' "$f"; then
+    ok "(G3) a resolvable endpoint carries no *_glob attribute"
+else
+    no "(G3) a plain endpoint carries a glob attribute: $( grep -o '<path [^>]*>' "$f" )"
+fi
+
 echo "(M) MCP path_between carries the same clause"
 # Two MCP legend postures (lean-answers): the unchanged assertions run on --mcp-legend=inline, the pre-posture spelling
 # where every answer carries its root facts on <path>; a TWIN runs the default session posture, whose answers after the
@@ -587,7 +704,8 @@ python3 - "$BIN" "$TMP" "$MPOST" <<'PY'
 import json, re, subprocess, sys
 binp, tmp, posture = sys.argv[1], sys.argv[2], sys.argv[3]
 cases = [ ( "decl", "Machine_run", "Process_update", True ), ( "val", "listen", "respond", True ),
-          ( "thr", "start", "target", True ), ( "lpy", "run", "target", True ), ( "clean", "a", "d", False ) ]
+          ( "thr", "start", "target", True ), ( "lpy", "run", "target", True ), ( "clean", "a", "d", False ),
+          ( "glob", "on_key", "on_c*", False ) ]
 reqs = [ { "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "g", "version": "1" } } } ]
 for i, ( d, a, b, _ ) in enumerate( cases ):
     reqs.append( { "jsonrpc": "2.0", "id": i + 1, "method": "tools/call", "params": { "name": "path_between", "arguments": { "path": tmp + "/" + d, "from": a, "to": b } } } )
@@ -618,7 +736,7 @@ for i, ( d, a, b, gap ) in enumerate( cases ):
     cli = subprocess.run( [ binp, tmp + "/" + d, "--no-cache", "--path=%s,%s" % ( a, b ) ], capture_output = True, text = True ).stdout
     if not head( mcp ):
         print( "  MCP gave no <path> root for", d, repr( mcp[:300] ), p.stderr[:300] ); bad = 1; continue
-    for name in ( "searched", "gaps", "gap_syms", "gap_syms_capped", "next", "reachable" ):
+    for name in ( "searched", "gaps", "gap_syms", "gap_syms_capped", "next", "reachable", "to_glob", "to_defs" ):
         if pick( mcp, name ) != pick( cli, name ):
             print( "  %s: %s= MCP %r vs CLI %r" % ( d, name, pick( mcp, name ), pick( cli, name ) ) ); bad = 1
     if re.findall( r'<gap [^>]*/>', mcp ) != re.findall( r'<gap [^>]*/>', cli ):
@@ -627,6 +745,8 @@ for i, ( d, a, b, gap ) in enumerate( cases ):
     nsm, nsc = re.findall( r'<near_sink .*?</near_sink>', mcp ), re.findall( r'<near_sink .*?</near_sink>', cli )
     if nsm != nsc or len( nsc ) != 1:
         print( "  %s: near_sink differs or is missing: MCP %r vs CLI %r" % ( d, nsm, nsc ) ); bad = 1
+    if re.findall( r'<bridge .*?</bridge>', mcp ) != re.findall( r'<bridge .*?</bridge>', cli ):
+        print( "  %s: bridge differs: MCP vs CLI" % d ); bad = 1
     if gap and ( "no directed call path" in mcp or "search is incomplete" not in mcp ):
         print( "  %s: MCP hint still claims no path" % d ); bad = 1
     if not gap and "no directed call path" not in mcp:

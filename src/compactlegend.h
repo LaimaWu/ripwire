@@ -788,6 +788,10 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "searched", "searched=N: reachable=0, but the search from from= (N symbols over resolved call edges) is INCOMPLETE: not proof of no path", false, "path", MapHeaderRead::No, {}, "path" },
     { "gaps", "gaps=kind:N,...: calls there with no edge (declined: nothing chose a candidate; unresolved), a function handed off as a value, a call through a slot, a via=name call whose name is also defined where it has no edge (name); ambiguous and undefined-name calls not counted", true, {}, MapHeaderRead::No, {}, "path" },
     { "gap_syms", "gap_syms=N: searched symbols carrying gaps; <gap t= n= p= gaps=> rows, nearest from= first, are where the search could not see, never a hop; gap_syms_capped=1 more than shown", false, "path", MapHeaderRead::No, {}, "path" },
+    // HEDGED BRIDGE and GLOB ENDPOINT (src/pathgaps.h kPathBridgeLegend / kPathGlobLegend), present-only on a reachable=0 answer
+    { "crossings", "bridge proven=0 crossings= hops=: a HEDGED chain, NOT a path; <s via=declined|value|closure|namesake cands=K> the crossing into that row, the rest proven edges", true, "bridge", MapHeaderRead::No, {}, "path" },
+    { "to_glob", "to_glob=1: to='s * matched every function or method definition fitting it (to_defs= counts them)", false, "path", MapHeaderRead::No, {}, "path" },
+    { "from_glob", "from_glob=1: from='s * matched every function or method definition fitting it (from_defs= counts them)", false, "path", MapHeaderRead::No, {}, "path" },
     // SINK-SIDE FRONTIER (src/pathgaps.h kNearSinkLegend), present on a reachable=0 answer: the <near_sink> block and its <ns> rows.
     { "rows", "near_sink depth= callers= rows=: to='s proven callers up to depth= back; rows_capped=1 cut; next= the first row's callers", true, "near_sink", MapHeaderRead::No, {}, "path" },
     { "d", "ns d= t= n= p= callers= why=: hops back, symbol, its callers; why= un-edged ways in (declined|value|through|name|closure), external: none found; never a hop", true, "ns", MapHeaderRead::No, {}, "path" },

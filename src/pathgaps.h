@@ -35,6 +35,8 @@
 #include "sarif.h"            // rootRelativeUri — p= relative to root=, as every other row
 #include "serialize.h"        // escapeXml
 #include "valuerefindex.h"    // ValueRefIndex::targetsOf — what a value reference may hand off
+#include "filter.h"           // pathTierIndexOver — the near-sink rows' tier key within a depth
+#include "arch.h"             // wildcardMatch — the ONE `*` match, which a glob endpoint reads
 #include "closures.h"         // ClosureIndex — a near-sink row written inside another function's body (why=closure)
 #include "infra/sortutil.h"   // svLess: the explicit byte order every string_view sort here takes (portablebuildcheck #6)
 
@@ -666,7 +668,10 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
         }
     }
 
-    std::ranges::sort( out.rows, []( const NearSinkRow& a, const NearSinkRow& b )
+    // ix2-slice commit 4: within a depth, the path TIER (source, then test/bench, then docs) before id — a glob to= (on_*) makes
+    // hundreds of depth-0 rows, and the docs examples must not lead them
+    const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( ing, out.rows, [ & ]( const NearSinkRow& r ) { return ing.symbols[ r.id ].fileId; } );
+    std::ranges::sort( out.rows, [ & ]( const NearSinkRow& a, const NearSinkRow& b )
     {
         if( a.reasoned() != b.reasoned() )
         {
@@ -680,7 +685,9 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
         {
             return a.depth < b.depth;
         }
-        return a.id < b.id;
+        const std::uint8_t ta = tierOfFile[ ing.symbols[ a.id ].fileId ];
+        const std::uint8_t tb = tierOfFile[ ing.symbols[ b.id ].fileId ];
+        return ta != tb ? ta < tb : a.id < b.id;
     } );
     // a to= definition with proven callers and no other way in is to_p= itself, not a frontier row; a to= DECLARATION (a
     // prototype: no body) is no frontier either — it is entered through the definition it declares, whose callers it shares
@@ -739,6 +746,312 @@ inline std::string pathNearSinkXml( const IngestResult& ing, const PathNearSink&
     return "<near_sink depth=\"" + std::to_string( kNearSinkDepth ) + "\" callers=\"" + std::to_string( ns.callers ) + "\" rows=\""
          + std::to_string( ns.rows.size() ) + "\"" + ( ns.rows.size() > shown ? " rows_capped=\"1\"" : "" )
          + nextAttrXml( nextFlag( "--callers=", std::string( rel( first.fileId ) ) + ":" + first.name ) ) + ">" + rows + "</near_sink>";
+}
+
+// ── GLOB ENDPOINT (lane ix2-slice, commit 4: IX-2 P4) ────────────────────────────────────────────────────────────────
+// `--path=post_message,on_*` answered rc=1 "endpoint not found": the reader asking how a message reaches its handlers names
+// the handler FAMILY, not one of its 279 members. An endpoint that names no definition and holds a `*` (and no file:
+// qualifier) now stands for every function or method DEFINITION whose name fits it (`*` = any run of characters, possibly
+// empty), so the one multi-target search answers it; from_glob="1"/to_glob="1" on the root says which endpoint was a
+// pattern, and from_defs=/to_defs= count its matches. A name that does resolve is never read as a pattern.
+// The definitions a path endpoint names: resolveAllByNameQualified, else — for a bare `*` pattern — every function or method
+// definition whose name fits it, in id order. `*glob` says which happened.
+inline std::vector<NodeId> resolvePathEndpoint( const IngestResult& ing, std::string_view spec, std::size_t* unprovenDefs, bool* glob )
+{
+    *glob                   = false;
+    std::vector<NodeId> out = resolveAllByNameQualified( ing, spec, unprovenDefs );
+    if( !out.empty() || spec.find( '*' ) == std::string_view::npos || spec.find( ':' ) != std::string_view::npos )
+    {
+        return out;
+    }
+    for( NodeId id = 0; id < ing.symbols.size(); ++id )
+    {
+        const Symbol& s = ing.symbols[id];
+        if( ( s.kind == SymKind::Function || s.kind == SymKind::Method ) && isDefinitionNotDeclaration( s ) && wildcardMatch( s.name, spec ) )
+        {
+            out.push_back( id );
+        }
+    }
+    *glob = !out.empty();
+    return out;
+}
+
+inline constexpr std::string_view kPathGlobLegend =
+    "from_glob=1 / to_glob=1: that endpoint held a * and named no definition, so it stands for every function or method definition "
+    "whose name fits the pattern (* = any run of characters); from_defs=/to_defs= count them. ";
+inline std::string_view pathGlobLegend( bool on ) noexcept
+{
+    return on ? kPathGlobLegend : std::string_view();
+}
+inline std::string pathGlobAttrXml( bool fromGlob, bool toGlob )
+{
+    return std::string( fromGlob ? " from_glob=\"1\"" : "" ) + ( toGlob ? " to_glob=\"1\"" : "" );
+}
+
+// ── HEDGED PATH BRIDGE (lane ix2-slice, commit 4: IX-2 P1) ─────────────────────────────────────────────────────────
+// THE GAP. The gap rows say where the forward search went blind and <near_sink> where the backward one did, but neither
+// joins them: on htop the reader still has to see that checkRecalculation's declined `Machine_scan()` could mean the Linux
+// build, whose callee is the sink. A human crosses exactly those hops.
+//
+// THE CONTRACT. Only on a reachable="0" answer, a second search may CROSS hops the graph holds no edge for — at most
+// kBridgeCrossings of them, each fanning out to at most kBridgeFanOut candidates (a wider one is not followed):
+//   declined  from a symbol to each candidate of a declined call it makes (the call's stored candidate list);
+//   value     from a symbol to each function it stores or passes as a value (ValueRefIndex::targetsOf);
+//   closure   from a function to each named function written in its body (src/closures.h);
+//   namesake  from a symbol whose call was bound by name alone to one definition, to the name's other same-language,
+//             same-kind definitions (the namesakes the proven search never walked).
+// Layer by layer — every symbol reachable with k crossings over resolved edges before any with k+1 — so the chain printed
+// has the FEWEST crossings, then is the first found in deterministic (id-ascending) order. <bridge proven="0" crossings=
+// hops=> lists it as <s> rows like a path's, the crossing into a row named by via= (and cands= its fan-out).
+//
+// What it does NOT mean: a bridge is NOT a path — reachable= stays 0, hops= stays 0, and no count includes it. It is the
+// closest chain the index can show, every crossing a hedge. Absent (with no clause) when no chain exists within the bounds.
+inline constexpr std::uint32_t kBridgeCrossings = 2;
+inline constexpr std::size_t   kBridgeFanOut    = 16;
+
+enum class BridgeVia : std::uint8_t { Edge, Declined, Value, Closure, Namesake };
+inline constexpr std::array<std::string_view, 5> kBridgeViaNames = { "", "declined", "value", "closure", "namesake" };
+
+struct PathBridge
+{
+    std::vector<NodeId>        hops;       // from= definition … to= definition
+    std::vector<BridgeVia>     via;        // parallel: how the hop INTO each row was taken (Edge: a resolved call edge)
+    std::vector<std::uint32_t> fan;        // parallel: a crossing's candidate count (0 on an edge)
+    std::size_t                crossings = 0;
+
+    bool found() const noexcept { return !hops.empty(); }
+};
+
+inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span<const NodeId> srcDefs, std::span<const NodeId> dstDefs,
+                              const ValueRefIndex& values )
+{
+    constexpr std::uint32_t kUnseen = std::numeric_limits<std::uint32_t>::max();
+    const std::size_t       S       = ing.symbols.size();
+    PathBridge              out;
+    if( S == 0 || g.outOff.size() < S + 1 )
+    {
+        return out;   // no graph over these symbols (an empty tree): no chain to show
+    }
+    // the crossings out of each symbol, as (from, index) pairs sorted by from: declined records, value references, closures
+    std::vector<std::pair<NodeId, std::uint32_t>> declinedBy, valueBy, closureOf;
+    for( std::uint32_t site = 0; site < g.declinedSiteList.size(); ++site )
+    {
+        declinedBy.emplace_back( g.declinedSiteCaller[site], site );
+    }
+    for( std::uint32_t i = 0; i < ing.references.size(); ++i )
+    {
+        if( ing.references[i].role == RefRole::Value && ing.references[i].fromSymbol < S )
+        {
+            valueBy.emplace_back( ing.references[i].fromSymbol, i );
+        }
+    }
+    const ClosureIndex closures( ing );
+    for( NodeId id = 0; closures.any() && id < S; ++id )
+    {
+        if( const NodeId p = closures.parentOf( id ); p != kNoNode )
+        {
+            closureOf.emplace_back( p, id );
+        }
+    }
+    std::ranges::sort( declinedBy );
+    std::ranges::sort( valueBy );
+    std::ranges::sort( closureOf );
+    // namesakes: the definitions by (lang, kind, name), id within
+    std::vector<NodeId> defsByKey;
+    for( NodeId id = 0; id < S; ++id )
+    {
+        if( isDefinitionNotDeclaration( ing.symbols[id] ) )
+        {
+            defsByKey.push_back( id );
+        }
+    }
+    const auto keyLess = [ & ]( NodeId a, NodeId b )
+    {
+        const Symbol& x = ing.symbols[a];
+        const Symbol& y = ing.symbols[b];
+        if( x.lang != y.lang )
+        {
+            return x.lang < y.lang;
+        }
+        if( x.kind != y.kind )
+        {
+            return x.kind < y.kind;
+        }
+        return x.name != y.name ? sortutil::svLess( x.name, y.name ) : a < b;
+    };
+    std::ranges::sort( defsByKey, keyLess );
+    const auto sameKey = [ & ]( NodeId a, NodeId b )
+    { const Symbol& x = ing.symbols[a]; const Symbol& y = ing.symbols[b]; return x.lang == y.lang && x.kind == y.kind && x.name == y.name; };
+
+    std::vector<std::uint32_t> layer( S, kUnseen );
+    std::vector<NodeId>        parent( S, kNoNode );
+    std::vector<BridgeVia>     viaOf( S, BridgeVia::Edge );
+    std::vector<std::uint32_t> fanOf( S, 0 );
+    std::vector<char>          isDst( S, 0 );
+    for( const NodeId t : dstDefs )
+    {
+        if( t < S )
+        {
+            isDst[t] = 1;
+        }
+    }
+    std::vector<NodeId> frontier;
+    for( const NodeId s : srcDefs )
+    {
+        if( s < S && layer[s] == kUnseen )
+        {
+            layer[s] = 0;
+            frontier.push_back( s );
+        }
+    }
+    NodeId hit = kNoNode;
+    for( std::uint32_t k = 0; k <= kBridgeCrossings && hit == kNoNode && !frontier.empty(); ++k )
+    {
+        // every symbol reachable from this layer's seeds over resolved call edges joins the layer
+        std::vector<NodeId> queue = std::move( frontier );
+        frontier.clear();
+        for( std::size_t head = 0; head < queue.size() && hit == kNoNode; ++head )
+        {
+            const NodeId u = queue[head];
+            if( isDst[u] != 0 )
+            {
+                hit = u;
+                break;
+            }
+            for( std::uint32_t e = g.outOff[u]; e < g.outOff[u + 1]; ++e )
+            {
+                if( const NodeId v = g.outTargets[e]; v < S && layer[v] == kUnseen )
+                {
+                    layer[v]  = k;
+                    parent[v] = u;
+                    queue.push_back( v );
+                }
+            }
+        }
+        if( hit != kNoNode || k == kBridgeCrossings )
+        {
+            break;
+        }
+        // one crossing out of this layer seeds the next
+        const auto cross = [ & ]( NodeId from, NodeId to, BridgeVia via, std::size_t fan )
+        {
+            if( to < S && layer[to] == kUnseen )
+            {
+                layer[to]  = k + 1;
+                parent[to] = from;
+                viaOf[to]  = via;
+                fanOf[to]  = std::uint32_t( fan );
+                frontier.push_back( to );
+            }
+        };
+        for( const NodeId u : queue )
+        {
+            const std::pair<NodeId, std::uint32_t> lo( u, 0u ), hi( u, std::numeric_limits<std::uint32_t>::max() );
+            for( auto it = std::ranges::lower_bound( declinedBy, lo ); it != declinedBy.end() && *it <= hi; ++it )
+            {
+                const std::uint32_t list = g.declinedSiteList[ it->second ];
+                if( list == kNoDeclinedList || list + 1 >= g.declinedListOff.size() )
+                {
+                    continue;   // a call with no stored candidate list names nothing to cross to
+                }
+                const std::size_t fan = g.declinedListOff[list + 1] - g.declinedListOff[list];
+                for( std::uint32_t slot = g.declinedListOff[list]; fan <= kBridgeFanOut && slot < g.declinedListOff[list + 1]; ++slot )
+                {
+                    cross( u, g.declinedListCand[slot], BridgeVia::Declined, fan );
+                }
+            }
+            for( auto it = std::ranges::lower_bound( valueBy, lo ); it != valueBy.end() && *it <= hi; ++it )
+            {
+                const std::vector<NodeId> targets = values.targetsOf( it->second );
+                for( std::size_t t = 0; targets.size() <= kBridgeFanOut && t < targets.size(); ++t )
+                {
+                    cross( u, targets[t], BridgeVia::Value, targets.size() );
+                }
+            }
+            for( auto it = std::ranges::lower_bound( closureOf, lo ); it != closureOf.end() && *it <= hi; ++it )
+            {
+                cross( u, it->second, BridgeVia::Closure, 1 );
+            }
+            for( std::uint32_t e = g.outOff[u]; e < g.outOff[u + 1] && e < g.outNameOnly.size(); ++e )
+            {
+                const NodeId w = g.outTargets[e];
+                if( g.outNameOnly[e] == 0 || w >= S )
+                {
+                    continue;
+                }
+                auto first = std::ranges::lower_bound( defsByKey, w, [ & ]( NodeId a, NodeId b ) { return sameKey( a, b ) ? false : keyLess( a, b ); } );
+                auto last  = first;
+                while( last != defsByKey.end() && sameKey( *last, w ) )
+                {
+                    ++last;
+                }
+                const std::size_t fan = std::size_t( last - first ) - ( std::find( first, last, w ) != last ? 1u : 0u );
+                for( auto it = first; fan <= kBridgeFanOut && it != last; ++it )
+                {
+                    if( *it != w )
+                    {
+                        cross( u, *it, BridgeVia::Namesake, fan );
+                    }
+                }
+            }
+        }
+        std::ranges::sort( frontier );   // the next layer's seeds in id order: the walk below them is order-independent of how they were met
+    }
+    if( hit == kNoNode )
+    {
+        return out;
+    }
+    for( NodeId n = hit; n != kNoNode; n = parent[n] )
+    {
+        out.hops.push_back( n );
+        out.via.push_back( viaOf[n] );
+        out.fan.push_back( fanOf[n] );
+        out.crossings += viaOf[n] != BridgeVia::Edge ? 1u : 0u;
+    }
+    std::ranges::reverse( out.hops );
+    std::ranges::reverse( out.via );
+    std::ranges::reverse( out.fan );
+    ENSURES( out.crossings >= 1 && out.crossings <= kBridgeCrossings, "only reached when the proven search was not (reachable=0), within the bound" );
+    return out;
+}
+
+inline constexpr std::string_view kPathBridgeLegend =
+    "<bridge proven=\"0\" crossings= hops=>: a HEDGED chain from= to to= that crosses at most 2 hops the graph holds no edge for, each "
+    "fanning out to at most 16 candidates; its <s> rows read like a path's, and via= on a row names the crossing INTO it: declined = "
+    "one of cands= candidates of a declined call in the previous row, value = a function the previous row stores or passes as a value, "
+    "closure = a function written in the previous row's body, namesake = another same-language definition of a name the previous row "
+    "calls by name alone (via=name rows are proven edges bound by name). Fewest crossings first. It is NOT a path: reachable= and "
+    "hops= on the root stay 0, no count includes it, and every crossing is a hedge. ";
+inline std::string_view pathBridgeLegend( bool on ) noexcept
+{
+    return on ? kPathBridgeLegend : std::string_view();
+}
+
+inline std::string pathBridgeXml( const IngestResult& ing, const Graph& g, const PathBridge& br, bool singleRoot, std::string_view rootPrefix )
+{
+    if( !br.found() )
+    {
+        return {};
+    }
+    std::vector<char> esc;
+    const auto        ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
+    std::string       out = "<bridge proven=\"0\" crossings=\"" + std::to_string( br.crossings ) + "\" hops=\"" + std::to_string( br.hops.size() - 1 ) + "\">";
+    for( std::size_t i = 0; i < br.hops.size(); ++i )
+    {
+        const Symbol&          s  = ing.symbols[ br.hops[i] ];
+        const std::string_view rp = singleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], rootPrefix ) : std::string_view( ing.files[ s.fileId ] );
+        out += "<s t=\"" + std::string( symTag( s.kind ) ) + "\" n=\"" + ex( s.name ) + "\" p=\"" + ex( rp ) + ":" + std::to_string( s.line ) + "\"";
+        if( br.via[i] != BridgeVia::Edge )
+        {
+            out += " via=\"" + std::string( kBridgeViaNames[ std::size_t( br.via[i] ) ] ) + "\" cands=\"" + std::to_string( br.fan[i] ) + "\"";
+        }
+        else if( i > 0 )
+        {
+            out += viaNameAttr( edgeNameOnly( g, br.hops[i - 1], br.hops[i] ) );   // FE-B: a proven hop bound by name says so
+        }
+        out += "/>";
+    }
+    return out + "</bridge>";
 }
 
 }   // namespace rw

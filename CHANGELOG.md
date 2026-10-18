@@ -15,6 +15,21 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — `--path` offers a hedged bridge (`<bridge proven="0">`) and glob endpoints
+
+A `reachable="0"` `--path` answer (and MCP `path_between`) now carries `<bridge proven="0" crossings= hops=>` when a chain
+from `from=` to `to=` exists that crosses at most 2 hops the graph holds no edge for, each fanning out to at most 16
+candidates: a declined call's candidate (`via="declined" cands=K`), a function stored or passed as a value
+(`via="value"`), a closure written in the previous row's body (`via="closure"`), or another same-language definition of a
+name called by name alone (`via="namesake"`). The chain with the fewest crossings is shown; it is not a path —
+`reachable=` and `hops=` stay 0 and no count includes it. On htop, `--path=ScreenManager_run,LinuxMachine_scanCPUTime`
+shows ScreenManager_run → checkRecalculation → Machine_scan (declined, 9 candidates) → LinuxMachine_scanCPUTime; on koa,
+`--path=listen,respond` shows listen → callback ⊃ handleRequest → handleRequest ⊃ handleResponse → respond.
+
+An endpoint that names no definition and holds a `*` now stands for every function or method definition whose name fits
+it (`from_glob="1"`/`to_glob="1"`, `to_defs=` counts them): `--path=post_message,on_*` on Textual was "endpoint not found"
+(exit 1) and is now an answer with its gaps, bridge and `<near_sink>` rows. A name that resolves is never read as a pattern.
+
 ### Changed — declined-call `<dc>` rows: tier-first order, and `--impact` lists them
 
 The `<dc>` rows (calls the resolver declined to bind) are now ordered by the file's path tier first — source, then
