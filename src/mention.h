@@ -1683,6 +1683,19 @@ inline bool resolveUniquePartnerFile( const IngestResult& ing, std::uint32_t nam
 // that is not itself named anywhere in the task. Empty when the task names no file with a unique partner
 // — the common case, and the feature is byte-identical to before it on every such task (AF's self-reject
 // band: 0 gold lost, 0 rows on a task that names nothing the index agrees is unique).
+// Does the task name an indexed file (a path mention resolving to exactly one file — forNamedHeaderRows' pass 1)? The head
+// round-robin (serialize.h forHeadRoundRobinOn) leaves such a question's rows in score order: it asked about that file.
+inline bool taskNamesIndexedFile( const IngestResult& ing, std::string_view task )
+{
+    using namespace mention_detail;
+    if( task.empty() )
+    {
+        return false;
+    }
+    std::uint32_t f;
+    return std::ranges::any_of( extractMentions( task ), [ & ]( const RawMention& m ) { return resolveUniqueMentionFile( ing, m, f ); } );
+}
+
 inline std::vector<ForNamedHeaderRow> forNamedHeaderRows( const IngestResult& ing, std::string_view task )
 {
     using namespace mention_detail;

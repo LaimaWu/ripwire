@@ -2793,7 +2793,10 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
                                            composePreCapCount, sections,
                                            rw::forLensRules( !noRoute && !taskAsksAboutDocs( task ) && !std::getenv( "RIPWIRE_NO_DOCS_AFTER_CODE" )
                                                                  && rw::docsAfterCodeFitsCeiling( budgetTokens, /*bodyCeiling=*/false ),
-                                                             rw::endLinesFitCeiling( budgetTokens, /*bodyCeiling=*/false ) ),   // LB-A, e=, docs reorder
+                                                             rw::endLinesFitCeiling( budgetTokens, /*bodyCeiling=*/false ),
+                                                             // the CLI twin's head round-robin verdict (serialize.h forHeadRoundRobinOn)
+                                                             rw::forHeadRoundRobinOn( std::strcmp( mcpRouteTag, "subtoken+body" ) == 0,
+                                                                                      rw::taskNamesIndexedFile( ing, task ), budgetTokens, /*bodyCeiling=*/false ) ),   // LB-A, e=, docs reorder, head RR
                                            ix.g.implementors, mcpEvidence, ix.g, mcpSlotOwner };
     // forbudget-soft: ONE assembly (the C3 unpaid/paid passes went with the hard ceiling they priced against)
     McpForAssembly chosen = assembleMcpFor( assemblyIn, headerStr, legoStr, composeStr, legoScoped, legoPreCapCount );
