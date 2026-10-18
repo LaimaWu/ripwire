@@ -97,10 +97,6 @@ public:
                     m_valueByContainer[ jsImportKey( r.fileId, r.recvVar ) ].push_back( i );
                 }
             }
-            else if( r.role == RefRole::Pattern )
-            {
-                ( scopeOf( r ) == 'w' ? m_patternsWide : m_patterns ).push_back( i );   // IX-3: 'w' = too wide, a count, never a row
-            }
             else if( r.role == RefRole::Through )
             {
                 if( scopeOf( r ) == 'p' )
@@ -206,51 +202,6 @@ public:
             }
         }
         return out;
-    }
-
-    // ── IX-3 name-template dispatch ────────────────────────────────────────────────────────────────────
-    // The Pattern sites (indices into ing.references, in reference order) whose template can name one of `defs`: a
-    // class member of the site's value-ref family whose name holds the literal prefix and suffix around a non-empty
-    // hole. A `self` / `this` / `cls` receiver narrows the members to the site's class family (its ancestors and its
-    // subclasses, by base name) when the site's method has a class scope (Python today; a JS/TS method's scope is empty in
-    // this index, so a `this` site there is unnarrowed — the nunjucks census family equals the whole tree's 50); any other
-    // receiver is unnarrowed. A MAY-dispatch clue matched by name: never a call.
-    std::vector<std::uint32_t> patternSitesTo( std::span<const NodeId> defs ) const
-    {
-        return sitesNaming( m_patterns, defs );   // m_patterns is in reference order, so the result is too, once each
-    }
-    // The class members Pattern site `refIdx` can name, in symbol order (the dispatcher's --callees side).
-    std::vector<NodeId> patternTargets( std::uint32_t refIdx ) const
-    {
-        std::vector<NodeId> out;
-        const Reference& r = m_ing.references[ refIdx ];
-        for( NodeId id = 0; id < m_ing.symbols.size(); ++id )
-        {
-            const Symbol& s = m_ing.symbols[id];
-            if( isClassMember( s ) && patternReaches( r, s ) )
-            {
-                out.push_back( id );
-            }
-        }
-        return out;
-    }
-    // The usable Pattern sites made inside any of `fns` (the dispatcher's own sites), in reference order.
-    std::vector<std::uint32_t> patternSitesIn( std::span<const NodeId> fns ) const
-    {
-        std::vector<std::uint32_t> out;
-        std::ranges::copy_if( m_patterns, std::back_inserter( out ), [ & ]( std::uint32_t i ) { return std::ranges::find( fns, m_ing.references[i].fromSymbol ) != fns.end(); } );
-        return out;
-    }
-    // The answer's Pattern rows: callers — the sites that may name `defs` and the too-wide count; callees — the sites in them.
-    std::pair<std::vector<std::uint32_t>, std::size_t> patternRows( std::span<const NodeId> defs, bool callersSide ) const
-    {
-        return callersSide ? std::pair( patternSitesTo( defs ), patternTooWideTo( defs ) ) : std::pair( patternSitesIn( defs ), std::size_t( 0 ) );
-    }
-    // Too-wide templates (`f"_{m}"`: no literal side of kVrPatternMinLiteral identifier characters) whose written sides
-    // could name one of `defs`: pattern_too_wide=, a count beside the rows, never a row of its own.
-    std::size_t patternTooWideTo( std::span<const NodeId> defs ) const
-    {
-        return sitesNaming( m_patternsWide, defs ).size();
     }
 
     // The resolved targets of value reference `refIdx` (an index into ing.references).
@@ -410,6 +361,16 @@ public:
         return r.qualifier.empty() ? 'x' : r.qualifier[0];
     }
 
+    // A class member, in every armed language: a Method, or a Python def directly in its class (public: PatternIndex reads it).
+    bool isClassMember( const Symbol& s ) const noexcept
+    {
+        if( s.kind == SymKind::Method )
+        {
+            return true;
+        }
+        return s.lang == Lang::Python && s.id < m_pyMember.size() && m_pyMember[ s.id ] != 0;
+    }
+
 private:
 
     // A value key "#N" (an argument position) or "#name" (a keyword / a parameter default) against a parameter Through.
@@ -504,114 +465,6 @@ private:
             }
             open.push_back( id );
         }
-    }
-
-    // The Pattern sites of `sites` (reference order) that can name at least one class member of `defs`, in that order.
-    std::vector<std::uint32_t> sitesNaming( const std::vector<std::uint32_t>& sites, std::span<const NodeId> defs ) const
-    {
-        std::vector<std::uint32_t> out;
-        std::ranges::copy_if( sites, std::back_inserter( out ), [ & ]( std::uint32_t i )
-        {
-            return std::ranges::any_of( defs, [ & ]( NodeId d ) { return isClassMember( m_ing.symbols[d] ) && patternReaches( m_ing.references[i], m_ing.symbols[d] ); } );
-        } );
-        return out;
-    }
-    // Can Pattern reference `r` name class member `s`? Same value-ref family; the literal sides around a non-empty hole;
-    // a self/this/cls receiver inside a class keeps only that class's family.
-    bool patternReaches( const Reference& r, const Symbol& s ) const
-    {
-        if( valueRefFamily( s.lang ) != valueRefFamily( r.lang ) )
-        {
-            return false;
-        }
-        const std::string_view pre = r.fieldName;
-        const std::string_view suf = r.composeRel;
-        const std::string_view n   = s.name;
-        if( n.size() <= pre.size() + suf.size() || !n.starts_with( pre ) || !n.ends_with( suf ) )
-        {
-            return false;
-        }
-        const std::string_view recv = r.recvVar;
-        if( ( recv == "self" || recv == "this" || recv == "cls" ) && r.fromSymbol < m_ing.symbols.size() )
-        {
-            const std::string& site = m_ing.symbols[ r.fromSymbol ].scope;
-            if( !site.empty() )
-            {
-                return inClassFamily( site, s.scope );
-            }
-        }
-        return true;
-    }
-    // Is class `member` in the family of class `site`: `site` itself, an ancestor of it, or a subclass of it (by name)?
-    bool inClassFamily( const std::string& site, const std::string& member ) const
-    {
-        if( member.empty() )
-        {
-            return false;
-        }
-        if( site == member )
-        {
-            return true;
-        }
-        buildBases();
-        const auto reaches = [ & ]( const std::string& from, const std::string& to )   // `to` is an ancestor of `from`
-        {
-            std::vector<std::string_view> todo { from };
-            std::vector<std::string_view> seen;
-            while( !todo.empty() && seen.size() < 4096 )
-            {
-                const std::string_view c = todo.back();
-                todo.pop_back();
-                if( std::ranges::find( seen, c ) != seen.end() )
-                {
-                    continue;
-                }
-                seen.push_back( c );
-                if( const auto it = m_basesOf.find( std::string( c ) ); it != m_basesOf.end() )
-                {
-                    for( const std::string& b : it->second )
-                    {
-                        if( b == to )
-                        {
-                            return true;
-                        }
-                        todo.push_back( b );
-                    }
-                }
-            }
-            return false;
-        };
-        return reaches( site, member ) || reaches( member, site );
-    }
-    // class name → its written base names, from the inherit references (built on first use; name-keyed, as the census)
-    void buildBases() const
-    {
-        if( m_basesBuilt )
-        {
-            return;
-        }
-        m_basesBuilt = true;
-        for( const Reference& r : m_ing.references )
-        {
-            if( ( r.isInherit || r.role == RefRole::Extends ) && r.fromSymbol < m_ing.symbols.size() && m_ing.symbols[ r.fromSymbol ].kind == SymKind::Class )
-            {
-                std::vector<std::string>& b = m_basesOf[ m_ing.symbols[ r.fromSymbol ].name ];
-                if( std::ranges::find( b, r.calleeName ) == b.end() )
-                {
-                    b.push_back( r.calleeName );
-                }
-            }
-        }
-    }
-
-    // A class member, in every armed language: a Method, or a Python def whose innermost enclosing def is its class.
-    bool isClassMember( const Symbol& s ) const noexcept
-    {
-        if( s.kind == SymKind::Method )
-        {
-            return true;
-        }
-        return s.lang == Lang::Python && s.id < m_pyMember.size() && m_pyMember[ s.id ] != 0;
     }
 
     // Is the class member `m` in bare-name scope at reference `r`? The call graph's own visibility, per language:
@@ -757,10 +610,6 @@ private:
 
     const IngestResult&                                  m_ing;
     HashMap<std::string, std::vector<NodeId>>            m_fnByName;
-    std::vector<std::uint32_t>                           m_patterns;          // IX-3: usable Pattern references, in reference order
-    std::vector<std::uint32_t>                           m_patternsWide;      // IX-3: too-wide Pattern references
-    mutable HashMap<std::string, std::vector<std::string>> m_basesOf;         // class name → base names (buildBases)
-    mutable bool                                         m_basesBuilt = false;
     std::vector<std::uint8_t>                            m_pyMember;   // per symbol: 1 = a Python def directly in its class (empty: no Python)
     std::vector<std::uint32_t>                           m_values;            // Value reference indices, ascending
     std::vector<std::uint32_t>                           m_depthCuts;         // the files' depth-cut records (no row), ascending
@@ -771,6 +620,182 @@ private:
     HashMap<NodeId, std::vector<std::uint32_t>>          m_throughParamBySym;
     HashMap<std::uint32_t, std::vector<const Binding*>>  m_importsByFile;
     mutable HashMap<std::string, std::uint32_t>          m_fileIndex;   // root-relative normalised path → fileId, built on first import
+};
+
+// ── IX-3 name-template dispatch ───────────────────────────────────────────────────────────────────────────────
+// The Pattern references (model.h RefRole::Pattern) and what they may name. Its own index beside ValueRefIndex, built
+// from the same IngestResult: a template site (indices into ing.references, in reference order) can name a class member
+// of the site's value-ref family whose name holds the literal prefix and suffix around a non-empty hole. A `self` /
+// `this` / `cls` receiver narrows the members to the site's class family (its ancestors and its subclasses, by base
+// name) when the site's method has a class scope (Python today; a JS/TS method's scope is empty in this index, so a
+// `this` site there is unnarrowed — the nunjucks census family equals the whole tree's 50); any other receiver is
+// unnarrowed. A MAY-dispatch clue matched by name: never a call. Class membership is ValueRefIndex::isClassMember,
+// read once per symbol at construction (only when a Pattern reference exists), so no reference to `vri` is kept.
+class PatternIndex
+{
+public:
+    PatternIndex( const IngestResult& ing, const ValueRefIndex& vri ) : m_ing( ing )
+    {
+        for( std::uint32_t i = 0; i < ing.references.size(); ++i )
+        {
+            if( ing.references[i].role == RefRole::Pattern )
+            {
+                ( ValueRefIndex::scopeOf( ing.references[i] ) == 'w' ? m_patternsWide : m_patterns ).push_back( i );   // 'w' = too wide, a count, never a row
+            }
+        }
+        if( !m_patterns.empty() || !m_patternsWide.empty() )
+        {
+            m_member.resize( ing.symbols.size() );
+            for( NodeId id = 0; id < ing.symbols.size(); ++id )
+            {
+                m_member[id] = vri.isClassMember( ing.symbols[id] ) ? 1 : 0;
+            }
+        }
+    }
+
+    // The usable Pattern sites whose template can name one of `defs`, in reference order, once each.
+    std::vector<std::uint32_t> sitesTo( std::span<const NodeId> defs ) const
+    {
+        return sitesNaming( m_patterns, defs );
+    }
+    // The class members Pattern site `refIdx` can name, in symbol order (the dispatcher's --callees side).
+    std::vector<NodeId> targets( std::uint32_t refIdx ) const
+    {
+        std::vector<NodeId> out;
+        const Reference& r = m_ing.references[ refIdx ];
+        for( NodeId id = 0; id < m_ing.symbols.size(); ++id )
+        {
+            if( isMember( id ) && reaches( r, m_ing.symbols[id] ) )
+            {
+                out.push_back( id );
+            }
+        }
+        return out;
+    }
+    // The usable Pattern sites made inside any of `fns` (the dispatcher's own sites), in reference order.
+    std::vector<std::uint32_t> sitesIn( std::span<const NodeId> fns ) const
+    {
+        std::vector<std::uint32_t> out;
+        std::ranges::copy_if( m_patterns, std::back_inserter( out ), [ & ]( std::uint32_t i ) { return std::ranges::find( fns, m_ing.references[i].fromSymbol ) != fns.end(); } );
+        return out;
+    }
+    // Too-wide templates (`f"_{m}"`: no literal side of kVrPatternMinLiteral identifier characters) whose written sides
+    // could name one of `defs`: pattern_too_wide=, a count beside the rows, never a row of its own.
+    std::size_t tooWideTo( std::span<const NodeId> defs ) const
+    {
+        return sitesNaming( m_patternsWide, defs ).size();
+    }
+
+private:
+    bool isMember( NodeId id ) const noexcept
+    {
+        return id < m_member.size() && m_member[id] != 0;
+    }
+
+    // The Pattern sites of `sites` (reference order) that can name at least one class member of `defs`, in that order.
+    std::vector<std::uint32_t> sitesNaming( const std::vector<std::uint32_t>& sites, std::span<const NodeId> defs ) const
+    {
+        std::vector<std::uint32_t> out;
+        std::ranges::copy_if( sites, std::back_inserter( out ), [ & ]( std::uint32_t i )
+        {
+            return std::ranges::any_of( defs, [ & ]( NodeId d ) { return isMember( d ) && reaches( m_ing.references[i], m_ing.symbols[d] ); } );
+        } );
+        return out;
+    }
+    // Can Pattern reference `r` name class member `s`? Same value-ref family; the literal sides around a non-empty hole;
+    // a self/this/cls receiver inside a class keeps only that class's family.
+    bool reaches( const Reference& r, const Symbol& s ) const
+    {
+        if( valueRefFamily( s.lang ) != valueRefFamily( r.lang ) )
+        {
+            return false;
+        }
+        const std::string_view pre = r.fieldName;
+        const std::string_view suf = r.composeRel;
+        const std::string_view n   = s.name;
+        if( n.size() <= pre.size() + suf.size() || !n.starts_with( pre ) || !n.ends_with( suf ) )
+        {
+            return false;
+        }
+        const std::string_view recv = r.recvVar;
+        if( ( recv == "self" || recv == "this" || recv == "cls" ) && r.fromSymbol < m_ing.symbols.size() )
+        {
+            const std::string& site = m_ing.symbols[ r.fromSymbol ].scope;
+            if( !site.empty() )
+            {
+                return inClassFamily( site, s.scope );
+            }
+        }
+        return true;
+    }
+    // Is class `member` in the family of class `site`: `site` itself, an ancestor of it, or a subclass of it (by name)?
+    bool inClassFamily( const std::string& site, const std::string& member ) const
+    {
+        if( member.empty() )
+        {
+            return false;
+        }
+        if( site == member )
+        {
+            return true;
+        }
+        buildBases();
+        const auto ancestor = [ & ]( const std::string& from, const std::string& to )   // `to` is an ancestor of `from`
+        {
+            std::vector<std::string_view> todo { from };
+            std::vector<std::string_view> seen;
+            while( !todo.empty() && seen.size() < 4096 )
+            {
+                const std::string_view c = todo.back();
+                todo.pop_back();
+                if( std::ranges::find( seen, c ) != seen.end() )
+                {
+                    continue;
+                }
+                seen.push_back( c );
+                if( const auto it = m_basesOf.find( std::string( c ) ); it != m_basesOf.end() )
+                {
+                    for( const std::string& b : it->second )
+                    {
+                        if( b == to )
+                        {
+                            return true;
+                        }
+                        todo.push_back( b );
+                    }
+                }
+            }
+            return false;
+        };
+        return ancestor( site, member ) || ancestor( member, site );
+    }
+    // class name → its written base names, from the inherit references (built on first use; name-keyed, as the census)
+    void buildBases() const
+    {
+        if( m_basesBuilt )
+        {
+            return;
+        }
+        m_basesBuilt = true;
+        for( const Reference& r : m_ing.references )
+        {
+            if( ( r.isInherit || r.role == RefRole::Extends ) && r.fromSymbol < m_ing.symbols.size() && m_ing.symbols[ r.fromSymbol ].kind == SymKind::Class )
+            {
+                std::vector<std::string>& b = m_basesOf[ m_ing.symbols[ r.fromSymbol ].name ];
+                if( std::ranges::find( b, r.calleeName ) == b.end() )
+                {
+                    b.push_back( r.calleeName );
+                }
+            }
+        }
+    }
+
+    const IngestResult&                                    m_ing;
+    std::vector<std::uint32_t>                             m_patterns;       // usable Pattern references, in reference order
+    std::vector<std::uint32_t>                             m_patternsWide;   // too-wide Pattern references
+    std::vector<std::uint8_t>                              m_member;         // per symbol: 1 = a class member (empty: no Pattern reference)
+    mutable HashMap<std::string, std::vector<std::string>> m_basesOf;        // class name → base names (buildBases)
+    mutable bool                                           m_basesBuilt = false;
 };
 
 // ── the rows every surface serves ─────────────────────────────────────────────────────────────────────────────
@@ -791,6 +816,8 @@ struct ValueRefRows
 {
     std::vector<ValueRefRow> rows;      // every row, served order; the window is the caller's
     ValueRefIndex::DepthCuts depthCut;  // the walk's depth cut over the answered defs' families (value_refs_depth_capped=)
+    std::vector<std::uint32_t> patternSites;   // IX-3 (the PatternIndex overloads): callers — template lookups that may name the defs; callees — the templates in them
+    std::size_t              patternTooWide = 0;   // IX-3 (callers): too-wide templates whose sides could name the defs
 };
 
 // --callers side: every value reference resolving to one of `defs`.
@@ -957,6 +984,22 @@ inline ValueRefRows valueRefCalleeRows( const IngestResult& ing, const ValueRefI
     }
     via.appendTo( out.rows );
     std::sort( out.rows.begin(), out.rows.end(), [ & ]( const ValueRefRow& a, const ValueRefRow& b ) { return vrCalleeRowLess( ing, a, b ); } );
+    return out;
+}
+
+// The same rows with the IX-3 Pattern rows riding inside them (patternSites / patternTooWide): the callers side's
+// template lookups that may name `defs`, and the callees side's templates made in `fns`.
+inline ValueRefRows valueRefCallerRows( const IngestResult& ing, const ValueRefIndex& idx, std::span<const NodeId> defs, const PatternIndex& pix )
+{
+    ValueRefRows out   = valueRefCallerRows( ing, idx, defs );
+    out.patternSites   = pix.sitesTo( defs );
+    out.patternTooWide = pix.tooWideTo( defs );
+    return out;
+}
+inline ValueRefRows valueRefCalleeRows( const IngestResult& ing, const ValueRefIndex& idx, std::span<const NodeId> fns, const PatternIndex& pix )
+{
+    ValueRefRows out = valueRefCalleeRows( ing, idx, fns );
+    out.patternSites = pix.sitesIn( fns );
     return out;
 }
 

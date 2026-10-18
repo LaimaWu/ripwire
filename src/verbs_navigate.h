@@ -276,7 +276,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                            + rw::callSitesAtLegend( chSites.any, chSites.anyCut, rw::kCallSitesPerRowCap ) ).c_str(),   // CALLSITE-AT: likewise for sites_at=/sites_total=
                          ( rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ) + rw::valueRefsLegend( !chRows.valueRefs.rows.empty(), wantCallers )
                            + rw::valueRefsDepthLegendFor( chRows.valueRefs )   // exactly when the root carries the depth disclosure
-                           + rw::patternDispatchLegend( !chRows.patternSites.empty() || chRows.patternTooWide > 0, wantCallers ) ).c_str(),   // IX-3: exactly when pattern_dispatch= rides
+                           + rw::patternDispatchLegend( !chRows.valueRefs.patternSites.empty() || chRows.valueRefs.patternTooWide > 0, wantCallers ) ).c_str(),   // IX-3: exactly when pattern_dispatch= rides
                          rw::rootRelPathsLegend( chSingleRoot ),
                          rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
         }
@@ -291,7 +291,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // Reference-as-value round: value_refs= beside count= (never in it), absent at zero; the <vrs> window after the rows.
         const rw::VrRender   chVr { chSingleRoot, chRootPrefix };
         const std::string    chValueRefsAttr = ( rw::valueRefsCountAttrXml( chRows.valueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( ing, chRows.valueRefs.depthCut, chVr )   // + the depth cut that makes it a floor
-                                                 + rw::patternDispatchAttrXml( chRows.patternSites.size(), chRows.patternTooWide ) );   // IX-3: template lookups, never in count=
+                                                 + rw::patternDispatchAttrXml( chRows.valueRefs.patternSites.size(), chRows.valueRefs.patternTooWide ) );   // IX-3: template lookups, never in count=
         const std::string    chVrNext = "--uses=" + std::string( sym );
 
         // --format=columnar (RESEARCH lever 1): the same page window, re-encoded as a path-table + parallel
@@ -412,9 +412,9 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         rw::emitTo( stdout, "{}{}{}</{}>", rw::stdMemberCallsSpelling( chRows.stdCalls, /*json=*/false ),   // the declined C++ standard-member calls, after the rows
                      chDcRows,                                                                                // and each declined call SITE (<dc>)
                      rw::valueRefsXml( ing, chRows.valueRefs, wantCallers, chVr, chVrNext )
-                       + ( wantCallers                  ? rw::patternDispatchXml( ing, chRows.patternSites, chVr )
-                           : chRows.patternSites.empty() ? std::string()
-                                                         : rw::patternCalleesXml( ing, rw::ValueRefIndex( ing ), chRows.patternSites, chVr ) ), tag );
+                       + ( wantCallers                  ? rw::patternDispatchXml( ing, chRows.valueRefs.patternSites, chVr )
+                           : chRows.valueRefs.patternSites.empty() ? std::string()
+                                                         : rw::patternCalleesXml( ing, rw::PatternIndex( ing, rw::ValueRefIndex( ing ) ), chRows.valueRefs.patternSites, chVr ) ), tag );
         return 0;
     }
     return std::nullopt;
@@ -1228,11 +1228,11 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     // (sites above) and they keep dead_code_candidate at 0 by --dead-code's own rule (ValueRefIndex::isValueReferenced):
     // a row made inside the function itself (`timer_set( tick )` in tick) or a wrapper decorator does not.
     const rw::ValueRefIndex sdVri( ing );
-    const rw::ValueRefRows  sdValueRefs = rw::valueRefCallerRows( ing, sdVri, defs );
+    const rw::ValueRefRows  sdValueRefs = rw::valueRefCallerRows( ing, sdVri, defs, rw::PatternIndex( ing, sdVri ) );
     const rw::VrRender      sdVr { sdSingleRoot, sdRootPrefix };   // the <vrs> rows' and the depth cut's paths
     // IX-3: name-template lookups that may name a def — rows and a risk reading, never a caller and never the dead set
-    const std::vector<std::uint32_t> sdPatterns = sdVri.patternSitesTo( defs );
-    const std::size_t                sdTooWide  = sdVri.patternTooWideTo( defs );
+    const std::vector<std::uint32_t>& sdPatterns = sdValueRefs.patternSites;
+    const std::size_t                 sdTooWide  = sdValueRefs.patternTooWide;
     bool deadCodeCandidate = false;
     if( defs.size() == 1 && callerIds.empty() && !sdVri.isValueReferenced( defs[0] ) )
     {
@@ -2842,8 +2842,8 @@ std::optional<int> runImpact( const MainDispatch& d )
         const rw::DefTableListing imListing = rw::defTableListing( imAttr.groups, imNamed );
         // Reference-as-value round: SYM's own binding sites, beside the radius they are not in.
         const rw::ValueRefIndex imVri( ing );
-        const rw::ValueRefRows  imValueRefs = rw::valueRefCallerRows( ing, imVri, seeds );
-        const std::vector<std::uint32_t> imPatterns = imVri.patternSitesTo( seeds );   // IX-3: beside the radius, never in it
+        const rw::ValueRefRows  imValueRefs = rw::valueRefCallerRows( ing, imVri, seeds, rw::PatternIndex( ing, imVri ) );
+        const std::vector<std::uint32_t>& imPatterns = imValueRefs.patternSites;   // IX-3: beside the radius, never in it
 
         if( !cfg.json )
         { // L2: JSON has no comment-node analogue; the XML-only leading doc comment

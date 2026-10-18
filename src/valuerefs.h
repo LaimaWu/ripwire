@@ -231,7 +231,7 @@ inline std::string patternDispatchXml( const IngestResult& ing, std::span<const 
 }
 // The dispatcher side (--callees of the function that holds the template): one <pd> per site with cands= (every member
 // it can name), the first kPatternRowCap of them as <t> rows, and next= (the callers verb on one of them) when cut.
-inline std::string patternCalleesXml( const IngestResult& ing, const ValueRefIndex& vri, std::span<const std::uint32_t> sites, const VrRender& rr )
+inline std::string patternCalleesXml( const IngestResult& ing, const PatternIndex& pix, std::span<const std::uint32_t> sites, const VrRender& rr )
 {
     std::string       out;
     std::vector<char> esc;
@@ -239,7 +239,7 @@ inline std::string patternCalleesXml( const IngestResult& ing, const ValueRefInd
     for( const std::uint32_t i : sites )
     {
         const Reference&          r     = ing.references[i];
-        const std::vector<NodeId> cands = vri.patternTargets( i );
+        const std::vector<NodeId> cands = pix.targets( i );
         const std::size_t         shown = std::min( cands.size(), kPatternRowCap );
         out += "<pd l=\"" + std::to_string( r.line ) + "\" pattern=\"" + ex( r.calleeName ) + "\" cands=\"" + std::to_string( cands.size() )
              + "\" shown=\"" + std::to_string( shown ) + "\"";

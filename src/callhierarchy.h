@@ -91,8 +91,6 @@ struct CallHierarchyRows
     std::string         crossKind;            // cross_kind= value ("fn:1,method:10"), "" unless defs span 2+ kinds
     std::size_t         declinedIface = 0;   // callers only: declinedIfaceCallsNaming below, the root's declined_iface=
     ValueRefRows        valueRefs;     // reference-as-value round: <vr> rows, never in `rows` or any count above
-    std::vector<std::uint32_t> patternSites;   // IX-3: callers — template lookups that may name `matches`; callees — the templates in them
-    std::size_t         patternTooWide = 0;    // IX-3 (callers): too-wide templates whose sides could name `matches`
     StdMemberCallsMade  stdCalls;      // callees only: of declinedCalls, the C++ standard-member ones (graph.h stdMemberCallsMadeBy)
     OneHopAttribution   attr;          // attrib-multidef (defattrib.h): the definition groups + each row's ties, parallel to `rows`
     // lane declined-sites (declinedsites.h): the records behind declinedCalls, in served order (callers file-first, callees
@@ -337,8 +335,7 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
     {
         const std::optional<ValueRefIndex> local = valueIndex == nullptr ? std::optional<ValueRefIndex>( std::in_place, ing ) : std::nullopt;
         const ValueRefIndex&               vri   = valueIndex != nullptr ? *valueIndex : *local;
-        out.valueRefs = wantCallers ? valueRefCallerRows( ing, vri, out.matches ) : valueRefCalleeRows( ing, vri, out.matches );
-        std::tie( out.patternSites, out.patternTooWide ) = vri.patternRows( out.matches, wantCallers );
+        out.valueRefs = wantCallers ? valueRefCallerRows( ing, vri, out.matches, PatternIndex( ing, vri ) ) : valueRefCalleeRows( ing, vri, out.matches, PatternIndex( ing, vri ) );   // IX-3 rows ride inside
     }
     if( wantCallers )
     {
