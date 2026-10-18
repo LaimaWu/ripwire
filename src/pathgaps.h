@@ -483,36 +483,26 @@ private:
     std::vector<std::pair<NodeId, std::uint32_t>> calls_;   // (caller, reference index), sorted
 };
 
-// The owners (rule 2) of a reach set: add() each reached symbol, seal(), then ask reaches() of a namesake.
+// The owners (rule 2) of a reach set: add() each reached symbol, then ask reaches() of a namesake. Membership only (no
+// iteration), so the hash order never reaches an answer; the key is "<fileId>#<scope>" (scope "" = the file itself).
 class NamesakeOwnerReach
 {
 public:
     void add( const Symbol& s )
     {
-        owners_.emplace_back( s.fileId, std::string_view( s.scope ) );
-        sealed_ = false;
-    }
-    void seal()
-    {
-        std::ranges::sort( owners_, ownerLess );
-        owners_.erase( std::ranges::unique( owners_ ).begin(), owners_.end() );
-        sealed_ = true;
+        owners_.try_emplace( keyOf( s ), char( 1 ) );
     }
     bool reaches( const Symbol& namesake ) const
     {
-        DASSERT( sealed_, "reaches() reads a sorted owner list: seal() after the last add()" );
-        return std::ranges::binary_search( owners_, Owner( namesake.fileId, namesake.scope ), ownerLess );
+        return owners_.contains( keyOf( namesake ) );
     }
 
 private:
-    using Owner = std::pair<std::uint32_t, std::string_view>;   // (file, owning class or "" for the file itself)
-    // byte order through sortutil::svLess, never string_view's operator< (sortutil.h: its libstdc++ compare trips -fsanitize=integer)
-    static bool ownerLess( const Owner& a, const Owner& b ) noexcept
+    static std::string keyOf( const Symbol& s )
     {
-        return a.first != b.first ? a.first < b.first : sortutil::svLess( a.second, b.second );
+        return std::to_string( s.fileId ) + "#" + s.scope;
     }
-    std::vector<Owner> owners_;
-    bool                                                    sealed_ = true;
+    HashMap<std::string, char> owners_;
 };
 
 // Is site a preferred over site b for one row? met first, then kind (table order), then path, line, order.
@@ -683,7 +673,6 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
                 ownerReach.add( ing.symbols[v] );
             }
         }
-        ownerReach.seal();
         struct Key
         {
             Lang             lang;
@@ -1037,7 +1026,6 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
         {
             ownerReach.add( ing.symbols[u] );
         }
-        ownerReach.seal();
         // one crossing out of this layer seeds the next
         const auto cross = [ & ]( NodeId from, NodeId to, BridgeVia via, std::size_t fan )
         {
