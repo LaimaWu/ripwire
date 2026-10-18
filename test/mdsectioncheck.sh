@@ -467,7 +467,9 @@ echo "--- warm == cold after editing ONLY the target file (the cached ref must s
 cp -R "$AFIX" "$TMP/anchorcopy"
 rm -f "$TMP/anchor.cache"
 $BIN "$TMP/anchorcopy" --cache="$TMP/anchor.cache" --callees="Self Collision" --legend=compact >/dev/null 2>&1
-sed -i 's/^## Install$/## Install Steps Renamed/' "$TMP/anchorcopy/docs/b/partner.md"
+sed -i.bak 's/^## Install$/## Install Steps Renamed/' "$TMP/anchorcopy/docs/b/partner.md"
+rm -f "$TMP/anchorcopy/docs/b/partner.md.bak"
+grep -q '^## Install Steps Renamed$' "$TMP/anchorcopy/docs/b/partner.md" || no "fixture edit did not apply (sed)"
 $BIN "$TMP/anchorcopy" --cache="$TMP/anchor.cache" --callees="Self Collision" --legend=compact >"$TMP/ac_warm" 2>/dev/null
 $BIN "$TMP/anchorcopy" --no-cache --callees="Self Collision" --legend=compact >"$TMP/ac_cold" 2>/dev/null
 if [ -s "$TMP/ac_cold" ] && diff -q "$TMP/ac_cold" "$TMP/ac_warm" >/dev/null; then ok "warm run equals cold run after only the target heading changed"; else no "warm run differs from cold after a target-only edit (a stale bound ref)"; fi
