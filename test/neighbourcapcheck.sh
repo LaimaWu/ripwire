@@ -442,6 +442,20 @@ with open( os.path.join( d, "c dir", "fan55.c" ), "w" ) as fh:
     for i in range( 55 ):
         fh.write( "    s += fanLf%02d( x );\n" % i )
     fh.write( "    return s;\n}\n" )
+# fix round 1 (rv-callers-band2 N2/M2, N1): two hubs that pin WHAT the byte estimate counts. sitesHub: 100 callers whose bare
+# rows are ~4 KB but each calls the hub on 8 lines, so with sites_at= the rows are ~19 KB — past the band only if the estimate
+# counts the sites. escHub: 200 MODULE-SCOPE callers (<file-scope>, printed escaped as &lt;file-scope&gt;) whose rows are
+# ~16.4 KB as printed but ~15.2 KB unescaped — past the band only if the estimate counts the escaping.
+with open( os.path.join( d, "c dir", "s100.c" ), "w" ) as fh:
+    fh.write( "int sitesHub( int a ) { return a + 1; }\n" )
+    for i in range( 100 ):
+        fh.write( "int sc%03d( int x ) {\n    int s = 0;\n" % i + "    s += sitesHub( x );\n" * 8 + "    return s;\n}\n" )
+os.makedirs( os.path.join( d, "esc" ), exist_ok = True )
+with open( os.path.join( d, "esc", "esccore.py" ), "w" ) as fh:
+    fh.write( "def escHub( a ):\n    return a\n" )
+for i in range( 200 ):
+    with open( os.path.join( d, "esc", "e%03d.py" % i ), "w" ) as fh:
+        fh.write( "from esccore import escHub\n\nescHub( %d )\n" % i )
 # a CALLEES hub: one function calling 45 distinct functions (the shared call-hierarchy cap, other direction)
 with open( os.path.join( d, "c dir", "fan.c" ), "w" ) as fh:
     for i in range( 45 ):
@@ -637,6 +651,30 @@ PYMC
 [ "$( printf '%s\n' "$MC" | sed -n 's/^C55 //p' )" = "40 True --callees=fanOut55 --offset=40|--expand=fanOut55" ] \
     && ok "(25c) MCP find_symbol's capped calls array names the callees page as next, expand as expand_next (CLI parity)" \
     || no "(25c) MCP callees 55: $( printf '%s\n' "$MC" | sed -n 's/^C55 //p' )"
+
+echo "=== (26)-(27) what the C2 byte estimate counts: sites_at= and the XML escaping of n=/p= (fix round 1, rv-callers-band2 N1/N2) ==="
+# rowBytesOf: the bytes of the <s> rows exactly as printed (the band bounds these, not the root or the legend).
+rowBytesOf(){ printf '%s' "$1" | grep -oE '<s t="[^"]*" n="[^>]*/>' | tr -d '\n' | wc -c | tr -d ' '; }
+S100="$( rb --callers=sitesHub --limit=100000 )"; TS100="$( rootTag "$S100" callers )"
+SB100="$( printf '%s' "$S100" | grep -oE '<s t="[^"]*" n="[^>]*/>' | sed -E 's/ sites_at="[^"]*"//; s/ sites_total="[^"]*"//' | tr -d '\n' | wc -c | tr -d ' ' )"
+{ [ "$( attr count "$TS100" )" = 100 ] && [ "$SB100" -lt 8000 ] && [ "$( rowBytesOf "$S100" )" -gt 16000 ] \
+  && printf '%s' "$S100" | grep -q 'n="sc000" p="c dir/s100.c:[0-9]*" sites_at="c dir/s100.c:[0-9]* c dir/s100.c:[0-9]*'; } \
+    && ok "(26) premise: sitesHub's 100 rows are $SB100 B bare and $( rowBytesOf "$S100" ) B with their sites_at= lists (the band sits between)" \
+    || no "(26) premise moved: count=$( attr count "$TS100" ) bare=$SB100 full=$( rowBytesOf "$S100" )"
+D100="$( rb --callers=sitesHub )"; TD100="$( rootTag "$D100" callers )"
+{ [ "$( bandRows "$D100" )" = 40 ] && [ "$( attr capped "$TD100" )" = 1 ] && [ "$( attr next "$TD100" )" = "--callers=sitesHub --offset=40" ]; } \
+    && ok "(26b) the estimate counts sites_at=: sitesHub (bare rows fit, rows with sites do not) still pages at 40, next= the page" \
+    || no "(26b) sitesHub served $( bandRows "$D100" ) rows: the estimate dropped sites_at= ($TD100)"
+E200="$( rb --callers=escHub --limit=100000 )"; TE200="$( rootTag "$E200" callers )"
+EU200="$( printf '%s' "$E200" | grep -oE '<s t="[^"]*" n="[^>]*/>' | sed -e 's/&lt;/</g; s/&gt;/>/g' | tr -d '\n' | wc -c | tr -d ' ' )"
+{ [ "$( attr count "$TE200" )" = 200 ] && [ "$EU200" -le 16000 ] && [ "$( rowBytesOf "$E200" )" -gt 16000 ] \
+  && printf '%s' "$E200" | grep -q 'n="&lt;file-scope&gt;" p="esc/e000.py:'; } \
+    && ok "(27) premise: escHub's 200 <file-scope> rows are $( rowBytesOf "$E200" ) B as printed, $EU200 B unescaped (the band sits between)" \
+    || no "(27) premise moved: count=$( attr count "$TE200" ) printed=$( rowBytesOf "$E200" ) unescaped=$EU200"
+DE200="$( rb --callers=escHub )"; TDE200="$( rootTag "$DE200" callers )"
+{ [ "$( bandRows "$DE200" )" = 40 ] && [ "$( attr capped "$TDE200" )" = 1 ] && [ "$( attr next "$TDE200" )" = "--callers=escHub --offset=40" ]; } \
+    && ok "(27b) the estimate counts the escaping: escHub (fits unescaped, not as printed) pages at 40, next= the page" \
+    || no "(27b) escHub served $( bandRows "$DE200" ) rows: the estimate read n=/p= unescaped ($TDE200)"
 
 echo
 [ "$fail" = 0 ] && { echo "neighbourcapcheck: PASS"; exit 0; } || { echo "neighbourcapcheck: FAIL"; exit 1; }

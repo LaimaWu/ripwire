@@ -608,8 +608,7 @@ inline std::string callHierarchyLegendOpen( bool wantCallers, bool nextUsesBareN
     // selector, its @FILE:LINE spelling mirrored), callees the BODY whose callees these are (expand).
     // nextUsesBareName is the emitter's OWN decision, never re-derived here; no double hyphen in comment text.
     return wantCallers ? std::string( kCallHierarchyLegendOpen ) + testedClause + kTestedLensBlindSpotLegend + callersNextClause
-                       : std::string( kCallHierarchyLegendOpen ) + testedClause + kTestedLensBlindSpotLegend + kCallHierarchyLegendCalleesOnly
-                             + ( nextIsPage ? kCalleesNextPageLegend : kCalleesNextExpandLegend );
+                       : std::string( kCallHierarchyLegendOpen ) + testedClause + kTestedLensBlindSpotLegend + kCallHierarchyLegendCalleesOnly + ( nextIsPage ? kCalleesNextPageLegend : kCalleesNextExpandLegend );
 }
 
 // ── LB-G (r10 GitNexus round) — the DISPLAY-CAP clause the neighbour verbs share ─────────────────────────

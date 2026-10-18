@@ -350,39 +350,42 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
 // C2 callers byte band (pageview.h kCallersBandMaxBytes): the estimated bytes of EVERY row of a callers answer, so
 // callHierarchyRowCap can serve the whole list when it fits, plus the site pass that estimate needed (the emitter reuses it
 // instead of walking the reference table twice). The estimate is the XML row each caller prints — `<s t= n= p=file:line/>`
-// with its tested=, via=, prov=, of_def= and sites_at=/sites_total= — without escaping or a macro row's role=, so it reads at
-// or a little below the bytes printed. ONE number for every surface (CLI XML, columnar, --json, MCP), so the dialects agree
-// on whether an answer is cut. rowBytes = 0 means no estimate was made: an explicit --limit, a total the row band already
-// covers, or a total too large to fit the band at kCallerRowMinBytes a row. `attr` is the rows' own attribution (its row
-// index = the position in `rows`); `testReach` the tested lens's reach (HopTestedPartition::testReach).
+// with its tested=, via=, prov=, of_def= and sites_at=/sites_total= — with n= and p= XML-escaped as the row prints them
+// (a `<file-scope>` caller is `&lt;file-scope&gt;`, 6 B more; rv-callers-band2 N1) but without a macro row's role=, so it
+// reads at or a little below the bytes printed. ONE number for every surface (CLI XML, columnar, --json, MCP), so the
+// dialects agree on whether an answer is cut. rowBytes = 0 means no estimate was made: an explicit --limit, a total the row
+// band already covers, or a total too large to fit the band at kCallerRowMinBytes a row. `attr` is the rows' own
+// attribution (its row index = the position in `rows`); `testReach` the tested lens's reach (HopTestedPartition::testReach).
 struct CallersByteBand
 {
     std::size_t  rowBytes;
     RowCallSites sites;   // over every row, in row order, exactly when rowBytes > 0
 };
 
+// fix round 1 (B1, the gcc-14 Release/LTO-only rc=139 in MCP find_symbol): the band is built in a local and returned as one
+// aggregate, never through a named return object that two return statements share and a release [[assume]] names.
 inline CallersByteBand callersByteBand( const IngestResult& ing, std::span<const NodeId> defs, std::span<const NodeId> rows, const VrRender& rr, int pageLimit,
                                         const std::vector<char>& testReach, const OneHopAttribution& attr )
 {
-    CallersByteBand out{};
     if( pageLimit > 0 || rows.size() <= std::size_t( kCallHierarchyBandMax ) || rows.size() > kCallersBandMaxBytes / kCallerRowMinBytes )
     {
-        return out;
+        return CallersByteBand{};
     }
-    out.sites = rowCallSites( ing, defs, rows, rr );
-    std::size_t bytes = 0;
+    RowCallSites      sites = rowCallSites( ing, defs, rows, rr );
+    std::vector<char> esc;   // the escape buffer the row's n= and p= are measured through
+    std::size_t       bytes = 0;
     for( std::size_t i = 0; i < rows.size(); ++i )
     {
-        const Symbol& s = ing.symbols[ rows[i] ];
-        bytes += std::string_view( "<s t=\"\" n=\"\" p=\":\"/>" ).size() + std::string_view( symTag( s.kind ) ).size() + s.name.size()
-               + vrPath( ing, s.fileId, rr ).size() + std::to_string( s.line ).size()
+        const Symbol&     s       = ing.symbols[ rows[i] ];
+        const std::size_t nameLen = escapeXml( s.name, esc ).size();
+        const std::size_t pathLen = escapeXml( vrPath( ing, s.fileId, rr ), esc ).size();
+        bytes += std::string_view( "<s t=\"\" n=\"\" p=\":\"/>" ).size() + std::string_view( symTag( s.kind ) ).size() + nameLen + pathLen
+               + std::to_string( s.line ).size()
                + ( isTestedByReach( ing, testReach, rows[i] ) ? std::string_view( " tested=\"1\"" ).size() : 0 )
                + std::string_view( viaNameAttr( attr.nameOnly( i ) ) ).size() + std::string_view( splitArmAttrXml( attr.splitArm( i ) ) ).size()
-               + ofDefAttrXml( attr.groups, attr.tokens, i ).size() + callSitesAttrXml( out.sites.tokens[i], out.sites.totals[i] ).size();
+               + ofDefAttrXml( attr.groups, attr.tokens, i ).size() + callSitesAttrXml( sites.tokens[i], sites.totals[i] ).size();
     }
-    out.rowBytes = std::max( bytes, std::size_t( 1 ) );
-    ENSURES( out.sites.tokens.size() == rows.size(), "the site pass covers every row the estimate read" );
-    return out;
+    return CallersByteBand{ std::max( bytes, std::size_t( 1 ) ), std::move( sites ) };
 }
 
 }   // namespace rw

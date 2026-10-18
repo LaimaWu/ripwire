@@ -177,7 +177,8 @@ inline constexpr int kCallHierarchyBandMax = kCallHierarchyRowCap + kCallHierarc
 // rows (tmux 121 rows = 10.8 KB fits; textual's `--callers=post_message`, 121 rows = 16.8 KB with long Python paths,
 // stays paged). Callers only: --callees keeps the row band (its next= is the body) and --impact its 40-row page. Above
 // the band the 40-row page, its next= page and uses_next= are unchanged. A runaway guard as well as a stair step: it
-// bounds the bytes a default call can add, never the rows an explicit --limit asks for.
+// bounds the bytes a default call can add, never the rows an explicit --limit asks for. It bounds the ROW bytes: the whole
+// answer adds its root, legend and <dc> rows (about 1-2.5 KB), so a banded answer measured up to 18,455 B (rv-callers-band2 N3).
 inline constexpr std::size_t kCallersBandMaxBytes = 16000;   // callers rows served whole while their estimated bytes fit (tmux 121 rows = 10.8 KB)
 // The smallest row a callers answer can print (`<s t="fn" n="x" p="f:1"/>`): a total past kCallersBandMaxBytes / this many
 // rows cannot fit the band, so the estimate (one site pass over every row) is skipped for it.
