@@ -1735,13 +1735,6 @@ inline std::string_view rootRelPath( const IngestResult& ing, std::uint32_t file
     return ing.crawlRoot.empty() ? path : relForHash( path, ing.crawlRoot );
 }
 
-// The directory part of a '/'-separated path, without its trailing '/'; "" for a path with no '/' (a root-level file).
-inline std::string_view pathDirOf( std::string_view path ) noexcept
-{
-    const std::size_t slash = path.rfind( '/' );
-    return slash == std::string_view::npos ? std::string_view() : path.substr( 0, slash );
-}
-
 // The ONE disk-path seam: every file read/stat must go through this instead of ing.files[fileId] directly.
 // Single-root (realPaths empty): returns ing.files[fileId] — byte-identical behavior, zero cost.
 // Multi-root: returns the on-disk spelling behind the labeled identity path.

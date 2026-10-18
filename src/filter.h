@@ -379,42 +379,27 @@ inline constexpr DeclarationTwinRow kDeclarationTwinRows[] = {
 };
 inline constexpr float kRankTierDeclTwinMul = 0.7f;   // gortex's declaration tier (0.7), here a multiplier: one tier, not a demotion
 
-namespace decltwin_detail
-{
-inline bool endsWithAny( std::string_view p, std::span<const std::string_view> suffixes ) noexcept
-{
-    for( const std::string_view suffix : suffixes )
-    {
-        if( p.ends_with( suffix ) )
-        {
-            return true;
-        }
-    }
-    return false;
-}
-inline std::string_view baseOf( std::string_view p ) noexcept   // the file name: everything after the last '/'
-{
-    const std::string_view d = pathDirOf( p );
-    return d.empty() ? p : p.substr( d.size() + 1 );
-}
-// the package directory of `p`: the longest manifest directory (sorted `manifestDirs`) that encloses it, else "" (the root)
-inline std::string_view packageDirOf( std::string_view p, const std::vector<std::string_view>& manifestDirs ) noexcept
-{
-    for( std::string_view d = pathDirOf( p ); !d.empty(); d = pathDirOf( d ) )
-    {
-        if( std::binary_search( manifestDirs.begin(), manifestDirs.end(), d, sortutil::svLess ) )
-        {
-            return d;
-        }
-    }
-    return {};
-}
-}   // namespace decltwin_detail
 
 // Per FILE: kRankTierDeclTwinMul for a declaration file whose package holds an implementation file of its row, else 1.0.
 inline std::vector<float> declarationTwinFileMultipliers( const IngestResult& ing )
 {
-    using namespace decltwin_detail;
+    // a path's directory ("" at the root) and file name; whether it ends with one of a row's suffixes
+    const auto dirOf = []( std::string_view p ) noexcept { const std::size_t k = p.rfind( '/' ); return k == std::string_view::npos ? std::string_view() : p.substr( 0, k ); };
+    const auto baseOf = [ & ]( std::string_view p ) noexcept { const std::string_view d = dirOf( p ); return d.empty() ? p : p.substr( d.size() + 1 ); };
+    const auto endsWithAny = []( std::string_view p, std::span<const std::string_view> xs ) noexcept
+    { return std::ranges::any_of( xs, [ & ]( std::string_view x ) { return p.ends_with( x ); } ); };
+    // the package directory of `p`: the longest manifest directory (sorted `manifestDirs`) that encloses it, else "" (the root)
+    const auto packageDirOf = [ & ]( std::string_view p, const std::vector<std::string_view>& manifestDirs ) noexcept
+    {
+        for( std::string_view d = dirOf( p ); !d.empty(); d = dirOf( d ) )
+        {
+            if( std::binary_search( manifestDirs.begin(), manifestDirs.end(), d, sortutil::svLess ) )
+            {
+                return d;
+            }
+        }
+        return std::string_view();
+    };
     std::vector<float> mul( ing.files.size(), 1.f );
     for( const DeclarationTwinRow& row : kDeclarationTwinRows )
     {
@@ -426,7 +411,7 @@ inline std::vector<float> declarationTwinFileMultipliers( const IngestResult& in
             const std::string_view base = baseOf( p );
             if( std::ranges::find( row.manifests, base ) != row.manifests.end() )
             {
-                manifestDirs.push_back( pathDirOf( p ) );
+                manifestDirs.push_back( dirOf( p ) );
             }
             if( endsWithAny( p, row.declSuffixes ) )
             {
