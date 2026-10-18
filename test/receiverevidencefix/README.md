@@ -57,3 +57,39 @@ The names are paraphrases of graded false rows; the code is minimal and is never
   (Python and Go also a local `super`), then calls `render` on it: never Base's render through the bases-only lookup.
   Kept: `super.render()`, Python `super().render()`, Go's promoted `p.Render()`, the typed local's own class. C#
   `base.Render()` is visible only (no C# tree reads `base` as a receiver root yet).
+- `callresult.txt` — arm (L), call-result typing: six source trees (`go`, `rust`, `cpp`, `java`, `kt`, `ts`) in ONE text
+  bundle that the gate unpacks into its temp dir (committed as source trees they would join the repo's own indexed map): a
+  local initialised by a call to an in-tree function whose DECLARED return type names an in-tree class (`Config`), beside a
+  same-named method on another class (`Other`), so the call on the local is name-only until the binding takes the callee's
+  return type. Shapes that RESOLVE: Go `(T, error)` with named results, `(*T, error)`, `*T`, a positional pair, a method
+  callee, a reassignment, the package func `model.Get` beside the method `Config.Get`; Rust `Result<T,_>` + `?`,
+  `Option<T>` + `?`, `Box<T>`, `&T`, `T`, a tuple element, an associated fn `Book::load(..)?`, a `self` method callee,
+  `.unwrap()`/`.expect()`; C++ `T`, `const T&`, `T*`, `std::unique_ptr<T>`, a method callee; Java `var`, Kotlin
+  `val`/`var`, TS `const` and `await`; and a CHAIN (`h = make(); c = h.get(); c.m()`, every language). Shapes typed but
+  proving NO member (floors, not resolutions): a Go INTERFACE result (its bodyless signature is the ladder's) and a C++
+  `using` alias result (Rule 2 reads no member through an alias). Near misses (must stay unproven): two-def / overloaded
+  callees, outside callees, wrappers outside the list (Go `Ref[T]`, Rust `Vec<T>` / `HashMap`, C++
+  `std::reference_wrapper`, Java `Optional<T>`), type-parameter results, Go/Rust aliases, no written return type, a
+  shadowing inner binding; fix round 1: a nested same-named call (`h.get().get()`), an outside import or qualifier naming an
+  in-tree namesake (Java/Kotlin `import java.io.File`, TS `ext-config` / `import type` / the global `Response`, Rust `use
+  std::fs::File`, C++ `ext::Config`), an interface in one Go package beside a same-named struct in another, a commit by name
+  alone (`ext::onlyOne()`) or by a written type's last name (`ext::Factory f`), a Go field `f *os.File`, and a chain hop that
+  binds by name alone or splits. `UseWritten`/`useWritten` twins write the type (green before the lane).
+  Fix round 3: `rust3` / `cpp3` / `java4` / `kt4` are the delta review's D4–D6 shapes (a Rust inline `mod` scope, a C++
+  alias / typedef, a JVM on-demand import — receiver and result).
+  Fix round 4: `java5` / `kt5` / `cpp4` / `rust4` are the delta-3 review's E1–E3 probes (a Java nested `record` /
+  `@interface` / single-static-import; C++ union / forward declaration / macro / block-scope using beside a local class;
+  a Rust macro in an enclosing fn body) with their guards (a nested enum, Kotlin's nested forms, a forward declaration of
+  the in-tree class, a local class with nothing in its block, a nested fn with no macro).
+  Fix round 5: `cpp5` / `rust5` are the delta-4 review's B1–B4 probes — macros the parser reads as well-formed code (a C++
+  export macro between the class-key and the name, a class-body `MK(S);`, a function-body macro beside a local class; a
+  Rust `impl` method in a fn body holding a macro) — with guards (constructors / a destructor, a function-body macro with
+  no local class, the own-namespace forward declaration reached through a using-declaration).
+  Fix round 6: `rust6` is the delta-5 review's B3 — an `impl` in a Rust `const` / `static` item's value block (a macro or
+  `use` there decides), with a guard (a const block with neither). C++ call-result typing is OFF (model.h
+  `callResultFamilyOf`): the C++ trees stay, their [P] arms and the matrix's C++ U cells are FLOORS that must hedge.
+- `callresult_matrix.txt` — arm (L)'s BINDING-FORM MATRIX (Python, kept as text for the same reason): it writes one tree per
+  language (`mx_rust`, `mx_cpp`, `mx_java`, `mx_kt`, `mx_ts`, `mx_go`) and lists every cell — language × binding form ×
+  scope level × target (in-tree unique / outside / unresolved / two in-tree), and (fix round 4) × declaration kind
+  (recorded class / unrecorded type-binding node / macro-unparsed) — with its expected verdict, plus the N/A rows a
+  language cannot write. Its header defines the cells.

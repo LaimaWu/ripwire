@@ -441,8 +441,9 @@ fi
 if ans e_sp cpp path s xml -- --path=PutInt,put; then
     # the hop into put is one arm of a split call (Fmt::put(int) vs Fmt::put(const char*)): the row that ends the path says
     # so, and the root does not claim the arm the BFS happened to take as the definition put was bound to
-    case "$( rowflags e_sp put )" in *prov=split*) ok "[P] e_sp: the split hop into a multi-definition to= carries prov=\"split\"" ;;
-        *) no "[P] e_sp: the hop into put is a split arm but carries '$( rowflags e_sp put )'" ;; esac
+    # path-owners (train 30): a member hop names its owner, so the hop into Fmt::put reads n="Fmt.put" (pathownercheck)
+    case "$( rowflags e_sp Fmt.put )" in *prov=split*) ok "[P] e_sp: the split hop into a multi-definition to= carries prov=\"split\"" ;;
+        *) no "[P] e_sp: the hop into Fmt.put is a split arm but carries '$( rowflags e_sp Fmt.put )'" ;; esac
     [ "$( rootf e_sp to_p )" = "-" ]; say $? "[P] e_sp: a to= bound only by a split hop carries no to_p" \
         "[P] e_sp: to_p=\"$( rootf e_sp to_p )\" claimed for a to= the path reached by a split arm"
     [ "$( rootf e_sp from_p )" = "fmt.cc:6" ]; say $? "[N] e_sp: the single-definition from= keeps from_p" \
@@ -506,11 +507,14 @@ if ans f_rs rs callers s xml -- --callers=walk; then
     case "$( rowflags f_rs walk_items )" in *via=name*) ok "[N] f_rs: the existing via=\"name\" row hedge stays" ;; *) no "[N] f_rs: via=\"name\" lost on walk_items" ;; esac
     rowset C f_rs 2 "walk_books walk_items"
 fi
+# train 30 (call-result typing x #405): a Rust member call carries its receiver PATH, so `self.items.iter()` /
+# `self.books.iter()` inside each iter is a chained receiver no rule types, and the standard-member row declines it too (it
+# is a Vec's iter; before, `self` alone proved the caller's own method, a dropped self-loop): 2 parameter + 2 chained = 4.
 if ans f_rs_iter rs callers s xml -- --callers=iter; then
-    if [ "$( nrows f_rs_iter )" = 0 ] && grep -q 'declined_calls="2"' "$DIR/f_rs_iter.out"; then
-        ok "[N] f_rs_iter: b.iter() / s.iter() on Book / Shelf parameters are declined by the Rust standard-member row (declined_calls=2, no row)"
+    if [ "$( nrows f_rs_iter )" = 0 ] && grep -q 'declined_calls="4"' "$DIR/f_rs_iter.out"; then
+        ok "[N] f_rs_iter: b.iter() / s.iter() on Book / Shelf parameters and self.items.iter() / self.books.iter() are declined by the Rust standard-member row (declined_calls=4, no row)"
     else
-        no "[N] f_rs_iter: want no row and declined_calls=\"2\" (test/stdmembergatecheck.sh arm R floor); got $( nrows f_rs_iter ) row(s): $( head -c 300 "$DIR/f_rs_iter.out" )"
+        no "[N] f_rs_iter: want no row and declined_calls=\"4\" (test/stdmembergatecheck.sh arm R floor); got $( nrows f_rs_iter ) row(s): $( head -c 300 "$DIR/f_rs_iter.out" )"
     fi
 fi
 if ans f_objc objc callers s xml -- --callers=area; then
