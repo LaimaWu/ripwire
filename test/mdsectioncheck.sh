@@ -381,7 +381,9 @@ want "$AFIX" "Path Choice"       'Setup@docs/b/notes.md'          "../b/notes.md
 want "$AFIX" "Root Readme Link"  'Languages@README.md'            "../../README.md#languages binds the ROOT README, not docs/README.md"
 want "$AFIX" "Dup Link"          'Notes@docs/b/dup.md'            "#notes over two ## Notes gives ONE edge (first heading wins)"
 want "$AFIX" "Func Name"         'do_work@docs/b/partner.md'      "a heading named like a .py function binds the section, never the function"
-want "$AFIX" "Missing Anchor"    'partner@docs/b/partner.md'      "#no-such-heading falls back to the file (stem) edge"
+want "$AFIX" "Missing Anchor"    'partner@docs/b/partner.md'      "#no-such-heading falls back to that file's own node"
+want "$AFIX" "Missed Readme"     'README@docs/b/README.md'        "../b/README.md#no-such-heading pins docs/b/README.md, not the same-directory README"
+want "$AFIX" "Bare Readme"       'README@docs/b/README.md'        "a bare ../b/README.md pins that file, not the same-directory README"
 want "$AFIX" "Fence Only"        ''                               "a link inside a fenced block makes no edge"
 # --callers lists every matched def in <def ix= t= p=> (cross_kind when a heading and a function share the name).
 # The edge is the <s> row: it must name the section, never the .py function.

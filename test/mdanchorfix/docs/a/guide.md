@@ -33,3 +33,11 @@ See [nothing](../b/partner.md#no-such-heading).
 ```python
 [fenced](../b/partner.md#install)
 ```
+
+## Missed Readme
+
+See [gone](../b/README.md#no-such-heading).
+
+## Bare Readme
+
+See [the page](../b/README.md).

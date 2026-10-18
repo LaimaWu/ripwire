@@ -6302,6 +6302,55 @@ inline bool isMarkdownLinkRef( const Reference& r ) noexcept
     return r.lang == Lang::Markdown && !r.isDocLink && !r.memberCall && !r.memberPath.empty();
 }
 
+// The file node is the Section extractMarkdown builds with bodyByte 0 over [0, size). assignSymbols then
+// leaves sigStart 0 and sigEnd == endByte == the file span (widest is that span, measured over the file's
+// own sections). A 0,0 span is a ModuleScope, never this node. Same predicate recall.h uses. A heading
+// matches it only when the whole file is that one heading line.
+inline bool isMarkdownFileNode( const Symbol& sym, std::uint32_t widestEnd ) noexcept
+{
+    return sym.sigStartByte == 0 && sym.sigEndByte >= sym.endByte && sym.endByte >= widestEnd;
+}
+
+inline std::vector<std::uint32_t> markdownWidestEnd( const IngestResult& ing )
+{
+    std::vector<std::uint32_t> widest( ing.files.size(), 0 );
+    for( const Symbol& sym : ing.symbols )
+    {
+        if( sym.lang == Lang::Markdown && sym.kind == SymKind::Section && sym.fileId < ing.files.size() )
+        {
+            widest[ sym.fileId ] = std::max( widest[ sym.fileId ], sym.endByte );
+        }
+    }
+    return widest;
+}
+
+// Headings, and each file's own node (the first matching symbol in id order). The file node is not a heading.
+inline void indexMarkdownSections( MdLinkIndex& ix, const IngestResult& ing )
+{
+    ix.wholeFile.assign( ing.files.size(), kNoNode );
+    const std::vector<std::uint32_t> widest = markdownWidestEnd( ing );
+    for( const Symbol& sym : ing.symbols )
+    {
+        if( sym.lang != Lang::Markdown || sym.kind != SymKind::Section || sym.fileId >= ing.files.size() )
+        {
+            continue;
+        }
+        if( isMarkdownFileNode( sym, widest[ sym.fileId ] ) )
+        {
+            if( ix.wholeFile[ sym.fileId ] == kNoNode )
+            {
+                ix.wholeFile[ sym.fileId ] = sym.id;
+            }
+            continue;
+        }
+        ix.headings.push_back( { sym.fileId, sym.sigStartByte, sym.id, mdSlugOf( sym.name ) } );
+    }
+    std::sort( ix.headings.begin(), ix.headings.end(), []( const MdLinkIndex::Heading& a, const MdLinkIndex::Heading& b )
+    {
+        return std::tie( a.fileId, a.slug, a.startByte, a.id ) < std::tie( b.fileId, b.slug, b.startByte, b.id );
+    } );
+}
+
 inline MdLinkIndex buildMdLinkIndex( const IngestResult& ing )
 {
     MdLinkIndex ix;
@@ -6312,26 +6361,7 @@ inline MdLinkIndex buildMdLinkIndex( const IngestResult& ing )
             ix.fileByPath.try_emplace( ing.files[ f ], f );
         }
     }
-    ix.wholeFile.assign( ing.files.size(), kNoNode );
-    for( const Symbol& sym : ing.symbols )
-    {
-        if( sym.lang != Lang::Markdown || sym.kind != SymKind::Section || sym.fileId >= ing.files.size() )
-        {
-            continue;
-        }
-        if( sym.sigStartByte == 0 && sym.sigEndByte == 0 )
-        {
-            ix.wholeFile[ sym.fileId ] = sym.id;
-        }
-        else
-        {
-            ix.headings.push_back( { sym.fileId, sym.sigStartByte, sym.id, mdSlugOf( sym.name ) } );
-        }
-    }
-    std::sort( ix.headings.begin(), ix.headings.end(), []( const MdLinkIndex::Heading& a, const MdLinkIndex::Heading& b )
-    {
-        return std::tie( a.fileId, a.slug, a.startByte, a.id ) < std::tie( b.fileId, b.slug, b.startByte, b.id );
-    } );
+    indexMarkdownSections( ix, ing );
     return ix;
 }
 
