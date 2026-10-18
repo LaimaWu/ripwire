@@ -15,6 +15,15 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — markdown links bind the exact heading (#409 item 1, #414)
+
+A cross-file `[text](path/other.md#slug)` now edges to that file's heading — `--callees` / `--callers` on a doc section
+list the sections it links to instead of one file-level edge. The extractor caches the link as written; `buildGraph` joins
+the path against the linking file, so `../b/notes.md` never lands on a same-named file in the linker's own directory and a
+link to a heading named like one of the linking file's own headings does not bind to the latter. Two headings of the same
+slug give one edge (the first). A missing heading falls back to the target file's edge; percent-encoded slugs and GitHub's
+`-1` duplicate suffix are not modelled and also fall back. Gate: `test/mdsectioncheck.sh`.
+
 ### Changed — Go methods carry their receiver type as scope (#403, slice 9a)
 
 Go methods now carry their receiver type as scope (`sc=`), with `*` and type arguments stripped (`*Stack[T]` → `Stack`),

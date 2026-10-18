@@ -358,6 +358,46 @@ grep -qF 'guide.md' "$TMP/men.xml" && ok "--mentions=codeIdentFn names guide.md 
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo
+echo "=== cross-file [text](path#slug) binds the EXACT (file, slug) heading, never a bare name ==="
+# ═══════════════════════════════════════════════════════════════════════════
+# Each arm reads --callees of ONE linking section and compares the rows' n=@p= (file, no line). The
+# fixture is built so a name-only resolver lands on the wrong target: the linking file has its own
+# `## Install`; docs/a/notes.md and docs/b/notes.md both exist; docs/README.md shadows the root README.
+AFIX="$ROOT/test/mdanchorfix"
+[ -d "$AFIX" ] || { echo "no fixture at $AFIX"; exit 2; }
+callees(){ # callees DIR SECTION → "n@file" per callee row, sorted, one per line
+    $BIN "$1" --no-cache --callees="$2" --legend=compact 2>/dev/null \
+        | python3 -c '
+import sys, re
+for m in re.finditer(r"<s t=\"[a-z]+\" n=\"([^\"]*)\" p=\"([^\":]*)", sys.stdin.read()):
+    print(m.group(1) + "@" + m.group(2))' | sort
+}
+want(){ # want DIR SECTION EXPECTED(newline list) WHY
+    got="$( callees "$1" "$2" )"
+    if [ "$got" = "$3" ]; then ok "$4"; else no "$4 — got [$( echo "$got" | tr '\n' ' ' )] want [$( echo "$3" | tr '\n' ' ' )]"; fi
+}
+want "$AFIX" "Self Collision"    'Install@docs/b/partner.md'      "a link to ../b/partner.md#install binds partner's Install, not the linking file's own ## Install"
+want "$AFIX" "Path Choice"       'Setup@docs/b/notes.md'          "../b/notes.md#setup binds docs/b/notes.md, not the same-directory notes.md"
+want "$AFIX" "Root Readme Link"  'Languages@README.md'            "../../README.md#languages binds the ROOT README, not docs/README.md"
+want "$AFIX" "Dup Link"          'Notes@docs/b/dup.md'            "#notes over two ## Notes gives ONE edge (first heading wins)"
+want "$AFIX" "Func Name"         'do_work@docs/b/partner.md'      "a heading named like a .py function binds the section, never the function"
+want "$AFIX" "Missing Anchor"    'partner@docs/b/partner.md'      "#no-such-heading falls back to the file (stem) edge"
+want "$AFIX" "Fence Only"        ''                               "a link inside a fenced block makes no edge"
+n="$( $BIN "$AFIX" --no-cache --callers=do_work --legend=compact 2>/dev/null | grep -c 'p="docs/a/tools.py' )"
+[ "$n" = "0" ] && ok "the .py do_work has no caller edge from the doc link" || no "the doc link leaked onto the .py function (rows naming tools.py: $n)"
+
+echo "--- warm == cold after editing ONLY the target file (the cached ref must stay unbound) ---"
+cp -R "$AFIX" "$TMP/anchorcopy"
+rm -f "$TMP/anchor.cache"
+$BIN "$TMP/anchorcopy" --cache="$TMP/anchor.cache" --callees="Self Collision" --legend=compact >/dev/null 2>&1
+sed -i 's/^## Install$/## Install Steps Renamed/' "$TMP/anchorcopy/docs/b/partner.md"
+$BIN "$TMP/anchorcopy" --cache="$TMP/anchor.cache" --callees="Self Collision" --legend=compact >"$TMP/ac_warm" 2>/dev/null
+$BIN "$TMP/anchorcopy" --no-cache --callees="Self Collision" --legend=compact >"$TMP/ac_cold" 2>/dev/null
+if [ -s "$TMP/ac_cold" ] && diff -q "$TMP/ac_cold" "$TMP/ac_warm" >/dev/null; then ok "warm run equals cold run after only the target heading changed"; else no "warm run differs from cold after a target-only edit (a stale bound ref)"; fi
+grep -q 'n="partner"' "$TMP/ac_warm" && ok "…and the dead anchor degraded to the partner file edge" || no "the renamed-heading link lost its edge on the warm run"
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo
 echo "=== determinism ×3 and cache transparency on the md fixture ==="
 # ═══════════════════════════════════════════════════════════════════════════
 $BIN "$FIX" --no-cache >"$TMP/d1" 2>/dev/null

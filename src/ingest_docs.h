@@ -41,9 +41,8 @@ namespace
 //       [label]: other.md → a ref named by the target's stem (the resolve ladder's same-dir preference
 //       lands it on the file node); [text](#anchor) → a ref named by the matching heading in THIS file
 //       (GitHub slugify; same-file preference wins) — a doc-section→doc-section edge. A cross-file
-//       [text](other.md#anchor) keeps the stem on the ref and parks the slug in qualifier until
-//       bindMarkdownCrossFileAnchors renames it to that file's heading, or leaves the stem when the
-//       heading is absent. Dangling links drop.
+//       [text](other.md#anchor) keeps the stem on the ref and the link as written in memberPath; graph.h
+//       pins it to that exact file's heading (the file node when the heading is absent). Dangling links drop.
 // Determinism: the walk is a preorder over the AST (byte order); pending anchors resolve in byte order.
 // Names are XML-escaped downstream; CR bytes never enter a name, embedded newlines flatten to spaces.
 namespace mdtier
@@ -82,21 +81,8 @@ inline std::string mdCleanHeadingText( std::string_view raw )
     return name;
 }
 
-// GitHub anchor slug of a heading name: alnum lowered, spaces→'-', '-'/'_' kept, everything else
-// dropped. First match wins on collision (GitHub's -1/-2 suffixes are not modelled; a collided anchor
-// resolves to the first heading — disclosed here rather than guessed).
-inline std::string mdSlugOf( std::string_view name )
-{
-    std::string slug;
-    slug.reserve( name.size() );
-    for( const char c : name )
-    {
-        if( ( c >= 'a' && c <= 'z' ) || ( c >= '0' && c <= '9' ) || c == '_' || c == '-' ) { slug += c; }
-        else if( c >= 'A' && c <= 'Z' ) { slug += char( c - 'A' + 'a' ); }
-        else if( c == ' ' || c == '\t' ) { slug += '-'; }
-    }
-    return slug;
-}
+// GitHub anchor slug of a heading name: infra/mdslug.h (shared with graph.h's cross-file link bind).
+using rw::mdSlugOf;
 
 inline void mdWalk( TSNode node, std::string_view src, bool inQuote, std::uint32_t depth, MdWalkOut& out )
 {
@@ -289,7 +275,7 @@ void extractMarkdown( std::uint32_t fileId, std::string_view src, std::string_vi
     // link-target handling shared by inline links, reference definitions and (via slug) anchors.
     // Cross-file: [x](other.md) / [x](../a/other.md) → ref named by the target's STEM (the resolve
     // ladder's same-dir preference lands it on other.md's file node, exactly like [[other]]).
-    // [x](other.md#slug) parks the slug in qualifier for bindMarkdownCrossFileAnchors. Anchors:
+    // The ref also carries the link as written (memberPath) so buildGraph can pin the EXACT file and heading. Anchors:
     // [x](#slug) → pending, resolved against THIS file's headings once they are all known.
     std::vector<std::pair<std::uint32_t, std::string>> pendingAnchors;   // (refByte, slug)
     const auto emitLinkTarget = [ & ]( std::string_view target, std::uint32_t refByte )
@@ -313,11 +299,10 @@ void extractMarkdown( std::uint32_t fileId, std::string_view src, std::string_vi
             pendingAnchors.emplace_back( refByte, std::move( slug ) );
             return;
         }
-        std::string_view anchorSlug;
+        const std::string_view writtenTarget = target;   // path#slug as written, for the exact bind in buildGraph
         if( const std::size_t frag = target.find( '#' ); frag != std::string_view::npos )
         {
-            anchorSlug = target.substr( frag + 1 );
-            target     = target.substr( 0, frag );
+            target = target.substr( 0, frag );
         }
         const bool isMd = target.size() > 3 && ( target.ends_with( ".md" ) || target.ends_with( ".markdown" ) );
         if( !isMd )
@@ -332,12 +317,16 @@ void extractMarkdown( std::uint32_t fileId, std::string_view src, std::string_vi
             RawRef r;
             r.fileId = fileId; r.startByte = refByte; r.lang = Lang::Markdown; r.isInherit = false;
             r.name.assign( base );
-            if( !anchorSlug.empty() )
+            // The link as written (path + optional #slug; the slug is lowered, the path is not). It is a fact of THIS file alone, so it is
+            // safe in the cache; the (file, slug) heading it names is resolved in buildGraph, where every file's
+            // headings exist (graph.h bindMarkdownLinks). memberPath is read beside memberCall / compose only.
+            r.memberPath.assign( writtenTarget );
+            if( const std::size_t frag = r.memberPath.find( '#' ); frag != std::string::npos )
             {
-                r.qualifier.reserve( anchorSlug.size() );
-                for( const char c : anchorSlug )
+                for( std::size_t k = frag + 1; k < r.memberPath.size(); ++k )
                 {
-                    r.qualifier += ( c >= 'A' && c <= 'Z' ) ? char( c - 'A' + 'a' ) : c;
+                    char& c = r.memberPath[ k ];
+                    c       = ( c >= 'A' && c <= 'Z' ) ? char( c - 'A' + 'a' ) : c;
                 }
             }
             refs.push_back( std::move( r ) );
@@ -514,92 +503,6 @@ void extractMarkdown( std::uint32_t fileId, std::string_view src, std::string_vi
                 refs.push_back( std::move( r ) );
                 break;
             }
-        }
-    }
-}
-
-// Cross-file [text](other.md#slug): emitLinkTarget left the stem in name and the slug in qualifier,
-// because the target file's headings are not known while one file is extracted. After the parse pool
-// merges every file, rename the ref to that file's heading (first slug match, the same rule as an
-// in-file anchor). A missing file or heading leaves the stem edge and clears qualifier, so the
-// resolver never sees a markdown qualifier. Same-directory stem wins; otherwise the lowest fileId.
-inline void bindMarkdownCrossFileAnchors( const std::vector<std::string>& files, const std::vector<RawDef>& defs, std::vector<RawRef>& refs )
-{
-    const auto parentDir = []( std::string_view path ) noexcept
-    {
-        const std::size_t slash = path.find_last_of( '/' );
-        return slash == std::string_view::npos ? std::string_view{} : path.substr( 0, slash );
-    };
-
-    const auto appendId = []( std::string& out, std::uint32_t id )
-    {
-        char digits[ 10 ];
-        int  digitCount = 0;
-        do { digits[ digitCount++ ] = char( '0' + id % 10u ); id /= 10u; } while( id != 0u );
-        while( digitCount > 0 ) { out.push_back( digits[ --digitCount ] ); }
-    };
-
-    HashMap<std::string, std::vector<std::uint32_t>> stems;
-    HashMap<std::string, std::string>                headingBySlug;
-    std::string                                      key;
-    for( const RawDef& d : defs )
-    {
-        if( d.lang != Lang::Markdown || d.kind != SymKind::Section )
-        {
-            continue;
-        }
-        if( d.startByte == 0 && d.bodyByte == 0 )
-        {
-            stems[ d.name ].push_back( d.fileId );
-            continue;
-        }
-        key.clear();
-        appendId( key, d.fileId );
-        key.push_back( '#' );
-        key.append( mdtier::mdSlugOf( d.name ) );
-        headingBySlug.try_emplace( key, d.name );
-    }
-
-    for( RawRef& r : refs )
-    {
-        if( r.lang != Lang::Markdown || r.isDocLink || r.qualifier.empty() )
-        {
-            continue;
-        }
-        const std::string slug = std::move( r.qualifier );
-        r.qualifier.clear();
-        const auto stemIt = stems.find( r.name );
-        if( stemIt == stems.end() || r.fileId >= files.size() )
-        {
-            continue;
-        }
-        const std::string_view refDir = parentDir( files[ r.fileId ] );
-        std::uint32_t          best   = stemIt->second.front();
-        bool                   inDir  = false;
-        for( const std::uint32_t fid : stemIt->second )
-        {
-            if( fid >= files.size() )
-            {
-                continue;
-            }
-            const bool sameDir = parentDir( files[ fid ] ) == refDir;
-            if( sameDir && ( !inDir || fid < best ) )
-            {
-                best  = fid;
-                inDir = true;
-            }
-            else if( !inDir && !sameDir && fid < best )
-            {
-                best = fid;
-            }
-        }
-        key.clear();
-        appendId( key, best );
-        key.push_back( '#' );
-        key.append( slug );
-        if( const auto hit = headingBySlug.find( key ); hit != headingBySlug.end() )
-        {
-            r.name = hit->second;
         }
     }
 }

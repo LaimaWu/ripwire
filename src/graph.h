@@ -26,6 +26,7 @@
 #include "externalnames.h"       // Phase 5: the committed builtin/stdlib tables behind the external-name veto
 #include "infra/sortutil.h"      // radix edge sorting for large integer-key graph edge lists
 #include "clones.h"              // scanCodeTokens / CodeScanOptions — BuiltinMethodGate::namedBeyondDefinition's code-token count
+#include "infra/mdslug.h"        // mdSlugOf — bindMarkdownLinks matches a link slug to a heading
 #include "infra/namesplit.h"     // isIdentChar — identifierRunCount, the identifier runs inside a string annotation
 #include "docparse.h"            // detail::readWholeFile — resolveAtSeed reads the seed line's byte range off disk
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
@@ -6281,6 +6282,106 @@ inline void fillImplementorBound( Graph& g, const std::vector<ImplementorBoundEd
     }
 }
 
+// Cross-file markdown links, bound to the EXACT target. extractMarkdown leaves each [text](path#slug) ref named by the
+// target's stem with the link as written in memberPath (a fact of the linking file alone, so the cache holds it
+// unbound). Here every heading in the repo is a symbol: the path is joined against the linking file's directory and
+// looked up as a whole file, then the slug among THAT file's headings (first heading wins, GitHub's -1 suffix is
+// not modelled). Returns, per reference index, the Section to pin the edge to: the heading, else the target file's own
+// node, else kNoNode (path not in the tree: the stem ladder answers, as it did before the bind existed). Empty
+// when the tree holds no such link.
+struct MdLinkIndex
+{
+    struct Heading { std::uint32_t fileId; std::uint32_t startByte; NodeId id; std::string slug; };
+    HashMap<std::string, std::uint32_t> fileByPath;   // every .md/.markdown file, by root-relative path
+    std::vector<Heading>                headings;     // sorted (fileId, slug, startByte, id): the first of a slug is its heading
+    std::vector<NodeId>                 wholeFile;    // per file: the file-level Section node, kNoNode when none
+};
+
+inline bool isMarkdownLinkRef( const Reference& r ) noexcept
+{
+    return r.lang == Lang::Markdown && !r.isDocLink && !r.memberCall && !r.memberPath.empty();
+}
+
+inline MdLinkIndex buildMdLinkIndex( const IngestResult& ing )
+{
+    MdLinkIndex ix;
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        if( ing.files[ f ].ends_with( ".md" ) || ing.files[ f ].ends_with( ".markdown" ) )
+        {
+            ix.fileByPath.try_emplace( ing.files[ f ], f );
+        }
+    }
+    ix.wholeFile.assign( ing.files.size(), kNoNode );
+    for( const Symbol& sym : ing.symbols )
+    {
+        if( sym.lang != Lang::Markdown || sym.kind != SymKind::Section || sym.fileId >= ing.files.size() )
+        {
+            continue;
+        }
+        if( sym.sigStartByte == 0 && sym.sigEndByte == 0 )
+        {
+            ix.wholeFile[ sym.fileId ] = sym.id;
+        }
+        else
+        {
+            ix.headings.push_back( { sym.fileId, sym.sigStartByte, sym.id, mdSlugOf( sym.name ) } );
+        }
+    }
+    std::sort( ix.headings.begin(), ix.headings.end(), []( const MdLinkIndex::Heading& a, const MdLinkIndex::Heading& b )
+    {
+        return std::tie( a.fileId, a.slug, a.startByte, a.id ) < std::tie( b.fileId, b.slug, b.startByte, b.id );
+    } );
+    return ix;
+}
+
+// The Section one link names, or kNoNode when its path is not in the tree.
+inline NodeId bindOneMarkdownLink( const MdLinkIndex& ix, std::string_view linkerPath, std::string_view written )
+{
+    const std::size_t      frag = written.find( '#' );
+    const std::string_view link = written.substr( 0, frag );
+    const std::string_view slug = frag == std::string_view::npos ? std::string_view{} : written.substr( frag + 1 );
+    const std::string_view dir  = includerDir( linkerPath );
+    std::string            path( dir );
+    if( !dir.empty() )
+    {
+        path.push_back( '/' );
+    }
+    path.append( link );
+    path = lexicalNormalize( path );   // empty on an escape above the root → stem ladder
+    const auto file = path.empty() ? ix.fileByPath.end() : ix.fileByPath.find( path );
+    if( file == ix.fileByPath.end() )
+    {
+        return kNoNode;
+    }
+    const std::uint32_t target = file->second;
+    using Key                  = std::pair<std::uint32_t, std::string_view>;
+    const auto hit = slug.empty() ? ix.headings.end()
+                                  : std::lower_bound( ix.headings.begin(), ix.headings.end(), Key{ target, slug },
+                                        []( const MdLinkIndex::Heading& h, const Key& key ) { return Key{ h.fileId, h.slug } < key; } );
+    return ( hit != ix.headings.end() && hit->fileId == target && hit->slug == slug ) ? hit->id : ix.wholeFile[ target ];
+}
+
+inline std::vector<NodeId> bindMarkdownLinks( const IngestResult& ing )
+{
+    std::vector<NodeId> pin;
+    if( std::none_of( ing.references.begin(), ing.references.end(), isMarkdownLinkRef ) )
+    {
+        return pin;
+    }
+    pin.assign( ing.references.size(), kNoNode );
+    const MdLinkIndex ix = buildMdLinkIndex( ing );
+    for( std::size_t i = 0; i < ing.references.size(); ++i )
+    {
+        const Reference& r = ing.references[ i ];
+        if( isMarkdownLinkRef( r ) && r.fileId < ing.files.size() )
+        {
+            pin[ i ] = bindOneMarkdownLink( ix, ing.files[ r.fileId ], r.memberPath );
+        }
+    }
+    return pin;
+}
+
 // B2.2 MINIMUM ARITY ACROSS DECLARATIONS: per symbol, the fewest arguments a call can pass to it — its own paramsMin
 // (ingest_metrics.h cc_paramShape) lowered to the lowest paramsMin of any DECLARATION with the same name and the same
 // parameter count. C++ may write a default on a separate prototype only (`int f( int x, int y = 5 );` in a header,
@@ -7434,6 +7535,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     };
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/3: resolve loop (per reference)" );
+    const std::vector<NodeId> mdLinkPin = bindMarkdownLinks( ing );   // empty unless the tree holds a cross-file markdown link
     for( siteIndex = 0; siteIndex < ing.references.size(); ++siteIndex )
     {
         const Reference& site = ing.references[ siteIndex ];
@@ -7515,6 +7617,19 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 scipPinned = true;
             }
+        }
+
+        // A cross-file markdown link whose file is in the tree: pinned to the exact heading (or file) bindMarkdownLinks
+        // found, like a SCIP site — the name ladder (same-dir stem, same-file heading) must not re-choose it.
+        if( !mdLinkPin.empty() && mdLinkPin[ siteIndex ] != kNoNode )
+        {
+            const NodeId to = mdLinkPin[ siteIndex ];
+            tier.clear();
+            if( to != r.fromSymbol )
+            {
+                tier.push_back( to );
+            }
+            scipPinned = true;
         }
 
         // Java issue #74: the grammar labels both `Widget::makeFn` and `widget::makeFn`

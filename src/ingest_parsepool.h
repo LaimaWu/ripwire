@@ -955,7 +955,6 @@ inline RawFacts runParsePool( IngestResult& result, const char* rootDir, std::st
             saveCache( std::string( cacheFile ), rootDir, result.files, scan.hash, scan.statSize, scan.statMtime, scan.statCtime, scan.health, raw.defs, raw.refs, raw.incs, raw.binds, raw.ffis, raw.routeDefs, raw.routeUses, raw.constOpens, captureValueUses );
         }
     }
-    bindMarkdownCrossFileAnchors( result.files, raw.defs, raw.refs );
     return raw;
 }
 

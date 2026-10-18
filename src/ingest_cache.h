@@ -331,9 +331,9 @@ constexpr std::uint32_t kCacheVersion = 34;           // 34: train 29 — lane a
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
 constexpr std::uint32_t kParserVer    = 185;          // bump on any grammar/.scm/extraction change
-                                                      // 185 = 2026-10-16 (#409): a cross-file markdown [text](other.md#slug) names the
-                                                      //   target file's heading instead of dropping the fragment. 185, not 184: 184 is
-                                                      //   train 29. Rich file tag 186. kCacheVersion stays 34.
+                                                      // 185 = 2026-10-18 (#409): a cross-file markdown [text](other.md#slug) keeps the link as
+                                                      //   written (RawRef::memberPath, unbound) so graph.h pins the exact file + heading.
+                                                      //   185, not 184: 184 is train 29. Rich file tag 186. kCacheVersion stays 34.
                                                       // 184 = 2026-10-17 (train 29): strictly above every number a train-29 binary used — lane arity-min 178
                                                       //   (rich 179), lane call-result-typing 180 (rich 181; carried to train 30), lane go-scope 182 (rich 183);
                                                       //   the other train-29 lanes kept 176. Rich file tag 185. kCacheVersion 34 (see its note).
