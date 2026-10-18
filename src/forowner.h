@@ -392,6 +392,7 @@ struct BodySlotInputs
     const std::vector<std::uint8_t>*  outProv           = nullptr;   // Graph::outProv (nullptr: no split labels)
     bool                              splitLegendInHead = false;     // the header already defines prov="split"
     const std::vector<std::uint8_t>*  outLink           = nullptr;   // Graph::outLink (nullptr: no via="link")
+    const std::vector<std::uint8_t>*  outAnchor         = nullptr;   // Graph::outAnchorMiss (nullptr: no anchor="missing")
 };
 inline BodySlotRender renderForBodySlot( const BodySlotInputs& in, ForBodySlotOwner owner, std::optional<std::size_t> share )
 {
@@ -399,7 +400,7 @@ inline BodySlotRender renderForBodySlot( const BodySlotInputs& in, ForBodySlotOw
     BodySlotRender                    out;
     const std::optional<RedactCounts> before = in.redact != nullptr ? std::optional<RedactCounts>( *in.redact ) : std::nullopt;
     ChargedSection sec = chargeSection( [ & ]( std::FILE* f )
-        { packBodies( f, in.ing, { owner.id }, kForBodySlotMaxBytes, in.outOff, in.outTargets, CalleeEdgeBytes( in.outNameOnly, in.outProv, nullptr, in.outLink ),
+        { packBodies( f, in.ing, { owner.id }, kForBodySlotMaxBytes, in.outOff, in.outTargets, withAnchorEdge( CalleeEdgeBytes( in.outNameOnly, in.outProv, nullptr, in.outLink ), in.outAnchor ),
                       in.compress, in.redact, /*ranges=*/nullptr, in.notes, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
                       /*withFileContext=*/false, in.rootArg, &in.lensRank, CalleeLegendsInHead( in.viaLegendInHead, in.splitLegendInHead ) ); },
         kBytesPerTokenBody );

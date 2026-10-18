@@ -1164,9 +1164,21 @@ inline constexpr const char* kViaNameImpactClause =
 inline constexpr const char* kViaNameColumnarClause = "format=columnar carries it as the <via> column (1 = via=\"name\"). ";
 inline constexpr const char* kViaLinkLegend =
     "via=\"link\" on a row: the edge is a markdown link, not a call. A real call on the same pair keeps the row unmarked. ";
+inline constexpr const char* kViaLinkColumnarClause = "format=columnar carries it as the <via> column (2 = via=\"link\"). ";
+inline constexpr const char* kAnchorMissLegend =
+    "anchor=\"missing\" on a row: the markdown link named a heading this file does not have, so the edge is the file. ";
 inline std::string viaLinkLegend( bool present )
 {
     return present ? std::string( kViaLinkLegend ) : std::string();
+}
+inline std::string anchorMissLegend( bool present )
+{
+    std::string sentence( kAnchorMissLegend );
+    if( !present )
+    {
+        sentence.clear();
+    }
+    return sentence;
 }
 inline std::string viaNameLegend( bool present, bool impact = false, bool columnar = false )
 {
@@ -1229,6 +1241,12 @@ inline constexpr std::string_view kMapViaNameLegend =
     "<!-- via=\"name\": by name alone; all in reach shown, x=N merged (callees=FILE:SYM lists all); does NOT mean it is false -->";
 inline constexpr std::string_view kMapViaLinkLegend =
     "<!-- via=\"link\": a markdown link, not a call. A real call on the same pair stays unmarked -->";
+inline constexpr std::string_view kMapAnchorMissLegend =
+    "<!-- anchor=\"missing\": the markdown link named a heading this file does not have, so the edge is the file -->";
+inline std::string anchorMissLegendComment()
+{
+    return std::string( "<!-- " ) + kAnchorMissLegend + "-->";
+}
 // …and MCP's spelling: the same sentence as the `via_note` key of an answer one of whose entries carries "via":"name".
 inline std::string viaFactNoteJson( std::string text, std::string_view from, std::string_view jsonSpelling, std::string_view key )
 {
@@ -1254,6 +1272,10 @@ inline std::string viaNameNoteJson()
 inline std::string viaLinkNoteJson()
 {
     return viaFactNoteJson( kViaLinkLegend, "via=\"link\"", "\\\"via\\\":\\\"link\\\"", "via_link_note" );
+}
+inline std::string anchorMissNoteJson()
+{
+    return viaFactNoteJson( kAnchorMissLegend, "anchor=\"missing\"", "\\\"anchor\\\":\\\"missing\\\"", "anchor_missing_note" );
 }
 
 // The same fact in --for's two dialects, which are prose strips joined by ';' and ':' rather than XML comment

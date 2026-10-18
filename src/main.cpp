@@ -2041,7 +2041,7 @@ int runDefaultMap( const MainDispatch& d )
         {
             return {};
         }
-        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls, g.inertDeclinedCalls, rw::linkOutPtr( g ) );
+        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls, g.inertDeclinedCalls, rw::linkOutPtr( g ), &g.outAnchorMiss );
         const rw::MemoryStreamBytes measured = probe.finish();
         return measured.isWhole ? std::string( measured.bytes ) : std::string();
     };
@@ -2054,7 +2054,7 @@ int runDefaultMap( const MainDispatch& d )
             DISCLOSE( maxTokensFit, rw::MapAnnotations::MaxTokensFit::DisclosureWhy::ProbeUnmeasured, "runDefaultMap: open_memstream failed for the --max-tokens fit probe — the map is emitted unshaped and its ceiling unverified" );
             return 0;
         }
-        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls, g.inertDeclinedCalls, rw::linkOutPtr( g ) );
+        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls, g.inertDeclinedCalls, rw::linkOutPtr( g ), &g.outAnchorMiss );
         const rw::MemoryStreamBytes measured = probe.finish();
         if( !measured.isWhole )
         {
@@ -2444,7 +2444,7 @@ int runDefaultMap( const MainDispatch& d )
     {
         bodiesSection = rw::chargeSection( [ & ]( std::FILE* f )
             { expandRecord = EmittedBodies{};   // a re-render starts from empty: the record is what THIS render emitted
-              packBodies( f, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, nullptr, nullptr, rw::linkOutPtr( g ) ), cfg.compress, redactPtr,
+              packBodies( f, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, rw::withAnchorEdge( rw::CalleeEdgeBytes( g.outNameOnly, nullptr, nullptr, rw::linkOutPtr( g ) ), &g.outAnchorMiss ), cfg.compress, redactPtr,
                           expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/&expandRecord,
                           /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, &calleeOrder ); },   // V1: octocode F2 sibs=/inc=
             rw::kBytesPerTokenBody );
@@ -2826,7 +2826,7 @@ int runDefaultMap( const MainDispatch& d )
         // not as the literal source token, for that same reason (the count is a naive grep over this file).
         if( !expandNodes.empty() && noteAppliesToBundle )   // !serveWholeFile is this whole branch's precondition (see the if above)
         {
-            emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, nullptr, nullptr, rw::linkOutPtr( g ) ), cfg.compress, redactPtr,
+            emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, rw::withAnchorEdge( rw::CalleeEdgeBytes( g.outNameOnly, nullptr, nullptr, rw::linkOutPtr( g ) ), &g.outAnchorMiss ), cfg.compress, redactPtr,
                                                            expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
                                                            /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, &calleeOrder ); } );
             bodiesEmittedEarly = true;
@@ -2854,7 +2854,7 @@ int runDefaultMap( const MainDispatch& d )
         }
         else
         {
-            serialize( out, ing, rank, g.outOff, g.outTargets, mapTopK, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, payloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls, g.inertDeclinedCalls, rw::linkOutPtr( g ) );
+            serialize( out, ing, rank, g.outOff, g.outTargets, mapTopK, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, payloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls, g.inertDeclinedCalls, rw::linkOutPtr( g ), &g.outAnchorMiss );
         }
     }
     else
@@ -2900,7 +2900,7 @@ int runDefaultMap( const MainDispatch& d )
     }
     if( !expandNodes.empty() && !serveWholeFile && !bodiesEmittedEarly )   // #289: already served ahead of the map below
     {
-        emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, nullptr, nullptr, rw::linkOutPtr( g ) ), cfg.compress, redactPtr,
+        emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, rw::withAnchorEdge( rw::CalleeEdgeBytes( g.outNameOnly, nullptr, nullptr, rw::linkOutPtr( g ) ), &g.outAnchorMiss ), cfg.compress, redactPtr,
                                                        expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
                                                        /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, &calleeOrder ); } );   // L3: --expand bodies surface notes; V1: sibs=/inc=
     }

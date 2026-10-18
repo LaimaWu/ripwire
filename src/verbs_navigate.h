@@ -269,6 +269,11 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                 chHasVia  = chHasVia || chAttr.nameOnly( i );   // FE-B's via="name": every edge to the matches by name (defattrib.h, one pass)
                 chHasLink = chHasLink || oneHopRowIsLink( g, matches, result[ i ], wantCallers );
             }
+            bool chHasMiss = false;
+            for( std::size_t i = pw.begin; i < pw.end && !chHasMiss; ++i )
+            {
+                chHasMiss = oneHopRowIsLink( g, matches, result[ i ], wantCallers, &g.outAnchorMiss );
+            }
             rw::emitTo( stdout, "{}{}{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar, chNextIsPage ).c_str(),
                          rw::capLegendClause( rw::computePageDisclosure( pw.end - pw.begin, result.size(), pw.end,
                                                                         cfg.pageLimit, cfg.pageOffset, chDiscloseCap ).active ),
@@ -288,6 +293,14 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                            + rw::valueRefsDepthLegendFor( chRows.valueRefs ) ).c_str(),   // exactly when the root carries the depth disclosure
                          rw::rootRelPathsLegend( chSingleRoot ),
                          rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
+            if( cfg.columnar && chHasLink )
+            {
+                rw::emitTo( stdout, "<!-- {}-->", rw::kViaLinkColumnarClause );
+            }
+            if( chHasMiss )
+            {
+                rw::emitTo( stdout, "<!-- {}-->", rw::kAnchorMissLegend );
+            }
         }
 
         // P3 (L7, nextverb.h): ONE follow-up, shared with MCP. Callers preserve SELECTOR unless a narrowed
@@ -344,6 +357,13 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                     pageOfDef.push_back( rw::ofDefColumnValue( chAttr.groups, chAttr.tokens, pw.begin + i ) );
                 }
             }
+            for( std::size_t i = 0; i < page.size(); ++i )
+            {
+                if( oneHopRowIsLink( g, matches, result[ pw.begin + i ], wantCallers ) )
+                {
+                    pageVia[ i ] = 2;
+                }
+            }
             const std::string chDefRows = rw::defTableXml( ing, chAttr.groups, chListing, chRootPrefix );
             emitColumnarSymbolRows( stdout, ing, tag, attr, page, chRootPrefix, &chTested.testReach, nullptr,
                                     rw::ColumnarRowExtras{ &pageVia, chSites.any ? &chSites.tokens : nullptr, &chSites.totals,   // CALLSITE-AT: sites_at only when a row has sites
@@ -393,6 +413,10 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                     chAtKeys[ i ] = rw::callSitesKeyJson( chSites.tokens[ i - pw.begin ], chSites.totals[ i - pw.begin ] );
                 }
                 chAtKeys[ i ] += rw::ofDefKeyJson( chAttr.groups, chAttr.tokens, i ) + rw::splitArmKeyJson( chAttr.splitArm( i ) );   // attrib-multidef
+                if( oneHopRowIsLink( g, matches, result[ i ], wantCallers, &g.outAnchorMiss ) )
+                {
+                    chAtKeys[ i ] += ",\"anchor\":\"missing\"";
+                }
             }
             printJsonSymbolRows( ing, result, pw.begin, pw.end, chRootPrefix, &chTested.testReach, nullptr, &chVia, &chAtKeys );
             rw::emitTo( stdout, "]{}{}{}}}", rw::declinedSitesJson( chDc, wantCallers, /*mcp=*/false ),   // the XML <dc> rows, keys = its attribute names
@@ -425,7 +449,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             // already follows everywhere else (serialize.h/verbs_for.h), so an untested row costs 0 bytes.
             rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}{}{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
                          macroRoleAttr( s.kind ), rw::isTestedByReach( ing, chTested.testReach, result[i] ) ? " tested=\"1\"" : "",
-                         viaEdgeAttr( chAttr.nameOnly( i ), oneHopRowIsLink( g, matches, result[ i ], wantCallers ) ),
+                         std::string( viaEdgeAttr( chAttr.nameOnly( i ), oneHopRowIsLink( g, matches, result[ i ], wantCallers ) ) )
+                           + anchorMissAttr( oneHopRowIsLink( g, matches, result[ i ], wantCallers, &g.outAnchorMiss ) ),
                          rw::splitArmAttrXml( chAttr.splitArm( i ) ), rw::ofDefAttrXml( chAttr.groups, chAttr.tokens, i ),   // attrib-multidef
                          chSites.any ? rw::callSitesAttrXml( chSites.tokens[ i - pw.begin ], chSites.totals[ i - pw.begin ] ) : std::string() );   // CALLSITE-AT
         }
@@ -973,6 +998,7 @@ struct SafeDeleteLegendFlags
     bool        defTableCut   = false;   // ... and the table lists only the groups this page's rows name (defs_listed=)
     bool        splitArms     = false;   // a <c prov="split"> row is on this page (a one-group selector's split arm, Q1)
     bool        linkRows      = false;   // a <c via="link"> row is on this page
+    bool        anchorRows    = false;   // a <c anchor="missing"> row is on this page
     rw::DeclinedSitesLegendFlags declinedSites{};   // lane declined-sites: what the <dc> rows on this answer carry (declinedsites.h)
 };
 
@@ -1011,6 +1037,7 @@ inline std::string safeDeleteFloorLegend( const SafeDeleteLegendFlags& flags, st
     }
     clause += rw::defTableLegend( flags.defTable, flags.defTableCut ) + rw::splitArmLegend( flags.splitArms );   // attrib-multidef
     clause += rw::viaLinkLegend( flags.linkRows );
+    clause += rw::anchorMissLegend( flags.anchorRows );
     return clause;
 }
 
@@ -1315,10 +1342,12 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     const rw::DefTableListing sdListing  = rw::defTableListing( sdAttr.groups, sdNamed );
     bool                      sdHasSplit = false;
     bool                      sdHasLink  = false;
-    for( std::size_t i = sdLw.begin; i < sdLw.end && ( !sdHasSplit || !sdHasLink ); ++i )
+    bool                      sdHasMiss  = false;
+    for( std::size_t i = sdLw.begin; i < sdLw.end && ( !sdHasSplit || !sdHasLink || !sdHasMiss ); ++i )
     {
         sdHasSplit = sdHasSplit || sdAttr.splitArm( i );
         sdHasLink  = sdHasLink || rw::oneHopRowIsLink( g, defs, callerIds[ i ], true );
+        sdHasMiss  = sdHasMiss || rw::oneHopRowIsLink( g, defs, callerIds[ i ], true, &g.outAnchorMiss );
     }
     const std::vector<rw::DeclinedSiteView> sdDc =
         rw::declinedSiteViews( ing, g, std::span<const std::uint32_t>( sdDeclinedSites ).first( sdDcCut.shown ), /*callersForm=*/true, defs, sdAttr.groups,
@@ -1330,7 +1359,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                                                  .valueRefs = sdValueRefs.rows.size(), .callersFloor = sdFloor.isFloor, .usesFloor = usesFloor,
                                                  .hasSitesAt = sdSites.any, .sitesCut = sdSites.anyCut, .valueRefDepthCut = sdValueRefs.depthCut.files > 0,
                                                  .defTable = sdAttr.groups.multi(), .defTableCut = sdListing.cut, .splitArms = sdHasSplit,
-                                                 .linkRows = sdHasLink,
+                                                 .linkRows = sdHasLink, .anchorRows = sdHasMiss,
                                                  .declinedSites = rw::declinedSitesLegendFlags( sdDc, /*callersForm=*/true, sdDcCut ) } );
 
     const Symbol&      lead = ing.symbols[ defs[0] ];   // resolveAllByNameQualified walks ascending id — defs[0] is the
@@ -1373,7 +1402,8 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
             rw::emitTo( stdout, " amb=\"{}\"", g.ambOut[ callerId ] );   // M15: the same COUNT a map row's amb= prints — one meaning, one unit
         }
         rw::emitTo( stdout, "{}{}{}/>", rw::splitArmAttrXml( sdAttr.splitArm( i ) ), rw::ofDefAttrXml( sdAttr.groups, sdAttr.tokens, i ),
-                    rw::viaEdgeAttr( false, rw::oneHopRowIsLink( g, defs, callerId, true ) ) );   // a direct markdown link
+                    std::string( rw::viaEdgeAttr( false, rw::oneHopRowIsLink( g, defs, callerId, true ) ) )
+                      + rw::anchorMissAttr( rw::oneHopRowIsLink( g, defs, callerId, true, &g.outAnchorMiss ) ) );   // a direct markdown link
     }
     rw::emitTo( stdout, "{}{}</safe-delete>", rw::declinedSitesXml( sdDc, /*callersForm=*/true ),   // lane declined-sites: each declined possible caller, after the <c> rows
                 rw::valueRefsXml( ing, sdValueRefs, true, sdVr, "--uses=" + std::string( cfg.safeDeleteSym ) ) );
@@ -2427,12 +2457,14 @@ std::optional<int> runPath( const MainDispatch& d )
         const rw::PathSearchGaps pthGaps = path.empty() ? rw::pathSearchGaps( ing, g, srcDefs, *pthValueIdx ) : rw::PathSearchGaps{};
         const bool pthHasVia = rw::pathHasNameOnlyHop( g, path );   // FE-B: exactly when a hop of THIS path is via="name"
         const bool pthHasLink = rw::pathHasLinkHop( g, path );
+        const bool pthHasMiss = std::adjacent_find( path.begin(), path.end(),
+                                                    [ & ]( rw::NodeId from, rw::NodeId to ) { return rw::edgeAnchorMiss( g, from, to ); } ) != path.end();
         // attrib-multidef (defattrib.h): from_p=/to_p= only for an endpoint the path bound; prov="split" on a split-arm hop
         const rw::PathEndpointBinding pthBound = rw::pathEndpointBinding( g, rw::endpointDefinitionCount( ing, srcDefs ), rw::endpointDefinitionCount( ing, dstDefs ), path );
         const bool                    pthHasSplit = pthBound.splitHop;
         rw::emitTo( stdout, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                      "graph holds none. {}{}{}{}-->{}", ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
-                                                         + rw::viaLinkLegend( pthHasLink )
+                                                         + rw::viaLinkLegend( pthHasLink ) + rw::anchorMissLegend( pthHasMiss )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to ) ).c_str(),
                      ( std::string( rw::toValueRefsLegend( pthToValueRefs.count > 0 ) ) + rw::valueRefsDepthLegend( pthToValueRefs.depthCut.files > 0 ) ).c_str(),
                      rw::pathGapsLegend( pthGaps.any() ),
@@ -2460,7 +2492,8 @@ std::optional<int> runPath( const MainDispatch& d )
             const std::string_view  rp = pthSingleRoot ? rw::sarif::rootRelativeUri( ing.files[ s.fileId ], pthRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
             // FE-B: a hop whose edge INTO it is name-only says so on its row (the first row is no hop)
             rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
-                         viaEdgeAttr( i > 0 && edgeNameOnly( g, path[ i - 1 ], path[ i ] ), i > 0 && edgeIsLink( g, path[ i - 1 ], path[ i ] ) ), rw::splitArmAttrXml( rw::pathHopSplitArm( g, path, i ) ) );
+                         std::string( viaEdgeAttr( i > 0 && edgeNameOnly( g, path[ i - 1 ], path[ i ] ), i > 0 && edgeIsLink( g, path[ i - 1 ], path[ i ] ) ) )
+                           + anchorMissAttr( i > 0 && edgeAnchorMiss( g, path[ i - 1 ], path[ i ] ) ), rw::splitArmAttrXml( rw::pathHopSplitArm( g, path, i ) ) );
         }
         rw::emitTo( stdout, "</path>" );
         return 0;
@@ -2605,21 +2638,18 @@ inline std::vector<std::string> impactOfDefKeys( const ImpactView& v )
     {
         keys[ i ] = v.attrib.ofDefJson( v.show[ i ] );
     }
+    for( std::size_t i = v.page.begin; i < v.page.end; ++i )
+    {
+        if( rw::impactDirectLink( v.g, v.seeds, v.depth, v.show[ i ] )
+            && rw::oneHopRowIsLink( v.g, v.seeds, v.show[ i ], true, &v.g.outAnchorMiss ) )
+        {
+            keys[ i ] += ",\"anchor\":\"missing\"";
+        }
+    }
     return keys;
 }
 
-// FE-B: the window's hedge bits in row order (impactRowNameOnly), for the dialects that carry them per entry or per column
-inline std::vector<char> impactViaColumn( const ImpactView& v, std::size_t begin, std::size_t end )
-{
-    std::vector<char> via( v.show.size(), 0 );
-    for( std::size_t i = begin; i < end; ++i )
-    {
-        via[ i ] = rw::impactRowNameOnly( v.provenReach, v.show[ i ] ) ? 1 : 0;
-    }
-    return via;
-}
-
-// JSON rows: 2 = a direct markdown link, 1 = via="name". The columnar column stays impactViaColumn (1 means name).
+// JSON rows: 2 = a direct markdown link, 1 = via="name". The columnar column uses the same codes.
 inline std::vector<char> impactJsonVia( const ImpactView& v )
 {
     std::vector<char> via( v.show.size(), 0 );
@@ -2682,7 +2712,7 @@ int emitImpactColumnar( const ImpactView& v )
                                                             : " lens=\"shown_importers,importers_capped,importers_next\"" )
                                  + rw::renderDisclosure( v.prD, rw::DiscloseAs::XmlAttrs )   // W2-F
                                  + rw::nextAttrXml( rw::nextFlag( "--safe-delete=", v.sym ) );   // P3 (L7): the XML root's next=, same set
-    const std::vector<char> via    = impactViaColumn( v, v.page.begin, v.page.end );
+    const std::vector<char> via    = impactJsonVia( v );
     const std::vector<char> rowVia( via.begin() + v.page.begin, via.begin() + v.page.end );   // FE-B: in `rows` order
     std::vector<std::string> rowOfDef;   // attrib-multidef: of_def per row, only on a multi-group selector
     for( std::size_t i = v.page.begin; i < v.page.end && v.attrib.groups.multi(); ++i )
@@ -2779,11 +2809,12 @@ int emitImpactXml( const ImpactView& v )
         const std::string_view rp = v.singleRoot ? rw::sarif::rootRelativeUri( v.ing.files[ s.fileId ], v.rootPrefix )
                                                  : std::string_view( v.ing.files[ s.fileId ] );
         // A6: tested="1" only (never a literal 0) — see kTestedRowLegend. 0.6.5: d= the row's hop depth, run-length (graph.h depthRunAttrXml).
+        const bool imLink = rw::impactDirectLink( v.g, v.seeds, v.depth, v.show[ i ] );
         rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
                      rw::depthRunAttrXml( v.show, v.depth, i, v.page.begin ),
                      rw::isTestedByReach( v.ing, *v.testReach, v.show[i] ) ? " tested=\"1\"" : "",
-                     viaEdgeAttr( rw::impactRowNameOnly( v.provenReach, v.show[i] ),
-                                  rw::impactDirectLink( v.g, v.seeds, v.depth, v.show[i] ) ),
+                     std::string( viaEdgeAttr( rw::impactRowNameOnly( v.provenReach, v.show[i] ), imLink ) )
+                       + anchorMissAttr( imLink && rw::oneHopRowIsLink( v.g, v.seeds, v.show[ i ], true, &v.g.outAnchorMiss ) ),
                      v.attrib.ofDefXml( v.show[i] ) );                                     // attrib-multidef
     }
     rw::emitImportRowsXml( stdout, v.ing, v.importPage, v.rootPrefix, v.importLazyPage );
@@ -2899,7 +2930,11 @@ std::optional<int> runImpact( const MainDispatch& d )
                            + rw::viaNameLegend( std::any_of( show.begin() + imPage.begin, show.begin() + imPage.end,   // FE-B: exactly when a shown row is via="name"
                                                              [ & ]( NodeId n ) { return rw::impactRowNameOnly( imProven, n ); } ), true, cfg.columnar )
                            + rw::viaLinkLegend( std::any_of( show.begin() + imPage.begin, show.begin() + imPage.end,
-                                                                    [ & ]( NodeId n ) { return rw::impactDirectLink( g, seeds, imDepth, n ); } ) ) ).c_str(),
+                                                                    [ & ]( NodeId n ) { return rw::impactDirectLink( g, seeds, imDepth, n ); } ) )
+                           + rw::anchorMissLegend( std::any_of( show.begin() + imPage.begin, show.begin() + imPage.end,
+                                                                [ & ]( NodeId n )
+                                                                { return rw::impactDirectLink( g, seeds, imDepth, n )
+                                                                      && rw::oneHopRowIsLink( g, seeds, n, true, &g.outAnchorMiss ); } ) ) ).c_str(),
                          rw::testedLensLegend( cfg.columnar ), rw::kImpactTestedPartitionLegend,   // A6: the columnar form reads its dense column
                          rw::kTestedLensBlindSpotLegend,                           // F-02: rides with the partition
                          rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Impact, imUnprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=
@@ -3098,7 +3133,7 @@ std::optional<int> runAround( const MainDispatch& d )
         aroundAnn.seed = { ing.symbols[ focus ].name, cfg.aroundDepth, cfg.aroundFanout, definitionCountOfName( ing, focus ), eg.fanoutCut, eg.depthTruncated };
         aroundAnn.seed.unprovenDefs = arUnprovenDefs;   // H1: unproven_defs= beside defs= on the root, its clause in the map legend
 
-        serialize( stdout, ing, rank, g.outOff, g.outTargets, int( eg.nodes.size() ), cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, false, g.outProv.empty() ? nullptr : &g.outProv, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, /*autoOrder=*/false, /*outEstTokens=*/nullptr, aroundCompose.tokens + aroundRoutes.tokens + wrap.tokens, aroundAnn, /*statsFirstScreen=*/false, aroundRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, /*gateDeclinedCalls=*/0, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, /*stdMemberDeclinedCalls=*/0, g.inertDeclinedCalls, rw::linkOutPtr( g ) );
+        serialize( stdout, ing, rank, g.outOff, g.outTargets, int( eg.nodes.size() ), cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, false, g.outProv.empty() ? nullptr : &g.outProv, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, /*autoOrder=*/false, /*outEstTokens=*/nullptr, aroundCompose.tokens + aroundRoutes.tokens + wrap.tokens, aroundAnn, /*statsFirstScreen=*/false, aroundRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, /*gateDeclinedCalls=*/0, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, /*stdMemberDeclinedCalls=*/0, g.inertDeclinedCalls, rw::linkOutPtr( g ), &g.outAnchorMiss );
 
         if( !g.composeEdges.empty() )
         {

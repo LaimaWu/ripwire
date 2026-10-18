@@ -384,6 +384,17 @@ want "$AFIX" "Func Name"         'do_work@docs/b/partner.md'      "a heading nam
 want "$AFIX" "Missing Anchor"    'partner@docs/b/partner.md'      "#no-such-heading falls back to that file's own node"
 want "$AFIX" "Missed Readme"     'README@docs/b/README.md'        "../b/README.md#no-such-heading pins docs/b/README.md, not the same-directory README"
 want "$AFIX" "Bare Readme"       'README@docs/b/README.md'        "a bare ../b/README.md pins that file, not the same-directory README"
+if $BIN "$AFIX" --no-cache --callees='Missing Anchor' --legend=compact 2>/dev/null | grep -q 'n="partner"[^>]*anchor="missing"' \
+ && ! $BIN "$AFIX" --no-cache --callees='Bare Readme' --legend=compact 2>/dev/null | grep -q 'anchor="missing"'; then
+    ok "a slug the file does not have is anchor=missing, and a bare link is not"
+else
+    no "anchor=missing missed the slug fallback, or a bare link carried it"
+fi
+if $BIN "$AFIX" --no-cache --format=columnar --callees='Func Name' --legend=compact 2>/dev/null | grep -q '<via>2</via>'; then
+    ok "columnar via is 2 for a direct markdown link"
+else
+    no "columnar via did not write 2 for the markdown link"
+fi
 want "$AFIX" "Fence Only"        ''                               "a link inside a fenced block makes no edge"
 # --callers lists every matched def in <def ix= t= p=> (cross_kind when a heading and a function share the name).
 # The edge is the <s> row: it must name the section, never the .py function.
@@ -393,28 +404,36 @@ xml = sys.stdin.read()
 kind = { m.group(1): m.group(2) for m in re.finditer(r"<def ix=\"(\d+)\" t=\"([a-z]+)\"", xml) }
 rows = list(re.finditer(r"<s t=\"[a-z]+\"([^>]*)/?>", xml))
 ok = bool(rows) and "fn" in kind.values() and "sec" in kind.values()
+saw_sec = False
+saw_fn = False
 for m in rows:
     attrs = m.group(1)
     p = re.search(r" p=\"([^\"]*)\"", attrs)
     of = re.search(r"of_def=\"(\d+)", attrs)
+    via = re.search(r" via=\"([^\"]*)\"", attrs)
     if p and "tools.py" in p.group(1):
         ok = False
     if of and kind.get(of.group(1)) == "fn":
-        ok = False
-    via = re.search(r" via=\"([^\"]*)\"", attrs)
-    if not via or via.group(1) != "link":
-        ok = False
-sys.exit(0 if ok else 1)
-'; then ok "the .py do_work is a matched def only — the caller edge belongs to the section and is via=link"; else no "the doc link leaked onto the .py function, or the section row lacks via=link"; fi
+        saw_fn = True
+        if via and via.group(1) == "link":
+            ok = False
+    else:
+        if not via or via.group(1) != "link":
+            ok = False
+        else:
+            saw_sec = True
+sys.exit(0 if ok and saw_sec and saw_fn else 1)
+'; then ok "the section caller stays via=link and the Python caller of do_work is unmarked"; else no "the doc link leaked onto the .py function, or the section row lacks via=link"; fi
 if ( cd "$AFIX" && $BIN . --no-cache --callers=do_work --legend=compact ) 2>/dev/null | grep -q 'n="Func Name"[^>]*via="link"'; then
     ok "a dot crawl root still pins the markdown link (./docs/... matches docs/...)"
 else
     no "a dot crawl root dropped the markdown link pin"
 fi
-if $BIN "$AFIX" --no-cache --callers='docs/a/tools.py:do_work' --legend=compact 2>/dev/null | grep -q 'via="link"'; then
-    no "a real function's callers carry via=link"
+QUAL=$($BIN "$AFIX" --no-cache --callers='docs/a/tools.py:do_work' --legend=compact 2>/dev/null || true)
+if printf '%s' "$QUAL" | grep -q 'count="[1-9]' && printf '%s' "$QUAL" | grep -q 'n="use_work"' && ! printf '%s' "$QUAL" | grep -q 'via="link"'; then
+    ok "the .py do_work has a real caller and that row is not via=link"
 else
-    ok "the .py do_work callers are not marked via=link"
+    no "the qualified .py do_work callers were empty or carried via=link"
 fi
 if $BIN "$AFIX" --no-cache --callees='Self Collision' --legend=compact 2>/dev/null | grep -q 'n="Install"[^>]*via="link"'; then
     ok "Self Collision's callee Install is via=link"
