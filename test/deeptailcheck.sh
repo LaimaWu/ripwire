@@ -272,10 +272,13 @@ T9_TOTAL="$( printf '%s' "$T9_TAG" | grep -oE 'total="[0-9]+"' | grep -oE '[0-9]
 case "$T9_SIGS" in *'capped="1"'*) ok "(9) fixture guard: the 900-token budget trims sigs rows ($T9_SIGS; $T9_NSHOWN file(s) shown)" ;;
                    *) no "(9) fixture guard: expected the ladder to trim at --token-budget=900, got '$T9_SIGS'" ;; esac
 printf '%s' "$T9" > "$TMP/t9.xml"
-T9_RANK="$( python3 "$TMP/tail.py" "$TMP/t9.xml" rank "$TMP/page40.xml" | grep -vc SPLIT-FAIL )"
+T9_RANKOUT="$( python3 "$TMP/tail.py" "$TMP/t9.xml" rank "$TMP/page40.xml" )"   # SPLIT-FAIL stays a failure: never read as zero rank rows
+T9_RANK="$( printf '%s\n' "$T9_RANKOUT" | grep -c . )"
 T9_SHOWNROWS="$( printf '%s' "$T9_TAG" | grep -oE 'shown="[0-9]+"' | grep -oE '[0-9]+' )"
 # every file outside the shown rows is a rank row (12 - shown files), or the cut tail stops short of them and says so (next=)
-if [ "$T9_TOTAL" = "12" ] && { [ "$T9_RANK" = "$(( 12 - T9_NSHOWN ))" ] || { [ "$T9_SHOWNROWS" -lt "$(( 12 - T9_NSHOWN ))" ] && printf '%s' "$T9_TAG" | grep -q ' next="'; }; }; then
+if [ "$T9_RANKOUT" = "SPLIT-FAIL" ]; then
+    no "(9a) the tail does not split into rank rows + the file page's rows (SPLIT-FAIL): $T9_TAG"
+elif [ "$T9_TOTAL" = "12" ] && { [ "$T9_RANK" = "$(( 12 - T9_NSHOWN ))" ] || { [ "$T9_SHOWNROWS" -lt "$(( 12 - T9_NSHOWN ))" ] && printf '%s' "$T9_TAG" | grep -q ' next="'; }; }; then
     ok "(9a) tail total=12; rank rows $T9_RANK = 12 files minus the $T9_NSHOWN shown, or a cut tail naming next= (trimmed rows land IN the tail)"
 else
     no "(9a) tail total=$T9_TOTAL, $T9_RANK rank row(s) but $T9_NSHOWN file(s) shown — a ranked file served nowhere ($T9_TAG)"
@@ -296,7 +299,8 @@ import json, subprocess, sys
 d = json.load( open( sys.argv[ 1 ] ) ); t = d.get( "tail", {} )
 shown = { s.get( "p" ) for s in d.get( "sigs", [] ) }
 rank = subprocess.run( [ "python3", sys.argv[ 2 ], sys.argv[ 1 ], "rank", sys.argv[ 3 ] ], capture_output=True, text=True ).stdout.split()
-rank = [] if "SPLIT-FAIL" in rank else rank
+if "SPLIT-FAIL" in rank:   # no split is a failure, never an empty rank list a cut tail could pass with
+    print( "N SPLIT-FAIL" ); sys.exit( 0 )
 cut_ok = t.get( "shown", 0 ) < 12 - len( shown ) and "next" in t
 print( "%s %d %d %d" % ( "Y" if t.get( "total" ) == 12 and ( len( rank ) == 12 - len( shown ) or cut_ok ) and not ( set( rank ) & shown ) else "N",
                          t.get( "total", -1 ), len( rank ), len( shown ) ) )' "$TMP/t9.json" "$TMP/tail.py" "$TMP/page40.xml" )"
