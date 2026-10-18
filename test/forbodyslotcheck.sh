@@ -100,7 +100,8 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
-unset RIPWIRE_NO_BODY_SLOT RIPWIRE_NO_OWNER_HOP
+unset RIPWIRE_NO_BODY_SLOT RIPWIRE_NO_OWNER_HOP RIPWIRE_NO_HEAD_RR
+export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py set_prefix: the head round-robin set-prefix twin (lane hrr)
 # body-fold (train 31; rule 4, by design): a compact answer now ends with <fold kind="bodies"> — the top ranked bodies, which may be a
 # class, a .d.ts or a test body by rank (forbodyfoldcheck owns that contract). Every arm here is about the ONE owner body, so the
 # answers are read fold-off; arm (FX), before the optional (I) arms, pins that the fold changes nothing of the slot on the default answer.
@@ -336,6 +337,13 @@ elif cmd == "prefix":                   # prefix FILE_A FILE_B : A's rows are a 
     if len(ra) < 4: fail("only %d rows (the rank 1..4 floor)" % len(ra))
     if ra != rb[:len(ra)]: fail("rows are not a rank prefix of the default answer (first diff at %d)" % next(i for i in range(len(ra)) if i >= len(rb) or ra[i] != rb[i]))
     print("%d rows, a prefix of %d" % (len(ra), len(rb)))
+elif cmd == "setprefix":                # setprefix A ON OFF : head round-robin on (lane hrr, rule 4): A's rows (>= 4) are, as a SET,
+    # the first rows of OFF (the RIPWIRE_NO_HEAD_RR=1 default: score ranks 1..K), and ON (the reordered default) serves OFF's rows
+    sys.path.insert(0, os.environ["RIPWIRE_TESTLIB"]); from softbudget import set_prefix
+    ra, ron, roff = ([(n, p) for r, n, p, a in rows(load(x))] for x in args[:3])
+    if len(ra) < 4: fail("only %d rows (the rank 1..4 floor)" % len(ra))
+    if not set_prefix(ra, ron, roff): fail("rows are not a SET prefix of the default answer (score ranks 1..%d of the RIPWIRE_NO_HEAD_RR=1 twin)" % len(ra))
+    print("%d rows, a set prefix of %d" % (len(ra), len(ron)))
 elif cmd == "nrows":                    # nrows FILE
     print(len(rows(load(args[0]))))
 elif cmd == "bodybytes":                # bodybytes FILE : CDATA bytes of every <b>
@@ -486,6 +494,8 @@ while IFS='|' read -r k q; do
     done
 done <<<"$QUESTIONS"
 run --for="$T_D" --legend=compact >"$TMP/d.c.xml"
+# head round-robin (lane hrr, train 31; rule 4): the score-order twin of the default answer, read by the E1-E3 order-prefix twins
+RIPWIRE_NO_HEAD_RR=1 run --for="$T_D" >"$TMP/d.so.xml"
 
 # ── D: the body slot in the default regime ─────────────────────────────────────────────────────────────────
 if r="$( chk rootattr "$TMP/d.xml" bundle compact )"; then ok "(D1) T-D premise: $r"; else no "(D1) T-D premise: $r"; fi
@@ -565,11 +575,23 @@ if r="$( chk body "$TMP/cpp.xml" Build src/cpp/build.cc "cannot make progress" )
 if r="$( chk nobodyat "$TMP/cpp.xml" '\.h$' )" && r2="$( chk nobodyof "$TMP/cpp.xml" Builder )"; then ok "(L2) C++: no header declaration, no class body"; else no "(L2) C++: ${r:-} ${r2:-}"; fi
 if r="$( chk body "$TMP/go.xml" Package src/go/packager.go "guessing packager from target file extension" )"; then ok "(L3) Go: $r (the method)"; else no "(L3) Go: $r"; fi
 if r="$( chk nobodyof "$TMP/go.xml" Packager )"; then ok "(L3) Go: the type Packager is never the body"; else no "(L3) Go: $r"; fi
-if r="$( chk rowis "$TMP/dts.xml" 1 negotiate src/types/global.d.ts )"; then :; else no "(N1) premise: $r"; fi
-if r="$( chk body "$TMP/dts.xml" negotiate src/negotiate.ts "negotiate fallback" )"; then ok "(N1) TS: $r — the definition, not the r1 .d.ts declaration"; else no "(N1) TS: $r"; fi
+# N1 re-anchored (lane hrr, train 31; rule 4): the declaration-twin tier ranks a .d.ts x0.7 when its package ships an
+# implementation, so on the fixture as it is negotiate.ts now outranks global.d.ts (the premise "r1 is the .d.ts" broke by
+# design). The premise is restored the tier's own way: a copy whose src/types is a types-only package (its own package.json,
+# no implementation), where the .d.ts keeps 1.0 and is r1 again — the arms below then run unchanged on it. (N1r) keeps the
+# fixture as it is: the tier's r1 is the definition, and its body is the one served.
+rm -rf "$TMP/dtsfix"; cp -R "$FIX" "$TMP/dtsfix" && printf '{"name":"@forbodyslot/types","types":"global.d.ts"}\n' >"$TMP/dtsfix/src/types/package.json"
+"$BIN" "$TMP/dtsfix" --no-cache --for="$T_DTS" >"$TMP/dts.tonly.xml" 2>/dev/null
+"$BIN" "$TMP/dtsfix" --no-cache --for="$T_DTS2" >"$TMP/dts2.tonly.xml" 2>/dev/null
+if r="$( chk rowis "$TMP/dts.tonly.xml" 1 negotiate src/types/global.d.ts )"; then :; else no "(N1) premise (types-only package): $r"; fi
+if r="$( chk body "$TMP/dts.tonly.xml" negotiate src/negotiate.ts "negotiate fallback" )"; then ok "(N1) TS: $r — the definition, not the r1 .d.ts declaration"; else no "(N1) TS: $r"; fi
 for k in dts dts2; do
+    if r="$( chk nobodyat "$TMP/$k.tonly.xml" '\.d\.ts$' )"; then ok "(N1) $k (types-only package): no body from a .d.ts declaration"; else no "(N1) $k (types-only package): $r"; fi
     if r="$( chk nobodyat "$TMP/$k.xml" '\.d\.ts$' )"; then ok "(N1) $k: no body from a .d.ts declaration"; else no "(N1) $k: $r"; fi
 done
+if r="$( chk rowis "$TMP/dts.xml" 1 negotiate src/negotiate.ts )" && r2="$( chk body "$TMP/dts.xml" negotiate src/negotiate.ts "negotiate fallback" )"; then
+    ok "(N1r) the fixture as it is: the declaration-twin tier ranks the definition r1, and its body is served: $r2"
+else no "(N1r) the fixture as it is: ${r:-} ${r2:-}"; fi
 if r="$( chk nobody "$TMP/test.xml" )" && cmp -s "$TMP/test.xml" "$TMP/test.off.xml"; then ok "(N2) the only name owner is a tests/ helper: no slot, byte-identical to RIPWIRE_NO_BODY_SLOT=1"; else no "(N2) a body rides, or the answer differs from slot-off ${r:-}"; fi
 if r="$( chk nobodyat "$TMP/test.xml" '(^|/)tests?/' )" && r2="$( chk nobodyof "$TMP/test.xml" roundtrip )"; then ok "(N2) no body from tests/ (roundtrip is a test symbol)"; else no "(N2) ${r:-} ${r2:-}"; fi
 if r="$( chk bodycount "$TMP/two.xml" 1 )"; then ok "(N3) two equal owners: one body"; else no "(N3) $r"; fi
@@ -589,6 +611,11 @@ Q_FORGE="How does the forge assemble a kiln job: scheduling glaze batches, track
 Q_RUN="How does the forge run a kiln job: scheduling glaze batches, tracking firing queues and recording kiln results?"
 for r in cpp rs py ts go deep other; do rrun "$r" --for="$Q_FORGE" >"$TMP/q1.$r.xml"; done
 rrun common --for="$Q_RUN" >"$TMP/q1.common.xml"
+# Q1 premises re-anchored (lane hrr, train 31; rule 4): each premise is a SCORE rank (the class in the head tier 1..24, the
+# member past it), which the head round-robin may display elsewhere (a distinct file's best row moves into r=1..8). The
+# premises read the RIPWIRE_NO_HEAD_RR=1 twin of the same answer; every body / no-body assertion still reads the answer as served.
+for r in cpp rs py ts go deep other; do RIPWIRE_NO_HEAD_RR=1 rrun "$r" --for="$Q_FORGE" >"$TMP/q1.$r.so.xml"; done
+RIPWIRE_NO_HEAD_RR=1 rrun common --for="$Q_RUN" >"$TMP/q1.common.so.xml"
 rrun cpp --for="$Q_FORGE" --legend=compact >"$TMP/q1.cpp.c.xml"
 if r="$( chk bodiesattr "$TMP/q1.cpp.c.xml" pick member )" && r2="$( chk legend "$TMP/q1.cpp.c.xml" "${R3_STRS[@]}" )"; then
     ok "(D5/R3) pick=member body (C++): the compact legend reads pick= and says what reason=owner does not mean"
@@ -629,7 +656,7 @@ ds tsabs DS4 print src/printer.ts 1 src/printer.ts 6
 # Q1 member owner: the head-tier class's member, defined past the head tier (no name owner exists)
 q1(){   # q1 KEY CLASS_RANK_MAX CLASS CLASS_PATH MEMBER MEMBER_PATH MEMBER_LINE LANG
     local k="$1" cmax="$2" c="$3" cp="$4" m="$5" mp="$6" ml="$7" lang="$8" cr mr
-    cr="$( chk rankof "$TMP/q1.$k.xml" "$c" "$cp" )"; mr="$( chk rankof "$TMP/q1.$k.xml" "$m" "$mp" )"
+    cr="$( chk rankof "$TMP/q1.$k.so.xml" "$c" "$cp" )"; mr="$( chk rankof "$TMP/q1.$k.so.xml" "$m" "$mp" )"   # score ranks (the twin)
     case "$cr$mr" in *[!0-9]*|'') no "(Q1) $k premise: unreadable ranks class=$cr member=$mr"; return;; esac
     if [ "$cr" -lt 1 ] || [ "$cr" -gt "$cmax" ] || { [ "$mr" -ge 1 ] && [ "$mr" -le 24 ]; }; then
         no "(Q1) $k premise: class $c r$cr (wanted 1..$cmax), member $m r$mr (wanted past the head tier)"; return
@@ -649,20 +676,20 @@ q1 ts 24 Forge src/forge.ts assemble src/forge.ts 9 "TS class (span)"
 # scope the member owner applies to Go as to the rows above, and q1 still asserts the type itself is never served.
 q1 go 24 Forge src/forge.go Assemble src/forge.go 14 "Go receiver (sc=)"
 # near misses
-cr="$( chk rankof "$TMP/q1.common.xml" Forge src/forge.h )"; mr="$( chk rankof "$TMP/q1.common.xml" Run src/forge.cc )"
+cr="$( chk rankof "$TMP/q1.common.so.xml" Forge src/forge.h )"; mr="$( chk rankof "$TMP/q1.common.so.xml" Run src/forge.cc )"
 if [ "$cr" = 1 ] && [ "$mr" -gt 24 ] 2>/dev/null; then
     if r="$( chk nobodyof "$TMP/q1.common.xml" Run )"; then ok "(Q1) near miss: a common-word member (Run, 'run') is never the member owner"; else no "(Q1) common-word member: $r"; fi
 else
     no "(Q1) common-word premise: Forge r$cr Run r$mr"
 fi
-cr="$( chk rankof "$TMP/q1.deep.xml" Forge src/forge.h )"
+cr="$( chk rankof "$TMP/q1.deep.so.xml" Forge src/forge.h )"
 if [ "$cr" -gt 24 ] 2>/dev/null; then
     if r="$( chk nobodyof "$TMP/q1.deep.xml" Assemble )"; then ok "(Q1) near miss: class Forge r$cr (in the pool, past the head tier) donates no member"; else no "(Q1) class past the head tier: $r"; fi
 else
     no "(Q1) deep premise: Forge r$cr, wanted 25..40"
 fi
-sr="$( chk rankof "$TMP/q1.other.xml" Assemble src/smelter.cc )"; fr="$( chk rankof "$TMP/q1.other.xml" Assemble src/forge.cc )"
-if [ "$sr" -gt 24 ] 2>/dev/null && [ "$fr" -gt "$sr" ] 2>/dev/null && [ "$( chk rankof "$TMP/q1.other.xml" Forge src/forge.h )" = 1 ]; then
+sr="$( chk rankof "$TMP/q1.other.so.xml" Assemble src/smelter.cc )"; fr="$( chk rankof "$TMP/q1.other.so.xml" Assemble src/forge.cc )"
+if [ "$sr" -gt 24 ] 2>/dev/null && [ "$fr" -gt "$sr" ] 2>/dev/null && [ "$( chk rankof "$TMP/q1.other.so.xml" Forge src/forge.h )" = 1 ]; then
     if r="$( chk bodyat "$TMP/q1.other.xml" Assemble src/forge.cc 4 )"; then ok "(Q1) entity identity: $r — Forge's member, not Smelter::Assemble (r$sr, outranks it at r$fr)"; else no "(Q1) entity identity: $r"; fi
 else
     no "(Q1) other-class premise: Smelter::Assemble r$sr, Forge::Assemble r$fr"
@@ -671,12 +698,18 @@ fi
 # ── E: explicit targets (reserve-sections-first) ───────────────────────────────────────────────────────────
 run --for="$T_D" --token-budget=5000 >"$TMP/e5000.xml"
 if r="$( chk body "$TMP/e5000.xml" jwt src/middleware/jwt/jwt.ts "getCookie" )"; then ok "(E1) --token-budget=5000: $r"; else no "(E1) --token-budget=5000: $r"; fi
-if r="$( chk prefix "$TMP/e5000.xml" "$TMP/d.xml" )"; then ok "(E1) --token-budget=5000: $r"; else no "(E1) --token-budget=5000: $r"; fi
+# E1-E3 order-prefix clauses (lane hrr, train 31; rule 4): each runs UNCHANGED as a RIPWIRE_NO_HEAD_RR=1 twin (against d.so.xml);
+# with the reorder on, "h" asserts the rows are a SET prefix of the default (score ranks 1..K: no gap, no repeat on next=)
+RIPWIRE_NO_HEAD_RR=1 run --for="$T_D" --token-budget=5000 >"$TMP/e5000.so.xml"
+if r="$( chk prefix "$TMP/e5000.so.xml" "$TMP/d.so.xml" )"; then ok "(E1) [RIPWIRE_NO_HEAD_RR=1 twin] --token-budget=5000: $r"; else no "(E1) [RIPWIRE_NO_HEAD_RR=1 twin] --token-budget=5000: $r"; fi
+if r="$( chk setprefix "$TMP/e5000.xml" "$TMP/d.xml" "$TMP/d.so.xml" )"; then ok "(E1h) head round-robin on, --token-budget=5000: $r"; else no "(E1h) head round-robin on, --token-budget=5000: $r"; fi
 if r="$( chk over "$TMP/e5000.xml" )"; then ok "(E1) --token-budget=5000: no over_ceiling"; else no "(E1) $r"; fi
 run --for="$T_D" --token-budget=400 >"$TMP/e400.xml"
 if r="$( chk rootattr "$TMP/e400.xml" bodies 0 )" && r2="$( chk rootattr "$TMP/e400.xml" reason budget )"; then ok "(E2) --token-budget=400: bodies=0 reason=budget"; else no "(E2) --token-budget=400: ${r:-} ${r2:-}"; fi
 if r="$( chk bodiesnext "$TMP/e400.xml" '^--expand=src/middleware/jwt/jwt\.ts:' )"; then ok "(E2) --token-budget=400: the skipped slot discloses itself, recoverable: $r"; else no "(E2) --token-budget=400: $r"; fi
-if r="$( chk prefix "$TMP/e400.xml" "$TMP/d.xml" )"; then ok "(E2) --token-budget=400: $r"; else no "(E2) --token-budget=400: $r"; fi
+RIPWIRE_NO_HEAD_RR=1 run --for="$T_D" --token-budget=400 >"$TMP/e400.so.xml"
+if r="$( chk prefix "$TMP/e400.so.xml" "$TMP/d.so.xml" )"; then ok "(E2) [RIPWIRE_NO_HEAD_RR=1 twin] --token-budget=400: $r"; else no "(E2) [RIPWIRE_NO_HEAD_RR=1 twin] --token-budget=400: $r"; fi
+if r="$( chk setprefix "$TMP/e400.xml" "$TMP/d.xml" "$TMP/d.so.xml" )"; then ok "(E2h) head round-robin on, --token-budget=400: $r"; else no "(E2h) head round-robin on, --token-budget=400: $r"; fi
 # E2b (CodeRabbit, #413): the skipped slot's next= is built by nextFlag, so a path a shell would split pastes as ONE argument
 rm -rf "$TMP/spc"; cp -R "$FIX" "$TMP/spc" && mv "$TMP/spc/src/middleware/jwt" "$TMP/spc/src/middleware/j wt"
 "$BIN" "$TMP/spc" --no-cache --for="$T_D" --token-budget=400 >"$TMP/e400spc.xml" 2>/dev/null
@@ -689,14 +722,16 @@ for n in 300 500 800 1200 2000 3000 5000 8000 1000000; do
     run --for="$T_D" --token-budget=$n >"$TMP/s$n.xml"; runoff --for="$T_D" --token-budget=$n >"$TMP/s$n.off.xml"
     rws="$( chk nrows "$TMP/s$n.xml" )"; rwo="$( chk nrows "$TMP/s$n.off.xml" )"; bb="$( chk bodybytes "$TMP/s$n.xml" )"
     case "$rws$rwo$bb" in *[!0-9]*|'') no "(E3) N=$n: unreadable counts rows=$rws off=$rwo body=$bb"; mono=0; continue;; esac
-    if ! chk prefix "$TMP/s$n.xml" "$TMP/d.xml" >/dev/null; then no "(E3) N=$n: rows are not a rank prefix of the default rows"; mono=0; fi
+    RIPWIRE_NO_HEAD_RR=1 run --for="$T_D" --token-budget=$n >"$TMP/s$n.so.xml"
+    if ! chk prefix "$TMP/s$n.so.xml" "$TMP/d.so.xml" >/dev/null; then no "(E3) [RIPWIRE_NO_HEAD_RR=1 twin] N=$n: rows are not a rank prefix of the default rows"; mono=0; fi
+    if ! chk setprefix "$TMP/s$n.xml" "$TMP/d.xml" "$TMP/d.so.xml" >/dev/null; then no "(E3h) head round-robin on, N=$n: rows are not a SET prefix of the default rows"; mono=0; fi
     if ! chk over "$TMP/s$n.xml" >/dev/null; then no "(E3) N=$n: over_ceiling on the root"; mono=0; fi
     [ "$rws" -lt "$prev_rows" ] && { no "(E3) N=$n: rows $rws < $prev_rows at the smaller N"; mono=0; }
     [ "$bb" -lt "$prev_b" ] && { no "(E3) N=$n: body $bb B < $prev_b B at the smaller N"; mono=0; }
     [ "$rws" -gt "$rwo" ] && { no "(E3) N=$n: rows $rws > slot-off $rwo (the body is reserved first, it never adds rows)"; mono=0; }
     prev_rows=$rws; prev_b=$bb; nflag="$nflag $n:$rws/$rwo/${bb}B"
 done
-if [ "$mono" = 1 ]; then ok "(E3) sweep rows(slot)/rows(off)/body:$nflag — rank prefix, monotone, <= slot-off, no over_ceiling"; fi
+if [ "$mono" = 1 ]; then ok "(E3) sweep rows(slot)/rows(off)/body:$nflag — rank prefix ([RIPWIRE_NO_HEAD_RR=1 twin]) and set prefix (E3h, reorder on), monotone, <= slot-off, no over_ceiling"; fi
 cdw=0; cdd=0
 chk cdata "$TMP/s1000000.xml" jwt >"$TMP/cd.wide" 2>/dev/null || cdw=1
 chk cdata "$TMP/d.xml" jwt >"$TMP/cd.default" 2>/dev/null || cdd=1
