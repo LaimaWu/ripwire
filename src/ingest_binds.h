@@ -5555,17 +5555,6 @@ inline constexpr std::array<PythonInPlaceOp, 13> kPythonInPlaceMethods = { {
     { "**=", "__ipow__", "__pow__" }, { "<<=", "__ilshift__", "__lshift__" }, { ">>=", "__irshift__", "__rshift__" },
     { "&=", "__iand__", "__and__" }, { "^=", "__ixor__", "__xor__" }, { "|=", "__ior__", "__or__" },
 } };
-// the row of operator `op` (an augmented assignment's spelling); nullptr for any other spelling
-inline const PythonInPlaceOp* pythonInPlaceOp( std::string_view op ) noexcept
-{
-    const auto it = std::ranges::find( kPythonInPlaceMethods, op, &PythonInPlaceOp::op );
-    return it == kPythonInPlaceMethods.end() ? nullptr : &*it;
-}
-// is `name` one of the operator methods an augmented assignment calls (in-place or the binary fallback)
-inline bool pythonOperatorMethod( std::string_view name ) noexcept
-{
-    return std::ranges::any_of( kPythonInPlaceMethods, [ & ]( const PythonInPlaceOp& o ) { return o.inPlace == name || o.binary == name; } );
-}
 // does `def` (a Python function_definition) return its first parameter BARE on every `return` — at least one, no `yield`;
 // a nested def, lambda or class is another scope and is not read. Bounded: a body past 4096 nodes proves nothing.
 inline bool pythonReturnsFirstParameter( TSNode def, std::string_view src )
@@ -5658,9 +5647,9 @@ inline void capturePythonInPlaceFacts( BindCtx& cx, TSNode n, const char* t, std
 {
     if( kindIs( t, "augmented_assignment" ) )
     {
-        const PythonInPlaceOp* op  = pythonInPlaceOp( nodeFieldText( n, NodeField::Operator, cx.src ) );
+        const auto             op  = std::ranges::find( kPythonInPlaceMethods, nodeFieldText( n, NodeField::Operator, cx.src ), &PythonInPlaceOp::op );
         const std::string_view var = identifierText( fieldChild( n, NodeField::Left ), cx.src );
-        if( op != nullptr && !var.empty() )
+        if( op != kPythonInPlaceMethods.end() && !var.empty() )
         {
             cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = at, .lang = cx.lang, .kind = LocalBindKind::AugAssign,
                                           .var = std::string( var ), .importedName = std::string( op->binary ), .typeName = std::string( op->inPlace ) } );
@@ -5673,7 +5662,12 @@ inline void capturePythonInPlaceFacts( BindCtx& cx, TSNode n, const char* t, std
     }
     const std::string_view name = nodeFieldText( n, NodeField::Name, cx.src );
     const TSNode           body = fieldChild( n, NodeField::Body );
-    if( ts_node_is_null( body ) || !pythonOperatorMethod( name ) )
+    bool operatorMethod = false;   // one the table's augmented assignments call: in-place, or the binary fallback
+    for( const PythonInPlaceOp& o : kPythonInPlaceMethods )
+    {
+        operatorMethod = operatorMethod || o.inPlace == name || o.binary == name;
+    }
+    if( ts_node_is_null( body ) || !operatorMethod )
     {
         return;
     }
