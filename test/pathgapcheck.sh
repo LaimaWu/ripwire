@@ -40,6 +40,11 @@
 #        the declined call could mean), S2 value (koa shape), S3 through (to= itself), S4 name, S5 external + row order,
 #        S6 depth cap, S7 row cap, S8 near miss (another name's declined list), S9 a disconnected pair keeps its plain hint,
 #        S10 a found path carries no block, S11 next= pastes, S12 both legends; (M) compares the block byte for byte.
+#   (C1-C8) CLOSURE CONTAINMENT (lane ix2-slice, IX-2 P2; src/closures.h): --callees=F carries closures=K and one
+#        <in n= p= via="closure" count=> block per named function written inside F's body (any depth), listing that
+#        closure's own callees — C1 nunjucks shape (createTemplate → Template), C2 the block is in no count=, C3 Python
+#        nested defs at depth 1 and 2, C4 near miss (a class member inside a function is no closure), C5 a closure-free
+#        answer carries none of it, C6 --json, C7 both legends, C8 near_sink why=closure (koa shape).
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -466,6 +471,112 @@ if grep -q '<near_sink callers= rows=>: the SINK-SIDE frontier' "$TMP/Sfull.xml"
 else
     no "(S12) a legend lacks the near_sink clause (full: $( grep -c 'SINK-SIDE' "$TMP/Sfull.xml" ), compact: $( grep -c 'ns in= site=' "$f" ))"
 fi
+
+echo "(C) closure containment: the callees form's <in> blocks and the near-sink why=closure (lane ix2-slice, IX-2 P2)"
+mkdir -p "$TMP/clo" "$TMP/clopy" "$TMP/clokoa"
+# nunjucks shape: createTemplate is an arrow written in getTemplate's body; only it calls Template
+cat > "$TMP/clo/env.js" <<'EOF'
+class Template {
+  constructor(src) { this.src = src; }
+}
+function iter(items, fn, done) { return done(null, items); }
+function plain(x) { return iter([], x, x); }
+class Env {
+  getTemplate(name, cb) {
+    const createTemplate = (err, info) => {
+      return new Template(info);
+    };
+    iter([], cb, createTemplate);
+    return name;
+  }
+}
+module.exports = { Env, plain };
+EOF
+# Python: a nested def (a closure, at depth 2 too) and a method of a class inside a function (a member, not a closure)
+cat > "$TMP/clopy/m.py" <<'EOF'
+def target():
+    return 1
+
+def other():
+    return 2
+
+def outer():
+    def helper():
+        def deeper():
+            return other()
+        return target()
+    return helper
+
+def factory():
+    class K:
+        def m(self):
+            return target()
+    return K
+EOF
+# koa shape: handleResponse is a closure of handleRequest and the sink's only caller
+cat > "$TMP/clokoa/app.js" <<'EOF'
+function respond(ctx) { return ctx; }
+class App {
+  handleRequest(ctx) {
+    const handleResponse = () => respond(ctx);
+    return 0;
+  }
+  listen() { return 1; }
+}
+module.exports = { App };
+EOF
+cal(){ "$BIN" "$1" --no-cache --callees="$2" > "$3" 2>&1; }
+f="$TMP/C1.xml"; cal "$TMP/clo" getTemplate "$f"; rc=$?
+blk="$( grep -o '<in [^>]*>.*</in>' "$f" )"
+if [ "$rc" -eq 0 ] && grep -q '<callees [^>]*closures="1"' "$f" \
+   && [ "$blk" = '<in n="createTemplate" p="env.js:8" via="closure" count="1"><s t="cls" n="Template" p="env.js:1"/></in>' ] \
+   && ! grep -o '<callees .*<in ' "$f" | grep -q '<s [^>]*n="Template"[^>]*/><in' ; then
+    ok "(C1) --callees=getTemplate carries closures=\"1\" and the createTemplate block naming Template (nunjucks shape)"
+else
+    no "(C1) want closures=1 and the createTemplate→Template block; got rc=$rc [$blk]: $( grep -o '<callees .*' "$f" | head -c 600 )"
+fi
+cnt="$( grep -o '<callees [^>]*count="[0-9]*"' "$f" | sed 's/.*count="\([0-9]*\)"/\1/' )"
+if [ "$cnt" = "1" ] && ! grep -o '<callees [^>]*>.*<in ' "$f" | grep -q 'n="Template"'; then
+    ok "(C2) count=\"1\" (iter only): the block's rows are in no count and in no row above it"
+else
+    no "(C2) count=[$cnt], or Template leaked into the call rows: $( grep -o '<callees .*' "$f" | head -c 400 )"
+fi
+f="$TMP/C3.xml"; cal "$TMP/clopy" outer "$f"; rc=$?
+blk="$( grep -o '<in .*</in>' "$f" | tr -d '\n' )"
+if [ "$rc" -eq 0 ] && grep -q '<callees [^>]*closures="2"' "$f" \
+   && [ "$blk" = '<in n="helper" p="m.py:8" via="closure" count="1"><s t="fn" n="target" p="m.py:1"/></in><in n="deeper" p="m.py:9" via="closure" count="1"><s t="fn" n="other" p="m.py:4"/></in>' ]; then
+    ok "(C3) Python nested defs, any depth: outer's blocks are helper (→ target) and deeper (→ other), source order"
+else
+    no "(C3) want helper and deeper blocks; got rc=$rc [$blk]"
+fi
+f="$TMP/C4.xml"; cal "$TMP/clopy" factory "$f"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q '<callees ' "$f" && ! grep -q 'closures=\|<in ' "$f"; then
+    ok "(C4) near miss: a method of a class written inside factory is the class's member, not a closure (no block)"
+else
+    no "(C4) factory's class member read as a closure: $( grep -o '<callees .*' "$f" | head -c 400 )"
+fi
+f="$TMP/C5.xml"; cal "$TMP/clo" plain "$f"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q '<callees [^>]*count="1"' "$f" && ! grep -q 'closures=\|<in \|closure' "$f"; then
+    ok "(C5) a function with no closure carries no closures=, no <in> and no closure legend"
+else
+    no "(C5) closure vocabulary on a closure-free answer: $( head -c 400 "$f" )"
+fi
+"$BIN" "$TMP/clo" --no-cache --callees=getTemplate --json > "$TMP/C6.json" 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); b=d["in"]; sys.exit(0 if d["closures"]==1 and len(b)==1 and b[0]["n"]=="createTemplate" and b[0]["via"]=="closure" and b[0]["count"]==1 and b[0]["calls"][0]["n"]=="Template" else 1)' "$TMP/C6.json"; then
+    ok "(C6) --json carries \"closures\":1 and the same block (keys = the XML attribute names)"
+else
+    no "(C6) --json lacks the closure block (rc=$rc): $( head -c 400 "$TMP/C6.json" )"
+fi
+"$BIN" "$TMP/clo" --no-cache --callees=getTemplate --legend=full > "$TMP/C7.xml" 2>&1
+if grep -q 'closures=K: K named functions are written INSIDE' "$TMP/C7.xml" && grep -q 'containment, not a call edge' "$TMP/C7.xml" \
+   && grep -q "closures=K: named functions written inside of=" "$TMP/C1.xml" && grep -q 'in n= p= via=closure count=' "$TMP/C1.xml"; then
+    ok "(C7) both legends define closures= and the <in> block (full: containment, not a call edge)"
+else
+    no "(C7) a legend lacks the closure reading"
+fi
+nsArm "(C8) near_sink why=closure: the sink's only caller is a closure of handleRequest (koa shape)" "$TMP/clokoa" "listen,respond" \
+    '<near_sink depth="2" callers="1" rows="1" next="--callers=app.js:handleResponse">' \
+    '<ns d="1" t="fn" n="handleResponse" p="app.js:4" why="closure:1" in="handleRequest" site="app.js:4"/>'
 
 echo "(M) MCP path_between carries the same clause"
 # Two MCP legend postures (lean-answers): the unchanged assertions run on --mcp-legend=inline, the pre-posture spelling

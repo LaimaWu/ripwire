@@ -15,6 +15,18 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — `--callees` lists what a function's closures call (`<in>` blocks)
+
+A named function written inside another function's body (a JS/TS arrow or function assigned in the body, a Python
+nested `def`, a Rust nested `fn`, at any depth) is a closure of it: read from the parser's own definition spans, so no
+cached content changes and no language needs a rule of its own. `--callees=F` (XML, `--json`, columnar) now carries
+`closures=K` and one `<in n= p= via="closure" count=>` block per closure (at most 4) listing that closure's own callees
+(at most 8 each, `capped="1"` and a `next=` past that). A block is containment, not a call edge: its rows are in no
+`count=`, and F reaches them only by running the closure or handing it on. The `--path` `<near_sink>` rows gain
+`why="closure"` with the enclosing function as `in=`. On nunjucks, `--callees=getTemplate` now names `Template`
+(called only inside its `createTemplate` arrow); on koa, `--path=listen,respond` names `handleResponse`, a closure of
+`handleRequest`. A function with no closure keeps its bytes. A class member written inside a function is not a closure.
+
 ### Added — `--path` names the sink side of an unreached path (`<near_sink>`)
 
 A `--path=A,B` answer with `reachable="0"` (and the MCP `path_between` twin) now carries `<near_sink depth= callers= rows=>`

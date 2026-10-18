@@ -336,6 +336,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // Written to the shortest honest form: every byte counts against the verb's pin, and the callees answer can carry the
     // first two at once.
     { "bodyless_defs",     "bodyless_defs=K: K of defs= have no body, so no callees to read" },
+    // lane ix2-slice (src/callhierarchy.h closureBlocks): the callees form's closure blocks, present-only
+    { "closures",          "closures=K: named functions written inside of='s body (closures_capped=1 more than the <in> blocks)" },
+    { "count",             "in n= p= via=closure count=: one closure and its OWN callees (count= distinct; shown= capped=1 next= the cut); containment, in no count above", true, "in" },
     { "unproven_defs",     "unproven_defs=K: K same-named defs not tied to that file, in no count or row (bare name shows them)" },
     { "declined_calls",    "declined_calls=K: K call sites left unbound (no evidence chose one def), in no count or row", false, {}, MapHeaderRead::No, {}, {}, "dc", "via" },
     { "cross_kind",        "cross_kind=kind:N,...: the defs= definitions differ in kind; rows union all of them (narrow with file:name)" },
@@ -787,7 +790,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "gap_syms", "gap_syms=N: searched symbols carrying gaps; <gap t= n= p= gaps=> rows, nearest from= first, are where the search could not see, never a hop; gap_syms_capped=1 more than shown", false, "path", MapHeaderRead::No, {}, "path" },
     // SINK-SIDE FRONTIER (src/pathgaps.h kNearSinkLegend), present on a reachable=0 answer: the <near_sink> block and its <ns> rows.
     { "rows", "near_sink depth= callers= rows=: to='s proven callers up to depth= back; rows_capped=1 cut; next= the first row's callers", true, "near_sink", MapHeaderRead::No, {}, "path" },
-    { "d", "ns d= t= n= p= callers= why=: hops back, symbol, its callers; why= un-edged ways in (declined|value|through|name), external: none found; never a hop", true, "ns", MapHeaderRead::No, {}, "path" },
+    { "d", "ns d= t= n= p= callers= why=: hops back, symbol, its callers; why= un-edged ways in (declined|value|through|name|closure), external: none found; never a hop", true, "ns", MapHeaderRead::No, {}, "path" },
     { "site", "ns in= site= met=1: one such site; met=1 the forward search reached in=", true, "ns", MapHeaderRead::No, {}, "path" },
     // quality-delta: src/verbs_quality.h (root emit) + src/quality.h identityDisclosure
     { "stale", "stale=N: ack ledger rows whose target no longer applies (sa rows); never gating", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },

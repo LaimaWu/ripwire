@@ -159,6 +159,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // tier-then-path order — the MCP twins run the identical call, so the two surfaces cannot disagree
         // about WHICH rows the question has.
         const CallHierarchyRows   chRows  = rw::callHierarchyRows( ing, g, sym, wantCallers );
+        // lane ix2-slice (IX-2 P2, src/closures.h): callees only — the functions written inside the matches' bodies, any depth
+        const std::vector<NodeId> chClosures = wantCallers ? std::vector<NodeId>{} : rw::ClosureIndex( ing ).closuresOf( chRows.matches );
         const std::vector<NodeId>& matches = chRows.matches;
         if( matches.empty() )
         {
@@ -266,6 +268,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             {
                 chHasVia = chAttr.nameOnly( i );   // FE-B's via="name": every edge to the matches by name (defattrib.h, one pass)
             }
+            chHasVia = chHasVia || rw::closureBlocksAnyVia( ing, g, chClosures );   // ix2-slice: a closure block's row may carry it too
             rw::emitTo( stdout, "{}{}{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar, chNextIsPage ).c_str(),
                          rw::capLegendClause( rw::computePageDisclosure( pw.end - pw.begin, result.size(), pw.end,
                                                                         cfg.pageLimit, cfg.pageOffset, chDiscloseCap ).active ),
@@ -281,7 +284,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                          ( std::string( rw::modScopeLegend( chHasModScope ) )   // #60: likewise, exactly when a t="modscope" row is
                            + rw::callSitesAtLegend( chSites.any, chSites.anyCut, rw::kCallSitesPerRowCap ) ).c_str(),   // CALLSITE-AT: likewise for sites_at=/sites_total=
                          ( rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ) + rw::valueRefsLegend( !chRows.valueRefs.rows.empty(), wantCallers )
-                           + rw::valueRefsDepthLegendFor( chRows.valueRefs ) ).c_str(),   // exactly when the root carries the depth disclosure
+                           + rw::valueRefsDepthLegendFor( chRows.valueRefs )                // exactly when the root carries the depth disclosure
+                           + std::string( rw::closureBlocksLegend( !chClosures.empty() ) ) ).c_str(),   // ix2-slice: exactly when an <in> block rides
                          rw::rootRelPathsLegend( chSingleRoot ),
                          rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
         }
@@ -301,6 +305,10 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         const rw::VrRender   chVr { chSingleRoot, chRootPrefix };
         const std::string    chValueRefsAttr = ( rw::valueRefsCountAttrXml( chRows.valueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( ing, chRows.valueRefs.depthCut, chVr ) );   // + the depth cut that makes it a floor
         const std::string    chVrNext = "--uses=" + std::string( sym );
+        // lane ix2-slice (IX-2 P2): the callees form's closure blocks — root closures= and the <in> blocks, absent with none
+        const rw::ClosureBlocksOut chIn         = rw::closureBlocks( ing, g, chClosures, chSingleRoot, chRootPrefix, /*json=*/false );
+        const std::string&         chClosuresAttr = chIn.head;
+        const std::string&         chInRows       = chIn.rows;
 
         // --format=columnar (RESEARCH lever 1): the same page window, re-encoded as a path-table + parallel
         // arrays (dedups the repeated per-row markup + paths). Default --format=xml is byte-identical below.
@@ -323,6 +331,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                                    + chTested.xmlAttr   // A6: hop_tested=/hop_untested=, the same partition on every dialect
                                    + chDeclinedAttr     // the tier-3 declines, beside the count they are not in
                                    + chValueRefsAttr    // value uses, beside the count they are not in (rows: the XML form)
+                                   + chClosuresAttr     // ix2-slice: closures written in of='s body (rows: the <in> blocks below)
                                    + chRootAttr   // R-E: same root= the XML/JSON branches carry
                                    + pageDisclosure( pab, sizeof( pab ), pw.end - pw.begin, result.size(), pw.end,
                                                      cfg.pageLimit, cfg.pageOffset, chDiscloseCap )
@@ -341,9 +350,10 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                 }
             }
             const std::string chDefRows = rw::defTableXml( ing, chAttr.groups, chListing, chRootPrefix );
+            const std::string chDcInRows = chDcRows + chInRows;
             emitColumnarSymbolRows( stdout, ing, tag, attr, page, chRootPrefix, &chTested.testReach, nullptr,
                                     rw::ColumnarRowExtras{ &pageVia, chSites.any ? &chSites.tokens : nullptr, &chSites.totals,   // CALLSITE-AT: sites_at only when a row has sites
-                                                           chAttr.groups.multi() ? &pageOfDef : nullptr, &chDefRows, &pageSplit, &chDcRows } );   // + the <dc> rows verbatim
+                                                           chAttr.groups.multi() ? &pageOfDef : nullptr, &chDefRows, &pageSplit, &chDcInRows } );   // + the <dc> and <in> rows verbatim
             return 0;
         }
 
@@ -389,7 +399,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                 chAtKeys[ i ] += rw::ofDefKeyJson( chAttr.groups, chAttr.tokens, i ) + rw::splitArmKeyJson( chAttr.splitArm( i ) );   // attrib-multidef
             }
             printJsonSymbolRows( ing, result, pw.begin, pw.end, chRootPrefix, &chTested.testReach, nullptr, &chVia, &chAtKeys );
-            rw::emitTo( stdout, "]{}{}}}", rw::declinedSitesJson( chDc, wantCallers, /*mcp=*/false ),   // the XML <dc> rows, keys = its attribute names
+            rw::emitTo( stdout, "]{}{}{}}}", rw::declinedSitesJson( chDc, wantCallers, /*mcp=*/false ),   // the XML <dc> rows, keys = its attribute names
+                         [ & ] { const rw::ClosureBlocksOut j = rw::closureBlocks( ing, g, chClosures, chSingleRoot, chRootPrefix, /*json=*/true ); return j.head + j.rows; }(),
                          rw::valueRefsJson( ing, chRows.valueRefs, wantCallers, chVr, "vrs", chVrNext ) );
             return 0;
         }
@@ -403,7 +414,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         }
         rw::emitTo( stdout, "{}{}{}{}{}{}", chUnprovenAttr.c_str(), rw::crossKindAttrXml( chRows.crossKind ).c_str(),   // H1's residue; hono-07's cross_kind=
                      rw::defsListedAttrXml( chAttr.groups, chListing ),                                             // attrib-multidef: a cut table says so
-                     chTested.xmlAttr.c_str(), chDeclinedAttr.c_str(), chValueRefsAttr );                        // then A6's partition, the declines, the value uses
+                     chTested.xmlAttr.c_str(), chDeclinedAttr.c_str(), chValueRefsAttr + chClosuresAttr );       // then A6's partition, the declines, the value uses, the closures
         rw::emitTo( stdout, "{}{}{}>", pageDisclosure( pab, sizeof( pab ), pw.end - pw.begin, result.size(), pw.end,
                                     cfg.pageLimit, cfg.pageOffset, chDiscloseCap ),
                      rw::graphCountFloorAttrXml( g ).c_str(),
@@ -422,8 +433,9 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                          rw::splitArmAttrXml( chAttr.splitArm( i ) ), rw::ofDefAttrXml( chAttr.groups, chAttr.tokens, i ),   // attrib-multidef
                          chSites.any ? rw::callSitesAttrXml( chSites.tokens[ i - pw.begin ], chSites.totals[ i - pw.begin ] ) : std::string() );   // CALLSITE-AT
         }
-        rw::emitTo( stdout, "{}{}{}</{}>", rw::stdMemberCallsSpelling( chRows.stdCalls, /*json=*/false ),   // the declined standard-member calls, after the rows
+        rw::emitTo( stdout, "{}{}{}{}</{}>", rw::stdMemberCallsSpelling( chRows.stdCalls, /*json=*/false ),   // the declined standard-member calls, after the rows
                      chDcRows,                                                                                // and each declined call SITE (<dc>)
+                     chInRows,                                                                                // ix2-slice: each closure's own callees (<in>)
                      rw::valueRefsXml( ing, chRows.valueRefs, wantCallers, chVr, chVrNext ), tag );
         return 0;
     }

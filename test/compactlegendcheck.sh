@@ -589,7 +589,8 @@ probeFor()
 # RE-PINNED 2026-10-18 (lane ix2-slice, commit 1 SINK-SIDE FRONTIER): ripwire.path/v1 550 -> 860 (measured 844, the
 # --path=total_area,distance probe; 535 on main b59b0824). Every reachable=0 answer now carries <near_sink> and its <ns> rows,
 # and the compact legend reads them: the near_sink and ns d= readings ride this probe (+309 B with separators); the ns in=/site=
-# reading (+~75 B) rides only an answer whose row names a site. Nothing else moved. The OLD path keeps its pin: the
+# reading (+~75 B) rides only an answer whose row names a site. Nothing else moved. Commit 2 (closure containment) adds
+# "|closure" to the ns d= reading: measured 852 B, inside the same 860 B pin. The OLD path keeps its pin: the
 # (U-twin-path) arm after the universe loop cuts exactly those readings out of the same probe and holds the rest at 550 B.
 PIN_TABLE='
 ripwire.edit-check/v1             650   636
@@ -630,7 +631,7 @@ ripwire.stray-content/v1          810   795
 ripwire.flags/v1                  470   459
 ripwire.doc-drift/v1              960   949
 ripwire.notes/v1                  310   292
-ripwire.path/v1                   860   844
+ripwire.path/v1                   860   852
 ripwire.connect/v1                760   741
 ripwire.impact/v1                940   924
 ripwire.mentions/v1               260   243
