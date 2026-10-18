@@ -385,7 +385,8 @@ case "$PD20c" in *' reaches="0" '*'pattern_dispatch="1"'*) ok "(20c) --impact=co
                  *) no "(20c) columnar --impact root lost pattern_dispatch=: ${PD20c:-no root}" ;; esac
 PD20d="$( "$BIN" "$PD" --no-cache --legend=full --impact=Widget._hidden 2>/dev/null )"; pdrc=$?
 if [ "$pdrc" -eq 0 ] && printf '%s' "$PD20d" | grep -q '<impact [^>]* reaches="0"[^>]* pattern_too_wide="1"' && printf '%s' "$PD20d" | grep -q 'pattern_too_wide=K: K templates' \
-   && ! printf '%s' "$PD20d" | grep -q 'pattern_dispatch="\|<pd \|<pdw '; then ok "(20d) --impact=Widget._hidden: pattern_too_wide=1 and its legend clause, no row"
+   && ! printf '%s' "$PD20d" | perl -0pe 's/<!--.*?-->//gs' | grep -q 'pattern_dispatch="\|<pd \|<pdw '; then   # rows only: the legend names <pd
+    ok "(20d) --impact=Widget._hidden: pattern_too_wide=1 and its legend clause, no row"
 else no "(20d) --impact of a too-wide-only method (rc=$pdrc): $( printf '%s' "$PD20d" | grep -o '<impact [^>]*>' )"; fi
 if command -v xmllint > /dev/null 2>&1; then
     printf '%s' "$PD20d" > "$WORK/pd20d.xml"
