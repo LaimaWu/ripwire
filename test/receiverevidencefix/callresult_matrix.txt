@@ -693,7 +693,25 @@ k = new_id(); rs_const_cell( "unparsed:const-block-in-fn", k, "pub fn outer%(k)d
 k = new_id(); rs_const_cell( "unparsed:const-block(item macro)", k, "const C%(k)d: () = {\n    mk%(k)d! {}\n" + CIMPL + "};\n", "N" )
 k = new_id(); rs_const_cell( "use:const-block-outside", k, "const _: () = {\n    use std::fmt::Error as %(S)s;\n" + CIMPL + "};\n", "N", macro=False )
 k = new_id(); rs_const_cell( "unparsed:none(const-block)", k, "const _: () = {\n" + CIMPL + "};\n", "P", tag=True, macro=False )
+# train 30 (N1, rv-call-result-typing-delta6 mutant M5): the qualified `use` walk (receiverevidence.h forEachRustUseAt) reads
+# the same item levels — `use a as m;` at module level, `use b as m;` inside a const / static item's value block, and the
+# block's impl returns `m::S`: the block's own `use` decides, so b's S is the ONE proven row and a's S (the trap) never is
+for form, opener in ( ( "use:const-block-qualified", "const _: () = {\n" ), ( "use:static-block-qualified", "static Q%(k)d: () = {\n" ) ):
+    k = new_id(); S = "S%d" % k
+    QIMPL = CIMPL.replace( "-> %(S)s {", "-> m::%(S)s {" )
+    rs_mod( k, "c%d" % k, "pub mod a {\n" + ind( rs_class( S, k ), 4 ) + "}\npub mod b {\n" + ind( rs_class( S, k, True ), 4 ) + "}\n"
+            + "use a as m;\n" + ( opener + "    use b as m;\n" + QIMPL + "};\n" ) % { "k": k, "S": S }
+            + "pub fn keep%d() -> usize { m::%s.hit%d() }\n" % ( k, S, k ) )
+    cells.append( ( k, "rust", form, "const-block", "U", RS, "src/c%d.rs:cell%d" % ( k, k ), "P", "method", "hit%d" % k, "@T%d" % k, False ) )
 put( RS, "src/lib.rs", "".join( "pub mod %s;\n" % m for m in rs_mods if ( "pub mod %s;\n" % m ) not in files[ RS ][ "src/lib.rs" ] ) )
+
+# train 30 (N3, rv-call-result-typing-delta6 M2): the ObjC FLOOR — model.h callResultFamilyOf maps ObjC (and C++) to None, so
+# an Objective-C++ `auto x = loadObjc(); x.hitObjc()` is not typed: with a second included namesake the call stays split.
+# Not a CELL (a split row has no via="name"); test/receiverevidencecheck.sh arm (L-objc) reads it by name. It turns into a
+# P cell when the macro-aware C++ card turns ObjC back on.
+put( CP, "src/objcfloor.h", "#pragma once\nstruct SObjc {\n    int hitObjc() const { return 1; }\n};\nSObjc loadObjc();\n" )
+put( CP, "src/objcdecoy.h", "#pragma once\nstruct DObjc {\n    int hitObjc() const { return 0; }\n};\n" )
+put( CP, "src/objcfloor.mm", '#include "objcfloor.h"\n#include "objcdecoy.h"\nSObjc loadObjc() { return {}; }\nint cellObjc() { auto x = loadObjc(); return x.hitObjc(); }\n' )
 
 # ───────────────────────────────────────────────────────────── write + list ─────────────────────────────────────────────────
 for root, fs in files.items():

@@ -113,15 +113,15 @@ Kotlin `val`/`var`, TS `const x = [await] f()` — now takes the callee's DECLAR
 to exactly one definition with evidence (not a pick by name alone, not a qualified written type's last name), and the
 result type — through `*T`, `&T`, `Box<T>`, a `?` per `Result`/`Option` layer, `await` for `Promise<T>`, a std smart
 pointer's pointee under `->` only — resolves in the callee's own file to exactly ONE class of this tree: through its
-imports (Java/Kotlin single-type and on-demand, TS, Rust `use` and globs, C++ using-declarations and using-directives),
-its qualifier (a Go import, a Rust crate or module path, a C++ namespace), its own file, then its package or namespace. ONE
+imports (Java/Kotlin single-type and on-demand, TS, Rust `use` and globs; planned for C++: using-declarations and using-directives),
+its qualifier (a Go import, a Rust crate or module path; planned for C++: a namespace), its own file, then its package or namespace. ONE
 rule decides every family's bare name: walk the callee's lexical scopes innermost first and collect EVERY binding of the
 spelling at each — a class declared there, an alias or typedef (C++ `using A = T;` / `typedef T A;` / `namespace a = b;`,
 Rust `type`, Kotlin `typealias`, TS `type` / `import A = n.T`), an import binding there (a Java single-static-import
 `import static a.B.S;` too), a member type a base of an enclosing class declares, a type declaration the index keeps no
 class for (a Java `record` / `@interface`, a C++ `union`, a forward declaration `struct S;` — which, in the class's own
-namespace, declares that class), a C++ block-scope binding in force in a local class's members, and a region the parser
-cannot read that may declare it (a C++ macro or parse error at namespace or class scope, a class-body `MK(S);`, any
+namespace, declares that class), (planned for C++) a block-scope binding in force in a local class's members, and a region the parser
+cannot read that may declare it (planned for C++: a macro or parse error at namespace or class scope, a class-body `MK(S);`, any
 statement of a function body enclosing a local class; a Rust statement- or item-position macro in a block enclosing a
 nested fn or an `impl` method written in a fn body) — and the first scope with any binding decides: one in-tree class types the local; an outside
 or unresolved binding, an alias, or two bindings that disagree record nothing. A Rust `mod` is a fresh scope (the file's

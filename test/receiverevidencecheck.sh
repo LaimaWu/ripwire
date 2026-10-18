@@ -1494,6 +1494,14 @@ while read -r tag id lang form scope target root sel verdict a b c; do
 done <"$MXCELLS"
 if [ "$mxn" -ge 200 ]; then ok "(L) matrix: $mxn cells run, $mxred red, $( grep -c '^NA ' "$MXCELLS" ) N/A rows listed"
 else no "(L) matrix: only $mxn cells were generated (expected >= 200)"; fi
+# (L-objc) train 30 (N3): the ObjC FLOOR (callresult_matrix.txt objcfloor.mm) — ObjC is off (model.h callResultFamilyOf), so the
+# Objective-C++ call result is not typed and the call keeps BOTH included namesakes; one proven SObjc row alone means ObjC is
+# typed now: make it a P cell (the macro-aware C++ card) instead of loosening this arm.
+if getrows "$CR/mx_cpp" callees "src/objcfloor.mm:cellObjc"; then
+    if [ -n "$( specmatch "hitObjc src/objcfloor.h:3" )" ] && [ -n "$( specmatch "hitObjc src/objcdecoy.h:3" )" ]; then
+        ok "(L-objc) ObjC floor: the .mm call result is not typed (hitObjc keeps both included namesakes)"
+    else no "(L-objc) ObjC floor: want hitObjc on objcfloor.h:3 AND objcdecoy.h:3 (ObjC untyped): $( show )"; fi
+fi
 
 echo "=== (C) conservation: no call silently disappears ==="
 ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/java5 callresult/kt5 callresult/cpp4 callresult/rust4 callresult/cpp5 callresult/rust5 callresult/rust6 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go"
