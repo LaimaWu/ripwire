@@ -147,6 +147,9 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strictly above every number a train-30 build used: lane call-result-typing
                                                       //    33 (RawBind resultIndex + unwrapDepth), lane fcall-forward 33, lane name-template-dispatch 35
                                                       //    (RefRole Pattern 11), main 34; so no blob a branch build wrote is read here.
+                                                      // 35: train 30 lane name-template-dispatch (train renumbers) — RefRole gained
+                                                      //    Pattern (11, appended): an older binary would reject the byte, a newer must not read a blob that
+                                                      //    predates it as complete.
                                                       // 34: train 29 — lane arity-min's paramsMin def field (its branch used 33, as did lane
                                                       //    call-result-typing's; 34 sits above both, so no blob a branch build wrote is read here).
                                                       // 33: train 29 lane arity-min — a def record appends `paramsMin` (u32 after params:
@@ -347,6 +350,8 @@ constexpr std::uint32_t kParserVer    = 196;          // bump on any grammar/.sc
                                                       //   lane call-result-typing 180 (rich 181), lane fcall-forward 188 (189), lane go-local-var 190 (191),
                                                       //   lane name-template-dispatch 192 (193), lane h1-annot (train 31) 194 (195); tail-sym and
                                                       //   path-owners kept 176. Rich file tag 197. kCacheVersion 36 (see its note).
+                                                      // 192 = 2026-10-17 (train 30 lane name-template-dispatch, IX-3; train renumbers): RefRole::Pattern
+                                                      //   records at Python getattr/hasattr/__dict__.get and JS/TS computed-member name templates. Rich 193.
                                                       // 190 = 2026-10-17 (train 30, lane go-local-var): Go var/const, Rust const/static and GDScript const
                                                       //   captures are anchored to their item/package scope, so a function-local declaration is no
                                                       //   longer a symbol; Go package-level `var ( … )` groups are captured. Train-30 reservation

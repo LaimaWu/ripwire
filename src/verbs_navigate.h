@@ -281,7 +281,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                          ( std::string( rw::modScopeLegend( chHasModScope ) )   // #60: likewise, exactly when a t="modscope" row is
                            + rw::callSitesAtLegend( chSites.any, chSites.anyCut, rw::kCallSitesPerRowCap ) ).c_str(),   // CALLSITE-AT: likewise for sites_at=/sites_total=
                          ( rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ) + rw::valueRefsLegend( !chRows.valueRefs.rows.empty(), wantCallers )
-                           + rw::valueRefsDepthLegendFor( chRows.valueRefs ) ).c_str(),   // exactly when the root carries the depth disclosure
+                           + rw::valueRefsDepthLegendFor( chRows.valueRefs )   // exactly when the root carries the depth disclosure
+                           + rw::patternDispatchLegend( !chRows.valueRefs.patternSites.empty() || !chRows.valueRefs.patternWideSites.empty(), wantCallers ) ).c_str(),   // IX-3: exactly when pattern_dispatch= rides
                          rw::rootRelPathsLegend( chSingleRoot ),
                          rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
         }
@@ -299,7 +300,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                                          + rw::declinedIfaceAttrXml( chRows.declinedIface );
         // Reference-as-value round: value_refs= beside count= (never in it), absent at zero; the <vrs> window after the rows.
         const rw::VrRender   chVr { chSingleRoot, chRootPrefix };
-        const std::string    chValueRefsAttr = ( rw::valueRefsCountAttrXml( chRows.valueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( ing, chRows.valueRefs.depthCut, chVr ) );   // + the depth cut that makes it a floor
+        const std::string    chValueRefsAttr = ( rw::valueRefsCountAttrXml( chRows.valueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( ing, chRows.valueRefs.depthCut, chVr )   // + the depth cut that makes it a floor
+                                                 + rw::patternDispatchAttrXml( chRows.valueRefs.patternSites.size(), chRows.valueRefs.patternWideSites.size() ) );   // IX-3: template lookups, never in count=
         const std::string    chVrNext = "--uses=" + std::string( sym );
 
         // --format=columnar (RESEARCH lever 1): the same page window, re-encoded as a path-table + parallel
@@ -424,7 +426,10 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         }
         rw::emitTo( stdout, "{}{}{}</{}>", rw::stdMemberCallsSpelling( chRows.stdCalls, /*json=*/false ),   // the declined standard-member calls, after the rows
                      chDcRows,                                                                                // and each declined call SITE (<dc>)
-                     rw::valueRefsXml( ing, chRows.valueRefs, wantCallers, chVr, chVrNext ), tag );
+                     rw::valueRefsXml( ing, chRows.valueRefs, wantCallers, chVr, chVrNext )
+                       + ( wantCallers                  ? rw::patternDispatchXml( ing, chRows.valueRefs.patternSites, chVr )
+                           : chRows.valueRefs.patternSites.empty() ? std::string()
+                                                         : rw::patternCalleesXml( ing, rw::PatternIndex( ing, rw::ValueRefIndex( ing ) ), chRows.valueRefs.patternSites, chVr ) ), tag );
         return 0;
     }
     return std::nullopt;
@@ -958,6 +963,8 @@ struct SafeDeleteLegendFlags
     bool        gateDeclined  = false;   // the builtin-method gate declined a call in this graph
     bool        stdDeclined   = false;   // the standard-member gate declined a call in this graph (graph.h StdMemberGate)
     std::size_t valueRefs     = 0;       // value_refs= on the root (valuerefs.h): SYM is used as a value
+    bool        patternDispatch = false; // IX-3: pattern_dispatch= / pattern_too_wide= on the root (valuerefs.h)
+    bool        patternWideRows = false; // IX-3: the <pdw> rows ride (risk=hedged and a too-wide template can name SYM)
     bool        callersFloor  = false;   // callers_floor= on the root (countfloor.h): callers= may be short for THIS definition
     bool        usesFloor     = false;   // uses_floor= on the root: this kind's reads/type mentions are not indexed in this run
     bool        hasSitesAt    = false;   // a <c sites_at=> row is on this page (CALLSITE-AT)
@@ -1018,15 +1025,37 @@ inline constexpr SafeDeleteRiskReading kSafeDeleteRiskReadings[] = {
     { "uses-exist",      "uses-exist: callers or uses exist, and at least part of the radius is test-covered. " },
     { "unmodelled",      "unmodelled: zero callers AND zero uses were READ, but this kind is used by reading or naming it and those "
                          "counts cannot see that — no reading either way, never a none-found. " },
+    // IX-3: a template lookup can name this method — zero proven callers is then no safety reading
+    { "hedged",          "hedged: zero proven callers and zero uses, but pattern_dispatch=N name-template lookups (the <pd> rows), or "
+                         "pattern_too_wide=K too-wide ones (the <pdw> rows), MAY invoke this method by a constructed name; not a safety reading. " },
     // lane declined-sites (gates review Q3): what none-found read beside declined_calls= before the <dc> rows named the calls
     { "possible-callers", "possible-callers: zero proven callers and zero uses, but declined_calls=K call sites (the <dc> rows) could have "
                           "meant this definition; not a safety reading. " },
 };
+// The risk= value in force, in precedence order. Without evidence: unmodelled (this kind's uses are not indexed), then
+// possible-callers (gates review Q3: never none-found beside a declined possible caller), then hedged (IX-3: never
+// none-found when a name template, too-wide ones included, can name it), then none-found; with evidence: untested-radius, else uses-exist.
+inline const char* safeDeleteRisk( bool anyEvidence, bool usesFloor, bool declined, bool patterns, bool untestedRadius ) noexcept
+{
+    if( anyEvidence )
+    {
+        return untestedRadius ? "untested-radius" : "uses-exist";
+    }
+    if( usesFloor )
+    {
+        return "unmodelled";
+    }
+    if( declined )
+    {
+        return "possible-callers";
+    }
+    return patterns ? "hedged" : "none-found";
+}
 inline const char* safeDeleteRiskSentence( std::string_view risk ) noexcept
 {
     const auto it  = std::ranges::find( kSafeDeleteRiskReadings, risk, &SafeDeleteRiskReading::risk );
     const auto end = std::end( kSafeDeleteRiskReadings );   // outside the promise: a self-check names values, it calls nothing
-    ASSUME( it != end, "safeDeleteRiskSentence: runSafeDelete assigns only the five values listed" );
+    ASSUME( it != end, "safeDeleteRiskSentence: runSafeDelete assigns only the six values listed" );
     return it != end ? it->sentence : "";
 }
 
@@ -1045,6 +1074,7 @@ inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs
     std::string declinedClause = rw::declinedCallsLegendForRows( declinedCalls > 0, flags.gateDeclined, flags.stdDeclined, flags.declinedSites.any )
                                + rw::declinedSitesLegend( flags.declinedSites );
     declinedClause += rw::valueRefsSafeDeleteLegend( flags.valueRefs > 0 );   // exactly when the root carries value_refs=
+    declinedClause += rw::patternDispatchLegend( flags.patternDispatch, true, flags.patternWideRows );     // IX-3: exactly when the root carries pattern_dispatch=/pattern_too_wide=
     declinedClause += rw::valueRefsDepthLegend( flags.valueRefDepthCut );      // exactly when it carries the depth disclosure
     declinedClause += safeDeleteFloorLegend( flags, risk );   // count-floor + CALLSITE-AT: present-only clauses
     rw::emitTo( stdout, "<!-- ripwire safe-delete: composes signals the tool already computes into one \"can I delete this?\" READ "
@@ -1215,8 +1245,11 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     // (sites above) and they keep dead_code_candidate at 0 by --dead-code's own rule (ValueRefIndex::isValueReferenced):
     // a row made inside the function itself (`timer_set( tick )` in tick) or a wrapper decorator does not.
     const rw::ValueRefIndex sdVri( ing );
-    const rw::ValueRefRows  sdValueRefs = rw::valueRefCallerRows( ing, sdVri, defs );
+    const rw::ValueRefRows  sdValueRefs = rw::withPatternRows( rw::valueRefCallerRows( ing, sdVri, defs ), rw::PatternIndex( ing, sdVri ), defs, true );
     const rw::VrRender      sdVr { sdSingleRoot, sdRootPrefix };   // the <vrs> rows' and the depth cut's paths
+    // IX-3: name-template lookups that may name a def — rows and a risk reading, never a caller and never the dead set
+    const std::vector<std::uint32_t>& sdPatterns = sdValueRefs.patternSites;
+    const std::vector<std::uint32_t>& sdWide     = sdValueRefs.patternWideSites;   // too wide for a candidate list; still never none-found
     bool deadCodeCandidate = false;
     if( defs.size() == 1 && callerIds.empty() && !sdVri.isValueReferenced( defs[0] ) )
     {
@@ -1267,11 +1300,8 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     // lane declined-sites: declined calls whose candidate lists hold a definition (as --callers counts and lists them) — the
     // <dc> rows, file-first, cut at the callers verb's own cap (one constant, gates review Q6).
     const auto [ sdDeclinedCalls, sdDeclinedSites ] = rw::declinedCallsAndSites( ing, g, defs, /*wantCallers=*/true );
-    const char* risk        = ( !anyEvidence && usesFloor )                   ? "unmodelled"
-                            : !anyEvidence && sdDeclinedCalls > 0             ? "possible-callers"   // gates review Q3: never none-found beside a declined possible caller
-                            : !anyEvidence                                    ? "none-found"
-                            : ( !reach.empty() && radiusTested == 0 )         ? "untested-radius"
-                            :                                                   "uses-exist";
+    const char* risk        = safeDeleteRisk( anyEvidence, usesFloor, sdDeclinedCalls > 0, !sdPatterns.empty() || !sdWide.empty(), !reach.empty() && radiusTested == 0 );
+    const bool  sdWideRows  = std::string_view( risk ) == "hedged" && !sdWide.empty();   // the <pdw> rows: exactly when they back risk=hedged
 
     std::vector<char> esc;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
@@ -1317,7 +1347,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                           SafeDeleteLegendFlags{ .singleRoot = sdSingleRoot, .hasUnindexed = rw::graphGaugeClauses( g ),
                                                  .hasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ) ),
                                                  .declinedCalls = sdDeclinedCalls, .gateDeclined = g.gateDeclinedCalls > 0, .stdDeclined = g.stdMemberDeclinedCalls > 0,
-                                                 .valueRefs = sdValueRefs.rows.size(), .callersFloor = sdFloor.isFloor, .usesFloor = usesFloor,
+                                                 .valueRefs = sdValueRefs.rows.size(), .patternDispatch = !sdPatterns.empty() || !sdWide.empty(), .patternWideRows = sdWideRows, .callersFloor = sdFloor.isFloor, .usesFloor = usesFloor,
                                                  .hasSitesAt = sdSites.any, .sitesCut = sdSites.anyCut, .valueRefDepthCut = sdValueRefs.depthCut.files > 0,
                                                  .defTable = sdAttr.groups.multi(), .defTableCut = sdListing.cut, .splitArms = sdHasSplit,
                                                  .declinedSites = rw::declinedSitesLegendFlags( sdDc, /*callersForm=*/true, sdDcCut ) } );
@@ -1345,7 +1375,8 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                 testedSelf ? 1 : 0, radiusTested, radiusUntested, deadCodeCandidate ? 1 : 0, risk,
                 rw::unprovenDefsAttrXml( sdUnprovenDefs ).c_str(),   // H1: beside the verdict it qualifies; absent at zero
                 ( rw::declinedCallsAttrXml( sdDeclinedCalls ) + rw::declinedSiteCutAttrXml( sdDcCut ) ).c_str(), // beside risk= too: declined calls that may reach it (+ the <dc> cut); absent at zero
-                ( rw::valueRefsCountAttrXml( sdValueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( ing, sdValueRefs.depthCut, sdVr ) ), // value uses: in uses=, never in callers=/impact_reaches=; absent at zero
+                ( rw::valueRefsCountAttrXml( sdValueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( ing, sdValueRefs.depthCut, sdVr )
+                  + rw::patternDispatchAttrXml( sdPatterns.size(), sdWide.size() ) ), // value uses + IX-3 template lookups: never in callers=/impact_reaches=; absent at zero
                 pageDisclosure( cab, sizeof( cab ), cw.end - cw.begin, callerIds.size(), cw.end, cfg.pageLimit, cfg.pageOffset, true ),
                 rw::graphCountFloorAttrXml( g ).c_str(), sdRootAttr.c_str(), sdNextAttr.c_str(),
                 rw::defsListedAttrXml( sdAttr.groups, sdListing ) );   // attrib-multidef: a cut table says so
@@ -1364,7 +1395,8 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
         rw::emitTo( stdout, "{}{}/>", rw::splitArmAttrXml( sdAttr.splitArm( i ) ), rw::ofDefAttrXml( sdAttr.groups, sdAttr.tokens, i ) );   // attrib-multidef
     }
     rw::emitTo( stdout, "{}{}</safe-delete>", rw::declinedSitesXml( sdDc, /*callersForm=*/true ),   // lane declined-sites: each declined possible caller, after the <c> rows
-                rw::valueRefsXml( ing, sdValueRefs, true, sdVr, "--uses=" + std::string( cfg.safeDeleteSym ) ) );
+                rw::valueRefsXml( ing, sdValueRefs, true, sdVr, "--uses=" + std::string( cfg.safeDeleteSym ) ) + rw::patternDispatchXml( ing, sdPatterns, sdVr )
+                    + ( sdWideRows ? rw::patternDispatchXml( ing, sdWide, sdVr, /*wide=*/true ) : std::string() ) );
     return 0;
 }
 
@@ -2579,6 +2611,7 @@ struct ImpactView
     const rw::ReachAttribution&    attrib;          // attrib-multidef (defattrib.h): the definition groups + each reached row's ties
     const rw::DefTableListing&     defListing;      // ... and the groups this page's table lists
     const std::vector<char>&       typeOnly;        // L7 (typeuse.h ImpactReach::typeOnly): per node, reached only through a type mention; empty when unarmed
+    std::span<const std::uint32_t> patternSites {}; // IX-3: template lookups that may name SYM — never in reaches= (XML rows)
 };
 
 
@@ -2732,7 +2765,8 @@ int emitImpactXml( const ImpactView& v )
                  rw::byDepthAttrXml( v.byDepth ),                                                              // 0.6.5: partitions reaches= by hop depth
                  v.imports.xmlAttrs.c_str(), v.radiusTested, v.radiusUntested,
                  ( rw::declinedCallsAttrXml( v.declinedCalls ) + rw::declinedIfaceAttrXml( v.declinedIface ) ).c_str(),   // tier-3 declines into the radius
-                 ( rw::valueRefsCountAttrXml( v.valueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( v.ing, v.valueRefs.depthCut, rw::VrRender{ v.singleRoot, v.rootPrefix } ) ),   // value uses: never in reaches=; absent at zero
+                 ( rw::valueRefsCountAttrXml( v.valueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( v.ing, v.valueRefs.depthCut, rw::VrRender{ v.singleRoot, v.rootPrefix } )
+                   + rw::patternDispatchAttrXml( v.patternSites.size(), 0 ) ),   // value uses + IX-3 template lookups: never in reaches=; absent at zero
                  std::string( v.rootAttr ).c_str(),
                  pageDisclosure( ipab, sizeof( ipab ), shownRows, v.show.size(), v.page.end,
                                  v.pageLimit, v.pageOffset, true ),
@@ -2754,7 +2788,8 @@ int emitImpactXml( const ImpactView& v )
     }
     rw::emitImportRowsXml( stdout, v.ing, v.importPage, v.rootPrefix, v.importLazyPage );
     rw::emitTo( stdout, "{}</impact>", rw::valueRefsXml( v.ing, v.valueRefs, true, rw::VrRender{ v.singleRoot, v.rootPrefix },
-                                                          "--uses=" + std::string( v.sym ) ) );
+                                                          "--uses=" + std::string( v.sym ) )
+                                         + rw::patternDispatchXml( v.ing, v.patternSites, rw::VrRender{ v.singleRoot, v.rootPrefix } ) );
     return 0;
 }
 
@@ -2841,7 +2876,8 @@ std::optional<int> runImpact( const MainDispatch& d )
         const rw::DefTableListing imListing = rw::defTableListing( imAttr.groups, imNamed );
         // Reference-as-value round: SYM's own binding sites, beside the radius they are not in.
         const rw::ValueRefIndex imVri( ing );
-        const rw::ValueRefRows  imValueRefs = rw::valueRefCallerRows( ing, imVri, seeds );
+        const rw::ValueRefRows  imValueRefs = rw::withPatternRows( rw::valueRefCallerRows( ing, imVri, seeds ), rw::PatternIndex( ing, imVri ), seeds, true );
+        const std::vector<std::uint32_t>& imPatterns = imValueRefs.patternSites;   // IX-3: beside the radius, never in it
 
         if( !cfg.json )
         { // L2: JSON has no comment-node analogue; the XML-only leading doc comment
@@ -2874,7 +2910,8 @@ std::optional<int> runImpact( const MainDispatch& d )
                                                      !imports.next.empty() && !cfg.columnar, rw::ImpactRollupTypeClauses{ imFiles.typed, imFiles.typeDefs, imFiles.typeCapped } )   // idea #6; fix27; FIX1 R1: the XML root's importers_next= (columnar names it in lens=); L7
                            + rw::defTableLegend( imAttr.groups.multi(), imListing.cut ) ).c_str(),   // attrib-multidef: exactly when the table rides
                          ( std::string( rw::valueRefsReachLegend( !imValueRefs.rows.empty() ) )   // exactly when the root carries value_refs=
-                           + rw::valueRefsDepthLegendFor( imValueRefs ) ).c_str(),                 // ... and the depth disclosure
+                           + rw::valueRefsDepthLegendFor( imValueRefs )                 // ... and the depth disclosure
+                           + rw::patternDispatchLegend( !imPatterns.empty(), true ) ).c_str(),   // IX-3: exactly when pattern_dispatch= rides
                          rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
         }
         // P2.1 + §P8 G1: the rank-ordered listing's 40 is a DEFAULT now, not a ceiling — see the §P10.3 note
@@ -2886,7 +2923,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                                imports, importPage, importLazyPage, prD, imSingleRoot, imRootPrefix, imRootAttr,
                                imSingleRoot ? cfg.roots[0] : std::string_view(), cfg.pageLimit, cfg.pageOffset,
                                &imTestReach, imRadiusTested, imRadiusUntested, imDeclinedCalls, imDeclinedIface, g, imDepth, imByDepth, imValueRefs,
-                               imProven, imFiles, imAttr, imListing, imWalk.typeOnly };
+                               imProven, imFiles, imAttr, imListing, imWalk.typeOnly, imPatterns };
 
         if( cfg.columnar ) { return emitImpactColumnar( view ); }
         if( cfg.json     ) { return emitImpactJson( view ); }

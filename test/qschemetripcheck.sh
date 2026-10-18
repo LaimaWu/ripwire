@@ -60,6 +60,10 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   call and value references) and kCacheVersion 32 -> 33 (a RawRef record appends the `forwarded` byte); the train
 #   renumbers both. kQSnapCacheScheme 21 is unchanged: what a cached Snapshot represents is the same, and the parser and
 #   cache versions already key every extraction fact it holds.
+# 2026-10-17, lane/name-template-dispatch (IX-3, train 30; the train renumbers): RE-PINNED with UPDATE_GOLDEN=1 (hash
+#   a99b270ea1…0fe680). The only watched text that moved is the kParserVer 176 -> 192 (rich 193) and kCacheVersion
+#   32 -> 35 declarations and quality.h's two mirrors: RefRole gained Pattern (11, appended) for name-template lookups.
+#   Pattern refs are never read by the quality Snapshot (dead set, clones, metrics), so kQSnapCacheScheme stays.
 # 2026-10-15, train 28 (grep-carrier, ruby-pair, qd-memory-degrade, githarden-speed, git-child-hardening, PR #380, forbudget-soft,
 #   for-body-slot, attrib-multidef, declined-sites merged onto main 1bcb6540): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged
 #   tree (hash 279718355d…5ba2db). Watched text: kParserVer 173 -> 176 (main's slice 4a 173 / rich 174, lane grep-carrier 173,

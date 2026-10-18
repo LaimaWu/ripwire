@@ -197,5 +197,168 @@ else
     no "(8) non-call references printed as call sites: every sites_at= is \"$SD8_ALL\", want \"n.c:11\""
 fi
 
+# (9)-(17) IX-3 name-template dispatch (lane name-template-dispatch): a method a template lookup can name is no
+#     none-found. RED on main (risk="none-found", no pattern_dispatch=). Python: getattr with an f-string prefix
+#     (the textual watch_ shape), a self receiver narrowed to the class family, a bare-variable getattr (no row), a
+#     literal getattr (no template, no row), a too-wide f"_{m}" (pattern_too_wide=1, no row); JS: this['compile' + t]
+#     (the nunjucks shape). Dead-code membership is unchanged: dead_code_candidate= is not read from these rows.
+#     (14)/(15) the same rows on --callers / --impact (red on main: count 0, no hedge); (16) --callers of a too-wide-only
+#     method carries pattern_too_wide=1 and no row; (17) a too-wide-only method WITH a caller keeps its evidence reading
+#     (no <pdw>, risk unchanged) — (12) is the honesty fix: too wide for a candidate list is still never none-found.
+PD="$WORK/pd"; mkdir -p "$PD"
+cat > "$PD/react.py" <<'PDEOF'
+class Node:
+    pass
+
+def check_watchers(obj, name):
+    fn = getattr(obj, f"watch_{name}", None)
+    return fn
+
+def bare_lookup(obj, name):
+    return getattr(obj, name)
+
+def literal_lookup(obj):
+    return getattr(obj, "plain_handler")
+
+def wide_lookup(obj, m):
+    return getattr(obj, f"_{m}")
+
+class Builder:
+    def run(self, rule):
+        return getattr(self, f"process_{rule}", None)
+
+    def process_color(self):
+        return 1
+
+class Unrelated:
+    def process_width(self):
+        return 2
+
+class Widget(Node):
+    def watch_value(self, v):
+        return v
+
+    def bare_target(self):
+        return 0
+
+    def plain_handler(self):
+        return 0
+
+    def _hidden(self):
+        return 0
+
+    def _called(self):
+        return 0
+
+def call_it(w):
+    return w._called()
+PDEOF
+cat > "$PD/comp.js" <<'PDEOF'
+class Compiler {
+  compile(node) {
+    var fn = this['compile' + node.typename];
+    return fn.call(this, node);
+  }
+  compileSuper(node) {
+    return node;
+  }
+}
+module.exports = { Compiler };
+PDEOF
+pdsd(){ "$BIN" "$PD" --no-cache --safe-delete="$1" 2>/dev/null | sed 's/<!--.*-->//'; }
+PD9="$( pdsd react.py:watch_value )"
+if printf '%s' "$PD9" | grep -q 'risk="hedged" pattern_dispatch="1"' && printf '%s' "$PD9" | grep -q '<pd in="check_watchers" p="react.py:5" pattern="watch_\*"/>'; then
+    ok "(9) getattr(obj, f\"watch_{name}\") names watch_value: risk=hedged, pattern_dispatch=1, <pd> at react.py:5"
+else
+    no "(9) watch_value is not hedged by the template lookup: $PD9"
+fi
+PD10a="$( pdsd Builder.process_color )"; PD10b="$( pdsd Unrelated.process_width )"
+if printf '%s' "$PD10a" | grep -q 'pattern_dispatch="1"' && printf '%s' "$PD10b" | grep -q 'risk="none-found"' && ! printf '%s' "$PD10b" | grep -q 'pattern_dispatch='; then
+    ok "(10) a self receiver keeps only the class family: Builder.process_color hedged, Unrelated.process_width not"
+else
+    no "(10) self-receiver family narrowing: in-family=[$PD10a] out-of-family=[$PD10b]"
+fi
+PD11a="$( pdsd Widget.bare_target )"; PD11b="$( pdsd Widget.plain_handler )"
+if printf '%s' "$PD11a$PD11b" | grep -q 'pattern_dispatch='; then
+    no "(11) a bare-variable or literal getattr made a template row: [$PD11a] [$PD11b]"
+else
+    ok "(11) near miss: getattr(obj, name) and getattr(obj, \"plain_handler\") make no pattern row"
+fi
+PD12="$( pdsd Widget._hidden )"
+if printf '%s' "$PD12" | grep -q 'risk="hedged" pattern_too_wide="1"' && printf '%s' "$PD12" | grep -q '<pdws total="1" shown="1"><pdw in="wide_lookup" p="react.py:15" pattern="_\*"/></pdws>' \
+    && ! printf '%s' "$PD12" | grep -q 'pattern_dispatch=\|<pd '; then
+    ok "(12) f\"_{m}\" is too wide: risk=hedged, pattern_too_wide=1, the site as <pdw> at react.py:15, no candidate list"
+else
+    no "(12) the too-wide template must hedge (never none-found) and name its site: $PD12"
+fi
+PD13="$( pdsd compileSuper )"
+PD13c="$( "$BIN" "$PD" --no-cache --callees=comp.js:compile 2>/dev/null | sed 's/<!--.*-->//' )"
+if printf '%s' "$PD13" | grep -q 'risk="hedged" pattern_dispatch="1"' && printf '%s' "$PD13c" | grep -q '<pd l="3" pattern="compile\*" cands="1" shown="1"><t n="compileSuper" p="comp.js:6"/></pd>'; then
+    ok "(13) JS this['compile' + t]: compileSuper hedged; --callees=compile lists it as a <pd> candidate"
+else
+    no "(13) the JS computed-member template: safe-delete=[$PD13] callees=[$PD13c]"
+fi
+
+PD14="$( "$BIN" "$PD" --no-cache --callers=compileSuper 2>/dev/null | sed 's/<!--.*-->//' )"
+PDROWS='<pds total="1" shown="1"><pd in="compile" p="comp.js:3" pattern="compile\*"/></pds>'
+if printf '%s' "$PD14" | grep -q 'count="0"' && printf '%s' "$PD14" | grep -q 'pattern_dispatch="1"' && printf '%s' "$PD14" | grep -q "$PDROWS"; then
+    ok "(14) --callers=compileSuper: count=0 plus pattern_dispatch=1 and the <pd> row naming compile at comp.js:3"
+else
+    no "(14) --callers=compileSuper lost the template-lookup hedge: $PD14"
+fi
+PD15="$( "$BIN" "$PD" --no-cache --impact=compileSuper 2>/dev/null | sed 's/<!--.*-->//' )"
+if printf '%s' "$PD15" | grep -q 'reaches="0"' && printf '%s' "$PD15" | grep -q 'pattern_dispatch="1"' && printf '%s' "$PD15" | grep -q "$PDROWS"; then
+    ok "(15) --impact=compileSuper: reaches=0 plus pattern_dispatch=1 and the <pd> row"
+else
+    no "(15) --impact=compileSuper lost the template-lookup hedge: $PD15"
+fi
+PD16="$( "$BIN" "$PD" --no-cache --callers=Widget._hidden 2>/dev/null | sed 's/<!--.*-->//' )"
+if printf '%s' "$PD16" | grep -q 'pattern_too_wide="1"' && ! printf '%s' "$PD16" | grep -q 'pattern_dispatch=\|<pd \|<pdw '; then
+    ok "(16) --callers=Widget._hidden: pattern_too_wide=1, no row"
+else
+    no "(16) --callers of a too-wide-only method: $PD16"
+fi
+PD17="$( pdsd Widget._called )"
+if printf '%s' "$PD17" | grep -q 'pattern_too_wide="1"' && ! printf '%s' "$PD17" | grep -q 'risk="hedged"\|risk="none-found"\|<pdw'; then
+    ok "(17) near miss: a too-wide-only method with a caller keeps its evidence reading, no <pdw>"
+else
+    no "(17) a too-wide site overrode real evidence: $PD17"
+fi
+
+# (18) N-A: a template with NO literal side (`codes[sc + '']`, f"{m}") carries no name information: it makes no
+#     Pattern ref at all (like bare obj[x] in (11)), so a method nothing calls stays none-found — no pattern_too_wide,
+#     no <pdw>. RED on c72f9c81 (the fastify statusCodes[statusCode + ''] shape read as pattern="*" and hedged every
+#     none-found method). A 1-2 char side (f"_{m}", (12)) is still a too-wide hedge.
+PE="$WORK/pe"; mkdir -p "$PE"
+cat > "$PE/codes.js" <<'PEEOF'
+const statusCodes = { 404: 'Not Found' };
+class Reply {
+  text(statusCode) {
+    return statusCodes[statusCode + ''];
+  }
+  orphan() {
+    return 0;
+  }
+}
+module.exports = { Reply };
+PEEOF
+cat > "$PE/codes.py" <<'PEEOF'
+def by_name(obj, m):
+    return getattr(obj, f"{m}")
+
+class Thing:
+    def lonely(self):
+        return 0
+PEEOF
+PD18a="$( "$BIN" "$PE" --no-cache --safe-delete=codes.js:orphan 2>/dev/null | sed 's/<!--.*-->//' )"
+PD18b="$( "$BIN" "$PE" --no-cache --safe-delete=Thing.lonely 2>/dev/null | sed 's/<!--.*-->//' )"
+PD18c="$( "$BIN" "$PE" --no-cache --callees=codes.js:text 2>/dev/null | sed 's/<!--.*-->//' )"
+if printf '%s' "$PD18a" | grep -q 'risk="none-found"' && printf '%s' "$PD18b" | grep -q 'risk="none-found"' \
+    && ! printf '%s' "$PD18a$PD18b$PD18c" | grep -q 'pattern_too_wide=\|pattern_dispatch=\|<pdw\|<pd \|pattern="\*"'; then
+    ok "(18) a zero-literal template (codes[sc + ''], f\"{m}\") makes no pattern ref: codes.js:orphan / Thing.lonely stay none-found"
+else
+    no "(18) a zero-literal template made a pattern ref: [$PD18a] [$PD18b] callees=[$PD18c]"
+fi
+
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'
 exit "$fail"
