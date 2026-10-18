@@ -318,6 +318,16 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # --for file page (rows with sym=), its full legend clause defines them, and est_tokens= prices them, 4111 -> 4500 B. Checked
 # mechanically: with the <tail> element, the tail clause and est_tokens= masked, the new answer equals the previous pin byte for
 # byte (at= masked). The six other pins are unchanged.
+# RE-ANCHORED BY HAND 2026-10-17 (lane tail-sym, train 30, by design), for.xml only: the full tail clause now says sym= rides
+# BOTH tail row kinds ("first t p= alone … then t p= sym=" -> "… t p= the file, sym= its top symbols by lens rank on either
+# kind (a pointer into the file, not the answer)"), and est_tokens= prices it, 4500 -> 4566 B. This fixture's tail has no rank
+# row (every file is in the head), so its <tail> is byte-identical. Checked mechanically: the reverse replacement of that one
+# clause with est_tokens= masked gives the previous pin byte for byte (at= masked). The six other pins are unchanged.
+# RE-ANCHORED BY HAND 2026-10-17 (lane tail-sym fix round 1, review rv-tail-sym R2), for.xml only: the same clause, shorter
+# ("t p= the file, sym= its top symbols by lens rank on either kind (a pointer into the file, not the answer)" -> "sym= its top
+# symbols by lens rank (a pointer, not the answer)"; p= is already "the file" in the r= clause), 4566 -> 4522 B. Same meaning,
+# shorter text. Checked mechanically: the reverse replacement with est_tokens= masked gives the previous pin byte for byte
+# (at= masked). The six other pins are unchanged.
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
 # sed does not): at="…" masked, trailing newlines dropped.
