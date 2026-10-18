@@ -106,14 +106,14 @@ inline void countUnlistedNamesakes( const IngestResult& ing, const Graph& g, std
     };
     const auto keyEq = []( const Key& a, const Key& b ) { return a.lang == b.lang && a.kind == b.kind && a.name == b.name; };
     const auto keyOf    = [ & ]( NodeId t ) { const Symbol& s = ing.symbols[t]; return Key{ s.lang, s.kind, s.name }; };
-    const auto hasHedge = [ & ]( NodeId u ) { return std::any_of( g.outNameOnly.begin() + g.outOff[u], g.outNameOnly.begin() + g.outOff[u + 1], []( std::uint8_t b ) { return b != 0; } ); };
+    const auto hasHedge = [ & ]( NodeId u ) { return std::any_of( g.outNameOnly.begin() + g.outOff[u], g.outNameOnly.begin() + g.outOff[u + 1], []( std::uint8_t b ) { return edgeKindByte( b ) == kEdgeName; } ); };
     const auto isSym    = [ & ]( std::uint32_t k ) { return g.outTargets[k] < ing.symbols.size(); };
     std::vector<std::string_view> names;
     for( const NodeId u : cone )
     {
         for( std::uint32_t k = g.outOff[u]; k < g.outOff[u + 1]; ++k )
         {
-            if( g.outNameOnly[k] != 0 && isSym( k ) )
+            if( edgeKindByte( g.outNameOnly[k] ) == kEdgeName && isSym( k ) )
             {
                 names.push_back( ing.symbols[ g.outTargets[k] ].name );
             }
@@ -156,7 +156,7 @@ inline void countUnlistedNamesakes( const IngestResult& ing, const Graph& g, std
         std::vector<Key> hedged;   // the targets u reached by name alone
         for( std::uint32_t k = g.outOff[u]; k < g.outOff[u + 1]; ++k )
         {
-            if( isSym( k ) && g.outNameOnly[k] != 0 )
+            if( isSym( k ) && edgeKindByte( g.outNameOnly[k] ) == kEdgeName )
             {
                 hedged.push_back( keyOf( g.outTargets[k] ) );
             }

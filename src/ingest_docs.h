@@ -191,6 +191,23 @@ inline void mdWalk( TSNode node, std::string_view src, bool inQuote, std::uint32
 
 } // namespace mdtier
 
+inline void lowercaseMarkdownSlug( std::string& written )
+{
+    const std::size_t frag = written.find( '#' );
+    if( frag == std::string::npos )
+    {
+        return;
+    }
+    for( std::size_t k = frag + 1; k < written.size(); ++k )
+    {
+        char& c = written[ k ];
+        if( c >= 'A' && c <= 'Z' )
+        {
+            c = char( c - 'A' + 'a' );
+        }
+    }
+}
+
 void extractMarkdown( std::uint32_t fileId, std::string_view src, std::string_view stem, TSNode root,
                       std::vector<RawDef>& defs, std::vector<RawRef>& refs )
 {
@@ -321,14 +338,7 @@ void extractMarkdown( std::uint32_t fileId, std::string_view src, std::string_vi
             // safe in the cache; the (file, slug) heading it names is resolved in buildGraph, where every file's
             // headings exist (graph.h bindMarkdownLinks). buildGraph reads this path. A member call still reads it beside memberCall.
             r.memberPath.assign( writtenTarget );
-            if( const std::size_t frag = r.memberPath.find( '#' ); frag != std::string::npos )
-            {
-                for( std::size_t k = frag + 1; k < r.memberPath.size(); ++k )
-                {
-                    char& c = r.memberPath[ k ];
-                    c       = ( c >= 'A' && c <= 'Z' ) ? char( c - 'A' + 'a' ) : c;
-                }
-            }
+            lowercaseMarkdownSlug( r.memberPath );
             refs.push_back( std::move( r ) );
         }
     };

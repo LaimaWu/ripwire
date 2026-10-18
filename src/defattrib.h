@@ -377,7 +377,7 @@ struct RowDefTokens
 // One out-edge's tie, off its two parallel per-edge bytes (either may be unallocated: a graph with no such edge).
 inline DefMark defMarkOfEdge( const Graph& g, std::size_t e ) noexcept
 {
-    if( e < g.outNameOnly.size() && g.outNameOnly[e] != 0 )
+    if( e < g.outNameOnly.size() && edgeKindByte( g.outNameOnly[e] ) == kEdgeName )
     {
         return DefMark::Name;
     }

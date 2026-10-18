@@ -499,11 +499,16 @@ printf '%s' "$IM" | grep -q 'reaches="2"' \
   && ! printf '%s' "$IM" | grep -q 'n="main"[^>]*via="link"' \
   && ok "impact marks Run Notes via=link and still counts both rows" \
   || no "impact dropped the link mark or the reach count"
+IJ="$( $BIN "$TMP/runfix" --no-cache --impact=run --json 2>/dev/null )"
+printf '%s' "$IJ" | grep -q 'via_link_note' \
+  && ok "impact json carries via_link_note" \
+  || no "impact json omitted via_link_note"
 
 # In-file anchors, wikilinks, and root-relative links are via="link". A code call on the same name stays unmarked.
-mkdir -p "$TMP/kinds/src" "$TMP/kinds/docs"
+mkdir -p "$TMP/kinds/src" "$TMP/kinds/docs" "$TMP/kinds/notes"
 printf '%s\n' 'def api():' '    return 1' '' 'def main():' '    api()' > "$TMP/kinds/src/app.py"
 printf '%s\n' '# api' > "$TMP/kinds/docs/api.md"
+printf '%s\n' '# decoy' > "$TMP/kinds/notes/api.md"
 printf '%s\n' '# Guide' '' '## Hub' '' '[down](#later)' '' '[a](api.md)' '' '[b](/docs/api.md)' '' '[[api]]' '' '## Later' '' 'notes' > "$TMP/kinds/docs/guide.md"
 HUB="$( $BIN "$TMP/kinds" --no-cache --callees=Hub --legend=compact 2>/dev/null )"
 printf '%s' "$HUB" | grep -q 'n="Later"[^>]*via="link"' \
@@ -516,6 +521,18 @@ printf '%s' "$API" | grep -q 'n="Hub"[^>]*via="link"' \
   && ! printf '%s' "$API" | grep -q 'n="main"[^>]*via="link"' \
   && ok "a code call to api stays unmarked while the doc link stays via=link" \
   || no "the code call was marked via=link, or the doc link lost the mark"
+printf '%s' "$HUB" | grep -q 'docs/api.md:[0-9]*"[^>]*via="link"' \
+  && ! printf '%s' "$HUB" | grep -q 'notes/api.md' \
+  && ok "a leading-slash link joins the crawl root, not the other api.md" \
+  || no "the leading-slash link missed docs/api.md or hit the decoy"
+PTH="$( $BIN "$TMP/kinds" --no-cache --path=Hub,Later --legend=compact 2>/dev/null )"
+printf '%s' "$PTH" | grep -q 'n="Later"[^>]*via="link"' \
+  && ok "path marks the Later hop via=link" \
+  || no "path lost via=link on the Later hop"
+CON="$( $BIN "$TMP/kinds" --no-cache --connect=Hub,Later --legend=compact 2>/dev/null )"
+printf '%s' "$CON" | grep -q 'via="link"' \
+  && ok "connect marks the Hub to Later edge via=link" \
+  || no "connect lost via=link on the Hub to Later edge"
 
 echo "--- warm == cold after editing ONLY the target file (the cached ref must stay unbound) ---"
 cp -R "$AFIX" "$TMP/anchorcopy"

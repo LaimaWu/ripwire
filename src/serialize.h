@@ -2635,25 +2635,46 @@ inline std::uint32_t counterAt( const std::vector<std::uint32_t>* v, NodeId id )
     return ( v && id < v->size() ) ? ( *v )[ id ] : 0u;
 }
 
+// The <c> row's prov=, via=, x= and anchor="missing" tail. One writer so the row loop stays a scan.
+inline void writeMapCalleeAttrs( XmlWriter& w, std::uint8_t prov, bool link, bool nameOnly, std::size_t repeats, bool miss )
+{
+    if( prov != 0 )
+    {
+        w.write( "\" prov=\"" );
+        w.write( provLabel( prov ) );
+    }
+    if( link )
+    {
+        w.write( "\" via=\"link" );
+    }
+    else if( nameOnly )
+    {
+        w.write( "\" via=\"name" );
+    }
+    if( repeats > 1 )
+    {
+        w.write( "\" x=\"" );
+        w.write( std::to_string( repeats ) );
+    }
+    if( miss )
+    {
+        w.write( "\" anchor=\"missing" );
+    }
+}
+
 // FE-B: one map <s>'s <c> rows over out-edges [from, to). A via="name" row (matched by name alone) that the symbol would
 // print several times byte for byte — N same-named by-name candidates, one row each, carrying only n=/prov=/via= — is
 // written ONCE, at its first edge, with x="N": the count, and --callees on the <s> lists each candidate with its file
 // (graphlegend.h kMapViaNameLegend / compactlegend.h's x row). Every other row, prov="split" arms included, is written as
 // before. `scratch` is reused across symbols.
-inline void writeMapAnchorAttr( XmlWriter& w, const std::vector<std::uint8_t>* bits, std::uint32_t e )
-{
-    if( bits != nullptr && e < bits->size() && ( *bits )[ e ] != 0 )
-    {
-        w.write( "\" anchor=\"missing" );
-    }
-}
 inline void writeMapCalleeRows( XmlWriter& w, const IngestResult& ing, std::uint32_t from, std::uint32_t to, const std::vector<NodeId>& outTargets,
                                 const std::vector<std::uint8_t>* outProv, const std::vector<std::uint8_t>* outNameOnly, std::vector<char>& esc,
-                                std::vector<std::uint32_t>& scratch, const std::vector<std::uint8_t>* outLink = nullptr, const std::vector<std::uint8_t>* outAnchor = nullptr )
+                                std::vector<std::uint32_t>& scratch )
 {
     const auto provOf    = [ & ]( std::uint32_t e ) -> std::uint8_t { return ( outProv && e < outProv->size() ) ? ( *outProv )[ e ] : 0; };
-    const auto nameOnly  = [ & ]( std::uint32_t e ) { return outNameOnly && e < outNameOnly->size() && ( *outNameOnly )[ e ] != 0; };
-    const auto link      = [ & ]( std::uint32_t e ) { return outLink && e < outLink->size() && ( *outLink )[ e ] != 0; };
+    const auto stored    = [ & ]( std::uint32_t e ) -> std::uint8_t { return outNameOnly && e < outNameOnly->size() ? ( *outNameOnly )[ e ] : 0; };
+    const auto nameOnly  = [ & ]( std::uint32_t e ) { return edgeKindByte( stored( e ) ) == kEdgeName; };
+    const auto link      = [ & ]( std::uint32_t e ) { return edgeKindByte( stored( e ) ) == kEdgeLink; };
     // the row's bytes among via="name" rows: name, prov=
     const auto rowLess = [ & ]( std::uint32_t x, std::uint32_t y )
     {
@@ -2691,33 +2712,16 @@ inline void writeMapCalleeRows( XmlWriter& w, const IngestResult& ing, std::uint
         // uniquely resolved (the common case → zero token cost). outProv parallels outTargets exactly. C1, and this is the
         // whole point of the marker: `amb="K"` on the enclosing <s> says K of this symbol's CALLS were guesses and cannot
         // say WHICH edges; prov="split" names the arms, and the suspect set becomes the guessed edges and nothing else.
-        if( provOf( e ) != 0 )
-        {
-            w.write( "\" prov=\"" );
-            w.write( provLabel( provOf( e ) ) );
-        }
-        if( link( e ) )
-        {
-            w.write( "\" via=\"link" );   // a pinned markdown link, and no real call on this pair
-        }
-        else if( nameOnly( e ) )
-        {
-            w.write( "\" via=\"name" );   // FE-B: the same edge bit every other surface reads (viaNameLegendComment)
-        }
-        if( repeats > 1 )
-        {
-            w.write( "\" x=\"" );
-            w.write( std::to_string( repeats ) );
-        }
-        writeMapAnchorAttr( w, outAnchor, e );
+        writeMapCalleeAttrs( w, provOf( e ), link( e ), nameOnly( e ), repeats, ( stored( e ) & 0x80 ) != 0 );
         w.write( "\"/>" );
     }
 }
 
 // A <c> row under one of `nodes` may carry the bit when any of their out-edges has it. Asked before the rows are written
 // so the map's first-screen legend can define the attribute. outLink and outNameOnly share this scan.
+// want 0: any nonzero byte. want 0x80: the anchor-missing high bit. Otherwise the kind byte equals want.
 inline bool markedOutAny( const std::vector<std::uint32_t>& outOff, const std::vector<std::uint8_t>& bits,
-                          std::span<const NodeId> nodes ) noexcept
+                          std::span<const NodeId> nodes, std::uint8_t want = 0 ) noexcept
 {
     for( const NodeId n : nodes )
     {
@@ -2727,18 +2731,14 @@ inline bool markedOutAny( const std::vector<std::uint32_t>& outOff, const std::v
         }
         for( std::uint32_t e = outOff[ n ]; e < outOff[ n + 1 ] && e < bits.size(); ++e )
         {
-            if( bits[ e ] != 0 )
+            const bool hit = want == 0 ? bits[ e ] != 0 : ( want == 0x80 ? ( bits[ e ] & 0x80 ) != 0 : edgeKindByte( bits[ e ] ) == want );
+            if( hit )
             {
                 return true;
             }
         }
     }
     return false;
-}
-inline bool linksOutAny( const std::vector<std::uint32_t>& outOff, const std::vector<std::uint8_t>& outLink,
-                         std::span<const NodeId> nodes ) noexcept
-{
-    return markedOutAny( outOff, outLink, nodes );
 }
 // FE-B: may a <c> row under one of `nodes` carry via="name"? True when any of their out-edges is name-only — an
 // over-approximation of what a section renders (a <calls> block's 16-per-symbol cap may cut that row; a merged overload
@@ -2747,7 +2747,7 @@ inline bool linksOutAny( const std::vector<std::uint32_t>& outOff, const std::ve
 inline bool namesOnlyOutAny( const std::vector<std::uint32_t>& outOff, const std::vector<std::uint8_t>& outNameOnly,
                              std::span<const NodeId> nodes ) noexcept
 {
-    return markedOutAny( outOff, outNameOnly, nodes );
+    return markedOutAny( outOff, outNameOnly, nodes, kEdgeName );
 }
 
 // attrib-multidef Q1: may a <c> row under one of `nodes` carry prov="split"? True when any of their out-edges is one arm of a
@@ -2761,7 +2761,7 @@ inline bool splitArmsOutAny( const std::vector<std::uint32_t>& outOff, const std
         for( std::uint32_t e = ( std::size_t( n ) + 1 < outOff.size() ) ? outOff[ n ] : 0u;
              std::size_t( n ) + 1 < outOff.size() && e < outOff[ n + 1 ] && e < outProv.size(); ++e )
         {
-            if( outProv[ e ] == 3u && !( e < outNameOnly.size() && outNameOnly[ e ] != 0 ) )
+            if( outProv[ e ] == 3u && !( e < outNameOnly.size() && edgeKindByte( outNameOnly[ e ] ) == kEdgeName ) )
             {
                 return true;
             }
@@ -2788,7 +2788,7 @@ inline bool hopSlotHasProvenEdge( const std::vector<std::uint32_t>& outOff, cons
     }
     ASSUME( outOff[ id + 1 ] <= outNameOnly.size(), "the hedge bits are one per flattened edge (graph.h buildGraph)" );
     return !std::all_of( outNameOnly.begin() + outOff[ id ], outNameOnly.begin() + outOff[ id + 1 ],
-                         []( std::uint8_t bit ) { return bit != 0; } );
+                         []( std::uint8_t bit ) { return edgeKindByte( bit ) == kEdgeName; } );
 }
 
 // D7 MAP-INVENTORY: whether THIS map carries the inventory tier (mapinventory.h), decided once for both dialects. The
@@ -2807,9 +2807,7 @@ template <class PathRel>
 inline void writeMapInventoryXml( XmlWriter& w, const IngestResult& ing, const MapInventory& inv, const PathRel& pathRel,
                                   const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets,
                                   const std::vector<std::uint8_t>* outProv, const std::vector<std::uint8_t>* outNameOnly,
-                                  std::vector<char>& esc, std::vector<std::uint32_t>& scratch,
-                                  const std::vector<std::uint8_t>* outLink = nullptr,
-                                  const std::vector<std::uint8_t>* outAnchor = nullptr )
+                                  std::vector<char>& esc, std::vector<std::uint32_t>& scratch )
 {
     EXPECTS( inv.active, "the caller emits the tier only when it has a cut to inventory" );
     w.write( "<inv listed=\"" );  w.write( std::to_string( inv.listed ) );
@@ -2830,7 +2828,7 @@ inline void writeMapInventoryXml( XmlWriter& w, const IngestResult& ing, const M
         const Symbol& s = ing.symbols[ id ];
         w.write( "<entry p=\"" );  w.write( escapeXml( pathRel( s.fileId ), esc ) );
         w.write( "\" n=\"" );      w.write( escapeXml( s.name, esc ) );  w.write( "\">" );
-        writeMapCalleeRows( w, ing, outOff[ id ], outOff[ id + 1 ], outTargets, outProv, outNameOnly, esc, scratch, outLink, outAnchor );
+        writeMapCalleeRows( w, ing, outOff[ id ], outOff[ id + 1 ], outTargets, outProv, outNameOnly, esc, scratch );
         w.write( "</entry>" );
     }
     for( const MapInventoryDir& d : inv.dirs )
@@ -2920,11 +2918,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
                        std::size_t stdMemberDeclinedCalls = 0,
                        // of declined=, the Elixir call candidates inside inert quote AST (g.inertDeclinedCalls, #380) →
                        // the kInertDeclinedMapLegend clause, absent when zero.
-                       std::size_t inertDeclinedCalls = 0,
-                       // Markdown link edges (Graph::outLink) → via="link" on a <c> row and kMapViaLinkLegend. nullptr/empty
-                       // ⇒ the map has no link edge and stays byte-identical.
-                       const std::vector<std::uint8_t>* outLink = nullptr,
-                       const std::vector<std::uint8_t>* outAnchor = nullptr )
+                       std::size_t inertDeclinedCalls = 0 )
 {
     const std::size_t* changedCount = ann.changedCount;
     const std::string* mapAtStamp   = ann.atStamp;
@@ -3179,13 +3173,13 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         // and whose element-qualified via/x rows restate it: the --max-tokens fit then prices what is delivered.
         legend += kMapViaNameLegend;
     }
-    if( outLink && !stubbed && !ann.viaLegendStripped
-        && linksOutAny( outOff, *outLink, std::span<const NodeId>( order.data(), std::min( keep, order.size() ) ) ) )
+    if( outNameOnly && !stubbed && !ann.viaLegendStripped
+        && markedOutAny( outOff, *outNameOnly, std::span<const NodeId>( order.data(), std::min( keep, order.size() ) ), kEdgeLink ) )
     {
         legend += kMapViaLinkLegend;
     }
-    if( outAnchor && !stubbed && !ann.viaLegendStripped
-        && markedOutAny( outOff, *outAnchor, std::span<const NodeId>( order.data(), std::min( keep, order.size() ) ) ) )
+    if( outNameOnly && !stubbed && !ann.viaLegendStripped
+        && markedOutAny( outOff, *outNameOnly, std::span<const NodeId>( order.data(), std::min( keep, order.size() ) ), 0x80 ) )
     {
         legend += kMapAnchorMissLegend;
     }
@@ -3483,7 +3477,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         {
             if( inventory.active )
             {
-                writeMapInventoryXml( w, ing, inventory, pathRel, outOff, outTargets, outProv, outNameOnly, esc, hedgedScratch, outLink, outAnchor );
+                writeMapInventoryXml( w, ing, inventory, pathRel, outOff, outTargets, outProv, outNameOnly, esc, hedgedScratch );
             }
         };
         const bool inventoryFirst = !stable && effImportantLast;   // --stable's path order wins, as it does for the rows
@@ -3704,7 +3698,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
                 }
                 w.write( ">" );
 
-                writeMapCalleeRows( w, ing, outOff[id], outOff[id + 1], outTargets, outProv, outNameOnly, esc, hedgedScratch, outLink, outAnchor );
+                writeMapCalleeRows( w, ing, outOff[id], outOff[id + 1], outTargets, outProv, outNameOnly, esc, hedgedScratch );
                 w.write( "</s>" );
             }
             w.write( "</f>" );
@@ -6736,10 +6730,20 @@ struct MergedCalleeNameRow
     bool                       miss = false;    // that link named no heading — merged only with other miss rows of the same name
 };
 
-inline void collectCalleeNameRow( std::vector<MergedCalleeNameRow>& rows, const Symbol& cs,
-                                  std::size_t& used, const CalleeCallsSink& sink, bool via = false, bool split = false, bool link = false,
-                                  bool miss = false )
+struct CalleeRowMarks
 {
+    bool via   = false;
+    bool split = false;
+    bool link  = false;
+    bool miss  = false;
+};
+inline void collectCalleeNameRow( std::vector<MergedCalleeNameRow>& rows, const Symbol& cs,
+                                  std::size_t& used, const CalleeCallsSink& sink, CalleeRowMarks mark = {} )
+{
+    const bool via = mark.via;
+    const bool split = mark.split;
+    const bool link = mark.link;
+    const bool miss = mark.miss;
     char lb[ 16 ];
     rw::formatTo( lb, sizeof( lb ), "{}", cs.line );
     bool merged = false;
@@ -6816,8 +6820,8 @@ struct CalleeEdgeBytes
     const std::vector<std::uint8_t>* link               = nullptr;
     const std::vector<std::uint8_t>* anchor             = nullptr;
     CalleeEdgeBytes( const std::vector<std::uint8_t>& nameOnlyBytes, const std::vector<std::uint8_t>* provBytes = nullptr,   // NOLINT: implicit
-                     bool* charged = nullptr, const std::vector<std::uint8_t>* linkBytes = nullptr ) noexcept
-        : nameOnly( nameOnlyBytes ), prov( provBytes ), splitLegendCharged( charged ), link( linkBytes ) {}
+                     bool* charged = nullptr ) noexcept
+        : nameOnly( nameOnlyBytes ), prov( provBytes ), splitLegendCharged( charged ) {}
 };
 inline CalleeEdgeBytes withAnchorEdge( CalleeEdgeBytes edges, const std::vector<std::uint8_t>* anchor ) noexcept
 {
@@ -6911,6 +6915,60 @@ inline void applyCalleeAnchorMiss( const CalleeCallsSink& sink, const std::vecto
     }
 }
 
+// One <c> of a body's callee block. True when the row counts toward shown=.
+template <typename ContentOfFn>
+inline bool appendOneCalleeCall( std::string& callsBody, std::vector<MergedCalleeNameRow>& nameRows, NodeId cid, NodeId id,
+                                 const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets,
+                                 const IngestResult& ing, ContentOfFn&& contentOf, std::vector<char>& esc, std::size_t& used,
+                                 const CalleeCallsSink& sink, bool& linkLegendCharged, bool& anchorLegendCharged )
+{
+    if( cid >= ing.symbols.size() )
+    {
+        return false;
+    }
+    const Symbol& cs = ing.symbols[cid];
+    const bool linkRow = sink.nameOnly != nullptr && edgeNameOnlyInCsr( outOff, outTargets, *sink.nameOnly, id, cid, kEdgeLink );
+    if( linkRow && !linkLegendCharged )
+    {
+        used += viaLinkLegendComment().size();
+        linkLegendCharged = true;
+    }
+    applyCalleeAnchorMiss( sink, outOff, outTargets, id, cid, anchorLegendCharged, used, nullptr, {}, false, nullptr );
+    const bool nameRow = !linkRow && calleeRowVia( outOff, outTargets, id, cid, used, sink );
+    const std::string_view viaAttr = viaEdgeAttr( nameRow, linkRow );
+    const std::string_view splitAttr = calleeRowSplitAttr( outOff, outTargets, id, cid, !viaAttr.empty(), used, sink );
+    if( sink.namesOnly )
+    {
+        collectCalleeNameRow( nameRows, cs, used, sink, CalleeRowMarks{ nameRow, !splitAttr.empty(), linkRow, false } );
+        applyCalleeAnchorMiss( sink, outOff, outTargets, id, cid, anchorLegendCharged, used, &nameRows, cs.name, linkRow, nullptr );
+        return true;
+    }
+    const std::string& csrc = contentOf( cs.fileId );
+    if( cs.sigStartByte >= cs.sigEndByte || cs.sigEndByte > csrc.size() )
+    {
+        return false;
+    }
+    const std::string sig = cleanSig( csrc.data(), cs.sigStartByte, cs.sigEndByte, sink.redact );
+    if( sig.empty() )
+    {
+        return false;
+    }
+    char hb[ 64 ];
+    rw::formatTo( hb, sizeof( hb ), "\" l=\"{}\"{}{}>", cs.line, viaAttr, splitAttr );
+    callsBody += "<c n=\"";
+    callsBody += escapeXml( cs.name, esc );
+    callsBody += hb;
+    applyCalleeAnchorMiss( sink, outOff, outTargets, id, cid, anchorLegendCharged, used, nullptr, {}, false, &callsBody );
+    callsBody += escapeXml( sig, esc );
+    callsBody += "</c>";
+    used += sig.size() + 24 + viaAttr.size() + splitAttr.size();
+    if( sink.recorded )
+    {
+        sink.recorded->push_back( EmittedBodyCall { cs.name, cs.line, sig } );
+    }
+    return true;
+}
+
 // §P10.1: the disclosed <calls total=... [shown=... capped="1"]> block
 // for one body's 1-hop callee signatures — extracted out of packBodies so the disclosure logic doesn't
 // inflate packBodies' own complexity/LOC. `total` is outOff[id+1]-outOff[id] — outTargets is deduped-per-
@@ -6924,7 +6982,6 @@ inline void emitCalleeCallsBlock( std::string& out, NodeId id, const std::vector
                                   ContentOfFn&& contentOf, std::vector<char>& esc, std::size_t& used, std::size_t budgetBytes,
                                   const CalleeCallsSink& sink )
 {
-    RedactCounts* const redact = sink.redact;
     if( id + 1 >= outOff.size() )
     {
         return;
@@ -6945,50 +7002,10 @@ inline void emitCalleeCallsBlock( std::string& out, NodeId id, const std::vector
     for( std::uint32_t k = outOff[id]; k < outOff[id + 1] && shown < int( sink.rowCap ) && used < budgetBytes; ++k )
     {
         const NodeId cid = walk[ k - outOff[id] ];
-        if( cid >= ing.symbols.size() )
+        if( appendOneCalleeCall( callsBody, nameRows, cid, id, outOff, outTargets, ing, contentOf, esc, used, sink,
+                                 linkLegendCharged, anchorLegendCharged ) )
         {
-            continue;
-        }
-        const Symbol& cs = ing.symbols[cid];
-        const bool linkRow = sink.link != nullptr && edgeNameOnlyInCsr( outOff, outTargets, *sink.link, id, cid );
-        if( linkRow && !linkLegendCharged )
-        {
-            used += viaLinkLegendComment().size();
-            linkLegendCharged = true;
-        }
-        applyCalleeAnchorMiss( sink, outOff, outTargets, id, cid, anchorLegendCharged, used, nullptr, {}, false, nullptr );
-        const bool nameRow = !linkRow && calleeRowVia( outOff, outTargets, id, cid, used, sink );
-        const std::string_view viaAttr = viaEdgeAttr( nameRow, linkRow );
-        const std::string_view splitAttr = calleeRowSplitAttr( outOff, outTargets, id, cid, !viaAttr.empty(), used, sink );   // Q1: prov="split" or ""
-
-        // COMPACT: the names-only rendering — see collectCalleeNameRow above for what it does and does not do.
-        if( sink.namesOnly )
-        {
-            collectCalleeNameRow( nameRows, cs, used, sink, nameRow, !splitAttr.empty(), linkRow );
-            applyCalleeAnchorMiss( sink, outOff, outTargets, id, cid, anchorLegendCharged, used, &nameRows, cs.name, linkRow, nullptr );
             ++shown;
-            continue;
-        }
-
-        const std::string& csrc = contentOf( cs.fileId );
-        if( cs.sigStartByte >= cs.sigEndByte || cs.sigEndByte > csrc.size() )
-        {
-            continue;
-        }
-        const std::string  sig  = cleanSig( csrc.data(), cs.sigStartByte, cs.sigEndByte, redact );
-        if( sig.empty() )
-        {
-            continue;
-        }
-        char hb[ 64 ];  rw::formatTo( hb, sizeof( hb ), "\" l=\"{}\"{}{}>", cs.line, viaAttr, splitAttr );
-        callsBody += "<c n=\"";  callsBody += escapeXml( cs.name, esc );  callsBody += hb;
-        applyCalleeAnchorMiss( sink, outOff, outTargets, id, cid, anchorLegendCharged, used, nullptr, {}, false, &callsBody );
-        callsBody += escapeXml( sig, esc );  callsBody += "</c>";
-        used += sig.size() + 24 + viaAttr.size() + splitAttr.size();
-        ++shown;
-        if( sink.recorded )
-        {
-            sink.recorded->push_back( EmittedBodyCall { cs.name, cs.line, sig } ); // §H5
         }
     }
     appendMergedCalleeNameRows( callsBody, nameRows, esc );   // no-op on the signature rendering (nameRows stays empty)
@@ -7974,7 +7991,7 @@ inline void packHops( std::FILE* out, const IngestResult& ing, const std::vector
 
     // owner-hop: the leading owner rows first (THE QUESTION'S OWNER ROWS above; nothing when `owners` is null), then the
     // ranked rows exactly as before, from the node the owners end at, on the budget and via charge the owners leave them
-    const OwnerHopRows own = packOwnerHopRows( ing, nodes, owners, outOff, outTargets, withAnchorEdge( CalleeEdgeBytes( outNameOnly, outEdges.prov, &splitLegendCharged, outEdges.link ), outEdges.anchor ),
+    const OwnerHopRows own = packOwnerHopRows( ing, nodes, owners, outOff, outTargets, withAnchorEdge( CalleeEdgeBytes( outNameOnly, outEdges.prov, &splitLegendCharged ), outEdges.anchor ),
                                                redact, rank, rootArg, budgetBytes, viaLegendCharged, pathRel, contentOf, esc );
     std::string children       = own.xml;
     std::size_t requestedCount = own.shown;

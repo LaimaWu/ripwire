@@ -454,7 +454,7 @@ inline std::string analyzeToString( const std::string& root, int topK, bool stab
                                     // §B4 family, and mcpclidiffcheck is the gate that keeps the two surfaces one.
                                     /*ann=*/rw::MapAnnotations{ .prDisclosure = ix.prDisclosure, .codeFirstRows = ix.isCleanWorkingSet, .inventoryTier = ix.isCleanWorkingSet },
                                     /*statsFirstScreen=*/true, anRootArg, &ix.g.locPinOut, ix.g.externalCalls, &ix.g.declinedOut, ix.g.gateDeclinedCalls,
-                                    ix.g.outNameOnly.empty() ? nullptr : &ix.g.outNameOnly, ix.g.stdMemberDeclinedCalls, ix.g.inertDeclinedCalls, rw::linkOutPtr( ix.g ), &ix.g.outAnchorMiss ); } );
+                                    ix.g.outNameOnly.empty() ? nullptr : &ix.g.outNameOnly, ix.g.stdMemberDeclinedCalls, ix.g.inertDeclinedCalls ); } );
 }
 
 // `rank_by` verb (lane/t10-mcp-coverage): the MCP twin of --rank-by=pagerank|authority|hub|rrf — the SAME
@@ -522,7 +522,7 @@ inline std::string rankByText( const std::string& root, std::string_view mode, i
                                     /*extraPayloadTokens=*/0,
                                     /*ann=*/rw::MapAnnotations{ .rankByLabel = rankByLabel, .prDisclosure = disclosure, .codeFirstRows = rankByLabel == nullptr, .inventoryTier = rankByLabel == nullptr },   // pagerank: the map scope's code-first pick
                                     /*statsFirstScreen=*/true, rbRootArg, &ix.g.locPinOut, ix.g.externalCalls, &ix.g.declinedOut, ix.g.gateDeclinedCalls,
-                                    ix.g.outNameOnly.empty() ? nullptr : &ix.g.outNameOnly, ix.g.stdMemberDeclinedCalls, ix.g.inertDeclinedCalls, rw::linkOutPtr( ix.g ), &ix.g.outAnchorMiss ); } );
+                                    ix.g.outNameOnly.empty() ? nullptr : &ix.g.outNameOnly, ix.g.stdMemberDeclinedCalls, ix.g.inertDeclinedCalls ); } );
 }
 
 // ─── the cross-branch + dark-content MCP twins (`whereis`, `stray_content`, `flags`) ───
@@ -723,6 +723,35 @@ inline std::string symbolQueryDefTableJson( const IngestResult& ing, const DefGr
     return out;
 }
 
+inline std::string symbolQueryNextField( bool referencingOnly, const PageWindow& pwPrimary, std::size_t rowTotal, const McpPageArgs& page,
+                                       std::string_view name, std::string_view nextSelector )
+{
+    if( referencingOnly && pwPrimary.end < rowTotal )
+    {
+        return nextFieldJson( callersPageNext( name, page.limit, pwPrimary.end ) )
+             + nextFieldJson( nextFlag( "--uses=", nextSelector ), "uses_next" );
+    }
+    return nextFieldJson( nextFlag( referencingOnly ? "--uses=" : "--expand=", nextSelector ) );
+}
+
+inline std::string symbolQueryNotes( bool anyVia, bool anyLink, bool anyMiss )
+{
+    std::string out;
+    if( anyVia )
+    {
+        out += viaNameNoteJson();
+    }
+    if( anyLink )
+    {
+        out += viaLinkNoteJson();
+    }
+    if( anyMiss )
+    {
+        out += anchorMissNoteJson();
+    }
+    return out;
+}
+
 inline std::string symbolQueryJson( const std::string& root, const std::string& name, bool referencingOnly,
                                     McpPageArgs page = {} )
 {
@@ -852,9 +881,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
          + declinedSiteCutKeyJson( sqDcCut )              // the CLI root's dc_shown= / dc_next=, absent when nothing was cut
          + declinedIfaceKeyJson( chRows.declinedIface )   // the CLI root's declined_iface= (callers direction only)
          + stdMemberCallsSpelling( chRows.stdCalls, /*json=*/true )       // the CLI callees answer's <stdm> line (callees direction only; absent when none)
-         + ( referencingOnly && pwPrimary.end < rowTotal   // L8: a capped callers page names the next page, the uses verb as uses_next (the CLI root's pair)
-                 ? nextFieldJson( callersPageNext( name, page.limit, pwPrimary.end ) ) + nextFieldJson( nextFlag( "--uses=", chNextSelector ), "uses_next" )
-                 : nextFieldJson( nextFlag( referencingOnly ? "--uses=" : "--expand=", chNextSelector ) ) );   // P3 (L7): the CLI root's next= (mcpattrparitycheck)
+         + symbolQueryNextField( referencingOnly, pwPrimary, rowTotal, page, name, chNextSelector );   // P3 (L7): the CLI root's next= (mcpattrparitycheck)
     if( !referencingOnly && chRows.bodylessDefs > 0 )
     {
         out += ",\"bodyless_defs\":" + std::to_string( chRows.bodylessDefs );
@@ -887,18 +914,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     {
         out += ",\"calls\":" + rowArray( calls, pwPrimary, false );
     }
-    if( anyVia )
-    {
-        out += rw::viaNameNoteJson();   // FE-B: the reading of "via":"name", only in an answer that carries it
-    }
-    if( anyLink )
-    {
-        out += rw::viaLinkNoteJson();
-    }
-    if( anyMiss )
-    {
-        out += rw::anchorMissNoteJson();
-    }
+    out += symbolQueryNotes( anyVia, anyLink, anyMiss );
     out += nextFieldJson( splitArmLegend( anySplit ), "split_note" );   // attrib-multidef Q1: likewise for "prov":"split"
     out += declinedSitesJson( sqDc, referencingOnly, /*mcp=*/true );   // lane declined-sites: the CLI <dc> rows, never in calls/calledBy or count
     out += nextFieldJson( declinedSitesLegend( declinedSitesLegendFlags( sqDc, referencingOnly, sqDcCut ), /*mcp=*/true ), "declined_note" );   // their reading, only when they ride
@@ -2233,7 +2249,7 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
             share = forSoftSectionsShare( budgetBytesForTokens( budgetTokens ), mcpHdrXml.size() + atCut + legoStr.size() + composeStr.size() + routeStr.size() );
         }
         mcpSlot = renderForBodySlot( BodySlotInputs{ ing, in.g.outOff, in.g.outTargets, in.g.outNameOnly, lensRank, flRootArg, redact, notesPtr,
-                                                     /*viaLegendInHead=*/false, /*compress=*/false, &in.g.outProv, /*splitLegendInHead=*/false, linkOutPtr( in.g ), &in.g.outAnchorMiss },
+                                                     /*viaLegendInHead=*/false, /*compress=*/false, &in.g.outProv, /*splitLegendInHead=*/false, &in.g.outAnchorMiss },
                                      in.slotOwner, share );
     }
     mcpForSoftRefill( in, renderSigs, sigsStr, mcpSigsCut, &mcpSigsNext,
@@ -3605,6 +3621,32 @@ inline McpAffectedResult affectedText( const std::string& root, std::string_view
     return { mcpAnswerText( stream ), false, {}, false };
 }
 
+inline std::string pathKindLegend( const Graph& g, std::span<const NodeId> path )
+{
+    return std::string( viaNameLegend( pathHasNameOnlyHop( g, path ) ) )
+         + viaLinkLegend( pathHasNameOnlyHop( g, path, kEdgeLink ) )
+         + anchorMissLegend( pathHasNameOnlyHop( g, path, 0 ) );
+}
+
+inline void emitPathHopRows( std::FILE* mem, const IngestResult& ing, const Graph& g, std::span<const NodeId> pth,
+                             bool singleRoot, std::string_view rootPrefix )
+{
+    std::vector<char> esc;
+    for( std::size_t i = 0; i < pth.size(); ++i )
+    {
+        const Symbol&          s  = ing.symbols[ pth[ i ] ];
+        const std::string_view rp = singleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], rootPrefix )
+                                               : std::string_view( ing.files[ s.fileId ] );
+        const bool        name = i > 0 && edgeNameOnly( g, pth[ i - 1 ], pth[ i ] );
+        const bool        link = i > 0 && edgeIsLink( g, pth[ i - 1 ], pth[ i ] );
+        const std::string mark = std::string( viaEdgeAttr( name, link ) )
+                               + anchorMissAttr( i > 0 && edgeAnchorMiss( g, pth[ i - 1 ], pth[ i ] ) );
+        rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ),
+                    std::string( escapeXml( s.name, esc ) ).c_str(), std::string( escapeXml( rp, esc ) ).c_str(), s.line,
+                    mark.c_str(), splitArmAttrXml( pathHopSplitArm( g, pth, i ) ) );
+    }
+}
+
 // `path` verb: the shortest directed CALL path from `from` to `to` (does A reach B, and how?). Reuses
 // resolveFocus + shortestPath, exactly as the CLI --path=A,B. Returns the <path>…</path> XML fragment (with
 // reachable="0" hops="0" and no <s> children when B is NOT reachable from A — a valid answer, not an error),
@@ -3658,15 +3700,11 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     const ToValueRefs ptToValueRefs = toValueRefs( ing, pth.empty(), dstDefs, &valueRefIndexOf( ix ) );
     // PATH-GAP: the CLI --path's gap clause, by the same analysis and emitter (src/pathgaps.h).
     const PathSearchGaps ptGaps = pth.empty() ? pathSearchGaps( ing, g, srcDefs, valueRefIndexOf( ix ) ) : PathSearchGaps{};
-    const bool ptHasVia = pathHasNameOnlyHop( g, pth );   // FE-B: exactly when a hop of this path is via="name", as on the CLI
-    const bool ptHasLink = pathHasLinkHop( g, pth );
-    const bool ptHasMiss = std::adjacent_find( pth.begin(), pth.end(),
-                                               [ & ]( NodeId from, NodeId to ) { return edgeAnchorMiss( g, from, to ); } ) != pth.end();
-    const PathEndpointBinding ptBound    = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), pth );   // attrib-multidef, as on the CLI
+    const std::string         ptKindLegend = pathKindLegend( g, pth );
+    const PathEndpointBinding ptBound      = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), pth );   // attrib-multidef, as on the CLI
     const bool                ptHasSplit = ptBound.splitHop;
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
-                       "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + viaNameLegend( ptHasVia )
-                                                           + viaLinkLegend( ptHasLink ) + anchorMissLegend( ptHasMiss )
+                       "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + ptKindLegend
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
                   pathGapsLegend( ptGaps.any() ),
@@ -3683,12 +3721,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
         ? pathUnreachedXml( ing, ptGaps, ptSingleRoot, ptRootPrefix, { "the connect verb on " + from + "," + to, "uses/impact", "" } )
         : PathGapsXml{};
     rw::emitTo( mem, "{}>{}", ptUnreached.rootAttrs, ptUnreached.rows );
-    for( std::size_t i = 0; i < pth.size(); ++i )
-    { const Symbol&           s  = ing.symbols[ pth[i] ];
-      const std::string_view  rp = ptSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], ptRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
-      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
-                    std::string( viaEdgeAttr( i > 0 && edgeNameOnly( g, pth[ i - 1 ], pth[ i ] ), i > 0 && edgeIsLink( g, pth[ i - 1 ], pth[ i ] ) ) )
-                      + anchorMissAttr( i > 0 && edgeAnchorMiss( g, pth[ i - 1 ], pth[ i ] ) ), splitArmAttrXml( pathHopSplitArm( g, pth, i ) ) ); }   // FE-B; a link hop says via="link"
+    emitPathHopRows( mem, ing, g, pth, ptSingleRoot, ptRootPrefix );
     rw::emitRaw( mem, "</path>" );
     return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }

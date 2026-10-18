@@ -1163,13 +1163,18 @@ inline constexpr const char* kViaNameImpactClause =
     "An impact row reached only through such an edge carries it too; one that some all-proven path reaches stays plain. ";
 inline constexpr const char* kViaNameColumnarClause = "format=columnar carries it as the <via> column (1 = via=\"name\"). ";
 inline constexpr const char* kViaLinkLegend =
-    "via=\"link\" on a row: the edge is a markdown link, not a call. A real call on the same pair keeps the row unmarked. ";
+    "via=\"link\" on a row: the edge is a markdown link, not a call. ";
 inline constexpr const char* kViaLinkColumnarClause = "format=columnar carries it as the <via> column (2 = via=\"link\"). ";
 inline constexpr const char* kAnchorMissLegend =
     "anchor=\"missing\" on a row: the markdown link named a heading this file does not have, so the edge is the file. ";
 inline std::string viaLinkLegend( bool present )
 {
-    return present ? std::string( kViaLinkLegend ) : std::string();
+    std::string sentence;
+    if( present )
+    {
+        sentence.assign( kViaLinkLegend );
+    }
+    return sentence;
 }
 inline std::string anchorMissLegend( bool present )
 {
@@ -1240,7 +1245,7 @@ inline std::string viaLinkLegendComment()
 inline constexpr std::string_view kMapViaNameLegend =
     "<!-- via=\"name\": by name alone; all in reach shown, x=N merged (callees=FILE:SYM lists all); does NOT mean it is false -->";
 inline constexpr std::string_view kMapViaLinkLegend =
-    "<!-- via=\"link\": a markdown link, not a call. A real call on the same pair stays unmarked -->";
+    "<!-- via=\"link\": a markdown link, not a call -->";
 inline constexpr std::string_view kMapAnchorMissLegend =
     "<!-- anchor=\"missing\": the markdown link named a heading this file does not have, so the edge is the file -->";
 inline std::string anchorMissLegendComment()
