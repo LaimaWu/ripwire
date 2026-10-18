@@ -212,7 +212,7 @@ inline NodeId innermostEnclosingFn( const IngestResult& ing, const std::vector<s
 struct BareNameRules
 {
     CallResultFamily family;
-    bool             itemScopesOnly;     // Rust: only a fn body or a `mod` is a level — a struct / trait / impl scopes no items
+    bool             itemScopesOnly;     // Rust: only an item scope is a level (rustScopesItems) — a struct / trait / impl scopes none
     bool             modIsBarrier;       // Rust: a `mod` (the file is one) is a fresh scope: no level outside it is read
     bool             importsAtAnyLevel;  // Rust: a `use` binds at the level it is written at (JVM / TS imports: the file level)
     bool             levelWildcards;     // Rust: a level's globs are read after its named bindings
@@ -220,6 +220,12 @@ struct BareNameRules
     bool             packageTier;        // JVM: past the file, the declared package's top-level classes and aliases
     bool             fileWildcards;      // JVM: last, the file's on-demand / star imports
 };
+// Rust: the symbols whose body is an item scope (a nested item, `use` or macro there is in force for what it holds) — a fn
+// body, a `mod` (Other), and (fix round 6) a `const` / `static` item's value block (`const _: () = { … impl … };`, Var)
+inline constexpr bool rustScopesItems( SymKind k ) noexcept
+{
+    return k == SymKind::Function || k == SymKind::Method || k == SymKind::Var || k == SymKind::Other;
+}
 inline constexpr BareNameRules kBareNameRules[] = {
     { CallResultFamily::Rust,       true,  true,  true,  true,  false, false, false },
     { CallResultFamily::Jvm,        false, false, false, false, true,  true,  true  },
@@ -715,7 +721,7 @@ struct CallResultTypes
         for( const Level& lv : chain )
         {
             const SymKind kind = lv.sym == kNoNode ? SymKind::Other : ing.symbols[ lv.sym ].kind;
-            if( rules->itemScopesOnly && lv.sym != kNoNode && kind != SymKind::Function && kind != SymKind::Method && kind != SymKind::Other )
+            if( rules->itemScopesOnly && lv.sym != kNoNode && !rustScopesItems( kind ) )
             {
                 continue;   // a Rust struct / trait / enum declares no item in scope (an associated type is `Self::T`)
             }
@@ -1081,7 +1087,7 @@ struct CallResultTypes
         for( const Level& lv : chain )
         {
             const SymKind kind = lv.sym == kNoNode ? SymKind::Other : ing.symbols[ lv.sym ].kind;
-            if( lv.sym != kNoNode && kind != SymKind::Function && kind != SymKind::Method && kind != SymKind::Other )
+            if( lv.sym != kNoNode && !rustScopesItems( kind ) )
             {
                 continue;
             }
