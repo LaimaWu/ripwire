@@ -4722,13 +4722,13 @@ inline constexpr bool docsAfterCodeFitsCeiling( std::size_t budgetTokens, bool b
 }
 // May the head round-robin apply? The routed subtoken+body ranking only (`conceptualRoute`): the name-exact route answers
 // the identifier the question named and --no-route keeps score order, and a question that NAMES an indexed file
-// (`namesAFile`, mention.h taskNamesIndexedFile) asked about that file, so its rows keep their places. Its files_first=
-// reading is uncharged like docs_after_code=, so the same ceiling rule applies (docsAfterCodeFitsCeiling). The A/B handle:
-// RIPWIRE_NO_HEAD_RR set ⇒ off (score order, byte-identical to the answer before the rule).
+// (`namesAFile`, mention.h taskNamesIndexedFile) asked about that file, so its rows keep their places. An explicit token
+// budget or a body ceiling keeps score order too: its files_first= reading is uncharged, and an answer that names its own
+// size promises est_tokens <= it (ownerhopcheck (B1) measured +41 tokens over a 4,500 budget) — the body fold's rule.
+// The A/B handle: RIPWIRE_NO_HEAD_RR set ⇒ off (score order, byte-identical to the answer before the rule).
 inline bool forHeadRoundRobinOn( bool conceptualRoute, bool namesAFile, std::size_t budgetTokens, bool bodyCeiling )
 {
-    return conceptualRoute && !namesAFile && std::getenv( "RIPWIRE_NO_HEAD_RR" ) == nullptr
-        && docsAfterCodeFitsCeiling( budgetTokens, bodyCeiling );
+    return conceptualRoute && !namesAFile && budgetTokens == 0 && !bodyCeiling && std::getenv( "RIPWIRE_NO_HEAD_RR" ) == nullptr;
 }
 inline constexpr bool endLinesFitCeilingFor( ForEndLinesMode mode, std::size_t budgetTokens, bool bodyCeiling ) noexcept
 {
