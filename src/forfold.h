@@ -34,6 +34,8 @@
 #include "lexical.h"    // subtokens, isRouteStopword
 #include "model.h"
 #include "nextverb.h"   // nextFlag
+#include "receiverevidence.h"   // ReceiverEvidence::classLike — the one class/struct/interface kind test
+#include "infra/sortutil.h"
 #include "serialize.h"  // packBodies, chargeSection, redactTakeBack, tokensForEmittedBytes
 
 #include <algorithm>
@@ -85,12 +87,19 @@ inline std::vector<NodeId> forBodyFoldCandidates( const IngestResult& ing, const
     return out;
 }
 
-// The fold's legend clause (both dialects), present-only beside the element. No "--": it rides inside an XML comment.
+// The fold's legend clauses, present-only beside the element: the full dialect's, and the compact dialect's (the default posture, so it
+// is the one most answers carry: the same readings, terse). Both start "; fold kind=bodies:" and end at the sigs_next= reading. No "--":
+// they ride inside an XML comment.
 inline constexpr std::string_view kForBodyFoldLegend =
     "; fold kind=bodies: whole bodies of the top ranked rows not already bodied, by rank, not a claim they are the answer "
     "(b t= n= p= l=, no sibs= or calls); served= of total=, each whole within budget_bytes=, on top of the unchanged answer; "
     "slice members= of=: a class too big for the rest, its constructor and the members holding a question word; "
-    "skip bytes= its source size, next= serves it; sigs next= the first skip, sigs_next= the signatures-only re-call";
+    "skip bytes= its source size, next= serves it; when a body was skipped, sigs next= is the first skip and sigs_next= the "
+    "signatures-only re-call";
+inline constexpr std::string_view kForCompactBodyFoldLegend =
+    "; fold kind=bodies: top ranked rows' whole bodies by rank, not the answer; served= of total= in budget_bytes=; slice "
+    "members= of=: a big class's constructor and question-word members; skip bytes= next=; a skip makes sigs next= it, sigs_next= "
+    "the signatures-only re-call";
 
 struct BodyFoldInputs
 {
@@ -132,15 +141,13 @@ inline std::vector<std::string> sliceWords( std::string_view task )
     }
     return out;
 }
-inline bool isSliceableKind( SymKind k ) noexcept
-{
-    return k == SymKind::Class || k == SymKind::Struct || k == SymKind::Interface;
-}
-// a constructor by name: the spellings the languages use, or the class's own name (C++, Java, C#)
+// a constructor by name: the languages' spellings (Python __init__, JS/TS constructor, Ruby initialize, Swift/ObjC init, Rust new,
+// a C# ctor) as DATA rows, or the class's own name (C++, Java, C#)
+inline constexpr std::string_view kFoldCtorNames[] = { "__init__", "constructor", "ctor", "init", "initialize", "new" };
+static_assert( std::ranges::is_sorted( kFoldCtorNames, rw::sortutil::svLess ), "kFoldCtorNames is binary-searched: keep it sorted" );
 inline bool isConstructorName( std::string_view member, std::string_view cls ) noexcept
 {
-    static constexpr std::string_view kCtorNames[] = { "__init__", "constructor", "ctor", "init", "initialize", "new" };
-    return member == cls || std::ranges::find( kCtorNames, member ) != std::end( kCtorNames );
+    return member == cls || std::ranges::binary_search( kFoldCtorNames, member, rw::sortutil::svLess );
 }
 // does `text` (a member's name, or its body) carry one of `words` as a subtoken
 inline bool holdsWord( std::string_view text, const std::vector<std::string>& words )
@@ -350,7 +357,7 @@ inline BodyFoldRender renderForBodyFold( const BodyFoldInputs& in, const std::ve
             }
             rw::redactTakeBack( in.redact, before, in.redact != nullptr ? std::optional<RedactCounts>( *in.redact ) : std::nullopt );
         }
-        if( fold_detail::isSliceableKind( s.kind ) )
+        if( ReceiverEvidence::classLike( s.kind ) )   // a class, struct or interface row: the member slice
         {
             if( !words )
             {
@@ -380,10 +387,14 @@ inline BodyFoldRender renderForBodyFold( const BodyFoldInputs& in, const std::ve
 // C3 NEXT ORDER (dn-compound): on an answer that carries the fold, the <sigs> continuation an agent meets first is the call that
 // ever lifted a row — the first skipped body's --expand — and the signatures-only re-call of the same rows (0 items lifted in 20
 // executions) moves to sigs_next=, its reading renamed with it. Only the <sigs> open tag is touched; nothing when it has no next=
-// and no body was skipped.
+// and no body was skipped; an answer whose fold skipped nothing keeps its <sigs> tag as it was.
 inline constexpr std::string_view kForFoldSigsNextNote = " [sigs sigs_next=: one call serving all total= rows uncut]";
 inline void spliceFoldSigsNext( std::string& sigs, std::string& sigsNote, std::string_view firstSkipNext )
 {
+    if( firstSkipNext.empty() )
+    {
+        return;   // every candidate was served: no body to lead with, the <sigs> continuation stays the re-call it was
+    }
     std::size_t open = sigs.find( "<sigs" );
     while( open != std::string::npos && open + 5 < sigs.size() && sigs[open + 5] != ' ' && sigs[open + 5] != '>' )
     {
@@ -404,10 +415,7 @@ inline void spliceFoldSigsNext( std::string& sigs, std::string& sigsNote, std::s
             sigsNote.replace( n, kForSigsNextNote.size(), kForFoldSigsNextNote );
         }
     }
-    if( !firstSkipNext.empty() )
-    {
-        sigs.insert( close, " next=\"" + std::string( firstSkipNext ) + "\"" );
-    }
+    sigs.insert( close, " next=\"" + std::string( firstSkipNext ) + "\"" );
 }
 
 }   // namespace rw

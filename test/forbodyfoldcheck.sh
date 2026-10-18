@@ -12,8 +12,9 @@
 #            or not served: a body whose element fits what is left of 4000 B is a <b t= l= p= n=> in the --expand shape WITHOUT
 #            sibs=/inc= and WITHOUT <calls>; one that does not is <skip p= n= l= bytes= next="--expand=P:L:N"/> and the walk goes
 #            on (a later, smaller body still rides).
-#   C3       the <sigs> continuation: next= becomes the first skip's next= (when one exists), and the signatures-only re-call
-#            the fold-off answer carried as <sigs next=> moves to sigs_next= (its legend reading renamed with it).
+#   C3       the <sigs> continuation, when a body was skipped: next= becomes the first skip's next=, and the signatures-only
+#            re-call the fold-off answer carried as <sigs next=> moves to sigs_next= (its reading renamed with it); a fold that
+#            skipped nothing leaves the <sigs> tag as it was.
 #   PRICE    est_tokens prices the fold (bodies at the body rate).
 #   RIDERS   (R1) a compact <hops> row whose <calls> listing is cut (16 of 20 callees) carries next="--callees=…" (rule 5:
 #            the per-hop cap was disclosed but not recoverable — forbudget-soft N3); (R2) the --for --limit=N file page
@@ -114,9 +115,9 @@ def strip_fold(t):
     t = re.sub(r'<fold .*?</fold>', '', t, flags=re.S)
     t = FOLD_CLAUSE.sub('', t)
     m = re.search(r'<sigs\b[^>]*>', t)
-    if m:
+    if m:   # the C3 pair (a skip's --expand as next=, the re-call as sigs_next=) rides only when a body was skipped
         tag = m.group(0)
-        tag2 = re.sub(r' next="[^"]*"', '', tag).replace(' sigs_next="', ' next="')
+        tag2 = re.sub(r' next="--expand=[^"]*"', '', tag).replace(' sigs_next="', ' next="')
         t = t[:m.start()] + tag2 + t[m.end():]
     t = t.replace('[sigs sigs_next=: one', '[sigs next=: one')
     return re.sub(r' est_tokens="\d+"', '', t)
@@ -149,9 +150,15 @@ elif cmd == "c3_skip":           # FILE : sigs next= == the first skip's next=
 elif cmd == "c3_pair":           # FOLD OFF : off's <sigs next=> == fold's sigs_next=; legend renamed
     t, o = load(args[0]), load(args[1])
     on, off = sigs_tag(t), sigs_tag(o)
+    a, x, _ = fold(t)
+    if a is None: fail("no fold on the src answer")
+    if not skips(x):   # every candidate served: the <sigs> tag is the fold-off answer's, untouched
+        tt, ot = re.search(r'<sigs\b[^>]*>', t), re.search(r'<sigs\b[^>]*>', o)
+        if not tt or not ot or tt.group(0) != ot.group(0): fail("no skip, yet the <sigs> tag differs from the fold-off answer's")
+        print("no skip: <sigs> untouched"); sys.exit(0)
     if "next" not in off: print("SKIPPED: the fold-off <sigs> carries no next= here"); sys.exit(0)
-    if fold(t)[0] is None: fail("no fold on the src answer")
     if on.get("sigs_next") != off["next"]: fail(f"sigs_next={on.get('sigs_next')!r} vs off next={off['next']!r}")
+    if on.get("next") != skips(x)[0]["next"]: fail(f"sigs next={on.get('next')!r} is not the first skip's")
     if "[sigs sigs_next=: one call serving all total= rows uncut]" not in legend(t): fail("legend not renamed to sigs_next=")
     if "[sigs next=: one call serving" in legend(t): fail("legend still reads [sigs next=: …] beside sigs_next=")
 elif cmd == "whole":             # FILE BIN DIR : every fold body == its --expand CDATA; budget; no sibs/inc/calls; counts

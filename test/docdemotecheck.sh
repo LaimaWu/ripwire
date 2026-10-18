@@ -283,7 +283,7 @@ if '<fold kind="bodies"' not in t: sys.exit(1)
 t = re.sub(r'<fold .*?</fold>', '', t, flags=re.S)
 t = re.sub(r'; fold kind=bodies:.*?sigs_next= the signatures-only re-call', '', t, flags=re.S)
 m = re.search(r'<sigs\b[^>]*>', t)
-if m: t = t[:m.start()] + re.sub(r' next="[^"]*"', '', m.group(0)).replace(' sigs_next="', ' next="') + t[m.end():]
+if m: t = t[:m.start()] + re.sub(r' next="--expand=[^"]*"', '', m.group(0)).replace(' sigs_next="', ' next="') + t[m.end():]
 t = t.replace('[sigs sigs_next=: one', '[sigs next=: one')
 mask = lambda x: re.sub(r' est_tokens="\d+"', '', x)
 sys.exit(0 if mask(t) == mask(o) else 1)

@@ -51,6 +51,10 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
+# body-fold (train 31; rule 4, by design): a compact-route --for answer now ends with <fold kind="bodies"> and its present-only clause
+# (forbodyfoldcheck owns the fold). This gate's subject is the legend DIALECTS and their bills over a fixed answer, so it reads the
+# fold-off answers (every pin and bill below is unchanged); (FOLD-L) at the end bills the fold's own clause in both dialects.
+export RIPWIRE_NO_BODY_FOLD=1
 export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py: the soft-target readers, shared helpers (CHECKLIST 32)
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
@@ -3073,4 +3077,15 @@ fi
 rm -f "$QAR/.ripwire_quality_acks"
 
 [ "$fail" -eq 0 ] && echo 'ALL PASS' || echo 'FAILURES ABOVE'
+echo "=== (FOLD-L) the fold's clause: present beside a fold, compact <= 300 B, full <= 500 B ==="
+( unset RIPWIRE_NO_BODY_FOLD; rrun "--for=geometry distance" --legend=compact ) >"$TMP/fl.c"
+( unset RIPWIRE_NO_BODY_FOLD; rrun "--for=geometry distance" --legend=full ) >"$TMP/fl.f"
+flc="$( python3 -c 'import re,sys; m=re.search(r"; fold kind=bodies:.*?sigs_next= the signatures-only re-call", open(sys.argv[1]).read(), re.S); print(len(m.group(0).encode()) if m else -1)' "$TMP/fl.c" )"
+flf="$( python3 -c 'import re,sys; m=re.search(r"; fold kind=bodies:.*?sigs_next= the signatures-only re-call", open(sys.argv[1]).read(), re.S); print(len(m.group(0).encode()) if m else -1)' "$TMP/fl.f" )"
+if grep -q '<fold kind="bodies"' "$TMP/fl.c" && [ "$flc" -gt 0 ] && [ "$flc" -le 300 ] && [ "$flf" -gt "$flc" ] && [ "$flf" -le 500 ]; then
+    ok "(FOLD-L) the fold clause rides beside the fold: compact $flc B, full $flf B"
+else
+    no "(FOLD-L) fold clause compact=$flc B full=$flf B (want 0 < compact <= 300 < full <= 500, beside a <fold>)"
+fi
+
 exit "$fail"

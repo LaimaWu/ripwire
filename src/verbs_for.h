@@ -765,10 +765,10 @@ inline std::string_view hopsCallsNextLegend( const ForLensHeaderParts& p, bool c
 {
     return !p.hopsCallsNextPresent ? std::string_view() : ( compact ? kForCompactHopsCallsNextClause : kForHopsCallsNextClause );
 }
-// body-fold: the fold's clause, present-only (bodyFoldPresent), right after the slot clause, the same words in both dialects
-inline std::string_view bodyFoldLegend( const ForLensHeaderParts& p ) noexcept
+// body-fold: the fold's clause in this dialect, present-only (bodyFoldPresent), right after the slot clause
+inline std::string_view bodyFoldLegend( const ForLensHeaderParts& p, bool compact ) noexcept
 {
-    return p.bodyFoldPresent ? rw::kForBodyFoldLegend : std::string_view();
+    return !p.bodyFoldPresent ? std::string_view() : ( compact ? rw::kForCompactBodyFoldLegend : rw::kForBodyFoldLegend );
 }
 inline constexpr std::string_view kForCompactLegendTail =
     "; t p= file outside sigs (weaker), t sym= a file-page row: its top symbols, r= rank (gap = trimmed)";
@@ -880,7 +880,7 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     h += hopsCallsNextLegend( p, /*compact=*/true );   // body-fold rider: present-only, right after the hops clause
     h += ownerHopLegend( p, /*compact=*/true );   // owner-hop: present-only, right after the hops clause
     h += bodySlotLegend( p, /*compact=*/true );   // for-body-slot: present-only, after the owner clause
-    h += bodyFoldLegend( p );                     // body-fold: present-only, after the slot clause
+    h += bodyFoldLegend( p, /*compact=*/true );   // body-fold: present-only, after the slot clause
     // The unconditionally-droppable-free tail of this dialect: five clauses that ride exactly when the bit beside
     // them is set, in THIS order, which is the contract a reader and every byte pin depend on. A table rather than
     // five identical ifs — the list has grown once per lane (hdr, compose, then train 9's lego and layer) and the
@@ -1025,7 +1025,7 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     h.append( hopsCallsNextLegend( p, /*compact=*/false ) );   // body-fold rider: present-only, right after the bundle clause
     h.append( ownerHopLegend( p, /*compact=*/false ) );   // owner-hop: present-only, right after the bundle clause
     h.append( bodySlotLegend( p, /*compact=*/false ) );   // for-body-slot: present-only, after the owner clause
-    h.append( bodyFoldLegend( p ) );                      // body-fold: present-only, after the slot clause
+    h.append( bodyFoldLegend( p, /*compact=*/false ) );   // body-fold: present-only, after the slot clause
     if( p.tailLegend )
     {
         h.append( rw::kForFileTailLegend );   // deep-tail: defines r= and the <tail> element (sigs-charge-exempt, serialize.h)
@@ -3379,7 +3379,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         const std::size_t bodySlotLegendEmitted = bodySlotLegend( headerParts, compactLegendOn ).size();
         // body-fold: the fold clause on the same contract — the fold rides on top of the complete answer (<sigs> byte-identical with
         // RIPWIRE_NO_BODY_FOLD=1 but for its next= attribute pair), so its reading never costs a signature row
-        const std::size_t bodyFoldLegendEmitted = bodyFoldLegend( headerParts ).size();
+        const std::size_t bodyFoldLegendEmitted = bodyFoldLegend( headerParts, compactLegendOn ).size();
         // attrib-multidef Q1: the prov="split" clause is a disclosure on the same contract — exempt, as e= is, so <sigs> (rows and
         // its continuation's budget) is byte-identical with and without it (fordisclosurecheck #2: auto vs --signatures-only)
         const std::size_t splitLegendEmitted = !headerParts.splitPresent ? 0u
@@ -3415,7 +3415,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                               + ( headerParts.endLinePresent ? rw::kForEndLineLegend.size() : 0u )
                                               + ownerLegendExemptBytes( headerParts, /*compact=*/false )
                                               + bodySlotLegend( headerParts, /*compact=*/false ).size()
-                                              + bodyFoldLegend( headerParts ).size()   // body-fold: one spelling in both dialects
+                                              + bodyFoldLegend( headerParts, /*compact=*/false ).size()   // body-fold
                                               + ( headerParts.splitPresent ? rw::kForSplitClause.size() : 0u );   // attrib-multidef Q1
             std::size_t       fullCharged     = fullExempt > fullHeaderBytes ? fullHeaderBytes : fullHeaderBytes - fullExempt;
             fullCharged -= std::min( fullCharged, rw::forZeroNoteBytes( fullHeader ) );   // lean-answers: exempt, as above
