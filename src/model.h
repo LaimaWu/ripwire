@@ -10,6 +10,7 @@
 
 #include "infra/profileScope.h"
 #include "infra/enumcount.h"   // rw::enumCountIsExact — the compile-time proof beside each k*Count a cache reader validates against
+#include "infra/tablelookup.h"   // rw::findByField — kCallForwarders below
 #include "infra/sortutil.h"  // svLess — JS/TS builtin-member tables below (binary_search, no signed-char wrap)
 #include "smallvec.h"   // rw::SmallVec — THE ONE ALIAS; the per-key span lists and per-file id buckets below
 #include "structlayout.h"   // cross-translation-unit sizeof/alignof tripwire for the shared model
@@ -20,6 +21,7 @@
 #include <cstdint>
 #include <optional>    // rubyTypedRecvOf — a Ruby reference's built receiver type, or none
 #include <string>
+#include <span>        // CallForwarderLang::forwarders
 #include <string_view>
 #include <type_traits>   // std::is_trivially_copyable_v — the VarSpan layout pin below
 #include <vector>
@@ -446,6 +448,51 @@ inline ValueRefFamily valueRefFamily( Lang l ) noexcept
 {
     return enumTableAt( kValueRefFamilyOfLang, l, ValueRefFamily::None );
 }
+// CALL FORWARDERS (lane fcall-forward, parser version 188, train renumbers; gate test/fcallforwardcheck.sh): a builtin
+// method that, called on a FUNCTION, calls that function (kind Call) or returns it as a value (kind Value). JS/TS
+// `f.call( thisArg, a )` and `f.apply( thisArg, args )` run f; `f.bind( thisArg )` hands f on without running it. When
+// ingest_valuerefs.h finds the receiver `f` is a bare identifier bound to a function declaration of the file or to a
+// file-scope import from a RELATIVE module (and no parameter or local of the site shadows it), a Call row becomes a
+// FORWARDED call reference to `f` (Reference::forwarded) — the bare call `f( … )` it stands for, resolved by the ordinary
+// tiers and then kept only where they PROVE a Function or Method (graph.h buildGraph; fix round 1): an import proves a
+// binding, not a function, so an imported object, const or class, and a by-name-only answer, add nothing — and a Value
+// row becomes a value reference to `f` at the slot the whole `f.bind( … )` fills. The original member reference (name `call`/`apply`) is kept unchanged. A family-owned
+// sparse table: a language with no row is unchanged. Function.prototype's other methods (toString) are not forwarders.
+// Floors, by language: Ruby `proc.call` / `m.to_proc` and Python `functools.partial( f )` are the same concept with
+// different receivers (a Proc or Method object, not a declaration) and have no row; a receiver that is a member
+// (`obj.m.call`), a parenthesised or computed expression, a local `const f = () => …`, or a TS `import f = require()`
+// is not forwarded. Shared with the bare call `f()` (the forward binds exactly as it does): a function-local `var f` /
+// `let f` declared AFTER the site does not shadow (scope declarations are read on scope entry), and a re-assignment
+// `f = …` is not followed. The declaration proof is file + name at any depth; a declaration only in a SIBLING scope
+// leaves the bare call by name alone, so that forward is dropped.
+enum class CallForwardKind : std::uint8_t { Call, Value };
+struct CallForwarder
+{
+    std::string_view name;
+    CallForwardKind  kind;
+    bool             argsAsArray;   // Call only: the forwarded arguments arrive as ONE array (`apply`), so the arity is unknown;
+                                    //   otherwise the first argument is the receiver and the rest are the call's own (`call`)
+};
+// Function.prototype's forwarders, shared by the two languages that run on it.
+inline constexpr CallForwarder kJsCallForwarders[] = {
+    { "apply", CallForwardKind::Call, true }, { "bind", CallForwardKind::Value, false }, { "call", CallForwardKind::Call, false },
+};
+struct CallForwarderLang
+{
+    Lang                               lang;
+    std::span<const CallForwarder>     forwarders;
+};
+inline constexpr CallForwarderLang kCallForwarders[] = {
+    { Lang::JavaScript, kJsCallForwarders },
+    { Lang::TypeScript, kJsCallForwarders },
+};
+// The language's forwarder rows — empty when it has none (the mechanism is then inert).
+inline std::span<const CallForwarder> callForwardersOf( Lang lang ) noexcept
+{
+    const CallForwarderLang* row = findByField( kCallForwarders, &CallForwarderLang::lang, lang );
+    return row != nullptr ? row->forwarders : std::span<const CallForwarder>{};
+}
+
 // The scope char (qualifier[0]) of a file's depth-cut Value record (see RefRole::Value above): written by
 // src/ingest_valuerefs.h, read by src/valuerefindex.h — distinct from every row scope (f l a p x).
 inline constexpr char kValueRefDepthCutScope = 'd';
@@ -838,6 +885,12 @@ struct Reference
     //   memberFactory), memberVia = the method that built it. recvVar is then empty. Read through rubyTypedRecvOf.
     std::string   memberVia;
     bool          memberFactory = false;
+    // lane fcall-forward fix 1 (test/fcallforwardcheck.sh N7 N8 N10 N11 H): a JS/TS call reference the value-ref walk
+    //   FORWARDED from `f.call( … )` / `f.apply( … )` (ingest_valuerefs.h forwardCallAt) — it stands for the bare call
+    //   `f( … )`, which the source never writes. graph.h buildGraph keeps its edges only where the resolver PROVES a
+    //   Function/Method (no via="name", no class/const/object target): an import proves a binding, not a function.
+    //   Sits beside memberFactory in the alignment padding before baseBind: sizeof(Reference) is unchanged.
+    bool          forwarded = false;
     // lane lego-transitive fix 1 (test/legotransitivecheck.sh NS arms), an INHERIT ref only (isInherit): the same-file declaration
     //   the base name binds to by the language's lexical lookup, as 1 + the byte its name starts at (ingest_relations.h
     //   localBaseBinding; 0 = no enclosing scope declares it, 0xFFFFFFFF = a scope too large to read, nothing proven). On an

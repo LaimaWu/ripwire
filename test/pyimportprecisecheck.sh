@@ -206,7 +206,7 @@ import copy, pathlib, re, struct, sys, xml.etree.ElementTree as ET
 from collections import Counter
 
 # readFileRecord/writeBind in ingest_cache.h, lean cache v36 (train 30: 34 -> 36 moved the number only, above three lanes'
-# 33/33/35; call-result-typing: a bind record gains two u8 after isFromAssignment, resultIndex and unwrapDepth, which a
+# 33/33/35; fcall-forward: a RawRef appends the `forwarded` u8 after memberFactory; call-result-typing: a bind record gains two u8 after isFromAssignment, resultIndex and unwrapDepth, which a
 # Python bind leaves at 0xFF / 0 — asserted below; train 29: 33 -> 34 moved the number only; arity-min: 32 -> 33 appends
 # paramsMin to the DEF record, which this lean fixture never holds; train 28: 31 -> 32 moved the number only). No heuristic
 # string searches: walk the counted arrays and require complete file coverage, clean parse health and exact EOF.
@@ -242,7 +242,7 @@ for i in range(count):
         string(); string(); take(13)  # argCount is serialized u32, narrowed by u16Of32 on read
         for _ in range(4):
             string()  # memberRoot/memberPath/memberCtor/memberVia
-        take(1)  # memberFactory
+        take(2)  # memberFactory, forwarded (fcall-forward)
         if inherit:
             take(4)  # baseBind
     incs = []
