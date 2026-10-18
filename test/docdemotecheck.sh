@@ -193,6 +193,10 @@ PY
 # anchorcheck/routecheck the same day).
 # L1 (2026-09-19): the CLI default legend is compact; (f)/(h) compare against goldens recorded from the full default, so they ask for it.
 "$BIN" docdemotefix --for="$CONCEPTQ" --no-cache --legend=full >"$TMP/concept.xml"   2>/dev/null
+# body-fold (train 31; rule 4, by design): the conceptual answer now ends with <fold kind="bodies"> (forbodyfoldcheck owns it).
+# The golden stays the pre-fold answer byte for byte — (f) reads it off the fold-off twin — and (f-fold) pins that the default
+# answer is that twin plus the fold, its legend clause, the <sigs> next pair and est_tokens, nothing else.
+RIPWIRE_NO_BODY_FOLD=1 "$BIN" docdemotefix --for="$CONCEPTQ" --no-cache --legend=full >"$TMP/conceptoff.xml" 2>/dev/null
 "$BIN" docdemotefix --for="$BUGQ" --no-route --no-cache --legend=full >"$TMP/noroutefor.xml" 2>/dev/null
 "$BIN" docdemotefix --recall="$BUGQ" --no-cache >"$TMP/recall.xml" 2>/dev/null
 
@@ -269,9 +273,22 @@ grep -q 'doc tier demoted' "$TMP/concept.xml" \
 grep -q 'doc_tier="' "$TMP/conceptc.xml" \
     && no "(f) conceptual query emitted a doc_tier= attribute: the detector over-fires on ordinary prose" \
     || ok "(f) conceptual query: no doc_tier= attribute on the candidates export either"
-diff -q "$TMP/concept.xml" "$ROOT/test/docdemotegolden_for.xml" >/dev/null \
-    && ok "(f) conceptual --for byte-identical to the pre-change golden" \
-    || no "(f) conceptual --for drifted from test/docdemotegolden_for.xml"
+diff -q "$TMP/conceptoff.xml" "$ROOT/test/docdemotegolden_for.xml" >/dev/null \
+    && ok "(f) conceptual --for (fold-off twin) byte-identical to the pre-change golden" \
+    || no "(f) conceptual --for (fold-off twin) drifted from test/docdemotegolden_for.xml"
+if python3 - "$TMP/concept.xml" "$TMP/conceptoff.xml" <<'PYF'
+import re, sys
+t, o = open(sys.argv[1]).read(), open(sys.argv[2]).read()
+if '<fold kind="bodies"' not in t: sys.exit(1)
+t = re.sub(r'<fold .*?</fold>', '', t, flags=re.S)
+t = re.sub(r'; fold kind=bodies:.*?sigs_next= the signatures-only re-call', '', t, flags=re.S)
+m = re.search(r'<sigs\b[^>]*>', t)
+if m: t = t[:m.start()] + re.sub(r' next="[^"]*"', '', m.group(0)).replace(' sigs_next="', ' next="') + t[m.end():]
+t = t.replace('[sigs sigs_next=: one', '[sigs next=: one')
+mask = lambda x: re.sub(r' est_tokens="\d+"', '', x)
+sys.exit(0 if mask(t) == mask(o) else 1)
+PYF
+then ok "(f-fold) the default conceptual answer is the golden's answer plus the fold, nothing else moved"; else no "(f-fold) the default conceptual answer differs from its fold-off twin outside the fold"; fi
 # (f) one row spelling: every r= row of a --for answer omits a zero cx=/ccx=/in= (the lens legend: absent = 0), the rows
 # the code-above-docs reorder moved and re-headed (serialize.h reorderDocsAfterCode) included. This routed question
 # moves the two notes/paging_design.md rows below the code.
