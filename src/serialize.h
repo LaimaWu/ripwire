@@ -7661,7 +7661,7 @@ inline std::string ownerCalleesNext( const IngestResult& ing, const Symbol& s, s
                                      std::vector<char>& esc )
 {
     std::string target = s.scope.empty() ? std::string( pathRel ) + ":" + std::string( s.name ) : canonicalIdForEmit( ing, s, rootArg );
-    return "--callees=" + std::string( escapeXml( target, esc ) );
+    return std::string( escapeXml( nextFlag( "--callees=", target ), esc ) );   // quoted only where a shell would split it (checklist 34)
 }
 
 // What the owner walk hands back to packHops: the rows, how many nodes they consumed, and the budget and via-legend charge

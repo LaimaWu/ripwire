@@ -42,7 +42,8 @@
 #   F9 [G] the body slot's owner (bodies="1" reason="owner") is never repeated in the fold
 #   R1 [P] the dispatcher question: <h n=dispatchRequest><calls total=20 shown=16 capped=1 next="--callees=src/dispatch.ts:dispatchRequest">
 #          and the pasted next= lists all 20 callees;  R1b [G] an uncut <calls> carries no next=;  R1c [P] its legend clause
-#          rides exactly when a ranked hop's listing is cut (present-only: an answer without one keeps its bytes)
+#          rides exactly when a ranked hop's listing is cut (present-only: an answer without one keeps its bytes);
+#          R1d [P] under a file name holding a space the next= is quoted (nextFlag) and pastes as one argument
 #   R2 [P] the file page legend (full and compact) carries the n= vs sibs_total= reading
 #   X1 [G] determinism   X2 [G] xmllint well-formed   X3 [G] no "--" inside a legend comment
 #   I0-I* [optional, RIPWIRE_BASE_BIN=<pre-change binary>] byte identity where the fold must not fire, and RIPWIRE_NO_BODY_FOLD=1
@@ -312,6 +313,10 @@ if grep -q 'h calls capped=1 next= the call listing every callee' "$TMP/hops" &&
 else
     no "(R1c) the hop calls next= clause is missing beside a cut listing, or rides without one"
 fi
+# R1d: the next= is a pasteable argument under a file name a shell would split (nextFlag quotes it; checklist 34)
+mkdir -p "$TMP/sp/src" && cp "$FIX/src/dispatch.ts" "$TMP/sp/src/dis patch.ts"
+"$BIN" "$TMP/sp" --no-cache --for="$T_HOPS" >"$TMP/sp.out" 2>/dev/null
+if r=$( chk hopnext "$TMP/sp.out" "$BIN" "$TMP/sp" dispatchRequest 20 ); then ok "(R1d) the cut listing's next= splits to one argument under a spaced file name and lists all 20"; else no "(R1d) $r"; fi
 # R2
 run "$TMP/page"  --for="$T_RESP" --limit=40
 run "$TMP/pagef" --for="$T_RESP" --limit=40 --legend=full
