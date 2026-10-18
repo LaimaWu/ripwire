@@ -87,12 +87,10 @@ inline std::vector<NodeId> forBodyFoldCandidates( const IngestResult& ing, const
 
 // The fold's legend clause (both dialects), present-only beside the element. No "--": it rides inside an XML comment.
 inline constexpr std::string_view kForBodyFoldLegend =
-    "; fold kind=bodies: the whole bodies of the top ranked rows not already bodied, by rank, not a claim they are the answer "
-    "(b t= n= p= l=, no sibs= and no callee rows); served= of total= rows, each whole or not at all within budget_bytes= "
-    "(the served bodies' bytes, on top of the answer above, which is unchanged without it); slice p= n= l= members= of=: a class "
-    "too big for what is left, its constructor and the members whose name or body holds a question word, each whole, members= "
-    "served of its of= members; skip p= n= l= bytes= its source size, next= the call that serves it; sigs next= is then the first "
-    "skip's next=, sigs_next= the signatures-only re-call";
+    "; fold kind=bodies: whole bodies of the top ranked rows not already bodied, by rank, not a claim they are the answer "
+    "(b t= n= p= l=, no sibs= or calls); served= of total=, each whole within budget_bytes=, on top of the unchanged answer; "
+    "slice members= of=: a class too big for the rest, its constructor and the members holding a question word; "
+    "skip bytes= its source size, next= serves it; sigs next= the first skip, sigs_next= the signatures-only re-call";
 
 struct BodyFoldInputs
 {
