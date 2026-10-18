@@ -2868,10 +2868,11 @@ std::optional<int> runImpact( const MainDispatch& d )
         // Reference-as-value round: SYM's own binding sites, beside the radius they are not in.
         const rw::ValueRefIndex imVri( ing );
         const rw::ValueRefRows  imValueRefs = rw::valueRefCallerRows( ing, imVri, seeds );
-        // ix2-slice (IX-4, declinedsites.h): the <dc> rows of exactly the declines declined_calls= counts, cut as --callers cuts
+        // ix2-slice (IX-4, declinedsites.h): the <dc> rows of exactly the declines declined_calls= counts, cut as --callers cuts;
+        // no cand= under any legend (as the MCP twin): --help promises the rows byte-identical across postures (legendcostcheck C)
         const rw::ImpactDeclinedRows imDc = rw::impactDeclinedRows( ing, g, imDeclineTargets, imDeclinedCalls, cfg.pageLimit, cfg.impactSym,
                                                                     std::size_t( effectiveRowCap( cfg.pageLimit, rw::kCallHierarchyRowCap ) ),
-                                                                    rw::VrRender{ imSingleRoot, imRootPrefix }, cfg.legend == "full" );
+                                                                    rw::VrRender{ imSingleRoot, imRootPrefix }, /*candidates=*/false );
 
         if( !cfg.json )
         { // L2: JSON has no comment-node analogue; the XML-only leading doc comment
