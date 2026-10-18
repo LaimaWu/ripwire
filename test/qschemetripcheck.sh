@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-17, lane/name-template-dispatch (IX-3, train 30; the train renumbers): RE-PINNED with UPDATE_GOLDEN=1 (hash
+#   a99b270ea1…0fe680). The only watched text that moved is the kParserVer 176 -> 192 (rich 193) and kCacheVersion
+#   32 -> 35 declarations and quality.h's two mirrors: RefRole gained Pattern (11, appended) for name-template lookups.
+#   Pattern refs are never read by the quality Snapshot (dead set, clones, metrics), so kQSnapCacheScheme stays.
 # 2026-10-15, train 28 (grep-carrier, ruby-pair, qd-memory-degrade, githarden-speed, git-child-hardening, PR #380, forbudget-soft,
 #   for-body-slot, attrib-multidef, declined-sites merged onto main 1bcb6540): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged
 #   tree (hash 279718355d…5ba2db). Watched text: kParserVer 173 -> 176 (main's slice 4a 173 / rich 174, lane grep-carrier 173,
