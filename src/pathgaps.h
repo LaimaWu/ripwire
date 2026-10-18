@@ -410,6 +410,7 @@ struct NearSinkRow
     std::size_t    callers = 0;   // its proven callers (in-edges), any depth
     NearSinkCounts counts{};
     NearSinkSite   site;          // the one site the row names (none when counts are all 0)
+    std::size_t    nameWithheld = 0;   // by-name hits the K5 rules withheld (owner out of reach, or no non-builtin call): never "external"
 
     bool reasoned() const noexcept { return site.valid || callers == 0; }   // a why= (external included)
 };
@@ -701,6 +702,7 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
         }
         std::ranges::stable_sort( keys, keyLess );
         std::vector<std::pair<NodeId, std::uint32_t>> nameHits;   // (caller, row)
+        std::vector<std::pair<NodeId, std::uint32_t>> withheld;   // (caller, row): a by-name hit the K5 rules drop (review M1)
         const std::size_t N = g.outOff.empty() ? 0 : g.outOff.size() - 1;
         for( NodeId c = 0; c < N && c < S; ++c )
         {
@@ -719,9 +721,9 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
                     const auto   from = g.outTargets.begin() + g.outOff[c];
                     const auto   to   = g.outTargets.begin() + g.outOff[c + 1];
                     // outTargets ascend within a source; the row's owner must be in the forward reach (K5 rule 2)
-                    if( u != w && u != c && !std::binary_search( from, to, u ) && ownerReach.reaches( ing.symbols[u] ) )
+                    if( u != w && u != c && !std::binary_search( from, to, u ) )
                     {
-                        nameHits.emplace_back( c, it->row );
+                        ( ownerReach.reaches( ing.symbols[u] ) ? nameHits : withheld ).emplace_back( c, it->row );
                     }
                 }
             }
@@ -745,12 +747,23 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
                 {
                     offer( row, NearSinkKind::Name, ref, c );
                 }
+                else
+                {
+                    withheld.emplace_back( c, row );
+                }
             }
+        }
+        std::ranges::sort( withheld );
+        withheld.erase( std::ranges::unique( withheld ).begin(), withheld.end() );
+        for( const auto& hit : withheld )
+        {
+            ++out.rows[ hit.second ].nameWithheld;
         }
     }
 
     // ix2-slice commit 4: within a depth, the path TIER (source, then test/bench, then docs) before id — a glob to= (on_*) makes
-    // hundreds of depth-0 rows, and the docs examples must not lead them
+    // hundreds of depth-0 rows, and docs-tier files must not lead them (the tier is read by extension: a .py under docs/ is
+    // still source tier, so docs/examples/*.py rows can lead — card)
     const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( ing, out.rows, [ & ]( const NearSinkRow& r ) { return ing.symbols[ r.id ].fileId; } );
     std::ranges::sort( out.rows, [ & ]( const NearSinkRow& a, const NearSinkRow& b )
     {
@@ -786,7 +799,8 @@ inline constexpr std::string_view kNearSinkLegend =
     "not spelled like a builtin type's method, and the row's class, or its file for a free function, owns something the forward search reached), "
     "closure = it is a named function written inside in='s body (site= its own definition: in= runs it or hands it on), "
     "external = none of those and no proven caller: no indexed way in was found (an entry point, an out-of-tree or framework caller, "
-    "a hand-off the index does not record, or dead); in= site= name one such site (its enclosing definition, file:line), met=1 when the forward search reached in= (it met that "
+    "a hand-off the index does not record, or dead); withheld=name:N = N by-name calls reach this namesake but fail the two name "
+    "rules: not counted as a way in, and never read as external; in= site= name one such site (its enclosing definition, file:line), met=1 when the forward search reached in= (it met that "
     "hand-off and could not follow it). A row is where the backward search could not see, never a hop and not proof a path exists; "
     "rows= counts them, rows_capped=1 = more than shown; next= on the block lists the first row's callers and declined sites. ";
 inline std::string_view nearSinkLegend( bool on ) noexcept
@@ -811,13 +825,14 @@ inline std::string pathNearSinkXml( const IngestResult& ing, const PathNearSink&
     {
         const NearSinkRow& r   = ns.rows[i];
         const Symbol&      s   = ing.symbols[ r.id ];
-        // why="declined:D,value:V,through:T,name:M" (table order), "external" with no proven caller and no other way in,
-        // nothing with proven callers only
+        // why="declined:D,value:V,through:T,name:M" (table order), "external" with no proven caller and no other way in —
+        // a withheld by-name hit is a way in the index holds, so it is never external (review M1) — nothing with proven callers only
         const std::string  counted = kindCountsValue( r.counts, kNearSinkKindNames );
-        const std::string  why     = counted.empty() && r.callers == 0 ? std::string( "external" ) : counted;
+        const std::string  why     = counted.empty() && r.callers == 0 && r.nameWithheld == 0 ? std::string( "external" ) : counted;
         rows += "<ns d=\"" + std::to_string( r.depth ) + "\" t=\"" + std::string( symTag( s.kind ) ) + "\" n=\"" + ex( s.name ) + "\" p=\""
               + ex( rel( s.fileId ) ) + ":" + std::to_string( s.line ) + "\"" + ( r.callers > 0 ? " callers=\"" + std::to_string( r.callers ) + "\"" : std::string() )
-              + ( why.empty() ? std::string() : " why=\"" + why + "\"" );
+              + ( why.empty() ? std::string() : " why=\"" + why + "\"" )
+              + ( r.nameWithheld > 0 ? " withheld=\"name:" + std::to_string( r.nameWithheld ) + "\"" : std::string() );
         if( r.site.valid )
         {
             rows += ( r.site.in < ing.symbols.size() ? " in=\"" + ex( ing.symbols[ r.site.in ].name ) + "\"" : std::string() ) + " site=\""
@@ -894,7 +909,8 @@ inline constexpr std::size_t   kBridgeFanOut    = 16;
 inline constexpr std::size_t   kBridgeMaxHops   = 8;   // a longer chain is no answer a reader would follow: none is printed
 
 enum class BridgeVia : std::uint8_t { Edge, Declined, Value, Closure, Namesake };
-inline constexpr std::array<std::string_view, 5> kBridgeViaNames = { "", "declined", "value", "closure", "namesake" };
+inline constexpr std::size_t                                    kBridgeViaCount = 5;
+inline constexpr std::array<std::string_view, kBridgeViaCount> kBridgeViaNames = { "", "declined", "value", "closure", "namesake" };
 
 struct PathBridge
 {
@@ -1117,7 +1133,9 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
     {
         return PathBridge{};   // past the hop bound: the legend says a bridge is shown only within it
     }
-    ENSURES( out.crossings >= 1 && out.crossings <= kBridgeCrossings, "only reached when the proven search was not (reachable=0), within the bound" );
+    // crossings >= 1 holds because every caller asks only on reachable=0 (a caller precondition, not something this function
+    // makes true), so it is checked in debug and never promised in release (review nit)
+    DASSERT( out.crossings >= 1 && out.crossings <= kBridgeCrossings, "only reached when the proven search was not (reachable=0), within the bound" );
     return out;
 }
 

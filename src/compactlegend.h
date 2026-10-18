@@ -796,6 +796,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "rows", "near_sink depth= callers= rows=: to='s proven callers up to depth= back; rows_capped=1 cut; next= the first row's callers", true, "near_sink", MapHeaderRead::No, {}, "path" },
     { "d", "ns d= t= n= p= callers= why=: hops back, symbol, its callers; why= un-edged ways in (declined|value|through|name|closure), external: none found; never a hop", true, "ns", MapHeaderRead::No, {}, "path" },
     { "site", "ns in= site= met=1: one such site; met=1 the forward search reached in=", true, "ns", MapHeaderRead::No, {}, "path" },
+    { "withheld", "ns withheld=name:N: N by-name calls failing the two name rules; not counted as a way in, never external", true, "ns", MapHeaderRead::No, {}, "path" },
     // quality-delta: src/verbs_quality.h (root emit) + src/quality.h identityDisclosure
     { "stale", "stale=N: ack ledger rows whose target no longer applies (sa rows); never gating", false, "quality-delta", MapHeaderRead::No, {}, "quality-delta" },
     // idea #11 (lane lean-trio): present-only, on a regression-free answer whose stale sa rows were collapsed to counts

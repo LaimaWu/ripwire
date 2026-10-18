@@ -827,6 +827,19 @@ if premise "(K4)" "$rc" "$f" && k5premise "(K4)" "$f"; then
         no "(K4) the in-reach, non-builtin by-name hedge was dropped: $( nsrows "$f" | tr -d '\n' ) $( brblock "$f" )"
     fi
 fi
+# K5x (review M1): a by-name way in the K5 rules WITHHOLD is not "no indexed way in was found" — the row says withheld="name:N"
+# and never why="external". Near miss: S5's z has no by-name hit at all and keeps why="external" (pinned exactly above).
+f="$TMP/K1.xml"
+if [ -s "$f" ] && grep -q '<path ' "$f"; then
+    r="$( nsrows "$f" | grep 'n="process"' | tr -d '\n' )"
+    if echo "$r" | grep -q 'withheld="name:1"' && ! echo "$r" | grep -q 'why="external"'; then
+        ok "(K5x) k_process_out: the withheld by-name way in is marked, not read as external — $r"
+    else
+        no "(K5x) k_process_out: a withheld by-name way in reads as external or carries no withheld mark: [$r]"
+    fi
+else
+    no "(K5x) premise: K1's answer is missing"
+fi
 
 echo "(M) MCP path_between carries the same clause"
 # Two MCP legend postures (lean-answers): the unchanged assertions run on --mcp-legend=inline, the pre-posture spelling

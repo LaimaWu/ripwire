@@ -33,6 +33,8 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   whose owner (its class in its file, or its file for a free function) owns something the forward search reached. On the
   24-row near_sink hand-check sample this removes all 5 by-name rejects and no accepted row; it is a hedge filter, not
   proof that a dropped namesake is never the one called.
+  A row whose by-name calls those rules drop says so with `withheld="name:N"` and never reads `why="external"`: the
+  index holds a way in it chose not to count (textual's `Input.render_line`, entered by `widget.render_line( y )`).
 
 ### Added — `--path` offers a hedged bridge (`<bridge proven="0">`) and glob endpoints
 
