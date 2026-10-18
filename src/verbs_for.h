@@ -1981,7 +1981,7 @@ ForAutoBodiesResult buildForAutoBodies( const rw::Config& cfg, const rw::IngestR
         // shell the "budget" branch below already gets for free, rather than a second hand-rolled tag.
         out.attr    = " bundle=\"auto\" bodies=\"0\" reason=\"no_candidates\"";
         out.section = rw::chargeSection( [ & ]( std::FILE* f )
-            { rw::packBodies( f, ing, autoBodyIds, /*budgetBytes=*/1, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), cfg.compress, redactPtr,
+            { rw::packBodies( f, ing, autoBodyIds, /*budgetBytes=*/1, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv, nullptr, rw::linkOutPtr( g ) ), cfg.compress, redactPtr,
                                /*ranges=*/nullptr, /*noteIndex=*/nullptr, nullptr, /*truncateOversizedFirst=*/false,
                                /*withFileContext=*/false, fabRootArg, &lensRank, rw::CalleeLegendsInHead( viaLegendInHead, splitLegendInHead ) ); },
             rw::kBytesPerTokenBody );
@@ -2003,7 +2003,7 @@ ForAutoBodiesResult buildForAutoBodies( const rw::Config& cfg, const rw::IngestR
     const std::size_t  autoBodyBudget = std::max<std::size_t>( 1, std::min( leftBytes, cfg.packBudgetBytes ) );
     rw::EmittedBodies autoEmitted;
     out.section = rw::chargeSection( [ & ]( std::FILE* f )
-        { rw::packBodies( f, ing, autoBodyIds, autoBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), cfg.compress, redactPtr,
+        { rw::packBodies( f, ing, autoBodyIds, autoBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv, nullptr, rw::linkOutPtr( g ) ), cfg.compress, redactPtr,
                            /*ranges=*/nullptr, /*noteIndex=*/nullptr, &autoEmitted, /*truncateOversizedFirst=*/false,
                            /*withFileContext=*/false, fabRootArg, &lensRank, rw::CalleeLegendsInHead( viaLegendInHead, splitLegendInHead ) ); },
         rw::kBytesPerTokenBody );
@@ -2409,7 +2409,7 @@ ForAutoBodiesResult buildForCompactHops( const rw::Config& cfg, const rw::Ingest
     const rw::HopOwners           owners   = forHopOwners( cfg, ing, ownerPlan, leftBytes, fcRootArg );
 
     out.section = rw::chargeSection( [ & ]( std::FILE* f )
-        { rw::packHops( f, ing, hopNodes, hopBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), redactPtr, &lensRank, fcRootArg,
+        { rw::packHops( f, ing, hopNodes, hopBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv, nullptr, rw::linkOutPtr( g ) ), redactPtr, &lensRank, fcRootArg,
                         rw::CalleeLegendsInHead( viaLegendInHead, promised.splitLegendInHead ), &owners ); },   // g.outNameOnly also feeds the hop-slot rule (serialize.h noProvenEdge)
         // MARKUP rate, not the body rate — and this is an honesty choice, not a copy-paste slip. The body
         // rate (3.80 B/tok) prices SOURCE TEXT; the compact section contains none, only tags, identifiers
@@ -3725,7 +3725,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                 detailBodyBudget = std::min( detailBodyBudget, std::max( leftBytes, detailFloorBudget ) );
             }
             detailSection = rw::chargeSection( [ & ]( std::FILE* f )
-                { packBodies( f, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), cfg.compress, redactPtr,
+                { packBodies( f, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv, nullptr, rw::linkOutPtr( g ) ), cfg.compress, redactPtr,
                               /*ranges=*/nullptr, notesPtr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
                               /*withFileContext=*/false, flRootArg, &lensRank, rw::CalleeLegendsInHead( headerParts.viaPresent, headerParts.splitPresent ) ); },   // L3: --detail bodies surface notes too (part of the --for bundle)
                 rw::kBytesPerTokenBody );
@@ -3779,7 +3779,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             const std::size_t slotSpent = rowsSpentBytes + plan.attrReserve + enrich.section.xml.size();   // the rows at the cut + the hops
             slot = rw::renderForBodySlot( rw::BodySlotInputs{ ing, g.outOff, g.outTargets, g.outNameOnly, lensRank, flRootArg, redactPtr, notesPtr,
-                                                              headerParts.viaPresent, cfg.compress, &g.outProv, headerParts.splitPresent },
+                                                              headerParts.viaPresent, cfg.compress, &g.outProv, headerParts.splitPresent, rw::linkOutPtr( g ) },
                                           slotOwner, forSoftTarget ? std::optional<std::size_t>( rw::forSoftSectionsShare( bundleBudget, slotSpent ) )
                                                                    : std::nullopt );
             if( slot.served )
@@ -3999,7 +3999,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // directly at the SAME budget — uncharged for that one run, with an alert, never a fabricated number.
         if( cfg.detail > 0 )
         {
-            rw::emitChargedSection( stdout, detailSection, [ & ]{ packBodies( stdout, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ),
+            rw::emitChargedSection( stdout, detailSection, [ & ]{ packBodies( stdout, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv, nullptr, rw::linkOutPtr( g ) ),
                                                                               cfg.compress, redactPtr, /*ranges=*/nullptr, notesPtr,
                                                                               /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
                                                                               /*withFileContext=*/false, flRootArg, &lensRank, rw::CalleeLegendsInHead( headerParts.viaPresent, headerParts.splitPresent ) ); } );

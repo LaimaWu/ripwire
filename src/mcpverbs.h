@@ -454,7 +454,7 @@ inline std::string analyzeToString( const std::string& root, int topK, bool stab
                                     // §B4 family, and mcpclidiffcheck is the gate that keeps the two surfaces one.
                                     /*ann=*/rw::MapAnnotations{ .prDisclosure = ix.prDisclosure, .codeFirstRows = ix.isCleanWorkingSet, .inventoryTier = ix.isCleanWorkingSet },
                                     /*statsFirstScreen=*/true, anRootArg, &ix.g.locPinOut, ix.g.externalCalls, &ix.g.declinedOut, ix.g.gateDeclinedCalls,
-                                    ix.g.outNameOnly.empty() ? nullptr : &ix.g.outNameOnly, ix.g.stdMemberDeclinedCalls, ix.g.inertDeclinedCalls ); } );
+                                    ix.g.outNameOnly.empty() ? nullptr : &ix.g.outNameOnly, ix.g.stdMemberDeclinedCalls, ix.g.inertDeclinedCalls, rw::linkOutPtr( ix.g ) ); } );
 }
 
 // `rank_by` verb (lane/t10-mcp-coverage): the MCP twin of --rank-by=pagerank|authority|hub|rrf — the SAME
@@ -522,7 +522,7 @@ inline std::string rankByText( const std::string& root, std::string_view mode, i
                                     /*extraPayloadTokens=*/0,
                                     /*ann=*/rw::MapAnnotations{ .rankByLabel = rankByLabel, .prDisclosure = disclosure, .codeFirstRows = rankByLabel == nullptr, .inventoryTier = rankByLabel == nullptr },   // pagerank: the map scope's code-first pick
                                     /*statsFirstScreen=*/true, rbRootArg, &ix.g.locPinOut, ix.g.externalCalls, &ix.g.declinedOut, ix.g.gateDeclinedCalls,
-                                    ix.g.outNameOnly.empty() ? nullptr : &ix.g.outNameOnly, ix.g.stdMemberDeclinedCalls, ix.g.inertDeclinedCalls ); } );
+                                    ix.g.outNameOnly.empty() ? nullptr : &ix.g.outNameOnly, ix.g.stdMemberDeclinedCalls, ix.g.inertDeclinedCalls, rw::linkOutPtr( ix.g ) ); } );
 }
 
 // ─── the cross-branch + dark-content MCP twins (`whereis`, `stray_content`, `flags`) ───
@@ -2213,7 +2213,7 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
             share = forSoftSectionsShare( budgetBytesForTokens( budgetTokens ), mcpHdrXml.size() + atCut + legoStr.size() + composeStr.size() + routeStr.size() );
         }
         mcpSlot = renderForBodySlot( BodySlotInputs{ ing, in.g.outOff, in.g.outTargets, in.g.outNameOnly, lensRank, flRootArg, redact, notesPtr,
-                                                     /*viaLegendInHead=*/false, /*compress=*/false, &in.g.outProv, /*splitLegendInHead=*/false },
+                                                     /*viaLegendInHead=*/false, /*compress=*/false, &in.g.outProv, /*splitLegendInHead=*/false, linkOutPtr( in.g ) },
                                      in.slotOwner, share );
     }
     mcpForSoftRefill( in, renderSigs, sigsStr, mcpSigsCut, &mcpSigsNext,
@@ -3637,10 +3637,12 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     // PATH-GAP: the CLI --path's gap clause, by the same analysis and emitter (src/pathgaps.h).
     const PathSearchGaps ptGaps = pth.empty() ? pathSearchGaps( ing, g, srcDefs, valueRefIndexOf( ix ) ) : PathSearchGaps{};
     const bool ptHasVia = pathHasNameOnlyHop( g, pth );   // FE-B: exactly when a hop of this path is via="name", as on the CLI
+    const bool ptHasLink = pathHasLinkHop( g, pth );
     const PathEndpointBinding ptBound    = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), pth );   // attrib-multidef, as on the CLI
     const bool                ptHasSplit = ptBound.splitHop;
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                        "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + viaNameLegend( ptHasVia )
+                                                           + viaLinkLegend( ptHasLink )
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
                   pathGapsLegend( ptGaps.any() ),
@@ -3661,7 +3663,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     { const Symbol&           s  = ing.symbols[ pth[i] ];
       const std::string_view  rp = ptSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], ptRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
       rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
-                    viaNameAttr( i > 0 && edgeNameOnly( g, pth[ i - 1 ], pth[ i ] ) ), splitArmAttrXml( pathHopSplitArm( g, pth, i ) ) ); }   // FE-B; attrib-multidef: as on the CLI
+                    viaEdgeAttr( i > 0 && edgeNameOnly( g, pth[ i - 1 ], pth[ i ] ), i > 0 && edgeIsLink( g, pth[ i - 1 ], pth[ i ] ) ), splitArmAttrXml( pathHopSplitArm( g, pth, i ) ) ); }   // FE-B; a link hop says via="link"
     rw::emitRaw( mem, "</path>" );
     return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
@@ -3925,7 +3927,12 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
     {
         return grp.terminals.size() > 1 && std::any_of( grp.edges.begin(), grp.edges.end(), [ & ]( const ConnectEdge& e ) { return edgeNameOnly( g, e.from, e.to ); } );
     } );
-    const std::string  connectViaLegend = connectHasVia ? "<!-- ripwire connect: " + viaNameLegend( true ) + "-->" : std::string();
+    const bool         connectHasLink = std::any_of( res.groups.begin(), res.groups.end(), [ & ]( const ConnectGroup& grp )
+    {
+        return grp.terminals.size() > 1 && std::any_of( grp.edges.begin(), grp.edges.end(), [ & ]( const ConnectEdge& e ) { return edgeIsLink( g, e.from, e.to ); } );
+    } );
+    const std::string  connectViaLegend = ( connectHasVia ? "<!-- ripwire connect: " + viaNameLegend( true ) + "-->" : std::string() )
+                                        + ( connectHasLink ? "<!-- ripwire connect: " + viaLinkLegend( true ) + "-->" : std::string() );
     const std::size_t  connectExtraBytes = connectRootAttr.size() + std::strlen( rootRelPathsLegend( !rootArg.empty() ) )
                                          + connectUnindexedLegend.size() + connectUnprovenAttr.size() + connectUnprovenLegend.size()
                                          + connectAmbiguousAttr.size() + connectViaLegend.size();
@@ -4077,7 +4084,7 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
             {
                 payload.append( "<e f=\"" ).append( ex( ing.symbols[ e.from ].name ) )
                        .append( "\" t=\"" ).append( ex( ing.symbols[ e.to ].name ) ).append( "\"" )
-                       .append( viaNameAttr( edgeNameOnly( g, e.from, e.to ) ) ).append( "/>" );   // FE-B: a name-only edge says so
+                       .append( viaEdgeAttr( edgeNameOnly( g, e.from, e.to ), edgeIsLink( g, e.from, e.to ) ) ).append( "/>" );   // FE-B, or via="link"
             }
             payload.append( "</g>" );
         }

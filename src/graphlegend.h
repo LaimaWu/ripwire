@@ -1162,6 +1162,12 @@ inline constexpr const char* kViaNameLegend =
 inline constexpr const char* kViaNameImpactClause =
     "An impact row reached only through such an edge carries it too; one that some all-proven path reaches stays plain. ";
 inline constexpr const char* kViaNameColumnarClause = "format=columnar carries it as the <via> column (1 = via=\"name\"). ";
+inline constexpr const char* kViaLinkLegend =
+    "via=\"link\" on a row: the edge is a markdown link, not a call. A real call on the same pair keeps the row unmarked. ";
+inline std::string viaLinkLegend( bool present )
+{
+    return present ? std::string( kViaLinkLegend ) : std::string();
+}
 inline std::string viaNameLegend( bool present, bool impact = false, bool columnar = false )
 {
     if( !present )
@@ -1211,12 +1217,18 @@ inline std::string viaNameLegendComment()
 {
     return std::string( "<!-- " ) + kViaNameLegend + "-->";
 }
+inline std::string viaLinkLegendComment()
+{
+    return std::string( "<!-- " ) + kViaLinkLegend + "-->";
+}
 // …and the MAP's spelling, as its own comment: the same three facts as kViaNameLegend in the fewest bytes (a map prints the
 // most hedged rows of any answer, and its --max-tokens fit pays for every legend byte in rows), plus x=, the count a merged
 // row carries (serialize.h writeMapCalleeRows), and where each merged candidate is listed. No `--` inside an XML comment:
 // the flag is named callees=.
 inline constexpr std::string_view kMapViaNameLegend =
     "<!-- via=\"name\": by name alone; all in reach shown, x=N merged (callees=FILE:SYM lists all); does NOT mean it is false -->";
+inline constexpr std::string_view kMapViaLinkLegend =
+    "<!-- via=\"link\": a markdown link, not a call. A real call on the same pair stays unmarked -->";
 // …and MCP's spelling: the same sentence as the `via_note` key of an answer one of whose entries carries "via":"name".
 inline std::string viaNameNoteJson()
 {

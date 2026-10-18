@@ -92,7 +92,8 @@ inline void printJsonSymbolRows( const rw::IngestResult& ing, const std::vector<
                      rw::symTag( s.kind ), rw::jsonStr( s.name ).c_str(), rw::jsonStr( p ).c_str(), s.line,
                      depth ? ",\"d\":" + std::to_string( ( *depth )[ ids[i] ] ) : std::string(),
                      ( testReach && rw::isTestedByReach( ing, *testReach, ids[i] ) ) ? ",\"tested\":true" : "",
-                     ( viaName && i < viaName->size() && ( *viaName )[ i ] != 0 ) ? ",\"via\":\"name\"" : "",   // FE-B: the row's hedge
+                     ( viaName && i < viaName->size() && ( *viaName )[ i ] == 2 ) ? ",\"via\":\"link\""
+                         : ( ( viaName && i < viaName->size() && ( *viaName )[ i ] == 1 ) ? ",\"via\":\"name\"" : "" ),   // 2 = markdown link, 1 = name hedge
                      jsonRowKeysAt( rowKeys, i ) );
     }
 }
@@ -262,9 +263,11 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             const bool chHasModScope = anyModuleScopeRow( ing, chPage ) || anyModuleScopeRow( ing, matches );
             // FE-B: exactly when a row on THIS page is via="name"
             bool chHasVia = false;
-            for( std::size_t i = pw.begin; i < pw.end && !chHasVia; ++i )
+            bool chHasLink = false;
+            for( std::size_t i = pw.begin; i < pw.end && ( !chHasVia || !chHasLink ); ++i )
             {
-                chHasVia = chAttr.nameOnly( i );   // FE-B's via="name": every edge to the matches by name (defattrib.h, one pass)
+                chHasVia  = chHasVia || chAttr.nameOnly( i );   // FE-B's via="name": every edge to the matches by name (defattrib.h, one pass)
+                chHasLink = chHasLink || oneHopRowIsLink( g, matches, result[ i ], wantCallers );
             }
             rw::emitTo( stdout, "{}{}{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar, chNextIsPage ).c_str(),
                          rw::capLegendClause( rw::computePageDisclosure( pw.end - pw.begin, result.size(), pw.end,
@@ -277,6 +280,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                          ( std::string( rw::unprovenDefsLegend( chRows.unprovenDefs > 0 ) )      // H1: likewise, exactly when unproven_defs= is there
                            + rw::crossKindLegend( !chRows.crossKind.empty() )                      // hono-07: likewise for cross_kind=
                            + rw::viaNameLegend( chHasVia, false, cfg.columnar )                   // FE-B: likewise for via="name"
+                           + rw::viaLinkLegend( chHasLink )
                            + rw::defTableLegend( chAttr.groups.multi(), chListing.cut ) + rw::splitArmLegend( chHasSplit ) ).c_str(),   // attrib-multidef: likewise
                          ( std::string( rw::modScopeLegend( chHasModScope ) )   // #60: likewise, exactly when a t="modscope" row is
                            + rw::callSitesAtLegend( chSites.any, chSites.anyCut, rw::kCallSitesPerRowCap ) ).c_str(),   // CALLSITE-AT: likewise for sites_at=/sites_total=
@@ -381,7 +385,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             std::vector<std::string> chAtKeys( result.size() );   // CALLSITE-AT: the rows' sites_at/sites_total keys, absent when none
             for( std::size_t i = pw.begin; i < pw.end; ++i )
             {
-                chVia[ i ] = chAttr.nameOnly( i ) ? 1 : 0;
+                chVia[ i ] = oneHopRowIsLink( g, matches, result[ i ], wantCallers ) ? 2 : ( chAttr.nameOnly( i ) ? 1 : 0 );
                 if( chSites.any )
                 {
                     chAtKeys[ i ] = rw::callSitesKeyJson( chSites.tokens[ i - pw.begin ], chSites.totals[ i - pw.begin ] );
@@ -418,7 +422,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             // already follows everywhere else (serialize.h/verbs_for.h), so an untested row costs 0 bytes.
             rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}{}{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
                          macroRoleAttr( s.kind ), rw::isTestedByReach( ing, chTested.testReach, result[i] ) ? " tested=\"1\"" : "",
-                         viaNameAttr( chAttr.nameOnly( i ) ),   // FE-B: a name-only edge says so on its row
+                         viaEdgeAttr( chAttr.nameOnly( i ), oneHopRowIsLink( g, matches, result[ i ], wantCallers ) ),
                          rw::splitArmAttrXml( chAttr.splitArm( i ) ), rw::ofDefAttrXml( chAttr.groups, chAttr.tokens, i ),   // attrib-multidef
                          chSites.any ? rw::callSitesAttrXml( chSites.tokens[ i - pw.begin ], chSites.totals[ i - pw.begin ] ) : std::string() );   // CALLSITE-AT
         }
@@ -2413,11 +2417,13 @@ std::optional<int> runPath( const MainDispatch& d )
         const rw::ToValueRefs pthToValueRefs = path.empty() ? rw::toValueRefs( ing, true, dstDefs, &*pthValueIdx ) : rw::ToValueRefs{};
         const rw::PathSearchGaps pthGaps = path.empty() ? rw::pathSearchGaps( ing, g, srcDefs, *pthValueIdx ) : rw::PathSearchGaps{};
         const bool pthHasVia = rw::pathHasNameOnlyHop( g, path );   // FE-B: exactly when a hop of THIS path is via="name"
+        const bool pthHasLink = rw::pathHasLinkHop( g, path );
         // attrib-multidef (defattrib.h): from_p=/to_p= only for an endpoint the path bound; prov="split" on a split-arm hop
         const rw::PathEndpointBinding pthBound = rw::pathEndpointBinding( g, rw::endpointDefinitionCount( ing, srcDefs ), rw::endpointDefinitionCount( ing, dstDefs ), path );
         const bool                    pthHasSplit = pthBound.splitHop;
         rw::emitTo( stdout, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                      "graph holds none. {}{}{}{}-->{}", ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
+                                                         + rw::viaLinkLegend( pthHasLink )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to ) ).c_str(),
                      ( std::string( rw::toValueRefsLegend( pthToValueRefs.count > 0 ) ) + rw::valueRefsDepthLegend( pthToValueRefs.depthCut.files > 0 ) ).c_str(),
                      rw::pathGapsLegend( pthGaps.any() ),
@@ -2445,7 +2451,7 @@ std::optional<int> runPath( const MainDispatch& d )
             const std::string_view  rp = pthSingleRoot ? rw::sarif::rootRelativeUri( ing.files[ s.fileId ], pthRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
             // FE-B: a hop whose edge INTO it is name-only says so on its row (the first row is no hop)
             rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
-                         viaNameAttr( i > 0 && edgeNameOnly( g, path[ i - 1 ], path[ i ] ) ), rw::splitArmAttrXml( rw::pathHopSplitArm( g, path, i ) ) );
+                         viaEdgeAttr( i > 0 && edgeNameOnly( g, path[ i - 1 ], path[ i ] ), i > 0 && edgeIsLink( g, path[ i - 1 ], path[ i ] ) ), rw::splitArmAttrXml( rw::pathHopSplitArm( g, path, i ) ) );
         }
         rw::emitTo( stdout, "</path>" );
         return 0;
@@ -3061,7 +3067,7 @@ std::optional<int> runAround( const MainDispatch& d )
         aroundAnn.seed = { ing.symbols[ focus ].name, cfg.aroundDepth, cfg.aroundFanout, definitionCountOfName( ing, focus ), eg.fanoutCut, eg.depthTruncated };
         aroundAnn.seed.unprovenDefs = arUnprovenDefs;   // H1: unproven_defs= beside defs= on the root, its clause in the map legend
 
-        serialize( stdout, ing, rank, g.outOff, g.outTargets, int( eg.nodes.size() ), cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, false, g.outProv.empty() ? nullptr : &g.outProv, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, /*autoOrder=*/false, /*outEstTokens=*/nullptr, aroundCompose.tokens + aroundRoutes.tokens + wrap.tokens, aroundAnn, /*statsFirstScreen=*/false, aroundRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, /*gateDeclinedCalls=*/0, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, /*stdMemberDeclinedCalls=*/0, g.inertDeclinedCalls );
+        serialize( stdout, ing, rank, g.outOff, g.outTargets, int( eg.nodes.size() ), cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, false, g.outProv.empty() ? nullptr : &g.outProv, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, /*autoOrder=*/false, /*outEstTokens=*/nullptr, aroundCompose.tokens + aroundRoutes.tokens + wrap.tokens, aroundAnn, /*statsFirstScreen=*/false, aroundRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, /*gateDeclinedCalls=*/0, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, /*stdMemberDeclinedCalls=*/0, g.inertDeclinedCalls, rw::linkOutPtr( g ) );
 
         if( !g.composeEdges.empty() )
         {

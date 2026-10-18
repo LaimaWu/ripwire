@@ -391,7 +391,7 @@ if $BIN "$AFIX" --no-cache --callers=do_work --legend=compact 2>/dev/null | pyth
 import sys, re
 xml = sys.stdin.read()
 kind = { m.group(1): m.group(2) for m in re.finditer(r"<def ix=\"(\d+)\" t=\"([a-z]+)\"", xml) }
-rows = list(re.finditer(r"<s\b([^>]*)/?>", xml))
+rows = list(re.finditer(r"<s t=\"[a-z]+\"([^>]*)/?>", xml))
 ok = bool(rows) and "fn" in kind.values() and "sec" in kind.values()
 for m in rows:
     attrs = m.group(1)
@@ -401,8 +401,26 @@ for m in rows:
         ok = False
     if of and kind.get(of.group(1)) == "fn":
         ok = False
+    via = re.search(r" via=\"([^\"]*)\"", attrs)
+    if not via or via.group(1) != "link":
+        ok = False
 sys.exit(0 if ok else 1)
-'; then ok "the .py do_work is a matched def only — the caller edge belongs to the section"; else no "the doc link leaked onto the .py function"; fi
+'; then ok "the .py do_work is a matched def only — the caller edge belongs to the section and is via=link"; else no "the doc link leaked onto the .py function, or the section row lacks via=link"; fi
+if $BIN "$AFIX" --no-cache --callers='docs/a/tools.py:do_work' --legend=compact 2>/dev/null | grep -q 'via="link"'; then
+    no "a real function's callers carry via=link"
+else
+    ok "the .py do_work callers are not marked via=link"
+fi
+if $BIN "$AFIX" --no-cache --callees='Self Collision' --legend=compact 2>/dev/null | grep -q 'n="Install"[^>]*via="link"'; then
+    ok "Self Collision's callee Install is via=link"
+else
+    no "Self Collision's callee Install lacks via=link"
+fi
+if $BIN "$AFIX" --no-cache --json --callees='Self Collision' 2>/dev/null | grep -q '"via":"link"'; then
+    ok "the JSON callee row spells via=link"
+else
+    no "the JSON callee row lacks via=link"
+fi
 
 echo "--- warm == cold after editing ONLY the target file (the cached ref must stay unbound) ---"
 cp -R "$AFIX" "$TMP/anchorcopy"

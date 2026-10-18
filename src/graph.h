@@ -83,6 +83,8 @@ struct Graph
     std::vector<std::uint8_t>  outNameOnly; // FE-B: per-out-edge HEDGE bit, parallel to outTargets — 1 = every call site that bound this
                                             // edge did so by NAME ALONE (no receiver evidence: receiverevidence.h), rendered via="name"
                                             // on every surface; 0 = at least one site proved it. Empty ⇒ no edge is name-only.
+    std::vector<std::uint8_t>  outLink;     // per-out-edge markdown-link bit, parallel to outTargets — 1 = every site that bound this
+                                            // edge was a pinned [text](path) link and no real call bound the same pair. Empty ⇒ no link edge.
     std::size_t                scipDocsSeen = 0;   // # SCIP documents consumed (0 unless --scip); honesty summary
     std::size_t                scipEdgesPinned = 0;   // # (from,to) edges the SCIP index pinned; honesty summary
     std::vector<std::vector<NodeId>> implementors;   // base-class id → derived class ids (inheritance/Lego view)
@@ -429,13 +431,67 @@ inline std::size_t edgeIndex( const Graph& g, NodeId from, NodeId to ) noexcept
     return ( it != e && *it == to ) ? std::size_t( it - g.outTargets.begin() ) : SIZE_MAX;
 }
 
+// A pinned markdown link, and no real call on the same pair. false when the graph recorded none, or the edge is absent.
+inline bool edgeIsLink( const Graph& g, NodeId from, NodeId to ) noexcept
+{
+    if( g.outLink.empty() )
+    {
+        return false;
+    }
+    EXPECTS( g.outLink.size() == g.outTargets.size(), "buildGraph allocates the link bits per edge, or none" );
+    const std::size_t e = edgeIndex( g, from, to );
+    return e != SIZE_MAX && g.outLink[ e ] != 0;
+}
+
+// Callers (towardMatches): every edge from the row to a matched def is a link. Callees: every edge from a matched def
+// to the row is. A row with no such edge is not a link. One real call among them drops the mark.
+inline bool oneHopRowIsLink( const Graph& g, std::span<const NodeId> matches, NodeId row, bool towardMatches ) noexcept
+{
+    if( g.outLink.empty() )
+    {
+        return false;
+    }
+    bool any = false;
+    for( const NodeId m : matches )
+    {
+        const NodeId      from = towardMatches ? row : m;
+        const NodeId      to   = towardMatches ? m : row;
+        const std::size_t e    = edgeIndex( g, from, to );
+        if( e == SIZE_MAX )
+        {
+            continue;
+        }
+        any = true;
+        if( e >= g.outLink.size() || g.outLink[ e ] == 0 )
+        {
+            return false;
+        }
+    }
+    return any;
+}
+
+inline bool pathHasLinkHop( const Graph& g, std::span<const NodeId> path ) noexcept
+{
+    return std::adjacent_find( path.begin(), path.end(), [ & ]( NodeId from, NodeId to ) { return edgeIsLink( g, from, to ); } ) != path.end();
+}
+
 // FE-B's per-row via="name" (EVERY edge joining a row to the selector's definitions is name-only) is defattrib.h's
 // OneHopAttribution::nameOnly now: the strongest tie the one attribution pass recorded is by name alone.
 
 // The via="name" spelling every XML row of a name-only edge carries (" via=\"name\"", 11 bytes), "" otherwise.
+// via="link" wins when the edge is a markdown link. The two do not share an edge: a pinned link is not name-only.
 inline const char* viaNameAttr( bool nameOnly ) noexcept
 {
     return nameOnly ? " via=\"name\"" : "";
+}
+inline const std::vector<std::uint8_t>* linkOutPtr( const Graph& g ) noexcept
+{
+    return g.outLink.empty() ? nullptr : &g.outLink;
+}
+
+inline const char* viaEdgeAttr( bool nameOnly, bool link ) noexcept
+{
+    return link ? " via=\"link\"" : viaNameAttr( nameOnly );
 }
 
 // The prov= VOCABULARY, spelled once. serialize's XML and serializeJson's JSON must emit identical
@@ -6302,6 +6358,41 @@ inline bool isMarkdownLinkRef( const Reference& r ) noexcept
     return r.lang == Lang::Markdown && !r.isDocLink && !r.memberCall && !r.memberPath.empty();
 }
 
+// A pinned markdown link records the pair as a link. Any other site that binds the same pair records a real call,
+// and the real call wins when the edge is stamped.
+inline void noteMarkdownLinkSite( HashMap<std::uint64_t, char>& linkEdges, HashMap<std::uint64_t, char>& realCalls, std::uint64_t ekey,
+                                  const std::vector<NodeId>& mdLinkPin, std::size_t siteIndex, const Reference& r )
+{
+    const bool linkSite = !mdLinkPin.empty() && siteIndex < mdLinkPin.size() && mdLinkPin[ siteIndex ] != kNoNode && isMarkdownLinkRef( r );
+    if( linkSite )
+    {
+        linkEdges[ ekey ] = 1;
+    }
+    else
+    {
+        realCalls[ ekey ] = 1;
+    }
+}
+
+template <class Edge>
+inline bool graphHasMarkdownLink( const std::vector<Edge>& edges, const HashMap<std::uint64_t, char>& linkEdges, const HashMap<std::uint64_t, char>& realCalls )
+{
+    for( const Edge& e : edges )
+    {
+        const std::uint64_t key = ( std::uint64_t( e.from ) << 32 ) | e.to;
+        if( linkEdges.find( key ) != linkEdges.end() && realCalls.find( key ) == realCalls.end() )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline std::uint8_t markdownLinkBit( const HashMap<std::uint64_t, char>& linkEdges, const HashMap<std::uint64_t, char>& realCalls, std::uint64_t key ) noexcept
+{
+    return ( linkEdges.find( key ) != linkEdges.end() && realCalls.find( key ) == realCalls.end() ) ? 1u : 0u;
+}
+
 // The file node is the Section extractMarkdown builds with bodyByte 0 over [0, size). assignSymbols then
 // leaves sigStart 0 and sigEnd == endByte == the file span (widest is that span, measured over the file's
 // own sections). A 0,0 span is a ModuleScope, never this node. Same predicate recall.h uses. A heading
@@ -6846,6 +6937,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                                  // so its bucket layout cannot reach output, and it is filled inside a loop
                                                  // whose per-reference tier work dominates the growth cascade by orders of
                                                  // magnitude. A guessed reserve would be a made-up number in a hot struct.
+    HashMap<std::uint64_t, char> linkEdges;      // (from<<32|to) a pinned markdown link bound. A real call on the same pair
+                                                 // (realCallEdges) drops the mark: the merged edge stays a call.
+    HashMap<std::uint64_t, char> realCallEdges;  // (from<<32|to) bound by a site that was not a pinned markdown link.
     std::vector<NodeId>      rule3Out;   // reused Rule-3 output buffer (candidates from the single included file)
     Rule3FileMemo            rule3Memo;  // Rule 3's answer per (caller file, byName entry): one walk per name per file, not per call
     std::string              qkey;       // reused "qualifier::name" buffer for the E#4 canonical lookup (no per-ref alloc)
@@ -9030,6 +9124,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 finalSegmentEdges[ekey] = 1;   // remember (from,to) for prov="final-segment"
             }
             ( nameOnly ? nameOnlyEdges : provenEdges )[ ekey ] = 1;   // FE-B: a proven site wins the merged row (Graph::outNameOnly)
+            noteMarkdownLinkSite( linkEdges, realCallEdges, ekey, mdLinkPin, siteIndex, r );
         }
         disposition = CallDisposition::Bound;
     }
@@ -9089,6 +9184,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     {
         g.outProv.assign( edges.size(), 0u );
     }
+    if( graphHasMarkdownLink( edges, linkEdges, realCallEdges ) )
+    {
+        g.outLink.assign( edges.size(), 0u );
+    }
     const EdgeProvenanceSets provSets{ bindingEdges, importEdges, splitEdges, finalSegmentEdges };
     // FE-B: the hedge bit, allocated only when some edge is name-only (empty ⇒ every edge proven, nothing marked anywhere)
     const auto hedged = [ & ]( std::uint64_t k ) { return nameOnlyEdges.contains( k ) && !provenEdges.contains( k ); };
@@ -9116,6 +9215,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 ASSUME( pos < g.outNameOnly.size(), "outNameOnly is allocated one slot per flattened edge" );
                 g.outNameOnly[ pos ] = hedged( ( std::uint64_t( e.from ) << 32 ) | e.to ) ? 1u : 0u;
+            }
+            if( !g.outLink.empty() )
+            {
+                g.outLink[ pos ] = markdownLinkBit( linkEdges, realCallEdges, ( std::uint64_t( e.from ) << 32 ) | e.to );
             }
         }
     }

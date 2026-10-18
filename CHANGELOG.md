@@ -22,7 +22,9 @@ list the sections it links to instead of one file-level edge. The extractor cach
 the path against the linking file, so `../b/notes.md` never lands on a same-named file in the linker's own directory and a
 link to a heading named like one of the linking file's own headings does not bind to the latter. Two headings of the same
 slug give one edge (the first). A missing heading falls back to the target file's edge; percent-encoded slugs and GitHub's
-`-1` duplicate suffix are not modelled and also fall back. Gate: `test/mdsectioncheck.sh`.
+`-1` duplicate suffix are not modelled and also fall back. A markdown link that no call shares is marked `via="link"` on
+`--callers`, `--callees`, `--path`, `--connect`, and on a map or body callee row. `count=` and `cross_kind` stay the same. A
+call on the same pair leaves the row unmarked. Gate: `test/mdsectioncheck.sh`.
 
 ### Changed — Go methods carry their receiver type as scope (#403, slice 9a)
 
