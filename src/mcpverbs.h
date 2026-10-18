@@ -3123,6 +3123,11 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     declineTargets.insert( declineTargets.end(), seeds.begin(), seeds.end() );
     const std::size_t       declinedCalls  = declinedCallsNaming( g, declineTargets );
     const std::size_t       declinedIface  = declinedIfaceCallsNaming( ing, g, declineTargets );   // the CLI --impact's declined_iface=
+    const bool        imSingleRoot = ing.realPaths.empty();   // R-E: root-relative p= + root=, exactly as the CLI --impact emits them
+    const std::string imRootPrefix = imSingleRoot ? sarif::rootPrefixOf( root ) : std::string();
+    // ix2-slice (IX-4): the CLI --impact's <dc> rows, by the same helper over the same set and cut (declinedsites.h)
+    const ImpactDeclinedRows imDc = impactDeclinedRows( ing, g, declineTargets, declinedCalls, page.limit, symbol,
+                                                        std::size_t( effectiveRowCap( page.limit, kCallHierarchyRowCap ) ), VrRender{ imSingleRoot, imRootPrefix }, false );
 
     std::vector<char> esc;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
@@ -3169,7 +3174,8 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   kTestedRowLegend, kImpactTestedPartitionLegend,   // A6
                   kTestedLensBlindSpotLegend,                       // F-02: rides with the partition, byte-identical to the CLI twin
                   unprovenDefsVerbLegend( UnprovenDefsVerb::Impact, unprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=, as on the CLI
-                  declinedCallsLegendWithGates( declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 ) + declinedSitesImpactPointer( declinedCalls > 0 ),   // exactly when the root carries declined_calls=, as on the CLI (+ where its sites are listed)
+                  declinedCallsLegendForRows( declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0, !imDc.views.empty() )
+                    + declinedSitesLegend( declinedSitesLegendFlags( imDc.views, /*callersForm=*/true, imDc.cut ) ),   // exactly when the root carries declined_calls=; ix2-slice: + the <dc> rows, as on the CLI
                   declinedIfaceLegend( declinedIface > 0 ),                                          // likewise declined_iface=, as on the CLI
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
                     + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI
@@ -3187,13 +3193,11 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     // R-E fix (2026-08-19): root-relative p= + root=, exactly as the CLI --impact now emits them. The first
     // R-E landing converted the CLI arm alone, so mcpclidiffcheck's attribute-set lens went red (CLI has
     // root=, MCP does not) and every row answered the same question in a different path dialect.
-    const bool         imSingleRoot = ing.realPaths.empty();
-    const std::string  imRootPrefix = imSingleRoot ? sarif::rootPrefixOf( root ) : std::string();
     const std::string  imRootAttr   = imSingleRoot ? ( " root=\"" + ex( root ) + "\"" ) : std::string();
     rw::emitTo( mem, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}{}>",
                   ex( symbol ).c_str(), seeds.size(), reach.size(), unprovenDefsAttrXml( unprovenDefs ) + defsListedAttrXml( imAttr.groups, imListing ),   // H1: where the CLI root carries it; attrib-multidef
                   byDepthAttrXml( byDepth ),                                                                        // 0.6.5: the CLI root's by_depth=
-                  imports.xmlAttrs.c_str(), radiusTested, radiusUntested, ( declinedCallsAttrXml( declinedCalls ) + declinedIfaceAttrXml( declinedIface ) ).c_str(),
+                  imports.xmlAttrs.c_str(), radiusTested, radiusUntested, ( declinedCallsAttrXml( declinedCalls ) + declinedSiteCutAttrXml( imDc.cut ) + declinedIfaceAttrXml( declinedIface ) ).c_str(),
                   ( valueRefsCountAttrXml( imValueRefs.rows.size() ) + valueRefsDepthAttrXml( ing, imValueRefs.depthCut, VrRender{ imSingleRoot, imRootPrefix } ) ), imRootAttr.c_str(),
                   pageDisclosure( ipab, sizeof( ipab ), shownRows, show.size(), ipw.end, page.limit, page.offset, true ),
                   graphCountFloorAttrXml( g ).c_str(), renderDisclosure( prD, DiscloseAs::XmlAttrs ).c_str(),   // M15: gauge + marker
@@ -3211,7 +3215,8 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     // different element (see the CLI arm and kImpactImportTierLegend for why they are never one number).
     emitImportRowsXml( mem, ing, std::span<const std::uint32_t>( imports.files ).first( imports.shown ), imRootPrefix,
                        std::span<const char>( imports.lazy ).first( imports.shown ) );
-    rw::emitTo( mem, "{}</impact>", valueRefsXml( ing, imValueRefs, true, VrRender{ imSingleRoot, imRootPrefix }, "--uses=" + symbol ) );
+    rw::emitTo( mem, "{}{}</impact>", declinedSitesXml( imDc.views, /*callersForm=*/true ),   // ix2-slice (IX-4), as on the CLI
+                  valueRefsXml( ing, imValueRefs, true, VrRender{ imSingleRoot, imRootPrefix }, "--uses=" + symbol ) );
     return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
 

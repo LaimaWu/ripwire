@@ -714,10 +714,8 @@ inline constexpr const char* kDeclinedSitesCutClause =
     "dc_shown=N: the <dc> rows printed (the callers form cuts file-first: each file's first site before any file's second); dc_next= is the call that lists every site. ";
 inline constexpr const char* kDeclinedSitesCandClause =
     "cand= (legend full only): the candidate definitions as file:line, cand_more= how many more. ";
-// The impact answer prints no <dc> row (gates review Q4): where its declined_calls= rides, it names where the sites are listed.
-inline constexpr const char* kDeclinedSitesImpactPointer =
-    "The callers verb on SYM lists its declined first-hop calls as <dc> rows. ";
-inline const char* declinedSitesImpactPointer( bool on ) noexcept { return on ? kDeclinedSitesImpactPointer : ""; }
+// The impact answer printed no <dc> row (gates review Q4) and pointed at the callers verb instead; since lane ix2-slice (IX-4) it
+// prints the rows (declinedsites.h impactDeclinedRows: one per counted call), so the pointer sentence is gone.
 // What one answer's <dc> rows carry, read off the rows it prints (never re-derived).
 struct DeclinedSitesLegendFlags
 {

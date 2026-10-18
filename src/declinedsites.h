@@ -29,6 +29,7 @@
 
 #include "cli.h"         // kPageValueMax — dc_next='s --limit saturates at the flag's own ceiling
 #include "defattrib.h"   // DefGroups — of_def on a multi-definition answer
+#include "filter.h"      // pathTierIndexOver / compareTierThenPath — the served order's tier-then-path file key
 #include "graph.h"       // Graph::declinedSite*, DeclinedSiteKind, kNoDeclinedList
 #include "model.h"
 #include "nextverb.h"    // nextFlag — dc_next= pastes as one argv element
@@ -61,9 +62,12 @@ inline const char* declinedSiteGate( DeclinedSiteKind kind ) noexcept
     return k < std::size( kDeclinedSiteGateNames ) ? kDeclinedSiteGateNames[ k ] : nullptr;
 }
 
-// The served order, in place. Every form first sorts by the call's file (path order), line, then record (resolve order:
-// two calls on one line keep their source order). The callers form is then interleaved FILE-FIRST: a stable sort on each
-// site's rank within its file, so rank 0 of every file (in path order) precedes rank 1 of any.
+// The served order, in place. Every form first sorts by the call's file — its path TIER first (filter.h pathTierOf: source,
+// then test/bench, then docs — the key the callers and uses rows already sort by), then path — then line, then record
+// (resolve order: two calls on one line keep their source order). Lane ix2-slice (IX-4): the plain path order put hono's
+// `src/helper/css/index.test.tsx` among the source sites of `--callers=src/router.ts:match`; a test site now follows them.
+// The callers form is then interleaved FILE-FIRST: a stable sort on each site's rank within its file, so rank 0 of every
+// file (in tier-then-path order) precedes rank 1 of any.
 inline void orderDeclinedSites( const IngestResult& ing, const Graph& g, std::vector<std::uint32_t>& sites, bool fileFirst )
 {
     const auto refOf = [ & ]( std::uint32_t site ) -> const Reference& { return ing.references[ g.declinedSiteRef[ site ] ]; };
@@ -72,13 +76,14 @@ inline void orderDeclinedSites( const IngestResult& ing, const Graph& g, std::ve
         EXPECTS( site < g.declinedSiteRef.size() && g.declinedSiteRef[ site ] < ing.references.size(),
                  "the records and the references come from the same build (an edit preview rebuilds both)" );
     }
+    const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( ing, sites, [ & ]( std::uint32_t site ) { return refOf( site ).fileId; } );
     std::sort( sites.begin(), sites.end(), [ & ]( std::uint32_t a, std::uint32_t b )
     {
         const Reference& ra = refOf( a );
         const Reference& rb = refOf( b );
-        if( ra.fileId != rb.fileId )
+        if( const int c = compareTierThenPath( ing, tierOfFile, ra.fileId, rb.fileId ); c != 0 )
         {
-            return ing.files[ ra.fileId ] < ing.files[ rb.fileId ];
+            return c < 0;
         }
         return ra.line != rb.line ? ra.line < rb.line : a < b;
     } );
@@ -368,6 +373,29 @@ inline DeclinedSitesLegendFlags declinedSitesLegendFlags( std::span<const Declin
         f.cand     = f.cand || !v.cand.empty();
     }
     return f;
+}
+
+// ── lane ix2-slice (IX-4): the --impact answer's <dc> rows ──────────────────────────────────────────────────────────────
+// --impact counted declined_calls= (the declines that could have reached SYM or a symbol in its radius) and named none of
+// them: hono's `--impact=match` gave only counts, while the declined call in src/helper/dev/index.ts that could mean
+// Router.match sat behind the callers verb. The impact answer (CLI XML, --json, columnar and the MCP twin) now prints the
+// callers-form rows of exactly those calls — the same records, order, cut and row spelling as --callers — so uncut the row
+// count equals declined_calls=. `targets` is the answer's decline set (SYM's definitions and its radius), `calls` its count.
+struct ImpactDeclinedRows
+{
+    DeclinedSiteCut               cut;
+    std::vector<DeclinedSiteView> views;
+};
+inline ImpactDeclinedRows impactDeclinedRows( const IngestResult& ing, const Graph& g, std::span<const NodeId> targets, std::size_t calls,
+                                              int pageLimit, std::string_view sym, std::size_t rowWindow, const VrRender& vr, bool candidates )
+{
+    auto [ named, sites ] = declinedCallsAndSites( ing, g, targets, /*wantCallers=*/true );
+    EXPECTS( named == calls, "the impact answer's declined_calls= counts the same set (graph.h declinedCallsNaming)" );
+    ImpactDeclinedRows out;
+    out.cut   = declinedSiteCut( sites.size(), pageLimit, "--impact=", sym, rowWindow );
+    out.views = declinedSiteViews( ing, g, std::span<const std::uint32_t>( sites ).first( out.cut.shown ), /*callersForm=*/true, targets, DefGroups{}, vr,
+                                   candidates );
+    return out;
 }
 
 }   // namespace rw

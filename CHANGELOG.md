@@ -15,6 +15,16 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — declined-call `<dc>` rows: tier-first order, and `--impact` lists them
+
+The `<dc>` rows (calls the resolver declined to bind) are now ordered by the file's path tier first — source, then
+test/bench, then docs, the key the callers and uses rows already sort by — then path and line, so a test file whose path
+sorts first no longer leads the list. `--impact` (XML, `--json`, columnar and the MCP twin) now prints the callers-form
+`<dc>` rows of exactly the declined calls its `declined_calls=` counts (the ones that could have reached SYM or a symbol
+in its radius), capped at 16 with `dc_shown=`/`dc_next=` as on `--callers`; before, it printed only the count. On hono,
+`--impact=match` now names 16 of its 339 declined sites; the `src/helper/dev/index.ts:77` site is the 18th, two rows past
+the cap, because hono's `benchmarks/` and `perf-measures/` trees are not in the test/bench tier.
+
 ### Added — `--callees` lists what a function's closures call (`<in>` blocks)
 
 A named function written inside another function's body (a JS/TS arrow or function assigned in the body, a Python
