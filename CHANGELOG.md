@@ -15,6 +15,15 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Fixed — closure blocks and bridges: three false hedges a hand-check found
+
+- `post: function _post( … ) { … }` (and `compile: function compile`) is one definition the parser reports twice; the
+  property is no longer listed as a closure beside the function expression, which takes its place.
+- C, C++ and Objective-C have no named nested function, so a function span the parser reports inside a function (htop's
+  `else if (…) {` read as a function named `if`) is no longer a closure (a `langfacts.h` column, no language compare).
+- A `<bridge>` no longer routes through a test, bench, demo, generated or minified symbol (it may still start or end at
+  one), and a chain longer than 8 hops is not shown.
+
 ### Added — `--path` offers a hedged bridge (`<bridge proven="0">`) and glob endpoints
 
 A `reachable="0"` `--path` answer (and MCP `path_between`) now carries `<bridge proven="0" crossings= hops=>` when a chain

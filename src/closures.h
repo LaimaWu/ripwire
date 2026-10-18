@@ -21,6 +21,7 @@
 // Every surface that prints it says via="closure" (containment: defined there, called from there or wherever it is
 // handed). Computed at query time from the ingest's spans, so no cached content changes.
 
+#include "langfacts.h"   // noNestedNamedFunctions — the languages where a nested function span is a misread, not a closure
 #include "model.h"
 #include "infra/Diagnostics.h"   // EXPECTS — parentOf's id contract
 
@@ -86,10 +87,25 @@ public:
                     }
                     open.pop_back();
                 }
-                if( !open.empty() && closureRoleOf( s ) == ClosureRole::Function && closureRoleOf( ing.symbols[ open.back() ] ) == ClosureRole::Function )
+                // A function that ENDS where its parent function ends is that parent's own value (`post: function _post( … ) { … }`,
+                // `compile: function compile( … )`: the property and the function expression are ONE definition spelled twice, and
+                // the body's calls belong to the expression). The expression takes the property's place — a closure of whatever
+                // the property was a closure of — and the property, whose body is the expression's, is none. A language with no
+                // named nested function has no closure to read (langfacts.h).
+                const bool nestable = !langFacts( s.lang ).noNestedNamedFunctions;
+                if( !open.empty() && nestable && closureRoleOf( s ) == ClosureRole::Function && closureRoleOf( ing.symbols[ open.back() ] ) == ClosureRole::Function )
                 {
-                    m_parent[id] = open.back();
-                    m_any        = true;
+                    const NodeId twin = open.back();
+                    if( s.endByte == ing.symbols[ twin ].endByte )
+                    {
+                        m_parent[id]   = m_parent[twin];
+                        m_parent[twin] = kNoNode;
+                    }
+                    else
+                    {
+                        m_parent[id] = twin;
+                    }
+                    m_any = m_any || m_parent[id] != kNoNode;
                 }
                 open.push_back( id );
             }

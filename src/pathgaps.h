@@ -808,6 +808,7 @@ inline std::string pathGlobAttrXml( bool fromGlob, bool toGlob )
 // closest chain the index can show, every crossing a hedge. Absent (with no clause) when no chain exists within the bounds.
 inline constexpr std::uint32_t kBridgeCrossings = 2;
 inline constexpr std::size_t   kBridgeFanOut    = 16;
+inline constexpr std::size_t   kBridgeMaxHops   = 8;   // a longer chain is no answer a reader would follow: none is printed
 
 enum class BridgeVia : std::uint8_t { Edge, Declined, Value, Closure, Namesake };
 inline constexpr std::array<std::string_view, 5> kBridgeViaNames = { "", "declined", "value", "closure", "namesake" };
@@ -888,6 +889,10 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
     std::vector<BridgeVia>     viaOf( S, BridgeVia::Edge );
     std::vector<std::uint32_t> fanOf( S, 0 );
     std::vector<char>          isDst( S, 0 );
+    // a chain may not route THROUGH a de-prioritized symbol — a test, bench, demo or generated file, or a minified bundle
+    // (filter.h's rank tiers) — only start or end at one: the runtime path a reader asks for runs through the code itself
+    const std::vector<float>   tierMul = rankTierSymbolMultipliers( ing );
+    const auto                 routable = [ & ]( NodeId v ) { return isDst[v] != 0 || tierMul[v] >= 1.f; };
     for( const NodeId t : dstDefs )
     {
         if( t < S )
@@ -920,7 +925,7 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
             }
             for( std::uint32_t e = g.outOff[u]; e < g.outOff[u + 1]; ++e )
             {
-                if( const NodeId v = g.outTargets[e]; v < S && layer[v] == kUnseen )
+                if( const NodeId v = g.outTargets[e]; v < S && layer[v] == kUnseen && routable( v ) )
                 {
                     layer[v]  = k;
                     parent[v] = u;
@@ -935,7 +940,7 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
         // one crossing out of this layer seeds the next
         const auto cross = [ & ]( NodeId from, NodeId to, BridgeVia via, std::size_t fan )
         {
-            if( to < S && layer[to] == kUnseen )
+            if( to < S && layer[to] == kUnseen && routable( to ) )
             {
                 layer[to]  = k + 1;
                 parent[to] = from;
@@ -1011,13 +1016,17 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
     std::ranges::reverse( out.hops );
     std::ranges::reverse( out.via );
     std::ranges::reverse( out.fan );
+    if( out.hops.size() > kBridgeMaxHops + 1 )
+    {
+        return PathBridge{};   // past the hop bound: the legend says a bridge is shown only within it
+    }
     ENSURES( out.crossings >= 1 && out.crossings <= kBridgeCrossings, "only reached when the proven search was not (reachable=0), within the bound" );
     return out;
 }
 
 inline constexpr std::string_view kPathBridgeLegend =
-    "<bridge proven=\"0\" crossings= hops=>: a HEDGED chain from= to to= that crosses at most 2 hops the graph holds no edge for, each "
-    "fanning out to at most 16 candidates; its <s> rows read like a path's, and via= on a row names the crossing INTO it: declined = "
+    "<bridge proven=\"0\" crossings= hops=>: a HEDGED chain from= to to= of at most 8 hops that crosses at most 2 the graph holds no "
+    "edge for, each fanning out to at most 16 candidates, and runs through no test, bench, demo, generated or minified symbol; its <s> rows read like a path's, and via= on a row names the crossing INTO it: declined = "
     "one of cands= candidates of a declined call in the previous row, value = a function the previous row stores or passes as a value, "
     "closure = a function written in the previous row's body, namesake = another same-language definition of a name the previous row "
     "calls by name alone (via=name rows are proven edges bound by name). Fewest crossings first. It is NOT a path: reachable= and "

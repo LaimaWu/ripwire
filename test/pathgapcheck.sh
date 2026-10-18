@@ -51,6 +51,9 @@
 #        vs 16 (crossed), B8 a disconnected pair, B9 a found path, B10 both legends. (G1-G3) GLOB endpoints (IX-2 P4): a `*`
 #        endpoint naming no definition stands for every function/method definition fitting it (to_glob="1"); G2 no match is
 #        refused; G3 a plain endpoint carries no glob attribute. (M) compares <bridge> and the glob root MCP vs CLI.
+#   (H1-H4) hedge-quality fixes the acceptance hand-check found: H1 `compile: function compile` (one definition spelled
+#        twice) is no closure; H2 C has no named nested function, so a nested span is never a closure; H3 a bridge never
+#        routes through a test/bench/demo/generated/minified symbol; H4 a chain past 8 hops is no bridge.
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -669,7 +672,7 @@ else
     no "(B9) a found path carries a bridge or did not run"
 fi
 "$BIN" "$TMP/decl" --no-cache --path=Machine_run,Process_update --legend=full > "$TMP/Bfull.xml" 2>&1
-if grep -q 'a HEDGED chain from= to to= that crosses at most 2 hops' "$TMP/Bfull.xml" && grep -q 'It is NOT a path' "$TMP/Bfull.xml" \
+if grep -q 'a HEDGED chain from= to to= of at most 8 hops that crosses at most 2' "$TMP/Bfull.xml" && grep -q 'It is NOT a path' "$TMP/Bfull.xml" \
    && grep -q 'bridge proven=0 crossings= hops=: a HEDGED chain, NOT a path' "$TMP/BB1declinedcrossingtotheplatformbuildthatreachesthesinkhtopshape.xml"; then
     ok "(B10) both legends define <bridge> and say it is not a path"
 else
@@ -694,6 +697,46 @@ if [ "$rc" -eq 0 ] && ! grep -q '_glob' "$f"; then
 else
     no "(G3) a plain endpoint carries a glob attribute: $( grep -o '<path [^>]*>' "$f" )"
 fi
+
+echo "(H) hedge-quality fixes found by the acceptance hand-check (lane ix2-slice)"
+mkdir -p "$TMP/twin" "$TMP/cnest" "$TMP/brtest/core" "$TMP/brtest/linux" "$TMP/brtest/tests" "$TMP/brlong"
+cat > "$TMP/twin/f.js" <<'EOF'
+function helper(u) { return u; }
+function build() {
+  const fastify = {
+    post: function _post (url) {
+      return helper(url)
+    },
+  }
+  return fastify
+}
+module.exports = build
+EOF
+cat > "$TMP/cnest/n.c" <<'EOF'
+int target( void ) { return 1; }
+int outer( void ) { int inner( void ) { return target(); } return inner(); }
+EOF
+printf 'void scan( void );\nvoid start( void ) { scan(); }\n' > "$TMP/brtest/core/m.c"
+printf 'void scan( void ) { }\n' > "$TMP/brtest/linux/s.c"
+printf 'void sink( void ) { }\nvoid scan( void ) { sink(); }\n' > "$TMP/brtest/tests/s.c"
+{ echo 'def target():'; echo '    return 0'; echo; echo 'def h9():'; echo '    return target()'; echo
+  i=8; while [ "$i" -ge 1 ]; do echo "def h$i():"; echo "    return h$(( i + 1 ))()"; echo; i=$(( i - 1 )); done
+  echo 'def start():'; echo '    def inner():'; echo '        return h1()'; echo '    return 0'; } > "$TMP/brlong/m.py"
+f="$TMP/H1.xml"; cal "$TMP/twin" build "$f"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q '<callees [^>]*closures="1"' "$f" \
+   && [ "$( grep -o '<in .*</in>' "$f" )" = '<in n="_post" p="f.js:4" via="closure" count="1"><s t="fn" n="helper" p="f.js:1"/></in>' ]; then
+    ok "(H1) \`post: function _post\` is ONE definition: build's one closure is _post (its calls), never the property twin as well"
+else
+    no "(H1) the property twin read as a closure: $( grep -o '<callees .*' "$f" | head -c 400 )"
+fi
+f="$TMP/H2.xml"; cal "$TMP/cnest" outer "$f"; rc=$?
+if [ "$rc" -eq 0 ] && grep -q '<callees ' "$f" && ! grep -q 'closures=\|<in ' "$f"; then
+    ok "(H2) C has no named nested function (langfacts noNestedNamedFunctions): a function span inside one is never a closure"
+else
+    no "(H2) a C nested span read as a closure: $( grep -o '<callees .*' "$f" | head -c 400 )"
+fi
+brArm "(H3) a bridge never routes through a test file (the only scan that reaches sink is under tests/)" "$TMP/brtest" "start,sink" ""
+brArm "(H4) a chain longer than 8 hops is no bridge (start ⊃ inner → h1 … h9 → target: 11 hops)" "$TMP/brlong" "start,target" ""
 
 echo "(M) MCP path_between carries the same clause"
 # Two MCP legend postures (lean-answers): the unchanged assertions run on --mcp-legend=inline, the pre-posture spelling
