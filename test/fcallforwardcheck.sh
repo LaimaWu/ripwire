@@ -233,5 +233,41 @@ for line in p.stdout.splitlines():
 if [ "$( printf '%s\n' "$MU" | grep -c '^[234] ' )" = 3 ] && ! printf '%s' "$MU" | grep -qE 'caller\.js:4|kuser\.js:2|gfwd\.js:2'; then ok "(S4) MCP uses lists none of the dropped forwards (caller.js:4, kuser.js:2, gfwd.js:2)"
 else no "(S4) MCP uses should answer 3 calls and list no dropped forward: ${MU:0:600}"; fi
 
+# (S5) train 30 CodeRabbit (outside the diff, src/lsp.h lspReferences): LSP textDocument/references reads the same kept-forward
+#     rule as --uses and the hover — the kept forward localDecl.apply (route.js:28) is a reference of localDecl. RED on ad8af71e
+#     (no graph reached the references provider, so every forwarded reference stayed out). Near miss: the --uses answer agrees.
+#     The LSP index runs on a copy (it may cache under its root; the fixture stays untouched).
+LW="$( cd "$( mktemp -d )" && pwd -P )"; cp -R "$CORPUS/js" "$LW/js"   # pwd -P: the uri must name the path the server indexes
+LDEF="$( grep -n '^function localDecl ' "$LW/js/route.js" | head -1 | cut -d: -f1 )"
+LR="$( python3 - "$BIN" "$LW/js" "$(( LDEF - 1 ))" <<'PY'
+import json, subprocess, sys
+binp, root, line = sys.argv[ 1 ], sys.argv[ 2 ], int( sys.argv[ 3 ] )
+def frame( o ):
+    b = json.dumps( o ).encode()
+    return b"Content-Length: %d\r\n\r\n" % len( b ) + b
+uri = "file://" + root + "/route.js"
+msgs = [ { "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "rootUri": "file://" + root, "capabilities": {} } },
+         { "jsonrpc": "2.0", "method": "initialized", "params": {} },
+         { "jsonrpc": "2.0", "id": 2, "method": "textDocument/references", "params": { "textDocument": { "uri": uri },
+           "position": { "line": line, "character": 10 }, "context": { "includeDeclaration": False } } },
+         { "jsonrpc": "2.0", "id": 99, "method": "shutdown" }, { "jsonrpc": "2.0", "method": "exit" } ]
+p = subprocess.run( [ binp, "--lsp" ], input = b"".join( frame( m ) for m in msgs ), capture_output = True, timeout = 120 )
+data, i = p.stdout, 0
+while i < len( data ):
+    j = data.find( b"\r\n\r\n", i )
+    if j < 0: break
+    cl = int( [ l for l in data[ i:j ].decode().split( "\r\n" ) if l.lower().startswith( "content-length:" ) ][ 0 ].split( ":" )[ 1 ] )
+    r = json.loads( data[ j + 4 : j + 4 + cl ] ); i = j + 4 + cl
+    if r.get( "id" ) == 2:
+        res = r.get( "result" )
+        print( "ERR " + json.dumps( r ) if not isinstance( res, list ) else "EMPTY" if not res else " ".join( sorted( "%s:%d" % ( x[ "uri" ].rsplit( "/", 1 )[ -1 ], x[ "range" ][ "start" ][ "line" ] + 1 ) for x in res ) ) )
+PY
+)"
+rm -rf "$LW"
+case " $LR " in
+    *" route.js:$LAPPLY "*) ok "(S5) LSP references of localDecl list the kept forward route.js:$LAPPLY ($LR)" ;;
+    *) no "(S5) LSP textDocument/references of localDecl should list the kept forward route.js:$LAPPLY: [${LR:-no answer}]" ;;
+esac
+
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "SOME FAILED"
 exit "$fail"
