@@ -345,7 +345,9 @@ constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strict
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 196;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 198;          // bump on any grammar/.scm/extraction change
+                                                      // 198 = 2026-10-19 (#358 C# 1a): using directives move to shared captures; import-free deep containers
+                                                      //   no longer disclose a cut or lose whole-cache eligibility. Alias/edge facts unchanged; rich tag 199.
                                                       // 196 = 2026-10-18 (train 30): strictly above every number a live build used — main 184 (rich 185),
                                                       //   lane call-result-typing 180 (rich 181), lane fcall-forward 188 (189), lane go-local-var 190 (191),
                                                       //   lane name-template-dispatch 192 (193), lane h1-annot (train 31) 194 (195); tail-sym and

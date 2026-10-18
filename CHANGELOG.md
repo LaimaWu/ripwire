@@ -15,6 +15,18 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — C# using directives share the import capture path (#358, slice 1a)
+
+C# `using` directives now use `@import.path` and the CSharp normaliser; the old `csharpUsingTarget`
+and `directiveTargetOf` branch are removed. Targets, directive sites, order, duplicate directives,
+static/global forms and existing binding behaviour are preserved. The known alias gap stays pinned:
+`using X = Foo.Bar` still reports X; alias bindings belong to slice 2b after the shared binds channel (2a).
+
+As with the Python capture move (#382), containers beyond depth 256 without a deeper import no longer
+make a file `extract-partial` or prevent whole-cache reuse. A nonempty import beyond the bound still
+discloses the cut and is not captured. `csharpcheck` arms C6/C7 pin the boundary and the new mechanism.
+Parser tag 198 (rich 199) invalidates the old extraction cache; the train-30 record format 36 is unchanged.
+
 ### Changed — Go methods carry their receiver type as scope (#403, slice 9a)
 
 Go methods now carry their receiver type as scope (`sc=`), with `*` and type arguments stripped (`*Stack[T]` → `Stack`),
