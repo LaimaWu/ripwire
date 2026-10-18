@@ -61,6 +61,19 @@ receiver binds an in-tree class only where the caller's file sees it — its pac
 on-demand import of its package (`import ext.Util; Util.open()`, `import ext.*; Util.open()`, `Util::open` no longer bind
 an in-tree `Util` as proven). `kParserVer` and the cache version move.
 
+### Fixed — a qualified annotation proves a class only through an in-tree qualifier; `x op= v` rebinds
+
+`def use(s: requests.Session): s.close()` (or TS `use(s: ext.Session<T>)`) proved an in-tree `Session.close` because the
+annotation was read by its last name alone. A Python or TS parameter, annotated local or TS field written `q.T` now names
+the in-tree class `T` only when the file's imports bind `q` to an in-tree module, package or relative path (Python
+`import pkg.store`, `from pkg import store`; TS `import * as`, default, named and `require` bindings), or `q` — bound by no
+import — names an in-tree class (`Outer.Inner`) or a TS namespace. An outside qualifier, a global such as `NodeJS.T`, or an
+unbound name proves nothing: the call keeps its rows marked `via="name"`. `T` itself is still matched by its last name.
+Python and JavaScript `x op= v` rebinds `x`: after `x = Num(); x += 1`, `x.bump()` no longer proves `Num.bump` unless the
+method Python calls — `Num`'s in-place `__iadd__` (its own or the nearest base's), else its `__add__` — returns `self` on
+every path or declares `-> Self` / `-> Num`. Measured: 0 call sites change on textual, hono, starlette, flake8, kysely and
+fastify (`--pin-census`, base vs head); the false proofs reproduce on minimal fixtures (test/receiverevidencecheck.sh arm Q).
+
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
 Ruby's `include`/`extend`/`prepend` are now captured by `queries/ruby/tags.scm` as `@reference.mixin` and turned into
