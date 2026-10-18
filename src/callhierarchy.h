@@ -362,8 +362,8 @@ struct CallersByteBand
     RowCallSites sites;   // over every row, in row order, exactly when rowBytes > 0
 };
 
-// fix round 1 (B1, the gcc-14 Release/LTO-only rc=139 in MCP find_symbol): the band is built in a local and returned as one
-// aggregate, never through a named return object that two return statements share and a release [[assume]] names.
+// The band is built in a local and returned as one aggregate. (Fix round 1 restructured this for the gcc-14.2 Release/LTO
+// rc=139; the SEGV round found the cause in pageview.h callHierarchyRowCap's unstated precondition, not here.)
 inline CallersByteBand callersByteBand( const IngestResult& ing, std::span<const NodeId> defs, std::span<const NodeId> rows, const VrRender& rr, int pageLimit,
                                         const std::vector<char>& testReach, const OneHopAttribution& attr )
 {
@@ -385,6 +385,7 @@ inline CallersByteBand callersByteBand( const IngestResult& ing, std::span<const
                + std::string_view( viaNameAttr( attr.nameOnly( i ) ) ).size() + std::string_view( splitArmAttrXml( attr.splitArm( i ) ) ).size()
                + ofDefAttrXml( attr.groups, attr.tokens, i ).size() + callSitesAttrXml( sites.tokens[i], sites.totals[i] ).size();
     }
+    ENSURES( sites.tokens.size() == rows.size(), "the site pass covers every row the estimate read" );   // rowCallSites' own ENSURES
     return CallersByteBand{ std::max( bytes, std::size_t( 1 ) ), std::move( sites ) };
 }
 
