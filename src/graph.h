@@ -5922,6 +5922,42 @@ inline FalseEdgeRules buildFalseEdgeRules( const IngestResult& ing, const HashMa
     return rules;
 }
 
+// Lane h1-annot: "<fileId>#name" → how the file's imports bind `name`, for a Python / TS annotation that qualifies a type with
+// it (`requests.Session`, `ns.T<…>`; receiverevidence.h WrittenQualifierRule::FileImport): 'i' — an in-tree module, package
+// or path (Python: the Phase-5 verdicts 'i' / 'u' of buildExternalVetoTables; JS/TS: an ES import or a module alias whose
+// specifier jsModuleIsForeign does not call outside), 'x' — outside (two bindings that disagree read 'x'). A name no import
+// binds is absent. Read by ReceiverEvidence::qualifierInTree only.
+inline HashMap<std::string, char> buildQualifierVerdicts( const IngestResult& ing, const ExternalVetoTables& veto, const FalseEdgeRules& rules )
+{
+    HashMap<std::string, char> out;
+    out.reserve( veto.importBind.size() );
+    for( const auto& [ k, v ] : veto.importBind )
+    {
+        out.try_emplace( k, v == 'x' ? 'x' : 'i' );
+    }
+    HashMap<std::string, char>        own;   // the JS module vocabulary, when FE-A built none (no module alias in the tree)
+    const HashMap<std::string, char>* vocabulary = rules.jsVocabulary.empty() ? nullptr : &rules.jsVocabulary;
+    for( const Binding& b : ing.bindings )
+    {
+        if( ( b.kind != LocalBindKind::JsImport && b.kind != LocalBindKind::ModuleAlias ) || b.var.empty() || b.var == "." || b.fileId >= ing.files.size() )
+        {
+            continue;
+        }
+        if( vocabulary == nullptr )
+        {
+            own        = jsModuleVocabulary( ing );
+            vocabulary = &own;
+        }
+        const char verdict = ( b.isFromAssignment && b.kind == LocalBindKind::ModuleAlias ) || jsModuleIsForeign( b.typeName, *vocabulary ) ? 'x' : 'i';
+        const auto [ it, fresh ] = out.try_emplace( jsImportKey( b.fileId, b.var ), verdict );
+        if( !fresh && it->second != verdict )
+        {
+            it->second = 'x';   // one name, two bindings that disagree: never proven in the tree
+        }
+    }
+    return out;
+}
+
 // lane lego-transitive fix 1: the evidence buildGraph's implementors builder reads to tell WHICH same-named class a base
 // clause meant (BaseBound). Every table is one the call resolver already built; this holds references, owns nothing.
 struct BaseEvidenceTables
@@ -6680,15 +6716,27 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         }
     }
     ReceiverEvidence         recvEv( ing, chaUp, classNames );
+    const HashMap<std::string, char> qualifierVerdicts = buildQualifierVerdicts( ing, extVeto, falseEdges );   // h1-annot
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/2i: receiver-evidence tables" );
         recvEv.localNames = &fieldNarrow.localNameSet;
         recvEv.goPackages = &falseEdges.goPackages;
+        recvEv.qualifierVerdicts = &qualifierVerdicts;   // h1-annot: a Python / TS annotation's qualifier, by the file's imports
         recvEv.types.classIds        = &classIds;          // (L) a C++ call result's class: unique by name, scoped by its qualifier
         recvEv.types.fileIncludes    = &fileIncludes;      // (L) fix round 2: the usings a C++ callee's headers put in force
         recvEv.types.chaUp           = &chaUp;             // (L) fix round 2: a JVM member type the callee's classes inherit
         recvEv.types.jsPinnedClasses = &jsPinnedClasses;   // (L) a TS call result's imported class
         recvEv.build();
+        // h1-annot: a Python `x op= v` that drops x's class (ReceiverEvidence::noteAugAssign) drops Rule 2's constructed type too
+        std::string augKey;
+        for( const Binding* a : recvEv.augDropped )
+        {
+            buildShadowKey( augKey, a->fromSymbol, a->var );
+            if( const auto it = varType.find( augKey ); it != varType.end() )
+            {
+                it->second.type.clear();   // a tombstone, as a conflicting declaration leaves (resolve.h recordFlatRecvTypeFact)
+            }
+        }
     }
     // (L) call-result typing (train 29 lane call-result-typing; test/receiverevidencecheck.sh (L)): each LocalBindKind::CallResult
     // by its call's key — (file << 32 | the CALL's start byte), the call Reference's own (ingest_binds.h pushCallResult) — and

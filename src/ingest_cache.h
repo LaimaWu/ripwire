@@ -330,7 +330,12 @@ constexpr std::uint32_t kCacheVersion = 33;           // 33: train 29 lane call-
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 180;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 194;          // bump on any grammar/.scm/extraction change
+                                                      // 194 = 2026-10-18 (lane h1-annot, train 31; the train renumbers — reservation 194/195):
+                                                      //   a Python / TS parameter, annotated local or TS field written `mod.T` / `ns.T<…>` keeps the
+                                                      //   qualified text in its RecvType / MemberType importedName; Python records LocalBindKind::
+                                                      //   AugAssign for `x op= v` and ReturnsSelf in an in-place method that returns self; a JS
+                                                      //   `x op= v` records a RecvType tombstone. Rich file tag 195. kCacheVersion unchanged.
                                                       // 180 = 2026-10-16 (train 29 lane call-result-typing; the train renumbers — reservation 180/181):
                                                       //   Go, Rust, C++, Java, Kotlin and TS (never JS) record LocalBindKind::CallResult for a
                                                       //   local bound to a call's result and LocalBindKind::ReturnType for each declared result
