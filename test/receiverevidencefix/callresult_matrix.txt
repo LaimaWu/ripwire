@@ -27,6 +27,9 @@ import os, sys
 
 OUT = sys.argv[ 1 ]
 files = {}      # root -> { path: text }
+# C++ OFF (owner 2026-10-17, fix round 6): model.h callResultFamilyOf maps C++ / ObjC to None, so no C++ call result is typed —
+# every C++ U cell is printed as an N FLOOR (it must hedge). True again with the macro-aware C++ card.
+CPP_TYPED = False
 cells = []      # ( id, lang, form, scope, target, root, selector, verdict, kind, name, tag, floor )
 nas   = []
 K     = [ 0 ]
@@ -710,6 +713,8 @@ def where( root, tag ):
 for ( k, lang, form, scope, target, root, sel, expect, kind, name, tag, floor ) in cells:
     f = lambda s: s.replace( " ", "_" )
     head = "CELL %d %s %s %s %s %s %s" % ( k, lang, f( form ), f( scope ), target, root, sel )
+    if expect == "P" and lang == "cpp" and not CPP_TYPED:
+        expect, floor = "N", True   # C++ off: the cell must hedge (its tagged row is not proven)
     if expect == "P":
         w = where( root, tag )
         if w is None:

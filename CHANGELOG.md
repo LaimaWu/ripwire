@@ -17,9 +17,14 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ### Added — a local bound to a call takes the callee's declared result type
 
+C++ (and Objective-C) call results are NOT typed yet: a macro the parser reads as ordinary code — an export macro in a
+class head, an `#if` around a declaration, a namespace-opening macro — can declare the result's name where no reader sees
+it, so C++ `auto x = f()` behaves as before (a macro-aware C++ reader is planned; the C++ rules below describe it). C is
+not typed either.
+
 `config, err := nfpm.ParseFile(path); config.Get(f)` reached `Config.Get` by name alone; `let (book, _) =
 self.preprocess_book(..)?; book.iter()` reached the wrong `iter`. A local initialised by a call — Go `x := f()` / `a, b :=
-f()`, Rust `let x = f()?` (also `.unwrap()` / `.expect()`, tuple patterns by position), C++ `auto x = f()`, Java `var`,
+f()`, Rust `let x = f()?` (also `.unwrap()` / `.expect()`, tuple patterns by position), Java `var`,
 Kotlin `val`/`var`, TS `const x = [await] f()` — now takes the callee's DECLARED result type when that call itself resolved
 to exactly one definition with evidence (not a pick by name alone, not a qualified written type's last name), and the
 result type — through `*T`, `&T`, `Box<T>`, a `?` per `Result`/`Option` layer, `await` for `Promise<T>`, a std smart

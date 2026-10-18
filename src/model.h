@@ -1191,7 +1191,11 @@ inline CallResultFamily callResultFamilyOf( Lang l ) noexcept
     {
         case Lang::Go:                     return CallResultFamily::Go;
         case Lang::Rust:                   return CallResultFamily::Rust;
-        case Lang::Cpp: case Lang::ObjC:   return CallResultFamily::Cpp;    // Rule 2's varType / scopedRecvDecls are the sink
+        // C++ / ObjC OFF (owner 2026-10-17, fix round 6): a macro the parser reads as code (an export macro in a class head, an
+        // `#if` around a declaration, a namespace-opening macro, …) can declare the result's name unseen, so no C++ call result
+        // is typed yet — base behaviour. CallResultFamily::Cpp's readers (Rule 2's varType / scopedRecvDecls are its sink) stay
+        // for the macro-aware C++ card; mapping this row back to Cpp turns them on.
+        case Lang::Cpp: case Lang::ObjC:   return CallResultFamily::None;
         case Lang::Java: case Lang::Kotlin: return CallResultFamily::Jvm;
         case Lang::TypeScript:             return CallResultFamily::TypeScript;
         default:                           return CallResultFamily::None;

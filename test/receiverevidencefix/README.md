@@ -85,6 +85,9 @@ The names are paraphrases of graded false rows; the code is minimal and is never
   export macro between the class-key and the name, a class-body `MK(S);`, a function-body macro beside a local class; a
   Rust `impl` method in a fn body holding a macro) — with guards (constructors / a destructor, a function-body macro with
   no local class, the own-namespace forward declaration reached through a using-declaration).
+  Fix round 6: `rust6` is the delta-5 review's B3 — an `impl` in a Rust `const` / `static` item's value block (a macro or
+  `use` there decides), with a guard (a const block with neither). C++ call-result typing is OFF (model.h
+  `callResultFamilyOf`): the C++ trees stay, their [P] arms and the matrix's C++ U cells are FLOORS that must hedge.
 - `callresult_matrix.txt` — arm (L)'s BINDING-FORM MATRIX (Python, kept as text for the same reason): it writes one tree per
   language (`mx_rust`, `mx_cpp`, `mx_java`, `mx_kt`, `mx_ts`, `mx_go`) and lists every cell — language × binding form ×
   scope level × target (in-tree unique / outside / unresolved / two in-tree), and (fix round 4) × declaration kind

@@ -205,7 +205,11 @@
 #            declaration: ANY name in that class), a C++ function-body statement beside a local class (any expression
 #            statement: ANY name for that class's members), a Rust `impl` method in a fn body holding a macro; guards:
 #            constructors / a destructor, a function-body macro with no local class, the own-namespace forward
-#            declaration reached through a using-declaration.
+#            declaration reached through a using-declaration. Fix round 6 (cells 289-294, arms rust6): a Rust `const` /
+#            `static` item's value block is an item scope (a macro or `use` there decides for the impls written in it).
+#            C++ OFF (owner 2026-10-17, fix round 6: model.h callResultFamilyOf maps C++ / ObjC to None): no C++ call
+#            result is typed yet — every C++ [P] arm and U cell is a FLOOR that must HEDGE (`# [FLOOR] C++ off`; the
+#            matrix prints them N … FLOOR), every C++ [N] stays; the C++ written-type twin (useWritten) stays proven.
 #   (C) conservation: each root's census dispositions still sum to calls= with unaccounted=0 (no silent drop).
 #   (K) the predicates can fail: a planted unhedged false row fails notproven, a planted hedged row passes it and
 #            fails proven, marked rejects an unhedged row, a rootless or not-found answer is NOROOT, the MCP reader
@@ -1227,7 +1231,7 @@ done
 notproven $CR/rust callees src/app.rs:near_qualified "sync_all src/osfile.rs:5"        # [N] io::Result<std::fs::File> / std::fs::File: the qualifier names std
 # C++ — Config::get model.cpp:5, Other::get :7.
 for f in usePlain useRef usePtr useUnique useMethod; do   # T, const T&, T* (->), std::unique_ptr<T> (->), a method callee
-    proven    $CR/cpp callees "src/app.cpp:$f" "method get src/model.cpp:5"            # [P]
+    notproven $CR/cpp callees "src/app.cpp:$f" "get src/model.cpp:5"                   # [FLOOR] C++ off (fix round 6): hedges — was [P]
     notproven $CR/cpp callees "src/app.cpp:$f" "get src/model.cpp:7"                   # [N]
 done
 # a `using` alias result answers as its written twin does: Rule 2 proves no member through the alias (Config::get :5 is a
@@ -1321,7 +1325,7 @@ proven    $CR/rust callees src/fix1.rs:use_chain            "method get src/nest
 notproven $CR/rust callees src/fix1.rs:use_chain            "get src/model.rs:6" "get src/model.rs:13"  # [N]
 proven    $CR/go   callees src/app/fix1.go:UseChain         "method Get src/nest/nest.go:11"            # [P] nest's Config, not model's
 notproven $CR/go   callees src/app/fix1.go:UseChain         "Get src/model/model.go:7"                  # [N]
-proven    $CR/cpp  callees src/fix1.cpp:useChain            "method get src/model.cpp:5"                # [P]
+notproven $CR/cpp  callees src/fix1.cpp:useChain            "get src/model.cpp:5"                       # [FLOOR] C++ off (fix round 6): hedges — was [P]
 notproven $CR/cpp  callees src/fix1.cpp:useChain            "get src/model.cpp:7"                       # [N]
 proven    $CR/java callees src/app/Use2.java:useChain       "method size src/app/Item.java:5"           # [P]
 notproven $CR/java callees src/app/Use2.java:useChain       "size src/app/Leaf.java:4"                  # [N]
@@ -1361,13 +1365,13 @@ for f in nearUsingNs nearUsingDecl; do   # `using namespace ext;` / `using ext::
 done
 notproven $CR/cpp2 callees src/app2.cpp:nearUsingDeclGlobal "load src/decl.cpp:3"                       # [N] `using ext::Settings;` hides the global ::Settings
 for f in useDirective useEnclosing; do   # `using namespace parts;` in the callee's namespace (its header); the callee's own namespace
-    proven    $CR/cpp2 callees "src/app2.cpp:$f"            "method weight src/pos.cpp:3"               # [P] # guard
+    notproven $CR/cpp2 callees "src/app2.cpp:$f"            "weight src/pos.cpp:3"                      # [FLOOR] C++ off (fix round 6): hedges — was [P] # guard
 done
 # a using-declaration written fully qualified (`using ::net::wire::Frame;`) names the class its own namespace records place
 # there, though that header declares no free function in the namespace (envoy's `using ::Envoy::Http::Http2::Http2Frame;`).
 # FLOOR (not gated): a callee whose file's parse lost its namespace nesting (envoy's TRY_NEEDS_AUDIT … END_TRY macros end
 # the namespace early) is in no namespace that encloses the class: it types nothing, as on base.
-proven    $CR/cpp2 callees src/app3.cpp:useQualifiedUsingDecl "method kind src/helper.cpp:3"            # [P]
+notproven $CR/cpp2 callees src/app3.cpp:useQualifiedUsingDecl "kind src/helper.cpp:3"                   # [FLOOR] C++ off (fix round 6): hedges — was [P]
 # D3 a JVM class-name receiver the caller IMPORTS from outside (`import ext.Util; Util.open()`) is not the in-tree
 #    namesake: the call is not bound to lib.Util.open as proven, and its result types nothing.
 notproven $CR/java3 callees src/app/Use.java:nearOutsideClassReceiver "size src/lib/Config.java:4" "size src/lib/Other.java:4"   # [N]
@@ -1393,7 +1397,7 @@ notproven $CR/cpp3 callees src/use.cpp:callAlias               "count src/list.c
 notproven $CR/cpp3 callees src/use.cpp:callTypedef             "count src/list.cpp:2" "count src/list.cpp:5" "count src/list.cpp:8"   # [N] `typedef ext::IntList List2;`
 notproven $CR/cpp3 callees src/use.cpp:callNsAlias             "count src/ns.cpp:2"                      # [N] cfg5's alias hides ::Settings
 notproven $CR/cpp3 callees src/use.cpp:callNsTypedef           "count src/ns.cpp:2"                      # [N] cfg6's typedef twin
-proven    $CR/cpp3 callees src/use.cpp:callElsewhere           "method count src/ns.cpp:2"               # [P] # guard: cfg8's alias is not in force in cfg7
+notproven $CR/cpp3 callees src/use.cpp:callElsewhere           "count src/ns.cpp:2"                      # [FLOOR] C++ off (fix round 6): hedges — was [P] # guard: cfg8's alias is not in force in cfg7
 # D6 a JVM class-name receiver binds the in-tree class only where the caller's file SEES it (its package, a single-type import
 #    naming it, an on-demand import of its package); `import ext.*` alone leaves lib.Util unseen. An in-tree on-demand import
 #    is a binding of the result type too (Java `import lib.*`, Kotlin `import lib.*`).
@@ -1421,12 +1425,12 @@ proven    $CR/kt5  callees src/app/C5.kt:cell5  "fn hit5 src/app/C5.kt:3"       
 #    using in force in a local class — each binds the spelling in its scope and hides the global namesake; a forward
 #    declaration of the in-tree class itself and a local class with nothing in its block stay proven.
 notproven $CR/cpp4 callees src/use.cpp:cell1  "hit1 src/traps.h:2"                               # [N] `struct S1;` in a1
-proven    $CR/cpp4 callees src/use.cpp:cell2  "method hit2 src/fwd2.h:3"                         # [P] # guard: the forward-declared class is in tree
+notproven $CR/cpp4 callees src/use.cpp:cell2  "hit2 src/fwd2.h:3"                                # [FLOOR] C++ off (fix round 6): hedges — was [P] # guard: the forward-declared class is in tree
 notproven $CR/cpp4 callees src/use.cpp:cell12 "hit12 src/traps.h:7"                              # [N] `union S12` in a12
 notproven $CR/cpp4 callees src/use.cpp:cell5  "hit5 src/traps.h:4"                               # [N] `DECL5(S5)` in a5
 notproven $CR/cpp4 callees src/use.cpp:cell3  "hit3 src/traps.h:3"                               # [N] ANY macro in force may declare it (`REG3(Other3)` does not: an honest loss)
 notproven $CR/cpp4 callees src/use.cpp:cell6  "hit6 src/traps.h:5"                               # [N] block `using ext::S6;` + local class
-proven    $CR/cpp4 callees src/use.cpp:cell7  "method hit7 src/traps.h:6"                        # [P] # guard: a local class, nothing in its block
+notproven $CR/cpp4 callees src/use.cpp:cell7  "hit7 src/traps.h:6"                               # [FLOOR] C++ off (fix round 6): hedges — was [P] # guard: a local class, nothing in its block
 # E3 Rust: a statement-position macro in an enclosing fn body may declare the item there (`mk14!()` does): the module's
 #    namesake is not proven; the same nested fn with no macro in its enclosing block stays proven.
 notproven $CR/rust4 callees src/c14.rs:cell14 "hit14 src/c14.rs:3"                               # [N] `mk14!();` in cell14's body
@@ -1444,9 +1448,9 @@ notproven $CR/cpp5 callees src/use.cpp:cell23 "hit23 src/traps.h:5"             
 notproven $CR/cpp5 callees src/use.cpp:cell27 "hit27 src/traps.h:6"                              # [N] `MK(S27);` in O27's body
 notproven $CR/cpp5 callees src/use.cpp:cell29 "hit29 src/traps.h:7"                              # [N] `MK2(S29, int);` in O29's body
 notproven $CR/cpp5 callees src/use.cpp:cell12 "hit12 src/traps.h:8"                              # [N] `DECL12(S12)` beside the local class
-proven    $CR/cpp5 callees src/use.cpp:cell40 "method hit40 src/traps.h:9"                       # [P] # guard: constructors, a destructor
-proven    $CR/cpp5 callees src/use.cpp:cell41 "method hit41 src/traps.h:10"                      # [P] # guard: a fn-body macro, no local class
-proven    $CR/cpp5 callees src/use.cpp:cell32 "method hit32 src/f32.h:3"                         # [P] # guard (M4): own-namespace forward decl via using a32::S32
+notproven $CR/cpp5 callees src/use.cpp:cell40 "hit40 src/traps.h:9"                              # [FLOOR] C++ off (fix round 6): hedges — was [P] # guard: constructors, a destructor
+notproven $CR/cpp5 callees src/use.cpp:cell41 "hit41 src/traps.h:10"                             # [FLOOR] C++ off (fix round 6): hedges — was [P] # guard: a fn-body macro, no local class
+notproven $CR/cpp5 callees src/use.cpp:cell32 "hit32 src/f32.h:3"                                # [FLOOR] C++ off (fix round 6): hedges — was [P] # guard (M4): own-namespace forward decl via using a32::S32
 # fix round 5 Rust (B1): a method of an `impl` written inside a fn body sees that body's items, so a macro there hides the
 #    module's namesake — the impl directly in the block, after an item-position macro, in an inner block, and an impl of
 #    a module-level struct; guard: an impl in a block with no macro.

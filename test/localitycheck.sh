@@ -164,8 +164,10 @@ done
 #       receiver takes make's declared result, arm 5b. Arms 5 and 8 keep their untyped premise through a factory this file
 #       does not define, `unknownMake()`.)
 expectSite "(5)" Decoy::untypedLocal pick "pick@1 pick@15 pick@6" split
-# ── 5b) the call-result twin: `auto other = make()` (Target* make()) types other as Target — one proven row.
-expectSite "(5b)" Typed::viaCall pick "pick@1" receiver-rule
+# ── 5b) the call-result twin: `auto other = make()` (Target* make()). C++ call-result typing is OFF (owner 2026-10-17, fix
+#       round 6: model.h callResultFamilyOf), so this is a FLOOR — untyped, as on base: the three same-file picks split.
+#       With the macro-aware C++ card it is `"pick@1" receiver-rule` again.
+expectSite "(5b)" Typed::viaCall pick "pick@1 pick@15 pick@6" split
 # ── 6) delegation through a member whose type Rule 2b cannot read (the measured dominant shape).
 expectSite "(6)" Wrapper::forward pick "pick@1 pick@15 pick@6" split
 # ── 6b) control: the member Rule 2b CAN read — a std smart pointer's pointee through `->` — is a narrow, not a split.
