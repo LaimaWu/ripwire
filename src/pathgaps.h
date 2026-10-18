@@ -494,18 +494,24 @@ public:
     }
     void seal()
     {
-        std::ranges::sort( owners_ );
+        std::ranges::sort( owners_, ownerLess );
         owners_.erase( std::ranges::unique( owners_ ).begin(), owners_.end() );
         sealed_ = true;
     }
     bool reaches( const Symbol& namesake ) const
     {
         DASSERT( sealed_, "reaches() reads a sorted owner list: seal() after the last add()" );
-        return std::ranges::binary_search( owners_, std::pair<std::uint32_t, std::string_view>( namesake.fileId, namesake.scope ) );
+        return std::ranges::binary_search( owners_, Owner( namesake.fileId, namesake.scope ), ownerLess );
     }
 
 private:
-    std::vector<std::pair<std::uint32_t, std::string_view>> owners_;   // (file, owning class or "" for the file itself)
+    using Owner = std::pair<std::uint32_t, std::string_view>;   // (file, owning class or "" for the file itself)
+    // byte order through sortutil::svLess, never string_view's operator< (sortutil.h: its libstdc++ compare trips -fsanitize=integer)
+    static bool ownerLess( const Owner& a, const Owner& b ) noexcept
+    {
+        return a.first != b.first ? a.first < b.first : sortutil::svLess( a.second, b.second );
+    }
+    std::vector<Owner> owners_;
     bool                                                    sealed_ = true;
 };
 
