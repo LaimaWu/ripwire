@@ -972,6 +972,7 @@ struct SafeDeleteLegendFlags
     bool        defTable      = false;   // attrib-multidef: the <def> table + of_def= rows (a multi-group selector)
     bool        defTableCut   = false;   // ... and the table lists only the groups this page's rows name (defs_listed=)
     bool        splitArms     = false;   // a <c prov="split"> row is on this page (a one-group selector's split arm, Q1)
+    bool        linkRows      = false;   // a <c via="link"> row is on this page
     rw::DeclinedSitesLegendFlags declinedSites{};   // lane declined-sites: what the <dc> rows on this answer carry (declinedsites.h)
 };
 
@@ -1009,6 +1010,7 @@ inline std::string safeDeleteFloorLegend( const SafeDeleteLegendFlags& flags, st
         clause += "next= is that uses call. ";   // runSafeDelete names it exactly then (sdNextAttr)
     }
     clause += rw::defTableLegend( flags.defTable, flags.defTableCut ) + rw::splitArmLegend( flags.splitArms );   // attrib-multidef
+    clause += rw::viaLinkLegend( flags.linkRows );
     return clause;
 }
 
@@ -1312,9 +1314,11 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     rw::defTableMarkNamed( sdNamed, sdAttr.groups, sdAttr.tokens, sdLw.begin, sdLw.end );
     const rw::DefTableListing sdListing  = rw::defTableListing( sdAttr.groups, sdNamed );
     bool                      sdHasSplit = false;
-    for( std::size_t i = sdLw.begin; i < sdLw.end && !sdHasSplit; ++i )
+    bool                      sdHasLink  = false;
+    for( std::size_t i = sdLw.begin; i < sdLw.end && ( !sdHasSplit || !sdHasLink ); ++i )
     {
-        sdHasSplit = sdAttr.splitArm( i );
+        sdHasSplit = sdHasSplit || sdAttr.splitArm( i );
+        sdHasLink  = sdHasLink || rw::oneHopRowIsLink( g, defs, callerIds[ i ], true );
     }
     const std::vector<rw::DeclinedSiteView> sdDc =
         rw::declinedSiteViews( ing, g, std::span<const std::uint32_t>( sdDeclinedSites ).first( sdDcCut.shown ), /*callersForm=*/true, defs, sdAttr.groups,
@@ -1326,6 +1330,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                                                  .valueRefs = sdValueRefs.rows.size(), .callersFloor = sdFloor.isFloor, .usesFloor = usesFloor,
                                                  .hasSitesAt = sdSites.any, .sitesCut = sdSites.anyCut, .valueRefDepthCut = sdValueRefs.depthCut.files > 0,
                                                  .defTable = sdAttr.groups.multi(), .defTableCut = sdListing.cut, .splitArms = sdHasSplit,
+                                                 .linkRows = sdHasLink,
                                                  .declinedSites = rw::declinedSitesLegendFlags( sdDc, /*callersForm=*/true, sdDcCut ) } );
 
     const Symbol&      lead = ing.symbols[ defs[0] ];   // resolveAllByNameQualified walks ascending id — defs[0] is the
@@ -1367,7 +1372,8 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
         {
             rw::emitTo( stdout, " amb=\"{}\"", g.ambOut[ callerId ] );   // M15: the same COUNT a map row's amb= prints — one meaning, one unit
         }
-        rw::emitTo( stdout, "{}{}/>", rw::splitArmAttrXml( sdAttr.splitArm( i ) ), rw::ofDefAttrXml( sdAttr.groups, sdAttr.tokens, i ) );   // attrib-multidef
+        rw::emitTo( stdout, "{}{}{}/>", rw::splitArmAttrXml( sdAttr.splitArm( i ) ), rw::ofDefAttrXml( sdAttr.groups, sdAttr.tokens, i ),
+                    rw::viaEdgeAttr( false, rw::oneHopRowIsLink( g, defs, callerId, true ) ) );   // a direct markdown link
     }
     rw::emitTo( stdout, "{}{}</safe-delete>", rw::declinedSitesXml( sdDc, /*callersForm=*/true ),   // lane declined-sites: each declined possible caller, after the <c> rows
                 rw::valueRefsXml( ing, sdValueRefs, true, sdVr, "--uses=" + std::string( cfg.safeDeleteSym ) ) );
@@ -2587,6 +2593,7 @@ struct ImpactView
     const rw::ReachAttribution&    attrib;          // attrib-multidef (defattrib.h): the definition groups + each reached row's ties
     const rw::DefTableListing&     defListing;      // ... and the groups this page's table lists
     const std::vector<char>&       typeOnly;        // L7 (typeuse.h ImpactReach::typeOnly): per node, reached only through a type mention; empty when unarmed
+    std::span<const rw::NodeId>    seeds;           // the matched defs; a depth-1 row's link mark reads the edge caller → seed
 };
 
 
@@ -2608,6 +2615,24 @@ inline std::vector<char> impactViaColumn( const ImpactView& v, std::size_t begin
     for( std::size_t i = begin; i < end; ++i )
     {
         via[ i ] = rw::impactRowNameOnly( v.provenReach, v.show[ i ] ) ? 1 : 0;
+    }
+    return via;
+}
+
+// JSON rows: 2 = a direct markdown link, 1 = via="name". The columnar column stays impactViaColumn (1 means name).
+inline std::vector<char> impactJsonVia( const ImpactView& v )
+{
+    std::vector<char> via( v.show.size(), 0 );
+    for( std::size_t i = v.page.begin; i < v.page.end; ++i )
+    {
+        if( rw::impactDirectLink( v.g, v.seeds, v.depth, v.show[ i ] ) )
+        {
+            via[ i ] = 2;
+        }
+        else if( rw::impactRowNameOnly( v.provenReach, v.show[ i ] ) )
+        {
+            via[ i ] = 1;
+        }
     }
     return via;
 }
@@ -2712,7 +2737,7 @@ int emitImpactJson( const ImpactView& v )
                                  v.pageLimit, v.pageOffset, true, kJsonPageSyntax ),
                  rw::graphCountFloorAttrJson( v.g ).c_str(),                                                // §H4 §3.4
                  rw::renderDisclosure( v.prD, rw::DiscloseAs::JsonKeys ).c_str() );           // W2-F: ONE keyset
-    const std::vector<char>        via  = impactViaColumn( v, v.page.begin, v.page.end );   // FE-B: the rows' hedge, per entry
+    const std::vector<char>        via  = impactJsonVia( v );   // 2 = direct markdown link, 1 = via="name"
     const std::vector<std::string> keys = impactOfDefKeys( v );                             // attrib-multidef: each row's of_def
     printJsonSymbolRows( v.ing, v.show, v.page.begin, v.page.end, v.rootPrefix, v.testReach, &v.depth, &via, &keys );
     rw::emitTo( stdout, "],\"import_reach\":[" );
@@ -2757,7 +2782,8 @@ int emitImpactXml( const ImpactView& v )
         rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
                      rw::depthRunAttrXml( v.show, v.depth, i, v.page.begin ),
                      rw::isTestedByReach( v.ing, *v.testReach, v.show[i] ) ? " tested=\"1\"" : "",
-                     viaNameAttr( rw::impactRowNameOnly( v.provenReach, v.show[i] ) ),   // FE-B (D3): reached only through a name-only edge
+                     viaEdgeAttr( rw::impactRowNameOnly( v.provenReach, v.show[i] ),
+                                  rw::impactDirectLink( v.g, v.seeds, v.depth, v.show[i] ) ),
                      v.attrib.ofDefXml( v.show[i] ) );                                     // attrib-multidef
     }
     rw::emitImportRowsXml( stdout, v.ing, v.importPage, v.rootPrefix, v.importLazyPage );
@@ -2871,7 +2897,9 @@ std::optional<int> runImpact( const MainDispatch& d )
                            + rw::importersNextLegend( !imports.next.empty() && !cfg.columnar ) ).c_str(),   // cut-fix E: exactly when the root carries it
                          ( rw::impactTsImportLegend( imports.importsUnresolved, imports.tsconfigUnread )   // #220: exactly when the root carries them
                            + rw::viaNameLegend( std::any_of( show.begin() + imPage.begin, show.begin() + imPage.end,   // FE-B: exactly when a shown row is via="name"
-                                                             [ & ]( NodeId n ) { return rw::impactRowNameOnly( imProven, n ); } ), true, cfg.columnar ) ).c_str(),
+                                                             [ & ]( NodeId n ) { return rw::impactRowNameOnly( imProven, n ); } ), true, cfg.columnar )
+                           + rw::viaLinkLegend( std::any_of( show.begin() + imPage.begin, show.begin() + imPage.end,
+                                                                    [ & ]( NodeId n ) { return rw::impactDirectLink( g, seeds, imDepth, n ); } ) ) ).c_str(),
                          rw::testedLensLegend( cfg.columnar ), rw::kImpactTestedPartitionLegend,   // A6: the columnar form reads its dense column
                          rw::kTestedLensBlindSpotLegend,                           // F-02: rides with the partition
                          rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Impact, imUnprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=
@@ -2894,7 +2922,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                                imports, importPage, importLazyPage, prD, imSingleRoot, imRootPrefix, imRootAttr,
                                imSingleRoot ? cfg.roots[0] : std::string_view(), cfg.pageLimit, cfg.pageOffset,
                                &imTestReach, imRadiusTested, imRadiusUntested, imDeclinedCalls, imDeclinedIface, g, imDepth, imByDepth, imValueRefs,
-                               imProven, imFiles, imAttr, imListing, imWalk.typeOnly };
+                               imProven, imFiles, imAttr, imListing, imWalk.typeOnly, seeds };
 
         if( cfg.columnar ) { return emitImpactColumnar( view ); }
         if( cfg.json     ) { return emitImpactJson( view ); }

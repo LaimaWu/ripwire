@@ -463,6 +463,24 @@ sys.exit(0 if hit and d.get("via_link_note") else 1)
 ' && ok "find_symbol marks Install via=link and carries via_link_note" \
   || no "find_symbol lacks via=link on Install or lacks via_link_note"
 
+# A direct doc caller is via="link" on --safe-delete and --impact. The counts still include it.
+mkdir -p "$TMP/runfix/src" "$TMP/runfix/docs"
+printf '%s\n' 'def run():' '    return 1' '' 'def main():' '    run()' > "$TMP/runfix/src/app.py"
+printf '%s\n' '# API' '' '## run' > "$TMP/runfix/docs/api.md"
+printf '%s\n' '# Guide' '' '## Run Notes' '' 'see [run](api.md#run)' > "$TMP/runfix/docs/guide.md"
+SD="$( $BIN "$TMP/runfix" --no-cache --safe-delete=run --legend=compact 2>/dev/null )"
+printf '%s' "$SD" | grep -q 'callers="2"' \
+  && printf '%s' "$SD" | grep -q 'n="Run Notes"[^>]*via="link"' \
+  && ! printf '%s' "$SD" | grep -q 'n="main"[^>]*via="link"' \
+  && ok "safe-delete marks Run Notes via=link and still counts both callers" \
+  || no "safe-delete dropped the link mark or the caller count"
+IM="$( $BIN "$TMP/runfix" --no-cache --impact=run --legend=compact 2>/dev/null )"
+printf '%s' "$IM" | grep -q 'reaches="2"' \
+  && printf '%s' "$IM" | grep -q 'n="Run Notes"[^>]*via="link"' \
+  && ! printf '%s' "$IM" | grep -q 'n="main"[^>]*via="link"' \
+  && ok "impact marks Run Notes via=link and still counts both rows" \
+  || no "impact dropped the link mark or the reach count"
+
 echo "--- warm == cold after editing ONLY the target file (the cached ref must stay unbound) ---"
 cp -R "$AFIX" "$TMP/anchorcopy"
 rm -f "$TMP/anchor.cache"

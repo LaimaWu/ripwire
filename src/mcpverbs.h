@@ -3174,11 +3174,13 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     }
     const DefTableListing imListing = defTableListing( imAttr.groups, imNamed );
     const bool          imHasVia    = std::any_of( show.begin() + ipw.begin, show.begin() + ipw.end, [ & ]( NodeId n ) { return impactRowNameOnly( proven, n ); } );
+    const bool          imHasLink   = std::any_of( show.begin() + ipw.begin, show.begin() + ipw.end, [ & ]( NodeId n ) { return impactDirectLink( g, seeds, depth, n ); } );
     rw::emitTo( mem, "{}{}. {}{}{}{}{}{}{}{}{}{}{}{}-->", kImpactLegendOpen, kPageRaiseCapClause,
                   reach.empty() ? "" : kImpactDepthLegend,           // 0.6.5: exactly when d=/by_depth= ride, as on the CLI
                   ( std::string( kImpactImportTierLegend ) + importersNextLegend( !imports.next.empty() ) ).c_str(),   // cut-fix E, as on the CLI
                   ( impactTsImportLegend( imports.importsUnresolved, imports.tsconfigUnread )   // #220: exactly when the root carries them, as on the CLI
-                    + viaNameLegend( imHasVia, true ) ).c_str(),                                // FE-B: exactly when a shown row is via="name", as on the CLI
+                    + viaNameLegend( imHasVia, true )
+                    + viaLinkLegend( imHasLink ) ).c_str(),
                   kTestedRowLegend, kImpactTestedPartitionLegend,   // A6
                   kTestedLensBlindSpotLegend,                       // F-02: rides with the partition, byte-identical to the CLI twin
                   unprovenDefsVerbLegend( UnprovenDefsVerb::Impact, unprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=, as on the CLI
@@ -3219,7 +3221,7 @@ inline std::optional<std::string> impactText( const std::string& root, const std
       // A6: tested="1" only (never a literal 0) — see kTestedRowLegend. 0.6.5: d= as on the CLI row.
       rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
                     depthRunAttrXml( show, depth, i, ipw.begin ), isTestedByReach( ing, impTestReach, show[i] ) ? " tested=\"1\"" : "",
-                    viaNameAttr( impactRowNameOnly( proven, show[i] ) ), imAttr.ofDefXml( show[i] ) ); }   // FE-B (D3); attrib-multidef
+                    viaEdgeAttr( impactRowNameOnly( proven, show[i] ), impactDirectLink( g, seeds, depth, show[i] ) ), imAttr.ofDefXml( show[i] ) ); }
     // the import tier's rows, after the symbol rows and under their own tag — a different unit, so a
     // different element (see the CLI arm and kImpactImportTierLegend for why they are never one number).
     emitImportRowsXml( mem, ing, std::span<const std::uint32_t>( imports.files ).first( imports.shown ), imRootPrefix,

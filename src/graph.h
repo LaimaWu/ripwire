@@ -12185,6 +12185,12 @@ inline bool impactRowNameOnly( const std::vector<char>& proven, NodeId n ) noexc
     return !proven.empty() && n < proven.size() && proven[n] == 0;
 }
 
+// A depth-1 impact row whose edge to every matched def is a markdown link. The edge runs caller → seed.
+inline bool impactDirectLink( const Graph& g, std::span<const NodeId> seeds, const std::vector<std::uint32_t>& depth, NodeId n ) noexcept
+{
+    return n < depth.size() && depth[ n ] == 1 && oneHopRowIsLink( g, seeds, n, true );
+}
+
 struct ImpactFileRow
 {
     std::uint32_t fileId   = 0;
