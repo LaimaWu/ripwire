@@ -352,7 +352,7 @@ inline float rankTierMultiplierOf( std::string_view p ) noexcept
 // DECLARATION-TWIN tier (lane hrr, train 31; peer-scout P2 as corrected by mine-gortex-codanna §1(d)). A declaration file
 // restates, as types, an API whose code lives in an implementation file of the same package: on a "how does X work" question
 // its rows match the same words and crowd the code out (fastify: 7 of the 8 head rows of a request-handling question were
-// types/*.d.ts). Multiplicative and gentle — the declaration stays a ranked answer, one tier below its code — and GUARDED: it
+// .d.ts files under types/). Multiplicative and gentle — the declaration stays a ranked answer, one tier below its code — and GUARDED: it
 // applies only when the declaration's PACKAGE has an implementation of its language family, so a types-only package (a .d.ts
 // with no JS behind it, a .pyi that is a compiled core's whole Python surface) keeps 1.0. The package is the nearest
 // enclosing directory holding one of the row's manifests, else the indexed root. min() with the other tiers (one claim per file).
@@ -365,17 +365,19 @@ struct DeclarationTwinRow
     std::span<const std::string_view> implSuffixes;     // the implementation files (a declaration suffix never counts as one)
     std::span<const std::string_view> manifests;        // basenames that root a package
     std::span<const std::string_view> notImplBaseNames; // an implementation-suffixed file that is not evidence of code (a package marker)
+    std::span<const std::string_view> declTestSuffixes; // a type test (tsd's index.test-d.ts): restates the declarations, is not code
 };
 inline constexpr std::string_view kTsDeclSuffixes[]    = { ".d.ts", ".d.mts", ".d.cts" };
 inline constexpr std::string_view kTsImplSuffixes[]    = { ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx" };
 inline constexpr std::string_view kTsManifests[]       = { "package.json" };
+inline constexpr std::string_view kTsDeclTestSuffixes[] = { ".test-d.ts", ".test-d.mts", ".test-d.cts", ".test-d.tsx" };
 inline constexpr std::string_view kPyDeclSuffixes[]    = { ".pyi" };
 inline constexpr std::string_view kPyImplSuffixes[]    = { ".py" };
 inline constexpr std::string_view kPyManifests[]       = { "pyproject.toml", "setup.py", "setup.cfg" };
 inline constexpr std::string_view kPyNotImplBaseNames[] = { "__init__.py" };
 inline constexpr DeclarationTwinRow kDeclarationTwinRows[] = {
-    { kTsDeclSuffixes, kTsImplSuffixes, kTsManifests, {} },
-    { kPyDeclSuffixes, kPyImplSuffixes, kPyManifests, kPyNotImplBaseNames },
+    { kTsDeclSuffixes, kTsImplSuffixes, kTsManifests, {}, kTsDeclTestSuffixes },
+    { kPyDeclSuffixes, kPyImplSuffixes, kPyManifests, kPyNotImplBaseNames, {} },
 };
 inline constexpr float kRankTierDeclTwinMul = 0.7f;   // gortex's declaration tier (0.7), here a multiplier: one tier, not a demotion
 
@@ -427,8 +429,11 @@ inline std::vector<float> declarationTwinFileMultipliers( const IngestResult& in
         {
             const std::string_view p    = rootRelPath( ing, f );
             const std::string_view base = baseOf( p );
-            if( endsWithAny( p, row.implSuffixes ) && !endsWithAny( p, row.declSuffixes )
-                && std::ranges::find( row.notImplBaseNames, base ) == row.notImplBaseNames.end() )
+            // IMPLEMENTATION EVIDENCE: an implementation suffix, and none of — a declaration or type-test suffix, a package marker,
+            // the row's own manifest (setup.py is .py), or a path tier (tests/, demo, generated: code, but not the package's)
+            if( endsWithAny( p, row.implSuffixes ) && !endsWithAny( p, row.declSuffixes ) && !endsWithAny( p, row.declTestSuffixes )
+                && std::ranges::find( row.notImplBaseNames, base ) == row.notImplBaseNames.end()
+                && std::ranges::find( row.manifests, base ) == row.manifests.end() && rankTierMultiplierOf( p ) == 1.0f )
             {
                 implPackages.push_back( packageDirOf( p, manifestDirs ) );
             }

@@ -27,6 +27,8 @@
 #          --token-budget=1200
 #   H6 [P] the declaration twin (decl): with the round-robin off, the types-only package's declaration (ztypes/index.d.ts) ranks
 #          above the same-content declaration whose package has an implementation (withimpl/types/server.d.ts)
+#   H6t/H6p/H6q [R on 051101f1] the same with a type test (index.test-d.ts), the row's manifest (setup.py), or a tests/ file added
+#          to the types-only package: none is implementation evidence (FIX2 M2)
 #   X1 [G] determinism   X2 [G] xmllint well-formed   X3 [G] no "--" inside a legend comment
 #
 # Usage:  bash test/forheadrrcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/forheadrrcheck.sh
@@ -194,6 +196,32 @@ h5 "--token-budget=1200" --for="$Q_MONO" --token-budget=1200
 run "$TMP/decl.off" "$FIX/decl" 1 --for="$Q_DECL"
 ran "$TMP/decl.off" H6 && chk "H6 a types-only declaration ranks above the twin whose package has an implementation" \
     above "$TMP/decl.off" ztypes/index.d.ts serveRequest withimpl/types/server.d.ts handleRequest
+# H6t/H6p/H6q (FIX2 M2, review rv-hrr): IMPLEMENTATION EVIDENCE is a file of the package's own code — not a type test, not the
+# row's manifest, not a path-tiered file (tests/). Each arm adds one such file to a types-only package; the package must stay
+# untiered, so its declaration still ranks above the twin whose package has real code. Red on 051101f1 (the leaky guard).
+mkdir -p "$TMP/ts1" && cp -R "$FIX/decl/." "$TMP/ts1/"
+printf '%s\n' "import { expectType } from 'tsd'" "import { serveRequest } from '.'" "expectType<void>(serveRequest(1, 2))" >"$TMP/ts1/ztypes/index.test-d.ts"
+run "$TMP/ts1.off" "$TMP/ts1" 1 --for="$Q_DECL"
+ran "$TMP/ts1.off" H6t && chk "H6t a tsd type test (index.test-d.ts) is no implementation: the types-only declaration still ranks above the twin" \
+    above "$TMP/ts1.off" ztypes/index.d.ts serveRequest withimpl/types/server.d.ts handleRequest
+pyfix(){ local d="$1"; mkdir -p "$d/cext" "$d/withimpl"
+    printf '%s\n' '[project]' 'name="cext"' >"$d/cext/pyproject.toml"
+    printf '%s\n' 'def serve_request(request: object, reply: object) -> None:' \
+        '    """Serve an incoming request: route the request, run the request hooks, and send the reply for the request."""' '    ...' >"$d/cext/core.pyi"
+    printf '%s\n' '[project]' 'name="withimpl"' >"$d/withimpl/pyproject.toml"
+    printf '%s\n' 'def handle_request(request: object, reply: object) -> None:' \
+        '    """Handle an incoming request: route the request, run the request hooks, and send the reply for the request."""' '    ...' >"$d/withimpl/server.pyi"
+    printf '%s\n' 'def handle_request(request, reply):' '    reply.send(request.body)' >"$d/withimpl/server.py"; }
+pyfix "$TMP/py1"
+printf '%s\n' 'from setuptools import setup, Extension' 'setup(ext_modules=[Extension("cext._core", ["src/core.c"])])' >"$TMP/py1/cext/setup.py"
+run "$TMP/py1.off" "$TMP/py1" 1 --for="$Q_DECL"
+ran "$TMP/py1.off" H6p && chk "H6p a compiled core's setup.py (the row's own manifest) is no implementation: core.pyi still ranks above the twin" \
+    above "$TMP/py1.off" cext/core.pyi serve_request withimpl/server.pyi handle_request
+pyfix "$TMP/py2"; mkdir -p "$TMP/py2/cext/tests"
+printf '%s\n' 'import cext' 'def test_serve():' '    assert cext.core.serve_request' >"$TMP/py2/cext/tests/test_core.py"
+run "$TMP/py2.off" "$TMP/py2" 1 --for="$Q_DECL"
+ran "$TMP/py2.off" H6q && chk "H6q a tests/ file (path-tiered) is no implementation: core.pyi still ranks above the twin" \
+    above "$TMP/py2.off" cext/core.pyi serve_request withimpl/server.pyi handle_request
 
 # ── X: determinism, well-formed, no "--" in a comment ───────────────────────────────────────────────────────────────────
 run "$TMP/mono.on2" "$FIX/mono" 0 --for="$Q_MONO"

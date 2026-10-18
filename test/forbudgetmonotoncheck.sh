@@ -104,6 +104,12 @@ STAGES="One Two Three Four Five Six"
 sigsblock(){ python3 -c 'import sys; s=open(sys.argv[1],"rb").read(); a=s.find(b"<sigs"); b=s.find(b"</sigs>"); sys.stdout.buffer.write(s[a:b+7] if a>=0 and b>=0 else b"")' "$1"; }
 bodyset(){ grep -o 'n="frobwidgetPipelineScheduleStage[A-Za-z]*">' "$1" | sed 's/.*Stage//; s/">//' | sort; }
 bodiesattr(){ grep -o 'bundle="auto" bodies="[0-9]*"' "$1" | head -1; }
+# the <sigs> block's rows, one p:l:n per line (score or shown order as served) — the set-prefix h arms' row key
+rowkeys(){ python3 -c 'import re,sys; s=open(sys.argv[1],encoding="utf-8",errors="replace").read(); a=s.find("<sigs"); b=s.find("</sigs>"); blk=s[a:b] if a>=0 and b>=0 else ""
+at=lambda t,k: (re.search(r"\s"+k+r"=\"([^\"]*)\"",t) or [None,""])[1]
+print("".join(at(t,"p")+":"+at(t,"l")+":"+at(t,"n")+"\n" for t in re.findall(r"<d [^>]*>",blk)),end="")' "$1"; }
+export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py set_prefix: the head round-robin h arms (lane hrr)
+setprefix(){ python3 "$RIPWIRE_TESTLIB/softbudget.py" setprefix "$1" "$2" "$3"; }
 
 # --auto-bodies on every body arm: the fixture's route is conceptual and that route now serves COMPACT by
 # default — see "WHY EVERY BODY ARM PASSES --auto-bodies" in the header.
@@ -113,6 +119,13 @@ run tb8k  "--auto-bodies --token-budget=8000"
 run tb12k "--auto-bodies --token-budget=12000"
 run cdef  ""
 run c8k   "--token-budget=8000"
+# head round-robin (lane hrr, train 31; PROCESS rule 4, ruling FIX1 §4(a)): the no-budget default reorders its first 8 rows
+# (<sigs files_first=N>) while an explicit --token-budget keeps score order, so the frozen-share BYTE identity (#1, #5) holds only
+# in score order. Each runs unchanged on the RIPWIRE_NO_HEAD_RR=1 twin (every call of the arm under it); #1h/#5h assert what still
+# holds with the reorder on: the explicit ceiling serves exactly the default's rows, as a set (the twin's rows, score ranks 1..K).
+RIPWIRE_NO_HEAD_RR=1 run defT "--auto-bodies"
+RIPWIRE_NO_HEAD_RR=1 run tb8kT "--auto-bodies --token-budget=8000"
+RIPWIRE_NO_HEAD_RR=1 run c8kT "--token-budget=8000"
 
 # ── presence guards: the fixture must reproduce the TRAP PRECONDITIONS, or every arm below is inert ─────
 grep -q 'anchors: ' "$TMP/def" \
@@ -137,15 +150,20 @@ MISSING=$( comm -23 "$TMP/set_def" "$TMP/set_8k" | tr '\n' ' ' )
 [ -z "$MISSING" ] \
     && ok "#1 a ceiling above the default effective ceiling keeps every default-served body" \
     || no "#1 --token-budget=8000 DROPPED default-served bodies: stage(s) $MISSING(the memo's re-inflation trap)"
-sigsblock "$TMP/def"  >"$TMP/sigs_def"
+sigsblock "$TMP/defT"  >"$TMP/sigs_def"   # the RIPWIRE_NO_HEAD_RR=1 twin (lane hrr, rule 4): see the twin runs above
+sigsblock "$TMP/tb8kT" >"$TMP/sigs_8kT"
 sigsblock "$TMP/tb8k" >"$TMP/sigs_8k"
 [ -s "$TMP/sigs_def" ] || no "#1 presence: could not extract a <sigs> block from the default run"
 # forbudget-soft (rule 4): the default answer discloses the rows it serves past its 7.5 KB target (<sigs past_target="K">);
 # a soft target names none (its rows are inside its own target). Everything else — every row, its text tier, the
 # continuation — must still be the default's byte for byte: the frozen-share invariant, minus that one disclosure.
-diff -q <( sed 's/ past_target="[0-9]*"//' "$TMP/sigs_def" ) "$TMP/sigs_8k" >/dev/null \
-    && ok "#1 the sig section at the explicit ceiling is byte-identical to the default's (frozen share)" \
-    || no "#1 the explicit ceiling re-inflated the sig section (default $( wc -c <"$TMP/sigs_def" | tr -d ' ' ) B vs 8000 $( wc -c <"$TMP/sigs_8k" | tr -d ' ' ) B)"
+diff -q <( sed 's/ past_target="[0-9]*"//' "$TMP/sigs_def" ) "$TMP/sigs_8kT" >/dev/null \
+    && ok "#1 [RIPWIRE_NO_HEAD_RR=1 twin] the sig section at the explicit ceiling is byte-identical to the default's (frozen share)" \
+    || no "#1 [RIPWIRE_NO_HEAD_RR=1 twin] the explicit ceiling re-inflated the sig section (default $( wc -c <"$TMP/sigs_def" | tr -d ' ' ) B vs 8000 $( wc -c <"$TMP/sigs_8kT" | tr -d ' ' ) B)"
+rowkeys "$TMP/def" >"$TMP/rk_def"; rowkeys "$TMP/tb8k" >"$TMP/rk_8k"; rowkeys "$TMP/defT" >"$TMP/rk_defT"
+{ [ -s "$TMP/rk_def" ] && [ "$( wc -l <"$TMP/rk_8k" )" = "$( wc -l <"$TMP/rk_def" )" ] && setprefix "$TMP/rk_8k" "$TMP/rk_def" "$TMP/rk_defT"; } \
+    && ok "#1h head round-robin on: the explicit ceiling serves exactly the default's $( wc -l <"$TMP/rk_def" | tr -d ' ' ) rows as a set (the twin's, frozen share)" \
+    || no "#1h head round-robin on: the explicit ceiling's rows ($( wc -l <"$TMP/rk_8k" | tr -d ' ' )) are not the default's rows as a set ($( wc -l <"$TMP/rk_def" | tr -d ' ' ))"
 
 # ── #2: monotone WITHIN the explicit regime — a larger ceiling serves a body superset, same frozen sigs ─
 bodyset "$TMP/tb12k" >"$TMP/set_12k"
@@ -186,16 +204,22 @@ grep -q 'bundle="compact"' "$TMP/cdef" \
 # body-fold (train 31; rule 4, by design): the default compact answer now carries the fold's <sigs> continuation pair (next= the first
 # skipped body, sigs_next= the signatures-only re-call; forbodyfoldcheck (F3)/(F5)), which a soft target — no fold — never does. The
 # frozen-share invariant is about the rows, so it is read off the fold-off twin of the default, byte for byte as before.
-RIPWIRE_NO_BODY_FOLD=1 "$BIN" "$WORK/src" --for="$Q" --no-cache >"$TMP/cdefoff" 2>/dev/null || no "run [fold-off default] exited non-zero"
+RIPWIRE_NO_BODY_FOLD=1 "$BIN" "$WORK/src" --for="$Q" --no-cache >"$TMP/cdefoffR" 2>/dev/null || no "run [fold-off default] exited non-zero"
+# lane hrr (rule 4): the byte arm reads the RIPWIRE_NO_HEAD_RR=1 twin of both calls; #5h below reads the reorder-on pair
+RIPWIRE_NO_BODY_FOLD=1 RIPWIRE_NO_HEAD_RR=1 "$BIN" "$WORK/src" --for="$Q" --no-cache >"$TMP/cdefoff" 2>/dev/null || no "run [fold-off RR-off default] exited non-zero"
 sigsblock "$TMP/cdefoff" >"$TMP/sigs_cdef"
-sigsblock "$TMP/c8k"  >"$TMP/sigs_c8k"
+sigsblock "$TMP/c8kT"  >"$TMP/sigs_c8k"
 [ -s "$TMP/sigs_cdef" ] || no "#5 presence: could not extract a <sigs> block from the compact default run"
 # forbudget-soft (rule 4): the default answer discloses the rows it serves past its 7.5 KB target (<sigs past_target="K">);
 # a soft target names none (its rows are inside its own target). Everything else — every row, its text tier, the
 # continuation — must still be the default's byte for byte: the frozen-share invariant, minus that one disclosure.
 diff -q <( sed 's/ past_target="[0-9]*"//' "$TMP/sigs_cdef" ) "$TMP/sigs_c8k" >/dev/null \
-    && ok "#5 the compact route's sig section is byte-identical at the explicit ceiling (frozen share)" \
-    || no "#5 the explicit ceiling re-inflated the COMPACT route's sig section (default $( wc -c <"$TMP/sigs_cdef" | tr -d ' ' ) B vs 8000 $( wc -c <"$TMP/sigs_c8k" | tr -d ' ' ) B)"
+    && ok "#5 [RIPWIRE_NO_HEAD_RR=1 twin] the compact route's sig section is byte-identical at the explicit ceiling (frozen share)" \
+    || no "#5 [RIPWIRE_NO_HEAD_RR=1 twin] the explicit ceiling re-inflated the COMPACT route's sig section (default $( wc -c <"$TMP/sigs_cdef" | tr -d ' ' ) B vs 8000 $( wc -c <"$TMP/sigs_c8k" | tr -d ' ' ) B)"
+rowkeys "$TMP/cdefoffR" >"$TMP/rk_cdef"; rowkeys "$TMP/c8k" >"$TMP/rk_c8k"; rowkeys "$TMP/cdefoff" >"$TMP/rk_cdefT"
+{ [ -s "$TMP/rk_cdef" ] && [ "$( wc -l <"$TMP/rk_c8k" )" = "$( wc -l <"$TMP/rk_cdef" )" ] && setprefix "$TMP/rk_c8k" "$TMP/rk_cdef" "$TMP/rk_cdefT"; } \
+    && ok "#5h head round-robin on: the compact route's explicit ceiling serves exactly the default's $( wc -l <"$TMP/rk_cdef" | tr -d ' ' ) rows as a set (the twin's)" \
+    || no "#5h head round-robin on: the compact route's explicit-ceiling rows ($( wc -l <"$TMP/rk_c8k" | tr -d ' ' )) are not the default's rows as a set ($( wc -l <"$TMP/rk_cdef" | tr -d ' ' ))"
 
 lint=1
 for F in def tb8k tb12k topn cdef c8k; do

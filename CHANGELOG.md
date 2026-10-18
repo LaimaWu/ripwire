@@ -15,25 +15,29 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
-### Changed — `--for`'s first eight rows name eight files before any file takes a second row (head round-robin)
+### Changed — `--for`'s first eight rows name up to eight distinct files before any file takes a second row (head round-robin)
 
 A routed (subtoken+body) `--for` answer's head was a list of the highest-scoring rows, and one file often took most of it: on
 25 answers graded complete in the round-5 kit, the first 8 rows named 3.96 distinct files on average. Now, inside the shown
 `<sigs>` rows (none added, none removed, each row's text unchanged), ranks 1..8 take each distinct file's best row first, in
 score order; a name a head row already holds does not open a new file (a C typedef/struct pair, an overload, a vendored copy);
-the rows that gives up keep score order after it, and rank 1 never moves. The tag says so: `<sigs files_first=N>` counts the rows
+the rows they displace keep score order after them, and rank 1 never moves. With fewer than eight distinct files shown, the free
+head slots take the remaining rows in score order, so a file can then hold a second head row. The tag says so: `<sigs files_first=N>` counts the rows
 whose rank changed, with a present-only legend reading. The body-tail fold and the compact `<hops>` keep score order (measured:
-following the reordered head lost two graded rows). The name-exact route, `--no-route`, a question that names an indexed file and
-a tight explicit `--token-budget` keep score order. CLI XML, `--json` and MCP `for` share one selection. `RIPWIRE_NO_HEAD_RR`,
+following the reordered head lost two graded rows), so `<hops total=N>` and the fold count score ranks, not the shown r=. The
+name-exact route, `--no-route`, a question that names an indexed file, any explicit `--token-budget` and a body ceiling keep
+score order. CLI XML, `--json` and MCP `for` share one selection. `RIPWIRE_NO_HEAD_RR`,
 set to any value, turns it off. Measured on 44 round-5 rows (19 file-miss targets, 25 ✓ rows), fold on: 3 of 20 gold files
-missing from the head-8 enter it, 18 more gold files enter the ✓ rows' head-8 with none lost, distinct head files 3.96 → 7.72;
+missing from the head-8 enter it, 19 more gold files enter the ✓ rows' head-8 with none lost, distinct head files 3.96 → 8.00;
 graded rows unchanged by the reorder alone.
 
 ### Changed — a `.d.ts` / `.pyi` row ranks one tier below the implementation its package ships
 
 A declaration file (`.d.ts`, `.d.mts`, `.d.cts`, `.pyi`) is ranked ×0.7 when its package — the nearest directory holding a
 `package.json` (TS/JS) or `pyproject.toml` / `setup.py` / `setup.cfg` (Python), else the indexed root — holds an implementation
-file of its family; a types-only package keeps 1.0, and the tier takes the minimum with the test/demo tiers. Data rows in
+file of its family; a types-only package keeps 1.0, and the tier takes the minimum with the test/demo tiers. Only the package's own
+code counts as an implementation: not its manifest (`setup.py`), a type test (`.test-d.ts`), a package marker (`__init__.py`) or a
+test, demo or generated path. Data rows in
 `src/filter.h`; the rule is common. On the same 44 rows: fastify-11 and fastify-13 become complete (Rule C), no row lower.
 
 ### Added — `--for` appends the bodies of its top ranked rows on the compact route (body-tail fold)
