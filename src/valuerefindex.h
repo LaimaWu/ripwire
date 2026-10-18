@@ -643,9 +643,9 @@ public:
                 ( ValueRefIndex::scopeOf( ing.references[i] ) == 'w' ? m_patternsWide : m_patterns ).push_back( i );   // 'w' = too wide, a count, never a row
             }
         }
+        m_member.assign( ing.symbols.size(), 0 );
         if( !m_patterns.empty() || !m_patternsWide.empty() )
         {
-            m_member.resize( ing.symbols.size() );
             for( NodeId id = 0; id < ing.symbols.size(); ++id )
             {
                 m_member[id] = vri.isClassMember( ing.symbols[id] ) ? 1 : 0;
@@ -665,7 +665,7 @@ public:
         const Reference& r = m_ing.references[ refIdx ];
         for( NodeId id = 0; id < m_ing.symbols.size(); ++id )
         {
-            if( isMember( id ) && reaches( r, m_ing.symbols[id] ) )
+            if( m_member[id] != 0 && reaches( r, m_ing.symbols[id] ) )
             {
                 out.push_back( id );
             }
@@ -687,10 +687,6 @@ public:
     }
 
 private:
-    bool isMember( NodeId id ) const noexcept
-    {
-        return id < m_member.size() && m_member[id] != 0;
-    }
 
     // The Pattern sites of `sites` (reference order) that can name at least one class member of `defs`, in that order.
     std::vector<std::uint32_t> sitesNaming( const std::vector<std::uint32_t>& sites, std::span<const NodeId> defs ) const
@@ -698,7 +694,7 @@ private:
         std::vector<std::uint32_t> out;
         std::ranges::copy_if( sites, std::back_inserter( out ), [ & ]( std::uint32_t i )
         {
-            return std::ranges::any_of( defs, [ & ]( NodeId d ) { return isMember( d ) && reaches( m_ing.references[i], m_ing.symbols[d] ); } );
+            return std::ranges::any_of( defs, [ & ]( NodeId d ) { return m_member[d] != 0 && reaches( m_ing.references[i], m_ing.symbols[d] ); } );
         } );
         return out;
     }
@@ -793,7 +789,7 @@ private:
     const IngestResult&                                    m_ing;
     std::vector<std::uint32_t>                             m_patterns;       // usable Pattern references, in reference order
     std::vector<std::uint32_t>                             m_patternsWide;   // too-wide Pattern references
-    std::vector<std::uint8_t>                              m_member;         // per symbol: 1 = a class member (empty: no Pattern reference)
+    std::vector<std::uint8_t>                              m_member;         // per symbol: 1 = a class member (all 0 when no Pattern reference exists)
     mutable HashMap<std::string, std::vector<std::string>> m_basesOf;        // class name → base names (buildBases)
     mutable bool                                           m_basesBuilt = false;
 };
@@ -987,20 +983,13 @@ inline ValueRefRows valueRefCalleeRows( const IngestResult& ing, const ValueRefI
     return out;
 }
 
-// The same rows with the IX-3 Pattern rows riding inside them (patternSites / patternTooWide): the callers side's
-// template lookups that may name `defs`, and the callees side's templates made in `fns`.
-inline ValueRefRows valueRefCallerRows( const IngestResult& ing, const ValueRefIndex& idx, std::span<const NodeId> defs, const PatternIndex& pix )
+// `rows` (valueRefCallerRows / valueRefCalleeRows over `ids`) with the IX-3 Pattern rows riding inside: callers — the
+// template lookups that may name `ids` and the too-wide count; callees — the templates made in `ids`.
+inline ValueRefRows withPatternRows( ValueRefRows rows, const PatternIndex& pix, std::span<const NodeId> ids, bool callersSide )
 {
-    ValueRefRows out   = valueRefCallerRows( ing, idx, defs );
-    out.patternSites   = pix.sitesTo( defs );
-    out.patternTooWide = pix.tooWideTo( defs );
-    return out;
-}
-inline ValueRefRows valueRefCalleeRows( const IngestResult& ing, const ValueRefIndex& idx, std::span<const NodeId> fns, const PatternIndex& pix )
-{
-    ValueRefRows out = valueRefCalleeRows( ing, idx, fns );
-    out.patternSites = pix.sitesIn( fns );
-    return out;
+    rows.patternSites   = callersSide ? pix.sitesTo( ids ) : pix.sitesIn( ids );
+    rows.patternTooWide = callersSide ? pix.tooWideTo( ids ) : 0;
+    return rows;
 }
 
 // The --uses / MCP uses site filter, ONE copy for both surfaces. A role="value" site is served only when the resolver

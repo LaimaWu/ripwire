@@ -1228,7 +1228,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     // (sites above) and they keep dead_code_candidate at 0 by --dead-code's own rule (ValueRefIndex::isValueReferenced):
     // a row made inside the function itself (`timer_set( tick )` in tick) or a wrapper decorator does not.
     const rw::ValueRefIndex sdVri( ing );
-    const rw::ValueRefRows  sdValueRefs = rw::valueRefCallerRows( ing, sdVri, defs, rw::PatternIndex( ing, sdVri ) );
+    const rw::ValueRefRows  sdValueRefs = rw::withPatternRows( rw::valueRefCallerRows( ing, sdVri, defs ), rw::PatternIndex( ing, sdVri ), defs, true );
     const rw::VrRender      sdVr { sdSingleRoot, sdRootPrefix };   // the <vrs> rows' and the depth cut's paths
     // IX-3: name-template lookups that may name a def — rows and a risk reading, never a caller and never the dead set
     const std::vector<std::uint32_t>& sdPatterns = sdValueRefs.patternSites;
@@ -2842,7 +2842,7 @@ std::optional<int> runImpact( const MainDispatch& d )
         const rw::DefTableListing imListing = rw::defTableListing( imAttr.groups, imNamed );
         // Reference-as-value round: SYM's own binding sites, beside the radius they are not in.
         const rw::ValueRefIndex imVri( ing );
-        const rw::ValueRefRows  imValueRefs = rw::valueRefCallerRows( ing, imVri, seeds, rw::PatternIndex( ing, imVri ) );
+        const rw::ValueRefRows  imValueRefs = rw::withPatternRows( rw::valueRefCallerRows( ing, imVri, seeds ), rw::PatternIndex( ing, imVri ), seeds, true );
         const std::vector<std::uint32_t>& imPatterns = imValueRefs.patternSites;   // IX-3: beside the radius, never in it
 
         if( !cfg.json )

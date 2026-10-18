@@ -335,7 +335,7 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
     {
         const std::optional<ValueRefIndex> local = valueIndex == nullptr ? std::optional<ValueRefIndex>( std::in_place, ing ) : std::nullopt;
         const ValueRefIndex&               vri   = valueIndex != nullptr ? *valueIndex : *local;
-        out.valueRefs = wantCallers ? valueRefCallerRows( ing, vri, out.matches, PatternIndex( ing, vri ) ) : valueRefCalleeRows( ing, vri, out.matches, PatternIndex( ing, vri ) );   // IX-3 rows ride inside
+        out.valueRefs = withPatternRows( wantCallers ? valueRefCallerRows( ing, vri, out.matches ) : valueRefCalleeRows( ing, vri, out.matches ), PatternIndex( ing, vri ), out.matches, wantCallers );
     }
     if( wantCallers )
     {
