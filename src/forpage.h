@@ -562,14 +562,16 @@ inline constexpr std::string_view kForPageLegend =
     "file-first: score= the IDF-weighted share of the query's subtokens the file's "
     "top 8 symbols cover between them (whole percent; a term counts once however often it recurs, so one huge "
     "file cannot monopolise), ties by the best symbol's lens score then path; n= positive-score symbols in the "
-    "file; sym= its top symbols by lens rank; p= the file. coverage= is the lens root's gauge: the same share "
+    "file for this task (not the file's whole symbol count, which the expand flag reports as sibs_total=); "
+    "sym= its top symbols by lens rank; p= the file. coverage= is the lens root's gauge: the same share "
     "for the top-ranked symbol alone (name, doc and body). shown=/total=/capped=1 when this page cut the list; "
     "offset=/limit=/has_more=/next_offset= page it and next= is the next page, pasted as-is";
 inline constexpr std::string_view kForPageLegendCompact =
     ": file-grain widening page (task= the query, route= the ranker that answered), one <f> row per positive-score "
     "file: score= IDF-weighted share of the query's "
     "subtokens the file's top 8 symbols cover together (%, a term counts once), ties by best symbol then path; "
-    "n= positive symbols; sym= top symbols; coverage= the top symbol's own share; shown=/total=/capped=1 when cut; "
+    "n= positive symbols for this task (not expand's sibs_total= file count); sym= top symbols; coverage= the top symbol's own "
+    "share; shown=/total=/capped=1 when cut; "
     "offset=/limit=/has_more=/next_offset= page it, next= the next page; root= the crawl root";
 
 // What the page document is rendered from, beside the rows: the task and the lens root's own open tag (ctxRootOpen's

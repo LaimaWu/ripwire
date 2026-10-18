@@ -7891,6 +7891,9 @@ inline void packHops( std::FILE* out, const IngestResult& ing, const std::vector
         }
 
         const Symbol& s = ing.symbols[ id ];
+        // body-fold rider (forbudget-soft N3, rule 5): a cut listing names the call that lists every callee, as an owner row's does —
+        // written only beside capped="1", and outside the budget walk (a disclosure never costs a callee row)
+        const std::string next = ownerCalleesNext( ing, s, pathRel( s.fileId ), rootArg, esc );
         std::string   row;
         char          hdr[ 64 ];
         rw::formatTo( hdr, sizeof( hdr ), "<h l=\"{}\" p=\"", s.line );
@@ -7903,7 +7906,8 @@ inline void packHops( std::FILE* out, const IngestResult& ing, const std::vector
         // the 1-hop callee signatures — the identical block a body carries, charged against the same
         // running `used` so the row identity bytes and the edge bytes share one budget.
         emitCalleeCallsBlock( row, id, outOff, outTargets, ing, contentOf, esc, used, budgetBytes,
-                              withSplitArms( CalleeCallsSink{ redact, /*recorded=*/nullptr, /*namesOnly=*/true, rank, &outNameOnly, &viaLegendCharged },
+                              withSplitArms( CalleeCallsSink{ redact, /*recorded=*/nullptr, /*namesOnly=*/true, rank, &outNameOnly, &viaLegendCharged,
+                                                              CalleeCallsSink{}.rowCap, next },
                                              outEdges.prov, &splitLegendCharged ) );
         row += "</h>";
         children += row;
