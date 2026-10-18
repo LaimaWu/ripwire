@@ -108,6 +108,10 @@ mid-compile; the discipline is the fix.
 ripwire builds and passes its suite on Ubuntu 24.04 with gcc 13.3 or clang 18, but a few things
 differ from macOS enough to cost you an afternoon if nobody says them out loud.
 
+**Source builds support gcc 13+, so never rely on C++23 P2718 range-for lifetime extension:** `for( x : makeRow().items() )`
+is correct on clang ≥ 19 and gcc ≥ 15 and reads a dead temporary on gcc 13/14, so name the temporary first; the gcc-14 CI
+leg is the canary, and `-Werror=dangling-reference` plus `portablebuildcheck` #7 hold the shape on every host.
+
 **Memory, not cores, sizes `-j`.** `src/main.cpp` is one very large translation unit (since the
 2026-08-29 split its verb families live in `src/verbs_*.h` sections included into that one TU — the
 compile cost is unchanged, only the editing surface moved; `src/ingest.cpp` got the same treatment
@@ -275,8 +279,8 @@ Homebrew's keg-only `/opt/homebrew/opt/llvm@22/bin/clang-tidy` — pin that path
 finds neither.
 
 The compiler holds the same line for the UB class: CMakeLists.txt's compile-time fence block makes
-`return-type`, `uninitialized`, `format`/`format-security`, returning a local's address, and on Clang
-`-Wdangling` and constant `array-bounds`, errors on our own targets, per compiler, with the cl.exe
+`return-type`, `uninitialized`, `format`/`format-security`, returning a local's address, on Clang
+`-Wdangling` and constant `array-bounds`, and on GCC 13+ `dangling-reference`, errors on our own targets, per compiler, with the cl.exe
 `/we####` equivalents — each measured at zero hits on AppleClang 17, clang 22 and GCC 13/14/16 first.
 
 ---

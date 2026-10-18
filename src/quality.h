@@ -8503,7 +8503,7 @@ inline std::optional<StaleAckWhy> staleForChurn( std::uint64_t key, const Snapsh
 inline std::optional<StaleAckWhy> staleForDefectShape( std::uint64_t key, const Snapshot& snap )
 {
     const std::vector<DefectSiteKey>& sites = snap.defectSites;   // sorted by (anchor, site): one anchor's records are contiguous
-    const auto                        self  = []( const DefectSiteKey& d ) -> const DefectSiteKey& { return d; };
+    const auto                        self  = []( const DefectSiteKey& d RW_LIFETIMEBOUND ) -> const DefectSiteKey& { return d; };
     for( auto it = sites.begin(); it != sites.end(); )
     {
         const auto                         end = std::find_if( it, sites.end(), [ & ]( const DefectSiteKey& d ) { return d.anchor != it->anchor; } );
@@ -8971,15 +8971,15 @@ inline void appendDefectShapeRows( std::vector<Regression>& regs, const IngestRe
     }
     for( const Credited& c : credited )
     {
-        const std::uint32_t was = facetCount( base.defectSites, c.anchor, c.facet, []( const DefectSiteKey& d ) -> const DefectSiteKey& { return d; } );
-        const std::uint32_t now = facetCount( nowSites, c.anchor, c.facet, []( const DefectSiteAt& d ) -> const DefectSiteKey& { return d.key; } );
+        const std::uint32_t was = facetCount( base.defectSites, c.anchor, c.facet, []( const DefectSiteKey& d RW_LIFETIMEBOUND ) -> const DefectSiteKey& { return d; } );
+        const std::uint32_t now = facetCount( nowSites, c.anchor, c.facet, []( const DefectSiteAt& d RW_LIFETIMEBOUND ) -> const DefectSiteKey& { return d.key; } );
         const NodeId        owner = c.first->owner;
         const std::string   rel( relForHash( ing.files[ c.first->fileId ], root ) );
         const bool          isNew = ( owner != kNoNode )
                                       ? !existedAtBaseline( c.anchor )
                                       : !std::binary_search( base.defectSites.begin(), base.defectSites.end(), DefectSiteKey{ c.anchor, kDefectFilePresent } );
         const std::string   sym = ( owner != kNoNode && owner < g.canonId.size() && !g.canonId[owner].empty() ) ? g.canonId[owner] : rel;
-        const std::uint64_t rowKey = defectRowKey( c.anchor, c.facet, defectSiteValsOf( nowSites, c.anchor, c.facet, []( const DefectSiteAt& d ) -> const DefectSiteKey& { return d.key; } ) );
+        const std::uint64_t rowKey = defectRowKey( c.anchor, c.facet, defectSiteValsOf( nowSites, c.anchor, c.facet, []( const DefectSiteAt& d RW_LIFETIMEBOUND ) -> const DefectSiteKey& { return d.key; } ) );
         regs.push_back( { "defect-shape", sym, was, now, rowKey, !defectshape::facetGatesOnAnyOrigin( c.facet ),
                           std::string( defectshape::facetName( c.facet ) ), isNew } );
         if( owner != kNoNode )

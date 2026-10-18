@@ -1384,9 +1384,9 @@ inline std::uint32_t resolveGitPath( const GitPathIndex& byGitPath, const std::s
 // must skip the offset probe in BOTH, not just whichever one remembered to.
 // `entries` is any range whose element is a git path (a changed-path list) or a (git path, value) pair (a churn
 // tally); `apply( fileId, entry )` does the caller's one distinct thing with it.
-inline const std::string& gitPathOfEntry( const std::string& gitRelPath ) noexcept { return gitRelPath; }
+inline const std::string& gitPathOfEntry( const std::string& gitRelPath RW_LIFETIMEBOUND ) noexcept { return gitRelPath; }
 template<typename Key, typename Value>   // Key covers both pair<string,V> (unordered_dense) and pair<const string,V>
-inline const std::string& gitPathOfEntry( const std::pair<Key, Value>& tallyEntry ) noexcept { return tallyEntry.first; }
+inline const std::string& gitPathOfEntry( const std::pair<Key, Value>& tallyEntry RW_LIFETIMEBOUND ) noexcept { return tallyEntry.first; }
 
 template<typename Entries, typename Apply>
 inline void forEachBoundGitPath( const Entries& entries, const IngestResult& ing, std::uint32_t onlyRoot, Apply&& apply )

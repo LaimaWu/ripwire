@@ -24,6 +24,8 @@
 #      (#6), a pass that resolves each container through its declaration (#6b), and a pass that resolves each
 #      explicit LAMBDA comparator's parameter and member types (#6c, the shape #343/#344/#345 landed with),
 #      each with planted controls.
+#   7) no range-for in src/ reads through a temporary that only C++23 P2718 keeps alive (`for( x : makeRow().items() )`
+#      SEGFAULTs on GCC 13/14), resolved through each callee's declaration, with planted controls.
 #
 # Usage: test/portablebuildcheck.sh
 # Exits non-zero on any failure; prints PASS/FAIL per check, ALL PASS on success.
@@ -1244,6 +1246,239 @@ EOF
         no "#6c comparator lambda orders string_view with operator< — aborts the Linux G1 leg (pass rw::sortutil::svLess):"
         printf '%s\n' "$SVLAMB" | sed 's/^/        /'
     fi
+fi
+
+# ── #7: no range-for reads through a temporary that only C++23 P2718 keeps alive ─────────────────────────────────────
+# WHY THIS IS A PORTABILITY RULE. `for( x : makeRow().items() )` binds the loop's hidden range reference to what
+# items() returns — a reference INTO the Row temporary — and before C++23 P2718 that temporary dies at the end of the
+# range-init, so the loop walks freed storage. Clang ≥ 19 and GCC ≥ 15 implement P2718 and the loop is correct; GCC 14
+# does not, and the same source SEGFAULTs there at every -O (tmp/lifetime-demo/c_rangefor.cpp, 2026-10-18). Source
+# builds support GCC 13+ (CONTRIBUTING.md, compiler floor), so the code never relies on P2718: name the temporary first
+# (`const Row row = makeRow(); for( x : row.items() )`). GCC 13/14's -Wdangling-reference (now -Werror in the GCC
+# fence) refuses the reference-returning shape, but only on those compilers; this pass holds it on every host.
+# The pass: every range-for's range expression (comments and literals blanked) → each `CALL( … )` or `T{ … }` whose
+# result has a METHOD called on it or is subscripted, directly or through a data-member path (`makeRow().items()`,
+# `makeBox().sub.items()`, `makeRow().cells[ 0 ]`) → the line-leading declarations of CALL in the scanned tree: a
+# finding unless every one returns a reference or a pointer. Not findings: `for( x : f() )` (the by-value result IS the
+# range and is extended in every standard), `for( x : local.items() )`, `for( x : makeRow().cells )` (a temporary's
+# DATA member is extended in every standard), a method on a std::string_view / std::span temporary (it returns into
+# the viewed data), and std's reference accessors (front/back/at/value/…) on a member chain. A callee the tree does
+# not declare is a finding: unknown is not safe. Stated blind spots — zero findings means "none found", not "none
+# exists": a by-value result whose ELEMENTS view a temporary argument (`for( v : split( std::string( s ) ) )`), `->`
+# through a temporary smart pointer, and an overloaded callee whose overloads disagree are not modelled. The
+# 2026-10-18 clang-query audit (cxxForRangeStmt whose range-init has a MaterializeTemporaryExpr under a call) found
+# 20 such range-fors over the 10 owned TUs, all safe; this text pass finds 0 of the C shape in src/.
+RFSCAN="$TMP/rangefor.py"
+cat > "$RFSCAN" <<'PY'
+import os
+import re
+import sys
+
+# comments and literal contents are blanked (newlines kept, so offsets and lines stay true); a pp-number is matched
+# first so a digit separator (1'000) is never read as a character literal
+TOKEN = re.compile(r'//[^\n]*|/\*.*?\*/'
+                   r'|(?<![\w])(?:u8|u|U|L)?R"(?P<delim>[^()\\\s]{0,16})\(.*?\)(?P=delim)"'
+                   r"|(?<![\w])\d[\w']*"
+                   r'|"(?:[^"\\\n]|\\.)*"'
+                   r"|'(?:[^'\\\n]|\\.)*'", re.S)
+FOR = re.compile(r'\bfor\s*\(')
+# a method called on a VIEW temporary returns into the viewed data, never into the view object itself
+VIEW_TYPES = {'string_view', 'span', 'basic_string_view'}
+# standard accessors that return a reference (or pointer) into the object they are called on
+REF_STD = {'front', 'back', 'at', 'top', 'value', 'first', 'second', 'get', 'data', 'operator'}
+KEYWORDS = {'if', 'for', 'while', 'switch', 'return', 'sizeof', 'decltype', 'alignof', 'static_cast', 'const_cast',
+            'reinterpret_cast', 'dynamic_cast', 'noexcept', 'requires', 'catch'}
+NOT_DECL = {'return', 'else', 'new', 'delete', 'co_return', 'case', 'goto', 'throw', 'co_yield'}
+SPEC = re.compile(r'^(?:(?:inline|static|constexpr|consteval|virtual|friend|explicit|extern|\[\[[^\]]*\]\])\s+)*')
+
+
+def blank(text):
+    """Replace comments and string/char literal CONTENTS with spaces, newlines and offsets preserved."""
+    return TOKEN.sub(lambda m: m.group(0) if m.group(0)[0].isdigit() else re.sub(r'[^\n]', ' ', m.group(0)), text)
+
+
+def close_of(text, i):
+    """Index of the bracket that closes the one at i, or -1."""
+    depth = 0
+    for j in range(i, len(text)):
+        c = text[j]
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            depth -= 1
+            if depth == 0:
+                return j
+    return -1
+
+
+def range_expr(text, open_index):
+    """(start, end) of a range-for's range expression, or None for a classic for( ;; )."""
+    end = close_of(text, open_index)
+    if end < 0:
+        return None
+    depth = 0
+    for j in range(open_index + 1, end):
+        c = text[j]
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            depth -= 1
+        elif depth == 0 and c == ';':
+            return None
+        elif depth == 0 and c == ':' and text[j - 1] != ':' and text[j + 1] != ':':
+            return j + 1, end
+    return None
+
+
+def returns_of(texts, name, memo):
+    """The return types the line-leading declarations of `name` spell (`RET NAME(` / `RET Cls::NAME(`), each ending
+    in '&' or '*' when the declaration returns a reference or a pointer. [] when the tree declares none."""
+    if name not in memo:
+        pat = re.compile(r'(?m)^[ \t]*(?:template\s*<[^\n]*>\s*)?([^\n;{}()=,.]*?[\w>])([ \t*&]+)(?:\w+::)*'
+                         + re.escape(name) + r'\s*\(')
+        rets = []
+        for text in texts:
+            for m in pat.finditer(text):
+                ret = SPEC.sub('', m.group(1).strip())
+                words = ret.split()
+                if not words or words[0] in NOT_DECL or words[-1] in KEYWORDS or words[-1] in NOT_DECL:
+                    continue
+                marks = m.group(2).replace(' ', '').replace('\t', '')
+                rets.append(ret + marks)
+        memo[name] = rets
+    return memo[name]
+
+
+def findings(expr, texts, memo):
+    """Each `CALL( … ).method(` in a range expression whose CALL is not known to return a reference or a pointer:
+    the temporary it returns dies at the end of the range-init before C++23 (P2718), while the loop reads through it."""
+    out = []
+    for m in re.finditer(r'[)}]', expr):
+        # a data-member path may come first: `makeRow().sub.items()` reads through the temporary just the same,
+        # and so does a subscript (`makeRow().cells[ 0 ]` calls vector::operator[] on it)
+        mm = re.match(r'\s*(?:\.\s*\w+\s*)*(?:\.\s*(?:template\s+)?(\w+)\s*(?:<[^()]*>)?\s*\(|(\[))', expr[m.end():])
+        if not mm:
+            continue
+        depth, k = 0, m.start()
+        while k >= 0:
+            c = expr[k]
+            if c in ')]}':
+                depth += 1
+            elif c in '([{':
+                depth -= 1
+                if depth == 0:
+                    break
+            k -= 1
+        if k < 0:
+            continue
+        head = expr[:k].rstrip()
+        hm = re.search(r'(\w+)\s*(?:<[^()]*>)?$', head)
+        if not hm:
+            continue                     # a parenthesised expression or a lambda, not a call
+        callee = hm.group(1)
+        if callee in KEYWORDS or callee in VIEW_TYPES:
+            continue
+        rets = returns_of(texts, callee, memo)
+        if rets and all(r.endswith(('&', '*')) for r in rets):
+            continue
+        member = head[:hm.start()].rstrip().endswith(('.', '->'))
+        if not rets and member and callee in REF_STD:
+            continue
+        out.append((callee, mm.group(1) or 'operator[]', 'returns by value' if rets else 'has no declaration in the tree'))
+    return out
+
+
+def scan(paths, texts, memo):
+    rows = []
+    for path in paths:
+        text = blank(open(path, encoding='utf-8', errors='replace').read())
+        for m in FOR.finditer(text):
+            r = range_expr(text, m.end() - 1)
+            if not r:
+                continue
+            for callee, method, why in findings(text[r[0]:r[1]], texts, memo):
+                line = text.count('\n', 0, m.start()) + 1
+                rows.append('%s:%d: range-for over %s( … ).%s( … ) — %s %s' % (path, line, callee, method, callee, why))
+    return rows
+
+
+if __name__ == '__main__':
+    files = []
+    for root in sys.argv[1:]:
+        for d, _, fs in os.walk(root):
+            files += [os.path.join(d, f) for f in fs if f.endswith(('.h', '.hpp', '.inl', '.cpp'))]
+    files.sort()
+    texts = [blank(open(p, encoding='utf-8', errors='replace').read()) for p in files]
+    for row in scan(files, texts, {}):
+        print(row)
+PY
+mkdir -p "$TMP/rfctl/planted" "$TMP/rfctl/clean"
+cat > "$TMP/rfctl/planted/planted.h" <<'CPP'
+#include <string>
+#include <vector>
+struct Row { std::vector<std::string> cells; const std::vector<std::string>& items() const { return cells; } };
+struct Box { Row sub; };
+Row makeRow();
+Box makeBox();
+inline int planted()
+{
+    int n = 0;
+    for( const std::string& c : makeRow().items() ) { n += int( c.size() ); }      // PLANT
+    for( const std::string& c : makeBox().sub.items() ) { n += int( c.size() ); }  // PLANT
+    for( const char ch : makeRow().cells[ 0 ] ) { n += ch; }                       // PLANT
+    for( const std::string& c : unknownFactory( 1 ).items() ) { n += int( c.size() ); }  // PLANT
+    return n;
+}
+CPP
+cat > "$TMP/rfctl/clean/clean.h" <<'CPP'
+#include <map>
+#include <string>
+#include <string_view>
+#include <vector>
+struct Row { std::vector<std::string> cells; const std::vector<std::string>& items() const { return cells; } };
+Row makeRow();
+Row& rowRef();
+const Row* rowPtr();
+std::vector<std::string> makeList();
+inline int clean( const std::map<int, std::vector<int>>& m, std::string_view line )
+{
+    int n = 0;
+    for( const std::string& c : makeList() ) { n += int( c.size() ); }              // by-value container: extended
+    const Row localVar = makeRow();
+    for( const std::string& c : localVar.items() ) { n += int( c.size() ); }        // a named local
+    for( const std::string& c : makeRow().cells ) { n += int( c.size() ); }         // a temporary's data member: extended
+    for( const std::string& c : rowRef().items() ) { n += int( c.size() ); }        // the callee returns a reference
+    for( const std::string& c : rowPtr()->items() ) { n += int( c.size() ); }       // ... or a pointer
+    for( const char ch : std::string_view( line ).substr( 1 ) ) { n += ch; }        // a view temporary
+    for( const int v : m.find( 1 )->second ) { n += v; }                            // an iterator into a live map
+    for( const std::string& c : localVar.cells.front().size() > 0 ? localVar.cells : makeList() ) { n += int( c.size() ); }
+    // for( const std::string& c : makeRow().items() )   — a comment is not code
+    const char* s = "for( const std::string& c : makeRow().items() )";             // nor is a literal
+    for( int i = 0; i < 3; ++i ) { n += i + int( s[ 0 ] ); }                        // a classic for
+    return n;
+}
+CPP
+wantRf="$( grep -n 'PLANT' "$TMP/rfctl/planted/planted.h" | cut -d: -f1 | sed 's#^#planted.h:#' )"
+gotRf="$( python3 "$RFSCAN" "$TMP/rfctl/planted" | sed 's#^.*/planted/##' | cut -d: -f1,2 )"
+if [ -n "$wantRf" ] && [ "$wantRf" = "$gotRf" ]; then
+    ok "#7 control: the range-for pass finds exactly the 4 planted shapes (method, member path + method, subscript, undeclared callee)"
+else
+    no "#7 control: planted range-for-over-temporary shapes not found exactly — want [$( printf '%s ' $wantRf )] got [$( printf '%s ' $gotRf )]"
+fi
+cleanRf="$( python3 "$RFSCAN" "$TMP/rfctl/clean" 2>&1 )"; cleanRfRc=$?
+if [ "$cleanRfRc" -eq 0 ] && [ -z "$cleanRf" ]; then
+    ok "#7 control: f(), local.items(), a temporary's data member, ref/ptr callees, views, iterators, comments, literals are not findings"
+else
+    no "#7 control: the near-miss input produced findings (rc=$cleanRfRc):"; printf '%s\n' "$cleanRf" | sed 's/^/        /'
+fi
+RFTREE="$( python3 "$RFSCAN" "$ROOT/src" 2>&1 )"; rfRc=$?
+if [ "$rfRc" -ne 0 ]; then
+    no "#7 the range-for pass itself failed on src/ (rc=$rfRc) — a crashed scan is not a clean one"; printf '%s\n' "$RFTREE" | tail -3 | sed 's/^/        /'
+elif [ -z "$RFTREE" ]; then
+    ok "#7 no range-for in src/ reads through a temporary only C++23 P2718 keeps alive (GCC 13/14 build safely)"
+else
+    no "#7 range-for over a temporary's member — SEGFAULTs on GCC 13/14 (name the temporary first):"
+    printf '%s\n' "$RFTREE" | sed "s#^$ROOT/##; s/^/        /"
 fi
 
 # NOTE (what this gate can prove vs what only Linux CI can prove): this machine is Apple-Silicon macOS, so
