@@ -24,7 +24,7 @@ link to a heading named like one of the linking file's own headings does not bin
 slug give one edge (the first). A missing heading falls back to the target file's edge; percent-encoded slugs and GitHub's
 `-1` duplicate suffix are not modelled and also fall back. A markdown link that no call shares is marked `via="link"` on
 `--callers`, `--callees`, `--path`, `--connect`, and on a map or body callee row. `count=` and `cross_kind` stay the same. A
-call on the same pair leaves the row unmarked. A crawl rooted at `.` stores `./docs/a.md`. The link index normalizes that path, so a root of `.` pins the same heading as an absolute root. `find_symbol` and `find_referencing_symbols` mark the link row, and the answer adds `via_link_note` when a row has it. `--json` callers and callees add that note too. `--safe-delete` and `--impact` mark a direct doc caller `via="link"`. `callers=` and `reaches=` still count it. Gate: `test/mdsectioncheck.sh`.
+call on the same pair leaves the row unmarked. A crawl rooted at `.` stores `./docs/a.md`. The link index normalizes that path, so a root of `.` pins the same heading as an absolute root. `find_symbol` and `find_referencing_symbols` mark the link row, and the answer adds `via_link_note` when a row has it. `--json` callers and callees add that note too. `--safe-delete` and `--impact` mark a direct doc caller `via="link"`. `callers=` and `reaches=` still count it. An in-file anchor, a wikilink, and a root-relative link are `via="link"` too. The mark follows the reference, so an unpinned link does not clear a pinned one on the same pair. Gate: `test/mdsectioncheck.sh`.
 
 ### Changed — Go methods carry their receiver type as scope (#403, slice 9a)
 

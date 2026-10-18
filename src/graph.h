@@ -6398,17 +6398,16 @@ inline bool isMarkdownLinkRef( const Reference& r ) noexcept
     return r.lang == Lang::Markdown && !r.isDocLink && !r.memberCall && !r.memberPath.empty();
 }
 
-// A pinned markdown link records the pair as a link. Any other site that binds the same pair records a real call,
-// and the real call wins when the edge is stamped.
-inline void noteMarkdownLinkSite( HashMap<std::uint64_t, char>& linkEdges, HashMap<std::uint64_t, char>& realCalls, std::uint64_t ekey,
-                                  const std::vector<NodeId>& mdLinkPin, std::size_t siteIndex, const Reference& r )
+// Link-ness is where the reference came from: lang Markdown and not a doc mention. isMarkdownLinkRef also requires a
+// path, which an in-file anchor and a wikilink do not have, and a root-relative link can miss the pin. A non-markdown
+// site on the same pair is a real call and wins at stamp time. A markdown doc mention is neither.
+inline void noteMarkdownLinkSite( HashMap<std::uint64_t, char>& linkEdges, HashMap<std::uint64_t, char>& realCalls, std::uint64_t ekey, const Reference& r )
 {
-    const bool linkSite = !mdLinkPin.empty() && siteIndex < mdLinkPin.size() && mdLinkPin[ siteIndex ] != kNoNode && isMarkdownLinkRef( r );
-    if( linkSite )
+    if( r.lang == Lang::Markdown && !r.isDocLink )
     {
         linkEdges[ ekey ] = 1;
     }
-    else
+    else if( r.lang != Lang::Markdown )
     {
         realCalls[ ekey ] = 1;
     }
@@ -6977,9 +6976,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                                  // so its bucket layout cannot reach output, and it is filled inside a loop
                                                  // whose per-reference tier work dominates the growth cascade by orders of
                                                  // magnitude. A guessed reserve would be a made-up number in a hot struct.
-    HashMap<std::uint64_t, char> linkEdges;      // (from<<32|to) a pinned markdown link bound. A real call on the same pair
+    HashMap<std::uint64_t, char> linkEdges;      // (from<<32|to) a markdown link bound. A non-markdown call on the same pair
                                                  // (realCallEdges) drops the mark: the merged edge stays a call.
-    HashMap<std::uint64_t, char> realCallEdges;  // (from<<32|to) bound by a site that was not a pinned markdown link.
+    HashMap<std::uint64_t, char> realCallEdges;  // (from<<32|to) bound by a non-markdown site. Empty on a tree with no markdown link.
     std::vector<NodeId>      rule3Out;   // reused Rule-3 output buffer (candidates from the single included file)
     Rule3FileMemo            rule3Memo;  // Rule 3's answer per (caller file, byName entry): one walk per name per file, not per call
     std::string              qkey;       // reused "qualifier::name" buffer for the E#4 canonical lookup (no per-ref alloc)
@@ -7700,6 +7699,15 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/3: resolve loop (per reference)" );
     const std::vector<NodeId> mdLinkPin = bindMarkdownLinks( ing );   // empty unless the tree holds a cross-file markdown link
+    bool anyMarkdownLink = false;
+    for( const Reference& r : ing.references )
+    {
+        if( r.lang == Lang::Markdown && !r.isDocLink )
+        {
+            anyMarkdownLink = true;
+            break;
+        }
+    }
     for( siteIndex = 0; siteIndex < ing.references.size(); ++siteIndex )
     {
         const Reference& site = ing.references[ siteIndex ];
@@ -9164,7 +9172,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 finalSegmentEdges[ekey] = 1;   // remember (from,to) for prov="final-segment"
             }
             ( nameOnly ? nameOnlyEdges : provenEdges )[ ekey ] = 1;   // FE-B: a proven site wins the merged row (Graph::outNameOnly)
-            noteMarkdownLinkSite( linkEdges, realCallEdges, ekey, mdLinkPin, siteIndex, r );
+            if( anyMarkdownLink )
+            {
+                noteMarkdownLinkSite( linkEdges, realCallEdges, ekey, r );
+            }
         }
         disposition = CallDisposition::Bound;
     }

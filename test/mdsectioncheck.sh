@@ -481,6 +481,23 @@ printf '%s' "$IM" | grep -q 'reaches="2"' \
   && ok "impact marks Run Notes via=link and still counts both rows" \
   || no "impact dropped the link mark or the reach count"
 
+# In-file anchors, wikilinks, and root-relative links are via="link". A code call on the same name stays unmarked.
+mkdir -p "$TMP/kinds/src" "$TMP/kinds/docs"
+printf '%s\n' 'def api():' '    return 1' '' 'def main():' '    api()' > "$TMP/kinds/src/app.py"
+printf '%s\n' '# api' > "$TMP/kinds/docs/api.md"
+printf '%s\n' '# Guide' '' '## Hub' '' '[down](#later)' '' '[a](api.md)' '' '[b](/docs/api.md)' '' '[[api]]' '' '## Later' '' 'notes' > "$TMP/kinds/docs/guide.md"
+HUB="$( $BIN "$TMP/kinds" --no-cache --callees=Hub --legend=compact 2>/dev/null )"
+printf '%s' "$HUB" | grep -q 'n="Later"[^>]*via="link"' \
+  && printf '%s' "$HUB" | grep -q 'n="api"[^>]*via="link"' \
+  && ok "in-file, wikilink, and root-relative links are via=link" \
+  || no "an in-file, wikilink, or root-relative link lost via=link"
+API="$( $BIN "$TMP/kinds" --no-cache --callers=api --legend=compact 2>/dev/null )"
+printf '%s' "$API" | grep -q 'n="Hub"[^>]*via="link"' \
+  && printf '%s' "$API" | grep -q 'n="main"' \
+  && ! printf '%s' "$API" | grep -q 'n="main"[^>]*via="link"' \
+  && ok "a code call to api stays unmarked while the doc link stays via=link" \
+  || no "the code call was marked via=link, or the doc link lost the mark"
+
 echo "--- warm == cold after editing ONLY the target file (the cached ref must stay unbound) ---"
 cp -R "$AFIX" "$TMP/anchorcopy"
 rm -f "$TMP/anchor.cache"
