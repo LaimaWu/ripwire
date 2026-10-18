@@ -900,6 +900,16 @@ struct Reference
     std::uint32_t baseBind = 0;
 };
 
+// ONE rule for every reader of the reference table that counts a call SITE (train 30, fcall-forward nit N1): a FORWARDED
+// reference counts only where buildGraph kept its call — `keptForwards` is Graph::keptForwards, the ascending
+// ing.references indices of the forwards it bound. A reader with no graph passes none, and every forwarded reference stays
+// out. Readers: --uses (verbs_navigate.h collectUseSites), sites_at= and --edit-check's sites (editcheck.h forEachCallSite),
+// --edit-check's incompatible-caller flags (editCheckIncompatibleFlags), callers_floor= (countfloor.h markUnboundSpellings).
+inline bool forwardCounts( const Reference& r, std::uint32_t refIndex, std::span<const std::uint32_t> keptForwards ) noexcept
+{
+    return !r.forwarded || std::ranges::binary_search( keptForwards, refIndex );
+}
+
 // A Ruby call whose RECEIVER the code builds (parser version 132, test/rubytypedrecvcheck.sh): `c = Client.new` then `c.get`,
 // `let( :user ) { create( :user ) }` then `user.activate!`, `User.find_by( … ).activate!`. ingest_binds.h reads the shape
 // by Ruby's own local rule and writes the type into the reference's OWN fields (FE-B on #373: it used to ride recvVar as an

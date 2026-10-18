@@ -46,7 +46,13 @@
 #   (N9) a file-scope `var fv` rebinding a declared function: no call (pins the rebinding guard)
 #   (N10) a function declared only in a sibling scope (`nestedOnly`): no call                             RED on 52d773b3
 #   (U1) --uses lists no call site for a dropped forward; (U2) it lists a kept one (Graph::keptForwards)    U1 RED on 52d773b3
-#   (T7) TS `import { type typeOnlyFn }`: an inline type specifier binds no value — no call (pins the type guard)
+#   (T7) TS `import { type typeOnlyFn }`: an inline type specifier binds no value — no call
+#   (M4) the type guard itself (ingest_valuerefs.h: a type-only specifier is never forwarded): --safe-delete=lib.ts:typeOnlyFn
+#        has no callers_floor= and graph_unresolved="0" (train 30, nit N3: RED with the guard removed; T7 alone is not)
+#   (S1) a forward buildGraph DROPPED (`fwdNested.call` on a name only a sibling scope declares) is no call site: --callers and
+#        --safe-delete of nested.js:fwdNested say sites_at="caller.js:3" — the bare call's line, as --uses lists (nit N1)
+#   (S2) a dropped forward of an imported CLASS (`FwdK.call`) and (S3) of a name the module does not export (`notThere.call`)
+#        raise no callers_floor= on a same-named function elsewhere (countfloor.h reads model.h forwardCounts; nit N1)
 #   (K)  the member reference itself is unchanged: runPreParsing keeps its `call` row via="name" (the fixture's
 #        object-literal method named call), as on the pre-change binary
 #   (V1) `.bind` handed on as an argument is not a call site: handleRequest's caller sites are the `.call` line only
@@ -189,6 +195,26 @@ if [ "$R" = "user.ts:tsUser" ]; then ok "(T5) defaultFn.bind into a local is no 
 for nm in other.ts:handler other.ts:run other.ts:typeOnlyFn lib.ts:typeOnlyFn; do
     D="$( run ts --callers="$nm" )"; C="$( root_tag "$D" callers )"
     if [ -n "$C" ] && [ "$( attr "$C" count )" = 0 ]; then ok "(T4/T6/T7) $nm has no caller"; else no "(T4/T6/T7) $nm should have count=0: ${C:-$D}"; fi
+done
+
+# ── train 30: the fcall-forward train nits (N1 one shared kept-forward rule, N3 the type guard's own arm) ──────────────
+D="$( run ts --safe-delete=lib.ts:typeOnlyFn )"; C="$( root_tag "$D" safe-delete )"
+if [ -n "$C" ] && [ "$( attr "$C" graph_unresolved )" = 0 ] && [ -z "$( attr "$C" callers_floor )" ]; then ok "(M4) a type-only specifier is never forwarded: no callers_floor=, graph_unresolved=\"0\""
+else no "(M4) --safe-delete=lib.ts:typeOnlyFn should carry graph_unresolved=\"0\" and no callers_floor=: ${C:-$D}"; fi
+for v in callers safe-delete; do
+    D="$( run sites --$v=nested.js:fwdNested )"; C="$( root_tag "$D" "$v" )"
+    S="$( printf '%s' "$D" | grep -oE 'sites_at="[^"]*"' | head -1 )"
+    if [ -n "$C" ] && [ "$S" = 'sites_at="caller.js:3"' ]; then ok "(S1) --$v: the dropped fwdNested.call is no call site ($S)"
+    else no "(S1) --$v=nested.js:fwdNested should say sites_at=\"caller.js:3\" only: ${S:-no sites_at} ${C:-$D}"; fi
+done
+D="$( run sites --uses=fwdNested )"
+if has_root "$D" uses && [ "$( printf '%s' "$D" | grep -oE '<u role="call" p="[^"]*"' | tr '\n' ' ' )" = '<u role="call" p="caller.js:3" ' ]; then ok "(S1) --uses agrees: the one call site is caller.js:3"
+else no "(S1) --uses=fwdNested should list exactly the call site caller.js:3: ${D:0:300}"; fi
+for pair in S2:kfn.js:FwdK S3:gname.js:notThere; do
+    arm="${pair%%:*}"; sel="${pair#*:}"
+    D="$( run sites --safe-delete="$sel" )"; C="$( root_tag "$D" safe-delete )"
+    if [ -n "$C" ] && [ -z "$( attr "$C" callers_floor )" ]; then ok "($arm) $sel: the dropped forward raises no callers_floor="
+    else no "($arm) --safe-delete=$sel should carry no callers_floor=: ${C:-$D}"; fi
 done
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "SOME FAILED"

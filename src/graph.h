@@ -8908,7 +8908,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // for the bare `f( … )` the source never writes (model.h Reference::forwarded) — is kept only where the tiers above
         // PROVE a function or method. An import proves a binding, not a function: a by-name-only answer, or a proven class,
         // const or object target, adds nothing, and the site keeps only its own member reference, as before the forwarders.
-        // Undefined, not a gauge bucket: the forward is no call the code makes, so it may not move unresolved= or declined=.
+        // Undefined, not a gauge bucket, HERE: a forward this filter drops moves no gauge. A forward that leaves the loop
+        // EARLIER (an unresolved, declined or external exit above) is counted in that bucket as the bare call `f( … )`
+        // would be — a floor (train 30, fcall-forward nit N2): honest when f is a function, a phantom count when the
+        // receiver is an object, const or class. No call-site reader counts such a forward (model.h forwardCounts).
         if( r.forwarded )
         {
             if( nameOnly )

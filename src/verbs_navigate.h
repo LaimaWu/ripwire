@@ -218,7 +218,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // Callers only: a callee row's sites are the callee's own body, which is the expand next= already names.
         const std::span<const NodeId> chPage = std::span<const NodeId>( result ).subspan( pw.begin, pw.end - pw.begin );
         const rw::RowCallSites chSites = wantCallers
-            ? rw::rowCallSites( ing, matches, chPage, rw::VrRender{ chSingleRoot, chRootPrefix } )
+            ? rw::rowCallSites( ing, matches, chPage, rw::VrRender{ chSingleRoot, chRootPrefix }, g.keptForwards )
             : rw::RowCallSites{};
         // attrib-multidef (defattrib.h): the definition table this page lists (every group up to the cap, else the ones its rows
         // name) and whether a row on it is a split arm of a one-group answer (Q1) — computed once for every dialect below.
@@ -680,7 +680,7 @@ collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span
             continue;
         }
         // not a use-site: a type edge, a doc mention, a markdown [[wikilink]], or a forwarded call the resolver did not keep
-        if( r.isCompose || r.isDocLink || r.lang == Lang::Markdown || ( r.forwarded && !std::ranges::binary_search( keptForwards, refIndex ) ) )
+        if( r.isCompose || r.isDocLink || r.lang == Lang::Markdown || !forwardCounts( r, refIndex, keptForwards ) )
         {
             continue;
         }
@@ -1298,7 +1298,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     // file:line tokens (editcheck.h rowCallSites: the uses verb's call-role filters, one scan of the reference table, the
     // callers verb's own sites_at= pass) over every caller row this page prints.
     const rw::RowCallSites sdSites =
-        rw::rowCallSites( ing, defs, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ), sdVr );
+        rw::rowCallSites( ing, defs, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ), sdVr, g.keptForwards );
 
     // Designated (train 27): two lanes each inserted a bool here at a different position; named fields keep two adjacent
     // bools from trading places silently in a positional aggregate.

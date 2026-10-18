@@ -806,7 +806,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     // CALLSITE-AT: the calledBy window's rows with their call sites — editcheck.h rowCallSites, the CLI --callers pass and path spelling.
     const PageWindow& calledByWin = referencingOnly ? pwPrimary : pwSecond;
     calledBySites = rowCallSites( ing, chRows.matches, std::span<const NodeId>( calledBy ).subspan( calledByWin.begin, calledByWin.end - calledByWin.begin ),
-                                  VrRender{ sqSingleRoot, sqRootPrefix } );
+                                  VrRender{ sqSingleRoot, sqRootPrefix }, g.keptForwards );
     char        pab[ kPageDisclosureCap ];
     // lane declined-sites (declinedsites.h): the CLI root's <dc> rows for the direction count= describes (find_symbol: the
     // declines its definitions make; find_referencing_symbols: the declined calls that could have meant them), cut by the
