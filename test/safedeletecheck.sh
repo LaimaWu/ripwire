@@ -325,5 +325,40 @@ else
     no "(17) a too-wide site overrode real evidence: $PD17"
 fi
 
+# (18) N-A: a template with NO literal side (`codes[sc + '']`, f"{m}") carries no name information: it makes no
+#     Pattern ref at all (like bare obj[x] in (11)), so a method nothing calls stays none-found — no pattern_too_wide,
+#     no <pdw>. RED on c72f9c81 (the fastify statusCodes[statusCode + ''] shape read as pattern="*" and hedged every
+#     none-found method). A 1-2 char side (f"_{m}", (12)) is still a too-wide hedge.
+PE="$WORK/pe"; mkdir -p "$PE"
+cat > "$PE/codes.js" <<'PEEOF'
+const statusCodes = { 404: 'Not Found' };
+class Reply {
+  text(statusCode) {
+    return statusCodes[statusCode + ''];
+  }
+  orphan() {
+    return 0;
+  }
+}
+module.exports = { Reply };
+PEEOF
+cat > "$PE/codes.py" <<'PEEOF'
+def by_name(obj, m):
+    return getattr(obj, f"{m}")
+
+class Thing:
+    def lonely(self):
+        return 0
+PEEOF
+PD18a="$( "$BIN" "$PE" --no-cache --safe-delete=codes.js:orphan 2>/dev/null | sed 's/<!--.*-->//' )"
+PD18b="$( "$BIN" "$PE" --no-cache --safe-delete=Thing.lonely 2>/dev/null | sed 's/<!--.*-->//' )"
+PD18c="$( "$BIN" "$PE" --no-cache --callees=codes.js:text 2>/dev/null | sed 's/<!--.*-->//' )"
+if printf '%s' "$PD18a" | grep -q 'risk="none-found"' && printf '%s' "$PD18b" | grep -q 'risk="none-found"' \
+    && ! printf '%s' "$PD18a$PD18b$PD18c" | grep -q 'pattern_too_wide=\|pattern_dispatch=\|<pdw\|<pd \|pattern="\*"'; then
+    ok "(18) a zero-literal template (codes[sc + ''], f\"{m}\") makes no pattern ref: codes.js:orphan / Thing.lonely stay none-found"
+else
+    no "(18) a zero-literal template made a pattern ref: [$PD18a] [$PD18b] callees=[$PD18c]"
+fi
+
 [ "$fail" = 0 ] && printf 'ALL PASS\n' || printf 'FAILURES ABOVE\n'
 exit "$fail"

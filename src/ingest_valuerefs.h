@@ -1810,9 +1810,9 @@ private:
     }
     void emitPattern( TSNode site, TSNode recv, const VrTemplate& t )
     {
-        if( !t.isTemplate )
+        if( !t.isTemplate || ( t.prefix.empty() && t.suffix.empty() ) )
         {
-            return;
+            return;   // no literal side at all (`o[k + '']`, f"{m}"): no name information, like a bare `o[k]`
         }
         const bool pre = patternSideUsable( t.prefix );
         const bool suf = patternSideUsable( t.suffix );
