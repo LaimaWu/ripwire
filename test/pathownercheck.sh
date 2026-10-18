@@ -170,8 +170,11 @@ echo "(L) legend clause rides with an owner row; XML parses"
 # NAMES and this adds none), so compact owner answers and owner-free answers alike carry no extra legend bytes
 "$BIN" "$TMP/cpp" --no-cache --legend=full --path=topCpp,leaf > "$TMP/last.xml" 2> "$TMP/last.err"; prc=$?
 if [ "$prc" -eq 0 ] && grep -q 'n=Owner.name' "$TMP/last.xml"; then ok "(L) owner clause present on a --legend=full owner answer"; else no "(L) no 'n=Owner.name' clause on the --legend=full C++ owner answer (rc=$prc)"; fi
-"$BIN" "$TMP/c" --no-cache --legend=full --path=c_top,c_leaf > "$TMP/free.xml" 2>/dev/null
-if grep -q 'n=Owner.name' "$TMP/free.xml"; then no "(L) owner clause rides a --legend=full answer with no owner row"; else ok "(L) no owner clause on a --legend=full owner-free answer"; fi
+"$BIN" "$TMP/c" --no-cache --legend=full --path=c_top,c_leaf > "$TMP/free.xml" 2> "$TMP/free.err"; frc=$?
+# the absence is read only off a run that succeeded and printed its path rows (an empty or failed run has no clause either)
+if [ "$frc" -ne 0 ] || ! grep -q '<s ' "$TMP/free.xml"; then no "(L) premise: the --legend=full owner-free answer rc=$frc or no <s> rows ($( head -c 200 "$TMP/free.err" ))"
+elif grep -q 'n=Owner.name' "$TMP/free.xml"; then no "(L) owner clause rides a --legend=full answer with no owner row"
+else ok "(L) no owner clause on a --legend=full owner-free answer"; fi
 if command -v xmllint > /dev/null 2>&1; then
     if xmllint --noout "$TMP/last.xml" 2> "$TMP/xl.err"; then ok "(L) xmllint parses the owner answer"; else no "(L) xmllint: $( head -c 300 "$TMP/xl.err" )"; fi
 else
