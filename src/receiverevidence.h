@@ -25,6 +25,7 @@
 #include "smallvec.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -222,9 +223,10 @@ struct BareNameRules
 };
 // Rust: the symbols whose body is an item scope (a nested item, `use` or macro there is in force for what it holds) — a fn
 // body, a `mod` (Other), and (fix round 6) a `const` / `static` item's value block (`const _: () = { … impl … };`, Var)
+inline constexpr std::array kRustItemScopeKinds = { SymKind::Function, SymKind::Method, SymKind::Var, SymKind::Other };
 inline constexpr bool rustScopesItems( SymKind k ) noexcept
 {
-    return k == SymKind::Function || k == SymKind::Method || k == SymKind::Var || k == SymKind::Other;
+    return std::ranges::find( kRustItemScopeKinds, k ) != kRustItemScopeKinds.end();
 }
 inline constexpr BareNameRules kBareNameRules[] = {
     { CallResultFamily::Rust,       true,  true,  true,  true,  false, false, false },
