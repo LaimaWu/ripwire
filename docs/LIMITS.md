@@ -17,10 +17,10 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 261 | 103 | 153 | **108** |
+| 265 | 104 | 157 | **108** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 261 + 7 is the 268 constants this generator parses out of `src/`.
+are not counted as caps, and 265 + 7 is the 272 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -38,8 +38,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **140 of 261 caps are classified
-(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 121 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **140 of 265 caps are classified
+(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 125 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -89,7 +89,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 103 files that declare a cap — the 261 caps counted above, and no parameter.
+One table for each of the 104 files that declare a cap — the 265 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -131,6 +131,14 @@ Discloses: **none**
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kCacheQueryBudget` | `100000` | — | — |
+
+### `src/callhierarchy.h`
+
+Discloses: `capped`, `closures_capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kClosureRows` | `8` | — | rows per block; count= is the closure's distinct callees, capped="1" past it |
 
 ### `src/cli.h`
 
@@ -778,10 +786,13 @@ Discloses: **none**
 
 ### `src/pathgaps.h`
 
-Discloses: `gap_syms_capped`
+Discloses: `gap_syms_capped`, `rows_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
+| `kBridgeMaxHops` | `8` | — | a longer chain is no answer a reader would follow: none is printed |
+| `kNearSinkDepth` | `2` | — | proven caller hops back from to= (1 = a direct caller) |
+| `kNearSinkRows` | `4` | — | <ns> rows printed; rows= counts them all, rows_capped="1" says so |
 | `kPathGapRows` | `3` | — | <gap> rows printed; gap_syms= counts them all, gap_syms_capped="1" says so |
 
 ### `src/pattern.h`
