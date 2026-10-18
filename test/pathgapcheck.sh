@@ -56,6 +56,10 @@
 #        routes through a test/bench/demo/generated/minified symbol; H4 a chain past 8 hops is no bridge; H5 a declined member
 #        call spelled like a builtin type's method (`ids.join`) is not crossed, H6 its non-builtin twin is.
 #        H7/H8 (near_sink): a builtin-spelled declined call and a wrapper decorator (@property) are no way in either.
+#   (K1-K4) by-name hedge rules (card K5): near_sink why=name and a bridge's namesake crossing need (1) a call of the name not
+#        spelled like a builtin type's method and (2) the namesake's owner (its class in its file, else its file) owning
+#        something the forward search reached — K1 owner out of reach, K2 builtin-spelled (owner in reach), K3 both,
+#        K4 near miss (owner in reach, not builtin: both hedges stay; S4/B4 run on the same fixture).
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -415,6 +419,21 @@ int c5( void ) { return sink(); }
 int c6( void ) { return sink(); }
 int lone( void ) { return 0; }
 EOF
+# K5 fixtures (by-name hedge rules): run(obj) calls obj.NAME(), bound by name alone to the imported A.NAME; the namesake
+# other/b.py B.NAME calls target. *_in: run also reaches B.make through helper (other/h.py imports B; c.py never names B),
+# so B — the namesake's owner — is in the forward reach; *_out: nothing run reaches is owned by B. NAME = process
+# (no builtin type has it) or update (a dict/set method: builtinSpelledCall).
+for nm in process update; do for own in in out; do
+    d="$TMP/k_${nm}_$own"; mkdir -p "$d/pkg/x" "$d/other"
+    printf 'class A:\n    def %s(self):\n        return 1\n' "$nm" > "$d/pkg/x/a.py"
+    if [ "$own" = in ]; then
+        printf 'from pkg.x.a import A\nfrom other.h import helper\ndef run(obj):\n    helper()\n    return obj.%s()\n' "$nm" > "$d/pkg/x/c.py"
+        printf 'from other.b import B\ndef helper():\n    return B.make()\n' > "$d/other/h.py"
+    else
+        printf 'from pkg.x.a import A\ndef run(obj):\n    return obj.%s()\n' "$nm" > "$d/pkg/x/c.py"
+    fi
+    printf 'def target():\n    return 2\n\nclass B:\n    @staticmethod\n    def make():\n        return 0\n\n    def %s(self):\n        return target()\n' "$nm" > "$d/other/b.py"
+done; done
 nsblock(){ grep -o '<near_sink [^>]*>.*</near_sink>' "$1"; }
 nshead(){ grep -o '<near_sink [^>]*>' "$1"; }
 nsrows(){ grep -o '<ns [^>]*/>' "$1"; }
@@ -438,9 +457,9 @@ nsArm "(S2) value: the sink's caller is handed to .then() where the search went 
 nsArm "(S3) through: to= itself, invoked through apply's parameter" "$TMP/thr" "start,target" \
     '<near_sink depth="2" callers="0" rows="1" next="--callers=t.py:target">' \
     '<ns d="0" t="fn" n="target" p="t.py:1" why="through:1" in="apply" site="t.py:5" met="1"/>'
-nsArm "(S4) name: a by-name call went to the namesake A.process, not to the sink's caller B.process" "$TMP/lpy" "run,target" \
+nsArm "(S4) name: a by-name call went to the namesake A.process, not to the sink's caller B.process (B is in reach: K5)" "$TMP/k_process_in" "run,target" \
     '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:process">' \
-    '<ns d="1" t="fn" n="process" p="other/b.py:5" why="name:1" in="run" site="pkg/x/c.py:2" met="1"/>'
+    '<ns d="1" t="fn" n="process" p="other/b.py:9" why="name:1" in="run" site="pkg/x/c.py:5" met="1"/>'
 nsArm "(S5) external: the frontier row first, then the proven caller it reaches to= through" "$TMP/clean" "a,d" \
     '<near_sink depth="2" callers="2" rows="2" next="--callers=c.c:z">' \
     '<ns d="2" t="fn" n="z" p="c.c:5" why="external"/><ns d="1" t="fn" n="c" p="c.c:2" callers="1"/>'
@@ -661,8 +680,8 @@ brArm "(B2) two closure crossings: listen → callback ⊃ handler → handleReq
     '<bridge proven="0" crossings="2" hops="5"><s t="method" n="listen" p="app.js:3"/><s t="method" n="callback" p="app.js:4"/><s t="fn" n="handler" p="app.js:5" via="closure" cands="1"/><s t="method" n="handleRequest" p="app.js:8"/><s t="fn" n="handleResponse" p="app.js:9" via="closure" cands="1"/><s t="fn" n="respond" p="app.js:1"/></bridge>'
 brArm "(B3) value crossing: the callback handed to .then()" "$TMP/val" "listen,respond" \
     '<bridge proven="0" crossings="1" hops="3"><s t="fn" n="listen" p="app.js:5"/><s t="fn" n="handleRequest" p="app.js:4"/><s t="fn" n="handleResponse" p="app.js:2" via="value" cands="1"/><s t="fn" n="respond" p="app.js:1"/></bridge>'
-brArm "(B4) namesake crossing: run's by-name obj.process() to the unsearched B.process" "$TMP/lpy" "run,target" \
-    '<bridge proven="0" crossings="1" hops="2"><s t="fn" n="run" p="pkg/x/c.py:1"/><s t="fn" n="process" p="other/b.py:5" via="namesake" cands="1"/><s t="fn" n="target" p="other/b.py:1"/></bridge>'
+brArm "(B4) namesake crossing: run's by-name obj.process() to the unsearched B.process (B is in reach: K5)" "$TMP/k_process_in" "run,target" \
+    '<bridge proven="0" crossings="1" hops="2"><s t="fn" n="run" p="pkg/x/c.py:3"/><s t="fn" n="process" p="other/b.py:9" via="namesake" cands="1"/><s t="fn" n="target" p="other/b.py:1"/></bridge>'
 brArm "(B5) three crossings needed: past the bound, no bridge" "$TMP/brdeep" "outer,target" ""
 brArm "(B6) a declined call with 17 candidates is not crossed (fan-out bound 16)" "$TMP/fan17" "start,sink" ""
 brArm "(B7) the same shape with 16 candidates is crossed" "$TMP/fan16" "start,sink" \
@@ -778,6 +797,34 @@ if premise "(H8)" "$rc" "$f"; then
         ok "(H8) near_sink: @property is a wrapper decorator, not a value hand-off ($r)"
     else
         no "(H8) a wrapper decorator read as a value way in: $r"
+    fi
+fi
+
+# K5 (card K5): the by-name hedges' two rules. Each arm first proves its premise — the call really is bound by name alone
+# (gaps="name:1" on the root) — so an arm cannot pass because the resolver stopped making the hedged edge.
+k5premise(){   # $1 label, $2 answer file
+    if [ "$( attr "$2" gaps )" != "name:1" ]; then
+        no "$1 premise: the by-name edge is gone (gaps=$( attr "$2" gaps )), the arm would assert nothing"; return 1
+    fi
+}
+for arm in "K1|process_out|owner" "K2|update_in|builtin" "K3|update_out|both"; do
+    IFS='|' read -r id fx why <<< "$arm"
+    f="$TMP/$id.xml"; path "$TMP/k_$fx" "run,target" "$f"; rc=$?
+    premise "($id)" "$rc" "$f" || continue
+    k5premise "($id)" "$f" || continue
+    r="$( nsrows "$f" | tr -d '\n' )"; b="$( brblock "$f" )"
+    if echo "$r" | grep -q 'n="update"\|n="process"' && ! echo "$r" | grep -q 'why="[^"]*name' && [ -z "$b" ]; then
+        ok "($id) k_$fx ($why): no near_sink why=name and no namesake bridge — $r"
+    else
+        no "($id) k_$fx ($why): a by-name hedge survived: rows [$r] bridge [$b]"
+    fi
+done
+f="$TMP/K4.xml"; path "$TMP/k_process_in" "run,target" "$f"; rc=$?
+if premise "(K4)" "$rc" "$f" && k5premise "(K4)" "$f"; then
+    if nsrows "$f" | grep -q 'n="process"[^>]*why="name:1"' && brblock "$f" | grep -q 'via="namesake"'; then
+        ok "(K4) near miss: the namesake's owner B is in reach (run → helper → B.make) and process is not builtin-spelled: both hedges stay"
+    else
+        no "(K4) the in-reach, non-builtin by-name hedge was dropped: $( nsrows "$f" | tr -d '\n' ) $( brblock "$f" )"
     fi
 fi
 

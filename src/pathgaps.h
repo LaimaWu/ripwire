@@ -429,6 +429,86 @@ inline bool builtinSpelledCall( const Reference& call ) noexcept
     return call.qualifier.empty() && std::binary_search( table.begin(), table.end(), std::string_view( call.calleeName ), sortutil::svLess );
 }
 
+// ── BY-NAME HEDGE RULES (lane ix2-slice, card K5) ────────────────────────────────────────────────────────────────────
+// A by-name hedge — near_sink why=name, a bridge's namesake crossing — reads: caller C's call of NAME was bound by name alone
+// to one definition, so another same-language, same-kind definition of NAME (the NAMESAKE) may be the one it runs. The
+// acceptance hand-check rejected this class most: a call spelled like a builtin type's method (`prerequisites.clear`,
+// `self._invalid_css.update( … )`) and a namesake the search never comes near (a docs example's `compose`, a test file's
+// `handler`). Both rules below hold for both hedges:
+//   (1) SITE: the hedge's site is C's first call of NAME that is not builtinSpelledCall (the declined pass's own filter);
+//       a caller whose every call of NAME is builtin-spelled offers no by-name hedge.
+//   (2) OWNER IN REACH: the namesake's OWNER — the class that owns it in its own file (Symbol::scope, the extractor's), or
+//       its file for a free definition — owns some definition in the forward reach set: near_sink takes
+//       PathSearchGaps::cone (every symbol the forward search reached), the bridge every symbol its layered search has
+//       reached so far (layers 0..k before crossing k+1). A namesake nothing reached shares an owner with is no way in.
+
+// Each caller's call references in reference order, for the by-name site (rule 1).
+class ByNameCallSites
+{
+public:
+    // `callerMask` empty ⇒ every caller; else only the symbols whose mask byte is set
+    ByNameCallSites( const IngestResult& ing, std::span<const char> callerMask )
+        : ing_( ing )
+    {
+        const std::ptrdiff_t S = std::ssize( ing.symbols );
+        EXPECTS( callerMask.empty() || std::ssize( callerMask ) == S, "a caller mask has one byte per symbol" );
+        for( std::ptrdiff_t i = 0; i < std::ssize( ing.references ); ++i )
+        {
+            const Reference& r = ing.references[ std::size_t( i ) ];
+            if( r.role == RefRole::Call && std::ptrdiff_t( r.fromSymbol ) < S && ( callerMask.empty() || callerMask[ r.fromSymbol ] != 0 ) )
+            {
+                calls_.emplace_back( r.fromSymbol, std::uint32_t( i ) );
+            }
+        }
+        std::ranges::sort( calls_ );
+    }
+
+    // The first call reference `caller` makes of `name` that is not spelled like a builtin type's method; kNoSite if none.
+    static constexpr std::uint32_t kNoSite = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t siteOf( NodeId caller, std::string_view name ) const
+    {
+        for( auto it = std::ranges::lower_bound( calls_, std::pair<NodeId, std::uint32_t>( caller, 0u ) ); it != calls_.end() && it->first == caller; ++it )
+        {
+            const Reference& r = ing_.references[ it->second ];
+            if( r.calleeName == name && !builtinSpelledCall( r ) )
+            {
+                return it->second;
+            }
+        }
+        return kNoSite;
+    }
+
+private:
+    const IngestResult&                           ing_;
+    std::vector<std::pair<NodeId, std::uint32_t>> calls_;   // (caller, reference index), sorted
+};
+
+// The owners (rule 2) of a reach set: add() each reached symbol, seal(), then ask reaches() of a namesake.
+class NamesakeOwnerReach
+{
+public:
+    void add( const Symbol& s )
+    {
+        owners_.emplace_back( s.fileId, std::string_view( s.scope ) );
+        sealed_ = false;
+    }
+    void seal()
+    {
+        std::ranges::sort( owners_ );
+        owners_.erase( std::ranges::unique( owners_ ).begin(), owners_.end() );
+        sealed_ = true;
+    }
+    bool reaches( const Symbol& namesake ) const
+    {
+        DASSERT( sealed_, "reaches() reads a sorted owner list: seal() after the last add()" );
+        return std::ranges::binary_search( owners_, std::pair<std::uint32_t, std::string_view>( namesake.fileId, namesake.scope ) );
+    }
+
+private:
+    std::vector<std::pair<std::uint32_t, std::string_view>> owners_;   // (file, owning class or "" for the file itself)
+    bool                                                    sealed_ = true;
+};
+
 // Is site a preferred over site b for one row? met first, then kind (table order), then path, line, order.
 inline bool nearSinkSiteBetter( const IngestResult& ing, const NearSinkSite& a, const NearSinkSite& b )
 {
@@ -589,6 +669,15 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
     if( !g.outNameOnly.empty() )
     {
         EXPECTS( g.outNameOnly.size() == g.outTargets.size(), "buildGraph allocates the hedge bits one per flattened edge" );
+        NamesakeOwnerReach ownerReach;   // K5 rule 2: the owners the forward search reached
+        for( const NodeId v : forwardCone )
+        {
+            if( v < S )
+            {
+                ownerReach.add( ing.symbols[v] );
+            }
+        }
+        ownerReach.seal();
         struct Key
         {
             Lang             lang;
@@ -634,7 +723,8 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
                     const NodeId u = out.rows[ it->row ].id;
                     const auto   from = g.outTargets.begin() + g.outOff[c];
                     const auto   to   = g.outTargets.begin() + g.outOff[c + 1];
-                    if( u != w && u != c && !std::binary_search( from, to, u ) )   // outTargets ascend within a source
+                    // outTargets ascend within a source; the row's owner must be in the forward reach (K5 rule 2)
+                    if( u != w && u != c && !std::binary_search( from, to, u ) && ownerReach.reaches( ing.symbols[u] ) )
                     {
                         nameHits.emplace_back( c, it->row );
                     }
@@ -645,35 +735,18 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
         nameHits.erase( std::ranges::unique( nameHits ).begin(), nameHits.end() );
         if( !nameHits.empty() )
         {
-            // the call site: the caller's first call reference of the row's name (reference order)
-            std::vector<std::pair<NodeId, std::uint32_t>> firstCall;   // (caller, ref), sorted by caller then ref
+            // the call site: the caller's first call reference of the row's name that is not builtin-spelled (K5 rule 1)
             std::vector<char> isCaller( S, 0 );
             for( const auto& [ c, row ] : nameHits )
             {
                 isCaller[c] = 1;
             }
-            for( std::uint32_t i = 0; i < ing.references.size(); ++i )
-            {
-                const Reference& r = ing.references[i];
-                if( r.role == RefRole::Call && r.fromSymbol < S && isCaller[ r.fromSymbol ] != 0 )
-                {
-                    firstCall.emplace_back( r.fromSymbol, i );
-                }
-            }
-            std::ranges::sort( firstCall );
+            const ByNameCallSites sites( ing, isCaller );
             for( const auto& [ c, row ] : nameHits )
             {
-                const std::string_view name = ing.symbols[ out.rows[row].id ].name;
-                std::uint32_t          ref  = UINT32_MAX;
-                for( auto it = std::ranges::lower_bound( firstCall, std::pair<NodeId, std::uint32_t>( c, 0u ) ); it != firstCall.end() && it->first == c; ++it )
-                {
-                    if( ing.references[ it->second ].calleeName == name )
-                    {
-                        ref = it->second;
-                        break;
-                    }
-                }
-                if( ref != UINT32_MAX )   // a hedged edge is always some call reference's; none found ⇒ no row claim
+                const std::uint32_t ref = sites.siteOf( c, ing.symbols[ out.rows[row].id ].name );
+                // a hedged edge is always some call reference's; none (or only builtin-spelled ones) ⇒ no row claim
+                if( ref != ByNameCallSites::kNoSite )
                 {
                     offer( row, NearSinkKind::Name, ref, c );
                 }
@@ -714,7 +787,8 @@ inline constexpr std::string_view kNearSinkLegend =
     "(callers= counts them), each <ns d= t= n= p=> row with callers= its own proven callers (absent at 0) and why= how it may ALSO be "
     "entered with no edge: declined = a declined call lists it as a candidate (not one spelled like a builtin type's method), value = "
     "it is stored or passed as a value (not by a wrapper decorator such as @property), through = a "
-    "call through a parameter or slot is matched to that value, name = a by-name call went to a namesake and has no edge to it, "
+    "call through a parameter or slot is matched to that value, name = a by-name call went to a namesake and has no edge to it (a call "
+    "not spelled like a builtin type's method, and the row's class, or its file for a free function, owns something the forward search reached), "
     "closure = it is a named function written inside in='s body (site= its own definition: in= runs it or hands it on), "
     "external = none of those and no proven caller: no indexed way in was found (an entry point, an out-of-tree or framework caller, "
     "a hand-off the index does not record, or dead); in= site= name one such site (its enclosing definition, file:line), met=1 when the forward search reached in= (it met that "
@@ -914,6 +988,8 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
             isDst[t] = 1;
         }
     }
+    const ByNameCallSites byNameSites( ing, {} );   // K5 rule 1: a namesake crossing needs a call of the name not builtin-spelled
+    NamesakeOwnerReach    ownerReach;               // K5 rule 2: the owners of every symbol layers 0..k reached
     std::vector<NodeId> frontier;
     for( const NodeId s : srcDefs )
     {
@@ -951,6 +1027,11 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
         {
             break;
         }
+        for( const NodeId u : queue )   // this layer is complete: its owners join the reach (cumulative over layers)
+        {
+            ownerReach.add( ing.symbols[u] );
+        }
+        ownerReach.seal();
         // one crossing out of this layer seeds the next
         const auto cross = [ & ]( NodeId from, NodeId to, BridgeVia via, std::size_t fan )
         {
@@ -1002,9 +1083,9 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
             for( std::uint32_t e = g.outOff[u]; e < g.outOff[u + 1] && e < g.outNameOnly.size(); ++e )
             {
                 const NodeId w = g.outTargets[e];
-                if( g.outNameOnly[e] == 0 || w >= S )
+                if( g.outNameOnly[e] == 0 || w >= S || byNameSites.siteOf( u, ing.symbols[w].name ) == ByNameCallSites::kNoSite )
                 {
-                    continue;
+                    continue;   // not a by-name edge, or every call of the name is builtin-spelled (K5 rule 1)
                 }
                 auto first = std::ranges::lower_bound( defsByKey, w, [ & ]( NodeId a, NodeId b ) { return sameKey( a, b ) ? false : keyLess( a, b ); } );
                 auto last  = first;
@@ -1015,7 +1096,7 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
                 const std::size_t fan = std::size_t( last - first ) - ( std::find( first, last, w ) != last ? 1u : 0u );
                 for( auto it = first; fan <= kBridgeFanOut && it != last; ++it )
                 {
-                    if( *it != w )
+                    if( *it != w && ownerReach.reaches( ing.symbols[*it] ) )   // K5 rule 2: its owner is in reach
                     {
                         cross( u, *it, BridgeVia::Namesake, fan );
                     }
@@ -1052,7 +1133,8 @@ inline constexpr std::string_view kPathBridgeLegend =
     "runs through no test, bench, demo, generated or minified symbol; its <s> rows read like a path's, and via= on a row names the crossing INTO it: declined = "
     "one of cands= candidates of a declined call in the previous row, value = a function the previous row stores or passes as a value, "
     "closure = a function written in the previous row's body, namesake = another same-language definition of a name the previous row "
-    "calls by name alone (via=name rows are proven edges bound by name). Fewest crossings first. It is NOT a path: reachable= and "
+    "calls by name alone, not spelled like a builtin type's method, whose class (or file, for a free function) owns something the "
+    "chain's earlier layers reached (via=name rows are proven edges bound by name). Fewest crossings first. It is NOT a path: reachable= and "
     "hops= on the root stay 0, no count includes it, and every crossing is a hedge. ";
 inline std::string_view pathBridgeLegend( bool on ) noexcept
 {
