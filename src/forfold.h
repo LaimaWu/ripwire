@@ -217,9 +217,17 @@ inline bool spanInside( const IngestResult& ing, NodeId a, NodeId b ) noexcept
     return a != b && x.fileId == y.fileId && y.sigStartByte <= x.sigStartByte && x.endByte <= y.endByte
         && ( y.sigStartByte < x.sigStartByte || x.endByte < y.endByte || b < a );
 }
-inline bool insideAny( const IngestResult& ing, NodeId a, const std::vector<NodeId>& ids ) noexcept
+// does a's text overlap a body in `ids` the answer already serves: a is one of them or lies inside one, or (orHolds) holds one
+inline bool overlapsServed( const IngestResult& ing, NodeId a, const std::vector<NodeId>& ids, bool orHolds ) noexcept
 {
-    return std::ranges::any_of( ids, [ & ]( NodeId b ) { return a == b || spanInside( ing, a, b ); } );
+    for( const NodeId b : ids )
+    {
+        if( a == b || spanInside( ing, a, b ) || ( orHolds && spanInside( ing, b, a ) ) )
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 // a class's direct members by the parser (isParsedMemberOf), in source order; one nested in another member is inside that
@@ -303,7 +311,7 @@ inline SliceRender renderSlice( const BodyFoldInputs& in, NodeId clsId, const st
     for( const NodeId m : slicePicks( in.ing, members, c.name, words ) )
     {
         const Symbol& ms = in.ing.symbols[m];
-        if( insideAny( in.ing, m, served ) || std::ranges::any_of( served, [ & ]( NodeId b ) { return spanInside( in.ing, b, m ); } ) )
+        if( overlapsServed( in.ing, m, served, /*orHolds=*/true ) )
         {
             continue;   // its text, or a body inside it, is already in this answer (a ranked row, the slot's owner): never twice
         }
@@ -398,7 +406,7 @@ inline BodyFoldRender renderForBodyFold( const BodyFoldInputs& in, const std::ve
     for( const NodeId id : candidates )
     {
         EXPECTS( id < in.ing.symbols.size(), "a fold candidate is an indexed symbol (forBodyFoldCandidates)" );
-        if( fold_detail::insideAny( in.ing, id, served ) )
+        if( fold_detail::overlapsServed( in.ing, id, served, /*orHolds=*/false ) )
         {
             ++out.served;   // a ranked row whose text an earlier body or slice already serves whole: counted, never repeated
             continue;
