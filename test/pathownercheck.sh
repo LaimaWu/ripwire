@@ -23,8 +23,8 @@
 #   (L) the --legend=full clause rides exactly when a row carries an owner; the answer parses as XML (xmllint when present).
 #   (X) clickable: every printed Owner.name, pasted into --callers, resolves (rc=0, defs>=1).
 #   (M) MCP path_between serves the same <s> rows as the CLI on A-E.
-#   (H) [post-train] Go: Matcher.Loop -> Matcher.scan -> goLeaf — needs Go receiver scopes (lane go-scope); SKIPs by name while
-#       Go methods carry no sc= on this binary.
+#   (H) Go: Matcher.Loop -> Matcher.scan -> goLeaf — Go receiver scopes (go-scope, #403) are on main since train 29, so the
+#       arm no longer SKIPs: a Go method with no sc= is a FAIL (train 30 re-check).
 #
 # Usage: test/pathownercheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -226,11 +226,11 @@ PY
 mrc=$?
 if [ "$mrc" -eq 0 ]; then ok "(M) path_between rows + owner clause equal the CLI's on A-E"; else no "(M) MCP path_between disagrees with the CLI (rc=$mrc, details above)"; fi
 
-echo "(H) [post-train] Go receiver owners"
+echo "(H) Go receiver owners"
 if "$BIN" "$TMP/go" --no-cache --for="scan Loop" --signatures-only 2>/dev/null | grep -q 'n="scan" sc="Matcher"'; then
     expect "(H) Go methods by receiver" "$TMP/go" "Loop,goLeaf" "Matcher.Loop Matcher.scan goLeaf"
 else
-    echo "  SKIP  (H) [post-train] Go methods carry no sc= on this binary (receiver scopes land with lane go-scope); the train re-checks this arm"
+    no "(H) Go methods carry no sc= on this binary (go-scope #403 is on main): the receiver owners cannot print"
 fi
 
 if [ "$fail" -eq 0 ]; then echo "ALL PASS"; else echo "FAIL"; fi
