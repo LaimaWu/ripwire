@@ -693,6 +693,15 @@ inline std::vector<ClassNewSite> classNewSites( const ClassNewScan& s, const Gra
     return sites;
 }
 
+// Does the call reference `r` (from a caller that constructs) name this construction? A constructorMethod call is named by its
+// LAST segment only (`new`), so `Other::new()` would pass the name test for `Eng`: the call's written qualifier must also be the
+// class (exact, or no row — a Rust alias import is a floor).
+inline bool classNewCallNames( const IngestResult& ing, const Reference& r, const ClassNewSite& site )
+{
+    return r.calleeName == ing.symbols[ site.target ].name
+           && ( site.target == site.cls || scopeLastSegment( r.qualifier ) == ing.symbols[ site.cls ].name );
+}
+
 // Step 5: per test file, the nearest class, then its earliest construction line (a call reference from that caller naming the target).
 inline std::vector<ClassNewRow> classNewBestRows( const ClassNewScan& s, std::span<const ClassNewSite> sites )
 {
@@ -719,11 +728,7 @@ inline std::vector<ClassNewRow> classNewBestRows( const ClassNewScan& s, std::sp
             ClassNewRow&      cur = best[ r.fileId ];
             const ClassNewRow cand{ r.fileId, r.line, it->cls, s.classRank[ it->cls ], it->target };
             const bool        nearer = std::tie( cand.rank, cand.line ) < std::tie( cur.rank, cur.line );
-            // A constructorMethod call is named by its LAST segment only (`new`), so `Other::new()` would pass the name test for
-            // `Eng`: the call's written qualifier must also be the class (exact, or no row — a Rust alias import is a floor).
-            const bool        named  = r.calleeName == ing.symbols[ it->target ].name
-                                       && ( it->target == it->cls || scopeLastSegment( r.qualifier ) == ing.symbols[ it->cls ].name );
-            if( named && cand.rank <= cur.rank && ( cur.line == 0 || nearer ) )
+            if( classNewCallNames( ing, r, *it ) && cand.rank <= cur.rank && ( cur.line == 0 || nearer ) )
             {
                 cur = cand;
             }
