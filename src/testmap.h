@@ -708,10 +708,10 @@ inline std::vector<ClassNewRow> classNewTestRows( const IngestResult& ing, const
                    if( a.rank != b.rank ) { return a.rank < b.rank; }
                    return ing.files[ a.testFile ] < ing.files[ b.testFile ];
                } );
-    ENSURES( std::ranges::all_of( rows, [ & ]( const ClassNewRow& r )
+    DASSERT( std::ranges::all_of( rows, [ & ]( const ClassNewRow& r )
                                   { return isTestFile[ r.testFile ] && !proven[ r.testFile ] && isConstructibleClassKind( ing.symbols[ r.cls ].kind )
                                            && r.target < N && r.rank != kUnreached; } ),
-             "classNewTestRows: every row is an unproven TEST file that constructs a class owning a reached symbol — never a proven row" );
+             "classNewTestRows: every row is an unproven TEST file that constructs a class owning a reached symbol — never a proven row (a scan: debug only)" );
     return rows;
 }
 
