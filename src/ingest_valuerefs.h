@@ -318,6 +318,17 @@ struct VrScalarTypedefs
     }
 };
 
+// IX-1: how a field's declared type takes a non-braced initializer value (`field_identifier` declarators only — a pointer or
+// array declarator decides itself): { a struct type this file holds a body for (`known`), a NAMED type this file holds neither
+// a body nor a scalar typedef for (VrSlotField::unseen) }.
+inline std::pair<bool, bool> vrFieldTypeClass( TSNode ftNode, bool known, const VrScalarTypedefs& scalars, std::string_view src )
+{
+    const char* t       = ts_node_is_null( ftNode ) ? "" : ts_node_type( ftNode );
+    const bool  structT = kindIs( t, "struct_specifier" ) || kindIs( t, "union_specifier" ) || ( kindIs( t, "type_identifier" ) && known );
+    const bool  named   = kindIs( t, "type_identifier" ) || kindIs( t, "qualified_identifier" ) || kindIs( t, "template_type" );
+    return { structT, !structT && named && !scalars.scalar( ftNode, src ) };
+}
+
 // IX-1: an anonymous struct / union MEMBER (`union { … };` in a body: no declarator, an untagged specifier) — one position.
 inline bool vrAnonymousMember( TSNode k, TSNode ftNode, TSFieldId fDeclarator, TSFieldId fName ) noexcept
 {
@@ -2222,10 +2233,9 @@ private:
             // `typedef struct T NAME;` and the pointer form `typedef struct T *NAME_p;` (a receiver `p->f` derefs it, and no
             // struct literal has a pointer type, so NAME_p → T is exact for the join), each declarator its own alias.
             const auto [ key, kw ] = slotTypeKey( child( n, m_fType ), n, t );
-            const bool scalarBase  = m_scalarTypedefs.scalar( child( n, m_fType ), m_src );
             forEachDeclarator( n, [ & ]( TSNode d )
             {
-                m_scalarTypedefs.note( d, scalarBase, m_fDeclarator, m_src );
+                m_scalarTypedefs.note( d, m_scalarTypedefs.scalar( child( n, m_fType ), m_src ), m_fDeclarator, m_src );
                 if( kindIs( ts_node_type( d ), "pointer_declarator" ) )
                 {
                     d = child( d, m_fDeclarator );
@@ -2314,10 +2324,7 @@ private:
             const TSNode ftNode = child( k, m_fType );
             const auto [ ftype, fkw ] = slotTypeKey( ftNode, k, "field_declaration" );
             const bool   isStatic = vrStaticMember( k, m_src );   // C++: a static data member is no part of the aggregate
-            const char*  ftk      = ts_node_is_null( ftNode ) ? "" : ts_node_type( ftNode );
-            const bool   structTyped = kindIs( ftk, "struct_specifier" ) || kindIs( ftk, "union_specifier" ) || ( kindIs( ftk, "type_identifier" ) && knownStruct( ftype ) );
-            const bool   unseen = !structTyped && !m_scalarTypedefs.scalar( ftNode, m_src )
-                               && ( kindIs( ftk, "type_identifier" ) || kindIs( ftk, "qualified_identifier" ) || kindIs( ftk, "template_type" ) );
+            const auto [ structTyped, unseen ] = vrFieldTypeClass( ftNode, knownStruct( ftype ), m_scalarTypedefs, m_src );
             if( !isStatic && vrAnonymousMember( k, ftNode, m_fDeclarator, m_fName ) )
             {
                 sf.fields.push_back( { {}, true, false } );   // an anonymous struct / union MEMBER: one position, no name a call writes
@@ -2334,8 +2341,7 @@ private:
                 {
                     const char* dt      = ts_node_type( d );
                     const bool  isArray = kindIs( dt, "array_declarator" );
-                    const bool  bare    = kindIs( dt, "field_identifier" );   // no pointer / array / function declarator around the name
-                    sf.fields.push_back( { nm, isArray || ( structTyped && bare ), isArray, unseen && bare } );
+                    sf.fields.push_back( { nm, isArray || ( structTyped && kindIs( dt, "field_identifier" ) ), isArray, unseen && kindIs( dt, "field_identifier" ) } );
                 }
                 if( nm.empty() )
                 {
