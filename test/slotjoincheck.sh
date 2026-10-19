@@ -27,7 +27,7 @@ echo "slotjoincheck: BIN=$BIN"
 FIX="$ROOT/test/slotjoinfix"
 [ -d "$FIX" ] || { echo "  FAIL  fixture dir missing: $FIX"; exit 2; }
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 # One run per query; an answer is read only off a command that succeeded and printed its root element.
