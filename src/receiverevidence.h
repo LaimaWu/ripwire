@@ -1244,34 +1244,41 @@ struct CallResultTypes
         const std::vector<std::uint32_t>& of = inlineMod != kNoNode ? none : files == rust.filesOf.end() ? none : files->second;
         NodeId hit     = kNoNode;
         bool   globbed = false;   // rust-receivers: a glob at the module's level may bring the name in unseen (not followed)
-        const auto follow = [ & ]( std::uint32_t mf )
-        {
-            for( const Binding* b : mf < importsByFile.size() ? std::span<const Binding* const>( importsByFile[ mf ] ) : std::span<const Binding* const>{} )
-            {
-                if( b->kind != LocalBindKind::TypeImport || ( b->var != cls && b->var != "*" ) || !atLevel( mf, b->startByte ) )
-                {
-                    continue;
-                }
-                globbed = globbed || b->var == "*";
-                if( b->var == cls )
-                {
-                    const auto [ modPath, item ] = splitLast( b->importedName, "::" );
-                    const NodeId c = modPath.empty() ? kNoNode : rustClassAt( mf, b->startByte, modPath, item, depth + 1 );
-                    hit   = found ? kNoNode : c;
-                    found = true;
-                }
-            }
-        };
         for( std::uint32_t mf : of )   // by reference: the layout's own list, never a copy
         {
-            follow( mf );
+            rustFollowReexports( mf, atLevel, cls, depth, hit, found, globbed );
         }
         if( inlineMod != kNoNode )
         {
-            follow( ing.symbols[ inlineMod ].fileId );
+            rustFollowReexports( ing.symbols[ inlineMod ].fileId, atLevel, cls, depth, hit, found, globbed );
         }
         found = found || globbed;
         return hit;
+    }
+    // rustItemAt's re-export step for one file `mf` of the module: each `use … cls` at the module's own level (`atLevel`) names
+    // the class its path reaches (two: none; `found` set by any), and a glob there sets `globbed`
+    template <class AtLevel>
+    void rustFollowReexports( std::uint32_t mf, const AtLevel& atLevel, std::string_view cls, int depth, NodeId& hit, bool& found, bool& globbed ) const
+    {
+        if( mf >= importsByFile.size() )
+        {
+            return;
+        }
+        for( const Binding* b : importsByFile[ mf ] )
+        {
+            if( b->kind != LocalBindKind::TypeImport || ( b->var != cls && b->var != "*" ) || !atLevel( mf, b->startByte ) )
+            {
+                continue;
+            }
+            globbed = globbed || b->var == "*";
+            if( b->var == cls )
+            {
+                const auto [ modPath, item ] = splitLast( b->importedName, "::" );
+                const NodeId c = modPath.empty() ? kNoNode : rustClassAt( mf, b->startByte, modPath, item, depth + 1 );
+                hit   = found ? kNoNode : c;
+                found = true;
+            }
+        }
     }
     // (L) a qualified Rust call whose qualifier is a module path reaching `target`'s own module (`model::load()`,
     // `crate::nest::holder()`, a `use`d `nest::holder()`): the evidence the canonical tier, keyed by type scopes, lacks
