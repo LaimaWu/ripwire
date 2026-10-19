@@ -450,6 +450,18 @@ if mkup_row PlainLink | grep -q 'n="Plain Head"[^>]*via="link"' && ! mkup_row Pl
 if mkup_row SnakeLink | grep -q 'n="snake_case"[^>]*via="link"' && ! mkup_row SnakeLink | grep -q 'anchor="missing"'; then ok "#snake_case binds the snake_case heading exactly"; else no "#snake_case did not bind its heading"; fi
 if mkup_row SnakeMiss | grep -q 'n="s"[^>]*via="link"[^>]*anchor="missing"'; then ok "a missing slug beside a snake_case heading (no emphasis) is still anchor=missing"; else no "snake_case wrongly counted as inline markup: the plain miss lost its mark"; fi
 
+# --json map rows read the same edge-kind byte as the XML twin: a markdown link is "via":"link" (never "name"), and a missing
+# anchor is "anchor":"missing".
+if $BIN "$TMP/amiss" --no-cache --json 2>/dev/null | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+rows = {s["n"]: s for f in d["r"] for s in f.get("s", [])}
+c = {x["n"]: x for x in rows["MissLink"]["c"]}
+u = {x["n"]: x for x in rows["UberLink"]["c"]}
+assert c["t"].get("via") == "link" and c["t"].get("anchor") == "missing", c
+assert u["t"].get("via") == "link" and "anchor" not in u["t"], u
+'; then ok "--json map: a link row is via=link (anchor=missing only on the provably missing one), not via=name"; else no "--json map rows spell a markdown link as via=name or drop its anchor mark"; fi
+
 # Callers that reach a namesake only through a markdown link are no by-name hit (near_sink): Caller links d.md#install, a different
 # section than b.md's Install, whose name it shares. The link is proven; nothing was matched by name.
 mkdir -p "$TMP/ngap"

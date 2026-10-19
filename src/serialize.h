@@ -2669,6 +2669,25 @@ inline void writeMapCalleeAttrs( XmlWriter& w, std::uint8_t prov, bool link, boo
     }
 }
 
+// The JSON twin of the <c> row's via= and anchor="missing" pair, from the stored kind byte (Graph::outNameOnly): the map rows
+// and the inventory entries' callees read it here, so --json spells a markdown link "link", never "name", and keeps its mark.
+inline void writeMapCalleeJsonKind( XmlWriter& w, std::uint8_t stored )
+{
+    const std::uint8_t kind = edgeKindByte( stored );
+    if( kind == kEdgeLink )
+    {
+        w.write( ",\"via\":\"link\"" );
+    }
+    else if( kind == kEdgeName )
+    {
+        w.write( ",\"via\":\"name\"" );   // FE-B: the XML via="name", 1:1
+    }
+    if( ( stored & 0x80 ) != 0 )   // the writer's anchor="missing" mark on a link (graph.h kEdgeKindMask)
+    {
+        w.write( ",\"anchor\":\"missing\"" );
+    }
+}
+
 // FE-B: one map <s>'s <c> rows over out-edges [from, to). A via="name" row (matched by name alone) that the symbol would
 // print several times byte for byte — N same-named by-name candidates, one row each, carrying only n=/prov=/via= — is
 // written ONCE, at its first edge, with x="N": the count, and --callees on the <s> lists each candidate with its file
@@ -10608,9 +10627,9 @@ inline void writeMapInventoryJson( JsonWriter& w, const IngestResult& ing, const
             {
                 w.write( ",\"prov\":" );  writeJsonStr( w, provLabel( ( *outProv )[ e ] ), esc );
             }
-            if( outNameOnly && e < outNameOnly->size() && ( *outNameOnly )[ e ] != 0 )
+            if( outNameOnly && e < outNameOnly->size() )
             {
-                w.write( ",\"via\":\"name\"" );
+                writeMapCalleeJsonKind( w, ( *outNameOnly )[ e ] );
             }
             w.write( "}" );
         }
@@ -10863,9 +10882,9 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
                     {
                         w.write( ",\"prov\":" );  writeJsonStr( w, provLabel( (*outProv)[e] ), esc );
                     }
-                    if( outNameOnly && e < outNameOnly->size() && ( *outNameOnly )[e] != 0 )
+                    if( outNameOnly && e < outNameOnly->size() )
                     {
-                        w.write( ",\"via\":\"name\"" );   // FE-B: the XML via="name", 1:1
+                        writeMapCalleeJsonKind( w, ( *outNameOnly )[e] );
                     }
                     w.write( "}" );
                 }
