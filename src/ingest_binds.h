@@ -3966,24 +3966,29 @@ inline BindSite siteIn( std::uint32_t at, TSNode scope ) noexcept { return siteO
 inline BindSite siteFrom( std::uint32_t at, TSNode scope ) noexcept { return siteOver( at, scope, true ); }
 
 // one local binding of `var`, naming class `cls` ("" = unknown), visible over `site`'s span. `flag`: Go's method receiver.
+// one site-spanned evidence record of `kind` (RecvType, lane L6's DispatchType): `var` names `type` over `site`
+inline void pushSiteEvidence( BindCtx& cx, LocalBindKind kind, std::string_view var, std::string_view type, BindSite site, bool flag, std::string_view imported )
+{
+    RawBind b;
+    b.fileId    = cx.fileId;
+    b.startByte = site.startByte;
+    b.lang      = cx.lang;
+    b.kind      = kind;
+    b.isFromAssignment = flag;
+    b.spanStart = site.spanStart;
+    b.spanEnd   = site.spanEnd;
+    b.var.assign( var );
+    b.typeName.assign( type );
+    b.importedName.assign( imported );
+    cx.binds->push_back( std::move( b ) );
+}
 inline void pushLocalEvidence( BindCtx& cx, std::string_view var, std::string_view cls, BindSite site, bool flag = false, std::string_view whole = {} )
 {
     if( var.empty() )
     {
         return;
     }
-    RawBind b;
-    b.fileId    = cx.fileId;
-    b.startByte = site.startByte;
-    b.lang      = cx.lang;
-    b.kind      = LocalBindKind::RecvType;
-    b.isFromAssignment = flag;
-    b.spanStart = site.spanStart;
-    b.spanEnd   = site.spanEnd;
-    b.var.assign( var );
-    b.typeName.assign( cls );
-    b.importedName.assign( cls.empty() ? std::string_view{} : whole );   // Go `pkg.T`: the qualifier ReceiverEvidence::build checks
-    cx.binds->push_back( std::move( b ) );
+    pushSiteEvidence( cx, LocalBindKind::RecvType, var, cls, site, flag, cls.empty() ? std::string_view{} : whole );   // Go `pkg.T`: the qualifier ReceiverEvidence::build checks
 }
 // the same for a name NODE (an identifier of any grammar's spelling; anything else records nothing)
 inline void pushLocalEvidence( BindCtx& cx, TSNode name, std::string_view cls, BindSite site )
@@ -6123,25 +6128,8 @@ inline std::string_view rustDispatchTrait( TSNode type, TSNode owner, std::strin
 inline void pushRustDispatch( BindCtx& cx, std::string_view var, std::string_view trait, std::string_view whole, std::string_view generic,
                               BindSite site, bool field )
 {
-    RawBind b;
-    b.fileId    = cx.fileId;
-    b.startByte = site.startByte;
-    b.lang      = cx.lang;
-    b.kind      = LocalBindKind::DispatchType;
-    b.isFromAssignment = field;
-    b.spanStart = site.spanStart;
-    b.spanEnd   = site.spanEnd;
-    b.var.assign( var );
-    b.typeName.assign( trait );
-    if( !generic.empty() )
-    {
-        b.importedName.assign( generic ).append( ": " ).append( whole.empty() ? trait : whole );   // the bound= text
-    }
-    else
-    {
-        b.importedName.assign( whole );
-    }
-    cx.binds->push_back( std::move( b ) );
+    const std::string bound = generic.empty() ? std::string() : std::string( generic ).append( ": " ).append( whole.empty() ? trait : whole );   // bound= text
+    pushSiteEvidence( cx, LocalBindKind::DispatchType, var, trait, site, field, generic.empty() ? whole : std::string_view( bound ) );
 }
 
 // rust-receivers: the class a `let` VALUE constructs — a struct literal `T { .. }` / `Self { .. }` / `m::T { .. }`, or
@@ -6218,6 +6206,17 @@ inline bool pushRustDispatchBinding( BindCtx& cx, TSNode pattern, std::string_vi
     return true;
 }
 
+// a parameter's or `let`'s names under their WRITTEN type: the class it names (rustWrittenClass), else (lane L6) the trait it
+// dispatches through, else the pattern's tombstones
+inline void pushRustWrittenBinding( BindCtx& cx, TSNode pattern, TSNode type, TSNode owner, BindSite site )
+{
+    std::string_view       whole;
+    const std::string_view cls = rustWrittenClass( type, owner, cx.src, whole );
+    if( !pushRustDispatchBinding( cx, pattern, cls, type, owner, site ) )
+    {
+        pushRustBinding( cx, pattern, cls, whole, site );
+    }
+}
 // rust-receivers: a `let`'s names — `let x: T` typed by its written type, `let x = T { .. }` / `T::default()` by the class
 // the value constructs, `let x = f()?` by the callee's declared result (a CallResult per bound name, a tuple by position)
 inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
@@ -6228,11 +6227,7 @@ inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
     std::string_view whole;
     if( const TSNode type = fieldChild( n, NodeField::Type ); !ts_node_is_null( type ) )
     {
-        const std::string_view cls = rustWrittenClass( type, owner, cx.src, whole );
-        if( !pushRustDispatchBinding( cx, pattern, cls, type, owner, site ) )   // L6: `let x: &dyn T = …`
-        {
-            pushRustBinding( cx, pattern, cls, whole, site );   // `let x: T = …`
-        }
+        pushRustWrittenBinding( cx, pattern, type, owner, site );   // `let x: T = …` (L6: `let x: &dyn T = …`)
         return;
     }
     // `let x = T { .. }` / `T::default()`: the class the value constructs, as the binding's site spells it. `T::default()`
@@ -6271,14 +6266,8 @@ inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
 // rust-receivers: a parameter `b: &Book` names the class it is written as (a fn's or a closure's); any other pattern: tombstones
 inline void captureRustParameter( BindCtx& cx, TSNode n, std::uint32_t at )
 {
-    std::string_view       whole;
-    const TSNode           owner = rustGenericsOwner( n, { "function_item", "function_signature_item" } );
-    const std::string_view cls   = rustWrittenClass( fieldChild( n, NodeField::Type ), owner, cx.src, whole );
-    const BindSite         site  = siteIn( at, ancestorOfKind( n, { "function_item", "closure_expression" } ) );
-    if( !pushRustDispatchBinding( cx, fieldChild( n, NodeField::Pattern ), cls, fieldChild( n, NodeField::Type ), owner, site ) )
-    {
-        pushRustBinding( cx, fieldChild( n, NodeField::Pattern ), cls, whole, site );
-    }
+    pushRustWrittenBinding( cx, fieldChild( n, NodeField::Pattern ), fieldChild( n, NodeField::Type ), rustGenericsOwner( n, { "function_item", "function_signature_item" } ),
+                            siteIn( at, ancestorOfKind( n, { "function_item", "closure_expression" } ) ) );
 }
 // rust-receivers: a struct's named field `book: Book` (MemberType on the struct, so `self.book.m()` narrows through it); a
 // field whose type names no class is a tombstone. An enum variant's fields are no struct's: nothing.

@@ -9,7 +9,8 @@ public class Drive {
 
     public String byLocal() {
         Packager p = Registry.get("deb");
-        return p.fileName("b");
+        String name = p.fileName("b");
+        return name;
     }
 
     public void byField() {

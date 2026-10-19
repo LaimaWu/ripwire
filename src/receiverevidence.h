@@ -1730,10 +1730,18 @@ struct ReceiverEvidence
     void addLocalFact( const std::string& k, const Binding& b ) { addTypedFact( k, b, b.typeName, kNoNode ); }
     // the same fact naming `type` instead of the binding's own (a qualified written type refused: ""), and the one class it
     // resolved to (kNoNode: the name alone)
-    void addTypedFact( const std::string& k, const Binding& b, std::string_view type, NodeId cls, NodeId iface = kNoNode, std::string_view bound = {} )
+    void addTypedFact( const std::string& k, const Binding& b, std::string_view type, NodeId cls )
     {
-        const bool                  spanned = b.spanEnd > b.spanStart;
-        LocalFact                   f{ spanned ? b.spanStart : 0u, spanned ? b.spanEnd : 0u, std::string( type ), cls, iface, std::string( bound ) };
+        addFact( k, factOf( b, type, cls ) );
+    }
+    // the fact a binding states over its span ({0,0}: no span), naming `type` / `cls`
+    static LocalFact factOf( const Binding& b, std::string_view type, NodeId cls )
+    {
+        const bool spanned = b.spanEnd > b.spanStart;
+        return LocalFact{ spanned ? b.spanStart : 0u, spanned ? b.spanEnd : 0u, std::string( type ), cls };
+    }
+    void addFact( const std::string& k, LocalFact f )
+    {
         std::vector<LocalFact>&     facts = localType[ k ];
         if( std::none_of( facts.begin(), facts.end(), [ & ]( const LocalFact& g ) { return g == f; } ) )
         {
@@ -2029,7 +2037,10 @@ struct ReceiverEvidence
             }
             return;
         }
-        addTypedFact( keyOf( factScope( d ), '#', d.var ), d, std::string_view{}, kNoNode, trait, bound );
+        LocalFact f = factOf( d, std::string_view{}, kNoNode );   // the tombstone it stands in for, carrying the trait
+        f.iface = trait;
+        f.bound.assign( bound );
+        addFact( keyOf( factScope( d ), '#', d.var ), std::move( f ) );
     }
     // the definition a local binding belongs to: a typed local the extractor also indexed as a symbol of its own (a Go
     // `var c T` inside a function) belongs to the function that declares it
@@ -2117,7 +2128,12 @@ struct ReceiverEvidence
     };
     static SeenLocal seenOf( const LocalFact& f ) noexcept
     {
-        return SeenLocal{ f.type, f.cls, f.iface, f.bound };
+        SeenLocal seen;
+        seen.type  = f.type;
+        seen.cls   = f.cls;
+        seen.iface = f.iface;   // lane L6
+        seen.bound = f.bound;
+        return seen;
     }
     std::optional<SeenLocal> seenLocal( NodeId scope, std::string_view var, std::uint32_t site ) const
     {

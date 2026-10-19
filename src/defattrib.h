@@ -848,7 +848,6 @@ struct OneHopAttribution
     bool nameOnly( std::size_t row ) const noexcept { return tokens.strongest( row ) == DefMark::Name; }   // None when none recorded
     bool splitArm( std::size_t row ) const noexcept { return rowSplitArm( groups, tokens, row ); }
     bool viaImpl( std::size_t row ) const noexcept { return row < impl.size() && impl[ row ] != 0; }
-    bool anyViaImpl() const noexcept { return !impl.empty(); }
 };
 // lane L6: per row, whether every edge joining it to the matches (row → match toward the matches, match → row away) is the
 // one-implementor edge (graph.h kProvImpl); empty when no row's is, so an answer without one keeps its bytes

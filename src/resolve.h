@@ -6355,7 +6355,7 @@ struct Narrower
         {
             return nullptr; // not a bare named-receiver call from a known def
         }
-        if( !fieldTableLang( r.lang ) )
+        if( r.lang != Lang::Cpp && r.lang != Lang::ObjC )
         {
             return nullptr; // (1) the field-type table is C++-evidence only — other languages stay on their unchanged ladder
         }
@@ -6372,12 +6372,6 @@ struct Narrower
 
         // (4) the declared type's own method set, then its bases — shared with Rule 2c below.
         return methodOnTypeOrBases( field->type, r, fields.chaUp );
-    }
-
-    // Rule 2b's step (1): the languages whose field-type table holds evidence (C++ and Objective-C++ field captures)
-    static bool fieldTableLang( Lang l ) noexcept
-    {
-        return l == Lang::Cpp || l == Lang::ObjC;
     }
 
     // Rule 2b's steps (2) and (3): the field entry a named receiver reads, nullptr when a local declaration shadows it, no
@@ -6414,7 +6408,7 @@ struct Narrower
     const rw::SmallVec<NodeId, 2>* rule2bDispatchSplit( const Reference& r, const std::string& callerScope, const FieldRecvTables& fields,
                                                         const HashMap<std::string, char>& localNames, const ClassIdentity& ids, const ChaUpNames& chaUp ) const
     {
-        if( r.recv != RecvKind::NamedVar || r.recvVar.empty() || !r.qualifier.empty() || r.fromSymbol == kNoNode || !fieldTableLang( r.lang )
+        if( r.recv != RecvKind::NamedVar || r.recvVar.empty() || !r.qualifier.empty() || r.fromSymbol == kNoNode || !extent::inSet( extent::kHeadRuleLangs, r.lang )
             || callerScope.empty() || fields.types.empty() || ids.classesByName.empty() )
         {
             return nullptr;
