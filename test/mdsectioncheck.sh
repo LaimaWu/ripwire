@@ -459,6 +459,16 @@ printf '%s\n' '# D' '' '## Install' '' 'other' > "$TMP/ngap/d.md"
 NG="$( $BIN "$TMP/ngap" --no-cache --path='Start,b.md::B::Install' --legend=compact 2>/dev/null )"
 if printf '%s' "$NG" | grep -q '<near_sink' && ! printf '%s' "$NG" | grep -q 'withheld="name\|why="[a-z,:0-9]*name'; then ok "near_sink: a markdown link to a same-named heading is no by-name hit"; else no "near_sink counted a markdown link as a by-name call (withheld=name / why=name): $( printf '%s' "$NG" | grep -o '<ns [^>]*>' )"; fi
 
+# names-only <calls> rows (--for hops) merge only rows of the same anchor state: Hub links a.md#b (a real heading named B, l=3)
+# and b.md#nope (missing, so the file node B, l=1). The merged row used to read l="1,3" anchor="missing", marking the good link.
+mkdir -p "$TMP/nmerge"
+printf '%s\n' '# Hub' '' '## Hub Section' '' 'zqhubtoken [first](b.md#nope) and [second](a.md#b) and [third](e.md#zzz)' > "$TMP/nmerge/x.md"
+printf '%s\n' '# A' '' '## B' '' 'text' > "$TMP/nmerge/a.md"
+printf '%s\n' '# B' > "$TMP/nmerge/b.md"
+printf '%s\n' '# E' '' '## Other' > "$TMP/nmerge/e.md"
+NM="$( $BIN "$TMP/nmerge" --no-cache --for=zqhubtoken --legend=compact 2>/dev/null | grep -o '<calls total="3">.*</calls>' )"
+if printf '%s' "$NM" | grep -q '<c n="B" l="3" via="link"/>' && printf '%s' "$NM" | grep -q '<c n="B" l="1" via="link" anchor="missing"/>' && ! printf '%s' "$NM" | grep -q 'l="1,3"'; then ok "--for hops: the good B link and the missing-anchor B link stay two rows"; else no "--for hops merged a good link into a missing-anchor row: [$NM]"; fi
+
 # --callers lists every matched def in <def ix= t= p=> (cross_kind when a heading and a function share the name).
 # The edge is the <s> row: it must name the section, never the .py function.
 if $BIN "$AFIX" --no-cache --callers=do_work --legend=compact 2>/dev/null | python3 -c '

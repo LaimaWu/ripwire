@@ -7002,15 +7002,21 @@ inline std::string_view calleeRowSplitAttr( const std::vector<std::uint32_t>& ou
     return split ? std::string_view( " prov=\"split\"" ) : std::string_view();
 }
 
-// A markdown link whose slug names no heading. Charges the legend once, marks a merged name row, or
-// inserts the attribute into a signature row that already ends at `>`.
+// Is the <calls> row id → cid a markdown link whose slug names no heading? Read by the names-only path BEFORE it collects the row, so
+// the miss bit is part of the merge key (a good link and a missing one that share a name stay two rows).
+inline bool calleeRowAnchorMiss( const CalleeCallsSink& sink, const std::vector<std::uint32_t>& outOff,
+                                 const std::vector<NodeId>& outTargets, NodeId id, NodeId cid ) noexcept
+{
+    return sink.anchor != nullptr && edgeNameOnlyInCsr( outOff, outTargets, *sink.anchor, id, cid );
+}
+
+// A markdown link whose slug names no heading. Charges the legend once and, when `callsBody` is given, inserts the attribute
+// into a signature row that already ends at `>`.
 inline void applyCalleeAnchorMiss( const CalleeCallsSink& sink, const std::vector<std::uint32_t>& outOff,
                                    const std::vector<NodeId>& outTargets, NodeId id, NodeId cid, bool& legendCharged,
-                                   std::size_t& used, std::vector<MergedCalleeNameRow>* nameRows, std::string_view name,
-                                   bool linkRow, std::string* callsBody )
+                                   std::size_t& used, std::string* callsBody )
 {
-    const bool miss = sink.anchor != nullptr && edgeNameOnlyInCsr( outOff, outTargets, *sink.anchor, id, cid );
-    if( !miss )
+    if( !calleeRowAnchorMiss( sink, outOff, outTargets, id, cid ) )
     {
         return;
     }
@@ -7018,19 +7024,6 @@ inline void applyCalleeAnchorMiss( const CalleeCallsSink& sink, const std::vecto
     {
         used += anchorMissLegendComment().size();
         legendCharged = true;
-    }
-    if( nameRows != nullptr )
-    {
-        for( MergedCalleeNameRow& nr : *nameRows )
-        {
-            if( nr.name == name && nr.link == linkRow && !nr.miss )
-            {
-                nr.miss = true;
-                used += 17;
-                return;
-            }
-        }
-        return;
     }
     if( callsBody == nullptr )
     {
@@ -7062,14 +7055,14 @@ inline bool appendOneCalleeCall( std::string& callsBody, std::vector<MergedCalle
         used += viaLinkLegendComment().size();
         linkLegendCharged = true;
     }
-    applyCalleeAnchorMiss( sink, outOff, outTargets, id, cid, anchorLegendCharged, used, nullptr, {}, false, nullptr );
+    const bool missRow = calleeRowAnchorMiss( sink, outOff, outTargets, id, cid );
+    applyCalleeAnchorMiss( sink, outOff, outTargets, id, cid, anchorLegendCharged, used, nullptr );
     const bool nameRow = !linkRow && calleeRowVia( outOff, outTargets, id, cid, used, sink );
     const std::string_view viaAttr = viaEdgeAttr( nameRow, linkRow );
     const std::string_view splitAttr = calleeRowSplitAttr( outOff, outTargets, id, cid, !viaAttr.empty(), used, sink );
     if( sink.namesOnly )
     {
-        collectCalleeNameRow( nameRows, cs, used, sink, CalleeRowMarks{ nameRow, !splitAttr.empty(), linkRow, false } );
-        applyCalleeAnchorMiss( sink, outOff, outTargets, id, cid, anchorLegendCharged, used, &nameRows, cs.name, linkRow, nullptr );
+        collectCalleeNameRow( nameRows, cs, used, sink, CalleeRowMarks{ nameRow, !splitAttr.empty(), linkRow, missRow } );
         return true;
     }
     const std::string& csrc = contentOf( cs.fileId );
@@ -7087,7 +7080,7 @@ inline bool appendOneCalleeCall( std::string& callsBody, std::vector<MergedCalle
     callsBody += "<c n=\"";
     callsBody += escapeXml( cs.name, esc );
     callsBody += hb;
-    applyCalleeAnchorMiss( sink, outOff, outTargets, id, cid, anchorLegendCharged, used, nullptr, {}, false, &callsBody );
+    applyCalleeAnchorMiss( sink, outOff, outTargets, id, cid, anchorLegendCharged, used, &callsBody );
     callsBody += escapeXml( sig, esc );
     callsBody += "</c>";
     used += sig.size() + 24 + viaAttr.size() + splitAttr.size();
