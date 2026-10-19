@@ -345,7 +345,11 @@ constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strict
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 196;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 204;          // bump on any grammar/.scm/extraction change
+                                                      // 204 = 2026-10-18 (train 32 lane ix1-slot, IX-1 slot-type join; train renumbers): C/C++ value rows
+                                                      //   whose slot is a struct field carry memberPath/memberCtor, calls through a struct field are
+                                                      //   Through records (qualifier 's'), and struct field types / typedef aliases are slot facts
+                                                      //   (Value, qualifier 't'). Same record layout: kCacheVersion unchanged. Rich file tag 205.
                                                       // 196 = 2026-10-18 (train 30): strictly above every number a live build used — main 184 (rich 185),
                                                       //   lane call-result-typing 180 (rich 181), lane fcall-forward 188 (189), lane go-local-var 190 (191),
                                                       //   lane name-template-dispatch 192 (193), lane h1-annot (train 31) 194 (195); tail-sym and

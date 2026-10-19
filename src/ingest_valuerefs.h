@@ -34,6 +34,15 @@
 //   Through: name=the container/parameter called through; fieldName=the written callee (through=);
 //            composeRel=the key (".k", "[k]", "*" computed, "" bare); qualifier="p" (a parameter: argCount is its
 //            index), "l" (a local container) or "f" (a file-scope container).
+//   Slot typing (C family, IX-1 slot-type join; model.h RefRole::Value / Through): a Value row whose slot is a struct field
+//            (a designated `.f = fn`, a positional entry of a struct literal this file defines the struct of, a field
+//            assignment `x->a.f = fn`) carries memberPath = the field chain and memberCtor = the object's declared struct type;
+//            a call through a field (`x->f( … )`, `x->a->f( … )`, `t[ i ].f( … )`) is a Through with qualifier
+//            kValueRefSlotCallScope ('s'), name = the root x, memberCtor = x's declared type ("" when no scope declares x),
+//            memberPath = the chain; and every struct field of a struct type, and every typedef of a struct, is a slot FACT
+//            (role Value, qualifier kValueRefSlotFactScope 't', name ""): recvVar = the owner, composeRel = the field
+//            ("" = a typedef alias), memberCtor = the field's type. An anonymous struct type is "@LINE" (its own file only);
+//            an anonymous struct a typedef names is that name.
 //   Depth cut (role Value, at most one per file, after its rows): name="" (no identifier is empty); qualifier="d"
 //            (model.h kValueRefDepthCutScope); argCount=the subtrees kVrMaxDepth stopped the walk above (saturating);
 //            startByte/line=the first one. Not a row: valuerefindex.h counts it, and every answer that reads value
@@ -157,6 +166,22 @@ inline constexpr VrPatternLookup kVrPatternLookups[] = {
     { VrFam::Py, "__dict__", 0, true, false },
     { VrFam::Js, "", 0, false, true },
 };
+// IX-1 SLOT-TYPE JOIN: which field calls are calls through a stored function, per language, as data (lang-specific-layer
+// §2: a family-owned row; a language with no row records no slot call and no slot fact). C has no member functions, so
+// EVERY field call `x->f( … )` calls through a function-pointer field (or a macro the grammar reads as one). A C++ field
+// call is mostly a member-function call: there the receiver must be declared with the `struct` / `union` keyword, or be
+// declared with a struct type whose body in this same file declares the callee as a function-pointer field. Go func-typed fields, Rust `fn` / `Box<dyn Fn>`
+// fields and TS function-typed properties are later rows.
+struct VrSlotLang
+{
+    Lang lang;
+    bool everyFieldCall;
+};
+inline constexpr VrSlotLang kVrSlotLangs[] = {
+    { Lang::C, true },
+    { Lang::Cpp, false },
+};
+
 // A template's literal side must hold this many identifier characters to be matched (`f"_{m}"` is too wide).
 inline constexpr std::size_t kVrPatternMinLiteral = 3;
 
@@ -193,6 +218,14 @@ inline VrKeyKind vrKeyKind( const char* t ) noexcept
     return VrKeyKind::Other;
 }
 
+// A name a scope declares with a struct type (IX-1): the type's key and whether the `struct` / `union` keyword wrote it.
+struct VrTyped
+{
+    std::string_view name;
+    std::string      type;
+    bool             structKw = false;
+};
+
 struct VrScope
 {
     TSNode                        node {};
@@ -203,6 +236,14 @@ struct VrScope
     std::string_view              fnName;          // the function's own name, when it has one
     std::vector<std::string>      fed;             // containers declared here that received a function value
     std::vector<RawRef>           pending;         // calls through a container declared here, awaiting `fed`
+    std::vector<VrTyped>          types;           // IX-1: the names declared here with a struct type (C family)
+};
+
+// IX-1: one struct body of this file, its fields in declaration order (a positional initializer's index → field name).
+struct VrStructFields
+{
+    std::string                   key;
+    std::vector<std::string_view> fields;
 };
 
 // The walk's DISCLOSE sink for the depth cap: the subtrees kVrMaxDepth stopped it above, and the first one's site.
@@ -271,6 +312,7 @@ public:
         m_fAlias       = ts_language_field_id_for_name( tl, "alias", 5 );
         m_fArguments   = fieldIdFor( tl, NodeField::Arguments );
         m_fSource      = ts_language_field_id_for_name( tl, "source", 6 );
+        m_slot         = findByField( kVrSlotLangs, &VrSlotLang::lang, m_lang );
         m_fwd          = callForwardersOf( m_lang );
         m_fwdArmed     = !m_fwd.empty();
 
@@ -930,6 +972,14 @@ private:
         if( !foreignParameters( a.kind ) )
         {
             harvest( n, a.kind, m_scopes.back().decls );
+            if( m_slot != nullptr )
+            {
+                noteSlotTypes( n, a.kind );   // IX-1: the declared struct types, beside the names
+            }
+        }
+        if( m_slot != nullptr && ( kindIs( a.kind, "struct_specifier" ) || kindIs( a.kind, "union_specifier" ) || kindIs( a.kind, "class_specifier" ) ) )
+        {
+            noteStructBody( n );   // IX-1: field order, function-pointer fields and the field-type facts (m_anc.back() is the parent)
         }
         if( m_fwdArmed )
         {
@@ -947,6 +997,10 @@ private:
         }
         else if( isCallKind( a.kind ) )
         {
+            if( m_slot != nullptr )
+            {
+                slotThroughAt( n );
+            }
             throughAt( n );
             patternAtCall( n );
         }
@@ -1491,6 +1545,10 @@ private:
         r.fieldName     = std::move( s.into );
         r.argCount      = s.argIndex;
         r.argCountKnown = s.isArg;
+        if( m_slot != nullptr )
+        {
+            valueSlot( j, r );
+        }
         m_out.push_back( std::move( r ) );
     }
 
@@ -1899,6 +1957,409 @@ private:
         emitThrough( call, obj, f, std::move( key ), kindIs( ft, "identifier" ) );
     }
 
+    // ── slot-type join (IX-1) ──────────────────────────────────────────────────────────────────────────
+    // A struct type's KEY: its tag (`struct cmd_entry` → "cmd_entry") or a typedef name (`Meter`), plus whether the
+    // `struct` / `union` keyword wrote it. An anonymous struct is the name a typedef gives it, else "@LINE" (the struct's
+    // own line: valuerefindex.h matches it in its own file only). Anything else (a scalar, `void`, a qualified or template
+    // type) has no key: a declaration of it types nothing.
+    std::pair<std::string, bool> slotTypeKey( TSNode ty, TSNode parent, const char* parentKind ) const
+    {
+        if( ts_node_is_null( ty ) )
+        {
+            return {};
+        }
+        const char* t = ts_node_type( ty );
+        if( kindIs( t, "type_identifier" ) )
+        {
+            return { std::string( text( ty ) ), false };
+        }
+        if( !( kindIs( t, "struct_specifier" ) || kindIs( t, "union_specifier" ) || kindIs( t, "class_specifier" ) ) )
+        {
+            return {};
+        }
+        const bool   kw = !kindIs( t, "class_specifier" );
+        const TSNode nm = child( ty, m_fName );
+        if( !ts_node_is_null( nm ) )
+        {
+            return kindIs( ts_node_type( nm ), "type_identifier" ) ? std::pair<std::string, bool>{ std::string( text( nm ) ), kw }
+                                                                   : std::pair<std::string, bool>{};
+        }
+        if( kindIs( parentKind, "type_definition" ) )
+        {
+            const std::string_view td = typedefName( parent );
+            return td.empty() ? std::pair<std::string, bool>{} : std::pair<std::string, bool>{ std::string( td ), kw };
+        }
+        return { "@" + std::to_string( ts_node_start_point( ty ).row + 1 ), kw };
+    }
+
+    // The name a `typedef … NAME;` declares (through pointer declarators: `typedef struct x *xp;` is NOT a struct alias).
+    std::string_view typedefName( TSNode td ) const
+    {
+        const TSNode d = child( td, m_fDeclarator );
+        return !ts_node_is_null( d ) && kindIs( ts_node_type( d ), "type_identifier" ) ? text( d ) : std::string_view();
+    }
+
+    // A function-POINTER declarator `(*f)( … )` (any depth of pointers inside the parentheses): a stored function.
+    bool fnPointerDeclarator( TSNode d ) const noexcept
+    {
+        if( ts_node_is_null( d ) || !kindIs( ts_node_type( d ), "function_declarator" ) )
+        {
+            return false;
+        }
+        const TSNode inner = child( d, m_fDeclarator );
+        return !ts_node_is_null( inner ) && kindIs( ts_node_type( inner ), "parenthesized_declarator" );
+    }
+
+    // Calls `fn( declarator )` for each declarator child of a declaring node (a declaration may declare several).
+    template<typename Fn>
+    void forEachDeclarator( TSNode n, Fn&& fn ) const
+    {
+        ChildCursor c( n );
+        ts_tree_cursor_reset( &c.cur, n );
+        if( !ts_tree_cursor_goto_first_child( &c.cur ) )
+        {
+            return;
+        }
+        do
+        {
+            if( ts_tree_cursor_current_field_id( &c.cur ) == m_fDeclarator )
+            {
+                fn( ts_tree_cursor_current_node( &c.cur ) );
+            }
+        }
+        while( ts_tree_cursor_goto_next_sibling( &c.cur ) );
+    }
+
+    // The declared struct types of a declaring node's names, into the innermost scope (beside harvest's names); a typedef
+    // of a struct is a slot fact (alias → struct).
+    void noteSlotTypes( TSNode n, const char* t )
+    {
+        if( kindIs( t, "type_definition" ) )
+        {
+            const std::string_view alias = typedefName( n );
+            const auto [ key, kw ] = slotTypeKey( child( n, m_fType ), n, t );
+            if( !alias.empty() && !key.empty() && key != alias )
+            {
+                emitSlotFact( n, std::string( alias ), {}, key );
+            }
+            return;
+        }
+        if( !( kindIs( t, "declaration" ) || kindIs( t, "parameter_declaration" ) || kindIs( t, "optional_parameter_declaration" )
+               || kindIs( t, "field_declaration" ) ) )
+        {
+            return;
+        }
+        const auto [ key, kw ] = slotTypeKey( child( n, m_fType ), n, t );
+        if( key.empty() )
+        {
+            return;   // a scalar / void / pointer-to-function declaration: its names stay declared, untyped (no slot call)
+        }
+        VrScope& sc = m_scopes.back();
+        forEachDeclarator( n, [ & ]( TSNode d )
+        {
+            if( declaresFunction( d ) || fnPointerDeclarator( d ) || ( kindIs( ts_node_type( d ), "init_declarator" ) && fnPointerDeclarator( child( d, m_fDeclarator ) ) ) )
+            {
+                return;   // a prototype, or a function pointer returning the struct: not an object of it
+            }
+            const std::string_view nm = declaratorName( d );
+            if( !nm.empty() )
+            {
+                sc.types.push_back( { nm, key, kw } );
+            }
+        } );
+    }
+
+    // A struct / union / class BODY as the walk enters its specifier: its field order (positional initializers), its
+    // function-pointer fields (the C++ gate) and one slot fact per field declared with a struct type.
+    void noteStructBody( TSNode n )
+    {
+        const TSNode body = fieldChild( n, NodeField::Body );
+        if( ts_node_is_null( body ) || m_anc.empty() )
+        {
+            return;
+        }
+        const VrAnc& parent = m_anc.back();
+        auto [ owner, kw ] = slotTypeKey( n, parent.node, parent.kind );
+        if( owner.empty() )
+        {
+            return;
+        }
+        VrStructFields sf;
+        sf.key = owner;
+        ChildCursor c( body );
+        forEachNamedChild( body, c.cur, [ & ]( TSNode k )
+        {
+            if( !kindIs( ts_node_type( k ), "field_declaration" ) )
+            {
+                return true;
+            }
+            const auto [ ftype, fkw ] = slotTypeKey( child( k, m_fType ), k, "field_declaration" );
+            forEachDeclarator( k, [ & ]( TSNode d )
+            {
+                if( declaresFunction( d ) )
+                {
+                    return;   // a member function declaration: no data field, no initializer position
+                }
+                const std::string_view nm = declaratorName( d );
+                if( nm.empty() )
+                {
+                    return;
+                }
+                sf.fields.push_back( nm );
+                if( fnPointerDeclarator( d ) )
+                {
+                    m_callableFields.emplace_back( owner, nm );
+                }
+                else if( !ftype.empty() )
+                {
+                    emitSlotFact( k, owner, nm, ftype );
+                }
+            } );
+            return true;
+        } );
+        m_structs.push_back( std::move( sf ) );
+    }
+
+    void emitSlotFact( TSNode at, std::string owner, std::string_view field, const std::string& type )
+    {
+        RawRef r;
+        r.fileId     = m_fileId;
+        r.startByte  = ts_node_start_byte( at );
+        r.line       = ts_node_start_point( at ).row + 1;
+        r.lang       = m_lang;
+        r.role       = RefRole::Value;
+        r.qualifier  = std::string( 1, kValueRefSlotFactScope );   // name stays "": no identifier is empty, so no row
+        r.recvVar    = std::move( owner );
+        r.composeRel = std::string( field );
+        r.memberCtor = type;
+        m_out.push_back( std::move( r ) );
+    }
+
+    // The struct type a name is declared with, innermost scope first: declared = some scope declares it; key "" with
+    // declared = true is a non-struct declaration (no slot); declared = false is a name no scope of this file declares.
+    struct VrTypeOf
+    {
+        bool             declared = false;
+        std::string_view key;
+        bool             structKw = false;
+    };
+    VrTypeOf typeOfName( std::string_view name ) const
+    {
+        for( std::size_t k = m_scopes.size(); k > 0; --k )
+        {
+            const VrScope& sc = m_scopes[k - 1];
+            if( std::ranges::find( sc.decls, name ) == sc.decls.end() )
+            {
+                continue;
+            }
+            for( auto it = sc.types.rbegin(); it != sc.types.rend(); ++it )
+            {
+                if( it->name == name )
+                {
+                    return { true, it->type, it->structKw };
+                }
+            }
+            return { true, {}, false };
+        }
+        return {};
+    }
+
+    // A single-dimension array declarator `name[]` / `name[N]`: the initializer list below it IS the array.
+    bool arrayDeclarator( TSNode d, bool& multi ) const noexcept
+    {
+        multi = false;
+        if( ts_node_is_null( d ) || !kindIs( ts_node_type( d ), "array_declarator" ) )
+        {
+            return false;
+        }
+        const TSNode inner = child( d, m_fDeclarator );
+        multi = !ts_node_is_null( inner ) && kindIs( ts_node_type( inner ), "array_declarator" );
+        return true;
+    }
+
+    // The struct type of the initializer list anc[k]: a struct object's list (`T x = { … }`), one element of a
+    // one-dimension array's list (`T a[] = { { … } }`), or a compound literal `(T){ … }`. "" otherwise — the array's own
+    // list, a nested struct field's list (its field type is not read here: a disclosed floor), a multi-dimension array.
+    std::string literalType( std::size_t k ) const
+    {
+        if( k < 2 || !kindIs( m_anc[k].kind, "initializer_list" ) )
+        {
+            return {};
+        }
+        const VrAnc& up = m_anc[k - 1];
+        bool         multi = false;
+        if( kindIs( up.kind, "init_declarator" ) )
+        {
+            if( arrayDeclarator( child( up.node, m_fDeclarator ), multi ) || !kindIs( m_anc[k - 2].kind, "declaration" ) )
+            {
+                return {};
+            }
+            return slotTypeKey( child( m_anc[k - 2].node, m_fType ), m_anc[k - 2].node, m_anc[k - 2].kind ).first;
+        }
+        if( kindIs( up.kind, "initializer_list" ) && k >= 3 && kindIs( m_anc[k - 2].kind, "init_declarator" ) )
+        {
+            if( !arrayDeclarator( child( m_anc[k - 2].node, m_fDeclarator ), multi ) || multi || !kindIs( m_anc[k - 3].kind, "declaration" ) )
+            {
+                return {};
+            }
+            return slotTypeKey( child( m_anc[k - 3].node, m_fType ), m_anc[k - 3].node, m_anc[k - 3].kind ).first;
+        }
+        if( kindIs( up.kind, "compound_literal_expression" ) )
+        {
+            TSNode ty = child( up.node, m_fType );
+            if( !ts_node_is_null( ty ) && kindIs( ts_node_type( ty ), "type_descriptor" ) )
+            {
+                ty = child( ty, m_fType );
+            }
+            return slotTypeKey( ty, up.node, up.kind ).first;
+        }
+        return {};
+    }
+
+    // The field chain of a member access, root first: `wme->mode->command` → root `wme`, chain "mode.command";
+    // subscripts and parentheses are crossed (`t[ i ].f` → root `t`, chain "f"). A null root: not an identifier.
+    TSNode fieldChain( TSNode f, std::string& chain ) const
+    {
+        chain = std::string( text( child( f, m_fField ) ) );
+        TSNode x = child( f, m_fArgument );
+        for( int guard = 0; guard < 8 && !ts_node_is_null( x ); ++guard )
+        {
+            const char* xt = ts_node_type( x );
+            if( kindIs( xt, "field_expression" ) )
+            {
+                chain = std::string( text( child( x, m_fField ) ) ) + "." + chain;
+                x     = child( x, m_fArgument );
+            }
+            else if( kindIs( xt, "subscript_expression" ) )
+            {
+                x = child( x, m_fArgument );
+            }
+            else if( kindIs( xt, "parenthesized_expression" ) )
+            {
+                x = ts_node_named_child( x, 0 );
+            }
+            else
+            {
+                break;
+            }
+        }
+        return !ts_node_is_null( x ) && kindIs( ts_node_type( x ), "identifier" ) ? x : TSNode{};
+    }
+
+    // The slot a Value row (`r`, effective position anc[j]) lands in, when it is a struct field: memberPath = the chain,
+    // memberCtor = the declared struct type of the object ("" unknown). Left empty for every other slot.
+    void valueSlot( std::size_t j, RawRef& r ) const
+    {
+        if( j < 1 )
+        {
+            return;
+        }
+        const VrAnc& p  = m_anc[j - 1];
+        const char*  pt = p.kind;
+        if( kindIs( pt, "initializer_pair" ) )
+        {
+            TSNode k = child( p.node, m_fDesignator );
+            if( ts_node_is_null( k ) )
+            {
+                k = ts_node_named_child( p.node, 0 );
+            }
+            if( ts_node_is_null( k ) || !kindIs( ts_node_type( k ), "field_designator" ) || j < 2 )
+            {
+                return;
+            }
+            r.memberPath = std::string( text( ts_node_named_child( k, 0 ) ) );
+            r.memberCtor = literalType( j - 2 );
+            return;
+        }
+        if( kindIs( pt, "initializer_list" ) )
+        {
+            const std::string t = literalType( j - 1 );
+            const TSNode      first = ts_node_named_child( p.node, 0 );
+            if( t.empty() || ( !ts_node_is_null( first ) && kindIs( ts_node_type( first ), "initializer_pair" ) ) )
+            {
+                return;   // not a struct literal, or a designated list (a position after a designator is not its index)
+            }
+            const auto sf = std::ranges::find( m_structs, t, &VrStructFields::key );
+            const std::uint32_t idx = m_anc[j].namedIndex;
+            if( sf != m_structs.end() && idx < sf->fields.size() )
+            {
+                r.memberPath = std::string( sf->fields[idx] );
+                r.memberCtor = t;
+            }
+            return;
+        }
+        if( kindIs( pt, "assignment_expression" ) && m_anc[j].field == m_fRight )
+        {
+            const TSNode lhs = child( p.node, m_fLeft );
+            if( ts_node_is_null( lhs ) || !kindIs( ts_node_type( lhs ), "field_expression" ) )
+            {
+                return;
+            }
+            std::string  chain;
+            const TSNode root = fieldChain( lhs, chain );
+            if( ts_node_is_null( root ) )
+            {
+                return;
+            }
+            const VrTypeOf ty = typeOfName( text( root ) );
+            if( ty.declared && ty.key.empty() )
+            {
+                return;   // a non-struct object
+            }
+            r.memberPath = std::move( chain );
+            r.memberCtor = std::string( ty.key );
+        }
+    }
+
+    // A call through a struct field (`x->f( … )`, `x->a.f( … )`, `t[ i ].f( … )`): one slot Through, never filtered by a
+    // fed container (the values arrive from other files). No row when the root is not an identifier (a cast, a call
+    // result) or is declared with a non-struct type (`void *`, a scalar); a root no scope of this file declares (an
+    // extern, a macro) keeps an empty type, so only the name tier can join it. Under C++'s row: see kVrSlotLangs.
+    void slotThroughAt( TSNode call )
+    {
+        const TSNode f = child( call, m_fFunction );
+        if( ts_node_is_null( f ) || !kindIs( ts_node_type( f ), "field_expression" ) )
+        {
+            return;
+        }
+        std::string  chain;
+        const TSNode root = fieldChain( f, chain );
+        if( ts_node_is_null( root ) )
+        {
+            return;
+        }
+        const VrTypeOf ty = typeOfName( text( root ) );
+        if( ty.declared && ty.key.empty() )
+        {
+            return;
+        }
+        const std::size_t      dot   = chain.rfind( '.' );
+        const std::string_view field = dot == std::string::npos ? std::string_view( chain ) : std::string_view( chain ).substr( dot + 1 );
+        if( !m_slot->everyFieldCall
+            && !( ty.declared
+                  && ( ty.structKw
+                       || ( dot == std::string::npos
+                            && std::ranges::find( m_callableFields, std::pair<std::string_view, std::string_view>( ty.key, field ),
+                                                  []( const auto& cf ) { return std::pair<std::string_view, std::string_view>( cf.first, cf.second ); } )
+                                   != m_callableFields.end() ) ) ) )
+        {
+            return;   // C++: a struct-keyword receiver, or a direct call through a function-pointer field its type declares in this file
+        }
+        RawRef r;
+        r.fileId     = m_fileId;
+        r.startByte  = ts_node_start_byte( call );
+        r.line       = ts_node_start_point( call ).row + 1;
+        r.lang       = m_lang;
+        r.role       = RefRole::Through;
+        r.qualifier  = std::string( 1, kValueRefSlotCallScope );
+        r.name       = std::string( text( root ) );
+        r.fieldName  = vrClean( text( f ) );
+        r.composeRel = "." + std::string( field );
+        r.memberCtor = std::string( ty.key );
+        r.memberPath = std::move( chain );
+        m_out.push_back( std::move( r ) );
+    }
+
     // ── name-template dispatch (IX-3) ─────────────────────────────────────────────────────────────────
     // A lookup whose NAME is built from a template with a visible literal side: the per-family forms are DATA
     // (kVrPatternLookups); the template shapes are an f-string / JS template literal (its holes are interpolation /
@@ -2147,6 +2608,9 @@ private:
 
     VrFam                          m_fam;
     Lang                           m_lang;
+    const VrSlotLang*              m_slot = nullptr;    // IX-1: this language's slot row (nullptr: no slot capture)
+    std::vector<VrStructFields>    m_structs;           // IX-1: this file's struct bodies so far
+    std::vector<std::pair<std::string, std::string_view>> m_callableFields;   // IX-1: (struct, function-pointer field) this file declares
     std::uint32_t                  m_fileId;
     std::string_view               m_src;
     std::vector<RawRef>&           m_out;

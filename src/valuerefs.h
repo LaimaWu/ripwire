@@ -48,6 +48,30 @@ inline std::string vrPath( const IngestResult& ing, std::uint32_t fileId, const 
     return std::string( rr.singleRoot ? sarif::rootRelativeUri( ing.files[fileId], rr.rootPrefix ) : std::string_view( ing.files[fileId] ) );
 }
 
+// IX-1: the slot callers of one <vr> row as text — called_by= names and called_at= sites (file:line), one per calling
+// function in the same order, cut at kSlotCallerCap with called_more= the rest; via= the tier.
+inline constexpr std::size_t kSlotCallerCap = 8;
+struct SlotCallerText
+{
+    std::string      by, at;
+    std::string_view via;
+    std::size_t      more = 0;
+};
+inline SlotCallerText slotCallerText( const IngestResult& ing, const ValueRefRow& row, const VrRender& rr )
+{
+    SlotCallerText    out;
+    const std::size_t shown = std::min( row.slotCalls.size(), kSlotCallerCap );
+    for( std::size_t k = 0; k < shown; ++k )
+    {
+        const Reference& c = ing.references[ row.slotCalls[k] ];
+        out.by += ( k == 0 ? "" : "," ) + ing.symbols[ c.fromSymbol ].name;
+        out.at += ( k == 0 ? "" : "," ) + vrPath( ing, c.fileId, rr ) + ":" + std::to_string( c.line );
+    }
+    out.via  = row.slotTyped ? "slot" : "slot-name";
+    out.more = row.slotCalls.size() - shown;
+    return out;
+}
+
 // The default display window of the <vrs> rows (the runaway guard): value_refs= and total= stay whole, the rows
 // beyond it are counted (capped="1") and the next= verb (--uses=SYM) pages every site. It lives beside the two
 // renderers that apply it and emit that disclosure (valueRefsXml, valueRefsJson).
@@ -94,6 +118,19 @@ inline std::string valueRefsXml( const IngestResult& ing, const ValueRefRows& ro
         if( callersSide && !row.calledBy.empty() )
         {
             out += " called_by=\"" + ex( row.calledBy ) + "\"";
+        }
+        else if( callersSide && !row.slotCalls.empty() )
+        {
+            const SlotCallerText st = slotCallerText( ing, row, rr );
+            out += " called_by=\"" + ex( st.by ) + "\" called_at=\"" + ex( st.at ) + "\" via=\"" + std::string( st.via ) + "\"";
+            if( st.more > 0 )
+            {
+                out += " called_more=\"" + std::to_string( st.more ) + "\"";
+            }
+            if( row.slotNameAlso > 0 )
+            {
+                out += " slot_name_also=\"" + std::to_string( row.slotNameAlso ) + "\"";
+            }
         }
         if( !callersSide && !row.through.empty() )
         {
@@ -158,6 +195,21 @@ inline std::string valueRefsJson( const IngestResult& ing, const ValueRefRows& r
         {
             kv( "called_by", row.calledBy );
         }
+        else if( callersSide && !row.slotCalls.empty() )
+        {
+            const SlotCallerText st = slotCallerText( ing, row, rr );
+            kv( "called_by", st.by );
+            kv( "called_at", st.at );
+            kv( "via", st.via );
+            if( st.more > 0 )
+            {
+                kv( "called_more", std::to_string( st.more ) );
+            }
+            if( row.slotNameAlso > 0 )
+            {
+                kv( "slot_name_also", std::to_string( row.slotNameAlso ) );
+            }
+        }
         if( !callersSide && !row.through.empty() )
         {
             kv( "through", row.through );
@@ -197,6 +249,97 @@ inline std::string valueRefsDepthKeyJson( const IngestResult& ing, const ValueRe
     const Reference& r = ing.references[cut.first];
     return ",\"value_refs_depth_capped\":" + std::to_string( cut.files ) + ",\"value_refs_depth_at\":\""
          + jsonStr( vrPath( ing, r.fileId, rr ) + ":" + std::to_string( r.line ) ) + "\"";
+}
+
+// ── IX-1 slot-type join: the callees side ───────────────────────────────────────────────────────────────
+// One <vs> per call through a struct field in the answered body: l= its line, through= the written callee, slot= the
+// resolved Type.field, via=, targets= the distinct functions that slot may hold, the first kSlotTargetCap as <t n= p=>,
+// next= when cut (a designated store is found by the literal `.f =`; a positional one by --uses on the first unshown).
+inline constexpr std::size_t kSlotTargetCap = 16;
+inline std::string slotCalleesXml( const IngestResult& ing, std::span<const SlotSiteRow> sites, const VrRender& rr )
+{
+    std::string       out;
+    std::vector<char> esc;
+    const auto        ex = [ & ]( std::string_view s ) { return std::string( escapeXml( s, esc ) ); };
+    for( const SlotSiteRow& site : sites )
+    {
+        const Reference&  r     = ing.references[ site.ref ];
+        const std::size_t shown = std::min( site.targets.size(), kSlotTargetCap );
+        out += "<vs l=\"" + std::to_string( r.line ) + "\" through=\"" + ex( r.fieldName ) + "\" slot=\"" + ex( site.slot ) + "\" via=\""
+             + ( site.typed ? "slot" : "slot-name" ) + "\" targets=\"" + std::to_string( site.targets.size() ) + "\" shown=\"" + std::to_string( shown ) + "\"";
+        if( shown < site.targets.size() )
+        {
+            const std::string_view field = std::string_view( site.slot ).substr( site.slot.rfind( '.' ) + 1 );
+            out += " next=\"" + ex( site.anyDesignated ? nextFlag( "--grep=", "." + std::string( field ) + " =" )
+                                                       : nextFlag( "--uses=", ing.symbols[ site.targets[shown] ].name ) ) + "\"";   // checklist 34
+        }
+        out += ">";
+        for( std::size_t k = 0; k < shown; ++k )
+        {
+            const Symbol& t = ing.symbols[ site.targets[k] ];
+            out += "<t n=\"" + ex( t.name ) + "\" p=\"" + ex( vrPath( ing, t.fileId, rr ) ) + ":" + std::to_string( t.line ) + "\"/>";
+        }
+        out += "</vs>";
+    }
+    return out;
+}
+// The --json twin: `,"vss":[{"l":N,"through":…,"slot":…,"via":…,"targets":N,"shown":M[,"next":…],"t":[{"n":…,"p":…}]}]`, or "".
+inline std::string slotCalleesJson( const IngestResult& ing, std::span<const SlotSiteRow> sites, const VrRender& rr )
+{
+    if( sites.empty() )
+    {
+        return {};
+    }
+    std::string out = ",\"vss\":[";
+    for( std::size_t i = 0; i < sites.size(); ++i )
+    {
+        const SlotSiteRow& site  = sites[i];
+        const Reference&   r     = ing.references[ site.ref ];
+        const std::size_t  shown = std::min( site.targets.size(), kSlotTargetCap );
+        out += ( i == 0 ? "{" : ",{" );
+        out += "\"l\":" + std::to_string( r.line ) + ",\"through\":\"" + jsonStr( r.fieldName ) + "\",\"slot\":\"" + jsonStr( site.slot )
+             + "\",\"via\":\"" + ( site.typed ? "slot" : "slot-name" ) + "\",\"targets\":" + std::to_string( site.targets.size() ) + ",\"shown\":" + std::to_string( shown );
+        if( shown < site.targets.size() )
+        {
+            const std::string_view field = std::string_view( site.slot ).substr( site.slot.rfind( '.' ) + 1 );
+            out += ",\"next\":\"" + jsonStr( site.anyDesignated ? nextFlag( "--grep=", "." + std::string( field ) + " =" )
+                                                                 : nextFlag( "--uses=", ing.symbols[ site.targets[shown] ].name ) ) + "\"";
+        }
+        out += ",\"t\":[";
+        for( std::size_t k = 0; k < shown; ++k )
+        {
+            const Symbol& t = ing.symbols[ site.targets[k] ];
+            out += ( k == 0 ? "{\"n\":\"" : ",{\"n\":\"" ) + jsonStr( t.name ) + "\",\"p\":\"" + jsonStr( vrPath( ing, t.fileId, rr ) + ":" + std::to_string( t.line ) ) + "\"}";
+        }
+        out += "]}";
+    }
+    return out + "]";
+}
+inline std::string slotCallsAttrXml( std::size_t n ) { return countFieldOrEmpty( "slot_calls", n, /*json=*/false ); }
+inline std::string slotCallsKeyJson( std::size_t n ) { return countFieldOrEmpty( "slot_calls", n, /*json=*/true ); }
+// The legend clause, exactly when an answer carries a slot join: callers — a <vr> row with via=; callees — slot_calls=.
+inline bool anySlotCallers( const ValueRefRows& rows ) noexcept
+{
+    return std::ranges::any_of( rows.rows, []( const ValueRefRow& r ) { return r.calledBy.empty() && !r.slotCalls.empty(); } );
+}
+inline std::string_view slotJoinLegend( bool any, bool callersSide ) noexcept
+{
+    if( !any )
+    {
+        return {};
+    }
+    return callersSide
+        ? "vr called_by= called_at= via=slot|slot-name: the function was stored in a struct FIELD; called_by names each function "
+          "that calls through a field of that name (x->f(...)), called_at= its first such call, file:line, in the same order. "
+          "via=slot: both sides' declared struct types are the same; via=slot-name: the field name alone matched (one side's "
+          "struct type unknown), the lower tier, shown only when no same-type call exists (slot_name_also=K: K name-only "
+          "callers hidden behind it); two known, different types never join. called_more=N: N more callers past the first 8. "
+          "MAY call through the slot; never a proven call, never in count=/callers=/reaches=. "
+        : "slot_calls=N (absent when 0): N calls in this body go through a struct FIELD holding a function (x->f(...)). "
+          "<vs l= through= slot=Type.field via= targets=K shown=> lists the functions stored in that field anywhere "
+          "(designated .f = fn, a positional struct entry, x->f = fn), first 16 as <t n= p=>, next= the rest; slot=@N.f: an "
+          "anonymous struct declared at line N of this file. via=slot: same declared struct type; via=slot-name: field name "
+          "only (one side's type unknown). MAY be called; never a proven call, never in count=. ";
 }
 
 // ── IX-3 name-template dispatch rows ────────────────────────────────────────────────────────────────────

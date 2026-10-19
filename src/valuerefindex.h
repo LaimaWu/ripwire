@@ -89,6 +89,10 @@ public:
             {
                 m_depthCuts.push_back( i );   // the file's depth-cut record: no row, a disclosure (depthCutsFor)
             }
+            else if( r.role == RefRole::Value && scopeOf( r ) == kValueRefSlotFactScope )
+            {
+                m_slots.addFact( r );         // IX-1: a field's struct type, or a typedef alias: no row
+            }
             else if( r.role == RefRole::Value )
             {
                 m_values.push_back( i );
@@ -102,6 +106,10 @@ public:
                 if( scopeOf( r ) == 'p' )
                 {
                     m_throughParamBySym[ r.fromSymbol ].push_back( i );
+                }
+                else if( scopeOf( r ) == kValueRefSlotCallScope )
+                {
+                    m_slotCalls.push_back( i );   // IX-1: a call through a struct field, joined by (type, field) below
                 }
                 else
                 {
@@ -126,6 +134,89 @@ public:
                 m_valuesByTarget[ t ].push_back( static_cast<std::uint32_t>( k ) );
             }
         }
+        buildSlots();
+    }
+
+    // ── IX-1 slot-type join ──────────────────────────────────────────────────────────────────────────────
+    // A function stored in struct field T.f (a Value row with a slot, ingest_valuerefs.h valueSlot) MAY be called by every
+    // call through a field f (`x->f( … )`, a slot Through): via="slot" when both sides' declared struct types resolve to
+    // the same T, via="slot-name" when only the field name matches (a side's type is unknown, or the two types differ:
+    // a typedef the facts do not alias). Never a proven call and never an edge: no count= / reaches= reads it.
+    struct SlotHit
+    {
+        std::uint32_t ref   = 0;       // the other side's reference index
+        bool          typed = false;   // same declared type (via="slot"), else field name only (via="slot-name")
+    };
+    // The slot calls that may call through the slot value reference `refIdx` lands in (empty: not a struct-field slot).
+    std::vector<SlotHit> slotCallsFor( std::uint32_t refIdx ) const
+    {
+        std::vector<SlotHit> out;
+        const auto vk = std::ranges::lower_bound( m_slotValues, refIdx, {}, &SlotEnd::ref );
+        if( vk == m_slotValues.end() || vk->ref != refIdx )
+        {
+            return out;
+        }
+        if( const auto it = m_slotCallsByField.find( vk->field ); it != m_slotCallsByField.end() )
+        {
+            for( const std::uint32_t k : it->second )
+            {
+                const SlotEnd& c = m_slotCallEnds[k];
+                if( const std::optional<bool> typed = slotJoin( *vk, c ) )
+                {
+                    out.push_back( { c.ref, *typed } );
+                }
+            }
+        }
+        return out;
+    }
+    // The slot value references (with a resolved function) the slot call `callIdx` may call through.
+    std::vector<SlotHit> slotValuesFor( std::uint32_t callIdx ) const
+    {
+        std::vector<SlotHit> out;
+        const auto ck = std::ranges::lower_bound( m_slotCallEnds, callIdx, {}, &SlotEnd::ref );
+        if( ck == m_slotCallEnds.end() || ck->ref != callIdx )
+        {
+            return out;
+        }
+        if( const auto it = m_slotValuesByField.find( ck->field ); it != m_slotValuesByField.end() )
+        {
+            for( const std::uint32_t k : it->second )
+            {
+                const SlotEnd& v = m_slotValues[k];
+                if( const std::optional<bool> typed = slotJoin( v, *ck ) )
+                {
+                    out.push_back( { v.ref, *typed } );
+                }
+            }
+        }
+        return out;
+    }
+    // The slot calls made inside any of `fns`, ascending; and the resolved "Type.field" of one ("" type: ".field").
+    std::vector<std::uint32_t> slotCallsMadeIn( std::span<const NodeId> fns ) const
+    {
+        std::vector<std::uint32_t> out;
+        for( const SlotEnd& c : m_slotCallEnds )
+        {
+            if( std::ranges::find( fns, m_ing.references[c.ref].fromSymbol ) != fns.end() )
+            {
+                out.push_back( c.ref );
+            }
+        }
+        return out;
+    }
+    std::string slotNameOf( std::uint32_t callIdx ) const
+    {
+        const auto ck = std::ranges::lower_bound( m_slotCallEnds, callIdx, {}, &SlotEnd::ref );
+        if( ck == m_slotCallEnds.end() || ck->ref != callIdx )
+        {
+            return {};
+        }
+        std::string_view t = ck->type;
+        if( t.starts_with( '@' ) )
+        {
+            t = t.substr( 0, t.find( '#' ) );   // an anonymous struct: "@LINE" in its own file (the "#file" key part is internal)
+        }
+        return std::string( t ) + "." + ck->field;
     }
 
     // Value references (indices into ing.references) whose resolved target is any of `defs`, in served order.
@@ -356,6 +447,12 @@ public:
         return out;
     }
 
+    // An anonymous struct's "@LINE" key is unique in its own file only: the file joins the key.
+    static std::string canonType( std::string_view t, std::uint32_t fileId )
+    {
+        return t.starts_with( '@' ) ? std::string( t ) + "#" + std::to_string( fileId ) : std::string( t );
+    }
+
     static char scopeOf( const Reference& r ) noexcept
     {
         return r.qualifier.empty() ? 'x' : r.qualifier[0];
@@ -372,6 +469,102 @@ public:
     }
 
 private:
+
+    // IX-1: the slot facts (field "T#f" → its struct type; typedef alias → struct), and both join sides keyed by field.
+    struct SlotFacts
+    {
+        HashMap<std::string, std::string> fieldType;
+        HashMap<std::string, std::string> alias;
+        void addFact( const Reference& r )
+        {
+            const std::string to = canonType( r.memberCtor, r.fileId );
+            if( r.composeRel.empty() )
+            {
+                alias.try_emplace( r.recvVar, to );   // `typedef struct tag NAME;` — the first spelling wins
+            }
+            else
+            {
+                fieldType.try_emplace( canonType( r.recvVar, r.fileId ) + "#" + r.composeRel, to );
+            }
+        }
+    };
+    struct SlotEnd
+    {
+        std::uint32_t ref = 0;
+        std::string   type;    // the resolved declared struct type, "" unknown
+        std::string   field;
+    };
+    // The slot (declared type, field) of a slot reference: the root's type through the typedef aliases, then each field
+    // of the chain through the field-type facts; a hop the facts do not know leaves the type unknown (the name tier).
+    SlotEnd slotEndOf( std::uint32_t refIdx ) const
+    {
+        const Reference& r = m_ing.references[refIdx];
+        SlotEnd          e;
+        e.ref = refIdx;
+        std::string_view chain = r.memberPath;
+        std::string      t     = r.memberCtor.empty() ? std::string() : unalias( canonType( r.memberCtor, r.fileId ) );
+        for( std::size_t dot = chain.find( '.' ); dot != std::string_view::npos; dot = chain.find( '.' ) )
+        {
+            if( !t.empty() )
+            {
+                const auto it = m_slots.fieldType.find( t + "#" + std::string( chain.substr( 0, dot ) ) );
+                t = it == m_slots.fieldType.end() ? std::string() : unalias( it->second );
+            }
+            chain.remove_prefix( dot + 1 );
+        }
+        e.type  = std::move( t );
+        e.field = std::string( chain );
+        return e;
+    }
+    // Two slot ends of one field name: same declared type → the typed tier (true); a side whose type is unknown → the name
+    // tier (false); two KNOWN, different types → no join (two different slots — `item->cb` never calls what `.cb` of
+    // another struct holds; the typedef aliases the facts record are resolved before this compare).
+    static std::optional<bool> slotJoin( const SlotEnd& value, const SlotEnd& call ) noexcept
+    {
+        if( value.type.empty() || call.type.empty() )
+        {
+            return false;
+        }
+        if( value.type == call.type )
+        {
+            return true;
+        }
+        return std::nullopt;
+    }
+    std::string unalias( std::string t ) const
+    {
+        for( int hop = 0; hop < 4; ++hop )   // `typedef struct a b; typedef b c;`: a short chain, cut (never a cycle)
+        {
+            const auto it = m_slots.alias.find( t );
+            if( it == m_slots.alias.end() || it->second == t )
+            {
+                break;
+            }
+            t = it->second;
+        }
+        return t;
+    }
+    void buildSlots()
+    {
+        if( m_slotCalls.empty() )
+        {
+            return;   // no call through a struct field anywhere: no value needs a slot key
+        }
+        for( std::size_t k = 0; k < m_values.size(); ++k )
+        {
+            if( !m_ing.references[ m_values[k] ].memberPath.empty() && !m_targets[k].empty() )
+            {
+                m_slotValues.push_back( slotEndOf( m_values[k] ) );
+                m_slotValuesByField[ m_slotValues.back().field ].push_back( static_cast<std::uint32_t>( m_slotValues.size() - 1 ) );
+            }
+        }
+        m_slotCallEnds.reserve( m_slotCalls.size() );
+        for( const std::uint32_t c : m_slotCalls )
+        {
+            m_slotCallEnds.push_back( slotEndOf( c ) );
+            m_slotCallsByField[ m_slotCallEnds.back().field ].push_back( static_cast<std::uint32_t>( m_slotCallEnds.size() - 1 ) );
+        }
+    }
 
     // A value key "#N" (an argument position) or "#name" (a keyword / a parameter default) against a parameter Through.
     static bool paramMatches( std::string_view valueKey, const Reference& through ) noexcept
@@ -619,6 +812,12 @@ private:
     HashMap<std::string, std::vector<std::uint32_t>>     m_throughByContainer;
     HashMap<NodeId, std::vector<std::uint32_t>>          m_throughParamBySym;
     HashMap<std::uint32_t, std::vector<const Binding*>>  m_importsByFile;
+    SlotFacts                                            m_slots;
+    std::vector<std::uint32_t>                           m_slotCalls;           // slot Through references, ascending
+    std::vector<SlotEnd>                                 m_slotValues;          // slot Value rows with a resolved function, by ref
+    std::vector<SlotEnd>                                 m_slotCallEnds;        // parallel to m_slotCalls
+    HashMap<std::string, std::vector<std::uint32_t>>     m_slotValuesByField;   // field → positions in m_slotValues
+    HashMap<std::string, std::vector<std::uint32_t>>     m_slotCallsByField;    // field → positions in m_slotCallEnds
     mutable HashMap<std::string, std::uint32_t>          m_fileIndex;   // root-relative normalised path → fileId, built on first import
 };
 
@@ -807,6 +1006,22 @@ struct ValueRefRow
     std::string   calledBy;             // callers side: comma-joined names
     std::string   through;              // callees side
     std::uint32_t sites   = 1;
+    // IX-1, callers side, only when calledBy is empty (a container or parameter join answers first): the slot calls that may
+    // call through this struct-field slot — one per calling function (its first site), by name; the same-type tier alone
+    // when it has any (slotTyped), else the field-name tier; slotNameAlso = name-tier functions the same-type tier hides.
+    std::vector<std::uint32_t> slotCalls;
+    bool                       slotTyped    = false;
+    std::uint32_t              slotNameAlso = 0;
+};
+
+// IX-1, callees side: one call through a struct field made in the answered functions, and the functions its slot may hold.
+struct SlotSiteRow
+{
+    std::uint32_t       ref   = 0;       // the slot Through reference (l=, through=)
+    std::string         slot;            // "Type.field" (".field" when the type is unknown)
+    bool                typed = false;   // the targets come from same-type slots (via="slot"), else name only (via="slot-name")
+    std::vector<NodeId> targets;         // distinct functions, by name then path
+    bool                anyDesignated = false;   // a target was stored by a designated `.f = fn` (the next= literal finds it)
 };
 
 struct ValueRefRows
@@ -815,7 +1030,48 @@ struct ValueRefRows
     ValueRefIndex::DepthCuts depthCut;  // the walk's depth cut over the answered defs' families (value_refs_depth_capped=)
     std::vector<std::uint32_t> patternSites;   // IX-3 (the PatternIndex overloads): callers — template lookups that may name the defs; callees — the templates in them
     std::vector<std::uint32_t> patternWideSites;   // IX-3 (callers): too-wide templates whose sides could name the defs
+    std::vector<SlotSiteRow>   slotSites;          // IX-1 (callees): calls through a struct field with at least one target
 };
+
+// IX-1: the calling functions of a slot hit list, one per function (its first site, by reference order), by name; `typed`
+// keeps the same-type tier alone when it has any hit. Returns the kept reference indices; `nameAlso` counts the name-tier
+// functions dropped behind a same-type tier.
+inline std::vector<std::uint32_t> slotCallers( const IngestResult& ing, std::vector<ValueRefIndex::SlotHit> hits, bool& typed, std::uint32_t& nameAlso )
+{
+    typed = std::ranges::any_of( hits, &ValueRefIndex::SlotHit::typed );
+    std::ranges::sort( hits, {}, &ValueRefIndex::SlotHit::ref );
+    std::vector<std::uint32_t> out;
+    std::vector<NodeId>        seen, seenName;
+    for( const ValueRefIndex::SlotHit& h : hits )
+    {
+        const NodeId f = ing.references[h.ref].fromSymbol;
+        if( f == kNoNode )
+        {
+            continue;
+        }
+        if( typed && !h.typed )
+        {
+            if( std::ranges::find( seenName, f ) == seenName.end() )
+            {
+                seenName.push_back( f );
+            }
+            continue;
+        }
+        if( std::ranges::find( seen, f ) == seen.end() )
+        {
+            seen.push_back( f );
+            out.push_back( h.ref );
+        }
+    }
+    nameAlso = static_cast<std::uint32_t>( std::ranges::count_if( seenName, [ & ]( NodeId f ) { return std::ranges::find( seen, f ) == seen.end(); } ) );
+    std::ranges::sort( out, [ & ]( std::uint32_t a, std::uint32_t b )
+    {
+        const Symbol& sa = ing.symbols[ ing.references[a].fromSymbol ];
+        const Symbol& sb = ing.symbols[ ing.references[b].fromSymbol ];
+        return sa.name != sb.name ? sa.name < sb.name : a < b;
+    } );
+    return out;
+}
 
 // --callers side: every value reference resolving to one of `defs`.
 inline ValueRefRows valueRefCallerRows( const IngestResult& ing, const ValueRefIndex& idx, std::span<const NodeId> defs )
@@ -834,6 +1090,10 @@ inline ValueRefRows valueRefCallerRows( const IngestResult& ing, const ValueRefI
                 row.calledBy.push_back( ',' );
             }
             row.calledBy += ing.symbols[f].name;
+        }
+        if( row.calledBy.empty() )
+        {
+            row.slotCalls = slotCallers( ing, idx.slotCallsFor( r ), row.slotTyped, row.slotNameAlso );   // IX-1
         }
         out.rows.push_back( std::move( row ) );
     }
@@ -981,6 +1241,57 @@ inline ValueRefRows valueRefCalleeRows( const IngestResult& ing, const ValueRefI
     }
     via.appendTo( out.rows );
     std::sort( out.rows.begin(), out.rows.end(), [ & ]( const ValueRefRow& a, const ValueRefRow& b ) { return vrCalleeRowLess( ing, a, b ); } );
+    // IX-1: the calls through a struct field in `fns` — a site the container join already answers (`ops.open()` on a table
+    // this file filled) keeps that answer alone.
+    std::vector<std::uint64_t> answered;
+    for( const std::uint32_t t : idx.madeIn( fns, RefRole::Through ) )
+    {
+        if( !idx.valuesThrough( t ).empty() )
+        {
+            answered.push_back( ( std::uint64_t( ing.references[t].fileId ) << 32 ) | ing.references[t].startByte );
+        }
+    }
+    std::ranges::sort( answered );
+    for( const std::uint32_t c : idx.slotCallsMadeIn( fns ) )
+    {
+        const Reference& cr = ing.references[c];
+        if( std::ranges::binary_search( answered, ( std::uint64_t( cr.fileId ) << 32 ) | cr.startByte ) )
+        {
+            continue;
+        }
+        const std::vector<ValueRefIndex::SlotHit> hits = idx.slotValuesFor( c );
+        SlotSiteRow site;
+        site.ref   = c;
+        site.slot  = idx.slotNameOf( c );
+        site.typed = std::ranges::any_of( hits, &ValueRefIndex::SlotHit::typed );
+        for( const ValueRefIndex::SlotHit& h : hits )
+        {
+            if( site.typed && !h.typed )
+            {
+                continue;
+            }
+            for( const NodeId t : idx.targetsOf( h.ref ) )
+            {
+                site.targets.push_back( t );
+            }
+            site.anyDesignated = site.anyDesignated || ing.references[h.ref].composeRel.starts_with( '.' );
+        }
+        std::ranges::sort( site.targets, [ & ]( NodeId a, NodeId b )
+        {
+            const Symbol& sa = ing.symbols[a];
+            const Symbol& sb = ing.symbols[b];
+            if( sa.name != sb.name )
+            {
+                return sa.name < sb.name;
+            }
+            return ing.files[sa.fileId] != ing.files[sb.fileId] ? ing.files[sa.fileId] < ing.files[sb.fileId] : a < b;
+        } );
+        site.targets.erase( std::ranges::unique( site.targets ).begin(), site.targets.end() );
+        if( !site.targets.empty() )
+        {
+            out.slotSites.push_back( std::move( site ) );
+        }
+    }
     return out;
 }
 
