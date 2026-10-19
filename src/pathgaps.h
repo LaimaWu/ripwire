@@ -1146,9 +1146,9 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
 inline constexpr std::string_view kPathBridgeLegend =
     "<bridge proven=\"0\" crossings= hops=>: a HEDGED chain from= to to= of at most 8 hops that crosses at most 2 the graph holds no "
     "edge for, each fanning out to at most 16 candidates (a declined call spelled like a builtin type's method is not crossed), and "
-    "runs through no test, bench, demo, generated or minified symbol; its <s> rows read like a path's, and via= on a row names the crossing INTO it: declined = "
+    "runs through no test, bench, demo, generated or minified symbol, nor a .d.ts/.pyi declaration twin whose package ships its implementation; its <s> rows read like a path's, and via= on a row names the crossing INTO it: declined = "
     "one of cands= candidates of a declined call in the previous row, value = a function the previous row stores or passes as a value, "
-    "closure = a function written in the previous row's body, namesake = another same-language definition of a name the previous row "
+    "closure = a function written in the previous row's body, namesake = another same-language, same-kind definition of a name the previous row "
     "calls by name alone, not spelled like a builtin type's method, whose class (or file, for a free function) owns something the "
     "chain's earlier layers reached (via=name rows are proven edges bound by name). Fewest crossings first. It is NOT a path: reachable= and "
     "hops= on the root stay 0, no count includes it, and every crossing is a hedge. ";

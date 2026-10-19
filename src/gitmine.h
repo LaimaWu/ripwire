@@ -14,6 +14,7 @@
 #include "workspace.h"          // WorkspaceRoot — mineChurnPerFile's per-root merge (promoted from main.cpp, 2026-08-29 split)
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
 #include "infra/Diagnostics.h"   // DISCLOSE — graceful-degrade on a bad/unresolvable --since value
+#include "infra/platform.h"      // RW_LIFETIMEBOUND — gitPathOfEntry's parameters; owned here, not through profileScope.h
 #include "infra/stdinline.h"     // readByteSafeLine — THE line reader (R4); no fixed buffer to split a long path on
 #include "infra/jsonesc.h"       // A4-F27 residual: rw::shSingleQuote lives here (lightest shared header) —
                                  // gitmine.h no longer carries its own copy; see jsonesc.h for the dedup rationale

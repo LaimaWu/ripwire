@@ -271,8 +271,9 @@ The exception is `scripts/tidycheck.sh`, a separate CI step with `--warnings-as-
 only checks whose every finding is a silently wrong answer and that sat at **zero rows** on the five CI
 TUs when admitted (0.6.3, clang-tidy 22; `bugprone-use-after-move` had one row, brought to zero by a
 behaviour-neutral fix that `.clang-tidy` describes): `bugprone-use-after-move`, `bugprone-dangling-handle`,
-`bugprone-sizeof-expression`, `bugprone-integer-division`, `bugprone-infinite-loop` and
-`clang-analyzer-core.*`. It is a ratchet, not a style gate: a new row is a
+`bugprone-sizeof-expression`, `bugprone-integer-division`, `bugprone-infinite-loop`,
+`clang-analyzer-core.*` and (lifetime round, 2026-10-18, also at zero rows) `clang-analyzer-cplusplus.InnerPointer`.
+It is a ratchet, not a style gate: a new row is a
 bug to fix, never a `NOLINT`, and a gated check that proves noisy leaves the list with its count, the way
 it came in (`.clang-tidy`'s header has the counts, and the candidates that stayed out or left). Run it
 before a PR that touches C++: `scripts/tidycheck.sh` finds clang-tidy 22 on `PATH` or, on macOS, at

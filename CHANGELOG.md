@@ -175,8 +175,10 @@ Rules for the `<in>` blocks, `<bridge>` and `<near_sink>` entries above, found b
   property is no longer listed as a closure beside the function expression, which takes its place.
 - C, C++ and Objective-C have no named nested function, so a function span the parser reports inside a function (htop's
   `else if (…) {` read as a function named `if`) is no longer a closure (a `langfacts.h` column, no language compare).
-- A `<bridge>` no longer routes through a test, bench, demo, generated or minified symbol (it may still start or end at
-  one), and a chain longer than 8 hops is not shown.
+- A `<bridge>` no longer routes through a test, bench, demo, generated or minified symbol, nor (with the declaration tier
+  above) a `.d.ts` / `.pyi` twin whose package ships its implementation (it may still start or end at one), and a chain
+  longer than 8 hops is not shown. Its namesake crossing joins definitions of the same language and kind; the full legend
+  now says both.
 - A `<bridge>` no longer crosses a declined member call spelled like a builtin type's method (`ids.join( "," )`,
   `keys.push( k )`, `d.get( k )`, Ruby `each`): the builtin-method gate's per-language tables decide, and on a 42-query
   hand-check every such crossing was a false chain.
@@ -284,7 +286,7 @@ With no `--limit`, a call hierarchy of 41 to 50 rows is served whole instead of 
 page (`--callers=SYM --offset=40`, the selector quoted as one argument, `--limit` and `--format=columnar` replayed), and
 the `--uses` follow-up it used to name moves to `uses_next=`; the last page and an uncut answer are unchanged. (A callers
 list past 50 rows can now be served whole too, and a capped `--callees` page names its next page: see the callers byte
-band below.) MCP `find_symbol` and `find_referencing_symbols` window each array the same way,
+band above.) MCP `find_symbol` and `find_referencing_symbols` window each array the same way,
 and `find_referencing_symbols` carries the page in `next` and the uses follow-up in `uses_next`; a `--json` page carries the
 same pair as `next` (with `--json` replayed) and `uses_next` keys. `--impact`, `--owners`
 and `--edit-check` windows keep the plain 40. Gate: `test/neighbourcapcheck.sh` arms 14-21.

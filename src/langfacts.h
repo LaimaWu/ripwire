@@ -77,9 +77,10 @@ struct LangFacts
     /// (verbs_quality.h; pinned by test/qddegradecheck.sh (E3)).
     bool defectShapeNeedsMacroSet = false;
 
-    /// C, C++, Objective-C: the language has no NAMED function definition inside another function (a lambda or a block is
-    /// anonymous), so a function the parser reports inside a function's span is an artifact of a misread (htop's `else if (…) {`
-    /// inside a macro-heavy body read as a function named `if`), never a closure (src/closures.h).
+    /// C, C++, Objective-C: a function span the parser reports DIRECTLY inside a function's span is read as a misread (htop's
+    /// `else if (…) {` inside a macro-heavy body read as a function named `if`), never a closure (src/closures.h; this fact
+    /// decides only the closure relation, no symbol or edge). A lambda or a block is anonymous, and a C++ local class's
+    /// methods sit inside the class's scope, not directly in the function, so neither is a closure either way.
     bool noNestedNamedFunctions = false;
 };
 
