@@ -24,6 +24,7 @@ Four batches of reviewed changes in one release. What a user sees:
   that uses it; declined calls are named as `<dc>` rows; `--path` says where an unreached path stopped.
 - Fewer false edges: Go receiver scope (#403), call-result typing, Rust standard members (#405), minimum arity,
   `f.call()` / `f.apply()`, qualified annotations; `--safe-delete` hedges constructed-name lookups instead of `none-found`.
+- Markdown: a `[text](other.md#slug)` link edges to that heading, and a link no call shares is marked `via="link"` (#414, thanks @muayyad-alsadi).
 - `--quality-delta=A..B` fits a memory limit (#387); git filter and diff programs are neutralised; Clojure (#349); `--pr-context` is faster.
 - Upgrade: caches rebuild once (`kParserVer` 206, `kCacheVersion` 36); re-pin Go quality baselines, acks and notes once (Go entry).
 - Measured: on our fixed set of 173 questions over public repositories (10 of them from one repository sealed before any build ran),
@@ -33,7 +34,7 @@ Four batches of reviewed changes in one release. What a user sees:
   0.6.8 figure was measured on the train-28 build of 0.6.8; the later changes in this release were measured only on their own
   target questions (release notes). Same machine, mechanical grading.
 - Thanks: @LaimaWu (#380, #382), @mpapis (#396, #400, #401, #412), @tonibergholm-codento (#387, #391, #392), @tag-und-nacht (#349),
-  and @muayyad-alsadi (#409; the markdown-link work in #414 is coming next, and the idea behind the help-wanted issue #417).
+  and @muayyad-alsadi (#409, #414: markdown section links; and the idea behind the help-wanted issue #417).
 
 ### Changed — `--for` stops when its answer is complete; an explicit `--token-budget` is a soft target
 
@@ -83,7 +84,7 @@ the path against the linking file, so `../b/notes.md` never lands on a same-name
 link to a heading named like one of the linking file's own headings does not bind to the latter. Two headings of the same
 slug give one edge (the first). A missing heading falls back to the target file's edge; percent-encoded slugs and GitHub's
 `-1` duplicate suffix are not modelled and also fall back. A markdown link that no call shares is marked `via="link"` on
-`--callers`, `--callees`, `--path`, `--connect`, and on a map or body callee row. `count=` and `cross_kind` stay the same. A crawl rooted at `.` stores `./docs/a.md`. The link index normalizes that path, so a root of `.` pins the same heading as an absolute root. `find_symbol` and `find_referencing_symbols` mark the link row, and the answer adds `via_link_note` when a row has it. `--json` callers and callees add that note too. `--safe-delete` and `--impact` mark a direct doc caller `via="link"`. `callers=` and `reaches=` still count it. An in-file anchor, a wikilink, and a root-relative link are `via="link"` too. The mark follows the reference, so an unpinned link does not clear a pinned one on the same pair. A link whose file is in the tree and whose slug names no heading carries `anchor="missing"`, unless the slug cannot be judged (non-ASCII, percent-encoded, a `-1` duplicate suffix of a heading that exists, a file that is one heading line): that link keeps the file edge with no mark. Columnar `<via>` is `2` for a direct markdown link and `1` for a name-only edge. Gate: `test/mdsectioncheck.sh`.
+`--callers`, `--callees`, `--path`, `--connect`, and on a map or body callee row. `count=` and `cross_kind` stay the same. A crawl rooted at `.` stores `./docs/a.md`. The link index normalizes that path, so a root of `.` pins the same heading as an absolute root. `find_symbol` and `find_referencing_symbols` mark the link row, and the answer adds `via_link_note` when a row has it. `--json` callers and callees add that note too. `--safe-delete` and `--impact` mark a direct doc caller `via="link"`. `callers=` and `reaches=` still count it. An in-file anchor, a wikilink, and a root-relative link are `via="link"` too. The mark follows the reference, so an unpinned link does not clear a pinned one on the same pair. A link whose file is in the tree and whose slug names no heading carries `anchor="missing"`, unless the slug cannot be judged (non-ASCII, percent-encoded, a `-1` duplicate suffix of a heading that exists, a file that is one heading line): that link keeps the file edge with no mark. Columnar `<via>` is `2` for a direct markdown link and `1` for a name-only edge. Gate: `test/mdsectioncheck.sh`. Thanks to @muayyad-alsadi (#409, #414).
 
 ### Changed — `--for`'s first eight rows name up to eight distinct files before any file takes a second row (head round-robin)
 
@@ -678,7 +679,7 @@ it); a binding record gained the call-result position and unwrap depth (33 on it
 the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls, 21), and a Rust call
 named like a standard-type member no longer binds an in-tree namesake (22), so the dead kind can
 differ for an unchanged commit. Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=f1e98faa0aeaa1ee entries=902`.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=30173b0aa2d06473 entries=908`.
 
 
 ## [0.6.7] — 2026-10-11
