@@ -25,6 +25,7 @@
 #include "filter.h"       // isTestPath — the ONE test-path convention the whole tool shares
 #include "docparse.h"     // docparse::detail::readWholeFile — the canonical whole-file byte read (reused, not re-rolled)
 #include "mention.h"      // mention_detail::baseNameOf + stripExt — the ONE basename/stem pair binstale.h/gitmine.h reuse
+#include "infra/sortutil.h" // rw::sortutil::svLess — string_view ordering is never operator< (portablebuildcheck #6)
 #include "infra/namesplit.h" // namesplit::isIdentChar — the canonical ASCII identifier-byte predicate
 #include "sarif.h"       // rootPrefixOf / rootRelativeUri — the ONE relativizer every p= emitter already shares (A3)
 #include "infra/jsonesc.h" // rw::shSingleQuote — the ONE shell quoter; run= is a COMMAND, see spell() below
@@ -480,7 +481,7 @@ inline AffectedAnswer affectedAnswer( const IngestResult& ing, const Graph& g, c
 // language's conventional constructor METHOD of the class (langfacts.h constructorMethod: Rust `T::new`). Not captured, so never a row (a floor):
 // Go composite literals `T{…}` and C++ declarations `T x;` (no call reference), Ruby `T.new` (no constructorMethod row).
 // Deliberately NOT the peers' flat dependents dump: one hop from the class, test callers only, capped.
-inline constexpr std::uint32_t kClassNewRowCap = 8;   // rows shown; the group's total= counts them all, next= lists the rest
+inline constexpr std::uint32_t kClassNewRowCap = 8;   // rows shown; the group's total= counts them all, next= is --callers= of the first cut row's class
 
 struct ClassNewRow
 {
@@ -527,8 +528,10 @@ inline NodeId classOwnerOf( const IngestResult& ing, NodeId s, std::span<const N
         return innermost;
     }
     const std::string_view owner = scopeLastSegment( sym.scope );
-    const auto [ lo, hi ] = std::equal_range( byName.begin(), byName.end(), std::pair<std::string_view, NodeId>{ owner, 0 },
-                                              []( const auto& a, const auto& b ) { return a.first < b.first; } );
+    // rw::sortutil::svLess, never operator<: the order byName is sorted under (classNewMarkReached's sort; portablebuildcheck #6/#6b/#6c).
+    using Entry = std::pair<std::string_view, NodeId>;
+    const auto nameLess = []( const Entry& a, const Entry& b ) { return rw::sortutil::svLess( a.first, b.first ); };
+    const auto [ lo, hi ] = std::equal_range( byName.begin(), byName.end(), Entry{ owner, 0 }, nameLess );
     NodeId found = kNoNode;
     for( auto it = lo; it != hi; ++it )
     {
@@ -610,7 +613,8 @@ inline void classNewMarkReached( ClassNewScan& s, const AffectedSeeds& sel, cons
             }
         }
     }
-    std::sort( s.byName.begin(), s.byName.end() );
+    std::sort( s.byName.begin(), s.byName.end(), []( const std::pair<std::string_view, NodeId>& a, const std::pair<std::string_view, NodeId>& b )
+               { return a.first != b.first ? rw::sortutil::svLess( a.first, b.first ) : a.second < b.second; } );
 }
 
 // Step 2: the owner classes, each at the hop of its nearest reached member (the changed class itself at its own hop).
@@ -715,7 +719,11 @@ inline std::vector<ClassNewRow> classNewBestRows( const ClassNewScan& s, std::sp
             ClassNewRow&      cur = best[ r.fileId ];
             const ClassNewRow cand{ r.fileId, r.line, it->cls, s.classRank[ it->cls ], it->target };
             const bool        nearer = std::tie( cand.rank, cand.line ) < std::tie( cur.rank, cur.line );
-            if( r.calleeName == ing.symbols[ it->target ].name && cand.rank <= cur.rank && ( cur.line == 0 || nearer ) )
+            // A constructorMethod call is named by its LAST segment only (`new`), so `Other::new()` would pass the name test for
+            // `Eng`: the call's written qualifier must also be the class (exact, or no row — a Rust alias import is a floor).
+            const bool        named  = r.calleeName == ing.symbols[ it->target ].name
+                                       && ( it->target == it->cls || scopeLastSegment( r.qualifier ) == ing.symbols[ it->cls ].name );
+            if( named && cand.rank <= cur.rank && ( cur.line == 0 || nearer ) )
             {
                 cur = cand;
             }
@@ -1696,7 +1704,7 @@ inline std::string classNewGroupXml( const IngestResult& ing, std::span<const Cl
                                   : std::format( "{}.{}", c.name, ing.symbols[ rows[shown].target ].name );
         next = nextAttrXml( nextFlag( "--callers=", sel ) );   // checklist 34: the one continuation spelling and escaper
     }
-    // the house window (total= shown= capped=): capped="1" exactly when rows were cut, beside the next= that lists them
+    // the house window (total= shown= capped=): capped="1" exactly when rows were cut, beside the next= for the first cut row's class (not a list of the rest)
     std::string out = std::format( "<g via=\"class-new\" total=\"{}\" shown=\"{}\"{}{}>", rows.size(), shown,
                                    shown < rows.size() ? " capped=\"1\"" : "", next );
     for( std::size_t i = 0; i < shown; ++i )

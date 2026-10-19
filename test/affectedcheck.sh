@@ -624,6 +624,27 @@ CNR="$( cn rs/src/util.rs )"
 printf '%s' "$CNR" | grep -q '<g via="class-new" total="1" shown="1"><new p="rs/tests/eng_test.rs" l="4" class="Eng"/></g>' \
     && ok '(9i) Rust: eng_test.rs calls Eng::new (the langfacts constructorMethod row) — a class-new row for Eng' \
     || no "(9i) Rust: $( printf '%s' "$CNR" | sed 's/^.*-->//' )"
+# (9i2) Rust: a file that constructs ANOTHER type first (`Other::new()`, line 5) then the reached class (`Eng::new()`, line 6): both calls
+# are named `new`, so only the call's written qualifier tells them apart — the row's l= must be the Eng line, never Other's.
+RS2="$TMP/classnew-rs2"; mkdir -p "$RS2/src" "$RS2/tests"
+printf 'pub fn leaf(p: u32) -> u32 { p }\n'                                                    > "$RS2/src/util.rs"
+printf 'mod util;\nuse crate::util::leaf;\npub struct Eng { v: u32 }\nimpl Eng {\n    pub fn new() -> Eng { Eng { v: 0 } }\n    pub fn run(&self) -> u32 { leaf(self.v) }\n}\npub struct Other { v: u32 }\nimpl Other {\n    pub fn new() -> Other { Other { v: 0 } }\n}\n' > "$RS2/src/lib.rs"
+printf 'use crate::{Eng, Other};\n#[test]\nfn builds() {\n    let _x = 1;\n    let _o = Other::new();\n    let _e = Eng::new();\n}\n' > "$RS2/tests/t.rs"
+CNR2="$( cd "$RS2" || exit 1; "$BIN" "$RS2" --affected=src/util.rs --no-cache 2>/dev/null )"
+printf '%s' "$CNR2" | grep -q '<g via="class-new" total="1" shown="1"><new p="tests/t.rs" l="6" class="Eng"/></g>' \
+    && ok '(9i2) Rust: Other::new() (line 5) then Eng::new() (line 6) in one test fn — the row names the Eng construction, l="6"' \
+    || no "(9i2) Rust: a row's l= names another type's construction: $( printf '%s' "$CNR2" | sed 's/^.*-->//' )"
+# (9l) "nearest class first": two classes at DIFFERENT hops whose test-path order is the reverse of their rank order. Far (hop 2, via
+# the module function mid) is built by the alphabetically-first test, Near (hop 1) by the later one: the rows must list Near first.
+MB="$TMP/classnew-rank"; mkdir -p "$MB/pkg" "$MB/tests"
+printf 'def leaf(p):\n    return p\n'                                                       > "$MB/pkg/util.py"
+printf 'from pkg.util import leaf\n\ndef mid(p):\n    return leaf(p)\n\nclass Far:\n    def go(self, p):\n        return mid(p)\n\nclass Near:\n    def run(self, p):\n        return leaf(p)\n' > "$MB/pkg/svc.py"
+printf 'from pkg.svc import Far\n\ndef test_far():\n    obj = Far()\n    getattr(obj, "g" + "o")(1)\n'  > "$MB/tests/test_a.py"
+printf 'from pkg.svc import Near\n\ndef test_near():\n    obj = Near()\n    getattr(obj, "r" + "un")(1)\n' > "$MB/tests/test_z.py"
+CNM="$( cd "$MB" || exit 1; "$BIN" "$MB" --affected=pkg/util.py --no-cache 2>/dev/null )"
+printf '%s' "$CNM" | grep -q '<g via="class-new" total="2" shown="2"><new p="tests/test_z.py" l="4" class="Near"/><new p="tests/test_a.py" l="4" class="Far"/></g>' \
+    && ok '(9l) rank order: Near (hop 1, tests/test_z.py) is listed before Far (hop 2, tests/test_a.py) although the path order is the reverse' \
+    || no "(9l) rank order: the nearest class is not first: $( printf '%s' "$CNM" | sed 's/^.*-->//' )"
 ( cd "$CN" || exit 1; "$BIN" "$CN" --affected=src/url.ts --legend=full --no-cache 2>/dev/null ) | grep -q '<g via="class-new" total= shown= capped= next=>: tests not listed above that construct a class owning a reached method' \
     && ok '(9k) the full legend carries the same clause (testmap.h kClassNewLegend) when the group renders' \
     || no '(9k) --legend=full renders the class-new group with no clause'
