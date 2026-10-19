@@ -63,8 +63,10 @@ answer (fold, its legend clause and the `<sigs>` pair) +3.4 KB median (max 4.9 K
   property is no longer listed as a closure beside the function expression, which takes its place.
 - C, C++ and Objective-C have no named nested function, so a function span the parser reports inside a function (htop's
   `else if (…) {` read as a function named `if`) is no longer a closure (a `langfacts.h` column, no language compare).
-- A `<bridge>` no longer routes through a test, bench, demo, generated or minified symbol (it may still start or end at
-  one), and a chain longer than 8 hops is not shown.
+- A `<bridge>` no longer routes through a test, bench, demo, generated or minified symbol, nor (with the declaration tier
+  above) a `.d.ts` / `.pyi` twin whose package ships its implementation (it may still start or end at one), and a chain
+  longer than 8 hops is not shown. Its namesake crossing joins definitions of the same language and kind; the full legend
+  now says both.
 - A `<bridge>` no longer crosses a declined member call spelled like a builtin type's method (`ids.join( "," )`,
   `keys.push( k )`, `d.get( k )`, Ruby `each`): the builtin-method gate's per-language tables decide, and on a 42-query
   hand-check every such crossing was a false chain.
