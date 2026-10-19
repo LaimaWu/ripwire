@@ -1281,28 +1281,6 @@ struct CallResultTypes
             }
         }
     }
-    // rust-receivers: does the path a `use` at byte `at` of file `f` writes (`std::path::Path`, `serde::Value`) start outside
-    // the tree — a root that is neither crate / self / super / Self, nor an in-tree crate's name, nor a module the file sees
-    bool rustPathLeavesTree( std::uint32_t f, std::uint32_t at, std::string_view path ) const
-    {
-        if( !rust.built )
-        {
-            buildRustLayout();
-        }
-        const std::string_view root = path.substr( 0, path.find( "::" ) );
-        if( root == "crate" || root == "self" || root == "super" || root == "Self" || root.empty() )
-        {
-            return false;
-        }
-        nameKey.assign( root );
-        if( rust.crateByName.contains( nameKey ) )
-        {
-            return false;
-        }
-        std::uint32_t crate = kNoCrate;
-        std::string   module;
-        return !rustModuleOf( f, at, root, crate, module, 0 );
-    }
     // (L) a qualified Rust call whose qualifier is a module path reaching `target`'s own module (`model::load()`,
     // `crate::nest::holder()`, a `use`d `nest::holder()`): the evidence the canonical tier, keyed by type scopes, lacks
     bool rustQualifierReaches( const Reference& r, NodeId target ) const

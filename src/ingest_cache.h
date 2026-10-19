@@ -356,6 +356,9 @@ constexpr std::uint32_t kParserVer    = 210;          // bump on any grammar/.sc
                                                       //   Rust records a typed RecvType for a parameter / `let x: T` / `let x = T { .. }` / `T::default()`
                                                       //   written or constructed as a type, and a MemberType for a struct's named field (ingest_binds.h
                                                       //   captureRustEvidence); a written or declared `Self` and a generic's head name their class.
+                                                      //   Fix round 1 changes the CONTENT under the same 202 (lane dev caches only; the train renumbers): a Rust
+                                                      //   CallResult's importedName is the call's WRITTEN qualifier path, and a ReturnType's isFromAssignment
+                                                      //   marks a result written `Self` — a cache from a pre-fix-round 202 build reads every result as not-Self.
                                                       //   kCacheVersion unchanged (no record format changes).
                                                       // 196 = 2026-10-18 (train 30): strictly above every number a live build used — main 184 (rich 185),
                                                       //   lane call-result-typing 180 (rich 181), lane fcall-forward 188 (189), lane go-local-var 190 (191),

@@ -60,7 +60,7 @@ a `use … as` alias by the path it names, a glob `use super::*` through the mod
 at the binding), so `use std::fs::File` beside an in-tree `File` proves nothing. A declared `-> Self`
 result now types its call too (`let b = Book::new(); b.spin()`) when the call's qualifier, resolved the same way, names
 that in-tree type: `fs::File::open()`, `std::path::PathBuf::from()`, a glob's or the prelude's `String::new()` or an
-external crate's glob reach an in-tree namesake only by name and type nothing. A generic result's head names its class. On
+external crate's glob reach an in-tree namesake only by name and type nothing. A result written by the type's own name (`-> PathBuf`, not `-> Self`) keeps the earlier call-result rule. A generic result's head names its class. On
 rust-lang/mdBook, `--callers=Book::iter` now lists `make_data` (`book: &Book`) and `MDBook::iter` (`self.book.iter()`)
 as plain edges. Stated floor (still declined or hedged): a generic bound `T: Trait`, `dyn` / `impl Trait` and a trait
 written as a type (which implementation runs is dispatch), a `type` alias, a glob of a module that only globs, a value behind `Option` / `Result` / `Rc` / `Arc` / `RefCell` /
