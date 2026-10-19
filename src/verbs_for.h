@@ -764,14 +764,14 @@ inline bool rankedHopCallsNextPresent( std::string_view hops ) noexcept
     }
     return false;
 }
-inline std::string_view hopsCallsNextLegend( const ForLensHeaderParts& p, bool compact ) noexcept
-{
-    return !p.hopsCallsNextPresent ? std::string_view() : ( compact ? kForCompactHopsCallsNextClause : kForHopsCallsNextClause );
-}
 // A present-only clause in this dialect: "" unless its element or attribute rides, else the compact or the full spelling.
 inline constexpr std::string_view presentOnlyClause( bool present, bool compact, std::string_view compactClause, std::string_view fullClause ) noexcept
 {
     return !present ? std::string_view() : ( compact ? compactClause : fullClause );
+}
+inline std::string_view hopsCallsNextLegend( const ForLensHeaderParts& p, bool compact ) noexcept
+{
+    return presentOnlyClause( p.hopsCallsNextPresent, compact, kForCompactHopsCallsNextClause, kForHopsCallsNextClause );
 }
 // body-fold: the fold's clause in this dialect, present-only (bodyFoldPresent), right after the slot clause
 inline std::string_view bodyFoldLegend( const ForLensHeaderParts& p, bool compact ) noexcept
