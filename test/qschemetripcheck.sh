@@ -34,6 +34,12 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-18, train 31 (body-fold, hrr, h1-annot, callers-band2, dangling-warnings, ix2-slice merged onto main 939dbb69):
+#   RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (hash b3bb57d4aa…a02a21a4). Watched text: kParserVer -> 198 (main
+#   196 / rich 197, lane h1-annot 194 / 195; the other five lanes kept their base 184; 198 / rich file tag 199 is above every
+#   live build), quality.h's kIngestParserVerMirror with it. kCacheVersion stays 36 (no lane touched a cache serializer) and
+#   kQSnapCacheScheme stays 22: what a cached Snapshot represents is the same, and the qsnap key folds the extraction identity.
+#   The h1-annot lane entry below is kept as written; its hash is superseded by this one.
 # 2026-10-18, train 30 (call-result-typing, go-local-var, fcall-forward, name-template-dispatch, tail-sym, path-owners merged
 #   onto main b59b0824): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (hash 5af7514356…3726b4). Watched text:
 #   kParserVer -> 196 (lanes call-result-typing 180 / rich 181, fcall-forward 188 / 189, go-local-var 190 / 191,

@@ -143,7 +143,7 @@ every definition. On fzf, `--path=Matcher::Loop,Pattern::extendedMatch` was "end
 
 Known floors: struct fields are not Go definitions, so nothing scopes to a struct; a member of an anonymous interface in
 a struct field scopes to the struct. Rust and Kotlin keep their own scope walkers; C++ and Python output is byte-identical.
-`kParserVer` moves (184 in this release, see the versions note).
+`kParserVer` moves (198 in this release, see the versions note).
 
 ### Changed — a Rust call named like a standard collection, string or Option member binds no in-tree namesake by name (#405)
 
@@ -179,7 +179,7 @@ overload the too-many check dropped. A call with a spread, splat or C++ pack exp
 argument count. Fewer calls stay ambiguous, so `ambiguous=` and `graph_ambiguous=` drop. Two residual limits stay: a
 C/C++ argument that is a macro expanding to several arguments is counted as one, and a default written only on a
 declaration ripwire does not index (a `.inl`/`.ipp` header, a header outside the tree) is not seen. `kParserVer` and `kCacheVersion` move
-(a definition record gains `paramsMin`; 184 and 34 in this release, see the versions note). A cached definition whose
+(a definition record gains `paramsMin`; 198 and 36 in this release, see the versions note). A cached definition whose
 minimum exceeds its parameter count is refused and that file reparses (`test/cachefuzzcheck.sh` Part 3). Gate: `test/aritycheck.sh` §3b.
 
 ### Changed — `--impact` of a type starts from the symbols that name it
@@ -255,7 +255,7 @@ it now names nothing.) Go's
 written `*os.File` no longer resolves to an in-tree type that happens to be called `File`. A Java/Kotlin class-name
 receiver binds an in-tree class only where the caller's file sees it — its package, a single-type import naming it, an
 on-demand import of its package (`import ext.Util; Util.open()`, `import ext.*; Util.open()`, `Util::open` no longer bind
-an in-tree `Util` as proven). `kParserVer` and `kCacheVersion` move (196 and 36 in this release, see the versions note).
+an in-tree `Util` as proven). `kParserVer` and `kCacheVersion` move (198 and 36 in this release, see the versions note).
 ### Fixed — `f.call( … )` and `f.apply( … )` on a proven function are calls of `f`
 
 `handleRequest.call( request.server, null, request, reply )` used to be recorded only as a member call named `call`, so
@@ -265,7 +265,7 @@ the file declares as a function, or imports from a relative module, now stands f
 where the resolver proves a function or method: an imported object, const or class (`rpc.call()` on a required
 module object, `Klass.call( this )`) and a name bound by name alone add nothing. `f.bind( … )` is a value use of `f`,
 never a call. Floors, shared with the bare call `f()`: a function-local `var f` / `let f` declared after the site does not
-shadow it, and a re-assignment `f = …` is not followed. `kParserVer` and `kCacheVersion` move (196 and 36 in this release, see the versions note).
+shadow it, and a re-assignment `f = …` is not followed. `kParserVer` and `kCacheVersion` move (198 and 36 in this release, see the versions note).
 ### Fixed — a method a name-template lookup can name no longer reads `risk="none-found"`
 
 `getattr(obj, f"watch_{name}")`, `hasattr`, `cls.__dict__.get(f"on_{n}")` and JS/TS `this['compile' + node.typename]`
@@ -279,7 +279,7 @@ each template's candidates (`<pd cands= shown=>`, first 8, `next=` for the rest)
 `--safe-delete`, when nothing else was found, it still makes `risk="hedged"` and names its site as a `<pdw>` row. A template with no literal side at all (`codes[sc + '']`, `f"{m}"`) carries no
 name and records nothing, like a bare `obj[k]`. Matched
 by name, never a proven call: `callers=`, `impact_reaches=`, `count=` and the `--dead-code` list are unchanged. The
-`--json` and `--format=columnar` roots carry both counts but not the rows; the MCP transport carries neither yet. Cache format and parser version move (the reference role set grew; 36 and 196 in this release, see the versions
+`--json` and `--format=columnar` roots carry both counts but not the rows; the MCP transport carries neither yet. Cache format and parser version move (the reference role set grew; 36 and 198 in this release, see the versions
 note). Gate: `test/safedeletecheck.sh` arms 9–18.
 ### Changed — `--for` tail rank rows name their file's top symbols
 
@@ -307,7 +307,7 @@ scope only, a Rust `const` / `static` at module, `impl`, trait or `extern` level
 level; a call in a function-local initializer belongs to the enclosing function. Package-level grouped Go `var ( a = …;
 b = … )` declarations, which were missed (grouped `const` was already read), are now one symbol per name. On fzf, gotestsum and nfpm (Go), 574
 function-local symbols leave the map, no package-level one is lost, and 87 grouped names are added. `kParserVer` moves
-(196 in this release, see the versions note). Gate: `test/localdeclcheck.sh`.
+(198 in this release, see the versions note). Gate: `test/localdeclcheck.sh`.
 
 ### Changed — `--path` hop rows name a member by its owner (`Owner.name`)
 
@@ -334,6 +334,7 @@ method Python calls — `Num`'s in-place `__iadd__` (its own or the nearest base
 every path (every `return` returns `self` bare, at least one does, and the body cannot fall off its end into an implicit
 `return None`) or declares `-> Self` / `-> Num`. Measured: 0 call sites change on textual, hono, starlette, flake8, kysely and
 fastify (`--pin-census`, base vs head); the false proofs reproduce on minimal fixtures (test/receiverevidencecheck.sh arm Q).
+`kParserVer` moves (the extraction path changed; 198 in this release, see the versions note).
 
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
@@ -348,7 +349,7 @@ Output is byte-identical with ONE stated exception: the map, `--deps --limit=100
 comes from the query, which has no such bound — so past that depth (260 nested `module`s with an `include M` innermost)
 the reference has no directive to join to: `--lego` lists the includer as an implementor, while the existing
 depth-bound notice on stderr says deeper imports were not captured. No real code nests 256 levels deep.
-`kParserVer` moves (the extraction path changed; 184 in this release, see the versions note).
+`kParserVer` moves (the extraction path changed; 198 in this release, see the versions note).
 
 ### Fixed — a function stored through `??`, `||`, `&&`, `or` or `and` is a value use
 
@@ -358,7 +359,7 @@ value-reference capture walked parentheses and ternary branches but stopped at a
 value-preserving operators — JS/TS `??`, `||`, `&&` and the logical assignments `??=`, `||=`, `&&=`; Python `or`,
 `and` — in every position it already read (assignment, return, argument, parameter default). The left operand of
 `&&`/`and` only decides and stays no row; C/C++ and Go `||`/`&&` yield a truth value and stay no row. Parser version
-184 in this release (caches re-parse once; see the versions note). Gate: `test/recallshapecheck.sh` arms OP1–OP17.
+198 in this release (caches re-parse once; see the versions note). Gate: `test/recallshapecheck.sh` arms OP1–OP17.
 
 ### Added — `--grep` names what a hit's variable carries and who reads it
 
@@ -390,7 +391,7 @@ edge, no `via="name"` hedge and no count: a `[]` or `__getitem__` definition els
 name. It does NOT mean every subscript of an in-tree class is found: a Ruby instance variable receiver is not typed, a
 compound assignment (`h[ k ] ||= v`) is recorded as the read form, and `del o[ k ]`, a multiple-assignment target and an
 annotation record nothing. On rake 93 callers of `[]` appear; on textual 42 of `__getitem__`. C++ `operator[]` could
-share the path and is not armed. `--uses` lists no subscript site. Parser version 184 in this release (see the versions note). Gate:
+share the path and is not armed. `--uses` lists no subscript site. Parser version 198 in this release (see the versions note). Gate:
 `test/subscriptopcheck.sh`.
 
 ### Added — `--lego=M` lists Ruby's main object when a file's top level mixes M in
@@ -570,14 +571,15 @@ server, when the cgroup's charge is the larger reading: restarting the server do
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 167 → 196: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
+`kParserVer` 167 → 198: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
 `??`/`||`/`&&`/`or`/`and` carried 173 on its branch, the Ruby/Python subscript references and Ruby's main-object mixins
 174 (file tag 175), and the Elixir quote live holes (#380) 145 on theirs; they landed together at 176 (file tag 177). The
 minimum-arity field (`paramsMin`) carried 178 (file tag 179) on its branch and the Go receiver scope (#403) 182 (file tag 183);
 those landed at 184 (file tag 185). Call-result typing carried 180 (file tag 181), the `f.call` / `f.apply` forwarders 188
 (189), the function-local Go / Rust / GDScript declarations 190 (191) and the name-template references 192 (193) on their
-branches, and a branch not in this release 194 (195). This release is 196, above every number a branch build has used, so
-no cache such a build wrote is read as this release's; its full-use file tag is 197.
+branches; those landed at 196 (file tag 197). The qualified-annotation and `x op= v` rebinding change carried 194 (195) on
+its branch. This release is 198, above every number a branch build has used, so no cache such a build wrote is read as this
+release's; its full-use file tag is 199.
 `kCacheVersion` 31 → 36: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
 numbered 9 on #380's branch, which predates the subscript role), and the binding kind byte one (Ruby's main-object mixin) (32);
 a definition record gained `paramsMin`, the fewest arguments a call can pass (33 on its branch, 34 in the train that landed
