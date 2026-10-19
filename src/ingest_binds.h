@@ -5794,11 +5794,12 @@ inline std::string_view rustImplSelf( TSNode n, std::string_view src )
 // passes (`Result<T, E>`, `Option<T>`) into `depth`: `T`, `Self` (the impl's type), or a path's last segment with `whole`
 // set to the path as written (`crate::model::Config`, `std::fs::File`), which graph.h resolves to an in-tree module's
 // class or refuses (receiverevidence.h rustResultClass). `tuple` receives a tuple type left at the core (positions are the
-// caller's). "" for anything else, or a type parameter of `fn`. `spelledSelf` (when given) receives whether the class came
+// caller's). "" for anything else, or a type parameter of `fn`. `spelledSelf` receives whether the class came
 // from a written `Self` (fix round 1: graph.h types such a call's local only through a qualifier that resolves to it).
-inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_view src, std::uint8_t& depth, std::string_view& whole, TSNode* tuple, bool* spelledSelf = nullptr )
+inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_view src, std::uint8_t& depth, std::string_view& whole, TSNode* tuple, bool& spelledSelf )
 {
-    whole = {};
+    whole       = {};
+    spelledSelf = false;
     for( int guard = 0; guard < 8 && !ts_node_is_null( type ); ++guard )
     {
         const char* t = ts_node_type( type );
@@ -5847,10 +5848,7 @@ inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_vie
         // `Self` (tree-sitter-rust spells it a type_identifier in a type, `fn new() -> Self`): the impl's type, "" in a trait
         if( kindIs( t, "self" ) || ( ( kindIs( t, "identifier" ) || kindIs( t, "type_identifier" ) ) && nodeTextOf( type, src ) == "Self" ) )
         {
-            if( spelledSelf != nullptr )
-            {
-                *spelledSelf = true;
-            }
+            spelledSelf = true;
             return rustImplSelf( fn, src );
         }
         if( kindIs( t, "scoped_type_identifier" ) )
@@ -5868,6 +5866,12 @@ inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_vie
     }
     return {};
 }
+// the same reading where whether the class came from a written `Self` does not matter (a written local / parameter / field)
+inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_view src, std::uint8_t& depth, std::string_view& whole, TSNode* tuple )
+{
+    bool spelledSelf = false;
+    return rustResultClass( type, fn, src, depth, whole, tuple, spelledSelf );
+}
 
 // Rust: one ReturnType per declared result of a fn — the whole value (kWholeResult) or, for a tuple at the core
 // (`Result<(Book, Ctx)>`), one per element by position; each element is read through the transparent wrappers only.
@@ -5883,7 +5887,7 @@ inline void captureRustReturnTypes( BindCtx& cx, TSNode fn )
     std::string_view    whole;
     TSNode              tuple{};
     bool                spelledSelf = false;
-    const std::string_view cls = rustResultClass( ret, fn, cx.src, depth, whole, &tuple, &spelledSelf );
+    const std::string_view cls = rustResultClass( ret, fn, cx.src, depth, whole, &tuple, spelledSelf );
     if( ts_node_is_null( tuple ) )
     {
         pushReturnType( cx, defStart, kWholeResult, cls, whole, depth, spelledSelf );
@@ -5893,7 +5897,7 @@ inline void captureRustReturnTypes( BindCtx& cx, TSNode fn )
     {
         std::uint8_t           inner     = 0;
         bool                   elemSelf  = false;
-        const std::string_view elem      = rustResultClass( ts_node_named_child( tuple, i ), fn, cx.src, inner, whole, nullptr, &elemSelf );
+        const std::string_view elem      = rustResultClass( ts_node_named_child( tuple, i ), fn, cx.src, inner, whole, nullptr, elemSelf );
         if( inner == 0 )   // an element that is itself a Result/Option layer needs an operator the tuple pattern cannot apply
         {
             pushReturnType( cx, defStart, std::uint8_t( i ), elem, whole, depth, elemSelf );

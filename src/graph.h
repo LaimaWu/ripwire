@@ -3169,9 +3169,8 @@ inline std::string_view stdElementType( std::string_view written ) noexcept
 // receiver evidence types (receiverevidence.h narrowTypedLocal): a parameter, local or field WRITTEN as an in-tree type —
 // `s: &mut Stack<i32>`, `let s = Stack { .. }`, `self.inner` declared `Stack<i32>`, `book: &Book` where Book defines iter —
 // or a call result. The receiver exception itself reads nothing for Rust (stdReceiverOf reads C++ written types only), so
-// its STATED FLOOR is what Rust does not type: a generic `P: Bound`, `dyn` / `impl Trait`, a type alias, a glob of a glob,
-// a tuple-struct field, a pattern other than a plain name, a value behind Option / Result / Rc / Arc / RefCell / Cell /
-// Mutex / RwLock — declined with the false edges, counted (declined_calls=, <stdm>), never silently dropped.
+// its STATED FLOOR is what Rust does not type: a generic bound, dyn / impl Trait, a type alias, a glob of a glob, a tuple-struct
+// field, a non-plain pattern, a value behind Option / Result / Rc / Arc / RefCell / Cell / Mutex / RwLock — declined with the false edges, counted (declined_calls=, <stdm>), never silently dropped.
 // C has no member functions. GO has an EMPTY row: its common member names
 // (Len, Write, String, Error, Reset, Lock, Unlock) are methods in-tree types implement on purpose to satisfy an interface,
 // so an unproven receiver may well dispatch into the tree; a Go gate needs typed receivers, not a name list. Java, Kotlin,
@@ -6950,14 +6949,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 const std::uint32_t ri = rtIt->second;
                 const Binding&      rt = ing.bindings[ ri ];
-                const bool          match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth );
+                const bool          match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth )
+                                            && ( !rt.isFromAssignment || recvEv.rustQualifiedTypeOwns( r, callee ) );   // Rust `-> Self`: rustQualifiedTypeOwns
                 if( !match )
                 {
                     continue;
-                }
-                if( rt.isFromAssignment && !recvEv.rustQualifiedTypeOwns( r, callee ) )
-                {
-                    break;   // rust-receivers fix round 1: a result written `Self` types only through a qualifier naming its class
                 }
                 const NodeId cls = recvEv.types.resultClassOf( rt, cs.lang );
                 if( cls != kNoNode && rule2Sink )
