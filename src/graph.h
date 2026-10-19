@@ -6455,7 +6455,7 @@ struct MdLinkIndex
 
 inline bool isMarkdownLinkRef( const Reference& r ) noexcept
 {
-    if( r.lang != Lang::Markdown || r.isDocLink || r.memberCall )
+    if( !langFacts( r.lang ).linkSections || r.isDocLink || r.memberCall )
     {
         return false;
     }
@@ -6466,7 +6466,7 @@ inline bool isMarkdownLinkRef( const Reference& r ) noexcept
 // path, which an in-file anchor and a wikilink do not have. A markdown doc mention is neither.
 inline void noteMarkdownLinkSite( HashMap<std::uint64_t, char>& linkEdges, std::uint64_t ekey, const Reference& r )
 {
-    if( r.lang == Lang::Markdown && !r.isDocLink )
+    if( langFacts( r.lang ).linkSections && !r.isDocLink )
     {
         linkEdges[ ekey ] = 1;
     }
@@ -6505,7 +6505,7 @@ inline std::vector<std::uint32_t> markdownWidestEnd( const IngestResult& ing )
     std::vector<std::uint32_t> widest( ing.files.size(), 0 );
     for( const Symbol& sym : ing.symbols )
     {
-        if( sym.lang == Lang::Markdown && sym.kind == SymKind::Section && sym.fileId < ing.files.size() )
+        if( langFacts( sym.lang ).linkSections && sym.kind == SymKind::Section && sym.fileId < ing.files.size() )
         {
             widest[ sym.fileId ] = std::max( widest[ sym.fileId ], sym.endByte );
         }
@@ -6520,7 +6520,7 @@ inline void indexMarkdownSections( MdLinkIndex& ix, const IngestResult& ing )
     const std::vector<std::uint32_t> widest = markdownWidestEnd( ing );
     for( const Symbol& sym : ing.symbols )
     {
-        if( sym.lang != Lang::Markdown || sym.kind != SymKind::Section || sym.fileId >= ing.files.size() )
+        if( !langFacts( sym.lang ).linkSections || sym.kind != SymKind::Section || sym.fileId >= ing.files.size() )
         {
             continue;
         }
@@ -7806,7 +7806,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     bool anyMarkdownLink = false;
     for( const Reference& r : ing.references )
     {
-        if( r.lang == Lang::Markdown && !r.isDocLink )
+        if( langFacts( r.lang ).linkSections && !r.isDocLink )
         {
             anyMarkdownLink = true;
             break;
@@ -11331,7 +11331,7 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
     for( std::uint32_t refIndex = 0; refIndex < ing.references.size(); ++refIndex )
     {
         const Reference& r = ing.references[ refIndex ];
-        if( ( r.role != RefRole::Read && r.role != RefRole::Write ) || r.isCompose || r.isDocLink || r.lang == Lang::Markdown )
+        if( ( r.role != RefRole::Read && r.role != RefRole::Write ) || r.isCompose || r.isDocLink || langFacts( r.lang ).linkSections )
         {
             continue;
         }

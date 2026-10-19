@@ -544,7 +544,7 @@ grep -q '^## Install Steps Renamed$' "$TMP/anchorcopy/docs/b/partner.md" || no "
 $BIN "$TMP/anchorcopy" --cache="$TMP/anchor.cache" --callees="Self Collision" --legend=compact >"$TMP/ac_warm" 2>/dev/null
 $BIN "$TMP/anchorcopy" --no-cache --callees="Self Collision" --legend=compact >"$TMP/ac_cold" 2>/dev/null
 if [ -s "$TMP/ac_cold" ] && diff -q "$TMP/ac_cold" "$TMP/ac_warm" >/dev/null; then ok "warm run equals cold run after only the target heading changed"; else no "warm run differs from cold after a target-only edit (a stale bound ref)"; fi
-grep -q 'n="partner"' "$TMP/ac_warm" && ok "…and the dead anchor degraded to the partner file edge" || no "the renamed-heading link lost its edge on the warm run"
+if grep -q 'n="partner"' "$TMP/ac_warm"; then ok "…and the dead anchor degraded to the partner file edge"; else no "the renamed-heading link lost its edge on the warm run"; fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo

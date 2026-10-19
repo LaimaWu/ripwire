@@ -76,6 +76,9 @@ struct LangFacts
     /// judged against the base's whole set. A changed C or Objective-C file does not need it, by today's behaviour
     /// (verbs_quality.h; pinned by test/qddegradecheck.sh (E3)).
     bool defectShapeNeedsMacroSet = false;
+
+    /// Markdown: a link targets a section, so shared graph code treats this language's sections as link targets (graph.h).
+    bool linkSections = false;
 };
 
 /// The rows, one per Lang in enum order. A language says only the facts it has.
@@ -87,7 +90,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Rust },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC },
-    { .lang = Lang::Markdown },
+    { .lang = Lang::Markdown, .linkSections = true },
     { .lang = Lang::JavaScript },
     { .lang = Lang::Bash },
     { .lang = Lang::Java },
