@@ -82,13 +82,29 @@ t = open( sys.argv[1], "rb" ).read().decode( "utf-8", "replace" )
 t = re.sub( r" est_tokens=\"[^\"]*\"", "", t )
 fold = lambda m: re.sub( r" bytes=\"[^\"]*\"", "", m.group( 0 ).replace( "\r", "" ) )
 sys.stdout.write( re.sub( r"<fold .*?</fold>", fold, t, flags = re.S ) )' "$1"; }
+# normeq NORMALISER A B -> 0 equal, 1 differ, 2 unusable: an input that is missing or empty, or a normaliser that fails or
+# prints nothing, is never compared (two empty streams would compare equal and pass R3 vacuously)
+normeq() {
+    [ -s "$2" ] && [ -s "$3" ] || return 2
+    local a b r; a="$( mktemp )"; b="$( mktemp )"
+    if "$1" "$2" >"$a" && "$1" "$3" >"$b" && [ -s "$a" ] && [ -s "$b" ]; then cmp -s "$a" "$b"; r=$?; [ "$r" -le 1 ] || r=2; else r=2; fi
+    rm -f "$a" "$b"; return "$r"
+}
 for side in "$LIN" "$WIN"; do
-    diff -q <( nf "$side/tree-for.xml" ) <( nf "$side/crlf-for.xml" ) >/dev/null \
-        || { verdict FAIL "R3 ${side##*/}: crlf-for differs from tree-for beyond est_tokens= and its fold's CR bytes and skip bytes=:"; show "$side/tree-for.xml" "$side/crlf-for.xml"; }
+    normeq nf "$side/tree-for.xml" "$side/crlf-for.xml"; r=$?
+    if [ "$r" -eq 2 ]; then
+        verdict FAIL "R3 ${side##*/}: tree-for.xml / crlf-for.xml missing, empty, or unreadable by the normaliser (python3) — nothing was compared"
+    elif [ "$r" -ne 0 ]; then
+        verdict FAIL "R3 ${side##*/}: crlf-for differs from tree-for beyond est_tokens= and its fold's CR bytes and skip bytes=:"; show "$side/tree-for.xml" "$side/crlf-for.xml"
+    fi
 done
 for side in "$LIN" "$WIN"; do
-    diff -q <( nx "$side/tree-expand.xml" ) <( nx "$side/crlf-expand.xml" ) >/dev/null \
-        || verdict FAIL "R3 ${side##*/}: crlf-expand differs from tree-expand beyond its CR bytes and reason=/est_tokens="
+    normeq nx "$side/tree-expand.xml" "$side/crlf-expand.xml"; r=$?
+    if [ "$r" -eq 2 ]; then
+        verdict FAIL "R3 ${side##*/}: tree-expand.xml / crlf-expand.xml missing, empty, or unreadable by the normaliser — nothing was compared"
+    elif [ "$r" -ne 0 ]; then
+        verdict FAIL "R3 ${side##*/}: crlf-expand differs from tree-expand beyond its CR bytes and reason=/est_tokens="
+    fi
 done
 [ "$rulefail" -eq 0 ] && verdict PASS "R3 CRLF copies give the same map/--callers/--impact as LF on both sides, crlf-for the same outside its fold CR bytes/bytes= and est_tokens=, and crlf-expand agrees with tree-expand modulo CR bytes and reason=/est_tokens="
 
