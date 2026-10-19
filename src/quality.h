@@ -35,6 +35,7 @@
 #include "memguard.h"           // #387: loadRefTree reads the hard line between a commit's ingest and its graph
 #include "infra/Diagnostics.h"  // DISCLOSE — the degrade path when git archive/ingest fails (no-op under NDEBUG; a gate-visible degrade line needs its own fprintf)
 #include "infra/jsonesc.h"      // L2 — rw::jsonesc::escapeMcp for staleAcksJsonArray's kind= field (the same posture serialize.h's jsonStr uses)
+#include "infra/platform.h"     // RW_LIFETIMEBOUND — the DefectSiteKey projection lambdas; owned here, not transitively
 #include "sourceidentity.h"    // rw::kRipwireSourceIdentity — the producer identity the qsnap/qbody keys and blob header carry
 
 #include "btree.hpp"              // gtl btree_map — sorted like std::map, cache-friendly nodes (house rule: never std::map)
