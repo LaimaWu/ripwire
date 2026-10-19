@@ -1306,6 +1306,7 @@ inline constexpr std::array<TypeWrapperRow, 9> kRustTypeWrappers = { {
 inline constexpr std::array<std::span<const TypeWrapperRow>, std::size_t( CallResultFamily::TypeScript ) + 1> kTypeWrappersOf = { {
     /* None */ {}, /* Go */ {}, /* Rust */ kRustTypeWrappers, /* Cpp */ {}, /* Jvm */ {}, /* TypeScript */ {},
 } };
+static_assert( enumCountIsExact<CallResultFamily, kTypeWrappersOf.size()>(), "kTypeWrappersOf must have one row per CallResultFamily — add the row with the append" );
 // the row `name` has in family `f`'s wrapper table (None: no row — the name is a class of its own)
 inline TypeWrap typeWrapOf( CallResultFamily f, std::string_view name ) noexcept
 {
