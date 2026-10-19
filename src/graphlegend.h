@@ -706,6 +706,17 @@ inline constexpr const char* kDeclinedSitesSideClause =
     "gate=side: a Ruby call whose in-reach definitions answer on the other side of self. ";
 inline constexpr const char* kDeclinedSitesNameGateClause =
     "gate=builtin|std: declined by the builtin-method or the standard-member name gate (per-language name lists, C++ and Rust). ";
+// lane L6 (ifacedispatch.h): the interface-typed dispatch rows, and a generic receiver's bound
+inline constexpr const char* kDeclinedSitesIfaceClause =
+    "gate=\"iface\": the receiver's recorded type is an interface, trait or abstract class, and cands=K counts the methods of the called name its implementors in this tree own (and its own default): K implementors of the receiver's interface; which one runs is unproven. Never a by-name list. ";
+inline constexpr const char* kDeclinedSitesBoundClause =
+    "bound=\"G: T\": the receiver is a generic G bounded by trait T; its candidates are T's implementors', never resolved by name. ";
+inline constexpr const char* kDeclinedSitesIfaceClauseMcp =
+    "gate iface: the receiver's recorded type is an interface, trait or abstract class, and cands counts the methods of the called name its implementors in this tree own (and its own default): K implementors of the receiver's interface; which one runs is unproven. bound (G: T): a generic receiver bounded by trait T. ";
+// lane L6: an edge via="impl" — the one implementor in the tree (a row of the callers / callees answers, a map <c>)
+inline constexpr const char* kViaImplLegend =
+    "via=\"impl\" on a row: the receiver's recorded type is an interface, trait or abstract class whose only implementor in this tree owns the called method, so the edge is to it; an implementor outside the tree may exist. ";
+inline const char* viaImplLegend( bool on ) noexcept { return on ? kViaImplLegend : ""; }
 inline constexpr const char* kDeclinedSitesOfDefCallees =
     "of_def=K on a <dc>: the definition (ix=K) making the call, a fact. ";
 inline constexpr const char* kDeclinedSitesOfDefCallers =
@@ -728,6 +739,8 @@ struct DeclinedSitesLegendFlags
     bool ofDef = false; // a row carries of_def=
     bool cut = false; // the root carries dc_shown= / dc_next=
     bool cand = false; // a row carries cand= (legend full)
+    bool iface = false; // a row says gate="iface" (lane L6)
+    bool bound = false; // a row carries bound= (lane L6)
 };
 // train 28 (declined-sites review N3): the MCP twins carry the same sites as "declined_sites" entries with their own keys, so
 // their declined_note names those keys ({name, line, cands, via} / {in, file, line, cands}) instead of the XML attributes.
@@ -755,6 +768,8 @@ inline std::string declinedSitesLegend( const DeclinedSitesLegendFlags& f, bool 
     out += f.callersForm ? ( mcp ? kDeclinedSitesCallersFormMcp : kDeclinedSitesCallersForm ) : ( mcp ? kDeclinedSitesCalleesFormMcp : kDeclinedSitesCalleesForm );
     out += f.side ? kDeclinedSitesSideClause : "";
     out += f.nameGate ? kDeclinedSitesNameGateClause : "";
+    out += f.iface ? ( mcp ? kDeclinedSitesIfaceClauseMcp : kDeclinedSitesIfaceClause ) : "";
+    out += f.bound && !mcp ? kDeclinedSitesBoundClause : "";
     out += f.ofDef ? ( f.callersForm ? ( mcp ? kDeclinedSitesOfDefCallersMcp : kDeclinedSitesOfDefCallers )
                                      : ( mcp ? kDeclinedSitesOfDefCalleesMcp : kDeclinedSitesOfDefCallees ) )
                    : "";

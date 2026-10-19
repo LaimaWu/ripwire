@@ -883,7 +883,8 @@ struct Reference
     //   shape here ("m", "this.items_", "rule.bindings_"; ingest_binds.h cppElementContainer) — read only by graph.h's
     //   StdMemberGate receiver exception (stdReceiverOf); chainOf reads memberPath only beside memberCall. A C/C++ type alias
     //   record and a composeRel "elem" field record carry the std container's whole written text here (ingest_relations.h
-    //   stdElementContainerText).
+    //   stdElementContainerText). Rust (lane L6): an `impl Trait for T` inherit ref carries the trait's path as written when it is
+    //   qualified (`render::Renderer`, generic arguments dropped), "" for a bare trait name (ingest_relations.h rustImplVisitNode).
     std::string   memberPath;
     std::string   memberCtor;
     // FE-B on #373: a Ruby receiver the code BUILDS (`User.new`, a finder, a FactoryBot build, a let or local holding one)
@@ -1245,6 +1246,14 @@ enum class LocalBindKind : std::uint8_t
                    //     Fix round 5: "unrecorded" a C++ class declaration only a macro can have written, which tree-sitter-cpp
                    //     reads as a function or a variable (`class API S {…}`, `struct API S;`): one row per identifier its head
                    //     spells (S among them), no span — a class of that name the index does not record exists in the tree.
+    DispatchType,  // lane L6 (interface-typed dispatch): a Rust parameter, local or struct field typed only as SOME implementor of a
+                   //     trait — `&dyn T`, `Box<dyn T>`, `impl T` / `&impl T`, or a type parameter `G` bounded by T (`G: T` inline
+                   //     or in a `where` clause) — never as T itself. var = the name (a field: the field), typeName = the trait's
+                   //     final segment, importedName = the trait as written when qualified (`crate::render::Renderer`), else "",
+                   //     and for a generic bound `G: <the trait as written>` (the bound= text a row carries); isFromAssignment =
+                   //     a struct FIELD (fromSymbol the struct), else a parameter or local (spanStart/spanEnd where it is
+                   //     visible, as a RecvType). It stands in for the binding's tombstone: the name hides an outer binding and
+                   //     types no class. Read by receiverevidence.h (ReceiverEvidence::noteDispatchWritten) ONLY. APPENDED.
 };
 // fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
 inline constexpr std::string_view kTypeBindForward  = "forward";
@@ -1252,14 +1261,15 @@ inline constexpr std::string_view kTypeBindShadow   = "shadow";
 inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
 inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::TypeAlias ) + 1;
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::DispatchType ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {
-    // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result five (CallResult .. TypeAlias) after RubyMainMixin
+    // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result five (CallResult .. TypeAlias) after RubyMainMixin,
+    // and L6's DispatchType right after them
     static_assert( std::uint8_t( LocalBindKind::StaticMember ) - std::uint8_t( LocalBindKind::RecvType ) == 4, "FE-B's five receiver-evidence kinds stay one run" );
-    static_assert( std::uint8_t( LocalBindKind::TypeAlias ) - std::uint8_t( LocalBindKind::CallResult ) == 4, "the call-result kinds stay one run" );
-    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::TypeAlias );
+    static_assert( std::uint8_t( LocalBindKind::DispatchType ) - std::uint8_t( LocalBindKind::CallResult ) == 5, "the call-result kinds and DispatchType stay one run" );
+    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::DispatchType );
 }
 // The language family whose call results take a callee's declared result type (train 29 call-result typing), ONE row read
 // by ingest (which records CallResult / ReturnType / TypeImport) and by graph.h (where the type resolves, and which

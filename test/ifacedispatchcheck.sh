@@ -239,15 +239,18 @@ say( af.ok and fake in cs, "[C] n_rs_test_impl", "the #[cfg(test)] implementor i
 # ── (L) legend ─────────────────────────────────────────────────────────────────────────────────────────────────────
 print( "=== (L) legend ===" )
 a = ask( RS, "callees", "dyn_ref" )
-say( a.ok and "gate=\"iface\"" in a.legend and "which one runs is unproven" in a.legend, "[P] l_iface",
+say( a.ok and "iface" in a.legend and "which one runs is unproven" in a.legend, "[P] l_iface",
      "an answer with a gate=\"iface\" row defines it: the receiver's interface's implementors, which one runs is unproven", a.legend[ -400: ] )
 a = ask( RS, "callees", "bound_generic" )
 say( a.ok and "bound=" in a.legend, "[P] l_bound", "an answer with bound= defines it", a.legend[ -400: ] )
+a = ask( RS, "callees", "bound_generic", "--legend=full" )
+say( a.ok and "gate=\"iface\"" in a.legend and "which one runs is unproven" in a.legend and "bound=\"G: T\"" in a.legend, "[P] l_full",
+     "--legend=full defines gate=\"iface\" and bound=\"G: T\" in the full clause", a.legend[ -500: ] )
 a = ask( RS, "callees", "solo_dyn" )
-say( a.ok and "via=\"impl\"" in a.legend and "only implementor" in a.legend, "[P] l_impl",
+say( a.ok and "via=impl" in a.legend.replace( '"', '' ) and ( "ONE implementor" in a.legend or "only implementor" in a.legend ), "[P] l_impl",
      "an answer with a via=\"impl\" row defines it (the only implementor in the tree)", a.legend[ -400: ] )
 a = ask( RS, "callees", "lonely_dyn" )
-say( a.ok and "gate=\"iface\"" not in a.legend and "via=\"impl\"" not in a.legend, "[C] l_absent", "an answer without either carries neither clause", a.legend[ -300: ] )
+say( a.ok and "which one runs is unproven" not in a.legend and "via=impl" not in a.legend.replace( '"', '' ), "[C] l_absent", "an answer without either carries neither clause", a.legend[ -300: ] )
 
 # ── (J) --json ─────────────────────────────────────────────────────────────────────────────────────────────────────
 print( "=== (J) --json ===" )

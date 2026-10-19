@@ -144,7 +144,9 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strictly above every number a train-30 build used: lane call-result-typing
+constexpr std::uint32_t kCacheVersion = 37;           // 37: train 32 lane l6-iface (train renumbers) — LocalBindKind gained DispatchType
+                                                      //    (appended): an older binary would reject the byte, a newer must not read a blob that predates it as complete.
+                                                      // 36: train 30 — strictly above every number a train-30 build used: lane call-result-typing
                                                       //    33 (RawBind resultIndex + unwrapDepth), lane fcall-forward 33, lane name-template-dispatch 35
                                                       //    (RefRole Pattern 11), main 34; so no blob a branch build wrote is read here.
                                                       // 35: train 30 lane name-template-dispatch (train renumbers) — RefRole gained
@@ -345,7 +347,11 @@ constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strict
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 202;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 210;          // bump on any grammar/.scm/extraction change
+                                                      // 210 = 2026-10-19 (train 32 lane l6-iface, reservation 210 / rich 211; the train renumbers):
+                                                      //   Rust records a DispatchType (model.h) for a parameter, `let` or struct field typed `&dyn T`,
+                                                      //   `Box<dyn T>`, `impl T` or a generic bounded by T (ingest_binds.h rustDispatchTrait) in place of
+                                                      //   its tombstone.
                                                       // 202 = 2026-10-18 (train 32 lane rust-receivers, reservation 202 / rich 203; the train renumbers):
                                                       //   Rust records a typed RecvType for a parameter / `let x: T` / `let x = T { .. }` / `T::default()`
                                                       //   written or constructed as a type, and a MemberType for a struct's named field (ingest_binds.h

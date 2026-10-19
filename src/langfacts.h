@@ -76,6 +76,11 @@ struct LangFacts
     /// judged against the base's whole set. A changed C or Objective-C file does not need it, by today's behaviour
     /// (verbs_quality.h; pinned by test/qddegradecheck.sh (E3)).
     bool defectShapeNeedsMacroSet = false;
+
+    /// Rust: a trait's bodyless method signature is no definition the index keeps (only a bodied default is), so a trait's contract
+    /// cannot be read off its members. The dispatch tier (ifacedispatch.h) takes the implementors' methods of the called name without
+    /// it, and leaves a standard-member name (`clone`, `iter`: graph.h StdMemberGate) to the name tiers as before.
+    bool contractSignaturesUnindexed = false;
 };
 
 /// The rows, one per Lang in enum order. A language says only the facts it has.
@@ -84,7 +89,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Python },
     { .lang = Lang::TypeScript, .overloadSignatures = true },
     { .lang = Lang::Go },
-    { .lang = Lang::Rust },
+    { .lang = Lang::Rust, .contractSignaturesUnindexed = true },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC },
     { .lang = Lang::Markdown },

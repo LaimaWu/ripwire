@@ -2687,7 +2687,9 @@ inline void writeMapCalleeRows( XmlWriter& w, const IngestResult& ing, std::uint
         // say WHICH edges; prov="split" names the arms, and the suspect set becomes the guessed edges and nothing else.
         if( provOf( e ) != 0 )
         {
-            w.write( "\" prov=\"" );
+            w.write( "\" " );
+            w.write( provAttrName( provOf( e ) ) );   // lane L6: via="impl" (the one implementor in the tree), prov= otherwise
+            w.write( "=\"" );
             w.write( provLabel( provOf( e ) ) );
         }
         if( nameOnly( e ) )
@@ -3023,6 +3025,11 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     if( hasModuleScope )
     {
         legend += kModScopeMapLegend;
+    }
+    // lane L6: a <c via="impl"> edge's reading, under the same absent-at-zero rule (a map with no one-implementor edge keeps its bytes)
+    if( outProv != nullptr && std::find( outProv->begin(), outProv->end(), kProvImpl ) != outProv->end() )
+    {
+        legend += "<!-- c:via=impl:the-one-implementor-in-the-tree-of-the-receiver's-interface/trait/abstract-type-owns-the-callee(one-outside-it-may-exist) -->";
     }
     // honesty-small-068: the Go named-type kinds' clause, under the same absent-at-zero rule as modscope's above.
     if( std::any_of( ing.symbols.begin(), ing.symbols.end(), []( const Symbol& sym )
@@ -10334,7 +10341,7 @@ inline void writeMapInventoryJson( JsonWriter& w, const IngestResult& ing, const
             w.write( e > outOff[ id ] ? ",{\"n\":" : "{\"n\":" );  writeJsonStr( w, ing.symbols[ outTargets[ e ] ].name, esc );
             if( outProv && e < outProv->size() && ( *outProv )[ e ] )
             {
-                w.write( ",\"prov\":" );  writeJsonStr( w, provLabel( ( *outProv )[ e ] ), esc );
+                w.write( ",\"" );  w.write( provAttrName( ( *outProv )[ e ] ) );  w.write( "\":" );  writeJsonStr( w, provLabel( ( *outProv )[ e ] ), esc );   // L6: "via":"impl"
             }
             if( outNameOnly && e < outNameOnly->size() && ( *outNameOnly )[ e ] != 0 )
             {
@@ -10589,7 +10596,7 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
                     // the gate that says so.
                     if( outProv && e < outProv->size() && (*outProv)[e] )
                     {
-                        w.write( ",\"prov\":" );  writeJsonStr( w, provLabel( (*outProv)[e] ), esc );
+                        w.write( ",\"" );  w.write( provAttrName( (*outProv)[e] ) );  w.write( "\":" );  writeJsonStr( w, provLabel( (*outProv)[e] ), esc );   // L6: "via":"impl"
                     }
                     if( outNameOnly && e < outNameOnly->size() && ( *outNameOnly )[e] != 0 )
                     {

@@ -464,6 +464,26 @@ expectDispatch(){   # arm label, caller, callee, the exact expected row set
         no "$1 $2(): $3 -> [$got], want [$4]"
     fi
 }
+# lane L6 (Rule 4, by design): a call through the interface-typed receiver used to commit a prov="split" edge to each
+# overrider (amb= on the caller); it is now DECLINED with exactly that list (ifacedispatch.h: <dc ... gate="iface">, the
+# overriders as --legend=full cand=), never an edge. Arms 26, 27, 31 and 32 read the declined row; the premise — the three
+# real overriders and neither nested namesake — is unchanged.
+dispatchDeclined(){   # caller, callee name → the sorted `name@path:line` candidates of its gate="iface" <dc> row
+    local out
+    out="$( "$BIN" "$DFIX" "--callees=$1" --no-cache --legend=full 2>/dev/null )"
+    printf '%s' "$out" | grep -q "<callees [^>]*of=\"$1\" defs=\"1\"" || { printf 'NO-CALLEES-ANSWER'; return; }
+    printf '%s' "$out" | grep -o "<dc n=\"$2\"[^>]*gate=\"iface\"[^>]*>" | grep -o 'cand="[^"]*"' | sed 's/^cand="//; s/"$//' | tr ' ' '\n' \
+        | sed "s/^/$2@/" | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+expectDispatchDeclined(){   # arm label, caller, callee, the exact expected candidate set
+    local got
+    got="$( dispatchDeclined "$2" "$3" )"
+    if [ "$got" = "$4" ]; then
+        ok "$1 $2(): $3 declined gate=\"iface\" over [$got]"
+    else
+        no "$1 $2(): $3 -> declined over [$got], want [$4]"
+    fi
+}
 DISPATCH_KEYS="key@db/impls.h:14 key@db/impls.h:5 key@tests/use.cc:5"
 # presence guard: the fixture's definitions and callers are indexed, or the arms below prove nothing
 DMAP="$( "$BIN" "$DFIX" --no-cache 2>/dev/null | tr '>' '\n' )"
@@ -475,9 +495,9 @@ done
 # ── 26) THE DEFECT: `it->key()` through a PARAMETER typed with the interface reaches its three real overriders — the
 #        top-level DBIter, the NESTED Outer::NestedIt (a nested subclass is still a subclass) and the same-file KVIter —
 #        and neither nested namesake (ListRep::Iterator, Skip::Iterator), and is not trimmed to the same-file KVIter. ─
-expectDispatch "(26)" useParam key "$DISPATCH_KEYS"
+expectDispatchDeclined "(26)" useParam key "$DISPATCH_KEYS"
 # ── 27) the same through a typed LOCAL (Rule 2's flat table), `Iterator* it = makeIter();`. ────────────────────────────
-expectDispatch "(27)" useLocal key "$DISPATCH_KEYS"
+expectDispatchDeclined "(27)" useLocal key "$DISPATCH_KEYS"
 # ── 28) INSIDE ListRep a bare `Iterator` IS ListRep::Iterator (a nested class is nameable in its enclosing class): the
 #        visible nested owner stays, Skip's namesake goes. ──────────────────────────────────────────────────────────────
 expectDispatch "(28)" peek key "key@memtable/rep.h:12"
@@ -486,17 +506,19 @@ expectDispatch "(29)" useQualified key "key@memtable/rep.h:25"
 # ── 30) control — a method the interface's base DEFINES (`IteratorBase::size`) keeps the static inherited definition;
 #        overriders join only when the ancestry has no body at all. ────────────────────────────────────────────────────
 expectDispatch "(30)" useInherited size "size@include/iterator.h:6"
-# ── 31) the dispatch split is disclosed as ambiguity: useParam carries amb=, never a quiet single pin. ────────────────
-if printf '%s\n' "$DMAP" | grep -F 'n="useParam"' | grep -q 'amb="'; then
-    ok "(31) useParam carries amb= — the dispatch split is disclosed"
+# ── 31) the dispatch is disclosed, never a quiet single pin: useParam declines it (lane L6: a <dc gate="iface"> row; was amb=
+#        and three split edges) and commits no edge to any overrider. ────────────────────────────────────────────────────
+D31="$( "$BIN" "$DFIX" --callees=useParam --no-cache 2>/dev/null )"
+if printf '%s' "$D31" | grep -q '<dc n="key" [^>]*cands="3" via="declined" gate="iface"' && ! printf '%s' "$D31" | grep -q '<s [^>]*n="key"'; then
+    ok "(31) useParam declines the dispatch (gate=\"iface\", cands=\"3\") and binds no overrider"
 else
-    no "(31) useParam carries no amb= — a multi-target dispatch reads as a confident edge: $( printf '%s\n' "$DMAP" | grep -F 'n="useParam"' | head -1 )"
+    no "(31) useParam: the dispatch is neither declined gate=\"iface\" cands=\"3\" nor edge-free: $( printf '%s' "$D31" | grep -oE '<(s|dc) [^>]*>' | head -3 | tr '\n' ' ' )"
 fi
 # ── Arms 32-35: the four shapes the corpora taught class identity (rocksdb, llvm-project, a private C++ corpus). ────────
 # 32: a namespace-level FORWARD DECLARATION `class Iterator;` is not a class — counted as one it made every bare `Iterator`
 #     read as several namesakes and refused arm 26's dispatch (rocksdb has five). db/fwd.h adds one; arms 26-27 re-run.
 printf 'class Iterator;\nclass IteratorBase;\n' >"$DFIX/db/fwd.h"
-expectDispatch "(32)" useParam key "$DISPATCH_KEYS"
+expectDispatchDeclined "(32)" useParam key "$DISPATCH_KEYS"
 # 33: a type ALIAS reaching a nested class (`using NodeSet = Graph::NodeSet;`, llvm's X86 LVI pass) is invisible to the
 #     index; the nested class's header is visible from the caller, so its hit is never dropped for the unrelated
 #     namespace-level `NodeSet` the caller never includes. pipe/pipeliner.h:1 must not be the whole answer.

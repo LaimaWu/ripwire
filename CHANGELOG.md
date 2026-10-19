@@ -15,6 +15,34 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — calls through an interface-, trait- or abstract-typed receiver name the implementors that can run
+
+A call such as `r.render( 2 )` on `r: &dyn Renderer`, `p.pack( t )` on `p: Packager` or `command_runner_->StartCommand( e )`
+on a `std::unique_ptr<CommandRunner>` field used to answer by NAME: every in-tree definition of `render`, including the
+implementor of a different `Renderer` trait in another module and an overload of another arity, or a `prov="split"` edge to
+each override. A tier of the resolver now reads the receiver's recorded type first. When it is an interface, a trait, or a
+class that declares the callee without a body, the candidates are the methods of that name its implementors own — the
+`implements` / `extends` / `impl Trait for X` types, at any depth — plus the type's own bodied default:
+
+- **one candidate**, every `implements` edge to it proven: an edge rendered `via="impl"` (the only implementor in the tree;
+  one outside it may exist);
+- **two or more**: the call is declined with exactly that list, a `<dc ... cands="K" via="declined" gate="iface"/>` row
+  (`--legend=full` names the candidates with `cand=`). It is never an edge and never in `count=`.
+
+Receivers read: Rust `&dyn T`, `Box<dyn T>`, `impl T`, `&impl T` parameters, `let x: &dyn T`, a struct field
+`Box<dyn T>` (through `self` or a typed local), and a generic parameter bounded by one trait (`R: T` inline or in a `where`
+clause; marker traits such as `Send` or `Clone` beside it are ignored), whose rows also carry `bound="R: T"`. C++ a
+pure-virtual member through a base pointer, reference or field (a `std::unique_ptr` / `std::shared_ptr` field through `->`).
+Java, Kotlin and TypeScript a typed parameter, local or field whose type is an interface or an abstract class. A Rust
+`impl Trait for X` is now proven onto the trait its header names when the written path or the file's `use`s resolve it, and
+a TypeScript `implements I` onto the interface of the module its import names, so `--lego` lists fewer by-name implementors.
+
+Not read (floors): a Go interface value — Go interfaces are structural and nothing in the source names an implementor (a
+method-set cover would); a Rust `for` loop variable over a collection of trait objects (`for p in self.preprocessors.values()`);
+a Rust `dyn A + B`, `Option<Box<dyn T>>`, `Rc<dyn T>` / `Arc<dyn T>`, a bound with two non-marker traits; a standard-member
+name (`clone`, `iter`) on a trait object, which stays with the standard-member gate; a Python ABC or Protocol; a C# or Swift interface (their written types resolve to no class yet); a TypeScript
+interface reached through a re-export barrel. A type with no implementor in the tree keeps the answer it had.
+
 ### Added — Rust receivers typed by their written type: parameters, `let` bindings and struct fields
 
 A Rust member call used to bind every in-tree method of its name, hedged `via="name"` (or, for a standard-member name such

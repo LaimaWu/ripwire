@@ -5984,6 +5984,166 @@ inline std::string_view rustWrittenClass( TSNode type, TSNode owner, std::string
     return cls;
 }
 
+// lane L6 (interface-typed dispatch): the marker traits a generic bound may add beside the one trait it dispatches through —
+// a bound `R: Renderer + Send + Clone` still dispatches through Renderer: the implementors of Renderer are a SUPERSET of what
+// may run there, which is the hedge's direction. A bound with two traits outside this row names no one trait (a floor).
+inline constexpr std::array<std::string_view, 15> kRustMarkerTraits = {
+    "Send", "Sync", "Unpin", "Sized", "Copy", "Clone", "Debug", "Default", "Eq", "PartialEq", "Hash", "Ord", "PartialOrd", "Display", "Any",
+};
+
+// lane L6: the trait a written trait reference names — `Renderer`, `render::Renderer` (`whole` the path), `Renderer<T>` (its
+// head); "" for anything else (a function trait `Fn( u32 )`, a lifetime, a `?Sized`).
+inline std::string_view rustTraitNamed( TSNode trait, std::string_view src, std::string_view& whole )
+{
+    whole = {};
+    for( int guard = 0; guard < 4 && !ts_node_is_null( trait ); ++guard )
+    {
+        const char* t = ts_node_type( trait );
+        if( kindIs( t, "generic_type" ) )
+        {
+            trait = fieldChild( trait, NodeField::Type );
+            continue;
+        }
+        if( kindIs( t, "type_identifier" ) )
+        {
+            return nodeTextOf( trait, src );
+        }
+        if( kindIs( t, "scoped_type_identifier" ) && !ts_node_is_null( fieldChild( trait, NodeField::Name ) ) )
+        {
+            whole = nodeTextOf( trait, src );
+            return nodeTextOf( fieldChild( trait, NodeField::Name ), src );
+        }
+        return {};
+    }
+    return {};
+}
+
+// lane L6: the ONE non-marker trait among the bounds `generic` is given by `owner`'s type parameters (`<R: T>`) and its `where`
+// clause (`where R: T`); "" when none, or two or more (each named in either place counts).
+inline std::string_view rustBoundTrait( TSNode owner, std::string_view generic, std::string_view src, std::string_view& whole )
+{
+    whole = {};
+    std::string_view one;
+    int              traits = 0;
+    const auto boundsOf = [ & ]( TSNode left, TSNode bounds )
+    {
+        if( ts_node_is_null( left ) || ts_node_is_null( bounds ) || nodeTextOf( left, src ) != generic )
+        {
+            return;
+        }
+        for( std::uint32_t i = 0, k = ts_node_named_child_count( bounds ); i < k; ++i )
+        {
+            const TSNode           b = ts_node_named_child( bounds, i );
+            std::string_view       path;
+            const std::string_view name = rustTraitNamed( b, src, path );
+            if( kindIs( ts_node_type( b ), "lifetime" ) || std::ranges::find( kRustMarkerTraits, name ) != kRustMarkerTraits.end() )
+            {
+                continue;
+            }
+            ++traits;
+            one   = name;
+            whole = path;
+        }
+    };
+    const TSNode params = ts_node_is_null( owner ) ? TSNode{} : fieldChild( owner, NodeField::TypeParameters );
+    for( std::uint32_t i = 0, k = ts_node_is_null( params ) ? 0u : ts_node_named_child_count( params ); i < k; ++i )
+    {
+        const TSNode p = ts_node_named_child( params, i );
+        if( kindIs( ts_node_type( p ), "constrained_type_parameter" ) )
+        {
+            boundsOf( fieldChild( p, NodeField::Left ), namedChildOfKind( p, { "trait_bounds" } ) );
+        }
+    }
+    const TSNode where = ts_node_is_null( owner ) ? TSNode{} : namedChildOfKind( owner, { "where_clause" } );
+    for( std::uint32_t i = 0, k = ts_node_is_null( where ) ? 0u : ts_node_named_child_count( where ); i < k; ++i )
+    {
+        const TSNode p = ts_node_named_child( where, i );
+        if( kindIs( ts_node_type( p ), "where_predicate" ) )
+        {
+            boundsOf( fieldChild( p, NodeField::Left ), namedChildOfKind( p, { "trait_bounds" } ) );
+        }
+    }
+    if( traits != 1 || one.empty() )
+    {
+        whole = {};
+        return {};
+    }
+    return one;
+}
+
+// lane L6: the TRAIT a written Rust type dispatches through, after the transparent wrappers alone (`&`, `&mut`, Box): `dyn T`,
+// `impl T`, or a type parameter of `owner` bounded by one trait (rustBoundTrait). `whole` the trait's path when qualified;
+// `generic` the type parameter's name for a bound, else "". "" for anything else — a Layer or a Hides wrapper
+// (`Option<Box<dyn T>>`, `Rc<dyn T>`: kRustTypeWrappers), a `dyn A + B` the grammar does not give one trait field.
+inline std::string_view rustDispatchTrait( TSNode type, TSNode owner, std::string_view src, std::string_view& whole, std::string_view& generic )
+{
+    whole   = {};
+    generic = {};
+    for( int guard = 0; guard < 8 && !ts_node_is_null( type ); ++guard )
+    {
+        const char* t = ts_node_type( type );
+        if( kindIs( t, "reference_type" ) )
+        {
+            type = fieldChild( type, NodeField::Type );
+            continue;
+        }
+        if( kindIs( t, "generic_type" ) )
+        {
+            const TSNode     head = fieldChild( type, NodeField::Type );
+            std::string_view name = ts_node_is_null( head ) ? std::string_view{} : nodeTextOf( head, src );
+            if( const std::size_t sep = name.rfind( "::" ); sep != std::string_view::npos )
+            {
+                name.remove_prefix( sep + 2 );
+            }
+            const TSNode args = namedChildOfKind( type, { "type_arguments" } );
+            if( typeWrapOf( CallResultFamily::Rust, name ) != TypeWrap::Transparent || ts_node_is_null( args ) || ts_node_named_child_count( args ) == 0 )
+            {
+                return {};
+            }
+            type = ts_node_named_child( args, 0 );
+            continue;
+        }
+        if( kindIs( t, "dynamic_type" ) || kindIs( t, "abstract_type" ) )
+        {
+            return rustTraitNamed( fieldChild( type, NodeField::Trait ), src, whole );
+        }
+        if( kindIs( t, "type_identifier" ) )
+        {
+            const std::string_view name = rustBoundTrait( owner, nodeTextOf( type, src ), src, whole );
+            generic = name.empty() ? std::string_view{} : nodeTextOf( type, src );
+            return name;
+        }
+        return {};
+    }
+    return {};
+}
+
+// lane L6: one Rust binding typed only as SOME implementor of a trait (model.h LocalBindKind::DispatchType): `var` over `site`
+// (a parameter or local) or, `field` set, a struct's field (fromSymbol the struct). `generic` the bound's type parameter.
+inline void pushRustDispatch( BindCtx& cx, std::string_view var, std::string_view trait, std::string_view whole, std::string_view generic,
+                              BindSite site, bool field )
+{
+    RawBind b;
+    b.fileId    = cx.fileId;
+    b.startByte = site.startByte;
+    b.lang      = cx.lang;
+    b.kind      = LocalBindKind::DispatchType;
+    b.isFromAssignment = field;
+    b.spanStart = site.spanStart;
+    b.spanEnd   = site.spanEnd;
+    b.var.assign( var );
+    b.typeName.assign( trait );
+    if( !generic.empty() )
+    {
+        b.importedName.assign( generic ).append( ": " ).append( whole.empty() ? trait : whole );   // the bound= text
+    }
+    else
+    {
+        b.importedName.assign( whole );
+    }
+    cx.binds->push_back( std::move( b ) );
+}
+
 // rust-receivers: the class a `let` VALUE constructs — a struct literal `T { .. }` / `Self { .. }` / `m::T { .. }`, or
 // `T::default()` on a type path (Default's contract: the value is a T); `whole` the path when qualified. "" for anything
 // else — `T::new( .. )` is a CALL, typed (or not) by its declared result through the call-result rows.
@@ -6040,6 +6200,24 @@ inline void pushRustBinding( BindCtx& cx, TSNode pattern, std::string_view cls, 
     pushPatternTombstones( cx, pattern, site );
 }
 
+// lane L6: a parameter or `let` NAME (a plain identifier pattern) whose written type names no class but dispatches through a trait
+// (rustDispatchTrait) records a DispatchType in place of its tombstone; false (nothing recorded) for any other binding.
+inline bool pushRustDispatchBinding( BindCtx& cx, TSNode pattern, std::string_view cls, TSNode type, TSNode owner, BindSite site )
+{
+    if( !cls.empty() || ts_node_is_null( pattern ) || !kindIs( ts_node_type( pattern ), "identifier" ) )
+    {
+        return false;
+    }
+    std::string_view       whole, generic;
+    const std::string_view trait = rustDispatchTrait( type, owner, cx.src, whole, generic );
+    if( trait.empty() )
+    {
+        return false;
+    }
+    pushRustDispatch( cx, nodeTextOf( pattern, cx.src ), trait, whole, generic, site, false );
+    return true;
+}
+
 // rust-receivers: a `let`'s names — `let x: T` typed by its written type, `let x = T { .. }` / `T::default()` by the class
 // the value constructs, `let x = f()?` by the callee's declared result (a CallResult per bound name, a tuple by position)
 inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
@@ -6050,7 +6228,11 @@ inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
     std::string_view whole;
     if( const TSNode type = fieldChild( n, NodeField::Type ); !ts_node_is_null( type ) )
     {
-        pushRustBinding( cx, pattern, rustWrittenClass( type, owner, cx.src, whole ), whole, site );   // `let x: T = …`
+        const std::string_view cls = rustWrittenClass( type, owner, cx.src, whole );
+        if( !pushRustDispatchBinding( cx, pattern, cls, type, owner, site ) )   // L6: `let x: &dyn T = …`
+        {
+            pushRustBinding( cx, pattern, cls, whole, site );   // `let x: T = …`
+        }
         return;
     }
     // `let x = T { .. }` / `T::default()`: the class the value constructs, as the binding's site spells it. `T::default()`
@@ -6090,8 +6272,13 @@ inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
 inline void captureRustParameter( BindCtx& cx, TSNode n, std::uint32_t at )
 {
     std::string_view       whole;
-    const std::string_view cls = rustWrittenClass( fieldChild( n, NodeField::Type ), rustGenericsOwner( n, { "function_item", "function_signature_item" } ), cx.src, whole );
-    pushRustBinding( cx, fieldChild( n, NodeField::Pattern ), cls, whole, siteIn( at, ancestorOfKind( n, { "function_item", "closure_expression" } ) ) );
+    const TSNode           owner = rustGenericsOwner( n, { "function_item", "function_signature_item" } );
+    const std::string_view cls   = rustWrittenClass( fieldChild( n, NodeField::Type ), owner, cx.src, whole );
+    const BindSite         site  = siteIn( at, ancestorOfKind( n, { "function_item", "closure_expression" } ) );
+    if( !pushRustDispatchBinding( cx, fieldChild( n, NodeField::Pattern ), cls, fieldChild( n, NodeField::Type ), owner, site ) )
+    {
+        pushRustBinding( cx, fieldChild( n, NodeField::Pattern ), cls, whole, site );
+    }
 }
 // rust-receivers: a struct's named field `book: Book` (MemberType on the struct, so `self.book.m()` narrows through it); a
 // field whose type names no class is a tombstone. An enum variant's fields are no struct's: nothing.
@@ -6106,7 +6293,14 @@ inline void captureRustField( BindCtx& cx, TSNode n, std::uint32_t at )
     }
     std::string_view       whole;
     const std::string_view cls = rustWrittenClass( fieldChild( n, NodeField::Type ), item, cx.src, whole );
-    if( cls.empty() )
+    std::string_view       traitWhole, generic;
+    const std::string_view trait = cls.empty() ? rustDispatchTrait( fieldChild( n, NodeField::Type ), item, cx.src, traitWhole, generic ) : std::string_view{};
+    if( !trait.empty() )
+    {
+        pushMemberTombstone( cx, nodeTextOf( name, cx.src ), at );   // the field names no class (memberClass), as before
+        pushRustDispatch( cx, nodeTextOf( name, cx.src ), trait, traitWhole, generic, BindSite{ at, 0u, 0u }, true );   // L6
+    }
+    else if( cls.empty() )
     {
         pushMemberTombstone( cx, nodeTextOf( name, cx.src ), at );
     }
