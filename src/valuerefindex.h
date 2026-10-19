@@ -126,20 +126,11 @@ public:
     std::vector<Hit> callsFor( std::uint32_t valueIdx ) const { return join( m_values, valueIdx, m_callsByField, m_callEnds ); }
     // The slot value references (with a resolved function) the slot call `callIdx` may call through.
     std::vector<Hit> valuesFor( std::uint32_t callIdx ) const { return join( m_callEnds, callIdx, m_valuesByField, m_values ); }
-    // The slot calls made inside any of `fns`, ascending.
-    std::vector<std::uint32_t> callsMadeIn( std::span<const NodeId> fns ) const
+    // The slot calls made inside function `f`, ascending.
+    std::span<const std::uint32_t> callsIn( NodeId f ) const
     {
-        std::vector<std::uint32_t> out;
-        for( const NodeId f : fns )
-        {
-            if( const auto it = m_callsBySym.find( f ); it != m_callsBySym.end() )
-            {
-                out.insert( out.end(), it->second.begin(), it->second.end() );
-            }
-        }
-        std::ranges::sort( out );
-        out.erase( std::ranges::unique( out ).begin(), out.end() );
-        return out;
+        const auto it = m_callsBySym.find( f );
+        return it == m_callsBySym.end() ? std::span<const std::uint32_t>() : std::span<const std::uint32_t>( it->second );
     }
     // The resolved "Type.field" of slot call `callIdx` (".field" when the type is unknown; an anonymous struct is "@LINE").
     std::string nameOf( std::uint32_t callIdx ) const
@@ -1244,18 +1235,22 @@ inline std::vector<SlotSiteRow> slotSiteRows( const IngestResult& ing, const Val
     }
     std::ranges::sort( answered );
     std::vector<SlotSiteRow> out;
-    for( const std::uint32_t c : idx.slots().callsMadeIn( fns ) )
+    for( const NodeId f : fns )
     {
-        const Reference& cr = ing.references[c];
-        if( std::ranges::binary_search( answered, ( std::uint64_t( cr.fileId ) << 32 ) | cr.startByte ) )
+        for( const std::uint32_t c : idx.slots().callsIn( f ) )
         {
-            continue;
-        }
-        if( SlotSiteRow site = slotSiteOf( ing, idx, c ); !site.targets.empty() )
-        {
-            out.push_back( std::move( site ) );
+            const Reference& cr = ing.references[c];
+            if( std::ranges::binary_search( answered, ( std::uint64_t( cr.fileId ) << 32 ) | cr.startByte ) )
+            {
+                continue;
+            }
+            if( SlotSiteRow site = slotSiteOf( ing, idx, c ); !site.targets.empty() )
+            {
+                out.push_back( std::move( site ) );
+            }
         }
     }
+    std::ranges::sort( out, {}, &SlotSiteRow::ref );   // reference order, whatever the order of `fns`
     return out;
 }
 
