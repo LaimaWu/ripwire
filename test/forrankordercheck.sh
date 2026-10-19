@@ -199,6 +199,8 @@ growth_fail=0
 # bodies appended after the unchanged answer (forbodyfoldcheck (F5) pins that nothing before it moved). The band reads the answer
 # WITHOUT those additions: the fold element, its legend clause, the hop-calls next= clause and the <sigs> continuation pair
 # (sigs_next= renamed from next=, next= the first skip). fold_exempt prints their bytes; nothing else is exempt.
+# member-names (train 32; rule 4, by design, the same precedent): the owner rows' mem=/mem_more= names and their legend clause ride
+# on top of the chosen rows (formembernamescheck (G1)/(G2): the <d> rows are the names-off rows one for one) — exempt likewise.
 # FIX1: the regexes spell the double quote \x22 — a bare " inside this single-quoted python made line 7 a SyntaxError, so
 # fold_exempt printed nothing, the $(( now - )) below aborted the ledger loops and (3) PASSED having checked no query; a
 # failed exemption read is now a FAIL (exempt_ok), never an empty operand.
@@ -216,6 +218,8 @@ if t and " sigs_next=\x22" in t.group( 0 ):
     n += len( "[sigs sigs_next=: one" ) - len( "[sigs next=: one" ) if "[sigs sigs_next=: one" in s else 0
 elif t:
     n += sum( len( x.encode() ) for x in re.findall( r" next=\x22--expand=[^\x22]*\x22", t.group( 0 ) ) )
+n += sum( len( x.group( 0 ).encode() ) for x in re.finditer( r" mem=\x22[^\x22]*\x22( mem_more=\x22\d+\x22)?", s ) )
+c = re.search( r"; (d mem=|mem= on an owner d row:)[^;]*?mem_more= (unlisted|the member names not listed)", s ); n += len( c.group( 0 ).encode() ) if c else 0
 print( n )'; }
 # exempt_ok N: in THIS shell (never inside a $( ), where no()'s fail=1 would be lost) — a non-number is a FAIL and counts 0
 exempt_ok(){ case "$1" in ''|*[!0-9]*) no "(3) fold_exempt could not read an answer (got '$1')"; growth_fail=1; return 1;; esac; return 0; }

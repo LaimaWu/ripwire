@@ -44,7 +44,8 @@
 #   F4 [G] whole-or-none: each fold <b> CDATA equals the --expand=P:L:N body CDATA byte for byte; served <b> elements sum
 #          <= 4000 B; no sibs=/inc=/<calls>/<c> inside the fold; served= counts the <b>, served + skips = total
 #   F5 [G] prefix identity: the answer minus the fold, its legend clause and the C3 pair, est_tokens masked, equals the
-#          RIPWIRE_NO_BODY_FOLD=1 answer — both legends, three questions (checklist 23)
+#          RIPWIRE_NO_BODY_FOLD=1 answer — both legends, three questions (checklist 23); member names (mem=, its clause) masked on
+#          both sides (train 32, by design: an owner the fold carries gets none); F5n the same unmasked with RIPWIRE_NO_MEMBER_NAMES=1
 #   F6 [P] est_tokens(fold) - est_tokens(off) >= 0.9 x the served body bytes / 3.80 (the body rate)
 #   F7 [P] the fold clause rides in both legends when the fold does, and never when it does not
 #   F8 [G] no fold, byte-identical to RIPWIRE_NO_BODY_FOLD=1: --signatures-only, --json, --auto-bodies, --detail=1,
@@ -67,7 +68,7 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
-unset RIPWIRE_NO_BODY_FOLD RIPWIRE_NO_BODY_SLOT RIPWIRE_NO_OWNER_HOP
+unset RIPWIRE_NO_BODY_FOLD RIPWIRE_NO_BODY_SLOT RIPWIRE_NO_OWNER_HOP RIPWIRE_NO_MEMBER_NAMES
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "forbodyfoldcheck: BIN=$BIN"
@@ -131,6 +132,12 @@ def strip_fold(t):
         t = t[:m.start()] + tag2 + t[m.end():]
     t = t.replace('[sigs sigs_next=: one', '[sigs next=: one')
     return re.sub(r' est_tokens="\d+"', '', t)
+# member-names (train 32; rule 4, by design): the fold now also decides which owner rows carry mem= (an owner the fold serves, or
+# slices, carries none — formembernamescheck (C1)/(C2) owns that), so the fold-off twin carries mem= the fold answer does not.
+# (F5) reads both answers with the names masked; (F5n) keeps the exact pre-names premise with RIPWIRE_NO_MEMBER_NAMES=1 on both sides.
+MEM_CLAUSE = re.compile(r'; (d mem=|mem= on an owner d row:)[^;]*?mem_more= (unlisted|the member names not listed)')
+def strip_mem(t):
+    return MEM_CLAUSE.sub('', re.sub(r' mem="[^"]*"( mem_more="\d+")?', '', t))
 def fail(msg):
     print(msg); sys.exit(1)
 if cmd == "has_body":          # FILE NAME NEEDLE... : the fold serves NAME's body holding every NEEDLE
@@ -214,6 +221,11 @@ elif cmd == "slice":             # FILE CLASS CTOR MATCH NOTMATCH : the class's 
 elif cmd == "prefix":            # FOLD OFF : strip_fold(fold) == off (est_tokens masked)
     t, o = load(args[0]), load(args[1])
     if fold(t)[0] is None: fail("no fold to strip")
+    if strip_mem(strip_fold(t)) != strip_mem(re.sub(r' est_tokens="\d+"', '', o)): fail("the answer before the fold is not the fold-off answer")
+elif cmd == "prefix_raw":        # FOLD OFF : the pre-names (F5) exactly, for answers run with RIPWIRE_NO_MEMBER_NAMES=1 (F5n)
+    t, o = load(args[0]), load(args[1])
+    if fold(t)[0] is None: fail("no fold to strip")
+    if re.search(r' mem="', t + o): fail("an answer carries mem= although RIPWIRE_NO_MEMBER_NAMES=1")
     if strip_fold(t) != re.sub(r' est_tokens="\d+"', '', o): fail("the answer before the fold is not the fold-off answer")
 elif cmd == "est":               # FOLD OFF
     t, o = load(args[0]), load(args[1]); a, x, _ = fold(t)
@@ -352,6 +364,13 @@ for q in router resp respf slot slice; do
     if r=$( chk prefix "$TMP/$q" "$TMP/$q.off" ); then ok "(F5) $q: the answer before the fold == RIPWIRE_NO_BODY_FOLD=1"; else no "(F5) $q: $r"; fi
 done
 if r=$( chk prefix "$TMP/src" "$TMP/src.off" ); then ok "(F5) src: the answer before the fold == RIPWIRE_NO_BODY_FOLD=1"; else no "(F5) src: $r"; fi
+# F5n (member-names twin): with the names off on both sides the pre-names premise holds byte for byte (est_tokens masked)
+for q in resp slice; do
+    case "$q" in resp) qq="$T_RESP"; rd="$FIX";; slice) qq="$T_SLICE"; rd="$FIXPY";; esac
+    RIPWIRE_NO_MEMBER_NAMES=1 "$BIN" "$rd" --no-cache --for="$qq" >"$TMP/$q.n" 2>/dev/null
+    RIPWIRE_NO_MEMBER_NAMES=1 RIPWIRE_NO_BODY_FOLD=1 "$BIN" "$rd" --no-cache --for="$qq" >"$TMP/$q.n.off" 2>/dev/null
+    if r=$( chk prefix_raw "$TMP/$q.n" "$TMP/$q.n.off" ); then ok "(F5n) $q: names off, the answer before the fold == RIPWIRE_NO_BODY_FOLD=1 unmasked"; else no "(F5n) $q: $r"; fi
+done
 # F6
 if r=$( chk est "$TMP/resp" "$TMP/resp.off" ); then ok "(F6) est_tokens prices the fold's bodies"; else no "(F6) $r"; fi
 # F7
@@ -436,7 +455,7 @@ if [ -n "${RIPWIRE_BASE_BIN:-}" ] && [ -x "$RIPWIRE_BASE_BIN" ]; then
 ARGV
     for q in "$T_ROUTER" "$T_RESP"; do
         "$RIPWIRE_BASE_BIN" "$FIX" --no-cache --for="$q" 2>/dev/null | strip_at >"$TMP/i.base"
-        RIPWIRE_NO_BODY_FOLD=1 "$BIN" "$FIX" --no-cache --for="$q" 2>/dev/null | strip_at >"$TMP/i.head"
+        RIPWIRE_NO_BODY_FOLD=1 RIPWIRE_NO_MEMBER_NAMES=1 "$BIN" "$FIX" --no-cache --for="$q" 2>/dev/null | strip_at >"$TMP/i.head"   # member-names off: the base has none
         if [ -s "$TMP/i.base" ] && cmp -s "$TMP/i.base" "$TMP/i.head"; then ok "(I-off) RIPWIRE_NO_BODY_FOLD=1 == the base binary: $q"; else no "(I-off) RIPWIRE_NO_BODY_FOLD=1 differs from the base binary: $q"; fi
     done
 else
