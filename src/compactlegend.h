@@ -252,6 +252,8 @@ inline constexpr std::string_view kCompactProsePrefixes[] =
     "<!-- b over_ceiling=",            // …and a past-the-budget one's (serialize.h kOverCeilingBodyLegend)
     "<!-- via=\"name\"",               // FE-B: graphlegend.h's via="name" comments (viaNameLegendComment, kMapViaNameLegend); the
                                        // element-qualified via rows (<s>/<c>/<e>, the <via> column) and x= restate them
+    "<!-- via=\"link\"",               // a markdown link edge (viaLinkLegendComment, kMapViaLinkLegend); the via=link rows restate it
+    "<!-- anchor=\"missing\"",         // a link whose slug names no heading (anchorMissLegendComment, kMapAnchorMissLegend)
     "<!-- src_cut: ",                  // --pack-top-n's cut reading (serialize.h kPackSourceCutLegend); the two src rows below
 };
 
@@ -584,7 +586,11 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // and VALUE-qualified (<s>/<c>/<e> whose via= lists name), so impact's <f via="import"> importer rows never pull it in; the
     // columnar form names it in fields= like the tested column.
     { "via",               "via=name: the target was matched by name alone (receiver unproven); every by-name candidate in reach is listed; NOT a claim the edge is false", true, "s", MapHeaderRead::No, "name" },
+    { "via",               "via=link: this edge is a markdown link, not a call", true, "s", MapHeaderRead::No, "link" },
+    { "anchor",            "anchor=missing: the markdown link named a heading this file does not have, so the edge is the file", true, "s", MapHeaderRead::No, "missing" },
     { "via",               "<c via=\"name\">: that callee matched by name alone (receiver unproven); it does NOT mean the edge is false", true, "c", MapHeaderRead::No, "name" },
+    { "via",               "<c via=\"link\">: that callee is a markdown link, not a call", true, "c", MapHeaderRead::No, "link" },
+    { "anchor",            "<c anchor=missing>: that markdown link named a heading this file does not have, so the edge is the file", true, "c", MapHeaderRead::No, "missing" },
     // CALLSITE-AT (2026-10-09): a callers row's call sites (editcheck.h rowCallSites); keyed to the callers schema, so the
     // map's own <s> rows never read it. The columnar form names the same list as its sites_at column.
     { "sites_at",          "<s sites_at=>: its calls of the leaf name, any receiver, as file:line (p= is its def line); not proof each binds", true, "s", MapHeaderRead::No, {}, "callers" },
@@ -594,6 +600,8 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // FE-B: a map <c> row merging N byte-identical via=name rows (serialize.h writeMapCalleeRows) carries x=N
     { "x",                 "<c x=N>: N same-named via=name rows merged; callees=FILE:SYM lists all", true, "c" },
     { "via",               "<e via=name>: that edge matched by name alone (receiver unproven); NOT a claim the edge is false", true, "e", MapHeaderRead::No, "name" },
+    { "via",               "<e via=link>: that edge is a markdown link, not a call", true, "e", MapHeaderRead::No, "link" },
+    { "anchor",            "<e anchor=missing>: that markdown link named a heading this file does not have, so the edge is the file", true, "e", MapHeaderRead::No, "missing" },
     // attrib-multidef (defattrib.h; graphlegend.h kDefTableLegend): the definition table of a multi-group selector, its rows'
     // ties, the cut table's count, and the columnar split column. Present-only, element-scoped. A row's prov="split" (Q1) reads
     // through the shared prov= row above, which already fires on any prov= in the payload.
@@ -614,7 +622,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "cand",              "dc cand=: the candidate defs as file:line (legend full only); cand_more= how many more", true, "dc" },
     { "fields",            "<of_def> column: each row's def ix=K groups (K~s split label, K~n by name, K~t primary template), space-separated", true, "cols", MapHeaderRead::No, "of_def" },
     { "fields",            "<split> column: 1 where the row's edge to of= carries the resolver's split label (may be another arm's)", true, "cols", MapHeaderRead::No, "split" },
-    { "fields",            "<via> column: 1 = via=name, the row's edge matched by name alone (receiver unproven); NOT a claim the edge is false", true, "cols", MapHeaderRead::No, "via" },
+    { "fields",            "<via> column: 1 = via=name, the row's edge matched by name alone (receiver unproven); 2 = via=link, a markdown link; NOT a claim the edge is false", true, "cols", MapHeaderRead::No, "via" },
     // DEPTH-LABELLED --impact (0.6.5): graph.h transitiveCallersDepth's hop per row. The <s> row prints d= run-length
     // (graph.h depthRunAttrXml: the window's first row and each depth change), the columnar form a dense <depth> column, and
     // the root by_depth= (graphlegend.h byDepthAttrXml) partitions reaches= by depth; all three are absent at reaches="0".

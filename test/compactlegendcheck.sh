@@ -124,8 +124,12 @@ elif op == "schema":
 elif op == "rootattrs":  # sorted attribute NAMES of the root, `schema` excluded
     print( " ".join( sorted( set( re.findall( r'([\w:.-]+)="', m.group( 2 ) ) ) - { "schema" } ) ) if m else "" )
 elif op == "payload":  # the payload with the root's schema attribute removed — the byte-identity operand
-    if m:   # est_tokens= on the root is the price of the EMITTED bytes — a smaller legend is a smaller price, not a row change
-        tag = m.group( 0 ); pay = pay.replace( tag, re.sub( r'\sest_tokens="[0-9]*"', "", re.sub( r'\sschema="[^"]*"', "", tag ) ), 1 )
+    if m:   # schema= is the compact dialect's own id
+        tag = m.group( 0 ); pay = pay.replace( tag, re.sub( r'\sschema="[^"]*"', "", tag ), 1 )
+    # est_tokens= prices the emitted bytes. A legend the compact dialect strips moves that price on the
+    # document root and on an embedded map root (pack-signatures, pack-top-n). A smaller legend is a
+    # smaller price, not a row change.
+    pay = re.sub( r'\sest_tokens="[0-9]*"', "", pay )
     sys.stdout.write( pay )
 elif op == "legend":   sys.stdout.write( "".join( leg ) )
 elif op == "prose":    # PROSE legend bytes: comments this document carries that the FULL document (argv[3]) does not carry
@@ -350,6 +354,8 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # RE-ANCHORED 2026-10-18 (train 31, merge of lane hrr over the merged body-fold pin), for.xml only: re-recorded from the
 # merged binary; a token-level 3-way merge (base = lane body-fold's pin, ours = the merged pin above, theirs = lane hrr's pin;
 # at= and est_tokens= masked) equals it exactly. 5527 -> 5688 B. The six other pins are unchanged.
+# RE-ANCHORED BY HAND 2026-10-19 (markdown section links), map.xml only: the two fixture callees gain via="link",
+# the full legend gains the via="link" comment, and est_tokens= prices them, 901 -> 929.
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
 # sed does not): at="…" masked, trailing newlines dropped.
@@ -630,12 +636,13 @@ probeFor()
 # reading (+~75 B) rides only an answer whose row names a site. Nothing else moved. Commit 2 (closure containment) adds
 # "|closure" to the ns d= reading: measured 852 B, inside the same 860 B pin. The OLD path keeps its pin: the
 # (U-twin-path) arm after the universe loop cuts exactly those readings out of the same probe and holds the rest at 550 B.
+# RE-PINNED 2026-10-19 (markdown section links): the via=link reading and the deleted same-pair sentence.
 PIN_TABLE='
 ripwire.edit-check/v1             650   636
 ripwire.map/v1                   1140  1129
-ripwire.map-diff/v1              900   885
-ripwire.pack-signatures/v1       770   759
-ripwire.metrics/v1               1040  1021
+ripwire.map-diff/v1              970   953
+ripwire.pack-signatures/v1       840   827
+ripwire.metrics/v1               1090  1080
 ripwire.deps/v1                   780   764
 ripwire.hotspots/v1               530   518
 ripwire.clones/v1                 810   799
@@ -676,7 +683,7 @@ ripwire.mentions/v1               260   243
 ripwire.affected/v1               840   826
 ripwire.verify/v1                 440   421
 ripwire.help-task/v1              440   429
-ripwire.query/v1                 720   707
+ripwire.query/v1                 790   775
 ripwire.grep/v1                  1380  1368
 ripwire.match/v1                  370   355
 ripwire.lego/v1                  290   275
@@ -695,7 +702,7 @@ ripwire.whereis/v1               1050  1037
 ripwire.community/v1             730   719
 ripwire.layout/v1                1220  1203
 ripwire.pack-task/v1             990   974
-ripwire.pack-top-n/v1            760   745
+ripwire.pack-top-n/v1            830   813
 ripwire.expand/v1                280   265
 ripwire.expand-file/v1            510   508
 ripwire.for/v1                   1100  1099

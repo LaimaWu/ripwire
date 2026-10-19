@@ -111,14 +111,14 @@ inline void countUnlistedNamesakes( const IngestResult& ing, const Graph& g, std
     };
     const auto keyEq = []( const Key& a, const Key& b ) { return a.lang == b.lang && a.kind == b.kind && a.name == b.name; };
     const auto keyOf    = [ & ]( NodeId t ) { const Symbol& s = ing.symbols[t]; return Key{ s.lang, s.kind, s.name }; };
-    const auto hasHedge = [ & ]( NodeId u ) { return std::any_of( g.outNameOnly.begin() + g.outOff[u], g.outNameOnly.begin() + g.outOff[u + 1], []( std::uint8_t b ) { return b != 0; } ); };
+    const auto hasHedge = [ & ]( NodeId u ) { return std::any_of( g.outNameOnly.begin() + g.outOff[u], g.outNameOnly.begin() + g.outOff[u + 1], []( std::uint8_t b ) { return edgeKindByte( b ) == kEdgeName; } ); };
     const auto isSym    = [ & ]( std::uint32_t k ) { return g.outTargets[k] < ing.symbols.size(); };
     std::vector<std::string_view> names;
     for( const NodeId u : cone )
     {
         for( std::uint32_t k = g.outOff[u]; k < g.outOff[u + 1]; ++k )
         {
-            if( g.outNameOnly[k] != 0 && isSym( k ) )
+            if( edgeKindByte( g.outNameOnly[k] ) == kEdgeName && isSym( k ) )
             {
                 names.push_back( ing.symbols[ g.outTargets[k] ].name );
             }
@@ -161,7 +161,7 @@ inline void countUnlistedNamesakes( const IngestResult& ing, const Graph& g, std
         std::vector<Key> hedged;   // the targets u reached by name alone
         for( std::uint32_t k = g.outOff[u]; k < g.outOff[u + 1]; ++k )
         {
-            if( isSym( k ) && g.outNameOnly[k] != 0 )
+            if( isSym( k ) && edgeKindByte( g.outNameOnly[k] ) == kEdgeName )
             {
                 hedged.push_back( keyOf( g.outTargets[k] ) );
             }
@@ -711,7 +711,7 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
             for( std::uint32_t k = g.outOff[c]; k < g.outOff[c + 1]; ++k )
             {
                 const NodeId w = g.outTargets[k];
-                if( g.outNameOnly[k] == 0 || w >= S )
+                if( edgeKindByte( g.outNameOnly[k] ) != kEdgeName || w >= S )   // a markdown link (kEdgeLink) is a proven edge, no by-name hit
                 {
                     continue;
                 }
@@ -1097,7 +1097,7 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
             for( std::uint32_t e = g.outOff[u]; e < g.outOff[u + 1] && e < g.outNameOnly.size(); ++e )
             {
                 const NodeId w = g.outTargets[e];
-                if( g.outNameOnly[e] == 0 || w >= S || byNameSites.siteOf( u, ing.symbols[w].name ) == ByNameCallSites::kNoSite )
+                if( edgeKindByte( g.outNameOnly[e] ) != kEdgeName || w >= S || byNameSites.siteOf( u, ing.symbols[w].name ) == ByNameCallSites::kNoSite )
                 {
                     continue;   // not a by-name edge, or every call of the name is builtin-spelled (K5 rule 1)
                 }

@@ -1169,6 +1169,29 @@ inline constexpr const char* kViaNameLegend =
 inline constexpr const char* kViaNameImpactClause =
     "An impact row reached only through such an edge carries it too; one that some all-proven path reaches stays plain. ";
 inline constexpr const char* kViaNameColumnarClause = "format=columnar carries it as the <via> column (1 = via=\"name\"). ";
+inline constexpr const char* kViaLinkLegend =
+    "via=\"link\" on a row: the edge is a markdown link, not a call. ";
+inline constexpr const char* kViaLinkColumnarClause = "format=columnar carries it as the <via> column (2 = via=\"link\"). ";
+inline constexpr const char* kAnchorMissLegend =
+    "anchor=\"missing\" on a row: the markdown link named a heading this file does not have, so the edge is the file. ";
+inline std::string viaLinkLegend( bool present )
+{
+    std::string sentence;
+    if( present )
+    {
+        sentence.assign( kViaLinkLegend );
+    }
+    return sentence;
+}
+inline std::string anchorMissLegend( bool present )
+{
+    std::string sentence( kAnchorMissLegend );
+    if( !present )
+    {
+        sentence.clear();
+    }
+    return sentence;
+}
 inline std::string viaNameLegend( bool present, bool impact = false, bool columnar = false )
 {
     if( !present )
@@ -1218,20 +1241,31 @@ inline std::string viaNameLegendComment()
 {
     return std::string( "<!-- " ) + kViaNameLegend + "-->";
 }
+inline std::string viaLinkLegendComment()
+{
+    return std::string( "<!-- " ) + kViaLinkLegend + "-->";
+}
 // …and the MAP's spelling, as its own comment: the same three facts as kViaNameLegend in the fewest bytes (a map prints the
 // most hedged rows of any answer, and its --max-tokens fit pays for every legend byte in rows), plus x=, the count a merged
 // row carries (serialize.h writeMapCalleeRows), and where each merged candidate is listed. No `--` inside an XML comment:
 // the flag is named callees=.
 inline constexpr std::string_view kMapViaNameLegend =
     "<!-- via=\"name\": by name alone; all in reach shown, x=N merged (callees=FILE:SYM lists all); does NOT mean it is false -->";
-// …and MCP's spelling: the same sentence as the `via_note` key of an answer one of whose entries carries "via":"name".
-inline std::string viaNameNoteJson()
+inline constexpr std::string_view kMapViaLinkLegend =
+    "<!-- via=\"link\": a markdown link, not a call -->";
+inline constexpr std::string_view kMapAnchorMissLegend =
+    "<!-- anchor=\"missing\": the markdown link named a heading this file does not have, so the edge is the file -->";
+inline std::string anchorMissLegendComment()
 {
-    std::string text = kViaNameLegend;
-    for( std::size_t at = text.find( "via=\"name\"" ); at != std::string::npos; at = text.find( "via=\"name\"", at ) )
+    return std::string( "<!-- " ) + kAnchorMissLegend + "-->";
+}
+// …and MCP's spelling: the same sentence as the `via_note` key of an answer one of whose entries carries "via":"name".
+inline std::string viaFactNoteJson( std::string text, std::string_view from, std::string_view jsonSpelling, std::string_view key )
+{
+    for( std::size_t at = text.find( from ); at != std::string::npos; at = text.find( from, at ) )
     {
-        text.replace( at, 10, "\\\"via\\\":\\\"name\\\"" ); // via="name" -> \"via\":\"name\" inside the JSON string
-        at += 16;
+        text.replace( at, from.size(), jsonSpelling );
+        at += jsonSpelling.size();
     }
     if( const std::size_t at = text.find( "on a row" ); at != std::string::npos )
     {
@@ -1241,7 +1275,19 @@ inline std::string viaNameNoteJson()
     {
         text.pop_back();
     }
-    return ",\"via_note\":\"" + text + "\"";
+    return ",\"" + std::string( key ) + "\":\"" + text + "\"";
+}
+inline std::string viaNameNoteJson()
+{
+    return viaFactNoteJson( kViaNameLegend, "via=\"name\"", "\\\"via\\\":\\\"name\\\"", "via_note" );
+}
+inline std::string viaLinkNoteJson()
+{
+    return viaFactNoteJson( kViaLinkLegend, "via=\"link\"", "\\\"via\\\":\\\"link\\\"", "via_link_note" );
+}
+inline std::string anchorMissNoteJson()
+{
+    return viaFactNoteJson( kAnchorMissLegend, "anchor=\"missing\"", "\\\"anchor\\\":\\\"missing\\\"", "anchor_missing_note" );
 }
 
 // The same fact in --for's two dialects, which are prose strips joined by ';' and ':' rather than XML comment
