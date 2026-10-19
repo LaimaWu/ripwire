@@ -622,6 +622,12 @@ probeFor()
 # probe; 595 on main 0852bc0f). The probe's contract is unchanged with nothing flagged, so the answer is now the verdict
 # line (no <c> rows), and the compact legend reads its two new facts: rows_next= (the --limit call listing the callers) and
 # callers= as the c rows' total (a floor). Nothing else moved.
+# RE-PINNED 2026-10-18 (lane ix2-slice, commit 1 SINK-SIDE FRONTIER): ripwire.path/v1 550 -> 860 (measured 844, the
+# --path=total_area,distance probe; 535 on main b59b0824). Every reachable=0 answer now carries <near_sink> and its <ns> rows,
+# and the compact legend reads them: the near_sink and ns d= readings ride this probe (+309 B with separators); the ns in=/site=
+# reading (+~75 B) rides only an answer whose row names a site. Nothing else moved. Commit 2 (closure containment) adds
+# "|closure" to the ns d= reading: measured 852 B, inside the same 860 B pin. The OLD path keeps its pin: the
+# (U-twin-path) arm after the universe loop cuts exactly those readings out of the same probe and holds the rest at 550 B.
 PIN_TABLE='
 ripwire.edit-check/v1             650   636
 ripwire.map/v1                   1140  1129
@@ -661,7 +667,7 @@ ripwire.stray-content/v1          810   795
 ripwire.flags/v1                  470   459
 ripwire.doc-drift/v1              960   949
 ripwire.notes/v1                  310   292
-ripwire.path/v1                   550   535
+ripwire.path/v1                   860   852
 ripwire.connect/v1                760   741
 ripwire.impact/v1                940   924
 ripwire.mentions/v1               260   243
@@ -771,6 +777,46 @@ else
                 ok "(U-twin-callers) callers compact prose minus the sites_at= reading ($catCut B) is $catRest B <= 330 B (the pre-CALLSITE-AT pin)"
             else
                 no "(U-twin-callers) callers compact prose minus the sites_at= reading ($catCut B) is ${catRest:-?} B > 330 B — the rest re-inflated"
+            fi ;;
+    esac
+fi
+# (U-twin-path) the pre-2026-10-18 ripwire.path/v1 pin (550 B), kept (PROCESS rule 4): the --path=total_area,distance probe
+# with the sink-side frontier's readings (near_sink, ns d=, ns in= when present, and the generic next= reading the block's
+# next= pulls in when the root has none) cut out of a copy of the compact answer must still fit the OLD pin. The cut is taken only when the answer carries <near_sink> and each present reading occurs once.
+( cd "$REPO" && "$BIN" . --path=total_area,distance --legend=compact >"$TMP/pth.c" 2>/dev/null </dev/null \
+  && "$BIN" . --path=total_area,distance --legend=full >"$TMP/pth.full" 2>/dev/null </dev/null ); rcPth=$?
+pthCut="$( python3 - "$TMP/pth.c" "$TMP/pth.cut" <<'PY'
+import re, sys
+doc = open( sys.argv[1], encoding = "utf-8", errors = "replace" ).read()
+body = re.sub( r"<!--.*?-->", "", doc, flags = re.S )
+if "<near_sink " not in body:
+    print( "NOPREMISE the probe carries no <near_sink>" ); sys.exit( 0 )
+cut = 0
+for opener in ( " near_sink depth=", " ns d=", " ns in=" ):
+    hits = [ m for m in re.finditer( re.escape( opener ) + r"[^.]*\.", doc ) ]
+    if opener != " ns in=" and len( hits ) != 1:
+        print( "NOPREMISE the reading %r occurs %d times, not once" % ( opener, len( hits ) ) ); sys.exit( 0 )
+    for m in hits[ :1 ]:
+        cut += len( m.group( 0 ).encode() ); doc = doc.replace( m.group( 0 ), "", 1 )
+# the generic next= reading rides only because the block carries next=: a root with no next= of its own pulled none before
+root = re.search( r"<path [^>]*>", body )
+generic = " next=: the one pasteable follow-up."
+if root and " next=" not in root.group( 0 ) and doc.count( generic ) == 1:
+    cut += len( generic.encode() ); doc = doc.replace( generic, "", 1 )
+open( sys.argv[2], "w", encoding = "utf-8" ).write( doc )
+print( cut )
+PY
+)"
+if [ "$rcPth" -ne 0 ]; then
+    no "(U-twin-path) --path=total_area,distance exited $rcPth — the twin cannot measure"
+else
+    case "$pthCut" in
+        NOPREMISE*) no "(U-twin-path) path twin cannot measure: ${pthCut#NOPREMISE }" ;;
+        *)  pthRest="$( leg prose "$TMP/pth.cut" "$TMP/pth.full" )"
+            if [ -n "$pthRest" ] && [ "$pthRest" -eq "$pthRest" ] 2>/dev/null && [ "$pthRest" -le 550 ]; then
+                ok "(U-twin-path) path compact prose minus the near_sink readings ($pthCut B) is $pthRest B <= 550 B (the pre-ix2-slice pin)"
+            else
+                no "(U-twin-path) path compact prose minus the near_sink readings ($pthCut B) is ${pthRest:-?} B > 550 B — the rest re-inflated"
             fi ;;
     esac
 fi
@@ -1655,13 +1701,15 @@ grep -q '^__ERROR__' "$TMP/m.bad" && ok "(M) MCP edit_check legend:\"terse\" is 
 # RE-PINNED 2026-09-19 (the L1 fix round, rv-r1-L1 HIGH-1: every emitted attribute defined — the (U) pins' note): uses 290 -> 510
 # (measured 500), path_between 280 -> 430 (419), exemplar 260 -> 350 (331); impact and lego did not cross their pins.
 # Fix round 2: path_between 430 -> 540 (measured 535 — the no-path hint= reading).
+# RE-PINNED 2026-10-18 (lane ix2-slice): path_between 540 -> 860 — the same <near_sink>/<ns> readings the (U) table's
+# ripwire.path/v1 row states (one emitter, src/pathgaps.h pathNearSinkXml); the (U-twin-path) arm keeps the old 550 B CLI pin.
 # RE-PINNED 2026-09-23 (cut-fix C): impact 780 -> 810 (measured 797; 777 on the base binary) — the same +20 B
 # shown_importers= reading the (U) table's ripwire.impact/v1 row states: --limit now sizes the import tier.
 # RE-PINNED 2026-09-26 (lane impact-depth-065): impact 810 -> 940 (measured 924; 797 on the base binary) — the same +127 B
 # <s d=N>/by_depth= readings the (U) table's ripwire.impact/v1 row states; the MCP twin carries the CLI's attributes.
 for pair in "impact:940:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
             "uses:510:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
-            "path_between:540:{\"path\":\".\",\"from\":\"total_area\",\"to\":\"distance\",\"legend\":\"compact\"}" \
+            "path_between:860:{\"path\":\".\",\"from\":\"total_area\",\"to\":\"distance\",\"legend\":\"compact\"}" \
             "lego:260:{\"path\":\".\",\"type\":\"Point\",\"legend\":\"compact\"}" \
             "exemplar:350:{\"path\":\".\",\"kind\":\"fn\",\"task\":\"distance\",\"legend\":\"compact\"}"; do
     verb="${pair%%:*}"; rest="${pair#*:}"; mpin="${rest%%:*}"; args="${rest#*:}"

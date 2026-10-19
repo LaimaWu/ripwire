@@ -57,6 +57,76 @@ answer (fold, its legend clause and the `<sigs>` pair) +3.4 KB median (max 4.9 K
 `next="--callees=…"`, and the `--for --limit=N` file page legend says `n=` counts this task's symbols, not the file's (`--expand`
 `sibs_total=`).
 
+### Fixed — closure blocks and bridges: three false hedges a hand-check found
+
+- `post: function _post( … ) { … }` (and `compile: function compile`) is one definition the parser reports twice; the
+  property is no longer listed as a closure beside the function expression, which takes its place.
+- C, C++ and Objective-C have no named nested function, so a function span the parser reports inside a function (htop's
+  `else if (…) {` read as a function named `if`) is no longer a closure (a `langfacts.h` column, no language compare).
+- A `<bridge>` no longer routes through a test, bench, demo, generated or minified symbol (it may still start or end at
+  one), and a chain longer than 8 hops is not shown.
+- A `<bridge>` no longer crosses a declined member call spelled like a builtin type's method (`ids.join( "," )`,
+  `keys.push( k )`, `d.get( k )`, Ruby `each`): the builtin-method gate's per-language tables decide, and on a 42-query
+  hand-check every such crossing was a false chain.
+- `<near_sink>` reads neither such a builtin-spelled declined call nor a wrapper decorator (`@property`, `@classmethod`,
+  `@overload`: the dead-code rule's own list) as a way into a row.
+- By-name hedges (`<near_sink>` `why="name"`, a `<bridge>` `via="namesake"` crossing) now need a call of the name that
+  is not spelled like a builtin type's method (`prerequisites.clear`, `self._invalid_css.update( … )`) AND a namesake
+  whose owner (its class in its file, or its file for a free function) owns something the forward search reached. On the
+  24-row near_sink hand-check sample this removes all 5 by-name rejects and no accepted row; it is a hedge filter, not
+  proof that a dropped namesake is never the one called.
+  A row whose by-name calls those rules drop says so with `withheld="name:N"` and never reads `why="external"`: the
+  index holds a way in it chose not to count (textual's `Input.render_line`, entered by `widget.render_line( y )`).
+
+### Added — `--path` offers a hedged bridge (`<bridge proven="0">`) and glob endpoints
+
+A `reachable="0"` `--path` answer (and MCP `path_between`) now carries `<bridge proven="0" crossings= hops=>` when a chain
+from `from=` to `to=` exists that crosses at most 2 hops the graph holds no edge for, each fanning out to at most 16
+candidates: a declined call's candidate (`via="declined" cands=K`), a function stored or passed as a value
+(`via="value"`), a closure written in the previous row's body (`via="closure"`), or another same-language definition of a
+name called by name alone (`via="namesake"`). The chain with the fewest crossings is shown; it is not a path —
+`reachable=` and `hops=` stay 0 and no count includes it. On htop, `--path=ScreenManager_run,LinuxMachine_scanCPUTime`
+shows ScreenManager_run → checkRecalculation → Machine_scan (declined, 9 candidates) → LinuxMachine_scanCPUTime; on koa,
+`--path=listen,respond` shows listen → callback ⊃ handleRequest → handleRequest ⊃ handleResponse → respond.
+
+An endpoint that names no definition and holds a `*` now stands for every function or method definition whose name fits
+it (`from_glob="1"`/`to_glob="1"`, `to_defs=` counts them): `--path=post_message,on_*` on Textual was "endpoint not found"
+(exit 1) and is now an answer with its gaps, bridge and `<near_sink>` rows. A name that resolves is never read as a pattern.
+
+### Changed — declined-call `<dc>` rows: tier-first order, and `--impact` lists them
+
+The `<dc>` rows (calls the resolver declined to bind) are now ordered by the file's path tier first — source, then
+test/bench, then docs, the key the callers and uses rows already sort by — then path and line, so a test file whose path
+sorts first no longer leads the list. `--impact` (XML, `--json`, columnar and the MCP twin) now prints the callers-form
+`<dc>` rows of exactly the declined calls its `declined_calls=` counts (the ones that could have reached SYM or a symbol
+in its radius), capped at 16 with `dc_shown=`/`dc_next=` as on `--callers`; before, it printed only the count. On hono,
+`--impact=match` now names 16 of its 339 declined sites; the `src/helper/dev/index.ts:77` site is the 18th, two rows past
+the cap, because hono's `benchmarks/` and `perf-measures/` trees are not in the test/bench tier.
+
+### Added — `--callees` lists what a function's closures call (`<in>` blocks)
+
+A named function written inside another function's body (a JS/TS arrow or function assigned in the body, a Python
+nested `def`, a Rust nested `fn`, at any depth) is a closure of it: read from the parser's own definition spans, so no
+cached content changes and no language needs a rule of its own. `--callees=F` (XML, `--json`, columnar) now carries
+`closures=K` and one `<in n= p= via="closure" count=>` block per closure (at most 4) listing that closure's own callees
+(at most 8 each, `capped="1"` and a `next=` past that). A block is containment, not a call edge: its rows are in no
+`count=`, and F reaches them only by running the closure or handing it on. The `--path` `<near_sink>` rows gain
+`why="closure"` with the enclosing function as `in=`. On nunjucks, `--callees=getTemplate` now names `Template`
+(called only inside its `createTemplate` arrow); on koa, `--path=listen,respond` names `handleResponse`, a closure of
+`handleRequest`. A function with no closure keeps its bytes. A class member written inside a function is not a closure.
+
+### Added — `--path` names the sink side of an unreached path (`<near_sink>`)
+
+A `--path=A,B` answer with `reachable="0"` (and the MCP `path_between` twin) now carries `<near_sink depth= callers= rows=>`
+beside the forward `<gap>` rows: B's proven callers walked back over resolved call edges up to 2 hops, each `<ns>` row
+classified by how it may also be entered with no edge — `why=` `declined` (a declined call lists it as a candidate),
+`value`, `through` (a call through a parameter or slot is matched to that value), `name` (a by-name call went to a
+namesake), or `external` (no indexed way in was found) — with one such site (`in=`, `site=`) and `met="1"` when the
+forward search reached that site. Rows are hedges, never hops; at most 4 are shown (`rows=` counts them all) and `next=`
+lists the first row's callers. On htop, `--path=ScreenManager_run,LinuxMachine_scanCPUTime` now names the Linux
+`Machine_scan` (the sink's only caller) and the declined call in `checkRecalculation` that could have meant it. Every
+`reachable="1"` answer is byte-identical; the reachable="0" hint and gap clause are unchanged.
+
 ### Changed — Go methods carry their receiver type as scope (#403, slice 9a)
 
 Go methods now carry their receiver type as scope (`sc=`), with `*` and type arguments stripped (`*Stack[T]` → `Stack`),

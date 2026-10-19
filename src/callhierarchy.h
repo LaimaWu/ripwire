@@ -20,6 +20,7 @@
 // surface-specific by contract (the CLI has a legend, the MCP arm speaks JSON-RPC errors), and folding them
 // in would trade one drift for another.
 
+#include "closures.h"        // ClosureIndex — the callees form's <in> blocks: functions written inside of='s body
 #include "declinedsites.h"   // the <dc> rows: the declined call sites, ordered here once for every surface
 #include "editcheck.h" // rowCallSites / callSitesAttrXml — the C2 byte band estimates the rows it serves
 #include "pageview.h"  // kCallersBandMaxBytes / kCallerRowMinBytes / kCallHierarchyBandMax
@@ -27,6 +28,8 @@
 #include "filter.h"    // pathTierIndexOver / compareTierThenPath — the tier-then-path row order both surfaces serve
 #include "graph.h"     // resolveAllByNameQualified, the CSR, testSymbolForwardReach / countTestedIn / isTestedByReach
 #include "model.h"
+#include "nextverb.h"  // nextFlag / nextAttrXml / nextFieldJson — a cut <in> block's next=
+#include "sarif.h"     // rootRelativeUri — the <in> blocks' p=, as every other row
 #include "infra/sortutil.h"   // svLess: the explicit byte order every string_view sort here takes (portablebuildcheck #6)
 #include "valuerefs.h" // the reference-as-value rows both surfaces serve beside the call rows
 
@@ -99,6 +102,134 @@ struct CallHierarchyRows
     // file and line) — the <dc> rows, never in `rows` or any count above; uncut, declinedSites.size() == declinedCalls.
     std::vector<std::uint32_t> declinedSites;
 };
+
+// ── CLOSURE BLOCKS (lane ix2-slice, IX-2 P2): what the functions written INSIDE of='s body call ───────────────────────────
+// `--callees=getTemplate` listed what getTemplate's own body calls, but nunjucks' `const createTemplate = ( err, info ) => {
+// … new Template( … ) … }` is a definition of its own, so Template was in no row. The callees form now carries one <in> block
+// per closure (src/closures.h: a named function whose innermost enclosing definition is a function of=, at any depth) listing
+// that closure's own callees. A block is CONTAINMENT, not a call: its rows are in no count=, and of= reaches them only by
+// running the closure or handing it on (via="closure" on every block says so). kClosureBlocks blocks, kClosureRows rows each.
+inline constexpr std::size_t kClosureBlocks = 4;   // <in> blocks per answer; closures= counts them all, closures_capped="1" says so
+inline constexpr std::size_t kClosureRows   = 8;   // rows per block; count= is the closure's distinct callees, capped="1" past it
+
+// One closure's callees: its resolved out-edges, deduped, in the callees form's tier-then-path order (then line, name).
+inline std::vector<NodeId> closureCalleeRows( const IngestResult& ing, const Graph& g, NodeId inner )
+{
+    std::vector<NodeId> rows;
+    for( std::uint32_t k = g.outOff[inner]; k < g.outOff[inner + 1]; ++k )
+    {
+        if( const NodeId c = g.outTargets[k]; c < ing.symbols.size() && c != inner )
+        {
+            rows.push_back( c );
+        }
+    }
+    std::ranges::sort( rows );
+    rows.erase( std::ranges::unique( rows ).begin(), rows.end() );
+    const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( ing, rows, [ & ]( NodeId r ) { return ing.symbols[r].fileId; } );
+    std::sort( rows.begin(), rows.end(), [ & ]( NodeId a, NodeId b )
+    {
+        const Symbol& sa = ing.symbols[a];
+        const Symbol& sb = ing.symbols[b];
+        if( const int c = compareTierThenPath( ing, tierOfFile, sa.fileId, sb.fileId ); c != 0 )
+        {
+            return c < 0;
+        }
+        return sa.line != sb.line ? sa.line < sb.line : sa.name < sb.name;
+    } );
+    return rows;
+}
+
+// Does a SHOWN closure block row carry via="name" (the answer then needs that reading)? Exactly the rows closureBlocks prints.
+inline bool closureBlocksAnyVia( const IngestResult& ing, const Graph& g, std::span<const NodeId> closures )
+{
+    for( std::size_t b = 0; b < std::min( closures.size(), kClosureBlocks ); ++b )
+    {
+        const std::vector<NodeId> rows = closureCalleeRows( ing, g, closures[b] );
+        for( std::size_t i = 0; i < std::min( rows.size(), kClosureRows ); ++i )
+        {
+            if( edgeNameOnly( g, closures[b], rows[i] ) )
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// The callees root's closures="K" [closures_capped="1"] (head) and the <in> blocks (rows), or their JSON spellings: the
+// ,"closures":K[,"closures_capped":1] keys and the ,"in":[…] array (keys = the XML attribute names, rows = {t,n,p[,via]}).
+// Both empty with no closure, so an answer without one keeps its bytes.
+struct ClosureBlocksOut
+{
+    std::string head;
+    std::string rows;
+};
+inline ClosureBlocksOut closureBlocks( const IngestResult& ing, const Graph& g, std::span<const NodeId> closures, bool singleRoot,
+                                       std::string_view rootPrefix, bool json )
+{
+    if( closures.empty() )
+    {
+        return {};
+    }
+    const bool        overCap = closures.size() > kClosureBlocks;
+    const std::string k       = std::to_string( closures.size() );
+    ClosureBlocksOut  res{ json ? ",\"closures\":" + k + ( overCap ? ",\"closures_capped\":1" : "" )
+                                : " closures=\"" + k + "\"" + ( overCap ? " closures_capped=\"1\"" : "" ), {} };
+    std::vector<char> esc;
+    const auto ex  = [ & ]( std::string_view v ) -> std::string { return std::string( escapeXml( v, esc ) ); };
+    const auto rel = [ & ]( const Symbol& s ) -> std::string
+    {
+        return std::string( singleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], rootPrefix ) : std::string_view( ing.files[ s.fileId ] ) )
+             + ":" + std::to_string( s.line );
+    };
+    const auto sel = [ & ]( const Symbol& s ) -> std::string   // file:name, the selector the block's next= replays
+    {
+        return std::string( singleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], rootPrefix ) : std::string_view( ing.files[ s.fileId ] ) ) + ":" + s.name;
+    };
+    std::string out = json ? ",\"in\":[" : "";
+    const std::size_t blocks = std::min( closures.size(), kClosureBlocks );
+    for( std::size_t b = 0; b < blocks; ++b )
+    {
+        const NodeId              inner = closures[b];
+        const Symbol&             is    = ing.symbols[inner];
+        const std::vector<NodeId> rows  = closureCalleeRows( ing, g, inner );
+        const std::size_t         shown = std::min( rows.size(), kClosureRows );
+        const bool                cut   = shown < rows.size();
+        const std::string         next  = cut ? nextFlag( "--callees=", sel( is ) ) : std::string();
+        if( json )
+        {
+            out += std::string( b == 0 ? "" : "," ) + "{\"n\":\"" + jsonStr( is.name ) + "\",\"p\":\"" + jsonStr( rel( is ) ) + "\",\"via\":\"closure\",\"count\":"
+                 + std::to_string( rows.size() ) + ( cut ? ",\"shown\":" + std::to_string( shown ) + ",\"capped\":1" : "" ) + nextFieldJson( next ) + ",\"calls\":[";
+        }
+        else
+        {
+            out += "<in n=\"" + ex( is.name ) + "\" p=\"" + ex( rel( is ) ) + "\" via=\"closure\" count=\"" + std::to_string( rows.size() ) + "\""
+                 + ( cut ? " shown=\"" + std::to_string( shown ) + "\" capped=\"1\"" : "" ) + nextAttrXml( next ) + ">";
+        }
+        for( std::size_t i = 0; i < shown; ++i )
+        {
+            const Symbol& s   = ing.symbols[ rows[i] ];
+            const bool    via = edgeNameOnly( g, inner, rows[i] );   // FE-B: a name-only edge says so, as on the callees rows
+            out += json ? std::string( i == 0 ? "" : "," ) + "{\"t\":\"" + symTag( s.kind ) + "\",\"n\":\"" + jsonStr( s.name ) + "\",\"p\":\"" + jsonStr( rel( s ) ) + "\""
+                              + ( via ? ",\"via\":\"name\"" : "" ) + "}"
+                        : "<s t=\"" + std::string( symTag( s.kind ) ) + "\" n=\"" + ex( s.name ) + "\" p=\"" + ex( rel( s ) ) + "\"" + viaNameAttr( via ) + "/>";
+        }
+        out += json ? "]}" : "</in>";
+    }
+    res.rows = json ? out + "]" : out;
+    return res;
+}
+
+// The callees legend's closure sentence, carried only by an answer with a block (absent otherwise: byte-identical).
+inline constexpr std::string_view kClosureBlocksLegend =
+    "closures=K: K named functions are written INSIDE of='s body (closures, at any depth); each <in n= p= via=\"closure\" count=> "
+    "block lists that closure's OWN callees (count= distinct, at most 8 shown, capped=1 = cut, its next= lists them all), at most 4 "
+    "blocks (closures_capped=1 = more). A block is containment, not a call edge: its rows are in no count= above, and of= reaches "
+    "them only by running the closure or handing it on. ";
+inline std::string_view closureBlocksLegend( bool on ) noexcept
+{
+    return on ? kClosureBlocksLegend : std::string_view();
+}
 
 // The callees answer's <stdm> line (graph.h StdMemberGate, stdMemberCallsMadeBy), one spelling per dialect — the JSON keys
 // mirror the XML attributes, n= the same comma-joined value — absent when the definitions made no such call, so every
