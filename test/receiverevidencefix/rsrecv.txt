@@ -1,0 +1,127 @@
+# arm (RS) Rust receiver evidence inputs (lane rust-receivers), unpacked by test/receiverevidencecheck.sh into its temp dir
+# (kept out of the indexed tree, like callresult.txt). Each file starts at a line `@@@ <root>/<path>`.
+@@@ rsrecv/Cargo.toml
+[package]
+name = "rsrecv"
+version = "0.1.0"
+@@@ rsrecv/src/lib.rs
+// test/receiverevidencecheck.sh arm (RS): Rust receiver evidence (lane rust-receivers).
+pub mod model;
+pub mod other;
+pub mod app;
+pub mod kinds;
+@@@ rsrecv/src/model.rs
+// Book and Other both define spin / iter; Cfg and Knob both define tune: a call proves one only through its receiver's type.
+pub struct Book { pub items: Vec<u32> }
+impl Book {
+    pub fn new() -> Self { Book { items: Vec::new() } }
+    pub fn spin(&self) -> u8 { 1 }
+    pub fn iter(&self) -> usize { 2 }
+}
+pub struct Other;
+impl Other {
+    pub fn spin(&self) -> u8 { 3 }
+    pub fn iter(&self) -> usize { 4 }
+}
+#[derive(Default)]
+pub struct Cfg;
+impl Cfg {
+    pub fn tune(&self) -> u8 { 5 }
+}
+pub struct Knob;
+impl Knob {
+    pub fn tune(&self) -> u8 { 6 }
+}
+pub struct Stack<T> { pub items: Vec<T> }
+impl<T> Stack<T> {
+    pub fn spin(&self) -> u8 { 7 }
+}
+pub struct Inner { pub book: Book }
+pub struct Shelf {
+    pub book: Book,
+    pub boxed: Box<Book>,
+    pub maybe: Option<Book>,
+    pub shared: std::rc::Rc<Book>,
+    pub inner: Inner,
+    pub count: u32,
+}
+impl Shelf {
+    pub fn iter(&self) -> usize { self.book.iter() }
+    pub fn self_field(&self) -> u8 { self.book.spin() }
+    pub fn self_boxed(&self) -> u8 { self.boxed.spin() }
+    pub fn self_two_hops(&self) -> u8 { self.inner.book.spin() }
+    pub fn self_literal(&self) -> u8 { let s = Self { book: Book::new(), boxed: Box::new(Book::new()), maybe: None, shared: todo!(), inner: todo!(), count: 0 }; s.book.spin() }
+    pub fn self_param(&self, b: &Book) -> u8 { b.spin() }
+    pub fn near_self_maybe(&self) -> u8 { self.maybe.spin() }
+    pub fn near_self_shared(&self) -> u8 { self.shared.spin() }
+    pub fn near_self_count(&self) -> u8 { self.count.spin() }
+    pub fn near_self_unknown(&self) -> u8 { self.missing.spin() }
+}
+pub struct Holder<T> { pub item: T }
+impl<T> Holder<T> {
+    pub fn near_generic_field(&self) -> u8 { self.item.spin() }
+}
+pub struct Pair(pub Book);
+impl Pair {
+    pub fn near_tuple_field(&self) -> u8 { self.0.spin() }
+}
+@@@ rsrecv/src/other.rs
+// a second Book (other::Book) and an in-tree File named like std::fs::File
+pub struct Book;
+impl Book {
+    pub fn spin(&self) -> u8 { 8 }
+}
+pub struct File;
+impl File {
+    pub fn sync_all(&self) -> u8 { 9 }
+}
+pub struct Shelf { pub book: Vec<u8> }
+impl Shelf {
+    pub fn near_same_named_owner(&self) -> u8 { self.book.spin() }
+}
+@@@ rsrecv/src/kinds.rs
+// an enum with methods and a trait with a default method, both spelled like receivers below
+pub enum Shape { Round, Square }
+impl Shape {
+    pub fn spin(&self) -> u8 { 10 }
+}
+pub trait Render {
+    fn spin(&self) -> u8 { 0 }
+}
+@@@ rsrecv/src/app.rs
+use crate::kinds::{Render, Shape};
+use crate::model::{Book, Cfg, Shelf, Stack};
+use crate::other;
+use std::fs::File;
+use std::rc::Rc;
+pub fn typed_param(b: &Book) -> u8 { b.spin() }
+pub fn typed_param_mut(mut b: &mut Book) -> u8 { b.spin() }
+pub fn typed_param_box(b: Box<Book>) -> u8 { b.spin() }
+pub fn typed_param_path(b: &crate::other::Book) -> u8 { b.spin() }
+pub fn typed_param_module(b: &other::Book) -> u8 { b.spin() }
+pub fn typed_param_generic(s: &Stack<u8>) -> u8 { s.spin() }
+pub fn typed_param_enum(s: &Shape) -> u8 { s.spin() }
+pub fn let_typed() -> u8 { let b: Book = make(); b.spin() }
+pub fn let_typed_ref() -> u8 { let b: &Book = &make(); b.spin() }
+pub fn let_struct() -> u8 { let b = Book { items: Vec::new() }; b.spin() }
+pub fn let_struct_path() -> u8 { let b = other::Book {}; b.spin() }
+pub fn let_new() -> u8 { let b = Book::new(); b.spin() }
+pub fn let_default() -> u8 { let c = Cfg::default(); c.tune() }
+pub fn field_chain(s: &Shelf) -> u8 { s.book.spin() }
+pub fn closure_param() -> u8 { let f = |b: &Book| b.spin(); f(&make()) }
+pub fn std_named(book: &Book) -> usize { book.iter() }
+pub fn near_call() -> u8 { let x = foo.bar(); x.spin() }
+pub fn near_dyn(r: &dyn Render) -> u8 { r.spin() }
+pub fn near_impl(r: &impl Render) -> u8 { r.spin() }
+pub fn near_generic<T: Render>(r: &T) -> u8 { r.spin() }
+pub fn near_bare_trait(r: &Render) -> u8 { r.spin() }
+pub fn near_option(b: Option<Book>) -> u8 { b.spin() }
+pub fn near_let_option() -> u8 { let b: Option<Book> = None; b.spin() }
+pub fn near_rc(b: Rc<Book>) -> u8 { b.spin() }
+pub fn near_shadow(b: &Book) -> u8 { let b = other_thing(); b.spin() }
+pub fn near_for(b: &Book, xs: Vec<u8>) -> u8 { for b in xs { b.spin(); } 0 }
+pub fn near_closure_shadow(b: &Book) -> u8 { let f = |b| b.spin(); f(1) }
+pub fn near_outside(f: &File) -> u8 { f.sync_all() }
+pub fn near_tuple((a, _b): (Book, u8)) -> u8 { a.spin() }
+pub fn near_default_outside() -> u8 { let c = String::default(); c.tune() }
+pub fn make() -> Book { Book::new() }

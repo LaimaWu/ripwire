@@ -51,13 +51,11 @@
 #       function-pointer call (C has no member functions) and a Go call (Go's row is EMPTY) are unchanged
 #   (R) the Rust row (rsgate/): `v.push()` / `v.iter()` on Vec parameters and a parameter of an undefined type are declined
 #       with their <stdm> line; `self.iter()` inside the defining impl stays proven; a name outside the table and a name with no
-#       in-tree definition are untouched, a qualified `Stack::push( s, 1 )` keeps its edge; STATED FLOOR until Rust records receiver types: a parameter, local or field written
-#       as the in-tree Stack / Book, or a generic bounded by an in-tree trait, is declined too (counted, never silently dropped)
-#       FLIP WHEN RUST RECORDS RECEIVER TYPES (map L3, rust-receivers): these five (R) STATED FLOOR arms pin today's decline
-#       and must turn into "keeps the edge / the via=name hedge" in the lane that types them — stack_param (parameter),
-#       stack_local (local), rsgate/lib.rs:add (field self.inner), book_iter (parameter of the in-tree Book), generic_bound
-#       (P: Pushable); with them the (R) --callers counts (rsgate/lib.rs:push declined 6, Book::iter declined 2) and
-#       attribmultidefcheck's f_rs_iter twin. vec_param / vec_iter / std_vec stay declined (their receivers are std types).
+#       in-tree definition are untouched, a qualified `Stack::push( s, 1 )` keeps its edge. FLIPPED by lane rust-receivers (Rust
+#       records receiver types): a parameter, local or field WRITTEN as the in-tree Stack / Book (stack_param, stack_local,
+#       rsgate/lib.rs:add's self.inner, book_iter, not_in_table's frobnicate) now BINDS that type's method, unhedged, and the
+#       (R) --callers counts fall with them; vec_param / vec_iter / std_vec stay declined (their receivers are std types).
+#       STATED FLOOR (lane L6): a generic bounded by an in-tree trait (generic_bound, P: Pushable) is still declined.
 #   (E) the callers side: Vec::push_back keeps exactly its typed callers and hedges and counts the ten declined calls; the one-def
 #       Solo::append keeps soloTyped and counts stdAppend; Pool::clear keeps poolTyped and counts two
 #   (F) disclosure surfaces: the map header's declined= equals the census's declined bucket, the full map legend, the
@@ -281,15 +279,16 @@ check "(R) v.push() on a &mut Vec<i32> parameter — declined, <stdm push>" call
 check "(R) x.push() on a parameter of a type the tree does not define — declined" callees unknown_param '' 1 'push:1'
 check "(R) v.iter() on a &Vec<i32> parameter — declined, <stdm iter>" callees vec_iter '' 1 'iter:1'
 check "(R) self.iter() inside Book — proven (FE-B self), kept unhedged" callees Book::first 'rsgate/lib.rs:16:iter' '' ''
-check "(R) s.frobnicate() — no std name, the ladder is unchanged" callees not_in_table 'rsgate/lib.rs:7:frobnicate~' '' ''
+check "(R) s.frobnicate() on a &Stack<i32> parameter — no std name; the written type proves Stack's (rust-receivers)" callees not_in_table 'rsgate/lib.rs:7:frobnicate' '' ''
 check "(R) m.insert() with no in-tree insert in reach — nothing to decline, nothing counted" callees map_insert '' '' ''
-check "(R) STATED FLOOR: s.push() on a &mut Stack<i32> parameter — Rust records no parameter type yet, declined" callees stack_param '' 1 'push:1'
-check "(R) STATED FLOOR: let s: Stack<i32> = Stack { .. }; s.push() — no local type either, even written, declined" callees stack_local '' 1 'push:1'
-check "(R) STATED FLOOR: self.inner.push() with inner: Stack<i32> — no Rust field type is recorded, declined" callees rsgate/lib.rs:add '' 1 'push:1'
-check "(R) STATED FLOOR: book.iter() on a &Book parameter — declined though Book defines iter" callees book_iter '' 1 'iter:1'
+check "(R) s.push() on a &mut Stack<i32> parameter — the written in-tree type BINDS Stack::push (rust-receivers)" callees stack_param 'rsgate/lib.rs:5:push' '' ''
+check "(R) let s: Stack<i32> = Stack { .. }; s.push() — the written local binds Stack::push" callees stack_local 'rsgate/lib.rs:5:push' '' ''
+check "(R) self.inner.push() with inner: Stack<i32> — the field's written type binds Stack::push" callees rsgate/lib.rs:add 'rsgate/lib.rs:5:push' '' ''
+check "(R) book.iter() on a &Book parameter — binds Book::iter (an in-tree receiver named like a std member)" callees book_iter 'rsgate/lib.rs:16:iter' '' ''
 check "(R) old scope fixture: let mut v = Vec::new(); v.push() — declined" callees std_vec '' 1 'push:1'
+check "(R) old scope fixture: let mut s = Stack { n: 0 }; s.push() — the struct literal binds Stack::push, never Queue's (rust-receivers)" callees typed_local 'rs/lib.rs:3:push' '' ''
 check "(R) near-miss: Stack::push( s, 1 ) — a qualified call, never gated, keeps its edge" callees ufcs 'rsgate/lib.rs:5:push' '' ''
-check "(R) STATED FLOOR: p.push() on a generic P: Pushable (an in-tree trait) — declined" callees generic_bound '' 1 'push:1'
+check "(R) STATED FLOOR (L6): p.push() on a generic P: Pushable (an in-tree trait) — not typed, still declined" callees generic_bound '' 1 'push:1'
 check "(R) --callers=rsgate/lib.rs:push keeps the qualified caller and counts the six declined calls" callers rsgate/lib.rs:push 'rsgate/lib.rs:28:ufcs' 6 ''
 check "(R) --callers=Book::iter keeps the proven self call and counts the two declined ones" callers Book::iter 'rsgate/lib.rs:17:first' 2 ''
 
@@ -317,14 +316,20 @@ grep -q '<stdm n= calls=>: of declined_calls=' "$TMP/ce.xml" \
 rw --callees=stdParam >"$TMP/cec.xml"
 grep -q 'stdm n= calls=: of declined_calls=' "$TMP/cec.xml" \
     && ok "(F) the compact callees legend defines stdm n= calls=" || no "(F) the compact callees legend does not define stdm"
-# every surface that defines the clause also states the Rust floor (checklist 3: what the claim does NOT mean)
+# every surface that defines the clause also states the Rust floor (checklist 3: what the claim does NOT mean). Lane
+# rust-receivers retired the old floor ("Rust records no receiver type yet": a written in-tree type now binds, arm R) and
+# states the new one: a generic bound, dyn / impl Trait and a value behind Option / Rc / RefCell are not typed.
 floor_missing=""
-grep -q 'Rust-records-no-receiver-type-yet' "$TMP/map.xml"                                            || floor_missing="$floor_missing map"
-grep -q 'a Rust receiver written as an in-tree type is declined too (Rust records no receiver type yet)' "$TMP/cl.xml" || floor_missing="$floor_missing callers"
-grep -q 'a Rust receiver written as an in-tree type is listed too (Rust records no receiver type yet)' "$TMP/ce.xml"   || floor_missing="$floor_missing callees"
-grep -q 'stdm n= calls=: [^>]*(Rust: one written as an in-tree type too, until Rust records receiver types)' "$TMP/cec.xml" || floor_missing="$floor_missing compact"
+grep -q 'Rust-types-written-constructed-and-call-result-receivers-not-generic-bounds-dyn-impl-Trait-or-Option-Rc-RefCell' "$TMP/map.xml" || floor_missing="$floor_missing map"
+grep -q 'a Rust receiver of an in-tree type that no rule typed is declined too (Rust types a written, constructed or call-result receiver, not a generic bound, dyn or impl Trait, or a value behind Option, Rc or RefCell)' "$TMP/cl.xml" || floor_missing="$floor_missing callers"
+grep -q 'a Rust receiver of an in-tree type that no rule typed is listed too (Rust types a written, constructed or call-result receiver, not a generic bound, dyn or impl Trait, or a value behind Option, Rc or RefCell)' "$TMP/ce.xml" || floor_missing="$floor_missing callees"
+grep -q 'stdm n= calls=: [^>]*(Rust: one of an in-tree type no rule typed too: a generic bound, dyn or impl Trait, behind Option / Rc / RefCell)' "$TMP/cec.xml" || floor_missing="$floor_missing compact"
 [ -z "$floor_missing" ] && ok "(F) the map, callers, full callees and compact callees legends each state the Rust floor" \
     || no "(F) the Rust floor is missing from:$floor_missing"
+# the retired floor is gone from every surface (a stale "no receiver type yet" would now be false)
+stale=""
+for f in map.xml cl.xml ce.xml cec.xml; do grep -q 'no-receiver-type-yet\|no receiver type yet\|until Rust records receiver types' "$TMP/$f" && stale="$stale $f"; done
+[ -z "$stale" ] && ok "(F) the retired Rust floor (no receiver type yet) is on no surface" || no "(F) the retired Rust floor is still on:$stale"
 rw --callees=typedLocal --legend=full >"$TMP/cen.xml"
 if [ -z "$( root_tag "$TMP/cen.xml" callees )" ]; then no "(F) --callees=typedLocal produced no <callees> root — the absence below would be vacuous"
 elif grep -q 'stdm' "$TMP/cen.xml"; then no "(F) a callees answer with no declined standard-member call mentions stdm"

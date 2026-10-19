@@ -251,9 +251,13 @@ echo "receiverevidencecheck: BIN=$BIN  CORPUS=$CORPUS"
 
 # arm (L)'s roots (callresult/<lang>) live in one text bundle unpacked into the temp dir: committed as source trees they
 # joined the repo's own indexed map (readmedriftcheck G4's --max-tokens=3000 head lost two rows)
+# (arm (RS)'s root rsrecv/ the same way, from rsrecv.txt)
 CRBUNDLE="$CORPUS/callresult.txt"
+RSBUNDLE="$CORPUS/rsrecv.txt"
 [ -f "$CRBUNDLE" ] || { echo "fixture missing: $CRBUNDLE"; exit 2; }
-python3 -I - "$CRBUNDLE" "$TMP/fix/callresult" <<'PY' || { echo "could not unpack $CRBUNDLE"; exit 2; }
+[ -f "$RSBUNDLE" ] || { echo "fixture missing: $RSBUNDLE"; exit 2; }
+for bundle in "$CRBUNDLE:$TMP/fix/callresult" "$RSBUNDLE:$TMP/fix"; do
+python3 -I - "${bundle%%:*}" "${bundle#*:}" <<'PY' || { echo "could not unpack ${bundle%%:*}"; exit 2; }
 import os, sys
 out, cur, n = sys.argv[ 2 ], None, 0
 for line in open( sys.argv[ 1 ], encoding="utf-8" ):
@@ -267,8 +271,9 @@ for line in open( sys.argv[ 1 ], encoding="utf-8" ):
 if cur: cur.close()
 sys.exit( 0 if n > 0 else 1 )
 PY
+done
 # rw ROOT ARGS… — run against one fixture root (every selector below is relative to that root's `.`)
-rw(){ local r="$1" d="$CORPUS/$1"; shift; case "$r" in callresult/*) d="$TMP/fix/$r" ;; esac; ( cd "$d" && "$BIN" . --no-cache "$@" 2>/dev/null ); }
+rw(){ local r="$1" d="$CORPUS/$1"; shift; case "$r" in callresult/*|rsrecv) d="$TMP/fix/$r" ;; esac; ( cd "$d" && "$BIN" . --no-cache "$@" 2>/dev/null ); }
 
 # ── the one reader every predicate shares ─────────────────────────────────────────────────────────────────────
 # parse.py MODE FILE [ARGS] — prints one line per row; NOROOT when the document has no answer about a symbol.
@@ -1503,8 +1508,63 @@ if getrows "$CR/mx_cpp" callees "src/objcfloor.mm:cellObjc"; then
     else no "(L-objc) ObjC floor: want hitObjc on objcfloor.h:3 AND objcdecoy.h:3 (ObjC untyped): $( show )"; fi
 fi
 
+echo "=== (RS) Rust receiver evidence (lane rust-receivers): a written or constructed type proves the receiver's class ==="
+# rsrecv/: model.rs Book::new :4, Book::spin :5, Book::iter :6, Other::spin :10, Other::iter :11, Cfg::tune :16, Knob::tune :20,
+# Stack::spin :24; other.rs other::Book::spin :4, File::sync_all :8; kinds.rs Shape::spin :4, the Render trait's default spin :7.
+# [P] a parameter (`&T`, `&mut T`, `Box<T>`, a path `crate::other::T` / `other::T`, a user generic `Stack<u8>`, an enum), a
+# `let x: T` / `let x: &T`, a struct literal (`T { .. }`, `other::T {}`), `T::new()` (its declared `-> Self`: the call-result
+# rows, which now read `Self`), `T::default()`, a closure's typed parameter, and a field path (`s.book.m()`, `self.book.m()`,
+# `self.boxed.m()`, `self.inner.book.m()`, a `Self { .. }` local's field) RESOLVE to exactly that class's method.
+RSA="src/app.rs"; RSM="src/model.rs"
+RSSPIN="spin $RSM:5|spin $RSM:10|spin $RSM:24|spin src/other.rs:4|spin src/kinds.rs:4|spin src/kinds.rs:7"
+for f in typed_param typed_param_mut typed_param_box let_typed let_typed_ref let_struct let_new closure_param field_chain; do
+    want="method spin $RSM"
+    case "$f" in let_typed|let_typed_ref|closure_param) want="$want;fn make $RSA" ;; let_new) want="$want;method new $RSM" ;; esac
+    exactproven rsrecv callees "$RSA:$f" "$want"                                                                # [P]
+    proven      rsrecv callees "$RSA:$f" "method spin $RSM:5"                                                   # [P] Book's
+done
+for f in typed_param_path typed_param_module let_struct_path; do
+    exactproven rsrecv callees "$RSA:$f" "method spin src/other.rs"                                             # [P] other::Book, never model's
+done
+proven      rsrecv callees "$RSA:typed_param_generic" "method spin $RSM:24"                                     # [P] Stack<u8> is a Stack
+exactproven rsrecv callees "$RSA:typed_param_generic" "method spin $RSM"
+exactproven rsrecv callees "$RSA:typed_param_enum" "method spin src/kinds.rs"                                    # [P] an enum's own impl
+proven      rsrecv callees "$RSA:typed_param_enum" "method spin src/kinds.rs:4"
+proven      rsrecv callees "$RSA:let_default" "method tune $RSM:16"                                             # [P] Cfg::default(): Cfg's
+notproven   rsrecv callees "$RSA:let_default" "tune $RSM:20"                                                    # never Knob's
+proven      rsrecv callees "$RSA:std_named" "method iter $RSM:6"                                                 # [P] book.iter() on &Book (std-named)
+for f in Shelf::self_field Shelf::self_boxed Shelf::self_two_hops Shelf::self_literal Shelf::self_param; do
+    want="method spin $RSM"; [ "$f" = Shelf::self_literal ] && want="$want;method new $RSM"
+    exactproven rsrecv callees "$RSM::$f" "$want"                                                               # [P] through the field table
+    proven      rsrecv callees "$RSM::$f" "method spin $RSM:5"
+done
+proven      rsrecv callees "$RSM::Shelf::iter" "method iter $RSM:6"                                              # [P] self.book.iter() (mdbook's MDBook::iter)
+# [N] near misses record nothing and stay as they were: an untyped `let x = foo.bar()`, `dyn Trait` / `impl Trait` / a
+# generic `T: Trait` / a trait written as a type (dispatch: lane L6), Option<T> (a parameter and a `let`), Rc<T> (its own
+# members), an inner binding hiding the typed one (`let`, `for`, a closure parameter), an outside type named like an in-tree
+# class (`use std::fs::File`), a tuple pattern, an outside `String::default()`; a field typed Option / Rc / u32, a missing
+# field, a generic struct's `T` field, a tuple-struct field `self.0`, and a same-named owner (other::Shelf) whose `book` is a Vec.
+rs_none(){   # rs_none SELECTOR — no spin candidate is proven
+    local specs; IFS='|' read -r -a specs <<<"$RSSPIN"
+    notproven rsrecv callees "$1" "${specs[@]}"
+}
+for f in near_call near_dyn near_impl near_generic near_bare_trait near_option near_let_option near_rc near_shadow near_for near_closure_shadow near_tuple; do
+    rs_none "$RSA:$f"                                                                                          # [N]
+done
+notproven rsrecv callees "$RSA:near_outside" "sync_all src/other.rs:8"                                           # [N] std::fs::File
+notproven rsrecv callees "$RSA:near_default_outside" "tune $RSM:16" "tune $RSM:20"                                # [N] String::default()
+for f in Shelf::near_self_maybe Shelf::near_self_shared Shelf::near_self_count Shelf::near_self_unknown Holder::near_generic_field Pair::near_tuple_field; do
+    rs_none "$RSM::$f"                                                                                         # [N]
+done
+rs_none "src/other.rs::Shelf::near_same_named_owner"                                                             # [N]
+# the callers side reads the same edges: --callers of model.rs's Book::spin lists [P] callers unhedged and never the [N] ones
+proven      rsrecv callers "$RSM::Book::spin" "fn typed_param $RSA" "fn let_struct $RSA" "method self_field $RSM"
+notproven   rsrecv callers "$RSM::Book::spin" "near_dyn $RSA" "near_rc $RSA" "near_shadow $RSA" "near_same_named_owner src/other.rs"
+# guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
+proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
+
 echo "=== (C) conservation: no call silently disappears ==="
-ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/java5 callresult/kt5 callresult/cpp4 callresult/rust4 callresult/cpp5 callresult/rust5 callresult/rust6 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go"
+ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/java5 callresult/kt5 callresult/cpp4 callresult/rust4 callresult/cpp5 callresult/rust5 callresult/rust6 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go rsrecv"
 for r in $ROOTS; do
     rf="$( printf '%s' "$r" | tr '/' '_' )"   # a nested root (callresult/go) writes a flat file name
     if ! rw "$r" --pin-census="$TMP/$rf.tsv" >"$TMP/$rf.map.xml"; then no "(C) ($r) the census run exited non-zero"; continue; fi
