@@ -700,7 +700,7 @@ inline void wrapEmitCliFirst( const AgentTarget& row, const std::string& token,
                               const std::string_view executablePath,
                               const WrapListing& listing ) noexcept
 {
-    rw::emitTo( stdout, "# ripwire -> {} (CLI-first)\n", std::string_view( row.displayName.data(), static_cast<int>( row.displayName.size() ) ) );
+    rw::emitTo( stdout, "# ripwire -> {} (CLI-first)\n", row.displayName );
     wrapPrintPathNote( token );
     rw::emitTo( stdout,
         "# RECOMMENDED — this agent can run shell commands, so call the CLI directly. It costs\n"
@@ -711,14 +711,14 @@ inline void wrapEmitCliFirst( const AgentTarget& row, const std::string& token,
         "# attributes the answer carries; the payload is byte-identical either way). Add --legend=full when a\n"
         "# definition's reasoning is needed -- `ripwire --help` carries the measured saving (one place,\n"
         "# gate-held) -- this line does not repeat it, because two copies of a number is one that goes stale:\n"
-        "#   ripwire . --callers=SYM --legend=full\n", std::string_view( row.contextFile.data(), static_cast<int>( row.contextFile.size() ) ), token.c_str() );
+        "#   ripwire . --callers=SYM --legend=full\n", row.contextFile, token.c_str() );
     if( !row.contextNote.empty() )
     {
-        rw::emitTo( stdout, "#        ({})\n", std::string_view( row.contextNote.data(), static_cast<int>( row.contextNote.size() ) ) );
+        rw::emitTo( stdout, "#        ({})\n", row.contextNote );
     }
     if( !row.caveat.empty() )
     {
-        rw::emitTo( stdout, "# NOTE: {}\n", std::string_view( row.caveat.data(), static_cast<int>( row.caveat.size() ) ) );
+        rw::emitTo( stdout, "# NOTE: {}\n", row.caveat );
     }
     if( row.mcpForm == McpForm::None )
     {
@@ -733,7 +733,7 @@ inline void wrapEmitCliFirst( const AgentTarget& row, const std::string& token,
             // passed it as a non-literal format string, which then wanted a consteval guard proving
             // every row held exactly one %s. Splitting the command at its substitution point removes
             // the hazard rather than containing it: there is no format string left to get wrong.
-            rw::emitTo( stdout, "{}{}{}", std::string_view( row.mcpAddPre.data(), static_cast<int>( row.mcpAddPre.size() ) ),
+            rw::emitTo( stdout, "{}{}{}", row.mcpAddPre,
                          token.c_str(), wrapCliAddPost( row, listing.toolsArg ) );
             break;
         }
@@ -785,7 +785,7 @@ inline void wrapEmitAgent( const std::string_view agent, const WrapListing& list
     // MCP row cannot forget it.
     if( cliRow != nullptr && cliRow->primary == WrapPrimary::Mcp )
     {
-        rw::emitTo( stdout, "# ripwire -> {} (MCP — deterministic, no LLM, no embeddings)\n", std::string_view( cliRow->displayName.data(), static_cast<int>( cliRow->displayName.size() ) ) );
+        rw::emitTo( stdout, "# ripwire -> {} (MCP — deterministic, no LLM, no embeddings)\n", cliRow->displayName );
     }
 
     if( cliFirst )

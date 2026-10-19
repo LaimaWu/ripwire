@@ -108,6 +108,12 @@ mid-compile; the discipline is the fix.
 ripwire builds and passes its suite on Ubuntu 24.04 with gcc 13.3 or clang 18, but a few things
 differ from macOS enough to cost you an afternoon if nobody says them out loud.
 
+**Source builds support gcc 13+, so never rely on C++23 P2718 range-for lifetime extension:** `for( x : makeRow().items() )`
+is correct on clang ≥ 19 and gcc ≥ 15 and reads a dead temporary on gcc 13/14, so name the temporary first; the gcc-14 CI
+leg is the canary, and `-Werror=dangling-reference` plus `portablebuildcheck` #7 hold the shape on every host. #7's blind
+spot: a reference-returning callee that takes the temporary as an argument (`for( v : std::get<0>( makeTup() ) )`) is held
+only by the gcc-14 leg's `-Werror=dangling-reference`.
+
 **Memory, not cores, sizes `-j`.** `src/main.cpp` is one very large translation unit (since the
 2026-08-29 split its verb families live in `src/verbs_*.h` sections included into that one TU — the
 compile cost is unchanged, only the editing surface moved; `src/ingest.cpp` got the same treatment
@@ -275,8 +281,8 @@ Homebrew's keg-only `/opt/homebrew/opt/llvm@22/bin/clang-tidy` — pin that path
 finds neither.
 
 The compiler holds the same line for the UB class: CMakeLists.txt's compile-time fence block makes
-`return-type`, `uninitialized`, `format`/`format-security`, returning a local's address, and on Clang
-`-Wdangling` and constant `array-bounds`, errors on our own targets, per compiler, with the cl.exe
+`return-type`, `uninitialized`, `format`/`format-security`, returning a local's address, on Clang
+`-Wdangling` and constant `array-bounds`, and on GCC 13+ `dangling-reference`, errors on our own targets, per compiler, with the cl.exe
 `/we####` equivalents — each measured at zero hits on AppleClang 17, clang 22 and GCC 13/14/16 first.
 
 ---
@@ -395,6 +401,8 @@ every input the tool ever sees, costs nothing in release, and tells the optimize
 | `DISCLOSE( Diagnostics::answerRefused, "reason" )` | this degrade refuses the answer by name | nothing, but the reason is listed by the gate | a path that, in every build, prints no answer and says why (non-zero exit + stderr, an MCP error, a query's named failure) | anything that still prints part of an answer |
 | `DISCLOSE( "msg" )` | **nothing to the user**: a debug trace | nothing | existing sites only, until converted (ratchet) | any new degrade |
 | `PANIC( "why" )` | we cannot continue | report and abort | a corrupt state | anything recoverable |
+
+**Signed integers for quantities.** Counts, computed lengths, offsets, differences and loop bounds are `int` (or `std::ptrdiff_t` / `std::int64_t` when the range needs it), not `unsigned`. Unsigned arithmetic wraps silently: `a - b` with `b > a` is a huge positive number that no check can catch. libstdc++'s `string_view` compare computing `n1 - n2` on `size_type` is our own example (see `sortutil.h`). Mixed signed/unsigned comparisons also convert the signed side. Signed also gives the optimizer more, and the undefined overflow is exactly what buys it: the compiler may assume a signed value never wraps, so it may widen a 32-bit loop index to 64 bits and fold `i + 1 > i` or `( x * 4 ) / 4`, while unsigned's defined wrap is a promise it must keep, paid for in extra extends and masks (easy to see in Compiler Explorer). A value that must not be negative says so: `EXPECTS( n >= 0 )` for a parameter, `ASSUME` / `ENSURES` where this code makes it true. Unsigned is for bit fields and bit patterns, and a few other things — hashes, the 32-bit handles of §3 (an index, never arithmetic), and the `size_t` an STL API returns — and almost nothing else; convert at that boundary with `std::ssize` / `std::ranges::ssize`. C++20 added them to give a signed size, and Stroustrup's WG21 paper P1428, "Subscripts and sizes should be signed", calls the unsigned `size_t` a mistake: with `ssize`, `i < std::ssize( v ) - 1` is safe on an empty `v`, where `i < v.size() - 1` wraps. **A contract's weight follows the function's:** a one-line accessor needs none, while a function with several inputs, a non-obvious output or a multi-step computation states its preconditions and postconditions.
 
 **The error ladder:**
 - A **recoverable** runtime error (an unreadable file, a full pool, a missing grammar) is a **degrade**, not a

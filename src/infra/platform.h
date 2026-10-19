@@ -92,6 +92,24 @@
 #define RW_ATTR_USED
 #endif
 
+// RW_LIFETIMEBOUND — on a parameter (after its name) or on `this` (after the member function's cv-qualifiers): the
+// returned reference or view points INTO this argument. Clang then reports, under the -Werror=dangling fence in
+// CMakeLists.txt, a caller that binds the result to a temporary that dies at the end of the full-expression
+// (`const std::string& r = f( std::string( "x" ) );`), and clang-tidy's bugprone-return-const-ref-from-parameter
+// stops reporting the function, since the hazard it names is now checked at every call site. Clang and clang-cl
+// only: GCC warns on the unknown `clang::` attribute (-Wattributes), and cl.exe's [[msvc::lifetimebound]] is read
+// only by /analyze (C26815/C26816), which no Windows leg runs — so both arms are empty, and the fence there is the
+// rest of the matrix. Put it only where a function really returns a view of an argument; it is a promise clang
+// checks callers against, not a comment.
+#if defined(__clang__) && defined(__has_cpp_attribute)
+#if __has_cpp_attribute( clang::lifetimebound )
+#define RW_LIFETIMEBOUND  [[clang::lifetimebound]]
+#endif
+#endif
+#ifndef RW_LIFETIMEBOUND
+#define RW_LIFETIMEBOUND
+#endif
+
 // --------------------------------------------------------------------------
 // Opaque-value barrier
 // --------------------------------------------------------------------------
