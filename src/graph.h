@@ -9093,7 +9093,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         {
             for( NodeId to : tier )
             {
-                if( to != r.fromSymbol && ( evidenced || recvEv.types.rustQualifierReaches( r, to ) ) && ( !finalSegmentType || qualifiedReceiverResolves( r, to ) ) )
+                if( to != r.fromSymbol && ( evidenced || recvEv.types.rustQualifierReaches( r, to ) ) && ( !finalSegmentType || qualifiedReceiverResolves( r, to ) )
+                    && recvEv.rustQualifiedTypeOwns( r, to ) )
                 {
                     typeCallResults( r, to, siteIndex );
                 }

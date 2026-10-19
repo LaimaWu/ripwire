@@ -1280,6 +1280,28 @@ struct CallResultTypes
             }
         }
     }
+    // rust-receivers: does the path a `use` at byte `at` of file `f` writes (`std::path::Path`, `serde::Value`) start outside
+    // the tree — a root that is neither crate / self / super / Self, nor an in-tree crate's name, nor a module the file sees
+    bool rustPathLeavesTree( std::uint32_t f, std::uint32_t at, std::string_view path ) const
+    {
+        if( !rust.built )
+        {
+            buildRustLayout();
+        }
+        const std::string_view root = path.substr( 0, path.find( "::" ) );
+        if( root == "crate" || root == "self" || root == "super" || root == "Self" || root.empty() )
+        {
+            return false;
+        }
+        nameKey.assign( root );
+        if( rust.crateByName.contains( nameKey ) )
+        {
+            return false;
+        }
+        std::uint32_t crate = kNoCrate;
+        std::string   module;
+        return !rustModuleOf( f, at, root, crate, module, 0 );
+    }
     // (L) a qualified Rust call whose qualifier is a module path reaching `target`'s own module (`model::load()`,
     // `crate::nest::holder()`, a `use`d `nest::holder()`): the evidence the canonical tier, keyed by type scopes, lacks
     bool rustQualifierReaches( const Reference& r, NodeId target ) const
@@ -2504,6 +2526,25 @@ struct ReceiverEvidence
             cls = it == memberClass.end() ? kNoNode : it->second;
         }
         return cls != kNoNode && methodOf( ing.symbols[ cls ].name, r.calleeName, false, cls );
+    }
+    // rust-receivers: may a Rust call written `T::f()` type the locals its result binds through `to`, a member of a type? Not
+    // when the caller's file imports `T` from OUTSIDE the tree (`use std::path::Path`): the canonical tier matches the
+    // callee's scope NAME alone, so `Path::new( p )` there committed to an in-tree `Path::new` (a base edge this does not
+    // change), and that callee's declared `-> &Self` must not type `p`. Any other qualifier keeps the call-result rule as it
+    // was (the call keeps only the qualifier's last segment, and a file outside every crate layout resolves nothing).
+    bool rustQualifiedTypeOwns( const Reference& r, NodeId to ) const
+    {
+        if( callResultFamilyOf( r.lang ) != CallResultFamily::Rust || r.qualifier.empty() || ing.symbols[ to ].scope.empty() )
+        {
+            return true;
+        }
+        const std::string_view qualifier = CallResultTypes::splitLast( r.qualifier, "::" ).second;
+        bool                   outside   = false;
+        types.forEachImport( r.fileId, qualifier, [ & ]( const Binding& b )
+        {
+            outside = outside || ( b.kind == LocalBindKind::TypeImport && types.rustPathLeavesTree( b.fileId, b.startByte, b.importedName ) );
+        } );
+        return !outside;
     }
     // rust-receivers: the ONE class `self` names inside `from` (or the method enclosing it): the in-tree class of the method's
     // owner name that owns the method (memberOwnerRuleOf — Rust: its own file and item scope, or the only class of the name);

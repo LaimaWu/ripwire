@@ -1628,6 +1628,14 @@ rs_none "src/kinds.rs:go"
 proven      rsrecv callees "src/consts.rs:SPUN" "method spin $RSM:5"                                               # [P]
 proven      rsrecv callees "src/consts.rs:SPIN_FN" "method spin $RSM:5"                                            # [P]
 notproven   rsrecv callees "src/consts.rs:SPIN_FN" "spin $RSM:10" "spin $RSM:24" "spin src/other.rs:4"
+# `Path::new( p )` where `use std::path::Path` names std's: the canonical tier still matches the in-tree other::Path's `new`
+# by its scope name (a base edge, not this lane's), but that call's declared `-> &Self` never types the local when the
+# file imports the qualifier from outside the tree (nushell's Open::run: path.is_dir() was proven onto nu-path's Path at
+# 89f236b0); twin: with `use crate::other::Path` in scope it does. FLOOR: a path-qualified `crate::other::Path::new( p )`
+# in that same file (the call keeps only its last qualifier segment, and the file's `Path` is std's) types nothing.
+notproven   rsrecv callees "src/stdpath.rs:std_path_new" "probe src/other.rs:17"                                   # [N]
+notproven   rsrecv callees "src/stdpath.rs:own_path_new" "probe src/other.rs:17"                                   # [N] floor
+proven      rsrecv callees "src/ownpath.rs:own_path_use" "method probe src/other.rs:17"                             # [P]
 # guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
 proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
 

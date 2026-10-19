@@ -16,6 +16,8 @@ pub mod adds;
 pub mod alias;
 pub mod samename;
 pub mod consts;
+pub mod stdpath;
+pub mod ownpath;
 @@@ rsrecv/src/model.rs
 // Book and Other both define spin / iter; Cfg and Knob both define tune: a call proves one only through its receiver's type.
 pub struct Book { pub items: Vec<u32> }
@@ -95,6 +97,11 @@ pub struct Shelf { pub book: Vec<u8> }
 impl Shelf {
     pub fn near_same_named_owner(&self) -> u8 { self.book.spin() }
 }
+pub struct Path;
+impl Path {
+    pub fn new(p: &str) -> &Self { todo!() }
+    pub fn probe(&self) -> u8 { 12 }
+}
 @@@ rsrecv/src/kinds.rs
 // an enum with methods and a trait with a default method, both spelled like receivers below
 pub enum Shape { Round, Square }
@@ -124,7 +131,7 @@ pub fn typed_param_generic(s: &Stack<u8>) -> u8 { s.spin() }
 pub fn typed_param_enum(s: &Shape) -> u8 { s.spin() }
 pub fn let_typed() -> u8 { let b: Book = make(); b.spin() }
 pub fn let_typed_ref() -> u8 { let b: &Book = &make(); b.spin() }
-pub fn let_struct() -> u8 { let b = Book { items: Vec::new() }; b.spin() }
+pub fn let_struct() -> u8 { let b = Book { items: vec![] }; b.spin() }
 pub fn let_struct_path() -> u8 { let b = other::Book {}; b.spin() }
 pub fn let_new() -> u8 { let b = Book::new(); b.spin() }
 pub fn let_default() -> u8 { let c = Cfg::default(); c.tune() }
@@ -228,3 +235,13 @@ pub mod nested {
 use crate::model::Book;
 pub const SPUN: u8 = { let a: Book = Book { items: Vec::new() }; a.spin() };
 pub static SPIN_FN: fn(&Book) -> u8 = |b: &Book| b.spin();
+@@@ rsrecv/src/stdpath.rs
+// `Path::new` written where `use std::path::Path` names std's: the canonical tier matches the in-tree Path's `new` by its
+// scope name (a base edge), but its declared `-> &Self` must not type the local; the in-tree one by its path does
+use std::path::Path;
+pub fn std_path_new(p: &str) -> u8 { let path = Path::new(p); path.probe() }
+pub fn own_path_new(p: &str) -> u8 { let path = crate::other::Path::new(p); path.probe() }
+@@@ rsrecv/src/ownpath.rs
+// the in-tree Path in scope by its `use`: `Path::new` types the local through its declared `-> &Self`
+use crate::other::Path;
+pub fn own_path_use(p: &str) -> u8 { let path = Path::new(p); path.probe() }
