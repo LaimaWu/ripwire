@@ -427,6 +427,8 @@ struct ForLensJsonInputs
     bool                               notesDegraded;
     // code above docs (serialize.h reorderDocsAfterCode): the XML twin's verdict, REQUIRED for the same reason
     bool                               docsAfterCode;
+    // head round-robin (serialize.h reorderHeadRoundRobin): the XML twin's verdict, REQUIRED for the same reason
+    bool                               headRoundRobin;
     // knob-honesty-068: what the "sigs_next" continuation echoes (serialize.h SigsCutContinuation) — REQUIRED like the two
     // above: a capped JSON bundle names the call that serves its cut rows exactly as the XML twin's <sigs next=> does.
     std::string_view                  task;
@@ -1530,7 +1532,7 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
     const JsonSigLens lens{ /*metrics=*/true, in.fanIn, in.impure, in.churnPerFile, in.cloneMember,
                             in.tested, in.amp, /*rankAdaptivePayload=*/true, in.noteIndex,
                             /*endLines=*/rw::endLinesFitCeiling( in.tokenBudget, /*bodyCeiling=*/false ),   // serialize.h
-                            in.docsAfterCode };
+                            in.docsAfterCode, in.headRoundRobin };
     JsonSigNoteCounts noteCounts;
     const auto packSigs = [ & ]( std::FILE* dst, std::size_t budget, bool* outCapped, std::size_t* outDroppedPositive,
                                  std::vector<rw::NodeId>* outShownIds, rw::SigsCutReport* outCut )
@@ -1655,6 +1657,10 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
     if( sigsCut.docsAfterCode > 0 )   // the XML tag's docs_after_code= (the reorder's disclosure; uncharged, like the XML attribute)
     {
         sigsCutStanza += ",\"docs_after_code\":" + std::to_string( sigsCut.docsAfterCode );
+    }
+    if( sigsCut.filesFirst > 0 )   // the XML tag's files_first= (the head round-robin's disclosure; uncharged likewise)
+    {
+        sigsCutStanza += ",\"files_first\":" + std::to_string( sigsCut.filesFirst );
     }
     const bool sigsCappedKey = sigsCut.isCapped;   // "capped": the XML tag's capped="1" (the ladder's verdict OR a gate cut)
 
@@ -2948,6 +2954,12 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // extra resolve and render on a --json call are cheap and unused, not wrong.
         const std::vector<rw::ForNamedHeaderRow> forHdrRows = rw::forNamedHeaderRows( ing, cfg.forTask );
         const std::string                        forHdrXml  = renderForHdrRowsXml( ing, forHdrRows, flRootArg );
+        // HEAD ROUND-ROBIN (serialize.h reorderHeadRoundRobin): the routed subtoken+body answer to a question that names no
+        // indexed file. Only the shown <sigs> rows reorder: the fold and the hops keep walking lensSurfaceIds in score order —
+        // measured on the rank-gates 44 rows (lane hrr report): hops and fold that followed the reordered head lost two graded
+        // ✓ rows (their strongest rows' callees and bodies left the hop window); in score order they lose none.
+        const bool forHeadRR = rw::forHeadRoundRobinOn( conceptualRoute, rw::taskNamesIndexedFile( ing, cfg.forTask ),
+                                                        cfg.tokenBudget > 0 ? std::size_t( cfg.tokenBudget ) : 0u, forBodyCeiling );
 
         // H1 (B0 r2): the bundle is emitted under a GLOBAL payload budget (serialize.h kForPayloadBudgetBytes; an
         // EXPLICIT --token-budget=N overrides it at the same conservative byte rate the --max-tokens fitter uses).
@@ -3220,7 +3232,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                                                    &forClone, testedPtr, ampPtr, redactPtr,
                                                                    cfg.packBudgetBytes, cfg.tokenBudget, notesPtr,
                                                                    legoTotal, composeTotal, routesTotal, flRootArg,
-                                                                   &forFileTail, &lr.evidence, d.notesDegraded, forDocsAfterCode, cfg.forTask,
+                                                                   &forFileTail, &lr.evidence, d.notesDegraded, forDocsAfterCode, forHeadRR, cfg.forTask,
                                                                    cfg.packTopN, forRankShapingFlags( cfg ) } );
             // §B0: this early return skipped the end-of-function tally below, so a --for --json run redacted
             // SILENTLY — the one stderr line that tells the user a secret was in their tree never appeared.
@@ -3539,7 +3551,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                 sigsBudget,                                  // H1: global payload budget (trim ladder; payload="capped" marker)
                                 notesPtr,                                    // L3: field-notes surfacing (inert when null)
                                 flRootArg,                                   // R-E: root-relative p=
-                                rw::forLensRules( forDocsAfterCode, forEndLines ),   // LB-A floor, e= (endLinesFitCeiling), docs reorder
+                                rw::forLensRules( forDocsAfterCode, forEndLines, forHeadRR ),   // LB-A floor, e= (endLinesFitCeiling), docs reorder, head RR
                                 &forDroppedPositive,                         // A2: exact count, see droppedPositiveCount
                                 &shownSigIds,                                // lane 2: the rows actually emitted — the tail's rank rows exclude THESE files
                                 &forSigsCapped,                              // did the ladder fire? — the budget_bytes= clause rides only then
@@ -4038,7 +4050,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             degradeSigsCut.pastTargetDisclosed = !forSoftTarget;
             packSignatures( stdout, ing, lensRank, forTopN, cfg.packBudgetBytes, true, fanInPtr, impurePtr, redactPtr,
                             &forChurn, &forClone, testedPtr, ampPtr, /*rankAdaptivePayload=*/true, sigsBudget, notesPtr, flRootArg,
-                            rw::forLensRules( forDocsAfterCode, forEndLines ), nullptr, nullptr, nullptr,   // the degrade path selects identically
+                            rw::forLensRules( forDocsAfterCode, forEndLines, forHeadRR ), nullptr, nullptr, nullptr,   // the degrade path selects identically
                             forTopRowNext,                                           // L-W: same next= rule on the degrade path
                             &degradeSigsCut,                                         // knob-honesty-068: and the same <sigs next=>
                             SigRowSpelling{ .elideZeroMetrics = true } );            // lean-answers lane: the same row spelling

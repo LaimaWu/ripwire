@@ -498,8 +498,12 @@ hopnotproven(){
     ran_ok "($r) --for=\"$q\"" "$f" || return
     P hcalls "$f" "$h" || return
     if [ "$PARSED" = "NOROOT" ]; then
-        local drow hp hr htot hne
-        drow="$( grep -o "<d [^>]*n=\"$h\"[^>]*>" "$f" | head -1 )"
+        local drow hp hr htot hne ft
+        # head round-robin (lane hrr, train 31; PROCESS rule 4): the answer's shown r= is the reordered rank (<sigs files_first=N>),
+        # while the hops walk the surface in SCORE order (<hops total=> counts score ranks), so the hop-candidate premise reads the
+        # HOP row's r= off the RIPWIRE_NO_HEAD_RR=1 twin of the same call (score order). The hop block and noedge= read the answer.
+        ft="$f.rrtwin"; RIPWIRE_NO_HEAD_RR=1 rw "$r" "--for=$q" >"$ft" || { no "($r) --for=\"$q\" [RIPWIRE_NO_HEAD_RR=1 twin] exited non-zero"; return; }
+        drow="$( grep -o "<d [^>]*n=\"$h\"[^>]*>" "$ft" | head -1 )"
         hp="$( printf '%s' "$drow" | sed -n 's/.* p="\([^"]*\)".*/\1/p' )"
         hr="$( printf '%s' "$drow" | sed -n 's/.* r="\([0-9][0-9]*\)".*/\1/p' )"
         htot="$( grep -o '<hops [^>]*>' "$f" | head -1 | sed -n 's/.* total="\([0-9][0-9]*\)".*/\1/p' )"
@@ -508,7 +512,7 @@ hopnotproven(){
             *'||'*|'|'*|*'|') no "($r) --for=\"$q\" shows no hop <h n=\"$h\">, and the hop-slot premises are unreadable (d p=/r=: '$hp'/'$hr', hops total=/noedge=: '$htot'/'$hne')"; return ;;
         esac
         if [ "$hr" -gt "$htot" ] || [ "$hne" -lt 1 ]; then
-            no "($r) --for=\"$q\" shows no hop <h n=\"$h\">, and it was no dropped hop candidate (r=$hr, hops total=$htot, noedge=$hne)"; return
+            no "($r) --for=\"$q\" shows no hop <h n=\"$h\">, and it was no dropped hop candidate (score r=$hr on the RR-off twin, hops total=$htot, noedge=$hne)"; return
         fi
         getrows "$r" callees "$hp:$h" || return
         if [ -z "$( printf '%s\n' "$GOT" | awk -v n="$n" 'NF >= 5 && $2 == n' )" ]; then

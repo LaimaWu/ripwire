@@ -191,6 +191,7 @@
 "forautobodycheck.sh": 21.6,
 "forblowupcheck.sh": 1.0,
 "forbodyfoldcheck.sh": 60.0,
+"forheadrrcheck.sh": 30.0,
 "forbodyslotcheck.sh": 150.0,
 "forbudgetmonotoncheck.sh": 2.5,
 "forcalibfactscheck.sh": 8.0,

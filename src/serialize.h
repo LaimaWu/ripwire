@@ -878,6 +878,11 @@ inline constexpr std::string_view kForDocsAfterCodeNote =
     " [docs_after_code=N: N doc rows of the shown set moved below its code rows; same rows, reordered, none added or removed; "
     "a question naming docs keeps score order]";
 
+// The head round-robin's reading (reorderHeadRoundRobin), present-only on a tag that carries files_first=. No "--" (G4).
+inline constexpr std::string_view kForFilesFirstNote =
+    " [files_first=N: N rows moved so r=1..8 are distinct files' best rows, score order, a repeated name once; same rows; "
+    "fold, hops keep score order]";
+
 //   • next= on <sigs> (knob-honesty-068): the call that serves the block uncut (sigsCutNextInvocation). Not the r=1 row's
 //     next= (a body or the widening page), so it says which rows it serves.
 inline constexpr std::string_view kForSigsNextNote = " [sigs next=: one call serving all total= rows uncut]";
@@ -4614,6 +4619,7 @@ enum class SigLensRules : std::uint8_t
     EndLine        = 2,
     ForLens        = 3,
     DocsAfterCode  = 4,
+    HeadRoundRobin = 8,   // ranks 1..8 take each distinct file's best shown row first (reorderHeadRoundRobin)
 };
 inline constexpr bool hasSigLensRule( SigLensRules set, SigLensRules rule ) noexcept
 {
@@ -4621,10 +4627,12 @@ inline constexpr bool hasSigLensRule( SigLensRules set, SigLensRules rule ) noex
 }
 // The --for lens's rules: the relevance floor always; the docs reorder when `docsAfterCode` (the caller's verdict: routed,
 // and the question does not ask about docs — filter.h taskAsksAboutDocs); e= when `endLines` (endLinesFitCeiling).
-inline constexpr SigLensRules forLensRules( bool docsAfterCode, bool endLines ) noexcept
+// The head round-robin when `headRoundRobin` (the caller's verdict: forHeadRoundRobinOn).
+inline constexpr SigLensRules forLensRules( bool docsAfterCode, bool endLines, bool headRoundRobin = false ) noexcept
 {
     return SigLensRules( std::uint8_t( SigLensRules::RelevanceFloor ) | ( endLines ? std::uint8_t( SigLensRules::EndLine ) : 0u )
-                         | ( docsAfterCode ? std::uint8_t( SigLensRules::DocsAfterCode ) : 0u ) );
+                         | ( docsAfterCode ? std::uint8_t( SigLensRules::DocsAfterCode ) : 0u )
+                         | ( headRoundRobin ? std::uint8_t( SigLensRules::HeadRoundRobin ) : 0u ) );
 }
 // WHEN e= RIDES. e= is exempt from the row budget (owner ruling: the ranked set is the one it was without it; its bytes are
 // explain-or-fail), and the rest of the bundle (hops, bodies, tail) is funded from the RENDERED <sigs> bytes, so the
@@ -4714,6 +4722,16 @@ inline constexpr bool docsAfterCodeFitsCeiling( std::size_t budgetTokens, bool b
 {
     return !explicitCeilingTighterThanDefault( budgetTokens, bodyCeiling );
 }
+// May the head round-robin apply? The routed subtoken+body ranking only (`conceptualRoute`): the name-exact route answers
+// the identifier the question named and --no-route keeps score order, and a question that NAMES an indexed file
+// (`namesAFile`, mention.h taskNamesIndexedFile) asked about that file, so its rows keep their places. An explicit token
+// budget or a body ceiling keeps score order too: its files_first= reading is uncharged, and an answer that names its own
+// size promises est_tokens <= it (ownerhopcheck (B1) measured +41 tokens over a 4,500 budget) — the body fold's rule.
+// The A/B handle: RIPWIRE_NO_HEAD_RR set ⇒ off (score order, byte-identical to the answer before the rule).
+inline bool forHeadRoundRobinOn( bool conceptualRoute, bool namesAFile, std::size_t budgetTokens, bool bodyCeiling )
+{
+    return conceptualRoute && !namesAFile && budgetTokens == 0 && !bodyCeiling && std::getenv( "RIPWIRE_NO_HEAD_RR" ) == nullptr;
+}
 inline constexpr bool endLinesFitCeilingFor( ForEndLinesMode mode, std::size_t budgetTokens, bool bodyCeiling ) noexcept
 {
     switch( mode )
@@ -4767,23 +4785,22 @@ inline std::pair<std::vector<std::size_t>, std::size_t> shownDocsAboveCode( cons
     return { std::move( live ), docsAboveLastCode };
 }
 
-template< class EntryT, class IsDoc, class Rehead >
-inline std::size_t reorderDocsAfterCode( std::vector<EntryT>& entries, IsDoc&& isDoc, Rehead&& rehead )
+// The shared step of the shown-set reorders (reorderDocsAfterCode, reorderHeadRoundRobin): `newOrder` is a permutation of
+// `live` (the shown rows' indices, in entries order = rank order); the k-th row of newOrder takes the k-th smallest r= the
+// shown rows held, a row whose r= changed is re-rendered (`rehead`), and entries is re-sorted by the shown r=. Dropped rows
+// keep their globalRank as displayRank and the shown rows hold a permutation of their own ranks, so the display ranks stay
+// unique and the sort is total (deterministic).
+template< class EntryT, class Rehead >
+inline void applyShownOrder( std::vector<EntryT>& entries, const std::vector<std::size_t>& live, const std::vector<std::size_t>& newOrder,
+                             Rehead&& rehead )
 {
-    const auto [ live, moved ] = shownDocsAboveCode( entries, isDoc );
-    if( moved == 0 )
-    {
-        return 0;   // no doc row above a code row (or no code row shown at all): byte-identical
-    }
-    std::vector<std::uint32_t> ranks;   // the shown rows' own r= values, ascending (entries is in globalRank order)
-    std::vector<std::size_t>   newOrder;
+    EXPECTS( newOrder.size() == live.size(), "a permutation of the shown rows" );
+    std::vector<std::uint32_t> ranks;   // the shown rows' own r= values, ascending (entries is in display order)
+    ranks.reserve( live.size() );
     for( const std::size_t i : live )
     {
-        ranks.push_back( entries[i].globalRank );
+        ranks.push_back( entries[i].displayRank );
     }
-    std::copy_if( live.begin(), live.end(), std::back_inserter( newOrder ), [ & ]( std::size_t i ) { return !isDoc( entries[i] ); } );
-    std::copy_if( live.begin(), live.end(), std::back_inserter( newOrder ), [ & ]( std::size_t i ) { return isDoc( entries[i] ); } );
-    ASSUME( newOrder.size() == ranks.size() );
     for( std::size_t k = 0; k < newOrder.size(); ++k )
     {
         EntryT& e = entries[ newOrder[k] ];
@@ -4793,10 +4810,103 @@ inline std::size_t reorderDocsAfterCode( std::vector<EntryT>& entries, IsDoc&& i
             e.displayRank = ranks[k];
         }
     }
-    // dropped rows keep their globalRank as displayRank; the shown rows hold a permutation of their own ranks, so the
-    // display ranks stay unique and the sort is total (deterministic)
     std::stable_sort( entries.begin(), entries.end(), []( const EntryT& a, const EntryT& b ) { return a.displayRank < b.displayRank; } );
+}
+
+template< class EntryT, class IsDoc, class Rehead >
+inline std::size_t reorderDocsAfterCode( std::vector<EntryT>& entries, IsDoc&& isDoc, Rehead&& rehead )
+{
+    const auto [ live, moved ] = shownDocsAboveCode( entries, isDoc );
+    if( moved == 0 )
+    {
+        return 0;   // no doc row above a code row (or no code row shown at all): byte-identical
+    }
+    std::vector<std::size_t> newOrder;
+    std::copy_if( live.begin(), live.end(), std::back_inserter( newOrder ), [ & ]( std::size_t i ) { return !isDoc( entries[i] ); } );
+    std::copy_if( live.begin(), live.end(), std::back_inserter( newOrder ), [ & ]( std::size_t i ) { return isDoc( entries[i] ); } );
+    applyShownOrder( entries, live, newOrder, rehead );
     ENSURES( moved > 0, "a moved count is only returned when the order changed" );
+    return moved;
+}
+
+// ── HEAD ROUND-ROBIN (improvement plan 2026-10-17 #3; lane hrr, train 31) ─────────────────────────────────────────────
+// The ranked head is a READING LIST: max-pooled lexical scores let one file take every head slot (the --for ✓ rows of
+// round 5 named 3.96 distinct files in their first 8 rows). Within the SHOWN rows — none added, none removed, the same
+// row text — ranks 1..kHeadRoundRobinRows take each distinct file's best row first, in score order; the rows they displace
+// keep score order after them. A row whose NAME a head row already holds does not open a new file (overloads, a C
+// typedef/struct pair, a vendored copy are one answer, not two files). Fewer distinct files than slots: the free slots
+// take the remaining rows in score order. Rank 1 never moves (the first row is its own file's best) unless it may not open a
+// file (a doc row while the docs reorder runs: that reorder moves it below the code rows anyway).
+inline constexpr std::size_t kHeadRoundRobinRows = 8;
+
+// The new order of a score-ordered sequence of n rows (indices into it): `fileOf(i)` / `nameOf(i)` read row i. One selection
+// for both dialects' rendered rows (reorderHeadRoundRobin in packSignatures and packSignaturesJson). The --for body-tail fold
+// and the compact hops do NOT follow it: they walk the surface in score order (verbs_for.h, measured there).
+// `mayOpen(i)`: may row i open a file in the head? (false for a doc row when the docs reorder runs after: it would move that row
+// back below the code rows, so lifting it would only spend a head slot and add a second reading.)
+template< class FileOf, class NameOf, class MayOpen >
+inline std::vector<std::size_t> headRoundRobinOrder( std::size_t n, FileOf&& fileOf, NameOf&& nameOf, MayOpen&& mayOpen )
+{
+    std::vector<std::size_t>      order;
+    std::vector<char>             taken( n, 0 );
+    std::vector<std::uint32_t>    headFiles;   // at most kHeadRoundRobinRows entries: a linear scan is the cheap lookup
+    std::vector<std::string_view> headNames;
+    order.reserve( n );
+    const bool rank1Opens = n > 0 && mayOpen( std::size_t{ 0 } );   // read once, outside the contract (contracts call no functors)
+    for( std::size_t i = 0; i < n && order.size() < kHeadRoundRobinRows; ++i )
+    {
+        const std::uint32_t    f  = fileOf( i );
+        const std::string_view nm = nameOf( i );
+        if( !mayOpen( i ) || std::ranges::find( headFiles, f ) != headFiles.end() || std::ranges::find( headNames, nm ) != headNames.end() )
+        {
+            continue;
+        }
+        order.push_back( i );
+        taken[i] = 1;
+        headFiles.push_back( f );
+        headNames.push_back( nm );
+    }
+    for( std::size_t i = 0; i < n; ++i )   // the free head slots, then everything after the head, in score order
+    {
+        if( !taken[i] )
+        {
+            order.push_back( i );
+        }
+    }
+    ENSURES( order.size() == n, "a reorder: every row once, none added or removed" );
+    ENSURES( !rank1Opens || order.front() == 0, "rank 1 moves only when it may not open a file (a doc row the docs reorder moves anyway)" );
+    return order;
+}
+
+// The rendered rows' reorder, after the ladder (the shown set is final): returns how many shown rows changed rank (0 ⇒ the
+// head already named distinct files — byte-identical). Runs BEFORE reorderDocsAfterCode, which then moves any doc row below
+// the code rows and keeps the code rows' round-robin order.
+template< class EntryT, class FileOf, class NameOf, class MayOpen, class Rehead >
+inline std::size_t reorderHeadRoundRobin( std::vector<EntryT>& entries, FileOf&& fileOf, NameOf&& nameOf, MayOpen&& mayOpen, Rehead&& rehead )
+{
+    std::vector<std::size_t> live;
+    for( std::size_t i = 0; i < entries.size(); ++i )
+    {
+        if( !entries[i].dropped )
+        {
+            live.push_back( i );
+        }
+    }
+    const std::vector<std::size_t> pos = headRoundRobinOrder( live.size(), [ & ]( std::size_t k ) { return fileOf( entries[ live[k] ] ); },
+                                                              [ & ]( std::size_t k ) { return nameOf( entries[ live[k] ] ); },
+                                                              [ & ]( std::size_t k ) { return mayOpen( entries[ live[k] ] ); } );
+    std::size_t              moved = 0;
+    std::vector<std::size_t> newOrder;
+    newOrder.reserve( pos.size() );
+    for( std::size_t k = 0; k < pos.size(); ++k )
+    {
+        moved += pos[k] != k ? 1u : 0u;
+        newOrder.push_back( live[ pos[k] ] );
+    }
+    if( moved > 0 )
+    {
+        applyShownOrder( entries, live, newOrder, rehead );
+    }
     return moved;
 }
 
@@ -5143,6 +5253,7 @@ struct SigsCutReport
     std::size_t docsDropped = 0;
     bool        isCapped    = false;
     std::size_t docsAfterCode = 0;     // reorderDocsAfterCode's moved count: docs_after_code= (0 ⇒ absent)
+    std::size_t filesFirst    = 0;     // reorderHeadRoundRobin's moved count: files_first= (0 ⇒ absent)
     std::string next;                  // knob-honesty-068: the cut's continuation (sigsCutNextInvocation), set only on a capped
                                        //   block whose caller asked for a PASTEABLE one; the tag's next= / the JSON "sigs_next"
     std::size_t nextBudgetTokens = 0;  // …or, on a surface with no pasteable argv (MCP), the budget_tokens a re-call needs:
@@ -5401,6 +5512,10 @@ inline std::string sigsCutReportLegend( const SigsCutReport& cut )
     {
         notes += kForDocsAfterCodeNote;
     }
+    if( cut.filesFirst > 0 )   // the head round-robin's reading (reorderHeadRoundRobin)
+    {
+        notes += kForFilesFirstNote;
+    }
     return notes;
 }
 // the same clauses from the four numbers a caller without a continuation holds (--from-trace, --pack-task)
@@ -5437,6 +5552,11 @@ inline std::string sigsOpenTag( const SigsCutReport& cut )
     if( cut.docsAfterCode > 0 )   // the docs reorder (reorderDocsAfterCode): uncharged, like e= — a disclosure never costs a row
     {
         rw::formatTo( nb, sizeof( nb ), " docs_after_code=\"{}\"", cut.docsAfterCode );
+        tag += nb;
+    }
+    if( cut.filesFirst > 0 )   // the head round-robin (reorderHeadRoundRobin): uncharged, like docs_after_code=
+    {
+        rw::formatTo( nb, sizeof( nb ), " files_first=\"{}\"", cut.filesFirst );
         tag += nb;
     }
     // knob-honesty-068: the cut's continuation — the resume index, then the call (pasteable, or the MCP machine form)
@@ -5920,15 +6040,22 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
             *cappedOut = plan.ladderFires;
         }
         SigsCutReport cut = sigsCutReportOf( entries, totalRows, plan );
-        // CODE ABOVE DOCS: the shown set is final here (the ladder ran on score order); only its order may change
+        // HEAD ROUND-ROBIN, then CODE ABOVE DOCS: the shown set is final here (the ladder ran on score order); only its order
+        // may change. The moved row keeps the row spelling it was charged and shown with (both reorders).
+        const auto reheadXml = [ & ]( SigEntry& e, std::uint32_t newRank )
+        { e.head = sigRowHead( ing, e.id, SigRowFacts{ metrics, fanIn, e.lensRun.c_str(), e.pureSig ? " pure=\"1\"" : "", newRank, topRowNext,
+                                                       spelling.elideZeroMetrics }, esc, rootArg ); };
+        const auto isDocRow = [ & ]( const SigEntry& e ) { return ing.symbols[ e.id ].lang == Lang::Markdown; };   // both reorders' one doc test
+        if( hasSigLensRule( lensRules, SigLensRules::HeadRoundRobin ) )
+        {
+            const bool docsLast = hasSigLensRule( lensRules, SigLensRules::DocsAfterCode );
+            cut.filesFirst = reorderHeadRoundRobin( entries, [ & ]( const SigEntry& e ) { return ing.symbols[ e.id ].fileId; },
+                                                    [ & ]( const SigEntry& e ) { return std::string_view( ing.symbols[ e.id ].name ); },
+                                                    [ & ]( const SigEntry& e ) { return !docsLast || !isDocRow( e ); }, reheadXml );
+        }
         if( hasSigLensRule( lensRules, SigLensRules::DocsAfterCode ) )
         {
-            cut.docsAfterCode = reorderDocsAfterCode( entries,
-                [ & ]( const SigEntry& e ) { return ing.symbols[ e.id ].lang == Lang::Markdown; },
-                [ & ]( SigEntry& e, std::uint32_t newRank )
-                // the moved row keeps the row spelling it was charged and shown with (lean-answers' zero elision included)
-                { e.head = sigRowHead( ing, e.id, SigRowFacts{ metrics, fanIn, e.lensRun.c_str(), e.pureSig ? " pure=\"1\"" : "", newRank, topRowNext,
-                                                               spelling.elideZeroMetrics }, esc, rootArg ); } );
+            cut.docsAfterCode = reorderDocsAfterCode( entries, isDocRow, reheadXml );   // lean-answers' zero elision included
         }
         cut.continuationRequest = cutNext;
         sigsCutRecordLadder( cut, ladder, totalAfterLadder, rowDropBudgetIn, pastTargetDisclosed );   // forbudget-soft
@@ -10795,6 +10922,7 @@ struct JsonSigLens
                                                                        // key (defEndLine) on every row whose extent is
                                                                        // known — --for only; off ⇒ byte-identical.
     bool                              docsAfterCode       = false;     // the XML sibling's SigLensRules::DocsAfterCode
+    bool                              headRoundRobin      = false;     // the XML sibling's SigLensRules::HeadRoundRobin
                                                                        // (reorderDocsAfterCode) — --for only.
 };
 
@@ -11181,12 +11309,19 @@ inline void packSignaturesJson( std::FILE* out, const IngestResult& ing, const s
     }
     {
         SigsCutReport cut = sigsCutReportOf( entries, totalRows, plan );
-        if( lens.docsAfterCode )   // the XML twin's reorder, after the ladder: the shown set is final, only its order changes
+        // the XML twin's reorders, after the ladder and in its order: the shown set is final, only its order changes
+        const auto reheadJson = [ & ]( JsonSigEntry& e, std::uint32_t newRank )
+        { e.head = jsonSigRowHead( ing, e.id, ing.symbols[ e.id ].fileId, lens, e.pureSig, rootArg, newRank ); };
+        const auto isDocRow = [ & ]( const JsonSigEntry& e ) { return ing.symbols[ e.id ].lang == Lang::Markdown; };   // both reorders' one doc test
+        if( lens.headRoundRobin )
         {
-            cut.docsAfterCode = reorderDocsAfterCode( entries,
-                [ & ]( const JsonSigEntry& e ) { return ing.symbols[ e.id ].lang == Lang::Markdown; },
-                [ & ]( JsonSigEntry& e, std::uint32_t newRank )
-                { e.head = jsonSigRowHead( ing, e.id, ing.symbols[ e.id ].fileId, lens, e.pureSig, rootArg, newRank ); } );
+            cut.filesFirst = reorderHeadRoundRobin( entries, [ & ]( const JsonSigEntry& e ) { return ing.symbols[ e.id ].fileId; },
+                                                    [ & ]( const JsonSigEntry& e ) { return std::string_view( ing.symbols[ e.id ].name ); },
+                                                    [ & ]( const JsonSigEntry& e ) { return !lens.docsAfterCode || !isDocRow( e ); }, reheadJson );
+        }
+        if( lens.docsAfterCode )
+        {
+            cut.docsAfterCode = reorderDocsAfterCode( entries, isDocRow, reheadJson );
         }
         cut.continuationRequest = cutNext;
         sigsCutRecordLadder( cut, ladder, totalAfterLadder, rowDropBudgetIn, pastTargetDisclosed );   // forbudget-soft

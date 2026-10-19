@@ -349,6 +349,107 @@ inline float rankTierMultiplierOf( std::string_view p ) noexcept
     return 1.0f;
 }
 
+// DECLARATION-TWIN tier (lane hrr, train 31; peer-scout P2 as corrected by mine-gortex-codanna §1(d)). A declaration file
+// restates, as types, an API whose code lives in an implementation file of the same package: on a "how does X work" question
+// its rows match the same words and crowd the code out (fastify: 7 of the 8 head rows of a request-handling question were
+// .d.ts files under types/). Multiplicative and gentle — the declaration stays a ranked answer, one tier below its code — and GUARDED: it
+// applies only when the declaration's PACKAGE has an implementation of its language family, so a types-only package (a .d.ts
+// with no JS behind it, a .pyi that is a compiled core's whole Python surface) keeps 1.0. The package is the nearest
+// enclosing directory holding one of the row's manifests, else the indexed root. min() with the other tiers (one claim per file).
+// The language part is DATA (this table); the rule is common. Pure re-export barrels (an index.ts of `export … from`, an
+// __init__.py of imports) get no row: a file that defines nothing has no definition row for a tier to reach — the same reason
+// kDemoOrGeneratedDirs omits vendor/ (dead weight that reads like coverage).
+struct DeclarationTwinRow
+{
+    std::span<const std::string_view> declSuffixes;     // the declaration files
+    std::span<const std::string_view> implSuffixes;     // the implementation files (a declaration suffix never counts as one)
+    std::span<const std::string_view> manifests;        // basenames that root a package
+    std::span<const std::string_view> notImplBaseNames; // an implementation-suffixed file that is not evidence of code (a package marker)
+    std::span<const std::string_view> declTestSuffixes; // a type test (tsd's index.test-d.ts): restates the declarations, is not code
+};
+inline constexpr std::string_view kTsDeclSuffixes[]    = { ".d.ts", ".d.mts", ".d.cts" };
+inline constexpr std::string_view kTsImplSuffixes[]    = { ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx" };
+inline constexpr std::string_view kTsManifests[]       = { "package.json" };
+inline constexpr std::string_view kTsDeclTestSuffixes[] = { ".test-d.ts", ".test-d.mts", ".test-d.cts", ".test-d.tsx" };
+inline constexpr std::string_view kPyDeclSuffixes[]    = { ".pyi" };
+inline constexpr std::string_view kPyImplSuffixes[]    = { ".py" };
+inline constexpr std::string_view kPyManifests[]       = { "pyproject.toml", "setup.py", "setup.cfg" };
+inline constexpr std::string_view kPyNotImplBaseNames[] = { "__init__.py" };
+inline constexpr DeclarationTwinRow kDeclarationTwinRows[] = {
+    { kTsDeclSuffixes, kTsImplSuffixes, kTsManifests, {}, kTsDeclTestSuffixes },
+    { kPyDeclSuffixes, kPyImplSuffixes, kPyManifests, kPyNotImplBaseNames, {} },
+};
+inline constexpr float kRankTierDeclTwinMul = 0.7f;   // gortex's declaration tier (0.7), here a multiplier: one tier, not a demotion
+
+
+// Per FILE: kRankTierDeclTwinMul for a declaration file whose package holds an implementation file of its row, else 1.0.
+inline std::vector<float> declarationTwinFileMultipliers( const IngestResult& ing )
+{
+    // a path's directory ("" at the root) and file name; whether it ends with one of a row's suffixes
+    const auto dirOf = []( std::string_view p ) noexcept { const std::size_t k = p.rfind( '/' ); return k == std::string_view::npos ? std::string_view() : p.substr( 0, k ); };
+    const auto baseOf = [ & ]( std::string_view p ) noexcept { const std::string_view d = dirOf( p ); return d.empty() ? p : p.substr( d.size() + 1 ); };
+    const auto endsWithAny = []( std::string_view p, std::span<const std::string_view> xs ) noexcept
+    { return std::ranges::any_of( xs, [ & ]( std::string_view x ) { return p.ends_with( x ); } ); };
+    // the package directory of `p`: the longest manifest directory (sorted `manifestDirs`) that encloses it, else "" (the root)
+    const auto packageDirOf = [ & ]( std::string_view p, const std::vector<std::string_view>& manifestDirs ) noexcept
+    {
+        for( std::string_view d = dirOf( p ); !d.empty(); d = dirOf( d ) )
+        {
+            if( std::binary_search( manifestDirs.begin(), manifestDirs.end(), d, sortutil::svLess ) )
+            {
+                return d;
+            }
+        }
+        return std::string_view();
+    };
+    std::vector<float> mul( ing.files.size(), 1.f );
+    for( const DeclarationTwinRow& row : kDeclarationTwinRows )
+    {
+        std::vector<std::string_view> manifestDirs, implPackages;
+        std::vector<std::uint32_t>    decls;
+        for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+        {
+            const std::string_view p    = rootRelPath( ing, f );
+            const std::string_view base = baseOf( p );
+            if( std::ranges::find( row.manifests, base ) != row.manifests.end() )
+            {
+                manifestDirs.push_back( dirOf( p ) );
+            }
+            if( endsWithAny( p, row.declSuffixes ) )
+            {
+                decls.push_back( f );
+            }
+        }
+        if( decls.empty() )
+        {
+            continue;   // no declaration file of this row: nothing to tier (and no second pass)
+        }
+        std::sort( manifestDirs.begin(), manifestDirs.end(), sortutil::svLess );
+        for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+        {
+            const std::string_view p    = rootRelPath( ing, f );
+            const std::string_view base = baseOf( p );
+            // IMPLEMENTATION EVIDENCE: an implementation suffix, and none of — a declaration or type-test suffix, a package marker,
+            // the row's own manifest (setup.py is .py), or a path tier (tests/, demo, generated: code, but not the package's)
+            if( endsWithAny( p, row.implSuffixes ) && !endsWithAny( p, row.declSuffixes ) && !endsWithAny( p, row.declTestSuffixes )
+                && std::ranges::find( row.notImplBaseNames, base ) == row.notImplBaseNames.end()
+                && std::ranges::find( row.manifests, base ) == row.manifests.end() && rankTierMultiplierOf( p ) == 1.0f )
+            {
+                implPackages.push_back( packageDirOf( p, manifestDirs ) );
+            }
+        }
+        std::sort( implPackages.begin(), implPackages.end(), sortutil::svLess );
+        for( const std::uint32_t f : decls )
+        {
+            if( std::binary_search( implPackages.begin(), implPackages.end(), packageDirOf( rootRelPath( ing, f ), manifestDirs ), sortutil::svLess ) )
+            {
+                mul[f] = std::min( mul[f], kRankTierDeclTwinMul );
+            }
+        }
+    }
+    return mul;
+}
+
 // EVIDENCE tier (2026-08-29, SWE-Explore loss bucket 4, the general class the path table above cannot
 // enumerate): a minified/bundled single-file artifact packs a whole definition onto one or a handful of
 // physical lines, so its bytes-per-line ratio is an order of magnitude past anything a human writes —
@@ -521,10 +622,11 @@ inline const char* shapeDocTierTag( const queryshape::Verdict& shape ) noexcept
 // heard of query shapes cannot accidentally acquire an opinion about it.
 inline std::vector<float> rankTierSymbolMultipliersShaped( const IngestResult& ing, bool demoteDocTier )
 {
-    std::vector<float> fileMul( ing.files.size(), 1.f );
+    std::vector<float> fileMul = declarationTwinFileMultipliers( ing );
     for( std::size_t f = 0; f < ing.files.size(); ++f )
     {
-        fileMul[f] = rankTierMultiplierOf( rootRelPath( ing, std::uint32_t( f ) ) );
+        // min(): the declaration-twin tier and the path tiers are one claim about one file, never compounded
+        fileMul[f] = std::min( fileMul[f], rankTierMultiplierOf( rootRelPath( ing, std::uint32_t( f ) ) ) );
         // min(), not assignment or a product: a file already down-weighted for being a deck or a fixture
         // must never be LIFTED by this line, and two independent de-prioritizations are one claim about
         // one file, not a compounding penalty.

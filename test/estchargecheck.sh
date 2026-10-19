@@ -43,6 +43,7 @@ set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
 export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py: the soft-target readers, shared helpers (CHECKLIST 32)
+unset RIPWIRE_NO_HEAD_RR                  # lane hrr: the head reorder is ON here unless an arm's twin sets it (rwm)
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "estchargecheck: BIN=$BIN"
@@ -321,6 +322,17 @@ PYRZ
 soft_rows(){ python3 "$TMP/soft_rows.py" "$1"; }
 soft_st(){ python3 "$TMP/soft_st.py" "$@"; }
 rows_prefix(){ [ -s "$1" ] && [ "$( head -n "$( wc -l < "$1" | tr -d ' ' )" "$2" )" = "$( cat "$1" )" ]; }
+# head round-robin (lane hrr, train 31; PROCESS rule 4, orchestrator ruling FIX1 §4(a)): the routed no-budget --for answer reorders
+# its first 8 rows (files_first=), so a budgeted answer's rows are an ORDER prefix of it only in score order. Each #11 arm that
+# asserts that order prefix runs twice (HRR=twin, then HRR=on): the twin is the arm UNCHANGED with RIPWIRE_NO_HEAD_RR=1 on every
+# call (rwm); with the reorder on, the order-prefix clause against a no-budget answer becomes set_prefix A REF REF_SO — the rows
+# are the score-order twin's first K rows as a SET (no gap, no repeat for the continuation), every other clause unchanged.
+rwm(){ if [ "${HRR:-on}" = twin ]; then RIPWIRE_NO_HEAD_RR=1 rw "$@"; else rw "$@"; fi; }
+rwcallm(){ if [ "${HRR:-on}" = twin ]; then RIPWIRE_NO_HEAD_RR=1 rwcall "$@"; else rwcall "$@"; fi; }
+set_prefix(){ python3 "$RIPWIRE_TESTLIB/softbudget.py" setprefix "$1" "$2" "$3"; }
+hrr_tag(){ if [ "${HRR:-on}" = twin ]; then printf ' [RIPWIRE_NO_HEAD_RR=1 twin]'; else printf ' [head round-robin on: set prefix]'; fi; }
+# the no-budget order-prefix clause of an arm: A against REF (this mode's no-budget answer) and REF_SO (the twin's)
+nobudget_prefix(){ if [ "${HRR:-on}" = twin ]; then rows_prefix "$1" "$2"; else set_prefix "$1" "$2" "$3"; fi; }
 ctx_root(){ grep -aoE '^<ctx [^>]*>' "$1" | head -1; }
 # the soft-target legend clauses (verbs_for.h / graphlegend.h): the compact dialect's reading of budget_tokens=, and the full one's
 SOFT_CLAUSE_COMPACT='budget_tokens= the soft row target asked (rows stop once it is reached)'
@@ -844,12 +856,19 @@ done
 # 10 / 11 rows with --detail=20 / --with-graph against the bare run's 14 — the reserve the soft target deleted.
 TBF=2000
 ALLOW="$( awk "BEGIN{printf \"%d\", $TBF*2.36*1.15}" )"   # still read by the no-budget --detail arm below
-rw src --for="$FOR_TASK" --token-budget=$TBF >"$TMP/f_tbp.out" 2>/dev/null
-rw src --for="$FOR_TASK" --token-budget=5000 >"$TMP/f_tbp5.out" 2>/dev/null
+# lane hrr (rule 4): the score-order twins of the no-budget references the A7 twin / A7B arms read
+for entry in "for:" "for_graph:--with-graph" "for_detail:--detail=20" "for_both:--detail=20 --with-graph"; do
+    # shellcheck disable=SC2086
+    RIPWIRE_NO_HEAD_RR=1 rw src --for="$FOR_TASK" ${entry#*:} >"$TMP/f_${entry%%:*}_so.out" 2>/dev/null
+done
+for HRR in twin on; do
+rwm src --for="$FOR_TASK" --token-budget=$TBF >"$TMP/f_tbp.out" 2>/dev/null
+rwm src --for="$FOR_TASK" --token-budget=5000 >"$TMP/f_tbp5.out" 2>/dev/null
 for tw in "2000:--detail=20:f_tbp:f_for_detail" "2000:--with-graph:f_tbp:f_for_graph" "5000:--detail=20 --with-graph:f_tbp5:f_for_both"; do
     tw_n="${tw%%:*}"; tw_rest="${tw#*:}"; tw_args="${tw_rest%%:*}"; tw_rest="${tw_rest#*:}"; tw_bare="${tw_rest%%:*}"; tw_ref="${tw_rest#*:}"
+    [ "$HRR" = twin ] && tw_ref="${tw_ref}_so"
     # shellcheck disable=SC2086
-    rw src --for="$FOR_TASK" --token-budget=$tw_n $tw_args >"$TMP/f_tw.out" 2>/dev/null
+    rwm src --for="$FOR_TASK" --token-budget=$tw_n $tw_args >"$TMP/f_tw.out" 2>/dev/null
     rc_tw=$?
     tw_root="$( ctx_root "$TMP/f_tw.out" )"
     soft_rows "$TMP/f_tw.out" >"$TMP/tw.rows" 2>/dev/null; soft_rows "$TMP/$tw_bare.out" >"$TMP/tw_bare.rows" 2>/dev/null
@@ -861,35 +880,38 @@ for tw in "2000:--detail=20:f_tbp:f_for_detail" "2000:--with-graph:f_tbp:f_for_g
     # reserved before the rows past the cut — so the rows clause is RP: the shape's rows are a rank prefix of its own
     # no-budget answer's rows (the cut and ST above/below keep the rest)
     soft_rows "$TMP/$tw_ref.out" >"$TMP/tw_ref.rows" 2>/dev/null
-    rows_prefix "$TMP/tw.rows" "$TMP/tw_ref.rows" || tw_why="$tw_why rows:$( wc -l < "$TMP/tw.rows" | tr -d ' ' )-not-a-rank-prefix-of-the-no-budget-answer"
+    soft_rows "$TMP/${tw_ref%_so}_so.out" >"$TMP/tw_ref_so.rows" 2>/dev/null
+    nobudget_prefix "$TMP/tw.rows" "$TMP/tw_ref.rows" "$TMP/tw_ref_so.rows" || tw_why="$tw_why rows:$( wc -l < "$TMP/tw.rows" | tr -d ' ' )-not-a-rank-prefix-of-the-no-budget-answer"
     [ "$tw_st_rc" -eq 0 ] || tw_why="$tw_why ST:[$tw_st]"
     [ -z "$tw_why" ] \
-        && ok "#11 A7 twin (forbudget-soft, round C) --for --token-budget=$tw_n $tw_args: exit 0, no over_ceiling=, $( wc -l < "$TMP/tw.rows" | tr -d ' ' ) rows a rank prefix of the no-budget answer (bare: $( wc -l < "$TMP/tw_bare.rows" | tr -d ' ' )) ($tw_st)" \
-        || no "#11 A7 twin (forbudget-soft) --for --token-budget=$tw_n $tw_args —$tw_why"
+        && ok "#11 A7 twin (forbudget-soft, round C)$( hrr_tag ) --for --token-budget=$tw_n $tw_args: exit 0, no over_ceiling=, $( wc -l < "$TMP/tw.rows" | tr -d ' ' ) rows a rank prefix of the no-budget answer (bare: $( wc -l < "$TMP/tw_bare.rows" | tr -d ' ' )) ($tw_st)" \
+        || no "#11 A7 twin (forbudget-soft)$( hrr_tag ) --for --token-budget=$tw_n $tw_args —$tw_why"
 done
 # A7B — REPLACED (forbudget-soft (rule 4)). Was the owner-option-B contract for both flags OVER the budget: a premise past the
 # allowance, over_ceiling="1", the kept-rows reason. All three die with the ceiling; its ROWS clause is the soft target's own
 # invariant and is kept: --detail=20 --with-graph at 2000 keeps every <sigs> row of the flagless 2000 answer, and its rows are
 # the uncapped answer's top rows in rank order (no higher-ranked row missing). Plus NOLBL, both trailing sections present, and
 # a cut first body still carries the next= that serves the rest.
-rw src --for="$FOR_TASK" --token-budget=$TBF --detail=20 --with-graph >"$TMP/f_tb.out" 2>"$TMP/f_tb.err"
+rwm src --for="$FOR_TASK" --token-budget=$TBF --detail=20 --with-graph >"$TMP/f_tb.out" 2>"$TMP/f_tb.err"
 rc_ftb=$?
 a7b_root="$( ctx_root "$TMP/f_tb.out" )"
 soft_rows "$TMP/f_tb.out" >"$TMP/a7b.rows" 2>/dev/null; soft_rows "$TMP/f_tbp.out" >"$TMP/a7b.plain" 2>/dev/null; soft_rows "$TMP/f_for.out" >"$TMP/a7b.unc" 2>/dev/null
+soft_rows "$TMP/f_for_so.out" >"$TMP/a7b.unc_so" 2>/dev/null; [ "$HRR" = twin ] && cp "$TMP/a7b.unc_so" "$TMP/a7b.unc"
 a7b_n="$( wc -l < "$TMP/a7b.rows" | tr -d ' ' )"; a7b_pn="$( wc -l < "$TMP/a7b.plain" | tr -d ' ' )"
 a7b_why=""
 { [ "$rc_ftb" -eq 0 ] && [ -n "$a7b_root" ]; } || a7b_why="$a7b_why exit-$rc_ftb-or-no-root"
 # round C (rule 4): "keeps every flagless row" is the by-design break (the graph block and the first body are reserved before the
 # rows past the cut); the uncapped answer's rank-prefix clause below is the rows invariant
-rows_prefix "$TMP/a7b.rows" "$TMP/a7b.unc" || a7b_why="$a7b_why rows:not-the-uncapped-answer's-rank-prefix"
+nobudget_prefix "$TMP/a7b.rows" "$TMP/a7b.unc" "$TMP/a7b.unc_so" || a7b_why="$a7b_why rows:not-the-uncapped-answer's-rank-prefix"
 [ -n "$a7b_root" ] && [ "${a7b_root#* over_ceiling=}" = "$a7b_root" ] || a7b_why="$a7b_why over_ceiling-on-a-soft-target"
 { grep -aq '<graph ' "$TMP/f_tb.out" && grep -aqE '<bodies [^>]*><b ' "$TMP/f_tb.out"; } || a7b_why="$a7b_why graph-or-first-body-missing"
 a7b_b1="$( grep -aoE '<b [^>]*>' "$TMP/f_tb.out" | head -1 )"
 { [ -n "$a7b_b1" ] && { [ "${a7b_b1#* truncated=\"1\"}" = "$a7b_b1" ] || [ "${a7b_b1#* next=\"--expand=}" != "$a7b_b1" ]; }; } \
     || a7b_why="$a7b_why first-body-cut-without-next"
 [ -z "$a7b_why" ] \
-    && ok "#11 A7B (forbudget-soft, round C) --token-budget=$TBF --detail=20 --with-graph: $a7b_n rows (flagless: $a7b_pn), the uncapped answer's rank prefix, no over_ceiling=, graph + first body served" \
-    || no "#11 A7B (forbudget-soft) --token-budget=$TBF --detail=20 --with-graph —$a7b_why"
+    && ok "#11 A7B (forbudget-soft, round C)$( hrr_tag ) --token-budget=$TBF --detail=20 --with-graph: $a7b_n rows (flagless: $a7b_pn), the uncapped answer's rank prefix, no over_ceiling=, graph + first body served" \
+    || no "#11 A7B (forbudget-soft)$( hrr_tag ) --token-budget=$TBF --detail=20 --with-graph —$a7b_why"
+done   # HRR twin / on (lane hrr)
 # A7B-X — REPLACED (forbudget-soft (rule 4)). Was: the kept-rows note rides and the answer still parses (fix round 6: its first
 # spelling broke xmllint). The note is gone; the disclosure that now rides the header comment of a soft answer is the reading
 # of budget_tokens= as a soft target, compact and full dialect. Both answers must carry their clause and stay well-formed XML.
@@ -1057,9 +1079,12 @@ for i in range( 4 ):
     with open( os.path.join( out, f"mod{i}.cpp" ), "w" ) as fh:
         fh.write( "\n".join( lines ) )
 PYG
-( cd "$A7S/c3" && rwcall corpus --for="map row serializer" --token-budget=745 --no-cache ) >"$A7S/c3.xml" 2>/dev/null; c3_rc=$?
-( cd "$A7S/c3" && rwcall corpus --for="map row serializer" --token-budget=790 --no-cache ) >"$A7S/paid.xml" 2>/dev/null; pd_rc=$?
-( cd "$A7S/c3" && rwcall corpus --for="map row serializer" --no-cache ) >"$A7S/c3_ref.xml" 2>/dev/null
+( cd "$A7S/c3" && RIPWIRE_NO_HEAD_RR=1 rwcall corpus --for="map row serializer" --no-cache ) >"$A7S/c3_ref_so.xml" 2>/dev/null   # lane hrr: the twin reference
+soft_rows "$A7S/c3_ref_so.xml" >"$A7S/c3_ref_so.rows" 2>/dev/null
+for HRR in twin on; do   # lane hrr (rule 4): the arm unchanged under RIPWIRE_NO_HEAD_RR=1, then the set prefix with the reorder on
+( cd "$A7S/c3" && rwcallm corpus --for="map row serializer" --token-budget=745 --no-cache ) >"$A7S/c3.xml" 2>/dev/null; c3_rc=$?
+( cd "$A7S/c3" && rwcallm corpus --for="map row serializer" --token-budget=790 --no-cache ) >"$A7S/paid.xml" 2>/dev/null; pd_rc=$?
+( cd "$A7S/c3" && rwcallm corpus --for="map row serializer" --no-cache ) >"$A7S/c3_ref.xml" 2>/dev/null
 soft_rows "$A7S/c3.xml" >"$A7S/c3.rows" 2>/dev/null; soft_rows "$A7S/paid.xml" >"$A7S/paid.rows" 2>/dev/null; soft_rows "$A7S/c3_ref.xml" >"$A7S/c3_ref.rows" 2>/dev/null
 c3_n="$( wc -l < "$A7S/c3.rows" | tr -d ' ' )"; pd_n="$( wc -l < "$A7S/paid.rows" | tr -d ' ' )"
 c3_why=""
@@ -1072,10 +1097,11 @@ for c3f in c3:745:$c3_rc paid:790:$pd_rc; do
     c3_st="$( soft_st "$A7S/$c3_lbl.xml" "$c3_bud" "$A7S/c3_ref.xml" )" || c3_why="$c3_why @$c3_bud:ST:[$c3_st]"
 done
 rows_prefix "$A7S/c3.rows" "$A7S/paid.rows" || c3_why="$c3_why rows(745)=$c3_n-not-a-prefix-of-rows(790)=$pd_n"
-rows_prefix "$A7S/paid.rows" "$A7S/c3_ref.rows" || c3_why="$c3_why rows(790)-not-a-prefix-of-the-no-budget-answer"
+nobudget_prefix "$A7S/paid.rows" "$A7S/c3_ref.rows" "$A7S/c3_ref_so.rows" || c3_why="$c3_why rows(790)-not-a-prefix-of-the-no-budget-answer"
 [ -z "$c3_why" ] \
-    && ok "#11 A7 C3/near miss (forbudget-soft, doc-less twin): rows(745)=$c3_n is a rank prefix of rows(790)=$pd_n, itself a prefix of the no-budget answer; both unlabelled, no unpaid clause, both ST-maximal" \
-    || no "#11 A7 C3/near miss (forbudget-soft, doc-less twin) —$c3_why"
+    && ok "#11 A7 C3/near miss (forbudget-soft, doc-less twin)$( hrr_tag ): rows(745)=$c3_n is a rank prefix of rows(790)=$pd_n, itself a prefix of the no-budget answer; both unlabelled, no unpaid clause, both ST-maximal" \
+    || no "#11 A7 C3/near miss (forbudget-soft, doc-less twin)$( hrr_tag ) —$c3_why"
+done   # HRR twin / on (lane hrr)
 }
 
 est_11_a7r(){
