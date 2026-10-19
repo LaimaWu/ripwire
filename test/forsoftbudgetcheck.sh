@@ -661,6 +661,9 @@ print( len( rows ), sum( 1 for p, y in rows if not y or want.get( p ) != y ) )' 
     fi
     # (C3) the size is disclosed: est_tokens= on the root prices the whole answer, tail included (markup rate 2.5 B/token)
     C3E="$( attr ctx est_tokens "$TMP/def.xml" )"; C3B="$( wc -c < "$TMP/def.xml" | tr -d ' ' )"
+    # body-fold (train 31): the fold's bodies are source text, priced at the body rate (forbodyfoldcheck (F6)); the markup-rate
+    # floor reads the answer without the <fold> element
+    C3B=$(( C3B - $( python3 -c 'import re,sys; m=re.search(r"<fold .*?</fold>", open(sys.argv[1]).read(), re.S); print(len(m.group(0).encode()) if m else 0)' "$TMP/def.xml" ) ))
     if isnum "$C3E" && [ "$(( C3E * 25 ))" -ge "$(( C3B * 10 * 97 / 100 ))" ]; then ok "(C3) est_tokens=$C3E prices the $C3B-byte answer, its tail included"
     else no "(C3) est_tokens='$C3E' does not price the $C3B-byte answer (the tail rides unpriced)"; fi
 else

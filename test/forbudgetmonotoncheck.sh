@@ -183,7 +183,11 @@ diff -q "$TMP/tb8k" "$TMP/tb8k_b" >/dev/null \
 grep -q 'bundle="compact"' "$TMP/cdef" \
     && ok "#5 presence: the conceptual route's DEFAULT bundle is compact (the shape #1-#4 opt out of)" \
     || no "#5 presence: the default conceptual bundle is not compact — re-check which shape this fixture serves"
-sigsblock "$TMP/cdef" >"$TMP/sigs_cdef"
+# body-fold (train 31; rule 4, by design): the default compact answer now carries the fold's <sigs> continuation pair (next= the first
+# skipped body, sigs_next= the signatures-only re-call; forbodyfoldcheck (F3)/(F5)), which a soft target — no fold — never does. The
+# frozen-share invariant is about the rows, so it is read off the fold-off twin of the default, byte for byte as before.
+RIPWIRE_NO_BODY_FOLD=1 "$BIN" "$WORK/src" --for="$Q" --no-cache >"$TMP/cdefoff" 2>/dev/null || no "run [fold-off default] exited non-zero"
+sigsblock "$TMP/cdefoff" >"$TMP/sigs_cdef"
 sigsblock "$TMP/c8k"  >"$TMP/sigs_c8k"
 [ -s "$TMP/sigs_cdef" ] || no "#5 presence: could not extract a <sigs> block from the compact default run"
 # forbudget-soft (rule 4): the default answer discloses the rows it serves past its 7.5 KB target (<sigs past_target="K">);

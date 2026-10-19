@@ -51,6 +51,11 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
+# body-fold (train 31): a compact-route --for answer now ends with <fold kind="bodies"> and its present-only clause (forbodyfoldcheck
+# owns the fold). FIX1 B2 (rule 4): every arm reads the DEFAULT answer, fold on — the gate's premise is that the default answer's
+# legend fits its pin and defines what it carries, so the fold's clause is billed by (U)/(L) like any other reading (re-pins below,
+# measured); (FOLD-L) at the end also bills the fold clause alone in both dialects.
+unset RIPWIRE_NO_BODY_FOLD
 export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py: the soft-target readers, shared helpers (CHECKLIST 32)
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
@@ -314,6 +319,11 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # sites_at= clause says the match is by LEAF name ("its call sites spelled like the called name" -> "its calls of the called
 # LEAF name, any receiver or qualifier"), 3890 -> 3907 B. Checked mechanically: the reverse replacement of that one phrase
 # gives the previous pin byte for byte (at= masked). The six other pins are unchanged.
+# RE-ANCHORED BY HAND 2026-10-18 (lane body-fold FIX1 B2, by design), for.xml only: the default --for answer now ends with
+# <fold kind="bodies" … served="3" total="3"> (the three top ranked bodies), the full legend gains the fold clause (forfold.h
+# kForBodyFoldLegend, 496 B), and est_tokens= prices them, 1802 -> 2143, 4504 -> 5509 B. Checked mechanically: with the <fold>
+# element, the fold clause, the <sigs> C3 pair (none here: nothing was skipped) and est_tokens= removed, the new answer equals the
+# previous pin byte for byte (at= masked). The six other pins are unchanged.
 # RE-ANCHORED BY HAND 2026-10-15 (lane forbudget-soft round C, FOLD C, by design), for.xml only: the <tail> carries page 0 of the
 # --for file page (rows with sym=), its full legend clause defines them, and est_tokens= prices them, 4111 -> 4500 B. Checked
 # mechanically: with the <tail> element, the tail clause and est_tokens= masked, the new answer equals the previous pin byte for
@@ -561,6 +571,10 @@ probeFor()
 # callers prose minus that reading to the OLD 330; the existing (U-twin) holds safe-delete minus its reading to 720.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
+# RE-PINNED 2026-10-18 (lane body-fold FIX1 B2, by design): ripwire.for/v1 820 -> 1100 (measured 1088; 802 fold-off, unchanged).
+#   The default --for=geometry answer now carries <fold kind="bodies"> and its compact clause rides beside it (forfold.h
+#   kForCompactBodyFoldLegend, 286 B: it defines b t= n= p= l=, served=/total=/budget_bytes=, the slice and skip rows and the C3
+#   pair). Tightened first (304 -> 286 B); nothing else moved. (U-twin-fold) below keeps the OLD 820 B pin on the fold-off answer.
 # RE-PINNED 2026-10-15 (lane forbudget-soft round C, FOLD C): ripwire.for/v1 775 -> 820 (measured 802; 761 at the last pin).
 #   The <tail> now carries page-0 rows of the file page with sym=, and the compact tail clause reads them: "; t p= file
 #   outside sigs (weaker), r= rank (gap = trimmed)" (58 B) -> "...(weaker), t sym= a file-page row: its top symbols, r= ..."
@@ -664,7 +678,7 @@ ripwire.pack-task/v1             990   974
 ripwire.pack-top-n/v1            760   745
 ripwire.expand/v1                280   265
 ripwire.expand-file/v1            510   508
-ripwire.for/v1                    820   802
+ripwire.for/v1                   1100  1088
 '
 pinFor()
 {
@@ -703,6 +717,19 @@ else
                 no "(U-twin) safe-delete compact prose minus the sites_at= reading ($sdtCut B) is ${sdtRest:-?} B > 720 B — the rest re-inflated"
             fi ;;
     esac
+fi
+# (U-twin-fold) FIX1 B2 (rule 4: a re-pin keeps a twin for the old path): the 820 -> 1100 re-pin of ripwire.for/v1 above paid for
+# ONE reading, the fold's compact clause; with the fold off (RIPWIRE_NO_BODY_FOLD=1, so neither the fold nor its clause rides) the
+# same --for=geometry probe's compact prose legend still fits the OLD 820 B pin, measured by the same `leg prose` operand.
+( cd "$REPO" && RIPWIRE_NO_BODY_FOLD=1 "$BIN" . --for=geometry --legend=compact >"$TMP/uf.c" 2>/dev/null </dev/null \
+  && RIPWIRE_NO_BODY_FOLD=1 "$BIN" . --for=geometry --legend=full >"$TMP/uf.full" 2>/dev/null </dev/null ); rcUf=$?
+ufRest="$( leg prose "$TMP/uf.c" "$TMP/uf.full" )"
+if [ "$rcUf" -ne 0 ] || grep -q '<fold ' "$TMP/uf.c"; then
+    no "(U-twin-fold) the fold-off --for=geometry probe exited $rcUf or still carries a <fold>"
+elif [ -n "$ufRest" ] && [ "$ufRest" -eq "$ufRest" ] 2>/dev/null && [ "$ufRest" -le 820 ]; then
+    ok "(U-twin-fold) --for=geometry compact prose with the fold off is $ufRest B <= 820 B (the pre-fold pin)"
+else
+    no "(U-twin-fold) --for=geometry compact prose with the fold off is ${ufRest:-?} B > 820 B — the rest re-inflated"
 fi
 # (U-twin-callers) the pre-2026-10-09 ripwire.callers/v1 pin, kept the same way: the 330 -> 450 re-pin paid for ONE
 # reading, the caller row's sites_at=. The --callers=distance compact answer with exactly that reading cut out still fits
@@ -1508,6 +1535,9 @@ echo
 # RE-ANCHORED 2026-09-26 (lane impact-depth-065, depth-labelled --impact): 7,500 → 7,700 B, measured 7,622 (7,495 on the
 # base binary b343b988). The loop's --impact=distance probe now carries by_depth= and d=, and its compact legend reads both
 # (+127 B, the (U) table's ripwire.impact/v1 row); the other nine verbs unmoved. Same rule: the next multiple of 100 B.
+# RE-ANCHORED 2026-10-18 (lane body-fold FIX1 B2, by design): 7,900 → 8,200 B, measured 8,157 (7,871 with the fold off). The +286 B is
+# the loop's --for probe: its default answer now carries the fold and the fold's compact clause (the ripwire.for/v1 (U) row moved
+# +286 B the same way); the other nine verbs unmoved. Same rule: the next multiple of 100 B.
 # RE-ANCHORED 2026-10-09 (lane callers-sites-first-call, CALLSITE-AT): 7,800 → 7,900 B, measured 7,830 (7,711 at the
 # train-26b anchor below, which is this lane's base). The +119 B is the loop's --callers probe: its rows now carry
 # sites_at= and the compact legend reads it (the ripwire.callers/v1 (U) row moved +121 B the same way). Same rule.
@@ -1515,7 +1545,7 @@ echo
 # the train's phase-A head, 7,688 with receiver evidence merged (its present-only via= readings; under the old ceiling),
 # 7,711 with lean-answers merged: +23 B, all on the --for probe, the " (absent cx/ccx/in = 0)" reading the lane pinned
 # in the ripwire.for/v1 row. The other verbs are unmoved by that step. Same rule: the next multiple of 100 B.
-echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 7,900 B (34,716 B in full on the fixture) ==="
+echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 8,200 B (34,716 B in full on the fixture) ==="
 loopBytes=0; fullBytes=0
 for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--uses=distance" "--edit-check=total_area" \
          "--quality-delta" "--test-gate=geometry.cpp" "--affected=geometry.cpp" "--safe-delete=total_area" "--slice=total_area"; do
@@ -1524,8 +1554,8 @@ for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--u
     b="$( leg bytes "$TMP/l.c" )"; f="$( leg bytes "$TMP/l.f" )"
     loopBytes=$(( loopBytes + b )); fullBytes=$(( fullBytes + f ))
 done
-[ "$loopBytes" -le 7900 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
-                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 7,900 B; full: $fullBytes B)"
+[ "$loopBytes" -le 8200 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
+                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 8,200 B; full: $fullBytes B)"
 
 echo
 echo "=== (M) MCP: legend:\"compact\" on edit_check answers in ≤ 900 B on a clean tree; every XML verb takes the argument, within its per-verb legend pin ==="
@@ -3083,4 +3113,15 @@ fi
 rm -f "$QAR/.ripwire_quality_acks"
 
 [ "$fail" -eq 0 ] && echo 'ALL PASS' || echo 'FAILURES ABOVE'
+echo "=== (FOLD-L) the fold's clause: present beside a fold, compact <= 300 B, full <= 500 B ==="
+( unset RIPWIRE_NO_BODY_FOLD; rrun "--for=geometry distance" --legend=compact ) >"$TMP/fl.c"
+( unset RIPWIRE_NO_BODY_FOLD; rrun "--for=geometry distance" --legend=full ) >"$TMP/fl.f"
+flc="$( python3 -c 'import re,sys; m=re.search(r"; fold kind=bodies:.*?sigs_next= the signatures-only re-call", open(sys.argv[1]).read(), re.S); print(len(m.group(0).encode()) if m else -1)' "$TMP/fl.c" )"
+flf="$( python3 -c 'import re,sys; m=re.search(r"; fold kind=bodies:.*?sigs_next= the signatures-only re-call", open(sys.argv[1]).read(), re.S); print(len(m.group(0).encode()) if m else -1)' "$TMP/fl.f" )"
+if grep -q '<fold kind="bodies"' "$TMP/fl.c" && [ "$flc" -gt 0 ] && [ "$flc" -le 300 ] && [ "$flf" -gt "$flc" ] && [ "$flf" -le 500 ]; then
+    ok "(FOLD-L) the fold clause rides beside the fold: compact $flc B, full $flf B"
+else
+    no "(FOLD-L) fold clause compact=$flc B full=$flf B (want 0 < compact <= 300 < full <= 500, beside a <fold>)"
+fi
+
 exit "$fail"

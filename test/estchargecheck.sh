@@ -1351,10 +1351,34 @@ fi
 # …and the COMPACT default satisfies the FLAT identity, which is the whole point of charging <hops> at the
 # markup rate: that bundle carries no source text at all, so every byte in it — the section included —
 # tokenizes like markup. A <hops> span priced at the body rate would under-report and this arm would fail.
-if out="$( selfconsistent "$TMP/f_for.out" )"; then
+# body-fold (train 31; rule 4, by design): the compact answer now ends with <fold kind="bodies">, whose bodies ARE source text
+# and are priced at the body rate. The flat identity is pinned on the fold-off twin (RIPWIRE_NO_BODY_FOLD=1), and the default
+# must satisfy the mixed identity with the fold's served <b> elements as the body span (foldconsistent).
+foldconsistent(){ python3 - "$1" <<'PY'
+import sys, re
+d = open( sys.argv[1], 'rb' ).read()
+m = re.search( rb'est_tokens="(\d+)"', d )
+if not m: sys.exit( 2 )
+est = int( m.group( 1 ) )
+f = re.search( rb'<fold .*?</fold>', d, re.S )
+if not f: sys.exit( 3 )                                 # arm requires the fold to be present
+span = sum( len( x ) for x in re.findall( rb'<b t=.*?</b>', f.group( 0 ), re.S ) )
+expected = int( ( len( d ) - span ) / 2.50 + 0.5 ) + int( span / 3.80 + 0.5 )
+print( f"{len(d)} {span} {est} {expected}" )
+sys.exit( 0 if est == expected else 1 )
+PY
+}
+if out="$( foldconsistent "$TMP/f_for.out" )"; then
+    ok "#11 A9/A10 --for (compact route, fold): est_tokens matches markup@2.50 + fold bodies@3.80 — bytes/span/est/expected = $out"
+else
+    fold_out="$( foldconsistent "$TMP/f_for.out" 2>/dev/null || true )"
+    no "#11 A9/A10 --for (compact route, fold): mixed-rate identity broken — bytes/span/est/expected = ${fold_out:-unreadable} (the fold is mischarged)"
+fi
+RIPWIRE_NO_BODY_FOLD=1 rw src --for="$FOR_TASK" >"$TMP/f_for_nofold.out" 2>/dev/null
+if out="$( selfconsistent "$TMP/f_for_nofold.out" )"; then
     ok "#11 A9/A10 --for (compact route): est_tokens = round(bytes/2.50) — bytes/est/expected = $out (the <hops> section is charged at the markup rate)"
 else
-    flat_out="$( selfconsistent "$TMP/f_for.out" 2>/dev/null || true )"
+    flat_out="$( selfconsistent "$TMP/f_for_nofold.out" 2>/dev/null || true )"
     no "#11 A9/A10 --for (compact route): flat-rate identity broken — bytes/est/expected = ${flat_out:-unreadable} (the compact section is mischarged)"
 fi
 grep -aq '<hops ' "$TMP/f_for.out" \
@@ -1754,7 +1778,10 @@ PY
         "ghp_""ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" "AKIA""IOSFODNN7EXAMPLE" > "$TMP/mfred/app.py"
     for mfredMode in xml json; do
         mfredFlag=""; [ "$mfredMode" = json ] && mfredFlag="--json"
-        rwcall "$TMP/mfred" --for="probe vault loader helper" $mfredFlag --no-cache >/dev/null 2>"$TMP/mfred_ctl.err"
+        # body-fold (train 31; rule 4): the control is the fold-off twin. The fold's bodies are an extra EMISSION of these secrets on
+        # the undegraded answer, and the faulted run (no <sigs> pre-render) serves no fold, so the like-for-like control is the answer
+        # without it; a fold body whose secrets were counted and not served would still show here as a higher faulted count.
+        RIPWIRE_NO_BODY_FOLD=1 rwcall "$TMP/mfred" --for="probe vault loader helper" $mfredFlag --no-cache >/dev/null 2>"$TMP/mfred_ctl.err"
         INFRA_FAULT_MEMSTREAM_FINISH=1 rwcall "$TMP/mfred" --for="probe vault loader helper" $mfredFlag --no-cache >/dev/null 2>"$TMP/mfred_f.err"
         mfredCtl="$( grep -a '^ripwire: redacted ' "$TMP/mfred_ctl.err" )"; mfredF="$( grep -a '^ripwire: redacted ' "$TMP/mfred_f.err" )"
         if [ -n "$mfredCtl" ] && [ "$mfredCtl" = "$mfredF" ]; then
@@ -2453,7 +2480,10 @@ if not m: sys.exit( 2 )
 est = int( m.group( 1 ) )
 a = d.find( b'<bodies ' ); b = d.find( b'</bodies>' )
 span = ( b + 9 - a ) if a >= 0 and b >= 0 else 0
-expected = int( ( len( d ) - span ) / 2.50 + 0.5 ) + ( int( span / 3.80 + 0.5 ) if span else 0 )
+# body-fold (train 31): the fold's served bodies are body-rate spans too, priced as one sum (forfold.h renderForBodyFold)
+f = re.search( rb'<fold .*?</fold>', d, re.S )
+fspan = sum( len( x ) for x in re.findall( rb'<b t=.*?</b>', f.group( 0 ), re.S ) ) if f else 0
+expected = int( ( len( d ) - span - fspan ) / 2.50 + 0.5 ) + ( int( span / 3.80 + 0.5 ) if span else 0 ) + ( int( fspan / 3.80 + 0.5 ) if fspan else 0 )
 print( f"{len(d)} {span} {est} {expected} hdr={d.count(b'<hdr ')}" )
 sys.exit( 0 if est == expected and d.count( b'<hdr ' ) == 6 else 1 )
 PYHXI

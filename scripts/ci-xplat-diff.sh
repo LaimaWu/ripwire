@@ -16,6 +16,10 @@
 #                 dropped — so a CRLF-only line-number (l=) or symbol-list bug in --expand is still caught even when
 #                 the two platforms happen to agree. It is also still under R1, so both platforms must print the
 #                 SAME CRLF bytes.
+#                 crlf-for is strict OUTSIDE its <fold kind="bodies"> element (train 31 body-fold): the fold carries whole source
+#                 bodies, as --expand does, so on EACH side crlf-for must equal tree-for byte for byte once est_tokens= (which
+#                 prices those bodies) is masked and, INSIDE the fold only, the CR bytes and a skip's bytes= (the source span's
+#                 size) are dropped — the same narrowing crlf-expand gets, applied to the same body text and nowhere else.
 #   R0 rc floor   every Linux-side *.rc must be 0. A verb that fails the same way on both platforms (rc != 0 on
 #                 both, same error bytes) would otherwise pass R1 vacuously.
 # Usage: bash scripts/ci-xplat-diff.sh <linux outputs dir> <windows outputs dir>
@@ -63,7 +67,7 @@ fi
 
 rulefail=0
 for side in "$LIN" "$WIN"; do
-    for v in map for callers impact; do
+    for v in map callers impact; do
         if cmp -s "$side/tree-$v.xml" "$side/crlf-$v.xml"; then
             :
         else
@@ -72,11 +76,21 @@ for side in "$LIN" "$WIN"; do
     done
 done
 nx() { tr -d '\r' <"$1" | sed -E 's/ (reason|est_tokens)="[^"]*"//g'; }
+# the --for answer: est_tokens= masked everywhere; inside <fold>…</fold> only, CR bytes and skip bytes= dropped
+nf() { python3 -c 'import re, sys
+t = open( sys.argv[1], "rb" ).read().decode( "utf-8", "replace" )
+t = re.sub( r" est_tokens=\"[^\"]*\"", "", t )
+fold = lambda m: re.sub( r" bytes=\"[^\"]*\"", "", m.group( 0 ).replace( "\r", "" ) )
+sys.stdout.write( re.sub( r"<fold .*?</fold>", fold, t, flags = re.S ) )' "$1"; }
+for side in "$LIN" "$WIN"; do
+    diff -q <( nf "$side/tree-for.xml" ) <( nf "$side/crlf-for.xml" ) >/dev/null \
+        || { verdict FAIL "R3 ${side##*/}: crlf-for differs from tree-for beyond est_tokens= and its fold's CR bytes and skip bytes=:"; show "$side/tree-for.xml" "$side/crlf-for.xml"; }
+done
 for side in "$LIN" "$WIN"; do
     diff -q <( nx "$side/tree-expand.xml" ) <( nx "$side/crlf-expand.xml" ) >/dev/null \
         || verdict FAIL "R3 ${side##*/}: crlf-expand differs from tree-expand beyond its CR bytes and reason=/est_tokens="
 done
-[ "$rulefail" -eq 0 ] && verdict PASS "R3 CRLF copies give the same map/--for/--callers/--impact as LF on both sides, and crlf-expand agrees with tree-expand modulo CR bytes and reason=/est_tokens="
+[ "$rulefail" -eq 0 ] && verdict PASS "R3 CRLF copies give the same map/--callers/--impact as LF on both sides, crlf-for the same outside its fold CR bytes/bytes= and est_tokens=, and crlf-expand agrees with tree-expand modulo CR bytes and reason=/est_tokens="
 
 if [ "$fail" -ne 0 ]; then
     echo "SOME CHECKS FAILED"; exit 1

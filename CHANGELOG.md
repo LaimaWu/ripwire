@@ -15,6 +15,23 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — `--for` appends the bodies of its top ranked rows on the compact route (body-tail fold)
+
+A conceptual `--for` question (root `bundle="compact"`) now ends with `<fold kind="bodies" budget_bytes="4000" served= total=>`:
+the whole bodies of its top three ranked rows that are not already bodied, in rank order, each whole or not at all within 4,000 B
+(no `sibs=`/`inc=`, no callee rows). A body that does not fit is a `<skip p= n= l= bytes= next="--expand=…">` row and the walk
+goes on; a class too big for what is left is served as a `<slice>` of its constructor and the members whose name, or body past its
+declaration line, holds a question word, followed by its skip. Each text rides once (a ranked row inside a served body is not
+repeated), and a row's field note stays on its `<d>` row. Everything before the fold is the answer without it
+(`RIPWIRE_NO_BODY_FOLD=1`), except that `<sigs next=>` now names the first skipped body and the signatures-only re-call moves to
+`sigs_next=`. No fold under an explicit `--token-budget`, `--json`, `--signatures-only`, `--auto-bodies`, `--detail=N` or the
+name-exact route; `--max-tokens` is not read by this answer (as its notice says) and leaves it unchanged. CLI only: the MCP `for`
+tool answers without the fold (it has no compact route). Measured on the 53 round-5 `--for` rows (base fc0745a0, frozen round-5
+grader): Rule C ✓ +4 (hono-02, hono-11, koa-02, textual-02), 0 lost; the fold element is +3.1 KB median (max 4.6 KB), the whole
+answer (fold, its legend clause and the `<sigs>` pair) +3.4 KB median (max 4.9 KB). Also: a cut `<hops>` callee listing now carries
+`next="--callees=…"`, and the `--for --limit=N` file page legend says `n=` counts this task's symbols, not the file's (`--expand`
+`sibs_total=`).
+
 ### Changed — Go methods carry their receiver type as scope (#403, slice 9a)
 
 Go methods now carry their receiver type as scope (`sc=`), with `*` and type arguments stripped (`*Stack[T]` → `Stack`),
