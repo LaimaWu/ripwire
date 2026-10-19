@@ -1245,6 +1245,21 @@ enum class LocalBindKind : std::uint8_t
                    //     Fix round 5: "unrecorded" a C++ class declaration only a macro can have written, which tree-sitter-cpp
                    //     reads as a function or a variable (`class API S {…}`, `struct API S;`): one row per identifier its head
                    //     spells (S among them), no span — a class of that name the index does not record exists in the tree.
+    // Lane h1-annot (test/receiverevidencecheck.sh (Q)): a Python augmented assignment REBINDS its name to whatever the in-place
+    // operator returns. Both kinds are receiver evidence (isReceiverEvidenceKind): graph.h ReceiverEvidence alone reads them.
+    AugAssign,     // a Python `x op= v` on a bare name: var = the name, typeName = the in-place method the operator calls (`+=`
+                   //     → `__iadd__`; ingest_binds.h kPythonInPlaceMethods), importedName = the binary method Python falls back
+                   //     to when the class defines no in-place one (`__add__`), no span (a Python name is function-wide).
+                   //     ReceiverEvidence keeps the class C `x` held only when the method Python calls — C's in-place method
+                   //     (its own, else the shallowest base's: ONE definition), else its binary one — carries an
+                   //     OperatorResult record naming "self" or C; otherwise `x` gets a tombstone, as a plain reassignment
+                   //     does. APPENDED (cache u8).
+    OperatorResult, // a Python operator method an augmented assignment can call (`__iadd__` … `__ior__`, `__add__` … `__or__`)
+                   //     whose result is provably its receiver's class: var = the method's name, startByte = its body's start
+                   //     (the record attributes to the method), typeName = "self" (every `return` returns the first
+                   //     parameter bare — at least one, no `yield`, nested defs / lambdas / classes not read — or the return
+                   //     annotation is `Self`) or the method's own class name (the return annotation names it: `-> Color`,
+                   //     `-> "Color"`). A method that proves neither records nothing. APPENDED.
 };
 // fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
 inline constexpr std::string_view kTypeBindForward  = "forward";
@@ -1252,14 +1267,15 @@ inline constexpr std::string_view kTypeBindShadow   = "shadow";
 inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
 inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::TypeAlias ) + 1;
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::OperatorResult ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {
-    // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result five (CallResult .. TypeAlias) after RubyMainMixin
+    // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result five (CallResult .. TypeAlias) after
+    // RubyMainMixin, and h1-annot's two (AugAssign, OperatorResult) right after them: one run CallResult .. OperatorResult
     static_assert( std::uint8_t( LocalBindKind::StaticMember ) - std::uint8_t( LocalBindKind::RecvType ) == 4, "FE-B's five receiver-evidence kinds stay one run" );
-    static_assert( std::uint8_t( LocalBindKind::TypeAlias ) - std::uint8_t( LocalBindKind::CallResult ) == 4, "the call-result kinds stay one run" );
-    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::TypeAlias );
+    static_assert( std::uint8_t( LocalBindKind::OperatorResult ) - std::uint8_t( LocalBindKind::CallResult ) == 6, "the call-result and in-place kinds stay one run" );
+    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::OperatorResult );
 }
 // The language family whose call results take a callee's declared result type (train 29 call-result typing), ONE row read
 // by ingest (which records CallResult / ReturnType / TypeImport) and by graph.h (where the type resolves, and which

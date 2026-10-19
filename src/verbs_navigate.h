@@ -165,12 +165,15 @@ inline int emitCallHierarchyAlt( const rw::Config& cfg, const rw::IngestResult& 
                                 const std::string& chDeclinedAttr, const std::string& chValueRefsAttr, const std::string& chRootAttr, char* pab,
                                 bool chDiscloseCap, const std::string& chNextAttr, const rw::RowCallSites& chSites, const std::string& chRootPrefix,
                                 const char* tag, const std::string& chDcRows, bool chSingleRoot, const rw::VrRender& chVr, const std::string& chHintCall,
-                                bool chNextIsPage, const rw::DeclinedSiteCut& chDcCut, const std::vector<rw::DeclinedSiteView>& chDc )
+                                bool chNextIsPage, const rw::DeclinedSiteCut& chDcCut, const std::vector<rw::DeclinedSiteView>& chDc,
+                                const std::vector<rw::NodeId>& chClosures )
 {
     using namespace rw;
     std::vector<char> esc;
     const auto        ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
     const std::string chVrNext = "--uses=" + std::string( sym );
+    // lane ix2-slice (IX-2 P2): the callees form's closure blocks — root closures= and the <in> blocks, absent with none
+    const rw::ClosureBlocksOut chIn = rw::closureBlocks( ing, g, chClosures, chSingleRoot, chRootPrefix, /*json=*/cfg.json && !cfg.columnar );
     if( cfg.columnar )
     {
         std::vector<NodeId> page( result.begin() + pw.begin, result.begin() + pw.end );
@@ -183,6 +186,7 @@ inline int emitCallHierarchyAlt( const rw::Config& cfg, const rw::IngestResult& 
                                + chTested.xmlAttr
                                + chDeclinedAttr
                                + chValueRefsAttr
+                               + chIn.head   // ix2-slice: closures written in of='s body (rows: the <in> blocks below)
                                + chRootAttr
                                + pageDisclosure( pab, kPageDisclosureCap, pw.end - pw.begin, result.size(), pw.end,
                                                  cfg.pageLimit, cfg.pageOffset, chDiscloseCap )
@@ -201,9 +205,10 @@ inline int emitCallHierarchyAlt( const rw::Config& cfg, const rw::IngestResult& 
             }
         }
         const std::string chDefRows = rw::defTableXml( ing, chAttr.groups, chListing, chRootPrefix );
+        const std::string chDcInRows = chDcRows + chIn.rows;
         emitColumnarSymbolRows( stdout, ing, tag, attr, page, chRootPrefix, &chTested.testReach, nullptr,
                                 rw::ColumnarRowExtras{ &pageVia, chSites.any ? &chSites.tokens : nullptr, &chSites.totals,
-                                                       chAttr.groups.multi() ? &pageOfDef : nullptr, &chDefRows, &pageSplit, &chDcRows } );
+                                                       chAttr.groups.multi() ? &pageOfDef : nullptr, &chDefRows, &pageSplit, &chDcInRows } );   // + the <dc> and <in> rows verbatim
         return 0;
     }
     rw::emitTo( stdout, "{{\"of\":\"{}\",\"defs\":{},\"count\":{}", jsonStr( sym ).c_str(), matches.size(), result.size() );
@@ -224,8 +229,8 @@ inline int emitCallHierarchyAlt( const rw::Config& cfg, const rw::IngestResult& 
     rw::emitTo( stdout, "{}{}{}", pageDisclosure( pab, kPageDisclosureCap, pw.end - pw.begin, result.size(), pw.end,
                                   cfg.pageLimit, cfg.pageOffset, chDiscloseCap, kJsonPageSyntax ),
                  rw::graphCountFloorAttrJson( g ).c_str(),
-                 chNextIsPage ? rw::nextFieldJson( rw::callersPageNext( sym, cfg.pageLimit, pw.end, false, true ) )
-                                  + rw::nextFieldJson( chHintCall, "uses_next" )
+                 chNextIsPage ? rw::nextFieldJson( rw::callHierarchyPageNext( wantCallers, sym, cfg.pageLimit, pw.end, false, true ) )
+                                  + rw::nextFieldJson( chHintCall, rw::callHierarchyHintAttr( wantCallers ) )
                               : std::string() );
     rw::emitTo( stdout, ",\"{}\":[", tag );
     std::vector<char> chVia( result.size(), 0 );
@@ -246,7 +251,8 @@ inline int emitCallHierarchyAlt( const rw::Config& cfg, const rw::IngestResult& 
         }
     }
     printJsonSymbolRows( ing, result, pw.begin, pw.end, chRootPrefix, &chTested.testReach, nullptr, &chVia, &chAtKeys );
-    rw::emitTo( stdout, "]{}{}{}}}", rw::declinedSitesJson( chDc, wantCallers, /*mcp=*/false ),
+    rw::emitTo( stdout, "]{}{}{}{}}}", rw::declinedSitesJson( chDc, wantCallers, /*mcp=*/false ),
+                 chIn.head + chIn.rows,   // ix2-slice: the closure blocks, JSON spelling
                  rw::valueRefsJson( ing, chRows.valueRefs, wantCallers, chVr, "vrs", chVrNext ),
                  chHasLink ? rw::viaLinkNoteJson() : std::string() );
     return 0;
@@ -274,6 +280,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // tier-then-path order — the MCP twins run the identical call, so the two surfaces cannot disagree
         // about WHICH rows the question has.
         const CallHierarchyRows   chRows  = rw::callHierarchyRows( ing, g, sym, wantCallers );
+        // lane ix2-slice (IX-2 P2, src/closures.h): callees only — the functions written inside the matches' bodies, any depth
+        const std::vector<NodeId> chClosures = wantCallers ? std::vector<NodeId>{} : rw::ClosureIndex( ing ).closuresOf( chRows.matches );
         const std::vector<NodeId>& matches = chRows.matches;
         if( matches.empty() )
         {
@@ -318,23 +326,28 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // answer's OWN capped state, not a constant true — these verbs shipped uncapped for their whole
         // life, and THE TRUNCATION VOCABULARY names that shape conformant (its --skill-scan precedent).
         // L8 (train 29): the cap is callHierarchyRowCap's — a total within the 1.25 x band (pageview.h) is served whole.
-        const PageWindow  pw = pageWindow( result.size(), rw::callHierarchyRowCap( cfg.pageLimit, result.size() ), cfg.pageOffset );
+        // C2 (train 31): so is a CALLERS list whose estimated row bytes fit kCallersBandMaxBytes (callhierarchy.h callersByteBand,
+        // whose site pass the page below reuses when it serves every row).
+        rw::CallersByteBand chBand = wantCallers ? rw::callersByteBand( ing, matches, result, rw::VrRender{ chSingleRoot, chRootPrefix }, cfg.pageLimit,
+                                                                           chTested.testReach, chRows.attr, g.keptForwards )
+                                                 : rw::CallersByteBand{};
+        const PageWindow  pw = pageWindow( result.size(), rw::callHierarchyRowCap( cfg.pageLimit, result.size(), chBand.rowBytes ), cfg.pageOffset );
         const bool        chDiscloseCap = ( pw.end - pw.begin ) < result.size();
         char              pab[ kPageDisclosureCap ];
 
         const auto [ chNextSelector, chNextIsBare ] = rw::callHierarchyNextSelector( ing, chRows, sym, wantCallers );
         // L8 (train 29): a callers page with rows after it hands over the NEXT PAGE as next= (the selector as typed, the caller's
         // --limit and form kept — rw::pagedNext), and the uses verb moves to uses_next=. The last page and an uncut answer keep
-        // the uses verb as next=. Callees keep expand: the body already lists every callee.
-        const bool        chNextIsPage = wantCallers && pw.end < result.size();
+        // the uses verb as next=. C2 rider (train 31): a capped callees page does the same, its expand moving to expand_next=.
+        const bool        chNextIsPage = pw.end < result.size();
 
         // CALLSITE-AT: each caller row on THIS page with its call sites as pasteable file:line tokens (editcheck.h
         // rowCallSites: the uses verb's call-role filters over the page's rows), computed once for every dialect below.
         // Callers only: a callee row's sites are the callee's own body, which is the expand next= already names.
         const std::span<const NodeId> chPage = std::span<const NodeId>( result ).subspan( pw.begin, pw.end - pw.begin );
-        const rw::RowCallSites chSites = wantCallers
-            ? rw::rowCallSites( ing, matches, chPage, rw::VrRender{ chSingleRoot, chRootPrefix }, g.keptForwards )
-            : rw::RowCallSites{};
+        const rw::RowCallSites chSites = !wantCallers ? rw::RowCallSites{}
+                                       : ( chBand.rowBytes > 0 && pw.begin == 0 && chPage.size() == result.size() ) ? std::move( chBand.sites )   // C2: the band's pass
+                                                                                                                       : rw::rowCallSites( ing, matches, chPage, rw::VrRender{ chSingleRoot, chRootPrefix }, g.keptForwards );
         // attrib-multidef (defattrib.h): the definition table this page lists (every group up to the cap, else the ones its rows
         // name) and whether a row on it is a split arm of a one-group answer (Q1) — computed once for every dialect below.
         const rw::OneHopAttribution& chAttr = chRows.attr;
@@ -384,6 +397,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                 chHasLink = chHasLink || oneHopRowIsLink( g, matches, result[ i ], wantCallers );
             }
             const bool chHasMiss = rw::pageHasAnchorMiss( g, matches, result, pw.begin, pw.end, wantCallers );
+            chHasVia = chHasVia || rw::closureBlocksAnyVia( ing, g, chClosures );   // ix2-slice: a closure block's row may carry it too
             rw::emitTo( stdout, "{}{}{}{}{}{}{}-->{}{}", rw::callHierarchyLegendOpen( wantCallers, chNextIsBare, cfg.columnar, chNextIsPage ).c_str(),
                          rw::capLegendClause( rw::computePageDisclosure( pw.end - pw.begin, result.size(), pw.end,
                                                                         cfg.pageLimit, cfg.pageOffset, chDiscloseCap ).active ),
@@ -401,7 +415,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                            + rw::callSitesAtLegend( chSites.any, chSites.anyCut, rw::kCallSitesPerRowCap ) ).c_str(),   // CALLSITE-AT: likewise for sites_at=/sites_total=
                          ( rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ) + rw::valueRefsLegend( !chRows.valueRefs.rows.empty(), wantCallers )
                            + rw::valueRefsDepthLegendFor( chRows.valueRefs )   // exactly when the root carries the depth disclosure
-                           + rw::patternDispatchLegend( !chRows.valueRefs.patternSites.empty() || !chRows.valueRefs.patternWideSites.empty(), wantCallers ) ).c_str(),   // IX-3: exactly when pattern_dispatch= rides
+                           + rw::patternDispatchLegend( !chRows.valueRefs.patternSites.empty() || !chRows.valueRefs.patternWideSites.empty(), wantCallers )
+                           + std::string( rw::closureBlocksLegend( !chClosures.empty() ) ) ).c_str(),   // IX-3: exactly when pattern_dispatch= rides; ix2-slice: exactly when an <in> block rides
                          rw::rootRelPathsLegend( chSingleRoot ),
                          rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
             if( cfg.columnar && chHasLink )
@@ -419,8 +434,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // Callees keep expand on the original selector; nextFlag retains quoting and the 120-byte contract.
         const std::string chHintCall = rw::nextFlag( wantCallers ? "--uses=" : "--expand=", chNextSelector );
         const std::string chNextAttr = chNextIsPage
-            ? rw::nextAttrXml( rw::callersPageNext( sym, cfg.pageLimit, pw.end, cfg.columnar ) )
-                + rw::nextAttrXml( chHintCall, "uses_next" )
+            ? rw::nextAttrXml( rw::callHierarchyPageNext( wantCallers, sym, cfg.pageLimit, pw.end, cfg.columnar ) )
+                + rw::nextAttrXml( chHintCall, rw::callHierarchyHintAttr( wantCallers ) )
             : rw::nextAttrXml( chHintCall );
         // The tier-3 declines count= does not include (callhierarchy.h), on every dialect; absent at zero.
         const std::string chDeclinedAttr = rw::declinedCallsAttrXml( chRows.declinedCalls ) + rw::declinedSiteCutAttrXml( chDcCut )   // + the <dc> cut, beside the count it cuts
@@ -434,9 +449,12 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         {
             return emitCallHierarchyAlt( cfg, ing, g, result, matches, pw, sym, wantCallers, bodylessDefsCount, chUnprovenAttr, chRows,
                                           chAttr, chListing, chTested, chDeclinedAttr, chValueRefsAttr, chRootAttr, pab, chDiscloseCap, chNextAttr,
-                                          chSites, chRootPrefix, tag, chDcRows, chSingleRoot, chVr, chHintCall, chNextIsPage, chDcCut, chDc );
+                                          chSites, chRootPrefix, tag, chDcRows, chSingleRoot, chVr, chHintCall, chNextIsPage, chDcCut, chDc, chClosures );
         }
-
+        // lane ix2-slice (IX-2 P2): the callees form's closure blocks — root closures= and the <in> blocks, absent with none
+        const rw::ClosureBlocksOut chIn         = rw::closureBlocks( ing, g, chClosures, chSingleRoot, chRootPrefix, /*json=*/false );
+        const std::string&         chClosuresAttr = chIn.head;
+        const std::string&         chInRows       = chIn.rows;
 
         // §P10.6: defs= = resolved definitions this name matched (matches.size()) — the rows below UNION the
         // neighbors of every def, which --uses/--impact already disclose and these two verbs silently hid.
@@ -447,7 +465,7 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         }
         rw::emitTo( stdout, "{}{}{}{}{}{}", chUnprovenAttr.c_str(), rw::crossKindAttrXml( chRows.crossKind ).c_str(),   // H1's residue; hono-07's cross_kind=
                      rw::defsListedAttrXml( chAttr.groups, chListing ),                                             // attrib-multidef: a cut table says so
-                     chTested.xmlAttr.c_str(), chDeclinedAttr.c_str(), chValueRefsAttr );                        // then A6's partition, the declines, the value uses
+                     chTested.xmlAttr.c_str(), chDeclinedAttr.c_str(), chValueRefsAttr + chClosuresAttr );       // then A6's partition, the declines, the value uses, the closures
         rw::emitTo( stdout, "{}{}{}>", pageDisclosure( pab, sizeof( pab ), pw.end - pw.begin, result.size(), pw.end,
                                     cfg.pageLimit, cfg.pageOffset, chDiscloseCap ),
                      rw::graphCountFloorAttrXml( g ).c_str(),
@@ -467,8 +485,9 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                          rw::splitArmAttrXml( chAttr.splitArm( i ) ), rw::ofDefAttrXml( chAttr.groups, chAttr.tokens, i ),   // attrib-multidef
                          chSites.any ? rw::callSitesAttrXml( chSites.tokens[ i - pw.begin ], chSites.totals[ i - pw.begin ] ) : std::string() );   // CALLSITE-AT
         }
-        rw::emitTo( stdout, "{}{}{}</{}>", rw::stdMemberCallsSpelling( chRows.stdCalls, /*json=*/false ),   // the declined standard-member calls, after the rows
+        rw::emitTo( stdout, "{}{}{}{}</{}>", rw::stdMemberCallsSpelling( chRows.stdCalls, /*json=*/false ),   // the declined standard-member calls, after the rows
                      chDcRows,                                                                                // and each declined call SITE (<dc>)
+                     chInRows,                                                                                // ix2-slice: each closure's own callees (<in>)
                      rw::valueRefsXml( ing, chRows.valueRefs, wantCallers, chVr, chVrNext )
                        + ( wantCallers                  ? rw::patternDispatchXml( ing, chRows.valueRefs.patternSites, chVr )
                            : chRows.valueRefs.patternSites.empty() ? std::string()
@@ -2455,8 +2474,12 @@ std::optional<int> runPath( const MainDispatch& d )
         // reader as a bare reachable="0".
         std::size_t               srcUnprovenDefs = 0;
         std::size_t               dstUnprovenDefs = 0;
-        const std::vector<NodeId> srcDefs         = resolveAllByNameQualified( ing, srcN, &srcUnprovenDefs );
-        const std::vector<NodeId> dstDefs         = resolveAllByNameQualified( ing, dstN, &dstUnprovenDefs );
+        // ix2-slice (IX-2 P4, src/pathgaps.h): an endpoint naming no definition that holds a `*` stands for every function or
+        // method definition whose name fits it (from_glob=/to_glob= say so); every resolvable spelling resolves as before
+        bool                      srcGlob         = false;
+        bool                      dstGlob         = false;
+        const std::vector<NodeId> srcDefs         = rw::resolvePathEndpoint( ing, srcN, &srcUnprovenDefs, &srcGlob );
+        const std::vector<NodeId> dstDefs         = rw::resolvePathEndpoint( ing, dstN, &dstUnprovenDefs, &dstGlob );
         const std::size_t         pthUnprovenDefs = srcUnprovenDefs + dstUnprovenDefs;
         if( srcDefs.empty() || dstDefs.empty() )
         {
@@ -2500,6 +2523,10 @@ std::optional<int> runPath( const MainDispatch& d )
         }
         const rw::ToValueRefs pthToValueRefs = path.empty() ? rw::toValueRefs( ing, true, dstDefs, &*pthValueIdx ) : rw::ToValueRefs{};
         const rw::PathSearchGaps pthGaps = path.empty() ? rw::pathSearchGaps( ing, g, srcDefs, *pthValueIdx ) : rw::PathSearchGaps{};
+        // ix2-slice: the sink-side frontier beside the forward gap rows (src/pathgaps.h pathNearSink), reachable="0" only
+        const rw::PathNearSink   pthNear = path.empty() ? rw::pathNearSink( ing, g, dstDefs, pthGaps.cone, *pthValueIdx ) : rw::PathNearSink{};
+        // ix2-slice (IX-2 P1): the hedged bridge — the fewest-crossings chain over declined / value / closure / namesake hops
+        const rw::PathBridge     pthBridge = path.empty() ? rw::pathBridge( ing, g, srcDefs, dstDefs, *pthValueIdx ) : rw::PathBridge{};
         const bool pthHasVia = rw::pathHasNameOnlyHop( g, path );   // FE-B: exactly when a hop of THIS path is via="name"
         const bool pthHasLink = rw::pathHasNameOnlyHop( g, path, rw::kEdgeLink );
         const bool pthHasMiss = rw::pathHasNameOnlyHop( g, path, 0 );
@@ -2513,12 +2540,13 @@ std::optional<int> runPath( const MainDispatch& d )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to )
                                                          + rw::pathOwnerLegend( rw::anyPathHopOwner( pthOwners ) ) ).c_str(),
                      ( std::string( rw::toValueRefsLegend( pthToValueRefs.count > 0 ) ) + rw::valueRefsDepthLegend( pthToValueRefs.depthCut.files > 0 ) ).c_str(),
-                     rw::pathGapsLegend( pthGaps.any() ),
+                     ( std::string( rw::pathGapsLegend( pthGaps.any() ) ) + std::string( rw::pathBridgeLegend( pthBridge.found() ) )
+                       + std::string( rw::nearSinkLegend( !pthNear.rows.empty() ) ) + std::string( rw::pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
                      rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rw::rootRelPathsLegend( pthSingleRoot ) );
         rw::emitTo( stdout, "<path from=\"{}\" to=\"{}\"{}{} from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
                      ex( srcN ).c_str(), ex( dstN ).c_str(), pthBound.from ? " from_p=\"" + loc( srcUsed ) + "\"" : std::string(),
                      pthBound.to ? " to_p=\"" + loc( dstUsed ) + "\"" : std::string(),
-                     srcDefs.size(), dstDefs.size(), rw::unprovenDefsAttrXml( pthUnprovenDefs ).c_str(),   // H1: beside the defs counts it is not in
+                     srcDefs.size(), dstDefs.size(), ( rw::unprovenDefsAttrXml( pthUnprovenDefs ) + rw::pathGlobAttrXml( srcGlob, dstGlob ) ).c_str(),   // H1: beside the defs counts it is not in; ix2-slice: a glob endpoint
                      path.empty() ? 0 : 1, path.empty() ? std::size_t( 0 ) : path.size() - 1, pthRootAttr.c_str(),
                      rw::graphCountFloorAttrXml( g ).c_str() );
         // absent at zero: byte-identical otherwise; the depth cut beside it makes the count (or its absence) a floor
@@ -2531,7 +2559,8 @@ std::optional<int> runPath( const MainDispatch& d )
                                     { "--connect=" + std::string( srcN ) + "," + std::string( dstN ), "--uses/--impact",
                                       ( srcDefs.size() > 1 || dstDefs.size() > 1 ) ? "; several defs share these names — qualify as file:name to pick one" : "" } )
             : rw::PathGapsXml{};
-        rw::emitTo( stdout, "{}>{}", pthUnreached.rootAttrs, pthUnreached.rows );
+        rw::emitTo( stdout, "{}>{}{}{}", pthUnreached.rootAttrs, pthUnreached.rows, rw::pathBridgeXml( ing, g, pthBridge, pthSingleRoot, pthRootPrefix ),
+                     rw::pathNearSinkXml( ing, pthNear, pthSingleRoot, pthRootPrefix ) );
         // FE-B via="name", #409 via="link"/anchor="missing", attrib-multidef prov="split", PATH-OWNERS n="Owner.name": one emitter, shared with MCP path_between
         rw::emitPathHopRows( stdout, ing, g, path, pthOwners, pthSingleRoot, pthRootPrefix );
         rw::emitTo( stdout, "</path>" );
@@ -2666,6 +2695,7 @@ struct ImpactView
     const rw::DefTableListing&     defListing;      // ... and the groups this page's table lists
     const std::vector<char>&       typeOnly;        // L7 (typeuse.h ImpactReach::typeOnly): per node, reached only through a type mention; empty when unarmed
     std::span<const rw::NodeId>    seeds;           // the matched defs; a depth-1 row's link mark reads the edge caller → seed
+    const rw::ImpactDeclinedRows&  dc;              // lane ix2-slice (IX-4, declinedsites.h): the <dc> rows declined_calls= counts, cut
     std::span<const std::uint32_t> patternSites {}; // IX-3: template lookups that may name SYM — never in reaches= (XML rows)
 };
 
@@ -2733,6 +2763,7 @@ int emitImpactColumnar( const ImpactView& v )
                                  + " radius_tested=\"" + std::to_string( v.radiusTested )       // A6
                                  + "\" radius_untested=\"" + std::to_string( v.radiusUntested ) + "\""
                                  + rw::declinedCallsAttrXml( v.declinedCalls )                    // tier-3 declines into the radius
+                                 + rw::declinedSiteCutAttrXml( v.dc.cut )                         // ix2-slice: + the <dc> cut, as the XML root
                                  + rw::declinedIfaceAttrXml( v.declinedIface )
                                  + ( rw::valueRefsCountAttrXml( v.valueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( v.ing, v.valueRefs.depthCut, rw::VrRender{ v.singleRoot, v.rootPrefix } )
                                      + rw::patternDispatchAttrXml( v.patternSites.size(), v.valueRefs.patternWideSites.size() ) )   // value uses + IX-3 template lookups (rows: the XML form)
@@ -2770,8 +2801,9 @@ int emitImpactColumnar( const ImpactView& v )
     {
         rowType[ i ] = rows[ i ] < v.typeOnly.size() ? v.typeOnly[ rows[ i ] ] : char( 0 );   // empty typeOnly: an unarmed tier, every row 0
     }
+    const std::string dcRows = rw::declinedSitesXml( v.dc.views, /*callersForm=*/true );   // ix2-slice: the <dc> rows verbatim, as --callers
     emitColumnarSymbolRows( stdout, v.ing, "impact", attr.c_str(), rows, v.rootPrefix, v.testReach, &v.depth,
-                            rw::ColumnarRowExtras{ &rowVia, nullptr, nullptr, v.attrib.groups.multi() ? &rowOfDef : nullptr, &defRows, nullptr, nullptr, &rowType } );
+                            rw::ColumnarRowExtras{ &rowVia, nullptr, nullptr, v.attrib.groups.multi() ? &rowOfDef : nullptr, &defRows, nullptr, &dcRows, &rowType } );
     return 0;
 }
 
@@ -2800,7 +2832,7 @@ int emitImpactJson( const ImpactView& v )
     rw::emitTo( stdout, "{}{}", rw::importsUnresolvedKeyJson( v.imports.importsUnresolved ),   // #220: the XML root's, absent at 0
                  rw::countFieldOrEmpty( "tsconfig_unread", std::size_t( v.imports.tsconfigUnread ), /*json=*/true ) );
     rw::emitTo( stdout, ",\"radius_tested\":{},\"radius_untested\":{}{}{}", v.radiusTested, v.radiusUntested,
-                 rw::declinedCallsKeyJson( v.declinedCalls ) + rw::declinedIfaceKeyJson( v.declinedIface ),   // A6; then the XML root's declined_calls=/declined_iface=
+                 rw::declinedCallsKeyJson( v.declinedCalls ) + rw::declinedSiteCutKeyJson( v.dc.cut ) + rw::declinedIfaceKeyJson( v.declinedIface ),   // A6; then the XML root's declined_calls=/dc_shown=/dc_next=/declined_iface=
                  ( rw::valueRefsCountKeyJson( v.valueRefs.rows.size() ) + rw::valueRefsDepthKeyJson( v.ing, v.valueRefs.depthCut, rw::VrRender{ v.singleRoot, v.rootPrefix } )
                    + rw::patternDispatchKeyJson( v.patternSites.size(), v.valueRefs.patternWideSites.size() ) ) );   // IX-3: the XML root's pattern counts
     if( v.singleRoot ) { rw::emitTo( stdout, ",\"root\":\"{}\"", jsonStr( v.rootRaw ).c_str() ); }   // R-E
@@ -2817,8 +2849,9 @@ int emitImpactJson( const ImpactView& v )
     rw::emitRaw( stdout, "]" );
     rw::emitImpactFileRollupJson( stdout, v.ing, v.fileRollup, v.rootPrefix );   // idea #6: present exactly when the XML element is
     const std::string imLinkNote = rw::impactViaLinkNote( via, v.page.begin, v.page.end );
-    rw::emitTo( stdout, "{}{}}}", imLinkNote.c_str(), rw::valueRefsJson( v.ing, v.valueRefs, true, rw::VrRender{ v.singleRoot, v.rootPrefix }, "vrs",
-                                                     "--uses=" + std::string( v.sym ) ).c_str() );
+    rw::emitTo( stdout, "{}{}{}}}", rw::declinedSitesJson( v.dc.views, /*callersForm=*/true, /*mcp=*/false ),   // ix2-slice: the XML <dc> rows
+                 rw::valueRefsJson( v.ing, v.valueRefs, true, rw::VrRender{ v.singleRoot, v.rootPrefix }, "vrs",
+                                                     "--uses=" + std::string( v.sym ) ), imLinkNote.c_str() );
     return 0;
 }
 
@@ -2837,7 +2870,7 @@ int emitImpactXml( const ImpactView& v )
                  ex( v.sym ).c_str(), v.defs, v.reaches, rw::unprovenDefsAttrXml( v.unprovenDefs ) + rw::defsListedAttrXml( v.attrib.groups, v.defListing ),   // H1: beside the reaches= it qualifies; attrib-multidef
                  rw::byDepthAttrXml( v.byDepth ),                                                              // 0.6.5: partitions reaches= by hop depth
                  v.imports.xmlAttrs.c_str(), v.radiusTested, v.radiusUntested,
-                 ( rw::declinedCallsAttrXml( v.declinedCalls ) + rw::declinedIfaceAttrXml( v.declinedIface ) ).c_str(),   // tier-3 declines into the radius
+                 ( rw::declinedCallsAttrXml( v.declinedCalls ) + rw::declinedSiteCutAttrXml( v.dc.cut ) + rw::declinedIfaceAttrXml( v.declinedIface ) ).c_str(),   // tier-3 declines into the radius (+ the <dc> cut)
                  ( rw::valueRefsCountAttrXml( v.valueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( v.ing, v.valueRefs.depthCut, rw::VrRender{ v.singleRoot, v.rootPrefix } )
                    + rw::patternDispatchAttrXml( v.patternSites.size(), v.valueRefs.patternWideSites.size() ) ),   // value uses + IX-3 template lookups: never in reaches=; absent at zero
                  std::string( v.rootAttr ).c_str(),
@@ -2862,9 +2895,10 @@ int emitImpactXml( const ImpactView& v )
                      v.attrib.ofDefXml( v.show[i] ) );                                     // attrib-multidef
     }
     rw::emitImportRowsXml( stdout, v.ing, v.importPage, v.rootPrefix, v.importLazyPage );
-    rw::emitTo( stdout, "{}</impact>", rw::valueRefsXml( v.ing, v.valueRefs, true, rw::VrRender{ v.singleRoot, v.rootPrefix },
-                                                          "--uses=" + std::string( v.sym ) )
-                                         + rw::patternDispatchXml( v.ing, v.patternSites, rw::VrRender{ v.singleRoot, v.rootPrefix } ) );
+    rw::emitTo( stdout, "{}{}</impact>", rw::declinedSitesXml( v.dc.views, /*callersForm=*/true ),   // ix2-slice (IX-4): each declined call the count names
+                 rw::valueRefsXml( v.ing, v.valueRefs, true, rw::VrRender{ v.singleRoot, v.rootPrefix },
+                                   "--uses=" + std::string( v.sym ) )
+                   + rw::patternDispatchXml( v.ing, v.patternSites, rw::VrRender{ v.singleRoot, v.rootPrefix } ) );
     return 0;
 }
 
@@ -2873,7 +2907,7 @@ inline void emitImpactLegend( const rw::Config& cfg, const rw::IngestResult& ing
                               const rw::ImportTier& imports, const std::vector<rw::NodeId>& seeds, const std::vector<std::uint32_t>& imDepth,
                               const std::vector<char>& imProven, std::size_t imUnprovenDefs, std::size_t imDeclinedCalls, std::size_t imDeclinedIface,
                               const rw::ImpactFileRollup& imFiles, const rw::ReachAttribution& imAttr, const rw::DefTableListing& imListing,
-                              const rw::ValueRefRows& imValueRefs, const rw::RankDisclosure& prD )
+                              const rw::ValueRefRows& imValueRefs, const rw::RankDisclosure& prD, const rw::ImpactDeclinedRows& imDc )
 {
     if( cfg.json )
     {
@@ -2895,7 +2929,8 @@ inline void emitImpactLegend( const rw::Config& cfg, const rw::IngestResult& ing
                  rw::testedLensLegend( cfg.columnar ), rw::kImpactTestedPartitionLegend,
                  rw::kTestedLensBlindSpotLegend,
                  rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Impact, imUnprovenDefs > 0 ).c_str(),
-                 rw::declinedCallsLegendWithGates( imDeclinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 ) + rw::declinedSitesImpactPointer( imDeclinedCalls > 0 ),
+                 rw::declinedCallsLegendForRows( imDeclinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0, !imDc.views.empty() )
+                   + rw::declinedSitesLegend( rw::declinedSitesLegendFlags( imDc.views, /*callersForm=*/true, imDc.cut ) ),   // ix2-slice: + the <dc> rows, one per counted call
                  rw::declinedIfaceLegend( imDeclinedIface > 0 ),
                  ( std::string( rw::modScopeLegend( imHasModScope ) )
                    + rw::impactRollupLegend( !imFiles.rows.empty() && !cfg.columnar, imports.umbrella, rw::impactRollupHedged( imFiles ),
@@ -2992,9 +3027,14 @@ std::optional<int> runImpact( const MainDispatch& d )
         const rw::ValueRefIndex imVri( ing );
         const rw::ValueRefRows  imValueRefs = rw::withPatternRows( rw::valueRefCallerRows( ing, imVri, seeds ), rw::PatternIndex( ing, imVri ), seeds, true );
         const std::vector<std::uint32_t>& imPatterns = imValueRefs.patternSites;   // IX-3: beside the radius, never in it
+        // ix2-slice (IX-4, declinedsites.h): the <dc> rows of exactly the declines declined_calls= counts, cut as --callers cuts;
+        // no cand= under any legend (as the MCP twin): --help promises the rows byte-identical across postures (legendcostcheck C)
+        const rw::ImpactDeclinedRows imDc = rw::impactDeclinedRows( ing, g, imDeclineTargets, imDeclinedCalls, cfg.pageLimit, cfg.impactSym,
+                                                                    std::size_t( effectiveRowCap( cfg.pageLimit, rw::kCallHierarchyRowCap ) ),
+                                                                    rw::VrRender{ imSingleRoot, imRootPrefix }, /*candidates=*/false );
 
         emitImpactLegend( cfg, ing, g, reach, show, imPage, imWalk, imports, seeds, imDepth, imProven, imUnprovenDefs,
-                          imDeclinedCalls, imDeclinedIface, imFiles, imAttr, imListing, imValueRefs, prD );
+                          imDeclinedCalls, imDeclinedIface, imFiles, imAttr, imListing, imValueRefs, prD, imDc );
         // P2.1 + §P8 G1: the rank-ordered listing's 40 is a DEFAULT now, not a ceiling — see the §P10.3 note
         // above runImpact; pageDisclosure emits the ` shown= capped=` bytes this verb used to hand-roll
         // (src/pageview.h, THE TRUNCATION VOCABULARY, rules 1-3). LB-G: the same NAMED constant
@@ -3004,7 +3044,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                                imports, importPage, importLazyPage, prD, imSingleRoot, imRootPrefix, imRootAttr,
                                imSingleRoot ? cfg.roots[0] : std::string_view(), cfg.pageLimit, cfg.pageOffset,
                                &imTestReach, imRadiusTested, imRadiusUntested, imDeclinedCalls, imDeclinedIface, g, imDepth, imByDepth, imValueRefs,
-                               imProven, imFiles, imAttr, imListing, imWalk.typeOnly, seeds, imPatterns };
+                               imProven, imFiles, imAttr, imListing, imWalk.typeOnly, seeds, imDc, imPatterns };
 
         if( cfg.columnar ) { return emitImpactColumnar( view ); }
         if( cfg.json     ) { return emitImpactJson( view ); }
