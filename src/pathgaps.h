@@ -711,7 +711,7 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
             for( std::uint32_t k = g.outOff[c]; k < g.outOff[c + 1]; ++k )
             {
                 const NodeId w = g.outTargets[k];
-                if( g.outNameOnly[k] == 0 || w >= S )
+                if( edgeKindByte( g.outNameOnly[k] ) != kEdgeName || w >= S )   // a markdown link (kEdgeLink) is a proven edge, no by-name hit
                 {
                     continue;
                 }
@@ -1097,7 +1097,7 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
             for( std::uint32_t e = g.outOff[u]; e < g.outOff[u + 1] && e < g.outNameOnly.size(); ++e )
             {
                 const NodeId w = g.outTargets[e];
-                if( g.outNameOnly[e] == 0 || w >= S || byNameSites.siteOf( u, ing.symbols[w].name ) == ByNameCallSites::kNoSite )
+                if( edgeKindByte( g.outNameOnly[e] ) != kEdgeName || w >= S || byNameSites.siteOf( u, ing.symbols[w].name ) == ByNameCallSites::kNoSite )
                 {
                     continue;   // not a by-name edge, or every call of the name is builtin-spelled (K5 rule 1)
                 }

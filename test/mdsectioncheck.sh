@@ -450,6 +450,15 @@ if mkup_row PlainLink | grep -q 'n="Plain Head"[^>]*via="link"' && ! mkup_row Pl
 if mkup_row SnakeLink | grep -q 'n="snake_case"[^>]*via="link"' && ! mkup_row SnakeLink | grep -q 'anchor="missing"'; then ok "#snake_case binds the snake_case heading exactly"; else no "#snake_case did not bind its heading"; fi
 if mkup_row SnakeMiss | grep -q 'n="s"[^>]*via="link"[^>]*anchor="missing"'; then ok "a missing slug beside a snake_case heading (no emphasis) is still anchor=missing"; else no "snake_case wrongly counted as inline markup: the plain miss lost its mark"; fi
 
+# Callers that reach a namesake only through a markdown link are no by-name hit (near_sink): Caller links d.md#install, a different
+# section than b.md's Install, whose name it shares. The link is proven; nothing was matched by name.
+mkdir -p "$TMP/ngap"
+printf '%s\n' '# B' '' '## Start' '' 'hello' '' '## Install' '' 'steps' > "$TMP/ngap/b.md"
+printf '%s\n' '# C' '' '## Caller' '' '[x](d.md#install)' > "$TMP/ngap/c.md"
+printf '%s\n' '# D' '' '## Install' '' 'other' > "$TMP/ngap/d.md"
+NG="$( $BIN "$TMP/ngap" --no-cache --path='Start,b.md::B::Install' --legend=compact 2>/dev/null )"
+if printf '%s' "$NG" | grep -q '<near_sink' && ! printf '%s' "$NG" | grep -q 'withheld="name\|why="[a-z,:0-9]*name'; then ok "near_sink: a markdown link to a same-named heading is no by-name hit"; else no "near_sink counted a markdown link as a by-name call (withheld=name / why=name): $( printf '%s' "$NG" | grep -o '<ns [^>]*>' )"; fi
+
 # --callers lists every matched def in <def ix= t= p=> (cross_kind when a heading and a function share the name).
 # The edge is the <s> row: it must name the section, never the .py function.
 if $BIN "$AFIX" --no-cache --callers=do_work --legend=compact 2>/dev/null | python3 -c '
