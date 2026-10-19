@@ -6492,6 +6492,7 @@ struct MdLinkIndex
     HashMap<std::string, std::uint32_t> fileByPath;   // every .md/.markdown file, by lexicalNormalize(ing.files). A `.`-rooted crawl stores `./docs/a.md`; the lookup key does not. An absolute root stores the absolute path, and the lookup joins to that same absolute path.
     std::vector<Heading>                headings;     // sorted (fileId, slug, startByte, id): the first of a slug is its heading
     std::vector<NodeId>                 wholeFile;    // per file: the file-level Section node, kNoNode when none
+    std::vector<std::string>            wholeSlug;    // parallel to wholeFile: that node's own slug (a file that is one heading line IS that heading)
 };
 
 inline bool isMarkdownLinkRef( const Reference& r ) noexcept
@@ -6545,6 +6546,7 @@ inline bool isMarkdownFileNode( const Symbol& sym, std::uint32_t widestEnd ) noe
 inline void indexMarkdownSections( MdLinkIndex& ix, const IngestResult& ing )
 {
     ix.wholeFile.assign( ing.files.size(), kNoNode );
+    ix.wholeSlug.assign( ing.files.size(), std::string() );
     std::vector<std::uint32_t> widest( ing.files.size(), 0 );
     for( const Symbol& sym : ing.symbols )
     {
@@ -6564,6 +6566,7 @@ inline void indexMarkdownSections( MdLinkIndex& ix, const IngestResult& ing )
             if( ix.wholeFile[ sym.fileId ] == kNoNode )
             {
                 ix.wholeFile[ sym.fileId ] = sym.id;
+                ix.wholeSlug[ sym.fileId ] = mdSlugOf( sym.name );
             }
             continue;
         }
@@ -6596,6 +6599,38 @@ struct MarkdownLinkTarget
     NodeId id       = kNoNode;
     bool   slugMiss = false;
 };
+
+// The first heading of `file` whose slug is `slug` (headings are sorted by (file, slug, start)), else headings.end().
+inline std::vector<MdLinkIndex::Heading>::const_iterator findMarkdownHeading( const MdLinkIndex& ix, std::uint32_t file, std::string_view slug )
+{
+    using Key      = std::pair<std::uint32_t, std::string_view>;
+    const auto hit = std::lower_bound( ix.headings.begin(), ix.headings.end(), Key{ file, slug },
+                                       []( const MdLinkIndex::Heading& h, const Key& key ) { return Key{ h.fileId, h.slug } < key; } );
+    return hit != ix.headings.end() && hit->fileId == file && hit->slug == slug ? hit : ix.headings.end();
+}
+
+// A link's slug that matched no heading is a CLAIM of absence only when mdSlugOf could have matched it. It cannot decide:
+// a byte >= 0x80 or a '%' (non-ASCII and encoded slugs); a "-<digits>" suffix whose stem names a heading (GitHub's
+// duplicate numbering, `#dup-1` for a second `## Dup`); a file that is one heading line, whose heading IS the file node
+// (the slug equals the node's own). Those keep the file edge and carry no anchor="missing".
+inline bool mdSlugProvablyAbsent( const MdLinkIndex& ix, std::uint32_t file, std::string_view slug )
+{
+    if( slug.empty() || mdSlugOutsideModel( slug ) )
+    {
+        return false;
+    }
+    const std::size_t dash = slug.find_last_of( '-' );
+    if( dash != std::string_view::npos && dash > 0 && dash + 1 < slug.size()
+        && slug.find_first_not_of( "0123456789", dash + 1 ) == std::string_view::npos
+        && findMarkdownHeading( ix, file, slug.substr( 0, dash ) ) != ix.headings.end() )
+    {
+        return false;
+    }
+    const auto first       = std::lower_bound( ix.headings.begin(), ix.headings.end(), file,
+                                               []( const MdLinkIndex::Heading& h, std::uint32_t f ) { return h.fileId < f; } );
+    const bool hasHeadings = first != ix.headings.end() && first->fileId == file;
+    return hasHeadings || ix.wholeSlug[ file ] != slug;
+}
 
 inline MarkdownLinkTarget bindOneMarkdownLink( const MdLinkIndex& ix, std::string_view linkerPath, std::string_view written,
                                                  std::string_view crawlRoot )
@@ -6639,16 +6674,13 @@ inline MarkdownLinkTarget bindOneMarkdownLink( const MdLinkIndex& ix, std::strin
         return {};
     }
     const std::uint32_t target = file->second;
-    using Key                  = std::pair<std::uint32_t, std::string_view>;
-    const auto hit = slug.empty() ? ix.headings.end()
-                                  : std::lower_bound( ix.headings.begin(), ix.headings.end(), Key{ target, slug },
-                                        []( const MdLinkIndex::Heading& h, const Key& key ) { return Key{ h.fileId, h.slug } < key; } );
-    if( hit != ix.headings.end() && hit->fileId == target && hit->slug == slug )
+    const auto hit = slug.empty() ? ix.headings.end() : findMarkdownHeading( ix, target, slug );
+    if( hit != ix.headings.end() )
     {
         return { hit->id, false };
     }
     const NodeId fileNode = ix.wholeFile[ target ];
-    return { fileNode, !slug.empty() && fileNode != kNoNode };
+    return { fileNode, fileNode != kNoNode && mdSlugProvablyAbsent( ix, target, slug ) };
 }
 
 struct MdLinkPins

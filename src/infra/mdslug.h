@@ -14,7 +14,8 @@ namespace rw
 
 // alnum lowered, spaces→'-', '-'/'_' kept, everything else dropped. First match wins on collision
 // (GitHub's -1/-2 suffixes and percent-encoded slugs are not modelled; such a link falls back to the
-// target file's own edge — disclosed here rather than guessed).
+// target file's own edge — disclosed here rather than guessed, and never marked anchor="missing": see
+// mdSlugOutsideModel and graph.h mdSlugProvablyAbsent).
 inline std::string mdSlugOf( std::string_view name )
 {
     std::string slug;
@@ -26,6 +27,17 @@ inline std::string mdSlugOf( std::string_view name )
         else if( c == ' ' || c == '\t' ) { slug += '-'; }
     }
     return slug;
+}
+
+// A link slug this function cannot decide about: a byte >= 0x80 (it drops non-ASCII letters, GitHub keeps them) or a '%'
+// (an encoded slug; it does not decode). A miss on such a slug proves nothing about the heading.
+inline bool mdSlugOutsideModel( std::string_view slug ) noexcept
+{
+    for( const char c : slug )
+    {
+        if( c == '%' || static_cast<unsigned char>( c ) >= 0x80 ) { return true; }
+    }
+    return false;
 }
 
 }   // namespace rw

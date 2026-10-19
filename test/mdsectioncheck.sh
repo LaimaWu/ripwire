@@ -396,6 +396,35 @@ else
     no "columnar via did not write 2 for the markdown link"
 fi
 want "$AFIX" "Fence Only"        ''                               "a link inside a fenced block makes no edge"
+# anchor="missing" is a CLAIM that the heading is absent, so it is made only when the slug is provably absent. Four shapes the
+# slug function does not model reach the same file-node fallback as a truly missing heading (a non-ASCII or percent-encoded slug,
+# GitHub's -N duplicate suffix, and a file that is only one heading line, whose heading IS the file node): each keeps its edge
+# and carries NO mark. Each arm links from its own section, so the rows do not merge into one pair.
+mkdir -p "$TMP/amiss/docs"
+printf '%s\n' '# Doc' '' '## Überblick' '' 'x' '' '## 概要' '' 'y' '' '## Dup' '' 'a' '' '## Dup' '' 'b' '' '## Real Heading' '' 'z' > "$TMP/amiss/docs/t.md"
+printf '%s\n' '# Title' > "$TMP/amiss/docs/one.md"
+printf '%s\n' '# Links' '' \
+    '## UberLink' '' '[a](t.md#überblick)' '' '## GaiLink' '' '[a](t.md#概要)' '' '## DupLink' '' '[a](t.md#dup-1)' '' \
+    '## OneLink' '' '[a](one.md#title)' '' '## PctLink' '' '[a](t.md#real%20heading)' '' '## EncLink' '' '[a](t.md#%C3%BCberblick)' '' \
+    '## MissLink' '' '[a](t.md#nonexistent)' '' '## MissNumLink' '' '[a](t.md#bar-2)' '' '## OneMissLink' '' '[a](one.md#nothere)' \
+    > "$TMP/amiss/docs/links.md"
+amiss_row(){ $BIN "$TMP/amiss" --no-cache --callees="$1" --legend=compact 2>/dev/null; }
+amiss_unmarked(){ # amiss_unmarked SECTION TARGET WHY: the edge exists (via=link) and says nothing about a missing anchor
+    row="$( amiss_row "$1" )"
+    if printf '%s' "$row" | grep -q "n=\"$2\"[^>]*via=\"link\"" && ! printf '%s' "$row" | grep -q 'anchor="missing"'; then ok "$3"; else no "$3 — got [$( printf '%s' "$row" | grep -o '<s [^>]*>' )]"; fi
+}
+amiss_marked(){ # amiss_marked SECTION TARGET WHY: the same fallback, marked, because the slug is absent
+    if amiss_row "$1" | grep -q "n=\"$2\"[^>]*via=\"link\"[^>]*anchor=\"missing\""; then ok "$3"; else no "$3"; fi
+}
+amiss_unmarked UberLink "t"     "#überblick (a non-ASCII slug, heading present) keeps the file edge, no anchor=missing"
+amiss_unmarked GaiLink  "t"     "#概要 (a CJK slug, heading present) keeps the file edge, no anchor=missing"
+amiss_unmarked DupLink  "t"     "#dup-1 (GitHub's duplicate suffix, second ## Dup present) keeps the file edge, no anchor=missing"
+amiss_unmarked OneLink  "Title" "one.md#title (the file is just that heading) keeps the file edge, no anchor=missing"
+amiss_unmarked PctLink  "t"     "#real%20heading (percent-encoded, heading present) keeps the file edge, no anchor=missing"
+amiss_unmarked EncLink  "t"     "#%C3%BCberblick (percent-encoded UTF-8, heading present) keeps the file edge, no anchor=missing"
+amiss_marked MissLink    "t"     "a plain ASCII slug no heading has is still anchor=missing"
+amiss_marked MissNumLink "t"     "#bar-2 with no ## Bar (the -N stem is absent) is still anchor=missing"
+amiss_marked OneMissLink "Title" "one.md#nothere (a heading-only file, other slug) is still anchor=missing"
 # --callers lists every matched def in <def ix= t= p=> (cross_kind when a heading and a function share the name).
 # The edge is the <s> row: it must name the section, never the .py function.
 if $BIN "$AFIX" --no-cache --callers=do_work --legend=compact 2>/dev/null | python3 -c '
