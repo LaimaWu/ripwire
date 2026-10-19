@@ -6493,6 +6493,7 @@ struct MdLinkIndex
     std::vector<Heading>                headings;     // sorted (fileId, slug, startByte, id): the first of a slug is its heading
     std::vector<NodeId>                 wholeFile;    // per file: the file-level Section node, kNoNode when none
     std::vector<std::string>            wholeSlug;    // parallel to wholeFile: that node's own slug (a file that is one heading line IS that heading)
+    std::vector<char>                   markup;       // per file: 1 when a heading (or the file node) holds inline markup mdSlugOf cannot slug as GitHub does
 };
 
 inline bool isMarkdownLinkRef( const Reference& r ) noexcept
@@ -6547,6 +6548,7 @@ inline void indexMarkdownSections( MdLinkIndex& ix, const IngestResult& ing )
 {
     ix.wholeFile.assign( ing.files.size(), kNoNode );
     ix.wholeSlug.assign( ing.files.size(), std::string() );
+    ix.markup.assign( ing.files.size(), 0 );
     std::vector<std::uint32_t> widest( ing.files.size(), 0 );
     for( const Symbol& sym : ing.symbols )
     {
@@ -6560,6 +6562,10 @@ inline void indexMarkdownSections( MdLinkIndex& ix, const IngestResult& ing )
         if( !langFacts( sym.lang ).linkSections || sym.kind != SymKind::Section || sym.fileId >= ing.files.size() )
         {
             continue;
+        }
+        if( mdHeadingOutsideModel( sym.name ) )
+        {
+            ix.markup[ sym.fileId ] = 1;
         }
         if( isMarkdownFileNode( sym, widest[ sym.fileId ] ) )
         {
@@ -6612,10 +6618,12 @@ inline std::vector<MdLinkIndex::Heading>::const_iterator findMarkdownHeading( co
 // A link's slug that matched no heading is a CLAIM of absence only when mdSlugOf could have matched it. It cannot decide:
 // a byte >= 0x80 or a '%' (non-ASCII and encoded slugs); a "-<digits>" suffix whose stem names a heading (GitHub's
 // duplicate numbering, `#dup-1` for a second `## Dup`); a file that is one heading line, whose heading IS the file node
-// (the slug equals the node's own). Those keep the file edge and carry no anchor="missing".
+// (the slug equals the node's own); a file with a heading that holds inline markup (a link, emphasis: GitHub slugs the
+// rendered text, mdSlugOf the source, so the right slug can miss every heading). Those keep the file edge and carry no
+// anchor="missing".
 inline bool mdSlugProvablyAbsent( const MdLinkIndex& ix, std::uint32_t file, std::string_view slug )
 {
-    if( slug.empty() || mdSlugOutsideModel( slug ) )
+    if( slug.empty() || mdSlugOutsideModel( slug ) || ix.markup[ file ] != 0 )
     {
         return false;
     }

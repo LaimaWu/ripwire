@@ -425,6 +425,31 @@ amiss_unmarked EncLink  "t"     "#%C3%BCberblick (percent-encoded UTF-8, heading
 amiss_marked MissLink    "t"     "a plain ASCII slug no heading has is still anchor=missing"
 amiss_marked MissNumLink "t"     "#bar-2 with no ## Bar (the -N stem is absent) is still anchor=missing"
 amiss_marked OneMissLink "Title" "one.md#nothere (a heading-only file, other slug) is still anchor=missing"
+
+# The same claim rests on mdSlugOf matching the slug GitHub gives the RENDERED heading. A heading that holds inline markup (a link,
+# _emphasis_, an HTML tag, `*`) is slugged from its raw source by mdSlugOf, so a link that names the rendered slug misses it. A file
+# with such a heading proves nothing by a miss: the edge stays, unmarked. A plain file, and snake_case (no emphasis), still mark.
+mkdir -p "$TMP/mkup"
+printf '%s\n' '# Doc' '' '## See [docs](x.md)' '' 'a' '' '## _Setup_' '' 'b' '' '## Plain Head' '' 'c' > "$TMP/mkup/m.md"
+printf '%s\n' '# _Solo_' > "$TMP/mkup/solo.md"
+printf '%s\n' '# Doc' '' '## snake_case' '' 'a' '' '## Other' '' 'b' > "$TMP/mkup/s.md"
+printf '%s\n' '# Links' '' \
+    '## SeeLink' '' '[a](m.md#see-docs)' '' '## SetupLink' '' '[a](m.md#setup)' '' '## PlainLink' '' '[a](m.md#plain-head)' '' \
+    '## MarkupMiss' '' '[a](m.md#nonexistent)' '' '## SoloLink' '' '[a](solo.md#solo)' '' \
+    '## SnakeLink' '' '[a](s.md#snake_case)' '' '## SnakeMiss' '' '[a](s.md#absent)' > "$TMP/mkup/links.md"
+mkup_row(){ $BIN "$TMP/mkup" --no-cache --callees="$1" --legend=compact 2>/dev/null; }
+mkup_unmarked(){ # mkup_unmarked SECTION TARGET WHY: the edge exists (via=link) and says nothing about a missing anchor
+    row="$( mkup_row "$1" )"
+    if printf '%s' "$row" | grep -q "n=\"$2\"[^>]*via=\"link\"" && ! printf '%s' "$row" | grep -q 'anchor="missing"'; then ok "$3"; else no "$3 — got [$( printf '%s' "$row" | grep -o '<s [^>]*>' )]"; fi
+}
+mkup_unmarked SeeLink    "m"             "#see-docs over '## See [docs](x.md)' (rendered slug see-docs) keeps the file edge, no anchor=missing"
+mkup_unmarked SetupLink  "m"             "#setup over '## _Setup_' (rendered slug setup) keeps the file edge, no anchor=missing"
+mkup_unmarked MarkupMiss "m"             "a slug no heading has, in a file whose headings hold inline markup, is not provably absent: no anchor=missing"
+mkup_unmarked SoloLink   "_Solo_"        "#solo over a file that is just '# _Solo_' keeps the file edge, no anchor=missing"
+if mkup_row PlainLink | grep -q 'n="Plain Head"[^>]*via="link"' && ! mkup_row PlainLink | grep -q 'anchor="missing"'; then ok "a plain heading in the markup file still binds exactly"; else no "a plain heading beside markup headings lost its exact bind"; fi
+if mkup_row SnakeLink | grep -q 'n="snake_case"[^>]*via="link"' && ! mkup_row SnakeLink | grep -q 'anchor="missing"'; then ok "#snake_case binds the snake_case heading exactly"; else no "#snake_case did not bind its heading"; fi
+if mkup_row SnakeMiss | grep -q 'n="s"[^>]*via="link"[^>]*anchor="missing"'; then ok "a missing slug beside a snake_case heading (no emphasis) is still anchor=missing"; else no "snake_case wrongly counted as inline markup: the plain miss lost its mark"; fi
+
 # --callers lists every matched def in <def ix= t= p=> (cross_kind when a heading and a function share the name).
 # The edge is the <s> row: it must name the section, never the .py function.
 if $BIN "$AFIX" --no-cache --callers=do_work --legend=compact 2>/dev/null | python3 -c '
