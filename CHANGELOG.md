@@ -25,11 +25,14 @@ field path below such a receiver or below `self` (`self.book.iter()`, `self.inne
 written type. The written name resolves exactly as a declared call result does (the item scopes, `use` declarations —
 a `use … as` alias by the path it names, a glob `use super::*` through the module's own `use` — and module paths in force
 at the binding), so `use std::fs::File` beside an in-tree `File` proves nothing. A declared `-> Self`
-result now types its call too (`let b = Book::new(); b.spin()`), and a generic result's head names its class. On
+result now types its call too (`let b = Book::new(); b.spin()`) when the call's qualifier, resolved the same way, names
+that in-tree type: `fs::File::open()`, `std::path::PathBuf::from()`, a glob's or the prelude's `String::new()` or an
+external crate's glob reach an in-tree namesake only by name and type nothing. A generic result's head names its class. On
 rust-lang/mdBook, `--callers=Book::iter` now lists `make_data` (`book: &Book`) and `MDBook::iter` (`self.book.iter()`)
 as plain edges. Stated floor (still declined or hedged): a generic bound `T: Trait`, `dyn` / `impl Trait` and a trait
 written as a type (which implementation runs is dispatch), a `type` alias, a glob of a module that only globs, a value behind `Option` / `Result` / `Rc` / `Arc` / `RefCell` /
-`Cell` / `Mutex` / `RwLock`, a tuple-struct field (`self.0`), and any pattern other than a plain name. The wrapper list is
+`Cell` / `Mutex` / `RwLock`, a tuple-struct field (`self.0`), and any pattern other than a plain name. A macro that
+rebinds a name (`shadow!(b); b.spin()`) is not read: the written type still types the name after it. The wrapper list is
 one data row per family (`Box` transparent; `Option` / `Result` one unwrap layer; the pointers and cells hide their argument).
 
 ### Changed — Go methods carry their receiver type as scope (#403, slice 9a)
@@ -62,7 +65,7 @@ the caller's `--callees` answer in a `<stdm>` line. A call the language itself p
 that defines `iter`) keeps its edge. On rust-lang/mdBook, `--callers=iter` no longer lists six functions whose `.iter()`
 is on a `Vec` or a map, and `--callees=make_data` shows `<stdm n="insert,iter,push,to_owned" calls="72"/>` instead of
 three in-tree methods it never calls. Stated floor: a receiver of an in-tree type that no rule typed (a generic bound,
-`dyn` / `impl Trait`, a value behind `Option` / `Rc` / `RefCell`, an extension-trait method on a foreign type) is declined
+`dyn` / `impl Trait`, a value behind `Option` / `Rc` / `RefCell` and the rest of the floor above, an extension-trait method on a foreign type) is declined
 too — counted and disclosed, not bound; a receiver written or constructed as an in-tree type binds (see "Rust receivers typed by their
 written type" above). Go keeps an empty row: `Len`, `Write`, `String` are methods in-tree types implement on
 purpose. The legend clauses now say "a standard-type member of its language". No cached content changes.

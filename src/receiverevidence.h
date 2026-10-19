@@ -2527,24 +2527,29 @@ struct ReceiverEvidence
         }
         return cls != kNoNode && methodOf( ing.symbols[ cls ].name, r.calleeName, false, cls );
     }
-    // rust-receivers: may a Rust call written `T::f()` type the locals its result binds through `to`, a member of a type? Not
-    // when the caller's file imports `T` from OUTSIDE the tree (`use std::path::Path`): the canonical tier matches the
-    // callee's scope NAME alone, so `Path::new( p )` there committed to an in-tree `Path::new` (a base edge this does not
-    // change), and that callee's declared `-> &Self` must not type `p`. Any other qualifier keeps the call-result rule as it
-    // was (the call keeps only the qualifier's last segment, and a file outside every crate layout resolves nothing).
+    // rust-receivers (fix round 1): may a Rust call written `T::f()` type the locals its result binds through `to`, a member
+    // whose declared result is written `Self` (graph.h typeCallResults asks only for those: a result the base read already
+    // typed keeps its base rule)? Only when the call's qualifier, read as a WRITTEN type at the call site (the resolver a
+    // written `x: T` uses: the full path; `Self` the impl's own class), resolves to the in-tree class that owns `to`. The
+    // canonical tier matches the callee's scope NAME alone, so std's `Path::new( p )`, `fs::File::open()`,
+    // `std::path::PathBuf::from()`, a glob's or the prelude's `String::new()` all commit to an in-tree type's member of that
+    // name (a base edge this does not change); an outside root, a std module, a glob that may supply, a prelude name with no
+    // in-tree item in scope resolve to no class, and that `-> Self` types nothing.
     bool rustQualifiedTypeOwns( const Reference& r, NodeId to ) const
     {
         if( callResultFamilyOf( r.lang ) != CallResultFamily::Rust || r.qualifier.empty() || ing.symbols[ to ].scope.empty() )
         {
             return true;
         }
-        const std::string_view qualifier = CallResultTypes::splitLast( r.qualifier, "::" ).second;
-        bool                   outside   = false;
-        types.forEachImport( r.fileId, qualifier, [ & ]( const Binding& b )
+        const auto [ path, last ] = CallResultTypes::splitLast( r.qualifier, "::" );
+        const NodeId cls          = path.empty() && last == "Self" ? selfClass( r.fromSymbol )
+                                                                   : types.rustResultClass( r.fileId, r.startByte, path.empty() ? std::string_view{} : std::string_view( r.qualifier ), last );
+        if( cls == kNoNode )
         {
-            outside = outside || ( b.kind == LocalBindKind::TypeImport && types.rustPathLeavesTree( b.fileId, b.startByte, b.importedName ) );
-        } );
-        return !outside;
+            return false;
+        }
+        const auto it = methodsByType.find( typeKey( ing.symbols[ cls ].name, "::", ing.symbols[ to ].name ) );
+        return it != methodsByType.end() && std::ranges::find( it->second, to ) != it->second.end() && ownedBy( to, cls );
     }
     // rust-receivers: the ONE class `self` names inside `from` (or the method enclosing it): the in-tree class of the method's
     // owner name that owns the method (memberOwnerRuleOf — Rust: its own file and item scope, or the only class of the name);
@@ -2556,9 +2561,9 @@ struct ReceiverEvidence
         {
             return kNoNode;
         }
-        NodeId one = kNoNode;
-        const std::size_t n = types.classesNamed( ownerClass[ at ], callResultFamilyOf( ing.symbols[ at ].lang ), [ & ]( NodeId c ) { return ownedBy( at, c ); }, one );
-        return n == 1 ? one : kNoNode;
+        NodeId     one    = kNoNode;
+        const bool unique = types.classesNamed( ownerClass[ at ], callResultFamilyOf( ing.symbols[ at ].lang ), [ & ]( NodeId c ) { return ownedBy( at, c ); }, one ) == 1;
+        return unique ? one : kNoNode;
     }
 
     // Python `feed = parser.feed; … feed( data )`: the alias names a typed object's method

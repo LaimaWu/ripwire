@@ -1208,6 +1208,7 @@ enum class LocalBindKind : std::uint8_t
                    //     written WHOLE when it is qualified (`os.File`, `std::fs::File`), else "", unwrapDepth = the
                    //     Result/Option layers above it (each needs one unwrap operator at the call site). var stays empty.
                    //     C++ writes importedName only for a non-std qualified result (`ext::Config`), which graph.h resolves.
+                   //     Rust sets isFromAssignment when the result is written `Self` (typeName = the impl's type).
     TypeImport,    // fix round 1: a file's import of a TYPE name (Java/Kotlin `import a.b.C [as D]`, Rust `use a::b::C [as D]`,
                    //     brace groups flattened): var = the local name it binds (`C` / `D`; "*" for a wildcard or glob),
                    //     typeName = the imported item's own name ("" for "*"), importedName = the path as written
@@ -1299,15 +1300,17 @@ inline constexpr std::array<TypeWrapperRow, 9> kRustTypeWrappers = { {
     { "Rc", TypeWrap::Hides }, { "Arc", TypeWrap::Hides }, { "RefCell", TypeWrap::Hides }, { "Cell", TypeWrap::Hides },
     { "Mutex", TypeWrap::Hides }, { "RwLock", TypeWrap::Hides },
 } };
+// each family's wrapper rows, indexed by CallResultFamily (Go / C++ / JVM / TS read their wrappers in their own readers
+// today, ingest_binds.h: empty rows)
+inline constexpr std::array<std::span<const TypeWrapperRow>, std::size_t( CallResultFamily::TypeScript ) + 1> kTypeWrappersOf = { {
+    /* None */ {}, /* Go */ {}, /* Rust */ kRustTypeWrappers, /* Cpp */ {}, /* Jvm */ {}, /* TypeScript */ {},
+} };
 // the row `name` has in family `f`'s wrapper table (None: no row — the name is a class of its own)
 inline TypeWrap typeWrapOf( CallResultFamily f, std::string_view name ) noexcept
 {
-    if( f != CallResultFamily::Rust )
-    {
-        return TypeWrap::None;   // Go / C++ / JVM / TS read their wrappers in their own readers today (ingest_binds.h)
-    }
-    const auto row = std::ranges::find( kRustTypeWrappers, name, &TypeWrapperRow::name );
-    return row == kRustTypeWrappers.end() ? TypeWrap::None : row->wrap;
+    const std::span<const TypeWrapperRow> rows = kTypeWrappersOf[ std::size_t( f ) ];
+    const auto                            row  = std::ranges::find( rows, name, &TypeWrapperRow::name );
+    return row == rows.end() ? TypeWrap::None : row->wrap;
 }
 // Binding::resultIndex of a record about a WHOLE result (a single non-tuple result; a Rust `let t = pair()?` binding all of it).
 inline constexpr std::uint8_t kWholeResult = 0xFF;
@@ -1339,6 +1342,7 @@ struct Binding
                                               // kind==Type: read off a C++ ASSIGNMENT's callee (`x = f( … )`), not a declaration —
                                               //   a function's name as often as a class's, so buildGraph drops it unless a class of
                                               //   that name exists (resolve.h assignmentNamesNoClass). Rides the padding after `kind`.
+                                              // kind==ReturnType (Rust): the result is written `Self` (LocalBindKind::ReturnType).
     std::uint8_t  resultIndex = kWholeResult; // kind==CallResult/ReturnType: the result position (see LocalBindKind). Rides the padding.
     std::uint8_t  unwrapDepth = 0;            // kind==CallResult/ReturnType: unwrap operators / layers (see LocalBindKind). Rides the padding.
     std::uint32_t startByte  = 0;         // the record's own position (RawBind::startByte). ONE declaration's

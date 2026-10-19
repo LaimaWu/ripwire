@@ -4147,12 +4147,13 @@ inline void pushCallResult( BindCtx& cx, TSNode var, TSNode call, std::uint8_t i
 
 // One ReturnType of the definition starting at `defStart`: position `index`, class `cls` ("" records nothing), the qualified
 // text whole (`os.File`, `std::fs::File`; "" when unqualified) and `depth` Result/Option layers above the class.
-inline void pushReturnType( BindCtx& cx, std::uint32_t defStart, std::uint8_t index, std::string_view cls, std::string_view whole, std::uint8_t depth )
+// `spelledSelf` (Rust): the result is written `Self` — carried on isFromAssignment (model.h Binding: kind==ReturnType)
+inline void pushReturnType( BindCtx& cx, std::uint32_t defStart, std::uint8_t index, std::string_view cls, std::string_view whole, std::uint8_t depth, bool spelledSelf = false )
 {
     if( !cls.empty() )   // Symbol::sigStartByte joins startByte (the RubySingletonDef pattern)
     {
         cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = defStart, .lang = cx.lang, .kind = LocalBindKind::ReturnType,
-                                      .resultIndex = index, .unwrapDepth = depth, .importedName = std::string( whole ), .typeName = std::string( cls ) } );
+                                      .isFromAssignment = spelledSelf, .resultIndex = index, .unwrapDepth = depth, .importedName = std::string( whole ), .typeName = std::string( cls ) } );
     }
 }
 
@@ -5793,8 +5794,9 @@ inline std::string_view rustImplSelf( TSNode n, std::string_view src )
 // passes (`Result<T, E>`, `Option<T>`) into `depth`: `T`, `Self` (the impl's type), or a path's last segment with `whole`
 // set to the path as written (`crate::model::Config`, `std::fs::File`), which graph.h resolves to an in-tree module's
 // class or refuses (receiverevidence.h rustResultClass). `tuple` receives a tuple type left at the core (positions are the
-// caller's). "" for anything else, or a type parameter of `fn`.
-inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_view src, std::uint8_t& depth, std::string_view& whole, TSNode* tuple )
+// caller's). "" for anything else, or a type parameter of `fn`. `spelledSelf` (when given) receives whether the class came
+// from a written `Self` (fix round 1: graph.h types such a call's local only through a qualifier that resolves to it).
+inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_view src, std::uint8_t& depth, std::string_view& whole, TSNode* tuple, bool* spelledSelf = nullptr )
 {
     whole = {};
     for( int guard = 0; guard < 8 && !ts_node_is_null( type ); ++guard )
@@ -5845,6 +5847,10 @@ inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_vie
         // `Self` (tree-sitter-rust spells it a type_identifier in a type, `fn new() -> Self`): the impl's type, "" in a trait
         if( kindIs( t, "self" ) || ( ( kindIs( t, "identifier" ) || kindIs( t, "type_identifier" ) ) && nodeTextOf( type, src ) == "Self" ) )
         {
+            if( spelledSelf != nullptr )
+            {
+                *spelledSelf = true;
+            }
             return rustImplSelf( fn, src );
         }
         if( kindIs( t, "scoped_type_identifier" ) )
@@ -5876,19 +5882,21 @@ inline void captureRustReturnTypes( BindCtx& cx, TSNode fn )
     std::uint8_t        depth    = 0;
     std::string_view    whole;
     TSNode              tuple{};
-    const std::string_view cls = rustResultClass( ret, fn, cx.src, depth, whole, &tuple );
+    bool                spelledSelf = false;
+    const std::string_view cls = rustResultClass( ret, fn, cx.src, depth, whole, &tuple, &spelledSelf );
     if( ts_node_is_null( tuple ) )
     {
-        pushReturnType( cx, defStart, kWholeResult, cls, whole, depth );
+        pushReturnType( cx, defStart, kWholeResult, cls, whole, depth, spelledSelf );
         return;
     }
     for( std::uint32_t i = 0, k = ts_node_named_child_count( tuple ); i < k && i < kWholeResult; ++i )
     {
-        std::uint8_t           inner = 0;
-        const std::string_view elem  = rustResultClass( ts_node_named_child( tuple, i ), fn, cx.src, inner, whole, nullptr );
+        std::uint8_t           inner     = 0;
+        bool                   elemSelf  = false;
+        const std::string_view elem      = rustResultClass( ts_node_named_child( tuple, i ), fn, cx.src, inner, whole, nullptr, &elemSelf );
         if( inner == 0 )   // an element that is itself a Result/Option layer needs an operator the tuple pattern cannot apply
         {
-            pushReturnType( cx, defStart, std::uint8_t( i ), elem, whole, depth );
+            pushReturnType( cx, defStart, std::uint8_t( i ), elem, whole, depth, elemSelf );
         }
     }
 }
