@@ -67,6 +67,14 @@ inline bool vrBindLess( const IngestResult& ing, const Reference& a, const Refer
     return a.startByte < b.startByte;
 }
 
+// The references of `refs` (indices into ing.references, kept in their order) made inside any of `fns`.
+inline std::vector<std::uint32_t> vrRefsMadeIn( const IngestResult& ing, std::span<const std::uint32_t> refs, std::span<const NodeId> fns )
+{
+    std::vector<std::uint32_t> out;
+    std::ranges::copy_if( refs, std::back_inserter( out ), [ & ]( std::uint32_t i ) { return std::ranges::find( fns, ing.references[i].fromSymbol ) != fns.end(); } );
+    return out;
+}
+
 // ── IX-1 slot-type join ──────────────────────────────────────────────────────────────────────────────────
 // A function stored in struct field T.f (a Value row with a slot, ingest_valuerefs.h valueSlot) MAY be called by every call
 // through a field f (`x->f( … )`, a slot Through, scope 's'): via="slot" when both sides' declared struct types resolve to the
@@ -128,9 +136,7 @@ public:
     // The slot calls made inside any of `fns`, ascending.
     std::vector<std::uint32_t> callsMadeIn( const IngestResult& ing, std::span<const NodeId> fns ) const
     {
-        std::vector<std::uint32_t> out;
-        std::ranges::copy_if( m_calls, std::back_inserter( out ), [ & ]( std::uint32_t c ) { return std::ranges::find( fns, ing.references[c].fromSymbol ) != fns.end(); } );
-        return out;
+        return vrRefsMadeIn( ing, m_calls, fns );
     }
     // The resolved "Type.field" of slot call `callIdx` (".field" when the type is unknown; an anonymous struct is "@LINE").
     std::string nameOf( std::uint32_t callIdx ) const
@@ -857,9 +863,7 @@ public:
     // The usable Pattern sites made inside any of `fns` (the dispatcher's own sites), in reference order.
     std::vector<std::uint32_t> sitesIn( std::span<const NodeId> fns ) const
     {
-        std::vector<std::uint32_t> out;
-        std::ranges::copy_if( m_patterns, std::back_inserter( out ), [ & ]( std::uint32_t i ) { return std::ranges::find( fns, m_ing.references[i].fromSymbol ) != fns.end(); } );
-        return out;
+        return vrRefsMadeIn( m_ing, m_patterns, fns );
     }
     // Too-wide templates (`f"_{m}"`: no literal side of kVrPatternMinLiteral identifier characters) whose written sides
     // could name one of `defs`, in reference order: pattern_too_wide= counts them; never a candidate list. --safe-delete
