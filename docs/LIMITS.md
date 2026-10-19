@@ -1002,7 +1002,7 @@ Discloses: `capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
-| `kClassNewRowCap` | `8` | — | rows shown; the group's total= counts them all, next= lists the rest |
+| `kClassNewRowCap` | `8` | — | rows shown; the group's total= counts them all, next= is --callers= of the first cut row's class |
 
 ### `src/tracelocus.h`
 
