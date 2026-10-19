@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <string_view>
 
 namespace rw
 {
@@ -76,6 +77,11 @@ struct LangFacts
     /// judged against the base's whole set. A changed C or Objective-C file does not need it, by today's behaviour
     /// (verbs_quality.h; pinned by test/qddegradecheck.sh (E3)).
     bool defectShapeNeedsMacroSet = false;
+
+    /// Rust: a construction is a call to the type's conventional constructor METHOD (`T::new( … )`), not to the type itself, so
+    /// --affected's class-new backstop (testmap.h classNewTestRows) reads a call to this method of a class as building it. Empty =
+    /// the language constructs by calling the class (`new T(` JS/TS/Java/C#, `T(` Python/Kotlin/C++), which needs no column.
+    std::string_view constructorMethod = {};
 };
 
 /// The rows, one per Lang in enum order. A language says only the facts it has.
@@ -84,7 +90,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Python },
     { .lang = Lang::TypeScript, .overloadSignatures = true },
     { .lang = Lang::Go },
-    { .lang = Lang::Rust },
+    { .lang = Lang::Rust, .constructorMethod = "new" },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC },
     { .lang = Lang::Markdown },

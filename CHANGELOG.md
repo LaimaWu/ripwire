@@ -15,6 +15,21 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — `--affected` lists tests that construct a reached class (class-new backstop)
+
+A test that builds a class and then drives it through an interface-typed helper (`runTest( () => new TrieRouter() )`, then
+`router.add( … )` inside the helper) is a test a reviewer checks, but the call walk cannot prove the dispatch, so `--affected`
+never listed it. `--affected` now adds a separate, hedged group after the proven rows: `<g via="class-new" total= shown= next=>`
+with one `<new p= l= class=/>` row per test file that constructs a class owning a reached method (or the changed class),
+naming the construction line and the class. The group is never counted in `tests=`/`reached=`, an already-listed test is
+never repeated, a class built only in non-test code adds nothing, and more than 8 rows cap with `next=--callers=…`. The
+group and its legend clause are absent when empty, so every other answer is byte-identical. Construction is read from call
+edges the parser already records: `new T(` (JS/TS, Java, C#), `T(` (Python, Kotlin, C++) and Rust `T::new` (a new
+`constructorMethod` column in the per-language facts table). Go `T{…}` literals, C++ `T x;` declarations and Ruby `T.new`
+are not recorded as constructions, so they add no row. On the in-sample hono checkout, `--affected=src/utils/url.ts` now
+names `src/router/trie-router/router.test.ts` (via `new TrieRouter()` at line 6); `tests=` stays 68. Gate:
+`test/affectedcheck.sh` section (9).
+
 ### Changed — Go methods carry their receiver type as scope (#403, slice 9a)
 
 Go methods now carry their receiver type as scope (`sc=`), with `*` and type arguments stripped (`*Stack[T]` → `Stack`),

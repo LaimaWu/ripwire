@@ -122,6 +122,17 @@ inline bool isStructOrNamedType( SymKind k ) noexcept
     return k == SymKind::Struct || k >= SymKind::NamedType;
 }
 
+// The last segment of a scope (Symbol::scope) as written ("outer::Scanner" or "pkg.Outer" -> the innermost owner): the spelling the selector
+// resolves as Owner.name (graph.h scopeSuffixMatches).
+inline std::string_view scopeLastSegment( std::string_view sc ) noexcept
+{
+    const std::size_t colons = sc.rfind( "::" );
+    const std::size_t dot    = sc.rfind( '.' );
+    const std::size_t cut    = colons == std::string_view::npos ? ( dot == std::string_view::npos ? 0 : dot + 1 )
+                                                                : ( dot == std::string_view::npos || dot < colons ? colons + 2 : dot + 1 );
+    return sc.substr( cut );
+}
+
 // #324: a ModuleScope owner is SYNTHETIC (comment above the enum) — a CALLER minted after the tags.scm pass,
 // never something a test (or anything else) can name or invoke, so it can never be discharged as a test
 // obligation. It is legitimate wherever a CALLER is shown (--callers/--impact/--for already carry the

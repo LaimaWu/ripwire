@@ -565,6 +565,72 @@ printf '%s' "$EXN" | grep -q 'bodyless=' \
     && no "(8d) an ordinary body's answer carries bodyless= (absent-at-zero broken)" \
     || ok "(8d) control: an ordinary --expand carries no bodyless= and no clause"
 
+# ── 9) IX-5 (hono-20) — the CLASS-NEW backstop: tests that construct a class owning a reached method ──────────
+# hono's trie-router/router.test.ts only does `new TrieRouter()` and drives it through an interface-typed helper, so the
+# caller walk from src/utils/url.ts never reached it. The backstop lists such tests in a SEPARATE hedged group
+# <g via="class-new"> (never in tests=), one <new p= l= class=> row each. Near misses pinned: an unrelated class stays out,
+# an already-proven test stays a proven row only, a class built only in non-test code adds nothing, a wide class caps
+# with total=/shown=/next=. Construction per language is data: `new T(` (TS), `T(` (Python), `T::new` (Rust row).
+echo "=== (9) IX-5: the class-new backstop ==="
+CN="$TMP/classnew"; mkdir -p "$CN/src" "$CN/test" "$CN/py/pkg" "$CN/py/tests" "$CN/rs/src" "$CN/rs/tests"
+printf 'export function leaf(p: string): string { return p }\n'                                > "$CN/src/url.ts"
+printf 'export interface IRouter { add(p: string): void }\n'                                   > "$CN/src/iface.ts"
+printf "import { leaf } from './url'\nimport type { IRouter } from './iface'\nexport class TrieRouter implements IRouter {\n  add(p: string) { leaf(p) }\n}\nexport class LinearRouter implements IRouter {\n  add(p: string) { return p }\n}\nexport class Unrelated {\n  ping() { return 1 }\n}\nexport class Other {\n  go(p: string) { leaf(p) }\n}\nexport class Wide {\n  run(p: string) { leaf(p) }\n}\n" > "$CN/src/router.ts"
+printf "import { Other } from './router'\nexport function makeOther() { return new Other() }\n"   > "$CN/src/app.ts"
+printf "import type { IRouter } from '../src/iface'\nexport function runTest(mk: () => IRouter) { const r = mk(); r.add('/x') }\n" > "$CN/test/runner.ts"
+printf "import { TrieRouter } from '../src/router'\nimport { runTest } from './runner'\ndescribe('trie', () => {\n  runTest(() => new TrieRouter())\n})\n" > "$CN/test/router.test.ts"
+printf "import { Unrelated } from '../src/router'\ndescribe('u', () => { new Unrelated().ping() })\n"  > "$CN/test/unrelated.test.ts"
+printf "import { leaf } from '../src/url'\nimport { TrieRouter } from '../src/router'\ndescribe('d', () => { leaf('a'); new TrieRouter() })\n" > "$CN/test/direct.test.ts"
+printf "import { makeOther } from '../src/app'\ndescribe('o', () => { makeOther() })\n"              > "$CN/test/other.test.ts"
+for i in 01 02 03 04 05 06 07 08 09 10; do
+    printf "import { Wide } from '../src/router'\ndescribe('w%s', () => { const w = new Wide(); void w })\n" "$i" > "$CN/test/wide$i.test.ts"
+done
+printf 'def leaf(p):\n    return p\n'                                                          > "$CN/py/pkg/util.py"
+printf 'from pkg.util import leaf\n\nclass Svc:\n    def run(self, p):\n        return leaf(p)\n' > "$CN/py/pkg/svc.py"
+printf 'from pkg.svc import Svc\n\ndef test_svc():\n    obj = Svc()\n    getattr(obj, "r" + "un")(1)\n' > "$CN/py/tests/test_svc.py"
+printf 'pub fn leaf(p: u32) -> u32 { p }\n'                                                    > "$CN/rs/src/util.rs"
+printf 'mod util;\nuse crate::util::leaf;\npub struct Eng { v: u32 }\nimpl Eng {\n    pub fn new() -> Eng { Eng { v: 0 } }\n    pub fn run(&self) -> u32 { leaf(self.v) }\n}\n' > "$CN/rs/src/lib.rs"
+printf 'use crate::Eng;\n#[test]\nfn builds() {\n    let _e = Eng::new();\n}\n'                 > "$CN/rs/tests/eng_test.rs"
+cn(){ ( cd "$CN" || exit 1; "$BIN" "$CN" --affected="$1" --no-cache 2>/dev/null ); }
+CNT="$( cn src/url.ts )"
+CNG="$( printf '%s' "$CNT" | grep -oE '<g via="class-new"[^>]*>.*</g>' )"
+printf '%s' "$CNG" | grep -q '<new p="test/router.test.ts" l="4" class="TrieRouter"/>' \
+    && ok '(9a) TS: router.test.ts constructs TrieRouter (owns the reached add) and rides <g via="class-new"> with l= and class=' \
+    || no "(9a) TS: no class-new row for test/router.test.ts: $( printf '%s' "$CNT" | sed 's/^.*-->//' )"
+printf '%s' "$CNT" | grep -q 'tests="1"' && printf '%s' "$CNT" | grep -q '<test p="test/direct.test.ts" hops="1"' \
+    && ok '(9b) the group is never counted: tests="1" (the one proven row), the backstop rows outside it' \
+    || no "(9b) tests= moved or the proven row is gone: $( printf '%s' "$CNT" | grep -oE '<affected [^>]*>' )"
+printf '%s' "$CNT" | grep -q 'unrelated.test.ts' \
+    && no '(9c) a test constructing an UNRELATED class (owns no reached method) was listed' \
+    || ok '(9c) near miss: unrelated.test.ts (constructs Unrelated, which owns no reached method) stays out'
+printf '%s' "$CNG" | grep -q 'direct.test.ts' \
+    && no '(9d) an already-proven test was duplicated into the class-new group' \
+    || ok '(9d) near miss: direct.test.ts (proven, and constructs TrieRouter) stays a proven row only'
+printf '%s' "$CNG" | grep -qE 'class="Other"|other.test.ts' \
+    && no '(9e) a class constructed only in non-test code (Other, via src/app.ts) added a row' \
+    || ok '(9e) near miss: Other, built only in src/app.ts, adds nothing (one hop from the class, test callers only)'
+printf '%s' "$CNG" | grep -q '<g via="class-new" total="11" shown="8" next="--callers=src/router.ts:Wide">' \
+    && [ "$( printf '%s' "$CNG" | grep -o '<new ' | wc -l | tr -d ' ' )" = 8 ] \
+    && ok '(9f) a wide class caps: total="11" shown="8" (8 <new> rows) with next="--callers=src/router.ts:Wide"' \
+    || no "(9f) cap/count/next= wrong: $( printf '%s' "$CNG" | grep -oE '<g via="class-new"[^>]*>' )"
+printf '%s' "$CNT" | grep -q 'via=class-new total= shown= next=>: tests not listed above that construct a class owning a reached method' \
+    && ok '(9g) the legend defines the group exactly when it renders' \
+    || no '(9g) the class-new group renders with no legend clause'
+CNP="$( cn py/pkg/util.py )"
+printf '%s' "$CNP" | grep -q 'tests="0"' && printf '%s' "$CNP" | grep -q '<g via="class-new" total="1" shown="1"><new p="py/tests/test_svc.py" l="4" class="Svc"/></g>' \
+    && ok '(9h) Python: test_svc.py builds Svc() (owns the reached run), tests="0" unchanged' \
+    || no "(9h) Python: $( printf '%s' "$CNP" | sed 's/^.*-->//' )"
+CNR="$( cn rs/src/util.rs )"
+printf '%s' "$CNR" | grep -q '<g via="class-new" total="1" shown="1"><new p="rs/tests/eng_test.rs" l="4" class="Eng"/></g>' \
+    && ok '(9i) Rust: eng_test.rs calls Eng::new (the langfacts constructorMethod row) — a class-new row for Eng' \
+    || no "(9i) Rust: $( printf '%s' "$CNR" | sed 's/^.*-->//' )"
+( cd "$CN" || exit 1; "$BIN" "$CN" --affected=src/url.ts --legend=full --no-cache 2>/dev/null ) | grep -q '<g via="class-new" total= shown= next=>: tests not listed above that construct a class owning a reached method' \
+    && ok '(9k) the full legend carries the same clause (testmap.h kClassNewLegend) when the group renders' \
+    || no '(9k) --legend=full renders the class-new group with no clause'
+printf '%s' "$A" | grep -q 'class-new' \
+    && no '(9j) an answer with no class-new row carries the group or its clause (absent-when-empty broken)' \
+    || ok '(9j) control: --affected=src/core.cpp (no class reached) has no group and no clause'
+
 # ── 6) xml well-formed ───────────────────────────────────────────────────────────────────────────────
 if command -v xmllint >/dev/null 2>&1; then
     if printf '%s' "$A" | xmllint --noout - 2>/dev/null; then ok "--affected xml well-formed"; else no "--affected xml malformed"; fi

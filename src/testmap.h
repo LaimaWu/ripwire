@@ -31,11 +31,13 @@
 #include "pythonrunner.h" // main-guard / pytest evidence; a .py extension alone is not a runner
 #include "jsrunner.h"     // #323: nearest package.json evidence (vitest/jest/node --test); a .ts/.js extension alone is not a runner
 #include "serialize.h"    // lane/t10-mcp-coverage: escapeXml — writeAffectedReport's ONE escaper (CLI ≡ MCP)
+#include "langfacts.h"    // constructorMethod — the class-new backstop's per-language construction row
 #include "graphlegend.h"  // lane/t10-mcp-coverage: unprovenDefsVerbLegend/unprovenDefsAttrXml/graphCountFloorBrief/
                           // rootRelPathsLegend — writeAffectedReport's shared legend vocabulary
 
 #include <algorithm>
 #include <cstdio>
+#include <format>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -441,12 +443,13 @@ struct AffectedAnswer
     std::vector<TestRow>       rows;            // the answer rows, EVIDENCE order (rankTestRows)
     std::vector<std::uint32_t> testFiles;       // the same rows as file ids, same order — the pre-F1 consumers' view
     std::vector<char>          isSeedTestFile;  // per file: matched by the argument AND a test path
+    std::vector<std::uint32_t> depth;           // per symbol: the caller-walk hop at which `reach` found it (read for reach members only)
 };
 
 inline AffectedAnswer affectedAnswer( const IngestResult& ing, const Graph& g, const AffectedSeeds& sel )
 {
     AffectedAnswer             out;
-    std::vector<std::uint32_t> depth;
+    std::vector<std::uint32_t>& depth = out.depth;
     out.isSeedTestFile.assign( ing.files.size(), 0 );
     out.reach = transitiveCallersDepth( g, sel.walkSeeds, &depth );
     for( std::uint32_t fileId : sel.seedTestFiles )
@@ -461,6 +464,255 @@ inline AffectedAnswer affectedAnswer( const IngestResult& ing, const Graph& g, c
         out.testFiles.push_back( r.fileId );
     }
     return out;
+}
+
+// ── IX-5 (ideas-r4 L6-2 / D11) — the CLASS-NEW BACKSTOP: tests that BUILD a class the change reaches into ─────────────
+// hono-20: `--affected=src/utils/url.ts` reached TrieRouter.add, but trie-router/router.test.ts only does
+// `newRouter: () => new TrieRouter()` and drives the router through an interface-typed helper (`router.add( … )`),
+// whose dispatch no resolver can prove, so the caller walk never reached the test. A programmer asking "which tests
+// does this file affect" checks that test anyway: it constructs the class whose method the change sits under.
+// The backstop lists exactly those tests, APART from the proven rows: a test-file caller of a class that OWNS a symbol
+// the walk reached (or that is itself a seed — the changed class), not already a row. It is a hedge, never an edge:
+// the construction is proven (a resolved call edge to the class), the dispatch from the test to the reached method is
+// not — so the rows are never counted in tests=/reached= and never merged into the proven list.
+// Construction, per language, is DATA the parser already records: a call edge whose target is a class or struct
+// (`new T(` JS/TS/Java/C#, `T(` Python/Kotlin/C++ functional form), plus a call to the
+// language's conventional constructor METHOD of the class (langfacts.h constructorMethod: Rust `T::new`). Not captured, so never a row (a floor):
+// Go composite literals `T{…}` and C++ declarations `T x;` (no call reference), Ruby `T.new` (no constructorMethod row).
+// Deliberately NOT the peers' flat dependents dump: one hop from the class, test callers only, capped.
+inline constexpr std::uint32_t kClassNewRowCap = 8;   // rows shown; the group's total= counts them all, next= lists the rest
+
+struct ClassNewRow
+{
+    std::uint32_t testFile = 0;
+    std::uint32_t line     = 0;         // the construction's line in testFile; 0 = no call reference named it (l= absent)
+    NodeId        cls      = kNoNode;   // the class constructed
+    std::uint32_t rank     = 0;         // the class's nearest reached member, in caller-walk hops (0 = a seed)
+    NodeId        target   = kNoNode;   // what the construction calls: cls itself, or its constructorMethod (Rust `new`)
+};
+
+inline bool isConstructibleClassKind( SymKind k ) noexcept
+{
+    return k == SymKind::Class || k == SymKind::Struct;
+}
+
+// The class owning `s`: the innermost class/struct in s's file whose span contains it; with none, the ONE class of s's
+// language named by s's scope (a C++ out-of-line member, a Rust impl method), kNoNode when the name is not unique.
+// `classesIn` holds the file's classes; `byName` is every class, (name, id) sorted — consulted only on that fallback.
+inline NodeId classOwnerOf( const IngestResult& ing, NodeId s, std::span<const NodeId> classesIn,
+                            std::span<const std::pair<std::string_view, NodeId>> byName )
+{
+    const Symbol& sym       = ing.symbols[s];
+    NodeId        innermost = kNoNode;
+    for( const NodeId c : classesIn )
+    {
+        const Symbol& t = ing.symbols[c];
+        if( c != s && t.sigStartByte <= sym.sigStartByte && sym.endByte <= t.endByte
+            && ( innermost == kNoNode || t.sigStartByte > ing.symbols[innermost].sigStartByte ) )
+        {
+            innermost = c;
+        }
+    }
+    if( innermost != kNoNode || sym.scope.empty() )
+    {
+        return innermost;
+    }
+    const std::string_view owner = scopeLastSegment( sym.scope );
+    const auto [ lo, hi ] = std::equal_range( byName.begin(), byName.end(), std::pair<std::string_view, NodeId>{ owner, 0 },
+                                              []( const auto& a, const auto& b ) { return a.first < b.first; } );
+    NodeId found = kNoNode;
+    for( auto it = lo; it != hi; ++it )
+    {
+        if( ing.symbols[ it->second ].lang == sym.lang )
+        {
+            if( found != kNoNode )
+            {
+                return kNoNode;   // two same-named classes in the language: the scope proves neither
+            }
+            found = it->second;
+        }
+    }
+    return found;
+}
+
+// The backstop rows, nearest class first (rank), then test path; ONE row per test file (its earliest construction of
+// the nearest class). Cost: nothing past one O(symbols) pass unless the walk reached a member of some class.
+inline std::vector<ClassNewRow> classNewTestRows( const IngestResult& ing, const Graph& g, const AffectedSeeds& sel, const AffectedAnswer& ans )
+{
+    const NodeId        N = NodeId( ing.symbols.size() );
+    const std::uint32_t F = std::uint32_t( ing.files.size() );
+    std::vector<char>   isTestFile( F, 0 );
+    for( std::uint32_t f = 0; f < F; ++f )
+    {
+        isTestFile[f] = isTestPath( rootRelPath( ing, f ) ) ? 1 : 0;
+    }
+    // the reached set with its hop (a seed is hop 0), non-test symbols only: a reached TEST symbol is a proven row already
+    constexpr std::uint32_t    kUnreached = UINT32_MAX;
+    std::vector<std::uint32_t> hop( N, kUnreached );
+    std::vector<char>          fileMarked( F, 0 );
+    const auto mark = [ & ]( NodeId n, std::uint32_t h )
+    {
+        if( n < N && !isTestFile[ ing.symbols[n].fileId ] )
+        {
+            hop[n]                          = std::min( hop[n], h );
+            fileMarked[ ing.symbols[n].fileId ] = 1;
+        }
+    };
+    for( const NodeId s : sel.walkSeeds )
+    {
+        mark( s, 0 );
+    }
+    for( const NodeId n : ans.reach )
+    {
+        mark( n, n < ans.depth.size() ? ans.depth[n] : kUnreached );
+    }
+    std::vector<std::vector<NodeId>>                 classesIn( F );
+    std::vector<std::pair<std::string_view, NodeId>> byName;
+    for( NodeId c = 0; c < N; ++c )
+    {
+        const Symbol& t = ing.symbols[c];
+        if( isConstructibleClassKind( t.kind ) )
+        {
+            byName.emplace_back( t.name, c );
+            if( fileMarked[ t.fileId ] )
+            {
+                classesIn[ t.fileId ].push_back( c );
+            }
+        }
+    }
+    std::sort( byName.begin(), byName.end() );
+    // the owner classes, each at the hop of its nearest reached member (the changed class itself at its own hop)
+    std::vector<std::uint32_t> classRank( N, kUnreached );
+    bool                       anyOwner = false;
+    for( NodeId s = 0; s < N; ++s )
+    {
+        if( hop[s] == kUnreached )
+        {
+            continue;
+        }
+        const NodeId owner = isConstructibleClassKind( ing.symbols[s].kind ) ? s : classOwnerOf( ing, s, classesIn[ ing.symbols[s].fileId ], byName );
+        if( owner != kNoNode )
+        {
+            classRank[owner] = std::min( classRank[owner], hop[s] );
+            anyOwner         = true;
+        }
+    }
+    if( !anyOwner )
+    {
+        return {};
+    }
+    // the construction targets: each owner class, plus its language's constructor METHOD (langfacts.h constructorMethod)
+    struct Target { NodeId node; NodeId cls; };
+    std::vector<Target> targets;
+    for( NodeId c = 0; c < N; ++c )
+    {
+        const Symbol&          t    = ing.symbols[c];
+        const std::string_view ctor = langFacts( t.lang ).constructorMethod;
+        if( classRank[c] != kUnreached )
+        {
+            targets.push_back( { c, c } );
+        }
+        else if( !ctor.empty() && t.name == ctor && !isTestFile[ t.fileId ] )
+        {
+            std::vector<NodeId> fileClasses;   // the owner lookup reads the file's classes, gathered lazily for this rare row
+            if( !fileMarked[ t.fileId ] )
+            {
+                for( const auto& [ name, id ] : byName )
+                {
+                    if( ing.symbols[id].fileId == t.fileId )
+                    {
+                        fileClasses.push_back( id );
+                    }
+                }
+            }
+            const NodeId owner = classOwnerOf( ing, c, fileMarked[ t.fileId ] ? std::span<const NodeId>( classesIn[ t.fileId ] ) : std::span<const NodeId>( fileClasses ), byName );
+            if( owner != kNoNode && classRank[owner] != kUnreached )
+            {
+                targets.push_back( { c, owner } );
+            }
+        }
+    }
+    std::vector<char> proven( F, 0 );
+    for( const TestRow& r : ans.rows )
+    {
+        proven[ r.fileId ] = 1;
+    }
+    // (caller, class, target name): a test-file caller of a construction target that is no proven row
+    struct Site { NodeId caller; NodeId cls; NodeId target; };
+    std::vector<Site> sites;
+    const auto*       ro = g.inEdges.rowOffsets();
+    const auto*       ci = g.inEdges.colIndices();
+    for( const Target& t : targets )
+    {
+        if( t.node >= g.inEdges.rows() )
+        {
+            continue;   // a graph built over fewer symbols than the ingest (none today) has no callers to offer
+        }
+        for( std::uint32_t k = ro[ t.node ]; k < ro[ t.node + 1 ]; ++k )
+        {
+            const NodeId u = ci[k];
+            if( u < N && isTestFile[ ing.symbols[u].fileId ] && !proven[ ing.symbols[u].fileId ] )
+            {
+                sites.push_back( { u, t.cls, t.node } );
+            }
+        }
+    }
+    if( sites.empty() )
+    {
+        return {};
+    }
+    std::sort( sites.begin(), sites.end(), []( const Site& a, const Site& b ) { return std::tie( a.caller, a.cls ) < std::tie( b.caller, b.cls ); } );
+    // per test file, the nearest class and its earliest construction line (a call reference from that caller naming it)
+    std::vector<ClassNewRow> best( F, ClassNewRow{ 0, 0, kNoNode, kUnreached, kNoNode } );
+    const auto better = [ & ]( const ClassNewRow& a, const ClassNewRow& b )
+    {
+        return std::tie( a.rank, a.line ) < std::tie( b.rank, b.line );
+    };
+    for( const Site& s : sites )
+    {
+        const std::uint32_t f = ing.symbols[ s.caller ].fileId;
+        const ClassNewRow   row{ f, 0, s.cls, classRank[ s.cls ], s.target };
+        if( best[f].cls == kNoNode || row.rank < best[f].rank )
+        {
+            best[f] = row;
+        }
+    }
+    for( const Reference& r : ing.references )
+    {
+        if( r.role != RefRole::Call || r.isCompose || r.isDocLink || r.fileId >= F || best[ r.fileId ].cls == kNoNode )
+        {
+            continue;
+        }
+        const auto [ lo, hi ] = std::equal_range( sites.begin(), sites.end(), Site{ r.fromSymbol, 0, kNoNode },
+                                                  []( const Site& a, const Site& b ) { return a.caller < b.caller; } );
+        for( auto it = lo; it != hi; ++it )
+        {
+            const ClassNewRow cand{ r.fileId, r.line, it->cls, classRank[ it->cls ], it->target };
+            ClassNewRow&      cur = best[ r.fileId ];
+            if( r.calleeName == ing.symbols[ it->target ].name && cand.rank <= cur.rank && ( cur.line == 0 || better( cand, cur ) ) )
+            {
+                cur = cand;
+            }
+        }
+    }
+    std::vector<ClassNewRow> rows;
+    for( const ClassNewRow& r : best )
+    {
+        if( r.cls != kNoNode )
+        {
+            rows.push_back( r );
+        }
+    }
+    std::sort( rows.begin(), rows.end(), [ & ]( const ClassNewRow& a, const ClassNewRow& b )
+               {
+                   if( a.rank != b.rank ) { return a.rank < b.rank; }
+                   return ing.files[ a.testFile ] < ing.files[ b.testFile ];
+               } );
+    ENSURES( std::ranges::all_of( rows, [ & ]( const ClassNewRow& r )
+                                  { return isTestFile[ r.testFile ] && !proven[ r.testFile ] && isConstructibleClassKind( ing.symbols[ r.cls ].kind )
+                                           && r.target < N && r.rank != kUnreached; } ),
+             "classNewTestRows: every row is an unproven TEST file that constructs a class owning a reached symbol — never a proven row" );
+    return rows;
 }
 
 // ── §P11.2b — the INVERSE: what does this test exercise? ─────────────────────────────────────────────
@@ -1369,6 +1621,39 @@ inline std::size_t scriptGatesUnmodelledCount( const IngestResult& ing )
 // and exits 1; the MCP arm returns a JSON-RPC error. Only the SUCCESS document has to be byte-identical,
 // never the two callers' very different failure UX (the same split every other CLI/MCP verb pair in this
 // tree already draws — see impactText/usesText's own refusal wording beside their CLI twins).
+// IX-5: the class-new group's legend clause and its rendering — spliced only when the group renders (absent when empty, so an
+// answer without one is byte-identical). The rows are tests NOT in the proven list, so the group is never counted in tests=.
+inline constexpr std::string_view kClassNewLegend =
+    "<g via=\"class-new\" total= shown= next=>: tests not listed above that construct a class owning a reached method (or the "
+    "changed class); <new p= l= class=>: the test file, the construction line, the class. The dispatch to the method is not "
+    "proven, so never in tests=/reached=; nearest class first. ";
+template<class EscapeFn>
+inline std::string classNewGroupXml( const IngestResult& ing, std::span<const ClassNewRow> rows, std::string_view rootPrefix, EscapeFn ex )
+{
+    if( rows.empty() )
+    {
+        return {};
+    }
+    const std::size_t shown = std::min<std::size_t>( rows.size(), kClassNewRowCap );
+    std::string       next;   // the rows past the cap: --callers of what the first cut row calls lists every construction of its class
+    if( shown < rows.size() )
+    {
+        const Symbol& c = ing.symbols[ rows[shown].cls ];
+        const std::string sel = rows[shown].target == rows[shown].cls   // the class itself (file:Class), or its constructor method (Class.new)
+                                  ? std::format( "{}:{}", sarif::rootRelativeUri( ing.files[ c.fileId ], rootPrefix ), c.name )
+                                  : std::format( "{}.{}", c.name, ing.symbols[ rows[shown].target ].name );
+        next = nextAttrXml( nextFlag( "--callers=", sel ) );   // checklist 34: the one continuation spelling and escaper
+    }
+    std::string out = std::format( "<g via=\"class-new\" total=\"{}\" shown=\"{}\"{}>", rows.size(), shown, next );
+    for( std::size_t i = 0; i < shown; ++i )
+    {
+        const ClassNewRow& r = rows[i];
+        out += std::format( "<new p=\"{}\"{} class=\"{}\"/>", ex( sarif::rootRelativeUri( ing.files[ r.testFile ], rootPrefix ) ),
+                            r.line ? std::format( " l=\"{}\"", r.line ) : std::string(), ex( ing.symbols[ r.cls ].name ) );
+    }
+    return out + "</g>";
+}
+
 struct AffectedReportResult
 {
     bool        ok           = false;   // true ⇒ `out` now holds a complete <affected>…</affected> document
@@ -1432,6 +1717,8 @@ inline AffectedReportResult writeAffectedReport( std::FILE* out, const IngestRes
     }
     const JoinedTestRows afRowsXml = testRowsList( runners, afRows, TestRowShape{ RowDialect::Xml, "test" }, ex );
     const std::string    afRunFirst = runFirstField( answer.rows, answer.rows.size(), /*json=*/false );   // hono-20: the run-first head
+    // IX-5 (hono-20): the class-new backstop, rendered apart from the proven rows above and counted in none of the root's counts
+    const std::string    afClassNew = classNewGroupXml( ing, classNewTestRows( ing, g, sel, answer ), afRootPrefix, ex );
     // seeded_by= is the honesty half of the file-first rule: the two readings answer DIFFERENT questions
     // over the same argument string and return different counts, so which one fired is a fact about the
     // measurement, not a detail. seeds= is the resolved seed-symbol count (1 for a lone function, ~84
@@ -1447,11 +1734,13 @@ inline AffectedReportResult writeAffectedReport( std::FILE* out, const IngestRes
                  // TRAIN 10: read off the index rather than re-derived here (testmap.h's own rule for this fact),
                  // so the sentence is decided by the very object that spelled the commands it describes.
                  "{}"     // hono-20/textual-20: the run-first clause, exactly when the root carries run_first=
+                 "{}"     // IX-5: the class-new group's clause, exactly when the group renders
                  "{}{}-->{}", kTestRowEvidenceLegend, runHintClauseIfRows( afRowsXml.files, runners.rootRelative() ),
                  // H1: the decl→def residue resolveAffectedSeeds summed over the symbol items. A file:name item whose
                  // definitions were dropped seeded the walk with declarations alone, which reached the reader as a bare
                  // tests="0" — on the verb whose answer is the list of tests to run. Exactly when the root carries it.
                  runFirstLegend( !afRunFirst.empty() ),
+                 afClassNew.empty() ? std::string_view() : kClassNewLegend,
                  unprovenDefsVerbLegend( UnprovenDefsVerb::Affected, sel.unprovenDefs > 0 ).c_str(),
                  graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rootRelPathsLegend( singleRoot ) );
     rw::emitTo( out, "<affected changed=\"{}\" seeded_by=\"{}\" seeds=\"{}\" seed_test_files=\"{}\" tests=\"{}\" reached=\"{}\"{} script_gates_unmodelled=\"{}\""
@@ -1465,6 +1754,7 @@ inline AffectedReportResult writeAffectedReport( std::FILE* out, const IngestRes
                  afRootAttr.c_str(),                      // M12: root= says what every <test p=> below is relative to
                  graphCountFloorAttrXml( g ).c_str()  );   // H5/M15: gauge + marker; tests=/reached= are a transitive-caller walk over the name-based CSR
     rw::emitRaw( out, afRowsXml.text.c_str() );   // E1: the rows rendered above — runner-less rows with equal evidence as ONE <g> row, the multiset unchanged
+    rw::emitRaw( out, afClassNew.c_str() );       // IX-5: the hedged class-new group, after every proven row (empty when none)
     rw::emitRaw( out, "</affected>" );
     return { true, false, {}, false };
 }
