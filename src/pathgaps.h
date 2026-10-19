@@ -801,8 +801,8 @@ inline constexpr std::string_view kNearSinkLegend =
     "not spelled like a builtin type's method, and the row's class, or its file for a free function, owns something the forward search reached), "
     "closure = it is a named function written inside in='s body (site= its own definition: in= runs it or hands it on), "
     "external = none of those and no proven caller: no indexed way in was found (an entry point, an out-of-tree or framework caller, "
-    "a hand-off the index does not record, or dead); withheld=name:N = N by-name calls reach this namesake but fail the two name "
-    "rules: not counted as a way in, and never read as external; in= site= name one such site (its enclosing definition, file:line), met=1 when the forward search reached in= (it met that "
+    "a hand-off the index does not record, or dead); withheld=name:N = N callers whose by-name calls reach this namesake "
+    "fail a name rule (either one): not counted as a way in, and never read as external; in= site= name one such site (its enclosing definition, file:line), met=1 when the forward search reached in= (it met that "
     "hand-off and could not follow it). A row is where the backward search could not see, never a hop and not proof a path exists; "
     "rows= counts them, rows_capped=1 = more than shown; next= on the block lists the first row's callers and declined sites. ";
 inline std::string_view nearSinkLegend( bool on ) noexcept
