@@ -52,8 +52,8 @@ class IfaceDispatch
 {
 public:
     IfaceDispatch( const IngestResult& ing, const ReceiverEvidence& recvEv, const std::vector<std::vector<NodeId>>& implementors,
-                   const std::vector<std::vector<std::uint8_t>>& bound )
-        : ing_( ing ), recvEv_( recvEv ), implementors_( implementors ), bound_( bound )
+                   const std::vector<std::vector<std::uint8_t>>& bound, const std::vector<char>& open )
+        : ing_( ing ), recvEv_( recvEv ), implementors_( implementors ), bound_( bound ), open_( open )
     {
         EXPECTS( bound.empty() || bound.size() == implementors.size(), "buildGraph sizes the bound map with the implementors map" );
         for( const Symbol& s : ing.symbols )   // the bodyless members: an interface's or abstract class's contract
@@ -75,16 +75,21 @@ public:
             return out;
         }
         const std::vector<Row>& rows = closureOf( type );
-        if( rows.empty() )
+        if( rows.empty() || isOpen( type ) || std::ranges::any_of( rows, [ & ]( const Row& row ) { return isOpen( row.id ); } ) )
         {
-            return out;   // no implementor in the tree: the name tiers answer, as before
+            return out;   // no implementor in the tree, or one the map cannot list: the name tiers answer, as before
         }
         bool provenAll = true;
         collect( type, callee, out.cand );   // T's own bodied default runs for every implementor without an override
+        const bool hasDefault = !out.cand.empty();
         for( const Row& row : rows )
         {
-            provenAll = provenAll && row.proven;
+            const std::size_t before = out.cand.size();
             collect( row.id, callee, out.cand );
+            // a concrete implementor owning no body of the callee, with no default above it, holds one the index cannot see
+            // (a macro-made override, a mock): the list is not the whole of what runs, so one candidate proves nothing
+            const bool unseen = !hasDefault && out.cand.size() == before && ( row.id >= implementors_.size() || implementors_[ row.id ].empty() );
+            provenAll = provenAll && row.proven && !unseen;
         }
         std::sort( out.cand.begin(), out.cand.end() );
         out.cand.erase( std::unique( out.cand.begin(), out.cand.end() ), out.cand.end() );
@@ -99,6 +104,11 @@ private:
         NodeId id     = kNoNode;
         bool   proven = false;   // every implements edge from T down to it is proven
     };
+
+    bool isOpen( NodeId t ) const noexcept
+    {
+        return t < open_.size() && open_[ t ] != 0;
+    }
 
     // T dispatches a call of `callee`: an interface / trait whose contract (its members, or a base's) names the callee — or
     // any trait of a language whose trait signatures are not indexed — or a class whose contract declares it without a body
@@ -180,6 +190,7 @@ private:
     const ReceiverEvidence&                       recvEv_;
     const std::vector<std::vector<NodeId>>&       implementors_;
     const std::vector<std::vector<std::uint8_t>>& bound_;
+    const std::vector<char>&                      open_;       // graph.h implementorsOpen: a clause names an implementor the map cannot list
     HashMap<std::string, char>                    contract_;   // "Owner::name" of every bodyless member
     mutable HashMap<NodeId, std::vector<Row>>     memo_;       // T → its closure
     mutable std::string                           key_;

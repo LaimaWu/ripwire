@@ -158,7 +158,10 @@ def impl_edge( root, sel, n, p ):
     a = ask( root, "callees", sel )
     hit = [ r for r in a.rows if r.get( "n" ) == n ]
     return a, len( hit ) == 1 and hit[ 0 ].get( "p" ) == p and hit[ 0 ].get( "via" ) == "impl" and not a.dc
-for root, sel, n, p, tag in ( ( RS, "solo_dyn", "solo_step", "src/solo/mod.rs:8", "rs" ), ( CPP, "soloCall", "soloRun", "runners.cc:23", "cpp" ),
+a = ask( CPP, "callees", "soloCall" )
+say( a.ok and [ ( r.get( "n" ), r.get( "p" ), r.get( "via" ) ) for r in a.rows ] == [ ( "soloRun", "runners.cc:23", None ) ] and not a.dc, "[C] c_cpp",
+     "C++ one subclass: class identity's own proven edge stays as it was (no via= relabel; the field path never proves one)", a.why() )
+for root, sel, n, p, tag in ( ( RS, "solo_dyn", "solo_step", "src/solo/mod.rs:8", "rs" ),
                               ( JAVA, "single", "singleRun", "app/OnlySingle.java:4", "java" ), ( TS, "lone", "loneCall", "src/fmt/impls.ts:16", "ts" ),
                               ( TS, "areaOf", "area", "src/fmt/impls.ts:22", "ts_abstract" ) ):
     a, good = impl_edge( root, sel, n, p )

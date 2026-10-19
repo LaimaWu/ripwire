@@ -7664,6 +7664,20 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     std::vector<NodeId> baseCand;   // one inheritance reference's base candidates, reused across references
     std::vector<NodeId> baseProven; // … and the one of them the language's lookup proves (provenBasesOf), reused
     std::vector<ImplementorBoundEdge> boundEdges;   // every edge drawn below with how it was bound; merged after the dedup
+    // lane L6: 1 for a base some extends/implements clause names whose implementor the map cannot list (the derived type is no
+    // class the index keeps: Rust `impl T for &X`, a blanket `impl<U: A> T for U`, a generic type) — by the base NAME, every
+    // same-named class-like of the clause's language. The dispatch tier steps aside for such a type: its list would hide one.
+    std::vector<char> implementorsOpen( N, char( 0 ) );
+    const auto markImplementorsOpen = [ & ]( const Reference& ref )
+    {
+        if( const auto bit = byName.find( ref.calleeName ); bit != byName.end() )
+        {
+            for( NodeId b : bit->second )
+            {
+                implementorsOpen[ b ] = langCompatible( ing.symbols[ b ].lang, ref.lang ) ? char( 1 ) : implementorsOpen[ b ];
+            }
+        }
+    };
     const BaseEvidenceTables baseEvidence{ ing, extVeto, jsImports, fileIncludes, includeAdj, fileDir, &recvEv };
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/5: inheritance edges" );
@@ -7688,17 +7702,27 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             const auto dit = byName.find( r.qualifier );
             if( dit == byName.end() )
             {
+                markImplementorsOpen( r );
                 continue;
             }
+            std::size_t named = 0;   // lane L6: two same-named types — the lowest id stands for both, so the map cannot list the other
             for( NodeId cand : dit->second )
             {
                 if( isClassLike( ing.symbols[ cand ].kind ) && langCompatible( ing.symbols[ cand ].lang, r.lang )
                     && sameRoot( cand, r.fileId ) )
-                { derived = cand; break; }              // ids are ascending → lowest-id match (deterministic)
+                {
+                    derived = derived == kNoNode ? cand : derived;   // ids are ascending → lowest-id match (deterministic)
+                    ++named;
+                }
+            }
+            if( named > 1 )
+            {
+                markImplementorsOpen( r );
             }
         }
         if( derived == kNoNode )
         {
+            markImplementorsOpen( r );   // lane L6: an implementor the map cannot list (`impl T for &X`, a blanket `impl<U> T for U`)
             continue;
         }
         if( ing.symbols[ derived ].lang == Lang::Ruby )
@@ -7782,7 +7806,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     g.rubyMainMixins = rubyMainObjectMixins( ing, rubyBases );
     // lane L6: the interface-typed dispatch tier (ifacedispatch.h) over the map just built, and the edges its one-implementor
     // answer committed (outProv=6, rendered via="impl"); the arity rule it shares with the name tiers' B2.2 filter below.
-    const IfaceDispatch          ifaceTier( ing, recvEv, g.implementors, g.implementorBound );
+    const IfaceDispatch          ifaceTier( ing, recvEv, g.implementors, g.implementorBound, implementorsOpen );
     HashMap<std::uint64_t, char> implEdges;
     std::vector<NodeId>          ifaceCand;   // reused: one call's dispatch candidates
     const auto arityCannotTake = [ & ]( const Reference& ref, NodeId c ) noexcept
@@ -8304,6 +8328,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                                                                           fieldNarrow.localNameSet, classIds, chaUp ) )
             {
                 narrowTo( split, r, ifaceCand );
+                proven = false;   // a field's dispatch split: one candidate is no proof here (a mock's macro-made override is unseen)
             }
             else if( const ReceiverEvidence::DispatchReceiver recv = recvEv.dispatchReceiverOf( r );
                      recv.type != kNoNode && !( langFacts( r.lang ).contractSignaturesUnindexed && StdMemberGate::tableIndexOf( r ) != StdMemberGate::kNotStd ) )
@@ -8323,13 +8348,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 std::erase_if( ifaceCand, [ & ]( NodeId c ) { return arityCannotTake( r, c ); } );   // an arity the call cannot pass is no candidate
             }
-            if( ifaceCand.size() == 1 && proven )
+            if( ifaceCand.size() == 1 && proven && !cppSplit )   // C++ one subclass: class identity's own proven edge, as before
             {
                 cand.assign( 1, ifaceCand.front() );
                 narrowed  = true;
                 ifaceImpl = true;
             }
-            else if( !ifaceCand.empty() )
+            else if( ifaceCand.size() > 1 )
             {
                 recordDecline( r, std::span<const NodeId>( ifaceCand.data(), ifaceCand.size() ), DeclinedSiteKind::Iface );
                 if( !bound.empty() )
@@ -8339,7 +8364,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 disposition = CallDisposition::Declined;
                 continue;
             }
-            else if( cppSplit )
+            else if( cppSplit && ifaceCand.empty() )
             {
                 cand.clear();   // the split's every definition is of another language or root: nothing narrowed, as narrowTo answers
                 narrowed = narrower.forgetClaim();

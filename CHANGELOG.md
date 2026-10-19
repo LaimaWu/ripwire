@@ -41,7 +41,12 @@ Not read (floors): a Go interface value — Go interfaces are structural and not
 method-set cover would); a Rust `for` loop variable over a collection of trait objects (`for p in self.preprocessors.values()`);
 a Rust `dyn A + B`, `Option<Box<dyn T>>`, `Rc<dyn T>` / `Arc<dyn T>`, a bound with two non-marker traits; a standard-member
 name (`clone`, `iter`) on a trait object, which stays with the standard-member gate; a Python ABC or Protocol; a C# or Swift interface (their written types resolve to no class yet); a TypeScript
-interface reached through a re-export barrel. A type with no implementor in the tree keeps the answer it had.
+interface reached through a re-export barrel. A type with no implementor in the tree, or with an
+implements clause the index cannot place (`impl T for &X`, a blanket `impl<U> T for U`, two same-named implementing
+types), keeps the answer it had; a single candidate that is not proven does too. A C++ subclass reached through a field
+never makes a one-implementor edge, and one subclass of a local or parameter keeps its proven edge unlabelled. An
+implementor a macro writes (`#[automock]`, `mock!`, gMock's `MOCK_METHOD` with no default above it) is unseen: a
+`via="impl"` edge may miss it.
 
 ### Added — Rust receivers typed by their written type: parameters, `let` bindings and struct fields
 
