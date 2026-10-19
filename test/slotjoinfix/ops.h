@@ -27,3 +27,7 @@ struct outer
     struct inner in;
 };
 typedef struct mode mode_alias;
+struct third
+{
+    int (*exec)( int );   /* stored below, never called through a `struct third` */
+};

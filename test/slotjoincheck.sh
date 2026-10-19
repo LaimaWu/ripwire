@@ -53,10 +53,14 @@ echo "-- callers side: called_by= called_at= via= on the <vr> row"
 o="$( run --callers=cmd_alpha_exec )"
 has   "A1 designated .exec = f joins the dispatcher (same type)" "$o" 'into="cmd_alpha_entry.exec" called_by="fire_command" called_at="queue.c:4" via="slot"'
 hasnt "A2 the same field name on another struct type never joins" "$o" 'fire_other'
+hasnt "A2b nor is it counted as a hidden name-only caller" "$o" 'slot_name_also='
 has   "A3 never a proven call: count stays 0" "$o" 'count="0"'
 has   "A4 the compact legend defines called_at=/via= when they ride" "$o" 'vr called_at= via=slot|slot-name'
 o="$( run --callers=cmd_alpha_exec --legend=full )"
 has   "A5 the full legend clause rides with via=" "$o" 'vr called_by= called_at= via=slot|slot-name'
+o="$( run --callers=third_exec )"
+hasnt "A6 a slot whose type no call names: two known, different types never join (not even by name)" "$o" 'called_by='
+has   "A7 its value row still prints" "$o" 'into="third_entry.exec"'
 o="$( run --callers=other_exec )"
 has   "B1 the other struct's own dispatcher joins it" "$o" 'called_by="fire_other" called_at="queue.c:8" via="slot"'
 hasnt "B2 and the first struct's dispatcher does not" "$o" 'fire_command'
