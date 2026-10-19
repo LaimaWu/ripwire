@@ -35,7 +35,7 @@ ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (202
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
 # 2026-10-19, PR #414 (#409 markdown section links) merged with main 90f6fae6 (train 31): RE-PINNED with UPDATE_GOLDEN=1 (hash
-#   HASHPLACEHOLDER). The only watched text that moved is the kParserVer line and quality.h's mirror: renumbered again at
+#   a667ffc55e…8a05, unchanged from the PR's own earlier pin: main moved its hash with 198, the watched text here is 206 again). The only watched text that moved is the kParserVer line and quality.h's mirror: renumbered again at
 #   merge to 206 (rich file tag 207), above main 198 / 199 (train 31), 196 / 197 and the live branch builds 202 and 204.
 #   kCacheVersion stays 36 and kQSnapCacheScheme stays 22: the PR keeps a markdown link's written path in an existing field,
 #   no record format moved. The train 31 entry below is kept as written; its hash is superseded by this one.
