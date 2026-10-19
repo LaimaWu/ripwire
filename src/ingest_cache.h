@@ -345,7 +345,12 @@ constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strict
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 196;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 202;          // bump on any grammar/.scm/extraction change
+                                                      // 202 = 2026-10-18 (train 32 lane rust-receivers, reservation 202 / rich 203; the train renumbers):
+                                                      //   Rust records a typed RecvType for a parameter / `let x: T` / `let x = T { .. }` / `T::default()`
+                                                      //   written or constructed as a type, and a MemberType for a struct's named field (ingest_binds.h
+                                                      //   captureRustEvidence); a written or declared `Self` and a generic's head name their class.
+                                                      //   kCacheVersion unchanged (no record format changes).
                                                       // 196 = 2026-10-18 (train 30): strictly above every number a live build used — main 184 (rich 185),
                                                       //   lane call-result-typing 180 (rich 181), lane fcall-forward 188 (189), lane go-local-var 190 (191),
                                                       //   lane name-template-dispatch 192 (193), lane h1-annot (train 31) 194 (195); tail-sym and

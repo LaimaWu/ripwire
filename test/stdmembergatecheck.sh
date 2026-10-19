@@ -289,8 +289,10 @@ check "(R) old scope fixture: let mut v = Vec::new(); v.push() — declined" cal
 check "(R) old scope fixture: let mut s = Stack { n: 0 }; s.push() — the struct literal binds Stack::push, never Queue's (rust-receivers)" callees typed_local 'rs/lib.rs:3:push' '' ''
 check "(R) near-miss: Stack::push( s, 1 ) — a qualified call, never gated, keeps its edge" callees ufcs 'rsgate/lib.rs:5:push' '' ''
 check "(R) STATED FLOOR (L6): p.push() on a generic P: Pushable (an in-tree trait) — not typed, still declined" callees generic_bound '' 1 'push:1'
-check "(R) --callers=rsgate/lib.rs:push keeps the qualified caller and counts the six declined calls" callers rsgate/lib.rs:push 'rsgate/lib.rs:28:ufcs' 6 ''
-check "(R) --callers=Book::iter keeps the proven self call and counts the two declined ones" callers Book::iter 'rsgate/lib.rs:17:first' 2 ''
+check "(R) --callers=rsgate/lib.rs:push keeps the qualified caller and the three typed ones (add, stack_param, stack_local) and counts the three declined calls (vec_param, unknown_param, generic_bound)" \
+      callers rsgate/lib.rs:push 'rsgate/lib.rs:11:add rsgate/lib.rs:20:stack_param rsgate/lib.rs:22:stack_local rsgate/lib.rs:28:ufcs' 3 ''
+check "(R) --callers=Book::iter keeps the proven self call and the typed book_iter, and counts the one declined call (vec_iter)" \
+      callers Book::iter 'rsgate/lib.rs:17:first rsgate/lib.rs:25:book_iter' 1 ''
 
 # ── (E) the callers side ──────────────────────────────────────────────────────────────────────────────────────
 echo "=== (E) callers: the typed callers stay, the declined ones are counted ==="

@@ -210,6 +210,16 @@
 #            C++ OFF (owner 2026-10-17, fix round 6: model.h callResultFamilyOf maps C++ / ObjC to None): no C++ call
 #            result is typed yet — every C++ [P] arm and U cell is a FLOOR that must HEDGE (`# [FLOOR] C++ off`; the
 #            matrix prints them N … FLOOR), every C++ [N] stays; the C++ written-type twin (useWritten) stays proven.
+#   (RS) Rust receiver evidence (lane rust-receivers; root rsrecv/, unpacked from rsrecv.txt): a receiver WRITTEN as a type
+#            — a parameter (`&T`, `&mut T`, `Box<T>`, a `crate::` / module path, a user generic, an enum), `let x: T`, a
+#            struct literal, `T::default()`, a closure's typed parameter — and a field path below one or below `self`
+#            (`s.book.m()`, `self.book.m()`, `self.inner.book.m()`, each field by its own written type) proves exactly the
+#            class the spelling resolves to at its site (the (L) resolution rule: item scopes, `use`s incl. a glob of a
+#            module's own `use`, paths); a declared `-> Self` result types its call ((L)). [N]: an untyped `let x =
+#            foo.bar()`, `dyn` / `impl` / generic-bound / bare-trait receivers (dispatch: lane L6), Option / Rc (a parameter,
+#            a `let`, a field), a shadowing `let` / `for` / closure parameter, an outside `use std::fs::File` beside an
+#            in-tree File, a tuple pattern, `String::default()`, a u32 / generic-`T` / tuple-struct field, a missing field,
+#            a same-named owner whose field differs, a glob of a module that only globs (not followed: a floor).
 #   (C) conservation: each root's census dispositions still sum to calls= with unaccounted=0 (no silent drop).
 #   (K) the predicates can fail: a planted unhedged false row fails notproven, a planted hedged row passes it and
 #            fails proven, marked rejects an unhedged row, a rootless or not-found answer is NOROOT, the MCP reader
@@ -1560,6 +1570,16 @@ rs_none "src/other.rs::Shelf::near_same_named_owner"                            
 # the callers side reads the same edges: --callers of model.rs's Book::spin lists [P] callers unhedged and never the [N] ones
 proven      rsrecv callers "$RSM::Book::spin" "fn typed_param $RSA" "fn let_struct $RSA" "method self_field $RSM"
 notproven   rsrecv callers "$RSM::Book::spin" "near_dyn $RSA" "near_rc $RSA" "near_shadow $RSA" "near_same_named_owner src/other.rs"
+# a glob `use super::*` brings in what the parent module's own `use` names (Rust: a glob imports the module's imports
+# too); a glob of a module that only globs in turn is not followed (stated floor: names nothing, proves nothing); a
+# `T::default()` whose spelling names no class at the site is still typed by its callee's declared `-> Self` (call result)
+exactproven rsrecv callees "src/nest/inner.rs:glob_param" "method spin $RSM"                                     # [P]
+proven      rsrecv callees "src/nest/inner.rs:glob_param" "method spin $RSM:5"
+proven      rsrecv callees "src/nest/inner.rs:glob_default" "method tune $RSM:20"                                # [P] Knob's
+notproven   rsrecv callees "src/nest/inner.rs:glob_default" "tune $RSM:16"
+rs_none "src/glob2/leaf.rs:glob_of_glob"                                                                        # [N] floor
+proven      rsrecv callees "src/glob2/leaf.rs:glob_of_glob_default" "method tune $RSM:20"                        # [P] via the call result
+notproven   rsrecv callees "src/glob2/leaf.rs:glob_of_glob_default" "tune $RSM:16"
 # guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
 proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
 

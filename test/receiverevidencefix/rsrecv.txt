@@ -10,6 +10,8 @@ pub mod model;
 pub mod other;
 pub mod app;
 pub mod kinds;
+pub mod nest;
+pub mod glob2;
 @@@ rsrecv/src/model.rs
 // Book and Other both define spin / iter; Cfg and Knob both define tune: a call proves one only through its receiver's type.
 pub struct Book { pub items: Vec<u32> }
@@ -64,6 +66,9 @@ impl<T> Holder<T> {
 pub struct Pair(pub Book);
 impl Pair {
     pub fn near_tuple_field(&self) -> u8 { self.0.spin() }
+}
+impl Default for Knob {
+    fn default() -> Self { Knob }
 }
 @@@ rsrecv/src/other.rs
 // a second Book (other::Book) and an in-tree File named like std::fs::File
@@ -125,3 +130,19 @@ pub fn near_outside(f: &File) -> u8 { f.sync_all() }
 pub fn near_tuple((a, _b): (Book, u8)) -> u8 { a.spin() }
 pub fn near_default_outside() -> u8 { let c = String::default(); c.tune() }
 pub fn make() -> Book { Book::new() }
+@@@ rsrecv/src/nest.rs
+// a module whose `use` brings Book and Knob in; its child module globs it (`use super::*`)
+use crate::model::{Book, Knob};
+pub mod inner;
+@@@ rsrecv/src/nest/inner.rs
+use super::*;
+pub fn glob_param(b: &Book) -> u8 { b.spin() }
+pub fn glob_default() -> u8 { let k = Knob::default(); k.tune() }
+@@@ rsrecv/src/glob2.rs
+// a module that globs model in; its child globs it in turn (a glob of a glob is not followed)
+use crate::model::*;
+pub mod leaf;
+@@@ rsrecv/src/glob2/leaf.rs
+use super::*;
+pub fn glob_of_glob(b: &Book) -> u8 { b.spin() }
+pub fn glob_of_glob_default() -> u8 { let k = Knob::default(); k.tune() }

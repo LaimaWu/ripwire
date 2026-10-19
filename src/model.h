@@ -1279,6 +1279,36 @@ inline CallResultFamily callResultFamilyOf( Lang l ) noexcept
         default:                           return CallResultFamily::None;
     }
 }
+// The WRAPPER rows a family's written type is read through (lane rust-receivers; the call-result reader shares them) — data,
+// one row per wrapper name, matched on the wrapper's last path segment (`std::rc::Rc` is `Rc`):
+//   Transparent: auto-deref reaches the argument's members — the class is the argument (`Box<T>`; `&T` / `&mut T` are the
+//                grammar's reference_type, read without a row).
+//   Layer:       the value is not a T until one unwrap operator (`?`, `.unwrap()`, `.expect( … )`) is applied (Result, Option):
+//                a call result counts it into unwrapDepth; a WRITTEN local, parameter or field of that type names no class.
+//   Hides:       a shared pointer or a cell whose OWN members a call written on it may reach — Rc / Arc (`clone`, `as_ref`,
+//                `borrow`, …), RefCell / Cell / Mutex / RwLock (`borrow`, `get`, `lock`, …): its argument is not read at all.
+// A generic type no row names (`Vec<T>`, `HashMap<K, V>`, an in-tree `Stack<T>`) is its own head class, resolved like any name.
+enum class TypeWrap : std::uint8_t { None, Transparent, Layer, Hides };
+struct TypeWrapperRow
+{
+    std::string_view name;
+    TypeWrap         wrap;
+};
+inline constexpr std::array<TypeWrapperRow, 9> kRustTypeWrappers = { {
+    { "Box", TypeWrap::Transparent }, { "Result", TypeWrap::Layer }, { "Option", TypeWrap::Layer },
+    { "Rc", TypeWrap::Hides }, { "Arc", TypeWrap::Hides }, { "RefCell", TypeWrap::Hides }, { "Cell", TypeWrap::Hides },
+    { "Mutex", TypeWrap::Hides }, { "RwLock", TypeWrap::Hides },
+} };
+// the row `name` has in family `f`'s wrapper table (None: no row — the name is a class of its own)
+inline TypeWrap typeWrapOf( CallResultFamily f, std::string_view name ) noexcept
+{
+    if( f != CallResultFamily::Rust )
+    {
+        return TypeWrap::None;   // Go / C++ / JVM / TS read their wrappers in their own readers today (ingest_binds.h)
+    }
+    const auto row = std::ranges::find( kRustTypeWrappers, name, &TypeWrapperRow::name );
+    return row == kRustTypeWrappers.end() ? TypeWrap::None : row->wrap;
+}
 // Binding::resultIndex of a record about a WHOLE result (a single non-tuple result; a Rust `let t = pair()?` binding all of it).
 inline constexpr std::uint8_t kWholeResult = 0xFF;
 // The importedName of a Ruby class-object binding that acts on each class INCLUDING the module, not on the module
