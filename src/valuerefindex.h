@@ -67,12 +67,18 @@ inline bool vrBindLess( const IngestResult& ing, const Reference& a, const Refer
     return a.startByte < b.startByte;
 }
 
-// The references of `refs` (indices into ing.references, kept in their order) made inside any of `fns`.
-inline std::vector<std::uint32_t> vrRefsMadeIn( const IngestResult& ing, std::span<const std::uint32_t> refs, std::span<const NodeId> fns )
+// The references of `refs` (indices into ing.references) that `keep` accepts, kept in their order.
+template<typename Keep>
+std::vector<std::uint32_t> vrRefsWhere( std::span<const std::uint32_t> refs, Keep&& keep )
 {
     std::vector<std::uint32_t> out;
-    std::ranges::copy_if( refs, std::back_inserter( out ), [ & ]( std::uint32_t i ) { return std::ranges::find( fns, ing.references[i].fromSymbol ) != fns.end(); } );
+    std::ranges::copy_if( refs, std::back_inserter( out ), keep );
     return out;
+}
+// The references of `refs` made inside any of `fns`.
+inline std::vector<std::uint32_t> vrRefsMadeIn( const IngestResult& ing, std::span<const std::uint32_t> refs, std::span<const NodeId> fns )
+{
+    return vrRefsWhere( refs, [ & ]( std::uint32_t i ) { return std::ranges::find( fns, ing.references[i].fromSymbol ) != fns.end(); } );
 }
 
 // ── IX-1 slot-type join ──────────────────────────────────────────────────────────────────────────────────
@@ -878,12 +884,10 @@ private:
     // The Pattern sites of `sites` (reference order) that can name at least one class member of `defs`, in that order.
     std::vector<std::uint32_t> sitesNaming( const std::vector<std::uint32_t>& sites, std::span<const NodeId> defs ) const
     {
-        std::vector<std::uint32_t> out;
-        std::ranges::copy_if( sites, std::back_inserter( out ), [ & ]( std::uint32_t i )
+        return vrRefsWhere( sites, [ & ]( std::uint32_t i )
         {
             return std::ranges::any_of( defs, [ & ]( NodeId d ) { return m_member[d] != 0 && reaches( m_ing.references[i], m_ing.symbols[d] ); } );
         } );
-        return out;
     }
     // Can Pattern reference `r` name class member `s`? Same value-ref family; the literal sides around a non-empty hole;
     // a self/this/cls receiver inside a class keeps only that class's family.
