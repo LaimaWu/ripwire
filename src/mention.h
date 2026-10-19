@@ -857,7 +857,7 @@ inline bool isUnnamedTestOrFixtureTarget( const IngestResult& ing, NodeId id, co
     {
         return false;
     }
-    return rankTierMultiplierOf( rootRelPath( ing, fileId ) ) < 1.0f || isTestSymbol( ing, id );
+    return isRankTierDownPath( rootRelPath( ing, fileId ) ) || isTestSymbol( ing, id );
 }
 
 // Which (identifier index, symbol id) pairs match by name? ONE scan over the symbols, whatever the identifier count:

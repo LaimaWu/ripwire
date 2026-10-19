@@ -201,13 +201,27 @@ users. `--format=columnar`, which carries no `<files>` rollup, marks each row re
 Function impacts are byte-identical. Other languages record no type mentions yet (a floor, stated in the legend).
 Gate: `test/impacttypecheck.sh`.
 
+### Changed — `--callers` serves a whole list whose rows fit 16,000 B; a capped `--callees` page names the next page
+
+With no `--limit`, a `--callers` answer past the 50-row band is served whole when the estimated bytes of its caller rows
+(`<s>` with `tested=`, `via=`, `prov=`, `of_def=` and `sites_at=`, as printed) fit 16,000 B (`src/pageview.h`
+`kCallersBandMaxBytes`): tmux's `--callers=options_get_number`, 121 callers and about 10.8 KB of rows, is one answer instead
+of four pages. A longer list keeps the 40-row page, its `next=` page and `uses_next=`. The band bounds the caller rows only:
+the root, legend, `<dc>` rows and value-use and name-template rows ride beside it, so a whole answer can exceed 16,000 B. One
+estimate decides for every surface: CLI XML, `--format=columnar`, `--json`, and MCP `find_symbol` (its `calledBy` array) and
+`find_referencing_symbols`. `--callees` keeps the 50-row band, and a capped `--callees` page now names its next page as
+`next=` (`--callees=SEL --offset=40`, `--limit`, `--format=columnar` and `--json` replayed); the body it used to name moves
+to `expand_next=` (MCP `find_symbol`'s capped `calls` array the same). `--impact`, `--owners` and `--edit-check` keep their
+40-row windows. Gate: `test/neighbourcapcheck.sh` arms 22-25.
+
 ### Changed — `--callers` and `--callees` serve up to 50 rows whole, and a capped `--callers` page names the next page
 
 With no `--limit`, a call hierarchy of 41 to 50 rows is served whole instead of cut at 40 (`src/pageview.h`
 `kCallHierarchyBandMax`, 40 + 40/4); above 50 the 40-row window holds. A cut `--callers` root's `next=` is now the next
 page (`--callers=SYM --offset=40`, the selector quoted as one argument, `--limit` and `--format=columnar` replayed), and
-the `--uses` follow-up it used to name moves to `uses_next=`; the last page, an uncut answer and `--callees` (whose
-`next=` stays `--expand`) are unchanged. MCP `find_symbol` and `find_referencing_symbols` window each array the same way,
+the `--uses` follow-up it used to name moves to `uses_next=`; the last page and an uncut answer are unchanged. (A callers
+list past 50 rows can now be served whole too, and a capped `--callees` page names its next page: see the callers byte
+band below.) MCP `find_symbol` and `find_referencing_symbols` window each array the same way,
 and `find_referencing_symbols` carries the page in `next` and the uses follow-up in `uses_next`; a `--json` page carries the
 same pair as `next` (with `--json` replayed) and `uses_next` keys. `--impact`, `--owners`
 and `--edit-check` windows keep the plain 40. Gate: `test/neighbourcapcheck.sh` arms 14-21.

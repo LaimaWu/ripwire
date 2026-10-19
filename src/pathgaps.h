@@ -991,8 +991,9 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
     std::vector<BridgeVia>     viaOf( S, BridgeVia::Edge );
     std::vector<std::uint32_t> fanOf( S, 0 );
     std::vector<char>          isDst( S, 0 );
-    // a chain may not route THROUGH a de-prioritized symbol — a test, bench, demo or generated file, or a minified bundle
-    // (filter.h's rank tiers) — only start or end at one: the runtime path a reader asks for runs through the code itself
+    // a chain may not route THROUGH a de-prioritized symbol — a test, bench, demo or generated file, a minified bundle, or (since
+    // train 31's head round-robin lane) a .d.ts / .pyi declaration twin whose package ships its implementation (filter.h's rank
+    // tiers: any multiplier below 1) — only start or end at one: the runtime path a reader asks for runs through the code itself
     const std::vector<float>   tierMul = rankTierSymbolMultipliers( ing );
     const auto                 routable = [ & ]( NodeId v ) { return isDst[v] != 0 || tierMul[v] >= 1.f; };
     for( const NodeId t : dstDefs )

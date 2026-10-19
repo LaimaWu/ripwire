@@ -583,6 +583,8 @@ probeFor()
 # callers prose minus that reading to the OLD 330; the existing (U-twin) holds safe-delete minus its reading to 720.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
+# MEASURED 2026-10-18 (train 31 merge, CR pre-pass A2): ripwire.for/v1 1099 against the 1100 pin — main's tail-sym compact clause
+#   (kForCompactLegendTail, +11 B) on top of body-fold's fold clause; the pin is NOT raised (1 B of headroom: card LEGEND-SHORTEN).
 # RE-PINNED 2026-10-18 (lane body-fold FIX1 B2, by design): ripwire.for/v1 820 -> 1100 (measured 1088; 802 fold-off, unchanged).
 #   The default --for=geometry answer now carries <fold kind="bodies"> and its compact clause rides beside it (forfold.h
 #   kForCompactBodyFoldLegend, 286 B: it defines b t= n= p= l=, served=/total=/budget_bytes=, the slice and skip rows and the C3
@@ -696,7 +698,7 @@ ripwire.pack-task/v1             990   974
 ripwire.pack-top-n/v1            760   745
 ripwire.expand/v1                280   265
 ripwire.expand-file/v1            510   508
-ripwire.for/v1                   1100  1088
+ripwire.for/v1                   1100  1099
 '
 pinFor()
 {

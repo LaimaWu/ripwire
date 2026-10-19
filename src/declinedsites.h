@@ -379,8 +379,8 @@ inline DeclinedSitesLegendFlags declinedSitesLegendFlags( std::span<const Declin
 // --impact counted declined_calls= (the declines that could have reached SYM or a symbol in its radius) and named none of
 // them: hono's `--impact=match` gave only counts, while the declined call in src/helper/dev/index.ts that could mean
 // Router.match sat behind the callers verb. The impact answer (CLI XML, --json, columnar and the MCP twin) now prints the
-// callers-form rows of exactly those calls — the same records, order, cut and row spelling as --callers — so uncut the row
-// count equals declined_calls=. `targets` is the answer's decline set (SYM's definitions and its radius), `calls` its count.
+// callers-form rows of exactly those calls — the same records, order and cut as --callers, spelled as --callers spells them
+// except of_def= (DefGroups{} below: the radius has no definition table) — so uncut the row count equals declined_calls=. `targets` is the answer's decline set (SYM's definitions and its radius), `calls` its count.
 struct ImpactDeclinedRows
 {
     DeclinedSiteCut               cut;

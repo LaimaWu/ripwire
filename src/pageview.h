@@ -175,10 +175,12 @@ inline constexpr int kCallHierarchyBandMax = kCallHierarchyRowCap + kCallHierarc
 // band. A who-calls answer IS the set: tmux's `--callers=options_get_number` was 40 of 121 rows at ~10.8 KB for the whole
 // list, and the 81 hidden rows cost three more calls that each re-paid the ~1 KB legend and root. Sized from the train-29
 // rows (tmux 121 rows = 10.8 KB fits; textual's `--callers=post_message`, 121 rows = 16.8 KB with long Python paths,
-// stays paged). Callers only: --callees keeps the row band (its next= is the body) and --impact its 40-row page. Above
-// the band the 40-row page, its next= page and uses_next= are unchanged. A runaway guard as well as a stair step: it
-// bounds the bytes a default call can add, never the rows an explicit --limit asks for. It bounds the ROW bytes: the whole
-// answer adds its root, legend and <dc> rows (about 1-2.5 KB), so a banded answer measured up to 18,455 B (rv-callers-band2 N3).
+// stays paged). Callers only: --callees keeps the 1.25x row band (a capped callees page names the next page as next= and the
+// body as expand_next=) and --impact its 40-row page. Above the band the 40-row page, its next= page and uses_next= are
+// unchanged. A runaway guard as well as a stair step: it bounds the bytes a default call can add, never the rows an explicit
+// --limit asks for. It bounds the <s> ROW bytes only: the whole answer adds its root, legend, <dc> rows and the value-use
+// (<vrs>, up to 64) and name-template (<pds>, up to 8) rows, which ride beside the band as they ride the 40-row page — so a
+// banded answer can exceed 16,000 B (rv-callers-band2 N3 measured 18,455 B; a 65-caller probe with 160 value uses, 23,655 B).
 inline constexpr std::size_t kCallersBandMaxBytes = 16000;   // callers rows served whole while their estimated bytes fit (tmux 121 rows = 10.8 KB)
 // The smallest row a callers answer can print (`<s t="fn" n="x" p="f:1"/>`): a total past kCallersBandMaxBytes / this many
 // rows cannot fit the band, so the estimate (one site pass over every row) is skipped for it.

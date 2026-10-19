@@ -345,15 +345,11 @@ inline bool isRankTierDownPath( std::string_view p ) noexcept
 // tier factor for one path — 1.0 for anything not in the two down-weighted families
 inline float rankTierMultiplierOf( std::string_view p ) noexcept
 {
-    if( isDemoOrGeneratedPath( p ) )
+    if( !isRankTierDownPath( p ) )
     {
-        return kRankTierDemoMul;
+        return 1.0f;
     }
-    if( pathTierOf( p ) == PathTier::TestOrBench )
-    {
-        return kRankTierTestMul;
-    }
-    return 1.0f;
+    return isDemoOrGeneratedPath( p ) ? kRankTierDemoMul : kRankTierTestMul;
 }
 
 // DECLARATION-TWIN tier (lane hrr, train 31; peer-scout P2 as corrected by mine-gortex-codanna §1(d)). A declaration file
