@@ -18,6 +18,10 @@ pub mod samename;
 pub mod consts;
 pub mod stdpath;
 pub mod ownpath;
+pub mod stdq;
+pub mod stdqown;
+pub mod stdqp;
+pub mod extglob;
 @@@ rsrecv/src/model.rs
 // Book and Other both define spin / iter; Cfg and Knob both define tune: a call proves one only through its receiver's type.
 pub struct Book { pub items: Vec<u32> }
@@ -101,6 +105,33 @@ pub struct Path;
 impl Path {
     pub fn new(p: &str) -> &Self { todo!() }
     pub fn probe(&self) -> u8 { 12 }
+}
+// fix round 1 (M1): in-tree types named like std's, each with a `-> Self` constructor (stdq.rs / stdqp/child.rs spell std's)
+impl File {
+    pub fn open(p: &str) -> Result<Self, ()> { Ok(File) }
+    pub fn create(p: &str) -> Self { File }
+}
+pub struct HashMap;
+impl HashMap {
+    pub fn new() -> Self { HashMap }
+    pub fn with_capacity(n: usize) -> Self { HashMap }
+    pub fn get_it(&self) -> u8 { 13 }
+}
+pub struct String;
+impl String {
+    pub fn from(s: &str) -> Self { String }
+    pub fn new() -> Self { String }
+    pub fn lenx(&self) -> usize { 14 }
+}
+pub struct Instant;
+impl Instant {
+    pub fn now() -> Self { Instant }
+    pub fn elapsed_x(&self) -> u8 { 15 }
+}
+pub struct PathBuf;
+impl PathBuf {
+    pub fn from(p: &str) -> Self { PathBuf }
+    pub fn as_pb(&self) -> u8 { 16 }
 }
 @@@ rsrecv/src/kinds.rs
 // an enum with methods and a trait with a default method, both spelled like receivers below
@@ -245,3 +276,43 @@ pub fn own_path_new(p: &str) -> u8 { let path = crate::other::Path::new(p); path
 // the in-tree Path in scope by its `use`: `Path::new` types the local through its declared `-> &Self`
 use crate::other::Path;
 pub fn own_path_use(p: &str) -> u8 { let path = Path::new(p); path.probe() }
+@@@ rsrecv/src/stdq.rs
+// fix round 1 (M1): each qualified `T::f()` below names std's type (a std module path, a fully qualified path, a glob of a
+// std module, a prelude name) — never the in-tree other::File / HashMap / String / Instant / Path / PathBuf — so the
+// callee's declared `-> Self` must type nothing, whatever the canonical tier matched by the scope NAME
+use std::fs;
+use std::collections::*;
+use std::time;
+pub fn fs_path_open() -> u8 { let f = fs::File::open("x").unwrap(); f.sync_all() }
+pub fn fs_path_create() -> u8 { let f = fs::File::create("x"); f.sync_all() }
+pub fn full_path_create() -> u8 { let f = std::fs::File::create("x"); f.sync_all() }
+pub fn full_path_new(p: &str) -> u8 { let path = std::path::Path::new(p); path.probe() }
+pub fn full_pathbuf_from(p: &str) -> u8 { let pb = std::path::PathBuf::from(p); pb.as_pb() }
+pub fn glob_std_new() -> u8 { let m = HashMap::new(); m.get_it() }
+pub fn glob_std_capacity() -> u8 { let m = HashMap::with_capacity(3); m.get_it() }
+pub fn prelude_from() -> usize { let s = String::from("x"); s.lenx() }
+pub fn prelude_new() -> usize { let s = String::new(); s.lenx() }
+pub fn module_now() -> u8 { let t = time::Instant::now(); t.elapsed_x() }
+@@@ rsrecv/src/stdqown.rs
+// fix round 1 (M1) twins: the same calls where the qualifier, read as a written type, IS the in-tree class — typed
+use crate::other::{File, HashMap};
+use crate::other;
+pub fn own_open() -> u8 { let f = File::open("x").unwrap(); f.sync_all() }
+pub fn own_new() -> u8 { let m = HashMap::new(); m.get_it() }
+pub fn own_full_create() -> u8 { let f = crate::other::File::create("x"); f.sync_all() }
+pub fn own_module_now() -> u8 { let t = other::Instant::now(); t.elapsed_x() }
+pub fn own_full_from() -> usize { let s = crate::other::String::from("x"); s.lenx() }
+@@@ rsrecv/src/stdqp.rs
+// fix round 1 (M1): a parent module importing std's File / Instant; its child globs them in (`use super::*`)
+use std::fs::File;
+use std::time::Instant;
+pub mod child;
+@@@ rsrecv/src/stdqp/child.rs
+use super::*;
+pub fn glob_open() -> u8 { let f = File::open("x").unwrap(); f.sync_all() }
+pub fn glob_create() -> u8 { let f = File::create("x"); f.sync_all() }
+pub fn glob_now() -> u8 { let t = Instant::now(); t.elapsed_x() }
+@@@ rsrecv/src/extglob.rs
+// fix round 1 (M1): an external crate's glob may supply `Book`; crate::model::Book is never imported here
+use serde::*;
+pub fn ext_glob_new() -> u8 { let b = Book::new(); b.spin() }

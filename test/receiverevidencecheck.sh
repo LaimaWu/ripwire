@@ -1631,11 +1631,34 @@ notproven   rsrecv callees "src/consts.rs:SPIN_FN" "spin $RSM:10" "spin $RSM:24"
 # `Path::new( p )` where `use std::path::Path` names std's: the canonical tier still matches the in-tree other::Path's `new`
 # by its scope name (a base edge, not this lane's), but that call's declared `-> &Self` never types the local when the
 # file imports the qualifier from outside the tree (nushell's Open::run: path.is_dir() was proven onto nu-path's Path at
-# 89f236b0); twin: with `use crate::other::Path` in scope it does. FLOOR: a path-qualified `crate::other::Path::new( p )`
-# in that same file (the call keeps only its last qualifier segment, and the file's `Path` is std's) types nothing.
+# 89f236b0); twins: with `use crate::other::Path` in scope it does, and so does a path-qualified `crate::other::Path::new( p )`
+# in that same file (fix round 1: the qualifier is resolved as a WRITTEN path at the call site, not by its last segment).
 notproven   rsrecv callees "src/stdpath.rs:std_path_new" "probe src/other.rs:17"                                   # [N]
-notproven   rsrecv callees "src/stdpath.rs:own_path_new" "probe src/other.rs:17"                                   # [N] floor
+proven      rsrecv callees "src/stdpath.rs:own_path_new" "method probe src/other.rs:17"                             # [P]
 proven      rsrecv callees "src/ownpath.rs:own_path_use" "method probe src/other.rs:17"                             # [P]
+# fix round 1 (rv-l3 M1): the std / external class, closed for every spelling. A qualified `T::f()` types its local only
+# when its qualifier, read as a WRITTEN type at the call site, resolves to the in-tree class owning `f`. [N] (each proven
+# at bb93a270, hedged on base): `use std::fs; fs::File::open()` / `create()`, fully qualified `std::fs::File::create()`,
+# `std::path::Path::new()`, `std::path::PathBuf::from()` (nushell misc/run.rs, nu-lsp symbols.rs), a glob of a std module
+# (`use std::collections::*; HashMap::new()` / `with_capacity()`), prelude `String::from()` / `String::new()` with no
+# in-tree String in scope, `use std::time; time::Instant::now()`, a child's `use super::*` of a parent's std `use`, and an
+# external crate's glob (`use serde::*; Book::new()`, crate::model::Book never imported). [P] twins: the in-tree class by
+# its `use`, by `crate::other::T::f()`, by a `use`d module `other::T::f()`.
+QO="src/other.rs"
+for f in fs_path_open fs_path_create full_path_create; do notproven rsrecv callees "src/stdq.rs:$f" "sync_all $QO:8"; done   # [N]
+notproven   rsrecv callees "src/stdq.rs:full_path_new" "probe $QO:17"                                              # [N]
+notproven   rsrecv callees "src/stdq.rs:full_pathbuf_from" "as_pb $QO:44"                                          # [N]
+for f in glob_std_new glob_std_capacity; do notproven rsrecv callees "src/stdq.rs:$f" "get_it $QO:28"; done        # [N]
+for f in prelude_from prelude_new; do notproven rsrecv callees "src/stdq.rs:$f" "lenx $QO:34"; done                 # [N]
+notproven   rsrecv callees "src/stdq.rs:module_now" "elapsed_x $QO:39"                                             # [N]
+for f in glob_open glob_create; do notproven rsrecv callees "src/stdqp/child.rs:$f" "sync_all $QO:8"; done          # [N]
+notproven   rsrecv callees "src/stdqp/child.rs:glob_now" "elapsed_x $QO:39"                                        # [N]
+rs_none "src/extglob.rs:ext_glob_new"                                                                           # [N]
+proven      rsrecv callees "src/stdqown.rs:own_open" "method sync_all $QO:8"                                       # [P]
+proven      rsrecv callees "src/stdqown.rs:own_new" "method get_it $QO:28"                                         # [P]
+proven      rsrecv callees "src/stdqown.rs:own_full_create" "method sync_all $QO:8"                                # [P]
+proven      rsrecv callees "src/stdqown.rs:own_module_now" "method elapsed_x $QO:39"                               # [P]
+proven      rsrecv callees "src/stdqown.rs:own_full_from" "method lenx $QO:34"                                     # [P]
 # guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
 proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
 
