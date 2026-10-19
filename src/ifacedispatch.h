@@ -74,8 +74,9 @@ public:
         {
             return out;
         }
-        const std::vector<Row>& rows = closureOf( type );
-        if( rows.empty() || isOpen( type ) || std::ranges::any_of( rows, [ & ]( const Row& row ) { return isOpen( row.id ); } ) )
+        const std::vector<Row>& rows   = closureOf( type );
+        const auto              opened = [ & ]( NodeId t ) { return t < open_.size() && open_[ t ] != 0; };
+        if( rows.empty() || opened( type ) || std::ranges::any_of( rows, [ & ]( const Row& row ) { return opened( row.id ); } ) )
         {
             return out;   // no implementor in the tree, or one the map cannot list: the name tiers answer, as before
         }
@@ -104,11 +105,6 @@ private:
         NodeId id     = kNoNode;
         bool   proven = false;   // every implements edge from T down to it is proven
     };
-
-    bool isOpen( NodeId t ) const noexcept
-    {
-        return t < open_.size() && open_[ t ] != 0;
-    }
 
     // T dispatches a call of `callee`: an interface / trait whose contract (its members, or a base's) names the callee — or
     // any trait of a language whose trait signatures are not indexed — or a class whose contract declares it without a body
