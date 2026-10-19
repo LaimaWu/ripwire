@@ -257,6 +257,50 @@ struct VrStructFields
     std::size_t              exactUpTo = static_cast<std::size_t>( -1 );
 };
 
+// IX-1: this file's typedef / using aliases of struct types, in order (alias → struct type key).
+struct VrAliases
+{
+    std::vector<std::pair<std::string, std::string>> pairs;
+    // A struct type key through the aliases (a short chain, cut; never a cycle).
+    std::string_view resolve( std::string_view key ) const
+    {
+        for( int hop = 0; hop < 4; ++hop )
+        {
+            const auto it = std::ranges::find( pairs, key, []( const auto& a ) { return std::string_view( a.first ); } );
+            if( it == pairs.end() )
+            {
+                break;
+            }
+            key = it->second;
+        }
+        return key;
+    }
+};
+
+// IX-1: an anonymous struct / union MEMBER (`union { … };` in a body: no declarator, an untagged specifier) — one position.
+inline bool vrAnonymousMember( TSNode k, TSNode ftNode, TSFieldId fDeclarator, TSFieldId fName ) noexcept
+{
+    return fDeclarator != 0 && fName != 0 && ts_node_is_null( ts_node_child_by_field_id( k, fDeclarator ) ) && !ts_node_is_null( ftNode )
+        && ( kindIs( ts_node_type( ftNode ), "struct_specifier" ) || kindIs( ts_node_type( ftNode ), "union_specifier" ) )
+        && ts_node_is_null( ts_node_child_by_field_id( ftNode, fName ) );
+}
+
+// IX-1: the callee of `( *x->f )( … )` is x->f (the explicit dereference of the same function-pointer field); else `f` itself.
+inline TSNode vrDerefCallee( TSNode f, TSFieldId fArgument ) noexcept
+{
+    if( fArgument == 0 || ts_node_is_null( f ) || !kindIs( ts_node_type( f ), "parenthesized_expression" ) )
+    {
+        return f;
+    }
+    const TSNode inner = ts_node_named_child( f, 0 );
+    if( !ts_node_is_null( inner ) && kindIs( ts_node_type( inner ), "pointer_expression" ) && ts_node_child_count( inner ) > 0
+        && kindIs( ts_node_type( ts_node_child( inner, 0 ) ), "*" ) )
+    {
+        return ts_node_child_by_field_id( inner, fArgument );
+    }
+    return f;
+}
+
 // A field declaration carrying the `static` storage class (C++ static data member).
 inline bool vrStaticMember( TSNode k, std::string_view src )
 {
@@ -2226,9 +2270,7 @@ private:
             const bool   structTyped = !ts_node_is_null( ftNode )
                                      && ( kindIs( ts_node_type( ftNode ), "struct_specifier" ) || kindIs( ts_node_type( ftNode ), "union_specifier" )
                                           || ( kindIs( ts_node_type( ftNode ), "type_identifier" ) && knownStruct( ftype ) ) );
-            if( !isStatic && ts_node_is_null( child( k, m_fDeclarator ) ) && !ts_node_is_null( ftNode )
-                && ( kindIs( ts_node_type( ftNode ), "struct_specifier" ) || kindIs( ts_node_type( ftNode ), "union_specifier" ) )
-                && ts_node_is_null( child( ftNode, m_fName ) ) )
+            if( !isStatic && vrAnonymousMember( k, ftNode, m_fDeclarator, m_fName ) )
             {
                 sf.fields.push_back( { {}, true, false } );   // an anonymous struct / union MEMBER: one position, no name a call writes
                 return true;
@@ -2268,7 +2310,7 @@ private:
     // A type key this file holds a struct body for (directly, or through this file's aliases).
     bool knownStruct( std::string_view key ) const
     {
-        return !key.empty() && std::ranges::find( m_structs, unaliasLocal( key ), &VrStructFields::key ) != m_structs.end();
+        return !key.empty() && std::ranges::find( m_structs, m_aliases.resolve( key ), &VrStructFields::key ) != m_structs.end();
     }
 
 
@@ -2283,22 +2325,7 @@ private:
             return;
         }
         emitSlotFact( at, std::string( alias ), {}, key );
-        m_aliases.emplace_back( std::string( alias ), key );
-    }
-
-    // A struct type key through this file's aliases (a short chain, cut; never a cycle).
-    std::string_view unaliasLocal( std::string_view key ) const
-    {
-        for( int hop = 0; hop < 4; ++hop )
-        {
-            const auto it = std::ranges::find( m_aliases, key, []( const auto& a ) { return std::string_view( a.first ); } );
-            if( it == m_aliases.end() )
-            {
-                break;
-            }
-            key = it->second;
-        }
-        return key;
+        m_aliases.pairs.emplace_back( std::string( alias ), key );
     }
 
     void emitSlotFact( TSNode at, std::string owner, std::string_view field, const std::string& type )
@@ -2460,7 +2487,7 @@ private:
             {
                 return;   // not a struct literal
             }
-            const auto sf = std::ranges::find( m_structs, unaliasLocal( t ), &VrStructFields::key );
+            const auto sf = std::ranges::find( m_structs, m_aliases.resolve( t ), &VrStructFields::key );
             const std::ptrdiff_t idx = sf == m_structs.end() ? -1 : vrPositionOf( p.node, m_anc[j].node, *sf, m_fDesignator, m_src );
             if( idx >= 0 )
             {
@@ -2502,17 +2529,7 @@ private:
         {
             return;
         }
-        TSNode f = child( call, m_fFunction );
-        if( !ts_node_is_null( f ) && kindIs( ts_node_type( f ), "parenthesized_expression" ) )
-        {
-            // `( *x->f )( … )`: the explicit dereference of the same function-pointer field
-            const TSNode inner = ts_node_named_child( f, 0 );
-            if( !ts_node_is_null( inner ) && kindIs( ts_node_type( inner ), "pointer_expression" ) && ts_node_child_count( inner ) > 0
-                && kindIs( ts_node_type( ts_node_child( inner, 0 ) ), "*" ) )
-            {
-                f = child( inner, m_fArgument );
-            }
-        }
+        const TSNode f = vrDerefCallee( child( call, m_fFunction ), m_fArgument );
         if( ts_node_is_null( f ) || !kindIs( ts_node_type( f ), "field_expression" ) )
         {
             return;
@@ -2534,7 +2551,7 @@ private:
             && !( ty.declared
                   && ( ty.structKw
                        || ( dot == std::string::npos
-                            && std::ranges::find( m_callableFields, std::pair<std::string_view, std::string_view>( unaliasLocal( ty.key ), field ),
+                            && std::ranges::find( m_callableFields, std::pair<std::string_view, std::string_view>( m_aliases.resolve( ty.key ), field ),
                                                   []( const auto& cf ) { return std::pair<std::string_view, std::string_view>( cf.first, cf.second ); } )
                                    != m_callableFields.end() ) ) ) )
         {
@@ -2807,7 +2824,7 @@ private:
     const VrSlotLang*              m_slot = nullptr;    // IX-1: this language's slot row (nullptr: no slot capture)
     std::vector<VrStructFields>    m_structs;           // IX-1: this file's struct bodies so far
     std::vector<std::pair<std::string, std::string_view>> m_callableFields;   // IX-1: (struct, function-pointer field) this file declares
-    std::vector<std::pair<std::string, std::string>>      m_aliases;          // IX-1: this file's typedef / using alias → struct type key
+    VrAliases                                             m_aliases;          // IX-1: this file's typedef / using alias → struct type key
     std::uint32_t                  m_fileId;
     std::string_view               m_src;
     std::vector<RawRef>&           m_out;
