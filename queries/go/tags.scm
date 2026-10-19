@@ -38,9 +38,20 @@
 
 (type_declaration (type_spec name: (type_identifier) @name type: (struct_type))) @definition.struct
 
-(var_declaration (var_spec name: (identifier) @name)) @definition.var
+;; go-local-var (train 30): a var/const is a SYMBOL only at package scope. Anchored to source_file, so a
+;; function-local `var x T = f()`, `var ( … )` group or `const k = 3` inside a func body or a func literal is not
+;; captured (it was indexed as a top-level var, and its initializer's calls were charged to it, not to the
+;; enclosing function). `x := f()` (short_var_declaration) was never captured. A grouped `var ( a = 1 )` parses
+;; as var_declaration > var_spec_list > var_spec in this grammar, so the package-level group needs its own
+;; pattern (before this lane it was not indexed at all; grouped `const ( … )` specs are direct children). Its role
+;; node is the var_spec, not the declaration, so each grouped var's extent is its own line(s) and a call in one
+;; spec's initializer is charged to that var, not to the group's last name.
+;; Same rule as queries/rust/tags.scm const_item/static_item and queries/gdscript/tags.scm const_statement.
+(source_file (var_declaration (var_spec name: (identifier) @name)) @definition.var)
 
-(const_declaration (const_spec name: (identifier) @name)) @definition.constant
+(source_file (var_declaration (var_spec_list (var_spec name: (identifier) @name) @definition.var)))
+
+(source_file (const_declaration (const_spec name: (identifier) @name)) @definition.constant)
 
 ; ---- references (calls) ----
 

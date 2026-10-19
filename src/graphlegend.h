@@ -1119,6 +1119,12 @@ inline constexpr const char* kPathUnboundLegend =
     "An endpoint with several definitions that nothing bound prints no from_p or to_p: unreached, or (to) reached only through a "
     "split or by-name hop. ";
 inline const char* pathUnboundLegend( bool on ) noexcept { return on ? kPathUnboundLegend : ""; }
+// PATH-OWNERS (defattrib.h pathHopOwners): rides only when a hop row carries an owner, so an owner-free answer is unchanged.
+inline constexpr const char* kPathOwnerLegend =
+    "n=Owner.name on a hop: its definition's scope names a class, struct, interface, named type or module the index defines in "
+    "that language (Owner = the scope's last segment, the spelling a selector takes); a bare n= is a free function, a type, or a "
+    "member of a scope the index defines no such owner for (a C++ namespace, or a language whose defs carry no sc=). ";
+inline const char* pathOwnerLegend( bool on ) noexcept { return on ? kPathOwnerLegend : ""; }
 
 // ── issue #60: the module-scope owner's clause, emitted exactly when a t="modscope" ROW is in the answer ──
 // A file-scope call (a top-level statement, or a call inside an anonymous callback body) used to have no

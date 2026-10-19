@@ -10,6 +10,7 @@
 
 #include "infra/profileScope.h"
 #include "infra/enumcount.h"   // rw::enumCountIsExact — the compile-time proof beside each k*Count a cache reader validates against
+#include "infra/tablelookup.h"   // rw::findByField — kCallForwarders below
 #include "infra/sortutil.h"  // svLess — JS/TS builtin-member tables below (binary_search, no signed-char wrap)
 #include "smallvec.h"   // rw::SmallVec — THE ONE ALIAS; the per-key span lists and per-file id buckets below
 #include "structlayout.h"   // cross-translation-unit sizeof/alignof tripwire for the shared model
@@ -20,6 +21,7 @@
 #include <cstdint>
 #include <optional>    // rubyTypedRecvOf — a Ruby reference's built receiver type, or none
 #include <string>
+#include <span>        // CallForwarderLang::forwarders
 #include <string_view>
 #include <type_traits>   // std::is_trivially_copyable_v — the VarSpan layout pin below
 #include <vector>
@@ -411,16 +413,22 @@ inline bool isJsTsBuiltinMember( std::string_view ctor, std::string_view name ) 
 //             builtin's own operator, not an unresolved call). Never a use site.
 //   Inert   — an Elixir call/operator/named-capture candidate whose enclosing quote AST remains inert after live-hole re-entry.
 //             It remains a site for declined/report accounting, but can never bind or mint a call edge.
-enum class RefRole : std::uint8_t { Call, Read, Write, Import, Extends, Macro, Type, Value, Through, Subscript, Inert };
+//   Pattern — a NAME-TEMPLATE lookup (IX-3; src/ingest_valuerefs.h patternAt*): `getattr( o, f"watch_{n}" )`, `hasattr`,
+//             `cls.__dict__.get( f"…" )` (Python), `o[ 'compile' + t ]` / o[ `on${e}` ] (JS/TS). name = the template as a
+//             glob ("watch_*", never an identifier), fieldName = the literal prefix, composeRel = the literal suffix,
+//             recvVar = the receiver as written, qualifier = "" (a literal side of >= 3 identifier characters) or "w"
+//             (too wide: no row, a count). A MAY-dispatch clue joined to methods by name (valuerefindex.h patternSitesTo);
+//             never a call, never a use site, never in the CSR or the dead set.
+enum class RefRole : std::uint8_t { Call, Read, Write, Import, Extends, Macro, Type, Value, Through, Subscript, Inert, Pattern };
 // The number of RefRole enumerators — the bound readRef validates a cached role byte against (see kSymKindCount).
-inline constexpr std::size_t kRefRoleCount = static_cast<std::size_t>( RefRole::Inert ) + 1;
+inline constexpr std::size_t kRefRoleCount = static_cast<std::size_t>( RefRole::Pattern ) + 1;
 static_assert( enumCountIsExact<RefRole, kRefRoleCount>(), "kRefRoleCount must name the LAST RefRole enumerator — move it with the append" );
 static_assert( sizeof( RefRole ) == 1, "RefRole must be a single byte (SoA-friendly, smallest int that fits)" );
 
 // the terse `role=` attribute string for the use-site index — a declarative table indexed by the enum, in enum
 // order. The static_assert is the guard a switch's -Werror=switch used to be: a NEW role without a spelling is a
 // build error, never a silent fallback.
-inline constexpr const char* kRefRoleTagTable[] = { "call", "read", "write", "import", "extends", "macro", "type", "value", "through", "subscript", "inert" };
+inline constexpr const char* kRefRoleTagTable[] = { "call", "read", "write", "import", "extends", "macro", "type", "value", "through", "subscript", "inert", "pattern" };
 static_assert( std::size( kRefRoleTagTable ) == kRefRoleCount, "kRefRoleTagTable: one spelling per RefRole, in enum order" );
 inline const char* refRoleTag( RefRole r ) noexcept
 {
@@ -446,6 +454,51 @@ inline ValueRefFamily valueRefFamily( Lang l ) noexcept
 {
     return enumTableAt( kValueRefFamilyOfLang, l, ValueRefFamily::None );
 }
+// CALL FORWARDERS (lane fcall-forward, parser version 188, train renumbers; gate test/fcallforwardcheck.sh): a builtin
+// method that, called on a FUNCTION, calls that function (kind Call) or returns it as a value (kind Value). JS/TS
+// `f.call( thisArg, a )` and `f.apply( thisArg, args )` run f; `f.bind( thisArg )` hands f on without running it. When
+// ingest_valuerefs.h finds the receiver `f` is a bare identifier bound to a function declaration of the file or to a
+// file-scope import from a RELATIVE module (and no parameter or local of the site shadows it), a Call row becomes a
+// FORWARDED call reference to `f` (Reference::forwarded) — the bare call `f( … )` it stands for, resolved by the ordinary
+// tiers and then kept only where they PROVE a Function or Method (graph.h buildGraph; fix round 1): an import proves a
+// binding, not a function, so an imported object, const or class, and a by-name-only answer, add nothing — and a Value
+// row becomes a value reference to `f` at the slot the whole `f.bind( … )` fills. The original member reference (name `call`/`apply`) is kept unchanged. A family-owned
+// sparse table: a language with no row is unchanged. Function.prototype's other methods (toString) are not forwarders.
+// Floors, by language: Ruby `proc.call` / `m.to_proc` and Python `functools.partial( f )` are the same concept with
+// different receivers (a Proc or Method object, not a declaration) and have no row; a receiver that is a member
+// (`obj.m.call`), a parenthesised or computed expression, a local `const f = () => …`, or a TS `import f = require()`
+// is not forwarded. Shared with the bare call `f()` (the forward binds exactly as it does): a function-local `var f` /
+// `let f` declared AFTER the site does not shadow (scope declarations are read on scope entry), and a re-assignment
+// `f = …` is not followed. The declaration proof is file + name at any depth; a declaration only in a SIBLING scope
+// leaves the bare call by name alone, so that forward is dropped.
+enum class CallForwardKind : std::uint8_t { Call, Value };
+struct CallForwarder
+{
+    std::string_view name;
+    CallForwardKind  kind;
+    bool             argsAsArray;   // Call only: the forwarded arguments arrive as ONE array (`apply`), so the arity is unknown;
+                                    //   otherwise the first argument is the receiver and the rest are the call's own (`call`)
+};
+// Function.prototype's forwarders, shared by the two languages that run on it.
+inline constexpr CallForwarder kJsCallForwarders[] = {
+    { "apply", CallForwardKind::Call, true }, { "bind", CallForwardKind::Value, false }, { "call", CallForwardKind::Call, false },
+};
+struct CallForwarderLang
+{
+    Lang                               lang;
+    std::span<const CallForwarder>     forwarders;
+};
+inline constexpr CallForwarderLang kCallForwarders[] = {
+    { Lang::JavaScript, kJsCallForwarders },
+    { Lang::TypeScript, kJsCallForwarders },
+};
+// The language's forwarder rows — empty when it has none (the mechanism is then inert).
+inline std::span<const CallForwarder> callForwardersOf( Lang lang ) noexcept
+{
+    const CallForwarderLang* row = findByField( kCallForwarders, &CallForwarderLang::lang, lang );
+    return row != nullptr ? row->forwarders : std::span<const CallForwarder>{};
+}
+
 // The scope char (qualifier[0]) of a file's depth-cut Value record (see RefRole::Value above): written by
 // src/ingest_valuerefs.h, read by src/valuerefindex.h — distinct from every row scope (f l a p x).
 inline constexpr char kValueRefDepthCutScope = 'd';
@@ -840,6 +893,12 @@ struct Reference
     //   memberFactory), memberVia = the method that built it. recvVar is then empty. Read through rubyTypedRecvOf.
     std::string   memberVia;
     bool          memberFactory = false;
+    // lane fcall-forward fix 1 (test/fcallforwardcheck.sh N7 N8 N10 N11 H): a JS/TS call reference the value-ref walk
+    //   FORWARDED from `f.call( … )` / `f.apply( … )` (ingest_valuerefs.h forwardCallAt) — it stands for the bare call
+    //   `f( … )`, which the source never writes. graph.h buildGraph keeps its edges only where the resolver PROVES a
+    //   Function/Method (no via="name", no class/const/object target): an import proves a binding, not a function.
+    //   Sits beside memberFactory in the alignment padding before baseBind: sizeof(Reference) is unchanged.
+    bool          forwarded = false;
     // lane lego-transitive fix 1 (test/legotransitivecheck.sh NS arms), an INHERIT ref only (isInherit): the same-file declaration
     //   the base name binds to by the language's lexical lookup, as 1 + the byte its name starts at (ingest_relations.h
     //   localBaseBinding; 0 = no enclosing scope declares it, 0xFFFFFFFF = a scope too large to read, nothing proven). On an
@@ -848,6 +907,16 @@ struct Reference
     //   Sits in memberFactory's alignment padding: sizeof(Reference) is unchanged.
     std::uint32_t baseBind = 0;
 };
+
+// ONE rule for every reader of the reference table that counts a call SITE (train 30, fcall-forward nit N1): a FORWARDED
+// reference counts only where buildGraph kept its call — `keptForwards` is Graph::keptForwards, the ascending
+// ing.references indices of the forwards it bound. A reader with no graph passes none, and every forwarded reference stays
+// out. Readers: --uses (verbs_navigate.h collectUseSites), sites_at= and --edit-check's sites (editcheck.h forEachCallSite),
+// --edit-check's incompatible-caller flags (editCheckIncompatibleFlags), callers_floor= (countfloor.h markUnboundSpellings).
+inline bool forwardCounts( const Reference& r, std::uint32_t refIndex, std::span<const std::uint32_t> keptForwards ) noexcept
+{
+    return !r.forwarded || std::ranges::binary_search( keptForwards, refIndex );
+}
 
 // A Ruby call whose RECEIVER the code builds (parser version 132, test/rubytypedrecvcheck.sh): `c = Client.new` then `c.get`,
 // `let( :user ) { create( :user ) }` then `user.activate!`, `User.find_by( … ).activate!`. ingest_binds.h reads the shape
@@ -1128,15 +1197,92 @@ enum class LocalBindKind : std::uint8_t
                    //     the directive ("include" / "extend"), spanStart = the constant's 1-based line; var stays EMPTY and the
                    //     record is file-scope, so no local-name table reads it. Read by graph.h rubyMainObjectMixins ONLY
                    //     (--lego's `<impl t="object" n="main">` row). APPENDED (cache u8).
+    // Train 29 lane call-result-typing (test/receiverevidencecheck.sh (L)): a binding initialised by a CALL takes the callee's
+    // DECLARED return type. Both kinds are receiver evidence (isReceiverEvidenceKind): graph.h's resolve loop alone reads them.
+    CallResult,    // a local bound to a call's result (Go `x := f()` / `a, b := f()`, Rust `let x = f()?` / `let (a, _) = f()?`):
+                   //     var = the bound name, typeName = the callee's final name, startByte = the CALL's start byte (the call
+                   //     Reference's own; with typeName it names one call), spanStart/spanEnd = where the name is visible (the same span as the name's RecvType
+                   //     tombstone, which the typed fact replaces), resultIndex = the position it binds (kWholeResult: the whole
+                   //     value), unwrapDepth = the unwrap operators applied before binding (Rust `?` / `.unwrap()` / `.expect()`).
+    ReturnType,    // one DECLARED result of a function definition, at startByte = the def's own start (Symbol::sigStartByte):
+                   //     resultIndex = its position (kWholeResult: a single non-tuple result), typeName = the class it names
+                   //     after the language's transparent wrappers (Go `*T`, Rust `Box<T>` / `&T`), importedName = the type
+                   //     written WHOLE when it is qualified (`os.File`, `std::fs::File`), else "", unwrapDepth = the
+                   //     Result/Option layers above it (each needs one unwrap operator at the call site). var stays empty.
+                   //     C++ writes importedName only for a non-std qualified result (`ext::Config`), which graph.h resolves.
+    TypeImport,    // fix round 1: a file's import of a TYPE name (Java/Kotlin `import a.b.C [as D]`, Rust `use a::b::C [as D]`,
+                   //     brace groups flattened): var = the local name it binds (`C` / `D`; "*" for a wildcard or glob),
+                   //     typeName = the imported item's own name ("" for "*"), importedName = the path as written
+                   //     (`java.io.File`, `std::fs::File`, `crate::model` for a glob). Read by graph.h's call-result type
+                   //     resolution (receiverevidence.h ReceiverEvidence::resultClassOf) ONLY. APPENDED (cache u8).
+                   //     C++ (fix round 2): a using-declaration `using a::C;` (var `C`) and a using-directive `using namespace
+                   //     a;` (var "*", importedName `a`), with spanStart/spanEnd = the scope it is declared in (a namespace
+                   //     body, a function body (fix round 4: a local class's member result sits inside it), or the whole
+                   //     file: 0 .. 0xFFFFFFFF) — the span marks a C++ row: Java/Kotlin/Rust rows carry none ({0,0}). A
+                   //     class-scope using records nothing. Java (fix round 4): a single-static-import `import static a.B.N;`
+                   //     (var `N`: it imports every static member named N, a member TYPE included) and a static-import-on-
+                   //     demand (var "*", importedName `a.B`).
+    Namespace,     // fix round 2: a lexical scope the index has no symbol for — a C++ `namespace` (not `inline`), a TS
+                   //     `namespace` / `module` — var = its name as written (`a::b`, `a.b`; "" when anonymous), spanStart/
+                   //     spanEnd = its body. Read by graph.h's call-result type resolution ONLY: a class nested in one is
+                   //     not in scope outside it, and a C++ class is visible from the namespaces its own encloses. A Java /
+                   //     Kotlin file's `package a.b` is one with NO span ({0,0}: it scopes nothing lexically) — the packages
+                   //     the tree declares, whatever directory holds them (an import of another one is from outside). APPENDED.
+    TypeAlias,     // fix round 3: a declaration that binds a TYPE NAME to another type — C++ `using A = T;` / `typedef T A;` /
+                   //     `namespace a = b;`, Rust `type A = T;`, Kotlin `typealias A = T`, TS `type A = T` / `import A = n.T`:
+                   //     var = the name bound, importedName = the target as written (blanks removed), startByte = the
+                   //     declaration's start. C++ rows carry the scope they are declared in as spanStart/spanEnd (a
+                   //     namespace or class body, or the whole file: 0 .. 0xFFFFFFFF) like a using row; the other families'
+                   //     rows carry none ({0,0}): their scope is the innermost one holding startByte. Read by graph.h's
+                   //     call-result type resolution ONLY: an alias of the spelling in force at a callee is a binding the
+                   //     result type is never resolved past (an outside target names nothing; an in-tree one is a floor). APPENDED.
+                   //     Fix round 4: typeName marks the rows that bind a spelling WITHOUT an alias target (kTypeBind* constants):
+                   //     "forward" a C++ bodiless `struct S;` / `class S;` / `union S;`, "shadow" a type declaration the index
+                   //     keeps no class symbol for (a Java `record` / `@interface`, a C++ union defined outside a declaration),
+                   //     "unparsed" a region the parser cannot read as declarations, which may declare ANY name (var "!": a
+                   //     C++ macro invocation or parse error where a declaration must stand, with its scope's span; a Rust
+                   //     block enclosing a nested fn that holds a statement- or item-position macro, at the block's start).
+                   //     Fix round 5: "unrecorded" a C++ class declaration only a macro can have written, which tree-sitter-cpp
+                   //     reads as a function or a variable (`class API S {…}`, `struct API S;`): one row per identifier its head
+                   //     spells (S among them), no span — a class of that name the index does not record exists in the tree.
 };
+// fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
+inline constexpr std::string_view kTypeBindForward  = "forward";
+inline constexpr std::string_view kTypeBindShadow   = "shadow";
+inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
+inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::RubyMainMixin ) + 1;
-// FE-B: the five kinds only graph.h ReceiverEvidence reads (see RecvType above).
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::TypeAlias ) + 1;
+// FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {
-    return k == LocalBindKind::RecvType || k == LocalBindKind::MemberType || k == LocalBindKind::MethodAlias || k == LocalBindKind::NameAlias
-        || k == LocalBindKind::StaticMember;
+    // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result five (CallResult .. TypeAlias) after RubyMainMixin
+    static_assert( std::uint8_t( LocalBindKind::StaticMember ) - std::uint8_t( LocalBindKind::RecvType ) == 4, "FE-B's five receiver-evidence kinds stay one run" );
+    static_assert( std::uint8_t( LocalBindKind::TypeAlias ) - std::uint8_t( LocalBindKind::CallResult ) == 4, "the call-result kinds stay one run" );
+    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::TypeAlias );
 }
+// The language family whose call results take a callee's declared result type (train 29 call-result typing), ONE row read
+// by ingest (which records CallResult / ReturnType / TypeImport) and by graph.h (where the type resolves, and which
+// receiver tables the typed local lands in). None: the language records nothing (JavaScript, Python, …).
+enum class CallResultFamily : std::uint8_t { None, Go, Rust, Cpp, Jvm, TypeScript };
+inline CallResultFamily callResultFamilyOf( Lang l ) noexcept
+{
+    switch( l )
+    {
+        case Lang::Go:                     return CallResultFamily::Go;
+        case Lang::Rust:                   return CallResultFamily::Rust;
+        // C++ / ObjC OFF (owner 2026-10-17, fix round 6): a macro the parser reads as code (an export macro in a class head, an
+        // `#if` around a declaration, a namespace-opening macro, …) can declare the result's name unseen, so no C++ call result
+        // is typed yet — base behaviour. CallResultFamily::Cpp's readers (Rule 2's varType / scopedRecvDecls are its sink) stay
+        // for the macro-aware C++ card; mapping this row back to Cpp turns them on.
+        case Lang::Cpp: case Lang::ObjC:   return CallResultFamily::None;
+        case Lang::Java: case Lang::Kotlin: return CallResultFamily::Jvm;
+        case Lang::TypeScript:             return CallResultFamily::TypeScript;
+        default:                           return CallResultFamily::None;
+    }
+}
+// Binding::resultIndex of a record about a WHOLE result (a single non-tuple result; a Rust `let t = pair()?` binding all of it).
+inline constexpr std::uint8_t kWholeResult = 0xFF;
 // The importedName of a Ruby class-object binding that acts on each class INCLUDING the module, not on the module
 // (LocalBindKind::RubySingletonDef, RubyClassMixin; parser version 145): written in a concern's `included do`, or a def
 // in its `class_methods do`.
@@ -1165,6 +1311,8 @@ struct Binding
                                               // kind==Type: read off a C++ ASSIGNMENT's callee (`x = f( … )`), not a declaration —
                                               //   a function's name as often as a class's, so buildGraph drops it unless a class of
                                               //   that name exists (resolve.h assignmentNamesNoClass). Rides the padding after `kind`.
+    std::uint8_t  resultIndex = kWholeResult; // kind==CallResult/ReturnType: the result position (see LocalBindKind). Rides the padding.
+    std::uint8_t  unwrapDepth = 0;            // kind==CallResult/ReturnType: unwrap operators / layers (see LocalBindKind). Rides the padding.
     std::uint32_t startByte  = 0;         // the record's own position (RawBind::startByte). ONE declaration's
                                           //   VarDecl and its typed record (Type or ParamType) carry the SAME
                                           //   value — that shared byte is how Rule 2's lexical receiver lookup
@@ -1187,7 +1335,7 @@ struct Binding
                                           //   name as written minus `&` (`alpha`, `ns::alpha`), or a sentinel.
 };
 static_assert( sizeof( Binding ) == 6 * sizeof( std::uint32_t ) + 3 * sizeof( std::string ),
-               "Binding's scalars are five u32, a u8 kind and a bool in 24 bytes — both ride one u32 slot" );
+               "Binding's scalars are five u32, a u8 kind, a bool and two u8 in 24 bytes — the four ride one u32 slot" );
 
 // R5 cross-language FFI binding alias. A language-binding DECLARATION found in a C/C++ file (or a
 // ctypes-handle assignment in a Python file) that makes a C/C++ definition reachable under a DIFFERENT

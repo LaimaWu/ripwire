@@ -34,6 +34,13 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-18, train 30 (call-result-typing, go-local-var, fcall-forward, name-template-dispatch, tail-sym, path-owners merged
+#   onto main b59b0824): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (hash 5af7514356…3726b4). Watched text:
+#   kParserVer -> 196 (lanes call-result-typing 180 / rich 181, fcall-forward 188 / 189, go-local-var 190 / 191,
+#   name-template-dispatch 192 / 193, and a train-31 lane's 194 / 195; 196 / rich file tag 197 is above every live build),
+#   kCacheVersion -> 36 (lane values 33, 33, 35; main 34), quality.h's two mirrors with them. kQSnapCacheScheme stays 22: what
+#   a cached Snapshot represents is the same, and the qsnap key folds the extraction identity, so no lane blob is named.
+#   The lane entries below are kept as written; their hashes are superseded by this one.
 # 2026-10-17, train 29 (langfacts-fold, go-scope, rust-std-rows, arity-min, callers-band, type-use-impact merged onto main
 #   7e589352): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (hash 2d60557b1f…bbe560). Watched text: kParserVer
 #   -> 184 (lane arity-min 178 / rich 179, lane go-scope 182 / rich 183, a receiver-typing lane 180 / rich 181 not in this train;
@@ -49,6 +56,21 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   declaration 176 -> 178 (reservation 178 / rich 179; the train renumbers) and kCacheVersion 32 -> 33 (a def record gains
 #   paramsMin, the fewest arguments a call can pass), quality.h's two mirrors with them. kQSnapCacheScheme 21 is unchanged: what a
 #   cached Snapshot represents is the same, and the two versions already key every extraction fact it holds.
+# 2026-10-16, train 29 lane call-result-typing (the train renumbers): RE-DERIVED with UPDATE_GOLDEN=1. Watched text: kParserVer
+#   176 -> 180 (reservation 180/181) and kCacheVersion 32 -> 33 (RawBind gains resultIndex + unwrapDepth), with quality.h's
+#   kIngest*Mirror moved in the same diff. What a cached Snapshot means is unchanged: kQSnapCacheScheme stays.
+# 2026-10-17, lane/go-local-var (train 30): RE-PINNED with UPDATE_GOLDEN=1. The only watched text that moved is the kParserVer
+#   declaration (and its mirror): 176 -> 190 (Go/Rust/GDScript var and const captures anchored to item/package scope; the
+#   train-30 reservation 190 / rich 191; the train renumbers). kCacheVersion 32 and kQSnapCacheScheme are unchanged.
+# 2026-10-17, lane/fcall-forward (train 30) fix round 1: RE-PINNED with UPDATE_GOLDEN=1. The only watched text that moved is
+#   the version constants and their quality.h mirrors: kParserVer 176 -> 188 (rich file tag 189; JS/TS call forwarders add
+#   call and value references) and kCacheVersion 32 -> 33 (a RawRef record appends the `forwarded` byte); the train
+#   renumbers both. kQSnapCacheScheme 21 is unchanged: what a cached Snapshot represents is the same, and the parser and
+#   cache versions already key every extraction fact it holds.
+# 2026-10-17, lane/name-template-dispatch (IX-3, train 30; the train renumbers): RE-PINNED with UPDATE_GOLDEN=1 (hash
+#   a99b270ea1…0fe680). The only watched text that moved is the kParserVer 176 -> 192 (rich 193) and kCacheVersion
+#   32 -> 35 declarations and quality.h's two mirrors: RefRole gained Pattern (11, appended) for name-template lookups.
+#   Pattern refs are never read by the quality Snapshot (dead set, clones, metrics), so kQSnapCacheScheme stays.
 # 2026-10-15, train 28 (grep-carrier, ruby-pair, qd-memory-degrade, githarden-speed, git-child-hardening, PR #380, forbudget-soft,
 #   for-body-slot, attrib-multidef, declined-sites merged onto main 1bcb6540): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged
 #   tree (hash 279718355d…5ba2db). Watched text: kParserVer 173 -> 176 (main's slice 4a 173 / rich 174, lane grep-carrier 173,

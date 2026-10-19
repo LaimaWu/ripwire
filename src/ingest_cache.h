@@ -90,6 +90,7 @@ struct RawRef
     std::string   memberCtor;          // FE-B: the class a constructed receiver names (`new X().m()`, Go `X{}.m()`); see model.h
     std::string   memberVia;           // FE-B on #373: the method a Ruby typed receiver was built by (`new`, a finder); see model.h
     bool          memberFactory = false;   // FE-B on #373: memberCtor names a FactoryBot factory, not a class
+    bool          forwarded = false;       // lane fcall-forward fix 1: a JS/TS `f.call/f.apply` site standing for `f( … )` (model.h Reference::forwarded)
     std::uint32_t baseBind = 0;          // lane lego-transitive fix 1, an inherit ref only: 1 + the name byte of the same-file
                                          //   declaration the base binds to (ingest_relations.h localBaseBinding); 0 none, ~0u unknown
 };
@@ -104,6 +105,8 @@ struct RawBind
     Lang          lang      = Lang::Unknown;
     LocalBindKind kind      = LocalBindKind::Type;   // Type = Rule 2 var→type; FnDecl/FnAssign = L3 var→function
     bool          isFromAssignment = false;          // kind==Type: an ASSIGNMENT's callee name, not a declaration's (model.h Binding)
+    std::uint8_t  resultIndex = kWholeResult;        // kind==CallResult/ReturnType: the result position (model.h LocalBindKind)
+    std::uint8_t  unwrapDepth = 0;                   // kind==CallResult/ReturnType: unwrap operators / layers (model.h LocalBindKind)
     std::uint32_t spanStart = 0;   // lexical visibility or declaration span; see model.h Binding/LocalBindKind
     std::uint32_t spanEnd   = 0;
     std::string   var;             // the declared variable identifier (`x`)
@@ -141,10 +144,22 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 34;           // 34: train 29 — lane arity-min's paramsMin def field (its branch used 33, as did lane
+constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strictly above every number a train-30 build used: lane call-result-typing
+                                                      //    33 (RawBind resultIndex + unwrapDepth), lane fcall-forward 33, lane name-template-dispatch 35
+                                                      //    (RefRole Pattern 11), main 34; so no blob a branch build wrote is read here.
+                                                      // 35: train 30 lane name-template-dispatch (train renumbers) — RefRole gained
+                                                      //    Pattern (11, appended): an older binary would reject the byte, a newer must not read a blob that
+                                                      //    predates it as complete.
+                                                      // 34: train 29 — lane arity-min's paramsMin def field (its branch used 33, as did lane
                                                       //    call-result-typing's; 34 sits above both, so no blob a branch build wrote is read here).
                                                       // 33: train 29 lane arity-min — a def record appends `paramsMin` (u32 after params:
                                                       //    the fewest arguments a call can pass) — a FORMAT change → reject v32 blobs. The train renumbers.
+                                                      // 33: lane call-result-typing (train 30; the train renumbers) — RawBind gains two u8,
+                                                      //    resultIndex and unwrapDepth (LocalBindKind::CallResult / ReturnType), written after
+                                                      //    isFromAssignment: a record FORMAT change → reject v32 blobs. kParserVer moves with it.
+                                                      // 33: train 30 (lane fcall-forward fix 1; train renumbers) — a RawRef record appends
+                                                      //    `forwarded` (u8) after memberFactory; the lane's 52d773b3 builds wrote parserVer-188
+                                                      //    blobs at 32 without it, so 32 must not read as this shape.
                                                       // 32: train 28 — the RefRole byte a record holds gained two appended values: lane
                                                       //    ruby-pair's Subscript (9) and PR #380's Inert (10; 9 on the PR's branch, which predates
                                                       //    Subscript). readRef validates the byte against kRefRoleCount, so no record changes
@@ -330,16 +345,39 @@ constexpr std::uint32_t kCacheVersion = 34;           // 34: train 29 — lane a
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 185;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 206;          // bump on any grammar/.scm/extraction change
+                                                      // 206 = 2026-10-18 (#409, PR #414, renumbered again at merge with main 939dbb69): strictly above every
+                                                      //   live number — main 196 (rich 197), train 31 198 (199), lane rust-receivers 202 (203), lane ix1-slot
+                                                      //   204 (205). Rich file tag 207. kCacheVersion stays 36 (no record format change).
                                                       // 185 = 2026-10-18 (#409): a cross-file markdown [text](other.md#slug) keeps the link as
                                                       //   written (RawRef::memberPath, unbound) so graph.h pins the exact file + heading.
                                                       //   185, not 184: 184 is train 29. Rich file tag 186. kCacheVersion stays 34.
+                                                      // 196 = 2026-10-18 (train 30): strictly above every number a live build used — main 184 (rich 185),
+                                                      //   lane call-result-typing 180 (rich 181), lane fcall-forward 188 (189), lane go-local-var 190 (191),
+                                                      //   lane name-template-dispatch 192 (193), lane h1-annot (train 31) 194 (195); tail-sym and
+                                                      //   path-owners kept 176. Rich file tag 197. kCacheVersion 36 (see its note).
+                                                      // 192 = 2026-10-17 (train 30 lane name-template-dispatch, IX-3; train renumbers): RefRole::Pattern
+                                                      //   records at Python getattr/hasattr/__dict__.get and JS/TS computed-member name templates. Rich 193.
+                                                      // 190 = 2026-10-17 (train 30, lane go-local-var): Go var/const, Rust const/static and GDScript const
+                                                      //   captures are anchored to their item/package scope, so a function-local declaration is no
+                                                      //   longer a symbol; Go package-level `var ( … )` groups are captured. Train-30 reservation
+                                                      //   190 / rich file tag 191; the train renumbers. kCacheVersion unchanged.
+                                                      // 188 = 2026-10-17 (train 30 reservation, lane fcall-forward; train renumbers): JS/TS
+                                                      //   call forwarders (model.h kCallForwarders) — `f.call/f.apply` adds a call reference to a
+                                                      //   proven f, `f.bind` a value reference. Rich file tag 189.
                                                       // 184 = 2026-10-17 (train 29): strictly above every number a train-29 binary used — lane arity-min 178
                                                       //   (rich 179), lane call-result-typing 180 (rich 181; carried to train 30), lane go-scope 182 (rich 183);
                                                       //   the other train-29 lanes kept 176. Rich file tag 185. kCacheVersion 34 (see its note).
                                                       // 182 = 2026-10-16 (train 29 reservation L5 go-scope, #403; the train renumbers): Go methods
                                                       //   carry their receiver type as scope and interface members their interface's name
                                                       //   (ingest_names.h kScopeOwners), so Go canonical ids change. Rich file tag 183.
+                                                      // 180 = 2026-10-16 (lane call-result-typing, carried to train 30; the train renumbers — reservation 180/181):
+                                                      //   Go, Rust, C++, Java, Kotlin and TS (never JS) record LocalBindKind::CallResult for a
+                                                      //   local bound to a call's result and LocalBindKind::ReturnType for each declared result
+                                                      //   (ingest_binds.h pushCallResult, pushReturnType); Java, Kotlin and Rust record a
+                                                      //   TypeImport per imported name, and a Go field keeps its `pkg.T` qualifier; Rust records a
+                                                      //   RecvType tombstone for every `let` name and member calls carry FE-B's receiver path.
+                                                      //   Rich file tag 181. kCacheVersion 33.
                                                       // 178 = train 29 lane arity-min (reservation 178, rich 179; the train renumbers): defs extract
                                                       //   paramsMin (cc_paramShape + kParamMinLangs) for the B2.2 minimum-arity exclusion.
                                                       // 176 = 2026-10-15 (train 28): strictly above every number a train-28 binary used — main 173
@@ -2354,7 +2392,7 @@ inline void writeDef( ByteW& w, const RawDef& d, bool withLex, std::size_t fileD
         }
     }
 }
-inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8( std::uint8_t( r.lang ) ); w.str( r.name ); w.u8( r.isInherit ? 1 : 0 ); w.u8( r.isDocLink ? 1 : 0 ); w.str( r.qualifier ); w.u8( std::uint8_t( r.recv ) ); w.str( r.recvVar ); w.u8( r.isCompose ? 1 : 0 ); w.str( r.fieldName ); w.str( r.composeRel ); w.u8( std::uint8_t( r.role ) ); w.u32( r.line ); w.u32( r.argCount ); w.u8( r.argCountKnown ? 1 : 0 ); w.u8( r.viaArrow ? 1 : 0 ); w.u8( r.qualifierRootsStd ? 1 : 0 ); w.u8( r.memberCall ? 1 : 0 ); w.str( r.memberRoot ); w.str( r.memberPath ); w.str( r.memberCtor ); w.str( r.memberVia ); w.u8( r.memberFactory ? 1 : 0 ); if( r.isInherit ) { w.u32( r.baseBind ); } }
+inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8( std::uint8_t( r.lang ) ); w.str( r.name ); w.u8( r.isInherit ? 1 : 0 ); w.u8( r.isDocLink ? 1 : 0 ); w.str( r.qualifier ); w.u8( std::uint8_t( r.recv ) ); w.str( r.recvVar ); w.u8( r.isCompose ? 1 : 0 ); w.str( r.fieldName ); w.str( r.composeRel ); w.u8( std::uint8_t( r.role ) ); w.u32( r.line ); w.u32( r.argCount ); w.u8( r.argCountKnown ? 1 : 0 ); w.u8( r.viaArrow ? 1 : 0 ); w.u8( r.qualifierRootsStd ? 1 : 0 ); w.u8( r.memberCall ? 1 : 0 ); w.str( r.memberRoot ); w.str( r.memberPath ); w.str( r.memberCtor ); w.str( r.memberVia ); w.u8( r.memberFactory ? 1 : 0 ); w.u8( r.forwarded ? 1 : 0 ); if( r.isInherit ) { w.u32( r.baseBind ); } }
 
 // loadCache's countFits() bounds a corrupt on-disk record COUNT against remaining bytes /
 // minRecordBytes BEFORE reserve() — the guard that keeps a hostile blob's 0xFFFFFFFF count from reaching
@@ -2374,13 +2412,14 @@ inline void   writeRef( ByteW& w, const RawRef& r ) { w.u32( r.startByte ); w.u8
 // str(len u32) fields = 3*4 + 8*1 + 5*4 = 40 bytes (39 until the `viaArrow` u8, kCacheVersion 23; #150's
 // `qualifierRootsStd` u8 then added a 9th u8 — 40 -> 41, kCacheVersion 25; FE-A's `memberCall` u8 and `memberRoot`
 // str then added a 10th u8 and a 6th str — 41 -> 46, kCacheVersion 28; FE-B's `memberPath` and `memberCtor` strs then
-// added a 7th and 8th str — 46 -> 54, kCacheVersion 29).
+// added a 7th and 8th str — 46 -> 54, kCacheVersion 29; fcall-forward fix 1's `forwarded` u8 then added a 12th u8 —
+// 59 -> 60, kCacheVersion 33).
 // verifyCacheRecordMinimaTripwire() below derives these
 // same numbers from the REAL writer functions at runtime so the next field added to writeDef/writeRef
 // can't silently stale them.
 inline constexpr std::size_t kMinDefRecordBytesLean      = 92;   // 17×u32 + 16×u8 + 2×str(len u32, empty) (paramsMin u32: 88 -> 92, kCacheVersion 33)
 inline constexpr std::size_t kMinDefRecordBytesRichExtra =  9;   // v10 rich withLex extra: dlWeighted u32 + tokenCount u32 + tfWidth u8
-inline constexpr std::size_t kMinRefRecordBytes          = 59;   // 3×u32 + 11×u8 + 9×str(len u32, empty)
+inline constexpr std::size_t kMinRefRecordBytes          = 60;   // 3×u32 + 12×u8 + 9×str(len u32, empty)
 
 inline std::size_t minDefRecordBytes( bool captureValueUses ) noexcept
 {
@@ -2497,9 +2536,9 @@ inline RawDef readDef( ByteR& r, bool withLex, const std::vector<std::uint64_t>&
     }
     return d;
 }
-inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = r.enumU8<Lang>( kLangCount ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = r.enumU8<RecvKind>( kRecvKindCount ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = r.enumU8<RefRole>( kRefRoleCount ); x.line = r.u32(); x.argCount = r.u16Of32(); x.argCountKnown = r.u8() != 0; x.viaArrow = r.u8() != 0; x.qualifierRootsStd = r.u8() != 0; x.memberCall = r.u8() != 0; x.memberRoot = r.str(); x.memberPath = r.str(); x.memberCtor = r.str(); x.memberVia = r.str(); x.memberFactory = r.u8() != 0; if( x.isInherit ) { x.baseBind = r.u32(); } return x; }
-inline void   writeBind( ByteW& w, const RawBind& b ) { w.u32( b.startByte ); w.u8( std::uint8_t( b.lang ) ); w.u8( std::uint8_t( b.kind ) ); w.u8( b.isFromAssignment ? 1 : 0 ); w.u32( b.spanStart ); w.u32( b.spanEnd ); w.str( b.var ); w.str( b.typeName ); w.str( b.importedName ); }
-inline RawBind readBind( ByteR& r ) { RawBind b; b.startByte = r.u32(); b.lang = r.enumU8<Lang>( kLangCount ); b.kind = r.enumU8<LocalBindKind>( kLocalBindKindCount ); b.isFromAssignment = r.u8() != 0; b.spanStart = r.u32(); b.spanEnd = r.u32(); b.var = r.str(); b.typeName = r.str(); b.importedName = r.str(); return b; }
+inline RawRef readRef ( ByteR& r ) { RawRef x; x.startByte = r.u32(); x.lang = r.enumU8<Lang>( kLangCount ); x.name = r.str(); x.isInherit = r.u8() != 0; x.isDocLink = r.u8() != 0; x.qualifier = r.str(); x.recv = r.enumU8<RecvKind>( kRecvKindCount ); x.recvVar = r.str(); x.isCompose = r.u8() != 0; x.fieldName = r.str(); x.composeRel = r.str(); x.role = r.enumU8<RefRole>( kRefRoleCount ); x.line = r.u32(); x.argCount = r.u16Of32(); x.argCountKnown = r.u8() != 0; x.viaArrow = r.u8() != 0; x.qualifierRootsStd = r.u8() != 0; x.memberCall = r.u8() != 0; x.memberRoot = r.str(); x.memberPath = r.str(); x.memberCtor = r.str(); x.memberVia = r.str(); x.memberFactory = r.u8() != 0; x.forwarded = r.u8() != 0; if( x.isInherit ) { x.baseBind = r.u32(); } return x; }
+inline void   writeBind( ByteW& w, const RawBind& b ) { w.u32( b.startByte ); w.u8( std::uint8_t( b.lang ) ); w.u8( std::uint8_t( b.kind ) ); w.u8( b.isFromAssignment ? 1 : 0 ); w.u8( b.resultIndex ); w.u8( b.unwrapDepth ); w.u32( b.spanStart ); w.u32( b.spanEnd ); w.str( b.var ); w.str( b.typeName ); w.str( b.importedName ); }
+inline RawBind readBind( ByteR& r ) { RawBind b; b.startByte = r.u32(); b.lang = r.enumU8<Lang>( kLangCount ); b.kind = r.enumU8<LocalBindKind>( kLocalBindKindCount ); b.isFromAssignment = r.u8() != 0; b.resultIndex = r.u8(); b.unwrapDepth = r.u8(); b.spanStart = r.u32(); b.spanEnd = r.u32(); b.var = r.str(); b.typeName = r.str(); b.importedName = r.str(); return b; }
 inline void   writeFfi( ByteW& w, const BindingAlias& a ) { w.u8( std::uint8_t( a.kind ) ); w.u8( a.lowConf ? 1 : 0 ); w.str( a.aliasName ); w.str( a.targetName ); w.str( a.targetScope ); }
 inline BindingAlias readFfi( ByteR& r ) { BindingAlias a; a.kind = r.enumU8<BindKind>( kBindKindCount ); a.lowConf = r.u8() != 0; a.aliasName = r.str(); a.targetName = r.str(); a.targetScope = r.str(); return a; }
 // B6.3: RouteDef needs no startByte (its handler is resolved by NAME in buildGraph); RawRouteUse mirrors
@@ -2549,7 +2588,7 @@ inline bool readFileRecord( ByteR& r, bool captureValueUses, std::vector<std::ui
     // arrays themselves are bounded per record inside readDef.
     const std::size_t     kMinDefRecordBytes      = minDefRecordBytes( captureValueUses );   // F8: named + tripwire-pinned above
     constexpr std::size_t kMinIncRecordBytes      = 12;   // 4×u8 (isAngle,isLazy,isSymbolic,isValueUse) + 1×u32 (byte) + 1×str(len u32, empty)
-    constexpr std::size_t kMinBindRecordBytes     = 27;   // 3×u32 + 3×u8 (lang,kind,isFromAssignment) + 3×str(len u32, empty)
+    constexpr std::size_t kMinBindRecordBytes     = 29;   // 3×u32 + 5×u8 (lang,kind,isFromAssignment,resultIndex,unwrapDepth) + 3×str(len u32, empty)
     constexpr std::size_t kMinFfiRecordBytes      = 14;   // 2×u8 (kind,lowConf) + 3×str(len u32, empty)
     constexpr std::size_t kMinRouteDefRecordBytes = 13;   // B6.3: 1×u32 (line) + 1×u8 (method) + 2×str(len u32, empty)
     constexpr std::size_t kMinRouteUseRecordBytes = 13;   // B6.3: 2×u32 (startByte,line) + 1×u8 (method) + 1×str(len u32, empty)

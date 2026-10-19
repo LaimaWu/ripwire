@@ -99,6 +99,9 @@ PY
 "$BIN" docdemotefix --for="$BUGQ" --no-route --format=candidates --no-cache >"$TMP/noroute.xml" 2>/dev/null
 "$BIN" docdemotefix --for="$BUGQ"     --no-cache >"$TMP/bugfor.xml"    2>/dev/null
 "$BIN" docdemotefix --for="$TRACEQ"   --no-cache >"$TMP/tracefor.xml"  2>/dev/null
+# RE-PIN 2026-10-18 (train 30, lane tail-sym merged; rule 4): docdemotegolden_for.xml 6539 -> 6557 B (est_tokens "2616" -> "2623")
+# and docdemotegolden_noroute.xml 10051 -> 10069 B ("3584" -> "3591"), re-captured from the merged binary and diffed by hand:
+# the ONLY bytes that moved are the tail legend clause only: "first t p= alone" / "then t p= sym=" lose the `t p=` words and sym= reads "its top symbols by lens rank (a pointer, not the answer)" (+18 B), and est_tokens with them.
 # UN-PIN 2026-10-15 (lane for-body-slot FIX1; rule 4): docdemotegolden_for.xml back to its pre-lane 6529 B. The lane had
 # re-pinned it to 7540 B for a pick=subtoken body (pin_page); the owner ruling dropped the subtoken fallback, and the
 # question names no owner (no callable is named by a whole question word), so no body rides and the golden is byte-identical

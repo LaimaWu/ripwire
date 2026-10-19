@@ -109,6 +109,113 @@ the `--uses` follow-up it used to name moves to `uses_next=`; the last page, an 
 and `find_referencing_symbols` carries the page in `next` and the uses follow-up in `uses_next`; a `--json` page carries the
 same pair as `next` (with `--json` replayed) and `uses_next` keys. `--impact`, `--owners`
 and `--edit-check` windows keep the plain 40. Gate: `test/neighbourcapcheck.sh` arms 14-21.
+### Added — a local bound to a call takes the callee's declared result type
+
+C++ (and Objective-C) call results are NOT typed yet: a macro the parser reads as ordinary code — an export macro in a
+class head, an `#if` around a declaration, a namespace-opening macro — can declare the result's name where no reader sees
+it, so C++ `auto x = f()` behaves as before (a macro-aware C++ reader is planned; the C++ rules below describe it). C is
+not typed either.
+
+`config, err := nfpm.ParseFile(path); config.Get(f)` reached `Config.Get` by name alone; `let (book, _) =
+self.preprocess_book(..)?; book.iter()` reached the wrong `iter`. A local initialised by a call — Go `x := f()` / `a, b :=
+f()`, Rust `let x = f()?` (also `.unwrap()` / `.expect()`, tuple patterns by position), Java `var`,
+Kotlin `val`/`var`, TS `const x = [await] f()` — now takes the callee's DECLARED result type when that call itself resolved
+to exactly one definition with evidence (not a pick by name alone, not a qualified written type's last name), and the
+result type — through `*T`, `&T`, `Box<T>`, a `?` per `Result`/`Option` layer, `await` for `Promise<T>`, a std smart
+pointer's pointee under `->` only — resolves in the callee's own file to exactly ONE class of this tree: through its
+imports (Java/Kotlin single-type and on-demand, TS, Rust `use` and globs; planned for C++: using-declarations and using-directives),
+its qualifier (a Go import, a Rust crate or module path; planned for C++: a namespace), its own file, then its package or namespace. ONE
+rule decides every family's bare name: walk the callee's lexical scopes innermost first and collect EVERY binding of the
+spelling at each — a class declared there, an alias or typedef (C++ `using A = T;` / `typedef T A;` / `namespace a = b;`,
+Rust `type`, Kotlin `typealias`, TS `type` / `import A = n.T`), an import binding there (a Java single-static-import
+`import static a.B.S;` too), a member type a base of an enclosing class declares, a type declaration the index keeps no
+class for (a Java `record` / `@interface`, a C++ `union`, a forward declaration `struct S;` — which, in the class's own
+namespace, declares that class), (planned for C++) a block-scope binding in force in a local class's members, and a region the parser
+cannot read that may declare it (planned for C++: a macro or parse error at namespace or class scope, a class-body `MK(S);`, any
+statement of a function body enclosing a local class; a Rust statement- or item-position macro in a block enclosing a
+nested fn or an `impl` method written in a fn body) — and the first scope with any binding decides: one in-tree class types the local; an outside
+or unresolved binding, an alias, or two bindings that disagree record nothing. A Rust `mod` is a fresh scope (the file's
+items and `use`s are not in force inside it; `super::` / `self::` there are relative to the mod); a class nested in a
+class, a Kotlin `object` or a TS/C++ `namespace` counts only where that scope holds the callee; a Java/Kotlin package is
+the one the files DECLARE, and an on-demand import of an outside package leaves the name unresolved; a type parameter of
+an enclosing generic (`class Box<T> { T get() }`, `impl<T> H<T>`, a C++ class template) names no class. The local then
+holds that class, so a call on it reaches that class's own members and
+never a same-named class elsewhere; a call on that local can type the next local in turn, in source order. A name imported
+from outside the tree, a TS global, an outside qualifier (`std::`, `ext::`), a type parameter, a name two classes share
+(C++: any shared class name) or a nested same-named call (`h.get().get()`) records nothing, and the call stays hedged. Not
+read through (no member proven): an interface result, an alias of an in-tree type (any family's alias forms above: the
+alias is not followed), a member type inherited from a base, a field path below the typed local, a Java record. A C++
+class declaration only a macro can have written (`class API S {…}`, `struct API S;`, read by the parser as a function or
+a variable) makes every name it spells a class the index does not record: no C++ result spelled so resolves. (A C++ `using` alias
+of an OUTSIDE type spelled like an in-tree class was not a floor before fix round 3 but a false proof of that class;
+it now names nothing.) Go's
+`pkg.F()` now reaches package-level functions only, never a same-named method, and a Go parameter, local or struct field
+written `*os.File` no longer resolves to an in-tree type that happens to be called `File`. A Java/Kotlin class-name
+receiver binds an in-tree class only where the caller's file sees it — its package, a single-type import naming it, an
+on-demand import of its package (`import ext.Util; Util.open()`, `import ext.*; Util.open()`, `Util::open` no longer bind
+an in-tree `Util` as proven). `kParserVer` and `kCacheVersion` move (196 and 36 in this release, see the versions note).
+### Fixed — `f.call( … )` and `f.apply( … )` on a proven function are calls of `f`
+
+`handleRequest.call( request.server, null, request, reply )` used to be recorded only as a member call named `call`, so
+`--path`, `--callees` and `--callers` lost the edge to `handleRequest` (on a real web framework, the request pipeline
+answered `reachable="0"`). In JavaScript and TypeScript, a `f.call( … )` / `f.apply( … )` whose receiver is a bare name
+the file declares as a function, or imports from a relative module, now stands for the call `f( … )`. It is kept only
+where the resolver proves a function or method: an imported object, const or class (`rpc.call()` on a required
+module object, `Klass.call( this )`) and a name bound by name alone add nothing. `f.bind( … )` is a value use of `f`,
+never a call. Floors, shared with the bare call `f()`: a function-local `var f` / `let f` declared after the site does not
+shadow it, and a re-assignment `f = …` is not followed. `kParserVer` and `kCacheVersion` move (196 and 36 in this release, see the versions note).
+### Fixed — a method a name-template lookup can name no longer reads `risk="none-found"`
+
+`getattr(obj, f"watch_{name}")`, `hasattr`, `cls.__dict__.get(f"on_{n}")` and JS/TS `this['compile' + node.typename]`
+call a method by a constructed name, so `--safe-delete` printed `risk="none-found"` for real dispatch targets (textual's
+`watch_*` watchers, nunjucks' `compile*` node compilers). These lookups are now recorded as name templates (literal
+prefix and suffix around one hole; a `self`/`this`/`cls` receiver inside a Python class keeps only that class family).
+`--callers`, `--impact` and `--safe-delete` of a method a template can name carry `pattern_dispatch=N` and one
+`<pd in= p= pattern=>` row per site; `--safe-delete` reads the new `risk="hedged"`; `--callees` of the dispatcher lists
+each template's candidates (`<pd cands= shown=>`, first 8, `next=` for the rest). A template whose literal side is under
+3 identifier characters (`f"_{m}"`) is too wide for a candidate list: it rides as `pattern_too_wide=K`, and on
+`--safe-delete`, when nothing else was found, it still makes `risk="hedged"` and names its site as a `<pdw>` row. A template with no literal side at all (`codes[sc + '']`, `f"{m}"`) carries no
+name and records nothing, like a bare `obj[k]`. Matched
+by name, never a proven call: `callers=`, `impact_reaches=`, `count=` and the `--dead-code` list are unchanged. The
+`--json` and `--format=columnar` roots carry both counts but not the rows; the MCP transport carries neither yet. Cache format and parser version move (the reference role set grew; 36 and 196 in this release, see the versions
+note). Gate: `test/safedeletecheck.sh` arms 9–18.
+### Changed — `--for` tail rank rows name their file's top symbols
+
+The `<tail>` of a `--for` answer starts with up to 24 rank rows: the best-ranked files outside the shown signature rows.
+They used to print a bare path (`<t p="lib/schema-controller.js"/>`), while the page rows after them already carried
+`sym=`. A rank row now carries `sym=` too, with the same names the file page (`--for=TASK --limit=N`) prints for that
+file: its top 3 symbols by lens rank, the first being the symbol that ranked the row. A file with fewer symbols names
+only those. The names are a pointer into the file, not the answer; the legend says so. The JSON twin's `"sym"` array and
+the MCP `for` tail carry the same names. Without `--token-budget`, nothing else in the answer moves: on 120 in-sample
+`--for` cells (60 questions, default and `--limit=100000`) every byte outside the tail, `est_tokens=` and the legend is
+unchanged, and the answers grow by 1.2 KB on average at the default limit (at most 1.9 KB). Under `--token-budget=N` the
+tail's names count against the budget, so a few of the lowest-ranked signature rows can move out of `<sigs>` and into the
+tail: on 6 questions at budgets 4000/6000/8000/12000, 5 of 24 points cut rows (tmux-02 at 6000: 40 to 32 rows,
+starlette-11 at 6000: 39 to 33, fastify-13 at 8000: 38 to 31, mdbook-13 at 6000: 32 to 27, fzf-11 at 6000: 40 to 37).
+Each cut is disclosed in the answer (`<sigs shown= total= capped="1" next_offset=>` and `dropped_positive=`), and the
+`<sigs>` `next=` and `--offset=` both bring every cut row back.
+
+### Fixed — a function-local Go `var` / `const`, Rust `const` / `static` or GDScript `const` is no longer a symbol
+
+A `var cfg = load()` or `const k = 3` written inside a Go function was indexed as a top-level `var` / constant symbol, and
+as the nearest enclosing symbol of its initializer it took that call: `--callers=Make` could name `var localCfg` instead
+of the function holding it. The definition captures are now anchored to their scope in the queries
+(`queries/go/tags.scm`, `queries/rust/tags.scm`, `queries/gdscript/tags.scm`): a Go `var` / `const` is a symbol at package
+scope only, a Rust `const` / `static` at module, `impl`, trait or `extern` level, and a GDScript `const` at script or class
+level; a call in a function-local initializer belongs to the enclosing function. Package-level grouped Go `var ( a = …;
+b = … )` declarations, which were missed (grouped `const` was already read), are now one symbol per name. On fzf, gotestsum and nfpm (Go), 574
+function-local symbols leave the map, no package-level one is lost, and 87 grouped names are added. `kParserVer` moves
+(196 in this release, see the versions note). Gate: `test/localdeclcheck.sh`.
+
+### Changed — `--path` hop rows name a member by its owner (`Owner.name`)
+
+`--path` and MCP `path_between` printed every hop as its bare name, so a path through two same-named methods read
+`n="go" n="go"`. A hop whose definition scope names a type or module the index holds in the same language (a class,
+struct, interface or named type; a Rust `mod` or Ruby module) now prints `n="Owner.name"`, the spelling `--callers=Owner.name`
+resolves: a fzf chain reads `Matcher.Loop`, and C++, Python, Rust, Ruby and Go methods are gated. A free function, a
+member of a scope the index holds no such definition for (a C++ namespace) and a type hop itself stay bare; the legend
+clause rides only when a row carries an owner, so an owner-free answer is byte-identical. `--callers` and `--callees`
+rows are unchanged; the CLI and MCP print the same rows. Gate: `test/pathownercheck.sh`.
 
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
@@ -345,20 +452,24 @@ server, when the cgroup's charge is the larger reading: restarting the server do
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 167 → 184: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
+`kParserVer` 167 → 196: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
 `??`/`||`/`&&`/`or`/`and` carried 173 on its branch, the Ruby/Python subscript references and Ruby's main-object mixins
 174 (file tag 175), and the Elixir quote live holes (#380) 145 on theirs; they landed together at 176 (file tag 177). The
-minimum-arity field (`paramsMin`) carried 178 (file tag 179) on its branch, the Go receiver scope (#403) 182 (file tag 183), and
-a receiver-typing branch not in this release 180 (file tag 181). This release is 184, above every number a branch build has used,
-so no cache such a build wrote is read as this release's; its full-use file tag is 185.
-`kCacheVersion` 31 → 34: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
+minimum-arity field (`paramsMin`) carried 178 (file tag 179) on its branch and the Go receiver scope (#403) 182 (file tag 183);
+those landed at 184 (file tag 185). Call-result typing carried 180 (file tag 181), the `f.call` / `f.apply` forwarders 188
+(189), the function-local Go / Rust / GDScript declarations 190 (191) and the name-template references 192 (193) on their
+branches, and a branch not in this release 194 (195). This release is 196, above every number a branch build has used, so
+no cache such a build wrote is read as this release's; its full-use file tag is 197.
+`kCacheVersion` 31 → 36: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
 numbered 9 on #380's branch, which predates the subscript role), and the binding kind byte one (Ruby's main-object mixin) (32);
-a definition record gained `paramsMin`, the fewest arguments a call can pass (33 on its branch, and on another branch for a
-different layout, so this release takes 34). `kQSnapCacheScheme` 20 → 22:
+a definition record gained `paramsMin`, the fewest arguments a call can pass (33 on its branch, 34 in the train that landed
+it); a binding record gained the call-result position and unwrap depth (33 on its branch), a reference record the
+`forwarded` byte (33 on its branch) and the role byte the name-template role (11; 35 on its branch), so this release takes
+36. `kQSnapCacheScheme` 20 → 22:
 the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls, 21), and a Rust call
 named like a standard-type member no longer binds an in-tree namesake (22), so the dead kind can
 differ for an unchanged commit. Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=03dafd43056d9967 entries=892`.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=c041289c80d454f1 entries=892`.
 
 
 ## [0.6.7] — 2026-10-11

@@ -847,7 +847,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     // CALLSITE-AT: the calledBy window's rows with their call sites — editcheck.h rowCallSites, the CLI --callers pass and path spelling.
     const PageWindow& calledByWin = referencingOnly ? pwPrimary : pwSecond;
     calledBySites = rowCallSites( ing, chRows.matches, std::span<const NodeId>( calledBy ).subspan( calledByWin.begin, calledByWin.end - calledByWin.begin ),
-                                  VrRender{ sqSingleRoot, sqRootPrefix } );
+                                  VrRender{ sqSingleRoot, sqRootPrefix }, g.keptForwards );
     char        pab[ kPageDisclosureCap ];
     // lane declined-sites (declinedsites.h): the CLI root's <dc> rows for the direction count= describes (find_symbol: the
     // declines its definitions make; find_referencing_symbols: the declined calls that could have meant them), cut by the
@@ -3497,9 +3497,9 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
         {
             continue;
         }
-        if( r.isCompose || r.isDocLink )
+        if( r.isCompose || r.isDocLink || !forwardCounts( r, refIndex, ix.g.keptForwards ) )
         {
-            continue; // type edge / doc mention — not a use-site
+            continue; // type edge / doc mention / a forwarded call buildGraph dropped (model.h forwardCounts, the CLI --uses' rule) — not a use-site
         }
         if( r.lang == Lang::Markdown )
         {
@@ -3628,25 +3628,6 @@ inline std::string pathKindLegend( const Graph& g, std::span<const NodeId> path 
          + anchorMissLegend( pathHasNameOnlyHop( g, path, 0 ) );
 }
 
-inline void emitPathHopRows( std::FILE* mem, const IngestResult& ing, const Graph& g, std::span<const NodeId> pth,
-                             bool singleRoot, std::string_view rootPrefix )
-{
-    std::vector<char> esc;
-    for( std::size_t i = 0; i < pth.size(); ++i )
-    {
-        const Symbol&          s  = ing.symbols[ pth[ i ] ];
-        const std::string_view rp = singleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], rootPrefix )
-                                               : std::string_view( ing.files[ s.fileId ] );
-        const bool        name = i > 0 && edgeNameOnly( g, pth[ i - 1 ], pth[ i ] );
-        const bool        link = i > 0 && edgeIsLink( g, pth[ i - 1 ], pth[ i ] );
-        const std::string mark = std::string( viaEdgeAttr( name, link ) )
-                               + anchorMissAttr( i > 0 && edgeAnchorMiss( g, pth[ i - 1 ], pth[ i ] ) );
-        rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ),
-                    std::string( escapeXml( s.name, esc ) ).c_str(), std::string( escapeXml( rp, esc ) ).c_str(), s.line,
-                    mark.c_str(), splitArmAttrXml( pathHopSplitArm( g, pth, i ) ) );
-    }
-}
-
 // `path` verb: the shortest directed CALL path from `from` to `to` (does A reach B, and how?). Reuses
 // resolveFocus + shortestPath, exactly as the CLI --path=A,B. Returns the <path>…</path> XML fragment (with
 // reachable="0" hops="0" and no <s> children when B is NOT reachable from A — a valid answer, not an error),
@@ -3703,9 +3684,11 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     const std::string         ptKindLegend = pathKindLegend( g, pth );
     const PathEndpointBinding ptBound      = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), pth );   // attrib-multidef, as on the CLI
     const bool                ptHasSplit = ptBound.splitHop;
+    const std::vector<std::string_view> ptOwners = pathHopOwners( ing, pth );   // PATH-OWNERS, as on the CLI
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                        "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + ptKindLegend
-                                                           + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to ) ).c_str(),
+                                                           + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to )
+                                                           + pathOwnerLegend( anyPathHopOwner( ptOwners ) ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
                   pathGapsLegend( ptGaps.any() ),
                   graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rootRelPathsLegend( ptSingleRoot ) );
@@ -3721,7 +3704,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
         ? pathUnreachedXml( ing, ptGaps, ptSingleRoot, ptRootPrefix, { "the connect verb on " + from + "," + to, "uses/impact", "" } )
         : PathGapsXml{};
     rw::emitTo( mem, "{}>{}", ptUnreached.rootAttrs, ptUnreached.rows );
-    emitPathHopRows( mem, ing, g, pth, ptSingleRoot, ptRootPrefix );
+    emitPathHopRows( mem, ing, g, pth, ptOwners, ptSingleRoot, ptRootPrefix );   // the CLI's own row emitter (defattrib.h)
     rw::emitRaw( mem, "</path>" );
     return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }

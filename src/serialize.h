@@ -1094,8 +1094,9 @@ inline constexpr std::size_t kForAnchorBodyBudgetBytes = 22800;
 // 20+ deep (external re-measure: the pre-registered retrieval lanes score exactly that) runs out of files
 // long before that depth — measured externally as the ENTIRE recall gap on the one task family where the
 // head's MRR already wins. Zero-score files are NOT served (the LB-A relevance-floor reasoning at file grain).
-// The REMAINING candidate files (a positive lens score, not among the shown head's files) as PATHS ONLY, in the
-// deterministic best-symbol projection of the same (score desc, id asc) order the head selected with — the rank rows.
+// The REMAINING candidate files (a positive lens score, not among the shown head's files), in the deterministic
+// best-symbol projection of the same (score desc, id asc) order the head selected with — the rank rows; each names the
+// file's top lens symbols in sym= (tail-sym, train 30: the file page's own top[] for that file, paths-only before).
 // FOLD C (forbudget-soft round C, owner decision 2026-10-14): page 0 of the --for file page (forpage.h computeForFilePage:
 // one row per positive-score file, file-first by the IDF share its top symbols cover) follows them, each row with sym=
 // naming its top symbols, so the answer carries its file grain and a capped tail's next= is the page itself. Measured
@@ -1117,9 +1118,10 @@ inline constexpr std::size_t kForFileTailShellReserve = 48;
 // dialect subtracts EXACTLY the bytes the clause adds (the kForAutoBundleLegend pattern). No "--" anywhere:
 // it rides inside an XML comment where "--" is ill-formed (G4).
 inline constexpr std::string_view kForFileTailLegend =
-    "; tail: file-grain rows, WEAKER evidence than the ranked rows: first t p= alone, the positive-score files NOT among the "
-    "shown sigs rows, the files of trimmed rows first, best-symbol rank order; then t p= sym=, the file page's first 40 rows "
-    "not listed above, file-first (the IDF share of the query's subtokens its top 8 symbols cover), sym= its top symbols; "
+    "; tail: file-grain rows, WEAKER evidence than the ranked rows: first the positive-score files NOT among the "
+    "shown sigs rows, the files of trimmed rows first, best-symbol rank order; then the file page's first 40 rows "
+    "not listed above, file-first (the IDF share of the query's subtokens its top 8 symbols cover); "
+    "sym= its top symbols by lens rank (a pointer, not the answer); "
     "total=every positive-score file, shown=printed, capped=1 when they differ, next= the page from its first unprinted row. "
     "r= on a ranked row is its 1-based rank in this lens ranking, rows in r= order, p= the file (a gap = a budget-trimmed row)";
 

@@ -62,8 +62,9 @@
 #   F2 a member or qualified value (`run(obj.lone)`, `self.f`, `ns::qf`, `&Cls::sm`, `this.handler`) is no row.
 #   F3 a value spelled by an import ALIAS (`import { aliasFn as af }`, `from m import alias_fn as af`) or bound by a
 #      destructured require (`const { reqFn } = require(…)`) is a local binding: no row under the original name.
-#   F4 a function as the OBJECT of a member access (`lone2.name`, `lone2.bind(null)`, `lone2.call(…)`, `f.__name__`) is
-#      no row.
+#   F4 a function as the OBJECT of a member access (`lone2.name`, `f.__name__`) is no row. JS/TS call forwarders are the
+#      exception (model.h kCallForwarders, test/fcallforwardcheck.sh): `lone2.bind(null)` is a value row at the slot the
+#      call fills, and `lone2.call(…)` on a proven function is a CALL of lone2 (a caller row, not a value row).
 #   F5 a C macro BODY is opaque (`#define H_ALIAS macro_alias_fn`): no row. A macro ARGUMENT parses as an argument and is
 #      a row (REG#arg0).
 #   F6 a class used as a value (`{"x": MyClass}`) is out of scope: functions and methods only.
@@ -1061,7 +1062,9 @@ arm "J2e callers cmpFn: (compare)" js2 --callers=cmpFn attr:count=0 attr:value_r
 arm "J2f callers keyFn: a computed KEY is a value use (keyed{})" js2 --callers=keyFn attr:count=0 attr:value_refs=1 'vr:bind=@J2_KEY;into=keyed{}'
 arm "J2g negatives: sibFn shadowed by an arrow parameter, a destructured const and a catch parameter — no row" \
     js2 --callers=sibFn attr:count=0 noattr:value_refs nvr:0
-arm "F4 floor (JS): lone2 as the object of .name / .bind / .call — no row" js2 --callers=lone2 attr:defs=1 noattr:value_refs nvr:0
+arm "F4 floor (JS): lone2 as the object of .name — no row" js2 --callers=lone2 attr:defs=1 'novr:bind=@J2_F4A' 'nos:n=reflect'
+arm "F4 lifted (JS call forwarders, test/fcallforwardcheck.sh): lone2.bind(null) handed to run2 is ONE value row, lone2.call(…) ONE call" \
+    js2 --callers=lone2 attr:defs=1 attr:count=1 ns:1 's:n=viaCall' attr:value_refs=1 nvr:1 'vr:bind=@J2_F4B;into=run2#arg0;in_id=bound'
 arm "J2i callers cjsA: module.exports.cjsA = cjsA" js2 --callers=cjsA attr:count=0 attr:value_refs=1 'vr:bind=@J2_CJSA;into=module.exports.cjsA'
 arm "J2j callers cjsB: exports.cjsB = cjsB" js2 --callers=cjsB attr:count=0 attr:value_refs=1 'vr:bind=@J2_CJSB;into=exports.cjsB'
 

@@ -58,6 +58,7 @@ if [ "$map_rc" -eq 0 ] && [ "${rows:-0}" -ge 15 ]; then ok "(A0) map ran: rc=0, 
 
 # has_row KIND NAME SC (has_row_in FILE KIND NAME SC) → the map holds that row with exactly that sc= (SC empty = the row has NO sc= attribute)
 has_row(){ has_row_in "$TMP/map.xml" "$@"; }
+has_any_row(){ grep -qE "<s t=\"$1\" n=\"$2\"[ >/]" "$TMP/map.xml"; }   # any row of that kind and name, scoped or not
 has_row_in(){
     python3 -I - "$1" "$2" "$3" "$4" <<'PY'
 import re, sys
@@ -96,11 +97,20 @@ callers_of "Loop" 2
 
 echo "=== (C) near misses ==="
 for spec in "method Push Stack" "method Size Stack" "method Close closer" \
-            "var step -" "var c -" "struct Deb -" "iface Packager -" "struct Stack -" "iface closer -" "fn Package -" "fn Build -" "fn Run -"; do
+            "struct Deb -" "iface Packager -" "struct Stack -" "iface closer -" "fn Package -" "fn Build -" "fn Run -"; do
     set -- $spec
     sc="$3"; [ "$sc" = "-" ] && sc=""
     want="no sc="; [ -n "$sc" ] && want="sc=\"$sc\""
     if has_row "$1" "$2" "$sc"; then ok "(C) t=$1 $2 $want"; else no "(C) t=$1 $2 wanted $want"; fi
+done
+
+# train 30 (go-scope x go-local-var): a func literal bound inside a method (`var step = func…`) and a local `var c closer` are
+# function-local declarations, which are no longer indexed symbols at all (test/localdeclcheck.sh) — so no row of either
+# exists, scoped or not (on main before go-local-var both were rows with no sc=; read off the map checked non-empty above).
+for spec in "var step" "var c"; do
+    set -- $spec
+    if [ "$rows" -gt 0 ] && ! has_any_row "$1" "$2"; then ok "(C) t=$1 $2 is no symbol (function-local, so never scoped to the method)"
+    else no "(C) t=$1 $2: a function-local declaration is a map row again (rows=$rows)"; fi
 done
 
 echo "=== (I) receiver-list comment and interface alias (written to a temp dir) ==="
