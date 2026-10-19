@@ -609,11 +609,11 @@ printf '%s' "$CNG" | grep -q 'direct.test.ts' \
 printf '%s' "$CNG" | grep -qE 'class="Other"|other.test.ts' \
     && no '(9e) a class constructed only in non-test code (Other, via src/app.ts) added a row' \
     || ok '(9e) near miss: Other, built only in src/app.ts, adds nothing (one hop from the class, test callers only)'
-printf '%s' "$CNG" | grep -q '<g via="class-new" total="11" shown="8" next="--callers=src/router.ts:Wide">' \
+printf '%s' "$CNG" | grep -q '<g via="class-new" total="11" shown="8" capped="1" next="--callers=src/router.ts:Wide">' \
     && [ "$( printf '%s' "$CNG" | grep -o '<new ' | wc -l | tr -d ' ' )" = 8 ] \
-    && ok '(9f) a wide class caps: total="11" shown="8" (8 <new> rows) with next="--callers=src/router.ts:Wide"' \
+    && ok '(9f) a wide class caps: total="11" shown="8" capped="1" (8 <new> rows) with next="--callers=src/router.ts:Wide"' \
     || no "(9f) cap/count/next= wrong: $( printf '%s' "$CNG" | grep -oE '<g via="class-new"[^>]*>' )"
-printf '%s' "$CNT" | grep -q 'via=class-new total= shown= next=>: tests not listed above that construct a class owning a reached method' \
+printf '%s' "$CNT" | grep -q 'via=class-new total= shown= capped= next=>: tests not listed above that construct a class owning a reached method' \
     && ok '(9g) the legend defines the group exactly when it renders' \
     || no '(9g) the class-new group renders with no legend clause'
 CNP="$( cn py/pkg/util.py )"
@@ -624,7 +624,7 @@ CNR="$( cn rs/src/util.rs )"
 printf '%s' "$CNR" | grep -q '<g via="class-new" total="1" shown="1"><new p="rs/tests/eng_test.rs" l="4" class="Eng"/></g>' \
     && ok '(9i) Rust: eng_test.rs calls Eng::new (the langfacts constructorMethod row) — a class-new row for Eng' \
     || no "(9i) Rust: $( printf '%s' "$CNR" | sed 's/^.*-->//' )"
-( cd "$CN" || exit 1; "$BIN" "$CN" --affected=src/url.ts --legend=full --no-cache 2>/dev/null ) | grep -q '<g via="class-new" total= shown= next=>: tests not listed above that construct a class owning a reached method' \
+( cd "$CN" || exit 1; "$BIN" "$CN" --affected=src/url.ts --legend=full --no-cache 2>/dev/null ) | grep -q '<g via="class-new" total= shown= capped= next=>: tests not listed above that construct a class owning a reached method' \
     && ok '(9k) the full legend carries the same clause (testmap.h kClassNewLegend) when the group renders' \
     || no '(9k) --legend=full renders the class-new group with no clause'
 printf '%s' "$A" | grep -q 'class-new' \

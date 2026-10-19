@@ -19,7 +19,7 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 A test that builds a class and then drives it through an interface-typed helper (`runTest( () => new TrieRouter() )`, then
 `router.add( … )` inside the helper) is a test a reviewer checks, but the call walk cannot prove the dispatch, so `--affected`
-never listed it. `--affected` now adds a separate, hedged group after the proven rows: `<g via="class-new" total= shown= next=>`
+never listed it. `--affected` now adds a separate, hedged group after the proven rows: `<g via="class-new" total= shown= capped= next=>`
 with one `<new p= l= class=/>` row per test file that constructs a class owning a reached method (or the changed class),
 naming the construction line and the class. The group is never counted in `tests=`/`reached=`, an already-listed test is
 never repeated, a class built only in non-test code adds nothing, and more than 8 rows cap with `next=--callers=…`. The
