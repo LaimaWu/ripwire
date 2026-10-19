@@ -2529,21 +2529,21 @@ struct ReceiverEvidence
     }
     // rust-receivers (fix round 1): may a Rust call written `T::f()` type the locals its result binds through `to`, a member
     // whose declared result is written `Self` (graph.h typeCallResults asks only for those: a result the base read already
-    // typed keeps its base rule)? Only when the call's qualifier, read as a WRITTEN type at the call site (the resolver a
-    // written `x: T` uses: the full path; `Self` the impl's own class), resolves to the in-tree class that owns `to`. The
-    // canonical tier matches the callee's scope NAME alone, so std's `Path::new( p )`, `fs::File::open()`,
-    // `std::path::PathBuf::from()`, a glob's or the prelude's `String::new()` all commit to an in-tree type's member of that
-    // name (a base edge this does not change); an outside root, a std module, a glob that may supply, a prelude name with no
-    // in-tree item in scope resolve to no class, and that `-> Self` types nothing.
-    bool rustQualifiedTypeOwns( const Reference& r, NodeId to ) const
+    // typed keeps its base rule)? Only when the qualifier as WRITTEN at the call site (`written`: the CallResult record's
+    // whole path — the Reference keeps only its last segment), resolved like a written `x: T` (`Self` the impl's own class),
+    // is the in-tree class that owns `to`. The canonical tier matches the callee's scope NAME alone, so std's `Path::new( p )`,
+    // `fs::File::open()`, `std::path::PathBuf::from()`, a glob's or the prelude's `String::new()` all commit to an in-tree
+    // type's member of that name (a base edge this does not change); an outside root, a std module, a glob that may supply,
+    // a prelude name with no in-tree item in scope resolve to no class, and that `-> Self` types nothing.
+    bool rustQualifiedTypeOwns( const Reference& r, std::string_view written, NodeId to ) const
     {
-        if( callResultFamilyOf( r.lang ) != CallResultFamily::Rust || r.qualifier.empty() || ing.symbols[ to ].scope.empty() )
+        if( r.qualifier.empty() )
         {
-            return true;
+            return true;   // a bare call (inside the impl): the language's own lookup
         }
-        const auto [ path, last ] = CallResultTypes::splitLast( r.qualifier, "::" );
+        const auto [ path, last ] = CallResultTypes::splitLast( written, "::" );
         const NodeId cls          = path.empty() && last == "Self" ? selfClass( r.fromSymbol )
-                                                                   : types.rustResultClass( r.fileId, r.startByte, path.empty() ? std::string_view{} : std::string_view( r.qualifier ), last );
+                                                                   : types.rustResultClass( r.fileId, r.startByte, path.empty() ? std::string_view{} : written, last );
         if( cls == kNoNode )
         {
             return false;

@@ -4131,7 +4131,8 @@ inline TSNode calleeNameNode( TSNode call )
 
 // One CallResult: `var` binds result `index` of `call` after `depth` unwrap operators, visible over `site`. A blank `_`, a
 // non-identifier name or a callee with no name node records nothing.
-inline void pushCallResult( BindCtx& cx, TSNode var, TSNode call, std::uint8_t index, std::uint8_t depth, BindSite site )
+// `written`: the qualifier a Rust path call is written with (rustCallQualifier; model.h LocalBindKind::CallResult)
+inline void pushCallResult( BindCtx& cx, TSNode var, TSNode call, std::uint8_t index, std::uint8_t depth, BindSite site, std::string written = {} )
 {
     const TSNode           callee = ts_node_is_null( call ) ? TSNode{} : calleeNameNode( call );
     const std::string_view name   = ts_node_is_null( var ) ? std::string_view{} : identifierText( var, cx.src );
@@ -4142,7 +4143,7 @@ inline void pushCallResult( BindCtx& cx, TSNode var, TSNode call, std::uint8_t i
     // startByte: the call Reference's own byte (the call's start) — graph.h joins on it and the callee name
     cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = ts_node_start_byte( call ), .lang = cx.lang, .kind = LocalBindKind::CallResult,
                                   .resultIndex = index, .unwrapDepth = depth, .spanStart = site.spanStart, .spanEnd = site.spanEnd,
-                                  .var = std::string( name ), .typeName = std::string( nodeTextOf( callee, cx.src ) ) } );
+                                  .var = std::string( name ), .importedName = std::move( written ), .typeName = std::string( nodeTextOf( callee, cx.src ) ) } );
 }
 
 // One ReturnType of the definition starting at `defStart`: position `index`, class `cls` ("" records nothing), the qualified
@@ -5905,6 +5906,17 @@ inline void captureRustReturnTypes( BindCtx& cx, TSNode fn )
     }
 }
 
+// rust-receivers fix round 1: the qualifier a Rust path call is WRITTEN with — `crate::other::Path` in
+// `crate::other::Path::new( p )`, `fs::File`, `Self` — blanks removed; "" for any other call (a method call, a bare call).
+// The call Reference keeps only the last segment (ingest_names.h rustQualifierOf); graph.h resolves this whole path like a
+// written type before a callee's `-> Self` may type the local (receiverevidence.h rustQualifiedTypeOwns).
+inline std::string rustCallQualifier( TSNode call, std::string_view src )
+{
+    const TSNode fn   = fieldChild( call, NodeField::Function );
+    const TSNode path = ts_node_is_null( fn ) || !kindIs( ts_node_type( fn ), "scoped_identifier" ) ? TSNode{} : fieldChild( fn, NodeField::Path );
+    return ts_node_is_null( path ) ? std::string{} : withoutBlanks( std::string( nodeTextOf( path, src ) ) );
+}
+
 // Rust: the call a `let` value binds, through the unwrap operators applied to it — each `?` and each `.unwrap()` /
 // `.expect( … )` counts one into `depth`; any other method on the result (`.into_other()`, `.iter()`) is not stripped, so
 // that call is the one recorded (its own result: one level further, a floor). Null when the value is no call.
@@ -6053,7 +6065,7 @@ inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
     }
     if( kindIs( ts_node_type( pattern ), "identifier" ) )
     {
-        pushCallResult( cx, pattern, call, kWholeResult, depth, site );
+        pushCallResult( cx, pattern, call, kWholeResult, depth, site, rustCallQualifier( call, cx.src ) );
     }
     else if( kindIs( ts_node_type( pattern ), "tuple_pattern" ) )
     {
@@ -6068,7 +6080,7 @@ inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
             }
             if( kindIs( ct, "identifier" ) )
             {
-                pushCallResult( cx, c, call, std::uint8_t( position ), depth, site );
+                pushCallResult( cx, c, call, std::uint8_t( position ), depth, site, rustCallQualifier( call, cx.src ) );
             }
             ++position;
         }

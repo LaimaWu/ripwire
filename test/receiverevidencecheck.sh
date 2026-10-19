@@ -1574,18 +1574,18 @@ rs_none "src/other.rs::Shelf::near_same_named_owner"                            
 # --callers lists the [P] caller unhedged and never the [N] one; Knob::tune's callers are the typed Knob locals only
 proven      rsrecv callers "$RSM::Cfg::tune" "fn let_default $RSA"
 notproven   rsrecv callers "$RSM::Cfg::tune" "near_default_outside $RSA" "glob_default src/nest/inner.rs" "glob_of_glob_default src/glob2/leaf.rs"
-proven      rsrecv callers "$RSM::Knob::tune" "fn glob_default src/nest/inner.rs" "fn glob_of_glob_default src/glob2/leaf.rs"
-notproven   rsrecv callers "$RSM::Knob::tune" "let_default $RSA" "near_default_outside $RSA"
+proven      rsrecv callers "$RSM::Knob::tune" "fn glob_default src/nest/inner.rs"
+notproven   rsrecv callers "$RSM::Knob::tune" "let_default $RSA" "near_default_outside $RSA" "glob_of_glob_default src/glob2/leaf.rs"
 # a glob `use super::*` brings in what the parent module's own `use` names (Rust: a glob imports the module's imports
-# too); a glob of a module that only globs in turn is not followed (stated floor: names nothing, proves nothing); a
-# `T::default()` whose spelling names no class at the site is still typed by its callee's declared `-> Self` (call result)
+# too); a glob of a module that only globs in turn is not followed (stated floor: names nothing, proves nothing) — and
+# (fix round 1, rv-l3 M1) neither does its `T::default()`: a callee's declared `-> Self` types the local only through a
+# qualifier that resolves at the site, so glob_of_glob_default is declined exactly as on base
 exactproven rsrecv callees "src/nest/inner.rs:glob_param" "method spin $RSM"                                     # [P]
 proven      rsrecv callees "src/nest/inner.rs:glob_param" "method spin $RSM:5"
 proven      rsrecv callees "src/nest/inner.rs:glob_default" "method tune $RSM:20"                                # [P] Knob's
 notproven   rsrecv callees "src/nest/inner.rs:glob_default" "tune $RSM:16"
 rs_none "src/glob2/leaf.rs:glob_of_glob"                                                                        # [N] floor
-proven      rsrecv callees "src/glob2/leaf.rs:glob_of_glob_default" "method tune $RSM:20"                        # [P] via the call result
-notproven   rsrecv callees "src/glob2/leaf.rs:glob_of_glob_default" "tune $RSM:16"
+notproven   rsrecv callees "src/glob2/leaf.rs:glob_of_glob_default" "tune $RSM:20" "tune $RSM:16"                # [N] floor (= base)
 # early gates review (rv-l3-gates A1-A12; src/adds.rs, alias.rs, samename.rs, kinds.rs's trait). [P]: the field below
 # `&mut self`, by-value `self`, `&'a self`, a field written `&'a Book`, a `&Self` parameter's field, a `Self::new()` local's
 # field, a `&'a Book` parameter, a `use … as` alias (by the path it names: other::Book, never the in-tree model::Other its

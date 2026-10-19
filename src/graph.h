@@ -6950,7 +6950,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 const std::uint32_t ri = rtIt->second;
                 const Binding&      rt = ing.bindings[ ri ];
                 const bool          match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth )
-                                            && ( !rt.isFromAssignment || recvEv.rustQualifiedTypeOwns( r, callee ) );   // Rust `-> Self`: rustQualifiedTypeOwns
+                                            && ( !rt.isFromAssignment || recvEv.rustQualifiedTypeOwns( r, cr.importedName, callee ) );   // Rust `-> Self`: rustQualifiedTypeOwns
                 if( !match )
                 {
                     continue;

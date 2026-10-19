@@ -1202,6 +1202,7 @@ enum class LocalBindKind : std::uint8_t
                    //     Reference's own; with typeName it names one call), spanStart/spanEnd = where the name is visible (the same span as the name's RecvType
                    //     tombstone, which the typed fact replaces), resultIndex = the position it binds (kWholeResult: the whole
                    //     value), unwrapDepth = the unwrap operators applied before binding (Rust `?` / `.unwrap()` / `.expect()`).
+                   //     Rust: importedName = the qualifier a path call is written with (`crate::m::T`, `fs::File`, `Self`), else "".
     ReturnType,    // one DECLARED result of a function definition, at startByte = the def's own start (Symbol::sigStartByte):
                    //     resultIndex = its position (kWholeResult: a single non-tuple result), typeName = the class it names
                    //     after the language's transparent wrappers (Go `*T`, Rust `Box<T>` / `&T`), importedName = the type
