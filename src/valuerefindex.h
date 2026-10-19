@@ -71,9 +71,15 @@ inline bool vrBindLess( const IngestResult& ing, const Reference& a, const Refer
 template<typename Keep>
 std::vector<std::uint32_t> vrRefsWhere( std::span<const std::uint32_t> refs, Keep&& keep )
 {
-    std::vector<std::uint32_t> out;
-    std::ranges::copy_if( refs, std::back_inserter( out ), keep );
-    return out;
+    std::vector<std::uint32_t> kept;
+    for( const std::uint32_t i : refs )
+    {
+        if( keep( i ) )
+        {
+            kept.push_back( i );   // reference order
+        }
+    }
+    return kept;
 }
 // The references of `refs` made inside any of `fns`.
 inline std::vector<std::uint32_t> vrRefsMadeIn( const IngestResult& ing, std::span<const std::uint32_t> refs, std::span<const NodeId> fns )
