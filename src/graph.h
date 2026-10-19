@@ -6505,8 +6505,10 @@ inline bool isMarkdownFileNode( const Symbol& sym, std::uint32_t widestEnd ) noe
     return sym.sigStartByte == 0 && sym.sigEndByte >= sym.endByte && sym.endByte >= widestEnd;
 }
 
-inline std::vector<std::uint32_t> markdownWidestEnd( const IngestResult& ing )
+// Headings, and each file's own node (the first matching symbol in id order). The file node is not a heading.
+inline void indexMarkdownSections( MdLinkIndex& ix, const IngestResult& ing )
 {
+    ix.wholeFile.assign( ing.files.size(), kNoNode );
     std::vector<std::uint32_t> widest( ing.files.size(), 0 );
     for( const Symbol& sym : ing.symbols )
     {
@@ -6515,14 +6517,6 @@ inline std::vector<std::uint32_t> markdownWidestEnd( const IngestResult& ing )
             widest[ sym.fileId ] = std::max( widest[ sym.fileId ], sym.endByte );
         }
     }
-    return widest;
-}
-
-// Headings, and each file's own node (the first matching symbol in id order). The file node is not a heading.
-inline void indexMarkdownSections( MdLinkIndex& ix, const IngestResult& ing )
-{
-    ix.wholeFile.assign( ing.files.size(), kNoNode );
-    const std::vector<std::uint32_t> widest = markdownWidestEnd( ing );
     for( const Symbol& sym : ing.symbols )
     {
         if( !langFacts( sym.lang ).linkSections || sym.kind != SymKind::Section || sym.fileId >= ing.files.size() )
