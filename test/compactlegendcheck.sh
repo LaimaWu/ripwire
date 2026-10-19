@@ -338,6 +338,11 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # symbols by lens rank (a pointer, not the answer)"; p= is already "the file" in the r= clause), 4566 -> 4522 B. Same meaning,
 # shorter text. Checked mechanically: the reverse replacement with est_tokens= masked gives the previous pin byte for byte
 # (at= masked). The six other pins are unchanged.
+# RE-ANCHORED 2026-10-18 (train 31, merge of lane body-fold over main's tail-sym pin), for.xml only: both sides moved the
+# same pin (body-fold: the fold legend clause and its <b> definition; tail-sym: the shorter tail sym= clause). Re-recorded
+# from the merged binary and checked mechanically: a token-level 3-way merge (base fc0745a0 pin, main pin, lane pin; at= and
+# est_tokens= masked) equals the merged output exactly, so it holds both lanes' edits and nothing else. 4522 -> 5527 B.
+# The six other pins are unchanged.
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
 # sed does not): at="…" masked, trailing newlines dropped.
