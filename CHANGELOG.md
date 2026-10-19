@@ -15,6 +15,120 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — `--for`'s first eight rows name up to eight distinct files before any file takes a second row (head round-robin)
+
+A routed (subtoken+body) `--for` answer's head was a list of the highest-scoring rows, and one file often took most of it: on
+25 answers graded complete in the round-5 kit, the first 8 rows named 3.96 distinct files on average. Now, inside the shown
+`<sigs>` rows (none added, none removed, each row's text unchanged), ranks 1..8 take each distinct file's best row first, in
+score order; a name a head row already holds does not open a new file (a C typedef/struct pair, an overload, a vendored copy);
+the rows they displace keep score order after them, and rank 1 never moves. With fewer than eight distinct files shown, the free
+head slots take the remaining rows in score order, so a file can then hold a second head row. The tag says so: `<sigs files_first=N>` counts the rows
+whose rank changed, with a present-only legend reading. The body-tail fold and the compact `<hops>` keep score order (measured:
+following the reordered head lost two graded rows), so `<hops total=N>` and the fold count score ranks, not the shown r=. The
+name-exact route, `--no-route`, a question that names an indexed file, any explicit `--token-budget` and a body ceiling keep
+score order. CLI XML, `--json` and MCP `for` share one selection. `RIPWIRE_NO_HEAD_RR`,
+set to any value, turns it off. Measured on 44 round-5 rows (19 file-miss targets, 25 ✓ rows), fold on: 3 of 20 gold files
+missing from the head-8 enter it, 19 more gold files enter the ✓ rows' head-8 with none lost, distinct head files 3.96 → 8.00;
+graded rows unchanged by the reorder alone.
+
+### Changed — a `.d.ts` / `.pyi` row ranks one tier below the implementation its package ships
+
+A declaration file (`.d.ts`, `.d.mts`, `.d.cts`, `.pyi`) is ranked ×0.7 when its package — the nearest directory holding a
+`package.json` (TS/JS) or `pyproject.toml` / `setup.py` / `setup.cfg` (Python), else the indexed root — holds an implementation
+file of its family; a types-only package keeps 1.0, and the tier takes the minimum with the test/demo tiers. Only the package's own
+code counts as an implementation: not its manifest (`setup.py`), a type test (`.test-d.ts`), a package marker (`__init__.py`) or a
+test, demo or generated path. Data rows in
+`src/filter.h`; the rule is common. On the same 44 rows: fastify-11 and fastify-13 become complete (Rule C), no row lower.
+
+### Added — `--for` appends the bodies of its top ranked rows on the compact route (body-tail fold)
+
+A conceptual `--for` question (root `bundle="compact"`) now ends with `<fold kind="bodies" budget_bytes="4000" served= total=>`:
+the whole bodies of its top three ranked rows that are not already bodied, in rank order, each whole or not at all within 4,000 B
+(no `sibs=`/`inc=`, no callee rows). A body that does not fit is a `<skip p= n= l= bytes= next="--expand=…">` row and the walk
+goes on; a class too big for what is left is served as a `<slice>` of its constructor and the members whose name, or body past its
+declaration line, holds a question word, followed by its skip. Each text rides once (a ranked row inside a served body is not
+repeated), and a row's field note stays on its `<d>` row. Everything before the fold is the answer without it
+(`RIPWIRE_NO_BODY_FOLD=1`), except that `<sigs next=>` now names the first skipped body and the signatures-only re-call moves to
+`sigs_next=`. No fold under an explicit `--token-budget`, `--json`, `--signatures-only`, `--auto-bodies`, `--detail=N` or the
+name-exact route; `--max-tokens` is not read by this answer (as its notice says) and leaves it unchanged. CLI only: the MCP `for`
+tool answers without the fold (it has no compact route). Measured on the 53 round-5 `--for` rows (base fc0745a0, frozen round-5
+grader): Rule C ✓ +4 (hono-02, hono-11, koa-02, textual-02), 0 lost; the fold element is +3.1 KB median (max 4.6 KB), the whole
+answer (fold, its legend clause and the `<sigs>` pair) +3.4 KB median (max 4.9 KB). Also: a cut `<hops>` callee listing now carries
+`next="--callees=…"`, and the `--for --limit=N` file page legend says `n=` counts this task's symbols, not the file's (`--expand`
+`sibs_total=`).
+
+### Fixed — closure blocks and bridges: three false hedges a hand-check found
+
+- `post: function _post( … ) { … }` (and `compile: function compile`) is one definition the parser reports twice; the
+  property is no longer listed as a closure beside the function expression, which takes its place.
+- C, C++ and Objective-C have no named nested function, so a function span the parser reports inside a function (htop's
+  `else if (…) {` read as a function named `if`) is no longer a closure (a `langfacts.h` column, no language compare).
+- A `<bridge>` no longer routes through a test, bench, demo, generated or minified symbol, nor (with the declaration tier
+  above) a `.d.ts` / `.pyi` twin whose package ships its implementation (it may still start or end at one), and a chain
+  longer than 8 hops is not shown. Its namesake crossing joins definitions of the same language and kind; the full legend
+  now says both.
+- A `<bridge>` no longer crosses a declined member call spelled like a builtin type's method (`ids.join( "," )`,
+  `keys.push( k )`, `d.get( k )`, Ruby `each`): the builtin-method gate's per-language tables decide, and on a 42-query
+  hand-check every such crossing was a false chain.
+- `<near_sink>` reads neither such a builtin-spelled declined call nor a wrapper decorator (`@property`, `@classmethod`,
+  `@overload`: the dead-code rule's own list) as a way into a row.
+- By-name hedges (`<near_sink>` `why="name"`, a `<bridge>` `via="namesake"` crossing) now need a call of the name that
+  is not spelled like a builtin type's method (`prerequisites.clear`, `self._invalid_css.update( … )`) AND a namesake
+  whose owner (its class in its file, or its file for a free function) owns something the forward search reached. On the
+  24-row near_sink hand-check sample this removes all 5 by-name rejects and no accepted row; it is a hedge filter, not
+  proof that a dropped namesake is never the one called.
+  A row whose by-name calls either rule drops says so with `withheld="name:N"` (N callers) and never reads `why="external"`: the
+  index holds a way in it chose not to count (textual's `Input.render_line`, entered by `widget.render_line( y )`).
+
+### Added — `--path` offers a hedged bridge (`<bridge proven="0">`) and glob endpoints
+
+A `reachable="0"` `--path` answer (and MCP `path_between`) now carries `<bridge proven="0" crossings= hops=>` when a chain
+from `from=` to `to=` exists that crosses at most 2 hops the graph holds no edge for, each fanning out to at most 16
+candidates: a declined call's candidate (`via="declined" cands=K`), a function stored or passed as a value
+(`via="value"`), a closure written in the previous row's body (`via="closure"`), or another same-language definition of a
+name called by name alone (`via="namesake"`). The chain with the fewest crossings is shown; it is not a path —
+`reachable=` and `hops=` stay 0 and no count includes it. On htop, `--path=ScreenManager_run,LinuxMachine_scanCPUTime`
+shows ScreenManager_run → checkRecalculation → Machine_scan (declined, 9 candidates) → LinuxMachine_scanCPUTime; on koa,
+`--path=listen,respond` shows listen → callback ⊃ handleRequest → handleRequest ⊃ handleResponse → respond.
+
+An endpoint that names no definition and holds a `*` now stands for every function or method definition whose name fits
+it (`from_glob="1"`/`to_glob="1"`, `to_defs=` counts them): `--path=post_message,on_*` on Textual was "endpoint not found"
+(exit 1) and is now an answer with its gaps, bridge and `<near_sink>` rows. A name that resolves is never read as a pattern.
+
+### Changed — declined-call `<dc>` rows: tier-first order, and `--impact` lists them
+
+The `<dc>` rows (calls the resolver declined to bind) are now ordered by the file's path tier first — source, then
+test/bench, then docs, the key the callers and uses rows already sort by — then path and line, so a test file whose path
+sorts first no longer leads the list. `--impact` (XML, `--json`, columnar and the MCP twin) now prints the callers-form
+`<dc>` rows of exactly the declined calls its `declined_calls=` counts (the ones that could have reached SYM or a symbol
+in its radius), capped at 16 with `dc_shown=`/`dc_next=` as on `--callers`; before, it printed only the count. On hono,
+`--impact=match` now names 16 of its 339 declined sites; the `src/helper/dev/index.ts:77` site is the 18th, two rows past
+the cap, because hono's `benchmarks/` and `perf-measures/` trees are not in the test/bench tier.
+
+### Added — `--callees` lists what a function's closures call (`<in>` blocks)
+
+A named function written inside another function's body (a JS/TS arrow or function assigned in the body, a Python
+nested `def`, a Rust nested `fn`, at any depth) is a closure of it: read from the parser's own definition spans, so no
+cached content changes and no language needs a rule of its own. `--callees=F` (XML, `--json`, columnar) now carries
+`closures=K` and one `<in n= p= via="closure" count=>` block per closure (at most 4) listing that closure's own callees
+(at most 8 each, `capped="1"` and a `next=` past that). A block is containment, not a call edge: its rows are in no
+`count=`, and F reaches them only by running the closure or handing it on. The `--path` `<near_sink>` rows gain
+`why="closure"` with the enclosing function as `in=`. On nunjucks, `--callees=getTemplate` now names `Template`
+(called only inside its `createTemplate` arrow); on koa, `--path=listen,respond` names `handleResponse`, a closure of
+`handleRequest`. A function with no closure keeps its bytes. A class member written inside a function is not a closure.
+
+### Added — `--path` names the sink side of an unreached path (`<near_sink>`)
+
+A `--path=A,B` answer with `reachable="0"` (and the MCP `path_between` twin) now carries `<near_sink depth= callers= rows=>`
+beside the forward `<gap>` rows: B's proven callers walked back over resolved call edges up to 2 hops, each `<ns>` row
+classified by how it may also be entered with no edge — `why=` `declined` (a declined call lists it as a candidate),
+`value`, `through` (a call through a parameter or slot is matched to that value), `name` (a by-name call went to a
+namesake), or `external` (no indexed way in was found) — with one such site (`in=`, `site=`) and `met="1"` when the
+forward search reached that site. Rows are hedges, never hops; at most 4 are shown (`rows=` counts them all) and `next=`
+lists the first row's callers. On htop, `--path=ScreenManager_run,LinuxMachine_scanCPUTime` now names the Linux
+`Machine_scan` (the sink's only caller) and the declined call in `checkRecalculation` that could have meant it. Every
+`reachable="1"` answer is byte-identical; the reachable="0" hint and gap clause are unchanged.
+
 ### Changed — Go methods carry their receiver type as scope (#403, slice 9a)
 
 Go methods now carry their receiver type as scope (`sc=`), with `*` and type arguments stripped (`*Stack[T]` → `Stack`),
@@ -31,7 +145,7 @@ every definition. On fzf, `--path=Matcher::Loop,Pattern::extendedMatch` was "end
 
 Known floors: struct fields are not Go definitions, so nothing scopes to a struct; a member of an anonymous interface in
 a struct field scopes to the struct. Rust and Kotlin keep their own scope walkers; C++ and Python output is byte-identical.
-`kParserVer` moves (184 in this release, see the versions note).
+`kParserVer` moves (198 in this release, see the versions note).
 
 ### Changed — a Rust call named like a standard collection, string or Option member binds no in-tree namesake by name (#405)
 
@@ -67,7 +181,7 @@ overload the too-many check dropped. A call with a spread, splat or C++ pack exp
 argument count. Fewer calls stay ambiguous, so `ambiguous=` and `graph_ambiguous=` drop. Two residual limits stay: a
 C/C++ argument that is a macro expanding to several arguments is counted as one, and a default written only on a
 declaration ripwire does not index (a `.inl`/`.ipp` header, a header outside the tree) is not seen. `kParserVer` and `kCacheVersion` move
-(a definition record gains `paramsMin`; 184 and 34 in this release, see the versions note). A cached definition whose
+(a definition record gains `paramsMin`; 198 and 36 in this release, see the versions note). A cached definition whose
 minimum exceeds its parameter count is refused and that file reparses (`test/cachefuzzcheck.sh` Part 3). Gate: `test/aritycheck.sh` §3b.
 
 ### Changed — `--impact` of a type starts from the symbols that name it
@@ -89,13 +203,27 @@ users. `--format=columnar`, which carries no `<files>` rollup, marks each row re
 Function impacts are byte-identical. Other languages record no type mentions yet (a floor, stated in the legend).
 Gate: `test/impacttypecheck.sh`.
 
+### Changed — `--callers` serves a whole list whose rows fit 16,000 B; a capped `--callees` page names the next page
+
+With no `--limit`, a `--callers` answer past the 50-row band is served whole when the estimated bytes of its caller rows
+(`<s>` with `tested=`, `via=`, `prov=`, `of_def=` and `sites_at=`, as printed) fit 16,000 B (`src/pageview.h`
+`kCallersBandMaxBytes`): tmux's `--callers=options_get_number`, 121 callers and about 10.8 KB of rows, is one answer instead
+of four pages. A longer list keeps the 40-row page, its `next=` page and `uses_next=`. The band bounds the caller rows only:
+the root, legend, `<dc>` rows and value-use and name-template rows ride beside it, so a whole answer can exceed 16,000 B. One
+estimate decides for every surface: CLI XML, `--format=columnar`, `--json`, and MCP `find_symbol` (its `calledBy` array) and
+`find_referencing_symbols`. `--callees` keeps the 50-row band, and a capped `--callees` page now names its next page as
+`next=` (`--callees=SEL --offset=40`, `--limit`, `--format=columnar` and `--json` replayed); the body it used to name moves
+to `expand_next=` (MCP `find_symbol`'s capped `calls` array the same). `--impact`, `--owners` and `--edit-check` keep their
+40-row windows. Gate: `test/neighbourcapcheck.sh` arms 22-25.
+
 ### Changed — `--callers` and `--callees` serve up to 50 rows whole, and a capped `--callers` page names the next page
 
 With no `--limit`, a call hierarchy of 41 to 50 rows is served whole instead of cut at 40 (`src/pageview.h`
 `kCallHierarchyBandMax`, 40 + 40/4); above 50 the 40-row window holds. A cut `--callers` root's `next=` is now the next
 page (`--callers=SYM --offset=40`, the selector quoted as one argument, `--limit` and `--format=columnar` replayed), and
-the `--uses` follow-up it used to name moves to `uses_next=`; the last page, an uncut answer and `--callees` (whose
-`next=` stays `--expand`) are unchanged. MCP `find_symbol` and `find_referencing_symbols` window each array the same way,
+the `--uses` follow-up it used to name moves to `uses_next=`; the last page and an uncut answer are unchanged. (A callers
+list past 50 rows can now be served whole too, and a capped `--callees` page names its next page: see the callers byte
+band above.) MCP `find_symbol` and `find_referencing_symbols` window each array the same way,
 and `find_referencing_symbols` carries the page in `next` and the uses follow-up in `uses_next`; a `--json` page carries the
 same pair as `next` (with `--json` replayed) and `uses_next` keys. `--impact`, `--owners`
 and `--edit-check` windows keep the plain 40. Gate: `test/neighbourcapcheck.sh` arms 14-21.
@@ -143,7 +271,7 @@ it now names nothing.) Go's
 written `*os.File` no longer resolves to an in-tree type that happens to be called `File`. A Java/Kotlin class-name
 receiver binds an in-tree class only where the caller's file sees it — its package, a single-type import naming it, an
 on-demand import of its package (`import ext.Util; Util.open()`, `import ext.*; Util.open()`, `Util::open` no longer bind
-an in-tree `Util` as proven). `kParserVer` and `kCacheVersion` move (196 and 36 in this release, see the versions note).
+an in-tree `Util` as proven). `kParserVer` and `kCacheVersion` move (198 and 36 in this release, see the versions note).
 ### Fixed — `f.call( … )` and `f.apply( … )` on a proven function are calls of `f`
 
 `handleRequest.call( request.server, null, request, reply )` used to be recorded only as a member call named `call`, so
@@ -153,7 +281,7 @@ the file declares as a function, or imports from a relative module, now stands f
 where the resolver proves a function or method: an imported object, const or class (`rpc.call()` on a required
 module object, `Klass.call( this )`) and a name bound by name alone add nothing. `f.bind( … )` is a value use of `f`,
 never a call. Floors, shared with the bare call `f()`: a function-local `var f` / `let f` declared after the site does not
-shadow it, and a re-assignment `f = …` is not followed. `kParserVer` and `kCacheVersion` move (196 and 36 in this release, see the versions note).
+shadow it, and a re-assignment `f = …` is not followed. `kParserVer` and `kCacheVersion` move (198 and 36 in this release, see the versions note).
 ### Fixed — a method a name-template lookup can name no longer reads `risk="none-found"`
 
 `getattr(obj, f"watch_{name}")`, `hasattr`, `cls.__dict__.get(f"on_{n}")` and JS/TS `this['compile' + node.typename]`
@@ -167,7 +295,7 @@ each template's candidates (`<pd cands= shown=>`, first 8, `next=` for the rest)
 `--safe-delete`, when nothing else was found, it still makes `risk="hedged"` and names its site as a `<pdw>` row. A template with no literal side at all (`codes[sc + '']`, `f"{m}"`) carries no
 name and records nothing, like a bare `obj[k]`. Matched
 by name, never a proven call: `callers=`, `impact_reaches=`, `count=` and the `--dead-code` list are unchanged. The
-`--json` and `--format=columnar` roots carry both counts but not the rows; the MCP transport carries neither yet. Cache format and parser version move (the reference role set grew; 36 and 196 in this release, see the versions
+`--json` and `--format=columnar` roots carry both counts but not the rows; the MCP transport carries neither yet. Cache format and parser version move (the reference role set grew; 36 and 198 in this release, see the versions
 note). Gate: `test/safedeletecheck.sh` arms 9–18.
 ### Changed — `--for` tail rank rows name their file's top symbols
 
@@ -195,7 +323,7 @@ scope only, a Rust `const` / `static` at module, `impl`, trait or `extern` level
 level; a call in a function-local initializer belongs to the enclosing function. Package-level grouped Go `var ( a = …;
 b = … )` declarations, which were missed (grouped `const` was already read), are now one symbol per name. On fzf, gotestsum and nfpm (Go), 574
 function-local symbols leave the map, no package-level one is lost, and 87 grouped names are added. `kParserVer` moves
-(196 in this release, see the versions note). Gate: `test/localdeclcheck.sh`.
+(198 in this release, see the versions note). Gate: `test/localdeclcheck.sh`.
 
 ### Changed — `--path` hop rows name a member by its owner (`Owner.name`)
 
@@ -206,6 +334,23 @@ resolves: a fzf chain reads `Matcher.Loop`, and C++, Python, Rust, Ruby and Go m
 member of a scope the index holds no such definition for (a C++ namespace) and a type hop itself stay bare; the legend
 clause rides only when a row carries an owner, so an owner-free answer is byte-identical. `--callers` and `--callees`
 rows are unchanged; the CLI and MCP print the same rows. Gate: `test/pathownercheck.sh`.
+
+### Fixed — a qualified annotation proves a class only through an in-tree qualifier; `x op= v` rebinds
+
+`def use(s: requests.Session): s.close()` (or TS `use(s: ext.Session<T>)`) proved an in-tree `Session.close` because the
+annotation was read by its last name alone. A Python or TS parameter, annotated local or TS field written `q.T` now names
+the in-tree class `T` only when the file's imports bind `q` to an in-tree module, package or relative path (Python
+`import pkg.store`, `from pkg import store`; TS `import * as`, default, named and `require` bindings), or `q` — bound by no
+import — names an in-tree class (`Outer.Inner`) or a TS namespace. An outside qualifier, a global such as `NodeJS.T`, or an
+unbound name proves nothing: the call keeps its rows marked `via="name"`. `T` itself is still matched by its last name.
+Floor: a Python import the resolver cannot pin to one file but whose first name matches a `.py` file or directory anywhere
+in the tree (import verdict `u`, e.g. `import requests` beside an unrelated `lib/requests.py`) still counts as in-tree.
+Python and JavaScript `x op= v` rebinds `x`: after `x = Num(); x += 1`, `x.bump()` no longer proves `Num.bump` unless the
+method Python calls — `Num`'s in-place `__iadd__` (its own or the nearest base's), else its `__add__` — returns `self` on
+every path (every `return` returns `self` bare, at least one does, and the body cannot fall off its end into an implicit
+`return None`) or declares `-> Self` / `-> Num`. Measured: 0 call sites change on textual, hono, starlette, flake8, kysely and
+fastify (`--pin-census`, base vs head); the false proofs reproduce on minimal fixtures (test/receiverevidencecheck.sh arm Q).
+`kParserVer` moves (the extraction path changed; 198 in this release, see the versions note).
 
 ### Changed — Ruby mixins read the shared base-relations path (#400, slice 4a)
 
@@ -220,7 +365,7 @@ Output is byte-identical with ONE stated exception: the map, `--deps --limit=100
 comes from the query, which has no such bound — so past that depth (260 nested `module`s with an `include M` innermost)
 the reference has no directive to join to: `--lego` lists the includer as an implementor, while the existing
 depth-bound notice on stderr says deeper imports were not captured. No real code nests 256 levels deep.
-`kParserVer` moves (the extraction path changed; 184 in this release, see the versions note).
+`kParserVer` moves (the extraction path changed; 198 in this release, see the versions note).
 
 ### Fixed — a function stored through `??`, `||`, `&&`, `or` or `and` is a value use
 
@@ -230,7 +375,7 @@ value-reference capture walked parentheses and ternary branches but stopped at a
 value-preserving operators — JS/TS `??`, `||`, `&&` and the logical assignments `??=`, `||=`, `&&=`; Python `or`,
 `and` — in every position it already read (assignment, return, argument, parameter default). The left operand of
 `&&`/`and` only decides and stays no row; C/C++ and Go `||`/`&&` yield a truth value and stay no row. Parser version
-184 in this release (caches re-parse once; see the versions note). Gate: `test/recallshapecheck.sh` arms OP1–OP17.
+198 in this release (caches re-parse once; see the versions note). Gate: `test/recallshapecheck.sh` arms OP1–OP17.
 
 ### Added — `--grep` names what a hit's variable carries and who reads it
 
@@ -262,7 +407,7 @@ edge, no `via="name"` hedge and no count: a `[]` or `__getitem__` definition els
 name. It does NOT mean every subscript of an in-tree class is found: a Ruby instance variable receiver is not typed, a
 compound assignment (`h[ k ] ||= v`) is recorded as the read form, and `del o[ k ]`, a multiple-assignment target and an
 annotation record nothing. On rake 93 callers of `[]` appear; on textual 42 of `__getitem__`. C++ `operator[]` could
-share the path and is not armed. `--uses` lists no subscript site. Parser version 184 in this release (see the versions note). Gate:
+share the path and is not armed. `--uses` lists no subscript site. Parser version 198 in this release (see the versions note). Gate:
 `test/subscriptopcheck.sh`.
 
 ### Added — `--lego=M` lists Ruby's main object when a file's top level mixes M in
@@ -442,14 +587,15 @@ server, when the cgroup's charge is the larger reading: restarting the server do
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 167 → 196: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
+`kParserVer` 167 → 198: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
 `??`/`||`/`&&`/`or`/`and` carried 173 on its branch, the Ruby/Python subscript references and Ruby's main-object mixins
 174 (file tag 175), and the Elixir quote live holes (#380) 145 on theirs; they landed together at 176 (file tag 177). The
 minimum-arity field (`paramsMin`) carried 178 (file tag 179) on its branch and the Go receiver scope (#403) 182 (file tag 183);
 those landed at 184 (file tag 185). Call-result typing carried 180 (file tag 181), the `f.call` / `f.apply` forwarders 188
 (189), the function-local Go / Rust / GDScript declarations 190 (191) and the name-template references 192 (193) on their
-branches, and a branch not in this release 194 (195). This release is 196, above every number a branch build has used, so
-no cache such a build wrote is read as this release's; its full-use file tag is 197.
+branches; those landed at 196 (file tag 197). The qualified-annotation and `x op= v` rebinding change carried 194 (195) on
+its branch. This release is 198, above every number a branch build has used, so no cache such a build wrote is read as this
+release's; its full-use file tag is 199.
 `kCacheVersion` 31 → 36: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
 numbered 9 on #380's branch, which predates the subscript role), and the binding kind byte one (Ruby's main-object mixin) (32);
 a definition record gained `paramsMin`, the fewest arguments a call can pass (33 on its branch, 34 in the train that landed
@@ -459,7 +605,7 @@ it); a binding record gained the call-result position and unwrap depth (33 on it
 the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls, 21), and a Rust call
 named like a standard-type member no longer binds an in-tree namesake (22), so the dead kind can
 differ for an unchanged commit. Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=c041289c80d454f1 entries=892`.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=f1e98faa0aeaa1ee entries=902`.
 
 
 ## [0.6.7] — 2026-10-11

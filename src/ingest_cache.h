@@ -345,11 +345,22 @@ constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strict
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 196;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 198;          // bump on any grammar/.scm/extraction change
+                                                      // 198 = 2026-10-18 (train 31): strictly above every number a live build used — main 196 (rich 197),
+                                                      //   lane h1-annot 194 (195); body-fold, hrr, callers-band2, dangling-warnings and ix2-slice kept
+                                                      //   their base value 184. Rich file tag 199. kCacheVersion stays 36: no lane changed a record format
+                                                      //   (h1-annot appends two LocalBindKind values; no lane touched a cache serializer).
                                                       // 196 = 2026-10-18 (train 30): strictly above every number a live build used — main 184 (rich 185),
                                                       //   lane call-result-typing 180 (rich 181), lane fcall-forward 188 (189), lane go-local-var 190 (191),
                                                       //   lane name-template-dispatch 192 (193), lane h1-annot (train 31) 194 (195); tail-sym and
                                                       //   path-owners kept 176. Rich file tag 197. kCacheVersion 36 (see its note).
+                                                      // 194 = 2026-10-18 (lane h1-annot, train 31; the train renumbers — reservation 194/195):
+                                                      //   a Python / TS parameter, annotated local or TS field written `mod.T` / `ns.T<…>` keeps the
+                                                      //   qualified text in its RecvType / MemberType importedName; Python records LocalBindKind::
+                                                      //   AugAssign for `x op= v` and OperatorResult in an operator method (in-place or binary) whose
+                                                      //   result is provably its receiver's class ("self" on every path, or `-> Self` / `-> C`); a JS
+                                                      //   `x op= v` records constructedBy( rhs ) like a plain reassignment (`x ||= new B()` names B).
+                                                      //   Rich file tag 195. kCacheVersion unchanged.
                                                       // 192 = 2026-10-17 (train 30 lane name-template-dispatch, IX-3; train renumbers): RefRole::Pattern
                                                       //   records at Python getattr/hasattr/__dict__.get and JS/TS computed-member name templates. Rich 193.
                                                       // 190 = 2026-10-17 (train 30, lane go-local-var): Go var/const, Rust const/static and GDScript const

@@ -584,6 +584,9 @@ inline constexpr const char* kCallersNextBareNameLegend = "next= is the one past
 // L8 (train 29): the same two readings when next= is the NEXT PAGE of a capped callers answer and the uses verb rides as uses_next=.
 inline constexpr const char* kCallersNextPageLegend = "next= is the one pasteable follow-up: the next page of this capped answer (the same call at next_offset=); uses_next= is the uses verb on this selector (the call sites). ";
 inline constexpr const char* kCallersNextPageBareNameLegend = "next= is the one pasteable follow-up: the next page of this capped answer (the same call at next_offset=); uses_next= is the uses verb on the called name (all same-named definitions' call sites, including sites bound to other definitions, because a declined call names no single definition). ";
+// C2 rider (train 31): the callees form's two readings — expand on the selector, or the next page with expand riding as expand_next=.
+inline constexpr const char* kCalleesNextExpandLegend = "next= is the one pasteable follow-up (expand on this selector: the body). ";
+inline constexpr const char* kCalleesNextPageLegend = "next= is the one pasteable follow-up: the next page of this capped answer (the same call at next_offset=); expand_next= is expand on this selector (the body). ";
 
 // The tested lens's reading for the form a document takes: an XML row omits a false tested=, the columnar array prints 0.
 // ONE choice for --callers/--callees (callHierarchyLegendOpen below) and --impact (verbs_navigate.h runImpact), so the verbs
@@ -605,7 +608,7 @@ inline std::string callHierarchyLegendOpen( bool wantCallers, bool nextUsesBareN
     // selector, its @FILE:LINE spelling mirrored), callees the BODY whose callees these are (expand).
     // nextUsesBareName is the emitter's OWN decision, never re-derived here; no double hyphen in comment text.
     return wantCallers ? std::string( kCallHierarchyLegendOpen ) + testedClause + kTestedLensBlindSpotLegend + callersNextClause
-                       : std::string( kCallHierarchyLegendOpen ) + testedClause + kTestedLensBlindSpotLegend + kCallHierarchyLegendCalleesOnly + "next= is the one pasteable follow-up (expand on this selector: the body). ";
+                       : std::string( kCallHierarchyLegendOpen ) + testedClause + kTestedLensBlindSpotLegend + kCallHierarchyLegendCalleesOnly + ( nextIsPage ? kCalleesNextPageLegend : kCalleesNextExpandLegend );
 }
 
 // ── LB-G (r10 GitNexus round) — the DISPLAY-CAP clause the neighbour verbs share ─────────────────────────
@@ -714,10 +717,8 @@ inline constexpr const char* kDeclinedSitesCutClause =
     "dc_shown=N: the <dc> rows printed (the callers form cuts file-first: each file's first site before any file's second); dc_next= is the call that lists every site. ";
 inline constexpr const char* kDeclinedSitesCandClause =
     "cand= (legend full only): the candidate definitions as file:line, cand_more= how many more. ";
-// The impact answer prints no <dc> row (gates review Q4): where its declined_calls= rides, it names where the sites are listed.
-inline constexpr const char* kDeclinedSitesImpactPointer =
-    "The callers verb on SYM lists its declined first-hop calls as <dc> rows. ";
-inline const char* declinedSitesImpactPointer( bool on ) noexcept { return on ? kDeclinedSitesImpactPointer : ""; }
+// The impact answer printed no <dc> row (gates review Q4) and pointed at the callers verb instead; since lane ix2-slice (IX-4) it
+// prints the rows (declinedsites.h impactDeclinedRows: one per counted call), so the pointer sentence is gone.
 // What one answer's <dc> rows carry, read off the rows it prints (never re-derived).
 struct DeclinedSitesLegendFlags
 {

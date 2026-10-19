@@ -31,6 +31,19 @@
 #                   moved to the advisory list after review: it reports a function that DOES override a base
 #                   and only lacks the `override` keyword, so none of its findings is a wrong answer. (A
 #                   drifted signature that overrides nothing is not what it reports.)
+# Lifetime round, measured 2026-10-18 on b59b0824 + this change, clang-tidy 22.1.8, the five CI TUs plus the five verifiers:
+#   gated, 0 rows:  clang-analyzer-cplusplus.InnerPointer — a c_str()/data() pointer used after its string was destroyed or
+#                   reallocated: every finding is a read of freed bytes. (bugprone-dangling-handle stays gated at 0, and
+#                   clang-analyzer-core.StackAddressEscape, inside core.*, is the one tool that refuses an escaping [&]
+#                   lambda — test/danglingwarncheck.sh plants both.)
+#   not gated:      bugprone-return-const-ref-from-parameter 3 rows (gitmine.h gitPathOfEntry; quality.h's two DefectSiteKey
+#                   projection lambdas), all safe identity/projection functions. Each parameter now carries RW_LIFETIMEBOUND
+#                   (src/infra/platform.h), which the check honours and which makes clang's -Wdangling check every caller, so
+#                   it reads 0 — but its findings are hazards, not wrong programs, so it stays advisory (bugprone-* above).
+#                   bugprone-dangling-handle.HandleClasses widened to the tree's aggregate view structs (DeclinedSiteView,
+#                   ImpactView, WhereisPageView): 0 rows, and a planted `DeclinedSiteView d{ key() }` is not reported either
+#                   (the check matches constructors; aggregates have none) — so the option is NOT set: it would claim a fence
+#                   it does not hold. Clang's -Wdangling-gsl does refuse that plant.
 # A new finding in the gating subset is a bug to fix; a gated check that turns out to be noisy is removed
 # from GATING with its count, the way it was admitted. Local run: scripts/tidycheck.sh (it SKIPs, loudly,
 # without clang-tidy 22; on macOS it finds Homebrew's keg-only /opt/homebrew/opt/llvm@22/bin/clang-tidy).
