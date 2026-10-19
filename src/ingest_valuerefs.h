@@ -972,15 +972,9 @@ private:
         if( !foreignParameters( a.kind ) )
         {
             harvest( n, a.kind, m_scopes.back().decls );
-            if( m_slot != nullptr )
-            {
-                noteSlotTypes( n, a.kind );   // IX-1: the declared struct types, beside the names
-            }
+            noteSlotTypes( n, a.kind );   // IX-1: the declared struct types, beside the names (inert without a slot row)
         }
-        if( m_slot != nullptr && ( kindIs( a.kind, "struct_specifier" ) || kindIs( a.kind, "union_specifier" ) || kindIs( a.kind, "class_specifier" ) ) )
-        {
-            noteStructBody( n );   // IX-1: field order, function-pointer fields and the field-type facts (m_anc.back() is the parent)
-        }
+        noteStructBody( n, a.kind );      // IX-1: a struct body's field order and facts (m_anc.back() is the parent)
         if( m_fwdArmed )
         {
             noteForwardProof( n, a.kind );
@@ -997,10 +991,7 @@ private:
         }
         else if( isCallKind( a.kind ) )
         {
-            if( m_slot != nullptr )
-            {
-                slotThroughAt( n );
-            }
+            slotThroughAt( n );   // IX-1 (inert without a slot row)
             throughAt( n );
             patternAtCall( n );
         }
@@ -1532,6 +1523,12 @@ private:
             }
         }
 
+        emitValueRef( i, j, name, s, fileShadow );
+    }
+
+    // The Value row of identifier anc[i] (effective position anc[j]) landing in slot `s`.
+    void emitValueRef( std::size_t i, std::size_t j, std::string_view name, Slot& s, bool fileShadow )
+    {
         RawRef r;
         r.fileId        = m_fileId;
         r.startByte     = ts_node_start_byte( m_anc[i].node );
@@ -1545,10 +1542,7 @@ private:
         r.fieldName     = std::move( s.into );
         r.argCount      = s.argIndex;
         r.argCountKnown = s.isArg;
-        if( m_slot != nullptr )
-        {
-            valueSlot( j, r );
-        }
+        valueSlot( j, r );   // IX-1: a struct-field slot's type and field (inert without a slot row)
         m_out.push_back( std::move( r ) );
     }
 
@@ -1992,11 +1986,10 @@ private:
         return { "@" + std::to_string( ts_node_start_point( ty ).row + 1 ), kw };
     }
 
-    // The name a `typedef … NAME;` declares (through pointer declarators: `typedef struct x *xp;` is NOT a struct alias).
-    std::string_view typedefName( TSNode td ) const
+    // The name a `typedef … NAME;` declares (a pointer declarator is not one: `typedef struct x *xp;` is NOT a struct alias).
+    std::string_view typedefName( TSNode td ) const noexcept
     {
-        const TSNode d = child( td, m_fDeclarator );
-        return !ts_node_is_null( d ) && kindIs( ts_node_type( d ), "type_identifier" ) ? text( d ) : std::string_view();
+        return fieldChildTextOfKind( td, NodeField::Declarator, "type_identifier", m_src );
     }
 
     // A function-POINTER declarator `(*f)( … )` (any depth of pointers inside the parentheses): a stored function.
@@ -2034,6 +2027,10 @@ private:
     // of a struct is a slot fact (alias → struct).
     void noteSlotTypes( TSNode n, const char* t )
     {
+        if( m_slot == nullptr )
+        {
+            return;
+        }
         if( kindIs( t, "type_definition" ) )
         {
             const std::string_view alias = typedefName( n );
@@ -2071,8 +2068,12 @@ private:
 
     // A struct / union / class BODY as the walk enters its specifier: its field order (positional initializers), its
     // function-pointer fields (the C++ gate) and one slot fact per field declared with a struct type.
-    void noteStructBody( TSNode n )
+    void noteStructBody( TSNode n, const char* t )
     {
+        if( m_slot == nullptr || !( kindIs( t, "struct_specifier" ) || kindIs( t, "union_specifier" ) || kindIs( t, "class_specifier" ) ) )
+        {
+            return;
+        }
         const TSNode body = fieldChild( n, NodeField::Body );
         if( ts_node_is_null( body ) || m_anc.empty() )
         {
@@ -2250,7 +2251,7 @@ private:
     // memberCtor = the declared struct type of the object ("" unknown). Left empty for every other slot.
     void valueSlot( std::size_t j, RawRef& r ) const
     {
-        if( j < 1 )
+        if( m_slot == nullptr || j < 1 )
         {
             return;
         }
@@ -2317,6 +2318,10 @@ private:
     // extern, a macro) keeps an empty type, so only the name tier can join it. Under C++'s row: see kVrSlotLangs.
     void slotThroughAt( TSNode call )
     {
+        if( m_slot == nullptr )
+        {
+            return;
+        }
         const TSNode f = child( call, m_fFunction );
         if( ts_node_is_null( f ) || !kindIs( ts_node_type( f ), "field_expression" ) )
         {
