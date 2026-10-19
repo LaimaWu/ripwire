@@ -67,26 +67,6 @@ inline bool vrBindLess( const IngestResult& ing, const Reference& a, const Refer
     return a.startByte < b.startByte;
 }
 
-// The references of `refs` (indices into ing.references) that `keep` accepts, kept in their order.
-template<typename Keep>
-std::vector<std::uint32_t> vrRefsWhere( std::span<const std::uint32_t> refs, Keep&& keep )
-{
-    std::vector<std::uint32_t> kept;
-    for( const std::uint32_t i : refs )
-    {
-        if( keep( i ) )
-        {
-            kept.push_back( i );   // reference order
-        }
-    }
-    return kept;
-}
-// The references of `refs` made inside any of `fns`.
-inline std::vector<std::uint32_t> vrRefsMadeIn( const IngestResult& ing, std::span<const std::uint32_t> refs, std::span<const NodeId> fns )
-{
-    return vrRefsWhere( refs, [ & ]( std::uint32_t i ) { return std::ranges::find( fns, ing.references[i].fromSymbol ) != fns.end(); } );
-}
-
 // ── IX-1 slot-type join ──────────────────────────────────────────────────────────────────────────────────
 // A function stored in struct field T.f (a Value row with a slot, ingest_valuerefs.h valueSlot) MAY be called by every call
 // through a field f (`x->f( … )`, a slot Through, scope 's'): via="slot" when both sides' declared struct types resolve to the
@@ -114,6 +94,7 @@ public:
         if( r.role == RefRole::Through && sc == kValueRefSlotCallScope )
         {
             m_calls.push_back( i );
+            m_callsBySym[ r.fromSymbol ].push_back( i );
             return true;
         }
         return false;
@@ -146,9 +127,19 @@ public:
     // The slot value references (with a resolved function) the slot call `callIdx` may call through.
     std::vector<Hit> valuesFor( std::uint32_t callIdx ) const { return join( m_callEnds, callIdx, m_valuesByField, m_values ); }
     // The slot calls made inside any of `fns`, ascending.
-    std::vector<std::uint32_t> callsMadeIn( const IngestResult& ing, std::span<const NodeId> fns ) const
+    std::vector<std::uint32_t> callsMadeIn( std::span<const NodeId> fns ) const
     {
-        return vrRefsMadeIn( ing, m_calls, fns );
+        std::vector<std::uint32_t> out;
+        for( const NodeId f : fns )
+        {
+            if( const auto it = m_callsBySym.find( f ); it != m_callsBySym.end() )
+            {
+                out.insert( out.end(), it->second.begin(), it->second.end() );
+            }
+        }
+        std::ranges::sort( out );
+        out.erase( std::ranges::unique( out ).begin(), out.end() );
+        return out;
     }
     // The resolved "Type.field" of slot call `callIdx` (".field" when the type is unknown; an anonymous struct is "@LINE").
     std::string nameOf( std::uint32_t callIdx ) const
@@ -253,6 +244,7 @@ private:
     HashMap<std::string, std::string>                m_fieldType;      // "Type#field" → that field's struct type
     HashMap<std::string, std::string>                m_alias;          // typedef name → struct type
     std::vector<std::uint32_t>                       m_calls;          // slot Through references, ascending
+    HashMap<NodeId, std::vector<std::uint32_t>>      m_callsBySym;     // calling function → its slot Through references
     std::vector<End>                                 m_values;         // slot Value rows with a resolved function, by ref
     std::vector<End>                                 m_callEnds;       // parallel to m_calls
     HashMap<std::string, std::vector<std::uint32_t>> m_valuesByField;  // field → positions in m_values
@@ -875,7 +867,9 @@ public:
     // The usable Pattern sites made inside any of `fns` (the dispatcher's own sites), in reference order.
     std::vector<std::uint32_t> sitesIn( std::span<const NodeId> fns ) const
     {
-        return vrRefsMadeIn( m_ing, m_patterns, fns );
+        std::vector<std::uint32_t> out;
+        std::ranges::copy_if( m_patterns, std::back_inserter( out ), [ & ]( std::uint32_t i ) { return std::ranges::find( fns, m_ing.references[i].fromSymbol ) != fns.end(); } );
+        return out;
     }
     // Too-wide templates (`f"_{m}"`: no literal side of kVrPatternMinLiteral identifier characters) whose written sides
     // could name one of `defs`, in reference order: pattern_too_wide= counts them; never a candidate list. --safe-delete
@@ -890,10 +884,12 @@ private:
     // The Pattern sites of `sites` (reference order) that can name at least one class member of `defs`, in that order.
     std::vector<std::uint32_t> sitesNaming( const std::vector<std::uint32_t>& sites, std::span<const NodeId> defs ) const
     {
-        return vrRefsWhere( sites, [ & ]( std::uint32_t i )
+        std::vector<std::uint32_t> out;
+        std::ranges::copy_if( sites, std::back_inserter( out ), [ & ]( std::uint32_t i )
         {
             return std::ranges::any_of( defs, [ & ]( NodeId d ) { return m_member[d] != 0 && reaches( m_ing.references[i], m_ing.symbols[d] ); } );
         } );
+        return out;
     }
     // Can Pattern reference `r` name class member `s`? Same value-ref family; the literal sides around a non-empty hole;
     // a self/this/cls receiver inside a class keeps only that class's family.
@@ -1248,7 +1244,7 @@ inline std::vector<SlotSiteRow> slotSiteRows( const IngestResult& ing, const Val
     }
     std::ranges::sort( answered );
     std::vector<SlotSiteRow> out;
-    for( const std::uint32_t c : idx.slots().callsMadeIn( ing, fns ) )
+    for( const std::uint32_t c : idx.slots().callsMadeIn( fns ) )
     {
         const Reference& cr = ing.references[c];
         if( std::ranges::binary_search( answered, ( std::uint64_t( cr.fileId ) << 32 ) | cr.startByte ) )
