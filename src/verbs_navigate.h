@@ -2230,9 +2230,9 @@ accumulateExternalSurface( const rw::IngestResult& ing, const rw::HashMap<std::s
             continue; // type edge / doc mention / an element access (its operator is a builtin's unless graph.h proves the class) / a name
                       // template (`watch_*`: a glob, never a name) — not a code reference
         }
-        if( r.lang == Lang::Markdown )
+        if( r.lang == Lang::Markdown || isSlotJoinRecord( r ) )
         {
-            continue; // markdown link — not a code reference
+            continue; // markdown link, or an IX-1 slot record (its name is a receiver variable) — not a code reference
         }
         if( r.calleeName.empty() )
         {

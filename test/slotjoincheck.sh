@@ -34,7 +34,7 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 run(){
     local out rc
     out="$( cd "$FIX" && "$BIN" "$FIX" "$@" --no-cache 2>/dev/null )"; rc=$?
-    if [ "$rc" -ne 0 ] || ! printf '%s' "$out" | grep -q -e '<callers ' -e '<callees ' -e '^{"of":'; then
+    if [ "$rc" -ne 0 ] || ! printf '%s' "$out" | grep -q -e '<callers ' -e '<callees ' -e '<external-surface ' -e '^{"of":'; then
         printf 'RUNFAIL rc=%s' "$rc"
         return 0
     fi
@@ -90,6 +90,41 @@ o="$( run --callees=run )"
 hasnt "H5 C++: a member function named like another struct's pointer field is no slot call" "$o" 'slot_calls='
 o="$( run --callees=fire_command --json )"
 has   "H6 the JSON twin of <vs>" "$o" '"vss":[{"l":4,"through":"entry->exec","slot":"cmd_ent.exec","via":"slot","targets":2,"shown":2'
+
+echo "-- fix round 1: positional index -> field is exact or no row; typedef / using / pointer-typedef receivers"
+o="$( run --callers=d3 )"
+has   "I1 a positional value after a designator continues at the next field (C: d3 is .d)" "$o" 'called_by="call_pd_d" called_at="shapes.c:15" via="slot"'
+hasnt "I1b and never joins the designated field before it" "$o" 'call_pd_c'
+o="$( run --callers=a3 )"
+has   "I1c a positional value before the designator keeps its index" "$o" 'called_by="call_pd_a" called_at="shapes.c:13" via="slot"'
+o="$( run --callers=x5 )"
+has   "I2 an anonymous union member holds one initializer position" "$o" 'called_by="call_au_x" called_at="shapes.c:28" via="slot"'
+hasnt "I2b and never the next field's" "$o" 'call_au_y'
+o="$( run --callers=y5 )"
+has   "I2c the field after it maps too" "$o" 'called_by="call_au_y" called_at="shapes.c:29" via="slot"'
+o="$( run --callers=ef )"
+hasnt "I3 brace elision (a scalar at a struct-typed field) makes the index unprovable: no join" "$o" 'called_by='
+o="$( run --callers=cf_r )"
+hasnt "I4 an #ifdef'd field before the index makes it unprovable: no join" "$o" 'called_by='
+o="$( run --callers=fa )"
+has   "I5 C++: a static data member is no initializer position" "$o" 'called_by="call_sa" called_at="shapes.cpp:11" via="slot"'
+o="$( run --callers=fb )"
+hasnt "I5b so fb is never sa" "$o" 'call_sa'
+has   "I5c fb is sb" "$o" 'called_by="call_sb" called_at="shapes.cpp:12" via="slot"'
+o="$( run --callers=fc )"
+hasnt "I6 C++: a base-class aggregate makes the positions unprovable: no wrong field" "$o" 'call_dd'
+o="$( run --callers=pt_fn )"
+has   "I7 a C pointer typedef receiver (typedef struct pt *pt_p) resolves to the struct" "$o" 'called_by="call_ptp" called_at="shapes.c:61" via="slot"'
+o="$( run --callers=gfn )"
+has   "I8 C++: typedef and using receivers resolve before the function-pointer-field gate" "$o" 'called_by="c_tdef,c_using" called_at="shapes.cpp:34,shapes.cpp:35" via="slot"'
+o="$( run --callers=b4 )"
+has   "N1 the (*x->f)( ... ) call form is a slot call" "$o" 'called_by="call_pd_star" called_at="shapes.c:18" via="slot"'
+
+echo "-- fix round 1: slot records are no ordinary references"
+o="$( run --external-surface )"
+for v in entry wme m o v p; do
+    hasnt "J1 --external-surface lists no slot-call receiver as an external name ($v)" "$o" "<x n=\"$v\" "
+done
 
 echo "-- well-formed XML where the clauses ride"
 if command -v xmllint >/dev/null 2>&1; then

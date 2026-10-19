@@ -11611,9 +11611,9 @@ inline QMetrics computeQMetrics( const IngestResult& ing, const Graph& g )
         HashMap<NodeId, std::vector<std::string>> methodRefNames;
         for( const Reference& r : ing.references )
         {
-            if( r.fromSymbol != kNoNode && r.fromSymbol < S && ing.symbols[ r.fromSymbol ].kind == SymKind::Method )
+            if( r.fromSymbol != kNoNode && r.fromSymbol < S && ing.symbols[ r.fromSymbol ].kind == SymKind::Method && !isSlotJoinRecord( r ) )
             {
-                methodRefNames[ r.fromSymbol ].push_back( r.calleeName );
+                methodRefNames[ r.fromSymbol ].push_back( r.calleeName );   // (an IX-1 slot record is skipped: the cohesion input stays pre-IX-1)
             }
         }
 

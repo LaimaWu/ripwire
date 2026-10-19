@@ -3387,9 +3387,10 @@ inline std::string usesSelectorRefusal( const IngestResult& ing, const std::stri
         {
             continue;
         }
-        if( r.isCompose || r.isDocLink || r.role == RefRole::Subscript )
+        if( r.isCompose || r.isDocLink || r.role == RefRole::Subscript || isSlotJoinRecord( r ) )
         {
-            continue; // type edge / doc mention / an element access (no use-site: valuerefindex.h UsesValueFilter::skip) — not a use-site
+            continue; // type edge / doc mention / an element access (no use-site: valuerefindex.h UsesValueFilter::skip) / an IX-1 slot
+                      // record (its name is a receiver variable) — not a use-site
         }
         if( r.lang == Lang::Markdown )
         {

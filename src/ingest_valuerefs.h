@@ -239,11 +239,22 @@ struct VrScope
     std::vector<VrTyped>          types;           // IX-1: the names declared here with a struct type (C family)
 };
 
-// IX-1: one struct body of this file, its fields in declaration order (a positional initializer's index → field name).
+// IX-1: one initializer POSITION of a struct body: the field's name ("" = an anonymous struct / union member, which holds one
+// position but no call names it) and whether a non-braced value there would be brace-elided into it (an array, or a field of
+// a struct type this file knows), which makes every later index unprovable.
+struct VrSlotField
+{
+    std::string_view name;
+    bool             aggregate = false;
+    bool             array     = false;   // an array field: a string literal fills it as ONE value (no elision)
+};
+// IX-1: one struct body of this file, its initializer positions in declaration order (a positional initializer's index →
+// field). A position at or past `exactUpTo` is unprovable (a base class comes first, an #if'd field before it).
 struct VrStructFields
 {
-    std::string                   key;
-    std::vector<std::string_view> fields;
+    std::string              key;
+    std::vector<VrSlotField> fields;
+    std::size_t              exactUpTo = static_cast<std::size_t>( -1 );
 };
 
 // The walk's DISCLOSE sink for the depth cap: the subtrees kVrMaxDepth stopped it above, and the first one's site.
@@ -1986,7 +1997,7 @@ private:
         return { "@" + std::to_string( ts_node_start_point( ty ).row + 1 ), kw };
     }
 
-    // The name a `typedef … NAME;` declares (a pointer declarator is not one: `typedef struct x *xp;` is NOT a struct alias).
+    // The name a `typedef … NAME;` declares (the pointer form `typedef struct x *xp;` is read by noteSlotTypes, not here).
     std::string_view typedefName( TSNode td ) const noexcept
     {
         return fieldChildTextOfKind( td, NodeField::Declarator, "type_identifier", m_src );
@@ -2033,12 +2044,31 @@ private:
         }
         if( kindIs( t, "type_definition" ) )
         {
-            const std::string_view alias = typedefName( n );
+            // `typedef struct T NAME;` and the pointer form `typedef struct T *NAME_p;` (a receiver `p->f` derefs it, and no
+            // struct literal has a pointer type, so NAME_p → T is exact for the join), each declarator its own alias.
             const auto [ key, kw ] = slotTypeKey( child( n, m_fType ), n, t );
-            if( !alias.empty() && !key.empty() && key != alias )
+            forEachDeclarator( n, [ & ]( TSNode d )
             {
-                emitSlotFact( n, std::string( alias ), {}, key );
+                if( kindIs( ts_node_type( d ), "pointer_declarator" ) )
+                {
+                    d = child( d, m_fDeclarator );
+                }
+                if( !ts_node_is_null( d ) && kindIs( ts_node_type( d ), "type_identifier" ) )
+                {
+                    noteSlotAlias( n, text( d ), key );
+                }
+            } );
+            return;
+        }
+        if( kindIs( t, "alias_declaration" ) )
+        {
+            // C++ `using SA = S;` (a pointer `using SP = S *;` too: the descriptor's own type is the struct)
+            TSNode ty = child( n, m_fType );
+            if( !ts_node_is_null( ty ) && kindIs( ts_node_type( ty ), "type_descriptor" ) )
+            {
+                ty = child( ty, m_fType );
             }
+            noteSlotAlias( n, text( child( n, m_fName ) ), slotTypeKey( ty, n, t ).first );
             return;
         }
         if( !( kindIs( t, "declaration" ) || kindIs( t, "parameter_declaration" ) || kindIs( t, "optional_parameter_declaration" )
@@ -2087,14 +2117,36 @@ private:
         }
         VrStructFields sf;
         sf.key = owner;
+        if( !ts_node_is_null( childOfKind( n, "base_class_clause" ) ) )
+        {
+            sf.exactUpTo = 0;   // C++ bases are initialized first, and a base's own list may be brace-elided: no index is provable
+        }
         ChildCursor c( body );
         forEachNamedChild( body, c.cur, [ & ]( TSNode k )
         {
-            if( !kindIs( ts_node_type( k ), "field_declaration" ) )
+            const char* kt = ts_node_type( k );
+            if( kindIs( kt, "preproc_if" ) || kindIs( kt, "preproc_ifdef" ) )
+            {
+                sf.exactUpTo = std::min( sf.exactUpTo, sf.fields.size() );   // the fields inside depend on the build: later indexes are unprovable
+                return true;
+            }
+            if( !kindIs( kt, "field_declaration" ) )
             {
                 return true;
             }
-            const auto [ ftype, fkw ] = slotTypeKey( child( k, m_fType ), k, "field_declaration" );
+            const TSNode ftNode = child( k, m_fType );
+            const auto [ ftype, fkw ] = slotTypeKey( ftNode, k, "field_declaration" );
+            const bool   isStatic = staticMember( k );   // C++: a static data member is no part of the aggregate
+            const bool   structTyped = !ts_node_is_null( ftNode )
+                                     && ( kindIs( ts_node_type( ftNode ), "struct_specifier" ) || kindIs( ts_node_type( ftNode ), "union_specifier" )
+                                          || ( kindIs( ts_node_type( ftNode ), "type_identifier" ) && knownStruct( ftype ) ) );
+            if( !isStatic && ts_node_is_null( child( k, m_fDeclarator ) ) && !ts_node_is_null( ftNode )
+                && ( kindIs( ts_node_type( ftNode ), "struct_specifier" ) || kindIs( ts_node_type( ftNode ), "union_specifier" ) )
+                && ts_node_is_null( child( ftNode, m_fName ) ) )
+            {
+                sf.fields.push_back( { {}, true, false } );   // an anonymous struct / union MEMBER: one position, no name a call writes
+                return true;
+            }
             forEachDeclarator( k, [ & ]( TSNode d )
             {
                 if( declaresFunction( d ) )
@@ -2102,11 +2154,16 @@ private:
                     return;   // a member function declaration: no data field, no initializer position
                 }
                 const std::string_view nm = declaratorName( d );
+                if( !isStatic )
+                {
+                    const char* dt      = ts_node_type( d );
+                    const bool  isArray = kindIs( dt, "array_declarator" );
+                    sf.fields.push_back( { nm, isArray || ( structTyped && kindIs( dt, "field_identifier" ) ), isArray } );
+                }
                 if( nm.empty() )
                 {
                     return;
                 }
-                sf.fields.push_back( nm );
                 if( fnPointerDeclarator( d ) )
                 {
                     m_callableFields.emplace_back( owner, nm );
@@ -2119,6 +2176,140 @@ private:
             return true;
         } );
         m_structs.push_back( std::move( sf ) );
+    }
+
+    // A field declaration carrying the `static` storage class (C++ static data member).
+    bool staticMember( TSNode k ) const
+    {
+        bool found = false;
+        ChildCursor c( k );
+        forEachNamedChild( k, c.cur, [ & ]( TSNode x )
+        {
+            found = found || ( kindIs( ts_node_type( x ), "storage_class_specifier" ) && text( x ) == "static" );
+            return !found;
+        } );
+        return found;
+    }
+
+    // A type key this file holds a struct body for (directly, or through this file's aliases).
+    bool knownStruct( std::string_view key ) const
+    {
+        return !key.empty() && std::ranges::find( m_structs, unaliasLocal( key ), &VrStructFields::key ) != m_structs.end();
+    }
+
+    // The direct child of `n` of kind `kind` (null when none).
+    static TSNode childOfKind( TSNode n, const char* kind )
+    {
+        const std::uint32_t cnt = ts_node_named_child_count( n );
+        for( std::uint32_t i = 0; i < cnt; ++i )
+        {
+            const TSNode x = ts_node_named_child( n, i );
+            if( std::string_view( ts_node_type( x ) ) == kind )
+            {
+                return x;
+            }
+        }
+        return TSNode{};
+    }
+
+    // The single field a designator list names (`.f = …` → "f"); "" for a nested (`.a.b`), array (`[i]`) or missing designator.
+    std::string_view designatedField( TSNode pair ) const
+    {
+        std::string_view out;
+        int              n = 0;
+        ChildCursor      c( pair );
+        ts_tree_cursor_reset( &c.cur, pair );
+        if( ts_tree_cursor_goto_first_child( &c.cur ) )
+        {
+            do
+            {
+                const TSNode x = ts_tree_cursor_current_node( &c.cur );
+                if( ts_tree_cursor_current_field_id( &c.cur ) == m_fDesignator
+                    || ( n == 0 && ts_node_is_named( x ) && kindIs( ts_node_type( x ), "field_identifier" ) ) )
+                {
+                    ++n;
+                    const char* xt = ts_node_type( x );
+                    out = kindIs( xt, "field_designator" ) ? text( ts_node_named_child( x, 0 ) )
+                        : kindIs( xt, "field_identifier" ) ? text( x )
+                                                           : std::string_view();
+                }
+            }
+            while( ts_tree_cursor_goto_next_sibling( &c.cur ) );
+        }
+        return n == 1 ? out : std::string_view();
+    }
+
+    // The initializer position of `value`, a direct child of struct literal `list`, exactly — C's rule: positions count from 0,
+    // and a designator `.f = …` moves the next one to f's position + 1. -1 when the index is not provable: a nested or array
+    // designator, a field no position names, brace elision (a non-braced value at an aggregate field), past exactUpTo.
+    std::ptrdiff_t positionOf( TSNode list, TSNode value, const VrStructFields& sf ) const
+    {
+        std::size_t         pos = 0;
+        const std::uint32_t cnt = ts_node_named_child_count( list );
+        for( std::uint32_t i = 0; i < cnt; ++i )
+        {
+            const TSNode k = ts_node_named_child( list, i );
+            if( ts_node_is_extra( k ) )
+            {
+                continue;
+            }
+            const char* kt = ts_node_type( k );
+            if( kindIs( kt, "initializer_pair" ) )
+            {
+                const std::string_view f  = designatedField( k );
+                const auto             at = std::ranges::find( sf.fields, f, &VrSlotField::name );
+                if( f.empty() || at == sf.fields.end() )
+                {
+                    return -1;
+                }
+                pos = static_cast<std::size_t>( at - sf.fields.begin() ) + 1;
+                continue;
+            }
+            if( pos >= sf.fields.size() || pos >= sf.exactUpTo )
+            {
+                return -1;
+            }
+            const VrSlotField& fld = sf.fields[pos];
+            const bool         braced = kindIs( kt, "initializer_list" )
+                                     || ( fld.array && ( kindIs( kt, "string_literal" ) || kindIs( kt, "concatenated_string" ) ) );
+            if( fld.aggregate && !braced )
+            {
+                return -1;   // brace elision: this value fills the aggregate's first member, and the positions after it shift
+            }
+            if( ts_node_eq( k, value ) )
+            {
+                return fld.name.empty() ? -1 : static_cast<std::ptrdiff_t>( pos );
+            }
+            ++pos;
+        }
+        return -1;
+    }
+
+    // A typedef / using alias of a struct type: a slot fact (valuerefindex.h unaliases a receiver through it) and this file's
+    // own alias map (the C++ gate reads the struct an alias names in this file).
+    void noteSlotAlias( TSNode at, std::string_view alias, const std::string& key )
+    {
+        if( alias.empty() || key.empty() || key == alias )
+        {
+            return;
+        }
+        emitSlotFact( at, std::string( alias ), {}, key );
+        m_aliases.emplace_back( std::string( alias ), key );
+    }
+
+    // A struct type key through this file's aliases (a short chain, cut; never a cycle).
+    std::string_view unaliasLocal( std::string_view key ) const
+    {
+        for( int hop = 0; hop < 4; ++hop )
+        {
+            const auto it = std::ranges::find( m_aliases, key, []( const auto& a ) { return std::string_view( a.first ); } );
+            if( it == m_aliases.end() )
+            {
+                break;
+            }
+            key = it->second;
+        }
+        return key;
     }
 
     void emitSlotFact( TSNode at, std::string owner, std::string_view field, const std::string& type )
@@ -2264,30 +2455,30 @@ private:
             {
                 k = ts_node_named_child( p.node, 0 );
             }
-            if( ts_node_is_null( k ) || !kindIs( ts_node_type( k ), "field_designator" ) || j < 2 )
+            const std::string_view fld = designatedField( p.node );
+            if( ts_node_is_null( k ) || fld.empty() || j < 2 )
             {
-                return;
+                return;   // a nested `.a.b =` / array `[i] =` designator: not one field of this literal's type
             }
-            r.memberPath = std::string( text( ts_node_named_child( k, 0 ) ) );
+            r.memberPath = std::string( fld );
             r.memberCtor = literalType( j - 2 );
             return;
         }
         if( kindIs( pt, "initializer_list" ) )
         {
             const std::string t = literalType( j - 1 );
-            const TSNode      first = ts_node_named_child( p.node, 0 );
-            if( t.empty() || ( !ts_node_is_null( first ) && kindIs( ts_node_type( first ), "initializer_pair" ) ) )
+            if( t.empty() )
             {
-                return;   // not a struct literal, or a designated list (a position after a designator is not its index)
+                return;   // not a struct literal
             }
-            const auto sf = std::ranges::find( m_structs, t, &VrStructFields::key );
-            const std::uint32_t idx = m_anc[j].namedIndex;
-            if( sf != m_structs.end() && idx < sf->fields.size() )
+            const auto sf = std::ranges::find( m_structs, unaliasLocal( t ), &VrStructFields::key );
+            const std::ptrdiff_t idx = sf == m_structs.end() ? -1 : positionOf( p.node, m_anc[j].node, *sf );
+            if( idx >= 0 )
             {
-                r.memberPath = std::string( sf->fields[idx] );
+                r.memberPath = std::string( sf->fields[ static_cast<std::size_t>( idx ) ].name );
                 r.memberCtor = t;
             }
-            return;
+            return;   // an index not provable exactly: no slot (never a guessed field)
         }
         if( kindIs( pt, "assignment_expression" ) && m_anc[j].field == m_fRight )
         {
@@ -2322,7 +2513,17 @@ private:
         {
             return;
         }
-        const TSNode f = child( call, m_fFunction );
+        TSNode f = child( call, m_fFunction );
+        if( !ts_node_is_null( f ) && kindIs( ts_node_type( f ), "parenthesized_expression" ) )
+        {
+            // `( *x->f )( … )`: the explicit dereference of the same function-pointer field
+            const TSNode inner = ts_node_named_child( f, 0 );
+            if( !ts_node_is_null( inner ) && kindIs( ts_node_type( inner ), "pointer_expression" ) && ts_node_child_count( inner ) > 0
+                && kindIs( ts_node_type( ts_node_child( inner, 0 ) ), "*" ) )
+            {
+                f = child( inner, m_fArgument );
+            }
+        }
         if( ts_node_is_null( f ) || !kindIs( ts_node_type( f ), "field_expression" ) )
         {
             return;
@@ -2344,11 +2545,12 @@ private:
             && !( ty.declared
                   && ( ty.structKw
                        || ( dot == std::string::npos
-                            && std::ranges::find( m_callableFields, std::pair<std::string_view, std::string_view>( ty.key, field ),
+                            && std::ranges::find( m_callableFields, std::pair<std::string_view, std::string_view>( unaliasLocal( ty.key ), field ),
                                                   []( const auto& cf ) { return std::pair<std::string_view, std::string_view>( cf.first, cf.second ); } )
                                    != m_callableFields.end() ) ) ) )
         {
-            return;   // C++: a struct-keyword receiver, or a direct call through a function-pointer field its type declares in this file
+            return;   // C++: a struct-keyword receiver, or a direct call through a function-pointer field its type (through this
+                      // file's typedef / using aliases) declares in this file
         }
         RawRef r;
         r.fileId     = m_fileId;
@@ -2616,6 +2818,7 @@ private:
     const VrSlotLang*              m_slot = nullptr;    // IX-1: this language's slot row (nullptr: no slot capture)
     std::vector<VrStructFields>    m_structs;           // IX-1: this file's struct bodies so far
     std::vector<std::pair<std::string, std::string_view>> m_callableFields;   // IX-1: (struct, function-pointer field) this file declares
+    std::vector<std::pair<std::string, std::string>>      m_aliases;          // IX-1: this file's typedef / using alias → struct type key
     std::uint32_t                  m_fileId;
     std::string_view               m_src;
     std::vector<RawRef>&           m_out;

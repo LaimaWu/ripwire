@@ -334,13 +334,16 @@ inline std::string_view slotJoinLegend( bool any, bool callersSide ) noexcept
     return callersSide
         ? "vr called_by= called_at= via=slot|slot-name: the function was stored in a struct FIELD; called_by names each function "
           "that calls through a field of that name (x->f(...)), called_at= its first such call, file:line, in the same order. "
+          "Not read: a cast, call-result or this-> receiver; a positional entry joins only when its file holds the struct body "
+          "and its index is exact. "
           "via=slot: both sides' declared struct types are the same; via=slot-name: the field name alone matched (one side's "
           "struct type unknown), the lower tier, shown only when no same-type call exists (slot_name_also=K: K name-only "
           "callers hidden behind it); two known, different types never join. called_more=N: N more callers past the first 8. "
           "MAY call through the slot; never a proven call, never in count=/callers=/reaches=. "
         : "slot_calls=N (absent when 0): N calls in this body go through a struct FIELD holding a function (x->f(...)). "
           "<vs l= through= slot=Type.field via= targets=K shown=> lists the functions stored in that field anywhere "
-          "(designated .f = fn, a positional struct entry, x->f = fn), first 16 as <t n= p=>, next= the rest; slot=@N.f: an "
+          "(designated .f = fn, a positional entry whose file holds the struct body, x->f = fn; a cast, call-result or this-> "
+          "receiver is not read), first 16 as <t n= p=>, next= the rest; slot=@N.f: an "
           "anonymous struct declared at line N of this file. via=slot: same declared struct type; via=slot-name: field name "
           "only (one side's type unknown). MAY be called; never a proven call, never in count=. ";
 }

@@ -2107,6 +2107,20 @@ inline bool isMemberAccessSite( const Reference& r ) noexcept
     return ( r.role == RefRole::Read || r.role == RefRole::Write ) && r.recv != RecvKind::None;
 }
 
+// IX-1: a slot-type join record (RefRole::Value / Through above): a slot FACT (a field's struct type or a typedef alias, name
+// "") or a call through a struct FIELD (name = the receiver's root variable, never a referenced symbol). Only the slot join
+// (valuerefindex.h SlotIndex) reads them; every other consumer of the reference stream skips them, so a C/C++ answer that
+// does not print the join (--context-ratio, --external-surface, stats, SCIP) reads the same stream it read before IX-1.
+inline bool isSlotJoinRecord( const Reference& r ) noexcept
+{
+    if( r.qualifier.empty() )
+    {
+        return false;
+    }
+    return ( r.role == RefRole::Value && r.qualifier[0] == kValueRefSlotFactScope )
+        || ( r.role == RefRole::Through && r.qualifier[0] == kValueRefSlotCallScope );
+}
+
 inline void buildShadowKey( std::string& key, std::uint32_t fromSymbol, std::string_view name )
 {
     key.clear();
