@@ -139,7 +139,7 @@ claim cannot quietly drift. The row-by-row ledger is
 JavaScript · Java · Ruby · PHP · Lua · Elixir · Dart · Kotlin · GDScript · Clojure · Bash · C# · JSON · TOML · YAML · Markdown — see
 [language support and limits](#languages).
 
-**Latest: 0.6.7** — more complete answers, faster calls, fewer bytes. [Release notes](#release-notes) ·
+**Latest: 0.6.8** — more complete first answers and fewer false edges. [Release notes](#release-notes) ·
 [the presentation](present/ripwire-showcase.pdf) · [the changelog](CHANGELOG.md) — with thanks to the
 contributors named there; this release is largely theirs.
 
@@ -1058,7 +1058,7 @@ report back. The exe is not code-signed. `Expand-Archive` does not pass the down
 files it extracts, so SmartScreen does not prompt for an exe unpacked this way; no prompt is not a verdict. In PowerShell:
 
 ```powershell
-$v = "0.6.3"; $a = "ripwire-$v-windows-x64"; $u = "https://github.com/redhat-et/ripwire/releases/download/v$v"
+$v = "0.6.8"; $a = "ripwire-$v-windows-x64"; $u = "https://github.com/redhat-et/ripwire/releases/download/v$v"
 Invoke-WebRequest "$u/$a.zip" -OutFile "$a.zip"; Invoke-WebRequest "$u/$a.zip.sha256" -OutFile "$a.zip.sha256"
 # extracts only when the SHA-256 matches; on a mismatch it throws and nothing is unpacked
 if ((Get-FileHash "$a.zip" -Algorithm SHA256).Hash -eq (Get-Content "$a.zip.sha256").Split(" ")[0]) { Expand-Archive "$a.zip" -DestinationPath "$env:LOCALAPPDATA\Programs" } else { throw "SHA-256 mismatch: do not run $a.zip" }
@@ -3091,6 +3091,8 @@ terms.
 ---
 
 ## Release notes
+
+**ripwire 0.6.8 — more complete first answers and fewer false edges.** `--for` stops when its answer is complete, names one owner body for a "how does X work" question, appends the whole bodies of its top ranked rows and puts eight different files in its first eight rows; `--callers` and `--callees` serve up to 50 rows whole (a callers list whole while its rows fit 16,000 B); `--impact` of a type starts from the symbols that name it; and the calls the resolver declined are named as hedged rows. Fewer edges are false: Go methods carry their receiver type, a local bound to a call takes the callee's declared result type (Go, Rust, Java, Kotlin, TypeScript), Rust standard-type members no longer bind an in-tree namesake, and a method a constructed-name lookup can reach is `risk="hedged"` in `--safe-delete`, not `none-found`. On our fixed set of 173 questions, graded two ways (a stricter method and a more lenient one), the questions answered completely in one call went from 50 with 0.6.5 to 83 with 0.6.7 to 98 with 0.6.8 under the stricter method, and from 78 to 109 to 127 under the more lenient one (same machine, mechanical grading; 15 answers better and none worse since 0.6.7; on the 60 development questions the first answers are 19.9% larger). The 0.6.8 figure was measured on the train-28 build of 0.6.8; the later changes in this release were measured only on their own target questions. Clojure is a supported language (thanks @tag-und-nacht, #349). `--quality-delta=A..B` holds one commit's index at a time and answers what it can under a memory limit, and the guard counts a Linux cgroup's real charge (thanks @tonibergholm-codento, #387, #391, #392). Ruby mixins and Rails capture moved onto the shared path (thanks @mpapis, #396, #400, #401, #412), Python imports and Elixir `unquote` calls too (thanks @LaimaWu, #382, #380). Markdown links that bind the exact heading (thanks @muayyad-alsadi, #409, #414) are coming next. Caches are rebuilt once on first run, and Go quality baselines, acks and notes pinned to a method need re-pinning once (see the changelog).
 
 **ripwire 0.6.7 — more complete answers, faster calls, fewer bytes.** Each `--callers` and `--safe-delete` row now
 names its call sites as `file:line`, so one answer holds the lines to edit (`--callers=escapeXml` on this repository:

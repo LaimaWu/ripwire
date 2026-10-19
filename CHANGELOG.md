@@ -15,6 +15,67 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+## [0.6.8] — 2026-10-19
+
+Four batches of reviewed changes in one release. What a user sees:
+- `--for` stops when its answer is complete, opens one owner body for a "how does X work" question, appends the bodies of its top
+  ranked rows and names eight different files first.
+- `--callers` and `--callees` serve up to 50 rows whole (a callers list up to 16,000 B); `--impact` of a type finds the code
+  that uses it; declined calls are named as `<dc>` rows; `--path` says where an unreached path stopped.
+- Fewer false edges: Go receiver scope (#403), call-result typing, Rust standard members (#405), minimum arity,
+  `f.call()` / `f.apply()`, qualified annotations; `--safe-delete` hedges constructed-name lookups instead of `none-found`.
+- `--quality-delta=A..B` fits a memory limit (#387); git filter and diff programs are neutralised; Clojure (#349); `--pr-context` is faster.
+- Upgrade: caches rebuild once (`kParserVer` 198, `kCacheVersion` 36); re-pin Go quality baselines, acks and notes once (Go entry).
+- Measured: on our fixed set of 173 questions over public repositories (10 of them from one repository sealed before any build ran),
+  graded two ways, a stricter method (a rubric item counts only when the answer names its primary symbol or at least two of its
+  listed terms) and a more lenient one (any one listed term), the questions answered completely in one call went 50, 83, 98
+  (stricter) and 78, 109, 127 (more lenient) for 0.6.5, 0.6.7 and 0.6.8; on the 10 sealed questions, 2, 5, 6 (stricter). The
+  0.6.8 figure was measured on the train-28 build of 0.6.8; the later changes in this release were measured only on their own
+  target questions (release notes). Same machine, mechanical grading.
+- Thanks: @LaimaWu (#380, #382), @mpapis (#396, #400, #401, #412), @tonibergholm-codento (#387, #391, #392), @tag-und-nacht (#349),
+  and @muayyad-alsadi (#409; the markdown-link work in #414 is coming next, and the idea behind the help-wanted issue #417).
+
+### Changed — `--for` stops when its answer is complete; an explicit `--token-budget` is a soft target
+
+With no `--token-budget`, a `--for` answer used to grow to a fixed length however complete it already was. It now stops when it is
+complete: a 7,500 B stair-step target with a 30,000 B runaway guard that discloses itself when it fires (`over_ceiling="1"`).
+An explicit `--token-budget` becomes a soft target: the fixed sections are reserved first, the `<tail>` carries page 0 of the file
+page (`sym=`, `total=`, `next=`), every cut stays recoverable through `next=`, and the shown rows are a rank prefix at every
+budget and root length. Rows kept past the target ride `<sigs past_target="K">` and a legend clause. Measured on 30 rows of our
+question set: no item lost against the old budget, and 6 of 6 rows registered for it reach their missing item.
+
+### Changed — an explanatory `--for` question gets one owner body
+
+For a "how does X …" question the answer now opens ONE body chosen by structure, never by score alone: the symbol the question
+names, an entry point, or the member the parser scopes to its class (C++, Rust and Python; TypeScript class members and Go
+receiver methods are a named floor). The legend says it is the owner by rule, "not necessarily the subject", and that it is not
+a claim to be the whole answer; with no structural evidence there is no owner body. On the 3 rows registered for it, fastify-12
+and ninja-11 reach their missing item and koa-12 does not; on 45 how-does questions the median answer grows by 702 B (14,636 to
+15,338 B), and none of the 44 complete rows lost an item.
+
+### Changed — the startup git check reads `.git` pointer files itself
+
+Every run started one `git rev-parse` child (269 to 351 ms, median of 7, on four repositories) to find the git directories it
+must pin. Pointer files (`.git`, `commondir`) are now read directly; any doubt, such as a NUL byte or a symlinked pointer, falls
+back to asking git. The check itself takes 0.10 to 0.24 ms. Output is byte-identical on 33 argv over tmux, hono, textual and this
+repository.
+
+### Changed — `--pr-context` builds its include-coupling table once per call (#395)
+
+The table depends only on the index but was rebuilt for every changed file and again on every pass of the trim ladder.
+`--pr-context=HEAD~30` on this repository: 49.45 s and 45.79 s become 8.66 s and 7.67 s (two interleaved runs each, about 5.8
+times faster); the output is byte-identical on 49 argv.
+
+### Changed — source builds: lifetime fences on GCC 13+ and Clang (no behaviour change)
+
+GCC 13 and later build our own targets with `-Werror=dangling-reference` (a reference bound to a call's result that took a
+temporary, as in `for( x : makeRow().items() )`, reads a dead object on GCC 13 and 14, which have no C++23 P2718 range-for
+lifetime extension); `RW_LIFETIMEBOUND` marks the accessors that return a view of an argument for Clang's `-Wdangling`;
+`test/danglingwarncheck.sh` plants each shape per compiler, and `portablebuildcheck` #7 holds the range-for rule. The tree had 0
+such sites on GCC 13.4, 14.4 and 16.2 and on Clang, so the fences found no bug and changed no output (33 of 33 argv
+byte-identical). CONTRIBUTING.md now says: never rely on P2718, and use signed integers for quantities.
+
+
 ### Changed — `--for`'s first eight rows name up to eight distinct files before any file takes a second row (head round-robin)
 
 A routed (subtoken+body) `--for` answer's head was a list of the highest-scoring rows, and one file often took most of it: on
@@ -56,27 +117,6 @@ grader): Rule C ✓ +4 (hono-02, hono-11, koa-02, textual-02), 0 lost; the fold 
 answer (fold, its legend clause and the `<sigs>` pair) +3.4 KB median (max 4.9 KB). Also: a cut `<hops>` callee listing now carries
 `next="--callees=…"`, and the `--for --limit=N` file page legend says `n=` counts this task's symbols, not the file's (`--expand`
 `sibs_total=`).
-
-### Fixed — closure blocks and bridges: three false hedges a hand-check found
-
-- `post: function _post( … ) { … }` (and `compile: function compile`) is one definition the parser reports twice; the
-  property is no longer listed as a closure beside the function expression, which takes its place.
-- C, C++ and Objective-C have no named nested function, so a function span the parser reports inside a function (htop's
-  `else if (…) {` read as a function named `if`) is no longer a closure (a `langfacts.h` column, no language compare).
-- A `<bridge>` no longer routes through a test, bench, demo, generated or minified symbol (it may still start or end at
-  one), and a chain longer than 8 hops is not shown.
-- A `<bridge>` no longer crosses a declined member call spelled like a builtin type's method (`ids.join( "," )`,
-  `keys.push( k )`, `d.get( k )`, Ruby `each`): the builtin-method gate's per-language tables decide, and on a 42-query
-  hand-check every such crossing was a false chain.
-- `<near_sink>` reads neither such a builtin-spelled declined call nor a wrapper decorator (`@property`, `@classmethod`,
-  `@overload`: the dead-code rule's own list) as a way into a row.
-- By-name hedges (`<near_sink>` `why="name"`, a `<bridge>` `via="namesake"` crossing) now need a call of the name that
-  is not spelled like a builtin type's method (`prerequisites.clear`, `self._invalid_css.update( … )`) AND a namesake
-  whose owner (its class in its file, or its file for a free function) owns something the forward search reached. On the
-  24-row near_sink hand-check sample this removes all 5 by-name rejects and no accepted row; it is a hedge filter, not
-  proof that a dropped namesake is never the one called.
-  A row whose by-name calls either rule drops says so with `withheld="name:N"` (N callers) and never reads `why="external"`: the
-  index holds a way in it chose not to count (textual's `Input.render_line`, entered by `widget.render_line( y )`).
 
 ### Added — `--path` offers a hedged bridge (`<bridge proven="0">`) and glob endpoints
 
@@ -126,6 +166,29 @@ forward search reached that site. Rows are hedges, never hops; at most 4 are sho
 lists the first row's callers. On htop, `--path=ScreenManager_run,LinuxMachine_scanCPUTime` now names the Linux
 `Machine_scan` (the sink's only caller) and the declined call in `checkRecalculation` that could have meant it. Every
 `reachable="1"` answer is byte-identical; the reachable="0" hint and gap clause are unchanged.
+
+### Added — closure blocks and bridges do not hedge on look-alikes
+
+Rules for the `<in>` blocks, `<bridge>` and `<near_sink>` entries above, found by a hand-check of their first build and shipped with them:
+
+- `post: function _post( … ) { … }` (and `compile: function compile`) is one definition the parser reports twice; the
+  property is no longer listed as a closure beside the function expression, which takes its place.
+- C, C++ and Objective-C have no named nested function, so a function span the parser reports inside a function (htop's
+  `else if (…) {` read as a function named `if`) is no longer a closure (a `langfacts.h` column, no language compare).
+- A `<bridge>` no longer routes through a test, bench, demo, generated or minified symbol (it may still start or end at
+  one), and a chain longer than 8 hops is not shown.
+- A `<bridge>` no longer crosses a declined member call spelled like a builtin type's method (`ids.join( "," )`,
+  `keys.push( k )`, `d.get( k )`, Ruby `each`): the builtin-method gate's per-language tables decide, and on a 42-query
+  hand-check every such crossing was a false chain.
+- `<near_sink>` reads neither such a builtin-spelled declined call nor a wrapper decorator (`@property`, `@classmethod`,
+  `@overload`: the dead-code rule's own list) as a way into a row.
+- By-name hedges (`<near_sink>` `why="name"`, a `<bridge>` `via="namesake"` crossing) now need a call of the name that
+  is not spelled like a builtin type's method (`prerequisites.clear`, `self._invalid_css.update( … )`) AND a namesake
+  whose owner (its class in its file, or its file for a free function) owns something the forward search reached. On the
+  24-row near_sink hand-check sample this removes all 5 by-name rejects and no accepted row; it is a hedge filter, not
+  proof that a dropped namesake is never the one called.
+  A row whose by-name calls either rule drops says so with `withheld="name:N"` (N callers) and never reads `why="external"`: the
+  index holds a way in it chose not to count (textual's `Input.render_line`, entered by `widget.render_line( y )`).
 
 ### Changed — Go methods carry their receiver type as scope (#403, slice 9a)
 
