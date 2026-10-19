@@ -2314,7 +2314,7 @@ inline constexpr const char* kDeclinedGateMapLegend =
 // that gate declined at least one call, so a map it never touched keeps its bytes. No '>' and no double hyphen inside.
 inline constexpr const char* kDeclinedStdMapLegend =
     "<!-- hdr:declined=also-counts-calls-named-like-a-standard-type-member-of-their-language(C++-v.push_back,s.size;Rust-v.push,xs.iter)-on-a-receiver-no-rule-tied-to-an-in-tree-class;"
-    "the-std-member-may-be-the-one-called;not-a-claim-the-receiver-is-a-std-type;Rust-types-written-constructed-and-call-result-receivers-not-generic-bounds-dyn-impl-Trait-or-Option-Rc-RefCell -->";
+    "the-std-member-may-be-the-one-called;not-a-claim-the-receiver-is-a-std-type;Rust-types-receivers-written-or-constructed-by-type-name-path-or-use-alias-and-call-results-not-generic-bounds-dyn-impl-Trait-type-aliases-or-Option-Rc-Arc-RefCell -->";
 inline constexpr const char* kInertDeclinedMapLegend =
     "<!-- hdr:declined=also-counts-ordinary-Elixir-call-sites-inside-inert-quote-AST-after-unquote/unquote_splicing-re-entry;no-edge;not-a-possible-callee -->";
 

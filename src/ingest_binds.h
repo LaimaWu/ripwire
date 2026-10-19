@@ -5451,13 +5451,33 @@ inline bool captureTypedDeclShared( BindCtx& cx, TSNode n, const char* t )
     }
     return true;
 }
-// one language's row: the shared head, then its own declaration reader (`at` = the node's start byte, as each reader expects)
-template <void ( *Decl )( BindCtx&, TSNode, const char*, std::uint32_t )>
-inline void captureTypedDeclEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32_t at )
+// each language's row: the shared head, then its own declaration reader (`at` = the node's start byte, as each reader expects)
+inline void captureJavaEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32_t at )
 {
     if( captureTypedDeclShared( cx, n, t ) )
     {
-        Decl( cx, n, t, at );
+        captureJavaDeclEvidence( cx, n, t, at );
+    }
+}
+inline void captureCSharpEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32_t at )
+{
+    if( captureTypedDeclShared( cx, n, t ) )
+    {
+        captureCSharpDeclEvidence( cx, n, t, at );
+    }
+}
+inline void captureKotlinEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32_t at )
+{
+    if( captureTypedDeclShared( cx, n, t ) )
+    {
+        captureKotlinDeclEvidence( cx, n, t, at );
+    }
+}
+inline void captureSwiftEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32_t at )
+{
+    if( captureTypedDeclShared( cx, n, t ) )
+    {
+        captureSwiftDeclEvidence( cx, n, t, at );
     }
 }
 
@@ -5986,6 +6006,82 @@ inline void pushRustBinding( BindCtx& cx, TSNode pattern, std::string_view cls, 
     pushPatternTombstones( cx, pattern, site );
 }
 
+// rust-receivers: a `let`'s names — `let x: T` typed by its written type, `let x = T { .. }` / `T::default()` by the class
+// the value constructs, `let x = f()?` by the callee's declared result (a CallResult per bound name, a tuple by position)
+inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
+{
+    const TSNode   pattern = fieldChild( n, NodeField::Pattern );
+    const auto     site    = rustLetSite( n, at );
+    const TSNode   owner   = ancestorOfKind( n, { "function_item" } );
+    std::string_view whole;
+    if( const TSNode type = fieldChild( n, NodeField::Type ); !ts_node_is_null( type ) )
+    {
+        pushRustBinding( cx, pattern, rustWrittenClass( type, owner, cx.src, whole ), whole, site );   // `let x: T = …`
+        return;
+    }
+    // `let x = T { .. }` / `T::default()`: the class the value constructs, as the binding's site spells it. `T::default()`
+    // is a call too, and its CallResult rides beside it: where the spelling resolves to no class here (the record is
+    // then an empty fact), the callee's declared result may still type it (graph.h's resolve loop fills an empty fact).
+    pushRustBinding( cx, pattern, rustConstructedClass( fieldChild( n, NodeField::Value ), owner, cx.src, whole ), whole, site );
+    std::uint8_t depth = 0;
+    const TSNode call  = rustUnwrappedCall( fieldChild( n, NodeField::Value ), depth, cx.src );
+    if( ts_node_is_null( call ) || ts_node_is_null( pattern ) )
+    {
+        return;
+    }
+    if( kindIs( ts_node_type( pattern ), "identifier" ) )
+    {
+        pushCallResult( cx, pattern, call, kWholeResult, depth, site );
+    }
+    else if( kindIs( ts_node_type( pattern ), "tuple_pattern" ) )
+    {
+        std::uint32_t position = 0;   // every element counts, `_` included: walk ALL children, skipping the punctuation
+        for( std::uint32_t i = 0, k = ts_node_child_count( pattern ); i < k && position < kWholeResult; ++i )
+        {
+            const TSNode c  = ts_node_child( pattern, i );
+            const char*  ct = ts_node_type( c );
+            if( kindIs( ct, "(" ) || kindIs( ct, ")" ) || kindIs( ct, "," ) )
+            {
+                continue;
+            }
+            if( kindIs( ct, "identifier" ) )
+            {
+                pushCallResult( cx, c, call, std::uint8_t( position ), depth, site );
+            }
+            ++position;
+        }
+    }
+}
+// rust-receivers: a parameter `b: &Book` names the class it is written as (a fn's or a closure's); any other pattern: tombstones
+inline void captureRustParameter( BindCtx& cx, TSNode n, std::uint32_t at )
+{
+    std::string_view       whole;
+    const std::string_view cls = rustWrittenClass( fieldChild( n, NodeField::Type ), ancestorOfKind( n, { "function_item", "function_signature_item" } ), cx.src, whole );
+    pushRustBinding( cx, fieldChild( n, NodeField::Pattern ), cls, whole, siteIn( at, ancestorOfKind( n, { "function_item", "closure_expression" } ) ) );
+}
+// rust-receivers: a struct's named field `book: Book` (MemberType on the struct, so `self.book.m()` narrows through it); a
+// field whose type names no class is a tombstone. An enum variant's fields are no struct's: nothing.
+inline void captureRustField( BindCtx& cx, TSNode n, std::uint32_t at )
+{
+    const TSNode list = ts_node_parent( n );
+    const TSNode item = ts_node_is_null( list ) ? TSNode{} : ts_node_parent( list );
+    const TSNode name = fieldChild( n, NodeField::Name );
+    if( ts_node_is_null( item ) || !kindIs( ts_node_type( item ), "struct_item" ) || ts_node_is_null( name ) )
+    {
+        return;
+    }
+    std::string_view       whole;
+    const std::string_view cls = rustWrittenClass( fieldChild( n, NodeField::Type ), item, cx.src, whole );
+    if( cls.empty() )
+    {
+        pushMemberTombstone( cx, nodeTextOf( name, cx.src ), at );
+    }
+    else
+    {
+        pushEvidenceBind( cx, LocalBindKind::MemberType, nodeTextOf( name, cx.src ), cls, whole, at, false );
+    }
+}
+
 // FE-B for Rust (train 29): every name a function binds is a tombstone over its span — `let` patterns, parameters, closure
 // parameters, `for` / `if let` / `while let` / `match` patterns — so a typed binding never leaks to a shadowing one; a `let`
 // whose value is a call (through `?` / `.unwrap()` / `.expect()`) records one CallResult per bound name (a tuple pattern by
@@ -6002,76 +6098,15 @@ inline void captureRustEvidence( BindCtx& cx, TSNode n, const char* t, std::uint
     }
     else if( kindIs( t, "let_declaration" ) )
     {
-        const TSNode   pattern = fieldChild( n, NodeField::Pattern );
-        const auto     site    = rustLetSite( n, at );
-        const TSNode   owner   = ancestorOfKind( n, { "function_item" } );
-        std::string_view whole;
-        if( const TSNode type = fieldChild( n, NodeField::Type ); !ts_node_is_null( type ) )
-        {
-            pushRustBinding( cx, pattern, rustWrittenClass( type, owner, cx.src, whole ), whole, site );   // `let x: T = …`
-            return;
-        }
-        // `let x = T { .. }` / `T::default()`: the class the value constructs, as the binding's site spells it. `T::default()`
-        // is a call too, and its CallResult rides beside it: where the spelling resolves to no class here (the record is
-        // then an empty fact), the callee's declared result may still type it (graph.h's resolve loop fills an empty fact).
-        pushRustBinding( cx, pattern, rustConstructedClass( fieldChild( n, NodeField::Value ), owner, cx.src, whole ), whole, site );
-        std::uint8_t depth = 0;
-        const TSNode call  = rustUnwrappedCall( fieldChild( n, NodeField::Value ), depth, cx.src );
-        if( ts_node_is_null( call ) || ts_node_is_null( pattern ) )
-        {
-            return;
-        }
-        if( kindIs( ts_node_type( pattern ), "identifier" ) )
-        {
-            pushCallResult( cx, pattern, call, kWholeResult, depth, site );
-        }
-        else if( kindIs( ts_node_type( pattern ), "tuple_pattern" ) )
-        {
-            std::uint32_t position = 0;   // every element counts, `_` included: walk ALL children, skipping the punctuation
-            for( std::uint32_t i = 0, k = ts_node_child_count( pattern ); i < k && position < kWholeResult; ++i )
-            {
-                const TSNode c  = ts_node_child( pattern, i );
-                const char*  ct = ts_node_type( c );
-                if( kindIs( ct, "(" ) || kindIs( ct, ")" ) || kindIs( ct, "," ) )
-                {
-                    continue;
-                }
-                if( kindIs( ct, "identifier" ) )
-                {
-                    pushCallResult( cx, c, call, std::uint8_t( position ), depth, site );
-                }
-                ++position;
-            }
-        }
+        captureRustLet( cx, n, at );
     }
     else if( kindIs( t, "parameter" ) )
     {
-        // `b: &Book` names the class it is written as (a fn's or a closure's parameter); any other pattern: tombstones
-        std::string_view       whole;
-        const std::string_view cls = rustWrittenClass( fieldChild( n, NodeField::Type ), ancestorOfKind( n, { "function_item", "function_signature_item" } ), cx.src, whole );
-        pushRustBinding( cx, fieldChild( n, NodeField::Pattern ), cls, whole, siteIn( at, ancestorOfKind( n, { "function_item", "closure_expression" } ) ) );
+        captureRustParameter( cx, n, at );
     }
     else if( kindIs( t, "field_declaration" ) )
     {
-        // a struct's named field `book: Book` (MemberType on the struct, so `self.book.m()` narrows through it); a field whose
-        // type names no class is a tombstone. An enum variant's fields are no struct's: nothing.
-        const TSNode list = ts_node_parent( n );
-        const TSNode item = ts_node_is_null( list ) ? TSNode{} : ts_node_parent( list );
-        const TSNode name = fieldChild( n, NodeField::Name );
-        if( ts_node_is_null( item ) || !kindIs( ts_node_type( item ), "struct_item" ) || ts_node_is_null( name ) )
-        {
-            return;
-        }
-        std::string_view       whole;
-        const std::string_view cls = rustWrittenClass( fieldChild( n, NodeField::Type ), item, cx.src, whole );
-        if( cls.empty() )
-        {
-            pushMemberTombstone( cx, nodeTextOf( name, cx.src ), at );
-        }
-        else
-        {
-            pushEvidenceBind( cx, LocalBindKind::MemberType, nodeTextOf( name, cx.src ), cls, whole, at, false );
-        }
+        captureRustField( cx, n, at );
     }
     else if( kindIs( t, "closure_parameters" ) )
     {
@@ -6314,10 +6349,10 @@ inline ReceiverEvidenceHook receiverEvidenceHookOf( Lang l ) noexcept
     switch( l )
     {
         case Lang::JavaScript: case Lang::TypeScript:                          return &captureJsEvidence;
-        case Lang::Java:                                                       return &captureTypedDeclEvidence<&captureJavaDeclEvidence>;
-        case Lang::CSharp:                                                     return &captureTypedDeclEvidence<&captureCSharpDeclEvidence>;
-        case Lang::Kotlin:                                                     return &captureTypedDeclEvidence<&captureKotlinDeclEvidence>;
-        case Lang::Swift:                                                      return &captureTypedDeclEvidence<&captureSwiftDeclEvidence>;
+        case Lang::Java:                                                       return &captureJavaEvidence;
+        case Lang::CSharp:                                                     return &captureCSharpEvidence;
+        case Lang::Kotlin:                                                     return &captureKotlinEvidence;
+        case Lang::Swift:                                                      return &captureSwiftEvidence;
         case Lang::Go:                                                         return &captureGoEvidence;
         case Lang::Rust:                                                       return &captureRustEvidence;
         default:                                                               return nullptr;

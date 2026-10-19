@@ -322,16 +322,17 @@ grep -q 'stdm n= calls=: of declined_calls=' "$TMP/cec.xml" \
 # rust-receivers retired the old floor ("Rust records no receiver type yet": a written in-tree type now binds, arm R) and
 # states the new one: a generic bound, dyn / impl Trait and a value behind Option / Rc / RefCell are not typed.
 floor_missing=""
-grep -q 'Rust-types-written-constructed-and-call-result-receivers-not-generic-bounds-dyn-impl-Trait-or-Option-Rc-RefCell' "$TMP/map.xml" || floor_missing="$floor_missing map"
-grep -q 'a Rust receiver of an in-tree type that no rule typed is declined too (Rust types a written, constructed or call-result receiver, not a generic bound, dyn or impl Trait, or a value behind Option, Rc or RefCell)' "$TMP/cl.xml" || floor_missing="$floor_missing callers"
-grep -q 'a Rust receiver of an in-tree type that no rule typed is listed too (Rust types a written, constructed or call-result receiver, not a generic bound, dyn or impl Trait, or a value behind Option, Rc or RefCell)' "$TMP/ce.xml" || floor_missing="$floor_missing callees"
-grep -q 'stdm n= calls=: [^>]*(Rust: one of an in-tree type no rule typed too: a generic bound, dyn or impl Trait, behind Option / Rc / RefCell)' "$TMP/cec.xml" || floor_missing="$floor_missing compact"
+grep -q 'Rust-types-receivers-written-or-constructed-by-type-name-path-or-use-alias-and-call-results-not-generic-bounds-dyn-impl-Trait-type-aliases-or-Option-Rc-Arc-RefCell' "$TMP/map.xml" || floor_missing="$floor_missing map"
+grep -q 'a Rust receiver of an in-tree type that no rule typed is declined too (Rust types a parameter, local or field written or constructed as an in-tree type by its name, path or use alias, and a call result; not a generic bound, dyn or impl Trait, a type alias, or a value behind Option, Result, Rc, Arc, RefCell, Cell, Mutex or RwLock)' "$TMP/cl.xml" || floor_missing="$floor_missing callers"
+grep -q 'a Rust receiver of an in-tree type that no rule typed is listed too (Rust types a parameter, local or field written or constructed as an in-tree type by its name, path or use alias, and a call result; not a generic bound, dyn or impl Trait, a type alias, or a value behind Option, Result, Rc, Arc, RefCell, Cell, Mutex or RwLock)' "$TMP/ce.xml" || floor_missing="$floor_missing callees"
+grep -q 'stdm n= calls=: [^>]*(Rust: one of an in-tree type no rule typed too: a generic bound, dyn or impl Trait, a type alias, behind Option / Rc / Arc / RefCell)' "$TMP/cec.xml" || floor_missing="$floor_missing compact"
 [ -z "$floor_missing" ] && ok "(F) the map, callers, full callees and compact callees legends each state the Rust floor" \
     || no "(F) the Rust floor is missing from:$floor_missing"
 # the retired floor is gone from every surface (a stale "no receiver type yet" would now be false)
 stale=""
 for f in map.xml cl.xml ce.xml cec.xml; do grep -q 'no-receiver-type-yet\|no receiver type yet\|until Rust records receiver types' "$TMP/$f" && stale="$stale $f"; done
-[ -z "$stale" ] && ok "(F) the retired Rust floor (no receiver type yet) is on no surface" || no "(F) the retired Rust floor is still on:$stale"
+if [ -z "$stale" ]; then ok "(F) the retired Rust floor (no receiver type yet) is on no surface"
+else no "(F) the retired Rust floor is still on:$stale"; fi
 rw --callees=typedLocal --legend=full >"$TMP/cen.xml"
 if [ -z "$( root_tag "$TMP/cen.xml" callees )" ]; then no "(F) --callees=typedLocal produced no <callees> root — the absence below would be vacuous"
 elif grep -q 'stdm' "$TMP/cen.xml"; then no "(F) a callees answer with no declined standard-member call mentions stdm"

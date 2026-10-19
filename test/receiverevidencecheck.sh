@@ -1532,6 +1532,7 @@ for f in typed_param typed_param_mut typed_param_box let_typed let_typed_ref let
     case "$f" in let_typed|let_typed_ref|closure_param) want="$want;fn make $RSA" ;; let_new) want="$want;method new $RSM" ;; esac
     exactproven rsrecv callees "$RSA:$f" "$want"                                                                # [P]
     proven      rsrecv callees "$RSA:$f" "method spin $RSM:5"                                                   # [P] Book's
+    notproven   rsrecv callees "$RSA:$f" "spin $RSM:10" "spin $RSM:24"                                          # the same file's decoys
 done
 for f in typed_param_path typed_param_module let_struct_path; do
     exactproven rsrecv callees "$RSA:$f" "method spin src/other.rs"                                             # [P] other::Book, never model's
@@ -1567,9 +1568,12 @@ for f in Shelf::near_self_maybe Shelf::near_self_shared Shelf::near_self_count S
     rs_none "$RSM::$f"                                                                                         # [N]
 done
 rs_none "src/other.rs::Shelf::near_same_named_owner"                                                             # [N]
-# the callers side reads the same edges: --callers of model.rs's Book::spin lists [P] callers unhedged and never the [N] ones
-proven      rsrecv callers "$RSM::Book::spin" "fn typed_param $RSA" "fn let_struct $RSA" "method self_field $RSM"
-notproven   rsrecv callers "$RSM::Book::spin" "near_dyn $RSA" "near_rc $RSA" "near_shadow $RSA" "near_same_named_owner src/other.rs"
+# the callers side reads the same edges (Cfg::tune: few enough callers that the answer is never capped, unlike Book::spin):
+# --callers lists the [P] caller unhedged and never the [N] one; Knob::tune's callers are the typed Knob locals only
+proven      rsrecv callers "$RSM::Cfg::tune" "fn let_default $RSA"
+notproven   rsrecv callers "$RSM::Cfg::tune" "near_default_outside $RSA" "glob_default src/nest/inner.rs" "glob_of_glob_default src/glob2/leaf.rs"
+proven      rsrecv callers "$RSM::Knob::tune" "fn glob_default src/nest/inner.rs" "fn glob_of_glob_default src/glob2/leaf.rs"
+notproven   rsrecv callers "$RSM::Knob::tune" "let_default $RSA" "near_default_outside $RSA"
 # a glob `use super::*` brings in what the parent module's own `use` names (Rust: a glob imports the module's imports
 # too); a glob of a module that only globs in turn is not followed (stated floor: names nothing, proves nothing); a
 # `T::default()` whose spelling names no class at the site is still typed by its callee's declared `-> Self` (call result)
@@ -1580,6 +1584,43 @@ notproven   rsrecv callees "src/nest/inner.rs:glob_default" "tune $RSM:16"
 rs_none "src/glob2/leaf.rs:glob_of_glob"                                                                        # [N] floor
 proven      rsrecv callees "src/glob2/leaf.rs:glob_of_glob_default" "method tune $RSM:20"                        # [P] via the call result
 notproven   rsrecv callees "src/glob2/leaf.rs:glob_of_glob_default" "tune $RSM:16"
+# early gates review (rv-l3-gates A1-A12; src/adds.rs, alias.rs, samename.rs, kinds.rs's trait). [P]: the field below
+# `&mut self`, by-value `self`, `&'a self`, a field written `&'a Book`, a `&Self` parameter's field, a `Self::new()` local's
+# field, a `&'a Book` parameter, a `use … as` alias (by the path it names: other::Book, never the in-tree model::Other its
+# alias spells), the same name in two modules (each scope's own Book), a block-scoped `let b: Other` beside a `&Book`
+# parameter (each call its own class). [N]: `Box<dyn Render>` (a parameter and a field), `&mut dyn Render`, `Arc<Book>`, a
+# `RefCell<Book>` field, an index receiver `self.books[0]`, a `type Tome = Book` alias (a floor: the alias is not
+# followed), a generic parameter spelled `Book`, a struct pattern parameter, `Book::try_new()` / `maybe_new()` (Result /
+# Option without its operator), the element type of `Vec<Book>` / `&[Book]` / `HashMap<_, Book>` (never Book::iter).
+RSD="src/adds.rs"
+for f in Rack::mut_self Rack::value_self Rack::life_self Rack::borrowed_field Rack::self_param Rack::self_new; do
+    proven      rsrecv callees "$RSD::$f" "method spin $RSM:5"                                                  # [P]
+    notproven   rsrecv callees "$RSD::$f" "spin $RSM:10" "spin $RSM:24" "spin src/other.rs:4" "spin src/kinds.rs:4" "spin src/kinds.rs:7"
+done
+exactproven rsrecv callees "$RSD:life_param" "method spin $RSM"                                                 # [P]
+proven      rsrecv callees "$RSD:life_param" "method spin $RSM:5"
+exactproven rsrecv callees "src/alias.rs:alias_collides" "method spin src/other.rs"                              # [P] never model's Other
+exactproven rsrecv callees "src/alias.rs:alias_plain" "method spin $RSM"                                         # [P]
+proven      rsrecv callees "src/alias.rs:alias_plain" "method spin $RSM:5"
+exactproven rsrecv callees "src/samename.rs:other_book" "method spin src/other.rs"                               # [P] the use'd other::Book
+exactproven rsrecv callees "src/samename.rs:nested_book" "method spin src/samename.rs"                           # [P] the mod's own Book
+proven      rsrecv callees "$RSD:block_shadow" "method spin $RSM:5" "method spin $RSM:10"                       # [P] each call its own class
+for f in Rack::near_box_dyn_field Rack::near_refcell_field Rack::near_index_recv; do rs_none "$RSD::$f"; done       # [N]
+for f in near_box_dyn near_mut_dyn near_arc near_type_alias near_generic_named near_struct_pattern near_try_new near_maybe_new; do
+    rs_none "$RSD:$f"                                                                                          # [N]
+done
+for f in near_vec_iter near_slice_iter near_map_get Rack::near_vec_field_iter Rack::near_chain_recv; do
+    sel="$RSD:$f"; case "$f" in Rack::*) sel="$RSD::$f" ;; esac
+    notproven rsrecv callees "$sel" "iter $RSM:6" "iter $RSM:11"                                                # [N] the element type is no receiver
+done
+proven      rsrecv callees "$RSD::Rack::near_chain_recv" "method spin $RSM:5"                                   # its inner call stays proven
+proven      rsrecv callees "$RSD:make_book_local" "method spin $RSM:5"                                           # guard: a call result (L)
+notproven   rsrecv callees "$RSD:make_book_local" "spin $RSM:10"                                                 # never Other's (the path's type)
+# FLOOR, unchanged from base (not this lane's rule): `self.spin()` inside a trait's default method is Rule 1's and proves
+# the trait's own default body (kinds.rs:7) — an implementor may override it (dispatch: lane L6, carded); a blanket
+# `impl<T: Render> Extra for T` stays hedged. Pinned so a change here is seen: exactly the base answer.
+exactproven rsrecv callees "src/kinds.rs:twice" "method spin src/kinds.rs"
+rs_none "src/kinds.rs:go"
 # guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
 proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
 

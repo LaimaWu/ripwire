@@ -12,6 +12,9 @@ pub mod app;
 pub mod kinds;
 pub mod nest;
 pub mod glob2;
+pub mod adds;
+pub mod alias;
+pub mod samename;
 @@@ rsrecv/src/model.rs
 // Book and Other both define spin / iter; Cfg and Knob both define tune: a call proves one only through its receiver's type.
 pub struct Book { pub items: Vec<u32> }
@@ -70,6 +73,13 @@ impl Pair {
 impl Default for Knob {
     fn default() -> Self { Knob }
 }
+impl Other {
+    pub fn make_book() -> Book { Book::new() }
+}
+impl Book {
+    pub fn try_new() -> Result<Self, ()> { Ok(Book::new()) }
+    pub fn maybe_new() -> Option<Self> { None }
+}
 @@@ rsrecv/src/other.rs
 // a second Book (other::Book) and an in-tree File named like std::fs::File
 pub struct Book;
@@ -92,6 +102,11 @@ impl Shape {
 }
 pub trait Render {
     fn spin(&self) -> u8 { 0 }
+    fn twice(&self) -> u8 { self.spin() }
+}
+pub trait Extra { fn go(&self) -> u8; }
+impl<T: Render> Extra for T {
+    fn go(&self) -> u8 { self.spin() }
 }
 @@@ rsrecv/src/app.rs
 use crate::kinds::{Render, Shape};
@@ -146,3 +161,64 @@ pub mod leaf;
 use super::*;
 pub fn glob_of_glob(b: &Book) -> u8 { b.spin() }
 pub fn glob_of_glob_default() -> u8 { let k = Knob::default(); k.tune() }
+@@@ rsrecv/src/adds.rs
+// early-gates-review adds (rv-l3-gates A1-A12): dispatch wrappers, element types, constructors, chains, self forms, shadows
+use crate::kinds::Render;
+use crate::model::{Book, Other};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::Arc;
+type Tome = Book;
+pub struct Rack<'a> {
+    pub book: Book,
+    pub books: Vec<Book>,
+    pub renderer: Box<dyn Render>,
+    pub cell: RefCell<Book>,
+    pub borrowed: &'a Book,
+}
+impl<'a> Rack<'a> {
+    pub fn new() -> Self { todo!() }
+    pub fn mut_self(&mut self) -> u8 { self.book.spin() }
+    pub fn value_self(self) -> u8 { self.book.spin() }
+    pub fn life_self(&'a self) -> u8 { self.book.spin() }
+    pub fn borrowed_field(&self) -> u8 { self.borrowed.spin() }
+    pub fn self_param(&self, o: &Self) -> u8 { o.book.spin() }
+    pub fn self_new() -> u8 { let r = Self::new(); r.book.spin() }
+    pub fn near_box_dyn_field(&self) -> u8 { self.renderer.spin() }
+    pub fn near_refcell_field(&self) -> u8 { self.cell.spin() }
+    pub fn near_index_recv(&self) -> u8 { self.books[0].spin() }
+    pub fn near_vec_field_iter(&self) -> usize { self.books.iter() }
+    pub fn near_chain_recv(&self) -> usize { self.book.spin().iter() }
+}
+pub fn life_param<'a>(b: &'a Book) -> u8 { b.spin() }
+pub fn make_book_local() -> u8 { let b = Other::make_book(); b.spin() }
+pub fn block_shadow(b: &Book, o: Other) -> u8 { { let b: Other = o; b.spin(); } b.spin() }
+pub fn near_box_dyn(r: Box<dyn Render>) -> u8 { r.spin() }
+pub fn near_mut_dyn(r: &mut dyn Render) -> u8 { r.spin() }
+pub fn near_arc(b: Arc<Book>) -> u8 { b.spin() }
+pub fn near_vec_iter(v: Vec<Book>) -> usize { v.iter() }
+pub fn near_slice_iter(v: &[Book]) -> usize { v.iter() }
+pub fn near_map_get(m: &HashMap<String, Book>) -> usize { m.iter() }
+pub fn near_try_new() -> u8 { let r = Book::try_new(); r.spin() }
+pub fn near_maybe_new() -> u8 { let r = Book::maybe_new(); r.spin() }
+pub fn near_type_alias(t: &Tome) -> u8 { t.spin() }
+pub fn near_generic_named<Book: Render>(b: &Book) -> u8 { b.spin() }
+pub fn near_struct_pattern(Wrap { inner }: Wrap) -> u8 { inner.spin() }
+pub struct Wrap { pub inner: Book }
+@@@ rsrecv/src/alias.rs
+// `use … as`: the alias names the item its path names (other::Book), never an in-tree type spelled like the alias
+use crate::other::Book as Other;
+use crate::model::Book as B;
+pub fn alias_collides(o: &Other) -> u8 { o.spin() }
+pub fn alias_plain(b: &B) -> u8 { b.spin() }
+@@@ rsrecv/src/samename.rs
+// the same type name in two modules, unqualified: each binding names the Book its own scope sees
+use crate::other::Book;
+pub fn other_book(b: &Book) -> u8 { b.spin() }
+pub mod nested {
+    pub struct Book;
+    impl Book {
+        pub fn spin(&self) -> u8 { 11 }
+    }
+    pub fn nested_book(b: &Book) -> u8 { b.spin() }
+}

@@ -1242,19 +1242,25 @@ struct CallResultTypes
         const auto files = rust.filesOf.find( rustModuleKey( crate, module ) );
         const std::vector<std::uint32_t> none;
         const std::vector<std::uint32_t>& of = inlineMod != kNoNode ? none : files == rust.filesOf.end() ? none : files->second;
-        NodeId hit = kNoNode;
+        NodeId hit     = kNoNode;
+        bool   globbed = false;   // rust-receivers: a glob at the module's level may bring the name in unseen (not followed)
         const auto follow = [ & ]( std::uint32_t mf )
         {
-            forEachImport( mf, cls, [ & ]( const Binding& b )
+            for( const Binding* b : mf < importsByFile.size() ? std::span<const Binding* const>( importsByFile[ mf ] ) : std::span<const Binding* const>{} )
             {
-                if( b.kind == LocalBindKind::TypeImport && atLevel( mf, b.startByte ) )
+                if( b->kind != LocalBindKind::TypeImport || ( b->var != cls && b->var != "*" ) || !atLevel( mf, b->startByte ) )
                 {
-                    const auto [ modPath, item ] = splitLast( b.importedName, "::" );
-                    const NodeId c = modPath.empty() ? kNoNode : rustClassAt( mf, b.startByte, modPath, item, depth + 1 );
+                    continue;
+                }
+                globbed = globbed || b->var == "*";
+                if( b->var == cls )
+                {
+                    const auto [ modPath, item ] = splitLast( b->importedName, "::" );
+                    const NodeId c = modPath.empty() ? kNoNode : rustClassAt( mf, b->startByte, modPath, item, depth + 1 );
                     hit   = found ? kNoNode : c;
                     found = true;
                 }
-            } );
+            }
         };
         for( std::uint32_t mf : of )   // by reference: the layout's own list, never a copy
         {
@@ -1264,22 +1270,7 @@ struct CallResultTypes
         {
             follow( ing.symbols[ inlineMod ].fileId );
         }
-        // rust-receivers: a glob at the module's own level may bring the name in unseen (not followed): found, no class
-        const auto globIn = [ & ]( std::uint32_t mf )
-        {
-            forEachImport( mf, "*", [ & ]( const Binding& b ) { found = found || ( b.kind == LocalBindKind::TypeImport && atLevel( mf, b.startByte ) ); } );
-        };
-        if( !found )
-        {
-            for( std::uint32_t mf : of )
-            {
-                globIn( mf );
-            }
-            if( inlineMod != kNoNode )
-            {
-                globIn( ing.symbols[ inlineMod ].fileId );
-            }
-        }
+        found = found || globbed;
         return hit;
     }
     // (L) a qualified Rust call whose qualifier is a module path reaching `target`'s own module (`model::load()`,

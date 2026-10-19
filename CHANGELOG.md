@@ -22,12 +22,13 @@ as `iter` or `push`, was declined), because Rust recorded no parameter, local or
 type proves that type's method: a parameter (`book: &Book`, `&mut T`, `Box<T>`, a path such as `crate::model::Book`, a
 user generic `Stack<u8>`), `let x: T`, a struct literal `T { .. }`, `T::default()`, a closure's typed parameter, and a
 field path below such a receiver or below `self` (`self.book.iter()`, `self.inner.book.spin()`), each field by its own
-written type. The written name resolves exactly as a declared call result does (the item scopes, `use` declarations and
-module paths in force at the binding), so `use std::fs::File` beside an in-tree `File` proves nothing. A declared `-> Self`
+written type. The written name resolves exactly as a declared call result does (the item scopes, `use` declarations —
+a `use … as` alias by the path it names, a glob `use super::*` through the module's own `use` — and module paths in force
+at the binding), so `use std::fs::File` beside an in-tree `File` proves nothing. A declared `-> Self`
 result now types its call too (`let b = Book::new(); b.spin()`), and a generic result's head names its class. On
 rust-lang/mdBook, `--callers=Book::iter` now lists `make_data` (`book: &Book`) and `MDBook::iter` (`self.book.iter()`)
 as plain edges. Stated floor (still declined or hedged): a generic bound `T: Trait`, `dyn` / `impl Trait` and a trait
-written as a type (which implementation runs is dispatch), a value behind `Option` / `Result` / `Rc` / `Arc` / `RefCell` /
+written as a type (which implementation runs is dispatch), a `type` alias, a glob of a module that only globs, a value behind `Option` / `Result` / `Rc` / `Arc` / `RefCell` /
 `Cell` / `Mutex` / `RwLock`, a tuple-struct field (`self.0`), and any pattern other than a plain name. The wrapper list is
 one data row per family (`Box` transparent; `Option` / `Result` one unwrap layer; the pointers and cells hide their argument).
 
@@ -62,7 +63,7 @@ that defines `iter`) keeps its edge. On rust-lang/mdBook, `--callers=iter` no lo
 is on a `Vec` or a map, and `--callees=make_data` shows `<stdm n="insert,iter,push,to_owned" calls="72"/>` instead of
 three in-tree methods it never calls. Stated floor: a receiver of an in-tree type that no rule typed (a generic bound,
 `dyn` / `impl Trait`, a value behind `Option` / `Rc` / `RefCell`, an extension-trait method on a foreign type) is declined
-too — counted and disclosed, not bound; a receiver written as an in-tree type binds (see "Rust receivers typed by their
+too — counted and disclosed, not bound; a receiver written or constructed as an in-tree type binds (see "Rust receivers typed by their
 written type" above). Go keeps an empty row: `Len`, `Write`, `String` are methods in-tree types implement on
 purpose. The legend clauses now say "a standard-type member of its language". No cached content changes.
 
