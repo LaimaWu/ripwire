@@ -77,6 +77,9 @@ struct LangFacts
     /// (verbs_quality.h; pinned by test/qddegradecheck.sh (E3)).
     bool defectShapeNeedsMacroSet = false;
 
+    /// Markdown: a link targets a section, so shared graph code treats this language's sections as link targets (graph.h).
+    bool linkSections = false;
+
     /// C, C++, Objective-C: a function span the parser reports DIRECTLY inside a function's span is read as a misread (htop's
     /// `else if (…) {` inside a macro-heavy body read as a function named `if`), never a closure (src/closures.h; this fact
     /// decides only the closure relation, no symbol or edge). A lambda or a block is anonymous, and a C++ local class's
@@ -93,7 +96,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Rust },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC, .noNestedNamedFunctions = true },
-    { .lang = Lang::Markdown },
+    { .lang = Lang::Markdown, .linkSections = true },
     { .lang = Lang::JavaScript },
     { .lang = Lang::Bash },
     { .lang = Lang::Java },

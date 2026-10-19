@@ -345,11 +345,17 @@ constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strict
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 198;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 206;          // bump on any grammar/.scm/extraction change
+                                                      // 206 = 2026-10-18 (#409, PR #414, renumbered again at merge with main 939dbb69): strictly above every
+                                                      //   live number — main 196 (rich 197), train 31 198 (199), lane rust-receivers 202 (203), lane ix1-slot
+                                                      //   204 (205). Rich file tag 207. kCacheVersion stays 36 (no record format change).
                                                       // 198 = 2026-10-18 (train 31): strictly above every number a live build used — main 196 (rich 197),
                                                       //   lane h1-annot 194 (195); body-fold, hrr, callers-band2, dangling-warnings and ix2-slice kept
                                                       //   their base value 184. Rich file tag 199. kCacheVersion stays 36: no lane changed a record format
                                                       //   (h1-annot appends two LocalBindKind values; no lane touched a cache serializer).
+                                                      // 185 = 2026-10-18 (#409): a cross-file markdown [text](other.md#slug) keeps the link as
+                                                      //   written (RawRef::memberPath, unbound) so graph.h pins the exact file + heading.
+                                                      //   185, not 184: 184 is train 29. Rich file tag 186. kCacheVersion stays 34.
                                                       // 196 = 2026-10-18 (train 30): strictly above every number a live build used — main 184 (rich 185),
                                                       //   lane call-result-typing 180 (rich 181), lane fcall-forward 188 (189), lane go-local-var 190 (191),
                                                       //   lane name-template-dispatch 192 (193), lane h1-annot (train 31) 194 (195); tail-sym and

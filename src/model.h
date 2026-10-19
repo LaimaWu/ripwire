@@ -875,6 +875,8 @@ struct Reference
     // FE-B (test/receiverevidencecheck.sh): the rest of a member call's receiver chain, for the receiver-evidence rule
     //   (graph.h ReceiverEvidence). memberPath is the member names BETWEEN memberRoot and the callee, '.'-joined —
     //   "bucket" for `this.bucket.listSchemas()`, "req.raw.headers" for `ctx.req.raw.headers.get()`, "" for `root.m()`.
+    //   A markdown link stores the path and slug as written here (the slug lowercased). memberCall stays false.
+    //   buildGraph reads it (bindMarkdownLinks).
     //   memberCtor is the class a CONSTRUCTED receiver names, final segment — "Reply" for `new Reply( r ).send()`, Go
     //   "Merger" for `(&Merger{}).Len()` — with memberRoot "" (a construction has no root identifier). Both "" for every
     //   other shape and every language that records no member-call shape.

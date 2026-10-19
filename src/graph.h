@@ -26,6 +26,7 @@
 #include "externalnames.h"       // Phase 5: the committed builtin/stdlib tables behind the external-name veto
 #include "infra/sortutil.h"      // radix edge sorting for large integer-key graph edge lists
 #include "clones.h"              // scanCodeTokens / CodeScanOptions — BuiltinMethodGate::namedBeyondDefinition's code-token count
+#include "infra/mdslug.h"        // mdSlugOf — bindMarkdownLinks matches a link slug to a heading
 #include "infra/namesplit.h"     // isIdentChar — identifierRunCount, the identifier runs inside a string annotation
 #include "docparse.h"            // detail::readWholeFile — resolveAtSeed reads the seed line's byte range off disk
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
@@ -79,9 +80,11 @@ struct Graph
                                             //       the export (JS/TS); read, not chosen by name
                                             // Empty ⇒ no overlay, no FFI/import edge and nothing split: every edge
                                             // uniquely resolved, so the whole attribute is absent (omit-at-confident).
-    std::vector<std::uint8_t>  outNameOnly; // FE-B: per-out-edge HEDGE bit, parallel to outTargets — 1 = every call site that bound this
-                                            // edge did so by NAME ALONE (no receiver evidence: receiverevidence.h), rendered via="name"
-                                            // on every surface; 0 = at least one site proved it. Empty ⇒ no edge is name-only.
+    std::vector<std::uint8_t>  outNameOnly; // per-out-edge kind, parallel to outTargets. 0 = a call. 1 = every site bound this edge by
+                                            // NAME ALONE (receiverevidence.h), rendered via="name". 2 = a markdown link, rendered via="link".
+                                            // The high bit on a 2 marks anchor="missing" for the map writer. Empty ⇒ every edge is a plain call.
+    std::vector<std::uint8_t>  outAnchorMiss; // parallel to outTargets — 1 = that link edge named a heading the file does not have, so the
+                                            // target is the file node. Empty ⇒ no such edge. A link with no slug stays 0.
     std::size_t                scipDocsSeen = 0;   // # SCIP documents consumed (0 unless --scip); honesty summary
     std::size_t                scipEdgesPinned = 0;   // # (from,to) edges the SCIP index pinned; honesty summary
     std::vector<std::vector<NodeId>> implementors;   // base-class id → derived class ids (inheritance/Lego view)
@@ -389,33 +392,35 @@ inline LegoClosure legoImplementorClosure( const std::vector<std::vector<NodeId>
     return out;
 }
 
-// FE-B: is the call edge from → to NAME-ONLY, over the raw out-CSR and its parallel hedge bits — bound by name alone at
-// every site that bound it, so every surface renders it via="name". false for an edge that does not exist and for empty
-// hedge bits (a graph with no name-only edge at all). edgeNameOnly( Graph ) below and serialize.h's <calls> block share it.
+// Graph::outNameOnly kind byte. The high bit is the map writer's anchor="missing" mark on a link.
+inline constexpr std::uint8_t kEdgeName     = 1;
+inline constexpr std::uint8_t kEdgeLink     = 2;
+inline constexpr std::uint8_t kEdgeKindMask = 0x7f;
+
+inline std::uint8_t edgeKindByte( std::uint8_t stored ) noexcept
+{
+    return std::uint8_t( stored & kEdgeKindMask );
+}
+
+// FE-B: is the call edge from → to the asked kind, over the raw out-CSR. want is kEdgeName or kEdgeLink.
+// false for an edge that does not exist and for an empty kind vector.
 inline bool edgeNameOnlyInCsr( const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets,
-                          const std::vector<std::uint8_t>& nameOnly, NodeId from, NodeId to ) noexcept
+                          const std::vector<std::uint8_t>& nameOnly, NodeId from, NodeId to, std::uint8_t want = kEdgeName ) noexcept
 {
     if( nameOnly.empty() || std::size_t( from ) + 1 >= outOff.size() )
     {
         return false;
     }
-    EXPECTS( nameOnly.size() == outTargets.size(), "the hedge bit is parallel to outTargets (buildGraph allocates it per edge)" );
+    EXPECTS( nameOnly.size() == outTargets.size(), "the kind byte is parallel to outTargets (buildGraph allocates it per edge)" );
     const auto b  = outTargets.begin() + outOff[ from ];
     const auto e  = outTargets.begin() + outOff[ std::size_t( from ) + 1 ];
     const auto it = std::lower_bound( b, e, to );   // ascending within a source (buildGraph sorts by (from, to))
-    return it != e && *it == to && nameOnly[ std::size_t( it - outTargets.begin() ) ] != 0;
+    return it != e && *it == to && edgeKindByte( nameOnly[ std::size_t( it - outTargets.begin() ) ] ) == want;
 }
 inline bool edgeNameOnly( const Graph& g, NodeId from, NodeId to ) noexcept
 {
     EXPECTS( g.outNameOnly.empty() || g.outNameOnly.size() == g.outTargets.size(), "buildGraph allocates the hedge bits per edge, or none" );
     return edgeNameOnlyInCsr( g.outOff, g.outTargets, g.outNameOnly, from, to );
-}
-
-// FE-B: does any hop of a directed call path (path[i-1] → path[i]) run through a name-only edge? --path and MCP
-// path_between ask it once to decide their via="name" legend sentence (one spelling for both transports).
-inline bool pathHasNameOnlyHop( const Graph& g, std::span<const NodeId> path ) noexcept
-{
-    return std::adjacent_find( path.begin(), path.end(), [ & ]( NodeId from, NodeId to ) { return edgeNameOnly( g, from, to ); } ) != path.end();
 }
 
 // The out-CSR position of the call edge from → to, or SIZE_MAX when there is none (ascending within a source: buildGraph sorts
@@ -432,13 +437,165 @@ inline std::size_t edgeIndex( const Graph& g, NodeId from, NodeId to ) noexcept
     return ( it != e && *it == to ) ? std::size_t( it - g.outTargets.begin() ) : SIZE_MAX;
 }
 
+// One per-edge bit vector (outAnchorMiss). false when that vector was not allocated, or the edge is absent.
+inline bool edgeBitSet( const Graph& g, const std::vector<std::uint8_t>& bits, NodeId from, NodeId to ) noexcept
+{
+    if( bits.empty() )
+    {
+        return false;
+    }
+    EXPECTS( bits.size() == g.outTargets.size(), "buildGraph allocates the per-edge bits, or none" );
+    const std::size_t e = edgeIndex( g, from, to );
+    return e != SIZE_MAX && bits[ e ] != 0;
+}
+
+inline bool edgeIsLink( const Graph& g, NodeId from, NodeId to ) noexcept
+{
+    return edgeNameOnlyInCsr( g.outOff, g.outTargets, g.outNameOnly, from, to, kEdgeLink );
+}
+
+inline bool edgeAnchorMiss( const Graph& g, NodeId from, NodeId to ) noexcept
+{
+    return edgeBitSet( g, g.outAnchorMiss, from, to );
+}
+
+// Callers (towardMatches): every edge from the row to a matched def is a link. Callees: every edge from a matched def
+// to the row is. A row with no such edge is not a link.
+// bits, when passed, reads that vector (outAnchorMiss: the slug named no heading). Otherwise the kind byte is read.
+inline bool oneHopRowIsLink( const Graph& g, std::span<const NodeId> matches, NodeId row, bool towardMatches,
+                             const std::vector<std::uint8_t>* bits = nullptr ) noexcept
+{
+    const bool                           onKind   = bits == nullptr;
+    const std::vector<std::uint8_t>&     edgeBits = onKind ? g.outNameOnly : *bits;
+    if( edgeBits.empty() )
+    {
+        return false;
+    }
+    bool any = false;
+    for( const NodeId m : matches )
+    {
+        const NodeId      from = towardMatches ? row : m;
+        const NodeId      to   = towardMatches ? m : row;
+        const std::size_t e    = edgeIndex( g, from, to );
+        if( e == SIZE_MAX )
+        {
+            continue;
+        }
+        any = true;
+        const bool set = e < edgeBits.size() && ( onKind ? edgeKindByte( edgeBits[ e ] ) == kEdgeLink : edgeBits[ e ] != 0 );
+        if( !set )
+        {
+            return false;
+        }
+    }
+    return any;
+}
+
+inline bool pageHasAnchorMiss( const Graph& g, std::span<const NodeId> matches, const std::vector<NodeId>& rows,
+                               std::size_t begin, std::size_t end, bool towardMatches ) noexcept
+{
+    for( std::size_t i = begin; i < end && i < rows.size(); ++i )
+    {
+        if( oneHopRowIsLink( g, matches, rows[ i ], towardMatches, &g.outAnchorMiss ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Does any hop of a directed path carry this kind byte? kind 1 is via="name", kind 2 is via="link".
+// --path and MCP path_between ask it once for the legend sentence.
+inline bool pathHasNameOnlyHop( const Graph& g, std::span<const NodeId> path, std::uint8_t kind = kEdgeName ) noexcept
+{
+    return std::adjacent_find( path.begin(), path.end(), [ & ]( NodeId from, NodeId to )
+    {
+        return kind == 0 ? edgeAnchorMiss( g, from, to ) : edgeNameOnlyInCsr( g.outOff, g.outTargets, g.outNameOnly, from, to, kind );
+    } ) != path.end();
+}
+
 // FE-B's per-row via="name" (EVERY edge joining a row to the selector's definitions is name-only) is defattrib.h's
 // OneHopAttribution::nameOnly now: the strongest tie the one attribution pass recorded is by name alone.
 
 // The via="name" spelling every XML row of a name-only edge carries (" via=\"name\"", 11 bytes), "" otherwise.
+// via="link" wins when the edge is a markdown link. The two do not share an edge: a pinned link is not name-only.
 inline const char* viaNameAttr( bool nameOnly ) noexcept
 {
     return nameOnly ? " via=\"name\"" : "";
+}
+inline const std::vector<std::uint8_t>* linkOutPtr( const Graph& g ) noexcept
+{
+    return g.outNameOnly.empty() ? nullptr : &g.outNameOnly;
+}
+
+inline const char* viaEdgeAttr( bool nameOnly, bool link ) noexcept
+{
+    return link ? " via=\"link\"" : viaNameAttr( nameOnly );
+}
+inline const char* anchorMissAttr( bool miss ) noexcept
+{
+    return miss ? " anchor=\"missing\"" : "";
+}
+inline const char* anchorMissJson( bool miss ) noexcept
+{
+    return miss ? ",\"anchor\":\"missing\"" : "";
+}
+
+// The JSON twin of viaEdgeAttr. Link wins. Empty when the row is a plain call.
+inline const char* viaJsonAttr( bool nameOnly, bool link ) noexcept
+{
+    return link ? ",\"via\":\"link\"" : ( nameOnly ? ",\"via\":\"name\"" : "" );
+}
+
+// oneHopRowIsLink plus the name hedge, and the two answer-level bits the notes read. The branch stays here so
+// symbolQueryJson does not grow one.
+inline const char* viaJsonForRow( const Graph& g, std::span<const NodeId> matches, NodeId row, bool towardMatches, bool nameOnly,
+                                  bool& anyName, bool& anyLink ) noexcept
+{
+    const bool link = oneHopRowIsLink( g, matches, row, towardMatches );
+    if( link )
+    {
+        anyLink = true;
+    }
+    else if( nameOnly )
+    {
+        anyName = true;
+    }
+    return viaJsonAttr( nameOnly, link );
+}
+
+inline const char* viaJsonForSide( const Graph& g, std::span<const NodeId> callerMatches, std::span<const NodeId> calleeMatches, NodeId row,
+                                   bool callersSide, bool nameOnly, bool& anyName, bool& anyLink ) noexcept
+{
+    return viaJsonForRow( g, callersSide ? callerMatches : calleeMatches, row, callersSide, nameOnly, anyName, anyLink );
+}
+
+// Empty unless id is the row the caller just selected. nameOnly stays false: the name fragment is the caller's own bit.
+inline const char* linkJsonFrag( const Graph& g, std::span<const NodeId> callerMatches, std::span<const NodeId> calleeMatches, NodeId id,
+                                 NodeId linkRow, bool callersSide, bool& anyName, bool& anyLink ) noexcept
+{
+    if( id != linkRow )
+    {
+        return "";
+    }
+    return viaJsonForSide( g, callerMatches, calleeMatches, id, callersSide, false, anyName, anyLink );
+}
+
+// Empty unless id is the row just selected and every edge of that row missed its heading.
+inline const char* anchorMissJsonFrag( const Graph& g, std::span<const NodeId> callerMatches, std::span<const NodeId> calleeMatches,
+                                       NodeId id, NodeId row, bool callersSide, bool& anyMiss ) noexcept
+{
+    if( id != row )
+    {
+        return "";
+    }
+    const bool miss = oneHopRowIsLink( g, callersSide ? callerMatches : calleeMatches, id, callersSide, &g.outAnchorMiss );
+    if( !miss )
+    {
+        return "";
+    }
+    anyMiss = true;
+    return anchorMissJson( true );
 }
 
 // The prov= VOCABULARY, spelled once. serialize's XML and serializeJson's JSON must emit identical
@@ -6322,6 +6479,239 @@ inline void fillImplementorBound( Graph& g, const std::vector<ImplementorBoundEd
     }
 }
 
+// Cross-file markdown links, bound to the EXACT target. extractMarkdown leaves each [text](path#slug) ref named by the
+// target's stem with the link as written in memberPath (a fact of the linking file alone, so the cache holds it
+// unbound). Here every heading in the repo is a symbol: the path is joined against the linking file's directory and
+// looked up as a whole file, then the slug among THAT file's headings (first heading wins, GitHub's -1 suffix is
+// not modelled). Returns, per reference index, the Section to pin the edge to: the heading, else the target file's own
+// node, else kNoNode (path not in the tree: the stem ladder answers, as it did before the bind existed). Empty
+// when the tree holds no such link.
+struct MdLinkIndex
+{
+    struct Heading { std::uint32_t fileId; std::uint32_t startByte; NodeId id; std::string slug; };
+    HashMap<std::string, std::uint32_t> fileByPath;   // every .md/.markdown file, by lexicalNormalize(ing.files). A `.`-rooted crawl stores `./docs/a.md`; the lookup key does not. An absolute root stores the absolute path, and the lookup joins to that same absolute path.
+    std::vector<Heading>                headings;     // sorted (fileId, slug, startByte, id): the first of a slug is its heading
+    std::vector<NodeId>                 wholeFile;    // per file: the file-level Section node, kNoNode when none
+    std::vector<std::string>            wholeSlug;    // parallel to wholeFile: that node's own slug (a file that is one heading line IS that heading)
+};
+
+inline bool isMarkdownLinkRef( const Reference& r ) noexcept
+{
+    if( !langFacts( r.lang ).linkSections || r.isDocLink || r.memberCall )
+    {
+        return false;
+    }
+    return !r.memberPath.empty();
+}
+
+// Link-ness is where the reference came from: lang Markdown and not a doc mention. isMarkdownLinkRef also requires a
+// path, which an in-file anchor and a wikilink do not have. A markdown doc mention is neither.
+inline void noteMarkdownLinkSite( HashMap<std::uint64_t, char>& linkEdges, std::uint64_t ekey, const Reference& r )
+{
+    if( langFacts( r.lang ).linkSections && !r.isDocLink )
+    {
+        linkEdges[ ekey ] = 1;
+    }
+}
+
+template <class Edge>
+inline bool graphHasMarkdownLink( const std::vector<Edge>& edges, const HashMap<std::uint64_t, char>& linkEdges )
+{
+    for( const Edge& e : edges )
+    {
+        const std::uint64_t key = ( std::uint64_t( e.from ) << 32 ) | e.to;
+        if( linkEdges.find( key ) != linkEdges.end() )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline std::uint8_t markdownLinkBit( const HashMap<std::uint64_t, char>& linkEdges, std::uint64_t key ) noexcept
+{
+    return linkEdges.find( key ) != linkEdges.end() ? 1u : 0u;
+}
+
+// The file node is the Section extractMarkdown builds with bodyByte 0 over [0, size). assignSymbols then
+// leaves sigStart 0 and sigEnd == endByte == the file span (widest is that span, measured over the file's
+// own sections). A 0,0 span is a ModuleScope, never this node. Same predicate recall.h uses. A heading
+// matches it only when the whole file is that one heading line.
+inline bool isMarkdownFileNode( const Symbol& sym, std::uint32_t widestEnd ) noexcept
+{
+    return sym.sigStartByte == 0 && sym.sigEndByte >= sym.endByte && sym.endByte >= widestEnd;
+}
+
+// Headings, and each file's own node (the first matching symbol in id order). The file node is not a heading.
+inline void indexMarkdownSections( MdLinkIndex& ix, const IngestResult& ing )
+{
+    ix.wholeFile.assign( ing.files.size(), kNoNode );
+    ix.wholeSlug.assign( ing.files.size(), std::string() );
+    std::vector<std::uint32_t> widest( ing.files.size(), 0 );
+    for( const Symbol& sym : ing.symbols )
+    {
+        if( langFacts( sym.lang ).linkSections && sym.kind == SymKind::Section && sym.fileId < ing.files.size() )
+        {
+            widest[ sym.fileId ] = std::max( widest[ sym.fileId ], sym.endByte );
+        }
+    }
+    for( const Symbol& sym : ing.symbols )
+    {
+        if( !langFacts( sym.lang ).linkSections || sym.kind != SymKind::Section || sym.fileId >= ing.files.size() )
+        {
+            continue;
+        }
+        if( isMarkdownFileNode( sym, widest[ sym.fileId ] ) )
+        {
+            if( ix.wholeFile[ sym.fileId ] == kNoNode )
+            {
+                ix.wholeFile[ sym.fileId ] = sym.id;
+                ix.wholeSlug[ sym.fileId ] = mdSlugOf( sym.name );
+            }
+            continue;
+        }
+        ix.headings.push_back( { sym.fileId, sym.sigStartByte, sym.id, mdSlugOf( sym.name ) } );
+    }
+    std::sort( ix.headings.begin(), ix.headings.end(), []( const MdLinkIndex::Heading& a, const MdLinkIndex::Heading& b )
+    {
+        return std::tie( a.fileId, a.slug, a.startByte, a.id ) < std::tie( b.fileId, b.slug, b.startByte, b.id );
+    } );
+}
+
+inline MdLinkIndex buildMdLinkIndex( const IngestResult& ing )
+{
+    MdLinkIndex ix;
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        if( ing.files[ f ].ends_with( ".md" ) || ing.files[ f ].ends_with( ".markdown" ) )
+        {
+            ix.fileByPath.try_emplace( lexicalNormalize( ing.files[ f ] ), f );
+        }
+    }
+    indexMarkdownSections( ix, ing );
+    return ix;
+}
+
+// The Section one link names. slugMiss is set only when the slug is non-empty, the file is in the tree, and no heading
+// matches, so the edge is that file's node. A link with no slug, and a path that is not in the tree, stay unmarked.
+struct MarkdownLinkTarget
+{
+    NodeId id       = kNoNode;
+    bool   slugMiss = false;
+};
+
+// The first heading of `file` whose slug is `slug` (headings are sorted by (file, slug, start)), else headings.end().
+inline std::vector<MdLinkIndex::Heading>::const_iterator findMarkdownHeading( const MdLinkIndex& ix, std::uint32_t file, std::string_view slug )
+{
+    using Key      = std::pair<std::uint32_t, std::string_view>;
+    const auto hit = std::lower_bound( ix.headings.begin(), ix.headings.end(), Key{ file, slug },
+                                       []( const MdLinkIndex::Heading& h, const Key& key ) { return Key{ h.fileId, h.slug } < key; } );
+    return hit != ix.headings.end() && hit->fileId == file && hit->slug == slug ? hit : ix.headings.end();
+}
+
+// A link's slug that matched no heading is a CLAIM of absence only when mdSlugOf could have matched it. It cannot decide:
+// a byte >= 0x80 or a '%' (non-ASCII and encoded slugs); a "-<digits>" suffix whose stem names a heading (GitHub's
+// duplicate numbering, `#dup-1` for a second `## Dup`); a file that is one heading line, whose heading IS the file node
+// (the slug equals the node's own). Those keep the file edge and carry no anchor="missing".
+inline bool mdSlugProvablyAbsent( const MdLinkIndex& ix, std::uint32_t file, std::string_view slug )
+{
+    if( slug.empty() || mdSlugOutsideModel( slug ) )
+    {
+        return false;
+    }
+    const std::size_t dash = slug.find_last_of( '-' );
+    if( dash != std::string_view::npos && dash > 0 && dash + 1 < slug.size()
+        && slug.find_first_not_of( "0123456789", dash + 1 ) == std::string_view::npos
+        && findMarkdownHeading( ix, file, slug.substr( 0, dash ) ) != ix.headings.end() )
+    {
+        return false;
+    }
+    const auto first       = std::lower_bound( ix.headings.begin(), ix.headings.end(), file,
+                                               []( const MdLinkIndex::Heading& h, std::uint32_t f ) { return h.fileId < f; } );
+    const bool hasHeadings = first != ix.headings.end() && first->fileId == file;
+    return hasHeadings || ix.wholeSlug[ file ] != slug;
+}
+
+inline MarkdownLinkTarget bindOneMarkdownLink( const MdLinkIndex& ix, std::string_view linkerPath, std::string_view written,
+                                                 std::string_view crawlRoot )
+{
+    const std::size_t      frag = written.find( '#' );
+    const std::string_view link = written.substr( 0, frag );
+    const std::string_view slug = frag == std::string_view::npos ? std::string_view{} : written.substr( frag + 1 );
+    std::string            path;
+    if( !link.empty() && link.front() == '/' )
+    {
+        // A leading slash is the crawl root. A multi-root crawl leaves crawlRoot empty, and the stem ladder answers.
+        if( crawlRoot.empty() )
+        {
+            return {};
+        }
+        path.assign( crawlRoot );
+        if( path.empty() || path.back() != '/' )
+        {
+            path.push_back( '/' );
+        }
+        const std::size_t body = link.find_first_not_of( '/' );
+        if( body != std::string_view::npos )
+        {
+            path.append( link.substr( body ) );
+        }
+    }
+    else
+    {
+        const std::string_view dir = includerDir( linkerPath );
+        path.assign( dir );
+        if( !dir.empty() )
+        {
+            path.push_back( '/' );
+        }
+        path.append( link );
+    }
+    path = lexicalNormalize( path );   // empty on an escape above the root → stem ladder
+    const auto file = path.empty() ? ix.fileByPath.end() : ix.fileByPath.find( path );
+    if( file == ix.fileByPath.end() )
+    {
+        return {};
+    }
+    const std::uint32_t target = file->second;
+    const auto hit = slug.empty() ? ix.headings.end() : findMarkdownHeading( ix, target, slug );
+    if( hit != ix.headings.end() )
+    {
+        return { hit->id, false };
+    }
+    const NodeId fileNode = ix.wholeFile[ target ];
+    return { fileNode, fileNode != kNoNode && mdSlugProvablyAbsent( ix, target, slug ) };
+}
+
+struct MdLinkPins
+{
+    std::vector<NodeId> pin;
+    std::vector<char>   slugMiss;   // parallel to pin, 1 when that reference fell back to the file node
+};
+
+inline MdLinkPins bindMarkdownLinks( const IngestResult& ing )
+{
+    MdLinkPins out;
+    if( std::none_of( ing.references.begin(), ing.references.end(), isMarkdownLinkRef ) )
+    {
+        return out;
+    }
+    out.pin.assign( ing.references.size(), kNoNode );
+    out.slugMiss.assign( ing.references.size(), 0 );
+    const MdLinkIndex ix = buildMdLinkIndex( ing );
+    for( std::size_t i = 0; i < ing.references.size(); ++i )
+    {
+        const Reference& r = ing.references[ i ];
+        if( isMarkdownLinkRef( r ) && r.fileId < ing.files.size() )
+        {
+            const MarkdownLinkTarget t = bindOneMarkdownLink( ix, ing.files[ r.fileId ], r.memberPath, ing.crawlRoot );
+            out.pin[ i ]      = t.id;
+            out.slugMiss[ i ] = t.slugMiss ? 1 : 0;
+        }
+    }
+    return out;
+}
+
 // B2.2 MINIMUM ARITY ACROSS DECLARATIONS: per symbol, the fewest arguments a call can pass to it — its own paramsMin
 // (ingest_metrics.h cc_paramShape) lowered to the lowest paramsMin of any DECLARATION with the same name and the same
 // parameter count. C++ may write a default on a separate prototype only (`int f( int x, int y = 5 );` in a header,
@@ -6756,6 +7146,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                                  // so its bucket layout cannot reach output, and it is filled inside a loop
                                                  // whose per-reference tier work dominates the growth cascade by orders of
                                                  // magnitude. A guessed reserve would be a made-up number in a hot struct.
+    HashMap<std::uint64_t, char> linkEdges;      // (from<<32|to) a markdown link bound. The section that holds the link is the edge's from.
+    HashMap<std::uint64_t, char> anchorMissEdges; // (from<<32|to) a link whose slug named no heading, so the target is the file node.
     std::vector<NodeId>      rule3Out;   // reused Rule-3 output buffer (candidates from the single included file)
     Rule3FileMemo            rule3Memo;  // Rule 3's answer per (caller file, byName entry): one walk per name per file, not per call
     std::string              qkey;       // reused "qualifier::name" buffer for the E#4 canonical lookup (no per-ref alloc)
@@ -7649,6 +8041,18 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     };
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/3: resolve loop (per reference)" );
+    const MdLinkPins                mdLinks    = bindMarkdownLinks( ing );   // empty unless the tree holds a cross-file markdown link
+    const std::vector<NodeId>&     mdLinkPin  = mdLinks.pin;
+    const std::vector<char>&       mdSlugMiss = mdLinks.slugMiss;
+    bool anyMarkdownLink = false;
+    for( const Reference& r : ing.references )
+    {
+        if( langFacts( r.lang ).linkSections && !r.isDocLink )
+        {
+            anyMarkdownLink = true;
+            break;
+        }
+    }
     for( siteIndex = 0; siteIndex < ing.references.size(); ++siteIndex )
     {
         const Reference& site = ing.references[ siteIndex ];
@@ -7730,6 +8134,19 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 scipPinned = true;
             }
+        }
+
+        // A cross-file markdown link whose file is in the tree: pinned to the exact heading (or file) bindMarkdownLinks
+        // found, like a SCIP site — the name ladder (same-dir stem, same-file heading) must not re-choose it.
+        if( !mdLinkPin.empty() && mdLinkPin[ siteIndex ] != kNoNode )
+        {
+            const NodeId to = mdLinkPin[ siteIndex ];
+            tier.clear();
+            if( to != r.fromSymbol )
+            {
+                tier.push_back( to );
+            }
+            scipPinned = true;
         }
 
         // Java issue #74: the grammar labels both `Widget::makeFn` and `widget::makeFn`
@@ -9034,7 +9451,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
         }
 
-        // drop self-loops BEFORE the split so the confidence mass is conserved over real targets
+        // drop self-loops BEFORE the split so the confidence mass is conserved over real targets.
+        // A markdown link whose target is the section that contains the link is dropped here on purpose.
         std::size_t nReal = 0;
         for( NodeId c : tier )
         {
@@ -9127,6 +9545,14 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 finalSegmentEdges[ekey] = 1;   // remember (from,to) for prov="final-segment"
             }
             ( nameOnly ? nameOnlyEdges : provenEdges )[ ekey ] = 1;   // FE-B: a proven site wins the merged row (Graph::outNameOnly)
+            if( anyMarkdownLink )
+            {
+                noteMarkdownLinkSite( linkEdges, ekey, r );
+                if( siteIndex < mdSlugMiss.size() && mdSlugMiss[ siteIndex ] != 0 && siteIndex < mdLinkPin.size() && to == mdLinkPin[ siteIndex ] )
+                {
+                    anchorMissEdges[ ekey ] = 1;
+                }
+            }
         }
         // (L) the call committed exactly ONE unsplit target WITH evidence — a receiver rule, a resolved qualifier, the language's
         // own lookup, an import or SCIP pin, or the ladder's unhedged pick of the one definition a hedge-eligible call reaches by
@@ -9208,10 +9634,23 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     {
         g.outProv.assign( edges.size(), 0u );
     }
+    const auto anchorMissed = [ & ]( std::uint64_t k )
+    {
+        return markdownLinkBit( linkEdges, k ) != 0 && anchorMissEdges.contains( k );
+    };
+    if( std::any_of( edges.begin(), edges.end(), [ & ]( const E& e ) { return anchorMissed( ( std::uint64_t( e.from ) << 32 ) | e.to ); } ) )
+    {
+        g.outAnchorMiss.assign( edges.size(), 0u );
+    }
     const EdgeProvenanceSets provSets{ bindingEdges, importEdges, splitEdges, finalSegmentEdges };
-    // FE-B: the hedge bit, allocated only when some edge is name-only (empty ⇒ every edge proven, nothing marked anywhere)
+    // Kind byte, allocated when some edge is name-only or a markdown link. Empty ⇒ every edge is a plain call.
     const auto hedged = [ & ]( std::uint64_t k ) { return nameOnlyEdges.contains( k ) && !provenEdges.contains( k ); };
-    if( std::any_of( edges.begin(), edges.end(), [ & ]( const E& e ) { return hedged( ( std::uint64_t( e.from ) << 32 ) | e.to ); } ) )
+    const auto marked = [ & ]( const E& e )
+    {
+        const std::uint64_t k = ( std::uint64_t( e.from ) << 32 ) | e.to;
+        return hedged( k ) || markdownLinkBit( linkEdges, k ) != 0;
+    };
+    if( std::any_of( edges.begin(), edges.end(), marked ) )
     {
         g.outNameOnly.assign( edges.size(), 0u );
     }
@@ -9234,7 +9673,21 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             if( !g.outNameOnly.empty() )
             {
                 ASSUME( pos < g.outNameOnly.size(), "outNameOnly is allocated one slot per flattened edge" );
-                g.outNameOnly[ pos ] = hedged( ( std::uint64_t( e.from ) << 32 ) | e.to ) ? 1u : 0u;
+                const std::uint64_t key = ( std::uint64_t( e.from ) << 32 ) | e.to;
+                std::uint8_t        kind = 0;
+                if( markdownLinkBit( linkEdges, key ) != 0 )
+                {
+                    kind = anchorMissed( key ) ? std::uint8_t( kEdgeLink | 0x80 ) : kEdgeLink;
+                }
+                else if( hedged( key ) )
+                {
+                    kind = kEdgeName;
+                }
+                g.outNameOnly[ pos ] = kind;
+            }
+            if( !g.outAnchorMiss.empty() )
+            {
+                g.outAnchorMiss[ pos ] = anchorMissed( ( std::uint64_t( e.from ) << 32 ) | e.to ) ? 1u : 0u;
             }
         }
     }
@@ -11168,7 +11621,7 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
     for( std::uint32_t refIndex = 0; refIndex < ing.references.size(); ++refIndex )
     {
         const Reference& r = ing.references[ refIndex ];
-        if( ( r.role != RefRole::Read && r.role != RefRole::Write ) || r.isCompose || r.isDocLink || r.lang == Lang::Markdown )
+        if( ( r.role != RefRole::Read && r.role != RefRole::Write ) || r.isCompose || r.isDocLink || langFacts( r.lang ).linkSections )
         {
             continue;
         }
@@ -12159,6 +12612,54 @@ inline constexpr std::size_t kImpactTypeRollupBandMax = 200;
 inline bool impactRowNameOnly( const std::vector<char>& proven, NodeId n ) noexcept
 {
     return !proven.empty() && n < proven.size() && proven[n] == 0;
+}
+
+// A depth-1 impact row whose edge to every matched def is a markdown link. The edge runs caller → seed.
+inline bool impactDirectLink( const Graph& g, std::span<const NodeId> seeds, const std::vector<std::uint32_t>& depth, NodeId n ) noexcept
+{
+    return n < depth.size() && depth[ n ] == 1 && oneHopRowIsLink( g, seeds, n, true );
+}
+inline std::string impactViaLinkNote( const std::vector<char>& via, std::size_t begin, std::size_t end )
+{
+    for( std::size_t i = begin; i < end && i < via.size(); ++i )
+    {
+        if( via[ i ] == 2 )
+        {
+            return viaLinkNoteJson();
+        }
+    }
+    return {};
+}
+
+// via="link" plus anchor="missing" when that direct edge named no heading. The && stays here so the impact emitters do not grow a branch.
+inline std::string impactLinkAttrs( const Graph& g, const std::vector<char>& proven, std::span<const NodeId> seeds,
+                                   const std::vector<std::uint32_t>& depth, NodeId n )
+{
+    const bool link = impactDirectLink( g, seeds, depth, n );
+    std::string attrs( viaEdgeAttr( impactRowNameOnly( proven, n ), link ) );
+    if( link && oneHopRowIsLink( g, seeds, n, true, &g.outAnchorMiss ) )
+    {
+        attrs += " anchor=\"missing\"";
+    }
+    return attrs;
+}
+inline std::string impactLinkLegendFor( const Graph& g, std::span<const NodeId> seeds, const std::vector<std::uint32_t>& depth,
+                                        const std::vector<NodeId>& show, std::size_t begin, std::size_t end )
+{
+    const bool any = std::any_of( show.begin() + std::ptrdiff_t( begin ), show.begin() + std::ptrdiff_t( end ), [ & ]( NodeId n )
+    {
+        return impactDirectLink( g, seeds, depth, n );
+    } );
+    return viaLinkLegend( any );
+}
+inline std::string impactAnchorLegendFor( const Graph& g, std::span<const NodeId> seeds, const std::vector<std::uint32_t>& depth,
+                                          const std::vector<NodeId>& show, std::size_t begin, std::size_t end )
+{
+    const bool any = std::any_of( show.begin() + std::ptrdiff_t( begin ), show.begin() + std::ptrdiff_t( end ), [ & ]( NodeId n )
+    {
+        return impactDirectLink( g, seeds, depth, n ) && oneHopRowIsLink( g, seeds, n, true, &g.outAnchorMiss );
+    } );
+    return anchorMissLegend( any );
 }
 
 struct ImpactFileRow

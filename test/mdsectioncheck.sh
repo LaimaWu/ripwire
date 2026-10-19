@@ -11,7 +11,8 @@
 #     canonical id is path::Parent::Child — identity stays PATH-QUALIFIED (the churn-keying
 #     lesson: same heading text across files must never collide);
 #   - markdown links are edges: [text](other.md) / [label]: other.md → doc→doc (file node, the
-#     wikilink machinery), [text](#anchor) → doc-section→doc-section IN-FILE; `backtick`
+#     wikilink machinery), [text](#anchor) → doc-section→doc-section IN-FILE,
+#     [text](other.md#slug) → that file's heading (stem if the heading is absent); `backtick`
 #     mentions stay doc→code and now attribute to their ENCLOSING SECTION;
 #   - fenced/tilde/indented code, html blocks, YAML front-matter and blockquoted headings are
 #     NOT document structure: nothing inside them becomes a symbol, and fenced code is never
@@ -76,6 +77,8 @@ guard "$G" '# zqhtmlphantom'               'the html-block decoy heading'
 guard "$G" '# zqindentphantom'             'the indented-code decoy heading'
 guard "$G" '> # Quoted Phantom'            'the blockquoted decoy heading'
 guard "$G" '(partner.md)'                  'the inline link to partner.md'
+guard "$G" '(partner.md#install-steps)'    'the cross-file heading link'
+guard "$G" '(alt.markdown#no-such-heading)'  'the cross-file link whose heading is absent'
 guard "$G" '(#result-tables)'              'the in-file anchor link'
 guard "$G" '[[decoy]]'                     'the wikilink to decoy'
 guard "$G" '[zqref]: decoy.md'             'the reference-style link definition'
@@ -252,6 +255,8 @@ for m in re.finditer(r'<s t="sec" n="([^"]*)"[^>]*>(.*?)</s>', xml, re.S):
 PYEOF
 edge(){ if grep -qF "$1 -> $2" "$TMP/edges.txt"; then ok "edge: $1 -> $2  ($3)"; else no "edge MISSING: $1 -> $2  ($3)"; fi; }
 edge "Cache Warm Path" "partner"        'inline [text](partner.md) link, attributed to its section'
+edge "Cache Warm Path" "Install Steps"  'cross-file [text](partner.md#install-steps) — that file'\''s heading'
+edge "Cache Warm Path" "alt"           'cross-file [text](alt.markdown#no-such-heading) falls back to the file stem'
 edge "Cache Warm Path" "Result Tables"  'in-file [text](#result-tables) anchor — doc-section→doc-section'
 edge "Result Tables"   "decoy"          '[[wikilink]], attributed to its section'
 edge "Deep Appendix"   "decoy"          'reference-style [zqref]: decoy.md definition'
@@ -350,6 +355,225 @@ echo "=== doc→code mention machinery still reaches the section tier ==="
 $BIN "$FIX" --no-cache --mentions=codeIdentFn >"$TMP/men.xml" 2>/dev/null
 grep -qF 'guide.md' "$TMP/men.xml" && ok "--mentions=codeIdentFn names guide.md (backtick doc→code edge)" \
     || no "--mentions=codeIdentFn lost the guide.md mention"
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo
+echo "=== cross-file [text](path#slug) binds the EXACT (file, slug) heading, never a bare name ==="
+# ═══════════════════════════════════════════════════════════════════════════
+# Each arm reads --callees of ONE linking section and compares the rows' n=@p= (file, no line). The
+# fixture is built so a name-only resolver lands on the wrong target: the linking file has its own
+# `## Install`; docs/a/notes.md and docs/b/notes.md both exist; docs/README.md shadows the root README.
+AFIX="$ROOT/test/mdanchorfix"
+[ -d "$AFIX" ] || { echo "no fixture at $AFIX"; exit 2; }
+callees(){ # callees DIR SECTION → "n@file" per callee row, sorted, one per line
+    $BIN "$1" --no-cache --callees="$2" --legend=compact 2>/dev/null \
+        | python3 -c '
+import sys, re
+for m in re.finditer(r"<s t=\"[a-z]+\" n=\"([^\"]*)\" p=\"([^\":]*)", sys.stdin.read()):
+    print(m.group(1) + "@" + m.group(2))' | sort
+}
+want(){ # want DIR SECTION EXPECTED(newline list) WHY
+    got="$( callees "$1" "$2" )"
+    if [ "$got" = "$3" ]; then ok "$4"; else no "$4 — got [$( echo "$got" | tr '\n' ' ' )] want [$( echo "$3" | tr '\n' ' ' )]"; fi
+}
+want "$AFIX" "Self Collision"    'Install@docs/b/partner.md'      "a link to ../b/partner.md#install binds partner's Install, not the linking file's own ## Install"
+want "$AFIX" "Path Choice"       'Setup@docs/b/notes.md'          "../b/notes.md#setup binds docs/b/notes.md, not the same-directory notes.md"
+want "$AFIX" "Root Readme Link"  'Languages@README.md'            "../../README.md#languages binds the ROOT README, not docs/README.md"
+want "$AFIX" "Dup Link"          'Notes@docs/b/dup.md'            "#notes over two ## Notes gives ONE edge (first heading wins)"
+want "$AFIX" "Func Name"         'do_work@docs/b/partner.md'      "a heading named like a .py function binds the section, never the function"
+want "$AFIX" "Missing Anchor"    'partner@docs/b/partner.md'      "#no-such-heading falls back to that file's own node"
+want "$AFIX" "Missed Readme"     'README@docs/b/README.md'        "../b/README.md#no-such-heading pins docs/b/README.md, not the same-directory README"
+want "$AFIX" "Bare Readme"       'README@docs/b/README.md'        "a bare ../b/README.md pins that file, not the same-directory README"
+if $BIN "$AFIX" --no-cache --callees='Missing Anchor' --legend=compact 2>/dev/null | grep -q 'n="partner"[^>]*anchor="missing"' \
+ && ! $BIN "$AFIX" --no-cache --callees='Bare Readme' --legend=compact 2>/dev/null | grep -q 'anchor="missing"'; then
+    ok "a slug the file does not have is anchor=missing, and a bare link is not"
+else
+    no "anchor=missing missed the slug fallback, or a bare link carried it"
+fi
+if $BIN "$AFIX" --no-cache --format=columnar --callees='Func Name' --legend=compact 2>/dev/null | grep -q '<via>2</via>'; then
+    ok "columnar via is 2 for a direct markdown link"
+else
+    no "columnar via did not write 2 for the markdown link"
+fi
+want "$AFIX" "Fence Only"        ''                               "a link inside a fenced block makes no edge"
+# anchor="missing" is a CLAIM that the heading is absent, so it is made only when the slug is provably absent. Four shapes the
+# slug function does not model reach the same file-node fallback as a truly missing heading (a non-ASCII or percent-encoded slug,
+# GitHub's -N duplicate suffix, and a file that is only one heading line, whose heading IS the file node): each keeps its edge
+# and carries NO mark. Each arm links from its own section, so the rows do not merge into one pair.
+mkdir -p "$TMP/amiss/docs"
+printf '%s\n' '# Doc' '' '## Überblick' '' 'x' '' '## 概要' '' 'y' '' '## Dup' '' 'a' '' '## Dup' '' 'b' '' '## Real Heading' '' 'z' > "$TMP/amiss/docs/t.md"
+printf '%s\n' '# Title' > "$TMP/amiss/docs/one.md"
+printf '%s\n' '# Links' '' \
+    '## UberLink' '' '[a](t.md#überblick)' '' '## GaiLink' '' '[a](t.md#概要)' '' '## DupLink' '' '[a](t.md#dup-1)' '' \
+    '## OneLink' '' '[a](one.md#title)' '' '## PctLink' '' '[a](t.md#real%20heading)' '' '## EncLink' '' '[a](t.md#%C3%BCberblick)' '' \
+    '## MissLink' '' '[a](t.md#nonexistent)' '' '## MissNumLink' '' '[a](t.md#bar-2)' '' '## OneMissLink' '' '[a](one.md#nothere)' \
+    > "$TMP/amiss/docs/links.md"
+amiss_row(){ $BIN "$TMP/amiss" --no-cache --callees="$1" --legend=compact 2>/dev/null; }
+amiss_unmarked(){ # amiss_unmarked SECTION TARGET WHY: the edge exists (via=link) and says nothing about a missing anchor
+    row="$( amiss_row "$1" )"
+    if printf '%s' "$row" | grep -q "n=\"$2\"[^>]*via=\"link\"" && ! printf '%s' "$row" | grep -q 'anchor="missing"'; then ok "$3"; else no "$3 — got [$( printf '%s' "$row" | grep -o '<s [^>]*>' )]"; fi
+}
+amiss_marked(){ # amiss_marked SECTION TARGET WHY: the same fallback, marked, because the slug is absent
+    if amiss_row "$1" | grep -q "n=\"$2\"[^>]*via=\"link\"[^>]*anchor=\"missing\""; then ok "$3"; else no "$3"; fi
+}
+amiss_unmarked UberLink "t"     "#überblick (a non-ASCII slug, heading present) keeps the file edge, no anchor=missing"
+amiss_unmarked GaiLink  "t"     "#概要 (a CJK slug, heading present) keeps the file edge, no anchor=missing"
+amiss_unmarked DupLink  "t"     "#dup-1 (GitHub's duplicate suffix, second ## Dup present) keeps the file edge, no anchor=missing"
+amiss_unmarked OneLink  "Title" "one.md#title (the file is just that heading) keeps the file edge, no anchor=missing"
+amiss_unmarked PctLink  "t"     "#real%20heading (percent-encoded, heading present) keeps the file edge, no anchor=missing"
+amiss_unmarked EncLink  "t"     "#%C3%BCberblick (percent-encoded UTF-8, heading present) keeps the file edge, no anchor=missing"
+amiss_marked MissLink    "t"     "a plain ASCII slug no heading has is still anchor=missing"
+amiss_marked MissNumLink "t"     "#bar-2 with no ## Bar (the -N stem is absent) is still anchor=missing"
+amiss_marked OneMissLink "Title" "one.md#nothere (a heading-only file, other slug) is still anchor=missing"
+# --callers lists every matched def in <def ix= t= p=> (cross_kind when a heading and a function share the name).
+# The edge is the <s> row: it must name the section, never the .py function.
+if $BIN "$AFIX" --no-cache --callers=do_work --legend=compact 2>/dev/null | python3 -c '
+import sys, re
+xml = sys.stdin.read()
+kind = { m.group(1): m.group(2) for m in re.finditer(r"<def ix=\"(\d+)\" t=\"([a-z]+)\"", xml) }
+rows = list(re.finditer(r"<s t=\"[a-z]+\"([^>]*)/?>", xml))
+ok = bool(rows) and "fn" in kind.values() and "sec" in kind.values()
+saw_sec = False
+saw_fn = False
+for m in rows:
+    attrs = m.group(1)
+    p = re.search(r" p=\"([^\"]*)\"", attrs)
+    of = re.search(r"of_def=\"(\d+)", attrs)
+    via = re.search(r" via=\"([^\"]*)\"", attrs)
+    if p and "tools.py" in p.group(1):
+        ok = False
+    if of and kind.get(of.group(1)) == "fn":
+        saw_fn = True
+        if via and via.group(1) == "link":
+            ok = False
+    else:
+        if not via or via.group(1) != "link":
+            ok = False
+        else:
+            saw_sec = True
+sys.exit(0 if ok and saw_sec and saw_fn else 1)
+'; then ok "the section caller stays via=link and the Python caller of do_work is unmarked"; else no "the doc link leaked onto the .py function, or the section row lacks via=link"; fi
+if ( cd "$AFIX" && $BIN . --no-cache --callers=do_work --legend=compact ) 2>/dev/null | grep -q 'n="Func Name"[^>]*via="link"'; then
+    ok "a dot crawl root still pins the markdown link (./docs/... matches docs/...)"
+else
+    no "a dot crawl root dropped the markdown link pin"
+fi
+QUAL=$($BIN "$AFIX" --no-cache --callers='docs/a/tools.py:do_work' --legend=compact 2>/dev/null || true)
+if printf '%s' "$QUAL" | grep -q 'count="[1-9]' && printf '%s' "$QUAL" | grep -q 'n="use_work"' && ! printf '%s' "$QUAL" | grep -q 'via="link"'; then
+    ok "the .py do_work has a real caller and that row is not via=link"
+else
+    no "the qualified .py do_work callers were empty or carried via=link"
+fi
+if $BIN "$AFIX" --no-cache --callees='Self Collision' --legend=compact 2>/dev/null | grep -q 'n="Install"[^>]*via="link"'; then
+    ok "Self Collision's callee Install is via=link"
+else
+    no "Self Collision's callee Install lacks via=link"
+fi
+if $BIN "$AFIX" --no-cache --json --callees='Self Collision' 2>/dev/null | grep -q '"via":"link"'; then
+    ok "the JSON callee row spells via=link"
+else
+    no "the JSON callee row lacks via=link"
+fi
+if $BIN "$AFIX" --no-cache --json --callers=do_work 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+rows = d.get("callers", [])
+sec = any(r.get("t") == "sec" and r.get("via") == "link" for r in rows)
+fn = any(r.get("t") == "fn" and r.get("via") == "link" for r in rows)
+sys.exit(0 if sec and d.get("via_link_note") and not fn else 1)
+'; then ok "the JSON callers answer marks the section row and carries via_link_note"; else no "the JSON callers answer lacks via_link_note, or the function row is marked via=link"; fi
+mcp_text(){
+    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' "$1" \
+        | "$BIN" --mcp 2>/dev/null | tail -1 | python3 -c '
+import sys, json
+r = json.load(sys.stdin)
+print("__ERROR__:" + r["error"].get("message", "") if "error" in r else r["result"]["content"][0]["text"])
+'
+}
+call(){ printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"%s","arguments":%s}}' "$1" "$2"; }
+M="$( mcp_text "$( call find_referencing_symbols '{"path":"'"$AFIX"'","symbol":"do_work"}' )" )"
+printf '%s' "$M" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+rows = d.get("calledBy", [])
+sec = any(r.get("kind") == "sec" and r.get("via") == "link" for r in rows)
+fn = any("tools.py" in r.get("file", "") and r.get("via") == "link" for r in rows)
+sys.exit(0 if sec and d.get("via_link_note") and not fn else 1)
+' && ok "find_referencing_symbols marks the section row via=link and carries via_link_note" \
+  || no "find_referencing_symbols lacks via=link on the section row, or marks the .py caller"
+M="$( mcp_text "$( call find_symbol '{"path":"'"$AFIX"'","symbol":"Self Collision"}' )" )"
+printf '%s' "$M" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+rows = d.get("calls", [])
+hit = any(r.get("name") == "Install" and r.get("via") == "link" for r in rows)
+sys.exit(0 if hit and d.get("via_link_note") else 1)
+' && ok "find_symbol marks Install via=link and carries via_link_note" \
+  || no "find_symbol lacks via=link on Install or lacks via_link_note"
+
+# A direct doc caller is via="link" on --safe-delete and --impact. The counts still include it.
+mkdir -p "$TMP/runfix/src" "$TMP/runfix/docs"
+printf '%s\n' 'def run():' '    return 1' '' 'def main():' '    run()' > "$TMP/runfix/src/app.py"
+printf '%s\n' '# API' '' '## run' > "$TMP/runfix/docs/api.md"
+printf '%s\n' '# Guide' '' '## Run Notes' '' 'see [run](api.md#run)' > "$TMP/runfix/docs/guide.md"
+SD="$( $BIN "$TMP/runfix" --no-cache --safe-delete=run --legend=compact 2>/dev/null )"
+printf '%s' "$SD" | grep -q 'callers="2"' \
+  && printf '%s' "$SD" | grep -q 'n="Run Notes"[^>]*via="link"' \
+  && ! printf '%s' "$SD" | grep -q 'n="main"[^>]*via="link"' \
+  && ok "safe-delete marks Run Notes via=link and still counts both callers" \
+  || no "safe-delete dropped the link mark or the caller count"
+IM="$( $BIN "$TMP/runfix" --no-cache --impact=run --legend=compact 2>/dev/null )"
+printf '%s' "$IM" | grep -q 'reaches="2"' \
+  && printf '%s' "$IM" | grep -q 'n="Run Notes"[^>]*via="link"' \
+  && ! printf '%s' "$IM" | grep -q 'n="main"[^>]*via="link"' \
+  && ok "impact marks Run Notes via=link and still counts both rows" \
+  || no "impact dropped the link mark or the reach count"
+IJ="$( $BIN "$TMP/runfix" --no-cache --impact=run --json 2>/dev/null )"
+printf '%s' "$IJ" | grep -q 'via_link_note' \
+  && ok "impact json carries via_link_note" \
+  || no "impact json omitted via_link_note"
+
+# In-file anchors, wikilinks, and root-relative links are via="link". A code call on the same name stays unmarked.
+mkdir -p "$TMP/kinds/src" "$TMP/kinds/docs" "$TMP/kinds/notes"
+printf '%s\n' 'def api():' '    return 1' '' 'def main():' '    api()' > "$TMP/kinds/src/app.py"
+printf '%s\n' '# api' > "$TMP/kinds/docs/api.md"
+printf '%s\n' '# decoy' > "$TMP/kinds/notes/api.md"
+printf '%s\n' '# Guide' '' '## Hub' '' '[down](#later)' '' '[a](api.md)' '' '[b](/docs/api.md)' '' '[[api]]' '' '## Later' '' 'notes' > "$TMP/kinds/docs/guide.md"
+HUB="$( $BIN "$TMP/kinds" --no-cache --callees=Hub --legend=compact 2>/dev/null )"
+printf '%s' "$HUB" | grep -q 'n="Later"[^>]*via="link"' \
+  && printf '%s' "$HUB" | grep -q 'n="api"[^>]*via="link"' \
+  && ok "in-file, wikilink, and root-relative links are via=link" \
+  || no "an in-file, wikilink, or root-relative link lost via=link"
+API="$( $BIN "$TMP/kinds" --no-cache --callers=api --legend=compact 2>/dev/null )"
+printf '%s' "$API" | grep -q 'n="Hub"[^>]*via="link"' \
+  && printf '%s' "$API" | grep -q 'n="main"' \
+  && ! printf '%s' "$API" | grep -q 'n="main"[^>]*via="link"' \
+  && ok "a code call to api stays unmarked while the doc link stays via=link" \
+  || no "the code call was marked via=link, or the doc link lost the mark"
+printf '%s' "$HUB" | grep -q 'docs/api.md:[0-9]*"[^>]*via="link"' \
+  && ! printf '%s' "$HUB" | grep -q 'notes/api.md' \
+  && ok "a leading-slash link joins the crawl root, not the other api.md" \
+  || no "the leading-slash link missed docs/api.md or hit the decoy"
+PTH="$( $BIN "$TMP/kinds" --no-cache --path=Hub,Later --legend=compact 2>/dev/null )"
+printf '%s' "$PTH" | grep -q 'n="Later"[^>]*via="link"' \
+  && ok "path marks the Later hop via=link" \
+  || no "path lost via=link on the Later hop"
+CON="$( $BIN "$TMP/kinds" --no-cache --connect=Hub,Later --legend=compact 2>/dev/null )"
+printf '%s' "$CON" | grep -q 'via="link"' \
+  && ok "connect marks the Hub to Later edge via=link" \
+  || no "connect lost via=link on the Hub to Later edge"
+
+echo "--- warm == cold after editing ONLY the target file (the cached ref must stay unbound) ---"
+cp -R "$AFIX" "$TMP/anchorcopy"
+rm -f "$TMP/anchor.cache"
+$BIN "$TMP/anchorcopy" --cache="$TMP/anchor.cache" --callees="Self Collision" --legend=compact >/dev/null 2>&1
+sed -i.bak 's/^## Install$/## Install Steps Renamed/' "$TMP/anchorcopy/docs/b/partner.md"
+rm -f "$TMP/anchorcopy/docs/b/partner.md.bak"
+grep -q '^## Install Steps Renamed$' "$TMP/anchorcopy/docs/b/partner.md" || no "fixture edit did not apply (sed)"
+$BIN "$TMP/anchorcopy" --cache="$TMP/anchor.cache" --callees="Self Collision" --legend=compact >"$TMP/ac_warm" 2>/dev/null
+$BIN "$TMP/anchorcopy" --no-cache --callees="Self Collision" --legend=compact >"$TMP/ac_cold" 2>/dev/null
+if [ -s "$TMP/ac_cold" ] && diff -q "$TMP/ac_cold" "$TMP/ac_warm" >/dev/null; then ok "warm run equals cold run after only the target heading changed"; else no "warm run differs from cold after a target-only edit (a stale bound ref)"; fi
+if grep -q 'n="partner"' "$TMP/ac_warm"; then ok "…and the dead anchor degraded to the partner file edge"; else no "the renamed-heading link lost its edge on the warm run"; fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo

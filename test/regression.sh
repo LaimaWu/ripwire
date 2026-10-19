@@ -327,7 +327,8 @@ done
 
 # 4) golden snapshot — output matches the committed golden (catches ANY unintended output change).
 #    --no-cache so the golden is the canonical cold parse, independent of any TMPDIR cache state.
-"$BIN" "$CORPUS" --no-cache >"$TMP/cur" 2>/dev/null
+#    L1: the CLI default legend is compact; golden.xml is the full legend, so this compare asks for it.
+"$BIN" "$CORPUS" --no-cache --legend=full >"$TMP/cur" 2>/dev/null
 if [ "${UPDATE_GOLDEN:-0}" = "1" ]; then
     cp "$TMP/cur" "$GOLD"; printf '  WROTE golden (%s B)\n' "$(wc -c <"$GOLD" | tr -d ' ')"
 elif [ -f "$GOLD" ]; then
