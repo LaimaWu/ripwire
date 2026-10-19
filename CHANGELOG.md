@@ -603,7 +603,7 @@ it); a binding record gained the call-result position and unwrap depth (33 on it
 the calls that keep a definition alive moved (proven subscript calls, live `unquote(...)` calls, 21), and a Rust call
 named like a standard-type member no longer binds an in-tree namesake (22), so the dead kind can
 differ for an unchanged commit. Every ingest cache written by an earlier build is refused and re-indexed once, and every
-cached quality snapshot is recomputed. The session legend dictionary is `dictv=c041289c80d454f1 entries=892`.
+cached quality snapshot is recomputed. The session legend dictionary is `dictv=f1e98faa0aeaa1ee entries=902`.
 
 
 ## [0.6.7] — 2026-10-11
