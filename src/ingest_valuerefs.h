@@ -279,6 +279,45 @@ struct VrAliases
     }
 };
 
+// IX-1: this file's typedefs of SCALAR types — a pointer or function pointer (`typedef struct x *xp;`, `typedef void ( *fp )(
+// int );`: never an aggregate, even when it points at one) or a plain name over a scalar base. An array is none. A field typed
+// by a name neither this list nor the file's struct bodies hold may be another file's struct (VrSlotField::unseen).
+struct VrScalarTypedefs
+{
+    std::vector<std::string_view> names;
+    // A type no value is brace-elided into: a primitive / enum, or a typedef this file declares as one.
+    bool scalar( TSNode ty, std::string_view src ) const
+    {
+        const char* t = ts_node_is_null( ty ) ? "" : ts_node_type( ty );
+        return kindIs( t, "primitive_type" ) || kindIs( t, "sized_type_specifier" ) || kindIs( t, "enum_specifier" )
+            || ( kindIs( t, "type_identifier" ) && std::ranges::contains( names, nodeTextOf( ty, src ) ) );
+    }
+    // Typedef declarator `d` (scalarBase: the typedef's type is scalar): its name when it declares a scalar type.
+    void note( TSNode d, bool scalarBase, TSFieldId fDeclarator, std::string_view src )
+    {
+        bool indirect = false;
+        for( int depth = 0; depth < 16 && !ts_node_is_null( d ); ++depth )
+        {
+            const char* dt = ts_node_type( d );
+            if( kindIs( dt, "type_identifier" ) )
+            {
+                if( indirect || scalarBase )
+                {
+                    names.push_back( nodeTextOf( d, src ) );
+                }
+                return;
+            }
+            if( kindIs( dt, "array_declarator" ) )
+            {
+                return;
+            }
+            indirect = indirect || kindIs( dt, "pointer_declarator" ) || kindIs( dt, "function_declarator" );
+            const TSNode inner = ts_node_child_by_field_id( d, fDeclarator );
+            d = ts_node_is_null( inner ) ? ts_node_named_child( d, 0 ) : inner;
+        }
+    }
+};
+
 // IX-1: an anonymous struct / union MEMBER (`union { … };` in a body: no declarator, an untagged specifier) — one position.
 inline bool vrAnonymousMember( TSNode k, TSNode ftNode, TSFieldId fDeclarator, TSFieldId fName ) noexcept
 {
@@ -2183,10 +2222,10 @@ private:
             // `typedef struct T NAME;` and the pointer form `typedef struct T *NAME_p;` (a receiver `p->f` derefs it, and no
             // struct literal has a pointer type, so NAME_p → T is exact for the join), each declarator its own alias.
             const auto [ key, kw ] = slotTypeKey( child( n, m_fType ), n, t );
-            const bool scalarBase  = scalarTypeNode( child( n, m_fType ) );
+            const bool scalarBase  = m_scalarTypedefs.scalar( child( n, m_fType ), m_src );
             forEachDeclarator( n, [ & ]( TSNode d )
             {
-                noteScalarTypedef( d, scalarBase );
+                m_scalarTypedefs.note( d, scalarBase, m_fDeclarator, m_src );
                 if( kindIs( ts_node_type( d ), "pointer_declarator" ) )
                 {
                     d = child( d, m_fDeclarator );
@@ -2277,7 +2316,7 @@ private:
             const bool   isStatic = vrStaticMember( k, m_src );   // C++: a static data member is no part of the aggregate
             const char*  ftk      = ts_node_is_null( ftNode ) ? "" : ts_node_type( ftNode );
             const bool   structTyped = kindIs( ftk, "struct_specifier" ) || kindIs( ftk, "union_specifier" ) || ( kindIs( ftk, "type_identifier" ) && knownStruct( ftype ) );
-            const bool   unseen = !structTyped && !scalarTypeNode( ftNode )
+            const bool   unseen = !structTyped && !m_scalarTypedefs.scalar( ftNode, m_src )
                                && ( kindIs( ftk, "type_identifier" ) || kindIs( ftk, "qualified_identifier" ) || kindIs( ftk, "template_type" ) );
             if( !isStatic && vrAnonymousMember( k, ftNode, m_fDeclarator, m_fName ) )
             {
@@ -2320,46 +2359,11 @@ private:
     // A type key this file holds a struct body for (directly, or through this file's aliases).
     bool knownStruct( std::string_view key ) const
     {
-        return !key.empty() && !scalarTypedef( key ) && std::ranges::find( m_structs, m_aliases.resolve( key ), &VrStructFields::key ) != m_structs.end();
+        return !key.empty() && !std::ranges::contains( m_scalarTypedefs.names, key ) && std::ranges::find( m_structs, m_aliases.resolve( key ), &VrStructFields::key ) != m_structs.end();
     }
 
 
 
-
-    // A type no value is brace-elided into: a primitive / enum, or a typedef this file declares as one (scalarTypedef).
-    bool scalarTypeNode( TSNode ty ) const
-    {
-        const char* t = ts_node_is_null( ty ) ? "" : ts_node_type( ty );
-        return kindIs( t, "primitive_type" ) || kindIs( t, "sized_type_specifier" ) || kindIs( t, "enum_specifier" )
-            || ( kindIs( t, "type_identifier" ) && scalarTypedef( text( ty ) ) );
-    }
-    bool scalarTypedef( std::string_view name ) const { return std::ranges::find( m_scalarTypedefs, name ) != m_scalarTypedefs.end(); }
-
-    // A typedef declarator naming a SCALAR type: a pointer or function pointer (`typedef struct x *xp;`, `typedef void
-    // ( *fp )( int );`, never an aggregate even when it points at one) or a plain name over a scalar base. An array is none.
-    void noteScalarTypedef( TSNode d, bool scalarBase )
-    {
-        bool indirect = false;
-        for( int depth = 0; depth < 16 && !ts_node_is_null( d ); ++depth )
-        {
-            const char* dt = ts_node_type( d );
-            if( kindIs( dt, "type_identifier" ) )
-            {
-                if( indirect || scalarBase )
-                {
-                    m_scalarTypedefs.emplace_back( text( d ) );
-                }
-                return;
-            }
-            if( kindIs( dt, "array_declarator" ) )
-            {
-                return;
-            }
-            indirect = indirect || kindIs( dt, "pointer_declarator" ) || kindIs( dt, "function_declarator" );
-            const TSNode inner = child( d, m_fDeclarator );
-            d = ts_node_is_null( inner ) ? ts_node_named_child( d, 0 ) : inner;
-        }
-    }
 
     // A typedef / using alias of a struct type: a slot fact (valuerefindex.h unaliases a receiver through it) and this file's
     // own alias map (the C++ gate reads the struct an alias names in this file).
@@ -2870,7 +2874,7 @@ private:
     std::vector<VrStructFields>    m_structs;           // IX-1: this file's struct bodies so far
     std::vector<std::pair<std::string, std::string_view>> m_callableFields;   // IX-1: (struct, function-pointer field) this file declares
     VrAliases                                             m_aliases;          // IX-1: this file's typedef / using alias → struct type key
-    std::vector<std::string_view>                         m_scalarTypedefs;   // IX-1: this file's typedefs of scalar types (noteScalarTypedef)
+    VrScalarTypedefs                                      m_scalarTypedefs;   // IX-1: this file's typedefs of scalar types
     std::uint32_t                  m_fileId;
     std::string_view               m_src;
     std::vector<RawRef>&           m_out;

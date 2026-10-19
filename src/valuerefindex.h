@@ -164,23 +164,20 @@ private:
     // A type no end resolves to: an alias or field type the facts spell two different ways. It joins NOTHING (not even the
     // name tier): which struct is meant is unknown, and a guess may be the wrong one.
     static constexpr std::string_view kConflict = "\x01";
-    // Records name → to; a second, different spelling of the same name marks it a conflict.
-    static void noteFact( HashMap<std::string, std::string>& m, std::string name, const std::string& to )
+    // Records name → to; a second, different spelling of the same name marks it a conflict (unlike an unknown "", which
+    // still joins by name).
+    static void noteFact( HashMap<std::string, std::string>& m, const std::string& name, const std::string& to )
     {
-        const auto [ it, fresh ] = m.try_emplace( std::move( name ), to );
-        if( !fresh && it->second != to )
-        {
-            it->second = std::string( kConflict );
-        }
+        std::string& have = m[ name ];
+        have = have.empty() || have == to ? to : std::string( kConflict );
     }
-    static std::string fileKey( std::uint32_t fileId, std::string_view name ) { return std::to_string( fileId ) + "#" + std::string( name ); }
     void addFact( const Reference& r )
     {
         const std::string to = canonType( r.memberCtor, r.fileId );
         if( r.composeRel.empty() )
         {
             // `typedef struct tag NAME;`: the file's own spelling, and the repo's (agreed by every file, or a conflict)
-            noteFact( m_aliasInFile, fileKey( r.fileId, r.recvVar ), to );
+            noteFact( m_aliasInFile, jsImportKey( r.fileId, r.recvVar ), to );
             noteFact( m_alias, r.recvVar, to );
         }
         else
@@ -194,7 +191,7 @@ private:
     {
         for( int hop = 0; hop < 4 && t != kConflict; ++hop )   // `typedef struct a b; typedef b c;`: a short chain, cut (never a cycle)
         {
-            auto it = m_aliasInFile.find( fileKey( fileId, t ) );
+            auto it = m_aliasInFile.find( jsImportKey( fileId, t ) );
             if( it == m_aliasInFile.end() )
             {
                 it = m_alias.find( t );
