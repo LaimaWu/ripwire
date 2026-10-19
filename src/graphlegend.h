@@ -584,6 +584,9 @@ inline constexpr const char* kCallersNextBareNameLegend = "next= is the one past
 // L8 (train 29): the same two readings when next= is the NEXT PAGE of a capped callers answer and the uses verb rides as uses_next=.
 inline constexpr const char* kCallersNextPageLegend = "next= is the one pasteable follow-up: the next page of this capped answer (the same call at next_offset=); uses_next= is the uses verb on this selector (the call sites). ";
 inline constexpr const char* kCallersNextPageBareNameLegend = "next= is the one pasteable follow-up: the next page of this capped answer (the same call at next_offset=); uses_next= is the uses verb on the called name (all same-named definitions' call sites, including sites bound to other definitions, because a declined call names no single definition). ";
+// C2 rider (train 31): the callees form's two readings — expand on the selector, or the next page with expand riding as expand_next=.
+inline constexpr const char* kCalleesNextExpandLegend = "next= is the one pasteable follow-up (expand on this selector: the body). ";
+inline constexpr const char* kCalleesNextPageLegend = "next= is the one pasteable follow-up: the next page of this capped answer (the same call at next_offset=); expand_next= is expand on this selector (the body). ";
 
 // The tested lens's reading for the form a document takes: an XML row omits a false tested=, the columnar array prints 0.
 // ONE choice for --callers/--callees (callHierarchyLegendOpen below) and --impact (verbs_navigate.h runImpact), so the verbs
@@ -605,7 +608,7 @@ inline std::string callHierarchyLegendOpen( bool wantCallers, bool nextUsesBareN
     // selector, its @FILE:LINE spelling mirrored), callees the BODY whose callees these are (expand).
     // nextUsesBareName is the emitter's OWN decision, never re-derived here; no double hyphen in comment text.
     return wantCallers ? std::string( kCallHierarchyLegendOpen ) + testedClause + kTestedLensBlindSpotLegend + callersNextClause
-                       : std::string( kCallHierarchyLegendOpen ) + testedClause + kTestedLensBlindSpotLegend + kCallHierarchyLegendCalleesOnly + "next= is the one pasteable follow-up (expand on this selector: the body). ";
+                       : std::string( kCallHierarchyLegendOpen ) + testedClause + kTestedLensBlindSpotLegend + kCallHierarchyLegendCalleesOnly + ( nextIsPage ? kCalleesNextPageLegend : kCalleesNextExpandLegend );
 }
 
 // ── LB-G (r10 GitNexus round) — the DISPLAY-CAP clause the neighbour verbs share ─────────────────────────

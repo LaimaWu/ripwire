@@ -663,6 +663,8 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "next",              "next=: the one pasteable follow-up", true },
     // L8 (train 29): a capped callers page's next= is the next page, and the uses verb rides beside it here (present-only)
     { "uses_next",         "uses_next=: the uses verb on this selector (the call sites), beside a capped callers page's next=", true },
+    // C2 rider (train 31): likewise a capped callees page's next= is the next page, and expand rides beside it here (present-only)
+    { "expand_next",       "expand_next=: expand on this selector (the body), beside a capped callees page's next=", true },
     { "scrubbed",          "scrubbed=1: this CDATA is not the bytes (]]> split or C0 replaced)", true },
     // lane/cutfix-bodies (2026-09-23): a body cut at the byte budget used to say so only INSIDE its CDATA; the cut is now
     // three attributes on the <b> (serialize.h kTruncatedBodyLegend is the full reading). ELEMENT-qualified: pr-context's

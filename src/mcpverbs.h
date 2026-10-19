@@ -798,15 +798,27 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     // windowed by the same limit so one `limit` never means two different sizes in one answer.
     // L8 (train 29): each array takes the CLI's callHierarchyRowCap over its own total (the 1.25 x band, pageview.h); an
     // explicit limit still sizes both arrays alike.
-    const int        rowCap    = callHierarchyRowCap( page.limit, referencingOnly ? calledBy.size() : calls.size() );
+    // C2 (train 31): the calledBy array also takes the CLI's callers BYTE band — the same estimate (callersByteBand) over the
+    // same rows, so both surfaces agree on whether a callers list is cut; the calls array keeps the row band.
+    CallersByteBand  calledByBand = callersByteBand( ing, chRows.matches, calledBy, VrRender{ sqSingleRoot, sqRootPrefix }, page.limit,
+                                                    chTested.testReach, calledByAttr, g.keptForwards );
+    const int        rowCap    = referencingOnly ? callHierarchyRowCap( page.limit, calledBy.size(), calledByBand.rowBytes ) : callHierarchyRowCap( page.limit, calls.size() );
     const PageWindow pwPrimary = pageWindow( referencingOnly ? calledBy.size() : calls.size(), rowCap, page.offset );
-    const PageWindow pwSecond  = pageWindow( calledBy.size(), callHierarchyRowCap( page.limit, calledBy.size() ), page.offset );
+    const PageWindow pwSecond  = pageWindow( calledBy.size(), callHierarchyRowCap( page.limit, calledBy.size(), calledByBand.rowBytes ), page.offset );
     const std::size_t rowTotal = referencingOnly ? calledBy.size() : calls.size();
     const bool  discloseCap    = ( pwPrimary.end - pwPrimary.begin ) < rowTotal;
     // CALLSITE-AT: the calledBy window's rows with their call sites — editcheck.h rowCallSites, the CLI --callers pass and path spelling.
     const PageWindow& calledByWin = referencingOnly ? pwPrimary : pwSecond;
-    calledBySites = rowCallSites( ing, chRows.matches, std::span<const NodeId>( calledBy ).subspan( calledByWin.begin, calledByWin.end - calledByWin.begin ),
-                                  VrRender{ sqSingleRoot, sqRootPrefix }, g.keptForwards );
+    // fix round 1 (B1): two plain assignments, not one assignment from a ?: whose arms are an xvalue and a prvalue.
+    if( calledByBand.rowBytes > 0 && calledByWin.begin == 0 && calledByWin.end == calledBy.size() )
+    {
+        calledBySites = std::move( calledByBand.sites );   // C2: the band's own pass over every row
+    }
+    else
+    {
+        calledBySites = rowCallSites( ing, chRows.matches, std::span<const NodeId>( calledBy ).subspan( calledByWin.begin, calledByWin.end - calledByWin.begin ),
+                                      VrRender{ sqSingleRoot, sqRootPrefix }, g.keptForwards );
+    }
     char        pab[ kPageDisclosureCap ];
     // lane declined-sites (declinedsites.h): the CLI root's <dc> rows for the direction count= describes (find_symbol: the
     // declines its definitions make; find_referencing_symbols: the declined calls that could have meant them), cut by the
@@ -827,6 +839,20 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     // the UNION of all of their neighbours), count= = the un-windowed row total, hop_tested/hop_untested =
     // the partition over that full set.
     const auto [ chNextSelector, chNextIsBare ] = callHierarchyNextSelector( ing, chRows, name, referencingOnly );
+    // L8 + C2 rider: a capped page names the next page, the direction's own follow-up beside it (the CLI root's pair); any
+    // other answer names the follow-up alone — P3 (L7): the CLI root's next= (mcpattrparitycheck). fix round 1 (B1): built
+    // here as its own statement, not as a ?: of string temporaries inside the root's one long concatenation below.
+    const std::string sqHintCall = nextFlag( referencingOnly ? "--uses=" : "--expand=", chNextSelector );
+    std::string       sqNextKeys;
+    if( pwPrimary.end < rowTotal )
+    {
+        sqNextKeys = nextFieldJson( callHierarchyPageNext( referencingOnly, name, page.limit, pwPrimary.end ) );
+        sqNextKeys += nextFieldJson( sqHintCall, callHierarchyHintAttr( referencingOnly ) );
+    }
+    else
+    {
+        sqNextKeys = nextFieldJson( sqHintCall );
+    }
     // 0.6.6 command sweep: find_symbol carries TWO arrays, and count/hop_tested/hop_untested describe `calls`
     // only — "count":0 sat beside "calledBy_total":67 on a leaf and read as a contradiction. The CLI key names
     // stay (mcpattrparitycheck), and count_of names the array they total, right beside them
@@ -840,9 +866,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
          + declinedSiteCutKeyJson( sqDcCut )              // the CLI root's dc_shown= / dc_next=, absent when nothing was cut
          + declinedIfaceKeyJson( chRows.declinedIface )   // the CLI root's declined_iface= (callers direction only)
          + stdMemberCallsSpelling( chRows.stdCalls, /*json=*/true )       // the CLI callees answer's <stdm> line (callees direction only; absent when none)
-         + ( referencingOnly && pwPrimary.end < rowTotal   // L8: a capped callers page names the next page, the uses verb as uses_next (the CLI root's pair)
-                 ? nextFieldJson( callersPageNext( name, page.limit, pwPrimary.end ) ) + nextFieldJson( nextFlag( "--uses=", chNextSelector ), "uses_next" )
-                 : nextFieldJson( nextFlag( referencingOnly ? "--uses=" : "--expand=", chNextSelector ) ) );   // P3 (L7): the CLI root's next= (mcpattrparitycheck)
+         + sqNextKeys;   // next= (and on a capped page its uses_next / expand_next), built above
     if( !referencingOnly && chRows.bodylessDefs > 0 )
     {
         out += ",\"bodyless_defs\":" + std::to_string( chRows.bodylessDefs );

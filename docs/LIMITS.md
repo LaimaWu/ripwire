@@ -758,6 +758,7 @@ Discloses: `capped`, `count_capped`, `findings_capped`, `hits_capped`, `importer
 | --- | --- | --- | --- |
 | `kCallHierarchyRowCap` | `40` | — | — |
 | `kCallSitesPerRowCap` | `16` | — | — |
+| `kCallersBandMaxBytes` | `16000` | — | callers rows served whole while their estimated bytes fit (tmux 121 rows = 10.8 KB) |
 | `kCochangePartnerCap` | `30` | — | — |
 | `kExternalSurfaceRowCap` | `100` | — | names, by ref count (≈ 5.2 KB on this repo) |
 | `kImportReachRowCap` | `40` | — | — |
