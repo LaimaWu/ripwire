@@ -257,6 +257,92 @@ struct VrStructFields
     std::size_t              exactUpTo = static_cast<std::size_t>( -1 );
 };
 
+// A field declaration carrying the `static` storage class (C++ static data member).
+inline bool vrStaticMember( TSNode k, std::string_view src )
+{
+    bool found = false;
+    ChildCursor c( k );
+    forEachNamedChild( k, c.cur, [ & ]( TSNode x )
+    {
+        found = found || ( kindIs( ts_node_type( x ), "storage_class_specifier" ) && nodeTextOf( x, src ) == "static" );
+        return !found;
+    } );
+    return found;
+}
+
+// The single field a designator list names (`.f = …` → "f"); "" for a nested (`.a.b`), array (`[i]`) or missing designator.
+inline std::string_view vrDesignatedField( TSNode pair, TSFieldId fDesignator, std::string_view src )
+{
+    std::string_view out;
+    int              n = 0;
+    ChildCursor      c( pair );
+    ts_tree_cursor_reset( &c.cur, pair );
+    if( ts_tree_cursor_goto_first_child( &c.cur ) )
+    {
+        do
+        {
+            const TSNode x = ts_tree_cursor_current_node( &c.cur );
+            if( ts_tree_cursor_current_field_id( &c.cur ) == fDesignator
+                || ( n == 0 && ts_node_is_named( x ) && kindIs( ts_node_type( x ), "field_identifier" ) ) )
+            {
+                ++n;
+                const char* xt = ts_node_type( x );
+                out = kindIs( xt, "field_designator" ) ? nodeTextOf( ts_node_named_child( x, 0 ), src )
+                    : kindIs( xt, "field_identifier" ) ? nodeTextOf( x, src )
+                                                       : std::string_view();
+            }
+        }
+        while( ts_tree_cursor_goto_next_sibling( &c.cur ) );
+    }
+    return n == 1 ? out : std::string_view();
+}
+
+// The initializer position of `value`, a direct child of struct literal `list`, exactly — C's rule: positions count from 0,
+// and a designator `.f = …` moves the next one to f's position + 1. -1 when the index is not provable: a nested or array
+// designator, a field no position names, brace elision (a non-braced value at an aggregate field), past exactUpTo.
+inline std::ptrdiff_t vrPositionOf( TSNode list, TSNode value, const VrStructFields& sf, TSFieldId fDesignator, std::string_view src )
+{
+    std::size_t         pos = 0;
+    const std::uint32_t cnt = ts_node_named_child_count( list );
+    for( std::uint32_t i = 0; i < cnt; ++i )
+    {
+        const TSNode k = ts_node_named_child( list, i );
+        if( ts_node_is_extra( k ) )
+        {
+            continue;
+        }
+        const char* kt = ts_node_type( k );
+        if( kindIs( kt, "initializer_pair" ) )
+        {
+            const std::string_view f  = vrDesignatedField( k, fDesignator, src );
+            const auto             at = std::ranges::find( sf.fields, f, &VrSlotField::name );
+            if( f.empty() || at == sf.fields.end() )
+            {
+                return -1;
+            }
+            pos = static_cast<std::size_t>( at - sf.fields.begin() ) + 1;
+            continue;
+        }
+        if( pos >= sf.fields.size() || pos >= sf.exactUpTo )
+        {
+            return -1;
+        }
+        const VrSlotField& fld = sf.fields[pos];
+        const bool         braced = kindIs( kt, "initializer_list" )
+                                 || ( fld.array && ( kindIs( kt, "string_literal" ) || kindIs( kt, "concatenated_string" ) ) );
+        if( fld.aggregate && !braced )
+        {
+            return -1;   // brace elision: this value fills the aggregate's first member, and the positions after it shift
+        }
+        if( ts_node_eq( k, value ) )
+        {
+            return fld.name.empty() ? -1 : static_cast<std::ptrdiff_t>( pos );
+        }
+        ++pos;
+    }
+    return -1;
+}
+
 // The walk's DISCLOSE sink for the depth cap: the subtrees kVrMaxDepth stopped it above, and the first one's site.
 struct VrDepthCut
 {
@@ -2117,7 +2203,7 @@ private:
         }
         VrStructFields sf;
         sf.key = owner;
-        if( !ts_node_is_null( childOfKind( n, "base_class_clause" ) ) )
+        if( !ts_node_is_null( firstChildOfKind( n, true, { "base_class_clause" } ) ) )
         {
             sf.exactUpTo = 0;   // C++ bases are initialized first, and a base's own list may be brace-elided: no index is provable
         }
@@ -2136,7 +2222,7 @@ private:
             }
             const TSNode ftNode = child( k, m_fType );
             const auto [ ftype, fkw ] = slotTypeKey( ftNode, k, "field_declaration" );
-            const bool   isStatic = staticMember( k );   // C++: a static data member is no part of the aggregate
+            const bool   isStatic = vrStaticMember( k, m_src );   // C++: a static data member is no part of the aggregate
             const bool   structTyped = !ts_node_is_null( ftNode )
                                      && ( kindIs( ts_node_type( ftNode ), "struct_specifier" ) || kindIs( ts_node_type( ftNode ), "union_specifier" )
                                           || ( kindIs( ts_node_type( ftNode ), "type_identifier" ) && knownStruct( ftype ) ) );
@@ -2178,18 +2264,6 @@ private:
         m_structs.push_back( std::move( sf ) );
     }
 
-    // A field declaration carrying the `static` storage class (C++ static data member).
-    bool staticMember( TSNode k ) const
-    {
-        bool found = false;
-        ChildCursor c( k );
-        forEachNamedChild( k, c.cur, [ & ]( TSNode x )
-        {
-            found = found || ( kindIs( ts_node_type( x ), "storage_class_specifier" ) && text( x ) == "static" );
-            return !found;
-        } );
-        return found;
-    }
 
     // A type key this file holds a struct body for (directly, or through this file's aliases).
     bool knownStruct( std::string_view key ) const
@@ -2197,93 +2271,8 @@ private:
         return !key.empty() && std::ranges::find( m_structs, unaliasLocal( key ), &VrStructFields::key ) != m_structs.end();
     }
 
-    // The direct child of `n` of kind `kind` (null when none).
-    static TSNode childOfKind( TSNode n, const char* kind )
-    {
-        const std::uint32_t cnt = ts_node_named_child_count( n );
-        for( std::uint32_t i = 0; i < cnt; ++i )
-        {
-            const TSNode x = ts_node_named_child( n, i );
-            if( std::string_view( ts_node_type( x ) ) == kind )
-            {
-                return x;
-            }
-        }
-        return TSNode{};
-    }
 
-    // The single field a designator list names (`.f = …` → "f"); "" for a nested (`.a.b`), array (`[i]`) or missing designator.
-    std::string_view designatedField( TSNode pair ) const
-    {
-        std::string_view out;
-        int              n = 0;
-        ChildCursor      c( pair );
-        ts_tree_cursor_reset( &c.cur, pair );
-        if( ts_tree_cursor_goto_first_child( &c.cur ) )
-        {
-            do
-            {
-                const TSNode x = ts_tree_cursor_current_node( &c.cur );
-                if( ts_tree_cursor_current_field_id( &c.cur ) == m_fDesignator
-                    || ( n == 0 && ts_node_is_named( x ) && kindIs( ts_node_type( x ), "field_identifier" ) ) )
-                {
-                    ++n;
-                    const char* xt = ts_node_type( x );
-                    out = kindIs( xt, "field_designator" ) ? text( ts_node_named_child( x, 0 ) )
-                        : kindIs( xt, "field_identifier" ) ? text( x )
-                                                           : std::string_view();
-                }
-            }
-            while( ts_tree_cursor_goto_next_sibling( &c.cur ) );
-        }
-        return n == 1 ? out : std::string_view();
-    }
 
-    // The initializer position of `value`, a direct child of struct literal `list`, exactly — C's rule: positions count from 0,
-    // and a designator `.f = …` moves the next one to f's position + 1. -1 when the index is not provable: a nested or array
-    // designator, a field no position names, brace elision (a non-braced value at an aggregate field), past exactUpTo.
-    std::ptrdiff_t positionOf( TSNode list, TSNode value, const VrStructFields& sf ) const
-    {
-        std::size_t         pos = 0;
-        const std::uint32_t cnt = ts_node_named_child_count( list );
-        for( std::uint32_t i = 0; i < cnt; ++i )
-        {
-            const TSNode k = ts_node_named_child( list, i );
-            if( ts_node_is_extra( k ) )
-            {
-                continue;
-            }
-            const char* kt = ts_node_type( k );
-            if( kindIs( kt, "initializer_pair" ) )
-            {
-                const std::string_view f  = designatedField( k );
-                const auto             at = std::ranges::find( sf.fields, f, &VrSlotField::name );
-                if( f.empty() || at == sf.fields.end() )
-                {
-                    return -1;
-                }
-                pos = static_cast<std::size_t>( at - sf.fields.begin() ) + 1;
-                continue;
-            }
-            if( pos >= sf.fields.size() || pos >= sf.exactUpTo )
-            {
-                return -1;
-            }
-            const VrSlotField& fld = sf.fields[pos];
-            const bool         braced = kindIs( kt, "initializer_list" )
-                                     || ( fld.array && ( kindIs( kt, "string_literal" ) || kindIs( kt, "concatenated_string" ) ) );
-            if( fld.aggregate && !braced )
-            {
-                return -1;   // brace elision: this value fills the aggregate's first member, and the positions after it shift
-            }
-            if( ts_node_eq( k, value ) )
-            {
-                return fld.name.empty() ? -1 : static_cast<std::ptrdiff_t>( pos );
-            }
-            ++pos;
-        }
-        return -1;
-    }
 
     // A typedef / using alias of a struct type: a slot fact (valuerefindex.h unaliases a receiver through it) and this file's
     // own alias map (the C++ gate reads the struct an alias names in this file).
@@ -2455,7 +2444,7 @@ private:
             {
                 k = ts_node_named_child( p.node, 0 );
             }
-            const std::string_view fld = designatedField( p.node );
+            const std::string_view fld = vrDesignatedField( p.node, m_fDesignator, m_src );
             if( ts_node_is_null( k ) || fld.empty() || j < 2 )
             {
                 return;   // a nested `.a.b =` / array `[i] =` designator: not one field of this literal's type
@@ -2472,7 +2461,7 @@ private:
                 return;   // not a struct literal
             }
             const auto sf = std::ranges::find( m_structs, unaliasLocal( t ), &VrStructFields::key );
-            const std::ptrdiff_t idx = sf == m_structs.end() ? -1 : positionOf( p.node, m_anc[j].node, *sf );
+            const std::ptrdiff_t idx = sf == m_structs.end() ? -1 : vrPositionOf( p.node, m_anc[j].node, *sf, m_fDesignator, m_src );
             if( idx >= 0 )
             {
                 r.memberPath = std::string( sf->fields[ static_cast<std::size_t>( idx ) ].name );
