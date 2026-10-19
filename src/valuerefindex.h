@@ -140,6 +140,10 @@ public:
         {
             return {};
         }
+        if( e->type == kConflict )
+        {
+            return "." + e->field;
+        }
         const std::string_view t = std::string_view( e->type ).substr( 0, e->type.starts_with( '@' ) ? e->type.find( '#' ) : std::string::npos );
         return std::string( t ) + "." + e->field;
     }
@@ -157,24 +161,49 @@ private:
     {
         return t.starts_with( '@' ) ? std::string( t ) + "#" + std::to_string( fileId ) : std::string( t );
     }
+    // A type no end resolves to: an alias or field type the facts spell two different ways. It joins NOTHING (not even the
+    // name tier): which struct is meant is unknown, and a guess may be the wrong one.
+    static constexpr std::string_view kConflict = "\x01";
+    // Records name → to; a second, different spelling of the same name marks it a conflict.
+    static void noteFact( HashMap<std::string, std::string>& m, std::string name, const std::string& to )
+    {
+        const auto [ it, fresh ] = m.try_emplace( std::move( name ), to );
+        if( !fresh && it->second != to )
+        {
+            it->second = std::string( kConflict );
+        }
+    }
+    static std::string fileKey( std::uint32_t fileId, std::string_view name ) { return std::to_string( fileId ) + "#" + std::string( name ); }
     void addFact( const Reference& r )
     {
         const std::string to = canonType( r.memberCtor, r.fileId );
         if( r.composeRel.empty() )
         {
-            m_alias.try_emplace( r.recvVar, to );   // `typedef struct tag NAME;` — the first spelling wins
+            // `typedef struct tag NAME;`: the file's own spelling, and the repo's (agreed by every file, or a conflict)
+            noteFact( m_aliasInFile, fileKey( r.fileId, r.recvVar ), to );
+            noteFact( m_alias, r.recvVar, to );
         }
         else
         {
-            m_fieldType.try_emplace( canonType( r.recvVar, r.fileId ) + "#" + r.composeRel, to );
+            noteFact( m_fieldType, canonType( r.recvVar, r.fileId ) + "#" + r.composeRel, to );
         }
     }
-    std::string unalias( std::string t ) const
+    // A type through the aliases as file `fileId` sees them: its own typedef first, else the repo's one agreed spelling (a
+    // header's); kConflict when the name is spelled two ways and the file does not decide it.
+    std::string unalias( std::string t, std::uint32_t fileId ) const
     {
-        for( int hop = 0; hop < 4; ++hop )   // `typedef struct a b; typedef b c;`: a short chain, cut (never a cycle)
+        for( int hop = 0; hop < 4 && t != kConflict; ++hop )   // `typedef struct a b; typedef b c;`: a short chain, cut (never a cycle)
         {
-            const auto it = m_alias.find( t );
-            if( it == m_alias.end() || it->second == t )
+            auto it = m_aliasInFile.find( fileKey( fileId, t ) );
+            if( it == m_aliasInFile.end() )
+            {
+                it = m_alias.find( t );
+                if( it == m_alias.end() )
+                {
+                    break;
+                }
+            }
+            if( it->second == t )
             {
                 break;
             }
@@ -190,13 +219,13 @@ private:
         End              e;
         e.ref = refIdx;
         std::string_view chain = r.memberPath;
-        std::string      t     = r.memberCtor.empty() ? std::string() : unalias( canonType( r.memberCtor, r.fileId ) );
+        std::string      t     = r.memberCtor.empty() ? std::string() : unalias( canonType( r.memberCtor, r.fileId ), r.fileId );
         for( std::size_t dot = chain.find( '.' ); dot != std::string_view::npos; dot = chain.find( '.' ) )
         {
-            if( !t.empty() )
+            if( !t.empty() && t != kConflict )
             {
                 const auto it = m_fieldType.find( t + "#" + std::string( chain.substr( 0, dot ) ) );
-                t = it == m_fieldType.end() ? std::string() : unalias( it->second );
+                t = it == m_fieldType.end() ? std::string() : unalias( it->second, r.fileId );
             }
             chain.remove_prefix( dot + 1 );
         }
@@ -216,7 +245,7 @@ private:
     {
         std::vector<Hit> out;
         const End*       e = find( side, ref );
-        const auto       it = e == nullptr ? byField.end() : byField.find( e->field );
+        const auto       it = e == nullptr || e->type == kConflict ? byField.end() : byField.find( e->field );
         if( it == byField.end() )
         {
             return out;
@@ -224,6 +253,10 @@ private:
         for( const std::uint32_t k : it->second )
         {
             const End& o = other[k];
+            if( o.type == kConflict )
+            {
+                continue;
+            }
             if( e->type.empty() || o.type.empty() || e->type == o.type )
             {
                 out.push_back( { o.ref, !e->type.empty() && e->type == o.type } );
@@ -233,7 +266,8 @@ private:
     }
 
     HashMap<std::string, std::string>                m_fieldType;      // "Type#field" → that field's struct type
-    HashMap<std::string, std::string>                m_alias;          // typedef name → struct type
+    HashMap<std::string, std::string>                m_alias;          // typedef name → struct type (kConflict: files disagree)
+    HashMap<std::string, std::string>                m_aliasInFile;    // "fileId#name" → struct type, the file's own typedef
     std::vector<std::uint32_t>                       m_calls;          // slot Through references, ascending
     HashMap<NodeId, std::vector<std::uint32_t>>      m_callsBySym;     // calling function → its slot Through references
     std::vector<End>                                 m_values;         // slot Value rows with a resolved function, by ref

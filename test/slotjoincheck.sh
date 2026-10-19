@@ -120,6 +120,31 @@ has   "I8 C++: typedef and using receivers resolve before the function-pointer-f
 o="$( run --callers=b4 )"
 has   "N1 the (*x->f)( ... ) call form is a slot call" "$o" 'called_by="call_pd_star" called_at="shapes.c:18" via="slot"'
 
+echo "-- fix round 2: a field type this file cannot see, and an alias name two files spell differently"
+o="$( run --callers=ea )"
+hasnt "K1 a value after a field typed by ANOTHER file's struct typedef (brace elision unseen) never joins the wrong field" "$o" 'call_eg'
+hasnt "K1b nor any field: the index is unprovable" "$o" 'called_by='
+o="$( run --callers=ec )"
+hasnt "K2 the single-object twin: no row past the unseen aggregate" "$o" 'called_by='
+o="$( run --callers=ia )"
+has   "K3 twin: the struct defined in this file and braced keeps the index exact (ia is .f)" "$o" 'called_by="call_if" called_at="elide_in.c:7" via="slot"'
+hasnt "K3b and never .g" "$o" 'call_ig'
+o="$( run --callers=ib )"
+has   "K3c ib is .g" "$o" 'called_by="call_ig" called_at="elide_in.c:8" via="slot"'
+o="$( run --callers=ha )"
+has   "K3d a value AT a header-typedef field keeps its index (a call through .f proves .f callable)" "$o" 'called_by="call_hf" called_at="elide_in.c:13" via="slot"'
+o="$( run --callers=hb )"
+hasnt "K3e the floor: a value after it has no row (a lost row, never a wrong one)" "$o" 'called_by='
+o="$( run --callers=af )"
+has   "K4 a file's own alias decides its receiver (handle_a.c: handle is hsa)" "$o" 'called_by="call_h" called_at="handle_a.c:9" via="slot"'
+hasnt "K4b another file's same-named alias to a different struct never joins hsa" "$o" 'call_hb'
+hasnt "K4c an alias the repo spells two ways, with no spelling in the file, joins nothing" "$o" 'call_hc'
+o="$( run --callers=bf )"
+has   "K5 handle_b.c's handle is hsb" "$o" 'called_by="call_hb" called_at="handle_b.c:3" via="slot"'
+hasnt "K5b and the conflicting file still joins nothing" "$o" 'call_hc'
+o="$( run --callers=lf )"
+has   "K6 a pointer alias field is a scalar position (no elision): lf is .f" "$o" 'called_by="call_nl" called_at="nodep.c:7" via="slot"'
+
 echo "-- fix round 1: slot records are no ordinary references"
 o="$( run --external-surface )"
 for v in entry wme m o v p; do
