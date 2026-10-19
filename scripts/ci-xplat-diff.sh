@@ -82,16 +82,28 @@ t = open( sys.argv[1], "rb" ).read().decode( "utf-8", "replace" )
 t = re.sub( r" est_tokens=\"[^\"]*\"", "", t )
 fold = lambda m: re.sub( r" bytes=\"[^\"]*\"", "", m.group( 0 ).replace( "\r", "" ) )
 sys.stdout.write( re.sub( r"<fold .*?</fold>", fold, t, flags = re.S ) )' "$1"; }
-# normeq NORMALISER A B -> 0 equal, 1 differ, 2 unusable: an input that is missing or empty, or a normaliser that fails or
+# normalise for|expand FILE -> the file through nf or nx; fails on a missing or empty input
+normalise() {
+    [ -s "$2" ] || return 1
+    case "$1" in
+        for )    nf "$2" ;;
+        expand ) nx "$2" ;;
+        * )      return 1 ;;
+    esac
+}
+# normeq for|expand A B -> 0 equal, 1 differ, 2 unusable: an input that is missing or empty, or a normaliser that fails or
 # prints nothing, is never compared (two empty streams would compare equal and pass R3 vacuously)
 normeq() {
-    [ -s "$2" ] && [ -s "$3" ] || return 2
     local a b r; a="$( mktemp )"; b="$( mktemp )"
-    if "$1" "$2" >"$a" && "$1" "$3" >"$b" && [ -s "$a" ] && [ -s "$b" ]; then cmp -s "$a" "$b"; r=$?; [ "$r" -le 1 ] || r=2; else r=2; fi
+    if normalise "$1" "$2" >"$a" && normalise "$1" "$3" >"$b" && [ -s "$a" ] && [ -s "$b" ]; then
+        cmp -s "$a" "$b"; r=$?; [ "$r" -le 1 ] || r=2
+    else
+        r=2
+    fi
     rm -f "$a" "$b"; return "$r"
 }
 for side in "$LIN" "$WIN"; do
-    normeq nf "$side/tree-for.xml" "$side/crlf-for.xml"; r=$?
+    normeq for "$side/tree-for.xml" "$side/crlf-for.xml"; r=$?
     if [ "$r" -eq 2 ]; then
         verdict FAIL "R3 ${side##*/}: tree-for.xml / crlf-for.xml missing, empty, or unreadable by the normaliser (python3) — nothing was compared"
     elif [ "$r" -ne 0 ]; then
@@ -99,7 +111,7 @@ for side in "$LIN" "$WIN"; do
     fi
 done
 for side in "$LIN" "$WIN"; do
-    normeq nx "$side/tree-expand.xml" "$side/crlf-expand.xml"; r=$?
+    normeq expand "$side/tree-expand.xml" "$side/crlf-expand.xml"; r=$?
     if [ "$r" -eq 2 ]; then
         verdict FAIL "R3 ${side##*/}: tree-expand.xml / crlf-expand.xml missing, empty, or unreadable by the normaliser — nothing was compared"
     elif [ "$r" -ne 0 ]; then
