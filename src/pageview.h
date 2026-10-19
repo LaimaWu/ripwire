@@ -190,10 +190,11 @@ inline constexpr std::size_t kCallerRowMinBytes = 30;
 inline int callHierarchyRowCap( int pageLimit, std::size_t rowTotal, std::size_t callersRowBytes = 0 ) noexcept
 {
     // The precondition the ENSURES below rests on: callersByteBand (callhierarchy.h) estimates only a total that can fit the
-    // band, so a served-whole total always fits an int. Stated, not left implicit (SEGV round, train 31): with only
+    // band (so a served-whole total also fits an int). Stated, not left implicit (SEGV round, train 31): with only
     // ENSURES( cap > 0 ) over int( rowTotal ) of an unbounded rowTotal, gcc 14.2 (ubuntu-24.04's g++-14) -O2 -flto served a
-    // 40-row window over a 3-row list in MCP find_symbol / find_referencing_symbols and --batch (rc=139). With this EXPECTS the
-    // same build answers rc=0 (debug runs 39134346019, 39137965028).
+    // 40-row window over a 3-row list in MCP find_symbol / find_referencing_symbols and --batch (rc=139). That input took the
+    // effectiveRowCap arm, so the int conversion was never the crash mechanism; the unstated precondition was. With this
+    // EXPECTS the same build answers rc=0 (debug runs 39134346019, 39137965028).
     EXPECTS( callersRowBytes == 0 || rowTotal <= kCallersBandMaxBytes / kCallerRowMinBytes, "callersByteBand estimates only a total that can fit the band" );
     const bool inRowBand  = rowTotal <= std::size_t( kCallHierarchyBandMax );
     const bool inByteBand = callersRowBytes > 0 && callersRowBytes <= kCallersBandMaxBytes;

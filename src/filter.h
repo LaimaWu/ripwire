@@ -335,6 +335,13 @@ inline bool isDemoOrGeneratedPath( std::string_view p ) noexcept
 inline constexpr float kRankTierTestMul = 0.35f;
 inline constexpr float kRankTierDemoMul = 0.35f;
 
+// whether a path is in one of the two down-weighted tier families (demo/generated, test/bench) — the predicate
+// rankTierMultiplierOf prices, read as a bool so no caller compares the float factor to 1.0
+inline bool isRankTierDownPath( std::string_view p ) noexcept
+{
+    return isDemoOrGeneratedPath( p ) || pathTierOf( p ) == PathTier::TestOrBench;
+}
+
 // tier factor for one path — 1.0 for anything not in the two down-weighted families
 inline float rankTierMultiplierOf( std::string_view p ) noexcept
 {
@@ -433,7 +440,7 @@ inline std::vector<float> declarationTwinFileMultipliers( const IngestResult& in
             // the row's own manifest (setup.py is .py), or a path tier (tests/, demo, generated: code, but not the package's)
             if( endsWithAny( p, row.implSuffixes ) && !endsWithAny( p, row.declSuffixes ) && !endsWithAny( p, row.declTestSuffixes )
                 && std::ranges::find( row.notImplBaseNames, base ) == row.notImplBaseNames.end()
-                && std::ranges::find( row.manifests, base ) == row.manifests.end() && rankTierMultiplierOf( p ) == 1.0f )
+                && std::ranges::find( row.manifests, base ) == row.manifests.end() && !isRankTierDownPath( p ) )
             {
                 implPackages.push_back( packageDirOf( p, manifestDirs ) );
             }

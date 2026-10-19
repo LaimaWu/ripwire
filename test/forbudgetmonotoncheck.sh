@@ -222,7 +222,7 @@ rowkeys "$TMP/cdefoffR" >"$TMP/rk_cdef"; rowkeys "$TMP/c8k" >"$TMP/rk_c8k"; rowk
     || no "#5h head round-robin on: the compact route's explicit-ceiling rows ($( wc -l <"$TMP/rk_c8k" | tr -d ' ' )) are not the default's rows as a set ($( wc -l <"$TMP/rk_cdef" | tr -d ' ' ))"
 
 lint=1
-for F in def tb8k tb12k topn cdef c8k; do
+for F in def tb8k tb12k topn cdef c8k defT tb8kT c8kT cdefoffR cdefoff; do   # + the RIPWIRE_NO_HEAD_RR=1 / fold-off twins (lane hrr nit)
     xmllint --noout "$TMP/$F" 2>/dev/null || { echo "    malformed: $F"; lint=0; }
 done
 if [ "$lint" = 1 ]; then ok "#4 all arms well-formed XML (G4)"; else no "#4 malformed XML"; fi
