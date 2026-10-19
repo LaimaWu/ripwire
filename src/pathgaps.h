@@ -39,6 +39,7 @@
 #include "arch.h"             // wildcardMatch — the ONE `*` match, which a glob endpoint reads
 #include "closures.h"         // ClosureIndex — a near-sink row written inside another function's body (why=closure)
 #include "infra/sortutil.h"   // svLess: the explicit byte order every string_view sort here takes (portablebuildcheck #6)
+#include "infra/enumcount.h"  // enumCountIsExact — the kNearSinkKindCount / kBridgeViaCount sizes follow their enums
 
 #include <algorithm>
 #include <array>
@@ -389,6 +390,7 @@ inline constexpr std::size_t   kNearSinkRows  = 4;   // <ns> rows printed; rows=
 // (commit 2, src/closures.h): the row is a named function written inside in='s body — its site is its own definition.
 enum class NearSinkKind : std::uint8_t { Declined, Value, Through, Name, Closure };
 inline constexpr std::size_t                                     kNearSinkKindCount = 5;
+static_assert( enumCountIsExact<NearSinkKind, kNearSinkKindCount>(), "kNearSinkKindCount must equal the NearSinkKind count — raise it with the append" );
 inline constexpr std::array<std::string_view, kNearSinkKindCount> kNearSinkKindNames = { "declined", "value", "through", "name", "closure" };
 using NearSinkCounts = std::array<std::size_t, kNearSinkKindCount>;
 
@@ -910,6 +912,7 @@ inline constexpr std::size_t   kBridgeMaxHops   = 8;   // a longer chain is no a
 
 enum class BridgeVia : std::uint8_t { Edge, Declined, Value, Closure, Namesake };
 inline constexpr std::size_t                                    kBridgeViaCount = 5;
+static_assert( enumCountIsExact<BridgeVia, kBridgeViaCount>(), "kBridgeViaCount must equal the BridgeVia count — raise it with the append" );
 inline constexpr std::array<std::string_view, kBridgeViaCount> kBridgeViaNames = { "", "declined", "value", "closure", "namesake" };
 
 struct PathBridge
