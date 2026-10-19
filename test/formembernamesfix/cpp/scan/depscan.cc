@@ -1,5 +1,5 @@
 // Out-of-line definitions of the dirty scan.
-#include "graph.h"
+#include "depscan.h"
 
 DependencyScan::DependencyScan( int depth ) : depth_( depth ) {}
 

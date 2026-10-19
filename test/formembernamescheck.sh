@@ -45,8 +45,7 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "formembernamescheck: BIN=$BIN"
 fail=0
-npass=0
-ok(){ npass=$(( npass + 1 )); printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
@@ -174,7 +173,7 @@ run cap_off2 "$FIX/cap"  RIPWIRE_NO_BODY_FOLD=1 -- --for="$Q_CAP"
 echo "=== A: exactly the direct members ==="
 arm "A1 JS TemplateCompiler"  exact "$TMP/js_off.xml"  TemplateCompiler src/compiler.js constructor compileBlock compileSuper emitLine flushOutput
 arm "A2 Python JobScheduler"  exact "$TMP/py_off.xml"  JobScheduler sched/scheduler.py __init__ submit assign drain
-arm "A3 C++ DependencyScan"   exact "$TMP/cpp_off.xml" DependencyScan src/graph.h@8 RecomputeDirty RecomputeOutputDirty LoadDepfile Reset Width
+arm "A3 C++ DependencyScan"   exact "$TMP/cpp_off.xml" DependencyScan scan/depscan.h@8 RecomputeDirty RecomputeOutputDirty LoadDepfile Reset Width
 arm "A4 Rust BookDriver (impl in driver.rs)" exact "$TMP/rs_off.xml" BookDriver src/book.rs load execute_build build_dir_for source_dir theme_dir
 arm "A4 Rust trait Renderer"  exact "$TMP/rs_off.xml"  Renderer src/book.rs supports
 
@@ -184,10 +183,10 @@ arm "B1 blockVisitor/wrap_job never listed (Py)" never "$TMP/py_off.xml" blockVi
 
 echo "=== C: the fold already carries the owner's text ==="
 arm "C1 fold serves TemplateCompiler whole: no mem=" none "$TMP/js_on.xml" TemplateCompiler
-grep -q '<fold [^>]*>.*<b [^>]*n="TemplateCompiler"' "$TMP/js_on.xml" && ok "C1 (the fold does serve TemplateCompiler's body)" || no "C1 the fold did not serve TemplateCompiler (the arm would be vacuous)"
+if grep -q '<fold [^>]*>.*<b [^>]*n="TemplateCompiler"' "$TMP/js_on.xml"; then ok "C1 (the fold does serve TemplateCompiler's body)"; else no "C1 the fold did not serve TemplateCompiler (the arm would be vacuous)"; fi
 arm "C1 twin: fold off, TemplateCompiler carries mem=" has "$TMP/js_off.xml" TemplateCompiler
 arm "C2 fold slices LedgerBook: no mem=" none "$TMP/cap_on.xml" LedgerBook
-grep -q '<slice [^>]*n="LedgerBook"' "$TMP/cap_on.xml" && ok "C2 (the fold does slice LedgerBook)" || no "C2 no LedgerBook slice (the arm would be vacuous)"
+if grep -q '<slice [^>]*n="LedgerBook"' "$TMP/cap_on.xml"; then ok "C2 (the fold does slice LedgerBook)"; else no "C2 no LedgerBook slice (the arm would be vacuous)"; fi
 arm "C2 twin: fold off, LedgerBook carries mem=" has "$TMP/cap_off.xml" LedgerBook
 
 echo "=== D: an ambiguous owner gets no list ==="
@@ -231,10 +230,10 @@ arm "L2 no mem=, no clause (fold-sliced cap)"  nomem "$TMP/cap_on.xml"
 
 echo "=== X: determinism, well-formedness ==="
 run js_off_b "$FIX/js" RIPWIRE_NO_BODY_FOLD=1 -- --for="$Q_JS"
-cmp -s "$TMP/js_off.xml" "$TMP/js_off_b.xml" && ok "X1 deterministic" || no "X1 two runs differ"
+if cmp -s "$TMP/js_off.xml" "$TMP/js_off_b.xml"; then ok "X1 deterministic"; else no "X1 two runs differ"; fi
 if command -v xmllint >/dev/null 2>&1; then
     for f in js_off js_full cap_off cpp_off rs_off; do
-        xmllint --noout "$TMP/$f.xml" 2>/dev/null && ok "X2 $f well-formed" || no "X2 $f not well-formed"
+        if xmllint --noout "$TMP/$f.xml" 2>/dev/null; then ok "X2 $f well-formed"; else no "X2 $f not well-formed"; fi
     done
 else
     echo "  SKIP  X2 xmllint not installed"
@@ -246,10 +245,10 @@ if [ -n "${RIPWIRE_BASE_BIN:-}" ]; then
         d="${spec%%|*}"; q="${spec#*|}"
         ( cd "$FIX/$d" || exit 1; RIPWIRE_NO_MEMBER_NAMES=1 "$BIN" "$FIX/$d" --for="$q" --cache="$TMP/i1h.$d" >"$TMP/i1h.$d.xml" 2>/dev/null )
         ( cd "$FIX/$d" || exit 1; "$RIPWIRE_BASE_BIN" "$FIX/$d" --for="$q" --cache="$TMP/i1b.$d" >"$TMP/i1b.$d.xml" 2>/dev/null )
-        cmp -s "$TMP/i1h.$d.xml" "$TMP/i1b.$d.xml" && ok "I1 $d: handle off == base" || no "I1 $d: handle off differs from the base binary"
+        if cmp -s "$TMP/i1h.$d.xml" "$TMP/i1b.$d.xml"; then ok "I1 $d: handle off == base"; else no "I1 $d: handle off differs from the base binary"; fi
     done
 fi
 
-echo "formembernamescheck: $npass PASS"
-[ "$fail" -eq 0 ] && { echo "formembernamescheck: ALL PASS"; exit 0; }
-echo "formembernamescheck: FAILURES"; exit 1
+echo
+if [ "$fail" = "0" ]; then echo "formembernamescheck: ALL PASS"; else echo "formembernamescheck: FAILURES ABOVE"; fi
+exit "$fail"
