@@ -6,6 +6,7 @@
 // extraction, and graph.h resolves a cross-file [text](other.md#slug) once every heading in the repo is a
 // symbol. A leaf header keeps them on one definition (a second copy is the clone --quality-delta flags).
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 
@@ -33,11 +34,7 @@ inline std::string mdSlugOf( std::string_view name )
 // (an encoded slug; it does not decode). A miss on such a slug proves nothing about the heading.
 inline bool mdSlugOutsideModel( std::string_view slug ) noexcept
 {
-    for( const char c : slug )
-    {
-        if( c == '%' || static_cast<unsigned char>( c ) >= 0x80 ) { return true; }
-    }
-    return false;
+    return std::any_of( slug.begin(), slug.end(), []( char c ) { return c == '%' || static_cast<unsigned char>( c ) >= 0x80; } );
 }
 
 }   // namespace rw
