@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-19, PR #414 (#409 markdown section links) merged with main 939dbb69: RE-PINNED with UPDATE_GOLDEN=1 (hash
+#   a667ffc55e…8a05). The only watched text that moved is the kParserVer line and quality.h's mirror: renumbered again at
+#   merge to 206 (rich file tag 207), above main 196 / 197 and the live branch builds 198, 202 and 204. kCacheVersion stays
+#   36 and kQSnapCacheScheme stays 22: the PR keeps a markdown link's written path in an existing field, no record format moved.
 # 2026-10-18, train 30 (call-result-typing, go-local-var, fcall-forward, name-template-dispatch, tail-sym, path-owners merged
 #   onto main b59b0824): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (hash 5af7514356…3726b4). Watched text:
 #   kParserVer -> 196 (lanes call-result-typing 180 / rich 181, fcall-forward 188 / 189, go-local-var 190 / 191,

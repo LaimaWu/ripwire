@@ -153,7 +153,7 @@ it now names nothing.) Go's
 written `*os.File` no longer resolves to an in-tree type that happens to be called `File`. A Java/Kotlin class-name
 receiver binds an in-tree class only where the caller's file sees it — its package, a single-type import naming it, an
 on-demand import of its package (`import ext.Util; Util.open()`, `import ext.*; Util.open()`, `Util::open` no longer bind
-an in-tree `Util` as proven). `kParserVer` and `kCacheVersion` move (196 and 36 in this release, see the versions note).
+an in-tree `Util` as proven). `kParserVer` and `kCacheVersion` move (206 and 36 in this release, see the versions note).
 ### Fixed — `f.call( … )` and `f.apply( … )` on a proven function are calls of `f`
 
 `handleRequest.call( request.server, null, request, reply )` used to be recorded only as a member call named `call`, so
@@ -163,7 +163,7 @@ the file declares as a function, or imports from a relative module, now stands f
 where the resolver proves a function or method: an imported object, const or class (`rpc.call()` on a required
 module object, `Klass.call( this )`) and a name bound by name alone add nothing. `f.bind( … )` is a value use of `f`,
 never a call. Floors, shared with the bare call `f()`: a function-local `var f` / `let f` declared after the site does not
-shadow it, and a re-assignment `f = …` is not followed. `kParserVer` and `kCacheVersion` move (196 and 36 in this release, see the versions note).
+shadow it, and a re-assignment `f = …` is not followed. `kParserVer` and `kCacheVersion` move (206 and 36 in this release, see the versions note).
 ### Fixed — a method a name-template lookup can name no longer reads `risk="none-found"`
 
 `getattr(obj, f"watch_{name}")`, `hasattr`, `cls.__dict__.get(f"on_{n}")` and JS/TS `this['compile' + node.typename]`
@@ -177,7 +177,7 @@ each template's candidates (`<pd cands= shown=>`, first 8, `next=` for the rest)
 `--safe-delete`, when nothing else was found, it still makes `risk="hedged"` and names its site as a `<pdw>` row. A template with no literal side at all (`codes[sc + '']`, `f"{m}"`) carries no
 name and records nothing, like a bare `obj[k]`. Matched
 by name, never a proven call: `callers=`, `impact_reaches=`, `count=` and the `--dead-code` list are unchanged. The
-`--json` and `--format=columnar` roots carry both counts but not the rows; the MCP transport carries neither yet. Cache format and parser version move (the reference role set grew; 36 and 196 in this release, see the versions
+`--json` and `--format=columnar` roots carry both counts but not the rows; the MCP transport carries neither yet. Cache format and parser version move (the reference role set grew; 36 and 206 in this release, see the versions
 note). Gate: `test/safedeletecheck.sh` arms 9–18.
 ### Changed — `--for` tail rank rows name their file's top symbols
 
@@ -205,7 +205,7 @@ scope only, a Rust `const` / `static` at module, `impl`, trait or `extern` level
 level; a call in a function-local initializer belongs to the enclosing function. Package-level grouped Go `var ( a = …;
 b = … )` declarations, which were missed (grouped `const` was already read), are now one symbol per name. On fzf, gotestsum and nfpm (Go), 574
 function-local symbols leave the map, no package-level one is lost, and 87 grouped names are added. `kParserVer` moves
-(196 in this release, see the versions note). Gate: `test/localdeclcheck.sh`.
+(206 in this release, see the versions note). Gate: `test/localdeclcheck.sh`.
 
 ### Changed — `--path` hop rows name a member by its owner (`Owner.name`)
 
@@ -452,14 +452,15 @@ server, when the cgroup's charge is the larger reading: restarting the server do
 
 ### Changed — the versions this release moves, stated once
 
-`kParserVer` 167 → 196: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
+`kParserVer` 167 → 206: the Clojure grammar (#349) took 171 on `main` and slice 4a (#400) 173 (its full-use file tag 174); the value-reference walk through
 `??`/`||`/`&&`/`or`/`and` carried 173 on its branch, the Ruby/Python subscript references and Ruby's main-object mixins
 174 (file tag 175), and the Elixir quote live holes (#380) 145 on theirs; they landed together at 176 (file tag 177). The
 minimum-arity field (`paramsMin`) carried 178 (file tag 179) on its branch and the Go receiver scope (#403) 182 (file tag 183);
 those landed at 184 (file tag 185). Call-result typing carried 180 (file tag 181), the `f.call` / `f.apply` forwarders 188
 (189), the function-local Go / Rust / GDScript declarations 190 (191) and the name-template references 192 (193) on their
-branches, and a branch not in this release 194 (195). This release is 196, above every number a branch build has used, so
-no cache such a build wrote is read as this release's; its full-use file tag is 197.
+branches, and branches not in this release 194 (195), 198 (199), 202 (203) and 204 (205). The markdown section links (#409)
+carried 185 (186) on their branch and were renumbered when it merged. This release is 206, above every number a branch build
+has used, so no cache such a build wrote is read as this release's; its full-use file tag is 207.
 `kCacheVersion` 31 → 36: a reference record's role byte gained two values, the subscript role (9) and the inert role (10,
 numbered 9 on #380's branch, which predates the subscript role), and the binding kind byte one (Ruby's main-object mixin) (32);
 a definition record gained `paramsMin`, the fewest arguments a call can pass (33 on its branch, 34 in the train that landed
