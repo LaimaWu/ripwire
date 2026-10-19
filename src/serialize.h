@@ -7882,7 +7882,7 @@ inline void packBodies( std::FILE* out, const IngestResult& ing, const std::vect
     {
         w.write( viaNameLegendComment() );   // FE-B: the same rule, for a <calls> row's via="name"
     }
-    if( !viaLegendInHead && children.find( " via=\"link\"" ) != std::string::npos )
+    if( children.find( " via=\"link\"" ) != std::string::npos )
     {
         w.write( viaLinkLegendComment() );
     }
@@ -8186,7 +8186,7 @@ inline void packHops( std::FILE* out, const IngestResult& ing, const std::vector
     {
         w.write( viaNameLegendComment() );   // FE-B: exactly when a hop's <calls> row carries via="name"
     }
-    if( !viaLegendInHead && children.find( " via=\"link\"" ) != std::string::npos )
+    if( children.find( " via=\"link\"" ) != std::string::npos )
     {
         w.write( viaLinkLegendComment() );
     }

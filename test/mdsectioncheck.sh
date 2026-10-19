@@ -469,6 +469,18 @@ printf '%s\n' '# E' '' '## Other' > "$TMP/nmerge/e.md"
 NM="$( $BIN "$TMP/nmerge" --no-cache --for=zqhubtoken --legend=compact 2>/dev/null | grep -o '<calls total="3">.*</calls>' )"
 if printf '%s' "$NM" | grep -q '<c n="B" l="3" via="link"/>' && printf '%s' "$NM" | grep -q '<c n="B" l="1" via="link" anchor="missing"/>' && ! printf '%s' "$NM" | grep -q 'l="1,3"'; then ok "--for hops: the good B link and the missing-anchor B link stay two rows"; else no "--for hops merged a good link into a missing-anchor row: [$NM]"; fi
 
+# A --for head that already defines via="name" must still define via="link" when a hop row carries it (run has a proven and a
+# by-name callee; Hub Section links): the link reading rides on its own presence, not on the name legend's.
+mkdir -p "$TMP/vlink/pkg/x" "$TMP/vlink/other"
+printf 'class A:\n    def process(self):\n        return 1\n' > "$TMP/vlink/pkg/x/a.py"
+printf 'def helper():\n    return 3\n\ndef run(obj):\n    # zqshared\n    helper()\n    return obj.process()\n' > "$TMP/vlink/pkg/x/c.py"
+printf 'def target():\n    return 2\n\nclass B:\n    def process(self):\n        return target()\n' > "$TMP/vlink/other/b.py"
+printf '%s\n' '# Guide' '' '## Hub Section' '' 'zqshared see [more](dd.md#zzz) and [ok](dd.md#real-part)' > "$TMP/vlink/guide.md"
+printf '%s\n' '# DD' '' '## Real Part' '' 'x' > "$TMP/vlink/dd.md"
+for leg in default full; do
+    if [ "$leg" = default ]; then VL="$( $BIN "$TMP/vlink" --no-cache --for=zqshared 2>/dev/null )"; else VL="$( $BIN "$TMP/vlink" --no-cache --for=zqshared --legend=full 2>/dev/null )"; fi
+    if printf '%s' "$VL" | grep -q 'via="name"' && printf '%s' "$VL" | grep -q 'via="link"' && printf '%s' "$VL" | grep -q 'markdown link, not a call'; then ok "--for ($leg legend): a via=name head and a via=link hop row both carry their legend"; else no "--for ($leg legend): via=link rows ride without their legend, or the fixture lost a row kind"; fi
+done
 # --callers lists every matched def in <def ix= t= p=> (cross_kind when a heading and a function share the name).
 # The edge is the <s> row: it must name the section, never the .py function.
 if $BIN "$AFIX" --no-cache --callers=do_work --legend=compact 2>/dev/null | python3 -c '
