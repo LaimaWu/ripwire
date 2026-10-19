@@ -347,6 +347,9 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # row first, so the seven <d> rows reorder (same rows, same text, r= renumbered), <sigs> gains files_first="3" and the full
 # legend its present-only files_first= reading; est_tokens= prices the reading, 5497 -> 5658 B. Checked mechanically: the same
 # binary with RIPWIRE_NO_HEAD_RR=1 prints the previous pin byte for byte (at= masked). The six other pins are unchanged.
+# RE-ANCHORED 2026-10-18 (train 31, merge of lane hrr over the merged body-fold pin), for.xml only: re-recorded from the
+# merged binary; a token-level 3-way merge (base = lane body-fold's pin, ours = the merged pin above, theirs = lane hrr's pin;
+# at= and est_tokens= masked) equals it exactly. 5527 -> 5688 B. The six other pins are unchanged.
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
 # sed does not): at="…" masked, trailing newlines dropped.
