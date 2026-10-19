@@ -12,7 +12,7 @@
 // A member is the parser's (fold_detail::sliceMembers = forowner.h isParsedMemberOf): a def whose index scope names the owner
 // (a Rust/Go impl or receiver method, a C++ out-of-line definition, in any file) or whose span lies inside the owner's span in
 // the same file (a C++ in-class declaration, a JS/TS/Python method), never one nested inside another member (a closure inside a
-// method is that method's text). Only callables and fields (kMemberKinds) are named; a nested type is not a member name here.
+// method is that method's text). Only callables and fields are named; a nested type is not a member name here.
 // Order: the most question words (the fold's own words, sliceWords) in the name first, then the owner's own file before others,
 // then declaration line. A name rides once (an overload, or a C++ declaration and its out-of-line definition, are one name).
 // NOT listed: a name the answer already shows as a row (one of this owner's members ranked, or the owner's own name: a C++
@@ -72,11 +72,6 @@ struct OwnerMemberNames
 
 namespace member_detail
 {
-// the member kinds a name is listed for: callables and fields (a nested type, a variable or a section is not a member name)
-inline bool isMemberKind( SymKind k ) noexcept
-{
-    return k == SymKind::Method || k == SymKind::Function || k == SymKind::Field;
-}
 // another class/struct/interface of the owner's name, in a compatible language, with a body: then a member's sc= cannot say
 // which owner it belongs to
 inline bool ownerNameAmbiguous( const IngestResult& ing, const Symbol& c )
@@ -111,7 +106,9 @@ inline OwnerMemberNames forOwnerMemberNames( const IngestResult& ing, NodeId own
         return out;
     }
     std::vector<NodeId> members = fold_detail::sliceMembers( ing, c );
-    std::erase_if( members, [ & ]( NodeId m ) { return !member_detail::isMemberKind( ing.symbols[m].kind ); } );
+    // the member kinds a name is listed for: callables (ReceiverEvidence::callableKind) and fields — a nested type, a variable or a
+    // section is not a member name here
+    std::erase_if( members, [ & ]( NodeId m ) { return !ReceiverEvidence::callableKind( ing.symbols[m].kind ) && ing.symbols[m].kind != SymKind::Field; } );
     // a name the answer already shows: the owner's own (a constructor) or one of its members ranked as a row
     std::vector<std::string_view> shownNames{ c.name };
     for( const NodeId m : members )

@@ -768,15 +768,15 @@ inline std::string_view hopsCallsNextLegend( const ForLensHeaderParts& p, bool c
 {
     return !p.hopsCallsNextPresent ? std::string_view() : ( compact ? kForCompactHopsCallsNextClause : kForHopsCallsNextClause );
 }
+// A present-only clause in this dialect: "" unless its element or attribute rides, else the compact or the full spelling.
+inline constexpr std::string_view presentOnlyClause( bool present, bool compact, std::string_view compactClause, std::string_view fullClause ) noexcept
+{
+    return !present ? std::string_view() : ( compact ? compactClause : fullClause );
+}
 // body-fold: the fold's clause in this dialect, present-only (bodyFoldPresent), right after the slot clause
 inline std::string_view bodyFoldLegend( const ForLensHeaderParts& p, bool compact ) noexcept
 {
-    return !p.bodyFoldPresent ? std::string_view() : ( compact ? rw::kForCompactBodyFoldLegend : rw::kForBodyFoldLegend );
-}
-// member-names: the mem= clause in this dialect, present-only (memberNamesPresent), right after the fold clause
-inline std::string_view memberNamesLegend( const ForLensHeaderParts& p, bool compact ) noexcept
-{
-    return !p.memberNamesPresent ? std::string_view() : ( compact ? rw::kForCompactMemberNamesLegend : rw::kForMemberNamesLegend );
+    return presentOnlyClause( p.bodyFoldPresent, compact, rw::kForCompactBodyFoldLegend, rw::kForBodyFoldLegend );
 }
 inline constexpr std::string_view kForCompactLegendTail =
     "; t p= file outside sigs (weaker), t sym= a file-page row: its top symbols, r= rank (gap = trimmed)";
@@ -889,7 +889,7 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     h += ownerHopLegend( p, /*compact=*/true );   // owner-hop: present-only, right after the hops clause
     h += bodySlotLegend( p, /*compact=*/true );   // for-body-slot: present-only, after the owner clause
     h += bodyFoldLegend( p, /*compact=*/true );   // body-fold: present-only, after the slot clause
-    h += memberNamesLegend( p, /*compact=*/true );   // member-names: present-only, after the fold clause
+    h += presentOnlyClause( p.memberNamesPresent, /*compact=*/true, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend );   // member-names: after the fold clause
     // The unconditionally-droppable-free tail of this dialect: five clauses that ride exactly when the bit beside
     // them is set, in THIS order, which is the contract a reader and every byte pin depend on. A table rather than
     // five identical ifs — the list has grown once per lane (hdr, compose, then train 9's lego and layer) and the
@@ -1035,7 +1035,7 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     h.append( ownerHopLegend( p, /*compact=*/false ) );   // owner-hop: present-only, right after the bundle clause
     h.append( bodySlotLegend( p, /*compact=*/false ) );   // for-body-slot: present-only, after the owner clause
     h.append( bodyFoldLegend( p, /*compact=*/false ) );   // body-fold: present-only, after the slot clause
-    h.append( memberNamesLegend( p, /*compact=*/false ) );   // member-names: present-only, after the fold clause
+    h.append( presentOnlyClause( p.memberNamesPresent, /*compact=*/false, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend ) );   // member-names
     if( p.tailLegend )
     {
         h.append( rw::kForFileTailLegend );   // deep-tail: defines r= and the <tail> element (sigs-charge-exempt, serialize.h)

@@ -26,8 +26,7 @@ class TemplateCompiler {
 }
 
 function compileTemplate(tree, opts) {
-  const compiler = new TemplateCompiler(opts);
-  return compiler.compileBlock(tree);
+  return new TemplateCompiler(opts).compileBlock(tree);
 }
 
 function renderTemplate(src, ctx) {
