@@ -5838,8 +5838,9 @@ inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_vie
         }
         if( kindIs( t, "type_identifier" ) && nodeTextOf( type, src ) != "Self" )
         {
-            const std::string_view name = nodeTextOf( type, src );
-            return declaresTypeName( fieldChild( fn, NodeField::TypeParameters ), name, src ) || enclosingGenericDeclares( fn, name, src ) ? std::string_view{} : name;
+            const std::string_view name   = nodeTextOf( type, src );
+            const TSNode           params = ts_node_is_null( fn ) ? TSNode{} : fieldChild( fn, NodeField::TypeParameters );   // a null node has no tree
+            return declaresTypeName( params, name, src ) || enclosingGenericDeclares( fn, name, src ) ? std::string_view{} : name;
         }
         // `Self` (tree-sitter-rust spells it a type_identifier in a type, `fn new() -> Self`): the impl's type, "" in a trait
         if( kindIs( t, "self" ) || ( ( kindIs( t, "identifier" ) || kindIs( t, "type_identifier" ) ) && nodeTextOf( type, src ) == "Self" ) )
@@ -5936,6 +5937,14 @@ inline BindSite rustLetSite( TSNode decl, std::uint32_t at )
     return site;
 }
 
+// rust-receivers: the item whose generics a binding's written type may name — the nearest ancestor of `kinds`, else the node
+// itself (a `let` or closure parameter in a `const` / `static` initializer: no fn; the enclosing impls' generics still count)
+inline TSNode rustGenericsOwner( TSNode n, std::initializer_list<std::string_view> kinds )
+{
+    const TSNode owner = ancestorOfKind( n, kinds );
+    return ts_node_is_null( owner ) ? n : owner;
+}
+
 // rust-receivers: the class a WRITTEN Rust type names for a local, a parameter or a field — rustResultClass's reading (the
 // wrapper rows, `Self`, a generic's head, a path's last segment with `whole` set to the path) taken at depth 0 only: under a
 // Result / Option layer the binding is not a T, and names no class. `owner` is the item whose generics the type may name.
@@ -5983,8 +5992,9 @@ inline std::string_view rustConstructedClass( TSNode value, TSNode owner, std::s
     }
     if( kindIs( pt, "identifier" ) )
     {
-        const std::string_view name = nodeTextOf( path, src );
-        return declaresTypeName( fieldChild( owner, NodeField::TypeParameters ), name, src ) || enclosingGenericDeclares( owner, name, src ) ? std::string_view{} : name;
+        const std::string_view name   = nodeTextOf( path, src );
+        const TSNode           params = ts_node_is_null( owner ) ? TSNode{} : fieldChild( owner, NodeField::TypeParameters );
+        return declaresTypeName( params, name, src ) || enclosingGenericDeclares( owner, name, src ) ? std::string_view{} : name;
     }
     if( kindIs( pt, "scoped_identifier" ) && !ts_node_is_null( fieldChild( path, NodeField::Name ) ) )
     {
@@ -6012,7 +6022,7 @@ inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
 {
     const TSNode   pattern = fieldChild( n, NodeField::Pattern );
     const auto     site    = rustLetSite( n, at );
-    const TSNode   owner   = ancestorOfKind( n, { "function_item" } );
+    const TSNode   owner   = rustGenericsOwner( n, { "function_item" } );
     std::string_view whole;
     if( const TSNode type = fieldChild( n, NodeField::Type ); !ts_node_is_null( type ) )
     {
@@ -6056,7 +6066,7 @@ inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
 inline void captureRustParameter( BindCtx& cx, TSNode n, std::uint32_t at )
 {
     std::string_view       whole;
-    const std::string_view cls = rustWrittenClass( fieldChild( n, NodeField::Type ), ancestorOfKind( n, { "function_item", "function_signature_item" } ), cx.src, whole );
+    const std::string_view cls = rustWrittenClass( fieldChild( n, NodeField::Type ), rustGenericsOwner( n, { "function_item", "function_signature_item" } ), cx.src, whole );
     pushRustBinding( cx, fieldChild( n, NodeField::Pattern ), cls, whole, siteIn( at, ancestorOfKind( n, { "function_item", "closure_expression" } ) ) );
 }
 // rust-receivers: a struct's named field `book: Book` (MemberType on the struct, so `self.book.m()` narrows through it); a

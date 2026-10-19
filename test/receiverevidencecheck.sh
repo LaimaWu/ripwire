@@ -219,7 +219,9 @@
 #            foo.bar()`, `dyn` / `impl` / generic-bound / bare-trait receivers (dispatch: lane L6), Option / Rc (a parameter,
 #            a `let`, a field), a shadowing `let` / `for` / closure parameter, an outside `use std::fs::File` beside an
 #            in-tree File, a tuple pattern, `String::default()`, a u32 / generic-`T` / tuple-struct field, a missing field,
-#            a same-named owner whose field differs, a glob of a module that only globs (not followed: a floor).
+#            a same-named owner whose field differs, a glob of a module that only globs (not followed: a floor). Early
+#            gates review adds (src/adds.rs, alias.rs, samename.rs, consts.rs): self forms, lifetimes, `use … as`, same
+#            names in two modules, Box<dyn> / Arc / RefCell / index / type-alias / element-type near misses, a const block.
 #   (C) conservation: each root's census dispositions still sum to calls= with unaccounted=0 (no silent drop).
 #   (K) the predicates can fail: a planted unhedged false row fails notproven, a planted hedged row passes it and
 #            fails proven, marked rejects an unhedged row, a rootless or not-found answer is NOROOT, the MCP reader
@@ -1621,6 +1623,11 @@ notproven   rsrecv callees "$RSD:make_book_local" "spin $RSM:10"                
 # `impl<T: Render> Extra for T` stays hedged. Pinned so a change here is seen: exactly the base answer.
 exactproven rsrecv callees "src/kinds.rs:twice" "method spin src/kinds.rs"
 rs_none "src/kinds.rs:go"
+# a `let` / a typed closure parameter in a `const` / `static` initializer (no enclosing fn: the first cut of this lane
+# crashed reading a null fn's generics there — nushell): typed like any other, and the run exits 0 (ran_ok)
+proven      rsrecv callees "src/consts.rs:SPUN" "method spin $RSM:5"                                               # [P]
+proven      rsrecv callees "src/consts.rs:SPIN_FN" "method spin $RSM:5"                                            # [P]
+notproven   rsrecv callees "src/consts.rs:SPIN_FN" "spin $RSM:10" "spin $RSM:24" "spin src/other.rs:4"
 # guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
 proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
 

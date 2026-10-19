@@ -15,6 +15,7 @@ pub mod glob2;
 pub mod adds;
 pub mod alias;
 pub mod samename;
+pub mod consts;
 @@@ rsrecv/src/model.rs
 // Book and Other both define spin / iter; Cfg and Knob both define tune: a call proves one only through its receiver's type.
 pub struct Book { pub items: Vec<u32> }
@@ -222,3 +223,8 @@ pub mod nested {
     }
     pub fn nested_book(b: &Book) -> u8 { b.spin() }
 }
+@@@ rsrecv/src/consts.rs
+// a `let` and a typed closure parameter in `const` / `static` initializers: no enclosing fn (a crash on the first cut)
+use crate::model::Book;
+pub const SPUN: u8 = { let a: Book = Book { items: Vec::new() }; a.spin() };
+pub static SPIN_FN: fn(&Book) -> u8 = |b: &Book| b.spin();
