@@ -881,7 +881,7 @@ inline std::vector<RawRow> diffRaw( const std::string& root, const std::string& 
         DISCLOSE( "crossref: refusing a diff whose revision arguments are not resolved object names" );
         return {};
     }
-    const std::string raw = gitCapture( root, "diff --raw --no-abbrev --no-renames " + shSingleQuote( a ) + " " + shSingleQuote( b ) + " -- 2>/dev/null" );
+    const std::string raw = gitCapture( root, "diff --no-ext-diff --no-textconv --ignore-submodules=dirty --raw --no-abbrev --no-renames " + shSingleQuote( a ) + " " + shSingleQuote( b ) + " -- 2>/dev/null" );
     std::vector<RawRow> out;
     for( std::string_view line : splitLines( raw ) )
     {
@@ -2642,7 +2642,7 @@ inline GitListing worktreeChangedPaths( const std::string& root, const std::stri
     {
         return {};
     }
-    GitListing changed = gitListChecked( root, "diff --name-only --no-renames --relative " + shSingleQuote( headSha ) + " --" );
+    GitListing changed = gitListChecked( root, "diff --no-ext-diff --no-textconv --ignore-submodules=dirty --name-only --no-renames --relative " + shSingleQuote( headSha ) + " --" );
     GitListing others  = gitListChecked( root, "ls-files --others --exclude-standard" );
     changed.ok         = changed.ok && others.ok;
     changed.lines.insert( changed.lines.end(), others.lines.begin(), others.lines.end() );
@@ -2947,7 +2947,7 @@ inline RenameEvidence renameEvidenceOf( const std::string& root, const std::stri
     {
         return ev;   // a git-quoted spelling is not the path's name: no evidence either way
     }
-    ev.headCopy = gitCapture( root, "show " + shSingleQuote( "HEAD:./" + path ) + " 2>/dev/null" );
+    ev.headCopy = gitCapture( root, "show --no-ext-diff --no-textconv " + shSingleQuote( "HEAD:./" + path ) + " 2>/dev/null" );
     std::string        work;
     const WorktreeCopy copy = readWorktreeCopy( root, path, work );
     ev.definitionLeft       = ( copy == WorktreeCopy::Text || copy == WorktreeCopy::Gone ) && definitionLeftCopy( ev.headCopy, work, missing );

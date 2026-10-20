@@ -1,5 +1,6 @@
 #pragma once
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
+#include "infra/Diagnostics.h" // ENSURES (callHierarchyRowCap)
 
 
 // pageview.h — §P8 ("Contract-level" bullets 1+2): the ONE paging window
@@ -163,6 +164,48 @@ inline int effectiveRowCap( int pageLimit, int historicCap ) noexcept
 // answer discloses shown=/capped= plus has_more=/next_offset= so a paging loop terminates.
 inline constexpr int kCallHierarchyRowCap = 40;
 inline constexpr int kUseSiteRowCap       = 100;
+// L8 callers cap band (train 29): a call-hierarchy answer whose WHOLE row total is at most 1.25 × the cap (50) is served
+// whole rather than cut a handful of rows short — ninja's `--callers=Stat` was 40 of 44, the four hidden rows costing an
+// agent a second call for ~0.5 KB. Above the band the cap is unchanged (40), disclosed, and the callers root's next= is
+// the next PAGE. The band reads the total, never the language or the file, so it is the same rule on every tree.
+inline constexpr int kCallHierarchyBandMax = kCallHierarchyRowCap + kCallHierarchyRowCap / 4;
+
+// C2 callers BYTE band (train 31): a CALLERS answer is served whole, however many rows it has, while the estimated bytes
+// of all its rows (callhierarchy.h callersByteBand: the XML row each caller prints, with its sites_at= tokens) fit this
+// band. A who-calls answer IS the set: tmux's `--callers=options_get_number` was 40 of 121 rows at ~10.8 KB for the whole
+// list, and the 81 hidden rows cost three more calls that each re-paid the ~1 KB legend and root. Sized from the train-29
+// rows (tmux 121 rows = 10.8 KB fits; textual's `--callers=post_message`, 121 rows = 16.8 KB with long Python paths,
+// stays paged). Callers only: --callees keeps the 1.25x row band (a capped callees page names the next page as next= and the
+// body as expand_next=) and --impact its 40-row page. Above the band the 40-row page, its next= page and uses_next= are
+// unchanged. A runaway guard as well as a stair step: it bounds the bytes a default call can add, never the rows an explicit
+// --limit asks for. It bounds the <s> ROW bytes only: the whole answer adds its root, legend, <dc> rows and the value-use
+// (<vrs>, up to 64) and name-template (<pds>, up to 8) rows, which ride beside the band as they ride the 40-row page — so a
+// banded answer can exceed 16,000 B (rv-callers-band2 N3 measured 18,455 B; a 65-caller probe with 160 value uses, 23,655 B).
+inline constexpr std::size_t kCallersBandMaxBytes = 16000;   // callers rows served whole while their estimated bytes fit (tmux 121 rows = 10.8 KB)
+// The smallest row a callers answer can print (`<s t="fn" n="x" p="f:1"/>`): a total past kCallersBandMaxBytes / this many
+// rows cannot fit the band, so the estimate (one site pass over every row) is skipped for it.
+inline constexpr std::size_t kCallerRowMinBytes = 30;
+
+// The row cap --callers/--callees and their MCP twins apply: an explicit --limit wins (effectiveRowCap); without one,
+// a total inside the band is its own cap, and so is a callers list whose estimated row bytes (callersRowBytes > 0, the
+// callers side only) fit kCallersBandMaxBytes; anything larger keeps kCallHierarchyRowCap.
+inline int callHierarchyRowCap( int pageLimit, std::size_t rowTotal, std::size_t callersRowBytes = 0 ) noexcept
+{
+    // The precondition the ENSURES below rests on: callersByteBand (callhierarchy.h) estimates only a total that can fit the
+    // band (so a served-whole total also fits an int). Stated, not left implicit (SEGV round, train 31): with only
+    // ENSURES( cap > 0 ) over int( rowTotal ) of an unbounded rowTotal, gcc 14.2 (ubuntu-24.04's g++-14) -O2 -flto served a
+    // 40-row window over a 3-row list in MCP find_symbol / find_referencing_symbols and --batch (rc=139). That input took the
+    // effectiveRowCap arm, so the int conversion was never the crash mechanism; the unstated precondition was. With this
+    // EXPECTS the same build answers rc=0 (debug runs 39134346019, 39137965028).
+    EXPECTS( callersRowBytes == 0 || rowTotal <= kCallersBandMaxBytes / kCallerRowMinBytes, "callersByteBand estimates only a total that can fit the band" );
+    const bool inRowBand  = rowTotal <= std::size_t( kCallHierarchyBandMax );
+    const bool inByteBand = callersRowBytes > 0 && callersRowBytes <= kCallersBandMaxBytes;
+    const int  cap = ( pageLimit <= 0 && rowTotal > std::size_t( kCallHierarchyRowCap ) && ( inRowBand || inByteBand ) )
+                        ? int( rowTotal )
+                        : effectiveRowCap( pageLimit, kCallHierarchyRowCap );
+    ENSURES( cap > 0, "a call-hierarchy window always holds at least one row: a band, an explicit --limit or the default 40" );
+    return cap;
+}
 // M13 (capture-audit 2026-09-04): --cochange's per-file partner cap. It was a bare `30` literal inside
 // verbs_report.h's --cochange arm and NOTHING at all on the MCP twin, which served every partner uncapped
 // — the two surfaces disagreeing about the size of one answer. Named here for the same reason as the two

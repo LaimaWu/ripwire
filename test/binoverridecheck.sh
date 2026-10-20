@@ -90,6 +90,7 @@ EXEMPT = {
     "clonelexcheck.sh":          "builds its OWN standalone harness binary from src/*.cpp, independent of build/ripwire",
     "codexplugincheck.sh":       "pure-python/json check of a static MCP manifest file; 'ripwire' only appears as a string field",
     "columnarcommacheck.sh":     "compiles an isolated $CXX probe .cpp; never invokes build/ripwire",
+    "danglingwarncheck.sh":      "compile-only gate: compiles planted lifetime bugs and near-miss shapes with the fence flags it reads out of CMakeLists.txt, under each compiler it finds on the host; build/ripwire is never bound or executed -- the file contains neither RIPWIRE_BIN nor $BIN (verified by reading it; it prints BIN=n/a), so (2b)'s static tell needs no exemption for it",
     "connectcorecheck.sh":       "builds its OWN standalone harness binary, independent of build/ripwire",
     "diagnoticecheck.sh":        "builds its OWN standalone harness (test/diagnotice_harness.cpp) against src/infra/diagnostics.cpp and statically reads that file; the subject is the Diagnostics reporters, so no ripwire binary is bound or executed — the file contains neither RIPWIRE_BIN nor $BIN",
     "dependencypincheck.sh":     "CMake-configure-level gate (checks CMakeLists.txt text + a throwaway cmake -S/-B configure); no ripwire binary",

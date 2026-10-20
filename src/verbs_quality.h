@@ -70,6 +70,16 @@ std::string noBaselineFatalMessage( const std::string& baselineFile, const rw::q
 // `sameRef` is the A==B case. It is a legal question with an empty answer, and it is answered by materializing
 // ONE tree and comparing it with itself rather than by a special-cased early return: the empty delta then
 // falls out of the ordinary machinery instead of being asserted by a branch nobody re-tests.
+// qd-memory-degrade: a memory-guard stop in one phase of the range form. Recorded, never printed where it happens: the
+// form first tries the changed files, and only if those do not fit either does it say anything (refPairStopRefusal).
+struct PhaseStop
+{
+    bool              stopped = false;
+    bool              hard    = false;   // the hard line (the limit itself); else a soft stop (soft below)
+    std::string       where;             // "ingest of the base commit", "graph of the target commit", …
+    rw::MemoryStop    soft;              // a soft stop's cause, copied off the cut ingest
+};
+
 struct RefPairDelta
 {
     rw::quality::TmpTreeGuard targetGuard;           // declared BEFORE the tree so teardown outlives its use
@@ -82,72 +92,119 @@ struct RefPairDelta
     std::string           rangeSpan;                 // R1: "<baseSha>..<targetSha>" — the range the rename
                                                      // record is read over, against the REAL repo (both trees
                                                      // here are temp dirs with no history of their own)
+    // qd-memory-degrade — which kinds this answer runs, and, when the full trees did not fit, what it answers from instead
+    rw::quality::KindMask     selected = rw::quality::kAllKinds;   // --quality-kinds (every kind when absent)
+    rw::quality::KindMask     kinds    = rw::quality::kAllKinds;   // the kinds actually run: selected, less what the changed files cannot decide
+    bool                      degraded = false;                    // answered from both commits' CHANGED files (ingest_scope="changed-files")
+    std::string               memoryStop;                          // after a stop: "crawl" | "parse" | "hard"; empty when the projection decided
+    bool                      memoryPressure = false;              // the stop was the OS pressure signal
+    std::string               stopWhere;                           // the stop's phase, as its sentence names it
+    std::uint64_t             needBytes = 0;                       // the projected need (the projection decided and measured it)
+    std::uint64_t             ingestNeedBytes = 0;                 // the projection's ingest need (judged against half the limit)
+    std::vector<std::string>  baseMacros;                          // the base commit's whole C-family macro-name set, when its full tree was read
+    bool                      haveBaseMacros = false;
+    std::vector<std::string>  targetFiles;                         // the target commit's files, for --scope's test (degraded + scoped only)
+    std::string               baseSha, targetSha;
+    PhaseStop                 stop;                                // the guard's stop in a full tree, when there was one
+    std::uint64_t             ingestPeak = 0;                      // this process's peak at the end of the base commit's ingest (the projection's input)
 
     const rw::quality::RefTree& target() const noexcept { return targetTree; }
+    const std::vector<std::string>* macroOverride() const noexcept { return degraded && haveBaseMacros ? &baseMacros : nullptr; }
+    const std::vector<std::string>* scopeFiles() const noexcept { return degraded ? &targetFiles : nullptr; }
 };
 
-// #387: what loadRefPairDelta prints and returns when one commit's tree could not be scored. A memory-guard stop is named
-// as one — exit 5 and the guard's own line — because "could not materialize or parse" would send the reader looking for
-// a broken commit; anything else is the environment, exit 1, with the sha named.
-int refPairLoadRefusal( rw::quality::RefTreeLoad load, const rw::quality::RefTree& tree, const std::string& sha, std::string_view side )
+// #387: what loadRefPairDelta prints and returns when one commit's tree could not be materialized at all — the environment,
+// exit 1, with the sha named. A memory-guard stop is not this: it is a PhaseStop, and the range form falls to the changed
+// files (qd-memory-degrade).
+int refPairUnavailable( const std::string& sha )
 {
-    using namespace rw;
-    if( load == quality::RefTreeLoad::OverHardLimit )
-    {
-        memguard::answerStops();
-        DISCLOSE( Diagnostics::answerRefused, "--quality-delta=A..B: over the memory guard's hard limit after a commit's ingest, before its graph — exit 5, one stderr line" );
-        rw::emitTo( stderr, "ripwire: {}\n", memguard::hardStopLine( "ingest of the " + std::string( side ) + " commit" ) );
-        return 5;
-    }
-    if( load == quality::RefTreeLoad::MemoryStopped )
-    {
-        memguard::answerStops();   // this refusal answers for the stop the commit's ingest recorded
-        DISCLOSE( Diagnostics::answerRefused, "--quality-delta=A..B: the memory guard cut a commit's ingest, so nothing is scored — exit 5, one stderr line" );
-        rw::emitTo( stderr, "ripwire: {}\n", memguard::verbRefusalLine( tree.ing.memoryStop, "--quality-delta=A..B" ) );
-        return 5;
-    }
     rw::emitTo( stderr, "ripwire: --quality-delta: could not materialize or parse the tree at {}\n", sha.c_str() );
     return 1;
 }
 
-// #387: the hard line between the range form's phases. main() checks it after the working-tree ingest and graph build,
-// which this form now dispatches before, so these are its only readings, in order: after each commit's ingest
-// (loadRefTree, before the graph is built) and after its graph; for the base, after its snapshot and again once its index
-// is released. Over the line nothing answers: exit 5 and one line naming the phase.
-bool refPairOverHardLimit( std::string_view phase )
+// The load outcome of one tree → a PhaseStop, or an exit code for the environment. Loaded = nothing to record.
+std::optional<int> recordLoad( rw::quality::RefTreeLoad load, const rw::quality::RefTree& tree, const std::string& sha, std::string_view side, PhaseStop& stop )
 {
-    using namespace rw;
-    if( !memguard::overHardLimit() )
+    using rw::quality::RefTreeLoad;
+    if( load == RefTreeLoad::Loaded )
+    {
+        return std::nullopt;
+    }
+    if( load == RefTreeLoad::Unavailable )
+    {
+        return refPairUnavailable( sha );
+    }
+    stop.stopped = true;
+    stop.hard    = load == RefTreeLoad::OverHardLimit;
+    stop.where   = "ingest of the " + std::string( side );
+    stop.soft    = tree.ing.memoryStop;
+    return std::nullopt;
+}
+
+// #387: the hard line between the range form's phases. main() checks it after the working-tree ingest and graph build,
+// which this form dispatches before, so these are its only readings, in order: after each commit's ingest (loadRefTree,
+// before the graph is built) and after its graph; for the base, after its snapshot and again once its index is
+// released. Over the line the phase is RECORDED as a stop and nothing is printed (qd-memory-degrade: the changed files
+// answer next, and refPairStopRefusal speaks only if they cannot) — where #387's refPairOverHardLimit refused on the spot.
+bool hardLineStops( std::string_view phase, PhaseStop& stop )
+{
+    if( !rw::memguard::overHardLimit() )
     {
         return false;
     }
-    memguard::answerStops();
-    DISCLOSE( Diagnostics::answerRefused, "--quality-delta=A..B: over the memory guard's hard limit between its phases — exit 5, one stderr line" );
-    rw::emitTo( stderr, "ripwire: {}\n", memguard::hardStopLine( phase ) );
+    stop.stopped = true;
+    stop.hard    = true;
+    stop.where   = std::string( phase );
     return true;
 }
 
+// The one line and exit 5 when the range form cannot answer at all: the stop (or the projection) that sent it to the
+// changed files, and why those did not answer either. Every stop recorded so far is answered for by this refusal.
+int refPairStopRefusal( const PhaseStop& stop, const RefPairDelta& refs, std::string_view why )
+{
+    using namespace rw;
+    memguard::answerStops();
+    DISCLOSE( Diagnostics::answerRefused, "--quality-delta=A..B: the full trees did not fit and the changed files did not answer either — exit 5, one stderr line" );
+    if( stop.stopped && stop.hard )
+    {
+        rw::emitTo( stderr, "ripwire: {}\n", memguard::hardStopLine( stop.where, std::string( why ) + "; " ) );
+    }
+    else if( stop.stopped )
+    {
+        rw::emitTo( stderr, "ripwire: the memory guard stopped the {} {} in the {}; --quality-delta=A..B cannot answer from a partial index, and {} — {}\n",
+                    memguard::phaseName( stop.soft.phase ), memguard::stopCause( stop.soft ), stop.where, why, memguard::kOverride );
+    }
+    else
+    {
+        rw::emitTo( stderr, "ripwire: memory limit {} ({}): the target phase of --quality-delta=A..B was projected to need ~{}; {}; stopped cleanly without an answer — {}\n",
+                    memguard::limitSpelling( memguard::limits().hardBytes ), memguard::limitSourceClause(), memguard::limitSpelling( refs.needBytes ), why, memguard::kOverride );
+    }
+    return 5;
+}
+
 // #387: the base commit lives only in this function. Its snapshot is everything the comparison needs from it, so its
-// index, graph and temp dir are released on return, before the target tree is materialized. Exit code on a refusal.
-std::optional<int> scoreBaseCommit( const std::string& root, const std::string& sha, const rw::Config& cfg, rw::quality::Snapshot& out )
+// index, graph and temp dir are released on return, before the target tree is materialized. qd-memory-degrade: it also
+// keeps the base tree's C-family macro NAMES (defect-shape's one tree-wide input, names only) and reads this process's
+// peak at the end of the ingest, for the projection. Exit code on an environment failure; a memory stop goes to `stop`.
+std::optional<int> scoreBaseCommit( const std::string& root, const std::string& sha, const rw::Config& cfg, RefPairDelta& refs )
 {
     using namespace rw;
     quality::TmpTreeGuard      baseGuard;
     quality::RefTree           baseTree;
     const quality::RefTreeLoad load = quality::loadRefTree( root, sha, cfg.excludes, cfg.maxFileBytes, "qdpair-base", baseGuard, baseTree );
-    if( load != quality::RefTreeLoad::Loaded )
+    refs.ingestPeak = os::mem_footprint_peak();
+    if( const std::optional<int> failed = recordLoad( load, baseTree, sha, "base commit", refs.stop ) )
     {
-        return refPairLoadRefusal( load, baseTree, sha, "base" );
+        return failed;
     }
-    if( refPairOverHardLimit( "graph of the base commit" ) )
+    if( refs.stop.stopped || hardLineStops( "graph of the base commit", refs.stop ) )
     {
-        return 5;
+        return std::nullopt;
     }
-    out = quality::computeSnapshot( baseTree.ing, baseTree.g, baseTree.root );
-    if( refPairOverHardLimit( "snapshot of the base commit" ) )
-    {
-        return 5;
-    }
+    refs.baseSnapshot   = quality::computeSnapshot( baseTree.ing, baseTree.g, baseTree.root, nullptr, { refs.selected } );
+    refs.baseMacros     = quality::cFamilyMacroNames( baseTree.ing );
+    refs.haveBaseMacros = true;
+    (void)hardLineStops( "snapshot of the base commit", refs.stop );
     return std::nullopt;
 }
 
@@ -156,29 +213,202 @@ std::optional<int> loadTargetCommit( const std::string& root, const std::string&
 {
     using namespace rw;
     const quality::RefTreeLoad load = quality::loadRefTree( root, sha, cfg.excludes, cfg.maxFileBytes, "qdpair-target", out.targetGuard, out.targetTree );
-    if( load != quality::RefTreeLoad::Loaded )
+    if( const std::optional<int> failed = recordLoad( load, out.targetTree, sha, "target commit", out.stop ) )
     {
-        return refPairLoadRefusal( load, out.targetTree, sha, "target" );
+        return failed;
     }
-    if( refPairOverHardLimit( "graph of the target commit" ) )
+    if( out.stop.stopped || hardLineStops( "graph of the target commit", out.stop ) )
     {
-        return 5;
+        return std::nullopt;
     }
     if( out.sameRef )
     {
-        out.baseSnapshot = quality::computeSnapshot( out.targetTree.ing, out.targetTree.g, out.targetTree.root );
-        if( refPairOverHardLimit( "snapshot of the base commit" ) )
-        {
-            return 5;
-        }
+        out.baseSnapshot = quality::computeSnapshot( out.targetTree.ing, out.targetTree.g, out.targetTree.root, nullptr, { out.selected } );
+        (void)hardLineStops( "snapshot of the base commit", out.stop );
     }
     return std::nullopt;
+}
+
+// review C1: the degraded line's last clause — the kinds memory skipped, or, when it skipped none (a selector of kinds
+// the changed files decide), that every selected kind ran: never an empty "skipped" list
+std::string memorySkippedClause( rw::quality::KindMask memorySkipped )
+{
+    return memorySkipped != 0 ? "; skipped " + rw::quality::kindList( memorySkipped, ", " ) : std::string( "; every selected kind ran" );
+}
+
+// qd-memory-degrade — the stderr line of a degraded answer: the limit, why the full trees were not read, the kinds it
+// skipped, the replay. One line, beside the gating line, so a caller reading only $? and stderr knows the answer is partial.
+std::string degradedStderrLine( const RefPairDelta& refs, rw::quality::KindMask memorySkipped, std::string_view kindsNext )
+{
+    using namespace rw;
+    const std::uint64_t limit = memguard::limits().hardBytes;
+    std::string why = refs.memoryStop.empty()
+                    ? "the target phase was projected to need ~" + memguard::limitSpelling( refs.needBytes )
+                    : refs.memoryStop == "hard" ? "the memory limit was reached during the " + refs.stopWhere + "; the full need was not measured"
+                    : "the memory guard stopped the " + refs.stopWhere + ( refs.memoryPressure ? " under critical system memory pressure" : "" ) + "; the full need was not measured";
+    std::string line = "memory limit " + ( limit == 0 ? std::string( "unknown" ) : memguard::limitSpelling( limit ) ) + " (" + std::string( memguard::limitSourceClause() )
+                     + "): --quality-delta=A..B answered from the changed files only (" + why + ")" + memorySkippedClause( memorySkipped );
+    if( !kindsNext.empty() )
+    {
+        line += " — run them with " + std::string( kindsNext );
+        if( refs.memoryStop.empty() )
+        {
+            const std::uint64_t machine = memguard::machineMemoryBytes();
+            if( machine != 0 && refs.needBytes >= machine )
+            {
+                line += " (more than this machine's " + memguard::limitSpelling( machine ) + ": recoverable only on a larger machine)";
+            }
+        }
+        else
+        {
+            line += " (its --max-memory is a guess, twice the limit: no need was measured)";
+        }
+    }
+    return line;
+}
+
+// qd-memory-degrade — THE CHANGED-FILES ANSWER. The full trees are gone (released, or never read); both commits' changed
+// files are ingested alone (never through a cache) and the base snapshot is taken from the base's. A kind runs here only
+// if its rows are decided by those files: the LOCAL kinds always, defect-shape when the changed files define the same
+// C-family macro names on both sides (then the tree's set is unchanged) and either the base's whole set was read or no
+// changed file is C++ (the only scanner that reads it). Exit code on a refusal; nullopt when `out` is ready.
+std::optional<int> loadChangedFiles( const std::string& root, const rw::Config& cfg, RefPairDelta& out, const PhaseStop& stop )
+{
+    using namespace rw;
+    if( cfg.qualityAck )
+    {
+        return refPairStopRefusal( stop, out, "--quality-ack needs every kind's rows, so nothing was acked (the ledger is untouched)" );
+    }
+    out.kinds = out.selected & static_cast<quality::KindMask>( ~quality::kWholeTreeKinds );
+    if( out.kinds == 0 )
+    {
+        return refPairStopRefusal( stop, out, "the selected kinds are whole-tree kinds, which the changed files cannot decide" );
+    }
+    if( memguard::overHardLimit() )
+    {
+        // the footprint still held after the full tree was released (on macOS the allocator keeps its pages): nothing of
+        // the changed files was ingested, so the line says they were not tried — never that they did not fit
+        return refPairStopRefusal( stop, out, "this process still held more than the limit after releasing the full tree, so the changed files were not tried" );
+    }
+    quality::ChangedFiles changed = quality::changedFilesBetween( root, out.baseSha, out.targetSha, !cfg.qualityScope.empty() );
+    if( !changed.ok )
+    {
+        memguard::answerStops();
+        rw::emitTo( stderr, "ripwire: --quality-delta={}..{}: the full trees did not fit the memory limit, and git could not list the changed files to answer from\n",
+                    out.baseSha.c_str(), out.targetSha.c_str() );
+        return 1;
+    }
+    if( !changed.refusal.empty() )
+    {
+        return refPairStopRefusal( stop, out, "the changed files cannot stand in for the trees: " + changed.refusal );
+    }
+    PhaseStop             subsetStop;
+    quality::TmpTreeGuard baseGuard;
+    quality::RefTree      baseTree;
+    quality::RefTreeLoad  load = quality::loadRefSubset( root, out.baseSha, changed.base, cfg.excludes, cfg.maxFileBytes, "qdpair-base-changed", baseGuard, baseTree );
+    if( const std::optional<int> failed = recordLoad( load, baseTree, out.baseSha, "changed files of the base commit", subsetStop ) )
+    {
+        return failed;
+    }
+    load = subsetStop.stopped ? quality::RefTreeLoad::Loaded
+                              : quality::loadRefSubset( root, out.targetSha, changed.target, cfg.excludes, cfg.maxFileBytes, "qdpair-target-changed", out.targetGuard, out.targetTree );
+    if( const std::optional<int> failed = recordLoad( load, out.targetTree, out.targetSha, "changed files of the target commit", subsetStop ) )
+    {
+        return failed;
+    }
+    if( subsetStop.stopped )
+    {
+        return refPairStopRefusal( subsetStop, out, "the changed files alone were cut too" );
+    }
+    // defect-shape's one tree-wide input (see the header comment of this function)
+    const std::vector<std::string> baseChanged   = quality::cFamilyMacroNames( baseTree.ing );
+    const std::vector<std::string> targetChanged = quality::cFamilyMacroNames( out.targetTree.ing );
+    const auto anyCpp = []( const IngestResult& ing ) { return std::any_of( ing.files.begin(), ing.files.end(), []( const std::string& f ) { return langFacts( langOfPath( f ) ).defectShapeNeedsMacroSet; } ); };
+    if( baseChanged != targetChanged || ( !out.haveBaseMacros && ( anyCpp( baseTree.ing ) || anyCpp( out.targetTree.ing ) ) ) )
+    {
+        out.kinds &= static_cast<quality::KindMask>( ~quality::kindBit( "defect-shape" ) );
+    }
+    if( out.kinds == 0 )   // the selection was defect-shape (with whole-tree kinds) and the changed files cannot decide it: never an empty pass
+    {
+        return refPairStopRefusal( stop, out, "the selected kinds need the whole tree (defect-shape too: the changed files' C-family macro names differ, or a C++ file changed without the base's whole set)" );
+    }
+    out.degraded     = true;
+    out.baseSnapshot = quality::computeSnapshot( baseTree.ing, baseTree.g, baseTree.root, nullptr, { out.kinds, out.macroOverride() } );
+    if( !cfg.qualityScope.empty() )
+    {
+        out.targetFiles = std::move( changed.targetTree );
+    }
+    out.memoryStop     = !stop.stopped ? std::string() : stop.hard ? std::string( "hard" ) : std::string( memguard::phaseName( stop.soft.phase ) );
+    out.memoryPressure = stop.stopped && !stop.hard && stop.soft.byPressure;
+    out.stopWhere      = stop.stopped ? ( stop.hard ? stop.where : std::string( memguard::phaseName( stop.soft.phase ) ) + " of the " + stop.where.substr( stop.where.find( "the " ) + 4 ) ) : std::string();
+    memguard::answerStops();   // the degraded answer answers for the stop that sent it here
+    return std::nullopt;
+}
+
+// qd-memory-degrade: the two full trees, as #387 reads them — the base scored and released, then the target — with the
+// projection between them. A stop in either is recorded in out.stop; `projectedNoFit` says the projection chose the
+// changed files before the target was read. The projection is asked only when the changed files could answer a selected
+// kind for certain: a selection of whole-tree kinds (with or without defect-shape, which the changed files may not
+// decide) gains nothing from pre-empting the full attempt — that is the replay kinds_next= names, and it runs in full,
+// refused only by a real stop. Exit code on an environment failure only.
+std::optional<int> loadFullTrees( const std::string& root, const rw::Config& cfg, RefPairDelta& out, bool& projectedNoFit )
+{
+    using namespace rw;
+    // --quality-ack needs every kind's rows, which the changed files never give: like a whole-tree selection it is never
+    // pre-empted by the projection, and only a real stop refuses it (review C2: base acked within the cap, head refused)
+    const quality::KindMask certainLocal = cfg.qualityAck ? quality::KindMask( 0 )
+                                         : static_cast<quality::KindMask>( out.selected & ~( quality::kWholeTreeKinds | quality::kindBit( "defect-shape" ) ) );
+    if( !out.sameRef )
+    {
+        const std::uint64_t before = os::mem_footprint();
+        if( const std::optional<int> failed = scoreBaseCommit( root, out.baseSha, cfg, out ) )
+        {
+            return failed;
+        }
+        // #387: the base tree's index, graph and temp dir were released when scoreBaseCommit returned.
+        if( out.stop.stopped || hardLineStops( "base commit's snapshot, with its index released", out.stop ) || certainLocal == 0 )
+        {
+            return out.stop.stopped ? std::nullopt : loadTargetCommit( root, out.targetSha, cfg, out );
+        }
+        const std::uint64_t              basePeak = os::mem_footprint_peak();
+        const std::uint64_t              after    = memguard::measuredFootprint();
+        const memguard::TargetProjection proj     = memguard::projectTargetPhase( before, out.ingestPeak, basePeak, after );
+        out.needBytes       = proj.needBytes;
+        out.ingestNeedBytes = proj.ingestNeedBytes;
+        projectedNoFit = !proj.fits;
+        if( std::getenv( "RIPWIRE_STATS" ) )   // the projection's own readings, the calibration's instrument (kProjectionScalePct)
+        {
+            rw::emitTo( stderr, "ripwire: memory-projection before={} ingest_peak={} base_peak={} after={} need={} measured={} fits={}\n",
+                        memguard::limitSpelling( before ), memguard::limitSpelling( out.ingestPeak ), memguard::limitSpelling( basePeak ),
+                        memguard::limitSpelling( after ), memguard::limitSpelling( proj.needBytes ), proj.measured ? 1 : 0, proj.fits ? 1 : 0 );
+        }
+        if( projectedNoFit )
+        {
+            return std::nullopt;
+        }
+    }
+    return loadTargetCommit( root, out.targetSha, cfg, out );
+}
+
+// A cut target is never scored: its index, graph and temp dir go before the changed files are read, and so does the full
+// base snapshot (the changed files' own base snapshot replaces it).
+void releaseFullTrees( RefPairDelta& out )
+{
+    out.targetTree   = {};
+    out.baseSnapshot = {};
+    rw::quality::TmpTreeGuard dropped;
+    std::swap( dropped.p, out.targetGuard.p );   // its destructor removes the cut tree's temp dir now
 }
 
 // Resolve the spec and materialize both sides. Returns an EXIT CODE on any refusal or environment failure
 // (already reported on stderr), or nullopt when `out` is ready to compare. Splitting user error from
 // environment failure is the same line --dmm's handler draws: a revision that does not resolve is a typo the
 // caller can fix, everything else is the machine.
+//
+// qd-memory-degrade — THE LADDER. Full trees first, exactly as before, so a run that fits is the run it always was. A
+// memory-guard stop in either commit's full tree (a soft crawl/parse stop or the hard line), or a projection after the
+// base phase that says the target phase will not fit, releases what was loaded and answers from both commits' changed
+// files instead (loadChangedFiles); exit 5 only when those do not fit or cannot stand in for the trees.
 std::optional<int> loadRefPairDelta( const std::string& root, std::string_view spec, const rw::Config& cfg, RefPairDelta& out )
 {
     using namespace rw;
@@ -219,25 +449,25 @@ std::optional<int> loadRefPairDelta( const std::string& root, std::string_view s
         rw::emitRaw( stderr, "ripwire: --quality-delta needs TWO commits (A..B); use the bare --quality-delta for the working tree\n" );
         return 1;
     }
+    out.baseSha   = ref.baseSha;
+    out.targetSha = ref.targetSha;
+    out.kinds     = out.selected;
 
     // DISTINCT tags — see quality::loadRefTree's header. The base tree is gone before the target is extracted, but
     // a shared tag would still let one side's extraction delete the other's directory if that order ever changed.
     out.sameRef = ( ref.baseSha == ref.targetSha );
-    if( !out.sameRef )
+    bool projectedNoFit = false;
+    if( const std::optional<int> failed = loadFullTrees( root, cfg, out, projectedNoFit ) )
     {
-        if( const std::optional<int> refused = scoreBaseCommit( root, ref.baseSha, cfg, out.baseSnapshot ) )
+        return failed;
+    }
+    if( out.stop.stopped || projectedNoFit )
+    {
+        releaseFullTrees( out );
+        if( const std::optional<int> refused = loadChangedFiles( root, cfg, out, out.stop ) )
         {
             return refused;
         }
-        // #387: the base tree's index, graph and temp dir were released when scoreBaseCommit returned.
-        if( refPairOverHardLimit( "base commit's snapshot, with its index released" ) )
-        {
-            return 5;
-        }
-    }
-    if( const std::optional<int> refused = loadTargetCommit( root, ref.targetSha, cfg, out ) )
-    {
-        return refused;
     }
 
     // Both values are bare 40-char object names straight out of `rev-parse --verify` (resolveRefSpec accepts
@@ -280,6 +510,7 @@ struct DeltaBasis
     std::size_t                                         valueRefExcluded      = 0;   // dead-code exemption: held as a VALUE (valuerefindex.h)
     std::size_t                                         apiNewSurface         = 0;   // Q-DIAL-4: new PUBLIC symbols this change added — the count that replaced one never-gating row each
     std::size_t acksBadLines = 0;   // 2026-09-06: .ripwire_quality_acks lines skipped as unparseable (disclosed on the root)
+    bool        ackHealingSkipped = false;   // qd-memory-degrade: a changed-files answer with a non-empty ledger (also_skipped ack-healing)
     // #228: WHICH basis produced baseSel.snapshot when the marker is one of the git-HEAD family, and WHY when
     // the fast one was refused for a reason the caller can act on. nullptr = the attribute is absent, which is
     // the ordinary archived comparison every git-HEAD marker has always meant. See quality::HeadBasis.
@@ -290,6 +521,33 @@ struct DeltaBasis
     // and never looks at it, which keeps the two runs' reported findings identical.
     std::vector<rw::quality::CloneIdiomFact> cloneIdioms;
 };
+
+// The REF-PAIR floor's comparison, once loadRefPairDelta has both sides: the base snapshot is the floor, tree B the judged
+// tree, the ledger healed against it, the delta taken.
+void refPairBasis( const rw::Config& cfg, const std::string& root, RefPairDelta& refs, DeltaBasis& out )
+{
+    using namespace rw;
+    out.baseSel.snapshot = std::move( refs.baseSnapshot );
+    out.baseSel.marker   = "ref-pair";
+    out.deltaRoot        = refs.target().root;
+    // R1 IDENTITY. The SPAN is what makes this honest here: both trees are materialized OUT of the repo
+    // into temp dirs, so asking them about renames answers "not a git repo" — the renames are recorded in
+    // the REAL repo, over exactly the range this comparison is about. `root` (the repo) supplies the
+    // record; `refs.rangeSpan` scopes it to the pair. Everything else is identical to the working-tree
+    // form, which is the point of having one healIdentity.
+    // qd-memory-degrade: over the changed files the two tree-wide rescues are skipped (healIdentity's header) — said
+    // as also_skipped ack-healing when the ledger holds any row they could have re-filed. The clone-idiom export is
+    // asked for only where it is read (the --quality-ack backfill), so a kind selection without the clone kinds skips
+    // the clone passes.
+    out.acks              = quality::readAckRecords( quality::acksPath( root ) );
+    out.ackHealingSkipped = refs.degraded && !out.acks.empty();
+    out.healing = quality::healIdentity( out.baseSel.snapshot, out.acks, refs.target().ing, refs.target().g,
+                                         out.deltaRoot, root, cfg.qualityAck, refs.rangeSpan, /*treeWideRescues=*/!refs.degraded );
+    out.regs    = quality::computeDelta( refs.target().ing, refs.target().g, out.baseSel.snapshot,
+                                         out.deltaRoot, cfg.excludes, cfg.maxFileBytes, &out.registerMacroExcluded, &out.apiNewSurface,
+                                         cfg.qualityAck ? &out.cloneIdioms : nullptr, &out.declinedCallExcluded, &out.valueRefExcluded,
+                                         quality::KindScope{ refs.kinds, refs.macroOverride() } );
+}
 
 // Returns an EXIT CODE when there is nothing to compare against (already reported), nullopt when `out` holds
 // a usable comparison. `refs` is the CALLER's because it owns the materialized trees' teardown, and those
@@ -312,20 +570,7 @@ std::optional<int> resolveDeltaBasis( const MainDispatch& d, const std::string& 
         // sidecar's whole contract is "pinned at the current HEAD", which says nothing about a pair of
         // arbitrary commits — and the bare form's self-heal deleting a user's pinned floor as a side effect
         // of a wave-level measurement would be a side effect nobody asked for.
-        out.baseSel.snapshot = std::move( refs.baseSnapshot );
-        out.baseSel.marker   = "ref-pair";
-        out.deltaRoot        = refs.target().root;
-        // R1 IDENTITY. The SPAN is what makes this honest here: both trees are materialized OUT of the repo
-        // into temp dirs, so asking them about renames answers "not a git repo" — the renames are recorded in
-        // the REAL repo, over exactly the range this comparison is about. `root` (the repo) supplies the
-        // record; `refs.rangeSpan` scopes it to the pair. Everything else is identical to the working-tree
-        // form, which is the point of having one healIdentity.
-        out.acks    = quality::readAckRecords( quality::acksPath( root ) );
-        out.healing = quality::healIdentity( out.baseSel.snapshot, out.acks, refs.target().ing, refs.target().g,
-                                             out.deltaRoot, root, cfg.qualityAck, refs.rangeSpan );
-        out.regs    = quality::computeDelta( refs.target().ing, refs.target().g, out.baseSel.snapshot,
-                                             out.deltaRoot, cfg.excludes, cfg.maxFileBytes, &out.registerMacroExcluded, &out.apiNewSurface,
-                                             &out.cloneIdioms, &out.declinedCallExcluded, &out.valueRefExcluded );
+        refPairBasis( cfg, root, refs, out );
         return std::nullopt;
     }
 
@@ -472,8 +717,11 @@ std::optional<int> expandScopeDiff( rw::quality::Scope& scope, bool refPair, con
 // that includes only ingest.h. Returns an exit code (already reported on stderr) or nullopt when the scope
 // is usable. `judged` is the tree the findings were taken from — the working tree, or tree B in the
 // ref-pair form — because "names nothing indexed" has to be asked of the corpus that was actually measured.
+// `commitFiles` (qd-memory-degrade): a changed-files answer indexed only the changed files, so a scope naming an UNCHANGED
+// file is not a typo there — the test reads the target commit's whole file list instead (its root-relative paths).
 std::optional<int> refuseUnusableScope( const rw::Config& cfg, const rw::quality::Scope& scope,
-                                        const rw::IngestResult& judged, std::string_view deltaRoot )
+                                        const rw::IngestResult& judged, std::string_view deltaRoot,
+                                        const std::vector<std::string>* commitFiles = nullptr )
 {
     if( !scope.active() )
     {
@@ -498,6 +746,10 @@ std::optional<int> refuseUnusableScope( const rw::Config& cfg, const rw::quality
         {
             return std::nullopt;
         }
+    }
+    if( commitFiles != nullptr && std::any_of( commitFiles->begin(), commitFiles->end(), [ & ]( const std::string& p ) { return scope.matchesPath( p ); } ) )
+    {
+        return std::nullopt;
     }
     rw::emitTo( stderr, "ripwire: --scope={} matches no indexed path — an exit 0 under a scope that owns nothing is a failure, not a clean tree\n"
                           "  (patterns are matched ROOT-RELATIVE, the same spelling p= prints: --scope=src or --scope=src/quality.h, not an absolute path)\n", std::string_view( cfg.qualityScope.data(), cfg.qualityScope.size() ) );
@@ -920,7 +1172,44 @@ struct QualityDeltaLegendParts
     bool                                          anyDeclinedCallExcluded = false;   // declined-call-excluded= is on the root
     bool                                          anyValueRefExcluded     = false;   // value-ref-excluded= is on the root
     bool                                          staleCollapsed          = false;   // idea #11: stale_by_kind=/stale_next= are on the root
+    bool                                          kindsSkipped            = false;   // qd-memory-degrade: kinds_skipped=/skipped_why= are on the root
+    bool                                          degraded                = false;   // ... ingest_scope= memory_limit= memory_need= also_skipped= kinds_next=
+    bool                                          memoryStopped           = false;   // ... memory_stop= (and memory_pressure= when it was pressure)
+    bool                                          memoryPeak              = false;   // ... memory_peak= (any range answer whose peak went over the limit)
+    bool                                          memorySkippedShare      = false;   // ... memory_skipped= (skipped_why="selector,memory")
 };
+
+// qd-memory-degrade — present-only: each rides only with the attributes it defines. No double dash anywhere in them
+// (they sit inside the legend comment): a flag is named by its words, never by its spelling.
+inline constexpr const char* kQdKindsSkippedLegend =
+    "kinds_skipped= names the kinds this answer did NOT run (alphabetical): no row of them is in this document, which is not a "
+    "statement that none exists, and regressions=, gating= and every count cover only the kinds that ran; a count only a "
+    "skipped kind feeds (register-macro-excluded=) is absent, never 0. skipped_why=\"selector\": the caller chose the kinds "
+    "(the kinds selector), and stale acks were judged for the chosen kinds only; skipped_why=\"memory\": see ingest_scope=. ";
+inline constexpr const char* kQdMemorySkippedLegend =
+    "skipped_why=\"selector,memory\": both; memory_skipped= names memory's share (what kinds_next= runs), the rest the caller left out. ";
+inline constexpr const char* kQdDegradedLegend =
+    "ingest_scope=\"changed-files\": the two full trees did not fit the memory guard's limit (memory_limit=, the max-memory value "
+    "that sets it), so both commits' CHANGED files were ingested alone and the kinds those files decide ran with the same code and "
+    "bars as a full answer: their rows are the full answer's rows of those kinds, and the skipped kinds can only ADD rows. "
+    "memory_need= is the full answer's projected need, from the base commit's measured peak (a run within that margin of the "
+    "limit may be answered this way though it would have fit), or \"unmeasured\" after a stop. also_skipped= names the "
+    "whole-answer facts not computed because they read the whole target tree: config-warnings (the .ripwire_config check), "
+    "stale-acks (no stale= and no stale sa rows), ack-healing (acks matched by their recorded key only: a row that only a "
+    "legacy-scheme re-key or a content-id match would hide in the full answer is shown here, and can gate). kinds_next= is the "
+    "call that runs exactly the skipped kinds over the same two commits, at a max-memory just above memory_need= (after a stop: "
+    "twice the limit, a guess, since no need was measured); it carries no output flag (rows only). EXIT 2 when a row of a kind that ran gates (final: the skipped kinds "
+    "only add rows, though with ack-healing skipped that row may be one an identity-healed ack hides in the full answer); "
+    "otherwise EXIT 6, a partial answer with no gating row, never 0 — even when every selected kind ran, since the also_skipped= "
+    "facts are still missing. ";
+inline constexpr const char* kQdMemoryStopLegend =
+    "memory_stop= names the guard's stop that sent this answer to the changed files: crawl (the crawl line, an eighth of the "
+    "limit grown) or parse (half the limit) is a soft line, memory_pressure=1 when the OS pressure signal stopped it instead, "
+    "hard is the limit itself; a soft stop does not show the full need exceeds the limit. ";
+inline constexpr const char* kQdMemoryPeakLegend =
+    "memory_peak= is this process's peak footprint when it went OVER the memory limit: the answer and its exit code are what "
+    "they would be without it (complete, or the changed-files answer ingest_scope= names), but the last stretch of the "
+    "comparison ran past the limit the guard holds between phases. ";
 
 // A DEFINITION IS EMITTED WHEN THE THING IT DEFINES IS IN THE DOCUMENT. Nothing is dropped and no limit is
 // softened: a reader can never meet an undefined name, because a name and its sentence appear together or
@@ -1050,6 +1339,26 @@ inline void emitQualityDeltaLegend( const QualityDeltaLegendParts& p, std::FILE*
     if( p.anyForeignAck )
     {
         std::fputs( kForeignAcksLegend, out );
+    }
+    if( p.kindsSkipped )
+    {
+        std::fputs( kQdKindsSkippedLegend, out );
+    }
+    if( p.degraded )
+    {
+        std::fputs( kQdDegradedLegend, out );
+    }
+    if( p.memorySkippedShare )
+    {
+        std::fputs( kQdMemorySkippedLegend, out );
+    }
+    if( p.memoryStopped )
+    {
+        std::fputs( kQdMemoryStopLegend, out );
+    }
+    if( p.memoryPeak )
+    {
+        std::fputs( kQdMemoryPeakLegend, out );
     }
     if( p.staleCollapsed )
     {
@@ -1241,6 +1550,167 @@ int runQualityBaselinePin( const MainDispatch& d, const std::string& baselineFil
 // branches, one of which was 298 lines. That one body is now runQualityDelta below; the residual
 // runQualityViews keeps only --dead-code. ONE extraction, verbatim: the 298-line body is unsplit, because
 // its interior is a sequential pipeline over shared locals, not independent arms.
+// qd-memory-degrade: --quality-kinds=K[,K] (range form only; cli.h refuses it elsewhere) — the kinds to run. The vocabulary
+// is quality.h's, so an unknown name is refused here, before any tree is read. nullopt when absent or valid.
+std::optional<int> applyKindSelector( const rw::Config& cfg, RefPairDelta& refs )
+{
+    if( cfg.qualityKinds.empty() )
+    {
+        return std::nullopt;
+    }
+    std::string bad;
+    refs.selected = rw::quality::parseKindList( cfg.qualityKinds, bad );
+    if( refs.selected != 0 )
+    {
+        return std::nullopt;
+    }
+    rw::emitTo( stderr, "ripwire: --quality-kinds: '{}' is not a kind — name one or more of: {}\n", bad, rw::quality::kindList( rw::quality::kAllKinds, ", " ) );
+    return 1;
+}
+
+// L2 stale acks in the range form. A changed-files answer holds no whole target tree to check the ledger against, so it
+// judges none (also_skipped= says so). Under --quality-kinds only the selected kinds' acks are judged, against a snapshot of
+// those kinds: a dead-code ack read against a snapshot that never computed the dead set would read finding-gone, which is
+// false (R9). Every kind selected: the ledger and snapshot every range answer has always used.
+std::vector<rw::quality::StaleAck> refPairStaleAcks( const gtl::btree_map<std::string, rw::quality::AckRecord>& acks, const RefPairDelta& refs )
+{
+    using namespace rw;
+    if( refs.degraded )
+    {
+        return {};
+    }
+    if( refs.selected == quality::kAllKinds )
+    {
+        return quality::computeStaleAcks( acks, quality::computeSnapshot( refs.target().ing, refs.target().g, refs.target().root ) );
+    }
+    gtl::btree_map<std::string, quality::AckRecord> selectedAcks;
+    for( const auto& [ mapKey, rec ] : acks )
+    {
+        if( quality::kindSelected( refs.selected, std::string_view( rec.kind ).substr( 0, rec.kind.find( ':' ) ) ) )   // the kind, without an origin facet
+        {
+            selectedAcks.emplace( mapKey, rec );
+        }
+    }
+    return selectedAcks.empty() ? std::vector<quality::StaleAck>{}
+                                : quality::computeStaleAcks( selectedAcks, quality::computeSnapshot( refs.target().ing, refs.target().g, refs.target().root, nullptr, { refs.selected } ) );
+}
+
+// qd-memory-degrade — what an answer that did not run every kind says about it, built ONCE for both emitters (the
+// identityDisclosure rule: the two surfaces cannot disclose different things). Empty strings on a full answer, which then
+// keeps every byte it had. kindsNext is the replay of the kinds memory skipped (empty when none).
+struct KindsDisclosure
+{
+    std::string           xml, json, kindsNext;
+    rw::quality::KindMask memorySkipped = 0;
+    std::uint64_t         peakOver      = 0;   // memory_peak=: the peak, when it went over the limit (0 = absent)
+};
+KindsDisclosure kindsDisclosure( const rw::Config& cfg, const RefPairDelta& refs, const DeltaBasis& basis, bool refPair )
+{
+    using namespace rw;
+    KindsDisclosure out;
+    if( !refPair )
+    {
+        return out;
+    }
+    const auto add = [ & ]( std::string_view name, const std::string& value, bool list )
+    {
+        out.xml += " " + std::string( name ) + "=\"" + value + "\"";
+        if( !list )
+        {
+            out.json += ",\"" + std::string( name ) + "\":\"" + rw::jsonesc::escapeMcp( value ) + "\"";
+            return;
+        }
+        out.json += ",\"" + std::string( name ) + "\":[";
+        for( std::size_t at = 0; at <= value.size(); )
+        {
+            const std::size_t comma = std::min( value.find( ',', at ), value.size() );
+            out.json += ( at == 0 ? "\"" : ",\"" ) + value.substr( at, comma - at ) + "\"";
+            at = comma + 1;
+        }
+        out.json += "]";
+    };
+    // review C1: the kinds the CALLER left out and the kinds MEMORY skipped are two sets with two reasons — a selector's
+    // exclusions are never disclosed as memory cuts, and kinds_next= replays exactly the memory set
+    const quality::KindMask skipped  = static_cast<quality::KindMask>( quality::kAllKinds & ~refs.kinds );
+    const quality::KindMask selector = static_cast<quality::KindMask>( quality::kAllKinds & ~refs.selected );
+    if( refs.degraded )
+    {
+        out.memorySkipped = static_cast<quality::KindMask>( refs.selected & ~refs.kinds );
+    }
+    if( skipped != 0 )
+    {
+        add( "kinds_skipped", quality::kindList( skipped, "," ), true );
+        const bool both = out.memorySkipped != 0 && selector != 0;   // then memory_skipped= names memory's share
+        add( "skipped_why", both ? "selector,memory" : out.memorySkipped != 0 ? "memory" : "selector", false );
+        if( both )
+        {
+            add( "memory_skipped", quality::kindList( out.memorySkipped, "," ), true );
+        }
+    }
+    if( refs.degraded )
+    {
+        const std::uint64_t limit = memguard::limits().hardBytes;
+        add( "ingest_scope", "changed-files", false );
+        if( limit != 0 )
+        {
+            add( "memory_limit", memguard::limitSpelling( limit ), false );
+        }
+        if( !refs.memoryStop.empty() )
+        {
+            add( "memory_stop", refs.memoryStop, false );
+            if( refs.memoryPressure )
+            {
+                add( "memory_pressure", "1", false );
+            }
+        }
+        add( "memory_need", refs.memoryStop.empty() ? memguard::limitSpelling( refs.needBytes ) : std::string( "unmeasured" ), false );
+        add( "also_skipped", basis.ackHealingSkipped ? "ack-healing,config-warnings,stale-acks" : "config-warnings,stale-acks", true );
+        if( out.memorySkipped != 0 )
+        {
+            out.kindsNext = "--quality-delta=" + refs.baseSha + ".." + refs.targetSha + " --quality-kinds=" + quality::kindList( out.memorySkipped, "," );
+            if( limit != 0 )
+            {
+                out.kindsNext += " --max-memory=" + memguard::limitSpelling( memguard::replayLimitBytes( refs.needBytes, refs.ingestNeedBytes, refs.memoryStop.empty() ) );
+            }
+            if( !cfg.qualityScope.empty() )
+            {
+                out.kindsNext += " " + rw::nextFlag( "--scope=", cfg.qualityScope );   // the same partition, so the union keeps its gating
+            }
+            add( "kinds_next", out.kindsNext, false );
+        }
+    }
+    out.peakOver = memguard::peakOverLimit();
+    if( out.peakOver != 0 )
+    {
+        add( "memory_peak", memguard::limitSpelling( out.peakOver ), false );
+    }
+    return out;
+}
+
+// qd-memory-degrade: the stderr lines of kindsDisclosure's facts — the degraded answer's one line, and the peak's.
+void emitMemoryLines( const KindsDisclosure& kd, const RefPairDelta& refs )
+{
+    using namespace rw;
+    if( refs.degraded )
+    {
+        rw::emitTo( stderr, "ripwire: {}\n", degradedStderrLine( refs, kd.memorySkipped, kd.kindsNext ) );
+    }
+    if( kd.peakOver != 0 )
+    {
+        rw::emitTo( stderr, "ripwire: memory peak {} went over the {} limit ({}): {}, but its last stretch ran past the limit the guard holds "
+                            "between phases — {}\n",
+                    memguard::limitSpelling( kd.peakOver ), memguard::limitSpelling( memguard::limits().hardBytes ), memguard::limitSourceClause(),
+                    refs.degraded ? "the changed-files answer stands as stated above" : "the answer is complete", memguard::kOverride );
+    }
+}
+
+// The exit code every --quality-delta emitter returns: 2 when a row gates; a changed-files answer with no gating row is 6
+// (a partial answer, never a clean pass — the kinds it skipped could still gate); otherwise 0.
+int qualityDeltaExit( std::size_t gatingCount, const RefPairDelta& refs ) noexcept
+{
+    return gatingCount > 0 ? 2 : refs.degraded ? 6 : 0;
+}
+
 std::optional<int> runQualityDelta( const MainDispatch& d )
 {
     using namespace rw;
@@ -1317,6 +1787,10 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         const bool   refPair = !cfg.qualityDeltaRange.empty();
         RefPairDelta refs;
         DeltaBasis   basis;
+        if( const std::optional<int> refused = applyKindSelector( cfg, refs ) )
+        {
+            return refused;
+        }
         if( const std::optional<int> refused = resolveDeltaBasis( d, baselineFile, refs, basis ) )
         {
             return refused;
@@ -1334,7 +1808,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         {
             return refused;
         }
-        if( const std::optional<int> refused = refuseUnusableScope( cfg, scope, judged, deltaRoot ) )
+        if( const std::optional<int> refused = refuseUnusableScope( cfg, scope, judged, deltaRoot, refs.scopeFiles() ) )
         {
             return refused;
         }
@@ -1547,10 +2021,11 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         // R-I: "the CURRENT tree" is the JUDGED tree, which in the ref-pair form is tree B — checking the
         // ledger against the working tree there would report acks as stale because of edits that have nothing
         // to do with the comparison being made.
+        // qd-memory-degrade: refPairStaleAcks owns the two range-form departures (a changed-files answer judges none; a
+        // kind selection judges its own kinds' acks only).
         const std::vector<quality::StaleAck> staleAcks = acks.empty() ? std::vector<quality::StaleAck>{}
-                                                         : quality::computeStaleAcks( acks, refPair
-                                                             ? quality::computeSnapshot( refs.target().ing, refs.target().g, refs.target().root )
-                                                             : quality::computeSnapshot( ing, g, cfg.rootPath ) );
+                                                         : refPair ? refPairStaleAcks( acks, refs )
+                                                         : quality::computeStaleAcks( acks, quality::computeSnapshot( ing, g, cfg.rootPath ) );
 
         // P1.4 — the <sa> family now carries THREE whys, and the third is counted SEPARATELY: stale= means
         // "this ack no longer applies", and a foreign ack applies fine — it is the SESSION that was wrong,
@@ -1610,8 +2085,16 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         // registerMacroConfigWarningAttr just above runQualityViews for why the stderr wording lives there).
         // #387: the inert-name test reads the JUDGED tree's index, which in the ref-pair form is tree B — the working tree
         // is not indexed there at all (runQualityDeltaRangeBeforeIngest).
-        const rw::quality::RegisterMacroConfigDiagnostics configDiag = rw::quality::diagnoseRegisterMacroConfig( judged, root );
+        // qd-memory-degrade: not over a changed-files index, which cannot tell an inert name from one the tree defines (also_skipped=)
+        const rw::quality::RegisterMacroConfigDiagnostics configDiag = refs.degraded ? rw::quality::RegisterMacroConfigDiagnostics{}
+                                                                                     : rw::quality::diagnoseRegisterMacroConfig( judged, root );
         const std::string configWarnAttr = registerMacroConfigWarningAttr( configDiag );
+        // qd-memory-degrade: the kinds this answer did not run, why, and the replay — plus the peak, read once now that the
+        // comparison is done (kindsDisclosure). Their stderr lines come first: an answer that is partial, or that ran past
+        // the limit, says so on the channel a human reads before anything else.
+        const KindsDisclosure kd = kindsDisclosure( cfg, refs, basis, refPair );
+        emitMemoryLines( kd, refs );
+        const bool deadRan = !refPair || quality::kindSelected( refs.kinds, "dead-code" );   // dead-code's side counts exist only when it ran
 
         // P2.5 — one stderr line NAMING the gating finding, in --token-budget's style ("ripwire: --token-budget
         // exceeded: est_tokens=… > budget=…"). stdout is the machine artifact and a caller that only checks
@@ -1679,11 +2162,14 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
                                             + ( basis.declinedCallExcluded == 0 ? std::string()   // the XML twin's declined-call-excluded=, absent at zero
                                               : ",\"declined-call-excluded\":" + std::to_string( basis.declinedCallExcluded ) )
                                             + rw::countFieldOrEmpty( "value-ref-excluded", basis.valueRefExcluded, /*json=*/true );
-            rw::emitTo( stdout, "{{\"baseline\":\"{}\",\"regressions\":{},\"minor\":{},\"acked\":{},\"stale\":{},"
-                         "\"preexisting-worse\":{},\"new-symbol\":{},\"gating\":{},\"register-macro-excluded\":{},\"api-new-surface\":{},\"at\":{}{}{}{}{}{}{},\"r\":[",
-                         jsonStr( baseMarkerJ ).c_str(), regs.size(), minorCount, ackedCount, staleAcks.size(),
-                         preexistingCount, newSymbolCount, gatingCount, basis.registerMacroExcluded, basis.apiNewSurface, atJsonJ.c_str(), refs.jsonAttrs.c_str(),
-                         identityJson.c_str(), scopeJson.c_str(), configWarnJson.c_str(), absorbedJson.c_str(), headBasisJson.c_str() );
+            // qd-memory-degrade: stale and register-macro-excluded are absent (never 0) when their pass did not run
+            const std::string staleJ = refs.degraded ? std::string() : ",\"stale\":" + std::to_string( staleAcks.size() );
+            const std::string rmeJ   = deadRan ? ",\"register-macro-excluded\":" + std::to_string( basis.registerMacroExcluded ) : std::string();
+            rw::emitTo( stdout, "{{\"baseline\":\"{}\",\"regressions\":{},\"minor\":{},\"acked\":{}{},"
+                         "\"preexisting-worse\":{},\"new-symbol\":{},\"gating\":{}{},\"api-new-surface\":{},\"at\":{}{}{}{}{}{}{}{},\"r\":[",
+                         jsonStr( baseMarkerJ ).c_str(), regs.size(), minorCount, ackedCount, staleJ,
+                         preexistingCount, newSymbolCount, gatingCount, rmeJ, basis.apiNewSurface, atJsonJ.c_str(), refs.jsonAttrs.c_str(),
+                         identityJson.c_str(), scopeJson.c_str(), configWarnJson.c_str(), absorbedJson.c_str(), headBasisJson.c_str(), kd.json );
             // P1: one row emitter, called for both halves of the scope partition — the disclosed rows carry
             // the identical key set, so nothing about a row changes by being someone else's. `gatingAllowed`
             // is the ONE difference: an out-of-scope row is not what the exit code fires on, so claiming
@@ -1761,7 +2247,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
             }
             std::fputs( quality::staleAcksJsonArray( saRows ).c_str(), stdout );   // L2 — "sa":[...], same taxonomy as the XML sa= rows below
             rw::emitRaw( stdout, "}" );
-            return gatingCount > 0 ? 2 : 0;
+            return qualityDeltaExit( gatingCount, refs );
         }
 
         std::vector<char> esc;
@@ -1900,7 +2386,9 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
             emitQualityDeltaLegend( { baseSel.marker, refPair, identityAttrs, !served.empty(), ackedCount > 0,
                                       basis.registerMacroExcluded > 0, configDiag.total() > 0, regs, outOfScope,
                                       scope.active() || !foreignAcks.empty(), !foreignAcks.empty(), baselineAbsorbed,
-                                      basis.headBasis, basis.declinedCallExcluded > 0, basis.valueRefExcluded > 0, collapse }, out );
+                                      basis.headBasis, basis.declinedCallExcluded > 0, basis.valueRefExcluded > 0, collapse,
+                                      refs.kinds != quality::kAllKinds, refs.degraded, !refs.memoryStop.empty(), kd.peakOver != 0,
+                                      kd.memorySkipped != 0 && refs.selected != quality::kAllKinds }, out );
             const char* baseMarker = baseSel.marker;    // R3: ditto — one seam decides staleness AND names it
             // 2026-09-06: what the sidecar readers skipped, on the root (absent means none) — see kQdBaseHeadUnreadable
             std::string sidecarHealthAttrs;
@@ -1912,14 +2400,17 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
             if( basis.declinedCallExcluded > 0 ) { sidecarHealthAttrs += " declined-call-excluded=\"" + std::to_string( basis.declinedCallExcluded ) + "\""; }
             sidecarHealthAttrs += rw::countAttrXmlOrEmpty( "value-ref-excluded", basis.valueRefExcluded );   // absent at zero, beside its sibling
             // at= anchors this regression list to the commit (+dirty state) it was computed against.
-            rw::emitTo( out, "<quality-delta baseline=\"{}\" regressions=\"{}\" minor=\"{}\" acked=\"{}\" stale=\"{}\" preexisting-worse=\"{}\" new-symbol=\"{}\" gating=\"{}\" register-macro-excluded=\"{}\" api-new-surface=\"{}\"{}{}{}{}{}{}{}>",
-                         baseMarker, regs.size(), minorCount, ackedCount, staleAcks.size(), preexistingCount, newSymbolCount, gatingCount, basis.registerMacroExcluded, basis.apiNewSurface,
+            // qd-memory-degrade: stale= and register-macro-excluded= are absent (never 0) when their pass did not run
+            const std::string staleX = refs.degraded ? std::string() : " stale=\"" + std::to_string( staleAcks.size() ) + "\"";
+            const std::string rmeX   = deadRan ? " register-macro-excluded=\"" + std::to_string( basis.registerMacroExcluded ) + "\"" : std::string();
+            rw::emitTo( out, "<quality-delta baseline=\"{}\" regressions=\"{}\" minor=\"{}\" acked=\"{}\"{} preexisting-worse=\"{}\" new-symbol=\"{}\" gating=\"{}\"{} api-new-surface=\"{}\"{}{}{}{}{}{}{}>",
+                         baseMarker, regs.size(), minorCount, ackedCount, staleX, preexistingCount, newSymbolCount, gatingCount, rmeX, basis.apiNewSurface,
                          // R-I: at= is OMITTED for the ref-pair form rather than stamped with the working tree's
                          // sha, which would anchor the list to a commit it was not computed from. base_ref= and
                          // target_ref= are the anchor there, and they carry FULL shas because a wave measurement
                          // gets quoted into handoffs where a 9-char prefix is one collision from unverifiable.
                          atAttrs.c_str(), refs.attrs.c_str(), identityAttrs.c_str(),
-                         scopeAttrs.c_str(), configWarnAttr.c_str(), baselineAbsorbedAttr.c_str(), ( sidecarHealthAttrs + ( collapse ? staleCollapseAttrs : std::string() ) ).c_str() );
+                         scopeAttrs.c_str(), configWarnAttr.c_str(), baselineAbsorbedAttr.c_str(), ( sidecarHealthAttrs + ( collapse ? staleCollapseAttrs : std::string() ) + kd.xml ).c_str() );
             for( const quality::Regression& r : regs )
             {
                 emitRow( out, r, /*gatingAllowed=*/true );
@@ -1961,7 +2452,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         if( !collapseStale )
         {
             emitDocument( stdout, /*collapse=*/false );
-            return gatingCount > 0 ? 2 : 0;
+            return qualityDeltaExit( gatingCount, refs );
         }
         const Rendered full   = renderToString( [ & ]( std::FILE* f ) { emitDocument( f, /*collapse=*/false ); } );
         const Rendered folded = renderToString( [ & ]( std::FILE* f ) { if( verdictOnly ) { emitVerdict( f ); } else { emitDocument( f, /*collapse=*/true ); } } );
@@ -1969,11 +2460,11 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         {
             // renderToString DISCLOSEd the failed buffer; the full document is the superset, written straight to stdout
             emitDocument( stdout, /*collapse=*/false );
-            return gatingCount > 0 ? 2 : 0;
+            return qualityDeltaExit( gatingCount, refs );
         }
         const std::string& chosen = foldPays( folded.text, full.text ) ? folded.text : full.text;   // compactlegend.h: the margin and why
         std::fwrite( chosen.data(), 1, chosen.size(), stdout );
-        return gatingCount > 0 ? 2 : 0;   // r26: only a PREEXISTING-worse AND major regression gates (== gating=)
+        return qualityDeltaExit( gatingCount, refs );   // r26: only a PREEXISTING-worse AND major regression gates (== gating=)
     }
     return std::nullopt;
 }

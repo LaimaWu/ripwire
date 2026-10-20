@@ -152,6 +152,10 @@ ALLOW = {
     "isDefinitionNotDeclaration": "read-only span comparison (model.h); no state — the predicate std::all_of walks above",
     "isFunctionLikeKind":        "read-only enum comparison (graph.h, a local lambda); no state — the F2 body-test scope guard",
     "any":                    "read-only member predicate (pathgaps.h PathSearchGaps::any: calls > 0); no state — the gap-cone postcondition",
+    "declinedCallsMadeBy":    "read-only sum of the sources' Graph::declinedOut counts (graph.h); no state — the <dc> site-record postconditions (lane declined-sites)",
+    "inertDeclinedMadeBy":    "read-only count of the sources among Graph::inertDeclinedCaller (graph.h); no state — the <dc> record postconditions with PR #380's inert quoted sites (train 28)",
+    "std::ranges::is_sorted": "read-only walk of the given range (graph.h rubyMainObjectMixins: the rows legoMainRowsOf binary-searches; lane ruby-pair)",
+    "has_value":              "read-only std::optional state test (verbs_grep.h: grepReadsIngest named its stop; lane grep-carrier)",
     "inCheckout":             "read-only member predicate (crossref.h WhereHit::inCheckout: fromWorktree || ref == \"HEAD\"); no state — labelJobRows' precondition that a parse job holds no checkout row",
 }
 # (T) ASSUMED-THEN-TESTED allowlist: "site -> reason", one line each. A site lands here only when the equality

@@ -112,8 +112,8 @@ struct Shape { int area() { return 0; } };
 struct Decoy
 {
     int pick( int n ) { return n; }
-    int peek( int n ) { auto other = make(); return other->peek( n ); }
-    int untypedLocal() { auto other = make(); return other->pick( 1 ); }
+    int peek( int n ) { auto other = unknownMake(); return other->peek( n ); }
+    int untypedLocal() { auto other = unknownMake(); return other->pick( 1 ); }
     int typedNoMethod( Shape& other ) { return other.pick( 1 ); }
     int typedLocal() { Target other; return other.pick( 1 ); }
 };
@@ -123,6 +123,10 @@ struct Wrapper
     int pick( int n ) { return n; }
     int forward( int n ) { return rep_->pick( n ); }
     int forwardOwned( int n ) { return owned_->pick( n ); }
+};
+struct Typed
+{
+    int viaCall() { auto other = make(); return other->pick( 1 ); }
 };
 EOF
 "$BIN" "$RFIX" --no-cache --pin-census="$TMP/recv.tsv" >/dev/null 2>&1
@@ -156,7 +160,14 @@ done
 [ "$rmiss" = 0 ] && ok "presence: all recvfix symbols indexed"
 
 # ── 5) an UNTYPED local receiver: no scope credit, so Decoy::pick no longer wins — the three same-file picks split.
+#       (Train 29 call-result typing: `auto other = make()` with an in-tree `Target* make()` is no longer untyped — the
+#       receiver takes make's declared result, arm 5b. Arms 5 and 8 keep their untyped premise through a factory this file
+#       does not define, `unknownMake()`.)
 expectSite "(5)" Decoy::untypedLocal pick "pick@1 pick@15 pick@6" split
+# ── 5b) the call-result twin: `auto other = make()` (Target* make()). C++ call-result typing is OFF (owner 2026-10-17, fix
+#       round 6: model.h callResultFamilyOf), so this is a FLOOR — untyped, as on base: the three same-file picks split.
+#       With the macro-aware C++ card it is `"pick@1" receiver-rule` again.
+expectSite "(5b)" Typed::viaCall pick "pick@1 pick@15 pick@6" split
 # ── 6) delegation through a member whose type Rule 2b cannot read (the measured dominant shape).
 expectSite "(6)" Wrapper::forward pick "pick@1 pick@15 pick@6" split
 # ── 6b) control: the member Rule 2b CAN read — a std smart pointer's pointee through `->` — is a narrow, not a split.

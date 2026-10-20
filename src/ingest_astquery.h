@@ -844,10 +844,12 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
     }
     bool                               anySpecs = false;
     bool                               anyWalk  = false;
+    bool                               allGroupsFiltered = !groups.empty();   // L7: every group names a mustContain literal
     for( const AstQueryGroup& group : groups )
     {
         anySpecs = anySpecs || ( group.specs != nullptr && !group.specs->empty() );
         anyWalk  = anyWalk  || ( group.walk != AstWalk::None );
+        allGroupsFiltered = allGroupsFiltered && !group.mustContain.empty();
     }
     // A walk group is work even with no spec anywhere: it needs the parse, not a compiled query.
     if( ( !anySpecs && !anyWalk ) || ing.files.empty() )
@@ -1110,6 +1112,11 @@ std::vector<std::vector<AstMatch>> astQueryGrouped( const IngestResult& ing, con
                     if( looksBinary( readBuf ) )
                     {
                         continue;
+                    }
+                    if( allGroupsFiltered && std::none_of( groups.begin(), groups.end(), [ & ]( const AstQueryGroup& gq )
+                                                           { return readBuf.find( gq.mustContain ) != std::string::npos; } ) )
+                    {
+                        continue;   // L7: no group's literal occurs in this file, so no group can match in it
                     }
                     if( ext == ".h" && looksObjC( readBuf ) )
                     {

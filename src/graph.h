@@ -20,11 +20,13 @@
 #include "smallvec.h"            // rw::SmallVec — THE ONE ALIAS (src/smallvec.h picks the implementation)
 #include "resolve.h"             // P2-D one-hop type narrowing (Rule 1: class membership) — applied before the name-based fallback
 #include "receiverevidence.h"    // FE-B: typed receivers RESOLVE; a call nothing proves keeps its rows marked via="name"
+#include "langfacts.h"           // langFacts(l): the per-language facts the resolver reads instead of a Lang:: compare
 #include "scipoverlay.h"         // SCIP precision overlay (data struct only; parser lives in scip.h)
 #include "pincensus.h"           // eval-only per-call-site decision census (--pin-census); inert unless armed
 #include "externalnames.h"       // Phase 5: the committed builtin/stdlib tables behind the external-name veto
 #include "infra/sortutil.h"      // radix edge sorting for large integer-key graph edge lists
 #include "clones.h"              // scanCodeTokens / CodeScanOptions — BuiltinMethodGate::namedBeyondDefinition's code-token count
+#include "infra/mdslug.h"        // mdSlugOf — bindMarkdownLinks matches a link slug to a heading
 #include "infra/namesplit.h"     // isIdentChar — identifierRunCount, the identifier runs inside a string annotation
 #include "docparse.h"            // detail::readWholeFile — resolveAtSeed reads the seed line's byte range off disk
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
@@ -45,6 +47,21 @@ namespace rw
 
 // ComposeEdge defined in model.h (so serialize.h can use it without including graph.h).
 
+// Which rule declined a call (Graph::declinedSiteKind): what a <dc> row's gate= says, and what train 29's interface-typed
+// dispatch rows (L6) will add a value to. One byte per declined call; the value is never ranked or counted, only read back.
+enum class DeclinedSiteKind : std::uint8_t
+{
+    Ladder,     // tier 3: two or more candidates, none in the caller's file or directory, no evidence chose one (no gate=)
+    Builtin,    // the builtin-method name gate (BuiltinMethodGate): gate="builtin"
+    Std,        // the standard-member gate (StdMemberGate; C++ and Rust rows): gate="std"
+    RubySide,   // Ruby: in reach of self's method lookup, but on the other side of self (class vs instance): gate="side"
+    RubyNew,    // Ruby: `new` on a class object, the reachable `initialize` definitions unpicked (no gate=; the row names `new`)
+    Iface,      // RESERVED for L6 (interface-typed dispatch rows); nothing writes it yet
+};
+// A declined call whose candidate list internDeclinedList could not store (its uint32 offset ceiling): the record keeps the
+// call, with no list (no cands=, and no callers row — declinedCallsNaming cannot count it either).
+inline constexpr std::uint32_t kNoDeclinedList = UINT32_MAX;
+
 struct Graph
 {
     sparseCsr<float>           inEdges;     // N×N, row = target's in-neighbours (for PageRank)
@@ -63,15 +80,21 @@ struct Graph
                                             //       the export (JS/TS); read, not chosen by name
                                             // Empty ⇒ no overlay, no FFI/import edge and nothing split: every edge
                                             // uniquely resolved, so the whole attribute is absent (omit-at-confident).
-    std::vector<std::uint8_t>  outNameOnly; // FE-B: per-out-edge HEDGE bit, parallel to outTargets — 1 = every call site that bound this
-                                            // edge did so by NAME ALONE (no receiver evidence: receiverevidence.h), rendered via="name"
-                                            // on every surface; 0 = at least one site proved it. Empty ⇒ no edge is name-only.
+    std::vector<std::uint8_t>  outNameOnly; // per-out-edge kind, parallel to outTargets. 0 = a call. 1 = every site bound this edge by
+                                            // NAME ALONE (receiverevidence.h), rendered via="name". 2 = a markdown link, rendered via="link".
+                                            // The high bit on a 2 marks anchor="missing" for the map writer. Empty ⇒ every edge is a plain call.
+    std::vector<std::uint8_t>  outAnchorMiss; // parallel to outTargets — 1 = that link edge named a heading the file does not have, so the
+                                            // target is the file node. Empty ⇒ no such edge. A link with no slug stays 0.
     std::size_t                scipDocsSeen = 0;   // # SCIP documents consumed (0 unless --scip); honesty summary
     std::size_t                scipEdgesPinned = 0;   // # (from,to) edges the SCIP index pinned; honesty summary
     std::vector<std::vector<NodeId>> implementors;   // base-class id → derived class ids (inheritance/Lego view)
     // lane lego-transitive fix 1: parallel to implementors — how each base→derived edge was BOUND (BaseBound). The direct rows
     // and every other reader keep reading implementors alone; only the --lego closure (legoImplementorClosure) walks this.
     std::vector<std::vector<std::uint8_t>> implementorBound;
+    // lane ruby-pair: the Ruby main object as an implementor — each top-level `include M` / `extend M` whose constant the
+    // tree opens (rubyMainObjectMixins), sorted by (base, fileId, line). Not in `implementors`: main is no symbol, so the
+    // graph's class readers (closure, CHA, ranks) never see it; only --lego's targeted answer lists it.
+    std::vector<RubyMainMixinRow> rubyMainMixins;
     std::vector<std::vector<NodeId>> mentions;       // code symbol id → markdown file-nodes that name it in a `backtick` (doc↔code)
     std::vector<std::uint32_t> ambOut;      // per-symbol: # outgoing calls that STILL resolved to MULTIPLE in-repo
                                             // defs AFTER canonical/narrow/locality resolution (the resolver could
@@ -136,21 +159,42 @@ struct Graph
     // stores what those calls could equally have meant ONCE PER DISTINCT candidate list (internDeclinedList): list k is declinedListCand[ off[k], off[k+1] ),
     // named by declinedListCallCount[k] calls — what the callers and impact answers read to count, once per call, the declines that could have meant THEIR symbols.
     std::vector<std::uint32_t> declinedOut;
+    std::size_t                inertDeclinedCalls = 0;   // quoted call sites counted in declinedOut, with no candidate list
+    // train 28 (PR #380 x lane declined-sites): the caller of each inert quoted site, in resolve-loop order. Those sites ride
+    // declinedOut with no candidate list and reach no decline site, so they write no declinedSite* record below; this column is
+    // what lets declinedSitesMadeBy state its record-count postcondition with them in it (records + inert == declined_calls=).
+    std::vector<NodeId>        inertDeclinedCaller;
     std::vector<std::uint32_t> declinedListOff{ 0u };   // the leading offset lives here, so a default Graph is already a valid zero-list CSR
     std::vector<NodeId>        declinedListCand;
     std::vector<std::size_t>   declinedListCallCount;
+    // lane declined-sites: ONE record per declined CALL, written beside every ++declinedOut (buildGraph's recordDecline), so
+    // the record count is the header's declined= and the records a selector's definitions made are its declined_calls=.
+    // Parallel columns in resolve-loop order (deterministic): the caller; the interned candidate list (kNoDeclinedList when
+    // internDeclinedList could not store it); the call's index into ing.references, from which the line, the file and the
+    // CALLED name are read (never off the candidates: a Ruby `new` declines with `initialize` candidates), and receiver and
+    // qualifier stay reachable for L6; and the rule that declined it. 13 B per declined call. Read by declinedSitesMadeBy /
+    // declinedSitesNaming below, the <dc> rows of the callers, callees and safe-delete answers. Built from the ingest each
+    // run like the rest of the Graph (never cached), so no cache version moves with it.
+    std::vector<NodeId>           declinedSiteCaller;
+    std::vector<std::uint32_t>    declinedSiteList;
+    std::vector<std::uint32_t>    declinedSiteRef;
+    std::vector<DeclinedSiteKind> declinedSiteKind;
     // 1 for a definition some call the builtin-method name gate DECLINED could have meant (BuiltinMethodGate below); empty
     // on a corpus with no such decline. Read by the dead-code predicate (quality.h isDeadCandidate): a definition a
     // declined `pool.get( k )` could have meant is not provably uncalled, which is what it was before the gate, when
     // that call bound to it by name.
     std::vector<char>          gateDeclinedTarget;
     std::size_t                gateDeclinedCalls = 0;   // of the header's declined=, the calls the builtin-method name gate declined
-    // Of the header's declined=, the C++ calls the standard-member gate declined (StdMemberGate below): its own legend clause
-    // rides where this is >0, so a tree with none keeps its bytes. stdMemberDeclines is one entry per DECLINED C++ call named
+    // Of the header's declined=, the calls the standard-member gate declined (StdMemberGate below): its own legend clause
+    // rides where this is >0, so a tree with none keeps its bytes. stdMemberDeclines is one entry per DECLINED call named
     // like a standard member on a receiver no rule tied to an in-tree class — by that gate or by the ladder's own tier-3 decline — as
-    // ( caller, kCppStdMemberNames index ), sorted after the resolve loop: the callees answer's <stdm> line.
+    // ( caller, kStdMemberNames flat index ), sorted after the resolve loop: the callees answer's <stdm> line.
     std::size_t                                    stdMemberDeclinedCalls = 0;
     std::vector<std::pair<NodeId, std::uint16_t>>  stdMemberDeclines;
+    // lane fcall-forward fix 1: the ing.references indices (ascending) of the FORWARDED call references (model.h
+    // Reference::forwarded) whose call the resolve loop kept — bound, proven, to a function or method. Every other forwarded
+    // reference stands for no call the code makes, so the use-site index skips it too (verbs_navigate.h collectUseSites).
+    std::vector<std::uint32_t> keptForwards;
     // Every call reference's disposition (pincensus.h CallDisposition), one bucket per reference. Read by buildGraph's
     // unaccounted alert and copied into pinCensus when a census is armed; its external/unresolved/declined buckets
     // equal those header gauges by construction.
@@ -348,21 +392,30 @@ inline LegoClosure legoImplementorClosure( const std::vector<std::vector<NodeId>
     return out;
 }
 
-// FE-B: is the call edge from → to NAME-ONLY, over the raw out-CSR and its parallel hedge bits — bound by name alone at
-// every site that bound it, so every surface renders it via="name". false for an edge that does not exist and for empty
-// hedge bits (a graph with no name-only edge at all). edgeNameOnly( Graph ) below and serialize.h's <calls> block share it.
+// Graph::outNameOnly kind byte. The high bit is the map writer's anchor="missing" mark on a link.
+inline constexpr std::uint8_t kEdgeName     = 1;
+inline constexpr std::uint8_t kEdgeLink     = 2;
+inline constexpr std::uint8_t kEdgeKindMask = 0x7f;
+
+inline std::uint8_t edgeKindByte( std::uint8_t stored ) noexcept
+{
+    return std::uint8_t( stored & kEdgeKindMask );
+}
+
+// FE-B: is the call edge from → to the asked kind, over the raw out-CSR. want is kEdgeName or kEdgeLink.
+// false for an edge that does not exist and for an empty kind vector.
 inline bool edgeNameOnlyInCsr( const std::vector<std::uint32_t>& outOff, const std::vector<NodeId>& outTargets,
-                          const std::vector<std::uint8_t>& nameOnly, NodeId from, NodeId to ) noexcept
+                          const std::vector<std::uint8_t>& nameOnly, NodeId from, NodeId to, std::uint8_t want = kEdgeName ) noexcept
 {
     if( nameOnly.empty() || std::size_t( from ) + 1 >= outOff.size() )
     {
         return false;
     }
-    EXPECTS( nameOnly.size() == outTargets.size(), "the hedge bit is parallel to outTargets (buildGraph allocates it per edge)" );
+    EXPECTS( nameOnly.size() == outTargets.size(), "the kind byte is parallel to outTargets (buildGraph allocates it per edge)" );
     const auto b  = outTargets.begin() + outOff[ from ];
     const auto e  = outTargets.begin() + outOff[ std::size_t( from ) + 1 ];
     const auto it = std::lower_bound( b, e, to );   // ascending within a source (buildGraph sorts by (from, to))
-    return it != e && *it == to && nameOnly[ std::size_t( it - outTargets.begin() ) ] != 0;
+    return it != e && *it == to && edgeKindByte( nameOnly[ std::size_t( it - outTargets.begin() ) ] ) == want;
 }
 inline bool edgeNameOnly( const Graph& g, NodeId from, NodeId to ) noexcept
 {
@@ -370,56 +423,179 @@ inline bool edgeNameOnly( const Graph& g, NodeId from, NodeId to ) noexcept
     return edgeNameOnlyInCsr( g.outOff, g.outTargets, g.outNameOnly, from, to );
 }
 
-// FE-B: does any hop of a directed call path (path[i-1] → path[i]) run through a name-only edge? --path and MCP
-// path_between ask it once to decide their via="name" legend sentence (one spelling for both transports).
-inline bool pathHasNameOnlyHop( const Graph& g, std::span<const NodeId> path ) noexcept
-{
-    return std::adjacent_find( path.begin(), path.end(), [ & ]( NodeId from, NodeId to ) { return edgeNameOnly( g, from, to ); } ) != path.end();
-}
-
-// FE-B: does the call edge from → to exist at all (the out-CSR is ascending within a source)
-inline bool edgeExists( const Graph& g, NodeId from, NodeId to ) noexcept
+// The out-CSR position of the call edge from → to, or SIZE_MAX when there is none (ascending within a source: buildGraph sorts
+// by (from, to)). The per-edge bytes (outNameOnly, outProv) are read at it; defattrib.h's row attribution reads both.
+inline std::size_t edgeIndex( const Graph& g, NodeId from, NodeId to ) noexcept
 {
     if( std::size_t( from ) + 1 >= g.outOff.size() )
     {
-        return false;
+        return SIZE_MAX;
     }
-    const auto b = g.outTargets.begin() + g.outOff[ from ];
-    const auto e = g.outTargets.begin() + g.outOff[ std::size_t( from ) + 1 ];
-    return std::binary_search( b, e, to );
+    const auto b  = g.outTargets.begin() + g.outOff[ from ];
+    const auto e  = g.outTargets.begin() + g.outOff[ std::size_t( from ) + 1 ];
+    const auto it = std::lower_bound( b, e, to );
+    return ( it != e && *it == to ) ? std::size_t( it - g.outTargets.begin() ) : SIZE_MAX;
 }
 
-// FE-B: a neighbour row of a selector that matched several definitions is via="name" iff EVERY edge joining it to one
-// of them is name-only — one proven edge makes the row proven. `towardMatches`: the row is a CALLER (row → match);
-// else a callee (match → row). false when no edge joins them, and on a graph with no name-only edge.
-inline bool rowNameOnly( const Graph& g, std::span<const NodeId> matches, NodeId row, bool towardMatches ) noexcept
+// One per-edge bit vector (outAnchorMiss). false when that vector was not allocated, or the edge is absent.
+inline bool edgeBitSet( const Graph& g, const std::vector<std::uint8_t>& bits, NodeId from, NodeId to ) noexcept
 {
-    if( g.outNameOnly.empty() )
+    if( bits.empty() )
+    {
+        return false;
+    }
+    EXPECTS( bits.size() == g.outTargets.size(), "buildGraph allocates the per-edge bits, or none" );
+    const std::size_t e = edgeIndex( g, from, to );
+    return e != SIZE_MAX && bits[ e ] != 0;
+}
+
+inline bool edgeIsLink( const Graph& g, NodeId from, NodeId to ) noexcept
+{
+    return edgeNameOnlyInCsr( g.outOff, g.outTargets, g.outNameOnly, from, to, kEdgeLink );
+}
+
+inline bool edgeAnchorMiss( const Graph& g, NodeId from, NodeId to ) noexcept
+{
+    return edgeBitSet( g, g.outAnchorMiss, from, to );
+}
+
+// Callers (towardMatches): every edge from the row to a matched def is a link. Callees: every edge from a matched def
+// to the row is. A row with no such edge is not a link.
+// bits, when passed, reads that vector (outAnchorMiss: the slug named no heading). Otherwise the kind byte is read.
+inline bool oneHopRowIsLink( const Graph& g, std::span<const NodeId> matches, NodeId row, bool towardMatches,
+                             const std::vector<std::uint8_t>* bits = nullptr ) noexcept
+{
+    const bool                           onKind   = bits == nullptr;
+    const std::vector<std::uint8_t>&     edgeBits = onKind ? g.outNameOnly : *bits;
+    if( edgeBits.empty() )
     {
         return false;
     }
     bool any = false;
     for( const NodeId m : matches )
     {
-        const NodeId from = towardMatches ? row : m;
-        const NodeId to   = towardMatches ? m : row;
-        if( !edgeExists( g, from, to ) )
+        const NodeId      from = towardMatches ? row : m;
+        const NodeId      to   = towardMatches ? m : row;
+        const std::size_t e    = edgeIndex( g, from, to );
+        if( e == SIZE_MAX )
         {
             continue;
         }
-        if( !edgeNameOnly( g, from, to ) )
+        any = true;
+        const bool set = e < edgeBits.size() && ( onKind ? edgeKindByte( edgeBits[ e ] ) == kEdgeLink : edgeBits[ e ] != 0 );
+        if( !set )
         {
             return false;
         }
-        any = true;
     }
     return any;
 }
 
+inline bool pageHasAnchorMiss( const Graph& g, std::span<const NodeId> matches, const std::vector<NodeId>& rows,
+                               std::size_t begin, std::size_t end, bool towardMatches ) noexcept
+{
+    for( std::size_t i = begin; i < end && i < rows.size(); ++i )
+    {
+        if( oneHopRowIsLink( g, matches, rows[ i ], towardMatches, &g.outAnchorMiss ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Does any hop of a directed path carry this kind byte? kind 1 is via="name", kind 2 is via="link".
+// --path and MCP path_between ask it once for the legend sentence.
+inline bool pathHasNameOnlyHop( const Graph& g, std::span<const NodeId> path, std::uint8_t kind = kEdgeName ) noexcept
+{
+    return std::adjacent_find( path.begin(), path.end(), [ & ]( NodeId from, NodeId to )
+    {
+        return kind == 0 ? edgeAnchorMiss( g, from, to ) : edgeNameOnlyInCsr( g.outOff, g.outTargets, g.outNameOnly, from, to, kind );
+    } ) != path.end();
+}
+
+// FE-B's per-row via="name" (EVERY edge joining a row to the selector's definitions is name-only) is defattrib.h's
+// OneHopAttribution::nameOnly now: the strongest tie the one attribution pass recorded is by name alone.
+
 // The via="name" spelling every XML row of a name-only edge carries (" via=\"name\"", 11 bytes), "" otherwise.
+// via="link" wins when the edge is a markdown link. The two do not share an edge: a pinned link is not name-only.
 inline const char* viaNameAttr( bool nameOnly ) noexcept
 {
     return nameOnly ? " via=\"name\"" : "";
+}
+inline const std::vector<std::uint8_t>* linkOutPtr( const Graph& g ) noexcept
+{
+    return g.outNameOnly.empty() ? nullptr : &g.outNameOnly;
+}
+
+inline const char* viaEdgeAttr( bool nameOnly, bool link ) noexcept
+{
+    return link ? " via=\"link\"" : viaNameAttr( nameOnly );
+}
+inline const char* anchorMissAttr( bool miss ) noexcept
+{
+    return miss ? " anchor=\"missing\"" : "";
+}
+inline const char* anchorMissJson( bool miss ) noexcept
+{
+    return miss ? ",\"anchor\":\"missing\"" : "";
+}
+
+// The JSON twin of viaEdgeAttr. Link wins. Empty when the row is a plain call.
+inline const char* viaJsonAttr( bool nameOnly, bool link ) noexcept
+{
+    return link ? ",\"via\":\"link\"" : ( nameOnly ? ",\"via\":\"name\"" : "" );
+}
+
+// oneHopRowIsLink plus the name hedge, and the two answer-level bits the notes read. The branch stays here so
+// symbolQueryJson does not grow one.
+inline const char* viaJsonForRow( const Graph& g, std::span<const NodeId> matches, NodeId row, bool towardMatches, bool nameOnly,
+                                  bool& anyName, bool& anyLink ) noexcept
+{
+    const bool link = oneHopRowIsLink( g, matches, row, towardMatches );
+    if( link )
+    {
+        anyLink = true;
+    }
+    else if( nameOnly )
+    {
+        anyName = true;
+    }
+    return viaJsonAttr( nameOnly, link );
+}
+
+inline const char* viaJsonForSide( const Graph& g, std::span<const NodeId> callerMatches, std::span<const NodeId> calleeMatches, NodeId row,
+                                   bool callersSide, bool nameOnly, bool& anyName, bool& anyLink ) noexcept
+{
+    return viaJsonForRow( g, callersSide ? callerMatches : calleeMatches, row, callersSide, nameOnly, anyName, anyLink );
+}
+
+// Empty unless id is the row the caller just selected. nameOnly stays false: the name fragment is the caller's own bit.
+inline const char* linkJsonFrag( const Graph& g, std::span<const NodeId> callerMatches, std::span<const NodeId> calleeMatches, NodeId id,
+                                 NodeId linkRow, bool callersSide, bool& anyName, bool& anyLink ) noexcept
+{
+    if( id != linkRow )
+    {
+        return "";
+    }
+    return viaJsonForSide( g, callerMatches, calleeMatches, id, callersSide, false, anyName, anyLink );
+}
+
+// Empty unless id is the row just selected and every edge of that row missed its heading.
+inline const char* anchorMissJsonFrag( const Graph& g, std::span<const NodeId> callerMatches, std::span<const NodeId> calleeMatches,
+                                       NodeId id, NodeId row, bool callersSide, bool& anyMiss ) noexcept
+{
+    if( id != row )
+    {
+        return "";
+    }
+    const bool miss = oneHopRowIsLink( g, callersSide ? callerMatches : calleeMatches, id, callersSide, &g.outAnchorMiss );
+    if( !miss )
+    {
+        return "";
+    }
+    anyMiss = true;
+    return anchorMissJson( true );
 }
 
 // The prov= VOCABULARY, spelled once. serialize's XML and serializeJson's JSON must emit identical
@@ -519,6 +695,9 @@ inline bool namespaceCompatible( RefRole role, SymKind kind ) noexcept
         }
         case RefRole::Call: case RefRole::Read: case RefRole::Write: case RefRole::Import:
         case RefRole::Value: case RefRole::Through:   // never in the call loop; graph.h valueRefIndex narrows by kind itself
+        case RefRole::Subscript:                      // the call loop's own receiver proof decides it (subscriptOperatorProven)
+        case RefRole::Inert:                          // Inert exits before the name ladder
+        case RefRole::Pattern:                        // a name-template clue, never in the call loop (valuerefindex.h joins it)
         {
             return true;   // un-narrowed — see the doctrine above; a NEW role is a -Werror=switch decision here
         }
@@ -3093,7 +3272,7 @@ inline std::string_view stdElementType( std::string_view written ) noexcept
     return argIndex < 0 ? std::string_view{} : stdTemplateArgClass( written, open, argIndex );
 }
 
-// THE C++ STANDARD-MEMBER GATE (test/stdmembergatecheck.sh; the names are data: externalnames.h kCppStdMemberNames).
+// THE STANDARD-MEMBER GATE (test/stdmembergatecheck.sh; the names are data, one row per language: kStdMemberNames below).
 // A C++ member call whose receiver no rule typed — `out.push_back( c )` on a `std::vector<char>&` parameter, `s.size()`,
 // `getV().empty()` — is NAME-ONLY (FE-B): it keeps every same-file, same-directory and included-file definition of the
 // name, each hedged via="name". When the name is a standard container or string member, those rows were overwhelmingly
@@ -3140,11 +3319,72 @@ inline std::string_view stdElementType( std::string_view written ) noexcept
 // cone's class NAMES, as CHA-lite matches it, and a namespace-scope variable by its name — those declared in the caller's
 // file or a file it includes, else every one in the tree; (4) generic names and iostream/filesystem/atomic/thread members are
 // not in the table (externalnames.h says which and why), so their calls keep the ladder.
-// LANGUAGE SCOPE (each probed): C has no member functions. Rust receivers carry no declared type (`let s = Stack{..};
-// s.push()` splits by name today), so a gate would decline typed true edges with the false ones. Go, Java, Kotlin, C# and
-// Swift name their standard members after interfaces in-tree types implement on purpose (Len/Write/String/Close, add/size,
-// Add, append), so an unproven receiver may dispatch into the tree. ObjC message sends carry no receiver shape.
-// Python/JS/TS/Ruby: BuiltinMethodGate above.
+// LANGUAGE SCOPE (each probed; a language is gated exactly when kStdMemberNames has a non-empty row for it): C++ as above.
+// RUST (externalnames.h kRustStdMemberNames; arm R): the same rule — `v.push( x )` on a `&mut Vec<i32>` parameter, `xs.iter()`,
+// `m.insert( k, v )` left NAME-ONLY are declined; a call the language's own lookup proves (`self.iter()` inside the impl
+// that defines iter) is not name-only and keeps its edge. The receiver exception reads nothing for Rust (stdReceiverOf reads
+// C++ written types only), so its STATED FLOOR is wider than C++'s: a receiver written as an in-tree type — a parameter
+// `s: &mut Stack<i32>`, a local `let s = Stack { .. }`, a field `self.inner` declared `Stack<i32>`, `book: &Book` where Book
+// defines iter — is declined with the false edges, because Rust records no parameter, local or field type for a call yet.
+// Such a call is counted (declined_calls=, <stdm>), never silently dropped; it keeps its edge once Rust receiver evidence
+// types it (the call is then no longer name-only). C has no member functions. GO has an EMPTY row: its common member names
+// (Len, Write, String, Error, Reset, Lock, Unlock) are methods in-tree types implement on purpose to satisfy an interface,
+// so an unproven receiver may well dispatch into the tree; a Go gate needs typed receivers, not a name list. Java, Kotlin,
+// C# and Swift likewise (add/size, Add, append). ObjC message sends carry no receiver shape. Python/JS/TS/Ruby:
+// BuiltinMethodGate above.
+// One language's row: a pointer and a count, not a std::span — libstdc++ 13.2/13.3 cannot evaluate a value-initialised
+// std::span (its dynamic __extent_storage has no default constructor) inside a constant expression, so a constexpr array of
+// spans failed to compile under gcc-13 and clang-on-libstdc++ (CI 2026-10-16). span() builds the view at run time.
+struct StdMemberRow
+{
+    const std::string_view* names = nullptr;
+    std::size_t             count = 0;
+    constexpr std::span<const std::string_view> span() const noexcept { return { names, count }; }
+};
+template<std::size_t N>
+constexpr StdMemberRow stdMemberRow( const std::string_view ( &table )[ N ] ) noexcept
+{
+    return { table, N };
+}
+inline constexpr std::array<StdMemberRow, kLangCount> kStdMemberNames = []
+{
+    std::array<StdMemberRow, kLangCount> rows {};   // value-initialised: a language with no row is not gated
+    rows[ std::size_t( Lang::Cpp ) ]  = stdMemberRow( externalnames::kCppStdMemberNames );
+    rows[ std::size_t( Lang::Rust ) ] = stdMemberRow( externalnames::kRustStdMemberNames );
+    rows[ std::size_t( Lang::Go ) ]   = {};   // EMPTY on purpose: see LANGUAGE SCOPE above
+    return rows;
+}();
+// Where each language's row starts in the ONE flat index the gate records (Graph::stdMemberDeclines packs it into 16 bits):
+// row l holds indices [ kStdMemberRowStart[ l ], kStdMemberRowStart[ l + 1 ] ). C++ is Lang 0, so a C++ index is its
+// kCppStdMemberNames index, as before.
+inline constexpr std::array<std::size_t, kLangCount + 1> kStdMemberRowStart = []
+{
+    std::array<std::size_t, kLangCount + 1> start {};
+    for( std::size_t l = 0; l < kLangCount; ++l )
+    {
+        start[ l + 1 ] = start[ l ] + kStdMemberNames[ l ].count;
+    }
+    return start;
+}();
+static_assert( kStdMemberRowStart[ kLangCount ] < 0xFFFFu, "StdMemberGate packs a kStdMemberNames flat index into 16 bits, 0xFFFF = none" );
+// Every row strictly sorted (tableIndexOf binary-searches it), proven HERE over the rows themselves, so a row added above
+// without its own externalnames.h assert cannot slip in unsorted. Walks the pointer and count, never a std::span (the
+// libstdc++ 13 note above).
+constexpr bool stdMemberRowsStrictlySorted() noexcept
+{
+    for( const StdMemberRow& row : kStdMemberNames )
+    {
+        for( std::size_t i = 1; i < row.count; ++i )
+        {
+            if( !rw::sortutil::svLess( row.names[ i - 1 ], row.names[ i ] ) )
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+static_assert( stdMemberRowsStrictlySorted(), "every kStdMemberNames row is strictly sorted (binary search)" );
 struct StdMemberGate
 {
     static constexpr std::uint16_t kNotStd = 0xFFFFu;
@@ -3153,19 +3393,33 @@ struct StdMemberGate
     // std::string bound to a repository's only `append` (one definition, one by-name edge) is the case this gate exists for.
     static constexpr std::size_t   kMinInTreeCandidates = 1;
 
-    // The table index of a call the gate is about — C++, a call, unqualified, written on a receiver, a table name — else
-    // kNotStd. Whether the resolve loop left it name-only, and its receiver's written type, are the caller's to add.
+    // The flat table index of a call the gate is about — a language with a row, a call, unqualified, written on a receiver,
+    // a name in its language's row — else kNotStd. Whether the resolve loop left it name-only, and its receiver's written
+    // type, are the caller's to add.
     static std::uint16_t tableIndexOf( const Reference& r ) noexcept
     {
-        if( r.lang != Lang::Cpp || r.role != RefRole::Call || !r.qualifier.empty() || !isMemberCallRef( r ) )
+        const std::span<const std::string_view> table = enumTableAt( kStdMemberNames, r.lang, StdMemberRow{} ).span();   // strictly sorted: static_assert
+        if( table.empty() || r.role != RefRole::Call || !r.qualifier.empty() || !isMemberCallRef( r ) )
         {
             return kNotStd;
         }
-        const std::span<const std::string_view> table( externalnames::kCppStdMemberNames );   // strictly sorted: static_assert
-        const auto                              it = std::lower_bound( table.begin(), table.end(), std::string_view( r.calleeName ), rw::sortutil::svLess );
-        const std::uint16_t                     index = ( it != table.end() && *it == r.calleeName ) ? std::uint16_t( it - table.begin() ) : kNotStd;
-        ENSURES( index == kNotStd || index < table.size(), "a table index, or none" );
-        return index;
+        const auto it = std::lower_bound( table.begin(), table.end(), std::string_view( r.calleeName ), rw::sortutil::svLess );
+        if( it == table.end() || *it != r.calleeName )
+        {
+            return kNotStd;
+        }
+        const std::size_t index = kStdMemberRowStart[ std::size_t( r.lang ) ] + std::size_t( it - table.begin() );
+        ENSURES( index < kStdMemberRowStart[ std::size_t( r.lang ) + 1 ], "a flat index inside the call's own language row" );
+        return std::uint16_t( index );
+    }
+    // The name a flat index records (tableIndexOf's inverse): the callees answer's <stdm> line spells it.
+    static std::string_view nameAt( std::uint16_t index ) noexcept
+    {
+        EXPECTS( index < kStdMemberRowStart[ kLangCount ], "a flat index tableIndexOf returned" );
+        const auto        next = std::upper_bound( kStdMemberRowStart.begin(), kStdMemberRowStart.end(), std::size_t( index ) );
+        const std::size_t lang = std::size_t( next - kStdMemberRowStart.begin() ) - 1;
+        ASSUME( lang < kLangCount, "an index below the last row start lies inside one row" );
+        return kStdMemberNames[ lang ].names[ index - kStdMemberRowStart[ lang ] ];
     }
 
     // What the receiver exception read off a call's receiver (buildGraph's stdReceiverOf): the written class names whose cone
@@ -4995,7 +5249,7 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
         // a backtick mention in prose is not code evidence; a read/write USE-site is recorded only by the rich ingest (--uses,
         // MCP), so reading it here made the same call bind on MCP and decline on the CLI map — evidence must not depend on
         // which ingest ran (FE-B found it through mcpclidiffcheck's stanza on a Python `set().update()` beside a method)
-        if( !r.isDocLink && r.role != RefRole::Read && r.role != RefRole::Write )
+        if( !r.isDocLink && r.role != RefRole::Read && r.role != RefRole::Write && r.role != RefRole::Subscript )   // a subscript names an operator, and is a call only once proven
         {
             note( r.fileId, r.calleeName );
             note( r.fileId, r.recvVar );
@@ -5004,7 +5258,7 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
     }
     for( const Binding& b : ing.bindings )
     {
-        if( !isReceiverEvidenceKind( b.kind ) )   // FE-B's receiver evidence is read by ReceiverEvidence alone
+        if( !isReceiverEvidenceKind( b.kind ) && b.kind != LocalBindKind::RubyMainMixin )   // FE-B's receiver evidence is read by ReceiverEvidence alone; a main mixin by --lego alone
         {
             noteBindingClasses( gate, fileGated, b );
         }
@@ -5032,6 +5286,37 @@ inline void collectFileClassEvidence( const IngestResult& ing, const std::vector
         std::sort( named.begin(), named.end() );
         named.erase( std::unique( named.begin(), named.end() ), named.end() );
     }
+}
+
+// The main object's mixins (LocalBindKind::RubyMainMixin, ingest_ruby.h captureRubyMainMixins) as implementor rows: the
+// constant a Ruby file's top level writes is read as Ruby reads it there — at the top level, so the path as written is the
+// fully-qualified constant (a leading `::` changes nothing) — and each class or module whose own open is that constant
+// (RubyBaseScope::classesByFqn) gets one row per directive. A constant the tree never opens (`include FileUtils`) lists
+// nothing: the module is outside the tree. Ruby-only by construction (no other language records the kind).
+inline std::vector<RubyMainMixinRow> rubyMainObjectMixins( const IngestResult& ing, const RubyBaseScope& bases )
+{
+    std::vector<RubyMainMixinRow> rows;
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind != LocalBindKind::RubyMainMixin )
+        {
+            continue;
+        }
+        const std::string_view written = std::string_view( b.typeName ).starts_with( "::" ) ? std::string_view( b.typeName ).substr( 2 ) : std::string_view( b.typeName );
+        const auto             it      = bases.classesByFqn.find( std::string( written ) );
+        if( it == bases.classesByFqn.end() )
+        {
+            continue;
+        }
+        for( const NodeId base : it->second )
+        {
+            rows.push_back( RubyMainMixinRow { base, b.fileId, b.spanStart } );
+        }
+    }
+    // ing.bindings is in (file, byte) order, so a stable sort by base leaves each base's rows in site order
+    std::ranges::stable_sort( rows, {}, &RubyMainMixinRow::base );
+    ENSURES( std::ranges::is_sorted( rows, {}, &RubyMainMixinRow::base ), "legoMainRowsOf binary-searches the rows by base" );
+    return rows;
 }
 
 inline BuiltinMethodGate buildBuiltinMethodGate( const IngestResult& ing, const ExternalVeto& veto, const ExternalVetoTables& vetoTables,
@@ -5875,6 +6160,42 @@ inline FalseEdgeRules buildFalseEdgeRules( const IngestResult& ing, const HashMa
     return rules;
 }
 
+// Lane h1-annot: "<fileId>#name" → how the file's imports bind `name`, for a Python / TS annotation that qualifies a type with
+// it (`requests.Session`, `ns.T<…>`; receiverevidence.h WrittenQualifierRule::FileImport): 'i' — an in-tree module, package
+// or path (Python: the Phase-5 verdicts 'i' / 'u' of buildExternalVetoTables; JS/TS: an ES import or a module alias whose
+// specifier jsModuleIsForeign does not call outside), 'x' — outside (two bindings that disagree read 'x'). A name no import
+// binds is absent. Read by ReceiverEvidence::qualifierInTree only.
+inline HashMap<std::string, char> buildQualifierVerdicts( const IngestResult& ing, const ExternalVetoTables& veto, const FalseEdgeRules& rules )
+{
+    HashMap<std::string, char> out;
+    out.reserve( veto.importBind.size() );
+    for( const auto& [ k, v ] : veto.importBind )
+    {
+        out.try_emplace( k, v == 'x' ? 'x' : 'i' );
+    }
+    HashMap<std::string, char>        own;   // the JS module vocabulary, when FE-A built none (no module alias in the tree)
+    const HashMap<std::string, char>* vocabulary = rules.jsVocabulary.empty() ? nullptr : &rules.jsVocabulary;
+    for( const Binding& b : ing.bindings )
+    {
+        if( ( b.kind != LocalBindKind::JsImport && b.kind != LocalBindKind::ModuleAlias ) || b.var.empty() || b.var == "." || b.fileId >= ing.files.size() )
+        {
+            continue;
+        }
+        if( vocabulary == nullptr )
+        {
+            own        = jsModuleVocabulary( ing );
+            vocabulary = &own;
+        }
+        const char verdict = ( b.isFromAssignment && b.kind == LocalBindKind::ModuleAlias ) || jsModuleIsForeign( b.typeName, *vocabulary ) ? 'x' : 'i';
+        const auto [ it, fresh ] = out.try_emplace( jsImportKey( b.fileId, b.var ), verdict );
+        if( !fresh && it->second != verdict )
+        {
+            it->second = 'x';   // one name, two bindings that disagree: never proven in the tree
+        }
+    }
+    return out;
+}
+
 // lane lego-transitive fix 1: the evidence buildGraph's implementors builder reads to tell WHICH same-named class a base
 // clause meant (BaseBound). Every table is one the call resolver already built; this holds references, owns nothing.
 struct BaseEvidenceTables
@@ -6158,7 +6479,291 @@ inline void fillImplementorBound( Graph& g, const std::vector<ImplementorBoundEd
     }
 }
 
-inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand );   // defined beside declinedCallsNaming, its one reader
+// Cross-file markdown links, bound to the EXACT target. extractMarkdown leaves each [text](path#slug) ref named by the
+// target's stem with the link as written in memberPath (a fact of the linking file alone, so the cache holds it
+// unbound). Here every heading in the repo is a symbol: the path is joined against the linking file's directory and
+// looked up as a whole file, then the slug among THAT file's headings (first heading wins, GitHub's -1 suffix is
+// not modelled). Returns, per reference index, the Section to pin the edge to: the heading, else the target file's own
+// node, else kNoNode (path not in the tree: the stem ladder answers, as it did before the bind existed). Empty
+// when the tree holds no such link.
+struct MdLinkIndex
+{
+    struct Heading { std::uint32_t fileId; std::uint32_t startByte; NodeId id; std::string slug; };
+    HashMap<std::string, std::uint32_t> fileByPath;   // every .md/.markdown file, by lexicalNormalize(ing.files). A `.`-rooted crawl stores `./docs/a.md`; the lookup key does not. An absolute root stores the absolute path, and the lookup joins to that same absolute path.
+    std::vector<Heading>                headings;     // sorted (fileId, slug, startByte, id): the first of a slug is its heading
+    std::vector<NodeId>                 wholeFile;    // per file: the file-level Section node, kNoNode when none
+    std::vector<std::string>            wholeSlug;    // parallel to wholeFile: that node's own slug (a file that is one heading line IS that heading)
+    std::vector<char>                   markup;       // per file: 1 when a heading (or the file node) holds inline markup mdSlugOf cannot slug as GitHub does
+};
+
+inline bool isMarkdownLinkRef( const Reference& r ) noexcept
+{
+    if( !langFacts( r.lang ).linkSections || r.isDocLink || r.memberCall )
+    {
+        return false;
+    }
+    return !r.memberPath.empty();
+}
+
+// Link-ness is where the reference came from: lang Markdown and not a doc mention. isMarkdownLinkRef also requires a
+// path, which an in-file anchor and a wikilink do not have. A markdown doc mention is neither.
+inline void noteMarkdownLinkSite( HashMap<std::uint64_t, char>& linkEdges, std::uint64_t ekey, const Reference& r )
+{
+    if( langFacts( r.lang ).linkSections && !r.isDocLink )
+    {
+        linkEdges[ ekey ] = 1;
+    }
+}
+
+template <class Edge>
+inline bool graphHasMarkdownLink( const std::vector<Edge>& edges, const HashMap<std::uint64_t, char>& linkEdges )
+{
+    for( const Edge& e : edges )
+    {
+        const std::uint64_t key = ( std::uint64_t( e.from ) << 32 ) | e.to;
+        if( linkEdges.find( key ) != linkEdges.end() )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline std::uint8_t markdownLinkBit( const HashMap<std::uint64_t, char>& linkEdges, std::uint64_t key ) noexcept
+{
+    return linkEdges.find( key ) != linkEdges.end() ? 1u : 0u;
+}
+
+// The file node is the Section extractMarkdown builds with bodyByte 0 over [0, size). assignSymbols then
+// leaves sigStart 0 and sigEnd == endByte == the file span (widest is that span, measured over the file's
+// own sections). A 0,0 span is a ModuleScope, never this node. Same predicate recall.h uses. A heading
+// matches it only when the whole file is that one heading line.
+inline bool isMarkdownFileNode( const Symbol& sym, std::uint32_t widestEnd ) noexcept
+{
+    return sym.sigStartByte == 0 && sym.sigEndByte >= sym.endByte && sym.endByte >= widestEnd;
+}
+
+// Headings, and each file's own node (the first matching symbol in id order). The file node is not a heading.
+inline void indexMarkdownSections( MdLinkIndex& ix, const IngestResult& ing )
+{
+    ix.wholeFile.assign( ing.files.size(), kNoNode );
+    ix.wholeSlug.assign( ing.files.size(), std::string() );
+    ix.markup.assign( ing.files.size(), 0 );
+    std::vector<std::uint32_t> widest( ing.files.size(), 0 );
+    for( const Symbol& sym : ing.symbols )
+    {
+        if( langFacts( sym.lang ).linkSections && sym.kind == SymKind::Section && sym.fileId < ing.files.size() )
+        {
+            widest[ sym.fileId ] = std::max( widest[ sym.fileId ], sym.endByte );
+        }
+    }
+    for( const Symbol& sym : ing.symbols )
+    {
+        if( !langFacts( sym.lang ).linkSections || sym.kind != SymKind::Section || sym.fileId >= ing.files.size() )
+        {
+            continue;
+        }
+        if( mdHeadingOutsideModel( sym.name ) )
+        {
+            ix.markup[ sym.fileId ] = 1;
+        }
+        if( isMarkdownFileNode( sym, widest[ sym.fileId ] ) )
+        {
+            if( ix.wholeFile[ sym.fileId ] == kNoNode )
+            {
+                ix.wholeFile[ sym.fileId ] = sym.id;
+                ix.wholeSlug[ sym.fileId ] = mdSlugOf( sym.name );
+            }
+            continue;
+        }
+        ix.headings.push_back( { sym.fileId, sym.sigStartByte, sym.id, mdSlugOf( sym.name ) } );
+    }
+    std::sort( ix.headings.begin(), ix.headings.end(), []( const MdLinkIndex::Heading& a, const MdLinkIndex::Heading& b )
+    {
+        return std::tie( a.fileId, a.slug, a.startByte, a.id ) < std::tie( b.fileId, b.slug, b.startByte, b.id );
+    } );
+}
+
+inline MdLinkIndex buildMdLinkIndex( const IngestResult& ing )
+{
+    MdLinkIndex ix;
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        if( ing.files[ f ].ends_with( ".md" ) || ing.files[ f ].ends_with( ".markdown" ) )
+        {
+            ix.fileByPath.try_emplace( lexicalNormalize( ing.files[ f ] ), f );
+        }
+    }
+    indexMarkdownSections( ix, ing );
+    return ix;
+}
+
+// The Section one link names. slugMiss is set only when the slug is non-empty, the file is in the tree, and no heading
+// matches, so the edge is that file's node. A link with no slug, and a path that is not in the tree, stay unmarked.
+struct MarkdownLinkTarget
+{
+    NodeId id       = kNoNode;
+    bool   slugMiss = false;
+};
+
+// The first heading of `file` whose slug is `slug` (headings are sorted by (file, slug, start)), else headings.end().
+inline std::vector<MdLinkIndex::Heading>::const_iterator findMarkdownHeading( const MdLinkIndex& ix, std::uint32_t file, std::string_view slug )
+{
+    using Key      = std::pair<std::uint32_t, std::string_view>;
+    const auto hit = std::lower_bound( ix.headings.begin(), ix.headings.end(), Key{ file, slug },
+                                       []( const MdLinkIndex::Heading& h, const Key& key ) { return Key{ h.fileId, h.slug } < key; } );
+    return hit != ix.headings.end() && hit->fileId == file && hit->slug == slug ? hit : ix.headings.end();
+}
+
+// A link's slug that matched no heading is a CLAIM of absence only when mdSlugOf could have matched it. It cannot decide:
+// a byte >= 0x80 or a '%' (non-ASCII and encoded slugs); a "-<digits>" suffix whose stem names a heading (GitHub's
+// duplicate numbering, `#dup-1` for a second `## Dup`); a file that is one heading line, whose heading IS the file node
+// (the slug equals the node's own); a file with a heading that holds inline markup (a link, emphasis: GitHub slugs the
+// rendered text, mdSlugOf the source, so the right slug can miss every heading). Those keep the file edge and carry no
+// anchor="missing".
+inline bool mdSlugProvablyAbsent( const MdLinkIndex& ix, std::uint32_t file, std::string_view slug )
+{
+    if( slug.empty() || mdSlugOutsideModel( slug ) || ix.markup[ file ] != 0 )
+    {
+        return false;
+    }
+    const std::size_t dash = slug.find_last_of( '-' );
+    if( dash != std::string_view::npos && dash > 0 && dash + 1 < slug.size()
+        && slug.find_first_not_of( "0123456789", dash + 1 ) == std::string_view::npos
+        && findMarkdownHeading( ix, file, slug.substr( 0, dash ) ) != ix.headings.end() )
+    {
+        return false;
+    }
+    const auto first       = std::lower_bound( ix.headings.begin(), ix.headings.end(), file,
+                                               []( const MdLinkIndex::Heading& h, std::uint32_t f ) { return h.fileId < f; } );
+    const bool hasHeadings = first != ix.headings.end() && first->fileId == file;
+    return hasHeadings || ix.wholeSlug[ file ] != slug;
+}
+
+inline MarkdownLinkTarget bindOneMarkdownLink( const MdLinkIndex& ix, std::string_view linkerPath, std::string_view written,
+                                                 std::string_view crawlRoot )
+{
+    const std::size_t      frag = written.find( '#' );
+    const std::string_view link = written.substr( 0, frag );
+    const std::string_view slug = frag == std::string_view::npos ? std::string_view{} : written.substr( frag + 1 );
+    std::string            path;
+    if( !link.empty() && link.front() == '/' )
+    {
+        // A leading slash is the crawl root. A multi-root crawl leaves crawlRoot empty, and the stem ladder answers.
+        if( crawlRoot.empty() )
+        {
+            return {};
+        }
+        path.assign( crawlRoot );
+        if( path.empty() || path.back() != '/' )
+        {
+            path.push_back( '/' );
+        }
+        const std::size_t body = link.find_first_not_of( '/' );
+        if( body != std::string_view::npos )
+        {
+            path.append( link.substr( body ) );
+        }
+    }
+    else
+    {
+        const std::string_view dir = includerDir( linkerPath );
+        path.assign( dir );
+        if( !dir.empty() )
+        {
+            path.push_back( '/' );
+        }
+        path.append( link );
+    }
+    path = lexicalNormalize( path );   // empty on an escape above the root → stem ladder
+    const auto file = path.empty() ? ix.fileByPath.end() : ix.fileByPath.find( path );
+    if( file == ix.fileByPath.end() )
+    {
+        return {};
+    }
+    const std::uint32_t target = file->second;
+    const auto hit = slug.empty() ? ix.headings.end() : findMarkdownHeading( ix, target, slug );
+    if( hit != ix.headings.end() )
+    {
+        return { hit->id, false };
+    }
+    const NodeId fileNode = ix.wholeFile[ target ];
+    return { fileNode, fileNode != kNoNode && mdSlugProvablyAbsent( ix, target, slug ) };
+}
+
+struct MdLinkPins
+{
+    std::vector<NodeId> pin;
+    std::vector<char>   slugMiss;   // parallel to pin, 1 when that reference fell back to the file node
+};
+
+inline MdLinkPins bindMarkdownLinks( const IngestResult& ing )
+{
+    MdLinkPins out;
+    if( std::none_of( ing.references.begin(), ing.references.end(), isMarkdownLinkRef ) )
+    {
+        return out;
+    }
+    out.pin.assign( ing.references.size(), kNoNode );
+    out.slugMiss.assign( ing.references.size(), 0 );
+    const MdLinkIndex ix = buildMdLinkIndex( ing );
+    for( std::size_t i = 0; i < ing.references.size(); ++i )
+    {
+        const Reference& r = ing.references[ i ];
+        if( isMarkdownLinkRef( r ) && r.fileId < ing.files.size() )
+        {
+            const MarkdownLinkTarget t = bindOneMarkdownLink( ix, ing.files[ r.fileId ], r.memberPath, ing.crawlRoot );
+            out.pin[ i ]      = t.id;
+            out.slugMiss[ i ] = t.slugMiss ? 1 : 0;
+        }
+    }
+    return out;
+}
+
+// B2.2 MINIMUM ARITY ACROSS DECLARATIONS: per symbol, the fewest arguments a call can pass to it — its own paramsMin
+// (ingest_metrics.h cc_paramShape) lowered to the lowest paramsMin of any DECLARATION with the same name and the same
+// parameter count. C++ may write a default on a separate prototype only (`int f( int x, int y = 5 );` in a header,
+// `int f( int x, int y ){…}` out of line), and a default on either makes the shorter call legal, so a definition is
+// judged on the minimum over itself and every declaration of it. The pairing is deliberately LOOSE (name + params,
+// any scope, any language): a declaration joined to a definition it does not declare can only LOWER the minimum,
+// which keeps a candidate the resolver could have dropped (a lost hedge) — it never drops one and never adds an edge.
+// Read off `byName` BEFORE the decl/def collapse folds declarations away. A symbol outside byName keeps 0 (no bound).
+inline std::vector<std::uint16_t> paramsMinAcrossDeclarations( const IngestResult& ing, const HashMap<std::string, rw::SmallVec<NodeId, 2>>& byName )
+{
+    std::vector<std::uint16_t> out( ing.symbols.size(), 0 );
+    std::vector<std::pair<std::uint16_t, std::uint16_t>> declMin;   // ( params, paramsMin ) of the name's declarations
+    for( const auto& [ name, ids ] : byName )
+    {
+        declMin.clear();
+        for( const NodeId id : ids )
+        {
+            const Symbol& s = ing.symbols[ id ];
+            out[ id ] = s.paramsMin;
+            if( !isDefinitionNotDeclaration( s ) )
+            {
+                declMin.push_back( { s.params, s.paramsMin } );
+            }
+        }
+        if( declMin.empty() )
+        {
+            continue;
+        }
+        std::sort( declMin.begin(), declMin.end() );   // per params value, its lowest declared minimum sorts first
+        for( const NodeId id : ids )
+        {
+            const Symbol& s  = ing.symbols[ id ];
+            const auto    it = std::lower_bound( declMin.begin(), declMin.end(), std::pair<std::uint16_t, std::uint16_t>{ s.params, 0 } );
+            if( it != declMin.end() && it->first == s.params )
+            {
+                out[ id ] = std::min( out[ id ], it->second );
+            }
+        }
+    }
+    ENSURES( out.size() == ing.symbols.size() );
+    return out;
+}
+
+inline std::uint32_t internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand );   // defined beside declinedCallsNaming, its one reader
 inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = nullptr, bool census = false )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph: resolve refs + build CSR" );
@@ -6261,6 +6866,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             byName[ s.name ].push_back( s.id );
         }
     }
+
+    // B2.2 minimum arity: read every declaration's minimum BEFORE the collapse below folds declarations away.
+    const std::vector<std::uint16_t> paramsMinOf = paramsMinAcrossDeclarations( ing, byName );
 
     // decl/def collapse (adversarial-review #1) — collapseDeclarationsOfName carries the rule, its per-root and per-family
     // keys, and why a Kotlin body never evicts a Java declaration (or the reverse).
@@ -6440,7 +7048,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
 
     // P2-D one-hop type narrowing over the canonical scope::name map above (no new pass): Rule 1 pins `this->m()` / `self.m()` to the caller's enclosing class; Rule 2
     // pins `x.m()` to the variable's type (a parameter's through the lexical table); Rule 3 pins a call to the ONE included file defining it — all BEFORE the spray. See resolve.h.
-    const ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );
+    ScopedRecvDecls scopedRecvDecls = buildScopedRecvDecls( ing );   // not const: (L) call-result typing fills an `auto` declaration's type
     const HashMap<std::string, std::vector<std::string>> usingReexports = buildUsingReexports( ing );
     const Narrower narrower( canonByName, varType, scopedRecvDecls, fileIncludes, symFileId, usingReexports );
     const HashMap<std::string, char> memberFields = Narrower::memberFieldNames( ing );   // Rule 2c's member-field veto and Rule 2b's declared-member set, "<Owner>#<field>" (C/C++)
@@ -6499,6 +7107,22 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     std::vector<NodeId>      cand, tier;
     HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>> declinedListsByHash;   // tier-3 declines: list hash → list numbers (internDeclinedList)
     declinedListsByHash.reserve( 4096 );
+    // Every decline site goes through here: the caller's count (declinedOut, the header's declined=), the candidate list
+    // (internDeclinedList, the callers answers' declined_calls=) and ONE site record (Graph::declinedSite*) — so the rows a
+    // callers or callees answer prints are exactly the calls its declined_calls= counts.
+    // `siteIndex` is the site's index in ing.references, carried by the resolve loop: a proven subscript runs the ladder on a
+    // COPY of its site (subscriptCall, role Call), so the address of `r` is not an element of ing.references there.
+    std::size_t siteIndex = 0;
+    const auto recordDecline = [ & ]( const Reference& r, std::span<const NodeId> declinedCand, DeclinedSiteKind kind )
+    {
+        EXPECTS( siteIndex < ing.references.size(), "the resolve loop's own reference" );
+        EXPECTS( r.fromSymbol < g.declinedOut.size(), "a declined call has a caller" );
+        ++g.declinedOut[ r.fromSymbol ];
+        g.declinedSiteList.push_back( internDeclinedList( g, declinedListsByHash, declinedCand ) );
+        g.declinedSiteCaller.push_back( r.fromSymbol );
+        g.declinedSiteRef.push_back( std::uint32_t( siteIndex ) );
+        g.declinedSiteKind.push_back( kind );
+    };
     std::vector<NodeId>      bindingTier;   // A4-R5 reused FFI-alias fallback candidate buffer
     std::string              bindKey;       // A4-R5 reused "<fileId>#var" key buffer for the ctypes-handle gate
     HashMap<std::uint64_t, char> bindingEdges;   // A4-R5 (from<<32|to) keys of edges resolved via an FFI alias —
@@ -6530,6 +7154,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                                  // so its bucket layout cannot reach output, and it is filled inside a loop
                                                  // whose per-reference tier work dominates the growth cascade by orders of
                                                  // magnitude. A guessed reserve would be a made-up number in a hot struct.
+    HashMap<std::uint64_t, char> linkEdges;      // (from<<32|to) a markdown link bound. The section that holds the link is the edge's from.
+    HashMap<std::uint64_t, char> anchorMissEdges; // (from<<32|to) a link whose slug named no heading, so the target is the file node.
     std::vector<NodeId>      rule3Out;   // reused Rule-3 output buffer (candidates from the single included file)
     Rule3FileMemo            rule3Memo;  // Rule 3's answer per (caller file, byName entry): one walk per name per file, not per call
     std::string              qkey;       // reused "qualifier::name" buffer for the E#4 canonical lookup (no per-ref alloc)
@@ -6607,13 +7233,187 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     std::vector<NodeId>      filtScratch;  // reused per-call survivor buffer for CHA-lite / arity filtering
     rw::SmallVec<NodeId, 2>  reachScratch; // reused per-call buffer: the candidates a call can reach by name (reachableByName)
     // FE-B (receiverevidence.h): the receiver-evidence tables, the per-edge hedge sets and the reused per-call buffers.
+    // (L) fix round 1: "<fileId>#<local>" → the in-tree CLASS a TS named import pins (buildJsImportTables), for resultClassOf
+    HashMap<std::string, NodeId> jsPinnedClasses;
+    for( const auto& [ key, target ] : jsImports.targets )
+    {
+        if( target.outcome == JsImportOutcome::Pinned && target.node != kNoNode && ReceiverEvidence::classLike( ing.symbols[ target.node ].kind ) )
+        {
+            jsPinnedClasses.try_emplace( key, target.node );
+        }
+    }
     ReceiverEvidence         recvEv( ing, chaUp, classNames );
+    const HashMap<std::string, char> qualifierVerdicts = buildQualifierVerdicts( ing, extVeto, falseEdges );   // h1-annot
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/2i: receiver-evidence tables" );
         recvEv.localNames = &fieldNarrow.localNameSet;
         recvEv.goPackages = &falseEdges.goPackages;
+        recvEv.qualifierVerdicts = &qualifierVerdicts;   // h1-annot: a Python / TS annotation's qualifier, by the file's imports
+        recvEv.types.classIds        = &classIds;          // (L) a C++ call result's class: unique by name, scoped by its qualifier
+        recvEv.types.fileIncludes    = &fileIncludes;      // (L) fix round 2: the usings a C++ callee's headers put in force
+        recvEv.types.chaUp           = &chaUp;             // (L) fix round 2: a JVM member type the callee's classes inherit
+        recvEv.types.jsPinnedClasses = &jsPinnedClasses;   // (L) a TS call result's imported class
         recvEv.build();
+        // h1-annot: a Python `x op= v` that drops x's class (ReceiverEvidence::noteAugAssign) drops Rule 2's constructed type too
+        std::string augKey;
+        for( const Binding* a : recvEv.augDropped )
+        {
+            buildShadowKey( augKey, a->fromSymbol, a->var );
+            if( const auto it = varType.find( augKey ); it != varType.end() )
+            {
+                it->second.type.clear();   // a tombstone, as a conflicting declaration leaves (resolve.h recordFlatRecvTypeFact)
+            }
+        }
     }
+    // (L) call-result typing (train 29 lane call-result-typing; test/receiverevidencecheck.sh (L)): each LocalBindKind::CallResult
+    // by its call's key — (file << 32 | the CALL's start byte), the call Reference's own (ingest_binds.h pushCallResult) — and
+    // each definition's declared results (LocalBindKind::ReturnType) by (file << 32 | its start byte), which
+    // Symbol::sigStartByte joins. The resolve loop types a CallResult's local from the ONE target its own call commits WITH
+    // evidence — no second ladder: the loop's decision IS the input, so the two cannot disagree (review R7) — and only when
+    // the declared type resolves in the callee's file to ONE in-tree class (ReceiverEvidence::resultClassOf), which the typed
+    // local then carries. The uses that follow in (file, byte) order read it through the receiver-evidence tables, so a
+    // proven call ON a call-typed local types the next local in turn: chaining, in source order, inside this one pass (no
+    // fixpoint; a hop bound by name alone or split stops it — test/receiverevidencecheck.sh (L) UseChain / use_chain).
+    // Both are flat (key, binding index) lists sorted by key then index — one record per binding, no per-key allocation
+    // (fix round 2, memory); equal_range reads a key's records in binding order.
+    using KeyedBinding = std::pair<std::uint64_t, std::uint32_t>;
+    std::vector<KeyedBinding> callResultAt;
+    std::vector<KeyedBinding> returnTypesAt;
+    for( std::uint32_t bi = 0; bi < ing.bindings.size(); ++bi )
+    {
+        const Binding& b = ing.bindings[ bi ];
+        if( b.kind == LocalBindKind::CallResult && !b.var.empty() )
+        {
+            callResultAt.emplace_back( ( std::uint64_t( b.fileId ) << 32 ) | b.startByte, bi );
+        }
+        else if( b.kind == LocalBindKind::ReturnType && !b.typeName.empty() )
+        {
+            returnTypesAt.emplace_back( ( std::uint64_t( b.fileId ) << 32 ) | b.startByte, bi );
+        }
+    }
+    std::sort( callResultAt.begin(), callResultAt.end() );
+    std::sort( returnTypesAt.begin(), returnTypesAt.end() );
+    const auto recordsAt = []( const std::vector<KeyedBinding>& list, std::uint64_t key )
+    {
+        return std::equal_range( list.begin(), list.end(), KeyedBinding{ key, 0u }, []( const KeyedBinding& a, const KeyedBinding& b ) { return a.first < b.first; } );
+    };
+    // C++ (Rule 2's tables are its receiver evidence): an `auto` declaration's type — the lexical table's declaration at the
+    // record's own declaration point when the name has one there and it is untyped, else the flat table's entry when it still
+    // holds this declaration's constructor-shaped guess (the callee's name, which no class carries) or nothing. A tombstoned
+    // entry (two declarations disagree) stays tombstoned. `arrowOnly`: a std smart pointer's pointee, reached by `->` alone.
+    // The class is the ONLY in-tree class of its name (resultClassOf), so Rule 2's name-keyed members are that class's.
+    std::string crKey;
+    const auto typeRule2CallResult = [ & ]( const Binding& cr, std::uint32_t rtIndex, bool arrowOnly )
+    {
+        const Binding& rt = ing.bindings[ rtIndex ];
+        if( cr.fromSymbol == kNoNode )
+        {
+            return;
+        }
+        buildShadowKey( crKey, cr.fromSymbol, cr.var );
+        if( const auto sit = scopedRecvDecls.byName.find( crKey ); sit != scopedRecvDecls.byName.end() )
+        {
+            for( ScopedRecvDecl& d : sit->second )
+            {
+                const bool guess = d.typeBinding < ing.bindings.size() && ing.bindings[ d.typeBinding ].typeName == cr.typeName
+                                && !classNames.contains( cr.typeName );   // the declaration's own constructor-shaped guess
+                if( d.spanStart == cr.spanStart && ( d.typeBinding == kRecvDeclUntyped || guess ) && !arrowOnly )
+                {
+                    d.typeBinding = rtIndex;   // its typeName is the class (resolve.h recvVarType reads a ReturnType as resolved)
+                }
+            }
+            return;
+        }
+        const auto vit = varType.find( crKey );
+        if( vit == varType.end() )
+        {
+            varType.try_emplace( crKey, FlatRecvType{ rt.typeName, false, arrowOnly } );
+        }
+        else if( vit->second.type == cr.typeName && !classNames.contains( cr.typeName ) )
+        {
+            vit->second = FlatRecvType{ rt.typeName, false, arrowOnly };
+        }
+    };
+    // is the call at `site` one of two nested same-named calls sharing its start byte (`h.get().get()`, review B1)? Then its
+    // record cannot say which call it is: the inner and outer Reference share (file, start, name), so nothing is typed.
+    const auto sharesCallKey = [ & ]( std::size_t site ) -> bool
+    {
+        const Reference& r = ing.references[ site ];
+        const auto same = [ & ]( std::size_t j )
+        {
+            const Reference& o = ing.references[ j ];
+            return o.fileId == r.fileId && o.startByte == r.startByte && o.calleeName == r.calleeName;
+        };
+        std::size_t calls = 0;
+        for( std::size_t j = site; j > 0 && same( j - 1 ); --j )
+        {
+            calls += isResolvableCallReference( ing.references[ j - 1 ] ) ? 1u : 0u;
+        }
+        for( std::size_t j = site + 1; j < ing.references.size() && same( j ); ++j )
+        {
+            calls += isResolvableCallReference( ing.references[ j ] ) ? 1u : 0u;
+        }
+        return calls > 0;
+    };
+    // a C++ member call Rule 2 decided by a QUALIFIED written receiver type's last name (prov="final-segment"): is that
+    // qualifier the scope of the class `to` belongs to (`cfg::Factory f; f.make()` — yes; `ext::Factory f` beside an in-tree
+    // cfg::Factory — no)? Only then is the commit evidence enough to type the result.
+    const auto qualifiedReceiverResolves = [ & ]( const Reference& r, NodeId to ) -> bool
+    {
+        const RecvVarType t = narrower.recvVarType( r );
+        if( !t.writtenQualified || t.name.empty() )
+        {
+            return false;
+        }
+        const auto [ known, written ] = narrower.writtenQualifier( t, classIds );   // the lexical record's text, else the flat table's
+        const NodeId cls = known && !written.empty() ? recvEv.types.cppResultClass( written, t.name ) : kNoNode;
+        return cls != kNoNode && ing.symbols[ to ].scope == ing.symbols[ cls ].name;
+    };
+    // the call `r` (reference `site`) committed ONE proven edge to `callee`: type every local its result binds (by position
+    // and unwrap depth) with the class the callee's declared type resolves to
+    const auto typeCallResults = [ & ]( const Reference& r, NodeId callee, std::size_t site )
+    {
+        const auto [ crLo, crHi ] = recordsAt( callResultAt, ( std::uint64_t( r.fileId ) << 32 ) | r.startByte );
+        if( crLo == crHi )
+        {
+            return;
+        }
+        const Symbol& cs             = ing.symbols[ callee ];
+        const auto    [ rtLo, rtHi ] = recordsAt( returnTypesAt, ( std::uint64_t( cs.fileId ) << 32 ) | cs.sigStartByte );
+        if( rtLo == rtHi || sharesCallKey( site ) )
+        {
+            return;
+        }
+        const bool rule2Sink = callResultFamilyOf( r.lang ) == CallResultFamily::Cpp;
+        for( auto crIt = crLo; crIt != crHi; ++crIt )
+        {
+            const Binding& cr = ing.bindings[ crIt->second ];
+            if( cr.typeName != r.calleeName )
+            {
+                continue;   // another call starting at the same byte
+            }
+            for( auto rtIt = rtLo; rtIt != rtHi; ++rtIt )
+            {
+                const std::uint32_t ri = rtIt->second;
+                const Binding&      rt = ing.bindings[ ri ];
+                const bool          match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth );
+                if( !match )
+                {
+                    continue;
+                }
+                const NodeId cls = recvEv.types.resultClassOf( rt, cs.lang );
+                if( cls != kNoNode && rule2Sink )
+                {
+                    typeRule2CallResult( cr, ri, rt.unwrapDepth == 1 );
+                }
+                else if( cls != kNoNode )
+                {
+                    recvEv.typeCallResult( cr, ing.symbols[ cls ].name, cls );
+                }
+                break;
+            }
+        }
+    };
     HashMap<std::uint64_t, char> nameOnlyEdges;   // (from<<32|to) of an edge some call bound by NAME ALONE (no receiver evidence)
     HashMap<std::uint64_t, char> provenEdges;     // … and of an edge some call bound WITH evidence: a proven site wins the merged row
     std::vector<NodeId>      provedScratch;   // reused: the name-ladder candidates the language's own lookup proves
@@ -6661,7 +7461,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
             if( recvEv.moduleNames( ref, ch.root, c ) )
             {
-                return true;
+                return !( moduleCallReachesFunctionsOnly( ref.lang ) && cs.kind == SymKind::Method );   // Go `pkg.F()`: never a method
             }
             if( ref.lang == Lang::Python && ref.recv == RecvKind::NamedVar )
             {
@@ -7171,10 +7971,112 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             g.pinCensus.addOracleRow( nd.from, nd.calleeName, nd.kind );
         }
     }
+    // SUBSCRIPT = OPERATOR-METHOD CALL (RefRole::Subscript; ingest_binds.h subscriptOperatorRef; test/subscriptopcheck.sh).
+    // An element access `recv[ k ]` runs the receiver class's subscript operator method (Ruby `[]`/`[]=`, Python
+    // `__getitem__`/`__setitem__`) — but only a class the tree defines can make it a call into the tree, and the receiver
+    // of nearly every element access is a builtin Hash/Array/dict/list whose own operator runs. So the site is taken up
+    // as a call ONLY where a receiver rule PROVES the class: Ruby's lookup on self in a def (RubyClassObjects::selfCall,
+    // then RubySelfReach through the class's include/extend/superclass ancestry), a receiver the code builds
+    // (RubyTypedReceivers), a class constant's closed lookup (`Registry[ :x ]` reaching its `def self.[]`); Python's
+    // receiver evidence (`self` in a class and its bases, a typed parameter or local, a constructed receiver); and Rule 1
+    // with its base walk for `self`. Anything else — an untyped local, a literal, a parameter, an instance variable —
+    // is dropped HERE, before any tally: no edge, no hedge, no unresolved=/external=/declined= count, so an answer that
+    // holds no proven subscript is byte-identical to one built before this rule. The decision is never by name: no `[]`
+    // or `__getitem__` definition anywhere in the tree makes a site a call unless its receiver's class reaches it.
+    // A proven site then runs the ladder below as the call `recv.[]( k )` would (role Call on a copy): the same rules
+    // decide its candidates, so it lands where that call lands; the census leaves it out (pincensus.h's population).
+    Reference                subscriptCall;            // the site as the call it runs (role Call), reused per proven subscript
+    std::vector<NodeId>      subscriptCand;            // scratch: what the proof found (the ladder recomputes it)
+    CallDispositionCounts    subscriptDispositions {}; // a proven subscript's tally: outside the census's call population
+    // Python: `Registry[ k ]` / `cls[ k ]` subscripts the CLASS object, which runs its metaclass's `__getitem__` (or the
+    // class's `__class_getitem__`), never the instance method receiver evidence would read a class-name receiver's call as.
+    const auto subscriptOnClassObject = [ & ]( const Reference& r ) -> bool
+    {
+        const ReceiverEvidence::Chain ch = ReceiverEvidence::chainOf( r );
+        bool isStatic = false, superOnly = false;
+        return ch.valid && ch.path.empty() && ch.ctor.empty() && ( ch.root == "cls" || ( !recvEv.rootClass( r, ch, isStatic, superOnly ).empty() && isStatic ) );
+    };
+    const auto subscriptOperatorProven = [ & ]( const Reference& r ) -> bool
+    {
+        EXPECTS( r.role == RefRole::Call, "the proof reads the site as the call it runs" );
+        if( r.fromSymbol == kNoNode || !byName.contains( r.calleeName ) )
+        {
+            return false;   // no caller node, or no definition of the operator method anywhere: nothing to prove
+        }
+        subscriptCand.clear();
+        const std::string& scope           = callerSelfScope( ing, r );
+        bool               rubySelfDecided = false;
+        if( langFacts( r.lang ).classObjectLookup )
+        {
+            const RubySideAnswer self = rubyClasses.selfCall( r );
+            rubySelfDecided           = self.side.has_value();
+            if( rubySelfDecided && narrowTo( self.hit, r, subscriptCand ) )
+            {
+                return true;
+            }
+            if( const std::string* typed = rubyTypes.classOf( r ); typed != nullptr )
+            {
+                const RubySideAnswer built = rubyClasses.typedLookup( r, *typed );
+                return ( built.side && narrowTo( built.hit, r, subscriptCand ) )
+                    || narrowTo( built.side ? rubyClasses.onSide( rubyTypes.lookup( r, *typed ), *built.side ) : rubyTypes.lookup( r, *typed ), r, subscriptCand );
+            }
+            if( const RubyClosedLookup closed = rubyClosedLookup( r, rubyTypes, rubyClasses ); closed.closed )
+            {
+                return narrowTo( closed.hit, r, subscriptCand );
+            }
+            if( r.recv == RecvKind::ThisObj && RubySelfReach::judges( r, scope ) )
+            {
+                const std::string& key = rubyReach.selfOf( ing, r );
+                for( NodeId c : byName.find( r.calleeName )->second )
+                {
+                    if( langCompatible( ing.symbols[ c ].lang, r.lang ) && sameRoot( c, r.fileId ) && rubyTop.proves( key, c ) )
+                    {
+                        return true;   // Ruby's own lookup on self reaches it (an included module's `def []`)
+                    }
+                }
+            }
+        }
+        else if( !subscriptOnClassObject( r ) && recvEv.narrow( r ) )
+        {
+            return true;   // a stated class: `self` in a class or its bases, a typed parameter or local, a constructed receiver
+        }
+        if( r.recv != RecvKind::ThisObj || rubySelfDecided )
+        {
+            return false;
+        }
+        return narrowTo( narrower.rule1ClassMember( r, scope ), r, subscriptCand )
+            || narrowTo( narrower.rule1BaseWalk( r, scope, langFacts( r.lang ).mixinAncestry ? rubyUp : chaUp, chaUpDeclared ), r, subscriptCand );
+    };
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/3: resolve loop (per reference)" );
+    const MdLinkPins                mdLinks    = bindMarkdownLinks( ing );   // empty unless the tree holds a cross-file markdown link
+    const std::vector<NodeId>&     mdLinkPin  = mdLinks.pin;
+    const std::vector<char>&       mdSlugMiss = mdLinks.slugMiss;
+    bool anyMarkdownLink = false;
     for( const Reference& r : ing.references )
     {
+        if( langFacts( r.lang ).linkSections && !r.isDocLink )
+        {
+            anyMarkdownLink = true;
+            break;
+        }
+    }
+    for( siteIndex = 0; siteIndex < ing.references.size(); ++siteIndex )
+    {
+        const Reference& site = ing.references[ siteIndex ];
+        // An element access is a call only where its receiver's class is proven (subscriptOperatorProven above); the
+        // rest of the loop reads it as that call.
+        const bool subscript = site.role == RefRole::Subscript;
+        if( subscript )
+        {
+            subscriptCall      = site;
+            subscriptCall.role = RefRole::Call;
+            if( !subscriptOperatorProven( subscriptCall ) )
+            {
+                continue;
+            }
+        }
+        const Reference& r = subscript ? subscriptCall : site;
         // inheritance / doc-mention / HAS-A → not a call. ABS-3: read/write/import use-sites are ALSO excluded
         // here — they live only in the use-site index, NEVER in the call graph CSR, so PageRank and the default
         // ranked map are unchanged by them (G5). Role Macro (the macro-edges round) IS admitted beside Call: an
@@ -7188,10 +8090,20 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // From here on every exit names its disposition and the tally counts it when the iteration ends,
         // whichever `continue` ends it. An exit that names nothing is counted Unaccounted (DispositionTally).
         CallDisposition        disposition = CallDisposition::Unaccounted;
-        const DispositionTally tally{ disposition, g.callDispositions };
+        const DispositionTally tally{ disposition, subscript ? subscriptDispositions : g.callDispositions };
         if( r.fromSymbol == kNoNode )
         {
             disposition = CallDisposition::FileScope;   // no caller node for an edge; the use-site index still lists the site
+            continue;
+        }
+        if( r.role == RefRole::Inert )
+        {
+            // The syntax is a call candidate, but quoted AST cannot execute it. Count the declined
+            // site on its caller; do not intern target candidates, since it could reach none of them.
+            ++g.declinedOut[ r.fromSymbol ];
+            ++g.inertDeclinedCalls;
+            g.inertDeclinedCaller.push_back( r.fromSymbol );   // no declinedSite* record: no candidate list, no decline site
+            disposition = CallDisposition::Declined;
             continue;
         }
         const auto it = byName.find( r.calleeName );
@@ -7232,6 +8144,19 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
         }
 
+        // A cross-file markdown link whose file is in the tree: pinned to the exact heading (or file) bindMarkdownLinks
+        // found, like a SCIP site — the name ladder (same-dir stem, same-file heading) must not re-choose it.
+        if( !mdLinkPin.empty() && mdLinkPin[ siteIndex ] != kNoNode )
+        {
+            const NodeId to = mdLinkPin[ siteIndex ];
+            tier.clear();
+            if( to != r.fromSymbol )
+            {
+                tier.push_back( to );
+            }
+            scipPinned = true;
+        }
+
         // Java issue #74: the grammar labels both `Widget::makeFn` and `widget::makeFn`
         // with an identifier receiver. A method-reference capture is therefore admitted only when
         // repository evidence proves the receiver is a type at this site. Every other receiver is
@@ -7243,7 +8168,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         if( !scipPinned && r.recv == RecvKind::JavaTypeCandidate )
         {
             javaProvenType = javaProvenTypeReceiver( r, classNames, fieldNarrow, qkey );
-            if( javaProvenType.empty() )
+            // (L) fix round 2 / 3 (D3, D6): `import ext.Util; … Util::open` (or `import ext.*;` alone) names the outside Util
+            if( javaProvenType.empty() || recvEv.types.jvmHides( r.fileId, r.startByte, r.recvVar.substr( 0, std::min( r.recvVar.find( '.' ), r.recvVar.size() ) ) ) )
             {
                 disposition = javaCandidateRefused( g, r, it != byName.end() );
                 continue;
@@ -7537,8 +8463,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 disposition = vetoExternal( r );
                 continue;
             }
-            ++g.declinedOut[ r.fromSymbol ];
-            internDeclinedList( g, declinedListsByHash, std::span<const NodeId>( rubyReachable.data(), rubyReachable.size() ) );
+            recordDecline( r, std::span<const NodeId>( rubyReachable.data(), rubyReachable.size() ), DeclinedSiteKind::RubyNew );
             disposition = CallDisposition::Declined;
             continue;
         }
@@ -7552,7 +8477,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // would hand the site to the caller's own class — the one class `super()` skips by definition.
         if( !scipPinned && !canonical && !narrowed && !rubySelfCall.side )
         {
-            narrowed = narrowTo( narrower.rule1BaseWalk( r, callerSelfScope( ing, r ), r.lang == Lang::Ruby ? rubyUp : chaUp, chaUpDeclared ), r, cand );
+            narrowed = narrowTo( narrower.rule1BaseWalk( r, callerSelfScope( ing, r ), langFacts( r.lang ).mixinAncestry ? rubyUp : chaUp, chaUpDeclared ), r, cand );
         }
         if( !scipPinned && !canonical && !narrowed && r.recv == RecvKind::SuperObj && bindingTier.empty() )
         {
@@ -7603,7 +8528,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         }
         // P2-D Rule 2c (CLASS-NAME receiver, Phase 4b): `Cls.m()` resolves to `Cls::m` (or the shallowest base defining `m`) when Cls is an in-repo class that no
         // local and no C++ member of the caller's class or its bases hides (then 2b reads the member). After Rule 2, before 2b. See Narrower::rule2cClassNameRecv.
-        if( !scipPinned && !canonical && !narrowed )
+        // (L) fix round 2 / 3 (D3, D6): a JVM receiver the caller does not SEE in the tree (`import ext.Util;`, `import ext.*;`
+        // alone) is an outside class, never an in-tree namesake — the call falls to the ladder, which hedges it.
+        if( !scipPinned && !canonical && !narrowed
+            && !( callResultFamilyOf( r.lang ) == CallResultFamily::Jvm
+                  && recvEv.types.jvmHides( r.fileId, r.startByte, std::string_view( r.recvVar ).substr( 0, std::min( r.recvVar.find( '.' ), r.recvVar.size() ) ) ) ) )
         {
             narrowed = narrowTo( narrower.rule2cClassNameRecv( r, ing.symbols[ r.fromSymbol ].scope, { classNames, fieldNarrow.localNameSet, memberFields }, chaUp ), r, cand );
         }
@@ -7733,8 +8662,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                                     : RubyCut::Unchanged;
         if( rubyCut == RubyCut::Declined )
         {
-            ++g.declinedOut[ r.fromSymbol ];   // in reach, but on the other side of self: no edge, and no claim it is outside
-            internDeclinedList( g, declinedListsByHash, std::span<const NodeId>( rubyReachable.data(), rubyReachable.size() ) );
+            // in reach, but on the other side of self: no edge, and no claim it is outside
+            recordDecline( r, std::span<const NodeId>( rubyReachable.data(), rubyReachable.size() ), DeclinedSiteKind::RubySide );
             disposition = CallDisposition::Declined;
             continue;
         }
@@ -7865,8 +8794,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             cand.swap( filtScratch );
             if( cut == RubyCut::Declined )
             {
-                ++g.declinedOut[ r.fromSymbol ];
-                internDeclinedList( g, declinedListsByHash, cand );
+                recordDecline( r, cand, DeclinedSiteKind::RubySide );
                 disposition = CallDisposition::Declined;
                 continue;
             }
@@ -8001,7 +8929,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 }
             }
         }
-        // StdMemberGate: a NAME-ONLY C++ member call named like a standard container or string member — its table index, else
+        // StdMemberGate: a NAME-ONLY member call named in its language's standard-member row — its flat table index, else
         // kNotStd — and what its receiver's written types say (stdReceiverOf). Decided once here: the ladder's own
         // tier-3 decline and the post-filter below both read them.
         const std::uint16_t    stdIndex    = nameOnly ? StdMemberGate::tableIndexOf( r ) : StdMemberGate::kNotStd;
@@ -8091,8 +9019,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                     }
                     else
                     {
-                        ++g.declinedOut[ r.fromSymbol ];
-                        internDeclinedList( g, declinedListsByHash, cand );
+                        recordDecline( r, cand, DeclinedSiteKind::Ladder );
                         if( stdIndex != StdMemberGate::kNotStd && !stdReceiverKeeps( stdRecv, r.fromSymbol, cand ) )
                         {
                             g.stdMemberDeclines.emplace_back( r.fromSymbol, stdIndex );   // the <stdm> line names it too
@@ -8153,8 +9080,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                     // DECLINED. Still no edge and still no guess — that precision rule is the ladder's point. What is gone is the silence: the decline counts on the
                     // caller (declinedOut → the header's declined=, the callees answer's declined_calls=) and records the candidate list it could equally have meant
                     // (internDeclinedList → the callers and impact answers' declined_calls=), so a count="0" there says a call was declined. test/declinecheck.sh (A), (B).
-                    ++g.declinedOut[ r.fromSymbol ];
-                    internDeclinedList( g, declinedListsByHash, cand );
+                    recordDecline( r, cand, DeclinedSiteKind::Ladder );
                     disposition = CallDisposition::Declined;
                     continue;
                 }
@@ -8208,38 +9134,46 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
 
             // B2.2 arity filter: when the call site has a reliably-counted positional-argument list, drop any
-            // same-name candidate whose declared parameter count is a FIXED, call-comparable arity (arityExact)
-            // and cannot possibly accept that many args — a provably-wrong overload. Strictly conservative: a
-            // variadic / default-argument / implicit-self candidate (arityExact==0) is NEVER dropped, nor is
-            // any candidate when the call-site count is unknown. Degrade rather than empty the tier.
-            //
-            // Decided: only `argCount > params` is provably wrong.
-            // arityExact is computed from the DEFINITION node only (cc_paramArityExact); a C++ default argument
-            // written ONLY on a separate header PROTOTYPE (`void f( int x = 5 );`) is invisible there, so an
-            // out-of-line def whose default lives in the decl reads as a fixed arity==params. An
-            // (params-1)-arg call against such a def is legal (the default fills the gap) but used to fail
-            // `params != argCount` and get "provably" excluded — dropping the correct edge AND silently
-            // suppressing the amb= honesty counter when a sibling overload happened to survive. No default
-            // argument can ever rescue a call with MORE args than the def declares, so `argCount > params`
-            // stays a sound exclusion in every language; `argCount < params` no longer excludes — the def
-            // stays a candidate and correctly re-enters amb= when multiple defs still survive. Trades a little
-            // precision for honesty (decided acceptance); the fuller decl/def arityExact merge is deferred.
+            // same-name candidate that provably cannot accept that many args — a provably-wrong overload — in
+            // either direction:
+            //   * TOO MANY: `argCount > params` on a FIXED, call-comparable arity (arityExact). No default can
+            //     rescue a call with more args than the def declares, so this is sound in every language. A
+            //     variadic / default-argument / implicit-self candidate (arityExact==0) is never dropped this way.
+            //   * TOO FEW: `argCount < paramsMinOf[c]` — the fewest arguments the candidate can take, the minimum
+            //     over its definition AND every declaration of it (paramsMinAcrossDeclarations: a C++ default
+            //     written only on the header PROTOTYPE still makes the shorter call legal and keeps the def).
+            //     paramsMin is 0 — no lower bound — for a variadic, implicit-self, receiver-parameter or
+            //     decorated def and for every language without a kParamMinLangs row (JavaScript, where a call
+            //     may pass fewer arguments; Kotlin; …), so those are never dropped for too few arguments.
+            //     Residual floors (disclosed, not handled): a C/C++ argument that is a macro expanding to several
+            //     arguments (`f( PAIR )`) is counted as one, so it reads as a shorter call than it is; and a default
+            //     written only on a declaration ripwire does not index (a `.inl`/`.ipp` header, a header outside the
+            //     tree) is invisible, so the definition is judged on its own minimum.
+            // Strictly conservative otherwise: no candidate is filtered when the call-site count is unknown, and
+            // each stage degrades (leaves the tier untouched) rather than empty it. The stages run IN ORDER — too
+            // many first, exactly as before the minimum existed, then too few on what survives — so a tier that the
+            // too-few stage would empty keeps the too-many stage's result: a candidate dropped for too many
+            // arguments never comes back (one combined pass restored the whole tier and re-added it).
             if( r.argCountKnown && tier.size() > 1 )
             {
-                filtScratch.clear();
-                for( NodeId c : tier )
+                for( const bool fewStage : { false, true } )
                 {
-                    const Symbol& cs = ing.symbols[ c ];
-                    const bool provablyWrong = ( cs.arityExact != 0 ) && ( r.argCount > cs.params );
-                    if( !provablyWrong )
+                    filtScratch.clear();
+                    for( NodeId c : tier )
                     {
-                        filtScratch.push_back( c );
+                        const Symbol& cs = ing.symbols[ c ];
+                        const bool provablyWrong = fewStage ? r.argCount < paramsMinOf[ c ]
+                                                            : ( cs.arityExact != 0 ) && ( r.argCount > cs.params );
+                        if( !provablyWrong )
+                        {
+                            filtScratch.push_back( c );
+                        }
                     }
-                }
-                if( !filtScratch.empty() && filtScratch.size() < tier.size() )
-                {
-                    tier.swap( filtScratch );
-                    censusArity = true;
+                    if( !filtScratch.empty() && filtScratch.size() < tier.size() )
+                    {
+                        tier.swap( filtScratch );
+                        censusArity = true;
+                    }
                 }
             }
         }
@@ -8391,9 +9325,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                     continue;
                 }
                 std::sort( gateRefused.begin(), gateRefused.end() );   // one sequence per set, as internDeclinedList keys it
-                ++g.declinedOut[ r.fromSymbol ];
                 ++g.gateDeclinedCalls;
-                internDeclinedList( g, declinedListsByHash, gateRefused );
+                recordDecline( r, gateRefused, DeclinedSiteKind::Builtin );
                 g.gateDeclinedTarget.resize( N, 0 );   // no-op after the first decline
                 for( const NodeId c : gateRefused )
                 {
@@ -8404,14 +9337,14 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
         }
 
-        // ---- the C++ standard-member gate (StdMemberGate above) — it only ever removes an edge -------------------------
+        // ---- the standard-member gate (StdMemberGate above) — it only ever removes an edge -----------------------------
         // The ladder decided this name-only call as it decides every other; when the name is a standard container or string
         // member and no written non-std type of the receiver reaches them, the in-tree definitions it reached by NAME are declined
         // instead of bound: the standard library's own member is the call's other candidate. A self-only tier is left to the
         // Self exit, exactly as the builtin-method gate leaves it.
         if( stdIndex != StdMemberGate::kNotStd && !bindingPinned && !identityClaim && !stdReceiverKeeps( stdRecv, r.fromSymbol, tier ) )
         {
-            ASSUME( stdIndex < std::size( externalnames::kCppStdMemberNames ), "tableIndexOf returns a table index or kNotStd" );
+            ASSUME( stdIndex < kStdMemberRowStart[ kLangCount ], "tableIndexOf returns a flat table index or kNotStd" );
             gateRefused.clear();
             for( const NodeId c : tier )
             {
@@ -8432,9 +9365,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             if( !gateRefused.empty() && byName >= StdMemberGate::kMinInTreeCandidates )
             {
                 std::sort( gateRefused.begin(), gateRefused.end() );   // one sequence per set, as internDeclinedList keys it
-                ++g.declinedOut[ r.fromSymbol ];
                 ++g.stdMemberDeclinedCalls;
-                internDeclinedList( g, declinedListsByHash, gateRefused );
+                recordDecline( r, gateRefused, DeclinedSiteKind::Std );
                 g.gateDeclinedTarget.resize( N, 0 );   // no-op after the first decline: a definition a declined call could have meant is not dead
                 for( const NodeId c : gateRefused )
                 {
@@ -8442,6 +9374,28 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 }
                 g.stdMemberDeclines.emplace_back( r.fromSymbol, stdIndex );
                 disposition = CallDisposition::Declined;
+                continue;
+            }
+        }
+
+        // lane fcall-forward fix 1 (B1, test/fcallforwardcheck.sh N7 N8 N10 N11 H): a FORWARDED call — `f.call( … )` standing
+        // for the bare `f( … )` the source never writes (model.h Reference::forwarded) — is kept only where the tiers above
+        // PROVE a function or method. An import proves a binding, not a function: a by-name-only answer, or a proven class,
+        // const or object target, adds nothing, and the site keeps only its own member reference, as before the forwarders.
+        // Undefined, not a gauge bucket, HERE: a forward this filter drops moves no gauge. A forward that leaves the loop
+        // EARLIER (an unresolved, declined or external exit above) is counted in that bucket as the bare call `f( … )`
+        // would be — a floor (train 30, fcall-forward nit N2): honest when f is a function, a phantom count when the
+        // receiver is an object, const or class. No call-site reader counts such a forward (model.h forwardCounts).
+        if( r.forwarded )
+        {
+            if( nameOnly )
+            {
+                tier.clear();
+            }
+            std::erase_if( tier, [ & ]( NodeId c ) { return ing.symbols[ c ].kind != SymKind::Function && ing.symbols[ c ].kind != SymKind::Method; } );
+            if( tier.empty() )
+            {
+                disposition = CallDisposition::Undefined;
                 continue;
             }
         }
@@ -8505,7 +9459,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             }
         }
 
-        // drop self-loops BEFORE the split so the confidence mass is conserved over real targets
+        // drop self-loops BEFORE the split so the confidence mass is conserved over real targets.
+        // A markdown link whose target is the section that contains the link is dropped here on purpose.
         std::size_t nReal = 0;
         for( NodeId c : tier )
         {
@@ -8528,7 +9483,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // Recorded HERE and nowhere else: this is the exact point where the resolver has finished deciding
         // and is about to commit the edge, so the row states what was committed and what committed it.
         // pincensus.h::classifyPin owns the precedence rule; this site only reports the stage outcomes.
-        if( census )
+        if( census && !subscript )
         {
             // `narrowed` is passed WITHOUT the import pin: it is a latch this loop sets so the receiver
             // rules below cannot append more candidates, and on the ES-import path it says nothing about
@@ -8598,6 +9553,36 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 finalSegmentEdges[ekey] = 1;   // remember (from,to) for prov="final-segment"
             }
             ( nameOnly ? nameOnlyEdges : provenEdges )[ ekey ] = 1;   // FE-B: a proven site wins the merged row (Graph::outNameOnly)
+            if( anyMarkdownLink )
+            {
+                noteMarkdownLinkSite( linkEdges, ekey, r );
+                if( siteIndex < mdSlugMiss.size() && mdSlugMiss[ siteIndex ] != 0 && siteIndex < mdLinkPin.size() && to == mdLinkPin[ siteIndex ] )
+                {
+                    anchorMissEdges[ ekey ] = 1;
+                }
+            }
+        }
+        // (L) the call committed exactly ONE unsplit target WITH evidence — a receiver rule, a resolved qualifier, the language's
+        // own lookup, an import or SCIP pin, or the ladder's unhedged pick of the one definition a hedge-eligible call reaches by
+        // name (the tool's usual standard for an unhedged edge; a qualified call the canonical tier could not place falls to the
+        // ladder unhedged but is not hedge-eligible: C++ `ext::onlyOne()`), and never a qualified written type's final segment
+        // (prov="final-segment") — so the locals its result binds take the target's declared type. A recursive call (the only
+        // target is the caller) types nothing: a floor.
+        // A Rust module path (`model::load()`) is a qualifier the canonical tier cannot place but the crate layout can.
+        const bool evidenced = scipPinned || canonical || narrowed || jsImportPinned || languageLookupProved || ( hedgeEligible && !nameOnly );
+        if( !callResultAt.empty() && nReal == 1 && !nameOnly && !splitPick && !bindingPinned && !subscript )
+        {
+            for( NodeId to : tier )
+            {
+                if( to != r.fromSymbol && ( evidenced || recvEv.types.rustQualifierReaches( r, to ) ) && ( !finalSegmentType || qualifiedReceiverResolves( r, to ) ) )
+                {
+                    typeCallResults( r, to, siteIndex );
+                }
+            }
+        }
+        if( r.forwarded )
+        {
+            g.keptForwards.push_back( std::uint32_t( siteIndex ) );   // ascending: the loop walks the references in order
         }
         disposition = CallDisposition::Bound;
     }
@@ -8657,10 +9642,23 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     {
         g.outProv.assign( edges.size(), 0u );
     }
+    const auto anchorMissed = [ & ]( std::uint64_t k )
+    {
+        return markdownLinkBit( linkEdges, k ) != 0 && anchorMissEdges.contains( k );
+    };
+    if( std::any_of( edges.begin(), edges.end(), [ & ]( const E& e ) { return anchorMissed( ( std::uint64_t( e.from ) << 32 ) | e.to ); } ) )
+    {
+        g.outAnchorMiss.assign( edges.size(), 0u );
+    }
     const EdgeProvenanceSets provSets{ bindingEdges, importEdges, splitEdges, finalSegmentEdges };
-    // FE-B: the hedge bit, allocated only when some edge is name-only (empty ⇒ every edge proven, nothing marked anywhere)
+    // Kind byte, allocated when some edge is name-only or a markdown link. Empty ⇒ every edge is a plain call.
     const auto hedged = [ & ]( std::uint64_t k ) { return nameOnlyEdges.contains( k ) && !provenEdges.contains( k ); };
-    if( std::any_of( edges.begin(), edges.end(), [ & ]( const E& e ) { return hedged( ( std::uint64_t( e.from ) << 32 ) | e.to ); } ) )
+    const auto marked = [ & ]( const E& e )
+    {
+        const std::uint64_t k = ( std::uint64_t( e.from ) << 32 ) | e.to;
+        return hedged( k ) || markdownLinkBit( linkEdges, k ) != 0;
+    };
+    if( std::any_of( edges.begin(), edges.end(), marked ) )
     {
         g.outNameOnly.assign( edges.size(), 0u );
     }
@@ -8683,7 +9681,21 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             if( !g.outNameOnly.empty() )
             {
                 ASSUME( pos < g.outNameOnly.size(), "outNameOnly is allocated one slot per flattened edge" );
-                g.outNameOnly[ pos ] = hedged( ( std::uint64_t( e.from ) << 32 ) | e.to ) ? 1u : 0u;
+                const std::uint64_t key = ( std::uint64_t( e.from ) << 32 ) | e.to;
+                std::uint8_t        kind = 0;
+                if( markdownLinkBit( linkEdges, key ) != 0 )
+                {
+                    kind = anchorMissed( key ) ? std::uint8_t( kEdgeLink | 0x80 ) : kEdgeLink;
+                }
+                else if( hedged( key ) )
+                {
+                    kind = kEdgeName;
+                }
+                g.outNameOnly[ pos ] = kind;
+            }
+            if( !g.outAnchorMiss.empty() )
+            {
+                g.outAnchorMiss[ pos ] = anchorMissed( ( std::uint64_t( e.from ) << 32 ) | e.to ) ? 1u : 0u;
             }
         }
     }
@@ -8707,6 +9719,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     }
     DASSERT( verifyCsr( g.inEdges, N ) );   // structural, so CHECKED in debug and not promised in release — see Diagnostics.h
     DASSERT( verifyOffsetCsr( g.declinedListOff, g.declinedListCand, g.declinedListCallCount.size(), N ) );
+    // One site record per declined call (recordDecline): at most one per reference, so the uint32 record and reference
+    // indices cannot wrap, and the four columns stay parallel.
+    ENSURES( g.declinedSiteCaller.size() <= ing.references.size() && g.declinedSiteList.size() == g.declinedSiteCaller.size()
+             && g.declinedSiteRef.size() == g.declinedSiteCaller.size() && g.declinedSiteKind.size() == g.declinedSiteCaller.size() );
     }
 
     // inheritance edges (Lego view): isInherit refs (derived → base name) → implementors[base] += derived.
@@ -8788,7 +9804,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         for( NodeId baseId : *baseIds )
         {
             // lane lego-transitive (M1): a Ruby MODULE is a base here too. `include M` / `extend M` / `prepend M` put it in
-            // the class's ancestors (captureRubyMixinBases, parser version 131), so the class implements its contract the way
+            // the class's ancestors (parser version 131 put them there from the captureIncludes walk; since 173 the @reference.mixin capture reads them), so the class implements its contract the way
             // a subclass does — and --lego=M listed nobody (rake: `include Rake::DSL`). The test is BuiltinMethodGate's
             // class-like rule, the one that already counts a Ruby module (Ruby && SymKind::Other: @definition.module maps to
             // Other for every language, and only Ruby's tags have no other Other). Other languages need nothing here: an
@@ -8834,6 +9850,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         v.erase( std::unique( v.begin(), v.end() ), v.end() );
     }
     fillImplementorBound( g, boundEdges );
+    g.rubyMainMixins = rubyMainObjectMixins( ing, rubyBases );
 
     // doc↔code edges: isDocLink refs (markdown `backtick` → code name) → mentions[codeDef] += docFileNode.
     // Resolve the name to real DEFINITIONS (body present), any file; stored OUT of the call graph so a doc
@@ -10612,7 +11629,7 @@ inline FieldUseAnswer collectFieldUseSites( const IngestResult& ing, FieldId fie
     for( std::uint32_t refIndex = 0; refIndex < ing.references.size(); ++refIndex )
     {
         const Reference& r = ing.references[ refIndex ];
-        if( ( r.role != RefRole::Read && r.role != RefRole::Write ) || r.isCompose || r.isDocLink || r.lang == Lang::Markdown )
+        if( ( r.role != RefRole::Read && r.role != RefRole::Write ) || r.isCompose || r.isDocLink || langFacts( r.lang ).linkSections )
         {
             continue;
         }
@@ -11593,11 +12610,64 @@ inline ImportTier impactImportTier( const IngestResult& ing, const std::vector<N
 // and folds byte-identically to before.
 inline const std::vector<char> kNoImpactHedge{};
 inline constexpr std::size_t kImpactFileRollupCap = 20;
+// L7 (typeuse.h): on a TYPE impact with no --limit, the listing holds the whole first-hop band — the defining file (d=0)
+// and every d=1 file a type mention reaches (isTypeBandRow) — however many there are, up to this runaway guard; past the
+// cut is disclosed (files_capped="1", files_next=) like any other. Measured: tmux `--impact=grid_cell` has 32 such files
+// (the 20-row default dropped 8 of the question's 32 gold files); a band in the hundreds would be a dump, not an index.
+inline constexpr std::size_t kImpactTypeRollupBandMax = 200;
 
 // the --impact row (provenCallerReach below)'s hedge: reached, but by no all-proven path
 inline bool impactRowNameOnly( const std::vector<char>& proven, NodeId n ) noexcept
 {
     return !proven.empty() && n < proven.size() && proven[n] == 0;
+}
+
+// A depth-1 impact row whose edge to every matched def is a markdown link. The edge runs caller → seed.
+inline bool impactDirectLink( const Graph& g, std::span<const NodeId> seeds, const std::vector<std::uint32_t>& depth, NodeId n ) noexcept
+{
+    return n < depth.size() && depth[ n ] == 1 && oneHopRowIsLink( g, seeds, n, true );
+}
+inline std::string impactViaLinkNote( const std::vector<char>& via, std::size_t begin, std::size_t end )
+{
+    for( std::size_t i = begin; i < end && i < via.size(); ++i )
+    {
+        if( via[ i ] == 2 )
+        {
+            return viaLinkNoteJson();
+        }
+    }
+    return {};
+}
+
+// via="link" plus anchor="missing" when that direct edge named no heading. The && stays here so the impact emitters do not grow a branch.
+inline std::string impactLinkAttrs( const Graph& g, const std::vector<char>& proven, std::span<const NodeId> seeds,
+                                   const std::vector<std::uint32_t>& depth, NodeId n )
+{
+    const bool link = impactDirectLink( g, seeds, depth, n );
+    std::string attrs( viaEdgeAttr( impactRowNameOnly( proven, n ), link ) );
+    if( link && oneHopRowIsLink( g, seeds, n, true, &g.outAnchorMiss ) )
+    {
+        attrs += " anchor=\"missing\"";
+    }
+    return attrs;
+}
+inline std::string impactLinkLegendFor( const Graph& g, std::span<const NodeId> seeds, const std::vector<std::uint32_t>& depth,
+                                        const std::vector<NodeId>& show, std::size_t begin, std::size_t end )
+{
+    const bool any = std::any_of( show.begin() + std::ptrdiff_t( begin ), show.begin() + std::ptrdiff_t( end ), [ & ]( NodeId n )
+    {
+        return impactDirectLink( g, seeds, depth, n );
+    } );
+    return viaLinkLegend( any );
+}
+inline std::string impactAnchorLegendFor( const Graph& g, std::span<const NodeId> seeds, const std::vector<std::uint32_t>& depth,
+                                          const std::vector<NodeId>& show, std::size_t begin, std::size_t end )
+{
+    const bool any = std::any_of( show.begin() + std::ptrdiff_t( begin ), show.begin() + std::ptrdiff_t( end ), [ & ]( NodeId n )
+    {
+        return impactDirectLink( g, seeds, depth, n ) && oneHopRowIsLink( g, seeds, n, true, &g.outAnchorMiss );
+    } );
+    return anchorMissLegend( any );
 }
 
 struct ImpactFileRow
@@ -11606,6 +12676,10 @@ struct ImpactFileRow
     std::uint32_t syms     = 0;
     std::uint32_t minDepth = 0;
     std::uint32_t nameOnly = 0;   // fix27: of syms, the via="name" rows (impactRowNameOnly) — counted only on a multi-def selector
+    std::uint32_t typeOnly = 0;   // L7: of syms, the ones only the type tier reaches (typeuse.h ImpactReach::typeOnly)
+    bool          typeScope = false;   // L7: the file names the type outside every indexed definition (syms may be 0)
+    std::string   ofDefXml;       // attrib-multidef (defattrib.h attachRollupOfDef): the row's of_def=, "" on a one-group selector
+    std::string   ofDefJson;      // ... and its JSON key
 };
 
 struct ImpactFileRollup
@@ -11614,18 +12688,113 @@ struct ImpactFileRollup
     std::size_t                shown  = 0;
     bool                       capped = false;
     std::string                next;     // the call listing every row; empty when uncut
+    bool                       typed       = false;   // L7: SYM is a type and its type tier ran (the <files> type_users= rides)
+    std::size_t                typeUsers   = 0;       // L7: symbols seeded by a type mention
+    std::size_t                typeDefs    = 0;       // L7: indexed type definitions sharing the spelled name (said when > 1)
+    bool                       typeCapped  = false;   // L7: the mention walk hit its budget — type rows are a floor
 };
+
+// L7 type-use impact (typeuse.h): what the type tier adds to the rollup. Default (null `typeOnly`) ⇒ no tier, the
+// rollup is byte-identical to before. Spans borrow the caller's TypeUseTier.
+struct ImpactTypeFold
+{
+    std::span<const std::uint32_t> defFiles;              // d="0" rows: the files defining SYM
+    std::span<const std::uint32_t> scopeFiles;            // files naming SYM outside every indexed definition (d="1", syms may be 0)
+    const std::vector<char>*       typeOnly   = nullptr;  // per node: reached only through the type tier
+    std::size_t                    users      = 0;
+    std::size_t                    typeDefs   = 0;
+    bool                           sitesCapped = false;
+};
+
+// L7: a TYPE impact (`type` non-null) rolls up even beside an uncut window — its d="0" row (the defining file) and the
+// via="type" marks are facts the symbol rows do not carry.
+// L7: the type tier's own rows, before the reach folds in — the defining files at d=0, then the files naming the type
+// outside every indexed definition at d=1 (syms=0 until a reached symbol lands there). Copies the tier's counts.
+// A null `fold` (no type tier) adds nothing.
+inline void seedTypeRollupRows( ImpactFileRollup& r, std::vector<std::uint32_t>& rowOfFile, const ImpactTypeFold* fold )
+{
+    if( fold == nullptr )
+    {
+        return;
+    }
+    const ImpactTypeFold& type = *fold;
+    r.typed      = true;
+    r.typeUsers  = type.users;
+    r.typeDefs   = type.typeDefs;
+    r.typeCapped = type.sitesCapped;
+    const auto add = [ & ]( std::span<const std::uint32_t> files, std::uint32_t d, bool scope )
+    {
+        for( const std::uint32_t f : files )
+        {
+            if( f < rowOfFile.size() && rowOfFile[f] == UINT32_MAX )
+            {
+                rowOfFile[f] = std::uint32_t( r.rows.size() );
+                r.rows.push_back( ImpactFileRow{ f, 0, d } );
+                r.rows.back().typeScope = scope;
+            }
+        }
+    };
+    add( type.defFiles, 0, false );
+    add( type.scopeFiles, 1, true );
+}
+
+// L7: after the reach folds in, each row's typeOnly = its reached symbols only the type tier reaches. Null ⇒ nothing.
+inline void foldTypeOnlyCounts( ImpactFileRollup& r, const std::vector<std::uint32_t>& rowOfFile, const IngestResult& ing,
+                                std::span<const NodeId> reach, const ImpactTypeFold* fold )
+{
+    if( fold == nullptr || fold->typeOnly == nullptr )
+    {
+        return;
+    }
+    const std::vector<char>& typeOnly = *fold->typeOnly;
+    for( const NodeId n : reach )
+    {
+        if( n < ing.symbols.size() && n < typeOnly.size() && typeOnly[n] != 0 )
+        {
+            ++r.rows[ rowOfFile[ ing.symbols[n].fileId ] ].typeOnly;
+        }
+    }
+}
+
+// Does the rollup ride? Beside a cut symbol window (idea #6), and (L7) on every type impact.
+inline bool impactRollupRides( bool windowCut, const ImpactTypeFold* type ) noexcept
+{
+    return windowCut || type != nullptr;
+}
+
+// L7: a row of the first-hop TYPE band — the defining file (d=0), or a d=1 file a type mention reaches (a type user or
+// a file-scope mention). A d=1 file reached only as a direct CALLER (a constructor call, or a namesake function of a
+// multi-definition selector) is not in the band: it keeps the ordinary 20-row window, so a selector that is mostly a
+// function (textual `query_one`: a class and four methods) does not grow to a 200-row listing.
+inline bool isTypeBandRow( const ImpactFileRow& row ) noexcept
+{
+    return row.minDepth == 0 || ( row.minDepth == 1 && ( row.typeOnly > 0 || row.typeScope ) );
+}
+
+// The rollup's default window: kImpactFileRollupCap, --limit when given; L7: a type impact with no --limit widens it to
+// the whole first-hop type band (isTypeBandRow), up to kImpactTypeRollupBandMax. `rows` is ranked (d= ascending).
+inline std::size_t impactRollupCap( std::span<const ImpactFileRow> rows, int pageLimit, bool typed )
+{
+    const std::size_t cap = std::size_t( rw::effectiveRowCap( pageLimit, int( kImpactFileRollupCap ) ) );
+    if( !typed || pageLimit > 0 )
+    {
+        return cap;
+    }
+    const std::size_t band = std::size_t( std::count_if( rows.begin(), rows.end(), []( const ImpactFileRow& row ) { return isTypeBandRow( row ); } ) );
+    return std::max( cap, std::min( band, kImpactTypeRollupBandMax ) );
+}
 
 inline ImpactFileRollup impactFileRollup( const IngestResult& ing, std::span<const NodeId> reach, const std::vector<std::uint32_t>& depth,
                                           int pageLimit, std::string_view sym, bool windowCut,
-                                          const std::vector<char>& hedgeProven = kNoImpactHedge )
+                                          const std::vector<char>& hedgeProven = kNoImpactHedge, const ImpactTypeFold* type = nullptr )
 {
     ImpactFileRollup          r;
-    if( !windowCut )
+    if( !impactRollupRides( windowCut, type ) )
     {
         return r;   // the rows name every reached file already (see the block comment); nothing to roll up
     }
     std::vector<std::uint32_t> rowOfFile( ing.files.size(), UINT32_MAX );
+    seedTypeRollupRows( r, rowOfFile, type );
     for( const NodeId n : reach )
     {
         if( n >= ing.symbols.size() )
@@ -11644,13 +12813,14 @@ inline ImpactFileRollup impactFileRollup( const IngestResult& ing, std::span<con
         row.minDepth = std::min( row.minDepth, d );
         row.nameOnly += std::uint32_t( impactRowNameOnly( hedgeProven, n ) );   // never on kNoImpactHedge (empty: no row hedged)
     }
+    foldTypeOnlyCounts( r, rowOfFile, ing, reach, type );
     std::sort( r.rows.begin(), r.rows.end(), [ & ]( const ImpactFileRow& a, const ImpactFileRow& b )
                {
                    if( a.minDepth != b.minDepth ) { return a.minDepth < b.minDepth; }
                    if( a.syms != b.syms ) { return a.syms > b.syms; }
                    return ing.files[a.fileId] < ing.files[b.fileId];
                } );
-    r.shown  = std::min( r.rows.size(), std::size_t( rw::effectiveRowCap( pageLimit, int( kImpactFileRollupCap ) ) ) );
+    r.shown  = std::min( r.rows.size(), impactRollupCap( r.rows, pageLimit, r.typed ) );
     r.capped = r.shown < r.rows.size();
     if( r.capped && !sym.empty() )
     {
@@ -11914,26 +13084,18 @@ inline std::vector<NodeId> shortestPath( const Graph& g, NodeId src, NodeId dst 
 // tests-to-run row say hops="1" (the test calls a changed symbol directly) rather than merely "reaches". ONE
 // walk, not a second BFS: a depth that disagreed with reachability by one edge would be invisible to every
 // gate that only checks the reached SET.
-inline std::vector<NodeId> transitiveCallersDepth( const Graph& g, std::span<const NodeId> seeds, std::vector<std::uint32_t>* depthOut )
+// L7 type-use impact (typeuse.h): `firstHop` (default empty ⇒ the plain call walk, unchanged) enters the walk at depth 1
+// beside the seeds' direct callers — the symbols that NAME a type seed — and is reached like any caller (in the output,
+// their own callers at depth 2). Queued after the seeds and before any expansion, so the BFS stays depth-monotone.
+// One BFS stretch of the caller walk: expands q[head..) (stopping before `end`, or when the queue drains) by in-edges,
+// appending each unseen caller at its parent's depth + 1. Returns where it stopped.
+inline std::size_t expandCallers( const Graph& g, std::vector<NodeId>& q, std::size_t head, std::size_t end, std::vector<char>& seen,
+                                  std::vector<std::uint32_t>& depth )
 {
-    const std::size_t          N = g.wOutDeg.size();
-    std::vector<char>          seen( N, 0 );
-    std::vector<NodeId>        q;
-    std::vector<std::uint32_t> localDepth;                                  // the walk always keeps depth; a caller that
-    std::vector<std::uint32_t>& depth = depthOut ? *depthOut : localDepth;  // wants it hands in the vector it lands in
-    depth.assign( N, 0 );
-    for( NodeId s : seeds )
-    {
-        if( s < N && !seen[s] )
-        {
-            seen[s] = 1;
-            q.push_back( s );
-        }
-    }
-    const std::size_t nSeed = q.size();
-    const auto*       ro    = g.inEdges.rowOffsets();
-    const auto*       ci    = g.inEdges.colIndices();
-    for( std::size_t head = 0; head < q.size(); ++head )
+    const std::size_t N  = seen.size();
+    const auto*       ro = g.inEdges.rowOffsets();
+    const auto*       ci = g.inEdges.colIndices();
+    for( ; head < q.size() && head < end; ++head )
     {
         const NodeId u = q[ head ];
         for( std::uint32_t k = ro[u]; k < ro[u + 1]; ++k )
@@ -11947,6 +13109,38 @@ inline std::vector<NodeId> transitiveCallersDepth( const Graph& g, std::span<con
             }
         }
     }
+    return head;
+}
+
+// Queue every not-yet-seen node of `nodes` at depth `d` (the walk's seeds at 0, L7's first hop at 1).
+inline void enqueueUnseen( std::span<const NodeId> nodes, std::uint32_t d, std::vector<char>& seen, std::vector<std::uint32_t>& depth,
+                           std::vector<NodeId>& q )
+{
+    for( const NodeId n : nodes )
+    {
+        if( n < seen.size() && !seen[n] )
+        {
+            seen[n]  = 1;
+            depth[n] = d;
+            q.push_back( n );
+        }
+    }
+}
+
+inline std::vector<NodeId> transitiveCallersDepth( const Graph& g, std::span<const NodeId> seeds, std::vector<std::uint32_t>* depthOut,
+                                                   std::span<const NodeId> firstHop = {} )
+{
+    const std::size_t          N = g.wOutDeg.size();
+    std::vector<char>          seen( N, 0 );
+    std::vector<NodeId>        q;
+    std::vector<std::uint32_t> localDepth;                                  // the walk always keeps depth; a caller that
+    std::vector<std::uint32_t>& depth = depthOut ? *depthOut : localDepth;  // wants it hands in the vector it lands in
+    depth.assign( N, 0 );
+    enqueueUnseen( seeds, 0, seen, depth, q );
+    const std::size_t nSeed = q.size();
+    const std::size_t head  = expandCallers( g, q, 0, nSeed, seen, depth );   // the seeds first: a direct caller and a first-hop node share d=1
+    enqueueUnseen( firstHop, 1, seen, depth, q );
+    expandCallers( g, q, head, SIZE_MAX, seen, depth );
     std::vector<NodeId> out( q.begin() + nSeed, q.end() );   // reached, minus the seeds
     std::sort( out.begin(), out.end() );
     return out;
@@ -13053,12 +14247,14 @@ inline GaugeClauses graphGaugeClauses( const Graph& g ) noexcept
 // it, so a collision costs a compare, never a wrong share. List numbers are first-seen in the sequential resolve loop, and the
 // map is only probed and inserted into — neither reaches output.
 //
+// Returns the call's list number (Graph::declinedSiteList), or kNoDeclinedList when the list could not be stored.
+//
 // DEGRADE: the offsets are uint32. A new list that would carry the candidate array past UINT32_MAX entries is not recorded:
-// the call stays counted on its caller (declinedOut, the header's declined=), and declined_calls= on the callers and impact
-// answers can under-count, as the counts_floor="1" those answers carry already allows. A declined set holds at least one
+// the call stays counted on its caller (declinedOut, the header's declined=) and keeps its site record with no list, and
+// declined_calls= on the callers and impact answers can under-count, as the counts_floor="1" those answers carry already allows. A declined set holds at least one
 // candidate — tier 3's two or more, or the ONE lone method the builtin-method name gate (BuiltinMethodGate) refused to
 // bind by name — so the list count never exceeds the entry count and the uint32 list numbers cannot wrap first.
-inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand )
+inline std::uint32_t internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand )
 {
     EXPECTS( !cand.empty(), "tier 3 declines a set it could not narrow to one; the builtin-method gate a non-empty set it admitted none of" );
     std::uint64_t     hash  = 14695981039346656037ull;   // the FNV-1a 64-bit offset basis
@@ -13075,19 +14271,21 @@ inline void internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<st
         if( listCount == cand.size() && std::memcmp( g.declinedListCand.data() + listOffset, cand.data(), cand.size_bytes() ) == 0 )
         {
             ++g.declinedListCallCount[ listIndex ];
-            return;
+            return listIndex;
         }
     }
     constexpr std::size_t kOffsetCeiling = UINT32_MAX;
     if( cand.size() > kOffsetCeiling - g.declinedListCand.size() )
     {
         DISCLOSE( "graph: the declined candidate lists would overflow their uint32 offsets — this call's list is not recorded, so declined_calls= can under-count" );
-        return;
+        return kNoDeclinedList;
     }
-    bucket.push_back( std::uint32_t( g.declinedListCallCount.size() ) );
+    const std::uint32_t listIndex = std::uint32_t( g.declinedListCallCount.size() );
+    bucket.push_back( listIndex );
     g.declinedListCand.insert( g.declinedListCand.end(), cand.begin(), cand.end() );
     g.declinedListOff.push_back( std::uint32_t( g.declinedListCand.size() ) );
     g.declinedListCallCount.push_back( 1 );
+    return listIndex;
 }
 
 // declined_calls= on the callers and impact answers: how many tier-3 declines named at least one of `targets`
@@ -13140,9 +14338,98 @@ inline std::size_t declinedCallsMadeBy( const Graph& g, std::span<const NodeId> 
     return callCount;
 }
 
-// The callees answer's <stdm> line: of the declines `sources` made (declinedCallsMadeBy), the C++ calls named like a
-// standard container or string member on a receiver no rule tied to an in-tree class (Graph::stdMemberDeclines) — the names,
-// each once in table (byte) order and comma-joined, and how many calls. Empty on a graph with none, so every other answer
+// lane declined-sites: the site records (Graph::declinedSite*) behind the two counts above, for the <dc> rows
+// (declinedsites.h). declinedSitesMadeBy: the declines `sources` made — one record per call declinedCallsMadeBy counts.
+// The inert quoted sites (#380) `sources` made: counted in declinedOut, never a record (Graph::inertDeclinedCaller).
+inline std::size_t inertDeclinedMadeBy( const Graph& g, std::span<const NodeId> sources ) noexcept
+{
+    std::size_t n = 0;
+    if( g.inertDeclinedCaller.empty() )
+    {
+        return 0;   // no Elixir quote anywhere: the common case pays nothing
+    }
+    for( const NodeId caller : g.inertDeclinedCaller )
+    {
+        n += std::ranges::contains( sources, caller ) ? 1u : 0u;
+    }
+    return n;
+}
+
+inline std::vector<std::uint32_t> declinedSitesMadeBy( const Graph& g, std::span<const NodeId> sources )
+{
+    std::vector<std::uint32_t> sites;
+    if( g.declinedSiteCaller.empty() || sources.empty() )
+    {
+        ENSURES( declinedCallsMadeBy( g, sources ) == inertDeclinedMadeBy( g, sources ),
+                 "no record, so no declined call but an inert quoted site: every decline site writes one" );
+        return sites;
+    }
+    std::vector<char> isSource( g.declinedOut.size(), 0 );
+    for( const NodeId s : sources )
+    {
+        if( s < isSource.size() )
+        {
+            isSource[ s ] = 1;
+        }
+    }
+    for( std::uint32_t site = 0; site < g.declinedSiteCaller.size(); ++site )
+    {
+        if( isSource[ g.declinedSiteCaller[ site ] ] )
+        {
+            sites.push_back( site );
+        }
+    }
+    ENSURES( sites.size() + inertDeclinedMadeBy( g, sources ) == declinedCallsMadeBy( g, sources ),
+             "every declined call a source made has its record, and no other does; an inert quoted site has none" );
+    return sites;
+}
+
+// declinedSitesNaming: the declined calls whose stored candidate LIST holds one of `targets` — list membership, never the
+// called name (the language and root filters split one name into several lists) — one record per call declinedCallsNaming
+// counts. Which lists hold a target is decided once per list (a bit), then the records are one pass: O(lists + records).
+inline std::vector<std::uint32_t> declinedSitesNaming( const Graph& g, std::span<const NodeId> targets )
+{
+    std::vector<std::uint32_t> sites;
+    if( g.declinedListCallCount.empty() || targets.empty() )
+    {
+        return sites;
+    }
+    std::vector<char> isTarget( g.declinedOut.size(), 0 );
+    for( const NodeId t : targets )
+    {
+        if( t < isTarget.size() )
+        {
+            isTarget[ t ] = 1;
+        }
+    }
+    std::vector<char> listHolds( g.declinedListCallCount.size(), 0 );
+    std::size_t       callCount = 0;   // declinedCallsNaming's own sum, for the postcondition
+    for( std::size_t listIndex = 0; listIndex < listHolds.size(); ++listIndex )
+    {
+        for( std::uint32_t slot = g.declinedListOff[ listIndex ]; slot < g.declinedListOff[ listIndex + 1 ]; ++slot )
+        {
+            if( isTarget[ g.declinedListCand[ slot ] ] )
+            {
+                listHolds[ listIndex ] = 1;
+                callCount += g.declinedListCallCount[ listIndex ];
+                break;
+            }
+        }
+    }
+    for( std::uint32_t site = 0; site < g.declinedSiteList.size(); ++site )
+    {
+        if( const std::uint32_t list = g.declinedSiteList[ site ]; list != kNoDeclinedList && listHolds[ list ] )
+        {
+            sites.push_back( site );
+        }
+    }
+    ENSURES( sites.size() == callCount, "each stored list counts exactly the calls whose records name it" );
+    return sites;
+}
+
+// The callees answer's <stdm> line: of the declines `sources` made (declinedCallsMadeBy), the calls named in their
+// language's standard-member row on a receiver no rule tied to an in-tree class (Graph::stdMemberDeclines) — the names,
+// each once in flat-table order (kStdMemberRowStart: C++ row first, each row by byte) and comma-joined, and how many calls. Empty on a graph with none, so every other answer
 // keeps its bytes. The names are table literals (identifier characters only): neither dialect needs to escape them.
 struct StdMemberCallsMade
 {
@@ -13157,13 +14444,13 @@ inline StdMemberCallsMade stdMemberCallsMadeBy( const Graph& g, std::span<const 
         return out;
     }
     EXPECTS( std::is_sorted( g.stdMemberDeclines.begin(), g.stdMemberDeclines.end() ), "buildGraph sorts the declines after its resolve loop" );
-    std::vector<char> named( std::size( externalnames::kCppStdMemberNames ), 0 );
+    std::vector<char> named( kStdMemberRowStart[ kLangCount ], 0 );
     for( const NodeId s : sources )
     {
         const auto lo = std::lower_bound( g.stdMemberDeclines.begin(), g.stdMemberDeclines.end(), std::pair<NodeId, std::uint16_t>( s, 0 ) );
         for( auto it = lo; it != g.stdMemberDeclines.end() && it->first == s; ++it )
         {
-            ASSUME( it->second < named.size(), "the resolve loop records a kCppStdMemberNames index" );
+            ASSUME( it->second < named.size(), "the resolve loop records a kStdMemberNames flat index" );
             named[ it->second ] = 1;
             ++out.calls;
         }
@@ -13172,7 +14459,7 @@ inline StdMemberCallsMade stdMemberCallsMadeBy( const Graph& g, std::span<const 
     {
         if( named[ i ] != 0 )
         {
-            out.names.append( out.names.empty() ? "" : "," ).append( externalnames::kCppStdMemberNames[ i ] );
+            out.names.append( out.names.empty() ? "" : "," ).append( StdMemberGate::nameAt( std::uint16_t( i ) ) );
         }
     }
     ENSURES( out.names.empty() == ( out.calls == 0 ), "a named call and a listed name come together" );

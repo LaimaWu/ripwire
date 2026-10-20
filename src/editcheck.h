@@ -184,12 +184,23 @@ inline std::size_t editCheckDeclTargetGroup( const IngestResult& ing, const Edit
     return target;
 }
 
-inline void editCheckFoldDeclGroups( const IngestResult& ing, EditCheckGroupKeys& gk )
+// The fold's verdict for every group: the index of the group it folds into, or its own index when it is kept. ONE rule
+// with two readers: editCheckFoldDeclGroups below drops the folded groups (a prototype and its definition are one
+// contract), and defattrib.h's definition groups (the per-row attribution of --callers/--callees/--impact) join a folded
+// declaration to the definition it declares — so "which declarations are this definition" cannot mean two things.
+// A pair is tried only when editCheckTieCandidate (parser fields alone) admits it, so a definition's signature is read
+// only for a declaration that could declare it.
+inline std::vector<std::size_t> editCheckDeclFoldTargets( const IngestResult& ing, const EditCheckGroupKeys& gk )
 {
-    const std::size_t groupCount = gk.keys.size();
+    const std::size_t        groupCount = gk.keys.size();
+    std::vector<std::size_t> target( groupCount );
+    for( std::size_t groupIndex = 0; groupIndex < groupCount; ++groupIndex )
+    {
+        target[ groupIndex ] = groupIndex;
+    }
     if( groupCount < 2 )
     {
-        return;
+        return target;
     }
     EditCheckSources                                  sources( ing, EditCheckSpliced{} );
     std::deque<std::pair<NodeId, EditCheckSignature>> defSigs;   // each definition's signature, read once (a deque: stable refs)
@@ -205,13 +216,34 @@ inline void editCheckFoldDeclGroups( const IngestResult& ing, EditCheckGroupKeys
     };
     const auto declares = [ & ]( NodeId decl, NodeId def )
     {
-        return editCheckTieDeclaration( ing, sources, decl, def, defSigOf( def ) ).tie == EditCheckTie::Declares;
+        return editCheckTieCandidate( ing.symbols[ decl ], ing.symbols[ def ] )
+            && editCheckTieDeclaration( ing, sources, decl, def, defSigOf( def ) ).tie == EditCheckTie::Declares;
     };
-
-    EditCheckGroupKeys kept;
     for( std::size_t groupIndex = 0; groupIndex < groupCount; ++groupIndex )
     {
-        if( editCheckDeclOnlyGroup( ing, gk.members[ groupIndex ] ) && editCheckDeclTargetGroup( ing, gk, groupIndex, declares ) < groupCount )
+        if( editCheckDeclOnlyGroup( ing, gk.members[ groupIndex ] ) )
+        {
+            const std::size_t into = editCheckDeclTargetGroup( ing, gk, groupIndex, declares );
+            target[ groupIndex ] = into < groupCount ? into : groupIndex;
+        }
+    }
+    const bool targetsKept = std::all_of( target.begin(), target.end(), [ & ]( std::size_t t ) { return t < groupCount && target[ t ] == t; } );
+    ENSURES( targetsKept, "a folded group names a kept one (a fold target holds a definition, so it never folds itself)" );
+    return target;
+}
+
+inline void editCheckFoldDeclGroups( const IngestResult& ing, EditCheckGroupKeys& gk )
+{
+    const std::size_t groupCount = gk.keys.size();
+    if( groupCount < 2 )
+    {
+        return;
+    }
+    const std::vector<std::size_t> target = editCheckDeclFoldTargets( ing, gk );
+    EditCheckGroupKeys              kept;
+    for( std::size_t groupIndex = 0; groupIndex < groupCount; ++groupIndex )
+    {
+        if( target[ groupIndex ] != groupIndex )
         {
             continue;   // folded into the definition group it declares
         }
@@ -599,7 +631,7 @@ inline EditCheckVerdict editCheckVerdict( const EditCheckContract& contract, std
 // ── the implicit-RECEIVER wildcard, recognised here because ingest's own version cannot fire ──────────────
 // A definition whose first parameter is a receiver the call site never writes: `params` counts it, the
 // call-site argument count does not, so an EXACT-arity comparison is off by one — and off in the direction
-// that manufactures a flag. ingest.cpp's cc_paramArityExact already exempts this class, but it keys on
+// that manufactures a flag. ingest_metrics.h cc_paramShape already exempts this class, but it keys on
 // `kind == SymKind::Method`, and Python's tags.scm has no `@definition.method` at all: every `def`, including
 // one nested in a class, is captured as `@definition.function`. So the exemption is unreachable for Python —
 // on this repo it could not fire on a single definition, and 12 of the 19 nonzero incompatible= counts on an
@@ -614,7 +646,7 @@ inline EditCheckVerdict editCheckVerdict( const EditCheckContract& contract, std
 // The Ruby half of that predicate is BELT AND BRACES, not a live exemption, and saying so here is the point:
 // Ruby's `def m(a)` has NO implicit receiver parameter — `params` and the call site's argument count already
 // agree — so there is nothing to exempt, and in any case Ruby never reaches this disjunct. The caller test
-// below short-circuits on `os.arityExact == 0` first, and `cc_paramArityExact`'s language gate
+// below short-circuits on `os.arityExact == 0` first, and `cc_paramShape`'s language gate
 // (src/ingest_metrics.h) does not list Ruby, so every Ruby definition carries arityExact 0 and no Ruby caller
 // is arity-flaggable at all. MEASURED both ways on a two-file Ruby repo whose method gained a parameter:
 // `incompatible="0"` for a SCOPED method and for a top-level one alike, before and after the scope arm. What
@@ -623,9 +655,13 @@ inline EditCheckVerdict editCheckVerdict( const EditCheckContract& contract, std
 //
 // The test is deliberately made HERE rather than on `arityExact`, which is also graph.h's
 // call-resolution arity filter — moving it there would move edge counts corpus-wide, which is the qualified-
-// call round's agenda and not this one's. graph.h needs no equivalent change: its filter drops a candidate
-// only when `argCount > params`, and the implicit receiver errs the other way (0 args vs 1 param), so that
-// one-sided form is already safe against this class.
+// call round's agenda and not this one's. graph.h's filter drops a candidate for too MANY arguments
+// (`argCount > params`, where the implicit receiver errs the other way: 0 args vs 1 param) and, since train 29,
+// for too FEW (`argCount < paramsMin`); the too-few side is safe against this class because ingest gives a
+// Python method no minimum at all (ingest_metrics.h kParamMinLangs `selfOwner`, the parse-tree test this
+// predicate's scope test approximates). editCheckMinArity (editcheckdecl.h) computes its own declaration-aware
+// minimum per QUERY from source text; graph.h reads Symbol::paramsMin, computed once per def at extraction —
+// two readings of "fewest arguments", kept apart because the per-query text tie is too costly per def in buildGraph.
 //
 // Residual, stated because it is a deliberate over-approximation: a Python function nested inside another
 // FUNCTION also has a non-empty scope and is exempted too. That direction only ever suppresses a flag, which
@@ -717,7 +753,8 @@ struct EditCheckCalleeTest : CallSiteCalleeTest
 // NOT a proof that the call site binds to those definitions at all — that half is name-based (module-resolved
 // for Elixir, see EditCheckCalleeTest), and the emitted legend says so.
 inline std::vector<char> editCheckIncompatibleFlags( const IngestResult& ing, std::span<const NodeId> overloadNodes,
-                                                     EditCheckCalleeTest& callee, std::span<const char> seenCaller )
+                                                     EditCheckCalleeTest& callee, std::span<const char> seenCaller,
+                                                     std::span<const std::uint32_t> keptForwards )
 {
     // a C/C++ definition whose matching declaration carries defaults accepts the RANGE [minArity, params]
     // (editCheckDeclDefaults); every other definition's minArity is its params, so the test below is the exact one
@@ -734,9 +771,11 @@ inline std::vector<char> editCheckIncompatibleFlags( const IngestResult& ing, st
         return true;
     };
     std::vector<char> callerIncompatible( ing.symbols.size(), 0 );
-    for( const Reference& r : ing.references )
+    for( std::uint32_t refIndex = 0; refIndex < ing.references.size(); ++refIndex )
     {
-        if( r.role != RefRole::Call || r.fromSymbol >= seenCaller.size() || !seenCaller[r.fromSymbol] )
+        const Reference& r = ing.references[refIndex];
+        // a FORWARDED call buildGraph did not keep is no call the caller makes (model.h forwardCounts): it flags nothing
+        if( r.role != RefRole::Call || r.fromSymbol >= seenCaller.size() || !seenCaller[r.fromSymbol] || !forwardCounts( r, refIndex, keptForwards ) )
         {
             continue;
         }
@@ -769,13 +808,16 @@ inline std::vector<char> editCheckIncompatibleFlags( const IngestResult& ing, st
 //
 // ONE pass over ing.references plus one sort — never a per-row rescan (editCheckIncompatibleFlags' own
 // rule; a widely-shared name has hundreds of caller rows). Duplicate (node,line) pairs collapse: this is a
-// set of LINES TO OPEN, so two calls on one line are one site.
+// set of LINES TO OPEN, so two calls on one line are one site. A FORWARDED call counts only where buildGraph kept it
+// (model.h forwardCounts, `--uses`' own filter: `keptForwards` is Graph::keptForwards).
 template <class OnSite>
-inline void forEachCallSite( const IngestResult& ing, CallSiteCalleeTest& callee, std::span<const char> callerSelected, OnSite&& onSite )
+inline void forEachCallSite( const IngestResult& ing, CallSiteCalleeTest& callee, std::span<const char> callerSelected,
+                             std::span<const std::uint32_t> keptForwards, OnSite&& onSite )
 {
-    for( const Reference& r : ing.references )
+    for( std::uint32_t refIndex = 0; refIndex < ing.references.size(); ++refIndex )
     {
-        if( r.role != RefRole::Call || r.isCompose || r.isDocLink || r.lang == Lang::Markdown )
+        const Reference& r = ing.references[refIndex];
+        if( r.role != RefRole::Call || r.isCompose || r.isDocLink || r.lang == Lang::Markdown || !forwardCounts( r, refIndex, keptForwards ) )
         {
             continue;
         }
@@ -788,10 +830,11 @@ inline void forEachCallSite( const IngestResult& ing, CallSiteCalleeTest& callee
 }
 
 inline std::vector<std::pair<NodeId, std::uint32_t>>
-editCheckCallSites( const IngestResult& ing, CallSiteCalleeTest& callee, std::span<const char> callerIncompatible )
+editCheckCallSites( const IngestResult& ing, CallSiteCalleeTest& callee, std::span<const char> callerIncompatible,
+                    std::span<const std::uint32_t> keptForwards )
 {
     std::vector<std::pair<NodeId, std::uint32_t>> sites;
-    forEachCallSite( ing, callee, callerIncompatible, [ & ]( const Reference& r ) { sites.emplace_back( r.fromSymbol, r.line ); } );
+    forEachCallSite( ing, callee, callerIncompatible, keptForwards, [ & ]( const Reference& r ) { sites.emplace_back( r.fromSymbol, r.line ); } );
     std::sort( sites.begin(), sites.end() );
     sites.erase( std::unique( sites.begin(), sites.end() ), sites.end() );
     return sites;
@@ -815,7 +858,8 @@ struct CallSiteAt
 // The call sites of `defs` inside the caller rows `pageCallers` (one page of a callers listing). `defs` is the resolved
 // definition set of ONE selector; a set whose members carry two leaf names (a qualified tier may) gets one pass per
 // distinct name, so the second name's sites are never silently dropped. Each pass is one scan of the reference table.
-inline std::vector<CallSiteAt> callSitesAt( const IngestResult& ing, std::span<const NodeId> defs, std::span<const NodeId> pageCallers )
+inline std::vector<CallSiteAt> callSitesAt( const IngestResult& ing, std::span<const NodeId> defs, std::span<const NodeId> pageCallers,
+                                            std::span<const std::uint32_t> keptForwards )
 {
     std::vector<CallSiteAt> sites;
     if( defs.empty() || pageCallers.empty() )
@@ -840,7 +884,7 @@ inline std::vector<CallSiteAt> callSitesAt( const IngestResult& ing, std::span<c
         sameName.clear();
         std::copy_if( defs.begin() + std::ptrdiff_t( i ), defs.end(), std::back_inserter( sameName ), nameAt );
         CallSiteCalleeTest callee( ing, ing.symbols[ defs[i] ], sameName );
-        forEachCallSite( ing, callee, onPage, [ & ]( const Reference& r ) { sites.push_back( CallSiteAt{ r.fromSymbol, r.fileId, r.line } ); } );
+        forEachCallSite( ing, callee, onPage, keptForwards, [ & ]( const Reference& r ) { sites.push_back( CallSiteAt{ r.fromSymbol, r.fileId, r.line } ); } );
     }
     std::sort( sites.begin(), sites.end() );
     sites.erase( std::unique( sites.begin(), sites.end() ), sites.end() );
@@ -883,10 +927,11 @@ struct RowCallSites
     bool                                  anyCut;
 };
 
-inline RowCallSites rowCallSites( const IngestResult& ing, std::span<const NodeId> defs, std::span<const NodeId> rows, const VrRender& rr )
+inline RowCallSites rowCallSites( const IngestResult& ing, std::span<const NodeId> defs, std::span<const NodeId> rows, const VrRender& rr,
+                                  std::span<const std::uint32_t> keptForwards )
 {
     RowCallSites out{};
-    const std::vector<CallSiteAt> sites = callSitesAt( ing, defs, rows );
+    const std::vector<CallSiteAt> sites = callSitesAt( ing, defs, rows, keptForwards );
     out.tokens.reserve( rows.size() );
     out.totals.reserve( rows.size() );
     for( const NodeId r : rows )
@@ -1016,7 +1061,7 @@ editCheckCallers( const IngestResult& ing, const Graph& g, std::span<const NodeI
         }
     }
 
-    std::vector<char> callerIncompatible = editCheckIncompatibleFlags( ing, overloadNodes, callee, seenCaller );
+    std::vector<char> callerIncompatible = editCheckIncompatibleFlags( ing, overloadNodes, callee, seenCaller, g.keptForwards );
 
     std::sort( callerIds.begin(), callerIds.end(), [ & ]( NodeId a, NodeId b )
     {
@@ -1387,7 +1432,7 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     // P3/M21: the call-site lines for the flagged rows. Paid for only when a row will carry them — an
     // unchanged contract with no flagged caller does not scan the reference table at all.
     const std::vector<std::pair<NodeId, std::uint32_t>> callSites =
-        incompatibleCount > 0 ? editCheckCallSites( ing, callee, callerIncompatible )
+        incompatibleCount > 0 ? editCheckCallSites( ing, callee, callerIncompatible, g.keptForwards )
                               : std::vector<std::pair<NodeId, std::uint32_t>>{};
 
     std::vector<char> esc;

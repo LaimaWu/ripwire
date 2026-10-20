@@ -860,6 +860,9 @@ fi
 # The same three runs cover the 16-BIT FIELDS the writer stores in a u32 slot (readDef's ppAlt and params,
 # readRef's argCount — hazardpatterncheck.sh rule D). `std::uint16_t( r.u32() )` kept the low bits of 0x10000
 # and believed a 0: (a) values 0x10000 and 0xFFFFFFFF must refuse that record, (c) 0xFFFF must be accepted.
+# The same runs cover readDef's PAIR rule paramsMin <= params (B2.2; the extractor never writes a larger minimum, and a
+# too-high one drops a candidate for too few arguments): on the first def with params >= 1, (a) paramsMin = params + 1
+# must refuse that record, (c) paramsMin = params (or 0 where it already equals params) must be accepted.
 echo
 echo "=== Part 3: out-of-range enum byte in a checksum-valid ingest-cache record — DEV build ==="
 EFX="$TMP/enumfx"; mkdir -p "$EFX/ffi" "$EFX/routes"
@@ -909,6 +912,7 @@ blob = bytearray(open(good_path, "rb").read())
 HDR, TRAILER, ENTRY = 25, 24, 32
 table_off, n = struct.unpack_from("<QI", blob, len(blob) - TRAILER)[0:2]
 sites = {}
+pmin = {}
 for i in range(n):
     e = table_off + i * ENTRY
     rec_off = struct.unpack_from("<Q", blob, e + 8)[0]
@@ -929,13 +933,15 @@ for i in range(n):
     s(); skip(4 * 8 + 5 * 4)                                              # path, hash/size/mtime/ctime, FileHealth
     for _ in range(u32()):                                                # defs (LEAN family: no subtoken rows)
         site32("def.ppAlt", 9 * 4); site32("def.params", 13 * 4)
-        skip(14 * 4 + 6 + 2 * 4); site("def.kind"); site("def.lang"); s(); s(); skip(8)   # #150: +1 u8 (scopeRootsStd); cache v26: +2 u32 (fnScopeStart/End) before kind
+        if "def.paramsMin" not in pmin and struct.unpack_from("<I", blob, p + 13 * 4)[0] >= 1:   # B2.2 pair rule: a def with params >= 1
+            pmin["def.paramsMin"] = (p + 14 * 4, struct.unpack_from("<I", blob, p + 14 * 4)[0], struct.unpack_from("<I", blob, p + 13 * 4)[0])
+        skip(15 * 4 + 6 + 2 * 4); site("def.kind"); site("def.lang"); s(); s(); skip(8)   # #150: +1 u8 (scopeRootsStd); cache v26: +2 u32 (fnScopeStart/End) before kind; cache v33: +1 u32 (paramsMin) after params
     for _ in range(u32()):                                                # refs
-        skip(4); site("ref.lang"); s(); skip(2); s(); site("ref.recv"); s(); skip(1); s(); s(); site("ref.role"); site32("ref.argCount", 4); skip(12); s(); s(); s(); s(); skip(1)   # line, argCount, argCountKnown, viaArrow, #150's qualifierRootsStd, FE-A's memberCall u8 + memberRoot str, FE-B's memberPath + memberCtor + memberVia strs, memberFactory u8
+        skip(4); site("ref.lang"); s(); skip(2); s(); site("ref.recv"); s(); skip(1); s(); s(); site("ref.role"); site32("ref.argCount", 4); skip(12); s(); s(); s(); s(); skip(2)   # line, argCount, argCountKnown, viaArrow, #150's qualifierRootsStd, FE-A's memberCall u8 + memberRoot str, FE-B's memberPath + memberCtor + memberVia strs, memberFactory u8, fcall-forward's forwarded u8
     for _ in range(u32()):                                                # includes
         skip(3 + 4 + 1); s()
     for _ in range(u32()):                                                # binds
-        skip(4); site("bind.lang"); site("bind.kind"); skip(1 + 8); s(); s(); s()   # isFromAssignment, spanStart/End
+        skip(4); site("bind.lang"); site("bind.kind"); skip(1 + 2 + 8); s(); s(); s()   # isFromAssignment, resultIndex/unwrapDepth (v33), spanStart/End
     for _ in range(u32()):                                                # FFI aliases
         site("ffi.kind"); skip(1); s(); s(); s()
     for _ in range(u32()):                                                # route defs
@@ -995,6 +1001,13 @@ for cls in ("def.ppAlt", "def.params", "ref.argCount"):
     for tag, value in (("wide", 0x10000), ("allones", 0xFFFFFFFF), ("inrange", 0xFFFF)):
         open(f"{outdir}/{cls}.{tag}.cache", "wb").write(rebuilt_with(off, value, 4))
         print(f"{cls}\tu16\t{tag}\t{value}\t{orig}\t65536")
+if "def.paramsMin" not in pmin:
+    print("def.paramsMin\tpmin\tABSENT\t-\t-\t-")
+else:
+    off, orig, params = pmin["def.paramsMin"]
+    for tag, value in (("above", params + 1), ("inrange", params if orig != params else 0)):
+        open(f"{outdir}/def.paramsMin.{tag}.cache", "wb").write(rebuilt_with(off, value, 4))
+        print(f"def.paramsMin\tpmin\t{tag}\t{value}\t{orig}\t{params}")
 PYEOF
 planRc=$?
 if [ "$planRc" -ne 0 ]; then
@@ -1007,7 +1020,9 @@ elif [ -n "$GOOD_RECORDS" ]; then
             continue
         fi
         mutant="$EDIR/$cls.$tag.cache"
-        if [ "$enum" = "u16" ]; then what="16-bit field stored wider than 16 bits"; else what="$enum byte past the last enumerator (count $enumCount)"; fi
+        if [ "$enum" = "u16" ]; then what="16-bit field stored wider than 16 bits"
+        elif [ "$enum" = "pmin" ]; then what="paramsMin above its def's params ($enumCount)"
+        else what="$enum byte past the last enumerator (count $enumCount)"; fi
         if cmp -s "$mutant" "$EDIR/good.cache"; then
             no "[enum:$cls=$value] the mutation did not take (mutant equals the good cache)"
             continue

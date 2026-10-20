@@ -26,7 +26,7 @@
 #       only read as absent because the fixture defines no Struct. `class Built < Factory.fabricate( :x )` against
 #       an in-tree `Factory` pins it.
 #   (b) a MIXIN (`include Helper` / `extend` / `prepend`) is an ANCESTOR for the call graph since parser version
-#       131 — the base walk, the CHA cone and a bare call's reach read it (ingest_relations.h captureRubyMixinBases,
+#       131 — the base walk, the CHA cone and a bare call's reach read it (captureRubyMixinBases then; the @reference.mixin capture since 173,
 #       test/rubyreachcheck.sh) — and since lane lego-transitive it is an IMPLEMENTOR edge too: graph.h's implementors
 #       builder admits a Ruby module as a base (BuiltinMethodGate::isClassLike's Ruby-module rule), so --lego=Helper
 #       lists Mixed. Floor (b) is CLOSED; the arm below is inverted and says so (rake: `include Rake::DSL`).
@@ -498,7 +498,8 @@ then
 fi
 # The expected count: every `class X < Const` in the fixture (a computed superclass mints no inherit reference) and,
 # since parser version 131, every constant of a class-body `include`/`extend`/`prepend` — a mixin is an ancestor too
-# (ingest_relations.h captureRubyMixinBases), so the seam drops its directive from the join as well.
+# (queries/ruby/tags.scm @reference.mixin since slice 4a; captureRubyMixinBases before that), so the seam drops its
+# directive from the join as well.
 SUPERS="$( cat "$FIX"/*.rb | grep -cE '^[[:space:]]*class [A-Z][A-Za-z0-9_:]* < (::)?[A-Z][A-Za-z0-9_]*(::[A-Z][A-Za-z0-9_]*)*[[:space:]]*(;|#|$)' )"
 MIXINS="$( cat "$FIX"/*.rb | grep -E '^[[:space:]]+(include|extend|prepend) ' | grep -oE '(::)?[A-Z][A-Za-z0-9_]*(::[A-Z][A-Za-z0-9_]*)*' | grep -c . )"
 WANT=$(( SUPERS + MIXINS ))
@@ -519,6 +520,73 @@ then
     echo "$SEAMC" | grep -q 'ruby_bases_unscoped=N:' \
         && ok "seam: the compact legend defines ruby_bases_unscoped=" \
         || no "seam: --legend=compact carries ruby_bases_unscoped= with no row defining it"
+fi
+
+# ---- slice 4a: the mixin read moved to queries/ruby/tags.scm (@reference.mixin) -------------------------------
+# The constants of a class-body `include`/`extend`/`prepend` are inherit references. Since slice 4a the tags query
+# states the SHAPE and the Ruby reader owns the two guards a tags pattern cannot: the directive's TEXT and its
+# POSITION. The query matches ANY call holding a constant argument, so those guards are the only thing between an
+# ordinary call and an invented ancestor. Each line below pins one of them:
+#
+#   include MixA, MixB      2 refs — one directive, N constants, in source order
+#   include Space::Mod      1      a scope_resolution is a base, as a superclass's is
+#   extend MixB             1   \
+#   prepend Space::Mod      1   /  all THREE mixin directives are read, not just `include`
+#   class << self/include   1      the enclosing class's own singleton is class-DSL position
+#   Logger.new( MixA )      0      refused by the RECEIVER half of the text guard
+#   raise MixA              0      receiverless, at class-body level: refused by the NAME half ALONE — a change
+#                                  that dropped only the name comparison would let this one through
+#   def f / include MixA    0      a method body is not class-DSL position (the POSITION guard)
+#
+# Total: 6. `raise MixA` mints no reference on this head (the maintainer measured the same).
+MIXQ="$DIR/mixq"; mkdir -p "$MIXQ"
+cat > "$MIXQ/q.rb" <<'RUBY'
+module MixA; end
+module MixB; end
+module Space
+  module Mod; end
+end
+class Mixed
+  include MixA, MixB
+  include Space::Mod
+  extend MixB
+  prepend Space::Mod
+  Logger.new( MixA )
+  raise MixA
+  def f
+    include MixA
+  end
+  class << self
+    include MixA
+  end
+end
+RUBY
+if RIPWIRE_TEST_RUBY_BASE_UNSCOPED=1 runq MIXSEAM "$MIXQ" --no-cache --lego=MixA --legend=full
+then
+    if echo "$MIXSEAM" | grep -q ' ruby_bases_unscoped="6"'
+    then
+        ok "slice 4a: 6 mixin inherit refs (include x2 + scope_resolution + extend + prepend + class << self) — and none of Logger.new( MixA ), raise MixA or the method-body include is one"
+    else
+        no "slice 4a: expected ruby_bases_unscoped=\"6\" (2+1+1+1+1, the two calls and the method body refused), got: $( echo "$MIXSEAM" | grep -o 'ruby_bases_unscoped="[0-9]*"' )"
+    fi
+    if echo "$MIXSEAM" | sed 's/></>\n</g' | grep -q '<impl n="Mixed"'
+    then
+        ok "slice 4a: --lego=MixA lists Mixed — the capture-driven path mints the same ancestry as the walk it replaced"
+    else
+        no "slice 4a: --lego=MixA lists no Mixed (the mixin ancestry is gone)"
+    fi
+fi
+# The MIGRATION itself. An IMPLEMENTATION guard, deliberately not a behaviour one: this slice is byte-identical by
+# contract, so NO output can tell the capture path from the walk it replaced — which is exactly why the two parity
+# arms above pass on main as well. What only this arm can catch is the regression they cannot: restoring the retired
+# Ruby-only walk, or dropping the capture, leaves every output byte the same while undoing the slice's whole point.
+# Red on main, green here — the one "red first" a behaviour-preserving slice has.
+if grep -q '@reference.mixin' "$ROOT/queries/ruby/tags.scm" 2>/dev/null \
+   && ! grep -qE 'void captureRubyMixinBases *\(' "$ROOT/src/ingest_relations.h" 2>/dev/null
+then
+    ok "slice 4a: the mixin read is queries/ruby/tags.scm's @reference.mixin capture, and the retired captureRubyMixinBases definition is gone"
+else
+    no "slice 4a: the migration is undone — tags.scm @reference.mixin=$( grep -c '@reference.mixin' "$ROOT/queries/ruby/tags.scm" 2>/dev/null ), ingest_relations.h captureRubyMixinBases definition=$( grep -cE 'void captureRubyMixinBases *\(' "$ROOT/src/ingest_relations.h" 2>/dev/null )"
 fi
 
 echo

@@ -1610,6 +1610,14 @@ void streamSideCaptures( TSNode root, const SideArms& arms )
     }
 }
 
+// The languages the binds pass (ingest_binds.h bindsVisitNode) visits: the Rule-2 / L3 / shadow families, and the languages
+// that join for the receiver-evidence records alone (FE-B; train 29 call-result typing adds Rust).
+inline constexpr std::array<Lang, 12> kBindPassLangs = {
+    Lang::Cpp, Lang::ObjC, Lang::C, Lang::Python, Lang::TypeScript, Lang::JavaScript, Lang::Java,
+    Lang::Go, Lang::CSharp, Lang::Kotlin, Lang::Swift, Lang::Rust,
+};
+inline bool bindPassLang( Lang l ) noexcept { return extent::inSet( kBindPassLangs, l ); }   // the shared membership test
+
 void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_view src, TSNode root,
                        std::vector<RawRef>& refs, std::vector<Include>& incs, std::vector<RawBind>& binds,
                        std::vector<BindingAlias>& ffis, std::vector<RouteDef>& routeDefs,
@@ -1688,12 +1696,10 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
         {
             arms.rust = &rustCtx;
         }
-        // FE-B: JavaScript and Go (and, review B3, C#, Kotlin and Swift) join for the receiver-evidence records alone
-        // (captureReceiverEvidence); every other branch of the pass gates its own language, so their record streams gain
+        // FE-B: JavaScript and Go (and, review B3, C#, Kotlin and Swift; train 29, Rust) join for the receiver-evidence records
+        // alone (captureReceiverEvidence); every other branch of the pass gates its own language, so their record streams gain
         // exactly those kinds.
-        if( le.lang == Lang::Cpp || le.lang == Lang::ObjC || le.lang == Lang::Python || le.lang == Lang::TypeScript
-            || le.lang == Lang::Java || le.lang == Lang::JavaScript || le.lang == Lang::Go
-            || le.lang == Lang::C || le.lang == Lang::CSharp || le.lang == Lang::Kotlin || le.lang == Lang::Swift )
+        if( bindPassLang( le.lang ) )
         {
             arms.bind = &bindCtx;
         }
@@ -1711,6 +1717,10 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
         if( arms.bind != nullptr )
         {
             bindsFinalize( bindCtx );   // L3 noise gates + clobber sweep — the tail of the old captureBindings
+            if( callResultFamilyOf( le.lang ) == CallResultFamily::Rust )
+            {
+                pruneRustTombstones( binds, firstBindOfFile );   // (L) only a call-typed name's tombstones hide anything
+            }
         }
         refs.insert( refs.end(), std::make_move_iterator( aliasCtx.out.begin() ), std::make_move_iterator( aliasCtx.out.end() ) );
 
@@ -2051,6 +2061,28 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 if( nameTxt == "/" && elixirNodeIs( parent, "unary_operator" ) && nodeFieldText( parent, NodeField::Operator, src  ) == "&" ) { continue; }
             }
 
+            if( langFacts( le.lang ).hasInertQuoteRegions && elixirInert( roleNode, src ) )
+            {
+                // Keep call/operator/named-capture candidates as declined facts, never edges. Heads,
+                // special forms and non-call operators already failed their syntax filters. Bare AST
+                // names remain variable-shaped syntax unless they explicitly name a function capture.
+                if( isRef && ( refCapSv == "reference.call" || refCapSv == "reference.operator"
+                               || ( refCapSv == "reference.bare" && elixir.namedCapture( nameNode ) ) ) )
+                {
+                    RawRef r;
+                    r.fileId    = fileId;
+                    r.startByte = ts_node_start_byte( roleNode );
+                    r.line      = nameRow + 1;
+                    r.lang      = Lang::Elixir;
+                    r.role      = RefRole::Inert;
+                    auto [ count, known ] = elixirCallArity( roleNode, nameNode, src );
+                    if( refCapSv == "reference.operator" ) { count = elixirNodeIs( roleNode, "binary_operator" ) ? 2 : 1; known = true; }
+                    r.name = known ? elixirFunctionName( nameTxt, count ) : std::string( nameTxt );
+                    refs.push_back( std::move( r ) );
+                }
+                continue;
+            }
+
             if( isDef )
             {
                 if( le.lang == Lang::Elixir && defCapSv == "definition.attribute" ) { kind = SymKind::Var; }
@@ -2245,7 +2277,11 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                                                                               : paramCountOf( metricNode, literalBound ) ) : std::uint16_t( 0 );
             // LB-E: a testmacroblock's parameter surface is the MACRO's business, not visible here — claim
             // inexact so the resolver's arity narrowing never trusts params=0 on a test-title symbol.
-            d.arityExact = ( fnOrMethod && !isTestMacroBlock && le.lang != Lang::Clojure ) ? std::uint8_t( cc_paramArityExact( metricNode, le.lang, kind ) ? 1 : 0 ) : std::uint8_t( 0 );   // B2.2
+            // B2.2: the fixed-arity bit and the minimum (fewest arguments a call can pass) come from ONE scan of the list.
+            // A minimum above the counted params (a literal-bound bare parameter countParams cannot see) is not trusted.
+            const ParamShape shape = ( fnOrMethod && !isTestMacroBlock && le.lang != Lang::Clojure ) ? cc_paramShape( metricNode, le.lang, kind, src ) : ParamShape{};
+            d.arityExact = shape.exact ? std::uint8_t( 1 ) : std::uint8_t( 0 );
+            d.paramsMin  = shape.minimum <= d.params ? shape.minimum : std::uint16_t( 0 );
             // L8: the in-file test-scope bit, for EVERY kind (a `#[cfg(test)] mod` and a `class TestFoo`
             // are themselves symbols, and dropping the members while keeping the shell would be a worse
             // answer than either). Runs on defNode, whose ancestors are the enclosing scopes.
@@ -2324,13 +2360,9 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 // whose immediate scope happens to spell a segment std also uses? See Symbol::scopeRootsStd.
                 d.scopeRootsStd = cppDefinitionRootsStd( nameNode, src ) ? std::uint8_t( 1 ) : std::uint8_t( 0 );
             }
-            else if( le.lang == Lang::Python )
-            { // P2-D Rule 1: enclosing class of a Python method → `self.m()` narrows to Class::m
-                d.scope = enclosingScopeOf( nameNode, src );
-            }
-            else if( le.lang == Lang::Rust )
-            { // H4: `impl Widget { fn new() }` → "Widget" — see rustEnclosingScopeOf
-                d.scope = rustEnclosingScopeOf( nameNode, src, /*includeModules=*/true );
+            else if( enumTableAt( kDefScopeWalkerOfLang, le.lang, DefScopeWalker::None ) != DefScopeWalker::None )
+            { // Python, Go, Rust, Kotlin: the language's row in ingest_names.h kDefScopeWalkerOfLang
+                d.scope = defScopeOf( le.lang, nameNode, src );
             }
             else if( le.lang == Lang::Elixir )
             {
@@ -2340,7 +2372,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                     d.name = elixirFunctionName( nameTxt, d.params );
                     // B2.2 for Elixir: a clause's arity IS its parameter count (no variadic form), so `params`
                     // is call-comparable unless a `\\` default widens the callable to more than one arity.
-                    // cc_paramArityExact's language gate leaves this at 0, which made every Elixir caller
+                    // cc_paramShape's language gate leaves this at 0, which made every Elixir caller
                     // unflaggable by --edit-check (test/elixirnamearitycheck.sh arm C: run(x) -> run(x, y)
                     // must flag run(x) callers; run(x, y \\ 1) must flag none).
                     d.arityExact = elixirHeadDefaultCount( roleNode, src ) == 0 ? std::uint8_t( 1 ) : std::uint8_t( 0 );
@@ -2365,13 +2397,6 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 {
                     rubyNoteClassSideDef( defNode, fileId, d.name, src, binds );   // a class object's method (test/rubyclassrecvcheck.sh)
                 }
-            }
-            else if( le.lang == Lang::Kotlin )
-            { // enclosing class/object/companion-object → same P2-D Rule-1 narrowing Python/Ruby get;
-              // ALSO what keeps two classes' same-named methods from colliding under the new
-              // Kotlin<->Java langCompatible bridge (graph.h) — an unqualified name-only match is
-              // exactly the false-candidate risk that bridge's own comment names.
-                d.scope = kotlinEnclosingScopeOf( nameNode, src );
             }
             else if( ( le.lang == Lang::JavaScript || le.lang == Lang::TypeScript )
                      && defCapSv == "definition.protomethod" )
@@ -2407,6 +2432,16 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
             }
             else if( isRef && full )
             {
+                // An element access: @name is its RECEIVER, and the site names the receiver class's subscript operator
+                // method (ingest_binds.h subscriptOperatorRef) — never a call by itself (RefRole::Subscript).
+                if( refCapSv == "reference.subscript" )
+                {
+                    if( std::optional<RawRef> sub = subscriptOperatorRef( roleNode, nameNode, fileId, le.lang, src ) )
+                    {
+                        refs.push_back( std::move( *sub ) );
+                    }
+                    continue;
+                }
                 // H4: a C++ cast keyword is not a call — see isCppCastKeyword. Valid input, skipped, no alert.
                 if( le.lang == Lang::Cpp && isCppCastKeyword( nameTxt ) )
                 {
@@ -2430,6 +2465,19 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
                 const bool isImportRef = ( refCapSv == "reference.import" );
                 if( isImportRef && usingDeclarationIsDirective( roleNode ) )
                 {
+                    continue;
+                }
+
+                // family 4 / slice 4a: a @reference.mixin capture is Ruby's `include`/`extend`/`prepend` — the shape
+                // lives in queries/ruby/tags.scm, so the capture IS the language gate and no Lang:: branch is spent
+                // here. The two guards a tags pattern cannot state (the directive's TEXT, and its POSITION) live in
+                // the Ruby reader, ingest_ruby.h emitCapturedRubyMixinBase, which takes the language from this call
+                // site and EXPECTS Ruby: Ruby is the capture's only emitter today, and a second language adds its own
+                // reader and dispatch here rather than reusing Ruby's. The directive's own CALL reference is a
+                // separate match, below.
+                if( refCapSv == "reference.mixin" )
+                {
+                    emitCapturedRubyMixinBase( roleNode, nameNode, fileId, le.lang, src, refs );
                     continue;
                 }
 
@@ -2574,6 +2622,7 @@ void captureTagsFacts( TSQueryCursor* cursor, const LangEntry& le, std::uint32_t
         captureRubyHelperMethods( root, fileId, src, binds );
         captureRubySingletonAccessors( root, fileId, src, binds );
         captureRubyClassMixins( root, fileId, src, binds );
+        captureRubyMainMixins( root, fileId, src, binds );
         if( le.ext == kJbuilderExt )
         {
             typeRubyJbuilderLocal( fileId, refs );

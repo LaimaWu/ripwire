@@ -20,16 +20,19 @@
 #include "filter.h"        // §P4: rankTierSymbolMultipliers — the fixture/present tier down-weight the CLI ranking lenses apply
 #include "redact.h"        // RedactCounts — the per-request redaction tally threaded through the body/doc verbs
 #include "forpage.h"    // L-W: the --for file page, coverage= and the thin rule — shared with the CLI twin
+#include "forowner.h"   // for-body-slot: the one owner body of an explanatory question — shared with the CLI twin
 #include "packtask.h"      // L4: the shared --pack-task / MCP explore+pack_task bundle assembler (packTaskBundleText)
 #include "partition.h"     // the explore verb's `partition` argument (packTaskPartitionText)
 #include "tracelocus.h"    // L4: the shared --from-trace / MCP from_trace bundle assembler (fromTraceBundleText)
 #include "countfloor.h"     // count-floor: a row's callers=/implementors= floor marker and its follow-up (CLI and MCP share it)
+#include "grepcarrier.h"    // L4: a grep enclosing row's carrier reads/vals (CLI and MCP share it)
 #include "editcheck.h"     // L4: the shared --edit-check / MCP edit_check contract-comparison core (editCheckBundleText)
 #include "callhierarchy.h"  // H14/M13: the shared 1-hop call-hierarchy computation — find_symbol / find_referencing_symbols
 #include "graphlegend.h"   // §H4 §3.4: the ONE counts_floor= marker + shared graph-count legend wording (CLI ≡ MCP)
 #include "crossref.h"      // the shared cross-branch content index (whereis / stray_content)
 #include "darkflags.h"     // the shared dark-content gate harvest (flags)
 #include "flipimpact.h"    // the flags verb's `symbol` argument: one gate's flip blast radius
+#include "typeuse.h"       // L7: the impact verb's type tier (CLI ≡ MCP)
 #include "docdrift.h"      // the shared doc-anchor verifier (doc_drift)
 #include "exemplar.h"      // §B6 M2: selectExemplar + kExemplarSelectionRule — the ONE selector/wording both surfaces use
 #include "mcprefusal.h"    // §B6 M7/M8/M9: the shared verb+field refusal table both MCP arms speak
@@ -451,7 +454,7 @@ inline std::string analyzeToString( const std::string& root, int topK, bool stab
                                     // §B4 family, and mcpclidiffcheck is the gate that keeps the two surfaces one.
                                     /*ann=*/rw::MapAnnotations{ .prDisclosure = ix.prDisclosure, .codeFirstRows = ix.isCleanWorkingSet, .inventoryTier = ix.isCleanWorkingSet },
                                     /*statsFirstScreen=*/true, anRootArg, &ix.g.locPinOut, ix.g.externalCalls, &ix.g.declinedOut, ix.g.gateDeclinedCalls,
-                                    ix.g.outNameOnly.empty() ? nullptr : &ix.g.outNameOnly, ix.g.stdMemberDeclinedCalls ); } );
+                                    ix.g.outNameOnly.empty() ? nullptr : &ix.g.outNameOnly, ix.g.stdMemberDeclinedCalls, ix.g.inertDeclinedCalls ); } );
 }
 
 // `rank_by` verb (lane/t10-mcp-coverage): the MCP twin of --rank-by=pagerank|authority|hub|rrf — the SAME
@@ -519,7 +522,7 @@ inline std::string rankByText( const std::string& root, std::string_view mode, i
                                     /*extraPayloadTokens=*/0,
                                     /*ann=*/rw::MapAnnotations{ .rankByLabel = rankByLabel, .prDisclosure = disclosure, .codeFirstRows = rankByLabel == nullptr, .inventoryTier = rankByLabel == nullptr },   // pagerank: the map scope's code-first pick
                                     /*statsFirstScreen=*/true, rbRootArg, &ix.g.locPinOut, ix.g.externalCalls, &ix.g.declinedOut, ix.g.gateDeclinedCalls,
-                                    ix.g.outNameOnly.empty() ? nullptr : &ix.g.outNameOnly, ix.g.stdMemberDeclinedCalls ); } );
+                                    ix.g.outNameOnly.empty() ? nullptr : &ix.g.outNameOnly, ix.g.stdMemberDeclinedCalls, ix.g.inertDeclinedCalls ); } );
 }
 
 // ─── the cross-branch + dark-content MCP twins (`whereis`, `stray_content`, `flags`) ───
@@ -674,8 +677,7 @@ inline std::string calledByCutJson( std::string_view name, std::size_t total, co
                     + ",\"calledBy_capped\":true";
     if( window.end < total )
     {
-        const std::string next = nextFlag( "--callers=", name ) + ( pageLimit > 0 ? " --limit=" + std::to_string( pageLimit ) : std::string() )
-                               + " --offset=" + std::to_string( window.end );
+        const std::string next = callersPageNext( name, pageLimit, window.end );
         out += ",\"calledBy_next\":\"" + mcpdetail::jsonEscape( next ) + "\"";
     }
     return out;
@@ -699,6 +701,60 @@ inline std::string calledByCutJson( std::string_view name, std::size_t total, co
 // tier-then-path order — and renders it with the same disclosures, paged through the same pageview.h
 // window every other paged MCP verb uses. `page` defaults to {} ⇒ the default cap, exactly as the CLI's
 // un-paged call behaves. Gates: test/mcpattrparitycheck.sh, test/mcpcontractcheck.sh's paging arm.
+// attrib-multidef (factored out of symbolQueryJson at train 28, byte-identical): the definition table listing the groups the
+// calledBy window names and, on find_symbol, the calls window too (all of them up to the cap), then its reading when it rides.
+// `callsWindow` is empty (begin == end) on find_referencing_symbols, which marks the calledBy window only.
+inline std::string symbolQueryDefTableJson( const IngestResult& ing, const DefGroups& groups, const RowDefTokens& calledByTokens,
+                                            const RowDefTokens& callsTokens, const PageWindow& calledByWindow, const PageWindow& callsWindow,
+                                            std::string_view rootPrefix )
+{
+    std::vector<char> named;
+    defTableMarkNamed( named, groups, calledByTokens, calledByWindow.begin, calledByWindow.end );
+    if( callsWindow.end > callsWindow.begin )
+    {
+        defTableMarkNamed( named, groups, callsTokens, callsWindow.begin, callsWindow.end );
+    }
+    const DefTableListing listing = defTableListing( groups, named );
+    std::string           out     = defTableJson( ing, groups, listing, rootPrefix, /*mcp=*/true );
+    if( groups.multi() )
+    {
+        out += nextFieldJson( defTableLegend( true, listing.cut ), "def_note" );   // its reading, only when the table rides
+    }
+    return out;
+}
+
+inline std::string symbolQueryNextField( bool referencingOnly, const PageWindow& pwPrimary, std::size_t rowTotal, const McpPageArgs& page,
+                                       std::string_view name, std::string_view nextSelector )
+{
+    // L8 + C2 rider: a capped page names the next page, the direction's own follow-up beside it (the CLI root's pair); any
+    // other answer names the follow-up alone — P3 (L7): the CLI root's next= (mcpattrparitycheck).
+    const std::string hintCall = nextFlag( referencingOnly ? "--uses=" : "--expand=", nextSelector );
+    if( pwPrimary.end < rowTotal )
+    {
+        return nextFieldJson( callHierarchyPageNext( referencingOnly, name, page.limit, pwPrimary.end ) )
+             + nextFieldJson( hintCall, callHierarchyHintAttr( referencingOnly ) );
+    }
+    return nextFieldJson( hintCall );
+}
+
+inline std::string symbolQueryNotes( bool anyVia, bool anyLink, bool anyMiss )
+{
+    std::string out;
+    if( anyVia )
+    {
+        out += viaNameNoteJson();
+    }
+    if( anyLink )
+    {
+        out += viaLinkNoteJson();
+    }
+    if( anyMiss )
+    {
+        out += anchorMissNoteJson();
+    }
+    return out;
+}
+
 inline std::string symbolQueryJson( const std::string& root, const std::string& name, bool referencingOnly,
                                     McpPageArgs page = {} )
 {
@@ -730,10 +786,18 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     const HopTestedPartition chTested = computeHopTestedPartition( ing, g, referencingOnly ? calledBy : calls );
 
     bool anyVia = false;   // FE-B: an entry carried "via":"name" — the answer then carries via_note, its reading
+    bool anyLink = false;   // an entry carried "via":"link" — the answer then carries via_link_note
+    bool anyMiss = false;   // an entry carried "anchor":"missing" — the answer then carries anchor_missing_note
+    const std::span<const NodeId> callerMatches( referencingOnly ? chRows.matches : chCallers.matches );
+    const std::span<const NodeId> calleeMatches( chRows.matches );
+    NodeId linkRow = kNoNode;
+    bool   linkToward = false;
     RowCallSites calledBySites{};   // CALLSITE-AT: the calledBy window's sites (set once the window is known, below)
-    const auto symObj = [ & ]( NodeId id, bool via ) -> std::string
+    const auto symObj = [ & ]( NodeId id, bool via, const std::string& attrib = std::string() ) -> std::string
     {
         anyVia = anyVia || via;
+        const char* linkFrag = linkJsonFrag( g, callerMatches, calleeMatches, id, linkRow, linkToward, anyVia, anyLink );
+        const char* missFrag = anchorMissJsonFrag( g, callerMatches, calleeMatches, id, linkRow, linkToward, anyMiss );
         const Symbol& s = ing.symbols[id];
         // T4: attach the stable content-handle so the agent can `fetch_body{handle}` instead of us re-sending
         // the body. Names/signatures by default (this verb); bodies by handle on request.
@@ -746,17 +810,29 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
              + "\",\"line\":" + std::to_string( s.line )
              + ",\"handle\":\"" + mcpdetail::jsonEscape( handleFor( ix, id ) ) + "\""
              + ( rw::isTestedByReach( ing, chTested.testReach, id ) ? ",\"tested\":true" : "" )
-             + ( via ? ",\"via\":\"name\"" : "" )   // FE-B: the CLI row's via="name", the same edge bit (graph.h rowNameOnly)
+             + ( via ? ",\"via\":\"name\"" : "" )   // FE-B: the CLI row's via="name", the same edge bit (defattrib.h, one pass)
+             + linkFrag
+             + missFrag
+             + attrib                                  // attrib-multidef: the CLI row's of_def= / prov="split"
              + "}";
     };
+    // attrib-multidef (defattrib.h): calledBy rows are callers (the callers computation's attribution), calls rows callees
+    const OneHopAttribution& calledByAttr = referencingOnly ? chRows.attr : chCallers.attr;
+    const OneHopAttribution& callsAttr    = chRows.attr;
+    bool anySplit = false;   // a row carried "prov":"split" — the answer then carries split_note, its reading
     const auto rowArray = [ & ]( const std::vector<NodeId>& ids, const PageWindow& w, bool callersSide ) -> std::string
     {
+        const OneHopAttribution& at = callersSide ? calledByAttr : callsAttr;
         std::string a = "[";
         for( std::size_t i = w.begin; i < w.end; ++i )
         {
             if( i != w.begin ) { a += ","; }
+            anySplit = anySplit || at.splitArm( i );
+            linkRow = ids[ i ];
+            linkToward = callersSide;
             // CALLSITE-AT: a calledBy row carries its call sites (the CLI --callers row's sites_at=); a calls row never does.
-            a += withRowSites( symObj( ids[i], rowNameOnly( g, chRows.matches, ids[i], callersSide ) ), calledBySites, i - w.begin, callersSide );
+            a += withRowSites( symObj( ids[i], at.nameOnly( i ), ofDefKeyJson( at.groups, at.tokens, i ) + splitArmKeyJson( at.splitArm( i ) ) ),
+                               calledBySites, i - w.begin, callersSide );
         }
         a += "]";
         return a;
@@ -764,16 +840,38 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
 
     // The page window applies to the direction the root's count= describes; find_symbol's second array is
     // windowed by the same limit so one `limit` never means two different sizes in one answer.
-    const int        rowCap    = effectiveRowCap( page.limit, rw::kCallHierarchyRowCap );
+    // L8 (train 29): each array takes the CLI's callHierarchyRowCap over its own total (the 1.25 x band, pageview.h); an
+    // explicit limit still sizes both arrays alike.
+    // C2 (train 31): the calledBy array also takes the CLI's callers BYTE band — the same estimate (callersByteBand) over the
+    // same rows, so both surfaces agree on whether a callers list is cut; the calls array keeps the row band.
+    CallersByteBand  calledByBand = callersByteBand( ing, chRows.matches, calledBy, VrRender{ sqSingleRoot, sqRootPrefix }, page.limit,
+                                                    chTested.testReach, calledByAttr, g.keptForwards );
+    const int        rowCap    = referencingOnly ? callHierarchyRowCap( page.limit, calledBy.size(), calledByBand.rowBytes ) : callHierarchyRowCap( page.limit, calls.size() );
     const PageWindow pwPrimary = pageWindow( referencingOnly ? calledBy.size() : calls.size(), rowCap, page.offset );
-    const PageWindow pwSecond  = pageWindow( calledBy.size(), rowCap, page.offset );
+    const PageWindow pwSecond  = pageWindow( calledBy.size(), callHierarchyRowCap( page.limit, calledBy.size(), calledByBand.rowBytes ), page.offset );
     const std::size_t rowTotal = referencingOnly ? calledBy.size() : calls.size();
     const bool  discloseCap    = ( pwPrimary.end - pwPrimary.begin ) < rowTotal;
     // CALLSITE-AT: the calledBy window's rows with their call sites — editcheck.h rowCallSites, the CLI --callers pass and path spelling.
     const PageWindow& calledByWin = referencingOnly ? pwPrimary : pwSecond;
-    calledBySites = rowCallSites( ing, chRows.matches, std::span<const NodeId>( calledBy ).subspan( calledByWin.begin, calledByWin.end - calledByWin.begin ),
-                                  VrRender{ sqSingleRoot, sqRootPrefix } );
+    // fix round 1 (B1): two plain assignments, not one assignment from a ?: whose arms are an xvalue and a prvalue.
+    if( calledByBand.rowBytes > 0 && calledByWin.begin == 0 && calledByWin.end == calledBy.size() )
+    {
+        calledBySites = std::move( calledByBand.sites );   // C2: the band's own pass over every row
+    }
+    else
+    {
+        calledBySites = rowCallSites( ing, chRows.matches, std::span<const NodeId>( calledBy ).subspan( calledByWin.begin, calledByWin.end - calledByWin.begin ),
+                                      VrRender{ sqSingleRoot, sqRootPrefix }, g.keptForwards );
+    }
     char        pab[ kPageDisclosureCap ];
+    // lane declined-sites (declinedsites.h): the CLI root's <dc> rows for the direction count= describes (find_symbol: the
+    // declines its definitions make; find_referencing_symbols: the declined calls that could have meant them), cut by the
+    // same `limit` the rows take — one computation (callhierarchy.h ordered them), the CLI's own row builder.
+    const DeclinedSiteCut sqDcCut = declinedSiteCut( chRows.declinedSites.size(), page.limit, referencingOnly ? "--callers=" : "--callees=", name,
+                                                     std::size_t( effectiveRowCap( page.limit, rw::kCallHierarchyRowCap ) ) );   // the CLI's <dc> cut: no band
+    const std::vector<DeclinedSiteView> sqDc = declinedSiteViews( ing, g, std::span<const std::uint32_t>( chRows.declinedSites ).first( sqDcCut.shown ),
+                                                                  referencingOnly, chRows.matches, chRows.attr.groups, VrRender{ sqSingleRoot, sqRootPrefix },
+                                                                  /*candidates=*/false );
 
     std::string out = "{";
     if( sqSingleRoot )
@@ -795,9 +893,10 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
          + ",\"hop_tested\":" + std::to_string( chTested.tested )
          + ",\"hop_untested\":" + std::to_string( chTested.untested )
          + declinedCallsKeyJson( chRows.declinedCalls )   // the CLI root's declined_calls=, for the direction count= describes
+         + declinedSiteCutKeyJson( sqDcCut )              // the CLI root's dc_shown= / dc_next=, absent when nothing was cut
          + declinedIfaceKeyJson( chRows.declinedIface )   // the CLI root's declined_iface= (callers direction only)
          + stdMemberCallsSpelling( chRows.stdCalls, /*json=*/true )       // the CLI callees answer's <stdm> line (callees direction only; absent when none)
-         + nextFieldJson( nextFlag( referencingOnly ? "--uses=" : "--expand=", chNextSelector ) );   // P3 (L7): the CLI root's next= (mcpattrparitycheck)
+         + symbolQueryNextField( referencingOnly, pwPrimary, rowTotal, page, name, chNextSelector );   // P3 (L7): the CLI root's next= (mcpattrparitycheck)
     if( !referencingOnly && chRows.bodylessDefs > 0 )
     {
         out += ",\"bodyless_defs\":" + std::to_string( chRows.bodylessDefs );
@@ -815,6 +914,10 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     // which is where the disclosure has to be — the same posture bodyless_defs= already holds here.
     out += unprovenDefsKeyJson( chRows.unprovenDefs );
     out += crossKindKeyJson( chRows.crossKind );   // hono-07: the CLI root's cross_kind=, self-named like unproven_defs above
+    // attrib-multidef: the CLI root's <def> table, in this surface's row vocabulary (symbolQueryDefTableJson). The `symbol` object
+    // above stays the first definition — def_table[0] — and this table rides beside it.
+    out += symbolQueryDefTableJson( ing, chRows.attr.groups, calledByAttr.tokens, callsAttr.tokens, referencingOnly ? pwPrimary : pwSecond,
+                                    referencingOnly ? PageWindow{} : pwPrimary, sqRootPrefix );
     out += pageDisclosure( pab, sizeof( pab ), pwPrimary.end - pwPrimary.begin, rowTotal, pwPrimary.end,
                            page.limit, page.offset, discloseCap, kJsonPageSyntax );
     if( !referencingOnly )
@@ -826,10 +929,10 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     {
         out += ",\"calls\":" + rowArray( calls, pwPrimary, false );
     }
-    if( anyVia )
-    {
-        out += rw::viaNameNoteJson();   // FE-B: the reading of "via":"name", only in an answer that carries it
-    }
+    out += symbolQueryNotes( anyVia, anyLink, anyMiss );
+    out += nextFieldJson( splitArmLegend( anySplit ), "split_note" );   // attrib-multidef Q1: likewise for "prov":"split"
+    out += declinedSitesJson( sqDc, referencingOnly, /*mcp=*/true );   // lane declined-sites: the CLI <dc> rows, never in calls/calledBy or count
+    out += nextFieldJson( declinedSitesLegend( declinedSitesLegendFlags( sqDc, referencingOnly, sqDcCut ), /*mcp=*/true ), "declined_note" );   // their reading, only when they ride
     out += nextFieldJson( callSitesAtLegend( calledBySites.any, calledBySites.anyCut, kCallSitesPerRowCap ), "sites_note" );   // CALLSITE-AT: its reading, only when a row carries it (nextFieldJson: "" -> no key, JSON-escaped)
     // Reference-as-value round: the CLI's <vrs> window, the same rows (callhierarchy.h computed them once): valueRefs =
     // where the symbol is USED AS A VALUE (the --callers side), valueCallees = what it stores/passes and may call
@@ -887,11 +990,56 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
 // under --handles mints (search.h grepEncHandleCandidate decides WHICH row may carry one; handleFor mints it from the index's
 // own byte hash) — or `handle_omitted` with the CLI legend's reason. Before this a grep answer named enclosing symbols that
 // fetch_body could not take, so the agent re-read every file it had just searched.
-inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepHit> hits )
+// L4: the page's <enc> rows and their carrier verdict (grepcarrier.h), computed once by the caller (its next= reads them
+// too), plus the root spelling the carrier's paths take.
+struct GrepEncPageJson
 {
-    const IngestResult&           ing     = ix.ing;
-    const Graph&                  g       = ix.g;
-    const std::vector<GrepEncRow> encRows = grepEnclosingRows( ing, g, hits );
+    std::span<const GrepEncRow>  rows;
+    std::span<const GrepCarrier> carriers;   // parallel to rows
+    bool                         singleRoot = false;
+    std::string_view             rootPrefix;
+};
+
+// The L4 carrier keys of one enclosing row — the CLI <enc> reads=/reads_at=/vals=/vals_total= twins, from the same
+// grepCarrierText. "" on a row that is no carrier or carries neither.
+inline std::string grepCarrierJson( const GrepCarrier& c, bool singleRoot, std::string_view rootPrefix )
+{
+    if( !c.isCarrier )
+    {
+        return {};
+    }
+    const GrepCarrierText t = grepCarrierText( c, singleRoot, rootPrefix );
+    const auto jsonList = []( const std::vector<std::string>& items )
+    {
+        std::string list = "[";
+        for( std::size_t k = 0; k < items.size(); ++k )
+        {
+            list += ( k > 0 ? ",\"" : "\"" ) + mcpdetail::jsonEscape( items[k] ) + "\"";
+        }
+        return list + "]";
+    };
+    std::string out;
+    if( !t.readsAt.empty() )
+    {
+        out += ",\"reads\":" + std::to_string( c.reads ) + ",\"reads_at\":" + jsonList( t.readsAt );
+    }
+    if( !t.vals.empty() )
+    {
+        out += ",\"vals\":" + jsonList( t.vals );
+        if( c.valsTotal > c.vals.size() )
+        {
+            out += ",\"vals_total\":" + std::to_string( c.valsTotal );
+        }
+    }
+    return out;
+}
+
+inline std::string grepEnclosingJson( const McpIndex& ix, const GrepEncPageJson& page )
+{
+    const IngestResult&                ing      = ix.ing;
+    const Graph&                       g        = ix.g;
+    const std::span<const GrepEncRow>  encRows  = page.rows;
+    const std::span<const GrepCarrier> carriers = page.carriers;
     if( encRows.empty() )
     {
         return {};
@@ -905,6 +1053,7 @@ inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepHi
     }
     const std::vector<CallerFloor> floors = callerFloors( ing, g, rowIds, &valueRefIndexOf( ix ) );
     ENSURES( floors.size() == encRows.size() );
+    EXPECTS( carriers.size() == encRows.size(), "the caller computed one carrier verdict per row (grepCarriers)" );
     std::string out = ",\"enclosing\":[";
     for( std::size_t r = 0; r < encRows.size(); ++r )
     {
@@ -926,6 +1075,7 @@ inline std::string grepEnclosingJson( const McpIndex& ix, std::span<const GrepHi
         {
             out += ",\"cx\":" + std::to_string( row.cx );
         }
+        out += grepCarrierJson( carriers[r], page.singleRoot, page.rootPrefix );
         const char*  omitted = nullptr;
         const NodeId id      = grepEncHandleCandidate( ing, row, omitted );
         if( id == kNoNode )
@@ -1144,6 +1294,15 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
     const PageWindow           grepPage  = pageWindow( collected.raw.size(), effectiveRowCap( page.limit, grepRowCap ), page.offset );
     const std::size_t          rowCount  = grepPage.end - grepPage.begin;
     const std::vector<GrepHit> hits      = grepEnrich( ing, std::span<const GrepRawHit>( collected.raw ).subspan( grepPage.begin, rowCount ), 0, 0 );
+    // R1 <enc> rows and L4's carrier verdict, once, before the root: next= reads them (grepCarrierNext) and so does the
+    // enclosing block. The MCP index is the RICH family (mcpindex.h ingests with value uses), so its own references
+    // carry the reads — no second ingest here, unlike the lean CLI run. Reads are counted on the SAME pages the CLI counts
+    // them (grepCarriersWantReads: the top hit's carrier), so the two surfaces print the same reads on every page, single
+    // root or workspace, although this index could count them on every page.
+    const std::vector<GrepEncRow>  encRowsJ  = grepEnclosingRows( ing, ix.g, std::span<const GrepHit>( hits ) );
+    const std::vector<GrepCarrier> carriersJ = grepCarriers( ing, valueRefIndexOf( ix ), encRowsJ,
+                                                             grepCarriersWantReads( ing, hits, encRowsJ ) ? &ing : nullptr );
+    const std::string              carrierNextJ = grepCarrierNext( ing, hits, encRowsJ, carriersJ );
 
     // §R-J: the CLI's unindexed_files_scanned=/unindexed block twin (search.h grepCollectAux) — literal-only,
     // matching this verb. No --max-file-size equivalent on the MCP surface, so this uses the same
@@ -1219,6 +1378,8 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                     // P3 (L7): the CLI grep root's next= — the same three-way rule (verbs_grep.h), mcpclidiffcheck LENS2
                     + nextFieldJson( ( grepPage.end < collected.raw.size() || collected.isBudgetReached )
                                          ? nextFlag( "--grep=", pattern ) + " --offset=" + std::to_string( grepPage.end ) + " --legend=compact"
+                                     : !carrierNextJ.empty()
+                                         ? carrierNextJ
                                      : !collected.raw.empty() && grepPage.begin < collected.raw.size()
                                          ? nextFlag( "--at=", std::string( pathForJ( collected.raw[ grepPage.begin ].fileId ) ) + ":" + std::to_string( collected.raw[ grepPage.begin ].line ) )
                                          : nextFlag( "--for=", pattern ) )
@@ -1278,7 +1439,7 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                         singleRootJ, rootPrefixJ );
     // R1 (the 2026-08-12 usage mine): the CLI <enc>/<suggest> twins, appended AFTER "hits" so the
     // historic key order three other gates read (files,total,shown,capped) is byte-untouched.
-    out += grepEnclosingJson( ix, std::span<const GrepHit>( hits ) );
+    out += grepEnclosingJson( ix, GrepEncPageJson{ encRowsJ, carriersJ, singleRootJ, rootPrefixJ } );
     if( collected.raw.empty() )
     {
         out += grepSuggestJson( ing, pattern );
@@ -1857,7 +2018,10 @@ inline void spliceForLegoCountLegend( std::string& doc, bool carries )
     }
 }
 
-inline void priceForTaskRoot( std::string& doc, std::size_t budgetTokens )
+// forbudget-soft: budget_tokens= is a SOFT target here too (the CLI twin's rule) — est_tokens may exceed it and nothing is
+// labelled "over" for it. The one over_ceiling this surface can carry is the runaway guard's (`guardOver`: the default head
+// passed kForRunawayGuardBytes); its reading (forRunawayGuardNote) was spliced with the <sigs> clauses by the assembly.
+inline void priceForTaskRoot( std::string& doc, bool guardOver )
 {
     if( doc.empty() )
     {
@@ -1865,14 +2029,9 @@ inline void priceForTaskRoot( std::string& doc, std::size_t budgetTokens )
     }
     std::size_t estTokens = 0;
     std::string rootAttrs = rw::pricedRootAttr( doc.size(), rw::kBytesPerTokenDefault, 0, &estTokens );
-    if( budgetTokens > 0 && estTokens > budgetTokens )
+    if( guardOver )
     {
-        const std::size_t legendEnd = doc.find( " -->" );
-        if( legendEnd != std::string::npos )
-        {
-            doc.insert( legendEnd, rw::kOverCeilingLegend );
-            rootAttrs = rw::pricedRootAttr( doc.size(), rw::kBytesPerTokenDefault, 0, &estTokens );
-        }
+        rootAttrs = rw::pricedRootAttr( doc.size() + sizeof( " over_ceiling=\"1\"" ) - 1, rw::kBytesPerTokenDefault, 0, &estTokens );
         rootAttrs += " over_ceiling=\"1\"";
     }
     rw::spliceRootAttrs( doc, rootAttrs );
@@ -1898,6 +2057,7 @@ struct McpForAssemblyInputs   // forTaskText's locals the assembly reads, by ref
     const std::vector<char>&                   impure;
     RedactCounts*                              redact;
     std::size_t                                sigsBudget;
+    std::size_t                                rowDropBudget;   // forbudget-soft: where step F aims (the guard / the soft target)
     std::size_t                                fixedBytes;
     std::size_t                                budgetTokens;
     const notes::NoteIndex&                    noteIndex;
@@ -1912,8 +2072,49 @@ struct McpForAssemblyInputs   // forTaskText's locals the assembly reads, by ref
     rw::SigLensRules                           lensRules;      // train 26b: the --for lens rules (LB-A floor, e=, docs reorder),
                                                                //   decided once in forTaskText (the noRoute/task/budget verdicts live there)
     const std::vector<std::vector<NodeId>>&    implementors;   // train 26b: ix.g.implementors, for the count-floor lego re-render
+    const LexTermEvidence&                     evidence;       // FOLD C: the term evidence the tail's page rows rank by
+    const Graph&                               g;              // for-body-slot: the owner body's <calls> edges
+    ForBodySlotOwner                           slotOwner;      // for-body-slot: the one owner body (forowner.h), none when not asked
 };
-inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, bool payFromRows, std::string headerStr, std::string legoStr,
+// round C (owner decision 2026-10-14, RESERVE SECTIONS FIRST — the CLI twin's rule): under budget_tokens the sections are scoped and
+// served from the rows at the target cut, and the rows past the cut fill what the sections served before the tail (<hdr> rows,
+// <lego>, <compose>, <routes>: `sectionsBytes`) leave of T — never below the cut. The tail rides on top on this twin, as it always
+// did. Re-rendered only when that narrows the rows; the first render's redaction count is replaced, never added to.
+template< class Render >
+inline void mcpForSoftRefill( const McpForAssemblyInputs& in, const Render& renderSigs, std::string& sigsStr, rw::SigsCutReport& cut,
+                              const rw::SigsCutContinuation* next, std::size_t sectionsBytes,
+                              const std::optional<RedactCounts>& before, const std::optional<RedactCounts>& after )
+{
+    if( in.budgetTokens == 0 || cut.pastTarget == 0 )
+    {
+        return;
+    }
+    const std::size_t rowDrop = forSoftRowDropFill( budgetBytesForTokens( in.budgetTokens ), sectionsBytes );
+    if( rowDrop >= in.rowDropBudget )
+    {
+        return;
+    }
+    redactTakeBack( in.redact, before, after );
+    cut                     = rw::SigsCutReport {};
+    cut.continuationRequest = next;
+    cut.rowDropBudgetBytes  = rowDrop;
+    sigsStr                 = captureXml( renderSigs );   // assembleMcpFor's own render seam (its renderToString)
+}
+
+// round C (RESERVE SECTIONS FIRST, the CLI twin's rule): the --sections= posture the stub plan reads — under budget_tokens the two
+// sections ride whole when they fit what the rows at the cut (and <routes>) left of the budget (serialize.h forSoftSectionsOptIn)
+inline std::string_view mcpSoftSections( const McpForAssemblyInputs& in, const std::string& sigsStr, const rw::SigsCutReport& cut,
+                                         std::size_t sectionsBytes )
+{
+    if( in.budgetTokens == 0 )
+    {
+        return in.sections;
+    }
+    const std::size_t atCut = sigsStr.size() - std::min( sigsStr.size(), cut.pastTargetBytes );
+    return forSoftSectionsOptIn( in.sections, sectionsBytes, 0u,
+                                 forSoftSectionsShare( budgetBytesForTokens( in.budgetTokens ), atCut + in.routeStr.size() ) );
+}
+inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::string headerStr, std::string legoStr,
                                       std::string composeStr, std::vector<std::vector<NodeId>> legoScoped, std::size_t legoPreCapCount )
 {
     const IngestResult&                       ing                = in.ing;
@@ -1942,9 +2143,9 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, bool payFr
     {
         return McpForAssembly{};   // the answer buffer could not be opened: an internal error, never "not found"
     }
+    // forbudget-soft: exempt in every regime (no byte promise to pay into: a target + the runaway guard, or a soft target)
     const rw::SigsCutContinuation mcpSigsNext{ task, 0, std::string_view(), fixedBytes,
-                                               /*charged=*/budgetTokens > 0, /*json=*/false, /*pasteHandle=*/false,
-                                               /*ledgerGapBytes=*/0u, payFromRows };
+                                               /*json=*/false, /*pasteHandle=*/false };
     // A2 (survey card, 2026-09-03): sigs render into their OWN buffer (rather than streaming straight into
     // `mem` the way this call used to) so droppedPositive is known BEFORE headerStr is written — headerStr,
     // once flushed to `mem`, cannot be edited retroactively (the same reason the CLI twin's degrade path
@@ -1953,8 +2154,16 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, bool payFr
     bool        mcpSigsCapped      = false;   // did the H1 ladder trim <sigs>? — decides the budget_bytes= disclosure below
     rw::SigsCutReport mcpSigsCut;             // cut-fix lane A: the <sigs> tag's cut readings, spliced below as the CLI twin does
     mcpSigsCut.continuationRequest = &mcpSigsNext;   // knob-honesty-068: IN — the capped block's machine continuation
-    std::vector<rw::NodeId> mcpShownIds;   // lane 2: the sigs rows actually emitted — the tail excludes these files, not the whole surface
-    std::string sigsStr = renderToString( [ & ]( std::FILE* m2 )
+    mcpSigsCut.rowDropBudgetBytes  = in.rowDropBudget;   // forbudget-soft: IN — the CLI twin's two budgets
+    mcpSigsCut.pastTargetDisclosed = budgetTokens == 0;
+    // R2-AF (round 2, S4): first rows inside the root, right after the legend (forHdrRowsXml); rendered before the rows so the
+    // round C refill below prices them
+    const std::string mcpHdrXml = forHdrRowsXml( ing, mcpForHdrRows, flRootArg );   // forpage.h: the CLI twin's one render
+    std::vector<rw::NodeId> mcpShownIds;   // lane 2: the sigs rows actually emitted — the tail's rank rows exclude these files
+    // round C: the render is named so a soft target can narrow its rows past the cut once the sections are served (below); the
+    // redaction tally around it is snapshotted so a second render replaces this one's count instead of adding to it
+    const std::optional<RedactCounts> redactBeforeSigs = redact != nullptr ? std::optional<RedactCounts>( *redact ) : std::nullopt;
+    const auto renderSigs = [ & ]( std::FILE* m2 )
     {
         packSignatures( m2, ing, lensRank, forTopN, 0 /* no byte budget in MCP (0 = unlimited) */, true, &fanIn, &impure, redact,
                         nullptr, nullptr, nullptr, nullptr,   // Q3 lens vectors — the MCP verb has no git/clone pass (as before)
@@ -1970,7 +2179,97 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, bool payFr
                         &mcpSigsCut,                          // cut-fix lane A: docs_dropped= / shrunk readings;
                                                               //   knob-honesty-068: carries mcpSigsNext IN
                         SigRowSpelling{ .elideZeroMetrics = true } );   // lean-answers lane: the CLI twin's row spelling
-    } );
+    };
+    std::string sigsStr = renderToString( renderSigs );
+    const std::optional<RedactCounts> redactAfterSigs = redact != nullptr ? std::optional<RedactCounts>( *redact ) : std::nullopt;
+    // §P3 × §P4 (parity with the CLI --for): narrow the lego block to the files the budget-trimmed sigs
+    // actually kept and re-render (a byte-subset of what the budget already charged for) — reads sigsStr
+    // directly now rather than re-slicing it back out of the flushed memstream buffer.
+    // count-floor (CLI/MCP parity): the root prefix the CLI twin passes. sigsStr's rows are root-relative (flRootArg) and
+    // without the prefix this scan compared them against ABSOLUTE ing.files spellings, matched nothing and narrowed the
+    // whole block away (serialize.h narrowLegoToRenderedSigs' own R-E note): MCP `for` served no <lego> at all where the
+    // CLI served six rows.
+    const std::string mcpLegoRootPrefix = flRootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( flRootArg );
+    if( !legoStr.empty() && narrowLegoToRenderedSigs( ing, legoScoped, sigsRowsAtTarget( sigsStr, mcpSigsCut ), mcpLegoRootPrefix ) )   // forbudget-soft
+    {
+        legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount, &implementors ); } );   // R-R: the re-render dropped the root its first render (above) passed
+    }
+    // R2-L2' (round-2, priced re-registration of L2/B1): the CLI twin's exact stub substitution
+    // (verbs_for.h) — same rule, same restoring spelling (kept as the CLI flag form: this dialect's next=
+    // is already CLI-flag-shaped everywhere else, e.g. the r=1 row's --expand=FILE:NAME, so the two
+    // surfaces do not need two spellings), and the SAME shared size gate (rw::priceSectionStub,
+    // serialize.h). This surface has no buffered/degrade-path split (renderToString always renders whole),
+    // so hasRenderedBytes is always true here and the size gate always has a true length to price.
+    //
+    // R2-L2p (independent review, 2026-09-19): mcpLegoWillStub/mcpComposeWillStub decide the SAME collapse
+    // the CLI twin discloses via kForSectionStubLegend (verbs_for.h finishForLensHeaderPriced), but this
+    // block used to just swap legoStr/composeStr for their stubs and never carried that clause anywhere —
+    // an MCP caller got a stubbed section with no legend explaining the cut. mcpSectionsWillStub survives
+    // this block's scope so the splice below (after `out` is assembled, mirroring priceForTaskRoot's own
+    // late-insertion technique for kOverCeilingLegend) knows whether to add it.
+    bool mcpSectionsWillStub = false;
+    {
+        // the CLI twin's one plan (rw::planForSectionStubs): this surface always renders whole, so rendered=true
+        const ForStubbableSection mcpLegoServedIn{ .hasContent = !legoStr.empty(), .preCapTotal = legoPreCapCount, .rendered = true,
+                                                   .renderedBytes = legoStr.size() };
+        const ForStubbableSection mcpComposeServedIn{ .hasContent = !composeStr.empty(), .preCapTotal = composePreCapCount, .rendered = true,
+                                                      .renderedBytes = composeStr.size() };
+        // round C (reserve first, the CLI twin's rule): under budget_tokens the sections ride whole when they fit what the rows
+        // at the cut left of the budget
+        const ForSectionStubPlan plan = planForSectionStubs( mcpSoftSections( in, sigsStr, mcpSigsCut, legoStr.size() + composeStr.size() ),
+                                                             task, mcpLegoServedIn, mcpComposeServedIn );
+        // lego-charge (train 26c seam): the charge plan the <sigs> budget follows (forTaskText's mcpSigChargePlan, the same
+        // rule: rw::forSectionsSigChargePlan), recomputed here from the sections AS SERVED — the count-floor lego re-render
+        // above may have changed the section's size since forTaskText charged the budget, and the invariant below is the
+        // two planners' agreement on one input: the served stub never exceeds the stub the charge plan collapses it to.
+        const ForSectionStubPlan mcpSigChargePlan = forSectionsSigChargePlan( sections, /*explicitCeiling=*/false, task, mcpLegoServedIn, mcpComposeServedIn );
+        const bool mcpLegoWillStub    = plan.legoWillStub;
+        const bool mcpComposeWillStub = plan.composeWillStub;
+        // postcondition of the rule itself, checked BEFORE the swap below discards the original size:
+        // whichever section actually collapses is, by construction, smaller than what it replaced.
+        ENSURES( !mcpLegoWillStub    || plan.lego.stubXml.size()    < legoStr.size(),
+                 "R2-L2' MCP twin: a lego stub collapsed without being smaller than the section it replaced" );
+        ENSURES( !mcpComposeWillStub || plan.compose.stubXml.size() < composeStr.size(),
+                 "R2-L2' MCP twin: a compose stub collapsed without being smaller than the section it replaced" );
+        ENSURES( !( mcpLegoWillStub && mcpSigChargePlan.legoWillStub ) || plan.lego.stubXml.size() <= mcpSigChargePlan.lego.stubXml.size(),
+                 "lego-charge MCP twin: the served lego stub is longer than the stub the <sigs> budget was charged for" );
+        if( mcpLegoWillStub )
+        {
+            legoStr = plan.lego.stubXml;
+        }
+        if( mcpComposeWillStub )
+        {
+            composeStr = plan.compose.stubXml;
+        }
+        // R2-L2p: same truth table as the CLI's `if( legoWillStub || composeWillStub ) sectionsStubNote = …`
+        // (verbs_for.h ~2858): the legend rides iff at least one section actually collapsed.
+        mcpSectionsWillStub = mcpLegoWillStub || mcpComposeWillStub;
+    }
+
+    // round C (owner decision 2026-10-14, RESERVE SECTIONS FIRST — the CLI twin's rule): under budget_tokens the sections are
+    // scoped and served from the rows at the target cut (above), and the rows past the cut fill what the sections served
+    // before the tail (<hdr> rows, <lego>, <compose>, <routes>) leave of T — never below the cut. The tail rides on top here,
+    // as it always did on this twin. Re-rendered only when that narrows the rows; the first render's redaction count is
+    // replaced, never added to.
+    // for-body-slot (the CLI twin's rule, forowner.h): the one owner body. At the default it rides on top; under budget_tokens it
+    // is funded from what the rows at the cut and the sections before it left of T, rides only whole, else is skipped with its
+    // next=, and the rows' refill below charges what it served — so the rows past the cut give way to it.
+    BodySlotRender mcpSlot;
+    if( in.slotOwner.any() )
+    {
+        std::optional<std::size_t> share;
+        if( budgetTokens > 0 )
+        {
+            const std::size_t atCut = sigsStr.size() - std::min( sigsStr.size(), mcpSigsCut.pastTargetBytes );
+            share = forSoftSectionsShare( budgetBytesForTokens( budgetTokens ), mcpHdrXml.size() + atCut + legoStr.size() + composeStr.size() + routeStr.size() );
+        }
+        mcpSlot = renderForBodySlot( BodySlotInputs{ ing, in.g.outOff, in.g.outTargets, in.g.outNameOnly, lensRank, flRootArg, redact, notesPtr,
+                                                     /*viaLegendInHead=*/false, /*compress=*/false, &in.g.outProv, /*splitLegendInHead=*/false, &in.g.outAnchorMiss },
+                                     in.slotOwner, share );
+    }
+    mcpForSoftRefill( in, renderSigs, sigsStr, mcpSigsCut, &mcpSigsNext,
+                      mcpHdrXml.size() + legoStr.size() + composeStr.size() + routeStr.size() + mcpSlot.xml.size(),
+                      redactBeforeSigs, redactAfterSigs );
     // A2: same insert-before-"-->" splice as the CLI twin (verbs_for.h) — absent entirely on the (overwhelming)
     // no-drop path, so headerStr's bytes are unchanged there (byte-identical to the pre-A2 output). Bare
     // spelling (no bracket note), same economy and same reasoning as the CLI twin — byte-consistent between
@@ -2004,7 +2303,18 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, bool payFr
         const std::size_t closeAt = headerStr.rfind( " -->" );
         if( closeAt != std::string::npos )
         {
-            headerStr.insert( closeAt, rw::kForBudgetBytesNote );
+            // forbudget-soft: "target" where the head ran past it (the CLI twin's choice)
+            headerStr.insert( closeAt, mcpSigsCut.pastTarget > 0 ? rw::kForBudgetBytesTargetNote : rw::kForBudgetBytesNote );
+        }
+    }
+    // forbudget-soft: the runaway guard's reading, where it cut the default head (the CLI twin's clause; priceForTaskRoot puts
+    // over_ceiling="1" on the root)
+    if( mcpSigsCut.rowDropCut && budgetTokens == 0 )
+    {
+        const std::size_t closeAt = headerStr.rfind( " -->" );
+        if( closeAt != std::string::npos )
+        {
+            headerStr.insert( closeAt, rw::forRunawayGuardNote() );
         }
     }
     // cut-fix lane A: the <sigs> tag's cut readings (docs_dropped=, shrunk-not-dropped, docs_after_code=, the continuation's) —
@@ -2035,106 +2345,22 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, bool payFr
         }
     }
     std::fwrite( headerStr.data(), 1, headerStr.size(), mem );
-    // R2-AF (round 2, S4): first rows inside the root, right after the legend — the CLI twin's exact rule
-    // (verbs_for.h renderForHdrRowsXml), duplicated here rather than shared because main.cpp includes this
-    // file (mcp.h, line 48) before verbs_for.h (line 525) — the render is ~10 lines over the SAME resolver
-    // (rw::forNamedHeaderRows, mention.h), which is the part a divergence would actually cost.
-    if( !mcpForHdrRows.empty() )
-    {
-        const std::string mcpHdrRootPrefix = flRootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( flRootArg );
-        const auto         mcpHdrRel        = [ & ]( std::uint32_t f ) -> std::string
-        {
-            return flRootArg.empty() ? std::string( ing.files[f] ) : std::string( rw::sarif::rootRelativeUri( ing.files[f], mcpHdrRootPrefix ) );
-        };
-        std::vector<char> mcpHdrEsc;
-        std::string       mcpHdrXml;
-        for( const rw::ForNamedHeaderRow& row : mcpForHdrRows )
-        {
-            // same local invariant as the CLI twin's renderForHdrRowsXml (verbs_for.h): the resolver
-            // (rw::forNamedHeaderRows, mention.h) is the only producer of these ids.
-            ASSUME( row.partnerFile < ing.files.size() && row.namedFile < ing.files.size() );
-            mcpHdrXml += "<hdr p=\"";
-            mcpHdrXml += rw::escapeXml( mcpHdrRel( row.partnerFile ), mcpHdrEsc );
-            mcpHdrXml += "\" of=\"";
-            mcpHdrXml += rw::escapeXml( mcpHdrRel( row.namedFile ), mcpHdrEsc );
-            mcpHdrXml += "\"/>";
-        }
-        std::fwrite( mcpHdrXml.data(), 1, mcpHdrXml.size(), mem );
-    }
-    // §P3 × §P4 (parity with the CLI --for): narrow the lego block to the files the budget-trimmed sigs
-    // actually kept and re-render (a byte-subset of what the budget already charged for) — reads sigsStr
-    // directly now rather than re-slicing it back out of the flushed memstream buffer.
-    // count-floor (CLI/MCP parity): the root prefix the CLI twin passes. sigsStr's rows are root-relative (flRootArg) and
-    // without the prefix this scan compared them against ABSOLUTE ing.files spellings, matched nothing and narrowed the
-    // whole block away (serialize.h narrowLegoToRenderedSigs' own R-E note): MCP `for` served no <lego> at all where the
-    // CLI served six rows.
-    const std::string mcpLegoRootPrefix = flRootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( flRootArg );
-    if( !legoStr.empty() && narrowLegoToRenderedSigs( ing, legoScoped, sigsStr, mcpLegoRootPrefix ) )
-    {
-        legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount, &implementors ); } );   // R-R: the re-render dropped the root its first render (above) passed
-    }
-    // R2-L2' (round-2, priced re-registration of L2/B1): the CLI twin's exact stub substitution
-    // (verbs_for.h) — same rule, same restoring spelling (kept as the CLI flag form: this dialect's next=
-    // is already CLI-flag-shaped everywhere else, e.g. the r=1 row's --expand=FILE:NAME, so the two
-    // surfaces do not need two spellings), and the SAME shared size gate (rw::priceSectionStub,
-    // serialize.h). This surface has no buffered/degrade-path split (renderToString always renders whole),
-    // so hasRenderedBytes is always true here and the size gate always has a true length to price.
-    //
-    // R2-L2p (independent review, 2026-09-19): mcpLegoWillStub/mcpComposeWillStub decide the SAME collapse
-    // the CLI twin discloses via kForSectionStubLegend (verbs_for.h finishForLensHeaderPriced), but this
-    // block used to just swap legoStr/composeStr for their stubs and never carried that clause anywhere —
-    // an MCP caller got a stubbed section with no legend explaining the cut. mcpSectionsWillStub survives
-    // this block's scope so the splice below (after `out` is assembled, mirroring priceForTaskRoot's own
-    // late-insertion technique for kOverCeilingLegend) knows whether to add it.
-    bool mcpSectionsWillStub = false;
-    {
-        // the CLI twin's one plan (rw::planForSectionStubs): this surface always renders whole, so rendered=true
-        const ForStubbableSection mcpLegoServedIn{ .hasContent = !legoStr.empty(), .preCapTotal = legoPreCapCount, .rendered = true,
-                                                   .renderedBytes = legoStr.size() };
-        const ForStubbableSection mcpComposeServedIn{ .hasContent = !composeStr.empty(), .preCapTotal = composePreCapCount, .rendered = true,
-                                                      .renderedBytes = composeStr.size() };
-        const ForSectionStubPlan plan = planForSectionStubs( sections, task, mcpLegoServedIn, mcpComposeServedIn );
-        // lego-charge (train 26c seam): the charge plan the <sigs> budget follows (forTaskText's mcpSigChargePlan, the same
-        // rule: rw::forSectionsSigChargePlan), recomputed here from the sections AS SERVED — the count-floor lego re-render
-        // above may have changed the section's size since forTaskText charged the budget, and the invariant below is the
-        // two planners' agreement on one input: the served stub never exceeds the stub the charge plan collapses it to.
-        const ForSectionStubPlan mcpSigChargePlan = forSectionsSigChargePlan( sections, budgetTokens > 0, task, mcpLegoServedIn, mcpComposeServedIn );
-        const bool mcpLegoWillStub    = plan.legoWillStub;
-        const bool mcpComposeWillStub = plan.composeWillStub;
-        // postcondition of the rule itself, checked BEFORE the swap below discards the original size:
-        // whichever section actually collapses is, by construction, smaller than what it replaced.
-        ENSURES( !mcpLegoWillStub    || plan.lego.stubXml.size()    < legoStr.size(),
-                 "R2-L2' MCP twin: a lego stub collapsed without being smaller than the section it replaced" );
-        ENSURES( !mcpComposeWillStub || plan.compose.stubXml.size() < composeStr.size(),
-                 "R2-L2' MCP twin: a compose stub collapsed without being smaller than the section it replaced" );
-        ENSURES( !( mcpLegoWillStub && mcpSigChargePlan.legoWillStub ) || plan.lego.stubXml.size() <= mcpSigChargePlan.lego.stubXml.size(),
-                 "lego-charge MCP twin: the served lego stub is longer than the stub the <sigs> budget was charged for" );
-        if( mcpLegoWillStub )
-        {
-            legoStr = plan.lego.stubXml;
-        }
-        if( mcpComposeWillStub )
-        {
-            composeStr = plan.compose.stubXml;
-        }
-        // R2-L2p: same truth table as the CLI's `if( legoWillStub || composeWillStub ) sectionsStubNote = …`
-        // (verbs_for.h ~2858): the legend rides iff at least one section actually collapsed.
-        mcpSectionsWillStub = mcpLegoWillStub || mcpComposeWillStub;
-    }
+    std::fwrite( mcpHdrXml.data(), 1, mcpHdrXml.size(), mem );   // R2-AF: rendered above, before the rows (round C prices it)
     const bool mcpLegoCountAttrs = legoStr.find( rw::kLegoCountAttrPrefix ) != std::string::npos;   // false on a stub (its own attributes only)
     std::fwrite( sigsStr.data(), 1, sigsStr.size(), mem );
     std::fwrite( legoStr.data(), 1, legoStr.size(), mem );
     std::fwrite( composeStr.data(), 1, composeStr.size(), mem );
     std::fwrite( routeStr.data(), 1, routeStr.size(), mem );   // B6.3
-    // DEEP-TAIL d2, MCP twin: the same shared walk + renderer the CLI --for uses (serialize.h), from the
-    // same resolved surface — the fixed default budget regime, so the tail rides on top (default row cap)
-    // and the ranked head above stays byte-identical to a tail-less bundle.
+    // DEEP-TAIL d2, MCP twin: the same model + renderer the CLI --for uses (forpage.h; FOLD C: page 0 of the file page) —
+    // it rides on top at the default row cap in every regime here, as it did before (this twin funds no trailing section
+    // from budget_tokens but <lego>/<compose>), and a cut tail carries the page after its last row as next=.
     {
         std::vector<char> tailEsc;
-        const std::string tailStr = renderFileTailXml( computeFileTail( ing, lensRank, mcpShownIds, flRootArg ),
-                                                       kForFileTailShownCap, tailEsc );
+        const FileTail    mcpTail = computeFileTail( ing, lensRank, in.evidence, mcpShownIds, flRootArg, task );
+        const std::string tailStr = renderFileTailXml( mcpTail, mcpTail.paths.size(), tailEsc );   // every row computeFileTail collected
         std::fwrite( tailStr.data(), 1, tailStr.size(), mem );
     }
+    std::fwrite( mcpSlot.xml.data(), 1, mcpSlot.xml.size(), mem );   // for-body-slot: "" when no body rides
     rw::emitRaw( mem, "</ctx>" );
     std::optional<std::string> answer = mcpAnswerText( stream );
     if( !answer )
@@ -2508,6 +2734,15 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // resolution, both surfaces. Rows are emitted right after headerStr is flushed, below; the legend
     // clause (present-only, never ceiling-dropped — this dialect has no ceiling ladder at all) goes here.
     const std::vector<rw::ForNamedHeaderRow> mcpForHdrRows = rw::forNamedHeaderRows( ing, task );
+    // for-body-slot (the CLI twin's rule, forowner.h): an explanatory question on the conceptual route carries ONE owner body.
+    // The bundle sentence then says so (kMcpForBundleSigsOwnerLegend replaces "no inline bodies") and the slot clause rides; both
+    // are exempt from the sigs charge below exactly as far as they differ from the sentence they replace, so the served rows are
+    // byte-identical to RIPWIRE_NO_BODY_SLOT=1's.
+    const ForBodySlotOwner mcpSlotOwner = ( std::string_view( mcpRouteTag ) == "subtoken+body" && forBodySlotAsked( task ) )
+        ? forBodySlotOwner( ing, ix.g.outOff, ix.g.outTargets, task, lensSurfaceIds, lensRank )
+        : ForBodySlotOwner{};
+    const std::string_view mcpBundleLegend   = mcpSlotOwner.any() ? rw::kMcpForBundleSigsOwnerLegend : rw::kMcpForBundleSigsLegend;
+    const std::string_view mcpBodySlotLegend = mcpSlotOwner.any() ? rw::kForBodySlotLegend : std::string_view();
     std::string headerStr = rootOpenStr
                           + "<!-- ripwire lens for \"" + safeTask + "\"" + termsCapNote + mentionNote + boostNote + docMentionNote + floorNote
                           + std::string( rw::kMcpForBuildingBlocksLegend )
@@ -2515,8 +2750,10 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
                           // …and the route= code, present-only, exactly as the CLI twin appends it (forRouteAttrPresent):
                           // this dialect drops route= under no_route, and a reading with no attribute beside it is noise.
                           + std::string( mcpIdRouteParts.route )
-                          + std::string( rw::kMcpForBundleSigsLegend )
+                          + std::string( mcpBundleLegend )
+                          + std::string( mcpBodySlotLegend )   // for-body-slot: present-only
                           + std::string( mcpForConf.note )
+                          + ( budgetTokens > 0 ? std::string( rw::kForSoftBudgetNote ) : std::string() )   // forbudget-soft: budget_tokens= is a soft target
                           // No "--" anywhere in this clause: it rides inside an XML comment, where a double
                           // hyphen is ill-formed (G4), so the CLI verb is named without its dashes.
                           + std::string( rw::kMcpForLensColumnsLegend )
@@ -2578,12 +2815,19 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
                                                .renderedBytes = legoStr.size() };
     const ForStubbableSection mcpComposeChargeIn{ .hasContent = !composeStr.empty(), .preCapTotal = composePreCapCount, .rendered = true,
                                                   .renderedBytes = composeStr.size() };
-    const ForSectionStubPlan  mcpSigChargePlan = forSectionsSigChargePlan( sections, budgetTokens > 0, task, mcpLegoChargeIn, mcpComposeChargeIn );
+    const ForSectionStubPlan  mcpSigChargePlan = forSectionsSigChargePlan( sections, /*explicitCeiling=*/false, task, mcpLegoChargeIn, mcpComposeChargeIn );
     const std::size_t fixedBytes = headerStr.size() - rw::kForFileTailLegend.size() - mcpConfidenceExemptBytes - mcpIdRouteExemptBytes - mcpAtLegendExemptBytes
                                  - mcpEndLineExemptBytes
+                                 - ( mcpBundleLegend.size() + mcpBodySlotLegend.size() - rw::kMcpForBundleSigsLegend.size() )   // for-body-slot: 0 when not asked
                                  - rw::forZeroNoteBytes( headerStr )   // lean-answers: the zero reading never costs a row
                                  + mcpSigChargePlan.servedBytes( mcpLegoChargeIn, mcpComposeChargeIn ) + routeStr.size() + 6;   // + "</ctx>"
-    const std::size_t sigsBudget = forBudgetBytes > fixedBytes ? forBudgetBytes - fixedBytes : 1;   // ≥1: 0 = "no budget"
+    // forbudget-soft: the CLI twin's two budgets (rw::forSigsBudgets) — the default target + the runaway guard, or a soft target
+    // over the rows (one dialect here, so the soft tier's header is this one)
+    const ForSigsBudgets mcpSigsBudgets = forSigsBudgets( budgetTokens > 0 ? forBudgetBytes : 0u, fixedBytes, fixedBytes, /*tierAtDefault=*/false );   // no bodies ride here
+    const std::size_t    sigsBudget     = mcpSigsBudgets.target;
+    // round C (RESERVE SECTIONS FIRST): under budget_tokens the target is the retired ceiling's cut; assembleMcpFor scopes the
+    // sections at it and narrows the rows past it to what those sections leave of T (its refill)
+
     // knob-honesty-068: the CLI twin's <sigs> continuation (serialize.h SigsCutContinuation). This surface is signatures-only,
     // so its sig side IS the ceiling: charged under a caller's budget_tokens, exempt at the default. NO CLI argv here — an
     // MCP client continues by re-calling the tool: the machine form next_budget_tokens=T (re-call `for` with budget_tokens=T)
@@ -2595,54 +2839,24 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     const notes::NoteIndex* const notesPtr  = noteIndex.empty() ? nullptr : &noteIndex;
 
     // knob-honesty-068 (orchestrator ruling C3): the assembly is one pass (assembleMcpFor above), run once or twice below.
-    const McpForAssemblyInputs assemblyIn{ ing, lensRank, forTopN, fanIn, impure, redact, sigsBudget, fixedBytes, budgetTokens,
+    const McpForAssemblyInputs assemblyIn{ ing, lensRank, forTopN, fanIn, impure, redact, sigsBudget, mcpSigsBudgets.rowDrop, fixedBytes, budgetTokens,
                                            noteIndex, notesPtr, flRootArg, task, mcpTopRowNext, mcpForHdrRows, routeStr,
                                            composePreCapCount, sections,
                                            rw::forLensRules( !noRoute && !taskAsksAboutDocs( task ) && !std::getenv( "RIPWIRE_NO_DOCS_AFTER_CODE" )
                                                                  && rw::docsAfterCodeFitsCeiling( budgetTokens, /*bodyCeiling=*/false ),
-                                                             rw::endLinesFitCeiling( budgetTokens, /*bodyCeiling=*/false ) ),   // LB-A, e=, docs reorder
-                                           ix.g.implementors };
-    // C3 (completed 2026-10-08) — drop a row to pay for the handle ONLY where dropping it is what makes the answer fit (the CLI
-    // twin's rule, runForLens). The UNPAID pass runs first: every row the cut leaves + the handle; when it fits (or nothing is
-    // capped under a budget) it is served and nothing is paid. Only when it lands past budget_tokens does the PAID pass run, and
-    // it is served only when IT fits — paying is what made it fit. Otherwise (this surface overshoots on its own: the header
-    // bytes its ledger exempts) the unpaid answer is served: the cut's rows, the handle riding unpaid, over_ceiling="1"
-    // (priceForTaskRoot). Both passes share the one ranking above; only the assembly re-runs.
-    const auto estOf = []( std::size_t docBytes )
-    {
-        std::size_t est = 0;
-        (void)rw::pricedRootAttr( docBytes, rw::kBytesPerTokenDefault, 0, &est );   // priceForTaskRoot's own reading
-        return est;
-    };
-    const std::optional<RedactCounts> tallyAtEntry = redact != nullptr ? std::optional<RedactCounts>( *redact ) : std::nullopt;
-    McpForAssembly chosen = assembleMcpFor( assemblyIn, /*payFromRows=*/false, headerStr, legoStr, composeStr, legoScoped, legoPreCapCount );
+                                                             rw::endLinesFitCeiling( budgetTokens, /*bodyCeiling=*/false ),
+                                                             // the CLI twin's head round-robin verdict (serialize.h forHeadRoundRobinOn)
+                                                             rw::forHeadRoundRobinOn( std::strcmp( mcpRouteTag, "subtoken+body" ) == 0,
+                                                                                      rw::taskNamesIndexedFile( ing, task ), budgetTokens, /*bodyCeiling=*/false ) ),   // LB-A, e=, docs reorder, head RR
+                                           ix.g.implementors, mcpEvidence, ix.g, mcpSlotOwner };
+    // forbudget-soft: ONE assembly (the C3 unpaid/paid passes went with the hard ceiling they priced against)
+    McpForAssembly chosen = assembleMcpFor( assemblyIn, headerStr, legoStr, composeStr, legoScoped, legoPreCapCount );
     if( !chosen.doc )
     {
         return std::nullopt;
     }
-    if( budgetTokens > 0 && chosen.cut.hasContinuation && estOf( chosen.doc->size() ) > budgetTokens )
-    {
-        const std::optional<RedactCounts> tallyUnpaid = redact != nullptr ? std::optional<RedactCounts>( *redact ) : std::nullopt;
-        if( tallyAtEntry )
-        {
-            *redact = *tallyAtEntry;   // the summary counts the rows of the ONE answer served
-        }
-        McpForAssembly paid = assembleMcpFor( assemblyIn, /*payFromRows=*/true, headerStr, legoStr, composeStr, legoScoped, legoPreCapCount );
-        if( !paid.doc )
-        {
-            return std::nullopt;
-        }
-        if( estOf( paid.doc->size() ) <= budgetTokens )
-        {
-            chosen = std::move( paid );
-        }
-        else if( tallyUnpaid )
-        {
-            *redact = *tallyUnpaid;   // the unpaid answer is served: its tally
-        }
-    }
     std::string out = std::move( *chosen.doc );
-    priceForTaskRoot( out, budgetTokens );   // R1: est_tokens=, and over_ceiling="1" when it exceeds budgetTokens
+    priceForTaskRoot( out, chosen.cut.rowDropCut && budgetTokens == 0 );   // R1: est_tokens=; over_ceiling="1" only past the runaway guard
     return out;
 }
 
@@ -2684,7 +2898,7 @@ inline std::string legoText( const std::string& root, const std::string& type, R
         const std::string legoTargetedAttr = unprovenDefsAttrXml( unprovenDefs ) + graphCountFloorAttrXml( ix.g );   // outlives the call
         packLego( mem, ing, ix.g.implementors, flat, 1, redact, &impure, focus, /*withPaths=*/true,
                   ing.realPaths.empty() ? std::string_view( root ) : std::string_view(),    // R-R: root-relative <iface p=>
-                  LegoTargetedArgs( legoTargetedAttr, page.limit, page.offset, &ix.g.implementorBound ) );   // H1 + M15 + the deeper-row page, as on the CLI
+                  LegoTargetedArgs( legoTargetedAttr, page.limit, page.offset, &ix.g.implementorBound ).withMainRows( ix.g.rubyMainMixins ) );   // H1 + M15 + the deeper-row page, as on the CLI
         rw::emitRaw( mem, "</ctx>" );
     } );
 }
@@ -2940,9 +3154,12 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     }
 
     // 0.6.5: the CLI --impact's walk, keeping each node's hop depth, and its order (graph.h orderByDepthThenRank).
-    std::vector<std::uint32_t>       depth;
-    const std::vector<NodeId>        reach = transitiveCallersDepth( g, seeds, &depth );
-    const std::vector<char>          proven = provenCallerReach( g, seeds );   // FE-B (D3): as on the CLI
+    // L7 (typeuse.h): the CLI's type tier, by the same calls — a type seed's walk also starts from the symbols naming it
+    const TypeUseTier                typeTier = typeUseTier( ing, seeds );
+    ImpactReach                      walk     = impactReachWithTypes( g, seeds, typeTier );
+    std::vector<std::uint32_t>&      depth    = walk.depth;
+    const std::vector<NodeId>&       reach    = walk.reach;
+    const std::vector<char>&         proven   = walk.proven;   // FE-B (D3): as on the CLI
     const auto [ rank, prIters, prConverged ] = rankGraph( g );
     const RankDisclosure             prD{ prIters, prConverged, true };   // W2-F: CLI --impact discloses this; so does its twin
     std::vector<NodeId>              show  = reach;
@@ -2960,6 +3177,11 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     declineTargets.insert( declineTargets.end(), seeds.begin(), seeds.end() );
     const std::size_t       declinedCalls  = declinedCallsNaming( g, declineTargets );
     const std::size_t       declinedIface  = declinedIfaceCallsNaming( ing, g, declineTargets );   // the CLI --impact's declined_iface=
+    const bool        imSingleRoot = ing.realPaths.empty();   // R-E: root-relative p= + root=, exactly as the CLI --impact emits them
+    const std::string imRootPrefix = imSingleRoot ? sarif::rootPrefixOf( root ) : std::string();
+    // ix2-slice (IX-4): the CLI --impact's <dc> rows, by the same helper over the same set and cut (declinedsites.h)
+    const ImpactDeclinedRows imDc = impactDeclinedRows( ing, g, declineTargets, declinedCalls, page.limit, symbol,
+                                                        std::size_t( effectiveRowCap( page.limit, kCallHierarchyRowCap ) ), VrRender{ imSingleRoot, imRootPrefix }, false );
 
     std::vector<char> esc;
     const auto ex = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
@@ -2985,22 +3207,37 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     const ValueRefRows  imValueRefs = valueRefCallerRows( ing, valueRefIndexOf( ix ), seeds );
     const PageWindow    ipw         = pageWindow( show.size(), effectiveRowCap( page.limit, 40 ), page.offset );
     // idea #6: the CLI arm's rollup, under the same rule — it rides only beside a CUT symbol window
-    const ImpactFileRollup imFiles = impactFileRollup( ing, reach, depth, page.limit, symbol, ipw.end - ipw.begin < show.size(),
-                                                       seeds.size() > 1 ? proven : kNoImpactHedge );   // fix27, as on the CLI
+    ImpactTypeFold   typeFold;
+    ImpactFileRollup imFiles = impactFileRollup( ing, reach, depth, page.limit, symbol, ipw.end - ipw.begin < show.size(),
+                                                 seeds.size() > 1 ? proven : kNoImpactHedge, impactTypeFold( typeTier, walk, typeFold ) );   // fix27; L7, as on the CLI
+    // attrib-multidef (defattrib.h): the CLI --impact's attribution, by the same calls
+    const ReachAttribution imAttr = attributeReachAnswer( ing, g, seeds, reach );
+    std::vector<char>      imNamed;
+    attachRollupOfDef( imFiles, ing, imAttr, imNamed );
+    for( std::size_t i = ipw.begin; i < ipw.end && imAttr.groups.multi(); ++i )
+    {
+        imAttr.markNamed( imNamed, show[ i ] );
+    }
+    const DefTableListing imListing = defTableListing( imAttr.groups, imNamed );
     const bool          imHasVia    = std::any_of( show.begin() + ipw.begin, show.begin() + ipw.end, [ & ]( NodeId n ) { return impactRowNameOnly( proven, n ); } );
+    const bool          imHasLink   = std::any_of( show.begin() + ipw.begin, show.begin() + ipw.end, [ & ]( NodeId n ) { return impactDirectLink( g, seeds, depth, n ); } );
     rw::emitTo( mem, "{}{}. {}{}{}{}{}{}{}{}{}{}{}{}-->", kImpactLegendOpen, kPageRaiseCapClause,
                   reach.empty() ? "" : kImpactDepthLegend,           // 0.6.5: exactly when d=/by_depth= ride, as on the CLI
-                  kImpactImportTierLegend,
+                  ( std::string( kImpactImportTierLegend ) + importersNextLegend( !imports.next.empty() ) ).c_str(),   // cut-fix E, as on the CLI
                   ( impactTsImportLegend( imports.importsUnresolved, imports.tsconfigUnread )   // #220: exactly when the root carries them, as on the CLI
-                    + viaNameLegend( imHasVia, true ) ).c_str(),                                // FE-B: exactly when a shown row is via="name", as on the CLI
+                    + viaNameLegend( imHasVia, true )
+                    + viaLinkLegend( imHasLink ) + impactAnchorLegendFor( g, seeds, depth, show, ipw.begin, ipw.end ) ).c_str(),
                   kTestedRowLegend, kImpactTestedPartitionLegend,   // A6
                   kTestedLensBlindSpotLegend,                       // F-02: rides with the partition, byte-identical to the CLI twin
                   unprovenDefsVerbLegend( UnprovenDefsVerb::Impact, unprovenDefs > 0 ).c_str(),   // H1: exactly when the root carries unproven_defs=, as on the CLI
-                  declinedCallsLegendWithGates( declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 ),         // exactly when the root carries declined_calls=, as on the CLI
+                  declinedCallsLegendForRows( declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0, !imDc.views.empty() )
+                    + declinedSitesLegend( declinedSitesLegendFlags( imDc.views, /*callersForm=*/true, imDc.cut ) ),   // exactly when the root carries declined_calls=; ix2-slice: + the <dc> rows, as on the CLI
                   declinedIfaceLegend( declinedIface > 0 ),                                          // likewise declined_iface=, as on the CLI
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
                     + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI
-                    + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ) ) ).c_str(),                  // idea #6, as on the CLI
+                    + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ), !imports.next.empty(),
+                                          ImpactRollupTypeClauses{ imFiles.typed, imFiles.typeDefs, imFiles.typeCapped } )   // idea #6; FIX1 R1; L7, as on the CLI
+                    + defTableLegend( imAttr.groups.multi(), imListing.cut ) ).c_str(),                                              // attrib-multidef, as on the CLI
                   graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), renderDisclosure( prD, DiscloseAs::LegendClause ).c_str() );
     // r27-emitters §P2.1: the listing is capped at 40 by rank. Without shown=/capped= a 40-row answer to
     // "is it safe to change X?" reads as the WHOLE blast radius when it can be 3% of it. Same attributes,
@@ -3012,30 +3249,30 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     // R-E fix (2026-08-19): root-relative p= + root=, exactly as the CLI --impact now emits them. The first
     // R-E landing converted the CLI arm alone, so mcpclidiffcheck's attribute-set lens went red (CLI has
     // root=, MCP does not) and every row answered the same question in a different path dialect.
-    const bool         imSingleRoot = ing.realPaths.empty();
-    const std::string  imRootPrefix = imSingleRoot ? sarif::rootPrefixOf( root ) : std::string();
     const std::string  imRootAttr   = imSingleRoot ? ( " root=\"" + ex( root ) + "\"" ) : std::string();
     rw::emitTo( mem, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}{}>",
-                  ex( symbol ).c_str(), seeds.size(), reach.size(), unprovenDefsAttrXml( unprovenDefs ).c_str(),   // H1: where the CLI root carries it
+                  ex( symbol ).c_str(), seeds.size(), reach.size(), unprovenDefsAttrXml( unprovenDefs ) + defsListedAttrXml( imAttr.groups, imListing ),   // H1: where the CLI root carries it; attrib-multidef
                   byDepthAttrXml( byDepth ),                                                                        // 0.6.5: the CLI root's by_depth=
-                  imports.xmlAttrs.c_str(), radiusTested, radiusUntested, ( declinedCallsAttrXml( declinedCalls ) + declinedIfaceAttrXml( declinedIface ) ).c_str(),
+                  imports.xmlAttrs.c_str(), radiusTested, radiusUntested, ( declinedCallsAttrXml( declinedCalls ) + declinedSiteCutAttrXml( imDc.cut ) + declinedIfaceAttrXml( declinedIface ) ).c_str(),
                   ( valueRefsCountAttrXml( imValueRefs.rows.size() ) + valueRefsDepthAttrXml( ing, imValueRefs.depthCut, VrRender{ imSingleRoot, imRootPrefix } ) ), imRootAttr.c_str(),
                   pageDisclosure( ipab, sizeof( ipab ), shownRows, show.size(), ipw.end, page.limit, page.offset, true ),
                   graphCountFloorAttrXml( g ).c_str(), renderDisclosure( prD, DiscloseAs::XmlAttrs ).c_str(),   // M15: gauge + marker
                   nextAttrXml( nextFlag( "--safe-delete=", symbol ) ).c_str()  );   // P3 (L7): the CLI twin's next=, same root attribute set (mcpclidiffcheck)
+    rw::emitRaw( mem, defTableXml( ing, imAttr.groups, imListing, imSingleRoot ? std::string_view( imRootPrefix ) : std::string_view() ).c_str() );   // attrib-multidef
     emitImpactFileRollupXml( mem, ing, imFiles, imSingleRoot ? std::string_view( imRootPrefix ) : std::string_view() );   // idea #6, as on the CLI
     for( std::size_t i = ipw.begin; i < ipw.end; ++i )
     { const Symbol& s = ing.symbols[ show[i] ];
       const std::string_view rp = imSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], imRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
       // A6: tested="1" only (never a literal 0) — see kTestedRowLegend. 0.6.5: d= as on the CLI row.
-      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
+      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
                     depthRunAttrXml( show, depth, i, ipw.begin ), isTestedByReach( ing, impTestReach, show[i] ) ? " tested=\"1\"" : "",
-                    viaNameAttr( impactRowNameOnly( proven, show[i] ) ) ); }   // FE-B (D3)
+                    impactLinkAttrs( g, proven, seeds, depth, show[ i ] ), imAttr.ofDefXml( show[i] ) ); }
     // the import tier's rows, after the symbol rows and under their own tag — a different unit, so a
     // different element (see the CLI arm and kImpactImportTierLegend for why they are never one number).
     emitImportRowsXml( mem, ing, std::span<const std::uint32_t>( imports.files ).first( imports.shown ), imRootPrefix,
                        std::span<const char>( imports.lazy ).first( imports.shown ) );
-    rw::emitTo( mem, "{}</impact>", valueRefsXml( ing, imValueRefs, true, VrRender{ imSingleRoot, imRootPrefix }, "--uses=" + symbol ) );
+    rw::emitTo( mem, "{}{}</impact>", declinedSitesXml( imDc.views, /*callersForm=*/true ),   // ix2-slice (IX-4), as on the CLI
+                  valueRefsXml( ing, imValueRefs, true, VrRender{ imSingleRoot, imRootPrefix }, "--uses=" + symbol ) );
     return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
 
@@ -3210,9 +3447,9 @@ inline std::string usesSelectorRefusal( const IngestResult& ing, const std::stri
         {
             continue;
         }
-        if( r.isCompose || r.isDocLink )
+        if( r.isCompose || r.isDocLink || r.role == RefRole::Subscript )
         {
-            continue; // type edge / doc mention — not a use-site
+            continue; // type edge / doc mention / an element access (no use-site: valuerefindex.h UsesValueFilter::skip) — not a use-site
         }
         if( r.lang == Lang::Markdown )
         {
@@ -3283,9 +3520,9 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
         {
             continue;
         }
-        if( r.isCompose || r.isDocLink )
+        if( r.isCompose || r.isDocLink || !forwardCounts( r, refIndex, ix.g.keptForwards ) )
         {
-            continue; // type edge / doc mention — not a use-site
+            continue; // type edge / doc mention / a forwarded call buildGraph dropped (model.h forwardCounts, the CLI --uses' rule) — not a use-site
         }
         if( r.lang == Lang::Markdown )
         {
@@ -3407,6 +3644,13 @@ inline McpAffectedResult affectedText( const std::string& root, std::string_view
     return { mcpAnswerText( stream ), false, {}, false };
 }
 
+inline std::string pathKindLegend( const Graph& g, std::span<const NodeId> path )
+{
+    return std::string( viaNameLegend( pathHasNameOnlyHop( g, path ) ) )
+         + viaLinkLegend( pathHasNameOnlyHop( g, path, kEdgeLink ) )
+         + anchorMissLegend( pathHasNameOnlyHop( g, path, 0 ) );
+}
+
 // `path` verb: the shortest directed CALL path from `from` to `to` (does A reach B, and how?). Reuses
 // resolveFocus + shortestPath, exactly as the CLI --path=A,B. Returns the <path>…</path> XML fragment (with
 // reachable="0" hops="0" and no <s> children when B is NOT reachable from A — a valid answer, not an error),
@@ -3423,8 +3667,10 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     // H1: each endpoint's decl→def residue, summed onto the root exactly as the CLI --path sums it.
     std::size_t               srcUnprovenDefs = 0;
     std::size_t               dstUnprovenDefs = 0;
-    const std::vector<NodeId> srcDefs         = resolveAllByNameQualified( ing, from, &srcUnprovenDefs );
-    const std::vector<NodeId> dstDefs         = resolveAllByNameQualified( ing, to, &dstUnprovenDefs );
+    bool                      srcGlob         = false;   // ix2-slice (IX-2 P4): a `*` endpoint, as on the CLI
+    bool                      dstGlob         = false;
+    const std::vector<NodeId> srcDefs         = resolvePathEndpoint( ing, from, &srcUnprovenDefs, &srcGlob );
+    const std::vector<NodeId> dstDefs         = resolvePathEndpoint( ing, to, &dstUnprovenDefs, &dstGlob );
     const std::size_t         unprovenDefs    = srcUnprovenDefs + dstUnprovenDefs;
     if( srcDefs.empty() || dstDefs.empty() )
     {
@@ -3460,15 +3706,24 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     const ToValueRefs ptToValueRefs = toValueRefs( ing, pth.empty(), dstDefs, &valueRefIndexOf( ix ) );
     // PATH-GAP: the CLI --path's gap clause, by the same analysis and emitter (src/pathgaps.h).
     const PathSearchGaps ptGaps = pth.empty() ? pathSearchGaps( ing, g, srcDefs, valueRefIndexOf( ix ) ) : PathSearchGaps{};
-    const bool ptHasVia = pathHasNameOnlyHop( g, pth );   // FE-B: exactly when a hop of this path is via="name", as on the CLI
+    const PathNearSink        ptNear       = pth.empty() ? pathNearSink( ing, g, dstDefs, ptGaps.cone, valueRefIndexOf( ix ) ) : PathNearSink{};   // ix2-slice, as on the CLI
+    const PathBridge          ptBridge     = pth.empty() ? pathBridge( ing, g, srcDefs, dstDefs, valueRefIndexOf( ix ) ) : PathBridge{};      // ix2-slice, as on the CLI
+    const std::string         ptKindLegend = pathKindLegend( g, pth );
+    const PathEndpointBinding ptBound      = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), pth );   // attrib-multidef, as on the CLI
+    const bool                ptHasSplit = ptBound.splitHop;
+    const std::vector<std::string_view> ptOwners = pathHopOwners( ing, pth );   // PATH-OWNERS, as on the CLI
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
-                       "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + viaNameLegend( ptHasVia ) ).c_str(),
+                       "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + ptKindLegend
+                                                           + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to )
+                                                           + pathOwnerLegend( anyPathHopOwner( ptOwners ) ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
-                  pathGapsLegend( ptGaps.any() ),
+                  ( std::string( pathGapsLegend( ptGaps.any() ) ) + std::string( pathBridgeLegend( ptBridge.found() ) )
+                    + std::string( nearSinkLegend( !ptNear.rows.empty() ) ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
                   graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rootRelPathsLegend( ptSingleRoot ) );
-    rw::emitTo( mem, "<path from=\"{}\" to=\"{}\" from_p=\"{}\" to_p=\"{}\" from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
-                  ex( from ).c_str(), ex( to ).c_str(), loc( srcUsed ).c_str(), loc( dstUsed ).c_str(),
-                  srcDefs.size(), dstDefs.size(), unprovenDefsAttrXml( unprovenDefs ).c_str(),   // H1: as the CLI root carries it
+    rw::emitTo( mem, "<path from=\"{}\" to=\"{}\"{}{} from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
+                  ex( from ).c_str(), ex( to ).c_str(), ptBound.from ? " from_p=\"" + loc( srcUsed ) + "\"" : std::string(),
+                  ptBound.to ? " to_p=\"" + loc( dstUsed ) + "\"" : std::string(),
+                  srcDefs.size(), dstDefs.size(), ( unprovenDefsAttrXml( unprovenDefs ) + pathGlobAttrXml( srcGlob, dstGlob ) ).c_str(),   // H1: as the CLI root carries it; ix2-slice: a glob endpoint
                   pth.empty() ? 0 : 1, pth.empty() ? std::size_t( 0 ) : pth.size() - 1, ptRootAttr.c_str(),
                   graphCountFloorAttrXml( g ).c_str()  );   // M15: gauge + marker
     rw::emitTo( mem, "{}{}", countAttrXmlOrEmpty( "to_value_refs", ptToValueRefs.count ),   // absent at zero, as on the CLI
@@ -3476,12 +3731,9 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     const PathGapsXml ptUnreached = pth.empty()
         ? pathUnreachedXml( ing, ptGaps, ptSingleRoot, ptRootPrefix, { "the connect verb on " + from + "," + to, "uses/impact", "" } )
         : PathGapsXml{};
-    rw::emitTo( mem, "{}>{}", ptUnreached.rootAttrs, ptUnreached.rows );
-    for( std::size_t i = 0; i < pth.size(); ++i )
-    { const Symbol&           s  = ing.symbols[ pth[i] ];
-      const std::string_view  rp = ptSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], ptRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
-      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
-                    viaNameAttr( i > 0 && edgeNameOnly( g, pth[ i - 1 ], pth[ i ] ) ) ); }   // FE-B: as on the CLI
+    rw::emitTo( mem, "{}>{}{}{}", ptUnreached.rootAttrs, ptUnreached.rows, pathBridgeXml( ing, g, ptBridge, ptSingleRoot, ptRootPrefix ),
+                  pathNearSinkXml( ing, ptNear, ptSingleRoot, ptRootPrefix ) );
+    emitPathHopRows( mem, ing, g, pth, ptOwners, ptSingleRoot, ptRootPrefix );   // the CLI's own row emitter (defattrib.h)
     rw::emitRaw( mem, "</path>" );
     return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
@@ -3494,8 +3746,10 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
 // returns nothing.
 inline std::string pathEndpointRefusal( const IngestResult& ing, const std::string& from, const std::string& to )
 {
-    const bool fromOk = !resolveAllByNameQualified( ing, from ).empty();
-    const bool toOk   = !resolveAllByNameQualified( ing, to ).empty();
+    std::size_t unused = 0;
+    bool        glob   = false;   // ix2-slice: a `*` endpoint that matches resolves, exactly as pathText resolves it
+    const bool fromOk = !resolvePathEndpoint( ing, from, &unused, &glob ).empty();
+    const bool toOk   = !resolvePathEndpoint( ing, to, &unused, &glob ).empty();
     if( fromOk && toOk )
     {
         return {};
@@ -3745,7 +3999,17 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
     {
         return grp.terminals.size() > 1 && std::any_of( grp.edges.begin(), grp.edges.end(), [ & ]( const ConnectEdge& e ) { return edgeNameOnly( g, e.from, e.to ); } );
     } );
-    const std::string  connectViaLegend = connectHasVia ? "<!-- ripwire connect: " + viaNameLegend( true ) + "-->" : std::string();
+    const bool         connectHasLink = std::any_of( res.groups.begin(), res.groups.end(), [ & ]( const ConnectGroup& grp )
+    {
+        return grp.terminals.size() > 1 && std::any_of( grp.edges.begin(), grp.edges.end(), [ & ]( const ConnectEdge& e ) { return edgeIsLink( g, e.from, e.to ); } );
+    } );
+    const bool         connectHasMiss = std::any_of( res.groups.begin(), res.groups.end(), [ & ]( const ConnectGroup& grp )
+    {
+        return grp.terminals.size() > 1 && std::any_of( grp.edges.begin(), grp.edges.end(), [ & ]( const ConnectEdge& e ) { return edgeAnchorMiss( g, e.from, e.to ); } );
+    } );
+    const std::string  connectViaLegend = ( connectHasVia ? "<!-- ripwire connect: " + viaNameLegend( true ) + "-->" : std::string() )
+                                        + ( connectHasLink ? "<!-- ripwire connect: " + viaLinkLegend( true ) + "-->" : std::string() )
+                                        + ( connectHasMiss ? "<!-- ripwire connect: " + anchorMissLegend( true ) + "-->" : std::string() );
     const std::size_t  connectExtraBytes = connectRootAttr.size() + std::strlen( rootRelPathsLegend( !rootArg.empty() ) )
                                          + connectUnindexedLegend.size() + connectUnprovenAttr.size() + connectUnprovenLegend.size()
                                          + connectAmbiguousAttr.size() + connectViaLegend.size();
@@ -3897,7 +4161,8 @@ inline void packConnect( std::FILE* out, const IngestResult& ing, const Graph& g
             {
                 payload.append( "<e f=\"" ).append( ex( ing.symbols[ e.from ].name ) )
                        .append( "\" t=\"" ).append( ex( ing.symbols[ e.to ].name ) ).append( "\"" )
-                       .append( viaNameAttr( edgeNameOnly( g, e.from, e.to ) ) ).append( "/>" );   // FE-B: a name-only edge says so
+                       .append( viaEdgeAttr( edgeNameOnly( g, e.from, e.to ), edgeIsLink( g, e.from, e.to ) ) )
+                       .append( anchorMissAttr( edgeAnchorMiss( g, e.from, e.to ) ) ).append( "/>" );   // FE-B, or via="link"
             }
             payload.append( "</g>" );
         }
@@ -4542,6 +4807,7 @@ inline std::string packTaskText( const std::string& root, const std::string& tas
 
     PackTaskInputs in;
     in.budgetTokens = budgetTokens;
+    in.softTarget   = budgetTokens > 0 && !( partitionCount >= packpartition::kMinPartitions && partitionCount <= packpartition::kMaxPartitions );   // forbudget-soft: the CLI twin's rule
     in.fanIn        = &fanIn;
     in.impure       = &impure;
     in.redact       = redact;
@@ -4583,6 +4849,9 @@ inline FromTraceResult fromTraceText( const std::string& root, const std::string
     FromTraceInputs in;
     in.bundleBudgetBytes = budgetTokens > 0 ? rw::budgetBytesForTokens( budgetTokens )
                                             : rw::kForPayloadBudgetBytes;
+    // forbudget-soft (sibling of the CLI --from-trace): the caller's budget_tokens is named on the root and read as a SOFT
+    // target (no ceiling ladder, no over_ceiling for it) — this twin used to shape by it without naming it at all
+    in.budgetTokens = budgetTokens;
     in.fanIn  = &fanIn;
     in.impure = &impure;
     in.redact = redact;

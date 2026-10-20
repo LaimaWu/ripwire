@@ -1,0 +1,2534 @@
+# arm (L) call-result typing inputs, unpacked by test/receiverevidencecheck.sh into its temp dir (kept out of the
+# indexed tree: committed source trees move the repo's own map). Each file starts at a line `@@@ <root>/<path>`.
+@@@ cpp/src/app.cpp
+#include "model.h"
+
+// usePlain: `auto x = f()` with a value result.
+int usePlain()
+{
+    auto c = cfg::makeConfig();
+    return c.get();
+}
+
+// useRef: `T&` result.
+int useRef()
+{
+    const auto& c = cfg::configRef();
+    return c.get();
+}
+
+// usePtr: `T*` result through `->`.
+int usePtr()
+{
+    auto p = cfg::configPtr();
+    return p->get();
+}
+
+// useUnique: std::unique_ptr<T> through `->`.
+int useUnique()
+{
+    auto u = cfg::ownConfig();
+    return u->get();
+}
+
+// useAlias: the result names a `using` alias of an in-tree class.
+int useAlias()
+{
+    auto a = cfg::makeAlias();
+    return a.get();
+}
+
+// useMethod: the callee is a method on a typed local.
+int useMethod()
+{
+    cfg::Factory f;
+    auto c = f.make();
+    return c.get();
+}
+
+// nearOverload: the callee is overloaded (two definitions).
+int nearOverload()
+{
+    auto x = cfg::pick( 1 );
+    return x.get();
+}
+
+// nearExternal: an outside callee whose result has a same-named member.
+int nearExternal()
+{
+    auto fut = std::async( [] { return 1; } );
+    return fut.get();
+}
+
+// nearWrapper: std::reference_wrapper is outside the list; its own get() runs.
+int nearWrapper()
+{
+    auto r = cfg::wrapRef();
+    return r.get().size();
+}
+
+// nearGeneric: a template-parameter result.
+int nearGeneric()
+{
+    auto g = cfg::create<cfg::Config>();
+    return g.get();
+}
+
+// nearShadow: an inner `c` hides the typed outer one.
+int nearShadow()
+{
+    auto c = cfg::makeConfig();
+    {
+        auto c = std::async( [] { return 2; } );
+        return c.get();
+    }
+}
+
+// useWritten (twin): the same call with the type written.
+int useWritten()
+{
+    cfg::Config c = cfg::makeConfig();
+    return c.get();
+}
+
+// nearOverloadName: the other overload — its truth is Other::get, so a first-definition bug shows here.
+int nearOverloadName()
+{
+    auto x = cfg::pick( "name" );
+    return x.get();
+}
+
+// nearUniqueDot: `u.get()` on a std::unique_ptr result is unique_ptr::get — the arrow templates unwrap under `->` only.
+int nearUniqueDot()
+{
+    auto u = cfg::ownConfig();
+    return u.get() != nullptr;
+}
+
+// nearTypeParamNamed: a template parameter named after the in-tree Config, instantiated with Other.
+int nearTypeParamNamed()
+{
+    auto g = cfg::create2<cfg::Other>();
+    return g.get();
+}
+
+// useAliasWritten (twin): the alias written — Rule 2 reaches no member through a `using` alias today, so neither the
+// written nor the call-result-typed binding proves Config::get (a floor both share); Other::get is never proven.
+int useAliasWritten()
+{
+    cfg::ConfigAlias a = cfg::makeAlias();
+    return a.get();
+}
+@@@ cpp/src/fix1.cpp
+#include "model.h"
+#include "nest.h"
+#include <ext/lib.h>
+
+// nearNestedSame: `h.get().get()` — x is the OUTER call's result (Leaf), never the inner call's (Item) (fix round 1, B1).
+int nearNestedSame()
+{
+    auto h = nest::makeBox();
+    auto x = h.get().get();
+    return x.size();
+}
+
+// nearNestedWritten: the same with the holder's type written.
+int nearNestedWritten()
+{
+    nest::Box h;
+    auto x = h.get().get();
+    return x.size();
+}
+
+// nearLoadExt: `ext::Config` is an outside class whose last segment names the in-tree cfg::Config (B2; second lens B1).
+int nearLoadExt()
+{
+    auto c = cfg::loadExt();
+    return c.get();
+}
+
+// nearExtCall / nearExtSubCall: `ext::onlyOne()` reaches the in-tree cfg::onlyOne by its name alone — no evidence (B5).
+int nearExtCall()
+{
+    auto x = ext::onlyOne();
+    return x.size();
+}
+
+int nearExtSubCall()
+{
+    auto x = ext::sub::onlyOne();
+    return x.size();
+}
+
+// nearExtWritten: `ext::Factory f; f.make()` reaches cfg::Factory::make by its final segment only — it types nothing (B5).
+int nearExtWritten()
+{
+    ext::Factory f;
+    auto c = f.make();
+    return c.get();
+}
+
+// useChain: f is typed by makeFactory()'s result, then the proven `f.make()` types c.
+int useChain()
+{
+    auto f = cfg::makeFactory();
+    auto c = f.make();
+    return c.get();
+}
+
+// nearOverloadHop: `p.pick( 1 )` is overloaded, so the chain stops at that hop.
+int nearOverloadHop()
+{
+    auto p = nest::makePicker();
+    auto c = p.pick( 1 );
+    return c.size();
+}
+@@@ cpp/src/model.cpp
+#include "model.h"
+
+namespace cfg
+{
+int Config::get() const { return 0; }
+int Config::size() const { return 0; }
+int Other::get() const { return 1; }
+int Other::size() const { return 1; }
+Config makeConfig() { return {}; }
+const Config& configRef() { static Config c; return c; }
+Config* configPtr() { return nullptr; }
+std::unique_ptr<Config> ownConfig() { return {}; }
+ConfigAlias makeAlias() { return {}; }
+Config pick( int ) { return {}; }
+Other pick( const char* ) { return {}; }
+std::reference_wrapper<Config> wrapRef() { static Config c; return c; }
+Config Factory::make() const { return {}; }
+}
+
+namespace cfg
+{
+Config async( int ) { return {}; }
+}
+
+namespace cfg
+{
+Config  onlyOne() { return {}; }
+Factory makeFactory() { return {}; }
+}
+@@@ cpp/src/model.h
+#pragma once
+#include <functional>
+#include <future>
+#include <memory>
+
+namespace cfg
+{
+struct Config
+{
+    int get() const;
+    int size() const;
+};
+
+struct Other
+{
+    int get() const;
+    int size() const;
+};
+
+using ConfigAlias = Config;
+
+Config                  makeConfig();
+const Config&           configRef();
+Config*                 configPtr();
+std::unique_ptr<Config> ownConfig();
+ConfigAlias             makeAlias();
+Config                  pick( int which );
+Other                   pick( const char* name );
+std::reference_wrapper<Config> wrapRef();
+template<class T> T     create();
+
+struct Factory
+{
+    Config make() const;
+};
+}
+
+namespace cfg
+{
+Config                        async( int which );   // an in-tree namesake of std::async
+template<class Config> Config create2();            // a template parameter named after the in-tree Config
+}
+
+#include <ext/config.h>
+
+namespace cfg
+{
+ext::Config loadExt();       // an OUTSIDE qualified result whose last segment names the in-tree cfg::Config
+Config      onlyOne();       // an in-tree namesake of an outside ext::onlyOne
+Factory     makeFactory();
+}
+@@@ cpp/src/nest.cpp
+#include "nest.h"
+
+namespace nest
+{
+int    Leaf::size() const { return 0; }
+Leaf   Item::get() const { return {}; }
+int    Item::size() const { return 1; }
+Item   Box::get() const { return {}; }
+Box    makeBox() { return {}; }
+Item   Picker::pick( int ) const { return {}; }
+Leaf   Picker::pick( const char* ) const { return {}; }
+Picker makePicker() { return {}; }
+}
+@@@ cpp/src/nest.h
+#pragma once
+
+namespace nest
+{
+struct Leaf
+{
+    int size() const;
+};
+struct Item
+{
+    Leaf get() const;
+    int  size() const;
+};
+struct Box
+{
+    Item get() const;
+};
+struct Picker
+{
+    Item pick( int which ) const;
+    Leaf pick( const char* name ) const;
+};
+Box    makeBox();
+Picker makePicker();
+}
+@@@ cpp2/src/app.cpp
+#include "model.h"
+
+// nearUsingNs: `using namespace ext;` brings the result's Config in from outside (ext::Config), never other::Config.
+int nearUsingNs()
+{
+    auto c = cfg::loadUsingNs();
+    return c.get();
+}
+
+// nearUsingDecl: `using ext::Config;` in the callee's namespace — ext::Config, never other::Config.
+int nearUsingDecl()
+{
+    auto c = cfg2::loadUsingDecl();
+    return c.get();
+}
+@@@ cpp2/src/app2.cpp
+#include "decl.h"
+#include "pos.h"
+
+// nearUsingDeclGlobal: the callee's namespace declares `using ext::Settings;` (in its header), which hides the in-tree
+// global Settings — ext::Settings, never ::Settings.
+int nearUsingDeclGlobal()
+{
+    auto s = cfg3::loadSettings();
+    return s.load();
+}
+
+// useDirective: `using namespace parts;` in the callee's namespace (in its header) — parts::Part.
+int useDirective()
+{
+    auto p = mk::makePart();
+    return p.weight();
+}
+
+// useEnclosing: the class's namespace is the callee's own — parts::Part.
+int useEnclosing()
+{
+    auto p = parts::makeLocal();
+    return p.weight();
+}
+@@@ cpp2/src/app3.cpp
+#include "helper.h"
+
+// useQualifiedUsingDecl: `using ::net::wire::Frame;` names the in-tree net::wire::Frame (its namespace path, read from the
+// header's own namespace records — the header declares no free function there)
+int useQualifiedUsingDecl()
+{
+    auto f = net::readFrame();
+    return f.kind();
+}
+@@@ cpp2/src/decl.cpp
+#include "decl.h"
+
+int Settings::load() const { return 3; }
+
+namespace cfg3
+{
+Settings loadSettings() { return Settings(); }
+}
+@@@ cpp2/src/decl.h
+#pragma once
+#include <ext/settings.h>
+
+struct Settings
+{
+    int load() const;
+};
+
+namespace cfg3
+{
+using ext::Settings;
+Settings loadSettings();
+}
+@@@ cpp2/src/frame.h
+#pragma once
+
+namespace net
+{
+namespace wire
+{
+struct Frame
+{
+    int kind() const;
+};
+}
+}
+@@@ cpp2/src/helper.cpp
+#include "helper.h"
+
+int net::wire::Frame::kind() const { return 5; }
+
+namespace net
+{
+Frame readFrame() { return Frame(); }
+}
+@@@ cpp2/src/helper.h
+#pragma once
+#include "frame.h"
+
+namespace net
+{
+using ::net::wire::Frame;
+Frame readFrame();
+}
+@@@ cpp2/src/model.cpp
+#include "model.h"
+
+int other::Config::get() const { return 1; }
+int other::Other::get() const { return 2; }
+
+namespace cfg
+{
+Config loadUsingNs() { return Config(); }
+}
+
+namespace cfg2
+{
+Config loadUsingDecl() { return Config(); }
+}
+@@@ cpp2/src/model.h
+#pragma once
+#include <ext/config.h>
+
+namespace other
+{
+struct Config
+{
+    int get() const;
+};
+struct Other
+{
+    int get() const;
+};
+}
+
+using namespace ext;
+
+namespace cfg
+{
+Config loadUsingNs();
+}
+
+namespace cfg2
+{
+using ext::Config;
+Config loadUsingDecl();
+}
+@@@ cpp2/src/pos.cpp
+#include "pos.h"
+
+int parts::Part::weight() const { return 4; }
+
+namespace mk
+{
+Part makePart() { return Part(); }
+}
+
+namespace parts
+{
+Part makeLocal() { return Part(); }
+}
+@@@ cpp2/src/pos.h
+#pragma once
+
+namespace parts
+{
+struct Part
+{
+    int weight() const;
+};
+}
+
+namespace mk
+{
+using namespace parts;
+Part makePart();
+}
+
+namespace parts
+{
+Part makeLocal();
+}
+@@@ go/go.mod
+module example.com/cr
+
+go 1.22
+@@@ go/src/a/a.go
+package a
+
+// Client is an INTERFACE here; package b holds a STRUCT of the same name whose Do has a body.
+type Client interface {
+	Do() error
+}
+
+func New() Client { return nil }
+@@@ go/src/app/app.go
+package app
+
+import (
+	"os"
+
+	"example.com/cr/src/model"
+)
+
+// UseValue: a value result through named results (nfpm's `config, err := nfpm.ParseFile(..)`).
+func UseValue(path string) {
+	config, err := model.ParseFile(path)
+	_ = err
+	config.Get("deb")
+}
+
+// UsePtr: `(*T, error)`.
+func UsePtr(path string) {
+	c, _ := model.Load(path)
+	c.Get("rpm")
+}
+
+// UseOne: a single `*T` result.
+func UseOne() {
+	c := model.Make()
+	c.Get("apk")
+}
+
+// UsePair: the second result binds the second name.
+func UsePair() {
+	_, o := model.Pair()
+	o.Get("ipk")
+}
+
+// UseIface: an interface result types the binding as the interface.
+func UseIface(info *model.Info) {
+	pkg, _ := model.Lookup("deb")
+	pkg.Package(info)
+}
+
+// UseMethod: the callee is a method on a typed receiver.
+func UseMethod(b *model.Builder) {
+	c := b.Build()
+	c.Get("arch")
+}
+
+// UseReassigned: Go is statically typed; `c = …` keeps c's type.
+func UseReassigned() {
+	c := model.Make()
+	c = model.Make()
+	c.Get("deb")
+}
+
+// NearExternal: an outside callee types nothing.
+func NearExternal() {
+	f, _ := os.Open("x")
+	f.Close()
+}
+
+// NearTwoDefs: the callee binds two definitions (an untyped receiver).
+func NearTwoDefs(factory interface{ Build() }) {
+	x := factory.Build()
+	x.Get("deb")
+}
+
+// NearAlias: a Go alias emits no alias record today.
+func NearAlias() {
+	a := model.MakeAlias()
+	a.Get("deb")
+}
+
+// NearWrapper: a wrapper outside the list.
+func NearWrapper() {
+	r := model.Wrap()
+	r.Get("deb")
+}
+
+// NearGeneric: a type-parameter result.
+func NearGeneric() {
+	g := model.Generic[model.Config]()
+	g.Get("deb")
+}
+
+// NearShadow: an inner `c` hides the typed outer one.
+func NearShadow() {
+	c := model.Make()
+	_ = c
+	{
+		c, _ := os.Open("y")
+		c.Close()
+	}
+}
+
+// UseWritten (twin): the same call with the type written — the record the receiver rules already read.
+func UseWritten() {
+	var c *model.Config = model.Make()
+	c.Get("deb")
+}
+
+// UseQualifiedFn: `model.Get` reaches the package-level func only, never the method (nfpm's `pkg, err := nfpm.Get(..)`).
+func UseQualifiedFn(info *model.Info) {
+	pkg, _ := model.Get("deb")
+	pkg.Package(info)
+}
+
+// NearQualified: an in-tree callee returning an OUTSIDE qualified type (*os.File) whose final segment names the
+// in-tree model.File: the qualifier resolves to no in-tree package, so nothing is recorded.
+func NearQualified() {
+	f, _ := model.OpenOS()
+	f.Close()
+}
+
+// NearOSParam: the written twin of the same outside type (a parameter): f.Close is os.File's.
+func NearOSParam(f *os.File) {
+	f.Close()
+}
+
+// UseGrouped / UseGroupedLast: grouped named results `(a, b *Config, o *Other)` count one position per NAME.
+func UseGrouped() {
+	_, y, _ := model.Triple()
+	y.Get("deb")
+}
+
+func UseGroupedLast() {
+	_, _, z := model.Triple()
+	z.Get("rpm")
+}
+
+// NearTypeParamNamed: a type parameter named after the in-tree Config, instantiated with Other.
+func NearTypeParamNamed() {
+	g := model.Generic2[model.Other]()
+	g.Get("deb")
+}
+
+// NearShadowPkg: a local spelled like the import is not the package — `model.Get` here is a method call on the local.
+func NearShadowPkg() {
+	model := model.Make()
+	model.Get("x")
+}
+
+// UseIfaceWritten (twin): the interface type written on a parameter — an interface-typed binding, written or call-result
+// typed, answers the same: the interface's bodyless signature is a dispatch contract the ladder keeps (FE-B), never a body.
+func UseIfaceWritten(p model.Packager, info *model.Info) {
+	p.Package(info)
+}
+@@@ go/src/app/fix1.go
+package app
+
+import (
+	"os"
+
+	"example.com/cr/src/a"
+	"example.com/cr/src/nest"
+)
+
+// NearIfaceNamesake: `a.New()` returns the INTERFACE a.Client; package b's struct Client is another class (fix round 1, B3).
+func NearIfaceNamesake() error {
+	c := a.New()
+	return c.Do()
+}
+
+// NearNestedSame: `h.Get().Get()` — x is the OUTER call's result (*Other), never the inner call's (*Config) (B1).
+func NearNestedSame() int {
+	h := nest.MakeHolder()
+	x := h.Get().Get()
+	return x.Size()
+}
+
+// UseChain: h is typed by MakeHolder's result, then the proven `h.Get()` types c — nest's Config, not model's.
+func UseChain() *nest.Other {
+	h := nest.MakeHolder()
+	c := h.Get()
+	return c.Get()
+}
+
+// fileHolder: a struct FIELD written `*os.File` beside the in-tree model.File.
+type fileHolder struct {
+	f *os.File
+}
+
+func (s *fileHolder) NearOSField() error {
+	return s.f.Close()
+}
+
+// UseNamedType: a result of a named non-struct type (`type Shape int`) types the local.
+func UseNamedType() bool {
+	s := nest.MakeShape()
+	return s.HasTop()
+}
+
+// UseFieldPath: a field path below a call-typed local whose class name is unique in the tree (Wrap.Cfg → *Config).
+func UseFieldPath() int {
+	w := nest.MakeWrap()
+	return w.Cfg.Size()
+}
+@@@ go/src/app/renamed.go
+package app
+
+import (
+	m "example.com/cr/src/model"
+)
+
+// UseRenamedImport: a renamed import `m.Get(..)` binds the package func, never the method Config.Get.
+func UseRenamedImport(info *m.Info) {
+	pkg, _ := m.Get("rpm")
+	pkg.Package(info)
+}
+@@@ go/src/b/b.go
+package b
+
+type Client struct{}
+
+func (c *Client) Do() error { return nil }
+@@@ go/src/model/extra.go
+package model
+
+import "os"
+
+// File: an in-tree namesake of os.File (R3: a qualified outside type never types a binding by its final segment).
+type File struct{}
+
+func (f *File) Close() error { return nil }
+
+// OpenOS returns an OUTSIDE qualified type whose final segment names the in-tree File.
+func OpenOS() (*os.File, error) { return nil, nil }
+
+// Open: an in-tree namesake of os.Open (R4).
+func Open(name string) (*Config, error) { return &Config{}, nil }
+
+// Get on Ref[T]: NearWrapper's `r.Get` is Ref.Get, neither Config's nor Other's.
+func (r Ref[T]) Get(format string) *Info { return nil }
+
+// Generic2 names its type parameter after the in-tree Config (R2: the type-parameter guard can fail).
+func Generic2[Config any]() Config {
+	var zero Config
+	return zero
+}
+
+// Triple: grouped named results — a and b are both *Config (positions 0 and 1), o is *Other (position 2).
+func Triple() (a, b *Config, o *Other) { return }
+
+// Deb and Rpm implement Packager: an interface-typed binding proves the interface's own method, never an implementor.
+type Deb struct{}
+
+func (d *Deb) Package(info *Info) error { return nil }
+
+type Rpm struct{}
+
+func (r *Rpm) Package(info *Info) error { return nil }
+@@@ go/src/model/model.go
+package model
+
+type Info struct{}
+
+type Config struct{}
+
+func (c *Config) Get(format string) *Info { return nil }
+
+func (c *Config) Close() error { return nil }
+
+type Other struct{}
+
+func (o *Other) Get(format string) *Info { return nil }
+
+func (o *Other) Close() error { return nil }
+
+type Packager interface {
+	Package(info *Info) error
+}
+
+type Alias = Config
+
+type Ref[T any] struct{ v T }
+
+// ParseFile names its results: `(config Config, err error)`.
+func ParseFile(path string) (config Config, err error) { return }
+
+func Load(path string) (*Config, error) { return &Config{}, nil }
+
+func Make() *Config { return &Config{} }
+
+func Pair() (*Config, *Other) { return &Config{}, &Other{} }
+
+func Lookup(format string) (Packager, error) { return nil, nil }
+
+func MakeAlias() Alias { return Alias{} }
+
+func Wrap() Ref[Config] { return Ref[Config]{} }
+
+func Generic[T any]() T {
+	var zero T
+	return zero
+}
+
+type Builder struct{}
+
+func (b *Builder) Build() *Config { return &Config{} }
+
+type Maker struct{}
+
+func (m *Maker) Build() *Other { return &Other{} }
+
+// Get: a package-level func beside the method Config.Get (nfpm's `nfpm.Get` beside `(*Config).Get`).
+func Get(format string) (Packager, error) { return nil, nil }
+@@@ go/src/nest/nest.go
+package nest
+
+type Holder struct{}
+
+func MakeHolder() *Holder { return &Holder{} }
+
+func (h *Holder) Get() *Config { return &Config{} }
+
+type Config struct{}
+
+func (c *Config) Get() *Other { return &Other{} }
+
+func (c *Config) Size() int { return 0 }
+
+type Other struct{}
+
+func (o *Other) Size() int { return 1 }
+
+// Shape: a named non-struct type with a method (fzf's `type BorderShape int`).
+type Shape int
+
+func (s Shape) HasTop() bool { return s > 0 }
+
+func MakeShape() Shape { return Shape(1) }
+
+// Wrap: a uniquely named struct whose field holds a Config.
+type Wrap struct {
+	Cfg *Config
+}
+
+func MakeWrap() *Wrap { return &Wrap{} }
+@@@ java/src/app/Box.java
+package app;
+
+public class Box {
+    public static Box make() { return new Box(); }
+    public Item get() { return new Item(); }
+}
+@@@ java/src/app/Config.java
+package app;
+
+public class Config {
+    public int get() { return 0; }
+}
+@@@ java/src/app/Configs.java
+package app;
+
+import java.util.Optional;
+
+public final class Configs {
+    public static Config make() { return new Config(); }
+    public static Optional<Config> find() { return Optional.of(new Config()); }
+    public static <T> T create() { return null; }
+    public static Config of() { return new Config(); }
+    public static <Config> Config create2() { return null; }
+}
+@@@ java/src/app/File.java
+package app;
+
+// File: an in-tree namesake of java.io.File.
+public class File {
+    public boolean delete() { return true; }
+}
+@@@ java/src/app/Item.java
+package app;
+
+public class Item {
+    public Leaf get() { return new Leaf(); }
+    public int size() { return 1; }
+}
+@@@ java/src/app/Leaf.java
+package app;
+
+public class Leaf {
+    public int size() { return 0; }
+}
+@@@ java/src/app/Other.java
+package app;
+
+public class Other {
+    public int get() { return 1; }
+}
+@@@ java/src/app/Use.java
+package app;
+
+public class Use {
+    // useVar: `var x = f()`.
+    int useVar() {
+        var c = Configs.make();
+        return c.get();
+    }
+
+    // nearExternal: an outside callee (List.of, beside the in-tree Configs.of) whose result has a same-named member.
+    int nearExternal() {
+        var l = java.util.List.of(new Config());
+        l.get(0);
+        return 0;
+    }
+
+    // nearWrapper: Optional<T> is outside the Java list; its own get() runs.
+    int nearWrapper() {
+        var o = Configs.find();
+        o.get();
+        return 0;
+    }
+
+    // nearGeneric: a type-parameter result.
+    int nearGeneric() {
+        var g = Configs.<Config>create();
+        return g.get();
+    }
+
+    // useWritten (twin): the same call with the type written.
+    int useWritten() {
+        Config c = Configs.make();
+        return c.get();
+    }
+
+    // nearTypeParamNamed: a type parameter named after the in-tree Config, instantiated with Other.
+    int nearTypeParamNamed() {
+        var g = Configs.<Other>create2();
+        return g.get();
+    }
+}
+@@@ java/src/app/Use2.java
+package app;
+
+public class Use2 {
+    // nearImported: Util.open() returns java.io.File, never the in-tree app.File.
+    boolean nearImported() {
+        var f = Util.open();
+        return f.delete();
+    }
+
+    // nearNestedSame: `h.get().get()` — x is the OUTER call's result (Leaf), never the inner call's (Item).
+    int nearNestedSame() {
+        var h = Box.make();
+        var x = h.get().get();
+        return x.size();
+    }
+
+    // useChain: h is typed by Box.make(), then the proven `h.get()` types i.
+    int useChain() {
+        var h = Box.make();
+        var i = h.get();
+        return i.size();
+    }
+}
+@@@ java/src/app/Util.java
+package app;
+
+import java.io.File;
+
+public final class Util {
+    // open: `File` here is java.io.File — the single-type import shadows the same-package app.File (fix round 1, B2).
+    public static File open() { return new File("x"); }
+}
+@@@ java2/src/inh/Base.java
+package inh;
+
+public class Base {
+    public static class Config {
+        int size() { return 0; }
+    }
+}
+@@@ java2/src/inh/Config.java
+package inh;
+
+public class Config {
+    int size() { return 1; }
+}
+@@@ java2/src/inh/Use4.java
+package inh;
+
+public class Use4 {
+    // nearInheritedNested: Util4 inherits Base.Config, which hides the package's Config
+    int nearInheritedNested() {
+        var c = Util4.open();
+        return c.size();
+    }
+}
+@@@ java2/src/inh/Util4.java
+package inh;
+
+public class Util4 extends Base {
+    public static Config open() { return new Config(); }
+}
+@@@ java2/src/scoped/Config.java
+package scoped;
+
+public class Config {
+    int size() { return 1; }
+}
+@@@ java2/src/scoped/Entry.java
+package scoped;
+
+public class Entry {
+    int weight() { return 1; }
+}
+@@@ java2/src/scoped/Use.java
+package scoped;
+
+public class Use {
+    // nearNestedOther: Fixtures.Config is not in scope at open(); its result is the package's Config
+    int nearNestedOther() {
+        var c = Util.open();
+        return c.size();
+    }
+}
+@@@ java2/src/scoped/Use2.java
+package scoped;
+
+public class Use2 {
+    // useNestedInScope: make() sits inside Util2, so Util2.Entry is in scope — never the package's Entry
+    int useNestedInScope() {
+        var e = Util2.make();
+        return e.weight();
+    }
+}
+@@@ java2/src/scoped/Util.java
+package scoped;
+
+public class Util {
+    public static Config open() { return new Config(); }
+
+    static class Fixtures {
+        static class Config {
+            int size() { return 0; }
+        }
+    }
+}
+@@@ java2/src/scoped/Util2.java
+package scoped;
+
+public class Util2 {
+    static class Entry {
+        int weight() { return 0; }
+    }
+
+    static Entry make() { return new Entry(); }
+}
+@@@ java2/src/scoped2/Holder.java
+package scoped2;
+
+public class Holder {
+    static class Config {
+        int size() { return 0; }
+    }
+}
+@@@ java2/src/scoped2/Use3.java
+package scoped2;
+
+public class Use3 {
+    // nearNestedPackage: Holder.Config is nested, so no bare `Config` of the package names it — ext.Config (on demand)
+    int nearNestedPackage() {
+        var c = Util3.open();
+        return c.size();
+    }
+}
+@@@ java2/src/scoped2/Util3.java
+package scoped2;
+
+import ext.*;
+
+public class Util3 {
+    public static Config open() { return null; }
+}
+@@@ java3/src/app/Use.java
+package app;
+
+import ext.Util;
+
+public class Use {
+    // nearOutsideClassReceiver: the caller imports ext.Util — Util.open() is never lib.Util's
+    int nearOutsideClassReceiver() {
+        var c = Util.open();
+        return c.size();
+    }
+
+    // nearOutsideMethodRef: `Util::open` names the imported ext.Util, never lib.Util
+    Object nearOutsideMethodRef() {
+        java.util.function.Supplier<Object> s = Util::open;
+        return s.get();
+    }
+}
+@@@ java3/src/lib/Config.java
+package lib;
+
+public class Config {
+    public int size() { return 1; }
+}
+@@@ java3/src/lib/Other.java
+package lib;
+
+public class Other {
+    public int size() { return 2; }
+}
+@@@ java3/src/lib/Util.java
+package lib;
+
+public class Util {
+    public static Config open() { return new Config(); }
+}
+@@@ kt/src/app/File.kt
+package app
+
+// File: an in-tree namesake of java.io.File.
+class File {
+    fun delete(): Boolean = true
+}
+@@@ kt/src/app/Model.kt
+package app
+
+class Config {
+    fun get(): Int = 0
+}
+
+class Other {
+    fun get(): Int = 1
+}
+
+fun makeConfig(): Config = Config()
+
+fun makeLazy() = Config()
+@@@ kt/src/app/Model2.kt
+package app
+
+import java.io.File
+
+// openFile: `File` is java.io.File through the import, never the in-tree app.File (fix round 1, B2).
+fun openFile(): File = File("x")
+
+class Box {
+    fun get(): Item = Item()
+}
+
+class Item {
+    fun get(): Leaf = Leaf()
+    fun size(): Int = 1
+}
+
+class Leaf {
+    fun size(): Int = 0
+}
+
+fun makeBox(): Box = Box()
+@@@ kt/src/app/Use.kt
+package app
+
+// useVal: `val x = f()` with a declared return type.
+fun useVal(): Int {
+    val c = makeConfig()
+    return c.get()
+}
+
+// useVar: `var x = f()`, reassigned with the same type.
+fun useVar(): Int {
+    var c = makeConfig()
+    c = makeConfig()
+    return c.get()
+}
+
+// nearInferred: an expression-bodied function with no written return type.
+fun nearInferred(): Int {
+    val c = makeLazy()
+    return c.get()
+}
+
+// useWritten (twin): the same call with the type written.
+fun useWritten(): Int {
+    val c: Config = makeConfig()
+    return c.get()
+}
+@@@ kt/src/app/Use2.kt
+package app
+
+// nearImported: openFile() returns java.io.File, never the in-tree app.File.
+fun nearImported(): Boolean {
+    val f = openFile()
+    return f.delete()
+}
+
+// nearNestedSame: `h.get().get()` — x is the OUTER call's result (Leaf), never the inner call's (Item).
+fun nearNestedSame(): Int {
+    val h = makeBox()
+    val x = h.get().get()
+    return x.size()
+}
+
+// useChain: h is typed by makeBox(), then the proven `h.get()` types i.
+fun useChain(): Int {
+    val h = makeBox()
+    val i = h.get()
+    return i.size()
+}
+@@@ kt2/src/app/Maker.kt
+package app
+
+class Maker {
+    companion object {
+        fun make(): Part = Part()
+    }
+
+    class Part {
+        fun weight(): Int = 0
+    }
+}
+@@@ kt2/src/app/Model.kt
+package app
+
+class Config {
+    fun size(): Int = 1
+}
+@@@ kt2/src/app/Part.kt
+package app
+
+class Part {
+    fun weight(): Int = 1
+}
+@@@ kt2/src/app/Registry.kt
+package app
+
+object Registry {
+    class Config {
+        fun size(): Int = 2
+    }
+}
+@@@ kt2/src/app/Use.kt
+package app
+
+// nearNestedOther: Fixtures.Config is not in scope at openNested(); its result is the package's Config
+fun nearNestedOther(): Int {
+    val c = openNested()
+    return c.size()
+}
+@@@ kt2/src/app/Use2.kt
+package app
+
+// useCompanion: make() sits in Maker's companion, so Maker.Part is in scope — never the package's Part
+fun useCompanion(): Int {
+    val p = Maker.make()
+    return p.weight()
+}
+@@@ kt2/src/app/Util.kt
+package app
+
+fun openNested(): Config = Config()
+
+class Fixtures {
+    class Config {
+        fun size(): Int = 0
+    }
+}
+@@@ kt3/src/app/Use.kt
+package app
+
+import core.Util
+
+// useImportedPackage: `core.Util` is declared in tree (package core) though its file sits in core/impl/ — never outside
+fun useImportedPackage(): Int {
+    return Util.open()
+}
+@@@ kt3/src/core/impl/Util.kt
+package core
+
+object Util {
+    fun open(): Int = 1
+}
+@@@ rust/Cargo.toml
+[package]
+name = "cr"
+version = "0.1.0"
+edition = "2021"
+@@@ rust/src/app.rs
+use crate::model::{self, Book, Config};
+
+// use_try: `let x = f()?` through Result<T, _>.
+pub fn use_try(path: &str) -> Result<u32, model::Error> {
+    let c = model::load(path)?;
+    Ok(c.get("a"))
+}
+
+// use_option: Option<T> with `?`.
+pub fn use_option() -> Option<u32> {
+    let c = model::find("k")?;
+    Some(c.get("b"))
+}
+
+// use_box: Box<T>.
+pub fn use_box() -> u32 {
+    let c = model::boxed();
+    c.get("c")
+}
+
+// use_ref: &T.
+pub fn use_ref(base: &Config) -> u32 {
+    let c = model::borrowed(base);
+    c.get("d")
+}
+
+// use_plain: T.
+pub fn use_plain() -> u32 {
+    let c = model::make();
+    c.get("e")
+}
+
+// use_tuple: the second element of a tuple result (mdbook's `let (book, _) = self.preprocess_book(..)?`).
+pub fn use_tuple() -> Result<u32, model::Error> {
+    let (_, o) = model::pair()?;
+    Ok(o.get("f"))
+}
+
+// use_path: an associated function on an in-tree type (`MDBook::load(..)?`).
+pub fn use_path() -> Result<u32, model::Error> {
+    let book = Book::load("root")?;
+    let c = book.build();
+    Ok(c.get("g"))
+}
+
+impl Book {
+    // use_self: the callee is a method on self.
+    pub fn use_self(&self) -> Result<u32, model::Error> {
+        let (c, _) = self.preprocess()?;
+        Ok(c.get("h"))
+    }
+}
+
+// near_external: an outside callee.
+pub fn near_external() -> usize {
+    let s = String::new();
+    s.len()
+}
+
+// near_std_get: a std container result whose method shares an in-tree name.
+pub fn near_std_get() -> Option<u32> {
+    let m = model::table();
+    m.get("k").copied()
+}
+
+// near_wrapper: Vec<T> is outside the list: `v.get(0)` is the slice's get.
+pub fn near_wrapper() -> usize {
+    let v = model::configs();
+    v.len()
+}
+
+// near_two_defs: the callee binds two definitions (an untyped receiver).
+pub fn near_two_defs<F>(f: F) -> u32 {
+    let x = f.produce();
+    x.get("i")
+}
+
+// near_alias: a Rust alias emits no alias record today.
+pub fn near_alias() -> u32 {
+    let a = model::alias();
+    a.get("j")
+}
+
+// near_generic: a type-parameter result.
+pub fn near_generic() -> u32 {
+    let g = model::generic::<Config>();
+    g.get("k")
+}
+
+// near_shadow: a later `let` rebinds the name to an outside value.
+pub fn near_shadow() -> usize {
+    let c = model::make();
+    let c = String::from("x");
+    c.len()
+}
+
+// use_written (twin): the same call with the type written.
+pub fn use_written() -> u32 {
+    let c: Config = model::make();
+    c.get("w")
+}
+
+// use_unwrap: `.unwrap()` / `.expect(..)` on a Result/Option result (the test-suite shape: `MDBook::load(..).unwrap()`).
+pub fn use_unwrap(path: &str) -> u32 {
+    let c = model::load(path).unwrap();
+    let d = model::find("k").expect("present");
+    c.get("u") + d.get("v")
+}
+
+// near_qualified: an in-tree callee returning std's File (written qualified) beside the in-tree osfile::File.
+pub fn near_qualified() -> std::io::Result<()> {
+    let f = crate::osfile::open_std()?;
+    f.sync_all()?;
+    let g = crate::osfile::open_fs();
+    g.sync_all()?;
+    Ok(())
+}
+
+// near_no_try: Option<T> without `?` — `r.iter()` is Option::iter, never Config::iter.
+pub fn near_no_try() -> usize {
+    let r = model::find("k");
+    r.iter().count()
+}
+
+// near_nested: Result<Option<T>, _> with ONE `?` leaves Option<T>: `c.iter()` is Option::iter.
+pub fn near_nested() -> Result<usize, model::Error> {
+    let c = model::nested()?;
+    Ok(c.iter().count())
+}
+
+// near_method_tail: a trailing method other than unwrap/expect is not stripped: o is Other (one level further: floor).
+pub fn near_method_tail() -> u32 {
+    let o = model::make().into_other();
+    o.get("o")
+}
+
+// near_type_param_named: a type parameter named after the in-tree Config, instantiated with Other.
+pub fn near_type_param_named() -> u32 {
+    let g = model::generic2::<model::Other>();
+    g.get("p")
+}
+@@@ rust/src/fix1.rs
+use crate::model::{self, Book};
+use crate::{nest, plainuse};
+
+// near_nested_same: `h.get().get()` — x is the OUTER call's result (Other), never the inner call's (Config) (B1).
+pub fn near_nested_same() -> usize {
+    let h = nest::holder();
+    let x = h.get().get();
+    x.size()
+}
+
+// use_chain: h is typed by holder()'s result, then the proven `h.get()` types c — nest's Config, not model's.
+pub fn use_chain() -> nest::Other {
+    let h = nest::holder();
+    let c = h.get();
+    c.get()
+}
+
+// near_plain_use / near_plain_use_result: `use std::fs::File` names std's File (B2).
+pub fn near_plain_use() -> u32 {
+    let f = plainuse::open_plain_use();
+    f.sync_all()
+}
+
+pub fn near_plain_use_result() -> u32 {
+    let f = plainuse::open_result().unwrap();
+    f.sync_all()
+}
+
+// near_hedged_hop: g is untyped (a generic result), so `g.build()` binds by name alone and types nothing.
+pub fn near_hedged_hop() -> u32 {
+    let g = model::generic::<Book>();
+    let c = g.build();
+    c.get("x")
+}
+
+// use_reexport: a result type named through a re-export resolves to the module that defines it.
+pub fn use_reexport() -> nest::Config {
+    let h = plainuse::via_reexport();
+    h.get()
+}
+@@@ rust/src/lib.rs
+pub mod app;
+pub mod model;
+pub mod osfile;
+pub mod nest;
+pub mod plainuse;
+pub mod fix1;
+pub use nest::Holder;
+@@@ rust/src/model.rs
+use std::collections::HashMap;
+
+pub struct Config;
+
+impl Config {
+    pub fn get(&self, key: &str) -> u32 { 0 }
+    pub fn len(&self) -> usize { 0 }
+}
+
+pub struct Other;
+
+impl Other {
+    pub fn get(&self, key: &str) -> u32 { 1 }
+    pub fn len(&self) -> usize { 1 }
+}
+
+pub type Alias = Config;
+
+pub struct Error;
+
+pub fn load(path: &str) -> Result<Config, Error> { Ok(Config) }
+
+pub fn find(key: &str) -> Option<Config> { Some(Config) }
+
+pub fn boxed() -> Box<Config> { Box::new(Config) }
+
+pub fn borrowed(c: &Config) -> &Config { c }
+
+pub fn make() -> Config { Config }
+
+pub fn pair() -> Result<(Config, Other), Error> { Ok((Config, Other)) }
+
+pub fn alias() -> Alias { Config }
+
+pub fn configs() -> Vec<Config> { vec![Config] }
+
+pub fn generic<T: Default>() -> T { T::default() }
+
+pub fn table() -> HashMap<String, u32> { HashMap::new() }
+
+pub struct Book;
+
+impl Book {
+    pub fn load(root: &str) -> Result<Book, Error> { Ok(Book) }
+    pub fn preprocess(&self) -> Result<(Config, Other), Error> { Ok((Config, Other)) }
+    pub fn build(&self) -> Config { Config }
+}
+
+pub struct Factory;
+
+impl Factory {
+    pub fn produce(&self) -> Config { Config }
+}
+
+pub struct Mill;
+
+impl Mill {
+    pub fn produce(&self) -> Other { Other }
+}
+
+// new: an in-tree namesake of String::new (an outside callee never types through it).
+pub fn new() -> Config { Config }
+
+// Config::iter (mdbook's Book::iter beside Option::iter) and a non-unwrap method returning Other.
+impl Config {
+    pub fn iter(&self) -> usize { 0 }
+    pub fn into_other(&self) -> Other { Other }
+}
+
+// nested: one `?` strips ONE layer — the binding is Option<Config>, not Config.
+pub fn nested() -> Result<Option<Config>, Error> { Ok(Some(Config)) }
+
+// generic2 names its type parameter after the in-tree Config.
+pub fn generic2<Config: Default>() -> Config { Config::default() }
+@@@ rust/src/nest.rs
+pub struct Holder;
+
+impl Holder {
+    pub fn get(&self) -> Config { Config }
+}
+
+pub struct Config;
+
+impl Config {
+    pub fn get(&self) -> Other { Other }
+    pub fn size(&self) -> usize { 0 }
+}
+
+pub struct Other;
+
+impl Other {
+    pub fn size(&self) -> usize { 1 }
+}
+
+pub fn holder() -> Holder { Holder }
+@@@ rust/src/osfile.rs
+// File: an in-tree namesake of std::fs::File — a qualified outside result type never types a binding by its last segment.
+pub struct File;
+
+impl File {
+    pub fn sync_all(&self) -> u32 { 0 }
+}
+
+pub fn open_std() -> std::io::Result<std::fs::File> { std::fs::File::open("x") }
+
+pub fn open_fs() -> std::fs::File { std::fs::File::open("x").unwrap() }
+@@@ rust/src/plainuse.rs
+use std::fs::File;
+
+// open_plain_use names `File` through `use std::fs::File`: std's File, never the in-tree osfile::File (fix round 1, B2).
+pub fn open_plain_use() -> File { File::open("x").unwrap() }
+
+pub fn open_result() -> std::io::Result<File> { File::open("x") }
+
+// via_reexport names the crate root's re-export `crate::Holder` (lib.rs `pub use nest::Holder;`).
+pub fn via_reexport() -> crate::Holder { crate::nest::holder() }
+@@@ rust2/Cargo.toml
+[package]
+name = "rtwo"
+version = "0.1.0"
+edition = "2021"
+@@@ rust2/src/lib.rs
+pub mod scoped;
+pub mod user;
+pub mod reexp;
+pub mod viareexp;
+pub mod user2;
+@@@ rust2/src/reexp.rs
+pub use other_crate::Config;
+
+pub mod helpers {
+    pub struct Config;
+    impl Config {
+        pub fn size(&self) -> usize { 0 }
+    }
+}
+@@@ rust2/src/scoped.rs
+use other_crate::Config;
+
+pub mod helpers {
+    pub struct Config;
+    impl Config {
+        pub fn size(&self) -> usize { 0 }
+    }
+}
+
+pub fn load() -> Config {
+    Config::default()
+}
+@@@ rust2/src/user.rs
+use crate::scoped;
+
+// near_inline_mod: helpers::Config is not in scope at load(); its result is other_crate's Config
+pub fn near_inline_mod() -> usize {
+    let c = scoped::load();
+    c.size()
+}
+@@@ rust2/src/user2.rs
+use crate::viareexp;
+
+// near_module_nested: `crate::reexp::Config` is reexp's own item (other_crate's, re-exported), never helpers::Config
+pub fn near_module_nested() -> usize {
+    let c = viareexp::load();
+    c.size()
+}
+@@@ rust2/src/viareexp.rs
+use crate::reexp::Config;
+
+pub fn load() -> Config {
+    Config::default()
+}
+@@@ ts/src/holder.ts
+export class Holder {
+  get(): number { return 0; }
+}
+@@@ ts/src/loader.ts
+import { Config } from "ext-config";
+import type { Holder } from "other-lib";
+
+// loadExt: `Config` is the OUTSIDE ext-config's, never the in-tree model.ts Config (fix round 1, B2).
+export function loadExt(): Config { return {} as Config; }
+
+// holderOf: a type-only import of an outside Holder, beside the in-tree holder.ts Holder.
+export function holderOf(): Holder { return {} as Holder; }
+
+// fetchIt: the global Response, beside the in-tree response.ts Response.
+export function fetchIt(): Response { return new Response(); }
+@@@ ts/src/model.ts
+export class Config {
+  get(): number { return 0; }
+}
+
+export class Other {
+  get(): number { return 1; }
+}
+
+export function makeConfig(): Config { return new Config(); }
+
+export function makeUntyped() { return new Config(); }
+
+export async function loadConfig(): Promise<Config> { return new Config(); }
+
+export function freeze(): Config { return new Config(); }
+@@@ ts/src/nest.ts
+export class Leaf {
+  size(): number { return 0; }
+}
+
+export class Item {
+  get(): Leaf { return new Leaf(); }
+  size(): number { return 1; }
+}
+
+export class Box {
+  get(): Item { return new Item(); }
+}
+
+export function makeBox(): Box { return new Box(); }
+@@@ ts/src/response.ts
+export class Response {
+  json(): number { return 0; }
+}
+@@@ ts/src/use.ts
+import { Config, makeConfig, makeUntyped, loadConfig } from "./model";
+
+// useConst: `const x = f()` with an annotated return type.
+export function useConst(): number {
+  const c = makeConfig();
+  return c.get();
+}
+
+// useAwait: `const x = await f()` through Promise<T>.
+export async function useAwait(): Promise<number> {
+  const c = await loadConfig();
+  return c.get();
+}
+
+// nearUntyped: no written return type (TS inference is not modelled).
+export function nearUntyped(): number {
+  const c = makeUntyped();
+  return c.get();
+}
+
+// nearMap: an outside callee whose result has a same-named member.
+export function nearMap(): number | undefined {
+  const m = Object.freeze(new Map<string, number>());
+  return m.get("a");
+}
+
+// useWritten (twin): the same call with the type written.
+export function useWritten(): number {
+  const c: Config = makeConfig();
+  return c.get();
+}
+@@@ ts/src/use2.ts
+import { loadExt, holderOf, fetchIt } from "./loader";
+import { makeBox } from "./nest";
+
+export function nearLoadExt(): number {
+  const c = loadExt();
+  return c.get();
+}
+
+export function nearTypeOnly(): number {
+  const h = holderOf();
+  return h.get();
+}
+
+export function nearGlobal(): number {
+  const r = fetchIt();
+  return r.json();
+}
+
+// nearNestedSame: `h.get().get()` — x is the OUTER call's result (Leaf), never the inner call's (Item).
+export function nearNestedSame(): number {
+  const h = makeBox();
+  const x = h.get().get();
+  return x.size();
+}
+
+// useChain: h is typed by makeBox(), then the proven `h.get()` types i.
+export function useChain(): number {
+  const h = makeBox();
+  const i = h.get();
+  return i.size();
+}
+@@@ ts2/src/globals.ts
+export function fetchIt(): Response {
+    return fetch('x') as any;
+}
+
+namespace mock {
+    export class Response {
+        json(): unknown { return null; }
+    }
+}
+@@@ ts2/src/use.ts
+import { fetchIt } from './globals';
+
+// nearNamespaced: mock.Response is not in scope at fetchIt(); its result is the global Response
+export function nearNamespaced() {
+    const r = fetchIt();
+    return r.json();
+}
+@@@ rust3/Cargo.toml
+[package]
+name = "rust3"
+version = "0.1.0"
+@@@ rust3/src/lib.rs
+pub mod n;
+pub mod n2;
+pub mod n3;
+pub mod other;
+pub mod use_it;
+@@@ rust3/src/n.rs
+pub struct Top;
+impl Top { pub fn width(&self) -> usize { 3 } }
+pub mod outer {
+    use ext_crate::Top;
+    pub mod inner {
+        pub struct Top;
+        impl Top { pub fn width(&self) -> usize { 4 } }
+    }
+    pub fn load_in_outer() -> Top { ext_crate::mk() }
+}
+pub mod bare {
+    pub fn load_bare() -> Top { todo!() }
+}
+@@@ rust3/src/n2.rs
+pub struct Gadget;
+impl Gadget {
+    pub fn spin(&self) -> usize { 1 }
+}
+
+pub mod outer {
+    use ext_crate::Gadget;
+
+    pub fn load_gadget() -> Gadget {
+        ext_crate::make()
+    }
+}
+
+pub mod plain {
+    pub fn load_plain() -> super::Gadget {
+        super::Gadget
+    }
+}
+@@@ rust3/src/n3.rs
+pub struct Widget;
+impl Widget {
+    pub fn turn(&self) -> usize { 1 }
+}
+
+pub mod own {
+    pub struct Widget;
+    impl Widget {
+        pub fn turn(&self) -> usize { 5 }
+    }
+    pub fn load_own() -> Widget {
+        Widget
+    }
+}
+@@@ rust3/src/other.rs
+pub struct Spinner;
+impl Spinner {
+    pub fn spin(&self) -> usize { 2 }
+    pub fn turn(&self) -> usize { 2 }
+}
+@@@ rust3/src/use_it.rs
+use crate::n::bare;
+use crate::n::outer as nouter;
+use crate::n2::outer;
+use crate::n2::plain;
+use crate::n3::own;
+// r_inline_use_outside (D4): `use ext_crate::Gadget;` inside `mod outer` — ext_crate's Gadget, never the file's n2::Gadget
+pub fn r_inline_use_outside() -> usize {
+    let g = outer::load_gadget();
+    g.spin()
+}
+// r_super_path: `super::Gadget` written inside `mod plain` is the file's own Gadget (n2.rs:3)
+pub fn r_super_path() -> usize {
+    let g = plain::load_plain();
+    g.spin()
+}
+// r_own_mod_item: the struct `mod own` declares is the one in scope there (n3.rs:9), never the file's n3::Widget
+pub fn r_own_mod_item() -> usize {
+    let w = own::load_own();
+    w.turn()
+}
+// r_nested_use_in_mod (D4 split twin): `use ext_crate::Top;` in `mod outer` — neither n::Top nor outer::inner::Top
+pub fn r_nested_use_in_mod() -> usize {
+    let t = nouter::load_in_outer();
+    t.width()
+}
+// r_nested_bare: nothing in `mod bare` binds Top (the file's Top is not in scope there)
+pub fn r_nested_bare() -> usize {
+    let t = bare::load_bare();
+    t.width()
+}
+@@@ cpp3/src/alias.cpp
+#include "alias.h"
+List loadList() { return {}; }
+List2 loadList2() { return {}; }
+@@@ cpp3/src/alias.h
+#pragma once
+#include <ext/lists.h>
+using List = ext::IntList;
+List loadList();
+typedef ext::IntList List2;
+List2 loadList2();
+@@@ cpp3/src/list.cpp
+struct List {
+    int count() const { return 1; }
+};
+struct List2 {
+    int count() const { return 6; }
+};
+struct Bag {
+    int count() const { return 2; }
+};
+@@@ cpp3/src/ns.cpp
+#include "ns.h"
+int Settings::count() const { return 4; }
+namespace cfg5 {
+Settings loadAlias() { return {}; }
+}
+namespace cfg6 {
+Settings loadTypedef() { return {}; }
+}
+namespace cfg7 {
+Settings loadElsewhere() { return {}; }
+}
+@@@ cpp3/src/ns.h
+#pragma once
+#include <ext/settings.h>
+struct Settings {
+    int count() const;
+};
+namespace cfg5 {
+using Settings = ext::Settings;
+Settings loadAlias();
+}
+namespace cfg6 {
+typedef ext::Settings Settings;
+Settings loadTypedef();
+}
+namespace cfg8 {
+using Settings = ext::Settings;
+}
+namespace cfg7 {
+Settings loadElsewhere();
+}
+@@@ cpp3/src/use.cpp
+#include "alias.h"
+#include "ns.h"
+// callAlias (D5): `using List = ext::IntList;` — ext::IntList::count, never the in-tree List (list.cpp:2)
+int callAlias() { auto l = loadList(); return l.count(); }
+// callTypedef: `typedef ext::IntList List2;` — never the in-tree List2 (list.cpp:5)
+int callTypedef() { auto l = loadList2(); return l.count(); }
+// callNsAlias: `using Settings = ext::Settings;` inside cfg5 hides the global ::Settings
+int callNsAlias() { auto s = cfg5::loadAlias(); return s.count(); }
+// callNsTypedef: the typedef twin in cfg6
+int callNsTypedef() { auto s = cfg6::loadTypedef(); return s.count(); }
+// callElsewhere: cfg8's alias is not in force in cfg7 — the global ::Settings (ns.cpp:2)
+int callElsewhere() { auto s = cfg7::loadElsewhere(); return s.count(); }
+@@@ java4/src/app3/UseWild.java
+package app3;
+
+import ext.*;
+
+public class UseWild {
+    // d6Wildcard (D6): `import ext.*;` — lib.Util is not visible here: the receiver is ext's Util
+    int d6Wildcard() { var c = Util.open(); return c.size(); }
+}
+@@@ java4/src/app5/UseBoth.java
+package app5;
+
+import lib.*;
+import ext.Util;
+
+public class UseBoth {
+    int d6WildPlusExplicit() { var c = Util.open(); return c.size(); }
+}
+@@@ java4/src/app6/UseLib.java
+package app6;
+
+import lib.*;
+
+public class UseLib {
+    // pLibWild: `import lib.*;` makes lib.Util visible — open and the typed size are lib's
+    int pLibWild() { var c = Util.open(); return c.size(); }
+}
+@@@ java4/src/app7/Loader.java
+package app7;
+
+import lib.*;
+
+public class Loader {
+    // the result type Thing is lib.Thing through the on-demand import
+    public static Thing load() { return new Thing(); }
+}
+@@@ java4/src/app7/UseLoader.java
+package app7;
+
+public class UseLoader {
+    int pOnDemandResult() { var c = Loader.load(); return c.size(); }
+}
+@@@ java4/src/lib/Other.java
+package lib;
+public class Other { public int size() { return 4; } }
+@@@ java4/src/lib/Thing.java
+package lib;
+public class Thing { public int size() { return 3; } }
+@@@ java4/src/lib/Util.java
+package lib;
+public class Util {
+    public static Thing open() { return new Thing(); }
+}
+@@@ kt4/src/app/Loader.kt
+package app
+
+import lib.*
+
+fun loadThing(): Thing = Thing()
+@@@ kt4/src/app/Use.kt
+package app
+
+// pStarResult: the result type Thing is lib.Thing through the star import
+fun pStarResult(): Int {
+    val c = loadThing()
+    return c.size()
+}
+@@@ kt4/src/app2/Use.kt
+package app2
+
+import ext.*
+
+// d6KotlinWild (D6): `import ext.*` — lib.Util is not visible here
+fun d6KotlinWild(): Int {
+    val c = Util.open()
+    return c.size()
+}
+@@@ kt4/src/lib/Util.kt
+package lib
+
+object Util {
+    fun open(): Thing = Thing()
+}
+
+class Thing {
+    fun size(): Int = 3
+}
+
+class Other {
+    fun size(): Int = 4
+}
+@@@ java5/src/app/C4.java
+package app;
+public class C4 {
+    record S4(int v) { int hit4() { return v; } }
+    S4 load4() { return new S4(4); }
+    int cell4() { var x = load4(); return x.hit4(); }
+}
+@@@ java5/src/app/S4.java
+package app;
+public class S4 {
+    public int hit4() { return 1; }
+}
+@@@ java5/src/app/C1.java
+package app;
+import static ext.Holder.S1;
+public class C1 {
+    S1 load1() { return null; }
+    int cell1() { var x = load1(); return x.hit1(); }
+}
+@@@ java5/src/app/S1.java
+package app;
+public class S1 {
+    public int hit1() { return 1; }
+}
+@@@ java5/src/app/C9.java
+package app;
+public class C9 {
+    @interface S9 { int hit9(); }
+    S9 load9() { return null; }
+    int cell9() { var x = load9(); return x.hit9(); }
+}
+@@@ java5/src/app/S9.java
+package app;
+public class S9 {
+    public int hit9() { return 1; }
+}
+@@@ java5/src/app/C3.java
+package app;
+public class C3 {
+    enum S3 { A; int hit3() { return 3; } }
+    S3 load3() { return S3.A; }
+    int cell3() { var x = load3(); return x.hit3(); }
+}
+@@@ java5/src/app/S3.java
+package app;
+public class S3 {
+    public int hit3() { return 1; }
+}
+@@@ java5/src/app/C7.java
+package app;
+import static app.Util7.helper7;
+import static ext.Holder.*;
+public class C7 {
+    S7 load7() { return null; }
+    int cell7() { var x = load7(); return x.hit7() + helper7(); }
+}
+@@@ java5/src/app/S7.java
+package app;
+public class S7 {
+    public int hit7() { return 7; }
+}
+@@@ java5/src/app/Util7.java
+package app;
+public class Util7 {
+    public static int helper7() { return 0; }
+}
+@@@ java5/src/decoy/D.java
+package decoy;
+public class D {
+    public int hit1() { return 0; }
+    public int hit3() { return 0; }
+    public int hit4() { return 0; }
+    public int hit7() { return 0; }
+    public int hit9() { return 0; }
+}
+@@@ kt5/src/app/C1.kt
+package app
+class C1 {
+    companion object {
+        class S1 { fun hit1(): Int = 10 }
+    }
+    fun load1(): S1 = S1()
+    fun cell1(): Int { val x = load1(); return x.hit1() }
+}
+@@@ kt5/src/app/C3.kt
+package app
+class C3 {
+    enum class S3 { A; fun hit3(): Int = 3 }
+    fun load3(): S3 = S3.A
+    fun cell3(): Int { val x = load3(); return x.hit3() }
+}
+@@@ kt5/src/app/C4.kt
+package app
+class C4 {
+    object S4 { fun hit4(): Int = 4 }
+    fun load4(): S4 = S4
+    fun cell4(): Int { val x = load4(); return x.hit4() }
+}
+@@@ kt5/src/app/C5.kt
+package app
+class C5 {
+    data class S5(val v: Int) { fun hit5(): Int = v }
+    fun load5(): S5 = S5(5)
+    fun cell5(): Int { val x = load5(); return x.hit5() }
+}
+@@@ kt5/src/app/S.kt
+package app
+class S1 { fun hit1(): Int = 1 }
+class S3 { fun hit3(): Int = 1 }
+class S4 { fun hit4(): Int = 1 }
+class S5 { fun hit5(): Int = 1 }
+@@@ kt5/src/decoy/D.kt
+package decoy
+class D {
+    fun hit1(): Int = 0
+    fun hit3(): Int = 0
+    fun hit4(): Int = 0
+    fun hit5(): Int = 0
+}
+@@@ cpp4/src/traps.h
+#pragma once
+struct S1 { int hit1() const { return 1; } };
+struct S3 { int hit3() const { return 1; } };
+struct S5 { int hit5() const { return 1; } };
+struct S6 { int hit6() const { return 1; } };
+struct S7 { int hit7() const { return 1; } };
+struct S12 { int hit12() const { return 1; } };
+@@@ cpp4/src/decoy.h
+#pragma once
+struct D {
+    int hit1() const { return 0; }
+    int hit2() const { return 0; }
+    int hit3() const { return 0; }
+    int hit5() const { return 0; }
+    int hit6() const { return 0; }
+    int hit7() const { return 0; }
+    int hit12() const { return 0; }
+};
+@@@ cpp4/src/fwd1.h
+#pragma once
+namespace a1 { struct S1; S1 load1(); }
+@@@ cpp4/src/fwd2.h
+#pragma once
+namespace a2 { struct S2; S2 load2(); }
+namespace a2 { struct S2 { int hit2() const { return 2; } }; }
+@@@ cpp4/src/u12.h
+#pragma once
+namespace a12 { union S12 { int v; int hit12() const { return v; } }; S12 load12(); }
+@@@ cpp4/src/m5.h
+#pragma once
+#define DECL5(n) struct n { int hit5() const { return 5; } };
+namespace a5 { DECL5(S5) S5 load5(); }
+@@@ cpp4/src/m3.h
+#pragma once
+#define REG3(n) int registered_##n = 0;
+namespace a3 { REG3(Other3) S3 load3(); }
+@@@ cpp4/src/lib.cpp
+#include "traps.h"
+#include "fwd1.h"
+#include "fwd2.h"
+#include "u12.h"
+#include "m5.h"
+#include "m3.h"
+namespace a1 { S1 load1() { return {}; } }
+namespace a2 { S2 load2() { return {}; } }
+namespace a12 { S12 load12() { return {}; } }
+namespace a5 { S5 load5() { return {}; } }
+namespace a3 { S3 load3() { return {}; } }
+@@@ cpp4/src/use.cpp
+#include "decoy.h"
+#include "traps.h"
+#include "fwd1.h"
+#include "fwd2.h"
+#include "u12.h"
+#include "m5.h"
+#include "m3.h"
+#include <ext/s6.h>
+// cell1: `struct S1;` in a1 declares a1::S1 (defined outside the tree) — never the global ::S1 (traps.h:2)
+int cell1() { auto x = a1::load1(); return x.hit1(); }
+// cell2 [P]: a forward declaration of the in-tree a2::S2 names that class (fwd2.h:3)
+int cell2() { auto x = a2::load2(); return x.hit2(); }
+// cell12: `union S12` in a12 hides the global ::S12 (traps.h:7)
+int cell12() { auto x = a12::load12(); return x.hit12(); }
+// cell5: a macro in a5 spells S5 — it may declare a5::S5 (it does): never the global ::S5 (traps.h:4)
+int cell5() { auto x = a5::load5(); return x.hit5(); }
+// cell3: ANY macro in force in a3 may declare a3::S3 (`REG3(Other3)` does not): the global ::S3 (traps.h:3) is not proven — an honest loss
+int cell3() { auto x = a3::load3(); return x.hit3(); }
+// cell6: a block-scope `using ext::S6;` is in force in the local class's member: never the global ::S6 (traps.h:5)
+int cell6() { using ext::S6; struct L { S6 load6() { return {}; } }; L l; auto x = l.load6(); return x.hit6(); }
+// cell7 [P]: a local class's member result with nothing in the block binding S7: the global ::S7 (traps.h:6)
+int cell7() { struct L7 { S7 load7() { return {}; } }; L7 l; auto x = l.load7(); return x.hit7(); }
+@@@ rust4/Cargo.toml
+[package]
+name = "rust4"
+version = "0.1.0"
+@@@ rust4/src/lib.rs
+pub mod c14;
+pub mod c15;
+pub mod decoy;
+@@@ rust4/src/c14.rs
+pub struct S14;
+impl S14 {
+    pub fn hit14(&self) -> usize { 14 }
+}
+macro_rules! mk14 {
+    () => { struct S14; impl S14 { fn hit14(&self) -> usize { 140 } } };
+}
+pub fn cell14() -> usize {
+    mk14!();
+    fn load14() -> S14 { S14 }
+    let x = load14();
+    x.hit14()
+}
+@@@ rust4/src/c15.rs
+pub struct S15;
+impl S15 {
+    pub fn hit15(&self) -> usize { 15 }
+}
+pub fn cell15() -> usize {
+    fn load15() -> S15 { S15 }
+    let x = load15();
+    x.hit15()
+}
+@@@ rust4/src/decoy.rs
+pub struct D;
+impl D {
+    pub fn hit14(&self) -> usize { 0 }
+    pub fn hit15(&self) -> usize { 0 }
+}
+@@@ cpp5/src/traps.h
+#pragma once
+struct S6 { int hit6() const { return 1; } };
+struct S7 { int hit7() const { return 1; } };
+struct S18 { int hit18() const { return 1; } };
+struct S23 { int hit23() const { return 1; } };
+struct S27 { int hit27() const { return 1; } };
+struct S29 { int hit29() const { return 1; } };
+struct S12 { int hit12() const { return 1; } };
+struct S40 { int hit40() const { return 40; } };
+struct S41 { int hit41() const { return 41; } };
+@@@ cpp5/src/decoy.h
+#pragma once
+struct D {
+    int hit6() const { return 0; }
+    int hit7() const { return 0; }
+    int hit18() const { return 0; }
+    int hit23() const { return 0; }
+    int hit27() const { return 0; }
+    int hit29() const { return 0; }
+    int hit12() const { return 0; }
+    int hit32() const { return 0; }
+    int hit40() const { return 0; }
+    int hit41() const { return 0; }
+};
+@@@ cpp5/src/m.h
+#pragma once
+#define API6
+#define MK(n) struct n { int hit27() const { return 27; } };
+#define MK2(n, t) struct n { t v; int hit29() const { return 29; } };
+#define DECL12(n) struct n { int hit12() const { return 12; } };
+#define DECL41(n) struct n { int hit41() const { return 41; } };
+@@@ cpp5/src/e.h
+#pragma once
+#include "m.h"
+namespace a6 { class API6 S6 { public: int hit6() const { return 6; } }; S6 load6(); }
+namespace a7 { struct API6 S7 final { int hit7() const { return 7; } }; S7 load7(); }
+namespace a18 { struct API6 S18; S18 load18(); }
+namespace a23 { API6 struct S23 { int hit23() const { return 23; } }; S23 load23(); }
+@@@ cpp5/src/k.h
+#pragma once
+#include "m.h"
+struct O27 { MK(S27); S27 load27() { return {}; } };
+struct O29 { MK2(S29, int); S29 load29() { return {}; } };
+struct O40 { O40(); explicit O40( int ); ~O40(); S40 load40() { return {}; } };
+inline int helper41() { DECL41(S41); return 0; }
+namespace a41 { S41 load41(); }
+@@@ cpp5/src/f32.h
+#pragma once
+namespace a32 { struct S32; namespace i { using a32::S32; S32 load32(); } }
+namespace a32 { struct S32 { int hit32() const { return 32; } }; }
+@@@ cpp5/src/lib.cpp
+#include "traps.h"
+#include "e.h"
+#include "k.h"
+#include "f32.h"
+namespace a6 { S6 load6() { return {}; } }
+namespace a7 { S7 load7() { return {}; } }
+namespace a18 { S18 load18() { return {}; } }
+namespace a23 { S23 load23() { return {}; } }
+namespace a41 { S41 load41() { return {}; } }
+namespace a32 { namespace i { S32 load32() { return {}; } } }
+@@@ cpp5/src/use.cpp
+#include "decoy.h"
+#include "traps.h"
+#include "e.h"
+#include "k.h"
+#include "f32.h"
+// B2: an export / annotation macro between the class-key and the name declares a6::S6 (… a23::S23) — never the global namesake
+int cell6() { auto x = a6::load6(); return x.hit6(); }
+int cell7() { auto x = a7::load7(); return x.hit7(); }
+int cell18() { auto x = a18::load18(); return x.hit18(); }
+int cell23() { auto x = a23::load23(); return x.hit23(); }
+// B3: a class-body macro invocation ending in `;` may declare a member type O27::S27 / O29::S29
+int cell27() { O27 o; auto x = o.load27(); return x.hit27(); }
+int cell29() { O29 o; auto x = o.load29(); return x.hit29(); }
+// B4: a function-body macro beside a local class may declare the local S12
+int cell12() { DECL12(S12) struct L { S12 load12() { return {}; } }; L l; auto x = l.load12(); return x.hit12(); }
+// guards [P]: constructors / a destructor are no macro; a function-body macro with no local class hides nothing at namespace
+// scope; a forward declaration in the class's own namespace reached by a using-declaration declares that class (M4)
+int cell40() { O40 o; auto x = o.load40(); return x.hit40(); }
+int cell41() { auto x = a41::load41(); return x.hit41(); }
+int cell32() { auto x = a32::i::load32(); return x.hit32(); }
+@@@ rust5/Cargo.toml
+[package]
+name = "rust5"
+version = "0.1.0"
+@@@ rust5/src/lib.rs
+pub mod c1;
+pub mod c3;
+pub mod c4;
+pub mod c5;
+pub mod c6;
+pub mod decoy;
+@@@ rust5/src/c1.rs
+pub struct S1;
+impl S1 {
+    pub fn hit1(&self) -> usize { 1 }
+}
+macro_rules! mk1 {
+    () => { struct S1; impl S1 { fn hit1(&self) -> usize { 10 } } };
+}
+pub fn cell1() -> usize {
+    mk1!();
+    struct L1;
+    impl L1 { fn load1() -> S1 { S1 } }
+    let x = L1::load1();
+    x.hit1()
+}
+@@@ rust5/src/c3.rs
+pub struct S3;
+impl S3 {
+    pub fn hit3(&self) -> usize { 3 }
+}
+macro_rules! mk3 {
+    () => { struct S3; impl S3 { fn hit3(&self) -> usize { 30 } } };
+}
+pub fn cell3() -> usize {
+    mk3! {}
+    struct L3;
+    impl L3 { fn load3() -> S3 { S3 } }
+    let x = L3::load3();
+    x.hit3()
+}
+@@@ rust5/src/c4.rs
+pub struct S4;
+impl S4 {
+    pub fn hit4(&self) -> usize { 4 }
+}
+macro_rules! mk4 {
+    () => { struct S4; impl S4 { fn hit4(&self) -> usize { 40 } } };
+}
+pub fn cell4() -> usize {
+    mk4!();
+    {
+        struct L4;
+        impl L4 { fn load4() -> S4 { S4 } }
+        let x = L4::load4();
+        x.hit4()
+    }
+}
+@@@ rust5/src/c5.rs
+pub struct S5;
+impl S5 {
+    pub fn hit5(&self) -> usize { 5 }
+}
+macro_rules! mk5 {
+    () => { struct S5; impl S5 { fn hit5(&self) -> usize { 50 } } };
+}
+pub struct L5;
+pub fn cell5() -> usize {
+    mk5!();
+    impl L5 { fn load5() -> S5 { S5 } }
+    let x = L5::load5();
+    x.hit5()
+}
+@@@ rust5/src/c6.rs
+pub struct S6;
+impl S6 {
+    pub fn hit6(&self) -> usize { 6 }
+}
+pub fn cell6() -> usize {
+    struct L6;
+    impl L6 { fn load6() -> S6 { S6 } }
+    let x = L6::load6();
+    x.hit6()
+}
+@@@ rust5/src/decoy.rs
+pub struct D;
+impl D {
+    pub fn hit1(&self) -> usize { 0 }
+    pub fn hit3(&self) -> usize { 0 }
+    pub fn hit4(&self) -> usize { 0 }
+    pub fn hit5(&self) -> usize { 0 }
+    pub fn hit6(&self) -> usize { 0 }
+}
+@@@ rust6/Cargo.toml
+[package]
+name = "rust6"
+version = "0.1.0"
+@@@ rust6/src/lib.rs
+pub mod c50;
+pub mod c51;
+pub mod c52;
+pub mod c53;
+pub mod c56;
+pub mod decoy;
+@@@ rust6/src/c50.rs
+pub struct S50;
+impl S50 {
+    pub fn hit50(&self) -> usize { 50 }
+}
+macro_rules! mk50 {
+    () => { struct S50; impl S50 { fn hit50(&self) -> usize { 500 } } };
+}
+const _: () = {
+    mk50!();
+    struct L50;
+    impl L50 {
+        fn load50() -> S50 { todo!() }
+        #[allow(dead_code)]
+        fn cell50() -> usize { let x = Self::load50(); x.hit50() }
+    }
+};
+@@@ rust6/src/c51.rs
+pub struct S51;
+impl S51 {
+    pub fn hit51(&self) -> usize { 51 }
+}
+macro_rules! mk51 {
+    () => { struct S51; impl S51 { fn hit51(&self) -> usize { 510 } } };
+}
+static X51: () = {
+    mk51!();
+    struct L51;
+    impl L51 {
+        fn load51() -> S51 { todo!() }
+        #[allow(dead_code)]
+        fn cell51() -> usize { let x = Self::load51(); x.hit51() }
+    }
+};
+@@@ rust6/src/c52.rs
+pub struct S52;
+impl S52 {
+    pub fn hit52(&self) -> usize { 52 }
+}
+macro_rules! mk52 {
+    () => { struct S52; impl S52 { fn hit52(&self) -> usize { 520 } } };
+}
+pub fn outer52() {
+    const _: () = {
+        mk52!();
+        struct L52;
+        impl L52 {
+            fn load52() -> S52 { todo!() }
+            #[allow(dead_code)]
+            fn cell52() -> usize { let x = Self::load52(); x.hit52() }
+        }
+    };
+}
+@@@ rust6/src/c53.rs
+pub struct S53;
+impl S53 {
+    pub fn hit53(&self) -> usize { 53 }
+}
+const _: () = {
+    struct L53;
+    impl L53 {
+        fn load53() -> S53 { todo!() }
+        #[allow(dead_code)]
+        fn cell53() -> usize { let x = Self::load53(); x.hit53() }
+    }
+};
+@@@ rust6/src/c56.rs
+pub struct S56;
+impl S56 {
+    pub fn hit56(&self) -> usize { 56 }
+}
+const _: () = {
+    use std::fmt::Error as S56;
+    struct L56;
+    impl L56 {
+        fn load56() -> S56 { todo!() }
+        #[allow(dead_code)]
+        fn cell56() -> usize { let x = Self::load56(); x.hit56() }
+    }
+};
+@@@ rust6/src/decoy.rs
+pub struct D;
+impl D {
+    pub fn hit50(&self) -> usize { 0 }
+    pub fn hit51(&self) -> usize { 0 }
+    pub fn hit52(&self) -> usize { 0 }
+    pub fn hit53(&self) -> usize { 0 }
+    pub fn hit56(&self) -> usize { 0 }
+}

@@ -35,6 +35,7 @@
 #include "memguard.h"           // #387: loadRefTree reads the hard line between a commit's ingest and its graph
 #include "infra/Diagnostics.h"  // DISCLOSE — the degrade path when git archive/ingest fails (no-op under NDEBUG; a gate-visible degrade line needs its own fprintf)
 #include "infra/jsonesc.h"      // L2 — rw::jsonesc::escapeMcp for staleAcksJsonArray's kind= field (the same posture serialize.h's jsonStr uses)
+#include "infra/platform.h"     // RW_LIFETIMEBOUND — the DefectSiteKey projection lambdas; owned here, not transitively
 #include "sourceidentity.h"    // rw::kRipwireSourceIdentity — the producer identity the qsnap/qbody keys and blob header carry
 
 #include "btree.hpp"              // gtl btree_map — sorted like std::map, cache-friendly nodes (house rule: never std::map)
@@ -286,6 +287,74 @@ struct Snapshot
     std::vector<std::uint64_t>             publicApi;   // Q1 contract drift — sorted hash(canonId) of PUBLIC/exported symbols (see isPublicApi)
     std::vector<DefectSiteKey>             defectSites; // the defect-shape kind — sorted (anchor, site) records, one per offending site (a multiset), plus each scanned file's presence record
 };
+
+// ─── THE TWELVE KINDS AS A SET (qd-memory-degrade) ─────────────────────────────────────────────────────────
+// --quality-kinds=K[,K] runs a subset of the kinds (the replay a degraded --quality-delta=A..B hands back), and the
+// degraded range form runs the subset its changed files can decide. Each kind stays a separately reported, separately
+// skippable unit: the mask decides which passes run and which rows are kept, never how a row is computed — a kind that
+// runs computes its rows with the same code and the same bars as in a full answer. Alphabetical, the order every list
+// of them (kinds_skipped=, the refusal, the help) is spelled in.
+inline constexpr std::string_view kQualityKindNames[] = {
+    "api-surface", "complexity", "dead-code", "defect-shape", "duplication", "error-masking", "nesting",
+    "new-clone-of-reused-helper", "params", "placeholder", "short-horizon-churn", "verbosity",
+};
+using KindMask = std::uint16_t;
+inline constexpr KindMask kAllKinds = KindMask( ( 1u << std::size( kQualityKindNames ) ) - 1u );
+static_assert( std::size( kQualityKindNames ) == 12 && std::size( kQualityKindNames ) <= 16, "one bit per kind" );
+// the kind's bit, or 0 for a name that is not one of the twelve
+inline constexpr KindMask kindBit( std::string_view kind ) noexcept
+{
+    const auto* const at = std::find( std::begin( kQualityKindNames ), std::end( kQualityKindNames ), kind );
+    return at == std::end( kQualityKindNames ) ? KindMask( 0 ) : KindMask( 1u << ( at - std::begin( kQualityKindNames ) ) );
+}
+// the kinds that need EVERY file of the target tree (dead-code: the whole graph's evidence; the two clone kinds: every
+// body) — what a changed-files answer cannot run
+inline constexpr KindMask kWholeTreeKinds = KindMask( kindBit( "dead-code" ) | kindBit( "duplication" ) | kindBit( "new-clone-of-reused-helper" ) );
+inline constexpr bool kindSelected( KindMask mask, std::string_view kind ) noexcept { return ( mask & kindBit( kind ) ) != 0; }
+// the kinds of `mask`, alphabetical, joined by `sep`
+inline std::string kindList( KindMask mask, std::string_view sep )
+{
+    std::string out;
+    for( std::size_t k = 0; k < std::size( kQualityKindNames ); ++k )
+    {
+        if( ( mask & ( 1u << k ) ) != 0 )
+        {
+            out.append( out.empty() ? std::string_view{} : sep ).append( kQualityKindNames[ k ] );
+        }
+    }
+    return out;
+}
+// What a snapshot or a delta is computed FOR (qd-memory-degrade): the kinds to run, and — when the index holds only some
+// of the tree's files (a changed-files answer) — the tree's C-family macro names to scan its C++ files against
+// (defectSitesOf). The default is every kind over a whole tree: the computation these functions always did.
+struct KindScope
+{
+    KindMask                        kinds         = kAllKinds;
+    const std::vector<std::string>* macroOverride = nullptr;
+};
+
+// --quality-kinds' value parsed: the mask, or 0 with `bad` naming the first token that is not a kind (an empty token too)
+inline KindMask parseKindList( std::string_view spec, std::string& bad )
+{
+    KindMask mask = 0;
+    while( true )
+    {
+        const std::size_t      comma = spec.find( ',' );
+        const std::string_view token = spec.substr( 0, comma );
+        const KindMask         bit   = kindBit( token );
+        if( bit == 0 )
+        {
+            bad.assign( token );
+            return 0;
+        }
+        mask |= bit;
+        if( comma == std::string_view::npos )
+        {
+            return mask;
+        }
+        spec.remove_prefix( comma + 1 );
+    }
+}
 
 // Q1 api-surface — the PUBLIC/exported contract surface. DEFINITION (deterministic, documented):
 // a symbol is PUBLIC iff it is DECLARED IN A HEADER file (`.h/.hpp/.hh/.hxx`) — the C/C++/ObjC export surface
@@ -1974,16 +2043,16 @@ inline RenameMap gitRenameMap( const std::string& root, const std::string& span 
         // silently dropped the most common rename an agent ever makes — and the gate would still have passed,
         // because the content route rescues that same ack by a different mechanism. That near-miss is why the
         // gate asserts the ROUTE (acked_by_rename) and not merely the outcome.
-        absorb( popenTrimmed( pinned + "diff -M50% --diff-filter=R --name-status --cached 2>/dev/null" ) );
-        absorb( popenTrimmed( pinned + "diff -M50% --diff-filter=R --name-status HEAD 2>/dev/null" ) );
-        absorb( popenTrimmed( pinned + "log -M50% --diff-filter=R --name-status --format= -n "
+        absorb( popenTrimmed( pinned + "diff --no-ext-diff --no-textconv --ignore-submodules=dirty -M50% --diff-filter=R --name-status --cached 2>/dev/null" ) );
+        absorb( popenTrimmed( pinned + "diff --no-ext-diff --no-textconv --ignore-submodules=dirty -M50% --diff-filter=R --name-status HEAD 2>/dev/null" ) );
+        absorb( popenTrimmed( pinned + "log --no-ext-diff --no-textconv -M50% --diff-filter=R --name-status --format= -n "
                               + std::to_string( kRenameWindowCommits ) + " 2>/dev/null" ) );
     }
     else
     {
         rm.truncatedWindow = false;   // the range IS the scope; nothing outside it was in question
         rm.commitsScanned  = 0;
-        absorb( popenTrimmed( pinned + "log -M50% --diff-filter=R --name-status --format= " + shSingleQuote( span ) + " 2>/dev/null" ) );
+        absorb( popenTrimmed( pinned + "log --no-ext-diff --no-textconv -M50% --diff-filter=R --name-status --format= " + shSingleQuote( span ) + " 2>/dev/null" ) );
     }
     return rm;
 }
@@ -2005,7 +2074,7 @@ inline std::string gitHeadSha( const std::string& root )
 // dashes at 4 and 7) — the caller degrades to a fixed epoch date. Read-only: `git log` never mutates the repo.
 inline std::string gitCommitterDateIso( const std::string& root )
 {
-    std::string out = gitOneLine( root, "log -1 --format=%cs HEAD 2>/dev/null" );   // not const: a const local cannot be moved out on return
+    std::string out = gitOneLine( root, "log --no-ext-diff --no-textconv -1 --format=%cs HEAD 2>/dev/null" );   // not const: a const local cannot be moved out on return
     if( out.size() != 10 || out[4] != '-' || out[7] != '-' )
     {
         return {};
@@ -2052,7 +2121,7 @@ inline bool gitIsAncestor( const std::string& root, const std::string& ancestor,
 // (HEAD epoch anchors the window — wall-clock is never consulted). "" on any failure (degrade: churn silent).
 inline std::string gitWindowRefSha( const std::string& root, std::uint32_t days )
 {
-    const std::string epochStr = gitOneLine( root, "log -1 --format=%ct HEAD 2>/dev/null" );
+    const std::string epochStr = gitOneLine( root, "log --no-ext-diff --no-textconv -1 --format=%ct HEAD 2>/dev/null" );
     if( epochStr.empty() )
     {
         return {};
@@ -2267,8 +2336,42 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 31;   // MUST equal ingest.cpp's kCacheVersion (gated); 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 171;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 36;   // MUST equal ingest.cpp's kCacheVersion (gated); 36 = train 30 (above call-result-typing's and fcall-forward's 33, name-template-dispatch's 35, main's 34), 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 33 = lane call-result-typing: RawBind resultIndex + unwrapDepth, 33 = lane fcall-forward: ref `forwarded` byte, 35 = lane name-template-dispatch: RefRole Pattern 11, 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
+constexpr std::uint32_t kIngestParserVerMirror    = 206;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 206 = 2026-10-18 (#409, PR #414, renumbered again at merge: above main 196/197,
+                                                          //   train 31 198/199, rust-receivers 202/203, ix1-slot 204/205; see the kParserVer note)
+                                                          // 198 = 2026-10-18 (train 31: above main 196/197 and h1-annot
+                                                          //   194/195; see the kParserVer note)
+                                                          // 194 = lane h1-annot (reservation 194/195; the train renumbers):
+                                                          //   qualified-annotation importedName, AugAssign / OperatorResult binds
+                                                          // 185 = 2026-10-18 (#409): cross-file markdown links carry their written path#slug
+                                                          //   (memberPath); graph.h pins the exact heading. 185, not 184: 184 is train 29.
+                                                          //   Rich file tag 186. kCacheVersion stays 34.
+                                                          // 196 = 2026-10-18 (train 30: above call-result-typing 180/181, fcall-forward
+                                                          //   188/189, go-local-var 190/191, name-template-dispatch 192/193, h1-annot
+                                                          //   194/195; see the kParserVer note)
+                                                          // 192 = lane name-template-dispatch (IX-3; reservation 192/193; the train renumbers):
+                                                          //   RefRole::Pattern name-template records
+                                                          // 190 = lane go-local-var (reservation 190/191; the train renumbers):
+                                                          //   Go/Rust/GDScript var and const captures anchored to item/package scope
+                                                          // 188 = 2026-10-17 (train 30 lane fcall-forward, rich 189; train renumbers)
+                                                          // 184 = 2026-10-17 (train 29: above arity-min 178/179, call-result-typing
+                                                          //   180/181, go-scope 182/183; see the kParserVer note)
+                                                          // 182 = 2026-10-16 (train 29 L5 go-scope reservation, #403: Go method /
+                                                          //   interface-member scope; the train renumbers)
+                                                          // 180 = lane call-result-typing (reservation 180/181; the train renumbers):
+                                                          //   call-result / return-type binds
+                                                          // 178 = train 29 lane arity-min (reservation 178/179; the train renumbers):
+                                                          //   defs extract paramsMin for the B2.2 minimum-arity exclusion
+                                                          // 176 = 2026-10-15 (train 28: above main 173/174, grep-carrier 173/174,
+                                                          //   ruby-pair 174/175, #380 145, the other lanes 171; see the kParserVer note)
+                                                          // 173 = 2026-10-15 (slice 4a, #400): Ruby's mixin directives onto the shared
+                                                          //   base-relations path — queries/ruby/tags.scm captures them as @reference.mixin
+                                                          //   and captureTagsFacts emits the inherit reference; captureRubyMixinBases
+                                                          //   retired. Output byte-identical, extraction path changed. 173, not 172: 172
+                                                          //   is 171's rich file tag.
+                                                          // 173 = 2026-10-14 (train 28 grep-carrier: value refs through ?? || && / or and)
+                                                          // 174 = lane ruby-pair (train 28: Ruby/Python subscript references, Ruby main-object mixins)
                                                           // 171 = 2026-10-13 (PR #349 Clojure lands above main's 167 / rich tag 168 and the
                                                           //   branch's own 169 / rich tag 170; see the kParserVer note)
                                                           // 167 = 2026-10-11 (train 27 release: lane fix27-cpp-subscript's 166 renumbered above the lane build;
@@ -3529,7 +3632,17 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // already keeps this build's blobs apart; bumped 19 -> 20 so the history above stays complete and the scheme sits above
 // every live value (19 on every branch). The lane's own note said the walk itself is a refactor (same class set and
 // order for the same g.implementors) — true; what moved is g.implementors.
-constexpr std::uint32_t kQSnapCacheScheme = 20;
+// v21 (2026-10-15, train 28) — no blob shape change; the dead SET's inputs moved again. Lane ruby-pair makes a proven element
+// access a call of the receiver class's subscript operator (Ruby `[]`/`[]=`, Python `__getitem__`/`__setitem__`) and PR #380
+// makes an Elixir `unquote(...)` call under `quote` live, so the calls that keep a definition alive can differ for an
+// UNCHANGED sha. kParserVer moved with those extractions (176, its mirror with it), and the producer identity already keeps
+// this build's blobs apart; bumped 20 -> 21 so the history above stays complete and the scheme sits above every live value
+// (20 on main and every lane). Lane qd-memory-degrade's KindScope builds the default scope's records unchanged (its note).
+// v22 (2026-10-16, lane rust-std-rows, #405; train 29 renumbers on a collision) — no blob shape change; the dead SET's inputs moved:
+// the standard-member gate gained a Rust row (graph.h kStdMemberNames), so a Rust definition a DECLINED call could have meant is
+// no dead candidate (Graph::gateDeclinedTarget), as v15 did for the builtin-method gate. No extraction change: kParserVer and its
+// mirror stay. The producer identity already keeps this build's blobs apart; bumped 21 -> 22 so the history above stays complete.
+constexpr std::uint32_t kQSnapCacheScheme = 22;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
@@ -4184,7 +4297,8 @@ inline RefSpec resolveRefSpec( const std::string& root, std::string_view spec )
 // a failed archive/extract/ingest → returns {snapshot, false}. rootPath is shell-escaped (shSingleQuote) and
 // quotepath=false — no injection, deterministic path handling.
 inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::string_view root,
-                                 const std::vector<char>* fileInBaseline = nullptr );   // fwd — defined below; computeHeadSnapshot reuses it
+                                 const std::vector<char>* fileInBaseline = nullptr,     // fwd — defined below; computeHeadSnapshot reuses it
+                                 const KindScope& scope = KindScope() );   // no braces here: qschemetripcheck's extractor reads them as a body
 // `excludes` MUST mirror the working-tree side's cfg.excludes (A4-F5): the HEAD snapshot is compared key-for-key
 // against the working tree, and any in-edge-derived kind (dead-code, api-surface) diverges if one side honors
 // --exclude and the other does not — e.g. a helper called only from tests/ is dead on a --exclude=tests working
@@ -4378,6 +4492,315 @@ inline RefTreeLoad loadRefTree( const std::string& repoRoot, const std::string& 
         DISCLOSE( Diagnostics::answerRefused, "the only caller, --quality-delta=A..B, refuses with the sha named; nothing is scored",
                   "quality: a materialized commit tree ingested empty" );
         return RefTreeLoad::Unavailable;
+    }
+    if( memguard::overHardLimit() )
+    {
+        return RefTreeLoad::OverHardLimit;
+    }
+    out.g    = buildGraph( out.ing, nullptr );
+    out.root = tmpRoot;
+    return RefTreeLoad::Loaded;
+}
+
+// ─── qd-memory-degrade: a commit pair's CHANGED FILES, and their trees ─────────────────────────────────────────
+// When the memory guard stops either commit's full tree, or projects that the target phase will not fit, the range form
+// re-asks the question of each commit's CHANGED files only. That answer is exact for a kind only if every file that
+// could yield a row of it is in the set, and is materialized exactly as the full archive materializes it. So the set is
+// the paths `git diff --no-renames` names (per side, those that exist there as files), plus the control files the crawl
+// reads to decide those paths, and the pair is REFUSED by name when an archive or a crawl would treat a path git does not
+// list differently:
+//   * a symlink anywhere in either tree — the crawl follows in-root links, so an UNCHANGED link to a changed file rows
+//     the link's path too (and a changed link to an unchanged file dangles in a partial tree);
+//   * an export-subst attribute in either tree — `git archive` rewrites the bytes of files git calls unchanged;
+//   * a changed .gitattributes that carries an export attribute on either side — an export-ignore flip adds or removes
+//     files the diff does not name.
+// The one crawl verdict decided by another file is the build-tree prune: a directory holding CMakeCache.txt is skipped
+// whole (ingest_crawl.h), so a changed path under such a directory brings that CMakeCache.txt along. Nothing else in
+// the crawl of a materialized tree reads another file: .gitignore is consulted through `git ls-files`, which a temp
+// tree does not answer, and .ripwire_config feeds only dead-code (a skipped kind). What it does not cover, stated:
+// attributes from $GIT_DIR/info/attributes or core.attributesFile (outside the tree, so the same on both sides).
+struct ChangedFiles
+{
+    std::vector<std::string> base;         // root-relative paths to materialize at the base commit (sorted, unique)
+    std::vector<std::string> target;       // ... at the target commit
+    std::vector<std::string> targetTree;   // every file of the target commit, sorted — filled only when asked (--scope's test)
+    std::string              refusal;      // non-empty: why the changed files cannot stand in for the trees (the line names it)
+    bool                     ok = false;   // git answered every question this needed
+    enum class DisclosureWhy : std::uint8_t
+    {
+        GitFailed,   // a diff, ls-tree or export-attribute grep over the pair did not complete: the set is unknown, and the caller refuses
+    };
+    void disclose( DisclosureWhy ) noexcept { ok = false; }
+};
+
+// Stream one git command's NUL-separated records into `onRecord`; true when git exited 0, or with the one other exit code
+// `alsoClean` names (git grep's 1 = no hit). Never holds the whole listing: on a large tree `ls-tree -r` is tens of
+// megabytes, and this runs exactly when memory is short.
+template<class OnRecord>
+inline bool forEachGitNulRecord( const std::string& root, const std::string& args, OnRecord&& onRecord, int alsoClean = 0 )
+{
+    const std::string cmd  = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " " + args + " 2>/dev/null";
+    std::FILE*        pipe = os::popen( cmd.c_str(), "r" );
+    if( pipe == nullptr )
+    {
+        return false;
+    }
+    std::string record;
+    char        buf[ 16384 ];
+    std::size_t got = 0;
+    while( ( got = std::fread( buf, 1, sizeof( buf ), pipe ) ) > 0 )
+    {
+        for( std::size_t at = 0; at < got; )
+        {
+            const char* nul = static_cast<const char*>( std::memchr( buf + at, '\0', got - at ) );
+            const std::size_t end = nul == nullptr ? got : std::size_t( nul - buf );
+            record.append( buf + at, end - at );
+            if( nul == nullptr )
+            {
+                break;
+            }
+            onRecord( std::string_view( record ) );
+            record.clear();
+            at = end + 1;
+        }
+    }
+    if( !record.empty() )
+    {
+        onRecord( std::string_view( record ) );
+    }
+    const int status = os::pclose( pipe );
+    return status == 0 || ( alsoClean != 0 && decodedExitCode( status ) == alsoClean );
+}
+
+// The changed files of `baseSha`..`targetSha` (two resolved commit names), with the refusals above decided.
+inline ChangedFiles changedFilesBetween( const std::string& root, const std::string& baseSha, const std::string& targetSha, bool wantTargetTree )
+{
+    ChangedFiles out;
+    // 1. what git says changed: "<status>\0<path>\0" pairs; --no-renames reports a move as its delete and its add
+    std::vector<std::string> changed;
+    std::vector<char>        statusOf;
+    {
+        bool        wantPath = false;
+        char        status   = 0;
+        const bool  ran      = forEachGitNulRecord( root, "diff --no-renames --no-ext-diff --no-textconv --name-status -z " + shSingleQuote( baseSha ) + " " + shSingleQuote( targetSha ),
+                                                    [ & ]( std::string_view rec )
+                                                    {
+                                                        if( !wantPath )
+                                                        {
+                                                            status   = rec.empty() ? 0 : rec.front();
+                                                            wantPath = true;
+                                                            return;
+                                                        }
+                                                        changed.emplace_back( rec );
+                                                        statusOf.push_back( status );
+                                                        wantPath = false;
+                                                    } );
+        if( !ran )
+        {
+            DISCLOSE( out, ChangedFiles::DisclosureWhy::GitFailed, "quality: git diff over the commit pair failed — the changed files are unknown" );
+            return out;
+        }
+    }
+    // 2. each side's tree: which changed paths exist there as FILES (a submodule's gitlink is no file), the build-tree
+    //    sentinels, the attribute files, and any symlink at all. One streamed `ls-tree -r` per side.
+    std::vector<std::size_t> order( changed.size() );
+    for( std::size_t k = 0; k < order.size(); ++k ) { order[k] = k; }
+    // rw::sortutil::svLess, not operator<: libstdc++'s string_view compare trips -fsanitize=integer (splitNulPaths' note)
+    std::sort( order.begin(), order.end(), [ & ]( std::size_t a, std::size_t b ) { return rw::sortutil::svLess( changed[a], changed[b] ); } );
+    const auto changedIndex = [ & ]( std::string_view path ) -> std::size_t
+    {
+        const auto it = std::lower_bound( order.begin(), order.end(), path, [ & ]( std::size_t k, std::string_view p ) { return rw::sortutil::svLess( changed[k], p ); } );
+        return ( it != order.end() && changed[ *it ] == path ) ? *it : SIZE_MAX;
+    };
+    const auto readSide = [ & ]( const std::string& sha, std::vector<char>& existsHere, std::vector<std::string>& cmakeDirs,
+                                 std::vector<std::string>* tree ) -> bool
+    {
+        existsHere.assign( changed.size(), 0 );
+        return forEachGitNulRecord( root, "ls-tree -r -z --full-tree " + shSingleQuote( sha ), [ & ]( std::string_view rec )
+        {
+            const std::size_t tab = rec.find( '\t' );
+            if( tab == std::string_view::npos || tab < 7 )
+            {
+                return;
+            }
+            const std::string_view mode = rec.substr( 0, 6 );
+            const std::string_view path = rec.substr( tab + 1 );
+            if( mode == "120000" && out.refusal.empty() )
+            {
+                out.refusal = "the commit " + sha.substr( 0, 12 ) + " holds a symlink (" + std::string( path ) + "), which the crawl follows into files git diff does not name";
+            }
+            const bool isFile = mode == "100644" || mode == "100755";
+            if( isFile && ( path == "CMakeCache.txt" || ( path.size() > 15 && path.substr( path.size() - 15 ) == "/CMakeCache.txt" ) ) )
+            {
+                cmakeDirs.emplace_back( path.substr( 0, path.size() - 14 ) );   // the directory with its trailing '/', "" for the root
+            }
+            if( const std::size_t k = changedIndex( path ); k != SIZE_MAX && isFile )
+            {
+                existsHere[k] = 1;
+            }
+            if( tree != nullptr && isFile )
+            {
+                tree->emplace_back( path );
+            }
+        } );
+    };
+    std::vector<char>        atBase, atTarget;
+    std::vector<std::string> cmakeBase, cmakeTarget;
+    if( !readSide( baseSha, atBase, cmakeBase, nullptr ) || !readSide( targetSha, atTarget, cmakeTarget, wantTargetTree ? &out.targetTree : nullptr ) )
+    {
+        DISCLOSE( out, ChangedFiles::DisclosureWhy::GitFailed, "quality: git ls-tree over a commit of the pair failed — the changed files are unknown" );
+        return out;
+    }
+    // 3. export attributes: "<sha>:<path>\0<match>\n" per hit (exit 1 = no hit, a clean answer; any other exit — a bad
+    //    object, git missing — is a failed read, never "no attribute")
+    const auto exportAttrs = [ & ]( const std::string& sha, std::vector<std::string>& files ) -> bool
+    {
+        std::string text;
+        bool        first = true;
+        const bool  ran   = forEachGitNulRecord( root, "grep -I -z -o -e export-subst -e export-ignore " + shSingleQuote( sha ) + " -- " + shSingleQuote( "*.gitattributes" ),
+                                                 [ & ]( std::string_view rec )
+                                                 {
+                                                     if( !first )
+                                                     {
+                                                         text += '\0';   // the records are rejoined: the parse below reads the line shape
+                                                     }
+                                                     first = false;
+                                                     text.append( rec );
+                                                 },
+                                                 /*alsoClean=*/1 );
+        if( !ran )
+        {
+            return false;
+        }
+        for( std::size_t at = 0; at < text.size(); )
+        {
+            const std::size_t nl   = std::min( text.find( '\n', at ), text.size() );
+            const std::string_view line( text.data() + at, nl - at );
+            const std::size_t nul  = line.find( '\0' );
+            if( nul != std::string_view::npos && line.size() > sha.size() + 1 )
+            {
+                const std::string_view path  = line.substr( sha.size() + 1, nul - sha.size() - 1 );
+                const std::string_view match = line.substr( nul + 1 );
+                if( match == "export-subst" && out.refusal.empty() )
+                {
+                    out.refusal = "the commit " + sha.substr( 0, 12 ) + " carries an export-subst attribute (" + std::string( path ) + "), which rewrites files git diff calls unchanged";
+                }
+                files.emplace_back( path );
+            }
+            at = nl + 1;
+        }
+        return true;
+    };
+    std::vector<std::string> attrFiles;
+    if( !exportAttrs( baseSha, attrFiles ) || !exportAttrs( targetSha, attrFiles ) )
+    {
+        DISCLOSE( out, ChangedFiles::DisclosureWhy::GitFailed, "quality: git grep for export attributes over a commit of the pair failed — the changed files are unknown" );
+        return out;
+    }
+    for( const std::string& p : changed )
+    {
+        if( out.refusal.empty() && std::find( attrFiles.begin(), attrFiles.end(), p ) != attrFiles.end() )
+        {
+            out.refusal = "the pair changes " + p + ", which carries an export attribute (an export-ignore flip adds or removes files git diff does not name)";
+        }
+    }
+    // 4. the per-side lists, each changed path that is a file there, plus the CMakeCache.txt of any ancestor directory
+    std::sort( cmakeBase.begin(), cmakeBase.end() );
+    std::sort( cmakeTarget.begin(), cmakeTarget.end() );
+    const auto addWithSentinels = [ & ]( const std::string& path, const std::vector<std::string>& cmakeDirs, std::vector<std::string>& list )
+    {
+        list.push_back( path );
+        for( std::size_t slash = path.find( '/' ); slash != std::string::npos; slash = path.find( '/', slash + 1 ) )
+        {
+            const std::string dir = path.substr( 0, slash + 1 );
+            if( std::binary_search( cmakeDirs.begin(), cmakeDirs.end(), dir ) )
+            {
+                list.push_back( dir + "CMakeCache.txt" );
+            }
+        }
+    };
+    for( std::size_t k = 0; k < changed.size(); ++k )
+    {
+        if( atBase[k] )
+        {
+            addWithSentinels( changed[k], cmakeBase, out.base );
+        }
+        if( atTarget[k] )
+        {
+            addWithSentinels( changed[k], cmakeTarget, out.target );
+        }
+    }
+    for( std::vector<std::string>* list : { &out.base, &out.target } )
+    {
+        std::sort( list->begin(), list->end() );
+        list->erase( std::unique( list->begin(), list->end() ), list->end() );
+    }
+    std::sort( out.targetTree.begin(), out.targetTree.end() );
+    out.ok = true;
+    return out;
+}
+
+// Materialize `paths` of `sha` (already-resolved, each a file there) into a fresh temp tree: the same archive-then-extract
+// discipline as materializeCommitTree, in chunks so no command line grows with the change. Each path is a :(literal)
+// pathspec, so a name with glob characters is itself. An empty list is an empty tree (an empty diff is a legal question).
+// Returns the temp root, or "" on any failure (the guard the caller passes removes a partial tree).
+inline std::string materializeCommitSubset( const std::string& root, const std::string& sha, const std::vector<std::string>& paths,
+                                            const char* tag, TmpTreeGuard& guard )
+{
+    namespace fs = std::filesystem;
+    std::error_code   ec;
+    const std::string tmpRoot = cacheDirLadder() + "/ripwire-" + tag + "-" + std::to_string( os::getpid() );
+    fs::remove_all( fs::path( tmpRoot ), ec );
+    if( !fs::create_directories( fs::path( tmpRoot ), ec ) && ec )
+    {
+        DISCLOSE( Diagnostics::answerRefused, "the range form refuses with the sha named; nothing is scored", "quality: cannot create the changed-files temp dir" );
+        return {};
+    }
+    guard.p = tmpRoot;
+    const std::string archiveFile = tmpRoot + ".tar";
+    constexpr std::size_t kChunkBytes = 64 * 1024;   // well under every ARG_MAX this builds on
+    for( std::size_t at = 0; at < paths.size(); )
+    {
+        std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " archive --format=tar --output=" + shSingleQuote( archiveFile )
+                        + " " + shSingleQuote( sha ) + " --";
+        const std::size_t first = at;
+        while( at < paths.size() && ( at == first || cmd.size() + paths[at].size() < kChunkBytes ) )
+        {
+            cmd += " " + shSingleQuote( ":(literal)" + paths[at] );
+            ++at;
+        }
+        const bool archived  = os::system( ( cmd + " 2>/dev/null" ).c_str() ) == 0;
+        const bool extracted = archived && os::system( ( "tar -x -f " + shSingleQuote( archiveFile ) + " -C " + shSingleQuote( tmpRoot ) + " 2>/dev/null" ).c_str() ) == 0;
+        fs::remove( fs::path( archiveFile ), ec );
+        if( !extracted )
+        {
+            DISCLOSE( Diagnostics::answerRefused, "the range form refuses with the sha named; nothing is scored", "quality: archiving a commit's changed files failed" );
+            return {};
+        }
+    }
+    return tmpRoot;
+}
+
+// The changed files of one commit, ingested and graphed — loadRefTree's shape with three differences: never through an
+// ingest cache (a subset must not read a full-tree blob or write one under the commit's key — checklist 21), an empty
+// subset is a legal answer, and `tag` names it apart from the full trees.
+inline RefTreeLoad loadRefSubset( const std::string& repoRoot, const std::string& sha, const std::vector<std::string>& paths,
+                                  const std::vector<std::string>& excludes, std::size_t maxFileBytes, const char* tag,
+                                  TmpTreeGuard& guard, RefTree& out )
+{
+    ASSUME( tag != nullptr && *tag != '\0' );
+    const std::string tmpRoot = materializeCommitSubset( repoRoot, sha, paths, tag, guard );
+    if( tmpRoot.empty() )
+    {
+        return RefTreeLoad::Unavailable;
+    }
+    {
+        std::lock_guard<std::mutex> ingestLk( headSnapshotIngestMutex() );
+        out.ing = ingest( tmpRoot.c_str(), excludes, std::string_view {}, maxFileBytes );
+    }
+    if( out.ing.memoryStop.isSet() )
+    {
+        return RefTreeLoad::MemoryStopped;
     }
     if( memguard::overHardLimit() )
     {
@@ -4793,22 +5216,34 @@ inline std::vector<std::uint64_t> baselineCloneGroupHashes( const IngestResult& 
 // leaves its presence record; a file that does not read leaves the unreadable record instead and contributes
 // no site (a partial read is evidence of nothing, forEachSymbolBody's rule) — the delta then judges no current
 // site in that file against it. Sorted by key; deterministic (files in id order, scanners pure).
-inline std::vector<DefectSiteAt> defectSitesOf( const IngestResult& ing, std::string_view root, const std::vector<char>* fileInBaseline )
+// format-arity's F1 skip input: every macro NAME the index holds in a C-family file, tree-wide (a call in one file may
+// use a macro another file defines). Sorted, unique: the scanner binary-searches it. Also what a degraded
+// --quality-delta=A..B keeps of the base commit's full tree (names only) so the changed files are scanned against the
+// tree's set rather than their own (qd-memory-degrade).
+inline std::vector<std::string> cFamilyMacroNames( const IngestResult& ing )
 {
-    std::vector<DefectSiteAt> out;
-    const SymbolsByFile byFile = symbolsByFileInIdOrder( ing, []( const Symbol& s ) { return s.endByte > s.sigStartByte && s.kind != SymKind::ModuleScope; } );
-    // format-arity's F1 skip: every macro the index holds in a C-family file, tree-wide (a call in one file may use
-    // a macro another file defines). Sorted, unique: the scanner binary-searches it.
-    std::vector<std::string> treeMacros;
+    std::vector<std::string> names;
     for( const Symbol& s : ing.symbols )
     {
         if( s.kind == SymKind::Macro && ( s.lang == Lang::Cpp || s.lang == Lang::C || s.lang == Lang::ObjC ) )
         {
-            treeMacros.push_back( s.name );
+            names.push_back( s.name );
         }
     }
-    std::sort( treeMacros.begin(), treeMacros.end() );
-    treeMacros.erase( std::unique( treeMacros.begin(), treeMacros.end() ), treeMacros.end() );
+    std::sort( names.begin(), names.end() );
+    names.erase( std::unique( names.begin(), names.end() ), names.end() );
+    return names;
+}
+
+// `macroOverride`, when given, is the macro-name set to scan C++ files against instead of this index's own — the whole
+// tree's, when this index holds only some of its files (a degraded --quality-delta=A..B's changed files).
+inline std::vector<DefectSiteAt> defectSitesOf( const IngestResult& ing, std::string_view root, const std::vector<char>* fileInBaseline,
+                                                const std::vector<std::string>* macroOverride = nullptr )
+{
+    std::vector<DefectSiteAt> out;
+    const SymbolsByFile byFile = symbolsByFileInIdOrder( ing, []( const Symbol& s ) { return s.endByte > s.sigStartByte && s.kind != SymKind::ModuleScope; } );
+    const std::vector<std::string> ownMacros  = macroOverride == nullptr ? cFamilyMacroNames( ing ) : std::vector<std::string>{};
+    const std::vector<std::string>& treeMacros = macroOverride == nullptr ? ownMacros : *macroOverride;
     for( std::uint32_t f = 0; f < ing.files.size(); ++f )
     {
         if( !fileIsInBaseline( fileInBaseline, f ) )
@@ -4868,16 +5303,71 @@ inline std::vector<DefectSiteAt> defectSitesOf( const IngestResult& ing, std::st
     return out;
 }
 
-inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::string_view root,
-                                 const std::vector<char>* fileInBaseline )
+// The dead set of a snapshot: every dead-code candidate the --dead-code verb's rule leaves dead, keyed like every per-symbol
+// record. Its own pass (and its four evidence structures) so a snapshot computed for kinds without dead-code skips it.
+inline void addDeadSet( Snapshot& snap, const IngestResult& ing, const Graph& g, std::string_view root, const std::vector<char>* fileInBaseline )
 {
-    Snapshot snap;
-    const std::vector<std::uint32_t> codeLoc         = codeLocByNode( ing );                     // Q-DIAL-3: the verbosity kind's metric is CODE lines
     const std::vector<std::uint64_t> topLevelCallees = topLevelCalleeNameHashes( ing );          // W1-S2: dead-kind evidence, built once
     const std::vector<std::string>   macroNames      = registeredMacroNames( root );             // P2.2: built-ins + .ripwire_config
     const std::vector<NodeId>        macroIds        = registeredMacroSymbolIds( ing, macroNames );
     const std::vector<NodeId>        pythonDispatch  = pythonDispatchedMethodIds( ing, g );
     const ValueRefIndex              valueRefs( ing );                                           // a value-held function is not dead
+    for( NodeId i = 0; i < ing.symbols.size(); ++i )
+    {
+        if( i >= g.canonId.size() || g.canonId[i].empty() || !fileIsInBaseline( fileInBaseline, ing.symbols[i].fileId ) )
+        {
+            continue;
+        }
+        if( isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch ) && !declinedCallMayReach( g, i )
+            && !valueRefs.isValueReferenced( i ) )
+        {
+            snap.dead.push_back( qualityKey( ing, i, root ) );
+        }
+    }
+}
+
+// The snapshot's whole-file passes, each only for the kinds it feeds (see computeSnapshot): clone groups, construct
+// counts, defect sites, body hashes.
+inline void addKindPasses( Snapshot& snap, const IngestResult& ing, std::string_view root, const std::vector<char>* fileInBaseline, const KindScope& scope )
+{
+    if( ( scope.kinds & ( kindBit( "duplication" ) | kindBit( "new-clone-of-reused-helper" ) ) ) != 0 )
+    {
+        snap.cloneGroups = baselineCloneGroupHashes( ing, root, fileInBaseline );
+    }
+    // §D#4 error-masking + placeholder baseline: per-canonId counts (the SUMs the delta compares), from one pass.
+    if( ( scope.kinds & ( kindBit( "error-masking" ) | kindBit( "placeholder" ) ) ) != 0 )
+    {
+        ConstructCounts counts = constructCountsBySym( ing, root );
+        snap.maskBySym         = std::move( counts.mask );
+        snap.maskReportBySym   = std::move( counts.maskReport );
+        snap.placeholderBySym  = std::move( counts.placeholder );
+    }
+    // the defect-shape baseline: every offending site (a sorted multiset of anchor + site identity) and each
+    // scanned file's presence record. Filtered to the baseline files inside defectSitesOf (IDENTITY BASIS).
+    if( kindSelected( scope.kinds, "defect-shape" ) )
+    {
+        const std::vector<DefectSiteAt> sites = defectSitesOf( ing, root, fileInBaseline, scope.macroOverride );
+        snap.defectSites.resize( sites.size() );
+        std::ranges::transform( sites, snap.defectSites.begin(), &DefectSiteAt::key );
+    }
+    // §D#4 short-horizon-churn baseline: per-canonId RAW-body hash so the delta detects a rewrite that moved no
+    // metric (a literal-only edit). Compared, never bar-checked — presence-or-difference IS the rewrite signal.
+    if( kindSelected( scope.kinds, "short-horizon-churn" ) )
+    {
+        snap.bodyHashBySym = bodyHashesBySym( ing, root );
+    }
+}
+
+// `scope` (qd-memory-degrade): the kinds this snapshot will be compared for. A pass that feeds only unselected kinds is
+// not run and its records stay empty — the dead set without dead-code, the clone groups without either clone kind, the
+// construct counts without error-masking or placeholder, the defect sites without defect-shape, the body hashes without
+// short-horizon-churn. The per-symbol metric maps always run (locBySym is every kind's existence oracle). The default
+// scope is every pass, the snapshot this function has always returned; its macroOverride: see defectSitesOf.
+inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::string_view root,
+                                 const std::vector<char>* fileInBaseline, const KindScope& scope )
+{
+    Snapshot snap;
+    const std::vector<std::uint32_t> codeLoc = codeLocByNode( ing );                     // Q-DIAL-3: the verbosity kind's metric is CODE lines
     for( NodeId i = 0; i < ing.symbols.size(); ++i )
     {
         if( i >= g.canonId.size() || g.canonId[i].empty() )
@@ -4904,37 +5394,16 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
         // (editcheck.h). A COUNT is overload-collision-proof for the opposite reason a MAX is: it is the one
         // number a collision cannot hide. (maskBySym is the other non-MAX kind; it sums for its own reason.)
         { std::uint32_t& slot = snap.defsBySym[ key ];    slot += 1; }
-        if( isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch ) && !declinedCallMayReach( g, i )
-            && !valueRefs.isValueReferenced( i ) )
-        {
-            snap.dead.push_back( key );
-        }
         if( isPublicApi( ing, i ) )
         {
             snap.publicApi.push_back( key );
         }
     }
-    snap.cloneGroups = baselineCloneGroupHashes( ing, root, fileInBaseline );
-
-    // §D#4 error-masking + placeholder baseline: per-canonId counts (the SUMs the delta compares), from one pass.
+    if( kindSelected( scope.kinds, "dead-code" ) )
     {
-        ConstructCounts counts = constructCountsBySym( ing, root );
-        snap.maskBySym         = std::move( counts.mask );
-        snap.maskReportBySym   = std::move( counts.maskReport );
-        snap.placeholderBySym  = std::move( counts.placeholder );
+        addDeadSet( snap, ing, g, root, fileInBaseline );   // sorted below with the rest; its order of insertion never reaches a reader
     }
-
-    // the defect-shape baseline: every offending site (a sorted multiset of anchor + site identity) and each
-    // scanned file's presence record. Filtered to the baseline files inside defectSitesOf (IDENTITY BASIS).
-    {
-        const std::vector<DefectSiteAt> sites = defectSitesOf( ing, root, fileInBaseline );
-        snap.defectSites.resize( sites.size() );
-        std::ranges::transform( sites, snap.defectSites.begin(), &DefectSiteAt::key );
-    }
-
-    // §D#4 short-horizon-churn baseline: per-canonId RAW-body hash so the delta detects a rewrite that moved no
-    // metric (a literal-only edit). Compared, never bar-checked — presence-or-difference IS the rewrite signal.
-    snap.bodyHashBySym = bodyHashesBySym( ing, root );
+    addKindPasses( snap, ing, root, fileInBaseline, scope );
 
     dropNonBaselineKeys( snap, ing, root, fileInBaseline );   // IDENTITY BASIS membership, on the two key-built maps
 
@@ -5013,7 +5482,7 @@ inline Snapshot computeSnapshot( const IngestResult& ing, const Graph& g, std::s
 // (not a repo, unborn HEAD, git absent) reads as "not identical" and falls back to the archived baseline.
 inline bool workingTreeMatchesHead( const std::string& root )
 {
-    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " diff --quiet HEAD -- . >/dev/null 2>&1";
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " diff --no-ext-diff --no-textconv --ignore-submodules=dirty --quiet HEAD -- . >/dev/null 2>&1";
     return os::system( cmd.c_str() ) == 0;
 }
 
@@ -5927,7 +6396,7 @@ inline void gitBlameRangeWindowCommits( const std::string& root, const std::stri
         return;
     }
     const std::string cmd = gitCmd( " -c core.quotepath=false" ) + gitBlameConfigPins( root ) + " -C " + shSingleQuote( root )
-                          + " blame --porcelain -L " + std::to_string( startLine ) + ",+" + std::to_string( lineCount )
+                          + " blame --no-ext-diff --no-textconv --porcelain -L " + std::to_string( startLine ) + ",+" + std::to_string( lineCount )
                           + " HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe )
@@ -6001,7 +6470,7 @@ inline std::vector<DiffHunk> gitDiffHunksVsHead( const std::string& root, const 
 {
     std::vector<DiffHunk> hunks;
     const std::string cmd = gitCmd( " -c core.quotepath=false -c diff.algorithm=myers -C " ) + shSingleQuote( root )
-                          + " diff --no-ext-diff --unified=0 --no-color HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
+                          + " diff --no-ext-diff --no-textconv --ignore-submodules=dirty --unified=0 --no-color HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );
     if( !pipe ) { DISCLOSE( "quality: churn hunk diff could not be spawned" ); return hunks; }
 
@@ -7800,9 +8269,14 @@ struct IdentityHealing
 // where the judged tree is a materialized temp dir with no git history at all: passing one root there would
 // silently lose every rename in the very wave being measured, which is the failure mode this round exists to
 // end. Collapsing them into one parameter is therefore a bug waiting for the next ref-pair caller.
+// `treeWideRescues` (qd-memory-degrade): false when `ing` holds only the changed files. The scheme re-key and the content-id
+// rescue both refuse an identity that is ambiguous ACROSS THE TREE (two files defining one scope-less name, two equal
+// bodies), and a partial index cannot see that ambiguity — it would rescue what the full run refuses. So both are skipped
+// there (and said: also_skipped= names ack-healing); the git rename route is per-path and runs as always.
 inline IdentityHealing healIdentity( Snapshot& base, gtl::btree_map<std::string, AckRecord>& acks,
                                      const IngestResult& ing, const Graph& g, const std::string& corpusRoot,
-                                     const std::string& gitRoot, bool wantContentIds, const std::string& span = {} )
+                                     const std::string& gitRoot, bool wantContentIds, const std::string& span = {},
+                                     bool treeWideRescues = true )
 {
     IdentityHealing h;
     if( acks.empty() && !wantContentIds )
@@ -7814,7 +8288,10 @@ inline IdentityHealing healIdentity( Snapshot& base, gtl::btree_map<std::string,
     // The SCHEME migration is not gated on git: the key rule changed in the binary, not in the history, so a
     // repo with no rename record at all still needs its committed acks re-filed. Runs after the rename pass so
     // a git-recorded move keeps precedence over the mechanical rekey (add-never-overwrite).
-    addSchemeAliases( h.aliases, ing, g, corpusRoot );
+    if( treeWideRescues )
+    {
+        addSchemeAliases( h.aliases, ing, g, corpusRoot );
+    }
     h.baselineKeysMoved = remapSnapshotIdentity( base, h.aliases );
 
     // Ack rows whose old identity FOLDED across files — countable only here, where both the ledger and the
@@ -7832,7 +8309,7 @@ inline IdentityHealing healIdentity( Snapshot& base, gtl::btree_map<std::string,
 
     const bool ledgerHasCid = std::any_of( acks.begin(), acks.end(),
                                            []( const auto& kv ) { return kv.second.cid != 0; } );
-    if( wantContentIds || ledgerHasCid )
+    if( treeWideRescues && ( wantContentIds || ledgerHasCid ) )
     {
         h.cids         = contentIdsBySym( ing, g, corpusRoot );
         h.cidsComputed = true;
@@ -8046,7 +8523,7 @@ inline std::optional<StaleAckWhy> staleForChurn( std::uint64_t key, const Snapsh
 inline std::optional<StaleAckWhy> staleForDefectShape( std::uint64_t key, const Snapshot& snap )
 {
     const std::vector<DefectSiteKey>& sites = snap.defectSites;   // sorted by (anchor, site): one anchor's records are contiguous
-    const auto                        self  = []( const DefectSiteKey& d ) -> const DefectSiteKey& { return d; };
+    const auto                        self  = []( const DefectSiteKey& d RW_LIFETIMEBOUND ) -> const DefectSiteKey& { return d; };
     for( auto it = sites.begin(); it != sites.end(); )
     {
         const auto                         end = std::find_if( it, sites.end(), [ & ]( const DefectSiteKey& d ) { return d.anchor != it->anchor; } );
@@ -8415,9 +8892,10 @@ inline std::pair<std::string, std::string> scopeDisclosure( const Scope& scope, 
 // Called from computeDelta with its origin oracle (existedAtBaseline) and its locator (stampLoc).
 template<class ExistedFn, class StampFn>
 inline void appendDefectShapeRows( std::vector<Regression>& regs, const IngestResult& ing, const Graph& g, const Snapshot& base,
-                                   std::string_view root, ExistedFn&& existedAtBaseline, StampFn&& stampLoc )
+                                   std::string_view root, ExistedFn&& existedAtBaseline, StampFn&& stampLoc,
+                                   const std::vector<std::string>* macroOverride = nullptr )
 {
-    const std::vector<DefectSiteAt> nowSites = defectSitesOf( ing, root, nullptr );
+    const std::vector<DefectSiteAt> nowSites = defectSitesOf( ing, root, nullptr, macroOverride );
     const auto isRealSite = []( std::uint64_t v ) { return v != kDefectFilePresent && v != kDefectFileUnreadable; };
     std::vector<std::uint64_t> baseVals, nowVals, baseUnreadable;
     for( const DefectSiteKey& d : base.defectSites )
@@ -8513,15 +8991,15 @@ inline void appendDefectShapeRows( std::vector<Regression>& regs, const IngestRe
     }
     for( const Credited& c : credited )
     {
-        const std::uint32_t was = facetCount( base.defectSites, c.anchor, c.facet, []( const DefectSiteKey& d ) -> const DefectSiteKey& { return d; } );
-        const std::uint32_t now = facetCount( nowSites, c.anchor, c.facet, []( const DefectSiteAt& d ) -> const DefectSiteKey& { return d.key; } );
+        const std::uint32_t was = facetCount( base.defectSites, c.anchor, c.facet, []( const DefectSiteKey& d RW_LIFETIMEBOUND ) -> const DefectSiteKey& { return d; } );
+        const std::uint32_t now = facetCount( nowSites, c.anchor, c.facet, []( const DefectSiteAt& d RW_LIFETIMEBOUND ) -> const DefectSiteKey& { return d.key; } );
         const NodeId        owner = c.first->owner;
         const std::string   rel( relForHash( ing.files[ c.first->fileId ], root ) );
         const bool          isNew = ( owner != kNoNode )
                                       ? !existedAtBaseline( c.anchor )
                                       : !std::binary_search( base.defectSites.begin(), base.defectSites.end(), DefectSiteKey{ c.anchor, kDefectFilePresent } );
         const std::string   sym = ( owner != kNoNode && owner < g.canonId.size() && !g.canonId[owner].empty() ) ? g.canonId[owner] : rel;
-        const std::uint64_t rowKey = defectRowKey( c.anchor, c.facet, defectSiteValsOf( nowSites, c.anchor, c.facet, []( const DefectSiteAt& d ) -> const DefectSiteKey& { return d.key; } ) );
+        const std::uint64_t rowKey = defectRowKey( c.anchor, c.facet, defectSiteValsOf( nowSites, c.anchor, c.facet, []( const DefectSiteAt& d RW_LIFETIMEBOUND ) -> const DefectSiteKey& { return d.key; } ) );
         regs.push_back( { "defect-shape", sym, was, now, rowKey, !defectshape::facetGatesOnAnyOrigin( c.facet ),
                           std::string( defectshape::facetName( c.facet ) ), isNew } );
         if( owner != kNoNode )
@@ -8532,6 +9010,64 @@ inline void appendDefectShapeRows( std::vector<Regression>& regs, const IngestRe
         {
             regs.back().path = rel;
             regs.back().line = c.first->line;
+        }
+    }
+}
+
+// The dead-code kind's delta pass: a dead candidate the --dead-code verb's rule leaves dead, not dead at the baseline. Its
+// own function (qd-memory-degrade) so computeDelta runs it, and builds its four evidence structures, only when the kind is
+// asked for. The three exclusion counts are the disclosed floors computeDelta's caller prints (any may be null).
+struct DeadExclusionCounts
+{
+    std::size_t* registerMacro = nullptr;   // P2.2: would be dead-code but for the register-macro exemption
+    std::size_t* declinedCall  = nullptr;   // ... but for a declined call that may reach it
+    std::size_t* valueRef      = nullptr;   // ... but for a table/field/argument holding it as a value
+};
+template<class ExistedFn, class StampFn>
+inline void appendDeadCodeRows( std::vector<Regression>& regs, const IngestResult& ing, const Graph& g, const Snapshot& base, std::string_view root,
+                                const std::vector<std::uint64_t>& keyByNode, ExistedFn&& existedAtBaseline, StampFn&& stampLoc, DeadExclusionCounts excluded )
+{
+    const std::vector<std::uint64_t> topLevelCallees = topLevelCalleeNameHashes( ing );   // W1-S2: dead-kind evidence, built once
+    const std::vector<std::string>   macroNames      = registeredMacroNames( root );      // P2.2: built-ins + .ripwire_config
+    const std::vector<NodeId>        macroIds        = registeredMacroSymbolIds( ing, macroNames );
+    const std::vector<NodeId>        pythonDispatch  = pythonDispatchedMethodIds( ing, g );
+    const ValueRefIndex              valueRefs( ing );                                     // reference-as-value round: the --dead-code verb's rule
+    for( NodeId i = 0; i < ing.symbols.size(); ++i )
+    {
+        if( i >= g.canonId.size() || g.canonId[i].empty() )
+        {
+            continue;
+        }
+        bool macroExempt = false;
+        if( !isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch, &macroExempt ) )
+        {
+            if( macroExempt && excluded.registerMacro )
+            {
+                ++( *excluded.registerMacro );   // P2.2: would be dead-code but for the macro exemption — disclosed count
+            }
+            continue;
+        }
+        if( declinedCallMayReach( g, i ) )
+        {
+            if( excluded.declinedCall )
+            {
+                ++( *excluded.declinedCall );    // would be dead-code but for a declined call that may reach it — disclosed count
+            }
+            continue;
+        }
+        if( valueRefs.isValueReferenced( i ) )   // checked LAST: one entity, one reason (the --dead-code verb's order)
+        {
+            if( excluded.valueRef )
+            {
+                ++( *excluded.valueRef );        // a table, field or argument holds it as a value — disclosed count
+            }
+            continue;
+        }
+        if( !std::binary_search( base.dead.begin(), base.dead.end(), keyByNode[i] ) )
+        {
+            regs.push_back( { "dead-code", g.canonId[i], 0, 0, keyByNode[i], false, {},
+                              !existedAtBaseline( keyByNode[i] ) } );          // origin: born uncalled (new) vs lost its last caller (preexisting)
+            stampLoc( i );
         }
     }
 }
@@ -8560,7 +9096,8 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                                              std::size_t* apiNewSurfaceOut = nullptr,          // Q-DIAL-4: the api-surface new-symbol COUNT that replaced N never-gating rows
                                              std::vector<CloneIdiomFact>* cloneIdiomsOut = nullptr,   // every CURRENT-tree clone group's (hash, idiom), for the legacy-ack backfill
                                              std::size_t* declinedCallExcludedOut = nullptr,          // symbols kept out of dead-code ONLY by a declined call (declinedCallMayReach)
-                                             std::size_t* valueRefExcludedOut = nullptr )             // ... ONLY because a table/field/argument holds them as a VALUE
+                                             std::size_t* valueRefExcludedOut = nullptr,              // ... ONLY because a table/field/argument holds them as a VALUE
+                                             const KindScope& scope = {} )                            // qd-memory-degrade: the kinds to report (see computeSnapshot)
 {
     if( declinedCallExcludedOut )
     {
@@ -8832,8 +9369,11 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     // ran TWICE per call (~46 % of the whole verb was redundant recompute). Compute each pass ONCE here and let
     // both consumers read the same vectors. Byte-identical BY CONSTRUCTION: both functions are deterministic
     // pure functions, so their single result is field-for-field the value both call sites received before.
-    const std::vector<CloneGroup> exactClones = findClones( ing, int( kMinCloneTokens ) );
-    const std::vector<CloneGroup> type3Clones = findClonesType3( ing, int( kMinCloneTokens ) );
+    // qd-memory-degrade: the clone passes feed only the two clone kinds (and the --quality-ack backfill export, which is
+    // never asked with a kind mask) — not run when neither is selected, the largest saving a kind selection buys.
+    const bool                    wantClones  = ( scope.kinds & ( kindBit( "duplication" ) | kindBit( "new-clone-of-reused-helper" ) ) ) != 0 || cloneIdiomsOut != nullptr;
+    const std::vector<CloneGroup> exactClones = wantClones ? findClones( ing, int( kMinCloneTokens ) ) : std::vector<CloneGroup>{};
+    const std::vector<CloneGroup> type3Clones = wantClones ? findClonesType3( ing, int( kMinCloneTokens ) ) : std::vector<CloneGroup>{};
 
     // duplication: a clone group (exact Type-1/2 OR gapped Type-3) whose member-set is not in the
     // baseline set. Both passes hash by the same sorted-member-canonId identity, so a change that
@@ -8994,48 +9534,10 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     reportNewClones( exactClones, exactIdioms );
     reportNewClones( type3Clones, type3Idioms );
 
-    const std::vector<std::uint64_t> topLevelCallees = topLevelCalleeNameHashes( ing );   // W1-S2: dead-kind evidence, built once
-    const std::vector<std::string>   macroNames      = registeredMacroNames( root );      // P2.2: built-ins + .ripwire_config
-    const std::vector<NodeId>        macroIds        = registeredMacroSymbolIds( ing, macroNames );
-    const std::vector<NodeId>        pythonDispatch  = pythonDispatchedMethodIds( ing, g );
-    const ValueRefIndex              valueRefs( ing );                                     // reference-as-value round: the --dead-code verb's rule
-    for( NodeId i = 0; i < ing.symbols.size(); ++i )
+    if( kindSelected( scope.kinds, "dead-code" ) )   // qd-memory-degrade: the pass and its four evidence structures, only for its kind
     {
-        if( i >= g.canonId.size() || g.canonId[i].empty() )
-        {
-            continue;
-        }
-        bool macroExempt = false;
-        if( !isDeadCandidate( ing, g, i, topLevelCallees, macroIds, pythonDispatch, &macroExempt ) )
-        {
-            if( macroExempt && registerMacroExcludedOut )
-            {
-                ++( *registerMacroExcludedOut );   // P2.2: would be dead-code but for the macro exemption — disclosed count
-            }
-            continue;
-        }
-        if( declinedCallMayReach( g, i ) )
-        {
-            if( declinedCallExcludedOut )
-            {
-                ++( *declinedCallExcludedOut );    // would be dead-code but for a declined call that may reach it — disclosed count
-            }
-            continue;
-        }
-        if( valueRefs.isValueReferenced( i ) )   // checked LAST: one entity, one reason (the --dead-code verb's order)
-        {
-            if( valueRefExcludedOut )
-            {
-                ++( *valueRefExcludedOut );        // a table, field or argument holds it as a value — disclosed count
-            }
-            continue;
-        }
-        if( !std::binary_search( base.dead.begin(), base.dead.end(), keyByNode[i] ) )
-        {
-            regs.push_back( { "dead-code", g.canonId[i], 0, 0, keyByNode[i], false, {},
-                              !existedAtBaseline( keyByNode[i] ) } );          // origin: born uncalled (new) vs lost its last caller (preexisting)
-            stampLoc( i );
-        }
+        appendDeadCodeRows( regs, ing, g, base, root, keyByNode, existedAtBaseline, stampLoc,
+                            DeadExclusionCounts{ registerMacroExcludedOut, declinedCallExcludedOut, valueRefExcludedOut } );
     }
 
     // api-surface (contract drift) — B10.2e TIERED into two shapes on the PUBLIC/exported surface:
@@ -9173,7 +9675,9 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     // code that did not exist at the baseline — so it is marked origin="new-symbol" on every row and never
     // gates, whatever symbol it lands in (the same way short-horizon-churn is preexisting by construction).
     {
-        const ConstructCounts nowCounts = constructCountsBySym( ing, root );
+        // qd-memory-degrade: the construct pass only for its two kinds — without them every count reads 0 and no row is made
+        const ConstructCounts nowCounts = ( scope.kinds & ( kindBit( "error-masking" ) | kindBit( "placeholder" ) ) ) != 0
+                                        ? constructCountsBySym( ing, root ) : ConstructCounts{};
         const auto countIn = []( const gtl::btree_map<std::uint64_t, std::uint32_t>& m, std::uint64_t key )
         {
             const auto it = m.find( key );
@@ -9211,7 +9715,10 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
         }
     }
 
-    appendDefectShapeRows( regs, ing, g, base, root, existedAtBaseline, stampLoc );   // the twelfth kind (see its doc)
+    if( kindSelected( scope.kinds, "defect-shape" ) )
+    {
+        appendDefectShapeRows( regs, ing, g, base, root, existedAtBaseline, stampLoc, scope.macroOverride );   // the twelfth kind (see its doc)
+    }
 
     // ── §D#4-2 short-horizon churn (GitClear +15% "new code rewritten within two weeks") ───────────────────
     // A symbol flags iff THREE independent gates all hold (signal-to-noise round, 2026-07-13):
@@ -9231,7 +9738,9 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
     // Git access uses computeDelta's own `root` (= cfg.rootPath on the CLI, the real repo root over MCP);
     // no git / no HEAD / no obtainable window ref → this kind simply reports nothing (degrade, precision-first).
     {
-        const std::vector<std::uint32_t> commitCounts = gitFileCommitCountsInDayWindow( std::string( root ), ing, kShortHorizonDays );
+        // qd-memory-degrade: no window mining when the kind is not asked for (no count reaches the threshold, so no row)
+        const std::vector<std::uint32_t> commitCounts = kindSelected( scope.kinds, "short-horizon-churn" )
+                                                      ? gitFileCommitCountsInDayWindow( std::string( root ), ing, kShortHorizonDays ) : std::vector<std::uint32_t>{};
         const bool anyChurn = std::any_of( commitCounts.begin(), commitCounts.end(),
                                            []( std::uint32_t c ){ return c >= kShortHorizonMinCommits; } );
         if( anyChurn )
@@ -9254,7 +9763,7 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
                 // degrades every symbol below to AMBIENT (churnEditWindowCommitCount is gated on `> 0`).
                 std::int64_t churnCutoffEpoch = 0;
                 {
-                    const std::string epochStr = gitOneLine( std::string( root ), "log -1 --format=%ct HEAD 2>/dev/null" );
+                    const std::string epochStr = gitOneLine( std::string( root ), "log --no-ext-diff --no-textconv -1 --format=%ct HEAD 2>/dev/null" );
                     if( !epochStr.empty() )
                     {
                         const std::int64_t headEpoch = std::strtoll( epochStr.c_str(), nullptr, 10 );
@@ -9446,6 +9955,13 @@ inline std::vector<Regression> computeDelta( const IngestResult& ing, const Grap
         reportReusedClones( type3Clones, type3Idioms );
     }
 
+    // qd-memory-degrade: only the selected kinds' rows. A pass shared by two kinds (error-masking and placeholder, the
+    // two clone kinds) or read by another kind (params, which api-surface's one-fact-one-row rule reads) ran for the
+    // selected one; its other rows are dropped here, so a selected kind's rows are exactly its rows in a full answer.
+    if( scope.kinds != kAllKinds )
+    {
+        std::erase_if( regs, [ &scope ]( const Regression& r ) { return !kindSelected( scope.kinds, r.kind ); } );
+    }
     std::sort( regs.begin(), regs.end(), []( const Regression& a, const Regression& b )
     { return a.kind != b.kind ? a.kind < b.kind : a.sym < b.sym; } );
     return regs;
