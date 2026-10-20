@@ -41,6 +41,9 @@
 #   (18) picker order (task C): on the copied rubyschemafix collision tree, workspace/symbol, definition and
 #        hover all lead with the Method def — the tower (kindSpecificity desc, reference-language first, id asc)
 #        — with the Var next, the schema column before the yaml section, byte-pinned
+#   (18b) schema-column click (user GO): a call site naming a schema column alone resolves to its
+#        db/schema.rb def; the multi-name column click lands on the first schema row (split, id tail)
+#        WITH the N-definitions disclosure — cross-kind columns stay REACHABLE, only their order moves
 #   (19) multi-def disclosure (task C): a name with N>1 defs carries ONE sentence — N definitions, counts are
 #        floors, the resolver splits — in the hover markdown and in one window/logMessage ahead of every
 #        definition answer; absent on single-def names
@@ -48,6 +51,8 @@
 #   (21) C/C++ decl/def no-regression (task C): a header declaration with the LOWER id still yields its bodyful
 #        definition — the resolveFocus refinement composes with the tower sort
 #   (22) determinism x2 on the new collision dialog (house pattern)
+#   (23) the known gap stays COHERENT: --around's CLI row shows the tower front AND its defs= count, so
+#        edge-vs-display disagreement is visible on the row, never hidden
 #
 # Usage:  RIPWIRE_BIN=build/ripwire bash test/lspcheck.sh   |   bash test/lspcheck.sh path/to/ripwire
 
@@ -402,6 +407,35 @@ done
 [ -n "$UR" ] && [ -z "$miss" ] && ok "(20) Used-at parity: every CLI --uses call row appears as a hover link ($( printf '%s\n' "$UR" | wc -l | tr -d ' ' ) rows)" \
              || { no "(20) parity missing rows:$miss (rows seen: $( echo $UR | tr ' ' ',' ))"; }
 
+# ── (18b) schema-column click: definition on a column use-site lands on schema.rb, unique and split ───
+cat > "$WORK/collide/click_single.rb" <<'EOF'
+# C task arm 18b: consumer of the UNIQUE column event_id -> db/schema.rb line 29 (0-based 28)
+Spike::IdRenamed.new.event_id
+EOF
+cat > "$WORK/collide/click_split.rb" <<'EOF'
+# C task arm 18b: consumer of a COLUMN-ONLY repeated name (timestamps, no code def) -> schema row first
+Spike::ColumnYaml.new.created_at
+EOF
+{
+  msg "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"rootUri\":\"$uriColl\",\"capabilities\":{}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file://$WORK/collide/click_single.rb\",\"languageId\":\"ruby\",\"version\":1,\"text\":\"\"}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file://$WORK/collide/click_split.rb\",\"languageId\":\"ruby\",\"version\":1,\"text\":\"\"}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file://$WORK/collide/click_single.rb\"},\"position\":{\"line\":1,\"character\":25}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":45,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file://$WORK/collide/click_split.rb\"},\"position\":{\"line\":1,\"character\":25}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":46,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file://$WORK/collide/click_split.rb\"},\"position\":{\"line\":1,\"character\":25}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\"}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"
+} > "$WORK/d18b"
+"$BIN" --lsp < "$WORK/d18b" > "$WORK/raw18b" 2>/dev/null
+decodeFrames "$WORK/raw18b" > "$WORK/r18b" 2>/dev/null
+head44="$( grep '"id":44,' "$WORK/r18b" | head -c 340 )"; head45="$( grep '"id":45,' "$WORK/r18b" | head -c 340 )"; R46="$( grep '"id":46,' "$WORK/r18b" )"
+printf '%s' "$head44" | grep -q 'schema\.rb","range":{"start":{"line":28' \
+    && printf '%s' "$head45" | grep -q 'schema\.rb","range":{"start":{"line":75' \
+    && printf '%s' "$R46" | grep -q 'definitions for .created_at.' \
+    && ok "(18b) column clicks land on schema.rb — unique event_id -> its row; column-only created_at -> schema first with the N-definitions disclosure" \
+    || { no "(18b) schema-column click wrong"; printf '%s\n' "$head44" | head -c 240; printf '%s\n' "$head45" | head -c 240; }
+
 # ── (21) C/C++ decl/def no-regression: the bodyful def front-picks over the lower-id header decl ──────
 mkdir -p "$WORK/cppdd"
 cat > "$WORK/cppdd/a.h" <<'EOF'
@@ -435,6 +469,13 @@ head50="$( grep '"id":50,' "$WORK/r21" | head -c 200 )"
 printf '%s' "$head50" | grep -q '"uri":"file://.*a\.cpp","range":{"start":{"line":1' \
     && ok "(21) decl/def refinement composes with the sort: the bodyful .cpp def fronts the lower-id header decl" \
     || { no "(21) decl front-picked the answer"; printf '%s\n' "$head50"; }
+
+# ── (23) known-gap coherence: the CLI row shows the tower front AND its defs= count ───────────────────
+c23="$( cd "$WORK/collide" && "$BIN" --around=name . 2>/dev/null | grep -m1 -o '<s t="method" n="name" sc="AllFour"' )"
+d23="$( cd "$WORK/collide" && "$BIN" --around=name . 2>/dev/null | grep -m1 -o 'defs="[0-9]*"' )"
+[ -n "$c23" ] && [ "$d23" = 'defs="19"' ] \
+    && ok "(23) --around names the tower front (t=method AllFour::name) while disclosing defs=\"19\" — the edge-vs-display gap is visible on the row" \
+    || { no "(23) known-gap coherence broken: focus='$c23' count='$d23'"; }
 
 # ── (22) determinism x2 on the collision dialog (house pattern) ───────────────────────────────────────
 "$BIN" --lsp < "$WORK/d18" > "$WORK/raw22a" 2>/dev/null
