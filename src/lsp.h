@@ -130,6 +130,18 @@ inline std::string lspWorkspaceCapNotice( const std::string& query, std::size_t 
          + "'; refine the query to see the rest\"}}";
 }
 
+// The multi-def disclosure (RIPWIRE-RUBY task C): a name with more than one definition answers the picker with
+// the WHOLE tower-ordered set — nothing was pinned, and the result list has no channel to say so. One sentence,
+// the SAME one the hover carries in its markdown, rides a window/logMessage (type 3, Info) sent just before the
+// definition response — the workspace-cap channel above, the same "never disagree silently" doctrine as D6.
+// test/lspcheck.sh arm (19).
+inline std::string lspMultiDefNotice( const std::string& name, std::size_t total )
+{
+    return "{\"jsonrpc\":\"2.0\",\"method\":\"window/logMessage\",\"params\":{\"type\":3,\"message\":\"ripwire: "
+         + std::to_string( total ) + " definitions for '" + rw::mcpdetail::jsonEscape( name )
+         + "' — counts are floors; the resolver splits over them\"}}";
+}
+
 inline void lspWriteMessage( std::FILE* out, const std::string& body )
 {
     char hdr[ 64 ];
@@ -510,11 +522,13 @@ inline std::string lspSymbolRangeJson( const LspDoc& d, const rw::Symbol& s )
 // definition: the name under the cursor, resolved through the shared name resolver (the same one --callers
 // and MCP find_symbol use). Multi-definition names return every def — the client shows a picker.
 inline std::string lspDefinition( const rw::IngestResult& ing, const std::string& cwd, LspDocs& docs,
-                                  const LspPos& pos )
+                                  const LspPos& pos, std::string& pickName, std::size_t& pickCount )
 {
     const LspAtCursor at = lspAtCursor( ing, cwd, docs, pos );
     if( !at.found ) return "null";
     const std::vector<rw::NodeId> defs = rw::resolveAllByName( ing, at.name );
+    pickName  = at.name;
+    pickCount = defs.size();   // the (19) disclosure rides the dispatch, mirroring the workspace-cap total
     std::string                   out  = "[";
     bool                          first = true;
     for( const rw::NodeId id : defs )
@@ -839,6 +853,13 @@ inline std::string lspHover( const rw::IngestResult& ing, const rw::Graph& g, co
 
     std::string md;
     lspAppendHoverDefs( md, ing, g, docs, defs );
+    if( defs.size() > 1 )
+    {
+        // The one multi-def sentence (task C): the picker's set is plural — say so in the D6 voice, beside the
+        // def block it qualifies. test/lspcheck.sh arm (19).
+        md += "\n*" + std::to_string( defs.size() ) + " definitions for `" + at.name
+            + "` — counts are floors; the resolver splits over them.*\n";
+    }
 
     // Used at (D7): the same name-matched floor the references provider answers with. Def lines are
     // omitted — they are the block above.
@@ -1000,7 +1021,10 @@ inline int runLsp( const std::string& cliRoot )
             const LspPos pos = lspReadPos( params );
             if( !pos.ok ) respond( -32602, "textDocument/definition needs params.textDocument.uri and params.position{line,character}" );
             else { const rw::McpIndex& mix = rw::getIndex( root ); LspDocs docs( mix.ing );
-                   resp = lspResultJson( id.token, lspDefinition( mix.ing, cwd, docs, pos ) ); }
+                   std::string defName; std::size_t defCount = 0;
+                   const std::string defResult = lspDefinition( mix.ing, cwd, docs, pos, defName, defCount );
+                   if( defCount > 1 ) lspWriteMessage( stdout, lspMultiDefNotice( defName, defCount ) );
+                   resp = lspResultJson( id.token, defResult ); }
         }
         else if( method == "textDocument/references" )
         {

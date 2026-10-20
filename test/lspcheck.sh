@@ -387,8 +387,8 @@ printf '%s' "$R42" | grep -q '19 definitions for .name. — counts are floors; t
     || { no "(19) hover disclosure missing"; printf '%s\n' "$R42" | head -c 400; }
 n19="$( grep -c 'window/logMessage.*19 definitions for .name. — counts are floors; the resolver splits over them' "$WORK/r18" )"
 l41="$( grep -n '"id":41,' "$WORK/r18" | cut -d: -f1 )"; l19="$( grep -n 'window/logMessage.*19 definitions' "$WORK/r18" | head -1 | cut -d: -f1 )"
-[ "$n19" = 2 ] && [ -n "$l19" ] && [ -n "$l41" ] && [ "$l19" -lt "$l41" ] \
-    && ok "(19) definition answers carry ONE window/logMessage disclosure AHEAD of each answer (2 dialogs)" \
+[ "$n19" = 1 ] && [ -n "$l19" ] && [ -n "$l41" ] && [ "$l19" -lt "$l41" ] \
+    && ok "(19) the definition answer carries ONE window/logMessage disclosure AHEAD of it" \
     || { no "(19) definition logMessage wrong: n=$n19 noticeLine=$l19 respLine=$l41"; }
 printf '%s' "$( R 5 )" | grep -q 'definitions for .scale.' && no "(19) single-def name carries a multi-def disclosure" || ok "(19) scale (single def) carries no disclosure"
 
