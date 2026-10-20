@@ -10199,6 +10199,50 @@ inline std::vector<NodeId> resolveAllByCanonicalId( const IngestResult& ing, std
     return out;
 }
 
+// The tower (RIPWIRE-RUBY task C): ONE total order for every multi-definition NAME answer, applied to the
+// RESULT LIST of the name resolvers below (query-time only — buildGraph's edge candidates are deliberately
+// NOT reordered, so no extraction moved and kParserVer stays; edge-vs-display disagreement is disclosed,
+// not hidden). Key: kindSpecificity DESC (the hoisted dedup ladder — a Method beats a Var beats a Section),
+// then the language of the most specific symbol first — the tower's own leading symbol defines the
+// reference language, so in a Ruby tree a Ruby def leads a Python one on a same-kind tie — then id ASC
+// for the deterministic tail. A list already in tower order comes back untouched. DISTINCT from gitmine.h's
+// §H6 "specificity-ordered mapper", which orders file PATHS on a different axis.
+inline std::vector<NodeId> applyNameTower( const IngestResult& ing, std::vector<NodeId> ids )
+{
+    if( ids.size() < 2 )
+    {
+        return ids;
+    }
+    NodeId referenceId = ids.front();
+    int    referenceSpec = kindSpecificity( ing.symbols[ referenceId ].kind );
+    for( const NodeId id : ids )
+    {
+        const int spec = kindSpecificity( ing.symbols[ id ].kind );
+        if( spec > referenceSpec || ( spec == referenceSpec && id < referenceId ) )
+        {
+            referenceSpec = spec;
+            referenceId = id;
+        }
+    }
+    const Lang referenceLang = ing.symbols[ referenceId ].lang;
+    std::sort( ids.begin(), ids.end(),
+               [ &ing, referenceLang ]( NodeId a, NodeId b ) noexcept
+               {
+                   const int specA = kindSpecificity( ing.symbols[ a ].kind ), specB = kindSpecificity( ing.symbols[ b ].kind );
+                   if( specA != specB )
+                   {
+                       return specA > specB;
+                   }
+                   const bool refA = ing.symbols[ a ].lang == referenceLang, refB = ing.symbols[ b ].lang == referenceLang;
+                   if( refA != refB )
+                   {
+                       return refA;
+                   }
+                   return a < b;
+               } );
+    return ids;
+}
+
 // Bare name, or a canonical id. The "::" probe runs FIRST and only when the spec carries one, then falls
 // back to the name match — no indexed symbol NAME contains "::" in any grammar we parse, so this is purely
 // additive: every previously-working query resolves byte-identically.
@@ -10226,7 +10270,7 @@ inline std::vector<NodeId> resolveAllByName( const IngestResult& ing, std::strin
             out.push_back( s.id );
         }
     }
-    return out;
+    return applyNameTower( ing, std::move( out ) );   // the tower orders this tier (task C); the early "::" tiers are their own answers
 }
 
 // The number of definitions the NAME of `focus` has — what a single-pick verb must disclose when it
@@ -10627,6 +10671,7 @@ inline std::vector<NodeId> resolveAllByNameQualified( const IngestResult& ing, s
     // #63: a header-qualified selector resolves to DECLARATIONS, which carry no call-graph edges.
     // Widen to the definitions they stand for. Full contract and its limits: declToDefFollowThrough above.
     declToDefFollowThrough( ing, file, name, out, unprovenDefCountOut );
+    out = applyNameTower( ing, std::move( out ) );   // the tower orders the name/file tier (task C); the early tiers above stay as-is
     return resolveAllByDottedScope( ing, spec, std::move( out ) );   // `Class.method` / `Class#method`, only when `out` is empty
 }
 
