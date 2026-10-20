@@ -120,6 +120,37 @@ inline bool isStructOrNamedType( SymKind k ) noexcept
     return k == SymKind::Struct || k >= SymKind::NamedType;
 }
 
+// The specificity ladder, hoisted VERBATIM out of dedupRawDefs (ingest_model.h) by RIPWIRE-RUBY task C so the
+// resolver's tower (graph.h's name matchers) and the def dedup order the SAME way from ONE table — higher =
+// more specific / preferred when two matches collide on one name byte. Values are load-bearing: the dedup's
+// total order and the picker's Method > Var > Section answer sequence are byte-pinned (rubyattrs/rubyschema
+// checks, lspcheck 18). DISTINCT from gitmine.h's §H6 "specificity-ordered mapper", which orders file PATHS
+// on a different axis; nothing there reads or shares this ladder.
+inline int kindSpecificity( SymKind k ) noexcept
+{
+    switch( k )
+    {
+        case SymKind::Method:    return 5;
+        case SymKind::Interface: return 4;
+        case SymKind::Struct:    return 3;
+        case SymKind::Class:     return 3;
+        case SymKind::Function:  return 2;
+        case SymKind::Var:       return 1;
+        case SymKind::Field:     return 1;   // never collides with Var in practice: the static/non-static gates are complementary
+        case SymKind::Macro:     return 0;   // Macro and Section were folded into "Other" by a default; named now, same value:
+        case SymKind::Section:   return 0;   // each comes from its own single capture (a #define, a heading or data key), so
+        case SymKind::Other:     return 0;   // neither collides with a code kind on one name byte
+        case SymKind::ModuleScope: return 0; // minted after this pass runs; it can never reach the dedup
+        // Go's type_spec fires the generic @definition.definedtype AND, for `type F func(...)`, @definition.functype on the
+        // same name byte (struct/interface specs fire their own pattern too): the form-specific kind must win, and a
+        // struct/interface must beat the generic defined type. An alias is its own node (type_alias) and never collides.
+        case SymKind::FuncType:  return 2;
+        case SymKind::NamedType: return 1;
+        case SymKind::Alias:     return 1;
+    }
+    return 0;   // a byte past the enum; a NEW SymKind is a -Werror=switch error above, never a silent 0
+}
+
 // #324: a ModuleScope owner is SYNTHETIC (comment above the enum) — a CALLER minted after the tags.scm pass,
 // never something a test (or anything else) can name or invoke, so it can never be discharged as a test
 // obligation. It is legitimate wherever a CALLER is shown (--callers/--impact/--for already carry the
