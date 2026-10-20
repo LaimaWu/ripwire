@@ -9674,7 +9674,7 @@ inline std::uint32_t exactRootRelFile( const IngestResult& ing, std::string_view
 }
 
 // shared "name" | "file:name" spec splitter (X9(b)) — the ONE disambiguation rule --around/--lego/
-// --edit-check (via resolveFocus, single lowest-id pick) and --callers/--impact (via
+// --edit-check (via resolveFocus, single tower-front pick) and --callers/--impact (via
 // resolveAllByNameQualified, every match) now both route through, so a same-named-across-files symbol
 // disambiguates identically everywhere instead of only some verbs supporting it. The LAST colon is the
 // separator (a file path itself never contains the trailing "name" after it), so a bare name with no
@@ -10274,7 +10274,7 @@ inline std::vector<NodeId> resolveAllByName( const IngestResult& ing, std::strin
 }
 
 // The number of definitions the NAME of `focus` has — what a single-pick verb must disclose when it
-// resolved a BARE name through resolveFocus's lowest-id pick (H6/F2). Named for the disclosure rather than
+// resolved a BARE name through resolveFocus's tower-front pick (H6/F2). Named for the disclosure rather than
 // the mechanism, because the mechanism is only resolveAllByName: the point is that the count printed on the
 // row and the pick printed on the row come from ONE resolver, so `defs="6"` beside `p="…/dynamic_map.hpp"`
 // can never disagree about which definitions exist. kNoNode (the ranked, selector-free mode) counts 0.
@@ -11098,15 +11098,17 @@ inline std::string memberSelectorUnservedRefusal( const IngestResult& ing, std::
 }
 
 // resolve a --around/--lego/--connect spec to ONE matching symbol; kNoNode if none. A PROJECTION of
-// resolveAllByNameQualified — matches ascend by NodeId there (symbols are walked in id order and every tier preserves
-// that) — so one grammar, one resolver, and every tier the full resolver gains (canonical id, Scope::name) reaches the
-// single-pick verbs in the same commit. Declared here, below the full resolver, for exactly that reason.
+// resolveAllByNameQualified — the tower (applyNameTower) orders its name-tier matches (kindSpecificity desc, the
+// leading symbol's language first, id asc — task C) and the projection keeps that order; one grammar, one resolver,
+// and every tier the full resolver gains (canonical id, Scope::name) reaches the single-pick verbs in the same
+// commit. Declared here, below the full resolver, for exactly that reason.
 //
-// THE PICK is the lowest id, with ONE exception: a bodyless C/C++ lowest id (a header prototype, an in-class method
+// THE PICK is the tower front — the most specific kind, the leading language, then the lowest id — with ONE
+// exception: a bodyless C/C++ front (a header prototype, an in-class method
 // declaration, a forward-declared class) yields to the lowest-id C/C++ match WITH a body in the SAME scope, when the set
 // holds one. The lowest id alone made the declaration the focus whenever its header sorted first, and a declaration has
 // no call or extends edges — so --around served its own row, --connect found no join and --lego counted no implementor,
-// for a bare name and a fully proven file:name alike (decltodefcheck E3a..E3d). Everything else keeps the lowest id:
+// for a bare name and a fully proven file:name alike (decltodefcheck E3a..E3d). Everything else keeps the tower front:
 //   * a set of declarations only, or a single match — nothing to prefer;
 //   * every other language — measured on this repository, an unscoped "bodied first" moved 69 non-C/C++ names (Python and
 //     JSON keys, Ruby classes, TypeScript overload signatures, even py -> cpp), none of them a declaration beside its
@@ -11125,8 +11127,8 @@ inline NodeId resolveFocus( const IngestResult& ing, std::string_view spec, std:
     {
         return kNoNode;
     }
-    // lane lego-transitive (M3): a CODE definition is the focus whenever one matched. The lowest id is crawl order, and a
-    // docs/ heading sorted first answered `--lego=Loader` about docs/api.md (defs=3, implementors=0) while src/loader.js
+    // lane lego-transitive (M3): a CODE definition is the focus whenever one matched. Ids are crawl order and the tower
+    // ranks above them; pre-tower, a docs/ heading sorted first answered `--lego=Loader` about docs/api.md (defs=3, implementors=0) while src/loader.js
     // held the class. A non-code match (a markdown heading, a JSON/YAML/TOML key) stays reachable by its file:name
     // selector, and is still the answer when it is all that matched. Every verb that names one focus reads this
     // (--lego, --around, --connect and their MCP twins), so the rule is stated once, here.
@@ -13067,7 +13069,7 @@ inline ConnectResult connectSubgraph( const Graph& g, const std::vector<NodeId>&
 }
 
 // 0.6.6 D1: WHICH definition of a many-definition terminal name --connect searches from. connectSubgraph takes one node
-// per terminal, and the callers used to hand it resolveFocus's single pick (the lowest id), so `--connect=main,escapeXml`
+// per terminal, and the callers used to hand it resolveFocus's single pick (the tower front), so `--connect=main,escapeXml`
 // searched from the one `main` of 107 that happened to sort first (a Python bench script) and printed every terminal
 // <unconnected> beside a --path that joins main to escapeXml in 2 hops. The pick is now the definition that JOINS: every
 // definition of the name is scored by how many OTHER terminals it reaches within the radius on the same undirected view
