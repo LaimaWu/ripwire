@@ -38,6 +38,16 @@
 #        inside a wall-clock cap (no hang)
 #   (17) workspace/symbol's 20-row cap is DISCLOSED: 25 matches answer 20 rows after a window/logMessage naming
 #        "first 20 of 25"; 10 matches answer all 10 with no notice
+#   (18) picker order (task C): on the copied rubyschemafix collision tree, workspace/symbol, definition and
+#        hover all lead with the Method def — the tower (kindSpecificity desc, reference-language first, id asc)
+#        — with the Var next, the schema column before the yaml section, byte-pinned
+#   (19) multi-def disclosure (task C): a name with N>1 defs carries ONE sentence — N definitions, counts are
+#        floors, the resolver splits — in the hover markdown and in one window/logMessage ahead of every
+#        definition answer; absent on single-def names
+#   (20) Used-at parity (task C): hover Used-at for the colliding name answers every CLI --uses call row
+#   (21) C/C++ decl/def no-regression (task C): a header declaration with the LOWER id still yields its bodyful
+#        definition — the resolveFocus refinement composes with the tower sort
+#   (22) determinism x2 on the new collision dialog (house pattern)
 #
 # Usage:  RIPWIRE_BIN=build/ripwire bash test/lspcheck.sh   |   bash test/lspcheck.sh path/to/ripwire
 
@@ -341,5 +351,97 @@ noticeLine="$( grep -n '"method":"window/logMessage"' "$WORK/r17" | cut -d: -f1 
     && [ -n "$noticeLine" ] && [ "$noticeLine" -lt "$resp30Line" ] \
     && ok "(17) workspace/symbol: 25 matches → 20 rows after one window/logMessage 'first 20 of 25'; 10 matches (capfn10-19) → 10 rows, no notice" \
     || { no "(17) cap disclosure wrong: rows30=$rows30 rows31=$rows31 notices=$notices"; head -c 500 "$WORK/r17"; }
+# ── (18) picker order: the tower sorts every multi-def answer, byte-pinned on the collision fixture ───
+cp -r "$ROOT/test/rubyschemafix" "$WORK/collide"
+uriColl="file://$WORK/collide"
+uriCA="file://$WORK/collide/consumer_ambiguous.rb"
+{
+  msg "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"rootUri\":\"$uriColl\",\"capabilities\":{}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"$uriCA\",\"languageId\":\"ruby\",\"version\":1,\"text\":\"\"}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file://$WORK/collide/all_four.rb\",\"languageId\":\"ruby\",\"version\":1,\"text\":\"\"}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"name\"}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"$uriCA\"},\"position\":{\"line\":7,\"character\":10}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"$uriCA\"},\"position\":{\"line\":7,\"character\":10}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file://$WORK/collide/all_four.rb\"},\"position\":{\"line\":9,\"character\":8}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\"}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"
+} > "$WORK/d18"
+"$BIN" --lsp < "$WORK/d18" > "$WORK/raw18" 2>/dev/null
+decodeFrames "$WORK/raw18" > "$WORK/r18" 2>/dev/null
+head40="$( grep '"id":40,' "$WORK/r18" )"; head41="$( grep '"id":41,' "$WORK/r18" | head -c 260 )"; R42="$( grep '"id":42,' "$WORK/r18" )"; R43="$( grep '"id":43,' "$WORK/r18" )"
+p_m="$( printf '%s' "$head40" | grep -bo 'all_four.rb","range":{"start":{"line":9' | cut -d: -f1 | head -1 )"
+p_v="$( printf '%s' "$head40" | grep -bo 'all_four.rb","range":{"start":{"line":7' | cut -d: -f1 | head -1 )"
+p_c="$( printf '%s' "$head40" | grep -bo 'schema.rb","range":{"start":{"line":14' | cut -d: -f1 | head -1 )"
+p_y="$( printf '%s' "$head40" | grep -bo 'spike_names.yml","range":{"start":{"line":3' | cut -d: -f1 | head -1 )"
+[ -n "$p_m" ] && [ -n "$p_v" ] && [ -n "$p_c" ] && [ -n "$p_y" ] \
+    && [ "$p_m" -lt "$p_v" ] && [ "$p_v" -lt "$p_c" ] && [ "$p_c" -lt "$p_y" ] \
+    && printf '%s' "$head41" | grep -q '"line":9' \
+    && printf '%s' "$R43" | grep -q '\*\*method\*\* `AllFour::name`' \
+    && ok "(18) picker order: Method before Var before column-Section before yaml-Section on ws/symbol, def-front and hover-front" \
+    || { no "(18) tower order wrong: m=$p_m v=$p_v c=$p_c y=$p_y"; printf '%s\n' "$head40" | head -c 400; printf '%s\n' "$head41" | head -c 240; }
+
+# ── (19) the ONE multi-def disclosure sentence, hover + definition logMessage, absent on single-def ───
+printf '%s' "$R42" | grep -q '19 definitions for .name. — counts are floors; the resolver splits over them' \
+    && ok "(19) hover discloses the def count + split sentence on the colliding name" \
+    || { no "(19) hover disclosure missing"; printf '%s\n' "$R42" | head -c 400; }
+n19="$( grep -c 'window/logMessage.*19 definitions for .name. — counts are floors; the resolver splits over them' "$WORK/r18" )"
+l41="$( grep -n '"id":41,' "$WORK/r18" | cut -d: -f1 )"; l19="$( grep -n 'window/logMessage.*19 definitions' "$WORK/r18" | head -1 | cut -d: -f1 )"
+[ "$n19" = 2 ] && [ -n "$l19" ] && [ -n "$l41" ] && [ "$l19" -lt "$l41" ] \
+    && ok "(19) definition answers carry ONE window/logMessage disclosure AHEAD of each answer (2 dialogs)" \
+    || { no "(19) definition logMessage wrong: n=$n19 noticeLine=$l19 respLine=$l41"; }
+printf '%s' "$( R 5 )" | grep -q 'definitions for .scale.' && no "(19) single-def name carries a multi-def disclosure" || ok "(19) scale (single def) carries no disclosure"
+
+# ── (20) Used-at parity: hover answers every CLI --uses call row for the colliding name ────────────────
+UR="$( cd "$WORK/collide" && "$BIN" --uses=name . 2>/dev/null | grep -oE '<u role="call" p="[^"]+"' | sed 's/.*p="//; s/"$//' | sort -u )"
+miss=""
+for row in $UR; do
+    site="${row%:*}"; ln="${row##*:}"
+    printf '%s' "$R42" | grep -q "$site#L$ln" || miss="$miss $row"
+done
+[ -n "$UR" ] && [ -z "$miss" ] && ok "(20) Used-at parity: every CLI --uses call row appears as a hover link ($( printf '%s\n' "$UR" | wc -l | tr -d ' ' ) rows)" \
+             || { no "(20) parity missing rows:$miss (rows seen: $( echo $UR | tr ' ' ',' ))"; }
+
+# ── (21) C/C++ decl/def no-regression: the bodyful def front-picks over the lower-id header decl ──────
+mkdir -p "$WORK/cppdd"
+cat > "$WORK/cppdd/a.h" <<'EOF'
+// decl/def fixture
+int quad( int f );
+EOF
+cat > "$WORK/cppdd/a.cpp" <<'EOF'
+// the def carries the body; the header decl above carries the lower id
+int quad( int f )
+{
+    return f * 4;
+}
+
+int use_quad()
+{
+    return quad( 2 );
+}
+EOF
+uriCpp="file://$WORK/cppdd"
+{
+  msg "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"rootUri\":\"$uriCpp\",\"capabilities\":{}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file://$WORK/cppdd/a.cpp\",\"languageId\":\"cpp\",\"version\":1,\"text\":\"\"}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file://$WORK/cppdd/a.cpp\"},\"position\":{\"line\":8,\"character\":11}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\"}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"
+} > "$WORK/d21"
+"$BIN" --lsp < "$WORK/d21" > "$WORK/raw21" 2>/dev/null
+decodeFrames "$WORK/raw21" > "$WORK/r21" 2>/dev/null
+head50="$( grep '"id":50,' "$WORK/r21" | head -c 200 )"
+printf '%s' "$head50" | grep -q '"uri":"file://.*a\.cpp","range":{"start":{"line":1' \
+    && ok "(21) decl/def refinement composes with the sort: the bodyful .cpp def fronts the lower-id header decl" \
+    || { no "(21) decl front-picked the answer"; printf '%s\n' "$head50"; }
+
+# ── (22) determinism x2 on the collision dialog (house pattern) ───────────────────────────────────────
+"$BIN" --lsp < "$WORK/d18" > "$WORK/raw22a" 2>/dev/null
+"$BIN" --lsp < "$WORK/d18" > "$WORK/raw22b" 2>/dev/null
+cmp -s "$WORK/raw22a" "$WORK/raw22b" && [ -s "$WORK/raw22a" ] \
+    && ok "(22) collision dialog byte-identical across two runs" \
+    || { no "(22) collision dialogs differ"; ls -l "$WORK/raw22a" "$WORK/raw22b"; }
+
 [ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
 exit $fail
