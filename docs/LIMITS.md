@@ -26,10 +26,10 @@ calls, so it refused fast linear answers and still bounded nothing inside one ca
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 253 | 98 | 149 | **104** |
+| 270 | 105 | 160 | **110** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 253 + 7 is the 260 constants this generator parses out of `src/`.
+are not counted as caps, and 270 + 7 is the 277 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -47,8 +47,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **139 of 253 caps are classified
-(49 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 114 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **140 of 270 caps are classified
+(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 130 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -98,7 +98,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 98 files that declare a cap — the 253 caps counted above, and no parameter.
+One table for each of the 105 files that declare a cap — the 270 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -140,6 +140,14 @@ Discloses: **none**
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kCacheQueryBudget` | `100000` | — | — |
+
+### `src/callhierarchy.h`
+
+Discloses: `capped`, `closures_capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kClosureRows` | `8` | — | rows per block; count= is the closure's distinct callees, capped="1" past it |
 
 ### `src/cli.h`
 
@@ -212,6 +220,23 @@ Discloses: `capped`, `reads_capped`
 | `kMaxAliasDepth` | `8` | INDEXING | — |
 | `kMaxEnvNameLen` | `128` | BOUNDARY | longest plausible environment-variable name |
 | `kMaxSitesShown` | `8` | OUTPUT | <read> sites per gate; a DEFAULT, raisable by --limit=N (effectiveRowCap), lifted by --detail |
+
+### `src/declinedsites.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kDeclinedSiteCandCap` | `8` | — | cand= entries per row on --legend=full; cand_more= counts the rest |
+| `kDeclinedSiteCap` | `16` | — | <dc> rows per answer by default; --limit=N raises it (dc_next= does) |
+
+### `src/defattrib.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kDefTableCap` | `16` | — | — |
 
 ### `src/didyoumean.h`
 
@@ -333,6 +358,23 @@ Discloses: `capped`, `hosts_capped`
 | `kMaxFlipRows` | `25` | OUTPUT | per emitted list; a DEFAULT --limit=N raises and --detail lifts |
 | `kMaxNearMisses` | `5` | OUTPUT | "did you mean" suggestions on an unknown gate name; --limit=N raises it |
 
+### `src/forfold.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kForBodyFoldBudgetBytes` | `4000` | — | — |
+| `kForBodyFoldRows` | `3` | — | — |
+
+### `src/forowner.h`
+
+Discloses: `capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kForBodySlotMaxBytes` | `6000` | — | — |
+
 ### `src/forpage.h`
 
 Discloses: `capped`
@@ -366,17 +408,26 @@ Discloses: **none**
 
 ### `src/graph.h`
 
-Discloses: `importers_capped`
+Discloses: `files_capped`, `importers_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kChaConeCap` | `4096` | INDEXING | per-walk discovery cap, unchanged from the per-call walk |
 | `kImpactFileRollupCap` | `20` | — | — |
+| `kImpactTypeRollupBandMax` | `200` | — | — |
 | `kMaxEdges` | `256` | — | total emitted edge cap |
 | `kMaxNodes` | `96` | — | total emitted node cap (§3 size caps) |
 | `kMaxRadius` | `12` | — | — |
 | `kMaxTerminals` | `16` | — | >16 is the CALLER's usage error; the core CLAMPS (never ASSUMEs on hostile input) |
 | `kMemberSpellingsShown` | `6` | OUTPUT | — |
+
+### `src/grepcarrier.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kGrepCarrierShown` | `3` | — | reads_at= sites and vals= entries printed per row (reads=/vals_total= count all) |
 
 ### `src/handlershape.h`
 
@@ -733,6 +784,7 @@ Discloses: `capped`, `count_capped`, `findings_capped`, `hits_capped`, `importer
 | --- | --- | --- | --- |
 | `kCallHierarchyRowCap` | `40` | — | — |
 | `kCallSitesPerRowCap` | `16` | — | — |
+| `kCallersBandMaxBytes` | `16000` | — | callers rows served whole while their estimated bytes fit (tmux 121 rows = 10.8 KB) |
 | `kCochangePartnerCap` | `30` | — | — |
 | `kExternalSurfaceRowCap` | `100` | — | names, by ref count (≈ 5.2 KB on this repo) |
 | `kImportReachRowCap` | `40` | — | — |
@@ -753,10 +805,13 @@ Discloses: **none**
 
 ### `src/pathgaps.h`
 
-Discloses: `gap_syms_capped`
+Discloses: `gap_syms_capped`, `rows_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
+| `kBridgeMaxHops` | `8` | — | a longer chain is no answer a reader would follow: none is printed |
+| `kNearSinkDepth` | `2` | — | proven caller hops back from to= (1 = a direct caller) |
+| `kNearSinkRows` | `4` | — | <ns> rows printed; rows= counts them all, rows_capped="1" says so |
 | `kPathGapRows` | `3` | — | <gap> rows printed; gap_syms= counts them all, gap_syms_capped="1" says so |
 
 ### `src/pattern.h`
@@ -893,7 +948,7 @@ Discloses: **none**
 
 ### `src/serialize.h`
 
-Discloses: `capped`, `calls_capped`, `entries_capped`, `files_capped`, `importers_capped`, `inc_capped`, `names_capped`, `sibs_capped`
+Discloses: `capped`, `calls_capped`, `entries_capped`, `files_capped`, `importers_capped`, `inc_capped`, `names_capped`, `sibs_capped`, `type_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
@@ -902,9 +957,11 @@ Discloses: `capped`, `calls_capped`, `entries_capped`, `files_capped`, `importer
 | `kForAutoBodyBudgetBytes` | `6000` | — | — |
 | `kForCapTailSigBytes` | `96` | — | — |
 | `kForCompactSurfaceBudgetBytes` | `1000` | — | — |
-| `kForFileTailShownCap` | `24` | — | — |
+| `kForFileTailPageRows` | `40` | — | FOLD C: page 0 of the file page (forpage.h kForPageRowsDefault) |
+| `kForFileTailShownCap` | `24` | — | the rank rows (deep-tail d2): files outside the shown head |
 | `kForLensDefaultTopN` | `40` | — | — |
 | `kForPayloadBudgetBytes` | `7500` | — | — |
+| `kHeadRoundRobinRows` | `8` | — | — |
 | `kLegoClosureRowCap` | `200` | OUTPUT | — |
 | `kMaxExpandIncludes` | `24` | — | inc= cap |
 | `kMaxExpandSibs` | `100` | — | sibs= cap — a BLOW-UP GUARD, set above the tail, not a trim of the |
@@ -981,12 +1038,21 @@ Discloses: `name_ladder_capped`
 | `kTestHopBasenameRowCap` | `3` | OUTPUT | — |
 | `kTestHopCalleeRowCap` | `5` | OUTPUT | — |
 
+### `src/typeuse.h`
+
+Discloses: `type_capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kTypeMentionMatchBudget` | `50000` | INDEXING | per pattern; no flag raises it — type_capped="1" marks the floor |
+
 ### `src/valuerefs.h`
 
 Discloses: `capped`, `value_refs_depth_capped`
 
 | constant | value | class | note |
 | --- | --- | --- | --- |
+| `kPatternRowCap` | `8` | — | — |
 | `kValueRefRowCap` | `64` | — | — |
 
 ### `src/verbs_change.h`

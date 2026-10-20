@@ -25,6 +25,7 @@
 
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace rw
@@ -167,9 +168,9 @@ inline void emitColumnarDepthColumn( std::FILE* out, const std::vector<NodeId>& 
     rw::emitTo( out, "{}", column );
 }
 
-// FE-B: the optional dense `<via>` column — 1 where the row's edge is name-only (via="name"), one value per row in row
-// order. Present only when some row carries it, so an answer with no hedged row pays 0 bytes; columnarViaField is its
-// fields= suffix.
+// The optional dense `<via>` column — 1 where the row's edge is name-only (via="name"), 2 where it is a direct markdown
+// link (via="link"), one value per row in row order. Present only when some row carries it, so an answer with no such
+// row pays 0 bytes; columnarViaField is its fields= suffix.
 inline bool columnarViaPresent( const std::vector<char>* viaName ) noexcept
 {
     return viaName != nullptr && std::any_of( viaName->begin(), viaName->end(), []( char c ) { return c != 0; } );
@@ -177,6 +178,20 @@ inline bool columnarViaPresent( const std::vector<char>* viaName ) noexcept
 inline std::string_view columnarViaField( const std::vector<char>* viaName ) noexcept
 {
     return columnarViaPresent( viaName ) ? ",via" : "";
+}
+inline void emitColumnarViaColumn( std::FILE* out, const std::vector<char>& via, std::size_t rowCount )
+{
+    rw::emitTo( out, "<via>" );
+    for( std::size_t i = 0; i < rowCount; ++i )
+    {
+        if( i )
+        {
+            std::fputc( ',', out );
+        }
+        const unsigned char v = ( i < via.size() ) ? static_cast<unsigned char>( via[ i ] ) : 0;
+        std::fputc( v <= 9 ? char( '0' + v ) : '0', out );
+    }
+    rw::emitTo( out, "</via>" );
 }
 
 // CALLSITE-AT (2026-10-09): the optional `<sites_at>` column — each row's call sites (editcheck.h rowCallSites), its tokens joined
@@ -230,11 +245,19 @@ inline void emitColumnarAtColumns( std::FILE* out, const std::vector<std::vector
 
 // The per-row extras a caller may add after the core columns, in ONE argument so the row emitter's signature does not grow per
 // column: FE-B's via flags and CALLSITE-AT's sites (tokens + parallel totals). Value-initialized = none of them.
+// attrib-multidef (defattrib.h): `ofDef` is each row's of_def tokens (space-separated, a multi-group answer only), `defRows` the
+// <def> table printed before <cols>, `splitArm` the dense 0/1 `<split>` column (a one-group answer's prov="split" rows, present
+// only when some row carries it — columnarViaPresent's rule).
 struct ColumnarRowExtras
 {
     const std::vector<char>*                     viaName;
     const std::vector<std::vector<std::string>>* atTokens;
     const std::vector<std::size_t>*              atTotals;
+    const std::vector<std::string>*              ofDef    = nullptr;
+    const std::string*                           defRows  = nullptr;
+    const std::vector<char>*                     splitArm = nullptr;
+    const std::string*                           tailRows = nullptr;   // XML rows kept verbatim after </cols> (lane declined-sites: <dc>)
+    const std::vector<char>*                     byType   = nullptr;   // L7 --impact: the dense 0/1 `<by_type>` column (reached only through a type mention), present-only
 };
 inline std::string columnarExtraFields( const ColumnarRowExtras& extras )
 {
@@ -243,7 +266,22 @@ inline std::string columnarExtraFields( const ColumnarRowExtras& extras )
     {
         fields += columnarAtCut( *extras.atTokens, *extras.atTotals ) ? ",sites_at,sites_total" : ",sites_at";
     }
+    fields += extras.ofDef != nullptr ? ",of_def" : "";
+    fields += columnarViaPresent( extras.splitArm ) ? ",split" : "";
+    fields += columnarViaPresent( extras.byType ) ? ",by_type" : "";
     return fields;
+}
+// the of_def column: each row's tokens, comma-separated rows (a token holds no comma)
+inline void emitColumnarOfDefColumn( std::FILE* out, const std::vector<std::string>& ofDef )
+{
+    std::string column = "<of_def>";
+    for( std::size_t i = 0; i < ofDef.size(); ++i )
+    {
+        column += i ? "," : "";
+        column += ofDef[i];
+    }
+    column += "</of_def>";
+    rw::emitTo( out, "{}", column );
 }
 
 // The optional columns a caller asked for, and the fields= suffix naming them, in ONE place: emitColumnarSymbolRows
@@ -267,11 +305,23 @@ inline void emitColumnarOptionalColumns( std::FILE* out, const IngestResult& ing
     }
     if( columnarViaPresent( viaName ) )
     {
-        emitColumnarFlagColumn( out, "via", rows.size(), [ & ]( std::size_t i ) { return i < viaName->size() && ( *viaName )[ i ] != 0; } );
+        emitColumnarViaColumn( out, *viaName, rows.size() );
     }
     if( extras.atTokens != nullptr && extras.atTotals != nullptr )
     {
         emitColumnarAtColumns( out, *extras.atTokens, *extras.atTotals );
+    }
+    if( extras.ofDef != nullptr )
+    {
+        emitColumnarOfDefColumn( out, *extras.ofDef );
+    }
+    if( columnarViaPresent( extras.splitArm ) )
+    {
+        emitColumnarFlagColumn( out, "split", rows.size(), [ & ]( std::size_t i ) { return i < extras.splitArm->size() && ( *extras.splitArm )[ i ] != 0; } );
+    }
+    if( columnarViaPresent( extras.byType ) )
+    {
+        emitColumnarFlagColumn( out, "by_type", rows.size(), [ & ]( std::size_t i ) { return i < extras.byType->size() && ( *extras.byType )[ i ] != 0; } );
     }
 }
 
@@ -307,6 +357,10 @@ inline void emitColumnarSymbolRows( std::FILE* out, const IngestResult& ing,
     std::fputs( kColumnarLegend, out );   // §B1.5: once per output, before the element it describes
     rw::emitTo( out, "<{} {} format=\"columnar\">", wrapperTag, wrapperAttrs.c_str() );
     emitPathTable( out, ing, uniqueFiles, esc, rootPrefix );
+    if( extras.defRows != nullptr )
+    {
+        rw::emitRaw( out, extras.defRows->c_str() );   // attrib-multidef: the <def> table the of_def column's ix= name
+    }
     rw::emitTo( out, "<cols n=\"{}\" fields=\"path,name,line,kind{}{}\">", rows.size(), columnarOptionalFields( testReach != nullptr, depth != nullptr ),
                 columnarExtraFields( extras ) );
 
@@ -359,7 +413,7 @@ inline void emitColumnarSymbolRows( std::FILE* out, const IngestResult& ing,
     // A6 / 0.6.5 / FE-B: each present only when the caller passed it — see the wrapper banner and emitColumnarOptionalColumns.
     emitColumnarOptionalColumns( out, ing, rows, testReach, depth, extras );
 
-    rw::emitTo( out, "</cols></{}>", wrapperTag );
+    rw::emitTo( out, "</cols>{}</{}>", extras.tailRows != nullptr ? std::string_view( *extras.tailRows ) : std::string_view(), wrapperTag );
 }
 
 // COLUMNAR form of the --uses verb: use-site rows carry (fileId, line, role, enclosing-symbol name `in`)

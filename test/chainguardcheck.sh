@@ -214,7 +214,8 @@ GO2="$( "$BIN" "$FIX2" --callees=go --no-cache 2>/dev/null | grep -o '<callees.*
 # FE-B (test/receiverevidencecheck.sh) reads TS field annotations: `cfg: TCfg` and `opts: TOpts` type the chain, so
 # TApp.go() RESOLVES to TOpts.enable and TDecoy.enable is no candidate (the split held while TS receivers were
 # uncaptured). The Python chain above is still split: a Python attribute annotation is not read (disclosed).
-( printf '%s\n' "$GO2" | grep -q 't.ts:1" *$' ) && ! ( printf '%s\n' "$GO2" | grep -q 't.ts:2"' ) \
+# attrib-multidef: go names two definitions (PApp.go, TApp.go), so each row also says which one it belongs to (of_def=)
+( printf '%s\n' "$GO2" | grep -qE 't.ts:1"( of_def="[^"]*")? *$' ) && ! ( printf '%s\n' "$GO2" | grep -q 't.ts:2"' ) \
     && ok "(j-ts) TApp.go() this.cfg.opts.enable() resolves to TOpts.enable alone (stated field types — FE-B)" \
     || no "(j-ts) TApp.go() should resolve to TOpts.enable alone: $( printf '%s' "$GO2" | tr '\n' ' ' )"
 AMB2="$( printf '%s\n' "$MAP2" | grep -o 'ambiguous=[0-9]*' | head -1 )"

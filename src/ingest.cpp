@@ -22,6 +22,7 @@
 #include "infra/ownedfile.h"   // rw::OwnedFile — readFile/readFilePrefix own their stream, so no return path skips the close
 #include "infra/statclock.h"   // rw::saturatingNanoseconds — statSizeTimes' stat timestamps without signed overflow past 2262
 #include "lexindex.h"          // B0.1/B0.2: shared subtoken state machine + per-def lexical statistics builder
+#include "langfacts.h"        // langFacts(l): the per-language facts the ingest sections read instead of a Lang:: compare
 #include "didyoumean.h"        // octocode F3: boundedEditDistance/nearestNameByEditDistance — the ONE near-miss
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 
@@ -191,9 +192,11 @@ extern "C"
 #include "handlershape.h"   // --quality-delta's handler/placeholder shapes — AstWalk::HandlerShapes rides the shared file walk (reads nodeTextOf above)
 #include "ingest_relations.h"
 #include "ingest_jsimports.h"
+#include "infra/mdslug.h"      // mdSlugOf — shared with graph.h (the cross-file link bind)
 #include "ingest_docs.h"
 #include "ingest_names.h"
 #include "ingest_binds.h"
+#include "ingest_inert.h"
 #include "ingest_elixir.h"
 #include "ingest_clojure.h"
 #include "ingest_ruby.h"      // Ruby Rails/DSL capture lane (schema columns, Jbuilder typing, factories, class-side DSL walks) - carved verbatim 2026-10-12

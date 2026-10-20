@@ -274,7 +274,7 @@ echo "=== (D) over_ceiling= is 1 exactly when est_tokens exceeds a ceiling named
 # named on that root, and whether it says over_ceiling. Comments are stripped: a legend DEFINES these names
 # and a definition is not a measurement. Prints nothing when the document names no ceiling at all.
 root_nums() {
-    python3 - "$1" <<'PY_EOF'
+    python3 - "$1" "${2:-}" <<'PY_EOF'
 import re, sys
 t = re.sub( r"<!--.*?-->", "", open( sys.argv[1], encoding = "utf-8", errors = "replace" ).read(), flags = re.S )
 # XML dialects put every root attribute in the first start-tag; --recall's is a PROSE header line, and its
@@ -289,24 +289,40 @@ def num( name ):
     g = re.search( r'\b%s="?(\d+)"?' % name, root )
     return int( g.group( 1 ) ) if g else None
 est   = num( "est_tokens" )
-ceils = [ c for c in ( num( "max_tokens" ), num( "budget_tokens" ), num( "budget" ) ) if c ]
+# forbudget-soft: on a SOFT lens (argv[2] == "soft": an explicit budget on --for / --pack-task / --from-trace) budget_tokens= is a
+# target, not a ceiling — only max_tokens= is one there. The target must still be NAMED (arm (B)'s echo): a missing one is a miss.
+soft  = len( sys.argv ) > 2 and sys.argv[ 2 ] == "soft"
+if soft and num( "budget_tokens" ) is None:
+    print( "NOBUDGET" ); raise SystemExit
+ceils = [ c for c in ( num( "max_tokens" ), None if soft else num( "budget_tokens" ), None if soft else num( "budget" ) ) if c ]
+if soft and est is not None and not ceils:
+    print( "%d 0 %d" % ( est, 1 if re.search( r'\bover_ceiling="?1"?', root ) else 0 ) ); raise SystemExit
 over  = 1 if re.search( r'\bover_ceiling="?1"?', root ) else 0
 if est is None or not ceils:
     raise SystemExit
 print( "%d %d %d" % ( est, min( ceils ), over ) )
 PY_EOF
 }
-label_probe() {   # label_probe LABEL ARGS...
+label_probe() {   # label_probe LABEL ARGS...   (LABEL starting "soft:" = a soft-target lens, see root_nums)
     local label="$1"; shift
+    local mode=""
+    case "$label" in soft:*) mode="soft"; label="${label#soft:}";; esac
     "$BIN" . "$@" >"$TMP/lab.out" 2>/dev/null
-    local nums; nums="$( root_nums "$TMP/lab.out" )"
-    if [ -z "$nums" ]; then
-        no "(D) $label: the root names no ceiling and no price — arm (B)'s subject vanished, fix this probe"
+    local nums; nums="$( root_nums "$TMP/lab.out" $mode )"
+    if [ -z "$nums" ] || [ "$nums" = "NOBUDGET" ]; then
+        no "(D) $label: the root names no ceiling/target and no price — arm (B)'s subject vanished, fix this probe"
         return
     fi
     # shellcheck disable=SC2086
     set -- $nums
     local est="$1" ceil="$2" over="$3"
+    if [ "$mode" = soft ] && [ "$ceil" = 0 ]; then
+        # forbudget-soft (rule 4, the replacement for the by-design break): a soft target is never "over" — no label,
+        # whatever the price; budget_tokens= still names it (checked in root_nums)
+        if [ "$over" = 0 ]; then ok "(D) $label: soft target, est=$est — no over_ceiling (budget_tokens= names a target, not a ceiling)"
+        else no "(D) $label: over_ceiling=\"1\" on a soft target (est=$est)"; fi
+        return
+    fi
     if [ "$est" -gt "$ceil" ] && [ "$over" = 0 ]; then
         no "(D) $label: root prices $est tokens against a ceiling of $ceil and says NOTHING (over_ceiling absent)"
     elif [ "$est" -le "$ceil" ] && [ "$over" = 1 ]; then
@@ -317,13 +333,15 @@ label_probe() {   # label_probe LABEL ARGS...
 }
 # Every budgeted verb, through BOTH front doors where it has two, at a ceiling that BINDS and one that does
 # not — the pair is the point: a verb that labels everything passes the first half and fails the second.
-label_probe "--for --token-budget=600"                  '--for=pagerank power iteration' --token-budget=600
-label_probe "--for --token-budget=1600"                 '--for=pagerank power iteration' --token-budget=1600
-label_probe "--for --token-budget=8000"                 '--for=pagerank power iteration' --token-budget=8000
-label_probe "--pack-task --token-budget=600"            '--pack-task=pagerank power iteration' --token-budget=600
-label_probe "--pack-task --token-budget=8000"           '--pack-task=pagerank power iteration' --token-budget=8000
-label_probe "--from-trace --token-budget=200"           "--from-trace=$TMP/trace.txt" --token-budget=200
-label_probe "--from-trace --token-budget=8000"          "--from-trace=$TMP/trace.txt" --token-budget=8000
+# forbudget-soft (owner decision 2026-10-14): the task lenses' explicit --token-budget is a SOFT target ("soft:" probes:
+# never labelled, still named); the family law above holds for every hard ceiling (max_tokens=, --handoff, --recall).
+label_probe "soft:--for --token-budget=600"                  '--for=pagerank power iteration' --token-budget=600
+label_probe "soft:--for --token-budget=1600"                 '--for=pagerank power iteration' --token-budget=1600
+label_probe "soft:--for --token-budget=8000"                 '--for=pagerank power iteration' --token-budget=8000
+label_probe "soft:--pack-task --token-budget=600"            '--pack-task=pagerank power iteration' --token-budget=600
+label_probe "soft:--pack-task --token-budget=8000"           '--pack-task=pagerank power iteration' --token-budget=8000
+label_probe "soft:--from-trace --token-budget=200"           "--from-trace=$TMP/trace.txt" --token-budget=200
+label_probe "soft:--from-trace --token-budget=8000"          "--from-trace=$TMP/trace.txt" --token-budget=8000
 label_probe "--from-trace --max-tokens=200"             "--from-trace=$TMP/trace.txt" --max-tokens=200
 label_probe "--from-trace --max-tokens=8000"            "--from-trace=$TMP/trace.txt" --max-tokens=8000
 label_probe "--handoff --token-budget=100"              --handoff --token-budget=100

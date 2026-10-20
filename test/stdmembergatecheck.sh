@@ -48,7 +48,16 @@
 #       no candidate, the container's own member, an in-tree template's own operator[], a local hiding the field; two element accesses, an iterator's ->second and a range-for `auto` are
 #       the stated floor (declined)
 #   (D) controls: a name outside the table (`grow`) keeps the ladder; a bare `size( b )` binds the free function; a C
-#       function-pointer call (C has no member functions) and the Rust by-name split (stated scope) are unchanged
+#       function-pointer call (C has no member functions) and a Go call (Go's row is EMPTY) are unchanged
+#   (R) the Rust row (rsgate/): `v.push()` / `v.iter()` on Vec parameters and a parameter of an undefined type are declined
+#       with their <stdm> line; `self.iter()` inside the defining impl stays proven; a name outside the table and a name with no
+#       in-tree definition are untouched, a qualified `Stack::push( s, 1 )` keeps its edge; STATED FLOOR until Rust records receiver types: a parameter, local or field written
+#       as the in-tree Stack / Book, or a generic bounded by an in-tree trait, is declined too (counted, never silently dropped)
+#       FLIP WHEN RUST RECORDS RECEIVER TYPES (map L3, rust-receivers): these five (R) STATED FLOOR arms pin today's decline
+#       and must turn into "keeps the edge / the via=name hedge" in the lane that types them — stack_param (parameter),
+#       stack_local (local), rsgate/lib.rs:add (field self.inner), book_iter (parameter of the in-tree Book), generic_bound
+#       (P: Pushable); with them the (R) --callers counts (rsgate/lib.rs:push declined 6, Book::iter declined 2) and
+#       attribmultidefcheck's f_rs_iter twin. vec_param / vec_iter / std_vec stay declined (their receivers are std types).
 #   (E) the callers side: Vec::push_back keeps exactly its typed callers and hedges and counts the ten declined calls; the one-def
 #       Solo::append keeps soloTyped and counts stdAppend; Pool::clear keeps poolTyped and counts two
 #   (F) disclosure surfaces: the map header's declined= equals the census's declined bucket, the full map legend, the
@@ -256,14 +265,33 @@ check "(X) STATED FLOOR: m.find( \"a\" )->second.empty() — an iterator (a call
 check "(X) STATED FLOOR: for( auto& e : v ) e.empty() — a range-for auto, declined"    callees elem/use.cpp:rangeForAuto '' 1 'empty:1'
 
 # ── (D) controls ──────────────────────────────────────────────────────────────────────────────────────────────
-echo "=== (D) controls: outside the table, bare calls, C and Rust keep the ladder ==="
+echo "=== (D) controls: outside the table, bare calls, C and Go keep the ladder ==="
 check "(D) v.grow() — grow is no standard member name, the ladder is unchanged" \
                                                                callees notInTable          'lib/vec.h:14:grow~' '' ''
 check "(D) size( b ) — a bare call binds the free size, never gated" \
                                                                callees bareFree            'lib/vec.h:34:size' '' ''
 check "(D) C o->size( o ) — C has no member functions, no gate" callees viaPointer         'c/ops.c:8:size~' '' ''
-check "(D) Rust v.push() — stated scope, the by-name split is unchanged" \
-                                                               callees std_vec             'rs/lib.rs:3:push~ rs/lib.rs:7:push~' '' ''
+# (D) used to pin Rust's by-name split here as the gate's stated scope; the Rust row (arm R) replaced that scope by design.
+check "(D) Go f().Len() — Go's row is EMPTY (Len/Write/String are in-tree interface methods), the ladder is unchanged" \
+                                                               callees lenOfResult         'gogate/buf.go:6:Len~' '' ''
+
+# ── (R) the Rust row ──────────────────────────────────────────────────────────────────────────────────────────
+echo "=== (R) Rust: a name-only call named like a std collection/string/Option member is declined, self-typed calls stay ==="
+check "(R) v.push() on a &mut Vec<i32> parameter — declined, <stdm push>" callees vec_param '' 1 'push:1'
+check "(R) x.push() on a parameter of a type the tree does not define — declined" callees unknown_param '' 1 'push:1'
+check "(R) v.iter() on a &Vec<i32> parameter — declined, <stdm iter>" callees vec_iter '' 1 'iter:1'
+check "(R) self.iter() inside Book — proven (FE-B self), kept unhedged" callees Book::first 'rsgate/lib.rs:16:iter' '' ''
+check "(R) s.frobnicate() — no std name, the ladder is unchanged" callees not_in_table 'rsgate/lib.rs:7:frobnicate~' '' ''
+check "(R) m.insert() with no in-tree insert in reach — nothing to decline, nothing counted" callees map_insert '' '' ''
+check "(R) STATED FLOOR: s.push() on a &mut Stack<i32> parameter — Rust records no parameter type yet, declined" callees stack_param '' 1 'push:1'
+check "(R) STATED FLOOR: let s: Stack<i32> = Stack { .. }; s.push() — no local type either, even written, declined" callees stack_local '' 1 'push:1'
+check "(R) STATED FLOOR: self.inner.push() with inner: Stack<i32> — no Rust field type is recorded, declined" callees rsgate/lib.rs:add '' 1 'push:1'
+check "(R) STATED FLOOR: book.iter() on a &Book parameter — declined though Book defines iter" callees book_iter '' 1 'iter:1'
+check "(R) old scope fixture: let mut v = Vec::new(); v.push() — declined" callees std_vec '' 1 'push:1'
+check "(R) near-miss: Stack::push( s, 1 ) — a qualified call, never gated, keeps its edge" callees ufcs 'rsgate/lib.rs:5:push' '' ''
+check "(R) STATED FLOOR: p.push() on a generic P: Pushable (an in-tree trait) — declined" callees generic_bound '' 1 'push:1'
+check "(R) --callers=rsgate/lib.rs:push keeps the qualified caller and counts the six declined calls" callers rsgate/lib.rs:push 'rsgate/lib.rs:28:ufcs' 6 ''
+check "(R) --callers=Book::iter keeps the proven self call and counts the two declined ones" callers Book::iter 'rsgate/lib.rs:17:first' 2 ''
 
 # ── (E) the callers side ──────────────────────────────────────────────────────────────────────────────────────
 echo "=== (E) callers: the typed callers stay, the declined ones are counted ==="
@@ -278,17 +306,25 @@ echo "=== (F) the header, the legends, the dialects ==="
 S="$( stats "$TMP/map.xml" )"; hdrd="$( gauge "$S" declined )"; censd="$( disp_in "$TMP/c.tsv" declined )"
 if [ -n "$hdrd" ] && [ "$hdrd" -ge 11 ] && [ "$hdrd" = "${censd:-x}" ]; then ok "(F) header declined=$hdrd (>= the 11 gated calls) equals the census's declined bucket"
 else no "(F) header declined=\"$hdrd\" census declined=\"$censd\" — want >= 11 and equal"; fi
-grep -q 'hdr:declined=also-counts-C++-calls-named-like-a-std-container' "$TMP/map.xml" \
-    && ok "(F) the full map legend carries the C++ standard-member declined= clause" || no "(F) the full map legend lacks the C++ clause"
+grep -q 'hdr:declined=also-counts-calls-named-like-a-standard-type-member-of-their-language' "$TMP/map.xml" \
+    && ok "(F) the full map legend carries the standard-member declined= clause" || no "(F) the full map legend lacks the standard-member clause"
 rw --callers=Vec::push_back --legend=full >"$TMP/cl.xml"
-grep -q 'It also counts a C++ call named like a member of a standard container' "$TMP/cl.xml" \
-    && ok "(F) the callers legend carries the declined_calls= C++ sentence" || no "(F) the callers legend lacks the C++ sentence"
+grep -q 'It also counts a call named like a standard-type member of its language' "$TMP/cl.xml" \
+    && ok "(F) the callers legend carries the declined_calls= standard-member sentence" || no "(F) the callers legend lacks the standard-member sentence"
 rw --callees=stdParam --legend=full >"$TMP/ce.xml"
 grep -q '<stdm n= calls=>: of declined_calls=' "$TMP/ce.xml" \
     && ok "(F) the full callees legend defines <stdm n= calls=>" || no "(F) the full callees legend does not define <stdm>"
 rw --callees=stdParam >"$TMP/cec.xml"
 grep -q 'stdm n= calls=: of declined_calls=' "$TMP/cec.xml" \
     && ok "(F) the compact callees legend defines stdm n= calls=" || no "(F) the compact callees legend does not define stdm"
+# every surface that defines the clause also states the Rust floor (checklist 3: what the claim does NOT mean)
+floor_missing=""
+grep -q 'Rust-records-no-receiver-type-yet' "$TMP/map.xml"                                            || floor_missing="$floor_missing map"
+grep -q 'a Rust receiver written as an in-tree type is declined too (Rust records no receiver type yet)' "$TMP/cl.xml" || floor_missing="$floor_missing callers"
+grep -q 'a Rust receiver written as an in-tree type is listed too (Rust records no receiver type yet)' "$TMP/ce.xml"   || floor_missing="$floor_missing callees"
+grep -q 'stdm n= calls=: [^>]*(Rust: one written as an in-tree type too, until Rust records receiver types)' "$TMP/cec.xml" || floor_missing="$floor_missing compact"
+[ -z "$floor_missing" ] && ok "(F) the map, callers, full callees and compact callees legends each state the Rust floor" \
+    || no "(F) the Rust floor is missing from:$floor_missing"
 rw --callees=typedLocal --legend=full >"$TMP/cen.xml"
 if [ -z "$( root_tag "$TMP/cen.xml" callees )" ]; then no "(F) --callees=typedLocal produced no <callees> root — the absence below would be vacuous"
 elif grep -q 'stdm' "$TMP/cen.xml"; then no "(F) a callees answer with no declined standard-member call mentions stdm"
@@ -328,12 +364,12 @@ R="$( root_tag "$TMP/sd.xml" safe-delete )"
     && ok "(G) --safe-delete=Shelf::empty: declined_calls=\"3\" (two gated, one tier-3), dead_code_candidate=\"0\"" || no "(G) --safe-delete root: $R"
 
 # ── (S) zero bytes elsewhere ──────────────────────────────────────────────────────────────────────────────────
-echo "=== (S) a tree the gate never declined in carries no C++ clause ==="
+echo "=== (S) a tree the gate never declined in carries no standard-member clause ==="
 BB="$ROOT/test/builtinbindfix"
 "$BIN" "$BB" --no-cache --legend=full >"$TMP/bbmap.xml" 2>/dev/null
 "$BIN" "$BB" --no-cache --legend=full --callers=py/pool.py:get >"$TMP/bbcl.xml" 2>/dev/null
-[ -s "$TMP/bbmap.xml" ] && [ -s "$TMP/bbcl.xml" ] && ! grep -q -e 'also-counts-C++' -e 'It also counts a C++ call named like' -e 'stdm' "$TMP/bbmap.xml" "$TMP/bbcl.xml" \
-    && ok "(S) builtinbindfix's map and callers legends carry no C++ standard-member clause" || no "(S) a C++ clause rides a tree with no C++ decline"
+[ -s "$TMP/bbmap.xml" ] && [ -s "$TMP/bbcl.xml" ] && ! grep -q -e 'also-counts-C++' -e 'also-counts-calls-named-like-a-standard-type-member' -e 'It also counts a C++ call named like' -e 'It also counts a call named like a standard-type member' -e 'stdm' "$TMP/bbmap.xml" "$TMP/bbcl.xml" \
+    && ok "(S) builtinbindfix's map and callers legends carry no standard-member clause" || no "(S) a standard-member clause rides a tree with no such decline"
 
 # ── (K) the predicates can fail ───────────────────────────────────────────────────────────────────────────────
 echo "=== (K) the predicates can fail ==="

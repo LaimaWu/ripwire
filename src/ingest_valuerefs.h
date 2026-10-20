@@ -66,6 +66,37 @@ inline constexpr std::size_t   kVrTextCap    = 96;    // a written slot / callee
 // truncateUtf8WithEllipsis's (that header is not reachable from the ingest side): "…" only when text was really cut —
 // a text of exactly kVrTextCap bytes is whole — and never inside a UTF-8 sequence (a lead byte without its
 // continuation bytes would reach into=/through= as an invalid character).
+// VALUE-PRESERVING OPERATORS (L4, train 28): a binary operator whose RESULT is one of its operands, so a function named
+// there lands in the slot the whole expression fills — `this.getPath = options.getPath ?? getPath` stores getPath.
+// One shared walk (transparent() below) reads this table, per family, as data:
+//   * leftLands: the LEFT operand can be the result. `f || g`, `f ?? g`, `f or g` yield f (a function is truthy and
+//     never nullish); `f && g`, `f and g` yield g, never f — a function on the left of && only decides, so it is no row.
+//   * the right operand always can.
+// Families with no row here, and why: C/C++ and Go `||` / `&&` yield a truth value (int or bool), never an operand, so
+// a function there is a test, not a stored value. The conditional `c ? f : g` (C, C++, JS/TS; Python `f if c else g`)
+// and parentheses are handled by transparent() for every family already. Value references are captured for the C, JS,
+// Python and Go families only (model.h kValueRefFamilyOfLang); Ruby, Java, C#, Swift, Rust, Bash have no
+// value-reference capture at all, so they have no operator to walk either. (Ruby `a || m` needs none: a bare `m` is a
+// call there and is already an edge; Ruby's function value is `method(:m)`, a different shape.)
+struct VrPassOp
+{
+    VrFam            fam;
+    std::string_view nodeKind;
+    std::string_view op;
+    bool             leftLands;
+};
+inline constexpr VrPassOp kVrPassOps[] = {
+    { VrFam::Js, "binary_expression", "??", true },
+    { VrFam::Js, "binary_expression", "||", true },
+    { VrFam::Js, "binary_expression", "&&", false },
+    { VrFam::Py, "boolean_operator",  "or", true },
+    { VrFam::Py, "boolean_operator",  "and", false },
+};
+// The JS logical ASSIGNMENTS (`x ??= f`, `x ||= f`, `x &&= f`) store the right operand into the left exactly as `=`
+// may: classify() reads them as an assignment. No other family has a value-preserving compound assignment
+// (C `x |= f` and Python `x |= f` are bitwise/set operators whose result is not f).
+inline constexpr std::string_view kVrJsLogicalAssignOps[] = { "\?\?=", "||=", "&&=" };   // escaped: unescaped, those three characters spell a trigraph
+
 inline std::string vrClean( std::string_view s )
 {
     std::string out;
@@ -107,6 +138,27 @@ inline void vrSortUnique( std::vector<std::string>& v )
     std::ranges::sort( v );
     v.erase( std::ranges::unique( v ).begin(), v.end() );
 }
+
+// IX-3 name-template dispatch: the dynamic-lookup FORMS per value-ref family, as data (one row per form; no Lang compare in
+// the walk). A Python row names a callee (`getattr( o, NAME )`, nameArg = the NAME position) or, dictGet, the attribute
+// `X.__dict__.get( NAME )` (callee = "__dict__"); a computedMember row arms `o[ NAME ]` (JS/TS). Ruby send/public_send and
+// PHP `$o->{…}` are not armed: neither language has a value-ref family yet (model.h kValueRefFamilyOfLang).
+struct VrPatternLookup
+{
+    VrFam            fam;
+    std::string_view callee;
+    std::uint8_t     nameArg        = 0;
+    bool             dictGet        = false;
+    bool             computedMember = false;
+};
+inline constexpr VrPatternLookup kVrPatternLookups[] = {
+    { VrFam::Py, "getattr", 1, false, false },
+    { VrFam::Py, "hasattr", 1, false, false },
+    { VrFam::Py, "__dict__", 0, true, false },
+    { VrFam::Js, "", 0, false, true },
+};
+// A template's literal side must hold this many identifier characters to be matched (`f"_{m}"` is too wide).
+inline constexpr std::size_t kVrPatternMinLiteral = 3;
 
 // The content of a string literal as written: prefix letters (b, f, r, u) and the quote pair stripped.
 inline std::string_view vrStringContent( std::string_view s ) noexcept
@@ -217,6 +269,10 @@ public:
         m_fSubscript   = ts_language_field_id_for_name( tl, "subscript", 9 );
         m_fDesignator  = ts_language_field_id_for_name( tl, "designator", 10 );
         m_fAlias       = ts_language_field_id_for_name( tl, "alias", 5 );
+        m_fArguments   = fieldIdFor( tl, NodeField::Arguments );
+        m_fSource      = ts_language_field_id_for_name( tl, "source", 6 );
+        m_fwd          = callForwardersOf( m_lang );
+        m_fwdArmed     = !m_fwd.empty();
 
         VrScope file;
         file.node = root;
@@ -272,6 +328,7 @@ public:
                 m_out.push_back( std::move( t ) );
             }
         }
+        emitForwardedCalls();
         if( m_depthCut.subtrees > 0 )
         {
             emitDepthCut();
@@ -874,6 +931,10 @@ private:
         {
             harvest( n, a.kind, m_scopes.back().decls );
         }
+        if( m_fwdArmed )
+        {
+            noteForwardProof( n, a.kind );
+        }
         m_anc.push_back( a );
         const std::size_t i = m_anc.size() - 1;
         if( m_fam == VrFam::Py && kindIs( a.kind, "decorated_definition" ) )
@@ -887,6 +948,11 @@ private:
         else if( isCallKind( a.kind ) )
         {
             throughAt( n );
+            patternAtCall( n );
+        }
+        else if( m_fam == VrFam::Js && kindIs( a.kind, "subscript_expression" ) )
+        {
+            patternAtSubscript( n );
         }
     }
 
@@ -928,6 +994,190 @@ private:
         return 0;
     }
 
+    // ── call forwarders (model.h kCallForwarders) ───────────────────────────────────────────────────────
+    // Is the string node `str` a module specifier inside the repository — relative, so it names a file of this tree?
+    bool relativeModuleString( TSNode str ) const
+    {
+        const std::string_view m = vrStringContent( text( str ) );
+        return m.starts_with( "./" ) || m.starts_with( "../" );
+    }
+
+    // Record what lets a bare name stand for a callable binding, as the walk enters each node (anc = its ancestors, root
+    // first): a function declaration at any depth, or a binding of a FILE-SCOPE import from a relative module (a BINDING
+    // only — whether it is a function graph.h decides, Reference::forwarded) —
+    // `import f from './m'` (anc: program, import_statement, import_clause), `import { g as f } from './m'` (… named_imports),
+    // `const f = require( './m' )` / `const { f } = require( './m' )` (anc: program, lexical/variable declaration). A
+    // type-only import binds no value; a namespace import binds a module object, never a function.
+    void noteForwardProof( TSNode n, const char* t )
+    {
+        const std::size_t depth = m_anc.size();
+        if( kindIs( t, "function_declaration" ) || kindIs( t, "generator_function_declaration" ) )
+        {
+            const std::string_view nm = text( child( n, m_fName ) );
+            if( !nm.empty() )
+            {
+                m_fnDeclNames.push_back( nm );
+            }
+        }
+        else if( depth == 2 && kindIs( t, "variable_declarator" )
+                 && ( kindIs( m_anc[1].kind, "lexical_declaration" ) || kindIs( m_anc[1].kind, "variable_declaration" ) )
+                 && requiresRelativeModule( child( n, m_fValue ) ) )
+        {
+            patternNames( child( n, m_fName ), m_relImportNames );
+        }
+        else if( depth == 3 && kindIs( t, "identifier" ) && kindIs( m_anc[2].kind, "import_clause" ) && relativeValueImport( m_anc[1] ) )
+        {
+            m_relImportNames.push_back( text( n ) );
+        }
+        else if( depth == 4 && kindIs( t, "import_specifier" ) && kindIs( m_anc[3].kind, "named_imports" ) && relativeValueImport( m_anc[1] )
+                 && !text( n ).starts_with( "type " ) )
+        {
+            const TSNode alias = child( n, m_fAlias );
+            const std::string_view nm = text( ts_node_is_null( alias ) ? child( n, m_fName ) : alias );
+            if( !nm.empty() )
+            {
+                m_relImportNames.push_back( nm );
+            }
+        }
+    }
+
+    // A file-scope import statement that binds VALUES from a module of this tree.
+    bool relativeValueImport( const VrAnc& stmt ) const
+    {
+        if( !kindIs( stmt.kind, "import_statement" ) )
+        {
+            return false;
+        }
+        const std::string_view whole = text( stmt.node );
+        return !whole.starts_with( "import type " ) && !whole.starts_with( "import type{" ) && relativeModuleString( child( stmt.node, m_fSource ) );
+    }
+
+    // `require( './m' )` with exactly one relative string argument.
+    bool requiresRelativeModule( TSNode v ) const
+    {
+        if( ts_node_is_null( v ) || !kindIs( ts_node_type( v ), "call_expression" ) || text( child( v, m_fFunction ) ) != "require" )
+        {
+            return false;
+        }
+        const TSNode args = child( v, m_fArguments );
+        if( ts_node_is_null( args ) || ts_node_named_child_count( args ) != 1 )
+        {
+            return false;
+        }
+        const TSNode arg = ts_node_named_child( args, 0 );
+        return kindIs( ts_node_type( arg ), "string" ) && relativeModuleString( arg );
+    }
+
+    // The forwarder row of the member expression `m` (`f.call`, `f.bind`) when its object is a bare identifier.
+    const CallForwarder* forwarderOfMember( TSNode m ) const noexcept
+    {
+        const TSNode obj = child( m, m_fObject );
+        if( ts_node_is_null( obj ) || !kindIs( ts_node_type( obj ), "identifier" ) )
+        {
+            return nullptr;
+        }
+        return findByField( m_fwd, &CallForwarder::name, text( child( m, m_fProperty ) ) );
+    }
+
+    // anc[i] is the identifier `f` of a CALLED member `f.call( … )` / `f.apply( … )` (a Call forwarder): queue the call of
+    // f it stands for. The caller has already refused a name some enclosing parameter or local declares; the file-end
+    // filter (emitForwardedCalls) keeps the site only when the file declares or imports f; graph.h keeps its call only at a
+    // proven Function/Method.
+    bool forwardCallAt( std::size_t i, std::string_view name )
+    {
+        if( i < 2 || !kindIs( m_anc[i].kind, "identifier" ) || m_anc[i].field != m_fObject )
+        {
+            return false;
+        }
+        const VrAnc& member = m_anc[i - 1];
+        const VrAnc& call   = m_anc[i - 2];
+        if( !kindIs( member.kind, "member_expression" ) || !kindIs( call.kind, "call_expression" ) || member.field != m_fFunction )
+        {
+            return false;
+        }
+        const CallForwarder* fw = forwarderOfMember( member.node );
+        if( fw == nullptr || fw->kind != CallForwardKind::Call )
+        {
+            return false;
+        }
+        RawRef r;
+        r.fileId    = m_fileId;
+        r.startByte = ts_node_start_byte( m_anc[i].node );
+        r.line      = ts_node_start_point( m_anc[i].node ).row + 1;
+        r.lang      = m_lang;
+        r.role      = RefRole::Call;
+        r.forwarded = true;   // graph.h keeps it only at a proven Function/Method (an import proves no function)
+        r.name      = std::string( name );
+        const TSNode args = child( call.node, m_fArguments );
+        if( !fw->argsAsArray && !ts_node_is_null( args ) )
+        {
+            std::uint32_t n      = 0;
+            bool          spread = false;
+            ChildCursor   c( args );
+            forEachNamedChild( args, c.cur, [ & ]( TSNode a )
+            {
+                if( !ts_node_is_extra( a ) )
+                {
+                    ++n;
+                    spread = spread || kindIs( ts_node_type( a ), "spread_element" );
+                }
+                return true;
+            } );
+            r.argCount      = static_cast<std::uint16_t>( std::min<std::uint32_t>( n > 0 ? n - 1 : 0, 0xFFFFu ) );   // the first is the receiver
+            r.argCountKnown = !spread;
+        }
+        m_fwdSites.push_back( std::move( r ) );
+        return true;
+    }
+
+    // `.bind` (a Value forwarder) is a pass-through: `f.bind( x )` lands f in the slot the whole call fills. Step one is
+    // the identifier as the member's object, step two the member as the call's callee.
+    bool valueForwardStep( std::size_t i ) const noexcept
+    {
+        const VrAnc& p = m_anc[i - 1];
+        const VrAnc& c = m_anc[i];
+        const auto isValueForwarder = [ this ]( TSNode m )
+        {
+            const CallForwarder* fw = forwarderOfMember( m );
+            return fw != nullptr && fw->kind == CallForwardKind::Value;
+        };
+        if( kindIs( p.kind, "member_expression" ) )
+        {
+            return i >= 2 && c.field == m_fObject && kindIs( c.kind, "identifier" ) && p.field == m_fFunction
+                && kindIs( m_anc[i - 2].kind, "call_expression" ) && isValueForwarder( p.node );
+        }
+        return kindIs( p.kind, "call_expression" ) && c.field == m_fFunction && kindIs( c.kind, "member_expression" ) && isValueForwarder( c.node );
+    }
+
+    // File end: a queued call/apply site becomes a FORWARDED call of f when f is a relative import of the file, or a function
+    // the file declares that no file-scope variable of the same name rebinds. Anything else adds nothing (today's answer).
+    // An import proves a binding, not a function: graph.h buildGraph keeps the call only at a proven Function/Method.
+    void emitForwardedCalls()
+    {
+        if( m_fwdSites.empty() )
+        {
+            return;
+        }
+        const auto sortUnique = []( std::vector<std::string_view>& v )
+        {
+            std::ranges::sort( v, rw::sortutil::svLess );   // never the default: libstdc++ debug aborts on string_view operator< (portablebuildcheck #6b)
+            v.erase( std::ranges::unique( v ).begin(), v.end() );
+        };
+        sortUnique( m_fnDeclNames );
+        sortUnique( m_relImportNames );
+        const std::vector<std::string_view>& fileDecls = m_scopes.front().decls;
+        for( RawRef& r : m_fwdSites )
+        {
+            const std::string_view nm = r.name;
+            const bool imported = std::ranges::binary_search( m_relImportNames, nm, rw::sortutil::svLess );
+            const bool declared = std::ranges::binary_search( m_fnDeclNames, nm, rw::sortutil::svLess ) && std::ranges::find( fileDecls, nm ) == fileDecls.end();
+            if( imported || declared )
+            {
+                m_out.push_back( std::move( r ) );
+            }
+        }
+    }
+
     // ── value positions ────────────────────────────────────────────────────────────────────────────────
     struct Slot
     {
@@ -956,6 +1206,10 @@ private:
         const VrAnc& p = m_anc[i - 1];
         const VrAnc& c = m_anc[i];
         const char*  t = p.kind;
+        if( m_fwdArmed && valueForwardStep( i ) )
+        {
+            return true;
+        }
         if( kindIs( t, "parenthesized_expression" ) || kindIs( t, "as_expression" ) || kindIs( t, "satisfies_expression" )
             || kindIs( t, "non_null_expression" ) || kindIs( t, "literal_element" ) || kindIs( t, "expression_list" )
             || kindIs( t, "type_assertion" ) )
@@ -975,7 +1229,26 @@ private:
             }
             return c.field != 0 && ( c.field == m_fConsequence || c.field == m_fAlternative );
         }
+        return c.field != 0 && passesOperator( p, c );
+    }
+
+    // A value-preserving binary operator (kVrPassOps) whose operand `c` can be the expression's result.
+    bool passesOperator( const VrAnc& p, const VrAnc& c ) const noexcept
+    {
+        for( const VrPassOp& po : kVrPassOps )
+        {
+            if( po.fam == m_fam && std::string_view( p.kind ) == po.nodeKind && opText( p.node ) == po.op )
+            {
+                return c.field == m_fRight || ( po.leftLands && c.field == m_fLeft );
+            }
+        }
         return false;
+    }
+
+    bool isLogicalAssignment( TSNode n ) const noexcept
+    {
+        const std::string_view op = opText( n );
+        return m_fam == VrFam::Js && std::ranges::find( kVrJsLogicalAssignOps, op ) != std::ranges::end( kVrJsLogicalAssignOps );
     }
 
     // The callee of the call whose argument list is anc[j] (the list itself), as written, plus its bare name.
@@ -1173,6 +1446,10 @@ private:
         if( declaringScope( name ) != 0 )
         {
             return;   // a parameter or local of that name hides the function
+        }
+        if( m_fwdArmed && forwardCallAt( i, name ) )
+        {
+            return;   // `f.call( … )` / `f.apply( … )`: a call of f (decided at file end), never a value use
         }
         std::size_t j = i;
         while( j > 1 && transparent( j ) )
@@ -1391,7 +1668,8 @@ private:
             s.scope = 'f';
             return !nm.empty();
         }
-        if( ( kindIs( pt, "assignment_expression" ) || kindIs( pt, "assignment" ) ) && c.field == m_fRight )
+        if( ( kindIs( pt, "assignment_expression" ) || kindIs( pt, "assignment" )
+              || ( kindIs( pt, "augmented_assignment_expression" ) && isLogicalAssignment( p.node ) ) ) && c.field == m_fRight )
         {
             const TSNode lhs = child( p.node, m_fLeft );
             const char*  lt  = ts_node_type( lhs );
@@ -1621,6 +1899,205 @@ private:
         emitThrough( call, obj, f, std::move( key ), kindIs( ft, "identifier" ) );
     }
 
+    // ── name-template dispatch (IX-3) ─────────────────────────────────────────────────────────────────
+    // A lookup whose NAME is built from a template with a visible literal side: the per-family forms are DATA
+    // (kVrPatternLookups); the template shapes are an f-string / JS template literal (its holes are interpolation /
+    // template_substitution children) or a `+` with exactly one string-literal operand. A literal name is no template
+    // (an ordinary by-name lookup) and a bare variable has no literal side: neither records anything.
+    struct VrTemplate
+    {
+        bool        isTemplate = false;
+        std::string prefix;
+        std::string suffix;
+    };
+    bool isPlainStringNode( TSNode n ) const noexcept
+    {
+        if( ts_node_is_null( n ) || !kindIs( ts_node_type( n ), "string" ) )
+        {
+            return false;
+        }
+        const std::uint32_t k = ts_node_named_child_count( n );
+        for( std::uint32_t i = 0; i < k; ++i )
+        {
+            if( kindIs( ts_node_type( ts_node_named_child( n, i ) ), "interpolation" ) )
+            {
+                return false;   // a Python f-string is a `string` with interpolation children
+            }
+        }
+        return true;
+    }
+    VrTemplate templateOf( TSNode n ) const
+    {
+        VrTemplate out;
+        if( ts_node_is_null( n ) )
+        {
+            return out;
+        }
+        const char* k = ts_node_type( n );
+        if( kindIs( k, "binary_operator" ) || kindIs( k, "binary_expression" ) )
+        {
+            const TSNode op = child( n, m_fOperator );
+            if( ts_node_is_null( op ) || text( op ) != "+" )
+            {
+                return out;
+            }
+            const TSNode l  = child( n, m_fLeft );
+            const TSNode r  = child( n, m_fRight );
+            const bool   ls = isPlainStringNode( l );
+            const bool   rs = isPlainStringNode( r );
+            if( ls == rs )
+            {
+                return out;   // two literals are a constant name; no literal operand leaves no visible side
+            }
+            out.isTemplate = true;
+            ( ls ? out.prefix : out.suffix ) = std::string( vrStringContent( text( ls ? l : r ) ) );
+            return out;
+        }
+        const bool py = kindIs( k, "string" );
+        if( !py && !kindIs( k, "template_string" ) )
+        {
+            return out;
+        }
+        const auto isHole = [ py ]( const char* ck ) { return py ? kindIs( ck, "interpolation" ) : kindIs( ck, "template_substitution" ); };
+        const std::uint32_t cnt = ts_node_named_child_count( n );
+        TSNode first {}, last {}, open {}, close {};
+        for( std::uint32_t i = 0; i < cnt; ++i )
+        {
+            const TSNode c  = ts_node_named_child( n, i );
+            const char*  ck = ts_node_type( c );
+            if( isHole( ck ) )
+            {
+                if( ts_node_is_null( first ) )
+                {
+                    first = c;
+                }
+                last = c;
+            }
+            else if( kindIs( ck, "string_start" ) )
+            {
+                open = c;
+            }
+            else if( kindIs( ck, "string_end" ) )
+            {
+                close = c;
+            }
+        }
+        if( ts_node_is_null( first ) )
+        {
+            return out;   // no hole: a literal
+        }
+        // byte spans: the literal text between the opening delimiter and the first hole, and after the last hole
+        const std::uint32_t b0 = py ? ( ts_node_is_null( open ) ? ts_node_end_byte( n ) : ts_node_end_byte( open ) ) : ts_node_start_byte( n ) + 1;
+        const std::uint32_t e1 = py ? ( ts_node_is_null( close ) ? ts_node_start_byte( n ) : ts_node_start_byte( close ) ) : ts_node_end_byte( n ) - 1;
+        const std::uint32_t h0 = ts_node_start_byte( first );
+        const std::uint32_t h1 = ts_node_end_byte( last );
+        if( b0 > h0 || h1 > e1 || e1 > m_src.size() )
+        {
+            return out;   // a delimiter shape this reading does not know: no claim
+        }
+        out.isTemplate = true;
+        out.prefix     = std::string( m_src.substr( b0, h0 - b0 ) );
+        out.suffix     = std::string( m_src.substr( h1, e1 - h1 ) );
+        return out;
+    }
+    // A literal side the template can be matched on: >= kVrPatternMinLiteral identifier characters and nothing else.
+    static bool patternSideUsable( std::string_view s ) noexcept
+    {
+        return s.size() >= kVrPatternMinLiteral && std::ranges::all_of( s, []( char c )
+        {
+            return ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ) || c == '_' || c == '$';
+        } );
+    }
+    void emitPattern( TSNode site, TSNode recv, const VrTemplate& t )
+    {
+        if( !t.isTemplate || ( t.prefix.empty() && t.suffix.empty() ) )
+        {
+            return;   // no literal side at all (`o[k + '']`, f"{m}"): no name information, like a bare `o[k]`
+        }
+        const bool pre = patternSideUsable( t.prefix );
+        const bool suf = patternSideUsable( t.suffix );
+        RawRef r;
+        r.fileId     = m_fileId;
+        r.startByte  = ts_node_start_byte( site );
+        r.line       = ts_node_start_point( site ).row + 1;
+        r.lang       = m_lang;
+        r.role       = RefRole::Pattern;
+        r.qualifier  = pre || suf ? "" : "w";   // too wide: counted, never matched
+        // an unusable side is no constraint: a template `x_{a}.{b}` keeps only its usable prefix; a too-wide one keeps
+        // both sides as written (valuerefindex.h counts the members they could name, pattern_too_wide=)
+        r.fieldName  = pre || !suf ? t.prefix : std::string();
+        r.composeRel = suf || !pre ? t.suffix : std::string();
+        r.name       = r.fieldName + "*" + r.composeRel;
+        r.recvVar    = ts_node_is_null( recv ) ? std::string() : vrClean( text( recv ) );
+        m_out.push_back( std::move( r ) );
+    }
+    void patternAtCall( TSNode call )
+    {
+        const TSNode f    = child( call, m_fFunction );
+        const TSNode args = child( call, m_fArguments );
+        if( ts_node_is_null( f ) || ts_node_is_null( args ) )
+        {
+            return;
+        }
+        for( const VrPatternLookup& form : kVrPatternLookups )
+        {
+            if( form.fam != m_fam || form.computedMember )
+            {
+                continue;
+            }
+            TSNode recv {};
+            const char* ft = ts_node_type( f );
+            if( form.dictGet )
+            {
+                // `X.__dict__.get( name )`: attribute `get` on attribute `__dict__` of the receiver
+                if( !kindIs( ft, "attribute" ) || text( child( f, m_fAttribute ) ) != "get" )
+                {
+                    continue;
+                }
+                const TSNode d = child( f, m_fObject );
+                if( ts_node_is_null( d ) || !kindIs( ts_node_type( d ), "attribute" ) || text( child( d, m_fAttribute ) ) != form.callee )
+                {
+                    continue;
+                }
+                recv = child( d, m_fObject );
+            }
+            else if( !kindIs( ft, "identifier" ) || text( f ) != form.callee )
+            {
+                continue;
+            }
+            // the positional arguments, keyword arguments and comments skipped
+            std::vector<TSNode> pos;
+            const std::uint32_t cnt = ts_node_named_child_count( args );
+            for( std::uint32_t i = 0; i < cnt; ++i )
+            {
+                const TSNode a = ts_node_named_child( args, i );
+                const char*  ak = ts_node_type( a );
+                if( !kindIs( ak, "comment" ) && !kindIs( ak, "keyword_argument" ) )
+                {
+                    pos.push_back( a );
+                }
+            }
+            if( pos.size() <= form.nameArg )
+            {
+                return;
+            }
+            if( !form.dictGet )
+            {
+                recv = pos[0];
+            }
+            emitPattern( call, recv, templateOf( pos[ form.nameArg ] ) );
+            return;
+        }
+    }
+    void patternAtSubscript( TSNode sub )
+    {
+        if( std::ranges::none_of( kVrPatternLookups, [ & ]( const VrPatternLookup& form ) { return form.fam == m_fam && form.computedMember; } ) )
+        {
+            return;
+        }
+        emitPattern( sub, child( sub, m_fObject ), templateOf( child( sub, m_fIndex ) ) );
+    }
+
     // Record one call through the container `obj` (written callee `f`), routed by where `obj` is declared.
     void emitThrough( TSNode call, TSNode obj, TSNode f, std::string key, bool bareCall )
     {
@@ -1678,6 +2155,15 @@ private:
     std::vector<std::string>       m_fileFed;
     std::vector<RawRef>            m_filePending;
     VrDepthCut                     m_depthCut;
+    // call forwarders (model.h kCallForwarders): the sites `f.call( … )` / `f.apply( … )` whose f no enclosing parameter or
+    // local declares, and the file's two proofs that a bare f names a function — its function declarations (any depth:
+    // a declaration is hoisted and the walk's scopes do not record it) and its file-scope relative imports.
+    std::span<const CallForwarder> m_fwd;
+    bool                           m_fwdArmed = false;
+    std::vector<RawRef>            m_fwdSites;
+    std::vector<std::string_view>  m_fnDeclNames;
+    std::vector<std::string_view>  m_relImportNames;
+    TSFieldId m_fArguments = 0, m_fSource = 0;
     TSFieldId m_fValue = 0, m_fKey = 0, m_fLeft = 0, m_fRight = 0, m_fFunction = 0, m_fName = 0, m_fDeclarator = 0;
     TSFieldId m_fConsequence = 0, m_fAlternative = 0, m_fParameters = 0, m_fParameter = 0, m_fObject = 0, m_fProperty = 0, m_fField = 0;
     TSFieldId m_fArgument = 0, m_fOperand = 0, m_fAttribute = 0, m_fOperator = 0, m_fPattern = 0, m_fDefinition = 0;

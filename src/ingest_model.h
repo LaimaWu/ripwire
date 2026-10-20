@@ -335,7 +335,7 @@ inline void mintModuleScopeOwners( IngestResult& result, std::vector<RawDef>& ra
         {
             continue;
         }
-        if( r.role != RefRole::Call && r.role != RefRole::Macro )
+        if( r.role != RefRole::Call && r.role != RefRole::Macro && r.role != RefRole::Inert )
         {
             continue;
         }
@@ -430,6 +430,7 @@ inline void assignSymbols( IngestResult& result, std::vector<RawDef>& rawDefs, b
         s.locals       = d.locals;   // Phase 1: local-decl floor count (C/C++ only; model.h localsCountedLang)
         s.ppAlt        = d.ppAlt;    // ppalt disclosure: preproc alternative branches in the body (model.h)
         s.params       = d.params;   // Q4: parameter count (fns/methods)
+        s.paramsMin    = std::uint8_t( d.paramsMin < 15 ? d.paramsMin : 15 );   // B2.2: fewest arguments a call can pass (0 = no bound); a 4-bit field — saturating LOWERS it, which only keeps candidates
         s.arityExact   = d.arityExact;   // B2.2: params is a fixed call-comparable arity
         // Both are 1-bit fields on Symbol, so this assignment is where a RawDef byte gets TRUNCATED: a cached blob that
         // carries 2 would read as 0. Coerce "any non-zero" to 1 here — testScope's reading has always been "non-zero
@@ -928,6 +929,7 @@ inline void emitReferences( IngestResult& result, std::vector<RawRef>& rawRefs, 
         ref.memberCtor  = std::move( r.memberCtor );    // FE-B: the class a constructed receiver names
         ref.memberVia   = std::move( r.memberVia );     // FE-B on #373: the method a Ruby typed receiver was built by
         ref.memberFactory = r.memberFactory;            // FE-B on #373: memberCtor names a FactoryBot factory
+        ref.forwarded   = r.forwarded;                  // lane fcall-forward fix 1: an `f.call/f.apply` site standing for `f( … )`
         ref.baseBind    = r.baseBind;                   // lane lego-transitive fix 1: an inherit ref's same-file base binding
         ref.fieldName   = std::move( r.fieldName );   // S5-E: the member variable name (e.g. "m_pool")
         ref.composeRel  = std::move( r.composeRel );  // S5-E: "creates" or "uses"
@@ -939,7 +941,7 @@ inline void emitReferences( IngestResult& result, std::vector<RawRef>& rawRefs, 
         // one that does not, so one reference's spelling would depend on an unrelated fact about its file;
         // and --affected's import tier and graph.h's Binding tables both already read that kNoNode.
         const bool refTakesModuleScope = !r.isInherit && !r.isDocLink && !r.isCompose
-                                      && ( r.role == RefRole::Call || r.role == RefRole::Macro );
+                                      && ( r.role == RefRole::Call || r.role == RefRole::Macro || r.role == RefRole::Inert );
         ref.fromSymbol  = refTakesModuleScope ? refSweep.find( r.fileId, r.startByte )
                                               : refSweep.findOwnedDef( r.fileId, r.startByte );
     }
@@ -998,6 +1000,8 @@ inline void emitBindings( IngestResult& result, std::vector<RawBind>& rawBinds, 
                        return a.kind < b.kind;
                    }
                    if( a.typeName != b.typeName ) { return a.typeName < b.typeName; }
+                   if( a.resultIndex != b.resultIndex ) { return a.resultIndex < b.resultIndex; }   // ReturnType: one record per position
+                   if( a.unwrapDepth != b.unwrapDepth ) { return a.unwrapDepth < b.unwrapDepth; }
                    return a.importedName < b.importedName;
                } );
     result.bindings.resize( rawBinds.size() );
@@ -1009,6 +1013,8 @@ inline void emitBindings( IngestResult& result, std::vector<RawBind>& rawBinds, 
         b.fileId     = rb.fileId;
         b.kind       = rb.kind;
         b.isFromAssignment = rb.isFromAssignment;
+        b.resultIndex = rb.resultIndex;
+        b.unwrapDepth = rb.unwrapDepth;
         b.startByte  = rb.startByte;   // the declaration a VarDecl and its typed record share (Rule 2 lexical lookup)
         b.spanStart  = rb.spanStart;   // shadow fix round: the declaring block's span rides through
         b.spanEnd    = rb.spanEnd;

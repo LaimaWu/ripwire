@@ -1805,7 +1805,7 @@ inline std::pair<std::uint32_t, std::uint32_t> resolveRubyConstant( const RubyCo
 // byName rule — the pre-scoping answer, never a guess in either direction — and is COUNTED by `disclosure` below
 // (RubyBaseScopeDisclosure), which buildGraph copies to Graph::rubyBasesUnscoped: the gauge attribute
 // ruby_bases_unscoped=N, absent at zero (graphlegend.h graphGaugeAttrXml/Json, test/rubyinheritcheck.sh).
-// Built only when the corpus holds a Ruby inherit reference; empty otherwise.
+// Built only when the corpus holds a Ruby inherit reference or a main-object mixin (LocalBindKind::RubyMainMixin); empty otherwise.
 //
 // The sink models Diagnostics::DisclosureSink: one reason, one count, read by the emitter as the gauge attribute.
 struct RubyBaseScopeDisclosure
@@ -1954,7 +1954,7 @@ struct RubyDirectiveSite
 };
 
 // Every symbolic directive that is not a value use, per file in byte order — the records a MIXIN reference is joined to
-// (parser version 131: ingest_relations.h emitCapturedMixinBase puts the reference at its constant, the directive sits at
+// (parser version 131 put the reference at its constant from captureRubyMixinBases; since 173 the capture does; the directive sits at
 // its `include` call). Stable, so two constants of one `include A, B` keep their source order at their shared byte.
 inline std::vector<std::vector<RubyDirectiveSite>> rubyDirectiveSitesByFile( const IngestResult& ing, const RubyConstantIndex& ix )
 {
@@ -2078,7 +2078,8 @@ inline RubyBaseScope buildRubyBaseScope( const IngestResult& ing )
 {
     RubyBaseScope sc;
     const auto isRubyBase = []( const Reference& r ) noexcept { return r.isInherit && r.lang == Lang::Ruby; };
-    if( std::none_of( ing.references.begin(), ing.references.end(), isRubyBase ) )
+    const auto isMainMixin = []( const Binding& b ) noexcept { return b.kind == LocalBindKind::RubyMainMixin; };   // graph.h rubyMainObjectMixins reads classesByFqn too
+    if( std::none_of( ing.references.begin(), ing.references.end(), isRubyBase ) && std::none_of( ing.bindings.begin(), ing.bindings.end(), isMainMixin ) )
     {
         return sc;
     }
@@ -6910,10 +6911,18 @@ struct Narrower
                 return RecvVarType{};   // no declaration in scope (a field or global of the name), a tie, or untyped/conflicted
             }
             const Binding& declared = ( *scopedDecls.bindings )[ innermost->typeBinding ];
+            if( declared.kind == LocalBindKind::ReturnType )   // a call result's class, resolved to the one in-tree class (graph.h)
+            {
+                return RecvVarType{ declared.typeName, false, &declared };
+            }
             return namesStdType( declared.importedName ) ? RecvVarType{} : RecvVarType{ declared.typeName, !declared.importedName.empty(), &declared };
         }
         const auto vit = varType.find( keyBind );
-        return ( vit == varType.end() ) ? RecvVarType{} : RecvVarType{ vit->second.type, vit->second.writtenQualified, nullptr };
+        if( vit == varType.end() || ( vit->second.arrowOnly && !r.viaArrow ) )
+        {
+            return RecvVarType{};   // a smart pointer's pointee (a call result's, train 29) answers `->` only, never `.`
+        }
+        return RecvVarType{ vit->second.type, vit->second.writtenQualified, nullptr };
     }
 
     // the qualifier the receiver's declaration wrote — the lexical record's own, else the flat table's kept one (read while
@@ -6922,7 +6931,8 @@ struct Narrower
     {
         if( bound.declared != nullptr )
         {
-            return { true, bound.declared->importedName };
+            // a call result's written qualifier (`ns::T`) was already resolved to its one class: no final-segment question left
+            return { true, bound.declared->kind == LocalBindKind::ReturnType ? std::string_view{} : std::string_view( bound.declared->importedName ) };
         }
         const auto flat = ids.flatQualifier.find( keyBind );
         if( flat == ids.flatQualifier.end() )

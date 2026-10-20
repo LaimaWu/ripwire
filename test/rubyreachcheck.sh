@@ -501,6 +501,52 @@ class HookDecoy
 end
 RUBY
 
+mkdir -p "$FIX/lib/mixmod" "$FIX/lib/mixsub"
+# A module's instance method has no side of its own to start from, so its bare call to self runs the base walk, and only the
+# Ruby walk (mixin-aware) holds the `include`. langfacts-fold: the walk is picked by LangFacts::mixinAncestry (graph.h, both sites).
+cat > "$FIX/lib/mixmod/mix.rb" <<'RUBY'
+module MixHelpers
+  def mix_target
+    1
+  end
+end
+
+module MixMod
+  include MixHelpers
+  def run_mix
+    mix_target
+  end
+end
+
+class MixHost
+  include MixMod
+  def mix_target
+    2
+  end
+end
+RUBY
+cat > "$FIX/lib/mixsub/mixsub.rb" <<'RUBY'
+module SubHelpers
+  def [](k)
+    k
+  end
+end
+
+module SubMod
+  include SubHelpers
+  def run_sub
+    self[ 3 ]
+  end
+end
+
+class SubHost
+  include SubMod
+  def [](k)
+    2
+  end
+end
+RUBY
+
 MAP="$DIR/map.xml"
 "$BIN" "$FIX" --no-cache >"$MAP" 2>"$DIR/map.err"
 if [ $? -eq 0 ]; then ok "default map exits 0"; else no "default map exited non-zero: $( cat "$DIR/map.err" )"; fi
@@ -557,6 +603,12 @@ misses  WriterDecoy::_write_attribute "id=" "WriterDecoy is neither above nor be
 
 reaches ClassMethods::define_hooks Wrapper "include Callbacky extends its ClassMethods onto Wrapper (the Concern convention)"
 misses  HookDecoy::define_hooks    Wrapper "an unrelated class's namesake stays out of reach"
+
+echo "=== a module's own bare call walks its includes (langfacts mixinAncestry: both graph.h sites) ==="
+reaches MixHelpers::mix_target run_mix "a module method's bare call reaches the module it includes, not only its includer's namesake"
+misses  MixHost::mix_target    run_mix "the includer's namesake does not split the call"
+reaches SubHelpers::[] run_sub "self[ 3 ] in a module method (the subscript tier) reaches the included module's []"
+misses  SubHost::[]    run_sub "the includer's [] does not split the subscript"
 
 echo "=== out of reach: the method Ruby runs is not in the tree, so the call is refused as external (external=) ==="
 misses Component::render     show    "a controller's render is ActionController's, not a component's"

@@ -9,7 +9,9 @@
 // pasteable invocation, typically ≤ kNextAttrMaxBytes and never dropped past it: --edit-check contract-change → --uses=SYM; --impact →
 // --safe-delete=SYM; a gating --quality-delta row → --expand=FILE:NAME; --test-gate → its first run= command;
 // --situ → --test-gate; --from-trace/--run-trace → --slice=@FILE:LINE (the innermost in-corpus frame);
-// --callers → --uses=SELECTOR (bare NAME for a narrowed selector with declined calls; otherwise the spelling is mirrored);
+// --callers → --uses=SELECTOR (bare NAME for a narrowed selector with declined calls; otherwise the spelling is mirrored), or the next
+// page (callersPageNext below) on a capped callers page, the uses verb then riding as uses_next=; --callees → --expand=SELECTOR, or
+// the next page on a capped callees page, expand then riding as expand_next=;
 // --grep → --at=FILE:LINE of the top hit, or the
 // next page under --legend=compact when the answer is capped, or --for=PAT on a zero-hit answer; --for → the
 // top-ranked row's --expand=FILE:NAME. Gate: test/nextverbcheck.sh — every next= that starts with `--` is run
@@ -177,6 +179,29 @@ inline std::string pagedNext( std::string_view invocation, int pageLimit, std::s
         out += " --offset=" + std::to_string( nextOffset );
     }
     return out;
+}
+
+// L8 (train 29): the NEXT PAGE of a callers listing — the CLI --callers root's next=, find_referencing_symbols' next and
+// find_symbol's calledBy_next all name this one call, so the three cannot spell the page differently. `selector` is the
+// selector as typed (a file:name narrowing is kept); `columnar` keeps --format=columnar and `json` keeps --json, so the
+// page has the same form.
+// C2 rider (train 31): the callees direction pages the same way — callHierarchyPageNext names either direction's page,
+// and callHierarchyHintAttr the attribute the direction's own follow-up moves to beside it (uses_next= / expand_next=).
+inline std::string callHierarchyPageNext( bool wantCallers, std::string_view selector, int pageLimit, std::size_t nextOffset, bool columnar = false,
+                                          bool json = false )
+{
+    return pagedNext( nextFlag( wantCallers ? "--callers=" : "--callees=", selector ) + ( columnar ? " --format=columnar" : "" ) + ( json ? " --json" : "" ),
+                      pageLimit, nextOffset );
+}
+
+inline std::string callersPageNext( std::string_view selector, int pageLimit, std::size_t nextOffset, bool columnar = false, bool json = false )
+{
+    return callHierarchyPageNext( true, selector, pageLimit, nextOffset, columnar, json );
+}
+
+inline constexpr std::string_view callHierarchyHintAttr( bool wantCallers ) noexcept
+{
+    return wantCallers ? "uses_next" : "expand_next";
 }
 
 } // namespace rw

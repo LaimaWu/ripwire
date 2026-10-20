@@ -47,8 +47,11 @@
 #   (D) LEGEND.  The attribute is defined by the legend of the document that carries it, against the
 #       ceiling ACTUALLY on that root — max_tokens, budget_tokens, or both when both were asked for — and
 #       a document inside its ceiling pays none of those bytes.
-#   (E) --token-budget INTEROP.  The pre-existing budget contract is unchanged, and with both flags set the
-#       label answers to EITHER ceiling.
+#   (E) --token-budget INTEROP.  forbudget-soft (rule 4, owner decisions 2026-10-14): an explicit --token-budget on
+#       --for is a SOFT row target, never a ceiling this root labels against — so alone it carries no over_ceiling=
+#       (est_tokens may exceed budget_tokens), and beside --max-tokens the label answers to max_tokens ONLY and its
+#       legend says so. The served rows are a rank prefix that grows with the target, untouched by --max-tokens.
+#       (Was: "the budget contract is unchanged, and with both flags set the label answers to EITHER ceiling".)
 #   (F) DETERMINISM across the band, and (G) MUTATION CONTROLS: every judge above is re-run over a
 #       deliberately corrupted copy of a real document and must go RED. An arm that cannot fail is not a
 #       gate, and three of these four judges are cheap to write in an always-true form.
@@ -99,8 +102,9 @@ QUERY='processEntry input trim'
 #    the same code path the arm did. Reads the ROOT ELEMENT through a real XML parser (the :719 trap), and
 #    re-derives est_tokens from the delivered bytes. Prints one diagnostic line per violation; exit 0 clean.
 #
-#      judge.py DOC MAX_TOKENS TOKEN_BUDGET
+#      judge.py DOC MAX_TOKENS TOKEN_BUDGET [soft]
 #        MAX_TOKENS / TOKEN_BUDGET: the value passed on the command line, or 0 for "flag not given".
+#        soft: TOKEN_BUDGET names a soft target (forbudget-soft) — stated on the root, never a ground for the label.
 JUDGE="$TMP/judge.py"
 cat > "$JUDGE" <<'PY_EOF'
 import re, sys, xml.etree.ElementTree as ET
@@ -114,6 +118,7 @@ def tokens( byteCount, rate ):
     return int( byteCount / rate + 0.5 )   # tokensForEmittedBytes
 
 path, wantMax, wantBudget = sys.argv[1], int( sys.argv[2] ), int( sys.argv[3] )
+softBudget = len( sys.argv ) > 4 and sys.argv[4] == 'soft'
 raw  = open( path, 'rb' ).read()
 bad  = []
 
@@ -138,7 +143,8 @@ est = int( attrs['est_tokens'] )
 
 # ── (A/B/E) THE BICONDITIONAL, in the unit the root prints both numbers in ───────────────────────────────
 overMax    = wantMax    > 0 and est > wantMax
-overBudget = wantBudget > 0 and est > wantBudget
+# forbudget-soft (rule 4): a soft target is never "over" — only max_tokens= is a ceiling on such a root
+overBudget = wantBudget > 0 and est > wantBudget and not softBudget
 labelled   = attrs.get( 'over_ceiling' ) == '1'
 if ( overMax or overBudget ) and not labelled:
     bad.append( 'est_tokens=%d exceeds the ceiling on its own root (max_tokens=%d budget_tokens=%d) '
@@ -178,6 +184,8 @@ if labelled:
     else:
         named  = set( re.findall( r'(?:budget|max)_tokens', clause.group( 1 ) ) )
         onRoot = set( k for k in ( 'budget_tokens', 'max_tokens' ) if k in attrs )
+        if softBudget:
+            onRoot.discard( 'budget_tokens' )   # forbudget-soft: the label must not be defined against a soft target
         if named != onRoot:
             bad.append( 'the legend defines over_ceiling against %s, but this root carries %s'
                         % ( sorted( named ) or [ 'nothing' ], sorted( onRoot ) or [ 'nothing' ] ) )
@@ -241,23 +249,73 @@ python3 "$JUDGE" "$TMP/nomax" 0 0 \
     || no "(B) --detail=30 with no --max-tokens still emits a ceiling attribute or a verdict"
 
 # ══ (E) --token-budget INTEROP ═══════════════════════════════════════════════════════════════════════════
-# The pre-existing budget contract is unchanged (this fix must not move it), and with BOTH ceilings on one
-# root the single label answers to either — which is also the case whose legend has two names to get right.
-INTEROP=0;  INTEROP_BAD=0
+# forbudget-soft (rule 4) — REPLACES "the pre-existing budget contract is unchanged, and with both ceilings on one root the
+# single label answers to either" (the JUDGE's biconditional against budget_tokens=). An explicit --token-budget is now a
+# SOFT row target (owner decisions 2026-10-14): the JUDGE runs with `soft`, so at every point
+#   · alone: NOLBL — no over_ceiling=, though est_tokens may exceed budget_tokens (asserted reachable below);
+#   · beside --max-tokens: the label answers to max_tokens ONLY, and the legend defines it against max_tokens alone;
+#   · (C) byte accounting and budget_tokens= on the root are judged exactly as before.
+# Plus RP: rows(N) is a rank prefix of rows(N') for N < N' and of the default answer's rows, and --max-tokens (a body
+# ceiling) never moves a row. The --max-tokens band (A) above is this arm's hard-ceiling twin.
+INTEROP=0;  INTEROP_BAD=0;  SOFT_PAST=0;  BOTH_LABELLED=0
+rowsOf(){ python3 -c "
+import re, sys
+s = open( sys.argv[1] ).read()
+m = re.search( r'<sigs\b[^>]*>(.*?)</sigs>', s, re.S )
+if not m: sys.exit( 3 )
+rows = []
+for d in re.finditer( r'<d ([^>]*)>', m.group( 1 ) ):
+    a = dict( re.findall( r'(\w+)=\"([^\"]*)\"', d.group( 1 ) ) )
+    r = a.get( 'r', '' )
+    rows.append( ( int( r ) if r.isdigit() else 10**9, a.get( 'p', '?' ) + ':' + a.get( 'l', '?' ) + ':' + a.get( 'n', '?' ) ) )
+rows.sort()
+print( '\n'.join( x[1] for x in rows ) )" "$1"; }
+isPrefix(){ [ -s "$1" ] && [ "$( wc -l < "$1" )" -le "$( wc -l < "$2" )" ] && [ "$( head -n "$( wc -l < "$1" )" "$2" )" = "$( cat "$1" )" ]; }
+rowsOf "$TMP/nomax" > "$TMP/rows.nomax" || no "(E) the default --detail=30 answer has no <sigs> block — RP has no reference"
+PREV=""
 for TB in 800 2000 20000; do
     "$BIN" "$CORPUS" --no-cache "--for=$QUERY" --detail=30 --token-budget="$TB" >"$TMP/tb.$TB" 2>/dev/null
     INTEROP=$(( INTEROP + 1 ))
-    python3 "$JUDGE" "$TMP/tb.$TB" 0 "$TB" || { INTEROP_BAD=$(( INTEROP_BAD + 1 )); echo "      ^ at --token-budget=$TB"; }
+    python3 "$JUDGE" "$TMP/tb.$TB" 0 "$TB" soft || { INTEROP_BAD=$(( INTEROP_BAD + 1 )); echo "      ^ at --token-budget=$TB"; }
+    EST="$( python3 -c "
+import sys, xml.etree.ElementTree as ET
+print( ET.parse( sys.argv[1] ).getroot().attrib.get( 'est_tokens', '' ) )" "$TMP/tb.$TB" 2>/dev/null )"
+    case "$EST" in ''|*[!0-9]*) ;; *) [ "$EST" -gt "$TB" ] && SOFT_PAST=$(( SOFT_PAST + 1 )) ;; esac
+    if rowsOf "$TMP/tb.$TB" > "$TMP/rows.$TB"; then
+        isPrefix "$TMP/rows.$TB" "$TMP/rows.nomax" \
+            && ok "(E) RP: rows(--token-budget=$TB) — $( wc -l < "$TMP/rows.$TB" | tr -d ' ' ) row(s) — are a rank prefix of the default answer's $( wc -l < "$TMP/rows.nomax" | tr -d ' ' )" \
+            || no "(E) RP: rows(--token-budget=$TB) are not a rank prefix of the default answer's rows"
+        if [ -n "$PREV" ]; then
+            isPrefix "$TMP/rows.$PREV" "$TMP/rows.$TB" \
+                && ok "(E) RP: rows(--token-budget=$PREV) are a prefix of rows(--token-budget=$TB) (monotone in the target)" \
+                || no "(E) RP: rows(--token-budget=$PREV) are not a prefix of rows(--token-budget=$TB) — not monotone"
+        fi
+        PREV="$TB"
+    else
+        no "(E) --token-budget=$TB: no <sigs> block — no rows to judge"
+    fi
     for MT in 300 20000; do
         "$BIN" "$CORPUS" --no-cache "--for=$QUERY" --detail=30 --token-budget="$TB" --max-tokens="$MT" >"$TMP/both.$TB.$MT" 2>/dev/null
         INTEROP=$(( INTEROP + 1 ))
-        python3 "$JUDGE" "$TMP/both.$TB.$MT" "$MT" "$TB" \
+        python3 "$JUDGE" "$TMP/both.$TB.$MT" "$MT" "$TB" soft \
             || { INTEROP_BAD=$(( INTEROP_BAD + 1 )); echo "      ^ at --token-budget=$TB --max-tokens=$MT"; }
+        grep -o '<ctx [^>]*>' "$TMP/both.$TB.$MT" | head -1 | grep -q ' over_ceiling="1"' && BOTH_LABELLED=$(( BOTH_LABELLED + 1 ))
+        rowsOf "$TMP/both.$TB.$MT" > "$TMP/rows.$TB.$MT" 2>/dev/null
+        cmp -s "$TMP/rows.$TB.$MT" "$TMP/rows.$TB" && [ -s "$TMP/rows.$TB" ] \
+            || { INTEROP_BAD=$(( INTEROP_BAD + 1 )); echo "    --token-budget=$TB --max-tokens=$MT: the rows differ from --token-budget=$TB alone — the body ceiling moved a row"; }
     done
 done
 [ "$INTEROP_BAD" = "0" ] \
-    && ok "(E) --token-budget alone and beside --max-tokens: $INTEROP point(s), one label answering to either ceiling" \
+    && ok "(E) --token-budget alone and beside --max-tokens: $INTEROP point(s), no label for the soft target, the label answering to max_tokens only, same rows either way" \
     || no "(E) VIOLATED at $INTEROP_BAD of $INTEROP --token-budget point(s)"
+# NON-VACUITY for both halves: a soft target the answer really exceeds (so NOLBL was tested, not assumed), and a
+# combined point really over max_tokens (so the max_tokens-only label was read, not absent).
+[ "$SOFT_PAST" -gt 0 ] \
+    && ok "(E) non-vacuity: $SOFT_PAST --token-budget point(s) deliver est_tokens past the soft target (the no-label half is exercised)" \
+    || no "(E) VACUOUS: no --token-budget point exceeds its target — the no-label half never ran"
+[ "$BOTH_LABELLED" -gt 0 ] \
+    && ok "(E) non-vacuity: $BOTH_LABELLED combined point(s) carry over_ceiling=\"1\" for max_tokens" \
+    || no "(E) VACUOUS: no --token-budget + --max-tokens point is labelled — the max_tokens-only legend half never ran"
 
 # ══ (F) DETERMINISM across the band ══════════════════════════════════════════════════════════════════════
 # The verdict is decided inside an est_tokens fixpoint that measures the document containing its own label.
@@ -308,6 +366,32 @@ d = re.sub( rb' over_ceiling=1 says est_tokens exceeds [a-z_ ]+', b'', d, count 
 # G5 — the legend arm, other direction: the clause naming a ceiling this root does not carry.
 mutate "a legend naming the wrong ceiling" "$TMP/band.300" 300 0 \
        "d = d.replace( b'over_ceiling=1 says est_tokens exceeds max_tokens', b'over_ceiling=1 says est_tokens exceeds budget_tokens', 1 )"
+# G6/G7 — forbudget-soft (rule 4): the soft judge of (E), on the old behaviour manufactured — a label on a soft target the
+# answer exceeds, and a legend defining the label against the soft target. A pasted attribute also moves the byte count,
+# which (C) rejects on its own, so each control requires the judge's rejection to name the SOFT reason ($6), not just exit 1.
+# On a binary whose real document already has the broken shape (the pre-soft base), the edit is a no-op and the real
+# document is judged as is — the control then reads the shape the binary emitted, which must be rejected all the same.
+softMutate(){                  # $1 label, $2 source doc, $3 max, $4 budget, $5 python edit expr, $6 expected reason
+    python3 - "$2" "$TMP/mut.xml" <<PY_EOF
+import sys
+d = open( sys.argv[1], 'rb' ).read()
+$5
+open( sys.argv[2], 'wb' ).write( d )
+PY_EOF
+    if python3 "$JUDGE" "$TMP/mut.xml" "$3" "$4" soft > "$TMP/mut.why" 2>&1; then
+        no "(G) $1: the soft judge ACCEPTS a deliberately broken document — arm (E) is inert"
+    elif grep -qF -e "$6" "$TMP/mut.why"; then
+        ok "(G) $1: the soft judge rejects it, for that reason"
+    else
+        no "(G) $1: the soft judge rejects it only for another reason ($( head -1 "$TMP/mut.why" | cut -c1-120 )) — the soft half is inert"
+    fi
+}
+softMutate "a label on a soft target (over_ceiling pasted onto --token-budget=800 alone)" "$TMP/tb.800" 0 800 \
+       "d = d.replace( b' over_ceiling=\"1\"', b'', 1 ).replace( b' est_tokens=', b' over_ceiling=\"1\" est_tokens=', 1 )" \
+       'root claims over_ceiling="1" but est_tokens='
+softMutate "a legend defining the label against the soft target too" "$TMP/both.800.300" 300 800 \
+       "d = d.replace( b'over_ceiling=1 says est_tokens exceeds max_tokens', b'over_ceiling=1 says est_tokens exceeds budget_tokens or max_tokens', 1 )" \
+       'the legend defines over_ceiling against'
 
 if [ "$fail" = "0" ]; then echo "formaxtokenscheck: ALL PASS"; else echo "formaxtokenscheck: FAILURES"; fi
 exit "$fail"

@@ -319,30 +319,46 @@ rc_for_tiny=$?
     && ok "--for --token-budget=1: exit 0 (shapes to fit, never the map/--query exit-3 gate)" \
     || no "--for --token-budget=1: expected exit 0 (shaping), got $rc_for_tiny"
 
-# ── #17 (W3FIX H2): the ABSOLUTE ceiling, not only the RELATIVE shape ──────────────────────────────────
+# ── #17 (W3FIX H2): the ABSOLUTE bound, not only the RELATIVE shape ─────────────────────────────────────
 # #15/#16 are relative arms — a tighter budget shapes to fewer-or-equal tokens, and shaping never gates — and a
-# FLOOR satisfies both perfectly: --for on a 900-char task delivered 5.3x its own stated ceiling at EVERY
-# budget, which is monotone, exits 0, and shrinks as the budget shrinks. Every relative arm in this file passed
-# it, which is precisely why an absolute one has to exist. The bar is the ceiling PLUS the single-entry
-# overshoot the design allows (src/serialize.h kCeilingFirstEntryTolerance = 1.15 — the ranking section emits
-# its first entry whole): the delivered document either fits that, or SAYS over_ceiling. Never neither.
-TB_LONG_TASK="$( python3 -c "print(('budget accounting for the ranked lens header attributes '*20)[:900])" 2>/dev/null )"
+# FLOOR satisfies both perfectly: --for on a 900-char task delivered 5.3x its own stated ceiling at EVERY budget,
+# which is monotone, exits 0, and shrinks as the budget shrinks. Every relative arm in this file passed it, which
+# is precisely why an absolute one has to exist.
+# forbudget-soft (owner decision 2026-10-14; rule 4: the by-design break of the old byte promise, replaced here):
+# an explicit --token-budget on --for is a SOFT TARGET charged against the <sigs> ROWS only — the header (here a
+# 900-char task echoed verbatim) always ships and nothing is labelled over it. The absolute bound is therefore on
+# the rows: their bytes fit T = N x 2.36 x 0.9 (the ladder's charge, with the zero metrics the lean spelling elides)
+# or they are the rank 1..4 floor; the header is whole (task= verbatim, no task_echo drop) and carries no
+# over_ceiling=. The soft regime's own gate is test/forsoftbudgetcheck.sh (ST, E2b, E1).
+TB_LONG_TASK="$( python3 -c "print(('budget accounting for the ranked lens header attributes '*20)[:900].rstrip())" 2>/dev/null )"
 if [ -z "$TB_LONG_TASK" ]; then
-    no "#17: python3 unavailable — the absolute-ceiling arm could not build its 900-char task"
+    no "#17: python3 unavailable — the absolute-bound arm could not build its 900-char task"
 else
     for TB_B in 600 1200 2400; do
         "$BIN" src --for="$TB_LONG_TASK" --token-budget=$TB_B --no-cache >"$TMP_TB_DIR/abs.$TB_B" 2>/dev/null
-        TB_BYTES="$( wc -c < "$TMP_TB_DIR/abs.$TB_B" | tr -d ' ' )"
-        TB_ALLOW="$( python3 -c "print(int($TB_B*2.36*1.15))" )"
-        # the disclosure lives in the header COMMENT — a body that quotes the word must not satisfy this arm
-        TB_HDR="$( head -c 6000 "$TMP_TB_DIR/abs.$TB_B" | sed -e 's/-->.*//' )"
-        if [ "$TB_BYTES" -le "$TB_ALLOW" ]; then
-            ok "#17 --for 900-char task --token-budget=$TB_B: $TB_BYTES B fits the $TB_ALLOW B allowance"
-        elif printf '%s' "$TB_HDR" | grep -q 'over_ceiling'; then
-            ok "#17 --for 900-char task --token-budget=$TB_B: $TB_BYTES B over $TB_ALLOW B and DISCLOSES over_ceiling"
-        else
-            no "#17 --for 900-char task --token-budget=$TB_B: $TB_BYTES B past the $TB_ALLOW B allowance in SILENCE"
-        fi
+        TB_VERDICT="$( python3 - "$TMP_TB_DIR/abs.$TB_B" "$TB_B" "$TB_LONG_TASK" <<'PY_EOF'
+import re, sys, html
+s = open( sys.argv[ 1 ] ).read(); n = int( sys.argv[ 2 ] ); task = sys.argv[ 3 ]
+T = int( n * 2.36 * 0.9 )
+root = re.search( r'<ctx\b([^>]*)>', s ); m = re.search( r'<sigs\b[^>]*>(.*?)</sigs>', s, re.S )
+if not root or not m: print( "BAD no <ctx> root or no <sigs> block" ); sys.exit()
+rows = re.findall( r'<d ([^>]*)>.*?</d>', m.group( 1 ), re.S )
+elided = sum( n2 for a in rows for k, n2 in ( ( 'cx', 7 ), ( 'ccx', 8 ), ( 'in', 7 ) ) if not re.search( r'\b' + k + r'="', a ) )
+charged = len( m.group( 1 ).encode() ) + elided
+t = re.search( r'\btask="([^"]*)"', root.group( 1 ) )
+head = s.split( '<sigs', 1 )[ 0 ]
+problems = []
+if not ( charged <= T or len( rows ) <= 4 ): problems.append( "rows charge %d B past T=%d with %d rows" % ( charged, T, len( rows ) ) )
+if not t or html.unescape( t.group( 1 ) ) != task: problems.append( "task= not verbatim" )
+if 'task_echo' in head or 'dropped (ceiling)' in head: problems.append( "the header was shed" )
+if 'over_ceiling=' in root.group( 1 ): problems.append( "over_ceiling= on a soft target" )
+print( ( "OK rows %d charged %d B <= T %d (or floor), header whole, no over_ceiling" % ( len( rows ), charged, T ) ) if not problems else "BAD " + "; ".join( problems ) )
+PY_EOF
+)"
+        case "$TB_VERDICT" in
+            OK*) ok "#17 --for 900-char task --token-budget=$TB_B: $TB_VERDICT" ;;
+            *)   no "#17 --for 900-char task --token-budget=$TB_B: $TB_VERDICT" ;;
+        esac
     done
 fi
 

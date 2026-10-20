@@ -8,6 +8,7 @@
 // ingest() comes from ingest.cpp (real, tree-sitter) or stub_ingest.cpp (test).
 
 #include "model.h"
+#include "langfacts.h"             // langFacts(l): the per-language facts verbs_quality.h and the graph read instead of a Lang:: compare
 #include "nextverb.h"              // P3 (L7): next= on every enumerated root (the verbs_*.h fragments read it from here)
 #include "infra/stdinline.h"       // R4: readByteSafeLine — the ONE byte-safe stdin line reader (--from-trace=- / --batch=-)
 #include "ingest.h"
@@ -43,6 +44,7 @@
 #include "tracelocus.h"            // L4: the shared --from-trace / MCP from_trace bundle assembler (fromTraceBundleText)
 #include "callhierarchy.h"        // H14/M13: the shared --callers/--callees / MCP find_* 1-hop computation (CLI == MCP rows)
 #include "countfloor.h"     // count-floor: a row's callers=/implementors= floor marker and its follow-up (CLI and MCP share it)
+#include "grepcarrier.h"    // L4: a grep <enc> carrier's reads=/reads_at=/vals= (CLI and MCP share it)
 #include "editcheck.h"             // L4: the shared --edit-check / MCP edit_check contract-comparison core (editCheckBundleText)
 #include "slice.h"                 // lane/paper-slice: --slice=SYM[:VAR] — the ARISE-motivated def-use slice core (sliceBundleText)
 #include "editpreview.h"           // card A1: the PRE-APPLY contract preview (editpreview::run) — BEFORE mcp.h, which
@@ -2039,7 +2041,7 @@ int runDefaultMap( const MainDispatch& d )
         {
             return {};
         }
-        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls );
+        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls, g.inertDeclinedCalls );
         const rw::MemoryStreamBytes measured = probe.finish();
         return measured.isWhole ? std::string( measured.bytes ) : std::string();
     };
@@ -2052,7 +2054,7 @@ int runDefaultMap( const MainDispatch& d )
             DISCLOSE( maxTokensFit, rw::MapAnnotations::MaxTokensFit::DisclosureWhy::ProbeUnmeasured, "runDefaultMap: open_memstream failed for the --max-tokens fit probe — the map is emitted unshaped and its ceiling unverified" );
             return 0;
         }
-        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls );
+        serialize( m, ing, rank, g.outOff, g.outTargets, k, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, /*outEstTokens=*/nullptr, extraPayloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls, g.inertDeclinedCalls );
         const rw::MemoryStreamBytes measured = probe.finish();
         if( !measured.isWhole )
         {
@@ -2442,7 +2444,7 @@ int runDefaultMap( const MainDispatch& d )
     {
         bodiesSection = rw::chargeSection( [ & ]( std::FILE* f )
             { expandRecord = EmittedBodies{};   // a re-render starts from empty: the record is what THIS render emitted
-              packBodies( f, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, g.outNameOnly, cfg.compress, redactPtr,
+              packBodies( f, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, rw::withAnchorEdge( rw::CalleeEdgeBytes( g.outNameOnly, nullptr, nullptr ), &g.outAnchorMiss ), cfg.compress, redactPtr,
                           expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/&expandRecord,
                           /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, &calleeOrder ); },   // V1: octocode F2 sibs=/inc=
             rw::kBytesPerTokenBody );
@@ -2824,7 +2826,7 @@ int runDefaultMap( const MainDispatch& d )
         // not as the literal source token, for that same reason (the count is a naive grep over this file).
         if( !expandNodes.empty() && noteAppliesToBundle )   // !serveWholeFile is this whole branch's precondition (see the if above)
         {
-            emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, g.outNameOnly, cfg.compress, redactPtr,
+            emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, rw::withAnchorEdge( rw::CalleeEdgeBytes( g.outNameOnly, nullptr, nullptr ), &g.outAnchorMiss ), cfg.compress, redactPtr,
                                                            expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
                                                            /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, &calleeOrder ); } );
             bodiesEmittedEarly = true;
@@ -2852,7 +2854,7 @@ int runDefaultMap( const MainDispatch& d )
         }
         else
         {
-            serialize( out, ing, rank, g.outOff, g.outTargets, mapTopK, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, payloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls );
+            serialize( out, ing, rank, g.outOff, g.outTargets, mapTopK, cfg.mostImportantLast, cfg.metrics, fanInPtr, &g.ambOut, cfg.stable, mapProvPtr, cboPtr, testedPtr, lcom4Ptr, ampPtr, &g.unresolvedOut, g.bindLabel.empty() ? nullptr : &g.bindLabel, mapAutoOrder, &mapEstTokens, payloadTokens, mapAnn, /*statsFirstScreen=*/false, mapRootArg, &g.locPinOut, g.externalCalls, &g.declinedOut, g.gateDeclinedCalls, g.outNameOnly.empty() ? nullptr : &g.outNameOnly, g.stdMemberDeclinedCalls, g.inertDeclinedCalls );
         }
     }
     else
@@ -2898,7 +2900,7 @@ int runDefaultMap( const MainDispatch& d )
     }
     if( !expandNodes.empty() && !serveWholeFile && !bodiesEmittedEarly )   // #289: already served ahead of the map below
     {
-        emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, g.outNameOnly, cfg.compress, redactPtr,
+        emitSection( bodiesSection, [ & ]{ packBodies( out, ing, expandNodes, cfg.packBudgetBytes, g.outOff, g.outTargets, rw::withAnchorEdge( rw::CalleeEdgeBytes( g.outNameOnly, nullptr, nullptr ), &g.outAnchorMiss ), cfg.compress, redactPtr,
                                                        expandRanges.empty() ? nullptr : &expandRanges, d.notesPtr, /*outEmitted=*/nullptr,
                                                        /*truncateOversizedFirst=*/true, /*withFileContext=*/true, mapRootArg, &calleeOrder ); } );   // L3: --expand bodies surface notes; V1: sibs=/inc=
     }
@@ -4074,7 +4076,10 @@ static int finishCompactCapture( const rw::Config& cfg, std::string& doc, int rc
     };
     // the DEFAULT posture shapes what it can and leaves the rest exactly as it was emitted (cfg.legendDefaulted);
     // only an ASKED --legend=compact refuses an answer the dialect cannot shape
-    switch( rw::applyCompactDialect( doc, compactLegendHint( cfg, doc ) ) )
+    // forbudget-soft: an explicit --token-budget on a task lens is a SOFT target — the settle never labels it "over"
+    const bool budgetIsSoft = cfg.tokenBudget > 0
+                           && ( !cfg.forTask.empty() || ( !cfg.packTask.empty() && cfg.partitionCount == 0 ) || !cfg.fromTrace.empty() || !cfg.runTrace.empty() );
+    switch( rw::applyCompactDialect( doc, compactLegendHint( cfg, doc ), budgetIsSoft ) )
     {
         case rw::CompactOutcome::Rewritten:
         case rw::CompactOutcome::AlreadyCompact:

@@ -121,18 +121,21 @@ are deciding how much of them to read.
 - Budget a large map: `--max-tokens=8000` or `--top-k=50`. `est_tokens` is calibrated per language against
   real tokenizer output, not a flat chars/4 guess, and `--max-tokens` fits to 90%-of-budget headroom — a
   ceiling, never a target you pad against.
-- **CI/hook budget gate, not a shaping flag:** `--token-budget=N[K|M|G]` asserts instead of fitting — exit 3
-  if `est_tokens` exceeds N, map unchanged. Use it to fail a build/hook on drift; `--max-tokens` SHAPES
-  instead. Composable: set either, both, or neither.
+- **`--token-budget=N[K|M|G]` has two personalities.** On the default map, `--query` and `--recall` it is a
+  CI/hook budget GATE: it asserts instead of fitting — exit 3 if `est_tokens` exceeds N, the map withheld,
+  never trimmed. Use it there to fail a build/hook on drift; `--max-tokens` SHAPES the map instead, and the
+  two compose (set either, both, or neither). On the task lenses (`--for`, `--pack-task`, `--from-trace`)
+  the same flag SHAPES the answer toward N and exits 0 — see `--help` for what it keeps.
 - **A high-cardinality verb paginates**: `--deps`/`--callers`/`--callees`/`--hotspots`/`--tree`/`--lint` take
   `--limit=N --offset=M` — sorted results, so `--offset=N` after `--limit=N` is the exact continuation, no
   drops/dupes. Default (no `--limit`) is the whole result; reach for pagination on a big monorepo instead.
 - **On `--for`, `--limit=N` is not a cut — it is a WIDER net.** `--for="<task>" --limit=40` answers with the
   file-grain page (one row per file with a positive-score symbol) instead of the ranked symbol bundle, and
   `--offset=M` continues it. That is the move when a `--for` answer came back thin (`coverage=` under 50, or
-  a head spread over fewer than three files) — widen first, then read one file. The bundle-shaping flags
-  (`--json`, `--detail`, `--signatures-only`, `--token-budget`, `--top-k`) are refused beside it, never
-  ignored: the page is a document of its own, not a shaped bundle.
+  a head spread over fewer than three files) — widen first, then read one file. With `--token-budget=N` beside
+  `--limit=K` the page is the candidate page instead: a `<sigs>` window over the ranked candidates the budgeted
+  bundle cuts, continued by its `next=`. The bundle-shaping flags (`--json`, `--detail=N`, `--signatures-only`,
+  `--top-k`) are refused beside `--limit`, never ignored: the page is a document of its own, not a shaped bundle.
 - **Spans a service+client split?** `ripwire dir1 dir2 <verb>` merges 2..16 checkouts into ONE labeled map —
   cheaper than reading each repo separately and cross-referencing an include/import by hand.
 - ripwire shines on **specific technical** asks. For a **broad common-word** question, plain `rg` + one read

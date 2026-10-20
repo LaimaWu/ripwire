@@ -1,0 +1,374 @@
+# arm (Q) qualified annotations and in-place rebinding (lane h1-annot), unpacked by test/receiverevidencecheck.sh into its temp
+# dir (kept out of the indexed tree, as callresult.txt). Each file starts at a line `@@@ <root>/<path>`.
+@@@ py/model.py
+class Session:
+    def close(self): pass
+class Other:
+    def close(self): pass
+    def read(self): pass
+class Request:
+    def read(self): pass
+class Outer:
+    class Inner:
+        def close(self): pass
+@@@ py/pkg/__init__.py
+@@@ py/pkg/store.py
+class Store:
+    def close(self): pass
+@@@ py/app.py
+import requests
+import httpx
+import outside.client as cl
+from outside import mod
+from outside import Holder
+from typing import Optional
+
+
+def use_param(s: requests.Session):
+    s.close()
+
+
+def use_default(s: requests.Session = None):
+    s.close()
+
+
+def use_local(make):
+    s: requests.Session = make()
+    s.close()
+
+
+def use_dotted(s: cl.Session):
+    s.close()
+
+
+def use_member_mod(s: mod.Session):
+    s.close()
+
+
+def use_nested_outside(s: Holder.Session):
+    s.close()
+
+
+def use_unbound(s: nowhere.Session):
+    s.close()
+
+
+def use_optional(s: Optional[requests.Session]):
+    s.close()
+
+
+def use_union(s: requests.Session | None):
+    s.close()
+
+
+def use_list(s: list[requests.Session]):
+    s.close()
+
+
+class Client:
+    def handle_request(self, request: httpx.Request):
+        request.read()
+
+
+def use_declared():
+    s: requests.Session
+    s.close()
+
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    import aiohttp
+
+
+def use_type_checking(s: aiohttp.Session):
+    s.close()
+
+
+def use_string(s: "requests.Session"):
+    s.close()
+@@@ py/keep.py
+import model
+import pkg.store
+from pkg import store
+from pkg.store import Store
+from pkg.store import Store as Shop
+from model import Outer
+
+
+def keep_mod(s: model.Session):
+    s.close()
+
+
+def keep_from_mod(s: store.Store):
+    s.close()
+
+
+def keep_dotted(s: pkg.store.Store):
+    s.close()
+
+
+def keep_bare(s: Store):
+    s.close()
+
+
+def keep_alias(s: Shop):
+    s.close()
+
+
+def keep_nested(s: Outer.Inner):
+    s.close()
+
+
+def keep_local(make):
+    s: store.Store = make()
+    s.close()
+
+
+class Local:
+    def close(self): pass
+
+
+def keep_same_file(s: Local):
+    s.close()
+
+
+class Wrap:
+    class Part:
+        def close(self): pass
+
+
+def keep_nested_same_file(s: Wrap.Part):
+    s.close()
+@@@ py/aug.py
+class Num:
+    def __iadd__(self, o):
+        return 7
+    def bump(self): pass
+
+
+class Acc:
+    def __iadd__(self, o):
+        self.v = o
+        return self
+    def bump(self): pass
+
+
+class Headers:
+    def __ior__(self, other):
+        if not other:
+            raise TypeError("x")
+        return self
+    def bump(self): pass
+
+
+class Plain:
+    def bump(self): pass
+
+
+class Sub(Acc):
+    pass
+
+
+class Spare:
+    def bump(self): pass
+
+
+def aug_notself():
+    x = Num()
+    x += 1
+    x.bump()
+
+
+def aug_nodunder():
+    x = Plain()
+    x += 1
+    x.bump()
+
+
+def aug_other_op():
+    x = Acc()
+    x |= 1
+    x.bump()
+
+
+def aug_self():
+    x = Acc()
+    x += 1
+    x.bump()
+
+
+def aug_ior_self():
+    h = Headers()
+    h |= {"a": "1"}
+    h.bump()
+
+
+def aug_inherited():
+    x = Sub()
+    x += 1
+    x.bump()
+
+
+def aug_none():
+    x = Acc()
+    x.bump()
+
+
+def plain_reassign(make):
+    x = Num()
+    x = make()
+    x.bump()
+
+
+def plain_reassign_attr(o):
+    x = Num()
+    x = o.v
+    x.bump()
+class Tint:
+    def __add__(self, other) -> Tint:
+        if other is None:
+            return self
+        return self.mix(other)
+    def mix(self, o): return self
+    def bump(self): pass
+
+
+class Shade(Tint):
+    def bump(self): pass
+
+
+def aug_binary_annotated():
+    x = Tint()
+    x += Tint()
+    x.bump()
+
+
+def aug_binary_base_annotated():
+    x = Shade()
+    x += Tint()
+    x.bump()
+
+
+class Fall:
+    def __iadd__(self, o):
+        if o:
+            return self
+    def bump(self): pass
+
+
+class Both:
+    def __iadd__(self, o):
+        if o:
+            return self
+        else:
+            return self
+    def bump(self): pass
+
+
+def aug_fallthrough():
+    x = Fall()
+    x += 1
+    x.bump()
+
+
+def aug_both_branches():
+    x = Both()
+    x += 1
+    x.bump()
+@@@ ts/model.ts
+export class Session { close(): void {} }
+export class Other { close(): void {} }
+@@@ ts/store.ts
+export class Store { close(): void {} }
+export class Box<T> { close(): void {} }
+@@@ ts/app.ts
+import * as ext from 'outside-lib';
+import extDefault from 'outside-default';
+import { nsx } from 'outside-named';
+const req = require('outside-req');
+
+export function useParam(s: ext.Session<number>) {
+  s.close();
+}
+export function usePlain(s: ext.Session) {
+  s.close();
+}
+export function useDefault(s: extDefault.Session) {
+  s.close();
+}
+export function useNamed(s: nsx.Session) {
+  s.close();
+}
+export function useRequire(s: req.Session) {
+  s.close();
+}
+export function useGlobal(s: NodeJS.Session) {
+  s.close();
+}
+export function useLocal(make: () => any) {
+  const s: ext.Session = make();
+  s.close();
+}
+export class Holder {
+  s: ext.Session;
+  run() {
+    this.s.close();
+  }
+}
+export function useOptional(s?: ext.Session) {
+  s.close();
+}
+export function useDeclared() {
+  let s: ext.Session;
+  s.close();
+}
+import * as dup from './store';
+import dup from 'outside-dup';
+export function useDup(s: dup.Store) {
+  s.close();
+}
+@@@ ts/keep.ts
+import * as store from './store';
+import { Store } from './store';
+
+export function keepNs(s: store.Store) {
+  s.close();
+}
+export function keepGeneric(s: store.Box<number>) {
+  s.close();
+}
+export function keepBare(s: Store) {
+  s.close();
+}
+namespace Local {
+  export class Thing { close(): void {} }
+}
+export function keepLocalNs(s: Local.Thing) {
+  s.close();
+}
+export function keepLocal(make: () => any) {
+  const s: store.Store = make();
+  s.close();
+}
+export class KeepHolder {
+  s: store.Store;
+  run() {
+    this.s.close();
+  }
+}
+import st from './store';
+export function keepDefault(s: st.Store) {
+  s.close();
+}
+@@@ js/aug.js
+class Num { bump() {} }
+class Spare { bump() {} }
+function augJs() {
+  let x = new Num();
+  x += 1;
+  x.bump();
+}
+function augNone() {
+  let x = new Num();
+  x.bump();
+}

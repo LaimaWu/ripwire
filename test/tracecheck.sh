@@ -18,6 +18,8 @@
 # CA4 §B3 adds the budget half: --from-trace is the third member of the family cli.h enumerates by name
 # ("--for / --pack-task / --from-trace"), and it was the one that stated a budget and never labelled an
 # overrun. Arms (T1)-(T5) below pin the ledger, all three ceiling rungs, and the root attrs.
+# forbudget-soft (rule 4): an explicit --token-budget on --from-trace is now a SOFT target — no ladder (the src echo always
+# ships), no over_ceiling against budget_tokens; (T3) asserts that, and its twin keeps --max-tokens' hard over_ceiling.
 #
 # TWO GATE DEFECTS FIXED HERE (CA4 §B15's lens — "what would make this gate pass without the property
 # holding?"), both of which this file had:
@@ -522,18 +524,31 @@ for tb in 50 500 2000; do
         || no "(T2) [default] --token-budget=$tb allowance='$got', expected $want in a kept <!-- ledger: --> comment — the default dropped the ceiling it applied"
 done
 
-# (T3) an overrun is LABELLED. A budget this small cannot fit the first whole signature, so the honest
-#      answer is the complete bundle + over_ceiling — never a silent 15x overshoot, never a mutilated bundle.
+# (T3) forbudget-soft (rule 4): an explicit --from-trace --token-budget is a SOFT target. It used to be a hard ceiling whose
+#      overrun was LABELLED (over_ceiling, the header ladder ready to drop the echo); now the answer is the complete bundle
+#      with NO over_ceiling (est_tokens may exceed N), the trace source echo is never dropped, and nothing is mutilated:
+#      every suspect row ships (shown == total) and the innermost in-corpus body is served. RED on base (d4325a8c): base
+#      labels these overruns over_ceiling="1". The premise (the bundle really is past the old allowance) stays numeric.
 for tb in 50 100 500; do
     out="$( tb_run "$tb" )";  n=$( printf '%s' "$out" | wc -c | tr -d ' ' );  want="$( allowance_of "$tb" )"
-    if [ "$n" -gt "$want" ]; then
-        printf '%s' "$out" | grep -qE 'over_ceiling(="1"|:)' \
-            && ok "(T3) --token-budget=$tb: ${n}B over a ${want}B allowance AND says over_ceiling" \
-            || no "(T3) --token-budget=$tb: ${n}B over a ${want}B allowance with NO over_ceiling label"
-    else
-        no "(T3) --token-budget=$tb did not overshoot ($n <= $want) — this arm no longer measures anything"
-    fi
+    case "$n$want" in ''|*[!0-9]*) no "(T3) --token-budget=$tb: no byte count / allowance to compare (n='$n' allowance='$want')"; continue ;; esac
+    if [ "$n" -le "$want" ]; then no "(T3) --token-budget=$tb did not overshoot ($n <= $want) — this arm no longer measures anything"; continue; fi
+    t3bad=""
+    printf '%s' "$out" | grep -qE 'over_ceiling(="1"|:)' && t3bad="$t3bad; over_ceiling on a soft target (NOLBL)"
+    printf '%s' "$out" | grep -q '^<ctx [^>]*task="traces/py.txt"' || t3bad="$t3bad; root task= echo missing (HL)"
+    printf '%s' "$out" | grep -q '<trace src="traces/py.txt" ' || t3bad="$t3bad; <trace src=> echo missing (HL)"
+    printf '%s' "$out" | grep -q '<sigs shown="3" total="3"' || t3bad="$t3bad; suspect rows cut (expected shown=3 total=3)"
+    printf '%s' "$out" | grep -q '<b t="fn" l="7" p="app/main.py" n="inner"><!\[CDATA\[def inner():' || t3bad="$t3bad; the innermost body (inner) is not served"
+    printf '%s' "$out" | grep -q 'budget_tokens="'"$tb"'"' || t3bad="$t3bad; budget_tokens=$tb not echoed on the root"
+    [ -z "$t3bad" ] \
+        && ok "(T3) --token-budget=$tb: ${n}B past the old ${want}B allowance, complete bundle, src echo kept, NO over_ceiling (soft target)" \
+        || no "(T3) --token-budget=$tb: ${n}B${t3bad}"
 done
+# (T3 twin) --max-tokens stays a HARD body ceiling on --from-trace: the same overrun under max_tokens= IS labelled.
+T3M="$( cd "$WORK" && "$BIN" . --from-trace="traces/py.txt" --max-tokens=50 --no-cache 2>/dev/null )"
+printf '%s' "$T3M" | grep -qE '^<ctx [^>]*max_tokens="50"[^>]* over_ceiling="1"' \
+    && ok "(T3 twin) --max-tokens=50 overrun carries over_ceiling=\"1\" (the hard ceiling twin)" \
+    || no "(T3 twin) --max-tokens=50 overrun lacks max_tokens=50 + over_ceiling=\"1\" on the root"
 
 # (T4) the label is not unconditional: a budget the bundle FITS under must stay silent (a lens that always
 #      cries over_ceiling is as useless as one that never does). 20000 tokens is ~54 KB of allowance.

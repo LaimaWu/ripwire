@@ -47,6 +47,12 @@
 #   GO grep <enc> on the Go kinds honesty-small-068 added (t="type" `type N string`, t="functype"): read as a struct
 #      is (a conversion is one call, a type mention is never counted) => callers_floor="1" + floor_next=, like the
 #      Go struct beside them (the kinds' rows in countfloor.h kUseFormOfKind, train 26b).
+#   P  (L4) the grep CARRIER: a hit inside a variable/constant/initialiser prints reads=/reads_at= (the uses verb's read
+#      sites, Python and C++ where that verb indexes reads; the same sites --uses lists) and vals= (the function values it
+#      stores, slot=fn@definition line, path:line in another file); root next= becomes --uses=<carrier> when reads > 0.
+#      Near misses: a carrier read nowhere (no reads=, next= stays the at verb), a string-only carrier (no vals=), a hit
+#      inside a function (row and next= unchanged), C/TS carriers (no reads=: not indexed), a C++ header carrier (no
+#      reads=: its .c readers are unseen). MCP twin: the same reads/reads_at/vals keys.
 #   N  legend: every new attribute is defined in the answer that carries it (compact and full dialects).
 #   O  determinism (x2) + xmllint.
 #
@@ -406,14 +412,159 @@ for n in TestName Pair Handler; do
     fi
 done
 
+# ── P: the grep CARRIER (L4, src/grepcarrier.h) ──────────────────────────────────────────────────────────
+# A hit inside a variable/constant/initialiser: reads=/reads_at= (the uses verb's read sites, where it indexes reads)
+# and vals= (the function values the carrier stores, @ the one definition each resolves to); next= the uses verb.
+echo "=== P: grep <enc> on a carrier names its reads and the functions it stores ==="
+mkdir -p "$W/pc/lib" "$W/cc" "$W/tsc"
+printf 'def handle_get():\n    return 1\n\ndef handle_put():\n    return 2\n' > "$W/pc/lib/handlers.py"
+printf 'from .handlers import handle_get\n\ndef local_put():\n    return 3\n\nUNREAD = "PC_UNREAD_MARK"\nNAMED = "PC_NAMED_MARK"\nTABLE = {"get": handle_get, "put": local_put, "label": "PC_TABLE_MARK"}\n\ndef inner():\n    return "PC_INNER_MARK"\n' > "$W/pc/lib/conf.py"
+printf 'from . import conf\n\ndef first():\n    return conf.NAMED\n\ndef second():\n    x = conf.NAMED\n    return x\n' > "$W/pc/lib/reader.py"
+printf 'from lib import conf\n\ndef test_named():\n    assert conf.NAMED\n' > "$W/pc/test_reader.py"
+printf 'struct entry { const char *name; int (*exec)(int); int (*undo)(int); };\nint other_exec(int);\nstatic int local_exec(int v) { return v; }\nconst struct entry ent = {\n\t.name = "C_ENT_MARK",\n\t.exec = local_exec,\n\t.undo = other_exec\n};\nstatic const char *plain = "C_PLAIN_MARK";\nint body(void) { return 1 + (plain != 0); }\n' > "$W/cc/ent.c"
+printf 'int other_exec(int v)\n{\n\treturn v + 1;\n}\n' > "$W/cc/other.c"
+printf 'const char *kCppName = "CPP_NAME_MARK";\n' > "$W/cc/names.cpp"
+printf 'extern const char *kCppName;\nconst char *use_name() { return kCppName; }\n' > "$W/cc/use.cpp"
+printf 'extern const char *kHdrName;\nconst char *kHdrName = "CPP_HDR_MARK";\n' > "$W/cc/hdr.h"
+printf '#include "hdr.h"\nconst char *use_hdr() { return kHdrName; }\n' > "$W/cc/usehdr.cpp"
+printf 'function homeHandler() { return 1; }\nexport const ROUTES = { home: homeHandler, name: "TS_ROUTES_MARK" };\nexport function useRoutes() { return ROUTES.home; }\n' > "$W/tsc/routes.ts"
+
+OUT_P="$( run pc --grep=PC_NAMED_MARK )"; ROW_P="$( enc_row "$OUT_P" NAMED )"
+[ -n "$ROW_P" ] || no "(P) premise: no <enc n=\"NAMED\"> row"
+if [ "$( attr "$ROW_P" reads )" = 3 ]; then ok "(P) reads=\"3\" — the uses verb's three read sites of NAMED"; else no "(P) reads on NAMED: $ROW_P"; fi
+if [ "$( attr "$ROW_P" reads_at )" = "lib/reader.py:4 lib/reader.py:7 test_reader.py:4" ]; then ok "(P) reads_at= lists them in tier, path, line order (source before tests, then path, line)"; else no "(P) reads_at on NAMED: $ROW_P"; fi
+USES_P="$( run pc --uses=NAMED | grep -oE '<u role="read" p="[^"]*"' | sed 's/.*p="//; s/"$//' | sort | tr '\n' ' ' )"
+if [ "$USES_P" = "lib/reader.py:4 lib/reader.py:7 test_reader.py:4 " ]; then ok "(P) the same three sites --uses=NAMED lists as role=\"read\""; else no "(P) --uses=NAMED read rows: $USES_P"; fi
+if [ "$( attr "$( root_tag "$OUT_P" grep )" next )" = "--uses=NAMED" ]; then ok "(P) root next=\"--uses=NAMED\" (the top hit's carrier has reads)"; else no "(P) root next on NAMED: $( root_tag "$OUT_P" grep )"; fi
+case "$ROW_P" in *vals=*) no "(P) a carrier holding a string got vals=: $ROW_P" ;; *) ok "(P) no vals= on a carrier that stores no function" ;; esac
+# langfacts-fold (train 29): a Markdown file that names the carrier is no reader of it (the pc corpus plus one doc). A Markdown
+# reference is a doc-link mention or a doc-to-doc call, never role Read, so readSitesOf's role test drops it; a former
+# per-language "is a document" clause there was dead (no producer gives a Markdown ref role Read) and is gone.
+mkdir -p "$W/pcmd"; cp -R "$W/pc/." "$W/pcmd/"; mkdir -p "$W/pcmd/docs"
+printf '# Guide\n\nSet `NAMED` before use; see [NAMED](lib/conf.py) and the NAMED value.\n\n```python\nconf.NAMED\nNAMED\n```\n' > "$W/pcmd/docs/guide.md"
+ROW_PMD="$( enc_row "$( run pcmd --grep=PC_NAMED_MARK )" NAMED )"
+if [ "$( attr "$ROW_PMD" reads )" = 3 ] && [ "$( attr "$ROW_PMD" reads_at )" = "lib/reader.py:4 lib/reader.py:7 test_reader.py:4" ]; then
+    ok "(P) near miss: a Markdown file naming NAMED (code span, link, fence) adds no read — reads=\"3\", the same reads_at="
+else no "(P) near miss: a Markdown mention changed the carrier's reads: $ROW_PMD"; fi
+
+ROW_PU="$( enc_row "$( run pc --grep=PC_UNREAD_MARK )" UNREAD )"; R_PU="$( root_tag "$( run pc --grep=PC_UNREAD_MARK )" grep )"
+[ -n "$ROW_PU" ] || no "(P) premise: no <enc n=\"UNREAD\"> row"
+case "$ROW_PU" in *reads=*|*reads_at=*) no "(P) near miss: a carrier read nowhere printed reads: $ROW_PU" ;; *) ok "(P) near miss: a carrier read nowhere carries no reads= (absent, never a zero)" ;; esac
+if [ "$( attr "$R_PU" next )" = "--at=lib/conf.py:6" ]; then ok "(P) near miss: no reads => next= stays the at verb on the top hit"; else no "(P) near miss next: $R_PU"; fi
+
+ROW_PT="$( enc_row "$( run pc --grep=PC_TABLE_MARK )" TABLE )"
+if [ "$( attr "$ROW_PT" vals )" = "[get]=handle_get@lib/handlers.py:1 [put]=local_put@3" ]; then ok "(P) vals= on a dict carrier: [key]=fn@its definition (path:line in another file)"; else no "(P) vals on TABLE: $ROW_PT"; fi
+
+ROW_PI="$( enc_row "$( run pc --grep=PC_INNER_MARK )" inner )"; R_PI="$( root_tag "$( run pc --grep=PC_INNER_MARK )" grep )"
+[ -n "$ROW_PI" ] || no "(P) premise: no <enc n=\"inner\"> row"
+case "$ROW_PI" in *reads=*|*vals=*) no "(P) negative: a literal in a function body got carrier attributes: $ROW_PI" ;; *) ok "(P) negative: a hit inside a function keeps its row unchanged" ;; esac
+if [ "$( attr "$R_PI" next )" = "--at=lib/conf.py:11" ]; then ok "(P) negative: next= stays the at verb inside a function"; else no "(P) negative next: $R_PI"; fi
+
+ROW_PC="$( enc_row "$( run cc --grep=C_ENT_MARK )" ent )"
+if [ "$( attr "$ROW_PC" vals )" = "exec=local_exec@3 undo=other_exec@other.c:1" ]; then ok "(P) C initialiser: vals=\"exec=local_exec@3 undo=other_exec@other.c:1\""; else no "(P) C initialiser row: $ROW_PC"; fi
+case "$ROW_PC" in *reads=*) no "(P) C reads are not indexed, yet reads= printed: $ROW_PC" ;; *) ok "(P) C: no reads= (the uses verb indexes no C reads; floor_next stays the literal scan)" ;; esac
+ROW_PCP="$( enc_row "$( run cc --grep=C_PLAIN_MARK )" plain )"
+[ -n "$ROW_PCP" ] || no "(P) premise: no <enc n=\"plain\"> row"
+case "$ROW_PCP" in *vals=*|*reads=*) no "(P) near miss: a C string constant got carrier attributes: $ROW_PCP" ;; *) ok "(P) near miss: a C constant holding a string and read in C carries neither attribute" ;; esac
+ROW_PX="$( enc_row "$( run cc --grep=CPP_NAME_MARK )" kCppName )"
+if [ "$( attr "$ROW_PX" reads )" = 1 ] && [ "$( attr "$ROW_PX" reads_at )" = "use.cpp:2" ]; then ok "(P) C++ (reads indexed): reads=\"1\" reads_at=\"use.cpp:2\""; else no "(P) C++ row: $ROW_PX"; fi
+ROW_PH="$( enc_row "$( run cc --grep=CPP_HDR_MARK )" kHdrName )"
+[ -n "$ROW_PH" ] || no "(P) premise: no <enc n=\"kHdrName\"> row"
+case "$ROW_PH" in *reads=*) no "(P) near miss: a header carrier counted reads its .c users hide: $ROW_PH" ;; *) ok "(P) near miss: a .h carrier carries no reads= (its readers may be .c files the uses verb never reads)" ;; esac
+ROW_PS="$( enc_row "$( run tsc --grep=TS_ROUTES_MARK )" ROUTES )"
+if [ "$( attr "$ROW_PS" vals )" = "home=homeHandler@1" ]; then ok "(P) TS object carrier: vals=\"home=homeHandler@1\""; else no "(P) TS row: $ROW_PS"; fi
+case "$ROW_PS" in *reads=*) no "(P) TS reads are not indexed, yet reads= printed: $ROW_PS" ;; *) ok "(P) TS: no reads= (not indexed for TS)" ;; esac
+
+MCP_P="$( mcp_call grep "{\"path\":\"$W/pc\",\"pattern\":\"PC_NAMED_MARK\"}" )"
+if printf '%s' "$MCP_P" | python3 -c '
+import json, sys
+d = json.loads( sys.stdin.read() )
+r = { x["n"]: x for x in d.get( "enclosing", [] ) }.get( "NAMED", {} )
+sys.exit( 0 if r.get( "reads" ) == 3 and r.get( "reads_at" ) == [ "lib/reader.py:4", "lib/reader.py:7", "test_reader.py:4" ] else 1 )'; then ok "(P) MCP grep enclosing NAMED: reads 3 and the same reads_at as the CLI"; else no "(P) MCP grep NAMED: $MCP_P"; fi
+if printf '%s' "$MCP_P" | python3 -c '
+import json, sys
+sys.exit( 0 if json.loads( sys.stdin.read() ).get( "next" ) == "--uses=NAMED" else 1 )'; then ok "(P) MCP grep next is --uses=NAMED, as the CLI root next="; else no "(P) MCP grep next: $MCP_P"; fi
+MCP_PC="$( mcp_call grep "{\"path\":\"$W/cc\",\"pattern\":\"C_ENT_MARK\"}" )"
+if printf '%s' "$MCP_PC" | python3 -c '
+import json, sys
+d = json.loads( sys.stdin.read() )
+r = { x["n"]: x for x in d.get( "enclosing", [] ) }.get( "ent", {} )
+sys.exit( 0 if r.get( "vals" ) == [ "exec=local_exec@3", "undo=other_exec@other.c:1" ] and "reads" not in r else 1 )'; then ok "(P) MCP grep enclosing ent: the same vals as the CLI, no reads key"; else no "(P) MCP grep ent: $MCP_PC"; fi
+
+# P/top (train-28 fix N1): reads are counted only when the TOP hit's carrier is readable. A page whose top hit is in a
+# function and whose lower hit is in a readable carrier pays NO second ingest (the hard-line seam set for the reading
+# that ingest would add never fires), and the lower carrier keeps floor_next= (the uses verb) as its clue, no reads=.
+mkdir -p "$W/pm/lib" "$W/pw/a/lib" "$W/pw/b"
+printf 'def early():\n    return "PM_MIX_MARK"\n\nLATE = "PM_MIX_MARK"\n' > "$W/pm/lib/aa.py"
+printf 'from lib import aa\n\ndef reader():\n    return aa.LATE\n' > "$W/pm/lib/rd.py"
+printf 'TOPV = "PW_WS_MARK"\n' > "$W/pw/a/lib/top.py"
+printf 'from lib import top\n\ndef r2():\n    return top.TOPV\n' > "$W/pw/a/lib/use.py"
+printf 'OTHER = "PW_WS_MARK"\n\ndef r3():\n    return OTHER\n' > "$W/pw/b/bb.py"
+OUT_PM="$( cd "$W/pm" && RIPWIRE_TEST_MEMGUARD=hard:3 "$BIN" . --no-cache --grep=PM_MIX_MARK 2>/dev/null )"
+ROW_PM="$( enc_row "$OUT_PM" LATE )"; R_PM="$( root_tag "$OUT_PM" grep )"
+[ -n "$ROW_PM" ] || no "(P/top) premise: no <enc n=\"LATE\"> row"
+[ -n "$( enc_row "$OUT_PM" early )" ] || no "(P/top) premise: no <enc n=\"early\"> row (the top hit's function)"
+case "$ROW_PM" in *reads=*|*reads_at=*) no "(P/top) a lower carrier counted reads although the top hit is in a function: $ROW_PM" ;; *) ok "(P/top) top hit in a function: the lower carrier LATE has no reads=" ;; esac
+if [ "$( attr "$ROW_PM" floor_next )" = "--uses=LATE" ]; then ok "(P/top) the lower carrier keeps floor_next=\"--uses=LATE\" as the clue"; else no "(P/top) clue on LATE: $ROW_PM"; fi
+case "$R_PM" in *reads_skipped=*) no "(P/top) a second ingest ran (the hard-line reading after it fired): $R_PM" ;; *) ok "(P/top) no second ingest: the hard-line reading it would add never happened" ;; esac
+if [ "$( attr "$R_PM" next )" = "--at=lib/aa.py:2" ]; then ok "(P/top) next= stays the at verb on the top hit"; else no "(P/top) next: $R_PM"; fi
+MCP_PM="$( mcp_call grep "{\"path\":\"$W/pm\",\"pattern\":\"PM_MIX_MARK\"}" )"
+if printf '%s' "$MCP_PM" | python3 -c '
+import json, sys
+r = { x["n"]: x for x in json.loads( sys.stdin.read() ).get( "enclosing", [] ) }.get( "LATE" )
+sys.exit( 0 if r is not None and "reads" not in r and r.get( "floor_next" ) == "--uses=LATE" else 1 )'; then ok "(P/top) MCP: the same page, the same verdict (no reads key on LATE, floor_next clue)"; else no "(P/top) MCP LATE: $MCP_PM"; fi
+
+# P/mem (fix N4): the second ingest runs under the memory guard. Over the hard line after it (seam: the third hard-line
+# reading of a single-root grep, after main's ingest and graph readings), the answer keeps the lean rows and its root
+# discloses the skipped reads in band, with the call that recovers them; exit 0, nothing refused.
+OUT_PX="$( cd "$W/pc" && RIPWIRE_TEST_MEMGUARD=hard:3 "$BIN" . --no-cache --grep=PC_NAMED_MARK 2>/dev/null; echo "rc=$?" )"
+R_PX="$( root_tag "$OUT_PX" grep )"; ROW_PXM="$( enc_row "$OUT_PX" NAMED )"
+[ -n "$ROW_PXM" ] || no "(P/mem) premise: no <enc n=\"NAMED\"> row on the stopped answer"
+if [ "$( attr "$R_PX" reads_skipped )" = hard_limit ] && [ "$( attr "$R_PX" reads_next )" = "--uses=NAMED" ]; then ok "(P/mem) stopped: root reads_skipped=\"hard_limit\" reads_next=\"--uses=NAMED\""; else no "(P/mem) root on a stopped reads ingest: $R_PX"; fi
+case "$ROW_PXM" in *reads=*) no "(P/mem) a stopped ingest still printed reads=: $ROW_PXM" ;; *) ok "(P/mem) stopped: no reads= on the row (unknown, never a short count)" ;; esac
+case "$OUT_PX" in *rc=0) ok "(P/mem) stopped: exit 0, the lean answer stands" ;; *) no "(P/mem) stopped exit: ${OUT_PX##*rc=}" ;; esac
+comments "$( cd "$W/pc" && RIPWIRE_TEST_MEMGUARD=hard:3 "$BIN" . --no-cache --grep=PC_NAMED_MARK --legend=compact 2>/dev/null )" | grep -qF "reads_skipped=" \
+    && ok "(P/mem) compact legend defines reads_skipped= on that answer" || no "(P/mem) compact legend lacks reads_skipped="
+comments "$( cd "$W/pc" && RIPWIRE_TEST_MEMGUARD=hard:3 "$BIN" . --no-cache --grep=PC_NAMED_MARK --legend=full 2>/dev/null )" | grep -qF "reads_next" \
+    && ok "(P/mem) full legend defines reads_next on that answer" || no "(P/mem) full legend lacks reads_next"
+case "$OUT_P" in *reads_skipped*) no "(P/mem) near miss: an unstopped answer carries reads_skipped" ;; *) ok "(P/mem) near miss: an unstopped answer carries no reads_skipped (nor its legend)" ;; esac
+
+# P/cache (fix N5): an explicit --cache=F is honoured — the second ingest writes no rich auto-cache under TMPDIR.
+mkdir -p "$W/tmpd"
+OUT_PK="$( cd "$W/pc" && TMPDIR="$W/tmpd" XDG_CACHE_HOME="$W/tmpd" "$BIN" . --cache="$W/named.bin" --grep=PC_NAMED_MARK 2>/dev/null )"
+[ "$( attr "$( enc_row "$OUT_PK" NAMED )" reads )" = 3 ] || no "(P/cache) premise: reads=\"3\" under --cache= (the second ingest ran)"
+if [ -z "$( find "$W/tmpd" -type f 2>/dev/null )" ] && [ -f "$W/named.bin" ]; then ok "(P/cache) --cache=F: F written, no hidden rich auto-cache under TMPDIR"; else no "(P/cache) files under TMPDIR: $( find "$W/tmpd" -type f | tr '\n' ' ' )"; fi
+OUT_PK2="$( cd "$W/pc" && TMPDIR="$W/tmpd" XDG_CACHE_HOME="$W/tmpd" "$BIN" . --cache="$W/named.bin" --grep=PC_NAMED_MARK 2>/dev/null )"
+if [ "$OUT_PK" = "$OUT_PK2" ]; then ok "(P/cache) warm == cold under --cache=F"; else no "(P/cache) warm and cold answers differ under --cache=F"; fi
+
+# P/ws (fix N6): reads= on a workspace (multi-root) run — the CLI re-ingests each root rich and merges, so it prints the
+# same reads/reads_at as the MCP workspace index (rich) on the same page.
+OUT_PW="$( "$BIN" "$W/pw/a" "$W/pw/b" --no-cache --grep=PW_WS_MARK 2>/dev/null )"
+ROW_PWA="$( enc_row "$OUT_PW" TOPV )"; ROW_PWB="$( enc_row "$OUT_PW" OTHER )"
+if [ "$( attr "$ROW_PWA" reads_at )" = "a/lib/use.py:4" ] && [ "$( attr "$ROW_PWB" reads_at )" = "b/bb.py:4" ]; then ok "(P/ws) CLI workspace: reads_at= per root, label/path"; else no "(P/ws) CLI workspace rows: $ROW_PWA $ROW_PWB"; fi
+if [ "$( attr "$( root_tag "$OUT_PW" grep )" next )" = "--uses=TOPV" ]; then ok "(P/ws) CLI workspace next=\"--uses=TOPV\""; else no "(P/ws) CLI workspace next: $( root_tag "$OUT_PW" grep )"; fi
+MCP_PW="$( mcp_call grep "{\"paths\":[\"$W/pw/a\",\"$W/pw/b\"],\"pattern\":\"PW_WS_MARK\"}" )"
+CLI_PW="$( for n in TOPV OTHER; do r="$( enc_row "$OUT_PW" "$n" )"; printf '%s %s %s\n' "$n" "$( attr "$r" reads )" "$( attr "$r" reads_at )"; done )"
+MCPS_PW="$( printf '%s' "$MCP_PW" | python3 -c '
+import json, sys
+d = json.loads( sys.stdin.read() )
+for x in d.get( "enclosing", [] ):
+    print( x["n"], x.get( "reads", "" ), " ".join( x.get( "reads_at", [] ) ) )
+print( "next", d.get( "next" ) )' )"
+if [ "$MCPS_PW" = "$CLI_PW
+next --uses=TOPV" ]; then ok "(P/ws) MCP workspace: reads/reads_at/next identical to the CLI"; else no "(P/ws) MCP vs CLI: [$MCPS_PW] vs [$CLI_PW]"; fi
+OUT_PWS="$( RIPWIRE_TEST_MEMGUARD=hard:4 "$BIN" "$W/pw/a" "$W/pw/b" --no-cache --grep=PW_WS_MARK 2>/dev/null )"
+if [ "$( attr "$( root_tag "$OUT_PWS" grep )" reads_skipped )" = hard_limit ] && [ -z "$( attr "$( enc_row "$OUT_PWS" OTHER )" reads )" ]; then ok "(P/ws) a workspace stopped after its first rich root: reads_skipped=, no partial reads= on any row"; else no "(P/ws) stopped workspace: $( root_tag "$OUT_PWS" grep )"; fi
+
 # ── N: legend ────────────────────────────────────────────────────────────────────────────────────────────
 echo "=== N: every new attribute is defined where it rides ==="
 for dialect in compact full; do
     L_A="$( run c --safe-delete=cell --legend=$dialect )"; L_C="$( run c --safe-delete=width_of --legend=$dialect )"
     L_E="$( run py --grep=APP_BACKEND_ENV --legend=$dialect )"
     L_K="$( run tsl '--for=which router classes implement the Router interface' --legend=$dialect )"
+    L_P="$( run pc --grep=PC_TABLE_MARK --legend=$dialect )"; L_PN="$( run pc --grep=PC_NAMED_MARK --legend=$dialect )"
     for pair in "L_A:callers_floor=" "L_A:uses_floor=" "L_A:unmodelled" "L_C:sites_at=" "L_E:callers_floor=" "L_E:floor_next=" \
-                "L_K:implementors_floor=" "L_K:implementors_shown=" "L_K:floor_next="; do
+                "L_K:implementors_floor=" "L_K:implementors_shown=" "L_K:floor_next=" "L_P:vals=" "L_PN:reads=" "L_PN:reads_at="; do
         var="${pair%%:*}"; term="${pair#*:}"
         comments "${!var}" | grep -qF -- "$term" \
             && ok "(N/$dialect) $term defined in the legend of the $var answer" || no "(N/$dialect) $term is not defined in the $var legend"
@@ -422,10 +573,16 @@ done
 OUT_N="$( run c --safe-delete=helper_dead --legend=compact )"
 [ -n "$( root_tag "$OUT_N" safe-delete )" ] || no "(N) premise: no <safe-delete> answer for helper_dead (an empty answer must not read as present-only)"
 case "$OUT_N" in *callers_floor*|*uses_floor*|*sites_l*|*sites_at*) no "(N) a legend defines a floor/sites term its answer does not carry" ;; *) ok "(N) present-only: no floor/sites term on an answer without them" ;; esac
+for dialect in compact full; do
+    OUT_NP="$( run pc --grep=PC_INNER_MARK --legend=$dialect )"
+    [ -n "$( root_tag "$OUT_NP" grep )" ] || no "(N) premise: no <grep> answer for PC_INNER_MARK"
+    case "$OUT_NP" in *reads_at*|*vals=*) no "(N/$dialect) a legend defines a carrier term its answer does not carry" ;; *) ok "(N/$dialect) present-only: no carrier term on an answer without a carrier attribute" ;; esac
+done
 
 # ── O: determinism + xmllint ─────────────────────────────────────────────────────────────────────────────
 echo "=== O: determinism and well-formed XML ==="
-for spec in "c --safe-delete=cell" "c --safe-delete=width_of" "py --grep=APP_BACKEND_ENV" "tsl --lego=Router"; do
+for spec in "c --safe-delete=cell" "c --safe-delete=width_of" "py --grep=APP_BACKEND_ENV" "tsl --lego=Router" "pc --grep=PC_NAMED_MARK" "cc --grep=C_ENT_MARK" \
+            "pc --grep=PC_TABLE_MARK --legend=full"; do
     set -- $spec; a="$( run "$@" )"; b="$( run "$@" )"
     if [ -n "$a" ] && [ "$a" = "$b" ]; then ok "(O) deterministic: $spec"; else no "(O) not deterministic (or empty): $spec"; fi
     if command -v xmllint >/dev/null 2>&1; then

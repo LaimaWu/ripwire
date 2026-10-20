@@ -637,7 +637,7 @@ inline ScoutResult computeMergeScout( const std::string& root, std::string_view 
         baseShas[i] = resolveMergeBase( root, refShas[i], result.headSha );
     }
 
-    const bool dirty = !quality::gitOneLine( root, "status --porcelain 2>/dev/null" ).empty();   // dirty ⇒ the implicit extra arm
+    const bool dirty = !quality::gitOneLine( root, "status --porcelain --ignore-submodules=dirty 2>/dev/null" ).empty();   // dirty ⇒ the implicit extra arm
 
     HeadChangedByBase headChangedByBase = planHeadConflictLane( baseShas, result.headSha );
 

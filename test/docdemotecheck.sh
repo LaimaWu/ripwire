@@ -99,6 +99,17 @@ PY
 "$BIN" docdemotefix --for="$BUGQ" --no-route --format=candidates --no-cache >"$TMP/noroute.xml" 2>/dev/null
 "$BIN" docdemotefix --for="$BUGQ"     --no-cache >"$TMP/bugfor.xml"    2>/dev/null
 "$BIN" docdemotefix --for="$TRACEQ"   --no-cache >"$TMP/tracefor.xml"  2>/dev/null
+# RE-PIN 2026-10-18 (train 30, lane tail-sym merged; rule 4): docdemotegolden_for.xml 6539 -> 6557 B (est_tokens "2616" -> "2623")
+# and docdemotegolden_noroute.xml 10051 -> 10069 B ("3584" -> "3591"), re-captured from the merged binary and diffed by hand:
+# the ONLY bytes that moved are the tail legend clause only: "first t p= alone" / "then t p= sym=" lose the `t p=` words and sym= reads "its top symbols by lens rank (a pointer, not the answer)" (+18 B), and est_tokens with them.
+# UN-PIN 2026-10-15 (lane for-body-slot FIX1; rule 4): docdemotegolden_for.xml back to its pre-lane 6529 B. The lane had
+# re-pinned it to 7540 B for a pick=subtoken body (pin_page); the owner ruling dropped the subtoken fallback, and the
+# question names no owner (no callable is named by a whole question word), so no body rides and the golden is byte-identical
+# to the forbudget-soft FIX2 base's again.
+# RE-PIN 2026-10-15 (lane forbudget-soft round C, FOLD C; rule 4): docdemotegolden_for.xml 5839 -> 6529 B (est_tokens "2340" ->
+# "2616") and docdemotegolden_noroute.xml 9350 -> 10039 B ("3309" -> "3584"). Only the <tail> (page 0 of the file page after the
+# rank rows, sym= on its rows, total= every positive-score file), the tail legend clause and est_tokens= moved (checked byte-equal
+# with those three stripped).
 # RE-PIN 2026-10-08 (train 26b: lean-answers merged): docdemotegolden_for.xml 6167 -> 5851 B (est_tokens "2467" -> "2340")
 # and docdemotegolden_noroute.xml 9695 -> 9364 B ("3441" -> "3309"). Only the zero elision and its legend reading moved:
 # undoing it (zeros back, reading removed, est_tokens=/at= masked) gives the train-side goldens exactly, on both fixtures,
@@ -185,6 +196,10 @@ PY
 # anchorcheck/routecheck the same day).
 # L1 (2026-09-19): the CLI default legend is compact; (f)/(h) compare against goldens recorded from the full default, so they ask for it.
 "$BIN" docdemotefix --for="$CONCEPTQ" --no-cache --legend=full >"$TMP/concept.xml"   2>/dev/null
+# body-fold (train 31; rule 4, by design): the conceptual answer now ends with <fold kind="bodies"> (forbodyfoldcheck owns it).
+# The golden stays the pre-fold answer byte for byte — (f) reads it off the fold-off twin — and (f-fold) pins that the default
+# answer is that twin plus the fold, its legend clause, the <sigs> next pair and est_tokens, nothing else.
+RIPWIRE_NO_BODY_FOLD=1 "$BIN" docdemotefix --for="$CONCEPTQ" --no-cache --legend=full >"$TMP/conceptoff.xml" 2>/dev/null
 "$BIN" docdemotefix --for="$BUGQ" --no-route --no-cache --legend=full >"$TMP/noroutefor.xml" 2>/dev/null
 "$BIN" docdemotefix --recall="$BUGQ" --no-cache >"$TMP/recall.xml" 2>/dev/null
 
@@ -261,9 +276,22 @@ grep -q 'doc tier demoted' "$TMP/concept.xml" \
 grep -q 'doc_tier="' "$TMP/conceptc.xml" \
     && no "(f) conceptual query emitted a doc_tier= attribute: the detector over-fires on ordinary prose" \
     || ok "(f) conceptual query: no doc_tier= attribute on the candidates export either"
-diff -q "$TMP/concept.xml" "$ROOT/test/docdemotegolden_for.xml" >/dev/null \
-    && ok "(f) conceptual --for byte-identical to the pre-change golden" \
-    || no "(f) conceptual --for drifted from test/docdemotegolden_for.xml"
+diff -q "$TMP/conceptoff.xml" "$ROOT/test/docdemotegolden_for.xml" >/dev/null \
+    && ok "(f) conceptual --for (fold-off twin) byte-identical to the pre-change golden" \
+    || no "(f) conceptual --for (fold-off twin) drifted from test/docdemotegolden_for.xml"
+if python3 - "$TMP/concept.xml" "$TMP/conceptoff.xml" <<'PYF'
+import re, sys
+t, o = open(sys.argv[1]).read(), open(sys.argv[2]).read()
+if '<fold kind="bodies"' not in t: sys.exit(1)
+t = re.sub(r'<fold .*?</fold>', '', t, flags=re.S)
+t = re.sub(r'; fold kind=bodies:.*?sigs_next= the signatures-only re-call', '', t, flags=re.S)
+m = re.search(r'<sigs\b[^>]*>', t)
+if m: t = t[:m.start()] + re.sub(r' next="--expand=[^"]*"', '', m.group(0)).replace(' sigs_next="', ' next="') + t[m.end():]
+t = t.replace('[sigs sigs_next=: one', '[sigs next=: one')
+mask = lambda x: re.sub(r' est_tokens="\d+"', '', x)
+sys.exit(0 if mask(t) == mask(o) else 1)
+PYF
+then ok "(f-fold) the default conceptual answer is the golden's answer plus the fold, nothing else moved"; else no "(f-fold) the default conceptual answer differs from its fold-off twin outside the fold"; fi
 # (f) one row spelling: every r= row of a --for answer omits a zero cx=/ccx=/in= (the lens legend: absent = 0), the rows
 # the code-above-docs reorder moved and re-headed (serialize.h reorderDocsAfterCode) included. This routed question
 # moves the two notes/paging_design.md rows below the code.

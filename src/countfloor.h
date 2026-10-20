@@ -168,13 +168,16 @@ inline IdsOfName relatedByName( const IngestResult& ing, const RowsOfName& rowsO
 // ONE pass over the reference table: a reference `isKind` accepts, spelled like a row's name, from a symbol that is not
 // in that name's `bound` set (or from file scope), marks every row of the name. `isBound( r, ids )` decides whether the
 // reference is accounted for by that name's sorted `bound` ids (empty when the name has none); `mark( row )` is the verdict.
+// A FORWARDED call buildGraph did not keep is no call the code makes, so it is no evidence (model.h forwardCounts;
+// `keptForwards` is Graph::keptForwards).
 template<class IsKind, class IsBound, class Mark>
 inline void markUnboundSpellings( const IngestResult& ing, const RowsOfName& rowsOfName, const IdsOfName& bound, IsKind&& isKind,
-                                  IsBound&& isBound, Mark&& mark )
+                                  IsBound&& isBound, std::span<const std::uint32_t> keptForwards, Mark&& mark )
 {
-    for( const Reference& r : ing.references )
+    for( std::uint32_t refIndex = 0; refIndex < ing.references.size(); ++refIndex )
     {
-        if( !isKind( r ) )
+        const Reference& r = ing.references[refIndex];
+        if( !isKind( r ) || !forwardCounts( r, refIndex, keptForwards ) )
         {
             continue;
         }
@@ -283,7 +286,7 @@ inline std::vector<CallerFloor> callerFloors( const IngestResult& ing, const Gra
                 into.insert( into.end(), inCi + inRo[id], inCi + inRo[id + 1] );
             } );
         countfloor::markUnboundSpellings( ing, rowsOfName, boundCallers, countfloor::isCallSpelling, countfloor::fromIsBound,
-                                          [ & ]( std::uint32_t row ) { out[row].isFloor = true; } );
+                                          g.keptForwards, [ & ]( std::uint32_t row ) { out[row].isFloor = true; } );
 
         std::optional<ValueRefIndex> own;   // one more pass over the table: built only if a row is still open
         for( const std::uint32_t row : pending )
@@ -335,6 +338,7 @@ inline std::vector<char> implementorFloors( const IngestResult& ing, const std::
         [ & ]( NodeId id, std::vector<NodeId>& into ) { into.insert( into.end(), graphImplementors[id].begin(), graphImplementors[id].end() ); } );
     countfloor::markUnboundSpellings( ing, rowsOfName, boundDerived, []( const Reference& r ) { return r.isInherit || r.role == RefRole::Extends; },
                                       [ & ]( const Reference& r, std::span<const NodeId> ids ) { return countfloor::inheritIsBound( ing, r, ids ); },
+                                      {},   // an inherit clause is never a forwarded call
                                       [ & ]( std::uint32_t row ) { out[row] = 1; } );
     return out;
 }

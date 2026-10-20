@@ -108,6 +108,12 @@ mid-compile; the discipline is the fix.
 ripwire builds and passes its suite on Ubuntu 24.04 with gcc 13.3 or clang 18, but a few things
 differ from macOS enough to cost you an afternoon if nobody says them out loud.
 
+**Source builds support gcc 13+, so never rely on C++23 P2718 range-for lifetime extension:** `for( x : makeRow().items() )`
+is correct on clang ≥ 19 and gcc ≥ 15 and reads a dead temporary on gcc 13/14, so name the temporary first; the gcc-14 CI
+leg is the canary, and `-Werror=dangling-reference` plus `portablebuildcheck` #7 hold the shape on every host. #7's blind
+spot: a reference-returning callee that takes the temporary as an argument (`for( v : std::get<0>( makeTup() ) )`) is held
+only by the gcc-14 leg's `-Werror=dangling-reference`.
+
 **Memory, not cores, sizes `-j`.** `src/main.cpp` is one very large translation unit (since the
 2026-08-29 split its verb families live in `src/verbs_*.h` sections included into that one TU — the
 compile cost is unchanged, only the editing surface moved; `src/ingest.cpp` got the same treatment
@@ -265,8 +271,9 @@ The exception is `scripts/tidycheck.sh`, a separate CI step with `--warnings-as-
 only checks whose every finding is a silently wrong answer and that sat at **zero rows** on the five CI
 TUs when admitted (0.6.3, clang-tidy 22; `bugprone-use-after-move` had one row, brought to zero by a
 behaviour-neutral fix that `.clang-tidy` describes): `bugprone-use-after-move`, `bugprone-dangling-handle`,
-`bugprone-sizeof-expression`, `bugprone-integer-division`, `bugprone-infinite-loop` and
-`clang-analyzer-core.*`. It is a ratchet, not a style gate: a new row is a
+`bugprone-sizeof-expression`, `bugprone-integer-division`, `bugprone-infinite-loop`,
+`clang-analyzer-core.*` and (lifetime round, 2026-10-18, also at zero rows) `clang-analyzer-cplusplus.InnerPointer`.
+It is a ratchet, not a style gate: a new row is a
 bug to fix, never a `NOLINT`, and a gated check that proves noisy leaves the list with its count, the way
 it came in (`.clang-tidy`'s header has the counts, and the candidates that stayed out or left). Run it
 before a PR that touches C++: `scripts/tidycheck.sh` finds clang-tidy 22 on `PATH` or, on macOS, at
@@ -275,8 +282,8 @@ Homebrew's keg-only `/opt/homebrew/opt/llvm@22/bin/clang-tidy` — pin that path
 finds neither.
 
 The compiler holds the same line for the UB class: CMakeLists.txt's compile-time fence block makes
-`return-type`, `uninitialized`, `format`/`format-security`, returning a local's address, and on Clang
-`-Wdangling` and constant `array-bounds`, errors on our own targets, per compiler, with the cl.exe
+`return-type`, `uninitialized`, `format`/`format-security`, returning a local's address, on Clang
+`-Wdangling` and constant `array-bounds`, and on GCC 13+ `dangling-reference`, errors on our own targets, per compiler, with the cl.exe
 `/we####` equivalents — each measured at zero hits on AppleClang 17, clang 22 and GCC 13/14/16 first.
 
 ---
@@ -396,6 +403,8 @@ every input the tool ever sees, costs nothing in release, and tells the optimize
 | `DISCLOSE( "msg" )` | **nothing to the user**: a debug trace | nothing | existing sites only, until converted (ratchet) | any new degrade |
 | `PANIC( "why" )` | we cannot continue | report and abort | a corrupt state | anything recoverable |
 
+**Signed integers for quantities.** Counts, computed lengths, offsets, differences and loop bounds are `int` (or `std::ptrdiff_t` / `std::int64_t` when the range needs it), not `unsigned`. Unsigned arithmetic wraps silently: `a - b` with `b > a` is a huge positive number that no check can catch. libstdc++'s `string_view` compare computing `n1 - n2` on `size_type` is our own example (see `sortutil.h`). Mixed signed/unsigned comparisons also convert the signed side. Signed also gives the optimizer more, and the undefined overflow is exactly what buys it: the compiler may assume a signed value never wraps, so it may widen a 32-bit loop index to 64 bits and fold `i + 1 > i` or `( x * 4 ) / 4`, while unsigned's defined wrap is a promise it must keep, paid for in extra extends and masks (easy to see in Compiler Explorer). A value that must not be negative says so: `EXPECTS( n >= 0 )` for a parameter, `ASSUME` / `ENSURES` where this code makes it true. Unsigned is for bit fields and bit patterns, and a few other things — hashes, the 32-bit handles of §3 (an index, never arithmetic), and the `size_t` an STL API returns — and almost nothing else; convert at that boundary with `std::ssize` / `std::ranges::ssize`. C++20 added them to give a signed size, and Stroustrup's WG21 paper P1428, "Subscripts and sizes should be signed", calls the unsigned `size_t` a mistake: with `ssize`, `i < std::ssize( v ) - 1` is safe on an empty `v`, where `i < v.size() - 1` wraps. **A contract's weight follows the function's:** a one-line accessor needs none, while a function with several inputs, a non-obvious output or a multi-step computation states its preconditions and postconditions.
+
 **The error ladder:**
 - A **recoverable** runtime error (an unreadable file, a full pool, a missing grammar) is a **degrade**, not a
   failure. Return `nullptr` / `false` / empty / a clamped value, **tell the reader in the document**, and keep
@@ -502,6 +511,31 @@ rules it enforces:
   (Elixir today; a Lisp-style `defn` if one is added) keep a small keyword table in C++. That table belongs in `tags.scm` once the
   mechanism lands (#355, slice 5a); it is not a pattern to extend.
 
+#### Where language-specific code lives
+
+Languages differ in fewer places than their code suggests. Language-specific code therefore has three homes, and shared code reads each one at a named point:
+
+1. **Facts** are decided once per language: a boolean, an enum or a short list (does `x.f()` ever reach a free function, which line-comment markers the language has).
+   They are columns of one `constexpr` table with one row per `Lang`. A missing row or a missing required column is a compile error.
+   The table is `src/langfacts.h` (`kLangFacts`; shared code reads `langFacts( l ).column`). A column is named for its reason (`overloadSignatures`), never for a language or a family,
+   and an optional one defaults to the conservative answer (`false`); a column every new language must decide is typed `Must<T>`. Slice 6c is moving the existing per-`Lang` tables and predicates into it.
+   Until it has moved them, extend the nearest existing table, add a column rather than a new `l == Lang::X || …` predicate, and note that `test/langidentitycheck.sh`'s ratchet counts those predicates in shared files and may only fall.
+2. **Hooks** are for an algorithm that genuinely differs (a different tree walk or binding rule). A hook is a named function pointer in a per-language hook table, and an empty slot means the shared path.
+   The body lives in that language's own file (`src/ingest_<lang>.h`), with a one-sentence reason above it. Slice 3a builds the first hook table, for `captureTagsFacts`.
+3. **Family rows** belong to a mechanism that only some languages use, such as the qualified-call resolver of slice 6b. It keeps its own small `constexpr` rows beside its shared handler, and a language without a row does not use it.
+
+A language-only feature with no counterpart elsewhere, such as Rails schema files, goes in the language's file and still emits the shared fact kinds.
+
+To decide where a change goes:
+- If a second language has the concept, even spelled differently, it belongs to the shared handler, and the difference is a `tags.scm` capture or a table entry.
+- If the difference is a value, it is data.
+- Only an algorithm gets a hook.
+
+Reviewers look for a new `Lang::` comparison in a shared file, a `<lang>Foo` that `--clones` pairs with another language's `Foo`, and a hook without its reason.
+A clone pair is not proof of one concept: two keyword lists can match token for token and mean different things. Fold them into data, not into one function.
+
+**Most wanted: Rust, C++ and Go.** Most contributions so far have improved Python, TypeScript and Ruby, and those answers improved release over release. Rust, C++ and Go answers have improved less. If you write Rust, C++ or Go, a slice below that touches your language is the most useful place to start. Two are written up as ready-to-claim issues: `--lego` for Go interfaces (#404) and the standard-member gate for Rust (#405). Others are marked **wanted** in the table: 1a for Rust (`use` trees and `mod`), 2b for Rust renames, 4c for Go interfaces (#386), 7a for Go `MethodByName` (#375), and 11a for Rust's test-scope walker (#356). A question ripwire answers badly on a real Rust, C++ or Go repository makes a good issue even without a fix: include the command, what it printed, and what the right answer is.
+
 #### Feature families: one shared handler each
 
 The same language feature is often implemented several times in per-language code (before #358 there were ~21 separate
@@ -556,17 +590,17 @@ review will credit it, but it is never a condition for merging the language.
 
 | Family | Shared mechanism today | State | Claimable slices |
 |---|---|---|---|
-| 1. Imports | `ingest_importcap.h`: `@import.path` captures, `emitCapturedImport`, one `normaliseImportSpecifier` arm per `DepDialect`. Resolution in `resolve.h`. | partly. C-family, JS/TS, Go and Python read the capture (Python since #382). The rest still go through per-language arms of `directiveTargetOf` (`ingest_relations.h`): `csharpUsingTarget`, `phpUseTarget`, `luaRequireTarget`, `bashSourceTarget`, `rubyRequireTarget`, `elixirDirectiveTarget`, plus Rust `use`/`mod`, Kotlin `import_header` and Swift `import_declaration`. | **1a** one language per PR onto `@import.path` plus its normaliser arm, deleting its arm in `directiveTargetOf`: S each for C#, PHP, Lua, Bash, Kotlin and Swift; M for Rust (`use` trees, `mod`), Ruby (`autoload`) and Elixir (`alias`/`use`), whose directives carry more meaning. Claim on #358. |
-| 2. Aliases | None. Renames reach the resolver as `RawBind` records (`ingest_cache.h`) from separate producers: Python's `@import.names` / `@import.alias` captures, read in `captureTagsFacts` (`ingest_sidecap.h`) and turned into binds by the Python-only `emitCapturedPythonImportBind` (`ingest_importcap.h`); `captureJsImportFacts`, `captureJsModuleAliases` and `captureGoImportFacts` (`ingest_jsimports.h`), C/C++ aliases in `fnPtrAliasName` (`ingest_binds.h`) and `captureTypeAlias` (`ingest_relations.h`). The readers are separate too: `addTypeAliasBases` and `buildUsingReexports` (`resolve.h`). | duplicated: one "local name → target" concept in about five shapes. | **2a** one shared binds channel (`@import.alias` / `@import.names` → one `RawBind` kind): M, *maintainers*, after the #358 import slices. **2b** after 2a, one language per PR moves its renames onto it: S each (Rust `use a as b`, Kotlin `import x as y`, PHP `use … as`, C# `using X = …`). |
+| 1. Imports | `ingest_importcap.h`: `@import.path` captures, `emitCapturedImport`, one `normaliseImportSpecifier` arm per `DepDialect`. Resolution in `resolve.h`. | partly. C-family, JS/TS, Go and Python read the capture (Python since #382). The rest still go through per-language arms of `directiveTargetOf` (`ingest_relations.h`): `csharpUsingTarget`, `phpUseTarget`, `luaRequireTarget`, `bashSourceTarget`, `rubyRequireTarget`, `elixirDirectiveTarget`, plus Rust `use`/`mod`, Kotlin `import_header` and Swift `import_declaration`. | **1a** one language per PR onto `@import.path` plus its normaliser arm, deleting its arm in `directiveTargetOf`: S each for C#, PHP, Lua, Bash, Kotlin and Swift; M for Rust (`use` trees, `mod`; **wanted**), Ruby (`autoload`) and Elixir (`alias`/`use`), whose directives carry more meaning. Claim on #358. |
+| 2. Aliases | None. Renames reach the resolver as `RawBind` records (`ingest_cache.h`) from separate producers: Python's `@import.names` / `@import.alias` captures, read in `captureTagsFacts` (`ingest_sidecap.h`) and turned into binds by the Python-only `emitCapturedPythonImportBind` (`ingest_importcap.h`); `captureJsImportFacts`, `captureJsModuleAliases` and `captureGoImportFacts` (`ingest_jsimports.h`), C/C++ aliases in `fnPtrAliasName` (`ingest_binds.h`) and `captureTypeAlias` (`ingest_relations.h`). The readers are separate too: `addTypeAliasBases` and `buildUsingReexports` (`resolve.h`). | duplicated: one "local name → target" concept in about five shapes. | **2a** one shared binds channel (`@import.alias` / `@import.names` → one `RawBind` kind): M, *maintainers*, after the #358 import slices. **2b** after 2a, one language per PR moves its renames onto it: S each (Rust `use a as b`, **wanted**; Kotlin `import x as y`, PHP `use … as`, C# `using X = …`). |
 | 3. Types | `captureTagsFacts` (`ingest_sidecap.h`) reads `@definition.*` captures for every language. | shared, but language decisions are `Lang::` branches inside the loop: 36 non-comment `Lang::` mentions, 15 of them Elixir. | **3a** #374: one constexpr per-language hook table that `captureTagsFacts` calls once per capture, one language per commit, Elixir first. M. |
-| 4. Inheritance | `captureBases` (`ingest_relations.h`): base clauses for C++, TS/JS, Java, Python, Swift, C#, PHP, Kotlin and Ruby, chosen by node kind (`isBaseTypeNodeIn`). | partly. Rust `impl … for` is a separate pass; Ruby mixins read the same path through `@reference.mixin` captures since slice 4a (#400). | **4a** done (#400): Ruby `include`/`extend`/`prepend` read the shared path through `queries/ruby/tags.scm` captures, `captureRubyMixinBases` retired. **4b** the base-clause node kinds move from `isBaseTypeNodeIn` into `tags.scm` captures: M, all of the languages above. **4c** structural conformance (#386): a class or type whose methods cover a structural base's required methods (Python `typing.Protocol`, Go interfaces, possibly TS interfaces) is listed as an implementor marked `structural=1`, never as a nominal subclass, with a disclosed minimum-method threshold; step (c), one shared method-set check, per-language data for which bases are structural. M; Python and Go first. |
+| 4. Inheritance | `captureBases` (`ingest_relations.h`): base clauses for C++, TS/JS, Java, Python, Swift, C#, PHP, Kotlin and Ruby, chosen by node kind (`isBaseTypeNodeIn`). | partly. Rust `impl … for` is a separate pass; Ruby mixins read the same path through `@reference.mixin` captures since slice 4a (#400). | **4a** done (#400): Ruby `include`/`extend`/`prepend` read the shared path through `queries/ruby/tags.scm` captures, `captureRubyMixinBases` retired. **4b** the base-clause node kinds move from `isBaseTypeNodeIn` into `tags.scm` captures: M, all of the languages above. **4c** structural conformance (#386): a class or type whose methods cover a structural base's required methods (Python `typing.Protocol`, Go interfaces, possibly TS interfaces) is listed as an implementor marked `structural=1`, never as a nominal subclass, with a disclosed minimum-method threshold; step (c), one shared method-set check, per-language data for which bases are structural. M; Python and Go first (Go **wanted**). |
 | 5. Callables | Definitions come from `tags.scm`, read by `captureTagsFacts`. | partly. Keyword-headed definitions keep keyword tables in C++: `elixirFunctionKeyword` and `elixirMetadataAttribute` (`ingest_elixir.h`) repeat `macroBodyKeyword` (`ingest_relations.h`), 0.82 and 0.96 similar by `--clones`. | **5a** #355: the tags pass evaluates `#eq?`/`#any-of?`/`#not-any-of?`, then Elixir's table moves into its `tags.scm`. M; Elixir, then Clojure. |
 | 6. Dispatch | `buildGraph` (`graph.h`): a SCIP pin, then the canonical tier (`appendCanonicalCandidates`, `resolve.h`), bindings and receiver rules (`receiverevidence.h`), then name tiers. Per-language qualified-call rules: `ElixirResolver` (`elixir_resolve.h`), `keepRustQualifiedCandidates` and `keepStdQualifiedCandidates` (`graph.h`). | partly. Facts about each language are scattered `l == Lang::X \|\| …` predicates (`implicitReceiverLang`, `memberNeverReachesFreeFunction` and `classNameReceiverLang` in `receiverevidence.h`; `langUsesHashComment` in `quality.h`), and `--clones` reports them as one group. | **6a** the shared refusal for an unplaced module qualifier (the known gap above): S, *maintainers*, not yet scheduled. **6b** the **language-neutral qualified-call resolver**: generalise `ElixirResolver`'s module table (alias/import/require facts → `Module::name`) so that Clojure `ns/f`, Elixir and other module-qualified languages use one resolver driven by per-language data. M; Elixir byte-identical, Clojure as the first new user. **6c** those predicates become columns of one constexpr per-`Lang` table: S, all languages. |
-| 7. Data-driven dispatch | One mechanism per shape: fn-pointer and callback bindings `buildFnPtrBindTables` (`graph.h`, C/C++); HTTP routes `routesVisitNode` (`ingest_sidecap.h`, a JS/TS and Python walk) into `RouteDef`/`RouteUse` (`model.h`); FFI aliases `BindingAlias` (`model.h`). | partly. Calls by a literal method name (`send(:m)`) resolve for Ruby only. | **7a** #375: one capture for a call whose method name is a literal, resolved through the ordinary receiver rules. M; Python `getattr`, JS/TS `obj["m"]`, Go `MethodByName`. **7b** route registration read from captures instead of the walk: M; JS/TS and Python. |
-| 8. Preprocessing | `retagMacroCallReferences` (`model.h`) for macro calls. Inert regions (quote, discard, comment forms) are per language today, for example `elixirQuoted` (`ingest_elixir.h`). | duplicated. A shared inert-region mechanism is in review (#357, PR #380). | **8a** after #380 and #349 are both on `main`, Clojure's quote/discard filter moves onto the shared mechanism: S, Clojure. |
-| 9. Scope and state | `enclosingScopeOf` (`ingest_names.h`); module and global state in `computeNonLocalState` (`nonlocalstate.h`). | duplicated: `rustEnclosingScopeOf` and `kotlinEnclosingScopeOf` are 0.82 similar to the generic walker by `--clones`. | **9a** #356 part 1: one table-driven enclosing-scope walker (scope-owner kinds, how the name is read). S–M; Rust and Kotlin. Read the notes above both functions first: each says why it was kept apart. If a table does not make the code smaller, a written finding that closes the slice is a valid result. |
+| 7. Data-driven dispatch | One mechanism per shape: fn-pointer and callback bindings `buildFnPtrBindTables` (`graph.h`, C/C++); HTTP routes `routesVisitNode` (`ingest_sidecap.h`, a JS/TS and Python walk) into `RouteDef`/`RouteUse` (`model.h`); FFI aliases `BindingAlias` (`model.h`). | partly. Calls by a literal method name (`send(:m)`) resolve for Ruby only. | **7a** #375: one capture for a call whose method name is a literal, resolved through the ordinary receiver rules. M; Python `getattr`, JS/TS `obj["m"]`, Go `MethodByName` (**wanted**). **7b** route registration read from captures instead of the walk: M; JS/TS and Python. |
+| 8. Preprocessing | `retagMacroCallReferences` (`model.h`) for macro calls. Inert regions (quote, discard, comment forms): `inInertRegion` (`ingest_inert.h`) for Elixir's quote and live holes; Clojure's `clojureInert` (`ingest_clojure.h`) is still per language. | partly. The shared inert-region walk `inInertRegion` (`ingest_inert.h`) landed with #380 (#357); Elixir's quote and live holes use it, Clojure's filter does not yet. | **8a** Clojure's quote/discard filter (`clojureInert`, `ingest_clojure.h`) moves onto `inInertRegion`: S, Clojure. Ready now that #380 and #349 are both on `main`. |
+| 9. Scope and state | `enclosingScopeOf` (`ingest_names.h`); module and global state in `computeNonLocalState` (`nonlocalstate.h`). | duplicated: `rustEnclosingScopeOf` and `kotlinEnclosingScopeOf` are 0.82 similar to the generic walker by `--clones`. | **9a** #356 part 1: one table-driven enclosing-scope walker (scope-owner kinds, how the name is read). S–M; Rust and Kotlin. Read the notes above both functions first: each says why it was kept apart. If a table does not make the code smaller, a written finding that closes the slice is a valid result. **State:** a table landed with #403 — `kScopeOwners` rows (owner kind, how the name is read, which defs it scopes) carry C++, Python and Go (receiver type, interface members); `kDefScopeWalkerOfLang` picks the walker per language. Rust and Kotlin keep their own walkers (the notes above each say why). The finding: the table was about +50 lines where a Go-only arm would have been about +25, kept because it removed three `Lang::` compares and the Kotlin clone pair. |
 | 10. Entry points | `inventoryEntryStyle` (`mapinventory.h`): one per-language table of entry conventions (`main`, a static `Main`, `__main__.py`). | shared. Entries declared in a manifest or by an attribute are not detected, and the legend says so. | **10a** manifest-declared entries (`package.json` `main`/`bin`, `console_scripts`, Cargo `[[bin]]`): one reader per manifest format feeding the same table. M. **10b** attribute entries (Swift `@main`): S. |
-| 11. Tests | `inFileTestScope` (`ingest_names.h`) dispatches to `pythonInFileTestScope`, `rustInFileTestScope`, `jsInFileTestScope` and `csharpInFileTestScope`. | duplicated: four functions. | **11a** #356 part 2: a table of test-scope shapes. S–M; Python, Rust, JS/TS, C#. The note above `inFileTestScope` says the four rules have different shapes, so measure before folding, as in 9a. |
+| 11. Tests | `inFileTestScope` (`ingest_names.h`) dispatches to `pythonInFileTestScope`, `rustInFileTestScope`, `jsInFileTestScope` and `csharpInFileTestScope`. | duplicated: four functions. | **11a** #356 part 2: a table of test-scope shapes. S–M; Python, Rust (**wanted**), JS/TS, C#. The note above `inFileTestScope` says the four rules have different shapes, so measure before folding, as in 9a. |
 | 12. Async | None. | none. | **12a** step (c) only: open a design issue (what counts as the callee of a goroutine, callback or future) with a measured miss before writing code. |
 
 #### Definition of done for a common-code slice
@@ -994,6 +1028,21 @@ round. Each takes minutes to check; each miss costs a review round.
 21. **A derived cache dies with its parent.** A cached object that points into a rebuilt structure is dropped
     wherever that structure is reassigned, never kept on a content stamp; probe a rebuild that keeps the
     stamp (a chmod, a new non-source file) under the sanitizer build.
+22. **A zero-hit word stays out of what the repository indexes.** A gate that queries a word to prove an absence
+    keeps that word out of every file the tree indexes: gate scripts, fixtures, and function bodies a test script
+    writes. Otherwise the gate's own text becomes the hit. Run the zero-hit query on the repository root and on the
+    gate's own fixture directory; both must stay at zero hits.
+23. **A new rule that repeats a reviewed helper reuses it.** Before you write a new predicate or rule (a scope, an
+    owner, a tie-break, a gate), look for the one that already exists (`ripwire . --exemplar=…`, `--grep=…`, or the
+    `ripwire-reuse-first` skill). Name the helper you reuse, or say why none fits.
+24. **An index comes from the caller, not from an address.** A helper that turns a reference into an index by
+    pointer subtraction (`&r - v.data()`) breaks when a caller hands it a copy of the element (a rewritten site, a
+    cloned row). Take the index as a parameter instead, and after a merge check every caller that may pass a copy.
+    Arm: the copy path reaches the helper.
+25. **A continuation is built by `rw::nextFlag` and replays clean.** Every `next=` or other continuation value is
+    built by `rw::nextFlag` / `nextAttrXml`, never by concatenating flag text, and the knob value it names clears
+    every predicate that refused or degraded the original run. Arm: a path with a space round-trips as one argv
+    word, and the replay at the named value is not degraded again.
 
 **The gate count is a build product.** It is stated in `README.md`, `docs/EVALS.md` and
 `present/deck5_ripwire_build.js` — eight sites — and every one of them is written by
