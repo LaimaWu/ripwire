@@ -121,13 +121,22 @@ inline LspFrame lspReadMessage( std::FILE* in )
 }
 
 // The picker's cap, disclosed (#279 review, @mpapis): a query matching more than kLspWorkspaceCap rows answers the first
+// The window/logMessage (type 3, Info) frame BOTH disclosures ride — the one channel LSP gives a result
+// that has no field to say more (cap: arm 17; multi-def: arm 19). The frame lives once; callers pass the
+// already-escaped message text.
+inline std::string lspLogMessageFrame( const std::string& message )
+{
+    return "{\"jsonrpc\":\"2.0\",\"method\":\"window/logMessage\",\"params\":{\"type\":3,\"message\":\""
+         + message + "\"}}";
+}
+
 // kLspWorkspaceCap and says how many it left out in a window/logMessage (type 3, Info) sent just before the response,
 // the one channel LSP gives a result that has no truncation field. test/lspcheck.sh arm (17).
 inline std::string lspWorkspaceCapNotice( const std::string& query, std::size_t total )
 {
-    return "{\"jsonrpc\":\"2.0\",\"method\":\"window/logMessage\",\"params\":{\"type\":3,\"message\":\"ripwire: workspace/symbol shows the first "
-         + std::to_string( kLspWorkspaceCap ) + " of " + std::to_string( total ) + " matches for '" + rw::mcpdetail::jsonEscape( query )
-         + "'; refine the query to see the rest\"}}";
+    return lspLogMessageFrame( "ripwire: workspace/symbol shows the first " + std::to_string( kLspWorkspaceCap )
+        + " of " + std::to_string( total ) + " matches for '" + rw::mcpdetail::jsonEscape( query )
+        + "'; refine the query to see the rest" );
 }
 
 // The multi-def disclosure (RIPWIRE-RUBY task C): a name with more than one definition answers the picker with
@@ -137,9 +146,8 @@ inline std::string lspWorkspaceCapNotice( const std::string& query, std::size_t 
 // test/lspcheck.sh arm (19).
 inline std::string lspMultiDefNotice( const std::string& name, std::size_t total )
 {
-    return "{\"jsonrpc\":\"2.0\",\"method\":\"window/logMessage\",\"params\":{\"type\":3,\"message\":\"ripwire: "
-         + std::to_string( total ) + " definitions for '" + rw::mcpdetail::jsonEscape( name )
-         + "' — counts are floors; the resolver splits over them\"}}";
+    return lspLogMessageFrame( "ripwire: " + std::to_string( total ) + " definitions for '" + rw::mcpdetail::jsonEscape( name )
+        + "' — counts are floors; the resolver splits over them" );
 }
 
 inline void lspWriteMessage( std::FILE* out, const std::string& body )
@@ -521,16 +529,24 @@ inline std::string lspSymbolRangeJson( const LspDoc& d, const rw::Symbol& s )
 // ─── handlers ────────────────────────────────────────────────────────────────────────────────────────
 // definition: the name under the cursor, resolved through the shared name resolver (the same one --callers
 // and MCP find_symbol use). Multi-definition names return every def — the client shows a picker.
-inline std::string lspDefinition( const rw::IngestResult& ing, const std::string& cwd, LspDocs& docs,
-                                  const LspPos& pos, std::string& pickName, std::size_t& pickCount )
+// A definition answer, with the disclosure that must be written AHEAD of it when the name split over
+// several defs (arm 19) — carried in the return, not in out-parameters (the §params bar: four in, one out).
+struct LspDefinitionAnswer
+{
+    std::string result;   // the Location[] JSON, or "null"
+    std::string notice;   // empty unless defs > 1
+};
+
+inline LspDefinitionAnswer lspDefinition( const rw::IngestResult& ing, const std::string& cwd, LspDocs& docs,
+                                          const LspPos& pos )
 {
     const LspAtCursor at = lspAtCursor( ing, cwd, docs, pos );
-    if( !at.found ) return "null";
+    if( !at.found ) return { "null", {} };
     const std::vector<rw::NodeId> defs = rw::resolveAllByName( ing, at.name );
-    pickName  = at.name;
-    pickCount = defs.size();   // the (19) disclosure rides the dispatch, mirroring the workspace-cap total
-    std::string                   out  = "[";
-    bool                          first = true;
+    LspDefinitionAnswer ans;
+    if( defs.size() > 1 ) ans.notice = lspMultiDefNotice( at.name, defs.size() );   // the (19) disclosure, one per split name
+    std::string           out  = "[";
+    bool                  first = true;
     for( const rw::NodeId id : defs )
     {
         if( id >= ing.symbols.size() ) continue;
@@ -539,7 +555,8 @@ inline std::string lspDefinition( const rw::IngestResult& ing, const std::string
         out += lspSymbolLocationJson( ing, cwd, docs, ing.symbols[ id ] );
     }
     out += "]";
-    return first ? std::string( "null" ) : out;
+    ans.result = first ? std::string( "null" ) : out;
+    return ans;
 }
 
 // references: the house use-site scan (collectUseSites — the --uses answer, name-matched FLOOR by
@@ -1021,10 +1038,9 @@ inline int runLsp( const std::string& cliRoot )
             const LspPos pos = lspReadPos( params );
             if( !pos.ok ) respond( -32602, "textDocument/definition needs params.textDocument.uri and params.position{line,character}" );
             else { const rw::McpIndex& mix = rw::getIndex( root ); LspDocs docs( mix.ing );
-                   std::string defName; std::size_t defCount = 0;
-                   const std::string defResult = lspDefinition( mix.ing, cwd, docs, pos, defName, defCount );
-                   if( defCount > 1 ) lspWriteMessage( stdout, lspMultiDefNotice( defName, defCount ) );
-                   resp = lspResultJson( id.token, defResult ); }
+                   const LspDefinitionAnswer d = lspDefinition( mix.ing, cwd, docs, pos );
+                   if( !d.notice.empty() ) lspWriteMessage( stdout, d.notice );
+                   resp = lspResultJson( id.token, d.result ); }
         }
         else if( method == "textDocument/references" )
         {

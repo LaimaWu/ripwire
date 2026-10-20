@@ -120,35 +120,37 @@ inline bool isStructOrNamedType( SymKind k ) noexcept
     return k == SymKind::Struct || k >= SymKind::NamedType;
 }
 
-// The specificity ladder, hoisted VERBATIM out of dedupRawDefs (ingest_model.h) by RIPWIRE-RUBY task C so the
+// The specificity ladder, hoisted out of dedupRawDefs (ingest_model.h) by RIPWIRE-RUBY task C so the
 // resolver's tower (graph.h's name matchers) and the def dedup order the SAME way from ONE table — higher =
-// more specific / preferred when two matches collide on one name byte. Values are load-bearing: the dedup's
-// total order and the picker's Method > Var > Section answer sequence are byte-pinned (rubyattrs/rubyschema
-// checks, lspcheck 18). DISTINCT from gitmine.h's §H6 "specificity-ordered mapper", which orders file PATHS
-// on a different axis; nothing there reads or shares this ladder.
+// more specific / preferred when two matches collide on one name byte. A table, not a switch (§3's
+// table-over-switch rule; --quality-delta scored the hoisted switch as a clone of the SymKind readers).
+// Values are load-bearing: the dedup's total order and the picker's Method > Var > Section answer sequence
+// are byte-pinned (rubyattrs/rubyschema checks, lspcheck 18). Index order is the SymKind enumerator order
+// above; the static_assert pins the length, so appending a kind without arming it is a build error, not a
+// silent 0. DISTINCT from gitmine.h's §H6 "specificity-ordered mapper", which orders file PATHS on a
+// different axis; nothing there reads or shares this ladder.
+inline constexpr std::array<int, kSymKindCount> kKindSpecificityTable = {
+    /* Function = */   2,   // a bare function definition
+    /* Method = */     5,   // most specific: a behaviour owned by a type
+    /* Class = */      3,
+    /* Struct = */     3,
+    /* Interface = */  4,
+    /* Var = */        1,
+    /* Section = */    0,   // doc headings, JSON/YAML keys, schema columns: never beat a code kind on one name byte
+    /* Macro = */      0,   // a #define comes from its own single capture, same value as Section/Other
+    /* Field = */      1,   // never collides with Var in practice: the static/non-static gates are complementary
+    /* Other = */      0,
+    /* ModuleScope = */ 0,  // minted after the dedup pass runs; it can never reach it
+    /* NamedType = */  1,   // Go's type_spec fires the generic definedtype AND functype on the same name byte for
+    /* Alias = */      1,   // `type F func(...)`: the form-specific kind must win — FuncType below — and an alias is
+                             // its own node (type_alias) that never collides
+    /* FuncType = */   2,
+};
+static_assert( kKindSpecificityTable.size() == kSymKindCount,
+               "kKindSpecificityTable: one weight per SymKind, in enum order" );
 inline int kindSpecificity( SymKind k ) noexcept
 {
-    switch( k )
-    {
-        case SymKind::Method:    return 5;
-        case SymKind::Interface: return 4;
-        case SymKind::Struct:    return 3;
-        case SymKind::Class:     return 3;
-        case SymKind::Function:  return 2;
-        case SymKind::Var:       return 1;
-        case SymKind::Field:     return 1;   // never collides with Var in practice: the static/non-static gates are complementary
-        case SymKind::Macro:     return 0;   // Macro and Section were folded into "Other" by a default; named now, same value:
-        case SymKind::Section:   return 0;   // each comes from its own single capture (a #define, a heading or data key), so
-        case SymKind::Other:     return 0;   // neither collides with a code kind on one name byte
-        case SymKind::ModuleScope: return 0; // minted after this pass runs; it can never reach the dedup
-        // Go's type_spec fires the generic @definition.definedtype AND, for `type F func(...)`, @definition.functype on the
-        // same name byte (struct/interface specs fire their own pattern too): the form-specific kind must win, and a
-        // struct/interface must beat the generic defined type. An alias is its own node (type_alias) and never collides.
-        case SymKind::FuncType:  return 2;
-        case SymKind::NamedType: return 1;
-        case SymKind::Alias:     return 1;
-    }
-    return 0;   // a byte past the enum; a NEW SymKind is a -Werror=switch error above, never a silent 0
+    return enumTableAt( kKindSpecificityTable, k, 0 );   // a byte past the enum (a corrupt cache byte is VALIDATEd on read)
 }
 
 // #324: a ModuleScope owner is SYNTHETIC (comment above the enum) — a CALLER minted after the tags.scm pass,
