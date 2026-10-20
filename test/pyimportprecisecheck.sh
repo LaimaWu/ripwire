@@ -205,14 +205,15 @@ if python3 - "$TMP/pn.fresh" "$TMP/pn.bin" "$ROOT" <<'PY'
 import copy, pathlib, re, struct, sys, xml.etree.ElementTree as ET
 from collections import Counter
 
-# readFileRecord/writeBind in ingest_cache.h, lean cache v36 (train 30: 34 -> 36 moved the number only, above three lanes'
+# readFileRecord/writeBind in ingest_cache.h, lean cache v37 (lane l6-iface: 36 -> 37 appended LocalBindKind::DispatchType only, no
+# record layout change; train renumbers) (train 30: 34 -> 36 moved the number only, above three lanes'
 # 33/33/35; name-template-dispatch: 32 -> 35 appended RefRole::Pattern = 11 only; fcall-forward: a RawRef appends the `forwarded` u8 after memberFactory; call-result-typing: a bind record gains two u8 after isFromAssignment, resultIndex and unwrapDepth, which a
 # Python bind leaves at 0xFF / 0 — asserted below; train 29: 33 -> 34 moved the number only; arity-min: 32 -> 33 appends
 # paramsMin to the DEF record, which this lean fixture never holds; train 28: 31 -> 32 moved the number only). No heuristic
 # string searches: walk the counted arrays and require complete file coverage, clean parse health and exact EOF.
 blob = pathlib.Path(sys.argv[2]).read_bytes()
 endian = '<' if sys.byteorder == 'little' else '>'
-assert blob[:4] == b'CTPK' and struct.unpack_from(endian + 'I', blob, 4)[0] == 36, 'update the cache walker for a new layout'
+assert blob[:4] == b'CTPK' and struct.unpack_from(endian + 'I', blob, 4)[0] == 37, 'update the cache walker for a new layout'
 table, count = struct.unpack_from(endian + 'QI', blob, len(blob) - 24)
 assert count == 5 == struct.unpack_from(endian + 'I', blob, 21)[0], 'all five fixtures must be cached'
 assert table + count * 32 == len(blob) - 24, 'cache table bounds'
