@@ -23,7 +23,10 @@ def _run(binary, root, query, env):
     proc = subprocess.run([binary, root, "--match=" + query, "--limit=5000"], capture_output=True, text=True, env=env)
     head = re.search(r"<match [^>]*>", proc.stdout)
     if proc.returncode != 0 or head is None:
-        print("SCANFAIL rc=%d query=%s stderr=%s" % (proc.returncode, query[:100], proc.stderr[-1200:]))
+        # a refusal quotes the pattern before its reason: elide long quoted patterns so the reason survives the cut
+        err = re.sub(r"(pattern ')([^']{120,})'", lambda m: "%s<%d-byte pattern>'" % (m.group(1), len(m.group(2))), proc.stderr.strip())
+        err = re.sub(r'(#match\? @\w+ ")([^"]{120,})"', lambda m: '%s<%d-byte pattern>"' % (m.group(1), len(m.group(2))), err)
+        print("SCANFAIL rc=%d query=%s stderr=%s" % (proc.returncode, query[:100], err[-1200:].replace("\n", " | ")))
         sys.exit(3)
     capped = 'hits_capped="1"' in head.group(0) or 'capped="1"' in head.group(0)
     rows = []

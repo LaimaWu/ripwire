@@ -192,6 +192,7 @@ extern "C"
 #include "handlershape.h"   // --quality-delta's handler/placeholder shapes — AstWalk::HandlerShapes rides the shared file walk (reads nodeTextOf above)
 #include "ingest_relations.h"
 #include "ingest_jsimports.h"
+#include "infra/mdslug.h"      // mdSlugOf — shared with graph.h (the cross-file link bind)
 #include "ingest_docs.h"
 #include "ingest_names.h"
 #include "ingest_binds.h"

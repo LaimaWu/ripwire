@@ -168,9 +168,9 @@ inline void emitColumnarDepthColumn( std::FILE* out, const std::vector<NodeId>& 
     rw::emitTo( out, "{}", column );
 }
 
-// FE-B: the optional dense `<via>` column — 1 where the row's edge is name-only (via="name"), one value per row in row
-// order. Present only when some row carries it, so an answer with no hedged row pays 0 bytes; columnarViaField is its
-// fields= suffix.
+// The optional dense `<via>` column — 1 where the row's edge is name-only (via="name"), 2 where it is a direct markdown
+// link (via="link"), one value per row in row order. Present only when some row carries it, so an answer with no such
+// row pays 0 bytes; columnarViaField is its fields= suffix.
 inline bool columnarViaPresent( const std::vector<char>* viaName ) noexcept
 {
     return viaName != nullptr && std::any_of( viaName->begin(), viaName->end(), []( char c ) { return c != 0; } );
@@ -178,6 +178,20 @@ inline bool columnarViaPresent( const std::vector<char>* viaName ) noexcept
 inline std::string_view columnarViaField( const std::vector<char>* viaName ) noexcept
 {
     return columnarViaPresent( viaName ) ? ",via" : "";
+}
+inline void emitColumnarViaColumn( std::FILE* out, const std::vector<char>& via, std::size_t rowCount )
+{
+    rw::emitTo( out, "<via>" );
+    for( std::size_t i = 0; i < rowCount; ++i )
+    {
+        if( i )
+        {
+            std::fputc( ',', out );
+        }
+        const unsigned char v = ( i < via.size() ) ? static_cast<unsigned char>( via[ i ] ) : 0;
+        std::fputc( v <= 9 ? char( '0' + v ) : '0', out );
+    }
+    rw::emitTo( out, "</via>" );
 }
 
 // CALLSITE-AT (2026-10-09): the optional `<sites_at>` column — each row's call sites (editcheck.h rowCallSites), its tokens joined
@@ -291,7 +305,7 @@ inline void emitColumnarOptionalColumns( std::FILE* out, const IngestResult& ing
     }
     if( columnarViaPresent( viaName ) )
     {
-        emitColumnarFlagColumn( out, "via", rows.size(), [ & ]( std::size_t i ) { return i < viaName->size() && ( *viaName )[ i ] != 0; } );
+        emitColumnarViaColumn( out, *viaName, rows.size() );
     }
     if( extras.atTokens != nullptr && extras.atTotals != nullptr )
     {

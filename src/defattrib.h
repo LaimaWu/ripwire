@@ -377,7 +377,7 @@ struct RowDefTokens
 // One out-edge's tie, off its two parallel per-edge bytes (either may be unallocated: a graph with no such edge).
 inline DefMark defMarkOfEdge( const Graph& g, std::size_t e ) noexcept
 {
-    if( e < g.outNameOnly.size() && g.outNameOnly[e] != 0 )
+    if( e < g.outNameOnly.size() && edgeKindByte( g.outNameOnly[e] ) == kEdgeName )
     {
         return DefMark::Name;
     }
@@ -1089,8 +1089,8 @@ inline bool anyPathHopOwner( std::span<const std::string_view> owners ) noexcept
     return std::any_of( owners.begin(), owners.end(), []( std::string_view o ) { return !o.empty(); } );
 }
 // THE hop rows of a --path answer — the CLI (stdout) and MCP path_between (its memstream) both write through this, so the two
-// transports cannot drift (they were two copies of one loop). Row i's via="name" (FE-B) and prov="split" (attrib-multidef) read
-// the edge INTO it; the first row is no hop.
+// transports cannot drift (they were two copies of one loop). Row i's via="name" (FE-B), via="link" and anchor="missing" (a
+// markdown link, #409) and prov="split" (attrib-multidef) read the edge INTO it; the first row is no hop.
 inline void emitPathHopRows( std::FILE* out, const IngestResult& ing, const Graph& g, std::span<const NodeId> path,
                              std::span<const std::string_view> owners, bool singleRoot, std::string_view rootPrefix )
 {
@@ -1102,9 +1102,11 @@ inline void emitPathHopRows( std::FILE* out, const IngestResult& ing, const Grap
         const std::string_view rp    = singleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], rootPrefix ) : std::string_view( ing.files[ s.fileId ] );
         const std::string      owner = owners[i].empty() ? std::string() : std::string( escapeXml( owners[i], esc ) ) + ".";
         const std::string      name  = std::string( escapeXml( s.name, esc ) );
+        const bool             hop   = i > 0;
+        const std::string      mark  = std::string( viaEdgeAttr( hop && edgeNameOnly( g, path[ i - 1 ], path[i] ), hop && edgeIsLink( g, path[ i - 1 ], path[i] ) ) )
+                                     + anchorMissAttr( hop && edgeAnchorMiss( g, path[ i - 1 ], path[i] ) );
         emitTo( out, "<s t=\"{}\" n=\"{}{}\" p=\"{}:{}\"{}{}{}/>", symTag( s.kind ), owner, name, escapeXml( rp, esc ), s.line,
-                viaNameAttr( i > 0 && edgeNameOnly( g, path[ i - 1 ], path[i] ) ), splitArmAttrXml( pathHopSplitArm( g, path, i ) ),
-                viaImplAttr( i > 0 && edgeViaImpl( g, path[ i - 1 ], path[i] ) ) );   // lane L6
+                mark, splitArmAttrXml( pathHopSplitArm( g, path, i ) ), viaImplAttr( hop && edgeViaImpl( g, path[ i - 1 ], path[i] ) ) );   // lane L6: via="impl"
     }
 }
 

@@ -223,6 +223,26 @@
 #            a same-named owner whose field differs, a glob of a module that only globs (not followed: a floor). Early
 #            gates review adds (src/adds.rs, alias.rs, samename.rs, consts.rs): self forms, lifetimes, `use … as`, same
 #            names in two modules, Box<dyn> / Arc / RefCell / index / type-alias / element-type near misses, a const block.
+#   (Q) qualified annotations and in-place rebinding (lane h1-annot; roots qualannot/<lang>/, unpacked from qualannot.txt).
+#            A Python / TS parameter, annotated local or TS field written `q.T` / `q.T<…>` names the in-tree class T only when
+#            the qualifier's ROOT `q` is an in-tree module or namespace as the file sees it: an import that resolves into the
+#            tree (Python `import pkg.store`, `from pkg import store`, a relative import; TS a relative or tree-named specifier,
+#            `import * as` / default / named / `require`), else — bound by no import — an in-tree class (`Outer.Inner`) or a TS
+#            namespace. [N] (a false proven edge before the lane): `requests.Session`, `requests.Session = None`, an
+#            annotation-only local, `import a.b as c` / `from outside import mod` / an outside class's nested `Holder.Session`,
+#            an unbound or TYPE_CHECKING-imported outside qualifier, starlette's `request: httpx.Request` beside an in-tree
+#            Request.read; TS `ext.Session<T>`, `ext.Session`, `s?: ext.Session`, a field `s: ext.Session`, an outside
+#            default / named / require binding, the global `NodeJS.Session`. [P] guards: an in-tree module qualifier (Python
+#            `model.Session`, `store.Store`, `pkg.store.Store`; TS `store.Store`, `store.Box<T>`, a default import of an
+#            in-tree module, a file-local namespace `Local.Thing`), a bare imported T (plain and aliased), a nested class
+#            `Outer.Inner`, a same-file class. Wrapped forms (`Optional[q.T]`, `q.T | None`, `list[q.T]`, a string
+#            annotation) named no class before the lane and still name none.
+#            A Python `x op= v` on a bare name rebinds x to what the operator returns: x keeps its class C only when the
+#            ONE method Python calls — C's own (else the shallowest base's) in-place method (`+=` → `__iadd__` … `|=` →
+#            `__ior__`), else, C defining none, its binary method (`__add__`: `x = x + v`) — returns its first parameter on
+#            every `return` (starlette MutableHeaders `__ior__ … return self`), or declares `-> Self` or `-> C` (textual
+#            Color `__add__ … -> Color`); otherwise — a return that is not provably C (7, a base's `-> Base` for a
+#            subclass receiver), another operator's method — x is name-only. A JS `x op= v` rebinds as a plain JS reassignment does (JS has no operator methods).
 #   (C) conservation: each root's census dispositions still sum to calls= with unaccounted=0 (no silent drop).
 #   (K) the predicates can fail: a planted unhedged false row fails notproven, a planted hedged row passes it and
 #            fails proven, marked rejects an unhedged row, a rootless or not-found answer is NOROOT, the MCP reader
@@ -264,12 +284,9 @@ echo "receiverevidencecheck: BIN=$BIN  CORPUS=$CORPUS"
 
 # arm (L)'s roots (callresult/<lang>) live in one text bundle unpacked into the temp dir: committed as source trees they
 # joined the repo's own indexed map (readmedriftcheck G4's --max-tokens=3000 head lost two rows)
-# (arm (RS)'s root rsrecv/ the same way, from rsrecv.txt)
-CRBUNDLE="$CORPUS/callresult.txt"
-RSBUNDLE="$CORPUS/rsrecv.txt"
-[ -f "$CRBUNDLE" ] || { echo "fixture missing: $CRBUNDLE"; exit 2; }
-[ -f "$RSBUNDLE" ] || { echo "fixture missing: $RSBUNDLE"; exit 2; }
-for bundle in "$CRBUNDLE:$TMP/fix/callresult" "$RSBUNDLE:$TMP/fix"; do
+# (arm (RS)'s root rsrecv/ and arm (Q)'s roots qualannot/<lang> the same way, from rsrecv.txt and qualannot.txt)
+for bundle in "$CORPUS/callresult.txt:$TMP/fix/callresult" "$CORPUS/qualannot.txt:$TMP/fix/qualannot" "$CORPUS/rsrecv.txt:$TMP/fix"; do
+[ -f "${bundle%%:*}" ] || { echo "fixture missing: ${bundle%%:*}"; exit 2; }
 python3 -I - "${bundle%%:*}" "${bundle#*:}" <<'PY' || { echo "could not unpack ${bundle%%:*}"; exit 2; }
 import os, sys
 out, cur, n = sys.argv[ 2 ], None, 0
@@ -286,7 +303,7 @@ sys.exit( 0 if n > 0 else 1 )
 PY
 done
 # rw ROOT ARGS… — run against one fixture root (every selector below is relative to that root's `.`)
-rw(){ local r="$1" d="$CORPUS/$1"; shift; case "$r" in callresult/*|rsrecv) d="$TMP/fix/$r" ;; esac; ( cd "$d" && "$BIN" . --no-cache "$@" 2>/dev/null ); }
+rw(){ local r="$1" d="$CORPUS/$1"; shift; case "$r" in callresult/*|qualannot/*|rsrecv) d="$TMP/fix/$r" ;; esac; ( cd "$d" && "$BIN" . --no-cache "$@" 2>/dev/null ); }
 
 # ── the one reader every predicate shares ─────────────────────────────────────────────────────────────────────
 # parse.py MODE FILE [ARGS] — prints one line per row; NOROOT when the document has no answer about a symbol.
@@ -529,8 +546,12 @@ hopnotproven(){
     ran_ok "($r) --for=\"$q\"" "$f" || return
     P hcalls "$f" "$h" || return
     if [ "$PARSED" = "NOROOT" ]; then
-        local drow hp hr htot hne
-        drow="$( grep -o "<d [^>]*n=\"$h\"[^>]*>" "$f" | head -1 )"
+        local drow hp hr htot hne ft
+        # head round-robin (lane hrr, train 31; PROCESS rule 4): the answer's shown r= is the reordered rank (<sigs files_first=N>),
+        # while the hops walk the surface in SCORE order (<hops total=> counts score ranks), so the hop-candidate premise reads the
+        # HOP row's r= off the RIPWIRE_NO_HEAD_RR=1 twin of the same call (score order). The hop block and noedge= read the answer.
+        ft="$f.rrtwin"; RIPWIRE_NO_HEAD_RR=1 rw "$r" "--for=$q" >"$ft" || { no "($r) --for=\"$q\" [RIPWIRE_NO_HEAD_RR=1 twin] exited non-zero"; return; }
+        drow="$( grep -o "<d [^>]*n=\"$h\"[^>]*>" "$ft" | head -1 )"
         hp="$( printf '%s' "$drow" | sed -n 's/.* p="\([^"]*\)".*/\1/p' )"
         hr="$( printf '%s' "$drow" | sed -n 's/.* r="\([0-9][0-9]*\)".*/\1/p' )"
         htot="$( grep -o '<hops [^>]*>' "$f" | head -1 | sed -n 's/.* total="\([0-9][0-9]*\)".*/\1/p' )"
@@ -539,7 +560,7 @@ hopnotproven(){
             *'||'*|'|'*|*'|') no "($r) --for=\"$q\" shows no hop <h n=\"$h\">, and the hop-slot premises are unreadable (d p=/r=: '$hp'/'$hr', hops total=/noedge=: '$htot'/'$hne')"; return ;;
         esac
         if [ "$hr" -gt "$htot" ] || [ "$hne" -lt 1 ]; then
-            no "($r) --for=\"$q\" shows no hop <h n=\"$h\">, and it was no dropped hop candidate (r=$hr, hops total=$htot, noedge=$hne)"; return
+            no "($r) --for=\"$q\" shows no hop <h n=\"$h\">, and it was no dropped hop candidate (score r=$hr on the RR-off twin, hops total=$htot, noedge=$hne)"; return
         fi
         getrows "$r" callees "$hp:$h" || return
         if [ -z "$( printf '%s\n' "$GOT" | awk -v n="$n" 'NF >= 5 && $2 == n' )" ]; then
@@ -1676,8 +1697,54 @@ proven      rsrecv callees "src/stdqown.rs:own_full_from" "method lenx $QO:34"  
 # guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
 proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
 
+echo "=== (Q) qualified annotations and in-place rebinding (lane h1-annot) ==="
+QA=qualannot
+# Python — model.py: Session.close :2, Other.close :4, Other.read :5, Request.read :7, Outer.Inner.close :10; pkg/store.py:
+#          Store.close :2; keep.py: Local.close :39. Every [N] call has 4 in-tree `close` namesakes (by name: hedged).
+for f in use_param use_default use_declared use_dotted use_member_mod use_nested_outside use_unbound use_type_checking; do
+    notproven $QA/py callees "app.py:$f" "close model.py:2"                       # [N] an outside qualifier's T beside an in-tree T
+done
+for f in use_optional use_union use_list use_string use_local; do   # wrapped / string / call-initialised: no class before or after
+    notproven $QA/py callees "app.py:$f" "close model.py:2"                       # guard
+done
+notproven $QA/py callees app.py:handle_request "read model.py:7"                  # [N] starlette testclient's `request: httpx.Request`
+proven    $QA/py callees keep.py:keep_mod       "fn close model.py:2"             # [P] guard: `import model` → model.Session
+for f in keep_from_mod keep_dotted keep_bare keep_alias; do                       # `from pkg import store`, `import pkg.store`, a bare / aliased import
+    proven    $QA/py callees "keep.py:$f" "fn close pkg/store.py:2"               # [P] guard
+done
+proven    $QA/py callees keep.py:keep_nested    "fn close model.py:10"            # [P] guard: an in-tree class qualifier `Outer.Inner`
+proven    $QA/py callees keep.py:keep_same_file "fn close keep.py:39"             # [P] guard: a same-file class
+proven    $QA/py callees keep.py:keep_nested_same_file "fn close keep.py:48"      # [P] guard (fix round 1, mutant MA): a same-file `Wrap.Part`, no import
+# TS — model.ts: Session.close :1, Other.close :2; store.ts: Store.close :1, Box.close :2; keep.ts: Local.Thing.close :14.
+for f in useParam usePlain useOptional useDefault useNamed useRequire useGlobal useDeclared useLocal; do
+    notproven $QA/ts callees "app.ts:$f" "close model.ts:1"                       # [N] (useDeclared / useLocal: guards, name-only before)
+done
+notproven $QA/ts callees app.ts:run "close model.ts:1"                     # [N] a field `s: ext.Session`
+notproven $QA/ts callees app.ts:useDup "close store.ts:1"                  # [N] (fix round 1, mutant MD): `dup` bound in-tree AND foreign
+for f in keepNs keepBare keepDefault; do
+    proven    $QA/ts callees "keep.ts:$f" "method close store.ts:1"               # [P] guard: `import * as store`, `import { Store }`, a default import
+done
+proven    $QA/ts callees keep.ts:keepGeneric  "method close store.ts:2"           # [P] guard: `store.Box<number>`
+proven    $QA/ts callees keep.ts:keepLocalNs  "method close keep.ts:14"           # [P] guard: a file-local namespace `Local.Thing`
+proven    $QA/ts callees keep.ts:run "method close store.ts:1"         # [P] guard: a field `s: store.Store`
+# Python in-place rebinding — aug.py: Num.bump :4 (`__iadd__` returns 7), Acc.bump :11 (`__iadd__` returns self), Headers.bump :19
+# (`__ior__` raises or returns self), Plain.bump :23 (no in-place method), Sub(Acc) inherits Acc's, Spare.bump :31.
+notproven $QA/py callees aug.py:aug_notself  "bump aug.py:4"                      # [N] `x += 1` where __iadd__ returns 7
+notproven $QA/py callees aug.py:aug_nodunder "bump aug.py:23"                     # [N] no __iadd__: `x = x + 1`
+notproven $QA/py callees aug.py:aug_other_op "bump aug.py:11"                     # [N] `x |= 1`: Acc defines __iadd__ only
+proven    $QA/py callees aug.py:aug_self      "fn bump aug.py:11"                 # [P] guard: __iadd__ returns self
+proven    $QA/py callees aug.py:aug_ior_self  "fn bump aug.py:19"                 # [P] guard: the MutableHeaders shape `h |= {…}`
+proven    $QA/py callees aug.py:aug_inherited "fn bump aug.py:11"                 # [P] guard: Sub inherits Acc.__iadd__
+proven    $QA/py callees aug.py:aug_none      "fn bump aug.py:11"                 # guard: no augmented assignment
+proven    $QA/py callees aug.py:aug_binary_annotated "fn bump aug.py:91"          # [P] guard: no __iadd__, but `__add__( … ) -> Tint` (textual Color)
+notproven $QA/py callees aug.py:aug_binary_base_annotated "bump aug.py:95"        # [N] Shade inherits `__add__ -> Tint`: x becomes a Tint
+notproven $QA/py callees aug.py:aug_fallthrough "bump aug.py:114"                # [N] (fix round 1) `if o: return self`, then an implicit None
+proven    $QA/py callees aug.py:aug_both_branches "fn bump aug.py:123"            # [P] guard: if / else, both return self
+notproven $QA/js callees aug.js:augJs  "bump aug.js:1"                            # [N] JS `x += 1` leaves a primitive
+proven    $QA/js callees aug.js:augNone "method bump aug.js:1"                    # guard
+
 echo "=== (C) conservation: no call silently disappears ==="
-ROOTS="js ts py go java kt cs cpp swift rb callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/java5 callresult/kt5 callresult/cpp4 callresult/rust4 callresult/cpp5 callresult/rust5 callresult/rust6 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go rsrecv"
+ROOTS="js ts py go java kt cs cpp swift rb qualannot/py qualannot/ts qualannot/js callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/java5 callresult/kt5 callresult/cpp4 callresult/rust4 callresult/cpp5 callresult/rust5 callresult/rust6 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go rsrecv"
 for r in $ROOTS; do
     rf="$( printf '%s' "$r" | tr '/' '_' )"   # a nested root (callresult/go) writes a flat file name
     if ! rw "$r" --pin-census="$TMP/$rf.tsv" >"$TMP/$rf.map.xml"; then no "(C) ($r) the census run exited non-zero"; continue; fi

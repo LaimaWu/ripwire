@@ -20,6 +20,7 @@
 // What it does NOT do: infer a function's return type (`s = self.get_screen(); s.refresh()`), follow a property, or type
 // a value that crossed a call boundary. Those receivers stay name-only — the honest answer, not a guess.
 
+#include "infra/sortutil.h"   // svLess: the explicit byte order the operatorResult sort takes (portablebuildcheck #6)
 #include "model.h"
 #include "resolve.h"   // includerDir; HashMap / SmallVec through it; extent::inSet (extentsuspect.h) through it
 #include "smallvec.h"
@@ -140,6 +141,23 @@ inline MemberOwnerRule memberOwnerRuleOf( Lang l ) noexcept
         case Lang::Go:   return MemberOwnerRule::PackageDir;
         case Lang::Rust: return MemberOwnerRule::FileOrUnique;
         default:         return MemberOwnerRule::Lexical;
+    }
+}
+
+// Lane h1-annot: how a written type's QUALIFIER (`pkg.T`, `mod.T`, `ns.T<…>`: the capture's RecvType / MemberType importedName)
+// is checked before its final segment may name an in-tree class. GoPackage — the import path names an in-tree package that
+// defines T (CallResultTypes::goQualifiedClass). FileImport — Python and TS: the qualifier's ROOT is bound by the file's
+// imports to an in-tree module, package or relative path (graph.h buildQualifierVerdicts), or, bound by no import, names an
+// in-tree class (`Outer.Inner`) or a TS namespace; T itself is then read by its final segment as before. None — a family whose
+// capture writes no qualifier: the written type proves nothing.
+enum class WrittenQualifierRule : std::uint8_t { None, GoPackage, FileImport };
+inline WrittenQualifierRule writtenQualifierRuleOf( Lang l ) noexcept
+{
+    switch( l )
+    {
+        case Lang::Go:                               return WrittenQualifierRule::GoPackage;
+        case Lang::Python: case Lang::TypeScript:    return WrittenQualifierRule::FileImport;
+        default:                                     return WrittenQualifierRule::None;
     }
 }
 
@@ -1668,6 +1686,12 @@ struct ReceiverEvidence
     bool                                                  active = false;
     const HashMap<std::string, char>*                     localNames = nullptr;   // graph.h FieldNarrowTables::localNameSet
     const GoPackagePaths*                                 goPackages = nullptr;   // graph.h FalseEdgeRules::goPackages
+    const HashMap<std::string, char>*                     qualifierVerdicts = nullptr;   // graph.h buildQualifierVerdicts (h1-annot)
+    mutable HashMap<std::string, char>                    namespaceNames;           // every Namespace record's name and its roots, on first use
+    mutable bool                                          namespaceNamesBuilt = false;
+    std::vector<std::pair<NodeId, std::string_view>>      operatorResult;           // OperatorResult methods → "self" / their class, sorted (h1-annot)
+    std::vector<const Binding*>                           augDropped;               // AugAssign records that dropped their name's class:
+                                                                                    //   graph.h tombstones Rule 2's varType entry too
     HashMap<std::string, std::uint32_t>                   callResultDecls;          // "<scope>#var" → its CallResult records (typeCallResult)
     CallResultTypes                                       types;                    // (L) fix round 1: a declared result type's ONE class
 
@@ -1833,6 +1857,7 @@ struct ReceiverEvidence
         std::vector<const Binding*> qualified;   // locals, parameters and fields written `pkg.T`: decided once every import alias is known
         std::vector<const Binding*> written;     // rust-receivers: Rust locals, parameters and fields written (or constructed) as a type
         std::vector<const Binding*> dispatch;    // lane L6: Rust locals, parameters and fields typed only through a trait (DispatchType)
+        std::vector<const Binding*> augAssigns;  // Python `x op= v`: decided once every fact and method is known (h1-annot)
         types.importsByFile.assign( ing.files.size(), {} );
         types.filePackage.assign( ing.files.size(), {} );
         types.moduleAlias = &moduleAlias;
@@ -1902,6 +1927,14 @@ struct ReceiverEvidence
                     it->second.first.clear();   // rebound to something else: decide nothing
                 }
             }
+            else if( b.kind == LocalBindKind::AugAssign && !b.var.empty() )
+            {
+                augAssigns.push_back( &b );
+            }
+            else if( b.kind == LocalBindKind::OperatorResult )
+            {
+                operatorResult.emplace_back( b.fromSymbol, b.typeName );
+            }
         }
         types.finishIndex();
         for( const Binding* q : qualified )
@@ -1916,7 +1949,52 @@ struct ReceiverEvidence
         {
             noteDispatchWritten( *d );
         }
+        std::ranges::sort( operatorResult, []( const std::pair<NodeId, std::string_view>& a, const std::pair<NodeId, std::string_view>& b )
+                           { return a.first != b.first ? a.first < b.first : sortutil::svLess( a.second, b.second ); } );
         active = true;
+        for( const Binding* a : augAssigns )
+        {
+            noteAugAssign( *a );   // reads methodOf: after `active`
+        }
+    }
+    // Lane h1-annot: a Python `x op= v` rebinds `x` to what the operator returns. The class C `x` holds in its scope — every
+    // typed fact of the name agreeing on ONE class — survives only when the method Python calls is ONE definition whose
+    // OperatorResult record names "self" or C: C's in-place method `a.typeName` (`__iadd__`; its own, else the shallowest
+    // base's: methodOf), else — C defines none in its cone — its binary method `a.importedName` (`__add__`: `x = x + v`).
+    // Otherwise (a result that is not provably C, two definitions, neither method) `x` gets a tombstone, as a plain
+    // reassignment does. A name with no typed fact is left alone (nothing to drop).
+    // test/receiverevidencecheck.sh (Q) AugNotSelf / AugNoDunder / AugOtherOp [N], AugSelf / AugIorSelf / AugInherited /
+    // AugBinaryAnnotated [P].
+    void noteAugAssign( const Binding& a )
+    {
+        const std::string k   = keyOf( factScope( a ), '#', a.var );   // a copy: methodOf reuses the key buffer
+        const auto        it  = localType.find( k );
+        if( it == localType.end() )
+        {
+            return;
+        }
+        std::string_view cls;
+        NodeId           id  = kNoNode;
+        bool             one = true;
+        for( const LocalFact& f : it->second )
+        {
+            if( f.type.empty() )
+            {
+                continue;
+            }
+            one = one && ( cls.empty() || ( f.type == cls && f.cls == id ) );
+            if( cls.empty() )
+            {
+                cls = f.type;
+                id  = f.cls;
+            }
+        }
+        if( cls.empty() || ( one && operatorKeepsClass( cls, id, a.typeName, a.importedName ) ) )
+        {
+            return;
+        }
+        addTypedFact( k, a, {}, kNoNode );
+        augDropped.push_back( &a );
     }
     // (L) the call-result facts one binding feeds: the file's imports (CallResultTypes) and the function's call-initialised
     // bindings of each name (typeCallResult's TS guess rule)
@@ -1943,14 +2021,27 @@ struct ReceiverEvidence
             addBase( owner, type );
         }
     }
-    // a local, parameter or field written `pkg.T` (the Go capture is its only writer: importedName = the qualified text) names
-    // a class of THIS tree only when `pkg` imports an in-tree package defining it (CallResultTypes::goQualifiedClass): `f
-    // *os.File` beside an in-tree `File` is os's File, never ours (test/receiverevidencecheck.sh (L) NearOSParam, NearOSField).
-    // Anything else keeps the name as a tombstone: it proves nothing. A local carries the class it resolved to.
+    // a local, parameter or field written `pkg.T` (importedName = the qualified text: the Go, Python and TS captures write it)
+    // names a class of THIS tree only when its qualifier passes the language's WrittenQualifierRule: Go — `pkg` imports an
+    // in-tree package defining it (CallResultTypes::goQualifiedClass): `f *os.File` beside an in-tree `File` is os's File,
+    // never ours (test/receiverevidencecheck.sh (L) NearOSParam, NearOSField); Python / TS (h1-annot) — the qualifier is an
+    // in-tree module or namespace (qualifierInTree): `s: requests.Session`, `s: ext.Session<T>` beside an in-tree Session
+    // prove nothing ((Q) PyModT, TsNsT). Anything else keeps the name as a tombstone. A Go local carries the class it resolved to.
     void noteQualifiedWritten( const Binding& q )
     {
-        const NodeId           cls  = types.goQualifiedClass( q.fileId, q.importedName, q.typeName );
-        const std::string_view type = cls != kNoNode ? std::string_view( q.typeName ) : std::string_view{};
+        EXPECTS( q.fromSymbol < ing.symbols.size() && !q.importedName.empty(), "build() queues only attributed records that carry a qualifier" );
+        NodeId cls  = kNoNode;
+        bool   keep = false;
+        switch( writtenQualifierRuleOf( ing.symbols[ q.fromSymbol ].lang ) )
+        {
+            case WrittenQualifierRule::GoPackage:
+                cls  = types.goQualifiedClass( q.fileId, q.importedName, q.typeName );
+                keep = cls != kNoNode;
+                break;
+            case WrittenQualifierRule::FileImport: keep = qualifierInTree( q.fileId, q.importedName ); break;
+            case WrittenQualifierRule::None:       break;
+        }
+        const std::string_view type = keep ? std::string_view( q.typeName ) : std::string_view{};
         if( q.kind == LocalBindKind::MemberType )
         {
             noteMemberType( q, type );
@@ -2019,6 +2110,55 @@ struct ReceiverEvidence
         f.iface = trait;
         f.bound.assign( bound );
         addFact( keyOf( factScope( d ), '#', d.var ), std::move( f ) );
+    }
+    // is the result of the operator Python calls on a `cls` receiver (`inPlace`, else `binary`) provably `cls` (noteAugAssign)
+    bool operatorKeepsClass( std::string_view cls, NodeId id, std::string_view inPlace, std::string_view binary ) const
+    {
+        if( !methodOf( cls, inPlace, false, id ) && ( binary.empty() || !methodOf( cls, binary, false, id ) ) )
+        {
+            return false;
+        }
+        if( found.size() != 1 )
+        {
+            return false;
+        }
+        const auto row = std::ranges::lower_bound( operatorResult, found[ 0 ], []( NodeId a, NodeId b ) { return a < b; },
+                                                   &std::pair<NodeId, std::string_view>::first );
+        return row != operatorResult.end() && row->first == found[ 0 ] && ( row->second == "self" || row->second == cls );
+    }
+    // Python / TS (h1-annot): is the qualifier of the written type `whole` (`requests.Session`, `a.b.T`, `ns.T`) — its ROOT,
+    // the name the file binds — an in-tree module, package or namespace as file `f` sees it: an import binding it decides
+    // (buildQualifierVerdicts: 'i' in the tree, 'x' outside); bound by no import, an in-tree class (`Outer.Inner`) or a
+    // namespace some file declares (TS `namespace Local`) passes, anything else (`NodeJS.T`, an unbound name) does not.
+    bool qualifierInTree( std::uint32_t f, std::string_view whole ) const
+    {
+        const std::size_t dot = whole.find( '.' );
+        if( dot == std::string_view::npos || dot == 0 )
+        {
+            return false;
+        }
+        const std::string_view root = whole.substr( 0, dot );
+        if( qualifierVerdicts != nullptr )
+        {
+            if( const auto it = qualifierVerdicts->find( keyOf( f, '#', root ) ); it != qualifierVerdicts->end() )
+            {
+                return it->second == 'i';
+            }
+        }
+        key.assign( root );
+        if( classNames.contains( key ) )
+        {
+            return true;
+        }
+        if( !namespaceNamesBuilt )
+        {
+            namespaceNamesBuilt = true;
+            for( const Binding* ns : types.namespaces )
+            {
+                namespaceNames.try_emplace( std::string( ns->var.substr( 0, ns->var.find( '.' ) ) ), char( 1 ) );   // `a.b` declares `a`
+            }
+        }
+        return namespaceNames.contains( key );
     }
     // the definition a local binding belongs to: a typed local the extractor also indexed as a symbol of its own (a Go
     // `var c T` inside a function) belongs to the function that declares it
