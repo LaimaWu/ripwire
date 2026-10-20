@@ -23,12 +23,26 @@
 // git child now carries (gitcmd.h: --no-optional-locks -c core.fsmonitor=false, for every form of the key, in
 // every directory). What this header does is TELL the user when a root they pointed at carries the hook form,
 // and keep the env override as a second layer there. Because the governing config need not sit in `root/.git`
-// — it can live up the parent chain, or in a per-worktree gitdir plus a shared commondir — `gitResolvedConfigDirs`
-// asks git itself (`rev-parse --absolute-git-dir --git-common-dir`, the hook disabled on that probe's OWN
-// command line) which dir governs the root, and the probe and disclosure run for THAT repo whatever its depth.
+// — it can live up the parent chain, or in a per-worktree gitdir plus a shared commondir — the cheap tier scans
+// every config file git's own discovery COULD pick for the root (`discoveryConfigSuperset`: every ancestor's
+// `.git` dir or `gitdir:` file, every ancestor that is itself a gitdir, and each one's `commondir`), so the probe
+// and disclosure run for the governing repo whatever its depth, with no git child unless a file could carry the
+// key. Where the filesystem cannot speak for git (GIT_DIR/GIT_COMMON_DIR/GIT_WORK_TREE set, a root that does not
+// canonicalise, a pointer file behind a symlink or holding a NUL), `gitResolvedConfigDirs` asks git itself
+// (`rev-parse --absolute-git-dir --git-common-dir`, the hook disabled on that probe's OWN command line).
 //
 // The trust decision is PER PROCESS: a long-lived --mcp server probes its roots once at start. A config edited
 // under a running server is not re-read — the same freshness contract every other startup-only fact has here.
+//
+// FILTER DRIVERS (2026-10-15). ripwire also neutralises repository-configured filter and diff programs for its own
+// git children. `filter.<name>.clean/smudge/process` drivers are named by the repository, so no fixed -c key covers
+// them: hardenFilterDriversFor() asks git which drivers the local/worktree scopes define (cheap-tier gated on the
+// same candidate files: "filter" or "include"; a candidate that exists but cannot be read as a plain file is always
+// probed) and pins each to an empty command on every later git child (gitcmd.h FILTER DRIVERS), disclosing
+// git_harden=filter-driver. A server that meets a root only in a request (MCP/LSP) probes it before that request is
+// dispatched (hardenLateRoot, once per root, from the MCP dispatch and from getIndex). Diff programs
+// (diff.external, diff.<driver>.command/textconv) are refused at the call site instead, with --no-ext-diff
+// --no-textconv; submodule repositories are not entered (--ignore-submodules=dirty).
 //
 // NOT covered, and measured NOT to fire here: a `post-index-change` hook under `git status --porcelain` (git 2.50.1,
 // the same fixture). Hooks are the same trust class as config, but an arm that cannot be observed to fire is not
@@ -47,9 +61,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>   // std::errc — discoveryConfigSuperset tells "absent" from a stat it cannot judge
 #include <utility>
 #include <vector>
 
@@ -220,11 +237,203 @@ inline std::vector<std::filesystem::path> gitResolvedConfigDirs( const std::stri
     return dirs;
 }
 
+// ── the filesystem superset: every config file git's discovery could govern the root with, no git child ──────
+//
+// The `rev-parse` above is one git child per crawl root per process — on the critical path of EVERY call, and the
+// answer it gives is a fact about the filesystem. With no GIT_DIR / GIT_COMMON_DIR / GIT_WORK_TREE in the
+// environment, git (setup.c, 2.50.1) finds the governing gitdir by walking up from the PHYSICAL cwd: at each
+// directory D it takes D/.git when that is a directory git accepts as a repository, or the path a `gitdir: X` FILE
+// at D/.git names, or D itself when D is a gitdir (a bare repository, or a cwd inside .git — which needs a D/HEAD);
+// a `.git` directory git rejects is skipped and the walk goes on up. The gitdir's `commondir` file, when present,
+// names the dir whose `config` is shared (a linked worktree; git honours it in ANY gitdir). Local config is then
+// gitdir/config, gitdir/config.worktree and commondir/config (+ includes, which the byte scan below reaches through
+// the word "include"). So the union over EVERY ancestor-or-self D of those candidates — never stopping at the first
+// `.git`, never judging which one git accepts — is a SUPERSET of the files git can read as local config. A superset
+// is the safe direction: an extra candidate can only trigger the authoritative `git config --get` probe, never hide
+// a value. Pointer files are read both as git reads them (the rest of the file, trailing CR/LF dropped, relative
+// to D or to the gitdir) and as the first line trimmed of blanks; where the two differ both are kept.
+// nullopt = the filesystem cannot speak for git here, and the caller asks git (gitResolvedConfigDirs) as before:
+// an environment-named repository, a root that does not canonicalise, a stat that fails other than "absent", a
+// pointer file (.git, commondir) that is a symlink — git reads through it, the no-follow reader does not — or a
+// pointer file with a NUL byte in it (git cuts the path there).
+// test/githardencheck.sh (O) pins the shapes (an invalid .git skipped, a planted commondir, a bare root, a
+// symlinked root) and (P) counts the git children: none for a root whose config cannot carry the key.
+inline bool gitDiscoveryNamedByEnvironment() noexcept
+{
+    for( const char* name : { "GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE" } )
+    {
+        if( const char* value = std::getenv( name ); value != nullptr && *value != '\0' )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline void addUniquePath( std::vector<std::filesystem::path>& out, const std::filesystem::path& p )
+{
+    if( std::find( out.begin(), out.end(), p ) == out.end() )
+    {
+        out.push_back( p );
+    }
+}
+
+// Both readings of a pointer file's path, each made absolute against `base`, appended to `out` once each.
+inline void addPointerReadings( std::string_view exactRest, std::string_view looseRest, const std::filesystem::path& base,
+                                std::vector<std::filesystem::path>& out )
+{
+    while( !exactRest.empty() && ( exactRest.back() == '\n' || exactRest.back() == '\r' ) )
+    {
+        exactRest.remove_suffix( 1 );
+    }
+    const std::string loose = trimmedFirstLine( looseRest );
+    for( const std::string_view reading : { exactRest, std::string_view( loose ) } )
+    {
+        if( reading.empty() )
+        {
+            continue;
+        }
+        std::filesystem::path p( reading );
+        if( p.is_relative() )
+        {
+            p = base / p;
+        }
+        addUniquePath( out, p );
+    }
+}
+
+// true = absent (or not a directory on the way); false = a stat error git could see differently — doubt.
+inline bool statAbsentOrOk( const std::error_code& ec ) noexcept
+{
+    return !ec || ec == std::errc::no_such_file_or_directory || ec == std::errc::not_a_directory;
+}
+
+// The target(s) a `.git` file at `dir` names with `gitdir:`. false = doubt (a `.git` that is a symlink to something
+// the no-follow reader cannot open, or a file holding a NUL: git reads the path as a C string, cut at the first NUL).
+inline bool addGitFileTargets( const std::filesystem::path& dir, const std::filesystem::path& dotGit,
+                               std::vector<std::filesystem::path>& gitDirs )
+{
+    const std::optional<std::string> head = pathguard::readRegularFileNoFollow( dotGit.string() );
+    if( !head )
+    {
+        return !pathguard::isSymlink( dotGit.string() );
+    }
+    if( head->find( '\0' ) != std::string::npos )
+    {
+        return false;
+    }
+    if( head->starts_with( "gitdir:" ) )
+    {
+        const std::string_view text( *head );
+        addPointerReadings( text.substr( text.starts_with( "gitdir: " ) ? 8 : 7 ), text.substr( 7 ), dir, gitDirs );
+    }
+    return true;
+}
+
+// One level of git's discovery walk: the gitdirs directory `dir` could contribute — its `.git` directory, the
+// target(s) of a `.git` gitdir: file, and `dir` itself when it holds a HEAD. false = doubt (a stat error that is not
+// "absent", or a `.git` file addGitFileTargets cannot speak for).
+inline bool addGitDirsAt( const std::filesystem::path& dir, std::vector<std::filesystem::path>& gitDirs )
+{
+    std::error_code                    ec;
+    const std::filesystem::path        dotGit = dir / ".git";
+    const std::filesystem::file_status st     = std::filesystem::status( dotGit, ec );   // follows a link, as git's stat does
+    if( !statAbsentOrOk( ec ) )
+    {
+        return false;
+    }
+    ec.clear();
+    if( std::filesystem::is_directory( st ) )
+    {
+        addUniquePath( gitDirs, dotGit );
+    }
+    else if( std::filesystem::exists( std::filesystem::symlink_status( dotGit, ec ) ) && !addGitFileTargets( dir, dotGit, gitDirs ) )
+    {
+        return false;
+    }
+    ec.clear();
+    if( std::filesystem::exists( std::filesystem::symlink_status( dir / "HEAD", ec ) ) )
+    {
+        addUniquePath( gitDirs, dir );   // a bare repository, or a directory inside a gitdir
+    }
+    return true;
+}
+
+// The local config files one gitdir could govern with: its config and config.worktree, and the same pair in every
+// reading of its `commondir`. false = doubt (a commondir behind a symlink, which git reads through, or one holding a NUL).
+inline bool addGitDirConfigFiles( const std::filesystem::path& gitDir, std::vector<std::filesystem::path>& files )
+{
+    files.push_back( gitDir / "config" );
+    files.push_back( gitDir / "config.worktree" );
+    const std::string                commondirFile = ( gitDir / "commondir" ).string();
+    const std::optional<std::string> common        = pathguard::readRegularFileNoFollow( commondirFile );
+    if( !common )
+    {
+        return !pathguard::isSymlink( commondirFile );
+    }
+    if( common->find( '\0' ) != std::string::npos )
+    {
+        return false;   // as for a `.git` file: git cuts the path at the NUL — let git answer
+    }
+    std::vector<std::filesystem::path> commonDirs;
+    addPointerReadings( *common, *common, gitDir, commonDirs );
+    for( const std::filesystem::path& commonDir : commonDirs )
+    {
+        files.push_back( commonDir / "config" );
+        files.push_back( commonDir / "config.worktree" );
+    }
+    return true;
+}
+
+inline std::optional<std::vector<std::filesystem::path>> discoveryConfigSuperset( const std::string& root )
+{
+    if( gitDiscoveryNamedByEnvironment() )
+    {
+        return std::nullopt;
+    }
+    std::error_code       ec;
+    std::filesystem::path dir = std::filesystem::canonical( std::filesystem::path( root ), ec );   // git walks the physical cwd
+    if( ec || dir.empty() )
+    {
+        return std::nullopt;
+    }
+    std::vector<std::filesystem::path> gitDirs;
+    for( ;; )   // every ancestor-or-self: never stop at the first `.git`, never judge which one git accepts
+    {
+        if( !addGitDirsAt( dir, gitDirs ) )
+        {
+            return std::nullopt;
+        }
+        const std::filesystem::path parent = dir.parent_path();
+        if( parent == dir || parent.empty() )
+        {
+            break;
+        }
+        dir = parent;
+    }
+    std::vector<std::filesystem::path> files;
+    files.reserve( gitDirs.size() * 4 );
+    for( const std::filesystem::path& gitDir : gitDirs )
+    {
+        if( !addGitDirConfigFiles( gitDir, files ) )
+        {
+            return std::nullopt;
+        }
+    }
+    ENSURES( files.size() >= gitDirs.size() * 2, "two candidates per gitdir, plus its commondir's" );
+    return files;
+}
+
 inline std::vector<std::filesystem::path> localConfigCandidates( const std::filesystem::path& root )
 {
+    if( std::optional<std::vector<std::filesystem::path>> superset = discoveryConfigSuperset( root.string() ) )
+    {
+        return std::move( *superset );   // may be empty: no `.git` and no gitdir anywhere above — nothing git could read
+    }
+    DISCLOSE( Diagnostics::answerUnchanged, "githarden: the filesystem cannot speak for git's discovery at this root, so git names the governing dirs (one more git child); the scan and the authoritative probe after it are unchanged" );
     std::vector<std::filesystem::path> out;
 
-    // Authoritative first: git resolves the governing gitdir/commondir for ANY root, subdirectory and
+    // Authoritative here: git resolves the governing gitdir/commondir for ANY root, subdirectory and
     // worktree and GIT_DIR included. Its config, its per-worktree config.worktree, and the shared common
     // config are the files a hook value could be spelled in (directly or through an include the cheap scan
     // also catches).
@@ -273,25 +482,221 @@ inline std::vector<std::filesystem::path> localConfigCandidates( const std::file
     return out;
 }
 
-inline bool localConfigMayCarryFsmonitor( const std::string& root )
+// One read of the local config candidates, two questions: could a file carry core.fsmonitor, and could one carry a
+// filter driver? "include" answers yes to both — an include can bring in either key. Same soundness argument as above:
+// a key git honours must be spelled in one of these files or reached through an include they name.
+//
+// The scan reads each candidate without following a final symlink (pathguard), but git DOES follow one when it reads
+// its config. So a candidate that exists yet cannot be read here as a plain file — a symlink, a non-regular file, an
+// unreadable one — answers "could carry either key": the cheap tier may only skip the probe for bytes it has actually
+// read, and git's own probe then decides.
+struct LocalConfigNeedles
 {
+    bool fsmonitor = false;
+    bool filter    = false;
+};
+
+inline LocalConfigNeedles localConfigNeedles( const std::string& root )
+{
+    LocalConfigNeedles found;
     for( const std::filesystem::path& candidate : localConfigCandidates( root ) )
     {
         std::optional<std::string> bytes = pathguard::readRegularFileNoFollow( candidate.string() );
         if( !bytes )
         {
+            // git reads a config file THROUGH a symlink; the no-follow reader does not. A candidate that exists yet
+            // cannot be read here as a plain file (a symlink — arm (O) symlinked config — a non-regular or unreadable
+            // file) is therefore unknown, not clean: git's own probe decides, never the shortcut.
+            std::error_code ec;
+            if( std::filesystem::exists( std::filesystem::symlink_status( candidate, ec ) ) )
+            {
+                found.fsmonitor = true;
+                found.filter    = true;
+            }
             continue;
         }
         for( char& c : *bytes )
         {
             if( c >= 'A' && c <= 'Z' ) { c = static_cast<char>( c + ( 'a' - 'A' ) ); }
         }
-        if( bytes->find( "fsmonitor" ) != std::string::npos || bytes->find( "include" ) != std::string::npos )
+        const bool include = bytes->find( "include" ) != std::string::npos;
+        found.fsmonitor    = found.fsmonitor || include || bytes->find( "fsmonitor" ) != std::string::npos;
+        found.filter       = found.filter || include || bytes->find( "filter" ) != std::string::npos;
+    }
+    return found;
+}
+
+// ── filter drivers the REPOSITORY's own config names (gitcmd.h FILTER DRIVERS) ─────────────────────────────
+//
+// `git config --show-scope -z --get-regexp` lists every filter.<name>.clean/smudge/process with the scope it came
+// from; an include is reported with the scope of the file that included it. Only `local` and `worktree` are the
+// repository's own writing: `global`/`system` are the user's and the machine's (git-lfs installs its driver
+// there), and `command` is this process's own -c pins and the caller's GIT_CONFIG_* block. The read is a config
+// read — it refreshes no index and starts no program. -z keeps a name with any byte but NUL/newline intact:
+// each entry is "scope\0key\nvalue\0".
+//
+// A git older than 2.26 has no --show-scope and rejects the option (exit 129). The fallback reads the same
+// entries WITHOUT scope and pins every one of them, the user's global drivers included: over-neutralising is the
+// safe direction, and the disclosure says scope="all" so the difference is visible.
+struct FilterDriverProbe
+{
+    std::vector<std::string> names;          // distinct driver names, in the order git listed them
+    bool                     allScopes = false;   // the pre-2.26 fallback: scope could not be read, every scope pinned
+};
+
+inline bool readConfigListing( const std::string& root, bool withScope, std::string& body )
+{
+    const std::string out = popenTrimmed( hardenedGitPrefix( root ) + " config" + ( withScope ? " --show-scope" : "" )
+                                          + " -z --get-regexp '^filter\\..*\\.(clean|smudge|process)$' 2>/dev/null; printf '\\nrc=%s' \"$?\"" );
+    const std::size_t rcAt = out.rfind( "\nrc=" );
+    if( rcAt == std::string::npos )
+    {
+        return false;
+    }
+    const std::string_view rc = std::string_view( out ).substr( rcAt + 4 );
+    if( rc != "0" && rc != "1" )
+    {
+        return false;   // 1 is "no match"; anything else is git refusing the command line or the config
+    }
+    body = out.substr( 0, rcAt );
+    return true;
+}
+
+// "filter.<name>.<var>\n<value>" → <name>. The name is everything between the section's dot and the LAST dot, so a
+// name holding dots survives; nullopt for anything that is not a filter driver key.
+inline std::optional<std::string> filterDriverNameOf( std::string_view entry )
+{
+    entry                               = entry.substr( 0, entry.find( '\n' ) );   // the key; the value follows the newline
+    constexpr std::string_view kSection = "filter.";
+    const std::size_t          lastDot  = entry.rfind( '.' );
+    if( !entry.starts_with( kSection ) || lastDot == std::string_view::npos || lastDot < kSection.size() )
+    {
+        return std::nullopt;
+    }
+    return std::string( entry.substr( kSection.size(), lastDot - kSection.size() ) );
+}
+
+inline FilterDriverProbe probeLocalFilterDrivers( const std::string& root )
+{
+    FilterDriverProbe probe;
+    std::string       body;
+    bool              withScope = true;
+    if( !readConfigListing( root, true, body ) )
+    {
+        withScope = false;
+        if( !readConfigListing( root, false, body ) )
         {
-            return true;
+            return probe;   // git cannot read this config at all — then no git command here gets as far as a filter
+        }
+        probe.allScopes = true;
+    }
+    std::vector<std::string_view> fields;
+    for( std::size_t start = 0; start < body.size(); )
+    {
+        const std::size_t nul  = body.find( '\0', start );
+        const std::size_t stop = nul == std::string::npos ? body.size() : nul;
+        fields.push_back( std::string_view( body ).substr( start, stop - start ) );
+        start = stop + 1;
+    }
+    const std::size_t stride = withScope ? 2 : 1;
+    for( std::size_t i = 0; i + stride <= fields.size(); i += stride )
+    {
+        if( withScope && fields[i] != "local" && fields[i] != "worktree" )
+        {
+            continue;
+        }
+        std::optional<std::string> name = filterDriverNameOf( fields[i + stride - 1] );
+        if( name && std::find( probe.names.begin(), probe.names.end(), *name ) == probe.names.end() )
+        {
+            probe.names.push_back( std::move( *name ) );
         }
     }
-    return false;
+    return probe;
+}
+
+// What one root's filter-driver probe found and did — kept for --doctor's git-config-trust row (the startup roots).
+struct FilterDriverOutcome
+{
+    std::size_t drivers   = 0;       // distinct driver names the probe found (0: none, or the cheap tier saw no candidate)
+    bool        allScopes = false;   // the pre-2.26 fallback: every scope was pinned
+    bool        refused   = false;   // a name -c cannot spell: every later git child is refused instead
+};
+
+// Probe one root's filter drivers, pin them (gitcmd.h), and disclose on stderr. The names are the repository's
+// text and are never printed — only their count. Safe to call from a server thread: the pins are mutex-guarded.
+inline FilterDriverOutcome hardenFilterDriversFor( const std::string& root )
+{
+    const FilterDriverProbe probe = probeLocalFilterDrivers( root );
+    FilterDriverOutcome     outcome{ probe.names.size(), probe.allScopes, false };
+    if( probe.names.empty() )
+    {
+        return outcome;
+    }
+    if( pinGitFilterDrivers( probe.names ).unpinnable )
+    {
+        outcome.refused = true;
+        emitTo( stderr, "ripwire: git: {} configures a filter driver whose name git's -c option cannot spell — every git call this run is refused instead (git_harden=filter-driver-refused): history, churn and the dirty stamp are unavailable\n", root );
+        return outcome;
+    }
+    emitTo( stderr, "ripwire: git: {} configures {} filter driver(s) in {} — neutralised for this run (git_harden=filter-driver): every git call ripwire makes runs them with an empty clean/smudge/process command, so no configured filter program starts\n",
+            root, probe.names.size(), probe.allScopes ? "its config (scope=all: this git cannot report scope, so the user's own drivers are neutralised too)" : "the repository's own config" );
+    return outcome;
+}
+
+// Roots a server meets only in a REQUEST (an MCP or LSP server, with or without a startup root): the startup pass
+// never saw them, so the request that names one probes it here before it is dispatched. One probe per distinct
+// spelling; the startup roots are recorded too, so they are not probed twice.
+namespace detail
+{
+struct ProbedRoots
+{
+    std::mutex               lock;
+    std::vector<std::string> roots;
+};
+inline ProbedRoots& probedRoots()
+{
+    static ProbedRoots probed;
+    return probed;
+}
+inline bool firstSighting( const std::string& root )
+{
+    ProbedRoots&                      probed = probedRoots();
+    const std::lock_guard<std::mutex> guard( probed.lock );
+    if( std::ranges::contains( probed.roots, root ) )
+    {
+        return false;
+    }
+    probed.roots.push_back( root );
+    return true;
+}
+}   // namespace detail
+
+// The lock is held ACROSS the probe, and the root is recorded only once its pins are registered: a second caller for
+// the same root waits until the pins exist instead of returning early and starting git before them, and a probe
+// interrupted by an exception leaves the root unrecorded, so the next caller probes it again. A root that is not a
+// directory (yet) is not recorded either. Callers for different roots serialise too; a probe is two short git reads.
+inline void hardenLateRoot( const std::string& root )
+{
+    if( root.empty() )
+    {
+        return;
+    }
+    detail::ProbedRoots&              probed = detail::probedRoots();
+    const std::lock_guard<std::mutex> guard( probed.lock );
+    if( std::ranges::contains( probed.roots, root ) )
+    {
+        return;
+    }
+    std::error_code ec;
+    if( !std::filesystem::is_directory( std::filesystem::path( root ), ec ) || ec )
+    {
+        return;
+    }
+    if( localConfigNeedles( root ).filter )
+    {
+        hardenFilterDriversFor( root );
+    }
+    probed.roots.push_back( root );
 }
 
 // ── the environment override block (git's own mechanism, git-config(1) ENVIRONMENT) ───────────────────────
@@ -332,30 +737,39 @@ inline bool appendGitConfigOverride( const char* key, const char* value )
 // per root, and doctor reads it. One write, at startup, before any thread.
 struct Report
 {
-    std::vector<std::pair<std::string, FsmonitorForm>> forms;      // every directory root probed, in argv order
-    bool                                               applied = false;
+    std::vector<std::pair<std::string, FsmonitorForm>>       forms;      // every directory root probed, in argv order
+    std::vector<std::pair<std::string, FilterDriverOutcome>> filters;    // the same roots' filter-driver probes
+    bool                                                     applied = false;
 };
 
 inline Report g_startup;
 
+// One root's startup record from either list; the value-initialised record (Unset / no drivers) for a root not probed.
+template<class Record>
+Record startupRecordFor( const std::vector<std::pair<std::string, Record>>& records, std::string_view root ) noexcept
+{
+    const auto it = std::ranges::find( records, root, &std::pair<std::string, Record>::first );
+    return it == records.end() ? Record{} : it->second;
+}
+
 inline FsmonitorForm startupFormFor( std::string_view root ) noexcept
 {
-    for( const auto& [ r, form ] : g_startup.forms )
-    {
-        if( r == root )
-        {
-            return form;
-        }
-    }
-    return FsmonitorForm::Unset;
+    return startupRecordFor( g_startup.forms, root );
+}
+
+inline FilterDriverOutcome startupFiltersFor( std::string_view root ) noexcept
+{
+    return startupRecordFor( g_startup.filters, root );
 }
 
 // Call ONCE from main(), after parseArgs and before any thread or git subprocess. A root that is not a directory
 // (a git URL, which git itself clones fresh — its config is never hostile) is skipped.
 inline const Report& hardenForRoots( std::span<const std::string_view> roots )
 {
+    PROFILE_SCOPE_DESCRIBE( "githarden: hardenForRoots (startup trust probe, per crawl root)" );
     Report& r = g_startup;
     r.forms.clear();
+    r.filters.clear();
     r.applied = false;
     bool anyHook = false;
     for( std::string_view root : roots )
@@ -365,10 +779,13 @@ inline const Report& hardenForRoots( std::span<const std::string_view> roots )
         {
             continue;
         }
-        const std::string   rootStr = std::string( root );
-        const FsmonitorForm form    = localConfigMayCarryFsmonitor( rootStr ) ? probeFsmonitorForm( rootStr ) : FsmonitorForm::Unset;
+        const std::string        rootStr = std::string( root );
+        const LocalConfigNeedles needles = localConfigNeedles( rootStr );
+        const FsmonitorForm      form    = needles.fsmonitor ? probeFsmonitorForm( rootStr ) : FsmonitorForm::Unset;
         r.forms.emplace_back( rootStr, form );
         anyHook = anyHook || form == FsmonitorForm::Hook;
+        detail::firstSighting( rootStr );
+        r.filters.emplace_back( rootStr, needles.filter ? hardenFilterDriversFor( rootStr ) : FilterDriverOutcome{} );
     }
     if( !anyHook )
     {

@@ -1,0 +1,744 @@
+# arm (L) fix round 3 — THE BINDING-FORM MATRIX (read by test/receiverevidencecheck.sh; Python, kept as .txt so the repo's own
+# indexed map does not grow — the same reason callresult.txt is a text bundle).
+#
+#   python3 -I callresult_matrix.txt OUTDIR     writes one tree per language under OUTDIR/mx_<lang>/ and prints the cells:
+#     CELL <id> <lang> <form> <scope> <target> <root> <selector> P <kind> <name> <file:line>   (the ONE proven row)
+#     CELL <id> <lang> <form> <scope> <target> <root> <selector> N <name> [FLOOR]              (no row <name> proven)
+#     NA   <lang> <form> <scope> <target> <reason…>                                            (the language cannot say it)
+#
+# THE CLASS. A written (or returned) type name is resolved to an in-tree class while some binding visible at the callee's
+# scope names that spelling as something else. Each cell writes ONE binding form of the spelling S<k> at ONE scope level of
+# the callee load<k>(), with ONE target, and plants a TRAP — an in-tree namesake S<k> (with the member hit<k>) where a
+# scope-blind or form-blind lookup would find it — plus a decoy D<k>.hit<k> so a by-name pick is never single. The caller
+# writes `x = load<k>(); x.hit<k>()`.
+#   target U  every visible binding names the same in-tree class → the cell's tagged hit<k> is the ONE proven row
+#   target O  the deciding binding names something OUTSIDE the tree → no hit<k> is proven (the trap never wins)
+#   target X  the deciding binding is UNRESOLVED (an outside wildcard, a path naming no in-tree module/class) → none proven
+#   target 2  two visible bindings (or two in-tree classes) disagree → none proven
+#   FLOOR     a U cell the rule does not follow (an alias, a member type inherited from a base, …): it must HEDGE, never
+#             prove — the gate header names each floor.
+# Scope levels: file, namespace / module (Rust inline `mod`, C++ / TS `namespace`, a JVM package-level class), nested
+# (a mod in a mod, a C++ class or nested namespace, a JVM nested class / object / companion), function body.
+# A binding is visible where the LANGUAGE puts it in force: an inner scope's binding shadows an outer one (a Rust `mod` is a
+# fresh scope; a JVM nested class hides the package's), and a lower tier is read only when every higher one is silent
+# (JVM: nested, single-type import / own file, package, on-demand; Rust: item / `use` / alias, then globs). Within the
+# deciding tier every binding must agree and stay in tree.
+import os, sys
+
+OUT = sys.argv[ 1 ]
+files = {}      # root -> { path: text }
+# C++ OFF (owner 2026-10-17, fix round 6): model.h callResultFamilyOf maps C++ / ObjC to None, so no C++ call result is typed —
+# every C++ U cell is printed as an N FLOOR (it must hedge). True again with the macro-aware C++ card.
+CPP_TYPED = False
+cells = []      # ( id, lang, form, scope, target, root, selector, verdict, kind, name, tag, floor )
+nas   = []
+K     = [ 0 ]
+
+def new_id():
+    K[ 0 ] += 1
+    return K[ 0 ]
+
+def put( root, path, text ):
+    files.setdefault( root, {} )
+    files[ root ][ path ] = files[ root ].get( path, "" ) + text
+
+def cell( lang, form, scope, target, root, sel, k, expect, kind="method", floor=False ):
+    cells.append( ( k, lang, form, scope, target, root, sel, expect, kind, "hit%d" % k if lang not in ( "go", ) else "Hit%d" % k, "@T%d" % k, floor ) )
+
+def na( lang, form, scope, target, why ):
+    nas.append( ( lang, form, scope, target, why ) )
+
+def ind( text, n ):
+    pad = " " * n
+    return "".join( ( pad + l if l.strip() else l ) for l in text.splitlines( True ) )
+
+# ───────────────────────────────────────────────────────────── Rust ─────────────────────────────────────────────────────────
+RS = "mx_rust"
+put( RS, "Cargo.toml", '[package]\nname = "mxr"\nversion = "0.1.0"\n' )
+rs_mods = [ "decoy" ]
+
+def rs_class( name, k, tag=False ):
+    return "pub struct %s;\nimpl %s {\n    pub fn hit%d(&self) -> usize { 1 }%s\n}\n" % ( name, name, k, " // @T%d" % k if tag else "" )
+
+def rs_mod( k, name, body ):
+    rs_mods.append( name )
+    put( RS, "src/%s.rs" % name, body )
+
+def rs_cell( form, scope, target, k, bind, callee_ret, outer, expect, floor=False, extra_file="" ):
+    """bind: the binding lines at the callee's level; outer: the trap at the enclosing level ('' none)."""
+    S = "S%d" % k
+    callee = "pub fn load%d() -> %s { todo!() }\n" % ( k, callee_ret or S )
+    if scope == "file":
+        body = bind + callee + "pub fn cell%d() -> usize { let x = load%d(); x.hit%d() }\n" % ( k, k, k )
+        if outer:
+            rs_mod( k, "w%d" % k, outer )    # the trap: a module nothing imports
+    elif scope == "mod":
+        body = outer + "pub mod m {\n" + ind( bind + callee, 4 ) + "}\n" + "pub fn cell%d() -> usize { let x = m::load%d(); x.hit%d() }\n" % ( k, k, k )
+    elif scope == "nested":
+        body = "pub mod m {\n" + ind( outer, 4 ) + "    pub mod n {\n" + ind( bind + callee, 8 ) + "    }\n}\n" \
+             + "pub fn cell%d() -> usize { let x = m::n::load%d(); x.hit%d() }\n" % ( k, k, k )
+    else:   # fn body: the callee is a fn nested in the caller's body; the module's items are in scope there
+        body = outer + "pub fn cell%d() -> usize {\n" % k + ind( bind + callee.replace( "pub fn", "fn" ), 4 ) \
+             + "    let x = load%d();\n    x.hit%d()\n}\n" % ( k, k )
+    rs_mod( k, "c%d" % k, extra_file + body )
+    cell( "rust", form, scope, target, RS, "src/c%d.rs:cell%d" % ( k, k ), k, expect, floor=floor )
+
+for scope in ( "file", "mod", "nested", "fn" ):
+    # item: a struct declared at the callee's own level; the trap one level out (file: another module)
+    k = new_id(); rs_cell( "item", scope, "U", k, rs_class( "S%d" % k, k, True ), "", rs_class( "S%d" % k, k ), "P" )
+    # none: nothing at the callee's level binds the name — the trap one level out is NOT in scope (a mod is a fresh
+    # scope), except in a fn body, which sees its module's items
+    k = new_id()
+    if scope == "fn":
+        rs_cell( "none", scope, "U", k, "", "", rs_class( "S%d" % k, k, True ), "P" )
+    else:
+        rs_cell( "none", scope, "X", k, "", "", rs_class( "S%d" % k, k ), "N" )
+    # use: an explicit `use` at the callee's level
+    k = new_id(); rs_mod( k, "t%d" % k, rs_class( "S%d" % k, k, True ) )
+    rs_cell( "use", scope, "U", k, "use crate::t%d::S%d;\n" % ( k, k ), "", rs_class( "S%d" % k, k ), "P" )
+    k = new_id(); rs_cell( "use", scope, "O", k, "use ext_crate::S%d;\n" % k, "", rs_class( "S%d" % k, k ), "N" )
+    k = new_id(); rs_cell( "use", scope, "X", k, "use crate::nowhere%d::S%d;\n" % ( k, k ), "", rs_class( "S%d" % k, k ), "N" )
+    na( "rust", "use", scope, "2", "two `use`s of one name in one scope (E0252) or a `use` beside an item of that name (E0255) do not compile" )
+    # use … as
+    k = new_id(); rs_mod( k, "t%d" % k, rs_class( "Real%d" % k, k, True ) )
+    rs_cell( "use-as", scope, "U", k, "use crate::t%d::Real%d as S%d;\n" % ( k, k, k ), "", rs_class( "S%d" % k, k ), "P" )
+    k = new_id(); rs_cell( "use-as", scope, "O", k, "use ext_crate::Thing as S%d;\n" % k, "", rs_class( "S%d" % k, k ), "N" )
+    k = new_id(); rs_cell( "use-as", scope, "X", k, "use crate::nowhere%d::Real%d as S%d;\n" % ( k, k, k ), "", rs_class( "S%d" % k, k ), "N" )
+    na( "rust", "use-as", scope, "2", "as for `use`: E0252 / E0255" )
+    # glob
+    k = new_id(); rs_mod( k, "t%d" % k, rs_class( "S%d" % k, k, True ) )
+    rs_cell( "glob", scope, "U", k, "use crate::t%d::*;\n" % k, "", rs_class( "S%d" % k, k ), "P" )
+    k = new_id(); rs_cell( "glob", scope, "O", k, "use ext_crate::*;\n", "", rs_class( "S%d" % k, k ), "N" )
+    k = new_id(); rs_cell( "glob", scope, "X", k, "use crate::nowhere%d::*;\n" % k, "", rs_class( "S%d" % k, k ), "N" )
+    k = new_id(); rs_mod( k, "t%d" % k, rs_class( "S%d" % k, k ) ); rs_mod( k, "u%d" % k, rs_class( "S%d" % k, k ) )
+    rs_cell( "glob", scope, "2", k, "use crate::t%d::*;\nuse crate::u%d::*;\n" % ( k, k ), "", "", "N" )
+    # alias: `type S = …;` is an item — it hides a glob's S; it is not followed (an in-tree target is a FLOOR)
+    k = new_id(); rs_mod( k, "t%d" % k, rs_class( "Real%d" % k, k, True ) )
+    rs_cell( "alias", scope, "U", k, "pub type S%d = crate::t%d::Real%d;\n" % ( k, k, k ), "", rs_class( "S%d" % k, k ), "N", floor=True )
+    k = new_id(); rs_mod( k, "t%d" % k, rs_class( "S%d" % k, k ) )
+    rs_cell( "alias", scope, "O", k, "pub type S%d = ext_crate::Thing;\nuse crate::t%d::*;\n" % ( k, k ), "", rs_class( "S%d" % k, k ), "N" )
+    na( "rust", "alias", scope, "X", "an alias's target is the alias's own business: O covers an outside one, U (floor) an in-tree one" )
+    na( "rust", "alias", scope, "2", "two items of one name in one scope do not compile (E0428)" )
+    na( "rust", "item", scope, "O", "an item is a declaration in the tree" )
+    na( "rust", "item", scope, "X", "an item is a declaration in the tree" )
+    na( "rust", "item", scope, "2", "two items of one name in one scope do not compile (E0428)" )
+for scope in ( "file", "mod" ):
+    # an item shadows a glob of the same level
+    k = new_id(); rs_mod( k, "t%d" % k, rs_class( "S%d" % k, k ) )
+    rs_cell( "item+glob", scope, "U", k, rs_class( "S%d" % k, k, True ) + "use crate::t%d::*;\n" % k, "", "", "P" )
+# a type parameter of the enclosing impl names the spelling: `impl<S> H<S> { fn load() -> S }` beside a struct S
+for scope in ( "file", "mod" ):
+    k = new_id(); S = "S%d" % k
+    impl = "pub struct H%d<%s>(pub %s);\nimpl<%s> H%d<%s> {\n    pub fn load%d() -> %s { todo!() }\n}\n" % ( k, S, S, S, k, S, k, S )
+    if scope == "file":
+        body = rs_class( S, k ) + impl + "pub fn cell%d() -> usize { let x = H%d::<u8>::load%d(); x.hit%d() }\n" % ( k, k, k, k )
+    else:
+        body = "pub mod m {\n" + ind( rs_class( S, k ) + impl, 4 ) + "}\npub fn cell%d() -> usize { let x = m::H%d::<u8>::load%d(); x.hit%d() }\n" % ( k, k, k, k )
+    rs_mod( k, "c%d" % k, body )
+    cell( "rust", "impl-type-param", scope, "O", RS, "src/c%d.rs:cell%d" % ( k, k ), k, "N" )
+# a `use` in a scope that does not hold the callee is not in force there (the file's outside glob decides: nothing)
+for where in ( "mod", "fn" ):
+    k = new_id(); rs_mod( k, "t%d" % k, rs_class( "S%d" % k, k ) )
+    side = ( "pub mod side {\n    use crate::t%d::S%d;\n}\n" if where == "mod" else "pub fn side() {\n    use crate::t%d::S%d;\n}\n" ) % ( k, k )
+    rs_cell( "use-elsewhere(%s)" % where, "file", "X", k, "use ext_crate::*;\n" + side, "", "", "N" )
+# qualified results written from inside an inline mod: `super::` / `self::` are relative to the mod, not the file
+k = new_id(); rs_mods.append( "c%d" % k )   # super:: from the file module = the crate root
+put( RS, "src/lib.rs", rs_class( "S%d" % k, k, True ) )
+put( RS, "src/c%d.rs" % k, "pub fn load%d() -> super::S%d { todo!() }\npub fn cell%d() -> usize { let x = load%d(); x.hit%d() }\n" % ( k, k, k, k, k ) )
+rs_mod( k, "w%d" % k, rs_class( "S%d" % k, k ) )
+cell( "rust", "path super::", "file", "U", RS, "src/c%d.rs:cell%d" % ( k, k ), k, "P" )
+k = new_id(); rs_mods.append( "c%d" % k )   # super:: from an inline mod = the file's own module
+put( RS, "src/lib.rs", rs_class( "S%d" % k, k ) )
+put( RS, "src/c%d.rs" % k, rs_class( "S%d" % k, k, True ) + "pub mod m {\n    pub fn load%d() -> super::S%d { todo!() }\n}\npub fn cell%d() -> usize { let x = m::load%d(); x.hit%d() }\n" % ( k, k, k, k, k ) )
+cell( "rust", "path super::", "mod", "U", RS, "src/c%d.rs:cell%d" % ( k, k ), k, "P" )
+k = new_id(); rs_mods.append( "c%d" % k )   # super:: from a mod in a mod = the outer inline mod
+put( RS, "src/lib.rs", rs_class( "S%d" % k, k ) )
+put( RS, "src/c%d.rs" % k, rs_class( "S%d" % k, k ) + "pub mod m {\n" + ind( rs_class( "S%d" % k, k, True ), 4 )
+     + "    pub mod n {\n        pub fn load%d() -> super::S%d { todo!() }\n    }\n}\npub fn cell%d() -> usize { let x = m::n::load%d(); x.hit%d() }\n" % ( k, k, k, k, k ) )
+cell( "rust", "path super::", "nested", "U", RS, "src/c%d.rs:cell%d" % ( k, k ), k, "P" )
+k = new_id(); rs_mods.append( "c%d" % k )   # self:: inside an inline mod = that mod
+put( RS, "src/c%d.rs" % k, rs_class( "S%d" % k, k ) + "pub mod m {\n" + ind( rs_class( "S%d" % k, k, True ), 4 )
+     + "    pub fn load%d() -> self::S%d { todo!() }\n}\npub fn cell%d() -> usize { let x = m::load%d(); x.hit%d() }\n" % ( k, k, k, k, k ) )
+cell( "rust", "path self::", "mod", "U", RS, "src/c%d.rs:cell%d" % ( k, k ), k, "P" )
+k = new_id(); rs_mod( k, "t%d" % k, rs_class( "S%d" % k, k, True ) )   # crate:: is absolute anywhere
+rs_mod( k, "c%d" % k, rs_class( "S%d" % k, k ) + "pub mod m {\n    pub fn load%d() -> crate::t%d::S%d { todo!() }\n}\npub fn cell%d() -> usize { let x = m::load%d(); x.hit%d() }\n" % ( k, k, k, k, k, k ) )
+cell( "rust", "path crate::", "mod", "U", RS, "src/c%d.rs:cell%d" % ( k, k ), k, "P" )
+k = new_id(); rs_mod( k, "t%d" % k, rs_class( "S%d" % k, k ) )   # a file-level `use crate::t;` is not in force inside `mod m`
+rs_mod( k, "c%d" % k, "use crate::t%d;\npub mod m {\n    pub fn load%d() -> t%d::S%d { todo!() }\n}\npub fn cell%d() -> usize { let x = m::load%d(); x.hit%d() }\n" % ( k, k, k, k, k, k, k ) )
+cell( "rust", "path (file use)", "mod", "X", RS, "src/c%d.rs:cell%d" % ( k, k ), k, "N" )
+put( RS, "src/lib.rs", "".join( "pub mod %s;\n" % m for m in rs_mods ) )
+
+# ───────────────────────────────────────────────────────────── C++ ──────────────────────────────────────────────────────────
+CP = "mx_cpp"
+
+def cp_class( name, k, tag=False ):
+    return "struct %s {\n    int hit%d() const { return 1; }%s\n};\n" % ( name, k, " // @T%d" % k if tag else "" )
+
+def cp_cell( form, scope, target, k, pre, bind, expect, trap_tu=False, floor=False, ret=None ):
+    """pre: header text before the callee's scope (in-tree classes); bind: the binding at the callee's level."""
+    S = ret or "S%d" % k
+    if scope == "global":
+        hdr = pre + bind + "%s load%d();\n" % ( S, k )
+        src = "%s load%d() { return {}; }\n" % ( S, k )
+        call = "load%d()" % k
+    elif scope == "namespace":
+        hdr = pre + "namespace n%d {\n" % k + bind + "%s load%d();\n}\n" % ( S, k )
+        src = "namespace n%d {\n%s load%d() { return {}; }\n}\n" % ( k, S, k )
+        call = "n%d::load%d()" % ( k, k )
+    elif scope == "nested-ns":
+        hdr = pre + "namespace n%d {\n" % k + bind + "namespace inner {\n%s load%d();\n}\n}\n" % ( S, k )
+        src = "namespace n%d {\nnamespace inner {\n%s load%d() { return {}; }\n}\n}\n" % ( k, S, k )
+        call = "n%d::inner::load%d()" % ( k, k )
+    else:   # class: the callee is a static member defined in the class; the binding is a member
+        hdr = pre + "struct H%d {\n" % k + ind( bind, 4 ) + "    static %s load%d() { return {}; }\n};\n" % ( S, k )
+        src = ""
+        call = "H%d::load%d()" % ( k, k )
+    put( CP, "src/c%d.h" % k, "#pragma once\n#include <ext/things.h>\n" + hdr )
+    put( CP, "src/c%d.cpp" % k, '#include "c%d.h"\n' % k + src + "int cell%d() { auto x = %s; return x.hit%d(); }\n" % ( k, call, k ) )
+    if trap_tu:
+        put( CP, "src/w%d.cpp" % k, cp_class( "S%d" % k, k ) )   # a TU nothing includes: the in-tree namesake
+    put( CP, "src/decoy.cpp", cp_class( "D%d" % k, k ) )
+    cell( "cpp", form, scope, target, CP, "src/c%d.cpp:cell%d" % ( k, k ), k, expect, floor=floor )
+
+# none: the class is a member of a scope enclosing the callee (Rule 2 keys members by NAME: the class must be the only one)
+k = new_id(); cp_cell( "none", "global", "U", k, cp_class( "S%d" % k, k, True ), "", "P" )
+k = new_id(); cp_cell( "none", "namespace", "U", k, "namespace n%d {\n" % k + cp_class( "S%d" % k, k, True ) + "}\n", "", "P" )
+k = new_id(); cp_cell( "none", "nested-ns", "U", k, "namespace n%d {\n" % k + cp_class( "S%d" % k, k, True ) + "}\n", "", "P" )
+k = new_id(); cp_cell( "none", "class", "U", k, "", cp_class( "S%d" % k, k, True ), "P" )
+k = new_id(); cp_cell( "none", "global", "X", k, "namespace o%d {\n" % k + cp_class( "S%d" % k, k ) + "}\n", "", "N" )
+k = new_id(); cp_cell( "none", "namespace", "X", k, "namespace o%d {\n" % k + cp_class( "S%d" % k, k ) + "}\n", "", "N" )
+k = new_id(); cp_cell( "none", "namespace", "2", k, "namespace n%d {\n" % k + cp_class( "S%d" % k, k ) + "}\nnamespace o%d {\n" % k + cp_class( "S%d" % k, k ) + "}\n", "", "N", floor=True )
+na( "cpp", "none", "class", "X", "a class member is in tree; the class-scope traps are the alias/typedef/inherited rows" )
+# using-declaration
+for scope in ( "global", "namespace", "nested-ns" ):
+    k = new_id(); cp_cell( "using-decl", scope, "U", k, "namespace lib%d {\n" % k + cp_class( "S%d" % k, k, True ) + "}\n", "using lib%d::S%d;\n" % ( k, k ), "P" )
+    k = new_id(); cp_cell( "using-decl", scope, "O", k, "" if scope == "global" else cp_class( "S%d" % k, k ), "using ext::S%d;\n" % k, "N", trap_tu=( scope == "global" ) )
+    k = new_id(); cp_cell( "using-decl", scope, "X", k, "namespace lib%d {\nint helper%d();\n}\n" % ( k, k ), "using lib%d::S%d;\n" % ( k, k ), "N", trap_tu=True )
+    na( "cpp", "using-decl", scope, "2", "two using-declarations of one name naming different entities in one scope are ill-formed" )
+na( "cpp", "using-decl", "class", "*", "a class-scope using-declaration names a BASE member (the inherited rows)" )
+# using-directive
+for scope in ( "global", "namespace", "nested-ns" ):
+    k = new_id(); cp_cell( "using-directive", scope, "U", k, "namespace lib%d {\n" % k + cp_class( "S%d" % k, k, True ) + "}\n", "using namespace lib%d;\n" % k, "P" )
+    k = new_id(); cp_cell( "using-directive", scope, "O", k, "namespace o%d {\n" % k + cp_class( "S%d" % k, k ) + "}\n", "using namespace ext;\n", "N" )
+    k = new_id(); cp_cell( "using-directive", scope, "X", k, "namespace lib%d {\nint helper%d();\n}\nnamespace o%d {\n" % ( k, k, k ) + cp_class( "S%d" % k, k ) + "}\n", "using namespace lib%d;\n" % k, "N" )
+k = new_id(); cp_cell( "using-directive", "namespace", "2", k, "namespace lib%d {\n" % k + cp_class( "S%d" % k, k ) + "}\nnamespace lib2_%d {\n" % k + cp_class( "S%d" % k, k ) + "}\n",
+                       "using namespace lib%d;\nusing namespace lib2_%d;\n" % ( k, k ), "N" )
+# an enclosing namespace's class beside an outside directive: lookup would be ambiguous if ext supplied the name (ill-formed)
+k = new_id(); cp_cell( "using-directive+enclosing", "namespace", "U", k, "namespace n%d {\n" % k + cp_class( "S%d" % k, k, True ) + "}\n", "using namespace ext;\n", "P" )
+na( "cpp", "using-directive", "class", "*", "a using-directive is not allowed at class scope" )
+# alias-declaration / typedef (D5): an alias is a binding of the spelling; an outside target names nothing, an in-tree one is a FLOOR
+for form, spell in ( ( "alias", "using S%d = %s;\n" ), ( "typedef", "typedef %s S%d;\n" ) ):
+    def b( k, target ):
+        return ( spell % ( k, target ) ) if form == "alias" else ( spell % ( target, k ) )
+    for scope in ( "global", "namespace", "nested-ns", "class" ):
+        k = new_id(); cp_cell( form, scope, "O", k, "" if scope == "global" else cp_class( "S%d" % k, k ), b( k, "ext::IntList" ), "N", trap_tu=( scope == "global" ) )
+    k = new_id(); cp_cell( form, "namespace", "U", k, "namespace lib%d {\n" % k + cp_class( "Real%d" % k, k, True ) + "}\n", b( k, "lib%d::Real%d" % ( k, k ) ), "N", floor=True )
+    k = new_id(); cp_cell( form, "global", "X", k, "namespace lib%d {\nint helper%d();\n}\n" % ( k, k ), b( k, "lib%d::Nope%d" % ( k, k ) ), "N", trap_tu=True )
+    na( "cpp", form, "*", "2", "two aliases of one name in one scope are ill-formed unless they name the same type" )
+# template parameters: of the enclosing class template, and of the callee itself
+k = new_id(); S = "S%d" % k
+put( CP, "src/c%d.h" % k, "#pragma once\n" + cp_class( S, k ) + "template <class %s> struct H%d {\n    static %s load%d() { return {}; }\n};\n" % ( S, k, S, k ) )
+put( CP, "src/c%d.cpp" % k, '#include "c%d.h"\nint cell%d() { auto x = H%d<int>::load%d(); return x.hit%d(); }\n' % ( k, k, k, k, k ) )
+put( CP, "src/decoy.cpp", cp_class( "D%d" % k, k ) )
+cell( "cpp", "class-template-param", "class", "O", CP, "src/c%d.cpp:cell%d" % ( k, k ), k, "N" )
+k = new_id(); S = "S%d" % k
+put( CP, "src/c%d.h" % k, "#pragma once\n" + cp_class( S, k ) + "template <class %s> %s load%d() { return {}; }\n" % ( S, S, k ) )
+put( CP, "src/c%d.cpp" % k, '#include "c%d.h"\nint cell%d() { auto x = load%d<int>(); return x.hit%d(); }\n' % ( k, k, k, k ) )
+put( CP, "src/decoy.cpp", cp_class( "D%d" % k, k ) )
+cell( "cpp", "fn-template-param", "global", "O", CP, "src/c%d.cpp:cell%d" % ( k, k ), k, "N" )
+# a member type inherited from a base: an alias to an outside type, and an in-tree nested class (FLOOR)
+k = new_id(); cp_cell( "inherited-alias", "class", "O", k, cp_class( "S%d" % k, k ) + "struct B%d {\n    using S%d = ext::IntList;\n};\n" % ( k, k ), "", "N", ret="S%d" % k )
+files[ CP ][ "src/c%d.h" % k ] = files[ CP ][ "src/c%d.h" % k ].replace( "struct H%d {" % k, "struct H%d : B%d {" % ( k, k ) )
+k = new_id(); cp_cell( "inherited-nested", "class", "U", k, "struct B%d {\n" % k + ind( cp_class( "S%d" % k, k, True ), 4 ) + "};\n", "", "N", floor=True )
+files[ CP ][ "src/c%d.h" % k ] = files[ CP ][ "src/c%d.h" % k ].replace( "struct H%d {" % k, "struct H%d : B%d {" % ( k, k ) )
+# a block-scope using is not in force at namespace scope
+k = new_id(); cp_cell( "block-using", "global", "X", k, "namespace lib%d {\n" % k + cp_class( "S%d" % k, k ) + "}\ninline void helper%d() { using lib%d::S%d; }\n" % ( k, k, k ), "", "N" )
+# a namespace alias rebinding a qualifier: `namespace lib = ext;` inside n, then `lib::S` names ext::S
+k = new_id(); cp_cell( "namespace-alias", "namespace", "O", k, "namespace lib%d {\n" % k + cp_class( "S%d" % k, k ) + "}\n", "namespace lib%d = ext;\n" % k, "N", ret="lib%d::S%d" % ( k, k ) )
+
+# ───────────────────────────────────────────────────────────── Java ─────────────────────────────────────────────────────────
+JV = "mx_java"
+
+def jv_class( pkg, name, k, tag=False, extra="" ):
+    return "package %s;\n\npublic class %s {\n    public int hit%d() { return 1; }%s\n%s}\n" % ( pkg, name, k, " // @T%d" % k if tag else "", extra )
+
+def jv_put_class( pkg, name, k, tag=False ):
+    put( JV, "src/%s/%s.java" % ( pkg.replace( ".", "/" ), name ), jv_class( pkg, name, k, tag ) )
+
+def jv_cell( form, scope, target, k, imports, ret, expect, members="", own="", floor=False, callee_head=None, call=None ):
+    p = "p%d" % k
+    if scope == "file":
+        body = "public class U%d {\n%s    public static %s load%d() { return null; }\n}\n" % ( k, ind( members, 4 ), ret, k )
+        call = call or "U%d.load%d()" % ( k, k )
+    else:   # nested: the callee is a static method of a static nested class, called from that class (an implicit receiver)
+        body = "public class U%d {\n%s    public static class In {\n        public static %s load%d() { return null; }\n" % ( k, ind( members, 4 ), ret, k ) \
+             + "        int cell%d() {\n            var x = load%d();\n            return x.hit%d();\n        }\n    }\n}\n" % ( k, k, k )
+    if callee_head is not None:
+        body = callee_head
+    put( JV, "src/%s/U%d.java" % ( p, k ), "package %s;\n\n%s\n%s%s" % ( p, imports, body, own ) )
+    if scope == "file":
+        put( JV, "src/%s/Use%d.java" % ( p, k ), "package %s;\n\npublic class Use%d {\n    int cell%d() {\n        var x = %s;\n        return x.hit%d();\n    }\n}\n" % ( p, k, k, call, k ) )
+    put( JV, "src/decoy/D%d.java" % k, jv_class( "decoy", "D%d" % k, k ) )
+    cell( "java", form, scope, target, JV, "src/%s/%s%d.java:cell%d" % ( p, "Use" if scope == "file" else "U", k, k ), k, expect, floor=floor )
+
+for scope in ( "file", "nested" ):
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k, True ); jv_put_class( "w%d" % k, "S%d" % k, k )
+    jv_cell( "package", scope, "U", k, "", "S%d" % k, "P" )
+    k = new_id(); jv_put_class( "w%d" % k, "S%d" % k, k )
+    jv_cell( "none", scope, "X", k, "", "S%d" % k, "N" )
+    k = new_id(); jv_put_class( "lib%d" % k, "S%d" % k, k, True ); jv_put_class( "p%d" % k, "S%d" % k, k )
+    jv_cell( "single-import", scope, "U", k, "import lib%d.S%d;\n" % ( k, k ), "S%d" % k, "P" )
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k )
+    jv_cell( "single-import", scope, "O", k, "import ext.S%d;\n" % k, "S%d" % k, "N" )
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k )
+    jv_cell( "single-import", scope, "X", k, "import nowhere%d.S%d;\n" % ( k, k ), "S%d" % k, "N" )
+    k = new_id(); jv_put_class( "lib%d" % k, "S%d" % k, k, True ); jv_put_class( "w%d" % k, "S%d" % k, k )
+    jv_cell( "on-demand", scope, "U", k, "import lib%d.*;\n" % k, "S%d" % k, "P" )
+    k = new_id(); jv_put_class( "w%d" % k, "S%d" % k, k )
+    jv_cell( "on-demand", scope, "O", k, "import ext.*;\n", "S%d" % k, "N" )
+    k = new_id(); jv_put_class( "lib%d" % k, "S%d" % k, k )
+    jv_cell( "on-demand", scope, "X", k, "import lib%d.*;\nimport ext.*;\n" % k, "S%d" % k, "N" )
+    k = new_id(); jv_put_class( "lib%d" % k, "S%d" % k, k ); jv_put_class( "lib2_%d" % k, "S%d" % k, k )
+    jv_cell( "on-demand", scope, "2", k, "import lib%d.*;\nimport lib2_%d.*;\n" % ( k, k ), "S%d" % k, "N" )
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k, True )   # JLS 6.4.1: an on-demand import never shadows the package
+    jv_cell( "package+on-demand", scope, "U", k, "import ext.*;\n", "S%d" % k, "P" )
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k )   # a nested class of the callee's class hides the package's
+    jv_cell( "nested", scope, "U", k, "", "S%d" % k, "P", members="public static class S%d {\n    public int hit%d() { return 1; } // @T%d\n}\n" % ( k, k, k ) )
+    na( "java", "single-import", scope, "2", "two single-type imports of one simple name do not compile" )
+k = new_id(); jv_put_class( "w%d" % k, "S%d" % k, k )
+jv_cell( "own-file", "file", "U", k, "", "S%d" % k, "P", own="\nclass S%d {\n    public int hit%d() { return 1; } // @T%d\n}\n" % ( k, k, k ) )
+k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k )   # an inherited member type hides the package's (not resolved: FLOOR)
+put( JV, "src/p%d/B%d.java" % ( k, k ), "package p%d;\n\npublic class B%d {\n    public static class S%d {\n        public int hit%d() { return 1; } // @T%d\n    }\n}\n" % ( k, k, k, k, k ) )
+jv_cell( "inherited-member", "file", "U", k, "", "S%d" % k, "N", floor=True,
+         callee_head="public class U%d extends B%d {\n    public static S%d load%d() { return null; }\n}\n" % ( k, k, k, k ) )
+k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k )   # a class type parameter spelled like the package's class
+jv_cell( "class-type-param", "file", "O", k, "", "S%d" % k, "N", callee_head="public class U%d<S%d> {\n    public S%d load%d() { return null; }\n}\n" % ( k, k, k, k ),
+         call="new U%d<Object>().load%d()" % ( k, k ) )
+k = new_id(); jv_put_class( "lib%d" % k, "S%d" % k, k, True ); jv_put_class( "p%d" % k, "S%d" % k, k )
+jv_cell( "qualified", "file", "U", k, "", "lib%d.S%d" % ( k, k ), "P" )
+k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k )
+jv_cell( "qualified", "file", "O", k, "", "ext.S%d" % k, "N" )
+na( "java", "*", "fn", "*", "a callee in a function body is a LOCAL class's member: those cells are the decl-kind section's (fix round 4); a local type is never a result outside its body" )
+
+# JVM class-name RECEIVERS (D3 / D6): `R.open()` binds the in-tree R only when R is visible in the CALLER's file
+def jv_recv( form, target, k, imports, expect, rpkg ):
+    q = "q%d" % k
+    put( JV, "src/%s/R%d.java" % ( rpkg, k ), "package %s;\n\npublic class R%d {\n    public static Res%d open%d() { return null; }%s\n}\n" % ( rpkg, k, k, k, " // @T%d" % k if expect == "P" else "" ) )
+    put( JV, "src/%s/Res%d.java" % ( rpkg, k ), "package %s;\n\npublic class Res%d {\n    public int hit%d() { return 1; }\n}\n" % ( rpkg, k, k ) )
+    put( JV, "src/decoy/Ro%d.java" % k, "package decoy;\n\npublic class Ro%d {\n    public static Res%d open%d() { return null; }\n}\n" % ( k, k, k ) )
+    put( JV, "src/%s/Use%d.java" % ( q, k ), "package %s;\n\n%s\npublic class Use%d {\n    int cell%d() {\n        var x = R%d.open%d();\n        return x.hashCode();\n    }\n}\n" % ( q, imports, k, k, k, k ) )
+    cells.append( ( k, "java", "receiver " + form, "file", target, JV, "src/%s/Use%d.java:cell%d" % ( q, k, k ), expect, "method", "open%d" % k, "@T%d" % k, False ) )
+k = new_id(); jv_recv( "package", "U", k, "", "P", "q%d" % k )
+k = new_id(); jv_recv( "single-import", "U", k, "import rl%d.R%d;\n" % ( k, k ), "P", "rl%d" % k )
+k = new_id(); jv_recv( "single-import", "O", k, "import ext.R%d;\n" % k, "N", "rl%d" % k )
+k = new_id(); jv_recv( "on-demand", "U", k, "import rl%d.*;\n" % k, "P", "rl%d" % k )
+k = new_id(); jv_recv( "on-demand", "O", k, "import ext.*;\n", "N", "rl%d" % k )
+k = new_id(); jv_recv( "on-demand", "X", k, "import rl%d.*;\nimport ext.*;\n" % k, "N", "rl%d" % k )
+k = new_id(); jv_recv( "none", "X", k, "", "N", "rl%d" % k )
+
+# ───────────────────────────────────────────────────────────── Kotlin ───────────────────────────────────────────────────────
+KT = "mx_kt"
+
+def kt_class( pkg, name, k, tag=False ):
+    return "package %s\n\nclass %s {\n    fun hit%d(): Int = 1%s\n}\n" % ( pkg, name, k, " // @T%d" % k if tag else "" )
+
+def kt_put( pkg, name, k, tag=False, dir=None ):
+    put( KT, "src/%s/%s.kt" % ( dir or pkg.replace( ".", "/" ), name ), kt_class( pkg, name, k, tag ) )
+
+def kt_cell( form, scope, target, k, imports, ret, expect, members="", own="", floor=False, callee=None, call=None ):
+    p = "p%d" % k
+    if callee is None:
+        if scope == "file":
+            callee = "fun load%d(): %s = TODO()\n" % ( k, ret )
+            call = call or "load%d()" % k
+        else:   # object member; a nested class of the object is in scope
+            callee = "object U%d {\n%s    fun load%d(): %s = TODO()\n}\n" % ( k, ind( members, 4 ), k, ret )
+            call = call or "U%d.load%d()" % ( k, k )
+    put( KT, "src/%s/U%d.kt" % ( p, k ), "package %s\n\n%s\n%s%s" % ( p, imports, callee, own ) )
+    put( KT, "src/%s/Use%d.kt" % ( p, k ), "package %s\n\nfun cell%d(): Int {\n    val x = %s\n    return x.hit%d()\n}\n" % ( p, k, call, k ) )
+    put( KT, "src/decoy/D%d.kt" % k, kt_class( "decoy", "D%d" % k, k ) )
+    cells.append( ( k, "kotlin", form, scope, target, KT, "src/%s/Use%d.kt:cell%d" % ( p, k, k ), expect, "fn", "hit%d" % k, "@T%d" % k, floor ) )
+
+for scope in ( "file", "object" ):
+    k = new_id(); kt_put( "p%d" % k, "S%d" % k, k, True ); kt_put( "w%d" % k, "S%d" % k, k )
+    kt_cell( "package", scope, "U", k, "", "S%d" % k, "P" )
+    k = new_id(); kt_put( "w%d" % k, "S%d" % k, k )
+    kt_cell( "none", scope, "X", k, "", "S%d" % k, "N" )
+    k = new_id(); kt_put( "lib%d" % k, "S%d" % k, k, True ); kt_put( "p%d" % k, "S%d" % k, k )
+    kt_cell( "import", scope, "U", k, "import lib%d.S%d\n" % ( k, k ), "S%d" % k, "P" )
+    k = new_id(); kt_put( "p%d" % k, "S%d" % k, k )
+    kt_cell( "import", scope, "O", k, "import ext.S%d\n" % k, "S%d" % k, "N" )
+    k = new_id(); kt_put( "p%d" % k, "S%d" % k, k )
+    kt_cell( "import", scope, "X", k, "import nowhere%d.S%d\n" % ( k, k ), "S%d" % k, "N" )
+    k = new_id(); kt_put( "lib%d" % k, "Real%d" % k, k, True ); kt_put( "p%d" % k, "S%d" % k, k )
+    kt_cell( "import-as", scope, "U", k, "import lib%d.Real%d as S%d\n" % ( k, k, k ), "S%d" % k, "P" )
+    k = new_id(); kt_put( "p%d" % k, "S%d" % k, k )
+    kt_cell( "import-as", scope, "O", k, "import ext.Thing as S%d\n" % k, "S%d" % k, "N" )
+    k = new_id(); kt_put( "lib%d" % k, "S%d" % k, k, True ); kt_put( "w%d" % k, "S%d" % k, k )
+    kt_cell( "star", scope, "U", k, "import lib%d.*\n" % k, "S%d" % k, "P" )
+    k = new_id(); kt_put( "w%d" % k, "S%d" % k, k )
+    kt_cell( "star", scope, "O", k, "import ext.*\n", "S%d" % k, "N" )
+    k = new_id(); kt_put( "lib%d" % k, "S%d" % k, k )
+    kt_cell( "star", scope, "X", k, "import lib%d.*\nimport ext.*\n" % k, "S%d" % k, "N" )
+    k = new_id(); kt_put( "lib%d" % k, "S%d" % k, k ); kt_put( "lib2_%d" % k, "S%d" % k, k )
+    kt_cell( "star", scope, "2", k, "import lib%d.*\nimport lib2_%d.*\n" % ( k, k ), "S%d" % k, "N" )
+    k = new_id(); kt_put( "p%d" % k, "S%d" % k, k, True )
+    kt_cell( "package+star", scope, "U", k, "import ext.*\n", "S%d" % k, "P" )
+    # typealias: a package member (it hides a star import's class); an outside target names nothing, an in-tree one is a FLOOR
+    k = new_id(); kt_put( "lib%d" % k, "S%d" % k, k )
+    kt_cell( "typealias", scope, "O", k, "import lib%d.*\n" % k, "S%d" % k, "N", own="\ntypealias S%d = ext.Thing\n" % k )
+    k = new_id(); kt_put( "lib%d" % k, "Real%d" % k, k, True ); kt_put( "w%d" % k, "S%d" % k, k )
+    kt_cell( "typealias", scope, "U", k, "", "S%d" % k, "N", own="\ntypealias S%d = lib%d.Real%d\n" % ( k, k, k ), floor=True )
+k = new_id(); kt_put( "p%d" % k, "S%d" % k, k )   # an object's nested class hides the package's
+kt_cell( "nested", "object", "U", k, "", "S%d" % k, "P", members="class S%d {\n    fun hit%d(): Int = 1 // @T%d\n}\n" % ( k, k, k ) )
+k = new_id(); kt_put( "w%d" % k, "S%d" % k, k )
+kt_cell( "own-file", "file", "U", k, "", "S%d" % k, "P", own="\nclass S%d {\n    fun hit%d(): Int = 1 // @T%d\n}\n" % ( k, k, k ) )
+k = new_id(); kt_put( "q%d" % k, "S%d" % k, k, dir="p%d" % k )   # same directory, ANOTHER declared package: not in scope
+kt_cell( "package (declared != dir)", "file", "X", k, "", "S%d" % k, "N" )
+k = new_id(); kt_put( "p%d" % k, "S%d" % k, k, True, dir="elsewhere%d" % k )   # the callee's package, declared in another directory
+kt_put( "w%d" % k, "S%d" % k, k )
+kt_cell( "package (other dir)", "file", "U", k, "", "S%d" % k, "P" )
+k = new_id(); kt_put( "p%d" % k, "S%d" % k, k )
+kt_cell( "class-type-param", "file", "O", k, "", "S%d" % k, "N", callee="class U%d<S%d> {\n    fun load%d(): S%d = TODO()\n}\n" % ( k, k, k, k ),
+         call="U%d<Int>().load%d()" % ( k, k ) )
+k = new_id(); kt_put( "lib%d" % k, "S%d" % k, k, True ); kt_put( "p%d" % k, "S%d" % k, k )
+kt_cell( "qualified", "file", "U", k, "", "lib%d.S%d" % ( k, k ), "P" )
+k = new_id(); kt_put( "p%d" % k, "S%d" % k, k )
+kt_cell( "qualified", "file", "O", k, "", "ext.S%d" % k, "N" )
+na( "kotlin", "import", "*", "2", "two explicit imports of one name are ambiguous when used" )
+na( "kotlin", "*", "fn", "*", "a callee in a function body is a LOCAL class's member: those cells are the decl-kind section's (fix round 4); a local type is never a result outside its body" )
+
+def kt_recv( form, target, k, imports, expect, rpkg ):
+    q = "q%d" % k
+    put( KT, "src/%s/R%d.kt" % ( rpkg, k ), "package %s\n\nobject R%d {\n    fun open%d(): Res%d = Res%d()%s\n}\n\nclass Res%d {\n    fun hit%d(): Int = 1\n}\n"
+         % ( rpkg, k, k, k, k, " // @T%d" % k if expect == "P" else "", k, k ) )
+    put( KT, "src/decoy/Ro%d.kt" % k, "package decoy\n\nobject Ro%d {\n    fun open%d(): Int = 0\n}\n" % ( k, k ) )
+    put( KT, "src/%s/Use%d.kt" % ( q, k ), "package %s\n\n%s\nfun cell%d(): Int {\n    val x = R%d.open%d()\n    return x.hashCode()\n}\n" % ( q, imports, k, k, k ) )
+    cells.append( ( k, "kotlin", "receiver " + form, "file", target, KT, "src/%s/Use%d.kt:cell%d" % ( q, k, k ), expect, "fn", "open%d" % k, "@T%d" % k, False ) )
+k = new_id(); kt_recv( "package", "U", k, "", "P", "q%d" % k )
+k = new_id(); kt_recv( "import", "U", k, "import rl%d.R%d\n" % ( k, k ), "P", "rl%d" % k )
+k = new_id(); kt_recv( "import", "O", k, "import ext.R%d\n" % k, "N", "rl%d" % k )
+k = new_id(); kt_recv( "star", "U", k, "import rl%d.*\n" % k, "P", "rl%d" % k )
+k = new_id(); kt_recv( "star", "O", k, "import ext.*\n", "N", "rl%d" % k )
+k = new_id(); kt_recv( "star", "X", k, "import rl%d.*\nimport ext.*\n" % k, "N", "rl%d" % k )
+k = new_id(); kt_recv( "none", "X", k, "", "N", "rl%d" % k )
+
+# ───────────────────────────────────────────────────────────── TypeScript ───────────────────────────────────────────────────
+TS = "mx_ts"
+
+def ts_class( name, k, tag=False, export=True ):
+    return "%sclass %s {\n    hit%d(): number { return 1; }%s\n}\n" % ( "export " if export else "", name, k, " // @T%d" % k if tag else "" )
+
+def ts_cell( form, scope, target, k, top, bind, expect, floor=False, ret=None, callee=None, call=None ):
+    S = ret or "S%d" % k
+    if callee is None:
+        if scope == "file":
+            callee = bind + "export function load%d(): %s { return null as any; }\n" % ( k, S )
+            imp, call = "load%d" % k, call or "load%d()" % k
+        elif scope == "namespace":   # the caller sits in the namespace too (a bare call of its own function)
+            callee = "export namespace n%d {\n" % k + ind( bind + "export function load%d(): %s { return null as any; }\n" % ( k, S )
+                     + "export function cell%d(): number {\n    const x = load%d();\n    return x.hit%d();\n}\n" % ( k, k, k ), 4 ) + "}\n"
+            imp, call = "n%d" % k, None
+        else:   # fn body: a function nested in the exported loader's body
+            callee = "export function run%d(): number {\n" % k + ind( bind + "function load%d(): %s { return null as any; }\nconst x = load%d();\nreturn x.hit%d();\n" % ( k, S, k, k ), 4 ) + "}\n"
+            imp, call = "run%d" % k, None
+    else:
+        imp = callee[ 1 ]; callee = callee[ 0 ]
+    put( TS, "src/c%d.ts" % k, top + callee )
+    if call is None:   # the fn-body shape calls inside the loader's own body; the namespace shape inside the namespace
+        sel = "src/c%d.ts:%s%d" % ( k, "cell" if scope == "namespace" else "run", k )
+    else:
+        put( TS, "src/u%d.ts" % k, 'import { %s } from "./c%d";\n\nexport function cell%d(): number {\n    const x = %s;\n    return x.hit%d();\n}\n' % ( imp, k, k, call, k ) )
+        sel = "src/u%d.ts:cell%d" % ( k, k )
+    put( TS, "src/decoy.ts", ts_class( "D%d" % k, k ) )
+    cell( "ts", form, scope, target, TS, sel, k, expect, floor=floor )
+
+for scope in ( "file", "namespace", "fn" ):
+    k = new_id()
+    if scope == "file":
+        ts_cell( "own", scope, "U", k, ts_class( "S%d" % k, k, True, export=False ), "", "P" )
+    else:
+        ts_cell( "own", scope, "U", k, ts_class( "S%d" % k, k ), ts_class( "S%d" % k, k, True, export=( scope == "namespace" ) ), "P" )
+    k = new_id(); put( TS, "src/w%d.ts" % k, ts_class( "S%d" % k, k ) )
+    ts_cell( "none", scope, "X", k, "", "", "N" )
+    k = new_id(); put( TS, "src/t%d.ts" % k, ts_class( "S%d" % k, k, True ) ); put( TS, "src/w%d.ts" % k, ts_class( "S%d" % k, k ) )
+    ts_cell( "import", scope, "U", k, 'import { S%d } from "./t%d";\n' % ( k, k ), "", "P" )
+    k = new_id(); put( TS, "src/w%d.ts" % k, ts_class( "S%d" % k, k ) )
+    ts_cell( "import", scope, "O", k, 'import { S%d } from "ext-pkg";\n' % k, "", "N" )
+    k = new_id(); put( TS, "src/t%d.ts" % k, ts_class( "Real%d" % k, k, True ) ); put( TS, "src/w%d.ts" % k, ts_class( "S%d" % k, k ) )
+    ts_cell( "import-as", scope, "U", k, 'import { Real%d as S%d } from "./t%d";\n' % ( k, k, k ), "", "P" )
+    k = new_id(); put( TS, "src/w%d.ts" % k, ts_class( "S%d" % k, k ) )
+    ts_cell( "import-as", scope, "O", k, 'import { Thing as S%d } from "ext-pkg";\n' % k, "", "N" )
+    if scope != "file":
+        # a type alias / import-equals in the callee's scope hides an enclosing class of that name
+        k = new_id(); ts_cell( "type-alias", scope, "O", k, ts_class( "S%d" % k, k, export=False ), "type S%d = Map<string, number>;\n" % k, "N" )
+    if scope == "namespace":   # `import X = ns.Y` is a namespace / module-level declaration only
+        k = new_id(); ts_cell( "import-equals", scope, "U", k, ts_class( "S%d" % k, k, export=False ) + "namespace o%d {\n    export class Other%d {\n        hit%d(): number { return 3; }\n    }\n}\n" % ( k, k, k ),
+                               "import S%d = o%d.Other%d;\n" % ( k, k, k ), "N", floor=True )
+    k = new_id(); ts_cell( "type-alias", scope, "U", k, ts_class( "Real%d" % k, k, True, export=False ), "type S%d = Real%d;\n" % ( k, k ), "N", floor=True )
+na( "ts", "type-alias", "file", "O", "a file-scope alias and a class of one name in one module are a duplicate identifier" )
+na( "ts", "*", "class", "*", "TS declares no nested class / member type; class-level type parameters are the row below" )
+na( "ts", "import", "*", "2", "two imports of one name are a duplicate identifier" )
+k = new_id(); S = "S%d" % k   # a class type parameter / a callee type parameter spelled like the file's class
+put( TS, "src/c%d.ts" % k, ts_class( S, k, export=False ) + "export class U%d<%s> {\n    load%d(): %s { return null as any; }\n}\n" % ( k, S, k, S ) )
+put( TS, "src/u%d.ts" % k, 'import { U%d } from "./c%d";\n\nexport function cell%d(): number {\n    const u = new U%d<number>();\n    const x = u.load%d();\n    return x.hit%d();\n}\n' % ( k, k, k, k, k, k ) )
+put( TS, "src/decoy.ts", ts_class( "D%d" % k, k ) )
+cell( "ts", "class-type-param", "class", "O", TS, "src/u%d.ts:cell%d" % ( k, k ), k, "N" )
+k = new_id(); S = "S%d" % k
+ts_cell( "fn-type-param", "file", "O", k, ts_class( S, k, export=False ), "", "N",
+         callee=( "export function load%d<%s>(): %s { return null as any; }\n" % ( k, S, S ), "load%d" % k ), call="load%d<number>()" % k )
+
+# ───────────────────────────────────────────────────────────── Go ───────────────────────────────────────────────────────────
+GO = "mx_go"
+put( GO, "go.mod", "module example.com/mx\n\ngo 1.22\n" )
+go_use_imports = []
+go_use_body = []
+
+def go_struct( pkg, name, k, tag=False ):
+    return "package %s\n\ntype %s struct{}\n\nfunc (s *%s) Hit%d() int { return 1 }%s\n" % ( pkg, name, name, k, " // @T%d" % k if tag else "" )
+
+def go_cell( form, target, k, callee_src, expect, floor=False, call=None, pre="" ):
+    p = "c%d" % k
+    put( GO, "src/%s/load.go" % p, callee_src )
+    put( GO, "src/decoy/d%d.go" % k, go_struct( "decoy", "D%d" % k, k ) )
+    go_use_imports.append( '\t"example.com/mx/src/%s"\n' % p )
+    go_use_body.append( "func Cell%d() int {\n%s\tx := %s\n\treturn x.Hit%d()\n}\n\n" % ( k, pre, call or "%s.Load%d()" % ( p, k ), k ) )
+    cell( "go", form, "package", target, GO, "src/use/use.go:Cell%d" % k, k, expect, floor=floor )
+
+k = new_id(); put( GO, "src/c%d/s.go" % k, go_struct( "c%d" % k, "S%d" % k, k, True ) ); put( GO, "src/w%d/s.go" % k, go_struct( "w%d" % k, "S%d" % k, k ) )
+go_cell( "package", "U", k, "package c%d\n\nfunc Load%d() *S%d { return nil }\n" % ( k, k, k ), "P" )
+k = new_id(); put( GO, "src/t%d/s.go" % k, go_struct( "t%d" % k, "S%d" % k, k, True ) ); put( GO, "src/w%d/s.go" % k, go_struct( "w%d" % k, "S%d" % k, k ) )
+go_cell( "qualified import", "U", k, 'package c%d\n\nimport "example.com/mx/src/t%d"\n\nfunc Load%d() *t%d.S%d { return nil }\n' % ( k, k, k, k, k ), "P" )
+k = new_id(); put( GO, "src/w%d/s.go" % k, go_struct( "w%d" % k, "S%d" % k, k ) )   # an alias of an outside type
+go_cell( "alias", "O", k, 'package c%d\n\nimport "strings"\n\ntype S%d = strings.Builder\n\nfunc Load%d() *S%d { return nil }\n' % ( k, k, k, k ), "N" )
+k = new_id(); put( GO, "src/t%d/s.go" % k, go_struct( "t%d" % k, "Real%d" % k, k, True ) ); put( GO, "src/w%d/s.go" % k, go_struct( "w%d" % k, "S%d" % k, k ) )
+go_cell( "alias", "U", k, 'package c%d\n\nimport "example.com/mx/src/t%d"\n\ntype S%d = t%d.Real%d\n\nfunc Load%d() *S%d { return nil }\n' % ( k, k, k, k, k, k, k ), "N", floor=True )
+k = new_id(); put( GO, "src/t%d/s.go" % k, go_struct( "t%d" % k, "S%d" % k, k, True ) ); put( GO, "src/w%d/s.go" % k, go_struct( "w%d" % k, "S%d" % k, k ) )
+go_cell( "dot import", "U", k, 'package c%d\n\nimport . "example.com/mx/src/t%d"\n\nfunc Load%d() *S%d { return nil }\n' % ( k, k, k, k ), "N", floor=True )
+k = new_id()
+go_cell( "fn-type-param", "O", k, "package c%d\n\ntype S%d struct{}\n\nfunc (s *S%d) Hit%d() int { return 1 }\n\nfunc Load%d[S%d any]() S%d { var z S%d; return z }\n" % ( k, k, k, k, k, k, k, k ), "N",
+        call="c%d.Load%d[int]()" % ( k, k ) )
+k = new_id()
+go_cell( "receiver-type-param", "O", k, "package c%d\n\ntype S%d struct{}\n\nfunc (s *S%d) Hit%d() int { return 1 }\n\ntype H%d[S%d any] struct{}\n\nfunc (h H%d[S%d]) Load%d() S%d { var z S%d; return z }\n"
+        % ( k, k, k, k, k, k, k, k, k, k, k ), "N", pre="\tvar h c%d.H%d[int]\n" % ( k, k ), call="h.Load%d()" % k )
+na( "go", "*", "nested/fn", "*", "Go has no nested scopes for types a named function can return: a function-local type cannot be a declared result" )
+na( "go", "dot import", "package", "O", "a dot-imported outside name beside a package-level type of that name does not compile (redeclared)" )
+put( GO, "src/use/use.go", "package use\n\nimport (\n" + "".join( go_use_imports ) + ")\n\n" + "".join( go_use_body ) )
+
+# ─────────────────────────────────── fix round 4: the DECLARATION-KIND axis (rv-call-result-typing-delta3 E1–E3) ────────────
+# Every cell above binds the spelling with a declaration the index RECORDS (a class, an import, an alias). These cells bind
+# it with one the index keeps NO class symbol for — kind "unrec" (a Java record / @interface / single-static-import, a C++
+# union / forward declaration / block-scope binding in force in a local class) — or one the parser cannot see — kind
+# "unparsed" (a macro: C++ at namespace / class scope when it spells the name, Rust in an enclosing fn body). Such a
+# binding decides its level like any other: it names no in-tree class, so the outer namesake (the trap) is never proven.
+# The form column reads <decl kind>:<form>; the earlier cells are decl kind "recorded".
+# Rust: a statement- or item-position macro in an ENCLOSING fn body may declare the spelling there.
+def rs_macro( k, body ):
+    return "macro_rules! mk%d {\n    () => { %s };\n}\n" % ( k, body )
+for form, bind in ( ( "unparsed:stmt-macro", "mk%d!();\n" ), ( "unparsed:item-macro", "mk%d! {}\n" ), ( "unparsed:macro-after", None ) ):
+    k = new_id(); S = "S%d" % k
+    outer = rs_class( S, k ) + rs_macro( k, "struct %s; impl %s { fn hit%d(&self) -> usize { 2 } }" % ( S, S, k ) )
+    if bind is None:   # items of a block are in scope throughout it: a macro written AFTER the nested fn counts too
+        rs_mod( k, "c%d" % k, outer + "pub fn cell%d() -> usize {\n    fn load%d() -> %s { todo!() }\n    let x = load%d();\n    mk%d!();\n    x.hit%d()\n}\n" % ( k, k, S, k, k, k ) )
+        cell( "rust", form, "fn", "X", RS, "src/c%d.rs:cell%d" % ( k, k ), k, "N" )
+    else:
+        rs_cell( form, "fn", "X", k, bind % k, "", outer, "N" )
+# guards: a macro in the callee's OWN body (not in scope at its signature) or in a sibling fn hides nothing
+k = new_id(); S = "S%d" % k
+rs_mod( k, "c%d" % k, rs_class( S, k, True ) + rs_macro( k, "struct %s;" % S )
+        + "pub fn cell%d() -> usize {\n    fn load%d() -> %s { mk%d!(); todo!() }\n    let x = load%d();\n    x.hit%d()\n}\n" % ( k, k, S, k, k, k ) )
+cell( "rust", "unparsed:macro-in-callee", "fn", "U", RS, "src/c%d.rs:cell%d" % ( k, k ), k, "P" )
+k = new_id(); S = "S%d" % k
+rs_mod( k, "c%d" % k, rs_class( S, k, True ) + rs_macro( k, "struct %s;" % S ) + "pub fn other%d() { mk%d!(); }\n" % ( k, k )
+        + "pub fn cell%d() -> usize {\n    fn load%d() -> %s { todo!() }\n    let x = load%d();\n    x.hit%d()\n}\n" % ( k, k, S, k, k ) )
+cell( "rust", "unparsed:macro-in-sibling", "fn", "U", RS, "src/c%d.rs:cell%d" % ( k, k ), k, "P" )
+na( "rust", "unparsed:macro", "file/mod/nested", "*", "an item macro at module level whose expansion names the spelling beside a binding of it there does not compile (E0428 item, E0255 use, E0659 glob), and with no binding the module is already silent (unresolved)" )
+na( "rust", "unrec:*", "*", "*", "every Rust type-binding item (struct, enum, union, trait, type) is recorded" )
+put( RS, "src/lib.rs", "".join( "pub mod %s;\n" % m for m in rs_mods if ( "pub mod %s;\n" % m ) not in files[ RS ][ "src/lib.rs" ] ) )
+# C++: a union / forward declaration / spelling macro in the callee's namespace or class hides the global namesake
+for scope in ( "namespace", "nested-ns", "class" ):
+    k = new_id(); cp_cell( "unrec:union", scope, "O", k, cp_class( "S%d" % k, k ), "union S%d { int v; int hit%d() const { return v; } };\n" % ( k, k ), "N" )
+    k = new_id(); cp_cell( "unparsed:macro", scope, "X", k, cp_class( "S%d" % k, k ) + "#define DECLM%d(n) struct n { int hit%d() const { return 2; } };\n" % ( k, k ),
+                           "DECLM%d(S%d)\n" % ( k, k ), "N" )
+for scope in ( "namespace", "nested-ns" ):
+    k = new_id(); cp_cell( "unrec:forward-decl", scope, "X", k, cp_class( "S%d" % k, k ), "struct S%d;\n" % k, "N" )
+    k = new_id(); cp_cell( "unrec:forward-decl(class)", scope, "X", k, cp_class( "S%d" % k, k ), "class S%d;\n" % k, "N" )
+# guards: a forward declaration OF the in-tree class (the same scope) names it; a macro spelling another name hides nothing
+k = new_id(); cp_cell( "unrec:forward-decl", "namespace", "U", k, "", "struct S%d;\n" % k, "P" )
+files[ CP ][ "src/c%d.h" % k ] += "namespace n%d {\n" % k + cp_class( "S%d" % k, k, True ) + "}\n"
+k = new_id(); cp_cell( "unrec:forward-decl", "global", "U", k, "struct S%d;\n" % k + cp_class( "S%d" % k, k, True ), "", "P" )
+k = new_id(); cp_cell( "unparsed:macro(other name)", "namespace", "X", k, cp_class( "S%d" % k, k ) + "#define REGM%d(n) int reg_##n = 0;\n" % k, "REGM%d(Other%d)\n" % ( k, k ), "N" )
+na( "cpp", "unrec:union", "global", "*", "a union and a class of one name in one scope do not compile" )
+na( "cpp", "unrec:forward-decl", "class", "*", "a nested forward declaration's out-of-line definition beside the global namesake is two in-tree classes of one name (the two-class floor)" )
+for scope in ( "namespace", "class" ):   # a macro that declares the spelling without writing it: ANY macro in force hedges
+    k = new_id(); cp_cell( "unparsed:macro(silent)", scope, "X", k, cp_class( "S%d" % k, k ) + "#define DECLALL%d() struct S%d { int hit%d() const { return 2; } };\n" % ( k, k, k ),
+                           "DECLALL%d()\n" % k, "N" )
+# C++ function body (the "fn" scope): a local class's member result sits INSIDE the block, so the block's bindings are in force
+def cp_local( form, target, k, block, expect, tag=False, floor=False ):
+    S = "S%d" % k
+    put( CP, "src/c%d.h" % k, "#pragma once\n#include <ext/things.h>\n" + cp_class( S, k, tag ) )
+    put( CP, "src/c%d.cpp" % k, '#include "c%d.h"\nint cell%d() {\n' % ( k, k ) + ind( block, 4 )
+         + "    struct L%d {\n        %s load%d() { return {}; }\n    };\n    L%d l;\n    auto x = l.load%d();\n    return x.hit%d();\n}\n" % ( k, S, k, k, k, k ) )
+    put( CP, "src/decoy.cpp", cp_class( "D%d" % k, k ) )
+    cell( "cpp", form, "fn", target, CP, "src/c%d.cpp:cell%d" % ( k, k ), k, expect, floor=floor )
+k = new_id(); cp_local( "none", "U", k, "", "P", tag=True )
+k = new_id(); cp_local( "using-decl", "O", k, "using ext::S%d;\n" % k, "N" )
+k = new_id(); cp_local( "alias", "O", k, "using S%d = ext::IntList;\n" % k, "N" )
+k = new_id(); cp_local( "typedef", "O", k, "typedef ext::IntList S%d;\n" % k, "N" )
+k = new_id(); cp_local( "unrec:forward-decl", "X", k, "struct S%d;\n" % k, "N" )
+k = new_id(); cp_local( "unrec:union", "O", k, "union S%d { int v; int hit%d() const { return v; } };\n" % ( k, k ), "N" )
+k = new_id(); cp_local( "item (local class)", "2", k, "struct S%d { int hit%d() const { return 3; } };\n" % ( k, k ), "N", floor=True )
+# Java: a nested record / @interface is a type of that level; a single-static-import of a type shadows the package (JLS 6.4.1)
+for scope in ( "file", "nested" ):
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k )
+    jv_cell( "unrec:record", scope, "O", k, "", "S%d" % k, "N", members="record S%d(int v) {\n    int hit%d() { return v; }\n}\n" % ( k, k ) )
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k )
+    jv_cell( "unrec:annotation", scope, "O", k, "", "S%d" % k, "N", members="@interface S%d {\n    int hit%d();\n}\n" % ( k, k ) )
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k )
+    jv_cell( "unrec:static-import", scope, "O", k, "import static ext.Holder.S%d;\n" % k, "S%d" % k, "N" )
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k, True )
+    jv_cell( "unrec:static-import(other name)", scope, "U", k, "import static ext.Holder.helper%d;\n" % k, "S%d" % k, "P" )
+    k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k, True )   # JLS 6.4.1: a static-import-on-demand never shadows the package
+    jv_cell( "unrec:static-on-demand+package", scope, "U", k, "import static ext.Holder.*;\n", "S%d" % k, "P" )
+    k = new_id(); jv_put_class( "lib%d" % k, "S%d" % k, k )   # an on-demand tier with an outside static on-demand: unresolved
+    jv_cell( "unrec:static-on-demand+on-demand", scope, "X", k, "import lib%d.*;\nimport static ext.Holder.*;\n" % k, "S%d" % k, "N" )
+# an in-tree record is U by the language, but the index keeps no class for it: a FLOOR (hedges, never proves)
+k = new_id(); jv_put_class( "w%d" % k, "S%d" % k, k )
+jv_cell( "unrec:record (own file)", "file", "U", k, "", "S%d" % k, "N", own="\nrecord S%d(int v) {\n    int hit%d() { return v; }\n}\n" % ( k, k ), floor=True )
+k = new_id(); jv_put_class( "lib%d" % k, "S%d" % k, k )
+put( JV, "src/p%d/S%d.java" % ( k, k ), "package p%d;\n\npublic record S%d(int v) {\n    public int hit%d() { return v; }\n}\n" % ( k, k, k ) )
+jv_cell( "unrec:record (package) + on-demand", "file", "U", k, "import lib%d.*;\n" % k, "S%d" % k, "N", floor=True )
+# Java / Kotlin function body: a LOCAL class's member (Kotlin: a local fun) has its result inside the body, so the body's
+# declarations are in force there
+def jv_local( form, target, k, block, expect ):
+    p = "p%d" % k
+    put( JV, "src/%s/U%d.java" % ( p, k ), "package %s;\n\npublic class U%d {\n    int cell%d() {\n%s        class L%d {\n            S%d load%d() { return null; }\n        }\n"
+         % ( p, k, k, ind( block, 8 ), k, k, k ) + "        var x = new L%d().load%d();\n        return x.hit%d();\n    }\n}\n" % ( k, k, k ) )
+    put( JV, "src/decoy/D%d.java" % k, jv_class( "decoy", "D%d" % k, k ) )
+    cell( "java", form, "fn", target, JV, "src/%s/U%d.java:cell%d" % ( p, k, k ), k, expect )
+k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k, True ); jv_local( "package", "U", k, "", "P" )
+k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k ); jv_local( "item (local class)", "U", k, "class S%d {\n    int hit%d() { return 3; } // @T%d\n}\n" % ( k, k, k ), "P" )
+k = new_id(); jv_put_class( "p%d" % k, "S%d" % k, k ); jv_local( "unrec:record (local)", "O", k, "record S%d(int v) {\n    int hit%d() { return v; }\n}\n" % ( k, k ), "N" )
+na( "java", "unparsed:*", "*", "*", "Java has no macros; an annotation processor's generated source is source the tree holds or lacks" )
+na( "kotlin", "unrec:*", "*", "*", "every Kotlin type declaration (class, interface, enum class, object, companion, data class) is recorded; a typealias is the alias row" )
+def kt_local( form, target, k, block, expect ):
+    p = "p%d" % k
+    put( KT, "src/%s/Use%d.kt" % ( p, k ), "package %s\n\nfun cell%d(): Int {\n%s    fun load%d(): S%d = TODO()\n    val x = load%d()\n    return x.hit%d()\n}\n"
+         % ( p, k, ind( block, 4 ), k, k, k, k ) )   # a local fun: the callee sits in the body
+    put( KT, "src/decoy/D%d.kt" % k, kt_class( "decoy", "D%d" % k, k ) )
+    cells.append( ( k, "kotlin", form, "fn", target, KT, "src/%s/Use%d.kt:cell%d" % ( p, k, k ), expect, "fn", "hit%d" % k, "@T%d" % k, False ) )
+k = new_id(); kt_put( "p%d" % k, "S%d" % k, k, True ); kt_local( "package", "U", k, "", "P" )
+k = new_id(); kt_put( "p%d" % k, "S%d" % k, k ); kt_local( "item (local class)", "U", k, "class S%d {\n    fun hit%d(): Int = 3 // @T%d\n}\n" % ( k, k, k ), "P" )
+na( "kotlin", "unparsed:*", "*", "*", "Kotlin has no macros" )
+na( "ts", "unrec:*", "*", "*", "every TS type declaration (class, abstract class, interface, enum) is recorded; a type alias / import-equals is the alias row" )
+na( "ts", "unparsed:*", "*", "*", "TypeScript has no macros (a decorator declares no type name)" )
+na( "go", "unrec:* / unparsed:*", "*", "*", "every Go type declaration is recorded and Go has no macros (go:generate output is source)" )
+
+# ──────────────────────── fix round 5: macros the parser reads as WELL-FORMED code (rv-call-result-typing-delta4 B1–B4) ────────
+# C++ — kind "unparsed" also covers a macro tree-sitter-cpp parses without an error node: a function definition whose
+# declarator is a bare name (`class API S {…}`, `struct API S final {…}`, `API struct S {…}`, `MKSTRUCT S {…}`), an
+# elaborated class-key declaration of a bare name (`struct API S;`), a type-less function-style declaration that is not a
+# constructor (`MK(S);` in a class body), and — for a local class's members — any statement of an enclosing function body
+# that may be a macro invocation. Each may declare ANY name in its scope, so it hides every in-tree namesake there.
+for scope in ( "namespace", "nested-ns", "class" ):
+    k = new_id(); cp_cell( "unparsed:export-macro", scope, "X", k, cp_class( "S%d" % k, k ) + "#define APIM%d\n" % k,
+                           "class APIM%d S%d { public: int hit%d() const { return 2; } };\n" % ( k, k, k ), "N" )
+k = new_id(); cp_cell( "unparsed:export-macro(final)", "namespace", "X", k, cp_class( "S%d" % k, k ) + "#define APIM%d\n" % k,
+                       "struct APIM%d S%d final { int hit%d() const { return 2; } };\n" % ( k, k, k ), "N" )
+k = new_id(); cp_cell( "unparsed:export-macro(forward)", "namespace", "X", k, cp_class( "S%d" % k, k ) + "#define APIM%d\n" % k, "struct APIM%d S%d;\n" % ( k, k ), "N" )
+k = new_id(); cp_cell( "unparsed:export-macro(leading)", "namespace", "X", k, cp_class( "S%d" % k, k ) + "#define APIM%d\n" % k,
+                       "APIM%d struct S%d { int hit%d() const { return 2; } };\n" % ( k, k, k ), "N" )
+k = new_id(); cp_cell( "unparsed:class-key-macro", "namespace", "X", k, cp_class( "S%d" % k, k ) + "#define MKS%d struct\n" % k,
+                       "MKS%d S%d { int hit%d() const { return 2; } };\n" % ( k, k, k ), "N" )
+for form, bind in ( ( "unparsed:class-body-macro", "MKC%d(S%d);\n" ), ( "unparsed:class-body-macro(2 args)", "MKC%d(S%d, int);\n" ) ):
+    k = new_id(); cp_cell( form, "class", "X", k, cp_class( "S%d" % k, k ) + "#define MKC%d(...) struct S%d { int hit%d() const { return 2; } };\n" % ( k, k, k ), bind % ( k, k ), "N" )
+# guard: constructors and a destructor are type-less declarations too — they declare no name
+k = new_id(); cp_cell( "unparsed:none(constructors)", "class", "U", k, cp_class( "S%d" % k, k, True ), "H%d();\nexplicit H%d( int );\n~H%d();\n" % ( k, k, k ), "P" )
+# C++ function body: a statement that may be a macro (any call statement) is in force for a local class's members
+for form, block in ( ( "unparsed:fn-macro", "DECLF%d(S%d)\n" ), ( "unparsed:fn-macro;", "DECLF%d(S%d);\n" ), ( "unparsed:fn-macro(other name)", "REGF%d(Other%d);\n" ) ):
+    k = new_id(); cp_local( form, "X", k, block % ( k, k ), "N" )
+# guard: a function-body macro hides nothing outside that body (no local class: the namespace-scope callee is proven)
+k = new_id(); cp_cell( "unparsed:fn-macro(no local class)", "namespace", "U", k, cp_class( "S%d" % k, k, True ) + "inline int helperF%d() { DECLF%d(S%d); return 0; }\n" % ( k, k, k ), "", "P" )
+# guard (delta-4 M4): a forward declaration in the class's OWN namespace, reached through a using-declaration, declares that class
+k = new_id(); S = "S%d" % k
+put( CP, "src/c%d.h" % k, "#pragma once\nnamespace n%d {\nstruct %s;\nnamespace inner {\nusing n%d::%s;\n%s load%d();\n}\n}\nnamespace n%d {\n" % ( k, S, k, S, S, k, k )
+     + cp_class( S, k, True ) + "}\n" )
+put( CP, "src/c%d.cpp" % k, '#include "c%d.h"\nnamespace n%d {\nnamespace inner {\n%s load%d() { return {}; }\n}\n}\nint cell%d() { auto x = n%d::inner::load%d(); return x.hit%d(); }\n' % ( k, k, S, k, k, k, k, k ) )
+put( CP, "src/decoy.cpp", cp_class( "D%d" % k, k ) )
+cell( "cpp", "unrec:forward-decl+using-decl", "nested-ns", "U", CP, "src/c%d.cpp:cell%d" % ( k, k ), k, "P" )
+# Rust — a method of an `impl` written in a fn body (directly, in an inner block, or of a module-level struct) sees that
+# body's items, so a macro there may declare the spelling
+def rs_impl_cell( form, k, body, expect, tag=False ):
+    S = "S%d" % k
+    rs_mod( k, "c%d" % k, rs_class( S, k, tag ) + ( "" if tag else rs_macro( k, "struct %s; impl %s { fn hit%d(&self) -> usize { 2 } }" % ( S, S, k ) ) ) + body % { "k": k, "S": S } )
+    cell( "rust", form, "fn", "U" if tag else "X", RS, "src/c%d.rs:cell%d" % ( k, k ), k, expect )
+IMPL = "    struct L%(k)d;\n    impl L%(k)d { fn load%(k)d() -> %(S)s { todo!() } }\n    let x = L%(k)d::load%(k)d();\n    x.hit%(k)d()\n"
+k = new_id(); rs_impl_cell( "unparsed:impl-in-block", k, "pub fn cell%(k)d() -> usize {\n    mk%(k)d!();\n" + IMPL + "}\n", "N" )
+k = new_id(); rs_impl_cell( "unparsed:impl-in-block(item macro)", k, "pub fn cell%(k)d() -> usize {\n    mk%(k)d! {}\n" + IMPL + "}\n", "N" )
+k = new_id(); rs_impl_cell( "unparsed:impl-in-inner-block", k, "pub fn cell%(k)d() -> usize {\n    mk%(k)d!();\n    {\n" + ind( IMPL, 4 ) + "    }\n}\n", "N" )
+k = new_id(); rs_impl_cell( "unparsed:impl-of-module-struct", k, "pub struct L%(k)d;\npub fn cell%(k)d() -> usize {\n    mk%(k)d!();\n"
+                            "    impl L%(k)d { fn load%(k)d() -> %(S)s { todo!() } }\n    let x = L%(k)d::load%(k)d();\n    x.hit%(k)d()\n}\n", "N" )
+k = new_id(); rs_impl_cell( "unparsed:none(impl-in-block)", k, "pub fn cell%(k)d() -> usize {\n" + IMPL + "}\n", "P", tag=True )
+# fix round 6 (rv-call-result-typing-delta5 B3): a `const` / `static` item's value block is an item scope as well — the methods
+# of an impl written in it see its items (a macro there, its own `use`); a const block with neither is no barrier (its own
+# struct beside a module namesake splits: Rule 2 keys members by name — hedged, so no cell)
+CIMPL = "    struct L%(k)d;\n    impl L%(k)d {\n        fn load%(k)d() -> %(S)s { todo!() }\n        #[allow(dead_code)]\n        fn cell%(k)d() -> usize { let x = Self::load%(k)d(); x.hit%(k)d() }\n    }\n"
+def rs_const_cell( form, k, body, expect, tag=False, macro=True ):
+    S = "S%d" % k
+    rs_mod( k, "c%d" % k, rs_class( S, k, tag ) + ( rs_macro( k, "struct %s; impl %s { fn hit%d(&self) -> usize { 2 } }" % ( S, S, k ) ) if macro else "" ) + body % { "k": k, "S": S } )
+    cells.append( ( k, "rust", form, "const-block", "U" if tag or expect == "P" else "X", RS, "src/c%d.rs:cell%d" % ( k, k ), expect, "method", "hit%d" % k, "@T%d" % k, False ) )
+k = new_id(); rs_const_cell( "unparsed:const-block", k, "const _: () = {\n    mk%(k)d!();\n" + CIMPL + "};\n", "N" )
+k = new_id(); rs_const_cell( "unparsed:static-block", k, "static X%(k)d: () = {\n    mk%(k)d!();\n" + CIMPL + "};\n", "N" )
+k = new_id(); rs_const_cell( "unparsed:const-block-in-fn", k, "pub fn outer%(k)d() {\n    const _: () = {\n        mk%(k)d!();\n" + ind( CIMPL, 4 ) + "    };\n}\n", "N" )
+k = new_id(); rs_const_cell( "unparsed:const-block(item macro)", k, "const C%(k)d: () = {\n    mk%(k)d! {}\n" + CIMPL + "};\n", "N" )
+k = new_id(); rs_const_cell( "use:const-block-outside", k, "const _: () = {\n    use std::fmt::Error as %(S)s;\n" + CIMPL + "};\n", "N", macro=False )
+k = new_id(); rs_const_cell( "unparsed:none(const-block)", k, "const _: () = {\n" + CIMPL + "};\n", "P", tag=True, macro=False )
+# train 30 (N1, rv-call-result-typing-delta6 mutant M5): the qualified `use` walk (receiverevidence.h forEachRustUseAt) reads
+# the same item levels — `use a as m;` at module level, `use b as m;` inside a const / static item's value block, and the
+# block's impl returns `m::S`: the block's own `use` decides, so b's S is the ONE proven row and a's S (the trap) never is
+for form, opener in ( ( "use:const-block-qualified", "const _: () = {\n" ), ( "use:static-block-qualified", "static Q%(k)d: () = {\n" ) ):
+    k = new_id(); S = "S%d" % k
+    QIMPL = CIMPL.replace( "-> %(S)s {", "-> m::%(S)s {" )
+    rs_mod( k, "c%d" % k, "pub mod a {\n" + ind( rs_class( S, k ), 4 ) + "}\npub mod b {\n" + ind( rs_class( S, k, True ), 4 ) + "}\n"
+            + "use a as m;\n" + ( opener + "    use b as m;\n" + QIMPL + "};\n" ) % { "k": k, "S": S }
+            + "pub fn keep%d() -> usize { m::%s.hit%d() }\n" % ( k, S, k ) )
+    cells.append( ( k, "rust", form, "const-block", "U", RS, "src/c%d.rs:cell%d" % ( k, k ), "P", "method", "hit%d" % k, "@T%d" % k, False ) )
+put( RS, "src/lib.rs", "".join( "pub mod %s;\n" % m for m in rs_mods if ( "pub mod %s;\n" % m ) not in files[ RS ][ "src/lib.rs" ] ) )
+
+# train 30 (N3, rv-call-result-typing-delta6 M2): the ObjC FLOOR — model.h callResultFamilyOf maps ObjC (and C++) to None, so
+# an Objective-C++ `auto x = loadObjc(); x.hitObjc()` is not typed: with a second included namesake the call stays split.
+# Not a CELL (a split row has no via="name"); test/receiverevidencecheck.sh arm (L-objc) reads it by name. It turns into a
+# P cell when the macro-aware C++ card turns ObjC back on.
+put( CP, "src/objcfloor.h", "#pragma once\nstruct SObjc {\n    int hitObjc() const { return 1; }\n};\nSObjc loadObjc();\n" )
+put( CP, "src/objcdecoy.h", "#pragma once\nstruct DObjc {\n    int hitObjc() const { return 0; }\n};\n" )
+put( CP, "src/objcfloor.mm", '#include "objcfloor.h"\n#include "objcdecoy.h"\nSObjc loadObjc() { return {}; }\nint cellObjc() { auto x = loadObjc(); return x.hitObjc(); }\n' )
+
+# ───────────────────────────────────────────────────────────── write + list ─────────────────────────────────────────────────
+for root, fs in files.items():
+    for path, text in fs.items():
+        full = os.path.join( OUT, root, path )
+        os.makedirs( os.path.dirname( full ), exist_ok=True )
+        with open( full, "w", encoding="utf-8" ) as f:
+            f.write( text )
+
+def where( root, tag ):
+    for path, text in files[ root ].items():
+        for i, line in enumerate( text.splitlines(), 1 ):
+            if line.rstrip().endswith( tag ):
+                return "%s:%d" % ( path, i )
+    return None
+
+for ( k, lang, form, scope, target, root, sel, expect, kind, name, tag, floor ) in cells:
+    f = lambda s: s.replace( " ", "_" )
+    head = "CELL %d %s %s %s %s %s %s" % ( k, lang, f( form ), f( scope ), target, root, sel )
+    if expect == "P" and lang == "cpp" and not CPP_TYPED:
+        expect, floor = "N", True   # C++ off: the cell must hedge (its tagged row is not proven)
+    if expect == "P":
+        w = where( root, tag )
+        if w is None:
+            sys.exit( "cell %d: no %s tag" % ( k, tag ) )
+        print( "%s P %s %s %s" % ( head, kind, name, w ) )
+    else:
+        print( "%s N %s%s" % ( head, name, " FLOOR" if floor else "" ) )
+for ( lang, form, scope, target, why ) in nas:
+    print( "NA %s %s %s %s %s" % ( lang, form.replace( " ", "_" ), scope.replace( " ", "_" ), target, why ) )

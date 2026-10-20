@@ -991,7 +991,7 @@ namespace mcpedit
         }
         const EditCheckVerdict verdict = editCheckVerdict( contract, incompatibleCount );
         const std::vector<std::pair<NodeId, std::uint32_t>> callSites =
-            incompatibleCount > 0 ? editCheckCallSites( ing, callee, callerIncompatible )
+            incompatibleCount > 0 ? editCheckCallSites( ing, callee, callerIncompatible, g.keptForwards )
                                   : std::vector<std::pair<NodeId, std::uint32_t>>{};
 
         std::string out = std::string( ",\"edit_check\":{\"status\":\"" ) + verdict.status

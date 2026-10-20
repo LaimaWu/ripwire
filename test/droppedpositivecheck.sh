@@ -194,12 +194,23 @@ INIT='{"jsonrpc":"2.0","id":1,"method":"initialize"}'
 # dialects differ in the NUMBER dropped because the CLI folds churn=/amp=/tested= onto each row and reserves
 # for auto <bodies>, which is exactly why this arm asserts presence and test/mcpforparitycheck.sh asserts the
 # candidate POOL both ladders start from).
+# forbudget-soft (owner decisions 2026-10-14; rule 4): the MCP `for` DEFAULT now serves its whole ranked head (stop when
+# complete; only the runaway guard drops rows), so the default no longer drops a positive and stays silent — asserted as
+# the twin below. The arm's intent ("present when a budget genuinely cuts positives on the MCP dialect") moves to an
+# explicit soft target: budget_tokens=1500 cuts the same 40-row head to its rank prefix.
 MCPCONC="resolve call edges by name"
-mcp_call "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"for\",\"arguments\":{\"path\":\"$CORPUS\",\"task\":\"$MCPCONC\"}}}" \
+mcp_call "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"for\",\"arguments\":{\"path\":\"$CORPUS\",\"task\":\"$MCPCONC\",\"budget_tokens\":1500}}}" \
     | result_text >"$TMP/mcp_for.xml"
 grep -q 'dropped_positive="[0-9]*"' "$TMP/mcp_for.xml" \
-    && ok "#6 MCP for verb: dropped_positive= present on a query wide enough to drop" \
-    || no "#6 MCP for verb: no dropped_positive= at all (the default MCP budget should trim this broad a query)"
+    && ok "#6 MCP for verb: dropped_positive= present where a budget_tokens soft target cuts positives" \
+    || no "#6 MCP for verb: no dropped_positive= at budget_tokens=1500 on a broad query (the soft target cuts this head)"
+mcp_call "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"for\",\"arguments\":{\"path\":\"$CORPUS\",\"task\":\"$MCPCONC\"}}}" \
+    | result_text >"$TMP/mcp_for_def.xml"
+if [ -s "$TMP/mcp_for_def.xml" ] && grep -q '<sigs' "$TMP/mcp_for_def.xml" && ! grep -q 'dropped_positive="' "$TMP/mcp_for_def.xml"; then
+    ok "#6 MCP for verb: the default serves its whole head — no positive dropped, no dropped_positive="
+else
+    no "#6 MCP for verb: the default answer did not run, or still drops positives (dropped_positive= on a whole-head default)"
+fi
 mcp_call "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"for\",\"arguments\":{\"path\":\"$CORPUS\",\"task\":\"pageRankDouble\"}}}" \
     | result_text | grep -q 'dropped_positive=' \
     && no "#6 MCP for verb: dropped_positive= present on a narrow, non-dropping query" \

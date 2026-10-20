@@ -220,7 +220,7 @@ inline NumstatDiff numstatChangedPaths( const std::string& root, const std::stri
     // revision this file builds is a rev-parse-resolved sha, see resolveDiffAnchor), so nothing downstream
     // can be re-read as an option or as an ambiguous pathspec. Belt to the resolver's braces; an empty
     // pathspec list after `--` means "all paths", so the diff itself is unchanged.
-    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " diff --numstat "
+    const std::string cmd = gitCmd( " -c core.quotepath=false -C " ) + shSingleQuote( root ) + " diff --no-ext-diff --no-textconv --ignore-submodules=dirty --numstat "
                           + revArgs + " -- 2>/dev/null";
 
     std::FILE* pipe = os::popen( cmd.c_str(), "r" );

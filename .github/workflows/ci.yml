@@ -333,6 +333,8 @@ jobs:
       # DEVELOPER_DIR pinned at the job level. The stranger's-clone question this used to answer — does
       # the stock ubuntu g++ 13 still build? — is answered by the `fallback-emitter` job below instead,
       # which builds with g++-13 on purpose and proves the fallback path emits the same bytes.
+      # The gcc Release leg is also a compiler canary: it alone caught the gcc 14.2 [[assume]] miscompile (train 31,
+      # callers byte band: rc=139 under -O2 -flto), so that coverage relies on the image's g++-14 being 14.2.
       - name: Configure (portable — no RIPWIRE_NATIVE; empty build type = the plain flavour)
         env:
           CC:  ${{ matrix.cc == 'clang' && 'clang'   || matrix.cc == 'gcc' && 'gcc-14' || '' }}

@@ -9,7 +9,7 @@
 // now lives in src/infra/tschildren.h so walks outside this TU can obey the same rule), the
 // essential-complexity ev(G) single-exit reduction (CtrlNode arena, EvCtx, the why-tag taxonomy),
 // the local-variable-indexing walk (ln_*), the fused complexityOf DFS, and parameter/arity counting
-// (countParams, cc_paramArityExact, callArity). Pure metric machinery: reads an AST, fills RawDef
+// (countParams, cc_paramShape, callArity). Pure metric machinery: reads an AST, fills RawDef
 // numbers, emits nothing. Same contract as every ingest_*.h: reopens `namespace rw` and the unnamed
 // namespace inside it — one TU, one unnamed namespace, internal linkage unchanged, zero new API
 // surface — under the RIPWIRE_INGEST_TU guard.
@@ -1464,43 +1464,107 @@ inline std::uint16_t countParams( TSNode defNode )   // A4-F25: NOT noexcept —
     return 0;
 }
 
-// B2.2 CALL-COMPARABLE ARITY: is `params` a FIXED arity that can be compared 1:1 against a call site's
-// positional-argument count? True ONLY when EVERY qualifying condition holds, so the safe default (any
-// uncertainty) is FALSE → the resolver never arity-filters that candidate (zero false negatives). Conditions:
+// B2.2 MINIMUM ARITY — the per-language DATA, one sparse family-owned row per language that takes part (the
+// lang-specific-layer tier-3 shape: a MISSING row means the language has no lower bound). A row names the
+// parameter-list children that are NOT a required argument:
+//   * `defaulted`          — a child of this kind carries a default value (C++ `int b = 1`, Python `y=1`, TS `b?`);
+//   * `defaultedWithValue` — a child of this kind carries one when it has a `value` field (TS `b = 2`);
+//   * `notParam`           — a child of this kind is no parameter at all (Python's bare `*` and `/` separators);
+//   * `soleVoid`           — a list whose ONLY parameter reads exactly this text has no parameter (C++ `f(void)`);
+//   * `receiverChild`      — a child holding a node of this kind is never passed (TS `this: T`) → NO minimum;
+//   * `decoratedParent`    — a def whose PARENT is this kind is decorated; a decorator may supply arguments → NO minimum;
+//   * `selfOwner`          — a def whose nearest enclosing class-or-function scope is this kind is a method whose first
+//                            parameter (`self`/`cls`) the call omits → NO minimum. Python tags every `def`
+//                            @definition.function, so SymKind::Method never marks a Python method and the kind gate
+//                            below cannot see one; the parse tree can.
+//   * `fnValue`            — a parameter list owned by a function VALUE of this kind (TS arrow / function expression,
+//                            Python lambda) bound to the def's name gets a minimum only when the arrow's own list IS
+//                            the call's contract: the value is the binding's `value` directly (no `as`/`satisfies` cast,
+//                            no wrapper), the binding carries no `type` annotation, and every parameter carries its own
+//                            `type`. Otherwise the signature lives elsewhere — hono `header: SetHeaders = (name, value,
+//                            options) => …` takes `value?`/`options?` from SetHeaders, and an untyped parameter is
+//                            contextually typed — so the arrow's parameter count says nothing about optionality → NO minimum.
+// Every kind name is the vendored grammar's own (third_party/deps/<lang>/src/parser.c symbol table). Languages
+// WITHOUT a row, each for a stated reason: JavaScript (a call may legally pass fewer arguments than declared);
+// Swift (a trailing closure is an argument outside the list callArity counts); Kotlin, C#, PHP, Ruby, Dart and the
+// rest (no call-comparable arity at all: cc_paramShape's language gate below). Their paramsMin is 0, so the
+// resolver never drops one of their candidates for too FEW arguments — exactly the behaviour before this table.
+struct ParamMinLang
+{
+    Lang             lang;
+    std::string_view defaulted[2];
+    std::string_view defaultedWithValue;
+    std::string_view notParam[2];
+    std::string_view soleVoid;
+    std::string_view receiverChild;
+    std::string_view decoratedParent;
+    std::string_view selfOwner;
+    std::string_view fnValue[2];
+};
+inline constexpr ParamMinLang kParamMinLangs[] = {
+    { Lang::Cpp,        { "optional_parameter_declaration", {} },        {},                   { {}, {} },                                     "void", {},     {},                     {},                 { {}, {} } },
+    { Lang::Java,       { {}, {} },                                      {},                   { {}, {} },                                     {},     {},     {},                     {},                 { {}, {} } },   // no default parameters
+    { Lang::Python,     { "default_parameter", "typed_default_parameter" }, {},                { "keyword_separator", "positional_separator" }, {},     {},     "decorated_definition", "class_definition", { "lambda", {} } },
+    { Lang::TypeScript, { "optional_parameter", {} },                    "required_parameter", { {}, {} },                                     {},     "this", {},                     {},                 { "arrow_function", "function_expression" } },
+};
+// Is `def` a member of an `owner`-kind node: the nearest enclosing `owner` or function is `owner`. The walk has no
+// depth cap — a class body may hold a def under any number of `if`/`try`/`with`/`else` blocks and a decorator wrapper
+// (a fixed hop count missed `class A:\n  if X:\n    def m(self, a)`, counted `self` and dropped the real method); it
+// stops at the first function, since a def nested in a method's body is a closure, not a member.
+inline bool ownedBy( TSNode def, std::string_view owner ) noexcept
+{
+    for( TSNode p = ts_node_parent( def ); !ts_node_is_null( p ); p = ts_node_parent( p ) )
+    {
+        const std::string_view t = ts_node_type( p );
+        if( t == owner )
+        {
+            return true;
+        }
+        if( t.find( "function" ) != std::string_view::npos )
+        {
+            return false;
+        }
+    }
+    return false;
+}
+inline bool paramKindIn( std::string_view t, const std::string_view ( &kinds )[2] ) noexcept
+{
+    return ( !kinds[0].empty() && t == kinds[0] ) || ( !kinds[1].empty() && t == kinds[1] );
+}
+
+// B2.2 CALL-COMPARABLE ARITY + MINIMUM. `exact`: is `params` a FIXED arity that can be compared 1:1 against a call
+// site's positional-argument count? True ONLY when EVERY qualifying condition holds, so the safe default (any
+// uncertainty) is FALSE → the resolver never drops that candidate for too MANY arguments. Conditions:
 //   * the language is one whose method params do NOT include an implicit receiver AND whose default/variadic
 //     forms we can positively detect (C++/Java/Swift/TS/JS). Python is filterable for FREE FUNCTIONS only —
 //     a Python/Ruby METHOD lists `self`/`cls`, which the call site omits, so a naive count is off by one.
 //   * the def actually HAS a parameter-list node (an empty `()` counts — a real 0-arity), and
 //   * that list contains NO variadic (`...`, `*args`/`**kwargs`, Java `...`, rest `...x`) and NO defaulted /
 //     optional parameter (`= v`, TS `x?`) — any of which makes the accepted arity a RANGE, not a point.
-// A bounded pre-order scan of the FIRST parameter list mirrors countParams; deterministic + allocation-free.
-//
-// Residual conservative gap (honest): a C++ default argument written ONLY on a separate PROTOTYPE
-// (`void f( int x = 5 );` in a header) and NOT on the definition (`void f( int x ){…}`) is invisible here —
-// the definition's parameter shows no default. byName resolves a call to the DEFINITION, so such a candidate
-// reads as a fixed arity==params. This is a source-visibility limit (the default lives on an uncaptured
-// decl), not a logic bug; it can only bite when ≥2 same-name overloads are same-file/dir AND the true target
-// relies on a header-only default. Whenever the default IS on the definition (the common case) the arity is
-// correctly treated as elastic and the candidate is never filtered.
-//
-// Decided: graph.h's arity filter only excludes on `argCount > params`, so
-// this residual gap can no longer drop the correct edge for an (params-1)-arg call — the header-default def
-// stays a candidate and correctly re-enters amb= when a sibling overload survives too. The gap is now
-// strictly a precision (not honesty) limit: a too-many-args call still provably excludes on the def's
-// visible arity regardless of where a default lives, which is sound in every language.
-inline bool cc_paramArityExact( TSNode defNode, Lang lang, SymKind kind ) noexcept
+// `minimum`: the fewest arguments a call can pass — the list's parameters minus its defaulted ones and minus what is
+// no parameter (kParamMinLangs). 0 = no lower bound known: no row, a variadic or implicit-self list, a receiver
+// parameter, a decorated def, a Python method, a function value typed elsewhere, or no list. The resolver takes the minimum over this def AND every declaration of
+// it (graph.h paramsMinAcrossDeclarations), because C++ may put the default on a separate prototype only.
+// A bounded pre-order scan of the FIRST parameter list mirrors countParams; deterministic.
+struct ParamShape
 {
-    // language / kind gate — see the header. Only these emit a filterable point arity.
+    bool          exact   = false;
+    std::uint16_t minimum = 0;
+};
+inline ParamShape cc_paramShape( TSNode defNode, Lang lang, SymKind kind, std::string_view src )   // NOT noexcept — allocates
+{
+    // language / kind gate — see the header. Only these emit a filterable arity.
     const bool langOk =    lang == Lang::Cpp || lang == Lang::Java || lang == Lang::Swift
                         || lang == Lang::TypeScript || lang == Lang::JavaScript || lang == Lang::Python;
     if( !langOk )
     {
-        return false;
+        return {};
     }
     if( ( lang == Lang::Python || lang == Lang::Ruby ) && kind == SymKind::Method )
     {
-        return false; // implicit self/cls
+        return {}; // implicit self/cls
     }
+    const ParamMinLang* row = findByField( kParamMinLangs, &ParamMinLang::lang, lang );   // nullptr = no row: no lower bound
 
     // an "elastic" (variadic / default / optional) node kind or token makes the arity a RANGE → not filterable.
     const auto isElastic = []( const char* t ) noexcept
@@ -1509,6 +1573,18 @@ inline bool cc_paramArityExact( TSNode defNode, Lang lang, SymKind kind ) noexce
                || std::strstr( t, "spread" )   != nullptr || std::strstr( t, "optional" )!= nullptr
                || std::strstr( t, "default" )  != nullptr || kindIs( t, "rest_pattern" )
                || kindIs( t, "..." ) || kindIs( t, "=" );
+    };
+    // a direct child of the list that its row says carries a default; its subtree is not scanned for elastic forms
+    // (its own `=` / kind name is what the scan would find), it only makes the arity a range.
+    const auto isDefaulted = [ row ]( TSNode c ) noexcept
+    {
+        if( row == nullptr )
+        {
+            return false;
+        }
+        const std::string_view t = ts_node_type( c );
+        return paramKindIn( t, row->defaulted )
+            || ( !row->defaultedWithValue.empty() && t == row->defaultedWithValue && !ts_node_is_null( fieldChild( c, NodeField::Value ) ) );
     };
 
     struct PF { TSNode n; std::uint16_t depth; };
@@ -1522,19 +1598,39 @@ inline bool cc_paramArityExact( TSNode defNode, Lang lang, SymKind kind ) noexce
     {
         const PF f = stack.back();
         stack.pop_back();
-        // same re-derivation bound as the first param walk (see comment above the first if)
+        // re-derivation bound (2026-09-10): see countParams
         if( f.depth > 12 )
         {
             continue;
         }
         const char* t = ts_node_type( f.n );
-        if( f.n.id != defNode.id && cc_isParamList( t ) )       // the FIRST parameter list — scan it for elastic forms
+        if( f.n.id != defNode.id && cc_isParamList( t ) )       // the FIRST parameter list — classify and scan it
         {
+            collectChildren( f.n, cursor.cur, kids );           // the list's direct children — read before the scan below reuses kids
+            std::uint16_t named = 0, defaulted = 0, notParam = 0;
+            bool          elastic = false, receiver = false, untyped = false;
+            TSNode        lone{};
             struct QF { TSNode n; std::uint16_t depth; };
             std::vector<QF> q;
             q.reserve( 32 );
-            q.push_back( { f.n, 0 } );
-            while( !q.empty() )                                 // never returns to the outer loop → reusing kids below is safe
+            for( const TSNode c : kids )
+            {
+                const char* ct = ts_node_type( c );
+                if( ts_node_is_named( c ) && !kindIs( ct, "comment" ) )
+                {
+                    ++named;
+                    lone    = c;
+                    untyped = untyped || ts_node_is_null( fieldChild( c, NodeField::Type ) );
+                    if( isDefaulted( c ) )
+                    {
+                        ++defaulted;
+                        continue;                              // its `=` / kind is the default, not a variadic form
+                    }
+                    notParam += ( row != nullptr && paramKindIn( ct, row->notParam ) ) ? 1u : 0u;
+                }
+                q.push_back( { c, 1 } );
+            }
+            while( !q.empty() && !elastic )
             {
                 const QF g = q.back();
                 q.pop_back();
@@ -1542,17 +1638,37 @@ inline bool cc_paramArityExact( TSNode defNode, Lang lang, SymKind kind ) noexce
                 {
                     continue; // param forms live shallow inside the list
                 }
-                if( g.n.id != f.n.id && isElastic( ts_node_type( g.n ) ) )
-                {
-                    return false;
-                }
+                const char* gt = ts_node_type( g.n );
+                elastic  = isElastic( gt );
+                receiver = receiver || ( g.depth == 2 && row != nullptr && !row->receiverChild.empty() && std::string_view( gt ) == row->receiverChild );
                 collectChildren( g.n, cursor.cur, kids );
                 for( const TSNode c : kids )
                 {
                     q.push_back( { c, std::uint16_t( g.depth + 1 ) } );
                 }
             }
-            return true;                                        // a real parameter list, no elastic form → fixed arity
+            ParamShape shape;
+            shape.exact = !elastic && defaulted == 0;
+            const TSNode decoParent = ts_node_parent( defNode );
+            const bool   decorated  = row != nullptr && !row->decoratedParent.empty() && !ts_node_is_null( decoParent )
+                                   && std::string_view( ts_node_type( decoParent ) ) == row->decoratedParent;
+            const bool   method     = row != nullptr && !row->selfOwner.empty() && ownedBy( defNode, row->selfOwner );
+            const bool   soleVoid   = row != nullptr && !row->soleVoid.empty() && named == 1 && nodeTextOf( lone, src ) == row->soleVoid;
+            // a function VALUE whose signature lives elsewhere (row comment `fnValue`): annotated or cast binding, or a
+            // contextually typed (untyped) parameter.
+            const TSNode fnNode     = ts_node_parent( f.n );
+            const TSNode binding    = ts_node_is_null( fnNode ) ? TSNode{} : ts_node_parent( fnNode );
+            const bool   fnValue    = row != nullptr && !ts_node_is_null( fnNode ) && paramKindIn( ts_node_type( fnNode ), row->fnValue );
+            const bool   typedElsewhere = fnValue
+                                   && ( untyped || ts_node_is_null( binding ) || !ts_node_eq( fieldChild( binding, NodeField::Value ), fnNode )
+                                        || !ts_node_is_null( fieldChild( binding, NodeField::Type ) ) );
+            if( row != nullptr && !elastic && !receiver && !decorated && !method && !soleVoid && !typedElsewhere )
+            {
+                ASSUME( defaulted + notParam <= named );   // each counted child is one of the named ones
+                shape.minimum = std::uint16_t( named - defaulted - notParam );
+            }
+            ENSURES( shape.minimum <= named );
+            return shape;
         }
         collectChildren( f.n, cursor.cur, kids );
         for( std::size_t i = kids.size(); i > 0; --i )
@@ -1560,12 +1676,12 @@ inline bool cc_paramArityExact( TSNode defNode, Lang lang, SymKind kind ) noexce
             stack.push_back( { kids[i - 1], std::uint16_t( f.depth + 1 ) } );
         }
     }
-    return false;   // no parameter-list node found at all → can't be sure → not filterable (safe)
+    return {};   // no parameter-list node found at all → can't be sure → not filterable (safe)
 }
 
 // B2.2 CALL-SITE ARITY: count the positional arguments of the call whose callee identifier is `nameNode`.
 // Returns { argCount, known }. `known` is true ONLY when a recognized call node + argument container is
-// found for a supported language AND no spread/splat/apply argument is present (which would make the count
+// found for a supported language AND no spread/splat/apply/pack-expansion argument is present (which would make the count
 // unreliable). Any uncertainty → { 0, false } so the resolver never arity-filters that call (zero false
 // negatives). Pure-syntactic, deterministic, allocation-free. Languages: C++/Python/TS/JS/Java/Swift/C#.
 inline std::pair<std::uint16_t, bool> callArity( TSNode nameNode, Lang lang, std::string_view /*src*/ ) noexcept
@@ -1620,9 +1736,10 @@ inline std::pair<std::uint16_t, bool> callArity( TSNode nameNode, Lang lang, std
     {   if( !ts_node_is_named( c ) ) { return true; }                                          // '(' ')' ',' separators
         const char* ct = ts_node_type( c );
         if( kindIs( ct, "comment" ) ) { return true; }
-        if( std::strstr( ct, "splat" ) != nullptr || std::strstr( ct, "spread" ) != nullptr || kindIs( ct, "..." ) )
+        if(    std::strstr( ct, "splat" ) != nullptr || std::strstr( ct, "spread" ) != nullptr || kindIs( ct, "..." )
+            || kindIs( ct, "parameter_pack_expansion" ) )
         {
-            unreliable = true;                                    // `f(*args)` / `f(...xs)` → unreliable
+            unreliable = true;                                    // `f(*args)` / `f(...xs)` / C++ `f(t...)` (a pack of any size) → unreliable
             return false;
         }
         ++count;

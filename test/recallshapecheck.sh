@@ -62,11 +62,16 @@
 #   F2 a member or qualified value (`run(obj.lone)`, `self.f`, `ns::qf`, `&Cls::sm`, `this.handler`) is no row.
 #   F3 a value spelled by an import ALIAS (`import { aliasFn as af }`, `from m import alias_fn as af`) or bound by a
 #      destructured require (`const { reqFn } = require(…)`) is a local binding: no row under the original name.
-#   F4 a function as the OBJECT of a member access (`lone2.name`, `lone2.bind(null)`, `lone2.call(…)`, `f.__name__`) is
-#      no row.
+#   F4 a function as the OBJECT of a member access (`lone2.name`, `f.__name__`) is no row. JS/TS call forwarders are the
+#      exception (model.h kCallForwarders, test/fcallforwardcheck.sh): `lone2.bind(null)` is a value row at the slot the
+#      call fills, and `lone2.call(…)` on a proven function is a CALL of lone2 (a caller row, not a value row).
 #   F5 a C macro BODY is opaque (`#define H_ALIAS macro_alias_fn`): no row. A macro ARGUMENT parses as an argument and is
 #      a row (REG#arg0).
 #   F6 a class used as a value (`{"x": MyClass}`) is out of scope: functions and methods only.
+#
+# OP (L4, train 28): the walk climbs value-preserving operators (ingest_valuerefs.h kVrPassOps) — JS/TS ?? || &&,
+# Python or/and, the JS logical assignments — with near misses (the left operand of && / and, C ||, a non-function
+# name, a same-named parameter) that a looser walk would turn into rows.
 #
 # MUTATION PROOF (checklist 1; sim/refval_mutate.sh, measured at the implementation head — the pre-registered list was
 # corrected to what each mutant measured): disabling the local/parameter shadow guard turns C5 C14 C2f C2g J2 J2g T2 P2
@@ -1057,7 +1062,9 @@ arm "J2e callers cmpFn: (compare)" js2 --callers=cmpFn attr:count=0 attr:value_r
 arm "J2f callers keyFn: a computed KEY is a value use (keyed{})" js2 --callers=keyFn attr:count=0 attr:value_refs=1 'vr:bind=@J2_KEY;into=keyed{}'
 arm "J2g negatives: sibFn shadowed by an arrow parameter, a destructured const and a catch parameter — no row" \
     js2 --callers=sibFn attr:count=0 noattr:value_refs nvr:0
-arm "F4 floor (JS): lone2 as the object of .name / .bind / .call — no row" js2 --callers=lone2 attr:defs=1 noattr:value_refs nvr:0
+arm "F4 floor (JS): lone2 as the object of .name — no row" js2 --callers=lone2 attr:defs=1 'novr:bind=@J2_F4A' 'nos:n=reflect'
+arm "F4 lifted (JS call forwarders, test/fcallforwardcheck.sh): lone2.bind(null) handed to run2 is ONE value row, lone2.call(…) ONE call" \
+    js2 --callers=lone2 attr:defs=1 attr:count=1 ns:1 's:n=viaCall' attr:value_refs=1 nvr:1 'vr:bind=@J2_F4B;into=run2#arg0;in_id=bound'
 arm "J2i callers cjsA: module.exports.cjsA = cjsA" js2 --callers=cjsA attr:count=0 attr:value_refs=1 'vr:bind=@J2_CJSA;into=module.exports.cjsA'
 arm "J2j callers cjsB: exports.cjsB = cjsB" js2 --callers=cjsB attr:count=0 attr:value_refs=1 'vr:bind=@J2_CJSB;into=exports.cjsB'
 
@@ -1307,6 +1314,93 @@ arm "Z3 uses hot: 300 role=value sites, paged by the verb's own window (shown=10
     big --uses=hot attr:count=300 attr:shown=100 attr:capped=1 attr:has_more=1 nu:100 'nou:role=read'
 arm_roots "Z4 multi-root (big c) callers hot: the same window on a two-root run" "big c" --callers=hot \
     attr:value_refs=300 el:vrs:total=300 el:vrs:shown=64 el:vrs:capped=1 nvr:64
+
+# ── OP (L4, train 28): value-preserving operators — `a ?? f`, `a || f`, `c && f` (JS/TS), `a or f`, `c and f` (Python),
+# and the JS logical assignments `x ??= f` — land f in the slot the whole expression fills, in assignment, return,
+# argument and parameter-default positions. A function on the LEFT of && / and only decides (the result is the right
+# operand): no row. C/C++ and Go || / && yield a truth value: no row. Ternaries and parentheses were already walked. ──
+echo "-- value-preserving operators"
+mkdir -p "$FX/opjs" "$FX/opts" "$FX/oppy" "$FX/opc"
+cat >"$FX/opjs/a.js" <<'EOF'
+function getPath(r) { return r; }
+function noStrict(r) { return r; }
+function defH() { return 1; }
+function andH() { return 2; }
+function andLeft() { return 3; }
+function argH() { return 4; }
+function laH() { return 5; }
+function orH() { return 6; }
+const plainVal = 3;
+class App {
+  constructor(options, strict) {
+    this.getPath = (strict ?? true) ? (options.getPath ?? getPath) : noStrict;   // @OJ_HONO
+  }
+}
+function withDefault(cb = opts.cb || defH) { return cb(); }   // @OJ_DEF
+function pick(flag) { return flag && andH; }                   // @OJ_RET
+function leftAnd(flag) { return andLeft && flag; }             // @OJ_ANDL
+function reg(cfg) { return register(cfg.h ?? argH); }          // @OJ_ARG
+function logical(slot) { let s = slot; s ??= laH; return s; } // @OJ_LA
+const t = orH || other;                                        // @OJ_ORL
+function negPlain(cfg) { const v = cfg.x ?? plainVal; return v; }   // @OJ_NEG
+function negShadow(getPath) { return other ?? getPath; }            // @OJ_SHADOW
+EOF
+cat >"$FX/opts/a.ts" <<'EOF'
+function tsH(): number { return 1; }
+export function pickTs(o: { h?: () => number }) { return o.h ?? tsH; }   // @OT_RET
+export class Holder { run: () => number = (globalThis as any).x || tsH; } // @OT_FIELD
+EOF
+cat >"$FX/oppy/m.py" <<'EOF'
+def py_h():
+    return 1
+def py_and():
+    return 2
+def py_left():
+    return 3
+def py_def():
+    return 4
+def py_arg():
+    return 5
+PLAIN = 3
+def choose(o):
+    return o.h or py_h          # @OP_OR
+def gate(flag):
+    return flag and py_and      # @OP_AND
+def left_and(flag):
+    return py_left and flag     # @OP_ANDL
+def with_default(cb=None or py_def):   # @OP_DEF
+    return cb()
+register(None or py_arg)        # @OP_ARG
+def neg(o):
+    return o.x or PLAIN         # @OP_NEG
+EOF
+cat >"$FX/opc/c.c" <<'EOF'
+static int c_h(int v) { return v; }
+static int c_t(int v) { return v + 1; }
+int use_or(int f) { return f || c_h; }                 /* @OC_OR */
+int (*use_ternary(int f))(int) { return f ? c_t : 0; }  /* @OC_TERN */
+EOF
+arm "OP1 callers getPath: the hono shape — getPath inside ?? inside a ternary branch lands in this.getPath" \
+    opjs --callers=getPath attr:value_refs=1 'vr:bind=@OJ_HONO;into=this.getPath;in_id=constructor' 'novr:bind=@OJ_SHADOW'
+arm "OP1b callers noStrict (control): the ternary alternative was already a row" \
+    opjs --callers=noStrict attr:value_refs=1 'vr:bind=@OJ_HONO;into=this.getPath'
+arm "OP2 callers defH: a parameter default through || (JS)" opjs --callers=defH attr:value_refs=1 'vr:bind=@OJ_DEF;into=withDefault#cb'
+arm "OP3 callers andH: the right operand of && is returned" opjs --callers=andH attr:value_refs=1 'vr:bind=@OJ_RET;into=(return)'
+arm "OP4 callers andLeft (near miss): the LEFT operand of && only decides — no row" opjs --callers=andLeft attr:count=0 noattr:value_refs nvr:0
+arm "OP5 callers argH: an argument through ??" opjs --callers=argH attr:value_refs=1 'vr:bind=@OJ_ARG;into=register#arg0'
+arm "OP6 callers laH: a logical assignment ??= stores the right operand" opjs --callers=laH attr:value_refs=1 'vr:bind=@OJ_LA;into=s'
+arm "OP7 callers orH: the LEFT operand of || can be the result" opjs --callers=orH attr:value_refs=1 'vr:bind=@OJ_ORL;into=t'
+arm "OP8 callees negPlain (negative): a non-function identifier in ?? is no value reference" opjs --callees=negPlain attr:count=0 noattr:value_refs nvr:0
+arm "OP9 callers tsH (TypeScript): a return through ??; FLOOR: a class FIELD initialiser is no value position at all (operator or not)" \
+    opts --callers=tsH attr:value_refs=1 'vr:bind=@OT_RET;into=(return)' 'novr:bind=@OT_FIELD'
+arm "OP10 callers py_h (Python): the right operand of or is returned" oppy --callers=py_h attr:value_refs=1 'vr:bind=@OP_OR;into=(return)'
+arm "OP11 callers py_and (Python): the right operand of and is returned" oppy --callers=py_and attr:value_refs=1 'vr:bind=@OP_AND;into=(return)'
+arm "OP12 callers py_left (near miss): the LEFT operand of and only decides — no row" oppy --callers=py_left attr:count=0 noattr:value_refs nvr:0
+arm "OP13 callers py_def (Python): a parameter default through or" oppy --callers=py_def attr:value_refs=1 'vr:bind=@OP_DEF;into=with_default#cb'
+arm "OP14 callers py_arg (Python): an argument through or" oppy --callers=py_arg attr:value_refs=1 'vr:bind=@OP_ARG;into=register#arg0'
+arm "OP15 callees neg (negative): a non-function name in or is no value reference" oppy --callees=neg attr:count=0 noattr:value_refs nvr:0
+arm "OP16 callers c_h (C, negative): || yields a truth value — no row" opc --callers=c_h attr:count=0 noattr:value_refs nvr:0
+arm "OP17 callers c_t (C control): the ternary branch is a returned value" opc --callers=c_t attr:value_refs=1 'vr:bind=@OC_TERN;into=(return)'
 
 # ── Controls: no value reference → no new attribute, element, row or legend clause ───────────────────────
 echo "-- controls"

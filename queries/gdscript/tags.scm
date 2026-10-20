@@ -34,8 +34,16 @@
 
 ; `const MAX := 5`. NOT gated on SCREAMING_SNAKE (constCaptureNeedsScreamingGate returns false for
 ; GDScript, deliberately): like Rust's const_item, the `const` keyword is the evidence, not the case.
-(const_statement
-  name: (name) @name) @definition.constant
+; go-local-var (train 30): script (source) or inner-class (class_body) scope only — a `const` inside a
+; func body is local to it and is not captured (it was indexed as a top-level var). Same rule as the
+; variable_statement patterns below.
+(source
+  (const_statement
+    name: (name) @name) @definition.constant)
+
+(class_body
+  (const_statement
+    name: (name) @name) @definition.constant)
 
 ; `enum State { IDLE, RUN }` — the enum's own name.
 (enum_definition

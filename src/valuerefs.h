@@ -18,6 +18,7 @@
 #include "valuerefindex.h"      // ValueRefIndex, the rows, the --uses filter (the resolution core)
 #include "graphlegend.h"       // countFieldOrEmpty — the absent-at-zero count spelling
 #include "model.h"
+#include "nextverb.h"     // nextFlag — the <pd> callees row's next=
 #include "sarif.h"
 #include "serialize.h"   // escapeXml / jsonStr
 
@@ -196,6 +197,104 @@ inline std::string valueRefsDepthKeyJson( const IngestResult& ing, const ValueRe
     const Reference& r = ing.references[cut.first];
     return ",\"value_refs_depth_capped\":" + std::to_string( cut.files ) + ",\"value_refs_depth_at\":\""
          + jsonStr( vrPath( ing, r.fileId, rr ) + ":" + std::to_string( r.line ) ) + "\"";
+}
+
+// ── IX-3 name-template dispatch rows ────────────────────────────────────────────────────────────────────
+// The callers-side window (--callers / --safe-delete / --impact of a method a template can name): one <pd> per site,
+// in reference order, cut at kPatternRowCap (the per-method reach measured at median 1, max 2 on the census trees).
+inline constexpr std::size_t kPatternRowCap = 8;
+inline std::string patternSiteAttrs( const IngestResult& ing, const Reference& r, const VrRender& rr, std::vector<char>& esc )
+{
+    const auto ex = [ & ]( std::string_view s ) { return std::string( escapeXml( s, esc ) ); };
+    std::string out;
+    if( r.fromSymbol < ing.symbols.size() )
+    {
+        out += " in=\"" + ex( ing.symbols[ r.fromSymbol ].name ) + "\"";
+    }
+    out += " p=\"" + ex( vrPath( ing, r.fileId, rr ) ) + ":" + std::to_string( r.line ) + "\" pattern=\"" + ex( r.calleeName ) + "\"";
+    return out;
+}
+// `wide`: the too-wide sites (--safe-delete, when they back risk=hedged) as <pdws>/<pdw>: the site only, no candidate list.
+inline std::string patternDispatchXml( const IngestResult& ing, std::span<const std::uint32_t> sites, const VrRender& rr, bool wide = false )
+{
+    if( sites.empty() )
+    {
+        return {};
+    }
+    const std::string_view tag   = wide ? "pdw" : "pd";
+    const std::size_t      shown = std::min( sites.size(), kPatternRowCap );
+    std::vector<char> esc;
+    std::string out = "<" + std::string( tag ) + "s total=\"" + std::to_string( sites.size() ) + "\" shown=\"" + std::to_string( shown ) + "\">";
+    for( std::size_t i = 0; i < shown; ++i )
+    {
+        out += "<" + std::string( tag ) + patternSiteAttrs( ing, ing.references[ sites[i] ], rr, esc ) + "/>";
+    }
+    return out + "</" + std::string( tag ) + "s>";
+}
+// The dispatcher side (--callees of the function that holds the template): one <pd> per site with cands= (every member
+// it can name), the first kPatternRowCap of them as <t> rows, and next= (the callers verb on one of them) when cut.
+inline std::string patternCalleesXml( const IngestResult& ing, const PatternIndex& pix, std::span<const std::uint32_t> sites, const VrRender& rr )
+{
+    std::string       out;
+    std::vector<char> esc;
+    const auto        ex = [ & ]( std::string_view s ) { return std::string( escapeXml( s, esc ) ); };
+    for( const std::uint32_t i : sites )
+    {
+        const Reference&          r     = ing.references[i];
+        const std::vector<NodeId> cands = pix.targets( i );
+        const std::size_t         shown = std::min( cands.size(), kPatternRowCap );
+        out += "<pd l=\"" + std::to_string( r.line ) + "\" pattern=\"" + ex( r.calleeName ) + "\" cands=\"" + std::to_string( cands.size() )
+             + "\" shown=\"" + std::to_string( shown ) + "\"";
+        if( shown < cands.size() )
+        {
+            out += " next=\"" + ex( nextFlag( "--grep=", r.fieldName.empty() ? r.composeRel : r.fieldName ) ) + "\"";   // checklist 34: through nextFlag
+        }
+        out += ">";
+        for( std::size_t k = 0; k < shown; ++k )
+        {
+            const Symbol& t = ing.symbols[ cands[k] ];
+            out += "<t n=\"" + ex( t.scope.empty() ? t.name : t.scope + "." + t.name ) + "\" p=\"" + ex( vrPath( ing, t.fileId, rr ) ) + ":"
+                 + std::to_string( t.line ) + "\"/>";
+        }
+        out += "</pd>";
+    }
+    return out;
+}
+inline std::string patternDispatchAttrXml( std::size_t n, std::size_t tooWide )
+{
+    return countFieldOrEmpty( "pattern_dispatch", n, /*json=*/false ) + countFieldOrEmpty( "pattern_too_wide", tooWide, /*json=*/false );
+}
+// The --json twin: the same two counts, absent at zero, beside value_refs on the --callers/--impact JSON roots.
+inline std::string patternDispatchKeyJson( std::size_t n, std::size_t tooWide )
+{
+    return countFieldOrEmpty( "pattern_dispatch", n, /*json=*/true ) + countFieldOrEmpty( "pattern_too_wide", tooWide, /*json=*/true );
+}
+// The callers-side clause up to its too-wide tail: one copy for both tails.
+inline constexpr std::string_view kPatternDispatchCallersLegend =
+    "pattern_dispatch=N (absent when 0): N lookups build a NAME from a template (Python getattr/hasattr/__dict__.get with an "
+    "f-string or +, a JS/TS o['p' + x] / o[`p${x}`]) whose literal prefix/suffix this method's name matches; a self/this/cls "
+    "receiver in a method the index places in a class keeps only that class family (ancestors and subclasses, by base name). MAY be invoked through that name; matched by name, "
+    "not a proven call: never in callers=/impact_reaches=/count=, and the dead-code list is unchanged. <pds>/<pd in= p= "
+    "pattern=> list them. pattern_too_wide=K: K templates whose literal side is under 3 identifier characters "
+    "(f\"_{m}\") could also name it; ";
+// The legend clause, exactly when an answer carries pattern_dispatch= or pattern_too_wide=. `wideRows`: the answer lists
+// the too-wide sites as <pdw> rows (--safe-delete, risk=hedged).
+inline std::string patternDispatchLegend( bool any, bool callersSide, bool wideRows = false )
+{
+    if( any && !callersSide )
+    {
+        return "pattern_dispatch=N (absent when 0): N lookups in this body build a NAME from a template (Python getattr/hasattr/"
+               "__dict__.get with an f-string or +, a JS/TS o['p' + x] / o[`p${x}`]); each <pd l= pattern= cands=K shown=> lists the "
+               "class members whose names match it (a self/this/cls receiver in a method the index places in a class: that class family only), first 8 as <t n= p=>, next= the "
+               "literal scan for the rest. MAY be invoked; matched by name, not a proven call: never in count=. ";
+    }
+    if( !any )
+    {
+        return {};
+    }
+    return std::string( kPatternDispatchCallersLegend )
+         + ( wideRows ? "no candidate list, but with no other evidence they keep risk= from none-found and <pdws>/<pdw in= p= pattern=> name each site. "
+                      : "no row. " );
 }
 
 inline std::string valueRefsCountAttrXml( std::size_t n ) { return countFieldOrEmpty( "value_refs", n, /*json=*/false ); }

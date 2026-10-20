@@ -51,6 +51,12 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
+# body-fold (train 31): a compact-route --for answer now ends with <fold kind="bodies"> and its present-only clause (forbodyfoldcheck
+# owns the fold). FIX1 B2 (rule 4): every arm reads the DEFAULT answer, fold on — the gate's premise is that the default answer's
+# legend fits its pin and defines what it carries, so the fold's clause is billed by (U)/(L) like any other reading (re-pins below,
+# measured); (FOLD-L) at the end also bills the fold clause alone in both dialects.
+unset RIPWIRE_NO_BODY_FOLD RIPWIRE_NO_HEAD_RR   # lane hrr: the head reorder is ON unless a twin sets it
+export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py: the soft-target readers, shared helpers (CHECKLIST 32)
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "compactlegendcheck: BIN=$BIN"
@@ -118,8 +124,12 @@ elif op == "schema":
 elif op == "rootattrs":  # sorted attribute NAMES of the root, `schema` excluded
     print( " ".join( sorted( set( re.findall( r'([\w:.-]+)="', m.group( 2 ) ) ) - { "schema" } ) ) if m else "" )
 elif op == "payload":  # the payload with the root's schema attribute removed — the byte-identity operand
-    if m:   # est_tokens= on the root is the price of the EMITTED bytes — a smaller legend is a smaller price, not a row change
-        tag = m.group( 0 ); pay = pay.replace( tag, re.sub( r'\sest_tokens="[0-9]*"', "", re.sub( r'\sschema="[^"]*"', "", tag ) ), 1 )
+    if m:   # schema= is the compact dialect's own id
+        tag = m.group( 0 ); pay = pay.replace( tag, re.sub( r'\sschema="[^"]*"', "", tag ), 1 )
+    # est_tokens= prices the emitted bytes. A legend the compact dialect strips moves that price on the
+    # document root and on an embedded map root (pack-signatures, pack-top-n). A smaller legend is a
+    # smaller price, not a row change.
+    pay = re.sub( r'\sest_tokens="[0-9]*"', "", pay )
     sys.stdout.write( pay )
 elif op == "legend":   sys.stdout.write( "".join( leg ) )
 elif op == "prose":    # PROSE legend bytes: comments this document carries that the FULL document (argv[3]) does not carry
@@ -313,6 +323,39 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # sites_at= clause says the match is by LEAF name ("its call sites spelled like the called name" -> "its calls of the called
 # LEAF name, any receiver or qualifier"), 3890 -> 3907 B. Checked mechanically: the reverse replacement of that one phrase
 # gives the previous pin byte for byte (at= masked). The six other pins are unchanged.
+# RE-ANCHORED BY HAND 2026-10-18 (lane body-fold FIX1 B2, by design), for.xml only: the default --for answer now ends with
+# <fold kind="bodies" … served="3" total="3"> (the three top ranked bodies), the full legend gains the fold clause (forfold.h
+# kForBodyFoldLegend, 496 B), and est_tokens= prices them, 1802 -> 2143, 4504 -> 5509 B. Checked mechanically: with the <fold>
+# element, the fold clause, the <sigs> C3 pair (none here: nothing was skipped) and est_tokens= removed, the new answer equals the
+# previous pin byte for byte (at= masked). The six other pins are unchanged.
+# RE-ANCHORED BY HAND 2026-10-15 (lane forbudget-soft round C, FOLD C, by design), for.xml only: the <tail> carries page 0 of the
+# --for file page (rows with sym=), its full legend clause defines them, and est_tokens= prices them, 4111 -> 4500 B. Checked
+# mechanically: with the <tail> element, the tail clause and est_tokens= masked, the new answer equals the previous pin byte for
+# byte (at= masked). The six other pins are unchanged.
+# RE-ANCHORED BY HAND 2026-10-17 (lane tail-sym, train 30, by design), for.xml only: the full tail clause now says sym= rides
+# BOTH tail row kinds ("first t p= alone … then t p= sym=" -> "… t p= the file, sym= its top symbols by lens rank on either
+# kind (a pointer into the file, not the answer)"), and est_tokens= prices it, 4500 -> 4566 B. This fixture's tail has no rank
+# row (every file is in the head), so its <tail> is byte-identical. Checked mechanically: the reverse replacement of that one
+# clause with est_tokens= masked gives the previous pin byte for byte (at= masked). The six other pins are unchanged.
+# RE-ANCHORED BY HAND 2026-10-17 (lane tail-sym fix round 1, review rv-tail-sym R2), for.xml only: the same clause, shorter
+# ("t p= the file, sym= its top symbols by lens rank on either kind (a pointer into the file, not the answer)" -> "sym= its top
+# symbols by lens rank (a pointer, not the answer)"; p= is already "the file" in the r= clause), 4566 -> 4522 B. Same meaning,
+# shorter text. Checked mechanically: the reverse replacement with est_tokens= masked gives the previous pin byte for byte
+# (at= masked). The six other pins are unchanged.
+# RE-ANCHORED 2026-10-18 (train 31, merge of lane body-fold over main's tail-sym pin), for.xml only: both sides moved the
+# same pin (body-fold: the fold legend clause and its <b> definition; tail-sym: the shorter tail sym= clause). Re-recorded
+# from the merged binary and checked mechanically: a token-level 3-way merge (base fc0745a0 pin, main pin, lane pin; at= and
+# est_tokens= masked) equals the merged output exactly, so it holds both lanes' edits and nothing else. 4522 -> 5527 B.
+# The six other pins are unchanged.
+# RE-ANCHORED BY HAND 2026-10-18 (lane hrr, head round-robin, by design), for.xml only: ranks 1..8 now name each file's best
+# row first, so the seven <d> rows reorder (same rows, same text, r= renumbered), <sigs> gains files_first="3" and the full
+# legend its present-only files_first= reading; est_tokens= prices the reading, 5497 -> 5658 B. Checked mechanically: the same
+# binary with RIPWIRE_NO_HEAD_RR=1 prints the previous pin byte for byte (at= masked). The six other pins are unchanged.
+# RE-ANCHORED 2026-10-18 (train 31, merge of lane hrr over the merged body-fold pin), for.xml only: re-recorded from the
+# merged binary; a token-level 3-way merge (base = lane body-fold's pin, ours = the merged pin above, theirs = lane hrr's pin;
+# at= and est_tokens= masked) equals it exactly. 5527 -> 5688 B. The six other pins are unchanged.
+# RE-ANCHORED BY HAND 2026-10-19 (markdown section links), map.xml only: the two fixture callees gain via="link",
+# the full legend gains the via="link" comment, and est_tokens= prices them, 901 -> 929.
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
 # sed does not): at="…" masked, trailing newlines dropped.
@@ -546,6 +589,16 @@ probeFor()
 # callers prose minus that reading to the OLD 330; the existing (U-twin) holds safe-delete minus its reading to 720.
 # the pins follow the definitions, measured + 10 rounded up to 10.
 # schema                      pin  measured
+# MEASURED 2026-10-18 (train 31 merge, CR pre-pass A2): ripwire.for/v1 1099 against the 1100 pin — main's tail-sym compact clause
+#   (kForCompactLegendTail, +11 B) on top of body-fold's fold clause; the pin is NOT raised (1 B of headroom: card LEGEND-SHORTEN).
+# RE-PINNED 2026-10-18 (lane body-fold FIX1 B2, by design): ripwire.for/v1 820 -> 1100 (measured 1088; 802 fold-off, unchanged).
+#   The default --for=geometry answer now carries <fold kind="bodies"> and its compact clause rides beside it (forfold.h
+#   kForCompactBodyFoldLegend, 286 B: it defines b t= n= p= l=, served=/total=/budget_bytes=, the slice and skip rows and the C3
+#   pair). Tightened first (304 -> 286 B); nothing else moved. (U-twin-fold) below keeps the OLD 820 B pin on the fold-off answer.
+# RE-PINNED 2026-10-15 (lane forbudget-soft round C, FOLD C): ripwire.for/v1 775 -> 820 (measured 802; 761 at the last pin).
+#   The <tail> now carries page-0 rows of the file page with sym=, and the compact tail clause reads them: "; t p= file
+#   outside sigs (weaker), r= rank (gap = trimmed)" (58 B) -> "...(weaker), t sym= a file-page row: its top symbols, r= ..."
+#   (99 B, +41 B), nothing else moved. (L) stays under its 7,900 B bill (7,871 B).
 # RE-PINNED 2026-10-04 (lane/lean-answers-068), two new definitions, each measured on this gate's fixture against the
 # base binary (255dc199) — no prose was added to any reading that already rode:
 #   ripwire.for/v1 738->761: " (absent cx/ccx/in = 0)" (+23 B) — the --for lens omits a zero cx=/ccx=/in=.
@@ -577,12 +630,19 @@ probeFor()
 # probe; 595 on main 0852bc0f). The probe's contract is unchanged with nothing flagged, so the answer is now the verdict
 # line (no <c> rows), and the compact legend reads its two new facts: rows_next= (the --limit call listing the callers) and
 # callers= as the c rows' total (a floor). Nothing else moved.
+# RE-PINNED 2026-10-18 (lane ix2-slice, commit 1 SINK-SIDE FRONTIER): ripwire.path/v1 550 -> 860 (measured 844, the
+# --path=total_area,distance probe; 535 on main b59b0824). Every reachable=0 answer now carries <near_sink> and its <ns> rows,
+# and the compact legend reads them: the near_sink and ns d= readings ride this probe (+309 B with separators); the ns in=/site=
+# reading (+~75 B) rides only an answer whose row names a site. Nothing else moved. Commit 2 (closure containment) adds
+# "|closure" to the ns d= reading: measured 852 B, inside the same 860 B pin. The OLD path keeps its pin: the
+# (U-twin-path) arm after the universe loop cuts exactly those readings out of the same probe and holds the rest at 550 B.
+# RE-PINNED 2026-10-19 (markdown section links): the via=link reading and the deleted same-pair sentence.
 PIN_TABLE='
 ripwire.edit-check/v1             650   636
 ripwire.map/v1                   1140  1129
-ripwire.map-diff/v1              900   885
-ripwire.pack-signatures/v1       770   759
-ripwire.metrics/v1               1040  1021
+ripwire.map-diff/v1              970   953
+ripwire.pack-signatures/v1       840   827
+ripwire.metrics/v1               1090  1080
 ripwire.deps/v1                   780   764
 ripwire.hotspots/v1               530   518
 ripwire.clones/v1                 810   799
@@ -616,14 +676,14 @@ ripwire.stray-content/v1          810   795
 ripwire.flags/v1                  470   459
 ripwire.doc-drift/v1              960   949
 ripwire.notes/v1                  310   292
-ripwire.path/v1                   550   535
+ripwire.path/v1                   860   852
 ripwire.connect/v1                760   741
 ripwire.impact/v1                940   924
 ripwire.mentions/v1               260   243
 ripwire.affected/v1               840   826
 ripwire.verify/v1                 440   421
 ripwire.help-task/v1              440   429
-ripwire.query/v1                 720   707
+ripwire.query/v1                 790   775
 ripwire.grep/v1                  1380  1368
 ripwire.match/v1                  370   355
 ripwire.lego/v1                  290   275
@@ -642,10 +702,10 @@ ripwire.whereis/v1               1050  1037
 ripwire.community/v1             730   719
 ripwire.layout/v1                1220  1203
 ripwire.pack-task/v1             990   974
-ripwire.pack-top-n/v1            760   745
+ripwire.pack-top-n/v1            830   813
 ripwire.expand/v1                280   265
 ripwire.expand-file/v1            510   508
-ripwire.for/v1                    775   761
+ripwire.for/v1                   1100  1099
 '
 pinFor()
 {
@@ -685,6 +745,19 @@ else
             fi ;;
     esac
 fi
+# (U-twin-fold) FIX1 B2 (rule 4: a re-pin keeps a twin for the old path): the 820 -> 1100 re-pin of ripwire.for/v1 above paid for
+# ONE reading, the fold's compact clause; with the fold off (RIPWIRE_NO_BODY_FOLD=1, so neither the fold nor its clause rides) the
+# same --for=geometry probe's compact prose legend still fits the OLD 820 B pin, measured by the same `leg prose` operand.
+( cd "$REPO" && RIPWIRE_NO_BODY_FOLD=1 "$BIN" . --for=geometry --legend=compact >"$TMP/uf.c" 2>/dev/null </dev/null \
+  && RIPWIRE_NO_BODY_FOLD=1 "$BIN" . --for=geometry --legend=full >"$TMP/uf.full" 2>/dev/null </dev/null ); rcUf=$?
+ufRest="$( leg prose "$TMP/uf.c" "$TMP/uf.full" )"
+if [ "$rcUf" -ne 0 ] || grep -q '<fold ' "$TMP/uf.c"; then
+    no "(U-twin-fold) the fold-off --for=geometry probe exited $rcUf or still carries a <fold>"
+elif [ -n "$ufRest" ] && [ "$ufRest" -eq "$ufRest" ] 2>/dev/null && [ "$ufRest" -le 820 ]; then
+    ok "(U-twin-fold) --for=geometry compact prose with the fold off is $ufRest B <= 820 B (the pre-fold pin)"
+else
+    no "(U-twin-fold) --for=geometry compact prose with the fold off is ${ufRest:-?} B > 820 B — the rest re-inflated"
+fi
 # (U-twin-callers) the pre-2026-10-09 ripwire.callers/v1 pin, kept the same way: the 330 -> 450 re-pin paid for ONE
 # reading, the caller row's sites_at=. The --callers=distance compact answer with exactly that reading cut out still fits
 # 330 B under the same `leg prose` operand; the cut is taken only when a row carries sites_at= AND the reading occurs once.
@@ -713,6 +786,46 @@ else
                 ok "(U-twin-callers) callers compact prose minus the sites_at= reading ($catCut B) is $catRest B <= 330 B (the pre-CALLSITE-AT pin)"
             else
                 no "(U-twin-callers) callers compact prose minus the sites_at= reading ($catCut B) is ${catRest:-?} B > 330 B — the rest re-inflated"
+            fi ;;
+    esac
+fi
+# (U-twin-path) the pre-2026-10-18 ripwire.path/v1 pin (550 B), kept (PROCESS rule 4): the --path=total_area,distance probe
+# with the sink-side frontier's readings (near_sink, ns d=, ns in= when present, and the generic next= reading the block's
+# next= pulls in when the root has none) cut out of a copy of the compact answer must still fit the OLD pin. The cut is taken only when the answer carries <near_sink> and each present reading occurs once.
+( cd "$REPO" && "$BIN" . --path=total_area,distance --legend=compact >"$TMP/pth.c" 2>/dev/null </dev/null \
+  && "$BIN" . --path=total_area,distance --legend=full >"$TMP/pth.full" 2>/dev/null </dev/null ); rcPth=$?
+pthCut="$( python3 - "$TMP/pth.c" "$TMP/pth.cut" <<'PY'
+import re, sys
+doc = open( sys.argv[1], encoding = "utf-8", errors = "replace" ).read()
+body = re.sub( r"<!--.*?-->", "", doc, flags = re.S )
+if "<near_sink " not in body:
+    print( "NOPREMISE the probe carries no <near_sink>" ); sys.exit( 0 )
+cut = 0
+for opener in ( " near_sink depth=", " ns d=", " ns in=" ):
+    hits = [ m for m in re.finditer( re.escape( opener ) + r"[^.]*\.", doc ) ]
+    if opener != " ns in=" and len( hits ) != 1:
+        print( "NOPREMISE the reading %r occurs %d times, not once" % ( opener, len( hits ) ) ); sys.exit( 0 )
+    for m in hits[ :1 ]:
+        cut += len( m.group( 0 ).encode() ); doc = doc.replace( m.group( 0 ), "", 1 )
+# the generic next= reading rides only because the block carries next=: a root with no next= of its own pulled none before
+root = re.search( r"<path [^>]*>", body )
+generic = " next=: the one pasteable follow-up."
+if root and " next=" not in root.group( 0 ) and doc.count( generic ) == 1:
+    cut += len( generic.encode() ); doc = doc.replace( generic, "", 1 )
+open( sys.argv[2], "w", encoding = "utf-8" ).write( doc )
+print( cut )
+PY
+)"
+if [ "$rcPth" -ne 0 ]; then
+    no "(U-twin-path) --path=total_area,distance exited $rcPth — the twin cannot measure"
+else
+    case "$pthCut" in
+        NOPREMISE*) no "(U-twin-path) path twin cannot measure: ${pthCut#NOPREMISE }" ;;
+        *)  pthRest="$( leg prose "$TMP/pth.cut" "$TMP/pth.full" )"
+            if [ -n "$pthRest" ] && [ "$pthRest" -eq "$pthRest" ] 2>/dev/null && [ "$pthRest" -le 550 ]; then
+                ok "(U-twin-path) path compact prose minus the near_sink readings ($pthCut B) is $pthRest B <= 550 B (the pre-ix2-slice pin)"
+            else
+                no "(U-twin-path) path compact prose minus the near_sink readings ($pthCut B) is ${pthRest:-?} B > 550 B — the rest re-inflated"
             fi ;;
     esac
 fi
@@ -936,6 +1049,11 @@ echo "=== (P) L1: compact BUYS rows and never loses one; a compact answer is PRI
 # is covered, not lost (the tail lists files OUTSIDE the sigs, so a bigger sigs section legitimately shortens it).
 # Posture-generic: it compares the default against --legend=full, whatever the default is. The arm must also BIND —
 # at least one argv where the default carries strictly more rows — or it would pass on a binary whose default is full.
+# forbudget-soft (2026-10-14): an explicit --token-budget on --for is now a SOFT TARGET charged against the <sigs> rows only,
+# never the header, so the two dialects serve the SAME rows and there is no ceiling ladder left to buy one with. This arm and
+# (P1-B) still hold as written (the superset is implied by equality; ruling B's exemption has no live case — p1Exempt needs a
+# compact answer whose rows paid for its next=, and nothing is paid from rows any more); the equality itself, CF, is pinned
+# strictly by the replaced (P1-S)/(P1-S2)/(P4 floor twin) arms below.
 cat > "$TMP/rows.py" <<'PY'
 import re, sys
 def rows( path ):
@@ -1100,82 +1218,187 @@ else
 fi
 [ "$p1bbad" -eq 0 ] && ok "(P1-B) the ruled exemption is pinned: its comparison, the short-root fixed arms, the scope twin and the MCP sentinel"
 
-# (P1-S) THE SWEEP (train 27). The pinned 1500 above is ONE point of a band, and the band moved under it: lego-charge (train 26c,
-# bisected to its merge 7601d3ac) charged a stubbed <lego>/<compose> at its served size, which removed the slack that had been
-# absorbing the compact header's excess over full's (the L1 cap charges the compact rows no more header than full's), so the
-# default answer landed past budgets the full answer met (1300..1500, 1600..1700 on the merged tree), each with a last-rung note
-# blaming "the header floor" while the header was about half the budget. Over --token-budget=1100..1700 step 50, on the same
-# short relative root, both dialects, every budget must hold:
-#   FIT   the default fits its budget wherever full does (so P4 — over the budget AND over full's — fires only where full is over too);
-#   NOTE  in each dialect a last-rung reason is TRUE: "the header floor ... exceeds" only on a header (the root open tag and the
-#         comments before the payload) past the allowance (budget x 2.36 x 1.15), "the header alone fits" only on one inside it;
-#   P1    a row full keeps and the default lost is the ruled exemption (p1Exempt above), as on the fixed arms.
-# …and it BINDS: some budget where full fits and the default paid rows for it (an exempt row), and some where both are over and
-# the true reason rides (the note arm reads a real last rung, not an absence).
-p1sbad=0; p1sn=0; p1sexempt=0; p1sbothover=0; p1sfirst=""
+# ── forbudget-soft (rule 4): (P1-S) and (P1-S2) REPLACED; the (P4 floor twin) below uses the same reader ─────────────────────
+# Owner decisions 2026-10-14: an explicit --token-budget=N on --for is a SOFT TARGET. T = N x 2.36 x 0.90 bytes is charged
+# against the rows inside <sigs> ONLY (the header and the disclosures are never charged), rows are added in rank order while
+# they fit T, rank 1..4 always ship, the cut carries next=, nothing is labelled over_ceiling= and no header clause, task echo
+# or route= is dropped "(ceiling)". The paid/unpaid continuation (knob-honesty-068 C3) is gone: one render, nothing paid from
+# rows. What the two retired arms pinned is therefore gone BY DESIGN: (P1-S) needed an exempt row (a row the compact answer
+# paid for its next=) and a both-over budget whose last-rung note told the true reason; (P1-S2) needed the full answer to fit
+# 1300 / 1200 (its premise — the soft lens's est_tokens may exceed N by the uncharged header: HEAD 2331 / 2249) and the
+# compact answer to fit or be labelled over_ceiling="1" at the floor. The core of what P1 protects — compact BUYS rows and
+# never loses one — is now exact, because the rows are charged and the header is not, and is pinned as these invariants
+# (one python3 per answer, the reader below; every field present and numeric before it is compared, CHECKLIST 14):
+#   CF     the compact and full dialects serve the SAME rows (p:l:n in rank order) — equality, not the old superset;
+#   ST     the rows' bytes inside <sigs> (+ the zero cx=/ccx=/in= the lean spelling elides, which serialize.h's entryCost
+#          charges — fornotesbudgetcheck's soft.py reads them the same way) fit T, or only the rank 1..4 floor ships, the floor
+#          is never short; a cut is MAXIMAL: the next row of the same dialect's no-budget answer would cross T (160 B slack);
+#   UP     (FIX2 C1, rule 4) the maximality twin: a cut past the floor serves no rows past T less the other sections and
+#          the tail reserve (test/lib/softbudget.py upper_bound), RED on a binary that ignores the tail reserve;
+#   RP     the rows are a rank prefix of that dialect's no-budget rows;
+#   NOLBL  no over_ceiling= on the root, and neither old over_ceiling clause ("[over_ceiling= is 1 on the root" / "[over_ceiling=1
+#          also when the sigs next= rides unpaid") in the legend;
+#   NX     a cut (rows < total) is capped="1" and carries next= on <sigs>, and its next_offset= (when printed) is the row count;
+#   HL     nothing is dropped "(ceiling)", no "task_echo: dropped", the root keeps route= and task= verbatim.
+# head round-robin (lane hrr, train 31; PROCESS rule 4, orchestrator ruling FIX1 §4(a)): the no-budget answer reorders its first 8
+# rows (files_first=) while a budgeted one keeps score order, so RP holds as an ORDER prefix only on the RIPWIRE_NO_HEAD_RR=1
+# twin. spRef also writes the twin reference (sp.ref.LAB.DIAL.so); softPair runs every call twice — the twin (env set, read by
+# this reader unchanged against the twin reference: an invariant broken there is reported "[RIPWIRE_NO_HEAD_RR=1 twin]") and
+# the answer as served, whose RP is the SET prefix (softp.py's 6th argument, OFFREF).
+# softp.py FILE N TASK ROWSOUT [REF [OFFREF]] prints ONE line "OK|BAD rows= total= charged= T= est= over= next= fits= maximal= upper= rp= hl=";
+# exit 3 = no <ctx> root or no <sigs> block (a missing premise: the caller FAILs it, never skips). ROWSOUT gets the rows.
+cat > "$TMP/softp.py" <<'PY'
+import html, json, re, sys
+def read( path ):
+    try: s = open( path, encoding = "utf-8", errors = "replace" ).read()
+    except OSError: return None
+    root = re.search( r"<ctx\b[^>]*>", s ); m = re.search( r"<sigs\b([^>]*)>(.*?)</sigs>", s, re.S )
+    if not root or not m: return None
+    inner = m.group( 2 ); charged = len( inner.encode() ); rows = []
+    for x in re.finditer( r"<d ([^>]*)>.*?</d>|<d ([^>]*)/>", inner, re.S ):
+        a = x.group( 1 ) or x.group( 2 )
+        g = lambda k: ( re.search( r"\b" + k + r'="([^"]*)"', a ) or [ None, "?" ] )[ 1 ]
+        elided = sum( n for k, n in ( ( "cx", 7 ), ( "ccx", 8 ), ( "in", 7 ) ) if not re.search( r"\b" + k + r'="', a ) )
+        charged += elided; r = g( "r" )
+        rows.append( ( int( r ) if r.isdigit() else 10**9, g( "p" ) + ":" + g( "l" ) + ":" + g( "n" ), len( x.group( 0 ).encode() ) + elided ) )
+    rows.sort(); sa = m.group( 1 ); rt = root.group( 0 )
+    t = re.search( r'\btotal="(\d+)"', sa ); nx = re.search( r'\bnext="[^"]+"', sa ); no = re.search( r'\bnext_offset="(\d+)"', sa )
+    e = re.search( r'\best_tokens="(\d+)"', rt ); tk = re.search( r'\btask="([^"]*)"', rt )
+    return dict( s = s, rows = rows, charged = charged, total = int( t.group( 1 ) ) if t else len( rows ), capped = ' capped="1"' in sa,
+                 next = nx is not None, nextoff = int( no.group( 1 ) ) if no else None, est = e.group( 1 ) if e else "-",
+                 over = re.search( r'\bover_ceiling="', rt ) is not None or "[over_ceiling= is 1 on the root" in s
+                        or "[over_ceiling=1 also when the sigs next= rides unpaid" in s,
+                 hl = "(ceiling)" not in s and "task_echo: dropped" not in s and ' route="' in rt
+                      and tk is not None and html.unescape( tk.group( 1 ) ) == sys.argv[ 3 ] )
+def sections_u( s ):
+    # round C (forbudget-soft, owner decision 2026-10-14: RESERVE SECTIONS FIRST; rule 4): the trailing sections are served first
+    # and the rows past the cut fill what they leave of T, so maximality reads T less their bytes (U): XML, all after </sigs> but
+    # </ctx> plus the <hdr> rows, less the --detail bodies (a root without bundle=); JSON, the "tail" object
+    if s.lstrip().startswith( "{" ):
+        try: return len( json.dumps( json.loads( s ).get( "tail", {} ), separators=( ",", ":" ), ensure_ascii=False ).encode() )
+        except ValueError: return 0
+    u = ( len( s.split( "</sigs>", 1 )[ 1 ].encode() ) - len( "</ctx>" ) ) if "</sigs>" in s else 0
+    u += sum( len( h.encode() ) for h in re.findall( r"<hdr [^>]*/>", s.split( "<sigs", 1 )[ 0 ] ) )
+    root = re.search( r"<ctx [^>]*>", s )
+    if root and ' bundle="' not in root.group( 0 ):
+        bm = re.search( r"<bodies\b.*?</bodies>", s, re.S )
+        u -= len( bm.group( 0 ).encode() ) if bm else 0
+    return u
+a = read( sys.argv[ 1 ] )
+if a is None: sys.exit( 3 )
+N = int( sys.argv[ 2 ] ); X = int( N * 2.36 * 0.90 ); k = len( a[ "rows" ] )
+# the tail size: test/lib/softbudget.py, shared by the five soft-target readers (the FIX1 R1 tail floor)
+import os as _os, sys as _sys; _sys.path.insert( 0, _os.environ[ "RIPWIRE_TESTLIB" ] ); from softbudget import tail_size
+U = sections_u( a[ "s" ] )
+if len( sys.argv ) > 5:
+    try: U += max( 0, tail_size( open( sys.argv[ 5 ], encoding = "utf-8", errors = "replace" ).read() ) - tail_size( a[ "s" ] ) )
+    except OSError: pass
+open( sys.argv[ 4 ], "w" ).write( "".join( x[ 1 ] + "\n" for x in a[ "rows" ] ) )
+cut = k < a[ "total" ]
+fits = ( a[ "charged" ] <= X or k <= 4 ) and k >= min( 4, a[ "total" ] )
+nxt = not cut or ( a[ "capped" ] and a[ "next" ] and a[ "nextoff" ] in ( None, k ) )
+maximal = rp = upper = True
+if len( sys.argv ) > 5:
+    ref = read( sys.argv[ 5 ] )
+    if ref is None: sys.exit( 3 )
+    if cut and k < len( ref[ "rows" ] ): maximal = a[ "charged" ] + ref[ "rows" ][ k ][ 2 ] > X - U - 160
+    # FIX2 C1 (rule 4): the upper-bound twin of maximality (test/lib/softbudget.py upper_bound): rows past the floor stop where T less
+    # the other sections and the tail reserve runs out; RED on a binary that ignores the tail reserve
+    from softbudget import upper_bound
+    upper = upper_bound( a[ "s" ], ref[ "s" ], X, k, a[ "total" ], U )[ 0 ]
+    rp = k > 0 and [ x[ 1 ] for x in a[ "rows" ] ] == [ x[ 1 ] for x in ref[ "rows" ] ][ :k ]
+    if len( sys.argv ) > 6:
+        # head round-robin (lane hrr, rule 4): REF is the reordered no-budget answer, argv[6] its RIPWIRE_NO_HEAD_RR=1 twin — the
+        # rows are a SET prefix (score ranks 1..k of the twin; test/lib/softbudget.py set_prefix) rather than an order prefix
+        from softbudget import set_prefix
+        off = read( sys.argv[ 6 ] )
+        if off is None: sys.exit( 3 )
+        rp = k > 0 and set_prefix( [ x[ 1 ] for x in a[ "rows" ] ], [ x[ 1 ] for x in ref[ "rows" ] ], [ x[ 1 ] for x in off[ "rows" ] ] )
+ok = a[ "est" ] != "-" and fits and maximal and upper and rp and nxt and not a[ "over" ] and a[ "hl" ]
+print( "%s rows=%d total=%d charged=%d T=%d est=%s over=%d next=%d fits=%d maximal=%d upper=%d rp=%d hl=%d"
+       % ( "OK" if ok else "BAD", k, a[ "total" ], a[ "charged" ], X, a[ "est" ], int( a[ "over" ] ), int( nxt ), int( fits ),
+           int( maximal ), int( upper ), int( rp ), int( a[ "hl" ] ) ) )
+PY
+spfield(){ local re=" $2=([^ ]*)"; [[ " $1 " =~ $re ]] && printf '%s' "${BASH_REMATCH[1]}"; }   # spfield LINE KEY
+# spRef LAB DIR ROOTARG TASK — the no-budget answer of both dialects (the ST/RP reference), and its rows in "$TMP/sp.ref.LAB.DIAL.rows".
+spRef(){
+    local d; for d in compact full; do
+        rm -f "$TMP/sp.ref.$1.$d.rows"
+        ( cd "$2" && "$BIN" "$3" --for="$4" --legend=$d ) >"$TMP/sp.ref.$1.$d" 2>/dev/null
+        python3 "$TMP/softp.py" "$TMP/sp.ref.$1.$d" 0 "$4" "$TMP/sp.ref.$1.$d.rows" >/dev/null
+        rm -f "$TMP/sp.ref.$1.$d.so.rows"   # lane hrr: the RIPWIRE_NO_HEAD_RR=1 twin reference
+        ( cd "$2" && RIPWIRE_NO_HEAD_RR=1 "$BIN" "$3" --for="$4" --legend=$d ) >"$TMP/sp.ref.$1.$d.so" 2>/dev/null
+        python3 "$TMP/softp.py" "$TMP/sp.ref.$1.$d.so" 0 "$4" "$TMP/sp.ref.$1.$d.so.rows" >/dev/null
+    done
+}
+# softPair LAB DIR ROOTARG TASK N — both dialects at --token-budget=N (each asked by name, so it reads the same dialect on any
+# binary); appends every broken invariant to $spWhy (empty = all hold) and leaves each dialect's verdict in $spLine_compact /
+# $spLine_full and its rows in "$TMP/sp.DIAL.rows".
+softPair(){
+    local lab="$1" dir="$2" rootarg="$3" task="$4" tb="$5" d line rc nc nf
+    spWhy=""; spLine_compact=""; spLine_full=""
+    for d in compact full; do
+        rm -f "$TMP/sp.$d.rows"
+        rm -f "$TMP/sp.$d.so.rows"
+        ( cd "$dir" && RIPWIRE_NO_HEAD_RR=1 "$BIN" "$rootarg" --for="$task" --token-budget="$tb" --legend=$d ) >"$TMP/sp.$d.so" 2>/dev/null; rc=$?
+        if [ "$rc" -ne 0 ]; then spWhy="$spWhy $d [RIPWIRE_NO_HEAD_RR=1 twin]: exit $rc;"
+        else
+            line="$( python3 "$TMP/softp.py" "$TMP/sp.$d.so" "$tb" "$task" "$TMP/sp.$d.so.rows" "$TMP/sp.ref.$lab.$d.so" )"
+            case "$line" in OK*) ;; *) spWhy="$spWhy $d [RIPWIRE_NO_HEAD_RR=1 twin]: ${line:-no <ctx>/<sigs> in the answer or its no-budget reference};" ;; esac
+        fi
+        ( cd "$dir" && "$BIN" "$rootarg" --for="$task" --token-budget="$tb" --legend=$d ) >"$TMP/sp.$d" 2>/dev/null; rc=$?
+        if [ "$rc" -ne 0 ]; then spWhy="$spWhy $d: exit $rc;"; continue; fi
+        line="$( python3 "$TMP/softp.py" "$TMP/sp.$d" "$tb" "$task" "$TMP/sp.$d.rows" "$TMP/sp.ref.$lab.$d" "$TMP/sp.ref.$lab.$d.so" )"
+        case "$line" in OK*) ;; *) spWhy="$spWhy $d: ${line:-no <ctx>/<sigs> in the answer or its no-budget reference};" ;; esac
+        eval "spLine_$d=\"\$line\""
+    done
+    nc="$( wc -l <"$TMP/sp.compact.rows" 2>/dev/null | tr -d ' ' )"; nf="$( wc -l <"$TMP/sp.full.rows" 2>/dev/null | tr -d ' ' )"
+    { [ "${nc:-0}" -gt 0 ] && cmp -s "$TMP/sp.compact.rows" "$TMP/sp.full.rows"; } \
+        || spWhy="$spWhy CF: compact rows (${nc:-?}) are not full's (${nf:-?});"
+}
+
+# (P1-S) THE SWEEP — REPLACED, forbudget-soft (rule 4). Was (train 27): over --token-budget=1100..1700 step 50 the default fits
+# wherever full does, every last-rung over_ceiling reason is true, every lost row is ruling B's exemption, and it bound on an
+# exempt row + a both-over budget with the true reason riding. Under the soft target there is no exemption, no last rung and
+# no over_ceiling= to be truthful about (HEAD 480bc90b: 13 of 13 read, 0 exempt, 0 both-over — the arm's binding premise is the
+# deleted contract). Now, on the same short relative root and band, both dialects: CF + ST + RP + NOLBL + NX + HL at every
+# budget, the rows a rank prefix that grows with N (RP monotone), and it BINDS: at least one budget cuts the head past the
+# rank 1..4 floor (so ST's fit and maximality are read on a real cut, not a floor or a complete answer).
+spRef pr "$ROOT" src "rank symbols by pagerank"
+p1sbad=0; p1sn=0; p1scut=0; p1sfirst=""; p1sprev=""; p1slo=""; p1shi=""
 p1sfail(){ p1sbad=$(( p1sbad + 1 )); [ "$p1sbad" -le 6 ] && p1sfirst="$p1sfirst [$1]"; }
 for tb in $( seq 1100 50 1700 ); do
-    ( cd "$ROOT" && "$BIN" src --for="rank symbols by pagerank" --token-budget="$tb" ) >"$TMP/p1s.def" 2>/dev/null; rd=$?
-    ( cd "$ROOT" && "$BIN" src --for="rank symbols by pagerank" --token-budget="$tb" --legend=full ) >"$TMP/p1s.full" 2>/dev/null; rf=$?
-    allow="$( awk "BEGIN{printf \"%d\", $tb*2.36*1.15}" )"
-    set -- $( python3 "$TMP/p1d.py" "$TMP/p1s.def" "$TMP/p1s.full" )
-    if [ "$rd" -ne 0 ] || [ "$rf" -ne 0 ] || [ $# -ne 6 ] || ! printf '%s' "$1$2$3$4$allow" | grep -qE '^[0-9]+$'; then
-        p1sfail "@$tb: unreadable answers (exit $rd/$rf, facts '$*')"; continue
+    softPair pr "$ROOT" src "rank symbols by pagerank" "$tb"
+    r="$( spfield "$spLine_compact" rows )"; t="$( spfield "$spLine_compact" total )"
+    if ! printf '%s' "$r$t" | grep -qE '^[0-9]+$'; then p1sfail "@$tb unreadable:$spWhy"; continue; fi
+    p1sn=$(( p1sn + 1 )); [ -z "$p1slo" ] && p1slo="$r"; p1shi="$r"
+    [ -n "$spWhy" ] && p1sfail "@$tb$spWhy"
+    [ "$r" -lt "$t" ] && [ "$r" -gt 4 ] && p1scut=$(( p1scut + 1 ))
+    if [ -n "$p1sprev" ]; then
+        head -n "$( wc -l <"$TMP/p1s.prev" | tr -d ' ' )" "$TMP/sp.compact.rows" | cmp -s - "$TMP/p1s.prev" \
+            || p1sfail "@$tb RP: the rows at $p1sprev are not a prefix of the rows at $tb"
     fi
-    dh="$1"; fh="$2"; de="$3"; fe="$4"; p1sn=$(( p1sn + 1 ))
-    [ "$fe" -le "$tb" ] && [ "$de" -gt "$tb" ] && p1sfail "@$tb FIT: default est_tokens $de over the budget, full fits at $fe"
-    [ "$de" -gt "$tb" ] && [ "$fe" -gt "$tb" ] && p1sbothover=$(( p1sbothover + 1 ))
-    for dial in def full; do
-        f="$TMP/p1s.$dial"; h="$dh"; [ "$dial" = full ] && h="$fh"
-        if grep -qF '[over_ceiling= is 1 on the root: the header floor' "$f"; then
-            [ $(( h + 6 )) -gt "$allow" ] || p1sfail "@$tb NOTE($dial): blames the header floor, but the header is $h B of a $allow B allowance"
-        fi
-        if grep -qF '[over_ceiling= is 1 on the root: the header alone fits this budget' "$f"; then
-            [ $(( h + 6 )) -le "$allow" ] || p1sfail "@$tb NOTE($dial): says the header alone fits, but it is $h B of a $allow B allowance"
-            [ "$dial" = def ] && [ "$de" -gt "$tb" ] && [ "$fe" -gt "$tb" ] && p1sbothnote=$(( ${p1sbothnote:-0} + 1 ))
-        fi
-        grep -qF '[over_ceiling= is 1 on the root: the ranked rows are kept' "$f" \
-            && p1sfail "@$tb NOTE($dial): the kept-rows reason (the --detail + --with-graph shape) on a bare --for"
-    done
-    set -- $( python3 "$TMP/rows.py" "$TMP/p1s.def" "$TMP/p1s.full" | tr -d "[](),'" )
-    if [ "${3:-1}" -ne 0 ]; then
-        if p1Exempt "$TMP/p1s.def" "$TMP/p1s.full" "$tb"; then
-            [ "$fe" -le "$tb" ] && p1sexempt=$(( p1sexempt + 1 ))
-        else
-            p1sfail "@$tb P1: lost ${3:-?} row(s) full keeps (default ${1:-?}, full ${2:-?}), not the ruled exemption ($p1facts)"
-        fi
-    fi
+    cp "$TMP/sp.compact.rows" "$TMP/p1s.prev" 2>/dev/null; p1sprev="$tb"
 done
-if [ "$p1sbad" -eq 0 ] && [ "$p1sn" -eq 13 ] && [ "$p1sexempt" -gt 0 ] && [ "${p1sbothnote:-0}" -gt 0 ]; then
-    ok "(P1-S) --for='rank symbols by pagerank' on root src, --token-budget=1100..1700 step 50, both dialects: the default fits wherever full does, every last-rung reason is true, every lost row is the exemption (binds: $p1sexempt exempt row budget(s) where full fits, $p1sbothover where both are over with the true reason riding ${p1sbothnote:-0}x)"
+if [ "$p1sbad" -eq 0 ] && [ "$p1sn" -eq 13 ] && [ "$p1scut" -gt 0 ]; then
+    ok "(P1-S) --for='rank symbols by pagerank' on root src, --token-budget=1100..1700 step 50: compact rows == full rows at every budget, each fits T or is the floor and stops only where the next row would cross it, no over_ceiling=, every cut carries next=, no (ceiling) drop; rows $p1slo -> $p1shi, a growing rank prefix (binds: $p1scut budget(s) cut past the floor)"
 else
-    no "(P1-S) the budget sweep ($p1sn of 13 budgets read, $p1sexempt exempt where full fits, ${p1sbothnote:-0} both-over with the true reason):$p1sfirst ($p1sbad failure(s))"
+    no "(P1-S) the soft-target sweep ($p1sn of 13 budgets read, $p1scut cut past the floor):$p1sfirst ($p1sbad failure(s))"
 fi
-# (P1-S2) THE OVERRUN PAYMENT, and what is left when it cannot pay. The sweep above fits on its own at every budget; the
-# compact dialect's last payment (verbs_for.h runForLens: a paid answer still over pays its MEASURED overrun from the rows)
-# is what fits "serialize the map" at 1300 (a mutant without it serves 6 rows at est_tokens 1457, over, while full fits at
-# 1294): the default must fit there, with full fitting too (the premise). At 1200 the same task is the case the payment
-# cannot reach — both dialects at the rank 1..4 floor, full fits by a token, the compact header is larger — so the default
-# goes over, and then it must say so truthfully (rule 5): over_ceiling="1", the header-fits reason with the header inside the
-# allowance, and the <sigs> next= that serves the rows.
-p1s2bad=""
-for spec in "1300:fit" "1200:disclose"; do
-    tb="${spec%%:*}"; want="${spec#*:}"
-    ( cd "$ROOT" && "$BIN" src --for="serialize the map" --token-budget="$tb" ) >"$TMP/p1s2.def" 2>/dev/null
-    ( cd "$ROOT" && "$BIN" src --for="serialize the map" --token-budget="$tb" --legend=full ) >"$TMP/p1s2.full" 2>/dev/null
-    set -- $( python3 "$TMP/p1d.py" "$TMP/p1s2.def" "$TMP/p1s2.full" )
-    allow="$( awk "BEGIN{printf \"%d\", $tb*2.36*1.15}" )"
-    if [ $# -ne 6 ] || ! printf '%s' "$1$3$4" | grep -qE '^[0-9]+$'; then p1s2bad="$p1s2bad [@$tb unreadable: '$*']"; continue; fi
-    [ "$4" -le "$tb" ] || p1s2bad="$p1s2bad [@$tb premise: full est_tokens $4 is over the budget — re-anchor]"
-    if [ "$want" = fit ]; then
-        [ "$3" -le "$tb" ] || p1s2bad="$p1s2bad [@$tb FIT: default est_tokens $3 over the budget, full fits at $4]"
-    elif [ "$3" -gt "$tb" ]; then
-        { grep -q '^<ctx [^>]* over_ceiling="1"' "$TMP/p1s2.def" && grep -qF '[over_ceiling= is 1 on the root: the header alone fits this budget' "$TMP/p1s2.def" \
-          && [ $(( $1 + 6 )) -le "$allow" ] && grep -qE '<sigs [^>]* next="--for=' "$TMP/p1s2.def"; } \
-            || p1s2bad="$p1s2bad [@$tb DISCLOSE: default over ($3) without over_ceiling + the true reason (header $1 B of $allow B) + sigs next=]"
-    fi
+# (P1-S2) REPLACED, forbudget-soft (rule 4). Was: 'serialize the map' FITS 1300 where full fits (the compact overrun payment),
+# and at 1200 (the floor the payment cannot reach) any overshoot is labelled over_ceiling="1" with the header-fits reason and
+# the sigs next=. Both halves assert the hard ceiling (HEAD 480bc90b: full est_tokens 2331 / 2249 — "over" N by the header the
+# soft target never charges, compact 1996 / 1914, no label). The task was chosen because its compact and full headers sat on
+# either side of the budget; that is exactly where CF could break if a header were still charged, so the same two budgets keep
+# the invariants of the sweep above: CF + ST + RP + NOLBL + NX + HL in both dialects.
+spRef sm "$ROOT" src "serialize the map"
+p1s2bad=""; p1s2facts=""
+for tb in 1300 1200; do
+    softPair sm "$ROOT" src "serialize the map" "$tb"
+    [ -n "$spWhy" ] && p1s2bad="$p1s2bad [@$tb$spWhy]"
+    p1s2facts="$p1s2facts @$tb: $( spfield "$spLine_compact" rows ) of $( spfield "$spLine_compact" total ) rows, est $( spfield "$spLine_compact" est ) (full $( spfield "$spLine_full" est ));"
 done
-[ -z "$p1s2bad" ] && ok "(P1-S2) 'serialize the map' on root src: fits at 1300 where full fits (the overrun payment), and where the floor cannot pay (1200) any overshoot is labelled with its true reason and the sigs next=" \
+[ -z "$p1s2bad" ] && ok "(P1-S2) 'serialize the map' on root src at 1300 and 1200: compact rows == full rows, each fits T or is the floor, maximal, no over_ceiling=, the cut carries next=, no (ceiling) drop ($p1s2facts)" \
                   || no "(P1-S2)$p1s2bad"
 
 # (P2) the default map's --token-budget gate decides on the price the default PRINTS. It used to decide on the full
@@ -1235,49 +1458,93 @@ for tb in 850 1000 1100 1200; do
     fi
 done
 [ "$p4bad" -eq 0 ] && ok "(P4) at --token-budget 850/1000/1100/1200 the compact --for answer is inside its budget or no further over it than the full one"
-# (P4 floor twin — knob-honesty-068; orchestrator rulings 2026-10-07, PROCESS rules 4/5) A capped <sigs> under a hard ceiling
-# names the call that recovers its cut (next=) and pays for it from its rows where that makes the answer fit. At 500 tokens
-# this fixture's block is at its rank 1..4 floor in BOTH dialects and the answer is past its ceiling paid or not: no row is
-# dropped for the handle (ruling C3), it still ships, unpaid, and the overshoot is DISCLOSED — root over_ceiling="1" with the
-# unpaid clause defining it, est_tokens pricing the bytes delivered (P3's rule), and the P4 claim itself (compact no further
-# over than full). Near miss at 750: paying is what makes it fit — est_tokens <= budget in both dialects, next= rides, no
-# over_ceiling= and no unpaid clause (a label riding every capped answer would pass the 500 half alone).
-# RE-PINNED 2026-10-10 (train 26c): the near miss moves 750 -> 900. lego-charge charges <lego>/<compose> at their served size
-# and #362's <tail next=> rides the bundle, so this fixture's 4-row floor answer prices est_tokens=918 compact / 963 full
-# (was 814 / 859): at 750 both dialects are still at the floor, unpaid and labelled; the paid next= first fits in both
-# dialects at 850 (784 / 829) and at 900 with margin (855 / 868). The 500 half is unchanged (4 rows, over, the clause).
-p4floor_bad=0
+# (P4 floor twin) REPLACED, forbudget-soft (rule 4). Was (knob-honesty-068; rulings 2026-10-07; re-pinned 750 -> 900 in train
+# 26c): at 500 both dialects ship <sigs> next= UNPAID at the rank 1..4 floor, labelled over_ceiling="1" with the unpaid clause;
+# at 900 the PAID next= fits (est_tokens <= 900) with no label. Both halves pin the retired hard ceiling and its C3 payment.
+# HEAD 480bc90b on this fixture: at 500 the compact and full dialects serve the same 7 of 12 rows (989 of T = 1,062 B charged;
+# the 8th row's 133 B would cross it), est 1105 / 1644, no label — the arm read "shown=7 over_ceiling=0 clause=0"; at 900 both
+# serve all 12 rows of the head in a complete <sigs> (no shown=/total=/capped=/next= on it, as on the no-budget answer: 1,655 of
+# T = 1,911 B), which the old arm misread as "a capped block without next=" — there is no cut there to recover. Now:
+#   500  the soft cut: CF + ST + RP + NOLBL + NX + HL (softPair above), the cut's next= RUNS on this fixture and serves the whole
+#        head (the no-budget answer's rows) uncut, the cut's rows its prefix; est_tokens prices the bytes delivered (P3's rule,
+#        kept from the old arm);
+#   900  stop when complete: a target wider than the answer serves exactly the no-budget answer's rows, uncapped, no next=,
+#        no label — in both dialects;
+#   both the P4 claim itself, kept: compact est_tokens is inside N or no further over it than full's.
+spRef p4 "$P4" . "widget routine dispatcher"
+p4floor_bad=0; p4facts=""
 for tb in 500 900; do
+    softPair p4 "$P4" . "widget routine dispatcher" "$tb"
+    [ -n "$spWhy" ] && { p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=$tb:$spWhy"; }
     for lg in compact full; do
-        ( cd "$P4" && "$BIN" . --for="widget routine dispatcher" --token-budget=$tb --legend=$lg 2>/dev/null ) >"$TMP/p4f.$lg"
-    done
-    pc="$( grep -o 'est_tokens="[0-9]*"' "$TMP/p4f.compact" | head -1 | tr -dc '0-9' )"; pf="$( grep -o 'est_tokens="[0-9]*"' "$TMP/p4f.full" | head -1 | tr -dc '0-9' )"
-    for lg in compact full; do
-        f="$TMP/p4f.$lg"; pb="$( wc -c <"$f" | tr -d ' ' )"; pe="$( grep -o 'est_tokens="[0-9]*"' "$f" | head -1 | tr -dc '0-9' )"
-        root="$( grep -oE '^<ctx [^>]*>' "$f" | head -1 )"; sigs="$( grep -oE '<sigs [^>]*>' "$f" | tail -1 )"
-        hasnext=0; case "$sigs" in *' capped="1"'*' next="--for='*) hasnext=1;; esac
-        over=0; [ "${root#* over_ceiling=\"1\"}" != "$root" ] && over=1
-        clause=0; grep -qF '[over_ceiling=1 also when the sigs next= rides unpaid: no row is dropped to pay for it on an answer that would not fit either way]' "$f" && clause=1
-        if [ -z "$pe" ] || [ "$hasnext" -ne 1 ]; then
-            p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=$tb --legend=$lg: est_tokens=${pe:-?}, <sigs> next= present=$hasnext — a capped block must carry its next="
-            continue
+        f="$TMP/sp.$lg"; pb="$( wc -c <"$f" | tr -d ' ' )"; pe="$( grep -oE '^<ctx [^>]*>' "$f" | head -1 | grep -oE ' est_tokens="[0-9]+"' | tr -dc '0-9' )"
+        sigs="$( grep -oE '<sigs( [^>]*)?>' "$f" | head -1 )"
+        eval "line=\"\$spLine_$lg\""; r="$( spfield "$line" rows )"; t="$( spfield "$line" total )"
+        if ! printf '%s' "$pe$pb$r$t" | grep -qE '^[0-9]+$'; then
+            p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=$tb --legend=$lg: unreadable (est_tokens='$pe' rows='$r' total='$t')"; continue
+        fi
+        truth=$(( pb * 100 / 250 )); floor=$(( pb * 100 / 255 )); diff=$(( pe - truth )); [ "$diff" -lt 0 ] && diff=$(( -diff ))
+        if [ $(( diff * 100 )) -gt $(( truth * 12 )) ] || [ "$pe" -lt "$floor" ]; then
+            p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=$tb --legend=$lg: est_tokens=$pe does not price the $pb B delivered (bytes/2.50 = $truth, floor $floor)"
         fi
         if [ "$tb" -eq 500 ]; then
-            truth=$(( pb * 100 / 250 )); floor=$(( pb * 100 / 255 )); diff=$(( pe - truth )); [ "$diff" -lt 0 ] && diff=$(( -diff ))
-            shown="$( printf '%s' "$sigs" | grep -oE ' shown="[0-9]+"' | tr -dc '0-9' )"
-            if [ "$over" -ne 1 ] || [ "$clause" -ne 1 ] || [ "${shown:-99}" -gt 4 ] || [ $(( diff * 100 )) -gt $(( truth * 12 )) ] || [ "$pe" -lt "$floor" ]; then
-                p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=500 --legend=$lg: over_ceiling=$over clause=$clause shown=${shown:-?} est_tokens=$pe for $pb B — the floor's unpaid next= must ride labelled and honestly priced"
+            if [ "$r" -ge "$t" ]; then
+                p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=500 --legend=$lg: premise — $r of $t rows, nothing cut; the arm reads no soft cut"
+            elif [ "$lg" = compact ]; then
+                # NX: run the cut's next= (entity-decoded, shell-split) on the same root; it must serve the whole head uncut.
+                nargv="$( printf '%s' "$sigs" | python3 -c 'import sys,re,html,shlex; m=re.search(r"\snext=\"([^\"]+)\"",sys.stdin.read()); print("\n".join(shlex.split(html.unescape(m.group(1)))) if m else "")' )"
+                if [ -z "$nargv" ]; then
+                    p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=500: the cut's <sigs> carries no next= to run"
+                else
+                    nb=0; nbr="$( printf '%s\n' "$nargv" | sed -n 's/^--token-budget=\([0-9]*\)$/\1/p' | head -1 )"; [ -n "$nbr" ] && nb="$nbr"
+                    ( cd "$P4" && printf '%s\n' "$nargv" | tr '\n' '\0' | xargs -0 "$BIN" . ) >"$TMP/p4n.out" 2>/dev/null
+                    nl="$( python3 "$TMP/softp.py" "$TMP/p4n.out" "$nb" "widget routine dispatcher" "$TMP/p4n.rows" )"
+                    nr="$( spfield "$nl" rows )"; nt="$( spfield "$nl" total )"
+                    # lane hrr (rule 4): the twin — the RIPWIRE_NO_HEAD_RR=1 cut's next=, run with it set — must serve the twin's
+                    # no-budget head in ORDER (unchanged); the answer as served must serve the no-budget head as a SET
+                    nargvT="$( grep -oE '<sigs( [^>]*)?>' "$TMP/sp.compact.so" | head -1 | python3 -c 'import sys,re,html,shlex; m=re.search(r"\snext=\"([^\"]+)\"",sys.stdin.read()); print("\n".join(shlex.split(html.unescape(m.group(1)))) if m else "")' )"
+                    ( cd "$P4" && printf '%s\n' "$nargvT" | tr '\n' '\0' | RIPWIRE_NO_HEAD_RR=1 xargs -0 "$BIN" . ) >"$TMP/p4n.so.out" 2>/dev/null
+                    python3 "$TMP/softp.py" "$TMP/p4n.so.out" "$nb" "widget routine dispatcher" "$TMP/p4n.so.rows" >/dev/null
+                    rT="$( wc -l <"$TMP/sp.compact.so.rows" 2>/dev/null | tr -d ' ' )"
+                    if [ -n "$nargvT" ] && cmp -s "$TMP/p4n.so.rows" "$TMP/sp.ref.p4.compact.so.rows" && head -n "${rT:-0}" "$TMP/p4n.so.rows" | cmp -s - "$TMP/sp.compact.so.rows"; then
+                        p4facts="$p4facts [RIPWIRE_NO_HEAD_RR=1 twin] the 500 cut's next= serves the no-budget head in order, the cut its prefix;"
+                    else
+                        p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) [RIPWIRE_NO_HEAD_RR=1 twin] --token-budget=500: the cut's next= did not serve the twin's no-budget head in order with the cut's rows as its prefix"
+                    fi
+                    if printf '%s' "$nr$nt" | grep -qE '^[0-9]+$' && [ "$nr" -eq "$nt" ] && python3 "$RIPWIRE_TESTLIB/softbudget.py" setprefix "$TMP/p4n.rows" "$TMP/sp.ref.p4.compact.rows" "$TMP/sp.ref.p4.compact.so.rows" \
+                       && head -n "$r" "$TMP/p4n.rows" | cmp -s - "$TMP/sp.compact.rows"; then
+                        p4facts="$p4facts the 500 cut's next= ($( printf '%s' "$nargv" | tr '\n' ' ')) serves $nr of $nt rows, the no-budget head;"
+                    else
+                        p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=500: the cut's next= ($( printf '%s' "$nargv" | tr '\n' ' ')) served '${nl:-no <sigs>}' — not the whole no-budget head with the cut's rows as its prefix"
+                    fi
+                fi
             fi
-        elif [ "$pe" -gt "$tb" ] || [ "$over" -ne 0 ] || [ "$clause" -ne 0 ]; then
-            p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) near miss --token-budget=$tb --legend=$lg: est_tokens=$pe over_ceiling=$over clause=$clause — a paid next= must fit with no label"
+        else
+            # round C (forbudget-soft, owner decision 2026-10-14: RESERVE SECTIONS FIRST; rule 4): the trailing sections are
+            # reserved before the rows past the cut, so 900 no longer serves the whole 12-row head (11 rows measured) — by design.
+            # What holds: the rows are a rank prefix of the no-budget answer's, and a cut carries capped + next=.
+            case "$sigs" in *' capped="1"'*) capd=1 ;; *) capd=0 ;; esac
+            case "$sigs" in *' next="'*) nxd=1 ;; *) nxd=0 ;; esac
+            # lane hrr (rule 4): the order-prefix clause runs unchanged on the RIPWIRE_NO_HEAD_RR=1 twin; as served, a SET prefix
+            rT="$( wc -l <"$TMP/sp.$lg.so.rows" 2>/dev/null | tr -d ' ' )"
+            if [ "${rT:-0}" -eq 0 ] || ! head -n "$rT" "$TMP/sp.ref.p4.$lg.so.rows" | cmp -s - "$TMP/sp.$lg.so.rows"; then
+                p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) [RIPWIRE_NO_HEAD_RR=1 twin] --token-budget=900 --legend=$lg: ${rT:-?} rows — not a rank prefix of the twin's no-budget answer"
+            fi
+            if ! python3 "$RIPWIRE_TESTLIB/softbudget.py" setprefix "$TMP/sp.$lg.rows" "$TMP/sp.ref.p4.$lg.rows" "$TMP/sp.ref.p4.$lg.so.rows" || { [ "$r" -lt "$t" ] && [ $(( capd * nxd )) -ne 1 ]; }; then
+                p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=900 --legend=$lg: $r of $t rows, capped=$capd next=$nxd — the rows must be a rank prefix of the no-budget answer's, and a cut must carry capped + next="
+            fi
         fi
+        p4facts="$p4facts $tb/$lg: $r of $t rows est $pe;"
     done
-    lim=$tb; [ "${pf:-0}" -gt "$lim" ] && lim=$pf
-    if [ -z "$pc" ] || [ "$pc" -gt "$lim" ]; then
-        p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=$tb: compact est_tokens=${pc:-?} over the budget AND over the full answer's ${pf:-?}"
+    pc="$( spfield "$spLine_compact" est )"; pf="$( spfield "$spLine_full" est )"
+    if printf '%s' "$pc$pf" | grep -qE '^[0-9]+$'; then
+        lim=$tb; [ "$pf" -gt "$lim" ] && lim=$pf
+        [ "$pc" -gt "$lim" ] && { p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=$tb: compact est_tokens=$pc over the budget AND over the full answer's $pf"; }
+    else
+        p4floor_bad=$(( p4floor_bad + 1 )); no "(P4 floor twin) --token-budget=$tb: est_tokens unreadable (compact '$pc', full '$pf')"
     fi
 done
-[ "$p4floor_bad" -eq 0 ] && ok "(P4 floor twin) at 500 both dialects ship <sigs> next= unpaid at the rank 1..4 floor with over_ceiling=\"1\", the unpaid clause and an honest est_tokens, the 900 run's paid next= fits with no label, compact never further over than full"
+[ "$p4floor_bad" -eq 0 ] && ok "(P4 floor twin) soft target on the twelve-routine fixture: at 500 both dialects serve the same maximal rank prefix within T, unlabelled, its next= serving the whole head, and with 900 the complete head ships uncut, est_tokens honest; compact never further over than full ($p4facts)"
 
 # (P5) the BUDGET LEDGER survives compaction (orchestrator rule, METHODOLOGY §9.3/§9.4: never cut silently). --pack-task's
 # full legend ends with "budget=N bytes (T-token target, ceiling C) | ranking: … | bodies: … | callers: … | notes: … | tests:
@@ -1373,6 +1640,9 @@ echo
 # RE-ANCHORED 2026-09-26 (lane impact-depth-065, depth-labelled --impact): 7,500 → 7,700 B, measured 7,622 (7,495 on the
 # base binary b343b988). The loop's --impact=distance probe now carries by_depth= and d=, and its compact legend reads both
 # (+127 B, the (U) table's ripwire.impact/v1 row); the other nine verbs unmoved. Same rule: the next multiple of 100 B.
+# RE-ANCHORED 2026-10-18 (lane body-fold FIX1 B2, by design): 7,900 → 8,200 B, measured 8,157 (7,871 with the fold off). The +286 B is
+# the loop's --for probe: its default answer now carries the fold and the fold's compact clause (the ripwire.for/v1 (U) row moved
+# +286 B the same way); the other nine verbs unmoved. Same rule: the next multiple of 100 B.
 # RE-ANCHORED 2026-10-09 (lane callers-sites-first-call, CALLSITE-AT): 7,800 → 7,900 B, measured 7,830 (7,711 at the
 # train-26b anchor below, which is this lane's base). The +119 B is the loop's --callers probe: its rows now carry
 # sites_at= and the compact legend reads it (the ripwire.callers/v1 (U) row moved +121 B the same way). Same rule.
@@ -1380,17 +1650,24 @@ echo
 # the train's phase-A head, 7,688 with receiver evidence merged (its present-only via= readings; under the old ceiling),
 # 7,711 with lean-answers merged: +23 B, all on the --for probe, the " (absent cx/ccx/in = 0)" reading the lane pinned
 # in the ripwire.for/v1 row. The other verbs are unmoved by that step. Same rule: the next multiple of 100 B.
-echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 7,900 B (34,716 B in full on the fixture) ==="
-loopBytes=0; fullBytes=0
+# RE-ANCHORED 2026-10-18 (lane hrr FIX1, by design; rule 4 twin): 8,200 → 8,400 B, measured 8,302. The +145 B is the loop's
+# --for probe: its routed default answer now reorders its head and carries files_first= with its present-only compact clause
+# (kForFilesFirstNote); the other nine verbs unmoved. The old bar is kept as the twin: with RIPWIRE_NO_HEAD_RR=1 the same loop
+# still pays <= 8,200 B (LT). Same rule: the next multiple of 100 B.
+echo "=== (L) the canonical ten-verb edit loop: compact legend bill ≤ 8,400 B (34,716 B in full on the fixture) ==="
+loopBytes=0; fullBytes=0; loopBytesT=0
 for v in "--for=geometry distance" "--callers=distance" "--impact=distance" "--uses=distance" "--edit-check=total_area" \
          "--quality-delta" "--test-gate=geometry.cpp" "--affected=geometry.cpp" "--safe-delete=total_area" "--slice=total_area"; do
     rrun "$v" --legend=compact >"$TMP/l.c"; rrun "$v" --legend=full >"$TMP/l.f"   # L1: the full bill is asked for by name
     [ -s "$TMP/l.c" ] || no "(L) $v --legend=compact answered NOTHING (a refusal is not a 0 B legend): $( head -c 120 "$TMP/rerr" )"
     b="$( leg bytes "$TMP/l.c" )"; f="$( leg bytes "$TMP/l.f" )"
     loopBytes=$(( loopBytes + b )); fullBytes=$(( fullBytes + f ))
+    RIPWIRE_NO_HEAD_RR=1 rrun "$v" --legend=compact >"$TMP/l.ct"; loopBytesT=$(( loopBytesT + $( leg bytes "$TMP/l.ct" ) ))
 done
-[ "$loopBytes" -le 7900 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
-                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 7,900 B; full: $fullBytes B)"
+[ "$loopBytes" -le 8400 ] && ok "(L) ten-verb loop: $loopBytes B of compact legend (full: $fullBytes B)" \
+                          || no "(L) ten-verb loop pays $loopBytes B of compact legend (> 8,400 B; full: $fullBytes B)"
+[ "$loopBytesT" -le 8200 ] && ok "(LT) [RIPWIRE_NO_HEAD_RR=1 twin] ten-verb loop: $loopBytesT B of compact legend (the pre-hrr bar, 8,200 B)" \
+                           || no "(LT) [RIPWIRE_NO_HEAD_RR=1 twin] ten-verb loop pays $loopBytesT B of compact legend (> 8,200 B)"
 
 echo
 echo "=== (M) MCP: legend:\"compact\" on edit_check answers in ≤ 900 B on a clean tree; every XML verb takes the argument, within its per-verb legend pin ==="
@@ -1433,13 +1710,15 @@ grep -q '^__ERROR__' "$TMP/m.bad" && ok "(M) MCP edit_check legend:\"terse\" is 
 # RE-PINNED 2026-09-19 (the L1 fix round, rv-r1-L1 HIGH-1: every emitted attribute defined — the (U) pins' note): uses 290 -> 510
 # (measured 500), path_between 280 -> 430 (419), exemplar 260 -> 350 (331); impact and lego did not cross their pins.
 # Fix round 2: path_between 430 -> 540 (measured 535 — the no-path hint= reading).
+# RE-PINNED 2026-10-18 (lane ix2-slice): path_between 540 -> 860 — the same <near_sink>/<ns> readings the (U) table's
+# ripwire.path/v1 row states (one emitter, src/pathgaps.h pathNearSinkXml); the (U-twin-path) arm keeps the old 550 B CLI pin.
 # RE-PINNED 2026-09-23 (cut-fix C): impact 780 -> 810 (measured 797; 777 on the base binary) — the same +20 B
 # shown_importers= reading the (U) table's ripwire.impact/v1 row states: --limit now sizes the import tier.
 # RE-PINNED 2026-09-26 (lane impact-depth-065): impact 810 -> 940 (measured 924; 797 on the base binary) — the same +127 B
 # <s d=N>/by_depth= readings the (U) table's ripwire.impact/v1 row states; the MCP twin carries the CLI's attributes.
 for pair in "impact:940:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
             "uses:510:{\"path\":\".\",\"symbol\":\"distance\",\"legend\":\"compact\"}" \
-            "path_between:540:{\"path\":\".\",\"from\":\"total_area\",\"to\":\"distance\",\"legend\":\"compact\"}" \
+            "path_between:860:{\"path\":\".\",\"from\":\"total_area\",\"to\":\"distance\",\"legend\":\"compact\"}" \
             "lego:260:{\"path\":\".\",\"type\":\"Point\",\"legend\":\"compact\"}" \
             "exemplar:350:{\"path\":\".\",\"kind\":\"fn\",\"task\":\"distance\",\"legend\":\"compact\"}"; do
     verb="${pair%%:*}"; rest="${pair#*:}"; mpin="${rest%%:*}"; args="${rest#*:}"
@@ -2948,4 +3227,15 @@ fi
 rm -f "$QAR/.ripwire_quality_acks"
 
 [ "$fail" -eq 0 ] && echo 'ALL PASS' || echo 'FAILURES ABOVE'
+echo "=== (FOLD-L) the fold's clause: present beside a fold, compact <= 300 B, full <= 500 B ==="
+( unset RIPWIRE_NO_BODY_FOLD; rrun "--for=geometry distance" --legend=compact ) >"$TMP/fl.c"
+( unset RIPWIRE_NO_BODY_FOLD; rrun "--for=geometry distance" --legend=full ) >"$TMP/fl.f"
+flc="$( python3 -c 'import re,sys; m=re.search(r"; fold kind=bodies:.*?sigs_next= the signatures-only re-call", open(sys.argv[1]).read(), re.S); print(len(m.group(0).encode()) if m else -1)' "$TMP/fl.c" )"
+flf="$( python3 -c 'import re,sys; m=re.search(r"; fold kind=bodies:.*?sigs_next= the signatures-only re-call", open(sys.argv[1]).read(), re.S); print(len(m.group(0).encode()) if m else -1)' "$TMP/fl.f" )"
+if grep -q '<fold kind="bodies"' "$TMP/fl.c" && [ "$flc" -gt 0 ] && [ "$flc" -le 300 ] && [ "$flf" -gt "$flc" ] && [ "$flf" -le 500 ]; then
+    ok "(FOLD-L) the fold clause rides beside the fold: compact $flc B, full $flf B"
+else
+    no "(FOLD-L) fold clause compact=$flc B full=$flf B (want 0 < compact <= 300 < full <= 500, beside a <fold>)"
+fi
+
 exit "$fail"

@@ -303,9 +303,9 @@ inline Facts collectFacts( const IngestResult& ing, const NameDefs& byName,
 
     for( const Reference& r : ing.references )
     {
-        if( r.isDocLink || r.lang == Lang::Markdown )
+        if( r.isDocLink || r.lang == Lang::Markdown || r.role == RefRole::Subscript )
         {
-            continue;   // a doc→code mention is a reader's cross-reference, not a thing the code resolves
+            continue;   // a doc→code mention is a reader's cross-reference, not a thing the code resolves; a subscript is a call only once graph.h proves it
         }
         // member-variable round (card A3): a MEMBER ACCESS (`o.count`, `this->name`, model.h isMemberAccessSite)
         // names a field, and a field is never in ing.symbols; resolving it here by NAME would bind `s.name` to

@@ -1,0 +1,21 @@
+# test/langidentity/ratchet.tsv -- the ratchet printed last by test/langidentitycheck.sh.
+# ceiling: the most "== Lang::X" / "!= Lang::X" predicate lines (a `case` label is not a predicate) src/ may hold outside the
+#          per-language files below; counted from `ripwire src --regex='Lang::[A-Z][A-Za-z]+'`, one count per distinct line.
+#          It may fall (lower the number in the same commit that removes the predicate) and may never rise.
+# perlang: a file that exists for ONE language, whose predicates are the point of the file and do not count.
+# CLOSED (train 29, langfacts-fold): the one-time named exception (owner waiver 2026-10-16) raised the ceiling 352 -> 362 for
+#   train 28, for 10 shared-file Lang:: predicates added by lanes signed before #399's ratchet (grep-carrier +1, ruby-pair +4,
+#   qd-memory-degrade +1, #380 +1, attrib-multidef/declined-sites +3). Train 29 folded them into src/langfacts.h columns,
+#   byte-identical, and lowered the ceiling below 352. The waiver is not a precedent: the rule above (may fall, never rise)
+#   holds for every change.
+# 350 -> 347 (#403): captureTagsFacts' Python, Rust and Kotlin scope arms became rows of kDefScopeWalkerOfLang (ingest_names.h).
+# 347 -> 346 (#405): the standard-member name gate's Lang::Cpp compare became the per-language kStdMemberNames table (graph.h).
+# 346 -> 339 (train 30, recount on the merged tree): lane call-result-typing folded 7 shared-file compares — the binds pass's
+#   language list became kBindPassLangs (ingest_binds.h bindPassLang) and the receiver-evidence dispatch receiverEvidenceHookOf;
+#   ingest_sidecap.h's Rust member-root arm moved to the call-result family. No other train-30 lane added or removed one.
+ceiling	339
+perlang	ingest_elixir.h
+perlang	elixir_resolve.h
+perlang	ingest_clojure.h
+perlang	ingest_jsimports.h
+perlang	ingest_ruby.h

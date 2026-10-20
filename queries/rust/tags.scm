@@ -63,11 +63,25 @@
 ; so unlike the convention-based grammars these are NOT SCREAMING_SNAKE-gated in ingest.cpp.
 ; Shapes verified with --match on the constcheck fixture.
 
-(const_item
-    name: (identifier) @name) @definition.constant
+; go-local-var (train 30): only item-scope constants are symbols — the crate root (source_file) and a
+; declaration_list (mod / impl / trait / extern block bodies). A `const`/`static` declared inside a fn,
+; method or closure body (a `block`) is local to that block, so it is not captured (it was indexed as a
+; top-level var). Same rule as the Go var/const and GDScript const patterns.
+(source_file
+  (const_item
+    name: (identifier) @name) @definition.constant)
 
-(static_item
-    name: (identifier) @name) @definition.constant
+(declaration_list
+  (const_item
+    name: (identifier) @name) @definition.constant)
+
+(source_file
+  (static_item
+    name: (identifier) @name) @definition.constant)
+
+(declaration_list
+  (static_item
+    name: (identifier) @name) @definition.constant)
 
 ; references (calls)
 

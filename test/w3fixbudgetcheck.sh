@@ -18,7 +18,8 @@
 #
 #   H2 — --for's header floor (fixed legend + the task echoed twice) can exceed the ceiling --help promises it
 #        "trims to fit", and it shipped the overrun silently: 5.3x at a 900-char task. An absolute-ceiling arm,
-#        which is what monotonicity could never catch — a floor is monotone.
+#        which is what monotonicity could never catch — a floor is monotone. (forbudget-soft: the explicit budget is
+#        a soft target now, so the H2 arms assert the soft contract instead — see below.)
 #   M1 — --pack-task charged the verbatim task= attribute and not the comment's echo of the same text, so a
 #        fixed 1024-byte reserve was bounding user-length bytes; and its "route_attr: dropped (ceiling)" note
 #        claimed a remedy that had not been measured. Same class at --recall --max-tokens, where the byte
@@ -29,16 +30,19 @@
 #   M3 — the comment echo was dash-scrubbed and nothing else, so a C0 byte or an invalid UTF-8 sequence in the
 #        task made xmllint reject the whole document.
 #
-# THE ONE INVARIANT the ceiling arms assert (and the reason they can be absolute at all): a bundle is
-# conformant at or under ceiling x 1.15 — the single-entry overshoot the design allows, because the ranking
-# section emits its first entry WHOLE (src/serialize.h kCeilingFirstEntryTolerance; the same 1.15
-# bundleidcheck.sh and partitioncheck.sh already commit to). Past that bar the lens has provably failed to trim
-# to fit, and must SAY SO. So the assertion is a biconditional, not a bound:
-#
-#       delivered > ceiling * 1.15   <=>   the document discloses over_ceiling
-#
-# A one-sided bound would be satisfiable by a lens that never trims and never admits it (the pre-fix state) or
-# by one that labels everything over_ceiling (honest but useless). Both directions are checked.
+# forbudget-soft (rule 4, owner decisions 2026-10-14) RETIRED the absolute-ceiling invariant these arms were built on.
+# An explicit --token-budget on --for / --pack-task is now a SOFT target: T = N x kMinBytesPerToken x kBudgetHeadroom bytes
+# charged against the ranked ROWS only (--for), or each section stopping once its share is reached (--pack-task). There is
+# no byte promise, so nothing is labelled over_ceiling and nothing in the header — the verbatim task echo, route=, any
+# legend clause — is ever dropped "(ceiling)" to fit. So the H2 arms no longer assert "fits ceiling x 1.15 <=> discloses
+# over_ceiling"; at every (task length x budget x lens) point they assert what must hold now:
+#   ST    (--for) the rows' charged bytes inside <sigs> fit T, or are only the rank 1..4 floor;
+#   RP    the served rows are a rank prefix of the default answer's rows, growing with the budget;
+#   NX    (--for) every cut element (capped="1") carries next=;
+#   NOLBL no over_ceiling= on the root and no over_ceiling ladder note;
+#   HL    no "(ceiling)" drop and no "task_echo: dropped" in the header; task= verbatim; route= kept when the default has it.
+# The user-text findings (M2/M3 hostile bytes, the M1 charge, the --recall disclosure, determinism) are unchanged:
+# --recall --max-tokens keeps its hard ceiling and its biconditional (arm 5).
 
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
@@ -132,17 +136,13 @@ PY_EOF
 HOSTILE="nl tab cr c0 badu8 mixed"
 
 # The disclosure lives in the header COMMENT. Grepping the whole document for it would also match a body that
-# quotes the word — this gate's own corpus does, deliberately, so that mistake cannot pass unnoticed. Every
-# ceiling arm below reads the header region ONLY: everything up to the first "-->".
+# quotes the word — this gate's own corpus does, deliberately, so that mistake cannot pass unnoticed. The charge
+# arm (4) reads the header region ONLY: everything up to the first "-->" (arms 3 and 7 read every header comment).
 hdr(){ python3 -c "
 import sys
 d = open( sys.argv[1], 'rb' ).read()
 i = d.find( b'-->' )
 sys.stdout.buffer.write( d if i < 0 else d[ :i + 3 ] )" "$1"; }
-# M11 (2026-09-04): the legends now DEFINE over_ceiling= ("over_ceiling=1 when …"), so a bare word-grep reads
-# the definition as the label. The label is the root attribute over_ceiling="1" or the ladder's own colon
-# note (" over_ceiling: the header floor …"); the map spells over_ceiling=1 in its stats comment.
-saysOverCeiling(){ hdr "$1" | grep -qE 'over_ceiling(="1"|=1|:)'; }
 
 # ═══ 1) M2 + M3 — G4 AND xmllint under hostile task bytes, every verb that echoes user text ═══════════════════
 # RED (build_base): xmllint FAILS on {--for,--pack-task} x {c0,badu8}; the newline arms emit a literal \n
@@ -223,73 +223,145 @@ if key != 'anchor--the\n\x01budget\tceiling�':
 sys.exit( 0 )
 PY_EOF
 
-# ═══ 3) H2 + M1 — THE ABSOLUTE CEILING BICONDITIONAL, across task length x budget ════════════════════════════
-# tokenbudgetcheck asserts MONOTONICITY, which a floor satisfies trivially (5.3x over at every budget is
-# perfectly monotone). This is the absolute arm: for every (task length, budget) point, the delivered document
-# either fits ceiling*1.15 or says over_ceiling — never neither, never both.
-#
-# RE-PIN 2026-09-05 (capture-audit verify-wave2 F2, lane V2) — to the NEW contract stated precisely, not to a
-# loosened assertion. over_ceiling= used to be a statement about BYTES vs the 1.15-tolerance allowance, which
-# is why the reverse half could be written in bytes. It is now a statement about the two numbers the ROOT
-# ITSELF PRINTS, in the unit it prints them in: over_ceiling="1" exactly when est_tokens > budget_tokens, on
-# every rung (F2: `--for --token-budget=1600` shipped `budget_tokens="1600" est_tokens="1665"` and no label,
-# because the flag fired only on the ladder's last rung). The two halves are therefore asymmetric on purpose:
-#   FORWARD  (unchanged, still in bytes): delivered > allowance  =>  over_ceiling. Sound, because
-#            allowance = N x 2.36 x 1.15 and the emitter prices at 2.50 B/tok, so bytes past the allowance
-#            are >= 1.085 x N tokens — over the budget by construction.
-#   REVERSE  (re-pinned, now in tokens):  over_ceiling  =>  est_tokens > budget_tokens. The old byte form
-#            would now fire on every HONEST label inside the 15% tolerance band, which is precisely the
-#            window F2 lived in.
-# A label with no overshoot behind it still fails, so the arm cannot be satisfied by labelling everything.
-CEILING_ARM_POINTS=0
-CEILING_ARM_BAD=0
+# ═══ 3) H2 — THE SOFT TARGET, across task length x budget ════════════════════════════════════════════════════
+# forbudget-soft (rule 4) — REPLACES the absolute ceiling biconditional (delivered > B x 2.36 x 1.15 <=> over_ceiling, and
+# over_ceiling <=> est_tokens > budget_tokens; re-pinned 2026-09-05 for F2). An explicit --token-budget is a soft target
+# now, so a bundle past B x 2.36 x 1.15 is legitimate (the header always ships; the floor rows always ship) and a label is
+# never legitimate. Kept from the old arm: the 24-point grid (tasks mid/long x 300..3000 x both lenses) and the premise
+# that the root prints a numeric est_tokens=. Per point: ST + RP + NX (--for), RP (--pack-task), NOLBL + HL (both).
+srcnum(){ sed -n "s/^inline constexpr [a-z:_ ]*$1 *= *\([0-9.]*\);.*/\1/p" "$ROOT/src/serialize.h" | head -1; }
+MINBPT="$( srcnum kMinBytesPerToken )";  HEADROOM="$( srcnum kBudgetHeadroom )"
+case "$MINBPT$HEADROOM" in ''|*[!0-9.]*) no "H2: cannot read kMinBytesPerToken/kBudgetHeadroom from src/serialize.h ('$MINBPT' '$HEADROOM') — the ST arm has no target to judge" ;; esac
+SOFT="$TMP/soft.py"
+cat > "$SOFT" <<'PY_EOF'
+# soft.py DOC DEFAULT_DOC TASKFILE LENS T  — prints "k=<rows served>", one "row p:l:n" per served row in rank order, then
+# one line per violation; exit 1 on any
+import re, sys, xml.etree.ElementTree as ET
+doc, ref, taskFile, lens, T = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int( float( sys.argv[5] ) )
+raw = open( doc, 'rb' ).read()
+bad = []
+if not raw:
+    print( 'k=0' ); print( '    no document' ); sys.exit( 1 )
+s = raw.decode( 'utf-8', 'replace' )
+comments = ' '.join( re.findall( r'<!--(.*?)-->', s, re.S ) )
+def strip( t ):
+    t = re.sub( r'<!\[CDATA\[.*?\]\]>', '', t, flags = re.S )
+    return re.sub( r'<!--.*?-->', '', t, flags = re.S )   # the legend quotes <sigs> and defines attributes; it is not the document's tags
+body = strip( s )
+root = re.search( r'<ctx\b[^>]*>', body )
+if root is None:
+    print( 'k=0' ); print( '    no <ctx> root' ); sys.exit( 1 )
+root = root.group( 0 )
+# a row's CHARGE is the ladder's (serialize.h entryCost): its printed bytes plus the zero cx=/ccx=/in= the lean spelling elides
+def charge( a, printed ):
+    return printed + sum( n for k, n in ( ( 'cx', 7 ), ( 'ccx', 8 ), ( 'in', 7 ) ) if not re.search( r'\b' + k + r'="', a ) )
+def rowsOf( t ):
+    m = re.search( r'<sigs\b([^>]*)>(.*?)</sigs>', t, re.S )
+    if not m: return None, None, 0
+    rows, total = [], 0
+    for d in re.finditer( r'<d ([^>]*)>.*?</d>|<d ([^>]*)/>', m.group( 2 ), re.S ):
+        a = d.group( 1 ) or d.group( 2 )
+        g = lambda k: ( re.search( r'\b' + k + r'="([^"]*)"', a ) or [ None, '?' ] )[ 1 ]
+        r = g( 'r' )
+        c = charge( a, len( d.group( 0 ).encode() ) )
+        total += c - len( d.group( 0 ).encode() )
+        rows.append( ( int( r ) if r.isdigit() else 10**9, g( 'p' ) + ':' + g( 'l' ) + ':' + g( 'n' ) ) )
+    rows.sort()
+    return m.group( 1 ), rows, len( m.group( 2 ).encode() ) + total
+sigAttrs, rows, charged = rowsOf( body )
+refAttrs, refRows, _ = rowsOf( strip( open( ref, 'rb' ).read().decode( 'utf-8', 'replace' ) ) )
+k = len( rows ) if rows is not None else 0
+print( 'k=%d' % k )
+for _, x in ( rows or [] ): print( 'row ' + x )
+# est_tokens present and numeric (CHECKLIST 14: a missing premise is a FAIL)
+if not re.search( r' est_tokens="\d+"', root ): bad.append( 'the root carries no numeric est_tokens=' )
+# NOLBL
+if ' over_ceiling="1"' in root:         bad.append( 'over_ceiling="1" on a soft target (est_tokens may exceed budget_tokens; no label)' )
+if re.search( r'over_ceiling:', comments ): bad.append( 'an over_ceiling ladder note rides the header' )
+# HL
+if '(ceiling)' in comments:
+    dropped = sorted( set( re.findall( r'([^\[\]]{0,40}) dropped \(ceiling\)', comments ) ) )
+    bad.append( 'a header piece was dropped "(ceiling)": %s' % ( ', '.join( dropped ) or 'see header' ) )
+if 'task_echo: dropped' in comments:    bad.append( 'the task echo was dropped' )
+want = open( taskFile, 'rb' ).read().decode( 'utf-8' )
+try:
+    got = ET.fromstring( raw ).attrib.get( 'task' )
+except Exception as exc:
+    got = None; bad.append( 'the document does not parse as XML: %s' % ( exc, ) )
+if got is not None and got != want:     bad.append( 'task= is not the verbatim task (%d chars vs %d)' % ( len( got ), len( want ) ) )
+refRoot = re.search( r'<ctx\b[^>]*>', strip( open( ref, 'rb' ).read().decode( 'utf-8', 'replace' ) ) )
+if refRoot and ' route=' in refRoot.group( 0 ) and ' route=' not in root: bad.append( 'route= dropped (the default answer carries it)' )
+# RP
+if rows is None or refRows is None:     bad.append( 'no <sigs> block (served %s, default %s) — no rows to judge' % ( rows is not None, refRows is not None ) )
+else:
+    if k == 0:                          bad.append( 'no row served — the rank 1..4 floor always ships' )
+    if [ r for r, _ in rows ] != list( range( 1, k + 1 ) ): bad.append( 'rows are not the ranks 1..%d: r=%s' % ( k, [ r for r, _ in rows ] ) )
+    # the default answer may move its doc rows below its code rows (docs_after_code=, renumbering r=; an explicit budget's
+    # answer does not, on base as on head), so against a reordered default the rows are judged as a SET there and the rank
+    # PREFIX is judged across budgets by the caller (rows(N) a prefix of rows(N'))
+    if refAttrs is not None and 'docs_after_code=' in refAttrs:
+        extra = set( x for _, x in rows ) - set( x for _, x in refRows )
+        if extra: bad.append( 'rows the default answer does not serve: %s' % sorted( extra )[ :3 ] )
+    elif [ x for _, x in rows ] != [ x for _, x in refRows[ :k ] ]: bad.append( 'rows are not the default answer\'s first %d rows' % k )
+    if k < min( 4, len( refRows ) ):    bad.append( 'only %d row(s): the rank 1..4 floor always ships' % k )
+if lens == 'for' and rows is not None:
+    # ST: the rows' charged bytes fit T, or are only the floor
+    if not ( charged <= T or k <= 4 ): bad.append( 'ST: %d rows charge %d B past the %d B soft target (beyond the 4-row floor)' % ( k, charged, T ) )
+    # NX: every cut section carries next= (the ranked rows, the hop rows, the file tail — the continuations --for promises)
+    for m in re.finditer( r'<(sigs|hops|tail)\b([^>]*)\bcapped="1"([^>]*)>', body ):
+        if ' next="' not in m.group( 2 ) + m.group( 3 ): bad.append( 'NX: <%s capped="1"> carries no next=' % m.group( 1 ) )
+for line in bad: print( '    ' + line )
+sys.exit( 1 if bad else 0 )
+PY_EOF
+SOFT_POINTS=0;  SOFT_BAD=0;  SOFT_BINDS=0
 for TASKFILE in mid long; do
     T="$( cat "$TMP/task.$TASKFILE" )"
-    for B in 300 600 900 1200 1600 3000; do
-        for V in for pack-task; do
+    for V in for pack-task; do
+        "$BIN" "$CORPUS" --no-cache "--$V=$T" >"$TMP/c.def" 2>/dev/null   # the default answer: RP's reference rows
+        PREVK=0;  : > "$TMP/rows.prev"
+        for B in 300 600 900 1200 1600 3000; do
             "$BIN" "$CORPUS" --no-cache "--$V=$T" --token-budget=$B >"$TMP/c.out" 2>/dev/null
-            BYTES="$( wc -c < "$TMP/c.out" | tr -d ' ' )"
-            # the bar, in shell, from the same two constants the code uses (2.36 B/tok x 1.15 tolerance)
-            ALLOW="$( python3 -c "print(int($B*2.36*1.15))" )"
-            OVER=0;  saysOverCeiling "$TMP/c.out" && OVER=1
-            # the root's own price, in the unit budget_tokens= is stated in (comments stripped: the legend
-            # DEFINES est_tokens= and a definition is not a measurement)
-            EST="$( perl -0pe 's#<!--.*?-->##gs' "$TMP/c.out" | grep -oE '<ctx( [^>]*)?>' | head -1 \
-                    | grep -oE ' est_tokens="[0-9]+"' | head -1 | tr -dc '0-9' )"
-            CEILING_ARM_POINTS=$(( CEILING_ARM_POINTS + 1 ))
-            if [ "$BYTES" -gt "$ALLOW" ] && [ "$OVER" = "0" ]; then
-                CEILING_ARM_BAD=$(( CEILING_ARM_BAD + 1 ))
-                echo "    --$V task=$TASKFILE budget=$B: $BYTES B > allowance $ALLOW B and SILENT about it"
-            elif [ -z "$EST" ]; then
-                CEILING_ARM_BAD=$(( CEILING_ARM_BAD + 1 ))
-                echo "    --$V task=$TASKFILE budget=$B: the <ctx> root carries no est_tokens= — the reverse half has no number to check"
-            elif [ "$OVER" = "1" ] && [ "$EST" -le "$B" ]; then
-                CEILING_ARM_BAD=$(( CEILING_ARM_BAD + 1 ))
-                echo "    --$V task=$TASKFILE budget=$B: claims over_ceiling but est_tokens=$EST is inside the $B-token budget"
-            elif [ "$OVER" = "0" ] && [ "$EST" -gt "$B" ]; then
-                CEILING_ARM_BAD=$(( CEILING_ARM_BAD + 1 ))
-                echo "    --$V task=$TASKFILE budget=$B: root prints budget_tokens=$B est_tokens=$EST and SILENT about the overshoot"
+            TB="$( python3 -c "import sys; print(int(float(sys.argv[1])*float(sys.argv[2])*float(sys.argv[3])))" "$B" "${MINBPT:-0}" "${HEADROOM:-0}" )"
+            SOFT_POINTS=$(( SOFT_POINTS + 1 ))
+            OUT="$( python3 "$SOFT" "$TMP/c.out" "$TMP/c.def" "$TMP/task.$TASKFILE" "$V" "$TB" )";  RC=$?
+            K="$( printf '%s\n' "$OUT" | sed -n 's/^k=//p' | head -1 )"
+            if [ "$RC" != 0 ]; then
+                SOFT_BAD=$(( SOFT_BAD + 1 ))
+                echo "    --$V task=$TASKFILE budget=$B (T=$TB B):";  printf '%s\n' "$OUT" | grep -v '^k=\|^row '
+            elif [ "${K:-0}" -lt "$PREVK" ] || [ "$( printf '%s\n' "$OUT" | sed -n 's/^row //p' | awk -v n="$PREVK" 'NR <= n' )" != "$( cat "$TMP/rows.prev" )" ]; then
+                SOFT_BAD=$(( SOFT_BAD + 1 ))
+                echo "    --$V task=$TASKFILE budget=$B: the $K row(s) served do not extend the $PREVK served at the budget below — RP is not a growing rank prefix"
             fi
+            printf '%s\n' "$OUT" | sed -n 's/^row //p' > "$TMP/rows.prev"
+            # non-vacuity: a point whose est_tokens is past its budget (so NOLBL was tested on a blown target, not assumed)
+            EST="$( perl -0pe 's#<!--.*?-->##gs' "$TMP/c.out" | grep -oE '<ctx( [^>]*)?>' | head -1 | grep -oE ' est_tokens="[0-9]+"' | tr -dc '0-9' )"
+            [ -n "$EST" ] && [ "$EST" -gt "$B" ] && SOFT_BINDS=$(( SOFT_BINDS + 1 ))
+            PREVK="${K:-0}"
         done
     done
 done
-[ "$CEILING_ARM_BAD" = "0" ] \
-    && ok "ceiling biconditional holds at all $CEILING_ARM_POINTS (task length x budget x lens) points" \
-    || no "ceiling biconditional VIOLATED at $CEILING_ARM_BAD of $CEILING_ARM_POINTS points"
+[ "$SOFT_BAD" = "0" ] \
+    && ok "H2 soft target: ST/RP/NX/NOLBL/HL hold at all $SOFT_POINTS (task length x budget x lens) points" \
+    || no "H2 soft target: VIOLATED at $SOFT_BAD of $SOFT_POINTS points"
+[ "$SOFT_BINDS" -gt 0 ] \
+    && ok "H2 soft target: non-vacuity — $SOFT_BINDS point(s) deliver est_tokens past their budget (NOLBL/HL were judged on blown targets)" \
+    || no "H2 soft target: VACUOUS — no point delivers past its budget, so no-label/header-kept was never tested on a blown target"
 
-# the RED case named in the finding, asserted on its own so a regression names itself: a 900-char task at a
-# tight budget must not be silently 2x+ over.
+# the case named in the finding, asserted on its own so a regression names itself. forbudget-soft (rule 4) — REPLACES
+# "a 900-char task at --token-budget=600 fits B x 2.36 x 1.15 or discloses over_ceiling": the soft target makes no byte
+# promise, so what must hold is that the floor rows are served and the header ships whole (task= verbatim, echo kept,
+# route= kept, nothing dropped "(ceiling)"), with no label.
 T="$( cat "$TMP/task.long" )"
 for V in for pack-task; do
+    "$BIN" "$CORPUS" --no-cache "--$V=$T"                    >"$TMP/c.ldef" 2>/dev/null
     "$BIN" "$CORPUS" --no-cache "--$V=$T" --token-budget=600 >"$TMP/c.long" 2>/dev/null
-    BYTES="$( wc -c < "$TMP/c.long" | tr -d ' ' )"
-    ALLOW="$( python3 -c "print(int(600*2.36*1.15))" )"
-    if [ "$BYTES" -le "$ALLOW" ]; then
-        ok "--$V: 900-char task at --token-budget=600 fits the allowance ($BYTES <= $ALLOW B)"
-    elif saysOverCeiling "$TMP/c.long"; then
-        ok "--$V: 900-char task at --token-budget=600 is $BYTES B over $ALLOW B and DISCLOSES over_ceiling"
+    TB="$( python3 -c "import sys; print(int(600*float(sys.argv[1])*float(sys.argv[2])))" "${MINBPT:-0}" "${HEADROOM:-0}" )"
+    OUT="$( python3 "$SOFT" "$TMP/c.long" "$TMP/c.ldef" "$TMP/task.long" "$V" "$TB" )";  RC=$?
+    K="$( printf '%s\n' "$OUT" | sed -n 's/^k=//p' | head -1 )"
+    if [ "$RC" = 0 ]; then
+        ok "--$V: 900-char task at --token-budget=600 serves its $K floor row(s) with the header whole and no over_ceiling ($( wc -c < "$TMP/c.long" | tr -d ' ' ) B; no byte promise)"
     else
-        no "--$V: 900-char task at --token-budget=600 delivers $BYTES B past the $ALLOW B allowance in SILENCE"
+        no "--$V: 900-char task at --token-budget=600:";  printf '%s\n' "$OUT" | grep -v '^k=\|^row '
     fi
 done
 
@@ -376,39 +448,44 @@ done
     && ok "det-gate: byte-identical run-to-run across every hostile byte x ceiling rung" \
     || no "det-gate: $DET_BAD argument set(s) are NOT byte-identical run-to-run"
 
-# ═══ 7) the ladder's rungs are REACHABLE and correctly ordered ════════════════════════════════════════════════
-# A remedy nothing ever selects is dead code that reads as a feature. Sweep a band of budgets and require that
-# the cheap rung (drop the DUPLICATE comment echo, keeping the verbatim task= attribute) is actually taken
-# somewhere — and that whenever it is, the verbatim attribute is still present. That ordering is the whole
-# point: reclaim the duplicate before dropping unique information.
+# ═══ 7) the header is NEVER dropped for a soft target ═══════════════════════════════════════════════════════════
+# forbudget-soft (rule 4) — REPLACES "the ceiling ladder's task_echo rung is REACHABLE" (and folds in its second half, "every
+# echo-drop kept the verbatim task="). The header ladder existed to land a HARD ceiling; an explicit --token-budget is a soft
+# target now, so the remedy that arm required to be reachable must now be unreachable. HL, across the same band and in the
+# full dialect (the only one that echoes the task into the header comment): at every point `task_echo: dropped` is ABSENT,
+# no header piece is dropped "(ceiling)", the comment echo is PRESENT, and the verbatim task= attribute is intact.
 T="$( cat "$TMP/task.long" )"
-ECHO_RUNG_SEEN=0
-ECHO_RUNG_BAD=0
+ECHO_POINTS=0
+ECHO_BAD=0
 for B in 900 1100 1200 1400 1600 1800 2000; do
     for V in for pack-task; do
-        # L1: the task_echo rung drops the header COMMENT's echo of the task, which only the full legend prints (the compact
-        # dialect never echoes it), so the rung is observable — and this arm meaningful — in the full dialect.
         "$BIN" "$CORPUS" --no-cache "--$V=$T" --token-budget=$B --legend=full >"$TMP/l.out" 2>/dev/null
-        hdr "$TMP/l.out" | grep -q 'task_echo: dropped' || continue
-        ECHO_RUNG_SEEN=$(( ECHO_RUNG_SEEN + 1 ))
-        # the verbatim copy must survive the drop of its scrubbed twin
-        python3 - "$TMP/l.out" "$TMP/task.long" <<'PY_EOF' || {
-import sys, xml.etree.ElementTree as ET
+        ECHO_POINTS=$(( ECHO_POINTS + 1 ))
+        python3 - "$TMP/l.out" "$TMP/task.long" <<'PY_EOF' || { ECHO_BAD=$(( ECHO_BAD + 1 )); echo "      ^ --$V budget=$B"; }
+import re, sys, xml.etree.ElementTree as ET
+raw  = open( sys.argv[1], 'rb' ).read()
 want = open( sys.argv[2], 'rb' ).read().decode( 'utf-8' )
-got  = ET.parse( sys.argv[1] ).getroot().attrib.get( 'task' )
-sys.exit( 0 if got == want else 1 )
+if not raw:
+    print( '    no document' );  sys.exit( 1 )
+s    = raw.decode( 'utf-8', 'replace' )
+com  = re.findall( r'<!--(.*?)-->', s, re.S )
+bad  = []
+if any( 'task_echo: dropped' in c for c in com ): bad.append( 'task_echo: dropped — the comment echo was dropped for a soft target' )
+if any( '(ceiling)' in c for c in com ):          bad.append( 'a header piece was dropped "(ceiling)"' )
+if not any( want[ :60 ] in c for c in com ):      bad.append( 'the header comment does not echo the task' )
+try:
+    got = ET.fromstring( raw ).attrib.get( 'task' )
+except Exception as exc:
+    got = None;  bad.append( 'the document does not parse as XML: %s' % ( exc, ) )
+if got is not None and got != want:               bad.append( 'the verbatim task= is gone or altered' )
+for line in bad: print( '    ' + line )
+sys.exit( 1 if bad else 0 )
 PY_EOF
-            ECHO_RUNG_BAD=$(( ECHO_RUNG_BAD + 1 ))
-            echo "    --$V budget=$B: dropped the comment echo but the verbatim task= is gone or altered"
-        }
     done
 done
-[ "$ECHO_RUNG_SEEN" -gt 0 ] \
-    && ok "ceiling ladder: the task_echo rung is REACHABLE ($ECHO_RUNG_SEEN point(s) in the 900..2000 band)" \
-    || no "ceiling ladder: the task_echo rung was never selected at any budget — an unreachable remedy"
-[ "$ECHO_RUNG_BAD" = "0" ] \
-    && ok "ceiling ladder: every echo-drop kept the VERBATIM task= attribute intact" \
-    || no "ceiling ladder: $ECHO_RUNG_BAD echo-drop(s) also lost the verbatim task= — wrong bytes dropped"
+[ "$ECHO_POINTS" -gt 0 ] && [ "$ECHO_BAD" = "0" ] \
+    && ok "header kept: at all $ECHO_POINTS points of the 900..2000 band (full dialect) the task echo, every header piece and the verbatim task= ship" \
+    || no "header kept: $ECHO_BAD of $ECHO_POINTS point(s) dropped part of the header for a soft target"
 
 # ═══ 8) the MCP SIBLING — the same hostile bytes through the live server ══════════════════════════════════════
 # M3's scrub had to be applied at SIX echo sites, two of which are MCP-only (mcpverbs.h `for` and `exemplar`).

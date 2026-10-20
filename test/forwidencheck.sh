@@ -14,8 +14,8 @@
 #       lookup is how an answer is scored complete).
 #   (2) The page is ranked file-first by a bounded union-coverage score: the fixture's gold file, whose four
 #       symbols each match ONE query term, sits at file-rank 8..30 on the page and is ABSENT from the default
-#       --for answer (its best symbol is weaker than twenty single-term files that outrank it in best-symbol
-#       order, which is what the default's <tail> walks).
+#       --for answer's head and tail RANK rows (its best symbol is weaker than twenty single-term files that outrank it
+#       in best-symbol order, which is what those rows walk) — FOLD C: the tail's page rows carry it.
 #   (3) The page is deterministic and well-formed; a cut page carries the house paging vocabulary
 #       (shown= total= capped="1" has_more= next_offset=) and a next= naming the next page; the second page
 #       has no row in common with the first and the pages concatenate to the wider page in order.
@@ -126,10 +126,26 @@ print( " ".join( sorted( set( re.findall( r"\s([a-z_]+)=\"", m.group( 2 ) ) ) ) 
 # ── (1) the default answer does NOT carry the gold; the page does, verbatim ─────────────────────────────
 run --for="$THIN" >"$TMP/default.xml"; rc=$?
 [ "$rc" = 0 ] || no "(1) default --for exited $rc: $( head -c 200 "$TMP/err" )"
-if grep -q "p=\"$GOLD\"" "$TMP/default.xml"; then
-    no "(1) the default --for answer already names $GOLD — the fixture does not exercise widening"
+# FOLD C (forbudget-soft round C, owner decision 2026-10-14; rule 4): the default answer's <tail> now carries page 0 of the
+# file page (its rows with sym=), so the widening this fixture measures is IN the default answer. The by-design break: the
+# old "the default answer does not name the gold" now reads the head and the tail's RANK rows (no sym=: the best-symbol walk
+# the gold falls past) — the fixture still exercises widening — and the page rows must name the gold, exactly as the page does.
+if python3 - "$TMP/default.xml" "$GOLD" <<'PY'
+import re, sys
+s = open( sys.argv[ 1 ] ).read(); g = sys.argv[ 2 ]
+head = re.findall( r'<d [^>]*?\bp="([^"]*)"', s )
+rank = [ p for p, sym in re.findall( r'<t p="([^"]*)"( sym="[^"]*")?/>', s ) if not sym ]
+sys.exit( 1 if g in head or g in rank else 0 )
+PY
+then
+    ok "(1) the default --for answer's head and tail rank rows do not name $GOLD (the best-symbol walk it falls past)"
 else
-    ok "(1) the default --for answer (head + tail) does not name $GOLD"
+    no "(1) the default --for answer's head or rank rows already name $GOLD — the fixture does not exercise widening"
+fi
+if grep -q "<t p=\"$GOLD\" sym=\"" "$TMP/default.xml"; then
+    ok "(1) FOLD C: the default answer's tail page rows name $GOLD (page 0 rides the answer)"
+else
+    no "(1) FOLD C: the default answer's tail has no page row for $GOLD — page 0 of the file page is not in the answer"
 fi
 grep -q '<tail ' "$TMP/default.xml" && ok "(1) presence guard: the default answer carries a <tail> (the file-grain surface the gold fell past)" \
                                     || no "(1) presence guard: no <tail> in the default answer — the fixture shape changed"

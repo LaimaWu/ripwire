@@ -2804,8 +2804,9 @@ int setsockopt_nosigpipe( int, const void*, socklen_t ) { return 0; }
 
 // ── memory (#350's guard): each a single call, 0 when it fails ─────────────────────────────────────────────
 // PrivateUsage is the commit charge this process owns, the Windows analogue of phys_footprint: it counts what the
-// process allocated whether or not it is resident, which is the quantity that runs a machine out of memory.
-std::uint64_t mem_footprint()
+// process allocated whether or not it is resident, which is the quantity that runs a machine out of memory. commitCharge
+// reads it, or with `peak` PeakPagefileUsage (the peak of PagefileUsage, which equals PrivateUsage); 0 when the call fails.
+static std::uint64_t commitCharge( bool peak )
 {
     PROCESS_MEMORY_COUNTERS_EX counters {};
     counters.cb = sizeof( counters );
@@ -2813,8 +2814,10 @@ std::uint64_t mem_footprint()
     {
         return 0;
     }
-    return std::uint64_t( counters.PrivateUsage );
+    return std::uint64_t( peak ? counters.PeakPagefileUsage : counters.PrivateUsage );
 }
+std::uint64_t mem_footprint() { return commitCharge( false ); }
+std::uint64_t mem_footprint_peak() { return commitCharge( true ); }
 
 std::uint64_t mem_physical()
 {

@@ -159,8 +159,9 @@ case "$FOR_INNER" in
     *)          ok "for verb: returned non-empty text result";;
 esac
 
-# Assert the result contains <sigs> — the core element that packSignatures emits
-if echo "$FOR_INNER" | grep -q "<sigs>"; then
+# Assert the result contains <sigs> — the core element that packSignatures emits. `<sigs[ >]`: the open tag may carry
+# attributes (lane/hrr: a reordered head discloses ` files_first=N`), the same way detailcheck accepts it.
+if echo "$FOR_INNER" | grep -qE "<sigs[ >]"; then
     ok "for verb: result contains <sigs> element"
 else
     no "for verb: result does NOT contain <sigs> — got: $( echo "$FOR_INNER" | head -c 200 )"

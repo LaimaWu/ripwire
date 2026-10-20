@@ -23,13 +23,18 @@
 # gate — that band is the recurrence guard, and it is the reason this file asserts a band and never a
 # bit-exact token count (house rule: float/estimate assertions get a tolerance, never bit-equality).
 #
-# BY-DESIGN BREAK (rule 4; owner ruling 2026-10-09, option B; reports/lego-charge.md fix round 5): #11 A7's old bar
-# "--token-budget=2000 --detail=20 --with-graph on src stays inside N x 2.36 x 1.15" no longer holds for that ONE shape.
-# With BOTH trailing sections under an explicit ceiling the answer KEEPS its ranked rows (a gold owner row, textual-12
-# Reactive._set, was cut when the two sections were reserved out of <sigs>) and goes over the budget, labelled
-# over_ceiling="1" with a TRUE reason and a next= on every cut: answers first, a budget never silently removes an
-# answer. The old assertion is kept as A7 twin wherever it must still hold (each flag alone at 2000, and both flags at
-# a budget the rows fit); A7B asserts the new contract for both-flags-over-budget.
+# BY-DESIGN BREAK (forbudget-soft (rule 4); owner decisions 2026-10-14). An explicit --token-budget=N on --for (and on
+# --pack-task, --from-trace, MCP for/explore) is a SOFT TARGET, not a byte ceiling: T = N x 2.36 x 0.90 bytes is charged
+# against the <sigs> ROWS only, rows are added in rank order while they fit T (the rank 1..4 floor always ships), the cut
+# carries next=, est_tokens may exceed N, and nothing is labelled over_ceiling= or dropped from the header for it (no rung
+# zero, no "(ceiling)" drop, no trailing-section reserve, no paid/unpaid continuation). The arms that asserted the old
+# byte promise (delivered <= N x 2.36 x 1.15, or over_ceiling="1"; the kept-rows / unpaid / header-floor reasons; the
+# reserve; rung zero) are REPLACED below by the invariants that guard the new behaviour on the same fixtures: ST (rows fit
+# T or are the floor, and a cut is maximal), NOLBL (no over_ceiling= on a soft lens), SEC (--detail / --with-graph never
+# remove a <sigs> row vs the bare run at the same N), RP (rows a rank prefix, monotone in N), NX (every cut carries a
+# next= that runs), HL (no legend clause, task echo or route= dropped). What still holds is kept unchanged: est_tokens
+# prices the delivered document exactly (#1, A7/A8 bands, A9/A10, §C1, #19), and every HARD ceiling keeps its twins
+# (--max-tokens #5/§C4, the map/payload --token-budget exit-3 gate #3/#12, --handoff #15(c)).
 #
 # Usage:  bash test/estchargecheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/estchargecheck.sh
 # Exits non-zero on any failure; prints PASS/FAIL per check, ALL PASS on success.
@@ -37,6 +42,8 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
+export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py: the soft-target readers, shared helpers (CHECKLIST 32)
+unset RIPWIRE_NO_HEAD_RR                  # lane hrr: the head reorder is ON here unless an arm's twin sets it (rwm)
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "estchargecheck: BIN=$BIN"
@@ -134,8 +141,10 @@ est_of(){ grep -aoE 'est_tokens=[0-9]+' "$1" | head -1 | grep -oE '[0-9]+'; }
 bytes_of(){ wc -c < "$1" | tr -d ' '; }
 
 # ── SHARED DEFINITIONS (moved here unchanged from #11 so the sections below can run as independent chains) ───────
-#    FOR_TASK and forest_of are read by #11, #14 and #15; KEPT_NOTE/FLOOR_NOTE by #11 and #11 A7R; sigs_unpaid_twin by
-#    #11 and its sweep. Defining them before the sections fork is the only reason they live here.
+#    FOR_TASK and forest_of are read by #11, #14 and #15; the forbudget-soft soft-target helpers (soft_rows / soft_st and
+#    the $TMP/soft_rows.py / soft_st.py they run, rows_prefix, ctx_root, SOFT_CLAUSE_*) by #11, its sweep, A7R/A7D, #15 and
+#    #19. Defining them before the sections fork is the only reason they live here. (forbudget-soft deleted KEPT_NOTE /
+#    FLOOR_NOTE / sigs_unpaid_twin with the hard-ceiling arms that read them: no section reads them any more.)
 FOR_TASK="serialize the map"
 # WEAK_QUERY is #11 A9's nonsense word. It is spelled ONLY here, at top level, never inside a function: the
 # repo's own bash functions are indexed symbols, so a section body that carried the word would make it match
@@ -172,41 +181,162 @@ print( m.group( 1 ).decode() if m else '' )
 PYX
 }
 
-KEPT_NOTE='[over_ceiling= is 1 on the root: the ranked rows are kept, not cut for the trailing sections'
-FLOOR_NOTE='[over_ceiling= is 1 on the root: the header floor'
-# THE <sigs> UNPAID TWIN (knob-honesty-068; orchestrator rulings 2026-10-07, PROCESS rules 4/5). A capped <sigs> under a
-# hard ceiling carries next= — the call that recovers its cut — and pays for it from its rows ONLY where that makes the
-# answer fit (ruling C3). Where it cannot (the rank 1..4 floor has nothing left to shed, or the answer lands past its ceiling
-# paid or not) no row is dropped for it: the recovery handle ALWAYS ships, unpaid, and the document may then land past the
-# allowance, and only if it says so. This is not a wider allowance: every condition of the old bound still holds for
-# everything except the disclosed handle. Train 26c: the single A7 arm it guarded is superseded by the lane's A7 twin loop +
-# A7B below; the twin itself still serves the sweep and the floor arm. sigs_unpaid_twin FILE ALLOW → exit 0 iff ALL of: the root carries
-# over_ceiling="1"; the legend carries the unpaid clause defining it; <sigs> is capped and carries next="--for=…";
-# est_tokens is positive and prices the delivered bytes inside the 2.00-4.20 B/tok band (honest: it moved with the handle);
-# and the document WITHOUT the handle and its label (the next= attribute, over_ceiling="1", the clause) is within ALLOW —
-# the old bound, intact — or carries the ladder's last-rung disclosure (the header floor alone exceeds the budget: the one
-# overshoot the old bound already admitted). The rows are the ones the cut alone leaves (the C3 arm below pins them).
-sigs_unpaid_twin(){ python3 - "$1" "$2" <<'PYF'
-import sys, re
-d = open( sys.argv[ 1 ], 'rb' ).read().decode( 'utf-8', 'replace' ); allow = int( sys.argv[ 2 ] )
-clause = ' [over_ceiling=1 also when the sigs next= rides unpaid: no row is dropped to pay for it on an answer that would not fit either way]'
-root = re.search( r'<ctx [^>]*>', d ); sigs = re.search( r'<sigs [^>]*>', d )
-why = []
-if not root or ' over_ceiling="1"' not in root.group( 0 ): why.append( 'no root over_ceiling="1"' )
-if clause not in d: why.append( 'no unpaid clause' )
-nxt = re.search( r' next="--for=[^"]*"', sigs.group( 0 ) ) if sigs else None
-if not sigs or ' capped="1"' not in sigs.group( 0 ): why.append( '<sigs> not capped' )
-if not nxt: why.append( '<sigs> carries no next=' )
-est = re.search( r' est_tokens="(\d+)"', root.group( 0 ) ) if root else None
-b = len( d.encode( 'utf-8' ) )
-if not est or int( est.group( 1 ) ) <= 0 or not ( 200 <= b * 100 // int( est.group( 1 ) ) <= 420 ): why.append( 'est_tokens absent or out of band' )
-rest = b - ( len( nxt.group( 0 ) ) if nxt else 0 ) - len( ' over_ceiling="1"' ) - len( clause )
-lastRung = '[over_ceiling= is 1 on the root: ' in d   # either last-rung reason: the header floor, or (lego-charge) the kept rows
-if rest > allow and not lastRung: why.append( f'{rest} B without the handle > {allow} B (and no last-rung disclosure)' )
-print( '; '.join( why ) if why else f'{b} B, {rest} B without the handle <= {allow} B, est_tokens={est.group( 1 )}' )
-sys.exit( 1 if why else 0 )
-PYF
-}
+# ── forbudget-soft (rule 4): THE SOFT TARGET's invariants, shared by the A7/A7B/sweep/floor/C3/A7R/#15/#19 arms below. An
+# explicit --token-budget=N on --for charges T = N x 2.36 x 0.90 bytes (serialize.h kMinBytesPerToken x kBudgetHeadroom)
+# against the rows inside <sigs> ONLY — never the header, a disclosure or a trailing section — so the old "delivered <= N x
+# 2.36 x 1.15 or over_ceiling=1" bar is gone by design (est_tokens may exceed N, unlabelled) and these replace it:
+#   soft_rows FILE        the served <sigs> rows as p:l:n in RANK order (r=), one per line; exit 3 when there is no <sigs>
+#   soft_st FILE N [REF]  ST: the bytes inside <sigs> (the rows as printed) fit T, or the rows are only the rank 1..4 floor;
+#                         with REF (the same shape's complete, no-budget answer) a cut must also be MAXIMAL — in the ladder's
+#                         own currency (serialize.h entryCost: a row's printed bytes plus the zero cx=/ccx=/in= the lean
+#                         spelling elides), the served rows plus REF's next row would cross T (160 B slack, as
+#                         forsoftbudgetcheck's (ST)). Prints "OK|BAD ...", exit 0|1.
+#   rows_prefix A B       RP: rows file A is a non-empty rank prefix of rows file B
+#   ctx_root FILE         the <ctx ...> root open tag (an over_ceiling= is read off the root only: a <b> can carry its own)
+cat >"$TMP/soft_rows.py" <<'PY'
+import re, sys
+s = open( sys.argv[ 1 ], encoding='utf-8', errors='replace' ).read()
+m = re.search( r'<sigs\b[^>]*>(.*?)</sigs>', s, re.S )
+if not m: sys.exit( 3 )
+rows = []
+for d in re.finditer( r'<d ([^>]*)>', m.group( 1 ) ):
+    a = d.group( 1 )
+    g = lambda k: ( re.search( r'\b' + k + r'="([^"]*)"', a ) or [ None, "?" ] )[ 1 ]
+    r = g( "r" )
+    rows.append( ( int( r ) if r.isdigit() else 10**9, g( "p" ) + ":" + g( "l" ) + ":" + g( "n" ) ) )
+rows.sort()
+print( "\n".join( x[ 1 ] for x in rows ) )
+PY
+cat >"$TMP/soft_st.py" <<'PY'
+import re, sys
+def charge( a, printed ):
+    return printed + sum( n for k, n in ( ( 'cx', 7 ), ( 'ccx', 8 ), ( 'in', 7 ) ) if not re.search( r'\b' + k + r'="', a ) )
+def rb( p ):
+    s = open( p, encoding='utf-8', errors='replace' ).read()
+    m = re.search( r'<sigs\b[^>]*>(.*?)</sigs>', s, re.S )
+    if not m: return None
+    inner = m.group( 1 ); rows = []; elided = 0
+    for d in re.finditer( r'<d ([^>]*)>.*?</d>|<d ([^>]*)/>', inner, re.S ):
+        a = d.group( 1 ) or d.group( 2 )
+        r = re.search( r'\br="(\d+)"', a )
+        printed = len( d.group( 0 ).encode() ); c = charge( a, printed ); elided += c - printed
+        rows.append( ( int( r.group( 1 ) ) if r else 10**9, c ) )
+    rows.sort()
+    return len( inner.encode() ), len( inner.encode() ) + elided, rows
+def row_ids( p ):   # soft_rows.py's list, for an in-process caller (the sweep)
+    s = open( p, encoding='utf-8', errors='replace' ).read()
+    m = re.search( r'<sigs\b[^>]*>(.*?)</sigs>', s, re.S )
+    if not m: return []
+    rows = []
+    for d in re.finditer( r'<d ([^>]*)>', m.group( 1 ) ):
+        a = d.group( 1 )
+        g = lambda k: ( re.search( r'\b' + k + r'="([^"]*)"', a ) or [ None, "?" ] )[ 1 ]
+        r = g( "r" )
+        rows.append( ( int( r ) if r.isdigit() else 10**9, g( "p" ) + ":" + g( "l" ) + ":" + g( "n" ) ) )
+    rows.sort()
+    return [ x[ 1 ] for x in rows ]
+def verdict( path, n, refpath=None ):
+    a = rb( path ); T = int( int( n ) * 2.36 * 0.90 )
+    if a is None: return False, "BAD no <sigs>"
+    pb, ab, ar = a; k = len( ar )
+    fits = pb <= T or k <= 4
+    if refpath is None:
+        return fits, "%s fits=%d rows=%d bytes=%d T=%d" % ( "OK" if fits else "BAD", fits, k, pb, T )
+    ref = rb( refpath )
+    if ref is None: return False, "BAD no <sigs> in the reference answer"
+    rr = ref[ 2 ]
+    if k >= len( rr ):
+        return fits, "%s fits=%d rows=%d/%d bytes=%d T=%d complete" % ( "OK" if fits else "BAD", fits, k, len( rr ), pb, T )
+    # round C (forbudget-soft, owner decision 2026-10-14: RESERVE SECTIONS FIRST; rule 4): the trailing sections are served first
+    # and the rows past the target cut fill what they leave of T, so maximality is judged against T less their bytes (U: all
+    # after </sigs> but </ctx>, and the <hdr> rows — less the --detail bodies, the caller's own request under its own ceiling:
+    # on a run without bundle= on the root the <bodies> element is the --detail section)
+    s = open( path, encoding='utf-8', errors='replace' ).read()
+    U = ( len( s.split( '</sigs>', 1 )[ 1 ].encode() ) - len( '</ctx>' ) ) if '</sigs>' in s else 0
+    U += sum( len( h.encode() ) for h in re.findall( r'<hdr [^>]*/>', s.split( '<sigs', 1 )[ 0 ] ) )
+    # the tail size: test/lib/softbudget.py, shared by the five soft-target readers (the FIX1 R1 tail floor)
+    import os as _os, sys as _sys; _sys.path.insert( 0, _os.environ[ "RIPWIRE_TESTLIB" ] ); from softbudget import tail_size
+    U += max( 0, tail_size( open( refpath, encoding='utf-8', errors='replace' ).read() ) - tail_size( s ) )
+    root = re.match( r'<ctx [^>]*>', s )
+    if root and ' bundle="' not in root.group( 0 ):
+        bm = re.search( r'<bodies\b.*?</bodies>', s, re.S )
+        U -= len( bm.group( 0 ).encode() ) if bm else 0
+    maximal = ab + rr[ k ][ 1 ] > T - U - 160
+    # FIX2 C1 (rule 4): the upper-bound twin of maximality (test/lib/softbudget.py upper_bound): rows past the floor stop where T less
+    # the other sections and the tail reserve runs out; RED on a binary that ignores the tail reserve
+    from softbudget import upper_bound
+    upper, udet = upper_bound( s, open( refpath, encoding='utf-8', errors='replace' ).read(), T, k, len( rr ), U )
+    return fits and maximal and upper, "%s fits=%d maximal=%d upper=%d rows=%d/%d bytes=%d charged=%d next=%d T=%d U=%d%s" % (
+        "OK" if fits and maximal and upper else "BAD", fits, maximal, upper, k, len( rr ), pb, ab, rr[ k ][ 1 ], T, U, "" if upper else " -- " + udet )
+if __name__ == "__main__":
+    good, msg = verdict( sys.argv[ 1 ], sys.argv[ 2 ], sys.argv[ 3 ] if len( sys.argv ) > 3 else None )
+    print( msg ); sys.exit( 0 if good else 1 )
+PY
+# #11 A7 sweep's one-pass judge and #18's rung-zero corpus writer: helper scripts in $TMP, written once here like soft_st.py
+# (moved out of est_11_sweep / est_18 unchanged at train 28, so each section reads as its arms)
+cat >"$TMP/a7s_judge.py" <<'PYS'
+import re, sys
+sys.path.insert( 0, sys.argv[ 2 ] )
+import soft_st
+runs = badn = cut = over = 0; bad = []; prev = {}
+for line in open( sys.argv[ 1 ] ):
+    label, n, rc, f, ref = line.split()
+    n = int( n ); runs += 1; why = []
+    d = open( f, encoding='utf-8', errors='replace' ).read()
+    root = re.search( r'^<ctx [^>]*>', d ); root = root.group( 0 ) if root else ''
+    est = re.search( r' est_tokens="(\d+)"', root )
+    if rc != '0' or not root or not est: why.append( 'exit-%s/no-root-or-est' % rc )
+    if ' over_ceiling=' in root or '[over_ceiling= is 1 on the root: ' in d: why.append( 'labelled' )
+    good, msg = soft_st.verdict( f, n, ref )
+    if not good: why.append( 'ST:[%s]' % msg )
+    rows = soft_st.row_ids( f )
+    if not rows or ( label in prev and rows[ :len( prev[ label ] ) ] != prev[ label ] ): why.append( 'not-monotone' )
+    prev[ label ] = rows
+    sigs = re.search( r'<sigs [^>]*>', d ); sigs = sigs.group( 0 ) if sigs else ''
+    sh = re.search( r' shown="(\d+)"', sigs ); tot = re.search( r' total="(\d+)"', sigs )
+    if sh and tot and int( sh.group( 1 ) ) < int( tot.group( 1 ) ):
+        cut += 1
+        if ' next="--for=' not in sigs: why.append( 'cut-without-next' )
+    if est and int( est.group( 1 ) ) > n: over += 1
+    if why:
+        badn += 1
+        if len( bad ) < 6: bad.append( '%s@%d:[%s]' % ( label, n, ' '.join( why ) ) )
+print( runs, badn, cut, over )
+for b in bad: print( b )
+PYS
+cat >"$TMP/rz_corpus.py" <<'PYRZ'
+import os, sys
+out   = sys.argv[ 1 ]
+lines = [ "def widgetPingBoxRouter( alpha, beta ):",
+          '    """Widget ping box router: route every alpha reading onto the beta box."""',
+          "    total = 0" ]
+for j in range( 26 ):
+    lines.append( f"    total = total + alpha * {j} - beta * {j} + widgetPingStep{j % 4}( total, {j} )" )
+lines.append( "    return total" )
+with open( os.path.join( out, "router.py" ), "w" ) as fh:
+    fh.write( "\n".join( lines ) + "\n" )
+with open( os.path.join( out, "steps.py" ), "w" ) as fh:
+    for j in range( 4 ):
+        fh.write( f'def widgetPingStep{j}( total, step ):\n    """Step {j}."""\n    return total + step\n\n' )
+PYRZ
+soft_rows(){ python3 "$TMP/soft_rows.py" "$1"; }
+soft_st(){ python3 "$TMP/soft_st.py" "$@"; }
+rows_prefix(){ [ -s "$1" ] && [ "$( head -n "$( wc -l < "$1" | tr -d ' ' )" "$2" )" = "$( cat "$1" )" ]; }
+# head round-robin (lane hrr, train 31; PROCESS rule 4, orchestrator ruling FIX1 §4(a)): the routed no-budget --for answer reorders
+# its first 8 rows (files_first=), so a budgeted answer's rows are an ORDER prefix of it only in score order. Each #11 arm that
+# asserts that order prefix runs twice (HRR=twin, then HRR=on): the twin is the arm UNCHANGED with RIPWIRE_NO_HEAD_RR=1 on every
+# call (rwm); with the reorder on, the order-prefix clause against a no-budget answer becomes set_prefix A REF REF_SO — the rows
+# are the score-order twin's first K rows as a SET (no gap, no repeat for the continuation), every other clause unchanged.
+rwm(){ if [ "${HRR:-on}" = twin ]; then RIPWIRE_NO_HEAD_RR=1 rw "$@"; else rw "$@"; fi; }
+rwcallm(){ if [ "${HRR:-on}" = twin ]; then RIPWIRE_NO_HEAD_RR=1 rwcall "$@"; else rwcall "$@"; fi; }
+set_prefix(){ python3 "$RIPWIRE_TESTLIB/softbudget.py" setprefix "$1" "$2" "$3"; }
+hrr_tag(){ if [ "${HRR:-on}" = twin ]; then printf ' [RIPWIRE_NO_HEAD_RR=1 twin]'; else printf ' [head round-robin on: set prefix]'; fi; }
+# the no-budget order-prefix clause of an arm: A against REF (this mode's no-budget answer) and REF_SO (the twin's)
+nobudget_prefix(){ if [ "${HRR:-on}" = twin ]; then rows_prefix "$1" "$2"; else set_prefix "$1" "$2" "$3"; fi; }
+ctx_root(){ grep -aoE '^<ctx [^>]*>' "$1" | head -1; }
+# the soft-target legend clauses (verbs_for.h / graphlegend.h): the compact dialect's reading of budget_tokens=, and the full one's
+SOFT_CLAUSE_COMPACT='budget_tokens= the soft row target asked (rows stop once it is reached)'
+SOFT_CLAUSE_FULL='[budget_tokens=: the soft token target; rows stop once it is reached, the rank 1..4 rows and every disclosure always ship, so est_tokens may exceed it]'
 
 est_1(){
 # ── #1: the CHARGE band. For every payload shape, bytes/est_tokens must sit inside the calibrated B/tok
@@ -713,97 +843,116 @@ for label in for_graph for_detail for_both; do
         || no "#11 A7/A8 $label: est_tokens=$E did not move above the bare bundle's $E_FOR — that section is uncharged"
 done
 
-# A7 — and --token-budget must SHAPE the bodies, not just the signatures. D10: --for trims to fit, exit 0.
-# The pre-fix binary streamed 68 035 B here against a 4 248 B ceiling; the bar is the stated ceiling plus the
-# documented single-entry overshoot tolerance (serialize.h kCeilingFirstEntryTolerance = 1.15).
-# BY-DESIGN BREAK (owner ruling 2026-10-09, option B — see this file's header): the old arm ran ONLY the both-flags shape
-# at 2000, which now keeps its rows and goes over on purpose. A7 TWIN keeps the old assertion, unchanged in substance
-# (exit 0, delivered <= the allowance), on every shape where it must still hold: each trailing flag alone at 2000, and
-# both flags at 5000 where the ranked rows fit (measured at fix round 5: 4727 / 4769 / 12337 B vs 5428 / 5428 / 13570 B).
+# (The soft-target helpers — soft_rows / soft_st / rows_prefix / ctx_root and SOFT_CLAUSE_* — live in SHARED DEFINITIONS
+# above: the sweep, A7R/A7D, #15 and #19 sections read them too.)
+
+# A7 TWIN — REPLACED (forbudget-soft (rule 4)). Was: exit 0 and delivered <= N x 2.36 x 1.15 for --detail=20 / --with-graph at
+# 2000 and both flags at 5000 (the trailing sections bounded by the budget). Under a soft target the trailing sections are
+# funded from what the rows left of T and the document may land past N, unlabelled — so the byte bar asserts the deleted
+# contract. The invariant that must hold on the same three shapes: exit 0; NOLBL (no over_ceiling= on the root); SEC (the
+# trailing flag never removes a <sigs> row — the bare run's rows at the same N are a rank prefix of the shape's rows); and ST
+# (the shape's rows fit T or are the floor, and a cut is maximal against the same shape's no-budget answer from A7/A8 above).
+# MEASURED on d099ec21: 20/20/40-row prefixes, rows identical with and without the flags; the base binary (d4325a8c) served
+# 10 / 11 rows with --detail=20 / --with-graph against the bare run's 14 — the reserve the soft target deleted.
 TBF=2000
-ALLOW="$( awk "BEGIN{printf \"%d\", $TBF*2.36*1.15}" )"
-for tw in "2000:--detail=20" "2000:--with-graph" "5000:--detail=20 --with-graph"; do
-    tw_n="${tw%%:*}"; tw_args="${tw#*:}"
-    tw_allow="$( awk "BEGIN{printf \"%d\", $tw_n*2.36*1.15}" )"
+ALLOW="$( awk "BEGIN{printf \"%d\", $TBF*2.36*1.15}" )"   # still read by the no-budget --detail arm below
+# lane hrr (rule 4): the score-order twins of the no-budget references the A7 twin / A7B arms read
+for entry in "for:" "for_graph:--with-graph" "for_detail:--detail=20" "for_both:--detail=20 --with-graph"; do
     # shellcheck disable=SC2086
-    rw src --for="$FOR_TASK" --token-budget=$tw_n $tw_args >"$TMP/f_tw.out" 2>/dev/null
-    rc_tw=$?
-    tw_b="$( bytes_of "$TMP/f_tw.out" )"
-    { [ "$rc_tw" -eq 0 ] && [ -n "$tw_b" ] && [ "$tw_b" -le "$tw_allow" ]; } 2>/dev/null \
-        && ok "#11 A7 twin --for --token-budget=$tw_n $tw_args: $tw_b B within the $tw_allow B allowance (exit 0, SHAPED)" \
-        || no "#11 A7 twin --for --token-budget=$tw_n $tw_args: ${tw_b:-?} B vs the $tw_allow B allowance, exit $rc_tw — the budget does not bound the appended sections"
+    RIPWIRE_NO_HEAD_RR=1 rw src --for="$FOR_TASK" ${entry#*:} >"$TMP/f_${entry%%:*}_so.out" 2>/dev/null
 done
-# A7B — THE NEW CONTRACT for both flags OVER the budget (owner ruling, option B). Same query, same 2000 tokens. It must:
-#   (premise) deliver past the allowance at exit 0 — else the shape now fits and this arm must be re-anchored, not passed;
-#   (rows)    keep every <sigs> row the same budget shows WITHOUT the trailing flags, and those rows are the uncapped
-#             answer's top rows in its order (no higher-ranked row of the uncapped answer is missing) — the trailing
-#             sections never remove an answer row;
-#   (label)   carry over_ceiling="1" on the root;
-#   (reason)  name the reason TRUTHFULLY: the last-rung note is the kept-rows one, not "the header floor ... exceeds",
-#             and what it names is there — the header alone fits the allowance, and <sigs> rows, the graph block and a
-#             first --detail body are all present;
-#   (next)    a cut first body carries a next= that recovers exactly the lines it cut (checked on A7R's corpus below,
-#             whose first body is longer than the floor; here a first body served whole carries no truncated=).
-rows_of(){ grep -aoE '<d [^>]*>' "$1" | sed -nE 's/.* n="([^"]*)".*/\1/p'; }
-rw src --for="$FOR_TASK" --token-budget=$TBF --detail=20 --with-graph >"$TMP/f_tb.out" 2>"$TMP/f_tb.err"
+for HRR in twin on; do
+rwm src --for="$FOR_TASK" --token-budget=$TBF >"$TMP/f_tbp.out" 2>/dev/null
+rwm src --for="$FOR_TASK" --token-budget=5000 >"$TMP/f_tbp5.out" 2>/dev/null
+for tw in "2000:--detail=20:f_tbp:f_for_detail" "2000:--with-graph:f_tbp:f_for_graph" "5000:--detail=20 --with-graph:f_tbp5:f_for_both"; do
+    tw_n="${tw%%:*}"; tw_rest="${tw#*:}"; tw_args="${tw_rest%%:*}"; tw_rest="${tw_rest#*:}"; tw_bare="${tw_rest%%:*}"; tw_ref="${tw_rest#*:}"
+    [ "$HRR" = twin ] && tw_ref="${tw_ref}_so"
+    # shellcheck disable=SC2086
+    rwm src --for="$FOR_TASK" --token-budget=$tw_n $tw_args >"$TMP/f_tw.out" 2>/dev/null
+    rc_tw=$?
+    tw_root="$( ctx_root "$TMP/f_tw.out" )"
+    soft_rows "$TMP/f_tw.out" >"$TMP/tw.rows" 2>/dev/null; soft_rows "$TMP/$tw_bare.out" >"$TMP/tw_bare.rows" 2>/dev/null
+    tw_st="$( soft_st "$TMP/f_tw.out" "$tw_n" "$TMP/$tw_ref.out" )"; tw_st_rc=$?
+    tw_why=""
+    { [ "$rc_tw" -eq 0 ] && [ -n "$tw_root" ]; } || tw_why="$tw_why exit-$rc_tw-or-no-root"
+    [ -n "$tw_root" ] && [ "${tw_root#* over_ceiling=}" = "$tw_root" ] || tw_why="$tw_why over_ceiling-on-a-soft-target"
+    # round C (rule 4): SEC ("the trailing flag never removes a <sigs> row") is the by-design break — a trailing section is
+    # reserved before the rows past the cut — so the rows clause is RP: the shape's rows are a rank prefix of its own
+    # no-budget answer's rows (the cut and ST above/below keep the rest)
+    soft_rows "$TMP/$tw_ref.out" >"$TMP/tw_ref.rows" 2>/dev/null
+    soft_rows "$TMP/${tw_ref%_so}_so.out" >"$TMP/tw_ref_so.rows" 2>/dev/null
+    nobudget_prefix "$TMP/tw.rows" "$TMP/tw_ref.rows" "$TMP/tw_ref_so.rows" || tw_why="$tw_why rows:$( wc -l < "$TMP/tw.rows" | tr -d ' ' )-not-a-rank-prefix-of-the-no-budget-answer"
+    [ "$tw_st_rc" -eq 0 ] || tw_why="$tw_why ST:[$tw_st]"
+    [ -z "$tw_why" ] \
+        && ok "#11 A7 twin (forbudget-soft, round C)$( hrr_tag ) --for --token-budget=$tw_n $tw_args: exit 0, no over_ceiling=, $( wc -l < "$TMP/tw.rows" | tr -d ' ' ) rows a rank prefix of the no-budget answer (bare: $( wc -l < "$TMP/tw_bare.rows" | tr -d ' ' )) ($tw_st)" \
+        || no "#11 A7 twin (forbudget-soft)$( hrr_tag ) --for --token-budget=$tw_n $tw_args —$tw_why"
+done
+# A7B — REPLACED (forbudget-soft (rule 4)). Was the owner-option-B contract for both flags OVER the budget: a premise past the
+# allowance, over_ceiling="1", the kept-rows reason. All three die with the ceiling; its ROWS clause is the soft target's own
+# invariant and is kept: --detail=20 --with-graph at 2000 keeps every <sigs> row of the flagless 2000 answer, and its rows are
+# the uncapped answer's top rows in rank order (no higher-ranked row missing). Plus NOLBL, both trailing sections present, and
+# a cut first body still carries the next= that serves the rest.
+rwm src --for="$FOR_TASK" --token-budget=$TBF --detail=20 --with-graph >"$TMP/f_tb.out" 2>"$TMP/f_tb.err"
 rc_ftb=$?
-rw src --for="$FOR_TASK" --token-budget=$TBF >"$TMP/f_tbp.out" 2>/dev/null
-FTB="$( bytes_of "$TMP/f_tb.out" )"
-a7b_root="$( grep -aoE '^<ctx [^>]*>' "$TMP/f_tb.out" | head -1 )"
-a7b_hdr="$( python3 -c 'import sys; d=open(sys.argv[1],"rb").read(); print(d.find(b"<sigs"))' "$TMP/f_tb.out" )"
-rows_of "$TMP/f_tb.out" >"$TMP/a7b.rows"; rows_of "$TMP/f_tbp.out" >"$TMP/a7b.plain"; rows_of "$TMP/f_for.out" >"$TMP/a7b.unc"
+a7b_root="$( ctx_root "$TMP/f_tb.out" )"
+soft_rows "$TMP/f_tb.out" >"$TMP/a7b.rows" 2>/dev/null; soft_rows "$TMP/f_tbp.out" >"$TMP/a7b.plain" 2>/dev/null; soft_rows "$TMP/f_for.out" >"$TMP/a7b.unc" 2>/dev/null
+soft_rows "$TMP/f_for_so.out" >"$TMP/a7b.unc_so" 2>/dev/null; [ "$HRR" = twin ] && cp "$TMP/a7b.unc_so" "$TMP/a7b.unc"
 a7b_n="$( wc -l < "$TMP/a7b.rows" | tr -d ' ' )"; a7b_pn="$( wc -l < "$TMP/a7b.plain" | tr -d ' ' )"
 a7b_why=""
-{ [ "$rc_ftb" -eq 0 ] && [ -n "$a7b_root" ] && [ -n "$FTB" ] && [ "$FTB" -gt "$ALLOW" ]; } 2>/dev/null \
-    || a7b_why="$a7b_why premise:${FTB:-?}B<=${ALLOW}B-or-exit-$rc_ftb(re-anchor)"
-{ [ "$a7b_pn" -ge 1 ] && [ "$a7b_n" -ge "$a7b_pn" ] && [ -z "$( grep -vxF -f "$TMP/a7b.rows" "$TMP/a7b.plain" )" ] \
-  && [ "$( head -n "$a7b_n" "$TMP/a7b.unc" )" = "$( cat "$TMP/a7b.rows" )" ]; } 2>/dev/null \
-    || a7b_why="$a7b_why rows:$a7b_n-vs-plain-$a7b_pn-or-not-the-uncapped-prefix"
-[ "${a7b_root#* over_ceiling=\"1\"}" != "$a7b_root" ] || a7b_why="$a7b_why no-over_ceiling"
-{ grep -aqF "$KEPT_NOTE" "$TMP/f_tb.out" && ! grep -aqF "$FLOOR_NOTE" "$TMP/f_tb.out" && [ "${a7b_hdr:--1}" -gt 0 ] && [ "$a7b_hdr" -le "$ALLOW" ] \
-  && grep -aq '<graph ' "$TMP/f_tb.out" && grep -aqE '<bodies [^>]*><b ' "$TMP/f_tb.out" && [ "$a7b_n" -ge 1 ]; } 2>/dev/null \
-    || a7b_why="$a7b_why reason:not-the-kept-rows-note-or-untrue(header ${a7b_hdr:-?}B)"
+{ [ "$rc_ftb" -eq 0 ] && [ -n "$a7b_root" ]; } || a7b_why="$a7b_why exit-$rc_ftb-or-no-root"
+# round C (rule 4): "keeps every flagless row" is the by-design break (the graph block and the first body are reserved before the
+# rows past the cut); the uncapped answer's rank-prefix clause below is the rows invariant
+nobudget_prefix "$TMP/a7b.rows" "$TMP/a7b.unc" "$TMP/a7b.unc_so" || a7b_why="$a7b_why rows:not-the-uncapped-answer's-rank-prefix"
+[ -n "$a7b_root" ] && [ "${a7b_root#* over_ceiling=}" = "$a7b_root" ] || a7b_why="$a7b_why over_ceiling-on-a-soft-target"
+{ grep -aq '<graph ' "$TMP/f_tb.out" && grep -aqE '<bodies [^>]*><b ' "$TMP/f_tb.out"; } || a7b_why="$a7b_why graph-or-first-body-missing"
 a7b_b1="$( grep -aoE '<b [^>]*>' "$TMP/f_tb.out" | head -1 )"
 { [ -n "$a7b_b1" ] && { [ "${a7b_b1#* truncated=\"1\"}" = "$a7b_b1" ] || [ "${a7b_b1#* next=\"--expand=}" != "$a7b_b1" ]; }; } \
     || a7b_why="$a7b_why first-body-cut-without-next"
 [ -z "$a7b_why" ] \
-    && ok "#11 A7B (by-design, owner option B) --token-budget=$TBF --detail=20 --with-graph: $FTB B past the $ALLOW B allowance, over_ceiling=\"1\", keeps all $a7b_pn rows of the flagless budget answer ($a7b_n rows, the uncapped answer's top), reason names the kept rows (header ${a7b_hdr} B fits alone)" \
-    || no "#11 A7B (by-design, owner option B) --token-budget=$TBF --detail=20 --with-graph —$a7b_why"
-# A7B-X (fix round 6, checklist 25): the kept-rows note rides INSIDE the header XML comment, so the answers that carry it
-# must be well-formed XML — its first spelling held two flag names with their leading double hyphens and every such
-# answer failed xmllint ("Double hyphen within comment"), on the compact default and on --legend=full alike.
+    && ok "#11 A7B (forbudget-soft, round C)$( hrr_tag ) --token-budget=$TBF --detail=20 --with-graph: $a7b_n rows (flagless: $a7b_pn), the uncapped answer's rank prefix, no over_ceiling=, graph + first body served" \
+    || no "#11 A7B (forbudget-soft)$( hrr_tag ) --token-budget=$TBF --detail=20 --with-graph —$a7b_why"
+done   # HRR twin / on (lane hrr)
+# A7B-X — REPLACED (forbudget-soft (rule 4)). Was: the kept-rows note rides and the answer still parses (fix round 6: its first
+# spelling broke xmllint). The note is gone; the disclosure that now rides the header comment of a soft answer is the reading
+# of budget_tokens= as a soft target, compact and full dialect. Both answers must carry their clause and stay well-formed XML.
 if command -v xmllint >/dev/null 2>&1; then
     rw src --for="$FOR_TASK" --token-budget=$TBF --detail=20 --with-graph --legend=full >"$TMP/f_tbl.out" 2>/dev/null
     a7x_bad=""
+    grep -aqF "$SOFT_CLAUSE_COMPACT" "$TMP/f_tb.out" || a7x_bad="$a7x_bad f_tb:no-soft-target-clause"
+    grep -aqF "$SOFT_CLAUSE_FULL" "$TMP/f_tbl.out" || a7x_bad="$a7x_bad f_tbl:no-soft-target-clause"
     for f in f_tb f_tbl; do
-        grep -aqF "$KEPT_NOTE" "$TMP/$f.out" || a7x_bad="$a7x_bad $f:no-kept-rows-note(premise)"
+        [ -s "$TMP/$f.out" ] || a7x_bad="$a7x_bad $f:empty"
         xmllint --noout "$TMP/$f.out" 2>/dev/null || a7x_bad="$a7x_bad $f:xmllint-rejected"
     done
     [ -z "$a7x_bad" ] \
-        && ok "#11 A7B-X the kept-rows answers (compact + --legend=full) carry the note and are well-formed XML" \
-        || no "#11 A7B-X the kept-rows note breaks the answer's XML or no longer rides —$a7x_bad"
+        && ok "#11 A7B-X (forbudget-soft) the soft-target answers (compact + --legend=full) define budget_tokens= as a soft target and are well-formed XML" \
+        || no "#11 A7B-X (forbudget-soft) the soft-target disclosure is missing or breaks the answer's XML —$a7x_bad"
 else
     printf '  SKIP  #11 A7B-X xmllint not installed\n'
 fi
-# A7B-N (fix round 6, checklist 1 — the negative of A7B's reason): the kept-rows note is chosen only when the header as
-# built fits the allowance by itself. Same both-flags shape, but a 700-char task at 300 tokens: the verbatim task echo
-# alone puts the header past the 814 B allowance, so the TRUE reason is the header floor and the kept-rows note would be
-# false. Red on the mutant that drops the header-fits term from keptTrailingOverrun (review mutant MX).
+# A7B-N — REPLACED (forbudget-soft (rule 4)). Was the negative of A7B's reason: a 700-char task at 300 tokens puts the header
+# alone past the allowance, so the last rung must name the header floor. There is no ladder on a soft target — so the same
+# shape now pins HL: the root keeps task= VERBATIM (all 700 chars) and route=, nothing is dropped "(ceiling)", no task_echo /
+# legend-clause drop note, no last-rung note, no over_ceiling=; the rank 1..4 floor ships and the <sigs> cut carries next=.
 A7N_TASK="$( python3 -c 'w="serialize the map rows into the output buffer while keeping the row order stable and flushing the writer "; print((w*10)[:700].strip())' )"
 rw src --for="$A7N_TASK" --token-budget=300 --detail=3 --with-graph >"$TMP/f_tbn.out" 2>/dev/null
 rc_a7n=$?
-a7n_allow="$( awk "BEGIN{printf \"%d\", 300*2.36*1.15}" )"
-a7n_root="$( grep -aoE '^<ctx [^>]*>' "$TMP/f_tbn.out" | head -1 )"
-a7n_hdr="$( python3 -c 'import sys; d=open(sys.argv[1],"rb").read(); print(d.find(b"<sigs"))' "$TMP/f_tbn.out" )"
+a7n_root="$( ctx_root "$TMP/f_tbn.out" )"
+a7n_sigs="$( grep -aoE '<sigs [^>]*>' "$TMP/f_tbn.out" | head -1 )"
+a7n_sh="$( printf '%s' "$a7n_sigs" | sed -nE 's/.* shown="([0-9]+)".*/\1/p' )"; a7n_tot="$( printf '%s' "$a7n_sigs" | sed -nE 's/.* total="([0-9]+)".*/\1/p' )"
 a7n_why=""
-{ [ "$rc_a7n" -eq 0 ] && [ "${a7n_hdr:--1}" -gt "$a7n_allow" ]; } 2>/dev/null \
-    || a7n_why="$a7n_why premise:header-${a7n_hdr:-?}B-not-past-${a7n_allow}B-or-exit-$rc_a7n(re-anchor)"
-[ "${a7n_root#* over_ceiling=\"1\"}" != "$a7n_root" ] || a7n_why="$a7n_why no-over_ceiling"
-grep -aqF "$FLOOR_NOTE" "$TMP/f_tbn.out" || a7n_why="$a7n_why no-header-floor-note"
-! grep -aqF "$KEPT_NOTE" "$TMP/f_tbn.out" || a7n_why="$a7n_why kept-rows-note-false-here"
+{ [ "$rc_a7n" -eq 0 ] && [ -n "$a7n_root" ]; } || a7n_why="$a7n_why exit-$rc_a7n-or-no-root"
+python3 -c 'import re,sys; m=re.search(r" task=\"([^\"]*)\"", sys.argv[1]); sys.exit(0 if m and m.group(1)==sys.argv[2] else 1)' "$a7n_root" "$A7N_TASK" \
+    || a7n_why="$a7n_why task=-not-verbatim"
+[ "${a7n_root#* route=\"}" != "$a7n_root" ] || a7n_why="$a7n_why no-route="
+[ "${a7n_root#* over_ceiling=}" = "$a7n_root" ] || a7n_why="$a7n_why over_ceiling-on-a-soft-target"
+! grep -aqE '\(ceiling\)|task_echo: dropped|\[legend clauses:|\[over_ceiling= is 1 on the root' "$TMP/f_tbn.out" || a7n_why="$a7n_why header-dropped-for-the-budget"
+{ [ -n "$a7n_sh" ] && [ -n "$a7n_tot" ] && { [ "$a7n_sh" -ge 4 ] || [ "$a7n_sh" -eq "$a7n_tot" ]; } \
+  && { [ "$a7n_sh" -eq "$a7n_tot" ] || [ "${a7n_sigs#* next=\"--for=}" != "$a7n_sigs" ]; }; } 2>/dev/null \
+    || a7n_why="$a7n_why floor-or-next:shown=${a7n_sh:-?}/${a7n_tot:-?}"
 [ -z "$a7n_why" ] \
-    && ok "#11 A7B-N 700-char task at --token-budget=300 --detail=3 --with-graph: header ${a7n_hdr} B alone past the ${a7n_allow} B allowance, the last rung names the header floor, not the kept rows" \
-    || no "#11 A7B-N header-alone-over shape names the wrong reason —$a7n_why"
+    && ok "#11 A7B-N (forbudget-soft) 700-char task at --token-budget=300 --detail=3 --with-graph: task= verbatim, route= kept, no drop, no over_ceiling=, floor $a7n_sh of $a7n_tot rows with next=" \
+    || no "#11 A7B-N (forbudget-soft) 700-char task at --token-budget=300 —$a7n_why"
 # and without an explicit --token-budget the bodies keep their own budget: the bundle must NOT have shrunk
 { [ "$( bytes_of "$TMP/f_for_detail.out" )" -gt "$ALLOW" ]; } 2>/dev/null \
     && ok "#11 A7 no --token-budget: --detail keeps its --pack-budget-bytes budget (unbudgeted bundle unshrunk)" \
@@ -811,19 +960,18 @@ grep -aqF "$FLOOR_NOTE" "$TMP/f_tbn.out" || a7n_why="$a7n_why no-header-floor-no
 }
 
 est_11_sweep(){
-# A7 SWEEP (PR #135 CI, 2026-09-11) — the budget must bound the document at EVERY budget, not at the one operating
-# point above. That arm went red at 5 429 B against its 5 428 B allowance when a merge moved the live src/ corpus,
-# and the main binary emits the same 5 429 bytes on the same tree, so the corpus only exposed it. The defect: the
-# ceiling ladder priced the document WITHOUT the root over_ceiling="1" (17 B) and the legend clause defining it
-# (53 B), which runForLens splices on AFTER the ladder whenever est_tokens exceeds budget_tokens. est_tokens prices
-# markup at 2.50 B/tok and the allowance is sized at 2.36 x 1.15 = 2.714 B/tok, so every bundle in that band
-# carries 70 unpriced bytes, and one the ladder fitted within 70 B of the allowance is pushed past it with no rung
-# fired. One budget on the live tree only sees that when the corpus lands a bundle in the 70 B window, so this arm
-# builds its OWN git-less corpus in $TMP and runs it from a relative path (no at=, no churn, a fixed root=, nothing
-# read from the live repo) and SWEEPS the budget in 10-token steps: the window recurs with every trimmed row
-# (~50 tokens), so a sweep this dense crosses it whatever the legend lengths are. Two shapes — the default bundle
-# and A7's own --detail=20 --with-graph. THE PROPERTY: delivered bytes <= N x 2.36 x 1.15 at exit 0, or the
-# ladder's LAST rung fired and says so (the header floor alone exceeds the budget — the one overshoot it documents).
+# A7 SWEEP — the harness is kept, its property REPLACED (forbudget-soft (rule 4)). Was (PR #135 CI, 2026-09-11): delivered
+# bytes <= N x 2.36 x 1.15 at exit 0 at EVERY budget, or the ladder's disclosed last rung / the <sigs> unpaid twin — the guard
+# against a byte spliced in after the ladder priced the document. A soft target makes no byte promise, so the sweep now pins
+# the soft target's own laws at every budget of a dense sweep over the same git-less corpus (run from a relative path: no
+# at=, no churn, a fixed root=): exit 0; NOLBL (no root over_ceiling=, no last-rung note); ST (rows fit T or are the floor,
+# and a cut is maximal against the spec's own no-budget answer); RP (rows(N) a rank prefix of rows(N + step) — monotone);
+# NX (a <sigs> with shown < total carries next=). The byte-exactness the old arm protected lives on in est_tokens'
+# identities (A9/A10, §C1, #19): est_tokens prices the delivered document, whatever its size.
+# RE-ANCHORED (forbudget-soft): the --detail=20 --with-graph spec ran 2880..3080, the old late-label band; on the soft target
+# that range serves all 32 rows (complete), so it now sweeps 300..2500, where the rows run from the 4-row floor to complete
+# (d099ec21: 4 rows at 300, 28 at 2000, 32 at 2500). The default spec keeps 760..1500 (8..20 rows); the one-row named task
+# keeps 400..600 — its document prices at est_tokens=719, past every N there: the soft overshoot.
 A7S="$TMP/a7sweep"
 mkdir -p "$A7S/corpus"
 python3 - "$A7S/corpus" <<'PYG'
@@ -842,96 +990,79 @@ for i in range( 4 ):
     with open( os.path.join( out, f"mod{i}.cpp" ), "w" ) as fh:
         fh.write( "\n".join( lines ) )
 PYG
-a7s_bad=""; a7s_badn=0; a7s_runs=0; a7s_inside_labelled=0; a7s_floor=0
-# RE-ANCHORED 2026-09-13 (PR #215): the default sweep starts at 760, not 1200. --for's rung zero now triggers on the
-# EXACT ceiling (verbs_for.h), so a document 1..15% over its budget drops its three explanatory clauses before the
-# allowance is consulted; on this corpus the late-label band (over_ceiling="1" INSIDE the allowance — the residual
-# after that drop) therefore sits at 780..810 instead of inside 1200..1500, and the control below would otherwise be
-# inert. Swept 700..3300 step 10 on the new binary: default hits at 780 790 800 810, none on the --detail=20 arm.
-# RE-ANCHORED 2026-10-07 (knob-honesty-068, orchestrator ruling C3): a capped, CHARGED <sigs> whose answer is past its ceiling
-# paid or not is now served with the rows the cut alone leaves and its next= unpaid — bigger than the paid answer, so the
-# capped documents that sat in the late-label band (dd6e4c8e: the --detail=20 arm's 2880..3080, est_tokens > N inside the
-# allowance) now cross the allowance on the ladder's disclosed last rung, and no capped document on this corpus is left in
-# the band (swept 700..1500 and 2880..3080 step 10). The band itself is untouched by the ruling: an UNCAPPED block owes no
-# continuation, so the third spec — a name-exact task serving ONE row — keeps a document whose header floor lands in it
-# (480..488 at the time of writing; step 4 so a band 9 budgets wide is always crossed). Fields: label:from:to:step:task:args.
-for spec in "default:760:1500:10:serialize the map:" "detail_graph:2880:3080:10:serialize the map:--detail=20 --with-graph" \
-            "named_one_row:400:600:4:serializeRow0_3:"; do
-    s_label="${spec%%:*}"; s_rest="${spec#*:}"; s_from="${s_rest%%:*}"; s_rest="${s_rest#*:}"; s_to="${s_rest%%:*}"; s_rest="${s_rest#*:}"
-    s_step="${s_rest%%:*}"; s_rest="${s_rest#*:}"; s_task="${s_rest%%:*}"; s_args="${s_rest#*:}"
-    for (( N = s_from; N <= s_to; N += s_step )); do
+a7s_bad=""; a7s_badn=0; a7s_runs=0; a7s_over=0; a7s_cut=0
+# RUNTIME (CI's 1200 s per-gate limit): the sweep keeps only the rungs where the served row set CHANGES — the first and the
+# last budget of every distinct row count, plus the band edges — and judges all of them in ONE python pass after the runs
+# (it was 131 rungs with three interpreter starts each, ~266 s of this gate's wall time). Measured on the 480bc90b binary at
+# step 10 / 50 / 20: default 760..1500 serves 8..20 rows (13 counts over 75 rungs), --detail=20 --with-graph 300..2500 serves
+# 4..32 (29 counts over 45 rungs), the named task 1 row everywhere. A rung dropped here served exactly the rows of a kept
+# neighbour on both sides, so every ST fit (tightest at a count's FIRST budget) and every maximality (tightest at its LAST)
+# is still asserted, and RP still compares each adjacent pair of distinct row sets.
+A7S_RUNGS_default="760 770 780 840 850 900 910 960 970 1020 1030 1090 1100 1150 1160 1210 1220 1270 1280 1330 1340 1400 1410 1460 1470 1500"
+A7S_RUNGS_detail_graph="300 500 550 600 650 700 750 800 850 900 950 1000 1050 1100 1150 1200 1250 1300 1350 1400 1450 1500 1550 1600 1650 1700 1750 1800 1850 1900 1950 2000 2050 2100 2150 2200 2250 2500"
+A7S_RUNGS_named_one_row="400 600"
+: >"$A7S/manifest"
+for spec in "default:serialize the map:" "detail_graph:serialize the map:--detail=20 --with-graph" "named_one_row:serializeRow0_3:"; do
+    s_label="${spec%%:*}"; s_rest="${spec#*:}"; s_task="${s_rest%%:*}"; s_args="${s_rest#*:}"
+    eval "s_rungs=\$A7S_RUNGS_$s_label"
+    # shellcheck disable=SC2086
+    ( cd "$A7S" && rwcall corpus --for="$s_task" $s_args --no-cache ) >"$A7S/ref_$s_label.xml" 2>/dev/null   # the spec's complete answer
+    for N in $s_rungs; do
         # shellcheck disable=SC2086
-        ( cd "$A7S" && rwcall corpus --for="$s_task" --token-budget=$N $s_args --no-cache ) >"$A7S/o.xml" 2>/dev/null
-        s_rc=$?
-        a7s_runs=$(( a7s_runs + 1 ))
-        s_b="$( bytes_of "$A7S/o.xml" )"
-        s_a="$( awk "BEGIN{printf \"%d\", $N*2.36*1.15}" )"
-        s_root="$( grep -aoE '^<ctx [^>]*>' "$A7S/o.xml" | head -1 )"
-        # fix round 5 (lego-charge): the last rung now names one of two reasons, each only where it is true — the header floor,
-        # or (both trailing sections under the ceiling) the kept rows. Either is the disclosure; the kept-rows one must also be
-        # TRUE here: only on the both-flags shape, and with the header alone inside the allowance.
-        s_hdr="$( python3 -c 'import sys; d=open(sys.argv[1],"rb").read(); print(d.find(b"<sigs"))' "$A7S/o.xml" )"
-        s_kept=0; grep -aqF '[over_ceiling= is 1 on the root: the ranked rows are kept' "$A7S/o.xml" && s_kept=1
-        if [ "$s_kept" -eq 1 ] && { [ -z "$s_args" ] || [ "${s_hdr:--1}" -gt "$s_a" ]; }; then
-            a7s_badn=$(( a7s_badn + 1 ))
-            [ "$a7s_badn" -le 6 ] && a7s_bad="$a7s_bad $s_label@$N=kept-rows-note-untrue(header ${s_hdr}B)"
-        # past the allowance: the ladder's last rung says so (either reason), or (knob-honesty-068) the <sigs> unpaid twin above
-        # holds in full
-        elif [ "$s_rc" -eq 0 ] && [ "$s_b" -gt "$s_a" ] && ! grep -aqF '[over_ceiling= is 1 on the root: ' "$A7S/o.xml" \
-            && sigs_unpaid_twin "$A7S/o.xml" "$s_a" >/dev/null; then
-            a7s_floor=$(( a7s_floor + 1 ))
-        elif [ "$s_rc" -ne 0 ] || { [ "$s_b" -gt "$s_a" ] && ! grep -aqF '[over_ceiling= is 1 on the root: ' "$A7S/o.xml"; }; then
-            a7s_badn=$(( a7s_badn + 1 ))
-            [ "$a7s_badn" -le 6 ] && a7s_bad="$a7s_bad $s_label@$N=${s_b}/${s_a}B(exit $s_rc)"
-        elif [ "$s_b" -le "$s_a" ] && [ "${s_root#* over_ceiling=\"1\"}" != "$s_root" ]; then
-            a7s_inside_labelled=$(( a7s_inside_labelled + 1 ))
-        fi
+        ( cd "$A7S" && rwcall corpus --for="$s_task" --token-budget=$N $s_args --no-cache ) >"$A7S/o_${s_label}_$N.xml" 2>/dev/null
+        printf '%s %s %s %s %s\n' "$s_label" "$N" "$?" "$A7S/o_${s_label}_$N.xml" "$A7S/ref_$s_label.xml" >>"$A7S/manifest"
     done
 done
-[ "$a7s_badn" -eq 0 ] \
-    && ok "#11 A7 sweep: $a7s_runs budgets over a git-less corpus (default 760..1500, --detail=20 --with-graph 2880..3080, step 10; one-row named task 400..600, step 4) — every document within N x 2.36 x 1.15 at exit 0, or on the ladder's disclosed last rung, or the disclosed <sigs> unpaid twin ($a7s_floor)" \
-    || no "#11 A7 sweep: $a7s_badn of $a7s_runs budgets deliver past the allowance with no ladder rung fired (first:$a7s_bad) — a byte spliced in after the ladder priced the document"
-# control: the sweep must cross the band the defect lives in — a root that says over_ceiling="1" while the document
-# still fits the allowance (est_tokens > N at 2.50 B/tok, bytes <= 2.714 B/tok). No such budget = inert, re-anchor.
-[ "$a7s_inside_labelled" -gt 0 ] \
-    && ok "#11 A7 sweep control: $a7s_inside_labelled budget(s) carry a root over_ceiling=\"1\" INSIDE the allowance — the sweep crosses the late-label band" \
-    || no "#11 A7 sweep control: no budget carried over_ceiling=\"1\" inside the allowance — the sweep no longer reaches the est_tokens > N band, re-anchor its ranges"
-# TRAIN 26c RE-PIN (2026-10-10) of the three regime arms below — the floor twin, C3 and its near miss. lego-charge charges
-# <lego>/<compose> to the <sigs> budget at their served size and #362's <tail next=> rides the bundle, so on this corpus the
-# merged binary's 4-row floor answer costs ~270 B more than 26b's: at "serialize the map" the cut never leaves 5 rows while
-# both the unpaid and the paid answer land over (the paid 4-row answer fits from 920, the cut leaves 5 rows from 920 — no C3
-# window at any budget 700..1400, swept step 10 on the merged binary and on lego-charge's pre-continuation binary 1cfbfdcc).
-# The task "map row serializer" on the same corpus has all three regimes: the floor at 890..910 (4 rows, the handle unpaid,
-# no last-rung note; the pre-continuation binary fits with 4 rows), C3 at 920..939 (the cut leaves 5 rows — 1cfbfdcc serves
-# 5, over, last rung fired — and the paid 4-row answer is over too), the payable near miss from 940 (the paid 4-row answer
-# fits, no label). Pinned at 900 / 925 / 970. The sweep above keeps "serialize the map". Assertions unchanged.
-# A7 UNPAID TWIN, EXERCISED EVERY RUN (knob-honesty-068; rulings 2026-10-07). The A7 arm and the sweep accept the twin only
-# as an alternative, so a fixture that stopped reaching it would leave it untested. On this git-less corpus at
-# --token-budget=780 the default bundle's <sigs> sits at its rank 1..4 floor: the answer the cut alone leaves FITS (the
-# pre-continuation binary, 255dc199, serves it at est_tokens=774 with no label), its next= cannot be paid in rows, and the
-# document lands past the allowance only by the handle — the twin must hold, with no last-rung disclosure to lean on.
+# one pass over every rung: exit 0 + root + est_tokens; NOLBL (no root over_ceiling=, no last-rung note); ST (soft_st's verdict);
+# RP (each rung's rows a rank prefix of the next rung's, same spec); NX (shown < total carries next="--for=). Prints
+# "runs badn cut over", then up to six "label@N:[why]" lines.
+a7s_out="$( python3 "$TMP/a7s_judge.py" "$A7S/manifest" "$TMP" )"   # the one-pass judge: SHARED DEFINITIONS
+read -r a7s_runs a7s_badn a7s_cut a7s_over <<<"$( printf '%s\n' "$a7s_out" | head -1 )"
+a7s_bad="$( printf '%s\n' "$a7s_out" | tail -n +2 | tr '\n' ' ' )"
+{ [ -n "$a7s_runs" ] && [ "$a7s_runs" -eq 66 ] && [ "$a7s_badn" -eq 0 ]; } 2>/dev/null \
+    && ok "#11 A7 sweep (forbudget-soft): $a7s_runs budgets over a git-less corpus (the first and last budget of every row count: default 760..1500, --detail=20 --with-graph 300..2500, one-row named task 400/600) — every answer exit 0, unlabelled, its rows fit T or the floor and a cut is maximal, rows monotone in N, every cut <sigs> carries next=" \
+    || no "#11 A7 sweep (forbudget-soft): ${a7s_badn:-?} of ${a7s_runs:-?} budgets break the soft target, or the sweep did not judge its 66 rungs (first: $a7s_bad)"
+# control (REPLACED, forbudget-soft (rule 4); was ">= 1 budget labelled over_ceiling INSIDE the allowance", a band the soft
+# target deleted): the sweep must actually exercise both halves of the contract — rows CUT at the target (else ST and NX ran
+# on complete answers only) and an answer whose est_tokens exceeds its N (the soft overshoot, which NOLBL then pins unlabelled).
+{ [ "$a7s_cut" -gt 0 ] && [ "$a7s_over" -gt 0 ]; } \
+    && ok "#11 A7 sweep control: $a7s_cut budget(s) cut the rows at the target and $a7s_over priced past their N — both halves exercised" \
+    || no "#11 A7 sweep control: cut=$a7s_cut over-N=$a7s_over — the sweep no longer reaches a cut or a soft overshoot, re-anchor its ranges"
+# A7 FLOOR / NEXT @900 — REPLACED (forbudget-soft (rule 4)). Was the <sigs> UNPAID TWIN (knob-honesty-068): at the rank 1..4
+# floor the next= rode unpaid, the root said over_ceiling="1" and the legend carried the unpaid clause. The paid/unpaid
+# continuation is gone — one render, nothing paid from rows. The same call ("map row serializer" at 900 on this corpus) now
+# pins: exit 0; NOLBL and no unpaid clause; ST against the task's no-budget answer (d099ec21: 10 rows, base d4325a8c: the
+# 4-row floor, not maximal); and NX — the <sigs> cut carries next=, and that next= RUNS (from the same root) and serves the
+# whole head: every one of total= rows, the cut's rows its rank prefix.
 ( cd "$A7S" && rwcall corpus --for="map row serializer" --token-budget=900 --no-cache ) >"$A7S/floor.xml" 2>/dev/null; fl_rc=$?
-fl_a="$( awk 'BEGIN{printf "%d", 900*2.36*1.15}' )"
-if [ "$fl_rc" -eq 0 ] && ! grep -aqF '[over_ceiling= is 1 on the root: the header floor' "$A7S/floor.xml" \
-   && fl_why="$( sigs_unpaid_twin "$A7S/floor.xml" "$fl_a" )"; then
-    ok "#11 A7 unpaid twin @900: $fl_why — next= ships at the floor and the overshoot is labelled over_ceiling=\"1\" with its clause"
+( cd "$A7S" && rwcall corpus --for="map row serializer" --no-cache ) >"$A7S/floor_ref.xml" 2>/dev/null
+fl_root="$( ctx_root "$A7S/floor.xml" )"; fl_sigs="$( grep -aoE '<sigs [^>]*>' "$A7S/floor.xml" | head -1 )"
+fl_tot="$( printf '%s' "$fl_sigs" | sed -nE 's/.* total="([0-9]+)".*/\1/p' )"
+fl_next="$( printf '%s' "$fl_sigs" | sed -nE 's/.* next="(--for=[^"]*)".*/\1/p' | sed "s/&apos;/'/g; s/&quot;/\"/g; s/&amp;/\\&/g" )"
+fl_why=""
+{ [ "$fl_rc" -eq 0 ] && [ -n "$fl_root" ]; } || fl_why="$fl_why exit-$fl_rc-or-no-root"
+[ "${fl_root#* over_ceiling=}" = "$fl_root" ] || fl_why="$fl_why over_ceiling-on-a-soft-target"
+! grep -aqF 'next= rides unpaid' "$A7S/floor.xml" || fl_why="$fl_why unpaid-clause"
+fl_st="$( soft_st "$A7S/floor.xml" 900 "$A7S/floor_ref.xml" )" || fl_why="$fl_why ST:[$fl_st]"
+if [ -z "$fl_next" ] || [ -z "$fl_tot" ]; then
+    fl_why="$fl_why <sigs>-cut-without-next=-or-total="
 else
-    no "#11 A7 unpaid twin @900 (exit $fl_rc): ${fl_why:-the ladder last rung fired, so the twin is not the only disclosure} — the <sigs> floor did not ship its next= with a labelled, honestly priced overshoot"
+    eval "set -- $fl_next"
+    ( cd "$A7S" && rwcall corpus "$@" --no-cache ) >"$A7S/floor_next.xml" 2>/dev/null
+    soft_rows "$A7S/floor.xml" >"$A7S/floor.rows" 2>/dev/null; soft_rows "$A7S/floor_next.xml" >"$A7S/floor_next.rows" 2>/dev/null
+    { [ "$( wc -l < "$A7S/floor_next.rows" | tr -d ' ' )" = "$fl_tot" ] && rows_prefix "$A7S/floor.rows" "$A7S/floor_next.rows"; } \
+        || fl_why="$fl_why next=-does-not-serve-the-head($( wc -l < "$A7S/floor_next.rows" | tr -d ' ' )-of-$fl_tot)"
 fi
-# C3 (orchestrator ruling 2026-10-07): NEVER DROP ROWS TO PAY FOR next= WHEN THE ANSWER IS OVER ITS CEILING ANYWAY. At 790 the
-# answer the cut alone leaves is past its ceiling already (255dc199 serves 5 rows there at est_tokens=952, last rung fired);
-# paying from rows (dd6e4c8e: 4 rows, est_tokens=885) still lands over, so it bought nothing. The answer must keep the cut's
-# own rows — at least 255dc199's 5 (re-pin from a pre-continuation binary if row bytes change; smaller rows only raise it) —
-# and MORE than the paid near miss at 850 serves (4 rows: there paying is what makes the answer fit), with next= riding
-# unpaid and over_ceiling="1" + the unpaid clause on the root. RED on dd6e4c8e (4 rows).
-# TRAIN 27 RE-PIN (2026-10-11) of C3 and its near miss (the floor twin above is unchanged). Under a spent ceiling the compact
-# header no longer carries clauses for sections served as stubs nor a false task_echo / "(total= shown= capped=)" note, and the
-# compact dialect pays a measured overrun from the rows (verbs_for.h runForLens), so on this corpus the paid 4-row answer FITS
-# from 910 and no budget 700..1500 serves the C3 shape on any task tried (C3 then correctly serves the paid answer: 925 = 4 rows,
-# est_tokens=907, no label). The regime lives on a twin of the same corpus WITHOUT the doc comments (smaller rows, so the cut
-# alone leaves 5 rows while the 4-row floor is still over): C3 at 740..750 (494f97b6: 740..770, 5 rows, last rung + unpaid
-# clause), the payable near miss from 760 (494f97b6: from 780). Pinned at 745 / 790, inside both binaries' windows. RED on a
-# mutant whose C3 fallback pays from the rows (4 rows, over). Assertions unchanged.
+[ -z "$fl_why" ] \
+    && ok "#11 A7 floor/next @900 (forbudget-soft): unlabelled, no unpaid clause, $fl_st; its next= serves all $fl_tot rows, the cut's its prefix" \
+    || no "#11 A7 floor/next @900 (forbudget-soft) —$fl_why"
+# C3 @745 / NEAR MISS @790 — REPLACED (forbudget-soft (rule 4)). Was orchestrator ruling C3 (never drop rows to pay for next=
+# on an answer over its ceiling either way: 745 keeps >= 5 rows, more than the paid 790 answer, labelled) and its payable near
+# miss (790: the handle paid from rows, inside the allowance, unlabelled). Under a soft target next= is never paid from rows
+# at all, which is what made the 745 answer serve MORE rows than the 790 one; that inversion is now impossible by contract.
+# The same doc-less corpus and the same two budgets pin RP: rows(745) is a rank prefix of rows(790), both a rank prefix of
+# the task's no-budget answer; both unlabelled with no unpaid clause; both ST-maximal (the handle bought with no row).
+# MEASURED: d099ec21 serves 11 / 12 rows; base d4325a8c 5 / 4 (745 labelled) — not monotone.
 mkdir -p "$A7S/c3/corpus"
 python3 - "$A7S/c3/corpus" <<'PYG'
 import os, sys
@@ -948,42 +1079,42 @@ for i in range( 4 ):
     with open( os.path.join( out, f"mod{i}.cpp" ), "w" ) as fh:
         fh.write( "\n".join( lines ) )
 PYG
-( cd "$A7S/c3" && rwcall corpus --for="map row serializer" --token-budget=745 --no-cache ) >"$A7S/c3.xml" 2>/dev/null; c3_rc=$?
-( cd "$A7S/c3" && rwcall corpus --for="map row serializer" --token-budget=790 --no-cache ) >"$A7S/paid.xml" 2>/dev/null; pd_rc=$?
-sigs_shown(){ grep -aoE '<sigs [^>]*>' "$1" | tail -1 | grep -oE ' shown="[0-9]+"' | tr -dc '0-9'; }
-c3_sh="$( sigs_shown "$A7S/c3.xml" )"; pd_sh="$( sigs_shown "$A7S/paid.xml" )"
-c3_root="$( grep -aoE '^<ctx [^>]*>' "$A7S/c3.xml" | head -1 )"
-if [ "$c3_rc" -eq 0 ] && [ -n "$c3_sh" ] && [ -n "$pd_sh" ] && [ "$c3_sh" -ge 5 ] && [ "$c3_sh" -gt "$pd_sh" ] \
-   && grep -aqE '<sigs [^>]* capped="1"[^>]* next="--for=' "$A7S/c3.xml" && [ "${c3_root#* over_ceiling=\"1\"}" != "$c3_root" ] \
-   && grep -aqF 'next= rides unpaid: no row is dropped to pay for it' "$A7S/c3.xml"; then
-    ok "#11 A7 C3 @745 (doc-less twin): over its ceiling either way, the answer keeps the cut's own $c3_sh rows (>= 5, > the paid 790 answer's $pd_sh) — next= unpaid, over_ceiling=\"1\" + the unpaid clause"
-else
-    no "#11 A7 C3 @745 (doc-less twin, exit $c3_rc): shown=${c3_sh:-?} (want >= 5 and > the paid 790 answer's ${pd_sh:-?}), next= + over_ceiling=\"1\" + the unpaid clause — rows were dropped to pay for a handle that cannot make the answer fit"
-fi
-# Its near miss (790 since the train-27 re-pin above) — the PAYABLE case, unchanged: paying is what makes the answer fit (255dc199: 5 rows, est_tokens=911,
-# over), so the handle is paid (the block sheds its bytes above the floor) — next= rides inside the allowance, and neither
-# over_ceiling="1" nor the unpaid clause appears (a label that rode on every capped answer would pass the arms above alone).
-pd_b="$( bytes_of "$A7S/paid.xml" )"; pd_a="$( awk 'BEGIN{printf "%d", 790*2.36*1.15}' )"
-pd_root="$( grep -aoE '^<ctx [^>]*>' "$A7S/paid.xml" | head -1 )"
-if [ "$pd_rc" -eq 0 ] && [ "$pd_b" -le "$pd_a" ] && grep -aqE '<sigs [^>]* capped="1"[^>]* next="--for=' "$A7S/paid.xml" \
-   && [ "${pd_root#* over_ceiling=\"1\"}" = "$pd_root" ] && ! grep -aqF 'next= rides unpaid' "$A7S/paid.xml"; then
-    ok "#11 A7 unpaid twin near miss @790 (doc-less twin): the capped <sigs> pays for its next= — $pd_b B <= $pd_a B, no over_ceiling=, no unpaid clause"
-else
-    no "#11 A7 unpaid twin near miss @790 (doc-less twin, exit $pd_rc): $pd_b B vs $pd_a B — expected a paid next= inside the allowance with no label"
-fi
+( cd "$A7S/c3" && RIPWIRE_NO_HEAD_RR=1 rwcall corpus --for="map row serializer" --no-cache ) >"$A7S/c3_ref_so.xml" 2>/dev/null   # lane hrr: the twin reference
+soft_rows "$A7S/c3_ref_so.xml" >"$A7S/c3_ref_so.rows" 2>/dev/null
+for HRR in twin on; do   # lane hrr (rule 4): the arm unchanged under RIPWIRE_NO_HEAD_RR=1, then the set prefix with the reorder on
+( cd "$A7S/c3" && rwcallm corpus --for="map row serializer" --token-budget=745 --no-cache ) >"$A7S/c3.xml" 2>/dev/null; c3_rc=$?
+( cd "$A7S/c3" && rwcallm corpus --for="map row serializer" --token-budget=790 --no-cache ) >"$A7S/paid.xml" 2>/dev/null; pd_rc=$?
+( cd "$A7S/c3" && rwcallm corpus --for="map row serializer" --no-cache ) >"$A7S/c3_ref.xml" 2>/dev/null
+soft_rows "$A7S/c3.xml" >"$A7S/c3.rows" 2>/dev/null; soft_rows "$A7S/paid.xml" >"$A7S/paid.rows" 2>/dev/null; soft_rows "$A7S/c3_ref.xml" >"$A7S/c3_ref.rows" 2>/dev/null
+c3_n="$( wc -l < "$A7S/c3.rows" | tr -d ' ' )"; pd_n="$( wc -l < "$A7S/paid.rows" | tr -d ' ' )"
+c3_why=""
+for c3f in c3:745:$c3_rc paid:790:$pd_rc; do
+    c3_lbl="${c3f%%:*}"; c3_rest="${c3f#*:}"; c3_bud="${c3_rest%%:*}"; c3_frc="${c3_rest#*:}"
+    c3_root="$( ctx_root "$A7S/$c3_lbl.xml" )"
+    { [ "$c3_frc" -eq 0 ] && [ -n "$c3_root" ]; } || c3_why="$c3_why @$c3_bud:exit-$c3_frc-or-no-root"
+    [ "${c3_root#* over_ceiling=}" = "$c3_root" ] || c3_why="$c3_why @$c3_bud:over_ceiling"
+    ! grep -aqF 'next= rides unpaid' "$A7S/$c3_lbl.xml" || c3_why="$c3_why @$c3_bud:unpaid-clause"
+    c3_st="$( soft_st "$A7S/$c3_lbl.xml" "$c3_bud" "$A7S/c3_ref.xml" )" || c3_why="$c3_why @$c3_bud:ST:[$c3_st]"
+done
+rows_prefix "$A7S/c3.rows" "$A7S/paid.rows" || c3_why="$c3_why rows(745)=$c3_n-not-a-prefix-of-rows(790)=$pd_n"
+nobudget_prefix "$A7S/paid.rows" "$A7S/c3_ref.rows" "$A7S/c3_ref_so.rows" || c3_why="$c3_why rows(790)-not-a-prefix-of-the-no-budget-answer"
+[ -z "$c3_why" ] \
+    && ok "#11 A7 C3/near miss (forbudget-soft, doc-less twin)$( hrr_tag ): rows(745)=$c3_n is a rank prefix of rows(790)=$pd_n, itself a prefix of the no-budget answer; both unlabelled, no unpaid clause, both ST-maximal" \
+    || no "#11 A7 C3/near miss (forbudget-soft, doc-less twin)$( hrr_tag ) —$c3_why"
+done   # HRR twin / on (lane hrr)
 }
 
 est_11_a7r(){
-# ── #11 A7R (lego-charge fix round 4): THE TRAILING-SECTION RESERVE. Under --token-budget, --with-graph's block and the
-# first --detail body were charged only AFTER <sigs> had claimed the whole sig-side ceiling, so both rode past the
-# budget, and the ladder's last rung then blamed the HEADER floor ("no payload left to trim") while <sigs> was the
-# trimmable payload. MEASURED on the parent binary over this arm's corpus: --detail=20 --with-graph at 2000 tokens =
-# 6054 B vs a 5428 B allowance; --detail=3 served its first body as a one-line over_ceiling stub at every budget.
-# runForLens now reserves the graph bytes and a MEASURED first-body floor out of the sig claim
-# (forSigClaimWithTrailingReserve / forDetailFirstBodyFloor). The corpus is git-less, run from a relative path, every
-# body is longer than a quarter of the smallest budget's bundle (so the floor's head-cut + next= path runs), and its
-# 40 signature rows overflow the default sig share (so <sigs> is capped="1" in every regime below — the negatives
-# compare a CUT section, not a whole one).
+# ── #11 A7R (lego-charge fix round 4): THE TRAILING-SECTION RESERVE — and its forbudget-soft (rule 4) REPLACEMENT. Under the
+# old hard ceiling --with-graph's block and the first --detail body were charged only AFTER <sigs> had claimed the whole
+# sig-side ceiling, so lego-charge reserved the graph bytes and a measured first-body floor OUT of the sig claim
+# (forSigClaimWithTrailingReserve / forDetailFirstBodyFloor) and these arms pinned "inside N x 2.36 x 1.15, unlabelled". The
+# soft target deletes both the byte promise and the reserve: T is charged against the <sigs> rows only, and a trailing
+# section takes what the rows left of T. So on this corpus the arms now pin SEC — a trailing section NEVER removes a <sigs>
+# row: with --with-graph / --detail the rows are the bare run's rows at the same N — plus ST, NOLBL, and the first body's
+# floor (never the one-line stub; a head-cut carries the next= that recovers it). The corpus is git-less, run from a
+# relative path, every body is longer than a quarter of the smallest budget's bundle (so the floor's head-cut + next= path
+# runs), and its 72 rows overflow the default byte target (so <sigs> is capped="1", rows cut or shrunk, in every regime below).
 A7R="$TMP/a7reserve"
 mkdir -p "$A7R/corpus"
 python3 - "$A7R/corpus" <<'PYG'
@@ -1003,26 +1134,34 @@ PYG
 A7R_Q="serialize the map row"
 a7r_out(){ ( cd "$A7R" && rwcall corpus --for="$A7R_Q" "$@" --no-cache ) 2>/dev/null; }
 a7r_sigs(){ python3 -c 'import re,sys; m=re.search(r"<sigs\b.*?</sigs>",open(sys.argv[1]).read(),re.S); print(m.group(0) if m else "")' "$1"; }
-# A7R-1 (positive): every budget, three shapes — exit 0, inside the allowance, NO over_ceiling on the root (est_tokens fits
-# budget_tokens), no ladder last rung, <sigs> present, and with --detail a first <b> that is not the one-line over_ceiling
-# stub; a first body the floor cut carries the next= that serves the rest (rule 5: every cut recoverable).
+a7r_out >"$A7R/n0.xml"   # the no-budget answer: the ST reference below, and the A7R no-ceiling / A7D default arms
+# A7R-1 — REPLACED (forbudget-soft (rule 4)). Was: --with-graph / --detail=3 at 1500..3000 — exit 0, inside N x 2.36 x 1.15, no
+# over_ceiling, no last rung, first body served (the reserve made room for it). Now: exit 0; NOLBL and no last-rung note; SEC
+# (rows identical to the bare run at the same N — d099ec21: 12/16/21/26 rows each; base d4325a8c: --with-graph 6/11/16/20 and
+# --detail=3 4/6/10/15 against the bare 8/13/18/22, the reserve at work); ST against the no-budget answer; and with --detail a
+# first <b> that is not the one-line over_ceiling stub, a head-cut one carrying next= (rule 5: every cut recoverable).
 a7r_bad=""; a7r_runs=0
-for spec in "graph:--with-graph" "detail:--detail=3"; do
-    r_label="${spec%%:*}"; r_args="${spec#*:}"
-    for N in 1500 2000 2500 3000; do
+for N in 1500 2000 2500 3000; do
+    a7r_out --token-budget=$N >"$A7R/o0.xml"
+    soft_rows "$A7R/o0.xml" >"$A7R/o0.rows" 2>/dev/null
+    for spec in "graph:--with-graph" "detail:--detail=3"; do
+        r_label="${spec%%:*}"; r_args="${spec#*:}"
         # shellcheck disable=SC2086
         a7r_out --token-budget=$N $r_args >"$A7R/o.xml"
         r_rc=$?
         a7r_runs=$(( a7r_runs + 1 ))
-        r_b="$( bytes_of "$A7R/o.xml" )"
-        r_a="$( awk "BEGIN{printf \"%d\", $N*2.36*1.15}" )"
-        r_root="$( grep -aoE '^<ctx [^>]*>' "$A7R/o.xml" | head -1 )"
+        r_root="$( ctx_root "$A7R/o.xml" )"
+        soft_rows "$A7R/o.xml" >"$A7R/o.rows" 2>/dev/null
         r_why=""
         [ "$r_rc" -eq 0 ] || r_why="exit $r_rc"
         [ -n "$r_root" ] && grep -aq '<sigs ' "$A7R/o.xml" || r_why="$r_why no-root-or-sigs"
-        [ -n "$r_b" ] && [ "$r_b" -le "$r_a" ] 2>/dev/null || r_why="$r_why ${r_b:-?}B>${r_a}B"
-        [ "${r_root#* over_ceiling=\"1\"}" = "$r_root" ] || r_why="$r_why over_ceiling"
-        ! grep -aqF '[over_ceiling= is 1 on the root: ' "$A7R/o.xml" || r_why="$r_why last-rung"   # either reason (fix round 5)
+        # round C (rule 4): SEC is the by-design break (a trailing section is reserved before the rows past the cut): RP instead
+        soft_rows "$A7R/n0.xml" >"$A7R/n0.rows" 2>/dev/null
+        [ -s "$A7R/o.rows" ] && rows_prefix "$A7R/o.rows" "$A7R/n0.rows" \
+            || r_why="$r_why rows:$( wc -l < "$A7R/o.rows" | tr -d ' ' )-not-a-rank-prefix-of-the-no-budget-answer"
+        r_st="$( soft_st "$A7R/o.xml" "$N" "$A7R/n0.xml" )" || r_why="$r_why ST:[$r_st]"
+        [ "${r_root#* over_ceiling=}" = "$r_root" ] || r_why="$r_why over_ceiling"
+        ! grep -aqF '[over_ceiling= is 1 on the root: ' "$A7R/o.xml" || r_why="$r_why last-rung"
         if [ "${r_args#*--detail}" != "$r_args" ]; then
             r_b1="$( grep -aoE '<b [^>]*>' "$A7R/o.xml" | head -1 )"
             [ -n "$r_b1" ] || r_why="$r_why no-first-body"
@@ -1033,48 +1172,44 @@ for spec in "graph:--with-graph" "detail:--detail=3"; do
     done
 done
 [ "$a7r_runs" -eq 8 ] && [ -z "$a7r_bad" ] \
-    && ok "#11 A7R reserve: 8 budgeted runs (--with-graph / --detail=3 at 1500..3000) — inside N x 2.36 x 1.15, no over_ceiling, no last rung, first body served (cut ones carry next=)" \
-    || no "#11 A7R reserve: <sigs> spent the bytes of the graph block / first --detail body —$a7r_bad"
-# A7R-K (the PRE-REGISTERED KILL, reports/lego-charge.md fix round 4): with BOTH --detail and --with-graph the reserve is
-# off — reserving both cut a gold-relevant owner row out of <sigs> on the measured question set. So that shape's ranked
-# rows keep their claim: never FEWER <sigs> rows than the same budget's --with-graph run (which reserves the graph alone),
-# a delivery past the allowance is disclosed (root over_ceiling="1"), and the first body still gets its floor — not the
-# one-line over_ceiling stub, and a head-cut carries next=.
+    && ok "#11 A7R (forbudget-soft, round C): 8 budgeted runs (--with-graph / --detail=3 at 1500..3000) serve a rank prefix of the no-budget rows, ST against T less the sections, unlabelled, first body served (cut ones carry next=)" \
+    || no "#11 A7R no reserve (forbudget-soft): a trailing section changed the <sigs> rows or the soft target broke —$a7r_bad"
+# A7R-K — REPLACED in part (forbudget-soft (rule 4)). Was the pre-registered kill (reports/lego-charge.md fix round 4): with BOTH
+# --detail and --with-graph the reserve was off, so the rows were never FEWER than the --with-graph run's; a delivery past
+# the allowance was labelled over_ceiling="1"; the first body got its floor. The rows clause tightens to SEC (both flags serve
+# exactly the bare rows); the allowance-or-label clause becomes ST + NOLBL; the first-body floor clause is unchanged.
 a7k_bad=""
 for N in 2000 2500 3000; do
     a7r_out --token-budget=$N --detail=20 --with-graph >"$A7R/k.xml"; k_rc=$?
-    a7r_out --token-budget=$N --with-graph >"$A7R/kg.xml"
-    k_rows="$( grep -aoE '<d [^>]*>' "$A7R/k.xml" | wc -l | tr -d ' ' )"; g_rows="$( grep -aoE '<d [^>]*>' "$A7R/kg.xml" | wc -l | tr -d ' ' )"
-    k_b="$( bytes_of "$A7R/k.xml" )"; k_a="$( awk "BEGIN{printf \"%d\", $N*2.36*1.15}" )"
-    k_root="$( grep -aoE '^<ctx [^>]*>' "$A7R/k.xml" | head -1 )"
+    a7r_out --token-budget=$N >"$A7R/kb.xml"
+    soft_rows "$A7R/k.xml" >"$A7R/k.rows" 2>/dev/null; soft_rows "$A7R/kb.xml" >"$A7R/kb.rows" 2>/dev/null
+    k_root="$( ctx_root "$A7R/k.xml" )"
     k_b1="$( grep -aoE '<b [^>]*>' "$A7R/k.xml" | head -1 )"
     k_why=""
     [ "$k_rc" -eq 0 ] && [ -n "$k_root" ] || k_why="exit $k_rc / no root"
-    [ "${k_rows:-0}" -ge 1 ] && [ "${k_rows:-0}" -ge "${g_rows:-0}" ] 2>/dev/null || k_why="$k_why rows ${k_rows:-?}<graph-only ${g_rows:-?}"
-    { [ -n "$k_b" ] && [ "$k_b" -le "$k_a" ]; } 2>/dev/null || [ "${k_root#* over_ceiling=\"1\"}" != "$k_root" ] || k_why="$k_why ${k_b:-?}B>${k_a}B-unlabelled"
+    soft_rows "$A7R/n0.xml" >"$A7R/n0.rows" 2>/dev/null   # round C (rule 4): RP instead of SEC, as A7R-1
+    [ -s "$A7R/k.rows" ] && rows_prefix "$A7R/k.rows" "$A7R/n0.rows" || k_why="$k_why rows $( wc -l < "$A7R/k.rows" | tr -d ' ' )-not-a-rank-prefix-of-the-no-budget-answer"
+    k_st="$( soft_st "$A7R/k.xml" "$N" "$A7R/n0.xml" )" || k_why="$k_why ST:[$k_st]"
+    [ "${k_root#* over_ceiling=}" = "$k_root" ] || k_why="$k_why over_ceiling"
     [ -n "$k_b1" ] && [ "${k_b1#* over_ceiling=}" = "$k_b1" ] || k_why="$k_why first-body-stub"
     { [ "${k_b1#* truncated=\"1\"}" = "$k_b1" ] || [ "${k_b1#* next=\"--expand=}" != "$k_b1" ]; } || k_why="$k_why cut-without-next"
     [ -z "$k_why" ] || a7k_bad="$a7k_bad @$N:[${k_why# }]"
 done
 [ -z "$a7k_bad" ] \
-    && ok "#11 A7R kill: --detail=20 --with-graph at 2000..3000 keeps at least the --with-graph run's <sigs> rows, labels any overshoot over_ceiling, serves the first body at its floor" \
-    || no "#11 A7R kill: the both-sections shape —$a7k_bad"
-# A7R-K2 (fix round 5, owner ruling option B — the A7B contract on a corpus whose first body is LONGER than the floor):
-# at 2000 and 2500 tokens --detail=20 --with-graph delivers past the allowance with over_ceiling="1", the last rung names
-# the kept rows (never the header floor: the header alone fits), and the head-cut first body's next= RECOVERS EXACTLY the
-# lines it cut — the cut CDATA plus the next= answer's CDATA is the function's source, line for line (rule 5).
+    && ok "#11 A7R both sections (forbudget-soft, round C): --detail=20 --with-graph at 2000..3000 serves a rank prefix of the no-budget rows, ST, unlabelled, first body at its floor" \
+    || no "#11 A7R both sections (forbudget-soft): —$a7k_bad"
+# A7R-K2 — REPLACED in part (forbudget-soft (rule 4)). Was the A7B contract on this corpus: past the allowance with
+# over_ceiling="1" and the kept-rows reason (both gone with the ceiling), well-formed despite the note, and the head-cut first
+# body's next= RECOVERING EXACTLY the lines it cut. The recovery half is the soft target's NX invariant and is kept unchanged:
+# at 2000 and 2500 tokens --detail=20 --with-graph serves its first body head-cut (T minus the rows funds it), and the cut
+# CDATA plus the next= answer's CDATA is the function's source, line for line (rule 5). Plus NOLBL and xmllint.
 a7k2_bad=""
 for N in 2000 2500; do
     a7r_out --token-budget=$N --detail=20 --with-graph >"$A7R/k2.xml"; k2_rc=$?
-    k2_b="$( bytes_of "$A7R/k2.xml" )"; k2_a="$( awk "BEGIN{printf \"%d\", $N*2.36*1.15}" )"
-    k2_root="$( grep -aoE '^<ctx [^>]*>' "$A7R/k2.xml" | head -1 )"
-    k2_hdr="$( python3 -c 'import sys; d=open(sys.argv[1],"rb").read(); print(d.find(b"<sigs"))' "$A7R/k2.xml" )"
+    k2_root="$( ctx_root "$A7R/k2.xml" )"
     k2_why=""
-    { [ "$k2_rc" -eq 0 ] && [ -n "$k2_b" ] && [ "$k2_b" -gt "$k2_a" ] && [ "${k2_root#* over_ceiling=\"1\"}" != "$k2_root" ]; } 2>/dev/null \
-        || k2_why="$k2_why premise/label:${k2_b:-?}B-vs-${k2_a}B"
-    { grep -aqF "$KEPT_NOTE" "$A7R/k2.xml" && ! grep -aqF "$FLOOR_NOTE" "$A7R/k2.xml" && [ "${k2_hdr:--1}" -gt 0 ] && [ "$k2_hdr" -le "$k2_a" ]; } 2>/dev/null \
-        || k2_why="$k2_why reason"
-    # fix round 6 (checklist 25): the kept-rows note rides in the header XML comment here too — the answer must parse
+    { [ "$k2_rc" -eq 0 ] && [ -n "$k2_root" ] && [ "${k2_root#* over_ceiling=}" = "$k2_root" ]; } || k2_why="$k2_why exit-$k2_rc/no-root/over_ceiling"
+    ! grep -aqF '[over_ceiling= is 1 on the root: ' "$A7R/k2.xml" || k2_why="$k2_why last-rung-note"
     if command -v xmllint >/dev/null 2>&1; then
         xmllint --noout "$A7R/k2.xml" 2>/dev/null || k2_why="$k2_why xmllint-rejected"
     fi
@@ -1102,8 +1237,8 @@ PYR
     [ -z "$k2_why" ] || a7k2_bad="$a7k2_bad @$N:[${k2_why# }]"
 done
 [ -z "$a7k2_bad" ] \
-    && ok "#11 A7R kill+next (by-design, owner option B): --detail=20 --with-graph at 2000/2500 is over_ceiling with the kept-rows reason, and the cut first body's next= returns exactly the lines it cut" \
-    || no "#11 A7R kill+next (by-design, owner option B): —$a7k2_bad"
+    && ok "#11 A7R cut body next= (forbudget-soft): --detail=20 --with-graph at 2000/2500 is unlabelled and well-formed, and the cut first body's next= returns exactly the lines it cut" \
+    || no "#11 A7R cut body next= (forbudget-soft): —$a7k2_bad"
 # A7R-2 (the floor's cut is the one the floor priced): at 1500 tokens the first body is longer than the floor, so it ships
 # head-cut — truncated="1" with lines= and next= — never dropped and never the bare one-line stub.
 a7r_out --token-budget=1500 --detail=3 >"$A7R/f.xml"
@@ -1115,7 +1250,7 @@ r_hi="$( printf '%s' "$r_b1" | sed -nE 's/.* lines="1-([0-9]+)\/[0-9]+".*/\1/p' 
     || no "#11 A7R floor: the first --detail body at 1500 tokens is not the floor's head-cut of >= 2 lines (got '${r_b1:-none}')"
 # A7R-N1 (near-miss negative, NO explicit ceiling): the reserve must not exist — <sigs> is byte-identical with and
 # without --with-graph (the default regime's graph rides on top, as before).
-a7r_out >"$A7R/n0.xml"; a7r_out --with-graph >"$A7R/n1.xml"
+a7r_out --with-graph >"$A7R/n1.xml"
 n0="$( a7r_sigs "$A7R/n0.xml" )"; n1="$( a7r_sigs "$A7R/n1.xml" )"
 { [ -n "$n0" ] && [ "$n0" = "$n1" ] && [ "${n0#*capped=\"1\"}" != "$n0" ]; } \
     && ok "#11 A7R no ceiling: <sigs> (capped=1) byte-identical with and without --with-graph — nothing reserved without --token-budget" \
@@ -1132,43 +1267,59 @@ w0="$( a7r_sigs "$A7R/w0.xml" )"; w1="$( a7r_sigs "$A7R/w1.xml" )"
 
 est_11_a7d(){
 # ── #11 A7D (fix round 4, review rv-wrap-recipe-k29 F1; rule 5 — never a silent cut): under --token-budget the compact
-# <hops> section is no longer DROPPED with no element when the ceiling is spent. The arm corpus is on the conceptual route.
-# A7D-1: at 2000 tokens the section is the counted marker — shown="0" total=N capped="1" and next= the same question with
-# no budget — its legend clause rides the header, the answer stays inside its budget (the disclosure's bytes are
-# reserved), and the next= RECOVERS the rows: that call's <hops> serves at least one row of the same total.
-a7r_out --token-budget=2000 >"$A7R/h.xml"
+# <hops> section is never DROPPED with no element when the target is spent. The arm corpus is on the conceptual route.
+# forbudget-soft (rule 4): a trailing section now takes T minus the rows already served, and the DEFAULT compact <hops> serves
+# all its rows (decision D-3: no 1,000 B cap). So the spent-target marker moved from 2000 to 1500 tokens on this corpus (the
+# rows now fill more of T: d099ec21 serves 3 of 6 hop rows at 2000, 0 at 1500), the partial cut moved from 5000 to 2000 (5000
+# is wide enough for the whole set), and the no-budget negative inverts: the default <hops> is WHOLE (base d4325a8c: 5 of 6,
+# capped). Re-anchored with the invariant unchanged where it still holds: every cut <hops> is counted and carries next=.
+# A7D-1: at 1500 tokens the section is the counted marker — shown="0" total=N capped="1" and next= the same question with no
+# budget — its legend clause rides the header, no over_ceiling=, and the next= RECOVERS the rows: that call (the default
+# answer) serves every one of the same total= hop rows.
+# round C (reserve first; rule 4): the hops are funded from the rows at the cut, so 1500 now serves the whole set — re-anchored
+# to 600 (the marker) and 800 (the partial cut), measured on the round C build: 600 shown=0, 800 shown=3 of 6, 900+ whole
+a7r_out --token-budget=600 >"$A7R/h.xml"
 h_tag="$( grep -aoE '<hops [^>]*>' "$A7R/h.xml" | head -1 )"
-h_root="$( grep -aoE '^<ctx [^>]*>' "$A7R/h.xml" | head -1 )"
+h_root="$( ctx_root "$A7R/h.xml" )"
 h_tot="$( printf '%s' "$h_tag" | sed -nE 's/.* total="([0-9]+)".*/\1/p' )"
-a7r_out >"$A7R/hd.xml"
-hd_tag="$( grep -aoE '<hops [^>]*>' "$A7R/hd.xml" | head -1 )"
+hd_tag="$( grep -aoE '<hops [^>]*>' "$A7R/n0.xml" | head -1 )"
 hd_shown="$( printf '%s' "$hd_tag" | sed -nE 's/<hops shown="([0-9]+)".*/\1/p' )"; hd_tot="$( printf '%s' "$hd_tag" | sed -nE 's/.* total="([0-9]+)".*/\1/p' )"
 { [ "$h_tag" = "<hops shown=\"0\" total=\"$h_tot\" capped=\"1\" next=\"--for=&apos;$A7R_Q&apos;\"/>" ] && [ "${h_tot:-0}" -ge 1 ] 2>/dev/null \
   && grep -aqF '; hops: this budget left out the call-hop rows (one hop of callees for each of total= top rows)' "$A7R/h.xml" && [ "${h_root#* over_ceiling=}" = "$h_root" ] \
-  && [ "${hd_shown:-0}" -ge 1 ] 2>/dev/null && [ "$hd_tot" = "$h_tot" ]; } \
-    && ok "#11 A7D hops: the spent-ceiling <hops> is the counted marker ($h_tag), defined, inside budget; its next= serves $hd_shown of $hd_tot rows" \
-    || no "#11 A7D hops: spent-ceiling <hops> not the counted, continued marker (got '${h_tag:-none}', next= answer '${hd_tag:-none}', root '${h_root:0:80}…')"
+  && [ -n "$h_root" ] && [ -n "$hd_shown" ] && [ "$hd_shown" = "$h_tot" ] && [ "$hd_tot" = "$h_tot" ]; } \
+    && ok "#11 A7D hops: the spent-target <hops> at 600 is the counted marker ($h_tag), defined, unlabelled; its next= serves all $hd_shown of $hd_tot rows" \
+    || no "#11 A7D hops: spent-target <hops> at 600 not the counted, continued marker (got '${h_tag:-none}', next= answer '${hd_tag:-none}', root '${h_root:0:80}…')"
 # A7D-1 (train 27): the compact dialect above defines the marker in its own short clause — it already reads total= shown=
 # capped=1 and next= in its un-droppable clauses (verbs_for.h kForHopsBudgetCutLegendCompact). The FULL dialect keeps the
-# long clause that defines both: the same marker, the same next=, inside the same budget, with shown=0 capped=1 and next= read.
-a7r_out --token-budget=2000 --legend=full >"$A7R/hf.xml"
-hf_tag="$( grep -aoE '<hops [^>]*>' "$A7R/hf.xml" | head -1 )"; hf_root="$( grep -aoE '^<ctx [^>]*>' "$A7R/hf.xml" | head -1 )"
-{ [ "$hf_tag" = "$h_tag" ] && [ -n "$hf_tag" ] \
+# long clause that defines both: the same marker, the same next=, with shown=0 capped=1 and next= read.
+a7r_out --token-budget=600 --legend=full >"$A7R/hf.xml"
+hf_tag="$( grep -aoE '<hops [^>]*>' "$A7R/hf.xml" | head -1 )"; hf_root="$( ctx_root "$A7R/hf.xml" )"
+{ [ "$hf_tag" = "$h_tag" ] && [ -n "$hf_tag" ] && [ -n "$hf_root" ] \
   && grep -aqF '; hops shown=0 capped=1: this budget left out the call-hop rows (one hop of callees for each of total= top rows); next= serves them' "$A7R/hf.xml" \
   && [ "${hf_root#* over_ceiling=}" = "$hf_root" ] && ! grep -aqF '; hops: this budget' "$A7R/hf.xml"; } \
-    && ok "#11 A7D hops (--legend=full twin): the same marker ($hf_tag), defined by the full clause (shown=0 capped=1, next=), inside budget" \
-    || no "#11 A7D hops (--legend=full twin): got '${hf_tag:-none}' vs compact '${h_tag:-none}', root '${hf_root:0:80}…' — the full clause or the budget fit is missing"
-# A7D-2: a PARTIAL hops cut under the budget carries the same next= (5000 tokens: some rows fit, not all).
-a7r_out --token-budget=5000 >"$A7R/hp.xml"
+    && ok "#11 A7D hops (--legend=full twin): the same marker ($hf_tag), defined by the full clause (shown=0 capped=1, next=), unlabelled" \
+    || no "#11 A7D hops (--legend=full twin): got '${hf_tag:-none}' vs compact '${h_tag:-none}', root '${hf_root:0:80}…' — the full clause is missing or the root is labelled"
+# A7D-2: a PARTIAL hops cut under the target carries the same next= (800 tokens since round C: some rows fit, not all).
+a7r_out --token-budget=800 >"$A7R/hp.xml"
 hp_tag="$( grep -aoE '<hops [^>]*>' "$A7R/hp.xml" | head -1 )"
-{ [ "${hp_tag#*shown=\"0\"}" = "$hp_tag" ] && [ "${hp_tag#* capped=\"1\"}" != "$hp_tag" ] && [ "${hp_tag#* next=\"--for=&apos;$A7R_Q&apos;\"}" != "$hp_tag" ]; } \
-    && ok "#11 A7D partial hops cut at 5000 tokens carries next= ($hp_tag)" \
-    || no "#11 A7D partial hops cut at 5000 tokens: no next= on a cut <hops> with rows (got '${hp_tag:-none}')"
-# A7D-N (near-miss negative): WITHOUT --token-budget the default regime is unchanged — its cut <hops> (capped="1") gets no
-# next= from this change (a named deferral: adding it there moves every default --for answer).
-{ [ "${hd_tag#* capped=\"1\"}" != "$hd_tag" ] && [ "${hd_tag#* next=}" = "$hd_tag" ]; } \
-    && ok "#11 A7D no budget: the default regime's cut <hops> is byte-unchanged (capped=1, no next= added): $hd_tag" \
-    || no "#11 A7D no budget: the default <hops> changed or is not cut (got '${hd_tag:-none}') — the disclosure leaked into the default regime"
+hp_sh="$( printf '%s' "$hp_tag" | sed -nE 's/<hops shown="([0-9]+)".*/\1/p' )"; hp_tot="$( printf '%s' "$hp_tag" | sed -nE 's/.* total="([0-9]+)".*/\1/p' )"
+{ [ -n "$hp_sh" ] && [ -n "$hp_tot" ] && [ "$hp_sh" -ge 1 ] && [ "$hp_sh" -lt "$hp_tot" ] && [ "${hp_tag#* capped=\"1\"}" != "$hp_tag" ] \
+  && [ "${hp_tag#* next=\"--for=&apos;$A7R_Q&apos;\"}" != "$hp_tag" ]; } 2>/dev/null \
+    && ok "#11 A7D partial hops cut at 800 tokens carries next= ($hp_tag)" \
+    || no "#11 A7D partial hops cut at 800 tokens: not a partial cut with next= (got '${hp_tag:-none}')"
+# A7D-W (forbudget-soft, replaces the old 5000-token partial cut): a target wide enough for the rows AND the hop rows serves the
+# whole hop set, like the default answer — stop when complete, nothing left to continue (no capped=, so no next= owed).
+a7r_out --token-budget=5000 >"$A7R/hw.xml"
+hw_tag="$( grep -aoE '<hops [^>]*>' "$A7R/hw.xml" | head -1 )"
+{ [ -n "$hw_tag" ] && [ -n "$hd_tot" ] && [ "$hw_tag" = "<hops shown=\"$hd_tot\" total=\"$hd_tot\" capped=\"0\">" ]; } \
+    && ok "#11 A7D wide target (forbudget-soft): at 5000 tokens <hops> serves the whole set ($hw_tag)" \
+    || no "#11 A7D wide target (forbudget-soft): at 5000 tokens <hops> is not the whole set of $hd_tot (got '${hw_tag:-none}')"
+# A7D-N — REPLACED (forbudget-soft (rule 4), decision D-3). Was: WITHOUT --token-budget the default regime's cut <hops>
+# (capped="1") gets no next= (a named deferral). The default compact route now serves ALL its hop rows (no 1,000 B cap), so
+# the no-budget <hops> is whole: shown == total, capped="0" — nothing cut, nothing to continue.
+{ [ -n "$hd_tag" ] && [ -n "$hd_tot" ] && [ "$hd_tag" = "<hops shown=\"$hd_tot\" total=\"$hd_tot\" capped=\"0\">" ] && [ "$hd_tot" -ge 1 ]; } 2>/dev/null \
+    && ok "#11 A7D no budget (forbudget-soft): the default <hops> serves its whole set ($hd_tag)" \
+    || no "#11 A7D no budget (forbudget-soft): the default <hops> is not whole (got '${hd_tag:-none}') — the compact route still caps its hop rows"
 
 # A9/A10 — the header's own spliced attributes are inside the number. IDENTITY, not a band: for a bundle with
 # no --detail bodies, est_tokens is markup-only, so it must equal round(delivered bytes / 2.50) EXACTLY
@@ -1226,10 +1377,34 @@ fi
 # …and the COMPACT default satisfies the FLAT identity, which is the whole point of charging <hops> at the
 # markup rate: that bundle carries no source text at all, so every byte in it — the section included —
 # tokenizes like markup. A <hops> span priced at the body rate would under-report and this arm would fail.
-if out="$( selfconsistent "$TMP/f_for.out" )"; then
+# body-fold (train 31; rule 4, by design): the compact answer now ends with <fold kind="bodies">, whose bodies ARE source text
+# and are priced at the body rate. The flat identity is pinned on the fold-off twin (RIPWIRE_NO_BODY_FOLD=1), and the default
+# must satisfy the mixed identity with the fold's served <b> elements as the body span (foldconsistent).
+foldconsistent(){ python3 - "$1" <<'PY'
+import sys, re
+d = open( sys.argv[1], 'rb' ).read()
+m = re.search( rb'est_tokens="(\d+)"', d )
+if not m: sys.exit( 2 )
+est = int( m.group( 1 ) )
+f = re.search( rb'<fold .*?</fold>', d, re.S )
+if not f: sys.exit( 3 )                                 # arm requires the fold to be present
+span = sum( len( x ) for x in re.findall( rb'<b t=.*?</b>', f.group( 0 ), re.S ) )
+expected = int( ( len( d ) - span ) / 2.50 + 0.5 ) + int( span / 3.80 + 0.5 )
+print( f"{len(d)} {span} {est} {expected}" )
+sys.exit( 0 if est == expected else 1 )
+PY
+}
+if out="$( foldconsistent "$TMP/f_for.out" )"; then
+    ok "#11 A9/A10 --for (compact route, fold): est_tokens matches markup@2.50 + fold bodies@3.80 — bytes/span/est/expected = $out"
+else
+    fold_out="$( foldconsistent "$TMP/f_for.out" 2>/dev/null || true )"
+    no "#11 A9/A10 --for (compact route, fold): mixed-rate identity broken — bytes/span/est/expected = ${fold_out:-unreadable} (the fold is mischarged)"
+fi
+RIPWIRE_NO_BODY_FOLD=1 rw src --for="$FOR_TASK" >"$TMP/f_for_nofold.out" 2>/dev/null
+if out="$( selfconsistent "$TMP/f_for_nofold.out" )"; then
     ok "#11 A9/A10 --for (compact route): est_tokens = round(bytes/2.50) — bytes/est/expected = $out (the <hops> section is charged at the markup rate)"
 else
-    flat_out="$( selfconsistent "$TMP/f_for.out" 2>/dev/null || true )"
+    flat_out="$( selfconsistent "$TMP/f_for_nofold.out" 2>/dev/null || true )"
     no "#11 A9/A10 --for (compact route): flat-rate identity broken — bytes/est/expected = ${flat_out:-unreadable} (the compact section is mischarged)"
 fi
 grep -aq '<hops ' "$TMP/f_for.out" \
@@ -1629,7 +1804,10 @@ PY
         "ghp_""ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" "AKIA""IOSFODNN7EXAMPLE" > "$TMP/mfred/app.py"
     for mfredMode in xml json; do
         mfredFlag=""; [ "$mfredMode" = json ] && mfredFlag="--json"
-        rwcall "$TMP/mfred" --for="probe vault loader helper" $mfredFlag --no-cache >/dev/null 2>"$TMP/mfred_ctl.err"
+        # body-fold (train 31; rule 4): the control is the fold-off twin. The fold's bodies are an extra EMISSION of these secrets on
+        # the undegraded answer, and the faulted run (no <sigs> pre-render) serves no fold, so the like-for-like control is the answer
+        # without it; a fold body whose secrets were counted and not served would still show here as a higher faulted count.
+        RIPWIRE_NO_BODY_FOLD=1 rwcall "$TMP/mfred" --for="probe vault loader helper" $mfredFlag --no-cache >/dev/null 2>"$TMP/mfred_ctl.err"
         INFRA_FAULT_MEMSTREAM_FINISH=1 rwcall "$TMP/mfred" --for="probe vault loader helper" $mfredFlag --no-cache >/dev/null 2>"$TMP/mfred_f.err"
         mfredCtl="$( grep -a '^ripwire: redacted ' "$TMP/mfred_ctl.err" )"; mfredF="$( grep -a '^ripwire: redacted ' "$TMP/mfred_f.err" )"
         if [ -n "$mfredCtl" ] && [ "$mfredCtl" = "$mfredF" ]; then
@@ -1812,11 +1990,17 @@ jsonEnvelopeCase "--token-budget=600"   --token-budget=600
 jsonEnvelopeCase "--token-budget=3000"  --token-budget=3000
 jsonEnvelopeCase "--token-budget=16000" --token-budget=16000
 
-# the over_ceiling key must actually FIRE somewhere in that sweep, or the §C2 arm above is vacuous.
 rw src --for="$JSON_TASK" --json --token-budget=200 > "$TMP/fj200.out" 2>/dev/null || true
-grep -q '"over_ceiling":true' "$TMP/fj200.out" \
-    && ok "§C2 control: over_ceiling DOES fire at a small budget (the charge arm above is not vacuous)" \
-    || no "§C2 control: no budget in the sweep produced over_ceiling - the §C2 arms proved nothing"
+# §C2 control — REPLACED (forbudget-soft (rule 4)). Was: the over_ceiling key must FIRE at --token-budget=200, or the §C2 arm
+# above is vacuous. A --for --json budget is a soft target: est_tokens may exceed it and the key is never emitted for it (it
+# survives only at the default regime's runaway guard). The control now pins both halves of that at the same call: the
+# overshoot is REAL (est_tokens > 200 — the §C1 identity above already proved that number prices the whole document) and the
+# document carries NO over_ceiling key (NOLBL). Base d4325a8c: "over_ceiling":true here.
+# ($TMP/fj200.out is the --token-budget=200 capture made just above this arm.)
+c2_est="$( python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("est_tokens","")); sys.exit(0 if "over_ceiling" not in d else 1)' "$TMP/fj200.out" 2>/dev/null )"; c2_rc=$?
+{ [ "$c2_rc" -eq 0 ] && [ -n "$c2_est" ] && [ "$c2_est" -gt 200 ]; } 2>/dev/null \
+    && ok "§C2 control (forbudget-soft): --for --json --token-budget=200 prices past its target (est_tokens=$c2_est) with no over_ceiling key — a soft target is never labelled" \
+    || no "§C2 control (forbudget-soft): --for --json --token-budget=200: est_tokens='${c2_est:-unreadable}', over_ceiling key $( [ "$c2_rc" -eq 1 ] && echo present || echo 'absent/unparseable' ) — want est_tokens > 200 and no over_ceiling key"
 }
 
 est_c4(){
@@ -1902,14 +2086,26 @@ band15 "--pack-task --token-budget=1500" "$TMP/p15_pt.xml" ctx 420
 [ "$( root_attr "$TMP/p15_pt.xml" ctx budget_tokens )" = "1500" ] \
     && ok "#15 --pack-task: root budget_tokens=\"1500\" — the ceiling in the SAME unit as est_tokens=" \
     || no "#15 --pack-task: root carries no budget_tokens=\"1500\" beside est_tokens= (got '$( root_attr "$TMP/p15_pt.xml" ctx budget_tokens )')"
+# forbudget-soft (rule 4): an explicit --pack-task budget is a SOFT target (decision 3) — the section cascade still shapes
+# toward it, but nothing is labelled over it and the header is never dropped for it. Was: root over_ceiling="1" at 50 (the
+# header floor exceeds the ceiling). Now NOLBL + HL at the same call: no over_ceiling= on the root, task= verbatim and route=
+# kept, no "(ceiling)" / task-echo drop; the full dialect reads budget_tokens= as the soft target (packtask.h
+# kPackTaskSoftBudgetSentence). The overshoot stays real and priced: est_tokens > 50.
 rw src --pack-task="$FOR_TASK" --token-budget=50 >"$TMP/p15_pt50.xml" 2>/dev/null
-[ "$( root_attr "$TMP/p15_pt50.xml" ctx over_ceiling )" = "1" ] \
-    && ok "#15 --pack-task --token-budget=50: root over_ceiling=\"1\" (the header floor exceeds the ceiling)" \
-    || no "#15 --pack-task --token-budget=50: no over_ceiling=\"1\" on the root while the ledger prose says the floor exceeds the budget"
+rw src --pack-task="$FOR_TASK" --token-budget=50 --legend=full >"$TMP/p15_pt50f.xml" 2>/dev/null
+pt50_why=""
+[ -n "$( perl -0pe 's#<!--.*?-->##gs' "$TMP/p15_pt50.xml" | grep -oE '<ctx( [^>]*)?>' | head -1 )" ] || pt50_why="$pt50_why no-root"
+[ -z "$( root_attr "$TMP/p15_pt50.xml" ctx over_ceiling )" ] || pt50_why="$pt50_why over_ceiling-on-a-soft-target"
+[ "$( root_attr "$TMP/p15_pt50.xml" ctx task )" = "$FOR_TASK" ] && [ -n "$( root_attr "$TMP/p15_pt50.xml" ctx route )" ] || pt50_why="$pt50_why task=/route=-dropped"
+! grep -aqE '\(ceiling\)|task_echo: dropped' "$TMP/p15_pt50.xml" || pt50_why="$pt50_why header-dropped-for-the-budget"
+grep -aqF 'budget_tokens= is the soft token target asked' "$TMP/p15_pt50f.xml" || pt50_why="$pt50_why full-legend-not-soft"
+[ -z "$pt50_why" ] \
+    && ok "#15 --pack-task --token-budget=50 (forbudget-soft): no over_ceiling=, task=/route= kept, nothing dropped, the full legend reads a soft target" \
+    || no "#15 --pack-task --token-budget=50 (forbudget-soft) —$pt50_why"
 E50="$( root_est "$TMP/p15_pt50.xml" ctx )"
 [ -n "$E50" ] && [ "$E50" -gt 50 ] 2>/dev/null \
-    && ok "#15 --pack-task --token-budget=50: est_tokens=$E50 > 50 — the label and the number agree" \
-    || no "#15 --pack-task --token-budget=50: est_tokens='$E50' does not exceed the budget it is labelled over"
+    && ok "#15 --pack-task --token-budget=50: est_tokens=$E50 > 50 — the soft overshoot is priced on the root" \
+    || no "#15 --pack-task --token-budget=50: est_tokens='$E50' does not exceed the 50-token target (the floor cannot fit 50 tokens)"
 # (b) --from-trace: the same two shapes on a name-resolved frame
 printf 'Traceback (most recent call last):\n  File "src/graph.h", line 1, in rankGraphTeleport\n' >"$TMP/p15_trace.txt"
 rw src --from-trace="$TMP/p15_trace.txt" --token-budget=1500 >"$TMP/p15_ft.xml" 2>/dev/null
@@ -1917,65 +2113,73 @@ band15 "--from-trace --token-budget=1500" "$TMP/p15_ft.xml" ctx 420
 [ "$( root_attr "$TMP/p15_ft.xml" ctx budget_tokens )" = "1500" ] \
     && ok "#15 --from-trace: root budget_tokens=\"1500\"" \
     || no "#15 --from-trace: root carries no budget_tokens=\"1500\" (got '$( root_attr "$TMP/p15_ft.xml" ctx budget_tokens )')"
+# forbudget-soft (rule 4): an explicit --from-trace budget is a SOFT target (decision 4): no ladder, the trace echo always ships,
+# over_ceiling= only against max_tokens=. Was: root over_ceiling="1" at 50. Now at the same call: est_tokens > 50 (the overshoot
+# is priced), no over_ceiling= (no max_tokens= was passed), the <trace src=> echo of the trace file ships, and the full dialect
+# reads budget_tokens= as the soft target (tracelocus.h).
 rw src --from-trace="$TMP/p15_trace.txt" --token-budget=50 >"$TMP/p15_ft50.xml" 2>/dev/null
-[ "$( root_attr "$TMP/p15_ft50.xml" ctx over_ceiling )" = "1" ] \
-    && ok "#15 --from-trace --token-budget=50: root over_ceiling=\"1\"" \
-    || no "#15 --from-trace --token-budget=50: no over_ceiling=\"1\" on the root (the prose label alone is what a parser discards)"
+rw src --from-trace="$TMP/p15_trace.txt" --token-budget=50 --legend=full >"$TMP/p15_ft50f.xml" 2>/dev/null
+FT50="$( root_est "$TMP/p15_ft50.xml" ctx )"
+ft50_why=""
+{ [ -n "$FT50" ] && [ "$FT50" -gt 50 ]; } 2>/dev/null || ft50_why="$ft50_why est_tokens='${FT50:-absent}'-not-past-50"
+[ -z "$( root_attr "$TMP/p15_ft50.xml" ctx over_ceiling )" ] || ft50_why="$ft50_why over_ceiling-on-a-soft-target"
+grep -aqF "<trace src=\"$TMP/p15_trace.txt\"" "$TMP/p15_ft50.xml" || ft50_why="$ft50_why no-trace-src-echo"
+grep -aqF 'budget_tokens= is the soft token target you passed' "$TMP/p15_ft50f.xml" || ft50_why="$ft50_why full-legend-not-soft"
+[ -z "$ft50_why" ] \
+    && ok "#15 --from-trace --token-budget=50 (forbudget-soft): est_tokens=$FT50 past the target, no over_ceiling=, the trace echo ships, the full legend reads a soft target" \
+    || no "#15 --from-trace --token-budget=50 (forbudget-soft) —$ft50_why"
 # (d) --for (verify-wave1 N1): after M11 the flagship budgeted verb was the ONE outlier — est_tokens="N" lived
 #     inside its header COMMENT (a comment-stripping parser reads nothing) and the ladder's over_ceiling verdict
 #     was a bracket note in the same comment, never an attribute: `--for … --token-budget=300` shipped 1,243
 #     tokens at exit 0 with a bare <ctx>. SWEPT across the usable range like arm #5 (the small end is where the
-#     fixed floor dominates): the root carries est_tokens=; delivered bytes sit inside the ladder's own
-#     allowance (N x kMinBytesPerToken x kCeilingFirstEntryTolerance = N x 2.36 x 1.15, serialize.h) OR the
-#     root says over_ceiling="1"; and a labelled root's est_tokens exceeds N (the label and the number agree).
-#     verify-wave2 F2: the byte half above cannot see the defect it was written for. At --token-budget=1600
-#     the bundle is 3,485 B against a 4,342 B allowance — so the allowance arm PASSES — while the very same
-#     root says budget_tokens="1600" est_tokens="1665" and withholds the one attribute that reconciles them.
-#     over_ceiling= fired only on the ladder's LAST RUNG, so a bundle that overshoots by a little (the common
-#     case) was silently unlabelled while one that overshoots by a lot was labelled. The property is about the
-#     two NUMBERS the root itself prints, in the unit it prints them in: est_tokens <= N OR over_ceiling="1",
-#     on EVERY rung. 1600/1700 are in the sweep because they are the rungs that were red.
+#     fixed floor dominates): the root carries est_tokens= — KEPT, unchanged.
+#     REPLACED (forbudget-soft (rule 4)): the two halves that read the old hard ceiling — "delivered <= N x 2.36 x 1.15 OR the
+#     root says over_ceiling=1" and verify-wave2 F2's "est_tokens > N <=> over_ceiling=1" — assert the deleted contract: an
+#     explicit --for budget is a soft target, est_tokens may exceed N and nothing labels it (decision 2). The two numbers the
+#     root prints no longer contradict each other because the legend reads budget_tokens= as a target the rows stop at, not a
+#     ceiling the document fits. Each rung now pins, on the same src corpus and budgets: NOLBL (no over_ceiling= on the root);
+#     ST (the <sigs> rows fit T = N x 2.36 x 0.90 or are the rank 1..4 floor, and a cut is maximal against the no-budget answer
+#     A7/A8 captured); RP (rows(N) a rank prefix of the next rung's rows); NX (a cut <sigs> carries next=). MEASURED on
+#     d099ec21: 4 rows at 100..600, 5 at 800, 10 at 1200, 20 at 2000, every rung unlabelled with est_tokens > N.
+# (#398 pool: #11's $TMP/f_for.out is written in another chain, so this section asks the same no-budget question itself —
+#  rw src --for="$FOR_TASK", the call the pool pre-warms — into its own file: the same bytes, no cross-chain read.)
+rw src --for="$FOR_TASK" >"$TMP/p15_for_ref.xml" 2>/dev/null
+f15_prev=""
 for N in 100 300 400 600 800 1200 1500 1600 1700 2000 2500 3000; do
     rw src --for="$FOR_TASK" --token-budget=$N >"$TMP/p15_for$N.xml" 2>/dev/null
     FB="$( bytes_of "$TMP/p15_for$N.xml" )"
     FE="$( root_est "$TMP/p15_for$N.xml" ctx )"
     FO="$( root_attr "$TMP/p15_for$N.xml" ctx over_ceiling )"
-    FLIM="$( awk "BEGIN{printf \"%d\", $N*2.36*1.15}" )"
     if [ -z "$FE" ]; then
         no "#15 --for --token-budget=$N: <ctx> root carries no est_tokens= ($FB B delivered; the price is not where a parser reads it)"
     else
         ok "#15 --for --token-budget=$N: root est_tokens=\"$FE\" ($FB B)"
     fi
-    if [ "$FB" -le "$FLIM" ] 2>/dev/null; then
-        ok "#15 --for --token-budget=$N: $FB B within the $FLIM B ladder allowance"
-    elif [ "$FO" = "1" ]; then
-        ok "#15 --for --token-budget=$N: $FB B over the $FLIM B allowance and the ROOT says so (over_ceiling=\"1\")"
-        { [ -n "$FE" ] && [ "$FE" -gt "$N" ]; } 2>/dev/null \
-            && ok "#15 --for --token-budget=$N: est_tokens=$FE > $N — the label and the number agree" \
-            || no "#15 --for --token-budget=$N: root over_ceiling=\"1\" but est_tokens='$FE' does not exceed the budget it is labelled over"
-    else
-        no "#15 --for --token-budget=$N: $FB B EXCEEDS the $FLIM B allowance with NO over_ceiling=\"1\" on the root (over_ceiling on root='$FO')"
+    soft_rows "$TMP/p15_for$N.xml" >"$TMP/p15_for$N.rows" 2>/dev/null
+    f15_sigs="$( grep -aoE '<sigs [^>]*>' "$TMP/p15_for$N.xml" | head -1 )"
+    f15_sh="$( printf '%s' "$f15_sigs" | sed -nE 's/.* shown="([0-9]+)".*/\1/p' )"; f15_tot="$( printf '%s' "$f15_sigs" | sed -nE 's/.* total="([0-9]+)".*/\1/p' )"
+    f15_why=""
+    [ -n "$( ctx_root "$TMP/p15_for$N.xml" )" ] || f15_why="$f15_why no-root"
+    [ -z "$FO" ] || f15_why="$f15_why over_ceiling=\"$FO\"-on-a-soft-target"
+    f15_st="$( soft_st "$TMP/p15_for$N.xml" "$N" "$TMP/p15_for_ref.xml" )" || f15_why="$f15_why ST:[$f15_st]"
+    [ -z "$f15_prev" ] || rows_prefix "$TMP/p15_for$f15_prev.rows" "$TMP/p15_for$N.rows" || f15_why="$f15_why rows-not-a-superset-of-N=$f15_prev's"
+    if [ -n "$f15_sh" ] && [ -n "$f15_tot" ] && [ "$f15_sh" -lt "$f15_tot" ] 2>/dev/null; then
+        [ "${f15_sigs#* next=\"--for=}" != "$f15_sigs" ] || f15_why="$f15_why cut-without-next"
     fi
-    # F2 — the TOKEN property, independent of the byte allowance above: the root prints budget_tokens= and
-    # est_tokens= in the same unit, so a reader can subtract them. Whenever it does and the answer is
-    # positive, the root must say over_ceiling="1"; silence there means "inside the budget".
-    if [ -n "$FE" ] && [ "$FE" -gt "$N" ] 2>/dev/null; then
-        [ "$FO" = "1" ] \
-            && ok "#15 --for --token-budget=$N: est_tokens=$FE > $N and the root says over_ceiling=\"1\"" \
-            || no "#15 --for --token-budget=$N: root prints budget_tokens=$N est_tokens=$FE (over by $(( FE - N ))) with NO over_ceiling= — the two numbers contradict each other on one root"
-    elif [ -n "$FE" ]; then
-        [ "$FO" = "1" ] \
-            && no "#15 --for --token-budget=$N: root says over_ceiling=\"1\" but est_tokens=$FE is inside the $N budget — the label is a lie in the other direction" \
-            || ok "#15 --for --token-budget=$N: est_tokens=$FE <= $N and the root is silent (absent = inside the budget)"
-    fi
+    [ -z "$f15_why" ] \
+        && ok "#15 --for --token-budget=$N (forbudget-soft): unlabelled (est_tokens=${FE:-?}), $f15_st, rows grow monotonically" \
+        || no "#15 --for --token-budget=$N (forbudget-soft) —$f15_why"
+    f15_prev="$N"
 done
 # the two root attributes must be DEFINED by the legend of the document that carries them (§B7 class)
 perl -0pe 's#<!--(.*?)-->#\1#gs' "$TMP/p15_for3000.xml" | grep -qE '(^|[^[:alnum:]_:.-])est_tokens\s*=' \
     && ok "#15 --for: the legend defines est_tokens=" \
     || no "#15 --for: est_tokens= rides the root but no legend clause defines it"
-grep -o '<!--.*-->' "$TMP/p15_for100.xml" | grep -qE '(^|[^[:alnum:]_:.-])over_ceiling\s*=' \
-    && ok "#15 --for --token-budget=100: the legend defines over_ceiling=" \
-    || no "#15 --for --token-budget=100: over_ceiling= rides the root but no legend clause defines it"
+# REPLACED (forbudget-soft (rule 4)): was "the legend at --token-budget=100 defines over_ceiling=" — the soft target never emits
+# that label, so the attribute to define is budget_tokens= itself, read as the soft row target the rows stop at.
+[ -n "$( root_attr "$TMP/p15_for100.xml" ctx budget_tokens )" ] && grep -aqF "$SOFT_CLAUSE_COMPACT" "$TMP/p15_for100.xml" \
+    && ok "#15 --for --token-budget=100 (forbudget-soft): the legend defines budget_tokens= as the soft row target the rows stop at" \
+    || no "#15 --for --token-budget=100 (forbudget-soft): budget_tokens= rides the root but the legend does not read it as a soft target"
 # (c) --handoff: priced, labelled, and withheld= is a boolean with the count beside it
 rw . --handoff --token-budget=100 >"$TMP/p15_ho100.xml" 2>/dev/null
 rw . --handoff --token-budget=100000 >"$TMP/p15_hobig.xml" 2>/dev/null
@@ -2186,7 +2390,8 @@ est_18(){
 # >= E, by the root's own arithmetic — so this arm READS E off a wide run where nothing is dropped and probes
 # just above it. No pinned byte count: if the corpus or the legend moves, E moves with it and the probe follows.
 # Both guards against an empty pass are asserted rather than assumed — the wide run must carry the clauses (else
-# there is no E), and the control below must still DROP them (else the rung is gone, not fixed).
+# there is no E), and the control below must still DROP them (else the rung is gone, not fixed). forbudget-soft (rule 4):
+# the soft target deleted rung zero on purpose, so that control now asserts the opposite law (no clause is ever dropped).
 # GIT-LESS and relative, the #11 A7 sweep's discipline: no at=, no churn, a fixed root=, nothing from the live
 # repo. --detail=1 is what puts bytes at the BODY rate, which is the half of the defect a bodiless bundle cannot
 # see; the fixture's one long body exceeds the tight budget's residual, so the first-entry-whole floor emits a
@@ -2195,21 +2400,7 @@ est_18(){
 # est_tokens=1069 with no over_ceiling=, and the pre-fix rung dropped all three clauses and delivered 715.
 RZ="$TMP/rungzero"
 mkdir -p "$RZ/corpus"
-python3 - "$RZ/corpus" <<'PYRZ'
-import os, sys
-out   = sys.argv[ 1 ]
-lines = [ "def widgetPingBoxRouter( alpha, beta ):",
-          '    """Widget ping box router: route every alpha reading onto the beta box."""',
-          "    total = 0" ]
-for j in range( 26 ):
-    lines.append( f"    total = total + alpha * {j} - beta * {j} + widgetPingStep{j % 4}( total, {j} )" )
-lines.append( "    return total" )
-with open( os.path.join( out, "router.py" ), "w" ) as fh:
-    fh.write( "\n".join( lines ) + "\n" )
-with open( os.path.join( out, "steps.py" ), "w" ) as fh:
-    for j in range( 4 ):
-        fh.write( f'def widgetPingStep{j}( total, step ):\n    """Step {j}."""\n    return total + step\n\n' )
-PYRZ
+python3 "$TMP/rz_corpus.py" "$RZ/corpus"   # the git-less corpus writer: SHARED DEFINITIONS
 # L1 (2026-09-19): #18 counts the FULL legend's droppable clauses (confidence=/tail:/route= prose), so rz_run asks for the full legend.
 rz_run(){ ( cd "$RZ" && rwcall corpus --for="widget ping box router" --detail=1 --token-budget="$1" --no-cache --legend=full ) >"$RZ/o.xml" 2>/dev/null; }
 rz_est(){ grep -aoE 'est_tokens="[0-9]+"' "$RZ/o.xml" | head -1 | tr -dc '0-9'; }
@@ -2218,7 +2409,10 @@ rz_note(){ grep -acF '[legend clauses:' "$RZ/o.xml"; }
 # file defines with no import, so their <calls> rows are via="name" and --for's header now defines it (~190 B, never
 # dropped). The full document prices at est_tokens=1269 (it was 1162, 38 under the old 1200), so 1200 no longer carried
 # its legend; 1400 is the wide control again with ~130 tokens of headroom. The probe and the control still read E off it.
-RZ_WIDE=1400
+# forbudget-soft (rule 4): 1400 -> 4000. Under the soft target the rows' text tier grows with N and nothing in the header is
+# charged, so the document at 1400 prices at est_tokens=1770 and the widest form (e= extents on the rows) at 1875 from ~4000
+# (d099ec21); the probe E+5 must sit below the wide control, so the control moved up. Measured: no budget prices past 1875.
+RZ_WIDE=4000
 rz_run "$RZ_WIDE"; RZ_E="$( rz_est )"; RZ_WIDE_NOTE="$( rz_note )"
 # THE CLAUSES THIS ARM COUNTS — all THREE of the droppable trio (CodeRabbit, PR #215). It counted two: the
 # confidence reading and the tail reading, but not the route= reading the arm's own paragraph above names.
@@ -2230,7 +2424,7 @@ rz_run "$RZ_WIDE"; RZ_E="$( rz_est )"; RZ_WIDE_NOTE="$( rz_note )"
 RZ_CLAUSE_ROUTE='route= name-exact(X)|subtoken+body'
 RZ_CLAUSES=0
 grep -aqF 'confidence= derives from the ranked head' "$RZ/o.xml" && RZ_CLAUSES=$(( RZ_CLAUSES + 1 ))
-grep -aqF 'tail: file-grain tail' "$RZ/o.xml"                    && RZ_CLAUSES=$(( RZ_CLAUSES + 1 ))
+grep -aqF 'tail: file-grain rows' "$RZ/o.xml"                    && RZ_CLAUSES=$(( RZ_CLAUSES + 1 ))
 grep -aqF "$RZ_CLAUSE_ROUTE" "$RZ/o.xml"                         && RZ_CLAUSES=$(( RZ_CLAUSES + 1 ))
 if [ -z "$RZ_E" ] || [ "$RZ_WIDE_NOTE" != "0" ] || [ "$RZ_CLAUSES" != "3" ]; then
     no "#18 rung zero: the wide control (--token-budget=$RZ_WIDE) does not carry its legend (est='${RZ_E:-unreadable}' dropped-note=$RZ_WIDE_NOTE clauses=$RZ_CLAUSES/3) — there is no price to probe against; re-anchor the fixture"
@@ -2242,7 +2436,7 @@ else
         rz_run "$RZ_PROBE"; RZ_PE="$( rz_est )"; RZ_PN="$( rz_note )"; RZ_PB="$( bytes_of "$RZ/o.xml" )"
         RZ_PC=0
         grep -aqF 'confidence= derives from the ranked head' "$RZ/o.xml" && RZ_PC=$(( RZ_PC + 1 ))
-        grep -aqF 'tail: file-grain tail' "$RZ/o.xml"                    && RZ_PC=$(( RZ_PC + 1 ))
+        grep -aqF 'tail: file-grain rows' "$RZ/o.xml"                    && RZ_PC=$(( RZ_PC + 1 ))
         grep -aqF "$RZ_CLAUSE_ROUTE" "$RZ/o.xml"                         && RZ_PC=$(( RZ_PC + 1 ))
         # the ROOT's verdict only (read off the <ctx …> open tag): since lane/cutfix-bodies a <b over_ceiling="1"> marks
         # a --detail body whose first line alone exceeds the BODY allowance, which is not the root's est_tokens claim,
@@ -2254,21 +2448,26 @@ else
             no "#18 rung zero at --token-budget=$RZ_PROBE dropped a legend it could afford: dropped-note=$RZ_PN clauses=$RZ_PC/3 est_tokens=${RZ_PE:-unreadable} over_ceiling=$RZ_PO ($RZ_PB B) — the same document prices at $RZ_E at --token-budget=$RZ_WIDE, so it fits every budget >= $RZ_E"
         fi
     fi
-    # …and the rung must still FIRE where the kept document genuinely does not fit. Without this, deleting
-    # rung zero outright would turn the arm above green.
-    RZ_CTRL=$(( RZ_E - 200 ))
-    rz_run "$RZ_CTRL"; RZ_CN="$( rz_note )"; RZ_CE="$( rz_est )"
-    # …and the tight control asserts the ABSENCE of the same three, route= included: a present-in-wide /
-    # unchecked-in-tight assertion is the one-sided shape that let the missing clause through.
-    RZ_CC=0
-    grep -aqF 'confidence= derives from the ranked head' "$RZ/o.xml" && RZ_CC=$(( RZ_CC + 1 ))
-    grep -aqF 'tail: file-grain tail' "$RZ/o.xml"                    && RZ_CC=$(( RZ_CC + 1 ))
-    grep -aqF "$RZ_CLAUSE_ROUTE" "$RZ/o.xml"                         && RZ_CC=$(( RZ_CC + 1 ))
-    if [ "$RZ_CN" != "0" ] && [ "$RZ_CC" = "0" ]; then
-        ok "#18 rung zero control at --token-budget=$RZ_CTRL (200 under the $RZ_E the full document prices at): all three clauses dropped and the note says so (est_tokens=$RZ_CE) — the rung still fires when the drop is real"
-    else
-        no "#18 rung zero control at --token-budget=$RZ_CTRL: dropped-note=$RZ_CN clauses still riding=$RZ_CC/3 (est_tokens=${RZ_CE:-unreadable}) — rung zero no longer fires at all, so the arm above is green for the wrong reason"
-    fi
+    # …the CONTROL — REPLACED (forbudget-soft (rule 4)). Was: 200 under E the rung must still FIRE (all three clauses dropped
+    # and the '[legend clauses:' note), or deleting rung zero would turn the arm above green. The soft target deletes rung zero
+    # by design (decision 2: no header ladder — no legend clause is ever dropped for a budget), so the control now asserts the
+    # law that replaced it, HL, at the same E-200 and at a budget far under the floor (400: base d4325a8c dropped all three
+    # there, est_tokens=1050, over_ceiling="1"): all three clauses ride, no drop note, no over_ceiling= on the root. The arm
+    # above then cannot be green for the wrong reason either: it pins the three clauses at E+5, this one below every price.
+    rz_hl_bad=""
+    for RZ_CTRL in $(( RZ_E - 200 )) 400; do
+        rz_run "$RZ_CTRL"; RZ_CN="$( rz_note )"; RZ_CE="$( rz_est )"
+        RZ_CC=0
+        grep -aqF 'confidence= derives from the ranked head' "$RZ/o.xml" && RZ_CC=$(( RZ_CC + 1 ))
+        grep -aqF 'tail: file-grain rows' "$RZ/o.xml"                    && RZ_CC=$(( RZ_CC + 1 ))
+        grep -aqF "$RZ_CLAUSE_ROUTE" "$RZ/o.xml"                         && RZ_CC=$(( RZ_CC + 1 ))
+        RZ_CO=0; grep -aoE '^<ctx [^>]*>' "$RZ/o.xml" | grep -qF 'over_ceiling=' && RZ_CO=1
+        { [ -n "$RZ_CE" ] && [ "$RZ_CN" = "0" ] && [ "$RZ_CC" = "3" ] && [ "$RZ_CO" = "0" ]; } \
+            || rz_hl_bad="$rz_hl_bad @$RZ_CTRL:[note=$RZ_CN clauses=$RZ_CC/3 over_ceiling=$RZ_CO est_tokens=${RZ_CE:-unreadable}]"
+    done
+    [ -z "$rz_hl_bad" ] \
+        && ok "#18 no rung zero (forbudget-soft): at --token-budget=$(( RZ_E - 200 )) and 400 (under the $RZ_E the document prices at) all three clauses ride, no drop note, no over_ceiling=" \
+        || no "#18 no rung zero (forbudget-soft): a soft target dropped a legend clause or labelled the root —$rz_hl_bad"
 fi
 }
 
@@ -2283,7 +2482,7 @@ est_19(){
 # this arm's fixture: --signatures-only printed est_tokens=2616 over 8183 B (round(bytes/2.50) = 3273), and at
 # --token-budget=1500 the root said est_tokens=1360 with no over_ceiling= over a 5043 B document (2017 tokens).
 # WHAT IS ASSERTED: the #11 identities (markup at 2.50, bodies at 3.80), exact, on three shapes of a document
-# that really carries six <hdr> rows — and under the explicit ceiling, est_tokens > budget iff over_ceiling="1".
+# that really carries six <hdr> rows — and under the explicit budget (a soft target since forbudget-soft) no over_ceiling=.
 # Git-less and relative (#18's discipline): nothing from the live repo, a fixed root=.
 HX="$TMP/hdrprice"
 mkdir -p "$HX"
@@ -2307,7 +2506,10 @@ if not m: sys.exit( 2 )
 est = int( m.group( 1 ) )
 a = d.find( b'<bodies ' ); b = d.find( b'</bodies>' )
 span = ( b + 9 - a ) if a >= 0 and b >= 0 else 0
-expected = int( ( len( d ) - span ) / 2.50 + 0.5 ) + ( int( span / 3.80 + 0.5 ) if span else 0 )
+# body-fold (train 31): the fold's served bodies are body-rate spans too, priced as one sum (forfold.h renderForBodyFold)
+f = re.search( rb'<fold .*?</fold>', d, re.S )
+fspan = sum( len( x ) for x in re.findall( rb'<b t=.*?</b>', f.group( 0 ), re.S ) ) if f else 0
+expected = int( ( len( d ) - span - fspan ) / 2.50 + 0.5 ) + ( int( span / 3.80 + 0.5 ) if span else 0 ) + ( int( fspan / 3.80 + 0.5 ) if fspan else 0 )
 print( f"{len(d)} {span} {est} {expected} hdr={d.count(b'<hdr ')}" )
 sys.exit( 0 if est == expected and d.count( b'<hdr ' ) == 6 else 1 )
 PYHXI
@@ -2321,13 +2523,17 @@ for hx_mode in "--signatures-only" "" "--token-budget=1500"; do
         hx_out="$( hx_identity "$HX/o.xml" 2>/dev/null || true )"
         no "#19 <hdr> rows unpriced ($hx_label): bytes/span/est/expected = ${hx_out:-unreadable} (six <hdr> rows required; a gap of ~bytes-of-rows/2.50 is the defect)"
     fi
+    # REPLACED (forbudget-soft (rule 4)): was "over_ceiling= agrees with est_tokens vs 1500, both ways" — the ceiling verdict
+    # had to see the <hdr> rows. A soft target emits no ceiling verdict (the <hdr> rows are header, never charged against T),
+    # so the arm pins NOLBL on the same document: the identity above prices the rows, and the root carries no over_ceiling=
+    # although est_tokens exceeds 1500 (d099ec21: 3726; base d4325a8c labelled it). Read off the root only.
     if [ "$hx_mode" = "--token-budget=1500" ]; then
-        HX_E="$( grep -aoE 'est_tokens="[0-9]+"' "$HX/o.xml" | head -1 | tr -dc '0-9' )"
-        HX_O=0; grep -aqF 'over_ceiling="1"' "$HX/o.xml" && HX_O=1
-        if [ -n "$HX_E" ] && { { [ "$HX_E" -gt 1500 ] && [ "$HX_O" = 1 ]; } || { [ "$HX_E" -le 1500 ] && [ "$HX_O" = 0 ]; }; }; then
-            ok "#19 --token-budget=1500: over_ceiling=$HX_O agrees with est_tokens=$HX_E (the ceiling verdict sees the <hdr> rows)"
+        HX_ROOT="$( ctx_root "$HX/o.xml" )"
+        HX_E="$( printf '%s' "$HX_ROOT" | sed -nE 's/.* est_tokens="([0-9]+)".*/\1/p' )"
+        if [ -n "$HX_ROOT" ] && [ -n "$HX_E" ] && [ "${HX_ROOT#* over_ceiling=}" = "$HX_ROOT" ]; then
+            ok "#19 --token-budget=1500 (forbudget-soft): est_tokens=$HX_E with the <hdr> rows priced, no over_ceiling= on the soft target's root"
         else
-            no "#19 --token-budget=1500: over_ceiling=$HX_O disagrees with est_tokens=${HX_E:-unreadable} — the ceiling verdict was made without the <hdr> rows"
+            no "#19 --token-budget=1500 (forbudget-soft): root '${HX_ROOT:0:120}' — want est_tokens= present and no over_ceiling= on a soft target"
         fi
     fi
 done

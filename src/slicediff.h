@@ -329,7 +329,7 @@ inline std::string blobAtRev( const std::string& root, const std::string& sha, c
         {
             return {};
         }
-        return quality::gitOneLine( root, "show " + shSingleQuote( sha + ":" + p ) + " 2>/dev/null" );
+        return quality::gitOneLine( root, "show --no-ext-diff --no-textconv " + shSingleQuote( sha + ":" + p ) + " 2>/dev/null" );
     };
     std::string blob = read( rel );
     if( !blob.empty() )

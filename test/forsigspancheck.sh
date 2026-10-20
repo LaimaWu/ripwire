@@ -55,13 +55,18 @@
 #        docs describe the context lifecycle?" keeps a docs row in its top five.
 #   (T)  a TIGHT explicit ceiling (--token-budget / MCP budget_tokens below the default signature share) gets neither the
 #        reorder nor its uncharged note: the answer is byte-equal to the RIPWIRE_NO_DOCS_AFTER_CODE=1 twin (which is the
-#        pre-reorder answer), XML, JSON and MCP, at 700 and 1200 on the TS fixture; at 1200 the XML/JSON est_tokens stay
-#        within the budget with no over_ceiling the twin lacks (RED at 9d0ad7aa: est 1277 > 1200, over_ceiling="1").
+#        pre-reorder answer), XML, JSON and MCP, at 700 and 1200 on the TS fixture. At 1200 (forbudget-soft, rule 4: an
+#        explicit --token-budget is a SOFT target over the <sigs> rows, est_tokens may exceed N) the old "est_tokens <= 1200,
+#        no over_ceiling the twin lacks" half is replaced by NOLBL (no over_ceiling= on either answer) + ST (the rows' charge
+#        fits T = N x 2.36 x 0.9 bytes or is the rank 1..4 floor; a cut is maximal against the uncut plain-order answer and
+#        carries capped + next=), XML and JSON (RED on base d4325a8c: the hard ceiling cut 10 of 16 / 13 of 16 rows with
+#        room left under T).
 #        MCP est_tokens is the twin's (already above 1200 on base; not this rule's to fix). Near misses: no ceiling and
 #        --token-budget=8000 still reorder and carry docs_after_code= with its reading, XML, JSON and MCP; a question that
 #        names docs keeps score order at 1200 too.
 #        A BODY ceiling (--max-tokens=N --detail=K, XML only: --json refuses the pair, MCP `for` has no max_tokens) is the third tight
-#        ceiling: the same twin equality, est_tokens <= N, on the TS fixture at 1600 and the Python+docs fixture (pydocs) at 1660
+#        ceiling: the same twin equality, est_tokens <= N, on the TS fixture at 1700 and the Python+docs fixture (pydocs) at 1760
+#        (round C re-anchor: 1600 / 1660 before the tail carried the file page)
 #        (RED at f4253d45: est 1634 > 1600 / 1725 > 1660, over_ceiling="1"); near miss --detail alone still reorders.
 #   (J)  dialect parity: --for --json "sigs" entries carry "e" equal to the XML rows' e= (and none where XML has none).
 #   (M)  the MCP `for` twin: the same e= on the C rows, none on the extent_suspect rows, and a legend clause for e=.
@@ -88,6 +93,7 @@ set -u
 export PYTHONDONTWRITEBYTECODE=1
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"   # a gate that indexes a repo must not inherit GIT_DIR/GIT_WORK_TREE (gitenvhermeticcheck D)
+export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py: the soft-target readers, shared helpers (CHECKLIST 32)
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"          # allow a repo-relative binary
 CORPUS="$ROOT/test/forcompletefix"
@@ -418,11 +424,69 @@ if mode == "tight":
         bad.append( "differs from the NO_DOCS_AFTER_CODE=1 twin (the pre-reorder answer)" )
     if moved or note:
         bad.append( "carries docs_after_code= or its reading" )
+    # forbudget-soft (rule 4): an explicit --token-budget (a REF is passed) is a SOFT target over the <sigs> rows (T = N x kMinBytesPerToken x
+    # kBudgetHeadroom bytes), so est_tokens may exceed N and nothing is labelled over_ceiling. The old "est_tokens <= N, no
+    # over_ceiling the twin lacks" half is replaced by NOLBL (no over_ceiling= on either answer) + ST (the rows fit T, or are
+    # the rank 1..4 floor; a cut is maximal against the uncut plain-order REF and carries next=). RED on base (d4325a8c): the
+    # hard ceiling cut the XML rows at 10 of 16 / the JSON rows at 13 with room left under T.
     m = re.search( r'<ctx [^>]*\best_tokens="([0-9]+)"', A ) or re.search( r'"est_tokens":([0-9]+)', A )
-    if budget and not on.endswith( ".mcp.json" ):
+    if budget and not on.endswith( ".mcp.json" ) and len( sys.argv ) <= 7:
+        # a HARD body ceiling (--max-tokens; no REF passed): est_tokens stays <= N, no over_ceiling the twin lacks — unchanged
         if not m: bad.append( "no est_tokens to compare with the budget (premise)" )
         elif int( m.group( 1 ) ) > budget: bad.append( "est_tokens %s > budget %d" % ( m.group( 1 ), budget ) )
         if "over_ceiling" in A and "over_ceiling" not in B: bad.append( "over_ceiling the twin lacks" )
+    elif budget and not on.endswith( ".mcp.json" ):
+        tb = float( sys.argv[ 8 ] ) if len( sys.argv ) > 8 and re.fullmatch( r"[0-9.]+", sys.argv[ 8 ] ) else 0.0
+        if tb <= 0: bad.append( "no target bytes-per-token constant (premise: src/serialize.h kMinBytesPerToken x kBudgetHeadroom)" )
+        if re.search( r'over_ceiling', A ) or re.search( r'over_ceiling', B ):
+            bad.append( "NOLBL: over_ceiling on a soft --token-budget answer" )
+        def charged( doc ):
+            """(row charges in rank order, total charged bytes, cut?, next?) — XML: the bytes inside <sigs> plus the zero
+            cx=/ccx=/in= the lean spelling elides (the ladder's entryCost); JSON: the compact bytes of each "sigs" entry."""
+            if doc.lstrip().startswith( "{" ):
+                try: j = json.loads( doc )
+                except ValueError: return None
+                rows = [ ( int( e.get( "r", 10**9 ) ), len( json.dumps( e, separators=( ",", ":" ), ensure_ascii=False ).encode() ) + 1 )
+                         for e in j.get( "sigs", [] ) ]
+                rows.sort()
+                cut = bool( j.get( "capped" ) ) or j.get( "sigs_shown", len( rows ) ) != j.get( "sigs_total", len( rows ) )
+                return [ c for _, c in rows ], sum( c for _, c in rows ), cut, bool( j.get( "sigs_next" ) )
+            m2 = re.search( r'<sigs\b([^>]*)>(.*?)</sigs>', doc, re.S )
+            if not m2: return None
+            rows = []; elided = 0
+            for d in re.finditer( r'<d ([^>]*)>.*?</d>|<d ([^>]*)/>', m2.group( 2 ), re.S ):
+                a = d.group( 1 ) or d.group( 2 ); r = re.search( r'\br="(\d+)"', a ); pr = len( d.group( 0 ).encode() )
+                c = pr + sum( n for k, n in ( ( "cx", 7 ), ( "ccx", 8 ), ( "in", 7 ) ) if not re.search( r'\b' + k + r'="', a ) )
+                elided += c - pr; rows.append( ( int( r.group( 1 ) ) if r else 10**9, c ) )
+            rows.sort()
+            return [ c for _, c in rows ], len( m2.group( 2 ).encode() ) + elided, 'capped="1"' in m2.group( 1 ), " next=" in m2.group( 1 )
+        a, ref = charged( A ), charged( body( sys.argv[ 7 ] ) ) if len( sys.argv ) > 7 else None
+        T = int( budget * tb )
+        # forbudget-soft round C (owner decision 2026-10-14: RESERVE SECTIONS FIRST; rule 4): the trailing sections are served
+        # first and the rows past the target cut fill what they leave of T — maximality is judged against T less their bytes
+        # (U: XML, everything after </sigs> but </ctx>, plus the <hdr> rows; JSON, the "tail" object)
+        if A.lstrip().startswith( "{" ):
+            try: U = len( json.dumps( json.loads( A ).get( "tail", {} ), separators=( ",", ":" ), ensure_ascii=False ).encode() )
+            except ValueError: U = 0
+        else:
+            U = ( len( A.split( "</sigs>", 1 )[ 1 ].encode() ) - len( "</ctx>" ) if "</sigs>" in A else 0 )
+            U += sum( len( h.encode() ) for h in re.findall( r'<hdr [^>]*/>', A.split( "<sigs", 1 )[ 0 ] ) )
+            # the tail size: test/lib/softbudget.py, shared by the five soft-target readers (the FIX1 R1 tail floor)
+            import os as _os, sys as _sys; _sys.path.insert( 0, _os.environ[ "RIPWIRE_TESTLIB" ] ); from softbudget import tail_size
+            if len( sys.argv ) > 7: U += max( 0, tail_size( body( sys.argv[ 7 ] ) ) - tail_size( A ) )
+        if a is None or ref is None or not ref[ 0 ]: bad.append( "ST: no rows to charge (premise: answer and uncut reference)" )
+        elif tb > 0:
+            k = len( a[ 0 ] ); fits = a[ 1 ] <= T or k <= 4
+            if not fits: bad.append( "ST: rows charged %d B > target %d B with %d rows (floor 4)" % ( a[ 1 ], T, k ) )
+            if k < len( ref[ 0 ] ):
+                if a[ 1 ] + ref[ 0 ][ k ] <= T - U - 160: bad.append( "ST: cut at %d of %d rows with %d B charged, the next row (%d B) fits T=%d less the sections U=%d" % ( k, len( ref[ 0 ] ), a[ 1 ], ref[ 0 ][ k ], T, U ) )
+                if not ( a[ 2 ] and a[ 3 ] ): bad.append( "NX: rows cut (%d of %d) without capped + next=" % ( k, len( ref[ 0 ] ) ) )
+                # FIX2 C1 (rule 4): the upper-bound twin of maximality (test/lib/softbudget.py upper_bound): rows past the floor
+                # stop where T less the other sections and the tail reserve runs out; RED on a binary that ignores the tail reserve
+                import os as _os, sys as _sys; _sys.path.insert( 0, _os.environ[ "RIPWIRE_TESTLIB" ] ); from softbudget import upper_bound
+                up, udet = upper_bound( A, body( sys.argv[ 7 ] ), T, k, len( ref[ 0 ] ), U )
+                if not up: bad.append( "UP: " + udet )
+            print( "  ....  %s: ST rows=%d/%d charged=%d T=%d" % ( label, k, len( ref[ 0 ] ), a[ 1 ], T ) )
 else:
     if not moved: bad.append( "no docs_after_code= (the reorder did not apply)" )
     if not note and not isjson: bad.append( "no reading for docs_after_code=" )   # the JSON twin carries the count only
@@ -438,13 +502,17 @@ mcpfor(){ local out="$1" twin="$2" task="$3" extra="${4:-}"; mkdir -p "$TMP/mcph
     printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
                    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"for","arguments":{"path":"'"$CORPUS/ts"'","task":"'"$task"'"'"$extra"'}}}' \
       | ( cd "$CORPUS/ts" && if [ "$twin" = 1 ]; then TMPDIR="$TMP/mcphome" RIPWIRE_NO_DOCS_AFTER_CODE=1 "$BIN" --mcp; else TMPDIR="$TMP/mcphome" env -u RIPWIRE_NO_DOCS_AFTER_CODE "$BIN" --mcp; fi >"$out" 2>/dev/null ); printf '%s' "$?" >"$out.rc"; }
+# forbudget-soft (rule 4): the soft target's bytes per token, read from source (a missing constant FAILS the ST half, never skips)
+TBPT="$( python3 -c "import re,sys; s=open(sys.argv[1]).read(); g=lambda k:float(re.search(r'inline constexpr double '+k+r' *= *([0-9.]+);',s).group(1)); print(g('kMinBytesPerToken')*g('kBudgetHeadroom'))" "$ROOT/src/serialize.h" 2>/dev/null )"
 for b in 700 1200; do
     for spec in "xml|" "json|--json"; do
         tag="${spec%%|*}"; extra="${spec#*|}"
         if [ -n "$extra" ]; then ON="$( onr ts "t$b$tag" "$Q1" "--token-budget=$b" "$extra" )"; OFF="$( offr ts "t$b$tag" "$Q1" "--token-budget=$b" "$extra" )"
         else ON="$( onr ts "t$b$tag" "$Q1" "--token-budget=$b" )"; OFF="$( offr ts "t$b$tag" "$Q1" "--token-budget=$b" )"; fi
         if ran_ok "$ON" "T/$b/$tag" && ran_ok "$OFF" "T/$b/$tag (twin)"; then
-            tcheck "T/$tag --token-budget=$b: byte-equal to the plain-order twin, no docs_after_code=$([ "$b" = 1200 ] && echo ", est_tokens <= 1200")" tight "$ON" "$OFF" "$([ "$b" = 1200 ] && echo 1200 || echo 0)"
+            REF="$( offr ts "r$tag" "$Q1" $extra )"   # the uncut plain-order answer (no budget): the rank order a soft cut is a prefix of
+            ran_ok "$REF" "T/$b/$tag (uncut reference)" || continue
+            tcheck "T/$tag --token-budget=$b: byte-equal to the plain-order twin, no docs_after_code=$([ "$b" = 1200 ] && echo ", NOLBL + ST (soft target)")" tight "$ON" "$OFF" "$([ "$b" = 1200 ] && echo 1200 || echo 0)" "$REF" "$TBPT"
         fi
     done
     mcpfor "$TMP/t$b.on.mcp.json" 0 "$Q1" ",\"budget_tokens\":$b"; mcpfor "$TMP/t$b.off.mcp.json" 1 "$Q1" ",\"budget_tokens\":$b"
@@ -457,7 +525,9 @@ done
 # sit in the window where the uncharged note alone pushed a within-ceiling answer over (RED at f4253d45: ts 1534 -> 1634 with
 # over_ceiling="1" at 1600; pydocs 1626 -> 1725 at 1660). JSON refuses the pair and MCP `for` has no body-ceiling input.
 QP='How is a message delivered to its handler?'
-for spec in "ts|$Q1|1600" "pydocs|$QP|1660"; do
+# forbudget-soft round C (FOLD C; rule 4): the default answer's <tail> now carries page 0 of the file page (+94 / +87 tokens on
+# these two answers), so the windows move with it: 1600 -> 1700, 1660 -> 1760 (est 1628 / 1713 on the round C binary).
+for spec in "ts|$Q1|1700" "pydocs|$QP|1760"; do
     r="${spec%%|*}"; rest="${spec#*|}"; q="${rest%|*}"; mt="${rest##*|}"
     ON="$( onr "$r" "bc$mt" "$q" "--max-tokens=$mt" --detail=1 )"; OFF="$( offr "$r" "bc$mt" "$q" "--max-tokens=$mt" --detail=1 )"
     if ran_ok "$ON" "T/body/$r" && ran_ok "$OFF" "T/body/$r (twin)"; then
