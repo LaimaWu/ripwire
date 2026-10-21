@@ -48,7 +48,9 @@ never makes a one-implementor edge, and one subclass of a local or parameter kee
 
 Exact or no row: a type an implementor can join with no clause the index reads keeps the answer it had (the by-name rows) —
 a Java or Kotlin interface or class with an anonymous class or object expression in the tree (`new T() { … }`,
-`object : T { … }`), a Kotlin `fun interface`, a Java interface with one abstract method (a lambda implements it), and a
+`object : T { … }`), a Kotlin `fun interface`, a Java interface with one abstract method (a lambda implements it; the
+`equals` / `hashCode` / `toString` it redeclares do not count, and an unrelated same-named interface in another package
+does not make it two), a Kotlin interface with one abstract method in a tree that holds Java (a Java lambda converts it), and a
 Rust trait under a mock attribute (`#[automock]` in any `cfg_attr` spelling writes `MockT`). TypeScript types structurally
 (an object literal or a class with the right members conforms unnamed), so one TypeScript candidate is never an edge, and
 a TypeScript `gate="iface"` row's `cands=K` is a floor. A Rust candidate is a method inside an `impl T for X` block or T's

@@ -26,7 +26,6 @@
 // indexed. C++ keeps its own class identity (resolve.h IdentityNarrower's dispatch split), which graph.h hands to the same
 // decision.
 
-#include "infra/sortutil.h"   // svLess: the explicit byte order a string_view sort takes (portablebuildcheck #6)
 #include "model.h"
 #include "langfacts.h"
 #include "receiverevidence.h"
@@ -68,12 +67,28 @@ public:
         EXPECTS( bound.empty() || bound.size() == implementors.size(), "buildGraph sizes the bound map with the implementors map" );
         for( const Symbol& s : ing.symbols )   // the bodyless members: an interface's or abstract class's contract
         {
+            const LangFacts& lf = langFacts( s.lang );
+            javaInTree_         = javaInTree_ || lf.samLambdas;
+            if( lf.samLambdas || lf.samFromJavaLambdas )
+            {
+                if( ReceiverEvidence::classLike( s.kind ) )
+                {
+                    classesByName_[ s.name ].push_back( s.id );   // the identities one name stands for (a package apart)
+                }
+            }
             if( ReceiverEvidence::callableKind( s.kind ) && s.endByte <= s.sigEndByte && s.id < recvEv.ownerClass.size() && !recvEv.ownerClass[ s.id ].empty() )
             {
-                const auto [ it, fresh ] = contract_.try_emplace( recvEv.ownerClass[ s.id ] + "::" + s.name, char( 1 ) );
-                if( fresh && langFacts( s.lang ).samLambdas )
+                contract_.try_emplace( recvEv.ownerClass[ s.id ] + "::" + s.name, char( 1 ) );
+                if( ( lf.samLambdas || lf.samFromJavaLambdas ) && !std::ranges::contains( lf.samIgnoredMembers, std::string_view( s.name ) ) )
                 {
-                    abstractNames_[ recvEv.ownerClass[ s.id ] ].push_back( s.name );   // one per distinct name: the SAM count
+                    if( const NodeId owner = recvEv.classAt( s.fileId, s.sigStartByte, s.endByte, s.id ); owner != kNoNode )
+                    {
+                        std::vector<std::string_view>& names = abstractNames_[ owner ];   // per class IDENTITY, not per name
+                        if( std::ranges::find( names, std::string_view( s.name ) ) == names.end() )
+                        {
+                            names.push_back( s.name );   // one per distinct name: the SAM count
+                        }
+                    }
                 }
             }
         }
@@ -186,12 +201,17 @@ private:
         cand.erase( out, cand.end() );
     }
 
-    // Java (langfacts.h samLambdas): an interface whose contract, its bases' included, has at most one abstract method — a lambda
-    // or a method reference implements it with no class the map can list, so its list is open
+    // A lambda or a method reference implements an interface with exactly one abstract method (JLS 9.8), with no class the index
+    // keeps, so such an interface's implementors list is open (langfacts.h samLambdas: Java; samFromJavaLambdas: Kotlin, when the
+    // tree holds Java). EXACT OR NO ROW: every doubt opens the list. The count is per class IDENTITY (the index knows a base by
+    // NAME only, and `a.Handler` and `b.Handler` are two interfaces): T's own members, plus those of the bases it names exactly.
     bool lambdaImplements( NodeId t ) const
     {
-        const Symbol& s = ing_.symbols[ t ];
-        if( s.kind != SymKind::Interface || !langFacts( s.lang ).samLambdas )
+        const Symbol&    s  = ing_.symbols[ t ];
+        const LangFacts& lf = langFacts( s.lang );
+        // Kotlin's extractor reads an interface as a class (interfaceReadsAsClass), so there a class with no abstract member of
+        // its own or above is a plain class, never an interface: the count must be exactly one
+        if( !samConvertible( s.lang ) || !( s.kind == SymKind::Interface || ( lf.interfaceReadsAsClass && s.kind == SymKind::Class ) ) )
         {
             return false;
         }
@@ -199,25 +219,59 @@ private:
         {
             return hit->second != 0;
         }
+        const auto        named = classesByName_.find( s.name );
+        const std::size_t count = abstractCount( t, named != classesByName_.end() && named->second.size() == 1 );
+        const bool        sam   = count <= 1 && count >= ( lf.interfaceReadsAsClass ? 1U : 0U );
+        samMemo_.emplace( t, char( sam ? 1 : 0 ) );
+        return sam;
+    }
+
+    // a lambda can implement this language's interfaces: Java's always, Kotlin's when a Java file in the tree can pass the lambda
+    bool samConvertible( Lang l ) const
+    {
+        const LangFacts& lf = langFacts( l );
+        return lf.samLambdas || ( lf.samFromJavaLambdas && javaInTree_ );
+    }
+
+    // the distinct abstract member names of class `c` (its own, plus those of the bases the index names exactly), stopping at 2:
+    // a LOWER bound on the true count, so a doubt reads as "may be single". An own name is certain; a base name shared by several
+    // classes, or none in the tree, adds nothing and is not walked past (its bases are the union of every same-named class's).
+    // `exactBases`: false when c's own name is shared, so its base names cannot be told apart per identity.
+    std::size_t abstractCount( NodeId c, bool exactBases ) const
+    {
         std::vector<std::string_view> names;
-        recvEv_.walkBaseLevels( s.name, [ & ]( const std::vector<std::string_view>& level, std::size_t )
+        const auto                    addOwn = [ & ]( NodeId id )
         {
-            for( std::string_view c : level )
+            if( const auto it = abstractNames_.find( id ); it != abstractNames_.end() )
             {
-                if( const auto it = abstractNames_.find( std::string( c ) ); it != abstractNames_.end() )
+                for( std::string_view n : it->second )
                 {
-                    for( std::string_view n : it->second )
+                    if( std::ranges::find( names, n ) == names.end() )
                     {
                         names.push_back( n );
                     }
                 }
             }
-            return false;
-        } );
-        std::sort( names.begin(), names.end(), rw::sortutil::svLess );
-        const bool sam = std::unique( names.begin(), names.end() ) - names.begin() <= 1;
-        samMemo_.emplace( t, char( sam ? 1 : 0 ) );
-        return sam;
+        };
+        addOwn( c );
+        if( !exactBases )
+        {
+            return names.size();
+        }
+        std::vector<std::string_view> frontier{ ing_.symbols[ c ].name };
+        for( std::size_t i = 0; i < frontier.size() && i < ReceiverEvidence::kWalkCap && names.size() <= 1; ++i )
+        {
+            recvEv_.forEachBase( frontier[ i ], [ & ]( std::string_view base )
+            {
+                const auto named = classesByName_.find( base );
+                if( named != classesByName_.end() && named->second.size() == 1 && std::ranges::find( frontier, base ) == frontier.end() )
+                {
+                    frontier.push_back( base );
+                    addOwn( named->second[ 0 ] );
+                }
+            } );
+        }
+        return names.size();
     }
 
     // breadth-first down the implementors map from T, each type once (a cycle or a diamond is walked once): an Other edge (the
@@ -265,7 +319,9 @@ private:
     const std::vector<std::vector<std::uint8_t>>& bound_;
     const std::vector<char>&                      open_;       // graph.h implementorsOpen: a clause names an implementor the map cannot list
     HashMap<std::string, char>                    contract_;   // "Owner::name" of every bodyless member
-    HashMap<std::string, std::vector<std::string_view>> abstractNames_;   // samLambdas languages: owner → its bodyless members' names
+    HashMap<NodeId, std::vector<std::string_view>>      abstractNames_;   // SAM-convertible languages: class id → its bodyless members' distinct names
+    HashMap<std::string_view, std::vector<NodeId>>      classesByName_;   // SAM-convertible languages: name → every class-like symbol so named
+    bool                                                javaInTree_ = false;   // a samLambdas-language symbol exists (a Kotlin SAM can take its lambda)
     HashMap<std::string, std::vector<const Binding*>>   implBlocks_;      // "T\x1fX" → the `impl T for X` blocks (ImplBlock)
     mutable HashMap<NodeId, std::vector<Row>>     memo_;       // T → its closure
     mutable HashMap<NodeId, char>                 samMemo_;    // T → lambdaImplements( T )

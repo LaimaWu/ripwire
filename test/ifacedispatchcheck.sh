@@ -35,6 +35,10 @@
 #   (K) fix round 1, B1 — completeness (fixtures b1ts/ b1java/ b1kt/ b1rs/): an implementor with no clause the map reads (a
 #       TS object literal or conforming class, a Java lambda or anonymous class, a Kotlin `fun interface` lambda or object
 #       expression, a Rust trait under mockall's automock) opens the list: no via="impl", main's by-name rows stay
+#   (K2) fix round 2, C2 — the SAM count (fixtures sam_*/): java.lang.Object's equals / hashCode / toString redeclared abstract do not count;
+#       the count is per interface IDENTITY (a same-named interface in another package is not this one's); a Kotlin single-method
+#       interface is lambda-implementable from Java; controls: a two-method interface (Object method redeclared), two same-named
+#       two-method interfaces, a two-method Kotlin interface beside Java, a Kotlin-only tree: still via="impl"
 #   (M) fix round 1, B2 — Rust method set: through `dyn T` a candidate sits in an `impl T for X` block (or is T's default);
 #       an inherent method of X never is
 #   (L) legend clauses ride with the rows (cands=K a floor; the iface clause only beside an iface row)   (J) --json gate / bound
@@ -274,6 +278,32 @@ for root, sel, want, tag, why in (
           "Rust: `#[cfg_attr(any(test, feature = \"mock\"), automock)]` writes MockFilter, an implementor no source holds (envoy send_500)" ) ):
     a = ask( root, "callees", sel )
     say( rows_are( a, want ), "[P] k_%s" % tag, "--callees=%s: main's by-name rows %s, no via=\"impl\" -- %s" % ( sel, [ w[ 1 ] for w in want ], why ), a.why() )
+
+# ── (K2) the SAM count (fix round 2, C2; the review's javaeq / javaeq2 / javasame / ktjava) ────────────────────────────────────
+# A lambda implements an interface with ONE abstract method (JLS 9.8), so every doubt opens the list: an Object method redeclared is
+# no abstract method of the count, `a.Handler` is not made non-SAM by `b.Handler`'s methods, and Java passes a lambda to a Kotlin
+# interface. The controls prove the rule is not "always open": two real methods (or two same-named two-method interfaces) keep impl.
+print( "=== (K2) the SAM count: Object methods, class identity, Kotlin from Java ===" )
+SAMO, SAMOA, SAMP, SAMK, SAM2, SAMKO = ( os.path.join( FIX, d ) for d in ( "sam_obj", "sam_obj_anno", "sam_pkg", "sam_kt", "sam_two", "sam_kt_only" ) )
+for root, sel, want, kind, tag, why in (
+        ( SAMO, "run", [ ( "compare", "app/LenCmp.java:3", "name" ) ], "P", "obj_equals",
+          "Java: Cmp redeclares equals( Object ) (Comparator does): one abstract method, so `run( ( a, b ) -> … )` can run" ),
+        ( SAMOA, "run", [ ( "hash", "app/Fnv.java:3", "name" ) ], "P", "obj_anno",
+          "Java: @FunctionalInterface Hasher redeclares toString() and hashCode(): still one abstract method (`String::length`)" ),
+        ( SAMP, "run", [ ( "handle", "a/LogHandler.java:3", "name" ) ], "P", "same_name",
+          "Java: a.Handler has one method; the unrelated b.Handler's open() / close() do not make it two" ),
+        ( SAMK, "runOp", [ ( "ap", "app/Op.kt:6", "name" ) ], "P", "kotlin_sam",
+          "Kotlin: `interface Op { fun ap }` (not `fun interface`) takes a Java lambda: OpKt.runOp( x -> x * 2 )" ),
+        ( SAM2, "run", [ ( "first", "app/PairImpl.java:3", "impl" ) ], "C", "two_methods",
+          "Java: Pair has two methods and equals( Object ): a lambda cannot implement it, the one implementor is proven" ),
+        ( SAMP, "fill", [ ( "put", "c/MemSink.java:3", "impl" ) ], "C", "same_name_multi",
+          "Java: c.Sink and d.Sink each have two methods: no interface of the name is a SAM type, impl stays" ),
+        ( SAMK, "runTwo", [ ( "first", "app/Op.kt:14", "impl" ) ], "C", "kotlin_two",
+          "Kotlin: a two-method interface beside Java files: no lambda converts it, impl stays" ),
+        ( SAMKO, "runOp", [ ( "ap", "app/Op.kt:6", "impl" ) ], "C", "kotlin_only",
+          "Kotlin: the same one-method interface in a tree with no Java file: nothing can pass a lambda, impl stays" ) ):
+    a = ask( root, "callees", sel )
+    say( rows_are( a, want ), "[%s] k2_%s" % ( kind, tag ), "--callees=%s: %s -- %s" % ( sel, [ ( w[ 1 ], w[ 2 ] ) for w in want ], why ), a.why() )
 
 # ── (M) Rust method set (fix round 1, B2; §(a) 4): through dyn T only T's impl blocks and defaults can run ───────────────────
 print( "=== (M) Rust: an inherent method is never a trait-dispatched candidate ===" )
