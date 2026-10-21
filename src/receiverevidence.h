@@ -1316,7 +1316,13 @@ struct CallResultTypes
         {
             return rustRootOutside( f, at, modPath.empty() ? item : modPath.substr( 0, modPath.find( "::" ) ), depth );
         }
-        // an in-tree file module: only a named re-export of the item at its own level, followed, may lead out
+        return rustReexportOutside( crate, module, item, depth );
+    }
+    // rustPathOutside's in-tree module step: an item of file module (crate, module) leads out only through a named re-export
+    // at the module's own level (`pub use std::ffi::OsString;`), each followed; an item declared there, an inline `mod`, or no
+    // such `use` (a glob, an unparsed region) never does
+    bool rustReexportOutside( std::uint32_t crate, const std::string& module, std::string_view item, int depth ) const
+    {
         const auto files = rust.filesOf.find( rustModuleKey( crate, module ) );
         if( files == rust.filesOf.end() || rust.inlineMods.contains( rustModuleKey( crate, module ) ) )
         {
