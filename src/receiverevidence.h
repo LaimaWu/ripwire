@@ -1295,6 +1295,89 @@ struct CallResultTypes
         rustModuleAt( tf, ing.symbols[ target ].sigStartByte, targetModule );
         return tf < rust.crateOf.size() && rust.crateOf[ tf ] == crate && targetModule == module;
     }
+    // fc1: does the Rust path `path` (a call's written qualifier, a `use`'s path) written at byte `at` of `f` PROVABLY lead out of
+    // the tree — std / core / alloc, an external crate, an unknown root, the prelude, or an in-tree re-export of one? false
+    // when it reaches an in-tree module or item, and whenever the walk cannot tell: a file outside every crate's tree, two
+    // `use`s of the root, an in-tree glob or an unparsed region of the file that may bring the name in, a depth cap.
+    bool rustPathOutside( std::uint32_t f, std::uint32_t at, std::string_view path, int depth = 0 ) const
+    {
+        if( !rust.built )
+        {
+            buildRustLayout();
+        }
+        if( f >= rust.crateOf.size() || rust.crateOf[ f ] == kNoCrate || path.empty() || depth > 4 )
+        {
+            return false;
+        }
+        const auto [ modPath, item ] = splitLast( path, "::" );
+        std::uint32_t crate = kNoCrate;
+        std::string   module;
+        if( modPath.empty() || !rustModuleOf( f, at, modPath, crate, module, 0 ) )
+        {
+            return rustRootOutside( f, at, modPath.empty() ? item : modPath.substr( 0, modPath.find( "::" ) ), depth );
+        }
+        // an in-tree file module: only a named re-export of the item at its own level, followed, may lead out
+        const auto files = rust.filesOf.find( rustModuleKey( crate, module ) );
+        if( files == rust.filesOf.end() || rust.inlineMods.contains( rustModuleKey( crate, module ) ) )
+        {
+            return false;
+        }
+        bool any = false;
+        bool out = true;
+        for( std::uint32_t mf : files->second )
+        {
+            NodeId one = kNoNode;
+            if( classesNamed( item, CallResultFamily::Rust, [ & ]( NodeId c ) { return ing.symbols[ c ].fileId == mf && enclosingSymbol( c ) == kNoNode; }, one ) > 0 )
+            {
+                return false;
+            }
+            forEachImport( mf, item, [ & ]( const Binding& b )
+            {
+                if( b.kind == LocalBindKind::TypeImport && levelAt( mf, b.startByte ).wholeFile() )
+                {
+                    any = true;
+                    out = out && rustPathOutside( mf, b.startByte, b.importedName, depth + 1 );
+                }
+            } );
+        }
+        return any && out;
+    }
+    // rustPathOutside's root step: the first segment `seg` of a path (or a bare type name) at byte `at` of `f`
+    bool rustRootOutside( std::uint32_t f, std::uint32_t at, std::string_view seg, int depth ) const
+    {
+        if( seg == "crate" || seg == "self" || seg == "super" || seg == "Self" || rust.crateByName.contains( std::string( seg ) ) )
+        {
+            return false;
+        }
+        std::size_t uses = 0;
+        bool        out  = false;
+        forEachRustUseAt( f, at, seg, [ & ]( const Binding& b )
+        {
+            ++uses;
+            out = rustPathOutside( f, b.startByte, b.importedName, depth + 1 );
+        } );
+        if( uses > 0 )
+        {
+            return uses == 1 && out;
+        }
+        std::string module;
+        rustModuleAt( f, at, module );
+        NodeId one = kNoNode;
+        if( rustModuleExists( rust.crateOf[ f ], joinModule( module, seg ) )
+            || classesNamed( seg, CallResultFamily::Rust, [ & ]( NodeId c ) { return ing.symbols[ c ].fileId == f; }, one ) > 0 )
+        {
+            return false;   // a child module, or an item of this file
+        }
+        bool mayBring = false;   // an in-tree glob, or an unparsed region, of this file
+        forEachImport( f, "*", [ & ]( const Binding& b )
+        {
+            std::uint32_t gc = kNoCrate;
+            std::string   gm;
+            mayBring = mayBring || ( b.kind == LocalBindKind::TypeImport && rustModuleOf( f, b.startByte, b.importedName, gc, gm, 0 ) );
+        } );
+        forEachImport( f, "!", [ & ]( const Binding& b ) { mayBring = mayBring || bindsWithoutTarget( b ); } );
+        return !mayBring;
+    }
     // `a::b::C` → ( `a::b`, `C` ); `C` → ( "", `C` ) — the last segment is namesplit::afterLast's
     static std::pair<std::string_view, std::string_view> splitLast( std::string_view path, std::string_view sep ) noexcept
     {
@@ -2519,15 +2602,45 @@ struct ReceiverEvidence
         {
             return true;   // a bare call (inside the impl): the language's own lookup
         }
-        const auto [ path, last ] = CallResultTypes::splitLast( written, "::" );
-        const NodeId cls          = path.empty() && last == "Self" ? selfClass( r.fromSymbol )
-                                                                   : types.rustResultClass( r.fileId, r.startByte, path.empty() ? std::string_view{} : written, last );
+        const NodeId cls = rustQualifierClass( r, written );
         if( cls == kNoNode )
         {
             return false;
         }
         const auto it = methodsByType.find( typeKey( ing.symbols[ cls ].name, "::", ing.symbols[ to ].name ) );
         return it != methodsByType.end() && std::ranges::find( it->second, to ) != it->second.end() && ownedBy( to, cls );
+    }
+    // the ONE in-tree class a Rust call's written qualifier names, resolved like a written `x: T` (`Self`: the impl's class)
+    NodeId rustQualifierClass( const Reference& r, std::string_view written ) const
+    {
+        const auto [ path, last ] = CallResultTypes::splitLast( written, "::" );
+        return path.empty() && last == "Self" ? selfClass( r.fromSymbol )
+                                              : types.rustResultClass( r.fileId, r.startByte, path.empty() ? std::string_view{} : written, last );
+    }
+    // fc1: may the call `r` (written with qualifier `written`) type the locals its result binds through `to`? Another family's
+    // own rules decided the edge, and so did a Rust bare call's and a free function's (an inline `mod`'s too). A Rust MEMBER
+    // call `T::f()` whose result is written `Self` types them only when T reaches f's class (rustQualifiedTypeOwns). One
+    // whose result is written by the type's own name (`-> PathBuf`, a path, inside Result / Option / Box) keeps the base
+    // rule unless T resolves to ANOTHER in-tree class or provably leaves the tree (rustPathOutside): `std::path::PathBuf::from()`
+    // never types a local onto an in-tree PathBuf whose `from` returns `PathBuf`, while a T the walk cannot follow (a module
+    // a glob re-exports, a file outside every crate's tree) keeps the row base proved.
+    bool rustQualifierTypes( const Reference& r, std::string_view written, NodeId to, bool spelledSelf ) const
+    {
+        if( callResultFamilyOf( r.lang ) != CallResultFamily::Rust )
+        {
+            return true;
+        }
+        if( spelledSelf )
+        {
+            return rustQualifiedTypeOwns( r, written, to );
+        }
+        NodeId one = kNoNode;
+        if( r.qualifier.empty() || ownerClass[ to ].empty() || types.classesNamed( ownerClass[ to ], CallResultFamily::Rust, []( NodeId ) { return true; }, one ) == 0
+            || rustQualifiedTypeOwns( r, written, to ) )
+        {
+            return true;
+        }
+        return rustQualifierClass( r, written ) == kNoNode && !types.rustPathOutside( r.fileId, r.startByte, written );
     }
     // rust-receivers: the ONE class `self` names inside `from` (or the method enclosing it): the in-tree class of the method's
     // owner name that owns the method (memberOwnerRuleOf — Rust: its own file and item scope, or the only class of the name);
