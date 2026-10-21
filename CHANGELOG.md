@@ -61,6 +61,8 @@ change does not claim it closed. The same holds for a bounded quantifier over a 
 refusal's advice to make the outer quantifier a small explicit bound is safe only when nothing inside the group
 repeats; it is the same class as `(a|aa){1,100}b$`.
 
+Contributed by **@pt-act** in #397.
+
 ## [0.6.8] — 2026-10-19
 
 Four batches of reviewed changes in one release. What a user sees:
