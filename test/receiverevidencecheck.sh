@@ -1659,6 +1659,33 @@ proven      rsrecv callees "src/stdqown.rs:own_new" "method get_it $QO:28"      
 proven      rsrecv callees "src/stdqown.rs:own_full_create" "method sync_all $QO:8"                                # [P]
 proven      rsrecv callees "src/stdqown.rs:own_module_now" "method elapsed_x $QO:39"                               # [P]
 proven      rsrecv callees "src/stdqown.rs:own_full_from" "method lenx $QO:34"                                     # [P]
+# fc1 (rv-l3-delta check 2 / N-c): the same class for a result written by the TYPE'S OWN NAME (`-> OsString`, a path
+# `-> crate::nsown::OsString`, `Result<OsString, ()>` / `Option<..>` + unwrap, `Box<..>`), not `Self`. A qualified member
+# call `T::f()` types its local only when T, read as a written type at the call site, reaches f's in-tree class, whatever
+# the result spelling. [N] (each proven on base dd378171): std's fully qualified, a `use`d std module, core's, std::time's,
+# an external crate's (`serde::`), an unknown root's, a re-export of std's (`crate::stdnre::OsString`), a `use` of std's
+# type, a std glob, the prelude's String. Hedged on base too (kept): UFCS `<std::ffi::OsString>::from()`, a renamed std
+# re-export, a type alias of std's, a free function std::fs::read_to_string / fs::read_to_string beside an in-tree namesake.
+NS="src/nsown.rs"
+for f in full_from full_from_q full_try full_opt full_box mod_from ext_from unknown_from re_path ufcs_from re_alias_path free_full free_mod; do
+    notproven rsrecv callees "src/stdn.rs:$f" "as_os $NS:10"                                                   # [N]
+done
+for f in core_secs std_secs; do notproven rsrecv callees "src/stdn.rs:$f" "as_dur $NS:15"; done                    # [N]
+notproven   rsrecv callees "src/stdnuse.rs:use_from" "as_os $NS:10"                                                # [N]
+notproven   rsrecv callees "src/stdnuse.rs:glob_secs" "as_dur $NS:15"                                              # [N]
+notproven   rsrecv callees "src/stdnuse.rs:prelude_with" "lenx $QO:34"                                             # [N]
+for f in re_alias ty_alias; do notproven rsrecv callees "src/stdnre.rs:$f" "as_os $NS:10"; done                    # [N]
+# [P] twins (proven on base, kept): crate::nsown::T, its path result, Result / Option + unwrap, Box, a `use`d module, a
+# `use`d type, a re-export reaching the in-tree type (`crate::nsre::OsString`, `self::OsString` inside nsre), the in-tree
+# String by its `use`, the free function by its module path. An in-tree `mod std` (nshadow.rs): a non-import path's first
+# segment is an item of the module before the extern prelude, so `std::ffi::OsStr::new()` there IS the in-tree one [P].
+for f in own_full own_q own_try own_opt own_box own_use own_free own_free_full own_reexp; do
+    proven  rsrecv callees "src/nsownuse.rs:$f" "method as_os $NS:10"                                          # [P]
+done
+proven      rsrecv callees "src/nsownuse.rs:own_mod" "method as_dur $NS:15"                                        # [P]
+proven      rsrecv callees "src/nsownuse.rs:own_prelude_twin" "method lenx $QO:34"                                 # [P]
+proven      rsrecv callees "src/nsre.rs:re_own_self" "method as_os $NS:10"                                         # [P]
+for f in shadow_bare shadow_self; do proven rsrecv callees "src/nshadow.rs:$f" "method as_sh src/nshadow.rs:7"; done   # [P]
 # guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
 proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
 

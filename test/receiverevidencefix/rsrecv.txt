@@ -22,6 +22,13 @@ pub mod stdq;
 pub mod stdqown;
 pub mod stdqp;
 pub mod extglob;
+pub mod nsown;
+pub mod stdn;
+pub mod stdnuse;
+pub mod stdnre;
+pub mod nshadow;
+pub mod nsownuse;
+pub mod nsre;
 @@@ rsrecv/src/model.rs
 // Book and Other both define spin / iter; Cfg and Knob both define tune: a call proves one only through its receiver's type.
 pub struct Book { pub items: Vec<u32> }
@@ -132,6 +139,10 @@ pub struct PathBuf;
 impl PathBuf {
     pub fn from(p: &str) -> Self { PathBuf }
     pub fn as_pb(&self) -> u8 { 16 }
+}
+// fc1: a String constructor whose result is written by the type's own NAME (stdnuse.rs spells the prelude's String)
+impl String {
+    pub fn with_n(n: usize) -> String { String }
 }
 @@@ rsrecv/src/kinds.rs
 // an enum with methods and a trait with a default method, both spelled like receivers below
@@ -316,3 +327,91 @@ pub fn glob_now() -> u8 { let t = Instant::now(); t.elapsed_x() }
 // fix round 1 (M1): an external crate's glob may supply `Book`; crate::model::Book is never imported here
 use serde::*;
 pub fn ext_glob_new() -> u8 { let b = Book::new(); b.spin() }
+@@@ rsrecv/src/nsown.rs
+// fc1: in-tree types named like std's whose constructors write the result by the TYPE'S OWN NAME (not `Self`), plainly,
+// fully qualified, and inside Result / Option / Box; a free function named like std::fs::read_to_string
+pub struct OsString;
+impl OsString {
+    pub fn from(s: &str) -> OsString { OsString }
+    pub fn from_q(s: &str) -> crate::nsown::OsString { OsString }
+    pub fn try_x(s: &str) -> Result<OsString, ()> { Ok(OsString) }
+    pub fn opt_x(s: &str) -> Option<OsString> { Some(OsString) }
+    pub fn boxed_x(s: &str) -> Box<OsString> { Box::new(OsString) }
+    pub fn as_os(&self) -> u8 { 21 }
+}
+pub struct Duration;
+impl Duration {
+    pub fn from_secs(n: u64) -> Duration { Duration }
+    pub fn as_dur(&self) -> u8 { 22 }
+}
+pub fn read_to_string(p: &str) -> OsString { OsString }
+@@@ rsrecv/src/stdn.rs
+// fc1: each call's qualifier names std's / core's / an external crate's / no module's type or function, never nsown's, so the
+// callee's result written by NAME must type nothing (base typed every one onto nsown)
+use std::ffi;
+use std::fs;
+pub fn full_from() -> u8 { let s = std::ffi::OsString::from("x"); s.as_os() }
+pub fn full_from_q() -> u8 { let s = std::ffi::OsString::from_q("x"); s.as_os() }
+pub fn full_try() -> u8 { let s = std::ffi::OsString::try_x("x").unwrap(); s.as_os() }
+pub fn full_opt() -> u8 { let s = std::ffi::OsString::opt_x("x").unwrap(); s.as_os() }
+pub fn full_box() -> u8 { let s = std::ffi::OsString::boxed_x("x"); s.as_os() }
+pub fn mod_from() -> u8 { let s = ffi::OsString::from("x"); s.as_os() }
+pub fn core_secs() -> u8 { let d = core::time::Duration::from_secs(1); d.as_dur() }
+pub fn std_secs() -> u8 { let d = std::time::Duration::from_secs(1); d.as_dur() }
+pub fn ext_from() -> u8 { let s = serde::OsString::from("x"); s.as_os() }
+pub fn unknown_from() -> u8 { let s = nosuch::OsString::from("x"); s.as_os() }
+pub fn ufcs_from() -> u8 { let s = <std::ffi::OsString>::from("x"); s.as_os() }
+pub fn free_full() -> u8 { let s = std::fs::read_to_string("x"); s.as_os() }
+pub fn free_mod() -> u8 { let s = fs::read_to_string("x"); s.as_os() }
+pub fn re_path() -> u8 { let s = crate::stdnre::OsString::from("x"); s.as_os() }
+pub fn re_alias_path() -> u8 { let s = crate::stdnre::P::from("x"); s.as_os() }
+pub fn turbofish_std() -> u8 { let s = std::ffi::OsString::from::<u8>("x"); s.as_os() }
+@@@ rsrecv/src/stdnuse.rs
+// fc1: std's types by a `use`, a glob, the prelude; nsown's / other's namesakes never imported here
+use std::ffi::OsString;
+use std::time::*;
+pub fn use_from() -> u8 { let s = OsString::from("x"); s.as_os() }
+pub fn glob_secs() -> u8 { let d = Duration::from_secs(1); d.as_dur() }
+pub fn prelude_with() -> usize { let s = String::with_n(3); s.lenx() }
+@@@ rsrecv/src/stdnre.rs
+// fc1: a re-export, a renamed re-export and a type alias of std's OsString
+pub use std::ffi::OsString;
+pub use std::ffi::OsString as Os;
+pub type P = std::ffi::OsString;
+pub fn re_alias() -> u8 { let s = Os::from("x"); s.as_os() }
+pub fn ty_alias() -> u8 { let s = P::from("x"); s.as_os() }
+@@@ rsrecv/src/nshadow.rs
+// fc1: an in-tree `mod std` (rare): a bare `std::` path is ambiguous with the extern crate in Rust 2018 (hedge); `self::std::` is the in-tree one
+pub mod std {
+    pub mod ffi {
+        pub struct OsStr;
+        impl OsStr {
+            pub fn new(s: &str) -> OsStr { OsStr }
+            pub fn as_sh(&self) -> u8 { 23 }
+        }
+    }
+}
+pub fn shadow_bare() -> u8 { let s = std::ffi::OsStr::new("x"); s.as_sh() }
+pub fn shadow_self() -> u8 { let s = self::std::ffi::OsStr::new("x"); s.as_sh() }
+@@@ rsrecv/src/nsownuse.rs
+// fc1 twins: the qualifier reaches nsown's own type or module (crate::, a `use`d module, a `use`d type, a re-export to the
+// in-tree type), so the result written by NAME types the local as before
+use crate::nsown;
+use crate::nsown::OsString;
+use crate::other::String;
+pub fn own_full() -> u8 { let s = crate::nsown::OsString::from("x"); s.as_os() }
+pub fn own_q() -> u8 { let s = crate::nsown::OsString::from_q("x"); s.as_os() }
+pub fn own_try() -> u8 { let s = OsString::try_x("x").unwrap(); s.as_os() }
+pub fn own_opt() -> u8 { let s = OsString::opt_x("x").unwrap(); s.as_os() }
+pub fn own_box() -> u8 { let s = nsown::OsString::boxed_x("x"); s.as_os() }
+pub fn own_use() -> u8 { let s = OsString::from("x"); s.as_os() }
+pub fn own_mod() -> u8 { let d = nsown::Duration::from_secs(1); d.as_dur() }
+pub fn own_free() -> u8 { let s = nsown::read_to_string("x"); s.as_os() }
+pub fn own_free_full() -> u8 { let s = crate::nsown::read_to_string("x"); s.as_os() }
+pub fn own_reexp() -> u8 { let s = crate::nsre::OsString::from("x"); s.as_os() }
+pub fn own_prelude_twin() -> usize { let s = String::with_n(3); s.lenx() }
+pub fn own_turbofish() -> u8 { let s = crate::nsown::OsString::from::<u8>("x"); s.as_os() }
+@@@ rsrecv/src/nsre.rs
+// fc1: a re-export of the in-tree OsString (its path reaches nsown's type)
+pub use crate::nsown::OsString;
+pub fn re_own_self() -> u8 { let s = self::OsString::from("x"); s.as_os() }
