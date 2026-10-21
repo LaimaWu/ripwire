@@ -1628,6 +1628,18 @@ proven      rsrecv callees "src/alias.rs:alias_plain" "method spin $RSM:5"
 exactproven rsrecv callees "src/samename.rs:other_book" "method spin src/other.rs"                               # [P] the use'd other::Book
 exactproven rsrecv callees "src/samename.rs:nested_book" "method spin src/samename.rs"                           # [P] the mod's own Book
 proven      rsrecv callees "$RSD:block_shadow" "method spin $RSM:5" "method spin $RSM:10"                       # [P] each call its own class
+# CodeRabbit #424: a Rust local or parameter named `this` is an ordinary name, read by its own binding — never the enclosing
+# impl's `self` (the pin-project idiom `let this = self.project()`). Mine.book is other::Book, Shelf.book is model::Book:
+# `self.book.spin()` stays other::Book's; `this.book.spin()` follows the `this` binding's type, or proves nothing when it has none
+RST="src/thisname.rs"
+exactproven rsrecv callees "$RST::Mine::real_self" "method spin src/other.rs"                                   # [P] the real `self`
+for f in Mine::this_param Mine::this_let; do
+    exactproven rsrecv callees "$RST::$f" "method spin $RSM"                                                    # [P] Shelf's book: model::Book
+    proven      rsrecv callees "$RST::$f" "method spin $RSM:5"
+    notproven   rsrecv callees "$RST::$f" "spin src/other.rs:4"                                                 # never the enclosing impl's field
+done
+exactproven rsrecv callees "$RST::Mine::this_direct" "method spin $RSM"                                         # [P] `this: &Book` -> Book::spin
+rs_none "$RST::Mine::this_untyped"                                                                              # [N] an untyped `this` local proves nothing (no spin, not other::Book's)
 for f in Rack::near_box_dyn_field Rack::near_refcell_field Rack::near_index_recv; do rs_none "$RSD::$f"; done       # [N]
 for f in near_box_dyn near_mut_dyn near_arc near_type_alias near_generic_named near_struct_pattern near_try_new near_maybe_new; do
     rs_none "$RSD:$f"                                                                                          # [N]

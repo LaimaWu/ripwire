@@ -22,6 +22,7 @@ pub mod stdq;
 pub mod stdqown;
 pub mod stdqp;
 pub mod extglob;
+pub mod thisname;
 @@@ rsrecv/src/model.rs
 // Book and Other both define spin / iter; Cfg and Knob both define tune: a call proves one only through its receiver's type.
 pub struct Book { pub items: Vec<u32> }
@@ -316,3 +317,16 @@ pub fn glob_now() -> u8 { let t = Instant::now(); t.elapsed_x() }
 // fix round 1 (M1): an external crate's glob may supply `Book`; crate::model::Book is never imported here
 use serde::*;
 pub fn ext_glob_new() -> u8 { let b = Book::new(); b.spin() }
+@@@ rsrecv/src/thisname.rs
+// CodeRabbit #424 (receiverevidence.h narrowTypedLocal): in Rust `this` is an ordinary name (the pin-project idiom
+// `let this = self.project()`), never the receiver keyword. Mine.book is other::Book; Shelf.book is model::Book.
+use crate::model::{Book, Shelf};
+use crate::other;
+pub struct Mine { pub book: other::Book }
+impl Mine {
+    pub fn real_self(&self) -> u8 { self.book.spin() }
+    pub fn this_param(&self, this: &Shelf) -> u8 { this.book.spin() }
+    pub fn this_let(&self) -> u8 { let this: &Shelf = todo!(); this.book.spin() }
+    pub fn this_direct(&self, this: &Book) -> u8 { this.spin() }
+    pub fn this_untyped(&self) -> u8 { let this = project(); this.book.spin() }
+}

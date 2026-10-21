@@ -2623,7 +2623,7 @@ struct ReceiverEvidence
             return false;
         }
         NodeId cls = kNoNode;
-        if( isThisRoot( ch.root ) )
+        if( ch.root == "self" )   // Rust's receiver keyword: `this` / `Self` are ordinary names here, read by their own binding below
         {
             if( ch.path.empty() )
             {
