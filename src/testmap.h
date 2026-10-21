@@ -710,8 +710,9 @@ inline bool classNewCallNames( const IngestResult& ing, const Reference& r, cons
 struct ClassNewSpelling
 {
     std::vector<std::string> first;   // per test file: how the first call ref that named the row's class was written
+    std::vector<std::string> head;    // per test file: the BARE NAME that ref leads with (TS/JS only, see bareName); "" = not a TS/JS construction
     std::vector<char>        mixed;   // per test file: a later ref naming that class was written differently
-    explicit ClassNewSpelling( std::size_t files ) : first( files ), mixed( files, 0 ) {}
+    explicit ClassNewSpelling( std::size_t files ) : first( files ), head( files ), mixed( files, 0 ) {}
     static std::string written( const Reference& r )
     {
         std::string out( 1, char( '0' + int( r.recv ) ) );
@@ -721,7 +722,17 @@ struct ClassNewSpelling
         }
         return out;
     }
-    void adopt( const Reference& r ) { first[ r.fileId ] = written( r ); mixed[ r.fileId ] = 0; }
+    // The name a TS/JS construction leads with: `Eng` in `new Eng()`, `M` in `new M.Eng()` — the identifier an import binds. A member chain with
+    // no identifier root (`new (f()).Eng()`) leads with " ", a name no binding has.
+    static std::string bareName( const Reference& r )
+    {
+        if( r.lang != Lang::TypeScript && r.lang != Lang::JavaScript )
+        {
+            return {};
+        }
+        return !r.memberCall ? r.calleeName : r.memberRoot.empty() ? std::string( 1, ' ' ) : r.memberRoot;
+    }
+    void adopt( const Reference& r ) { first[ r.fileId ] = written( r ); head[ r.fileId ] = bareName( r ); mixed[ r.fileId ] = 0; }
     void note( const Reference& r ) { mixed[ r.fileId ] |= char( written( r ) != first[ r.fileId ] ); }
     void hedge( ClassNewRow& row ) const { row.line = mixed[ row.testFile ] ? 0 : row.line; }   // the emitter omits l= for line 0
 };
@@ -750,24 +761,29 @@ inline void classNewOffer( const ClassNewScan& s, const Reference& r, const Clas
     }
 }
 
-// A TS/JS test file that imports the reached class under ANOTHER local name (`import { Eng as E }`, `import E from "./b"`) spells its
-// construction `new E()`, which fails classNewCallNames' name test — so a bare `new Eng()` of a namesake class is then the only ref that
-// passes, and classNewSpelling has no second spelling to disagree with. The row's line would name the namesake: drop it (exact l= or none).
-// A default import counts only when its module is the class's own file (or the directory an index file stands for): `import React from
-// "react"` says nothing about the class. A named alias is matched by the requested export name alone (over-hedging is the floor).
-inline bool classNewImportRenames( const IngestResult& ing, const Binding& b, const Symbol& cls )
+// THE l= RULE FOR TS/JS: decide by WHERE THE BARE NAME IS BOUND, never by how the class happens to be aliased. A row's line is the earliest
+// construction that passes the NAME test, and a name is only a name: `new Eng()` in a test file whose `Eng` is imported from ANOTHER module (an
+// import alias of the reached class, an export-side rename `export { Eng as Engine }`, a default import under a new name) builds a namesake, while
+// the reached class is built under a spelling the name test never sees. So, in the row's test file:
+//   - every import binding (named, default, `import * as`, a require destructure) of the construction's leading name must resolve to the file
+//     that DEFINES the reached class — else the line is dropped;
+//   - a leading name NO import binds (a class declared in the test, a global) keeps its line only if no class of that name lives in another file.
+// Exact l= or none: over-hedging is the floor. A module that resolves in the tree is compared by file; one that does not (a package, a tsconfig
+// alias this resolver does not follow) falls back to the last path segment against the class file's stem, an index file standing for its directory.
+inline bool classNewBindsClassFile( const IngestResult& ing, const HashMap<std::string, std::uint32_t>& files, const Binding& b, const Symbol& cls )
 {
-    if( b.kind != LocalBindKind::JsImport || b.var == cls.name )
+    if( b.isFromAssignment )
+    {
+        return false;   // `const { Eng } = G`: typeName is an identifier, not a module
+    }
+    const auto [ module, ambiguous ] = resolveJsNamedImportFile( rootRelPath( ing, b.fileId ), b.typeName, files, nullptr, b.fileId );
+    if( ambiguous )
     {
         return false;
     }
-    if( b.importedName == cls.name )
+    if( module != kNoFile )
     {
-        return true;
-    }
-    if( b.importedName != "default" )
-    {
-        return false;
+        return module == cls.fileId;
     }
     const auto stemOf = []( std::string_view path )
     {
@@ -785,20 +801,103 @@ inline bool classNewImportRenames( const IngestResult& ing, const Binding& b, co
     return stemOf( b.typeName ) == want;
 }
 
-inline void classNewHedgeAliased( const IngestResult& ing, std::vector<ClassNewRow>& rows )
+// Per test file: did an import bind the construction's leading name (seen), and did one bind it elsewhere (wrong)?
+struct ClassNewBound
+{
+    std::vector<char> seen;
+    std::vector<char> wrong;
+};
+
+inline ClassNewBound classNewBoundNames( const IngestResult& ing, const ClassNewSpelling& spelling, std::span<const ClassNewRow> rows )
 {
     std::vector<std::int32_t> rowOf( ing.files.size(), -1 );
+    bool                      anyJs = false;
     for( std::size_t i = 0; i < rows.size(); ++i )
     {
         rowOf[ rows[i].testFile ] = std::int32_t( i );
+        anyJs                     = anyJs || !spelling.head[ rows[i].testFile ].empty();
+    }
+    ClassNewBound out{ std::vector<char>( ing.files.size(), 0 ), std::vector<char>( ing.files.size(), 0 ) };
+    if( !anyJs )
+    {
+        return out;
+    }
+    HashMap<std::string, std::uint32_t> files;   // buildJsImportTables' index: normalized root-relative path -> file
+    files.reserve( ing.files.size() );
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        files.emplace( lexicalNormalize( rootRelPath( ing, f ) ), f );
     }
     for( const Binding& b : ing.bindings )
     {
-        if( b.kind == LocalBindKind::JsImport && b.fileId < rowOf.size() && rowOf[ b.fileId ] >= 0
-            && classNewImportRenames( ing, b, ing.symbols[ rows[ rowOf[ b.fileId ] ].cls ] ) )
+        const bool imports = b.kind == LocalBindKind::JsImport || b.kind == LocalBindKind::ModuleAlias;
+        if( !imports || b.fileId >= rowOf.size() || rowOf[ b.fileId ] < 0 || b.var != spelling.head[ b.fileId ] )
         {
-            rows[ rowOf[ b.fileId ] ].line = 0;   // the emitter omits l= for line 0
+            continue;
         }
+        out.seen[ b.fileId ]  = 1;
+        out.wrong[ b.fileId ] |= char( !classNewBindsClassFile( ing, files, b, ing.symbols[ rows[ rowOf[ b.fileId ] ].cls ] ) );
+    }
+    return out;
+}
+
+// Does a class of this row's name live in a file other than the row's class? One pass over the symbols, only for names that need it.
+inline std::vector<char> classNewHasNamesake( const IngestResult& ing, std::span<const ClassNewRow> rows, std::span<const std::int32_t> asked )
+{
+    std::vector<std::pair<std::string_view, std::uint32_t>> wanted;   // (class name, the row's class file), sorted by name
+    for( const std::int32_t i : asked )
+    {
+        wanted.emplace_back( ing.symbols[ rows[i].cls ].name, ing.symbols[ rows[i].cls ].fileId );
+    }
+    std::ranges::sort( wanted );
+    std::vector<char> other( wanted.size(), 0 );
+    for( const Symbol& sym : ing.symbols )
+    {
+        if( !isConstructibleClassKind( sym.kind ) )
+        {
+            continue;
+        }
+        for( auto it = std::lower_bound( wanted.begin(), wanted.end(), std::pair<std::string_view, std::uint32_t>{ sym.name, 0 } );
+             it != wanted.end() && it->first == sym.name; ++it )
+        {
+            other[ std::size_t( it - wanted.begin() ) ] |= char( it->second != sym.fileId );
+        }
+    }
+    std::vector<char> out( asked.size(), 0 );
+    for( std::size_t k = 0; k < asked.size(); ++k )
+    {
+        const Symbol& cls = ing.symbols[ rows[ asked[k] ].cls ];
+        const auto    it  = std::lower_bound( wanted.begin(), wanted.end(), std::pair<std::string_view, std::uint32_t>{ cls.name, cls.fileId } );
+        out[k]            = other[ std::size_t( it - wanted.begin() ) ];
+    }
+    return out;
+}
+
+inline void classNewHedgeByBinding( const IngestResult& ing, const ClassNewSpelling& spelling, std::vector<ClassNewRow>& rows )
+{
+    const ClassNewBound       bound = classNewBoundNames( ing, spelling, rows );
+    std::vector<std::int32_t> unbound;   // TS/JS rows whose leading name no import binds
+    for( std::size_t i = 0; i < rows.size(); ++i )
+    {
+        const std::uint32_t f = rows[i].testFile;
+        if( spelling.head[f].empty() || rows[i].line == 0 )
+        {
+            continue;
+        }
+        rows[i].line = bound.wrong[f] ? 0 : rows[i].line;   // the emitter omits l= for line 0
+        if( !bound.seen[f] )
+        {
+            unbound.push_back( std::int32_t( i ) );
+        }
+    }
+    if( unbound.empty() )
+    {
+        return;
+    }
+    const std::vector<char> namesake = classNewHasNamesake( ing, rows, unbound );
+    for( std::size_t k = 0; k < unbound.size(); ++k )
+    {
+        rows[ unbound[k] ].line = namesake[k] ? 0 : rows[ unbound[k] ].line;
     }
 }
 
@@ -832,7 +931,7 @@ inline std::vector<ClassNewRow> classNewBestRows( const ClassNewScan& s, std::sp
     std::vector<ClassNewRow> rows;
     std::copy_if( best.begin(), best.end(), std::back_inserter( rows ), []( const ClassNewRow& r ) { return r.cls != kNoNode; } );
     std::ranges::for_each( rows, [ & ]( ClassNewRow& r ) { spelling.hedge( r ); } );
-    classNewHedgeAliased( ing, rows );
+    classNewHedgeByBinding( ing, spelling, rows );
     return rows;
 }
 
@@ -1787,7 +1886,7 @@ inline std::size_t scriptGatesUnmodelledCount( const IngestResult& ing )
 // answer without one is byte-identical). The rows are tests NOT in the proven list, so the group is never counted in tests=.
 inline constexpr std::string_view kClassNewLegend =
     "<g via=\"class-new\" total= shown= capped= next=>: tests not listed above that construct a class owning a reached method (or the "
-    "changed class); <new p= l= class=>: the test file, the construction line, the class. The dispatch to the method is not "
+    "changed class); <new p= l= class=>: the test file, the construction line if exact, the class. The dispatch to the method is not "
     "proven, so never in tests=/reached=; nearest class first. ";
 template<class EscapeFn>
 inline std::string classNewGroupXml( const IngestResult& ing, std::span<const ClassNewRow> rows, std::string_view rootPrefix, EscapeFn ex )

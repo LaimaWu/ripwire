@@ -682,6 +682,45 @@ CNT6="$( cd "$TS6" || exit 1; "$BIN" "$TS6" --affected=src/util.ts --no-cache 2>
 printf '%s' "$CNT6" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" l="4" class="Eng"/></g>' \
     && ok '(9i4) TS control: an unrelated default import (React) + the reached Eng built by its own name keeps l="4"' \
     || no "(9i4) TS control: an unrelated default import dropped the line: $( printf '%s' "$CNT6" | sed 's/^.*-->//' )"
+# (9i4b) The GENERAL rule behind 9i4: l= is decided by where the construction's BARE NAME is bound, not by how the class is aliased. Here the
+# class is renamed on the EXPORT side (`class Eng {} export { Eng as Engine }`), so no import in the test aliases anything: `Eng` is bound to
+# ../src/a (a namesake), `Engine` to ../src/b (the reached class), and the bare `new Eng()` (line 4) is the only construction that passes the
+# name test. Its bare name is bound to a module that is not the class's file, so the row must have no l= (never l="4").
+TS7="$TMP/classnew-ts7"; mkdir -p "$TS7/src" "$TS7/test"
+cp "$TS4/src/a.ts" "$TS4/src/util.ts" "$TS7/src/"
+printf 'import { leaf } from "./util";\nclass Eng { run(p: number) { return leaf(p); } }\nexport { Eng as Engine };\n' > "$TS7/src/b.ts"
+printf 'import { Eng } from "../src/a";\nimport { Engine } from "../src/b";\ntest("x", () => {\n  const x = new Eng();\n  const y = new Engine();\n});\n' > "$TS7/test/x.test.ts"
+CNT7="$( cd "$TS7" || exit 1; "$BIN" "$TS7" --affected=src/util.ts --no-cache 2>/dev/null )"
+printf '%s' "$CNT7" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" class="Eng"/></g>' \
+    && ok '(9i4b) TS: export { Eng as Engine } + a test binding Eng to a namesake file and building it first (line 4) — the row has no l= (never l="4")' \
+    || no "(9i4b) TS: an export-side rename leaves the namesake's line: $( printf '%s' "$CNT7" | sed 's/^.*-->//' )"
+# Recall arms for the same rule: the bare name is bound to the class's OWN file, so the row keeps its line however the test file aliases other things.
+#   stem: a default import of another file (lib/b) whose stem equals the class file's (src/b); stem2: two default imports of same-stem files (the
+#   bare one is src/eng); agree-react: unrelated default/namespace imports and the NAMESAKE aliased (`Eng as Other`).
+TS8="$TMP/classnew-ts8"; mkdir -p "$TS8/src" "$TS8/lib" "$TS8/test"
+cp "$TS4/src/b.ts" "$TS4/src/util.ts" "$TS8/src/"
+printf 'export default class Other { }\n'                                                             > "$TS8/lib/b.ts"
+printf 'import Thing from "../lib/b";\nimport { Eng } from "../src/b";\ntest("x", () => {\n  const t = new Thing();\n  const x = new Eng();\n});\n' > "$TS8/test/x.test.ts"
+CNT8="$( cd "$TS8" || exit 1; "$BIN" "$TS8" --affected=src/util.ts --no-cache 2>/dev/null )"
+printf '%s' "$CNT8" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" l="5" class="Eng"/></g>' \
+    && ok '(9i4b) TS recall: a default import of a same-stem file elsewhere (lib/b) does not hedge — Eng is bound to src/b, l="5" kept' \
+    || no "(9i4b) TS recall: a same-stem default import dropped the line: $( printf '%s' "$CNT8" | sed 's/^.*-->//' )"
+TS9="$TMP/classnew-ts9"; mkdir -p "$TS9/src" "$TS9/lib" "$TS9/test"
+cp "$TS5/src/util.ts" "$TS9/src/"
+printf 'export default class Eng { other() { return 1; } }\n'                                          > "$TS9/lib/eng.ts"
+printf 'import { leaf } from "./util";\nexport default class Eng { run(p: number) { return leaf(p); } }\n' > "$TS9/src/eng.ts"
+printf 'import Eng from "../src/eng";\nimport L from "../lib/eng";\ntest("x", () => {\n  const x = new Eng();\n  const y = new L();\n});\n' > "$TS9/test/x.test.ts"
+CNT9="$( cd "$TS9" || exit 1; "$BIN" "$TS9" --affected=src/util.ts --no-cache 2>/dev/null )"
+printf '%s' "$CNT9" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" l="4" class="Eng"/></g>' \
+    && ok '(9i4b) TS recall: Eng default-imported from src/eng (the class file) beside a same-stem lib/eng import — l="4" kept' \
+    || no "(9i4b) TS recall: a same-stem default import dropped the line: $( printf '%s' "$CNT9" | sed 's/^.*-->//' )"
+TS10="$TMP/classnew-ts10"; mkdir -p "$TS10/src" "$TS10/test"
+cp "$TS4/src/a.ts" "$TS4/src/b.ts" "$TS4/src/util.ts" "$TS10/src/"
+printf 'import React from "react";\nimport * as path from "path";\nimport { Eng } from "../src/b";\nimport { Eng as Other } from "../src/a";\ntest("x", () => {\n  const x = new Eng();\n});\n' > "$TS10/test/x.test.ts"
+CNT10="$( cd "$TS10" || exit 1; "$BIN" "$TS10" --affected=src/util.ts --no-cache 2>/dev/null )"
+printf '%s' "$CNT10" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" l="6" class="Eng"/></g>' \
+    && ok '(9i4b) TS recall: Eng bound to src/b while the namesake is aliased (Eng as Other) and unrelated imports sit around it — l="6" kept' \
+    || no "(9i4b) TS recall: an aliased namesake dropped the line: $( printf '%s' "$CNT10" | sed 's/^.*-->//' )"
 # (9l) "nearest class first": two classes at DIFFERENT hops whose test-path order is the reverse of their rank order. Far (hop 2, via
 # the module function mid) is built by the alphabetically-first test, Near (hop 1) by the later one: the rows must list Near first.
 MB="$TMP/classnew-rank"; mkdir -p "$MB/pkg" "$MB/tests"

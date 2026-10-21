@@ -728,7 +728,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "script_gates_unmodelled", "script_gates_unmodelled=N: test/*.sh runners; their subprocess reach is unmodelled, never in tests=/reached=", false, "affected", MapHeaderRead::No, {}, "affected" },
     { "run_first", "run_first=N: the first N test files have the most direct evidence (changed/partner/hops=1, else nearest hops=); not a skip list", false, "affected", MapHeaderRead::No, {}, "affected" },
     // IX-5 (testmap.h classNewTestRows / kClassNewLegend): present only when the hedged group renders
-    { "via", "<g via=class-new total= shown= capped= next=>: tests not listed above that construct a class owning a reached method (or the changed class); <new p= l= class=>: the test file, the construction line, the class. The dispatch is not proven, so never in tests=/reached=; nearest class first", true, "g", MapHeaderRead::No, "class-new", "affected" },
+    { "via", "<g via=class-new total= shown= capped= next=>: tests not listed above that construct a class owning a reached method (or the changed class); <new p= l= class=>: the test file, the construction line if exact, the class. The dispatch is not proven, so never in tests=/reached=; nearest class first", true, "g", MapHeaderRead::No, "class-new", "affected" },
     // callees: src/callhierarchy.h computeHopTestedPartition, spliced in src/verbs_navigate.h
     { "hop_tested", "hop_tested=/hop_untested=: count= split by whether an indexed test reaches the row (in-process calls only)", false, "callees", MapHeaderRead::No, {}, "callees" },   // also defines hop_untested=
     // clones: src/verbs_report.h (the <clones> root emit)
