@@ -345,13 +345,32 @@ constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strict
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 198;          // bump on any grammar/.scm/extraction change
-                                                      // 198 = 2026-10-19 (#358 C# 1a): using directives move to shared captures; import-free deep containers
-                                                      //   no longer disclose a cut or lose whole-cache eligibility. Alias/edge facts unchanged; rich tag 199.
+constexpr std::uint32_t kParserVer    = 214;          // bump on any grammar/.scm/extraction change
+                                                      // 214 = 2026-10-21 (#358 1a, PR #420, merged with main f156be85): C# using directives move to shared
+                                                      //   captures; import-free deep containers no longer disclose a cut or lose whole-cache eligibility.
+                                                      //   Alias/edge facts unchanged. Reserved for #420 above main 206 (rich 207) and the train-32 numbers
+                                                      //   212/213 (32a); train 32b goes above. Rich file tag 215. kCacheVersion stays 36 (no record format change).
+                                                      // 206 = 2026-10-18 (#409, PR #414, renumbered again at merge with main 939dbb69): strictly above every
+                                                      //   live number — main 196 (rich 197), train 31 198 (199), lane rust-receivers 202 (203), lane ix1-slot
+                                                      //   204 (205). Rich file tag 207. kCacheVersion stays 36 (no record format change).
+                                                      // 198 = 2026-10-18 (train 31): strictly above every number a live build used — main 196 (rich 197),
+                                                      //   lane h1-annot 194 (195); body-fold, hrr, callers-band2, dangling-warnings and ix2-slice kept
+                                                      //   their base value 184. Rich file tag 199. kCacheVersion stays 36: no lane changed a record format
+                                                      //   (h1-annot appends two LocalBindKind values; no lane touched a cache serializer).
+                                                      // 185 = 2026-10-18 (#409): a cross-file markdown [text](other.md#slug) keeps the link as
+                                                      //   written (RawRef::memberPath, unbound) so graph.h pins the exact file + heading.
+                                                      //   185, not 184: 184 is train 29. Rich file tag 186. kCacheVersion stays 34.
                                                       // 196 = 2026-10-18 (train 30): strictly above every number a live build used — main 184 (rich 185),
                                                       //   lane call-result-typing 180 (rich 181), lane fcall-forward 188 (189), lane go-local-var 190 (191),
                                                       //   lane name-template-dispatch 192 (193), lane h1-annot (train 31) 194 (195); tail-sym and
                                                       //   path-owners kept 176. Rich file tag 197. kCacheVersion 36 (see its note).
+                                                      // 194 = 2026-10-18 (lane h1-annot, train 31; the train renumbers — reservation 194/195):
+                                                      //   a Python / TS parameter, annotated local or TS field written `mod.T` / `ns.T<…>` keeps the
+                                                      //   qualified text in its RecvType / MemberType importedName; Python records LocalBindKind::
+                                                      //   AugAssign for `x op= v` and OperatorResult in an operator method (in-place or binary) whose
+                                                      //   result is provably its receiver's class ("self" on every path, or `-> Self` / `-> C`); a JS
+                                                      //   `x op= v` records constructedBy( rhs ) like a plain reassignment (`x ||= new B()` names B).
+                                                      //   Rich file tag 195. kCacheVersion unchanged.
                                                       // 192 = 2026-10-17 (train 30 lane name-template-dispatch, IX-3; train renumbers): RefRole::Pattern
                                                       //   records at Python getattr/hasattr/__dict__.get and JS/TS computed-member name templates. Rich 193.
                                                       // 190 = 2026-10-17 (train 30, lane go-local-var): Go var/const, Rust const/static and GDScript const

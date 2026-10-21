@@ -525,6 +525,7 @@ if [ "$ndup" -ge 20 ]; then ok "(D) $ndup <hops> blocks parsed, none with an <h>
 # ── (I) base vs head: the knob restores the BASE answer, and everything outside --for hop selection is unchanged (C1) ─
 if [ -n "${RIPWIRE_BASE_BIN:-}" ] && [ -x "${RIPWIRE_BASE_BIN}" ]; then
     echo "  (I) RIPWIRE_BASE_BIN=$RIPWIRE_BASE_BIN"
+    export RIPWIRE_NO_BODY_FOLD=1   # body-fold (train 31): the head side turns the fold off too (its base predates it)
     n=0; d=0; e=0
     # MODE|ROOT|ARG|ARG… — K: head with RIPWIRE_NO_OWNER_HOP=1 vs base; H: head as shipped vs base; M: MCP `for` (K form)
     while IFS= read -r line; do

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 # The version string lives in exactly ONE place — this project() call. --version (main.cpp)
 # reads it via the generated version.h below; test/versioncheck.sh asserts the two never drift.
-project(ripwire VERSION 0.6.7 LANGUAGES C CXX)
+project(ripwire VERSION 0.6.8 LANGUAGES C CXX)
 
 # ---- language standards (C++23 for our own code / C11 for the vendored C dependencies) ----
 set(CMAKE_CXX_STANDARD 23)
@@ -201,9 +201,26 @@ if(RIPWIRE_PGO)
       "RIPWIRE_PGO must not be enabled in ${_ripwire_pgo_build_name}/ — that is the tree the gates and "
       "benches measure, and a silently PGO'd build/ripwire moves every recorded number. Use build_pgo/.")
   endif()
+  # The compiler-ID guard above already excludes cl.exe; share this driver distinction at both sites.
+  set(_ripwire_pgo_clang_cl OFF)
+  if(WIN32 AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    set(_ripwire_pgo_clang_cl ON)
+  endif()
   if(RIPWIRE_PGO STREQUAL "generate")
     # Counters land in <build>/prof as default_*.profraw, one per process image.
     set(_ripwire_pgo_flag "-fprofile-generate=${CMAKE_BINARY_DIR}/prof")
+    if(_ripwire_pgo_clang_cl)
+      # Observed LLVM backend crash (Clang 22.1.8 / x86_64-v3); no upstream issue/reduced repro yet.
+      # Reproduction and removal criteria: docs/WINDOWS-PGO.md. Only clang-cl is covered/tested;
+      # Windows clang++ (GNU-style driver) is deliberately unchanged, not claimed unaffected.
+      # Profile generation with SLP active fails with "Cannot select: ch = brind ..., v2i64 CopyFromReg".
+      # Scoped strictly to the generate phase so the final 'use' build keeps SLP vectorization active.
+      # For direct compilation (non-LTO), /clang:-fno-slp-vectorize is passed to the compiler frontend.
+      # When LTO is active (e.g. Release builds), code generation is performed at link time by lld-link,
+      # which requires /mllvm:-vectorize-slp=false.
+      add_compile_options(/clang:-fno-slp-vectorize)
+      add_link_options(/mllvm:-vectorize-slp=false)
+    endif()
   elseif(RIPWIRE_PGO STREQUAL "use")
     if(NOT RIPWIRE_PGO_PROFILE OR NOT EXISTS "${RIPWIRE_PGO_PROFILE}")
       message(FATAL_ERROR
@@ -221,7 +238,14 @@ if(RIPWIRE_PGO)
   # must be linked in, and the vendored C is where the parse loop lives — profiling only our C++ would
   # profile the caller of the hot code and not the hot code.
   add_compile_options(${_ripwire_pgo_flag})
-  add_link_options(${_ripwire_pgo_flag})
+  # On Windows with MSVC frontend (clang-cl), CMake routes link options directly to lld-link/link.exe,
+  # which rejects clang driver flags like -fprofile-generate. clang-cl automatically injects the compiler-rt
+  # target-specific profiling library dependency (e.g. /DEFAULTLIB:clang_rt.profile-x86_64.lib on x64)
+  # into the compiled objects, so
+  # link options are unnecessary there and adding ${_ripwire_pgo_flag} would fail link invocation.
+  if(NOT _ripwire_pgo_clang_cl)
+    add_link_options(${_ripwire_pgo_flag})
+  endif()
   message(STATUS "RIPWIRE_PGO: ${RIPWIRE_PGO} — see docs/OPTREMARKS.md F2 and scripts/pgobuild.sh")
 endif()
 
@@ -1254,6 +1278,25 @@ endif()
 #                        -O level, inlining and GCC release — the property that rules out maybe-uninitialized. It is 0
 #                        here on GCC 13/14/16 at -O3 too, and still OFF on GCC for that reason. cl.exe's C4789 is a
 #                        backend warning of optimised builds, which the plain Windows legs never run: not held.
+#   dangling-reference   GCC 13+ only (2026-10-18): a reference bound to the result of a call that took a temporary and
+#                        returns a reference — `for( x : makeRow().items() )`, which reads a dead Row on GCC 13/14 (no
+#                        C++23 P2718 range-for lifetime extension before GCC 15: tmp/lifetime-demo/c_rangefor.cpp, a SEGFAULT
+#                        at every -O on g++-14). A front-end check, so its answer does not move with -O. 0 hits on GCC
+#                        13.4, 14.4 and 16.2 over the 10 owned TUs at -O0 and -O2 -DNDEBUG — the noise GCC 13/14 are known
+#                        for (a function returning a reference to an lvalue argument) does not occur in this tree. A
+#                        false positive is silenced at the function with [[gnu::no_dangling]] (GCC 14+) or by naming the
+#                        temporary, never with -Wno-. GCC 12 has no such flag, hence the version arm. Clang's -Wdangling
+#                        above is the counterpart (with RW_LIFETIMEBOUND, src/infra/platform.h, marking the accessors that
+#                        return a view of an argument); cl.exe has only the /analyze C26815/C26816: not held there.
+# ADVISORY, measured the same day and NOT errors (counts are rows over the 10 owned TUs):
+#   GCC -Wdangling-pointer=2           0 on 13.4/14.4/16.2 at -O2, but a middle-end pass that reads the optimizer's points-to
+#                                      sets, so its answer moves with -O, inlining and release: the maybe-uninitialized rule.
+#   Clang -Wexperimental-lifetime-safety  0 on AppleClang 21 and clang 22; experimental, its diagnostics change per release.
+#   clang-tidy bugprone-return-const-ref-from-parameter  3 rows (gitPathOfEntry and two DefectSiteKey projections),
+#                                      every one safe: each now carries RW_LIFETIMEBOUND, which this check honours and which
+#                                      hands the hazard to clang's -Wdangling at the call sites -> 0. Advisory, not gating:
+#                                      it names a hazard, not a wrong program (scripts/tidycheck.sh's rule).
+#   test/danglingwarncheck.sh compiles planted instances of each shape against these exact flags, per compiler.
 # A flag that is noise on one compiler is dropped on that compiler and written down here, never silenced by a pragma.
 if(MSVC AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS /we4062
@@ -1266,6 +1309,9 @@ else()
   set(RIPWIRE_COMPILE_TIME_FENCE_FLAGS -Werror=switch -Werror=implicit-fallthrough
     -Werror=return-type -Werror=uninitialized -Wno-maybe-uninitialized
     -Werror=format -Werror=format-security -Werror=return-local-addr)
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 13)
+    list(APPEND RIPWIRE_COMPILE_TIME_FENCE_FLAGS -Werror=dangling-reference)
+  endif()
 endif()
 foreach(_t IN LISTS RIPWIRE_OWNED_CXX_TARGETS)
   target_compile_options(${_t} PRIVATE ${RIPWIRE_COMPILE_TIME_FENCE_FLAGS})

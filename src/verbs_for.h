@@ -6,6 +6,7 @@
 #include "infra/emit.h" // rw::emitTo / emitRaw / formatTo — THE emitter and its siblings
 #include "forpage.h"    // L-W: the --for --limit=N file page, coverage=, the thin rule and the widening next=
 #include "forowner.h"   // the question's owner (owner-hop's found set) and the one owner body of an explanatory question
+#include "forfold.h"    // body-fold: the whole bodies of the top ranked rows, appended to a compact-route answer
 #include <optional>          // the redaction-tally snapshots a degraded pre-render restores
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
@@ -426,6 +427,8 @@ struct ForLensJsonInputs
     bool                               notesDegraded;
     // code above docs (serialize.h reorderDocsAfterCode): the XML twin's verdict, REQUIRED for the same reason
     bool                               docsAfterCode;
+    // head round-robin (serialize.h reorderHeadRoundRobin): the XML twin's verdict, REQUIRED for the same reason
+    bool                               headRoundRobin;
     // knob-honesty-068: what the "sigs_next" continuation echoes (serialize.h SigsCutContinuation) — REQUIRED like the two
     // above: a capped JSON bundle names the call that serves its cut rows exactly as the XML twin's <sigs next=> does.
     std::string_view                  task;
@@ -560,6 +563,11 @@ struct ForLensHeaderParts
                                             // under a target with its next= — and the slot clause defines it (present-only)
     bool             splitPresent = false;   // attrib-multidef Q1: may a <calls><c> row carry prov="split"? viaPresent's twin
                                             // question over the same ids (serialize.h splitArmsOutAny); set after construction
+    bool             hopsCallsNextPresent = false; // body-fold rider: a ranked <hops> row's cut <calls> carries next= (set after the
+                                            // hops render, cleared with the section)
+    bool             bodyFoldPresent = false; // body-fold: a compact-route answer in the default regime has fold candidates
+                                            // (forfold.h forBodyFoldCandidates), so a <fold> rides and its clause defines it;
+                                            // set after construction, cleared with the section
 };
 
 // Splice a pre-formatted fragment in front of a structural boundary, or leave the document exactly as it
@@ -728,6 +736,42 @@ inline std::string bodySlotLegend( const ForLensHeaderParts& p, bool compact )
     }
     return compact ? std::string( kForCompactLegendBodySlot ) : std::string( rw::kForBodySlotLegend ) + std::string( kForBodySlotRootClause );
 }
+// body-fold rider (forbudget-soft N3): a ranked hop's cut <calls> listing carries next= (serialize.h packHops), defined present-only
+// (hopsCallsNextPresent: read off the rendered <hops>), so an answer without a cut listing is byte-identical to before
+inline constexpr std::string_view kForCompactHopsCallsNextClause = "; h calls capped=1 next= the call listing every callee";
+inline constexpr std::string_view kForHopsCallsNextClause =
+    "; a hop row's cut calls listing (capped=1) carries next=, the call that lists every callee";
+// does a RANKED hop row (an <h> without qword=: an owner row's cut listing is the owner clause's) carry a cut <calls> with next=
+inline bool rankedHopCallsNextPresent( std::string_view hops ) noexcept
+{
+    for( std::size_t at = hops.find( "<h " ); at != std::string_view::npos; at = hops.find( "<h ", at + 3 ) )
+    {
+        const std::size_t tagEnd = hops.find( '>', at );
+        const std::size_t rowEnd = hops.find( "</h>", at );
+        if( tagEnd == std::string_view::npos || rowEnd == std::string_view::npos )
+        {
+            return false;
+        }
+        const std::string_view tag  = hops.substr( at, tagEnd - at );
+        const std::size_t      open = hops.find( "<calls ", tagEnd );
+        const std::size_t      shut = open == std::string_view::npos ? open : hops.find( '>', open );
+        if( tag.find( " qword=\"" ) == std::string_view::npos && open < rowEnd && shut != std::string_view::npos
+            && hops.substr( open, shut - open ).find( " capped=\"1\" next=\"" ) != std::string_view::npos )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+inline std::string_view hopsCallsNextLegend( const ForLensHeaderParts& p, bool compact ) noexcept
+{
+    return !p.hopsCallsNextPresent ? std::string_view() : ( compact ? kForCompactHopsCallsNextClause : kForHopsCallsNextClause );
+}
+// body-fold: the fold's clause in this dialect, present-only (bodyFoldPresent), right after the slot clause
+inline std::string_view bodyFoldLegend( const ForLensHeaderParts& p, bool compact ) noexcept
+{
+    return !p.bodyFoldPresent ? std::string_view() : ( compact ? rw::kForCompactBodyFoldLegend : rw::kForBodyFoldLegend );
+}
 inline constexpr std::string_view kForCompactLegendTail =
     "; t p= file outside sigs (weaker), t sym= its top symbols (a pointer, not the answer), r= rank (gap = trimmed)";
 // R2-AF (round 2, S4): the COMPACT dialect's `<hdr p= of=/>` clause — verbatim, round-2 amendment §R7.
@@ -835,8 +879,10 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     {
         h += kForCompactLegendBodies;
     }
+    h += hopsCallsNextLegend( p, /*compact=*/true );   // body-fold rider: present-only, right after the hops clause
     h += ownerHopLegend( p, /*compact=*/true );   // owner-hop: present-only, right after the hops clause
     h += bodySlotLegend( p, /*compact=*/true );   // for-body-slot: present-only, after the owner clause
+    h += bodyFoldLegend( p, /*compact=*/true );   // body-fold: present-only, after the slot clause
     // The unconditionally-droppable-free tail of this dialect: five clauses that ride exactly when the bit beside
     // them is set, in THIS order, which is the contract a reader and every byte pin depend on. A table rather than
     // five identical ifs — the list has grown once per lane (hdr, compose, then train 9's lego and layer) and the
@@ -978,8 +1024,10 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     {
         h.append( kForAutoBundleLegend );   // T3: present whenever auto mode is on, whatever the fit outcome — it explains bodies="0" too
     }
+    h.append( hopsCallsNextLegend( p, /*compact=*/false ) );   // body-fold rider: present-only, right after the bundle clause
     h.append( ownerHopLegend( p, /*compact=*/false ) );   // owner-hop: present-only, right after the bundle clause
     h.append( bodySlotLegend( p, /*compact=*/false ) );   // for-body-slot: present-only, after the owner clause
+    h.append( bodyFoldLegend( p, /*compact=*/false ) );   // body-fold: present-only, after the slot clause
     if( p.tailLegend )
     {
         h.append( rw::kForFileTailLegend );   // deep-tail: defines r= and the <tail> element (sigs-charge-exempt, serialize.h)
@@ -1484,7 +1532,7 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
     const JsonSigLens lens{ /*metrics=*/true, in.fanIn, in.impure, in.churnPerFile, in.cloneMember,
                             in.tested, in.amp, /*rankAdaptivePayload=*/true, in.noteIndex,
                             /*endLines=*/rw::endLinesFitCeiling( in.tokenBudget, /*bodyCeiling=*/false ),   // serialize.h
-                            in.docsAfterCode };
+                            in.docsAfterCode, in.headRoundRobin };
     JsonSigNoteCounts noteCounts;
     const auto packSigs = [ & ]( std::FILE* dst, std::size_t budget, bool* outCapped, std::size_t* outDroppedPositive,
                                  std::vector<rw::NodeId>* outShownIds, rw::SigsCutReport* outCut )
@@ -1609,6 +1657,10 @@ inline int emitForLensJsonPass( std::FILE* out, const std::string& header, const
     if( sigsCut.docsAfterCode > 0 )   // the XML tag's docs_after_code= (the reorder's disclosure; uncharged, like the XML attribute)
     {
         sigsCutStanza += ",\"docs_after_code\":" + std::to_string( sigsCut.docsAfterCode );
+    }
+    if( sigsCut.filesFirst > 0 )   // the XML tag's files_first= (the head round-robin's disclosure; uncharged likewise)
+    {
+        sigsCutStanza += ",\"files_first\":" + std::to_string( sigsCut.filesFirst );
     }
     const bool sigsCappedKey = sigsCut.isCapped;   // "capped": the XML tag's capped="1" (the ladder's verdict OR a gate cut)
 
@@ -1981,7 +2033,7 @@ ForAutoBodiesResult buildForAutoBodies( const rw::Config& cfg, const rw::IngestR
         // shell the "budget" branch below already gets for free, rather than a second hand-rolled tag.
         out.attr    = " bundle=\"auto\" bodies=\"0\" reason=\"no_candidates\"";
         out.section = rw::chargeSection( [ & ]( std::FILE* f )
-            { rw::packBodies( f, ing, autoBodyIds, /*budgetBytes=*/1, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), cfg.compress, redactPtr,
+            { rw::packBodies( f, ing, autoBodyIds, /*budgetBytes=*/1, g.outOff, g.outTargets, rw::withAnchorEdge( rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv, nullptr ), &g.outAnchorMiss ), cfg.compress, redactPtr,
                                /*ranges=*/nullptr, /*noteIndex=*/nullptr, nullptr, /*truncateOversizedFirst=*/false,
                                /*withFileContext=*/false, fabRootArg, &lensRank, rw::CalleeLegendsInHead( viaLegendInHead, splitLegendInHead ) ); },
             rw::kBytesPerTokenBody );
@@ -2003,7 +2055,7 @@ ForAutoBodiesResult buildForAutoBodies( const rw::Config& cfg, const rw::IngestR
     const std::size_t  autoBodyBudget = std::max<std::size_t>( 1, std::min( leftBytes, cfg.packBudgetBytes ) );
     rw::EmittedBodies autoEmitted;
     out.section = rw::chargeSection( [ & ]( std::FILE* f )
-        { rw::packBodies( f, ing, autoBodyIds, autoBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), cfg.compress, redactPtr,
+        { rw::packBodies( f, ing, autoBodyIds, autoBodyBudget, g.outOff, g.outTargets, rw::withAnchorEdge( rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv, nullptr ), &g.outAnchorMiss ), cfg.compress, redactPtr,
                            /*ranges=*/nullptr, /*noteIndex=*/nullptr, &autoEmitted, /*truncateOversizedFirst=*/false,
                            /*withFileContext=*/false, fabRootArg, &lensRank, rw::CalleeLegendsInHead( viaLegendInHead, splitLegendInHead ) ); },
         rw::kBytesPerTokenBody );
@@ -2409,7 +2461,7 @@ ForAutoBodiesResult buildForCompactHops( const rw::Config& cfg, const rw::Ingest
     const rw::HopOwners           owners   = forHopOwners( cfg, ing, ownerPlan, leftBytes, fcRootArg );
 
     out.section = rw::chargeSection( [ & ]( std::FILE* f )
-        { rw::packHops( f, ing, hopNodes, hopBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), redactPtr, &lensRank, fcRootArg,
+        { rw::packHops( f, ing, hopNodes, hopBudget, g.outOff, g.outTargets, rw::withAnchorEdge( rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv, nullptr ), &g.outAnchorMiss ), redactPtr, &lensRank, fcRootArg,
                         rw::CalleeLegendsInHead( viaLegendInHead, promised.splitLegendInHead ), &owners ); },   // g.outNameOnly also feeds the hop-slot rule (serialize.h noProvenEdge)
         // MARKUP rate, not the body rate — and this is an honesty choice, not a copy-paste slip. The body
         // rate (3.80 B/tok) prices SOURCE TEXT; the compact section contains none, only tags, identifiers
@@ -2902,6 +2954,12 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // extra resolve and render on a --json call are cheap and unused, not wrong.
         const std::vector<rw::ForNamedHeaderRow> forHdrRows = rw::forNamedHeaderRows( ing, cfg.forTask );
         const std::string                        forHdrXml  = renderForHdrRowsXml( ing, forHdrRows, flRootArg );
+        // HEAD ROUND-ROBIN (serialize.h reorderHeadRoundRobin): the routed subtoken+body answer to a question that names no
+        // indexed file. Only the shown <sigs> rows reorder: the fold and the hops keep walking lensSurfaceIds in score order —
+        // measured on the rank-gates 44 rows (lane hrr report): hops and fold that followed the reordered head lost two graded
+        // ✓ rows (their strongest rows' callees and bodies left the hop window); in score order they lose none.
+        const bool forHeadRR = rw::forHeadRoundRobinOn( conceptualRoute, rw::taskNamesIndexedFile( ing, cfg.forTask ),
+                                                        cfg.tokenBudget > 0 ? std::size_t( cfg.tokenBudget ) : 0u, forBodyCeiling );
 
         // H1 (B0 r2): the bundle is emitted under a GLOBAL payload budget (serialize.h kForPayloadBudgetBytes; an
         // EXPLICIT --token-budget=N overrides it at the same conservative byte rate the --max-tokens fitter uses).
@@ -3046,6 +3104,15 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                         forLegoPresent, forLayerPresent, forModScopePresent, forEndLinePresent, forViaPresent,
                                         ownerPlan.any(), forViaByOwnerOnly, slotOwner.any() };
         headerParts.splitPresent = forSplitPresent;   // attrib-multidef Q1 (a trailing member: the aggregate above keeps its order)
+        // body-fold (forfold.h): the bodies of the top ranked rows, appended — decided here because the header's fold clause reads it.
+        // The compact route's XML answer in the DEFAULT regime only: an explicit --token-budget is a size the caller named (that
+        // answer stays byte-identical), and autoBundleMode already excludes --detail/--signatures-only/--auto-bodies. --max-tokens is
+        // NOT read here (FIX1 B1: --for's notice says this answer ignores it — the detail bodies' ceiling — so it must not turn the
+        // fold off either; shapingflagcheck (A)/(F)).
+        const std::vector<rw::NodeId> foldIds = ( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forBodyFoldOn() )
+            ? rw::forBodyFoldCandidates( ing, lensSurfaceIds, lensRank, std::size_t( std::max( forTopN, 0 ) ), slotOwner.id )
+            : std::vector<rw::NodeId>{};
+        headerParts.bodyFoldPresent = !foldIds.empty();
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
         { return forLensHeaderText( headerParts, withRouteAttr, withTaskEcho, extraNotes ); };
         std::string headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
@@ -3165,7 +3232,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                                                    &forClone, testedPtr, ampPtr, redactPtr,
                                                                    cfg.packBudgetBytes, cfg.tokenBudget, notesPtr,
                                                                    legoTotal, composeTotal, routesTotal, flRootArg,
-                                                                   &forFileTail, &lr.evidence, d.notesDegraded, forDocsAfterCode, cfg.forTask,
+                                                                   &forFileTail, &lr.evidence, d.notesDegraded, forDocsAfterCode, forHeadRR, cfg.forTask,
                                                                    cfg.packTopN, forRankShapingFlags( cfg ) } );
             // §B0: this early return skipped the end-of-function tally below, so a --for --json run redacted
             // SILENTLY — the one stderr line that tells the user a secret was in their tree never appeared.
@@ -3323,12 +3390,16 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // for-body-slot: the slot clause on the same contract — the body rides on top of the complete answer, so its reading never
         // costs a signature row (forbodyslotcheck (D4): <sigs> byte-identical with RIPWIRE_NO_BODY_SLOT=1)
         const std::size_t bodySlotLegendEmitted = bodySlotLegend( headerParts, compactLegendOn ).size();
+        // body-fold: the fold clause on the same contract — the fold rides on top of the complete answer (<sigs> byte-identical with
+        // RIPWIRE_NO_BODY_FOLD=1 but for its next= attribute pair), so its reading never costs a signature row
+        const std::size_t bodyFoldLegendEmitted = bodyFoldLegend( headerParts, compactLegendOn ).size();
         // attrib-multidef Q1: the prov="split" clause is a disclosure on the same contract — exempt, as e= is, so <sigs> (rows and
         // its continuation's budget) is byte-identical with and without it (fordisclosurecheck #2: auto vs --signatures-only)
         const std::size_t splitLegendEmitted = !headerParts.splitPresent ? 0u
                                              : ( compactLegendOn ? rw::kForCompactSplitClause.size() : rw::kForSplitClause.size() );
         const std::size_t exemptBytes = adaptiveNote.size() + autoLegendBytes + confidenceExemptBytes + tailLegendEmitted + idRouteLegendEmitted
-                                      + endLineLegendEmitted + ownerLegendEmitted + bodySlotLegendEmitted + splitLegendEmitted;
+                                      + endLineLegendEmitted + ownerLegendEmitted + bodySlotLegendEmitted + splitLegendEmitted
+                                      + bodyFoldLegendEmitted;
         if( exemptBytes > headerStr.size() )
         {
             DISCLOSE( "runForLens: header exemptions exceed the emitted header — the sig ledger would underflow; charging the header whole" );
@@ -3357,6 +3428,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                               + ( headerParts.endLinePresent ? rw::kForEndLineLegend.size() : 0u )
                                               + ownerLegendExemptBytes( headerParts, /*compact=*/false )
                                               + bodySlotLegend( headerParts, /*compact=*/false ).size()
+                                              + bodyFoldLegend( headerParts, /*compact=*/false ).size()   // body-fold
                                               + ( headerParts.splitPresent ? rw::kForSplitClause.size() : 0u );   // attrib-multidef Q1
             std::size_t       fullCharged     = fullExempt > fullHeaderBytes ? fullHeaderBytes : fullHeaderBytes - fullExempt;
             fullCharged -= std::min( fullCharged, rw::forZeroNoteBytes( fullHeader ) );   // lean-answers: exempt, as above
@@ -3479,7 +3551,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                 sigsBudget,                                  // H1: global payload budget (trim ladder; payload="capped" marker)
                                 notesPtr,                                    // L3: field-notes surfacing (inert when null)
                                 flRootArg,                                   // R-E: root-relative p=
-                                rw::forLensRules( forDocsAfterCode, forEndLines ),   // LB-A floor, e= (endLinesFitCeiling), docs reorder
+                                rw::forLensRules( forDocsAfterCode, forEndLines, forHeadRR ),   // LB-A floor, e= (endLinesFitCeiling), docs reorder, head RR
                                 &forDroppedPositive,                         // A2: exact count, see droppedPositiveCount
                                 &shownSigIds,                                // lane 2: the rows actually emitted — the tail's rank rows exclude THESE files
                                 &forSigsCapped,                              // did the ladder fire? — the budget_bytes= clause rides only then
@@ -3725,7 +3797,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                 detailBodyBudget = std::min( detailBodyBudget, std::max( leftBytes, detailFloorBudget ) );
             }
             detailSection = rw::chargeSection( [ & ]( std::FILE* f )
-                { packBodies( f, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ), cfg.compress, redactPtr,
+                { packBodies( f, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, rw::withAnchorEdge( rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv, nullptr ), &g.outAnchorMiss ), cfg.compress, redactPtr,
                               /*ranges=*/nullptr, notesPtr, /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
                               /*withFileContext=*/false, flRootArg, &lensRank, rw::CalleeLegendsInHead( headerParts.viaPresent, headerParts.splitPresent ) ); },   // L3: --detail bodies surface notes too (part of the --for bundle)
                 rw::kBytesPerTokenBody );
@@ -3758,6 +3830,11 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                 headerParts.ownerPresent = false;   // owner-hop: the same section
                 headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
             }
+            else if( headerParts.compactBundle && rankedHopCallsNextPresent( enrich.section.xml ) )
+            {
+                headerParts.hopsCallsNextPresent = true;   // body-fold rider: the clause rides beside the next= it defines
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+            }
         }
         else if( autoBundleMode )
         {
@@ -3779,7 +3856,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             const std::size_t slotSpent = rowsSpentBytes + plan.attrReserve + enrich.section.xml.size();   // the rows at the cut + the hops
             slot = rw::renderForBodySlot( rw::BodySlotInputs{ ing, g.outOff, g.outTargets, g.outNameOnly, lensRank, flRootArg, redactPtr, notesPtr,
-                                                              headerParts.viaPresent, cfg.compress, &g.outProv, headerParts.splitPresent },
+                                                              headerParts.viaPresent, cfg.compress, &g.outProv, headerParts.splitPresent, &g.outAnchorMiss },
                                           slotOwner, forSoftTarget ? std::optional<std::size_t>( rw::forSoftSectionsShare( bundleBudget, slotSpent ) )
                                                                    : std::nullopt );
             if( slot.served )
@@ -3803,6 +3880,23 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, enrich.surfaceOff ? std::string_view() : kForDegradedBundleNote );
         }
         ASSUME( !slot.served || headerParts.bodySlotPresent, "a served owner body rides with the clause that defines it" );
+        // ── body-fold: THE TOP RANKED BODIES, after the slot (forfold.h states the walk). The default regime only (foldIds above):
+        // it rides on top of the complete answer — <sigs>, <hops>, <tail> and the slot are the RIPWIRE_NO_BODY_FOLD=1 bytes but for
+        // the <sigs> next= pair spliced below — and est_tokens prices it (bodies at the body rate, the envelope and skips as markup).
+        rw::BodyFoldRender fold;
+        if( headerParts.bodyFoldPresent )
+        {
+            if( sigsPreRendered && !enrich.surfaceOff && !enrich.hopsCutMarker )
+            {
+                fold = rw::renderForBodyFold( rw::BodyFoldInputs{ ing, cfg.forTask, slot.served ? slotOwner.id : rw::kNoNode, lensRank, flRootArg, redactPtr, cfg.compress }, foldIds );
+            }
+            if( fold.xml.empty() )
+            {
+                // the compact section degraded (surfaceOff) or the rows were never measured: no fold, and its clause goes with it
+                headerParts.bodyFoldPresent = false;
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, enrich.surfaceOff ? std::string_view() : kForDegradedBundleNote );
+            }
+        }
         const rw::ChargedSection& autoSection = enrich.section;
         const std::string&        autoAttr    = enrich.attr;
         if( enrich.hopsCutMarker )
@@ -3900,6 +3994,11 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             }
         }
 
+        // body-fold C3: the <sigs> continuation pair, once the fold rode (forfold.h spliceFoldSigsNext; before the root is priced)
+        if( !fold.xml.empty() )
+        {
+            rw::spliceFoldSigsNext( sigsStr, sigsCeilingNote, fold.firstSkipNext );
+        }
         // PR #135: the priced root this header will carry — every late splice and the est_tokens fixpoint, in
         // finishForLensHeader (above runForLens, with each splice's rationale).
         const ForLensRootFinish rootFinish{
@@ -3919,10 +4018,10 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             // F2: everything OUTSIDE the header at the markup rate. enrich.markupBytes is the compact <hops> section,
             // folded in here rather than charged separately — one rate, one rounding (ForEnrichmentPlan).
             .nonHeaderMarkupBytes = forHdrXml.size() + sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size() + graphSection.xml.size()
-                                  + enrich.markupBytes + tailStr.size() + slot.markupBytes + 6,   // + "</ctx>" (deep-tail: the tail at the markup rate)
+                                  + enrich.markupBytes + tailStr.size() + slot.markupBytes + fold.markupBytes + 6,   // + "</ctx>" (deep-tail: the tail at the markup rate)
             // T3: the body-rate sections; enrich.bodyTokens is zero on the compact route (markup, above); for-body-slot: the
             // owner body at the body rate (a skipped slot's element is markup, above)
-            .bodyTokens           = detailSection.tokens + enrich.bodyTokens + slot.bodyTokens,
+            .bodyTokens           = detailSection.tokens + enrich.bodyTokens + slot.bodyTokens + fold.bodyTokens,   // body-fold: its bodies
             // forbudget-soft: a soft target is never "over" — budget_tokens= names a target, so it is not a ceiling this root
             // labels against; max_tokens= (the detail bodies' hard ceiling) still is, and the runaway guard's cut is the default's
             .tokenBudget          = 0,
@@ -3951,7 +4050,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             degradeSigsCut.pastTargetDisclosed = !forSoftTarget;
             packSignatures( stdout, ing, lensRank, forTopN, cfg.packBudgetBytes, true, fanInPtr, impurePtr, redactPtr,
                             &forChurn, &forClone, testedPtr, ampPtr, /*rankAdaptivePayload=*/true, sigsBudget, notesPtr, flRootArg,
-                            rw::forLensRules( forDocsAfterCode, forEndLines ), nullptr, nullptr, nullptr,   // the degrade path selects identically
+                            rw::forLensRules( forDocsAfterCode, forEndLines, forHeadRR ), nullptr, nullptr, nullptr,   // the degrade path selects identically
                             forTopRowNext,                                           // L-W: same next= rule on the degrade path
                             &degradeSigsCut,                                         // knob-honesty-068: and the same <sigs next=>
                             SigRowSpelling{ .elideZeroMetrics = true } );            // lean-answers lane: the same row spelling
@@ -3999,7 +4098,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // directly at the SAME budget — uncharged for that one run, with an alert, never a fabricated number.
         if( cfg.detail > 0 )
         {
-            rw::emitChargedSection( stdout, detailSection, [ & ]{ packBodies( stdout, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv ),
+            rw::emitChargedSection( stdout, detailSection, [ & ]{ packBodies( stdout, ing, detailIds, detailBodyBudget, g.outOff, g.outTargets, rw::withAnchorEdge( rw::CalleeEdgeBytes( g.outNameOnly, &g.outProv, nullptr ), &g.outAnchorMiss ),
                                                                               cfg.compress, redactPtr, /*ranges=*/nullptr, notesPtr,
                                                                               /*outEmitted=*/nullptr, /*truncateOversizedFirst=*/true,
                                                                               /*withFileContext=*/false, flRootArg, &lensRank, rw::CalleeLegendsInHead( headerParts.viaPresent, headerParts.splitPresent ) ); } );
@@ -4014,6 +4113,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         }
         // for-body-slot: the owner body (or its skip disclosure) after the hops, from the bytes est_tokens priced ("" when none)
         std::fwrite( slot.xml.data(), 1, slot.xml.size(), stdout );
+        // body-fold: the top ranked bodies after the slot, from the bytes est_tokens priced ("" when none)
+        std::fwrite( fold.xml.data(), 1, fold.xml.size(), stdout );
 
         // R8: --with-graph — a compact mermaid flowchart of the ranked bundle's anchor neighborhood,
         // right before </ctx>. Off by default (G5): omitted, this is a no-op and output is byte-identical.

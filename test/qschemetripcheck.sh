@@ -34,9 +34,21 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
-# 2026-10-19, C# import captures (#358 1a), rebased onto train 30: parser tag 196 -> 198 (rich 199) and mirror move together.
-#   Import-free deep containers cease to be partial; record format 36 and quality scheme 22 stay unchanged.
-#   Re-derived with UPDATE_GOLDEN=1; extraction identity remains part of the quality snapshot key.
+# 2026-10-21, C# import captures (#358 1a, PR #420 by @LaimaWu), merged with main f156be85 (0.6.8): RE-PINNED with UPDATE_GOLDEN=1 (hash PLACEHOLDER).
+#   Watched text moved: kParserVer 206 -> 214 (rich file tag 215), quality.h's kIngestParserVerMirror with it. 214 is above main 206 / 207 and the
+#   train-32a numbers 212 / 213. Import-free deep containers cease to be partial. kCacheVersion stays 36 and kQSnapCacheScheme stays 22: no record
+#   format moved. The entries below are kept as written; their hashes are superseded by this one.
+# 2026-10-19, PR #414 (#409 markdown section links) merged with main 90f6fae6 (train 31): RE-PINNED with UPDATE_GOLDEN=1 (hash
+#   a667ffc55e…8a05, unchanged from the PR's own earlier pin: main moved its hash with 198, the watched text here is 206 again). The only watched text that moved is the kParserVer line and quality.h's mirror: renumbered again at
+#   merge to 206 (rich file tag 207), above main 198 / 199 (train 31), 196 / 197 and the live branch builds 202 and 204.
+#   kCacheVersion stays 36 and kQSnapCacheScheme stays 22: the PR keeps a markdown link's written path in an existing field,
+#   no record format moved. The train 31 entry below is kept as written; its hash is superseded by this one.
+# 2026-10-18, train 31 (body-fold, hrr, h1-annot, callers-band2, dangling-warnings, ix2-slice merged onto main 939dbb69):
+#   RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (hash b3bb57d4aa…a02a21a4). Watched text: kParserVer -> 198 (main
+#   196 / rich 197, lane h1-annot 194 / 195; the other five lanes kept their base 184; 198 / rich file tag 199 is above every
+#   live build), quality.h's kIngestParserVerMirror with it. kCacheVersion stays 36 (no lane touched a cache serializer) and
+#   kQSnapCacheScheme stays 22: what a cached Snapshot represents is the same, and the qsnap key folds the extraction identity.
+#   The h1-annot lane entry below is kept as written; its hash is superseded by this one.
 # 2026-10-18, train 30 (call-result-typing, go-local-var, fcall-forward, name-template-dispatch, tail-sym, path-owners merged
 #   onto main b59b0824): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (hash 5af7514356…3726b4). Watched text:
 #   kParserVer -> 196 (lanes call-result-typing 180 / rich 181, fcall-forward 188 / 189, go-local-var 190 / 191,
@@ -59,6 +71,9 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   declaration 176 -> 178 (reservation 178 / rich 179; the train renumbers) and kCacheVersion 32 -> 33 (a def record gains
 #   paramsMin, the fewest arguments a call can pass), quality.h's two mirrors with them. kQSnapCacheScheme 21 is unchanged: what a
 #   cached Snapshot represents is the same, and the two versions already key every extraction fact it holds.
+# 2026-10-18, train 31 lane h1-annot (the train renumbers): RE-DERIVED with UPDATE_GOLDEN=1. Watched text: kParserVer 180 -> 194
+#   (reservation 194/195; Python/TS qualified annotations keep their qualifier, two appended LocalBindKinds), with quality.h's
+#   kIngestParserVerMirror moved in the same diff; kCacheVersion stays 33. What a cached Snapshot means is unchanged: kQSnapCacheScheme stays.
 # 2026-10-16, train 29 lane call-result-typing (the train renumbers): RE-DERIVED with UPDATE_GOLDEN=1. Watched text: kParserVer
 #   176 -> 180 (reservation 180/181) and kCacheVersion 32 -> 33 (RawBind gains resultIndex + unwrapDepth), with quality.h's
 #   kIngest*Mirror moved in the same diff. What a cached Snapshot means is unchanged: kQSnapCacheScheme stays.

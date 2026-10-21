@@ -53,6 +53,7 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"   # gitenvhermeticcheck (D): no ambient GIT_* reaches the RP10 fixture repos
+unset RIPWIRE_NO_HEAD_RR          # lane hrr: the reorder is ON here unless a twin below sets it (cli_so / mcp_so)
 export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py: the soft-target readers, shared helpers (CHECKLIST 32)
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
@@ -129,6 +130,10 @@ a = open( sys.argv[ 1 ] ).read().split( "\n" ); b = open( sys.argv[ 2 ] ).read()
 a = [ x for x in a if x ]; b = [ x for x in b if x ]
 sys.exit( 0 if a == b[ :len( a ) ] else 1 )
 PY
+# head round-robin (lane hrr, train 31; PROCESS rule 4, orchestrator ruling FIX1 §4(a)): the routed no-budget answer reorders
+# its first 8 rows (files_first=), so an ORDER-prefix arm below runs UNCHANGED as a RIPWIRE_NO_HEAD_RR=1 twin, and its "h" arm
+# asserts what still holds with the reorder ON: the rows are a SET prefix (score ranks 1..K) — the continuation resumes with
+# no gap and no repeat (the forrankordercheck (10h) precedent).
 cat > "$TMP/legend.py" <<'PY'
 # legend.py NARROW WIDE: the legend clauses (header comments before <sigs>, split at brackets / '; ' / '. ', digits
 # normalised) of WIDE that NARROW lacks, one per line — present-only clauses (each rides only with its own attribute)
@@ -189,10 +194,13 @@ for line in sys.stdin:
     if c: print( c[ 0 ].get( "text", "" ) )
 PY
 cli_for(){ "$BIN" "$CORPUS" --for="$Q" "$@" "$CF" 2>/dev/null; }
+cli_so(){ RIPWIRE_NO_HEAD_RR=1 cli_for "$@"; }   # the rule-4 twin of cli_for: the score-order answer (lane hrr)
 mcp_call(){ # mcp_call TOOL TASK EXTRA-JSON
     printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"%s","arguments":{"path":"%s","task":"%s"%s}}}\n' \
            "$1" "$CORPUS" "$2" "${3:-}" | "$BIN" --mcp 2>/dev/null | python3 "$TMP/mcptext.py"; }
+mcp_so(){ RIPWIRE_NO_HEAD_RR=1 mcp_call "$@"; }   # the rule-4 twin of mcp_call (lane hrr)
 attr(){ python3 "$TMP/attr.py" "$1" "$2" < "$3"; }
+setp(){ python3 "$RIPWIRE_TESTLIB/softbudget.py" setprefix "$1" "$2" "$3"; }   # setp A ON OFF: A is a SET prefix (score ranks 1..K); ON == OFF as sets
 rows(){ python3 "$TMP/rows.py" < "$1" > "$2"; }
 isnum(){ case "${1:-}" in ''|*[!0-9]*) return 1;; esac; return 0; }
 lines(){ local c; c="$( grep -c . "$1" 2>/dev/null )"; echo "${c:-0}"; }
@@ -207,6 +215,7 @@ PY
     [ "${#a[@]}" -gt 0 ] || return 1
     "$BIN" "$CORPUS" "${a[@]}" "$CF" > "$2" 2>/dev/null
 }
+run_next_so(){ RIPWIRE_NO_HEAD_RR=1 run_next "$@"; }
 
 if ! isnum "$TOPN" || [ -z "$MINBPT" ] || [ -z "$HEADROOM" ]; then
     no "premise: kForLensDefaultTopN / kMinBytesPerToken / kBudgetHeadroom not found in src/serialize.h"
@@ -219,6 +228,9 @@ if [ "$rc" -ne 0 ] || ! rows "$TMP/def.xml" "$TMP/def.rows"; then
     no "premise: default --for on $CORPUS did not run (rc=$rc) or served no <sigs> — every arm below would measure nothing"
     echo "FAILURES ABOVE"; exit 1
 fi
+# lane hrr (rule 4): the score-order twin of the default answer, the reference of every order-prefix twin below
+cli_so > "$TMP/def_so.xml"
+if ! rows "$TMP/def_so.xml" "$TMP/def_so.rows"; then no "premise: the RIPWIRE_NO_HEAD_RR=1 default served no <sigs> — the twins below measure nothing"; fi
 DS="$( attr sigs shown "$TMP/def.xml" )"; DT="$( attr sigs total "$TMP/def.xml" )"
 DN="$( lines "$TMP/def.rows" )"
 # R5: the head size is pinned to the lens's own cap — a change that shrinks the head cannot pass D1 by shrinking total=
@@ -235,12 +247,19 @@ else
     no "(D1) default answer served $DN rows (shown='$DS') of total='$DT' — rows of the ranked head were dropped below the runaway guard"
 fi
 
-# (D2) the default rows ARE the uncapped rows, in rank order
-cli_for --signatures-only --token-budget=1000000 > "$TMP/unc.xml"
-if rows "$TMP/unc.xml" "$TMP/unc.rows" && cmp -s "$TMP/def.rows" "$TMP/unc.rows"; then
-    ok "(D2) default rows == uncapped rows ($( lines "$TMP/unc.rows" ) rows, rank order)"
+# (D2) the default rows ARE the uncapped rows, in rank order — rule-4 twin (lane hrr): unchanged, under RIPWIRE_NO_HEAD_RR=1
+cli_so --signatures-only --token-budget=1000000 > "$TMP/unc_so.xml"
+if rows "$TMP/unc_so.xml" "$TMP/unc_so.rows" && cmp -s "$TMP/def_so.rows" "$TMP/unc_so.rows"; then
+    ok "(D2) [RIPWIRE_NO_HEAD_RR=1 twin] default rows == uncapped rows ($( lines "$TMP/unc_so.rows" ) rows, rank order)"
 else
-    no "(D2) default rows ($DN) differ from the uncapped call's rows ($( lines "$TMP/unc.rows" ))"
+    no "(D2) [RIPWIRE_NO_HEAD_RR=1 twin] default rows ($( lines "$TMP/def_so.rows" )) differ from the uncapped call's rows ($( lines "$TMP/unc_so.rows" ))"
+fi
+# (D2h) reorder ON: the default serves the uncapped call's rows as a set (the reorder adds and drops none)
+cli_for --signatures-only --token-budget=1000000 > "$TMP/unc.xml"
+if rows "$TMP/unc.xml" "$TMP/unc.rows" && [ "$( lines "$TMP/unc.rows" )" -eq "$DN" ] && setp "$TMP/def.rows" "$TMP/unc.rows" "$TMP/def_so.rows"; then
+    ok "(D2h) head round-robin on: default rows == uncapped rows as a set ($DN rows)"
+else
+    no "(D2h) head round-robin on: default rows ($DN) are not the uncapped call's rows ($( lines "$TMP/unc.rows" )) as a set"
 fi
 
 # (D3) past-target disclosure on that answer
@@ -307,17 +326,31 @@ elif [ "$SIGB" -le "$GUARD" ] && [ "$SIGB" -gt $(( GUARD - 6000 )) ]; then
 else
     no "(D4) <sigs> block $SIGB B is not in (guard-6000, guard] = ($(( GUARD - 6000 )), $GUARD] — the cut is not at the guard"
 fi
-# (NX2) the guard cut's next= runs and serves the whole 400-candidate head, the cut's rows its prefix
+# (NX2) the guard cut's next= runs and serves the whole 400-candidate head, the cut's rows its prefix — rule-4 twin (lane
+# hrr): this arm unchanged under RIPWIRE_NO_HEAD_RR=1; (NX2h) below asserts the set prefix with the reorder on
+cli_so --pack-top-n=400 > "$TMP/guard_so.xml"
+GNXS="$( attr sigs next "$TMP/guard_so.xml" )"; GTS="$( attr sigs total "$TMP/guard_so.xml" )"
+rows "$TMP/guard_so.xml" "$TMP/guard_so.rows"
+if [ -n "$GNXS" ] && run_next_so "$GNXS" "$TMP/guard_next_so.xml" && rows "$TMP/guard_next_so.xml" "$TMP/guard_next_so.rows"; then
+    GXNS="$( lines "$TMP/guard_next_so.rows" )"
+    if isnum "$GTS" && [ "$GXNS" -eq "$GTS" ] && python3 "$TMP/prefix.py" "$TMP/guard_so.rows" "$TMP/guard_next_so.rows"; then
+        ok "(NX2) [RIPWIRE_NO_HEAD_RR=1 twin] the guard cut's next= serves all $GXNS rows of total=$GTS; the cut's $( lines "$TMP/guard_so.rows" ) rows are its prefix"
+    else
+        no "(NX2) [RIPWIRE_NO_HEAD_RR=1 twin] the guard cut's next= served $GXNS rows (total=$GTS) or the cut's rows are not its prefix"
+    fi
+else
+    no "(NX2) [RIPWIRE_NO_HEAD_RR=1 twin] the guard cut's next= ('${GNXS:0:60}') is absent or did not run"
+fi
 rows "$TMP/guard.xml" "$TMP/guard.rows"
 if [ -n "$GNX" ] && run_next "$GNX" "$TMP/guard_next.xml" && rows "$TMP/guard_next.xml" "$TMP/guard_next.rows"; then
     GXN="$( lines "$TMP/guard_next.rows" )"
-    if isnum "$GT" && [ "$GXN" -eq "$GT" ] && python3 "$TMP/prefix.py" "$TMP/guard.rows" "$TMP/guard_next.rows"; then
-        ok "(NX2) the guard cut's next= serves all $GXN rows of total=$GT; the cut's $( lines "$TMP/guard.rows" ) rows are its prefix"
+    if isnum "$GT" && [ "$GXN" -eq "$GT" ] && [ -s "$TMP/guard_next_so.rows" ] && setp "$TMP/guard.rows" "$TMP/guard_next.rows" "$TMP/guard_next_so.rows"; then
+        ok "(NX2h) head round-robin on: the guard cut's next= serves all $GXN rows of total=$GT; the cut's $( lines "$TMP/guard.rows" ) rows are its SET prefix"
     else
-        no "(NX2) the guard cut's next= served $GXN rows (total=$GT) or the cut's rows are not its prefix"
+        no "(NX2h) head round-robin on: the guard cut's next= served $GXN rows (total=$GT) or the cut's rows are not its set prefix (score ranks 1..K)"
     fi
 else
-    no "(NX2) the guard cut's next= ('${GNX:0:60}') is absent or did not run"
+    no "(NX2h) the guard cut's next= ('${GNX:0:60}') is absent or did not run"
 fi
 
 # (D4b) the guard biconditional over a --pack-top-n sweep: over_ceiling="1" <=> the uncut head passes the guard
@@ -414,9 +447,13 @@ for n in "${SWEEP[@]}"; do
             no "(E1) N=$n: over_ceiling='$TOC', rows=$TN (floor 4), sigs next='${TNX:0:40}' — a soft target is never 'over' and always names its continuation"
         fi
     fi
-    # (E3) rank prefix: of the default rows, and of the next wider target
-    if python3 "$TMP/prefix.py" "$TMP/t_${n}_full.rows" "$TMP/def.rows"; then ok "(E3) N=$n: rows ($TN) are a rank prefix of the default rows"
-    else no "(E3) N=$n: rows ($TN) are not a rank prefix of the default rows ($DN)"; fi
+    # (E3) rank prefix: of the default rows, and of the next wider target. Rule-4 twin (lane hrr): the default-prefix arm runs
+    #      unchanged under RIPWIRE_NO_HEAD_RR=1; (E3h) asserts the set prefix with the reorder on
+    cli_so --token-budget="$n" --legend=full > "$TMP/t_${n}_so.xml"; rows "$TMP/t_${n}_so.xml" "$TMP/t_${n}_so.rows" || : > "$TMP/t_${n}_so.rows"
+    if [ -s "$TMP/t_${n}_so.rows" ] && python3 "$TMP/prefix.py" "$TMP/t_${n}_so.rows" "$TMP/def_so.rows"; then ok "(E3) [RIPWIRE_NO_HEAD_RR=1 twin] N=$n: rows ($( lines "$TMP/t_${n}_so.rows" )) are a rank prefix of the default rows"
+    else no "(E3) [RIPWIRE_NO_HEAD_RR=1 twin] N=$n: rows ($( lines "$TMP/t_${n}_so.rows" )) are not a rank prefix of the default rows ($( lines "$TMP/def_so.rows" ))"; fi
+    if setp "$TMP/t_${n}_full.rows" "$TMP/def.rows" "$TMP/def_so.rows"; then ok "(E3h) head round-robin on, N=$n: rows ($TN) are a SET prefix of the default rows (score ranks 1..$TN)"
+    else no "(E3h) head round-robin on, N=$n: rows ($TN) are not a set prefix of the default rows ($DN) — the continuation would gap or repeat"; fi
     if [ -n "$prev" ]; then
         if python3 "$TMP/prefix.py" "$TMP/t_${prev}_full.rows" "$TMP/t_${n}_full.rows"; then ok "(E3) rows(N=$prev) is a prefix of rows(N=$n)"
         else no "(E3) rows(N=$prev) is not a prefix of rows(N=$n) — not monotone"; fi
@@ -498,32 +535,58 @@ else
     no "(E2b) a ${#Q900}-char --pack-task at N=2000: task= changed or the echo was dropped (a soft target never sheds the header)"
 fi
 
-# (NX1) the tight cut's next= runs and serves the whole head; the cut's rows are its prefix
-NX="$( attr sigs next "$TMP/t_300_full.xml" )"
-if [ -n "$NX" ] && run_next "$NX" "$TMP/nx.xml" && rows "$TMP/nx.xml" "$TMP/nx.rows"; then
-    if cmp -s "$TMP/nx.rows" "$TMP/def.rows" && python3 "$TMP/prefix.py" "$TMP/t_300_full.rows" "$TMP/nx.rows"; then
-        ok "(NX1) N=300's next= serves the whole head ($( lines "$TMP/nx.rows" ) rows == the default's); the cut is its prefix"
+# (NX1) the tight cut's next= runs and serves the whole head; the cut's rows are its prefix — rule-4 twin (lane hrr): unchanged
+# under RIPWIRE_NO_HEAD_RR=1; (NX1h) asserts the set prefix with the reorder on
+NXS="$( attr sigs next "$TMP/t_300_so.xml" )"
+if [ -n "$NXS" ] && run_next_so "$NXS" "$TMP/nx_so.xml" && rows "$TMP/nx_so.xml" "$TMP/nx_so.rows"; then
+    if cmp -s "$TMP/nx_so.rows" "$TMP/def_so.rows" && python3 "$TMP/prefix.py" "$TMP/t_300_so.rows" "$TMP/nx_so.rows"; then
+        ok "(NX1) [RIPWIRE_NO_HEAD_RR=1 twin] N=300's next= serves the whole head ($( lines "$TMP/nx_so.rows" ) rows == the default's); the cut is its prefix"
     else
-        no "(NX1) N=300's next= served $( lines "$TMP/nx.rows" ) rows, not the default's $DN in order (or the cut is not its prefix)"
+        no "(NX1) [RIPWIRE_NO_HEAD_RR=1 twin] N=300's next= served $( lines "$TMP/nx_so.rows" ) rows, not the default's in order (or the cut is not its prefix)"
     fi
 else
-    no "(NX1) N=300's sigs next= ('${NX:0:60}') is absent or did not run"
+    no "(NX1) [RIPWIRE_NO_HEAD_RR=1 twin] N=300's sigs next= ('${NXS:0:60}') is absent or did not run"
+fi
+NX="$( attr sigs next "$TMP/t_300_full.xml" )"
+if [ -n "$NX" ] && run_next "$NX" "$TMP/nx.xml" && rows "$TMP/nx.xml" "$TMP/nx.rows"; then
+    if [ "$( lines "$TMP/nx.rows" )" -eq "$DN" ] && setp "$TMP/nx.rows" "$TMP/def.rows" "$TMP/def_so.rows" && setp "$TMP/t_300_full.rows" "$TMP/nx.rows" "$TMP/def_so.rows"; then
+        ok "(NX1h) head round-robin on: N=300's next= serves the whole head as a set ($DN rows); the cut is its SET prefix"
+    else
+        no "(NX1h) head round-robin on: N=300's next= served $( lines "$TMP/nx.rows" ) rows, not the default's $DN as a set (or the cut is not its set prefix)"
+    fi
+else
+    no "(NX1h) N=300's sigs next= ('${NX:0:60}') is absent or did not run"
 fi
 
-# (E5) stop when complete: a wide target serves exactly the default answer's rows
-if cmp -s "$TMP/wide.rows" "$TMP/def.rows" && [ "$DN" = "$DT" ]; then
-    ok "(E5) --token-budget=20000 serves exactly the default (complete) rows: $DN"
+# (E5) stop when complete: a wide target serves exactly the default answer's rows — rule-4 twin (lane hrr): unchanged under
+# RIPWIRE_NO_HEAD_RR=1; (E5h) asserts the same rows as a set with the reorder on
+cli_so --token-budget=20000 > "$TMP/wide_so.xml"; rows "$TMP/wide_so.xml" "$TMP/wide_so.rows"
+if cmp -s "$TMP/wide_so.rows" "$TMP/def_so.rows" && [ "$( lines "$TMP/def_so.rows" )" = "$DT" ]; then
+    ok "(E5) [RIPWIRE_NO_HEAD_RR=1 twin] --token-budget=20000 serves exactly the default (complete) rows: $DT"
 else
-    no "(E5) --token-budget=20000 served $( lines "$TMP/wide.rows" ) rows; the default served $DN of total=$DT — a target wider than the answer must serve the complete head"
+    no "(E5) [RIPWIRE_NO_HEAD_RR=1 twin] --token-budget=20000 served $( lines "$TMP/wide_so.rows" ) rows; the default served $( lines "$TMP/def_so.rows" ) of total=$DT — a target wider than the answer must serve the complete head"
+fi
+if [ "$( lines "$TMP/wide.rows" )" = "$DN" ] && [ "$DN" = "$DT" ] && setp "$TMP/wide.rows" "$TMP/def.rows" "$TMP/def_so.rows"; then
+    ok "(E5h) head round-robin on: --token-budget=20000 serves the default (complete) rows as a set: $DN"
+else
+    no "(E5h) head round-robin on: --token-budget=20000 served $( lines "$TMP/wide.rows" ) rows; the default served $DN of total=$DT — not the complete head as a set"
 fi
 
 # (PT1) --pack-top-n sets the head; the target fills it (rule-4 table #4). An uncut block prints no total= (its rows are it).
 cli_for --pack-top-n=10 --token-budget=20000 > "$TMP/ptn10.xml"; rows "$TMP/ptn10.xml" "$TMP/ptn10.rows"
 P10T="$( attr sigs total "$TMP/ptn10.xml" )"
-if { [ "$P10T" = "10" ] || [ -z "$P10T" ]; } && [ "$( lines "$TMP/ptn10.rows" )" -eq 10 ] && python3 "$TMP/prefix.py" "$TMP/ptn10.rows" "$TMP/def.rows"; then
-    ok "(PT1) --pack-top-n=10 --token-budget=20000: exactly the 10-row head, a prefix of the default rows"
+# rule-4 twin (lane hrr): this arm unchanged under RIPWIRE_NO_HEAD_RR=1; (PT1h) the set prefix with the reorder on
+cli_so --pack-top-n=10 --token-budget=20000 > "$TMP/ptn10_so.xml"; rows "$TMP/ptn10_so.xml" "$TMP/ptn10_so.rows"
+P10TS="$( attr sigs total "$TMP/ptn10_so.xml" )"
+if { [ "$P10TS" = "10" ] || [ -z "$P10TS" ]; } && [ "$( lines "$TMP/ptn10_so.rows" )" -eq 10 ] && python3 "$TMP/prefix.py" "$TMP/ptn10_so.rows" "$TMP/def_so.rows"; then
+    ok "(PT1) [RIPWIRE_NO_HEAD_RR=1 twin] --pack-top-n=10 --token-budget=20000: exactly the 10-row head, a prefix of the default rows"
 else
-    no "(PT1) --pack-top-n=10 --token-budget=20000: total='$P10T' rows=$( lines "$TMP/ptn10.rows" ) — a wide target must serve exactly the --pack-top-n head"
+    no "(PT1) [RIPWIRE_NO_HEAD_RR=1 twin] --pack-top-n=10 --token-budget=20000: total='$P10TS' rows=$( lines "$TMP/ptn10_so.rows" ) — a wide target must serve exactly the --pack-top-n head"
+fi
+if { [ "$P10T" = "10" ] || [ -z "$P10T" ]; } && [ "$( lines "$TMP/ptn10.rows" )" -eq 10 ] && setp "$TMP/ptn10.rows" "$TMP/def.rows" "$TMP/def_so.rows"; then
+    ok "(PT1h) head round-robin on: --pack-top-n=10 --token-budget=20000: exactly the 10-row head, a SET prefix of the default rows"
+else
+    no "(PT1h) head round-robin on: --pack-top-n=10 --token-budget=20000: total='$P10T' rows=$( lines "$TMP/ptn10.rows" ) — want the 10-row head, a set prefix of the default rows"
 fi
 
 # (E6) MCP for at a tight budget_tokens; (NX3) its continuation re-call serves the whole head
@@ -532,15 +595,30 @@ M3OC="$( attr ctx over_ceiling "$TMP/mcp_300.xml" )"; M3NB="$( attr sigs next_bu
 if [ -z "$M3OC" ] && isnum "$M3NB"; then ok "(E6) MCP for budget_tokens=300: no over_ceiling=, next_budget_tokens=$M3NB"
 else no "(E6) MCP for budget_tokens=300: over_ceiling='$M3OC' next_budget_tokens='$M3NB'"; fi
 rows "$TMP/mcp_300.xml" "$TMP/mcp_300.rows"
-if isnum "$M3NB"; then
-    mcp_call for "$Q" ",\"budget_tokens\":$M3NB" > "$TMP/mcp_nx.xml"; rows "$TMP/mcp_nx.xml" "$TMP/mcp_nx.rows"
-    if cmp -s "$TMP/mcp_nx.rows" "$TMP/mcp_def.rows" && python3 "$TMP/prefix.py" "$TMP/mcp_300.rows" "$TMP/mcp_nx.rows"; then
-        ok "(NX3) MCP re-call at next_budget_tokens=$M3NB serves the whole head ($( lines "$TMP/mcp_nx.rows" ) rows); the cut is its prefix"
+# rule-4 twin (lane hrr): (NX3) runs unchanged under RIPWIRE_NO_HEAD_RR=1; (NX3h) the set prefix with the reorder on
+mcp_so for "$Q" "" > "$TMP/mcp_def_so.xml"; rows "$TMP/mcp_def_so.xml" "$TMP/mcp_def_so.rows"
+mcp_so for "$Q" ',"budget_tokens":300' > "$TMP/mcp_300_so.xml"; rows "$TMP/mcp_300_so.xml" "$TMP/mcp_300_so.rows"
+M3NBS="$( attr sigs next_budget_tokens "$TMP/mcp_300_so.xml" )"
+if isnum "$M3NBS"; then
+    mcp_so for "$Q" ",\"budget_tokens\":$M3NBS" > "$TMP/mcp_nx_so.xml"; rows "$TMP/mcp_nx_so.xml" "$TMP/mcp_nx_so.rows"
+    if cmp -s "$TMP/mcp_nx_so.rows" "$TMP/mcp_def_so.rows" && python3 "$TMP/prefix.py" "$TMP/mcp_300_so.rows" "$TMP/mcp_nx_so.rows"; then
+        ok "(NX3) [RIPWIRE_NO_HEAD_RR=1 twin] MCP re-call at next_budget_tokens=$M3NBS serves the whole head ($( lines "$TMP/mcp_nx_so.rows" ) rows); the cut is its prefix"
     else
-        no "(NX3) MCP re-call at next_budget_tokens=$M3NB served $( lines "$TMP/mcp_nx.rows" ) rows; the MCP default serves $MN"
+        no "(NX3) [RIPWIRE_NO_HEAD_RR=1 twin] MCP re-call at next_budget_tokens=$M3NBS served $( lines "$TMP/mcp_nx_so.rows" ) rows; the MCP default serves $( lines "$TMP/mcp_def_so.rows" )"
     fi
 else
-    no "(NX3) no next_budget_tokens= to re-call with"
+    no "(NX3) [RIPWIRE_NO_HEAD_RR=1 twin] no next_budget_tokens= to re-call with"
+fi
+if isnum "$M3NB"; then
+    mcp_call for "$Q" ",\"budget_tokens\":$M3NB" > "$TMP/mcp_nx.xml"; rows "$TMP/mcp_nx.xml" "$TMP/mcp_nx.rows"
+    if [ "$( lines "$TMP/mcp_nx.rows" )" -eq "$MN" ] && setp "$TMP/mcp_nx.rows" "$TMP/mcp_def.rows" "$TMP/mcp_def_so.rows" \
+       && setp "$TMP/mcp_300.rows" "$TMP/mcp_nx.rows" "$TMP/mcp_def_so.rows"; then
+        ok "(NX3h) head round-robin on: MCP re-call at next_budget_tokens=$M3NB serves the whole head as a set ($MN rows); the cut is its SET prefix"
+    else
+        no "(NX3h) head round-robin on: MCP re-call at next_budget_tokens=$M3NB served $( lines "$TMP/mcp_nx.rows" ) rows; the MCP default serves $MN (or the cut is not its set prefix)"
+    fi
+else
+    no "(NX3h) no next_budget_tokens= to re-call with"
 fi
 
 # (P1) --pack-task at a tight target
@@ -661,6 +739,9 @@ print( len( rows ), sum( 1 for p, y in rows if not y or want.get( p ) != y ) )' 
     fi
     # (C3) the size is disclosed: est_tokens= on the root prices the whole answer, tail included (markup rate 2.5 B/token)
     C3E="$( attr ctx est_tokens "$TMP/def.xml" )"; C3B="$( wc -c < "$TMP/def.xml" | tr -d ' ' )"
+    # body-fold (train 31): the fold's bodies are source text, priced at the body rate (forbodyfoldcheck (F6)); the markup-rate
+    # floor reads the answer without the <fold> element
+    C3B=$(( C3B - $( python3 -c 'import re,sys; m=re.search(r"<fold .*?</fold>", open(sys.argv[1]).read(), re.S); print(len(m.group(0).encode()) if m else 0)' "$TMP/def.xml" ) ))
     if isnum "$C3E" && [ "$(( C3E * 25 ))" -ge "$(( C3B * 10 * 97 / 100 ))" ]; then ok "(C3) est_tokens=$C3E prices the $C3B-byte answer, its tail included"
     else no "(C3) est_tokens='$C3E' does not price the $C3B-byte answer (the tail rides unpriced)"; fi
 else
@@ -757,21 +838,39 @@ def rows( s, js ):
         g = lambda k: ( re.search( r"\b" + k + r'="([^"]*)"', x.group( 1 ) ) or [ None, "?" ] )[ 1 ]
         out.append( ( int( g( "r" ) ) if g( "r" ).isdigit() else 10**9, g( "p" ) + ":" + g( "l" ) + ":" + g( "n" ) ) )
     return [ b for a, b in sorted( out ) ]
-bad = []
-for js in ( False, True ):
-    extra = [ "--json" ] if js else []
-    ref = rows( subprocess.run( [ B, root, "--for=" + q ] + extra, capture_output=True ).stdout.decode(), js ); prev = None
-    for n in range( 1400, 1601, 10 ):
-        r = rows( subprocess.run( [ B, root, "--for=" + q, "--token-budget=%d" % n ] + extra, capture_output=True ).stdout.decode(), js )
-        if not r or r != ref[ :len( r ) ] or ( prev is not None and prev != r[ :len( prev ) ] ):
-            bad.append( "%s@%d:%s->%d" % ( "json" if js else "xml", n, len( prev ) if prev else "-", len( r ) ) )
-        prev = r
-print( "OK" if not bad else "BAD " + " ".join( bad[ :4 ] ) )
+# rule-4 twin (lane hrr): the order-prefix sweep runs unchanged under RIPWIRE_NO_HEAD_RR=1 (twin); with the reorder on, the
+# rows are a SET prefix of the default (score ranks 1..K, read off the twin default) and stay monotone in N (seth)
+import os
+sys.path.insert( 0, os.environ[ "RIPWIRE_TESTLIB" ] ); from softbudget import set_prefix
+def run( argv, off ):
+    env = dict( os.environ ); env.pop( "RIPWIRE_NO_HEAD_RR", None )
+    if off: env[ "RIPWIRE_NO_HEAD_RR" ] = "1"
+    return subprocess.run( argv, capture_output=True, env=env ).stdout.decode()
+out = []
+for mode in ( "twin", "seth" ):
+    bad = []
+    for js in ( False, True ):
+        extra = [ "--json" ] if js else []
+        ref = rows( run( [ B, root, "--for=" + q ] + extra, True ), js ); prev = None
+        on = rows( run( [ B, root, "--for=" + q ] + extra, False ), js )
+        for n in range( 1400, 1601, 10 ):
+            r = rows( run( [ B, root, "--for=" + q, "--token-budget=%d" % n ] + extra, mode == "twin" ), js )
+            if mode == "twin": pre = r == ref[ :len( r ) ]
+            else: pre = set_prefix( r, on, ref )
+            if not r or not pre or ( prev is not None and prev != r[ :len( prev ) ] ):
+                bad.append( "%s@%d:%s->%d" % ( "json" if js else "xml", n, len( prev ) if prev else "-", len( r ) ) )
+            prev = r
+    out.append( mode + "=" + ( "OK" if not bad else "BAD " + " ".join( bad[ :4 ] ) ) )
+print( ";".join( out ) )
 PY
 )"
     case "$rp10" in
-        OK) ok "(RP10) root of ${#root} chars: rows are a rank prefix, monotone in N, 1400..1600 step 10, default and --json" ;;
-        *)  no "(RP10) root of ${#root} chars: $rp10 — the rows past the cut fell as N grew (or are not a rank prefix)" ;;
+        twin=OK*) ok "(RP10) [RIPWIRE_NO_HEAD_RR=1 twin] root of ${#root} chars: rows are a rank prefix, monotone in N, 1400..1600 step 10, default and --json" ;;
+        *)  no "(RP10) [RIPWIRE_NO_HEAD_RR=1 twin] root of ${#root} chars: ${rp10%%;*} — the rows past the cut fell as N grew (or are not a rank prefix)" ;;
+    esac
+    case "$rp10" in
+        *";seth=OK") ok "(RP10h) head round-robin on, root of ${#root} chars: rows are a SET prefix of the default, monotone in N, 1400..1600 step 10, default and --json" ;;
+        *)  no "(RP10h) head round-robin on, root of ${#root} chars: ${rp10#*;} — the rows past the cut fell as N grew (or are not a set prefix)" ;;
     esac
 done
 rm -rf "$RPD"

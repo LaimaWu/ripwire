@@ -76,18 +76,27 @@ struct LangFacts
     /// judged against the base's whole set. A changed C or Objective-C file does not need it, by today's behaviour
     /// (verbs_quality.h; pinned by test/qddegradecheck.sh (E3)).
     bool defectShapeNeedsMacroSet = false;
+
+    /// Markdown: a link targets a section, so shared graph code treats this language's sections as link targets (graph.h).
+    bool linkSections = false;
+
+    /// C, C++, Objective-C: a function span the parser reports DIRECTLY inside a function's span is read as a misread (htop's
+    /// `else if (…) {` inside a macro-heavy body read as a function named `if`), never a closure (src/closures.h; this fact
+    /// decides only the closure relation, no symbol or edge). A lambda or a block is anonymous, and a C++ local class's
+    /// methods sit inside the class's scope, not directly in the function, so neither is a closure either way.
+    bool noNestedNamedFunctions = false;
 };
 
 /// The rows, one per Lang in enum order. A language says only the facts it has.
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
-    { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true },
+    { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true },
     { .lang = Lang::Python },
     { .lang = Lang::TypeScript, .overloadSignatures = true },
     { .lang = Lang::Go },
     { .lang = Lang::Rust },
     { .lang = Lang::Swift },
-    { .lang = Lang::ObjC },
-    { .lang = Lang::Markdown },
+    { .lang = Lang::ObjC, .noNestedNamedFunctions = true },
+    { .lang = Lang::Markdown, .linkSections = true },
     { .lang = Lang::JavaScript },
     { .lang = Lang::Bash },
     { .lang = Lang::Java },
@@ -95,7 +104,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Unknown },
     { .lang = Lang::Json },
     { .lang = Lang::CSharp },
-    { .lang = Lang::C },
+    { .lang = Lang::C, .noNestedNamedFunctions = true },
     { .lang = Lang::Toml },
     { .lang = Lang::Yaml },
     { .lang = Lang::Php },

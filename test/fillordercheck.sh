@@ -132,7 +132,9 @@ OFIX="$( order_of test/fixture )"
 # RE-PIN 2026-10-04 (train 25): 863 -> 905, the document GREW by its legend and nothing else. The v1 header legend's
 # unresolved=/external= clauses now state the false-edge rule (+106 B); test/golden.xml was re-recorded beside it and differs
 # from its previous self by exactly those two clauses and est_tokens=. Order is unchanged (important-first).
-{ [ "$EFIX" = "905" ] && [ "$OFIX" = "important-first" ]; } \
+# RE-PIN 2026-10-19 (markdown section links): 905 -> 933. The full map gained the via="link" comment and the two
+# fixture edges ([[notes]] and [[related]]); order is unchanged.
+{ [ "$EFIX" = "933" ] && [ "$OFIX" = "important-first" ]; } \
     && ok "test/fixture (est_tokens=$EFIX) does NOT auto-flip — order=$OFIX (golden neutral)" \
     || no "test/fixture unexpectedly changed order or est_tokens (est=$EFIX order=$OFIX)"
 
