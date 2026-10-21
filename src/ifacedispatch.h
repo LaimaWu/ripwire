@@ -9,8 +9,17 @@
 // interface or trait, or a class declaring the callee without a body, the candidates are the bodied methods of that name the
 // types implementing T own (the extends / implements / `impl T for X` edges, walked down to every depth), plus T's own bodied
 // default. One candidate reached through proven edges only is an edge, rendered via="impl" — the only implementor in the tree
-// (one outside it may exist); otherwise the call is DECLINED with exactly that list (DeclinedSiteKind::Iface, gate="iface").
+// (one outside it, or one a macro other than a mock attribute writes, may exist); otherwise the call is DECLINED with exactly that list (DeclinedSiteKind::Iface, gate="iface").
 // No candidate: the tier stays out of the way, and the name tiers answer as before.
+//
+// EXACT OR NO ROW (fix round 1, reports/dispatch-classes.md §(a) 4 and 5). The one-candidate edge needs the WHOLE in-tree set:
+//   * a list some implementor can join with no clause the map reads is OPEN, and the tier steps aside (graph.h implementorsOpen):
+//     a Java / Kotlin anonymous class or object expression, a Kotlin `fun interface`, a Rust trait under a mock attribute (all
+//     ImplBlock records with no implementor name), and a Java interface with one abstract method, which a lambda implements;
+//   * a language that types structurally (TypeScript: an object literal or a matching class conforms unnamed) never proves one
+//     candidate; two or more still decline, and cands=K is then a floor (the legend says so);
+//   * Rust: an implementor's candidate sits inside its `impl T for X` block (an ImplBlock record's span); an inherent method of
+//     X is never one, and a supertrait's method, whose impl block is another trait's, finds none here (the name tiers answer).
 //
 // The rule reads only the implementors map and the receiver's type, so it is language-neutral; what each language supplies
 // is the receiver typing (receiverevidence.h) and, for Rust, the langfacts.h column saying its trait signatures are not
@@ -60,7 +69,19 @@ public:
         {
             if( ReceiverEvidence::callableKind( s.kind ) && s.endByte <= s.sigEndByte && s.id < recvEv.ownerClass.size() && !recvEv.ownerClass[ s.id ].empty() )
             {
-                contract_.try_emplace( recvEv.ownerClass[ s.id ] + "::" + s.name, char( 1 ) );
+                const auto [ it, fresh ] = contract_.try_emplace( recvEv.ownerClass[ s.id ] + "::" + s.name, char( 1 ) );
+                if( fresh && langFacts( s.lang ).samLambdas )
+                {
+                    abstractNames_[ recvEv.ownerClass[ s.id ] ].push_back( s.name );   // one per distinct name: the SAM count
+                }
+            }
+        }
+        for( const Binding& b : ing.bindings )   // a trait impl block's span, keyed "T\x1fX" (model.h LocalBindKind::ImplBlock)
+        {
+            if( b.kind == LocalBindKind::ImplBlock && !b.typeName.empty() )
+            {
+                key_.assign( b.var ).push_back( '\x1f' );
+                implBlocks_[ key_.append( b.typeName ) ].push_back( &b );
             }
         }
     }
@@ -75,7 +96,7 @@ public:
             return out;
         }
         const std::vector<Row>& rows   = closureOf( type );
-        const auto              opened = [ & ]( NodeId t ) { return t < open_.size() && open_[ t ] != 0; };
+        const auto              opened = [ & ]( NodeId t ) { return ( t < open_.size() && open_[ t ] != 0 ) || lambdaImplements( t ); };
         if( rows.empty() || opened( type ) || std::ranges::any_of( rows, [ & ]( const Row& row ) { return opened( row.id ); } ) )
         {
             return out;   // no implementor in the tree, or one the map cannot list: the name tiers answer, as before
@@ -83,10 +104,15 @@ public:
         bool provenAll = true;
         collect( type, callee, out.cand );   // T's own bodied default runs for every implementor without an override
         const bool hasDefault = !out.cand.empty();
+        const bool implBlocks = langFacts( ing_.symbols[ type ].lang ).traitImplBlocks;
         for( const Row& row : rows )
         {
             const std::size_t before = out.cand.size();
             collect( row.id, callee, out.cand );
+            if( implBlocks )
+            {
+                keepInImplBlock( type, row.id, out.cand, before );   // Rust: X's methods for T, never an inherent one
+            }
             // a concrete implementor owning no body of the callee, with no default above it, holds one the index cannot see
             // (a macro-made override, a mock): the list is not the whole of what runs, so one candidate proves nothing
             const bool unseen = !hasDefault && out.cand.size() == before && ( row.id >= implementors_.size() || implementors_[ row.id ].empty() );
@@ -95,7 +121,7 @@ public:
         std::sort( out.cand.begin(), out.cand.end() );
         out.cand.erase( std::unique( out.cand.begin(), out.cand.end() ), out.cand.end() );
         out.fired  = !out.cand.empty();
-        out.proven = provenAll;
+        out.proven = provenAll && !langFacts( ing_.symbols[ type ].lang ).structuralTyping;   // structural: the list is a floor
         return out;
     }
 
@@ -143,6 +169,56 @@ private:
         out.insert( out.end(), recvEv_.found.begin(), recvEv_.found.end() );
     }
 
+    // Rust: keep, of the candidates from `first` on (implementor `impl`'s methods named the callee), those inside one of its
+    // `impl T for X` blocks (ImplBlock spans, by T's and X's names, as the inherit reference names them)
+    void keepInImplBlock( NodeId type, NodeId impl, std::vector<NodeId>& cand, std::size_t first ) const
+    {
+        key_.assign( ing_.symbols[ type ].name ).push_back( '\x1f' );
+        key_.append( ing_.symbols[ impl ].name );
+        const auto hit = implBlocks_.find( key_ );
+        const auto out = std::remove_if( cand.begin() + std::ptrdiff_t( first ), cand.end(), [ & ]( NodeId c )
+        {
+            const Symbol& m = ing_.symbols[ c ];
+            return hit == implBlocks_.end() || std::none_of( hit->second.begin(), hit->second.end(), [ & ]( const Binding* b )
+                   { return b->fileId == m.fileId && b->spanStart <= m.sigStartByte && m.endByte <= b->spanEnd; } );
+        } );
+        cand.erase( out, cand.end() );
+    }
+
+    // Java (langfacts.h samLambdas): an interface whose contract, its bases' included, has at most one abstract method — a lambda
+    // or a method reference implements it with no class the map can list, so its list is open
+    bool lambdaImplements( NodeId t ) const
+    {
+        const Symbol& s = ing_.symbols[ t ];
+        if( s.kind != SymKind::Interface || !langFacts( s.lang ).samLambdas )
+        {
+            return false;
+        }
+        if( const auto hit = samMemo_.find( t ); hit != samMemo_.end() )
+        {
+            return hit->second != 0;
+        }
+        std::vector<std::string_view> names;
+        recvEv_.walkBaseLevels( s.name, [ & ]( const std::vector<std::string_view>& level, std::size_t )
+        {
+            for( std::string_view c : level )
+            {
+                if( const auto it = abstractNames_.find( std::string( c ) ); it != abstractNames_.end() )
+                {
+                    for( std::string_view n : it->second )
+                    {
+                        names.push_back( n );
+                    }
+                }
+            }
+            return false;
+        } );
+        std::sort( names.begin(), names.end() );
+        const bool sam = std::unique( names.begin(), names.end() ) - names.begin() <= 1;
+        samMemo_.emplace( t, char( sam ? 1 : 0 ) );
+        return sam;
+    }
+
     // breadth-first down the implementors map from T, each type once (a cycle or a diamond is walked once): an Other edge (the
     // evidence names a different same-named type) is not followed; a ByName one is, its row and everything below it unproven
     const std::vector<Row>& closureOf( NodeId type ) const
@@ -188,7 +264,10 @@ private:
     const std::vector<std::vector<std::uint8_t>>& bound_;
     const std::vector<char>&                      open_;       // graph.h implementorsOpen: a clause names an implementor the map cannot list
     HashMap<std::string, char>                    contract_;   // "Owner::name" of every bodyless member
+    HashMap<std::string, std::vector<std::string_view>> abstractNames_;   // samLambdas languages: owner → its bodyless members' names
+    HashMap<std::string, std::vector<const Binding*>>   implBlocks_;      // "T\x1fX" → the `impl T for X` blocks (ImplBlock)
     mutable HashMap<NodeId, std::vector<Row>>     memo_;       // T → its closure
+    mutable HashMap<NodeId, char>                 samMemo_;    // T → lambdaImplements( T )
     mutable std::string                           key_;
 };
 

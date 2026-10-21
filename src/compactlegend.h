@@ -586,11 +586,11 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // and VALUE-qualified (<s>/<c>/<e> whose via= lists name), so impact's <f via="import"> importer rows never pull it in; the
     // columnar form names it in fields= like the tested column.
     { "via",               "via=name: the target was matched by name alone (receiver unproven); every by-name candidate in reach is listed; NOT a claim the edge is false", true, "s", MapHeaderRead::No, "name" },
-    { "via",               "via=impl: the receiver's interface/trait/abstract type has ONE implementor in the tree owning the target (one outside it may exist)", true, "s", MapHeaderRead::No, "impl" },
+    { "via",               "via=impl: the receiver's interface/trait/abstract type has ONE implementor in the tree owning the target (an out-of-tree or macro-written one may exist)", true, "s", MapHeaderRead::No, "impl" },
     { "via",               "via=link: this edge is a markdown link, not a call", true, "s", MapHeaderRead::No, "link" },
     { "anchor",            "anchor=missing: the markdown link named a heading this file does not have, so the edge is the file", true, "s", MapHeaderRead::No, "missing" },
     { "via",               "<c via=\"name\">: that callee matched by name alone (receiver unproven); it does NOT mean the edge is false", true, "c", MapHeaderRead::No, "name" },
-    { "via",               "<c via=\"impl\">: the receiver's interface/trait/abstract type has ONE implementor in the tree owning the callee (one outside it may exist)", true, "c", MapHeaderRead::No, "impl" },
+    { "via",               "<c via=\"impl\">: the receiver's interface/trait/abstract type has ONE implementor in the tree owning the callee (an out-of-tree or macro-written one may exist)", true, "c", MapHeaderRead::No, "impl" },
     { "via",               "<c via=\"link\">: that callee is a markdown link, not a call", true, "c", MapHeaderRead::No, "link" },
     { "anchor",            "<c anchor=missing>: that markdown link named a heading this file does not have, so the edge is the file", true, "c", MapHeaderRead::No, "missing" },
     // CALLSITE-AT (2026-10-09): a callers row's call sites (editcheck.h rowCallSites); keyed to the callers schema, so the
@@ -618,8 +618,10 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
                            "(callees: called name, line; callers: calling def, file:line); NOT an edge or a caller/callee claim; cands=K: "
                            "K in-tree defs it could have meant (K may be 1), the resolver proved none; not a claim this call reaches any of them",
                            true, "dc", MapHeaderRead::No, "declined" },
-    { "gate",              "dc gate=: builtin or std, a name gate declined it; side, a Ruby call whose in-reach defs answer on the other side of self; "
-                           "iface, the receiver's interface/trait/abstract type: cands=K its implementors' methods of the name (K implementors; which one runs is unproven)", true, "dc" },
+    { "gate",              "dc gate=: builtin or std, a name gate declined it; side, a Ruby call whose in-reach defs answer on the other side of self", true, "dc" },
+    // lane L6 fix round 1 (N2): value-keyed, so the iface reading rides only with a gate="iface" row, never with builtin / std / side
+    { "gate",              "dc gate=iface: the receiver's interface/trait/abstract type; cands=K its implementors' methods of the name (which one runs is unproven; "
+                           "K is a floor where types conform unnamed: TS)", true, "dc", MapHeaderRead::No, "iface" },
     { "bound",             "dc bound=G: T: a generic receiver bounded by trait T; the candidates are T's implementors', never by name", true, "dc" },
     { "of_def",            "dc of_def=K: the def ix=K making the call; K~d: its candidates include group K, never a claim it calls K", true, "dc" },
     { "dc_shown",          "dc_shown=N: dc rows printed (callers: file-first); dc_next= lists every site" },

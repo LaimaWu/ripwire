@@ -3075,10 +3075,13 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     {
         legend += kModScopeMapLegend;
     }
-    // lane L6: a <c via="impl"> edge's reading, under the same absent-at-zero rule (a map with no one-implementor edge keeps its bytes)
-    if( outProv != nullptr && std::find( outProv->begin(), outProv->end(), kProvImpl ) != outProv->end() )
+    // lane L6: a <c via="impl"> edge's reading, under the same absent-at-zero rule over the rows WRITTEN (fix round 1, N1): only
+    // when a kept row or an inventory entry has a one-implementor edge — never because one exists elsewhere in the graph
+    if( outProv != nullptr && !stubbed
+        && ( markedOutAny( outOff, *outProv, std::span<const NodeId>( order.data(), std::min( keep, order.size() ) ), kProvImpl )
+             || markedOutAny( outOff, *outProv, std::span<const NodeId>( inventory.entries.data(), inventory.entries.size() ), kProvImpl ) ) )
     {
-        legend += "<!-- c:via=impl:the-one-implementor-in-the-tree-of-the-receiver's-interface/trait/abstract-type-owns-the-callee(one-outside-it-may-exist) -->";
+        legend += "<!-- c:via=impl:the-one-implementor-in-the-tree-of-the-receiver's-interface/trait/abstract-type-owns-the-callee(an-out-of-tree-or-macro-written-one-may-exist) -->";
     }
     // honesty-small-068: the Go named-type kinds' clause, under the same absent-at-zero rule as modscope's above.
     if( std::any_of( ing.symbols.begin(), ing.symbols.end(), []( const Symbol& sym )

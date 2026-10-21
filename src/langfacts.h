@@ -82,6 +82,26 @@ struct LangFacts
     /// it, and leaves a standard-member name (`clone`, `iter`: graph.h StdMemberGate) to the name tiers as before.
     bool contractSignaturesUnindexed = false;
 
+    /// Rust: a type's methods for a trait sit in that trait's own `impl T for X` block, apart from its inherent `impl X` methods,
+    /// and a call through `dyn T` / `impl T` / a `T` bound reaches only the former and T's defaults (ingest_relations.h records each
+    /// trait impl block as an ImplBlock binding; ifacedispatch.h keeps the candidates inside one).
+    bool traitImplBlocks = false;
+
+    /// Go, TypeScript, JavaScript: a type conforms to an interface (TS: to any object type) by its members alone, with no clause
+    /// naming it — an object literal, a structurally matching class — so an implements list is never the whole set, and one
+    /// candidate is never the only implementor (ifacedispatch.h: a list of two or more is still declined, as a floor).
+    bool structuralTyping = false;
+
+    /// Java: a lambda or a method reference implements any interface with exactly one abstract method, with no class the index
+    /// keeps, so such an interface's implementors list is open (ifacedispatch.h). Kotlin opts in per interface (`fun interface`,
+    /// recorded at ingest as an anonymous implementor).
+    bool samLambdas = false;
+
+    /// Java, Kotlin: an expression can implement an interface or extend a class anonymously (`new T() { … }`, `object : T { … }`;
+    /// Kotlin's `fun interface` lets a lambda do it), recorded at ingest as an ImplBlock binding with no implementor name, which
+    /// opens that type's implementors list (ingest_binds.h anonymousImplementorOf).
+    bool anonymousImplementors = false;
+
     /// Markdown: a link targets a section, so shared graph code treats this language's sections as link targets (graph.h).
     bool linkSections = false;
 
@@ -96,15 +116,15 @@ struct LangFacts
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true },
     { .lang = Lang::Python },
-    { .lang = Lang::TypeScript, .overloadSignatures = true },
-    { .lang = Lang::Go },
-    { .lang = Lang::Rust, .contractSignaturesUnindexed = true },
+    { .lang = Lang::TypeScript, .overloadSignatures = true, .structuralTyping = true },
+    { .lang = Lang::Go, .structuralTyping = true },
+    { .lang = Lang::Rust, .contractSignaturesUnindexed = true, .traitImplBlocks = true },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC, .noNestedNamedFunctions = true },
     { .lang = Lang::Markdown, .linkSections = true },
-    { .lang = Lang::JavaScript },
+    { .lang = Lang::JavaScript, .structuralTyping = true },
     { .lang = Lang::Bash },
-    { .lang = Lang::Java },
+    { .lang = Lang::Java, .samLambdas = true, .anonymousImplementors = true },
     { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true },
     { .lang = Lang::Unknown },
     { .lang = Lang::Json },
@@ -116,7 +136,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Lua },
     { .lang = Lang::Elixir, .hasInertQuoteRegions = true },
     { .lang = Lang::Dart },
-    { .lang = Lang::Kotlin },
+    { .lang = Lang::Kotlin, .anonymousImplementors = true },
     { .lang = Lang::GDScript },
     { .lang = Lang::Clojure },
 } };

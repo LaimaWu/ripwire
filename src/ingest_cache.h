@@ -144,7 +144,9 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 37;           // 37: train 32 lane l6-iface (train renumbers) — LocalBindKind gained DispatchType
+constexpr std::uint32_t kCacheVersion = 38;           // 38: train 32 lane l6-iface fix round 1 (train renumbers) — LocalBindKind gained ImplBlock
+                                                      //    (appended): an older binary would reject the byte, a newer must not read a blob that predates it as complete.
+                                                      // 37: train 32 lane l6-iface (train renumbers) — LocalBindKind gained DispatchType
                                                       //    (appended): an older binary would reject the byte, a newer must not read a blob that predates it as complete.
                                                       // 36: train 30 — strictly above every number a train-30 build used: lane call-result-typing
                                                       //    33 (RawBind resultIndex + unwrapDepth), lane fcall-forward 33, lane name-template-dispatch 35
@@ -347,7 +349,11 @@ constexpr std::uint32_t kCacheVersion = 37;           // 37: train 32 lane l6-if
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 210;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 212;          // bump on any grammar/.scm/extraction change
+                                                      // 212 = 2026-10-21 (train 32 lane l6-iface fix round 1, rich 213; the train renumbers): an ImplBlock record
+                                                      //   (model.h) for every Rust `impl T for X` block (its span), a Rust trait under a mock attribute, a Java
+                                                      //   anonymous class, a Kotlin object expression and a Kotlin `fun interface` (ingest_relations.h
+                                                      //   rustImplVisitNode, ingest_binds.h anonymousImplementorOf).
                                                       // 210 = 2026-10-19 (train 32 lane l6-iface, reservation 210 / rich 211; the train renumbers):
                                                       //   Rust records a DispatchType (model.h) for a parameter, `let` or struct field typed `&dyn T`,
                                                       //   `Box<dyn T>`, `impl T` or a generic bounded by T (ingest_binds.h rustDispatchTrait) in place of

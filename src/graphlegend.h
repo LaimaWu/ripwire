@@ -711,14 +711,14 @@ inline constexpr const char* kDeclinedSitesNameGateClause =
     "gate=builtin|std: declined by the builtin-method or the standard-member name gate (per-language name lists, C++ and Rust). ";
 // lane L6 (ifacedispatch.h): the interface-typed dispatch rows, and a generic receiver's bound
 inline constexpr const char* kDeclinedSitesIfaceClause =
-    "gate=\"iface\": the receiver's recorded type is an interface, trait or abstract class, and cands=K counts the methods of the called name its implementors in this tree own (and its own default): K implementors of the receiver's interface; which one runs is unproven. Never a by-name list. ";
+    "gate=\"iface\": the receiver's recorded type is an interface, trait or abstract class, and cands=K counts the methods of the called name its implementors in this tree own (and its own default): K implementors of the receiver's interface; which one runs is unproven. K is a floor where a type conforms with no implements clause (a TypeScript object literal or matching class is not counted). Never a by-name list. ";
 inline constexpr const char* kDeclinedSitesBoundClause =
     "bound=\"G: T\": the receiver is a generic G bounded by trait T; its candidates are T's implementors', never resolved by name. ";
 inline constexpr const char* kDeclinedSitesIfaceClauseMcp =
-    "gate iface: the receiver's recorded type is an interface, trait or abstract class, and cands counts the methods of the called name its implementors in this tree own (and its own default): K implementors of the receiver's interface; which one runs is unproven. bound (G: T): a generic receiver bounded by trait T. ";
+    "gate iface: the receiver's recorded type is an interface, trait or abstract class, and cands counts the methods of the called name its implementors in this tree own (and its own default): K implementors of the receiver's interface; which one runs is unproven; K is a floor where a type conforms with no implements clause (TypeScript). bound (G: T): a generic receiver bounded by trait T. ";
 // lane L6: an edge via="impl" — the one implementor in the tree (a row of the callers / callees answers, a map <c>)
 inline constexpr const char* kViaImplLegend =
-    "via=\"impl\" on a row: the receiver's recorded type is an interface, trait or abstract class whose only implementor in this tree owns the called method, so the edge is to it; an implementor outside the tree may exist. ";
+    "via=\"impl\" on a row: the receiver's recorded type is an interface, trait or abstract class whose only implementor in this tree owns the called method, so the edge is to it; an implementor outside the tree, or one a macro writes, may exist. ";
 inline const char* viaImplLegend( bool on ) noexcept { return on ? kViaImplLegend : ""; }
 inline constexpr const char* kDeclinedSitesOfDefCallees =
     "of_def=K on a <dc>: the definition (ix=K) making the call, a fact. ";

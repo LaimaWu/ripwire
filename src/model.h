@@ -1271,6 +1271,13 @@ enum class LocalBindKind : std::uint8_t
                    //     a struct FIELD (fromSymbol the struct), else a parameter or local (spanStart/spanEnd where it is
                    //     visible, as a RecvType). It stands in for the binding's tombstone: the name hides an outer binding and
                    //     types no class. Read by receiverevidence.h (ReceiverEvidence::noteDispatchWritten) ONLY. APPENDED.
+    ImplBlock,     // lane L6 fix round 1 (candidate-set completeness): a block that implements the type named `var` (its final segment).
+                   //     typeName = the implementing type's name — a Rust `impl T for X` block (typeName "X", spanStart/spanEnd = the
+                   //     whole impl item, so a method inside it is one of X's T methods, never an inherent one) — or "" for an
+                   //     implementor no class the index keeps names: a Java anonymous class `new T() { … }`, a Kotlin object
+                   //     expression `object : T { … }` or `fun interface T` (a lambda), a Rust trait under a mock attribute
+                   //     (`#[automock]` writes MockT). Read by graph.h's implementors-map pass (an unnamed one opens T's list) and
+                   //     ifacedispatch.h ONLY. APPENDED.
 };
 // fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
 inline constexpr std::string_view kTypeBindForward  = "forward";
@@ -1278,7 +1285,7 @@ inline constexpr std::string_view kTypeBindShadow   = "shadow";
 inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
 inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::DispatchType ) + 1;
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::ImplBlock ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {

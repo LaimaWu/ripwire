@@ -8251,11 +8251,29 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         std::sort( v.begin(), v.end() );
         v.erase( std::unique( v.begin(), v.end() ), v.end() );
     }
+    // lane L6 fix round 1 (B1): an implementor no class the index keeps names — a Java anonymous class, a Kotlin object expression or
+    // `fun interface`, a Rust trait a mock attribute implements (model.h LocalBindKind::ImplBlock, typeName "") — opens the type's
+    // list, by name, every same-named class-like of the record's language (of any language when the record sits in no definition)
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind != LocalBindKind::ImplBlock || !b.typeName.empty() )
+        {
+            continue;
+        }
+        if( const auto bit = byName.find( b.var ); bit != byName.end() )
+        {
+            for( NodeId t : bit->second )
+            {
+                const bool sameLang = b.fromSymbol >= N || langCompatible( ing.symbols[ t ].lang, ing.symbols[ b.fromSymbol ].lang );
+                implementorsOpen[ t ] = isClassLike( ing.symbols[ t ].kind ) && sameLang ? char( 1 ) : implementorsOpen[ t ];
+            }
+        }
+    }
     fillImplementorBound( g, boundEdges );
     g.rubyMainMixins = rubyMainObjectMixins( ing, rubyBases );
     // lane L6: the interface-typed dispatch tier (ifacedispatch.h) over the map just built, and the edges its one-implementor
     // answer committed (outProv=6, rendered via="impl"); the arity rule it shares with the name tiers' B2.2 filter below.
-    const IfaceDispatch          ifaceTier( ing, recvEv, g.implementors, g.implementorBound, implementorsOpen );
+    const IfaceDispatch          ifaceTier( ing, recvEv, g.implementors, g.implementorBound, implementorsOpen );   // reads ing.bindings' ImplBlock spans too
     HashMap<std::uint64_t, char> implEdges;
     std::vector<NodeId>          ifaceCand;   // reused: one call's dispatch candidates
     const auto arityCannotTake = [ & ]( const Reference& ref, NodeId c ) noexcept

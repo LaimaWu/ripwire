@@ -2710,13 +2710,13 @@ struct BindSite
 
 // the ONE bind-record emitter. A nameless declarator records nothing. kind=VarDecl is the r9 shadow-
 // evidence record: typeName stays EMPTY on it (shadow evidence, not narrowing fuel — nothing downstream
-// ever reads a type off it), so the empty-typeName refusal applies to every OTHER kind, where it is
+// ever reads a type off it), and so may an ImplBlock's (an implementor with no name), so the empty-typeName refusal applies to every OTHER kind, where it is
 // load-bearing for Rule 2 (an undecidable type must degrade to §2a, not mint a half-record). The DeclType's
 // qualified text rides importedName (see qualifiedNameText) — non-empty only on a declaration's Type/ParamType record.
 inline void pushTypedBind( std::uint32_t fileId, Lang lang, std::string_view var, DeclType type, BindSite site, LocalBindKind kind,
                            std::vector<RawBind>& binds )
 {
-    if( var.empty() || ( type.name.empty() && kind != LocalBindKind::VarDecl ) )
+    if( var.empty() || ( type.name.empty() && kind != LocalBindKind::VarDecl && kind != LocalBindKind::ImplBlock ) )
     {
         return;
     }
@@ -6887,6 +6887,81 @@ inline void captureReceiverEvidence( BindCtx& cx, TSNode n, const char* t )
     }
 }
 
+// lane L6 fix round 1 (reports/dispatch-classes.md §(a) 4 and 5): the blocks that implement a type, as ImplBlock records over the
+// node (model.h LocalBindKind::ImplBlock). The implemented name is the written type's final segment, generic arguments dropped.
+// An implementor the index keeps no class for records no implementor name; graph.h then opens the type's implementors list.
+inline void pushImplBlock( BindCtx& cx, TSNode n, std::string_view written, std::string_view implementor )
+{
+    std::string_view name = written.substr( 0, std::min( written.find( '<' ), written.size() ) );
+    const std::size_t cut = name.find_last_of( ".:" );
+    name = name.substr( cut == std::string_view::npos ? 0 : cut + 1 );
+    while( !name.empty() && ( name.back() == ' ' || name.back() == '\n' || name.back() == '\t' || name.back() == '\r' || name.back() == '?' ) )
+    {
+        name.remove_suffix( 1 );
+    }
+    pushRawBind( cx.fileId, cx.lang, name, std::string( implementor ), BindSite{ ts_node_start_byte( n ), ts_node_start_byte( n ), ts_node_end_byte( n ) },
+                 LocalBindKind::ImplBlock, *cx.binds );
+}
+
+// Rust (langfacts.h traitImplBlocks): `impl T for X { … }` — its methods are X's methods for T, never inherent ones; the names are
+// the ones ingest_relations.h rustImplVisitNode gives the inherit reference. A trait under a mock attribute: the mock it writes.
+inline void rustImplBlockOf( BindCtx& cx, TSNode n, const char* t )
+{
+    if( kindIs( t, "trait_item" ) )
+    {
+        const TSNode name = fieldChild( n, NodeField::Name );
+        if( !ts_node_is_null( name ) && rustItemCarriesMockAttr( n, cx.src ) )
+        {
+            pushImplBlock( cx, n, nodeTextOf( name, cx.src ), {} );
+        }
+        return;
+    }
+    const TSNode trait = kindIs( t, "impl_item" ) ? fieldChild( n, NodeField::Trait ) : TSNode{};
+    const TSNode type  = ts_node_is_null( trait ) ? TSNode{} : fieldChild( n, NodeField::Type );
+    if( !ts_node_is_null( type ) )
+    {
+        pushImplBlock( cx, n, finalSegment( nodeTextOf( trait, cx.src ) ), finalSegment( nodeTextOf( type, cx.src ) ) );
+    }
+}
+
+// Java / Kotlin (langfacts.h anonymousImplementors): an implementor with no class — a Java anonymous class `new T( … ) { … }`, a
+// Kotlin object expression `object : A, B( x ) { … }` (each delegation specifier's user type), a Kotlin `fun interface T` (a lambda
+// implements it).
+inline void anonymousImplementorOf( BindCtx& cx, TSNode n, const char* t )
+{
+    const bool javaAnon  = kindIs( t, "object_creation_expression" );
+    const bool ktObject  = kindIs( t, "object_literal" );
+    const bool ktFunType = kindIs( t, "class_declaration" );
+    if( !javaAnon && !ktObject && !ktFunType )
+    {
+        return;
+    }
+    bool        hit = false;   // Java: a class body; Kotlin `fun interface`: the `fun` keyword
+    TSNode      named{};       // Kotlin `fun interface`: its name
+    ChildCursor cursor( n );
+    forEachChild( n, cursor.cur, [ & ]( TSNode c )
+    {
+        const char* ct = ts_node_type( c );
+        hit = hit || ( javaAnon && kindIs( ct, "class_body" ) ) || ( ktFunType && !ts_node_is_named( c ) && kindIs( ct, "fun" ) );
+        named = ktFunType && ts_node_is_null( named ) && kindIs( ct, "type_identifier" ) ? c : named;
+        if( ktObject && kindIs( ct, "delegation_specifier" ) && ts_node_named_child_count( c ) > 0 )
+        {
+            const TSNode spec = ts_node_named_child( c, 0 );
+            const TSNode user = kindIs( ts_node_type( spec ), "constructor_invocation" ) && ts_node_named_child_count( spec ) > 0 ? ts_node_named_child( spec, 0 ) : spec;
+            if( kindIs( ts_node_type( user ), "user_type" ) )
+            {
+                pushImplBlock( cx, n, nodeTextOf( user, cx.src ), {} );
+            }
+        }
+        return !kindIs( ct, "class_body" ) || javaAnon;
+    } );
+    const TSNode type = javaAnon ? fieldChild( n, NodeField::Type ) : named;
+    if( hit && !ts_node_is_null( type ) )
+    {
+        pushImplBlock( cx, n, nodeTextOf( type, cx.src ), {} );
+    }
+}
+
 void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
 {
     // The body below is the pass's own node step, unchanged; these aliases keep it reading against the
@@ -6900,6 +6975,15 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
     std::vector<FnBindClobber>& fnUnk     = cx.fnUnk;
     FnBindGateState&            fnGate    = cx.fnGate;
     const bool                  cFamilyFn = cx.cFamilyFn;
+
+    if( langFacts( lang ).anonymousImplementors )
+    {
+        anonymousImplementorOf( cx, n, t );   // lane L6 fix round 1: Java / Kotlin implementors with no class
+    }
+    else if( langFacts( lang ).traitImplBlocks )
+    {
+        rustImplBlockOf( cx, n, t );          // lane L6 fix round 1: Rust trait impl blocks and mocked traits
+    }
 
     // C++/ObjC: `Foo x;` · `Foo* x;` · `Foo x = Foo();` · `auto x = Foo();`
     if( ( lang == Lang::Cpp || lang == Lang::ObjC ) && kindIs( t, "declaration" ) )

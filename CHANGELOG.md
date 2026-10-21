@@ -24,8 +24,8 @@ each override. A tier of the resolver now reads the receiver's recorded type fir
 class that declares the callee without a body, the candidates are the methods of that name its implementors own — the
 `implements` / `extends` / `impl Trait for X` types, at any depth — plus the type's own bodied default:
 
-- **one candidate**, every `implements` edge to it proven: an edge rendered `via="impl"` (the only implementor in the tree;
-  one outside it may exist);
+- **one candidate**, every `implements` edge to it proven, and no implementor possible without a clause: an edge rendered
+  `via="impl"` (the only implementor in the tree; one outside it, or one a macro writes, may exist);
 - **two or more**: the call is declined with exactly that list, a `<dc ... cands="K" via="declined" gate="iface"/>` row
   (`--legend=full` names the candidates with `cand=`). It is never an edge and never in `count=`.
 
@@ -44,9 +44,17 @@ name (`clone`, `iter`) on a trait object, which stays with the standard-member g
 interface reached through a re-export barrel. A type with no implementor in the tree, or with an
 implements clause the index cannot place (`impl T for &X`, a blanket `impl<U> T for U`, two same-named implementing
 types), keeps the answer it had; a single candidate that is not proven does too. A C++ subclass reached through a field
-never makes a one-implementor edge, and one subclass of a local or parameter keeps its proven edge unlabelled. An
-implementor a macro writes (`#[automock]`, `mock!`, gMock's `MOCK_METHOD` with no default above it) is unseen: a
-`via="impl"` edge may miss it.
+never makes a one-implementor edge, and one subclass of a local or parameter keeps its proven edge unlabelled.
+
+Exact or no row: a type an implementor can join with no clause the index reads keeps the answer it had (the by-name rows) —
+a Java or Kotlin interface or class with an anonymous class or object expression in the tree (`new T() { … }`,
+`object : T { … }`), a Kotlin `fun interface`, a Java interface with one abstract method (a lambda implements it), and a
+Rust trait under a mock attribute (`#[automock]` in any `cfg_attr` spelling writes `MockT`). TypeScript types structurally
+(an object literal or a class with the right members conforms unnamed), so one TypeScript candidate is never an edge, and
+a TypeScript `gate="iface"` row's `cands=K` is a floor. A Rust candidate is a method inside an `impl T for X` block or T's
+own default; an inherent method of X never is, and a supertrait's method keeps the by-name answer. Still unseen: an
+implementor another macro writes (`mock!`, a `macro_rules!` that expands to `impl T for X`, gMock's `MOCK_METHOD` with no
+default above it); a `via="impl"` edge may miss it.
 
 ### Added — Rust receivers typed by their written type: parameters, `let` bindings and struct fields
 
