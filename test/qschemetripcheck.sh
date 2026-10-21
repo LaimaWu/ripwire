@@ -34,7 +34,7 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
-# 2026-10-21, C# import captures (#358 1a, PR #420 by @LaimaWu), merged with main f156be85 (0.6.8): RE-PINNED with UPDATE_GOLDEN=1 (hash PLACEHOLDER).
+# 2026-10-21, C# import captures (#358 1a, PR #420 by @LaimaWu), merged with main f156be85 (0.6.8): RE-PINNED with UPDATE_GOLDEN=1 (hash 6093f6e27e…5043).
 #   Watched text moved: kParserVer 206 -> 214 (rich file tag 215), quality.h's kIngestParserVerMirror with it. 214 is above main 206 / 207 and the
 #   train-32a numbers 212 / 213. Import-free deep containers cease to be partial. kCacheVersion stays 36 and kQSnapCacheScheme stays 22: no record
 #   format moved. The entries below are kept as written; their hashes are superseded by this one.
