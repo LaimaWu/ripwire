@@ -750,6 +750,58 @@ inline void classNewOffer( const ClassNewScan& s, const Reference& r, const Clas
     }
 }
 
+// A TS/JS test file that imports the reached class under ANOTHER local name (`import { Eng as E }`, `import E from "./b"`) spells its
+// construction `new E()`, which fails classNewCallNames' name test — so a bare `new Eng()` of a namesake class is then the only ref that
+// passes, and classNewSpelling has no second spelling to disagree with. The row's line would name the namesake: drop it (exact l= or none).
+// A default import counts only when its module is the class's own file (or the directory an index file stands for): `import React from
+// "react"` says nothing about the class. A named alias is matched by the requested export name alone (over-hedging is the floor).
+inline bool classNewImportRenames( const IngestResult& ing, const Binding& b, const Symbol& cls )
+{
+    if( b.kind != LocalBindKind::JsImport || b.var == cls.name )
+    {
+        return false;
+    }
+    if( b.importedName == cls.name )
+    {
+        return true;
+    }
+    if( b.importedName != "default" )
+    {
+        return false;
+    }
+    const auto stemOf = []( std::string_view path )
+    {
+        const std::size_t slash = path.find_last_of( '/' );
+        std::string_view  leaf  = slash == std::string_view::npos ? path : path.substr( slash + 1 );
+        const std::size_t dot   = leaf.find( '.' );
+        return dot == std::string_view::npos ? leaf : leaf.substr( 0, dot );
+    };
+    const std::string_view classFile = rootRelPath( ing, cls.fileId );
+    std::string_view       want      = stemOf( classFile );
+    if( want == "index" && classFile.find( '/' ) != std::string_view::npos )
+    {
+        want = stemOf( classFile.substr( 0, classFile.find_last_of( '/' ) ) );
+    }
+    return stemOf( b.typeName ) == want;
+}
+
+inline void classNewHedgeAliased( const IngestResult& ing, std::vector<ClassNewRow>& rows )
+{
+    std::vector<std::int32_t> rowOf( ing.files.size(), -1 );
+    for( std::size_t i = 0; i < rows.size(); ++i )
+    {
+        rowOf[ rows[i].testFile ] = std::int32_t( i );
+    }
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind == LocalBindKind::JsImport && b.fileId < rowOf.size() && rowOf[ b.fileId ] >= 0
+            && classNewImportRenames( ing, b, ing.symbols[ rows[ rowOf[ b.fileId ] ].cls ] ) )
+        {
+            rows[ rowOf[ b.fileId ] ].line = 0;   // the emitter omits l= for line 0
+        }
+    }
+}
+
 // Step 5: per test file, the nearest class, then its earliest construction line (a call reference from that caller naming the target).
 inline std::vector<ClassNewRow> classNewBestRows( const ClassNewScan& s, std::span<const ClassNewSite> sites )
 {
@@ -780,6 +832,7 @@ inline std::vector<ClassNewRow> classNewBestRows( const ClassNewScan& s, std::sp
     std::vector<ClassNewRow> rows;
     std::copy_if( best.begin(), best.end(), std::back_inserter( rows ), []( const ClassNewRow& r ) { return r.cls != kNoNode; } );
     std::ranges::for_each( rows, [ & ]( ClassNewRow& r ) { spelling.hedge( r ); } );
+    classNewHedgeAliased( ing, rows );
     return rows;
 }
 
