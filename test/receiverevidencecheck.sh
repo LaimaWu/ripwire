@@ -1640,6 +1640,7 @@ for f in Mine::this_param Mine::this_let; do
 done
 exactproven rsrecv callees "$RST::Mine::this_direct" "method spin $RSM"                                         # [P] `this: &Book` -> Book::spin
 rs_none "$RST::Mine::this_untyped"                                                                              # [N] an untyped `this` local proves nothing (no spin, not other::Book's)
+notproven rsrecv callees "$RST:near_ufcs_cast" "tune $RSM:20" "tune $RSM:16"                                   # [N] a UFCS cast's `-> Self` types nothing (a pin: by-name today)
 for f in Rack::near_box_dyn_field Rack::near_refcell_field Rack::near_index_recv; do rs_none "$RSD::$f"; done       # [N]
 for f in near_box_dyn near_mut_dyn near_arc near_type_alias near_generic_named near_struct_pattern near_try_new near_maybe_new; do
     rs_none "$RSD:$f"                                                                                          # [N]

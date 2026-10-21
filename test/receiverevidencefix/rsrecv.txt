@@ -330,3 +330,6 @@ impl Mine {
     pub fn this_direct(&self, this: &Book) -> u8 { this.spin() }
     pub fn this_untyped(&self) -> u8 { let this = project(); this.book.spin() }
 }
+// CodeRabbit #424 (rustQualifiedTypeOwns): a UFCS cast `<String as Default>::default()` writes a path (rustQualifierOf leaves the
+// Reference qualifier empty), so its `-> Self` must not type the local onto the in-tree Knob::default's class
+pub fn near_ufcs_cast() -> u8 { let k = <String as Default>::default(); k.tune() }

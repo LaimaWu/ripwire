@@ -2655,9 +2655,9 @@ struct ReceiverEvidence
     // a prelude name with no in-tree item in scope resolve to no class, and that `-> Self` types nothing.
     bool rustQualifiedTypeOwns( const Reference& r, std::string_view written, NodeId to ) const
     {
-        if( r.qualifier.empty() )
+        if( r.qualifier.empty() && written.empty() )
         {
-            return true;   // a bare call (inside the impl): the language's own lookup
+            return true;   // a bare or member call (no path written): the language's own lookup
         }
         const auto [ path, last ] = CallResultTypes::splitLast( written, "::" );
         const NodeId cls          = path.empty() && last == "Self" ? selfClass( r.fromSymbol )
