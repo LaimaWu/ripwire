@@ -1687,8 +1687,8 @@ proven      rsrecv callees "src/nsownuse.rs:own_prelude_twin" "method lenx $QO:3
 proven      rsrecv callees "src/nsre.rs:re_own_self" "method as_os $NS:10"                                         # [P]
 for f in shadow_bare shadow_self; do proven rsrecv callees "src/nshadow.rs:$f" "method as_sh src/nshadow.rs:7"; done   # [P]
 # [P] a T the walk cannot follow keeps the base row: the in-tree glob re-export `pub use crate::nsown::*;` (nsglob.rs) by a
-# `use`, by its path and by the file's own glob of it (nsglobstar.rs), and a bench file outside every crate's module tree (`use rsrecv::nsown::OsString`). [N] there:
-# a std root (`std::ffi::OsString::from()`) leads out of the tree from any file.
+# `use`, by its path and by the file's own glob of it (nsglobstar.rs), and a bench file outside every crate's module tree
+# (`use rsrecv::nsown::OsString`). [N] there: a std root (`std::ffi::OsString::from()`) leads out of the tree from any file.
 for f in glob_reexp_own glob_reexp_path; do proven rsrecv callees "src/nsglobuse.rs:$f" "method as_os $NS:10"; done # [P]
 proven      rsrecv callees "src/nsglobstar.rs:glob_star_own" "method as_os $NS:10"                                # [P]
 proven      rsrecv callees "benches/nsb.rs:bench_own" "method as_os $NS:10"                                         # [P]
