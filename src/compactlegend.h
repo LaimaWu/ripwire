@@ -860,6 +860,15 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "script_gates_unresolved_dynamic", "script_gates_unresolved_dynamic=N: registered gates with no mappable deps; they may cover the change unlisted", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     { "evidence", "t evidence=script_literal|manifest_declared: why a shell gate joins tests=, its text names the changed path or its RIPWIRE_TEST_DEPS does", true, "t", MapHeaderRead::No, {}, "test-gate" },
     { "ccx_bar", "ccx_bar=N: the cognitive-complexity bar a u row's ccx= is read against", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
+    // the symbol-granular change set (situ.h computeSymbolChangeSet / testGateGranularityAttrXml) — CONDITIONAL:
+    // the attributes ride only when git-hunk evidence shaped the change set (testGateHunkShaped), and the
+    // present-only vocabulary emits these readings only when the payload carries them. diff_hunks* NOT hunks=:
+    // naming-calibration's root already owns hunks= with a different unit (§P8's collision class — a new
+    // attribute gets a new name rather than joining that table).
+    { "change_granularity", "change_granularity=: how the change set seeded — symbol = only symbols a git hunk (diff -U0 vs HEAD) locates inside a function/method body; file = whole changed files (an unlocated hunk — module-level, deletion, rename — returns its file to file-granular); mixed = both", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
+    { "changed_symbols", "changed_symbols=/file_symbols=: the seeds the walk used vs all symbols of the changed files", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },   // also defines file_symbols=
+    { "files_narrowed", "files_narrowed=/files_file_granular=: changed files under each treatment", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },   // also defines files_file_granular=
+    { "diff_hunks", "diff_hunks=/diff_hunks_located=/diff_hunks_unlocated=: the hunk tally; an unlocated hunk is WHY a file went file-granular", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },   // also defines the two located/unlocated halves
     // rv-test-gate-tsjs F3: untested_modscope=N is ALWAYS present (like the terms above), so the COMPACT
     // (default) legend needs its own reading too — the full-legend clause (situ.h::kUntestedModscopeLegend)
     // is row-gated on N>0 and pays nothing on the compact default otherwise.
