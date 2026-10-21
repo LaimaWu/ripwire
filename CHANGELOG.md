@@ -29,7 +29,7 @@ spliced after the rows are chosen, so they never cost a ranked row, and `est_tok
 `--expand` or the map; `RIPWIRE_NO_MEMBER_NAMES=1` turns it off. CLI only, as the fold. Measured on the 163 stored round-5 argv that
 may be run (handlebars, helix and waybar never run; base lane/body-fold b112e8ac, frozen round-5 grader): Rule C ✓ 124 → 128
 (mdbook-02, nunjucks-02, nunjucks-12, starlette-13), legacy ✓ 149 → 149, 0 items lost under either grading; the 60 `--for` answers
-grow +336 B median (max +1,345 B), every other answer is unchanged. Gate: `test/formembernamescheck.sh`.
+grow +332 B median (max +1,340 B), every other answer is unchanged. Gate: `test/formembernamescheck.sh`.
 
 ### Added — Rust receivers typed by their written type: parameters, `let` bindings and struct fields
 
@@ -50,6 +50,28 @@ written as a type (which implementation runs is dispatch), a `type` alias, a glo
 `Cell` / `Mutex` / `RwLock`, a tuple-struct field (`self.0`), and any pattern other than a plain name. A macro that
 rebinds a name (`shadow!(b); b.spin()`) is not read: the written type still types the name after it. The wrapper list is
 one data row per family (`Box` transparent; `Option` / `Result` one unwrap layer; the pointers and cells hide their argument).
+
+### Fixed — Windows: `--quality-delta=A..B` extracts its commit trees through stdin; two vendored scanners stop calling `isdigit` on code points (#402, thanks @lennix1337)
+
+GNU tar on MSYS2 / Git for Windows read the colon of a drive path (`C:\…`) given to `-f` as a remote host, so materializing a
+commit tree failed there; the archive now reaches `tar -x -f -` on stdin on every platform, and `test/qualitycheck.sh` runs that
+arm under a colon-bearing temporary directory. The vendored tree-sitter bash and markdown external scanners called `isdigit()` on
+an `int32_t` lookahead (undefined above 255, and an assertion in Microsoft UCRT debug builds); both use an explicit `'0'..'9'`
+range check now, recorded as patches under `third_party/patches/`. No output change.
+
+### Changed — source builds: Windows clang-cl PGO builds link, and keep SLP vectorization in the final binary (#410, thanks @lennix1337)
+
+With `clang-cl` + `lld-link`, `RIPWIRE_PGO=generate` crashed Clang 22.1.8's backend (x86_64-v3); the instrumented `generate`
+build now turns SLP vectorization off for that phase only (`/clang:-fno-slp-vectorize` on compiles, `/mllvm:-vectorize-slp=false`
+on the link, where LTO code generation runs), so the `use` build keeps it. `lld-link` no longer receives the clang driver's
+`-fprofile-generate` / `-fprofile-use`, which it rejects (clang-cl links the profile runtime itself). Reproduction and removal
+criteria: `docs/WINDOWS-PGO.md`. No other compiler changes; no output change.
+
+### Changed — the versions this change moves, stated once
+
+`kParserVer` 206 → 212 (file tag 213): the Rust written-type receivers carried 202 (203) on their branch; 212 sits above
+every live branch number (210 / 211 on a branch not in this change; #420 reserves 214 / 215). A cache written by 0.6.8 is
+re-parsed once. `kCacheVersion` stays 36 and the quality-snapshot scheme stays 22: no record format changed.
 
 ## [0.6.8] — 2026-10-19
 
