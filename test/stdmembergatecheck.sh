@@ -322,9 +322,12 @@ grep -q 'stdm n= calls=: of declined_calls=' "$TMP/cec.xml" \
 # rust-receivers retired the old floor ("Rust records no receiver type yet": a written in-tree type now binds, arm R) and
 # states the new one: a generic bound, dyn / impl Trait, a type alias, a glob of a glob, a tuple-struct field, a non-plain
 # pattern and a value behind Option / Result / Rc / Arc / RefCell / Cell / Mutex / RwLock are not typed (one list, fix round 1).
-# The map states it in one short clause (the map's bytes are budgeted, readmedriftcheck G4); the other three surfaces carry the list.
+# The map states it through its own clause "on-a-receiver-no-rule-tied-to-an-in-tree-class" (a Rust receiver no rule typed is
+# one; the map's bytes are budgeted, readmedriftcheck G4); the other three surfaces carry the list. Train 32a (owner bytes rule
+# 2026-10-21) dropped the map's separate Rust clause, which restated that clause: the arm pins both halves.
 floor_missing=""
-grep -q 'Rust-receivers-no-rule-typed-stay-declined' "$TMP/map.xml" || floor_missing="$floor_missing map"
+grep -q 'hdr:declined=also-counts-calls-named-like-a-standard-type-member-of-their-language([^)]*)-on-a-receiver-no-rule-tied-to-an-in-tree-class;' "$TMP/map.xml" || floor_missing="$floor_missing map"
+grep -q 'Rust-receivers-no-rule-typed-stay-declined' "$TMP/map.xml" && floor_missing="$floor_missing map(restated-clause)"
 grep -q 'a Rust receiver of an in-tree type that no rule typed is declined too (Rust types a parameter, local or field written or constructed as an in-tree type by its name, path or use alias, and a call result; not a generic bound, dyn or impl Trait, a type alias, a glob of a glob, a tuple-struct field, a pattern other than a plain name, or a value behind Option, Result, Rc, Arc, RefCell, Cell, Mutex or RwLock)' "$TMP/cl.xml" || floor_missing="$floor_missing callers"
 grep -q 'a Rust receiver of an in-tree type that no rule typed is listed too (Rust types a parameter, local or field written or constructed as an in-tree type by its name, path or use alias, and a call result; not a generic bound, dyn or impl Trait, a type alias, a glob of a glob, a tuple-struct field, a pattern other than a plain name, or a value behind Option, Result, Rc, Arc, RefCell, Cell, Mutex or RwLock)' "$TMP/ce.xml" || floor_missing="$floor_missing callees"
 grep -q 'stdm n= calls=: [^>]*(Rust: one of an in-tree type no rule typed too: a generic bound, dyn or impl Trait, a type alias, a glob of a glob, a tuple-struct field, a non-plain pattern, behind Option / Result / Rc / Arc / RefCell / Cell / Mutex / RwLock)' "$TMP/cec.xml" || floor_missing="$floor_missing compact"

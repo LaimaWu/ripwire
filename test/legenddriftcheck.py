@@ -139,7 +139,7 @@ def extract_flag_tokens_from_legend(legend_text):
     # same hyphen, so a long hyphen-joined prose run NOT followed by flag/lens/verb/option backtracked
     # exponentially (a 41-hyphen served disclosure hung the live arm past CI's 1200 s cap). The class already
     # holds "-", so the tail matched nothing more; the group ends where `\s+` starts, so the capture is the
-    # same text, in linear time (identical matches on all 79 unique legends of the live suite).
+    # same text, in linear time (identical matches on every unique legend of the live suite: 77 at the lane's base, 79 at its head).
     for match in re.finditer(
         r'\b(?:the\s+)?([a-z][a-z0-9\-]*)\s+(?:flag|lens|verb|option)\b',
         legend_text,
