@@ -35,6 +35,7 @@
 #include "receiverevidence.h"   // ReceiverEvidence::classLike — the one class/struct/interface kind test
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdlib>
 #include <string>
@@ -46,7 +47,9 @@ namespace rw
 {
 
 // How many member names an owner row lists; the rest is counted in mem_more= (gap-diag §3.1: K=8 flipped 5 rows at +284 B median).
-inline constexpr std::size_t kForMemberNameCap = 8;
+// A signed quantity (compared with std::ssize); the full legend clause below states it from this constant.
+inline constexpr std::ptrdiff_t kForMemberNameCap = 8;
+static_assert( kForMemberNameCap > 0, "an owner row lists at least one member name" );
 
 // The A/B switch: member names ride unless RIPWIRE_NO_MEMBER_NAMES is set. The caller adds the posture (compact route, XML, default).
 inline bool forMemberNamesOn()
@@ -56,10 +59,46 @@ inline bool forMemberNamesOn()
 
 // The legend clauses, present-only beside the attribute (a row carries mem=). Terse (LEGEND-SHORTEN); no "--" (an XML comment).
 inline constexpr std::string_view kForCompactMemberNamesLegend =
-    "; d mem= an owner's direct member names by the index (question words first, names only), mem_more= unlisted";
-inline constexpr std::string_view kForMemberNamesLegend =
-    "; mem= on an owner d row: up to 8 names of its direct members by the index (scope or span, question words first, then line), "
+    "; d mem= an owner's direct member names by the index (question words first, names only), mem_more= names cut";
+namespace member_detail
+{
+// The full clause, built at compile time around kForMemberNameCap's decimal digits, so the cap it states is the cap.
+inline constexpr std::string_view kMemberNamesLegendHead = "; mem= on an owner d row: up to ";
+inline constexpr std::string_view kMemberNamesLegendTail =
+    " names of its direct members by the index (scope or span, question words first, then line), "
     "not a claim they answer, never a row already shown, mem_more= the member names not listed";
+struct LegendText
+{
+    std::array<char, 256> text{};
+    std::size_t           size = 0;
+};
+consteval LegendText memberNamesLegend()
+{
+    LegendText out;
+    const auto put = [ & ]( char ch ) { out.text[ out.size++ ] = ch; };   // past 256 B: not a constant expression, the build fails
+    for( const char ch : kMemberNamesLegendHead )
+    {
+        put( ch );
+    }
+    std::array<char, 20> digits{};
+    std::size_t          nd = 0;
+    for( std::ptrdiff_t v = kForMemberNameCap; v > 0; v /= 10 )
+    {
+        digits[ nd++ ] = char( '0' + v % 10 );
+    }
+    while( nd > 0 )
+    {
+        put( digits[ --nd ] );
+    }
+    for( const char ch : kMemberNamesLegendTail )
+    {
+        put( ch );
+    }
+    return out;
+}
+inline constexpr LegendText kMemberNamesLegendText = memberNamesLegend();
+}   // namespace member_detail
+inline constexpr std::string_view kForMemberNamesLegend{ member_detail::kMemberNamesLegendText.text.data(), member_detail::kMemberNamesLegendText.size };
 static_assert( kForCompactMemberNamesLegend.find( ';', 1 ) == std::string_view::npos && kForMemberNamesLegend.find( ';', 1 ) == std::string_view::npos,
                "one clause each: a ';' inside would split it (the legend's clause separator)" );
 
@@ -134,7 +173,7 @@ inline OwnerMemberNames forOwnerMemberNames( const IngestResult& ing, NodeId own
             continue;   // shown already, or this name rode once (an overload, a declaration beside its definition)
         }
         seen.push_back( name );
-        if( out.names.size() < kForMemberNameCap && name.find( ',' ) == std::string_view::npos )
+        if( std::ssize( out.names ) < kForMemberNameCap && name.find( ',' ) == std::string_view::npos )
         {
             out.names.emplace_back( name );
             continue;

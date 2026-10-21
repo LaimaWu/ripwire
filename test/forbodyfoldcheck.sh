@@ -45,7 +45,7 @@
 #          <= 4000 B; no sibs=/inc=/<calls>/<c> inside the fold; served= counts the <b>, served + skips = total
 #   F5 [G] prefix identity: the answer minus the fold, its legend clause and the C3 pair, est_tokens masked, equals the
 #          RIPWIRE_NO_BODY_FOLD=1 answer — both legends, three questions (checklist 23); member names (mem=, its clause) masked on
-#          both sides (train 32, by design: an owner the fold carries gets none); F5n the same unmasked with RIPWIRE_NO_MEMBER_NAMES=1
+#          both sides (train 32, by design: an owner the fold carries gets none); F5n the same unmasked with RIPWIRE_NO_MEMBER_NAMES=1, on all six
 #   F6 [P] est_tokens(fold) - est_tokens(off) >= 0.9 x the served body bytes / 3.80 (the body rate)
 #   F7 [P] the fold clause rides in both legends when the fold does, and never when it does not
 #   F8 [G] no fold, byte-identical to RIPWIRE_NO_BODY_FOLD=1: --signatures-only, --json, --auto-bodies, --detail=1,
@@ -135,7 +135,7 @@ def strip_fold(t):
 # member-names (train 32; rule 4, by design): the fold now also decides which owner rows carry mem= (an owner the fold serves, or
 # slices, carries none — formembernamescheck (C1)/(C2) owns that), so the fold-off twin carries mem= the fold answer does not.
 # (F5) reads both answers with the names masked; (F5n) keeps the exact pre-names premise with RIPWIRE_NO_MEMBER_NAMES=1 on both sides.
-MEM_CLAUSE = re.compile(r'; (d mem=|mem= on an owner d row:)[^;]*?mem_more= (unlisted|the member names not listed)')
+MEM_CLAUSE = re.compile(r'; (d mem=|mem= on an owner d row:)[^;]*?mem_more= (names cut|the member names not listed)')
 def strip_mem(t):
     return MEM_CLAUSE.sub('', re.sub(r' mem="[^"]*"( mem_more="\d+")?', '', t))
 def fail(msg):
@@ -365,10 +365,19 @@ for q in router resp respf slot slice; do
 done
 if r=$( chk prefix "$TMP/src" "$TMP/src.off" ); then ok "(F5) src: the answer before the fold == RIPWIRE_NO_BODY_FOLD=1"; else no "(F5) src: $r"; fi
 # F5n (member-names twin): with the names off on both sides the pre-names premise holds byte for byte (est_tokens masked)
-for q in resp slice; do
-    case "$q" in resp) qq="$T_RESP"; rd="$FIX";; slice) qq="$T_SLICE"; rd="$FIXPY";; esac
-    RIPWIRE_NO_MEMBER_NAMES=1 "$BIN" "$rd" --no-cache --for="$qq" >"$TMP/$q.n" 2>/dev/null
-    RIPWIRE_NO_MEMBER_NAMES=1 RIPWIRE_NO_BODY_FOLD=1 "$BIN" "$rd" --no-cache --for="$qq" >"$TMP/$q.n.off" 2>/dev/null
+# (train 32a, N1: all six of F5's questions, each with F5's own root and legend)
+namesoff(){ local q="$1" rd="$2" qq="$3"; shift 3
+    RIPWIRE_NO_MEMBER_NAMES=1 "$BIN" "$rd" --no-cache --for="$qq" "$@" >"$TMP/$q.n" 2>/dev/null
+    RIPWIRE_NO_MEMBER_NAMES=1 RIPWIRE_NO_BODY_FOLD=1 "$BIN" "$rd" --no-cache --for="$qq" "$@" >"$TMP/$q.n.off" 2>/dev/null; }
+for q in router resp respf slot slice src; do
+    case "$q" in
+        router) namesoff "$q" "$FIX" "$T_ROUTER";;
+        resp)   namesoff "$q" "$FIX" "$T_RESP";;
+        respf)  namesoff "$q" "$FIX" "$T_RESP" --legend=full;;
+        slot)   namesoff "$q" "$FIX" "$T_SLOT";;
+        slice)  namesoff "$q" "$FIXPY" "$T_SLICE";;
+        src)    namesoff "$q" "$ROOT/src" "$T_SRC";;
+    esac
     if r=$( chk prefix_raw "$TMP/$q.n" "$TMP/$q.n.off" ); then ok "(F5n) $q: names off, the answer before the fold == RIPWIRE_NO_BODY_FOLD=1 unmasked"; else no "(F5n) $q: $r"; fi
 done
 # F6

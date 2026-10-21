@@ -84,7 +84,7 @@ def rows(t):
     return [attrs(m.group(1)) for m in re.finditer(r'<d ([^>]*)>', t)]
 def legend(t):
     return " ".join(re.findall(r'<!--(.*?)-->', t, re.S))
-CLAUSE = re.compile(r'; (d mem=|mem= on an owner d row:)[^;]*?mem_more= (unlisted|the member names not listed)(?=;| ?-->|$)')
+CLAUSE = re.compile(r'; (d mem=|mem= on an owner d row:)[^;]*?mem_more= (names cut|the member names not listed)(?=;| ?-->|$)')
 def strip(t):
     t = re.sub(r' mem="[^"]*"( mem_more="\d+")?', '', t)
     t = CLAUSE.sub('', t)
