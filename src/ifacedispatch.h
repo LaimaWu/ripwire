@@ -26,6 +26,7 @@
 // indexed. C++ keeps its own class identity (resolve.h IdentityNarrower's dispatch split), which graph.h hands to the same
 // decision.
 
+#include "infra/sortutil.h"   // svLess: the explicit byte order a string_view sort takes (portablebuildcheck #6)
 #include "model.h"
 #include "langfacts.h"
 #include "receiverevidence.h"
@@ -213,7 +214,7 @@ private:
             }
             return false;
         } );
-        std::sort( names.begin(), names.end() );
+        std::sort( names.begin(), names.end(), rw::sortutil::svLess );
         const bool sam = std::unique( names.begin(), names.end() ) - names.begin() <= 1;
         samMemo_.emplace( t, char( sam ? 1 : 0 ) );
         return sam;
