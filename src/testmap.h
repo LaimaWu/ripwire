@@ -844,12 +844,15 @@ inline ClassNewBound classNewBoundNames( const IngestResult& ing, const ClassNew
 // Does a class of this row's name live in a file other than the row's class? One pass over the symbols, only for names that need it.
 inline std::vector<char> classNewHasNamesake( const IngestResult& ing, std::span<const ClassNewRow> rows, std::span<const std::int32_t> asked )
 {
-    std::vector<std::pair<std::string_view, std::uint32_t>> wanted;   // (class name, the row's class file), sorted by name
+    using Want = std::pair<std::string_view, std::uint32_t>;
+    std::vector<Want> wanted;   // (class name, the row's class file), sorted by name — rw::sortutil::svLess, never operator< (portablebuildcheck #6)
     for( const std::int32_t i : asked )
     {
         wanted.emplace_back( ing.symbols[ rows[i].cls ].name, ing.symbols[ rows[i].cls ].fileId );
     }
-    std::ranges::sort( wanted );
+    const auto wantLess = []( const Want& a, const Want& b )
+    { return a.first != b.first ? rw::sortutil::svLess( a.first, b.first ) : a.second < b.second; };
+    std::sort( wanted.begin(), wanted.end(), wantLess );
     std::vector<char> other( wanted.size(), 0 );
     for( const Symbol& sym : ing.symbols )
     {
@@ -857,8 +860,7 @@ inline std::vector<char> classNewHasNamesake( const IngestResult& ing, std::span
         {
             continue;
         }
-        for( auto it = std::lower_bound( wanted.begin(), wanted.end(), std::pair<std::string_view, std::uint32_t>{ sym.name, 0 } );
-             it != wanted.end() && it->first == sym.name; ++it )
+        for( auto it = std::lower_bound( wanted.begin(), wanted.end(), Want{ sym.name, 0 }, wantLess ); it != wanted.end() && it->first == sym.name; ++it )
         {
             other[ std::size_t( it - wanted.begin() ) ] |= char( it->second != sym.fileId );
         }
@@ -867,7 +869,7 @@ inline std::vector<char> classNewHasNamesake( const IngestResult& ing, std::span
     for( std::size_t k = 0; k < asked.size(); ++k )
     {
         const Symbol& cls = ing.symbols[ rows[ asked[k] ].cls ];
-        const auto    it  = std::lower_bound( wanted.begin(), wanted.end(), std::pair<std::string_view, std::uint32_t>{ cls.name, cls.fileId } );
+        const auto    it  = std::lower_bound( wanted.begin(), wanted.end(), Want{ cls.name, cls.fileId }, wantLess );
         out[k]            = other[ std::size_t( it - wanted.begin() ) ];
     }
     return out;
