@@ -65,32 +65,9 @@ public:
         : ing_( ing ), recvEv_( recvEv ), implementors_( implementors ), bound_( bound ), open_( open )
     {
         EXPECTS( bound.empty() || bound.size() == implementors.size(), "buildGraph sizes the bound map with the implementors map" );
-        for( const Symbol& s : ing.symbols )   // the bodyless members: an interface's or abstract class's contract
+        for( const Symbol& s : ing.symbols )
         {
-            const LangFacts& lf = langFacts( s.lang );
-            javaInTree_         = javaInTree_ || lf.samLambdas;
-            if( lf.samLambdas || lf.samFromJavaLambdas )
-            {
-                if( ReceiverEvidence::classLike( s.kind ) )
-                {
-                    classesByName_[ s.name ].push_back( s.id );   // the identities one name stands for (a package apart)
-                }
-            }
-            if( ReceiverEvidence::callableKind( s.kind ) && s.endByte <= s.sigEndByte && s.id < recvEv.ownerClass.size() && !recvEv.ownerClass[ s.id ].empty() )
-            {
-                contract_.try_emplace( recvEv.ownerClass[ s.id ] + "::" + s.name, char( 1 ) );
-                if( ( lf.samLambdas || lf.samFromJavaLambdas ) && !std::ranges::contains( lf.samIgnoredMembers, std::string_view( s.name ) ) )
-                {
-                    if( const NodeId owner = recvEv.classAt( s.fileId, s.sigStartByte, s.endByte, s.id ); owner != kNoNode )
-                    {
-                        std::vector<std::string_view>& names = abstractNames_[ owner ];   // per class IDENTITY, not per name
-                        if( std::ranges::find( names, std::string_view( s.name ) ) == names.end() )
-                        {
-                            names.push_back( s.name );   // one per distinct name: the SAM count
-                        }
-                    }
-                }
-            }
+            indexSymbol( s );
         }
         for( const Binding& b : ing.bindings )   // a trait impl block's span, keyed "T\x1fX" (model.h LocalBindKind::ImplBlock)
         {
@@ -142,6 +119,47 @@ public:
     }
 
 private:
+    // the bodyless members are an interface's or abstract class's contract; in a lambda-convertible language (langfacts.h) they are
+    // also counted per owning class identity, and every class is listed under its name
+    void indexSymbol( const Symbol& s )
+    {
+        const LangFacts& lf      = langFacts( s.lang );
+        const bool       samLang = lf.samLambdas || lf.samFromJavaLambdas;
+        javaInTree_              = javaInTree_ || lf.samLambdas;
+        if( samLang && ReceiverEvidence::classLike( s.kind ) )
+        {
+            classesByName_[ s.name ].push_back( s.id );   // the identities one name stands for (a package apart)
+        }
+        if( !ReceiverEvidence::callableKind( s.kind ) || s.endByte > s.sigEndByte || s.id >= recvEv_.ownerClass.size() || recvEv_.ownerClass[ s.id ].empty() )
+        {
+            return;
+        }
+        contract_.try_emplace( recvEv_.ownerClass[ s.id ] + "::" + s.name, char( 1 ) );
+        if( !samLang || std::ranges::contains( lf.samIgnoredMembers, std::string_view( s.name ) ) )
+        {
+            return;
+        }
+        if( const NodeId owner = recvEv_.classAt( s.fileId, s.sigStartByte, s.endByte, s.id ); owner != kNoNode )
+        {
+            addDistinct( abstractNames_[ owner ], s.name );   // per class IDENTITY, not per name: the SAM count
+        }
+    }
+
+    static void addDistinct( std::vector<std::string_view>& names, std::string_view n )
+    {
+        if( std::ranges::find( names, n ) == names.end() )
+        {
+            names.push_back( n );
+        }
+    }
+
+    // the one class-like symbol of a lambda-convertible language called `name`; kNoNode when none or several share it
+    NodeId soleClassNamed( std::string_view name ) const
+    {
+        const auto it = classesByName_.find( name );
+        return it != classesByName_.end() && it->second.size() == 1 ? it->second[ 0 ] : kNoNode;
+    }
+
     struct Row
     {
         NodeId id     = kNoNode;
@@ -219,8 +237,7 @@ private:
         {
             return hit->second != 0;
         }
-        const auto        named = classesByName_.find( s.name );
-        const std::size_t count = abstractCount( t, named != classesByName_.end() && named->second.size() == 1 );
+        const std::size_t count = abstractCount( t, soleClassNamed( s.name ) != kNoNode );
         const bool        sam   = count <= 1 && count >= ( lf.interfaceReadsAsClass ? 1U : 0U );
         samMemo_.emplace( t, char( sam ? 1 : 0 ) );
         return sam;
@@ -244,30 +261,20 @@ private:
         {
             if( const auto it = abstractNames_.find( id ); it != abstractNames_.end() )
             {
-                for( std::string_view n : it->second )
-                {
-                    if( std::ranges::find( names, n ) == names.end() )
-                    {
-                        names.push_back( n );
-                    }
-                }
+                std::ranges::for_each( it->second, [ & ]( std::string_view n ) { addDistinct( names, n ); } );
             }
         };
         addOwn( c );
-        if( !exactBases )
-        {
-            return names.size();
-        }
         std::vector<std::string_view> frontier{ ing_.symbols[ c ].name };
-        for( std::size_t i = 0; i < frontier.size() && i < ReceiverEvidence::kWalkCap && names.size() <= 1; ++i )
+        for( std::size_t i = 0; exactBases && i < frontier.size() && i < ReceiverEvidence::kWalkCap && names.size() <= 1; ++i )
         {
             recvEv_.forEachBase( frontier[ i ], [ & ]( std::string_view base )
             {
-                const auto named = classesByName_.find( base );
-                if( named != classesByName_.end() && named->second.size() == 1 && std::ranges::find( frontier, base ) == frontier.end() )
+                const NodeId only = soleClassNamed( base );
+                if( only != kNoNode && std::ranges::find( frontier, base ) == frontier.end() )
                 {
                     frontier.push_back( base );
-                    addOwn( named->second[ 0 ] );
+                    addOwn( only );
                 }
             } );
         }
