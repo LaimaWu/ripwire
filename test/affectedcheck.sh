@@ -634,6 +634,26 @@ CNR2="$( cd "$RS2" || exit 1; "$BIN" "$RS2" --affected=src/util.rs --no-cache 2>
 printf '%s' "$CNR2" | grep -q '<g via="class-new" total="1" shown="1"><new p="tests/t.rs" l="6" class="Eng"/></g>' \
     && ok '(9i2) Rust: Other::new() (line 5) then Eng::new() (line 6) in one test fn — the row names the Eng construction, l="6"' \
     || no "(9i2) Rust: a row's l= names another type's construction: $( printf '%s' "$CNR2" | sed 's/^.*-->//' )"
+# (9i3) TS `new A.Eng()` (line 4) then `new B.Eng()` (line 5) — two classes named Eng, the edge is B.Eng's. The call refs share the bare name and
+# differ only by qualifier (A / B), so the row's line is ambiguous: it must render WITHOUT l= (exact line or no l=), never l="4". Python twin:
+# `ext.Eng()` (external module, line 5) then the imported `Eng()` (line 6). Control: ONE passing ref keeps its line.
+TS3="$TMP/classnew-ts3"; mkdir -p "$TS3/src" "$TS3/test"
+printf 'export class Eng { other() { return 1; } }\n'                                                 > "$TS3/src/a.ts"
+printf 'import { leaf } from "./util";\nexport class Eng { run(p: number) { return leaf(p); } }\n'    > "$TS3/src/b.ts"
+printf 'export function leaf(p: number) { return p; }\n'                                              > "$TS3/src/util.ts"
+printf 'import * as A from "../src/a";\nimport * as B from "../src/b";\ntest("x", () => {\n  const x = new A.Eng();\n  const y = new B.Eng();\n});\n' > "$TS3/test/x.test.ts"
+CNT3="$( cd "$TS3" || exit 1; "$BIN" "$TS3" --affected=src/util.ts --no-cache 2>/dev/null )"
+printf '%s' "$CNT3" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" class="Eng"/></g>' \
+    && ok '(9i3) TS: new A.Eng() (line 4) then new B.Eng() (line 5) — two different qualifiers pass the name test, so the row has no l= (never l="4")' \
+    || no "(9i3) TS: a row's l= names another class's construction: $( printf '%s' "$CNT3" | sed 's/^.*-->//' )"
+PY3="$TMP/classnew-py3"; mkdir -p "$PY3/pkg" "$PY3/tests"
+printf 'def leaf(p):\n    return p\n'                                                                > "$PY3/pkg/util.py"
+printf 'from pkg.util import leaf\n\nclass Eng:\n    def run(self, p):\n        return leaf(p)\n'      > "$PY3/pkg/b.py"
+printf 'from pkg.b import Eng\nimport ext\n\ndef test_x():\n    x = ext.Eng()\n    y = Eng()\n'        > "$PY3/tests/test_x.py"
+CNY3="$( cd "$PY3" || exit 1; "$BIN" "$PY3" --affected=pkg/util.py --no-cache 2>/dev/null )"
+printf '%s' "$CNY3" | grep -q '<g via="class-new" total="1" shown="1"><new p="tests/test_x.py" class="Eng"/></g>' \
+    && ok '(9i3) Python: ext.Eng() (line 5) then Eng() (line 6) — two different qualifiers pass the name test, so the row has no l= (never l="5")' \
+    || no "(9i3) Python: a row's l= names the external namesake's construction: $( printf '%s' "$CNY3" | sed 's/^.*-->//' )"
 # (9l) "nearest class first": two classes at DIFFERENT hops whose test-path order is the reverse of their rank order. Far (hop 2, via
 # the module function mid) is built by the alphabetically-first test, Near (hop 1) by the later one: the rows must list Near first.
 MB="$TMP/classnew-rank"; mkdir -p "$MB/pkg" "$MB/tests"

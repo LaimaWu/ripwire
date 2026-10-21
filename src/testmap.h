@@ -695,11 +695,59 @@ inline std::vector<ClassNewSite> classNewSites( const ClassNewScan& s, const Gra
 
 // Does the call reference `r` (from a caller that constructs) name this construction? A constructorMethod call is named by its
 // LAST segment only (`new`), so `Other::new()` would pass the name test for `Eng`: the call's written qualifier must also be the
-// class (exact, or no row — a Rust alias import is a floor).
+// class (exact, or no l= — a Rust alias import is a floor). A target that IS the class (TS `new T`, Python `T()`) carries no
+// qualifier test (Reference holds no resolved target), so classNewBestRows hedges instead: two passing refs with different
+// qualifiers (`new A.Eng()` / `new B.Eng()`) leave the row without its l=.
 inline bool classNewCallNames( const IngestResult& ing, const Reference& r, const ClassNewSite& site )
 {
     return r.calleeName == ing.symbols[ site.target ].name
            && ( site.target == site.cls || scopeLastSegment( r.qualifier ) == ing.symbols[ site.cls ].name );
+}
+
+// A test file's class-new row hedges its l=: the call refs that named the row's class must all be WRITTEN the same way. The qualifier
+// proper is a C++/Rust `A::b` scope; a TS `new A.Eng()` / Python `ext.Eng()` writes it as a member receiver, which the extractor files
+// under recv/recvVar/memberRoot/memberPath — so two refs to one name that differ there may be two classes (a namesake), and the line is dropped.
+struct ClassNewSpelling
+{
+    std::vector<std::string> first;   // per test file: how the first call ref that named the row's class was written
+    std::vector<char>        mixed;   // per test file: a later ref naming that class was written differently
+    explicit ClassNewSpelling( std::size_t files ) : first( files ), mixed( files, 0 ) {}
+    static std::string written( const Reference& r )
+    {
+        std::string out( 1, char( '0' + int( r.recv ) ) );
+        for( const std::string* part : { &r.qualifier, &r.recvVar, &r.memberRoot, &r.memberPath } )
+        {
+            out.append( 1, '|' ).append( *part );
+        }
+        return out;
+    }
+    void adopt( const Reference& r ) { first[ r.fileId ] = written( r ); mixed[ r.fileId ] = 0; }
+    void note( const Reference& r ) { mixed[ r.fileId ] |= char( written( r ) != first[ r.fileId ] ); }
+    void hedge( ClassNewRow& row ) const { row.line = mixed[ row.testFile ] ? 0 : row.line; }   // the emitter omits l= for line 0
+};
+
+// One call reference from a constructing caller, offered to its test file's row: adopt it when it names the construction and is as near
+// a class and earlier than the row's line; a second ref to the row's class spelled differently marks the row's line unreliable.
+inline void classNewOffer( const ClassNewScan& s, const Reference& r, const ClassNewSite& site, ClassNewRow& cur, ClassNewSpelling& spelling )
+{
+    const ClassNewRow cand{ r.fileId, r.line, site.cls, s.classRank[ site.cls ], site.target };
+    if( !classNewCallNames( s.ing, r, site ) || cand.rank > cur.rank )
+    {
+        return;
+    }
+    const bool sameClass = cur.line != 0 && cur.cls == site.cls;
+    if( sameClass )
+    {
+        spelling.note( r );
+    }
+    if( cur.line == 0 || std::tie( cand.rank, cand.line ) < std::tie( cur.rank, cur.line ) )
+    {
+        if( !sameClass )
+        {
+            spelling.adopt( r );
+        }
+        cur = cand;
+    }
 }
 
 // Step 5: per test file, the nearest class, then its earliest construction line (a call reference from that caller naming the target).
@@ -707,6 +755,7 @@ inline std::vector<ClassNewRow> classNewBestRows( const ClassNewScan& s, std::sp
 {
     const IngestResult&      ing = s.ing;
     std::vector<ClassNewRow> best( ing.files.size(), ClassNewRow{ 0, 0, kNoNode, ClassNewScan::kUnreached, kNoNode } );
+    ClassNewSpelling         spelling( best.size() );
     for( const ClassNewSite& site : sites )
     {
         const std::uint32_t f = ing.symbols[ site.caller ].fileId;
@@ -725,17 +774,12 @@ inline std::vector<ClassNewRow> classNewBestRows( const ClassNewScan& s, std::sp
                                                   []( const ClassNewSite& a, const ClassNewSite& b ) { return a.caller < b.caller; } );
         for( auto it = lo; it != hi; ++it )
         {
-            ClassNewRow&      cur = best[ r.fileId ];
-            const ClassNewRow cand{ r.fileId, r.line, it->cls, s.classRank[ it->cls ], it->target };
-            const bool        nearer = std::tie( cand.rank, cand.line ) < std::tie( cur.rank, cur.line );
-            if( classNewCallNames( ing, r, *it ) && cand.rank <= cur.rank && ( cur.line == 0 || nearer ) )
-            {
-                cur = cand;
-            }
+            classNewOffer( s, r, *it, best[ r.fileId ], spelling );
         }
     }
     std::vector<ClassNewRow> rows;
     std::copy_if( best.begin(), best.end(), std::back_inserter( rows ), []( const ClassNewRow& r ) { return r.cls != kNoNode; } );
+    std::ranges::for_each( rows, [ & ]( ClassNewRow& r ) { spelling.hedge( r ); } );
     return rows;
 }
 
