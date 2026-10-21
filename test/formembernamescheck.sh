@@ -136,6 +136,8 @@ elif cmd == "ledger":         # ON OFF : rows one for one; est_tokens rise by th
     added += sum(len(m.group(0).encode()) for m in CLAUSE.finditer(on))
     if added == 0: fail("no mem= on the answer: vacuous")
     if not eo > ef: fail(f"est_tokens {eo} vs {ef}: the names are not priced")
+    want = added / 2.5   # the markup rate (kBytesPerTokenDefault); the header says "within 2 tokens"
+    if abs( ( eo - ef ) - want ) > 2: fail(f"est_tokens rose {eo - ef}, want {want:.1f} (+/-2) for {added} B")
     print(f"est_tokens {ef} -> {eo} for {added} B")
 elif cmd == "prefix":         # ON OFF
     a, b = strip(load(args[0])), strip(load(args[1]))
