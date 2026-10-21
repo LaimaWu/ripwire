@@ -11141,16 +11141,16 @@ inline NodeId resolveFocus( const IngestResult& ing, std::string_view spec, std:
             std::rotate( matches.begin(), code, code + 1 );   // the first code match leads; the rest keep their order
         }
     }
-    const Symbol& lowest = ing.symbols[ matches.front() ];
-    const auto    cOrCpp = []( Lang lang ) noexcept { return lang == Lang::Cpp || lang == Lang::C; };
-    if( isDefinitionNotDeclaration( lowest ) || !cOrCpp( lowest.lang ) )
+    const Symbol& towerFront = ing.symbols[ matches.front() ];
+    const auto    cOrCpp     = []( Lang lang ) noexcept { return lang == Lang::Cpp || lang == Lang::C; };
+    if( isDefinitionNotDeclaration( towerFront ) || !cOrCpp( towerFront.lang ) )
     {
         return matches.front();
     }
     for( NodeId id : matches )
     {
         const Symbol& candidate = ing.symbols[ id ];
-        if( isDefinitionNotDeclaration( candidate ) && cOrCpp( candidate.lang ) && candidate.scope == lowest.scope )
+        if( isDefinitionNotDeclaration( candidate ) && cOrCpp( candidate.lang ) && candidate.scope == towerFront.scope )
         {
             return id;
         }

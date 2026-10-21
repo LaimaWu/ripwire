@@ -120,7 +120,6 @@ inline LspFrame lspReadMessage( std::FILE* in )
     return f;
 }
 
-// The picker's cap, disclosed (#279 review, @mpapis): a query matching more than kLspWorkspaceCap rows answers the first
 // The window/logMessage (type 3, Info) frame BOTH disclosures ride — the one channel LSP gives a result
 // that has no field to say more (cap: arm 17; multi-def: arm 19). The frame lives once; callers pass the
 // already-escaped message text.
@@ -130,6 +129,7 @@ inline std::string lspLogMessageFrame( const std::string& message )
          + message + "\"}}";
 }
 
+// The picker's cap, disclosed (#279 review, @mpapis): a query matching more than kLspWorkspaceCap rows answers the first
 // kLspWorkspaceCap and says how many it left out in a window/logMessage (type 3, Info) sent just before the response,
 // the one channel LSP gives a result that has no truncation field. test/lspcheck.sh arm (17).
 inline std::string lspWorkspaceCapNotice( const std::string& query, std::size_t total )

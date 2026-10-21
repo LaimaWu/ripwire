@@ -1767,8 +1767,8 @@ std::optional<int> runMaintenanceViews( const MainDispatch& d )
                 return 1;
             }
             // §B11.3's SHAPE, found by that item's sweep and closed here: this is a fold that reports a scalar.
-            // `defs[0]` is ONE of N definitions of the name — the lowest node id — and the report then covers
-            // that definition's file alone under files="1", which reads as "this symbol lives in one file"
+            // `defs[0]` is ONE of N definitions of the name — the tower front (kind, leading language, then the lowest id) — and
+            // the report then covers that definition's file alone under files="1", which reads as "this symbol lives in one file"
             // while --callers/--uses/--impact/--mentions on the same name all disclose defs="3". The pick is a
             // reasonable default (it matches --around/--lego's resolveFocus), but it was invisible.
             onlyFileId  = ing.symbols[ defs[0] ].fileId;

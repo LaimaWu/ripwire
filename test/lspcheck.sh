@@ -375,17 +375,21 @@ uriCA="file://$WORK/collide/consumer_ambiguous.rb"
 } > "$WORK/d18"
 "$BIN" --lsp < "$WORK/d18" > "$WORK/raw18" 2>/dev/null
 decodeFrames "$WORK/raw18" > "$WORK/r18" 2>/dev/null
-head40="$( grep '"id":40,' "$WORK/r18" )"; head41="$( grep '"id":41,' "$WORK/r18" | head -c 260 )"; R42="$( grep '"id":42,' "$WORK/r18" )"; R43="$( grep '"id":43,' "$WORK/r18" )"
+head40="$( grep '"id":40,' "$WORK/r18" )"; head41="$( grep '"id":41,' "$WORK/r18" )"; R42="$( grep '"id":42,' "$WORK/r18" )"; R43="$( grep '"id":43,' "$WORK/r18" )"
 p_m="$( printf '%s' "$head40" | grep -bo 'all_four.rb","range":{"start":{"line":9' | cut -d: -f1 | head -1 )"
 p_v="$( printf '%s' "$head40" | grep -bo 'all_four.rb","range":{"start":{"line":7' | cut -d: -f1 | head -1 )"
 p_c="$( printf '%s' "$head40" | grep -bo 'schema.rb","range":{"start":{"line":14' | cut -d: -f1 | head -1 )"
 p_y="$( printf '%s' "$head40" | grep -bo 'spike_names.yml","range":{"start":{"line":3' | cut -d: -f1 | head -1 )"
+# The def-front clause pins the FIRST row by OFFSET, like the ws/symbol rows above: a Location row is ~130 bytes, so the
+# old "first 260 bytes contain a "line":9 field" window also matched the SECOND row — a Var-first order still printed PASS.
+q_m="$( printf '%s' "$head41" | grep -bo 'all_four.rb","range":{"start":{"line":9' | cut -d: -f1 | head -1 )"
+q_v="$( printf '%s' "$head41" | grep -bo 'all_four.rb","range":{"start":{"line":7' | cut -d: -f1 | head -1 )"
 [ -n "$p_m" ] && [ -n "$p_v" ] && [ -n "$p_c" ] && [ -n "$p_y" ] \
     && [ "$p_m" -lt "$p_v" ] && [ "$p_v" -lt "$p_c" ] && [ "$p_c" -lt "$p_y" ] \
-    && printf '%s' "$head41" | grep -q '"line":9' \
+    && [ -n "$q_m" ] && [ -n "$q_v" ] && [ "$q_m" -lt "$q_v" ] \
     && printf '%s' "$R43" | grep -q '\*\*method\*\* `AllFour::name`' \
     && ok "(18) picker order: Method before Var before column-Section before yaml-Section on ws/symbol, def-front and hover-front" \
-    || { no "(18) tower order wrong: m=$p_m v=$p_v c=$p_c y=$p_y"; printf '%s\n' "$head40" | head -c 400; printf '%s\n' "$head41" | head -c 240; }
+    || { no "(18) tower order wrong: m=$p_m v=$p_v c=$p_c y=$p_y d_m=$q_m d_v=$q_v"; printf '%s\n' "$head40" | head -c 400; printf '%s\n' "$head41" | head -c 240; }
 
 # ── (19) the ONE multi-def disclosure sentence, hover + definition logMessage, absent on single-def ───
 printf '%s' "$R42" | grep -q '19 definitions for .name. — counts are floors; the resolver splits over them' \

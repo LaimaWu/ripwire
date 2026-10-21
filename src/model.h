@@ -126,9 +126,10 @@ inline bool isStructOrNamedType( SymKind k ) noexcept
 // table-over-switch rule; --quality-delta scored the hoisted switch as a clone of the SymKind readers).
 // Values are load-bearing: the dedup's total order and the picker's Method > Var > Section answer sequence
 // are byte-pinned (rubyattrs/rubyschema checks, lspcheck 18). Index order is the SymKind enumerator order
-// above; the static_assert pins the length, so appending a kind without arming it is a build error, not a
-// silent 0. DISTINCT from gitmine.h's §H6 "specificity-ordered mapper", which orders file PATHS on a
-// different axis; nothing there reads or shares this ladder.
+// above; the size assert pins the length, so appending a kind without arming it is a build error, not a
+// silent 0, and the three keyed asserts below pin the enumerator ORDER too — reordering a kind without moving its
+// table row is a build error, not a silent reweight of the ladder. DISTINCT from gitmine.h's §H6
+// "specificity-ordered mapper", which orders file PATHS on a different axis; nothing there reads or shares this ladder.
 inline constexpr std::array<int, kSymKindCount> kKindSpecificityTable = {
     /* Function = */   2,   // a bare function definition
     /* Method = */     5,   // most specific: a behaviour owned by a type
@@ -148,6 +149,16 @@ inline constexpr std::array<int, kSymKindCount> kKindSpecificityTable = {
 };
 static_assert( kKindSpecificityTable.size() == kSymKindCount,
                "kKindSpecificityTable: one weight per SymKind, in enum order" );
+// The size assert arms an APPENDED kind; these arm a REORDERED enumerator, which no length can see. House pattern
+// (serialize.h pins int(Lang::Unknown) == 12; the NamedType..FuncType assert above pins a range): ordinal and rung
+// are asserted TOGETHER, keyed by enumerator. Three anchors — the top of the ladder, its floor, its tail — so any
+// permutation of the enum that does not move the matching table rows trips one of them.
+static_assert( unsigned( SymKind::Method ) == 1 && kKindSpecificityTable[ unsigned( SymKind::Method ) ] == 5,
+               "SymKind::Method is enumerator 1 with weight 5 — the tower's top rung; move the enumerator and the table row together" );
+static_assert( unsigned( SymKind::Section ) == 6 && kKindSpecificityTable[ unsigned( SymKind::Section ) ] == 0,
+               "SymKind::Section is enumerator 6 with weight 0 — headings, keys and schema columns never beat a code kind on one name byte" );
+static_assert( unsigned( SymKind::FuncType ) == 13 && kKindSpecificityTable[ unsigned( SymKind::FuncType ) ] == 2,
+               "SymKind::FuncType is enumerator 13 (the last) with weight 2 — the Go func-type rung over NamedType/Alias" );
 inline int kindSpecificity( SymKind k ) noexcept
 {
     return enumTableAt( kKindSpecificityTable, k, 0 );   // a byte past the enum (a corrupt cache byte is VALIDATEd on read)

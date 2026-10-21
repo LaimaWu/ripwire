@@ -3043,7 +3043,7 @@ std::optional<int> runEditCheck( const MainDispatch& d )
                       editCheckAmbiguousMessage( cfg.editCheckSym, groups, "--edit-check=", matches.size() ).c_str() );
         return 1;
     }
-    const NodeId focus = groups[0].lowestNode;
+    const NodeId focus = groups[0].focusNode;
 
     // card A1 — the PRE-APPLY fork. Everything above (resolution, the not-found refusal, the §A6a ambiguity
     // refusal) is shared verbatim, because a preview that resolved its target differently from the post-hoc

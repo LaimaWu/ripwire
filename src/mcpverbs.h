@@ -4842,12 +4842,12 @@ inline EditCheckReply editCheckText( const std::string& root, const std::string&
             return EditCheckReply{ {}, "new_body " + std::string( mcpedit::kBinaryPayloadRefusal ) };
         }
         const rw::editpreview::Outcome preview =
-            rw::editpreview::run( ing, g, root, kDefaultMaxFileBytes, {}, true, symbol, groups[0].lowestNode, newBody, nullptr,
+            rw::editpreview::run( ing, g, root, kDefaultMaxFileBytes, {}, true, symbol, groups[0].focusNode, newBody, nullptr,
                                    pg.limit, pg.offset );
         return preview.ok ? EditCheckReply{ preview.xml, {} } : EditCheckReply{ {}, preview.message };
     }
 
-    return EditCheckReply{ editCheckBundleText( ing, g, root, kDefaultMaxFileBytes, {}, groups[0].lowestNode,
+    return EditCheckReply{ editCheckBundleText( ing, g, root, kDefaultMaxFileBytes, {}, groups[0].focusNode,
                                                  /*ni=*/nullptr, /*preview=*/false, EditCheckPage{ pg.limit, pg.offset }, unprovenDefs ), {} };
 }
 
