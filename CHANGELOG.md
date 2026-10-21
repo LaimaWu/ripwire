@@ -56,7 +56,10 @@ spec).** The new rule targets a group with a top-level `|`; a pattern carrying s
 group — `a*a*a*a*a*b`, `^(a)*(a)*(a)*(a)*(a)*$` — is admitted, and on libstdc++ a subject that holds its required
 literal and then a long run is unbounded work: one `std::regex` call is atomic to its caller, and its backtracking
 never throws. libc++ returns only because its engine throws `error_complexity`. The follow-on spec owns it; this
-change does not claim it closed.
+change does not claim it closed. The same holds for a bounded quantifier over a group that itself repeats —
+`((a|aa){2,5}){2,5}b$` is admitted (both quantifiers are bounded, by design) and is exponential on libstdc++ — so the
+refusal's advice to make the outer quantifier a small explicit bound is safe only when nothing inside the group
+repeats; it is the same class as `(a|aa){1,100}b$`.
 
 ## [0.6.8] — 2026-10-19
 

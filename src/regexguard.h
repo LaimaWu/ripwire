@@ -348,7 +348,13 @@ struct RegexCharSet
     std::uint64_t asciiHigh       = 0;
     bool          matchesNonAscii = false;
 
-    void add( unsigned char c ) { ( c < 64 ? asciiLow : asciiHigh ) |= std::uint64_t( 1 ) << ( c & 63 ); }
+    // A byte >= 128 is a UTF-8 lead/continuation byte, not an ASCII character: recording it in the low-7-bit bitmaps would
+    // alias it to an ASCII letter (0xC3 -> 'C') and let a set that excludes that letter look disjoint from it.
+    void add( unsigned char c )
+    {
+        if( c >= 128 ) { matchesNonAscii = true; return; }
+        ( c < 64 ? asciiLow : asciiHigh ) |= std::uint64_t( 1 ) << ( c & 63 );
+    }
     void remove( unsigned char c ) { ( c < 64 ? asciiLow : asciiHigh ) &= ~( std::uint64_t( 1 ) << ( c & 63 ) ); }
     bool has( unsigned char c ) const { return ( ( c < 64 ? asciiLow : asciiHigh ) >> ( c & 63 ) ) & 1; }
 };

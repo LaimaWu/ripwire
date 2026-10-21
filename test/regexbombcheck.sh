@@ -288,6 +288,12 @@ altCase "(\w|\d)+$"   '(\w|\d)+$'
 altCase "(get|getResponse)+" '(get|getResponse)+'
 altCase "((a|aa))+b$" '((a|aa))+b$'
 altCase "(?:(?:a|aa))+b$" '(?:(?:a|aa))+b$'
+# A non-ASCII literal branch must not be proven disjoint from a set that matches every non-ASCII byte: the first-
+# character proof used to record 'é' (0xC3 0xA9) as the ASCII aliases {C} / {i}, so a complement or shorthand set that
+# merely excluded 'C' looked disjoint from it (round 6, PR #397 review N-A). libc++ abandons both; libstdc++ goes
+# exponential (\W|é)+b$ over "é"*n+"!" .
+altCase "(\W|é)+b$"   '(\W|é)+b$'
+altCase "([^C]|é)+b$" '([^C]|é)+b$'
 # (a|a*)+ (a branch that can match EMPTY) is refused by the NESTED arm, not this one: its group contains '*', so the
 # first arm fires and its message is the nested-repetition one. It is asserted as a bombCase above, where that
 # message belongs. The PM-1 honesty assertion below applies only to patterns the ALTERNATION arm actually catches.

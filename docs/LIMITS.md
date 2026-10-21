@@ -22,7 +22,11 @@ returns only because its ENGINE throws `error_complexity`. The multi-quantifier 
 then a long run is unbounded work, named and reachable, **tracked by `regex-screen-multiquantifier` (follow-on
 spec), never claimed closed**. (The guard's former per-file match budget — `kRegexFileMatchBudget`, removed in
 the PR #397 review — cannot be revived against this residual: it counted line-match attempts BETWEEN engine
-calls, so it refused fast linear answers and still bounded nothing inside one call.)
+calls, so it refused fast linear answers and still bounded nothing inside one call.) A second admitted shape is a
+bounded quantifier over a group that itself repeats: `((a|aa){2,5}){2,5}b$` passes the screen because both
+quantifiers are bounded, yet it is exponential on libstdc++ (and abandoned by libc++), so "make the outer quantifier
+a small explicit bound" is safe only when nothing inside the group repeats; it is the same class as
+`(a|aa){1,100}b$`, tracked with the multi-quantifier family above.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
