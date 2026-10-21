@@ -16,3 +16,4 @@ impl Shelf {
 }
 pub fn walk_items(b: &Book) -> usize { b.walk() }
 pub fn walk_books(s: &Shelf) -> usize { s.walk() }
+pub fn walk_any<T>(t: &T) -> usize { t.walk() }

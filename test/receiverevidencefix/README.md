@@ -93,3 +93,9 @@ The names are paraphrases of graded false rows; the code is minimal and is never
   scope level × target (in-tree unique / outside / unresolved / two in-tree), and (fix round 4) × declaration kind
   (recorded class / unrecorded type-binding node / macro-unparsed) — with its expected verdict, plus the N/A rows a
   language cannot write. Its header defines the cells.
+- `rsrecv.txt` — arm (RS), Rust receiver evidence (lane rust-receivers): one Rust crate in a text bundle (unpacked like
+  `callresult.txt`). `model.rs` defines Book / Other (both `spin`, `iter`), Cfg / Knob (both `tune`), a generic Stack, and
+  Shelf / Inner / Holder / Pair whose fields are typed Book, `Box<Book>`, `Option<Book>`, `Rc<Book>`, u32, `T` and a tuple
+  field; `other.rs` a second Book, an in-tree File and a same-named Shelf whose `book` is a Vec; `kinds.rs` an enum with
+  `spin` and a trait with a default `spin`; `app.rs` one function per receiver shape; `nest/` and `glob2/` a glob of a
+  module's own `use` and a glob of a glob.

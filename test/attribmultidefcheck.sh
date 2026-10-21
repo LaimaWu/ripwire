@@ -498,23 +498,26 @@ if ans f_rb rb callers s xml -- --callers=area; then
     expect P f_rb circle_area shapes.rb:2; expect P f_rb square_area shapes.rb:7
     rowset C f_rb 2 "circle_area square_area"
 fi
-# Re-anchored (lane rust-std-rows, #405): `iter` is in the standard-member gate's Rust row, so `b.iter()` on a `&Book` is now
-# DECLINED (graph.h StdMemberGate's stated floor: Rust records no parameter type yet) and the multi-definition hedge this arm
-# pins moved to `walk`, the same two-impl shape under a name no table holds. The iter twin below keeps the old premise visible.
+# Re-anchored (lane rust-std-rows, #405): `iter` is in the standard-member gate's Rust row, so the multi-definition hedge this
+# arm pins moved to `walk`, the same two-impl shape under a name no table holds. Re-anchored again (lane rust-receivers):
+# `b: &Book` / `s: &Shelf` now TYPE their receivers, so walk_items / walk_books are each proven onto ONE definition, and the
+# hedge moved to walk_any — `t: &T`, a generic no rule types (the premise: a receiver nothing proves, two impls of the name).
 if ans f_rs rs callers s xml -- --callers=walk; then
-    hedged P f_rs walk_items "src/lib.rs:12 src/lib.rs:15"
-    hedged P f_rs walk_books "src/lib.rs:12 src/lib.rs:15"
-    case "$( rowflags f_rs walk_items )" in *via=name*) ok "[N] f_rs: the existing via=\"name\" row hedge stays" ;; *) no "[N] f_rs: via=\"name\" lost on walk_items" ;; esac
-    rowset C f_rs 2 "walk_books walk_items"
+    hedged P f_rs walk_any "src/lib.rs:12 src/lib.rs:15"
+    case "$( rowflags f_rs walk_any )" in *via=name*) ok "[N] f_rs: the via=\"name\" row hedge stays on the untyped walk_any" ;; *) no "[N] f_rs: via=\"name\" lost on walk_any" ;; esac
+    expect P f_rs walk_items "src/lib.rs:12"
+    expect P f_rs walk_books "src/lib.rs:15"
+    rowset C f_rs 3 "walk_any walk_books walk_items"
 fi
 # train 30 (call-result typing x #405): a Rust member call carries its receiver PATH, so `self.items.iter()` /
-# `self.books.iter()` inside each iter is a chained receiver no rule types, and the standard-member row declines it too (it
-# is a Vec's iter; before, `self` alone proved the caller's own method, a dropped self-loop): 2 parameter + 2 chained = 4.
+# `self.books.iter()` inside each iter is a chained receiver whose field is a Vec, and the standard-member row declines it
+# (before, `self` alone proved the caller's own method, a dropped self-loop). Lane rust-receivers: `b.iter()` / `s.iter()` on
+# the Book / Shelf parameters are typed now and BIND (one row each), so 2 declined remain (the two Vec fields).
 if ans f_rs_iter rs callers s xml -- --callers=iter; then
-    if [ "$( nrows f_rs_iter )" = 0 ] && grep -q 'declined_calls="4"' "$DIR/f_rs_iter.out"; then
-        ok "[N] f_rs_iter: b.iter() / s.iter() on Book / Shelf parameters and self.items.iter() / self.books.iter() are declined by the Rust standard-member row (declined_calls=4, no row)"
+    if [ "$( nrows f_rs_iter )" = 2 ] && grep -q 'declined_calls="2"' "$DIR/f_rs_iter.out" && ! grep -q 'via="name"' "$DIR/f_rs_iter.out"; then
+        ok "[N] f_rs_iter: b.iter() / s.iter() on Book / Shelf parameters bind (2 rows, unhedged); self.items.iter() / self.books.iter() are declined (declined_calls=2)"
     else
-        no "[N] f_rs_iter: want no row and declined_calls=\"4\" (test/stdmembergatecheck.sh arm R floor); got $( nrows f_rs_iter ) row(s): $( head -c 300 "$DIR/f_rs_iter.out" )"
+        no "[N] f_rs_iter: want 2 unhedged rows and declined_calls=\"2\" (test/stdmembergatecheck.sh arm R); got $( nrows f_rs_iter ) row(s): $( head -c 300 "$DIR/f_rs_iter.out" )"
     fi
 fi
 if ans f_objc objc callers s xml -- --callers=area; then
