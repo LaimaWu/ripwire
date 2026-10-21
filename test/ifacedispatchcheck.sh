@@ -14,7 +14,8 @@
 #     interface / trait / abstract base (a type whose own `m` has no body) with implementors (the extends / implements /
 #     `impl T for X` edges, walked through implementorClosure), the candidates are the methods named m that those types own
 #     (an arity the call cannot pass is not one; T's own bodied default is one).
-#   * ONE candidate, every edge to it proven: an edge via="impl" (the only implementor in the tree; one outside it may exist).
+#   * ONE candidate, every edge to it proven, no clause-less implementor possible: an edge via="impl" (the only implementor in
+#     the tree; one outside it, or one a macro writes, may exist).
 #   * TWO or more: a <dc ... cands="K" via="declined" gate="iface"/> row, cands= that list's size; --legend=full names it
 #     (cand=). A Rust generic bound adds bound="R: Trait". Never retargeted by name, never in count=.
 #   * NOT the tier: a receiver whose type defines a bodied m (a concrete base with subclasses keeps today's proven edge),
@@ -31,7 +32,12 @@
 #   (G) the callers form: an implementor's answer names the declined sites; a same-named trait's implementor is not named
 #   (N) near misses: concrete base with subclasses, no implementor, another arity, a same-named interface elsewhere,
 #       count= untouched, a test-only implementor listed
-#   (L) legend clauses ride with the rows      (J) --json carries gate / bound
+#   (K) fix round 1, B1 — completeness (fixtures b1ts/ b1java/ b1kt/ b1rs/): an implementor with no clause the map reads (a
+#       TS object literal or conforming class, a Java lambda or anonymous class, a Kotlin `fun interface` lambda or object
+#       expression, a Rust trait under mockall's automock) opens the list: no via="impl", main's by-name rows stay
+#   (M) fix round 1, B2 — Rust method set: through `dyn T` a candidate sits in an `impl T for X` block (or is T's default);
+#       an inherent method of X never is
+#   (L) legend clauses ride with the rows (cands=K a floor; the iface clause only beside an iface row)   (J) --json gate / bound
 #   (Go) FLOOR: Go interfaces are structural; no implements clause names an implementor, so the tier has none (4c)
 #
 # RED ON BASE: every [P] arm fails on a binary without the tier; [C] arms are controls that pass on both; [FLOOR] arms pin a
@@ -162,10 +168,15 @@ a = ask( CPP, "callees", "soloCall" )
 say( a.ok and [ ( r.get( "n" ), r.get( "p" ), r.get( "via" ) ) for r in a.rows ] == [ ( "soloRun", "runners.cc:23", None ) ] and not a.dc, "[C] c_cpp",
      "C++ one subclass: class identity's own proven edge stays as it was (no via= relabel; the field path never proves one)", a.why() )
 for root, sel, n, p, tag in ( ( RS, "solo_dyn", "solo_step", "src/solo/mod.rs:8", "rs" ),
-                              ( JAVA, "single", "singleRun", "app/OnlySingle.java:4", "java" ), ( TS, "lone", "loneCall", "src/fmt/impls.ts:16", "ts" ),
-                              ( TS, "areaOf", "area", "src/fmt/impls.ts:22", "ts_abstract" ) ):
+                              ( JAVA, "single", "singleRun", "app/OnlySingle.java:4", "java" ) ):
     a, good = impl_edge( root, sel, n, p )
     say( a.ok and good, "[P] c_%s" % tag, "--callees=%s: <s n=\"%s\" p=\"%s\" via=\"impl\">, no <dc>" % ( sel, n, p ), a.why() )
+# fix round 1 (B1 i): TypeScript types structurally — an object literal or a class with the right members implements an interface
+# (or a class type) without naming it, so one `implements` clause never proves the only implementor: main's by-name row stays
+for sel, n, p, tag in ( ( "lone", "loneCall", "src/fmt/impls.ts:16", "ts" ), ( "areaOf", "area", "src/fmt/impls.ts:22", "ts_abstract" ) ):
+    a = ask( TS, "callees", sel )
+    say( a.ok and [ ( r.get( "n" ), r.get( "p" ), r.get( "via" ) ) for r in a.rows ] == [ ( n, p, "name" ) ] and not a.dc, "[P] c_%s_structural" % tag,
+         "--callees=%s: main's <s n=\"%s\" p=\"%s\" via=\"name\">, never via=\"impl\" (structural typing: the list is no proof)" % ( sel, n, p ), a.why() )
 a = ask( RS, "callers", "src/solo/mod.rs::OnlySolo::solo_step" )
 say( a.ok and [ ( r.get( "n" ), r.get( "via" ) ) for r in a.rows ] == [ ( "solo_dyn", "impl" ) ] and a.a( "count" ) == "1", "[P] c_callers",
      "--callers of the one implementor: solo_dyn via=\"impl\", count=\"1\"", a.why() )
@@ -239,8 +250,51 @@ cs = cand_set( af, "render", line_of( DRIVE_RS, "r.render(2)" ) ) or set()
 fake = "src/render/impls.rs:" + line_of( IMPLS_RS, "fn render", 6 )
 say( af.ok and fake in cs, "[C] n_rs_test_impl", "the #[cfg(test)] implementor is a candidate (%s): a test may be what runs it" % fake, str( cs ) )
 
+# ── (K) candidate-set completeness (fix round 1, B1; reports/dispatch-classes.md §(a) 5) ────────────────────────────
+# EXACT OR NO ROW: a via="impl" edge needs the whole in-tree implementor set. Where an implementor can exist with no clause the
+# map reads — a structurally conforming TS object literal or class, a Java lambda / anonymous class, a Kotlin `fun interface`
+# lambda or object expression, a Rust trait mockall's attribute implements — the tier steps aside and main's by-name rows stay.
+print( "=== (K) completeness: an implementor without a clause opens the list ===" )
+B1TS, B1JAVA, B1KT, B1RS = ( os.path.join( FIX, d ) for d in ( "b1ts", "b1java", "b1kt", "b1rs" ) )
+def rows_are( a, want ):
+    return a.ok and sorted( ( r.get( "n" ), r.get( "p" ), r.get( "via" ) ) for r in a.rows ) == sorted( want ) and not a.dc
+for root, sel, want, tag, why in (
+        ( B1TS, "serve", [ ( "route", "src/lit.ts:3", "name" ), ( "route", "src/lit.ts:6", "name" ), ( "route", "src/r.ts:5", "name" ) ], "ts_literal",
+          "TS: memRouter (an object literal typed Router) and StructRouter (no implements clause) can run r.route" ),
+        ( B1JAVA, "run", [ ( "handle", "app/LogHandler.java:2", "name" ), ( "handle", "app/Use.java:7", "name" ) ], "java_sam_anon",
+          "Java: Handler takes a lambda (one abstract method) and an anonymous class (Use.java:7)" ),
+        ( B1JAVA, "runTwo", [ ( "first", "app/TwoImpl.java:2", "name" ), ( "first", "app/UseTwo.java:6", "name" ) ], "java_anon",
+          "Java: a two-method interface with an anonymous class `new Two() { … }` — no lambda involved" ),
+        ( B1JAVA, "runFn", [ ( "apply", "app/FnImpl.java:2", "name" ) ], "java_sam",
+          "Java: a single-abstract-method interface a lambda implements (`runFn(x -> x * 2)`), no anonymous class" ),
+        ( B1KT, "run", [ ( "apply", "A.kt:3", "name" ) ], "kt_fun_object", "Kotlin: `fun interface Op` with a lambda and an `object : Op` expression" ),
+        ( B1KT, "runTwo", [ ( "first", "B.kt:3", "name" ) ], "kt_object", "Kotlin: a two-method interface with an `object : Two { … }` expression" ),
+        ( B1KT, "runLam", [ ( "call", "C.kt:3", "name" ) ], "kt_fun", "Kotlin: `fun interface Lam` a lambda implements (`runLam { it + 1 }`)" ),
+        ( B1RS, "send_500", [ ( "send_response", "src/mock.rs:10", "name" ) ], "rs_automock",
+          "Rust: `#[cfg_attr(any(test, feature = \"mock\"), automock)]` writes MockFilter, an implementor no source holds (envoy send_500)" ) ):
+    a = ask( root, "callees", sel )
+    say( rows_are( a, want ), "[P] k_%s" % tag, "--callees=%s: main's by-name rows %s, no via=\"impl\" -- %s" % ( sel, [ w[ 1 ] for w in want ], why ), a.why() )
+
+# ── (M) Rust method set (fix round 1, B2; §(a) 4): through dyn T only T's impl blocks and defaults can run ───────────────────
+print( "=== (M) Rust: an inherent method is never a trait-dispatched candidate ===" )
+a = ask( B1RS, "callees", "via_ext" )
+say( rows_are( a, [ ( "helper", "src/t.rs:2", "name" ), ( "helper", "src/t.rs:9", "name" ) ] ), "[P] m_rs_supertrait",
+     "x.helper() on &dyn Foo runs supertrait Ext's default (t.rs:2), not X's inherent helper (t.rs:9): main's hedged rows, never t.rs:9 via=\"impl\"", a.why() )
+a = ask( B1RS, "callees", "via_inherent" )
+say( rows_are( a, [ ( "only_inherent", "src/t.rs:10", "name" ) ] ), "[P] m_rs_inherent",
+     "x.only_inherent() on &dyn Foo (an inherent-only method; no trait has it): main's by-name row, never via=\"impl\"", a.why() )
+a = ask( B1RS, "callees", "via_dup" )
+say( rows_are( a, [ ( "go", "src/dup.rs:15", "impl" ) ] ), "[P] m_rs_impl_block",
+     "z.go() on &dyn Step: `impl Step for Z`'s go (dup.rs:15) via=\"impl\"; Z's inherent go (dup.rs:9) is no candidate", a.why() )
+
 # ── (L) legend ─────────────────────────────────────────────────────────────────────────────────────────────────────
 print( "=== (L) legend ===" )
+a = ask( TS, "callees", "dispatch" )
+say( a.ok and one_dc( a, "match", "4", "2" ) and "K is a floor" in a.legend, "[P] l_iface_floor",
+     "a gate=\"iface\" row's legend says cands=K is a floor (a structurally conforming TS type is not counted)", a.legend[ -500: ] )
+a = ask( B1RS, "callees", "std_len" )
+say( a.ok and any( d.get( "gate" ) == "std" for d in a.dc ) and "iface" not in a.legend, "[P] l_iface_absent",
+     "an answer whose only <dc> is gate=\"std\" carries no iface clause (N2: the clause rides with an iface row)", a.legend[ -500: ] )
 a = ask( RS, "callees", "dyn_ref" )
 say( a.ok and "iface" in a.legend and "which one runs is unproven" in a.legend, "[P] l_iface",
      "an answer with a gate=\"iface\" row defines it: the receiver's interface's implementors, which one runs is unproven", a.legend[ -400: ] )
