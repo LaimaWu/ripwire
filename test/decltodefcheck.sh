@@ -1913,8 +1913,8 @@ printf '<!-- <t n="helper" p="api.h:2"/> --><connect edges="1"><g><t n="useHelpe
     || no "(F) termP misread a terminal: helper=$( termP "$TMP/m_e3b.xml" helper ) useHelper=$( termP "$TMP/m_e3b.xml" useHelper ) absent=$( termP "$TMP/m_e3b.xml" absent )"
 # (E3g) shape: readingOf must read the NAMED head's reading alone — never another term whose name ends in the same bytes
 # (unproven_defs=K: holds the needle below), never a later term (rank_by= holds it too), and it must stop at "; qualify".
-L_E3G_BAD='<!-- unproven_defs=K: K defs of the same scope. defs=N: of= names N defs; the lowest-id one was walked, a C/C++ body over its declaration. rank_by=: the same scope -->'
-L_E3G_OK='<!-- defs=N: of= names N defs; the lowest-id one was walked, a C/C++ body in the same scope over its declaration. -->'
+L_E3G_BAD='<!-- unproven_defs=K: K defs of the same scope. defs=N: of= names N defs; most-specific kind walked first, a C/C++ body over its declaration. rank_by=: the same scope -->'
+L_E3G_OK='<!-- defs=N: of= names N defs; most-specific kind walked first, its language ahead, id last, code first, a C/C++ body in the same scope over its declaration. -->'
 L_E3G_FULL='<!-- defs= (only when >1) = N definitions (a declaration yields); qualify with file:name of its scope. -->'
 case "$( readingOf "$L_E3G_BAD" "defs=N:" )"  in *'same scope'*)   G_BAD=1 ;;  *) G_BAD=0 ;;  esac
 case "$( readingOf "$L_E3G_OK" "defs=N:" )"   in *'same scope'*)   G_OK=1 ;;   *) G_OK=0 ;;   esac

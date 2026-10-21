@@ -11104,10 +11104,11 @@ inline std::string memberSelectorUnservedRefusal( const IngestResult& ing, std::
 // commit. Declared here, below the full resolver, for exactly that reason.
 //
 // THE PICK is the tower front — the most specific kind, the leading language, then the lowest id — with ONE
-// exception: a bodyless C/C++ front (a header prototype, an in-class method
-// declaration, a forward-declared class) yields to the lowest-id C/C++ match WITH a body in the SAME scope, when the set
-// holds one. The lowest id alone made the declaration the focus whenever its header sorted first, and a declaration has
-// no call or extends edges — so --around served its own row, --connect found no join and --lego counted no implementor,
+// exception: a bodyless C/C++ front (a header prototype, an in-class method declaration, a forward-declared class) yields to
+// the TOWER-FRONT bodied definition of the SAME scope, when the set holds one: the scan walks the tower-ordered matches and
+// returns the FIRST bodied same-scope candidate, so a mixed-kind same-name C collision (struct X + void X()) is won by its
+// kind, not by its id. The lowest id alone made the declaration the focus whenever its header sorted first, and a declaration
+// has no call or extends edges — so --around served its own row, --connect found no join and --lego counted no implementor,
 // for a bare name and a fully proven file:name alike (decltodefcheck E3a..E3d). Everything else keeps the tower front:
 //   * a set of declarations only, or a single match — nothing to prefer;
 //   * every other language — measured on this repository, an unscoped "bodied first" moved 69 non-C/C++ names (Python and

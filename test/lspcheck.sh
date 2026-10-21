@@ -48,8 +48,9 @@
 #        floors, the resolver splits — in the hover markdown and in one window/logMessage ahead of every
 #        definition answer; absent on single-def names
 #   (20) Used-at parity (task C): hover Used-at for the colliding name answers every CLI --uses call row
-#   (21) C/C++ decl/def no-regression (task C): a header declaration with the LOWER id still yields its bodyful
-#        definition — the resolveFocus refinement composes with the tower sort
+#   (21) C/C++ decl/def no-regression (task C): on a tree whose HEADER sorts first — so the prototype carries the LOWER
+#        crawl-order id — the single-pick --around still walks the bodyful definition (the resolveFocus refinement
+#        composes with the tower sort); textDocument/definition is pinned beside it as the whole-list answer it is
 #   (22) determinism x2 on the new collision dialog (house pattern)
 #   (23) the known gap stays COHERENT: --around's CLI row shows the tower front AND its defs= count, so
 #        edge-vs-display disagreement is visible on the row, never hidden
@@ -402,7 +403,7 @@ UR="$( cd "$WORK/collide" && "$BIN" --uses=name . 2>/dev/null | grep -oE '<u rol
 miss=""
 for row in $UR; do
     site="${row%:*}"; ln="${row##*:}"
-    printf '%s' "$R42" | grep -q "$site#L$ln" || miss="$miss $row"
+    printf '%s' "$R42" | grep -qF "$site#L$ln" || miss="$miss $row"
 done
 [ -n "$UR" ] && [ -z "$miss" ] && ok "(20) Used-at parity: every CLI --uses call row appears as a hover link ($( printf '%s\n' "$UR" | wc -l | tr -d ' ' ) rows)" \
              || { no "(20) parity missing rows:$miss (rows seen: $( echo $UR | tr ' ' ',' ))"; }
@@ -436,14 +437,20 @@ printf '%s' "$head44" | grep -q 'schema\.rb","range":{"start":{"line":28' \
     && ok "(18b) column clicks land on schema.rb — unique event_id -> its row; column-only created_at -> schema first with the N-definitions disclosure" \
     || { no "(18b) schema-column click wrong"; printf '%s\n' "$head44" | head -c 240; printf '%s\n' "$head45" | head -c 240; }
 
-# ── (21) C/C++ decl/def no-regression: the bodyful def front-picks over the lower-id header decl ──────
+# ── (21) C/C++ decl/def: the LOWER-id header prototype yields to the bodyful def on the SINGLE-PICK verb ─────
+# WHY THE FIXTURE IS NAMED quad.h + z_quad.cpp: ids follow SORTED crawl order, and "quad.h" sorts before
+# "z_quad.cpp", so the bodyless prototype carries the LOWER NodeId and the tower's id-ASC tie leads with it. That is
+# the only order in which resolveFocus's same-scope body preference (graph.h) decides the answer: delete the yield and
+# the focus stays quad.h's declaration, which carries no call or extends edges — the walk would then name the
+# declaration's own row and never reach use_quad. textDocument/definition cannot show that pick at all (lsp.h
+# lspDefinition answers the WHOLE def list via resolveAllByName), so it is pinned here beside the pick, as the
+# no-regression answer it actually is, and the pick itself is read off a single-pick verb.
 mkdir -p "$WORK/cppdd"
-cat > "$WORK/cppdd/a.h" <<'EOF'
-// decl/def fixture
+cat > "$WORK/cppdd/quad.h" <<'EOF'
+// decl/def fixture — the HEADER sorts FIRST, so this prototype carries the lower crawl-order id
 int quad( int f );
 EOF
-cat > "$WORK/cppdd/a.cpp" <<'EOF'
-// the def carries the body; the header decl above carries the lower id
+cat > "$WORK/cppdd/z_quad.cpp" <<'EOF'
 int quad( int f )
 {
     return f * 4;
@@ -458,17 +465,27 @@ uriCpp="file://$WORK/cppdd"
 {
   msg "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"rootUri\":\"$uriCpp\",\"capabilities\":{}}}"
   msg "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"
-  msg "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file://$WORK/cppdd/a.cpp\",\"languageId\":\"cpp\",\"version\":1,\"text\":\"\"}}}"
-  msg "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file://$WORK/cppdd/a.cpp\"},\"position\":{\"line\":8,\"character\":11}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file://$WORK/cppdd/z_quad.cpp\",\"languageId\":\"cpp\",\"version\":1,\"text\":\"\"}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file://$WORK/cppdd/z_quad.cpp\"},\"position\":{\"line\":7,\"character\":11}}}"
   msg "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\"}"
   msg "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"
 } > "$WORK/d21"
 "$BIN" --lsp < "$WORK/d21" > "$WORK/raw21" 2>/dev/null
 decodeFrames "$WORK/raw21" > "$WORK/r21" 2>/dev/null
-head50="$( grep '"id":50,' "$WORK/r21" | head -c 200 )"
-printf '%s' "$head50" | grep -q '"uri":"file://.*a\.cpp","range":{"start":{"line":1' \
-    && ok "(21) decl/def refinement composes with the sort: the bodyful .cpp def fronts the lower-id header decl" \
-    || { no "(21) decl front-picked the answer"; printf '%s\n' "$head50"; }
+resp50="$( grep '"id":50,' "$WORK/r21" | head -1 )"
+# the whole-list answer: BOTH definitions are named, the body among them (the list is not a pick — do not read order here)
+printf '%s' "$resp50" | grep -qF "\"uri\":\"file://$WORK/cppdd/quad.h\",\"range\":{\"start\":{\"line\":1" \
+    && printf '%s' "$resp50" | grep -qF "\"uri\":\"file://$WORK/cppdd/z_quad.cpp\",\"range\":{\"start\":{\"line\":0" \
+    || { no "(21) the def list no longer names both the prototype (quad.h:2) and the body (z_quad.cpp:1)"; printf '%s\n' "$resp50" | head -c 300; }
+ar21="$( cd "$WORK/cppdd" && "$BIN" --around=quad . 2>/dev/null )"
+printf '%s' "$ar21" | grep -q '<r [^>]*defs="2"' \
+    || no "(21) premise broken — --around=quad's root carries no defs=\"2\", so the name has no pick for the refinement to make: $( printf '%s' "$ar21" | grep -m1 -o '<r [^>]*>' | head -c 160 )"
+w21="$( printf '%s' "$ar21" | grep -cF '<f p="z_quad.cpp"><s t="fn" n="quad"' )"
+c21="$( printf '%s' "$ar21" | grep -cF '<s t="fn" n="use_quad"' )"
+n21="$( printf '%s' "$ar21" | grep -cF '<f p="quad.h">' )"
+[ "$w21" = 1 ] && [ "$c21" = 1 ] && [ "$n21" = 0 ] \
+    && ok "(21) single-pick decl/def refinement composes with the sort: --around walks the bodyful .cpp def and reaches its caller, never the lower-id header prototype" \
+    || { no "(21) the pick did not move to the body — the same-scope yield is what does that here (bodyRow=$w21 caller=$c21 declRow=$n21)"; printf '%s\n' "$ar21" | grep -o '<r [^>]*>\|<f p="[^"]*">' | head -4; }
 
 # ── (23) known-gap coherence: the CLI row shows the tower front AND its defs= count ───────────────────
 c23="$( cd "$WORK/collide" && "$BIN" --around=name . 2>/dev/null | grep -m1 -o '<s t="method" n="name" sc="AllFour"' )"

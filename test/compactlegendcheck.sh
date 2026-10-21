@@ -582,6 +582,16 @@ probeFor()
 # A name with several definitions now serves lean (no ride-along map), so the whole-file answer this probe reaches carries
 # topk_default="0" (+112 B reading) and map_next= (+56 B reading) on its root, both present-only (compactlegend.h). The
 # (U-twin-expand) arm below keeps the OLD 360 B pin for everything else in that legend.
+# RE-PINNED 2026-10-21 (this review-fix round, but the BYTES are the reviewed commit's): ripwire.around/v1 770 -> 830
+# (measured 812, the --around=distance probe; the table held 760). e5d39f70 "say tower front where the code now means it"
+# rewrote the compact defs= READING from "lowest-id walked, code first, a C/C++ body in the same scope over its declaration"
+# (107 B) to "most-specific kind walked first, its language ahead, id last, code first, a C/C++ body in the same scope over its
+# declaration" (151 B, +44 B) and left this row where it was — splice that pre-e5d39f70 term back into THIS build's answer and
+# the same probe measures 768 B, inside the old 770, which localises the whole breach to that one reading. The (U) arm was
+# therefore already red on the branch before this round. This round's own half of the same fix — the FULL --around seed clause,
+# re-worded to the tower-front pick — costs (U) nothing: the compact dialect drops that clause, so no full-legend phrase is
+# billed here. No (U-twin): a twin holds an OLD PATH that still exists, and here the same probe in the same dialect simply
+# speaks the pick correctly, so the row is the whole story.
 # RE-PINNED 2026-10-10 (lane lean-trio, idea #11): ripwire.edit-check/v1 610 -> 650 (measured 636, the --edit-check=distance
 # probe; 595 on main 0852bc0f). The probe's contract is unchanged with nothing flagged, so the answer is now the verdict
 # line (no <c> rows), and the compact legend reads its two new facts: rows_next= (the --limit call listing the callers) and
@@ -637,7 +647,7 @@ ripwire.grep/v1                  1380  1368
 ripwire.match/v1                  370   355
 ripwire.lego/v1                  290   275
 ripwire.exemplar/v1               440   422
-ripwire.around/v1                770   760
+ripwire.around/v1                830   812
 ripwire.callers/v1               450   438
 ripwire.callees/v1                500   484
 ripwire.uses/v1                   510   500
@@ -1860,9 +1870,10 @@ for v in "" "--query=distance" "--rank-by=hub" "--around=total_area" "--impact=d
     for spec in pr_iters pr_converged "#declined" "#external" "#locality_pinned" "#extent_suspect_syms" "#macro_blanked_files" \
                 "#ignored_files" "#ignored_dirs" "#max_tokens" "#fit_bytes" "#over_ceiling" r:defs r:rank_by r:window; do
         attr="${spec#*:}"; attr="${attr#\#}"
-        # Since the fourth sweep (2026-09-12) --impact's purpose line reads its OWN defs=, so the map root's defs= reading is
-        # found by its opener rather than its attribute name, the way (D17)/(D23) find theirs.
-        if [ "$spec" = r:defs ]; then isRead="$( ca mentions "$TMP/d12.c" "the lowest-id one was walked" )"; else isRead="$( ca defines "$TMP/d12.c" "$attr" )"; fi
+        # Since the fourth sweep (2026-09-12) --impact's purpose line reads its OWN defs=, so the map root's defs= reading is found by its opener rather
+        # than its attribute name, the way (D17)/(D23) find theirs. THE NEEDLE IS THE COMPACT TERM'S OPENER (compactlegend.h's defs row) — these documents
+        # are read under --legend=compact, where the full clause is never printed, so a full-legend phrase here would silently match nothing.
+        if [ "$spec" = r:defs ]; then isRead="$( ca mentions "$TMP/d12.c" "most-specific kind walked first" )"; else isRead="$( ca defines "$TMP/d12.c" "$attr" )"; fi
         if [ "$isRead" = 1 ] && [ "$( ca carries "$TMP/d12.c" "$spec" )" != 1 ]; then
             no "(D12) ${v:-the flagless map}: the compact legend defines $attr= but the document carries no $spec — a reading of a field that is not there"
             d12bad=1
