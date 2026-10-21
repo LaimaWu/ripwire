@@ -2340,10 +2340,10 @@ constexpr std::uint32_t kIngestCacheVersionMirror   = 36;   // MUST equal ingest
 constexpr std::uint32_t kIngestParserVerMirror    = 212;  // MUST equal ingest.cpp's kParserVer   (gated)
                                                           // 212 = 2026-10-21 (train 32a: above main 206/207, rust-receivers 202/203, ix1-slot
                                                           //   204/205, l6-iface 210/211; #420 reserves 214/215; see the kParserVer note)
-                                                          // 202 = lane rust-receivers (reservation 202/203; the train renumbers): Rust written-type
-                                                          //   RecvType / MemberType, the written qualifier path of a call result, `-> Self` results
                                                           // 206 = 2026-10-18 (#409, PR #414, renumbered again at merge: above main 196/197,
                                                           //   train 31 198/199, rust-receivers 202/203, ix1-slot 204/205; see the kParserVer note)
+                                                          // 202 = lane rust-receivers (reservation 202/203; the train renumbers): Rust written-type
+                                                          //   RecvType / MemberType, the written qualifier path of a call result, `-> Self` results
                                                           // 198 = 2026-10-18 (train 31: above main 196/197 and h1-annot
                                                           //   194/195; see the kParserVer note)
                                                           // 194 = lane h1-annot (reservation 194/195; the train renumbers):
