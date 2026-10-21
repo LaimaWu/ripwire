@@ -59,6 +59,10 @@ arm under a colon-bearing temporary directory. The vendored tree-sitter bash and
 an `int32_t` lookahead (undefined above 255, and an assertion in Microsoft UCRT debug builds); both use an explicit `'0'..'9'`
 range check now, recorded as patches under `third_party/patches/`. No output change.
 
+### Fixed — Windows: `--quality-delta=A..B` extracts its per-commit archive through stdin (#422, thanks @lennix1337)
+
+- `--quality-delta=A..B` extracts its per-commit archive through stdin (`tar -x -f -`), the same Windows drive-colon fix as #402 (thanks @lennix1337).
+
 ### Changed — source builds: Windows clang-cl PGO builds link, and keep SLP vectorization in the final binary (#410, thanks @lennix1337)
 
 With `clang-cl` + `lld-link`, `RIPWIRE_PGO=generate` crashed Clang 22.1.8's backend (x86_64-v3); the instrumented `generate`

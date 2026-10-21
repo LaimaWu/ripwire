@@ -4775,7 +4775,8 @@ inline std::string materializeCommitSubset( const std::string& root, const std::
             ++at;
         }
         const bool archived  = os::system( ( cmd + " 2>/dev/null" ).c_str() ) == 0;
-        const bool extracted = archived && os::system( ( "tar -x -f " + shSingleQuote( archiveFile ) + " -C " + shSingleQuote( tmpRoot ) + " 2>/dev/null" ).c_str() ) == 0;
+        // Feed the file through stdin: GNU tar treats a Windows drive colon in -f as a remote host (same fix as materializeCommitTree).
+        const bool extracted = archived && os::system( ( "tar -x -f - -C " + shSingleQuote( tmpRoot ) + " < " + shSingleQuote( archiveFile ) + " 2>/dev/null" ).c_str() ) == 0;
         fs::remove( fs::path( archiveFile ), ec );
         if( !extracted )
         {
