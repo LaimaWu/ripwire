@@ -3081,7 +3081,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         && ( markedOutAny( outOff, *outProv, std::span<const NodeId>( order.data(), std::min( keep, order.size() ) ), kProvImpl )
              || markedOutAny( outOff, *outProv, std::span<const NodeId>( inventory.entries.data(), inventory.entries.size() ), kProvImpl ) ) )
     {
-        legend += "<!-- c:via=impl:the-one-implementor-in-the-tree-of-the-receiver's-interface/trait/abstract-type-owns-the-callee(an-out-of-tree-or-macro-written-one-may-exist) -->";
+        legend += "<!-- c:via=impl:the-one-implementor-in-the-tree-of-the-receiver's-interface/trait/abstract-type-owns-the-callee(an-outside-or-macro-made-one-may-exist) -->";
     }
     // honesty-small-068: the Go named-type kinds' clause, under the same absent-at-zero rule as modscope's above.
     if( std::any_of( ing.symbols.begin(), ing.symbols.end(), []( const Symbol& sym )
