@@ -1176,7 +1176,7 @@ for pair in "e2_us_cmp.xml:uses" "e2_mn_cmp.xml:mentions" "e2_vf_cmp.xml:verify"
 done
 
 # ── (E2n..E2t) THE SAME RESIDUE ON --edit-check, --lego, --connect, --around AND --slice ───────────────────────────────
-# Five more readers of the same resolver (--lego, --connect and --around through resolveFocus, its lowest-id projection)
+# Five more readers of the same resolver (--lego, --connect and --around through resolveFocus, its tower-front projection)
 # answered the drop with a zero and nothing beside it. The one a reader acts on first is --edit-check's: incompatible="0"
 # about the declaration, while the definition the selector dropped carries the caller that no longer binds.
 # Same four questions as (E2e), through two readers that find a root wherever it sits and read its zero off whichever

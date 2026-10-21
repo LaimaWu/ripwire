@@ -384,12 +384,18 @@ p_y="$( printf '%s' "$head40" | grep -bo 'spike_names.yml","range":{"start":{"li
 # old "first 260 bytes contain a "line":9 field" window also matched the SECOND row — a Var-first order still printed PASS.
 q_m="$( printf '%s' "$head41" | grep -bo 'all_four.rb","range":{"start":{"line":9' | cut -d: -f1 | head -1 )"
 q_v="$( printf '%s' "$head41" | grep -bo 'all_four.rb","range":{"start":{"line":7' | cut -d: -f1 | head -1 )"
+# The hover-front clause is pinned by offset the same way. lspAppendHoverDefs renders up to kLspHoverDefCap=8 of the 19 defs,
+# so the old membership grep matched the Method block wherever it sat: on the pre-tower binary it is the SECOND block of the
+# hover (a Var leads it) and that clause still printed PASS. The FIRST def block is the one a reader reads first, so the
+# Method block's offset must EQUAL the offset of the first "**<kind>** `" marker, not merely exist somewhere in the answer.
+h_first="$( printf '%s' "$R43" | grep -bo '\*\*[a-z]*\*\* `' | cut -d: -f1 | head -1 )"
+h_m="$( printf '%s' "$R43" | grep -bo '\*\*method\*\* `AllFour::name`' | cut -d: -f1 | head -1 )"
 [ -n "$p_m" ] && [ -n "$p_v" ] && [ -n "$p_c" ] && [ -n "$p_y" ] \
     && [ "$p_m" -lt "$p_v" ] && [ "$p_v" -lt "$p_c" ] && [ "$p_c" -lt "$p_y" ] \
     && [ -n "$q_m" ] && [ -n "$q_v" ] && [ "$q_m" -lt "$q_v" ] \
-    && printf '%s' "$R43" | grep -q '\*\*method\*\* `AllFour::name`' \
+    && [ -n "$h_first" ] && [ -n "$h_m" ] && [ "$h_m" = "$h_first" ] \
     && ok "(18) picker order: Method before Var before column-Section before yaml-Section on ws/symbol, def-front and hover-front" \
-    || { no "(18) tower order wrong: m=$p_m v=$p_v c=$p_c y=$p_y d_m=$q_m d_v=$q_v"; printf '%s\n' "$head40" | head -c 400; printf '%s\n' "$head41" | head -c 240; }
+    || { no "(18) tower order wrong: m=$p_m v=$p_v c=$p_c y=$p_y d_m=$q_m d_v=$q_v h_m=$h_m h_first=$h_first"; printf '%s\n' "$head40" | head -c 400; printf '%s\n' "$head41" | head -c 240; }
 
 # ── (19) the ONE multi-def disclosure sentence, hover + definition logMessage, absent on single-def ───
 printf '%s' "$R42" | grep -q '19 definitions for .name. — counts are floors; the resolver splits over them' \
@@ -434,12 +440,23 @@ EOF
 } > "$WORK/d18b"
 "$BIN" --lsp < "$WORK/d18b" > "$WORK/raw18b" 2>/dev/null
 decodeFrames "$WORK/raw18b" > "$WORK/r18b" 2>/dev/null
-head44="$( grep '"id":44,' "$WORK/r18b" | head -c 340 )"; head45="$( grep '"id":45,' "$WORK/r18b" | head -c 340 )"; R46="$( grep '"id":46,' "$WORK/r18b" )"
-printf '%s' "$head44" | grep -q 'schema\.rb","range":{"start":{"line":28' \
-    && printf '%s' "$head45" | grep -q 'schema\.rb","range":{"start":{"line":75' \
+head44="$( grep '"id":44,' "$WORK/r18b" | head -1 )"; head45="$( grep '"id":45,' "$WORK/r18b" | head -1 )"; R46="$( grep '"id":46,' "$WORK/r18b" )"
+# Both clauses pin the FIRST Location row by offset, like arm (18)'s def-front sibling. The old 340-byte window spanned the
+# WHOLE id-45 answer (two ~130-byte rows plus a 35-byte prefix = ~300 bytes), so it proved the schema.rb:75 row was PRESENT,
+# never that it led: with the t.timestamps-minted row ahead of it the needle still fell inside the window and printed PASS.
+# r1_4x is the start of the answer's first row, r2_4x the start of its second (empty when the answer holds one row); the
+# needle must lie inside the first row, and for the split name ahead of the other schema row.
+r1_44="$( printf '%s' "$head44" | grep -bo '{"uri":"' | cut -d: -f1 | head -1 )"; r2_44="$( printf '%s' "$head44" | grep -bo '},{"uri":"' | cut -d: -f1 | head -1 )"
+r1_45="$( printf '%s' "$head45" | grep -bo '{"uri":"' | cut -d: -f1 | head -1 )"; r2_45="$( printf '%s' "$head45" | grep -bo '},{"uri":"' | cut -d: -f1 | head -1 )"
+o28="$( printf '%s' "$head44" | grep -bo 'schema\.rb","range":{"start":{"line":28' | cut -d: -f1 | head -1 )"
+o75="$( printf '%s' "$head45" | grep -bo 'schema\.rb","range":{"start":{"line":75' | cut -d: -f1 | head -1 )"
+o82="$( printf '%s' "$head45" | grep -bo 'schema\.rb","range":{"start":{"line":82' | cut -d: -f1 | head -1 )"
+[ -n "$o28" ] && [ -n "$r1_44" ] && [ "$o28" -ge "$r1_44" ] && { [ -z "$r2_44" ] || [ "$o28" -lt "$r2_44" ]; } \
+    && [ -n "$o75" ] && [ -n "$r1_45" ] && [ -n "$r2_45" ] && [ "$o75" -ge "$r1_45" ] && [ "$o75" -lt "$r2_45" ] \
+    && [ -n "$o82" ] && [ "$o75" -lt "$o82" ] \
     && printf '%s' "$R46" | grep -q 'definitions for .created_at.' \
     && ok "(18b) column clicks land on schema.rb — unique event_id -> its row; column-only created_at -> schema first with the N-definitions disclosure" \
-    || { no "(18b) schema-column click wrong"; printf '%s\n' "$head44" | head -c 240; printf '%s\n' "$head45" | head -c 240; }
+    || { no "(18b) schema-column click wrong: e44 needle=$o28 in[$r1_44,${r2_44:-end}] | s45 needle=$o75 in[$r1_45,${r2_45:-end}] other=$o82"; printf '%s\n' "$head44" | head -c 240; printf '%s\n' "$head45" | head -c 240; }
 
 # ── (21) C/C++ decl/def: the LOWER-id header prototype yields to the bodyful def on the SINGLE-PICK verb ─────
 # WHY THE FIXTURE IS NAMED quad.h + z_quad.cpp: ids follow SORTED crawl order, and "quad.h" sorts before

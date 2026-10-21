@@ -13074,8 +13074,10 @@ inline ConnectResult connectSubgraph( const Graph& g, const std::vector<NodeId>&
 // searched from the one `main` of 107 that happened to sort first (a Python bench script) and printed every terminal
 // <unconnected> beside a --path that joins main to escapeXml in 2 hops. The pick is now the definition that JOINS: every
 // definition of the name is scored by how many OTHER terminals it reaches within the radius on the same undirected view
-// connectSubgraph walks, then by the fewest summed hops; resolveFocus's pick wins a tie it is part of, the lowest id any
-// other tie. Two passes: the first scores against every definition of the other names, the second re-scores against the
+// connectSubgraph walks, then by the fewest summed hops; resolveFocus's pick wins a tie it is part of, the tower front any
+// other tie: joinTerminalPicks hands the scan resolveAllByNameQualified's list, which applyNameTower sorts for the
+// name/file tier and leaves id-ascending for the canonical-id and Scope::name tiers. Two passes: the first scores against
+// every definition of the other names, the second re-scores against the
 // picks the first made — the nodes connectSubgraph will actually search from. A name none of whose definitions reaches
 // another terminal keeps resolveFocus's pick (so <unconnected> there is true of EVERY definition). tiedOut[i] > 1 says
 // that many definitions joined exactly as well as the pick: the answer is about one of them, disclosed by the emitter
@@ -13129,8 +13131,10 @@ inline std::vector<std::uint16_t> connectUndirectedDistances( const Graph& g, st
 }
 
 // One terminal's choice among its definitions, against the other terminals' distance maps: the candidate reaching the
-// most of them, then the fewest summed hops; `preferred` (resolveFocus's pick) wins a tie it is part of, the lowest id any
-// other tie (candidates ascend by id). reached == 0 ⇒ no candidate joins anything, and `chosen` is `preferred`.
+// most of them, then the fewest summed hops; `preferred` (resolveFocus's pick) wins a tie it is part of, the first
+// candidate met any other tie — the scan keeps what it met first, and the list arrives tower-ordered for the name/file
+// tier (applyNameTower), id-ascending for the canonical-id and Scope::name tiers. reached == 0 ⇒ no candidate joins
+// anything, and `chosen` is `preferred`.
 struct TerminalChoice { NodeId chosen = kNoNode; std::uint32_t reached = 0, hops = 0, tied = 1; };
 
 inline TerminalChoice scoreTerminalCandidates( std::span<const NodeId> candidates, NodeId preferred, std::size_t self,
