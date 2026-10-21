@@ -29,6 +29,9 @@ pub mod stdnre;
 pub mod nshadow;
 pub mod nsownuse;
 pub mod nsre;
+pub mod nsglob;
+pub mod nsglobuse;
+pub mod nsglobstar;
 @@@ rsrecv/src/model.rs
 // Book and Other both define spin / iter; Cfg and Knob both define tune: a call proves one only through its receiver's type.
 pub struct Book { pub items: Vec<u32> }
@@ -415,3 +418,19 @@ pub fn own_turbofish() -> u8 { let s = crate::nsown::OsString::from::<u8>("x"); 
 // fc1: a re-export of the in-tree OsString (its path reaches nsown's type)
 pub use crate::nsown::OsString;
 pub fn re_own_self() -> u8 { let s = self::OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/nsglob.rs
+// fc1: an in-tree glob re-export: the walk does not follow it, so a T reached through it keeps the base rule
+pub use crate::nsown::*;
+@@@ rsrecv/src/nsglobuse.rs
+use crate::nsglob::OsString;
+pub fn glob_reexp_own() -> u8 { let s = OsString::from("x"); s.as_os() }
+pub fn glob_reexp_path() -> u8 { let s = crate::nsglob::OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/nsglobstar.rs
+// fc1: this file's own glob of an in-tree module may bring OsString in: the base rule holds
+use crate::nsglob::*;
+pub fn glob_star_own() -> u8 { let s = OsString::from("x"); s.as_os() }
+@@@ rsrecv/benches/nsb.rs
+// fc1: a file outside every crate's module tree (a bench target): its qualifier resolves nowhere, so the base rule holds
+use rsrecv::nsown::OsString;
+pub fn bench_own() -> u8 { let s = OsString::from("x"); s.as_os() }
+pub fn bench_std() -> u8 { let s = std::ffi::OsString::from("x"); s.as_os() }

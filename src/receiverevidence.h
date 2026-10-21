@@ -1297,22 +1297,23 @@ struct CallResultTypes
     }
     // fc1: does the Rust path `path` (a call's written qualifier, a `use`'s path) written at byte `at` of `f` PROVABLY lead out of
     // the tree — std / core / alloc, an external crate, an unknown root, the prelude, or an in-tree re-export of one? false
-    // when it reaches an in-tree module or item, and whenever the walk cannot tell: a file outside every crate's tree, two
-    // `use`s of the root, an in-tree glob or an unparsed region of the file that may bring the name in, a depth cap.
+    // when it reaches an in-tree module or item, and whenever the walk cannot tell: two `use`s of the root, an in-tree glob
+    // or an unparsed region of the file that may bring the name in, a depth cap. A file outside every crate's module tree
+    // (a bench target) resolves no module: only a std / core / alloc root (by a `use` too) leads out there.
     bool rustPathOutside( std::uint32_t f, std::uint32_t at, std::string_view path, int depth = 0 ) const
     {
         if( !rust.built )
         {
             buildRustLayout();
         }
-        if( f >= rust.crateOf.size() || rust.crateOf[ f ] == kNoCrate || path.empty() || depth > 4 )
+        if( f >= rust.crateOf.size() || path.empty() || depth > 4 )
         {
             return false;
         }
         const auto [ modPath, item ] = splitLast( path, "::" );
         std::uint32_t crate = kNoCrate;
         std::string   module;
-        if( modPath.empty() || !rustModuleOf( f, at, modPath, crate, module, 0 ) )
+        if( modPath.empty() || rust.crateOf[ f ] == kNoCrate || !rustModuleOf( f, at, modPath, crate, module, 0 ) )
         {
             return rustRootOutside( f, at, modPath.empty() ? item : modPath.substr( 0, modPath.find( "::" ) ), depth );
         }
@@ -1368,8 +1369,9 @@ struct CallResultTypes
         }
         std::string module;
         rustModuleAt( f, at, module );
-        NodeId one = kNoNode;
-        if( rustModuleExists( rust.crateOf[ f ], joinModule( module, seg ) )
+        NodeId     one    = kNoNode;
+        const bool inTree = rust.crateOf[ f ] != kNoCrate;
+        if( ( inTree && rustModuleExists( rust.crateOf[ f ], joinModule( module, seg ) ) )
             || classesNamed( seg, CallResultFamily::Rust, [ & ]( NodeId c ) { return ing.symbols[ c ].fileId == f; }, one ) > 0 )
         {
             return false;   // a child module, or an item of this file
@@ -1382,7 +1384,8 @@ struct CallResultTypes
             mayBring = mayBring || ( b.kind == LocalBindKind::TypeImport && rustModuleOf( f, b.startByte, b.importedName, gc, gm, 0 ) );
         } );
         forEachImport( f, "!", [ & ]( const Binding& b ) { mayBring = mayBring || bindsWithoutTarget( b ); } );
-        return !mayBring;
+        constexpr std::string_view kStdRoots[] = { "std", "core", "alloc" };   // the sysroot crates every target sees
+        return !mayBring && ( inTree || std::ranges::find( kStdRoots, seg ) != std::end( kStdRoots ) );
     }
     // `a::b::C` → ( `a::b`, `C` ); `C` → ( "", `C` ) — the last segment is namesplit::afterLast's
     static std::pair<std::string_view, std::string_view> splitLast( std::string_view path, std::string_view sep ) noexcept
