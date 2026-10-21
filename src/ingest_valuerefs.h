@@ -2269,7 +2269,7 @@ private:
                 }
                 if( !ts_node_is_null( d ) && kindIs( ts_node_type( d ), "type_identifier" ) )
                 {
-                    noteSlotAlias( n, text( d ), key, kw );
+                    noteSlotAlias( n, text( d ), slotCtor( key, kw ) );
                 }
             } );
             return;
@@ -2283,7 +2283,7 @@ private:
                 ty = child( ty, m_fType );
             }
             const auto [ key, kw ] = slotTypeKey( ty, n, t );
-            noteSlotAlias( n, text( child( n, m_fName ) ), key, kw );
+            noteSlotAlias( n, text( child( n, m_fName ) ), slotCtor( key, kw ) );
             return;
         }
         if( !( kindIs( t, "declaration" ) || kindIs( t, "parameter_declaration" ) || kindIs( t, "optional_parameter_declaration" )
@@ -2405,14 +2405,15 @@ private:
 
     // A typedef / using alias of a struct type: a slot fact (valuerefindex.h unaliases a receiver through it) and this file's
     // own alias map (the C++ gate reads the struct an alias names in this file).
-    void noteSlotAlias( TSNode at, std::string_view alias, const std::string& key, bool kw )
+    void noteSlotAlias( TSNode at, std::string_view alias, const std::string& ctor )   // ctor: slotCtor( key, kw )
     {
+        const std::string_view key = ctor.starts_with( kValueRefSlotTagMark ) ? std::string_view( ctor ).substr( 1 ) : std::string_view( ctor );
         if( alias.empty() || key.empty() || key == alias )
         {
             return;
         }
-        emitSlotFact( at, std::string( alias ), {}, slotCtor( key, kw ) );
-        m_aliases.pairs.emplace_back( std::string( alias ), key );
+        emitSlotFact( at, std::string( alias ), {}, ctor );
+        m_aliases.pairs.emplace_back( std::string( alias ), std::string( key ) );
     }
 
     void emitSlotFact( TSNode at, std::string owner, std::string_view field, const std::string& type )
