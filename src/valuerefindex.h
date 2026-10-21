@@ -159,6 +159,10 @@ private:
     // An anonymous struct's "@LINE" key is unique in its own file only: the file joins the key.
     static std::string canonType( std::string_view t, std::uint32_t fileId )
     {
+        if( t.starts_with( kValueRefSlotTagMark ) )
+        {
+            return kValueRefSlotTagMark + canonType( t.substr( 1 ), fileId );
+        }
         return t.starts_with( '@' ) ? std::string( t ) + "#" + std::to_string( fileId ) : std::string( t );
     }
     // A type no end resolves to: an alias or field type the facts spell two different ways. It joins NOTHING (not even the
@@ -174,6 +178,12 @@ private:
     void addFact( const Reference& r )
     {
         const std::string to = canonType( r.memberCtor, r.fileId );
+        if( r.composeRel.size() == 1 && r.composeRel[0] == kValueRefSlotBodyRel )
+        {
+            // a struct body (`to` is its digest): the same tag or name with a DIFFERENT body in another file is no one type
+            noteFact( m_body, r.recvVar, to );
+            return;
+        }
         if( r.composeRel.empty() )
         {
             // `typedef struct tag NAME;`: the file's own spelling, and the repo's (agreed by every file, or a conflict)
@@ -189,7 +199,7 @@ private:
     // header's); kConflict when the name is spelled two ways and the file does not decide it.
     std::string unalias( std::string t, std::uint32_t fileId ) const
     {
-        for( int hop = 0; hop < 4 && t != kConflict; ++hop )   // `typedef struct a b; typedef b c;`: a short chain, cut (never a cycle)
+        for( int hop = 0; hop < 4 && t != kConflict && !t.starts_with( kValueRefSlotTagMark ); ++hop )   // `typedef struct a b; typedef b c;`: a short chain, cut (never a cycle)
         {
             auto it = m_aliasInFile.find( jsImportKey( fileId, t ) );
             if( it == m_aliasInFile.end() )
@@ -206,7 +216,12 @@ private:
             }
             t = it->second;
         }
-        return t;
+        if( t.starts_with( kValueRefSlotTagMark ) )
+        {
+            t.erase( 0, 1 );   // spelled `struct X`: the tag, which no typedef name renames
+        }
+        const auto body = m_body.find( t );
+        return body != m_body.end() && body->second == kConflict ? std::string( kConflict ) : t;
     }
     // The slot of a slot reference: the root's type through the typedef aliases, then each field of the chain through the
     // field-type facts; a hop the facts do not know leaves the type unknown (the name tier).
@@ -265,6 +280,7 @@ private:
     HashMap<std::string, std::string>                m_fieldType;      // "Type#field" → that field's struct type
     HashMap<std::string, std::string>                m_alias;          // typedef name → struct type (kConflict: files disagree)
     HashMap<std::string, std::string>                m_aliasInFile;    // "fileId#name" → struct type, the file's own typedef
+    HashMap<std::string, std::string>                m_body;           // struct type → its body's digest (kConflict: files differ)
     std::vector<std::uint32_t>                       m_calls;          // slot Through references, ascending
     HashMap<NodeId, std::vector<std::uint32_t>>      m_callsBySym;     // calling function → its slot Through references
     std::vector<End>                                 m_values;         // slot Value rows with a resolved function, by ref

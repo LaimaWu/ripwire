@@ -515,6 +515,11 @@ inline constexpr char kValueRefDepthCutScope = 'd';
 // declared struct type, or a typedef alias). Distinct from every other scope char.
 inline constexpr char kValueRefSlotCallScope = 's';
 inline constexpr char kValueRefSlotFactScope = 't';
+// A slot type key written with the `struct` / `union` keyword (`struct thandle`) leads with this mark: a C tag is no typedef
+// name, so the join never reads it through an alias. A slot fact whose composeRel is kValueRefSlotBodyRel declares that its
+// owner's struct BODY is in this file (no field): one tag with bodies in two files is two types, so it joins nothing.
+inline constexpr char kValueRefSlotTagMark = '\x02';
+inline constexpr char kValueRefSlotBodyRel = '{';
 
 // Essential-complexity ev_why= reason vocabulary (the essential-complexity design note, §5.1). PUBLIC the
 // moment it ships (test/attrvocabcheck.sh's standing posture; test/essentialcxcheck.sh pins the spellings):

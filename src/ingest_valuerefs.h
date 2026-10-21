@@ -70,6 +70,26 @@ using VrFam = ValueRefFamily;   // model.h: the one armed-language table the res
 inline constexpr std::uint32_t kVrMaxDepth   = 512;   // the value-uses pass's own depth guard (ingest_sidecap.h kSideDepthUses); a cut is disclosed as value_refs_depth_capped= (valuerefs.h)
 inline constexpr std::size_t   kVrTextCap    = 96;    // a written slot / callee longer than this is cut with "…"
 
+// IX-1: a struct BODY's identity for the slot join: FNV-1a-64 of its text with every whitespace byte dropped, in hex. Two files
+// whose bodies of one tag read the same are one type; bodies that differ are two (valuerefindex.h SlotIndex::addFact).
+inline std::string vrBodyDigest( std::string_view body )
+{
+    std::uint64_t h = 14695981039346656037ull;
+    for( const char c : body )
+    {
+        if( c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != '\f' && c != '\v' )
+        {
+            h = hashutil::fnv1aAbsorb( h, c );
+        }
+    }
+    std::string hex( 16, '0' );
+    for( std::size_t i = 16; i > 0; --i, h >>= 4 )
+    {
+        hex[i - 1] = "0123456789abcdef"[ h & 0xF ];
+    }
+    return hex;
+}
+
 // A written slot or callee, made attribute-safe: whitespace runs collapse to one space (an XML attribute may not
 // carry a raw newline) and the text is capped. Escaping is the emitter's job. The cut is serialize.h
 // truncateUtf8WithEllipsis's (that header is not reachable from the ingest side): "…" only when text was really cut —
@@ -325,7 +345,8 @@ inline std::pair<bool, bool> vrFieldTypeClass( TSNode ftNode, bool known, const 
 {
     const char* t       = ts_node_is_null( ftNode ) ? "" : ts_node_type( ftNode );
     const bool  structT = kindIs( t, "struct_specifier" ) || kindIs( t, "union_specifier" ) || ( kindIs( t, "type_identifier" ) && known );
-    const bool  named   = kindIs( t, "type_identifier" ) || kindIs( t, "qualified_identifier" ) || kindIs( t, "template_type" );
+    const bool  named   = kindIs( t, "type_identifier" ) || kindIs( t, "qualified_identifier" ) || kindIs( t, "template_type" )
+                       || kindIs( t, "macro_type_specifier" );   // `TAILQ_ENTRY( x ) e;`: a macro's expansion has an unknown width
     return { structT, !structT && named && !scalars.scalar( ftNode, src ) };
 }
 
@@ -2183,6 +2204,12 @@ private:
         return { "@" + std::to_string( ts_node_start_point( ty ).row + 1 ), kw };
     }
 
+    // slotTypeKey's key as a record carries it: led by kValueRefSlotTagMark when the `struct` / `union` keyword spelled it.
+    static std::string slotCtor( const std::string& key, bool kw )
+    {
+        return kw && !key.empty() ? kValueRefSlotTagMark + key : key;
+    }
+
     // The name a `typedef … NAME;` declares (the pointer form `typedef struct x *xp;` is read by noteSlotTypes, not here).
     std::string_view typedefName( TSNode td ) const noexcept
     {
@@ -2242,7 +2269,7 @@ private:
                 }
                 if( !ts_node_is_null( d ) && kindIs( ts_node_type( d ), "type_identifier" ) )
                 {
-                    noteSlotAlias( n, text( d ), key );
+                    noteSlotAlias( n, text( d ), key, kw );
                 }
             } );
             return;
@@ -2255,7 +2282,8 @@ private:
             {
                 ty = child( ty, m_fType );
             }
-            noteSlotAlias( n, text( child( n, m_fName ) ), slotTypeKey( ty, n, t ).first );
+            const auto [ key, kw ] = slotTypeKey( ty, n, t );
+            noteSlotAlias( n, text( child( n, m_fName ) ), key, kw );
             return;
         }
         if( !( kindIs( t, "declaration" ) || kindIs( t, "parameter_declaration" ) || kindIs( t, "optional_parameter_declaration" )
@@ -2301,6 +2329,10 @@ private:
         if( owner.empty() )
         {
             return;
+        }
+        if( owner.front() != '@' )   // an anonymous struct's "@LINE" key is its own file's already
+        {
+            emitSlotFact( n, owner, std::string_view( &kValueRefSlotBodyRel, 1 ), vrBodyDigest( text( body ) ) );
         }
         VrStructFields sf;
         sf.key = owner;
@@ -2353,7 +2385,7 @@ private:
                 }
                 else if( !ftype.empty() )
                 {
-                    emitSlotFact( k, owner, nm, ftype );
+                    emitSlotFact( k, owner, nm, slotCtor( ftype, fkw ) );
                 }
             } );
             return true;
@@ -2373,13 +2405,13 @@ private:
 
     // A typedef / using alias of a struct type: a slot fact (valuerefindex.h unaliases a receiver through it) and this file's
     // own alias map (the C++ gate reads the struct an alias names in this file).
-    void noteSlotAlias( TSNode at, std::string_view alias, const std::string& key )
+    void noteSlotAlias( TSNode at, std::string_view alias, const std::string& key, bool kw )
     {
         if( alias.empty() || key.empty() || key == alias )
         {
             return;
         }
-        emitSlotFact( at, std::string( alias ), {}, key );
+        emitSlotFact( at, std::string( alias ), {}, slotCtor( key, kw ) );
         m_aliases.pairs.emplace_back( std::string( alias ), key );
     }
 
@@ -2443,7 +2475,7 @@ private:
     // The struct type of the initializer list anc[k]: a struct object's list (`T x = { … }`), one element of a
     // one-dimension array's list (`T a[] = { { … } }`), or a compound literal `(T){ … }`. "" otherwise — the array's own
     // list, a nested struct field's list (its field type is not read here: a disclosed floor), a multi-dimension array.
-    std::string literalType( std::size_t k ) const
+    std::pair<std::string, bool> literalType( std::size_t k ) const
     {
         if( k < 2 || !kindIs( m_anc[k].kind, "initializer_list" ) )
         {
@@ -2457,7 +2489,7 @@ private:
             {
                 return {};
             }
-            return slotTypeKey( child( m_anc[k - 2].node, m_fType ), m_anc[k - 2].node, m_anc[k - 2].kind ).first;
+            return slotTypeKey( child( m_anc[k - 2].node, m_fType ), m_anc[k - 2].node, m_anc[k - 2].kind );
         }
         if( kindIs( up.kind, "initializer_list" ) && k >= 3 && kindIs( m_anc[k - 2].kind, "init_declarator" ) )
         {
@@ -2465,7 +2497,7 @@ private:
             {
                 return {};
             }
-            return slotTypeKey( child( m_anc[k - 3].node, m_fType ), m_anc[k - 3].node, m_anc[k - 3].kind ).first;
+            return slotTypeKey( child( m_anc[k - 3].node, m_fType ), m_anc[k - 3].node, m_anc[k - 3].kind );
         }
         if( kindIs( up.kind, "compound_literal_expression" ) )
         {
@@ -2474,7 +2506,7 @@ private:
             {
                 ty = child( ty, m_fType );
             }
-            return slotTypeKey( ty, up.node, up.kind ).first;
+            return slotTypeKey( ty, up.node, up.kind );
         }
         return {};
     }
@@ -2531,23 +2563,24 @@ private:
             {
                 return;   // a nested `.a.b =` / array `[i] =` designator: not one field of this literal's type
             }
+            const auto [ lt, ltKw ] = literalType( j - 2 );
             r.memberPath = std::string( fld );
-            r.memberCtor = literalType( j - 2 );
+            r.memberCtor = slotCtor( lt, ltKw );
             return;
         }
         if( kindIs( pt, "initializer_list" ) )
         {
-            const std::string t = literalType( j - 1 );
+            const auto [ t, tKw ] = literalType( j - 1 );
             if( t.empty() )
             {
                 return;   // not a struct literal
             }
-            const auto sf = std::ranges::find( m_structs, m_aliases.resolve( t ), &VrStructFields::key );
+            const auto sf = std::ranges::find( m_structs, tKw ? std::string_view( t ) : m_aliases.resolve( t ), &VrStructFields::key );
             const std::ptrdiff_t idx = sf == m_structs.end() ? -1 : vrPositionOf( p.node, m_anc[j].node, *sf, m_fDesignator, m_src );
             if( idx >= 0 )
             {
                 r.memberPath = std::string( sf->fields[ static_cast<std::size_t>( idx ) ].name );
-                r.memberCtor = t;
+                r.memberCtor = slotCtor( t, tKw );
             }
             return;   // an index not provable exactly: no slot (never a guessed field)
         }
@@ -2570,7 +2603,7 @@ private:
                 return;   // a non-struct object
             }
             r.memberPath = std::move( chain );
-            r.memberCtor = std::string( ty.key );
+            r.memberCtor = slotCtor( std::string( ty.key ), ty.structKw );
         }
     }
 
@@ -2623,7 +2656,7 @@ private:
         r.name       = std::string( text( root ) );
         r.fieldName  = vrClean( text( f ) );
         r.composeRel = "." + std::string( field );
-        r.memberCtor = std::string( ty.key );
+        r.memberCtor = slotCtor( std::string( ty.key ), ty.structKw );
         r.memberPath = std::move( chain );
         m_out.push_back( std::move( r ) );
     }

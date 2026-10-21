@@ -145,6 +145,21 @@ hasnt "K5b and the conflicting file still joins nothing" "$o" 'call_hc'
 o="$( run --callers=lf )"
 has   "K6 a pointer alias field is a scalar position (no elision): lf is .f" "$o" 'called_by="call_nl" called_at="nodep.c:7" via="slot"'
 
+echo "-- fix round 3: a macro-typed field, a typedef name vs a struct tag, one tag with two bodies"
+o="$( run --callers=ma )"
+hasnt "M1 a field typed by a macro (TAILQ_ENTRY(x) e;) has an unknown width: ma is never .g" "$o" 'call_mg'
+hasnt "M1b nor any field: no positional row past the macro field" "$o" 'called_by='
+o="$( run --callers=taf )"
+has   "T1 a typedef name in one file never retypes another file's struct TAG of that spelling: taf is tsa.f" "$o" 'called_by="call_ta" called_at="tagns_a.c:6" via="slot"'
+hasnt "T1b so taf is never call_tb" "$o" 'call_tb'
+o="$( run --callers=tbf )"
+has   "T2 tbf is the struct tag thandle's .f" "$o" 'called_by="call_tb" called_at="tagns_b.c:5" via="slot"'
+hasnt "T2b and never call_ta" "$o" 'call_ta'
+o="$( run --callers=pa )"
+hasnt "Y1 one struct tag with two different bodies in two files is no one type: pa never joins call_pb" "$o" 'call_pb'
+o="$( run --callers=pb )"
+hasnt "Y2 and pb never joins call_pa" "$o" 'call_pa'
+
 echo "-- fix round 1: slot records are no ordinary references"
 o="$( run --external-surface )"
 for v in entry wme m o v p; do
