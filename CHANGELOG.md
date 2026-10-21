@@ -15,6 +15,8 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+- `--quality-delta=A..B` extracts its per-commit archive through stdin (`tar -x -f -`), the same Windows drive-colon fix as #402 (thanks @lennix1337).
+
 ## [0.6.8] — 2026-10-19
 
 Four batches of reviewed changes in one release. What a user sees:
