@@ -141,15 +141,11 @@ private:
         }
         if( const NodeId owner = recvEv_.classAt( s.fileId, s.sigStartByte, s.endByte, s.id ); owner != kNoNode )
         {
-            addDistinct( abstractNames_[ owner ], s.name );   // per class IDENTITY, not per name: the SAM count
-        }
-    }
-
-    static void addDistinct( std::vector<std::string_view>& names, std::string_view n )
-    {
-        if( std::ranges::find( names, n ) == names.end() )
-        {
-            names.push_back( n );
+            std::vector<std::string_view>& names = abstractNames_[ owner ];   // per class IDENTITY, not per name: the SAM count
+            if( !std::ranges::contains( names, std::string_view( s.name ) ) )
+            {
+                names.push_back( s.name );
+            }
         }
     }
 
@@ -261,7 +257,13 @@ private:
         {
             if( const auto it = abstractNames_.find( id ); it != abstractNames_.end() )
             {
-                std::ranges::for_each( it->second, [ & ]( std::string_view n ) { addDistinct( names, n ); } );
+                for( std::string_view n : it->second )
+                {
+                    if( !std::ranges::contains( names, n ) )
+                    {
+                        names.push_back( n );
+                    }
+                }
             }
         };
         addOwn( c );
