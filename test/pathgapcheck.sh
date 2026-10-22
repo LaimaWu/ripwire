@@ -60,6 +60,15 @@
 #        spelled like a builtin type's method and (2) the namesake's owner (its class in its file, else its file) owning
 #        something the forward search reached — K1 owner out of reach, K2 builtin-spelled (owner in reach), K3 both,
 #        K4 near miss (owner in reach, not builtin: both hedges stay; S4/B4 run on the same fixture).
+#   (K6-K12) lane ind4b, K5 rule 2 by namesake shape (pathgaps.h NamesakeOwnerReach::admits; one helper for both hedges):
+#        2b a FILE-OWNED namesake (a free definition, or a JS/TS method: no class scope) needs the caller's file to be or
+#        import its file — K6 the koa accessor shape and K7 the nunjucks `this.init` shape (owner in reach, no import) are
+#        withheld, K8 the koa near miss whose caller file requires the namesake's file keeps why=name. 2c override dispatch:
+#        a class-owned namesake whose class derives (by name, transitively) from the bound definition's class and whose
+#        file imports that class's file is a way in (K9 direct, K10 via an in-file middle class: near_sink AND bridge; K10b
+#        a Python src/ layout, whose import only FE-A's suffix match places);
+#        K11 a same-named method on an UNRELATED class (§(a) 11) and K12 a class whose parent is an EXTERNAL same-named
+#        class (`ext.Base`, `from ext import Base`: §(a) 2) stay withheld.
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -434,6 +443,39 @@ for nm in process update; do for own in in out; do
     fi
     printf 'def target():\n    return 2\n\nclass B:\n    @staticmethod\n    def make():\n        return 0\n\n    def %s(self):\n        return target()\n' "$nm" > "$d/other/b.py"
 done; done
+# K6-K8 fixtures (rule 2b, JS). kq_*: a getter/setter pair `method` in lib/req.js, lib/ctx.js's file scope calls .method('a')
+# — bound by name alone to one accessor, the other is the namesake; from= kind lives in req.js, so its owner (the file) is in
+# reach. kq_imp's ctx.js also requires ./req (the near miss). nj_noimp: ui/pop.js's `this.init(el)` is bound by name alone to
+# ui/tip.js's prototype init; core/parser.js's class method init is the namesake; from= render lives in parser.js.
+for v in noimp imp; do d="$TMP/kq_$v"; mkdir -p "$d/lib"
+    printf "function target() {\n  return 2;\n}\nmodule.exports = {\n  kind() {\n    return 1;\n  },\n  get method() {\n    return target();\n  },\n  set method(val) {\n    this.m = val;\n  }\n};\n" > "$d/lib/req.js"
+    req=""; [ "$v" = imp ] && req="const req = require('./req');\n"
+    printf "${req}function delegate(p) {\n  return p;\n}\nconst proto = {};\ndelegate(proto)\n  .method('a');\n" > "$d/lib/ctx.js"
+done
+mkdir -p "$TMP/nj_noimp/ui" "$TMP/nj_noimp/core"
+printf 'function Tip(el) {\n  this.el = el;\n}\nTip.prototype.init = function (el) {\n  this.el = el;\n};\n' > "$TMP/nj_noimp/ui/tip.js"
+printf 'function target() {\n  return 2;\n}\nfunction render() {\n  return 0;\n}\nclass Parser {\n  init(tokens) {\n    return target();\n  }\n}\nmodule.exports = { Parser, render };\n' > "$TMP/nj_noimp/core/parser.js"
+printf 'var Pop = function (el) {\n  this.init(el);\n};\n' > "$TMP/nj_noimp/ui/pop.js"
+# K10b fixture (rule 2c, Python src/ layout — textual's shape): `from tx.driver import Driver` names src/tx/driver.py, which
+# the precise import adjacency's Step-A cannot place (no src/ root); FE-A's suffix match can.
+mkdir -p "$TMP/c5_src/src/tx/drivers"; : > "$TMP/c5_src/src/tx/__init__.py"; : > "$TMP/c5_src/src/tx/drivers/__init__.py"
+printf 'class Driver:\n    def stop_mode(self):\n        return 1\n' > "$TMP/c5_src/src/tx/driver.py"
+printf 'from tx.driver import Driver\n\ndef target():\n    return 2\n\nclass LinuxDriver(Driver):\n    def stop_mode(self):\n        return target()\n' > "$TMP/c5_src/src/tx/drivers/linux.py"
+printf 'from tx.driver import Driver\ndef run(driver):\n    return driver.stop_mode()\n' > "$TMP/c5_src/src/tx/app.py"
+# K9-K12 fixtures (rule 2c, Python): run(obj) in pkg/x/c.py calls obj.render_line(), bound by name alone to the imported
+# Base.render_line; other/b.py's Sub.render_line (calls target) is the namesake and nothing run reaches is owned by Sub.
+for v in der der2 unrel ext extbare; do d="$TMP/c5_$v"; mkdir -p "$d/pkg/x" "$d/other"
+    printf 'class Base:\n    def render_line(self):\n        return 1\n' > "$d/pkg/x/a.py"
+    printf 'from pkg.x.a import Base\ndef run(obj):\n    return obj.render_line()\n' > "$d/pkg/x/c.py"
+    case "$v" in
+        der)     hdr='from pkg.x.a import Base\n';  cls='class Sub(Base):' ;;
+        der2)    hdr='from pkg.x.a import Base\n';  cls='class Mid(Base):\n    pass\n\nclass Sub(Mid):' ;;
+        unrel)   hdr='';                             cls='class Sub:' ;;
+        ext)     hdr='import ext\n';                cls='class Sub(ext.Base):' ;;
+        extbare) hdr='from ext import Base\n';      cls='class Sub(Base):' ;;
+    esac
+    printf "${hdr}\ndef target():\n    return 2\n\n${cls}\n    def render_line(self):\n        return target()\n" > "$d/other/b.py"
+done
 nsblock(){ grep -o '<near_sink [^>]*>.*</near_sink>' "$1"; }
 nshead(){ grep -o '<near_sink [^>]*>' "$1"; }
 nsrows(){ grep -o '<ns [^>]*/>' "$1"; }
@@ -840,6 +882,38 @@ if [ -s "$f" ] && grep -q '<path ' "$f"; then
 else
     no "(K5x) premise: K1's answer is missing"
 fi
+
+# K6-K12 (lane ind4b): K5 rule 2 by namesake shape. Exact rows: a withheld="name:1" row proves the by-name hit exists (the
+# premise), so a withheld arm cannot pass because the resolver stopped making the hedged edge.
+nsArm "(K6) 2b koa accessor: ctx.js never imports req.js, so the by-name .method() is withheld though req.js is in reach" "$TMP/kq_noimp" "kind,target" \
+    '<near_sink depth="2" callers="1" rows="1" next="--callers=lib/req.js:method">' \
+    '<ns d="1" t="method" n="method" p="lib/req.js:8" withheld="name:1"/>'
+nsArm "(K7) 2b nunjucks this.init: pop.js never imports parser.js, so Parser.init is withheld though parser.js is in reach" "$TMP/nj_noimp" "render,target" \
+    '<near_sink depth="2" callers="1" rows="1" next="--callers=core/parser.js:init">' \
+    '<ns d="1" t="method" n="init" p="core/parser.js:8" withheld="name:1"/>'
+nsArm "(K8) 2b near miss: ctx.js requires ./req, so the by-name .method() stays a way in" "$TMP/kq_imp" "kind,target" \
+    '<near_sink depth="2" callers="1" rows="1" next="--callers=lib/req.js:method">' \
+    '<ns d="1" t="method" n="method" p="lib/req.js:8" why="name:1" in="&lt;file-scope&gt;" site="lib/ctx.js:6"/>'
+nsArm "(K9) 2c override dispatch: Sub(Base) overrides render_line, so run's obj.render_line() may run it" "$TMP/c5_der" "run,target" \
+    '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+    '<ns d="1" t="fn" n="render_line" p="other/b.py:7" why="name:1" in="run" site="pkg/x/c.py:3" met="1"/>'
+brArm "(K9b) 2c: the bridge crosses to the override the same way" "$TMP/c5_der" "run,target" \
+    '<bridge proven="0" crossings="1" hops="2"><s t="fn" n="run" p="pkg/x/c.py:2"/><s t="fn" n="render_line" p="other/b.py:7" via="namesake" cands="1"/><s t="fn" n="target" p="other/b.py:3"/></bridge>'
+nsArm "(K10) 2c transitive: Sub(Mid), Mid(Base) — the override two classes down is a way in" "$TMP/c5_der2" "run,target" \
+    '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+    '<ns d="1" t="fn" n="render_line" p="other/b.py:10" why="name:1" in="run" site="pkg/x/c.py:3" met="1"/>'
+nsArm "(K10b) 2c src/ layout: LinuxDriver(Driver) imports src/tx/driver.py by its package name — the override is a way in" "$TMP/c5_src" "run,target" \
+    '<near_sink depth="2" callers="1" rows="1" next="--callers=src/tx/drivers/linux.py:stop_mode">' \
+    '<ns d="1" t="fn" n="stop_mode" p="src/tx/drivers/linux.py:7" why="name:1" in="run" site="src/tx/app.py:3" met="1"/>'
+nsArm "(K11) §(a) 11: render_line on an UNRELATED class Sub (no base) stays withheld" "$TMP/c5_unrel" "run,target" \
+    '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+    '<ns d="1" t="fn" n="render_line" p="other/b.py:6" withheld="name:1"/>'
+for fx in ext extbare; do
+    nsArm "(K12) §(a) 2 external parent ($fx): Sub's base is an external same-named Base, so its render_line stays withheld" "$TMP/c5_$fx" "run,target" \
+        '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+        '<ns d="1" t="fn" n="render_line" p="other/b.py:7" withheld="name:1"/>'
+    brArm "(K12b) §(a) 2 external parent ($fx): no namesake bridge to it either" "$TMP/c5_$fx" "run,target" ''
+done
 
 echo "(M) MCP path_between carries the same clause"
 # Two MCP legend postures (lean-answers): the unchanged assertions run on --mcp-legend=inline, the pre-posture spelling
