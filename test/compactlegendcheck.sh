@@ -592,6 +592,13 @@ probeFor()
 # re-worded to the tower-front pick — costs (U) nothing: the compact dialect drops that clause, so no full-legend phrase is
 # billed here. No (U-twin): a twin holds an OLD PATH that still exists, and here the same probe in the same dialect simply
 # speaks the pick correctly, so the row is the whole story.
+# RE-PINNED 2026-10-21 (this review-fix round, the BYTES are the reviewed branch's): ripwire.safe-delete/v1 measured
+# 828 -> 830 (the --safe-delete=distance probe), pin 840 UNCHANGED. e5d39f70 re-worded that verb's own compact purpose
+# clause (compactlegend.h:130, "t= p= its lowest-id match's kind and file:line" -> "its tower-front match's ...", 9 B ->
+# 11 B, +2 B), a clause every compact --safe-delete answer emits, and left this row at 828. Nothing goes red:
+# round-up-to-10(830) + 10 is still 840, and the (U-twin) cut holds its own reading — so this is the attribution the
+# table's rule above asks for (re-pin in the commit that adds the bytes, with the bytes attributed there), the same one
+# the around/v1 row carries.
 # RE-PINNED 2026-10-10 (lane lean-trio, idea #11): ripwire.edit-check/v1 610 -> 650 (measured 636, the --edit-check=distance
 # probe; 595 on main 0852bc0f). The probe's contract is unchanged with nothing flagged, so the answer is now the verdict
 # line (no <c> rows), and the compact legend reads its two new facts: rows_next= (the --limit call listing the callers) and
@@ -652,7 +659,7 @@ ripwire.callers/v1               450   438
 ripwire.callees/v1                500   484
 ripwire.uses/v1                   510   500
 ripwire.batch/v1                  250   238
-ripwire.safe-delete/v1           840   828
+ripwire.safe-delete/v1           840   830
 ripwire.at/v1                    180   161
 ripwire.from-trace/v1            1300  1281
 ripwire.plan-lint/v1              570   551

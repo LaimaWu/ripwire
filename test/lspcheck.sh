@@ -46,8 +46,9 @@
 #        WITH the N-definitions disclosure — cross-kind columns stay REACHABLE, only their order moves
 #   (19) multi-def disclosure (task C): a name with N>1 defs carries ONE sentence — N definitions, counts are
 #        floors, the resolver splits — in the hover markdown and in one window/logMessage ahead of every
-#        definition answer; absent on single-def names
-#   (20) Used-at parity (task C): hover Used-at for the colliding name answers every CLI --uses call row
+#        definition answer; absent on single-def names, whose hover must ANSWER before the silence is credited
+#   (20) Used-at parity (task C): hover Used-at for the colliding name answers every CLI --uses call row, with the
+#        kLspHoverUseCap=8 tier premise pinned first — past the cap a missing link is the disclosed truncation, not a defect
 #   (21) C/C++ decl/def no-regression (task C): on a tree whose HEADER sorts first — so the prototype carries the LOWER
 #        crawl-order id — the single-pick --around still walks the bodyful definition (the resolveFocus refinement
 #        composes with the tower sort); textDocument/definition is pinned beside it as the whole-list answer it is
@@ -406,17 +407,39 @@ l41="$( grep -n '"id":41,' "$WORK/r18" | cut -d: -f1 )"; l19="$( grep -n 'window
 [ "$n19" = 1 ] && [ -n "$l19" ] && [ -n "$l41" ] && [ "$l19" -lt "$l41" ] \
     && ok "(19) the definition answer carries ONE window/logMessage disclosure AHEAD of it" \
     || { no "(19) definition logMessage wrong: n=$n19 noticeLine=$l19 respLine=$l41"; }
-printf '%s' "$( R 5 )" | grep -q 'definitions for .scale.' && no "(19) single-def name carries a multi-def disclosure" || ok "(19) scale (single def) carries no disclosure"
+# Premise (fix round 4): credit the silence only to an ANSWERING hover. When the id-5 row was absent (dialog
+# truncated, decodeFrames threw) or its result null (lspHover regressed), the old bare `grep -q` failed and the ||
+# branch printed PASS — the one clause of the round that could not tell "no disclosure, because the name has one
+# def" from "no answer at all". R 5 reads $WORK/resp, the geometry dialog: the single-def tree this control is about.
+if ! printf '%s' "$R5" | grep -q '"result":{'; then
+    no "(19) premise broken — the id-5 hover did not answer (row absent or result null), so its silence proves nothing: $( printf '%s' "$R5" | head -c 160 )"
+elif printf '%s' "$R5" | grep -q 'definitions for .scale.'; then
+    no "(19) single-def name carries a multi-def disclosure"
+else
+    ok "(19) scale (single def) carries no disclosure (premise held: the id-5 hover answered)"
+fi
 
 # ── (20) Used-at parity: hover answers every CLI --uses call row for the colliding name ────────────────
 UR="$( cd "$WORK/collide" && "$BIN" --uses=name . 2>/dev/null | grep -oE '<u role="call" p="[^"]+"' | sed 's/.*p="//; s/"$//' | sort -u )"
-miss=""
-for row in $UR; do
-    site="${row%:*}"; ln="${row##*:}"
-    printf '%s' "$R42" | grep -qF "$site#L$ln" || miss="$miss $row"
-done
-[ -n "$UR" ] && [ -z "$miss" ] && ok "(20) Used-at parity: every CLI --uses call row appears as a hover link ($( printf '%s\n' "$UR" | wc -l | tr -d ' ' ) rows)" \
-             || { no "(20) parity missing rows:$miss (rows seen: $( echo $UR | tr ' ' ',' ))"; }
+n_ur="$( printf '%s\n' "$UR" | grep -c . )"
+# Premise (fix round 4): the hover's Used-at tier is capped at kLspHoverUseCap=8 (src/lsp.h:65, applied by
+# lspAppendSiteTier at src/lsp.h:912, which discloses a cut as "_+N more_"); the CLI --uses list is NOT capped, so
+# "every CLI row appears in the hover" is a server promise only while the rows fit the tier. Pin that before the
+# loop: widen the fixture past 8 and a correct, properly disclosed truncation used to read as a parity failure.
+if [ -z "$UR" ]; then
+    no "(20) premise broken — the CLI --uses answer carries no call rows to compare"
+elif [ "$n_ur" -gt 8 ]; then
+    no "(20) premise broken — $n_ur CLI --uses rows exceed the hover tier's kLspHoverUseCap=8; parity is only promised within the cap"
+else
+    miss=""
+    for row in $UR; do
+        site="${row%:*}"; ln="${row##*:}"
+        printf '%s' "$R42" | grep -qF "$site#L$ln" || miss="$miss $row"
+    done
+    [ -z "$miss" ] \
+        && ok "(20) Used-at parity within the cap: all $n_ur CLI --uses call rows (<= kLspHoverUseCap=8) appear as hover links" \
+        || { no "(20) parity missing rows:$miss (rows seen: $( echo $UR | tr ' ' ',' ))"; }
+fi
 
 # ── (18b) schema-column click: definition on a column use-site lands on schema.rb, unique and split ───
 cat > "$WORK/collide/click_single.rb" <<'EOF'

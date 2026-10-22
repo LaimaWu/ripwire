@@ -10574,7 +10574,11 @@ inline void declToDefFollowThrough( const IngestResult& ing, std::string_view fi
     {
         *unprovenDefCountOut = unprovenCount;
     }
-    std::sort( sel.begin(), sel.end() );   // NodeId order - the contract every caller of this already relies on
+    // NodeId order is the widening's OWN postcondition, not a caller contract. The sole caller feeds this list to
+    // applyNameTower on the very next statement, and that comparator is a TOTAL order (kind, leading language,
+    // id ASC) on distinct ids, so the tower's answer never reads this order - for today's call site the sort is
+    // vestigial; it is kept so the widening leaves this function canonical when it runs.
+    std::sort( sel.begin(), sel.end() );
 }
 
 // THE DOTTED SCOPE TIER (2026-10-01). Agents and docs write a method as `Class.method` (Python, JS, Java, the

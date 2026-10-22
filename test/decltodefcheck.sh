@@ -88,10 +88,11 @@
 #       written; a bare name and a refusal that dropped nothing print no such line.
 #   (E3a..E3f) THE FOCUS PICK. --lego, --connect and --around take ONE node from a match set (resolveFocus), and it was the
 #       lowest id — with the header sorting first, the DECLARATION, even where no definition was dropped: a bare name and a
-#       fully proven file:name answered the same zero as the dropping selector. A bodyless C/C++ lowest id now yields to the
-#       lowest-id bodied C/C++ match of the same scope: --around reaches the caller (E3a), --connect joins it and names the
-#       definition's file on its terminal row (E3b), --lego counts the implementor (E3c), and among several definitions the
-#       lowest id wins (E3d). Kept as they were: a set of declarations only (the dropping selector still carries its
+#       fully proven file:name answered the same zero as the dropping selector. A bodyless C/C++ front now yields to the
+#       tower-front bodied definition of the same scope: --around reaches the caller (E3a), --connect joins it and names
+#       the definition's file on its terminal row (E3b), --lego counts the implementor (E3c), and among several
+#       definitions the tower front wins (E3d). Kept as they were: a set of declarations only (the dropping
+#       selector still carries its
 #       residue). A TypeScript overload signature beside its implementation (E3e) and a C++ pure virtual beside an override
 #       of another class (E3f) keep resolveFocus's pick, but since 0.6.6 --connect searches from the definition that JOINS
 #       the other terminal (graph.h joinTerminalPicks), so its terminal row there names the implementation / the override.
@@ -1736,7 +1737,7 @@ done
 e3Present "(E3c) kept: --lego=a_fwd.h:Shape drops the definition" "$TMP/e3_lg_drop.xml" lego 1 iface implementors 0
 
 echo
-echo "=== (E3d) among several definitions, the lowest id is chosen ==="
+echo "=== (E3d) among several definitions, the tower front is chosen ==="
 run "$TMP/free" --connect=helper,unrelatedCaller >"$TMP/e3_cn_free.xml"
 e3Pick "(E3d) --connect=helper,unrelatedCaller over api.h, other.cpp, third.cpp" "$TMP/e3_cn_free.xml" helper other.cpp:2 1
 
