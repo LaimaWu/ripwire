@@ -2318,9 +2318,11 @@ inline constexpr const char* kDeclinedGateMapLegend =
     "<!-- hdr:declined=also-counts-builtin-type-method-calls(dict.get,list.append)whose-bound-targets-classes-the-callers-file-never-names -->";
 // The standard-member gate's declines (graph.h StdMemberGate) ride the same declined= count; charged only to a map where
 // that gate declined at least one call, so a map it never touched keeps its bytes. No '>' and no double hyphen inside.
+// The Rust floor is the clause's own "on-a-receiver-no-rule-tied-to-an-in-tree-class" (a Rust receiver no rule typed is one);
+// the itemised floor rides the callers / callees legends (graphlegend.h). Train 32a dropped a 43-B Rust clause that restated it.
 inline constexpr const char* kDeclinedStdMapLegend =
     "<!-- hdr:declined=also-counts-calls-named-like-a-standard-type-member-of-their-language(C++-v.push_back,s.size;Rust-v.push,xs.iter)-on-a-receiver-no-rule-tied-to-an-in-tree-class;"
-    "the-std-member-may-be-the-one-called;not-a-claim-the-receiver-is-a-std-type;Rust-records-no-receiver-type-yet -->";
+    "the-std-member-may-be-the-one-called;not-a-claim-the-receiver-is-a-std-type -->";
 inline constexpr const char* kInertDeclinedMapLegend =
     "<!-- hdr:declined=also-counts-ordinary-Elixir-call-sites-inside-inert-quote-AST-after-unquote/unquote_splicing-re-entry;no-edge;not-a-possible-callee -->";
 

@@ -2337,9 +2337,13 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
 constexpr std::uint32_t kIngestCacheVersionMirror   = 36;   // MUST equal ingest.cpp's kCacheVersion (gated); 36 = train 30 (above call-result-typing's and fcall-forward's 33, name-template-dispatch's 35, main's 34), 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 33 = lane call-result-typing: RawBind resultIndex + unwrapDepth, 33 = lane fcall-forward: ref `forwarded` byte, 35 = lane name-template-dispatch: RefRole Pattern 11, 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 206;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestParserVerMirror    = 212;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 212 = 2026-10-21 (train 32a: above main 206/207, rust-receivers 202/203, ix1-slot
+                                                          //   204/205, l6-iface 210/211; #420 reserves 214/215; see the kParserVer note)
                                                           // 206 = 2026-10-18 (#409, PR #414, renumbered again at merge: above main 196/197,
                                                           //   train 31 198/199, rust-receivers 202/203, ix1-slot 204/205; see the kParserVer note)
+                                                          // 202 = lane rust-receivers (reservation 202/203; the train renumbers): Rust written-type
+                                                          //   RecvType / MemberType, the written qualifier path of a call result, `-> Self` results
                                                           // 198 = 2026-10-18 (train 31: above main 196/197 and h1-annot
                                                           //   194/195; see the kParserVer note)
                                                           // 194 = lane h1-annot (reservation 194/195; the train renumbers):
@@ -4771,7 +4775,8 @@ inline std::string materializeCommitSubset( const std::string& root, const std::
             ++at;
         }
         const bool archived  = os::system( ( cmd + " 2>/dev/null" ).c_str() ) == 0;
-        const bool extracted = archived && os::system( ( "tar -x -f " + shSingleQuote( archiveFile ) + " -C " + shSingleQuote( tmpRoot ) + " 2>/dev/null" ).c_str() ) == 0;
+        // Feed the file through stdin: GNU tar treats a Windows drive colon in -f as a remote host (same fix as materializeCommitTree).
+        const bool extracted = archived && os::system( ( "tar -x -f - -C " + shSingleQuote( tmpRoot ) + " < " + shSingleQuote( archiveFile ) + " 2>/dev/null" ).c_str() ) == 0;
         fs::remove( fs::path( archiveFile ), ec );
         if( !extracted )
         {

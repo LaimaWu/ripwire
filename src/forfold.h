@@ -128,6 +128,8 @@ struct BodyFoldRender
     std::size_t total       = 0;
     std::size_t slices = 0;   // classes served as a member slice (each also has its skip row)
     std::string firstSkipNext;       // the first skip's next= value, XML-escaped; empty when every candidate was served
+    std::vector<NodeId> bodies;      // member-names: every body this answer carries whole (the slot's owner, the fold's, slice members)
+    std::vector<NodeId> sliced;      // member-names: the classes served as a member slice
 };
 
 namespace fold_detail
@@ -440,6 +442,10 @@ inline BodyFoldRender renderForBodyFold( const BodyFoldInputs& in, const std::ve
             fold_detail::SliceRender slice = fold_detail::renderSlice( in, id, *words, kForBodyFoldBudgetBytes - used, served );
             used += slice.bodyBytes;
             out.slices += slice.bodyBytes > 0 ? 1u : 0u;
+            if( slice.bodyBytes > 0 )
+            {
+                out.sliced.push_back( id );
+            }
             if( !slice.xml.empty() )
             {
                 pieces.push_back( { kNoNode, std::move( slice.xml ), slice.bodyBytes } );
@@ -462,6 +468,7 @@ inline BodyFoldRender renderForBodyFold( const BodyFoldInputs& in, const std::ve
     out.xml         = open + bodies + skips + std::string( kClose );
     out.bodyTokens  = tokensForEmittedBytes( used, kBytesPerTokenBody );
     out.markupBytes = out.xml.size() - used;
+    out.bodies      = std::move( served );
     ENSURES( used <= kForBodyFoldBudgetBytes, "the served bodies fit the fold's budget" );
     return out;
 }

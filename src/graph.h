@@ -3322,12 +3322,13 @@ inline std::string_view stdElementType( std::string_view written ) noexcept
 // LANGUAGE SCOPE (each probed; a language is gated exactly when kStdMemberNames has a non-empty row for it): C++ as above.
 // RUST (externalnames.h kRustStdMemberNames; arm R): the same rule — `v.push( x )` on a `&mut Vec<i32>` parameter, `xs.iter()`,
 // `m.insert( k, v )` left NAME-ONLY are declined; a call the language's own lookup proves (`self.iter()` inside the impl
-// that defines iter) is not name-only and keeps its edge. The receiver exception reads nothing for Rust (stdReceiverOf reads
-// C++ written types only), so its STATED FLOOR is wider than C++'s: a receiver written as an in-tree type — a parameter
-// `s: &mut Stack<i32>`, a local `let s = Stack { .. }`, a field `self.inner` declared `Stack<i32>`, `book: &Book` where Book
-// defines iter — is declined with the false edges, because Rust records no parameter, local or field type for a call yet.
-// Such a call is counted (declined_calls=, <stdm>), never silently dropped; it keeps its edge once Rust receiver evidence
-// types it (the call is then no longer name-only). C has no member functions. GO has an EMPTY row: its common member names
+// that defines iter) is not name-only and keeps its edge, and so (lane rust-receivers) does a call on a receiver Rust
+// receiver evidence types (receiverevidence.h narrowTypedLocal): a parameter, local or field WRITTEN as an in-tree type —
+// `s: &mut Stack<i32>`, `let s = Stack { .. }`, `self.inner` declared `Stack<i32>`, `book: &Book` where Book defines iter —
+// or a call result. The receiver exception itself reads nothing for Rust (stdReceiverOf reads C++ written types only), so
+// its STATED FLOOR is what Rust does not type: a generic bound, dyn / impl Trait, a type alias, a glob of a glob, a tuple-struct
+// field, a non-plain pattern, a value behind Option / Result / Rc / Arc / RefCell / Cell / Mutex / RwLock — declined with the false edges, counted (declined_calls=, <stdm>), never silently dropped.
+// C has no member functions. GO has an EMPTY row: its common member names
 // (Len, Write, String, Error, Reset, Lock, Unlock) are methods in-tree types implement on purpose to satisfy an interface,
 // so an unproven receiver may well dispatch into the tree; a Go gate needs typed receivers, not a name list. Java, Kotlin,
 // C# and Swift likewise (add/size, Add, append). ObjC message sends carry no receiver shape. Python/JS/TS/Ruby:
@@ -6764,6 +6765,68 @@ inline std::vector<std::uint16_t> paramsMinAcrossDeclarations( const IngestResul
 }
 
 inline std::uint32_t internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand );   // defined beside declinedCallsNaming, its one reader
+// TS/JS literal receivers (issue #163 twin): candidate test for literal polyfills.
+// A definition is a polyfill candidate for a literal receiver when it is a scope-matched Method (e.g. JS Foo.prototype.NAME),
+// compatible in language, and within the reference's own root in multi-root workspaces.
+[[nodiscard]] inline bool
+isJsTsLitPolyfillCandidate( const rw::IngestResult& ing, rw::NodeId candSym, std::string_view ctor, const rw::Reference& r ) noexcept
+{
+    if( candSym >= ing.symbols.size() )
+    {
+        return false;
+    }
+    const rw::Symbol& sy = ing.symbols[ candSym ];
+    if( sy.kind != rw::SymKind::Method || sy.scope != ctor || !rw::langCompatible( sy.lang, r.lang ) )
+    {
+        return false;
+    }
+    if( !ing.fileRoot.empty() )
+    {
+        if( sy.fileId >= ing.fileRoot.size() || r.fileId >= ing.fileRoot.size()
+            || ing.fileRoot[ sy.fileId ] != ing.fileRoot[ r.fileId ] )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// TS/JS literal receivers (issue #163 twin): only names that are built-in members of the literal's type
+// leave --uses when an in-repo definition shares the name. If no in-repo definition exists (valueDefs empty),
+// return false so external/stdlib queries (e.g. --uses=repeat on hono) answer with external="1" instead of refusing.
+// Python literal calls (e.g. "hello".replace) remain listed by --uses (scoping matches graph.h's #163 JS/TS block).
+// Named function-expression polyfills (String.prototype.padStart = function padStart(n) { ... }, indexed as plain functions)
+// and TS prototype assignments drop their literal calls from --uses, matching graph.h.
+[[nodiscard]] inline bool
+isBuiltinLiteralCall( const rw::IngestResult& ing, const rw::Reference& r,
+                      std::span<const rw::NodeId> valueDefs,
+                      std::span<const rw::NodeId> literalDefs = {} ) noexcept
+{
+    using namespace rw;
+    const std::span<const rw::NodeId> checkDefs = literalDefs.empty() ? valueDefs : literalDefs;
+    if( checkDefs.empty() )
+    {
+        return false;
+    }
+    if( !isJsTsLitRecv( r.recv ) )
+    {
+        return false;
+    }
+    const std::string_view ctor = jsLitCtorName( r.recv );
+    if( ctor.empty() || !isJsTsBuiltinMember( ctor, r.calleeName ) )
+    {
+        return false;
+    }
+    for( NodeId def : checkDefs )
+    {
+        if( isJsTsLitPolyfillCandidate( ing, def, ctor, r ) )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = nullptr, bool census = false )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph: resolve refs + build CSR" );
@@ -7396,7 +7459,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 const std::uint32_t ri = rtIt->second;
                 const Binding&      rt = ing.bindings[ ri ];
-                const bool          match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth );
+                const bool          match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth )
+                                            && ( !rt.isFromAssignment || recvEv.rustQualifiedTypeOwns( r, cr.importedName, callee ) );   // Rust `-> Self`: rustQualifiedTypeOwns
                 if( !match )
                 {
                     continue;
@@ -8314,9 +8378,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 }
                 for( NodeId c : it->second )
                 {
-                    const Symbol& sy = ing.symbols[c];
-                    if( sy.kind == SymKind::Method && sy.scope == ctor
-                        && langCompatible( sy.lang, r.lang ) && sameRoot( c, r.fileId ) )
+                    if( isJsTsLitPolyfillCandidate( ing, c, ctor, r ) )
                     {
                         cand.push_back( c );
                     }

@@ -1719,7 +1719,7 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
             bindsFinalize( bindCtx );   // L3 noise gates + clobber sweep — the tail of the old captureBindings
             if( callResultFamilyOf( le.lang ) == CallResultFamily::Rust )
             {
-                pruneRustTombstones( binds, firstBindOfFile );   // (L) only a call-typed name's tombstones hide anything
+                pruneRustTombstones( binds, firstBindOfFile );   // (L) only a typed name's tombstones hide anything
             }
         }
         refs.insert( refs.end(), std::make_move_iterator( aliasCtx.out.begin() ), std::make_move_iterator( aliasCtx.out.end() ) );

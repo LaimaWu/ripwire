@@ -194,6 +194,31 @@ else
     fail=1
 fi
 
+# ── Arm D: a long hyphen-joined prose run must not stall the checker (L3 fix round 2) ────────────
+#
+# A served legend may spell a disclosure as ONE hyphen-joined run (the Rust receiver disclosure in
+# src/serialize.h is 242 chars with 41 hyphens). Pattern 4's old capture `[a-z][a-z0-9\-]*(?:-[a-z0-9\-]*)*`
+# nested two quantifiers over the same hyphen, so a run NOT followed by flag/lens/verb/option backtracked
+# exponentially in its hyphen count (20 hyphens 0.5 s, x4 per 2 more): the live arm hit CI's 1200 s cap
+# on every release leg. The fixture: a 60-hyphen run plus a pattern-4 phantom the checker must still catch,
+# under a 10 s wall cap (perl alarm: portable, no coreutils timeout on macOS).
+{
+    printf '<!-- ripwire v1 t=fn\n'
+    printf 'disclosure;w'; for i in $( seq 1 60 ); do printf -- '-w%d' "$i"; done; printf ';\n'
+    printf 'The signatures-only flag opts out of bodies.\n-->\n'
+} >"$TMPDIR/synthetic_legend_run.txt"
+t0=$( date +%s )
+perl -e 'alarm shift; exec @ARGV' 10 python3 "$LEGEND_CHECK" --legend-file="$TMPDIR/synthetic_legend_run.txt" \
+    --help-file="$TMPDIR/synthetic_help.txt" >"$TMPDIR/synthetic_run_result.json" 2>"$TMPDIR/synthetic_run_err.txt"
+rc_run=$?
+secs_run=$(( $( date +%s ) - t0 ))
+phantoms_run=$( python3 -c "import json,sys; d=json.load(sys.stdin); print(','.join(d['findings']['phantom_flags']))" <"$TMPDIR/synthetic_run_result.json" 2>/dev/null || echo "" )
+if [ "$rc_run" -ne 142 ] && [ "$secs_run" -lt 10 ] && [ "$phantoms_run" = "--signatures-only" ]; then
+    ok "Arm D 60-hyphen prose run: checker finished in ${secs_run}s (cap 10 s) and still caught --signatures-only"
+else
+    no "Arm D 60-hyphen prose run: rc=$rc_run (142 = killed at the 10 s cap) ${secs_run}s phantoms=[$phantoms_run] (expected < 10 s, phantoms=--signatures-only)"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────────────────────────
 echo
 if [ "$fail" -eq 0 ]; then

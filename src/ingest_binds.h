@@ -4135,7 +4135,8 @@ inline TSNode calleeNameNode( TSNode call )
 
 // One CallResult: `var` binds result `index` of `call` after `depth` unwrap operators, visible over `site`. A blank `_`, a
 // non-identifier name or a callee with no name node records nothing.
-inline void pushCallResult( BindCtx& cx, TSNode var, TSNode call, std::uint8_t index, std::uint8_t depth, BindSite site )
+// `written`: the qualifier a Rust path call is written with (rustCallQualifier; model.h LocalBindKind::CallResult)
+inline void pushCallResult( BindCtx& cx, TSNode var, TSNode call, std::uint8_t index, std::uint8_t depth, BindSite site, std::string written = {} )
 {
     const TSNode           callee = ts_node_is_null( call ) ? TSNode{} : calleeNameNode( call );
     const std::string_view name   = ts_node_is_null( var ) ? std::string_view{} : identifierText( var, cx.src );
@@ -4146,17 +4147,18 @@ inline void pushCallResult( BindCtx& cx, TSNode var, TSNode call, std::uint8_t i
     // startByte: the call Reference's own byte (the call's start) — graph.h joins on it and the callee name
     cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = ts_node_start_byte( call ), .lang = cx.lang, .kind = LocalBindKind::CallResult,
                                   .resultIndex = index, .unwrapDepth = depth, .spanStart = site.spanStart, .spanEnd = site.spanEnd,
-                                  .var = std::string( name ), .typeName = std::string( nodeTextOf( callee, cx.src ) ) } );
+                                  .var = std::string( name ), .importedName = std::move( written ), .typeName = std::string( nodeTextOf( callee, cx.src ) ) } );
 }
 
 // One ReturnType of the definition starting at `defStart`: position `index`, class `cls` ("" records nothing), the qualified
 // text whole (`os.File`, `std::fs::File`; "" when unqualified) and `depth` Result/Option layers above the class.
-inline void pushReturnType( BindCtx& cx, std::uint32_t defStart, std::uint8_t index, std::string_view cls, std::string_view whole, std::uint8_t depth )
+// `spelledSelf` (Rust): the result is written `Self` — carried on isFromAssignment (model.h Binding: kind==ReturnType)
+inline void pushReturnType( BindCtx& cx, std::uint32_t defStart, std::uint8_t index, std::string_view cls, std::string_view whole, std::uint8_t depth, bool spelledSelf = false )
 {
     if( !cls.empty() )   // Symbol::sigStartByte joins startByte (the RubySingletonDef pattern)
     {
         cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = defStart, .lang = cx.lang, .kind = LocalBindKind::ReturnType,
-                                      .resultIndex = index, .unwrapDepth = depth, .importedName = std::string( whole ), .typeName = std::string( cls ) } );
+                                      .isFromAssignment = spelledSelf, .resultIndex = index, .unwrapDepth = depth, .importedName = std::string( whole ), .typeName = std::string( cls ) } );
     }
 }
 
@@ -5424,19 +5426,21 @@ inline void captureSwiftDeclEvidence( BindCtx& cx, TSNode n, const char* t, std:
 // FE-B (review B3): a declaration's evidence in Java, C#, Kotlin and Swift — a typed parameter, a typed or constructed
 // local (RecvType), a typed or constructed field / property (MemberType); (review B4) every other binding form, and the
 // type parameters a generic declares. The base resolver bound these receivers by name alone; FE-B proves a member call
-// only through evidence, so the declarations are read here.
-inline void captureTypedDeclEvidence( BindCtx& cx, TSNode n, const char* t )
+// only through evidence, so the declarations are read here. The four languages share this head (type parameters, JVM
+// imports and packages, a declared return type); each one's own declaration reader is its row of the per-TU hook table
+// (receiverEvidenceHookOf: lane rust-receivers registered them there, which removed the `cx.lang ==` chain this ended in).
+// False when the node was handled here whole.
+inline bool captureTypedDeclShared( BindCtx& cx, TSNode n, const char* t )
 {
-    const std::uint32_t at = ts_node_start_byte( n );
     if( kindIs( t, "type_parameters" ) || kindIs( t, "type_parameter_list" ) )
     {
         noteTypeParameters( cx, n );
-        return;
+        return false;
     }
     if( ( kindIs( t, "import_declaration" ) || kindIs( t, "import_header" ) ) && callResultFamilyOf( cx.lang ) == CallResultFamily::Jvm )
     {
         captureJvmTypeImport( cx, n, ts_node_start_byte( n ) );   // (L) fix round 1: what a bare result type names in this file
-        return;
+        return false;
     }
     if( ( kindIs( t, "package_declaration" ) || kindIs( t, "package_header" ) ) && callResultFamilyOf( cx.lang ) == CallResultFamily::Jvm )
     {
@@ -5445,25 +5449,39 @@ inline void captureTypedDeclEvidence( BindCtx& cx, TSNode n, const char* t )
         const TSNode path = namedChildOfKind( n, { "scoped_identifier", "identifier" } );
         cx.binds->push_back( RawBind{ .fileId = cx.fileId, .startByte = ts_node_start_byte( n ), .lang = cx.lang, .kind = LocalBindKind::Namespace,
                                       .var = importPathText( path, cx.src ) } );
-        return;
+        return false;
     }
     if( kindIs( t, "method_declaration" ) || kindIs( t, "function_declaration" ) )
     {
         captureDeclaredReturnType( cx, n );   // (L) call-result typing: Java's `type`, Kotlin's type after the parameters (C#/Swift: none read)
     }
-    if( cx.lang == Lang::Java )
+    return true;
+}
+// each language's row: the shared head, then its own declaration reader (`at` = the node's start byte, as each reader expects)
+inline void captureJavaEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32_t at )
+{
+    if( captureTypedDeclShared( cx, n, t ) )
     {
         captureJavaDeclEvidence( cx, n, t, at );
     }
-    else if( cx.lang == Lang::CSharp )
+}
+inline void captureCSharpEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32_t at )
+{
+    if( captureTypedDeclShared( cx, n, t ) )
     {
         captureCSharpDeclEvidence( cx, n, t, at );
     }
-    else if( cx.lang == Lang::Kotlin )
+}
+inline void captureKotlinEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32_t at )
+{
+    if( captureTypedDeclShared( cx, n, t ) )
     {
         captureKotlinDeclEvidence( cx, n, t, at );
     }
-    else
+}
+inline void captureSwiftEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32_t at )
+{
+    if( captureTypedDeclShared( cx, n, t ) )
     {
         captureSwiftDeclEvidence( cx, n, t, at );
     }
@@ -5974,25 +5992,12 @@ inline void captureGoEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32
 }
 
 // ── Rust (train 29 call-result typing; the shared Rust local-evidence path the rust-receivers lane extends) ──────────────────
-// The wrapper ROWS a declared Rust result is read through: a transparent one (auto-deref: the class is its argument) or a
-// LAYER that needs one unwrap operator at the call site (`?`, `.unwrap()`, `.expect(..)`). Matched on the wrapper's last
-// segment, so `std::result::Result`, `io::Result` and a crate's one-argument `Result<T>` alias all read as Result. Any other
-// generic (Vec, HashMap, Rc, a user type) names no class: nothing is recorded. A reader of a WRITTEN local type
-// (`let x: Option<T>`, the rust-receivers lane) takes the class only at depth 0: a Layer there means the local is NOT a T.
-enum class RustWrap : std::uint8_t { None, Transparent, Layer };
-struct RustWrapperRow
-{
-    std::string_view name;
-    RustWrap         wrap;
-};
-inline constexpr std::array<RustWrapperRow, 3> kRustResultWrappers = { {
-    { "Box", RustWrap::Transparent }, { "Result", RustWrap::Layer }, { "Option", RustWrap::Layer },
-} };
-inline RustWrap rustWrapperOf( std::string_view name ) noexcept
-{
-    const auto row = std::ranges::find( kRustResultWrappers, name, &RustWrapperRow::name );
-    return row == kRustResultWrappers.end() ? RustWrap::None : row->wrap;
-}
+// The wrapper ROWS a Rust type is read through are model.h's family table (kRustTypeWrappers, typeWrapOf): Box transparent,
+// Result / Option one LAYER each (an unwrap operator at the call site: `?`, `.unwrap()`, `.expect(..)`), Rc / Arc / RefCell /
+// Cell / Mutex / RwLock HIDE their argument (their own members answer a call written on them). Matched on the wrapper's last
+// segment, so `std::result::Result`, `io::Result` and a crate's one-argument `Result<T>` alias all read as Result. A generic
+// no row names (Vec, HashMap, an in-tree `Stack<T>`) is its own head class, resolved like any name in graph.h. A reader of a
+// WRITTEN local, parameter or field type (rustWrittenClass) takes the class only at depth 0: a Layer there means it is NOT a T.
 
 // the type an `impl` block names (`Book` in `impl Book` / `impl<T> Store<T>` / `impl Trait for Book`) — what `Self` means in it
 inline std::string_view rustImplSelf( TSNode n, std::string_view src )
@@ -6010,10 +6015,12 @@ inline std::string_view rustImplSelf( TSNode n, std::string_view src )
 // passes (`Result<T, E>`, `Option<T>`) into `depth`: `T`, `Self` (the impl's type), or a path's last segment with `whole`
 // set to the path as written (`crate::model::Config`, `std::fs::File`), which graph.h resolves to an in-tree module's
 // class or refuses (receiverevidence.h rustResultClass). `tuple` receives a tuple type left at the core (positions are the
-// caller's). "" for anything else, or a type parameter of `fn`.
-inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_view src, std::uint8_t& depth, std::string_view& whole, TSNode* tuple )
+// caller's). "" for anything else, or a type parameter of `fn`. `spelledSelf` receives whether the class came
+// from a written `Self` (fix round 1: graph.h types such a call's local only through a qualifier that resolves to it).
+inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_view src, std::uint8_t& depth, std::string_view& whole, TSNode* tuple, bool& spelledSelf )
 {
-    whole = {};
+    whole       = {};
+    spelledSelf = false;
     for( int guard = 0; guard < 8 && !ts_node_is_null( type ); ++guard )
     {
         const char* t = ts_node_type( type );
@@ -6030,13 +6037,18 @@ inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_vie
             {
                 name.remove_prefix( sep + 2 );   // `std::result::Result` / `io::Result`: the wrapper's last segment
             }
-            const RustWrap         wrap = rustWrapperOf( name );
+            const TypeWrap         wrap = typeWrapOf( CallResultFamily::Rust, name );
             const TSNode           args = namedChildOfKind( type, { "type_arguments" } );
-            if( wrap == RustWrap::None || ts_node_is_null( args ) || ts_node_named_child_count( args ) == 0 )
+            if( wrap == TypeWrap::None )
+            {
+                type = head;   // rust-receivers: a generic no row names is its own head class (`Stack<i32>` is a Stack)
+                continue;
+            }
+            if( wrap == TypeWrap::Hides || ts_node_is_null( args ) || ts_node_named_child_count( args ) == 0 )
             {
                 return {};
             }
-            depth += wrap == RustWrap::Layer ? 1u : 0u;
+            depth += wrap == TypeWrap::Layer ? 1u : 0u;
             type = ts_node_named_child( args, 0 );
             continue;
         }
@@ -6048,13 +6060,16 @@ inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_vie
             }
             return {};
         }
-        if( kindIs( t, "type_identifier" ) )
+        if( kindIs( t, "type_identifier" ) && nodeTextOf( type, src ) != "Self" )
         {
-            const std::string_view name = nodeTextOf( type, src );
-            return declaresTypeName( fieldChild( fn, NodeField::TypeParameters ), name, src ) || enclosingGenericDeclares( fn, name, src ) ? std::string_view{} : name;
+            const std::string_view name   = nodeTextOf( type, src );
+            const TSNode           params = ts_node_is_null( fn ) ? TSNode{} : fieldChild( fn, NodeField::TypeParameters );   // a null node has no tree
+            return declaresTypeName( params, name, src ) || enclosingGenericDeclares( fn, name, src ) ? std::string_view{} : name;
         }
-        if( kindIs( t, "self" ) || ( kindIs( t, "identifier" ) && nodeTextOf( type, src ) == "Self" ) )
+        // `Self` (tree-sitter-rust spells it a type_identifier in a type, `fn new() -> Self`): the impl's type, "" in a trait
+        if( kindIs( t, "self" ) || ( ( kindIs( t, "identifier" ) || kindIs( t, "type_identifier" ) ) && nodeTextOf( type, src ) == "Self" ) )
         {
+            spelledSelf = true;
             return rustImplSelf( fn, src );
         }
         if( kindIs( t, "scoped_type_identifier" ) )
@@ -6072,6 +6087,12 @@ inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_vie
     }
     return {};
 }
+// the same reading where whether the class came from a written `Self` does not matter (a written local / parameter / field)
+inline std::string_view rustResultClass( TSNode type, TSNode fn, std::string_view src, std::uint8_t& depth, std::string_view& whole, TSNode* tuple )
+{
+    bool spelledSelf = false;
+    return rustResultClass( type, fn, src, depth, whole, tuple, spelledSelf );
+}
 
 // Rust: one ReturnType per declared result of a fn — the whole value (kWholeResult) or, for a tuple at the core
 // (`Result<(Book, Ctx)>`), one per element by position; each element is read through the transparent wrappers only.
@@ -6086,21 +6107,34 @@ inline void captureRustReturnTypes( BindCtx& cx, TSNode fn )
     std::uint8_t        depth    = 0;
     std::string_view    whole;
     TSNode              tuple{};
-    const std::string_view cls = rustResultClass( ret, fn, cx.src, depth, whole, &tuple );
+    bool                spelledSelf = false;
+    const std::string_view cls = rustResultClass( ret, fn, cx.src, depth, whole, &tuple, spelledSelf );
     if( ts_node_is_null( tuple ) )
     {
-        pushReturnType( cx, defStart, kWholeResult, cls, whole, depth );
+        pushReturnType( cx, defStart, kWholeResult, cls, whole, depth, spelledSelf );
         return;
     }
     for( std::uint32_t i = 0, k = ts_node_named_child_count( tuple ); i < k && i < kWholeResult; ++i )
     {
-        std::uint8_t           inner = 0;
-        const std::string_view elem  = rustResultClass( ts_node_named_child( tuple, i ), fn, cx.src, inner, whole, nullptr );
+        std::uint8_t           inner     = 0;
+        bool                   elemSelf  = false;
+        const std::string_view elem      = rustResultClass( ts_node_named_child( tuple, i ), fn, cx.src, inner, whole, nullptr, elemSelf );
         if( inner == 0 )   // an element that is itself a Result/Option layer needs an operator the tuple pattern cannot apply
         {
-            pushReturnType( cx, defStart, std::uint8_t( i ), elem, whole, depth );
+            pushReturnType( cx, defStart, std::uint8_t( i ), elem, whole, depth, elemSelf );
         }
     }
+}
+
+// rust-receivers fix round 1: the qualifier a Rust path call is WRITTEN with — `crate::other::Path` in
+// `crate::other::Path::new( p )`, `fs::File`, `Self` — blanks removed; "" for any other call (a method call, a bare call).
+// The call Reference keeps only the last segment (ingest_names.h rustQualifierOf); graph.h resolves this whole path like a
+// written type before a callee's `-> Self` may type the local (receiverevidence.h rustQualifiedTypeOwns).
+inline std::string rustCallQualifier( TSNode call, std::string_view src )
+{
+    const TSNode fn   = fieldChild( call, NodeField::Function );
+    const TSNode path = ts_node_is_null( fn ) || !kindIs( ts_node_type( fn ), "scoped_identifier" ) ? TSNode{} : fieldChild( fn, NodeField::Path );
+    return ts_node_is_null( path ) ? std::string{} : withoutBlanks( std::string( nodeTextOf( path, src ) ) );
 }
 
 // Rust: the call a `let` value binds, through the unwrap operators applied to it — each `?` and each `.unwrap()` /
@@ -6147,6 +6181,161 @@ inline BindSite rustLetSite( TSNode decl, std::uint32_t at )
     return site;
 }
 
+// rust-receivers: the item whose generics a binding's written type may name — the nearest ancestor of `kinds`, else the node
+// itself (a `let` or closure parameter in a `const` / `static` initializer: no fn; the enclosing impls' generics still count)
+inline TSNode rustGenericsOwner( TSNode n, std::initializer_list<std::string_view> kinds )
+{
+    const TSNode owner = ancestorOfKind( n, kinds );
+    return ts_node_is_null( owner ) ? n : owner;
+}
+
+// rust-receivers: the class a WRITTEN Rust type names for a local, a parameter or a field — rustResultClass's reading (the
+// wrapper rows, `Self`, a generic's head, a path's last segment with `whole` set to the path) taken at depth 0 only: under a
+// Result / Option layer the binding is not a T, and names no class. `owner` is the item whose generics the type may name.
+inline std::string_view rustWrittenClass( TSNode type, TSNode owner, std::string_view src, std::string_view& whole )
+{
+    std::uint8_t           depth = 0;
+    const std::string_view cls   = rustResultClass( type, owner, src, depth, whole, nullptr );
+    if( depth != 0 )
+    {
+        whole = {};
+        return {};
+    }
+    return cls;
+}
+
+// rust-receivers: the class a `let` VALUE constructs — a struct literal `T { .. }` / `Self { .. }` / `m::T { .. }`, or
+// `T::default()` on a type path (Default's contract: the value is a T); `whole` the path when qualified. "" for anything
+// else — `T::new( .. )` is a CALL, typed (or not) by its declared result through the call-result rows.
+inline std::string_view rustConstructedClass( TSNode value, TSNode owner, std::string_view src, std::string_view& whole )
+{
+    whole = {};
+    std::uint8_t depth = 0;
+    if( ts_node_is_null( value ) )
+    {
+        return {};
+    }
+    if( kindIs( ts_node_type( value ), "struct_expression" ) )
+    {
+        return rustResultClass( fieldChild( value, NodeField::Name ), owner, src, depth, whole, nullptr );
+    }
+    const TSNode fn = kindIs( ts_node_type( value ), "call_expression" ) ? fieldChild( value, NodeField::Function ) : TSNode{};
+    if( ts_node_is_null( fn ) || !kindIs( ts_node_type( fn ), "scoped_identifier" ) || nodeTextOf( fieldChild( fn, NodeField::Name ), src ) != "default" )
+    {
+        return {};
+    }
+    const TSNode path = fieldChild( fn, NodeField::Path );   // `Cfg` (identifier), `Self`, `model::Cfg` (scoped_identifier)
+    if( ts_node_is_null( path ) )
+    {
+        return {};
+    }
+    const char* pt = ts_node_type( path );
+    if( kindIs( pt, "self" ) || nodeTextOf( path, src ) == "Self" )
+    {
+        return rustImplSelf( owner, src );
+    }
+    if( kindIs( pt, "identifier" ) )
+    {
+        const std::string_view name   = nodeTextOf( path, src );
+        const TSNode           params = ts_node_is_null( owner ) ? TSNode{} : fieldChild( owner, NodeField::TypeParameters );
+        return declaresTypeName( params, name, src ) || enclosingGenericDeclares( owner, name, src ) ? std::string_view{} : name;
+    }
+    if( kindIs( pt, "scoped_identifier" ) && !ts_node_is_null( fieldChild( path, NodeField::Name ) ) )
+    {
+        whole = nodeTextOf( path, src );   // graph.h resolves the path or refuses it, as for a written `m::T`
+        return nodeTextOf( fieldChild( path, NodeField::Name ), src );
+    }
+    return {};
+}
+
+// rust-receivers: one name a Rust binding declares — typed (`cls`, `whole` its qualified spelling) or, when no class is
+// named, the tombstones of every name `pattern` holds
+inline void pushRustBinding( BindCtx& cx, TSNode pattern, std::string_view cls, std::string_view whole, BindSite site )
+{
+    if( !cls.empty() && !ts_node_is_null( pattern ) && kindIs( ts_node_type( pattern ), "identifier" ) )
+    {
+        pushLocalEvidence( cx, nodeTextOf( pattern, cx.src ), cls, site, false, whole );
+        return;
+    }
+    pushPatternTombstones( cx, pattern, site );
+}
+
+// rust-receivers: a `let`'s names — `let x: T` typed by its written type, `let x = T { .. }` / `T::default()` by the class
+// the value constructs, `let x = f()?` by the callee's declared result (a CallResult per bound name, a tuple by position)
+inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
+{
+    const TSNode   pattern = fieldChild( n, NodeField::Pattern );
+    const auto     site    = rustLetSite( n, at );
+    const TSNode   owner   = rustGenericsOwner( n, { "function_item" } );
+    std::string_view whole;
+    if( const TSNode type = fieldChild( n, NodeField::Type ); !ts_node_is_null( type ) )
+    {
+        pushRustBinding( cx, pattern, rustWrittenClass( type, owner, cx.src, whole ), whole, site );   // `let x: T = …`
+        return;
+    }
+    // `let x = T { .. }` / `T::default()`: the class the value constructs, as the binding's site spells it. `T::default()`
+    // is a call too, and its CallResult rides beside it: where the spelling resolves to no class here (the record is
+    // then an empty fact), the callee's declared result may still type it (graph.h's resolve loop fills an empty fact).
+    pushRustBinding( cx, pattern, rustConstructedClass( fieldChild( n, NodeField::Value ), owner, cx.src, whole ), whole, site );
+    std::uint8_t depth = 0;
+    const TSNode call  = rustUnwrappedCall( fieldChild( n, NodeField::Value ), depth, cx.src );
+    if( ts_node_is_null( call ) || ts_node_is_null( pattern ) )
+    {
+        return;
+    }
+    if( kindIs( ts_node_type( pattern ), "identifier" ) )
+    {
+        pushCallResult( cx, pattern, call, kWholeResult, depth, site, rustCallQualifier( call, cx.src ) );
+    }
+    else if( kindIs( ts_node_type( pattern ), "tuple_pattern" ) )
+    {
+        std::uint32_t position = 0;   // every element counts, `_` included: walk ALL children, skipping the punctuation
+        for( std::uint32_t i = 0, k = ts_node_child_count( pattern ); i < k && position < kWholeResult; ++i )
+        {
+            const TSNode c  = ts_node_child( pattern, i );
+            const char*  ct = ts_node_type( c );
+            if( kindIs( ct, "(" ) || kindIs( ct, ")" ) || kindIs( ct, "," ) )
+            {
+                continue;
+            }
+            if( kindIs( ct, "identifier" ) )
+            {
+                pushCallResult( cx, c, call, std::uint8_t( position ), depth, site, rustCallQualifier( call, cx.src ) );
+            }
+            ++position;
+        }
+    }
+}
+// rust-receivers: a parameter `b: &Book` names the class it is written as (a fn's or a closure's); any other pattern: tombstones
+inline void captureRustParameter( BindCtx& cx, TSNode n, std::uint32_t at )
+{
+    std::string_view       whole;
+    const std::string_view cls = rustWrittenClass( fieldChild( n, NodeField::Type ), rustGenericsOwner( n, { "function_item", "function_signature_item" } ), cx.src, whole );
+    pushRustBinding( cx, fieldChild( n, NodeField::Pattern ), cls, whole, siteIn( at, ancestorOfKind( n, { "function_item", "closure_expression" } ) ) );
+}
+// rust-receivers: a struct's named field `book: Book` (MemberType on the struct, so `self.book.m()` narrows through it); a
+// field whose type names no class is a tombstone. An enum variant's fields are no struct's: nothing.
+inline void captureRustField( BindCtx& cx, TSNode n, std::uint32_t at )
+{
+    const TSNode list = ts_node_parent( n );
+    const TSNode item = ts_node_is_null( list ) ? TSNode{} : ts_node_parent( list );
+    const TSNode name = fieldChild( n, NodeField::Name );
+    if( ts_node_is_null( item ) || !kindIs( ts_node_type( item ), "struct_item" ) || ts_node_is_null( name ) )
+    {
+        return;
+    }
+    std::string_view       whole;
+    const std::string_view cls = rustWrittenClass( fieldChild( n, NodeField::Type ), item, cx.src, whole );
+    if( cls.empty() )
+    {
+        pushMemberTombstone( cx, nodeTextOf( name, cx.src ), at );
+    }
+    else
+    {
+        pushEvidenceBind( cx, LocalBindKind::MemberType, nodeTextOf( name, cx.src ), cls, whole, at, false );
+    }
+}
+
 // FE-B for Rust (train 29): every name a function binds is a tombstone over its span — `let` patterns, parameters, closure
 // parameters, `for` / `if let` / `while let` / `match` patterns — so a typed binding never leaks to a shadowing one; a `let`
 // whose value is a call (through `?` / `.unwrap()` / `.expect()`) records one CallResult per bound name (a tuple pattern by
@@ -6163,45 +6352,27 @@ inline void captureRustEvidence( BindCtx& cx, TSNode n, const char* t, std::uint
     }
     else if( kindIs( t, "let_declaration" ) )
     {
-        const TSNode   pattern = fieldChild( n, NodeField::Pattern );
-        const auto     site    = rustLetSite( n, at );
-        pushPatternTombstones( cx, pattern, site );
-        std::uint8_t depth = 0;
-        const TSNode call  = ts_node_is_null( fieldChild( n, NodeField::Type ) ) ? rustUnwrappedCall( fieldChild( n, NodeField::Value ), depth, cx.src ) : TSNode{};
-        if( ts_node_is_null( call ) || ts_node_is_null( pattern ) )
-        {
-            return;
-        }
-        if( kindIs( ts_node_type( pattern ), "identifier" ) )
-        {
-            pushCallResult( cx, pattern, call, kWholeResult, depth, site );
-        }
-        else if( kindIs( ts_node_type( pattern ), "tuple_pattern" ) )
-        {
-            std::uint32_t position = 0;   // every element counts, `_` included: walk ALL children, skipping the punctuation
-            for( std::uint32_t i = 0, k = ts_node_child_count( pattern ); i < k && position < kWholeResult; ++i )
-            {
-                const TSNode c  = ts_node_child( pattern, i );
-                const char*  ct = ts_node_type( c );
-                if( kindIs( ct, "(" ) || kindIs( ct, ")" ) || kindIs( ct, "," ) )
-                {
-                    continue;
-                }
-                if( kindIs( ct, "identifier" ) )
-                {
-                    pushCallResult( cx, c, call, std::uint8_t( position ), depth, site );
-                }
-                ++position;
-            }
-        }
+        captureRustLet( cx, n, at );
     }
     else if( kindIs( t, "parameter" ) )
     {
-        pushPatternTombstones( cx, fieldChild( n, NodeField::Pattern ), siteIn( at, ancestorOfKind( n, { "function_item", "closure_expression" } ) ) );
+        captureRustParameter( cx, n, at );
+    }
+    else if( kindIs( t, "field_declaration" ) )
+    {
+        captureRustField( cx, n, at );
     }
     else if( kindIs( t, "closure_parameters" ) )
     {
-        pushPatternTombstones( cx, n, siteIn( at, ts_node_parent( n ) ) );
+        // `|a, (b, c)|`: each pattern's names are tombstones; a typed `|b: &Book|` is a `parameter`, recorded by its own arm
+        const BindSite site = siteIn( at, ts_node_parent( n ) );
+        for( std::uint32_t i = 0, k = ts_node_named_child_count( n ); i < k; ++i )
+        {
+            if( const TSNode c = ts_node_named_child( n, i ); !kindIs( ts_node_type( c ), "parameter" ) )
+            {
+                pushPatternTombstones( cx, c, site );
+            }
+        }
     }
     else if( kindIs( t, "for_expression" ) )
     {
@@ -6218,10 +6389,11 @@ inline void captureRustEvidence( BindCtx& cx, TSNode n, const char* t, std::uint
 }
 
 // (L) fix round 2 (memory): a Rust tombstone — the untyped RecvType of a `let`, parameter, closure, `for`, `if let` or match
-// arm name — only ever HIDES a call-typed fact of the same name where both are visible: Rust records no other typed local,
-// and its receivers read no other local fact (Rust is no class-name-receiver language and records no module alias). So a
-// file keeps a tombstone only when one of its CallResult records binds the same name over a span that overlaps the
-// tombstone's, and drops the rest before they are cached or merged (nushell: 98 740 tombstones → 21 091).
+// arm name — only ever HIDES a typed fact of the same name where both are visible: a call-typed one (CallResult) or, since
+// rust-receivers, a written or constructed one (a RecvType WITH a class: a typed parameter, `let x: T`, `let x = T { .. }`);
+// Rust receivers read no other local fact (Rust is no class-name-receiver language and records no module alias). So a file
+// keeps a tombstone only when one of its typed records binds the same name over a span that overlaps the tombstone's, and
+// drops the rest before they are cached or merged (nushell: 98 740 tombstones → 21 091 at train 29).
 inline void pruneRustTombstones( std::vector<RawBind>& binds, std::size_t first )
 {
     struct Typed
@@ -6234,7 +6406,7 @@ inline void pruneRustTombstones( std::vector<RawBind>& binds, std::size_t first 
     std::vector<Typed> typed;
     for( std::size_t i = first; i < binds.size(); ++i )
     {
-        if( binds[ i ].kind == LocalBindKind::CallResult )
+        if( binds[ i ].kind == LocalBindKind::CallResult || ( binds[ i ].kind == LocalBindKind::RecvType && !binds[ i ].typeName.empty() ) )
         {
             typed.push_back( { binds[ i ].var, binds[ i ].spanStart, binds[ i ].spanEnd } );
         }
@@ -6431,13 +6603,15 @@ inline void captureJsEvidence( BindCtx& cx, TSNode n, const char* t, std::uint32
 // FE-B: one node's receiver evidence: Python, JS/TS and Go, and (review B3) Java, C#, Kotlin and Swift declarations.
 // The per-language receiver-evidence capture (a hook per language family; nullptr = none). Python is handled inline above.
 using ReceiverEvidenceHook = void ( * )( BindCtx&, TSNode, const char*, std::uint32_t );
-inline void captureTypedDeclEvidenceAt( BindCtx& cx, TSNode n, const char* t, std::uint32_t ) { captureTypedDeclEvidence( cx, n, t ); }
 inline ReceiverEvidenceHook receiverEvidenceHookOf( Lang l ) noexcept
 {
     switch( l )
     {
         case Lang::JavaScript: case Lang::TypeScript:                          return &captureJsEvidence;
-        case Lang::Java: case Lang::CSharp: case Lang::Kotlin: case Lang::Swift: return &captureTypedDeclEvidenceAt;
+        case Lang::Java:                                                       return &captureJavaEvidence;
+        case Lang::CSharp:                                                     return &captureCSharpEvidence;
+        case Lang::Kotlin:                                                     return &captureKotlinEvidence;
+        case Lang::Swift:                                                      return &captureSwiftEvidence;
         case Lang::Go:                                                         return &captureGoEvidence;
         case Lang::Rust:                                                       return &captureRustEvidence;
         default:                                                               return nullptr;
