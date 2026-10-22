@@ -38,6 +38,7 @@ echo "forcallerhopcheck: BIN=$BIN"
 fail=0
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
+verdict(){ if [ "$1" -eq 0 ]; then ok "$2"; else no "$3"; fi; }   # rc, the PASS line, the FAIL line
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
@@ -76,45 +77,43 @@ case "$H1" in
     *'n="connect_client" p="client.c:3" sites_at="client.c:5"'*'next="--impact=start_server"'*|*'next="--impact=start_server"'*'n="connect_client" p="client.c:3" sites_at="client.c:5"'*) ok "(P1a) connect_client is a caller row with its call site" ;;
     *) no "(P1a) no connect_client caller row with sites_at=client.c:5: [$H1]" ;;
 esac
-printf '%s' "$H1" | grep -q 'n="run_client" p="client.c:8" sites_at="client.c:13"' && ok "(P1b) run_client is a caller row" || no "(P1b) no run_client caller row: [$H1]"
-printf '%s' "$H1" | grep -q '<s t="fn" n="main" p="main.c:3" d="2"/>' && ok "(P1c) main is the d=2 row" || no "(P1c) main is not a d=2 row: [$H1]"
-printf '%s' "$H1" | grep -q '<callers of="start_server" shown="2" total="2" capped="0" d2="1" d2_shown="1" next="--impact=start_server">' \
-    && ok "(P1d) the element's counts and next=" || no "(P1d) the element's open tag: [${H1%%>*}>]"
-printf '%s' "$H1" | grep -q 'n="listen_socket"' && no "(P1e) a CALLEE (listen_socket) rode as a caller" || ok "(P1e) no callee in the caller rows"
+printf '%s' "$H1" | grep -q 'n="run_client" p="client.c:8" sites_at="client.c:13"'; verdict $? "(P1b) run_client is a caller row" "(P1b) no run_client caller row: [$H1]"
+printf '%s' "$H1" | grep -q '<s t="fn" n="main" p="main.c:3" d="2"/>'; verdict $? "(P1c) main is the d=2 row" "(P1c) main is not a d=2 row: [$H1]"
+printf '%s' "$H1" | grep -q '<callers of="start_server" shown="2" total="2" capped="0" d2="1" d2_shown="1" next="--impact=start_server">'; verdict $? "(P1d) the element's counts and next=" "(P1d) the element's open tag: [${H1%%>*}>]"
+! printf '%s' "$H1" | grep -q 'n="listen_socket"'; verdict $? "(P1e) no callee in the caller rows" "(P1e) a CALLEE (listen_socket) rode as a caller"
 # placement: after the tail, before the bodies
-python3 - "$TMP/p1" <<'PY' && ok "(P1f) <callers> sits after <tail> and before <bodies>" || no "(P1f) <callers> is not between <tail> and <bodies>"
+python3 - "$TMP/p1" <<'PY'
 import sys; t = open(sys.argv[1]).read(); c = t.find("<callers "); b = t.find("<bodies "); tl = t.find("</tail>")
 sys.exit(0 if 0 <= tl < c < b else 1)
 PY
+verdict $? "(P1f) <callers> sits after <tail> and before <bodies>" "(P1f) <callers> is not between <tail> and <bodies>"
 
 # ── P2: the fan ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 run "$FC" --for=fan_target >"$TMP/p2"
 H2="$( hop "$TMP/p2" )"
-printf '%s' "$H2" | grep -q '<callers of="fan_target" shown="16" total="20" capped="1" next="--impact=fan_target">' \
-    && ok "(P2) 20 callers: shown=16 total=20 capped=1, next= serves the rest" || no "(P2) the fan's open tag: [${H2%%>*}>]"
+printf '%s' "$H2" | grep -q '<callers of="fan_target" shown="16" total="20" capped="1" next="--impact=fan_target">'; verdict $? "(P2) 20 callers: shown=16 total=20 capped=1, next= serves the rest" "(P2) the fan's open tag: [${H2%%>*}>]"
 n2="$( printf '%s' "$H2" | grep -o '<s ' | wc -l | tr -d ' ' )"
-[ "$n2" = "16" ] && ok "(P2b) exactly 16 rows printed" || no "(P2b) $n2 rows printed, expected 16"
+[ "$n2" = "16" ]; verdict $? "(P2b) exactly 16 rows printed" "(P2b) $n2 rows printed, expected 16"
 
 # ── P3: entity identity — a same-named method of ANOTHER class is a different function ─────────────────────────────────────
 run "$FX" --for=Repaint >"$TMP/p3"
 H3="$( hop "$TMP/p3" )"
-printf '%s' "$H3" | grep -q '<callers of="Canvas::Repaint" shown="1" total="1"' && printf '%s' "$H3" | grep -q 'n="RefreshCanvas" p="canvas.cc:10" sites_at="canvas.cc:12"' \
-    && ok "(P3a) a C++ method (Canvas::Repaint): its caller RefreshCanvas rides, of= qualified" || no "(P3a) Canvas::Repaint's hop: [$H3]"
+printf '%s' "$H3" | grep -q '<callers of="Canvas::Repaint" shown="1" total="1"' && printf '%s' "$H3" | grep -q 'n="RefreshCanvas" p="canvas.cc:10" sites_at="canvas.cc:12"'; verdict $? "(P3a) a C++ method (Canvas::Repaint): its caller RefreshCanvas rides, of= qualified" "(P3a) Canvas::Repaint's hop: [$H3]"
 run "$FX" --for=Draw >"$TMP/p3d"
 if grep -q 'route="name-exact(Draw)' "$TMP/p3d" && [ "$( grep -o '<b t="method"' "$TMP/p3d" | wc -l | tr -d ' ' )" = "2" ]; then
-    grep -q '<callers ' "$TMP/p3d" && no "(P3b) --for=Draw bodies Widget::Draw AND Gadget::Draw (two functions) yet a hop rode" || ok "(P3b) two same-named methods of two classes are not ONE function: no hop"
+    ! grep -q '<callers ' "$TMP/p3d"; verdict $? "(P3b) two same-named methods of two classes are not ONE function: no hop" "(P3b) --for=Draw bodies Widget::Draw AND Gadget::Draw (two functions) yet a hop rode"
 else
     no "(P3b-pre) --for=Draw no longer bodies the two Draw methods — re-author the arm"
 fi
 # ── P8: the by-name hedge, as the callers verb decides it ──────────────────────────────────────────────────────────────────────
 run "test/forcallerhopfix/py" --for=handle_job >"$TMP/p8"
 H8="$( hop "$TMP/p8" )"
-printf '%s' "$H8" | grep -q 'n="dispatch_jobs" p="worker.py:6" via="name" sites_at="worker.py:8"' && ok "(P8) a receiver-unproven caller carries via=\"name\"" || no "(P8) the by-name caller row: [$H8]"
+printf '%s' "$H8" | grep -q 'n="dispatch_jobs" p="worker.py:6" via="name" sites_at="worker.py:8"'; verdict $? "(P8) a receiver-unproven caller carries via=\"name\"" "(P8) the by-name caller row: [$H8]"
 
 # ── P4: legend coverage, both dialects ───────────────────────────────────────────────────────────────────────────────────────
 run "$FC" --for=start_server --legend=full >"$TMP/p4f"
 for f in "$TMP/p1" "$TMP/p4f"; do
-    python3 - "$f" <<'PY' && ok "(P4) $(basename "$f"): the clause rides and defines every attribute of <callers> and its rows" || no "(P4) $(basename "$f"): clause missing or an attribute undefined"
+    python3 - "$f" <<'PY'
 import re, sys
 t = open(sys.argv[1]).read()
 leg = " ".join(re.findall(r'<!--(.*?)-->', t, re.S))
@@ -126,9 +125,10 @@ names = set(re.findall(r'\s(\w+)="', el))
 missing = [a for a in names if not re.search(r'(?<![\w])' + a + r'=', clause)]
 sys.exit(1 if missing else 0)
 PY
+    verdict $? "(P4) $(basename "$f"): the clause rides and defines every attribute of <callers> and its rows" "(P4) $(basename "$f"): clause missing or an attribute undefined"
 done
 run "$FC" --for=g_backlog_limit >"$TMP/n1v"
-grep -q '; callers of=' "$TMP/n1v" && no "(P4n) the clause rode without the element" || ok "(P4n) no clause on an answer without the hop"
+! grep -q '; callers of=' "$TMP/n1v"; verdict $? "(P4n) no clause on an answer without the hop" "(P4n) the clause rode without the element"
 
 # ── P5 / P6: prefix identity and pricing ─────────────────────────────────────────────────────────────────────────────────────
 for lg in compact full; do
@@ -161,17 +161,18 @@ done
 
 # ── X ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 run "$FC" --for=start_server >"$TMP/x2"
-cmp -s "$TMP/p1" "$TMP/x2" && ok "(X1) deterministic" || no "(X1) two runs differ"
+cmp -s "$TMP/p1" "$TMP/x2"; verdict $? "(X1) deterministic" "(X1) two runs differ"
 if command -v xmllint >/dev/null 2>&1; then
-    for f in p1 p2 p3 p4f p8; do xmllint --noout "$TMP/$f" 2>/dev/null && ok "(X2) well-formed: $f" || no "(X2) xmllint rejects $f"; done
+    for f in p1 p2 p3 p4f p8; do xmllint --noout "$TMP/$f" 2>/dev/null; verdict $? "(X2) well-formed: $f" "(X2) xmllint rejects $f"; done
 else
     printf '  SKIP  (X2) xmllint not installed\n'
 fi
-python3 - "$TMP/p1" "$TMP/p4f" <<'PY' && ok "(X3) no -- inside a legend comment" || no "(X3) a legend comment holds --"
+python3 - "$TMP/p1" "$TMP/p4f" <<'PY'
 import re, sys
 for p in sys.argv[1:]:
     for c in re.findall(r'<!--(.*?)-->', open(p).read(), re.S):
         if "--" in c: sys.exit(1)
 PY
+verdict $? "(X3) no -- inside a legend comment" "(X3) a legend comment holds --"
 
-exit $fail
+exit "$fail"
