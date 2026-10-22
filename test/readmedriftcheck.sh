@@ -35,8 +35,9 @@
 #       control, exactly as (C) is (B)'s, and E6/E7 carry their own. E9 checks a SECOND restatement
 #       of the folded/surveyed pair that drifted independently of the one E5 checks — see E9's own
 #       comment for the round that found it stale.
-#   (G) the COLD-START arm — README's "orient once" invocation is the PLAIN map (owner 2026-10-09), and --max-tokens=3000 must
-#       keep the bare map's head under 4,500 est_tokens (G1 presence, G2 property, G3 mutation, G4 promise)
+#   (G) the COLD-START arm — README's "orient once" invocation is the PLAIN map (owner 2026-10-09), and --max-tokens=3000
+#       keeps the plain map's head, prices fewer est_tokens than the uncut map and discloses the cut (G1 presence, G2 property,
+#       G3 mutation, G4 promise); no arm pins an absolute est_tokens size
 #
 # WHY E6-E8 EXIST. A count can be arithmetically correct and still be a lie about a SET. LINEAGE.md
 # claims its folded tables and its surveyed table are DISJOINT — that is what makes "36 folded plus

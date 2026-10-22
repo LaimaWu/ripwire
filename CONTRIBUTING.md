@@ -824,6 +824,13 @@ then compares `scripts/ci-xplat-outputs.sh`'s verb set between that exe and the 
   **order**, not the scores.
 - **A sort has no tolerance band.** For sorted or serialized output, use the determinism gate
   instead: run twice, `diff -q` the bytes.
+- **A legend byte pin is a target, not a ceiling.** The legend size gates (`compactlegendcheck` (U)/(L)/(M),
+  `graphlegendbudgetcheck`, `donelegendcheck`, `testgatelegendbudgetcheck`, `panellegendcheck`) share one verdict,
+  `test/lib/legendtarget.sh`. A legend past its target passes only when every extra byte is a clause registered in
+  `test/legend_over_target.tsv` (which content, why the answer needs it) that rides on that answer only beside the
+  attribute it defines; the gate prints an `OVER-TARGET` line for it. A hard runaway guard (8,000 B of comments per
+  compact answer, 16,000 B for the ten-verb loop, 2 x the target rounded up to 500 B on the full dialect) fails with
+  `LEGEND-RUNAWAY` and a clause breakdown. `RIPWIRE_LEGEND_PINS=strict` restores the hard pins (the old-path twin).
 
 ---
 

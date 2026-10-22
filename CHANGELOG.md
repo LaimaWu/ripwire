@@ -71,6 +71,10 @@ on the link, where LTO code generation runs), so the `use` build keeps it. `lld-
 `-fprofile-generate` / `-fprofile-use`, which it rejects (clang-cl links the profile runtime itself). Reproduction and removal
 criteria: `docs/WINDOWS-PGO.md`. No other compiler changes; no output change.
 
+### Changed — tests: legend byte pins are stair-step targets under a runaway guard
+
+- The five legend size gates keep every pinned number as a target; a registered present-only clause may pass it (printed `OVER-TARGET`), a hard runaway guard fails as a bug signal, and `RIPWIRE_LEGEND_PINS=strict` keeps the old hard pins (tests only; no output change).
+
 ### Changed — the versions this change moves, stated once
 
 `kParserVer` 206 → 212 (file tag 213): the Rust written-type receivers carried 202 (203) on their branch; 212 sits above
