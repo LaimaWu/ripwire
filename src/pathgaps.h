@@ -529,35 +529,18 @@ private:
 //        `from ext import Base`) has no proven edge to the bound class however its file's imports reach the bound file, and
 //        an edge no evidence binds (ByName) is withheld too: exact or no row. The residual is the binding's own: a
 //        qualified base the lookup does not read (a dotted `a.b.X`, a star import) stays withheld (withheld="name").
-class NamesakeRule
+// Rule 2c's derivation (below): the classes that derive from a bound definition's class through PROVEN base edges only
+// (Graph::implementorBound == BaseBound::Proven), memoized per bound owner. The classes with a derived class are indexed by
+// "<file>#<name>" on first ask (one pass over the implementors map); the walk visits each class once.
+class ProvenSubclasses
 {
 public:
-    NamesakeRule( const IngestResult& ing, const Graph& g )
+    explicit ProvenSubclasses( const IngestResult& ing, const Graph& g )
         : ing_( ing ), g_( g ) {}
-    void add( const Symbol& s )
+    // does a class owning `ns`'s scope derive, over proven edges, from the class owning `bs`'s scope?
+    bool derives( const Symbol& ns, const Symbol& bs ) const
     {
-        owners_.add( s );
-    }
-    // May caller c's call, bound by name alone to `bound`, run `namesake` instead? (rules 2b / 2c above)
-    bool admits( NodeId caller, NodeId bound, NodeId namesake ) const
-    {
-        const Symbol& ns = ing_.symbols[namesake];
-        if( ns.scope.empty() )
-        {
-            const std::uint32_t from = ing_.symbols[caller].fileId;
-            return from == ns.fileId || fileSees( from, ns.fileId, langFacts( ns.lang ).transitiveIncludes );
-        }
-        if( owners_.reaches( ns ) )
-        {
-            return true;
-        }
-        const Symbol& bs = ing_.symbols[bound];
-        if( bs.scope.empty() )
-        {
-            return false;
-        }
-        const std::vector<NodeId>& below = provenBelow( bs );
-        return std::ranges::any_of( below, [ & ]( NodeId d ) { return ownsScope( ing_.symbols[d], ns.fileId, ns.scope ); } );
+        return std::ranges::any_of( below( bs ), [ & ]( NodeId d ) { return ownsScope( ing_.symbols[d], ns.fileId, ns.scope ); } );
     }
 
 private:
@@ -581,52 +564,44 @@ private:
         return ( outer.ends_with( "::" ) && outer.substr( 0, outer.size() - 2 ) == cls.scope )
                || ( outer.ends_with( "." ) && outer.substr( 0, outer.size() - 1 ) == cls.scope );
     }
-    static std::string fileNameKey( std::uint32_t fileId, std::string_view name )
+    // the classes owning `bs`'s scope: those of its leaf name in its file that have a derived class
+    std::vector<NodeId> ownersOf( const Symbol& bs ) const
     {
-        std::string key = std::to_string( fileId );
-        key.push_back( '#' );
-        key.append( name );
-        return key;
-    }
-    // every class below the class owning `bs` over proven base edges (rule 2c), memoized per owner; the classes with a
-    // derived class are indexed by "<file>#<name>" on first ask (one pass over the implementors map)
-    const std::vector<NodeId>& provenBelow( const Symbol& bs ) const
-    {
-        const std::string ownerKey = fileNameKey( bs.fileId, bs.scope );
-        if( const auto it = below_.find( ownerKey ); it != below_.end() )
+        if( !indexed_ )
         {
-            return it->second;
-        }
-        if( !basesIndexed_ )
-        {
-            basesIndexed_ = true;
+            indexed_ = true;
             for( NodeId b = 0; b < g_.implementors.size(); ++b )
             {
                 if( !g_.implementors[b].empty() )
                 {
-                    basesByName_[ fileNameKey( ing_.symbols[b].fileId, ing_.symbols[b].name ) ].push_back( b );
+                    basesByName_[ fileNameKey( key_, ing_.symbols[b].fileId, ing_.symbols[b].name ) ].push_back( b );
                 }
             }
         }
-        std::vector<NodeId> out;
-        std::vector<NodeId> stack;
+        std::vector<NodeId>    out;
         const std::string_view leaf = namesplit::afterLast( namesplit::afterLast( bs.scope, "::" ), "." );
-        if( const auto it = basesByName_.find( fileNameKey( bs.fileId, leaf ) ); it != basesByName_.end() )
+        if( const auto it = basesByName_.find( fileNameKey( key_, bs.fileId, leaf ) ); it != basesByName_.end() )
         {
-            std::ranges::copy_if( it->second, std::back_inserter( stack ), [ & ]( NodeId b ) { return ownsScope( ing_.symbols[b], bs.fileId, bs.scope ); } );
+            std::ranges::copy_if( it->second, std::back_inserter( out ), [ & ]( NodeId b ) { return ownsScope( ing_.symbols[b], bs.fileId, bs.scope ); } );
         }
+        return out;
+    }
+    const std::vector<NodeId>& below( const Symbol& bs ) const
+    {
+        if( const auto it = below_.find( fileNameKey( key_, bs.fileId, bs.scope ) ); it != below_.end() )
+        {
+            return it->second;
+        }
+        std::vector<NodeId>   out;
+        std::vector<NodeId>   stack = ownersOf( bs );
         HashMap<NodeId, char> seen;
         while( !stack.empty() )
         {
             const NodeId b = stack.back();
             stack.pop_back();
-            if( b >= g_.implementors.size() || b >= g_.implementorBound.size() )
-            {
-                continue;
-            }
             const std::vector<NodeId>&       kids  = g_.implementors[b];
             const std::vector<std::uint8_t>& bound = g_.implementorBound[b];
-            for( std::size_t k = 0; k < kids.size() && k < bound.size(); ++k )
+            for( std::size_t k = 0; k < kids.size(); ++k )
             {
                 if( bound[k] == std::uint8_t( BaseBound::Proven ) && seen.try_emplace( kids[k], char( 1 ) ).second )
                 {
@@ -635,8 +610,39 @@ private:
                 }
             }
         }
-        return below_.try_emplace( ownerKey, std::move( out ) ).first->second;
+        return below_.try_emplace( fileNameKey( key_, bs.fileId, bs.scope ), std::move( out ) ).first->second;
     }
+    const IngestResult&                               ing_;
+    const Graph&                                      g_;
+    mutable std::string                               key_;
+    mutable bool                                      indexed_ = false;
+    mutable HashMap<std::string, std::vector<NodeId>> basesByName_;   // "<file>#<class name>" → the classes with a derived class
+    mutable HashMap<std::string, std::vector<NodeId>> below_;         // "<file>#<bound scope>" → the proven-derived classes
+};
+
+class NamesakeRule
+{
+public:
+    NamesakeRule( const IngestResult& ing, const Graph& g )
+        : ing_( ing ), g_( g ), derived_( ing, g ) {}
+    void add( const Symbol& s )
+    {
+        owners_.add( s );
+    }
+    // May caller c's call, bound by name alone to `bound`, run `namesake` instead? (rules 2b / 2c above)
+    bool admits( NodeId caller, NodeId bound, NodeId namesake ) const
+    {
+        const Symbol& ns = ing_.symbols[namesake];
+        if( ns.scope.empty() )
+        {
+            const std::uint32_t from = ing_.symbols[caller].fileId;
+            return from == ns.fileId || fileSees( from, ns.fileId, langFacts( ns.lang ).transitiveIncludes );
+        }
+        const Symbol& bs = ing_.symbols[bound];
+        return owners_.reaches( ns ) || ( !bs.scope.empty() && derived_.derives( ns, bs ) );
+    }
+
+private:
     // does file `from` import file `to` — directly (the precise adjacency only), or (transitive: a C-family #include
     // closure) over any number of import edges? Memoized per `from`.
     bool fileSees( std::uint32_t from, std::uint32_t to, bool transitive ) const
@@ -684,9 +690,7 @@ private:
     NamesakeOwnerReach                                   owners_;
     mutable std::vector<std::vector<std::uint32_t>>      reach_;          // file → the files its #includes reach (sorted), on first ask
     mutable std::vector<char>                            reachDone_;
-    mutable bool                                         basesIndexed_ = false;
-    mutable HashMap<std::string, std::vector<NodeId>>    basesByName_;    // "<file>#<class name>" → the classes with a derived class
-    mutable HashMap<std::string, std::vector<NodeId>>    below_;          // "<file>#<bound scope>" → the proven-derived classes
+    ProvenSubclasses                                     derived_;        // rule 2c
 };
 
 // Is site a preferred over site b for one row? met first, then kind (table order), then path, line, order.
