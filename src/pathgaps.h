@@ -40,6 +40,7 @@
 #include "closures.h"         // ClosureIndex — a near-sink row written inside another function's body (why=closure)
 #include "infra/sortutil.h"   // svLess: the explicit byte order every string_view sort here takes (portablebuildcheck #6)
 #include "infra/enumcount.h"  // enumCountIsExact — the kNearSinkKindCount / kBridgeViaCount sizes follow their enums
+#include "infra/namesplit.h"  // afterLast — a scope's final segment, the CHA name graph's key (K5 rule 2c)
 
 #include <algorithm>
 #include <array>
@@ -445,7 +446,7 @@ inline bool builtinSpelledCall( const Reference& call ) noexcept
 //       search reached), the bridge every symbol its layered search has reached so far (layers 0..k before crossing k+1).
 //       A namesake nothing reached shares an owner with is no way in. Lane ind4b: a FILE-OWNED namesake needs the caller's
 //       file to be or import its file instead (2b), and a class-owned one is also admitted by override dispatch (2c) —
-//       NamesakeOwnerReach::admits below.
+//       NamesakeRule::admits below.
 
 // Each caller's call references in reference order, for the by-name site (rule 1).
 class ByNameCallSites
@@ -488,8 +489,28 @@ private:
     std::vector<std::pair<NodeId, std::uint32_t>> calls_;   // (caller, reference index), sorted
 };
 
-// The owners (rule 2) of a reach set: add() each reached symbol, then ask admits() of a by-name hit. Membership only (no
+// The owners (rule 2) of a reach set: add() each reached symbol, then ask reaches() of a namesake. Membership only (no
 // iteration), so the hash order never reaches an answer; the key is "<fileId>#<scope>" (scope "" = the file itself).
+class NamesakeOwnerReach
+{
+public:
+    void add( const Symbol& s )
+    {
+        owners_.try_emplace( keyOf( s ), char( 1 ) );
+    }
+    bool reaches( const Symbol& namesake ) const
+    {
+        return owners_.contains( keyOf( namesake ) );
+    }
+
+private:
+    static std::string keyOf( const Symbol& s )
+    {
+        return std::to_string( s.fileId ) + "#" + s.scope;
+    }
+    HashMap<std::string, char> owners_;
+};
+
 // Lane ind4b sharpened rule 2 per namesake shape (one place for both hedges — near_sink and the bridge's crossing):
 //   (2b) a FILE-OWNED namesake (scope "": a free function, or a method of a language whose extractor records no class
 //        scope — JS/TS) is admitted only when the caller's file IS the namesake's file or imports it: a direct edge of the
@@ -504,14 +525,14 @@ private:
 //        parent is an EXTERNAL same-named class (`class Sub(ext.Base)`, `from ext import Base`) out: chaUp is name-keyed.
 //        A residual it cannot see: the namesake's file imports the bound definition's file for another reason while its
 //        parent is external and same-named — that one stays admitted (a hedge, never a proven edge).
-class NamesakeOwnerReach
+class NamesakeRule
 {
 public:
-    NamesakeOwnerReach( const IngestResult& ing, const Graph& g )
+    NamesakeRule( const IngestResult& ing, const Graph& g )
         : ing_( ing ), g_( g ) {}
     void add( const Symbol& s )
     {
-        owners_.try_emplace( keyOf( s ), char( 1 ) );
+        owners_.add( s );
     }
     // May caller c's call, bound by name alone to `bound`, run `namesake` instead? (rules 2b / 2c above)
     bool admits( NodeId caller, NodeId bound, NodeId namesake ) const
@@ -523,26 +544,18 @@ public:
             const bool          cFam = ns.lang == Lang::C || ns.lang == Lang::Cpp || ns.lang == Lang::ObjC;
             return from == ns.fileId || fileSees( from, ns.fileId, cFam );
         }
-        if( owners_.contains( keyOf( ns ) ) )
+        if( owners_.reaches( ns ) )
         {
             return true;
         }
-        const Symbol& bs = ing_.symbols[bound];
-        return !bs.scope.empty() && derivesFromName( classNameOf( ns.scope ), classNameOf( bs.scope ), g_.chaUp )
+        // chaUp is keyed by a class's final-segment name; a scope may be written qualified (`Outer::Inner`, `Outer.Inner`)
+        const auto    leaf = []( std::string_view scope ) { return namesplit::afterLast( namesplit::afterLast( scope, "::" ), "." ); };
+        const Symbol& bs   = ing_.symbols[bound];
+        return !bs.scope.empty() && derivesFromName( leaf( ns.scope ), leaf( bs.scope ), g_.chaUp )
                && ( ns.fileId == bs.fileId || fileSees( ns.fileId, bs.fileId, true ) );
     }
 
 private:
-    static std::string keyOf( const Symbol& s )
-    {
-        return std::to_string( s.fileId ) + "#" + s.scope;
-    }
-    // chaUp is keyed by a class's final-segment name; a scope may be written qualified (`Outer::Inner`, `Outer.Inner`)
-    static std::string_view classNameOf( std::string_view scope ) noexcept
-    {
-        const std::size_t at = scope.find_last_of( ".:" );
-        return at == std::string_view::npos ? scope : scope.substr( at + 1 );
-    }
     // does file `from` import file `to` — directly (the precise adjacency only), or (transitive) over any number of import
     // edges, where a Python file's FE-A directive files (the suffix match a src/ layout needs) count too? Memoized per `from`.
     bool fileSees( std::uint32_t from, std::uint32_t to, bool transitive ) const
@@ -595,7 +608,7 @@ private:
     }
     const IngestResult&                             ing_;
     const Graph&                                    g_;
-    HashMap<std::string, char>                      owners_;
+    NamesakeOwnerReach                              owners_;
     mutable std::vector<std::vector<std::uint32_t>> reach_;       // file → the files its imports reach (sorted), on first ask
     mutable std::vector<char>                       reachDone_;
 };
@@ -760,7 +773,7 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
     if( !g.outNameOnly.empty() )
     {
         EXPECTS( g.outNameOnly.size() == g.outTargets.size(), "buildGraph allocates the hedge bits one per flattened edge" );
-        NamesakeOwnerReach ownerReach( ing, g );   // K5 rule 2 (2b/2c): the owners the forward search reached
+        NamesakeRule ownerReach( ing, g );   // K5 rule 2 (2b/2c): the owners the forward search reached
         for( const NodeId v : forwardCone )
         {
             if( v < S )
@@ -1097,7 +1110,7 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
         }
     }
     const ByNameCallSites byNameSites( ing, {} );   // K5 rule 1: a namesake crossing needs a call of the name not builtin-spelled
-    NamesakeOwnerReach    ownerReach( ing, g );     // K5 rule 2 (2b/2c): the owners of every symbol layers 0..k reached
+    NamesakeRule          ownerReach( ing, g );     // K5 rule 2 (2b/2c): the owners of every symbol layers 0..k reached
     std::vector<NodeId> frontier;
     for( const NodeId s : srcDefs )
     {
