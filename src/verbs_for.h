@@ -648,7 +648,7 @@ using rw::deriveForConfidence;
 inline constexpr std::string_view kForCompactLegendRoot =
     "bundle=/bodies=/reason= the body posture; ";
 inline constexpr std::string_view kForCompactLegendRows =
-    "d: cx= ccx= complexity, in= callers (absent cx/ccx/in = 0), churn= amp= change, clone= tested= 1, sc= scope, id=p::sc::n, a member n=Owner.name; "
+    "d: cx= ccx= complexity, in= callers (absent cx/ccx/in = 0), churn= amp= change, clone= tested= 1, sc= scope, id=p::sc::n; "
     "total= shown= capped=1 if cut";
 // …and the same clause for a bundle whose served rows carry NO scope (a corpus of free functions, a markdown
 // tree): 22 B of sc= reading removed, nothing else. Two constants rather than one built at runtime because this

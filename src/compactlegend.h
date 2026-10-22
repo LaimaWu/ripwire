@@ -656,7 +656,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // row 6 (2026-09-12): the SHORT id on symbol rows. A map <s> row and a lens <d> row carry sc= (the enclosing
     // scope) instead of the path-repeating id=; the reading spells the composition once for every root that
     // prints the rows, since the shared purposes above only name the attribute.
-    { "sc",                "sc=: enclosing scope; the full id is p::sc::n (p= of the row or its <f>) and selectors take it; a <d> member row folds it, n=Owner.name (Owner::name C/C++/Rust/PHP, Owner#name Ruby)", true },
+    { "sc",                "sc=: enclosing scope; the full id is p::sc::n (p= of the row or its <f>) and selectors take it", true },
     { "parse_degraded",    "parse_degraded=1: ERROR nodes in that parse", true },
     { "tier_partial",      "tier_partial=1: tier elected under a partial classification" },
     { "dangling",          "dangling=1: matches nothing indexed", true },

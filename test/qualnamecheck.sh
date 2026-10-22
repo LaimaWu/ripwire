@@ -19,6 +19,7 @@
 #   (D) clickable: every qualified name printed in (A) resolves through --callers (defs>=1).
 #   (E) present-only legend: the member-owner clause rides a --callers answer with an owner, not one without.
 #   (F) JSON keys stable: --callers --json keeps "n" bare.
+#   (G) the composed id p::n of a folded row (path::Owner.name / path::Owner#name) resolves; a wrong owner does not.
 #
 # Usage: test/qualnamecheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -166,6 +167,14 @@ for pair in "py:Pattern.match_chunk" "go:Pattern.MatchChunk" "rs:Builder::build"
   out=$( run "$d" --callers="$q" ); defs=$( printf '%s' "$out" | grep -oE 'defs="[0-9]+"' | head -1 | grep -oE '[0-9]+' )
   if [ -n "$defs" ] && [ "$defs" -ge 1 ] 2>/dev/null; then ok "--callers=$q resolves (defs=$defs)"; else no "--callers=$q does not resolve"; fi
 done
+
+echo "(G) the composed id of a folded <d> row (p::n, sc= absent) resolves"
+for pair in "py:m.py::Pattern.match_chunk" "go:m.go::Pattern.MatchChunk" "rs:m.rs::Builder::build" "rb:m.rb::Application#run"; do
+  d="$TMP/${pair%%:*}"; q="${pair#*:}"
+  out=$( run "$d" --callers="$q" ); defs=$( printf '%s' "$out" | grep -oE 'defs="[0-9]+"' | head -1 | grep -oE '[0-9]+' )
+  if [ -n "$defs" ] && [ "$defs" -ge 1 ] 2>/dev/null; then ok "--callers=$q resolves (defs=$defs)"; else no "--callers=$q does not resolve"; fi
+done
+out=$( run "$TMP/py" --callers=m.py::Nope.match_chunk ); case "$out" in *'defs="'[1-9]*) no "a wrong owner resolves";; *) ok "a wrong owner in a composed id does not resolve";; esac
 
 echo "(E) present-only legend"
 f=$( cd "$TMP/py" && "$BIN" "$TMP/py" --no-cache --legend=full --callers=leaf_fn 2>/dev/null )
