@@ -26,13 +26,15 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   `request.js`'s `get method`, and a bundled Bootstrap `this.init( … )` reaching nunjucks' `Parser.init`). The one accepted
   site, flake8's `report()`, stays. 16 rows that already showed a value or declined site keep it and now also count a by-name way in.
 - A class method namesake is now also a way in when its class derives from the class of the definition the call was bound
-  to (by name, any depth), and its file imports that class's file (any depth; for Python, an import that resolves by package
-  name in a `src/` layout counts). This is override dispatch. A parent that is an external class of the same name
-  (`class Sub(ext.Base)`, `from ext import Base`) does not count. On the same draw this shows 6 sites, and a hand-check read
-  all 6 as correct: textual's `driver.start_application_mode()` / `stop_application_mode()` → `LinuxDriver`,
-  `widget.render_line( y )` → `TextArea`, and `node.compose()` → three `App` subclasses in examples. Like every by-name hedge,
-  each is a hedge and never a proven edge. The remaining blind spot: a file that imports the parent's module for some other
-  reason, while the parent it actually names is an external class of the same name.
+  to, at any depth, and every step of that derivation is bound in its own file: the base name a class writes resolves,
+  through that file's own declaration or its import of that name (a package re-export, and for Python a `src/` layout
+  import that resolves by package name, count), to the next class. This is override dispatch. A base clause that names a
+  different same-named class (one elsewhere in the tree, or an external one: `class Sub(ext.Base)`, `from ext import Base`)
+  does not count, however the file's other imports reach the parent's file; neither does a base no import binds. On the
+  same draw this shows 6 sites, and a hand-check read all 6 as correct: textual's `driver.start_application_mode()` /
+  `stop_application_mode()` → `LinuxDriver`, `widget.render_line( y )` → `TextArea`, and `node.compose()` → three `App`
+  subclasses in examples. Like every by-name hedge, each is a hedge and never a proven edge. What stays withheld: a base
+  the binding does not read (a dotted `a.b.Base`, a star import).
 
 ### Added — `--for` names the members of its shown owner rows on the compact route (`mem=`)
 

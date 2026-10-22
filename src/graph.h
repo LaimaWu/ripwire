@@ -146,13 +146,10 @@ struct Graph
     // class open), so their base stayed on the final-segment byName rule — resolve.h RubyBaseScopeDisclosure.
     // A whole-corpus gauge beside unindexedFiles, emitted as ruby_bases_unscoped= and ABSENT AT ZERO.
     std::size_t                rubyBasesUnscoped = 0;
-    // lane ind4b: two resolver tables kept past buildGraph for the by-name hedge rules (pathgaps.h NamesakeOwnerReach, K5
-    // rules 2b/2c) — the precise import adjacency (file → the files its imports resolve to, forCallNarrow) and the CHA-lite
-    // name graph (class name → its direct base names, sorted), plus FE-A's Python import-directive files. Moved in at the end of
-    // buildGraph; not cached.
+    // lane ind4b: the precise import adjacency (file → the files its imports resolve to, forCallNarrow), kept past buildGraph
+    // for the by-name hedge's rule 2b (pathgaps.h NamesakeRule). Moved in at the end of buildGraph; not cached. (Rule 2c
+    // reads implementors + implementorBound above: the per-file base binding.)
     std::vector<std::vector<std::uint32_t>> importAdj;
-    std::vector<std::vector<std::uint32_t>> pyImportFiles;   // FE-A's Python directive files (Step-A, else the suffix match: src/ layouts)
-    ChaUpNames                              chaUp;
     std::size_t                externalCalls = 0;   // Phase 5 (docs/EVALS.md "Phase 5"): call sites the external-name
                                                      // VETO refused — a bare name or receiver provably bound OUTSIDE the
                                                      // indexed tree (a builtin/stdlib name with no in-repo evidence, an
@@ -10087,9 +10084,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         g.priorWeight[ s.id ] = priorwt::weight( s.name, defCount );
     }
 
-    g.importAdj = std::move( includeAdj );   // last use: the by-name hedge rules read them from here (pathgaps.h, K5 2b/2c)
-    g.pyImportFiles = extVeto.importFiles;   // a copy: extVeto is const and Python-only (empty rows elsewhere)
-    g.chaUp     = std::move( chaUp );
+    g.importAdj = std::move( includeAdj );   // last use: the by-name hedge's rule 2b reads it from here (pathgaps.h NamesakeRule)
     return g;
 }
 

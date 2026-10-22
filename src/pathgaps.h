@@ -41,12 +41,13 @@
 #include "infra/sortutil.h"   // svLess: the explicit byte order every string_view sort here takes (portablebuildcheck #6)
 #include "infra/enumcount.h"  // enumCountIsExact — the kNearSinkKindCount / kBridgeViaCount sizes follow their enums
 #include "langfacts.h"         // langFacts(l).transitiveIncludes — the import rule's C-family closure (K5 rule 2b)
-#include "infra/namesplit.h"  // afterLast — a scope's final segment, the CHA name graph's key (K5 rule 2c)
+#include "infra/namesplit.h"  // afterLast — a bound scope's final segment, the base index key (K5 rule 2c)
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <span>
 #include <string>
@@ -519,13 +520,15 @@ private:
 //        longer admits one: a file the search touched is not evidence the caller can name its function (the koa accessor
 //        and nunjucks `this.init` sites the IND4 Stage-0 hand-check rejected).
 //   (2c) a CLASS-OWNED namesake is admitted when its class's owner is in reach (rule 2, unchanged) OR — override dispatch
-//        — its class derives, by name and transitively (resolve.h derivesFromName over Graph::chaUp, buildGraph's CHA
-//        name graph), from the class owning the definition the call was bound to, AND the namesake's file is that
-//        definition's file or reaches it over the import adjacency (any depth; a Python file's FE-A directive files count,
-//        so a src/ layout's `from pkg.driver import Driver` does). The import condition keeps a class whose
-//        parent is an EXTERNAL same-named class (`class Sub(ext.Base)`, `from ext import Base`) out: chaUp is name-keyed.
-//        A residual it cannot see: the namesake's file imports the bound definition's file for another reason while its
-//        parent is external and same-named — that one stays admitted (a hedge, never a proven edge).
+//        — its class derives from the class owning the definition the call was bound to through PROVEN base edges only
+//        (Graph::implementorBound == BaseBound::Proven, any depth): at every hop the deriving class's written base name is
+//        bound, in that class's own file, to the next class — a same-file declaration, the file its import of THAT name
+//        resolves to (Python FE-A memberImportFile, incl. a package re-export and the src/ layout suffix match; a JS/TS
+//        named import; a C-family include; the Java/Kotlin/Go package) — buildGraph's provenBasesOf, the one base resolver.
+//        A namesake whose base clause names another same-named class (in-tree elsewhere, or external: `ext.Base`,
+//        `from ext import Base`) has no proven edge to the bound class however its file's imports reach the bound file, and
+//        an edge no evidence binds (ByName) is withheld too: exact or no row. The residual is the binding's own: a
+//        qualified base the lookup does not read (a dotted `a.b.X`, a star import) stays withheld (withheld="name").
 class NamesakeRule
 {
 public:
@@ -548,16 +551,94 @@ public:
         {
             return true;
         }
-        // chaUp is keyed by a class's final-segment name; a scope may be written qualified (`Outer::Inner`, `Outer.Inner`)
-        const auto    leaf = []( std::string_view scope ) { return namesplit::afterLast( namesplit::afterLast( scope, "::" ), "." ); };
-        const Symbol& bs   = ing_.symbols[bound];
-        return !bs.scope.empty() && derivesFromName( leaf( ns.scope ), leaf( bs.scope ), g_.chaUp )
-               && ( ns.fileId == bs.fileId || fileSees( ns.fileId, bs.fileId, true ) );
+        const Symbol& bs = ing_.symbols[bound];
+        if( bs.scope.empty() )
+        {
+            return false;
+        }
+        const std::vector<NodeId>& below = provenBelow( bs );
+        return std::ranges::any_of( below, [ & ]( NodeId d ) { return ownsScope( ing_.symbols[d], ns.fileId, ns.scope ); } );
     }
 
 private:
-    // does file `from` import file `to` — directly (the precise adjacency only), or (transitive) over any number of import
-    // edges, where a Python file's FE-A directive files (the suffix match a src/ layout needs) count too? Memoized per `from`.
+    // is `cls` the class whose members carry `scope` in file `fileId`? scope ends with its name, and is either the class's
+    // own recorded scope (Python records a class under its own qualified name) or its scope, a separator, its name
+    static bool ownsScope( const Symbol& cls, std::uint32_t fileId, std::string_view scope ) noexcept
+    {
+        if( cls.fileId != fileId || !scope.ends_with( cls.name ) )
+        {
+            return false;
+        }
+        if( cls.scope == scope )
+        {
+            return true;
+        }
+        const std::string_view outer = scope.substr( 0, scope.size() - cls.name.size() );
+        if( outer.empty() )
+        {
+            return cls.scope.empty();
+        }
+        return ( outer.ends_with( "::" ) && outer.substr( 0, outer.size() - 2 ) == cls.scope )
+               || ( outer.ends_with( "." ) && outer.substr( 0, outer.size() - 1 ) == cls.scope );
+    }
+    static std::string fileNameKey( std::uint32_t fileId, std::string_view name )
+    {
+        std::string key = std::to_string( fileId );
+        key.push_back( '#' );
+        key.append( name );
+        return key;
+    }
+    // every class below the class owning `bs` over proven base edges (rule 2c), memoized per owner; the classes with a
+    // derived class are indexed by "<file>#<name>" on first ask (one pass over the implementors map)
+    const std::vector<NodeId>& provenBelow( const Symbol& bs ) const
+    {
+        const std::string ownerKey = fileNameKey( bs.fileId, bs.scope );
+        if( const auto it = below_.find( ownerKey ); it != below_.end() )
+        {
+            return it->second;
+        }
+        if( !basesIndexed_ )
+        {
+            basesIndexed_ = true;
+            for( NodeId b = 0; b < g_.implementors.size(); ++b )
+            {
+                if( !g_.implementors[b].empty() )
+                {
+                    basesByName_[ fileNameKey( ing_.symbols[b].fileId, ing_.symbols[b].name ) ].push_back( b );
+                }
+            }
+        }
+        std::vector<NodeId> out;
+        std::vector<NodeId> stack;
+        const std::string_view leaf = namesplit::afterLast( namesplit::afterLast( bs.scope, "::" ), "." );
+        if( const auto it = basesByName_.find( fileNameKey( bs.fileId, leaf ) ); it != basesByName_.end() )
+        {
+            std::ranges::copy_if( it->second, std::back_inserter( stack ), [ & ]( NodeId b ) { return ownsScope( ing_.symbols[b], bs.fileId, bs.scope ); } );
+        }
+        HashMap<NodeId, char> seen;
+        while( !stack.empty() )
+        {
+            const NodeId b = stack.back();
+            stack.pop_back();
+            if( b >= g_.implementors.size() || b >= g_.implementorBound.size() )
+            {
+                continue;
+            }
+            const std::vector<NodeId>&       kids  = g_.implementors[b];
+            const std::vector<std::uint8_t>& bound = g_.implementorBound[b];
+            for( std::size_t k = 0; k < kids.size() && k < bound.size(); ++k )
+            {
+                if( bound[k] == std::uint8_t( BaseBound::Proven ) && seen.try_emplace( kids[k], char( 1 ) ).second )
+                {
+                    out.push_back( kids[k] );
+                    stack.push_back( kids[k] );
+                }
+            }
+        }
+        return below_.try_emplace( ownerKey, std::move( out ) ).first->second;
+    }
+    // does file `from` import file `to` — directly (the precise adjacency only), or (transitive: a C-family #include
+    // closure) over any number of import edges? Memoized per `from`.
     bool fileSees( std::uint32_t from, std::uint32_t to, bool transitive ) const
     {
         const std::vector<std::vector<std::uint32_t>>& adj = g_.importAdj;
@@ -584,33 +665,28 @@ private:
             {
                 const std::uint32_t v = stack.back();
                 stack.pop_back();
-                const auto visit = [ & ]( std::span<const std::uint32_t> next )
+                for( const std::uint32_t w : adj[v] )
                 {
-                    for( const std::uint32_t w : next )
+                    if( w < adj.size() && seen[w] == 0 )
                     {
-                        if( w < adj.size() && seen[w] == 0 )
-                        {
-                            seen[w] = 1;
-                            stack.push_back( w );
-                            reach_[from].push_back( w );
-                        }
+                        seen[w] = 1;
+                        stack.push_back( w );
+                        reach_[from].push_back( w );
                     }
-                };
-                visit( adj[v] );
-                if( v < g_.pyImportFiles.size() )
-                {
-                    visit( g_.pyImportFiles[v] );   // a Python src/ layout import Step-A cannot place (FE-A's suffix match)
                 }
             }
             std::ranges::sort( reach_[from] );
         }
         return std::ranges::binary_search( reach_[from], to );
     }
-    const IngestResult&                             ing_;
-    const Graph&                                    g_;
-    NamesakeOwnerReach                              owners_;
-    mutable std::vector<std::vector<std::uint32_t>> reach_;       // file → the files its imports reach (sorted), on first ask
-    mutable std::vector<char>                       reachDone_;
+    const IngestResult&                                  ing_;
+    const Graph&                                         g_;
+    NamesakeOwnerReach                                   owners_;
+    mutable std::vector<std::vector<std::uint32_t>>      reach_;          // file → the files its #includes reach (sorted), on first ask
+    mutable std::vector<char>                            reachDone_;
+    mutable bool                                         basesIndexed_ = false;
+    mutable HashMap<std::string, std::vector<NodeId>>    basesByName_;    // "<file>#<class name>" → the classes with a derived class
+    mutable HashMap<std::string, std::vector<NodeId>>    below_;          // "<file>#<bound scope>" → the proven-derived classes
 };
 
 // Is site a preferred over site b for one row? met first, then kind (table order), then path, line, order.
@@ -904,7 +980,7 @@ inline constexpr std::string_view kNearSinkLegend =
     "it is stored or passed as a value (not by a wrapper decorator such as @property), through = a "
     "call through a parameter or slot is matched to that value, name = a by-name call went to a namesake and has no edge to it (a call "
     "not spelled like a builtin type's method; a row with no class needs the caller's file to be or import its file, a class method needs its class "
-    "to own something the forward search reached or to derive from the bound definition's class, in a file that imports that one), "
+    "to own something the forward search reached or to derive from the bound definition's class, each base bound by its file's import), "
     "closure = it is a named function written inside in='s body (site= its own definition: in= runs it or hands it on), "
     "external = none of those and no proven caller: no indexed way in was found (an entry point, an out-of-tree or framework caller, "
     "a hand-off the index does not record, or dead); withheld=name:N = N callers whose by-name calls reach this namesake "

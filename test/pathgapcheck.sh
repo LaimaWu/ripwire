@@ -69,6 +69,10 @@
 #        a Python src/ layout, whose import only FE-A's suffix match places);
 #        K11 a same-named method on an UNRELATED class (§(a) 11) and K12 a class whose parent is an EXTERNAL same-named
 #        class (`ext.Base`, `from ext import Base`: §(a) 2) stay withheld.
+#   (K13-K14) fix 1: 2c's derivation is bound per file — every hop a BaseBound::Proven implementors edge (the deriving
+#        class's base name bound by its own file's import of that name) — so K13 a same-named in-tree Base elsewhere, an
+#        external parent whose file reaches a.py transitively or directly, and an unrelated class whose file imports Base
+#        stay withheld (near_sink + bridge); K14 a package re-export (`from pkg.x import Base`) is a way in.
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -464,7 +468,7 @@ printf 'from tx.driver import Driver\n\ndef target():\n    return 2\n\nclass Lin
 printf 'from tx.driver import Driver\ndef run(driver):\n    return driver.stop_mode()\n' > "$TMP/c5_src/src/tx/app.py"
 # K9-K12 fixtures (rule 2c, Python): run(obj) in pkg/x/c.py calls obj.render_line(), bound by name alone to the imported
 # Base.render_line; other/b.py's Sub.render_line (calls target) is the namesake and nothing run reaches is owned by Sub.
-for v in der der2 unrel ext extbare; do d="$TMP/c5_$v"; mkdir -p "$d/pkg/x" "$d/other"
+for v in der der2 unrel ext extbare same exttr extdir selfnm unimp reexp; do d="$TMP/c5_$v"; mkdir -p "$d/pkg/x" "$d/other"
     printf 'class Base:\n    def render_line(self):\n        return 1\n' > "$d/pkg/x/a.py"
     printf 'from pkg.x.a import Base\ndef run(obj):\n    return obj.render_line()\n' > "$d/pkg/x/c.py"
     case "$v" in
@@ -473,6 +477,14 @@ for v in der der2 unrel ext extbare; do d="$TMP/c5_$v"; mkdir -p "$d/pkg/x" "$d/
         unrel)   hdr='';                             cls='class Sub:' ;;
         ext)     hdr='import ext\n';                cls='class Sub(ext.Base):' ;;
         extbare) hdr='from ext import Base\n';      cls='class Sub(Base):' ;;
+        same)    hdr='from pkg.y.base2 import Base\n'; cls='class Sub(Base):'; mkdir -p "$d/pkg/y"
+                 printf 'import pkg.x.a\n\nclass Base:\n    def other(self):\n        return 3\n' > "$d/pkg/y/base2.py" ;;
+        exttr)   hdr='import ext\nimport pkg.util\n'; cls='class Sub(ext.Base):'
+                 printf 'import pkg.x.a\n\ndef util():\n    return 4\n' > "$d/pkg/util.py" ;;
+        extdir)  hdr='import ext\nimport pkg.x.a\n';  cls='class Sub(ext.Base):' ;;
+        selfnm)  hdr='import ext\nimport pkg.x.a\n';  cls='class Base(ext.Base):' ;;
+        unimp)   hdr='from pkg.x.a import Base\n';  cls='class Sub:' ;;
+        reexp)   hdr='from pkg.x import Base\n';    cls='class Sub(Base):'; printf 'from .a import Base\n' > "$d/pkg/x/__init__.py" ;;
     esac
     printf "${hdr}\ndef target():\n    return 2\n\n${cls}\n    def render_line(self):\n        return target()\n" > "$d/other/b.py"
 done
@@ -914,6 +926,26 @@ for fx in ext extbare; do
         '<ns d="1" t="fn" n="render_line" p="other/b.py:7" withheld="name:1"/>'
     brArm "(K12b) §(a) 2 external parent ($fx): no namesake bridge to it either" "$TMP/c5_$fx" "run,target" ''
 done
+# K13-K15 (lane ind4b fix 1): 2c binds the base NAME per file (BaseBound::Proven at every hop), not a name graph plus file
+# reach. Each withheld arm's namesake file reaches pkg/x/a.py over its imports, so only the per-file binding withholds it.
+for fx in same:7 exttr:8 extdir:8 selfnm:8 unimp:7; do v=${fx%%:*}; ln=${fx##*:}
+    case "$v" in
+        same)   why="Sub's Base is pkg/y/base2.py's same-named class (base2.py itself imports pkg.x.a)" ;;
+        exttr)  why="Sub(ext.Base) is external; b.py reaches pkg/x/a.py only through pkg/util.py" ;;
+        extdir) why="Sub(ext.Base) is external though b.py imports pkg.x.a directly" ;;
+        selfnm) why="class Base(ext.Base) is external though b.py imports pkg.x.a directly" ;;
+        unimp)  why="b.py imports Base but its class Sub has no base (the derivation check alone withholds it)" ;;
+    esac
+    nsArm "(K13) 2c per-file base binding ($v): $why — withheld" "$TMP/c5_$v" "run,target" \
+        '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+        "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" withheld=\"name:1\"/>"
+    brArm "(K13b) 2c per-file base binding ($v): no namesake bridge to it either" "$TMP/c5_$v" "run,target" ''
+done
+nsArm "(K14) 2c package re-export: from pkg.x import Base binds pkg/x/__init__.py's re-export of a.Base — a way in" "$TMP/c5_reexp" "run,target" \
+    '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+    '<ns d="1" t="fn" n="render_line" p="other/b.py:7" why="name:1" in="run" site="pkg/x/c.py:3" met="1"/>'
+brArm "(K14b) 2c package re-export: the bridge crosses to the override" "$TMP/c5_reexp" "run,target" \
+    '<bridge proven="0" crossings="1" hops="2"><s t="fn" n="run" p="pkg/x/c.py:2"/><s t="fn" n="render_line" p="other/b.py:7" via="namesake" cands="1"/><s t="fn" n="target" p="other/b.py:3"/></bridge>'
 
 echo "(M) MCP path_between carries the same clause"
 # Two MCP legend postures (lean-answers): the unchanged assertions run on --mcp-legend=inline, the pre-posture spelling
