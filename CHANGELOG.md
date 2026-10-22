@@ -15,6 +15,7 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+- `--for` with a subject that names ONE function (the name-exact route) now also lists that function's callers: a `<callers of= shown= total= capped= next="--impact=…">` section after the file tail — the callers verb's rows with their call sites (`sites_at=`) and `via="name"` hedge, then up to four `d="2"` rows (callers of those callers), at most 16 first-hop rows with the rest counted. A change-propagation question no longer stops at the definition. Default regime and XML only (`--json`, `--token-budget=N`, `--signatures-only`, `--detail=N` unchanged); `RIPWIRE_NO_CALLER_HOP=1` turns it off. Measured on the 39 in-sample MF1-DEV rows: Rule C 5→6 complete, 10→8 missed, 0 rows lower; +0.5–1.3 KB per answer that carries it; the 163 non-sealed round-5 first calls are byte-identical.
 - `--quality-delta=A..B` extracts its per-commit archive through stdin (`tar -x -f -`), the same Windows drive-colon fix as #402 (thanks @lennix1337).
 
 ## [0.6.8] — 2026-10-19
