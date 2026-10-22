@@ -82,19 +82,24 @@ struct LangFacts
     /// --affected's class-new backstop (testmap.h classNewTestRows) reads a call to this method of a class as building it. Empty =
     /// the language constructs by calling the class (`new T(` JS/TS/Java/C#, `T(` Python/Kotlin/C++), which needs no column.
     std::string_view constructorMethod = {};
+
+    /// TypeScript / JavaScript: the leading name of a construction (`Eng` in `new Eng()`, `M` in `new M.Eng()`) is whatever an import
+    /// binds it to, so --affected's class-new row keeps its l= only when that binding lands on the reached class (testmap.h
+    /// classNewHedgeByBinding). The other languages resolve the written name through the call graph alone.
+    bool importBoundConstruction = false;
 };
 
 /// The rows, one per Lang in enum order. A language says only the facts it has.
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true },
     { .lang = Lang::Python },
-    { .lang = Lang::TypeScript, .overloadSignatures = true },
+    { .lang = Lang::TypeScript, .overloadSignatures = true, .importBoundConstruction = true },
     { .lang = Lang::Go },
     { .lang = Lang::Rust, .constructorMethod = "new" },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC },
     { .lang = Lang::Markdown },
-    { .lang = Lang::JavaScript },
+    { .lang = Lang::JavaScript, .importBoundConstruction = true },
     { .lang = Lang::Bash },
     { .lang = Lang::Java },
     { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true },

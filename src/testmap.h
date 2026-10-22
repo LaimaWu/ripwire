@@ -726,7 +726,7 @@ struct ClassNewSpelling
     // no identifier root (`new (f()).Eng()`) leads with " ", a name no binding has.
     static std::string bareName( const Reference& r )
     {
-        if( r.lang != Lang::TypeScript && r.lang != Lang::JavaScript )
+        if( !langFacts( r.lang ).importBoundConstruction )
         {
             return {};
         }
