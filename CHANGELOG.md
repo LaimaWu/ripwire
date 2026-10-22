@@ -34,7 +34,7 @@ one, so `mod tests { use super::*; }` never does, and a glob cycle ends with tha
 shadows that module's globs, as in Rust), an external crate, a `use` or glob re-export of one, an inline module's re-export of
 one, cfg-gated duplicate `use`s that all lead out — while a `T` the walk cannot follow (cfg-gated `use`s that disagree,
 an unparsed region of the file, a file outside every crate's module tree) keeps the earlier call-result rule; a re-export
-chain longer than the walk's depth cap is cut, and a cut is hedged, never proven onto an in-tree type. A generic result's head names its class. On
+chain longer than the walk's depth cap is cut, and a cut is hedged, never proven onto an in-tree type, whether it falls in a glob's chain or in the written path itself (an in-tree twin cut the same way is hedged too). A generic result's head names its class. On
 rust-lang/mdBook, `--callers=Book::iter` now lists `make_data` (`book: &Book`) and `MDBook::iter` (`self.book.iter()`)
 as plain edges. Stated floor (still declined or hedged): a generic bound `T: Trait`, `dyn` / `impl Trait` and a trait
 written as a type (which implementation runs is dispatch), a `type` alias, a glob of a module that only globs, a value behind `Option` / `Result` / `Rc` / `Arc` / `RefCell` /

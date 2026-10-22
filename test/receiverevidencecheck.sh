@@ -1732,6 +1732,12 @@ done
 for f in gshown.rs:gsho_top gshown.rs:gsho_in gdox4.rs:gdo4_bare; do
     proven  rsrecv callees "src/$f" "method as_os $NS:10"                                                      # [P]
 done
+# fc1 fix 4 (rv-fc1-delta3 E1): a named re-export chain longer than the depth cap, with NO glob in between, is cut in the TOP-LEVEL
+# walk (bare `use` and a written full path), and a cut is hedged, never proven onto the in-tree namesake [N]; [P] twin: a short chain in-tree
+for f in gctn.rs:gctn_bare gctq.rs:gctq_full; do
+    notproven rsrecv callees "src/$f" "as_os $NS:10"                                                           # [N]
+done
+proven      rsrecv callees "src/gcto.rs:gcto_bare" "method as_os $NS:10"                                      # [P]
 # guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
 proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
 

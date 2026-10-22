@@ -88,6 +88,9 @@ pub mod gcz4;
 pub mod gcz5;
 pub mod gczg;
 pub mod gczuse;
+pub mod gctn;
+pub mod gcto;
+pub mod gctq;
 @@@ rsrecv/src/model.rs
 // Book and Other both define spin / iter; Cfg and Knob both define tune: a call proves one only through its receiver's type.
 pub struct Book { pub items: Vec<u32> }
@@ -718,6 +721,16 @@ pub use crate::nsown::*;
 @@@ rsrecv/src/gczuse.rs
 use crate::gczg::*;
 pub fn gcz_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gctn.rs
+// rv-fc1-delta3 E1: the same 5-hop named chain with NO glob in between — the cut is in the top-level walk, and a cut is hedged [N]
+use crate::gcz1::OsString;
+pub fn gctn_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gcto.rs
+// [P] twin: a 2-hop named chain ending in the in-tree type stays proven
+use crate::gdo4::OsString;
+pub fn gcto_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gctq.rs
+pub fn gctq_full() -> u8 { let s = crate::gcz1::OsString::from("x"); s.as_os() }
 @@@ rsrecv/benches/nsb.rs
 // fc1: a file outside every crate's module tree (a bench target): its qualifier resolves nowhere, so the base rule holds
 use rsrecv::nsown::OsString;

@@ -2767,7 +2767,13 @@ struct ReceiverEvidence
         {
             return true;
         }
-        return rustQualifierClass( r, written ) == kNoNode && !types.rustPathOutside( r.fileId, r.startByte, written );
+        if( rustQualifierClass( r, written ) != kNoNode )
+        {
+            return false;
+        }
+        types.pathCut = false;   // the top-level walk's own cut: a cut walk is no proof that the path stays in the tree
+        const bool out = types.rustPathOutside( r.fileId, r.startByte, written );
+        return !out && !types.pathCut;
     }
     // rust-receivers: the ONE class `self` names inside `from` (or the method enclosing it): the in-tree class of the method's
     // owner name that owns the method (memberOwnerRuleOf — Rust: its own file and item scope, or the only class of the name);
