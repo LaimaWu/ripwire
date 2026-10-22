@@ -2528,14 +2528,14 @@ ForAutoBodiesResult buildForEnrichment( const rw::Config& cfg, const rw::IngestR
 
 // mf1-nx (forcallerhop.h): the ONE function whose callers ride — `nameExactBodies` is the posture runForLensPass knows (the auto
 // <bodies> bundle on the name-exact route); this adds the regime (XML, no explicit --token-budget, the A/B switch) and the target rule.
-inline std::vector<rw::NodeId> forCallerHopIds( const rw::Config& cfg, const rw::IngestResult& ing, const std::vector<rw::NodeId>& lensSurfaceIds,
+inline std::vector<rw::NodeId> forCallerHopIds( const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g, const std::vector<rw::NodeId>& lensSurfaceIds,
                                                 const std::vector<float>& lensRank, const std::vector<rw::RouteAnchorDef>& anchorDefs, bool nameExactBodies )
 {
     if( !nameExactBodies || cfg.json || cfg.tokenBudget > 0 || !rw::forCallerHopOn() )
     {
         return {};
     }
-    return rw::forCallerHopTargets( ing, computeAutoBodyCandidateIds( ing, lensSurfaceIds, lensRank, anchorDefs ) );
+    return rw::forCallerHopTargets( ing, g, computeAutoBodyCandidateIds( ing, lensSurfaceIds, lensRank, anchorDefs ) );
 }
 
 // DEEP-TAIL d2 — the XML tail render + its explicit-regime fill, a free function over runForLens' locals (that function
@@ -3140,7 +3140,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // clause reads it. The name-exact route's auto-bodies XML answer in the DEFAULT regime only, as the fold: an explicit
         // --token-budget is a size the caller named (that answer stays byte-identical), and autoBundleMode excludes --detail,
         // --signatures-only and --auto-bodies on the compact route (plan.autoBodies is the name-exact route's bundle).
-        const std::vector<rw::NodeId> callerHopIds = forCallerHopIds( cfg, ing, lensSurfaceIds, lensRank, routeAnchorDefs,
+        const std::vector<rw::NodeId> callerHopIds = forCallerHopIds( cfg, ing, g, lensSurfaceIds, lensRank, routeAnchorDefs,
                                                                       autoBundleMode && plan.autoBodies && isNameExactRouteTag( lr.routeTag ) );
         headerParts.callerHopPresent = !callerHopIds.empty();
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )

@@ -16,6 +16,9 @@ expand 541 542 455 --expand=billableTotal
 # differ by exactly the e= rows, 64 o200k). Other rows kept (pin.py re-measured them within 1-8% of their pins).
 for-named 1257 1250 1700 --for=billableTotal
 for-named-noe 1193 1185 1605 RIPWIRE_FOR_ENDLINES=never --for=billableTotal
+# for-named-nohop (mf1-nx fix round 1, rule 4 twin): RIPWIRE_NO_CALLER_HOP=1 keeps the pre-hop answer priced at its old pin (1031 o200k),
+# so the path the hop switches off stays pinned beside the one it moved.
+for-named-nohop 1031 1026 1392 RIPWIRE_NO_CALLER_HOP=1 --for=billableTotal
 # for-budgeted re-pinned 2026-10-14 (forbudget-soft: an explicit budget is a soft row target — the header is no longer shed to fit, measured with pin.py; other rows kept).
 # …and 2026-10-15 (round C: reserve sections first — the tail keeps its share and carries page rows with sym=; 855->982 o200k).
 for-budgeted 982 974 1376 --for=dedupe --token-budget=400

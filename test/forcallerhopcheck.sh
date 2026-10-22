@@ -23,6 +23,9 @@
 #   P7 [G] next= pasted lists every caller (the --impact answer names connect_client, run_client and main)
 #   N1 [G] no hop on a struct (ServerConfig), a variable (g_backlog_limit), a conceptual question
 #   N2 [G] no hop, byte-identical to RIPWIRE_NO_CALLER_HOP=1: --json, --signatures-only, --detail=1, --token-budget=3000
+#   F1 [P] fix round 1 (rv-mf1-nx B1/B2): no block on a C++ overload set, a method overload set, two same-named statics, a function
+#          beside a same-named struct; [G] a declared-and-defined function (recall control) keeps its block, total= = --callers
+#   B3 [P] a d="2" row carries via="name" when its own callers row does (Python driver(c): c.submit(None))
 #   X1 [G] determinism  X2 [G] xmllint well-formed  X3 [G] no "--" inside a legend comment
 #
 # Usage:  bash test/forcallerhopcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/forcallerhopcheck.sh
@@ -159,6 +162,45 @@ for extra in --json --signatures-only --detail=1 --token-budget=3000; do
     if [ -s "$TMP/n2.on" ] && cmp -s "$TMP/n2.on" "$TMP/n2.off" && ! grep -q '<callers \|"callers"' "$TMP/n2.on"; then ok "(N2) $extra: no hop, byte-identical"; else no "(N2) $extra: a hop rode or bytes moved"; fi
 done
 
+# ── FIX ROUND 1 (rv-mf1-nx B1-B3): exact or no row — the block fires only when the callers verb's own resolution of the name is
+#    ONE function (one def group, one kind). [P] arms are RED on df6952a7 (they printed a block the verb's rows contradict) ──────────────
+for case in "ovl:Emit:B1 a C++ free-function overload set (lg::Emit(int) + lg::Emit(const char*))" \
+            "ovlm:Draw:B1 a C++ method overload set (Shape::Draw() + Shape::Draw(int))" \
+            "cstatic:tidy_buffer:B2 two same-named statics in two files" \
+            "cvar:probe_stat:B2 a function beside a same-named struct (cross_kind)"; do
+    d="${case%%:*}"; rest="${case#*:}"; q="${rest%%:*}"; why="${rest#*:}"
+    run "test/forcallerhopfix/$d" --for="$q" >"$TMP/fx.$d"
+    if [ -s "$TMP/fx.$d" ] && grep -q "route=\"name-exact($q)" "$TMP/fx.$d"; then
+        ! grep -q '<callers ' "$TMP/fx.$d"; verdict $? "(F1:$d) $why: no <callers> block (the verb splits or hedges it)" "(F1:$d) $why: a <callers> block rode: [$( hop "$TMP/fx.$d" | head -c 300 )]"
+    else
+        no "(F1:$d-pre) --for=$q did not route name-exact — the fixture proves nothing"
+    fi
+done
+# the verb itself confirms each one is ambiguous (the arm's premise: --callers prints a def split or cross_kind)
+run "test/forcallerhopfix/ovl" --callers=Emit >"$TMP/c.ovl"
+grep -q 'of_def="' "$TMP/c.ovl"; verdict $? "(F1p:ovl) --callers=Emit splits the rows by def (of_def=)" "(F1p:ovl) --callers=Emit has no of_def= — the premise moved"
+run "test/forcallerhopfix/cvar" --callers=probe_stat >"$TMP/c.cvar"
+grep -q 'cross_kind=' "$TMP/c.cvar"; verdict $? "(F1p:cvar) --callers=probe_stat discloses cross_kind=" "(F1p:cvar) --callers=probe_stat has no cross_kind= — the premise moved"
+run "test/forcallerhopfix/cstatic" --callers=tidy_buffer >"$TMP/c.cstatic"
+grep -q 'defs="2" count="2"' "$TMP/c.cstatic"; verdict $? "(F1p:cstatic) --callers=tidy_buffer prints BOTH statics' callers (defs=2 count=2)" "(F1p:cstatic) --callers=tidy_buffer is no longer defs=2 count=2 — the premise moved"
+# recall control [G]: a function that is declared in a header and defined in a .cc (decl + def = ONE function) still gets the block,
+# and its counts are the callers verb's
+run "test/forcallerhopfix/ovl" --for=Flush >"$TMP/f1.on"
+HF="$( hop "$TMP/f1.on" )"
+case "$HF" in
+    '<callers of="lg::Flush" shown="1" total="1"'*'n="Done"'*) ok "(F1r) recall control: a declared-and-defined function (lg::Flush) keeps its block" ;;
+    *) no "(F1r) lg::Flush lost its block: [$HF]" ;;
+esac
+run "test/forcallerhopfix/ovl" --callers=Flush >"$TMP/f1.c"
+grep -q 'count="1"' "$TMP/f1.c" && grep -q 'n="Done"' "$TMP/f1.c"; verdict $? "(F1r2) the hop's total= equals what --callers=Flush prints (1: Done)" "(F1r2) --callers=Flush disagrees with the hop"
+# ── B3: the d=2 row carries the by-name hedge its own callers row carries ──────────────────────────────────────────────────────
+run "test/forcallerhopfix/d2via" --for=post_entry >"$TMP/b3"
+H3b="$( hop "$TMP/b3" )"
+printf '%s' "$H3b" | grep -q '<s t="fn" n="driver" p="m.py:11" d="2" via="name"/>'; verdict $? "(B3a) the d=2 row driver carries via=\"name\" (c.submit(None): receiver unproven)" "(B3a) the d=2 driver row has no via=name: [$H3b]"
+run "test/forcallerhopfix/d2via" --callers=Client::submit >"$TMP/b3c"
+grep -q 'n="driver"[^>]*via="name"' "$TMP/b3c"; verdict $? "(B3b) the callers verb's own row for that edge is via=\"name\" (the hop says what the verb says)" "(B3b) --callers=Client::submit does not hedge driver — the premise moved"
+printf '%s' "$H3b" | grep -q 'n="submit"[^>]*via=' ; [ $? -ne 0 ]; verdict $? "(B3c) the proven first-hop row (Client.submit -> post_entry, typed receiver) has no via=" "(B3c) the first-hop row Client.submit carries a hedge: [$H3b]"
+
 # ── X ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 python3 - "$TMP/p1" "$TMP/p4f" <<'PY'
 import re, sys
@@ -170,7 +212,7 @@ verdict $? "(X3) no -- inside a legend comment" "(X3) a legend comment holds --"
 run "$FC" --for=start_server >"$TMP/x2"
 cmp -s "$TMP/p1" "$TMP/x2"; verdict $? "(X1) deterministic" "(X1) two runs differ"
 if command -v xmllint >/dev/null 2>&1; then
-    for f in p1 p2 p3 p4f p8; do xmllint --noout "$TMP/$f" 2>/dev/null; verdict $? "(X2) well-formed: $f" "(X2) xmllint rejects $f"; done
+    for f in p1 p2 p3 p4f p8 b3 f1.on; do xmllint --noout "$TMP/$f" 2>/dev/null; verdict $? "(X2) well-formed: $f" "(X2) xmllint rejects $f"; done
 else
     printf '  SKIP  (X2) xmllint not installed\n'
 fi

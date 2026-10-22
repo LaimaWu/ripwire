@@ -16,10 +16,13 @@
 // kForCallerHopDepth2Rows). shown=/total= count the first hop, d2_shown=/d2= the second; capped="1" when either was cut, and
 // next= is the whole caller radius (--impact) either way. Counts are floors: resolved call edges only, as the callers verb says.
 //
-// WHEN. The name-exact route, the auto <bodies> bundle, and its anchor-restricted body candidates are ONE function: every
-// candidate a function or method with the same name and scope (a C++ declaration and its out-of-line definition are one
-// function). The DEFAULT regime and the XML dialect only, as the body fold: an explicit --token-budget, --json,
-// --signatures-only, --detail=N and every other route carry none (byte-identical to before). MCP for is not changed.
+// WHEN. The name-exact route, the auto <bodies> bundle, and the callers verb's OWN resolution of the name is ONE function: its
+// definitions (a C++ declaration and its out-of-line definition are one) fall in one def group, all functions or methods of one
+// kind, nothing unproven (forCallerHopTargets). A C++ overload set, a same-named static in two files, a function beside a
+// same-named struct and a name in two classes carry no block: the callers verb splits or hedges them (of_def=, cross_kind=), and
+// this element prints exactly what `--callers=NAME` prints or nothing. The second hop's rows carry the by-name hedge the callers
+// verb prints for them (via="name"). The DEFAULT regime and the XML dialect only, as the body fold: an explicit --token-budget,
+// --json, --signatures-only, --detail=N and every other route carry none (byte-identical to before). MCP for is not changed.
 // RIPWIRE_NO_CALLER_HOP (any value) turns it off — the A/B handle, the RIPWIRE_NO_BODY_FOLD precedent.
 
 #include "callhierarchy.h"   // oneHopCallerRows — the callers verb's rows; rowCallSites / callSitesAttrXml via editcheck.h
@@ -32,6 +35,7 @@
 #include "serialize.h"       // escapeXml
 #include "valuerefs.h"       // VrRender
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdlib>
 #include <span>
@@ -55,11 +59,18 @@ inline bool forCallerHopOn()
     return std::getenv( "RIPWIRE_NO_CALLER_HOP" ) == nullptr;
 }
 
-// The function the hop is about: the body candidates when they are ONE function — non-empty, every one a function or method
-// with the first one's name AND scope (the entity, not a namesake in another class) — else empty. The candidates are the
-// anchor-restricted auto-body head (verbs_for.h computeAutoBodyCandidateIds), so a name-exact answer bodying two different
-// symbols, or a class, a variable or a doc section, carries no hop.
-inline std::vector<NodeId> forCallerHopTargets( const IngestResult& ing, std::span<const NodeId> bodyCandidates )
+// The function the hop is about. Two readings must agree, and the hop fires only when both say ONE function:
+//   * the body candidates (verbs_for.h computeAutoBodyCandidateIds, the anchor-restricted auto-body head): non-empty, every one a
+//     function or method with the first one's name AND scope — a name-exact answer bodying two different symbols, a class, a
+//     variable or a doc section carries no hop;
+//   * THE CALLERS VERB'S OWN RESOLUTION of that name (callhierarchy.h callHierarchyRows: resolveAllByNameQualified, crossKindValue,
+//     defGroupsOf, attributeOneHopAnswer's silent-group drop): every definition the verb would union — not only the anchor's — is a function or method, none differs in kind
+//     (no cross_kind=), the resolver left no unproven residue, and they fall in exactly ONE def group (a definition with its tied
+//     declarations; the verb prints no <def> table and no of_def=). An overload set, two same-named statics in two files, a function
+//     beside a same-named struct, a name in two classes: the verb splits or hedges them, so the hop prints no row (fix round 1,
+//     rv-mf1-nx B1/B2: exact or no row).
+// The targets ARE the verb's matches, so total= and every row equal what `--callers=NAME` prints.
+inline std::vector<NodeId> forCallerHopTargets( const IngestResult& ing, const Graph& g, std::span<const NodeId> bodyCandidates )
 {
     if( bodyCandidates.empty() )
     {
@@ -74,7 +85,30 @@ inline std::vector<NodeId> forCallerHopTargets( const IngestResult& ing, std::sp
             return {};
         }
     }
-    return std::vector<NodeId>( bodyCandidates.begin(), bodyCandidates.end() );
+    std::size_t         unproven = 0;
+    std::vector<NodeId> matches  = resolveAllByNameQualified( ing, first.name, &unproven );
+    if( matches.empty() || unproven != 0 || !crossKindValue( ing, matches ).empty() )
+    {
+        return {};
+    }
+    for( const NodeId id : matches )
+    {
+        if( !ReceiverEvidence::callableKind( ing.symbols[id].kind ) )
+        {
+            return {};
+        }
+    }
+    for( const NodeId id : bodyCandidates )   // the anchor's own definitions are among the verb's (the hop is about THIS function)
+    {
+        if( std::find( matches.begin(), matches.end(), id ) == matches.end() )
+        {
+            return {};
+        }
+    }
+    // the verb's groups AFTER its silent-group drop (attributeOneHopAnswer): an out-of-line definition beside a local forward
+    // declaration no row ties to is ONE function (the verb prints no <def> table), not two
+    const std::vector<NodeId> rows = oneHopCallerRows( ing, g, matches );
+    return attributeOneHopAnswer( ing, g, matches, rows, /*towardMatches=*/true ).groups.size() == 1 ? matches : std::vector<NodeId>{};
 }
 
 // The hop's legend clauses, present-only beside the element: the full dialect's and the compact dialect's. No "--": they ride
@@ -168,6 +202,10 @@ inline CallerHopRender renderForCallerHop( const IngestResult& ing, const Graph&
     // the callers verb's per-row readings over the shown rows: the call sites (CALLSITE-AT) and the by-name hedge (FE-B)
     const RowCallSites       sites = rowCallSites( ing, targets, shown, VrRender{ !rootArg.empty(), rootArg }, g.keptForwards );
     const OneHopAttribution  attr  = attributeOneHopAnswer( ing, g, targets, shown, /*towardMatches=*/true );
+    // the second hop's by-name hedge, as the callers verb on the shown callers prints it (rv-mf1-nx B3): a d=2 row whose every edge
+    // into the shown callers is by name alone is receiver-unproven — via="name", exactly the row `--callers=<that caller>` carries
+    const std::span<const NodeId> secondShownRows = std::span<const NodeId>( second ).first( secondShown );
+    const OneHopAttribution       attr2 = secondShown == 0 ? OneHopAttribution{} : attributeOneHopAnswer( ing, g, shown, secondShownRows, /*towardMatches=*/true );
 
     const Symbol&     t   = ing.symbols[ targets.front() ];
     const std::string sel = t.scope.empty() ? t.name : t.scope + "::" + t.name;   // the callers verb's own qualified selector
@@ -193,7 +231,7 @@ inline CallerHopRender renderForCallerHop( const IngestResult& ing, const Graph&
     }
     for( std::size_t i = 0; i < secondShown; ++i )
     {
-        appendCallerHopRow( x, rc, second[i], " d=\"2\"" );
+        appendCallerHopRow( x, rc, second[i], std::string( " d=\"2\"" ) + viaNameAttr( attr2.nameOnly( i ) ) );
     }
     x += "</callers>";
     return out;
