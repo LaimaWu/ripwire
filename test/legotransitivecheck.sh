@@ -30,7 +30,9 @@
 #      `use ext::Base`, Java/Kotlin `import org.ext.Base` / `extends org.ext.Base`); a real in-tree implementor by bare,
 #      qualified, re-exported, relative, same-package or imported spelling stays; an undecided binding (a star or wildcard
 #      import), a workspace crate spelled with `_` for its `-` directory, and the tree's own package name keep their row.
-#      Red on 27eddee1 (every outside namesake listed). Corpus xp/{py,ts,js,rs,java,kt}.
+#      Red on 27eddee1 (every outside namesake listed). Corpus xp/{py,ts,js,rs,java,kt}. Fix round 1: a Cargo package/[lib] name
+#      (tests/, examples/, main.rs, a renamed workspace crate), the Node self-reference on a multi-root run, a root-is-the-package
+#      Python self import keep their row; a clause dropped for a DECIDED outside binding adds no implementors_floor.
 # (UW) fix 2 (rule 5): a DIRECT row whose own extends clause is not proven (a cross-package Java import, a Kotlin import, a C#
 #      using, an ES import of a CommonJS base) is not walked below, and the answer SAYS so: the row carries unwalked="1", the
 #      <iface> counts those rows transitive_unwalked=N and names the first one's --lego as unwalked_next=; a present-only
@@ -387,6 +389,37 @@ xp XpKBase  "XpKOutImport"                               "XpKInImport"
 # (`use xp_core::XpWsBase` beside crates/xp-core), and an import of the tree's OWN package name (Node self-reference)
 xp XpWsBase   "" "XpWsImpl"
 xp XpSelfBase "" "XpSelfUser"
+# fix round 1 (review B1): a crate's own name (`use xp_selfcrate::T` from tests/, examples/, src/main.rs beside the Cargo.toml
+# naming it xp-selfcrate) and a workspace crate whose Cargo name differs from its directory (crates/ren-dir = xp-renamed-core)
+# are IN the tree: every real implementor stays listed
+xp XpRsSelfBase "" "XpRsSelfMain XpRsSelfTest XpRsSelfExample"
+xp XpRenBase    "" "XpRenImpl"
+# (P1) a repo whose ROOT is the package (top-level __init__.py, no src/) importing its own name keeps its row; an outside
+# namesake beside it is still dropped
+if "$BIN" "$FIX/xp/pyflat" --no-cache --lego=XpFlatBase >"$DIR/out" 2>"$DIR/err"
+then
+    OUT="$( sed 's/></>\n</g' "$DIR/out" )"
+    if has '<impl n="XpFlatImpl"'; then ok "a root-is-the-package self import keeps XpFlatImpl"; else no "pyflat lost XpFlatImpl: $( iface )"; fi
+    if has '<impl n="XpFlatOut"'; then no "pyflat lists XpFlatOut, whose base is imported from extflat: $( iface )"; else ok "pyflat: no XpFlatOut (outside-bound base)"; fi
+else
+    no "pyflat run exited non-zero: $( head -3 "$DIR/err" )"
+fi
+# (B2) the Node self-reference on a MULTI-root run: the second root is not the package's, the labeled path is not on disk
+# (diskPath), and the row must stay
+if "$BIN" "$FIX/xp/jsself" "$FIX/xp/mrroot" --no-cache --lego=XpSelfBase >"$DIR/out" 2>"$DIR/err"
+then
+    OUT="$( sed 's/></>\n</g' "$DIR/out" )"
+    if has '<impl n="XpSelfUser"'; then ok "multi-root: the Node self-reference keeps XpSelfUser"; else no "multi-root lost XpSelfUser: $( iface )"; fi
+else
+    no "multi-root run exited non-zero: $( head -3 "$DIR/err" )"
+fi
+# (N1) a clause dropped because its import is DECIDED outside draws no implementors_floor (the floor says a clause bound
+# nowhere may be hiding an implementor; this one is accounted for)
+if lego XpRsBase
+then
+    if iface | grep -q 'implementors_floor'; then no "XpRsBase carries a floor for a decided-outside clause: $( iface )"; else ok "XpRsBase: no implementors_floor for the outside-bound XpRsOutUse"; fi
+    if has '<impl n="XpRsInUse"'; then ok "XpRsBase still lists XpRsInUse"; else no "XpRsBase lost XpRsInUse: $( iface )"; fi
+fi
 if lego py/xpkg/core.py:XpBase
 then
     if iface | grep -q 'implementors="6"'; then ok "implementors= counts the in-tree rows alone (five + XpShadowed, a same-file namesake's: card)"; else no "XpBase count: $( iface )"; fi

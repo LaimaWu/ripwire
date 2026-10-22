@@ -2192,7 +2192,7 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
     const std::string mcpLegoRootPrefix = flRootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( flRootArg );
     if( !legoStr.empty() && narrowLegoToRenderedSigs( ing, legoScoped, sigsRowsAtTarget( sigsStr, mcpSigsCut ), mcpLegoRootPrefix ) )   // forbudget-soft
     {
-        legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount, &implementors ); } );   // R-R: the re-render dropped the root its first render (above) passed
+        legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, LegoTargetedArgs().withDecidedOutside( in.g.baseOutsideClauses ), &legoPreCapCount, &implementors ); } );   // R-R: the re-render dropped the root its first render (above) passed
     }
     // R2-L2' (round-2, priced re-registration of L2/B1): the CLI twin's exact stub substitution
     // (verbs_for.h) — same rule, same restoring spelling (kept as the CLI flag form: this dialect's next=
@@ -2778,7 +2778,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // L2 (round-1 lever B1): each renderer's OWN pre-cap row count, captured by the SAME call that renders
     // the real body — see verbs_for.h's identical CLI-twin comment for the full rationale.
     std::size_t legoPreCapCount = 0, composePreCapCount = 0;
-    std::string legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount, &ix.g.implementors ); } );
+    std::string legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, LegoTargetedArgs().withDecidedOutside( ix.g.baseOutsideClauses ), &legoPreCapCount, &ix.g.implementors ); } );
     std::string composeStr, routeStr;
     if( !ix.g.composeEdges.empty() )
     {
@@ -2893,12 +2893,12 @@ inline std::string legoText( const std::string& root, const std::string& type, R
         // clause rides as its own comment beside the closed literal, exactly as on the CLI.
         rw::emitTo( mem, "<ctx>{}{}{}{}{}", kLegoLegend, graphUnindexedLegendComment( rw::graphGaugeClauses( ix.g ) ).c_str(),
                     unprovenDefsVerbComment( UnprovenDefsVerb::Lego, unprovenDefs > 0, "<!-- ripwire lego: " ).c_str(),
-                    implementorsFloorLegendComment( ing, ix.g.implementors, focus ),   // count-floor: the CLI twin's clause
+                    implementorsFloorLegendComment( ing, ix.g.implementors, focus, ix.g.baseOutsideClauses ),   // count-floor: the CLI twin's clause
                     legoClosureLegendComment( ix.g.implementors, ix.g.implementorBound, focus ).c_str() );   // lane lego-transitive: the deeper rows' clause, as on the CLI
         const std::string legoTargetedAttr = unprovenDefsAttrXml( unprovenDefs ) + graphCountFloorAttrXml( ix.g );   // outlives the call
         packLego( mem, ing, ix.g.implementors, flat, 1, redact, &impure, focus, /*withPaths=*/true,
                   ing.realPaths.empty() ? std::string_view( root ) : std::string_view(),    // R-R: root-relative <iface p=>
-                  LegoTargetedArgs( legoTargetedAttr, page.limit, page.offset, &ix.g.implementorBound ).withMainRows( ix.g.rubyMainMixins ) );   // H1 + M15 + the deeper-row page, as on the CLI
+                  LegoTargetedArgs( legoTargetedAttr, page.limit, page.offset, &ix.g.implementorBound ).withMainRows( ix.g.rubyMainMixins ).withDecidedOutside( ix.g.baseOutsideClauses ) );   // H1 + M15 + the deeper-row page, as on the CLI
         rw::emitRaw( mem, "</ctx>" );
     } );
 }

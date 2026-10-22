@@ -3279,7 +3279,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // tally). Overwritten below if the §P3×§P4 narrow-and-re-render fires, so it always reflects the set
         // that would actually be restored.
         std::size_t legoPreCapCount = 0, composePreCapCount = 0;
-        legoPreRendered = preRender( [ & ]( std::FILE* lm ) { packLego( lm, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount, &g.implementors ); },
+        legoPreRendered = preRender( [ & ]( std::FILE* lm ) { packLego( lm, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, rw::LegoTargetedArgs().withDecidedOutside( g.baseOutsideClauses ), &legoPreCapCount, &g.implementors ); },
                                      legoStr );
         if( !legoPreRendered )
         {
@@ -3667,7 +3667,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             && narrowLegoToRenderedSigs( ing, legoScoped, rw::sigsRowsAtTarget( sigsStr, forSigsCut ),   // forbudget-soft: scoped at the target
                                          flRootArg.empty() ? std::string_view() : rw::sarif::rootPrefixOf( flRootArg ) ) )
         {
-            legoStr = captureXml( [ & ]( std::FILE* f ) { packLego( f, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount, &g.implementors ); } );
+            legoStr = captureXml( [ & ]( std::FILE* f ) { packLego( f, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, rw::LegoTargetedArgs().withDecidedOutside( g.baseOutsideClauses ), &legoPreCapCount, &g.implementors ); } );
         }
 
         // L2 (round-1 lever B1, §9.3 disclosed cut): collapse <lego>/<compose> to a counted stub BY DEFAULT —
@@ -4066,7 +4066,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             // the same bytes --sections=lego would restore. Same scope+identity (§P3; un-narrowed — the sigs
             // bytes are unknown here). legoStubTotal == 0 emits nothing, packLego's own no-op.
             ASSUME( !legoWillStub, "runForLens: an unmeasured lego section was marked for collapse" );
-            packLego( stdout, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, {}, nullptr, &g.implementors );
+            packLego( stdout, ing, legoScoped, lensRank, 12, redactPtr, impurePtr, kNoNode, /*withPaths=*/true, flRootArg, rw::LegoTargetedArgs().withDecidedOutside( g.baseOutsideClauses ), nullptr, &g.implementors );
         }
         if( composePreRendered )
         {
@@ -4194,11 +4194,11 @@ std::optional<int> runTargetedViews( const MainDispatch& d )
         rw::emitTo( stdout, "{}{}{}{}{}{}", rw::ctxRootOpen( {}, {}, tvRootArg ).c_str(), rw::kLegoLegend,
                      rw::graphUnindexedLegendComment( rw::graphGaugeClauses( g ) ).c_str(),
                      rw::unprovenDefsVerbComment( rw::UnprovenDefsVerb::Lego, legoUnprovenDefs > 0, "<!-- ripwire lego: " ).c_str(),
-                     rw::implementorsFloorLegendComment( ing, g.implementors, focus ),   // count-floor: present-only, as the two above
+                     rw::implementorsFloorLegendComment( ing, g.implementors, focus, g.baseOutsideClauses ),   // count-floor: present-only, as the two above
                      rw::legoClosureLegendComment( g.implementors, g.implementorBound, focus ).c_str() );   // lane lego-transitive: present-only, the deeper rows
         const std::string legoTargetedAttr = rw::unprovenDefsAttrXml( legoUnprovenDefs ) + rw::graphCountFloorAttrXml( g );   // outlives the call
         packLego( stdout, ing, g.implementors, flat, 1, d.redactPtr, &legoImpure, focus, /*withPaths=*/true, tvRootArg,
-                  rw::LegoTargetedArgs( legoTargetedAttr, cfg.pageLimit, cfg.pageOffset, &g.implementorBound ).withMainRows( g.rubyMainMixins ) );   // H1 + M15: residue, gauge, marker; the deeper-row page
+                  rw::LegoTargetedArgs( legoTargetedAttr, cfg.pageLimit, cfg.pageOffset, &g.implementorBound ).withMainRows( g.rubyMainMixins ).withDecidedOutside( g.baseOutsideClauses ) );   // H1 + M15: residue, gauge, marker; the deeper-row page
         rw::emitRaw( stdout, "</ctx>" );
         reportRedactions( stderr, d.redactCounts );      // W3-N1: a contract <m> sig is a redacting seam — disclose the tally
         return 0;

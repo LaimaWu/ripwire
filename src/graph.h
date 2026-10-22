@@ -91,6 +91,10 @@ struct Graph
     // lane lego-transitive fix 1: parallel to implementors — how each base→derived edge was BOUND (BaseBound). The direct rows
     // and every other reader keep reading implementors alone; only the --lego closure (legoImplementorClosure) walks this.
     std::vector<std::vector<std::uint8_t>> implementorBound;
+    // lane fc2-lego-extparent: the ascending IngestResult::references indices of the extends/implements clauses the file's own
+    // import binds OUTSIDE the tree (baseBoundOutsideTree) — drawn no edge, and DECIDED, so --lego's implementors_floor does not
+    // count them as a clause bound nowhere (countfloor.h implementorFloors).
+    std::vector<std::uint32_t> baseOutsideClauses;
     // lane ruby-pair: the Ruby main object as an implementor — each top-level `include M` / `extend M` whose constant the
     // tree opens (rubyMainObjectMixins), sorted by (base, fileId, line). Not in `implementors`: main is no symbol, so the
     // graph's class readers (closure, CHA, ranks) never see it; only --lego's targeted answer lists it.
@@ -6100,9 +6104,78 @@ inline HashMap<std::string, char> rustModuleNames( const IngestResult& ing )
     return names;
 }
 
+// Every `name = "x"` line of a TOML text's `[section]` tables listed in `sections`, appended to `out` (a bare line scan: a
+// dotted key, an inline table or a multi-line string is not read, which can only miss a name, never invent one).
+inline void tomlSectionNames( std::string_view text, std::initializer_list<std::string_view> sections, std::vector<std::string>& out )
+{
+    bool inSection = false;
+    while( !text.empty() )
+    {
+        const std::size_t end  = text.find( '\n' );
+        std::string_view  line = text.substr( 0, end );
+        text = end == std::string_view::npos ? std::string_view() : text.substr( end + 1 );
+        line.remove_prefix( std::min( line.find_first_not_of( " \t\r" ), line.size() ) );
+        if( line.starts_with( '[' ) )
+        {
+            inSection = std::ranges::any_of( sections, [ & ]( std::string_view h ) { return line.starts_with( h ); } );
+            continue;
+        }
+        if( !inSection || !line.starts_with( "name" ) )
+        {
+            continue;
+        }
+        line.remove_prefix( 4 );
+        line.remove_prefix( std::min( line.find_first_not_of( " \t" ), line.size() ) );
+        if( !line.starts_with( '=' ) )
+        {
+            continue;
+        }
+        line.remove_prefix( 1 );
+        line.remove_prefix( std::min( line.find_first_not_of( " \t" ), line.size() ) );
+        if( line.size() < 2 || ( line.front() != '"' && line.front() != '\'' ) )
+        {
+            continue;
+        }
+        const std::size_t close = line.find( line.front(), 1 );
+        if( close != std::string_view::npos && close > 1 )
+        {
+            out.emplace_back( line.substr( 1, close - 1 ) );
+        }
+    }
+}
+
+// The crate names this tree's Cargo.toml files declare, spelled the way a `use` writes them (`foo-core` -> `foo_core`): each
+// manifest's `[package] name` and `[lib] name`. A crate's own name is no path segment of any .rs file, yet `use mycrate::T` in
+// its tests/, examples/, benches/ and src/main.rs names the crate itself, and a workspace crate's package name need not be its
+// directory's. Read through diskPath (the multi-root seam).
+inline HashMap<std::string, char> cargoCrateNames( const IngestResult& ing )
+{
+    HashMap<std::string, char> names;
+    std::vector<std::string>   found;
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        const std::string_view rel = rootRelPath( ing, f );
+        if( rel != "Cargo.toml" && !rel.ends_with( "/Cargo.toml" ) )
+        {
+            continue;
+        }
+        if( const std::optional<std::string> text = docparse::detail::readWholeFile( diskPath( ing, f ) ) )
+        {
+            tomlSectionNames( *text, { "[package]", "[lib]" }, found );
+        }
+    }
+    for( std::string& name : found )
+    {
+        std::replace( name.begin(), name.end(), '-', '_' );
+        names.try_emplace( std::move( name ), char( 1 ) );
+    }
+    return names;
+}
+
 // Rust: `use a::b::c;` whose first segment is not crate/self/super/a module of this tree names an outside item `c`, into
 // `out` ("<fileId>#c"). `crateDirAware` (lane fc2-lego-extparent's base clause reader) also reads a head spelled with `_` as the
-// workspace crate directory spelled with `-` (`use nu_glob::X` beside crates/nu-glob): such a head is in the tree, not outside.
+// workspace crate directory spelled with `-` (`use nu_glob::X` beside crates/nu-glob), and a head that is a Cargo package or
+// [lib] name of this tree (`use mycrate::X` from its tests/): such a head is in the tree, not outside.
 // FE-A's own table keeps the plain rule (crateDirAware false), so the call edges stay as they were.
 inline void rustOutsideUses( const IngestResult& ing, bool crateDirAware, HashMap<std::string, char>& out )
 {
@@ -6112,6 +6185,7 @@ inline void rustOutsideUses( const IngestResult& ing, bool crateDirAware, HashMa
         return;   // no Rust in the tree
     }
     std::string dashed;
+    const HashMap<std::string, char> cargoNames = crateDirAware ? cargoCrateNames( ing ) : HashMap<std::string, char>{};
     for( const Include& inc : ing.includes )
     {
         const std::string_view path = inc.target;
@@ -6128,6 +6202,10 @@ inline void rustOutsideUses( const IngestResult& ing, bool crateDirAware, HashMa
         if( head == "crate" || head == "self" || head == "super" || modules.contains( std::string( head ) ) )
         {
             continue;
+        }
+        if( crateDirAware && cargoNames.contains( std::string( head ) ) )
+        {
+            continue;   // a crate this tree's Cargo.toml names (its own, or a workspace member under another directory)
         }
         if( crateDirAware && head.find( '_' ) != std::string_view::npos )
         {
@@ -6228,7 +6306,7 @@ struct BaseEvidenceTables
     const std::vector<std::uint32_t>&       fileDir;       // file → interned directory id
     const ReceiverEvidence*                 recvEv;        // JS/TS: a CommonJS require alias's module (moduleNames)
     const HashMap<std::string, char>*       rustOutsideUse;   // Rust: "<fileId>#X" a `use` of an outside path binds (crate-dir aware)
-    const HashMap<std::string, char>*       jsSelfImport;     // JS/TS: "<fileId>#X" an import of the tree's OWN package name binds
+    const HashMap<std::string, char>*       selfImport;       // JS/TS, Python: "<fileId>#X" an import of the tree's OWN package name binds
 };
 
 // JS/TS (lane fc2-lego-extparent): "<fileId>#var" for every ES import / module alias whose bare specifier names a package
@@ -6239,11 +6317,11 @@ inline HashMap<std::string, char> jsSelfPackageImports( const IngestResult& ing 
     HashMap<std::string, char> names;
     for( std::uint32_t f = 0; f < ing.files.size(); ++f )
     {
-        const std::string_view path = ing.files[ f ];
+        const std::string_view path = rootRelPath( ing, f );
         if( path == "package.json" || path.ends_with( "/package.json" ) )
         {
             tsimport::JsonNode pj;
-            const tsimport::JsonNode* name = tsimport::parseJsonObject( readConfigBytes( std::string( path ) ), pj ) ? pj.get( "name" ) : nullptr;
+            const tsimport::JsonNode* name = tsimport::parseJsonObject( readConfigBytes( diskPath( ing, f ) ), pj ) ? pj.get( "name" ) : nullptr;
             if( name != nullptr && name->kind == tsimport::JsonNode::Kind::Str && !name->str.empty() )
             {
                 names.try_emplace( name->str, char( 1 ) );
@@ -6259,6 +6337,66 @@ inline HashMap<std::string, char> jsSelfPackageImports( const IngestResult& ing 
     {
         if( ( b.kind == LocalBindKind::JsImport || b.kind == LocalBindKind::ModuleAlias ) && !b.var.empty() && !b.typeName.empty()
             && names.contains( std::string( tsimport::splitPackageSpecifier( b.typeName ).first ) ) )
+        {
+            out.try_emplace( jsImportKey( b.fileId, b.var ), char( 1 ) );
+        }
+    }
+    return out;
+}
+
+// Python (lane fc2-lego-extparent, fix round 1): "<fileId>#var" for every import whose first segment is the name of a package
+// whose root IS this tree's root — a top-level __init__.py, so the crawl root's own directory name, or the root pyproject.toml's
+// `[project] name`, is a module of the tree that no path inside it spells (`from mypkg.base import Base` in mypkg/sub.py,
+// crawled as `ripwire mypkg`). The Phase-5 import table reads such a head as outside; the clause can mean the in-tree class.
+inline HashMap<std::string, char> pythonRootPackageImports( const IngestResult& ing )
+{
+    HashMap<std::string, char> out;
+    if( ing.crawlRoot.empty() )
+    {
+        return out;   // a multi-root run has no one package root
+    }
+    std::uint32_t initFile = kNoFile;
+    std::uint32_t pyproject = kNoFile;
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        const std::string_view rel = rootRelPath( ing, f );
+        if( rel == "__init__.py" )
+        {
+            initFile = f;
+        }
+        else if( rel == "pyproject.toml" )
+        {
+            pyproject = f;
+        }
+    }
+    if( initFile == kNoFile )
+    {
+        return out;
+    }
+    std::vector<std::string> found;
+    std::error_code          ec;
+    const std::filesystem::path root = std::filesystem::absolute( ing.crawlRoot, ec ).lexically_normal();
+    found.push_back( ( root.has_filename() ? root : root.parent_path() ).filename().string() );
+    if( pyproject != kNoFile )
+    {
+        if( const std::optional<std::string> text = docparse::detail::readWholeFile( diskPath( ing, pyproject ) ) )
+        {
+            tomlSectionNames( *text, { "[project]" }, found );
+        }
+    }
+    HashMap<std::string, char> names;
+    for( std::string& name : found )
+    {
+        std::replace( name.begin(), name.end(), '-', '_' );
+        if( !name.empty() )
+        {
+            names.try_emplace( std::move( name ), char( 1 ) );
+        }
+    }
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind == LocalBindKind::Import && !b.var.empty() && !b.typeName.empty() && b.typeName.front() != '.'
+            && names.contains( std::string( std::string_view( b.typeName ).substr( 0, b.typeName.find( '.' ) ) ) ) )
         {
             out.try_emplace( jsImportKey( b.fileId, b.var ), char( 1 ) );
         }
@@ -6529,6 +6667,10 @@ inline bool baseBoundOutsideTree( const BaseEvidenceTables& t, const Reference& 
     const std::string_view qual = r.memberRoot;
     const std::string_view root = qual.empty() ? std::string_view( r.calleeName ) : qual.substr( 0, qual.find( '.' ) );
     std::string            key;
+    if( t.selfImport != nullptr && t.selfImport->contains( fileNameKey( key, r.fileId, root ) ) )
+    {
+        return false;   // the tree's own package name (Node self-reference, a root-is-the-package Python import): it may land on the in-tree class
+    }
     switch( langFacts( r.lang ).baseImportEvidence )
     {
         case BaseImportEvidence::PythonImport:
@@ -6538,10 +6680,6 @@ inline bool baseBoundOutsideTree( const BaseEvidenceTables& t, const Reference& 
         }
         case BaseImportEvidence::JsImport:
         {
-            if( t.jsSelfImport != nullptr && t.jsSelfImport->contains( fileNameKey( key, r.fileId, root ) ) )
-            {
-                return false;   // the tree's own package name: the import may land on the in-tree class
-            }
             if( qual.empty() )
             {
                 const auto pin = t.jsImports.targets.find( jsImportKey( r.fileId, root ) );
@@ -9945,8 +10083,12 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     {
         rustOutsideUses( ing, /*crateDirAware=*/true, rustOutsideBase );
     }
-    const HashMap<std::string, char> jsSelfImport = jsImports.targets.empty() ? HashMap<std::string, char>{} : jsSelfPackageImports( ing );
-    const BaseEvidenceTables baseEvidence{ ing, extVeto, jsImports, fileIncludes, includeAdj, fileDir, &recvEv, &rustOutsideBase, &jsSelfImport };
+    HashMap<std::string, char> selfImport = jsImports.targets.empty() ? HashMap<std::string, char>{} : jsSelfPackageImports( ing );
+    for( auto& [ k, v ] : pythonRootPackageImports( ing ) )
+    {
+        selfImport.try_emplace( k, v );
+    }
+    const BaseEvidenceTables baseEvidence{ ing, extVeto, jsImports, fileIncludes, includeAdj, fileDir, &recvEv, &rustOutsideBase, &selfImport };
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/5: inheritance edges" );
     for( const Reference& r : ing.references )
@@ -9979,8 +10121,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 { derived = cand; break; }              // ids are ascending → lowest-id match (deterministic)
             }
         }
-        if( derived == kNoNode || baseBoundOutsideTree( baseEvidence, r ) )
+        if( derived == kNoNode )
         {
+            continue;
+        }
+        if( baseBoundOutsideTree( baseEvidence, r ) )
+        {
+            g.baseOutsideClauses.push_back( std::uint32_t( &r - ing.references.data() ) );
             continue;   // fc2-lego-extparent: the file's own import binds the written base outside the tree — no in-tree base
         }
         if( ing.symbols[ derived ].lang == Lang::Ruby )
