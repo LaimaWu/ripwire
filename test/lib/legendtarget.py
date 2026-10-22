@@ -4,21 +4,27 @@
 # (compactlegendcheck (U)/(L)/(M), graphlegendbudgetcheck, donelegendcheck, testgatelegendbudgetcheck, panellegendcheck);
 # they share THIS verdict so the rule lives in one place (CHECKLIST 32), not five copies.
 #
-#   verdict ID MEASURED TARGET GMEASURED GUARD MODE REGISTRY DOC...   -> first line: a status word, then detail lines
+#   verdict ID MEASURED TARGET GMEASURED GUARD MODE REGISTRY DOC...   -> detail lines first, then the VERDICT as the LAST line
+#                                                                      (a status word, then its message; the verdict is never followed by detail)
 #       WITHIN      MEASURED <= TARGET (a smaller measure never fails)
 #       EXPLAINED   MEASURED > TARGET and every excess byte is covered by registered PRESENT-ONLY clauses that ride
 #       UNEXPLAINED MEASURED > TARGET and the registered riding clauses do not cover it (or none is registered)
+#       OVERCLAIM   a registered clause claims more bytes than it renders (by > CLAIM_SLACK B): the registry is not trusted
 #       NOTPRESENT  a registered clause rides while its attribute is not rendered: it is not present-only, so it explains nothing
 #       STRICT      MODE=strict and MEASURED > TARGET: today's hard pin, the registry is not read (the rule 4 twin)
 #       RUNAWAY     GMEASURED > GUARD: the hard ceiling well above typical; a bug signal, with the clause breakdown
-#       BADINPUT    a number is missing/non-numeric, the registry is malformed, or a DOC is unreadable
+#       BADINPUT    a number is missing/non-numeric, the registry is malformed, or a DOC is unreadable; also a 0 B measure or an
+#                   answer with no legend comment at all (a vacuous size row never passes), unless the surface is named in
+#                   LT_ALLOW_ZERO (space-separated ids; set by the gate after sourcing legendtarget.sh, which clears any inherited value)
 #   validate REGISTRY                                                  -> "OK n" or "BAD reason"
 #
 # A clause RIDES when its marker (a verbatim substring of the clause) occurs in the answer's legend (every <!-- --> outside
 # CDATA); it is PRESENT-ONLY on that answer when its attribute token (e.g. ` sites_at="`, `<near_sink`) occurs in the payload
 # (everything else). Registry: test/legend_over_target.tsv, tab-separated, `#` lines are comments:
 #   surface  clause  bytes  attr  marker  reason
-import re, sys
+import os, re, sys
+
+CLAIM_SLACK = 24   # B: a registered clause may claim up to this many bytes more than the legend renders (separators, a trailing space)
 
 COLS = ( "surface", "clause", "bytes", "attr", "marker", "reason" )
 
@@ -63,6 +69,19 @@ def breakdown( leg, top = 6 ):
     return [ "  clause %5d B  %s" % ( len( p.encode() ), re.sub( r"\s+", " ", p )[ :72 ] ) for p in parts[ :top ] ]
 
 
+def clause_bytes( leg, marker ):
+    # the bytes the clause holding MARKER actually renders: from its start ("[", "<!--" or just after " | ") to the next such start or the comment end "-->";
+    # -1 when the marker is not in the legend
+    i = leg.find( marker )
+    if i < 0: return -1
+    starts = [ 0 ]; ends = [ len( leg ) ]
+    for m in re.finditer( r"\[|<!--|-->| \| ", leg ):
+        st = m.end() if m.group() == " | " else m.start()
+        if st <= i: starts.append( st )
+        elif st > i: ends.append( st )
+    return len( leg[ max( starts ):min( ends ) ].rstrip().encode() )
+
+
 def isnum( s ): return re.fullmatch( r"[0-9]+", s or "" ) is not None
 
 
@@ -78,9 +97,16 @@ def verdict( a ):
         try: l, p = split( open( d, encoding = "utf-8", errors = "replace" ).read() )
         except OSError as e: print( "BADINPUT cannot read %s: %s" % ( d, e.strerror ) ); return
         leg += l; pay += p
+    if sid not in os.environ.get( "LT_ALLOW_ZERO", "" ).split():
+        if meas == 0 or gmeas == 0:
+            print( "BADINPUT %s measured %d B (guard measure %d B): a 0 B legend is a vacuous size row, not a pass "
+                   "(a surface that really has none must be named in LT_ALLOW_ZERO)" % ( sid, meas, gmeas ) ); return
+        if docs and "<!--" not in leg:
+            print( "BADINPUT %s: the answer carries no legend comment (<!--), so its size row measured nothing "
+                   "(a surface that really has none must be named in LT_ALLOW_ZERO)" % sid ); return
     if gmeas > guard:
-        print( "RUNAWAY %s legend %d B > runaway guard %d B (target %d B): a bug signal (a present-only builder loop or an unbounded clause)" % ( sid, gmeas, guard, tgt ) )
         for x in breakdown( leg ): print( x )
+        print( "RUNAWAY %s legend %d B > runaway guard %d B (target %d B): a bug signal (a present-only builder loop or an unbounded clause)" % ( sid, gmeas, guard, tgt ) )
         return
     if meas <= tgt: print( "WITHIN" ); return
     if mode == "strict":
@@ -93,15 +119,21 @@ def verdict( a ):
         print( "NOTPRESENT %s %d B > target %d B: registered clause(s) %s ride WITHOUT their attribute rendered — not present-only, so they explain nothing"
                % ( sid, meas, tgt, ", ".join( "%s (attr %r)" % ( r[ "clause" ], r[ "attr" ] ) for r in notpresent ) ) )
         return
-    allow = sum( r[ "bytes" ] for r in riding ); excess = meas - tgt
+    measured = { r[ "clause" ]: clause_bytes( leg, r[ "marker" ] ) for r in riding }
+    over = [ r for r in riding if r[ "bytes" ] > measured[ r[ "clause" ] ] + CLAIM_SLACK ]
     lines = [ "OVER-TARGET %s measured=%d target=%d: clause %s %d B, rides when %s is rendered — %s"
               % ( sid, meas, tgt, r[ "clause" ], r[ "bytes" ], r[ "attr" ].strip(), r[ "reason" ] ) for r in riding ]
+    for x in lines: print( x )
+    if over:
+        print( "OVERCLAIM %s measured=%d target=%d: registered clause(s) [%s] over-claim: the registry says more bytes than the legend renders (slack %d B) — fix test/legend_over_target.tsv"
+               % ( sid, meas, tgt, ", ".join( "%s claims %d B, renders %d B" % ( r[ "clause" ], r[ "bytes" ], measured[ r[ "clause" ] ] ) for r in over ), CLAIM_SLACK ) )
+        return
+    allow = sum( min( r[ "bytes" ], measured[ r[ "clause" ] ] ) for r in riding ); excess = meas - tgt
     if excess <= allow:
         print( "EXPLAINED %s %d B over target, covered by %d B of registered present-only clause(s)" % ( sid, excess, allow ) )
     else:
-        print( "UNEXPLAINED %s measured=%d target=%d: %d B over, registered riding present-only clauses cover %d B — register the clause "
+        print( "UNEXPLAINED %s measured=%d target=%d: %d B over, registered riding present-only clauses cover %d B (min of registered and rendered bytes) — register the clause "
                "(present-only) in test/legend_over_target.tsv with its reason, or cut it" % ( sid, meas, tgt, excess, allow ) )
-    for x in lines: print( x )
 
 
 if __name__ == "__main__":

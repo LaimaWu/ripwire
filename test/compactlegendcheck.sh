@@ -100,7 +100,8 @@ run(){ "$BIN" "$FIX" "$@" 2>"$TMP/err"; }
 # present-only on that answer (each printed OVER-TARGET), else FAIL; a smaller measure never fails — under a hard RUNAWAY GUARD
 # (8,000 B of comments per compact answer; 16,000 B for the (L) loop) that prints LEGEND-RUNAWAY with the clause breakdown.
 # RIPWIRE_LEGEND_PINS=strict is the rule 4 twin: today's hard pins, registry ignored; lt_summary at the end reports the strict
-# verdict of every run. The (U-twin*), (LT), (U-TWIN), (FOLD-L) and (P1/P4) old-path twins stay hard pins: they ARE twins.
+# verdict of every run. The old-path size twins ((U-twin*), (LT), (U-TWIN)) use the SAME surface id as their main arm, so a
+# registered clause relaxes a twin exactly as it relaxes the main arm (test/lib/legendtarget.sh); only RIPWIRE_LEGEND_PINS=strict hard-pins them.
 # One shared verdict: test/lib/legendtarget.sh. Census: legend-shorten §4 items 1, 2, 3, 5.
 . "$ROOT/test/lib/legendtarget.sh"
 LT_GUARD_COMPACT=8000; LT_GUARD_LOOP=16000
