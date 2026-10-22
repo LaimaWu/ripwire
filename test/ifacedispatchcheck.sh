@@ -43,6 +43,8 @@
 #       sam_kt_inherit / _generic / _javabase (a base the index names exactly) stay open by the SAM rule
 #       fix round 4, E1 — a name re-declared WITH A BODY below its abstract declaration (sam_kt_default_*) leaves the count; a body-less
 #       re-declaration (sam_kt_redeclare_abstract) and a Java default method (sam_java_default_override) are the controls
+#       fix round 5, NIT-1 — the nearest declaration wins: a body ABOVE an abstract re-declaration is no answer (kt_reabstract_mid,
+#       java_default_kt_reabstract, kt_reabstract_arity); the count's drop is for a body at or below the declarer
 #   (M) fix round 1, B2 — Rust method set: through `dyn T` a candidate sits in an `impl T for X` block (or is T's default);
 #       an inherent method of X never is
 #   (L) legend clauses ride with the rows (cands=K a floor; the iface clause only beside an iface row)   (J) --json gate / bound
@@ -349,6 +351,26 @@ for root, sel, want, kind, tag, why in (
           "Kotlin: `Sub : Base { override fun bp(): Int }` stays abstract: two abstract methods, no lambda converts it, impl stays" ) ):
     a = ask( root, "callees", sel )
     say( rows_are( a, want ), "[%s] k2r4_%s" % ( kind, tag ), "--callees=%s: %s -- %s" % ( sel, [ ( w[ 1 ], w[ 2 ] ) for w in want ], why ), a.why() )
+
+# (K2, fix round 5, NIT-1 + the count's upward drop) the bodied-base-member rule (ReceiverEvidence::methodOf) answered with an ANCESTOR body even
+# when a nearer interface on the path re-declares the name abstract (Base { ap() = 0 } above Mid { override fun ap( x ): Int }): the nearest
+# declaration wins, so the call hedges (the dispatch tier and the name tiers answer). A body of another parameter count is no answer either:
+# Kotlin has no call arity, so a bodyless overload of a count no body has, above the body, hedges (Java's arity is the name tiers' own rule). The SAM count
+# drops an abstract name only for a body at or BELOW the class declaring it: with the rule above fixed, kt_reabstract_mid must read ONE
+# abstract method (a lambda converts it: via="name"), never a certain 0 (a false via="impl"). An own re-declaration (kt_own_reabstract) is red the same way: Base.ap, no via.
+print( "=== (K2) fix round 5: the nearest declaration wins; a body above a re-declaration never runs ===" )
+KRM, JDK, KRAR, KOR = ( os.path.join( FIX, d ) for d in ( "kt_reabstract_mid", "java_default_kt_reabstract", "kt_reabstract_arity", "kt_own_reabstract" ) )
+for root, sel, want, kind, tag, why in (
+        ( KRM, "runSub", [ ( "ap", "app/Op.kt:2", "name" ), ( "ap", "app/Op.kt:5", "name" ) ], "P", "kt_reabstract_mid",
+          "Kotlin: Base { ap() = 0 }, Mid : Base { override fun ap( x ) } abstract again, Sub : Mid: Base's body never runs, no unhedged row onto it (and the count reads one abstract method)" ),
+        ( JDK, "runSub", [ ( "ap", "app/Op.kt:4", "name" ) ], "P", "java_default_kt_reabstract",
+          "Kotlin Mid re-declares a Java Base's `default` method abstract: no unhedged row onto Base.java" ),
+        ( KRAR, "runSub", [ ( "ap", "app/Op.kt:2", "name" ), ( "ap", "app/Op.kt:4", "name" ), ( "ap", "app/Op.kt:5", "name" ) ], "P", "kt_reabstract_arity",
+          "Kotlin: Sub's bodied ap() and Mid's abstract ap( x ): the call ap( 1 ) is not Sub.ap(), no unhedged row onto it" ),
+        ( KOR, "runSub", [ ( "ap", "app/Op.kt:4", "impl" ) ], "P", "kt_own_reabstract",
+          "Kotlin: Sub re-declares Base's bodied ap abstract itself: two abstract methods, not a SAM, Inc is the only implementor: impl" ) ):
+    a = ask( root, "callees", sel )
+    say( rows_are( a, want ), "[%s] k2r5_%s" % ( kind, tag ), "--callees=%s: %s -- %s" % ( sel, [ ( w[ 1 ], w[ 2 ] ) for w in want ], why ), a.why() )
 
 # ── (M) Rust method set (fix round 1, B2; §(a) 4): through dyn T only T's impl blocks and defaults can run ───────────────────
 print( "=== (M) Rust: an inherent method is never a trait-dispatched candidate ===" )

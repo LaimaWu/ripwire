@@ -181,10 +181,43 @@ public:
         }
     }
 
+    // the classes of the walk that declare an abstract member of this name
+    std::vector<NodeId> declarersOf( std::string_view name, const BaseWalk& w ) const
+    {
+        std::vector<NodeId> out;
+        for( NodeId k : w.walked )
+        {
+            if( const auto it = abstractNames_.find( k ); it != abstractNames_.end() && std::ranges::contains( it->second, name, &AbstractMember::name ) )
+            {
+                out.push_back( k );
+            }
+        }
+        return out;
+    }
+
+    // a body of abstract member `m` in a class of the walk AT OR BELOW a class declaring it (nearer to the receiver): a body ABOVE the
+    // re-declaring class (Base { ap() = 0 } above Mid { override ap( x ): Int }) never runs for it. Below only SOME of the declaring
+    // classes (a diamond) cannot be told exact: a loose drop
+    BodyMatch bodyBelowDeclarer( const AbstractMember& m, const BaseWalk& w ) const
+    {
+        const std::vector<NodeId> decl = declarersOf( m.name, w );
+        for( NodeId k : w.walked )
+        {
+            const auto below = [ & ]( NodeId d ) { return recvEv_.inCone( ing_.symbols[ k ].name, ing_.symbols[ d ].name ); };
+            if( BodyMatch hit = bodyOf( k, m ); hit.any && std::ranges::any_of( decl, below ) )
+            {
+                hit.exact = hit.exact && std::ranges::all_of( decl, below );
+                return hit;
+            }
+        }
+        return {};
+    }
+
     // the distinct abstract member names of class `c`: its own, plus those of the bases the index names exactly, minus a base's name
     // that some class of the walk gives a body (a sub-interface's or middle interface's `override fun m() = …`, a Java `default`
-    // method): that name is no abstract member of `c` (matched by NAME, an overload the index cannot tell apart is dropped too, so
-    // a drop is `doubted`). `c`'s own abstract name stays (an abstract re-declaration) unless `c` has a bodied member of it too.
+    // method) AT OR BELOW a class declaring the name, nearer to `c` (a body ABOVE the re-declaring class never runs for it): that name
+    // is no abstract member of `c` (matched by NAME, an overload the index cannot tell apart is dropped too, so a drop is `doubted`).
+    // `c`'s own abstract name stays (an abstract re-declaration) unless `c` has a bodied member of it too.
     // `exactBases`: false when c's own name is shared, so its base names cannot be told apart per identity (doubted, not walked;
     // hidden when c names any base at all).
     AbstractCount abstractCount( NodeId c, bool exactBases ) const
@@ -210,9 +243,9 @@ public:
         const auto                  overridden = [ & ]( const AbstractMember& m, bool ownName )
         {
             BodyMatch hit = bodyOf( c, m );
-            for( std::size_t k = 0; !ownName && !hit.any && k < w.walked.size(); ++k )
+            if( !ownName && !hit.any )
             {
-                hit = bodyOf( w.walked[ k ], m );
+                hit = bodyBelowDeclarer( m, w );
             }
             exactDrop = exactDrop || ( hit.any && hit.exact );
             looseDrop = looseDrop || ( hit.any && !hit.exact );

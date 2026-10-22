@@ -1657,6 +1657,8 @@ struct ReceiverEvidence
     std::vector<std::string>                              ownerClass;  // per symbol: the class that owns it, "" none
     std::vector<std::uint8_t>                             staticMember;    // per symbol: 1 = a JS/TS `static` member (the CLASS side)
     HashMap<std::string, rw::SmallVec<NodeId, 2>>         methodsByType;   // "Class::name" → its callables
+    HashMap<std::string, rw::SmallVec<NodeId, 2>>         abstractByType;  // "Class::name" → its BODYLESS callables (the contract a call dispatches through)
+    HashMap<std::string_view, char>                       abstractNames;   // every name some class declares without a body (the gate of the two walks below)
     HashMap<std::string, std::string>                     memberType;      // "Class#field" → field class ("" = tombstone)
     HashMap<std::string, NodeId>                          memberClass;     // rust-receivers: "<class id>#field" → the ONE class its written type resolved to (kNoNode = unknown)
     HashMap<std::string, NodeId>                          memberIface;     // lane L6: "<class id>#field" → the trait a `Box<dyn T>` field dispatches through (kNoNode = disagree)
@@ -1848,9 +1850,13 @@ struct ReceiverEvidence
         {
             // a BODIED callable only: an interface's or an abstract class's bodyless signature is the contract a call
             // dispatches through, never the body it reaches — that call stays with the ladder (declined_iface= reads it)
-            if( callableKind( s.kind ) && !ownerClass[ s.id ].empty() && receiverHedgeLang( s.lang ) && s.endByte > s.sigEndByte )
+            if( callableKind( s.kind ) && !ownerClass[ s.id ].empty() && receiverHedgeLang( s.lang ) )
             {
-                methodsByType[ typeKey( ownerClass[ s.id ], "::", s.name ) ].push_back( s.id );
+                ( s.endByte > s.sigEndByte ? methodsByType : abstractByType )[ typeKey( ownerClass[ s.id ], "::", s.name ) ].push_back( s.id );
+                if( s.endByte <= s.sigEndByte )
+                {
+                    abstractNames.try_emplace( std::string_view( s.name ), char( 1 ) );
+                }
             }
         }
         const std::size_t N = ing.symbols.size();
@@ -2449,7 +2455,10 @@ struct ReceiverEvidence
             return false;
         }
         const bool basesByName = cls == kNoNode || types.sameNamedClasses( cls ) == 1;
-        const bool stopped     = walkBaseLevels( type, [ & ]( const std::vector<std::string_view>& level, std::size_t depth )
+        bool        redeclared = false;   // a nearer level declared the name WITHOUT a body: the nearest declaration wins, no ancestor body runs
+        std::size_t foundDepth = 0;
+        const bool  gated      = abstractNames.contains( name );   // no class declares the name bodyless: neither walk below can matter
+        const bool  stopped    = walkBaseLevels( type, [ & ]( const std::vector<std::string_view>& level, std::size_t depth )
         {
             if( ( superOnly && depth == 0 ) || ( depth > 0 && !basesByName ) )
             {
@@ -2457,11 +2466,50 @@ struct ReceiverEvidence
             }
             for( std::string_view t : level )
             {
+                const std::size_t before = found.size();
                 collectMethods( t, name, depth == 0 ? cls : kNoNode );
+                redeclared = redeclared || ( gated && found.size() == before && abstractOn( t, name, depth == 0 ? cls : kNoNode ) );
             }
-            return !found.empty();
+            foundDepth = depth;
+            return redeclared || !found.empty();
         } );
+        if( redeclared || ( stopped && !found.empty() && gated && overloadedAbove( type, name, foundDepth ) ) )
+        {
+            found.clear();   // EXACT OR NO ROW: an abstract re-declaration on the path is no body (the dispatch tier answers)
+        }
         return stopped && !found.empty();   // a walk stopped at an unwalkable base level found nothing
+    }
+    // Kotlin and C# keep no call-comparable arity (ingest_metrics.h cc_paramShape's language gate; Java has one, which the name tiers'
+    // arity rule reads): `found` (bodies at depth `at`) is not the call's answer when a base level ABOVE
+    // declares the name without a body at a parameter count NO found body has: the call may mean that overload (Sub { override fun
+    // ap() } over Mid { fun ap( x: Int ): Int }). A count a found body has is the ordinary override of it.
+    bool overloadedAbove( std::string_view type, std::string_view name, std::size_t at ) const
+    {
+        const Lang lang = ing.symbols[ found[ 0 ] ].lang;
+        if( lang != Lang::Kotlin && lang != Lang::CSharp )
+        {
+            return false;
+        }
+        return walkBaseLevels( type, [ & ]( const std::vector<std::string_view>& level, std::size_t depth )
+        {
+            for( std::string_view t : level )
+            {
+                const auto it = depth > at ? abstractByType.find( typeKey( t, "::", name ) ) : abstractByType.end();
+                if( it != abstractByType.end() && std::ranges::any_of( it->second, [ & ]( NodeId a )
+                    { return std::ranges::all_of( found, [ & ]( NodeId f ) { return ing.symbols[ f ].params != ing.symbols[ a ].params; } ); } ) )
+                {
+                    return true;
+                }
+            }
+            return false;
+        } );
+    }
+    // does `type` declare a callable `name` with NO body (`cls`: only the one class owns it), and own no body of it (collectMethods
+    // found none): an interface's or abstract class's re-declaration of an inherited member
+    bool abstractOn( std::string_view type, std::string_view name, NodeId cls ) const
+    {
+        const auto it = abstractByType.find( typeKey( type, "::", name ) );
+        return it != abstractByType.end() && ( cls == kNoNode || std::ranges::any_of( it->second, [ & ]( NodeId c ) { return ownedBy( c, cls ); } ) );
     }
     // `type`'s own callables named `name` into `found` — only those class `cls` owns, when it is a definition
     void collectMethods( std::string_view type, std::string_view name, NodeId cls ) const
