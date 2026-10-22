@@ -957,8 +957,17 @@ ls /tmp/tsanlog.*     # one file per process that raced; none means no report
 6. If your change alters emitted output, regenerate the goldens as their **own** commit with the
    diff reviewed by eye — never bundled with logic.
 7. Keep formatting churn out of logic commits.
-8. **Cutting a release:** bump the version in `CMakeLists.txt`'s `project()` call, rename
-   `CHANGELOG.md`'s `## [Unreleased]` section to the new version, and add the release's blurb to
+8. **Changelog entry: add a file, never edit `CHANGELOG.md`.** A user-visible change adds ONE new file
+   `changelog.d/<pr-number-or-slug>.md`: line 1 `### <Section> — <title>` (Added, Changed, Deprecated,
+   Removed, Fixed, Security, Documented), a blank line, then the entry; credit as `(thanks @handle, #N)`.
+   `changelog.d/README.md` has the format; `python3 scripts/changelog_assemble.py check` validates it
+   (`test/changelogfragcheck.sh` runs it, and fails a PR that writes under `## [Unreleased]` instead).
+   One file per change is what keeps open PRs from conflicting on the changelog after every merge.
+9. **Cutting a release:** bump the version in `CMakeLists.txt`'s `project()` call, fold the fragments
+   with `python3 scripts/changelog_assemble.py release X.Y.Z YYYY-MM-DD` (it writes the
+   `## [X.Y.Z] — date` section under the `## [Unreleased]` stub and deletes the folded files; edit the
+   section's opening summary in by hand after it), commit that before tagging (the release workflow
+   refuses a tag while `changelog.d/` still holds fragments), and add the release's blurb to
    README.md's `## Release notes` section (newest first, with a `Thanks to` line where one applies) —
    never to a `## What's new` section, which no longer exists (moved 2026-09-25; see git history if
    you are looking for it). Update the one-line **Latest: 0.6.x** pointer near the top of README.md to

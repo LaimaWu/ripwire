@@ -15,72 +15,9 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
-### Added — `--for` names the members of its shown owner rows on the compact route (`mem=`)
-
-On a conceptual `--for` answer (root `bundle="compact"`), a shown class, struct or interface/trait row now carries
-`mem="a,b,…"`: up to 8 names of its direct members by the index (a def whose scope names the owner, such as a Rust `impl` or a
-C++ out-of-line method, or whose span lies inside the owner's, such as a C++ in-class declaration or a JS/TS/Python method; never a
-closure nested in a method), the names holding the most question words first, then by line. `mem_more="N"` counts the member names
-it did not list. A name already shown as a row, and the owner's own name (a constructor), are not repeated. No list on an owner
-whose text the answer already carries (the body-tail fold or the body slot serves its body, or the fold served its member slice),
-nor on an owner whose name another indexed class shares (its members' scope cannot say which one they belong to). The names are
-spliced after the rows are chosen, so they never cost a ranked row, and `est_tokens` prices them. Not under an explicit
-`--token-budget`, `--json`, `--signatures-only`, `--auto-bodies`, `--detail=N`, the name-exact route, the `--limit=N` file page,
-`--expand` or the map; `RIPWIRE_NO_MEMBER_NAMES=1` turns it off. CLI only, as the fold. Measured on the 163 stored round-5 argv that
-may be run (handlebars, helix and waybar never run; base lane/body-fold b112e8ac, frozen round-5 grader): Rule C ✓ 124 → 128
-(mdbook-02, nunjucks-02, nunjucks-12, starlette-13), legacy ✓ 149 → 149, 0 items lost under either grading; the 60 `--for` answers
-grow +332 B median (max +1,340 B), every other answer is unchanged. Gate: `test/formembernamescheck.sh`.
-
-### Added — Rust receivers typed by their written type: parameters, `let` bindings and struct fields
-
-A Rust member call used to bind every in-tree method of its name, hedged `via="name"` (or, for a standard-member name such
-as `iter` or `push`, was declined), because Rust recorded no parameter, local or field type. Now a receiver written as a
-type proves that type's method: a parameter (`book: &Book`, `&mut T`, `Box<T>`, a path such as `crate::model::Book`, a
-user generic `Stack<u8>`), `let x: T`, a struct literal `T { .. }`, `T::default()`, a closure's typed parameter, and a
-field path below such a receiver or below `self` (`self.book.iter()`, `self.inner.book.spin()`), each field by its own
-written type. The written name resolves exactly as a declared call result does (the item scopes, `use` declarations —
-a `use … as` alias by the path it names, a glob `use super::*` through the module's own `use` — and module paths in force
-at the binding), so `use std::fs::File` beside an in-tree `File` proves nothing. A declared `-> Self`
-result now types its call too (`let b = Book::new(); b.spin()`) when the call's qualifier, resolved the same way, names
-that in-tree type: `fs::File::open()`, `std::path::PathBuf::from()`, a glob's or the prelude's `String::new()` or an
-external crate's glob reach an in-tree namesake only by name and type nothing. A result written by the type's own name (`-> PathBuf`, not `-> Self`) keeps the earlier call-result rule. A generic result's head names its class. On
-rust-lang/mdBook, `--callers=Book::iter` now lists `make_data` (`book: &Book`) and `MDBook::iter` (`self.book.iter()`)
-as plain edges. Stated floor (still declined or hedged): a generic bound `T: Trait`, `dyn` / `impl Trait` and a trait
-written as a type (which implementation runs is dispatch), a `type` alias, a glob of a module that only globs, a value behind `Option` / `Result` / `Rc` / `Arc` / `RefCell` /
-`Cell` / `Mutex` / `RwLock`, a tuple-struct field (`self.0`), and any pattern other than a plain name. A macro that
-rebinds a name (`shadow!(b); b.spin()`) is not read: the written type still types the name after it. The wrapper list is
-one data row per family (`Box` transparent; `Option` / `Result` one unwrap layer; the pointers and cells hide their argument).
-
-### Fixed — Windows: `--quality-delta=A..B` extracts its commit trees through stdin; two vendored scanners stop calling `isdigit` on code points (#402, thanks @lennix1337)
-
-GNU tar on MSYS2 / Git for Windows read the colon of a drive path (`C:\…`) given to `-f` as a remote host, so materializing a
-commit tree failed there; the archive now reaches `tar -x -f -` on stdin on every platform, and `test/qualitycheck.sh` runs that
-arm under a colon-bearing temporary directory. The vendored tree-sitter bash and markdown external scanners called `isdigit()` on
-an `int32_t` lookahead (undefined above 255, and an assertion in Microsoft UCRT debug builds); both use an explicit `'0'..'9'`
-range check now, recorded as patches under `third_party/patches/`. No output change.
-
-### Fixed — Windows: `--quality-delta=A..B` extracts its per-commit archive through stdin (#422, thanks @lennix1337)
-
-- `--quality-delta=A..B` extracts its per-commit archive through stdin (`tar -x -f -`), the same Windows drive-colon fix as #402 (thanks @lennix1337).
-
-### Fixed — `--uses` on a JS/TS literal receiver no longer lists built-in member calls as uses of a same-named in-tree method (#411, thanks @lennix1337)
-
-- `--uses` on JS/TS literal receivers no longer lists built-in member calls (e.g. `"abc".trim()`) as uses of an in-tree method of the same name; a `declined_literal_calls=` count discloses what was filtered (thanks @lennix1337, #411). A call stays a use when an in-repo definition is a prototype polyfill of that built-in on the same literal type. The MCP `uses` twin, `--safe-delete`, `--verify` and the LSP references / hover answers apply the same filter, and Python literal calls are unchanged.
-
-### Changed — source builds: Windows clang-cl PGO builds link, and keep SLP vectorization in the final binary (#410, thanks @lennix1337)
-
-With `clang-cl` + `lld-link`, `RIPWIRE_PGO=generate` crashed Clang 22.1.8's backend (x86_64-v3); the instrumented `generate`
-build now turns SLP vectorization off for that phase only (`/clang:-fno-slp-vectorize` on compiles, `/mllvm:-vectorize-slp=false`
-on the link, where LTO code generation runs), so the `use` build keeps it. `lld-link` no longer receives the clang driver's
-`-fprofile-generate` / `-fprofile-use`, which it rejects (clang-cl links the profile runtime itself). Reproduction and removal
-criteria: `docs/WINDOWS-PGO.md`. No other compiler changes; no output change.
-
-### Changed — the versions this change moves, stated once
-
-`kParserVer` 206 → 212 (file tag 213): the Rust written-type receivers carried 202 (203) on their branch; 212 sits above
-every live branch number (210 / 211 on a branch not in this change; #420 reserves 214 / 215). A cache written by 0.6.8 is
-re-parsed once. `kCacheVersion` stays 36 and the quality-snapshot scheme stays 22: no record format changed. The session
-legend dictionary is `dictv=5775b5b07dd973a2 entries=908`.
+Entries for the next release are files under [`changelog.d/`](changelog.d/README.md), one per change; this section
+stays this one paragraph. At release, the step in CONTRIBUTING.md ("Cutting a release") folds the files in
+under the new version's heading.
 
 ## [0.6.8] — 2026-10-19
 
