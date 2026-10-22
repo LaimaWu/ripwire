@@ -6147,12 +6147,8 @@ inline void tomlSectionNames( std::string_view text, std::initializer_list<std::
 // `a-b` -> `a_b`: the spelling a Rust `use` gives a crate name.
 inline std::string rustCrateSpelling( std::string_view name )
 {
-    std::string spelled;
-    spelled.reserve( name.size() );
-    for( const char c : name )
-    {
-        spelled.push_back( c == '-' ? '_' : c );
-    }
+    std::string spelled( name.size(), '\0' );
+    std::replace_copy( name.begin(), name.end(), spelled.begin(), '-', '_' );
     return spelled;
 }
 
