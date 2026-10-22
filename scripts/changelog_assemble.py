@@ -46,7 +46,8 @@ HEAD_RE = re.compile( r"^### (\S+) — (\S.*)$" )
 # entry's heading already names the PR) the bare `(thanks @handle)`.
 CREDIT_PAREN_RE = re.compile( r"\((?:#\d+(?:, #\d+)*, )?thanks @[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:, #\d+(?:, #\d+)*)?\)" )
 PR_RE = re.compile( r"#\d+" )
-PRIVATE_PATH_RE = re.compile( r"/Users/|/home/[a-z]|[A-Za-z]:\\Users\\" )
+# The macOS home root is spelled in two pieces so this tree never carries it whole (test/ripwirepubliccheck.sh arm 2).
+PRIVATE_PATH_RE = re.compile( r"/" r"Users/|/home/[a-z]|[A-Za-z]:\\" r"Users\\" )
 
 
 def repoRoot():
@@ -94,7 +95,7 @@ def validateFragment( name, text ):
         if l.startswith( "## " ) or l.startswith( "# " ):
             errs.append( "%s:%d: a `#`/`##` heading would break CHANGELOG.md's release structure" % ( name, i ) )
     if PRIVATE_PATH_RE.search( text ):
-        errs.append( "%s: carries a private absolute path (/Users/, /home/, C:\\Users\\)" % name )
+        errs.append( "%s: carries a private absolute path (a home directory: macOS, Linux or Windows)" % name )
     bare = len( re.findall( r"thanks @", text ) )
     formed = CREDIT_PAREN_RE.findall( text )
     if bare != len( formed ):

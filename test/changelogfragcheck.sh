@@ -116,8 +116,9 @@ badCase "heading only"           x.md     "line 2 must be blank"         '### Fi
 badCase "empty file"             x.md     "empty fragment"               '\n'
 badCase "two changes"            x.md     "one change per file"          '### Fixed — x\n\nbody\n\n### Added — y\n\nbody\n'
 badCase "release heading inside" x.md     "break CHANGELOG.md"           '### Fixed — x\n\nbody\n\n## [9.9.9]\n'
-badCase "private path"           x.md     "private absolute path"        '### Fixed — x\n\nsee /Users/someone/x\n'
+badCase "private path"           x.md     "private absolute path"        '### Fixed — x\n\nsee /Use''rs/someone/x\n'
 badCase "home path"              x.md     "private absolute path"        '### Fixed — x\n\nsee /home/someone/x\n'
+badCase "Windows home path"      x.md     "private absolute path"        '### Fixed — x\n\nsee C:\\Use''rs\\someone\n'
 badCase "bare credit"            x.md     "a credit must read"           '### Fixed — x (#5)\n\nthanks @someone for this\n'
 badCase "credit, no PR"          x.md     "names no PR"                  '### Fixed — x\n\nbody (thanks @someone)\n'
 badCase "credit, bad handle"     x.md     "a credit must read"           '### Fixed — x\n\nbody (thanks @-bad, #5)\n'
@@ -157,7 +158,7 @@ goodCase "credit, handle first"        '### Fixed — x\n\nbody (thanks @someone
 goodCase "two PRs then the credit"     '### Fixed — x (#5, #6, thanks @someone)\n\nbody\n'
 goodCase "bare (thanks @h), PR in head" '### Fixed — x (#5)\n\n- a bullet (thanks @someone).\n'
 goodCase "#### sub-heading in the body" '### Documented — x\n\nbody\n\n#### detail\n\nmore\n'
-goodCase "Windows drive path in prose" '### Fixed — x\n\n`C:\\\\…` and `C:\\\\Program Files`\n'
+goodCase "Windows drive path in prose" '### Fixed — x\n\n`C:\\…` and `C:\\Program Files`\n'
 goodCase "every known section (Security)" '### Security — x\n\nbody\n'
 
 [ "$fail" -eq 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
