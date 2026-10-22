@@ -395,8 +395,7 @@ pub type P = std::ffi::OsString;
 pub fn re_alias() -> u8 { let s = Os::from("x"); s.as_os() }
 pub fn ty_alias() -> u8 { let s = P::from("x"); s.as_os() }
 @@@ rsrecv/src/nshadow.rs
-// fc1: an in-tree `mod std` (rare): a non-import path's first segment is an item of the module before the extern prelude, so a
-// bare `std::ffi::OsStr` here IS the in-tree one (proven), like `self::std::`
+// fc1: an in-tree `mod std`: a path's first segment is the module's own item before the extern prelude, so bare `std::` here IS the in-tree one (proven), like `self::std::`
 pub mod std {
     pub mod ffi {
         pub struct OsStr;
