@@ -63,6 +63,10 @@ range check now, recorded as patches under `third_party/patches/`. No output cha
 
 - `--quality-delta=A..B` extracts its per-commit archive through stdin (`tar -x -f -`), the same Windows drive-colon fix as #402 (thanks @lennix1337).
 
+### Fixed — `--uses` on a JS/TS literal receiver no longer lists built-in member calls as uses of a same-named in-tree method (#411, thanks @lennix1337)
+
+- `--uses` on JS/TS literal receivers no longer lists built-in member calls (e.g. `"abc".trim()`) as uses of an in-tree method of the same name; a `declined_literal_calls=` count discloses what was filtered (thanks @lennix1337, #411). A call stays a use when an in-repo definition is a prototype polyfill of that built-in on the same literal type. The MCP `uses` twin, `--safe-delete`, `--verify` and the LSP references / hover answers apply the same filter, and Python literal calls are unchanged.
+
 ### Changed — source builds: Windows clang-cl PGO builds link, and keep SLP vectorization in the final binary (#410, thanks @lennix1337)
 
 With `clang-cl` + `lld-link`, `RIPWIRE_PGO=generate` crashed Clang 22.1.8's backend (x86_64-v3); the instrumented `generate`
