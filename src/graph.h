@@ -6144,14 +6144,6 @@ inline void tomlSectionNames( std::string_view text, std::initializer_list<std::
     }
 }
 
-// `a-b` -> `a_b`: the spelling a Rust `use` gives a crate name.
-inline std::string rustCrateSpelling( std::string_view name )
-{
-    std::string spelled( name.size(), '\0' );
-    std::replace_copy( name.begin(), name.end(), spelled.begin(), '-', '_' );
-    return spelled;
-}
-
 // The TOML key or quoted string at the front of `s` (`"a-b"`, `'a'` or a bare `a-b`, which stops at whitespace, `=` or `.`), consumed from `s`.
 inline std::string_view tomlTakeKey( std::string_view& s )
 {
@@ -6197,7 +6189,12 @@ inline void tomlDependencyKeys( std::string_view text, const HashMap<std::string
     bool        table   = false;   // inside a dependency-key table
     bool        inEntry = false;   // inside `[dependencies.<entry>]`
     std::string entry;
-    const auto  ownPackage = [ & ]( std::string_view name ) { return !name.empty() && inTree.contains( rustCrateSpelling( name ) ); };
+    const auto  ownPackage = [ & ]( std::string_view name )
+    {
+        std::string spelled( name );   // `foo-core` is written `foo_core` in the names
+        std::replace( spelled.begin(), spelled.end(), '-', '_' );
+        return !name.empty() && inTree.contains( spelled );
+    };
     while( !text.empty() )
     {
         const std::size_t end  = text.find( '\n' );
@@ -6282,19 +6279,18 @@ inline HashMap<std::string, char> cargoCrateNames( const IngestResult& ing )
             manifests.push_back( std::move( *text ) );
         }
     }
-    for( const std::string& name : found )
+    const auto add = [ & ]( std::string& name )
     {
-        names.try_emplace( rustCrateSpelling( name ), char( 1 ) );
-    }
+        std::replace( name.begin(), name.end(), '-', '_' );
+        names.try_emplace( std::move( name ), char( 1 ) );
+    };
+    std::ranges::for_each( found, add );
     found.clear();
     for( const std::string& text : manifests )
     {
         tomlDependencyKeys( text, names, found );   // after the package names: a rename's `package =` is checked against them
     }
-    for( const std::string& key : found )
-    {
-        names.try_emplace( rustCrateSpelling( key ), char( 1 ) );
-    }
+    std::ranges::for_each( found, add );
     return names;
 }
 
