@@ -83,9 +83,9 @@ struct LangFacts
     /// the language constructs by calling the class (`new T(` JS/TS/Java/C#, `T(` Python/Kotlin/C++), which needs no column.
     std::string_view constructorMethod = {};
 
-    /// TypeScript / JavaScript: the leading name of a construction (`Eng` in `new Eng()`, `M` in `new M.Eng()`) is whatever an import
-    /// binds it to, so --affected's class-new row keeps its l= only when that binding lands on the reached class (testmap.h
-    /// classNewHedgeByBinding). The other languages resolve the written name through the call graph alone.
+    /// TypeScript / JavaScript: a construction (`new X()`, `new N.X()`) builds whatever its import binding resolves to, so --affected's
+    /// class-new row takes its l= only from a construction the import resolver pins to the reached class (testmap.h ClassNewJsBinds,
+    /// graph.h pinJsImport), never from the written name. The other languages keep the name test (classNewCallNames).
     bool importBoundConstruction = false;
 };
 

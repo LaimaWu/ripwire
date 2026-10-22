@@ -2496,26 +2496,31 @@ inline std::pair<std::uint32_t, JsImportOutcome> resolveJsImportModule( std::str
     return { fileId, JsImportOutcome::Unlisted };
 }
 
-inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncludeCtx* workspace )
+// The EXPORT side of the import tables, and what resolving a module needs: the corpus file index, the module
+// vocabulary, every module's export facts ("<fileId>#<exported name>" → the definition, kNoNode when ambiguous or
+// unmatched) and the JsShadow spans. buildJsImportTables pins every ES import binding through it; --affected's
+// class-new rows (testmap.h ClassNewJsBinds) pin a test file's construction through the SAME pinJsImport.
+struct JsExportTables
 {
-    PROFILE_SCOPE_DESCRIBE( "buildGraph/2g: JS/TS import tables" );
-    JsImportTables tables;
-    if( std::none_of( ing.bindings.begin(), ing.bindings.end(), []( const Binding& b ) { return b.kind == LocalBindKind::JsImport; } ) )
-    {
-        return tables;
-    }
-    tables.targets.reserve( ing.bindings.size() );
-    tables.shadows.reserve( ing.bindings.size() );
-    HashMap<std::string, std::uint32_t> files;
-    files.reserve( ing.files.size() );
+    HashMap<std::string, std::uint32_t>        files;
+    HashMap<std::string, char>                 vocabulary;
+    HashMap<std::string, JsExportFact>         exported;
+    HashMap<std::string, std::vector<VarSpan>> shadows;
+};
+
+inline JsExportTables buildJsExportTables( const IngestResult& ing )
+{
+    JsExportTables ex;
+    ex.shadows.reserve( ing.bindings.size() );
+    ex.files.reserve( ing.files.size() );
     for( std::uint32_t fileId = 0; fileId < ing.files.size(); ++fileId )
     {
-        files.emplace( lexicalNormalize( rootRelPath( ing, fileId ) ), fileId );
+        ex.files.emplace( lexicalNormalize( rootRelPath( ing, fileId ) ), fileId );
     }
     // Two views of the same export bindings: by the EXPORTED name (what an importer writes) and by the
     // LOCAL one (what the definition is called). `export { f as g }` makes them different words, so a
     // single map keyed either way would silently drop one of the two forms.
-    HashMap<std::string, JsExportFact> exported;
+    HashMap<std::string, JsExportFact>& exported = ex.exported;
     HashMap<std::string, std::vector<std::string>> byLocal;
     exported.reserve( ing.bindings.size() );
     byLocal.reserve( ing.bindings.size() );
@@ -2530,7 +2535,7 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
         }
         else if( b.kind == LocalBindKind::JsShadow )
         {
-            tables.shadows[ jsImportKey( b.fileId, b.var ) ].push_back( { b.spanStart, b.spanEnd } );
+            ex.shadows[ jsImportKey( b.fileId, b.var ) ].push_back( { b.spanStart, b.spanEnd } );
         }
     }
     for( auto& [ localKey, keys ] : byLocal )
@@ -2554,28 +2559,53 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
             else { fact.node = symbol.id; }
         }
     }
-    const HashMap<std::string, char> vocabulary = jsModuleVocabulary( ing );
-    const JsModuleCtx ctx{ files, workspace, vocabulary };
+    ex.vocabulary = jsModuleVocabulary( ing );
+    return ex;
+}
+
+// The definition `moduleFile` exports under `name` — kNoNode when the export is ambiguous, matches no definition,
+// or is not in the PARTIAL table (a re-export `export { f } from`, `export *`: ingest_jsimports.h records none).
+inline NodeId jsExportedNode( const JsExportTables& ex, std::uint32_t moduleFile, std::string_view name )
+{
+    const auto found = ex.exported.find( jsImportKey( moduleFile, name ) );
+    return found != ex.exported.end() ? found->second.node : kNoNode;
+}
+
+// Where `import { exportName } from "module"` in `fileId` lands: Pinned to the definition, or why not (resolveJsImportModule).
+// An empty exportName is a TYPE-ONLY import: it binds a type, so a call through the name is not this import's call, and
+// there is no module question to ask.
+inline JsImportTarget pinJsImport( const IngestResult& ing, const JsExportTables& ex, const WsIncludeCtx* workspace, std::uint32_t fileId,
+                                   std::string_view module, std::string_view exportName )
+{
+    JsImportTarget    target;
+    const JsModuleCtx ctx{ ex.files, workspace, ex.vocabulary };
+    const auto [ moduleFile, moduleOutcome ] = exportName.empty()
+        ? std::pair<std::uint32_t, JsImportOutcome>{ kNoFile, JsImportOutcome::Refused }
+        : resolveJsImportModule( rootRelPath( ing, fileId ), module, fileId, ctx );
+    target.outcome = moduleOutcome;
+    if( moduleFile != kNoFile )
+    {
+        target.node    = jsExportedNode( ex, moduleFile, exportName );
+        target.outcome = target.node != kNoNode ? JsImportOutcome::Pinned : moduleOutcome;
+    }
+    return target;
+}
+
+inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncludeCtx* workspace )
+{
+    PROFILE_SCOPE_DESCRIBE( "buildGraph/2g: JS/TS import tables" );
+    JsImportTables tables;
+    if( std::none_of( ing.bindings.begin(), ing.bindings.end(), []( const Binding& b ) { return b.kind == LocalBindKind::JsImport; } ) )
+    {
+        return tables;
+    }
+    tables.targets.reserve( ing.bindings.size() );
+    JsExportTables ex = buildJsExportTables( ing );
     for( const Binding& b : ing.bindings )
     {
         if( b.kind != LocalBindKind::JsImport || b.fileId >= ing.files.size() ) { continue; }
-        JsImportTarget target;
-        target.renamed = b.importedName != b.var;
-        // An empty importedName is a TYPE-ONLY import: it binds a type, so a call through the name is not
-        // this import's call, and there is no module question to ask.
-        const auto [ moduleFile, moduleOutcome ] = b.importedName.empty()
-            ? std::pair<std::uint32_t, JsImportOutcome>{ kNoFile, JsImportOutcome::Refused }
-            : resolveJsImportModule( rootRelPath( ing, b.fileId ), b.typeName, b.fileId, ctx );
-        target.outcome = moduleOutcome;
-        if( moduleFile != kNoFile )
-        {
-            const auto found = exported.find( jsImportKey( moduleFile, b.importedName ) );
-            if( found != exported.end() && found->second.node != kNoNode )
-            {
-                target.outcome = JsImportOutcome::Pinned;
-                target.node    = found->second.node;
-            }
-        }
+        JsImportTarget target = pinJsImport( ing, ex, workspace, b.fileId, b.typeName, b.importedName );
+        target.renamed        = b.importedName != b.var;
         const auto [ found, inserted ] = tables.targets.try_emplace( jsImportKey( b.fileId, b.var ), target );
         if( !inserted )
         {
@@ -2583,6 +2613,7 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
             found->second.outcome = JsImportOutcome::Refused;    //   included): never choose one of them
         }
     }
+    tables.shadows = std::move( ex.shadows );
     return tables;
 }
 

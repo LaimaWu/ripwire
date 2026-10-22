@@ -634,17 +634,17 @@ CNR2="$( cd "$RS2" || exit 1; "$BIN" "$RS2" --affected=src/util.rs --no-cache 2>
 printf '%s' "$CNR2" | grep -q '<g via="class-new" total="1" shown="1"><new p="tests/t.rs" l="6" class="Eng"/></g>' \
     && ok '(9i2) Rust: Other::new() (line 5) then Eng::new() (line 6) in one test fn — the row names the Eng construction, l="6"' \
     || no "(9i2) Rust: a row's l= names another type's construction: $( printf '%s' "$CNR2" | sed 's/^.*-->//' )"
-# (9i3) TS `new A.Eng()` (line 4) then `new B.Eng()` (line 5) — two classes named Eng, the edge is B.Eng's. The call refs share the bare name and
-# differ only by qualifier (A / B), so the row's line is ambiguous: it must render WITHOUT l= (exact line or no l=), never l="4". Python twin:
-# `ext.Eng()` (external module, line 5) then the imported `Eng()` (line 6).
+# (9i3) TS `new A.Eng()` (line 4) then `new B.Eng()` (line 5) — two classes named Eng, the edge is B.Eng's. TS/JS take l= only from a construction
+# that RESOLVES to the reached class (B is `import * as B` of its file, B.Eng its export), so the row reads l="5", never l="4". Python twin (the
+# name test + spelling hedge): `ext.Eng()` (external module, line 5) then the imported `Eng()` (line 6) — no l=, never l="5".
 TS3="$TMP/classnew-ts3"; mkdir -p "$TS3/src" "$TS3/test"
 printf 'export class Eng { other() { return 1; } }\n'                                                 > "$TS3/src/a.ts"
 printf 'import { leaf } from "./util";\nexport class Eng { run(p: number) { return leaf(p); } }\n'    > "$TS3/src/b.ts"
 printf 'export function leaf(p: number) { return p; }\n'                                              > "$TS3/src/util.ts"
 printf 'import * as A from "../src/a";\nimport * as B from "../src/b";\ntest("x", () => {\n  const x = new A.Eng();\n  const y = new B.Eng();\n});\n' > "$TS3/test/x.test.ts"
 CNT3="$( cd "$TS3" || exit 1; "$BIN" "$TS3" --affected=src/util.ts --no-cache 2>/dev/null )"
-printf '%s' "$CNT3" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" class="Eng"/></g>' \
-    && ok '(9i3) TS: new A.Eng() (line 4) then new B.Eng() (line 5) — two different qualifiers pass the name test, so the row has no l= (never l="4")' \
+printf '%s' "$CNT3" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" l="5" class="Eng"/></g>' \
+    && ok '(9i3) TS: new A.Eng() (line 4) then new B.Eng() (line 5) — only B.Eng resolves to the reached class (namespace export), so l="5" (never l="4")' \
     || no "(9i3) TS: a row's l= names another class's construction: $( printf '%s' "$CNT3" | sed 's/^.*-->//' )"
 PY3="$TMP/classnew-py3"; mkdir -p "$PY3/pkg" "$PY3/tests"
 printf 'def leaf(p):\n    return p\n'                                                                > "$PY3/pkg/util.py"
@@ -655,16 +655,16 @@ printf '%s' "$CNY3" | grep -q '<g via="class-new" total="1" shown="1"><new p="te
     && ok '(9i3) Python: ext.Eng() (line 5) then Eng() (line 6) — two different qualifiers pass the name test, so the row has no l= (never l="5")' \
     || no "(9i3) Python: a row's l= names the external namesake's construction: $( printf '%s' "$CNY3" | sed 's/^.*-->//' )"
 # (9i4) TS ALIASED import of the reached class: `import { Eng as E }` / `import E from "../src/b"` + a bare `new Eng()` of a namesake (line 4) then
-# `new E()` (line 5, the reached B.Eng). `new E()` fails the name test, so the namesake's `new Eng()` is the ONLY passing ref and the spelling
-# hedge never sees a second spelling: the row must still render WITHOUT l= (never l="4"). Controls: an unrelated default import (`React`) keeps l=.
+# `new E()` (line 5, the reached B.Eng). Only `new E()` resolves to the reached class (the named import / the module's default export), so the
+# row reads l="5", never l="4". Controls: an unrelated default import (`React`) keeps l=.
 TS4="$TMP/classnew-ts4"; mkdir -p "$TS4/src" "$TS4/test"
 printf 'export class Eng { other() { return 1; } }\n'                                                 > "$TS4/src/a.ts"
 printf 'import { leaf } from "./util";\nexport class Eng { run(p: number) { return leaf(p); } }\n'    > "$TS4/src/b.ts"
 printf 'export function leaf(p: number) { return p; }\n'                                              > "$TS4/src/util.ts"
 printf 'import { Eng } from "../src/a";\nimport { Eng as E } from "../src/b";\ntest("x", () => {\n  const x = new Eng();\n  const y = new E();\n});\n' > "$TS4/test/x.test.ts"
 CNT4="$( cd "$TS4" || exit 1; "$BIN" "$TS4" --affected=src/util.ts --no-cache 2>/dev/null )"
-printf '%s' "$CNT4" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" class="Eng"/></g>' \
-    && ok '(9i4) TS: import { Eng as E } of the reached class + a bare new Eng() of a namesake (line 4) — the row has no l= (never l="4")' \
+printf '%s' "$CNT4" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" l="5" class="Eng"/></g>' \
+    && ok '(9i4) TS: import { Eng as E } of the reached class + a bare new Eng() of a namesake (line 4) — l="5" from new E() (never l="4")' \
     || no "(9i4) TS: an aliased import leaves the namesake's line: $( printf '%s' "$CNT4" | sed 's/^.*-->//' )"
 TS5="$TMP/classnew-ts5"; mkdir -p "$TS5/src" "$TS5/test"
 printf 'export default class Eng { other() { return 1; } }\n'                                                 > "$TS5/src/a.ts"
@@ -672,8 +672,8 @@ printf 'import { leaf } from "./util";\nexport default class Eng { run(p: number
 printf 'export function leaf(p: number) { return p; }\n'                                              > "$TS5/src/util.ts"
 printf 'import Eng from "../src/a";\nimport E from "../src/b";\ntest("x", () => {\n  const x = new Eng();\n  const y = new E();\n});\n' > "$TS5/test/x.test.ts"
 CNT5="$( cd "$TS5" || exit 1; "$BIN" "$TS5" --affected=src/util.ts --no-cache 2>/dev/null )"
-printf '%s' "$CNT5" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" class="Eng"/></g>' \
-    && ok '(9i4) TS: default import E of the reached class + a bare new Eng() of a namesake (line 4) — the row has no l= (never l="4")' \
+printf '%s' "$CNT5" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" l="5" class="Eng"/></g>' \
+    && ok '(9i4) TS: default import E of the reached class + a bare new Eng() of a namesake (line 4) — l="5" from new E() (never l="4")' \
     || no "(9i4) TS: a default import leaves the namesake's line: $( printf '%s' "$CNT5" | sed 's/^.*-->//' )"
 TS6="$TMP/classnew-ts6"; mkdir -p "$TS6/src" "$TS6/test"
 cp "$TS4/src/b.ts" "$TS4/src/util.ts" "$TS6/src/"
@@ -682,17 +682,15 @@ CNT6="$( cd "$TS6" || exit 1; "$BIN" "$TS6" --affected=src/util.ts --no-cache 2>
 printf '%s' "$CNT6" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" l="4" class="Eng"/></g>' \
     && ok '(9i4) TS control: an unrelated default import (React) + the reached Eng built by its own name keeps l="4"' \
     || no "(9i4) TS control: an unrelated default import dropped the line: $( printf '%s' "$CNT6" | sed 's/^.*-->//' )"
-# (9i4b) The GENERAL rule behind 9i4: l= is decided by where the construction's BARE NAME is bound, not by how the class is aliased. Here the
-# class is renamed on the EXPORT side (`class Eng {} export { Eng as Engine }`), so no import in the test aliases anything: `Eng` is bound to
-# ../src/a (a namesake), `Engine` to ../src/b (the reached class), and the bare `new Eng()` (line 4) is the only construction that passes the
-# name test. Its bare name is bound to a module that is not the class's file, so the row must have no l= (never l="4").
+# (9i4b) The class is renamed on the EXPORT side (`class Eng {} export { Eng as Engine }`): `Eng` is bound to ../src/a (a namesake), `Engine` to
+# ../src/b's export Engine = the reached class. Only `new Engine()` (line 5) resolves to it, so l="5", never the namesake's line 4.
 TS7="$TMP/classnew-ts7"; mkdir -p "$TS7/src" "$TS7/test"
 cp "$TS4/src/a.ts" "$TS4/src/util.ts" "$TS7/src/"
 printf 'import { leaf } from "./util";\nclass Eng { run(p: number) { return leaf(p); } }\nexport { Eng as Engine };\n' > "$TS7/src/b.ts"
 printf 'import { Eng } from "../src/a";\nimport { Engine } from "../src/b";\ntest("x", () => {\n  const x = new Eng();\n  const y = new Engine();\n});\n' > "$TS7/test/x.test.ts"
 CNT7="$( cd "$TS7" || exit 1; "$BIN" "$TS7" --affected=src/util.ts --no-cache 2>/dev/null )"
-printf '%s' "$CNT7" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" class="Eng"/></g>' \
-    && ok '(9i4b) TS: export { Eng as Engine } + a test binding Eng to a namesake file and building it first (line 4) — the row has no l= (never l="4")' \
+printf '%s' "$CNT7" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" l="5" class="Eng"/></g>' \
+    && ok '(9i4b) TS: export { Eng as Engine } + a test binding Eng to a namesake file and building it first (line 4) — l="5" from new Engine() (never l="4")' \
     || no "(9i4b) TS: an export-side rename leaves the namesake's line: $( printf '%s' "$CNT7" | sed 's/^.*-->//' )"
 # Recall arms for the same rule: the bare name is bound to the class's OWN file, so the row keeps its line however the test file aliases other things.
 #   stem: a default import of another file (lib/b) whose stem equals the class file's (src/b); stem2: two default imports of same-stem files (the
@@ -721,17 +719,53 @@ CNT10="$( cd "$TS10" || exit 1; "$BIN" "$TS10" --affected=src/util.ts --no-cache
 printf '%s' "$CNT10" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" l="6" class="Eng"/></g>' \
     && ok '(9i4b) TS recall: Eng bound to src/b while the namesake is aliased (Eng as Other) and unrelated imports sit around it — l="6" kept' \
     || no "(9i4b) TS recall: an aliased namesake dropped the line: $( printf '%s' "$CNT10" | sed 's/^.*-->//' )"
-# Barrel recall (hono's `import { RegExpRouter } from "../reg-exp-router"`): the bare name is bound to src/eng/index.ts, which only re-exports the
-# class defined in src/eng/router.ts, and no other class of that name is visible through it — the name still resolves to the reached class: l="3" kept.
+# Barrel FLOOR (hono's `import { RegExpRouter } from "../reg-exp-router"`): the name is bound to src/eng/index.ts, which only RE-EXPORTS the class
+# (`export { Eng } from "./router"`). The import resolver records no re-export (ingest_jsimports.h), so the construction resolves to nothing and the
+# row keeps no l= (exact or none; the row itself stays).
 TS11="$TMP/classnew-ts11"; mkdir -p "$TS11/src/eng" "$TS11/test"
 cp "$TS4/src/a.ts" "$TS4/src/util.ts" "$TS11/src/"
 printf 'import { leaf } from "../util";\nexport class Eng { run(p: number) { return leaf(p); } }\n' > "$TS11/src/eng/router.ts"
 printf 'export { Eng } from "./router";\n'                                                          > "$TS11/src/eng/index.ts"
 printf 'import { Eng } from "../src/eng";\ntest("x", () => {\n  const x = new Eng();\n});\n'     > "$TS11/test/x.test.ts"
 CNT11="$( cd "$TS11" || exit 1; "$BIN" "$TS11" --affected=src/util.ts --no-cache 2>/dev/null )"
-printf '%s' "$CNT11" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" l="3" class="Eng"/></g>' \
-    && ok '(9i4b) TS recall: Eng imported through a barrel (src/eng/index.ts re-exporting ./router) keeps l="3"' \
-    || no "(9i4b) TS recall: a barrel import dropped the line: $( printf '%s' "$CNT11" | sed 's/^.*-->//' )"
+printf '%s' "$CNT11" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" class="Eng"/></g>' \
+    && ok '(9i4b) TS floor: Eng imported through a barrel (src/eng/index.ts re-exporting ./router) keeps the row, no l= (the resolver records no re-export)' \
+    || no "(9i4b) TS floor: a barrel import row is missing or claims a line: $( printf '%s' "$CNT11" | sed 's/^.*-->//' )"
+# (9i5) THE RESOLVED-EDGE RULE: a TS/JS row's l= is the earliest construction whose callee RESOLVES to the reached class (Eng in src/eng), never one
+# that merely carries its name or comes from its module. ren: `import { Foo as Eng }` + `import { Eng as Real }` — new Eng() (line 4) builds Foo,
+# new Real() (line 5) builds Eng → l="5". dflt: `import Eng` of `export default class Foo` → l="5" from new Real(). js: the .js twin of ren.
+# expren: `export { Foo as Eng, Eng as Engine }` in the class file → l="5" from new Engine(). bar1/bar2: a barrel `export { Foo as Eng } from` /
+# `export * ... export { Bar as Eng } from "./bar"` — nothing resolves through a re-export, so no l= (never the renamed class's line 3).
+# Recall/controls: only (a lone `import { Foo as Eng }` + new Eng()) — no row; req (`const { Eng } = require( class file )`) → l="3";
+# shadow (a parameter Eng hides the import at line 3) → l="6".
+cn9i5(){ ( cd "$TMP/classnew-9i5/$1" || exit 1; "$BIN" "$TMP/classnew-9i5/$1" --affected="src/util.$2" --no-cache 2>/dev/null ) | grep -oE '<g via="class-new"[^>]*>.*</g>'; }
+mk9i5(){ mkdir -p "$TMP/classnew-9i5/$1/src" "$TMP/classnew-9i5/$1/test"; printf '%b' "$4" > "$TMP/classnew-9i5/$1/src/eng.$2"; printf '%b' "$5" > "$TMP/classnew-9i5/$1/test/x.test.$2"
+         printf 'export function leaf(p%s) { return p; }\n' "$3" > "$TMP/classnew-9i5/$1/src/util.$2"; }
+ENG2='import { leaf } from "./util";\nexport class Eng { run(p: number) { return leaf(p); } }\nexport class Foo { other() { return 1; } }\n'
+RENT='import { Foo as Eng } from "../src/eng";\nimport { Eng as Real } from "../src/eng";\ntest("x", () => {\n  const x = new Eng();\n  const y = new Real();\n});\n'
+mk9i5 ren ts ': number' "$ENG2" "$RENT"
+mk9i5 dflt ts ': number' 'import { leaf } from "./util";\nexport class Eng { run(p: number) { return leaf(p); } }\nexport default class Foo { other() { return 1; } }\n' \
+      'import Eng from "../src/eng";\nimport { Eng as Real } from "../src/eng";\ntest("x", () => {\n  const x = new Eng();\n  const y = new Real();\n});\n'
+mk9i5 js js '' 'import { leaf } from "./util";\nexport class Eng { run(p) { return leaf(p); } }\nexport class Foo { other() { return 1; } }\n' "$RENT"
+mk9i5 expren ts ': number' 'import { leaf } from "./util";\nclass Eng { run(p: number) { return leaf(p); } }\nclass Foo { other() { return 1; } }\nexport { Foo as Eng, Eng as Engine };\n' \
+      'import { Eng } from "../src/eng";\nimport { Engine } from "../src/eng";\ntest("x", () => {\n  const x = new Eng();\n  const y = new Engine();\n});\n'
+BART='import { Eng, Engine } from "../src";\ntest("x", () => {\n  const x = new Eng();\n  const y = new Engine();\n});\n'
+mk9i5 bar1 ts ': number' "$ENG2" "$BART"
+printf 'export { Foo as Eng } from "./eng";\nexport { Eng as Engine } from "./eng";\n' > "$TMP/classnew-9i5/bar1/src/index.ts"
+mk9i5 bar2 ts ': number' 'import { leaf } from "./util";\nexport class Eng { run(p: number) { return leaf(p); } }\n' "$BART"
+printf 'export class Bar { other() { return 1; } }\n' > "$TMP/classnew-9i5/bar2/src/bar.ts"
+printf 'export * from "./eng";\nexport { Bar as Eng } from "./bar";\nexport { Eng as Engine } from "./eng";\n' > "$TMP/classnew-9i5/bar2/src/index.ts"
+mk9i5 only ts ': number' "$ENG2" 'import { Foo as Eng } from "../src/eng";\ntest("x", () => {\n  const x = new Eng();\n});\n'
+mk9i5 req ts ': number' "$ENG2" 'const { Eng } = require("../src/eng");\ntest("x", () => {\n  const x = new Eng();\n});\n'
+mk9i5 shadow ts ': number' "$ENG2" 'import { Eng } from "../src/eng";\nimport { Foo } from "../src/eng";\nfunction mk(Eng: any) { return new Eng(); }\ntest("x", () => {\n  mk(Foo);\n  const y = new Eng();\n});\n'
+for c in 'ren ts l="5" ' 'dflt ts l="5" ' 'js js l="5" ' 'expren ts l="5" ' 'bar1 ts -' 'bar2 ts -' 'req ts l="3" ' 'shadow ts l="6" '; do
+    d=${c%% *}; rest=${c#* }; e=${rest%% *}; want=${rest#* }; [ "$want" = - ] && want=
+    got="$( cn9i5 "$d" "$e" )"
+    [ "$got" = "<g via=\"class-new\" total=\"1\" shown=\"1\"><new p=\"test/x.test.$e\" ${want}class=\"Eng\"/></g>" ] \
+        && ok "(9i5) $d: the row's l= is the construction resolved to the reached class (${want:-no l=})" \
+        || no "(9i5) $d: expected ${want:-no l=}, got: ${got:-<no group>}"
+done
+[ -z "$( cn9i5 only ts )" ] && ok '(9i5) only: import { Foo as Eng } + new Eng() builds Foo — no class-new row' || no "(9i5) only: a row for a Foo construction: $( cn9i5 only ts )"
 # (9l) "nearest class first": two classes at DIFFERENT hops whose test-path order is the reverse of their rank order. Far (hop 2, via
 # the module function mid) is built by the alphabetically-first test, Near (hop 1) by the later one: the rows must list Near first.
 MB="$TMP/classnew-rank"; mkdir -p "$MB/pkg" "$MB/tests"
