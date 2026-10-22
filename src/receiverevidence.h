@@ -1319,28 +1319,41 @@ struct CallResultTypes
         }
         return rustReexportOutside( crate, module, item, depth );
     }
-    // rustPathOutside's in-tree module step: an item of file module (crate, module) leads out only through a named re-export
-    // at the module's own level (`pub use std::ffi::OsString;`), each followed; an item declared there, an inline `mod`, or no
-    // such `use` (a glob, an unparsed region) never does
+    // the files holding module (crate, module)'s own level: a file module's files, or (`inlineMod` set) the one file of an
+    // inline `mod`, kept in `ownFile`; empty when no such module
+    std::span<const std::uint32_t> rustModuleFiles( std::uint32_t crate, const std::string& module, NodeId& inlineMod, std::uint32_t& ownFile ) const
+    {
+        const auto inl = rust.inlineMods.find( rustModuleKey( crate, module ) );
+        inlineMod      = inl == rust.inlineMods.end() ? kNoNode : inl->second;
+        if( inlineMod != kNoNode )
+        {
+            ownFile = ing.symbols[ inlineMod ].fileId;
+            return { &ownFile, 1 };
+        }
+        const auto files = rust.filesOf.find( rustModuleKey( crate, module ) );
+        return files == rust.filesOf.end() ? std::span<const std::uint32_t>{} : std::span<const std::uint32_t>( files->second );
+    }
+    // rustPathOutside's in-tree module step: an item of module (crate, module) — a file module, or an inline `mod` (its
+    // body) — leads out only through a named re-export at the module's own level (`pub use std::ffi::OsString;`), each
+    // followed; an item declared there, or no such `use` (a glob, an unparsed region), never does
     bool rustReexportOutside( std::uint32_t crate, const std::string& module, std::string_view item, int depth ) const
     {
-        const auto files = rust.filesOf.find( rustModuleKey( crate, module ) );
-        if( files == rust.filesOf.end() || rust.inlineMods.contains( rustModuleKey( crate, module ) ) )
-        {
-            return false;
-        }
+        NodeId        inlineMod = kNoNode;
+        std::uint32_t ownFile   = 0;
+        const auto    mfs       = rustModuleFiles( crate, module, inlineMod, ownFile );
+        const Level   level     = rustModuleLevel( inlineMod );
         bool any = false;
         bool out = true;
-        for( std::uint32_t mf : files->second )
+        for( std::uint32_t mf : mfs )
         {
             NodeId one = kNoNode;
-            if( classesNamed( item, CallResultFamily::Rust, [ & ]( NodeId c ) { return ing.symbols[ c ].fileId == mf && enclosingSymbol( c ) == kNoNode; }, one ) > 0 )
+            if( classesNamed( item, CallResultFamily::Rust, [ & ]( NodeId c ) { return ing.symbols[ c ].fileId == mf && enclosingSymbol( c ) == inlineMod; }, one ) > 0 )
             {
                 return false;
             }
             forEachImport( mf, item, [ & ]( const Binding& b )
             {
-                if( b.kind == LocalBindKind::TypeImport && levelAt( mf, b.startByte ).wholeFile() )
+                if( b.kind == LocalBindKind::TypeImport && levelAt( mf, b.startByte ) == level )
                 {
                     any = true;
                     out = out && rustPathOutside( mf, b.startByte, b.importedName, depth + 1 );
@@ -1356,16 +1369,16 @@ struct CallResultTypes
         {
             return false;
         }
-        std::size_t uses = 0;
-        bool        out  = false;
+        bool any = false;
+        bool out = true;   // every `use` of the root in force (cfg-gated duplicates) leads out, or the walk keeps the row
         forEachRustUseAt( f, at, seg, [ & ]( const Binding& b )
         {
-            ++uses;
-            out = rustPathOutside( f, b.startByte, b.importedName, depth + 1 );
+            any = true;
+            out = out && rustPathOutside( f, b.startByte, b.importedName, depth + 1 );
         } );
-        if( uses > 0 )
+        if( any )
         {
-            return uses == 1 && out;
+            return out;
         }
         std::string module;
         rustModuleAt( f, at, module );
@@ -1376,16 +1389,67 @@ struct CallResultTypes
         {
             return false;   // a child module, or an item of this file
         }
-        bool mayBring = false;   // an in-tree glob, or an unparsed region, of this file
-        forEachImport( f, "*", [ & ]( const Binding& b )
-        {
-            std::uint32_t gc = kNoCrate;
-            std::string   gm;
-            mayBring = mayBring || ( b.kind == LocalBindKind::TypeImport && rustModuleOf( f, b.startByte, b.importedName, gc, gm, 0 ) );
-        } );
+        bool mayBring = rustGlobMayBring( f, at, seg, depth );   // a glob in force there, or an unparsed region of this file
         forEachImport( f, "!", [ & ]( const Binding& b ) { mayBring = mayBring || bindsWithoutTarget( b ); } );
         constexpr std::string_view kStdRoots[] = { "std", "core", "alloc" };   // the sysroot crates every target sees
         return !mayBring && ( inTree || std::ranges::find( kStdRoots, seg ) != std::end( kStdRoots ) );
+    }
+    // fc1 fix 1: may a glob `use` in force at byte `at` of `f` — one at a level of its chain (a fn body, then the module it
+    // sits in; an outer module's globs never reach an inline `mod`) — bring the name `seg`? Only an in-tree glob whose
+    // target module declares or re-exports `seg` (rustModuleMayBring); `mod tests { use super::*; }` never brings `std`
+    bool rustGlobMayBring( std::uint32_t f, std::uint32_t at, std::string_view seg, int depth ) const
+    {
+        std::vector<Level> chain;
+        chainAt( f, at, chain );
+        bool may = false;
+        for( const Level& lv : chain )
+        {
+            const SymKind kind = lv.sym == kNoNode ? SymKind::Other : ing.symbols[ lv.sym ].kind;
+            if( lv.sym != kNoNode && !rustScopesItems( kind ) )
+            {
+                continue;
+            }
+            forEachImport( f, "*", [ & ]( const Binding& b )
+            {
+                std::uint32_t gc = kNoCrate;
+                std::string   gm;
+                may = may || ( b.kind == LocalBindKind::TypeImport && levelAt( f, b.startByte ) == lv && rustModuleOf( f, b.startByte, b.importedName, gc, gm, 0 )
+                               && rustModuleMayBring( gc, gm, seg, depth + 1 ) );
+            } );
+            if( may || lv.wholeFile() || kind == SymKind::Other )
+            {
+                break;
+            }
+        }
+        return may;
+    }
+    // does module (crate, module) declare or re-export an item `seg` a glob of it brings — a child module, a class or a `use`
+    // of the name at its own level, or (followed, depth-bounded: past the cap it may) a glob there whose target does?
+    bool rustModuleMayBring( std::uint32_t crate, const std::string& module, std::string_view seg, int depth ) const
+    {
+        if( depth > 4 || rustModuleExists( crate, joinModule( module, seg ) ) )
+        {
+            return true;
+        }
+        NodeId        inlineMod = kNoNode;
+        std::uint32_t ownFile   = 0;
+        const auto    mfs       = rustModuleFiles( crate, module, inlineMod, ownFile );
+        const Level   level     = rustModuleLevel( inlineMod );
+        bool may = false;
+        for( std::uint32_t mf : mfs )
+        {
+            NodeId one = kNoNode;
+            may = may || classesNamed( seg, CallResultFamily::Rust, [ & ]( NodeId c ) { return ing.symbols[ c ].fileId == mf && enclosingSymbol( c ) == inlineMod; }, one ) > 0;
+            forEachImport( mf, seg, [ & ]( const Binding& b ) { may = may || ( b.kind == LocalBindKind::TypeImport && levelAt( mf, b.startByte ) == level ); } );
+            forEachImport( mf, "*", [ & ]( const Binding& b )
+            {
+                std::uint32_t gc = kNoCrate;
+                std::string   gm;
+                may = may || ( b.kind == LocalBindKind::TypeImport && levelAt( mf, b.startByte ) == level && rustModuleOf( mf, b.startByte, b.importedName, gc, gm, 0 )
+                               && rustModuleMayBring( gc, gm, seg, depth + 1 ) );
+            } );
+        }
+        return may;
     }
     // `a::b::C` → ( `a::b`, `C` ); `C` → ( "", `C` ) — the last segment is namesplit::afterLast's
     static std::pair<std::string_view, std::string_view> splitLast( std::string_view path, std::string_view sep ) noexcept

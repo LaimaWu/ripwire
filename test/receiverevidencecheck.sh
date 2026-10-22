@@ -1693,6 +1693,22 @@ for f in glob_reexp_own glob_reexp_path; do proven rsrecv callees "src/nsglobuse
 proven      rsrecv callees "src/nsglobstar.rs:glob_star_own" "method as_os $NS:10"                                # [P]
 proven      rsrecv callees "benches/nsb.rs:bench_own" "method as_os $NS:10"                                         # [P]
 notproven   rsrecv callees "benches/nsb.rs:bench_std" "as_os $NS:10"                                                # [N]
+# fc1 fix 1 (rv-fc1 B1-B3, N4): the walk's "cannot follow" exits no longer fire on code that provably leaves the tree.
+# B1: a glob brings a root only when its TARGET module declares or re-exports an item of that name, and only a glob at the
+# level the call sits in (a fn body, then its module): `mod tests { use super::*; }` beside and around a std call, a glob of
+# a module with no `std` / `core`, an explicit `use std::ffi::OsString` beside an in-tree glob (it shadows the glob). B2:
+# cfg-gated duplicate `use`s lead out when every one does. B3: an inline module's re-export of std's type. N4: an extern
+# crate named like an in-tree module. [N] each proven on dd378171 and 5cd18c99; [P] twins reach the in-tree type.
+for f in rvtests.rs:t_full rvtests.rs:inner rvglob.rs:g_full rvexpl.rs:expl_from rvcfg.rs:cfg_from rvinl.rs:inl_path \
+         rvinl.rs:inl_self rvinluse.rs:inl_cross rvext.rs:ext_mod rvext.rs:ext_mod_q; do
+    notproven rsrecv callees "src/$f" "as_os $NS:10"                                                           # [N]
+done
+notproven   rsrecv callees "src/rvglob.rs:g_core" "as_dur $NS:15"                                                  # [N]
+for f in rvtests.rs:t_own rvtests.rs:inner_own rvglob.rs:g_own rvgtuse.rs:gt_own rvinl.rs:inl_own rvinluse.rs:inl_cross_own \
+         rvext.rs:ext_own; do
+    proven  rsrecv callees "src/$f" "method as_os $NS:10"                                                      # [P]
+done
+for f in rvexpl.rs:expl_glob rvcfg.rs:cfg_own; do proven rsrecv callees "src/$f" "method as_dur $NS:15"; done     # [P]
 # guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
 proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
 

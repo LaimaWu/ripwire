@@ -28,8 +28,11 @@ at the binding), so `use std::fs::File` beside an in-tree `File` proves nothing.
 result now types its call too (`let b = Book::new(); b.spin()`) when the call's qualifier, resolved the same way, names
 that in-tree type: `fs::File::open()`, `std::path::PathBuf::from()`, a glob's or the prelude's `String::new()` or an
 external crate's glob reach an in-tree namesake only by name and type nothing. The same holds for a result written by
-the type's own name (`-> PathBuf`, a path, `Result<PathBuf, _>` / `Option<..>` / `Box<..>`): a qualified `T::f()` types its
-local only when `T` reaches `f`'s in-tree type. A generic result's head names its class. On
+the type's own name (`-> PathBuf`, a path, `Result<PathBuf, _>` / `Option<..>` / `Box<..>`): a qualified `T::f()` whose `T`
+leads out of the tree types nothing — `std` / `core` / `alloc` (a glob brings such a root only when its module declares
+one, so `mod tests { use super::*; }` never does), an external crate, an inline module's re-export of one, cfg-gated
+duplicate `use`s that all lead out — while a `T` the walk cannot follow (a glob re-export, cfg-gated `use`s that disagree,
+an unparsed region of the file, a file outside every crate's module tree) keeps the earlier call-result rule. A generic result's head names its class. On
 rust-lang/mdBook, `--callers=Book::iter` now lists `make_data` (`book: &Book`) and `MDBook::iter` (`self.book.iter()`)
 as plain edges. Stated floor (still declined or hedged): a generic bound `T: Trait`, `dyn` / `impl Trait` and a trait
 written as a type (which implementation runs is dispatch), a `type` alias, a glob of a module that only globs, a value behind `Option` / `Result` / `Rc` / `Arc` / `RefCell` /
