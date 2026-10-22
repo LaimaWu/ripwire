@@ -709,6 +709,14 @@ inline std::vector<char> usesChosenCallers( const rw::IngestResult& ing, const r
 // ONE use-site row: (file, line, role, enclosing canonical id). File scope ⇒ `in` empty.
 struct UseSite { std::uint32_t fileId; std::uint32_t line; rw::RefRole role; std::string in; rw::NodeId from; };   // from: the enclosing symbol (kNoNode at file scope) — rankUseSites' weight
 
+// The literal-receiver filter collectUseSites applies (issue #163 twin): `defs` are the in-repo definitions of the name, `declined`
+// (when set) counts the literal-receiver calls the filter dropped, for the declined_literal_calls= disclosure.
+struct LiteralUseFilter
+{
+    std::span<const rw::NodeId> defs;
+    std::size_t* declined = nullptr;
+};
+
 // The use-site scan: references whose NAME matches the selector and that carry a real use-site role. Markdown
 // doc-mentions / wikilinks and HAS-A compose edges are NOT name use-sites (excluded). Returns the rows in the
 // deterministic base order (tier, file path, line, role, enclosing-id; the --uses emitters then rank it, graph.h rankUseSites) plus `callSitesOfName` — the call-role
@@ -721,11 +729,10 @@ struct UseSite { std::uint32_t fileId; std::uint32_t line; rw::RefRole role; std
 // that never matched the row's own root-relative p=, the map's id=, or a git path — the M6/L1/M0-5 finding.
 //
 // `keptForwards` is Graph::keptForwards: a FORWARDED call reference (`f.call( … )` standing for `f( … )`) is a use-site only
-// where the resolver kept its call; a caller with no graph passes none, and every forwarded reference stays out, as before.
 inline std::pair<std::vector<UseSite>, std::size_t>
 collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span<const char> isChosenCaller,
                  std::string_view rootForId = {}, std::span<const rw::NodeId> valueDefs = {}, const rw::ValueRefIndex* valueIndex = nullptr,
-                 std::span<const std::uint32_t> keptForwards = {} )
+                 std::span<const std::uint32_t> keptForwards = {}, LiteralUseFilter literals = {} )
 {
     using namespace rw;
     std::vector<UseSite> sites;
@@ -754,6 +761,14 @@ collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span
         if( r.role == RefRole::Call )
         {
             ++callSitesOfName;
+            if( rw::isBuiltinLiteralCall( ing, r, valueDefs, literals.defs ) )
+            {
+                if( literals.declined != nullptr )
+                {
+                    ++*literals.declined;
+                }
+                continue;
+            }
         }
         // the file: qualifier's call-role narrowing — and, since issue #164, a "::" spelling's too
         // (scopeNarrowed, the same file:name semantics off a scope-qualified selector). A file-scope call site
@@ -862,8 +877,10 @@ std::optional<int> runUses( const MainDispatch& d )
         // The value index is this verb's own, so the depth cut the --callers answer discloses (valuerefs.h) is read off the
         // SAME index the role="value" rows come from: a file nested past the walk's cap holds a use below it that no row shows.
         const rw::ValueRefIndex usVri( ing );
+        const std::vector<NodeId> literalDefs = ( sel.fileQualified || sel.scopeNarrowed ) ? rw::resolveAllByName( ing, sel.siteMatchName ) : std::vector<NodeId>{};
+        std::size_t usDeclinedLiteralCalls = 0;
         auto [ sites, callSitesOfName ] = collectUseSites( ing, sel, isChosenCaller,
-                                                           usSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, &usVri, g.keptForwards );
+                                                           usSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, &usVri, g.keptForwards, { literalDefs, &usDeclinedLiteralCalls } );
         const rw::ValueRefIndex::DepthCuts usDepthCut = usVri.depthCutsFor( defs );
         rw::rankUseSites( ing, g, sites );   // cut-fix C: most-depended-on sites first, so the cap drops the lightest
 
@@ -923,6 +940,7 @@ std::optional<int> runUses( const MainDispatch& d )
                      "{}{}{}-->{}{}", rw::kUsesLegendOpen,
                      ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Uses, usUnprovenDefs > 0 )           // H1: exactly when the root carries unproven_defs=
                        + rw::declinedCallsLegendWithGates( usDeclinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 )                                // exactly when it carries declined_calls=
+                       + rw::declinedLiteralCallsLegend( usDeclinedLiteralCalls > 0 )
                        + rw::usesValueRoleLegend( std::any_of( sites.begin(), sites.end(), []( const UseSite& u ) { return u.role == RefRole::Value; } ) )
                        + rw::valueRefsDepthLegend( usDepthCut.files > 0 ) ).c_str(),   // exactly when the root carries the depth disclosure
                      rw::capLegendClause( rw::computePageDisclosure( pageRows, sites.size(), upw.end,
@@ -947,6 +965,7 @@ std::optional<int> runUses( const MainDispatch& d )
             // a markdown SECTION heading reaches routinely. Same shape as runImpact / the callers arm.
             const std::string attr = "of=\"" + ex( sym ) + "\" defs=\"" + std::to_string( defs.size() )
                                    + "\" external=\"" + ( external ? "1" : "0" ) + "\" count=\"" + std::to_string( sites.size() ) + "\""
+                                   + rw::declinedLiteralCallsAttrXml( usDeclinedLiteralCalls )
                                    + rw::unprovenDefsAttrXml( usUnprovenDefs )   // H1: where the XML root carries it
                                    + selectorAttrs + usRootAttr + upage + rw::graphCountFloorAttrXml( g )   // §H4 §3.4
                                    + rw::valueRefsDepthAttrXml( ing, usDepthCut, rw::VrRender{ usSingleRoot, usRootPrefix } );   // the depth cut that makes count= a floor; absent when none
@@ -954,8 +973,9 @@ std::optional<int> runUses( const MainDispatch& d )
             return 0;
         }
 
-        rw::emitTo( stdout, "<uses of=\"{}\" defs=\"{}\" external=\"{}\" count=\"{}\"{}{}{}{}{}{}>",
+        rw::emitTo( stdout, "<uses of=\"{}\" defs=\"{}\" external=\"{}\" count=\"{}\"{}{}{}{}{}{}{}>",
                      ex( sym ).c_str(), defs.size(), external ? 1 : 0, sites.size(),
+                     rw::declinedLiteralCallsAttrXml( usDeclinedLiteralCalls ).c_str(),
                      rw::unprovenDefsAttrXml( usUnprovenDefs ).c_str(),   // H1: beside the count it qualifies; absent at zero
                      selectorAttrs.c_str(), usRootAttr.c_str(), upage,
                      rw::graphCountFloorAttrXml( g ).c_str(),
@@ -1274,8 +1294,10 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     // selector grammar, unchanged.
     const UsesSelector        sel            = resolveUsesSelector( ing, cfg.safeDeleteSym, defs );
     const std::vector<char>   isChosenCaller = ( sel.fileQualified || sel.scopeNarrowed ) ? usesChosenCallers( ing, g, defs ) : std::vector<char>{};
+    const std::vector<NodeId> literalDefs = rw::resolveAllByName( ing, sel.siteMatchName );
+    std::size_t sdDeclinedLiteralCalls = 0;
     const auto                sitesPair      = collectUseSites( ing, sel, isChosenCaller,
-                                                                 sdSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, nullptr, g.keptForwards );
+                                                                 sdSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, nullptr, g.keptForwards, { literalDefs, &sdDeclinedLiteralCalls } );
                                                                                                // .second (the un-narrowed
                                                                                                // call-site total) is not read here;
                                                                                                // .in_id is unused on this verb too, root
@@ -1423,6 +1445,10 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                                                  .linkRows = sdHasLink, .anchorRows = sdHasMiss,
                                                  .declinedSites = rw::declinedSitesLegendFlags( sdDc, /*callersForm=*/true, sdDcCut ) } );
 
+    if( sdDeclinedLiteralCalls > 0 )
+    {
+        rw::emitTo( stdout, "<!-- ripwire safe-delete: {}risk= describes retained evidence after these exclusions. -->", rw::declinedLiteralCallsLegend( true ) );
+    }
     const Symbol&      lead = ing.symbols[ defs[0] ];   // resolveAllByNameQualified walks ascending id — defs[0] is the
                                                         // lowest, same convention --impact/--uses/--callers's of=/defs=
                                                         // pairing relies on for orientation when defs > 1.
@@ -1445,7 +1471,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                 defs.size(), callerIds.size(), sdCallersFloorAttr, ambiguousCallers, reach.size(), sites.size(), sdUsesFloorAttr,
                 testedSelf ? 1 : 0, radiusTested, radiusUntested, deadCodeCandidate ? 1 : 0, risk,
                 rw::unprovenDefsAttrXml( sdUnprovenDefs ).c_str(),   // H1: beside the verdict it qualifies; absent at zero
-                ( rw::declinedCallsAttrXml( sdDeclinedCalls ) + rw::declinedSiteCutAttrXml( sdDcCut ) ).c_str(), // beside risk= too: declined calls that may reach it (+ the <dc> cut); absent at zero
+                ( rw::declinedCallsAttrXml( sdDeclinedCalls ) + rw::declinedSiteCutAttrXml( sdDcCut ) + rw::declinedLiteralCallsAttrXml( sdDeclinedLiteralCalls ) ).c_str(), // beside risk= too: declined calls that may reach it (+ the <dc> cut); absent at zero
                 ( rw::valueRefsCountAttrXml( sdValueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( ing, sdValueRefs.depthCut, sdVr )
                   + rw::patternDispatchAttrXml( sdPatterns.size(), sdWide.size() ) ), // value uses + IX-3 template lookups: never in callers=/impact_reaches=; absent at zero
                 pageDisclosure( cab, sizeof( cab ), cw.end - cw.begin, callerIds.size(), cw.end, cfg.pageLimit, cfg.pageOffset, true ),
@@ -2065,8 +2091,10 @@ std::optional<int> runVerify( const MainDispatch& d )
         const std::vector<NodeId> defs = resolveAllByNameQualified( ing, sym, &vfUnprovenDefs );   // H1: the residue --uses discloses
         const UsesSelector        sel  = resolveUsesSelector( ing, sym, defs );
         const std::vector<char>   isChosenCaller = ( sel.fileQualified || sel.scopeNarrowed ) ? usesChosenCallers( ing, g, defs ) : std::vector<char>{};
+        const std::vector<NodeId> literalDefs = rw::resolveAllByName( ing, sel.siteMatchName );
+        std::size_t vfDeclinedLiteralCalls = 0;
         const auto [ sites, callSitesOfName ]    = collectUseSites( ing, sel, isChosenCaller,
-                                                                     verSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, nullptr, g.keptForwards );
+                                                                     verSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, nullptr, g.keptForwards, { literalDefs, &vfDeclinedLiteralCalls } );
         (void) callSitesOfName;
         if( defs.empty() && sites.empty() )
         {
@@ -2074,12 +2102,17 @@ std::optional<int> runVerify( const MainDispatch& d )
                           "ripwire: --verify symbol not found: " + std::string( sym ) ).c_str() );
             return 1;
         }
+        if( vfDeclinedLiteralCalls > 0 )
+        {
+            rw::emitTo( stdout, "<!-- ripwire verify: {}verdict= describes retained evidence after these exclusions. -->", rw::declinedLiteralCallsLegend( true ) );
+        }
         const bool        external = defs.empty() && sel.defsOfName == 0;
         const std::size_t total    = sites.size();
         const PageWindow  w        = pageWindow( total, kEvidenceCap, 0 );
         const std::string facts    = " defs=\"" + std::to_string( defs.size() ) + "\" external=\"" + ( external ? "1" : "0" )
                                    + "\" count=\"" + std::to_string( total ) + "\""
-                                   + rw::unprovenDefsAttrXml( vfUnprovenDefs );   // H1: beside the count it qualifies; absent at zero
+                                   + rw::unprovenDefsAttrXml( vfUnprovenDefs )
+                                   + rw::declinedLiteralCallsAttrXml( vfDeclinedLiteralCalls );   // H1: beside the count it qualifies; absent at zero
         const bool        anySites = total > 0;
         const char*       verdict  = claim.shape == verify::ClaimShape::Uses ? ( anySites ? "confirmed" : "not-established" )
                                                                         : ( anySites ? "refuted"   : "not-established" );
