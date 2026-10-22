@@ -39,6 +39,8 @@
 #       the count is per interface IDENTITY (a same-named interface in another package is not this one's); a Kotlin single-method
 #       interface is lambda-implementable from Java; controls: a two-method interface (Object method redeclared), two same-named
 #       two-method interfaces, a two-method Kotlin interface beside Java, a Kotlin-only tree: still via="impl"
+#       fix round 3, D1 — a DOUBTED Kotlin count of 0 (sam_kt_*_shared: Sub's or its base's name is shared) opens the list; controls
+#       sam_kt_inherit / _generic / _javabase (a base the index names exactly) stay open by the SAM rule
 #   (M) fix round 1, B2 — Rust method set: through `dyn T` a candidate sits in an `impl T for X` block (or is T's default);
 #       an inherent method of X never is
 #   (L) legend clauses ride with the rows (cands=K a floor; the iface clause only beside an iface row)   (J) --json gate / bound
@@ -304,6 +306,25 @@ for root, sel, want, kind, tag, why in (
           "Kotlin: the same one-method interface in a tree with no Java file: nothing can pass a lambda, impl stays" ) ):
     a = ask( root, "callees", sel )
     say( rows_are( a, want ), "[%s] k2_%s" % ( kind, tag ), "--callees=%s: %s -- %s" % ( sel, [ ( w[ 1 ], w[ 2 ] ) for w in want ], why ), a.why() )
+
+# (K2, fix round 3, D1) Kotlin reads an interface as a class, so a SAM needs a count of exactly one -- but a count of 0 that the index
+# DOUBTED (T's own name shared, or a base named by two classes / none in the tree) is a lower bound, never a certain 0: the list opens.
+# The controls (a base the index names exactly, generic or Java) keep the count certain, and the list open by the SAM rule alone.
+print( "=== (K2) fix round 3: a doubted Kotlin count of 0 opens the list ===" )
+KB, KO, KJ, KI, KG, KJU = ( os.path.join( FIX, d ) for d in ( "sam_kt_base_shared", "sam_kt_own_shared", "sam_kt_javabase_shared", "sam_kt_inherit",
+                                                              "sam_kt_generic", "sam_kt_javabase" ) )
+for root, want, kind, tag, why in (
+        ( KB, [ ( "ap", "app/Op.kt:4", "name" ) ], "P", "kt_base_shared",
+          "Kotlin: `Sub : Base` where an unrelated other.Base { p; q } shares Base's name: Sub may be Base's one method, the lambda can run" ),
+        ( KO, [ ( "ap", "app/Op.kt:4", "name" ) ], "P", "kt_own_shared",
+          "Kotlin: `Sub : Base` where an unrelated other.Sub { z } shares Sub's own name: its bases cannot be told apart, so it is open" ),
+        ( KJ, [ ( "ap", "app/Op.kt:3", "name" ) ], "P", "kt_javabase_shared",
+          "Kotlin `Sub : Base` over a Java SAM Base, with an unrelated Java other.Base { p; q }: open" ),
+        ( KI, [ ( "ap", "app/Op.kt:4", "name" ) ], "C", "kt_inherit", "Kotlin: `Sub : Base`, no shared name: the SAM is inherited, open" ),
+        ( KG, [ ( "ap", "app/Op.kt:4", "name" ) ], "C", "kt_generic", "Kotlin: `Sub : Base<Int>`: open" ),
+        ( KJU, [ ( "ap", "app/Op.kt:3", "name" ) ], "C", "kt_javabase", "Kotlin `Sub : Base` over a uniquely named Java SAM: open" ) ):
+    a = ask( root, "callees", "runSub" )
+    say( rows_are( a, want ), "[%s] k2r3_%s" % ( kind, tag ), "--callees=runSub: %s -- %s" % ( [ ( w[ 1 ], w[ 2 ] ) for w in want ], why ), a.why() )
 
 # ── (M) Rust method set (fix round 1, B2; §(a) 4): through dyn T only T's impl blocks and defaults can run ───────────────────
 print( "=== (M) Rust: an inherent method is never a trait-dispatched candidate ===" )

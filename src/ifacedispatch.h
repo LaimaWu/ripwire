@@ -233,8 +233,10 @@ private:
         {
             return hit->second != 0;
         }
-        const std::size_t count = abstractCount( t, soleClassNamed( s.name ) != kNoNode );
-        const bool        sam   = count <= 1 && count >= ( lf.interfaceReadsAsClass ? 1U : 0U );
+        bool              doubted = false;
+        const std::size_t count   = abstractCount( t, soleClassNamed( s.name ) != kNoNode, doubted );
+        // a doubted 0 is a LOWER bound, never a certain 0: Kotlin's "exactly one" holds only for a count the index is sure of
+        const bool sam = count <= 1 && ( lf.interfaceReadsAsClass ? count == 1 || doubted : true );
         samMemo_.emplace( t, char( sam ? 1 : 0 ) );
         return sam;
     }
@@ -249,8 +251,9 @@ private:
     // the distinct abstract member names of class `c` (its own, plus those of the bases the index names exactly), stopping at 2:
     // a LOWER bound on the true count, so a doubt reads as "may be single". An own name is certain; a base name shared by several
     // classes, or none in the tree, adds nothing and is not walked past (its bases are the union of every same-named class's).
-    // `exactBases`: false when c's own name is shared, so its base names cannot be told apart per identity.
-    std::size_t abstractCount( NodeId c, bool exactBases ) const
+    // `exactBases`: false when c's own name is shared, so its base names cannot be told apart per identity. `doubted` is set when the
+    // count is only a lower bound: c's own name is shared, a base is not exactly one class in the tree, or the walk cap was reached.
+    std::size_t abstractCount( NodeId c, bool exactBases, bool& doubted ) const
     {
         std::vector<std::string_view> names;
         const auto                    addOwn = [ & ]( NodeId id )
@@ -268,18 +271,25 @@ private:
         };
         addOwn( c );
         std::vector<std::string_view> frontier{ ing_.symbols[ c ].name };
-        for( std::size_t i = 0; exactBases && i < frontier.size() && i < ReceiverEvidence::kWalkCap && names.size() <= 1; ++i )
+        doubted = !exactBases;
+        std::size_t i = 0;
+        for( ; exactBases && i < frontier.size() && i < ReceiverEvidence::kWalkCap && names.size() <= 1; ++i )
         {
             recvEv_.forEachBase( frontier[ i ], [ & ]( std::string_view base )
             {
                 const NodeId only = soleClassNamed( base );
-                if( only != kNoNode && std::ranges::find( frontier, base ) == frontier.end() )
+                if( only == kNoNode )
+                {
+                    doubted = true;
+                }
+                else if( std::ranges::find( frontier, base ) == frontier.end() )
                 {
                     frontier.push_back( base );
                     addOwn( only );
                 }
             } );
         }
+        doubted = doubted || ( exactBases && i < frontier.size() && i >= ReceiverEvidence::kWalkCap && names.size() <= 1 );
         return names.size();
     }
 
