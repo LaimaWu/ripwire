@@ -34,7 +34,8 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   same draw this shows 6 sites, and a hand-check read all 6 as correct: textual's `driver.start_application_mode()` /
   `stop_application_mode()` → `LinuxDriver`, `widget.render_line( y )` → `TextArea`, and `node.compose()` → three `App`
   subclasses in examples. Like every by-name hedge, each is a hedge and never a proven edge. What stays withheld: a base
-  the binding does not read (a dotted `a.b.Base`, a star import).
+  the binding does not read (a dotted `a.b.Base`, a star import), and a Python base name its file rebinds at module scope
+  after the import (`Base = Other`, `Base: type = Other`), since the import no longer says what the name means.
 
 ### Added — `--for` names the members of its shown owner rows on the compact route (`mem=`)
 

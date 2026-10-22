@@ -6263,11 +6263,19 @@ inline void pythonReexportChain( const BaseEvidenceTables& t, const std::vector<
 }
 
 // tier 2, Python: `from m import X` (X bare), `import pkg.mod as q` (q.X), `from pkg import q` (q.X: q is pkg's submodule,
-// or a class q that pkg defines or re-exports and X sits in)
+// or a class q that pkg defines or re-exports and X sits in). The name the clause starts with (X, else q) proves nothing
+// when the file REBINDS it at module scope (`X = Other`, `X: T = Other`, a tuple target, `for`/`with … as`, a top-level
+// def or class, a `global`): the import no longer says what the name means at the class statement
+// (ExternalVetoTables::pythonModuleRebind — the table recordImportBindFile already consults); a rebinding inside a
+// function body is not in it, since it does not rebind the module's name.
 inline void pythonImportedBases( const BaseEvidenceTables& t, const Reference& r, const std::vector<NodeId>& cand, std::vector<NodeId>& out )
 {
     const std::string_view qual = r.memberRoot;   // the base's written qualifier on an inherit ref ("" bare)
     std::string            key;
+    if( t.extVeto.pythonModuleRebind.contains( fileNameKey( key, r.fileId, qual.empty() ? std::string_view( r.calleeName ) : qual ) ) )
+    {
+        return;
+    }
     if( qual.empty() )
     {
         pythonReexportChain( t, cand, pythonImportFileOf( t.extVeto.memberImportFile, r.fileId, r.calleeName, key ), r.calleeName, out );
