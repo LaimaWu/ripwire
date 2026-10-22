@@ -40,6 +40,7 @@
 #include "closures.h"         // ClosureIndex — a near-sink row written inside another function's body (why=closure)
 #include "infra/sortutil.h"   // svLess: the explicit byte order every string_view sort here takes (portablebuildcheck #6)
 #include "infra/enumcount.h"  // enumCountIsExact — the kNearSinkKindCount / kBridgeViaCount sizes follow their enums
+#include "langfacts.h"         // langFacts(l).transitiveIncludes — the import rule's C-family closure (K5 rule 2b)
 #include "infra/namesplit.h"  // afterLast — a scope's final segment, the CHA name graph's key (K5 rule 2c)
 
 #include <algorithm>
@@ -541,8 +542,7 @@ public:
         if( ns.scope.empty() )
         {
             const std::uint32_t from = ing_.symbols[caller].fileId;
-            const bool          cFam = ns.lang == Lang::C || ns.lang == Lang::Cpp || ns.lang == Lang::ObjC;
-            return from == ns.fileId || fileSees( from, ns.fileId, cFam );
+            return from == ns.fileId || fileSees( from, ns.fileId, langFacts( ns.lang ).transitiveIncludes );
         }
         if( owners_.reaches( ns ) )
         {

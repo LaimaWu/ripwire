@@ -85,17 +85,22 @@ struct LangFacts
     /// decides only the closure relation, no symbol or edge). A lambda or a block is anonymous, and a C++ local class's
     /// methods sit inside the class's scope, not directly in the function, so neither is a closure either way.
     bool noNestedNamedFunctions = false;
+
+    /// C, C++, Objective-C: a file sees every file its #includes reach, transitively (a header's own #include is in force in
+    /// the includer), so the by-name hedge's import rule (pathgaps.h NamesakeRule, K5 rule 2b) follows the include closure;
+    /// every other language's import names one module, so that rule reads the direct import edge only.
+    bool transitiveIncludes = false;
 };
 
 /// The rows, one per Lang in enum order. A language says only the facts it has.
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
-    { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true },
+    { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true, .transitiveIncludes = true },
     { .lang = Lang::Python },
     { .lang = Lang::TypeScript, .overloadSignatures = true },
     { .lang = Lang::Go },
     { .lang = Lang::Rust },
     { .lang = Lang::Swift },
-    { .lang = Lang::ObjC, .noNestedNamedFunctions = true },
+    { .lang = Lang::ObjC, .noNestedNamedFunctions = true, .transitiveIncludes = true },
     { .lang = Lang::Markdown, .linkSections = true },
     { .lang = Lang::JavaScript },
     { .lang = Lang::Bash },
@@ -104,7 +109,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Unknown },
     { .lang = Lang::Json },
     { .lang = Lang::CSharp },
-    { .lang = Lang::C, .noNestedNamedFunctions = true },
+    { .lang = Lang::C, .noNestedNamedFunctions = true, .transitiveIncludes = true },
     { .lang = Lang::Toml },
     { .lang = Lang::Yaml },
     { .lang = Lang::Php },

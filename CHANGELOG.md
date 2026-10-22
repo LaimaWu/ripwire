@@ -19,8 +19,9 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 - A by-name hedge (`<near_sink>` `why="name"`, a `<bridge>` `via="namesake"` crossing) to a namesake with no class (a free
   function, or a JavaScript/TypeScript method, whose class the extractor does not record) now needs the caller's file to be,
-  or to import, the namesake's file: a direct import edge, or any transitive `#include` in C, C++ and Objective-C. A namesake
-  file the search merely touched no longer counts. On the 880-pair seed-18 `--path` draw over 11 in-sample repos this
+  or to import, the namesake's file (a direct import edge). A namesake file the search merely touched no longer counts. For
+  C, C++ and Objective-C the rule follows the transitive `#include` closure, but no probe of ours produced a by-name hedge
+  to a C-family free function: those calls are declined, not bound by name. On the 880-pair seed-18 `--path` draw over 11 in-sample repos this
   withholds the 2 shown by-name sites a hand-check had rejected (koa's `delegate( proto, 'response' ).method( … )` reaching
   `request.js`'s `get method`, and a bundled Bootstrap `this.init( … )` reaching nunjucks' `Parser.init`). The one accepted
   site, flake8's `report()`, stays. 16 rows that already showed a value or declined site keep it and now also count a by-name way in.
