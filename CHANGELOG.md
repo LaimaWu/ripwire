@@ -19,16 +19,21 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   outside the tree: `class Sub(ext.Base)`, `from ext import Base`, `import { Base } from 'lib'` / `lib.Base`, `use ext::Base;
   impl Base for S`, Java/Kotlin `import org.ext.Base` / `extends org.ext.Base` (a package the tree does not declare). A star or
   wildcard import, an import the tree cannot place, an import of the tree's own package name (Node self-reference, also on a
-  multi-root run; a single-root Python repo whose root is the package, by its directory or `[project] name`; a Rust crate's
-  Cargo `[package]`/`[lib]` name from its tests/, examples/ and main.rs, a renamed dependency key
-  (`core2 = { package = "foo-core", path = "../core" }`, also a `[dependencies.core2]` table or a dotted key), a leading `::`
-  (`use ::foo_core::T`), and an alias the file itself spells with `extern crate foo_core as fc;` or `use foo_core as fc;`), a
-  workspace crate spelled with `_` for its `-` directory or named in its Cargo.toml, and a same-file declaration still keep
-  the by-name row, and a clause dropped as outside adds no `implementors_floor=`. Not read, so the row is kept by name
-  rather than dropped: any `use` in a .rs file that spells an alias inside a brace group (`use a::{b as c};`). Not read, and
-  the clause IS dropped as outside (no floor): a crate alias reached through another file's re-export (`pub use foo_core as fc;`
-  in lib.rs, `use fc::T` from a module that does not repeat it) and a renamed crate that only a `[patch]` / `[replace]`
-  table or a `.cargo/config` names. This does NOT
+  multi-root run; a single-root Python repo whose root is the package, by its directory or `[project] name`) and a same-file
+  declaration still keep the by-name row, and a clause dropped as outside adds no `implementors_floor=`.
+  For Rust the decision is inverted: a `use` head is decided OUTSIDE only when it is `std`/`core`/`alloc`/`proc_macro`/`test`, or
+  a registry or git dependency that some Cargo.toml of the tree declares (any dependency table, `[workspace.dependencies]`
+  included; the key and its `package =` name; a `path =` crate or a key `[patch]`/`[replace]` names is not one), also through
+  an alias the file itself spells (`use serde as sd;`, `use std::io::{Write as _};` moves no other head). A head that is a
+  crate of the tree keeps its row: a Cargo `[package]`/`[lib]` name from its tests/, examples/ and main.rs, a workspace crate
+  spelled with `_` for its `-` directory, a dependency key with `path =` under the indexed root or an in-tree `package =`
+  (`core2 = { package = "foo-core", path = "../core" }`, also a `[dependencies.core2]` table or a dotted key), a leading `::`,
+  an `extern crate foo_core as fc;` or `use foo_core as fc;` the file spells. EVERY other head — an unknown crate, an alias or
+  re-export this scan did not see (`pub extern crate foo_core as fc;` in lib.rs, `use fc::T` from another file), a rename only
+  `[patch]`, `[replace]` or `.cargo/config` names, a `path =` crate outside the indexed root — is undecided: it lists no row
+  and the interface carries `implementors_floor=`, never a confident `implementors="0"`. A tree with no Cargo.toml decides
+  nothing outside but `std` and its siblings. `.cargo/config` is not read, so a registry key it renames is decided outside.
+  This does NOT
   cover a C++ `ext::Base` or `using ext::Base`, a C# `using`, a Swift `import`, a PHP `use`, a JS `require` destructure or a
   Rust `impl ext::Base for S` with no `use`: those rows are still listed by name. Gate: `test/legotransitivecheck.sh` (XP).
 - `--quality-delta=A..B` extracts its per-commit archive through stdin (`tar -x -f -`), the same Windows drive-colon fix as #402 (thanks @lennix1337).

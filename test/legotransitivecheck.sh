@@ -399,6 +399,24 @@ xp XpRenBase    "" "XpRenImpl"
 # leading `::` — are in the tree too; `use serde::…` beside them is still outside
 xp XpDepBase  "XpDepOutSerde" "XpDepRenamed XpDepExternAlias XpDepUseAlias XpDepEntryTable"
 xp XpLeadBase "XpLeadOutSerde" "XpLeadColons"
+# fix round 3 (review rv-fc2-delta2 R1, R2, S-a): the Rust decision is INVERTED — a `use` head is decided OUTSIDE only when it is std/core/
+# alloc/proc_macro/test or a registry or git dependency some Cargo.toml of the tree declares; every other head (a crate-root `extern crate`
+# alias used from another file, a rename only [patch] names, a `path =` crate outside the indexed root) is UNDECIDED: its clause draws no row
+# and carries implementors_floor, never a confident implementors="0". A brace alias of std in a file moves no other head of it.
+xpfloor(){
+    local sel="$1" absent="$2" n
+    lego "$sel" || return 0
+    if iface | grep -q 'implementors_floor="1"'; then ok "--lego=$sel: the undecided clause keeps implementors_floor"; else no "--lego=$sel: an undecided clause is a confident drop (no floor): $( iface )"; fi
+    for n in $absent
+    do
+        if has "<impl n=\"$n\""; then no "--lego=$sel lists $n, whose base head the tree cannot place: $( iface )"; else ok "--lego=$sel: no $n (undecided head, floor instead)"; fi
+    done
+}
+xpfloor XpReexpBase  "XpReexpReal XpReexpOutSerde"
+xpfloor XpPatchBase  "XpPatchReal XpPatchOutSerde"
+xpfloor XpPathExtBase "XpPathExtOut"
+xp XpBraceBase "XpBraceOutBrace XpBraceOutPlain" "XpBraceInGroup"
+xp XpWsInhBase "XpWsInhOutAlias" "XpWsInhReal XpWsInhTarget"
 # (P1) a repo whose ROOT is the package (top-level __init__.py, no src/) importing its own name keeps its row; an outside
 # namesake beside it is still dropped
 if "$BIN" "$FIX/xp/pyflat" --no-cache --lego=XpFlatBase >"$DIR/out" 2>"$DIR/err"
@@ -425,7 +443,7 @@ then
     if iface | grep -q 'implementors_floor'; then no "XpRsBase carries a floor for a decided-outside clause: $( iface )"; else ok "XpRsBase: no implementors_floor for the outside-bound XpRsOutUse"; fi
     if has '<impl n="XpRsInUse"'; then ok "XpRsBase still lists XpRsInUse"; else no "XpRsBase lost XpRsInUse: $( iface )"; fi
 fi
-for t in XpDepBase XpLeadBase
+for t in XpDepBase XpLeadBase XpBraceBase XpWsInhBase
 do
     if lego "$t"
     then

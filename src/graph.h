@@ -6179,12 +6179,43 @@ inline bool tomlInlineSets( std::string_view value, std::string_view field, std:
     return false;
 }
 
-// The dependency KEYS of one Cargo.toml text that name a crate of this tree, appended to `out` as written: an entry of a
+// What the dependency tables of one Cargo.toml name, keys as written (a `foo-core` is normalised to `foo_core` by the caller).
+struct TomlDeps
+{
+    std::vector<std::string> inTree;     // keys naming a crate of this tree: a `path =` under the indexed root, or an in-tree `package =`
+    std::vector<std::string> declared;   // every dependency key, and every `package =` name
+    std::vector<std::string> pathed;     // keys with any `path =` (inside the root or not) and every [patch] / [replace] key: never a registry or git dependency
+};
+
+// Does a dependency's `path =` (relative to the manifest in `dir`, "" for the root) stay under the indexed root? A path that climbs out of
+// it names a crate this run did not index (a vendored or sibling-workspace crate): not a crate of the tree.
+inline bool tomlPathInRoot( std::string_view dir, std::string_view path )
+{
+    if( path.starts_with( '/' ) || path.starts_with( '\\' ) || ( path.size() > 1 && path[ 1 ] == ':' ) )
+    {
+        return false;
+    }
+    std::ptrdiff_t depth = std::ranges::count( dir, '/' ) + ( dir.empty() ? 0 : 1 );
+    for( std::size_t at = 0; at <= path.size(); )
+    {
+        const std::size_t       end = std::min( path.find( '/', at ), path.size() );
+        const std::string_view seg = path.substr( at, end - at );
+        depth += seg == ".." ? -1 : ( seg.empty() || seg == "." ? 0 : 1 );
+        if( depth < 0 )
+        {
+            return false;
+        }
+        at = end + 1;
+    }
+    return true;
+}
+
+// The dependency KEYS of one Cargo.toml text (in the directory `dir`, "" for the root), sorted into TomlDeps: an entry of a
 // `[dependencies]` / `[dev-dependencies]` / `[build-dependencies]` / `[workspace.dependencies]` / `[target.*.dependencies]` table (or its
-// own `[dependencies.key]` table, or a dotted `key.path =`) that carries `path =` or `package = "<a package of this tree>"`. That key is
-// the crate's name in the code (`core2 = { package = "foo-core", path = "../core" }` -> `use core2::T`). An inline table
-// that does not close on its line cannot be read, so its key is added whole: that can only keep a row, never drop one.
-inline void tomlDependencyKeys( std::string_view text, const HashMap<std::string, char>& inTree, std::vector<std::string>& out )
+// own `[dependencies.key]` table, or a dotted `key.path =`). A key that carries a `path =` under the root or `package = "<a package of
+// this tree>"` names a crate of the tree in the code (`core2 = { package = "foo-core", path = "../core" }` -> `use core2::T`). An inline
+// table that does not close on its line cannot be read, so its key counts as in the tree: that can only keep a row, never decide one.
+inline void tomlDependencyKeys( std::string_view text, std::string_view dir, const HashMap<std::string, char>& inTree, TomlDeps& out )
 {
     bool        table   = false;   // inside a dependency-key table
     bool        inEntry = false;   // inside `[dependencies.<entry>]`
@@ -6194,6 +6225,22 @@ inline void tomlDependencyKeys( std::string_view text, const HashMap<std::string
         std::string spelled( name );   // `foo-core` is written `foo_core` in the names
         std::replace( spelled.begin(), spelled.end(), '-', '_' );
         return !name.empty() && inTree.contains( spelled );
+    };
+    const auto note = [ & ]( std::string_view name, bool hasPath, std::string_view path, std::string_view package )
+    {
+        out.declared.emplace_back( name );
+        if( !package.empty() )
+        {
+            out.declared.emplace_back( package );
+        }
+        if( hasPath )
+        {
+            out.pathed.emplace_back( name );
+        }
+        if( hasPath ? tomlPathInRoot( dir, path ) : ownPackage( package ) )
+        {
+            out.inTree.emplace_back( name );
+        }
     };
     while( !text.empty() )
     {
@@ -6217,6 +6264,10 @@ inline void tomlDependencyKeys( std::string_view text, const HashMap<std::string
                 after.remove_prefix( 1 );
                 entry   = std::string( tomlTakeKey( after ) );
                 inEntry = !entry.empty();
+                if( inEntry )
+                {
+                    out.declared.push_back( entry );
+                }
             }
             continue;
         }
@@ -6238,34 +6289,95 @@ inline void tomlDependencyKeys( std::string_view text, const HashMap<std::string
             continue;
         }
         rest.remove_prefix( 1 );
-        std::string_view quoted;
         if( inEntry || !sub.empty() )
         {
             const std::string_view field = inEntry ? key : sub;   // inside an entry table the line's own key is the field
             std::string_view       value = rest;
-            if( field == "path" || ( field == "package" && ownPackage( tomlTakeKey( value ) ) ) )
-            {
-                out.emplace_back( inEntry ? entry : std::string( key ) );
-            }
+            const std::string_view v     = tomlTakeKey( value );
+            note( inEntry ? std::string_view( entry ) : key, field == "path", field == "path" ? v : std::string_view(), field == "package" ? v : std::string_view() );
+            continue;
         }
-        else if( tomlInlineSets( rest, "path", quoted ) || ( tomlInlineSets( rest, "package", quoted ) && ownPackage( quoted ) )
-                 || ( rest.find( '{' ) != std::string_view::npos && rest.find( '}' ) == std::string_view::npos ) )
+        std::string_view path;
+        std::string_view package;
+        const bool       hasPath = tomlInlineSets( rest, "path", path );
+        tomlInlineSets( rest, "package", package );
+        note( key, hasPath, path, package );
+        if( rest.find( '{' ) != std::string_view::npos && rest.find( '}' ) == std::string_view::npos )
         {
-            out.emplace_back( key );
+            out.inTree.emplace_back( key );   // an inline table over several lines: unreadable, never a registry dependency
+            out.pathed.emplace_back( key );
         }
     }
 }
 
-// The crate names this tree's Cargo.toml files declare, spelled the way a `use` writes them (`foo-core` -> `foo_core`): each
-// manifest's `[package] name` and `[lib] name`, plus every dependency KEY that names a crate of the tree (a renamed dependency:
-// `core2 = { package = "foo-core", path = "../core" }`, see tomlDependencyKeys). A crate's own name is no path segment of any .rs
-// file, yet `use mycrate::T` in its tests/, examples/, benches/ and src/main.rs names the crate itself, and a workspace crate's
-// package name need not be its directory's. Read through diskPath (the multi-root seam).
-inline HashMap<std::string, char> cargoCrateNames( const IngestResult& ing )
+// The keys a `[patch.<registry>]` / `[replace]` table redirects, appended to `out` (they stay out of the declared-external set: the
+// code may name a patched crate by a key this scan would call a registry dependency): `[patch.crates-io]` lines `key = …` and their
+// `package =` names, the entry form `[patch.crates-io.key]`, and `[replace]` keys (`"foo:1.0.0"` -> `foo`).
+inline void tomlPatchKeys( std::string_view text, std::vector<std::string>& out )
 {
-    HashMap<std::string, char> names;
-    std::vector<std::string>   found;
-    std::vector<std::string>   manifests;
+    bool table = false;
+    while( !text.empty() )
+    {
+        const std::size_t end  = text.find( '\n' );
+        std::string_view  line = text.substr( 0, end );
+        text = end == std::string_view::npos ? std::string_view() : text.substr( end + 1 );
+        line.remove_prefix( std::min( line.find_first_not_of( " \t\r" ), line.size() ) );
+        if( line.starts_with( '[' ) )
+        {
+            std::string_view header = line.substr( 1, std::min( line.find( ']' ), line.size() ) - 1 );
+            const bool       patch  = header.starts_with( "patch" );
+            table                   = patch || header.starts_with( "replace" );
+            header.remove_prefix( std::min( header.find( '.' ), header.size() ) );
+            if( table && header.starts_with( '.' ) )
+            {
+                header.remove_prefix( 1 );
+                std::string_view named = header;
+                if( patch )
+                {
+                    tomlTakeKey( named );   // the registry
+                    named.remove_prefix( named.starts_with( '.' ) ? 1 : named.size() );
+                }
+                if( const std::string_view key = tomlTakeKey( named ); !key.empty() )
+                {
+                    out.emplace_back( key.substr( 0, key.find( ':' ) ) );
+                    table = false;   // the entry form: the lines below are its fields
+                }
+            }
+            continue;
+        }
+        std::string_view       rest = line;
+        const std::string_view key  = tomlTakeKey( rest );
+        rest.remove_prefix( std::min( rest.find_first_not_of( " \t" ), rest.size() ) );
+        if( !table || key.empty() || key.front() == '#' || !rest.starts_with( '=' ) )
+        {
+            continue;
+        }
+        out.emplace_back( key.substr( 0, key.find( ':' ) ) );
+        std::string_view package;
+        if( tomlInlineSets( rest, "package", package ) && !package.empty() )
+        {
+            out.emplace_back( package );
+        }
+    }
+}
+
+// What this tree's Cargo.toml files say about crate names, spelled the way a `use` writes them (`foo-core` -> `foo_core`).
+struct CargoNames
+{
+    HashMap<std::string, char> inTree;     // each manifest's `[package] name` and `[lib] name`, plus every dependency KEY naming a crate of the tree
+    HashMap<std::string, char> external;   // declared as a registry or git dependency (not `path =`, not [patch]ed): decided OUTSIDE the tree
+};
+
+// The crate names this tree's Cargo.toml files declare. A crate's own name is no path segment of any .rs file, yet `use mycrate::T` in
+// its tests/, examples/, benches/ and src/main.rs names the crate itself, and a workspace crate's package name need not be its
+// directory's. A dependency key is the crate's name in the code, renamed or not (see tomlDependencyKeys); one that
+// only a registry or git dependency declares is `external`, which is the only thing a Rust base clause is DECIDED outside by (besides
+// std). Read through diskPath (the multi-root seam).
+inline CargoNames cargoCrateNames( const IngestResult& ing )
+{
+    CargoNames               names;
+    std::vector<std::string> found;
+    std::vector<std::pair<std::string, std::string>> manifests;   // (directory under the root, text)
     for( std::uint32_t f = 0; f < ing.files.size(); ++f )
     {
         const std::string_view rel = rootRelPath( ing, f );
@@ -6276,28 +6388,52 @@ inline HashMap<std::string, char> cargoCrateNames( const IngestResult& ing )
         if( std::optional<std::string> text = docparse::detail::readWholeFile( diskPath( ing, f ) ) )
         {
             tomlSectionNames( *text, { "[package]", "[lib]" }, found );
-            manifests.push_back( std::move( *text ) );
+            manifests.emplace_back( std::string( rel.substr( 0, rel.rfind( '/' ) == std::string_view::npos ? 0 : rel.rfind( '/' ) ) ), std::move( *text ) );
         }
     }
-    const auto add = [ & ]( std::string& name )
+    const auto spell = []( std::string& name ) { std::replace( name.begin(), name.end(), '-', '_' ); };
+    const auto add   = [ & ]( std::string& name )
     {
-        std::replace( name.begin(), name.end(), '-', '_' );
-        names.try_emplace( std::move( name ), char( 1 ) );
+        spell( name );
+        names.inTree.try_emplace( std::move( name ), char( 1 ) );
     };
     std::ranges::for_each( found, add );
-    found.clear();
-    for( const std::string& text : manifests )
+    TomlDeps deps;
+    for( const auto& [ dir, text ] : manifests )
     {
-        tomlDependencyKeys( text, names, found );   // after the package names: a rename's `package =` is checked against them
+        tomlDependencyKeys( text, dir, names.inTree, deps );   // after the package names: a rename's `package =` is checked against them
+        tomlPatchKeys( text, deps.pathed );
     }
-    std::ranges::for_each( found, add );
+    std::ranges::for_each( deps.inTree, add );
+    HashMap<std::string, char> notRegistry;
+    for( std::string& name : deps.pathed )
+    {
+        spell( name );
+        notRegistry.try_emplace( std::move( name ), char( 1 ) );
+    }
+    for( std::string& name : deps.declared )
+    {
+        spell( name );
+        if( !notRegistry.contains( name ) && !names.inTree.contains( name ) )
+        {
+            names.external.try_emplace( std::move( name ), char( 1 ) );
+        }
+    }
     return names;
 }
 
+// The first path segment of `s` (`::foo_core::inner` -> `foo_core`; `foo as f` -> `foo`).
+inline std::string_view rustFirstSegment( std::string_view s )
+{
+    s.remove_prefix( std::min( s.find_first_not_of( " \t\r" ), s.size() ) );
+    s.remove_prefix( s.starts_with( "::" ) ? 2 : 0 );
+    return s.substr( 0, std::min( s.find_first_of( ": \t\r{" ), s.size() ) );
+}
+
 // The crate aliases one .rs file spells locally, `alias -> the first path segment it names`: `extern crate foo_core as fc;`,
-// `use foo_core as fc;`, `use foo_core::inner as fc;` (a statement may span lines). `use fc::T` then names an item of foo_core.
-// An alias inside a brace group (`use a::{b as c};`) is not read: it is recorded as the marker ("*", "") so the caller keeps
-// every row of the file instead of dropping one it cannot place. A bare statement scan: an alias inside a macro body is read like any other.
+// `use foo_core as fc;`, `use foo_core::inner as fc;`, and inside a brace group `use foo_core::{inner as fc, Y};` (an alias there
+// names the group prefix's first segment; with no prefix, the item's own). A statement may span lines. `use fc::T` then names an item of
+// foo_core. A bare statement scan: an alias inside a macro body is read like any other.
 inline void rustCrateAliases( std::string_view text, std::vector<std::pair<std::string, std::string>>& out )
 {
     const auto trim = []( std::string_view s )
@@ -6338,25 +6474,18 @@ inline void rustCrateAliases( std::string_view text, std::vector<std::pair<std::
         open = false;
         std::string_view body = trim( std::string_view( stmt ).substr( 0, semi ) );
         body = trim( body.substr( body.starts_with( "use " ) ? 4 : 12 ) );
-        const std::size_t asAt = body.find( " as " );
-        if( asAt == std::string_view::npos )
+        const std::string_view lead = rustFirstSegment( body.substr( 0, std::min( body.find( '{' ), body.find( " as " ) ) ) );
+        for( std::size_t asAt = body.find( " as " ); asAt != std::string_view::npos; asAt = body.find( " as ", asAt + 4 ) )
         {
-            continue;
-        }
-        if( body.find( '{' ) != std::string_view::npos )
-        {
-            out.emplace_back( "*", std::string() );
-            continue;
-        }
-        std::string_view target = trim( body.substr( 0, asAt ) );
-        if( target.starts_with( "::" ) )
-        {
-            target.remove_prefix( 2 );
-        }
-        target = target.substr( 0, target.find( "::" ) );
-        if( const std::string_view alias = trim( body.substr( asAt + 4 ) ); !alias.empty() && !target.empty() )
-        {
-            out.emplace_back( std::string( alias ), std::string( target ) );
+            std::string_view alias = trim( body.substr( asAt + 4 ) );
+            alias                  = alias.substr( 0, alias.find_first_not_of( "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_" ) );
+            const std::size_t from  = body.substr( 0, asAt ).find_last_of( ",{" );
+            const std::size_t start = from == std::string_view::npos ? 0 : from + 1;
+            const std::string_view target = lead.empty() ? rustFirstSegment( body.substr( start, asAt - start ) ) : lead;
+            if( !alias.empty() && !target.empty() )
+            {
+                out.emplace_back( std::string( alias ), std::string( target ) );
+            }
         }
     }
 }
@@ -6375,30 +6504,69 @@ inline bool rustTreeCrate( const HashMap<std::string, char>& modules, const Hash
 
 using RustAliasCache = HashMap<std::uint32_t, std::vector<std::pair<std::string, std::string>>>;   // per file, read once and only when asked
 
-// Does file `f` alias `head` to a crate of this tree (`extern crate foo_core as fc;` then `use fc::X`), or spell an alias this
-// scan cannot read (rustCrateAliases' "*" marker)? The file is read the first time a head of it is asked about; std/core/alloc never are.
-inline bool rustAliasOfTreeCrate( const IngestResult& ing, std::uint32_t f, std::string_view head, RustAliasCache& cache,
-                                  const auto& treeCrate )
+// What file `f` aliases `head` to (`extern crate foo_core as fc;` then `use fc::X` -> foo_core), "" if it does not. The file is read
+// the first time a head of it is asked about.
+inline std::string_view rustFileAlias( const IngestResult& ing, std::uint32_t f, std::string_view head, RustAliasCache& cache )
 {
-    if( head == "std" || head == "core" || head == "alloc" )
-    {
-        return false;
-    }
     auto [ at, fresh ] = cache.try_emplace( f );
     if( const std::optional<std::string> text = fresh ? docparse::detail::readWholeFile( diskPath( ing, f ) ) : std::nullopt )
     {
         rustCrateAliases( *text, at->second );
     }
-    return std::ranges::any_of( at->second, [ & ]( const auto& a )
-                                { return a.first == "*" || ( a.first == head && ( a.second == "crate" || a.second == "self" || a.second == "super" || treeCrate( a.second ) ) ); } );
+    const auto hit = std::ranges::find_if( at->second, [ & ]( const auto& a ) { return a.first == head; } );
+    return hit == at->second.end() ? std::string_view() : std::string_view( hit->second );
+}
+
+// Rust base clause table values: the head of the `use` is DECIDED outside the tree ('\0') or UNDECIDED ('u').
+inline constexpr char kRustUseUndecided = 'u';
+
+// Is `name` decided outside the tree: std and its siblings, or a crate some Cargo.toml of the tree declares as a registry or git dependency?
+// Everything else — an unknown head, an alias or re-export this scan did not see, a [patch]ed or `path =` crate — is not decided either way.
+inline bool rustDecidedOutside( const CargoNames& cargo, std::string_view name )
+{
+    return name == "std" || name == "core" || name == "alloc" || name == "proc_macro" || name == "test" || cargo.external.contains( std::string( name ) );
+}
+
+// The `a::b::c` path of one Rust `use` that names a single outside-able item (`first` = the offset of its first `::`), "" for any other
+// include: a `mod`, a non-.rs file, `use x;` (a crate root) or a brace group. crateDirAware strips a leading `::` (`use ::mycrate::X`).
+inline std::string_view rustUsePath( const IngestResult& ing, const Include& inc, bool crateDirAware )
+{
+    std::string_view path = inc.target;
+    if( inc.fileId >= ing.files.size() || path.starts_with( "mod:" ) || !rootRelPath( ing, inc.fileId ).ends_with( ".rs" ) )
+    {
+        return {};
+    }
+    path.remove_prefix( crateDirAware && path.starts_with( "::" ) ? 2 : 0 );
+    return path.find( "::" ) == std::string_view::npos || path.find( '{' ) != std::string_view::npos ? std::string_view() : path;
+}
+
+// crateDirAware's reading of one `use` head that is no module: 'i' a crate of this tree (no row), '\0' decided outside, kRustUseUndecided.
+inline char rustHeadVerdict( const IngestResult& ing, std::uint32_t f, std::string_view head, const CargoNames& cargo, RustAliasCache& aliases,
+                             const auto& treeCrate )
+{
+    if( treeCrate( head ) )
+    {
+        return 'i';   // a crate of this tree under its own name or a Cargo key
+    }
+    if( rustDecidedOutside( cargo, head ) )
+    {
+        return '\0';
+    }
+    const std::string_view target = rustFileAlias( ing, f, head, aliases );   // `extern crate X as head;` / `use X as head;`
+    if( !target.empty() && treeCrate( target ) )
+    {
+        return 'i';
+    }
+    return !target.empty() && rustDecidedOutside( cargo, target ) ? '\0' : kRustUseUndecided;
 }
 
 // Rust: `use a::b::c;` whose first segment is not crate/self/super/a module of this tree names an outside item `c`, into
-// `out` ("<fileId>#c"). `crateDirAware` (lane fc2-lego-extparent's base clause reader) also reads as in the tree: a head spelled with
-// `_` for the workspace crate directory spelled with `-` (`use nu_glob::X` beside crates/nu-glob), a Cargo package or [lib] name
-// of this tree or a dependency key naming one (`use mycrate::X` from its tests/, `use core2::X` for a renamed dependency), a
-// leading `::` (`use ::mycrate::X`), and a head the file itself aliases to such a crate (`extern crate foo_core as fc;`).
-// FE-A's own table keeps the plain rule (crateDirAware false), so the call edges stay as they were.
+// `out` ("<fileId>#c"). `crateDirAware` (lane fc2-lego-extparent's base clause reader) decides it differently and in three ways: a head that is a
+// crate of this tree (a module, a workspace crate directory spelled with `_` for `-`, a Cargo package or [lib] name or a
+// dependency key naming one, a leading `::` stripped, or a head the file itself aliases to such a crate) is in the tree and has no
+// row; a head that is std/core/alloc/proc_macro/test or declared as a registry or git dependency (rustDecidedOutside, also through a
+// file's own alias of one) is DECIDED outside ('\0'); every other head is UNDECIDED (kRustUseUndecided): it is not read as in or out.
+// FE-A's own table keeps the plain rule (crateDirAware false: every head that is no module is outside), so the call edges stay as they were.
 inline void rustOutsideUses( const IngestResult& ing, bool crateDirAware, HashMap<std::string, char>& out )
 {
     const HashMap<std::string, char> modules = rustModuleNames( ing );
@@ -6406,32 +6574,24 @@ inline void rustOutsideUses( const IngestResult& ing, bool crateDirAware, HashMa
     {
         return;   // no Rust in the tree
     }
-    const HashMap<std::string, char> cargoNames = crateDirAware ? cargoCrateNames( ing ) : HashMap<std::string, char>{};
-    const auto treeCrate = [ & ]( std::string_view name ) { return rustTreeCrate( modules, cargoNames, name ); };
+    const CargoNames cargo = crateDirAware ? cargoCrateNames( ing ) : CargoNames{};
+    const auto treeCrate = [ & ]( std::string_view name )
+    { return name == "crate" || name == "self" || name == "super" || rustTreeCrate( modules, cargo.inTree, name ); };
     RustAliasCache aliases;
     for( const Include& inc : ing.includes )
     {
-        std::string_view path = inc.target;
-        if( inc.fileId >= ing.files.size() || path.starts_with( "mod:" ) || !rootRelPath( ing, inc.fileId ).ends_with( ".rs" ) )
+        const std::string_view path = rustUsePath( ing, inc, crateDirAware );
+        const std::string_view head = path.substr( 0, path.find( "::" ) );
+        if( path.empty() || head == "crate" || head == "self" || head == "super" || modules.contains( std::string( head ) ) )
         {
             continue;
         }
-        path.remove_prefix( crateDirAware && path.starts_with( "::" ) ? 2 : 0 );   // `use ::mycrate::X`: the same path, rooted at the extern prelude
-        const std::size_t first = path.find( "::" );
-        if( first == std::string_view::npos || path.find( '{' ) != std::string_view::npos )
+        const char verdict = crateDirAware ? rustHeadVerdict( ing, inc.fileId, head, cargo, aliases, treeCrate ) : '\0';
+        if( verdict != 'i' )
         {
-            continue;   // `use x;` (a crate root) or a brace group: no single named item
+            char& slot = out.try_emplace( jsImportKey( inc.fileId, path.substr( path.rfind( "::" ) + 2 ) ), '\0' ).first->second;
+            slot       = verdict == kRustUseUndecided ? verdict : slot;   // two uses of one name: an undecided one keeps the clause undecided
         }
-        const std::string_view head = path.substr( 0, first );
-        if( head == "crate" || head == "self" || head == "super" || modules.contains( std::string( head ) ) )
-        {
-            continue;
-        }
-        if( crateDirAware && ( treeCrate( head ) || rustAliasOfTreeCrate( ing, inc.fileId, head, aliases, treeCrate ) ) )
-        {
-            continue;   // a crate of this tree under its own name, a Cargo key, or an alias the file spells for one
-        }
-        out.try_emplace( jsImportKey( inc.fileId, path.substr( path.rfind( "::" ) + 2 ) ), '\0' );
     }
 }
 
@@ -6867,6 +7027,27 @@ inline bool jvmPackageOutsideTree( const ReceiverEvidence& ev, std::string_view 
     return !ev.classNames.contains( std::string( dot == std::string_view::npos ? pkg : pkg.substr( dot + 1 ) ) );
 }
 
+// Lane fc2-lego-extparent: what the file's `use` says of the Rust base clause `r` (rustOutsideUses' table): '\0' its head is DECIDED outside the
+// tree, kRustUseUndecided the tree can neither place it nor prove it outside (an unknown head, a re-export or [patch] rename, a
+// `path =` crate outside the root), 'n' no outside `use` names it (or a same-file declaration answers).
+inline char rustUseVerdict( const BaseEvidenceTables& t, const Reference& r )
+{
+    if( r.lang != Lang::Rust || r.baseBind != 0 || !r.memberRoot.empty() || t.rustOutsideUse == nullptr )
+    {
+        return 'n';
+    }
+    std::string key;
+    const auto  it = t.rustOutsideUse->find( fileNameKey( key, r.fileId, r.calleeName ) );
+    return it == t.rustOutsideUse->end() ? 'n' : it->second;
+}
+
+// … and the undecided one draws no by-name edge and is NOT decided either: the interface row's implementors_floor= says a clause of that
+// spelling is unbound.
+inline bool rustBaseUndecided( const BaseEvidenceTables& t, const Reference& r )
+{
+    return rustUseVerdict( t, r ) == kRustUseUndecided;
+}
+
 // Lane fc2-lego-extparent: does the file's OWN import evidence bind the base clause `r` writes to a type from OUTSIDE the
 // tree, so that no in-tree class of that name is its base (`class Sub(ext.Base)`, `from ext import Base; class Sub(Base)`,
 // `import { Base } from 'lib'`, `use ext::Base; impl Base for S`, `import org.ext.Base;`)? Then the clause draws no
@@ -6911,7 +7092,7 @@ inline bool baseBoundOutsideTree( const BaseEvidenceTables& t, const Reference& 
             return it != verdicts->end() && it->second == 'x';   // the namespace import's module is outside (buildQualifierVerdicts)
         }
         case BaseImportEvidence::RustUse:
-            return qual.empty() && t.rustOutsideUse != nullptr && t.rustOutsideUse->contains( fileNameKey( key, r.fileId, r.calleeName ) );
+            return rustUseVerdict( t, r ) == '\0';
         case BaseImportEvidence::JvmImport:
         {
             if( t.recvEv == nullptr )
@@ -10346,6 +10527,10 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         {
             g.baseOutsideClauses.push_back( std::uint32_t( &r - ing.references.data() ) );
             continue;   // fc2-lego-extparent: the file's own import binds the written base outside the tree — no in-tree base
+        }
+        if( rustBaseUndecided( baseEvidence, r ) )
+        {
+            continue;   // fc2-lego-extparent: a `use` head the tree cannot place and cannot prove outside — no edge, no decision (the floor says so)
         }
         if( ing.symbols[ derived ].lang == Lang::Ruby )
         {

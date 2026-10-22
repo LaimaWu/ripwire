@@ -309,7 +309,7 @@ rrun US --uses=selectBaseline \
 # 31 -> 32 (lane/cr-qd-kinds-068): quality.h defectSitesOf reads each C++ / Python / Bash test-script file for the
 # defect-shape scanners through the canonical helper — one new call site, same helper.
 # 32 -> 35 (lane/fc2-lego-extparent fix 1 + fix 2): cargoCrateNames and pythonRootPackageImports read each Cargo.toml / the root
-# pyproject.toml through the canonical helper (two call sites, fix 1), and rustOutsideUses reads a .rs file to find its
+# pyproject.toml through the canonical helper (two call sites, fix 1), and rustFileAlias (called by rustOutsideUses) reads a .rs file to find its
 # `extern crate … as` / `use … as` crate aliases (one more, fix 2) — three new call sites, same helper.
 rrun RW --uses=readWholeFile \
 && { [ "$( cnt "$RW" )" = 35 ] \
