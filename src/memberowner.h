@@ -84,7 +84,11 @@ private:
     using Key = std::pair<Lang, std::string_view>;
     static bool keyLess( const Key& a, const Key& b ) noexcept
     {
-        return a.first != b.first ? a.first < b.first : sortutil::svLess( a.second, b.second );
+        if( a.first != b.first )
+        {
+            return a.first < b.first;   // language first: an owner counts only in the row's own language
+        }
+        return sortutil::svLess( a.second, b.second );
     }
     std::vector<Key> defined_;
 };
