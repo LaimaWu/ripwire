@@ -67,7 +67,7 @@ lt_summary(){
     elif [ "$LT_MODE" = strict ]; then
         no "($gate strict twin) over today's pins:$LT_STRICT_OVER"
     else
-        printf '  INFO  (%s strict twin) over today'"'"'s pins, explained above as OVER-TARGET (RIPWIRE_LEGEND_PINS=strict fails these):%s\n' "$gate" "$LT_STRICT_OVER"
+        printf '  INFO  (%s strict twin) over today'"'"'s pins (each row above says whether OVER-TARGET explained it; RIPWIRE_LEGEND_PINS=strict fails them all):%s\n' "$gate" "$LT_STRICT_OVER"
     fi
 }
 
