@@ -233,10 +233,9 @@ private:
         {
             return hit->second != 0;
         }
-        bool              doubted = false;
-        const std::size_t count   = abstractCount( t, soleClassNamed( s.name ) != kNoNode, doubted );
+        const AbstractCount ac = abstractCount( t, soleClassNamed( s.name ) != kNoNode );
         // a doubted 0 is a LOWER bound, never a certain 0: Kotlin's "exactly one" holds only for a count the index is sure of
-        const bool sam = count <= 1 && ( lf.interfaceReadsAsClass ? count == 1 || doubted : true );
+        const bool sam = ac.n <= 1 && ( !lf.interfaceReadsAsClass || ac.n == 1 || ac.doubted );
         samMemo_.emplace( t, char( sam ? 1 : 0 ) );
         return sam;
     }
@@ -248,32 +247,35 @@ private:
         return lf.samLambdas || ( lf.samFromJavaLambdas && javaInTree_ );
     }
 
-    // the distinct abstract member names of class `c` (its own, plus those of the bases the index names exactly), stopping at 2:
-    // a LOWER bound on the true count, so a doubt reads as "may be single". An own name is certain; a base name shared by several
-    // classes, or none in the tree, adds nothing and is not walked past (its bases are the union of every same-named class's).
-    // `exactBases`: false when c's own name is shared, so its base names cannot be told apart per identity. `doubted` is set when the
-    // count is only a lower bound: c's own name is shared, a base is not exactly one class in the tree, or the walk cap was reached.
-    std::size_t abstractCount( NodeId c, bool exactBases, bool& doubted ) const
+    // the count of distinct abstract member names (stopping at 2) and whether it is only a LOWER bound
+    struct AbstractCount
     {
-        std::vector<std::string_view> names;
-        const auto                    addOwn = [ & ]( NodeId id )
+        std::size_t n       = 0;
+        bool        doubted = false;
+    };
+
+    // append the distinct abstract member names of class `id` to `names`
+    void addOwnAbstract( NodeId id, std::vector<std::string_view>& names ) const
+    {
+        if( const auto it = abstractNames_.find( id ); it != abstractNames_.end() )
         {
-            if( const auto it = abstractNames_.find( id ); it != abstractNames_.end() )
+            for( std::string_view n : it->second )
             {
-                for( std::string_view n : it->second )
+                if( !std::ranges::contains( names, n ) )
                 {
-                    if( !std::ranges::contains( names, n ) )
-                    {
-                        names.push_back( n );
-                    }
+                    names.push_back( n );
                 }
             }
-        };
-        addOwn( c );
-        std::vector<std::string_view> frontier{ ing_.symbols[ c ].name };
-        doubted = !exactBases;
-        std::size_t i = 0;
-        for( ; exactBases && i < frontier.size() && i < ReceiverEvidence::kWalkCap && names.size() <= 1; ++i )
+        }
+    }
+
+    // breadth-first through the bases the index names exactly, adding their abstract names; true when a base is not exactly one class
+    // in the tree (shared name, or none) or the walk cap cut the walk short: the names are then only a lower bound
+    bool walkAbstractBases( std::vector<std::string_view>& frontier, std::vector<std::string_view>& names ) const
+    {
+        bool        doubted = false;
+        std::size_t i       = 0;
+        for( ; i < frontier.size() && i < ReceiverEvidence::kWalkCap && names.size() <= 1; ++i )
         {
             recvEv_.forEachBase( frontier[ i ], [ & ]( std::string_view base )
             {
@@ -285,12 +287,24 @@ private:
                 else if( std::ranges::find( frontier, base ) == frontier.end() )
                 {
                     frontier.push_back( base );
-                    addOwn( only );
+                    addOwnAbstract( only, names );
                 }
             } );
         }
-        doubted = doubted || ( exactBases && i < frontier.size() && i >= ReceiverEvidence::kWalkCap && names.size() <= 1 );
-        return names.size();
+        return doubted || ( i < frontier.size() && names.size() <= 1 );
+    }
+
+    // the distinct abstract member names of class `c` (its own, plus those of the bases the index names exactly), stopping at 2:
+    // a LOWER bound on the true count, so a doubt reads as "may be single" (`doubted`). An own name is certain; a base name shared by
+    // several classes, or none in the tree, adds nothing and is not walked past (its bases are the union of every same-named class's).
+    // `exactBases`: false when c's own name is shared, so its base names cannot be told apart per identity (doubted, not walked).
+    AbstractCount abstractCount( NodeId c, bool exactBases ) const
+    {
+        std::vector<std::string_view> names;
+        addOwnAbstract( c, names );
+        std::vector<std::string_view> frontier{ ing_.symbols[ c ].name };
+        const bool                    doubted = !exactBases || walkAbstractBases( frontier, names );
+        return AbstractCount{ names.size(), doubted };
     }
 
     // breadth-first down the implementors map from T, each type once (a cycle or a diamond is walked once): an Other edge (the
