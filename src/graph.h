@@ -6147,8 +6147,12 @@ inline void tomlSectionNames( std::string_view text, std::initializer_list<std::
 // `a-b` -> `a_b`: the spelling a Rust `use` gives a crate name.
 inline std::string rustCrateSpelling( std::string_view name )
 {
-    std::string spelled( name );
-    std::replace( spelled.begin(), spelled.end(), '-', '_' );
+    std::string spelled;
+    spelled.reserve( name.size() );
+    for( const char c : name )
+    {
+        spelled.push_back( c == '-' ? '_' : c );
+    }
     return spelled;
 }
 
@@ -6365,12 +6369,43 @@ inline void rustCrateAliases( std::string_view text, std::vector<std::pair<std::
     }
 }
 
+// Is `name` a crate of this tree: a module, a Cargo name or dependency key, or a workspace crate directory spelled with `-`?
+inline bool rustTreeCrate( const HashMap<std::string, char>& modules, const HashMap<std::string, char>& cargoNames, std::string_view name )
+{
+    std::string spelled( name );
+    if( modules.contains( spelled ) || cargoNames.contains( spelled ) )
+    {
+        return true;
+    }
+    std::replace( spelled.begin(), spelled.end(), '_', '-' );
+    return modules.contains( spelled );
+}
+
+using RustAliasCache = HashMap<std::uint32_t, std::vector<std::pair<std::string, std::string>>>;   // per file, read once and only when asked
+
+// Does file `f` alias `head` to a crate of this tree (`extern crate foo_core as fc;` then `use fc::X`), or spell an alias this
+// scan cannot read (rustCrateAliases' "*" marker)? The file is read the first time a head of it is asked about; std/core/alloc never are.
+inline bool rustAliasOfTreeCrate( const IngestResult& ing, std::uint32_t f, std::string_view head, RustAliasCache& cache,
+                                  const auto& treeCrate )
+{
+    if( head == "std" || head == "core" || head == "alloc" )
+    {
+        return false;
+    }
+    auto [ at, fresh ] = cache.try_emplace( f );
+    if( const std::optional<std::string> text = fresh ? docparse::detail::readWholeFile( diskPath( ing, f ) ) : std::nullopt )
+    {
+        rustCrateAliases( *text, at->second );
+    }
+    return std::ranges::any_of( at->second, [ & ]( const auto& a )
+                                { return a.first == "*" || ( a.first == head && ( a.second == "crate" || a.second == "self" || a.second == "super" || treeCrate( a.second ) ) ); } );
+}
+
 // Rust: `use a::b::c;` whose first segment is not crate/self/super/a module of this tree names an outside item `c`, into
-// `out` ("<fileId>#c"). `crateDirAware` (lane fc2-lego-extparent's base clause reader) also reads a head spelled with `_` as the
-// workspace crate directory spelled with `-` (`use nu_glob::X` beside crates/nu-glob), a head that is a Cargo package or
-// [lib] name of this tree or a dependency key naming one (`use mycrate::X` from its tests/, `use core2::X` for a renamed
-// dependency), a leading `::` (`use ::mycrate::X`), and a head the file itself aliases to such a crate (`extern crate
-// foo_core as fc;`, `use foo_core as fc;`): such a head is in the tree, not outside.
+// `out` ("<fileId>#c"). `crateDirAware` (lane fc2-lego-extparent's base clause reader) also reads as in the tree: a head spelled with
+// `_` for the workspace crate directory spelled with `-` (`use nu_glob::X` beside crates/nu-glob), a Cargo package or [lib] name
+// of this tree or a dependency key naming one (`use mycrate::X` from its tests/, `use core2::X` for a renamed dependency), a
+// leading `::` (`use ::mycrate::X`), and a head the file itself aliases to such a crate (`extern crate foo_core as fc;`).
 // FE-A's own table keeps the plain rule (crateDirAware false), so the call edges stay as they were.
 inline void rustOutsideUses( const IngestResult& ing, bool crateDirAware, HashMap<std::string, char>& out )
 {
@@ -6380,18 +6415,8 @@ inline void rustOutsideUses( const IngestResult& ing, bool crateDirAware, HashMa
         return;   // no Rust in the tree
     }
     const HashMap<std::string, char> cargoNames = crateDirAware ? cargoCrateNames( ing ) : HashMap<std::string, char>{};
-    // a crate of this tree under the spelling `name`: a module, a Cargo name or key, or a workspace crate directory spelled with `-`
-    const auto inTree = [ & ]( std::string_view name )
-    {
-        std::string spelled( name );
-        if( modules.contains( spelled ) || cargoNames.contains( spelled ) )
-        {
-            return true;
-        }
-        std::replace( spelled.begin(), spelled.end(), '_', '-' );
-        return modules.contains( spelled );
-    };
-    HashMap<std::uint32_t, std::vector<std::pair<std::string, std::string>>> aliasesOf;   // per file, read once and only when asked
+    const auto treeCrate = [ & ]( std::string_view name ) { return rustTreeCrate( modules, cargoNames, name ); };
+    RustAliasCache aliases;
     for( const Include& inc : ing.includes )
     {
         std::string_view path = inc.target;
@@ -6399,10 +6424,7 @@ inline void rustOutsideUses( const IngestResult& ing, bool crateDirAware, HashMa
         {
             continue;
         }
-        if( crateDirAware && path.starts_with( "::" ) )
-        {
-            path.remove_prefix( 2 );   // `use ::mycrate::X`: the same crate path, rooted at the extern prelude
-        }
+        path.remove_prefix( crateDirAware && path.starts_with( "::" ) ? 2 : 0 );   // `use ::mycrate::X`: the same path, rooted at the extern prelude
         const std::size_t first = path.find( "::" );
         if( first == std::string_view::npos || path.find( '{' ) != std::string_view::npos )
         {
@@ -6413,25 +6435,9 @@ inline void rustOutsideUses( const IngestResult& ing, bool crateDirAware, HashMa
         {
             continue;
         }
-        if( crateDirAware && inTree( head ) )
+        if( crateDirAware && ( treeCrate( head ) || rustAliasOfTreeCrate( ing, inc.fileId, head, aliases, treeCrate ) ) )
         {
-            continue;   // a crate this tree's Cargo.toml names (its own, a renamed dependency, a workspace member under another directory)
-        }
-        if( crateDirAware && head != "std" && head != "core" && head != "alloc" )
-        {
-            auto [ at, fresh ] = aliasesOf.try_emplace( inc.fileId );
-            if( fresh )
-            {
-                if( const std::optional<std::string> text = docparse::detail::readWholeFile( diskPath( ing, inc.fileId ) ) )
-                {
-                    rustCrateAliases( *text, at->second );
-                }
-            }
-            if( std::ranges::any_of( at->second, [ & ]( const auto& a )
-                                     { return a.first == "*" || ( a.first == head && ( a.second == "crate" || a.second == "self" || a.second == "super" || inTree( a.second ) ) ); } ) )
-            {
-                continue;   // `extern crate foo_core as fc; use fc::X`: fc is an in-tree crate under another name (or the file spells an alias this scan cannot read)
-            }
+            continue;   // a crate of this tree under its own name, a Cargo key, or an alias the file spells for one
         }
         out.try_emplace( jsImportKey( inc.fileId, path.substr( path.rfind( "::" ) + 2 ) ), '\0' );
     }
