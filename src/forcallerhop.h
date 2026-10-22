@@ -18,7 +18,8 @@
 //
 // WHEN. The name-exact route, the auto <bodies> bundle, and the callers verb's OWN resolution of the name is ONE function: its
 // definitions (a C++ declaration and its out-of-line definition are one) fall in one def group, all functions or methods of one
-// kind, nothing unproven (forCallerHopTargets). A C++ overload set, a same-named static in two files, a function beside a
+// kind, nothing unproven (forCallerHopTargets); a bodyless declaration group the verb lists (a <def> table) but no row ties to is
+// not a second function, and its rows then carry no of_def= here (they would all read of_def="1"). A C++ overload set, a same-named static in two files, a function beside a
 // same-named struct and a name in two classes carry no block: the callers verb splits or hedges them (of_def=, cross_kind=), and
 // this element prints exactly what `--callers=NAME` prints or nothing. The second hop's rows carry the by-name hedge the callers
 // verb prints for them (via="name"). The DEFAULT regime and the XML dialect only, as the body fold: an explicit --token-budget,
@@ -59,11 +60,17 @@ inline bool forCallerHopOn()
     return std::getenv( "RIPWIRE_NO_CALLER_HOP" ) == nullptr;
 }
 
+// The callers verb's own qualified selector of a function: Scope::name, or the bare name when it has no scope.
+inline std::string callerHopSelector( const Symbol& s )
+{
+    return s.scope.empty() ? s.name : s.scope + "::" + s.name;
+}
+
 // The function the hop is about. Two readings must agree, and the hop fires only when both say ONE function:
 //   * the body candidates (verbs_for.h computeAutoBodyCandidateIds, the anchor-restricted auto-body head): non-empty, every one a
 //     function or method with the first one's name AND scope — a name-exact answer bodying two different symbols, a class, a
 //     variable or a doc section carries no hop;
-//   * THE CALLERS VERB'S OWN RESOLUTION of that name (callhierarchy.h callHierarchyRows: resolveAllByNameQualified, crossKindValue,
+//   * THE CALLERS VERB'S OWN RESOLUTION of that selector, `--callers=Scope::name` (callhierarchy.h callHierarchyRows: resolveAllByNameQualified, crossKindValue,
 //     defGroupsOf, attributeOneHopAnswer's silent-group drop): every definition the verb would union — not only the anchor's — is a function or method, none differs in kind
 //     (no cross_kind=), the resolver left no unproven residue, and they fall in exactly ONE def group (a definition with its tied
 //     declarations; the verb prints no <def> table and no of_def=). An overload set, two same-named statics in two files, a function
@@ -86,7 +93,9 @@ inline std::vector<NodeId> forCallerHopTargets( const IngestResult& ing, const G
         }
     }
     std::size_t         unproven = 0;
-    std::vector<NodeId> matches  = resolveAllByNameQualified( ing, first.name, &unproven );
+    // the selector the element names (of=, next=) — what `--callers=SELECTOR` resolves: scope::name, the bare name when unscoped
+    const std::string   sel      = callerHopSelector( first );
+    std::vector<NodeId> matches  = resolveAllByNameQualified( ing, sel, &unproven );
     if( matches.empty() || unproven != 0 || !crossKindValue( ing, matches ).empty() )
     {
         return {};
@@ -105,10 +114,33 @@ inline std::vector<NodeId> forCallerHopTargets( const IngestResult& ing, const G
             return {};
         }
     }
-    // the verb's groups AFTER its silent-group drop (attributeOneHopAnswer): an out-of-line definition beside a local forward
-    // declaration no row ties to is ONE function (the verb prints no <def> table), not two
-    const std::vector<NodeId> rows = oneHopCallerRows( ing, g, matches );
-    return attributeOneHopAnswer( ing, g, matches, rows, /*towardMatches=*/true ).groups.size() == 1 ? matches : std::vector<NodeId>{};
+    // the verb's groups AFTER its silent-group drop (attributeOneHopAnswer): ONE function means the verb groups the rows under one
+    // definition. A bodyless declaration group that no row ties to (an in-class declaration the fold could not pair with its
+    // out-of-line definition, ninja's DepsLog::Recompact: the verb prints a <def> table whose every row says of_def="1") does not
+    // make a second function; a second BODIED group, a row tied to a bodyless group, or a split-labelled tie does.
+    const std::vector<NodeId>     rows = oneHopCallerRows( ing, g, matches );
+    const OneHopAttribution       attr = attributeOneHopAnswer( ing, g, matches, rows, /*towardMatches=*/true );
+    std::size_t                   bodied = 0;
+    for( std::size_t k = 0; k < attr.groups.size(); ++k )
+    {
+        bodied += attr.groups.bodyless[k] ? 0 : 1;
+    }
+    if( attr.groups.size() == 1 )
+    {
+        return matches;
+    }
+    if( bodied != 1 )
+    {
+        return {};
+    }
+    for( const std::uint32_t tok : attr.tokens.tok )
+    {
+        if( attr.groups.bodyless[ tok >> 2 ] || ( tok & 3u ) == std::uint32_t( DefMark::Split ) )
+        {
+            return {};
+        }
+    }
+    return matches;
 }
 
 // The hop's legend clauses, present-only beside the element: the full dialect's and the compact dialect's. No "--": they ride
@@ -208,7 +240,7 @@ inline CallerHopRender renderForCallerHop( const IngestResult& ing, const Graph&
     const OneHopAttribution       attr2 = secondShown == 0 ? OneHopAttribution{} : attributeOneHopAnswer( ing, g, shown, secondShownRows, /*towardMatches=*/true );
 
     const Symbol&     t   = ing.symbols[ targets.front() ];
-    const std::string sel = t.scope.empty() ? t.name : t.scope + "::" + t.name;   // the callers verb's own qualified selector
+    const std::string sel = callerHopSelector( t );
     std::vector<char>     esc;
     const CallerHopRowCtx rc{ ing, rootArg, esc };
     std::string&          x = out.xml;

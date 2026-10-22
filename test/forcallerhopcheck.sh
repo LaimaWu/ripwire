@@ -193,6 +193,16 @@ case "$HF" in
 esac
 run "test/forcallerhopfix/ovl" --callers=Flush >"$TMP/f1.c"
 grep -q 'count="1"' "$TMP/f1.c" && grep -q 'n="Done"' "$TMP/f1.c"; verdict $? "(F1r2) the hop's total= equals what --callers=Flush prints (1: Done)" "(F1r2) --callers=Flush disagrees with the hop"
+# the unfolded-declaration shape (ninja DepsLog::Recompact): the verb prints a <def> table (defs=2) because the in-class declaration spells
+# std::string where the definition spells string, yet EVERY row is of_def="1" — the declaration is no second function, so the block rides
+run "test/forcallerhopfix/declpair" --callers=DepsLog::Recompact >"$TMP/dp.c"
+if grep -q 'defs="2"' "$TMP/dp.c" && grep -q 'bodyless="1"' "$TMP/dp.c" && grep -q 'n="OpenLog"[^>]*of_def="1"' "$TMP/dp.c"; then ok "(F1p:declpair) the verb prints a def table (defs=2, the declaration bodyless) with the caller on def 1"; else no "(F1p:declpair) the premise moved: [$( sed 's/<!--.*-->//' "$TMP/dp.c" | head -c 400 )]"; fi
+run "test/forcallerhopfix/declpair" --for=Recompact >"$TMP/dp.f"
+HD="$( hop "$TMP/dp.f" )"
+case "$HD" in
+    '<callers of="DepsLog::Recompact" shown="1" total="1"'*'n="OpenLog"'*) ok "(F1d) recall control: a bodied function beside an unfolded bodyless declaration no row ties to keeps its block (total= the verb's count)" ;;
+    *) no "(F1d) the declpair function lost its block: [$HD]" ;;
+esac
 # ── B3: the d=2 row carries the by-name hedge its own callers row carries ──────────────────────────────────────────────────────
 run "test/forcallerhopfix/d2via" --for=post_entry >"$TMP/b3"
 H3b="$( hop "$TMP/b3" )"
@@ -212,7 +222,7 @@ verdict $? "(X3) no -- inside a legend comment" "(X3) a legend comment holds --"
 run "$FC" --for=start_server >"$TMP/x2"
 cmp -s "$TMP/p1" "$TMP/x2"; verdict $? "(X1) deterministic" "(X1) two runs differ"
 if command -v xmllint >/dev/null 2>&1; then
-    for f in p1 p2 p3 p4f p8 b3 f1.on; do xmllint --noout "$TMP/$f" 2>/dev/null; verdict $? "(X2) well-formed: $f" "(X2) xmllint rejects $f"; done
+    for f in p1 p2 p3 p4f p8 b3 f1.on dp.f; do xmllint --noout "$TMP/$f" 2>/dev/null; verdict $? "(X2) well-formed: $f" "(X2) xmllint rejects $f"; done
 else
     printf '  SKIP  (X2) xmllint not installed\n'
 fi
