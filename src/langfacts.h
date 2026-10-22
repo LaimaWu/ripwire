@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <string_view>
 
 namespace rw
 {
@@ -85,29 +86,36 @@ struct LangFacts
     /// decides only the closure relation, no symbol or edge). A lambda or a block is anonymous, and a C++ local class's
     /// methods sit inside the class's scope, not directly in the function, so neither is a closure either way.
     bool noNestedNamedFunctions = false;
+
+    /// QUALNAME-1 (src/memberowner.h): the separator a member row prints between its owner and its name, as the language itself
+    /// spells a member: `Owner::name` in C, C++, Rust and PHP (scope resolution), `Owner#name` in Ruby (the instance-method form
+    /// RDoc uses; a `def self.x` singleton prints `#` too, since the index does not tell the two apart), `Owner.name` elsewhere.
+    /// Every spelling is one the selectors resolve (graph.h resolveAllByScopeQualified / resolveAllByDottedScope).
+    std::string_view memberSeparator = ".";
 };
 
 /// The rows, one per Lang in enum order. A language says only the facts it has.
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
-    { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true },
+    { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true, .memberSeparator = "::" },
     { .lang = Lang::Python },
     { .lang = Lang::TypeScript, .overloadSignatures = true },
     { .lang = Lang::Go },
-    { .lang = Lang::Rust },
+    { .lang = Lang::Rust, .memberSeparator = "::" },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC, .noNestedNamedFunctions = true },
     { .lang = Lang::Markdown, .linkSections = true },
     { .lang = Lang::JavaScript },
     { .lang = Lang::Bash },
     { .lang = Lang::Java },
-    { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true },
+    { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true,
+      .memberSeparator = "#" },
     { .lang = Lang::Unknown },
     { .lang = Lang::Json },
     { .lang = Lang::CSharp },
-    { .lang = Lang::C, .noNestedNamedFunctions = true },
+    { .lang = Lang::C, .noNestedNamedFunctions = true, .memberSeparator = "::" },
     { .lang = Lang::Toml },
     { .lang = Lang::Yaml },
-    { .lang = Lang::Php },
+    { .lang = Lang::Php, .memberSeparator = "::" },
     { .lang = Lang::Lua },
     { .lang = Lang::Elixir, .hasInertQuoteRegions = true },
     { .lang = Lang::Dart },
