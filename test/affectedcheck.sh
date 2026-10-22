@@ -737,7 +737,7 @@ printf '%s' "$CNT11" | grep -q '<g via="class-new" total="1" shown="1"><new p="t
 # expren: `export { Foo as Eng, Eng as Engine }` in the class file → l="5" from new Engine(). bar1/bar2: a barrel `export { Foo as Eng } from` /
 # `export * ... export { Bar as Eng } from "./bar"` — nothing resolves through a re-export, so no l= (never the renamed class's line 3).
 # Recall/controls: only (a lone `import { Foo as Eng }` + new Eng()) — no row; req (`const { Eng } = require( class file )`) → l="3";
-# shadow (a parameter Eng hides the import at line 3) → l="6".
+# shadow (an arrow parameter Eng hides the import inside the test callback, line 3; the real new Eng() is line 4) → l="4".
 cn9i5(){ ( cd "$TMP/classnew-9i5/$1" || exit 1; "$BIN" "$TMP/classnew-9i5/$1" --affected="src/util.$2" --no-cache 2>/dev/null ) | grep -oE '<g via="class-new"[^>]*>.*</g>'; }
 mk9i5(){ mkdir -p "$TMP/classnew-9i5/$1/src" "$TMP/classnew-9i5/$1/test"; printf '%b' "$4" > "$TMP/classnew-9i5/$1/src/eng.$2"; printf '%b' "$5" > "$TMP/classnew-9i5/$1/test/x.test.$2"
          printf 'export function leaf(p%s) { return p; }\n' "$3" > "$TMP/classnew-9i5/$1/src/util.$2"; }
@@ -757,15 +757,17 @@ printf 'export class Bar { other() { return 1; } }\n' > "$TMP/classnew-9i5/bar2/
 printf 'export * from "./eng";\nexport { Bar as Eng } from "./bar";\nexport { Eng as Engine } from "./eng";\n' > "$TMP/classnew-9i5/bar2/src/index.ts"
 mk9i5 only ts ': number' "$ENG2" 'import { Foo as Eng } from "../src/eng";\ntest("x", () => {\n  const x = new Eng();\n});\n'
 mk9i5 req ts ': number' "$ENG2" 'const { Eng } = require("../src/eng");\ntest("x", () => {\n  const x = new Eng();\n});\n'
-mk9i5 shadow ts ': number' "$ENG2" 'import { Eng } from "../src/eng";\nimport { Foo } from "../src/eng";\nfunction mk(Eng: any) { return new Eng(); }\ntest("x", () => {\n  mk(Foo);\n  const y = new Eng();\n});\n'
-for c in 'ren ts l="5" ' 'dflt ts l="5" ' 'js js l="5" ' 'expren ts l="5" ' 'bar1 ts -' 'bar2 ts -' 'req ts l="3" ' 'shadow ts l="6" '; do
+mk9i5 shadow ts ': number' "$ENG2" 'import { Eng, Foo } from "../src/eng";\ntest("x", () => {\n  [Foo].map((Eng: any) => new Eng());\n  const y = new Eng();\n});\n'
+for c in 'ren ts l="5" ' 'dflt ts l="5" ' 'js js l="5" ' 'expren ts l="5" ' 'bar1 ts -' 'bar2 ts -' 'req ts l="3" ' 'shadow ts l="4" '; do
     d=${c%% *}; rest=${c#* }; e=${rest%% *}; want=${rest#* }; [ "$want" = - ] && want=
     got="$( cn9i5 "$d" "$e" )"
     [ "$got" = "<g via=\"class-new\" total=\"1\" shown=\"1\"><new p=\"test/x.test.$e\" ${want}class=\"Eng\"/></g>" ] \
         && ok "(9i5) $d: the row's l= is the construction resolved to the reached class (${want:-no l=})" \
         || no "(9i5) $d: expected ${want:-no l=}, got: ${got:-<no group>}"
 done
-[ -z "$( cn9i5 only ts )" ] && ok '(9i5) only: import { Foo as Eng } + new Eng() builds Foo — no class-new row' || no "(9i5) only: a row for a Foo construction: $( cn9i5 only ts )"
+[ -z "$( cn9i5 only ts )" ] \
+    && ok '(9i5) only: import { Foo as Eng } + new Eng() builds Foo — no class-new row' \
+    || no "(9i5) only: a row for a Foo construction: $( cn9i5 only ts )"
 # (9l) "nearest class first": two classes at DIFFERENT hops whose test-path order is the reverse of their rank order. Far (hop 2, via
 # the module function mid) is built by the alphabetically-first test, Near (hop 1) by the later one: the rows must list Near first.
 MB="$TMP/classnew-rank"; mkdir -p "$MB/pkg" "$MB/tests"
