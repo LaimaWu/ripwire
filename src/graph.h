@@ -3322,12 +3322,13 @@ inline std::string_view stdElementType( std::string_view written ) noexcept
 // LANGUAGE SCOPE (each probed; a language is gated exactly when kStdMemberNames has a non-empty row for it): C++ as above.
 // RUST (externalnames.h kRustStdMemberNames; arm R): the same rule — `v.push( x )` on a `&mut Vec<i32>` parameter, `xs.iter()`,
 // `m.insert( k, v )` left NAME-ONLY are declined; a call the language's own lookup proves (`self.iter()` inside the impl
-// that defines iter) is not name-only and keeps its edge. The receiver exception reads nothing for Rust (stdReceiverOf reads
-// C++ written types only), so its STATED FLOOR is wider than C++'s: a receiver written as an in-tree type — a parameter
-// `s: &mut Stack<i32>`, a local `let s = Stack { .. }`, a field `self.inner` declared `Stack<i32>`, `book: &Book` where Book
-// defines iter — is declined with the false edges, because Rust records no parameter, local or field type for a call yet.
-// Such a call is counted (declined_calls=, <stdm>), never silently dropped; it keeps its edge once Rust receiver evidence
-// types it (the call is then no longer name-only). C has no member functions. GO has an EMPTY row: its common member names
+// that defines iter) is not name-only and keeps its edge, and so (lane rust-receivers) does a call on a receiver Rust
+// receiver evidence types (receiverevidence.h narrowTypedLocal): a parameter, local or field WRITTEN as an in-tree type —
+// `s: &mut Stack<i32>`, `let s = Stack { .. }`, `self.inner` declared `Stack<i32>`, `book: &Book` where Book defines iter —
+// or a call result. The receiver exception itself reads nothing for Rust (stdReceiverOf reads C++ written types only), so
+// its STATED FLOOR is what Rust does not type: a generic bound, dyn / impl Trait, a type alias, a glob of a glob, a tuple-struct
+// field, a non-plain pattern, a value behind Option / Result / Rc / Arc / RefCell / Cell / Mutex / RwLock — declined with the false edges, counted (declined_calls=, <stdm>), never silently dropped.
+// C has no member functions. GO has an EMPTY row: its common member names
 // (Len, Write, String, Error, Reset, Lock, Unlock) are methods in-tree types implement on purpose to satisfy an interface,
 // so an unproven receiver may well dispatch into the tree; a Go gate needs typed receivers, not a name list. Java, Kotlin,
 // C# and Swift likewise (add/size, Add, append). ObjC message sends carry no receiver shape. Python/JS/TS/Ruby:
@@ -7458,7 +7459,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 const std::uint32_t ri = rtIt->second;
                 const Binding&      rt = ing.bindings[ ri ];
-                const bool          match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth );
+                const bool          match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth )
+                                            && ( !rt.isFromAssignment || recvEv.rustQualifiedTypeOwns( r, cr.importedName, callee ) );   // Rust `-> Self`: rustQualifiedTypeOwns
                 if( !match )
                 {
                     continue;

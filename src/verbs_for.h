@@ -7,6 +7,7 @@
 #include "forpage.h"    // L-W: the --for --limit=N file page, coverage=, the thin rule and the widening next=
 #include "forowner.h"   // the question's owner (owner-hop's found set) and the one owner body of an explanatory question
 #include "forfold.h"    // body-fold: the whole bodies of the top ranked rows, appended to a compact-route answer
+#include "formembers.h" // member-names: mem= on the shown owner rows of a compact-route answer
 #include <optional>          // the redaction-tally snapshots a degraded pre-render restores
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
@@ -568,6 +569,8 @@ struct ForLensHeaderParts
     bool             bodyFoldPresent = false; // body-fold: a compact-route answer in the default regime has fold candidates
                                             // (forfold.h forBodyFoldCandidates), so a <fold> rides and its clause defines it;
                                             // set after construction, cleared with the section
+    bool             memberNamesPresent = false; // member-names (formembers.h): a shown owner row carries mem= (set after the
+                                            // <sigs> splice), so its clause defines it
 };
 
 // Splice a pre-formatted fragment in front of a structural boundary, or leave the document exactly as it
@@ -763,14 +766,19 @@ inline bool rankedHopCallsNextPresent( std::string_view hops ) noexcept
     }
     return false;
 }
+// A present-only clause in this dialect: "" unless its element or attribute rides, else the compact or the full spelling.
+inline constexpr std::string_view presentOnlyClause( bool present, bool compact, std::string_view compactClause, std::string_view fullClause ) noexcept
+{
+    return !present ? std::string_view() : ( compact ? compactClause : fullClause );
+}
 inline std::string_view hopsCallsNextLegend( const ForLensHeaderParts& p, bool compact ) noexcept
 {
-    return !p.hopsCallsNextPresent ? std::string_view() : ( compact ? kForCompactHopsCallsNextClause : kForHopsCallsNextClause );
+    return presentOnlyClause( p.hopsCallsNextPresent, compact, kForCompactHopsCallsNextClause, kForHopsCallsNextClause );
 }
 // body-fold: the fold's clause in this dialect, present-only (bodyFoldPresent), right after the slot clause
 inline std::string_view bodyFoldLegend( const ForLensHeaderParts& p, bool compact ) noexcept
 {
-    return !p.bodyFoldPresent ? std::string_view() : ( compact ? rw::kForCompactBodyFoldLegend : rw::kForBodyFoldLegend );
+    return presentOnlyClause( p.bodyFoldPresent, compact, rw::kForCompactBodyFoldLegend, rw::kForBodyFoldLegend );
 }
 inline constexpr std::string_view kForCompactLegendTail =
     "; t p= file outside sigs (weaker), t sym= its top symbols (a pointer, not the answer), r= rank (gap = trimmed)";
@@ -883,6 +891,7 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     h += ownerHopLegend( p, /*compact=*/true );   // owner-hop: present-only, right after the hops clause
     h += bodySlotLegend( p, /*compact=*/true );   // for-body-slot: present-only, after the owner clause
     h += bodyFoldLegend( p, /*compact=*/true );   // body-fold: present-only, after the slot clause
+    h += presentOnlyClause( p.memberNamesPresent, /*compact=*/true, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend );   // member-names: after the fold clause
     // The unconditionally-droppable-free tail of this dialect: five clauses that ride exactly when the bit beside
     // them is set, in THIS order, which is the contract a reader and every byte pin depend on. A table rather than
     // five identical ifs — the list has grown once per lane (hdr, compose, then train 9's lego and layer) and the
@@ -1028,6 +1037,7 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     h.append( ownerHopLegend( p, /*compact=*/false ) );   // owner-hop: present-only, right after the bundle clause
     h.append( bodySlotLegend( p, /*compact=*/false ) );   // for-body-slot: present-only, after the owner clause
     h.append( bodyFoldLegend( p, /*compact=*/false ) );   // body-fold: present-only, after the slot clause
+    h.append( presentOnlyClause( p.memberNamesPresent, /*compact=*/false, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend ) );   // member-names
     if( p.tailLegend )
     {
         h.append( rw::kForFileTailLegend );   // deep-tail: defines r= and the <tail> element (sigs-charge-exempt, serialize.h)
@@ -3998,6 +4008,23 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         if( !fold.xml.empty() )
         {
             rw::spliceFoldSigsNext( sigsStr, sigsCeilingNote, fold.firstSkipNext );
+        }
+        // ── member-names (formembers.h): mem= on the shown owner rows, spliced into the rendered rows AFTER they were chosen (a name
+        // never costs a row) and before the root is priced (est_tokens prices the names with <sigs>). The fold's posture — the compact
+        // route, XML, the default regime — and the whole answer measured (the splice reads the shown ids against the rendered rows).
+        if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forMemberNamesOn() && sigsPreRendered
+            && !enrich.surfaceOff && !enrich.hopsCutMarker )
+        {
+            rw::MemberNamesServed answerBodies{ fold.bodies, fold.sliced };
+            if( slot.served )
+            {
+                answerBodies.bodies.push_back( slotOwner.id );   // the body slot's owner (the fold lists it too when the fold rode)
+            }
+            if( rw::spliceMemberNames( sigsStr, ing, shownSigIds, cfg.forTask, answerBodies ) > 0 )
+            {
+                headerParts.memberNamesPresent = true;   // the clause rides beside the attribute it defines
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+            }
         }
         // PR #135: the priced root this header will carry — every late splice and the est_tokens fixpoint, in
         // finishForLensHeader (above runForLens, with each splice's rationale).
