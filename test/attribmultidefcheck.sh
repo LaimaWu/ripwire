@@ -251,22 +251,24 @@ if ans a_cpp cpp callers s xml -- --callers=empty; then
     sed 's/-->.*//' "$DIR/a_cpp.out" | grep -q 'of_def='; say $? "[P] a_cpp: the legend defines of_def= (present-only clause)" \
         "[P] a_cpp: of_def= is not defined in the answer's legend"
 fi
+# QUALNAME-1 observation: --callers --json, --safe-delete (xml) and the MCP find_referencing_symbols still print the caller row BARE
+# (ParseDefault); only the XML --callers/--callees rows print Owner::name. Pinned as they are (a_cppj / a_sd / a_mcp); a future widening goes red here.
 if ans a_cppj cpp - callers json -- --callers=empty --json; then
     expect P a_cppj UsesPiece "$SP"; expect P a_cppj UsesBoth "$EV $SP"
-    rowset C a_cppj 4 "ManifestParser::ParseDefault UsesBoth UsesEval UsesPiece"
+    rowset C a_cppj 4 "ParseDefault UsesBoth UsesEval UsesPiece"
 fi
 if ( cd "$FIX/cpp" && "$BIN" . --no-cache --callers=empty --format=columnar ) >"$DIR/a_col.out" 2>/dev/null && grep -q '<callers ' "$DIR/a_col.out"; then
     { grep -q '<def ' "$DIR/a_col.out" && grep -qE 'fields="[^"]*of_def' "$DIR/a_col.out"; }; say $? "[P] a_col: columnar carries the <def> table and an of_def column" \
         "[P] a_col: columnar lacks <def> rows or the of_def column: $( grep -oE 'fields="[^"]*"' "$DIR/a_col.out" )"
 else no "a_col: columnar --callers=empty failed"; fi
 if ans a_sd cpp safe-delete c xml -- --safe-delete=empty; then
-    expect P a_sd UsesPiece "$SP"; expect P a_sd UsesEval "$EV"; expect P a_sd UsesBoth "$EV $SP"; expect P a_sd ManifestParser::ParseDefault "$EV"
+    expect P a_sd UsesPiece "$SP"; expect P a_sd UsesEval "$EV"; expect P a_sd UsesBoth "$EV $SP"; expect P a_sd ParseDefault "$EV"
     invariant P a_sd
-    rowset C a_sd 4 "ManifestParser::ParseDefault UsesBoth UsesEval UsesPiece"
+    rowset C a_sd 4 "ParseDefault UsesBoth UsesEval UsesPiece"
 fi
 if mcp a_mcp cpp calledBy find_referencing_symbols '"symbol":"empty"'; then
     expect P a_mcp UsesPiece "$SP"; expect P a_mcp UsesBoth "$EV $SP"; invariant P a_mcp
-    rowset C a_mcp 4 "ManifestParser::ParseDefault UsesBoth UsesEval UsesPiece"
+    rowset C a_mcp 4 "ParseDefault UsesBoth UsesEval UsesPiece"
 fi
 if mcp a_mcps cpp calledBy find_symbol '"symbol":"empty"'; then
     expect P a_mcps UsesEval "$EV"

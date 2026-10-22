@@ -600,7 +600,7 @@ misses  Unrelated::audit_target audit "Unrelated does not include Auditable"
 reaches Renderer::story       GroupContent#summary  "GroupContent#summary's story reaches Reacted's superclass Renderer through the includer"
 misses  CommentsMod::story    summary  "naming CommentsMod in the concern's file does not put it in reach — the include narrow picks the reachable"
 
-reaches Write::_write_attribute       "id=" "a mixin inside a concern's included block joins its includer's ancestors"
+reaches Write::_write_attribute       "PrimaryKey#id=" "a mixin inside a concern's included block joins its includer's ancestors"
 misses  WriterDecoy::_write_attribute "id=" "WriterDecoy is neither above nor below PrimaryKey"
 
 reaches ClassMethods::define_hooks Wrapper "include Callbacky extends its ClassMethods onto Wrapper (the Concern convention)"

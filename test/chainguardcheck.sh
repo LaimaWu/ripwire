@@ -206,7 +206,7 @@ EDG="$( printf '%s\n' "$MAP" | grep -o 'edges=[0-9]*' | head -1 )"
 
 # ── (j) cross-language stability (FIX2): Python/TS chained-call edges are byte-stable ─────────────────
 MAP2="$( "$BIN" "$FIX2" --no-cache --legend=full 2>/dev/null | tr '>' '\n' )"
-printf '%s\n' "$MAP2" | grep -qF 'n="PApp::go"' || no "(j) presence guard: PApp.go not indexed in FIX2"
+printf '%s\n' "$MAP2" | grep -qF 'n="go" sc="PApp"' || no "(j) presence guard: PApp.go not indexed in FIX2"
 GO2="$( "$BIN" "$FIX2" --callees=go --no-cache 2>/dev/null | grep -o '<callees.*</callees>' | tr '/' '\n' )"
 ( printf '%s\n' "$GO2" | grep -q 'p.py:2"' ) && ( printf '%s\n' "$GO2" | grep -q 'p.py:6"' ) \
     && ok "(j-py) PApp.go() self.pool.acquire() keeps its COMPLETE split (Python shape capture changes no edge)" \

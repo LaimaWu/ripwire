@@ -215,7 +215,7 @@ check "(W) near-miss: std::string g_str; g_str.size() — a namespace-scope vari
 check "(W) near-miss: a local std::string g_list hides the namespace-scope ns::List g_list"          callees shadowedGlobal     '' 1 'size:1'
 check "(W) near-miss: a std::string field g_list hides the namespace-scope ns::List g_list"          callees fieldHidesGlobal   '' 1 'size:1'
 check "(W) near-miss: a std::vector field g_list (no recorded field type) hides it too"             callees stdFieldHidesGlobal '' 1 'size:1'
-check "(W) STATED FLOOR: h.list().size() — a call result carries no recorded type, declined"         callees callResult         'wrap/use.cpp:53:list~' 1 'size:1'
+check "(W) STATED FLOOR: h.list().size() — a call result carries no recorded type, declined"         callees callResult         'wrap/use.cpp:53:Holder2::list~' 1 'size:1'
 check "(W) v.front().size() on std::vector<ns::List>& — the element keeps the hedge (arm X); v.front() itself is the container's member" callees frontOfVector "$LS" 1 'front:1'
 check "(W) STATED FLOOR: auto it = v.begin(); it->size() — an iterator, declined"                    callees iteratorArrow      '' 1 'size:1'
 check "(W) STATED FLOOR: QList<ns::List>& l; l.size() — an unqualified template's arguments are not recorded" callees unqualifiedTemplate '' 1 'size:1'
@@ -236,7 +236,7 @@ check "(W) STATED FLOOR: a typedef inside a function body records no alias targe
 
 # ── (X) element receivers (elem/) ────────────────────────────────────────────────────────────────────────────
 echo "=== (X) one element access of a container whose recorded element type is EvalString keeps the hedge ==="
-EE='elem/eval.h:14:empty~ elem/eval.h:19:empty~'   # EvalString::empty and Piece::empty, the by-name candidates in reach
+EE='elem/eval.h:14:EvalString::empty~ elem/eval.h:19:Piece::empty~'   # EvalString::empty and Piece::empty, the by-name candidates in reach
 check "(X) auto rule = std::unique_ptr<Rule>(…); rule->bindings_[ k ].empty() — a class-scoped typedef of std::map<…, EvalString, …>" \
                                                                callees elem/use.cpp:ruleSubscript "$EE" '' ''
 check "(X) Rule& r; r.direct_[ \"a\" ].empty() — a field written std::map<std::string, EvalString>" callees elem/use.cpp:refDirect "$EE" '' ''
@@ -265,39 +265,39 @@ check "(X) STATED FLOOR: for( auto& e : v ) e.empty() — a range-for auto, decl
 # ── (D) controls ──────────────────────────────────────────────────────────────────────────────────────────────
 echo "=== (D) controls: outside the table, bare calls, C and Go keep the ladder ==="
 check "(D) v.grow() — grow is no standard member name, the ladder is unchanged" \
-                                                               callees notInTable          'lib/vec.h:14:grow~' '' ''
+                                                               callees notInTable          'lib/vec.h:14:Vec::grow~' '' ''
 check "(D) size( b ) — a bare call binds the free size, never gated" \
                                                                callees bareFree            'lib/vec.h:34:size' '' ''
 check "(D) C o->size( o ) — C has no member functions, no gate" callees viaPointer         'c/ops.c:8:size~' '' ''
 # (D) used to pin Rust's by-name split here as the gate's stated scope; the Rust row (arm R) replaced that scope by design.
 check "(D) Go f().Len() — Go's row is EMPTY (Len/Write/String are in-tree interface methods), the ladder is unchanged" \
-                                                               callees lenOfResult         'gogate/buf.go:6:Len~' '' ''
+                                                               callees lenOfResult         'gogate/buf.go:6:Buf.Len~' '' ''
 
 # ── (R) the Rust row ──────────────────────────────────────────────────────────────────────────────────────────
 echo "=== (R) Rust: a name-only call named like a std collection/string/Option member is declined, self-typed calls stay ==="
 check "(R) v.push() on a &mut Vec<i32> parameter — declined, <stdm push>" callees vec_param '' 1 'push:1'
 check "(R) x.push() on a parameter of a type the tree does not define — declined" callees unknown_param '' 1 'push:1'
 check "(R) v.iter() on a &Vec<i32> parameter — declined, <stdm iter>" callees vec_iter '' 1 'iter:1'
-check "(R) self.iter() inside Book — proven (FE-B self), kept unhedged" callees Book::first 'rsgate/lib.rs:16:iter' '' ''
-check "(R) s.frobnicate() on a &Stack<i32> parameter — no std name; the written type proves Stack's (rust-receivers)" callees not_in_table 'rsgate/lib.rs:7:frobnicate' '' ''
+check "(R) self.iter() inside Book — proven (FE-B self), kept unhedged" callees Book::first 'rsgate/lib.rs:16:Book::iter' '' ''
+check "(R) s.frobnicate() on a &Stack<i32> parameter — no std name; the written type proves Stack's (rust-receivers)" callees not_in_table 'rsgate/lib.rs:7:Stack::frobnicate' '' ''
 check "(R) m.insert() with no in-tree insert in reach — nothing to decline, nothing counted" callees map_insert '' '' ''
-check "(R) s.push() on a &mut Stack<i32> parameter — the written in-tree type BINDS Stack::push (rust-receivers)" callees stack_param 'rsgate/lib.rs:5:push' '' ''
-check "(R) let s: Stack<i32> = Stack { .. }; s.push() — the written local binds Stack::push" callees stack_local 'rsgate/lib.rs:5:push' '' ''
-check "(R) self.inner.push() with inner: Stack<i32> — the field's written type binds Stack::push" callees rsgate/lib.rs:add 'rsgate/lib.rs:5:push' '' ''
-check "(R) book.iter() on a &Book parameter — binds Book::iter (an in-tree receiver named like a std member)" callees book_iter 'rsgate/lib.rs:16:iter' '' ''
+check "(R) s.push() on a &mut Stack<i32> parameter — the written in-tree type BINDS Stack::push (rust-receivers)" callees stack_param 'rsgate/lib.rs:5:Stack::push' '' ''
+check "(R) let s: Stack<i32> = Stack { .. }; s.push() — the written local binds Stack::push" callees stack_local 'rsgate/lib.rs:5:Stack::push' '' ''
+check "(R) self.inner.push() with inner: Stack<i32> — the field's written type binds Stack::push" callees rsgate/lib.rs:add 'rsgate/lib.rs:5:Stack::push' '' ''
+check "(R) book.iter() on a &Book parameter — binds Book::iter (an in-tree receiver named like a std member)" callees book_iter 'rsgate/lib.rs:16:Book::iter' '' ''
 check "(R) old scope fixture: let mut v = Vec::new(); v.push() — declined" callees std_vec '' 1 'push:1'
-check "(R) old scope fixture: let mut s = Stack { n: 0 }; s.push() — the struct literal binds Stack::push, never Queue's (rust-receivers)" callees typed_local 'rs/lib.rs:3:push' '' ''
-check "(R) near-miss: Stack::push( s, 1 ) — a qualified call, never gated, keeps its edge" callees ufcs 'rsgate/lib.rs:5:push' '' ''
+check "(R) old scope fixture: let mut s = Stack { n: 0 }; s.push() — the struct literal binds Stack::push, never Queue's (rust-receivers)" callees typed_local 'rs/lib.rs:3:Stack::push' '' ''
+check "(R) near-miss: Stack::push( s, 1 ) — a qualified call, never gated, keeps its edge" callees ufcs 'rsgate/lib.rs:5:Stack::push' '' ''
 check "(R) STATED FLOOR (L6): p.push() on a generic P: Pushable (an in-tree trait) — not typed, still declined" callees generic_bound '' 1 'push:1'
 check "(R) --callers=rsgate/lib.rs:push keeps the qualified caller and the three typed ones (add, stack_param, stack_local) and counts the three declined calls (vec_param, unknown_param, generic_bound)" \
-      callers rsgate/lib.rs:push 'rsgate/lib.rs:11:add rsgate/lib.rs:20:stack_param rsgate/lib.rs:22:stack_local rsgate/lib.rs:28:ufcs' 3 ''
+      callers rsgate/lib.rs:push 'rsgate/lib.rs:11:Holder::add rsgate/lib.rs:20:stack_param rsgate/lib.rs:22:stack_local rsgate/lib.rs:28:ufcs' 3 ''
 check "(R) --callers=Book::iter keeps the proven self call and the typed book_iter, and counts the one declined call (vec_iter)" \
-      callers Book::iter 'rsgate/lib.rs:17:first rsgate/lib.rs:25:book_iter' 1 ''
+      callers Book::iter 'rsgate/lib.rs:17:Book::first rsgate/lib.rs:25:book_iter' 1 ''
 
 # ── (E) the callers side ──────────────────────────────────────────────────────────────────────────────────────
 echo "=== (E) callers: the typed callers stay, the declined ones are counted ==="
 check "(E) --callers=Vec::push_back is exactly its typed callers + the alias, Vec-field and element hedges; declined_calls=\"10\"" \
-      callers Vec::push_back 'app/use.cpp:10:typedPtr app/use.cpp:16:add app/use.cpp:17:addOwned app/use.cpp:22:aliasTyped~ app/use.cpp:8:typedLocal app/use.cpp:9:typedParam lib/vec.h:15:pushTwice sib/sib.cpp:10:thisField~ sib/sib.cpp:13:fieldOfVar~ sib/sib.cpp:20:subscript~' 10 ''
+      callers Vec::push_back 'app/use.cpp:10:typedPtr app/use.cpp:16:Holder::add app/use.cpp:17:Holder::addOwned app/use.cpp:22:aliasTyped~ app/use.cpp:8:typedLocal app/use.cpp:9:typedParam lib/vec.h:15:Vec::pushTwice sib/sib.cpp:10:Box::thisField~ sib/sib.cpp:13:fieldOfVar~ sib/sib.cpp:20:subscript~' 10 ''
 check "(E) --callers=lib/vec.h:append (one definition) keeps soloTyped; declined_calls=\"1\"" \
       callers lib/vec.h:append 'app/use.cpp:20:soloTyped' 1 ''
 check "(E) --callers=Pool::clear keeps poolTyped; declined_calls=\"2\"" callers Pool::clear 'app/use.cpp:21:poolTyped' 2 ''

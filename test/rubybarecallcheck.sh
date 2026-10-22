@@ -592,7 +592,7 @@ sed 's/^    x_asg = 1$/    y_asg = 1/' "$FIX/lib/app/locals.rb" >"$MUT/lib/app/l
 grep -q '^    y_asg = 1$' "$MUT/lib/app/locals.rb" || no "mutation did not apply"
 if callers "$MUT" "Decoy::x_asg"
 then
-    grep -q ' n="assign"' "$DIR/c.rows" && ok "mutation: with the binding renamed, assign → Decoy::x_asg (the included module's method)" \
+    grep -q ' n="Locals#assign"' "$DIR/c.rows" && ok "mutation: with the binding renamed, assign → Decoy::x_asg (the included module's method)" \
         || no "mutation: renamed binding, but assign still does not call Decoy::x_asg"
 fi
 
