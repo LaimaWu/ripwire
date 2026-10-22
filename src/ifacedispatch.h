@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -259,13 +260,8 @@ private:
     {
         if( const auto it = abstractNames_.find( id ); it != abstractNames_.end() )
         {
-            for( std::string_view n : it->second )
-            {
-                if( !std::ranges::contains( names, n ) )
-                {
-                    names.push_back( n );
-                }
-            }
+            std::ranges::copy_if( it->second, std::back_inserter( names ),
+                                  [ & ]( std::string_view n ) { return !std::ranges::contains( names, n ); } );
         }
     }
 
