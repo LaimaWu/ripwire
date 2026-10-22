@@ -1722,6 +1722,16 @@ for f in gcpar.rs:gcpar_own gcpar/kid.rs:gckid_own gcabuse.rs:gcab_own gcinl.rs:
          gutuown.rs:gutuown_top gutuown.rs:gutuown_in gutuown.rs:gutuown_bare gususeown.rs:gusown_bare; do
     proven  rsrecv callees "src/$f" "method as_os $NS:10"                                                      # [P]
 done
+# fc1 fix 3 (rv-fc1-delta2 D1, D2): a named `use` of the name shadows the level's globs (so `use std::ffi::OsString;` beside
+# `use crate::nsown::*;` is std's name for a child's `use super::*;` and for a glob of that module) [N]; a glob chain 4 deep
+# ending in a named std re-export is cut at the path walk's depth cap, and a cut is never a proof onto the in-tree type [N]
+# (3 deep is followed out, still [N]); [P] twins: a std glob + an explicit in-tree `use`, the same chain ending in the in-tree type.
+for f in gsh.rs:gsh_in gsreuse.rs:gsre_bare gdqx4.rs:gdq4_bare gsh.rs:gsh_top gdqx3.rs:gdq3_bare gczuse.rs:gcz_bare; do
+    notproven rsrecv callees "src/$f" "as_os $NS:10"                                                           # [N]
+done
+for f in gshown.rs:gsho_top gshown.rs:gsho_in gdox4.rs:gdo4_bare; do
+    proven  rsrecv callees "src/$f" "method as_os $NS:10"                                                      # [P]
+done
 # guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
 proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
 

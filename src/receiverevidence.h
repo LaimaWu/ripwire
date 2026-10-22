@@ -280,6 +280,7 @@ struct CallResultTypes
     mutable std::string                                   aliasKey;   // importPathOf's / the TS pin lookup's
     mutable std::vector<std::string_view>                 usingPath;  // forEachCppUsing's per-row namespace path
     mutable std::string                                   moduleKey;  // rustModuleKey's buffer
+    mutable bool                                          pathCut = false;   // fc1 fix 3: a rustPathOutside walk hit its depth cap — its false then means "cut", not "stays in the tree"
 
     explicit CallResultTypes( const IngestResult& i ) : ing( i ) {}
 
@@ -1316,7 +1317,12 @@ struct CallResultTypes
         {
             buildRustLayout();
         }
-        if( f >= rust.crateOf.size() || path.empty() || depth > 4 )
+        if( depth > 4 )
+        {
+            pathCut = true;   // a cut, not an answer: a caller that would PROVE from "stays in the tree" reads this flag
+            return false;
+        }
+        if( f >= rust.crateOf.size() || path.empty() )
         {
             return false;
         }
@@ -1407,44 +1413,76 @@ struct CallResultTypes
     // fc1 fix 1: may a glob `use` in force at byte `at` of `f` — one at a level of its chain (a fn body, then the module it
     // sits in; an outer module's globs never reach an inline `mod`) — bring the name `seg`? Only an in-tree glob whose
     // target module declares or re-exports `seg` in-tree (rustModuleMayBring); `mod tests { use super::*; }` never brings `std`
+    struct GlobWalk
+    {
+        int                      depth;   // the glob chain's stack bound
+        int                      base;    // the depth of the rustPathOutside walk this query runs under (a `use` it follows starts one deeper, so nesting stays bounded)
+        std::vector<std::string> seen;    // fc1 fix 2: the (crate, module) keys this query already entered — a cycle brings nothing new
+    };
     bool rustGlobMayBring( std::uint32_t f, std::uint32_t at, std::string_view seg, int depth ) const
     {
-        std::vector<std::string> seen;   // fc1 fix 2: the (crate, module) keys this query already entered — a cycle brings nothing new
-        bool                     may = false;
+        GlobWalk walk{ 0, depth, {} };
+        bool     may = false;
         forEachRustScopeAt( f, at, [ & ]( const Level& lv )
         {
             forEachImport( f, "*", [ & ]( const Binding& b )
             {
-                may = may || ( levelAt( f, b.startByte ) == lv && rustGlobBrings( f, b, seg, depth, seen ) );
+                may = may || ( levelAt( f, b.startByte ) == lv && rustGlobBrings( f, b, seg, walk ) );
             } );
             return may;
         } );
         return may;
     }
     // does the glob row `b` of file `f` — an in-tree one — bring `seg` (rustModuleMayBring of its target)?
-    bool rustGlobBrings( std::uint32_t f, const Binding& b, std::string_view seg, int depth, std::vector<std::string>& seen ) const
+    bool rustGlobBrings( std::uint32_t f, const Binding& b, std::string_view seg, GlobWalk& walk ) const
     {
         std::uint32_t gc = kNoCrate;
         std::string   gm;
-        return b.kind == LocalBindKind::TypeImport && rustModuleOf( f, b.startByte, b.importedName, gc, gm, 0 ) && rustModuleMayBring( gc, gm, seg, depth + 1, seen );
+        if( b.kind != LocalBindKind::TypeImport || !rustModuleOf( f, b.startByte, b.importedName, gc, gm, 0 ) )
+        {
+            return false;
+        }
+        ++walk.depth;
+        const bool brings = rustModuleMayBring( gc, gm, seg, walk );
+        --walk.depth;
+        return brings;
+    }
+    // fc1 fix 3: does a named `use` of `seg` at `level` of file `mf` bring an in-tree binding (one that does not lead out)?
+    // `named` is set when the level has one at all; a walk cut at rustPathOutside's depth cap proves nothing, so it is hedged
+    bool rustNamedUsesBring( std::uint32_t mf, const Level& level, std::string_view seg, const GlobWalk& walk, bool& named ) const
+    {
+        bool brings = false;
+        forEachImport( mf, seg, [ & ]( const Binding& b )
+        {
+            if( b.kind == LocalBindKind::TypeImport && levelAt( mf, b.startByte ) == level )
+            {
+                named   = true;
+                pathCut = false;
+                const bool out = rustPathOutside( mf, b.startByte, b.importedName, walk.base + 1 );
+                brings = brings || ( !out && !pathCut );
+            }
+        } );
+        return brings;
     }
     // does module (crate, module) declare, or re-export from the tree, an item `seg` a glob of it brings — a child module, a
     // class or a `use` of the name at its own level that does not lead out (fc1 fix 2: a `use` of std's name there brings std's
     // binding, which is what the call sees; a private one reaches a child module's `super::*`), or a glob there whose target
-    // does? Each module is entered once per query (`seen`: a glob cycle terminates with the true answer); the depth cap is only
-    // a stack bound and answers "brings nothing" — the row is hedged, never proven onto an in-tree type
-    bool rustModuleMayBring( std::uint32_t crate, const std::string& module, std::string_view seg, int depth, std::vector<std::string>& seen ) const
+    // does? fc1 fix 3: a named `use` of the name at a level shadows that level's globs (Rust's rule), so the named uses decide
+    // alone and the globs are consulted only when there is none; a `use` whose walk was cut at rustPathOutside's depth cap does
+    // not count as in-tree. Each module is entered once per query (`seen`: a glob cycle terminates with the true answer); the
+    // depth cap is only a stack bound and answers "brings nothing" — the row is hedged, never proven onto an in-tree type
+    bool rustModuleMayBring( std::uint32_t crate, const std::string& module, std::string_view seg, GlobWalk& walk ) const
     {
-        if( depth > 32 )
+        if( walk.depth > 32 )
         {
             return false;
         }
         const std::string key = rustModuleKey( crate, module );
-        if( std::ranges::find( seen, key ) != seen.end() )
+        if( std::ranges::find( walk.seen, key ) != walk.seen.end() )
         {
             return false;
         }
-        seen.push_back( key );
+        walk.seen.push_back( key );
         if( rustModuleExists( crate, joinModule( module, seg ) ) )
         {
             return true;
@@ -1458,11 +1496,12 @@ struct CallResultTypes
         {
             NodeId one = kNoNode;
             may = may || classesNamed( seg, CallResultFamily::Rust, [ & ]( NodeId c ) { return ing.symbols[ c ].fileId == mf && enclosingSymbol( c ) == inlineMod; }, one ) > 0;
-            forEachImport( mf, seg, [ & ]( const Binding& b )
+            bool named = false;   // fc1 fix 3: a named `use` of `seg` at this level shadows the level's globs (Rust's rule) and decides alone
+            may = rustNamedUsesBring( mf, level, seg, walk, named ) || may;
+            if( !named )
             {
-                may = may || ( b.kind == LocalBindKind::TypeImport && levelAt( mf, b.startByte ) == level && depth <= 4 && !rustPathOutside( mf, b.startByte, b.importedName, depth ) );   // past rustPathOutside's cap: hedged
-            } );
-            forEachImport( mf, "*", [ & ]( const Binding& b ) { may = may || ( levelAt( mf, b.startByte ) == level && rustGlobBrings( mf, b, seg, depth, seen ) ); } );
+                forEachImport( mf, "*", [ & ]( const Binding& b ) { may = may || ( levelAt( mf, b.startByte ) == level && rustGlobBrings( mf, b, seg, walk ) ); } );
+            }
         }
         return may;
     }

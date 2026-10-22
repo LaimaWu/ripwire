@@ -64,6 +64,30 @@ pub mod gus3;
 pub mod gus4;
 pub mod gususe;
 pub mod gususeown;
+pub mod gsh;
+pub mod gshown;
+pub mod gsre;
+pub mod gsreuse;
+pub mod gdq;
+pub mod gdq4;
+pub mod gdq3;
+pub mod gdq2;
+pub mod gdq1;
+pub mod gdqx4;
+pub mod gdqx3;
+pub mod gdqo;
+pub mod gdo4;
+pub mod gdo3;
+pub mod gdo2;
+pub mod gdo1;
+pub mod gdox4;
+pub mod gcz1;
+pub mod gcz2;
+pub mod gcz3;
+pub mod gcz4;
+pub mod gcz5;
+pub mod gczg;
+pub mod gczuse;
 @@@ rsrecv/src/model.rs
 // Book and Other both define spin / iter; Cfg and Knob both define tune: a call proves one only through its receiver's type.
 pub struct Book { pub items: Vec<u32> }
@@ -626,6 +650,74 @@ pub fn gus_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
 @@@ rsrecv/src/gususeown.rs
 use crate::gus3::*;
 pub fn gusown_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gsh.rs
+// fc1 fix 3 (rv-fc1-delta2 D1): a named `use std::ffi::OsString` SHADOWS the glob of the in-tree prelude at its level, so a child's
+// `use super::*;` sees std's name too [N]; the reverse (a std glob + an explicit in-tree `use`) stays the in-tree type [P] (gshown.rs)
+use crate::nsown::*;
+use std::ffi::OsString;
+pub fn gsh_top() -> u8 { let s = OsString::from("x"); s.as_os() }
+pub mod tests { use super::*; pub fn gsh_in() -> u8 { let s = OsString::from("x"); s.as_os() } }
+@@@ rsrecv/src/gshown.rs
+use std::ffi::*;
+use crate::nsown::OsString;
+pub fn gsho_top() -> u8 { let s = OsString::from("x"); s.as_os() }
+pub mod tests { use super::*; pub fn gsho_in() -> u8 { let s = OsString::from("x"); s.as_os() } }
+@@@ rsrecv/src/gsre.rs
+// a glob target that names std's type and globs the in-tree prelude: the named `use` wins for whoever globs this module
+pub use std::ffi::OsString;
+pub use crate::nsown::*;
+@@@ rsrecv/src/gsreuse.rs
+use crate::gsre::*;
+pub fn gsre_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gdq.rs
+// fc1 fix 3 (rv-fc1-delta2 D2): a glob chain 4 deep ending in a named std re-export — the walk is cut at rustPathOutside's depth
+// cap, and a cut is never a proof onto the in-tree type [N]; 3 deep is followed out (also [N]); the same chain ending in the in-tree type stays [P]
+pub use std::ffi::OsString;
+@@@ rsrecv/src/gdq4.rs
+pub use crate::gdq::OsString;
+@@@ rsrecv/src/gdq3.rs
+pub use crate::gdq4::*;
+@@@ rsrecv/src/gdq2.rs
+pub use crate::gdq3::*;
+@@@ rsrecv/src/gdq1.rs
+pub use crate::gdq2::*;
+@@@ rsrecv/src/gdqx4.rs
+use crate::gdq1::*;
+pub fn gdq4_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gdqx3.rs
+use crate::gdq2::*;
+pub fn gdq3_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gdqo.rs
+pub use crate::nsown::OsString;
+@@@ rsrecv/src/gdo4.rs
+pub use crate::gdqo::OsString;
+@@@ rsrecv/src/gdo3.rs
+pub use crate::gdo4::*;
+@@@ rsrecv/src/gdo2.rs
+pub use crate::gdo3::*;
+@@@ rsrecv/src/gdo1.rs
+pub use crate::gdo2::*;
+@@@ rsrecv/src/gdox4.rs
+use crate::gdo1::*;
+pub fn gdo4_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gcz1.rs
+// a CUT walk (rv-fc1-delta2 D2): a re-export chain of named `use`s longer than rustPathOutside's depth cap, ending in std — the cap
+// answers "not outside", which is a cut and never a proof onto the in-tree type [N] (the same chain ending in-tree is hedged too: a floor)
+pub use crate::gcz2::OsString;
+@@@ rsrecv/src/gcz2.rs
+pub use crate::gcz3::OsString;
+@@@ rsrecv/src/gcz3.rs
+pub use crate::gcz4::OsString;
+@@@ rsrecv/src/gcz4.rs
+pub use crate::gcz5::OsString;
+@@@ rsrecv/src/gcz5.rs
+pub use std::ffi::OsString;
+@@@ rsrecv/src/gczg.rs
+pub use crate::gcz1::OsString;
+pub use crate::nsown::*;
+@@@ rsrecv/src/gczuse.rs
+use crate::gczg::*;
+pub fn gcz_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
 @@@ rsrecv/benches/nsb.rs
 // fc1: a file outside every crate's module tree (a bench target): its qualifier resolves nowhere, so the base rule holds
 use rsrecv::nsown::OsString;
