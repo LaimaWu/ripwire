@@ -91,12 +91,21 @@ reads a call through a field only when the receiver is declared with `struct` / 
 as a function pointer in the same file. Not yet: typedef'd function-pointer fields copied between structs (htop's
 `this->draw = mode->draw`), macro bodies, Go / Rust / TypeScript function-typed fields.
 
+### Fixed — test infrastructure: `cppqualcheck` gives a Linux ASan binary the sanitizer alarm (#421)
+
+The gate scales its per-call alarm (30 s plain, 90 s sanitizer) from the binary's flavour, which it read only off the
+binary's undefined symbols. Linux clang links the sanitizer runtime statically, so every ubuntu ASan run was read as
+plain and its one cold whole-repo call (22-30 s under ASan) timed out twice in nightly CI. The flavour now also comes
+from the runtime's symbol names inside the binary or from the runtime answering `ASAN_OPTIONS=help=1`; the alarms
+themselves, every arm and every literal are unchanged. Test-only; no output change.
+
 ### Changed — the versions this change moves, stated once
 
-`kParserVer` 206 → 212 (file tag 213): the Rust written-type receivers carried 202 (203) on their branch; 212 sits above
-every live branch number (210 / 211 on a branch not in this change; #420 reserves 214 / 215). A cache written by 0.6.8 is
-re-parsed once. `kCacheVersion` stays 36 and the quality-snapshot scheme stays 22: no record format changed. The session
-legend dictionary is `dictv=5775b5b07dd973a2 entries=908`.
+`kParserVer` 206 → 220 (file tag 221): the Rust written-type receivers carried 202 (203) on their branch and the struct-field
+slot join 204 (205), and its fix rounds changed what 204 extracts, so a cache from that branch would replay the older slot
+rows; 220 sits above every live branch and pull-request number (214 to 219). A cache written by 0.6.8 is re-parsed once.
+`kCacheVersion` stays 36 and the quality-snapshot scheme stays 22: no record format changed (the slot join rides existing
+fields of the value and call-through records). The session legend dictionary is `dictv=b407fca01d70235f entries=914`.
 
 ## [0.6.8] — 2026-10-19
 
