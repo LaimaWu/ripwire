@@ -1080,10 +1080,10 @@ struct CallResultTypes
     {
         return rust.filesOf.contains( rustModuleKey( crate, module ) ) || rust.inlineMods.contains( rustModuleKey( crate, module ) );
     }
-    // the `use` rows binding `name` in force at byte `at` of file `f`: those of the innermost level (a fn body, then the
-    // module) that holds one — a `use` binds where it is written (fix round 3), never file-wide
+    // each level of the chain at byte `at` of Rust file `f` that scopes items (a fn body, then the module it sits in: an
+    // inline `mod`, or the file), innermost first, until `fn( level )` returns true or the module level is passed
     template <class Fn>
-    void forEachRustUseAt( std::uint32_t f, std::uint32_t at, std::string_view name, Fn&& fn ) const
+    void forEachRustScopeAt( std::uint32_t f, std::uint32_t at, Fn&& fn ) const
     {
         std::vector<Level> chain;
         chainAt( f, at, chain );
@@ -1094,6 +1094,19 @@ struct CallResultTypes
             {
                 continue;
             }
+            if( fn( lv ) || lv.wholeFile() || kind == SymKind::Other )
+            {
+                return;
+            }
+        }
+    }
+    // the `use` rows binding `name` in force at byte `at` of file `f`: those of the innermost level (a fn body, then the
+    // module) that holds one — a `use` binds where it is written (fix round 3), never file-wide
+    template <class Fn>
+    void forEachRustUseAt( std::uint32_t f, std::uint32_t at, std::string_view name, Fn&& fn ) const
+    {
+        forEachRustScopeAt( f, at, [ & ]( const Level& lv )
+        {
             bool found = false;
             forEachImport( f, name, [ & ]( const Binding& b )
             {
@@ -1103,11 +1116,8 @@ struct CallResultTypes
                     fn( b );
                 }
             } );
-            if( found || lv.wholeFile() || kind == SymKind::Other )
-            {
-                return;
-            }
-        }
+            return found;
+        } );
     }
     // the (crate, module) `modPath` (`crate::model`, `super::x`, `mdbook_core::book`, a `use`d `model`) names at byte `at` of
     // file `f` — relative to the module `at` sits in, an inline `mod` included (fix round 3: `super::` inside `mod m` is the
@@ -1399,29 +1409,23 @@ struct CallResultTypes
     // target module declares or re-exports `seg` (rustModuleMayBring); `mod tests { use super::*; }` never brings `std`
     bool rustGlobMayBring( std::uint32_t f, std::uint32_t at, std::string_view seg, int depth ) const
     {
-        std::vector<Level> chain;
-        chainAt( f, at, chain );
         bool may = false;
-        for( const Level& lv : chain )
+        forEachRustScopeAt( f, at, [ & ]( const Level& lv )
         {
-            const SymKind kind = lv.sym == kNoNode ? SymKind::Other : ing.symbols[ lv.sym ].kind;
-            if( lv.sym != kNoNode && !rustScopesItems( kind ) )
-            {
-                continue;
-            }
             forEachImport( f, "*", [ & ]( const Binding& b )
             {
-                std::uint32_t gc = kNoCrate;
-                std::string   gm;
-                may = may || ( b.kind == LocalBindKind::TypeImport && levelAt( f, b.startByte ) == lv && rustModuleOf( f, b.startByte, b.importedName, gc, gm, 0 )
-                               && rustModuleMayBring( gc, gm, seg, depth + 1 ) );
+                may = may || ( levelAt( f, b.startByte ) == lv && rustGlobBrings( f, b, seg, depth ) );
             } );
-            if( may || lv.wholeFile() || kind == SymKind::Other )
-            {
-                break;
-            }
-        }
+            return may;
+        } );
         return may;
+    }
+    // does the glob row `b` of file `f` — an in-tree one — bring `seg` (rustModuleMayBring of its target)?
+    bool rustGlobBrings( std::uint32_t f, const Binding& b, std::string_view seg, int depth ) const
+    {
+        std::uint32_t gc = kNoCrate;
+        std::string   gm;
+        return b.kind == LocalBindKind::TypeImport && rustModuleOf( f, b.startByte, b.importedName, gc, gm, 0 ) && rustModuleMayBring( gc, gm, seg, depth + 1 );
     }
     // does module (crate, module) declare or re-export an item `seg` a glob of it brings — a child module, a class or a `use`
     // of the name at its own level, or (followed, depth-bounded: past the cap it may) a glob there whose target does?
@@ -1441,13 +1445,7 @@ struct CallResultTypes
             NodeId one = kNoNode;
             may = may || classesNamed( seg, CallResultFamily::Rust, [ & ]( NodeId c ) { return ing.symbols[ c ].fileId == mf && enclosingSymbol( c ) == inlineMod; }, one ) > 0;
             forEachImport( mf, seg, [ & ]( const Binding& b ) { may = may || ( b.kind == LocalBindKind::TypeImport && levelAt( mf, b.startByte ) == level ); } );
-            forEachImport( mf, "*", [ & ]( const Binding& b )
-            {
-                std::uint32_t gc = kNoCrate;
-                std::string   gm;
-                may = may || ( b.kind == LocalBindKind::TypeImport && levelAt( mf, b.startByte ) == level && rustModuleOf( mf, b.startByte, b.importedName, gc, gm, 0 )
-                               && rustModuleMayBring( gc, gm, seg, depth + 1 ) );
-            } );
+            forEachImport( mf, "*", [ & ]( const Binding& b ) { may = may || ( levelAt( mf, b.startByte ) == level && rustGlobBrings( mf, b, seg, depth ) ); } );
         }
         return may;
     }
