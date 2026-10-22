@@ -41,6 +41,8 @@
 #       two-method interfaces, a two-method Kotlin interface beside Java, a Kotlin-only tree: still via="impl"
 #       fix round 3, D1 — a DOUBTED Kotlin count of 0 (sam_kt_*_shared: Sub's or its base's name is shared) opens the list; controls
 #       sam_kt_inherit / _generic / _javabase (a base the index names exactly) stay open by the SAM rule
+#       fix round 4, E1 — a name re-declared WITH A BODY below its abstract declaration (sam_kt_default_*) leaves the count; a body-less
+#       re-declaration (sam_kt_redeclare_abstract) and a Java default method (sam_java_default_override) are the controls
 #   (M) fix round 1, B2 — Rust method set: through `dyn T` a candidate sits in an `impl T for X` block (or is T's default);
 #       an inherent method of X never is
 #   (L) legend clauses ride with the rows (cands=K a floor; the iface clause only beside an iface row)   (J) --json gate / bound
@@ -325,6 +327,28 @@ for root, want, kind, tag, why in (
         ( KJU, [ ( "ap", "app/Op.kt:3", "name" ) ], "C", "kt_javabase", "Kotlin `Sub : Base` over a uniquely named Java SAM: open" ) ):
     a = ask( root, "callees", "runSub" )
     say( rows_are( a, want ), "[%s] k2r3_%s" % ( kind, tag ), "--callees=runSub: %s -- %s" % ( [ ( w[ 1 ], w[ 2 ] ) for w in want ], why ), a.why() )
+
+# (K2, fix round 4, E1) a name a sub-interface (or a middle interface) re-declares WITH A BODY is no abstract member: since Kotlin 2.2 it is a
+# JVM default method, so Java sees the one abstract method `ap` and a lambda can be the receiver. Counting the base's `bp` too read 2 and
+# closed the list (a false via="impl"). Controls: a Java `default` method, a body-less re-declaration (still abstract: 2, impl stays), an
+# overload the index cannot match by arity (dropped by name, doubted: open, an over-hedge), and every arm above.
+print( "=== (K2) fix round 4: a body that re-declares an inherited abstract name is not abstract ===" )
+KD, KDD, KRA, KDO, JD, KCE = ( os.path.join( FIX, d ) for d in ( "sam_kt_default_override", "sam_kt_default_diamond", "sam_kt_redeclare_abstract",
+                                                           "sam_kt_default_overload", "sam_java_default_override", "sam_kt_concrete_ext" ) )
+for root, sel, want, kind, tag, why in (
+        ( KD, "runSub", [ ( "ap", "app/Op.kt:4", "name" ) ], "P", "kt_default_override",
+          "Kotlin: `Sub : Base { override fun bp() = 0 }`: bp has a body, one abstract method (ap) is left, the lambda can run" ),
+        ( KDD, "runSub", [ ( "ap", "app/Op.kt:5", "name" ) ], "P", "kt_default_diamond",
+          "Kotlin: the default lives on a middle interface Def : Base, Sub : Def: still one abstract method" ),
+        ( KDO, "runSub", [ ( "ap", "app/Op.kt:4", "name" ) ], "P", "kt_default_overload",
+          "Kotlin: Base { ap; bp(); bp( n ) }, Sub gives bp( n ) a body: matched by name only, so the count is doubted and the list opens" ),
+        ( JD, "runSub", [ ( "a", "app/Inc.java:2", "name" ) ], "C", "java_default", "Java: `Sub extends Base { default int b() }`: unchanged, open" ),
+        ( KCE, "runBase", [ ( "ap", "app/Op.kt:3", "impl" ) ], "C", "kt_concrete_ext",
+          "Kotlin: a concrete Inc : Base, Closeable overriding every Base member (an external base): not an interface, impl stays" ),
+        ( KRA, "runSub", [ ( "ap", "app/Op.kt:4", "impl" ) ], "C", "kt_redeclare_abstract",
+          "Kotlin: `Sub : Base { override fun bp(): Int }` stays abstract: two abstract methods, no lambda converts it, impl stays" ) ):
+    a = ask( root, "callees", sel )
+    say( rows_are( a, want ), "[%s] k2r4_%s" % ( kind, tag ), "--callees=%s: %s -- %s" % ( sel, [ ( w[ 1 ], w[ 2 ] ) for w in want ], why ), a.why() )
 
 # ── (M) Rust method set (fix round 1, B2; §(a) 4): through dyn T only T's impl blocks and defaults can run ───────────────────
 print( "=== (M) Rust: an inherent method is never a trait-dispatched candidate ===" )

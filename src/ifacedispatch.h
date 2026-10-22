@@ -58,12 +58,192 @@ struct IfaceDispatchAnswer
     std::vector<NodeId> cand;
 };
 
+// the lambda-conversion count of lambdaImplements, apart from the tier: per class IDENTITY (the index knows a base by NAME only), the
+// abstract (bodyless) member names a class declares, and every class of a lambda-convertible language under its name
+class SamCounter
+{
+public:
+    SamCounter( const IngestResult& ing, const ReceiverEvidence& recvEv ) : ing_( ing ), recvEv_( recvEv ) {}
+
+    void addClass( const Symbol& s ) { classesByName_[ s.name ].push_back( s.id ); }   // the identities one name stands for (a package apart)
+
+    // a bodyless member `s` of class `owner`
+    void addMember( NodeId owner, const Symbol& s )
+    {
+        mergeAbstract( abstractNames_[ owner ], AbstractMember{ s.name, std::int32_t( s.params ) }, true );
+    }
+
+    // the one class-like symbol of a lambda-convertible language called `name`; kNoNode when none or several share it
+    NodeId soleClassNamed( std::string_view name ) const
+    {
+        const auto it = classesByName_.find( name );
+        return it != classesByName_.end() && it->second.size() == 1 ? it->second[ 0 ] : kNoNode;
+    }
+
+    // a bodyless member: its name and parameter count (kOverloaded: the class declares the name bodyless more than once)
+    static constexpr std::int32_t kOverloaded = -1;
+    struct AbstractMember
+    {
+        std::string_view name;
+        std::int32_t     params = 0;
+    };
+
+    // the count of distinct abstract member names and what the index cannot vouch for: `doubted`: the count may be BELOW the truth
+    // (a base it cannot see adds names; a name a body overrides is dropped by name, an overload it cannot tell apart); `hidden`: a
+    // class that may re-declare a name WITH A BODY is out of sight, so the count may also be ABOVE the truth (even a 2 proves nothing)
+    struct AbstractCount
+    {
+        std::size_t n       = 0;
+        std::size_t ownN    = 0;   // of n, the class's OWN abstract names: no base's body can override one (the class re-declares it)
+        bool        doubted = false;
+        bool        hidden  = false;
+    };
+
+    // what the walk below the receiver gathered: the abstract names of the classes it named exactly (and their identities)
+    struct BaseWalk
+    {
+        std::vector<AbstractMember>   names;
+        std::vector<NodeId>           walked;
+        bool                          doubted = false;
+        bool                          hidden  = false;
+    };
+
+    // does class `cls` own a member of abstract member `m`'s name WITH a body (a Kotlin interface's default, a Java `default` method, an
+    // override), and is it exactly the one `m` declares: ONE such body of the same parameter count and `m` not overloaded (an
+    // overload by type the index cannot see stays unseen: that is a name match, which `doubted` records)
+    struct BodyMatch
+    {
+        bool any   = false;
+        bool exact = false;
+    };
+    BodyMatch bodyOf( NodeId cls, const AbstractMember& m ) const
+    {
+        recvEv_.found.clear();
+        recvEv_.collectMethods( ing_.symbols[ cls ].name, m.name, cls );
+        return BodyMatch{ !recvEv_.found.empty(),
+                          recvEv_.found.size() == 1 && m.params != kOverloaded && ing_.symbols[ recvEv_.found[ 0 ] ].params == m.params };
+    }
+
+    // add `m` to `into`, one entry per name; a name seen again keeps one entry, its arity `kOverloaded` when the two cannot be told
+    // apart (the same class bodyless twice, or two classes with different parameter counts)
+    static void mergeAbstract( std::vector<AbstractMember>& into, const AbstractMember& m, bool sameClass )
+    {
+        if( const auto seen = std::ranges::find( into, m.name, &AbstractMember::name ); seen == into.end() )
+        {
+            into.push_back( m );
+        }
+        else if( sameClass || seen->params != m.params )
+        {
+            seen->params = kOverloaded;
+        }
+    }
+
+    // append the distinct abstract members of class `id` to `names`
+    void addOwnAbstract( NodeId id, std::vector<AbstractMember>& names ) const
+    {
+        if( const auto it = abstractNames_.find( id ); it != abstractNames_.end() )
+        {
+            for( const AbstractMember& m : it->second )
+            {
+                mergeAbstract( names, m, false );
+            }
+        }
+    }
+
+    // breadth-first through ALL the bases the index names exactly (no early stop: a class below may give a name a body), adding their
+    // abstract names and identities. A base that is not exactly one class in the tree (a shared name, or none) or a walk the cap cut
+    // short leaves the names only a lower bound (`doubted`); one that may be a class hiding an override is `hidden`: a name shared by
+    // several classes, or the cap (a name no class in the tree bears is external, and no external type extends an in-tree one)
+    void walkAbstractBases( std::vector<std::string_view>& frontier, BaseWalk& w ) const
+    {
+        std::size_t i = 0;
+        for( ; i < frontier.size() && i < ReceiverEvidence::kWalkCap; ++i )
+        {
+            recvEv_.forEachBase( frontier[ i ], [ & ]( std::string_view base )
+            {
+                const NodeId only = soleClassNamed( base );
+                if( only == kNoNode )
+                {
+                    w.doubted = true;
+                    w.hidden  = w.hidden || classesByName_.contains( base );
+                }
+                else if( std::ranges::find( frontier, base ) == frontier.end() )
+                {
+                    frontier.push_back( base );
+                    w.walked.push_back( only );
+                    addOwnAbstract( only, w.names );
+                }
+            } );
+        }
+        if( i < frontier.size() )
+        {
+            w.doubted = w.hidden = true;
+        }
+    }
+
+    // the distinct abstract member names of class `c`: its own, plus those of the bases the index names exactly, minus a base's name
+    // that some class of the walk gives a body (a sub-interface's or middle interface's `override fun m() = …`, a Java `default`
+    // method): that name is no abstract member of `c` (matched by NAME, an overload the index cannot tell apart is dropped too, so
+    // a drop is `doubted`). `c`'s own abstract name stays (an abstract re-declaration) unless `c` has a bodied member of it too.
+    // `exactBases`: false when c's own name is shared, so its base names cannot be told apart per identity (doubted, not walked;
+    // hidden when c names any base at all).
+    AbstractCount abstractCount( NodeId c, bool exactBases ) const
+    {
+        BaseWalk                      w;
+        std::vector<std::string_view> frontier{ ing_.symbols[ c ].name };
+        if( exactBases )
+        {
+            walkAbstractBases( frontier, w );
+        }
+        else
+        {
+            w.doubted = true;
+            recvEv_.forEachBase( frontier[ 0 ], [ & ]( std::string_view ) { w.hidden = true; } );
+        }
+        std::vector<AbstractMember> own;
+        addOwnAbstract( c, own );
+        AbstractCount ac;
+        ac.hidden = w.hidden;
+        bool exactDrop = false;   // a body matched an abstract name exactly (name, parameter count, not overloaded)
+        bool looseDrop = false;   // a body matched by name only: an overload may remain abstract
+        std::vector<AbstractMember> names;
+        const auto                  overridden = [ & ]( const AbstractMember& m, bool ownName )
+        {
+            BodyMatch hit = bodyOf( c, m );
+            for( std::size_t k = 0; !ownName && !hit.any && k < w.walked.size(); ++k )
+            {
+                hit = bodyOf( w.walked[ k ], m );
+            }
+            exactDrop = exactDrop || ( hit.any && hit.exact );
+            looseDrop = looseDrop || ( hit.any && !hit.exact );
+            return hit.any;
+        };
+        std::ranges::copy_if( own, std::back_inserter( names ), [ & ]( const AbstractMember& m ) { return !overridden( m, true ); } );
+        ac.ownN = names.size();
+        std::ranges::copy_if( w.names, std::back_inserter( names ), [ & ]( const AbstractMember& m )
+                              { return !std::ranges::contains( own, m.name, &AbstractMember::name ) && !overridden( m, false ); } );
+        ac.n = names.size();
+        // A base the index cannot see (an external type, a same-named class of another language) may add an abstract name: the count is
+        // only a lower bound. But a type that gives a body to names it inherits, every one of them exactly, is far likelier a concrete
+        // implementor than an interface left with one external SAM base: such a lower bound is not a doubt (the walk saw what it
+        // overrides). A shared base name, the cap and a loose match stay doubts.
+        ac.doubted = looseDrop || w.hidden || ( w.doubted && !exactDrop );
+        return ac;
+    }
+
+private:
+    const IngestResult&                            ing_;
+    const ReceiverEvidence&                        recvEv_;
+    HashMap<NodeId, std::vector<AbstractMember>>   abstractNames_;   // class id → its bodyless members' distinct names
+    HashMap<std::string_view, std::vector<NodeId>> classesByName_;   // name → every class-like symbol so named
+};
+
 class IfaceDispatch
 {
 public:
     IfaceDispatch( const IngestResult& ing, const ReceiverEvidence& recvEv, const std::vector<std::vector<NodeId>>& implementors,
                    const std::vector<std::vector<std::uint8_t>>& bound, const std::vector<char>& open )
-        : ing_( ing ), recvEv_( recvEv ), implementors_( implementors ), bound_( bound ), open_( open )
+        : ing_( ing ), recvEv_( recvEv ), implementors_( implementors ), bound_( bound ), open_( open ), sam_( ing, recvEv )
     {
         EXPECTS( bound.empty() || bound.size() == implementors.size(), "buildGraph sizes the bound map with the implementors map" );
         for( const Symbol& s : ing.symbols )
@@ -129,7 +309,7 @@ private:
         javaInTree_              = javaInTree_ || lf.samLambdas;
         if( samLang && ReceiverEvidence::classLike( s.kind ) )
         {
-            classesByName_[ s.name ].push_back( s.id );   // the identities one name stands for (a package apart)
+            sam_.addClass( s );
         }
         if( !ReceiverEvidence::callableKind( s.kind ) || s.endByte > s.sigEndByte || s.id >= recvEv_.ownerClass.size() || recvEv_.ownerClass[ s.id ].empty() )
         {
@@ -142,19 +322,8 @@ private:
         }
         if( const NodeId owner = recvEv_.classAt( s.fileId, s.sigStartByte, s.endByte, s.id ); owner != kNoNode )
         {
-            std::vector<std::string_view>& names = abstractNames_[ owner ];   // per class IDENTITY, not per name: the SAM count
-            if( !std::ranges::contains( names, std::string_view( s.name ) ) )
-            {
-                names.push_back( s.name );
-            }
+            sam_.addMember( owner, s );   // per class IDENTITY, not per name: the SAM count
         }
-    }
-
-    // the one class-like symbol of a lambda-convertible language called `name`; kNoNode when none or several share it
-    NodeId soleClassNamed( std::string_view name ) const
-    {
-        const auto it = classesByName_.find( name );
-        return it != classesByName_.end() && it->second.size() == 1 ? it->second[ 0 ] : kNoNode;
     }
 
     struct Row
@@ -234,9 +403,11 @@ private:
         {
             return hit->second != 0;
         }
-        const AbstractCount ac = abstractCount( t, soleClassNamed( s.name ) != kNoNode );
-        // a doubted 0 is a LOWER bound, never a certain 0: Kotlin's "exactly one" holds only for a count the index is sure of
-        const bool sam = ac.n <= 1 && ( !lf.interfaceReadsAsClass || ac.n == 1 || ac.doubted );
+        const SamCounter::AbstractCount ac = sam_.abstractCount( t, sam_.soleClassNamed( s.name ) != kNoNode );
+        // a doubted 0 is a LOWER bound, never a certain 0: Kotlin's "exactly one" holds only for a count the index is sure of; and a
+        // count with a class the walk cannot see (`hidden`: it may re-declare a name with a body) is no certain 2 either: it opens,
+        // unless T's own members alone are two (a base's body never overrides a name T itself declares)
+        const bool sam = ac.ownN < 2 && ( ac.hidden || ( ac.n <= 1 && ( !lf.interfaceReadsAsClass || ac.n == 1 || ac.doubted ) ) );
         samMemo_.emplace( t, char( sam ? 1 : 0 ) );
         return sam;
     }
@@ -246,61 +417,6 @@ private:
     {
         const LangFacts& lf = langFacts( l );
         return lf.samLambdas || ( lf.samFromJavaLambdas && javaInTree_ );
-    }
-
-    // the count of distinct abstract member names (stopping at 2) and whether it is only a LOWER bound
-    struct AbstractCount
-    {
-        std::size_t n       = 0;
-        bool        doubted = false;
-    };
-
-    // append the distinct abstract member names of class `id` to `names`
-    void addOwnAbstract( NodeId id, std::vector<std::string_view>& names ) const
-    {
-        if( const auto it = abstractNames_.find( id ); it != abstractNames_.end() )
-        {
-            std::ranges::copy_if( it->second, std::back_inserter( names ),
-                                  [ & ]( std::string_view n ) { return !std::ranges::contains( names, n ); } );
-        }
-    }
-
-    // breadth-first through the bases the index names exactly, adding their abstract names; true when a base is not exactly one class
-    // in the tree (shared name, or none) or the walk cap cut the walk short: the names are then only a lower bound
-    bool walkAbstractBases( std::vector<std::string_view>& frontier, std::vector<std::string_view>& names ) const
-    {
-        bool        doubted = false;
-        std::size_t i       = 0;
-        for( ; i < frontier.size() && i < ReceiverEvidence::kWalkCap && names.size() <= 1; ++i )
-        {
-            recvEv_.forEachBase( frontier[ i ], [ & ]( std::string_view base )
-            {
-                const NodeId only = soleClassNamed( base );
-                if( only == kNoNode )
-                {
-                    doubted = true;
-                }
-                else if( std::ranges::find( frontier, base ) == frontier.end() )
-                {
-                    frontier.push_back( base );
-                    addOwnAbstract( only, names );
-                }
-            } );
-        }
-        return doubted || ( i < frontier.size() && names.size() <= 1 );
-    }
-
-    // the distinct abstract member names of class `c` (its own, plus those of the bases the index names exactly), stopping at 2:
-    // a LOWER bound on the true count, so a doubt reads as "may be single" (`doubted`). An own name is certain; a base name shared by
-    // several classes, or none in the tree, adds nothing and is not walked past (its bases are the union of every same-named class's).
-    // `exactBases`: false when c's own name is shared, so its base names cannot be told apart per identity (doubted, not walked).
-    AbstractCount abstractCount( NodeId c, bool exactBases ) const
-    {
-        std::vector<std::string_view> names;
-        addOwnAbstract( c, names );
-        std::vector<std::string_view> frontier{ ing_.symbols[ c ].name };
-        const bool                    doubted = !exactBases || walkAbstractBases( frontier, names );
-        return AbstractCount{ names.size(), doubted };
     }
 
     // breadth-first down the implementors map from T, each type once (a cycle or a diamond is walked once): an Other edge (the
@@ -348,8 +464,7 @@ private:
     const std::vector<std::vector<std::uint8_t>>& bound_;
     const std::vector<char>&                      open_;       // graph.h implementorsOpen: a clause names an implementor the map cannot list
     HashMap<std::string, char>                    contract_;   // "Owner::name" of every bodyless member
-    HashMap<NodeId, std::vector<std::string_view>>      abstractNames_;   // SAM-convertible languages: class id → its bodyless members' distinct names
-    HashMap<std::string_view, std::vector<NodeId>>      classesByName_;   // SAM-convertible languages: name → every class-like symbol so named
+    SamCounter                                          sam_;   // the SAM count: abstract members per class identity
     bool                                                javaInTree_ = false;   // a samLambdas-language symbol exists (a Kotlin SAM can take its lambda)
     HashMap<std::string, std::vector<const Binding*>>   implBlocks_;      // "T\x1fX" → the `impl T for X` blocks (ImplBlock)
     mutable HashMap<NodeId, std::vector<Row>>     memo_;       // T → its closure
