@@ -394,6 +394,11 @@ xp XpSelfBase "" "XpSelfUser"
 # are IN the tree: every real implementor stays listed
 xp XpRsSelfBase "" "XpRsSelfMain XpRsSelfTest XpRsSelfExample"
 xp XpRenBase    "" "XpRenImpl"
+# fix round 2 (review D1): the other spellings of an in-tree crate — a renamed dependency KEY (`xpdep2 = { package = "xp-dep-core",
+# path = … }`, also a `[dev-dependencies.xpdep3]` table), an `extern crate … as` alias, a `use crate_name as alias;` alias, a
+# leading `::` — are in the tree too; `use serde::…` beside them is still outside
+xp XpDepBase  "XpDepOutSerde" "XpDepRenamed XpDepExternAlias XpDepUseAlias XpDepEntryTable"
+xp XpLeadBase "XpLeadOutSerde" "XpLeadColons"
 # (P1) a repo whose ROOT is the package (top-level __init__.py, no src/) importing its own name keeps its row; an outside
 # namesake beside it is still dropped
 if "$BIN" "$FIX/xp/pyflat" --no-cache --lego=XpFlatBase >"$DIR/out" 2>"$DIR/err"
@@ -420,6 +425,13 @@ then
     if iface | grep -q 'implementors_floor'; then no "XpRsBase carries a floor for a decided-outside clause: $( iface )"; else ok "XpRsBase: no implementors_floor for the outside-bound XpRsOutUse"; fi
     if has '<impl n="XpRsInUse"'; then ok "XpRsBase still lists XpRsInUse"; else no "XpRsBase lost XpRsInUse: $( iface )"; fi
 fi
+for t in XpDepBase XpLeadBase
+do
+    if lego "$t"
+    then
+        if iface | grep -q 'implementors_floor'; then no "$t carries a floor, every dropped clause is decided outside: $( iface )"; else ok "$t: no implementors_floor (the outside-bound clause is decided)"; fi
+    fi
+done
 if lego py/xpkg/core.py:XpBase
 then
     if iface | grep -q 'implementors="6"'; then ok "implementors= counts the in-tree rows alone (five + XpShadowed, a same-file namesake's: card)"; else no "XpBase count: $( iface )"; fi

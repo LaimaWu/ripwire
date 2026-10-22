@@ -19,10 +19,16 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   outside the tree: `class Sub(ext.Base)`, `from ext import Base`, `import { Base } from 'lib'` / `lib.Base`, `use ext::Base;
   impl Base for S`, Java/Kotlin `import org.ext.Base` / `extends org.ext.Base` (a package the tree does not declare). A star or
   wildcard import, an import the tree cannot place, an import of the tree's own package name (Node self-reference, also on a
-  multi-root run; a Python repo whose root is the package, by its directory or `[project] name`; a Rust crate's Cargo
-  `[package]`/`[lib]` name from its tests/, examples/ and main.rs), a workspace crate spelled with `_` for its `-` directory
-  or named in its Cargo.toml, and a same-file declaration still keep the by-name row, and a clause dropped as outside adds no
-  `implementors_floor=`. This does NOT
+  multi-root run; a single-root Python repo whose root is the package, by its directory or `[project] name`; a Rust crate's
+  Cargo `[package]`/`[lib]` name from its tests/, examples/ and main.rs, a renamed dependency key
+  (`core2 = { package = "foo-core", path = "../core" }`, also a `[dependencies.core2]` table or a dotted key), a leading `::`
+  (`use ::foo_core::T`), and an alias the file itself spells with `extern crate foo_core as fc;` or `use foo_core as fc;`), a
+  workspace crate spelled with `_` for its `-` directory or named in its Cargo.toml, and a same-file declaration still keep
+  the by-name row, and a clause dropped as outside adds no `implementors_floor=`. Not read, so the row is kept by name
+  rather than dropped: any `use` in a .rs file that spells an alias inside a brace group (`use a::{b as c};`). Not read, and
+  the clause IS dropped as outside (no floor): a crate alias reached through another file's re-export (`pub use foo_core as fc;`
+  in lib.rs, `use fc::T` from a module that does not repeat it) and a renamed crate that only a `[patch]` / `[replace]`
+  table or a `.cargo/config` names. This does NOT
   cover a C++ `ext::Base` or `using ext::Base`, a C# `using`, a Swift `import`, a PHP `use`, a JS `require` destructure or a
   Rust `impl ext::Base for S` with no `use`: those rows are still listed by name. Gate: `test/legotransitivecheck.sh` (XP).
 - `--quality-delta=A..B` extracts its per-commit archive through stdin (`tar -x -f -`), the same Windows drive-colon fix as #402 (thanks @lennix1337).
