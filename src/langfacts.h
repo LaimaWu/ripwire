@@ -41,6 +41,18 @@ struct Must
     constexpr operator T() const noexcept { return value; }
 };
 
+/// Lane fc2-lego-extparent: which of the file's own import facts can show that an extends / implements clause names a type
+/// from OUTSIDE the tree (graph.h baseBoundOutsideTree), so no in-tree namesake is listed as its base. None: the language's
+/// imports cannot rule one out here (a C# `using`, a Swift `import`, a C++ include: the clause keeps its by-name edge).
+enum class BaseImportEvidence : std::uint8_t
+{
+    None,           // no import fact read
+    PythonImport,   // `from ext import Base` / `import ext` + `ext.Base`: the Phase-5 import verdict ('x' = every binding outside)
+    JsImport,       // `import { Base } from 'lib'` (the import tables' External outcome) / `lib.Base` (the qualifier verdict)
+    RustUse,        // `use ext::Base;` whose first segment is not crate/self/super/an in-tree module (FE-A rustOutsideUse)
+    JvmImport,      // `import org.ext.Base` / `extends org.ext.Base` of a package the tree does not declare
+};
+
 /// What shared code asks about a language. Every optional column is false for a language that says nothing.
 struct LangFacts
 {
@@ -85,21 +97,24 @@ struct LangFacts
     /// decides only the closure relation, no symbol or edge). A lambda or a block is anonymous, and a C++ local class's
     /// methods sit inside the class's scope, not directly in the function, so neither is a closure either way.
     bool noNestedNamedFunctions = false;
+
+    /// The import facts that can prove a base clause names an outside type (BaseImportEvidence; graph.h baseBoundOutsideTree).
+    BaseImportEvidence baseImportEvidence = BaseImportEvidence::None;
 };
 
 /// The rows, one per Lang in enum order. A language says only the facts it has.
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true },
-    { .lang = Lang::Python },
-    { .lang = Lang::TypeScript, .overloadSignatures = true },
+    { .lang = Lang::Python, .baseImportEvidence = BaseImportEvidence::PythonImport },
+    { .lang = Lang::TypeScript, .overloadSignatures = true, .baseImportEvidence = BaseImportEvidence::JsImport },
     { .lang = Lang::Go },
-    { .lang = Lang::Rust },
+    { .lang = Lang::Rust, .baseImportEvidence = BaseImportEvidence::RustUse },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC, .noNestedNamedFunctions = true },
     { .lang = Lang::Markdown, .linkSections = true },
-    { .lang = Lang::JavaScript },
+    { .lang = Lang::JavaScript, .baseImportEvidence = BaseImportEvidence::JsImport },
     { .lang = Lang::Bash },
-    { .lang = Lang::Java },
+    { .lang = Lang::Java, .baseImportEvidence = BaseImportEvidence::JvmImport },
     { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true },
     { .lang = Lang::Unknown },
     { .lang = Lang::Json },
@@ -111,7 +126,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Lua },
     { .lang = Lang::Elixir, .hasInertQuoteRegions = true },
     { .lang = Lang::Dart },
-    { .lang = Lang::Kotlin },
+    { .lang = Lang::Kotlin, .baseImportEvidence = BaseImportEvidence::JvmImport },
     { .lang = Lang::GDScript },
     { .lang = Lang::Clojure },
 } };

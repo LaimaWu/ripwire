@@ -25,6 +25,11 @@
 #      an include, the package, a qualifier). A name-only edge's row is hedged base_by="name" and not walked; an edge the
 #      evidence binds to ANOTHER same-named type adds no row and is counted transitive_other_base=. Python's `A.B` base is
 #      B (inside A), `Generic[K]`'s type argument and `metaclass=M` are no base. Red on 4d59c804 (the namesake rows listed).
+# (XP) lane fc2-lego-extparent: a class whose base clause the file's OWN import binds OUTSIDE the tree is no implementor of an
+#      in-tree namesake (Python `ext.Base` / `from ext import Base`, TS/JS `import { Base } from 'lib'` / `lib.Base`, Rust
+#      `use ext::Base`, Java/Kotlin `import org.ext.Base` / `extends org.ext.Base`); a real in-tree implementor by bare,
+#      qualified, re-exported, relative, same-package or imported spelling stays; an undecided binding (a star or wildcard
+#      import) keeps its row. Red on 27eddee1 (every outside namesake listed). Corpus xp/{py,ts,js,rs,java,kt}.
 # (UW) fix 2 (rule 5): a DIRECT row whose own extends clause is not proven (a cross-package Java import, a Kotlin import, a C#
 #      using, an ES import of a CommonJS base) is not walked below, and the answer SAYS so: the row carries unwalked="1", the
 #      <iface> counts those rows transitive_unwalked=N and names the first one's --lego as unwalked_next=; a present-only
@@ -356,6 +361,37 @@ fi
 if "$BIN" "$FIX" --no-cache --lego=BaseFormatter --legend=full >"$DIR/full" 2>"$DIR/err" && ! grep -q 'unwalked' "$DIR/full"; then ok "an answer with no unwalked row carries no unwalked clause"; else no "the unwalked clause rides an answer without an unwalked row"; fi
 M="$( printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"lego\",\"arguments\":{\"path\":\"$FIX\",\"type\":\"UwCRoot\"}}}" | "$BIN" --mcp 2>/dev/null )"
 if printf '%s' "$M" | grep -q 'transitive_unwalked=\\"1\\" unwalked_next=\\"--lego=uw/cs/UwCMid.cs:UwCMid\\"' && printf '%s' "$M" | grep -q 'unwalked=\\"1\\"/>'; then ok "MCP lego carries the same count, next and row mark"; else no "MCP lego UwCRoot: $( printf '%s' "$M" | head -c 400 )"; fi
+
+echo "=== (XP) a base the file imports from OUTSIDE the tree is no implementor of an in-tree namesake ==="
+# xp SEL "absent rows" "present rows": one --lego answer; every absent row must be missing, every present row listed
+xp(){
+    local sel="$1" absent="$2" present="$3" n
+    lego "$sel" || return 0
+    for n in $absent
+    do
+        if has "<impl n=\"$n\""; then no "--lego=$sel lists $n, whose base clause is bound outside the tree: $( iface )"; else ok "--lego=$sel: no $n (outside-bound base)"; fi
+    done
+    for n in $present
+    do
+        if has "<impl n=\"$n\""; then ok "--lego=$sel lists $n"; else no "--lego=$sel lost $n: $( iface )"; fi
+    done
+}
+xp py/xpkg/core.py:XpBase "XpOutQual XpOutBare XpOutDotted" "XpInBare XpInQual XpInReexport XpInRelative XpStar"
+xp XpTsBase "XpTsOutBare XpTsOutNs"                      "XpTsInBare XpTsInNs"
+xp XpJsBase "XpJsOutBare"                                "XpJsInBare"
+xp XpRsBase "XpRsOutUse"                                 "XpRsInUse"
+xp XpJBase  "XpJOutImport XpJOutQual"                    "XpJSamePkg XpJInImport XpJInQual XpJOutWild"
+xp XpKBase  "XpKOutImport"                               "XpKInImport"
+if lego py/xpkg/core.py:XpBase
+then
+    if iface | grep -q 'implementors="6"'; then ok "implementors= counts the in-tree rows alone (five + XpShadowed, a same-file namesake's: card)"; else no "XpBase count: $( iface )"; fi
+fi
+# the shadowing declaration itself: `from extlib import XpBase` then `class XpBase:` in the same file — the local class is
+# the one XpShadowed extends (tier 1 wins over the import), so it lists XpShadowed
+if lego py/outside/shadow.py:XpBase
+then
+    if has '<impl n="XpShadowed"'; then ok "a same-file declaration after an outside import still binds the clause (XpShadowed)"; else no "shadow: $( iface )"; fi
+fi
 
 echo "=== (M3) the focus is a CODE definition whenever one matched ==="
 if lego Loader

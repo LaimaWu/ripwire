@@ -6207,6 +6207,7 @@ struct BaseEvidenceTables
     const std::vector<std::vector<std::uint32_t>>& includeAdj;   // every language: the files a file's imports resolve to
     const std::vector<std::uint32_t>&       fileDir;       // file → interned directory id
     const ReceiverEvidence*                 recvEv;        // JS/TS: a CommonJS require alias's module (moduleNames)
+    const FalseEdgeRules*                   falseEdges;    // Rust: a `use` of a path outside the crate (baseBoundOutsideTree)
 };
 
 // is `path` the module `name` inside the package directory `pkgDir` (`pkg/name.py` or `pkg/name/__init__.py`)?
@@ -6440,6 +6441,90 @@ inline void provenBasesOf( const BaseEvidenceTables& t, const Reference& r, cons
     {
         out.clear();   // the evidence named two same-named types: it proves neither
     }
+}
+
+// Java / Kotlin: is `pkg` (`org.ext`, from `import org.ext.Base` or `extends org.ext.Base`) a package from outside the tree —
+// the tree declares packages and not this one, and its last segment is no in-tree class (`import a.b.Outer.Base` names a
+// nested class of an in-tree Outer: not decided here)? A tree that declares no package decides nothing.
+inline bool jvmPackageOutsideTree( const ReceiverEvidence& ev, std::string_view pkg )
+{
+    if( pkg.empty() || ev.types.jvmPackages.empty() || ev.types.packageFiles.contains( std::string( pkg ) ) )
+    {
+        return false;
+    }
+    const std::size_t dot = pkg.rfind( '.' );
+    return !ev.classNames.contains( std::string( dot == std::string_view::npos ? pkg : pkg.substr( dot + 1 ) ) );
+}
+
+// Lane fc2-lego-extparent: does the file's OWN import evidence bind the base clause `r` writes to a type from OUTSIDE the
+// tree, so that no in-tree class of that name is its base (`class Sub(ext.Base)`, `from ext import Base; class Sub(Base)`,
+// `import { Base } from 'lib'`, `use ext::Base; impl Base for S`, `import org.ext.Base;`)? Then the clause draws no
+// implementors edge at all. Only a binding the language's lookup cannot get past answers true; anything undecided — a star
+// or glob import, an import the tree cannot place, two bindings that disagree (Python), a same-file declaration the
+// clause's scopes hold (tier 1 of provenBasesOf) — answers false and the by-name edge stays as before.
+// What it does NOT decide: a C++ `ext::Base` or using-declaration, a C# `using`, a Swift `import`, a PHP `use`, a Rust
+// `impl ext::Base for S` (the qualifier is not recorded on a Rust inherit reference) — those clauses keep their edge.
+inline bool baseBoundOutsideTree( const BaseEvidenceTables& t, const Reference& r )
+{
+    if( r.baseBind != 0 )
+    {
+        return false;   // a same-file declaration answers (or a scope too large to read): the local tier decides
+    }
+    const std::string_view qual = r.memberRoot;
+    const std::string_view root = qual.empty() ? std::string_view( r.calleeName ) : qual.substr( 0, qual.find( '.' ) );
+    std::string            key;
+    switch( langFacts( r.lang ).baseImportEvidence )
+    {
+        case BaseImportEvidence::PythonImport:
+        {
+            const auto it = t.extVeto.importBind.find( fileNameKey( key, r.fileId, root ) );
+            return it != t.extVeto.importBind.end() && it->second == 'x';   // every import binding of the name is outside
+        }
+        case BaseImportEvidence::JsImport:
+        {
+            if( qual.empty() )
+            {
+                const auto pin = t.jsImports.targets.find( jsImportKey( r.fileId, root ) );
+                return pin != t.jsImports.targets.end() && pin->second.outcome == JsImportOutcome::External;
+            }
+            const HashMap<std::string, char>* verdicts = t.recvEv != nullptr ? t.recvEv->qualifierVerdicts : nullptr;
+            if( verdicts == nullptr )
+            {
+                return false;
+            }
+            const auto it = verdicts->find( fileNameKey( key, r.fileId, root ) );
+            return it != verdicts->end() && it->second == 'x';   // the namespace import's module is outside (buildQualifierVerdicts)
+        }
+        case BaseImportEvidence::RustUse:
+            return qual.empty() && t.falseEdges != nullptr && t.falseEdges->lookup( r.fileId, r.calleeName, t.falseEdges->rustOutsideUse );
+        case BaseImportEvidence::JvmImport:
+        {
+            if( t.recvEv == nullptr )
+            {
+                return false;
+            }
+            if( !qual.empty() )
+            {
+                return jvmPackageOutsideTree( *t.recvEv, qual );
+            }
+            bool outside = false;
+            bool inside  = false;
+            t.recvEv->types.forEachImport( r.fileId, r.calleeName, [ & ]( const Binding& b )
+            {
+                if( b.kind != LocalBindKind::TypeImport || b.var == "*" )
+                {
+                    return;
+                }
+                const std::size_t dot = b.importedName.rfind( '.' );
+                const bool        out = dot != std::string::npos && jvmPackageOutsideTree( *t.recvEv, std::string_view( b.importedName ).substr( 0, dot ) );
+                ( out ? outside : inside ) = true;
+            } );
+            return outside && !inside;   // a single-type import of an outside package names the clause's type
+        }
+        case BaseImportEvidence::None:
+            return false;
+    }
+    return false;
 }
 
 // one implementors edge as drawn, with how its base was bound (merged into Graph::implementorBound after the dedup)
@@ -9795,7 +9880,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     std::vector<NodeId> baseCand;   // one inheritance reference's base candidates, reused across references
     std::vector<NodeId> baseProven; // … and the one of them the language's lookup proves (provenBasesOf), reused
     std::vector<ImplementorBoundEdge> boundEdges;   // every edge drawn below with how it was bound; merged after the dedup
-    const BaseEvidenceTables baseEvidence{ ing, extVeto, jsImports, fileIncludes, includeAdj, fileDir, &recvEv };
+    const BaseEvidenceTables baseEvidence{ ing, extVeto, jsImports, fileIncludes, includeAdj, fileDir, &recvEv, &falseEdges };
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/5: inheritance edges" );
     for( const Reference& r : ing.references )
@@ -9828,9 +9913,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 { derived = cand; break; }              // ids are ascending → lowest-id match (deterministic)
             }
         }
-        if( derived == kNoNode )
+        if( derived == kNoNode || baseBoundOutsideTree( baseEvidence, r ) )
         {
-            continue;
+            continue;   // fc2-lego-extparent: the file's own import binds the written base outside the tree — no in-tree base
         }
         if( ing.symbols[ derived ].lang == Lang::Ruby )
         {
