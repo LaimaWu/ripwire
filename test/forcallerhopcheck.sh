@@ -160,13 +160,6 @@ for extra in --json --signatures-only --detail=1 --token-budget=3000; do
 done
 
 # ── X ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-run "$FC" --for=start_server >"$TMP/x2"
-cmp -s "$TMP/p1" "$TMP/x2"; verdict $? "(X1) deterministic" "(X1) two runs differ"
-if command -v xmllint >/dev/null 2>&1; then
-    for f in p1 p2 p3 p4f p8; do xmllint --noout "$TMP/$f" 2>/dev/null; verdict $? "(X2) well-formed: $f" "(X2) xmllint rejects $f"; done
-else
-    printf '  SKIP  (X2) xmllint not installed\n'
-fi
 python3 - "$TMP/p1" "$TMP/p4f" <<'PY'
 import re, sys
 for p in sys.argv[1:]:
@@ -174,5 +167,12 @@ for p in sys.argv[1:]:
         if "--" in c: sys.exit(1)
 PY
 verdict $? "(X3) no -- inside a legend comment" "(X3) a legend comment holds --"
+run "$FC" --for=start_server >"$TMP/x2"
+cmp -s "$TMP/p1" "$TMP/x2"; verdict $? "(X1) deterministic" "(X1) two runs differ"
+if command -v xmllint >/dev/null 2>&1; then
+    for f in p1 p2 p3 p4f p8; do xmllint --noout "$TMP/$f" 2>/dev/null; verdict $? "(X2) well-formed: $f" "(X2) xmllint rejects $f"; done
+else
+    printf '  SKIP  (X2) xmllint not installed\n'
+fi
 
 exit "$fail"
