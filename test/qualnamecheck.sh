@@ -183,7 +183,7 @@ f=$( cd "$TMP/free" && "$BIN" "$TMP/free" --no-cache --legend=full --callers=lea
 [ -n "$f" ] || no "free-function --callers answer empty"
 case "$f" in *'n=Owner.name on a row'*) no "clause rides an owner-free answer";; *) ok "clause absent from an owner-free answer";; esac
 if command -v xmllint >/dev/null 2>&1; then
-  ( cd "$TMP/py" && "$BIN" "$TMP/py" --no-cache --legend=full --callers=leaf_fn 2>/dev/null ) | xmllint --noout - 2>/dev/null && ok "full-legend answer parses" || no "full-legend answer is not well-formed XML"
+  if ( cd "$TMP/py" && "$BIN" "$TMP/py" --no-cache --legend=full --callers=leaf_fn 2>/dev/null ) | xmllint --noout - 2>/dev/null; then ok "full-legend answer parses"; else no "full-legend answer is not well-formed XML"; fi
 fi
 
 echo "(F) --json keys stable"

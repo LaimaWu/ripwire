@@ -156,7 +156,8 @@ done
 
 # ── (D) --for, name-exact → the auto body walk ────────────────────────────────────────────────────────
 cap "$TMP/d.xml" "$TMP/leak" --no-cache --for=clampQuantity
-drow="$( grep -oE '<d [^>]*n="clampQuantity"[^>]*>' "$TMP/d.xml" | head -1 )"
+# the <d> row prints the member-owner spelling of the (misfiled) stored scope; the <b> row stays bare
+drow="$( grep -oE '<d [^>]*n="IndiaError::clampQuantity"[^>]*>' "$TMP/d.xml" | head -1 )"
 brow="$( grep -oE '<b [^>]*n="clampQuantity"[^>]*>' "$TMP/d.xml" | head -1 )"
 if [ -n "$( reasonOf "$drow" )" ]; then ok "(D) --for <d> row carries extent_suspect=\"$( reasonOf "$drow" )\""; else no "(D) --for <d> row lacks extent_suspect=: ${drow:-no <d> row}"; fi
 if [ -n "$( reasonOf "$brow" )" ]; then ok "(D) --for <b> row carries extent_suspect=\"$( reasonOf "$brow" )\""; else no "(D) --for <b> row lacks extent_suspect=: ${brow:-no <b> row}"; fi
