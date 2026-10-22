@@ -1778,10 +1778,10 @@ inline std::string situationDiffJson( const std::string& root, const std::string
 
 // The @FILE:LINE rebind the NAME-matching scan verbs' payload fns share (2026-08-30 decision round): a
 // resolvable line-seed's ONE innermost enclosing definition — the SEED's own def, exactly the CLI twin's
-// resolveAllByNameQualified @-tier semantics, NEVER the bare-name union. Post-C2 it is the UNION that moved: the `owners`
-// name-tier answer arrives tower-ordered, so the union's pick is the tower front (its pre-C2 lowest-id pick could name
-// the WRONG file). The seed path is untouched by that move — seed.chain.back() is a line enclosure, which no name tower
-// reorders. kNoNode when sym is not a seed, or the seed faults — the
+// resolveAllByNameQualified @-tier semantics, NEVER the bare-name union. Once the name tier took the tower it is the
+// UNION that moved: the `owners` name-tier answer arrives tower-ordered, so the union's pick is the tower front (its
+// pre-tower lowest-id pick could name the WRONG file). The seed path is untouched by that move — seed.chain.back() is
+// a line enclosure, which no name tower reorders. kNoNode when sym is not a seed, or the seed faults — the
 // dispatch guards (qualifiedSelectorRefusal) refuse faulted seeds upstream with the shared at-diagnosis.
 inline NodeId atSeedDefOr( const IngestResult& ing, std::string_view sym )
 {

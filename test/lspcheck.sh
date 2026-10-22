@@ -42,8 +42,9 @@
 #        hover all lead with the Method def — the tower (kindSpecificity desc, reference-language first, id asc)
 #        — with the Var next, the schema column before the yaml section, byte-pinned
 #   (18b) schema-column click (user GO): a call site naming a schema column alone resolves to its
-#        db/schema.rb def; the multi-name column click lands on the first schema row (split, id tail)
-#        WITH the N-definitions disclosure — cross-kind columns stay REACHABLE, only their order moves
+#        schema.rb def (the collision tree holds it at the root, no db/ prefix); the multi-name click lands
+#        on the first schema row (split, id tail) WITH the N-definitions disclosure — cross-kind columns stay
+#        REACHABLE, only their order moves
 #   (19) multi-def disclosure (task C): a name with N>1 defs carries ONE sentence — N definitions, counts are
 #        floors, the resolver splits — in the hover markdown and in one window/logMessage ahead of every
 #        definition answer; absent on single-def names, whose hover must ANSWER before the silence is credited
@@ -443,7 +444,7 @@ fi
 
 # ── (18b) schema-column click: definition on a column use-site lands on schema.rb, unique and split ───
 cat > "$WORK/collide/click_single.rb" <<'EOF'
-# C task arm 18b: consumer of the UNIQUE column event_id -> db/schema.rb line 29 (0-based 28)
+# C task arm 18b: consumer of the UNIQUE column event_id -> schema.rb line 29 (0-based 28)
 Spike::IdRenamed.new.event_id
 EOF
 cat > "$WORK/collide/click_split.rb" <<'EOF'

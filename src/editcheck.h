@@ -128,7 +128,11 @@ inline std::vector<NodeId> editCheckOverloadSet( const IngestResult& ing, const 
 // resolveAllByNameQualified), verified by editCheckRoundTripSpelling.
 struct EditCheckGroup
 {
-    NodeId      focusNode;     // the group's tower-front member — the focus resolveFocus would have picked from these matches
+    NodeId      focusNode;     // the group's tower-front member — its orientation node. resolveFocus picks the SAME node
+                               // from these matches EXCEPT where its C/C++ body-yield (graph.h) moves to the first bodied
+                               // same-scope member later in the group: a prototype beside its definition in one file keeps
+                               // the declaration here while the single-pick verbs answer at the definition. No answer is
+                               // wrong — editCheckOverloadSet unifies the contract from either node.
     std::string spelling;      // a selector that resolves to THIS group and no other (when `unique`)
     bool        declOnly;      // only C/C++ declarations, beside a group that holds a definition: never offered (M2)
     bool        unique;        // `spelling` was verified to resolve to this group alone
