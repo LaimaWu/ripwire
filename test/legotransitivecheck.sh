@@ -29,7 +29,8 @@
 #      in-tree namesake (Python `ext.Base` / `from ext import Base`, TS/JS `import { Base } from 'lib'` / `lib.Base`, Rust
 #      `use ext::Base`, Java/Kotlin `import org.ext.Base` / `extends org.ext.Base`); a real in-tree implementor by bare,
 #      qualified, re-exported, relative, same-package or imported spelling stays; an undecided binding (a star or wildcard
-#      import) keeps its row. Red on 27eddee1 (every outside namesake listed). Corpus xp/{py,ts,js,rs,java,kt}.
+#      import), a workspace crate spelled with `_` for its `-` directory, and the tree's own package name keep their row.
+#      Red on 27eddee1 (every outside namesake listed). Corpus xp/{py,ts,js,rs,java,kt}.
 # (UW) fix 2 (rule 5): a DIRECT row whose own extends clause is not proven (a cross-package Java import, a Kotlin import, a C#
 #      using, an ES import of a CommonJS base) is not walked below, and the answer SAYS so: the row carries unwalked="1", the
 #      <iface> counts those rows transitive_unwalked=N and names the first one's --lego as unwalked_next=; a present-only
@@ -382,6 +383,10 @@ xp XpJsBase "XpJsOutBare"                                "XpJsInBare"
 xp XpRsBase "XpRsOutUse"                                 "XpRsInUse"
 xp XpJBase  "XpJOutImport XpJOutQual"                    "XpJSamePkg XpJInImport XpJInQual XpJOutWild"
 xp XpKBase  "XpKOutImport"                               "XpKInImport"
+# near misses an outside-looking spelling must NOT drop: a workspace crate whose directory spells the crate with `-`
+# (`use xp_core::XpWsBase` beside crates/xp-core), and an import of the tree's OWN package name (Node self-reference)
+xp XpWsBase   "" "XpWsImpl"
+xp XpSelfBase "" "XpSelfUser"
 if lego py/xpkg/core.py:XpBase
 then
     if iface | grep -q 'implementors="6"'; then ok "implementors= counts the in-tree rows alone (five + XpShadowed, a same-file namesake's: card)"; else no "XpBase count: $( iface )"; fi

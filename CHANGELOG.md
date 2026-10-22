@@ -18,7 +18,8 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 - `--lego` no longer lists a class as an implementor of an in-tree type when the class's own file imports its base from
   outside the tree: `class Sub(ext.Base)`, `from ext import Base`, `import { Base } from 'lib'` / `lib.Base`, `use ext::Base;
   impl Base for S`, Java/Kotlin `import org.ext.Base` / `extends org.ext.Base` (a package the tree does not declare). A star or
-  wildcard import, an import the tree cannot place and a same-file declaration still keep the by-name row. This does NOT
+  wildcard import, an import the tree cannot place, an import of the tree's own package name (Node self-reference), a
+  workspace crate spelled with `_` for its `-` directory, and a same-file declaration still keep the by-name row. This does NOT
   cover a C++ `ext::Base` or `using ext::Base`, a C# `using`, a Swift `import`, a PHP `use`, a JS `require` destructure or a
   Rust `impl ext::Base for S` with no `use`: those rows are still listed by name. Gate: `test/legotransitivecheck.sh` (XP).
 - `--quality-delta=A..B` extracts its per-commit archive through stdin (`tar -x -f -`), the same Windows drive-colon fix as #402 (thanks @lennix1337).

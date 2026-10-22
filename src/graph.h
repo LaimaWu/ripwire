@@ -6100,14 +6100,18 @@ inline HashMap<std::string, char> rustModuleNames( const IngestResult& ing )
     return names;
 }
 
-// FE-A Rust: `use a::b::c;` whose first segment is not crate/self/super/a module of this tree names an outside item `c`.
-inline void collectRustOutsideUses( const IngestResult& ing, FalseEdgeRules& rules )
+// Rust: `use a::b::c;` whose first segment is not crate/self/super/a module of this tree names an outside item `c`, into
+// `out` ("<fileId>#c"). `crateDirAware` (lane fc2-lego-extparent's base clause reader) also reads a head spelled with `_` as the
+// workspace crate directory spelled with `-` (`use nu_glob::X` beside crates/nu-glob): such a head is in the tree, not outside.
+// FE-A's own table keeps the plain rule (crateDirAware false), so the call edges stay as they were.
+inline void rustOutsideUses( const IngestResult& ing, bool crateDirAware, HashMap<std::string, char>& out )
 {
     const HashMap<std::string, char> modules = rustModuleNames( ing );
     if( modules.empty() )
     {
         return;   // no Rust in the tree
     }
+    std::string dashed;
     for( const Include& inc : ing.includes )
     {
         const std::string_view path = inc.target;
@@ -6121,11 +6125,27 @@ inline void collectRustOutsideUses( const IngestResult& ing, FalseEdgeRules& rul
             continue;   // `use x;` (a crate root) or a brace group: no single named item
         }
         const std::string_view head = path.substr( 0, first );
-        if( head != "crate" && head != "self" && head != "super" && !modules.contains( std::string( head ) ) )
+        if( head == "crate" || head == "self" || head == "super" || modules.contains( std::string( head ) ) )
         {
-            rules.rustOutsideUse.try_emplace( jsImportKey( inc.fileId, path.substr( path.rfind( "::" ) + 2 ) ), '\0' );
+            continue;
         }
+        if( crateDirAware && head.find( '_' ) != std::string_view::npos )
+        {
+            dashed.assign( head );
+            std::replace( dashed.begin(), dashed.end(), '_', '-' );
+            if( modules.contains( dashed ) )
+            {
+                continue;   // a workspace crate: its directory spells the crate name with `-`
+            }
+        }
+        out.try_emplace( jsImportKey( inc.fileId, path.substr( path.rfind( "::" ) + 2 ) ), '\0' );
     }
+}
+
+// FE-A Rust: the plain outside-use table (rustOutsideUses, crateDirAware false)
+inline void collectRustOutsideUses( const IngestResult& ing, FalseEdgeRules& rules )
+{
+    rustOutsideUses( ing, /*crateDirAware=*/false, rules.rustOutsideUse );
 }
 
 inline FalseEdgeRules buildFalseEdgeRules( const IngestResult& ing, const HashMap<std::string, char>& classNames, const ExternalVeto& veto,
@@ -6207,8 +6227,44 @@ struct BaseEvidenceTables
     const std::vector<std::vector<std::uint32_t>>& includeAdj;   // every language: the files a file's imports resolve to
     const std::vector<std::uint32_t>&       fileDir;       // file → interned directory id
     const ReceiverEvidence*                 recvEv;        // JS/TS: a CommonJS require alias's module (moduleNames)
-    const FalseEdgeRules*                   falseEdges;    // Rust: a `use` of a path outside the crate (baseBoundOutsideTree)
+    const HashMap<std::string, char>*       rustOutsideUse;   // Rust: "<fileId>#X" a `use` of an outside path binds (crate-dir aware)
+    const HashMap<std::string, char>*       jsSelfImport;     // JS/TS: "<fileId>#X" an import of the tree's OWN package name binds
 };
+
+// JS/TS (lane fc2-lego-extparent): "<fileId>#var" for every ES import / module alias whose bare specifier names a package
+// this tree's own package.json files declare (`import { Command } from 'commander'` inside commander: Node's self-reference,
+// or a workspace member) — the import tables may call that module external, but the clause can mean the in-tree class.
+inline HashMap<std::string, char> jsSelfPackageImports( const IngestResult& ing )
+{
+    HashMap<std::string, char> names;
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        const std::string_view path = ing.files[ f ];
+        if( path == "package.json" || path.ends_with( "/package.json" ) )
+        {
+            tsimport::JsonNode pj;
+            const tsimport::JsonNode* name = tsimport::parseJsonObject( readConfigBytes( std::string( path ) ), pj ) ? pj.get( "name" ) : nullptr;
+            if( name != nullptr && name->kind == tsimport::JsonNode::Kind::Str && !name->str.empty() )
+            {
+                names.try_emplace( name->str, char( 1 ) );
+            }
+        }
+    }
+    HashMap<std::string, char> out;
+    if( names.empty() )
+    {
+        return out;
+    }
+    for( const Binding& b : ing.bindings )
+    {
+        if( ( b.kind == LocalBindKind::JsImport || b.kind == LocalBindKind::ModuleAlias ) && !b.var.empty() && !b.typeName.empty()
+            && names.contains( std::string( tsimport::splitPackageSpecifier( b.typeName ).first ) ) )
+        {
+            out.try_emplace( jsImportKey( b.fileId, b.var ), char( 1 ) );
+        }
+    }
+    return out;
+}
 
 // is `path` the module `name` inside the package directory `pkgDir` (`pkg/name.py` or `pkg/name/__init__.py`)?
 inline bool pythonSubmoduleOf( std::string_view path, std::string_view pkgDir, std::string_view name ) noexcept
@@ -6482,6 +6538,10 @@ inline bool baseBoundOutsideTree( const BaseEvidenceTables& t, const Reference& 
         }
         case BaseImportEvidence::JsImport:
         {
+            if( t.jsSelfImport != nullptr && t.jsSelfImport->contains( fileNameKey( key, r.fileId, root ) ) )
+            {
+                return false;   // the tree's own package name: the import may land on the in-tree class
+            }
             if( qual.empty() )
             {
                 const auto pin = t.jsImports.targets.find( jsImportKey( r.fileId, root ) );
@@ -6496,7 +6556,7 @@ inline bool baseBoundOutsideTree( const BaseEvidenceTables& t, const Reference& 
             return it != verdicts->end() && it->second == 'x';   // the namespace import's module is outside (buildQualifierVerdicts)
         }
         case BaseImportEvidence::RustUse:
-            return qual.empty() && t.falseEdges != nullptr && t.falseEdges->lookup( r.fileId, r.calleeName, t.falseEdges->rustOutsideUse );
+            return qual.empty() && t.rustOutsideUse != nullptr && t.rustOutsideUse->contains( fileNameKey( key, r.fileId, r.calleeName ) );
         case BaseImportEvidence::JvmImport:
         {
             if( t.recvEv == nullptr )
@@ -9880,7 +9940,13 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     std::vector<NodeId> baseCand;   // one inheritance reference's base candidates, reused across references
     std::vector<NodeId> baseProven; // … and the one of them the language's lookup proves (provenBasesOf), reused
     std::vector<ImplementorBoundEdge> boundEdges;   // every edge drawn below with how it was bound; merged after the dedup
-    const BaseEvidenceTables baseEvidence{ ing, extVeto, jsImports, fileIncludes, includeAdj, fileDir, &recvEv, &falseEdges };
+    HashMap<std::string, char> rustOutsideBase;   // fc2-lego-extparent: built only when FE-A saw an outside `use` at all
+    if( !falseEdges.rustOutsideUse.empty() )
+    {
+        rustOutsideUses( ing, /*crateDirAware=*/true, rustOutsideBase );
+    }
+    const HashMap<std::string, char> jsSelfImport = jsImports.targets.empty() ? HashMap<std::string, char>{} : jsSelfPackageImports( ing );
+    const BaseEvidenceTables baseEvidence{ ing, extVeto, jsImports, fileIncludes, includeAdj, fileDir, &recvEv, &rustOutsideBase, &jsSelfImport };
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/5: inheritance edges" );
     for( const Reference& r : ing.references )
