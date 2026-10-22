@@ -60,12 +60,6 @@ inline bool forCallerHopOn()
     return std::getenv( "RIPWIRE_NO_CALLER_HOP" ) == nullptr;
 }
 
-// The callers verb's own qualified selector of a function: Scope::name, or the bare name when it has no scope.
-inline std::string callerHopSelector( const Symbol& s )
-{
-    return s.scope.empty() ? s.name : s.scope + "::" + s.name;
-}
-
 // The function the hop is about. Two readings must agree, and the hop fires only when both say ONE function:
 //   * the body candidates (verbs_for.h computeAutoBodyCandidateIds, the anchor-restricted auto-body head): non-empty, every one a
 //     function or method with the first one's name AND scope — a name-exact answer bodying two different symbols, a class, a
@@ -94,7 +88,7 @@ inline std::vector<NodeId> forCallerHopTargets( const IngestResult& ing, const G
     }
     std::size_t         unproven = 0;
     // the selector the element names (of=, next=) — what `--callers=SELECTOR` resolves: scope::name, the bare name when unscoped
-    const std::string   sel      = callerHopSelector( first );
+    const std::string   sel      = first.scope.empty() ? first.name : first.scope + "::" + first.name;
     std::vector<NodeId> matches  = resolveAllByNameQualified( ing, sel, &unproven );
     if( matches.empty() || unproven != 0 || !crossKindValue( ing, matches ).empty() )
     {
@@ -240,7 +234,7 @@ inline CallerHopRender renderForCallerHop( const IngestResult& ing, const Graph&
     const OneHopAttribution       attr2 = secondShown == 0 ? OneHopAttribution{} : attributeOneHopAnswer( ing, g, shown, secondShownRows, /*towardMatches=*/true );
 
     const Symbol&     t   = ing.symbols[ targets.front() ];
-    const std::string sel = callerHopSelector( t );
+    const std::string sel = t.scope.empty() ? t.name : t.scope + "::" + t.name;   // the callers verb's own qualified selector
     std::vector<char>     esc;
     const CallerHopRowCtx rc{ ing, rootArg, esc };
     std::string&          x = out.xml;
