@@ -1709,6 +1709,19 @@ for f in rvtests.rs:t_own rvtests.rs:inner_own rvglob.rs:g_own rvgtuse.rs:gt_own
     proven  rsrecv callees "src/$f" "method as_os $NS:10"                                                      # [P]
 done
 for f in rvexpl.rs:expl_glob rvcfg.rs:cfg_own; do proven rsrecv callees "src/$f" "method as_dur $NS:15"; done     # [P]
+# fc1 fix 2 (rv-fc1-delta1 C1, C2): a glob CYCLE (parent `pub use self::kid::*` + kid's `use super::*`, two files globbing each
+# other, an inline mod globbing its parent) and a 7-deep acyclic glob chain end with the true answer — no module brings `std`,
+# so the std call leads out [N] (each proven before); a private `use std::ffi::OsString` a `use super::*` sees is std's [N]
+# (`#[cfg(test)] mod tests`, a plain child mod), and so is a std name at the end of a glob chain of named re-exports [N];
+# [P] twins: the in-tree path on every cycle, a parent's `use crate::nsown::OsString`, a chain ending in the in-tree re-export.
+for f in gcpar.rs:gcpar_full gcpar/kid.rs:gckid_full gcabuse.rs:gcab_full gcinl.rs:gcinl_kid_full gcinl.rs:gcinl_full gcdeep.rs:gcdeep_full \
+         gutu.rs:gutu_in gutu.rs:gutu_bare gutu.rs:gutu_top gususe.rs:gus_bare; do
+    notproven rsrecv callees "src/$f" "as_os $NS:10"                                                           # [N]
+done
+for f in gcpar.rs:gcpar_own gcpar/kid.rs:gckid_own gcabuse.rs:gcab_own gcinl.rs:gcinl_kid_own gcinl.rs:gcinl_own gcdeep.rs:gcdeep_own \
+         gutuown.rs:gutuown_top gutuown.rs:gutuown_in gutuown.rs:gutuown_bare gususeown.rs:gusown_bare; do
+    proven  rsrecv callees "src/$f" "method as_os $NS:10"                                                      # [P]
+done
 # guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
 proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
 

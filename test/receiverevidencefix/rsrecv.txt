@@ -43,6 +43,27 @@ pub mod rvcfg;
 pub mod rvinl;
 pub mod rvinluse;
 pub mod rvext;
+pub mod gcpar;
+pub mod gcab1;
+pub mod gcab2;
+pub mod gcabuse;
+pub mod gcinl;
+pub mod gcd1;
+pub mod gcd2;
+pub mod gcd3;
+pub mod gcd4;
+pub mod gcd5;
+pub mod gcd6;
+pub mod gcd7;
+pub mod gcdeep;
+pub mod gutu;
+pub mod gutuown;
+pub mod gus1;
+pub mod gus2;
+pub mod gus3;
+pub mod gus4;
+pub mod gususe;
+pub mod gususeown;
 @@@ rsrecv/src/model.rs
 // Book and Other both define spin / iter; Cfg and Knob both define tune: a call proves one only through its receiver's type.
 pub struct Book { pub items: Vec<u32> }
@@ -504,6 +525,107 @@ pub fn inl_cross_own() -> u8 { let s = crate::rvinl::b::OsString::from("x"); s.a
 pub fn ext_mod() -> u8 { let s = nsown::OsString::from("x"); s.as_os() }
 pub fn ext_mod_q() -> u8 { let s = ::nsown::OsString::from("x"); s.as_os() }
 pub fn ext_own() -> u8 { let s = crate::nsown::OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gcpar.rs
+// fc1 fix 2 (rv-fc1-delta1 C1): a glob CYCLE — the parent re-exports its child and the child globs the parent — terminates
+// with the true answer: no module brings `std`, so the std call leads out [N]; the in-tree path stays [P]
+mod kid;
+pub use self::kid::*;
+pub fn gcpar_full() -> u8 { let s = std::ffi::OsString::from("x"); s.as_os() }
+pub fn gcpar_own() -> u8 { let s = crate::nsown::OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gcpar/kid.rs
+use super::*;
+pub struct Kid;
+pub fn gckid_full() -> u8 { let s = std::ffi::OsString::from("x"); s.as_os() }
+pub fn gckid_own() -> u8 { let s = crate::nsown::OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gcab1.rs
+pub use crate::gcab2::*;
+pub struct Ab1;
+@@@ rsrecv/src/gcab2.rs
+pub use crate::gcab1::*;
+pub struct Ab2;
+@@@ rsrecv/src/gcabuse.rs
+// two files that glob each other, the std call from a third
+use crate::gcab1::*;
+pub fn gcab_full() -> u8 { let s = std::ffi::OsString::from("x"); s.as_os() }
+pub fn gcab_own() -> u8 { let s = crate::nsown::OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gcinl.rs
+// an inline `mod` that globs its parent, the parent re-exporting it
+pub use self::kid::*;
+pub struct Mk;
+pub mod kid {
+    pub use super::*;
+    pub fn gcinl_kid_full() -> u8 { let s = std::ffi::OsString::from("x"); s.as_os() }
+    pub fn gcinl_kid_own() -> u8 { let s = crate::nsown::OsString::from("x"); s.as_os() }
+}
+pub fn gcinl_full() -> u8 { let s = std::ffi::OsString::from("x"); s.as_os() }
+pub fn gcinl_own() -> u8 { let s = crate::nsown::OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gcd1.rs
+pub use crate::gcd2::*;
+pub struct D1;
+@@@ rsrecv/src/gcd2.rs
+pub use crate::gcd3::*;
+pub struct D2;
+@@@ rsrecv/src/gcd3.rs
+pub use crate::gcd4::*;
+pub struct D3;
+@@@ rsrecv/src/gcd4.rs
+pub use crate::gcd5::*;
+pub struct D4;
+@@@ rsrecv/src/gcd5.rs
+pub use crate::gcd6::*;
+pub struct D5;
+@@@ rsrecv/src/gcd6.rs
+pub use crate::gcd7::*;
+pub struct D6;
+@@@ rsrecv/src/gcd7.rs
+pub struct D7;
+@@@ rsrecv/src/gcdeep.rs
+// an acyclic 7-deep glob chain, no module declaring `std`: past the old depth cap, still [N]
+use crate::gcd1::*;
+pub fn gcdeep_full() -> u8 { let s = std::ffi::OsString::from("x"); s.as_os() }
+pub fn gcdeep_own() -> u8 { let s = crate::nsown::OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gutu.rs
+// fc1 fix 2 (rv-fc1-delta1 C2): a test module's `use super::*;` sees the parent's PRIVATE `use std::ffi::OsString`, so the
+// bare name is std's there too [N]; a parent `use crate::nsown::OsString` stays the in-tree one [P] (gutuown.rs)
+use std::ffi::OsString;
+pub fn gutu_top() -> u8 { let s = OsString::from("x"); s.as_os() }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn gutu_in() -> u8 { let s = OsString::from("x"); s.as_os() }
+}
+pub mod tests2 {
+    use super::*;
+    pub fn gutu_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
+    pub fn gutu_full() -> u8 { let s = std::ffi::OsString::from("x"); s.as_os() }
+}
+@@@ rsrecv/src/gutuown.rs
+use crate::nsown::OsString;
+pub fn gutuown_top() -> u8 { let s = OsString::from("x"); s.as_os() }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn gutuown_in() -> u8 { let s = OsString::from("x"); s.as_os() }
+}
+pub mod tests2 {
+    use super::*;
+    pub fn gutuown_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
+}
+@@@ rsrecv/src/gus1.rs
+pub use crate::gus2::*;
+@@@ rsrecv/src/gus2.rs
+pub use std::ffi::OsString;
+@@@ rsrecv/src/gus3.rs
+pub use crate::gus4::*;
+@@@ rsrecv/src/gus4.rs
+pub use crate::nsown::OsString;
+@@@ rsrecv/src/gususe.rs
+// a glob chain ending in a named re-export: std's (the bare name leads out) / the in-tree type's
+use crate::gus1::*;
+pub fn gus_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
+@@@ rsrecv/src/gususeown.rs
+use crate::gus3::*;
+pub fn gusown_bare() -> u8 { let s = OsString::from("x"); s.as_os() }
 @@@ rsrecv/benches/nsb.rs
 // fc1: a file outside every crate's module tree (a bench target): its qualifier resolves nowhere, so the base rule holds
 use rsrecv::nsown::OsString;

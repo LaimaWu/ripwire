@@ -1406,32 +1406,46 @@ struct CallResultTypes
     }
     // fc1 fix 1: may a glob `use` in force at byte `at` of `f` — one at a level of its chain (a fn body, then the module it
     // sits in; an outer module's globs never reach an inline `mod`) — bring the name `seg`? Only an in-tree glob whose
-    // target module declares or re-exports `seg` (rustModuleMayBring); `mod tests { use super::*; }` never brings `std`
+    // target module declares or re-exports `seg` in-tree (rustModuleMayBring); `mod tests { use super::*; }` never brings `std`
     bool rustGlobMayBring( std::uint32_t f, std::uint32_t at, std::string_view seg, int depth ) const
     {
-        bool may = false;
+        std::vector<std::string> seen;   // fc1 fix 2: the (crate, module) keys this query already entered — a cycle brings nothing new
+        bool                     may = false;
         forEachRustScopeAt( f, at, [ & ]( const Level& lv )
         {
             forEachImport( f, "*", [ & ]( const Binding& b )
             {
-                may = may || ( levelAt( f, b.startByte ) == lv && rustGlobBrings( f, b, seg, depth ) );
+                may = may || ( levelAt( f, b.startByte ) == lv && rustGlobBrings( f, b, seg, depth, seen ) );
             } );
             return may;
         } );
         return may;
     }
     // does the glob row `b` of file `f` — an in-tree one — bring `seg` (rustModuleMayBring of its target)?
-    bool rustGlobBrings( std::uint32_t f, const Binding& b, std::string_view seg, int depth ) const
+    bool rustGlobBrings( std::uint32_t f, const Binding& b, std::string_view seg, int depth, std::vector<std::string>& seen ) const
     {
         std::uint32_t gc = kNoCrate;
         std::string   gm;
-        return b.kind == LocalBindKind::TypeImport && rustModuleOf( f, b.startByte, b.importedName, gc, gm, 0 ) && rustModuleMayBring( gc, gm, seg, depth + 1 );
+        return b.kind == LocalBindKind::TypeImport && rustModuleOf( f, b.startByte, b.importedName, gc, gm, 0 ) && rustModuleMayBring( gc, gm, seg, depth + 1, seen );
     }
-    // does module (crate, module) declare or re-export an item `seg` a glob of it brings — a child module, a class or a `use`
-    // of the name at its own level, or (followed, depth-bounded: past the cap it may) a glob there whose target does?
-    bool rustModuleMayBring( std::uint32_t crate, const std::string& module, std::string_view seg, int depth ) const
+    // does module (crate, module) declare, or re-export from the tree, an item `seg` a glob of it brings — a child module, a
+    // class or a `use` of the name at its own level that does not lead out (fc1 fix 2: a `use` of std's name there brings std's
+    // binding, which is what the call sees; a private one reaches a child module's `super::*`), or a glob there whose target
+    // does? Each module is entered once per query (`seen`: a glob cycle terminates with the true answer); the depth cap is only
+    // a stack bound and answers "brings nothing" — the row is hedged, never proven onto an in-tree type
+    bool rustModuleMayBring( std::uint32_t crate, const std::string& module, std::string_view seg, int depth, std::vector<std::string>& seen ) const
     {
-        if( depth > 4 || rustModuleExists( crate, joinModule( module, seg ) ) )
+        if( depth > 32 )
+        {
+            return false;
+        }
+        const std::string key = rustModuleKey( crate, module );
+        if( std::ranges::find( seen, key ) != seen.end() )
+        {
+            return false;
+        }
+        seen.push_back( key );
+        if( rustModuleExists( crate, joinModule( module, seg ) ) )
         {
             return true;
         }
@@ -1444,8 +1458,11 @@ struct CallResultTypes
         {
             NodeId one = kNoNode;
             may = may || classesNamed( seg, CallResultFamily::Rust, [ & ]( NodeId c ) { return ing.symbols[ c ].fileId == mf && enclosingSymbol( c ) == inlineMod; }, one ) > 0;
-            forEachImport( mf, seg, [ & ]( const Binding& b ) { may = may || ( b.kind == LocalBindKind::TypeImport && levelAt( mf, b.startByte ) == level ); } );
-            forEachImport( mf, "*", [ & ]( const Binding& b ) { may = may || ( levelAt( mf, b.startByte ) == level && rustGlobBrings( mf, b, seg, depth ) ); } );
+            forEachImport( mf, seg, [ & ]( const Binding& b )
+            {
+                may = may || ( b.kind == LocalBindKind::TypeImport && levelAt( mf, b.startByte ) == level && depth <= 4 && !rustPathOutside( mf, b.startByte, b.importedName, depth ) );   // past rustPathOutside's cap: hedged
+            } );
+            forEachImport( mf, "*", [ & ]( const Binding& b ) { may = may || ( levelAt( mf, b.startByte ) == level && rustGlobBrings( mf, b, seg, depth, seen ) ); } );
         }
         return may;
     }
