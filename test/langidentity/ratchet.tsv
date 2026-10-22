@@ -13,7 +13,9 @@
 # 346 -> 339 (train 30, recount on the merged tree): lane call-result-typing folded 7 shared-file compares — the binds pass's
 #   language list became kBindPassLangs (ingest_binds.h bindPassLang) and the receiver-evidence dispatch receiverEvidenceHookOf;
 #   ingest_sidecap.h's Rust member-root arm moved to the call-result family. No other train-30 lane added or removed one.
-ceiling	339
+# 339 -> 335 (train 32a, recount on the merged tree): lane rust-receivers removed three (its Java / C# / Kotlin / Swift hook
+#   rows; the lane wrote 336), and main at f156be85 already counted 338 against its 339 ceiling. Lane member-names adds none.
+ceiling	335
 perlang	ingest_elixir.h
 perlang	elixir_resolve.h
 perlang	ingest_clojure.h

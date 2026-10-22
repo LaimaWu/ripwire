@@ -21,7 +21,8 @@ empty, so the ladder is unchanged).
 `Stack<i32>`) and `Book` (its own `iter`). `v.push()` / `v.iter()` on Vec parameters and a parameter of a type the tree does
 not define are declined with a `<stdm>` line; `self.iter()` inside `Book` stays proven; a name outside the table
 (`frobnicate`) and a name with no in-tree definition (`insert`) are untouched; a parameter, local or field written as the
-in-tree `Stack` / `Book` is the stated floor (declined: Rust records no receiver type yet). `far/` calls `w.empty()` where no namesake is in
+in-tree `Stack` / `Book` binds that type's method (lane rust-receivers), and a generic bounded by an in-tree trait
+(`P: Pushable`) is the stated floor (declined: lane L6). `far/` calls `w.empty()` where no namesake is in
 reach, so the ladder itself declines it (tier 3), and the `<stdm>` line still names it.
 
 `sib/` holds the field and expression receivers: a field written as the in-tree `Vec` (`this->items_`, `b.items_` on a

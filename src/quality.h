@@ -2340,8 +2340,12 @@ constexpr std::uint32_t kIngestCacheVersionMirror   = 36;   // MUST equal ingest
 constexpr std::uint32_t kIngestParserVerMirror    = 214;  // MUST equal ingest.cpp's kParserVer   (gated)
                                                           // 214 = 2026-10-21 (#358 1a, PR #420: above main 206/207 and train 32a 212/213;
                                                           //   see the kParserVer note)
+                                                          // 212 = 2026-10-21 (train 32a: above main 206/207, rust-receivers 202/203, ix1-slot
+                                                          //   204/205, l6-iface 210/211; #420 reserves 214/215; see the kParserVer note)
                                                           // 206 = 2026-10-18 (#409, PR #414, renumbered again at merge: above main 196/197,
                                                           //   train 31 198/199, rust-receivers 202/203, ix1-slot 204/205; see the kParserVer note)
+                                                          // 202 = lane rust-receivers (reservation 202/203; the train renumbers): Rust written-type
+                                                          //   RecvType / MemberType, the written qualifier path of a call result, `-> Self` results
                                                           // 198 = 2026-10-18 (train 31: above main 196/197 and h1-annot
                                                           //   194/195; see the kParserVer note)
                                                           // 194 = lane h1-annot (reservation 194/195; the train renumbers):
@@ -4773,7 +4777,8 @@ inline std::string materializeCommitSubset( const std::string& root, const std::
             ++at;
         }
         const bool archived  = os::system( ( cmd + " 2>/dev/null" ).c_str() ) == 0;
-        const bool extracted = archived && os::system( ( "tar -x -f " + shSingleQuote( archiveFile ) + " -C " + shSingleQuote( tmpRoot ) + " 2>/dev/null" ).c_str() ) == 0;
+        // Feed the file through stdin: GNU tar treats a Windows drive colon in -f as a remote host (same fix as materializeCommitTree).
+        const bool extracted = archived && os::system( ( "tar -x -f - -C " + shSingleQuote( tmpRoot ) + " < " + shSingleQuote( archiveFile ) + " 2>/dev/null" ).c_str() ) == 0;
         fs::remove( fs::path( archiveFile ), ec );
         if( !extracted )
         {
