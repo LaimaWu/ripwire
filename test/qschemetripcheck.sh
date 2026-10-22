@@ -50,6 +50,10 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   live build), quality.h's kIngestParserVerMirror with it. kCacheVersion stays 36 (no lane touched a cache serializer) and
 #   kQSnapCacheScheme stays 22: what a cached Snapshot represents is the same, and the qsnap key folds the extraction identity.
 #   The h1-annot lane entry below is kept as written; its hash is superseded by this one.
+# 2026-10-18, train 32 lane ix1-slot (IX-1 slot-type join): RE-DERIVED with UPDATE_GOLDEN=1. Watched text: kParserVer -> 204
+#   (rich file tag 205; reserved for this lane, the train renumbers) and quality.h's parser-version mirror with it. kCacheVersion
+#   stays 36 (same record layout: struct-field slots ride memberPath/memberCtor of the existing value/through records), and
+#   kQSnapCacheScheme stays 22.
 # 2026-10-18, train 30 (call-result-typing, go-local-var, fcall-forward, name-template-dispatch, tail-sym, path-owners merged
 #   onto main b59b0824): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (hash 5af7514356…3726b4). Watched text:
 #   kParserVer -> 196 (lanes call-result-typing 180 / rich 181, fcall-forward 188 / 189, go-local-var 190 / 191,

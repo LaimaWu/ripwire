@@ -358,6 +358,12 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "called_by",         "called_by=: functions that may call through that slot (a called parameter, tbl[k]() or tbl.k())", false, "vr" },
     { "to",                "vr to= def=: the function used as a value and its definition; sites=N binding sites one to=/through= pair joins", false, "vr" },
     { "through",           "through=: the written callee this function may call it through", false, "vr" },
+    // IX-1 slot-type join (src/valuerefs.h slotJoinLegend): present-only; a struct-field slot and the calls through that field.
+    { "called_at",         "vr called_at= via=slot|slot-name: called_by='s calls through that struct field, file:line in the same order; slot = same declared struct type, slot-name = field name only (a type unknown); MAY call, not a proven call, in no count", false, "vr" },
+    { "slot_name_also",    "slot_name_also=K: K name-only callers hidden behind the same-type ones", false, "vr" },
+    { "called_more",       "called_more=N: N more callers past the first 8", false, "vr" },
+    { "slot_calls",        "slot_calls=N: N calls in this body go through a struct field holding a function; in no count" },
+    { "slot",              "vs l= through= slot=Type.field via= targets=K shown= next=: one such call and the functions stored in that field anywhere (t n= p=); slot = same declared type, slot-name = field name only; MAY be called, not a proven call", false, "vs" },
     { "to_value_refs",     "to_value_refs=N: to= is used as a value N times (matched by name); a run through such a slot is not a proven call and no hop here" },
     { "value-ref-excluded", "value-ref-excluded=N: internal functions kept off because a table, field or argument in another function or at file scope holds them (matched by name, not a proven call); a floor" },
     // The value walk's depth cut (ingest_valuerefs.h kVrMaxDepth, graphlegend.h kValueRefsDepthLegend): absent when none.

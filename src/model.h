@@ -401,10 +401,19 @@ inline bool isJsTsBuiltinMember( std::string_view ctor, std::string_view name ) 
 //             ONE Value record per file may instead be the DEPTH CUT (qualifier = kValueRefDepthCutScope, name = "",
 //             which no identifier is): the walk stopped at its depth cap there and argCount subtrees were not visited
 //             (saturating), line = the first one. It is no row; valuerefindex.h counts it for the answers' depth disclosure.
+//             C family only (IX-1 slot-type join): a Value row whose slot is a STRUCT FIELD also carries memberPath = the
+//             field chain from the declared object to the slot ("exec"; "tty.mouse_drag_release" for an assignment
+//             `c->tty.mouse_drag_release = f`) and memberCtor = the object's declared struct type ("" when unknown). A
+//             SLOT FACT (qualifier = kValueRefSlotFactScope, name = ""): recvVar = a struct type, composeRel = one of its
+//             fields, memberCtor = that field's declared struct type; composeRel "" makes it a typedef alias (recvVar
+//             names memberCtor). No row: valuerefindex.h reads the facts to type a field chain.
 //   Through — a call THROUGH a value: a called parameter, `tbl[k](…)` / `tbl.k(…)` on a container that received a
 //             function value. name = the container, fieldName = the written callee, composeRel = the key,
 //             qualifier = p|l|f, argCount = the parameter index. Joined to Value rows only (called_by=/through=, a
 //             may-call clue); never a use site, never in the CSR.
+//             qualifier = kValueRefSlotCallScope (C family, IX-1): a call through a struct FIELD `x->f( … )`, `x.a.f( … )`,
+//             `t[ i ].f( … )`; name = the root identifier x, memberCtor = x's declared struct type ("" when no scope of the
+//             file declares x), memberPath = the field chain ("a.f"), fieldName = the written callee. Joined by (type, field).
 //   Subscript — an element access `recv[ args ]` (Ruby, Python; ingest_binds.h subscriptOperatorRef), named as the
 //             receiver class's subscript OPERATOR METHOD (kSubscriptOperatorMethods: Ruby `[]` / `[]=`, Python
 //             `__getitem__` / `__setitem__`); receiver fields as a call's. NOT a call by itself: graph.h's resolve loop
@@ -502,6 +511,15 @@ inline std::span<const CallForwarder> callForwardersOf( Lang lang ) noexcept
 // The scope char (qualifier[0]) of a file's depth-cut Value record (see RefRole::Value above): written by
 // src/ingest_valuerefs.h, read by src/valuerefindex.h — distinct from every row scope (f l a p x).
 inline constexpr char kValueRefDepthCutScope = 'd';
+// IX-1 slot-type join (see RefRole::Value / Through above): a call through a struct field, and a slot FACT (a field's
+// declared struct type, or a typedef alias). Distinct from every other scope char.
+inline constexpr char kValueRefSlotCallScope = 's';
+inline constexpr char kValueRefSlotFactScope = 't';
+// A slot type key written with the `struct` / `union` keyword (`struct thandle`) leads with this mark: a C tag is no typedef
+// name, so the join never reads it through an alias. A slot fact whose composeRel is kValueRefSlotBodyRel declares that its
+// owner's struct BODY is in this file (no field): one tag with bodies in two files is two types, so it joins nothing.
+inline constexpr char kValueRefSlotTagMark = '\x02';
+inline constexpr char kValueRefSlotBodyRel = '{';
 
 // Essential-complexity ev_why= reason vocabulary (the essential-complexity design note, §5.1). PUBLIC the
 // moment it ships (test/attrvocabcheck.sh's standing posture; test/essentialcxcheck.sh pins the spellings):
@@ -2146,6 +2164,20 @@ struct ShadowEvidence
 inline bool isMemberAccessSite( const Reference& r ) noexcept
 {
     return ( r.role == RefRole::Read || r.role == RefRole::Write ) && r.recv != RecvKind::None;
+}
+
+// IX-1: a slot-type join record (RefRole::Value / Through above): a slot FACT (a field's struct type or a typedef alias, name
+// "") or a call through a struct FIELD (name = the receiver's root variable, never a referenced symbol). Only the slot join
+// (valuerefindex.h SlotIndex) reads them; every other consumer of the reference stream skips them, so a C/C++ answer that
+// does not print the join (--context-ratio, --external-surface, stats, SCIP) reads the same stream it read before IX-1.
+inline bool isSlotJoinRecord( const Reference& r ) noexcept
+{
+    if( r.qualifier.empty() )
+    {
+        return false;
+    }
+    return ( r.role == RefRole::Value && r.qualifier[0] == kValueRefSlotFactScope )
+        || ( r.role == RefRole::Through && r.qualifier[0] == kValueRefSlotCallScope );
 }
 
 inline void buildShadowKey( std::string& key, std::uint32_t fromSymbol, std::string_view name )

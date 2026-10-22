@@ -1052,6 +1052,8 @@ Discloses: `capped`, `value_refs_depth_capped`
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kPatternRowCap` | `8` | — | — |
+| `kSlotCallerCap` | `8` | — | — |
+| `kSlotTargetCap` | `16` | — | — |
 | `kValueRefRowCap` | `64` | — | — |
 
 ### `src/verbs_change.h`
