@@ -721,6 +721,17 @@ CNT10="$( cd "$TS10" || exit 1; "$BIN" "$TS10" --affected=src/util.ts --no-cache
 printf '%s' "$CNT10" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" l="6" class="Eng"/></g>' \
     && ok '(9i4b) TS recall: Eng bound to src/b while the namesake is aliased (Eng as Other) and unrelated imports sit around it — l="6" kept' \
     || no "(9i4b) TS recall: an aliased namesake dropped the line: $( printf '%s' "$CNT10" | sed 's/^.*-->//' )"
+# Barrel recall (hono's `import { RegExpRouter } from "../reg-exp-router"`): the bare name is bound to src/eng/index.ts, which only re-exports the
+# class defined in src/eng/router.ts, and no other class of that name is visible through it — the name still resolves to the reached class: l="3" kept.
+TS11="$TMP/classnew-ts11"; mkdir -p "$TS11/src/eng" "$TS11/test"
+cp "$TS4/src/a.ts" "$TS4/src/util.ts" "$TS11/src/"
+printf 'import { leaf } from "../util";\nexport class Eng { run(p: number) { return leaf(p); } }\n' > "$TS11/src/eng/router.ts"
+printf 'export { Eng } from "./router";\n'                                                          > "$TS11/src/eng/index.ts"
+printf 'import { Eng } from "../src/eng";\ntest("x", () => {\n  const x = new Eng();\n});\n'     > "$TS11/test/x.test.ts"
+CNT11="$( cd "$TS11" || exit 1; "$BIN" "$TS11" --affected=src/util.ts --no-cache 2>/dev/null )"
+printf '%s' "$CNT11" | grep -q '<g via="class-new" total="1" shown="1"><new p="test/x.test.ts" l="3" class="Eng"/></g>' \
+    && ok '(9i4b) TS recall: Eng imported through a barrel (src/eng/index.ts re-exporting ./router) keeps l="3"' \
+    || no "(9i4b) TS recall: a barrel import dropped the line: $( printf '%s' "$CNT11" | sed 's/^.*-->//' )"
 # (9l) "nearest class first": two classes at DIFFERENT hops whose test-path order is the reverse of their rank order. Far (hop 2, via
 # the module function mid) is built by the alphabetically-first test, Near (hop 1) by the later one: the rows must list Near first.
 MB="$TMP/classnew-rank"; mkdir -p "$MB/pkg" "$MB/tests"

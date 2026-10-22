@@ -765,26 +765,20 @@ inline void classNewOffer( const ClassNewScan& s, const Reference& r, const Clas
 // construction that passes the NAME test, and a name is only a name: `new Eng()` in a test file whose `Eng` is imported from ANOTHER module (an
 // import alias of the reached class, an export-side rename `export { Eng as Engine }`, a default import under a new name) builds a namesake, while
 // the reached class is built under a spelling the name test never sees. So, in the row's test file:
-//   - every import binding (named, default, `import * as`, a require destructure) of the construction's leading name must resolve to the file
-//     that DEFINES the reached class — else the line is dropped;
+//   - every import binding (named, default, `import * as`, a require destructure) of the construction's leading name must land on the file that
+//     DEFINES the reached class, or on a barrel one re-export hop from it through which no other class of that name is visible — else no l=;
 //   - a leading name NO import binds (a class declared in the test, a global) keeps its line only if no class of that name lives in another file.
-// Exact l= or none: over-hedging is the floor. A module that resolves in the tree is compared by file; one that does not (a package, a tsconfig
-// alias this resolver does not follow) falls back to the last path segment against the class file's stem, an index file standing for its directory.
-inline bool classNewBindsClassFile( const IngestResult& ing, const HashMap<std::string, std::uint32_t>& files, const Binding& b, const Symbol& cls )
+// Exact l= or none: over-hedging is the floor. A module the resolver cannot place in the tree (a package, a tsconfig alias it does not follow)
+// falls back to the last path segment against the class file's stem, an index file standing for its directory.
+struct ClassNewEvidence
 {
-    if( b.isFromAssignment )
-    {
-        return false;   // `const { Eng } = G`: typeName is an identifier, not a module
-    }
-    const auto [ module, ambiguous ] = resolveJsNamedImportFile( rootRelPath( ing, b.fileId ), b.typeName, files, nullptr, b.fileId );
-    if( ambiguous )
-    {
-        return false;
-    }
-    if( module != kNoFile )
-    {
-        return module == cls.fileId;
-    }
+    std::vector<char>                       seen;      // per test file: an import binds the construction's leading name
+    std::vector<char>                       wrong;     // per test file: one binds it to a module that is not (a barrel for) the class's file
+    std::vector<std::vector<std::uint32_t>> barrels;   // per test file: the in-tree modules that bind it elsewhere — barrel candidates
+};
+
+inline bool classNewStemNamesClassFile( const IngestResult& ing, std::string_view module, const Symbol& cls )
+{
     const auto stemOf = []( std::string_view path )
     {
         const std::size_t slash = path.find_last_of( '/' );
@@ -798,36 +792,19 @@ inline bool classNewBindsClassFile( const IngestResult& ing, const HashMap<std::
     {
         want = stemOf( classFile.substr( 0, classFile.find_last_of( '/' ) ) );
     }
-    return stemOf( b.typeName ) == want;
+    return stemOf( module ) == want;
 }
 
-// Per test file: did an import bind the construction's leading name (seen), and did one bind it elsewhere (wrong)?
-struct ClassNewBound
-{
-    std::vector<char> seen;
-    std::vector<char> wrong;
-};
-
-inline ClassNewBound classNewBoundNames( const IngestResult& ing, const ClassNewSpelling& spelling, std::span<const ClassNewRow> rows )
+inline ClassNewEvidence classNewBoundNames( const IngestResult& ing, const HashMap<std::string, std::uint32_t>& files, const ClassNewSpelling& spelling,
+                                            std::span<const ClassNewRow> rows )
 {
     std::vector<std::int32_t> rowOf( ing.files.size(), -1 );
-    bool                      anyJs = false;
     for( std::size_t i = 0; i < rows.size(); ++i )
     {
         rowOf[ rows[i].testFile ] = std::int32_t( i );
-        anyJs                     = anyJs || !spelling.head[ rows[i].testFile ].empty();
     }
-    ClassNewBound out{ std::vector<char>( ing.files.size(), 0 ), std::vector<char>( ing.files.size(), 0 ) };
-    if( !anyJs )
-    {
-        return out;
-    }
-    HashMap<std::string, std::uint32_t> files;   // buildJsImportTables' index: normalized root-relative path -> file
-    files.reserve( ing.files.size() );
-    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
-    {
-        files.emplace( lexicalNormalize( rootRelPath( ing, f ) ), f );
-    }
+    ClassNewEvidence out{ std::vector<char>( ing.files.size(), 0 ), std::vector<char>( ing.files.size(), 0 ),
+                          std::vector<std::vector<std::uint32_t>>( ing.files.size() ) };
     for( const Binding& b : ing.bindings )
     {
         const bool imports = b.kind == LocalBindKind::JsImport || b.kind == LocalBindKind::ModuleAlias;
@@ -835,25 +812,38 @@ inline ClassNewBound classNewBoundNames( const IngestResult& ing, const ClassNew
         {
             continue;
         }
-        out.seen[ b.fileId ]  = 1;
-        out.wrong[ b.fileId ] |= char( !classNewBindsClassFile( ing, files, b, ing.symbols[ rows[ rowOf[ b.fileId ] ].cls ] ) );
+        const Symbol& cls = ing.symbols[ rows[ rowOf[ b.fileId ] ].cls ];
+        out.seen[ b.fileId ] = 1;
+        if( b.isFromAssignment )   // `const { Eng } = G`: typeName is an identifier, not a module
+        {
+            out.wrong[ b.fileId ] = 1;
+            continue;
+        }
+        const auto [ module, ambiguous ] = resolveJsNamedImportFile( rootRelPath( ing, b.fileId ), b.typeName, files, nullptr, b.fileId );
+        if( ambiguous || ( module == kNoFile && !classNewStemNamesClassFile( ing, b.typeName, cls ) ) )
+        {
+            out.wrong[ b.fileId ] = 1;
+        }
+        else if( module != kNoFile && module != cls.fileId )
+        {
+            out.barrels[ b.fileId ].push_back( module );
+        }
     }
     return out;
 }
 
-// Does a class of this row's name live in a file other than the row's class? One pass over the symbols, only for names that need it.
-inline std::vector<char> classNewHasNamesake( const IngestResult& ing, std::span<const ClassNewRow> rows, std::span<const std::int32_t> asked )
+// The files defining a class/struct of each row's class name (sorted, distinct; the row's own class file included). One pass over the symbols.
+inline std::vector<std::vector<std::uint32_t>> classNewDefiningFiles( const IngestResult& ing, std::span<const ClassNewRow> rows )
 {
-    using Want = std::pair<std::string_view, std::uint32_t>;
-    std::vector<Want> wanted;   // (class name, the row's class file), sorted by name — rw::sortutil::svLess, never operator< (portablebuildcheck #6)
-    for( const std::int32_t i : asked )
+    using Want = std::pair<std::string_view, std::size_t>;
+    std::vector<Want> wanted;   // (class name, row index), sorted by name — rw::sortutil::svLess, never operator< (portablebuildcheck #6)
+    for( std::size_t i = 0; i < rows.size(); ++i )
     {
-        wanted.emplace_back( ing.symbols[ rows[i].cls ].name, ing.symbols[ rows[i].cls ].fileId );
+        wanted.emplace_back( ing.symbols[ rows[i].cls ].name, i );
     }
-    const auto wantLess = []( const Want& a, const Want& b )
-    { return a.first != b.first ? rw::sortutil::svLess( a.first, b.first ) : a.second < b.second; };
+    const auto wantLess = []( const Want& a, const Want& b ) { return a.first != b.first ? rw::sortutil::svLess( a.first, b.first ) : a.second < b.second; };
     std::sort( wanted.begin(), wanted.end(), wantLess );
-    std::vector<char> other( wanted.size(), 0 );
+    std::vector<std::vector<std::uint32_t>> files( rows.size() );
     for( const Symbol& sym : ing.symbols )
     {
         if( !isConstructibleClassKind( sym.kind ) )
@@ -862,23 +852,74 @@ inline std::vector<char> classNewHasNamesake( const IngestResult& ing, std::span
         }
         for( auto it = std::lower_bound( wanted.begin(), wanted.end(), Want{ sym.name, 0 }, wantLess ); it != wanted.end() && it->first == sym.name; ++it )
         {
-            other[ std::size_t( it - wanted.begin() ) ] |= char( it->second != sym.fileId );
+            files[ it->second ].push_back( sym.fileId );
         }
     }
-    std::vector<char> out( asked.size(), 0 );
-    for( std::size_t k = 0; k < asked.size(); ++k )
+    for( std::vector<std::uint32_t>& list : files )
     {
-        const Symbol& cls = ing.symbols[ rows[ asked[k] ].cls ];
-        const auto    it  = std::lower_bound( wanted.begin(), wanted.end(), Want{ cls.name, cls.fileId }, wantLess );
-        out[k]            = other[ std::size_t( it - wanted.begin() ) ];
+        std::sort( list.begin(), list.end() );
+        list.erase( std::unique( list.begin(), list.end() ), list.end() );
     }
-    return out;
+    return files;
+}
+
+// One re-export hop: the files each barrel candidate imports/re-exports directly (resolved the way imports are; unresolved ones are absent).
+inline HashMap<std::uint32_t, std::vector<std::uint32_t>> classNewBarrelHops( const IngestResult& ing, const HashMap<std::string, std::uint32_t>& files,
+                                                                              const ClassNewEvidence& ev )
+{
+    std::vector<char> wanted( ing.files.size(), 0 );
+    for( const std::vector<std::uint32_t>& list : ev.barrels )
+    {
+        for( const std::uint32_t module : list )
+        {
+            wanted[ module ] = 1;
+        }
+    }
+    HashMap<std::uint32_t, std::vector<std::uint32_t>> hops;
+    for( const Include& inc : ing.includes )
+    {
+        if( inc.fileId >= wanted.size() || wanted[ inc.fileId ] == 0 || inc.isSymbolic )
+        {
+            continue;
+        }
+        const std::uint32_t to = resolveJsNamedImportFile( rootRelPath( ing, inc.fileId ), inc.target, files, nullptr, inc.fileId ).first;
+        if( to != kNoFile )
+        {
+            hops[ inc.fileId ].push_back( to );
+        }
+    }
+    return hops;
+}
+
+// Does `module` (not the class's file) stand for the class's file? Yes when it re-exports it in one hop and, among itself and what it re-exports,
+// the class's file is the ONLY one defining a class of that name (so the name cannot be bound to a namesake there).
+inline bool classNewBarrelNamesClass( std::uint32_t module, std::uint32_t classFile, std::span<const std::uint32_t> defining,
+                                      const HashMap<std::uint32_t, std::vector<std::uint32_t>>& hops )
+{
+    const auto it = hops.find( module );
+    if( it == hops.end() || std::find( it->second.begin(), it->second.end(), classFile ) == it->second.end() )
+    {
+        return false;
+    }
+    const auto visible = [ & ]( std::uint32_t f ) { return f == module || std::find( it->second.begin(), it->second.end(), f ) != it->second.end(); };
+    return std::ranges::count_if( defining, visible ) == 1;
 }
 
 inline void classNewHedgeByBinding( const IngestResult& ing, const ClassNewSpelling& spelling, std::vector<ClassNewRow>& rows )
 {
-    const ClassNewBound       bound = classNewBoundNames( ing, spelling, rows );
-    std::vector<std::int32_t> unbound;   // TS/JS rows whose leading name no import binds
+    if( std::none_of( rows.begin(), rows.end(), [ & ]( const ClassNewRow& r ) { return r.line != 0 && !spelling.head[ r.testFile ].empty(); } ) )
+    {
+        return;
+    }
+    HashMap<std::string, std::uint32_t> files;   // buildJsImportTables' index: normalized root-relative path -> file
+    files.reserve( ing.files.size() );
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        files.emplace( lexicalNormalize( rootRelPath( ing, f ) ), f );
+    }
+    const ClassNewEvidence                           ev       = classNewBoundNames( ing, files, spelling, rows );
+    const std::vector<std::vector<std::uint32_t>>    defining = classNewDefiningFiles( ing, rows );
+    const HashMap<std::uint32_t, std::vector<std::uint32_t>> hops = classNewBarrelHops( ing, files, ev );
     for( std::size_t i = 0; i < rows.size(); ++i )
     {
         const std::uint32_t f = rows[i].testFile;
@@ -886,20 +927,10 @@ inline void classNewHedgeByBinding( const IngestResult& ing, const ClassNewSpell
         {
             continue;
         }
-        rows[i].line = bound.wrong[f] ? 0 : rows[i].line;   // the emitter omits l= for line 0
-        if( !bound.seen[f] )
-        {
-            unbound.push_back( std::int32_t( i ) );
-        }
-    }
-    if( unbound.empty() )
-    {
-        return;
-    }
-    const std::vector<char> namesake = classNewHasNamesake( ing, rows, unbound );
-    for( std::size_t k = 0; k < unbound.size(); ++k )
-    {
-        rows[ unbound[k] ].line = namesake[k] ? 0 : rows[ unbound[k] ].line;
+        const std::uint32_t classFile = ing.symbols[ rows[i].cls ].fileId;
+        const bool          viaBarrel = std::ranges::all_of( ev.barrels[f], [ & ]( std::uint32_t m ) { return classNewBarrelNamesClass( m, classFile, defining[i], hops ); } );
+        const bool          exact     = ev.seen[f] ? ( !ev.wrong[f] && viaBarrel ) : defining[i].size() == 1;
+        rows[i].line                  = exact ? rows[i].line : 0;   // the emitter omits l= for line 0
     }
 }
 
