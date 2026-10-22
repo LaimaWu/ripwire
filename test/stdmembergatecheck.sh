@@ -192,7 +192,7 @@ check "(H) template parameter C& c; c.push_back() — the receiver may be anythi
 
 # ── (W) written types beyond Rule 2's tables (wrap/) ─────────────────────────────────────────────────────────
 echo "=== (W) a recorded written type that names ns::List keeps the hedge; one that does not stays declined ==="
-LS='wrap/list.h:9:size~'; LF='wrap/list.h:10:find~'; LR='wrap/list.h:11:front~'
+LS='wrap/list.h:9:List::size~'; LF='wrap/list.h:10:List::find~'; LR='wrap/list.h:11:List::front~'
 check "(W) std::unique_ptr<ns::List> up; up->size() — the smart pointer's argument keeps the hedge"  callees uniqueLocal        "$LS" '' ''
 check "(W) const std::shared_ptr<ns::List>& p; p->size()"                                          callees sharedParam        "$LS" '' ''
 check "(W) std::optional<ns::List> o; o->find()"                                                    callees optionalLocal      "$LF" '' ''
