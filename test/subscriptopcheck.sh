@@ -335,13 +335,13 @@ pos_rb(){ # name tag op line what
         else no "R $5: $1 should call $3 at registry.rb:$4 with no via=: $( tr '\n' ' ' < "$DIR/$2.rows" )"; fi
     fi
 }
-pos_rb find_self  r1 '[]'  "$RGET" "self[ k ] through an included module"
-pos_rb put_self   r2 '[]=' "$RSET" "self[ k ] = v names the writer"
-pos_rb get_built  r3 '[]'  "$RGET" "a local the code builds (r = Registry.new)"
-pos_rb get_value  r4 '[]'  "$RGET" "a value receiver (Registry.new[ k ])"
-pos_rb by_class   r5 '[]'  "$RCLS" "a class constant reaches its def self.[]"
-pos_rb or_assign  r6 '[]'  "$RGET" "floor: self[ k ] ||= v is recorded as the read form"
-if [ -s "$DIR/r5.rows" ] && ! has_row r5 '[]' "registry.rb:$RGET"; then ok "R class side: Registry[ k ] does not reach the instances' []"
+pos_rb find_self  r1 'Lookup#[]'  "$RGET" "self[ k ] through an included module"
+pos_rb put_self   r2 'Lookup#[]=' "$RSET" "self[ k ] = v names the writer"
+pos_rb get_built  r3 'Lookup#[]'  "$RGET" "a local the code builds (r = Registry.new)"
+pos_rb get_value  r4 'Lookup#[]'  "$RGET" "a value receiver (Registry.new[ k ])"
+pos_rb by_class   r5 'Registry#[]'  "$RCLS" "a class constant reaches its def self.[]"
+pos_rb or_assign  r6 'Lookup#[]'  "$RGET" "floor: self[ k ] ||= v is recorded as the read form"
+if [ -s "$DIR/r5.rows" ] && ! has_row r5 'Lookup#[]' "registry.rb:$RGET"; then ok "R class side: Registry[ k ] does not reach the instances' []"
 else no "R class side: Registry[ k ] must not reach Lookup#[]: $( tr '\n' ' ' < "$DIR/r5.rows" 2>/dev/null )"; fi
 
 neg_rb(){ # name tag what

@@ -306,7 +306,7 @@ gapArm "(P4) unresolved" "$TMP/unr" "begin,finish"              "unresolved:1" "
 
 # P7's premise: the call really is bound by name alone to A.process only (else the arm would test the old resolver)
 f="$TMP/lpycallees.xml"; "$BIN" "$TMP/lpy" --no-cache --callees=run > "$f" 2>&1
-if [ "$( grep -o '<s [^>]*n="process"[^>]*/>' "$f" | wc -l | tr -d ' ' )" = "1" ] && grep -q '<s [^>]*n="process" p="pkg/x/a.py:2" via="name"' "$f"; then
+if [ "$( grep -o '<s [^>]*n="[A-Za-z.]*process"[^>]*/>' "$f" | wc -l | tr -d ' ' )" = "1" ] && grep -q '<s [^>]*n="A.process" p="pkg/x/a.py:2" via="name"' "$f"; then
     ok "(P7) premise: run's obj.process() is via=\"name\" to pkg/x/a.py's A.process only"
     gapArm "(P7) name" "$TMP/lpy" "run,target" "name:1" "run"
 else
@@ -383,7 +383,7 @@ if premise "(N4)" "$rc" "$f"; then
 fi
 cleanArm "(N5) a value the search also calls" "$TMP/valin" "handleRequest,other"
 f="$TMP/lpyxcallees.xml"; "$BIN" "$TMP/lpyx" --no-cache --callees=run > "$f" 2>&1
-if grep -q '<s [^>]*n="process" p="pkg/x/a.py:2" via="name"' "$f"; then
+if grep -q '<s [^>]*n="A.process" p="pkg/x/a.py:2" via="name"' "$f"; then
     cleanArm "(N6) via=name, namesakes of another language/kind" "$TMP/lpyx" "run,target"
 else
     no "(N6) premise: run's obj.process() is not via=name to A.process here: $( grep -o '<callees .*' "$f" | head -c 500 )"
@@ -391,8 +391,8 @@ fi
 f="$TMP/lpyinhelper.xml"; "$BIN" "$TMP/lpyin" --no-cache --callees=helper > "$f" 2>&1; fh_rc=$?
 f2="$TMP/lpyinrun.xml"; "$BIN" "$TMP/lpyin" --no-cache --callees=run > "$f2" 2>&1; fr_rc=$?
 if [ "$fh_rc" -eq 0 ] && [ "$fr_rc" -eq 0 ] \
-   && grep -q '<s [^>]*n="process" p="other/b.py:2" via="name"' "$f" && ! grep -q 'p="pkg/x/a.py:2"' "$f" \
-   && grep -q '<s [^>]*n="process" p="pkg/x/a.py:2"' "$f2"; then
+   && grep -q '<s [^>]*n="B.process" p="other/b.py:2" via="name"' "$f" && ! grep -q 'p="pkg/x/a.py:2"' "$f" \
+   && grep -q '<s [^>]*n="A.process" p="pkg/x/a.py:2"' "$f2"; then
     cleanArm "(N7) via=name, the unlisted namesake is in the searched cone" "$TMP/lpyin" "run,target"
 else
     no "(N7) premise: helper lists only other/B.process by name and run reaches pkg/x/A.process (rc=$fh_rc/$fr_rc): $( grep -o '<callees .*' "$f" | head -c 300 ) | $( grep -o '<callees .*' "$f2" | head -c 300 )"

@@ -132,7 +132,7 @@ call(){ printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"
 [ -s "$TMP/c.tsv" ] || no "the census run wrote no census — the census arm below would be vacuous"
 [ -s "$TMP/map.xml" ] || no "the map run wrote nothing — every header arm below would be vacuous"
 
-PB='lib/vec.h:8:push_back lib/vec.h:9:push_back'   # Vec's two push_back overloads, as a callees answer lists them
+PB='lib/vec.h:8:Vec::push_back lib/vec.h:9:Vec::push_back'   # Vec's two push_back overloads, as a callees answer lists them
 
 # ── (A) typed receivers keep their edges ──────────────────────────────────────────────────────────────────────
 echo "=== (A) a receiver a rule types keeps its edge, unhedged ==="
@@ -142,8 +142,8 @@ check "(A) typed pointer Vec<int>* p; p->push_back()"          callees typedPtr 
 check "(A) member field Vec<int> items_ (Rule 2b)"             callees app/use.cpp:add     "$PB" '' ''
 check "(A) smart pointer field owned_->push_back() (Rule 2b, ->)" callees app/use.cpp:addOwned "$PB" '' ''
 check "(A) implicit-this and this-> calls inside Vec"          callees pushTwice           "$PB" '' ''
-check "(A) Solo so; so.append() keeps the tree's only append"  callees soloTyped           'lib/vec.h:27:append' '' ''
-check "(A) Pool& p; p.clear()"                                 callees poolTyped           'lib/vec.h:22:clear' '' ''
+check "(A) Solo so; so.append() keeps the tree's only append"  callees soloTyped           'lib/vec.h:27:Solo::append' '' ''
+check "(A) Pool& p; p.clear()"                                 callees poolTyped           'lib/vec.h:22:Pool::clear' '' ''
 
 # ── (B) std-written or untyped receivers are declined and disclosed ───────────────────────────────────────────
 echo "=== (B) a receiver written in std, or typed by nothing, binds no in-tree namesake ==="
@@ -169,14 +169,14 @@ check "(B) the ladder's own tier-3 decline (no namesake in reach) is named on th
 # ── (C) an alias of the in-tree container keeps the hedge ────────────────────────────────────────────────────
 echo "=== (C) a written non-std type whose cone reaches a candidate keeps the ladder's hedge ==="
 check "(C) SmallV<int> a (an alias of Vec); a.push_back() stays via=\"name\" on Vec" \
-                                                               callees aliasTyped          'lib/vec.h:8:push_back~ lib/vec.h:9:push_back~' '' ''
+                                                               callees aliasTyped          'lib/vec.h:8:Vec::push_back~ lib/vec.h:9:Vec::push_back~' '' ''
 
 # ── (H) field and expression receivers (sib/) ───────────────────────────────────────────────────────────────
 echo "=== (H) a field written as the in-tree Vec keeps the hedge; std fields and expression receivers are declined ==="
 check "(H) this->items_.push_back() (a field written Vec<int>) keeps the ladder's via=\"name\" hedge" \
-                                                               callees sib/sib.cpp:thisField 'lib/vec.h:8:push_back~ lib/vec.h:9:push_back~' '' ''
+                                                               callees sib/sib.cpp:thisField 'lib/vec.h:8:Vec::push_back~ lib/vec.h:9:Vec::push_back~' '' ''
 check "(H) b.items_.push_back() on Box& b (one field hop off a typed root) keeps the hedge" \
-                                                               callees fieldOfVar          'lib/vec.h:8:push_back~ lib/vec.h:9:push_back~' '' ''
+                                                               callees fieldOfVar          'lib/vec.h:8:Vec::push_back~ lib/vec.h:9:Vec::push_back~' '' ''
 check "(H) this->raw_.push_back() (a field written in std) is declined" \
                                                                callees sib/sib.cpp:thisRaw '' 1 'push_back:1'
 check "(H) b.raw_.push_back() (a std field one hop off a typed root) is declined" \
@@ -184,7 +184,7 @@ check "(H) b.raw_.push_back() (a std field one hop off a typed root) is declined
 check "(H) STATED FLOOR: ( *p ).push_back() — a dereference carries no written type, declined" \
                                                                callees derefPtr            '' 1 'push_back:1'
 check "(H) vs[ 0 ].push_back() on std::vector<Vec<int>>& — the element type reaches Vec, keeps the hedge (arm X)" \
-                                                               callees subscript           'lib/vec.h:8:push_back~ lib/vec.h:9:push_back~' '' ''
+                                                               callees subscript           'lib/vec.h:8:Vec::push_back~ lib/vec.h:9:Vec::push_back~' '' ''
 check "(H) STATED FLOOR: for( auto& v : vs ) v.push_back() — a range-for auto, declined" \
                                                                callees rangeFor            '' 1 'push_back:1'
 check "(H) template parameter C& c; c.push_back() — the receiver may be anything, declined" \
@@ -386,8 +386,8 @@ BB="$ROOT/test/builtinbindfix"
 
 # ── (K) the predicates can fail ───────────────────────────────────────────────────────────────────────────────
 echo "=== (K) the predicates can fail ==="
-printf '<callees of="x" count="2"><s t="method" n="push_back" p="lib/vec.h:8" via="name"/></callees>' >"$TMP/k.xml"
-[ "$( rows "$TMP/k.xml" )" = 'lib/vec.h:8:push_back~' ] && [ -z "$( stdm "$TMP/k.xml" )" ] \
+printf '<callees of="x" count="2"><s t="method" n="Vec::push_back" p="lib/vec.h:8" via="name"/></callees>' >"$TMP/k.xml"
+[ "$( rows "$TMP/k.xml" )" = 'lib/vec.h:8:Vec::push_back~' ] && [ -z "$( stdm "$TMP/k.xml" )" ] \
     && ok "(K) a via=\"name\" row reads as one and a missing <stdm> line reads as empty" || no "(K) the row/stdm readers are blind"
 
 # ── (L) determinism, well-formedness, stderr ──────────────────────────────────────────────────────────────────

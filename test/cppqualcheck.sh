@@ -127,7 +127,7 @@ expect callers freeTmpl   1 "explicit-template-arg call names its caller"
 # `b::Box<int>::get` as `Box` and spray an edge onto the Box CLASS DEF — a plausible, wrong graph. The
 # re-split (last TOP-LEVEL `::`, template args stripped from the scope half) is what prevents it.
 CALLEES="$( run "$FIX" --callees=callerQualified --no-cache )"
-printf '%s' "$CALLEES" | grep -q 'n="get"' \
+printf '%s' "$CALLEES" | grep -q 'n="Box::get"' \
     && ok "templated-scope call resolves to the METHOD get" \
     || no "templated-scope call did not resolve to get: $CALLEES"
 printf '%s' "$CALLEES" | grep -q 'n="Box"' \
@@ -428,8 +428,8 @@ if [ -d "$DEC" ]; then
     printf '%s' "$DMAP" | grep -q 'ambiguous=0 unresolved=0' \
         && ok "decoy corpus: ambiguous=0 — the template-arg strip kept every call canonically bound" \
         || no "decoy corpus: expected ambiguous=0 (a lost stripTemplateArgs sprays Box::get across Other::get): $( printf '%s' "$DMAP" | grep -oE 'ambiguous=[0-9]+ unresolved=[0-9]+' )"
-    printf '%s' "$DSTR" | grep -qE '<s [^>]*n="get" p="[^"]*decoy\.cpp:41"' \
-        && printf '%s' "$DSTR" | grep -qE '<s [^>]*n="get" p="[^"]*decoy\.cpp:46"' \
+    printf '%s' "$DSTR" | grep -qE '<s [^>]*n="Box::get" p="[^"]*decoy\.cpp:41"' \
+        && printf '%s' "$DSTR" | grep -qE '<s [^>]*n="Other::get" p="[^"]*decoy\.cpp:46"' \
         && ok "decoy: Box<int>::get -> :41 and Other::get -> :46, each on its own def" \
         || no "decoy: callerStrip did not reach both gets by line: $DSTR"
 
