@@ -1262,6 +1262,16 @@ enum class LocalBindKind : std::uint8_t
                    //     parameter bare — at least one, no `yield`, nested defs / lambdas / classes not read — or the return
                    //     annotation is `Self`) or the method's own class name (the return annotation names it: `-> Color`,
                    //     `-> "Color"`). A method that proves neither records nothing. APPENDED.
+    // FC3 (T1 class 14 ALIAS-THROUGH-ASSIGNMENT): a JS/TS binding WRITTEN after its declaration — `Eng = Foo`, `[Eng] = [Foo]`,
+    // `({ Eng } = { Eng: Foo })`, `Eng += …`, `Eng++`, `for ( Eng of xs )`, a second `var Eng = Foo`, but not a write whose
+    // value keeps the name (`equal = util.equal`) — so a call or construction by that name in its scope is undecided
+    // (ingest_jsimports.h captureJsRebindFacts). var = the name; spanStart/spanEnd = the WHOLE scope of the declaration the
+    // write resolves to (the program, for a name the file never declares): byte order is not run order, a closure or a loop
+    // sees the write anywhere in it; startByte = the file's END, so the record has no owner (fromSymbol kNoNode) and no
+    // (fromSymbol, var) local-name reader takes it for a function's local. An ES import or `const` binding records nothing:
+    // writing one throws. Read by graph.h buildGraph (the call is unresolved, no edge) and FalseEdgeRules (as a shadow: no
+    // external veto) ONLY. APPENDED (cache u8).
+    JsRebind,
 };
 // fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
 inline constexpr std::string_view kTypeBindForward  = "forward";
@@ -1269,7 +1279,7 @@ inline constexpr std::string_view kTypeBindShadow   = "shadow";
 inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
 inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::OperatorResult ) + 1;
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::JsRebind ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {

@@ -2534,6 +2534,7 @@ struct JsImportTables
 {
     HashMap<std::string, JsImportTarget> targets;
     HashMap<std::string, std::vector<VarSpan>> shadows;
+    HashMap<std::string, std::vector<VarSpan>> rebinds;   // FC3: "<fileId>#name" → JsRebind spans (model.h): a call there is undecided
 };
 
 inline std::string jsImportKey( std::uint32_t fileId, std::string_view name )
@@ -2657,6 +2658,10 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph/2g: JS/TS import tables" );
     JsImportTables tables;
+    for( const Binding& b : ing.bindings )   // FC3: the written bindings, whether or not the tree has any ES import
+    {
+        if( b.kind == LocalBindKind::JsRebind ) { tables.rebinds[ jsImportKey( b.fileId, b.var ) ].push_back( { b.spanStart, b.spanEnd } ); }
+    }
     if( std::none_of( ing.bindings.begin(), ing.bindings.end(), []( const Binding& b ) { return b.kind == LocalBindKind::JsImport; } ) )
     {
         return tables;
@@ -6068,8 +6073,9 @@ inline bool collectFalseEdgeBindings( const IngestResult& ing, FalseEdgeRules& r
         {
             rules.bound.try_emplace( jsImportKey( b.fileId, b.var ), '\0' );
         }
-        else if( b.kind == LocalBindKind::JsShadow )
+        else if( b.kind == LocalBindKind::JsShadow || b.kind == LocalBindKind::JsRebind )
         {
+            // FC3: a written binding no longer names its declared module either — never vetoed as outside by its alias
             rules.shadows[ jsImportKey( b.fileId, b.var ) ].push_back( { b.spanStart, b.spanEnd } );
         }
     }
@@ -8407,6 +8413,20 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         //             unless the import renamed the binding, in which case the local spelling is private
         //             to this file and any same-name ladder hit is a coincidence.
         bool jsImportPinned = false;
+        // FC3 (T1 class 14): a BARE name (not `o.name()`: memberCall) whose binding is WRITTEN in this scope (`Eng = Foo;
+        // new Eng()`) names neither its declaration nor a same-spelled definition — undecided, so no edge (unresolved=),
+        // like a shadowed import below.
+        if( !scipPinned && r.role == RefRole::Call && r.recv == RecvKind::None && r.qualifier.empty() && !r.memberCall
+            && ( r.lang == Lang::TypeScript || r.lang == Lang::JavaScript ) && !jsImports.rebinds.empty() )
+        {
+            if( const auto spans = jsImports.rebinds.find( jsImportKey( r.fileId, r.calleeName ) ); spans != jsImports.rebinds.end()
+                && std::any_of( spans->second.begin(), spans->second.end(), [ & ]( const VarSpan& span ) { return r.startByte >= span.startByte && r.startByte < span.endByte; } ) )
+            {
+                ++g.unresolvedOut[ r.fromSymbol ];
+                disposition = CallDisposition::Unresolved;
+                continue;
+            }
+        }
         if( !scipPinned && r.role == RefRole::Call && r.recv == RecvKind::None && r.qualifier.empty()
             && ( r.lang == Lang::TypeScript || r.lang == Lang::JavaScript ) )
         {

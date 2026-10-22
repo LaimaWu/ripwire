@@ -69,6 +69,19 @@
 #   (R) Rust (no implicit receiver either): a bare call imported from an outside crate never reaches a same-named
 #            METHOD; a same-module function, `h.render()`, `History::new()`, `History::render( &h )` and
 #            `Self::width()` and the fully qualified `<History as Render>::render_all( h )` keep their edges.
+#   (S) JS/TS REBIND (FC3, T1 class 14 alias-through-assignment; root jsrebind/): a binding WRITTEN after its
+#            declaration — `let { Eng, Foo } = require( … ); Eng = Foo; new Eng()` builds a Foo — binds nothing: the
+#            call is unresolved=, never its declared target nor a same-spelled class. Shapes: destructured and plain
+#            require, a conditional write, `[Eng] = [Foo]`, `({ Eng } = o)`, `(Eng) = Foo`, `+=`, `++`, `for ( Eng of xs )`,
+#            a second `var Eng = Foo`, a write inside a nested function (the whole declaring scope: h() too), a write
+#            AFTER the call in a loop or after a closure that calls it (byte order is not run order), a redefined
+#            `function Eng`, an undeclared global, a written bare function `leaf`. Near misses keep: no write; a
+#            write to ANOTHER binding of the name (a parameter, a function's own `let`, another file's); `o.Eng =`;
+#            `{ Eng }` as a value; `var Eng;` without an initializer; `const` and ES import bindings (a write throws);
+#            a named class expression's own name; TS rows the base already left unresolved stay so; a write whose value
+#            KEEPS the name (`Eng = require( … ).Eng` in both branches of an if, `({ Eng } = mod)`) — the declare-then-
+#            assign test idiom — while a default (`({ Eng = mod.Foo } = mod)`) does not keep it; `reply.run()` beside
+#            a written local `run` (a member call is not the bare name).
 #   (F) propagation: --callers and --impact of the in-repo decoys no longer list the false callers.
 #   (G) disclosure: every call the arms above unbind is a `C external` census row (empty targets) — except a Python bare
 #            name nothing binds and no builtin table holds (run_all's `process`, siblings.py's `helper`), which has no
@@ -89,6 +102,8 @@
 #   * dynamic receivers (`promise.then`, `map.set`, `dict.get`, a parameter called as a function) — a later lane.
 #   * Python `max = mymax; max( a, b )`: no edge before or after (the builtin veto wins over the rebinding).
 #   * JS `const f = make(); f()` and a Go method value `f := h.append; f()`: no edge before or after.
+#   * JS/TS `let m = require( 'a' ); m = require( 'b' ); new m.Eng()`: a MEMBER call through a written module binding is
+#     the member ladder's by-name reading, before and after FC3 (arm S pins the row; the rebind rule reads bare names).
 #   * rows() compares (kind, name, file) without the line: two same-named definitions in one file read as one row.
 #
 # Exits non-zero on any failure.
@@ -194,7 +209,7 @@ reaches_fn(){
 }
 
 # ── census: one per root, written FIRST so no arm reads a missing file ─────────────────────────────────────────
-ROOTS="go gonomod gomodcomment goreplace js ts tsimport py c cpp rs"
+ROOTS="go gonomod gomodcomment goreplace js ts tsimport py c cpp rs jsrebind"
 for r in $ROOTS; do
     if ! rw "$r" --pin-census="$TMP/$r.tsv" >"$TMP/$r.map.xml"; then no "($r) the census run exited non-zero"; fi
     if [ ! -s "$TMP/$r.tsv" ]; then no "($r) the census run wrote no census — every census arm for this root would be vacuous"; fi
@@ -353,6 +368,16 @@ exactly rs callees src/lib.rs:paint "fn helper src/lib.rs;method render src/hist
 exactly rs callees src/assoc.rs:build "method new src/assoc.rs;method render src/history.rs"
 exactly rs callees src/assoc.rs:count "method width src/assoc.rs"
 exactly rs callees src/ufcs.rs:draw_all "method render_all src/ufcs.rs"
+
+echo "=== (S) JS/TS rebind: a written binding names nothing (FC3) ==="
+# the exact row set: every case file whose binding is written is GONE; each near miss keeps its row (nestedP keeps h,
+# its g wrote its own `let Eng`; classexprP's m constructs its own class expression)
+exactly jsrebind callers Eng "fn h cases/nestedP.js;method m cases/classexprP.js;method run src/eng.js;modscope &lt;file-scope&gt; cases/constwriteP.js;modscope &lt;file-scope&gt; cases/esimport.js;modscope &lt;file-scope&gt; cases/keepdestrP.js;modscope &lt;file-scope&gt; cases/keepmemberP.js;modscope &lt;file-scope&gt; cases/memberroot.js;modscope &lt;file-scope&gt; cases/memberwriteP.js;modscope &lt;file-scope&gt; cases/norewriteP.js;modscope &lt;file-scope&gt; cases/otherfileP_y.js;modscope &lt;file-scope&gt; cases/paramP.js;modscope &lt;file-scope&gt; cases/redeclnoinitP.js"
+lacks jsrebind callers leaf "&lt;file-scope&gt; cases/fncall.js"
+has jsrebind callers leaf "method run src/eng.js"
+lacks jsrebind callers Foo "&lt;file-scope&gt; cases/destr.js" "&lt;file-scope&gt; cases/plainreq.js"   # undecided is not Foo either
+# a member call spelled like a written LOCAL is not that local: `let run = ''; run += ' '; reply.run( … )` keeps its row
+has jsrebind callers run "fn onSendEnd cases/memberwriteP.js"
 
 echo "=== (F) propagation: the decoys' callers and impact ==="
 exactly go callers hist/history.go:append "fn Remember hist/history.go"
