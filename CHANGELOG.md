@@ -15,6 +15,24 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Changed — by-name hedges: a free namesake needs an import, an override is a way in
+
+- A by-name hedge (`<near_sink>` `why="name"`, a `<bridge>` `via="namesake"` crossing) to a namesake with no class (a free
+  function, or a JavaScript/TypeScript method, whose class the extractor does not record) now needs the caller's file to be,
+  or to import, the namesake's file: a direct import edge, or any transitive `#include` in C, C++ and Objective-C. A namesake
+  file the search merely touched no longer counts. On the 880-pair seed-18 `--path` draw over 11 in-sample repos this
+  withholds the 2 shown by-name sites a hand-check had rejected (koa's `delegate( proto, 'response' ).method( … )` reaching
+  `request.js`'s `get method`, and a bundled Bootstrap `this.init( … )` reaching nunjucks' `Parser.init`). The one accepted
+  site, flake8's `report()`, stays. 16 rows that already showed a value or declined site keep it and now also count a by-name way in.
+- A class method namesake is now also a way in when its class derives from the class of the definition the call was bound
+  to (by name, any depth), and its file imports that class's file (any depth; for Python, an import that resolves by package
+  name in a `src/` layout counts). This is override dispatch. A parent that is an external class of the same name
+  (`class Sub(ext.Base)`, `from ext import Base`) does not count. On the same draw this shows 6 sites, and a hand-check read
+  all 6 as correct: textual's `driver.start_application_mode()` / `stop_application_mode()` → `LinuxDriver`,
+  `widget.render_line( y )` → `TextArea`, and `node.compose()` → three `App` subclasses in examples. Like every by-name hedge,
+  each is a hedge and never a proven edge. The remaining blind spot: a file that imports the parent's module for some other
+  reason, while the parent it actually names is an external class of the same name.
+
 ### Added — `--for` names the members of its shown owner rows on the compact route (`mem=`)
 
 On a conceptual `--for` answer (root `bundle="compact"`), a shown class, struct or interface/trait row now carries
