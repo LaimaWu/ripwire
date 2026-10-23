@@ -6445,9 +6445,11 @@ inline bool pythonStarMayBind( const ExternalVetoTables& v, std::uint32_t f, std
 // a qualified clause (`q.Base`) reads importBindFile first, which only a module-form import (`import a.b as q`) fills, so any such
 // import of `q` outside the chain leaves it undecided; a bare clause reads memberImportFile alone, so its import must be the member form
 // (`from m import Base`), where two modules already degrade to kNoFile.
-inline bool pythonBaseNameProven( const BaseEvidenceTables& t, const Reference& r, std::string_view name, bool qualified )
+inline bool pythonBaseNameProven( const BaseEvidenceTables& t, const Reference& r )
 {
-    std::string key;
+    const bool             qualified = !r.memberRoot.empty();   // `q.Base`: the clause starts with the qualifier, else with the bare base
+    const std::string_view name      = qualified ? std::string_view( r.memberRoot ) : std::string_view( r.calleeName );
+    std::string            key;
     const auto  it = t.extVeto.pythonScopes.nameBinds.find( fileNameKey( key, r.fileId, name ) );
     if( it == t.extVeto.pythonScopes.nameBinds.end() || r.fromSymbol == kNoNode )
     {
@@ -6484,7 +6486,7 @@ inline void pythonImportedBases( const BaseEvidenceTables& t, const Reference& r
     const std::string_view qual = r.memberRoot;   // the base's written qualifier on an inherit ref ("" bare)
     std::string            key;
     const std::string_view first = qual.empty() ? std::string_view( r.calleeName ) : qual;
-    if( t.extVeto.pythonModuleRebind.contains( fileNameKey( key, r.fileId, first ) ) || !pythonBaseNameProven( t, r, first, !qual.empty() ) )
+    if( t.extVeto.pythonModuleRebind.contains( fileNameKey( key, r.fileId, first ) ) || !pythonBaseNameProven( t, r ) )
     {
         return;
     }
