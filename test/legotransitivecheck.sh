@@ -426,6 +426,14 @@ xpfloor XpKeyBase     "XpKeyReal XpKeyOutReg"
 # fix round 5 (review rv-fc2-delta4 C1): the same two meanings when the key is also an in-tree PACKAGE name (`xp-pkg-core` is a path
 # dependency of one member and a registry crate of another): floor, no row either way
 xpfloor XpPkgBase     "XpPkgReal XpPkgOutReg"
+# fix round 6 (review rv-fc2-delta5 D1 and its class sweep: no key is in the tree by a NAME match, only by a `path =` under the root):
+# (1) a renamed key with NO `path =` (`xpnp = { package = "xp-np-core", version = "1" }`, or the entry table's own `package =` / `version =` lines) is a
+# registry crate even when its package name is an in-tree package: floor, never a listed implementor
+# (2) an inline table that does not close on its line cannot be read, so no path proves it: undecided, not in the tree
+# (3) ONE manifest that writes a key as a registry crate in [dependencies] and as a path crate in [dev-dependencies] means it two ways: floor
+xpfloor XpNpBase      "XpNpOutReg XpNpOutEntry"
+xpfloor XpMlBase      "XpMlOutReg"
+xpfloor XpTtBase      "XpTtOutReg"
 xp XpKeyBothBase "" "XpKeyBothA XpKeyBothB"
 xp XpKeyCtlBase "XpKeyCtlOut" ""
 if lego XpKeyCtlBase && iface | grep -q 'implementors_floor'; then no "XpKeyCtlBase carries a floor for a key every member declares as a registry crate: $( iface )"; else ok "XpKeyCtlBase: a key registry in every member stays decided (no floor)"; fi

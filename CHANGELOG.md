@@ -26,7 +26,7 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   included; the key and its `package =` name; a `path =` crate or a key `[patch]`/`[replace]` names is not one), also through
   an alias the file itself spells (`use serde as sd;`, `use std::io::{Write as _};` moves no other head). A head that is a
   crate of the tree keeps its row: a Cargo `[package]`/`[lib]` name from its tests/, examples/ and main.rs, a workspace crate
-  spelled with `_` for its `-` directory, a dependency key with `path =` under the indexed root or an in-tree `package =`
+  spelled with `_` for its `-` directory, a dependency key with `path =` under the indexed root (only a path puts a key in the tree)
   (`core2 = { package = "foo-core", path = "../core" }`, also a `[dependencies.core2]` table or a dotted key), a leading `::`,
   an `extern crate foo_core as fc;` or `use foo_core as fc;` the file spells. EVERY other head — an unknown crate, an alias or
   re-export this scan did not see (`pub extern crate foo_core as fc;` in lib.rs, `use fc::T` from another file), a rename only
@@ -35,7 +35,9 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   nothing outside but `std` and its siblings. A key that two members of the tree mean differently (in the tree for one, a registry
   crate for another, also when it spells a package name of the tree) and a key a `.cargo/config(.toml)` `[patch]` names — read in
   each manifest's directory and above it, within the indexed root, so a config ABOVE the indexed root is not read — are undecided
-  too; a Cargo file the run cannot read decides nothing outside. This does NOT
+  too, as is a renamed key with no `path =` (`fc = { package = "foo-core", version = "1" }`: a registry crate, or a `[patch]`'s), an
+  inline table that does not close on its line, and a key one manifest writes as a registry crate in one dependency table and as a
+  `path =` crate in another; a Cargo file the run cannot read decides nothing outside. This does NOT
   cover a C++ `ext::Base` or `using ext::Base`, a C# `using`, a Swift `import`, a PHP `use`, a JS `require` destructure or a
   Rust `impl ext::Base for S` with no `use`: those rows are still listed by name. Gate: `test/legotransitivecheck.sh` (XP).
 - `--quality-delta=A..B` extracts its per-commit archive through stdin (`tar -x -f -`), the same Windows drive-colon fix as #402 (thanks @lennix1337).

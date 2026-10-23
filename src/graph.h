@@ -6182,10 +6182,10 @@ inline bool tomlInlineSets( std::string_view value, std::string_view field, std:
 // What the dependency tables of one Cargo.toml name, keys as written (a `foo-core` is normalised to `foo_core` by the caller).
 struct TomlDeps
 {
-    std::vector<std::string> inTree;      // keys naming a crate of this tree: a `path =` under the indexed root, or an in-tree `package =`
+    std::vector<std::string> inTree;      // keys naming a crate of this tree: only a `path =` under the indexed root proves it (never a name match)
     std::vector<std::string> declared;    // every dependency key, and every `package =` name
     std::vector<std::string> pathed;      // keys with any `path =` (inside the root or not) and every [patch] / [replace] key: never a registry or git dependency
-    std::vector<std::string> registry;    // keys a manifest declares with neither: a registry or git dependency (after tomlMergeManifest: of that manifest alone)
+    std::vector<std::string> registry;    // keys a manifest declares with neither: a registry or git dependency (after tomlMergeManifest: of that table alone)
     std::vector<std::string> inherited;   // keys a manifest writes `workspace = true`: the [workspace.dependencies] entry says what they are
 };
 
@@ -6243,8 +6243,18 @@ inline void tomlNoteDependency( const TomlDepScope& scope, const TomlDepEntry& e
     {
         out.pathed.emplace_back( e.name );
     }
-    const bool inTree = e.hasPath ? tomlPathInRoot( scope.dir, e.path ) : !e.package.empty() && scope.inTree.contains( spelled );
-    ( inTree ? out.inTree : out.registry ).emplace_back( e.name );
+    if( e.hasPath )
+    {
+        ( tomlPathInRoot( scope.dir, e.path ) ? out.inTree : out.registry ).emplace_back( e.name );   // an outside path is also in `pathed`
+    }
+    else if( !e.package.empty() && scope.inTree.contains( spelled ) )
+    {
+        out.pathed.emplace_back( e.name );   // no path: Cargo takes the registry's crate of that name (or a [patch]): undecided, never in the tree
+    }
+    else
+    {
+        out.registry.emplace_back( e.name );
+    }
     if( e.workspace )
     {
         out.inherited.emplace_back( e.name );
@@ -6327,13 +6337,13 @@ inline void tomlDepLine( std::string_view line, const TomlDepCursor& cur, const 
     tomlNoteDependency( scope, tomlDepEntry( key, sub, rest, cur ), out );
     if( !cur.inEntry && sub.empty() && rest.find( '{' ) != std::string_view::npos && rest.find( '}' ) == std::string_view::npos )
     {
-        out.inTree.emplace_back( key );   // an inline table over several lines: unreadable, never a registry dependency
-        out.pathed.emplace_back( key );
+        out.pathed.emplace_back( key );   // an inline table over several lines: unreadable, no path proves it: undecided (never in the tree, never a registry crate)
     }
 }
 
-// Fold one manifest's keys into the tree's. A key THIS manifest puts in the tree, paths or inherits is no registry key of its (an entry
-// table's `version =` line reads as one beside its own `path =` line); what is left is a registry or git dependency of this manifest.
+// Fold one dependency TABLE's keys into the tree's. A key THIS table puts in the tree, paths or inherits is no registry key of its (an entry
+// table's `version =` line reads as one beside its own `path =` line); what is left is a registry or git dependency of this table. Another
+// table of the same manifest that writes the key differently is a second meaning, kept for cargoSettleNames to see.
 inline void tomlMergeManifest( TomlDeps& one, TomlDeps& all )
 {
     const auto has     = []( const std::vector<std::string>& v, const std::string& k ) { return std::ranges::find( v, k ) != v.end(); };
@@ -6351,9 +6361,10 @@ inline void tomlMergeManifest( TomlDeps& one, TomlDeps& all )
 
 // The dependency KEYS of one Cargo.toml text, sorted into TomlDeps: an entry of a `[dependencies]` / `[dev-dependencies]` /
 // `[build-dependencies]` / `[workspace.dependencies]` / `[target.*.dependencies]` table (or its own `[dependencies.key]` table, or a dotted
-// `key.path =`). A key that carries a `path =` under the root or `package = "<a package of this tree>"` names a crate of the tree in the
-// code (`core2 = { package = "foo-core", path = "../core" }` -> `use core2::T`). An inline table that does not close on its line cannot be
-// read, so its key counts as in the tree: that can only keep a row, never decide one.
+// `key.path =`). A key that carries a `path =` under the root names a crate of the tree in the code (`core2 = { package = "foo-core",
+// path = "../core" }` -> `use core2::T`); nothing else puts a key in the tree: `package = "<a package of this tree>"` with no path is a
+// registry crate (or a [patch]), so its key is undecided. An inline table that does not close on its line cannot be read: its key is
+// undecided too.
 inline void tomlDependencyKeys( std::string_view text, const TomlDepScope& scope, TomlDeps& out )
 {
     TomlDeps      one;
@@ -6366,6 +6377,8 @@ inline void tomlDependencyKeys( std::string_view text, const TomlDepScope& scope
         line.remove_prefix( std::min( line.find_first_not_of( " \t\r" ), line.size() ) );
         if( line.starts_with( '[' ) )
         {
+            tomlMergeManifest( one, out );   // a table's own keys settle among themselves only
+            one = TomlDeps();
             tomlDepHeader( line, cur, one );
         }
         else if( cur.table || cur.inEntry )
