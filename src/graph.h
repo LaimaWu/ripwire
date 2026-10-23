@@ -2542,6 +2542,19 @@ inline std::string jsImportKey( std::uint32_t fileId, std::string_view name )
     return std::to_string( fileId ) + "#" + std::string( name );
 }
 
+// FC3: is this call made through a name WRITTEN after its declaration, at a byte that declaration's scope holds? A bare
+// name (`new Eng()`) is that name itself; a member call (`Eng.make()`) holds whatever its ROOT name holds, so it is as
+// undecided as the root.
+inline bool jsCallThroughWrittenBinding( const JsImportTables& tables, const Reference& r )
+{
+    if( r.role != RefRole::Call ) { return false; }
+    const bool bare = r.recv == RecvKind::None && r.qualifier.empty() && !r.memberCall;
+    if( !bare && ( !r.memberCall || r.memberRoot.empty() ) ) { return false; }
+    const auto spans = tables.rebinds.find( jsImportKey( r.fileId, r.memberCall ? std::string_view( r.memberRoot ) : std::string_view( r.calleeName ) ) );
+    return spans != tables.rebinds.end()
+        && std::any_of( spans->second.begin(), spans->second.end(), [ & ]( const VarSpan& span ) { return r.startByte >= span.startByte && r.startByte < span.endByte; } );
+}
+
 // `utils.ts` and `utils` name the same module, so the vocabulary probe below has to compare stems.
 inline std::string_view jsModuleStem( std::string_view segment )
 {
@@ -8416,21 +8429,15 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         //             unless the import renamed the binding, in which case the local spelling is private
         //             to this file and any same-name ladder hit is a coincidence.
         bool jsImportPinned = false;
-        // FC3 (T1 class 14): a BARE name (not `o.name()`: memberCall) whose binding is WRITTEN in this scope (`Eng = Foo;
-        // new Eng()`) names neither its declaration nor a same-spelled definition — undecided, so no edge (unresolved=),
-        // like a shadowed import below.
-        if( !scipPinned && r.role == RefRole::Call && r.recv == RecvKind::None && r.qualifier.empty() && !r.memberCall
-            && !jsImports.rebinds.empty() && langFacts( r.lang ).writtenBindingUndecided )
+        // FC3 (T1 class 14): a call through a name WRITTEN in this scope (`Eng = Foo; new Eng()`) is undecided — no edge
+        // (unresolved=), like a shadowed import below (jsCallThroughWrittenBinding).
+        if( !scipPinned && !jsImports.rebinds.empty() && langFacts( r.lang ).writtenBindingUndecided && jsCallThroughWrittenBinding( jsImports, r ) )
         {
-            if( const auto spans = jsImports.rebinds.find( jsImportKey( r.fileId, r.calleeName ) ); spans != jsImports.rebinds.end()
-                && std::any_of( spans->second.begin(), spans->second.end(), [ & ]( const VarSpan& span ) { return r.startByte >= span.startByte && r.startByte < span.endByte; } ) )
-            {
-                ++g.unresolvedOut[ r.fromSymbol ];
-                disposition = CallDisposition::Unresolved;
-                continue;
-            }
+            ++g.unresolvedOut[ r.fromSymbol ];
+            disposition = CallDisposition::Unresolved;
+            continue;
         }
-        if( !scipPinned && r.role == RefRole::Call && r.recv == RecvKind::None && r.qualifier.empty()
+        if( !scipPinned && r.role == RefRole::Call && r.recv == RecvKind::None && r.qualifier.empty() && !r.memberCall   // `reply.header()` is not the imported `header`
             && ( r.lang == Lang::TypeScript || r.lang == Lang::JavaScript ) )
         {
             const std::string key = jsImportKey( r.fileId, r.calleeName );

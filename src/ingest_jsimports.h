@@ -648,31 +648,38 @@ inline TSNode jsObjectLiteralValue( TSNode object, std::string_view key, std::st
 // keeps the name (jsValueKeepsName), handed to `emit( name, keeps )`. `value` is the right-hand side, null when unknown.
 // An object pattern reads each property by its KEY: from an object literal, that property's own value; from anything
 // else, a member of that name (`({ css } = getEnv())` keeps `css`). A default (`{ x = d }`), a rest element and every
-// array-pattern slot never keep the name: which value lands there is not read here.
+// array-pattern slot never keep the name: which value lands there is not read here. Nested patterns are walked with an
+// explicit stack of frames (depth-first, in source order), never by recursion: a file nests patterns as deep as it likes.
 template <class Emit>
 inline void jsNoteRebindingWrites( TSNode target, TSNode value, std::string_view src, Emit&& emit )
 {
-    while( jsNodeIs( target, "parenthesized_expression" ) && ts_node_named_child_count( target ) == 1 ) { target = ts_node_named_child( target, 0 ); }
-    while( jsNodeIs( value, "parenthesized_expression" ) && ts_node_named_child_count( value ) == 1 ) { value = ts_node_named_child( value, 0 ); }
-    if( jsNodeIs( target, "identifier" ) )
+    struct Frame { TSNode target; TSNode value; std::uint32_t next; bool literal; };
+    std::vector<Frame> stack;
+    // one target/value pair: an identifier or a non-object pattern emits at once, an object pattern opens a frame
+    const auto enter = [ & ]( TSNode t, TSNode v )
     {
-        const std::string_view name = pattern::nodeText( target, src );
-        emit( std::string( name ), jsValueKeepsName( value, name, src ) );
-        return;
-    }
-    if( !jsNodeIs( target, "object_pattern" ) )
+        while( jsNodeIs( t, "parenthesized_expression" ) && ts_node_named_child_count( t ) == 1 ) { t = ts_node_named_child( t, 0 ); }
+        while( jsNodeIs( v, "parenthesized_expression" ) && ts_node_named_child_count( v ) == 1 ) { v = ts_node_named_child( v, 0 ); }
+        if( jsNodeIs( t, "identifier" ) )
+        {
+            const std::string_view name = pattern::nodeText( t, src );
+            emit( std::string( name ), jsValueKeepsName( v, name, src ) );
+        }
+        else if( jsNodeIs( t, "object_pattern" ) ) { stack.push_back( { t, v, 0, jsNodeIs( v, "object" ) } ); }
+        else { for( std::string& name : jsPatternNames( t, src ) ) { emit( std::move( name ), false ); } }   // array, rest, …
+    };
+    enter( target, value );
+    while( !stack.empty() )
     {
-        for( std::string& name : jsPatternNames( target, src ) ) { emit( std::move( name ), false ); }   // array, rest, …
-        return;
-    }
-    const bool literal = jsNodeIs( value, "object" );
-    for( std::uint32_t i = 0; i < ts_node_named_child_count( target ); ++i )
-    {
-        const TSNode prop = ts_node_named_child( target, i );
+        Frame& frame = stack.back();
+        if( frame.next >= ts_node_named_child_count( frame.target ) ) { stack.pop_back(); continue; }
+        const TSNode prop    = ts_node_named_child( frame.target, frame.next++ );
+        const TSNode object  = frame.value;
+        const bool   literal = frame.literal;   // copied: `enter` below may grow the stack and move `frame`
         if( jsNodeIs( prop, "shorthand_property_identifier_pattern" ) )
         {
             const std::string_view name = pattern::nodeText( prop, src );
-            emit( std::string( name ), literal ? jsValueKeepsName( jsObjectLiteralValue( value, name, src ), name, src ) : true );
+            emit( std::string( name ), literal ? jsValueKeepsName( jsObjectLiteralValue( object, name, src ), name, src ) : true );
         }
         else if( jsNodeIs( prop, "pair_pattern" ) )
         {
@@ -687,11 +694,11 @@ inline void jsNoteRebindingWrites( TSNode target, TSNode value, std::string_view
             if( jsNodeIs( sub, "identifier" ) )
             {
                 const std::string_view name = pattern::nodeText( sub, src );
-                emit( std::string( name ), literal ? jsValueKeepsName( jsObjectLiteralValue( value, keyText, src ), name, src ) : keyText == name );
+                emit( std::string( name ), literal ? jsValueKeepsName( jsObjectLiteralValue( object, keyText, src ), name, src ) : keyText == name );
             }
             else
             {
-                jsNoteRebindingWrites( sub, literal ? jsObjectLiteralValue( value, keyText, src ) : TSNode{}, src, emit );
+                enter( sub, literal ? jsObjectLiteralValue( object, keyText, src ) : TSNode{} );
             }
         }
         else
@@ -710,19 +717,21 @@ inline void jsNoteRebindingWrites( TSNode target, TSNode value, std::string_view
 // conditional writes included. A write the file declares nowhere (an implicit global, CommonJS `exports`) spans the program.
 // Writes that throw record nothing: an ES import binding, a `const`, a named function/class expression's own name.
 // A second `var x = …` / `function x` in one scope is a write too. A write whose value KEEPS the name (`equal =
-// util.equal`, `({ css } = getEnv())`: jsValueKeepsName) is no rebinding — the declare-then-assign test-file idiom
-// (`var Environment; … Environment = require( … ).Environment`) keeps its edges. Only names the file CALLS (`x()`,
+// util.equal`, `({ css } = getEnv())`: jsValueKeepsName) is no rebinding when its declaration binds NO value (`var x;`,
+// `let x;`, undeclared) — the declare-then-assign test-file idiom (`var Environment; … Environment = require( … ).Environment`)
+// keeps its edges. Over a declaration that already pinned a definition (`let { Eng } = require( 'a' )`, `class Eng`) the
+// spelling proves nothing: the new value may be another module's, so it is a write. Only names the file CALLS (`x()`,
 // `new x()`, `x.m()`) are recorded, so a loop counter's `i++` costs nothing downstream.
 inline void captureJsRebindFacts( TSNode root, Lang lang, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
 {
     if( lang != Lang::TypeScript && lang != Lang::JavaScript ) { return; }
-    struct Write { std::string name; std::uint32_t at; };
-    std::vector<Write>                  writes;    // the writes that do NOT keep the name (jsValueKeepsName)
+    struct Write { std::string name; std::uint32_t at; bool keeping = false; };
+    std::vector<Write>                  writes;    // every write; `keeping` ones (jsValueKeepsName) count only beside a declaration with no initializer
     HashMap<std::string, char>          called;
     HashMap<std::string, std::vector<Write>> hoisted;   // "<scope start>#name" → its initializing var / function declarations
     const auto noteWrites = [ & ]( TSNode target, TSNode value, std::uint32_t at )
     {
-        jsNoteRebindingWrites( target, value, src, [ & ]( std::string name, bool keeps ) { if( !keeps ) { writes.push_back( { std::move( name ), at } ); } } );
+        jsNoteRebindingWrites( target, value, src, [ & ]( std::string name, bool keeps ) { writes.push_back( { std::move( name ), at, keeps } ); } );
     };
     const auto noteHoisted = [ & ]( TSNode scope, std::string name, bool keeps, std::uint32_t at )
     {
@@ -793,12 +802,15 @@ inline void captureJsRebindFacts( TSNode root, Lang lang, std::uint32_t fileId, 
     for( const Write& w : writes ) { written.try_emplace( w.name, 1 ); }
 
     // The declarations of the written names: the node that declares, its scope, and whether a write to it throws.
-    struct Decl { std::string name; TSNode node; std::uint32_t start; std::uint32_t end; bool immutable; };
+    struct Decl { std::string name; TSNode node; std::uint32_t start; std::uint32_t end; bool immutable; bool initialized; };
     std::vector<Decl> decls;
     const auto noteDecl = [ & ]( std::string name, TSNode node, TSNode scope, bool immutable )
     {
         if( ts_node_is_null( scope ) || !written.contains( name ) ) { return; }
-        decls.push_back( { std::move( name ), node, ts_node_start_byte( scope ), ts_node_end_byte( scope ), immutable } );
+        // only `var x;` / `let x;` binds no value: a parameter, a `for` head, a class or function declaration, an import and every
+        // declarator with an initializer already pins a definition, which a write that "keeps the name" may not silently replace
+        const bool initialized = !( jsNodeIs( node, "variable_declarator" ) && ts_node_is_null( fieldChild( node, NodeField::Value ) ) );
+        decls.push_back( { std::move( name ), node, ts_node_start_byte( scope ), ts_node_end_byte( scope ), immutable, initialized } );
     };
     pending.assign( 1, root );
     while( !pending.empty() )
@@ -852,6 +864,16 @@ inline void captureJsRebindFacts( TSNode root, Lang lang, std::uint32_t fileId, 
                 || ( d.end - d.start == best->end - best->start && ts_node_start_byte( d.node ) < ts_node_start_byte( best->node ) ) ) { best = &d; }
         }
         if( best != nullptr && best->immutable ) { continue; }   // writing it throws: the declared target stands
+        if( w.keeping )
+        {
+            // `Eng = require( 'b' ).Eng` over `let Eng;` / an undeclared name is the declare-then-assign idiom: the spelling names
+            // what it named. Over a declaration that already pinned a definition (`let { Eng } = require( 'a' )`, `class Eng`)
+            // the spelling is not the proof — the new value may be another module's: a write, as any other
+            const bool pinned = best != nullptr
+                && std::any_of( decls.begin(), decls.end(), [ & ]( const Decl& d )
+                                { return d.name == w.name && d.start == best->start && d.end == best->end && d.initialized; } );
+            if( !pinned ) { continue; }
+        }
         const TSNode node = best != nullptr ? best->node : root;
         if( !recorded.try_emplace( std::to_string( ts_node_start_byte( node ) ) + "#" + w.name, 1 ).second ) { continue; }
         RawBind bind;
