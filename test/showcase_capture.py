@@ -551,7 +551,7 @@ _IN_LIMIT    = 3
 # The corpus flags are not decoration: they narrow the mined window so the GLOBAL block fits the display cut,
 # and they make next= replay real corpus/window flags, which is the fact a hand-spelled next= used to lose.
 # --exclude=skills joined them on 2026-09-14 (18 skills/ files in the window, and 17 of the ~24 bytes of
-# next= headroom); a fourth exclude costs more than the cap has left, which is why widening stops here.
+# next= headroom); a fourth exclude then cost more than the cap had left (superseded by the next paragraph).
 # --exclude=changelog.d joined them on 2026-10-23 (train 33): the per-change fragment directory holds one small file per
 # entry, 16 in the first window that carried it, and they filled the global block past the display cut at every N whose
 # src/ page could cut. next= is emitted in full since 2026-09-25, so the headroom note above no longer limits a fourth.

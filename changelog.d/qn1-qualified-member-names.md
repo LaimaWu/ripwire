@@ -11,5 +11,5 @@ every TypeScript, JavaScript, Java, C#, Swift and Kotlin `object` member, whose 
 signature `<d>` row the owner folds into `n=` and `sc=` is dropped. A `--for` answer about one function lists its callers
 the same way. `--json` keys, `<c>` callee rows, tail rows and the map are unchanged. Measured on the 163 non-sealed
 round-5 first calls (frozen grader): Rule C +12 items, −7 (rake-21, where the grader reads `Task#execute` as no match for
-`execute`), 106 answers byte-identical, net −217 B; on the 39 MF1-DEV questions +12 items, 0 lost. Gate:
+`execute`), 106 answers byte-identical, net −217 B; on the 39 MF1-DEV questions +12 items, 0 lost. Those figures are this change alone: composed with the interface-dispatch change (a call on an interface-typed receiver declines instead of listing every same-named method), `mf1-ninja-02` and `ninja-14` lose required items (outcomes unchanged). Gate:
 `test/qualnamecheck.sh`.
