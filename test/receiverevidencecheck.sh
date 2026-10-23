@@ -1693,6 +1693,85 @@ proven      rsrecv callees "src/stdqown.rs:own_new" "method get_it $QO:28"      
 proven      rsrecv callees "src/stdqown.rs:own_full_create" "method sync_all $QO:8"                                # [P]
 proven      rsrecv callees "src/stdqown.rs:own_module_now" "method elapsed_x $QO:39"                               # [P]
 proven      rsrecv callees "src/stdqown.rs:own_full_from" "method lenx $QO:34"                                     # [P]
+# fc1 (rv-l3-delta check 2 / N-c): the same class for a result written by the TYPE'S OWN NAME (`-> OsString`, a path
+# `-> crate::nsown::OsString`, `Result<OsString, ()>` / `Option<..>` + unwrap, `Box<..>`), not `Self`. A qualified member
+# call `T::f()` types its local only when T, read as a written type at the call site, reaches f's in-tree class, whatever
+# the result spelling. [N] (each proven on base dd378171): std's fully qualified, a `use`d std module, core's, std::time's,
+# an external crate's (`serde::`), an unknown root's, a re-export of std's (`crate::stdnre::OsString`), a `use` of std's
+# type, a std glob, the prelude's String. Hedged on base too (kept): UFCS `<std::ffi::OsString>::from()`, a renamed std
+# re-export, a type alias of std's, a free function std::fs::read_to_string / fs::read_to_string beside an in-tree namesake.
+NS="src/nsown.rs"
+for f in full_from full_from_q full_try full_opt full_box mod_from ext_from unknown_from re_path ufcs_from re_alias_path free_full free_mod; do
+    notproven rsrecv callees "src/stdn.rs:$f" "as_os $NS:10"                                                   # [N]
+done
+for f in core_secs std_secs; do notproven rsrecv callees "src/stdn.rs:$f" "as_dur $NS:15"; done                    # [N]
+notproven   rsrecv callees "src/stdnuse.rs:use_from" "as_os $NS:10"                                                # [N]
+notproven   rsrecv callees "src/stdnuse.rs:glob_secs" "as_dur $NS:15"                                              # [N]
+notproven   rsrecv callees "src/stdnuse.rs:prelude_with" "lenx $QO:34"                                             # [N]
+for f in re_alias ty_alias; do notproven rsrecv callees "src/stdnre.rs:$f" "as_os $NS:10"; done                    # [N]
+# [P] twins (proven on base, kept): crate::nsown::T, its path result, Result / Option + unwrap, Box, a `use`d module, a
+# `use`d type, a re-export reaching the in-tree type (`crate::nsre::OsString`, `self::OsString` inside nsre), the in-tree
+# String by its `use`, the free function by its module path. An in-tree `mod std` (nshadow.rs): a non-import path's first
+# segment is an item of the module before the extern prelude, so `std::ffi::OsStr::new()` there IS the in-tree one [P].
+for f in own_full own_q own_try own_opt own_box own_use own_free own_free_full own_reexp; do
+    proven  rsrecv callees "src/nsownuse.rs:$f" "method as_os $NS:10"                                          # [P]
+done
+proven      rsrecv callees "src/nsownuse.rs:own_mod" "method as_dur $NS:15"                                        # [P]
+proven      rsrecv callees "src/nsownuse.rs:own_prelude_twin" "method lenx $QO:34"                                 # [P]
+proven      rsrecv callees "src/nsre.rs:re_own_self" "method as_os $NS:10"                                         # [P]
+for f in shadow_bare shadow_self; do proven rsrecv callees "src/nshadow.rs:$f" "method as_sh src/nshadow.rs:7"; done   # [P]
+# [P] a T the walk cannot follow keeps the base row: the in-tree glob re-export `pub use crate::nsown::*;` (nsglob.rs) by a
+# `use`, by its path and by the file's own glob of it (nsglobstar.rs), and a bench file outside every crate's module tree
+# (`use rsrecv::nsown::OsString`). [N] there: a std root (`std::ffi::OsString::from()`) leads out of the tree from any file.
+for f in glob_reexp_own glob_reexp_path; do proven rsrecv callees "src/nsglobuse.rs:$f" "method as_os $NS:10"; done # [P]
+proven      rsrecv callees "src/nsglobstar.rs:glob_star_own" "method as_os $NS:10"                                # [P]
+proven      rsrecv callees "benches/nsb.rs:bench_own" "method as_os $NS:10"                                         # [P]
+notproven   rsrecv callees "benches/nsb.rs:bench_std" "as_os $NS:10"                                                # [N]
+# fc1 fix 1 (rv-fc1 B1-B3, N4): the walk's "cannot follow" exits no longer fire on code that provably leaves the tree.
+# B1: a glob brings a root only when its TARGET module declares or re-exports an item of that name, and only a glob at the
+# level the call sits in (a fn body, then its module): `mod tests { use super::*; }` beside and around a std call, a glob of
+# a module with no `std` / `core`, an explicit `use std::ffi::OsString` beside an in-tree glob (it shadows the glob). B2:
+# cfg-gated duplicate `use`s lead out when every one does. B3: an inline module's re-export of std's type. N4: an extern
+# crate named like an in-tree module. [N] each proven on dd378171 and 5cd18c99; [P] twins reach the in-tree type.
+for f in rvtests.rs:t_full rvtests.rs:inner rvglob.rs:g_full rvexpl.rs:expl_from rvcfg.rs:cfg_from rvinl.rs:inl_path \
+         rvinl.rs:inl_self rvinluse.rs:inl_cross rvext.rs:ext_mod rvext.rs:ext_mod_q; do
+    notproven rsrecv callees "src/$f" "as_os $NS:10"                                                           # [N]
+done
+notproven   rsrecv callees "src/rvglob.rs:g_core" "as_dur $NS:15"                                                  # [N]
+for f in rvtests.rs:t_own rvtests.rs:inner_own rvglob.rs:g_own rvgtuse.rs:gt_own rvinl.rs:inl_own rvinluse.rs:inl_cross_own \
+         rvext.rs:ext_own; do
+    proven  rsrecv callees "src/$f" "method as_os $NS:10"                                                      # [P]
+done
+for f in rvexpl.rs:expl_glob rvcfg.rs:cfg_own; do proven rsrecv callees "src/$f" "method as_dur $NS:15"; done     # [P]
+# fc1 fix 2 (rv-fc1-delta1 C1, C2): a glob CYCLE (parent `pub use self::kid::*` + kid's `use super::*`, two files globbing each
+# other, an inline mod globbing its parent) and a 7-deep acyclic glob chain end with the true answer — no module brings `std`,
+# so the std call leads out [N] (each proven before); a private `use std::ffi::OsString` a `use super::*` sees is std's [N]
+# (`#[cfg(test)] mod tests`, a plain child mod), and so is a std name at the end of a glob chain of named re-exports [N];
+# [P] twins: the in-tree path on every cycle, a parent's `use crate::nsown::OsString`, a chain ending in the in-tree re-export.
+for f in gcpar.rs:gcpar_full gcpar/kid.rs:gckid_full gcabuse.rs:gcab_full gcinl.rs:gcinl_kid_full gcinl.rs:gcinl_full gcdeep.rs:gcdeep_full \
+         gutu.rs:gutu_in gutu.rs:gutu_bare gutu.rs:gutu_top gususe.rs:gus_bare; do
+    notproven rsrecv callees "src/$f" "as_os $NS:10"                                                           # [N]
+done
+for f in gcpar.rs:gcpar_own gcpar/kid.rs:gckid_own gcabuse.rs:gcab_own gcinl.rs:gcinl_kid_own gcinl.rs:gcinl_own gcdeep.rs:gcdeep_own \
+         gutuown.rs:gutuown_top gutuown.rs:gutuown_in gutuown.rs:gutuown_bare gususeown.rs:gusown_bare; do
+    proven  rsrecv callees "src/$f" "method as_os $NS:10"                                                      # [P]
+done
+# fc1 fix 3 (rv-fc1-delta2 D1, D2): a named `use` of the name shadows the level's globs (so `use std::ffi::OsString;` beside
+# `use crate::nsown::*;` is std's name for a child's `use super::*;` and for a glob of that module) [N]; a glob chain 4 deep
+# ending in a named std re-export is cut at the path walk's depth cap, and a cut is never a proof onto the in-tree type [N]
+# (3 deep is followed out, still [N]); [P] twins: a std glob + an explicit in-tree `use`, the same chain ending in the in-tree type.
+for f in gsh.rs:gsh_in gsreuse.rs:gsre_bare gdqx4.rs:gdq4_bare gsh.rs:gsh_top gdqx3.rs:gdq3_bare gczuse.rs:gcz_bare; do
+    notproven rsrecv callees "src/$f" "as_os $NS:10"                                                           # [N]
+done
+for f in gshown.rs:gsho_top gshown.rs:gsho_in gdox4.rs:gdo4_bare; do
+    proven  rsrecv callees "src/$f" "method as_os $NS:10"                                                      # [P]
+done
+# fc1 fix 4 (rv-fc1-delta3 E1): a named re-export chain longer than the depth cap, with NO glob in between, is cut in the TOP-LEVEL
+# walk (bare `use` and a written full path), and a cut is hedged, never proven onto the in-tree namesake [N]; [P] twin: a short chain in-tree
+for f in gctn.rs:gctn_bare gctq.rs:gctq_full; do
+    notproven rsrecv callees "src/$f" "as_os $NS:10"                                                           # [N]
+done
+proven      rsrecv callees "src/gcto.rs:gcto_bare" "method as_os $NS:10"                                      # [P]
 # guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
 proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
 
