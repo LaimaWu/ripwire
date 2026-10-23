@@ -1221,14 +1221,7 @@ inline std::string grepDegradedNoteJson( const IngestResult& ing, std::span<cons
 // honest-lex: the CLI row's occ= twin — the pattern occurs N times on this one line; "" when once.
 inline std::string grepOccJson( std::uint32_t occ )
 {
-    return occ > 1 ? ",\"occ\":" + std::to_string( occ ) : std::string();
-}
-
-// honest-lex GREP-META: the CLI root's pattern_meta= twin (search.h grepPatternMeta) — this verb is literal-only.
-inline std::string grepPatternMetaJson( std::string_view pattern )
-{
-    const std::string meta = grepPatternMeta( pattern );
-    return meta.empty() ? std::string() : ",\"pattern_meta\":\"" + mcpdetail::jsonEscape( meta ) + "\"";
+    return countFieldOrEmpty( "occ", occ > 1 ? occ : 0, /*json=*/true );
 }
 
 // The root's next for this literal-only verb: the CLI grepRootNext twin. A regex-shaped pattern → the regex run first
@@ -1390,7 +1383,7 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                     // G1: mirrors the CLI <grep root="…"> — same condition (singleRootJ), same fact, right
                     // after pattern like the CLI's attribute order (mcpclidiffcheck.sh's LENS2 fact-parity).
                     + ( singleRootJ ? ( "\",\"root\":\"" + mcpdetail::jsonEscape( root ) + "\"" ) : "\"" )
-                    + grepPatternMetaJson( pattern )
+                    + textFieldOrEmpty( "pattern_meta", mcpdetail::jsonEscape( grepPatternMeta( pattern ) ), /*json=*/true )   // honest-lex
                     + ",\"files\":" + std::to_string( filesMatched )
                     + ( isPaging ? std::string{} : ( ",\"total\":" + std::to_string( collected.raw.size() ) ) )
                     + pageDisclosure( pagebuf, sizeof( pagebuf ), rowCount, collected.raw.size(), grepPage.end,

@@ -402,24 +402,14 @@ std::string grepUnindexedAttrs( const rw::GrepAuxCollection& aux )
 // honest-lex, occ= (the pattern occurs N times on this one line; absent = once).
 std::string grepRowTailAttrs( std::uint32_t lineBytes, std::uint32_t occ )
 {
-    std::string attrs;
-    if( lineBytes != 0 )
-    {
-        attrs += " line_bytes=\"" + std::to_string( lineBytes ) + "\"";
-    }
-    if( occ > 1 )
-    {
-        attrs += " occ=\"" + std::to_string( occ ) + "\"";
-    }
-    return attrs;
+    return rw::countAttrXmlOrEmpty( "line_bytes", lineBytes ) + rw::countAttrXmlOrEmpty( "occ", occ > 1 ? occ : 0 );
 }
 
 // honest-lex GREP-META: pattern_meta= on a LITERAL answer whose pattern reads as regex syntax (search.h grepPatternMeta
 // states the rule); "" on a regex answer or a plain literal.
 std::string grepMetaAttr( const rw::Config& cfg, std::string_view pat, std::vector<char>& esc )
 {
-    const std::string meta = cfg.grepRegex ? std::string() : rw::grepPatternMeta( pat );
-    return meta.empty() ? std::string() : " pattern_meta=\"" + std::string( rw::escapeXml( meta, esc ) ) + "\"";
+    return rw::textFieldOrEmpty( "pattern_meta", cfg.grepRegex ? std::string_view() : rw::escapeXml( rw::grepPatternMeta( pat ), esc ), /*json=*/false );
 }
 
 // The present-only legend clauses for honest-lex's two attributes (full legend; the compact one leans on the dict).

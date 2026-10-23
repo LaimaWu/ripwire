@@ -811,6 +811,16 @@ inline std::string countAttrXmlOrEmpty( std::string_view name, std::size_t count
 {
     return countFieldOrEmpty( name, count, /*json=*/false );
 }
+// The same absent-when-empty shape for a TEXT value the caller already escaped for its dialect: ` name="v"` or `,"name":"v"`
+// (grep's pattern_meta= and its MCP twin spell through it).
+inline std::string textFieldOrEmpty( std::string_view name, std::string_view escaped, bool json )
+{
+    if( escaped.empty() )
+    {
+        return {};
+    }
+    return json ? ",\"" + std::string( name ) + "\":\"" + std::string( escaped ) + "\"" : " " + std::string( name ) + "=\"" + std::string( escaped ) + "\"";
+}
 
 // The attribute and the key, one spelling each, absent at zero like bodyless_defs= and graph_unindexed=.
 inline std::string declinedCallsAttrXml( std::size_t declinedCalls )
