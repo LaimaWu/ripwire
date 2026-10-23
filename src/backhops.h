@@ -64,11 +64,11 @@ inline bool builtinSpelledCall( const Reference& call ) noexcept
 //       (JS/TS) or `self.f` (Python, Ruby), the language's keyword only (checklist 37: a local named `self` in JS is an ordinary
 //       name) — or a parameter or local of the calling function whose class the source states (`app: Hono<E>`, a
 //       LocalBindKind::RecvType record, unqualified, one spelling), standing for EVERY in-tree class definition of that name;
-//   (4) each such class that states f's class (a LocalBindKind::MemberType record, `router!: Router<…>`, `this.f = new Foo()`;
-//       one spelling per class, two decide nothing) states an in-tree class-like definition's name, and at least one does.
+//   (4) EVERY such class states f's class (a LocalBindKind::MemberType record, `router!: Router<…>`, `this.f = new Foo()`; one
+//       spelling per class, two decide nothing) as the name of an in-tree class-like definition.
 // What it does NOT mean: the call is not proven to reach any candidate; it is only no longer read as the builtin. A `.match` on a
 // receiver with no stated class (`path.match( re )`), on a field typed `string`, on a field one same-named class types outside
-// the tree, or on a field only a base class states (bases are not walked) stays skipped.
+// the tree or not at all, or on a field only a base class states (bases are not walked) stays skipped.
 class DeclinedCrossRule
 {
 public:
@@ -173,21 +173,14 @@ private:
                 owners.push_back( it->id );
             }
         }
-        std::size_t typed = 0;
-        for( const NodeId owner : owners )
+        return !owners.empty() && std::ranges::all_of( owners, [ & ]( NodeId owner )
         {
+            // (4) this class states one in-tree class for the field; stating none (a primitive, a base's field), two spellings, or
+            // a class the tree does not define leaves the builtin reading standing
             const auto it = std::ranges::lower_bound( m_fields, std::pair( owner, ch.path ), fieldKeyLess, [ ]( const FieldType& f ) { return std::pair( f.owner, f.field ); } );
-            if( it == m_fields.end() || it->owner != owner || it->field != ch.path )
-            {
-                continue;   // this class states nothing for the field
-            }
-            if( it->type.empty() || !std::ranges::binary_search( m_classNames, it->type, sortutil::svLess ) )
-            {
-                return false;   // (4) two spellings, or a class the tree does not define: the builtin reading stands
-            }
-            ++typed;
-        }
-        return typed > 0;
+            return it != m_fields.end() && it->owner == owner && it->field == ch.path && !it->type.empty()
+                && std::ranges::binary_search( m_classNames, it->type, sortutil::svLess );
+        } );
     }
 
     // The class the source states for parameter or local `var` of function `fn` (one unqualified spelling), "" when none or two.

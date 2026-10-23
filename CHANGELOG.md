@@ -15,6 +15,34 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
 
 ## [Unreleased]
 
+### Added — one backward hop step for `--path` and `--impact` (slot and declined callers)
+
+`--callers=X` already names, one hop per call, who MAY call X without a graph edge: a `<vr via="slot">` row's
+`called_by=` (a call through a struct field X is stored in) and a `<dc>` row (a declined call whose candidate list holds
+X). The answers that join hops now read the same rows, from one provider (`src/backhops.h`):
+
+- `--path`'s hedged `<bridge>` crosses a slot hop (`via="slot"`, `via="slot-name"` for a field-name-only join) while the
+  join names at most 16 calling functions (`slot_callers=`); a chain whose every crossing is a slot may take three
+  crossings, any other chain keeps two. On tmux, `--path=cmdq_fire_command,window_copy_cmd_cancel` now prints the
+  three-field-call chain (`cmd_entry.exec`, `window_mode.command`, the command table's `.f`); before, no chain.
+- A `reachable="0"` path answer whose search met gaps and whose `to=` has such a hop ends with `next="--callers=<to>"`
+  (CLI and MCP `path_between`) instead of the gap rows' bodies.
+- `--impact` (XML, `--json`, columnar count, MCP `impact`) adds `reaches_hedged=N` beside `reaches=`: the functions that
+  may reach the symbol through one or two calls through struct fields, with the two-hop ones listed as
+  `<ring d="2"><rh called_by= called_at= via= calls=/></ring>` (16 shown, `next=` the rest). Never counted in
+  `reaches=`, `by_depth=` or the radius counts.
+
+Every crossing stays a hedge: `proven="0"`, `via=` named, its width beside it, and never in `reachable=`/`hops=`/`reaches=`.
+
+### Fixed — a declined call on a typed in-tree receiver is no longer read as the builtin method its name spells
+
+The bridge and the `<near_sink>` frontier skipped every declined call spelled like a builtin type's method, so hono's
+`this.router.match( method, path )` (`router!: Router`, an in-tree interface with eight implementations) was dropped as
+`String.prototype.match`. The skip now lifts for one field of `this`/`self` or of a parameter whose class the source
+states, when every same-named class types that field as an in-tree class and the call's candidate list is complete (2
+to 16). A `.match` on a string parameter, an un-annotated local, a field typed `string`, or a field another same-named
+class types outside the tree stays skipped.
+
 ### Security — the pattern screen refuses overlapping alternation, one group deeper
 
 A pattern whose group carries a top-level `|` under an unbounded outer quantifier could backtrack catastrophically
