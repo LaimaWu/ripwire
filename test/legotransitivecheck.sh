@@ -423,6 +423,9 @@ xp XpWsInhBase "XpWsInhOutAlias" "XpWsInhReal XpWsInhTarget"
 xpfloor XpCfgBase     "XpCfgOutSerde"
 xpfloor XpCfgTwoBase  ""
 xpfloor XpKeyBase     "XpKeyReal XpKeyOutReg"
+# fix round 5 (review rv-fc2-delta4 C1): the same two meanings when the key is also an in-tree PACKAGE name (`xp-pkg-core` is a path
+# dependency of one member and a registry crate of another): floor, no row either way
+xpfloor XpPkgBase     "XpPkgReal XpPkgOutReg"
 xp XpKeyBothBase "" "XpKeyBothA XpKeyBothB"
 xp XpKeyCtlBase "XpKeyCtlOut" ""
 if lego XpKeyCtlBase && iface | grep -q 'implementors_floor'; then no "XpKeyCtlBase carries a floor for a key every member declares as a registry crate: $( iface )"; else ok "XpKeyCtlBase: a key registry in every member stays decided (no floor)"; fi
