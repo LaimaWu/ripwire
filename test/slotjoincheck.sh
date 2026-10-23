@@ -166,6 +166,19 @@ for v in entry wme m o v p; do
     hasnt "J1 --external-surface lists no slot-call receiver as an external name ($v)" "$o" "<x n=\"$v\" "
 done
 
+echo "-- section L (CR pre-pass 32b): the <vs> window's continuation and the JSON twin's target names"
+o="$( run --callees=big_fire )"
+has   "L1 18 stores, a window of 16: the row discloses the cut" "$o" 'targets="18" shown="16" next="--regex='
+has   "L2 next= is a regex over ANY spacing and a field assignment, never the literal .f =" "$o" 'next="--regex=&apos;(\.|-&gt;)bigcb\s*=[^=]&apos;"'
+n="$( cd "$FIX" && "$BIN" "$FIX" --regex='(\.|->)bigcb\s*=[^=]' --no-cache 2>/dev/null | grep -o 'hits="[0-9]*"' | head -1 )"
+if [ "$n" = 'hits="18"' ]; then ok "L3 replaying that regex finds all 18 stores (aligned and unspaced too)"; else no "L3 the replayed regex found ${n:-nothing}, not hits=\"18\""; fi
+n="$( cd "$FIX" && "$BIN" "$FIX" --grep='.bigcb =' --no-cache 2>/dev/null | grep -o 'hits="[0-9]*"' | head -1 )"
+if [ -n "$n" ] && [ "$n" != 'hits="18"' ]; then ok "L4 the old literal .bigcb = misses stores ($n), so L3 discriminates"; else no "L4 the old literal found ${n:-nothing}: the fixture no longer shows the miss"; fi
+o="$( run --callees=ns_dispatch )"
+has   "L5 a namespaced target is Scope.name in the XML" "$o" '<t n="nsx.nsgo" p="ns.cpp:5"/>'
+o="$( run --callees=ns_dispatch --json )"
+has   "L6 and the same in the JSON twin" "$o" '"t":[{"n":"nsx.nsgo","p":"ns.cpp:5"}]'
+
 echo "-- well-formed XML where the clauses ride"
 if command -v xmllint >/dev/null 2>&1; then
     for q in --callers=cmd_alpha_exec --callees=fire_command; do

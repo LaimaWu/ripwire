@@ -241,6 +241,9 @@ inline std::string valueRefsDepthKeyJson( const IngestResult& ing, const ValueRe
          + jsonStr( vrPath( ing, r.fileId, rr ) + ":" + std::to_string( r.line ) ) + "\"";
 }
 
+// A dispatch target's n=: Scope.name for a member / namespaced function, the bare name otherwise. ONE spelling for the XML <t n=>
+// and its --json twin (a same-named function in two namespaces stays two targets in both).
+inline std::string vrTargetName( const Symbol& t ) { return t.scope.empty() ? t.name : t.scope + "." + t.name; }
 // The candidate window the callees-side dispatch rows share (IX-3 <pd>, IX-1 <vs>): ` COUNT="N" shown="M"[ next="…"]>` (next=
 // only when cut) and the first `cap` targets as <t n= p=> (a member's n= is Scope.name).
 inline std::string vrTargetWindowXml( const IngestResult& ing, std::span<const NodeId> targets, std::size_t cap, std::string_view countName,
@@ -256,7 +259,7 @@ inline std::string vrTargetWindowXml( const IngestResult& ing, std::span<const N
     for( const NodeId id : targets.first( shown ) )
     {
         const Symbol& t = ing.symbols[id];
-        out += "<t n=\"" + std::string( escapeXml( t.scope.empty() ? t.name : t.scope + "." + t.name, esc ) ) + "\" p=\""
+        out += "<t n=\"" + std::string( escapeXml( vrTargetName( t ), esc ) ) + "\" p=\""
              + std::string( escapeXml( vrPath( ing, t.fileId, rr ), esc ) ) + ":" + std::to_string( t.line ) + "\"/>";
     }
     return out;
@@ -265,16 +268,17 @@ inline std::string vrTargetWindowXml( const IngestResult& ing, std::span<const N
 // ── IX-1 slot-type join: the callees side ───────────────────────────────────────────────────────────────
 // One <vs> per call through a struct field in the answered body: l= its line, through= the written callee, slot= the
 // resolved Type.field, via=, targets= the distinct functions that slot may hold, the first kSlotTargetCap as <t n= p=>,
-// next= when cut (a designated store is found by the literal `.f =`; a positional one by --uses on the first unshown).
+// next= when cut (a designated store is found by the regex `(.|->)f\s*=[^=]`; a positional one by --uses on the first unshown).
 inline constexpr std::size_t kSlotTargetCap = 16;
-// The <vs> continuation when its window is cut (checklist 34: through nextFlag): a designated store is found by the literal
-// `.f =`; otherwise --uses on the first function the window does not show.
+// The <vs> continuation when its window is cut (checklist 34: through nextFlag): a designated store is found by the regex
+// `(.|->)f\s*=[^=]` (any spacing, a field assignment too); otherwise --uses on the first function the window does not show.
 inline std::string slotSiteNext( const IngestResult& ing, const SlotSiteRow& site )
 {
     const std::size_t shown = std::min( site.targets.size(), kSlotTargetCap );
     if( site.anyDesignated )
     {
-        return nextFlag( "--grep=", "." + site.slot.substr( site.slot.rfind( '.' ) + 1 ) + " =" );
+        // a regex, not the literal `.f =`: an aligned (`.f    = fn`) or unspaced (`.f=fn`) store is a store too, and `x->f = fn` another
+        return nextFlag( "--regex=", "(\\.|->)" + site.slot.substr( site.slot.rfind( '.' ) + 1 ) + "\\s*=[^=]" );
     }
     return shown < site.targets.size() ? nextFlag( "--uses=", ing.symbols[ site.targets[shown] ].name ) : std::string();
 }
@@ -315,7 +319,7 @@ inline std::string slotCalleesJson( const IngestResult& ing, std::span<const Slo
         for( std::size_t k = 0; k < shown; ++k )
         {
             const Symbol& t = ing.symbols[ site.targets[k] ];
-            out += ( k == 0 ? "{\"n\":\"" : ",{\"n\":\"" ) + jsonStr( t.name ) + "\",\"p\":\"" + jsonStr( vrPath( ing, t.fileId, rr ) + ":" + std::to_string( t.line ) ) + "\"}";
+            out += ( k == 0 ? "{\"n\":\"" : ",{\"n\":\"" ) + jsonStr( vrTargetName( t ) ) + "\",\"p\":\"" + jsonStr( vrPath( ing, t.fileId, rr ) + ":" + std::to_string( t.line ) ) + "\"}";
         }
         out += "]}";
     }
