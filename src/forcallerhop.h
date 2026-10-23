@@ -29,6 +29,7 @@
 #include "callhierarchy.h"   // oneHopCallerRows — the callers verb's rows; rowCallSites / callSitesAttrXml via editcheck.h
 #include "defattrib.h"       // attributeOneHopAnswer — via="name" on a row, as the callers verb decides it
 #include "graph.h"           // viaNameAttr
+#include "memberowner.h"     // MemberOwners / qualifiedMemberName — n= as the callers verb prints it (QUALNAME-1, train 33)
 #include "model.h"
 #include "nextverb.h"        // nextFlag / nextAttrXml
 #include "receiverevidence.h"   // ReceiverEvidence::callableKind — the one function-or-method test
@@ -141,11 +142,11 @@ inline std::vector<NodeId> forCallerHopTargets( const IngestResult& ing, const G
 // inside an XML comment.
 inline constexpr std::string_view kForCallerHopLegend =
     "; callers of=: the route named one function, so its callers follow its definition: s t= n= sc= p=file:line rows are its "
-    "1-hop callers (sites_at= their calls of it as file:line, sites_total= when that list was cut; via=name: matched by name "
+    "1-hop callers (n=Owner.name with no sc= on a member whose owner the index defines, as the callers verb prints it; sites_at= their calls of it as file:line, sites_total= when that list was cut; via=name: matched by name "
     "alone, the receiver unproven), shown= of total=; then d=2 rows, callers of the shown callers by rank, d2_shown= of d2=; "
     "capped=1 when either hop was cut; counts are floors (resolved calls only); next= lists the whole caller radius";
 inline constexpr std::string_view kForCompactCallerHopLegend =
-    "; callers of=: the one function's 1-hop callers, s t= n= sc= p=file:line (sites_at= its call sites, sites_total= if cut; "
+    "; callers of=: the one function's 1-hop callers, s t= n= sc= p=file:line (n=Owner.name folds sc= on a member; sites_at= its call sites, sites_total= if cut; "
     "via=name by name only), shown= of total=; d=2 rows: their callers, d2_shown= of d2=; capped=1 if cut; floors; next= the radius";
 
 struct CallerHopRender
@@ -157,11 +158,14 @@ struct CallerHopRender
 struct CallerHopRowCtx
 {
     const IngestResult& ing;
+    const MemberOwners& owners;   // QUALNAME-1: one owner pass per answer, the rule --callers prints n= by
     std::string_view    rootArg;
     std::vector<char>&  esc;
 };
 
-// One <s> row: kind, name, scope (when it has one), the root-relative definition site, then the row's extra attributes.
+// One <s> row: kind, name, scope (when it has one), the root-relative definition site, then the row's extra attributes. A member
+// whose owner the index defines prints n="Owner<sep>name" exactly as the callers verb does and folds sc= into it (serialize.h
+// sigRowHead's rule); every other scoped row keeps n= bare and sc=.
 inline void appendCallerHopRow( std::string& x, const CallerHopRowCtx& c, NodeId id, std::string_view extra )
 {
     const IngestResult&    ing = c.ing;
@@ -170,9 +174,10 @@ inline void appendCallerHopRow( std::string& x, const CallerHopRowCtx& c, NodeId
     const std::string_view rp  = c.rootArg.empty() ? std::string_view( ing.files[ s.fileId ] ) : sarif::rootRelativeUri( ing.files[ s.fileId ], c.rootArg );
     x += "<s t=\"";
     x += symTag( s.kind );
+    const std::string_view owner = c.owners.ownerOf( s );
     x += "\" n=\"";
-    x += escapeXml( s.name, esc );
-    if( !s.scope.empty() )
+    x += escapeXml( qualifiedMemberName( owner, s ), esc );
+    if( owner.empty() && !s.scope.empty() )
     {
         x += "\" sc=\"";
         x += escapeXml( s.scope, esc );
@@ -236,7 +241,8 @@ inline CallerHopRender renderForCallerHop( const IngestResult& ing, const Graph&
     const Symbol&     t   = ing.symbols[ targets.front() ];
     const std::string sel = t.scope.empty() ? t.name : t.scope + "::" + t.name;   // the callers verb's own qualified selector
     std::vector<char>     esc;
-    const CallerHopRowCtx rc{ ing, rootArg, esc };
+    const MemberOwners    owners( ing );
+    const CallerHopRowCtx rc{ ing, owners, rootArg, esc };
     std::string&          x = out.xml;
     x.reserve( 160 + ( firstShown + secondShown ) * 112 );
     x += "<callers of=\"";

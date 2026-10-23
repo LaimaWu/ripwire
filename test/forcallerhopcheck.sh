@@ -26,6 +26,8 @@
 #   F1 [P] fix round 1 (rv-mf1-nx B1/B2): no block on a C++ overload set, a method overload set, two same-named statics, a function
 #          beside a same-named struct; [G] a declared-and-defined function (recall control) keeps its block, total= = --callers
 #   B3 [P] a d="2" row carries via="name" when its own callers row does (Python driver(c): c.submit(None))
+#   Q1 [P] train 33 (MF1-NX x QUALNAME-1): every first-hop row's n= and p= equal the callers verb's own row; a member caller
+#          folds its owner into n= (n="Client.submit", no sc=)
 #   X1 [G] determinism  X2 [G] xmllint well-formed  X3 [G] no "--" inside a legend comment
 #
 # Usage:  bash test/forcallerhopcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/forcallerhopcheck.sh
@@ -209,7 +211,37 @@ H3b="$( hop "$TMP/b3" )"
 printf '%s' "$H3b" | grep -q '<s t="fn" n="driver" p="m.py:11" d="2" via="name"/>'; verdict $? "(B3a) the d=2 row driver carries via=\"name\" (c.submit(None): receiver unproven)" "(B3a) the d=2 driver row has no via=name: [$H3b]"
 run "test/forcallerhopfix/d2via" --callers=Client::submit >"$TMP/b3c"
 grep -q 'n="driver"[^>]*via="name"' "$TMP/b3c"; verdict $? "(B3b) the callers verb's own row for that edge is via=\"name\" (the hop says what the verb says)" "(B3b) --callers=Client::submit does not hedge driver — the premise moved"
-printf '%s' "$H3b" | grep -q 'n="submit"[^>]*via=' ; [ $? -ne 0 ]; verdict $? "(B3c) the proven first-hop row (Client.submit -> post_entry, typed receiver) has no via=" "(B3c) the first-hop row Client.submit carries a hedge: [$H3b]"
+# train 33 (QUALNAME-1): the first-hop row prints n="Client.submit" (owner folded, no sc=), so the negative reads THAT row and first
+# proves it is there — a bare n="submit" no longer exists to be absent (a respelled row disarms a `! grep` silently)
+if printf '%s' "$H3b" | grep -q '<s t="fn" n="Client.submit" p="m.py:7"'; then
+    printf '%s' "$H3b" | grep -q 'n="Client.submit"[^>]*via=' ; [ $? -ne 0 ]; verdict $? "(B3c) the proven first-hop row (Client.submit -> post_entry, typed receiver) has no via=" "(B3c) the first-hop row Client.submit carries a hedge: [$H3b]"
+else
+    no "(B3c-pre) the first-hop row n=\"Client.submit\" p=\"m.py:7\" is missing — the negative would pass vacuously: [$H3b]"
+fi
+
+# ── Q1 (train 33, MF1-NX x QUALNAME-1): a hop row names a caller exactly as the callers verb does ───────────────────────────────
+# Every first-hop <s> of the block has the identical n= and p= in `--callers=<of=>`'s own rows, and a member whose owner the index
+# defines folds sc= into n= (serialize.h sigRowHead's rule). [P] on the composed head before forcallerhop.h used qualifiedMemberName.
+parity(){ python3 - "$1" "$2" <<'PY'
+import re, sys
+hop = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+cal = open(sys.argv[2], encoding="utf-8", errors="replace").read()
+m = re.search(r'<callers of="[^"]*"[^>]*>(.*?)</callers>', hop, re.S)
+if not m: print("no hop block"); sys.exit(1)
+first = [r for r in re.findall(r'<s [^>]*/>', m.group(1)) if ' d="2"' not in r]
+key = lambda r: ( re.search(r' n="([^"]*)"', r).group(1), re.search(r' p="([^"]*)"', r).group(1) )
+verb = { key(r) for r in re.findall(r'<s [^>]*/>', cal) if ' n="' in r and ' p="' in r }
+miss = [key(r) for r in first if key(r) not in verb]
+if not first or miss: print("rows=%d missing=%s" % (len(first), miss)); sys.exit(1)
+PY
+}
+for q in "b3:test/forcallerhopfix/d2via:Ledger::post_entry" "p1:$FC:start_server" "p3:$FX:Canvas::Repaint"; do
+    f="${q%%:*}"; rest="${q#*:}"; dir="${rest%%:*}"; of="${rest#*:}"
+    grep -q "<callers of=\"$of\"" "$TMP/$f" || { no "(Q1-pre) $f: the hop block is not of=\"$of\" — re-author the arm"; continue; }
+    run "$dir" --callers="$of" >"$TMP/q1.$f"
+    out="$( parity "$TMP/$f" "$TMP/q1.$f" )"; verdict $? "(Q1) $f: every first-hop row's n= and p= equal --callers=$of's own row" "(Q1) $f: a hop row differs from --callers=$of: $out"
+done
+printf '%s' "$H3b" | grep -q '<s t="fn" n="Client.submit" p="m.py:7" sites_at="m.py:8"/>'; verdict $? "(Q1b) a member caller folds its owner into n= and prints no sc=" "(Q1b) the Client.submit hop row is not n=\"Client.submit\" without sc=: [$H3b]"
 
 # ── X ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 python3 - "$TMP/p1" "$TMP/p4f" <<'PY'
