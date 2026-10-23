@@ -1896,8 +1896,12 @@ inline bool isDeclMarkerWord( std::string_view w ) noexcept
 // An export or attribute macro between `class` and its name (`class RW_API Foo`): ALL-CAPS, digits and '_'.
 inline bool isAllCapsMacro( std::string_view w ) noexcept
 {
-    return w.size() >= 2 && std::ranges::all_of( w, []( char c ) { return std::isupper( (unsigned char)c ) || std::isdigit( (unsigned char)c ) || c == '_'; } )
-        && std::ranges::any_of( w, []( char c ) { return std::isupper( (unsigned char)c ); } );
+    // static_cast, one per line: --lint's c-style-cast count collapses two casts on one line into one visible row
+    // (dedupeLintFindings), which lintbudgetcheck then reads as a disagreement with --match's raw capture count.
+    const auto upper = []( char c ) { return std::isupper( static_cast<unsigned char>( c ) ) != 0; };
+    const auto digit = []( char c ) { return std::isdigit( static_cast<unsigned char>( c ) ) != 0; };
+    return w.size() >= 2 && std::ranges::all_of( w, [ & ]( char c ) { return upper( c ) || digit( c ) || c == '_'; } )
+        && std::ranges::any_of( w, upper );
 }
 
 // The index of the bracket that closes the group opening at `open` (`<…>`), or npos when it does not close on this line.

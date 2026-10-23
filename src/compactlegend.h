@@ -723,6 +723,11 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // --naming-consistency's absent-at-zero count (countAttrXmlOrEmpty, so (S) requires its row HERE): the JSX components
     // kept out of the vote (namingconsistency.h isJsxComponentName). Key-qualified: no other verb spells it.
     { "component_exempt", "component_exempt=N: PascalCase .tsx/.jsx functions (read as JSX components by extension alone), kept out of voting and flagging", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
+    // grep's per-hit tail, spelled through countAttrXmlOrEmpty (verbs_grep.h grepRowTailAttrs). Arm (S) of test/compactlegendcheck.sh
+    // reads every such name from SOURCE and demands a row in THIS table, so these two moved here from kCompactAttributeReadings
+    // (moved, not copied: the joint reading space would print a name twice). Still <hit>-qualified and grep-only.
+    { "line_bytes", "line_bytes=N: whole line N bytes; text is a cut prefix", true, "hit", MapHeaderRead::No, {}, "grep" },
+    { "occ", "occ=N: the pattern occurs N times on this one line; a hit is a line, hits= counts lines; absent = once", true, "hit", MapHeaderRead::No, {}, "grep" },
 
 };
 
@@ -957,8 +962,6 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "string_hits", "string_hits=N: of hits=, string-tier; rows: files named like the pattern, source, then the rest", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "ref", "hit ref=: first code site (not a comment/string) naming the hit's callerless enclosing def (where it is registered; one site)", true, "hit", MapHeaderRead::No, {}, "grep" },
     { "tier_budget", "tier_budget=: files|bytes cap hit after tier_parsed= of tier_files= hit files; tier counts floors, every row served", false, "grep", MapHeaderRead::No, {}, "grep" },
-    { "line_bytes", "line_bytes=N: whole line N bytes; text is a cut prefix", true, "hit", MapHeaderRead::No, {}, "grep" },
-    { "occ", "occ=N: the pattern occurs N times on this one line; a hit is a line, hits= counts lines; absent = once", true, "hit", MapHeaderRead::No, {}, "grep" },
     { "pattern_meta", "pattern_meta=: regex-shaped pieces of this LITERAL pattern, matched as text; next= is then the regex verb on it", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "unindexed_files_scanned", "unindexed_files_scanned=N: off-index text files also scanned; outside complete=", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "unindexed_hits", "unindexed_hits=N: hits in off-index files, NOT in hits=/total=; listed in the trailing unindexed element", false, "grep", MapHeaderRead::No, {}, "grep" },
