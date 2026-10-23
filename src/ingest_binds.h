@@ -3328,9 +3328,9 @@ inline TSNode pythonPatternTarget( TSNode n, const char* t )
 
 // the name a match pattern or `type` statement binds, as a VarDecl at the statement (veto evidence like capturePythonRebindShadowDecls'),
 // or at byte 0 when the enclosing function declares it global/nonlocal
-inline void capturePythonPatternDecls( TSNode n, const char* t, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawBind>& binds )
+inline void capturePythonPatternDecls( TSNode n, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawBind>& binds )
 {
-    const TSNode id = pythonPatternTarget( n, t );
+    const TSNode id = pythonPatternTarget( n, ts_node_type( n ) );
     if( ts_node_is_null( id ) )
     {
         return;
@@ -3472,7 +3472,7 @@ inline void captureShadowScopeDecls( TSNode n, const char* t, std::uint32_t file
             capturePythonParamShadowDecls( n, fileId, lang, src, binds );   // Phase 4b: veto evidence only (empty span)
         }
         capturePythonRebindShadowDecls( n, t, fileId, lang, src, binds );   // issue #287 round 2: rebind veto evidence
-        capturePythonPatternDecls( n, t, fileId, lang, src, binds );        // ind4b fix 4: match captures and `type` statements
+        capturePythonPatternDecls( n, fileId, lang, src, binds );        // ind4b fix 4: match captures and `type` statements
         return;
     }
     if( lang != Lang::Cpp && lang != Lang::ObjC )
