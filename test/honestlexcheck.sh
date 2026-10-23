@@ -24,7 +24,7 @@ ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
@@ -101,7 +101,7 @@ print(m[0] if m else "MISSING")' "$1" "$2"; }
 arm() {   # arm LABEL SYM FILE LINE WANT
     local out k; out="$( wh --exclude=hlxfix/ --whereis="$2" )"
     k="$( printf '%s' "$out" | kind_at "$3" "$4" )"
-    [ "$k" = "$5" ] && ok "$1 ($2 at $3:$4 kind=$k)" || no "$1 ($2 at $3:$4: kind=$k, want $5)"
+    if [ "$k" = "$5" ]; then ok "$1 ($2 at $3:$4 kind=$k)"; else no "$1 ($2 at $3:$4: kind=$k, want $5)"; fi
 }
 
 echo "── (A) lexical definition shape (head_labels=lexical forced) ──"
@@ -144,17 +144,17 @@ arm "A34 an ObjC method '- (ret) NAME' is a definition"           hlxObjc hlxfix
 
 echo "── (A) head_defs ──"
 o="$( wh --whereis=hlxComment )"
-printf '%s' "$o" | grep -q 'head_labels="lexical" head_defs="0"' && ok "H1 no index def of the name → head_labels=lexical head_defs=0" \
-    || no "H1 head_defs=0 missing: $( printf '%s' "$o" | grep -o '<whereis [^>]*>' )"
+if printf '%s' "$o" | grep -q 'head_labels="lexical" head_defs="0"'; then ok "H1 no index def of the name → head_labels=lexical head_defs=0"
+else no "H1 head_defs=0 missing: $( printf '%s' "$o" | grep -o '<whereis [^>]*>' )"; fi
 o="$( wh --whereis=hlx_indexed )"
 if printf '%s' "$o" | grep -q 'head_labels="index"' && ! printf '%s' "$o" | grep -q 'head_defs='; then
     ok "H2 an indexed def → head_labels=index, no head_defs"
 else no "H2 indexed name: $( printf '%s' "$o" | grep -o '<whereis [^>]*>' )"; fi
-[ "$( printf '%s' "$o" | kind_at keep.c 3 )" = ref ] && ok "H3 the index labels a comment mention of an indexed name ref" || no "H3 keep.c:3 not ref"
+if [ "$( printf '%s' "$o" | kind_at keep.c 3 )" = ref ]; then ok "H3 the index labels a comment mention of an indexed name ref"; else no "H3 keep.c:3 not ref"; fi
 o="$( wh --whereis=hlxComment )"
-printf '%s' "$o" | grep -q 'head_defs=0: ' && ok "H4 the default (compact) legend defines head_defs" || no "H4 head_defs undefined in the legend"
+if printf '%s' "$o" | grep -q 'head_defs=0: '; then ok "H4 the default (compact) legend defines head_defs"; else no "H4 head_defs undefined in the legend"; fi
 o="$( wh --whereis=hlxComment --legend=full )"
-printf '%s' "$o" | grep -q 'head_defs="0" beside it' && ok "H5 the full legend defines head_defs" || no "H5 head_defs undefined in the full legend"
+if printf '%s' "$o" | grep -q 'head_defs="0" beside it'; then ok "H5 the full legend defines head_defs"; else no "H5 head_defs undefined in the full legend"; fi
 
 echo "── (B) grep: regex-shaped literals ──"
 cat > "$R/b.c" <<'EOF'
@@ -166,58 +166,62 @@ printf 'hlxq hlxq\n' > "$R/q.scm"
 g() { ( cd "$R" && "$BIN" "$R" --no-cache "$@" 2>/dev/null ); }
 root() { grep -o '<grep [^>]*>' | head -1; }
 o="$( g --grep='hlxa|hlxb' | root )"
-printf '%s' "$o" | grep -q 'pattern_meta="|"' && ok "B1 a|b literal → pattern_meta=|" || no "B1 $o"
-printf '%s' "$o" | grep -q "next=\"--regex=&apos;hlxa|hlxb&apos;\"" && ok "B2 its next= is the regex verb on the pattern" || no "B2 $o"
+if printf '%s' "$o" | grep -q 'pattern_meta="|"'; then ok "B1 a|b literal → pattern_meta=|"; else no "B1 $o"; fi
+if printf '%s' "$o" | grep -q "next=\"--regex=&apos;hlxa|hlxb&apos;\""; then ok "B2 its next= is the regex verb on the pattern"; else no "B2 $o"; fi
 o="$( g --regex='hlxa|hlxb' | root )"
-printf '%s' "$o" | grep -q 'pattern_meta=' && no "B3 a regex answer carries pattern_meta: $o" || ok "B3 a --regex answer carries no pattern_meta"
-printf '%s' "$o" | grep -q 'hits="2"' && ok "B4 the named regex finds the two lines" || no "B4 $o"
+if printf '%s' "$o" | grep -q 'pattern_meta='; then no "B3 a regex answer carries pattern_meta: $o"; else ok "B3 a --regex answer carries no pattern_meta"; fi
+if printf '%s' "$o" | grep -q 'hits="2"'; then ok "B4 the named regex finds the two lines"; else no "B4 $o"; fi
 o="$( g --grep='hlxa.c' | root )"
-printf '%s' "$o" | grep -q 'pattern_meta=' && no "B5 a lone literal dot is meta: $o" || ok "B5 a lone '.' (hlxa.c) is a literal: no pattern_meta"
-printf '%s' "$o" | grep -q 'next="--at=' && ok "B6 …and keeps the --at next=" || no "B6 $o"
+if printf '%s' "$o" | grep -q 'pattern_meta='; then no "B5 a lone literal dot is meta: $o"; else ok "B5 a lone '.' (hlxa.c) is a literal: no pattern_meta"; fi
+if printf '%s' "$o" | grep -q 'next="--at='; then ok "B6 …and keeps the --at next="; else no "B6 $o"; fi
 o="$( g --grep='hlxa\.c' | root )"
-printf '%s' "$o" | grep -q 'pattern_meta="\\"' && ok "B7 a backslash escape → pattern_meta=\\" || no "B7 $o"
+if printf '%s' "$o" | grep -q 'pattern_meta="\\"'; then ok "B7 a backslash escape → pattern_meta=\\"; else no "B7 $o"; fi
 o="$( g --grep='||' | root )"
-printf '%s' "$o" | grep -q 'pattern_meta=' && no "B8 '||' read as alternation: $o" || ok "B8 '||' (an operator) is no alternation"
+if printf '%s' "$o" | grep -q 'pattern_meta='; then no "B8 '||' read as alternation: $o"; else ok "B8 '||' (an operator) is no alternation"; fi
 o="$( g --grep='java.util.*' | root )"
-printf '%s' "$o" | grep -q 'pattern_meta=' && no "B9 a trailing .* read as meta: $o" || ok "B9 a trailing .* (java.util.*) stays literal"
+if printf '%s' "$o" | grep -q 'pattern_meta='; then no "B9 a trailing .* read as meta: $o"; else ok "B9 a trailing .* (java.util.*) stays literal"; fi
 o="$( g --grep='hlxa.*hlxa' | root )"
-printf '%s' "$o" | grep -q 'pattern_meta=".*"' && ok "B10 .* inside the pattern → pattern_meta=.*" || no "B10 $o"
+if printf '%s' "$o" | grep -q 'pattern_meta=".*"'; then ok "B10 .* inside the pattern → pattern_meta=.*"; else no "B10 $o"; fi
 o="$( g --grep='hlxa\|hlxb' | root )"
-printf '%s' "$o" | grep -q "next=\"--regex=&apos;hlxa|hlxb&apos;\"" && ok "B11 basic-grep a\\|b → next= the ERE a|b" || no "B11 $o"
+if printf '%s' "$o" | grep -q "next=\"--regex=&apos;hlxa|hlxb&apos;\""; then ok "B11 basic-grep a\\|b → next= the ERE a|b"; else no "B11 $o"; fi
 o="$( g --grep='[^h]lxa' | root )"
-printf '%s' "$o" | grep -q 'pattern_meta="\[\]"' && ok "B12 a [^…] class → pattern_meta=[]" || no "B12 $o"
+if printf '%s' "$o" | grep -q 'pattern_meta="\[\]"'; then ok "B12 a [^…] class → pattern_meta=[]"; else no "B12 $o"; fi
 o="$( g --grep='a[0]' | root )"
-printf '%s' "$o" | grep -q 'pattern_meta=' && no "B13 an index a[0] read as a class: $o" || ok "B13 a[0] (an index) is no bracket class"
+if printf '%s' "$o" | grep -q 'pattern_meta='; then no "B13 an index a[0] read as a class: $o"; else ok "B13 a[0] (an index) is no bracket class"; fi
 o="$( g --grep='^hlxb' | root )"
-printf '%s' "$o" | grep -q 'pattern_meta="^\$"' && ok "B14 a leading ^ → pattern_meta=^\$" || no "B14 $o"
+if printf '%s' "$o" | grep -q 'pattern_meta="^\$"'; then ok "B14 a leading ^ → pattern_meta=^\$"; else no "B14 $o"; fi
 o="$( g --grep='hlxa|hlxb' --legend=full )"
-printf '%s' "$o" | grep -q 'pattern_meta= (present only' && ok "B15 the full legend defines pattern_meta= when it rides" || no "B15 legend clause missing"
+if printf '%s' "$o" | grep -q 'pattern_meta= (present only'; then ok "B15 the full legend defines pattern_meta= when it rides"; else no "B15 legend clause missing"; fi
 o="$( g --grep='hlxa' --legend=full )"
-printf '%s' "$o" | grep -q 'pattern_meta= (present only' && no "B16 the pattern_meta clause rides without the attribute" || ok "B16 the clause is present-only"
+if printf '%s' "$o" | grep -q 'pattern_meta= (present only'; then no "B16 the pattern_meta clause rides without the attribute"; else ok "B16 the clause is present-only"; fi
 
 echo "── (B) grep: one row per line, occ= ──"
 o="$( g --grep='hlxa' --grep-in=any )"
-printf '%s' "$o" | root | grep -q 'hits="3"' && ok "B17 hits= counts LINES (3 lines hold hlxa, 4 occurrences)" || no "B17 $( printf '%s' "$o" | root )"
-printf '%s' "$o" | grep -q '<hit l="2"[^>]* occ="2"' && ok "B18 the line holding hlxa twice is ONE row with occ=2" || no "B18 no occ=2 row"
-[ "$( printf '%s' "$o" | grep -o '<hit l="2"' | wc -l | tr -d ' ' )" = 1 ] && ok "B19 …printed once" || no "B19 line 2 printed more than once"
-printf '%s' "$o" | grep -q '<hit l="1"[^>]* occ=' && no "B20 a single occurrence carries occ=" || ok "B20 a single occurrence carries no occ="
-g --grep='hlxa' --grep-in=any --legend=full | grep -q 'occ= on a row' && ok "B21 the full legend defines occ= when it rides" || no "B21 occ clause missing"
+if printf '%s' "$o" | root | grep -q 'hits="3"'; then ok "B17 hits= counts LINES (3 lines hold hlxa, 4 occurrences)"; else no "B17 $( printf '%s' "$o" | root )"; fi
+if printf '%s' "$o" | grep -q '<hit l="2"[^>]* occ="2"'; then ok "B18 the line holding hlxa twice is ONE row with occ=2"; else no "B18 no occ=2 row"; fi
+if [ "$( printf '%s' "$o" | grep -o '<hit l="2"' | wc -l | tr -d ' ' )" = 1 ]; then ok "B19 …printed once"; else no "B19 line 2 printed more than once"; fi
+if printf '%s' "$o" | grep -q '<hit l="1"[^>]* occ='; then no "B20 a single occurrence carries occ="; else ok "B20 a single occurrence carries no occ="; fi
+if g --grep='hlxa' --grep-in=any --legend=full | grep -q 'occ= on a row'; then ok "B21 the full legend defines occ= when it rides"; else no "B21 occ clause missing"; fi
 o="$( g --grep='hlxq' )"
-printf '%s' "$o" | grep -q '<unindexed' && { printf '%s' "$o" | grep -q '<hit l="1" occ="2"' && ok "B22 the unindexed list folds too (occ=2)" || no "B22 unindexed row: $( printf '%s' "$o" | grep -o '<unindexed.*' | head -c 300 )"; } \
-    || no "B22 premise: q.scm was not served as an unindexed file"
+if ! printf '%s' "$o" | grep -q '<unindexed'; then no "B22 premise: q.scm was not served as an unindexed file"
+elif printf '%s' "$o" | grep -q '<hit l="1" occ="2"'; then ok "B22 the unindexed list folds too (occ=2)"
+else no "B22 unindexed row: $( printf '%s' "$o" | grep -o '<unindexed.*' | head -c 300 )"; fi
 
 echo "── (B) MCP twin ──"
 mcp() { printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"grep","arguments":{"path":"'"$R"'","pattern":"'"$1"'","in":"any"}}}' \
     | "$BIN" --mcp 2>/dev/null | tail -1 | python3 -c 'import sys,json; r=json.load(sys.stdin); print(r["result"]["content"][0]["text"] if "result" in r else "__ERROR__")'; }
 j="$( mcp 'hlxa|hlxb' )"
-printf '%s' "$j" | python3 -c 'import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get("pattern_meta")=="|" and "--regex=" in d.get("next","") else 1)' \
-    && ok "M1 MCP grep: pattern_meta | and next= the regex verb" || no "M1 MCP: $( printf '%s' "$j" | head -c 300 )"
+if printf '%s' "$j" | python3 -c 'import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get("pattern_meta")=="|" and "--regex=" in d.get("next","") else 1)'; then
+    ok "M1 MCP grep: pattern_meta | and next= the regex verb"
+else no "M1 MCP: $( printf '%s' "$j" | head -c 300 )"; fi
 j="$( mcp 'hlxa' )"
-printf '%s' "$j" | python3 -c 'import sys,json; d=json.load(sys.stdin); h=[x for x in d["hits"] if x["line"]==2]; sys.exit(0 if len(h)==1 and h[0].get("occ")==2 and d.get("total")==3 else 1)' \
-    && ok "M2 MCP grep: one row per line, occ 2, total 3 (CLI parity)" || no "M2 MCP: $( printf '%s' "$j" | head -c 400 )"
-printf '%s' "$j" | python3 -c 'import sys,json; d=json.load(sys.stdin); sys.exit(1 if "pattern_meta" in d else 0)' \
-    && ok "M3 MCP grep: a plain literal carries no pattern_meta" || no "M3 plain literal has pattern_meta"
+if printf '%s' "$j" | python3 -c 'import sys,json; d=json.load(sys.stdin); h=[x for x in d["hits"] if x["line"]==2]; sys.exit(0 if len(h)==1 and h[0].get("occ")==2 and d.get("total")==3 else 1)'; then
+    ok "M2 MCP grep: one row per line, occ 2, total 3 (CLI parity)"
+else no "M2 MCP: $( printf '%s' "$j" | head -c 400 )"; fi
+if printf '%s' "$j" | python3 -c 'import sys,json; d=json.load(sys.stdin); sys.exit(1 if "pattern_meta" in d else 0)'; then
+    ok "M3 MCP grep: a plain literal carries no pattern_meta"
+else no "M3 plain literal has pattern_meta"; fi
 
 [ "$fail" -eq 0 ] && echo "honestlexcheck: ALL PASS" || echo "honestlexcheck: FAILURES"
 exit "$fail"
