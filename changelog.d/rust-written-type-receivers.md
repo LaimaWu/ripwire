@@ -20,7 +20,7 @@ an unparsed region of the file, a file outside every crate's module tree) keeps 
 chain longer than the walk's depth cap is cut, and a cut is hedged, never proven onto an in-tree type, whether it falls in a glob's chain or in the written path itself (an in-tree twin cut the same way is hedged too). A generic result's head names its class. On
 rust-lang/mdBook, `--callers=Book::iter` now lists `make_data` (`book: &Book`) and `MDBook::iter` (`self.book.iter()`)
 as plain edges. Stated floor (still declined or hedged): a generic bound `T: Trait`, `dyn` / `impl Trait` and a trait
-written as a type (which implementation runs is dispatch), a `type` alias, a glob of a module that only globs, a value behind `Option` / `Result` / `Rc` / `Arc` / `RefCell` /
+written as a type (which implementation runs is dispatch; the interface-dispatch entry reads those receivers), a `type` alias, a glob of a module that only globs, a value behind `Option` / `Result` / `Rc` / `Arc` / `RefCell` /
 `Cell` / `Mutex` / `RwLock`, a tuple-struct field (`self.0`), and any pattern other than a plain name. A macro that
 rebinds a name (`shadow!(b); b.spin()`) is not read: the written type still types the name after it. The wrapper list is
 one data row per family (`Box` transparent; `Option` / `Result` one unwrap layer; the pointers and cells hide their argument).

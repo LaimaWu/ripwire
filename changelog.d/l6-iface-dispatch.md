@@ -40,3 +40,8 @@ a TypeScript `gate="iface"` row's `cands=K` is a floor. A Rust candidate is a me
 own default; an inherent method of X never is, and a supertrait's method keeps the by-name answer. Still unseen: an
 implementor another macro writes (`mock!`, a `macro_rules!` that expands to `impl T for X`, gMock's `MOCK_METHOD` with no
 default above it); a `via="impl"` edge may miss it.
+
+A decline replaces by-name rows, and those rows sometimes named the implementor that runs. On ninja-build/ninja,
+`command_runner_->StartCommand` (3 implementors) and `file_reader_->ReadFile` (4) are now `gate="iface"` declines:
+`--path=Build,Start` no longer routes through the subprocess runner, and the right `ReadFile` is named only under
+`--legend=full` (`cand=`). The qualified-member-name and caller-hop entries measured their rows without this tier.
