@@ -154,9 +154,13 @@ echo "(C) T1 controls"
 r=$( run "$TMP/py" --callees=match_chunk | rows );   has "py closure (callee)" "$r" "helper"; hasnt "py closure (callee)" "$r" "Pattern.helper"
 r=$( run "$TMP/py" --callees=helper | rows );        has "py nested closure" "$r" "inner_helper"; hasnt "py nested closure" "$r" "Pattern.inner_helper"
 s=$( run "$TMP/py" --pack-signatures )
+# the negatives below read THIS run: first prove it ran and printed the bare closure rows a wrong fold would respell (an empty or
+# crashed run would otherwise pass every "no Pattern.helper" arm — CHECKLIST 1/14)
+case "$s" in *'n="helper" sc="Pattern"'*'n="inner_helper" sc="Pattern"'*) ok "py closure <d> rows are present, bare, with their sc=";; *) no "py closure <d> rows missing or already respelled — the closure negatives below would pass vacuously";; esac
 case "$s" in *'n="Pattern.helper"'*|*'n="Pattern.inner_helper"'*) no "py closure <d> row claims the class";; *) ok "py closure <d> rows stay bare";; esac
+case "$s" in *'<d l="1" n="Pattern" sc="Pattern"'*) ok "py type row is present (own sc=)";; *) no "py type row missing — the doubled-row negative would pass vacuously";; esac
 case "$s" in *'n="Pattern.Pattern"'*) no "type row doubled";; *) ok "py type row not doubled";; esac
-r=$( run "$TMP/py" --callers=leaf_fn | rows );       hasnt "py free fn" "$r" "Pattern.leaf_fn"
+r=$( run "$TMP/py" --callers=leaf_fn | rows );       has "py free fn" "$r" "Pattern.match_chunk"; hasnt "py free fn" "$r" "Pattern.leaf_fn"
 s=$( run "$TMP/cpp" --pack-signatures )
 case "$s" in *'n="nsFree" sc="ns"'*) ok "c++ namespace fn bare, sc= kept";; *) no "c++ namespace fn not bare/sc=";; esac
 case "$s" in *'n="ns::nsFree"'*) no "c++ namespace fn qualified";; *) ok "c++ namespace fn not qualified";; esac
@@ -176,7 +180,9 @@ for pair in "py:m.py::Pattern.match_chunk" "go:m.go::Pattern.MatchChunk" "rs:m.r
   out=$( run "$d" --callers="$q" ); defs=$( printf '%s' "$out" | grep -oE 'defs="[0-9]+"' | head -1 | grep -oE '[0-9]+' )
   if [ -n "$defs" ] && [ "$defs" -ge 1 ] 2>/dev/null; then ok "--callers=$q resolves (defs=$defs)"; else no "--callers=$q does not resolve"; fi
 done
-out=$( run "$TMP/py" --callers=m.py::Nope.match_chunk ); case "$out" in *'defs="'[1-9]*) no "a wrong owner resolves";; *) ok "a wrong owner in a composed id does not resolve";; esac
+out=$( run "$TMP/py" --callers=m.py::Nope.match_chunk )
+if [ -z "$out" ]; then no "a wrong owner in a composed id printed nothing — the refusal arm needs an answer to read"
+else case "$out" in *'defs="'[1-9]*) no "a wrong owner resolves";; *) ok "a wrong owner in a composed id does not resolve";; esac; fi
 
 echo "(E) present-only legend"
 f=$( cd "$TMP/py" && "$BIN" "$TMP/py" --no-cache --legend=full --callers=leaf_fn 2>/dev/null )
@@ -186,6 +192,8 @@ f=$( cd "$TMP/free" && "$BIN" "$TMP/free" --no-cache --legend=full --callers=lea
 case "$f" in *'n=Owner.name on a row'*) no "clause rides an owner-free answer";; *) ok "clause absent from an owner-free answer";; esac
 if command -v xmllint >/dev/null 2>&1; then
   if ( cd "$TMP/py" && "$BIN" "$TMP/py" --no-cache --legend=full --callers=leaf_fn 2>/dev/null ) | xmllint --noout - 2>/dev/null; then ok "full-legend answer parses"; else no "full-legend answer is not well-formed XML"; fi
+else
+  printf '  SKIP  (E) xmllint not installed\n'   # named, as forcallerhopcheck (X2) does: an absent tool is a SKIP line, never a silent pass
 fi
 
 echo "(F) --json keys stable"
