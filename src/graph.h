@@ -2535,7 +2535,7 @@ struct JsImportTables
     HashMap<std::string, JsImportTarget> targets;
     HashMap<std::string, std::vector<VarSpan>> shadows;
     HashMap<std::string, std::vector<VarSpan>> rebinds;   // FC3: "<fileId>#name" → JsRebind spans (model.h): a call there is undecided
-    HashMap<std::string, std::vector<VarSpan>> pinnedRebinds;   // FC3: the rebinds whose declaration already bound a value: a MEMBER call through the name is undecided there
+    HashMap<std::string, std::vector<VarSpan>> pinnedRebinds;   // FC3: the rebinds whose declaration already bound a value: a MEMBER call through the name has no receiver at all there (jsMemberRootWritten)
 };
 
 inline std::string jsImportKey( std::uint32_t fileId, std::string_view name )
@@ -2543,19 +2543,34 @@ inline std::string jsImportKey( std::uint32_t fileId, std::string_view name )
     return std::to_string( fileId ) + "#" + std::string( name );
 }
 
-// FC3: is this call made through a name WRITTEN after its declaration, at a byte that declaration's scope holds? A bare
-// name (`new Eng()`) is that name itself. A member call (`Eng.make()`) holds whatever its ROOT name holds: as undecided as
-// the root, but only where the root's declaration had bound a value that the write replaced (`let app; app = new Hono()`
-// replaces nothing, and its `app.request()` keeps the receiver reading).
+// FC3: is this BARE call made through a name WRITTEN after its declaration, at a byte that declaration's scope holds
+// (`Eng = Foo; new Eng()`)? Such a call is undecided: the name no longer names what it was declared as.
 inline bool jsCallThroughWrittenBinding( const JsImportTables& tables, const Reference& r )
 {
-    if( r.role != RefRole::Call ) { return false; }
-    const bool bare = r.recv == RecvKind::None && r.qualifier.empty() && !r.memberCall;
-    if( !bare && ( !r.memberCall || r.memberRoot.empty() ) ) { return false; }
-    const auto& spansByName = r.memberCall ? tables.pinnedRebinds : tables.rebinds;
-    const auto  spans       = spansByName.find( jsImportKey( r.fileId, r.memberCall ? std::string_view( r.memberRoot ) : std::string_view( r.calleeName ) ) );
-    return spans != spansByName.end()
+    if( r.role != RefRole::Call || r.memberCall || r.recv != RecvKind::None || !r.qualifier.empty() ) { return false; }
+    const auto spans = tables.rebinds.find( jsImportKey( r.fileId, r.calleeName ) );
+    return spans != tables.rebinds.end()
         && std::any_of( spans->second.begin(), spans->second.end(), [ & ]( const VarSpan& span ) { return r.startByte >= span.startByte && r.startByte < span.endByte; } );
+}
+
+// FC3: what a MEMBER call's ROOT name (`tank` of `tank.spill()`, `Eng` of `Eng.make()`) holds at the call's byte. A root WRITTEN
+// anywhere in its declaration's scope never decides by its own spelling: `Eng = Foo; Eng.make()` is Foo's make, not the class
+// the name spells. Pinned = the declaration had already bound a value the write replaced (`let tank = new Tank(); tank = b`): the
+// receiver is unknown, so no receiver rule reads it. Unpinned = `let Eng;` / undeclared: the declared type is nothing, but a
+// constructed assignment (`let rig; rig = new Rig()`) is still a stated class, so only the SPELLING readings step aside.
+// Either way the call falls to the by-name ladder, which hedges it (via=name).
+enum class JsWrittenRoot : std::uint8_t { None, Unpinned, Pinned };
+
+inline JsWrittenRoot jsMemberRootWritten( const JsImportTables& tables, const Reference& r )
+{
+    if( r.role != RefRole::Call || !r.memberCall || r.memberRoot.empty() ) { return JsWrittenRoot::None; }
+    const auto holds = [ & ]( const HashMap<std::string, std::vector<VarSpan>>& byName )
+    {
+        const auto spans = byName.find( jsImportKey( r.fileId, r.memberRoot ) );
+        return spans != byName.end()
+            && std::any_of( spans->second.begin(), spans->second.end(), [ & ]( const VarSpan& span ) { return r.startByte >= span.startByte && r.startByte < span.endByte; } );
+    };
+    return holds( tables.pinnedRebinds ) ? JsWrittenRoot::Pinned : holds( tables.rebinds ) ? JsWrittenRoot::Unpinned : JsWrittenRoot::None;
 }
 
 // `utils.ts` and `utils` name the same module, so the vocabulary probe below has to compare stems.
@@ -7525,6 +7540,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         const Symbol& cs = ing.symbols[ c ];
         if( isMemberCallRef( ref ) )
         {
+            if( jsMemberRootWritten( jsImports, ref ) != JsWrittenRoot::None ) { return false; }   // a written root names no class by its spelling
             const ReceiverEvidence::Chain ch = ReceiverEvidence::chainOf( ref );
             if( !ch.valid || !ch.path.empty() || !ch.ctor.empty() )
             {
@@ -8442,6 +8458,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             disposition = CallDisposition::Unresolved;
             continue;
         }
+        // …and a MEMBER call through a written root is not receiver-typed by its spelling (jsMemberRootWritten): it goes on to the by-name ladder
+        const JsWrittenRoot writtenRoot = !scipPinned && !jsImports.rebinds.empty() && langFacts( r.lang ).writtenBindingUndecided
+                                              ? jsMemberRootWritten( jsImports, r ) : JsWrittenRoot::None;
         if( !scipPinned && r.role == RefRole::Call && r.recv == RecvKind::None && r.qualifier.empty()
             && ( r.lang == Lang::TypeScript || r.lang == Lang::JavaScript ) )
         {
@@ -8619,7 +8638,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // nested namesakes dropped, an inherited body, an interface's dispatch split); otherwise narrowed stays false and the name-based fallback
         // runs. Skipped when the call was already pinned canonically or by Rule 1 (the more specific / already-resolved signals).
         const bool narrowedBeforeReceiverRules = narrowed;
-        if( !scipPinned && !canonical && !narrowed )
+        if( !scipPinned && !canonical && !narrowed && writtenRoot != JsWrittenRoot::Pinned )
         {
             narrowed = narrowTo( narrower.rule2RecvVarType( r, classIds, chaUp ), r, cand ) || narrower.forgetClaim();
         }
@@ -8627,7 +8646,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // local and no C++ member of the caller's class or its bases hides (then 2b reads the member). After Rule 2, before 2b. See Narrower::rule2cClassNameRecv.
         // (L) fix round 2 / 3 (D3, D6): a JVM receiver the caller does not SEE in the tree (`import ext.Util;`, `import ext.*;`
         // alone) is an outside class, never an in-tree namesake — the call falls to the ladder, which hedges it.
-        if( !scipPinned && !canonical && !narrowed
+        if( !scipPinned && !canonical && !narrowed && writtenRoot == JsWrittenRoot::None
             && !( callResultFamilyOf( r.lang ) == CallResultFamily::Jvm
                   && recvEv.types.jvmHides( r.fileId, r.startByte, std::string_view( r.recvVar ).substr( 0, std::min( r.recvVar.find( '.' ), r.recvVar.size() ) ) ) ) )
         {
@@ -8651,7 +8670,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // FE-B receiver evidence (receiverevidence.h, point 1): a receiver whose class the source states — `this`/`super`
         // in a class, a typed parameter or local, a constructed receiver, a class-name receiver, a chain of stated field
         // classes, Python's `feed = parser.feed` — resolves to that class's member or the shallowest base defining it.
-        if( !scipPinned && !canonical && !narrowed && recvEv.narrow( r ) )
+        if( !scipPinned && !canonical && !narrowed && writtenRoot != JsWrittenRoot::Pinned && recvEv.narrow( r, writtenRoot == JsWrittenRoot::None ) )
         {
             for( NodeId c : recvEv.found )
             {

@@ -83,7 +83,9 @@
 #            WITHOUT an initializer (`var Eng;` / `let Eng;`) — the declare-then-assign test idiom (over `let { Eng } =
 #            require( 'a' )` or `class Eng` the write replaces a pinned definition: withheld) — while a default (`({ Eng = mod.Foo } = mod)`) does not keep it; `reply.run()` beside
 #            a written local `run` (a member call is not the bare name); a MEMBER call through a written ROOT name
-#            (`Eng = Foo; Eng.run()`, `m = require( b ); m.Eng()`) is withheld; patterns nested 20000 deep.
+#            (`Eng = Foo; Eng.run()`, `m = require( b ); m.Eng()`, `let tank = new Tank(); tank = b; tank.drip()`) keeps only the
+#            by-name hedge (via="name", every candidate) — never a pinned row, never the class its SPELLING names, with or
+#            without a declaration (FIX2 C1/C2); patterns nested 20000 deep.
 #   (F) propagation: --callers and --impact of the in-repo decoys no longer list the false callers.
 #   (G) disclosure: every call the arms above unbind is a `C external` census row (empty targets) — except a Python bare
 #            name nothing binds and no builtin table holds (run_all's `process`, siblings.py's `helper`), which has no
@@ -201,6 +203,24 @@ sys.exit( 1 )
 PY
     then ok "($r) --$v=$s lists [$want] as a hedged via=name row"
     else no "($r) --$v=$s has no hedged via=name row [$want]"; fi
+}
+# unpinned ROOT VERB SEL "n file" … — each named row is absent or carries via="name": never a confident (pinned) row
+unpinned(){
+    local r="$1" v="$2" s="$3"; shift 3
+    local f; f="$( answer "$r" "$v" "$s" )"; ran_ok "$r" "$v" "$s" "$f" || return
+    local want
+    for want in "$@"; do
+        if python3 - "$f" "${want% *}" "${want#* }" <<'PY'
+import re, sys
+doc, name, path = sys.argv[ 1: ]
+for s in re.findall( r"<s [^>]*/>", open( doc, encoding="utf-8", errors="replace" ).read() ):
+    n = re.search( r' n="([^"]*)"', s ); p = re.search( r' p="([^"]*)"', s )
+    if n and p and n.group( 1 ) == name and p.group( 1 ).rsplit( ":", 1 )[ 0 ] == path and ' via="name"' not in s: sys.exit( 1 )
+sys.exit( 0 )
+PY
+        then ok "($r) --$v=$s has no confident row [$want]"
+        else no "($r) --$v=$s lists [$want] as a confident (pinned) row"; fi
+    done
 }
 # exactly ROOT VERB SEL "t n file;t n file" — the exact row set (";"-separated, sorted); "" = no rows at all
 exactly(){
@@ -390,19 +410,28 @@ exactly rs callees src/ufcs.rs:draw_all "method render_all src/ufcs.rs"
 echo "=== (S) JS/TS rebind: a written binding names nothing (FC3) ==="
 # the exact row set: every case file whose binding is written is GONE; each near miss keeps its row (nestedP keeps h,
 # its g wrote its own `let Eng`; classexprP's m constructs its own class expression)
-exactly jsrebind callers Eng "fn h cases/nestedP.js;method m cases/classexprP.js;modscope &lt;file-scope&gt; cases/constwriteP.js;modscope &lt;file-scope&gt; cases/esimport.js;modscope &lt;file-scope&gt; cases/keepdestrP.js;modscope &lt;file-scope&gt; cases/keepmemberP.js;modscope &lt;file-scope&gt; cases/memberwriteP.js;modscope &lt;file-scope&gt; cases/norewriteP.js;modscope &lt;file-scope&gt; cases/otherfileP_y.js;modscope &lt;file-scope&gt; cases/paramP.js;modscope &lt;file-scope&gt; cases/redeclnoinitP.js"
+exactly jsrebind callers Eng "fn h cases/nestedP.js;method m cases/classexprP.js;modscope &lt;file-scope&gt; cases/constwriteP.js;modscope &lt;file-scope&gt; cases/esimport.js;modscope &lt;file-scope&gt; cases/keepdestrP.js;modscope &lt;file-scope&gt; cases/keepmemberP.js;modscope &lt;file-scope&gt; cases/memberroot.js;modscope &lt;file-scope&gt; cases/memberwriteP.js;modscope &lt;file-scope&gt; cases/norewriteP.js;modscope &lt;file-scope&gt; cases/otherfileP_y.js;modscope &lt;file-scope&gt; cases/paramP.js;modscope &lt;file-scope&gt; cases/redeclnoinitP.js"
 lacks jsrebind callers leaf "&lt;file-scope&gt; cases/fncall.js"
 has jsrebind callers leaf "method run src/eng.js"
 lacks jsrebind callers Foo "&lt;file-scope&gt; cases/destr.js" "&lt;file-scope&gt; cases/plainreq.js"   # undecided is not Foo either
 # a member call spelled like a written LOCAL is not that local: `let run = ''; run += ' '; reply.run( … )` keeps its row
 has jsrebind callers run "fn onSendEnd cases/memberwriteP.js"
 # FIX1 B3: a MEMBER call is read through its ROOT name — `Eng = Foo; Eng.run()` calls Foo's, a rebound module alias
-# `m = require( b ); m.Eng()` whatever b holds (memberroot.js, once a floor, is gone from the Eng rows above), and a
+# `m = require( b ); m.Eng()` whatever b holds (memberroot.js: a hedged row below), and a
 # local class `Pack = Crate; Pack.make()` — when the write REPLACES a value the declaration bound. Near misses keep: a
 # name nobody writes, and `let rig; … rig = new Rig(); rig.fire()` (the declaration bound nothing: the test-file idiom;
 # measured: refusing it dropped 400+ true rows from hono alone)
-lacks jsrebind callers run "&lt;file-scope&gt; cases/memberclass.js"
-exactly jsrebind callers make "modscope &lt;file-scope&gt; cases/membernowriteP.js"
+# FIX2 C1: such a member call is not DROPPED either — a written root is no receiver, so the call keeps the by-name ladder's
+# hedge (via="name", every candidate): the true target stays visible, never a pinned row (memberclass, memberlocal, memberroot)
+hedged jsrebind callers run "&lt;file-scope&gt; cases/memberclass.js"
+hedged jsrebind callers Eng "&lt;file-scope&gt; cases/memberroot.js"
+exactly jsrebind callers make "modscope &lt;file-scope&gt; cases/memberlocal.js;modscope &lt;file-scope&gt; cases/membernowriteP.js"
+hedged jsrebind callers make "&lt;file-scope&gt; cases/memberlocal.js"
+hedged jsrebind callers drip "reassign cases/pinnedhedgeP.js"   # `let tank = new Tank(); tank = b; tank.drip()`
+# FIX2 C2: a root ASSIGNED anywhere in its scope never decides by its own SPELLING — `Eng = Foo; Eng.run()` is not the class
+# `Eng`, with or without a declaration, nor `Cog = require( … ).Gear; Cog.spin()` the class `Cog`: hedged at best, never pinned
+unpinned jsrebind callers spin "&lt;file-scope&gt; cases/spellnodeclP.js" "&lt;file-scope&gt; cases/spellimplicitP.js" "&lt;file-scope&gt; cases/spellvarP.js"
+hedged jsrebind callers spin "&lt;file-scope&gt; cases/spellnodeclP.js"   # the by-name hedge keeps both candidates, not a guess at either
 has jsrebind callers fire "modscope &lt;file-scope&gt; cases/memberunpinnedP.js"
 # FIX1 FC5: `reply.leaf( … )` is a member call: the ES-imported function `leaf` of the same file does not PIN it
 hedged jsrebind callers leaf "send cases/esmemberP.js"   # by name at best: not the imported `leaf` as a pinned row
