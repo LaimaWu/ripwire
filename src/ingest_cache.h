@@ -345,7 +345,12 @@ constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strict
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 212;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 224;          // bump on any grammar/.scm/extraction change
+                                                      // 224 = 2026-10-23 (lane ind4b fix round 4; train renumbers): strictly above every live number I know of - main 220
+                                                      //   (rich 221), lane ind5-glob-imports 222 (223). Rich file tag 225. capturePythonRebindShadowDecls now
+                                                      //   emits a LocalBindKind::VarDecl for a match-statement capture (`case Base:`, `case P as Base`, `Cls(x=Base)`,
+                                                      //   `*Base`, `**Base`) and a PEP 695 `type Base = ...`, so a Python base name rebound that way is no binding the
+                                                      //   rule 2c proof can read. Same record layout: kCacheVersion unchanged.
                                                       // 212 = 2026-10-21 (train 32a: member-names + rust-receivers): strictly above every live number — main 206 (rich 207),
                                                       //   lane rust-receivers 202 (203), lane ix1-slot 204 (205), lane l6-iface 210 (211); #420 reserves 214 (215), so train
                                                       //   32b can go above. Rich file tag 213. kCacheVersion stays 36: neither lane changed a record format (rust-receivers

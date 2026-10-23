@@ -530,7 +530,8 @@ private:
 //        an edge no evidence binds (ByName) is withheld too: exact or no row. The residual is the binding's own: a
 //        qualified base the lookup does not read (a dotted `a.b.X`) stays withheld (withheld="name"), and so
 //        does a Python base name with any binding but its import in the class statement's scope chain (pythonBaseNameProven:
-//        `Base = Other` at module, class-body or function scope, a parameter, a second import, a star import that could bind it).
+//        `Base = Other` at module, class-body or function scope, a parameter, a match capture, a `type` statement, a second import,
+//        a star import that could bind it; a qualifier also imported as a module outside the chain, where the file-wide tables decide).
 // Rule 2c's derivation (below): the classes that derive from a bound definition's class through PROVEN base edges only
 // (Graph::implementorBound == BaseBound::Proven), memoized per bound owner. The classes with a derived class are indexed by
 // "<file>#<name>" on first ask (one pass over the implementors map); the walk visits each class once.

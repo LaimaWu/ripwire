@@ -80,6 +80,9 @@
 #        binding only when, in the scope chain the class statement runs in, the import is its ONE binding: any other binding
 #        there (a star import that could bind it, a class-body or function-local rebinding, a parameter, a loop target, a
 #        second import) is withheld; K16 the twins whose scope chain holds only the import stay a way in.
+#   (K17-K18) fix 4: the file-wide import tables never decide for an import outside the class's chain (qualmod, qualfn), a `global`
+#        rebinding in a def at byte 0 is module scope (glob0), a match-statement capture and a PEP 695 `type` statement are bindings
+#        (matchas/matchbare/matchsplat/matchkw/matchdict/matchfn, typestmt); K18 qualctl and matchctl stay a way in.
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -531,6 +534,40 @@ for v in clsbody fnlocal fnparam fnloop clsskip methcls fnimp; do d="$TMP/c5_$v"
     esac
     printf "${imp}${body}" > "$d/other/b.py"
 done
+# K17 fixtures (lane ind4b fix 4): the other binding forms the scope-chain rule must not miss. The tail of every fixture is the same
+# `class Sub(<base>): def render_line` calling target(); CPython (3.13) gives Sub's base for each, noted per variant.
+#   qualmod/qualfn: the qualifier `q` is imported in the class's chain AND (in the other form) in an unrelated function - the file-wide
+#     import tables hold the unrelated one; qualctl: the module-form import is the chain's, the unrelated one a `from` import (stays a way in)
+#   glob0/glob1: `global Base` rebinding inside `later()` - first in the file (def at byte 0), then after a comment line
+#   matchas/matchbare/matchsplat/matchkw/matchdict/matchfn: a match-statement capture binds Base; matchctl: it captures another name
+#   typestmt: `type Base = Other` (3.12): the name is a TypeAliasType
+# K17 begin
+for v in qualmod qualfn qualctl glob0 glob1 matchas matchbare matchsplat matchkw matchdict matchfn matchctl typestmt; do d="$TMP/c5_$v"; mkdir -p "$d/pkg/x" "$d/pkg/y" "$d/other"
+    printf 'class Base:\n    def render_line(self):\n        return 1\n' > "$d/pkg/x/a.py"
+    printf 'from pkg.x.a import Base\ndef run(obj):\n    return obj.render_line()\n' > "$d/pkg/x/c.py"
+    printf 'class Base:\n    def other(self):\n        return 3\n' > "$d/pkg/y/base2.py"
+    tgt='def target():\n    return 2\n\n'
+    sub='class Sub(Base):\n    def render_line(self):\n        return target()\n'
+    glob='def later():\n    global Base\n    Base = Other\nfrom pkg.y.base2 import Base as Other\nfrom pkg.x.a import Base\nlater()\n\n'
+    pre='from pkg.y.base2 import Base as Other\nfrom pkg.x.a import Base\n'
+    case "$v" in
+        qualmod) out="from pkg.y import base2 as q\ndef g():\n    import pkg.x.a as q\n    return q\n\n${tgt}class Sub(q.Base):\n    def render_line(self):\n        return target()\n" ;;
+        qualfn)  out="def g():\n    import pkg.x.a as q\n    return q\n\n${tgt}def make():\n    from pkg.y import base2 as q\n    class Sub(q.Base):\n        def render_line(self):\n            return target()\n    return Sub\n" ;;
+        qualctl) out="import pkg.x.a as q\ndef g():\n    from pkg.y import base2 as q\n    return q\n\n${tgt}class Sub(q.Base):\n    def render_line(self):\n        return target()\n" ;;
+        glob0)   out="${glob}${tgt}${sub}" ;;
+        glob1)   out="# a leading comment: byte 0 is not a def\n${glob}${tgt}${sub}" ;;
+        matchas)    out="${pre}match Other:\n    case _ as Base:\n        pass\n\n${tgt}${sub}" ;;
+        matchbare)  out="${pre}match Other:\n    case Base:\n        pass\n\n${tgt}${sub}" ;;
+        matchsplat) out="${pre}match [Other]:\n    case [*Base]:\n        pass\n\n${tgt}${sub}" ;;
+        matchkw)    out="${pre}match Other:\n    case type(__base__=Base):\n        pass\n\n${tgt}${sub}" ;;
+        matchdict)  out="${pre}match {'k': Other}:\n    case {'k': Base}:\n        pass\n\n${tgt}${sub}" ;;
+        matchfn)    out="${pre}\n${tgt}def make():\n    match Other:\n        case Base:\n            pass\n    class Sub(Base):\n        def render_line(self):\n            return target()\n    return Sub\n" ;;
+        matchctl)   out="${pre}match Other:\n    case Other(x=1) | Other.other:\n        pass\n    case _ as Spare:\n        pass\n\n${tgt}${sub}" ;;
+        typestmt)   out="${pre}type Base = Other\n\n${tgt}${sub}" ;;
+    esac
+    printf "$out" > "$d/other/b.py"
+done
+# K17 end
 nsblock(){ grep -o '<near_sink [^>]*>.*</near_sink>' "$1"; }
 nshead(){ grep -o '<near_sink [^>]*>' "$1"; }
 nsrows(){ grep -o '<ns [^>]*/>' "$1"; }
@@ -1018,6 +1055,38 @@ for fx in starclean:8:4 clsskip:11:4 methcls:11:4 fnimp:9:3; do v=${fx%%:*}; res
         '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
         "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" why=\"name:1\" in=\"run\" site=\"pkg/x/c.py:3\" met=\"1\"/>"
     brArm "(K16b) 2c per-file base binding ($v): the bridge crosses to the override" "$TMP/c5_$v" "run,target" \
+        "<bridge proven=\"0\" crossings=\"1\" hops=\"2\"><s t=\"fn\" n=\"run\" p=\"pkg/x/c.py:2\"/><s t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" via=\"namesake\" cands=\"1\"/><s t=\"fn\" n=\"target\" p=\"other/b.py:$tl\"/></bridge>"
+done
+
+# K17 (lane ind4b fix 4): the binding forms fix 3's scope-chain rule still missed (each withheld arm is shown + bridged at fix 3's head).
+# The import tables are file-wide, so an import of the qualifier outside the class's chain must not decide (qualmod, qualfn); a `global`
+# rebinding inside a def that starts at byte 0 is module scope (glob0; glob1 is the same file after a comment, withheld before too); a
+# match-statement capture and a PEP 695 `type` statement bind the name. qualctl (the chain's import is the module form, the unrelated one
+# a `from` import) and matchctl (a match that captures another name) stay a way in.
+for fx in qualmod:10 qualfn:11 glob0:12 glob1:13 matchas:11 matchbare:11 matchsplat:11 matchkw:11 matchdict:11 matchfn:12 typestmt:9; do v=${fx%%:*}; ln=${fx##*:}
+    case "$v" in
+        qualmod)    why="Sub(q.Base): q is the module-scope 'from pkg.y import base2 as q'; an unrelated function's 'import pkg.x.a as q' fills the file-wide table" ;;
+        qualfn)     why="Sub(q.Base) inside make(), whose own 'from pkg.y import base2 as q' is the chain's import; another function's 'import pkg.x.a as q' fills the table" ;;
+        glob0)      why="def later(): global Base; Base = Other starts the file (byte 0) and runs: Base is pkg/y/base2.py's class" ;;
+        glob1)      why="the same file after a leading comment line (the def is no longer at byte 0)" ;;
+        matchas)    why="match Other: case _ as Base: binds Base" ;;
+        matchbare)  why="match Other: case Base: (a bare capture pattern) binds Base" ;;
+        matchsplat) why="case [*Base]: (a star capture) binds Base" ;;
+        matchkw)    why="case type(__base__=Base): (a keyword pattern's capture) binds Base" ;;
+        matchdict)  why="case {'k': Base}: (a mapping value capture) binds Base" ;;
+        matchfn)    why="def make(): match Other: case Base: ... class Sub(Base): the capture is the function's local Base" ;;
+        typestmt)   why="type Base = Other binds Base (a TypeAliasType, no derivation at all)" ;;
+    esac
+    nsArm "(K17) 2c per-scope base binding ($v): $why — withheld" "$TMP/c5_$v" "run,target" \
+        '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+        "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" withheld=\"name:1\"/>"
+    brArm "(K17b) 2c per-scope base binding ($v): no namesake bridge to it either" "$TMP/c5_$v" "run,target" ''
+done
+for fx in qualctl:10:6 matchctl:13:9; do v=${fx%%:*}; rest=${fx#*:}; ln=${rest%%:*}; tl=${rest##*:}
+    nsArm "(K18) 2c per-scope base binding ($v): Base is still pkg/x/a.py's class where Sub is defined — a way in" "$TMP/c5_$v" "run,target" \
+        '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+        "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" why=\"name:1\" in=\"run\" site=\"pkg/x/c.py:3\" met=\"1\"/>"
+    brArm "(K18b) 2c per-scope base binding ($v): the bridge crosses to the override" "$TMP/c5_$v" "run,target" \
         "<bridge proven=\"0\" crossings=\"1\" hops=\"2\"><s t=\"fn\" n=\"run\" p=\"pkg/x/c.py:2\"/><s t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" via=\"namesake\" cands=\"1\"/><s t=\"fn\" n=\"target\" p=\"other/b.py:$tl\"/></bridge>"
 done
 

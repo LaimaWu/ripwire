@@ -37,11 +37,15 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   the binding does not read (a dotted `a.b.Base`), and a Python base name that has any binding other than its import in
   the class statement's own scope chain (its class body or function, the enclosing functions, then the module; an
   enclosing class body is skipped, as Python skips it): an assignment of any form (`Base = Other`, `Base: type = Other`),
-  a def, class, loop, `with` or `except` target, a parameter, a `global` or `nonlocal`, a second import, a `try: from a
-  import Base / except ImportError: Base = None` fallback, or a star import that could bind it (one from a module outside
-  the tree, or from a module that defines, imports or star-imports the name), wherever in the scope it sits and in
-  either order. The import must be the name's one binding; otherwise the site is withheld, never shown. Not read, and
-  not detectable statically: a rebinding made from outside the file (`a.Base = Other` on an imported module).
+  a def, class, loop, `with` or `except` target, a parameter, a `global` or `nonlocal` (also in a def that starts the
+  file), a `match` capture (`case Base:`, `case P as Base`, `*Base`), a PEP 695 `type Base = …`, a second import, a `try:
+  from a import Base / except ImportError: Base = None` fallback, or a star import that could bind it (one from a module
+  outside the tree, or from a module that defines, imports or star-imports the name), wherever in the scope it sits and
+  in either order. A qualified base (`q.Base`) is also withheld when another function or class imports `q` as a module
+  (`import a.b as q`), since the import tables are per file; this over-hedges the same import repeated in two scopes,
+  and a star import from an in-tree module whose `__all__` omits the name. The import must be the name's one binding;
+  otherwise the site is withheld, never shown. Not read, and not detectable statically: a rebinding made from outside
+  the file (`a.Base = Other` on an imported module).
 
 ### Added — `--for` names the members of its shown owner rows on the compact route (`mem=`)
 

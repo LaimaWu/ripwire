@@ -3279,6 +3279,56 @@ inline bool pythonNameIsGlobalOrNonlocalHere( TSNode n, std::string_view name, s
     return false;
 }
 
+// The names a Python match-statement pattern or a PEP 695 `type` statement binds at `n`, appended to `out` (cleared first). True when
+// `n` is one of those shapes, even if it binds nothing new. Grammar shapes (read off the tree): a capture pattern is a `case_pattern`
+// holding a dotted_name of ONE identifier (`case Base:`), a keyword pattern's value is the same dotted_name (`Cls(x=Base)`), `*Base`
+// and `**Base` are a splat_pattern, and the `as` target of `case P as Base` is the identifier that follows the case_pattern inside the
+// `as_pattern` (no `alias` field there, unlike `with … as`). A dotted_name of two or more identifiers (`case Color.RED`) is a value
+// pattern and binds nothing. `type Base = …` / `type Base[T] = …` binds the left side's first identifier.
+inline bool pythonMatchOrTypeBinds( TSNode n, const char* t, std::vector<TSNode>& out )
+{
+    out.clear();
+    const auto soleName = []( TSNode dotted ) -> TSNode   // dotted_name of exactly one identifier, else null
+    {
+        const bool one = !ts_node_is_null( dotted ) && kindIs( ts_node_type( dotted ), "dotted_name" ) && ts_node_named_child_count( dotted ) == 1
+                         && kindIs( ts_node_type( ts_node_named_child( dotted, 0 ) ), "identifier" );
+        return one ? ts_node_named_child( dotted, 0 ) : TSNode{};
+    };
+    const auto keep = [ & ]( TSNode id ) { if( !ts_node_is_null( id ) ) { out.push_back( id ); } };
+    const std::uint32_t cc = ts_node_named_child_count( n );
+    if( kindIs( t, "case_pattern" ) )
+    {
+        keep( cc == 1 ? soleName( ts_node_named_child( n, 0 ) ) : TSNode{} );
+        return true;
+    }
+    if( kindIs( t, "keyword_pattern" ) )
+    {
+        keep( cc == 2 ? soleName( ts_node_named_child( n, 1 ) ) : TSNode{} );
+        return true;
+    }
+    if( kindIs( t, "splat_pattern" ) )
+    {
+        const TSNode id = cc == 1 ? ts_node_named_child( n, 0 ) : TSNode{};
+        keep( !ts_node_is_null( id ) && kindIs( ts_node_type( id ), "identifier" ) ? id : TSNode{} );
+        return true;
+    }
+    if( kindIs( t, "as_pattern" ) && ts_node_is_null( fieldChild( n, NodeField::Alias ) ) )   // `case P as Base` (the with/except form has an alias field)
+    {
+        const TSNode last = cc > 0 ? ts_node_named_child( n, cc - 1 ) : TSNode{};
+        keep( !ts_node_is_null( last ) && kindIs( ts_node_type( last ), "identifier" ) ? last : TSNode{} );
+        return true;
+    }
+    if( kindIs( t, "type_alias_statement" ) )
+    {
+        TSNode left = fieldChild( n, NodeField::Left );
+        left        = !ts_node_is_null( left ) && ts_node_named_child_count( left ) > 0 ? ts_node_named_child( left, 0 ) : TSNode{};   // type > identifier | generic_type
+        left        = !ts_node_is_null( left ) && kindIs( ts_node_type( left ), "generic_type" ) && ts_node_named_child_count( left ) > 0 ? ts_node_named_child( left, 0 ) : left;
+        keep( !ts_node_is_null( left ) && kindIs( ts_node_type( left ), "identifier" ) ? left : TSNode{} );
+        return true;
+    }
+    return false;
+}
+
 inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawBind>& binds )
 {
     std::vector<TSNode> targets;   // reused scratch, cleared before each shape below
@@ -3318,6 +3368,11 @@ inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32
             const std::uint32_t at       = pythonNameIsGlobalOrNonlocalHere( n, nodeTextOf( nm, src ), src ) ? 0u : ownStart;
             pushRawBind( fileId, lang, nodeTextOf( nm, src ), std::string{}, BindSite{ at, 0u, 0u }, LocalBindKind::VarDecl, binds );
         }
+        return;
+    }
+    if( pythonMatchOrTypeBinds( n, t, targets ) )   // a match-statement capture or a PEP 695 `type X = …`: the name is bound at the statement
+    {
+        emitAll( n, ts_node_start_byte( n ) );
         return;
     }
     if( kindIs( t, "as_pattern" ) )   // `with X as tm:` AND `except X as tm:` share this ONE grammar node
