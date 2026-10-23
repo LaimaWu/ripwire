@@ -85,19 +85,24 @@ struct LangFacts
     /// decides only the closure relation, no symbol or edge). A lambda or a block is anonymous, and a C++ local class's
     /// methods sit inside the class's scope, not directly in the function, so neither is a closure either way.
     bool noNestedNamedFunctions = false;
+
+    /// JavaScript, TypeScript: a bare call by a name whose binding is WRITTEN in its scope (`Eng = Foo; new Eng()`) is undecided —
+    /// it names neither the declaration nor a same-spelled definition — so it binds nothing (FC3: the LocalBindKind::JsRebind
+    /// records of ingest_jsimports.h captureJsRebindFacts, read by graph.h buildGraph).
+    bool writtenBindingUndecided = false;
 };
 
 /// The rows, one per Lang in enum order. A language says only the facts it has.
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true },
     { .lang = Lang::Python },
-    { .lang = Lang::TypeScript, .overloadSignatures = true },
+    { .lang = Lang::TypeScript, .overloadSignatures = true, .writtenBindingUndecided = true },
     { .lang = Lang::Go },
     { .lang = Lang::Rust },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC, .noNestedNamedFunctions = true },
     { .lang = Lang::Markdown, .linkSections = true },
-    { .lang = Lang::JavaScript },
+    { .lang = Lang::JavaScript, .writtenBindingUndecided = true },
     { .lang = Lang::Bash },
     { .lang = Lang::Java },
     { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true },

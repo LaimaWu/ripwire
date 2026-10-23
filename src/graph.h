@@ -8417,7 +8417,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // new Eng()`) names neither its declaration nor a same-spelled definition — undecided, so no edge (unresolved=),
         // like a shadowed import below.
         if( !scipPinned && r.role == RefRole::Call && r.recv == RecvKind::None && r.qualifier.empty() && !r.memberCall
-            && ( r.lang == Lang::TypeScript || r.lang == Lang::JavaScript ) && !jsImports.rebinds.empty() )
+            && !jsImports.rebinds.empty() && langFacts( r.lang ).writtenBindingUndecided )
         {
             if( const auto spans = jsImports.rebinds.find( jsImportKey( r.fileId, r.calleeName ) ); spans != jsImports.rebinds.end()
                 && std::any_of( spans->second.begin(), spans->second.end(), [ & ]( const VarSpan& span ) { return r.startByte >= span.startByte && r.startByte < span.endByte; } ) )
