@@ -127,6 +127,12 @@ lt_selftest(){
     vo syn:v 95 50 95 8000 target "$d/reg.tsv" "$d/with" | tail -n 1 | grep -q '^EXPLAINED ' || bad="$bad verdict-last-explained"
     vo syn:v 95 50 9001 8000 target "$d/reg.tsv" "$d/with" | tail -n 1 | grep -q '^RUNAWAY ' || bad="$bad verdict-last-runaway"
     r="$( python3 "$LT_LIB/legendtarget.py" validate "$d/bad.tsv" )"; case "$r" in BAD*) ;; *) bad="$bad validate-bad" ;; esac
+    # CR #434 (review 5634438801 nitpick): two clauses naming ONE marker are refused (the verdict would count the clause's bytes twice); control: distinct markers load
+    printf 'syn:v\textra\t60\t extra_clause="\t[extra_clause= rides only\tfirst\nsyn:v\textra2\t60\t extra_clause="\t[extra_clause= rides only\tsecond, same marker\n' >"$d/dupmarker.tsv"
+    printf 'syn:v\textra\t60\t extra_clause="\t[extra_clause= rides only\tfirst\nsyn:v\textra2\t60\t extra_clause="\t[x= a thing\tsecond, other marker\n' >"$d/distinct.tsv"
+    r="$( python3 "$LT_LIB/legendtarget.py" validate "$d/dupmarker.tsv" )"; case "$r" in BAD*repeats\ the\ marker*) ;; *) bad="$bad validate-dup-marker" ;; esac
+    r="$( python3 "$LT_LIB/legendtarget.py" validate "$d/distinct.tsv" )"; case "$r" in BAD*) bad="$bad validate-distinct-markers-control" ;; esac
+    [ "$( v syn:v 95 50 95 8000 target "$d/dupmarker.tsv" "$d/with" )" = BADINPUT ] || bad="$bad dup-marker-verdict"
     [ "$( lt_full_guard 3769 )" = 8000 ] && [ "$( lt_full_guard 4000 )" = 8000 ] && [ "$( lt_full_guard 1590 )" = 3500 ] || bad="$bad full-guard"
     rm -rf "$d"; unset -f v
     [ -z "$bad" ] && ok "(lt-selftest) the shared size verdict goes red on each premise: unregistered, under-registered, not present-only, strict twin, runaway (with breakdown), non-numeric, 0 B measure, legend-less answer, over-claimed registry bytes, bad registry, unreadable answer; the verdict is the last line; a smaller measure never fails" \

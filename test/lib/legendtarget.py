@@ -42,7 +42,7 @@ def split( b ):
 
 
 def load( path ):
-    rows = []; seen = set()
+    rows = []; seen = set(); seen_markers = set()
     try:
         lines = open( path, encoding = "utf-8" ).read().split( "\n" )
     except OSError as e:
@@ -58,7 +58,9 @@ def load( path ):
         if "--" in r[ "marker" ]: return None, "line %d marker holds '--' (cannot occur inside an XML comment)" % k
         key = ( r[ "surface" ], r[ "clause" ] )
         if key in seen: return None, "line %d repeats %s %s" % ( k, key[ 0 ], key[ 1 ] )
-        seen.add( key ); r[ "bytes" ] = int( r[ "bytes" ] ); rows.append( r )
+        mkey = ( r[ "surface" ], r[ "marker" ] )   # two clauses on one marker would measure the one clause twice and double the allowance
+        if mkey in seen_markers: return None, "line %d repeats the marker of %s %s (one clause per marker)" % ( k, mkey[ 0 ], r[ "clause" ] )
+        seen.add( key ); seen_markers.add( mkey ); r[ "bytes" ] = int( r[ "bytes" ] ); rows.append( r )
     return rows, ""
 
 
