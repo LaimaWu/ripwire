@@ -1471,7 +1471,9 @@ struct CallResultTypes
     // `named` is set when the level has one at all; a walk cut at rustPathOutside's depth cap proves nothing, so it is hedged
     bool rustNamedUsesBring( std::uint32_t mf, const Level& level, std::string_view seg, const GlobWalk& walk, bool& named ) const
     {
-        bool brings = false;
+        bool       brings = false;
+        const bool outer  = pathCut;   // a cut already taken by the enclosing walk (an earlier sibling glob) must survive this probe (CR #434)
+        bool       cut    = false;
         forEachImport( mf, seg, [ & ]( const Binding& b )
         {
             if( b.kind == LocalBindKind::TypeImport && levelAt( mf, b.startByte ) == level )
@@ -1480,8 +1482,10 @@ struct CallResultTypes
                 pathCut = false;
                 const bool out = rustPathOutside( mf, b.startByte, b.importedName, walk.base + 1 );
                 brings = brings || ( !out && !pathCut );
+                cut    = cut || pathCut;   // a later `use` of the name must not clear an earlier one's cut either
             }
         } );
+        pathCut = outer || cut;
         return brings;
     }
     // does module (crate, module) declare, or re-export from the tree, an item `seg` a glob of it brings — a child module, a
