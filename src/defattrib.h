@@ -842,12 +842,46 @@ inline void defGroupsDropSilent( DefGroups& groups, RowDefTokens& tokens )
 // selector, or a graph that holds split arms (Q1) or by-name edges (the rows' via="name" reads strongest() == Name).
 struct OneHopAttribution
 {
-    DefGroups    groups;
-    RowDefTokens tokens;   // parallel to the rows; empty when nothing was computed
+    DefGroups         groups;
+    RowDefTokens      tokens;   // parallel to the rows; empty when nothing was computed
+    std::vector<char> impl;     // lane L6: parallel to the rows, 1 = every edge joining the row to the matches is via="impl"; empty when none is
 
     bool nameOnly( std::size_t row ) const noexcept { return tokens.strongest( row ) == DefMark::Name; }   // None when none recorded
     bool splitArm( std::size_t row ) const noexcept { return rowSplitArm( groups, tokens, row ); }
+    bool viaImpl( std::size_t row ) const noexcept { return row < impl.size() && impl[ row ] != 0; }
 };
+// lane L6: per row, whether every edge joining it to the matches (row → match toward the matches, match → row away) is the
+// one-implementor edge (graph.h kProvImpl); empty when no row's is, so an answer without one keeps its bytes
+inline std::vector<char> rowsViaImpl( const Graph& g, std::span<const NodeId> matches, std::span<const NodeId> rows, bool towardMatches )
+{
+    std::vector<char> out;
+    if( g.outProv.empty() )
+    {
+        return out;
+    }
+    bool any = false;
+    std::vector<char> impl( rows.size(), 0 );
+    for( std::size_t i = 0; i < rows.size(); ++i )
+    {
+        std::size_t joined = 0, viaImpl = 0;
+        for( const NodeId m : matches )
+        {
+            const std::size_t e = towardMatches ? edgeIndex( g, rows[ i ], m ) : edgeIndex( g, m, rows[ i ] );
+            if( e != SIZE_MAX )
+            {
+                ++joined;
+                viaImpl += g.outProv[ e ] == kProvImpl ? 1u : 0u;
+            }
+        }
+        impl[ i ] = joined > 0 && viaImpl == joined ? 1 : 0;
+        any       = any || impl[ i ] != 0;
+    }
+    if( any )
+    {
+        out.swap( impl );
+    }
+    return out;
+}
 inline OneHopAttribution attributeOneHopAnswer( const IngestResult& ing, const Graph& g, std::span<const NodeId> matches,
                                                 std::span<const NodeId> rows, bool towardMatches )
 {
@@ -858,6 +892,7 @@ inline OneHopAttribution attributeOneHopAnswer( const IngestResult& ing, const G
         out.tokens = attributeOneHop( g, out.groups, matches, rows, towardMatches );
         defGroupsDropSilent( out.groups, out.tokens );
     }
+    out.impl = rowsViaImpl( g, matches, rows, towardMatches );
     return out;
 }
 
@@ -1026,8 +1061,8 @@ inline void emitPathHopRows( std::FILE* out, const IngestResult& ing, const Grap
         const bool             hop   = i > 0;
         const std::string      mark  = std::string( viaEdgeAttr( hop && edgeNameOnly( g, path[ i - 1 ], path[i] ), hop && edgeIsLink( g, path[ i - 1 ], path[i] ) ) )
                                      + anchorMissAttr( hop && edgeAnchorMiss( g, path[ i - 1 ], path[i] ) );
-        emitTo( out, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ), name, escapeXml( rp, esc ), s.line,
-                mark, splitArmAttrXml( pathHopSplitArm( g, path, i ) ) );
+        emitTo( out, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}/>", symTag( s.kind ), name, escapeXml( rp, esc ), s.line,
+                mark, splitArmAttrXml( pathHopSplitArm( g, path, i ) ), viaImplAttr( hop && edgeViaImpl( g, path[ i - 1 ], path[i] ) ) );   // lane L6: via="impl"
     }
 }
 

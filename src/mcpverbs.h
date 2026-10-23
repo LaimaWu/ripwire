@@ -820,6 +820,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     const OneHopAttribution& calledByAttr = referencingOnly ? chRows.attr : chCallers.attr;
     const OneHopAttribution& callsAttr    = chRows.attr;
     bool anySplit = false;   // a row carried "prov":"split" — the answer then carries split_note, its reading
+    bool anyImpl  = false;   // lane L6: a row carried "via":"impl" — the answer then carries impl_note, its reading
     const auto rowArray = [ & ]( const std::vector<NodeId>& ids, const PageWindow& w, bool callersSide ) -> std::string
     {
         const OneHopAttribution& at = callersSide ? calledByAttr : callsAttr;
@@ -831,7 +832,9 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
             linkRow = ids[ i ];
             linkToward = callersSide;
             // CALLSITE-AT: a calledBy row carries its call sites (the CLI --callers row's sites_at=); a calls row never does.
-            a += withRowSites( symObj( ids[i], at.nameOnly( i ), ofDefKeyJson( at.groups, at.tokens, i ) + splitArmKeyJson( at.splitArm( i ) ) ),
+            anyImpl = anyImpl || at.viaImpl( i );
+            a += withRowSites( symObj( ids[i], at.nameOnly( i ), ofDefKeyJson( at.groups, at.tokens, i ) + splitArmKeyJson( at.splitArm( i ) )
+                                                                 + ( at.viaImpl( i ) ? ",\"via\":\"impl\"" : "" ) ),   // lane L6: the CLI row's via="impl"
                                calledBySites, i - w.begin, callersSide );
         }
         a += "]";
@@ -931,6 +934,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     }
     out += symbolQueryNotes( anyVia, anyLink, anyMiss );
     out += nextFieldJson( splitArmLegend( anySplit ), "split_note" );   // attrib-multidef Q1: likewise for "prov":"split"
+    out += nextFieldJson( viaImplLegend( anyImpl ), "impl_note" );      // lane L6: likewise for "via":"impl"
     out += declinedSitesJson( sqDc, referencingOnly, /*mcp=*/true );   // lane declined-sites: the CLI <dc> rows, never in calls/calledBy or count
     out += nextFieldJson( declinedSitesLegend( declinedSitesLegendFlags( sqDc, referencingOnly, sqDcCut ), /*mcp=*/true ), "declined_note" );   // their reading, only when they ride
     out += nextFieldJson( callSitesAtLegend( calledBySites.any, calledBySites.anyCut, kCallSitesPerRowCap ), "sites_note" );   // CALLSITE-AT: its reading, only when a row carries it (nextFieldJson: "" -> no key, JSON-escaped)

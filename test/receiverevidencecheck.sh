@@ -53,6 +53,7 @@
 #   exactproven— the set of unhedged rows is exactly the given set (no false candidate rides along unhedged)
 #   visible    — the named row is present, hedged or not (a true target is never dropped)
 #   marked     — the named row is present WITH the hedge (a name-only true edge is kept and labelled)
+#   ifacenamed — lane L6: the named row is a candidate of the answer's gate="iface" <dc> row (--legend=full cand=)
 #
 # ARMS (one fixture root per language under test/receiverevidencefix/; each root is indexed on its own).
 #   (J) JS:  Bm ctx.onerror (plain, optional-chained, aliased, destructured), an object-literal module's
@@ -514,6 +515,19 @@ visible(){
         else no "($r) --$v=$s does not show the true target [$spec]: $( show )"; fi
     done
 }
+# lane L6: the true targets are named as the candidates of a gate="iface" <dc> row (the call declined through its receiver's
+# interface, ifacedispatch.h) — on --legend=full, where cand= lists them as file:line
+ifacenamed(){
+    local r="$1" v="$2" s="$3"; shift 3
+    local f; f="$( answer "$r" "$v" "$s" --legend=full )"
+    ran_ok "($r) --$v=$s --legend=full" "$f" || return
+    local spec cands
+    cands="$( grep -o '<dc [^>]*gate="iface"[^>]*>' "$f" | grep -o 'cand="[^"]*"' | sed 's/^cand="//; s/"$//' | tr ' ' '\n' )"
+    for spec in "$@"; do
+        if printf '%s\n' "$cands" | grep -qx "${spec#* }"; then ok "($r) --$v=$s names the true target [$spec] as a gate=\"iface\" candidate"
+        else no "($r) --$v=$s does not name [$spec] among its gate=\"iface\" candidates: [$( printf '%s' "$cands" | tr '\n' ' ' )]"; fi
+    done
+}
 marked(){
     local r="$1" v="$2" s="$3"; shift 3
     getrows "$r" "$v" "$s" || return
@@ -686,7 +700,7 @@ proven      java  callees src/main/java/app/Pump.java:param "method spill src/ma
 notproven   java  callees src/main/java/app/Pump.java:untyped "spill src/main/java/app/Pump.java:7" "spill src/main/java/app/Pump.java:8"       # near miss: an untyped local
 notproven   java  callees src/main/java/app/Pump.java:shadow "spill src/main/java/app/Pump.java:7" "spill src/main/java/app/Pump.java:8"        # near miss: a local hides the field
 notproven   java  callees src/main/java/app/Pump.java:viaIface "spill src/main/java/app/Pump.java:7" "spill src/main/java/app/Pump.java:8"      # near miss: an interface, two implementors
-visible     java  callees src/main/java/app/Pump.java:viaIface "spill src/main/java/app/Pump.java:7" "spill src/main/java/app/Pump.java:8"
+ifacenamed  java  callees src/main/java/app/Pump.java:viaIface "spill src/main/java/app/Pump.java:7" "spill src/main/java/app/Pump.java:8"   # lane L6: was `visible` as two via="name" rows; now one gate="iface" <dc> naming both
 exactproven cs    callees App/Pump.cs:Param "method Spill App/Pump.cs"
 exactproven cs    callees App/Pump.cs:TypedLocal "method Spill App/Pump.cs;method MakeTank App/Pump.cs"
 exactproven cs    callees App/Pump.cs:CtorLocal "method Spill App/Pump.cs;cls Tank App/Pump.cs"
@@ -707,7 +721,7 @@ proven      kt    callees src/app/Pump.kt:constructedProperty "fn spill src/app/
 notproven   kt    callees src/app/Pump.kt:untyped "spill src/app/Pump.kt:7" "spill src/app/Pump.kt:8"
 notproven   kt    callees src/app/Pump.kt:shadow "spill src/app/Pump.kt:7" "spill src/app/Pump.kt:8"
 notproven   kt    callees src/app/Pump.kt:viaIface "spill src/app/Pump.kt:7" "spill src/app/Pump.kt:8"
-visible     kt    callees src/app/Pump.kt:viaIface "spill src/app/Pump.kt:7" "spill src/app/Pump.kt:8"
+ifacenamed  kt    callees src/app/Pump.kt:viaIface "spill src/app/Pump.kt:7" "spill src/app/Pump.kt:8"   # lane L6: was `visible` as two via="name" rows; now one gate="iface" <dc> naming both
 exactproven swift callees Sources/App/Pump.swift:param "fn spill Sources/App/Pump.swift"
 exactproven swift callees Sources/App/Pump.swift:typedLocal "fn spill Sources/App/Pump.swift;fn makeTank Sources/App/Pump.swift"
 exactproven swift callees Sources/App/Pump.swift:ctorLocal "cls Tank Sources/App/Pump.swift;fn spill Sources/App/Pump.swift"

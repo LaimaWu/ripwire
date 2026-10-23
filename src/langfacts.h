@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <span>
 #include <string_view>
 
 namespace rw
@@ -78,6 +79,46 @@ struct LangFacts
     /// (verbs_quality.h; pinned by test/qddegradecheck.sh (E3)).
     bool defectShapeNeedsMacroSet = false;
 
+    /// Rust: a trait's bodyless method signature is no definition the index keeps (only a bodied default is), so a trait's contract
+    /// cannot be read off its members. The dispatch tier (ifacedispatch.h) takes the implementors' methods of the called name without
+    /// it, and leaves a standard-member name (`clone`, `iter`: graph.h StdMemberGate) to the name tiers as before.
+    bool contractSignaturesUnindexed = false;
+
+    /// Rust: a type's methods for a trait sit in that trait's own `impl T for X` block, apart from its inherent `impl X` methods,
+    /// and a call through `dyn T` / `impl T` / a `T` bound reaches only the former and T's defaults (ingest_relations.h records each
+    /// trait impl block as an ImplBlock binding; ifacedispatch.h keeps the candidates inside one).
+    bool traitImplBlocks = false;
+
+    /// Go, TypeScript, JavaScript: a type conforms to an interface (TS: to any object type) by its members alone, with no clause
+    /// naming it — an object literal, a structurally matching class — so an implements list is never the whole set, and one
+    /// candidate is never the only implementor (ifacedispatch.h: a list of two or more is still declined, as a floor).
+    bool structuralTyping = false;
+
+    /// Java: a lambda or a method reference implements any interface with exactly one abstract method, with no class the index
+    /// keeps, so such an interface's implementors list is open (ifacedispatch.h). Kotlin opts in per interface (`fun interface`,
+    /// recorded at ingest as an anonymous implementor) and, below, through Java.
+    bool samLambdas = false;
+
+    /// Kotlin: a Java file passes a lambda to ANY Kotlin interface with one abstract method (in bytecode it is a plain Java
+    /// interface, `fun interface` or not), so with a samLambdas-language file in the tree such an interface's implementors list is
+    /// open too (ifacedispatch.h). A Kotlin-only tree is unchanged.
+    bool samFromJavaLambdas = false;
+
+    /// Kotlin: an `interface` is a class_declaration like a class (queries/kotlin/tags.scm: "both land here as @definition.class"),
+    /// so the symbol's kind cannot tell the two apart; shared code that needs an interface (ifacedispatch.h's lambda test) reads a
+    /// class of such a language as a possible one.
+    bool interfaceReadsAsClass = false;
+
+    /// Java: the member names that never count toward an interface's single abstract method (JLS 9.8: a public method of
+    /// java.lang.Object an interface redeclares, as java.util.Comparator does equals). Names only; an overload is still ignored,
+    /// which can only open more lists. Empty for a language with no such rule.
+    std::span<const std::string_view> samIgnoredMembers = {};
+
+    /// Java, Kotlin: an expression can implement an interface or extend a class anonymously (`new T() { … }`, `object : T { … }`;
+    /// Kotlin's `fun interface` lets a lambda do it), recorded at ingest as an ImplBlock binding with no implementor name, which
+    /// opens that type's implementors list (ingest_binds.h anonymousImplementorOf).
+    bool anonymousImplementors = false;
+
     /// Markdown: a link targets a section, so shared graph code treats this language's sections as link targets (graph.h).
     bool linkSections = false;
 
@@ -104,19 +145,22 @@ struct LangFacts
     std::string_view memberSeparator = ".";
 };
 
+/// java.lang.Object's public methods an interface may redeclare abstract (LangFacts::samIgnoredMembers).
+inline constexpr std::array<std::string_view, 3> kJavaObjectMethods = { "equals", "hashCode", "toString" };
+
 /// The rows, one per Lang in enum order. A language says only the facts it has.
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true, .memberSeparator = "::" },
     { .lang = Lang::Python },
-    { .lang = Lang::TypeScript, .overloadSignatures = true, .importBoundConstruction = true },
-    { .lang = Lang::Go },
-    { .lang = Lang::Rust, .constructorMethod = "new", .memberSeparator = "::" },
+    { .lang = Lang::TypeScript, .overloadSignatures = true, .structuralTyping = true, .importBoundConstruction = true },
+    { .lang = Lang::Go, .structuralTyping = true },
+    { .lang = Lang::Rust, .contractSignaturesUnindexed = true, .traitImplBlocks = true, .constructorMethod = "new", .memberSeparator = "::" },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC, .noNestedNamedFunctions = true },
     { .lang = Lang::Markdown, .linkSections = true },
-    { .lang = Lang::JavaScript, .importBoundConstruction = true },
+    { .lang = Lang::JavaScript, .structuralTyping = true, .importBoundConstruction = true },
     { .lang = Lang::Bash },
-    { .lang = Lang::Java },
+    { .lang = Lang::Java, .samLambdas = true, .samIgnoredMembers = kJavaObjectMethods, .anonymousImplementors = true },
     { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true,
       .memberSeparator = "#" },
     { .lang = Lang::Unknown },
@@ -129,7 +173,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Lua },
     { .lang = Lang::Elixir, .hasInertQuoteRegions = true },
     { .lang = Lang::Dart },
-    { .lang = Lang::Kotlin },
+    { .lang = Lang::Kotlin, .samFromJavaLambdas = true, .interfaceReadsAsClass = true, .anonymousImplementors = true },
     { .lang = Lang::GDScript },
     { .lang = Lang::Clojure },
 } };

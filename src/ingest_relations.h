@@ -1072,6 +1072,15 @@ void rustImplVisitNode( RustImplCtx& cx, TSNode node, const char* t )
         r.role      = RefRole::Extends;
         r.name      = finalSegment( src.substr( ta, tb - ta ) );   // the TRAIT (base) name
         r.qualifier = finalSegment( src.substr( da, db - da ) );   // the DERIVED type name (Car/Bike) — resolved by name in buildGraph
+        // lane L6: the trait's path as written when qualified (`render::Renderer`; generic arguments dropped), which graph.h's
+        // base evidence resolves like a written type at the impl (provenBasesOf); "" for a bare trait name (model.h memberPath)
+        const std::string_view written = src.substr( ta, tb - ta );
+        const std::string_view path    = written.substr( 0, std::min( written.find( '<' ), written.size() ) );
+        if( path.find( "::" ) != std::string_view::npos )
+        {
+            r.memberPath.assign( path );
+            std::erase_if( r.memberPath, []( char ch ) { return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'; } );
+        }
         cx.refs->push_back( std::move( r ) );
     }
 }

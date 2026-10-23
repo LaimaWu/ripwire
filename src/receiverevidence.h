@@ -266,6 +266,7 @@ struct CallResultTypes
     const HashMap<std::string, std::string>*              moduleAlias     = nullptr;  // ReceiverEvidence's "<fileId>#name" → module
     const GoPackagePaths*                                 goPackages      = nullptr;  // graph.h FalseEdgeRules::goPackages
     const HashMap<std::string, NodeId>*                   jsPinnedClasses = nullptr;  // graph.h: "<fileId>#<local>" → the class a TS import pins
+    const HashMap<std::string, std::uint32_t>*            jsImportModules = nullptr;  // graph.h (lane L6): "<fileId>#<local>" → the file a TS import's module resolved to
     const ClassIdentity*                                  classIds        = nullptr;  // graph.h: C-family class identity (resolve.h)
     const std::vector<std::vector<NodeId>>*               fileIncludes    = nullptr;  // graph.h: C-family transitive include set per file (sorted)
     const HashMap<std::string, std::vector<std::string>>* chaUp           = nullptr;  // class name → its direct base names
@@ -1834,6 +1835,20 @@ struct CallResultTypes
         }
     }
 
+    // lane L6: the class (or interface) a bare type NAME spelled at byte `at` of file `fileId` resolves to in language `lang`'s
+    // scopes — resultClassOf's rows for a written, unqualified type; kNoNode for none, several, or a family with no rows
+    NodeId classAtSite( Lang lang, std::uint32_t fileId, std::uint32_t at, std::string_view cls ) const
+    {
+        switch( callResultFamilyOf( lang ) )
+        {
+            case CallResultFamily::Go:         return goResultClass( fileId, at, {}, cls );
+            case CallResultFamily::Jvm:        return jvmResultClass( fileId, at, {}, cls );
+            case CallResultFamily::TypeScript: return tsResultClass( fileId, at, {}, cls );
+            case CallResultFamily::Rust:       return rustResultClass( fileId, at, {}, cls );
+            default:                           return kNoNode;
+        }
+    }
+
     // the in-tree class-likes of `cls`'s language sharing its name (cls included)
     std::size_t sameNamedClasses( NodeId cls ) const
     {
@@ -1852,8 +1867,11 @@ struct ReceiverEvidence
     std::vector<std::string>                              ownerClass;  // per symbol: the class that owns it, "" none
     std::vector<std::uint8_t>                             staticMember;    // per symbol: 1 = a JS/TS `static` member (the CLASS side)
     HashMap<std::string, rw::SmallVec<NodeId, 2>>         methodsByType;   // "Class::name" → its callables
+    HashMap<std::string, rw::SmallVec<NodeId, 2>>         abstractByType;  // "Class::name" → its BODYLESS callables (the contract a call dispatches through)
+    HashMap<std::string_view, char>                       abstractNames;   // every name some class declares without a body (the gate of the two walks below)
     HashMap<std::string, std::string>                     memberType;      // "Class#field" → field class ("" = tombstone)
     HashMap<std::string, NodeId>                          memberClass;     // rust-receivers: "<class id>#field" → the ONE class its written type resolved to (kNoNode = unknown)
+    HashMap<std::string, NodeId>                          memberIface;     // lane L6: "<class id>#field" → the trait a `Box<dyn T>` field dispatches through (kNoNode = disagree)
     HashMap<std::string, std::vector<std::string>>        embeds;          // "Class" → its other bases: Go embedded classes (promotion)
     HashMap<std::string, std::string>                     nameAlias;       // "<fileId>#local" → the class name it imports
     // FE-B (review B4): one binding of a local name — the class it names ("" = unknown: it hides an outer binding of the
@@ -1865,6 +1883,8 @@ struct ReceiverEvidence
         std::uint32_t end   = 0;
         std::string   type;
         NodeId        cls   = kNoNode;   // (L) fix round 1: the ONE in-tree class `type` resolved to (kNoNode: the name alone)
+        NodeId        iface = kNoNode;   // lane L6: a binding typed only as SOME implementor of this trait (type stays "")
+        std::string   bound;             // lane L6: a generic bound's text (`R: Renderer`), "" otherwise
         bool operator==( const LocalFact& ) const = default;
     };
     HashMap<std::string, std::vector<LocalFact>>          localType;       // "<fromSymbol>#var" → its bindings
@@ -1926,8 +1946,16 @@ struct ReceiverEvidence
     // resolved to (kNoNode: the name alone)
     void addTypedFact( const std::string& k, const Binding& b, std::string_view type, NodeId cls )
     {
-        const bool                  spanned = b.spanEnd > b.spanStart;
-        LocalFact                   f{ spanned ? b.spanStart : 0u, spanned ? b.spanEnd : 0u, std::string( type ), cls };
+        addFact( k, factOf( b, type, cls ) );
+    }
+    // the fact a binding states over its span ({0,0}: no span), naming `type` / `cls`
+    static LocalFact factOf( const Binding& b, std::string_view type, NodeId cls )
+    {
+        const bool spanned = b.spanEnd > b.spanStart;
+        return LocalFact{ spanned ? b.spanStart : 0u, spanned ? b.spanEnd : 0u, std::string( type ), cls };
+    }
+    void addFact( const std::string& k, LocalFact f )
+    {
         std::vector<LocalFact>&     facts = localType[ k ];
         if( std::none_of( facts.begin(), facts.end(), [ & ]( const LocalFact& g ) { return g == f; } ) )
         {
@@ -2032,14 +2060,19 @@ struct ReceiverEvidence
         {
             // a BODIED callable only: an interface's or an abstract class's bodyless signature is the contract a call
             // dispatches through, never the body it reaches — that call stays with the ladder (declined_iface= reads it)
-            if( callableKind( s.kind ) && !ownerClass[ s.id ].empty() && receiverHedgeLang( s.lang ) && s.endByte > s.sigEndByte )
+            if( callableKind( s.kind ) && !ownerClass[ s.id ].empty() && receiverHedgeLang( s.lang ) )
             {
-                methodsByType[ typeKey( ownerClass[ s.id ], "::", s.name ) ].push_back( s.id );
+                ( s.endByte > s.sigEndByte ? methodsByType : abstractByType )[ typeKey( ownerClass[ s.id ], "::", s.name ) ].push_back( s.id );
+                if( s.endByte <= s.sigEndByte )
+                {
+                    abstractNames.try_emplace( std::string_view( s.name ), char( 1 ) );
+                }
             }
         }
         const std::size_t N = ing.symbols.size();
         std::vector<const Binding*> qualified;   // locals, parameters and fields written `pkg.T`: decided once every import alias is known
         std::vector<const Binding*> written;     // rust-receivers: Rust locals, parameters and fields written (or constructed) as a type
+        std::vector<const Binding*> dispatch;    // lane L6: Rust locals, parameters and fields typed only through a trait (DispatchType)
         std::vector<const Binding*> augAssigns;  // Python `x op= v`: decided once every fact and method is known (h1-annot)
         types.importsByFile.assign( ing.files.size(), {} );
         types.filePackage.assign( ing.files.size(), {} );
@@ -2071,7 +2104,14 @@ struct ReceiverEvidence
             const bool typedLocal = b.kind == LocalBindKind::RecvType
                                  || ( b.kind == LocalBindKind::Type && ( ing.symbols[ b.fromSymbol ].lang == Lang::TypeScript
                                                                          || ing.symbols[ b.fromSymbol ].lang == Lang::Python ) );
-            if( b.kind == LocalBindKind::StaticMember )
+            if( b.kind == LocalBindKind::DispatchType )
+            {
+                if( !b.var.empty() && !b.typeName.empty() )
+                {
+                    dispatch.push_back( &b );
+                }
+            }
+            else if( b.kind == LocalBindKind::StaticMember )
             {
                 if( ing.symbols[ from ].name == b.var )   // recorded inside the member's body: the member itself
                 {
@@ -2120,6 +2160,10 @@ struct ReceiverEvidence
         for( const Binding* w : written )
         {
             noteResolvedWritten( *w );
+        }
+        for( const Binding* d : dispatch )
+        {
+            noteDispatchWritten( *d );
         }
         std::ranges::sort( operatorResult, []( const std::pair<NodeId, std::string_view>& a, const std::pair<NodeId, std::string_view>& b )
                            { return a.first != b.first ? a.first < b.first : sortutil::svLess( a.second, b.second ); } );
@@ -2249,6 +2293,40 @@ struct ReceiverEvidence
         }
         addTypedFact( keyOf( factScope( w ), '#', w.var ), w, type, cls );
     }
+    // lane L6: a Rust parameter, local or field typed only as SOME implementor of a trait (model.h LocalBindKind::DispatchType)
+    // — `&dyn T`, `Box<dyn T>`, `impl T`, a generic bounded by T. The trait resolves at the binding's own site like a written
+    // type (resultClassOf's Rust rows) and must be a trait (SymKind::Interface); the binding then types no class: a local or
+    // parameter is the tombstone it replaces, carrying the trait beside it, and a field its memberIface entry (the field's
+    // memberClass tombstone was recorded by its own MemberType). Read by dispatchReceiverOf, for the dispatch tier alone.
+    void noteDispatchWritten( const Binding& d )
+    {
+        const std::string_view imported = d.importedName;
+        const std::size_t      colon    = imported.find( ": " );
+        const std::string_view bound    = colon == std::string_view::npos ? std::string_view{} : imported;
+        const std::string_view written  = colon == std::string_view::npos ? imported : imported.substr( colon + 2 );
+        const std::string_view whole    = written.find( "::" ) == std::string_view::npos ? std::string_view{} : written;
+        NodeId trait = types.rustResultClass( d.fileId, d.startByte, whole, d.typeName );
+        if( trait != kNoNode && ing.symbols[ trait ].kind != SymKind::Interface )
+        {
+            trait = kNoNode;   // a class of that name: `dyn` / `impl` / a bound name a trait, never a class
+        }
+        if( d.isFromAssignment )   // a struct's field
+        {
+            if( classLike( ing.symbols[ d.fromSymbol ].kind ) )
+            {
+                const auto [ it, fresh ] = memberIface.try_emplace( keyOf( d.fromSymbol, '#', d.var ), trait );
+                if( !fresh && it->second != trait )
+                {
+                    it->second = kNoNode;   // two declarations of the field disagree: decide nothing
+                }
+            }
+            return;
+        }
+        LocalFact f = factOf( d, std::string_view{}, kNoNode );   // the tombstone it stands in for, carrying the trait
+        f.iface = trait;
+        f.bound.assign( bound );
+        addFact( keyOf( factScope( d ), '#', d.var ), std::move( f ) );
+    }
     // is the result of the operator Python calls on a `cls` receiver (`inPlace`, else `binary`) provably `cls` (noteAugAssign)
     bool operatorKeepsClass( std::string_view cls, NodeId id, std::string_view inPlace, std::string_view binary ) const
     {
@@ -2377,9 +2455,20 @@ struct ReceiverEvidence
     struct SeenLocal
     {
         std::string_view type;
-        NodeId           cls = kNoNode;
+        NodeId           cls   = kNoNode;
+        NodeId           iface = kNoNode;   // lane L6: typed only as SOME implementor of this trait (LocalFact::iface)
+        std::string_view bound;             // lane L6: that typing's generic bound text, "" when none
         bool operator==( const SeenLocal& ) const = default;
     };
+    static SeenLocal seenOf( const LocalFact& f ) noexcept
+    {
+        SeenLocal seen;
+        seen.type  = f.type;
+        seen.cls   = f.cls;
+        seen.iface = f.iface;   // lane L6
+        seen.bound = f.bound;
+        return seen;
+    }
     std::optional<SeenLocal> seenLocal( NodeId scope, std::string_view var, std::uint32_t site ) const
     {
         const auto it = localType.find( keyOf( scope, '#', var ) );
@@ -2394,7 +2483,7 @@ struct ReceiverEvidence
         {
             if( f.end == 0 )
             {
-                whole = ( whole.has_value() && *whole != SeenLocal{ f.type, f.cls } ) ? SeenLocal{} : SeenLocal{ f.type, f.cls };
+                whole = ( whole.has_value() && *whole != seenOf( f ) ) ? SeenLocal{} : seenOf( f );
                 continue;
             }
             if( site < f.start || site >= f.end )
@@ -2406,7 +2495,7 @@ struct ReceiverEvidence
                 inner      = &f;
                 innerSplit = false;
             }
-            else if( f.start == inner->start && f.end == inner->end && SeenLocal{ f.type, f.cls } != SeenLocal{ inner->type, inner->cls } )
+            else if( f.start == inner->start && f.end == inner->end && seenOf( f ) != seenOf( *inner ) )
             {
                 innerSplit = true;
             }
@@ -2415,7 +2504,7 @@ struct ReceiverEvidence
         {
             return whole;
         }
-        const SeenLocal seen = innerSplit ? SeenLocal{} : SeenLocal{ inner->type, inner->cls };
+        const SeenLocal seen = innerSplit ? SeenLocal{} : seenOf( *inner );
         return ( whole.has_value() && *whole != seen ) ? SeenLocal{} : seen;
     }
     static std::optional<std::string_view> typeOf( const std::optional<SeenLocal>& seen ) noexcept
@@ -2576,7 +2665,10 @@ struct ReceiverEvidence
             return false;
         }
         const bool basesByName = cls == kNoNode || types.sameNamedClasses( cls ) == 1;
-        const bool stopped     = walkBaseLevels( type, [ & ]( const std::vector<std::string_view>& level, std::size_t depth )
+        bool        redeclared = false;   // a nearer level declared the name WITHOUT a body: the nearest declaration wins, no ancestor body runs
+        std::size_t foundDepth = 0;
+        const bool  gated      = abstractNames.contains( name );   // no class declares the name bodyless: neither walk below can matter
+        const bool  stopped    = walkBaseLevels( type, [ & ]( const std::vector<std::string_view>& level, std::size_t depth )
         {
             if( ( superOnly && depth == 0 ) || ( depth > 0 && !basesByName ) )
             {
@@ -2584,11 +2676,50 @@ struct ReceiverEvidence
             }
             for( std::string_view t : level )
             {
+                const std::size_t before = found.size();
                 collectMethods( t, name, depth == 0 ? cls : kNoNode );
+                redeclared = redeclared || ( gated && found.size() == before && abstractOn( t, name, depth == 0 ? cls : kNoNode ) );
             }
-            return !found.empty();
+            foundDepth = depth;
+            return redeclared || !found.empty();
         } );
+        if( redeclared || ( stopped && !found.empty() && gated && overloadedAbove( type, name, foundDepth ) ) )
+        {
+            found.clear();   // EXACT OR NO ROW: an abstract re-declaration on the path is no body (the dispatch tier answers)
+        }
         return stopped && !found.empty();   // a walk stopped at an unwalkable base level found nothing
+    }
+    // Kotlin and C# keep no call-comparable arity (ingest_metrics.h cc_paramShape's language gate; Java has one, which the name tiers'
+    // arity rule reads): `found` (bodies at depth `at`) is not the call's answer when a base level ABOVE
+    // declares the name without a body at a parameter count NO found body has: the call may mean that overload (Sub { override fun
+    // ap() } over Mid { fun ap( x: Int ): Int }). A count a found body has is the ordinary override of it.
+    bool overloadedAbove( std::string_view type, std::string_view name, std::size_t at ) const
+    {
+        const Lang lang = ing.symbols[ found[ 0 ] ].lang;
+        if( lang != Lang::Kotlin && lang != Lang::CSharp )
+        {
+            return false;
+        }
+        return walkBaseLevels( type, [ & ]( const std::vector<std::string_view>& level, std::size_t depth )
+        {
+            for( std::string_view t : level )
+            {
+                const auto it = depth > at ? abstractByType.find( typeKey( t, "::", name ) ) : abstractByType.end();
+                if( it != abstractByType.end() && std::ranges::any_of( it->second, [ & ]( NodeId a )
+                    { return std::ranges::all_of( found, [ & ]( NodeId f ) { return ing.symbols[ f ].params != ing.symbols[ a ].params; } ); } ) )
+                {
+                    return true;
+                }
+            }
+            return false;
+        } );
+    }
+    // does `type` declare a callable `name` with NO body (`cls`: only the one class owns it), and own no body of it (collectMethods
+    // found none): an interface's or abstract class's re-declaration of an inherited member
+    bool abstractOn( std::string_view type, std::string_view name, NodeId cls ) const
+    {
+        const auto it = abstractByType.find( typeKey( type, "::", name ) );
+        return it != abstractByType.end() && ( cls == kNoNode || std::ranges::any_of( it->second, [ & ]( NodeId c ) { return ownedBy( c, cls ); } ) );
     }
     // `type`'s own callables named `name` into `found` — only those class `cls` owns, when it is a definition
     void collectMethods( std::string_view type, std::string_view name, NodeId cls ) const
@@ -2854,6 +2985,128 @@ struct ReceiverEvidence
             cls = it == memberClass.end() ? kNoNode : it->second;
         }
         return cls != kNoNode && methodOf( ing.symbols[ cls ].name, r.calleeName, false, cls );
+    }
+    // lane L6 (interface-typed dispatch): the TYPE a member call's receiver is recorded as — the one class or interface the
+    // dispatch tier (ifacedispatch.h) asks about — and, for a Rust generic, the bound that typed it. `type` kNoNode: nothing
+    // recorded. Rust (receiverLocalsOnly): a parameter, local or field typed only through a trait (noteDispatchWritten), reached
+    // from a local or from `self` through the fields' resolved classes. The typed languages: the receiver root's written type
+    // (rootClass: a typed parameter or local, a field of the caller's class) and its stated fields (fieldOf), resolved to ONE
+    // in-tree class at the call site (classAtSite) — a field path only below a class no other in-tree class names. Never
+    // `this` / `self` / `super` or a class-name receiver: those name the caller's own class or a static call, no dispatch.
+    struct DispatchReceiver
+    {
+        NodeId           type = kNoNode;
+        std::string_view bound;
+    };
+    DispatchReceiver dispatchReceiverOf( const Reference& r ) const
+    {
+        if( !active || r.fromSymbol >= ing.symbols.size() || !r.qualifier.empty() || !isMemberCallRef( r ) )
+        {
+            return {};
+        }
+        const Chain ch = chainOf( r );
+        if( !ch.valid || !ch.ctor.empty() || ch.root.empty() )
+        {
+            return {};
+        }
+        if( receiverLocalsOnly( r.lang ) )
+        {
+            return traitDispatchReceiver( r, ch );
+        }
+        if( isThisRoot( ch.root ) || isSuperRoot( r, ch.root ) )
+        {
+            return {};
+        }
+        bool             isStatic = false, superOnly = false;
+        NodeId           cls  = kNoNode;
+        std::string_view type = rootClass( r, ch, isStatic, superOnly, &cls );
+        if( type.empty() || isStatic || superOnly )
+        {
+            return {};
+        }
+        for( std::string_view rest = ch.path; !rest.empty(); )   // the stated field classes, by name
+        {
+            const std::size_t      dot   = rest.find( '.' );
+            const std::string_view field = rest.substr( 0, dot );
+            rest = dot == std::string_view::npos ? std::string_view{} : rest.substr( dot + 1 );
+            type = fieldOf( type, field );
+            cls  = kNoNode;
+            if( type.empty() )
+            {
+                return {};
+            }
+        }
+        if( cls == kNoNode )
+        {
+            cls = types.classAtSite( r.lang, r.fileId, r.startByte, type );
+            cls = cls != kNoNode ? cls : importedTypeClass( r, type );
+            if( cls != kNoNode && !ch.path.empty() && types.sameNamedClasses( cls ) != 1 )
+            {
+                cls = kNoNode;   // a field's type is known by NAME: below a name two in-tree classes share, a floor
+            }
+        }
+        return { cls, {} };
+    }
+    // TypeScript: a type name the caller's file imports by name from a module (`import { Router } from "./fmt/router"`) that the
+    // import tables pin to no class — their export table holds functions and classes, never an interface — names the ONE
+    // top-level INTERFACE of that name in the file the specifier resolved to, else a class of the caller's own file; kNoNode for none
+    // or several (a re-export barrel: a floor), and for every other family (classAtSite's rows answer them)
+    NodeId importedTypeClass( const Reference& r, std::string_view type ) const
+    {
+        if( callResultFamilyOf( r.lang ) != CallResultFamily::TypeScript )
+        {
+            return kNoNode;
+        }
+        std::uint32_t module = UINT32_MAX;
+        if( types.jsImportModules != nullptr )
+        {
+            if( const auto it = types.jsImportModules->find( keyOf( r.fileId, '#', type ) ); it != types.jsImportModules->end() )
+            {
+                module = it->second;
+            }
+        }
+        return types.onlyClass( type, CallResultFamily::TypeScript, [ & ]( NodeId c )
+        {
+            const std::uint32_t f = ing.symbols[ c ].fileId;
+            return ( f == r.fileId || ( f == module && ing.symbols[ c ].kind == SymKind::Interface ) ) && types.levelOfClass( c ).wholeFile();
+        } );
+    }
+    // Rust: a local or parameter typed through a trait, or `self.f` / `x.f.g` whose LAST field is a `Box<dyn T>` one (each
+    // field above it read by its resolved class, as narrowTypedLocal reads them)
+    DispatchReceiver traitDispatchReceiver( const Reference& r, const Chain& ch ) const
+    {
+        NodeId cls = kNoNode;
+        if( isThisRoot( ch.root ) )
+        {
+            if( ch.path.empty() )
+            {
+                return {};
+            }
+            cls = selfClass( r.fromSymbol );
+        }
+        else if( const std::optional<SeenLocal> t = localSeenAt( r.fromSymbol, ch.root, r.startByte ); t.has_value() )
+        {
+            if( ch.path.empty() )
+            {
+                return { t->iface, t->bound };
+            }
+            cls = t->cls;
+        }
+        for( std::string_view rest = ch.path; !rest.empty() && cls != kNoNode; )
+        {
+            const std::size_t      dot   = rest.find( '.' );
+            const std::string_view field = rest.substr( 0, dot );
+            rest = dot == std::string_view::npos ? std::string_view{} : rest.substr( dot + 1 );
+            const std::string&     k     = keyOf( cls, '#', field );
+            if( rest.empty() )
+            {
+                const auto it = memberIface.find( k );
+                return { it == memberIface.end() ? kNoNode : it->second, {} };
+            }
+            const auto it = memberClass.find( k );
+            cls = it == memberClass.end() ? kNoNode : it->second;
+        }
+        return {};
     }
     // rust-receivers (fix round 1): may a Rust call written `T::f()` type the locals its result binds through `to`, a member
     // whose declared result is written `Self` (graph.h typeCallResults asks only for those: a result the base read already
