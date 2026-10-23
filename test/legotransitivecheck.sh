@@ -417,6 +417,16 @@ xpfloor XpPatchBase  "XpPatchReal XpPatchOutSerde"
 xpfloor XpPathExtBase "XpPathExtOut"
 xp XpBraceBase "XpBraceOutBrace XpBraceOutPlain" "XpBraceInGroup"
 xp XpWsInhBase "XpWsInhOutAlias" "XpWsInhReal XpWsInhTarget"
+# fix round 4 (review rv-fc2-delta3 B1, B2): a rename only a `.cargo/config(.toml)` [patch] names (the tree root's, and a member's own
+# extensionless one) makes its key undecided, and so does ONE dependency key that two members mean differently (in the tree in one,
+# a registry crate in the other): floor, no row either way. A key every member means the same way stays decided.
+xpfloor XpCfgBase     "XpCfgOutSerde"
+xpfloor XpCfgTwoBase  ""
+xpfloor XpKeyBase     "XpKeyReal XpKeyOutReg"
+xp XpKeyBothBase "" "XpKeyBothA XpKeyBothB"
+xp XpKeyCtlBase "XpKeyCtlOut" ""
+if lego XpKeyCtlBase && iface | grep -q 'implementors_floor'; then no "XpKeyCtlBase carries a floor for a key every member declares as a registry crate: $( iface )"; else ok "XpKeyCtlBase: a key registry in every member stays decided (no floor)"; fi
+if lego XpKeyBothBase && iface | grep -q 'implementors_floor'; then no "XpKeyBothBase carries a floor for a key in the tree in every member: $( iface )"; else ok "XpKeyBothBase: a key in the tree in every member stays decided (no floor)"; fi
 # (P1) a repo whose ROOT is the package (top-level __init__.py, no src/) importing its own name keeps its row; an outside
 # namesake beside it is still dropped
 if "$BIN" "$FIX/xp/pyflat" --no-cache --lego=XpFlatBase >"$DIR/out" 2>"$DIR/err"

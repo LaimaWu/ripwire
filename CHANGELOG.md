@@ -32,8 +32,9 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   re-export this scan did not see (`pub extern crate foo_core as fc;` in lib.rs, `use fc::T` from another file), a rename only
   `[patch]`, `[replace]` or `.cargo/config` names, a `path =` crate outside the indexed root — is undecided: it lists no row
   and the interface carries `implementors_floor=`, never a confident `implementors="0"`. A tree with no Cargo.toml decides
-  nothing outside but `std` and its siblings. `.cargo/config` is not read, so a registry key it renames is decided outside.
-  This does NOT
+  nothing outside but `std` and its siblings. A key that two members of the tree mean differently (in the tree for one, a registry
+  crate for another) and a key a `.cargo/config(.toml)` `[patch]` names — read in each manifest's directory and above it, within the
+  indexed root — are undecided too; a Cargo file the run cannot read decides nothing outside. This does NOT
   cover a C++ `ext::Base` or `using ext::Base`, a C# `using`, a Swift `import`, a PHP `use`, a JS `require` destructure or a
   Rust `impl ext::Base for S` with no `use`: those rows are still listed by name. Gate: `test/legotransitivecheck.sh` (XP).
 - `--quality-delta=A..B` extracts its per-commit archive through stdin (`tar -x -f -`), the same Windows drive-colon fix as #402 (thanks @lennix1337).

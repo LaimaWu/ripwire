@@ -6182,9 +6182,11 @@ inline bool tomlInlineSets( std::string_view value, std::string_view field, std:
 // What the dependency tables of one Cargo.toml name, keys as written (a `foo-core` is normalised to `foo_core` by the caller).
 struct TomlDeps
 {
-    std::vector<std::string> inTree;     // keys naming a crate of this tree: a `path =` under the indexed root, or an in-tree `package =`
-    std::vector<std::string> declared;   // every dependency key, and every `package =` name
-    std::vector<std::string> pathed;     // keys with any `path =` (inside the root or not) and every [patch] / [replace] key: never a registry or git dependency
+    std::vector<std::string> inTree;      // keys naming a crate of this tree: a `path =` under the indexed root, or an in-tree `package =`
+    std::vector<std::string> declared;    // every dependency key, and every `package =` name
+    std::vector<std::string> pathed;      // keys with any `path =` (inside the root or not) and every [patch] / [replace] key: never a registry or git dependency
+    std::vector<std::string> registry;    // keys a manifest declares with neither: a registry or git dependency (after tomlMergeManifest: of that manifest alone)
+    std::vector<std::string> inherited;   // keys a manifest writes `workspace = true`: the [workspace.dependencies] entry says what they are
 };
 
 // Does a dependency's `path =` (relative to the manifest in `dir`, "" for the root) stay under the indexed root? A path that climbs out of
@@ -6210,38 +6212,152 @@ inline bool tomlPathInRoot( std::string_view dir, std::string_view path )
     return true;
 }
 
-// The dependency KEYS of one Cargo.toml text (in the directory `dir`, "" for the root), sorted into TomlDeps: an entry of a
-// `[dependencies]` / `[dev-dependencies]` / `[build-dependencies]` / `[workspace.dependencies]` / `[target.*.dependencies]` table (or its
-// own `[dependencies.key]` table, or a dotted `key.path =`). A key that carries a `path =` under the root or `package = "<a package of
-// this tree>"` names a crate of the tree in the code (`core2 = { package = "foo-core", path = "../core" }` -> `use core2::T`). An inline
-// table that does not close on its line cannot be read, so its key counts as in the tree: that can only keep a row, never decide one.
-inline void tomlDependencyKeys( std::string_view text, std::string_view dir, const HashMap<std::string, char>& inTree, TomlDeps& out )
+// What one manifest's scan needs besides its text.
+struct TomlDepScope
 {
-    bool        table   = false;   // inside a dependency-key table
-    bool        inEntry = false;   // inside `[dependencies.<entry>]`
+    std::string_view                  dir;      // the manifest's directory under the root, "" for the root
+    const HashMap<std::string, char>& inTree;   // the tree's package names (a `package =` is checked against them)
+};
+
+// One dependency entry as written.
+struct TomlDepEntry
+{
+    std::string_view name;
+    std::string_view path;
+    std::string_view package;
+    bool             hasPath   = false;
+    bool             workspace = false;   // `workspace = true`
+};
+
+// Sort one dependency entry into the manifest's key lists.
+inline void tomlNoteDependency( const TomlDepScope& scope, const TomlDepEntry& e, TomlDeps& out )
+{
+    std::string spelled( e.package );   // `foo-core` is written `foo_core` in the names
+    std::replace( spelled.begin(), spelled.end(), '-', '_' );
+    out.declared.emplace_back( e.name );
+    if( !e.package.empty() )
+    {
+        out.declared.emplace_back( e.package );
+    }
+    if( e.hasPath )
+    {
+        out.pathed.emplace_back( e.name );
+    }
+    const bool inTree = e.hasPath ? tomlPathInRoot( scope.dir, e.path ) : !e.package.empty() && scope.inTree.contains( spelled );
+    ( inTree ? out.inTree : out.registry ).emplace_back( e.name );
+    if( e.workspace )
+    {
+        out.inherited.emplace_back( e.name );
+    }
+}
+
+// Where a manifest's scan stands: inside a dependency-key table, or inside `[dependencies.<entry>]`.
+struct TomlDepCursor
+{
+    bool        table   = false;
+    bool        inEntry = false;
     std::string entry;
-    const auto  ownPackage = [ & ]( std::string_view name )
+};
+
+// A `[header]` line: does it open a dependency table, or an entry table?
+inline void tomlDepHeader( std::string_view line, TomlDepCursor& cur, TomlDeps& out )
+{
+    cur.table = cur.inEntry = false;
+    const std::string_view header = line.substr( 1, std::min( line.find( ']' ), line.size() ) - 1 );
+    const std::size_t      at     = header.rfind( "dependencies" );
+    if( at == std::string_view::npos || ( at > 0 && header[ at - 1 ] != '.' && header[ at - 1 ] != '-' ) )
     {
-        std::string spelled( name );   // `foo-core` is written `foo_core` in the names
-        std::replace( spelled.begin(), spelled.end(), '-', '_' );
-        return !name.empty() && inTree.contains( spelled );
-    };
-    const auto note = [ & ]( std::string_view name, bool hasPath, std::string_view path, std::string_view package )
+        return;
+    }
+    std::string_view after = header.substr( at + 12 );
+    cur.table              = after.empty();
+    if( !after.empty() && after.front() == '.' )
     {
-        out.declared.emplace_back( name );
-        if( !package.empty() )
+        after.remove_prefix( 1 );
+        cur.entry   = std::string( tomlTakeKey( after ) );
+        cur.inEntry = !cur.entry.empty();
+        if( cur.inEntry )
         {
-            out.declared.emplace_back( package );
+            out.declared.push_back( cur.entry );
         }
-        if( hasPath )
-        {
-            out.pathed.emplace_back( name );
-        }
-        if( hasPath ? tomlPathInRoot( dir, path ) : ownPackage( package ) )
-        {
-            out.inTree.emplace_back( name );
-        }
+    }
+}
+
+// The entry a `key = value` line of a dependency table writes: a dotted `key.field = value` or an entry table's own `field = value`
+// sets ONE field of it; any other line is the whole inline table.
+inline TomlDepEntry tomlDepEntry( std::string_view key, std::string_view sub, std::string_view rest, const TomlDepCursor& cur )
+{
+    TomlDepEntry     e;
+    std::string_view flag;
+    if( cur.inEntry || !sub.empty() )
+    {
+        const std::string_view field = cur.inEntry ? key : sub;   // inside an entry table the line's own key is the field
+        const std::string_view v     = tomlTakeKey( rest );
+        e.name      = cur.inEntry ? std::string_view( cur.entry ) : key;
+        e.hasPath   = field == "path";
+        e.path      = e.hasPath ? v : std::string_view();
+        e.package   = field == "package" ? v : std::string_view();
+        e.workspace = field == "workspace" && v.starts_with( "true" );
+        return e;
+    }
+    e.name      = key;
+    e.hasPath   = tomlInlineSets( rest, "path", e.path );
+    e.workspace = tomlInlineSets( rest, "workspace", flag ) && flag.starts_with( "true" );
+    tomlInlineSets( rest, "package", e.package );
+    return e;
+}
+
+// A `key = value` line of a dependency table, an entry table's own field, or a dotted `key.field = value`.
+inline void tomlDepLine( std::string_view line, const TomlDepCursor& cur, const TomlDepScope& scope, TomlDeps& out )
+{
+    std::string_view       rest = line;
+    const std::string_view key  = tomlTakeKey( rest );
+    std::string_view       sub;   // a dotted `key.sub = value`
+    if( rest.starts_with( '.' ) )
+    {
+        rest.remove_prefix( 1 );
+        sub = tomlTakeKey( rest );
+    }
+    rest.remove_prefix( std::min( rest.find_first_not_of( " \t" ), rest.size() ) );
+    if( key.empty() || key.front() == '#' || !rest.starts_with( '=' ) )
+    {
+        return;
+    }
+    rest.remove_prefix( 1 );
+    tomlNoteDependency( scope, tomlDepEntry( key, sub, rest, cur ), out );
+    if( !cur.inEntry && sub.empty() && rest.find( '{' ) != std::string_view::npos && rest.find( '}' ) == std::string_view::npos )
+    {
+        out.inTree.emplace_back( key );   // an inline table over several lines: unreadable, never a registry dependency
+        out.pathed.emplace_back( key );
+    }
+}
+
+// Fold one manifest's keys into the tree's. A key THIS manifest puts in the tree, paths or inherits is no registry key of its (an entry
+// table's `version =` line reads as one beside its own `path =` line); what is left is a registry or git dependency of this manifest.
+inline void tomlMergeManifest( TomlDeps& one, TomlDeps& all )
+{
+    const auto has     = []( const std::vector<std::string>& v, const std::string& k ) { return std::ranges::find( v, k ) != v.end(); };
+    const auto settled = [ & ]( const std::string& k ) { return has( one.inTree, k ) || has( one.pathed, k ) || has( one.inherited, k ); };
+    std::erase_if( one.registry, settled );
+    const auto fold = []( std::vector<std::string>& from, std::vector<std::string>& to )
+    {
+        to.insert( to.end(), std::make_move_iterator( from.begin() ), std::make_move_iterator( from.end() ) );
     };
+    fold( one.inTree, all.inTree );
+    fold( one.declared, all.declared );
+    fold( one.pathed, all.pathed );
+    fold( one.registry, all.registry );
+}
+
+// The dependency KEYS of one Cargo.toml text, sorted into TomlDeps: an entry of a `[dependencies]` / `[dev-dependencies]` /
+// `[build-dependencies]` / `[workspace.dependencies]` / `[target.*.dependencies]` table (or its own `[dependencies.key]` table, or a dotted
+// `key.path =`). A key that carries a `path =` under the root or `package = "<a package of this tree>"` names a crate of the tree in the
+// code (`core2 = { package = "foo-core", path = "../core" }` -> `use core2::T`). An inline table that does not close on its line cannot be
+// read, so its key counts as in the tree: that can only keep a row, never decide one.
+inline void tomlDependencyKeys( std::string_view text, const TomlDepScope& scope, TomlDeps& out )
+{
+    TomlDeps      one;
+    TomlDepCursor cur;
     while( !text.empty() )
     {
         const std::size_t end  = text.find( '\n' );
@@ -6250,64 +6366,14 @@ inline void tomlDependencyKeys( std::string_view text, std::string_view dir, con
         line.remove_prefix( std::min( line.find_first_not_of( " \t\r" ), line.size() ) );
         if( line.starts_with( '[' ) )
         {
-            table = inEntry = false;
-            const std::string_view header = line.substr( 1, std::min( line.find( ']' ), line.size() ) - 1 );
-            const std::size_t      at     = header.rfind( "dependencies" );
-            if( at == std::string_view::npos || ( at > 0 && header[ at - 1 ] != '.' && header[ at - 1 ] != '-' ) )
-            {
-                continue;
-            }
-            std::string_view after = header.substr( at + 12 );
-            table                  = after.empty();
-            if( !after.empty() && after.front() == '.' )
-            {
-                after.remove_prefix( 1 );
-                entry   = std::string( tomlTakeKey( after ) );
-                inEntry = !entry.empty();
-                if( inEntry )
-                {
-                    out.declared.push_back( entry );
-                }
-            }
-            continue;
+            tomlDepHeader( line, cur, one );
         }
-        if( !table && !inEntry )
+        else if( cur.table || cur.inEntry )
         {
-            continue;
-        }
-        std::string_view       rest = line;
-        const std::string_view key  = tomlTakeKey( rest );
-        std::string_view       sub;   // a dotted `key.sub = value`
-        if( rest.starts_with( '.' ) )
-        {
-            rest.remove_prefix( 1 );
-            sub = tomlTakeKey( rest );
-        }
-        rest.remove_prefix( std::min( rest.find_first_not_of( " \t" ), rest.size() ) );
-        if( key.empty() || key.front() == '#' || !rest.starts_with( '=' ) )
-        {
-            continue;
-        }
-        rest.remove_prefix( 1 );
-        if( inEntry || !sub.empty() )
-        {
-            const std::string_view field = inEntry ? key : sub;   // inside an entry table the line's own key is the field
-            std::string_view       value = rest;
-            const std::string_view v     = tomlTakeKey( value );
-            note( inEntry ? std::string_view( entry ) : key, field == "path", field == "path" ? v : std::string_view(), field == "package" ? v : std::string_view() );
-            continue;
-        }
-        std::string_view path;
-        std::string_view package;
-        const bool       hasPath = tomlInlineSets( rest, "path", path );
-        tomlInlineSets( rest, "package", package );
-        note( key, hasPath, path, package );
-        if( rest.find( '{' ) != std::string_view::npos && rest.find( '}' ) == std::string_view::npos )
-        {
-            out.inTree.emplace_back( key );   // an inline table over several lines: unreadable, never a registry dependency
-            out.pathed.emplace_back( key );
+            tomlDepLine( line, cur, scope, one );
         }
     }
+    tomlMergeManifest( one, out );
 }
 
 // The keys a `[patch.<registry>]` / `[replace]` table redirects, appended to `out` (they stay out of the declared-external set: the
@@ -6368,15 +6434,78 @@ struct CargoNames
     HashMap<std::string, char> external;   // declared as a registry or git dependency (not `path =`, not [patch]ed): decided OUTSIDE the tree
 };
 
+// The text of `path` when the file exists; `unreadable` is set when it exists and cannot be read (what it says is then unknown).
+inline std::optional<std::string> readTextIfPresent( const std::string& path, bool& unreadable )
+{
+    std::error_code ec;
+    if( !std::filesystem::exists( path, ec ) )
+    {
+        return std::nullopt;
+    }
+    std::optional<std::string> text = docparse::detail::readWholeFile( path );
+    unreadable                      = unreadable || !text;
+    return text;
+}
+
+// Add the keys every `.cargo/config.toml` / `.cargo/config` that Cargo reads for a manifest in `diskDir` (that directory's and each of
+// its `depth` ancestors up to the root) redirects through [patch] / [replace] to `out`: a config can turn a registry key of a Cargo.toml
+// into a crate of the tree, and the code names it by that key. The config files are no indexed files, so they are probed on disk.
+inline void cargoConfigPatchKeys( const std::filesystem::path& diskDir, std::ptrdiff_t depth, std::vector<std::string>& out, bool& unreadable )
+{
+    std::filesystem::path dir = diskDir.empty() ? std::filesystem::path( "." ) : diskDir;
+    for( ; depth >= 0; --depth, dir = dir.parent_path() )
+    {
+        for( const char* name : { "config.toml", "config" } )
+        {
+            if( const std::optional<std::string> text = readTextIfPresent( ( dir / ".cargo" / name ).string(), unreadable ) )
+            {
+                tomlPatchKeys( *text, out );
+            }
+        }
+    }
+}
+
+// Sort the dependency keys of the whole tree into `names`: a key is IN the tree when some manifest puts it there; EXTERNAL when it is
+// declared and nothing says otherwise. A key that is not a registry or git dependency everywhere (a `path =` anywhere, a [patch], or in the
+// tree for one manifest and a registry crate for another) is decided by no key at all.
+inline void cargoSettleNames( TomlDeps& deps, CargoNames& names )
+{
+    for( std::vector<std::string>* keys : { &deps.inTree, &deps.registry, &deps.pathed, &deps.declared } )
+    {
+        std::ranges::for_each( *keys, []( std::string& name ) { std::replace( name.begin(), name.end(), '-', '_' ); } );
+    }
+    HashMap<std::string, char> notRegistry;
+    for( std::string& name : deps.pathed )
+    {
+        notRegistry.try_emplace( std::move( name ), char( 1 ) );
+    }
+    for( std::string& name : deps.inTree )
+    {
+        const bool twoMeanings = std::ranges::find( deps.registry, name ) != deps.registry.end();
+        ( twoMeanings ? notRegistry : names.inTree ).try_emplace( std::move( name ), char( 1 ) );
+    }
+    for( std::string& name : deps.declared )
+    {
+        if( !notRegistry.contains( name ) && !names.inTree.contains( name ) )
+        {
+            names.external.try_emplace( std::move( name ), char( 1 ) );
+        }
+    }
+}
+
 // The crate names this tree's Cargo.toml files declare. A crate's own name is no path segment of any .rs file, yet `use mycrate::T` in
 // its tests/, examples/, benches/ and src/main.rs names the crate itself, and a workspace crate's package name need not be its
 // directory's. A dependency key is the crate's name in the code, renamed or not (see tomlDependencyKeys); one that
 // only a registry or git dependency declares is `external`, which is the only thing a Rust base clause is DECIDED outside by (besides
-// std). Read through diskPath (the multi-root seam).
+// std). A key one manifest means as a crate of the tree and another as a registry crate, or a key a .cargo/config [patch] names, is
+// neither: the code cannot be placed by the key alone. A manifest or config the run cannot read decides nothing outside. Read through
+// diskPath (the multi-root seam).
 inline CargoNames cargoCrateNames( const IngestResult& ing )
 {
     CargoNames               names;
+    bool                     unreadable = false;
     std::vector<std::string> found;
+    TomlDeps                 deps;
     std::vector<std::pair<std::string, std::string>> manifests;   // (directory under the root, text)
     for( std::uint32_t f = 0; f < ing.files.size(); ++f )
     {
@@ -6385,39 +6514,28 @@ inline CargoNames cargoCrateNames( const IngestResult& ing )
         {
             continue;
         }
-        if( std::optional<std::string> text = docparse::detail::readWholeFile( diskPath( ing, f ) ) )
+        if( std::optional<std::string> text = readTextIfPresent( diskPath( ing, f ), unreadable ) )
         {
+            const std::string_view dir = rel.substr( 0, rel.rfind( '/' ) == std::string_view::npos ? 0 : rel.rfind( '/' ) );
             tomlSectionNames( *text, { "[package]", "[lib]" }, found );
-            manifests.emplace_back( std::string( rel.substr( 0, rel.rfind( '/' ) == std::string_view::npos ? 0 : rel.rfind( '/' ) ) ), std::move( *text ) );
+            cargoConfigPatchKeys( std::filesystem::path( diskPath( ing, f ) ).parent_path(), std::ranges::count( dir, '/' ) + ( dir.empty() ? 0 : 1 ), deps.pathed, unreadable );
+            manifests.emplace_back( std::string( dir ), std::move( *text ) );
         }
     }
-    const auto spell = []( std::string& name ) { std::replace( name.begin(), name.end(), '-', '_' ); };
-    const auto add   = [ & ]( std::string& name )
+    for( std::string& name : found )
     {
-        spell( name );
+        std::replace( name.begin(), name.end(), '-', '_' );
         names.inTree.try_emplace( std::move( name ), char( 1 ) );
-    };
-    std::ranges::for_each( found, add );
-    TomlDeps deps;
+    }
     for( const auto& [ dir, text ] : manifests )
     {
-        tomlDependencyKeys( text, dir, names.inTree, deps );   // after the package names: a rename's `package =` is checked against them
+        tomlDependencyKeys( text, TomlDepScope{ dir, names.inTree }, deps );   // after the package names: a rename's `package =` is checked against them
         tomlPatchKeys( text, deps.pathed );
     }
-    std::ranges::for_each( deps.inTree, add );
-    HashMap<std::string, char> notRegistry;
-    for( std::string& name : deps.pathed )
+    cargoSettleNames( deps, names );
+    if( unreadable )
     {
-        spell( name );
-        notRegistry.try_emplace( std::move( name ), char( 1 ) );
-    }
-    for( std::string& name : deps.declared )
-    {
-        spell( name );
-        if( !notRegistry.contains( name ) && !names.inTree.contains( name ) )
-        {
-            names.external.try_emplace( std::move( name ), char( 1 ) );
-        }
+        names.external.clear();
     }
     return names;
 }
@@ -6439,7 +6557,8 @@ inline void rustCrateAliases( std::string_view text, std::vector<std::pair<std::
     const auto trim = []( std::string_view s )
     {
         s.remove_prefix( std::min( s.find_first_not_of( " \t\r" ), s.size() ) );
-        return s.substr( 0, s.find_last_not_of( " \t\r" ) + 1 );
+        const std::size_t last = s.find_last_not_of( " \t\r" );   // npos on a blank line: npos + 1 wraps (an ASan/UBSan abort)
+        return last == std::string_view::npos ? std::string_view() : s.substr( 0, last + 1 );
     };
     std::string stmt;        // the `use` / `extern crate` statement being read, up to its `;`
     bool        open = false;
@@ -6771,7 +6890,8 @@ inline HashMap<std::string, char> pythonRootPackageImports( const IngestResult& 
     for( const Binding& b : ing.bindings )
     {
         // a Python file's import only: a JS or Rust binding whose first segment spells the directory name is no Python package import
-        if( b.kind == LocalBindKind::Import && b.fileId < ing.files.size() && langOfPath( ing.files[ b.fileId ] ) == Lang::Python
+        if( b.kind == LocalBindKind::Import && b.fileId < ing.files.size()
+            && langFacts( langOfPath( ing.files[ b.fileId ] ) ).baseImportEvidence == BaseImportEvidence::PythonImport
             && !b.var.empty() && !b.typeName.empty() && b.typeName.front() != '.'
             && names.contains( std::string( std::string_view( b.typeName ).substr( 0, b.typeName.find( '.' ) ) ) ) )
         {
