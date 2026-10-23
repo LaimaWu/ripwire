@@ -552,7 +552,10 @@ _IN_LIMIT    = 3
 # and they make next= replay real corpus/window flags, which is the fact a hand-spelled next= used to lose.
 # --exclude=skills joined them on 2026-09-14 (18 skills/ files in the window, and 17 of the ~24 bytes of
 # next= headroom); a fourth exclude costs more than the cap has left, which is why widening stops here.
-_IN_EXCLUDES = "--exclude=test --exclude=docs --exclude=skills"
+# --exclude=changelog.d joined them on 2026-10-23 (train 33): the per-change fragment directory holds one small file per
+# entry, 16 in the first window that carried it, and they filled the global block past the display cut at every N whose
+# src/ page could cut. next= is emitted in full since 2026-09-25, so the headroom note above no longer limits a fourth.
+_IN_EXCLUDES = "--exclude=test --exclude=docs --exclude=skills --exclude=changelog.d"
 
 def inCaseCmd( n ):
     return f"{BIN} . --rank-by=churn-decay --since=HEAD~{n} {_IN_EXCLUDES} --in={_IN_DIR} --limit={_IN_LIMIT}"
