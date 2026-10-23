@@ -11004,7 +11004,7 @@ inline bool canonicalIdMatches( std::string_view canonAbs, std::string_view spec
 // in id= is exactly what this accepts — including the ROOT-RELATIVE spelling every lens now emits (see
 // canonicalIdMatches above). Overloads share one canonical id by construction, so this returns
 // EVERY match — the caller decides (--expand shows all, --around picks one), same as the bare-name path.
-inline std::vector<NodeId> resolveAllByCanonicalId( const IngestResult& ing, std::string_view spec )
+inline std::vector<NodeId> resolveAllByCanonicalIdExact( const IngestResult& ing, std::string_view spec )
 {
     std::vector<NodeId> out;
     for( const Symbol& s : ing.symbols )
@@ -11015,6 +11015,26 @@ inline std::vector<NodeId> resolveAllByCanonicalId( const IngestResult& ing, std
         }
     }
     return out;
+}
+// QUALNAME-1 (memberowner.h): a member row prints n="Owner.name" / n="Owner#name" and no sc=, so the id the legend composes
+// (p::sc::n with sc absent) reads `path::Owner.name`. On a miss, the LAST `.` or `#` after the path's final "::" is read as the
+// member separator it is and the canonical id retried as path::Owner::name — exact, never a looser match.
+inline std::vector<NodeId> resolveAllByCanonicalId( const IngestResult& ing, std::string_view spec )
+{
+    std::vector<NodeId> out = resolveAllByCanonicalIdExact( ing, spec );
+    const std::size_t   cut = spec.rfind( "::" );
+    if( !out.empty() || cut == std::string_view::npos )
+    {
+        return out;
+    }
+    const std::size_t sep = spec.find_last_of( ".#" );
+    if( sep == std::string_view::npos || sep <= cut + 2 || sep + 1 >= spec.size() )
+    {
+        return out;
+    }
+    std::string alt( spec.substr( 0, sep ) );
+    alt.append( "::" ).append( spec.substr( sep + 1 ) );
+    return resolveAllByCanonicalIdExact( ing, alt );
 }
 
 // Bare name, or a canonical id. The "::" probe runs FIRST and only when the spec carries one, then falls

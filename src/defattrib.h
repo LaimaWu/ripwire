@@ -42,6 +42,7 @@
 #include "editcheck.h"   // editCheckGroupKeys' fold (editCheckDeclFoldTargets) — the C-family declaration identity
 #include "graph.h"
 #include "langfacts.h"   // langFacts(l).overloadSignatures — the TypeScript overload-signature rule, as a column
+#include "memberowner.h"   // QUALNAME-1: MemberOwners / qualifiedMemberName — the one member-owner rule for every row
 #include "model.h"
 #include "pageview.h"
 #include "sarif.h"       // rootRelativeUri: the table's p= in the rows' own path dialect
@@ -983,60 +984,25 @@ inline PathEndpointBinding pathEndpointBinding( const Graph& g, std::size_t srcD
 }
 
 // ── PATH-OWNERS (train 30): a --path / path_between hop row names a member by its owner, n="Owner.name" ────────────────
-// A bare hop name made the reader re-resolve it: a path through A::go and B::go read n="go" n="go". The owner is read off the
-// parser's own scope (Symbol::scope, the sc= every other surface prints), never off the name, and printed only when the index
-// DEFINES that scope as a member owner in the hop's language — a class, struct, interface or named type, or a module
-// (`@definition.module` is SymKind::Other: Rust `mod`, Ruby `module`, Elixir `defmodule`). A C++ namespace is no indexed
-// definition, so a namespace-scope function stays bare, exactly like a free function. Language-neutral: every language whose
-// defs carry sc= gets owners by this one rule (today C/C++, Python, Rust, Ruby, Kotlin classes; Go since go-scope (#403));
-// a language whose defs carry no sc= (TS/JS, Java, C#, Swift, Kotlin `object`) keeps bare rows — a floor, not a claim.
-// The kinds a scope must be defined as to print as an owner — and the kinds of a hop that is itself an owner (a type hop is
-// never printed as Box.Box: a class carries its own name as sc=).
-// Reuse-first: the type half is graph.h namespaceCompatible's Type rule (the one statement of "a type definition"), plus a
-// module (SymKind::Other).
-inline bool isMemberOwnerKind( SymKind k ) noexcept
-{
-    return k == SymKind::Other || namespaceCompatible( RefRole::Type, k );
-}
-// scopeLastSegment (the innermost owner of a written scope) lives in model.h, beside Symbol::scope: testmap.h's class-new owner reads it too.
-// Clears every candidate owner the index does not DEFINE as a member owner in that hop's language: one pass over the symbols,
-// each checked against the path's handful of candidates.
-inline void keepDefinedOwners( const IngestResult& ing, std::span<const NodeId> path, std::vector<std::string_view>& owner )
-{
-    EXPECTS( owner.size() == path.size(), "one candidate slot per hop" );
-    std::vector<char> defined( path.size(), 0 );
-    for( const Symbol& t : ing.symbols )
-    {
-        for( std::size_t i = 0; i < path.size() && isMemberOwnerKind( t.kind ); ++i )
-        {
-            defined[i] = char( defined[i] || ( !owner[i].empty() && t.name == owner[i] && t.lang == ing.symbols[ path[i] ].lang ) );
-        }
-    }
-    for( std::size_t i = 0; i < path.size(); ++i )
-    {
-        owner[i] = defined[i] ? owner[i] : std::string_view();
-    }
-}
-// Per hop, the owner its row prints ("" = bare). One pass over the symbols, and only when some hop has a scope at all: a
-// free-function path costs nothing. The candidate set is the path's hops (a handful), so the pass is O(symbols x hops).
+// A bare hop name made the reader re-resolve it: a path through A::go and B::go read n="go" n="go". QUALNAME-1 moved the rule to
+// memberowner.h (MemberOwners) so every member row shares it — the owner is the parser's own scope, printed only when the index
+// DEFINES its last segment as a member owner in the hop's language; a type hop, a C++ namespace-scope function, a function-local
+// def (a closure) and a language whose defs carry no sc= (TS/JS, Java, C#, Swift, Kotlin `object`) keep bare rows — a floor, not
+// a claim. The separator is the language's own (langfacts.h memberSeparator: `Builder::Build`, `Application#run`, `Pattern.Match`).
+// Per hop, the owner its row prints ("" = bare). Built only when some hop has a scope at all: a free-function path costs nothing.
 inline std::vector<std::string_view> pathHopOwners( const IngestResult& ing, std::span<const NodeId> path )
 {
     std::vector<std::string_view> owner( path.size() );
-    bool                          anyCandidate = false;
-    for( std::size_t i = 0; i < path.size(); ++i )
-    {
-        const Symbol& s = ing.symbols[ path[i] ];
-        if( !s.scope.empty() && !isMemberOwnerKind( s.kind ) )
-        {
-            owner[i]     = scopeLastSegment( s.scope );
-            anyCandidate = anyCandidate || !owner[i].empty();
-        }
-    }
-    if( !anyCandidate )
+    const bool anyScope = std::any_of( path.begin(), path.end(), [ & ]( NodeId id ) { return !ing.symbols[ id ].scope.empty(); } );
+    if( !anyScope )
     {
         return owner;
     }
-    keepDefinedOwners( ing, path, owner );
+    const MemberOwners owners( ing );
+    for( std::size_t i = 0; i < path.size(); ++i )
+    {
+        owner[i] = owners.ownerOf( ing.symbols[ path[i] ] );
+    }
     ENSURES( owner.size() == path.size(), "one owner slot per hop" );
     return owner;
 }
@@ -1056,12 +1022,11 @@ inline void emitPathHopRows( std::FILE* out, const IngestResult& ing, const Grap
     {
         const Symbol&          s     = ing.symbols[ path[i] ];
         const std::string_view rp    = singleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], rootPrefix ) : std::string_view( ing.files[ s.fileId ] );
-        const std::string      owner = owners[i].empty() ? std::string() : std::string( escapeXml( owners[i], esc ) ) + ".";
-        const std::string      name  = std::string( escapeXml( s.name, esc ) );
+        const std::string      name  = std::string( escapeXml( qualifiedMemberName( owners[i], s ), esc ) );   // QUALNAME-1: the language's separator
         const bool             hop   = i > 0;
         const std::string      mark  = std::string( viaEdgeAttr( hop && edgeNameOnly( g, path[ i - 1 ], path[i] ), hop && edgeIsLink( g, path[ i - 1 ], path[i] ) ) )
                                      + anchorMissAttr( hop && edgeAnchorMiss( g, path[ i - 1 ], path[i] ) );
-        emitTo( out, "<s t=\"{}\" n=\"{}{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ), owner, name, escapeXml( rp, esc ), s.line,
+        emitTo( out, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}/>", symTag( s.kind ), name, escapeXml( rp, esc ), s.line,
                 mark, splitArmAttrXml( pathHopSplitArm( g, path, i ) ) );
     }
 }

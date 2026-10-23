@@ -465,11 +465,15 @@ getrows(){
     ran_ok "($1) --$2=$3" "$f" || return 1
     rowsof "($1) --$2=$3" "$f"
 }
+# QUALNAME-1: a member row prints Owner::name / Owner.name / Owner#name (the owner is part of the spelling). Every arm below keys a row by
+# (kind, BARE name, path[:line]) - the bare name matches the bare spelling AND any Owner-qualified one, so a notproven negative rejects both
+# spellings (never a vacuous pass on a row that moved to its qualified name). The exact qualified spelling is pinned by the (Qs) arms.
+AWKB='function bare( s ) { sub( /^.*(::|[.#])/, "", s ); return s }'
 # match SPEC — the awk condition for "n path[:line]" over a rows line "t n path line H d"
 specmatch(){   # prints the matching rows of $GOT for SPEC
     local n="${1%% *}" p="${1#* }" l=""
     case "$p" in *:[0-9]*) l="${p##*:}"; p="${p%:*}";; esac
-    printf '%s\n' "$GOT" | awk -v n="$n" -v p="$p" -v l="$l" 'NF >= 5 && $2 == n && $3 == p && ( l == "" || $4 == l )'
+    printf '%s\n' "$GOT" | awk -v n="$n" -v p="$p" -v l="$l" "$AWKB"' NF >= 5 && ( $2 == n || bare( $2 ) == n ) && $3 == p && ( l == "" || $4 == l )'
 }
 show(){ printf '%s' "$GOT" | awk 'NF >= 5 { printf "%s %s %s:%s%s; ", $1, $2, $3, $4, ( $5 == "name" ? " via=name" : "" ) }'; }
 
@@ -496,8 +500,8 @@ proven(){
 exactproven(){
     local r="$1" v="$2" s="$3" want="$4" got
     getrows "$r" "$v" "$s" || return
-    got="$( printf '%s\n' "$GOT" | awk 'NF >= 5 && $5 != "name" { print $1 " " $2 " " $3 }' | sort -u | tr '\n' ';' | sed 's/;$//' )"
-    want="$( printf '%s' "$want" | tr ';' '\n' | sort -u | tr '\n' ';' | sed 's/;$//' )"
+    got="$( printf '%s\n' "$GOT" | awk "$AWKB"' NF >= 5 && $5 != "name" { print $1 " " bare( $2 ) " " $3 }' | sort -u | tr '\n' ';' | sed 's/;$//' )"
+    want="$( printf '%s' "$want" | tr ';' '\n' | awk "$AWKB"' { n = $2; $2 = bare( n ); print }' | sort -u | tr '\n' ';' | sed 's/;$//' )"
     if [ "$got" = "$want" ]; then ok "($r) --$v=$s unhedged rows are exactly [${want:-none}]"
     else no "($r) --$v=$s unhedged rows are [${got:-none}], want [${want:-none}]"; fi
 }
@@ -549,7 +553,7 @@ hopnotproven(){
             no "($r) --for=\"$q\" shows no hop <h n=\"$h\">, and it was no dropped hop candidate (score r=$hr on the RR-off twin, hops total=$htot, noedge=$hne)"; return
         fi
         getrows "$r" callees "$hp:$h" || return
-        if [ -z "$( printf '%s\n' "$GOT" | awk -v n="$n" 'NF >= 5 && $2 == n' )" ]; then
+        if [ -z "$( printf '%s\n' "$GOT" | awk -v n="$n" "$AWKB"' NF >= 5 && ( $2 == n || bare( $2 ) == n )' )" ]; then
             no "($r) --for=\"$q\" dropped hop $h, and --callees=$hp:$h does not list $n either: $( show )"
         elif [ -n "$( printf '%s\n' "$GOT" | awk 'NF >= 5 && $5 != "name"' )" ]; then
             no "($r) --for=\"$q\" dropped hop $h, yet --callees=$hp:$h proves a row (the hop-slot rule does not explain the drop): $( show )"
@@ -1520,12 +1524,12 @@ while read -r tag id lang form scope target root sel verdict a b c; do
     if ! getrows "$CR/$root" callees "$sel"; then mxred=$(( mxred + 1 )); continue; fi
     if [ "$verdict" = "P" ]; then
         f="${c%:*}"; l="${c##*:}"
-        want="$( printf '%s\n' "$GOT" | awk -v t="$a" -v n="$b" -v f="$f" -v l="$l" '$1 == t && $2 == n && $3 == f && $4 == l && $5 != "name"' )"
-        extra="$( printf '%s\n' "$GOT" | awk -v n="$b" -v f="$f" -v l="$l" '$2 == n && $5 != "name" && !( $3 == f && $4 == l )' )"
+        want="$( printf '%s\n' "$GOT" | awk -v t="$a" -v n="$b" -v f="$f" -v l="$l" "$AWKB"' $1 == t && ( $2 == n || bare( $2 ) == n ) && $3 == f && $4 == l && $5 != "name"' )"
+        extra="$( printf '%s\n' "$GOT" | awk -v n="$b" -v f="$f" -v l="$l" "$AWKB"' ( $2 == n || bare( $2 ) == n ) && $5 != "name" && !( $3 == f && $4 == l )' )"
         if [ -n "$want" ] && [ -z "$extra" ]; then ok "$label proves exactly [$b $c]"
         else no "$label: expected exactly the proven row [$a $b $c]: $( show )"; mxred=$(( mxred + 1 )); fi
     else
-        hits="$( printf '%s\n' "$GOT" | awk -v n="$a" '$2 == n && $5 != "name"' )"
+        hits="$( printf '%s\n' "$GOT" | awk -v n="$a" "$AWKB"' ( $2 == n || bare( $2 ) == n ) && $5 != "name"' )"
         if [ -z "$hits" ]; then ok "$label proves no [$a]${b:+ ($b)}"
         else no "$label shows [$a] as a PROVEN edge${b:+ (a $b cell must hedge)}: $( show )"; mxred=$(( mxred + 1 )); fi
     fi
@@ -1840,8 +1844,28 @@ PY
     else no "(C) ($r) conservation broken: $DL"; fi
 done
 
+echo "=== (Qs) the exact Owner-qualified spelling of the unhedged callee rows (QUALNAME-1; the arms above key by bare name) ==="
+# exactnames ROOT VERB SEL "kind QualName path;..." - the unhedged rows are exactly these, spelled exactly (a bare name FAILs here)
+exactnames(){
+    local r="$1" v="$2" s="$3" want="$4" got
+    getrows "$r" "$v" "$s" || return
+    got="$( printf '%s\n' "$GOT" | awk 'NF >= 5 && $5 != "name" { print $1 " " $2 " " $3 }' | sort -u | tr '\n' ';' | sed 's/;$//' )"
+    want="$( printf '%s' "$want" | tr ';' '\n' | sort -u | tr '\n' ';' | sed 's/;$//' )"
+    if [ "$got" = "$want" ]; then ok "(Qs) ($r) --$v=$s spells its unhedged rows exactly [$want]"
+    else no "(Qs) ($r) --$v=$s unhedged rows spelled [${got:-none}], want exactly [$want]"; fi
+}
+exactnames py    callees src/tui/uses.py:clone     "fn Styles.copy src/tui/css/styles.py"
+exactnames go    callees src/result.go:fromValue   "method Chars.Get src/util/chars.go"
+exactnames kt    callees src/app/Pump.kt:param     "fn Tank.spill src/app/Pump.kt"
+exactnames cpp   callees src/logger.cpp:close      "method Base::flush src/logger.cpp;method Logger::reset src/logger.cpp"
+exactnames rb    callees lib/app/logger.rb:line    "method Helpers#stamp lib/app/helpers.rb"
+exactnames rsrecv callees src/app.rs:typed_param   "method Book::spin src/model.rs"
+
 echo "=== (K) the predicates can fail ==="
 kread(){ P rows "$1" && GOT="$PARSED"; }
+printf '<callees of="x" defs="1"><s t="method" n="Application#onerror" p="lib/application.js:12"/></callees>' >"$TMP/kq.xml"; kread "$TMP/kq.xml"
+if [ -n "$( specmatch "onerror lib/application.js" | awk '$5 != "name"' )" ] && [ -z "$( specmatch "other lib/application.js" )" ]; then ok "(K) an unhedged planted Owner#name row reads as PROVEN under the bare spelling (notproven would fail it), and only that name"
+else no "(K) the reader missed an unhedged planted qualified row: [$GOT]"; fi
 printf '<callees of="x" defs="1"><s t="method" n="onerror" p="lib/application.js:12"/></callees>' >"$TMP/k1.xml"; kread "$TMP/k1.xml"
 if [ -n "$( specmatch "onerror lib/application.js" | awk '$5 != "name"' )" ]; then ok "(K) an unhedged planted row reads as PROVEN (notproven would fail it)"
 else no "(K) the reader missed an unhedged planted row: [$GOT]"; fi

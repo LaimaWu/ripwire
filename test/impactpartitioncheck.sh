@@ -156,6 +156,7 @@ fn_rows = {}              # the same, from FUNCTION seeds only — assertion (1-
 # L7: per TYPE seed (its <files> carries type_users=), what (1-type) and (1-mention) read: its name, its rollup row
 # per file, its compared rows (after the exclusions below) and its d=1 rows per file (every file, none excluded).
 type_seed_recs = []
+qualified_rows = [0]      # QUALNAME-1 floor: how many --impact rows printed an `Owner::` prefix (see the join-key note)
 row_count_ok = True
 radius_sum_ok = True
 for name in seed_names:
@@ -210,6 +211,12 @@ for name in seed_names:
             rec["d1"][f1] = rec["d1"].get(f1, 0) + 1
     for rkind, rn, rp, rtested in rows:
         np = norm_path(rp)
+        # QUALNAME-1: a C++ member row prints n="Owner::name"; --test-gate's <u sym=> is the BARE name (its emitter is
+        # not owner-qualified), so the join key drops the `Owner::` prefix — spelling only, the (name, file) identity
+        # the comparison always used. The floor below proves the prefix really is printed (not silently dropped).
+        qn, rn = rn, rn.rsplit("::", 1)[-1]
+        if qn != rn:
+            qualified_rows[0] += 1
         if np == SAMPLE_FILE:
             continue                       # the changed file's own symbols — excluded, as --test-gate excludes them
         if np in testgate_testfiles:
@@ -233,6 +240,11 @@ for name in seed_names:
             rec["rows"].append((rn, np, tested))
         else:
             observe(fn_rows, def_key, tested)
+
+if qualified_rows[0] > 0:
+    ok("QUALNAME-1: %d --impact row(s) printed an Owner::-qualified n= (the join below strips it to --test-gate's bare <u sym=>)" % qualified_rows[0])
+else:
+    no("QUALNAME-1: no --impact row printed an Owner::name — the member-owner spelling this gate's join strips is gone, re-check the join key")
 
 if row_count_ok:
     ok("row-count invariance: every --impact call's printed row count equals its own reaches=")

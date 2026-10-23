@@ -12,6 +12,7 @@
 #include "nextverb.h"   // P3 (L7): next= on the top-ranked <d> row
 #include "countfloor.h"   // count-floor: implementorFloors — the <iface> implementors_floor= evidence
 #include "arch.h"        // P3: builtinLayer() — the file-node layer= tag
+#include "memberowner.h"   // QUALNAME-1: MemberOwners — the <d> row folds a member's sc= into n="Owner.name"
 #include "graph.h"     // H6/F2: definitionCountOfName — the ONE resolver behind --lego's defs= single-pick disclosure
 #include "graphlegend.h"   // R-E fix (2026-08-19): rw::rootRelPathsLegend — the ONE root= definition
 #include "lintrules.h"   // §P9.4: langOfPath / dependencyCapable — packDeps' dep_files= denominator
@@ -4458,6 +4459,8 @@ struct SigRowFacts
                                                            //   when "0" — its legend says an absent one IS 0. Only where in=
                                                            //   is measured on every row (fanIn supplied): without fanIn an
                                                            //   absent in= means "not measured" (P2.4), so nothing is elided.
+    const MemberOwners*               owners = nullptr;    // QUALNAME-1: a member row prints n="Owner.name" and no sc= (memberowner.h);
+                                                           //   nullptr ⇒ n= bare and sc= as before.
 };
 
 // Whether this row's zero cx=/ccx=/in= are omitted (SigRowFacts::elideZero): the lens asked AND in= is measured here.
@@ -4540,9 +4543,12 @@ inline std::string sigRowHead( const IngestResult& ing, NodeId id, const SigRowF
     char lineAttr[ 32 ];
     rw::formatTo( lineAttr, sizeof( lineAttr ), "<d l=\"{}\" n=\"", s.line );
     std::string head = lineAttr;
-    head += escapeXml( s.name, esc );          // escapeXml returns a view INTO esc — copy before the next call
+    // QUALNAME-1: a member's scope FOLDS into n= (n="Owner.name", the language's separator; memberowner.h says when) — the id is
+    // then p::Owner::name, the scope still spelled once; every other scoped row keeps n= bare and sc= (row 6).
+    const std::string_view owner = facts.owners != nullptr ? facts.owners->ownerOf( s ) : std::string_view();
+    head += escapeXml( qualifiedMemberName( owner, s ), esc );          // escapeXml returns a view INTO esc — copy before the next call
     head += "\"";
-    if( hasScopeAttr( s ) )   // row 6: the short id — the scope segment only; p= (this row's, or its <f>'s) supplies the rest
+    if( owner.empty() && hasScopeAttr( s ) )   // row 6: the short id — the scope segment only; p= (this row's, or its <f>'s) supplies the rest
     { head += " sc=\"";  head += escapeXml( s.scope, esc );  head += "\""; }
     // P7 (terminality round A, lane R, 2026-09-05): p= (and layer= when the file sits in a builtin layer) ride
     // EVERY row that carries r= — the lens serving is FLAT now (rows in rank order, no <f p=> wrapper), so the
@@ -5729,6 +5735,7 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
                                                              //   r=1: the rank-adaptive doc/sig tiers and the r=1 row's next= hint key
                                                              //   on GLOBAL rank), so pages merge without duplicate r=
 {
+    const MemberOwners sigOwners( ing );   // QUALNAME-1: one owner pass per <sigs> block, a binary search per row
     const SigsCutContinuation* const cutNext = cutOut != nullptr ? cutOut->continuationRequest : nullptr;
     // forbudget-soft: the two other INPUTS the report carries (the row-drop budget and whether past_target= is printed), read
     // before the reset like the continuation request
@@ -5965,7 +5972,7 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
                     }
                 }
 
-                const SigRowFacts rowFacts{ metrics, fanIn, qbuf, pure, globalRank, topRowNext, spelling.elideZeroMetrics };
+                const SigRowFacts rowFacts{ metrics, fanIn, qbuf, pure, globalRank, topRowNext, spelling.elideZeroMetrics, &sigOwners };
                 std::string head = sigRowHead( ing, id, rowFacts, esc, rootArg );   // d1: rank fact (ladder path)
 
                 std::string doc = docCommentBefore( src, a );
@@ -6100,7 +6107,7 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
         // may change. The moved row keeps the row spelling it was charged and shown with (both reorders).
         const auto reheadXml = [ & ]( SigEntry& e, std::uint32_t newRank )
         { e.head = sigRowHead( ing, e.id, SigRowFacts{ metrics, fanIn, e.lensRun.c_str(), e.pureSig ? " pure=\"1\"" : "", newRank, topRowNext,
-                                                       spelling.elideZeroMetrics }, esc, rootArg ); };
+                                                       spelling.elideZeroMetrics, &sigOwners }, esc, rootArg ); };
         const auto isDocRow = [ & ]( const SigEntry& e ) { return ing.symbols[ e.id ].lang == Lang::Markdown; };   // both reorders' one doc test
         if( hasSigLensRule( lensRules, SigLensRules::HeadRoundRobin ) )
         {
@@ -6313,7 +6320,7 @@ inline void packSignatures( std::FILE* out, const IngestResult& ing, const std::
 
             // identity (n=/id=) + descriptive facts (cx=complexity, ccx=cognitive, in=reuse-count, Q3 lens, pure)
             // d1: rank 0 = non-lens serving — r= (and P7's p=) absent by contract.
-            std::string row = sigRowHead( ing, id, SigRowFacts{ metrics, fanIn, qbuf, pure, /*rank=*/0u }, esc, rootArg );
+            std::string row = sigRowHead( ing, id, SigRowFacts{ metrics, fanIn, qbuf, pure, /*rank=*/0u, {}, false, &sigOwners }, esc, rootArg );
             std::string doc = docCommentBefore( src, a );   // L2: the human-written intent, if any
             redactInPlace( doc, redact );                    // a doc-comment body can hold a pasted secret
             if( !doc.empty() ) { row += "<doc>";  row += escapeXml( doc, esc );  row += "</doc>";  used += doc.size() + 12; }

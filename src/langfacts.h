@@ -96,29 +96,36 @@ struct LangFacts
     /// class-new row takes its l= only from a construction the import resolver pins to the reached class (testmap.h ClassNewJsBinds,
     /// graph.h pinJsImport), never from the written name. The other languages keep the name test (classNewCallNames).
     bool importBoundConstruction = false;
+
+    /// QUALNAME-1 (src/memberowner.h): the separator a member row prints between its owner and its name, as the language itself
+    /// spells a member: `Owner::name` in C, C++, Rust and PHP (scope resolution; PHP methods store no scope today, so none prints), `Owner#name` in Ruby (the instance-method form
+    /// RDoc uses; a `def self.x` singleton prints `#` too, since the index does not tell the two apart), `Owner.name` elsewhere.
+    /// Every spelling is one the selectors resolve (graph.h resolveAllByScopeQualified / resolveAllByDottedScope).
+    std::string_view memberSeparator = ".";
 };
 
 /// The rows, one per Lang in enum order. A language says only the facts it has.
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
-    { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true },
+    { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true, .memberSeparator = "::" },
     { .lang = Lang::Python },
     { .lang = Lang::TypeScript, .overloadSignatures = true, .importBoundConstruction = true },
     { .lang = Lang::Go },
-    { .lang = Lang::Rust, .constructorMethod = "new" },
+    { .lang = Lang::Rust, .constructorMethod = "new", .memberSeparator = "::" },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC, .noNestedNamedFunctions = true },
     { .lang = Lang::Markdown, .linkSections = true },
     { .lang = Lang::JavaScript, .importBoundConstruction = true },
     { .lang = Lang::Bash },
     { .lang = Lang::Java },
-    { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true },
+    { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true,
+      .memberSeparator = "#" },
     { .lang = Lang::Unknown },
     { .lang = Lang::Json },
     { .lang = Lang::CSharp },
-    { .lang = Lang::C, .noNestedNamedFunctions = true },
+    { .lang = Lang::C, .noNestedNamedFunctions = true, .memberSeparator = "::" },
     { .lang = Lang::Toml },
     { .lang = Lang::Yaml },
-    { .lang = Lang::Php },
+    { .lang = Lang::Php, .memberSeparator = "::" },
     { .lang = Lang::Lua },
     { .lang = Lang::Elixir, .hasInertQuoteRegions = true },
     { .lang = Lang::Dart },

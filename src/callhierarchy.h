@@ -27,6 +27,7 @@
 #include "defattrib.h" // the per-row definition attribution every surface of these rows serves (and tsContractSignatures)
 #include "filter.h"    // pathTierIndexOver / compareTierThenPath — the tier-then-path row order both surfaces serve
 #include "graph.h"     // resolveAllByNameQualified, the CSR, testSymbolForwardReach / countTestedIn / isTestedByReach
+#include "memberowner.h"   // QUALNAME-1: MemberOwners / qualifiedMemberName — n="Owner.name" on every member row
 #include "model.h"
 #include "nextverb.h"  // nextFlag / nextAttrXml / nextFieldJson — a cut <in> block's next=
 #include "sarif.h"     // rootRelativeUri — the <in> blocks' p=, as every other row
@@ -188,6 +189,7 @@ inline ClosureBlocksOut closureBlocks( const IngestResult& ing, const Graph& g, 
     };
     std::string out = json ? ",\"in\":[" : "";
     const std::size_t blocks = std::min( closures.size(), kClosureBlocks );
+    const std::optional<MemberOwners> owners = json ? std::nullopt : std::optional<MemberOwners>( std::in_place, ing );   // QUALNAME-1: XML rows only (JSON keys stay)
     for( std::size_t b = 0; b < blocks; ++b )
     {
         const NodeId              inner = closures[b];
@@ -212,7 +214,7 @@ inline ClosureBlocksOut closureBlocks( const IngestResult& ing, const Graph& g, 
             const bool    via = edgeNameOnly( g, inner, rows[i] );   // FE-B: a name-only edge says so, as on the callees rows
             out += json ? std::string( i == 0 ? "" : "," ) + "{\"t\":\"" + symTag( s.kind ) + "\",\"n\":\"" + jsonStr( s.name ) + "\",\"p\":\"" + jsonStr( rel( s ) ) + "\""
                               + ( via ? ",\"via\":\"name\"" : "" ) + "}"
-                        : "<s t=\"" + std::string( symTag( s.kind ) ) + "\" n=\"" + ex( s.name ) + "\" p=\"" + ex( rel( s ) ) + "\"" + viaNameAttr( via ) + "/>";
+                        : "<s t=\"" + std::string( symTag( s.kind ) ) + "\" n=\"" + ex( qualifiedMemberName( *owners, s ) ) + "\" p=\"" + ex( rel( s ) ) + "\"" + viaNameAttr( via ) + "/>";
         }
         out += json ? "]}" : "</in>";
     }
@@ -514,13 +516,14 @@ inline CallersByteBand callersByteBand( const IngestResult& ing, std::span<const
     {
         return CallersByteBand{};
     }
-    RowCallSites      sites = rowCallSites( ing, defs, rows, rr, keptForwards );
-    std::vector<char> esc;   // the escape buffer the row's n= and p= are measured through
+    RowCallSites       sites = rowCallSites( ing, defs, rows, rr, keptForwards );
+    std::vector<char>  esc;   // the escape buffer the row's n= and p= are measured through
+    const MemberOwners owners( ing );   // QUALNAME-1: the row's n= is its owner-qualified name (memberowner.h), so the estimate charges it
     std::size_t       bytes = 0;
     for( std::size_t i = 0; i < rows.size(); ++i )
     {
         const Symbol&     s       = ing.symbols[ rows[i] ];
-        const std::size_t nameLen = escapeXml( s.name, esc ).size();
+        const std::size_t nameLen = escapeXml( qualifiedMemberName( owners, s ), esc ).size();
         const std::size_t pathLen = escapeXml( vrPath( ing, s.fileId, rr ), esc ).size();
         bytes += std::string_view( "<s t=\"\" n=\"\" p=\":\"/>" ).size() + std::string_view( symTag( s.kind ) ).size() + nameLen + pathLen
                + std::to_string( s.line ).size()
