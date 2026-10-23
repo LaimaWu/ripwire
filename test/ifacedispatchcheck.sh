@@ -99,6 +99,13 @@ class Answer:
             self.err = "not well-formed XML: %s" % e
         self.dc = [ dict( e.attrib ) for e in self.root.iter( "dc" ) ] if self.root is not None else []
         self.rows = [ dict( e.attrib ) for e in self.root.findall( "s" ) ] if self.root is not None else []
+        # train 33 (QUALNAME-1 composed): a member row prints n="Owner<sep>name" (OnlySolo::soloRun, Inc.ap). The arms below key a
+        # row by its MEMBER name plus p= (which already names the one definition); the printed spelling stays in "qn", and the (Q)
+        # arms pin it. Every row is normalised, so a negative that asks for a name's absence still reads the respelled rows.
+        for r in self.rows:
+            if "n" in r:
+                r[ "qn" ] = r[ "n" ]
+                r[ "n" ] = re.split( r"::|#|\.", r[ "n" ] )[ -1 ]
     @property
     def ok( self ):
         return self.rc == 0 and self.root is not None
@@ -373,6 +380,15 @@ for root, sel, want, kind, tag, why in (
     say( rows_are( a, want ), "[%s] k2r5_%s" % ( kind, tag ), "--callees=%s: %s -- %s" % ( sel, [ ( w[ 1 ], w[ 2 ] ) for w in want ], why ), a.why() )
 
 # ── (M) Rust method set (fix round 1, B2; §(a) 4): through dyn T only T's impl blocks and defaults can run ───────────────────
+print( "=== (Q) train 33: the rows carry QUALNAME-1's owner spelling (the arms above compare member name + p=) ===" )
+for root, sel, qn, p, tag in ( ( CPP, "soloCall", "OnlySolo::soloRun", "runners.cc:23", "cpp" ),
+                               ( RS, "solo_dyn", "OnlySolo::solo_step", "src/solo/mod.rs:8", "rs" ),
+                               ( SAMKO, "runOp", "Inc.ap", "app/Op.kt:6", "kt" ),
+                               ( JAVA, "single", "singleRun", "app/OnlySingle.java:4", "java_bare" ) ):
+    a = ask( root, "callees", sel )
+    say( a.ok and [ r.get( "qn" ) for r in a.rows if r.get( "p" ) == p ] == [ qn ], "[C] q_%s" % tag,
+         "--callees=%s: the row at %s prints n=\"%s\" (owner from the stored scope; Java stores none: bare)" % ( sel, p, qn ), a.why() )
+
 print( "=== (M) Rust: an inherent method is never a trait-dispatched candidate ===" )
 a = ask( B1RS, "callees", "via_ext" )
 say( rows_are( a, [ ( "helper", "src/t.rs:2", "name" ), ( "helper", "src/t.rs:9", "name" ) ] ), "[P] m_rs_supertrait",

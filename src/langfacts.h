@@ -143,6 +143,11 @@ struct LangFacts
     /// RDoc uses; a `def self.x` singleton prints `#` too, since the index does not tell the two apart), `Owner.name` elsewhere.
     /// Every spelling is one the selectors resolve (graph.h resolveAllByScopeQualified / resolveAllByDottedScope).
     std::string_view memberSeparator = ".";
+
+    /// Kotlin, C#: a method name may be overloaded and the index keeps no call-comparable arity for it (ingest_metrics.h
+    /// cc_paramShape's language gate; Java has one), so the dispatch tier cannot tell an override from an overload by its
+    /// parameter count (receiverevidence.h overloadedAbove; lane L6, folded from a `Lang::` compare in train 33).
+    bool overloadsWithoutArity = false;
 };
 
 /// java.lang.Object's public methods an interface may redeclare abstract (LangFacts::samIgnoredMembers).
@@ -165,7 +170,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
       .memberSeparator = "#" },
     { .lang = Lang::Unknown },
     { .lang = Lang::Json },
-    { .lang = Lang::CSharp },
+    { .lang = Lang::CSharp, .overloadsWithoutArity = true },
     { .lang = Lang::C, .noNestedNamedFunctions = true, .memberSeparator = "::" },
     { .lang = Lang::Toml },
     { .lang = Lang::Yaml },
@@ -173,7 +178,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Lua },
     { .lang = Lang::Elixir, .hasInertQuoteRegions = true },
     { .lang = Lang::Dart },
-    { .lang = Lang::Kotlin, .samFromJavaLambdas = true, .interfaceReadsAsClass = true, .anonymousImplementors = true },
+    { .lang = Lang::Kotlin, .samFromJavaLambdas = true, .interfaceReadsAsClass = true, .anonymousImplementors = true, .overloadsWithoutArity = true },
     { .lang = Lang::GDScript },
     { .lang = Lang::Clojure },
 } };

@@ -21,6 +21,7 @@
 // a value that crossed a call boundary. Those receivers stay name-only — the honest answer, not a guess.
 
 #include "infra/sortutil.h"   // svLess: the explicit byte order the operatorResult sort takes (portablebuildcheck #6)
+#include "langfacts.h"   // langFacts(l).overloadsWithoutArity — overloadedAbove's language column
 #include "model.h"
 #include "resolve.h"   // includerDir; HashMap / SmallVec through it; extent::inSet (extentsuspect.h) through it
 #include "smallvec.h"
@@ -2696,7 +2697,7 @@ struct ReceiverEvidence
     bool overloadedAbove( std::string_view type, std::string_view name, std::size_t at ) const
     {
         const Lang lang = ing.symbols[ found[ 0 ] ].lang;
-        if( lang != Lang::Kotlin && lang != Lang::CSharp )
+        if( !langFacts( lang ).overloadsWithoutArity )
         {
             return false;
         }
