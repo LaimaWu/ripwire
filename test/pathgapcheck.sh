@@ -76,6 +76,10 @@
 #   (K13 assign/annot/tuple, K15) fix 2: a base name REBOUND at module scope after its import (`Base = Other`, `Base: type =
 #        Other`, `Base, spare = Other, 1`) is no binding — withheld; K15 the same assignment inside a function body rebinds no
 #        module name, so the override stays a way in.
+#   (K13 star/starfirst/starext/dupimp/clsbody/fnlocal/fnparam/fnloop, K16) fix 3: the Python rule is inverted — a base name is a
+#        binding only when, in the scope chain the class statement runs in, the import is its ONE binding: any other binding
+#        there (a star import that could bind it, a class-body or function-local rebinding, a parameter, a loop target, a
+#        second import) is withheld; K16 the twins whose scope chain holds only the import stay a way in.
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -471,7 +475,7 @@ printf 'from tx.driver import Driver\n\ndef target():\n    return 2\n\nclass Lin
 printf 'from tx.driver import Driver\ndef run(driver):\n    return driver.stop_mode()\n' > "$TMP/c5_src/src/tx/app.py"
 # K9-K12 fixtures (rule 2c, Python): run(obj) in pkg/x/c.py calls obj.render_line(), bound by name alone to the imported
 # Base.render_line; other/b.py's Sub.render_line (calls target) is the namesake and nothing run reaches is owned by Sub.
-for v in der der2 unrel ext extbare same exttr extdir selfnm unimp reexp assign annot tuple fnbind; do d="$TMP/c5_$v"; mkdir -p "$d/pkg/x" "$d/pkg/y" "$d/other"
+for v in der der2 unrel ext extbare same exttr extdir selfnm unimp reexp assign annot tuple fnbind star starfirst starext starclean dupimp; do d="$TMP/c5_$v"; mkdir -p "$d/pkg/x" "$d/pkg/y" "$d/other"
     printf 'class Base:\n    def render_line(self):\n        return 1\n' > "$d/pkg/x/a.py"
     printf 'from pkg.x.a import Base\ndef run(obj):\n    return obj.render_line()\n' > "$d/pkg/x/c.py"
     case "$v" in
@@ -496,8 +500,36 @@ for v in der der2 unrel ext extbare same exttr extdir selfnm unimp reexp assign 
                  printf 'class Base:\n    def other(self):\n        return 3\n' > "$d/pkg/y/base2.py" ;;
         fnbind)  hdr='from pkg.y.base2 import Base as Other\nfrom pkg.x.a import Base\n\ndef later():\n    Base = Other\n    return Base\n'; cls='class Sub(Base):'
                  printf 'class Base:\n    def other(self):\n        return 3\n' > "$d/pkg/y/base2.py" ;;
+        star)      hdr='from pkg.x.a import Base\nfrom pkg.y.base2 import *\n';  cls='class Sub(Base):'
+                 printf 'class Base:\n    def other(self):\n        return 3\n' > "$d/pkg/y/base2.py" ;;
+        starfirst) hdr='from pkg.y.base2 import *\nfrom pkg.x.a import Base\n';  cls='class Sub(Base):'
+                 printf 'class Base:\n    def other(self):\n        return 3\n' > "$d/pkg/y/base2.py" ;;
+        starext)   hdr='from pkg.x.a import Base\nfrom ext import *\n';          cls='class Sub(Base):' ;;
+        starclean) hdr='from pkg.x.a import Base\nfrom pkg.y.helpers import *\n'; cls='class Sub(Base):'
+                 printf 'def helper():\n    return 5\n' > "$d/pkg/y/helpers.py" ;;
+        dupimp)  hdr='from pkg.x.a import Base\nfrom pkg.x.a import Base\n';     cls='class Sub(Base):' ;;
     esac
     printf "${hdr}\ndef target():\n    return 2\n\n${cls}\n    def render_line(self):\n        return target()\n" > "$d/other/b.py"
+done
+# K16 fixtures (lane ind4b fix 3): the class statement sits INSIDE a class body or a function, so the base name is read in that scope chain
+# (its own class body or function, then enclosing functions, then the module — an enclosing class body is skipped). The tail of every
+# fixture is the same `class Sub(Base): def render_line` calling target().
+for v in clsbody fnlocal fnparam fnloop clsskip methcls fnimp; do d="$TMP/c5_$v"; mkdir -p "$d/pkg/x" "$d/pkg/y" "$d/other"
+    printf 'class Base:\n    def render_line(self):\n        return 1\n' > "$d/pkg/x/a.py"
+    printf 'from pkg.x.a import Base\ndef run(obj):\n    return obj.render_line()\n' > "$d/pkg/x/c.py"
+    printf 'class Base:\n    def other(self):\n        return 3\n' > "$d/pkg/y/base2.py"
+    imp='from pkg.y.base2 import Base as Other\nfrom pkg.x.a import Base\n\ndef target():\n    return 2\n\n'
+    case "$v" in
+        clsbody) body='class Outer:\n    Base = Other\n    class Sub(Base):\n        def render_line(self):\n            return target()\n' ;;
+        fnlocal) body='def make():\n    Base = Other\n    class Sub(Base):\n        def render_line(self):\n            return target()\n    return Sub\n' ;;
+        fnparam) body='def make(Base):\n    class Sub(Base):\n        def render_line(self):\n            return target()\n    return Sub\n' ;;
+        fnloop)  body='def make():\n    for Base in (Other,):\n        class Sub(Base):\n            def render_line(self):\n                return target()\n' ;;
+        clsskip) body='class Outer:\n    Base = Other\n    class Mid:\n        class Sub(Base):\n            def render_line(self):\n                return target()\n' ;;
+        methcls) body='class Outer:\n    Base = Other\n    def make(self):\n        class Sub(Base):\n            def render_line(self):\n                return target()\n        return Sub\n' ;;
+        fnimp)   imp='from pkg.y.base2 import Base as Other\n\ndef target():\n    return 2\n\n'
+                 body='def make():\n    from pkg.x.a import Base\n    class Sub(Base):\n        def render_line(self):\n            return target()\n    return Sub\n' ;;
+    esac
+    printf "${imp}${body}" > "$d/other/b.py"
 done
 nsblock(){ grep -o '<near_sink [^>]*>.*</near_sink>' "$1"; }
 nshead(){ grep -o '<near_sink [^>]*>' "$1"; }
@@ -939,7 +971,7 @@ for fx in ext extbare; do
 done
 # K13-K15 (lane ind4b fix 1): 2c binds the base NAME per file (BaseBound::Proven at every hop), not a name graph plus file
 # reach. Each withheld arm's namesake file reaches pkg/x/a.py over its imports, so only the per-file binding withholds it.
-for fx in same:7 exttr:8 extdir:8 selfnm:8 unimp:7 assign:9 annot:9 tuple:9; do v=${fx%%:*}; ln=${fx##*:}
+for fx in same:7 exttr:8 extdir:8 selfnm:8 unimp:7 assign:9 annot:9 tuple:9 star:8 starfirst:8 starext:8 dupimp:8 clsbody:10 fnlocal:10 fnparam:9 fnloop:10; do v=${fx%%:*}; ln=${fx##*:}
     case "$v" in
         same)   why="Sub's Base is pkg/y/base2.py's same-named class (base2.py itself imports pkg.x.a)" ;;
         exttr)  why="Sub(ext.Base) is external; b.py reaches pkg/x/a.py only through pkg/util.py" ;;
@@ -949,6 +981,14 @@ for fx in same:7 exttr:8 extdir:8 selfnm:8 unimp:7 assign:9 annot:9 tuple:9; do 
         assign) why="b.py imports Base, then rebinds it at module scope (Base = Other, pkg/y/base2's class): Sub derives from that" ;;
         annot)  why="the module-scope rebinding is annotated (Base: type = Other)" ;;
         tuple)  why="the module-scope rebinding is a tuple target (Base, spare = Other, 1)" ;;
+        star)      why="a star import AFTER the explicit import (from pkg.y.base2 import *) could rebind Base to base2's class" ;;
+        starfirst) why="a star import BEFORE the explicit import: the name has two possible bindings, so it is undecided" ;;
+        starext)   why="a star import from a module outside the tree (from ext import *) could bind any name" ;;
+        dupimp)    why="the same import twice: the name has two bindings, so it is undecided" ;;
+        clsbody)   why="class Outer: Base = Other; class Sub(Base): the base is read in Outer's class body, where Base is Other" ;;
+        fnlocal)   why="def make(): Base = Other; class Sub(Base): the base is the function's local Base" ;;
+        fnparam)   why="def make(Base): class Sub(Base): the base is the parameter" ;;
+        fnloop)    why="def make(): for Base in (Other,): class Sub(Base): the base is the loop target" ;;
     esac
     nsArm "(K13) 2c per-file base binding ($v): $why — withheld" "$TMP/c5_$v" "run,target" \
         '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
@@ -968,6 +1008,18 @@ nsArm "(K15) 2c per-file base binding (fnbind): Base = Other inside a function b
     '<ns d="1" t="fn" n="render_line" p="other/b.py:12" why="name:1" in="run" site="pkg/x/c.py:3" met="1"/>'
 brArm "(K15b) 2c per-file base binding (fnbind): the bridge crosses to the override" "$TMP/c5_fnbind" "run,target" \
     '<bridge proven="0" crossings="1" hops="2"><s t="fn" n="run" p="pkg/x/c.py:2"/><s t="fn" n="render_line" p="other/b.py:12" via="namesake" cands="1"/><s t="fn" n="target" p="other/b.py:8"/></bridge>'
+
+# K16 (lane ind4b fix 3): the base name is read where the class statement runs. The rebinding forms above are withheld in the loop
+# (clsbody, fnlocal, fnparam, fnloop, star*, dupimp). The twins below stay a way in: Python skips an enclosing class body for a
+# class nested one level down or defined in a method (checked against CPython), an import inside the function that holds the class is
+# the one binding, and a star import from a module that binds no Base could not rebind it.
+for fx in starclean:8:4 clsskip:11:4 methcls:11:4 fnimp:9:3; do v=${fx%%:*}; rest=${fx#*:}; ln=${rest%%:*}; tl=${rest##*:}
+    nsArm "(K16) 2c per-file base binding ($v): Base is still pkg/x/a.py's class where Sub is defined — a way in" "$TMP/c5_$v" "run,target" \
+        '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+        "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" why=\"name:1\" in=\"run\" site=\"pkg/x/c.py:3\" met=\"1\"/>"
+    brArm "(K16b) 2c per-file base binding ($v): the bridge crosses to the override" "$TMP/c5_$v" "run,target" \
+        "<bridge proven=\"0\" crossings=\"1\" hops=\"2\"><s t=\"fn\" n=\"run\" p=\"pkg/x/c.py:2\"/><s t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" via=\"namesake\" cands=\"1\"/><s t=\"fn\" n=\"target\" p=\"other/b.py:$tl\"/></bridge>"
+done
 
 echo "(M) MCP path_between carries the same clause"
 # Two MCP legend postures (lean-answers): the unchanged assertions run on --mcp-legend=inline, the pre-posture spelling

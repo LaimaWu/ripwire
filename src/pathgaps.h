@@ -528,8 +528,9 @@ private:
 //        A namesake whose base clause names another same-named class (in-tree elsewhere, or external: `ext.Base`,
 //        `from ext import Base`) has no proven edge to the bound class however its file's imports reach the bound file, and
 //        an edge no evidence binds (ByName) is withheld too: exact or no row. The residual is the binding's own: a
-//        qualified base the lookup does not read (a dotted `a.b.X`, a star import) stays withheld (withheld="name"), and so
-//        does a Python base name its file rebinds at module scope (`Base = Other`: pythonModuleRebind), import or not.
+//        qualified base the lookup does not read (a dotted `a.b.X`) stays withheld (withheld="name"), and so
+//        does a Python base name with any binding but its import in the class statement's scope chain (pythonBaseNameProven:
+//        `Base = Other` at module, class-body or function scope, a parameter, a second import, a star import that could bind it).
 // Rule 2c's derivation (below): the classes that derive from a bound definition's class through PROVEN base edges only
 // (Graph::implementorBound == BaseBound::Proven), memoized per bound owner. The classes with a derived class are indexed by
 // "<file>#<name>" on first ask (one pass over the implementors map); the walk visits each class once.

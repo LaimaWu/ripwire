@@ -34,8 +34,14 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   same draw this shows 6 sites, and a hand-check read all 6 as correct: textual's `driver.start_application_mode()` /
   `stop_application_mode()` → `LinuxDriver`, `widget.render_line( y )` → `TextArea`, and `node.compose()` → three `App`
   subclasses in examples. Like every by-name hedge, each is a hedge and never a proven edge. What stays withheld: a base
-  the binding does not read (a dotted `a.b.Base`, a star import), and a Python base name its file rebinds at module scope
-  after the import (`Base = Other`, `Base: type = Other`), since the import no longer says what the name means.
+  the binding does not read (a dotted `a.b.Base`), and a Python base name that has any binding other than its import in
+  the class statement's own scope chain (its class body or function, the enclosing functions, then the module; an
+  enclosing class body is skipped, as Python skips it): an assignment of any form (`Base = Other`, `Base: type = Other`),
+  a def, class, loop, `with` or `except` target, a parameter, a `global` or `nonlocal`, a second import, a `try: from a
+  import Base / except ImportError: Base = None` fallback, or a star import that could bind it (one from a module outside
+  the tree, or from a module that defines, imports or star-imports the name), wherever in the scope it sits and in
+  either order. The import must be the name's one binding; otherwise the site is withheld, never shown. Not read, and
+  not detectable statically: a rebinding made from outside the file (`a.Base = Other` on an imported module).
 
 ### Added — `--for` names the members of its shown owner rows on the compact route (`mem=`)
 
