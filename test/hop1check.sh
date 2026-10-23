@@ -397,6 +397,11 @@ check( "(L2) the compact path legend defines slot_callers=", "s via=slot|slot-na
 check( "(L2) the compact impact legend defines reaches_hedged= and the ring row", "reaches_hedged=N:" in ti and "rh called_by= called_at= via= calls=:" in ti )
 sys.exit( fail )
 PY
-rc=$?
-if [ "$rc" -eq 0 ]; then echo "ALL PASS"; else echo "FAIL"; fi
-exit "$rc"
+rc=$?   # the harness's own status, read immediately (checklist 14): 0 every arm passed, 1 an arm failed, anything else a crash
+fail=0
+if [ "$rc" -ne 0 ]; then
+    printf '  FAIL  the arm harness exited %s (an arm failed above, or the harness crashed)\n' "$rc"
+    fail=1
+fi
+[ "$fail" = 0 ] && echo "ALL PASS" || echo "FAILURES ABOVE"
+exit "$fail"
