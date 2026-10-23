@@ -2146,13 +2146,25 @@ inline HashMap<std::string, char> buildPythonModuleRebindVetoes( const IngestRes
 // PythonScopeFacts::nameBinds: every binding of a name a Python class's base clause starts with (the bare base, else its
 // qualifier), per file and scope. buildPythonModuleRebindVetoes keeps only the module-scope facts; the base-name rule (pythonBaseNameProven)
 // needs the scoped ones too, because a class statement resolves its base in ITS lexical scope chain, not the module's.
+// fileId → 1 for a Python source file (.py / .pyi)
+inline std::vector<char> pythonFileFlags( const IngestResult& ing )
+{
+    std::vector<char> isPy( ing.files.size(), 0 );
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        const std::string_view path = rootRelPath( ing, f );
+        isPy[ f ] = char( path.ends_with( ".py" ) || path.ends_with( ".pyi" ) );
+    }
+    return isPy;
+}
+
 // the first name of every Python class's base clause (the bare base, else its qualifier)
-inline HashMap<std::string, char> pythonBaseClauseNames( const IngestResult& ing )
+inline HashMap<std::string, char> pythonBaseClauseNames( const IngestResult& ing, const std::vector<char>& isPy )
 {
     HashMap<std::string, char> names;
     for( const Reference& r : ing.references )
     {
-        if( r.isInherit && r.lang == Lang::Python )
+        if( r.isInherit && r.fileId < isPy.size() && isPy[ r.fileId ] )
         {
             names.try_emplace( r.memberRoot.empty() ? r.calleeName : r.memberRoot, '\0' );
         }
@@ -2177,11 +2189,13 @@ inline NodeId pythonBindScope( const IngestResult& ing, const Binding& b ) noexc
 inline HashMap<std::string, std::vector<PythonNameBind>> buildPythonNameBinds( const IngestResult& ing )
 {
     HashMap<std::string, std::vector<PythonNameBind>> binds;
-    const HashMap<std::string, char>                  wanted = pythonBaseClauseNames( ing );
+    const std::vector<char>                           isPy   = pythonFileFlags( ing );
+    const HashMap<std::string, char>                  wanted = pythonBaseClauseNames( ing, isPy );
     std::string                                       key;
     for( const Binding& b : ing.bindings )
     {
-        if( ( b.kind == LocalBindKind::VarDecl || b.kind == LocalBindKind::Import ) && b.fileId < ing.files.size() && wanted.contains( b.var ) )
+        if( ( b.kind == LocalBindKind::VarDecl || b.kind == LocalBindKind::Import ) && b.fileId < isPy.size() && isPy[ b.fileId ]
+            && wanted.contains( b.var ) )
         {
             key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
             binds[ key ].push_back( PythonNameBind{ pythonBindScope( ing, b ), b.kind == LocalBindKind::Import } );
