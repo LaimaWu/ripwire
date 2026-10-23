@@ -55,6 +55,8 @@
 # Exits non-zero on any failure; prints PASS/FAIL per check, ALL PASS on success.
 
 set -u
+# Byte order for every `sort` below: the want strings are C-ordered ("TBase::push_back@…" before "push_back@…"); en_US.UTF-8 swaps them (CI macos-26 red, arm 38).
+export LC_ALL=C
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"          # allow a repo-relative RIPWIRE_BIN
