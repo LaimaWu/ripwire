@@ -2031,6 +2031,15 @@ struct PythonNameBind
     bool   isImport = false;
 };
 
+// the scope facts a Python class statement's base name is judged by (pythonBaseNameProven)
+struct PythonScopeFacts
+{
+    HashMap<std::string, std::vector<PythonNameBind>> nameBinds;     // "<fileId>#name" → EVERY binding of the name in that file, in any scope;
+                                                                     //   only for names a Python class's base clause starts with
+    std::vector<std::vector<std::uint32_t>>           starTargets;   // Python fileId → the file each `from m import *` names (kNoFile:
+                                                                     //   unresolved) — a star import binds names no table lists
+};
+
 struct ExternalVetoTables
 {
     HashMap<std::string, char>          importBind;
@@ -2041,10 +2050,7 @@ struct ExternalVetoTables
                                                             //   (Step-A, else the suffix match) — a star import's only evidence
     HashMap<std::string, char>          fileScopeDef;
     HashMap<std::string, char>          pythonModuleRebind;
-    HashMap<std::string, std::vector<PythonNameBind>> pythonNameBinds;   // "<fileId>#name" → EVERY binding of the name in that file, in any
-                                                                         //   scope; only for names a Python class's base clause starts with
-    std::vector<std::vector<std::uint32_t>> pythonStarTargets;           // Python fileId → the file each `from m import *` names (kNoFile:
-                                                                         //   unresolved) — a star import binds names no table lists
+    PythonScopeFacts                    pythonScopes;
     HashMap<std::string, char>          freeName;
 };
 
@@ -2129,7 +2135,7 @@ inline HashMap<std::string, char> buildPythonModuleRebindVetoes( const IngestRes
         }
         if( enclosing && *enclosing == SymKind::Class )
         {
-            continue;   // a class body's own scope — reaches no call site anywhere; ExternalVetoTables' doc explains why
+            continue;   // a class body's own scope — reaches no call site anywhere (a class statement nested in it reads pythonScopes instead)
         }
         key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
         pythonModuleRebind.try_emplace( key, '\0' );
@@ -2137,38 +2143,49 @@ inline HashMap<std::string, char> buildPythonModuleRebindVetoes( const IngestRes
     return pythonModuleRebind;
 }
 
-// ExternalVetoTables::pythonNameBinds: every binding of a name a Python class's base clause starts with (the bare base, else its
+// PythonScopeFacts::nameBinds: every binding of a name a Python class's base clause starts with (the bare base, else its
 // qualifier), per file and scope. buildPythonModuleRebindVetoes keeps only the module-scope facts; the base-name rule (pythonBaseNameProven)
 // needs the scoped ones too, because a class statement resolves its base in ITS lexical scope chain, not the module's.
-inline HashMap<std::string, std::vector<PythonNameBind>> buildPythonNameBinds( const IngestResult& ing )
+// the first name of every Python class's base clause (the bare base, else its qualifier)
+inline HashMap<std::string, char> pythonBaseClauseNames( const IngestResult& ing )
 {
-    HashMap<std::string, char> wanted;   // the first name of every Python base clause
+    HashMap<std::string, char> names;
     for( const Reference& r : ing.references )
     {
         if( r.isInherit && r.lang == Lang::Python )
         {
-            wanted.try_emplace( r.memberRoot.empty() ? r.calleeName : r.memberRoot, '\0' );
+            names.try_emplace( r.memberRoot.empty() ? r.calleeName : r.memberRoot, '\0' );
         }
     }
-    HashMap<std::string, std::vector<PythonNameBind>> binds;
-    std::string                                       key;
-    if( wanted.empty() )
+    return names;
+}
+
+// the scope a Python binding sits in: its enclosing def or class, kNoNode for module scope. A def or class that starts at byte 0 is
+// attributed one byte before itself, clamped to 0 — which lands inside it: its own name binding is module scope, not its own scope
+// (capturePythonRebindShadowDecls).
+inline NodeId pythonBindScope( const IngestResult& ing, const Binding& b ) noexcept
+{
+    if( b.fromSymbol == kNoNode || b.fromSymbol >= ing.symbols.size() )
     {
-        return binds;   // no Python class has a base clause: nothing to look up
+        return kNoNode;
     }
+    const Symbol& enc = ing.symbols[ b.fromSymbol ];
+    const bool    def = enc.kind == SymKind::Function || enc.kind == SymKind::Method || enc.kind == SymKind::Class;
+    return def && !( enc.sigStartByte == 0 && enc.name == b.var ) ? b.fromSymbol : kNoNode;
+}
+
+inline HashMap<std::string, std::vector<PythonNameBind>> buildPythonNameBinds( const IngestResult& ing )
+{
+    HashMap<std::string, std::vector<PythonNameBind>> binds;
+    const HashMap<std::string, char>                  wanted = pythonBaseClauseNames( ing );
+    std::string                                       key;
     for( const Binding& b : ing.bindings )
     {
-        if( ( b.kind != LocalBindKind::VarDecl && b.kind != LocalBindKind::Import ) || b.fileId >= ing.files.size() || !wanted.contains( b.var ) )
+        if( ( b.kind == LocalBindKind::VarDecl || b.kind == LocalBindKind::Import ) && b.fileId < ing.files.size() && wanted.contains( b.var ) )
         {
-            continue;
+            key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
+            binds[ key ].push_back( PythonNameBind{ pythonBindScope( ing, b ), b.kind == LocalBindKind::Import } );
         }
-        // a def or class that starts at byte 0 is attributed one byte before itself, clamped to 0 — which lands inside it: its own name
-        // binding is module scope, not its own scope (capturePythonRebindShadowDecls)
-        const Symbol* encl   = b.fromSymbol != kNoNode && b.fromSymbol < ing.symbols.size() ? &ing.symbols[ b.fromSymbol ] : nullptr;
-        const bool    scoped = encl != nullptr && ( encl->kind == SymKind::Function || encl->kind == SymKind::Method || encl->kind == SymKind::Class )
-                               && !( encl->sigStartByte == 0 && encl->name == b.var );
-        key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
-        binds[ key ].push_back( PythonNameBind{ scoped ? b.fromSymbol : kNoNode, b.kind == LocalBindKind::Import } );
     }
     return binds;
 }
@@ -2184,7 +2201,7 @@ struct PythonImportVetoes
     HashMap<std::string, std::uint32_t>     importBindFile;
     HashMap<std::string, std::uint32_t>     memberImportFile;
     std::vector<std::vector<std::uint32_t>> importFiles;
-    std::vector<std::vector<std::uint32_t>> starTargets;
+    PythonScopeFacts                        scopes;
 };
 
 // FE-A: resolvePythonModuleSuffix scans every indexed path, and FE-A asks it about every UNRESOLVED absolute import (the
@@ -2346,7 +2363,8 @@ inline PythonImportVetoes buildPythonImportVetoes( const IngestResult& ing, cons
         }
     }
     t.importFiles  = buildPythonImportFiles( ing, fileIndex, memo );
-    t.starTargets  = buildPythonStarTargets( ing, fileIndex, memo );
+    t.scopes.starTargets = buildPythonStarTargets( ing, fileIndex, memo );
+    t.scopes.nameBinds   = buildPythonNameBinds( ing );
     return t;
 }
 
@@ -2417,8 +2435,7 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
         t.importBindFile      = std::move( iv.importBindFile );
         t.memberImportFile    = std::move( iv.memberImportFile );
         t.importFiles         = std::move( iv.importFiles );
-        t.pythonStarTargets   = std::move( iv.starTargets );
-        t.pythonNameBinds     = buildPythonNameBinds( ing );
+        t.pythonScopes        = std::move( iv.scopes );
     }
     for( const Symbol& sy : ing.symbols )
     {
@@ -6383,19 +6400,19 @@ inline std::vector<NodeId> pythonClassScopeChain( const IngestResult& ing, NodeI
 // Unknown answers yes (no walk past one level, no __all__ read).
 inline bool pythonStarMayBind( const ExternalVetoTables& v, std::uint32_t f, std::string_view name )
 {
-    if( f >= v.pythonStarTargets.size() )
+    if( f >= v.pythonScopes.starTargets.size() )
     {
         return false;
     }
     std::string key;
-    for( std::uint32_t target : v.pythonStarTargets[ f ] )
+    for( std::uint32_t target : v.pythonScopes.starTargets[ f ] )
     {
-        if( target == kNoFile || ( target < v.pythonStarTargets.size() && !v.pythonStarTargets[ target ].empty() ) )
+        if( target == kNoFile || ( target < v.pythonScopes.starTargets.size() && !v.pythonScopes.starTargets[ target ].empty() ) )
         {
             return true;
         }
-        const auto it = v.pythonNameBinds.find( fileNameKey( key, target, name ) );
-        if( it != v.pythonNameBinds.end() && std::ranges::any_of( it->second, []( const PythonNameBind& b ) { return b.scope == kNoNode; } ) )
+        const auto it = v.pythonScopes.nameBinds.find( fileNameKey( key, target, name ) );
+        if( it != v.pythonScopes.nameBinds.end() && std::ranges::any_of( it->second, []( const PythonNameBind& b ) { return b.scope == kNoNode; } ) )
         {
             return true;
         }
@@ -6410,8 +6427,8 @@ inline bool pythonStarMayBind( const ExternalVetoTables& v, std::uint32_t f, std
 inline bool pythonBaseNameProven( const BaseEvidenceTables& t, const Reference& r, std::string_view name )
 {
     std::string key;
-    const auto  it = t.extVeto.pythonNameBinds.find( fileNameKey( key, r.fileId, name ) );
-    if( it == t.extVeto.pythonNameBinds.end() || r.fromSymbol == kNoNode )
+    const auto  it = t.extVeto.pythonScopes.nameBinds.find( fileNameKey( key, r.fileId, name ) );
+    if( it == t.extVeto.pythonScopes.nameBinds.end() || r.fromSymbol == kNoNode )
     {
         return false;
     }
