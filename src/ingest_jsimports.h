@@ -864,16 +864,14 @@ inline void captureJsRebindFacts( TSNode root, Lang lang, std::uint32_t fileId, 
                 || ( d.end - d.start == best->end - best->start && ts_node_start_byte( d.node ) < ts_node_start_byte( best->node ) ) ) { best = &d; }
         }
         if( best != nullptr && best->immutable ) { continue; }   // writing it throws: the declared target stands
-        if( w.keeping )
-        {
-            // `Eng = require( 'b' ).Eng` over `let Eng;` / an undeclared name is the declare-then-assign idiom: the spelling names
-            // what it named. Over a declaration that already pinned a definition (`let { Eng } = require( 'a' )`, `class Eng`)
-            // the spelling is not the proof — the new value may be another module's: a write, as any other
-            const bool pinned = best != nullptr
-                && std::any_of( decls.begin(), decls.end(), [ & ]( const Decl& d )
-                                { return d.name == w.name && d.start == best->start && d.end == best->end && d.initialized; } );
-            if( !pinned ) { continue; }
-        }
+        // pinned: the declaration already bound a definition (`let { Eng } = require( 'a' )`, `class Eng`, a parameter, a `for` head,
+        // an import) — as opposed to `var x;` / `let x;` / an undeclared name, which hold nothing the write could replace
+        const bool pinned = best != nullptr
+            && std::any_of( decls.begin(), decls.end(), [ & ]( const Decl& d )
+                            { return d.name == w.name && d.start == best->start && d.end == best->end && d.initialized; } );
+        // `Eng = require( 'b' ).Eng` over `let Eng;` is the declare-then-assign idiom: the spelling names what it named. Over a
+        // pinned declaration the spelling is not the proof — the new value may be another module's: a write, as any other
+        if( w.keeping && !pinned ) { continue; }
         const TSNode node = best != nullptr ? best->node : root;
         if( !recorded.try_emplace( std::to_string( ts_node_start_byte( node ) ) + "#" + w.name, 1 ).second ) { continue; }
         RawBind bind;
@@ -884,6 +882,7 @@ inline void captureJsRebindFacts( TSNode root, Lang lang, std::uint32_t fileId, 
         bind.startByte = ts_node_end_byte( root );
         bind.kind      = LocalBindKind::JsRebind;
         bind.var       = w.name;
+        bind.isFromAssignment = pinned;   // graph.h: a MEMBER call through the name is undecided only when a pinned declaration was replaced
         bind.spanStart = best != nullptr ? best->start : ts_node_start_byte( root );
         bind.spanEnd   = best != nullptr ? best->end : ts_node_end_byte( root );
         binds.push_back( std::move( bind ) );

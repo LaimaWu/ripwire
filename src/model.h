@@ -1270,7 +1270,10 @@ enum class LocalBindKind : std::uint8_t
     // sees the write anywhere in it; startByte = the file's END, so the record has no owner (fromSymbol kNoNode) and no
     // (fromSymbol, var) local-name reader takes it for a function's local. An ES import or `const` binding records nothing:
     // writing one throws. Read by graph.h buildGraph (the call is unresolved, no edge) and FalseEdgeRules (as a shadow: no
-    // external veto) ONLY. APPENDED (cache u8).
+    // external veto) ONLY. isFromAssignment = the declaration already BOUND a value (an initializer, a parameter, a `class` /
+    // `function` / import / `for` head — not `var x;` / `let x;` / an undeclared name): a MEMBER call through the name
+    // (`Eng.make()` after `Eng = Foo`) is undecided only then; `let app; … app = new Hono(); app.request()` replaces
+    // nothing a declaration pinned and keeps its receiver reading. APPENDED (cache u8).
     JsRebind,
 };
 // fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)

@@ -2535,6 +2535,7 @@ struct JsImportTables
     HashMap<std::string, JsImportTarget> targets;
     HashMap<std::string, std::vector<VarSpan>> shadows;
     HashMap<std::string, std::vector<VarSpan>> rebinds;   // FC3: "<fileId>#name" → JsRebind spans (model.h): a call there is undecided
+    HashMap<std::string, std::vector<VarSpan>> pinnedRebinds;   // FC3: the rebinds whose declaration already bound a value: a MEMBER call through the name is undecided there
 };
 
 inline std::string jsImportKey( std::uint32_t fileId, std::string_view name )
@@ -2543,15 +2544,17 @@ inline std::string jsImportKey( std::uint32_t fileId, std::string_view name )
 }
 
 // FC3: is this call made through a name WRITTEN after its declaration, at a byte that declaration's scope holds? A bare
-// name (`new Eng()`) is that name itself; a member call (`Eng.make()`) holds whatever its ROOT name holds, so it is as
-// undecided as the root.
+// name (`new Eng()`) is that name itself. A member call (`Eng.make()`) holds whatever its ROOT name holds: as undecided as
+// the root, but only where the root's declaration had bound a value that the write replaced (`let app; app = new Hono()`
+// replaces nothing, and its `app.request()` keeps the receiver reading).
 inline bool jsCallThroughWrittenBinding( const JsImportTables& tables, const Reference& r )
 {
     if( r.role != RefRole::Call ) { return false; }
     const bool bare = r.recv == RecvKind::None && r.qualifier.empty() && !r.memberCall;
     if( !bare && ( !r.memberCall || r.memberRoot.empty() ) ) { return false; }
-    const auto spans = tables.rebinds.find( jsImportKey( r.fileId, r.memberCall ? std::string_view( r.memberRoot ) : std::string_view( r.calleeName ) ) );
-    return spans != tables.rebinds.end()
+    const auto& spansByName = r.memberCall ? tables.pinnedRebinds : tables.rebinds;
+    const auto  spans       = spansByName.find( jsImportKey( r.fileId, r.memberCall ? std::string_view( r.memberRoot ) : std::string_view( r.calleeName ) ) );
+    return spans != spansByName.end()
         && std::any_of( spans->second.begin(), spans->second.end(), [ & ]( const VarSpan& span ) { return r.startByte >= span.startByte && r.startByte < span.endByte; } );
 }
 
@@ -2673,7 +2676,9 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
     JsImportTables tables;
     for( const Binding& b : ing.bindings )   // FC3: the written bindings, whether or not the tree has any ES import
     {
-        if( b.kind == LocalBindKind::JsRebind ) { tables.rebinds[ jsImportKey( b.fileId, b.var ) ].push_back( { b.spanStart, b.spanEnd } ); }
+        if( b.kind != LocalBindKind::JsRebind ) { continue; }
+        tables.rebinds[ jsImportKey( b.fileId, b.var ) ].push_back( { b.spanStart, b.spanEnd } );
+        if( b.isFromAssignment ) { tables.pinnedRebinds[ jsImportKey( b.fileId, b.var ) ].push_back( { b.spanStart, b.spanEnd } ); }
     }
     if( std::none_of( ing.bindings.begin(), ing.bindings.end(), []( const Binding& b ) { return b.kind == LocalBindKind::JsImport; } ) )
     {
@@ -8437,7 +8442,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             disposition = CallDisposition::Unresolved;
             continue;
         }
-        if( !scipPinned && r.role == RefRole::Call && r.recv == RecvKind::None && r.qualifier.empty() && !r.memberCall   // `reply.header()` is not the imported `header`
+        if( !scipPinned && r.role == RefRole::Call && r.recv == RecvKind::None && r.qualifier.empty()
             && ( r.lang == Lang::TypeScript || r.lang == Lang::JavaScript ) )
         {
             const std::string key = jsImportKey( r.fileId, r.calleeName );
@@ -8464,7 +8469,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                     disposition = CallDisposition::Unresolved;
                     continue;
                 }
-                if( bound.outcome == JsImportOutcome::Pinned )
+                if( bound.outcome == JsImportOutcome::Pinned && !r.memberCall )   // `reply.header()` is not the imported `header`: the ladder reads it
                 {
                     cand.push_back( bound.node );
                     narrowed       = true;   // the LATCH that stops the ladder below; see the census call site

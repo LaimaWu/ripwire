@@ -398,9 +398,12 @@ lacks jsrebind callers Foo "&lt;file-scope&gt; cases/destr.js" "&lt;file-scope&g
 has jsrebind callers run "fn onSendEnd cases/memberwriteP.js"
 # FIX1 B3: a MEMBER call is read through its ROOT name — `Eng = Foo; Eng.run()` calls Foo's, a rebound module alias
 # `m = require( b ); m.Eng()` whatever b holds (memberroot.js, once a floor, is gone from the Eng rows above), and a
-# local class `Pack = Crate; Pack.make()` — while a member call through a name nobody writes keeps its edge
+# local class `Pack = Crate; Pack.make()` — when the write REPLACES a value the declaration bound. Near misses keep: a
+# name nobody writes, and `let rig; … rig = new Rig(); rig.fire()` (the declaration bound nothing: the test-file idiom;
+# measured: refusing it dropped 400+ true rows from hono alone)
 lacks jsrebind callers run "&lt;file-scope&gt; cases/memberclass.js"
 exactly jsrebind callers make "modscope &lt;file-scope&gt; cases/membernowriteP.js"
+has jsrebind callers fire "modscope &lt;file-scope&gt; cases/memberunpinnedP.js"
 # FIX1 FC5: `reply.leaf( … )` is a member call: the ES-imported function `leaf` of the same file does not PIN it
 hedged jsrebind callers leaf "send cases/esmemberP.js"   # by name at best: not the imported `leaf` as a pinned row
 # FIX1 B2: the name-keeping exception is for `var x;` / `let x;` / an undeclared name only. keepotherinit.js / keepclass.js
