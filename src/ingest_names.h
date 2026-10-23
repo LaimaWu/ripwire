@@ -1479,14 +1479,10 @@ inline bool rustItemCarriesTestAttr( TSNode item, std::string_view src ) noexcep
         // O(children): `#[ /*…*/ test ]` puts the comments in the attribute_item — 56x at 16 000
         // (test/childwalkscalecheck.sh, arm B23). The sibling climb this sits in is a different scan:
         // ts_node_prev_sibling restarts from the parent's first child too (the parent-chain family).
-        bool        marked = false;
-        ChildCursor cursor( attr );
-        forEachChild( attr, cursor.cur, [ & ]( TSNode ch )
-        {
-            marked = kindIs( ts_node_type( ch ), "attribute" ) && rustAttrIsTestMarker( nodeTextOf( ch, src ) );
-            return !marked;
-        } );
-        return marked;
+        // One level down (maxDepth 1): the attribute_item's own children, stopping at the first test marker (train 33: the
+        // shared tschildren.h walk, not a second hand-written cursor loop — quality-delta paired it with vrStaticMember).
+        return anyChildBelow( attr, 1, /*namedOnly=*/false, [ & ]( TSNode ch )
+                              { return kindIs( ts_node_type( ch ), "attribute" ) && rustAttrIsTestMarker( nodeTextOf( ch, src ) ); } );
     } );
 }
 // lane L6 fix round 1 (B1 iii): a mock attribute in the run — mockall's `#[automock]` in any spelling (`#[mockall::automock]`,
