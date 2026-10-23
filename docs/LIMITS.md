@@ -1026,6 +1026,14 @@ Discloses: **none**
 | --- | --- | --- | --- |
 | `kMinWeakSymbolLen` | `5` | — | — |
 
+### `src/testmap.h`
+
+Discloses: `capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kClassNewRowCap` | `8` | — | rows shown; the group's total= counts them all, next= is --callers= of the first cut row's class |
+
 ### `src/tracelocus.h`
 
 Discloses: `name_ladder_capped`

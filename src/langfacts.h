@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <string_view>
 
 namespace rw
 {
@@ -85,19 +86,29 @@ struct LangFacts
     /// decides only the closure relation, no symbol or edge). A lambda or a block is anonymous, and a C++ local class's
     /// methods sit inside the class's scope, not directly in the function, so neither is a closure either way.
     bool noNestedNamedFunctions = false;
+
+    /// Rust: a construction is a call to the type's conventional constructor METHOD (`T::new( … )`), not to the type itself, so
+    /// --affected's class-new backstop (testmap.h classNewTestRows) reads a call to this method of a class as building it. Empty =
+    /// the language constructs by calling the class (`new T(` JS/TS/Java/C#, `T(` Python/Kotlin/C++), which needs no column.
+    std::string_view constructorMethod = {};
+
+    /// TypeScript / JavaScript: a construction (`new X()`, `new N.X()`) builds whatever its import binding resolves to, so --affected's
+    /// class-new row takes its l= only from a construction the import resolver pins to the reached class (testmap.h ClassNewJsBinds,
+    /// graph.h pinJsImport), never from the written name. The other languages keep the name test (classNewCallNames).
+    bool importBoundConstruction = false;
 };
 
 /// The rows, one per Lang in enum order. A language says only the facts it has.
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true },
     { .lang = Lang::Python },
-    { .lang = Lang::TypeScript, .overloadSignatures = true },
+    { .lang = Lang::TypeScript, .overloadSignatures = true, .importBoundConstruction = true },
     { .lang = Lang::Go },
-    { .lang = Lang::Rust },
+    { .lang = Lang::Rust, .constructorMethod = "new" },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC, .noNestedNamedFunctions = true },
     { .lang = Lang::Markdown, .linkSections = true },
-    { .lang = Lang::JavaScript },
+    { .lang = Lang::JavaScript, .importBoundConstruction = true },
     { .lang = Lang::Bash },
     { .lang = Lang::Java },
     { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true },
