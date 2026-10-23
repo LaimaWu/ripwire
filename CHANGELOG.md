@@ -33,8 +33,9 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   `[patch]`, `[replace]` or `.cargo/config` names, a `path =` crate outside the indexed root — is undecided: it lists no row
   and the interface carries `implementors_floor=`, never a confident `implementors="0"`. A tree with no Cargo.toml decides
   nothing outside but `std` and its siblings. A key that two members of the tree mean differently (in the tree for one, a registry
-  crate for another) and a key a `.cargo/config(.toml)` `[patch]` names — read in each manifest's directory and above it, within the
-  indexed root — are undecided too; a Cargo file the run cannot read decides nothing outside. This does NOT
+  crate for another, also when it spells a package name of the tree) and a key a `.cargo/config(.toml)` `[patch]` names — read in
+  each manifest's directory and above it, within the indexed root, so a config ABOVE the indexed root is not read — are undecided
+  too; a Cargo file the run cannot read decides nothing outside. This does NOT
   cover a C++ `ext::Base` or `using ext::Base`, a C# `using`, a Swift `import`, a PHP `use`, a JS `require` destructure or a
   Rust `impl ext::Base for S` with no `use`: those rows are still listed by name. Gate: `test/legotransitivecheck.sh` (XP).
 - `--quality-delta=A..B` extracts its per-commit archive through stdin (`tar -x -f -`), the same Windows drive-colon fix as #402 (thanks @lennix1337).

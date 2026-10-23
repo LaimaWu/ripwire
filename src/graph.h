@@ -6479,10 +6479,25 @@ inline void cargoSettleNames( TomlDeps& deps, CargoNames& names )
     {
         notRegistry.try_emplace( std::move( name ), char( 1 ) );
     }
+    HashMap<std::string, char> twoMeanings;   // registry for one manifest and a crate of the tree for another (or for the package list)
+    for( const std::string& name : deps.registry )
+    {
+        if( names.inTree.contains( name ) || std::ranges::find( deps.inTree, name ) != deps.inTree.end() )
+        {
+            twoMeanings.try_emplace( name, char( 1 ) );
+        }
+    }
     for( std::string& name : deps.inTree )
     {
-        const bool twoMeanings = std::ranges::find( deps.registry, name ) != deps.registry.end();
-        ( twoMeanings ? notRegistry : names.inTree ).try_emplace( std::move( name ), char( 1 ) );
+        if( !twoMeanings.contains( name ) )
+        {
+            names.inTree.try_emplace( std::move( name ), char( 1 ) );
+        }
+    }
+    for( const auto& [ name, flag ] : twoMeanings )
+    {
+        names.inTree.erase( name );   // a package name of the tree too: the registry meaning of the key is as good as the tree's
+        notRegistry.try_emplace( name, flag );
     }
     for( std::string& name : deps.declared )
     {
