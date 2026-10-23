@@ -8,6 +8,7 @@
 #include "forowner.h"   // the question's owner (owner-hop's found set) and the one owner body of an explanatory question
 #include "forfold.h"    // body-fold: the whole bodies of the top ranked rows, appended to a compact-route answer
 #include "formembers.h" // member-names: mem= on the shown owner rows of a compact-route answer
+#include "forcallerhop.h"   // mf1-nx: a name-exact answer about ONE function carries that function's callers
 #include <optional>          // the redaction-tally snapshots a degraded pre-render restores
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
@@ -571,6 +572,9 @@ struct ForLensHeaderParts
                                             // set after construction, cleared with the section
     bool             memberNamesPresent = false; // member-names (formembers.h): a shown owner row carries mem= (set after the
                                             // <sigs> splice), so its clause defines it
+    bool             callerHopPresent = false; // mf1-nx: a name-exact answer whose body candidates are ONE function in the default
+                                            // regime (forcallerhop.h forCallerHopTargets), so a <callers> rides and its clause
+                                            // defines it; set after construction, cleared with the section
 };
 
 // Splice a pre-formatted fragment in front of a structural boundary, or leave the document exactly as it
@@ -892,6 +896,7 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     h += bodySlotLegend( p, /*compact=*/true );   // for-body-slot: present-only, after the owner clause
     h += bodyFoldLegend( p, /*compact=*/true );   // body-fold: present-only, after the slot clause
     h += presentOnlyClause( p.memberNamesPresent, /*compact=*/true, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend );   // member-names: after the fold clause
+    h += presentOnlyClause( p.callerHopPresent, /*compact=*/true, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend );  // mf1-nx: present-only, after the fold clause
     // The unconditionally-droppable-free tail of this dialect: five clauses that ride exactly when the bit beside
     // them is set, in THIS order, which is the contract a reader and every byte pin depend on. A table rather than
     // five identical ifs — the list has grown once per lane (hdr, compose, then train 9's lego and layer) and the
@@ -1038,6 +1043,7 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     h.append( bodySlotLegend( p, /*compact=*/false ) );   // for-body-slot: present-only, after the owner clause
     h.append( bodyFoldLegend( p, /*compact=*/false ) );   // body-fold: present-only, after the slot clause
     h.append( presentOnlyClause( p.memberNamesPresent, /*compact=*/false, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend ) );   // member-names
+    h.append( presentOnlyClause( p.callerHopPresent, /*compact=*/false, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend ) );  // mf1-nx: present-only, after the fold clause
     if( p.tailLegend )
     {
         h.append( rw::kForFileTailLegend );   // deep-tail: defines r= and the <tail> element (sigs-charge-exempt, serialize.h)
@@ -2525,6 +2531,18 @@ ForAutoBodiesResult buildForEnrichment( const rw::Config& cfg, const rw::IngestR
     return out;
 }
 
+// mf1-nx (forcallerhop.h): the ONE function whose callers ride — `nameExactBodies` is the posture runForLensPass knows (the auto
+// <bodies> bundle on the name-exact route); this adds the regime (XML, no explicit --token-budget, the A/B switch) and the target rule.
+inline std::vector<rw::NodeId> forCallerHopIds( const rw::Config& cfg, const rw::IngestResult& ing, const rw::Graph& g, const std::vector<rw::NodeId>& lensSurfaceIds,
+                                                const std::vector<float>& lensRank, const std::vector<rw::RouteAnchorDef>& anchorDefs, bool nameExactBodies )
+{
+    if( !nameExactBodies || cfg.json || cfg.tokenBudget > 0 || !rw::forCallerHopOn() )
+    {
+        return {};
+    }
+    return rw::forCallerHopTargets( ing, g, computeAutoBodyCandidateIds( ing, lensSurfaceIds, lensRank, anchorDefs ) );
+}
+
 // DEEP-TAIL d2 — the XML tail render + its explicit-regime fill, a free function over runForLens' locals (that function
 // is already one of the largest in this file — the ForLensHeaderParts precedent). Default regime: page 0's full 40 rows
 // (FOLD C), bytes riding on top (est_tokens measures them). Explicit regime (forbudget-soft round C, reserve first): the
@@ -3123,6 +3141,13 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             ? rw::forBodyFoldCandidates( ing, lensSurfaceIds, lensRank, std::size_t( std::max( forTopN, 0 ) ), slotOwner.id )
             : std::vector<rw::NodeId>{};
         headerParts.bodyFoldPresent = !foldIds.empty();
+        // mf1-nx (forcallerhop.h): the callers of the ONE function a name-exact answer bodies — decided here because the header's
+        // clause reads it. The name-exact route's auto-bodies XML answer in the DEFAULT regime only, as the fold: an explicit
+        // --token-budget is a size the caller named (that answer stays byte-identical), and autoBundleMode excludes --detail,
+        // --signatures-only and --auto-bodies on the compact route (plan.autoBodies is the name-exact route's bundle).
+        const std::vector<rw::NodeId> callerHopIds = forCallerHopIds( cfg, ing, g, lensSurfaceIds, lensRank, routeAnchorDefs,
+                                                                      autoBundleMode && plan.autoBodies && isNameExactRouteTag( lr.routeTag ) );
+        headerParts.callerHopPresent = !callerHopIds.empty();
         const auto buildForHeader = [ & ]( bool withRouteAttr, bool withTaskEcho, std::string_view extraNotes )
         { return forLensHeaderText( headerParts, withRouteAttr, withTaskEcho, extraNotes ); };
         std::string headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
@@ -3403,13 +3428,16 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // body-fold: the fold clause on the same contract — the fold rides on top of the complete answer (<sigs> byte-identical with
         // RIPWIRE_NO_BODY_FOLD=1 but for its next= attribute pair), so its reading never costs a signature row
         const std::size_t bodyFoldLegendEmitted = bodyFoldLegend( headerParts, compactLegendOn ).size();
+        // mf1-nx: the caller hop's clause on the same contract — the hop rides on top of the complete answer (<sigs>, the tail and
+        // the bodies byte-identical with RIPWIRE_NO_CALLER_HOP=1), so its reading never costs a signature row
+        const std::size_t callerHopLegendEmitted = presentOnlyClause( headerParts.callerHopPresent, compactLegendOn, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend ).size();
         // attrib-multidef Q1: the prov="split" clause is a disclosure on the same contract — exempt, as e= is, so <sigs> (rows and
         // its continuation's budget) is byte-identical with and without it (fordisclosurecheck #2: auto vs --signatures-only)
         const std::size_t splitLegendEmitted = !headerParts.splitPresent ? 0u
                                              : ( compactLegendOn ? rw::kForCompactSplitClause.size() : rw::kForSplitClause.size() );
         const std::size_t exemptBytes = adaptiveNote.size() + autoLegendBytes + confidenceExemptBytes + tailLegendEmitted + idRouteLegendEmitted
                                       + endLineLegendEmitted + ownerLegendEmitted + bodySlotLegendEmitted + splitLegendEmitted
-                                      + bodyFoldLegendEmitted;
+                                      + bodyFoldLegendEmitted + callerHopLegendEmitted;
         if( exemptBytes > headerStr.size() )
         {
             DISCLOSE( "runForLens: header exemptions exceed the emitted header — the sig ledger would underflow; charging the header whole" );
@@ -3439,6 +3467,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                                               + ownerLegendExemptBytes( headerParts, /*compact=*/false )
                                               + bodySlotLegend( headerParts, /*compact=*/false ).size()
                                               + bodyFoldLegend( headerParts, /*compact=*/false ).size()   // body-fold
+                                              + presentOnlyClause( headerParts.callerHopPresent, /*compact=*/false, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend ).size()  // mf1-nx
                                               + ( headerParts.splitPresent ? rw::kForSplitClause.size() : 0u );   // attrib-multidef Q1
             std::size_t       fullCharged     = fullExempt > fullHeaderBytes ? fullHeaderBytes : fullHeaderBytes - fullExempt;
             fullCharged -= std::min( fullCharged, rw::forZeroNoteBytes( fullHeader ) );   // lean-answers: exempt, as above
@@ -3907,6 +3936,22 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
                 headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, enrich.surfaceOff ? std::string_view() : kForDegradedBundleNote );
             }
         }
+        // ── mf1-nx: THE CALLER HOP, the ONE function's callers (forcallerhop.h states the rows). The default regime only
+        // (callerHopIds above): it rides on top of the complete answer — every other byte is the RIPWIRE_NO_CALLER_HOP=1 answer's —
+        // and est_tokens prices it as markup. No hop when the bodies section degraded or the rows were never measured.
+        rw::CallerHopRender callerHop;
+        if( headerParts.callerHopPresent )
+        {
+            if( sigsPreRendered && !enrich.surfaceOff )
+            {
+                callerHop = rw::renderForCallerHop( ing, g, callerHopIds, flRootArg );
+            }
+            if( callerHop.xml.empty() )
+            {
+                headerParts.callerHopPresent = false;   // its clause goes with it
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, enrich.surfaceOff ? std::string_view() : kForDegradedBundleNote );
+            }
+        }
         const rw::ChargedSection& autoSection = enrich.section;
         const std::string&        autoAttr    = enrich.attr;
         if( enrich.hopsCutMarker )
@@ -4045,7 +4090,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             // F2: everything OUTSIDE the header at the markup rate. enrich.markupBytes is the compact <hops> section,
             // folded in here rather than charged separately — one rate, one rounding (ForEnrichmentPlan).
             .nonHeaderMarkupBytes = forHdrXml.size() + sigsStr.size() + legoStr.size() + composeStr.size() + routeStr.size() + graphSection.xml.size()
-                                  + enrich.markupBytes + tailStr.size() + slot.markupBytes + fold.markupBytes + 6,   // + "</ctx>" (deep-tail: the tail at the markup rate)
+                                  + enrich.markupBytes + tailStr.size() + slot.markupBytes + fold.markupBytes + callerHop.xml.size() + 6,   // + "</ctx>" (deep-tail: the tail at the markup rate)
             // T3: the body-rate sections; enrich.bodyTokens is zero on the compact route (markup, above); for-body-slot: the
             // owner body at the body rate (a skipped slot's element is markup, above)
             .bodyTokens           = detailSection.tokens + enrich.bodyTokens + slot.bodyTokens + fold.bodyTokens,   // body-fold: its bodies
@@ -4117,6 +4162,8 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         // DEEP-TAIL d2: the file-grain tail, BEFORE the body sections — a prefix-budgeted consumer meets
         // the file-grain recall before the big CDATA. Bytes already charged (ladder + est_tokens above).
         std::fwrite( tailStr.data(), 1, tailStr.size(), stdout );
+        // mf1-nx: the caller hop after the tail and before the body CDATA, from the bytes est_tokens priced ("" when none)
+        std::fwrite( callerHop.xml.data(), 1, callerHop.xml.size(), stdout );
 
         // §F1: the last two sections, from the bytes already RENDERED and CHARGED above — so what the header
         // priced and what stdout receives are the same bytes by construction, not by two pieces of code

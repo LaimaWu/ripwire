@@ -349,6 +349,15 @@ Discloses: `capped`, `hosts_capped`
 | `kMaxFlipRows` | `25` | OUTPUT | per emitted list; a DEFAULT --limit=N raises and --detail lifts |
 | `kMaxNearMisses` | `5` | OUTPUT | "did you mean" suggestions on an unknown gate name; --limit=N raises it |
 
+### `src/forcallerhop.h`
+
+Discloses: `capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kForCallerHopDepth2Rows` | `4` | — | — |
+| `kForCallerHopRows` | `16` | — | — |
+
 ### `src/forfold.h`
 
 Discloses: **none**
