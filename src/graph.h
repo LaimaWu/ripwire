@@ -2146,7 +2146,8 @@ inline HashMap<std::string, char> buildPythonModuleRebindVetoes( const IngestRes
 // is `path` a Python source file (.py / .pyi)?
 inline bool isPythonSourcePath( std::string_view path ) noexcept
 {
-    return path.ends_with( ".py" ) || path.ends_with( ".pyi" );
+    const std::string_view ext = path.substr( std::min( path.size(), path.rfind( '.' ) ) );
+    return ext == ".py" || ext == ".pyi";
 }
 
 // the first name of every Python class's base clause (the bare base, else its qualifier)
