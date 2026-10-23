@@ -634,7 +634,7 @@ CNR2="$( cd "$RS2" || exit 1; "$BIN" "$RS2" --affected=src/util.rs --no-cache 2>
 printf '%s' "$CNR2" | grep -q '<g via="class-new" total="1" shown="1"><new p="tests/t.rs" l="6" class="Eng"/></g>' \
     && ok '(9i2) Rust: Other::new() (line 5) then Eng::new() (line 6) in one test fn — the row names the Eng construction, l="6"' \
     || no "(9i2) Rust: a row's l= names another type's construction: $( printf '%s' "$CNR2" | sed 's/^.*-->//' )"
-# (9i4) CR #434 (4364224370): the next= of a capped Rust group whose first cut row built the class through its constructor METHOD names that
+# (9n) CR #434 (4364224370): the next= of a capped Rust group whose first cut row built the class through its constructor METHOD names that
 # method by its canonical id (src/lib.rs::Eng::new), not `Eng.new` (every same-named class's `new`); the continuation resolves to ONE def.
 RS4="$TMP/classnew-rs4"; mkdir -p "$RS4/src" "$RS4/tests"
 printf 'pub fn leaf(p: u32) -> u32 { p }\n'                                                    > "$RS4/src/util.rs"
@@ -642,12 +642,12 @@ printf 'mod util;\nuse crate::util::leaf;\npub struct Eng { v: u32 }\nimpl Eng {
 for n in 1 2 3 4 5 6 7 8 9; do printf 'use crate::Eng;\n#[test]\nfn builds%s() {\n    let _e = Eng::new();\n}\n' "$n" > "$RS4/tests/t$n.rs"; done
 CNR4="$( cd "$RS4" || exit 1; "$BIN" "$RS4" --affected=src/util.rs --no-cache 2>/dev/null )"
 printf '%s' "$CNR4" | grep -q '<g via="class-new" total="9" shown="8" capped="1" next="--callers=src/lib.rs::Eng::new">' \
-    && ok '(9i4) Rust ctor row cut: next="--callers=src/lib.rs::Eng::new" (the constructor by canonical id)' \
-    || no "(9i4) Rust ctor row cut: next= is not the canonical id of Eng::new: $( printf '%s' "$CNR4" | sed 's/^.*-->//' | grep -o '<g via="class-new"[^>]*>' )"
+    && ok '(9n) Rust ctor row cut: next="--callers=src/lib.rs::Eng::new" (the constructor by canonical id)' \
+    || no "(9n) Rust ctor row cut: next= is not the canonical id of Eng::new: $( printf '%s' "$CNR4" | sed 's/^.*-->//' | grep -o '<g via="class-new"[^>]*>' )"
 CNR4N="$( cd "$RS4" || exit 1; "$BIN" "$RS4" --callers=src/lib.rs::Eng::new --no-cache 2>/dev/null )"
 printf '%s' "$CNR4N" | grep -q 'defs="1"' \
-    && ok '(9i4) the continuation resolves to one definition (defs="1")' \
-    || no "(9i4) the continuation does not resolve to one def: $( printf '%s' "$CNR4N" | sed 's/^.*-->//' | cut -c1-200 )"
+    && ok '(9n) the continuation resolves to one definition (defs="1")' \
+    || no "(9n) the continuation does not resolve to one def: $( printf '%s' "$CNR4N" | sed 's/^.*-->//' | cut -c1-200 )"
 # (9i3) TS `new A.Eng()` (line 4) then `new B.Eng()` (line 5) — two classes named Eng, the edge is B.Eng's. TS/JS take l= only from a construction
 # that RESOLVES to the reached class (B is `import * as B` of its file, B.Eng its export), so the row reads l="5", never l="4". Python twin (the
 # name test + spelling hedge): `ext.Eng()` (external module, line 5) then the imported `Eng()` (line 6) — no l=, never l="5".
@@ -796,13 +796,13 @@ printf '%s' "$CNM" | grep -q '<g via="class-new" total="2" shown="2"><new p="tes
 ( cd "$CN" || exit 1; "$BIN" "$CN" --affected=src/url.ts --legend=full --no-cache 2>/dev/null ) | grep -q '<g via="class-new" total= shown= capped= next=>: tests not listed above that construct a class owning a reached method' \
     && ok '(9k) the full legend carries the same clause (testmap.h kClassNewLegend) when the group renders' \
     || no '(9k) --legend=full renders the class-new group with no clause'
-# (9k2) CR #434 (4364224360): the group is a FLOOR (Go T{}, C++ T x;, Ruby T.new are never read), and both legends say so
+# (9m) CR #434 (4364224360): the group is a FLOOR (Go T{}, C++ T x;, Ruby T.new are never read), and both legends say so
 ( cd "$CN" || exit 1; "$BIN" "$CN" --affected=src/url.ts --legend=full --no-cache 2>/dev/null ) | grep -q 'nearest class first; a floor (Go T{}, C++ T x;, Ruby T.new are not read)' \
-    && ok '(9k2) the full legend names the class-new group a floor (Go T{}, C++ T x;, Ruby T.new unread)' \
-    || no '(9k2) --legend=full: the class-new clause does not say the group is a floor'
+    && ok '(9m) the full legend names the class-new group a floor (Go T{}, C++ T x;, Ruby T.new unread)' \
+    || no '(9m) --legend=full: the class-new clause does not say the group is a floor'
 ( cd "$CN" || exit 1; "$BIN" "$CN" --affected=src/url.ts --legend=compact --no-cache 2>/dev/null ) | grep -q 'nearest class first; a floor (Go T{}, C++ T x;, Ruby T.new are not read)' \
-    && ok '(9k2) the compact legend carries the floor clause too (compact shortens the dictionary, never a meaning)' \
-    || no '(9k2) --legend=compact: the class-new clause does not say the group is a floor'
+    && ok '(9m) the compact legend carries the floor clause too (compact shortens the dictionary, never a meaning)' \
+    || no '(9m) --legend=compact: the class-new clause does not say the group is a floor'
 printf '%s' "$A" | grep -q 'class-new' \
     && no '(9j) an answer with no class-new row carries the group or its clause (absent-when-empty broken)' \
     || ok '(9j) control: --affected=src/core.cpp (no class reached) has no group and no clause'
