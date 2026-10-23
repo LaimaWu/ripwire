@@ -41,6 +41,7 @@
 "builtinbindcheck.sh": 3.7,
 "bundleidcheck.sh": 8.9,
 "cachefuzzcheck.sh": 56.9,
+"changelogfragcheck.sh": 30.0,
 "cachehashcheck.sh": 2.1,
 "cacheidentitycheck.sh": 56.5,
 "cacheisolationcheck.sh": 0.9,
