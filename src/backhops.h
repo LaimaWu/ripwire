@@ -127,11 +127,7 @@ private:
             { Lang::JavaScript, "this" }, { Lang::TypeScript, "this" }, { Lang::Python, "self" }, { Lang::Ruby, "self" } };
         return std::ranges::find( kSelf, std::pair( lang, root ) ) != std::end( kSelf );
     }
-    static std::string keyOf( NodeId id, std::string_view name )
-    {
-        return std::to_string( id ) + "#" + std::string( name );
-    }
-    // One stated class per key: a second, different spelling leaves "" (decides nothing), as ReceiverEvidence's tombstones do.
+    // One stated class per key (graph.h jsImportKey's "id#name", here a definition id): a second, different spelling leaves "" (decides nothing), as ReceiverEvidence's tombstones do.
     static void noteOnce( HashMap<std::string, std::string_view>& m, std::string key, std::string_view type )
     {
         const auto [ it, fresh ] = m.try_emplace( std::move( key ), type );
@@ -142,7 +138,7 @@ private:
     }
     static std::string_view lookup( const HashMap<std::string, std::string_view>& m, NodeId id, std::string_view name )
     {
-        const auto it = m.find( keyOf( id, name ) );
+        const auto it = m.find( jsImportKey( id, name ) );
         return it == m.end() ? std::string_view() : it->second;
     }
 
@@ -223,11 +219,11 @@ private:
             }
             if( b.kind == LocalBindKind::RecvType )
             {
-                noteOnce( m_recvTypes, keyOf( b.fromSymbol, b.var ), b.typeName );   // keyed by the function that states it
+                noteOnce( m_recvTypes, jsImportKey( b.fromSymbol, b.var ), b.typeName );   // keyed by the function that states it
             }
             else if( const NodeId owner = ownerOf( b.fromSymbol ); owner != kNoNode )
             {
-                noteOnce( m_fields, keyOf( owner, b.var ), b.typeName );
+                noteOnce( m_fields, jsImportKey( owner, b.var ), b.typeName );
             }
         }
     }
