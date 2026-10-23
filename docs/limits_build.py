@@ -199,6 +199,18 @@ def render(caps, disc, classes):
     w('document. To reach a declaration, search its file for the name (`grep -n <name> <file>`, or')
     w('`ripwire . --grep=<name>`). A file that declares the same name, value and note more than once shows')
     w('it once, marked `×N`.\n')
+    w('**Known residual — a single pathological match is unbounded on libstdc++.** One `std::regex` call is atomic to')
+    w('its caller, so no caller-side counter can see the work inside one, and libstdc++\'s engine never throws; libc++')
+    w('returns only because its ENGINE throws `error_complexity`. The multi-quantifier family (`a*a*a*a*a*b`,')
+    w('`^(a)*(a)*(a)*(a)*(a)*$`) is admitted by the screen by construction: a subject that holds a required literal and')
+    w('then a long run is unbounded work, named and reachable, **tracked by `regex-screen-multiquantifier` (follow-on')
+    w('spec), never claimed closed**. (The guard\'s former per-file match budget — `kRegexFileMatchBudget`, removed in')
+    w('the PR #397 review — cannot be revived against this residual: it counted line-match attempts BETWEEN engine')
+    w('calls, so it refused fast linear answers and still bounded nothing inside one call.) A second admitted shape is a')
+    w('bounded quantifier over a group that itself repeats: `((a|aa){2,5}){2,5}b$` passes the screen because both')
+    w('quantifiers are bounded, yet it is exponential on libstdc++ (and abandoned by libc++), so "make the outer quantifier')
+    w('a small explicit bound" is safe only when nothing inside the group repeats; it is the same class as')
+    w('`(a|aa){1,100}b$`, tracked with the multi-quantifier family above.\n')
     allcaps = caps
     caps, weights = partition(caps)
     silent = [c for c in caps if not disc.get(c[2])]
