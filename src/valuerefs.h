@@ -241,9 +241,6 @@ inline std::string valueRefsDepthKeyJson( const IngestResult& ing, const ValueRe
          + jsonStr( vrPath( ing, r.fileId, rr ) + ":" + std::to_string( r.line ) ) + "\"";
 }
 
-// A dispatch target's n=: Scope.name for a member / namespaced function, the bare name otherwise. ONE spelling for the XML <t n=>
-// and its --json twin (a same-named function in two namespaces stays two targets in both).
-inline std::string vrTargetName( const Symbol& t ) { return t.scope.empty() ? t.name : t.scope + "." + t.name; }
 // The candidate window the callees-side dispatch rows share (IX-3 <pd>, IX-1 <vs>): ` COUNT="N" shown="M"[ next="…"]>` (next=
 // only when cut) and the first `cap` targets as <t n= p=> (a member's n= is Scope.name).
 inline std::string vrTargetWindowXml( const IngestResult& ing, std::span<const NodeId> targets, std::size_t cap, std::string_view countName,
@@ -259,7 +256,7 @@ inline std::string vrTargetWindowXml( const IngestResult& ing, std::span<const N
     for( const NodeId id : targets.first( shown ) )
     {
         const Symbol& t = ing.symbols[id];
-        out += "<t n=\"" + std::string( escapeXml( vrTargetName( t ), esc ) ) + "\" p=\""
+        out += "<t n=\"" + std::string( escapeXml( t.scope.empty() ? t.name : t.scope + "." + t.name, esc ) ) + "\" p=\""
              + std::string( escapeXml( vrPath( ing, t.fileId, rr ), esc ) ) + ":" + std::to_string( t.line ) + "\"/>";
     }
     return out;
@@ -319,7 +316,7 @@ inline std::string slotCalleesJson( const IngestResult& ing, std::span<const Slo
         for( std::size_t k = 0; k < shown; ++k )
         {
             const Symbol& t = ing.symbols[ site.targets[k] ];
-            out += ( k == 0 ? "{\"n\":\"" : ",{\"n\":\"" ) + jsonStr( vrTargetName( t ) ) + "\",\"p\":\"" + jsonStr( vrPath( ing, t.fileId, rr ) + ":" + std::to_string( t.line ) ) + "\"}";
+            out += ( k == 0 ? "{\"n\":\"" : ",{\"n\":\"" ) + jsonStr( t.scope.empty() ? t.name : t.scope + "." + t.name ) + "\",\"p\":\"" + jsonStr( vrPath( ing, t.fileId, rr ) + ":" + std::to_string( t.line ) ) + "\"}";
         }
         out += "]}";
     }
