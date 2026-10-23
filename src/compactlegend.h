@@ -958,6 +958,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "ref", "hit ref=: first code site (not a comment/string) naming the hit's callerless enclosing def (where it is registered; one site)", true, "hit", MapHeaderRead::No, {}, "grep" },
     { "tier_budget", "tier_budget=: files|bytes cap hit after tier_parsed= of tier_files= hit files; tier counts floors, every row served", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "line_bytes", "line_bytes=N: whole line N bytes; text is a cut prefix", true, "hit", MapHeaderRead::No, {}, "grep" },
+    { "occ", "occ=N: the pattern occurs N times on this one line; a hit is a line, hits= counts lines; absent = once", true, "hit", MapHeaderRead::No, {}, "grep" },
+    { "pattern_meta", "pattern_meta=: regex-shaped pieces of this LITERAL pattern, matched as text; next= is then the regex verb on it", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "unindexed_files_scanned", "unindexed_files_scanned=N: off-index text files also scanned; outside complete=", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "unindexed_hits", "unindexed_hits=N: hits in off-index files, NOT in hits=/total=; listed in the trailing unindexed element", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "callers", "callers=N: 1-hop distinct callers of this name, all same-named defs (a FLOOR)", true, "enc", MapHeaderRead::No, {}, "grep" },
@@ -1069,6 +1071,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "hits", "hits=N: occurrences in HEAD plus every scanned local ref's full tree (the total rows)", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "on-head", "on-head=1|0: whether HEAD's tree holds it; 0 beside hits = it lives only on a branch", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "head_labels", "head_labels=index: HEAD kind= from the parsed index; lexical: text heuristic", false, "whereis", MapHeaderRead::No, {}, "whereis" },
+    { "head_defs", "head_defs=0: lexical labels and the parsed index defines no symbol of this name: every HEAD kind=def is a text guess", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     // fix round 2 of the whereis-defs lane (crossref.h labelBranchRowsByParse): present only when a row of another ref is.
     { "ref_labels", "ref_labels=parsed: another ref's kind= from the index's own tags parse of its blob (one per blob and path; HEAD's own blob takes HEAD's labels); a blob with no line a loose lexical test calls worth parsing is not parsed and its rows read ref; kind=text: such a line no parse read, never a def", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "blobs", "unparsed blobs=N: other refs' blobs holding a line worth parsing that no parse read (past the runaway guard, or the parser could not finish); those lines read kind=text; next= lifts the guard", true, "unparsed", MapHeaderRead::No, {}, "whereis" },

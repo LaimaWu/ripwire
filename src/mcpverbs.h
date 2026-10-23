@@ -1218,6 +1218,28 @@ inline std::string grepDegradedNoteJson( const IngestResult& ing, std::span<cons
 // and 29 unindexed rows — 2,805 B for a three-row answer — because `limit` reached the indexed list only.
 // The keys are the CLI element's attributes verbatim (count/shown/capped) so the two dialects state the
 // same facts under the same names; `rows` holds what the window admitted.
+// honest-lex: the CLI row's occ= twin — the pattern occurs N times on this one line; "" when once.
+inline std::string grepOccJson( std::uint32_t occ )
+{
+    return occ > 1 ? ",\"occ\":" + std::to_string( occ ) : std::string();
+}
+
+// honest-lex GREP-META: the CLI root's pattern_meta= twin (search.h grepPatternMeta) — this verb is literal-only.
+inline std::string grepPatternMetaJson( std::string_view pattern )
+{
+    const std::string meta = grepPatternMeta( pattern );
+    return meta.empty() ? std::string() : ",\"pattern_meta\":\"" + mcpdetail::jsonEscape( meta ) + "\"";
+}
+
+// The root's next for this literal-only verb: the CLI grepRootNext twin. A regex-shaped pattern → the regex run first
+// (when the regex verb accepts it), else the caller's three-way rule.
+template <class FallbackFn>
+inline std::string grepMetaNextOr( std::string_view pattern, FallbackFn&& fallback )
+{
+    const std::string metaRegex = grepPatternMeta( pattern ).empty() ? std::string() : grepMetaRegex( pattern );
+    return metaRegex.empty() ? fallback() : nextFlag( "--regex=", metaRegex );
+}
+
 inline std::string grepAuxJson( const std::vector<GrepAuxHit>& hits, const PageWindow& window, bool singleRoot,
                                 const std::string& rootPrefix )
 {
@@ -1237,7 +1259,7 @@ inline std::string grepAuxJson( const std::vector<GrepAuxHit>& hits, const PageW
         if( !first ) { out += ","; }
         first = false;
         out += "{\"file\":\"" + mcpdetail::jsonEscape( std::string( singleRoot ? sarif::rootRelativeUri( h.path, rootPrefix ) : std::string_view( h.path ) ) )
-             + "\",\"line\":" + std::to_string( h.line ) + "}";
+             + "\",\"line\":" + std::to_string( h.line ) + grepOccJson( h.occ ) + "}";
     }
     out += "]}";
     return out;
@@ -1288,12 +1310,12 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
     // the MCP `in` argument (the CLI --grep-in twin): the escape hatch has to exist here too, because an
     // MCP-only agent that reads suppressed_comment= has no CLI to re-ask from. Counters ride the payload
     // below under the CLI's own key names.
-    const GrepCollection       collected = grepApplySpanTiers( ing, grepCollect( ing, pattern, /*regex=*/false, /*noPrefilter=*/false ),
-                                                               grepInMode, tierReport, /*useMemo=*/true, pattern );
+    const GrepCollection       collected = grepFoldLines( grepApplySpanTiers( ing, grepCollect( ing, pattern, /*regex=*/false, /*noPrefilter=*/false ),
+                                                                              grepInMode, tierReport, /*useMemo=*/true, pattern ) );   // honest-lex: one row per line
     const int                  grepRowCap   = tierReport.servedString > 0 ? kGrepLiftRowCap : 100;   // the CLI's default window (idea #5; ranked lifts only)
     const PageWindow           grepPage  = pageWindow( collected.raw.size(), effectiveRowCap( page.limit, grepRowCap ), page.offset );
     const std::size_t          rowCount  = grepPage.end - grepPage.begin;
-    const std::vector<GrepHit> hits      = grepEnrich( ing, std::span<const GrepRawHit>( collected.raw ).subspan( grepPage.begin, rowCount ), 0, 0 );
+    const std::vector<GrepHit> hits      = grepEnrichPage( ing, collected, grepPage.begin, rowCount );
     // R1 <enc> rows and L4's carrier verdict, once, before the root: next= reads them (grepCarrierNext) and so does the
     // enclosing block. The MCP index is the RICH family (mcpindex.h ingests with value uses), so its own references
     // carry the reads — no second ingest here, unlike the lean CLI run. Reads are counted on the SAME pages the CLI counts
@@ -1368,6 +1390,7 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                     // G1: mirrors the CLI <grep root="…"> — same condition (singleRootJ), same fact, right
                     // after pattern like the CLI's attribute order (mcpclidiffcheck.sh's LENS2 fact-parity).
                     + ( singleRootJ ? ( "\",\"root\":\"" + mcpdetail::jsonEscape( root ) + "\"" ) : "\"" )
+                    + grepPatternMetaJson( pattern )
                     + ",\"files\":" + std::to_string( filesMatched )
                     + ( isPaging ? std::string{} : ( ",\"total\":" + std::to_string( collected.raw.size() ) ) )
                     + pageDisclosure( pagebuf, sizeof( pagebuf ), rowCount, collected.raw.size(), grepPage.end,
@@ -1376,13 +1399,13 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                     + ",\"hits_capped\":" + ( collected.isBudgetReached ? "true" : "false" )
                     + ( scanExhaustive && windowWhole && nothingHeldBack ? ",\"complete\":true" : "" )
                     // P3 (L7): the CLI grep root's next= — the same three-way rule (verbs_grep.h), mcpclidiffcheck LENS2
-                    + nextFieldJson( ( grepPage.end < collected.raw.size() || collected.isBudgetReached )
+                    + nextFieldJson( grepMetaNextOr( pattern, [ & ] { return ( grepPage.end < collected.raw.size() || collected.isBudgetReached )
                                          ? nextFlag( "--grep=", pattern ) + " --offset=" + std::to_string( grepPage.end ) + " --legend=compact"
                                      : !carrierNextJ.empty()
                                          ? carrierNextJ
                                      : !collected.raw.empty() && grepPage.begin < collected.raw.size()
                                          ? nextFlag( "--at=", std::string( pathForJ( collected.raw[ grepPage.begin ].fileId ) ) + ":" + std::to_string( collected.raw[ grepPage.begin ].line ) )
-                                         : nextFlag( "--for=", pattern ) )
+                                         : nextFlag( "--for=", pattern ); } ) )
                     + tierKeys
                     // G4 (2026-08-15 harvest, report-ugrep §F6): the CLI's corpus_excluded=/corpus_oversize=
                     // twins — present only when non-zero, same condition as the CLI emitter.
@@ -1426,7 +1449,7 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
         {
             out += ",\"line_bytes\":" + std::to_string( h.lineBytes );
         }
-        out += "}";
+        out += grepOccJson( h.occ ) + "}";
     }
     out += "]";
     // parse_degraded's in-band definition (helper above) — "" on a clean answer.
