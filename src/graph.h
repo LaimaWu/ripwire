@@ -2143,28 +2143,19 @@ inline HashMap<std::string, char> buildPythonModuleRebindVetoes( const IngestRes
     return pythonModuleRebind;
 }
 
-// PythonScopeFacts::nameBinds: every binding of a name a Python class's base clause starts with (the bare base, else its
-// qualifier), per file and scope. buildPythonModuleRebindVetoes keeps only the module-scope facts; the base-name rule (pythonBaseNameProven)
-// needs the scoped ones too, because a class statement resolves its base in ITS lexical scope chain, not the module's.
-// fileId → 1 for a Python source file (.py / .pyi)
-inline std::vector<char> pythonFileFlags( const IngestResult& ing )
+// is `path` a Python source file (.py / .pyi)?
+inline bool isPythonSourcePath( std::string_view path ) noexcept
 {
-    std::vector<char> isPy( ing.files.size(), 0 );
-    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
-    {
-        const std::string_view path = rootRelPath( ing, f );
-        isPy[ f ] = char( path.ends_with( ".py" ) || path.ends_with( ".pyi" ) );
-    }
-    return isPy;
+    return path.ends_with( ".py" ) || path.ends_with( ".pyi" );
 }
 
 // the first name of every Python class's base clause (the bare base, else its qualifier)
-inline HashMap<std::string, char> pythonBaseClauseNames( const IngestResult& ing, const std::vector<char>& isPy )
+inline HashMap<std::string, char> pythonBaseClauseNames( const IngestResult& ing )
 {
     HashMap<std::string, char> names;
     for( const Reference& r : ing.references )
     {
-        if( r.isInherit && r.fileId < isPy.size() && isPy[ r.fileId ] )
+        if( r.isInherit && r.fileId < ing.files.size() && isPythonSourcePath( rootRelPath( ing, r.fileId ) ) )
         {
             names.try_emplace( r.memberRoot.empty() ? r.calleeName : r.memberRoot, '\0' );
         }
@@ -2186,16 +2177,18 @@ inline NodeId pythonBindScope( const IngestResult& ing, const Binding& b ) noexc
     return def && !( enc.sigStartByte == 0 && enc.name == b.var ) ? b.fromSymbol : kNoNode;
 }
 
+// PythonScopeFacts::nameBinds: every binding of a name a Python class's base clause starts with (the bare base, else its
+// qualifier), per file and scope. buildPythonModuleRebindVetoes keeps only the module-scope facts; the base-name rule (pythonBaseNameProven)
+// needs the scoped ones too, because a class statement resolves its base in ITS lexical scope chain, not the module's.
 inline HashMap<std::string, std::vector<PythonNameBind>> buildPythonNameBinds( const IngestResult& ing )
 {
     HashMap<std::string, std::vector<PythonNameBind>> binds;
-    const std::vector<char>                           isPy   = pythonFileFlags( ing );
-    const HashMap<std::string, char>                  wanted = pythonBaseClauseNames( ing, isPy );
+    const HashMap<std::string, char>                  wanted = pythonBaseClauseNames( ing );
     std::string                                       key;
     for( const Binding& b : ing.bindings )
     {
-        if( ( b.kind == LocalBindKind::VarDecl || b.kind == LocalBindKind::Import ) && b.fileId < isPy.size() && isPy[ b.fileId ]
-            && wanted.contains( b.var ) )
+        if( ( b.kind == LocalBindKind::VarDecl || b.kind == LocalBindKind::Import ) && b.fileId < ing.files.size()
+            && wanted.contains( b.var ) && isPythonSourcePath( rootRelPath( ing, b.fileId ) ) )
         {
             key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
             binds[ key ].push_back( PythonNameBind{ pythonBindScope( ing, b ), b.kind == LocalBindKind::Import } );
@@ -2272,7 +2265,7 @@ inline std::uint32_t pythonIncludeFile( const IngestResult& ing, const Include& 
                                         PythonSuffixMemo& memo )
 {
     const std::string_view from = inc.fileId < ing.files.size() ? rootRelPath( ing, inc.fileId ) : std::string_view{};
-    if( inc.target.empty() || !( from.ends_with( ".py" ) || from.ends_with( ".pyi" ) ) )
+    if( inc.target.empty() || !isPythonSourcePath( from ) )
     {
         return kNoFile;
     }
@@ -2320,7 +2313,7 @@ inline std::vector<std::vector<std::uint32_t>> buildPythonStarTargets( const Ing
     for( const Include& inc : ing.includes )
     {
         const std::string_view from = inc.fileId < ing.files.size() ? rootRelPath( ing, inc.fileId ) : std::string_view{};
-        if( inc.target.empty() || !( from.ends_with( ".py" ) || from.ends_with( ".pyi" ) )
+        if( inc.target.empty() || !isPythonSourcePath( from )
             || std::binary_search( named.begin(), named.end(), ( std::uint64_t( inc.fileId ) << 32 ) | inc.byte ) )
         {
             continue;
