@@ -179,6 +179,16 @@ has   "L5 a namespaced target is Scope.name in the XML" "$o" '<t n="nsx.nsgo" p=
 o="$( run --callees=ns_dispatch --json )"
 has   "L6 and the same in the JSON twin" "$o" '"t":[{"n":"nsx.nsgo","p":"ns.cpp:5"}]'
 
+echo "-- section Z (CR pre-pass 32b): a build-dependent entry inside a positional struct literal"
+o="$( run --callers=pf0 )"
+has   "Z1 the entry before the #ifdef keeps its exact index (pf0 is .tfirst)" "$o" 'called_by="call_tri_first" called_at="ifdef.c:14" via="slot"'
+o="$( run --callers=pf2 )"
+has   "Z2 the entry after the #ifdef still prints its value row" "$o" 'into="tri_t[2]"'
+hasnt "Z3 but joins no field: it is the 2nd entry without WITH_B and the 3rd with it (never a guessed field)" "$o" 'called_by='
+o="$( run --callers=pf1 )"
+has   "Z4 the entry inside the #ifdef still prints its value row" "$o" 'into="tri_t[1]"'
+hasnt "Z5 and joins no field either" "$o" 'called_by='
+
 echo "-- well-formed XML where the clauses ride"
 if command -v xmllint >/dev/null 2>&1; then
     for q in --callers=cmd_alpha_exec --callees=fire_command; do

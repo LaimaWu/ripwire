@@ -416,7 +416,8 @@ inline std::string_view vrDesignatedField( TSNode pair, TSFieldId fDesignator, s
 
 // The initializer position of `value`, a direct child of struct literal `list`, exactly — C's rule: positions count from 0,
 // and a designator `.f = …` moves the next one to f's position + 1. -1 when the index is not provable: a nested or array
-// designator, a field no position names, brace elision (a non-braced value at an aggregate field), past exactUpTo.
+// designator, a field no position names, brace elision (a non-braced value at an aggregate field), past exactUpTo, a preprocessor
+// conditional in the list (the entry and everything after it depend on the build).
 inline std::ptrdiff_t vrPositionOf( TSNode list, TSNode value, const VrStructFields& sf, TSFieldId fDesignator, std::string_view src )
 {
     std::size_t         pos = 0;
@@ -424,11 +425,19 @@ inline std::ptrdiff_t vrPositionOf( TSNode list, TSNode value, const VrStructFie
     for( std::uint32_t i = 0; i < cnt; ++i )
     {
         const TSNode k = ts_node_named_child( list, i );
+        const char* kt = ts_node_type( k );
+        if( std::string_view( kt ).starts_with( "preproc_" ) )
+        {
+            return -1;   // an #if / #ifdef inside the literal: this entry and every later position depend on the build (noteStructBody's exactUpTo, literal side)
+        }
         if( ts_node_is_extra( k ) )
         {
-            continue;
+            if( kindIs( kt, "comment" ) )
+            {
+                continue;
+            }
+            return -1;   // any other extra (the grammar may read a `#ifdef` line as one): a position the text does not show
         }
-        const char* kt = ts_node_type( k );
         if( kindIs( kt, "initializer_pair" ) )
         {
             const std::string_view f  = vrDesignatedField( k, fDesignator, src );
