@@ -951,9 +951,10 @@ enum class BridgeVia : std::uint8_t { Edge, Declined, Value, Closure, Namesake, 
 inline constexpr std::size_t                                    kBridgeViaCount = 7;
 static_assert( enumCountIsExact<BridgeVia, kBridgeViaCount>(), "kBridgeViaCount must equal the BridgeVia count — raise it with the append" );
 inline constexpr std::array<std::string_view, kBridgeViaCount> kBridgeViaNames = { "", "declined", "value", "closure", "namesake", "slot", "slot-name" };
+static_assert( std::size_t( BridgeVia::SlotName ) + 1 == kBridgeViaCount && std::size_t( BridgeVia::Slot ) + 2 == kBridgeViaCount, "the two slot crossings close the enum" );
 inline bool bridgeViaIsSlot( BridgeVia v ) noexcept
 {
-    return v == BridgeVia::Slot || v == BridgeVia::SlotName;
+    return v >= BridgeVia::Slot;   // Slot or SlotName, the enum's last two (static_assert above)
 }
 
 struct PathBridge
@@ -965,6 +966,46 @@ struct PathBridge
 
     bool found() const noexcept { return !hops.empty(); }
 };
+
+// SLOT crossings out of `u` (HOP1): each function a struct-field call in u may call, kept only when that function's own backward
+// hops name u (the --callers join and its tier rule, read from the provider: one copy) within the width bound. `cross( to, via,
+// width )` decides whether the target is new.
+template<class Cross>
+inline void bridgeSlotCrossings( const ValueRefIndex& values, const BackwardHops& backHops, NodeId u, Cross&& cross )
+{
+    for( const std::uint32_t call : values.slots().callsIn( u ) )
+    {
+        for( const SlotIndex::Hit& stored : values.slots().valuesFor( call ) )
+        {
+            for( const NodeId f : values.targetsOf( stored.ref ) )
+            {
+                const std::span<const BackHop> hops = backHops.backwardHops( f );
+                const auto it = std::ranges::find_if( hops, [ & ]( const BackHop& h ) { return h.from == u && h.via != BackHopVia::Declined && h.width <= kBridgeFanOut; } );
+                if( it != hops.end() )
+                {
+                    cross( f, it->via == BackHopVia::Slot ? BridgeVia::Slot : BridgeVia::SlotName, it->width );
+                }
+            }
+        }
+    }
+}
+
+// DECLINED crossings of record `site`: each candidate of its stored list, unless the list is missing or wider than kBridgeFanOut,
+// or the call reads as the builtin method it spells (DeclinedCrossRule, HOP1 #11).
+template<class Cross>
+inline void bridgeDeclinedCrossings( const Graph& g, const DeclinedCrossRule& rule, std::uint32_t site, Cross&& cross )
+{
+    const std::uint32_t list = g.declinedSiteList[ site ];
+    if( list == kNoDeclinedList || list + 1 >= g.declinedListOff.size() || rule.builtinSpelled( site ) )
+    {
+        return;   // a call with no stored candidate list names nothing to cross to; a builtin-spelled one is no hand-off
+    }
+    const std::size_t fan = g.declinedListOff[ list + 1 ] - g.declinedListOff[ list ];
+    for( std::uint32_t slot = g.declinedListOff[ list ]; fan <= kBridgeFanOut && slot < g.declinedListOff[ list + 1 ]; ++slot )
+    {
+        cross( g.declinedListCand[ slot ], BridgeVia::Declined, fan );
+    }
+}
 
 inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span<const NodeId> srcDefs, std::span<const NodeId> dstDefs,
                               const ValueRefIndex& values, const BackwardHops& backHops )
@@ -1057,7 +1098,6 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
             frontier.push_back( s );
         }
     }
-    const DeclinedCrossRule& declinedRule = backHops.declinedRule();   // HOP1 #11: one builtin rule for every declined crossing
     NodeId hit = kNoNode;
     for( std::uint32_t k = 0; k <= kBridgeSlotCrossings && hit == kNoNode && !frontier.empty(); ++k )
     {
@@ -1111,29 +1151,7 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
             {
                 continue;
             }
-            // SLOT (HOP1): each function a struct-field call in u may call, kept only when the stored function's own backward
-            // hops name u (the --callers join and its tier rule, read from the provider: one copy) within the width bound
-            for( const std::uint32_t call : values.slots().callsIn( u ) )
-            {
-                for( const SlotIndex::Hit& stored : values.slots().valuesFor( call ) )
-                {
-                    for( const NodeId f : values.targetsOf( stored.ref ) )
-                    {
-                        if( f >= S || layer[f] != kUnseen || !routable( f ) )
-                        {
-                            continue;
-                        }
-                        for( const BackHop& h : backHops.backwardHops( f ) )
-                        {
-                            if( h.from == u && isSlotHop( h.via ) && h.width <= kBridgeFanOut )
-                            {
-                                cross( u, f, h.via == BackHopVia::Slot ? BridgeVia::Slot : BridgeVia::SlotName, h.width );
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+            bridgeSlotCrossings( values, backHops, u, [ & ]( NodeId to, BridgeVia via, std::size_t fan ) { cross( u, to, via, fan ); } );   // HOP1
             if( slotStepOnly )
             {
                 continue;
@@ -1141,20 +1159,7 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
             const std::pair<NodeId, std::uint32_t> lo( u, 0u ), hi( u, std::numeric_limits<std::uint32_t>::max() );
             for( auto it = std::ranges::lower_bound( declinedBy, lo ); it != declinedBy.end() && *it <= hi; ++it )
             {
-                const std::uint32_t list = g.declinedSiteList[ it->second ];
-                if( list == kNoDeclinedList || list + 1 >= g.declinedListOff.size() )
-                {
-                    continue;   // a call with no stored candidate list names nothing to cross to
-                }
-                if( declinedRule.builtinSpelled( it->second ) )
-                {
-                    continue;   // not a hand-off to cross (DeclinedCrossRule: spelled like a builtin method, receiver not typed in-tree)
-                }
-                const std::size_t fan = g.declinedListOff[list + 1] - g.declinedListOff[list];
-                for( std::uint32_t slot = g.declinedListOff[list]; fan <= kBridgeFanOut && slot < g.declinedListOff[list + 1]; ++slot )
-                {
-                    cross( u, g.declinedListCand[slot], BridgeVia::Declined, fan );
-                }
+                bridgeDeclinedCrossings( g, backHops.declinedRule(), it->second, [ & ]( NodeId to, BridgeVia via, std::size_t fan ) { cross( u, to, via, fan ); } );
             }
             for( auto it = std::ranges::lower_bound( valueBy, lo ); it != valueBy.end() && *it <= hi; ++it )
             {

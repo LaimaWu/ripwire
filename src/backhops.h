@@ -19,6 +19,7 @@
 // What it does NOT mean: a hop is NOT a call edge and NOT proven. Every consumer prints it as a hedge (proven="0", via=
 // named, the width beside it) and never counts it in reachable= / hops= / reaches=.
 
+#include "graphlegend.h"        // countFieldOrEmpty — reaches_hedged= absent at zero
 #include "graph.h"              // Graph — the declined records and their stored candidate lists
 #include "model.h"
 #include "nextverb.h"           // nextAttrXml / nextFlag — the ring's continuation
@@ -30,6 +31,7 @@
 #include "infra/sortutil.h"     // svLess
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -83,14 +85,6 @@ public:
     }
 
 private:
-    struct FieldType
-    {
-        NodeId           owner = kNoNode;   // the class definition that states the field (checklist 16: the entity, not its name —
-                                            // hono's hono-base.ts and hono.ts both define a class `Hono`, each typing `router` its own
-                                            // way); in m_recvTypes, the function stating its parameter's or local's class
-        std::string_view field;
-        std::string_view type;    // "" = spelled two ways: decides nothing
-    };
     struct ClassName
     {
         std::string_view name;
@@ -125,14 +119,31 @@ private:
         return best != nullptr ? best->id : kNoNode;
     }
 
+    // The receiver keyword of the four languages builtinSpelledCall's tables cover; any other language, or another spelling, is
+    // an ordinary name (checklist 37).
     static bool selfKeyword( Lang lang, std::string_view root ) noexcept
     {
-        switch( lang )
+        static constexpr std::pair<Lang, std::string_view> kSelf[] = {
+            { Lang::JavaScript, "this" }, { Lang::TypeScript, "this" }, { Lang::Python, "self" }, { Lang::Ruby, "self" } };
+        return std::ranges::find( kSelf, std::pair( lang, root ) ) != std::end( kSelf );
+    }
+    static std::string keyOf( NodeId id, std::string_view name )
+    {
+        return std::to_string( id ) + "#" + std::string( name );
+    }
+    // One stated class per key: a second, different spelling leaves "" (decides nothing), as ReceiverEvidence's tombstones do.
+    static void noteOnce( HashMap<std::string, std::string_view>& m, std::string key, std::string_view type )
+    {
+        const auto [ it, fresh ] = m.try_emplace( std::move( key ), type );
+        if( !fresh && it->second != type )
         {
-            case Lang::JavaScript: case Lang::TypeScript: return root == "this";
-            case Lang::Python:     case Lang::Ruby:       return root == "self";
-            default:                                      return false;   // builtinSpelledCall's tables hold these four only
+            it->second = {};
         }
+    }
+    static std::string_view lookup( const HashMap<std::string, std::string_view>& m, NodeId id, std::string_view name )
+    {
+        const auto it = m.find( keyOf( id, name ) );
+        return it == m.end() ? std::string_view() : it->second;
     }
 
     bool receiverTypedInTree( std::uint32_t site, const Reference& r ) const
@@ -166,7 +177,7 @@ private:
                 owners.push_back( own );
             }
         }
-        else if( const std::string_view cls = statedClassOf( caller, ch.root ); !cls.empty() )
+        else if( const std::string_view cls = lookup( m_recvTypes, caller, ch.root ); !cls.empty() )
         {
             for( auto it = std::ranges::lower_bound( m_classIds, cls, sortutil::svLess, &ClassName::name ); it != m_classIds.end() && it->name == cls; ++it )
             {
@@ -177,22 +188,9 @@ private:
         {
             // (4) this class states one in-tree class for the field; stating none (a primitive, a base's field), two spellings, or
             // a class the tree does not define leaves the builtin reading standing
-            const auto it = std::ranges::lower_bound( m_fields, std::pair( owner, ch.path ), fieldKeyLess, [ ]( const FieldType& f ) { return std::pair( f.owner, f.field ); } );
-            return it != m_fields.end() && it->owner == owner && it->field == ch.path && !it->type.empty()
-                && std::ranges::binary_search( m_classNames, it->type, sortutil::svLess );
+            const std::string_view type = lookup( m_fields, owner, ch.path );
+            return !type.empty() && std::ranges::binary_search( m_classNames, type, sortutil::svLess );
         } );
-    }
-
-    // The class the source states for parameter or local `var` of function `fn` (one unqualified spelling), "" when none or two.
-    std::string_view statedClassOf( NodeId fn, std::string_view var ) const
-    {
-        const auto it = std::ranges::lower_bound( m_recvTypes, std::pair( fn, var ), fieldKeyLess, [ ]( const FieldType& f ) { return std::pair( f.owner, f.field ); } );
-        return it != m_recvTypes.end() && it->owner == fn && it->field == var ? it->type : std::string_view();
-    }
-
-    static bool fieldKeyLess( const std::pair<NodeId, std::string_view>& a, const std::pair<NodeId, std::string_view>& b ) noexcept
-    {
-        return a.first != b.first ? a.first < b.first : sortutil::svLess( a.second, b.second );
     }
 
     // Built on the first receiver shape that needs it: a tree with no such call pays nothing.
@@ -225,52 +223,23 @@ private:
             }
             if( b.kind == LocalBindKind::RecvType )
             {
-                m_recvTypes.push_back( FieldType{ b.fromSymbol, b.var, b.typeName } );   // keyed by the function that states it
+                noteOnce( m_recvTypes, keyOf( b.fromSymbol, b.var ), b.typeName );   // keyed by the function that states it
             }
             else if( const NodeId owner = ownerOf( b.fromSymbol ); owner != kNoNode )
             {
-                m_fields.push_back( FieldType{ owner, b.var, b.typeName } );
+                noteOnce( m_fields, keyOf( owner, b.var ), b.typeName );
             }
         }
-        oneSpellingPerKey( m_fields );
-        oneSpellingPerKey( m_recvTypes );
-    }
-
-    // Sorted by key, one row per (owner, name): two different spellings decide nothing (type "").
-    static void oneSpellingPerKey( std::vector<FieldType>& v )
-    {
-        std::ranges::sort( v, [ ]( const FieldType& a, const FieldType& b )
-        {
-            if( a.owner != b.owner || a.field != b.field )
-            {
-                return fieldKeyLess( { a.owner, a.field }, { b.owner, b.field } );
-            }
-            return sortutil::svLess( a.type, b.type );
-        } );
-        std::vector<FieldType> merged;
-        for( const FieldType& f : v )
-        {
-            if( !merged.empty() && merged.back().owner == f.owner && merged.back().field == f.field )
-            {
-                if( merged.back().type != f.type )
-                {
-                    merged.back().type = {};
-                }
-                continue;
-            }
-            merged.push_back( f );
-        }
-        v = std::move( merged );
     }
 
     const IngestResult&                    m_ing;
     const Graph&                           m_g;
     mutable bool                           m_built = false;
-    mutable std::vector<FieldType>         m_fields;       // (owner, field) → the one stated class, sorted
+    mutable HashMap<std::string, std::string_view> m_fields;   // "classId#field" → the one stated class ("" two spellings)
     mutable std::vector<std::string_view>  m_classNames;   // every in-tree class-like definition name, sorted, distinct
     mutable std::vector<ClassSpan>         m_classes;      // every class-like definition's span, by file (ownerOf)
     mutable std::vector<ClassName>         m_classIds;     // every class-like definition by name (a stated class's definitions)
-    mutable std::vector<FieldType>         m_recvTypes;    // (function, parameter or local) → the one stated class, sorted
+    mutable HashMap<std::string, std::string_view> m_recvTypes;   // "functionId#name" → its parameter's or local's stated class
 };
 
 // ── the provider ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -372,14 +341,7 @@ private:
     mutable HashMap<NodeId, std::vector<BackHop>> m_memo;
 };
 
-inline bool isSlotHop( BackHopVia v ) noexcept
-{
-    return v == BackHopVia::Slot || v == BackHopVia::SlotName;
-}
-inline std::string_view backHopViaName( BackHopVia v ) noexcept
-{
-    return v == BackHopVia::Slot ? "slot" : v == BackHopVia::SlotName ? "slot-name" : "declined";
-}
+inline constexpr std::array<std::string_view, 3> kBackHopViaNames = { "slot", "slot-name", "declined" };   // indexed by BackHopVia
 
 // Whether any of `sinks` has a backward hop a consumer follows (width within kBackHopWidth): --path's root next= swap.
 inline bool anyFollowedBackHop( const BackwardHops& hops, std::span<const NodeId> sinks )
@@ -431,7 +393,7 @@ inline ImpactRing impactSlotRing( const IngestResult& ing, const BackwardHops& h
     {
         for( const BackHop& h : hops.backwardHops( s ) )
         {
-            if( isSlotHop( h.via ) && std::ranges::find( d1, h.from ) == d1.end() )
+            if( h.via != BackHopVia::Declined && std::ranges::find( d1, h.from ) == d1.end() )
             {
                 d1.push_back( h.from );
             }
@@ -453,7 +415,7 @@ inline ImpactRing impactSlotRing( const IngestResult& ing, const BackwardHops& h
     {
         for( const BackHop& h : hops.backwardHops( f ) )
         {
-            if( !isSlotHop( h.via ) || h.from == f || ( h.from < S && known[ h.from ] != 0 ) || std::ranges::find( d1, h.from ) != d1.end() )
+            if( h.via == BackHopVia::Declined || h.from == f || ( h.from < S && known[ h.from ] != 0 ) || std::ranges::find( d1, h.from ) != d1.end() )
             {
                 continue;   // a proven member, an answered definition or a d=1 function already speaks for itself
             }
@@ -464,14 +426,8 @@ inline ImpactRing impactSlotRing( const IngestResult& ing, const BackwardHops& h
     return out;
 }
 
-inline std::string impactRingAttrXml( const ImpactRing& ring )
-{
-    return ring.hedged == 0 ? std::string() : " reaches_hedged=\"" + std::to_string( ring.hedged ) + "\"";
-}
-inline std::string impactRingKeyJson( const ImpactRing& ring )
-{
-    return ring.hedged == 0 ? std::string() : ",\"reaches_hedged\":" + std::to_string( ring.hedged );
-}
+inline std::string impactRingAttrXml( const ImpactRing& ring ) { return countFieldOrEmpty( "reaches_hedged", ring.hedged, /*json=*/false ); }
+inline std::string impactRingKeyJson( const ImpactRing& ring ) { return countFieldOrEmpty( "reaches_hedged", ring.hedged, /*json=*/true ); }
 
 inline std::string impactRingNext( const IngestResult& ing, const ImpactRing& ring )
 {
@@ -495,7 +451,7 @@ inline std::string impactRingXml( const IngestResult& ing, const ImpactRing& rin
         const ImpactRingRow& row = ring.rows[ i ];
         const Reference&     c   = ing.references[ row.ref ];
         out += "<rh called_by=\"" + ex( ing.symbols[ row.fn ].name ) + "\" called_at=\"" + ex( vrPath( ing, c.fileId, rr ) ) + ":" + std::to_string( c.line )
-             + "\" via=\"" + std::string( backHopViaName( row.via ) ) + "\" calls=\"" + ex( ing.symbols[ row.calls ].name ) + "\"/>";
+             + "\" via=\"" + std::string( kBackHopViaNames[ std::size_t( row.via ) ] ) + "\" calls=\"" + ex( ing.symbols[ row.calls ].name ) + "\"/>";
     }
     return out + "</ring>";
 }
@@ -518,7 +474,7 @@ inline std::string impactRingJson( const IngestResult& ing, const ImpactRing& ri
         const ImpactRingRow& row = ring.rows[ i ];
         const Reference&     c   = ing.references[ row.ref ];
         out += std::string( i == 0 ? "{" : ",{" ) + "\"called_by\":\"" + jsonStr( ing.symbols[ row.fn ].name ) + "\",\"called_at\":\""
-             + jsonStr( vrPath( ing, c.fileId, rr ) + ":" + std::to_string( c.line ) ) + "\",\"via\":\"" + std::string( backHopViaName( row.via ) )
+             + jsonStr( vrPath( ing, c.fileId, rr ) + ":" + std::to_string( c.line ) ) + "\",\"via\":\"" + std::string( kBackHopViaNames[ std::size_t( row.via ) ] )
              + "\",\"calls\":\"" + jsonStr( ing.symbols[ row.calls ].name ) + "\"}";
     }
     return out + "]}";
@@ -534,7 +490,13 @@ inline constexpr std::string_view kImpactRingRowsLegend =
 // `on`: reaches_hedged= rides; `rows`: the <ring> element rides too (XML/JSON; the columnar form carries the count alone).
 inline std::string impactRingLegend( bool on, bool rows )
 {
-    return on ? std::string( kImpactRingLegend ) + ( rows ? std::string( kImpactRingRowsLegend ) : std::string() ) : std::string();
+    std::string out;
+    if( on )
+    {
+        out.append( kImpactRingLegend );
+        out.append( rows ? kImpactRingRowsLegend : std::string_view() );
+    }
+    return out;
 }
 
 }   // namespace rw
