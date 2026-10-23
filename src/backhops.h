@@ -29,6 +29,7 @@
 #include "valuerefs.h"          // VrRender / vrPath — p= spelled as every other row
 #include "infra/Diagnostics.h"  // EXPECTS
 #include "infra/sortutil.h"     // svLess
+#include "infra/enumcount.h"    // enumCountIsExact — kBackHopViaNames is sized by the enum
 
 #include <algorithm>
 #include <array>
@@ -337,7 +338,9 @@ private:
     mutable HashMap<NodeId, std::vector<BackHop>> m_memo;
 };
 
-inline constexpr std::array<std::string_view, 3> kBackHopViaNames = { "slot", "slot-name", "declined" };   // indexed by BackHopVia
+inline constexpr std::size_t kBackHopViaCount = 3;
+static_assert( enumCountIsExact<BackHopVia, kBackHopViaCount>(), "kBackHopViaCount must equal the BackHopVia count — raise it with the append" );
+inline constexpr std::array<std::string_view, kBackHopViaCount> kBackHopViaNames = { "slot", "slot-name", "declined" };   // indexed by BackHopVia
 
 // Whether any of `sinks` has a backward hop a consumer follows (width within kBackHopWidth): --path's root next= swap.
 inline bool anyFollowedBackHop( const BackwardHops& hops, std::span<const NodeId> sinks )
