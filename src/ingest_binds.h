@@ -3326,9 +3326,18 @@ inline TSNode pythonPatternTarget( TSNode n, const char* t )
     return kindIs( t, "type_alias_statement" ) ? pythonTypeAliasName( n ) : TSNode{};
 }
 
+// a Python name node as a VarDecl at byte `at` (veto evidence: the match/`type`/type-parameter records below); a null node records nothing
+inline void pushPythonNodeDecl( TSNode id, std::uint32_t at, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
+{
+    if( !ts_node_is_null( id ) )
+    {
+        pushRawBind( fileId, Lang::Python, nodeTextOf( id, src ), std::string{}, BindSite{ at, 0u, 0u }, LocalBindKind::VarDecl, binds );
+    }
+}
+
 // the name a match pattern or `type` statement binds, as a VarDecl at the statement (veto evidence like capturePythonRebindShadowDecls'),
 // or at byte 0 when the enclosing function declares it global/nonlocal
-inline void capturePythonPatternDecls( TSNode n, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawBind>& binds )
+inline void capturePythonPatternDecls( TSNode n, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
 {
     const TSNode id = pythonPatternTarget( n, ts_node_type( n ) );
     if( ts_node_is_null( id ) )
@@ -3336,7 +3345,7 @@ inline void capturePythonPatternDecls( TSNode n, std::uint32_t fileId, Lang lang
         return;
     }
     const std::uint32_t at = pythonNameIsGlobalOrNonlocalHere( n, nodeTextOf( id, src ), src ) ? 0u : ts_node_start_byte( n );
-    pushRawBind( fileId, lang, nodeTextOf( id, src ), std::string{}, BindSite{ at, 0u, 0u }, LocalBindKind::VarDecl, binds );
+    pushPythonNodeDecl( id, at, fileId, src, binds );
 }
 
 // PEP 695 `class C[Base](Base)` / `def f[Base]()`: each type parameter is a name the base clause can resolve to (a TypeVar, so CPython
@@ -3353,7 +3362,7 @@ inline TSNode pythonTypeParamName( TSNode param )   // `type` > identifier | con
     return !ts_node_is_null( c ) && kindIs( ts_node_type( c ), "identifier" ) ? c : TSNode{};
 }
 
-inline void capturePythonTypeParamDecls( TSNode n, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawBind>& binds )
+inline void capturePythonTypeParamDecls( TSNode n, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
 {
     const bool isClass = kindIs( ts_node_type( n ), "class_definition" );
     const TSNode list = isClass || kindIs( ts_node_type( n ), "function_definition" ) ? fieldChild( n, NodeField::TypeParameters ) : TSNode{};
@@ -3365,10 +3374,7 @@ inline void capturePythonTypeParamDecls( TSNode n, std::uint32_t fileId, Lang la
     const std::uint32_t at  = isClass ? ( own > 0 ? own - 1 : 0 ) : ts_node_start_byte( list );
     for( std::uint32_t i = 0, k = ts_node_named_child_count( list ); i < k; ++i )
     {
-        if( const TSNode id = pythonTypeParamName( ts_node_named_child( list, i ) ); !ts_node_is_null( id ) )
-        {
-            pushRawBind( fileId, lang, nodeTextOf( id, src ), std::string{}, BindSite{ at, 0u, 0u }, LocalBindKind::VarDecl, binds );
-        }
+        pushPythonNodeDecl( pythonTypeParamName( ts_node_named_child( list, i ) ), at, fileId, src, binds );
     }
 }
 
@@ -3505,8 +3511,8 @@ inline void captureShadowScopeDecls( TSNode n, const char* t, std::uint32_t file
             capturePythonParamShadowDecls( n, fileId, lang, src, binds );   // Phase 4b: veto evidence only (empty span)
         }
         capturePythonRebindShadowDecls( n, t, fileId, lang, src, binds );   // issue #287 round 2: rebind veto evidence
-        capturePythonPatternDecls( n, fileId, lang, src, binds );        // ind4b fix 4: match captures and `type` statements
-        capturePythonTypeParamDecls( n, fileId, lang, src, binds );   // ind4b fix 5: PEP 695 type parameters
+        capturePythonPatternDecls( n, fileId, src, binds );        // ind4b fix 4: match captures and `type` statements
+        capturePythonTypeParamDecls( n, fileId, src, binds );   // ind4b fix 5: PEP 695 type parameters
         return;
     }
     if( lang != Lang::Cpp && lang != Lang::ObjC )

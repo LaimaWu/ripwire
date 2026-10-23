@@ -2039,7 +2039,7 @@ struct PythonNameBind
 struct PythonScopeFacts
 {
     HashMap<std::string, std::vector<PythonNameBind>> nameBinds;     // "<fileId>#name" → EVERY binding of the name in that file, in any scope;
-                                                                     //   only for names a Python class's base clause starts with
+                                                                     //   only for names a Python class's base clause starts with or is looked up under
     std::vector<std::vector<std::uint32_t>>           starTargets;   // Python fileId → the file each `from m import *` names (kNoFile:
                                                                      //   unresolved) — a star import binds names no table lists
 };
@@ -2183,6 +2183,28 @@ inline HashMap<std::string, char> pythonBaseClauseNames( const IngestResult& ing
     return names;
 }
 
+// the names a base clause is LOOKED UP under in another file, beyond the clause's first name: a qualified clause's own name (`q.Base`:
+// Base, what a re-export chain hops by) and the member an aliased import of a first name renames (`from pkg.x import a as q`: a, the name
+// pkg's __init__ may bind). pythonReexportChain and pythonImportedBases read the bindings of exactly these (a renamed hop, a package
+// that binds the submodule's name).
+inline void addPythonLookupNames( const IngestResult& ing, HashMap<std::string, char>& names )
+{
+    for( const Reference& r : ing.references )
+    {
+        if( r.isInherit && !r.memberRoot.empty() && r.fileId < ing.files.size() && isPythonSourcePath( rootRelPath( ing, r.fileId ) ) )
+        {
+            names.try_emplace( r.calleeName, '\0' );
+        }
+    }
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind == LocalBindKind::Import && b.importedName.starts_with( kPythonFromMemberMark ) && names.contains( b.var ) )
+        {
+            names.try_emplace( b.importedName.substr( kPythonFromMemberMark.size() ), '\0' );
+        }
+    }
+}
+
 // the scope a Python binding sits in: its enclosing def or class, kNoNode for module scope (including every binding at byte 0 —
 // pythonBindAtFileStart: a `global Base` rebinding inside a def that starts the file, and that def's own name).
 inline NodeId pythonBindScope( const IngestResult& ing, const Binding& b ) noexcept
@@ -2196,12 +2218,13 @@ inline NodeId pythonBindScope( const IngestResult& ing, const Binding& b ) noexc
 }
 
 // PythonScopeFacts::nameBinds: every binding of a name a Python class's base clause starts with (the bare base, else its
-// qualifier), per file and scope. buildPythonModuleRebindVetoes keeps only the module-scope facts; the base-name rule (pythonBaseNameProven)
+// qualifier) or is looked up under (addPythonLookupNames), per file and scope. buildPythonModuleRebindVetoes keeps only the module-scope facts; the base-name rule (pythonBaseNameProven)
 // needs the scoped ones too, because a class statement resolves its base in ITS lexical scope chain, not the module's.
 inline HashMap<std::string, std::vector<PythonNameBind>> buildPythonNameBinds( const IngestResult& ing )
 {
     HashMap<std::string, std::vector<PythonNameBind>> binds;
-    const HashMap<std::string, char>                  wanted = pythonBaseClauseNames( ing );
+    HashMap<std::string, char>                        wanted = pythonBaseClauseNames( ing );
+    addPythonLookupNames( ing, wanted );
     std::string                                       key;
     for( const Binding& b : ing.bindings )
     {
@@ -6375,6 +6398,21 @@ inline std::uint32_t pythonImportFileOf( const HashMap<std::string, std::uint32_
     return it == table.end() ? kNoFile : it->second;
 }
 
+// the module-scope bindings of `name` in Python file `f`, if the table records any (only the names pythonBaseClauseNames lists)
+inline const std::vector<PythonNameBind>* pythonModuleBindsOf( const ExternalVetoTables& v, std::uint32_t f, std::string_view name )
+{
+    std::string key;
+    const auto  it = v.pythonScopes.nameBinds.find( fileNameKey( key, f, name ) );
+    return it == v.pythonScopes.nameBinds.end() ? nullptr : &it->second;
+}
+
+// does file `f` import `name` under another name than the member's own (`from m import Other as name`)?
+inline bool pythonFileRenames( const ExternalVetoTables& v, std::uint32_t f, std::string_view name )
+{
+    const std::vector<PythonNameBind>* binds = pythonModuleBindsOf( v, f, name );
+    return binds != nullptr && std::ranges::any_of( *binds, []( const PythonNameBind& b ) { return b.scope == kNoNode && !b.member.empty(); } );
+}
+
 inline constexpr int kPythonReexportHops = 4;   // member-import hops provenBasesOf follows (a package re-exporting a re-export)
 
 // a Python `from m import N` names m's file `f`; when m defines no candidate it may RE-EXPORT the name (a package
@@ -6386,7 +6424,13 @@ inline void pythonReexportChain( const BaseEvidenceTables& t, const std::vector<
     for( int hop = 0; hop < kPythonReexportHops && f != kNoFile && out.empty(); ++hop )
     {
         appendCandidatesIn( t.ing, cand, f, out );
-        f = out.empty() ? pythonImportFileOf( t.extVeto.memberImportFile, f, link, key ) : f;
+        if( !out.empty() )
+        {
+            return;
+        }
+        // hop through `f` only when its import of `link` keeps the name: `from pkg.x.a import Other as Base` exports Other, and the
+        // candidates here are named Base (the import keys memberImportFile by the alias)
+        f = pythonFileRenames( t.extVeto, f, link ) ? kNoFile : pythonImportFileOf( t.extVeto.memberImportFile, f, link, key );
     }
 }
 
@@ -6445,6 +6489,22 @@ inline bool pythonStarMayBind( const ExternalVetoTables& v, std::uint32_t f, std
         }
     }
     return false;
+}
+
+// can package file `pkg` (its __init__.py) bind `name` itself? `from pkg import name` reads the package's attribute FIRST and falls back
+// to the submodule `name` only when there is none, so the submodule is the answer only when nothing in the package binds the name: no
+// import, def, class or assignment of it at module scope (a `global` anywhere counts, pythonModuleRebind), no module `__getattr__`
+// (which answers the lookup before the fallback) and no star import that could bind it. Unknown answers yes.
+inline bool pythonPackageMayBind( const ExternalVetoTables& v, std::uint32_t pkg, std::string_view name )
+{
+    std::string key;
+    if( const std::vector<PythonNameBind>* binds = pythonModuleBindsOf( v, pkg, name );
+        binds != nullptr && std::ranges::any_of( *binds, []( const PythonNameBind& b ) { return b.scope == kNoNode; } ) )
+    {
+        return true;
+    }
+    return v.pythonModuleRebind.contains( fileNameKey( key, pkg, name ) ) || v.pythonModuleRebind.contains( fileNameKey( key, pkg, "__getattr__" ) )
+        || pythonStarMayBind( v, pkg, name );
 }
 
 // Is the import the ONE thing `name` can mean where the class statement `r` sits? Proven only when, in the statement's scope chain
@@ -6528,9 +6588,10 @@ inline void pythonImportedBases( const BaseEvidenceTables& t, const Reference& r
     }
     const std::string_view pkgDir = includerDir( rootRelPath( t.ing, pkg ) );
     const std::string_view link   = bind->member.empty() ? qual : std::string_view( bind->member );   // `from pkg import other as a`: pkg's name is `other` (E2)
+    const bool shadowed = pythonPackageMayBind( t.extVeto, pkg, link );   // the package's own `link` wins over the submodule (F1)
     for( NodeId c : cand )
     {
-        if( pythonSubmoduleOf( rootRelPath( t.ing, t.ing.symbols[ c ].fileId ), pkgDir, link ) && std::find( out.begin(), out.end(), c ) == out.end() )
+        if( !shadowed && pythonSubmoduleOf( rootRelPath( t.ing, t.ing.symbols[ c ].fileId ), pkgDir, link ) && std::find( out.begin(), out.end(), c ) == out.end() )
         {
             out.push_back( c );
         }

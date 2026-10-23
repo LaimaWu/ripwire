@@ -277,9 +277,13 @@ want = {
     'builtin_call.py': ([], []),
     'importlib_call.py': ([include('importlib')], [bind('importlib', 'importlib', 'module')]),
     'dotted.py': ([include('a.b as c')], [bind('c', 'a.b', 'module')]),
+    # HISTORY (lane ind4b, fix 5 -> fix 6): the Import RawBind of an ALIASED from-import used to carry importedName '' (no marker); fix 5
+    # records the member's own name for it, 'from:a' (kPythonFromMemberMark + a), so `from . import a as b` + `b.Base` can be read as the
+    # submodule a. The change is on purpose, not erosion: the pin still asserts the exact value (a wrong or missing marker fails, see the
+    # wrong_marker control below), and only a plain `from m import x` or a module-form import keeps ''/'module'.
     # The receiver-evidence pass also writes this NameAlias. Pin all its fields and count;
     # its position relative to the Import bind is an implementation detail of the two passes.
-    'relative.py': ([include('.')], [('b', 'a', '', 14, py, name_alias, 0, (0, 0)), bind('b', '.', '')]),
+    'relative.py': ([include('.')], [('b', 'a', '', 14, py, name_alias, 0, (0, 0)), bind('b', '.', 'from:a')]),
 }
 def check(actual):
     assert actual.keys() == want.keys() and all(
@@ -317,7 +321,7 @@ for path in ('dotted.py', 'relative.py'):
         else: raise AssertionError((path, channel, 'missing fact escaped the alias assertion'))
 print('  PASS  #382: 16 corrupt-fact controls rejected by the exact Include/RawBind predicate')
 PY
-then ok '#382: future/dynamic negatives; c -> a.b with module marker; relative Include . and b -> . without marker'
+then ok '#382: future/dynamic negatives; c -> a.b with module marker; relative Include . and b -> . with the member marker from:a'
 else no '#382: negative/alias extraction or assertion controls failed'
 fi
 

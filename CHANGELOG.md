@@ -47,7 +47,10 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   (`import a.b as q`), since the import tables are per file; this over-hedges the same import repeated in two scopes,
   and a star import from an in-tree module whose `__all__` omits the name. `from pkg import other as a` with `a.Base` now
   reads `other` (the member's own name), not `a`; a dotted `import pkg.x` binds the root `pkg`, which no table names, so
-  `pkg.Base` is withheld (this also over-hedges `import pkg.x as pkg`). The import must be the name's one binding;
+  `pkg.Base` is withheld (this also over-hedges `import pkg.x as pkg`). `from pkg import a` (aliased or not) with `a.Base`
+  reads the submodule `a` only when the package's `__init__` does not bind `a` itself (an import, def, class or assignment of
+  it, a star import that could bind it, or a module `__getattr__`), and a re-export hop that renames (`from pkg.x.a import
+  Other as Base` in the package or a middle module) is not followed. The import must be the name's one binding;
   otherwise the site is withheld, never shown. Not read, and not detectable statically: a rebinding made from outside
   the file (`a.Base = Other` on an imported module).
 

@@ -86,6 +86,9 @@
 #   (K19-K20) fix 5: `from m import Other as Base` (memberalias), `from pkg.x import other as a` (qualalias) and `import pkg.x` (dottedroot,
 #        binds the root) name something else than the written name says, and a PEP 695 type parameter shadows the base (tpclass,
 #        tpdef): all withheld; K19 qualok now PROVES `from pkg.x import a as q` (q.Base) through the recorded member name; K20 stays.
+#   (K21-K22) fix 6: a package that BINDS the name (`from pkg.y import base2 as a` in pkg/x/__init__.py) is not its submodule a.py (shadowalias,
+#        shadowplain), and a re-export hop that RENAMES (`from pkg.x.a import Other as Base` in the package or a middle module) exports Other,
+#        not a.py's Base (reexpalias, reexpmod, reexpmid): all withheld; K22 re-exports under the SAME name and stays a way in.
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -605,6 +608,38 @@ for v in memberalias qualalias dottedroot tpclass tpdef sameas qualok outform do
     printf "$out" > "$d/other/b.py"
 done
 # K19 end
+# K21 fixtures (lane ind4b fix 6): what the package a name is imported from BINDS, and the renamed import a re-export chain hops through.
+#   CPython (3.13) truth per variant: shadowalias/shadowplain: pkg/x/__init__.py binds `a` to pkg.y.base2, so `from pkg.x import a [as q]` is
+#   base2 (getattr first, the submodule only as a fallback) - F1; reexpalias/reexpmod/reexpmid: the hop file reads `from pkg.x.a import Other as
+#   Base`, so Sub's base is pkg.x.a.Other, not the Base a.py also holds - F2 (reexpmod: `import pkg.x as q` + q.Base; reexpmid: the hop is
+#   pkg/x/mid.py, not the package). Controls (stay a way in): reexpplain (the hop re-exports the SAME name), reexpmidplain (the same, through mid.py).
+# K21 begin
+for v in shadowalias shadowplain reexpalias reexpmod reexpmid reexpplain reexpmidplain; do d="$TMP/c6_$v"; mkdir -p "$d/pkg/x" "$d/pkg/y" "$d/other"
+    printf 'class Base:\n    def render_line(self):\n        return 1\n\nclass Other:\n    pass\n' > "$d/pkg/x/a.py"
+    printf 'from pkg.x.a import Base\ndef run(obj):\n    return obj.render_line()\n' > "$d/pkg/x/c.py"
+    printf 'class Base:\n    def other(self):\n        return 3\n' > "$d/pkg/y/base2.py"
+    : > "$d/pkg/__init__.py"; : > "$d/pkg/x/__init__.py"; : > "$d/pkg/y/__init__.py"
+    tgt='def target():\n    return 2\n\n'
+    sub() { printf 'class Sub(%s):\n    def render_line(self):\n        return target()\n' "$1"; }
+    case "$v" in
+        shadowalias)  printf 'from pkg.y import base2 as a\n' > "$d/pkg/x/__init__.py"
+                      out="from pkg.x import a as q\n\n${tgt}$(sub q.Base)\n" ;;
+        shadowplain)  printf 'from pkg.y import base2 as a\n' > "$d/pkg/x/__init__.py"
+                      out="from pkg.x import a\n\n${tgt}$(sub a.Base)\n" ;;
+        reexpalias)   printf 'from pkg.x.a import Other as Base\n' > "$d/pkg/x/__init__.py"
+                      out="from pkg.x import Base\n\n${tgt}$(sub Base)\n" ;;
+        reexpmod)     printf 'from pkg.x.a import Other as Base\n' > "$d/pkg/x/__init__.py"
+                      out="import pkg.x as q\n\n${tgt}$(sub q.Base)\n" ;;
+        reexpmid)     printf 'from pkg.x.a import Other as Base\n' > "$d/pkg/x/mid.py"
+                      out="from pkg.x.mid import Base\n\n${tgt}$(sub Base)\n" ;;
+        reexpplain)   printf 'from pkg.x.a import Base\n' > "$d/pkg/x/__init__.py"
+                      out="from pkg.x import Base\n\n${tgt}$(sub Base)\n" ;;
+        reexpmidplain) printf 'from pkg.x.a import Base\n' > "$d/pkg/x/mid.py"
+                      out="from pkg.x.mid import Base\n\n${tgt}$(sub Base)\n" ;;
+    esac
+    printf "$out" > "$d/other/b.py"
+done
+# K21 end
 nsblock(){ grep -o '<near_sink [^>]*>.*</near_sink>' "$1"; }
 nshead(){ grep -o '<near_sink [^>]*>' "$1"; }
 nsrows(){ grep -o '<ns [^>]*/>' "$1"; }
@@ -1150,6 +1185,29 @@ for fx in sameas:7:3 qualok:7:3 outform:10:6 dotted2:7:3; do v=${fx%%:*}; rest=$
         '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
         "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" why=\"name:1\" in=\"run\" site=\"pkg/x/c.py:3\" met=\"1\"/>"
     brArm "(K20b) 2c import binding ($v): the bridge crosses to the override" "$TMP/c5_$v" "run,target" \
+        "<bridge proven=\"0\" crossings=\"1\" hops=\"2\"><s t=\"fn\" n=\"run\" p=\"pkg/x/c.py:2\"/><s t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" via=\"namesake\" cands=\"1\"/><s t=\"fn\" n=\"target\" p=\"other/b.py:$tl\"/></bridge>"
+done
+
+# K21 (lane ind4b fix 6): a name the package already binds is not its submodule, and a renamed import is not the name it is filed under.
+# Every withheld arm is shown + bridged at fix 5's head (4994f5ae); the two controls re-export under the SAME name and stay a way in.
+for fx in shadowalias:7 shadowplain:7 reexpalias:7 reexpmod:7 reexpmid:7; do v=${fx%%:*}; ln=${fx##*:}
+    case "$v" in
+        shadowalias)  why="pkg/x/__init__.py binds a to pkg.y.base2, so from pkg.x import a as q is base2, not the submodule a.py" ;;
+        shadowplain)  why="the same unaliased: from pkg.x import a; Sub(a.Base)" ;;
+        reexpalias)   why="the package reads from pkg.x.a import Other as Base: the Base it exports is Other" ;;
+        reexpmod)     why="import pkg.x as q; Sub(q.Base): the package's Base is the renamed Other" ;;
+        reexpmid)     why="the hop is pkg/x/mid.py, which renames Other to Base" ;;
+    esac
+    nsArm "(K21) 2c package binding ($v): $why - withheld" "$TMP/c6_$v" "run,target" \
+        '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+        "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" withheld=\"name:1\"/>"
+    brArm "(K21b) 2c package binding ($v): no namesake bridge to it either" "$TMP/c6_$v" "run,target" ''
+done
+for fx in reexpplain:7:3 reexpmidplain:7:3; do v=${fx%%:*}; rest=${fx#*:}; ln=${rest%%:*}; tl=${rest##*:}
+    nsArm "(K22) 2c re-export under the same name ($v): Base is still pkg/x/a.py's class - a way in" "$TMP/c6_$v" "run,target" \
+        '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+        "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" why=\"name:1\" in=\"run\" site=\"pkg/x/c.py:3\" met=\"1\"/>"
+    brArm "(K22b) 2c re-export under the same name ($v): the bridge crosses to the override" "$TMP/c6_$v" "run,target" \
         "<bridge proven=\"0\" crossings=\"1\" hops=\"2\"><s t=\"fn\" n=\"run\" p=\"pkg/x/c.py:2\"/><s t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" via=\"namesake\" cands=\"1\"/><s t=\"fn\" n=\"target\" p=\"other/b.py:$tl\"/></bridge>"
 done
 
