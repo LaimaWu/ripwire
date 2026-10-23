@@ -609,7 +609,7 @@ else
 fi
 ( cd "$IFD" && "$BIN" "$IFD" --no-cache --callees=solo_dyn ) >"$TMP/ifd2.xml" 2>/dev/null
 R="$( root_tag "$TMP/ifd2.xml" callees )"
-if [ "$( attr "$R" count )" = 1 ] && [ -z "$( attr "$R" declined_calls )" ] && grep -q 'n="solo_step" p="src/solo/mod.rs:8" via="impl"' "$TMP/ifd2.xml"; then
+if [ "$( attr "$R" count )" = 1 ] && [ -z "$( attr "$R" declined_calls )" ] && grep -q 'n="OnlySolo::solo_step" p="src/solo/mod.rs:8" via="impl"' "$TMP/ifd2.xml"; then   # train 33: QUALNAME-1 prints the owner
     ok "(K) --callees=solo_dyn: the one implementor is an edge (count=\"1\", via=\"impl\"), not a decline"
 else
     no "(K) --callees=solo_dyn: ${R:-no root} $( grep -oE '<s [^>]*>' "$TMP/ifd2.xml" | head -2 | tr '\n' ' ' )"
