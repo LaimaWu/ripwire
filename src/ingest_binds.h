@@ -3339,6 +3339,34 @@ inline void capturePythonPatternDecls( TSNode n, std::uint32_t fileId, Lang lang
     pushRawBind( fileId, lang, nodeTextOf( id, src ), std::string{}, BindSite{ at, 0u, 0u }, LocalBindKind::VarDecl, binds );
 }
 
+// PEP 695 `class C[Base](Base)` / `def f[Base]()`: each type parameter is a name the base clause can resolve to (a TypeVar, so CPython
+// raises TypeError and no derivation exists). One `type` per name; a bound `Base: int` wraps its name in a constrained_type, `*Ts` / `**P`
+// in a splat_type. A def's parameters are visible inside it (a VarDecl at the list); a class's are visible to its own base clause, which
+// the scope chain reads from OUTSIDE the class, so it is filed one byte before the class like the class's own name.
+inline void capturePythonTypeParamDecls( TSNode n, const char* t, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawBind>& binds )
+{
+    const bool isClass = kindIs( t, "class_definition" );
+    const TSNode list = isClass || kindIs( t, "function_definition" ) ? fieldChild( n, NodeField::TypeParameters ) : TSNode{};
+    if( ts_node_is_null( list ) )
+    {
+        return;
+    }
+    const std::uint32_t own = ts_node_start_byte( n );
+    const std::uint32_t at  = isClass ? ( own > 0 ? own - 1 : 0 ) : ts_node_start_byte( list );
+    for( std::uint32_t i = 0, k = ts_node_named_child_count( list ); i < k; ++i )
+    {
+        TSNode c = ts_node_named_child( list, i );   // `type`, then (constrained_type > type | splat_type) > ... > identifier
+        for( int depth = 0; depth < 4 && !ts_node_is_null( c ) && !kindIs( ts_node_type( c ), "identifier" ); ++depth )
+        {
+            c = ts_node_named_child_count( c ) > 0 ? ts_node_named_child( c, 0 ) : TSNode{};
+        }
+        if( !ts_node_is_null( c ) && kindIs( ts_node_type( c ), "identifier" ) )
+        {
+            pushRawBind( fileId, lang, nodeTextOf( c, src ), std::string{}, BindSite{ at, 0u, 0u }, LocalBindKind::VarDecl, binds );
+        }
+    }
+}
+
 inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawBind>& binds )
 {
     std::vector<TSNode> targets;   // reused scratch, cleared before each shape below
@@ -3473,6 +3501,7 @@ inline void captureShadowScopeDecls( TSNode n, const char* t, std::uint32_t file
         }
         capturePythonRebindShadowDecls( n, t, fileId, lang, src, binds );   // issue #287 round 2: rebind veto evidence
         capturePythonPatternDecls( n, fileId, lang, src, binds );        // ind4b fix 4: match captures and `type` statements
+        capturePythonTypeParamDecls( n, t, fileId, lang, src, binds );   // ind4b fix 5: PEP 695 type parameters
         return;
     }
     if( lang != Lang::Cpp && lang != Lang::ObjC )

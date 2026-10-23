@@ -2025,12 +2025,14 @@ inline CallDisposition javaCandidateRefused( Graph& g, const Reference& r, bool 
 //                 the veto fires only when the name's in-repo definitions are ALL members.
 // one binding of a Python name: the scope it sits in (the enclosing Function/Method/Class symbol; kNoNode = module scope), whether
 // it is an import (a rebinding of any other form is not) and, for an import, whether it binds a MODULE (`import a.b as q`: the one
-// form importBindFile records) rather than a member (`from a import q`: memberImportFile)
+// form importBindFile records) rather than a member (`from a import q`: memberImportFile); `member` is the member's own name in m when
+// the import renames it (`from m import x as q`: "x")
 struct PythonNameBind
 {
     NodeId scope      = kNoNode;
     bool   isImport   = false;
     bool   moduleForm = false;
+    std::string member;   // `from m import x as y` (y != x): "x", the member's own name in m; empty for every other form
 };
 
 // the scope facts a Python class statement's base name is judged by (pythonBaseNameProven)
@@ -2090,6 +2092,12 @@ inline void recordImportBindFile( const Binding& b, std::uint32_t resolved, cons
     {
         // absolute spec only (never relative); root-scoped to b.fileId's own root in a multi-root workspace
         moduleFile = resolvePythonModuleSuffix( b.typeName, fileIndex, fileRoot, b.fileId );
+    }
+    // ind4b fix 5 (E3): `import pkg.x` binds the ROOT `pkg` (pkg/__init__.py), not pkg.x, but `import pkg.x as pkg` binds pkg.x and the
+    // record cannot tell them apart (same var, same typeName): a dotted spec whose first segment is the bound name names no ONE file.
+    if( b.typeName.starts_with( b.var ) && b.typeName.size() > b.var.size() && b.typeName[ b.var.size() ] == '.' )
+    {
+        moduleFile = kNoFile;
     }
     // issue #287 round 3 (review rv-p6.md HIGH): try_emplace runs even when THIS import is unresolved
     // (moduleFile==kNoFile) — an import whose target is outside the indexed tree (stdlib/third-party/
@@ -2201,7 +2209,9 @@ inline HashMap<std::string, std::vector<PythonNameBind>> buildPythonNameBinds( c
             && wanted.contains( b.var ) && isPythonSourcePath( rootRelPath( ing, b.fileId ) ) )
         {
             key.clear();  Narrower::appendUint( key, b.fileId );  key.push_back( '#' );  key.append( b.var );
-            binds[ key ].push_back( PythonNameBind{ pythonBindScope( ing, b ), b.kind == LocalBindKind::Import, b.importedName == "module" } );
+            const bool member = b.importedName.starts_with( kPythonFromMemberMark );
+            binds[ key ].push_back( PythonNameBind{ pythonBindScope( ing, b ), b.kind == LocalBindKind::Import, b.importedName == "module",
+                                                    member ? b.importedName.substr( kPythonFromMemberMark.size() ) : std::string{} } );
         }
     }
     return binds;
@@ -6444,8 +6454,8 @@ inline bool pythonStarMayBind( const ExternalVetoTables& v, std::uint32_t f, std
 // The import TABLES that resolve the name are file-wide, though, so an import outside the chain can still be the one they hold:
 // a qualified clause (`q.Base`) reads importBindFile first, which only a module-form import (`import a.b as q`) fills, so any such
 // import of `q` outside the chain leaves it undecided; a bare clause reads memberImportFile alone, so its import must be the member form
-// (`from m import Base`), where two modules already degrade to kNoFile.
-inline bool pythonBaseNameProven( const BaseEvidenceTables& t, const Reference& r )
+// (`from m import Base`), where two modules already degrade to kNoFile. Returns that one binding (the caller reads its renamed member), else null.
+inline const PythonNameBind* pythonBaseNameProven( const BaseEvidenceTables& t, const Reference& r )
 {
     const bool             qualified = !r.memberRoot.empty();   // `q.Base`: the clause starts with the qualifier, else with the bare base
     const std::string_view name      = qualified ? std::string_view( r.memberRoot ) : std::string_view( r.calleeName );
@@ -6453,11 +6463,12 @@ inline bool pythonBaseNameProven( const BaseEvidenceTables& t, const Reference& 
     const auto  it = t.extVeto.pythonScopes.nameBinds.find( fileNameKey( key, r.fileId, name ) );
     if( it == t.extVeto.pythonScopes.nameBinds.end() || r.fromSymbol == kNoNode )
     {
-        return false;
+        return nullptr;
     }
     const bool          scoped = std::ranges::any_of( it->second, []( const PythonNameBind& b ) { return b.scope != kNoNode; } );
     const std::vector<NodeId> chain = scoped ? pythonClassScopeChain( t.ing, r.fromSymbol ) : std::vector<NodeId>{};
     int  here        = 0;
+    const PythonNameBind* sole = nullptr;
     bool importOnly  = false;
     bool moduleForm  = false;
     bool outsideForm = false;   // an import of the name outside the chain that binds a module
@@ -6466,6 +6477,7 @@ inline bool pythonBaseNameProven( const BaseEvidenceTables& t, const Reference& 
         if( b.scope == kNoNode || std::ranges::find( chain, b.scope ) != chain.end() )
         {
             ++here;
+            sole       = &b;
             importOnly = b.isImport;
             moduleForm = b.moduleForm;
         }
@@ -6474,7 +6486,7 @@ inline bool pythonBaseNameProven( const BaseEvidenceTables& t, const Reference& 
             outsideForm = outsideForm || ( b.isImport && b.moduleForm );
         }
     }
-    return here == 1 && importOnly && ( qualified ? !outsideForm : !moduleForm ) && !pythonStarMayBind( t.extVeto, r.fileId, name );
+    return here == 1 && importOnly && ( qualified ? !outsideForm : !moduleForm ) && !pythonStarMayBind( t.extVeto, r.fileId, name ) ? sole : nullptr;
 }
 
 // tier 2, Python: `from m import X` (X bare), `import pkg.mod as q` (q.X), `from pkg import q` (q.X: q is pkg's submodule,
@@ -6486,12 +6498,17 @@ inline void pythonImportedBases( const BaseEvidenceTables& t, const Reference& r
     const std::string_view qual = r.memberRoot;   // the base's written qualifier on an inherit ref ("" bare)
     std::string            key;
     const std::string_view first = qual.empty() ? std::string_view( r.calleeName ) : qual;
-    if( t.extVeto.pythonModuleRebind.contains( fileNameKey( key, r.fileId, first ) ) || !pythonBaseNameProven( t, r ) )
+    const PythonNameBind* bind = pythonBaseNameProven( t, r );
+    if( t.extVeto.pythonModuleRebind.contains( fileNameKey( key, r.fileId, first ) ) || bind == nullptr )
     {
         return;
     }
     if( qual.empty() )
     {
+        if( !bind->member.empty() )
+        {
+            return;   // `from m import Other as Base`: the candidates are named Base, the class the clause means is m's Other (E1)
+        }
         pythonReexportChain( t, cand, pythonImportFileOf( t.extVeto.memberImportFile, r.fileId, r.calleeName, key ), r.calleeName, out );
         return;
     }
@@ -6510,16 +6527,17 @@ inline void pythonImportedBases( const BaseEvidenceTables& t, const Reference& r
         return;
     }
     const std::string_view pkgDir = includerDir( rootRelPath( t.ing, pkg ) );
+    const std::string_view link   = bind->member.empty() ? qual : std::string_view( bind->member );   // `from pkg import other as a`: pkg's name is `other` (E2)
     for( NodeId c : cand )
     {
-        if( pythonSubmoduleOf( rootRelPath( t.ing, t.ing.symbols[ c ].fileId ), pkgDir, qual ) && std::find( out.begin(), out.end(), c ) == out.end() )
+        if( pythonSubmoduleOf( rootRelPath( t.ing, t.ing.symbols[ c ].fileId ), pkgDir, link ) && std::find( out.begin(), out.end(), c ) == out.end() )
         {
             out.push_back( c );
         }
     }
     if( out.empty() )
     {
-        pythonReexportChain( t, cand, pkg, qual, out );
+        pythonReexportChain( t, cand, pkg, link, out );
     }
 }
 

@@ -83,6 +83,9 @@
 #   (K17-K18) fix 4: the file-wide import tables never decide for an import outside the class's chain (qualmod, qualfn), a `global`
 #        rebinding in a def at byte 0 is module scope (glob0), a match-statement capture and a PEP 695 `type` statement are bindings
 #        (matchas/matchbare/matchsplat/matchkw/matchdict/matchfn, typestmt); K18 qualctl and matchctl stay a way in.
+#   (K19-K20) fix 5: `from m import Other as Base` (memberalias), `from pkg.x import other as a` (qualalias) and `import pkg.x` (dottedroot,
+#        binds the root) name something else than the written name says, and a PEP 695 type parameter shadows the base (tpclass,
+#        tpdef): all withheld; K19 qualok now PROVES `from pkg.x import a as q` (q.Base) through the recorded member name; K20 stays.
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -568,6 +571,40 @@ for v in qualmod qualfn qualctl glob0 glob1 matchas matchbare matchsplat matchkw
     printf "$out" > "$d/other/b.py"
 done
 # K17 end
+# K19 fixtures (lane ind4b fix 5): the import forms whose local name is not the name the module holds, and PEP 695 type parameters. The
+# tail of every fixture is `class Sub(<base>): def render_line` calling target(); CPython (3.13) truth noted per variant.
+#   memberalias: `from pkg.x.a import Other as Base` - Sub's base is pkg.x.a.Other, not the Base this file also happens to hold (E1)
+#   qualalias:   `from pkg.x import other as a` + Sub(a.Base) - a is pkg/x/other.py, not pkg/x/a.py (E2)
+#   dottedroot:  `import pkg.x` binds the ROOT package pkg: pkg.Base is pkg/__init__.py's class, not pkg/x/__init__.py's re-export (E3)
+#   tpclass/tpdef: `class Sub[Base](Base)` / `def make[Base](): class Sub(Base)` - the type parameter is the name (TypeError, no base) (N8)
+#   Controls (stay a way in): sameas (`import Base as Base`), qualok (`from pkg.x import a as q` + q.Base is pkg/x/a.py), outform (an
+#   unrelated function's `import pkg.y.base2 as Base` does not touch the bare member import), dotted2 (`import pkg.x.a as q` + q.Base)
+# K19 begin
+for v in memberalias qualalias dottedroot tpclass tpdef sameas qualok outform dotted2; do d="$TMP/c5_$v"; mkdir -p "$d/pkg/x" "$d/pkg/y" "$d/other"
+    printf 'class Base:\n    def render_line(self):\n        return 1\n' > "$d/pkg/x/a.py"
+    printf 'from pkg.x.a import Base\ndef run(obj):\n    return obj.render_line()\n' > "$d/pkg/x/c.py"
+    printf 'class Base:\n    def other(self):\n        return 3\n' > "$d/pkg/y/base2.py"
+    : > "$d/pkg/__init__.py"; : > "$d/pkg/x/__init__.py"; : > "$d/pkg/y/__init__.py"
+    tgt='def target():\n    return 2\n\n'
+    sub() { printf 'class Sub(%s):\n    def render_line(self):\n        return target()\n' "$1"; }
+    case "$v" in
+        memberalias) printf 'class Other:\n    pass\n' >> "$d/pkg/x/a.py"
+                     out="from pkg.x.a import Other as Base\n\n${tgt}$(sub Base)\n" ;;
+        qualalias)   printf 'class Base:\n    pass\n' > "$d/pkg/x/other.py"
+                     out="from pkg.x import other as a\n\n${tgt}$(sub a.Base)\n" ;;
+        dottedroot)  printf 'class Base:\n    def other(self):\n        return 4\n' > "$d/pkg/__init__.py"
+                     printf 'from pkg.x.a import Base\n' > "$d/pkg/x/__init__.py"
+                     out="import pkg.x\n\n${tgt}$(sub pkg.Base)\n" ;;
+        tpclass)     out="from pkg.x.a import Base\n\n${tgt}class Sub[Base](Base):\n    def render_line(self):\n        return target()\n" ;;
+        tpdef)       out="from pkg.x.a import Base\n\n${tgt}def make[Base]():\n    class Sub(Base):\n        def render_line(self):\n            return target()\n    return Sub\n" ;;
+        sameas)      out="from pkg.x.a import Base as Base\n\n${tgt}$(sub Base)\n" ;;
+        qualok)      out="from pkg.x import a as q\n\n${tgt}$(sub q.Base)\n" ;;
+        outform)     out="from pkg.x.a import Base\ndef g():\n    import pkg.y.base2 as Base\n    return Base\n\n${tgt}$(sub Base)\n" ;;
+        dotted2)     out="import pkg.x.a as q\n\n${tgt}$(sub q.Base)\n" ;;
+    esac
+    printf "$out" > "$d/other/b.py"
+done
+# K19 end
 nsblock(){ grep -o '<near_sink [^>]*>.*</near_sink>' "$1"; }
 nshead(){ grep -o '<near_sink [^>]*>' "$1"; }
 nsrows(){ grep -o '<ns [^>]*/>' "$1"; }
@@ -1087,6 +1124,32 @@ for fx in qualctl:10:6 matchctl:13:9; do v=${fx%%:*}; rest=${fx#*:}; ln=${rest%%
         '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
         "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" why=\"name:1\" in=\"run\" site=\"pkg/x/c.py:3\" met=\"1\"/>"
     brArm "(K18b) 2c per-scope base binding ($v): the bridge crosses to the override" "$TMP/c5_$v" "run,target" \
+        "<bridge proven=\"0\" crossings=\"1\" hops=\"2\"><s t=\"fn\" n=\"run\" p=\"pkg/x/c.py:2\"/><s t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" via=\"namesake\" cands=\"1\"/><s t=\"fn\" n=\"target\" p=\"other/b.py:$tl\"/></bridge>"
+done
+
+# K19 (lane ind4b fix 5): the names an import does NOT bind, and PEP 695 type parameters (each withheld arm is shown + bridged at fix 4's head).
+# `from m import Other as Base` binds the local Base to m's Other (memberalias); `from pkg.x import other as a` binds a to pkg/x/other.py
+# (qualalias); `import pkg.x` binds the root pkg, not pkg.x (dottedroot); a class/def type parameter is a TypeVar, never a base (tpclass, tpdef).
+# qualok (`from pkg.x import a as q`, q is pkg/x/a.py) is the one that GAINS: the alias is resolved through the recorded member name.
+# sameas, outform and dotted2 stay a way in (K20): an alias equal to the name, an unrelated function's import, a dotted import with an alias.
+for fx in memberalias:7 qualalias:7 dottedroot:7 tpclass:7 tpdef:8; do v=${fx%%:*}; ln=${fx##*:}
+    case "$v" in
+        memberalias) why="from pkg.x.a import Other as Base: Sub's base is pkg.x.a.Other, not the Base that file also holds" ;;
+        qualalias)   why="from pkg.x import other as a; Sub(a.Base): a is pkg/x/other.py, not pkg/x/a.py" ;;
+        dottedroot)  why="import pkg.x binds the root package pkg; pkg.Base is pkg/__init__.py's class" ;;
+        tpclass)     why="class Sub[Base](Base): the type parameter is the name (CPython: TypeError, no base)" ;;
+        tpdef)       why="def make[Base](): class Sub(Base): the function's type parameter is the name" ;;
+    esac
+    nsArm "(K19) 2c import/type-parameter binding ($v): $why — withheld" "$TMP/c5_$v" "run,target" \
+        '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+        "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" withheld=\"name:1\"/>"
+    brArm "(K19b) 2c import/type-parameter binding ($v): no namesake bridge to it either" "$TMP/c5_$v" "run,target" ''
+done
+for fx in sameas:7:3 qualok:7:3 outform:10:6 dotted2:7:3; do v=${fx%%:*}; rest=${fx#*:}; ln=${rest%%:*}; tl=${rest##*:}
+    nsArm "(K20) 2c import binding ($v): Base is still pkg/x/a.py's class where Sub is defined — a way in" "$TMP/c5_$v" "run,target" \
+        '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+        "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" why=\"name:1\" in=\"run\" site=\"pkg/x/c.py:3\" met=\"1\"/>"
+    brArm "(K20b) 2c import binding ($v): the bridge crosses to the override" "$TMP/c5_$v" "run,target" \
         "<bridge proven=\"0\" crossings=\"1\" hops=\"2\"><s t=\"fn\" n=\"run\" p=\"pkg/x/c.py:2\"/><s t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" via=\"namesake\" cands=\"1\"/><s t=\"fn\" n=\"target\" p=\"other/b.py:$tl\"/></bridge>"
 done
 

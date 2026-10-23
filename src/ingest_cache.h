@@ -351,6 +351,8 @@ constexpr std::uint32_t kParserVer    = 224;          // bump on any grammar/.sc
                                                       //   emits a LocalBindKind::VarDecl for a match-statement capture (`case Base:`, `case P as Base`, `Cls(x=Base)`,
                                                       //   `*Base`, `**Base`) and a PEP 695 `type Base = ...`, so a Python base name rebound that way is no binding the
                                                       //   rule 2c proof can read. Same record layout: kCacheVersion unchanged.
+                                                      //   Fix round 5 (still 224, the placeholder is unreleased): an aliased `from m import x as y` records "from:x" in the Import
+                                                      //   binding's importedName (kPythonFromMemberMark), and a PEP 695 class/def type parameter is a VarDecl.
                                                       // 212 = 2026-10-21 (train 32a: member-names + rust-receivers): strictly above every live number — main 206 (rich 207),
                                                       //   lane rust-receivers 202 (203), lane ix1-slot 204 (205), lane l6-iface 210 (211); #420 reserves 214 (215), so train
                                                       //   32b can go above. Rich file tag 213. kCacheVersion stays 36: neither lane changed a record format (rust-receivers
