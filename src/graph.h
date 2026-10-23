@@ -6043,9 +6043,9 @@ inline void collectGoModules( const IngestResult& ing, FalseEdgeRules& rules )
     noteGoReplacedPaths( ing, rules, isGoFile, reads.replacedDirs );
 }
 
-// A JS/TS record whose span hides what a name was bound to: a declaration shadowing an import (JsShadow), or FC3's written
-// binding (JsRebind) — a name written in its scope no longer names its declared module, so it is never vetoed as outside.
-inline bool hidesJsBinding( LocalBindKind k ) noexcept { return k == LocalBindKind::JsShadow || k == LocalBindKind::JsRebind; }
+// The JS/TS records whose span hides what a name was bound to: a declaration shadowing an import (JsShadow), and FC3's
+// written binding (JsRebind) — a name written in its scope no longer names its declared module, so it is never vetoed as outside.
+inline constexpr std::array<LocalBindKind, 2> kJsHidingKinds = { LocalBindKind::JsShadow, LocalBindKind::JsRebind };
 
 // FE-A: the binding facts — every ModuleAlias (Go dot imports apart), every name a JS/TS import or alias binds, and every
 // JsShadow span. Returns whether any alias exists (only then is the JS module vocabulary worth building).
@@ -6077,7 +6077,7 @@ inline bool collectFalseEdgeBindings( const IngestResult& ing, FalseEdgeRules& r
         {
             rules.bound.try_emplace( jsImportKey( b.fileId, b.var ), '\0' );
         }
-        else if( hidesJsBinding( b.kind ) )
+        else if( std::find( kJsHidingKinds.begin(), kJsHidingKinds.end(), b.kind ) != kJsHidingKinds.end() )
         {
             rules.shadows[ jsImportKey( b.fileId, b.var ) ].push_back( { b.spanStart, b.spanEnd } );
         }
