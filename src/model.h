@@ -1316,14 +1316,17 @@ inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
 inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::ImplBlock ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
+// L6's ImplBlock is in the set for the same reason: its var is the TRAIT / interface being implemented, never a name bound in the
+// enclosing function, so the generic binding readers (localNameSet, the fn-pointer tables, nonlocalstate) must skip it (its two
+// readers, graph.h's implementors-map pass and ifacedispatch.h, filter by kind).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {
     // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result five (CallResult .. TypeAlias) after
-    // RubyMainMixin, h1-annot's two (AugAssign, OperatorResult) right after them, and L6's DispatchType after those: one run
-    // CallResult .. DispatchType
+    // RubyMainMixin, h1-annot's two (AugAssign, OperatorResult) right after them, and L6's DispatchType and ImplBlock after
+    // those: one run CallResult .. ImplBlock
     static_assert( std::uint8_t( LocalBindKind::StaticMember ) - std::uint8_t( LocalBindKind::RecvType ) == 4, "FE-B's five receiver-evidence kinds stay one run" );
-    static_assert( std::uint8_t( LocalBindKind::DispatchType ) - std::uint8_t( LocalBindKind::CallResult ) == 7, "the call-result, in-place and dispatch kinds stay one run" );
-    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::DispatchType );
+    static_assert( std::uint8_t( LocalBindKind::ImplBlock ) - std::uint8_t( LocalBindKind::CallResult ) == 8, "the call-result, in-place, dispatch and impl-block kinds stay one run" );
+    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::ImplBlock );
 }
 // The language family whose call results take a callee's declared result type (train 29 call-result typing), ONE row read
 // by ingest (which records CallResult / ReturnType / TypeImport) and by graph.h (where the type resolves, and which

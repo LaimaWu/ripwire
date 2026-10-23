@@ -1705,7 +1705,7 @@ inline JavaFieldOwnerGroups buildJavaFieldOwnerGroups( const IngestResult& ing )
     HashMap<NodeId, std::uint32_t> javaOwnerSlot;
     for( const Binding& b : ing.bindings )
     {
-        if( b.fromSymbol == kNoNode || b.fromSymbol >= ing.symbols.size() || b.var.empty() )
+        if( b.fromSymbol == kNoNode || b.fromSymbol >= ing.symbols.size() || b.var.empty() || b.kind == LocalBindKind::ImplBlock )   // an anonymous class's ImplBlock (var = the base) is no field
         {
             continue;
         }
