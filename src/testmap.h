@@ -1823,7 +1823,7 @@ inline std::size_t scriptGatesUnmodelledCount( const IngestResult& ing )
 inline constexpr std::string_view kClassNewLegend =
     "<g via=\"class-new\" total= shown= capped= next=>: tests not listed above that construct a class owning a reached method (or the "
     "changed class); <new p= l= class=>: the test file, the construction line if exact, the class. The dispatch to the method is not "
-    "proven, so never in tests=/reached=; nearest class first. ";
+    "proven, so never in tests=/reached=; nearest class first; a floor (Go T{}, C++ T x;, Ruby T.new are not read). ";
 template<class EscapeFn>
 inline std::string classNewGroupXml( const IngestResult& ing, std::span<const ClassNewRow> rows, std::string_view rootPrefix, EscapeFn ex )
 {
@@ -1836,9 +1836,14 @@ inline std::string classNewGroupXml( const IngestResult& ing, std::span<const Cl
     if( shown < rows.size() )
     {
         const Symbol& c = ing.symbols[ rows[shown].cls ];
-        const std::string sel = rows[shown].target == rows[shown].cls   // the class itself (file:Class), or its constructor method (Class.new)
+        const Symbol& t = ing.symbols[ rows[shown].target ];
+        // the class itself (file:Class), or its constructor method by its canonical id (file::Class::new: `Class.new` named every
+        // same-named class's constructor, widening the continuation past the class the first cut row built; CR #434)
+        const std::string sel = rows[shown].target == rows[shown].cls
                                   ? std::format( "{}:{}", sarif::rootRelativeUri( ing.files[ c.fileId ], rootPrefix ), c.name )
-                                  : std::format( "{}.{}", c.name, ing.symbols[ rows[shown].target ].name );
+                              : t.scope.empty()
+                                  ? std::format( "{}.{}", c.name, t.name )
+                                  : canonicalId( sarif::rootRelativeUri( ing.files[ t.fileId ], rootPrefix ), t.scope, t.name );
         next = nextAttrXml( nextFlag( "--callers=", sel ) );   // checklist 34: the one continuation spelling and escaper
     }
     // the house window (total= shown= capped=): capped="1" exactly when rows were cut, beside the next= for the first cut row's class (not a list of the rest)
