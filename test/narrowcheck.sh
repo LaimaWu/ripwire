@@ -513,8 +513,13 @@ expectDispatch "(29)" useQualified key "Iterator::key@memtable/rep.h:25"
 expectDispatch "(30)" useInherited size "IteratorBase::size@include/iterator.h:6"
 # ── 31) the dispatch is disclosed, never a quiet single pin: useParam declines it (lane L6: a <dc gate="iface"> row; was amb=
 #        and three split edges) and commits no edge to any overrider. ────────────────────────────────────────────────────
+# the negative reads a row under its member spelling too (QUALNAME-1 prints Owner::key): a bare `n="key"` pattern could never match an
+# overrider row, and `! grep` would pass vacuously. The control reads arm 28's answer, which carries an Owner::key row.
+KEYROW='<s [^>]*n="([A-Za-z_0-9]+::)?key"'
 D31="$( "$BIN" "$DFIX" --callees=useParam --no-cache 2>/dev/null )"
-if printf '%s' "$D31" | grep -q '<dc n="key" [^>]*cands="3" via="declined" gate="iface"' && ! printf '%s' "$D31" | grep -q '<s [^>]*n="key"'; then
+if ! "$BIN" "$DFIX" --callees=peek --no-cache 2>/dev/null | grep -qE "$KEYROW"; then
+    no "(31) control: the key-row pattern does not match arm 28's Iterator::key row (the negative below would pass vacuously)"
+elif printf '%s' "$D31" | grep -q '<dc n="key" [^>]*cands="3" via="declined" gate="iface"' && ! printf '%s' "$D31" | grep -qE "$KEYROW"; then
     ok "(31) useParam declines the dispatch (gate=\"iface\", cands=\"3\") and binds no overrider"
 else
     no "(31) useParam: the dispatch is neither declined gate=\"iface\" cands=\"3\" nor edge-free: $( printf '%s' "$D31" | grep -oE '<(s|dc) [^>]*>' | head -3 | tr '\n' ' ' )"
