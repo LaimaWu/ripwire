@@ -99,6 +99,10 @@ plain and its one cold whole-repo call (22-30 s under ASan) timed out twice in n
 from the runtime's symbol names inside the binary or from the runtime answering `ASAN_OPTIONS=help=1`; the alarms
 themselves, every arm and every literal are unchanged. Test-only; no output change.
 
+### Changed — tests: legend byte pins are stair-step targets under a runaway guard
+
+- The five legend size gates keep every pinned number as a target; a registered present-only clause may pass it (printed `OVER-TARGET`), a hard runaway guard fails as a bug signal, and `RIPWIRE_LEGEND_PINS=strict` keeps the old hard pins (tests only; no output change).
+
 ### Changed — the versions this change moves, stated once
 
 `kParserVer` 206 → 220 (file tag 221): the Rust written-type receivers carried 202 (203) on their branch and the struct-field
