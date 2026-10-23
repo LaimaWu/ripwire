@@ -76,6 +76,20 @@ python3 "$ASM" release 1.1.1 2030-02-03 "$TMP/g2" >/dev/null 2>"$TMP/empty.err" 
     && no "(B) a release with no fragments left was accepted" \
     || { grep -q 'nothing to release' "$TMP/empty.err" && ok "(B) a release with no fragments is refused ('nothing to release')" \
                                                        || no "(B) empty release refused for the wrong reason: $( head -2 "$TMP/empty.err" )"; }
+# (B) CR #434 (4364224289): a version that already has a section is refused BEFORE anything is written — CHANGELOG.md byte-identical,
+# every fragment still there; control: a fresh version on the same tree folds. $TMP/g1 holds the folded 1.1.0 section.
+freshTree "$TMP/dv"; cp "$TMP/g1/CHANGELOG.md" "$TMP/dv/CHANGELOG.md"
+before="$( cksum <"$TMP/dv/CHANGELOG.md" )"; nfrag="$( ls "$TMP/dv/changelog.d" | wc -l | tr -d ' ' )"
+python3 "$ASM" release 1.1.0 2030-02-04 "$TMP/dv" >/dev/null 2>"$TMP/dv.err" \
+    && no "(B) a release of a version that already has a changelog section was accepted" \
+    || { grep -q 'already has a' "$TMP/dv.err" && ok "(B) a duplicate version is refused ('already has a ## [1.1.0] section')" \
+                                                || no "(B) duplicate version refused for the wrong reason: $( head -2 "$TMP/dv.err" )"; }
+[ "$( cksum <"$TMP/dv/CHANGELOG.md" )" = "$before" ] && [ "$( ls "$TMP/dv/changelog.d" | wc -l | tr -d ' ' )" = "$nfrag" ] \
+    && ok "(B) the refused duplicate wrote nothing: CHANGELOG.md and every fragment untouched" \
+    || no "(B) the refused duplicate still rewrote CHANGELOG.md or deleted fragments"
+python3 "$ASM" release 1.1.2 2030-02-04 "$TMP/dv" >/dev/null 2>&1 && grep -q '^## \[1.1.2\]' "$TMP/dv/CHANGELOG.md" \
+    && ok "(B) control: a version without a section folds on the same CHANGELOG.md" \
+    || no "(B) control: a fresh version was refused on a CHANGELOG.md that holds another version's section"
 
 # ── (C) drift ─────────────────────────────────────────────────────────────────────────────────────────────────
 freshTree "$TMP/d"

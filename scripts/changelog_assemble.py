@@ -156,6 +156,8 @@ def release( root, ver, date ):
     entries = assembledEntries( root )
     if not entries:
         raise ValueError( "no fragments under %s/ — nothing to release" % DIR )
+    if re.search( r"^## \[%s\]" % re.escape( ver ), rest, re.M ):   # CR #434: a second section for one version leaves CHANGELOG.md inconsistent
+        raise ValueError( "CHANGELOG.md already has a `## [%s]` section — a version is released once (nothing was written)" % ver )
     section = "## [%s] — %s\n\n%s\n\n" % ( ver, date, "\n\n".join( entries ) )
     text = head + "\n" + STUB + "\n\n" + section + rest
     with open( path, "wb" ) as fh:
