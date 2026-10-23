@@ -20,6 +20,7 @@
 #   (E) present-only legend: the member-owner clause rides a --callers answer with an owner, not one without.
 #   (F) JSON keys stable: --callers --json keeps "n" bare.
 #   (G) the composed id p::n of a folded row (path::Owner.name / path::Owner#name) resolves; a wrong owner does not.
+#   (H) honesty: a free function an ERROR-recovered struct swallowed (test/extentfix/leak.cpp) prints bare, never IndiaError::clampQuantity.
 #
 # Usage: test/qualnamecheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -189,6 +190,14 @@ fi
 echo "(F) --json keys stable"
 j=$( cd "$TMP/py" && "$BIN" "$TMP/py" --no-cache --callers=leaf_fn --json 2>/dev/null )
 case "$j" in *'"n":"match_chunk"'*) ok "json n stays bare";; *) no "json n changed: $j";; esac
+
+echo "(H) an extent-suspect symbol prints bare (a free function under the struct that swallowed it)"
+mkdir -p "$TMP/leak"
+cp "$ROOT/test/extentfix/leak.cpp" "$TMP/leak/leak.cpp"
+printf 'int clampQuantity(int quantity, int ceiling);\nint useClamp() { return clampQuantity(1, 2); }\n' > "$TMP/leak/caller.cpp"
+r=$( run "$TMP/leak" --callees=useClamp | rows )
+has   "leak: the swallowed free function is a callee" "$r" "clampQuantity"
+hasnt "leak: not filed under the swallowing struct"    "$r" "IndiaError::clampQuantity"
 
 if [ "$fail" -eq 0 ]; then echo "qualnamecheck: PASS"; exit 0; fi
 echo "qualnamecheck: FAIL"; exit 1
