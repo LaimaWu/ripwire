@@ -7,9 +7,10 @@
 #
 # THE CONTRACT. A row whose definition is a member — its stored scope's last segment is a class, struct, interface, named type or
 # module the index defines in the row's language — prints n="Scope<sep>name" with the language's separator (langfacts.h
-# memberSeparator: `::` C/C++/Rust/PHP, `#` Ruby, `.` elsewhere); a <d> row then drops sc= (folded, lossless). A printed scope is a
-# claim, so it is exact or bare: a type row, a free function, a C++ namespace-scope function, a function-local def (a closure) and a
-# language whose defs carry no scope (TS, Java) stay bare. The legend clause rides only where a row carries an owner.
+# memberSeparator: `::` C/C++/Rust, `#` Ruby, `.` elsewhere; PHP methods store no scope, so none prints); a <d> row then drops sc=
+# (folded, lossless). A printed scope is a claim, so it is exact or bare: a type row, a free function, a C++ namespace-scope function
+# (unless a class of the same name is indexed: the owner test is name-keyed), a function-local def (a closure), an EXTENT-SUSPECT
+# symbol (a free function an ERROR-recovered struct swallowed) and a language whose defs carry no scope (TS, Java) stay bare. The legend clause rides only where a row carries an owner.
 #
 # ARMS
 #   (A) red-first, per language: callees/callers/path/sigs rows carry the owner (Py, Go, Rust, C++, Ruby).

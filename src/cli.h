@@ -1049,7 +1049,7 @@ inline constexpr char kHelpHead[] =
         "                               = a name hit refused because the word is a common name (N names carry it, M definitions); a shape\n"
         "                               demotion appends \"; doc tier demoted (...)\". On the rows, sc= is the enclosing scope and the full id\n"
         "                               is p::sc::n (p= of the row or its <f>) - the spelling --expand/--callers/--impact/--uses accept; a member\n"
-        "                               row folds its scope into n=Owner.name (Owner::name C/C++/Rust/PHP, Owner#name Ruby): id p::n.\n"
+        "                               row folds its stored scope into n=Owner.name where the index defines that scope as a type or module (Owner::name C/C++/Rust, Owner#name Ruby): id p::n.\n"
         "    --adaptive                 (with --for/--query) cut the result at the relevance cliff instead of at a fixed K\n"
         "                               (with --for/--query) cut the result at the relevance CLIFF — the largest relative score gap\n"
         "                               (Adaptive-k), floor 5, ceiling = the existing top-k; a sharp query returns few, a flat/broad one\n"

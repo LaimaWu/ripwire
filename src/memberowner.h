@@ -8,12 +8,13 @@
 // SymKind::Other: Rust `mod`, Ruby `module`, Elixir `defmodule`). A printed scope is a claim, so it is exact or bare:
 //   * no stored scope (TS/JS, Java, C#, Swift, Kotlin `object` today) → bare: a floor, not a claim;
 //   * a type or module row → bare (a class carries its own name as sc=; never `Box.Box`);
-//   * a C++ namespace scope → bare (a namespace is no indexed definition, so a namespace-scope function stays a free function);
+//   * a C++ namespace scope → bare (a namespace is no indexed definition, so a namespace-scope function stays a free function) —
+//     unless a class of the same name is defined in that language: the owner test is name-keyed, so `namespace Logger { int init(); }`
+//     beside `class Logger` prints `Logger::init`, the valid qualified name of a function that is not a member;
 //   * an EXTENT-SUSPECT symbol → bare: a recovered parse can file a free function under the struct that swallowed it (extentsuspect.h);
-//     its scope is an inference from the ERROR region, not a claim the source made;
 //   * a FUNCTION-LOCAL def (Symbol::fnLocal: a Python/JS closure, whose scope walk skips the enclosing method) → bare: its owner
 //     would read `Class.fn` for a function no `Class` instance carries.
-// The spelling is the full stored scope, the language's member separator (langfacts.h memberSeparator: `::` C/C++/Rust/PHP, `#`
+// The spelling is the full stored scope, the language's member separator (langfacts.h memberSeparator: `::` C/C++/Rust (PHP methods store no scope, so none prints), `#`
 // Ruby, `.` elsewhere), then the name — every spelling a selector resolves. A constructor is a member by the same rule and prints
 // in its language's own form (`Route.__init__`, `NinjaMain::NinjaMain`, `Config::new`).
 // ONE rule for every row kind that prints a member: --path hops (defattrib.h emitPathHopRows), the --callers/--callees and --impact
@@ -69,7 +70,8 @@ public:
         std::sort( defined_.begin(), defined_.end(), keyLess );
         defined_.erase( std::unique( defined_.begin(), defined_.end() ), defined_.end() );
     }
-    // The owner a member row prints ("" = bare): the symbol's full stored scope, when the rule above holds.
+    // The owner a member row prints ("" = bare): the symbol's full stored scope, when the rule above holds. An extent-suspect symbol's
+    // scope was inferred from a recovered parse (extentsuspect.h), so it is no claim: bare.
     std::string_view ownerOf( const Symbol& s ) const noexcept
     {
         if( s.scope.empty() || isMemberOwnerKind( s.kind ) || s.fnLocal || s.extentSuspect != 0 )

@@ -88,7 +88,7 @@ struct LangFacts
     bool noNestedNamedFunctions = false;
 
     /// QUALNAME-1 (src/memberowner.h): the separator a member row prints between its owner and its name, as the language itself
-    /// spells a member: `Owner::name` in C, C++, Rust and PHP (scope resolution), `Owner#name` in Ruby (the instance-method form
+    /// spells a member: `Owner::name` in C, C++, Rust and PHP (scope resolution; PHP methods store no scope today, so none prints), `Owner#name` in Ruby (the instance-method form
     /// RDoc uses; a `def self.x` singleton prints `#` too, since the index does not tell the two apart), `Owner.name` elsewhere.
     /// Every spelling is one the selectors resolve (graph.h resolveAllByScopeQualified / resolveAllByDottedScope).
     std::string_view memberSeparator = ".";

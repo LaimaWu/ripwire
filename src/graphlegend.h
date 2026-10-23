@@ -1132,8 +1132,9 @@ inline const char* pathUnboundLegend( bool on ) noexcept { return on ? kPathUnbo
 // QUALNAME-1 (memberowner.h MemberOwners; train 30's PATH-OWNERS widened): rides only when a row carries an owner, so an owner-free
 // answer is unchanged. One clause for every row kind that prints one (--path hops, --callers/--callees/--impact rows).
 inline constexpr const char* kMemberOwnerLegend =
-    "n=Owner.name on a row: a member, Owner its stored scope, the index defining it as a type or module in that language "
-    "(Owner::name C/C++/Rust/PHP, Owner#name Ruby, a singleton too); bare: a free function, a type, a closure, or no such owner. ";
+    "n=Owner.name on a row: Owner is its stored scope, shown when the index defines that name as a type or module in that language "
+    "(Owner::name C/C++/Rust, Owner#name Ruby, a singleton too; a C++ namespace sharing a name with a class prints alike); "
+    "bare: a free function, a type, a closure, or no such owner. ";
 inline const char* memberOwnerLegend( bool on ) noexcept { return on ? kMemberOwnerLegend : ""; }
 
 // ── issue #60: the module-scope owner's clause, emitted exactly when a t="modscope" ROW is in the answer ──
