@@ -389,6 +389,18 @@ for root, sel, qn, p, tag in ( ( CPP, "soloCall", "OnlySolo::soloRun", "runners.
     say( a.ok and [ r.get( "qn" ) for r in a.rows if r.get( "p" ) == p ] == [ qn ], "[C] q_%s" % tag,
          "--callees=%s: the row at %s prints n=\"%s\" (owner from the stored scope; Java stores none: bare)" % ( sel, p, qn ), a.why() )
 
+print( "=== (K3) cr-prepass-33a: an anonymous class's ImplBlock record binds no local NAME (CHECKLIST 36: a widened kind's reader audit) ===" )
+# A Java `new Handler() { ... }` records an ImplBlock (var = Handler) attributed to the enclosing method, or to the class for a field
+# initialiser. The generic binding readers (localNameSet, the Java field-name groups) once read it as a local/field NAMED Handler,
+# which vetoed Rule 2c's class-name receiver: `Handler.of( 1 )` fell to by-name rows naming Other.of too (main: one proven edge).
+ANON = os.path.join( FIX, "anon_static" )
+for sel, tag in ( ( "inMethod", "method" ), ( "viaField", "field" ) ):
+    a = ask( ANON, "callees", sel )
+    of_rows = [ r for r in a.rows if r.get( "n" ) == "of" ]
+    say( a.ok and [ r.get( "p" ) for r in of_rows ] == [ "app/Handler.java:4" ] and all( r.get( "via" ) != "name" for r in of_rows ),
+         "[P] k3_anon_static_%s" % tag,
+         "--callees=%s: Handler.of( 1 ) stays the one proven edge (app/Handler.java:4), not by-name rows with Other.of, beside an anonymous Handler" % sel, a.why() )
+
 print( "=== (M) Rust: an inherent method is never a trait-dispatched candidate ===" )
 a = ask( B1RS, "callees", "via_ext" )
 say( rows_are( a, [ ( "helper", "src/t.rs:2", "name" ), ( "helper", "src/t.rs:9", "name" ) ] ), "[P] m_rs_supertrait",
