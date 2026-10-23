@@ -5325,7 +5325,7 @@ static int dispatchMain( const rw::Config& cfg, char** argv )
         }
         for( const auto& r : ing.references )
         {
-            calleeB += r.calleeName.size();
+            calleeB += isSlotJoinRecord( r ) ? 0 : r.calleeName.size();
         }
         for( const auto& i : ing.includes )
         {

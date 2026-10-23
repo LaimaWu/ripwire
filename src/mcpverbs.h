@@ -3235,6 +3235,7 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   declinedIfaceLegend( declinedIface > 0 ),                                          // likewise declined_iface=, as on the CLI
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
                     + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI
+                    + std::string( slotJoinLegend( imValueRefs.slotCallers, true ) )                 // IX-1: exactly when a <vr> row carries via=, as on the CLI
                     + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ), !imports.next.empty(),
                                           ImpactRollupTypeClauses{ imFiles.typed, imFiles.typeDefs, imFiles.typeCapped } )   // idea #6; FIX1 R1; L7, as on the CLI
                     + defTableLegend( imAttr.groups.multi(), imListing.cut ) ).c_str(),                                              // attrib-multidef, as on the CLI
@@ -3447,9 +3448,10 @@ inline std::string usesSelectorRefusal( const IngestResult& ing, const std::stri
         {
             continue;
         }
-        if( r.isCompose || r.isDocLink || r.role == RefRole::Subscript )
+        if( r.isCompose || r.isDocLink || r.role == RefRole::Subscript || isSlotJoinRecord( r ) )
         {
-            continue; // type edge / doc mention / an element access (no use-site: valuerefindex.h UsesValueFilter::skip) — not a use-site
+            continue; // type edge / doc mention / an element access (no use-site: valuerefindex.h UsesValueFilter::skip) / an IX-1 slot
+                      // record (its name is a receiver variable) — not a use-site
         }
         if( r.lang == Lang::Markdown )
         {

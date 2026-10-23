@@ -557,6 +557,7 @@
 "slicediffcheck.sh": 124.2,
 "sliceflowcheck.sh": 38.5,
 "sliceflowsenscheck.sh": 40.2,
+"slotjoincheck.sh": 6.0,
 "sourceinstallcheck.sh": 1.1,
 "spectimingcheck.sh": 1.8,
 "staleackcheck.sh": 6.1,

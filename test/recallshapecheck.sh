@@ -798,7 +798,8 @@ cat >"$TMP/chk.py" <<'EOF'
 # in VR_ATTRS, so no existing gate's n=/p=/t= grep can ever match one (early gates review, fix 1).
 import os, re, sys
 import xml.etree.ElementTree as ET
-VR_ATTRS = { "in_id", "bind", "into", "called_by", "to", "def", "through", "sites" }
+VR_ATTRS = { "in_id", "bind", "into", "called_by", "to", "def", "through", "sites",
+             "called_at", "via", "called_more", "slot_name_also" }   # IX-1 slot join (test/slotjoincheck.sh): none is n=/p=/t=
 fxdir, outfile, toks = sys.argv[1], sys.argv[2], sys.argv[3:]
 text = open( outfile, encoding="utf-8", errors="replace" ).read()
 marks = {}
@@ -933,16 +934,20 @@ arm_roots() {   # arm_roots LABEL "ROOT ROOT…" ARGV TOKEN… — a multi-root 
 
 # ── C: struct-field initialisers, designated and positional, a function-pointer array, callbacks, assignment ──
 echo "-- C"
+# IX-1 (train 32, by design): a function stored in a `struct ops` field is joined to every call through that field of a
+# `struct ops` (use_literal's o.open, use_ptr's p->open) as a HEDGED slot row (via="slot"); before IX-1 the table and
+# positional rows had no called_by=. A container join (the same declaration) still answers alone, with no via= (twins).
 arm "C1 callers my_open: count stays 0 (calls), value_refs=3 at the global table, the positional initialiser and a local literal" \
     c --callers=my_open attr:count=0 attr:value_refs=3 nvr:3 el:vrs:total=3 el:vrs:shown=3 el:vrs:capped=0 \
-    'vr:bind=@C_TABLE;into=table.open;called_by=-' 'vr:bind=@C_POS;into=positional[0];called_by=-' \
-    'vr:bind=@C_LIT;into=o.open;in_id=use_literal;called_by=use_literal'
+    'vr:bind=@C_TABLE;into=table.open;called_by=use_literal,use_ptr;via=slot' 'vr:bind=@C_POS;into=positional[0];called_by=use_literal,use_ptr;via=slot' \
+    'vr:bind=@C_LIT;into=o.open;in_id=use_literal;called_by=use_literal;via=-'
 arm "C2 callers my_close: table.close is called through in use_global only (shadow_tbl's local table is another declaration)" \
     c --callers=my_close attr:count=0 attr:value_refs=3 nvr:3 \
-    'vr:bind=@C_TABLE;into=table.close;called_by=use_global' 'vr:bind=@C_POS;into=positional[1]' 'vr:bind=@C_LIT;into=o.close;called_by=-'
+    'vr:bind=@C_TABLE;into=table.close;called_by=use_global;via=-' 'vr:bind=@C_POS;into=positional[1];called_by=shadow_tbl,use_global;via=slot' \
+    'vr:bind=@C_LIT;into=o.close;called_by=shadow_tbl,use_global;via=slot'
 arm "C3 callers other_open: fn-pointer array element 0 (called through fns[0]) and a field assignment through a parameter" \
     c --callers=other_open attr:count=0 attr:value_refs=2 nvr:2 \
-    'vr:bind=@C_FNS;into=fns[0];called_by=use_global' 'vr:bind=@C_ASSIGN;into=p->open;in_id=use_assign;called_by=-'
+    'vr:bind=@C_FNS;into=fns[0];called_by=use_global;via=-' 'vr:bind=@C_ASSIGN;into=p->open;in_id=use_assign;called_by=use_literal,use_ptr;via=slot'
 arm "C4 callers on_tick: &fn in an array and as an argument; run calls its parameter 0" \
     c --callers=on_tick attr:count=0 attr:value_refs=2 nvr:2 'vr:bind=@C_FNS;into=fns[1]' 'vr:bind=@C_CB;into=run#arg0;in_id=use_callback;called_by=run'
 arm "C5 callers on_event: the callback argument; NOT the same-named local in neg_shadow" \

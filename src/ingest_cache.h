@@ -345,7 +345,12 @@ constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strict
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 212;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 220;          // bump on any grammar/.scm/extraction change
+                                                      // 220 = 2026-10-22 (train 32b: ix1-slot + cppqual-alarm): strictly above every live number — main 212 (rich 213),
+                                                      //   lane ix1-slot 204 (205), #420 214 (215), #426 / lane fc1 216 (217), lane ind4b 218 (219), lane l6-iface 212 (213).
+                                                      //   Rich file tag 221. Mandatory for IX-1: its fix rounds changed slot extraction under the one 204 reservation, so a
+                                                      //   stale 204 cache would bring back the typedef-vs-tag and two-bodies joins. kCacheVersion stays 36: IX-1 rides
+                                                      //   memberPath/memberCtor of the existing value/through records (no record format changed); cppqual-alarm is test-only.
                                                       // 212 = 2026-10-21 (train 32a: member-names + rust-receivers): strictly above every live number — main 206 (rich 207),
                                                       //   lane rust-receivers 202 (203), lane ix1-slot 204 (205), lane l6-iface 210 (211); #420 reserves 214 (215), so train
                                                       //   32b can go above. Rich file tag 213. kCacheVersion stays 36: neither lane changed a record format (rust-receivers
@@ -368,6 +373,10 @@ constexpr std::uint32_t kParserVer    = 212;          // bump on any grammar/.sc
                                                       //   CallResult's importedName is the call's WRITTEN qualifier path, and a ReturnType's isFromAssignment
                                                       //   marks a result written `Self` — a cache from a pre-fix-round 202 build reads every result as not-Self.
                                                       //   kCacheVersion unchanged (no record format changes).
+                                                      // 204 = 2026-10-18 (train 32 lane ix1-slot, IX-1 slot-type join; train renumbers): C/C++ value rows
+                                                      //   whose slot is a struct field carry memberPath/memberCtor, calls through a struct field are
+                                                      //   Through records (qualifier 's'), and struct field types / typedef aliases are slot facts
+                                                      //   (Value, qualifier 't'). Same record layout: kCacheVersion unchanged. Rich file tag 205.
                                                       // 196 = 2026-10-18 (train 30): strictly above every number a live build used — main 184 (rich 185),
                                                       //   lane call-result-typing 180 (rich 181), lane fcall-forward 188 (189), lane go-local-var 190 (191),
                                                       //   lane name-template-dispatch 192 (193), lane h1-annot (train 31) 194 (195); tail-sym and

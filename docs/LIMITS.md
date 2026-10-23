@@ -17,10 +17,10 @@ it once, marked `×N`.
 
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 271 | 106 | 160 | **111** |
+| 273 | 106 | 162 | **111** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 271 + 7 is the 278 constants this generator parses out of `src/`.
+are not counted as caps, and 273 + 7 is the 280 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -38,8 +38,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **140 of 271 caps are classified
-(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 131 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **140 of 273 caps are classified
+(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 133 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -89,7 +89,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 106 files that declare a cap — the 271 caps counted above, and no parameter.
+One table for each of the 106 files that declare a cap — the 273 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -1052,6 +1052,8 @@ Discloses: `capped`, `value_refs_depth_capped`
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kPatternRowCap` | `8` | — | — |
+| `kSlotCallerCap` | `8` | — | — |
+| `kSlotTargetCap` | `16` | — | — |
 | `kValueRefRowCap` | `64` | — | — |
 
 ### `src/verbs_change.h`
