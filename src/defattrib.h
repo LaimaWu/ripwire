@@ -42,6 +42,7 @@
 #include "editcheck.h"   // editCheckGroupKeys' fold (editCheckDeclFoldTargets) — the C-family declaration identity
 #include "graph.h"
 #include "langfacts.h"   // langFacts(l).overloadSignatures — the TypeScript overload-signature rule, as a column
+#include "memberowner.h"   // QUALNAME-1: MemberOwners / qualifiedMemberName — the one member-owner rule for every row
 #include "model.h"
 #include "pageview.h"
 #include "sarif.h"       // rootRelativeUri: the table's p= in the rows' own path dialect
@@ -377,7 +378,7 @@ struct RowDefTokens
 // One out-edge's tie, off its two parallel per-edge bytes (either may be unallocated: a graph with no such edge).
 inline DefMark defMarkOfEdge( const Graph& g, std::size_t e ) noexcept
 {
-    if( e < g.outNameOnly.size() && g.outNameOnly[e] != 0 )
+    if( e < g.outNameOnly.size() && edgeKindByte( g.outNameOnly[e] ) == kEdgeName )
     {
         return DefMark::Name;
     }
@@ -841,12 +842,46 @@ inline void defGroupsDropSilent( DefGroups& groups, RowDefTokens& tokens )
 // selector, or a graph that holds split arms (Q1) or by-name edges (the rows' via="name" reads strongest() == Name).
 struct OneHopAttribution
 {
-    DefGroups    groups;
-    RowDefTokens tokens;   // parallel to the rows; empty when nothing was computed
+    DefGroups         groups;
+    RowDefTokens      tokens;   // parallel to the rows; empty when nothing was computed
+    std::vector<char> impl;     // lane L6: parallel to the rows, 1 = every edge joining the row to the matches is via="impl"; empty when none is
 
     bool nameOnly( std::size_t row ) const noexcept { return tokens.strongest( row ) == DefMark::Name; }   // None when none recorded
     bool splitArm( std::size_t row ) const noexcept { return rowSplitArm( groups, tokens, row ); }
+    bool viaImpl( std::size_t row ) const noexcept { return row < impl.size() && impl[ row ] != 0; }
 };
+// lane L6: per row, whether every edge joining it to the matches (row → match toward the matches, match → row away) is the
+// one-implementor edge (graph.h kProvImpl); empty when no row's is, so an answer without one keeps its bytes
+inline std::vector<char> rowsViaImpl( const Graph& g, std::span<const NodeId> matches, std::span<const NodeId> rows, bool towardMatches )
+{
+    std::vector<char> out;
+    if( g.outProv.empty() )
+    {
+        return out;
+    }
+    bool any = false;
+    std::vector<char> impl( rows.size(), 0 );
+    for( std::size_t i = 0; i < rows.size(); ++i )
+    {
+        std::size_t joined = 0, viaImpl = 0;
+        for( const NodeId m : matches )
+        {
+            const std::size_t e = towardMatches ? edgeIndex( g, rows[ i ], m ) : edgeIndex( g, m, rows[ i ] );
+            if( e != SIZE_MAX )
+            {
+                ++joined;
+                viaImpl += g.outProv[ e ] == kProvImpl ? 1u : 0u;
+            }
+        }
+        impl[ i ] = joined > 0 && viaImpl == joined ? 1 : 0;
+        any       = any || impl[ i ] != 0;
+    }
+    if( any )
+    {
+        out.swap( impl );
+    }
+    return out;
+}
 inline OneHopAttribution attributeOneHopAnswer( const IngestResult& ing, const Graph& g, std::span<const NodeId> matches,
                                                 std::span<const NodeId> rows, bool towardMatches )
 {
@@ -857,6 +892,7 @@ inline OneHopAttribution attributeOneHopAnswer( const IngestResult& ing, const G
         out.tokens = attributeOneHop( g, out.groups, matches, rows, towardMatches );
         defGroupsDropSilent( out.groups, out.tokens );
     }
+    out.impl = rowsViaImpl( g, matches, rows, towardMatches );
     return out;
 }
 
@@ -980,6 +1016,54 @@ inline PathEndpointBinding pathEndpointBinding( const Graph& g, std::size_t srcD
         }
     }
     return b;
+}
+
+// ── PATH-OWNERS (train 30): a --path / path_between hop row names a member by its owner, n="Owner.name" ────────────────
+// A bare hop name made the reader re-resolve it: a path through A::go and B::go read n="go" n="go". QUALNAME-1 moved the rule to
+// memberowner.h (MemberOwners) so every member row shares it — the owner is the parser's own scope, printed only when the index
+// DEFINES its last segment as a member owner in the hop's language; a type hop, a C++ namespace-scope function, a function-local
+// def (a closure) and a language whose defs carry no sc= (TS/JS, Java, C#, Swift, Kotlin `object`) keep bare rows — a floor, not
+// a claim. The separator is the language's own (langfacts.h memberSeparator: `Builder::Build`, `Application#run`, `Pattern.Match`).
+// Per hop, the owner its row prints ("" = bare). Built only when some hop has a scope at all: a free-function path costs nothing.
+inline std::vector<std::string_view> pathHopOwners( const IngestResult& ing, std::span<const NodeId> path )
+{
+    std::vector<std::string_view> owner( path.size() );
+    const bool anyScope = std::any_of( path.begin(), path.end(), [ & ]( NodeId id ) { return !ing.symbols[ id ].scope.empty(); } );
+    if( !anyScope )
+    {
+        return owner;
+    }
+    const MemberOwners owners( ing );
+    for( std::size_t i = 0; i < path.size(); ++i )
+    {
+        owner[i] = owners.ownerOf( ing.symbols[ path[i] ] );
+    }
+    ENSURES( owner.size() == path.size(), "one owner slot per hop" );
+    return owner;
+}
+inline bool anyPathHopOwner( std::span<const std::string_view> owners ) noexcept
+{
+    return std::any_of( owners.begin(), owners.end(), []( std::string_view o ) { return !o.empty(); } );
+}
+// THE hop rows of a --path answer — the CLI (stdout) and MCP path_between (its memstream) both write through this, so the two
+// transports cannot drift (they were two copies of one loop). Row i's via="name" (FE-B), via="link" and anchor="missing" (a
+// markdown link, #409) and prov="split" (attrib-multidef) read the edge INTO it; the first row is no hop.
+inline void emitPathHopRows( std::FILE* out, const IngestResult& ing, const Graph& g, std::span<const NodeId> path,
+                             std::span<const std::string_view> owners, bool singleRoot, std::string_view rootPrefix )
+{
+    EXPECTS( owners.size() == path.size(), "owners come from pathHopOwners( ing, path )" );
+    std::vector<char> esc;
+    for( std::size_t i = 0; i < path.size(); ++i )
+    {
+        const Symbol&          s     = ing.symbols[ path[i] ];
+        const std::string_view rp    = singleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], rootPrefix ) : std::string_view( ing.files[ s.fileId ] );
+        const std::string      name  = std::string( escapeXml( qualifiedMemberName( owners[i], s ), esc ) );   // QUALNAME-1: the language's separator
+        const bool             hop   = i > 0;
+        const std::string      mark  = std::string( viaEdgeAttr( hop && edgeNameOnly( g, path[ i - 1 ], path[i] ), hop && edgeIsLink( g, path[ i - 1 ], path[i] ) ) )
+                                     + anchorMissAttr( hop && edgeAnchorMiss( g, path[ i - 1 ], path[i] ) );
+        emitTo( out, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}/>", symTag( s.kind ), name, escapeXml( rp, esc ), s.line,
+                mark, splitArmAttrXml( pathHopSplitArm( g, path, i ) ), viaImplAttr( hop && edgeViaImpl( g, path[ i - 1 ], path[i] ) ) );   // lane L6: via="impl"
+    }
 }
 
 }   // namespace rw

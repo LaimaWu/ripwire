@@ -762,7 +762,8 @@ struct EditCheckCalleeTest : CallSiteCalleeTest
 // NOT a proof that the call site binds to those definitions at all — that half is name-based (module-resolved
 // for Elixir, see EditCheckCalleeTest), and the emitted legend says so.
 inline std::vector<char> editCheckIncompatibleFlags( const IngestResult& ing, std::span<const NodeId> overloadNodes,
-                                                     EditCheckCalleeTest& callee, std::span<const char> seenCaller )
+                                                     EditCheckCalleeTest& callee, std::span<const char> seenCaller,
+                                                     std::span<const std::uint32_t> keptForwards )
 {
     // a C/C++ definition whose matching declaration carries defaults accepts the RANGE [minArity, params]
     // (editCheckDeclDefaults); every other definition's minArity is its params, so the test below is the exact one
@@ -779,9 +780,11 @@ inline std::vector<char> editCheckIncompatibleFlags( const IngestResult& ing, st
         return true;
     };
     std::vector<char> callerIncompatible( ing.symbols.size(), 0 );
-    for( const Reference& r : ing.references )
+    for( std::uint32_t refIndex = 0; refIndex < ing.references.size(); ++refIndex )
     {
-        if( r.role != RefRole::Call || r.fromSymbol >= seenCaller.size() || !seenCaller[r.fromSymbol] )
+        const Reference& r = ing.references[refIndex];
+        // a FORWARDED call buildGraph did not keep is no call the caller makes (model.h forwardCounts): it flags nothing
+        if( r.role != RefRole::Call || r.fromSymbol >= seenCaller.size() || !seenCaller[r.fromSymbol] || !forwardCounts( r, refIndex, keptForwards ) )
         {
             continue;
         }
@@ -814,13 +817,16 @@ inline std::vector<char> editCheckIncompatibleFlags( const IngestResult& ing, st
 //
 // ONE pass over ing.references plus one sort — never a per-row rescan (editCheckIncompatibleFlags' own
 // rule; a widely-shared name has hundreds of caller rows). Duplicate (node,line) pairs collapse: this is a
-// set of LINES TO OPEN, so two calls on one line are one site.
+// set of LINES TO OPEN, so two calls on one line are one site. A FORWARDED call counts only where buildGraph kept it
+// (model.h forwardCounts, `--uses`' own filter: `keptForwards` is Graph::keptForwards).
 template <class OnSite>
-inline void forEachCallSite( const IngestResult& ing, CallSiteCalleeTest& callee, std::span<const char> callerSelected, OnSite&& onSite )
+inline void forEachCallSite( const IngestResult& ing, CallSiteCalleeTest& callee, std::span<const char> callerSelected,
+                             std::span<const std::uint32_t> keptForwards, OnSite&& onSite )
 {
-    for( const Reference& r : ing.references )
+    for( std::uint32_t refIndex = 0; refIndex < ing.references.size(); ++refIndex )
     {
-        if( r.role != RefRole::Call || r.isCompose || r.isDocLink || r.lang == Lang::Markdown )
+        const Reference& r = ing.references[refIndex];
+        if( r.role != RefRole::Call || r.isCompose || r.isDocLink || r.lang == Lang::Markdown || !forwardCounts( r, refIndex, keptForwards ) )
         {
             continue;
         }
@@ -833,10 +839,11 @@ inline void forEachCallSite( const IngestResult& ing, CallSiteCalleeTest& callee
 }
 
 inline std::vector<std::pair<NodeId, std::uint32_t>>
-editCheckCallSites( const IngestResult& ing, CallSiteCalleeTest& callee, std::span<const char> callerIncompatible )
+editCheckCallSites( const IngestResult& ing, CallSiteCalleeTest& callee, std::span<const char> callerIncompatible,
+                    std::span<const std::uint32_t> keptForwards )
 {
     std::vector<std::pair<NodeId, std::uint32_t>> sites;
-    forEachCallSite( ing, callee, callerIncompatible, [ & ]( const Reference& r ) { sites.emplace_back( r.fromSymbol, r.line ); } );
+    forEachCallSite( ing, callee, callerIncompatible, keptForwards, [ & ]( const Reference& r ) { sites.emplace_back( r.fromSymbol, r.line ); } );
     std::sort( sites.begin(), sites.end() );
     sites.erase( std::unique( sites.begin(), sites.end() ), sites.end() );
     return sites;
@@ -860,7 +867,8 @@ struct CallSiteAt
 // The call sites of `defs` inside the caller rows `pageCallers` (one page of a callers listing). `defs` is the resolved
 // definition set of ONE selector; a set whose members carry two leaf names (a qualified tier may) gets one pass per
 // distinct name, so the second name's sites are never silently dropped. Each pass is one scan of the reference table.
-inline std::vector<CallSiteAt> callSitesAt( const IngestResult& ing, std::span<const NodeId> defs, std::span<const NodeId> pageCallers )
+inline std::vector<CallSiteAt> callSitesAt( const IngestResult& ing, std::span<const NodeId> defs, std::span<const NodeId> pageCallers,
+                                            std::span<const std::uint32_t> keptForwards )
 {
     std::vector<CallSiteAt> sites;
     if( defs.empty() || pageCallers.empty() )
@@ -885,7 +893,7 @@ inline std::vector<CallSiteAt> callSitesAt( const IngestResult& ing, std::span<c
         sameName.clear();
         std::copy_if( defs.begin() + std::ptrdiff_t( i ), defs.end(), std::back_inserter( sameName ), nameAt );
         CallSiteCalleeTest callee( ing, ing.symbols[ defs[i] ], sameName );
-        forEachCallSite( ing, callee, onPage, [ & ]( const Reference& r ) { sites.push_back( CallSiteAt{ r.fromSymbol, r.fileId, r.line } ); } );
+        forEachCallSite( ing, callee, onPage, keptForwards, [ & ]( const Reference& r ) { sites.push_back( CallSiteAt{ r.fromSymbol, r.fileId, r.line } ); } );
     }
     std::sort( sites.begin(), sites.end() );
     sites.erase( std::unique( sites.begin(), sites.end() ), sites.end() );
@@ -928,10 +936,11 @@ struct RowCallSites
     bool                                  anyCut;
 };
 
-inline RowCallSites rowCallSites( const IngestResult& ing, std::span<const NodeId> defs, std::span<const NodeId> rows, const VrRender& rr )
+inline RowCallSites rowCallSites( const IngestResult& ing, std::span<const NodeId> defs, std::span<const NodeId> rows, const VrRender& rr,
+                                  std::span<const std::uint32_t> keptForwards )
 {
     RowCallSites out{};
-    const std::vector<CallSiteAt> sites = callSitesAt( ing, defs, rows );
+    const std::vector<CallSiteAt> sites = callSitesAt( ing, defs, rows, keptForwards );
     out.tokens.reserve( rows.size() );
     out.totals.reserve( rows.size() );
     for( const NodeId r : rows )
@@ -1061,7 +1070,7 @@ editCheckCallers( const IngestResult& ing, const Graph& g, std::span<const NodeI
         }
     }
 
-    std::vector<char> callerIncompatible = editCheckIncompatibleFlags( ing, overloadNodes, callee, seenCaller );
+    std::vector<char> callerIncompatible = editCheckIncompatibleFlags( ing, overloadNodes, callee, seenCaller, g.keptForwards );
 
     std::sort( callerIds.begin(), callerIds.end(), [ & ]( NodeId a, NodeId b )
     {
@@ -1432,7 +1441,7 @@ inline std::string editCheckBundleText( const IngestResult& ing, const Graph& g,
     // P3/M21: the call-site lines for the flagged rows. Paid for only when a row will carry them — an
     // unchanged contract with no flagged caller does not scan the reference table at all.
     const std::vector<std::pair<NodeId, std::uint32_t>> callSites =
-        incompatibleCount > 0 ? editCheckCallSites( ing, callee, callerIncompatible )
+        incompatibleCount > 0 ? editCheckCallSites( ing, callee, callerIncompatible, g.keptForwards )
                               : std::vector<std::pair<NodeId, std::uint32_t>>{};
 
     std::vector<char> esc;

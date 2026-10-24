@@ -35,6 +35,7 @@
 #include "memguard.h"           // #387: loadRefTree reads the hard line between a commit's ingest and its graph
 #include "infra/Diagnostics.h"  // DISCLOSE — the degrade path when git archive/ingest fails (no-op under NDEBUG; a gate-visible degrade line needs its own fprintf)
 #include "infra/jsonesc.h"      // L2 — rw::jsonesc::escapeMcp for staleAcksJsonArray's kind= field (the same posture serialize.h's jsonStr uses)
+#include "infra/platform.h"     // RW_LIFETIMEBOUND — the DefectSiteKey projection lambdas; owned here, not transitively
 #include "sourceidentity.h"    // rw::kRipwireSourceIdentity — the producer identity the qsnap/qbody keys and blob header carry
 
 #include "btree.hpp"              // gtl btree_map — sorted like std::map, cache-friendly nodes (house rule: never std::map)
@@ -2335,12 +2336,43 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 34;   // MUST equal ingest.cpp's kCacheVersion (gated); 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 184;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 39;   // MUST equal ingest.cpp's kCacheVersion (gated); 39 = train 33 (above main 36 and l6-iface 38), 38 = train 32 lane l6-iface fix round 1: LocalBindKind ImplBlock (train renumbers), 37 = train 32 lane l6-iface: LocalBindKind DispatchType (train renumbers), 36 = train 30 (above call-result-typing's and fcall-forward's 33, name-template-dispatch's 35, main's 34), 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 33 = lane call-result-typing: RawBind resultIndex + unwrapDepth, 33 = lane fcall-forward: ref `forwarded` byte, 35 = lane name-template-dispatch: RefRole Pattern 11, 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
+constexpr std::uint32_t kIngestParserVerMirror    = 224;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 224 = 2026-10-23 (train 33: above main 220/221, ind5 222/223, #420 214/215, fc1 216/217,
+                                                          //   ind4b 218/219, l6-iface 212/213; see the kParserVer note)
+                                                          // 220 = 2026-10-22 (train 32b: above main 212/213, ix1-slot 204/205, #420 214/215,
+                                                          //   #426 / fc1 216/217, ind4b 218/219, l6-iface 212/213; see the kParserVer note)
+                                                          // 212 = 2026-10-21 (train 32a: above main 206/207, rust-receivers 202/203, ix1-slot
+                                                          //   204/205, l6-iface 210/211; #420 reserves 214/215; see the kParserVer note)
+                                                          // 212 = 2026-10-21 (lane l6-iface fix round 1: ImplBlock records; rich 213; see the kParserVer note)
+                                                          // 210 = 2026-10-19 (train 32 lane l6-iface: DispatchType; strictly above main 206/207; see the kParserVer note)
+                                                          // 206 = 2026-10-18 (#409, PR #414, renumbered again at merge: above main 196/197,
+                                                          //   train 31 198/199, rust-receivers 202/203, ix1-slot 204/205; see the kParserVer note)
+                                                          // 202 = lane rust-receivers (reservation 202/203; the train renumbers): Rust written-type
+                                                          //   RecvType / MemberType, the written qualifier path of a call result, `-> Self` results
+                                                          // 198 = 2026-10-18 (train 31: above main 196/197 and h1-annot
+                                                          //   194/195; see the kParserVer note)
+                                                          // 194 = lane h1-annot (reservation 194/195; the train renumbers):
+                                                          //   qualified-annotation importedName, AugAssign / OperatorResult binds
+                                                          // 185 = 2026-10-18 (#409): cross-file markdown links carry their written path#slug
+                                                          //   (memberPath); graph.h pins the exact heading. 185, not 184: 184 is train 29.
+                                                          //   Rich file tag 186. kCacheVersion stays 34.
+                                                          // 204 = lane ix1-slot (reservation 204/205; the train renumbers): C/C++ struct-field
+                                                          //   slots (memberPath/memberCtor), Through calls via a field, slot facts
+                                                          // 196 = 2026-10-18 (train 30: above call-result-typing 180/181, fcall-forward
+                                                          //   188/189, go-local-var 190/191, name-template-dispatch 192/193, h1-annot
+                                                          //   194/195; see the kParserVer note)
+                                                          // 192 = lane name-template-dispatch (IX-3; reservation 192/193; the train renumbers):
+                                                          //   RefRole::Pattern name-template records
+                                                          // 190 = lane go-local-var (reservation 190/191; the train renumbers):
+                                                          //   Go/Rust/GDScript var and const captures anchored to item/package scope
+                                                          // 188 = 2026-10-17 (train 30 lane fcall-forward, rich 189; train renumbers)
                                                           // 184 = 2026-10-17 (train 29: above arity-min 178/179, call-result-typing
                                                           //   180/181, go-scope 182/183; see the kParserVer note)
                                                           // 182 = 2026-10-16 (train 29 L5 go-scope reservation, #403: Go method /
                                                           //   interface-member scope; the train renumbers)
+                                                          // 180 = lane call-result-typing (reservation 180/181; the train renumbers):
+                                                          //   call-result / return-type binds
                                                           // 178 = train 29 lane arity-min (reservation 178/179; the train renumbers):
                                                           //   defs extract paramsMin for the B2.2 minimum-arity exclusion
                                                           // 176 = 2026-10-15 (train 28: above main 173/174, grep-carrier 173/174,
@@ -4134,7 +4166,8 @@ inline std::string materializeCommitTree( const std::string& root, const std::st
         return tree.root;
     }
 
-    const std::string extractCmd = "tar -x -f " + shSingleQuote( archiveFile ) + " -C " + shSingleQuote( tmpRoot ) + " 2>/dev/null";
+    // Feed the file through stdin: GNU tar treats a Windows drive colon in -f as a remote host.
+    const std::string extractCmd = "tar -x -f - -C " + shSingleQuote( tmpRoot ) + " < " + shSingleQuote( archiveFile ) + " 2>/dev/null";
     const int         extractRc  = os::system( extractCmd.c_str() );
     std::error_code   rmEc;
     fs::remove( fs::path( archiveFile ), rmEc );   // never leave the intermediate .tar behind, success or failure
@@ -4750,7 +4783,8 @@ inline std::string materializeCommitSubset( const std::string& root, const std::
             ++at;
         }
         const bool archived  = os::system( ( cmd + " 2>/dev/null" ).c_str() ) == 0;
-        const bool extracted = archived && os::system( ( "tar -x -f " + shSingleQuote( archiveFile ) + " -C " + shSingleQuote( tmpRoot ) + " 2>/dev/null" ).c_str() ) == 0;
+        // Feed the file through stdin: GNU tar treats a Windows drive colon in -f as a remote host (same fix as materializeCommitTree).
+        const bool extracted = archived && os::system( ( "tar -x -f - -C " + shSingleQuote( tmpRoot ) + " < " + shSingleQuote( archiveFile ) + " 2>/dev/null" ).c_str() ) == 0;
         fs::remove( fs::path( archiveFile ), ec );
         if( !extracted )
         {
@@ -8503,7 +8537,7 @@ inline std::optional<StaleAckWhy> staleForChurn( std::uint64_t key, const Snapsh
 inline std::optional<StaleAckWhy> staleForDefectShape( std::uint64_t key, const Snapshot& snap )
 {
     const std::vector<DefectSiteKey>& sites = snap.defectSites;   // sorted by (anchor, site): one anchor's records are contiguous
-    const auto                        self  = []( const DefectSiteKey& d ) -> const DefectSiteKey& { return d; };
+    const auto                        self  = []( const DefectSiteKey& d RW_LIFETIMEBOUND ) -> const DefectSiteKey& { return d; };
     for( auto it = sites.begin(); it != sites.end(); )
     {
         const auto                         end = std::find_if( it, sites.end(), [ & ]( const DefectSiteKey& d ) { return d.anchor != it->anchor; } );
@@ -8971,15 +9005,15 @@ inline void appendDefectShapeRows( std::vector<Regression>& regs, const IngestRe
     }
     for( const Credited& c : credited )
     {
-        const std::uint32_t was = facetCount( base.defectSites, c.anchor, c.facet, []( const DefectSiteKey& d ) -> const DefectSiteKey& { return d; } );
-        const std::uint32_t now = facetCount( nowSites, c.anchor, c.facet, []( const DefectSiteAt& d ) -> const DefectSiteKey& { return d.key; } );
+        const std::uint32_t was = facetCount( base.defectSites, c.anchor, c.facet, []( const DefectSiteKey& d RW_LIFETIMEBOUND ) -> const DefectSiteKey& { return d; } );
+        const std::uint32_t now = facetCount( nowSites, c.anchor, c.facet, []( const DefectSiteAt& d RW_LIFETIMEBOUND ) -> const DefectSiteKey& { return d.key; } );
         const NodeId        owner = c.first->owner;
         const std::string   rel( relForHash( ing.files[ c.first->fileId ], root ) );
         const bool          isNew = ( owner != kNoNode )
                                       ? !existedAtBaseline( c.anchor )
                                       : !std::binary_search( base.defectSites.begin(), base.defectSites.end(), DefectSiteKey{ c.anchor, kDefectFilePresent } );
         const std::string   sym = ( owner != kNoNode && owner < g.canonId.size() && !g.canonId[owner].empty() ) ? g.canonId[owner] : rel;
-        const std::uint64_t rowKey = defectRowKey( c.anchor, c.facet, defectSiteValsOf( nowSites, c.anchor, c.facet, []( const DefectSiteAt& d ) -> const DefectSiteKey& { return d.key; } ) );
+        const std::uint64_t rowKey = defectRowKey( c.anchor, c.facet, defectSiteValsOf( nowSites, c.anchor, c.facet, []( const DefectSiteAt& d RW_LIFETIMEBOUND ) -> const DefectSiteKey& { return d.key; } ) );
         regs.push_back( { "defect-shape", sym, was, now, rowKey, !defectshape::facetGatesOnAnyOrigin( c.facet ),
                           std::string( defectshape::facetName( c.facet ) ), isNew } );
         if( owner != kNoNode )

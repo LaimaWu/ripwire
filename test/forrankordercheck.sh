@@ -36,6 +36,8 @@
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
+export RIPWIRE_TESTLIB="$ROOT/test/lib"   # softbudget.py set_prefix: the head round-robin set-prefix arms (lane hrr)
+unset RIPWIRE_NO_HEAD_RR                  # lane hrr: the reorder is ON here unless a twin sets it
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "forrankordercheck: BIN=$BIN"
@@ -195,12 +197,46 @@ FX_Q=( "geometry area of a shape" "call a native function from python" "parse th
 
 # ── (3) byte growth ≤ 4% against the registered sizes ─────────────────────────────────────────────────────
 growth_fail=0
+# body-fold (train 31; rule 4, by design — the FOLD C precedent): a compact answer now ends with <fold kind="bodies">, the top ranked
+# bodies appended after the unchanged answer (forbodyfoldcheck (F5) pins that nothing before it moved). The band reads the answer
+# WITHOUT those additions: the fold element, its legend clause, the hop-calls next= clause and the <sigs> continuation pair
+# (sigs_next= renamed from next=, next= the first skip). fold_exempt prints their bytes; nothing else is exempt.
+# member-names (train 32; rule 4, by design, the same precedent): the owner rows' mem=/mem_more= names and their legend clause ride
+# on top of the chosen rows (formembernamescheck (G1)/(G2): the <d> rows are the names-off rows one for one) — exempt likewise.
+# FIX1: the regexes spell the double quote \x22 — a bare " inside this single-quoted python made line 7 a SyntaxError, so
+# fold_exempt printed nothing, the $(( now - )) below aborted the ledger loops and (3) PASSED having checked no query; a
+# failed exemption read is now a FAIL (exempt_ok), never an empty operand.
+fold_exempt(){ python3 -c '
+import re, sys
+s = sys.stdin.read(); n = 0
+f = re.search( r"<fold .*?</fold>", s, re.S ); n += len( f.group( 0 ).encode() ) if f else 0
+c = re.search( r"; fold kind=bodies:.*?sigs_next= the signatures-only re-call", s, re.S ); n += len( c.group( 0 ).encode() ) if c else 0
+h = re.search( r"; (h calls capped=1 next= the call listing every callee|a hop row.s cut calls listing \(capped=1\) carries next=, the call that lists every callee)", s ); n += len( h.group( 0 ).encode() ) if h else 0
+# FIX1 N5: only a RANKED hop row cut listing (an <h> without qword=); an owner row next= predates the fold and is not exempt
+n += sum( len( x.encode() ) for x in re.findall( r" next=\x22--callees=[^\x22]*\x22", "".join( c for h, c in re.findall( r"<h ([^>]*)><calls ([^>]*)>", s ) if " qword=" not in " " + h ) ) )
+# head round-robin (lane hrr, train 31): its disclosure is a reorder reading, uncharged like docs_after_code= — the rows are the
+# same rows (forheadrrcheck owns that contract), so the band reads the answer without the attribute and its legend clause
+r = re.search( r" files_first=\x22[0-9]+\x22", s ); n += len( r.group( 0 ).encode() ) if r else 0
+r = re.search( r" \[files_first=N:[^\]]*\]", s ); n += len( r.group( 0 ).encode() ) if r else 0
+t = re.search( r"<sigs\b[^>]*>", s )
+if t and " sigs_next=\x22" in t.group( 0 ):
+    n += 5 + sum( len( x.encode() ) for x in re.findall( r" next=\x22[^\x22]*\x22", t.group( 0 ) ) )
+    n += len( "[sigs sigs_next=: one" ) - len( "[sigs next=: one" ) if "[sigs sigs_next=: one" in s else 0
+elif t:
+    n += sum( len( x.encode() ) for x in re.findall( r" next=\x22--expand=[^\x22]*\x22", t.group( 0 ) ) )
+n += sum( len( x.group( 0 ).encode() ) for x in re.finditer( r" mem=\x22[^\x22]*\x22( mem_more=\x22\d+\x22)?", s ) )
+c = re.search( r"; (d mem=|mem= on an owner d row:)[^;]*?mem_more= (names cut|the member names not listed)", s ); n += len( c.group( 0 ).encode() ) if c else 0
+print( n )'; }
+# exempt_ok N: in THIS shell (never inside a $( ), where no()'s fail=1 would be lost) — a non-number is a FAIL and counts 0
+exempt_ok(){ case "$1" in ''|*[!0-9]*) no "(3) fold_exempt could not read an answer (got '$1')"; growth_fail=1; return 1;; esac; return 0; }
 echo "  ledger: the ten reference queries (this repo, full legend) — base bytes @8eb669ff (q5 @cap-followup-2026-09-10) → now, shown=/total="
 i=0
 for q in "${REPO_Q[@]}"; do
     base="${REPO_BASE[$i]}"; i=$(( i + 1 ))
     out="$( "$BIN" . --for="$q" 2>/dev/null )"
     now="$( printf '%s' "$out" | wc -c | tr -d ' ' )"
+    ex="$( printf '%s' "$out" | fold_exempt )"; exempt_ok "$ex" || ex=0
+    now=$(( now - ex ))   # body-fold: the band reads the answer before its fold additions
     marker="$( printf '%s' "$out" | grep -o '<sigs[^>]*>' | head -1 )"
     # forbudget-soft (stop when complete; PROCESS rule 5's stair-step target): rows served past the 7.5 KB target are disclosed
     # (<sigs past_target="K">: the last K rows) and are what the answer needs, so the band applies to the answer WITHOUT them —
@@ -246,7 +282,9 @@ hostilefix|call a native function from python|2106
 hostilefix|parse the config and load it|3380"
 echo "  ledger: nine fixture bundles — base bytes @d5ac29a7 → now"
 while IFS='|' read -r fx q base; do
-    now="$( cd "$TMP" && "$BIN" "$fx" --for="$q" 2>/dev/null | wc -c | tr -d ' ' )"
+    fxout="$( cd "$TMP" && "$BIN" "$fx" --for="$q" 2>/dev/null )"
+    ex="$( printf '%s' "$fxout" | fold_exempt )"; exempt_ok "$ex" || ex=0
+    now=$(( $( printf '%s' "$fxout" | wc -c | tr -d ' ' ) - ex ))   # body-fold: as above
     pct="$( python3 -c "print( '%+.2f' % ( ( $now - $base ) * 100.0 / $base ) )" )"
     printf '    %-10s %-36s %5d → %5d  (%s%%)\n' "$fx" "'$q'" "$base" "$now" "$pct"
     if [ "$now" -gt $(( base * 104 / 100 )) ]; then
@@ -433,7 +471,8 @@ if shrunk != ( "[sigs capped=1 with shown=total:" in s ): print( "FAIL the shrun
 print( "OK docs_dropped=%d rows=%d %s" % ( got, len( rows ), "<sigs%s>" % m.group( 1 ) ) )'; }
 if v="$( cd "$TMP" && "$BIN" fxdocs --for="widget helper" --no-cache 2>/dev/null | docs_arm )"; then
     case "$v" in
-        *'docs_dropped=16 rows=40 <sigs docs_dropped="16">'*) ok "(8) uncapped: the r>24 tier is disclosed: $v" ;;
+        # head round-robin (lane hrr): the tag may also carry files_first= (the reorder's reading; forheadrrcheck)
+        *'docs_dropped=16 rows=40 <sigs docs_dropped="16">'*|*'docs_dropped=16 rows=40 <sigs docs_dropped="16" files_first="'[0-9]*'">'*) ok "(8) uncapped: the r>24 tier is disclosed: $v" ;;
         *) no "(8) uncapped fixture: want docs_dropped=16 of 40 on an uncapped tag, got: $v" ;;
     esac
 else
@@ -498,7 +537,22 @@ for k in ( "est_tokens", "budget_tokens" ):
 out[ "over" ] = "over_ceiling=\"1\"" in r
 print( json.dumps( out ) )'; }
 cfield(){ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); v=d.get(sys.argv[2]); print(json.dumps(v) if isinstance(v,(list,dict,bool)) or v is None else v)' "$1" "$2"; }
-C1="$( cd "$TMP" && "$BIN" fxcut --for="gadget assembler" --no-cache 2>/dev/null | cut_arm )"
+# body-fold (train 31; rule 4, by design — C3): on an answer that carries the fold, the signatures-only re-call moves from <sigs next=>
+# to sigs_next= (next= names the first skipped body). This arm's subject is that re-call, so it reads the fold-off twin, where it is
+# still next=; (9f) pins that the fold answer carries the same call as sigs_next= with its renamed clause.
+C1="$( cd "$TMP" && RIPWIRE_NO_BODY_FOLD=1 "$BIN" fxcut --for="gadget assembler" --no-cache 2>/dev/null | cut_arm )"
+C1F="$( cd "$TMP" && "$BIN" fxcut --for="gadget assembler" --no-cache 2>/dev/null )"
+# a fold that skipped a body moves the call to sigs_next= (renamed reading); one that skipped none leaves <sigs next=> as it was
+C1FN="$( printf '%s' "$C1F" | python3 -c 'import re,sys,html; s=sys.stdin.read(); t=re.search(r"<sigs\b[^>]*>", s); f=re.search(r"<fold .*?</fold>", s, re.S)
+k = "sigs_next" if f and "<skip " in f.group(0) else "next"
+m=re.search(r" %s=\"([^\"]*)\"" % k, t.group(0)) if t else None; print(k + " " + (html.unescape(m.group(1)) if m else ""))' )"
+C1FK="${C1FN%% *}"; C1FV="${C1FN#* }"
+if printf '%s' "$C1F" | grep -q '<fold kind="bodies"' && [ "$C1FV" = "$( cfield "$C1" next )" ] \
+   && { [ "$C1FK" = next ] || printf '%s' "$C1F" | grep -q '\[sigs sigs_next=: one call serving all total= rows uncut\]'; }; then
+    ok "(9f) fold on: the same signatures-only call rides as $C1FK= (a skip moves it to sigs_next= with its reading)"
+else
+    no "(9f) fold on: $C1FK='$C1FV' vs the fold-off next='$( cfield "$C1" next )', no fold, or the [sigs sigs_next=: …] reading is missing"
+fi
 if [ "$( cfield "$C1" capped )" = true ] && [ "$( cfield "$C1" shown )" = "$( cfield "$C1" total )" ] && [ "$( cfield "$C1" past_target )" -gt 0 ]; then
     ok "(9) presence guard: the default ships the whole head past its target, shrunk ($( cfield "$C1" shown ) of $( cfield "$C1" total ), past_target=$( cfield "$C1" past_target ))"
 else
@@ -524,9 +578,21 @@ if [ -n "$C2" ] && [ "$( cfield "$C2" capped )" = false ] && [ "$( cfield "$C2" 
 else
     no "(9) the pasted next= did not serve the block uncut: ${C2:-<no output>}"
 fi
-python3 -c 'import json,sys; a=json.loads(sys.argv[1])["names"]; b=json.loads(sys.argv[2])["names"]; sys.exit(0 if a and b[:len(a)]==a else 1)' "$C1" "${C2:-{\"names\":[]\}}" 2>/dev/null \
-    && ok "(9) the cut block's rows are a prefix of the continuation's (same ranked list, same order)" \
-    || no "(9) the continuation does not extend the cut block's rows in order"
+# head round-robin (lane hrr, train 31; rule 4, orchestrator ruling FIX1 §4(a)): the default (C1) reorders its first 8 rows, while
+# its next= carries an explicit --token-budget and keeps score order, so this ORDER-prefix arm runs unchanged on the
+# RIPWIRE_NO_HEAD_RR=1 twin (C1T / C2T), and (9h) asserts what still holds with the reorder on: the cut block's rows are the
+# continuation's first rows as a SET (test/lib/softbudget.py set_prefix) — no gap, no repeat
+C1T="$( cd "$TMP" && RIPWIRE_NO_BODY_FOLD=1 RIPWIRE_NO_HEAD_RR=1 "$BIN" fxcut --for="gadget assembler" --no-cache 2>/dev/null | cut_arm )"
+NX1T="$( cfield "${C1T:-{\}}" next )"
+C2T="$( [ -n "$NX1T" ] && RIPWIRE_NO_HEAD_RR=1 pasted "$NX1T" fxcut | cut_arm )"
+python3 -c 'import json,sys; a=json.loads(sys.argv[1])["names"]; b=json.loads(sys.argv[2])["names"]; sys.exit(0 if a and b[:len(a)]==a else 1)' "${C1T:-{\"names\":[]\}}" "${C2T:-{\"names\":[]\}}" 2>/dev/null \
+    && ok "(9) [RIPWIRE_NO_HEAD_RR=1 twin] the cut block's rows are a prefix of the continuation's (same ranked list, same order)" \
+    || no "(9) [RIPWIRE_NO_HEAD_RR=1 twin] the continuation does not extend the cut block's rows in order"
+python3 -c 'import json,os,sys; sys.path.insert(0, os.environ["RIPWIRE_TESTLIB"]); from softbudget import set_prefix
+a=json.loads(sys.argv[1])["names"]; on=json.loads(sys.argv[2])["names"]; off=json.loads(sys.argv[3])["names"]; sys.exit(0 if set_prefix(a, on, off) else 1)' \
+    "$C1" "${C2:-{\"names\":[]\}}" "${C2T:-{\"names\":[]\}}" 2>/dev/null \
+    && ok "(9h) head round-robin on: the cut block's rows are the continuation's first rows as a SET (score ranks 1..K)" \
+    || no "(9h) head round-robin on: the cut block's rows are not a set prefix of the continuation's"
 # a tight explicit (SOFT) target: the row cut — named with its clause, the resume index defined, never "over"
 C3="$( cd "$TMP" && "$BIN" fxcut --for="gadget assembler" --token-budget=1500 --no-cache 2>/dev/null | cut_arm )"
 NX3="$( cfield "$C3" next )"
@@ -543,9 +609,16 @@ else
 fi
 # a wide explicit target serves the default's rows (stop when complete: no pad, no cap below the default)
 C8="$( cd "$TMP" && "$BIN" fxcut --for="gadget assembler" --token-budget=8000 --no-cache 2>/dev/null | cut_arm )"
-python3 -c 'import json,sys; a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2]); sys.exit(0 if a["names"] and a["names"]==b["names"] and not a["over"] else 1)' "$C8" "$C1" \
-    && ok "(9) --token-budget=8000: serves exactly the default's rows ($( cfield "$C8" shown )), no over_ceiling" \
-    || no "(9) --token-budget=8000: rows differ from the default's (or over_ceiling): $C8"
+# rule-4 twin (lane hrr): unchanged under RIPWIRE_NO_HEAD_RR=1 (C8T vs C1T); (9h) the same rows as a set with the reorder on
+C8T="$( cd "$TMP" && RIPWIRE_NO_HEAD_RR=1 "$BIN" fxcut --for="gadget assembler" --token-budget=8000 --no-cache 2>/dev/null | cut_arm )"
+python3 -c 'import json,sys; a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2]); sys.exit(0 if a["names"] and a["names"]==b["names"] and not a["over"] else 1)' "${C8T:-{\}}" "${C1T:-{\}}" \
+    && ok "(9) [RIPWIRE_NO_HEAD_RR=1 twin] --token-budget=8000: serves exactly the default's rows ($( cfield "$C8T" shown )), no over_ceiling" \
+    || no "(9) [RIPWIRE_NO_HEAD_RR=1 twin] --token-budget=8000: rows differ from the default's (or over_ceiling): $C8T"
+python3 -c 'import json,os,sys; sys.path.insert(0, os.environ["RIPWIRE_TESTLIB"]); from softbudget import set_prefix
+a=json.loads(sys.argv[1]); on=json.loads(sys.argv[2]); off=json.loads(sys.argv[3]); sys.exit(0 if len(a["names"]) == len(on["names"]) and set_prefix(a["names"], on["names"], off["names"]) and not a["over"] else 1)' \
+    "${C8:-{\}}" "${C1:-{\}}" "${C1T:-{\}}" 2>/dev/null \
+    && ok "(9h) head round-robin on: --token-budget=8000 serves the default's rows as a set ($( cfield "$C8" shown )), no over_ceiling" \
+    || no "(9h) head round-robin on: --token-budget=8000: not the default's rows as a set (or over_ceiling): $C8"
 C4="$( [ -n "$NX3" ] && pasted "$NX3" fxcut | cut_arm )"
 [ -n "$C4" ] && [ "$( cfield "$C4" capped )" = false ] && [ "$( cfield "$C4" shown )" = "$( cfield "$C3" total )" ] \
     && ok "(9) --token-budget=1500: pasting its next= serves the block uncut" || no "(9) --token-budget=1500: the pasted next= left it cut: ${C4:-<none>}"
@@ -612,14 +685,28 @@ for line in sys.stdin:
     if not line: continue
     d=json.loads(line)
     if d.get("id")==1: print(d["result"]["content"][0]["text"])' 2>/dev/null | cut_arm; }
+# head round-robin (lane hrr, train 31; rule 4, by design): the head is reordered WITHIN each answer's shown rows, so a budgeted
+# answer's ORDER is a prefix of the default's only in score order — the twin below runs this arm unchanged with
+# RIPWIRE_NO_HEAD_RR=1, and (10h) asserts what still holds with it on: the budgeted rows are the default's first rows as a SET
+# (score ranks 1..K, so the next_budget_tokens= re-call continues without a gap or a repeat).
+M1T="$( RIPWIRE_NO_HEAD_RR=1 mcpfor '' )"
 prev_names='[]'
 for bt in 2000 2600 3800; do
-    MB="$( mcprel "$bt" )"
+    MBH="$( mcprel "$bt" )"
+    vh="$( python3 -c 'import json,sys
+b=json.loads(sys.argv[1]); d=json.loads(sys.argv[2])
+ok = sorted(b["names"]) == sorted(d["names"][:len(b["names"])]) and not b["over"] and ( b["shown"] == b["total"] or b["next_budget_tokens"] is not None )
+print(("OK" if ok else "BAD"), b["shown"], b["total"], b["over"], b["next_budget_tokens"])' "${MBH:-{\}}" "${M1T:-{\}}" 2>/dev/null )"
+    case "$vh" in
+        OK*) ok "(10h) MCP budget_tokens=$bt, head round-robin on: the default's first rows as a set, the cut continued ($vh)" ;;
+        *)   no "(10h) MCP budget_tokens=$bt, head round-robin on: ${vh:-<no output>} — want the default's first rows (score ranks 1..K) as a set" ;;
+    esac
+    MB="$( RIPWIRE_NO_HEAD_RR=1 mcprel "$bt" )"
     v="$( python3 -c 'import json,sys
 b=json.loads(sys.argv[1]); d=json.loads(sys.argv[2]); p=json.loads(sys.argv[3])
 ok = b["names"] == d["names"][:len(b["names"])] and b["names"][:len(p)] == p and not b["over"] \
      and ( b["shown"] == b["total"] or b["next_budget_tokens"] is not None )
-print(("OK" if ok else "BAD"), b["shown"], b["total"], b["over"], b["next_budget_tokens"])' "${MB:-{\}}" "${M1:-{\}}" "$prev_names" 2>/dev/null )"
+print(("OK" if ok else "BAD"), b["shown"], b["total"], b["over"], b["next_budget_tokens"])' "${MB:-{\}}" "${M1T:-{\}}" "$prev_names" 2>/dev/null )"
     case "$v" in
         OK*) ok "(10) MCP budget_tokens=$bt: a rank prefix of the whole head, monotone, the cut continued, no over_ceiling ($v)" ;;
         *)   no "(10) MCP budget_tokens=$bt: ${v:-<no output>} — want a monotone rank prefix, next_budget_tokens= on a cut, no over_ceiling" ;;

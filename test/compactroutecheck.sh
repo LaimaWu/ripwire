@@ -52,7 +52,10 @@ CONC_CUE="how are identifiers split into subtokens for ranking"
 NAME="pageRankDouble"                                          # name-exact: a small, stable anchor
 
 rw(){ "$BIN" src --no-cache "$@" 2>/dev/null; }
-bodycount(){ grep -o '<b t=' "$1" | wc -l | tr -d ' '; }
+# body-fold (train 31; rule 4, by design): the compact answer now ENDS with <fold kind="bodies">, the top ranked bodies appended
+# after the unchanged answer (forbodyfoldcheck owns that contract). The compact contract pinned here is the answer BEFORE the fold:
+# bodycount reads it without the <fold> element, and arm (1e) pins the old whole-answer reading on the fold-off twin.
+bodycount(){ python3 -c 'import re,sys; t=open(sys.argv[1]).read(); print(len(re.findall(r"<b t=", re.sub(r"<fold .*?</fold>", "", t, flags=re.S))))' "$1"; }
 
 # L1 (2026-09-19): the CLI default legend is compact; arm (3) reads the FULL legend's prose (concfull), and arm (6) greps
 # sigonly for bundle= which the compact legend spells inside its comment — both ask for the full legend.
@@ -81,6 +84,12 @@ grep -q '<bodies ' "$TMP/conc" \
 grep -q 'bundle="compact" bodies="0" reason="compact-route"' "$TMP/conc" \
     && ok '(1c) the root discloses bundle="compact" bodies="0" reason="compact-route"' \
     || no '(1c) missing the bundle="compact" bodies="0" reason="compact-route" disclosure (every removal is disclosed)'
+RIPWIRE_NO_BODY_FOLD=1 "$BIN" src --no-cache --for="$CONC" 2>/dev/null >"$TMP/concoff"
+if [ "$( grep -o '<b t=' "$TMP/concoff" | wc -l | tr -d ' ' )" = "0" ] && grep -q '<fold ' "$TMP/conc"; then
+    ok "(1e) fold-off twin: zero <b> in the whole answer; the default carries its bodies only inside <fold>"
+else
+    no "(1e) RIPWIRE_NO_BODY_FOLD=1 still serves a body, or the default carries no <fold>"
+fi
 rw --for="$CONC_CUE" >"$TMP/conccue"
 n_cue="$( bodycount "$TMP/conccue" )"
 if grep -q '<sigs' "$TMP/conccue" && { { [ "$n_cue" = 1 ] && grep -q 'bundle="compact" bodies="1" reason="owner"' "$TMP/conccue"; } \

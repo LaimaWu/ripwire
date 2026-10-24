@@ -28,6 +28,8 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <span>
+#include <string_view>
 
 namespace rw
 {
@@ -76,33 +78,107 @@ struct LangFacts
     /// judged against the base's whole set. A changed C or Objective-C file does not need it, by today's behaviour
     /// (verbs_quality.h; pinned by test/qddegradecheck.sh (E3)).
     bool defectShapeNeedsMacroSet = false;
+
+    /// Rust: a trait's bodyless method signature is no definition the index keeps (only a bodied default is), so a trait's contract
+    /// cannot be read off its members. The dispatch tier (ifacedispatch.h) takes the implementors' methods of the called name without
+    /// it, and leaves a standard-member name (`clone`, `iter`: graph.h StdMemberGate) to the name tiers as before.
+    bool contractSignaturesUnindexed = false;
+
+    /// Rust: a type's methods for a trait sit in that trait's own `impl T for X` block, apart from its inherent `impl X` methods,
+    /// and a call through `dyn T` / `impl T` / a `T` bound reaches only the former and T's defaults (ingest_relations.h records each
+    /// trait impl block as an ImplBlock binding; ifacedispatch.h keeps the candidates inside one).
+    bool traitImplBlocks = false;
+
+    /// Go, TypeScript, JavaScript: a type conforms to an interface (TS: to any object type) by its members alone, with no clause
+    /// naming it — an object literal, a structurally matching class — so an implements list is never the whole set, and one
+    /// candidate is never the only implementor (ifacedispatch.h: a list of two or more is still declined, as a floor).
+    bool structuralTyping = false;
+
+    /// Java: a lambda or a method reference implements any interface with exactly one abstract method, with no class the index
+    /// keeps, so such an interface's implementors list is open (ifacedispatch.h). Kotlin opts in per interface (`fun interface`,
+    /// recorded at ingest as an anonymous implementor) and, below, through Java.
+    bool samLambdas = false;
+
+    /// Kotlin: a Java file passes a lambda to ANY Kotlin interface with one abstract method (in bytecode it is a plain Java
+    /// interface, `fun interface` or not), so with a samLambdas-language file in the tree such an interface's implementors list is
+    /// open too (ifacedispatch.h). A Kotlin-only tree is unchanged.
+    bool samFromJavaLambdas = false;
+
+    /// Kotlin: an `interface` is a class_declaration like a class (queries/kotlin/tags.scm: "both land here as @definition.class"),
+    /// so the symbol's kind cannot tell the two apart; shared code that needs an interface (ifacedispatch.h's lambda test) reads a
+    /// class of such a language as a possible one.
+    bool interfaceReadsAsClass = false;
+
+    /// Java: the member names that never count toward an interface's single abstract method (JLS 9.8: a public method of
+    /// java.lang.Object an interface redeclares, as java.util.Comparator does equals). Names only; an overload is still ignored,
+    /// which can only open more lists. Empty for a language with no such rule.
+    std::span<const std::string_view> samIgnoredMembers = {};
+
+    /// Java, Kotlin: an expression can implement an interface or extend a class anonymously (`new T() { … }`, `object : T { … }`;
+    /// Kotlin's `fun interface` lets a lambda do it), recorded at ingest as an ImplBlock binding with no implementor name, which
+    /// opens that type's implementors list (ingest_binds.h anonymousImplementorOf).
+    bool anonymousImplementors = false;
+
+    /// Markdown: a link targets a section, so shared graph code treats this language's sections as link targets (graph.h).
+    bool linkSections = false;
+
+    /// C, C++, Objective-C: a function span the parser reports DIRECTLY inside a function's span is read as a misread (htop's
+    /// `else if (…) {` inside a macro-heavy body read as a function named `if`), never a closure (src/closures.h; this fact
+    /// decides only the closure relation, no symbol or edge). A lambda or a block is anonymous, and a C++ local class's
+    /// methods sit inside the class's scope, not directly in the function, so neither is a closure either way.
+    bool noNestedNamedFunctions = false;
+
+    /// Rust: a construction is a call to the type's conventional constructor METHOD (`T::new( … )`), not to the type itself, so
+    /// --affected's class-new backstop (testmap.h classNewTestRows) reads a call to this method of a class as building it. Empty =
+    /// the language constructs by calling the class (`new T(` JS/TS/Java/C#, `T(` Python/Kotlin/C++), which needs no column.
+    std::string_view constructorMethod = {};
+
+    /// TypeScript / JavaScript: a construction (`new X()`, `new N.X()`) builds whatever its import binding resolves to, so --affected's
+    /// class-new row takes its l= only from a construction the import resolver pins to the reached class (testmap.h ClassNewJsBinds,
+    /// graph.h pinJsImport), never from the written name. The other languages keep the name test (classNewCallNames).
+    bool importBoundConstruction = false;
+
+    /// QUALNAME-1 (src/memberowner.h): the separator a member row prints between its owner and its name, as the language itself
+    /// spells a member: `Owner::name` in C, C++, Rust and PHP (scope resolution; PHP methods store no scope today, so none prints), `Owner#name` in Ruby (the instance-method form
+    /// RDoc uses; a `def self.x` singleton prints `#` too, since the index does not tell the two apart), `Owner.name` elsewhere.
+    /// Every spelling is one the selectors resolve (graph.h resolveAllByScopeQualified / resolveAllByDottedScope).
+    std::string_view memberSeparator = ".";
+
+    /// Kotlin, C#: a method name may be overloaded and the index keeps no call-comparable arity for it (ingest_metrics.h
+    /// cc_paramShape's language gate; Java has one), so the dispatch tier cannot tell an override from an overload by its
+    /// parameter count (receiverevidence.h overloadedAbove; lane L6, folded from a `Lang::` compare in train 33).
+    bool overloadsWithoutArity = false;
 };
+
+/// java.lang.Object's public methods an interface may redeclare abstract (LangFacts::samIgnoredMembers).
+inline constexpr std::array<std::string_view, 3> kJavaObjectMethods = { "equals", "hashCode", "toString" };
 
 /// The rows, one per Lang in enum order. A language says only the facts it has.
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
-    { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true },
+    { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true, .memberSeparator = "::" },
     { .lang = Lang::Python },
-    { .lang = Lang::TypeScript, .overloadSignatures = true },
-    { .lang = Lang::Go },
-    { .lang = Lang::Rust },
+    { .lang = Lang::TypeScript, .overloadSignatures = true, .structuralTyping = true, .importBoundConstruction = true },
+    { .lang = Lang::Go, .structuralTyping = true },
+    { .lang = Lang::Rust, .contractSignaturesUnindexed = true, .traitImplBlocks = true, .constructorMethod = "new", .memberSeparator = "::" },
     { .lang = Lang::Swift },
-    { .lang = Lang::ObjC },
-    { .lang = Lang::Markdown },
-    { .lang = Lang::JavaScript },
+    { .lang = Lang::ObjC, .noNestedNamedFunctions = true },
+    { .lang = Lang::Markdown, .linkSections = true },
+    { .lang = Lang::JavaScript, .structuralTyping = true, .importBoundConstruction = true },
     { .lang = Lang::Bash },
-    { .lang = Lang::Java },
-    { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true },
+    { .lang = Lang::Java, .samLambdas = true, .samIgnoredMembers = kJavaObjectMethods, .anonymousImplementors = true },
+    { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true,
+      .memberSeparator = "#" },
     { .lang = Lang::Unknown },
     { .lang = Lang::Json },
-    { .lang = Lang::CSharp },
-    { .lang = Lang::C },
+    { .lang = Lang::CSharp, .overloadsWithoutArity = true },
+    { .lang = Lang::C, .noNestedNamedFunctions = true, .memberSeparator = "::" },
     { .lang = Lang::Toml },
     { .lang = Lang::Yaml },
-    { .lang = Lang::Php },
+    { .lang = Lang::Php, .memberSeparator = "::" },
     { .lang = Lang::Lua },
     { .lang = Lang::Elixir, .hasInertQuoteRegions = true },
     { .lang = Lang::Dart },
-    { .lang = Lang::Kotlin },
+    { .lang = Lang::Kotlin, .samFromJavaLambdas = true, .interfaceReadsAsClass = true, .anonymousImplementors = true, .overloadsWithoutArity = true },
     { .lang = Lang::GDScript },
     { .lang = Lang::Clojure },
 } };

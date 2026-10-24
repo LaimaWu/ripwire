@@ -96,3 +96,21 @@ def upper_bound( answer, ref, T, k, total, u_floored ):
     ok = rows <= room + slack
     return ok, "upper: rows printed %d B %s room %d B + %d B slack (served tail %d, ref tail %d)" % (
         rows, "<=" if ok else ">", room, slack, st, rt )
+
+# ── lane hrr (train 31; PROCESS rule 4, orchestrator ruling FIX1 §4(a)): the SET-prefix twin of an order-prefix arm ─────────────
+# The routed no-budget --for answer reorders its first 8 rows (files_first=: each file's best row first), so a budgeted answer's
+# rows are an ORDER prefix of it only in score order. Every order-prefix arm keeps running unchanged on the RIPWIRE_NO_HEAD_RR=1
+# twin; with the reorder ON what must still hold is this: the reorder serves the twin's rows (as a set) and a budgeted / cut
+# answer's rows are, as a set, the twin's first K rows (score ranks 1..K), so the continuation resumes with no gap and no repeat.
+# Compared as MULTISETS (sorted lists), not sets: a row key (p:l:n, or (n, p)) can repeat — two overloads in one file — and a
+# repeat in A beyond OFF's own count is still caught.
+def set_prefix( a, on, off ):
+    return bool( a ) and sorted( on ) == sorted( off ) and sorted( a ) == sorted( off[ :len( a ) ] )
+
+def _row_lines( p ):
+    return [ x for x in open( p, encoding='utf-8', errors='replace' ).read().split( "\n" ) if x ]
+
+if __name__ == "__main__":   # python3 softbudget.py setprefix A ON OFF  (rows files, one p:l:n per line): exit 0 | 1
+    import sys
+    if len( sys.argv ) != 5 or sys.argv[ 1 ] != "setprefix": sys.exit( 2 )
+    sys.exit( 0 if set_prefix( *( _row_lines( p ) for p in sys.argv[ 2:5 ] ) ) else 1 )

@@ -904,6 +904,7 @@ inline void emitReferences( IngestResult& result, std::vector<RawRef>& rawRefs, 
         ref.memberCtor  = std::move( r.memberCtor );    // FE-B: the class a constructed receiver names
         ref.memberVia   = std::move( r.memberVia );     // FE-B on #373: the method a Ruby typed receiver was built by
         ref.memberFactory = r.memberFactory;            // FE-B on #373: memberCtor names a FactoryBot factory
+        ref.forwarded   = r.forwarded;                  // lane fcall-forward fix 1: an `f.call/f.apply` site standing for `f( … )`
         ref.baseBind    = r.baseBind;                   // lane lego-transitive fix 1: an inherit ref's same-file base binding
         ref.fieldName   = std::move( r.fieldName );   // S5-E: the member variable name (e.g. "m_pool")
         ref.composeRel  = std::move( r.composeRel );  // S5-E: "creates" or "uses"
@@ -974,6 +975,8 @@ inline void emitBindings( IngestResult& result, std::vector<RawBind>& rawBinds, 
                        return a.kind < b.kind;
                    }
                    if( a.typeName != b.typeName ) { return a.typeName < b.typeName; }
+                   if( a.resultIndex != b.resultIndex ) { return a.resultIndex < b.resultIndex; }   // ReturnType: one record per position
+                   if( a.unwrapDepth != b.unwrapDepth ) { return a.unwrapDepth < b.unwrapDepth; }
                    return a.importedName < b.importedName;
                } );
     result.bindings.resize( rawBinds.size() );
@@ -985,6 +988,8 @@ inline void emitBindings( IngestResult& result, std::vector<RawBind>& rawBinds, 
         b.fileId     = rb.fileId;
         b.kind       = rb.kind;
         b.isFromAssignment = rb.isFromAssignment;
+        b.resultIndex = rb.resultIndex;
+        b.unwrapDepth = rb.unwrapDepth;
         b.startByte  = rb.startByte;   // the declaration a VarDecl and its typed record share (Rule 2 lexical lookup)
         b.spanStart  = rb.spanStart;   // shadow fix round: the declaring block's span rides through
         b.spanEnd    = rb.spanEnd;

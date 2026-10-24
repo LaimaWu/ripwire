@@ -35,7 +35,8 @@
 #     rows verbatim; the MCP twins (find_symbol, find_referencing_symbols) carry "declined_sites":[...] with the same
 #     sites ({"name","line","cands","via"} / {"in","file","line","cands"}) and an unchanged "count".
 #   * --safe-delete: a definition with no caller and no use but a declined call that could have meant it reads
-#     risk="possible-callers", never "none-found", and lists the <dc> rows; --impact and --for print no <dc> row.
+#     risk="possible-callers", never "none-found", and lists the <dc> rows; --for prints no <dc> row, and --impact (lane
+#     ix2-slice, IX-4) prints the callers-form rows of exactly the declines its declined_calls= counts.
 #
 # ARMS (fixture test/declinedsitefix: go/ py/ rs/ ts/ cpp/ rb/, plus test/declinefix, test/builtinbindfix,
 # test/stdmembergatefix and test/lpinfix):
@@ -51,7 +52,7 @@
 #   (E) dialects: --json, columnar, the MCP twins (same sites, same count), and every answer parses as XML
 #   (F) legend: defined where rows ride, absent elsewhere (and on the zero-decline corpus test/lpinfix)
 #   (G) the cap, on generated trees: callers and callees past the cap are counted, file-first, with dc_next=
-#   (H) safe-delete never reads none-found beside a declined possible caller; impact and for print no <dc>
+#   (H) safe-delete never reads none-found beside a declined possible caller; impact lists its <dc> rows, for prints none
 #   (K) the gates review's amendments: R1 the three Ruby decline sites (new, side, side over the assembled set) and
 #       the W1 discriminator (callers by candidate list, never by name); R2 rows == declined_calls= on every uncut
 #       answer (== declined_iface= on the TS interface answers); R3 W1 on the declinedlistcheck shapes (language and
@@ -194,7 +195,7 @@ say( af.ok and cands.get( ( "Package", "24" ) ) == { "deb/deb.go:15", "rpm/rpm.g
 r = ask( RS, "callees", "preprocess_book" )
 say( r.ok and dc_sites( r, ( "n", "l" ) ) == [ ( "run", "18", "2" ) ], "[P] a_rs",
      "rust --callees=preprocess_book names preprocessor.run@18 through Box<dyn Preprocessor> (cands=2)", r.why() )
-say( r.ok and r.a( "count" ) == "2" and sorted( x.get( "n" ) for x in r.rows ) == [ "new", "preprocessor_should_run" ], "[C] a_rs_count",
+say( r.ok and r.a( "count" ) == "2" and sorted( x.get( "n" ) for x in r.rows ) == [ "PreprocessorContext::new", "preprocessor_should_run" ], "[C] a_rs_count",
      "count=\"2\" (PreprocessorContext::new, preprocessor_should_run) unchanged", r.why() )
 rf = ask( RS, "callees", "preprocess_book", "--legend=full" )
 say( rf.ok and len( rf.dc ) == 1 and set( rf.dc[ 0 ].get( "cand", "" ).split() ) == { "src/builtin/index/mod.rs:10", "src/builtin/links/mod.rs:10" },
@@ -367,8 +368,39 @@ x = ask( PYF, "safe-delete", "beta/store.py:fetch" )
 say( x.ok and x.a( "risk" ) == "untested-radius" and x.a( "callers" ) == "1", "[C] h_sd_ctrl",
      "a definition with a real caller keeps its risk= (untested-radius) and callers=\"1\"", x.why() )
 x = ask( GO, "impact", "deb/deb.go:Package" )
-say( x.ok and x.dc == [] and x.a( "reaches" ) == "0" and x.a( "declined_calls" ) == "1", "[C] h_impact",
-     "impact prints no <dc> row (declined_calls= stays its disclosure); reaches=\"0\" unchanged", x.why() )
+# lane ix2-slice (IX-4): --impact now names the declines its declined_calls= counts, in the callers form (was: no row)
+say( x.ok and dc_sites( x, ( "in", "p" ) ) == [ ( "doPackage", "cmd/package.go:24", "2" ) ] and x.a( "reaches" ) == "0" and x.a( "declined_calls" ) == "1",
+     "[P] h_impact", "impact lists the declined call its declined_calls=\"1\" counts as a callers-form <dc> row; reaches=\"0\" unchanged", x.why() )
+xf = ask( GO, "impact", "deb/deb.go:Package", "--legend=full" )
+say( xf.ok and "<dc in= p= via=\"declined\">" in xf.legend and LEG_NOT in xf.legend and "the <dc> rows below name them" in xf.legend
+     and "The callers verb on SYM lists" not in xf.legend and "<dc n= l=|in= p=" in x.legend, "[P] h_impact_legend",
+     "the impact legend defines its <dc> rows the callers way (full: what a row is NOT; compact: the dc reading)", xf.legend[ -400: ] )
+# lane ix2-slice (IX-4): the served order is TIER first (source, then test/bench, then docs — filter.h pathTierOf), then path:
+# a test file whose path sorts first no longer leads; and the impact rows ride --json and columnar as --callers' do.
+TO = os.path.join( TMP, "tierorder" )
+for d in ( "alpha", "beta", "tests", "zlib" ):
+    os.makedirs( os.path.join( TO, d ), exist_ok = True )
+open( os.path.join( TO, "alpha", "a.py" ), "w" ).write( "class A:\n    def poll(self):\n        return 1\n" )
+open( os.path.join( TO, "beta", "b.py" ), "w" ).write( "class B:\n    def poll(self):\n        return 2\n" )
+open( os.path.join( TO, "tests", "t.py" ), "w" ).write( "def use_t(x):\n    return x.poll()\n" )
+open( os.path.join( TO, "zlib", "u.py" ), "w" ).write( "def use_u(x):\n    return x.poll()\n" )
+x = ask( TO, "callers", "alpha/a.py:poll" )
+say( x.ok and [ d.get( "p" ) for d in x.dc ] == [ "zlib/u.py:2", "tests/t.py:2" ], "[P] h_tier_order",
+     "callers <dc> rows: the source site (zlib/) before the test site (tests/), though tests/ sorts first by path", x.why() )
+x = ask( TO, "impact", "alpha/a.py:poll" )
+say( x.ok and [ d.get( "p" ) for d in x.dc ] == [ "zlib/u.py:2", "tests/t.py:2" ] and x.a( "declined_calls" ) == "2", "[P] h_impact_order",
+     "impact lists the same two rows in the same order, declined_calls=\"2\"", x.why() )
+rc, out = run( TO, "--impact=alpha/a.py:poll", "--json" )
+try:
+    jd = json.loads( out ).get( "dc", [] )
+except ValueError:
+    jd = None
+say( rc == 0 and jd is not None and [ ( d.get( "in" ), d.get( "p" ) ) for d in jd ] == [ ( "use_u", "zlib/u.py:2" ), ( "use_t", "tests/t.py:2" ) ], "[P] h_impact_json",
+     "impact --json carries \"dc\" with the same rows (keys = the XML attribute names)", "rc=%s %s" % ( rc, out[ :300 ] ) )
+rc, out = run( TO, "--impact=alpha/a.py:poll", "--format=columnar" )
+body = re.sub( r"<!--.*?-->", "", out, flags = re.S )
+say( rc == 0 and body.count( "<dc " ) == 2 and body.index( "zlib/u.py:2" ) < body.index( "tests/t.py:2" ), "[P] h_impact_columnar",
+     "impact --format=columnar keeps the <dc> rows verbatim", "rc=%s %s" % ( rc, out[ -300: ] ) )
 rc, out = run( GO, "--for=doPackage" )
 say( rc == 0 and "<dc" not in out and len( out ) > 0, "[C] h_for", "--for prints no <dc> row", "rc=%s" % rc )
 

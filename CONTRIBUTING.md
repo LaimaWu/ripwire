@@ -108,6 +108,12 @@ mid-compile; the discipline is the fix.
 ripwire builds and passes its suite on Ubuntu 24.04 with gcc 13.3 or clang 18, but a few things
 differ from macOS enough to cost you an afternoon if nobody says them out loud.
 
+**Source builds support gcc 13+, so never rely on C++23 P2718 range-for lifetime extension:** `for( x : makeRow().items() )`
+is correct on clang ≥ 19 and gcc ≥ 15 and reads a dead temporary on gcc 13/14, so name the temporary first; the gcc-14 CI
+leg is the canary, and `-Werror=dangling-reference` plus `portablebuildcheck` #7 hold the shape on every host. #7's blind
+spot: a reference-returning callee that takes the temporary as an argument (`for( v : std::get<0>( makeTup() ) )`) is held
+only by the gcc-14 leg's `-Werror=dangling-reference`.
+
 **Memory, not cores, sizes `-j`.** `src/main.cpp` is one very large translation unit (since the
 2026-08-29 split its verb families live in `src/verbs_*.h` sections included into that one TU — the
 compile cost is unchanged, only the editing surface moved; `src/ingest.cpp` got the same treatment
@@ -265,8 +271,9 @@ The exception is `scripts/tidycheck.sh`, a separate CI step with `--warnings-as-
 only checks whose every finding is a silently wrong answer and that sat at **zero rows** on the five CI
 TUs when admitted (0.6.3, clang-tidy 22; `bugprone-use-after-move` had one row, brought to zero by a
 behaviour-neutral fix that `.clang-tidy` describes): `bugprone-use-after-move`, `bugprone-dangling-handle`,
-`bugprone-sizeof-expression`, `bugprone-integer-division`, `bugprone-infinite-loop` and
-`clang-analyzer-core.*`. It is a ratchet, not a style gate: a new row is a
+`bugprone-sizeof-expression`, `bugprone-integer-division`, `bugprone-infinite-loop`,
+`clang-analyzer-core.*` and (lifetime round, 2026-10-18, also at zero rows) `clang-analyzer-cplusplus.InnerPointer`.
+It is a ratchet, not a style gate: a new row is a
 bug to fix, never a `NOLINT`, and a gated check that proves noisy leaves the list with its count, the way
 it came in (`.clang-tidy`'s header has the counts, and the candidates that stayed out or left). Run it
 before a PR that touches C++: `scripts/tidycheck.sh` finds clang-tidy 22 on `PATH` or, on macOS, at
@@ -275,8 +282,8 @@ Homebrew's keg-only `/opt/homebrew/opt/llvm@22/bin/clang-tidy` — pin that path
 finds neither.
 
 The compiler holds the same line for the UB class: CMakeLists.txt's compile-time fence block makes
-`return-type`, `uninitialized`, `format`/`format-security`, returning a local's address, and on Clang
-`-Wdangling` and constant `array-bounds`, errors on our own targets, per compiler, with the cl.exe
+`return-type`, `uninitialized`, `format`/`format-security`, returning a local's address, on Clang
+`-Wdangling` and constant `array-bounds`, and on GCC 13+ `dangling-reference`, errors on our own targets, per compiler, with the cl.exe
 `/we####` equivalents — each measured at zero hits on AppleClang 17, clang 22 and GCC 13/14/16 first.
 
 ---
@@ -395,6 +402,8 @@ every input the tool ever sees, costs nothing in release, and tells the optimize
 | `DISCLOSE( Diagnostics::answerRefused, "reason" )` | this degrade refuses the answer by name | nothing, but the reason is listed by the gate | a path that, in every build, prints no answer and says why (non-zero exit + stderr, an MCP error, a query's named failure) | anything that still prints part of an answer |
 | `DISCLOSE( "msg" )` | **nothing to the user**: a debug trace | nothing | existing sites only, until converted (ratchet) | any new degrade |
 | `PANIC( "why" )` | we cannot continue | report and abort | a corrupt state | anything recoverable |
+
+**Signed integers for quantities.** Counts, computed lengths, offsets, differences and loop bounds are `int` (or `std::ptrdiff_t` / `std::int64_t` when the range needs it), not `unsigned`. Unsigned arithmetic wraps silently: `a - b` with `b > a` is a huge positive number that no check can catch. libstdc++'s `string_view` compare computing `n1 - n2` on `size_type` is our own example (see `sortutil.h`). Mixed signed/unsigned comparisons also convert the signed side. Signed also gives the optimizer more, and the undefined overflow is exactly what buys it: the compiler may assume a signed value never wraps, so it may widen a 32-bit loop index to 64 bits and fold `i + 1 > i` or `( x * 4 ) / 4`, while unsigned's defined wrap is a promise it must keep, paid for in extra extends and masks (easy to see in Compiler Explorer). A value that must not be negative says so: `EXPECTS( n >= 0 )` for a parameter, `ASSUME` / `ENSURES` where this code makes it true. Unsigned is for bit fields and bit patterns, and a few other things — hashes, the 32-bit handles of §3 (an index, never arithmetic), and the `size_t` an STL API returns — and almost nothing else; convert at that boundary with `std::ssize` / `std::ranges::ssize`. C++20 added them to give a signed size, and Stroustrup's WG21 paper P1428, "Subscripts and sizes should be signed", calls the unsigned `size_t` a mistake: with `ssize`, `i < std::ssize( v ) - 1` is safe on an empty `v`, where `i < v.size() - 1` wraps. **A contract's weight follows the function's:** a one-line accessor needs none, while a function with several inputs, a non-obvious output or a multi-step computation states its preconditions and postconditions.
 
 **The error ladder:**
 - A **recoverable** runtime error (an unreadable file, a full pool, a missing grammar) is a **degrade**, not a
@@ -586,7 +595,7 @@ review will credit it, but it is never a condition for merging the language.
 | 3. Types | `captureTagsFacts` (`ingest_sidecap.h`) reads `@definition.*` captures for every language. | shared, but language decisions are `Lang::` branches inside the loop: 36 non-comment `Lang::` mentions, 15 of them Elixir. | **3a** #374: one constexpr per-language hook table that `captureTagsFacts` calls once per capture, one language per commit, Elixir first. M. |
 | 4. Inheritance | `captureBases` (`ingest_relations.h`): base clauses for C++, TS/JS, Java, Python, Swift, C#, PHP, Kotlin and Ruby, chosen by node kind (`isBaseTypeNodeIn`). | partly. Rust `impl … for` is a separate pass; Ruby mixins read the same path through `@reference.mixin` captures since slice 4a (#400). | **4a** done (#400): Ruby `include`/`extend`/`prepend` read the shared path through `queries/ruby/tags.scm` captures, `captureRubyMixinBases` retired. **4b** the base-clause node kinds move from `isBaseTypeNodeIn` into `tags.scm` captures: M, all of the languages above. **4c** structural conformance (#386): a class or type whose methods cover a structural base's required methods (Python `typing.Protocol`, Go interfaces, possibly TS interfaces) is listed as an implementor marked `structural=1`, never as a nominal subclass, with a disclosed minimum-method threshold; step (c), one shared method-set check, per-language data for which bases are structural. M; Python and Go first (Go **wanted**). |
 | 5. Callables | Definitions come from `tags.scm`, read by `captureTagsFacts`. | partly. Keyword-headed definitions keep keyword tables in C++: `elixirFunctionKeyword` and `elixirMetadataAttribute` (`ingest_elixir.h`) repeat `macroBodyKeyword` (`ingest_relations.h`), 0.82 and 0.96 similar by `--clones`. | **5a** #355: the tags pass evaluates `#eq?`/`#any-of?`/`#not-any-of?`, then Elixir's table moves into its `tags.scm`. M; Elixir, then Clojure. |
-| 6. Dispatch | `buildGraph` (`graph.h`): a SCIP pin, then the canonical tier (`appendCanonicalCandidates`, `resolve.h`), bindings and receiver rules (`receiverevidence.h`), then name tiers. Per-language qualified-call rules: `ElixirResolver` (`elixir_resolve.h`), `keepRustQualifiedCandidates` and `keepStdQualifiedCandidates` (`graph.h`). | partly. Facts about each language are scattered `l == Lang::X \|\| …` predicates (`implicitReceiverLang`, `memberNeverReachesFreeFunction` and `classNameReceiverLang` in `receiverevidence.h`; `langUsesHashComment` in `quality.h`), and `--clones` reports them as one group. | **6a** the shared refusal for an unplaced module qualifier (the known gap above): S, *maintainers*, not yet scheduled. **6b** the **language-neutral qualified-call resolver**: generalise `ElixirResolver`'s module table (alias/import/require facts → `Module::name`) so that Clojure `ns/f`, Elixir and other module-qualified languages use one resolver driven by per-language data. M; Elixir byte-identical, Clojure as the first new user. **6c** those predicates become columns of one constexpr per-`Lang` table: S, all languages. |
+| 6. Dispatch | `buildGraph` (`graph.h`): a SCIP pin, then the canonical tier (`appendCanonicalCandidates`, `resolve.h`), bindings and receiver rules (`receiverevidence.h`), the interface-typed dispatch tier (`ifacedispatch.h`), then name tiers. Per-language qualified-call rules: `ElixirResolver` (`elixir_resolve.h`), `keepRustQualifiedCandidates` and `keepStdQualifiedCandidates` (`graph.h`). | partly. Facts about each language are scattered `l == Lang::X \|\| …` predicates (`implicitReceiverLang`, `memberNeverReachesFreeFunction` and `classNameReceiverLang` in `receiverevidence.h`; `langUsesHashComment` in `quality.h`), and `--clones` reports them as one group. | **6a** the shared refusal for an unplaced module qualifier (the known gap above): S, *maintainers*, not yet scheduled. **6b** the **language-neutral qualified-call resolver**: generalise `ElixirResolver`'s module table (alias/import/require facts → `Module::name`) so that Clojure `ns/f`, Elixir and other module-qualified languages use one resolver driven by per-language data. M; Elixir byte-identical, Clojure as the first new user. **6c** those predicates become columns of one constexpr per-`Lang` table: S, all languages. |
 | 7. Data-driven dispatch | One mechanism per shape: fn-pointer and callback bindings `buildFnPtrBindTables` (`graph.h`, C/C++); HTTP routes `routesVisitNode` (`ingest_sidecap.h`, a JS/TS and Python walk) into `RouteDef`/`RouteUse` (`model.h`); FFI aliases `BindingAlias` (`model.h`). | partly. Calls by a literal method name (`send(:m)`) resolve for Ruby only. | **7a** #375: one capture for a call whose method name is a literal, resolved through the ordinary receiver rules. M; Python `getattr`, JS/TS `obj["m"]`, Go `MethodByName` (**wanted**). **7b** route registration read from captures instead of the walk: M; JS/TS and Python. |
 | 8. Preprocessing | `retagMacroCallReferences` (`model.h`) for macro calls. Inert regions (quote, discard, comment forms): `inInertRegion` (`ingest_inert.h`) for Elixir's quote and live holes; Clojure's `clojureInert` (`ingest_clojure.h`) is still per language. | partly. The shared inert-region walk `inInertRegion` (`ingest_inert.h`) landed with #380 (#357); Elixir's quote and live holes use it, Clojure's filter does not yet. | **8a** Clojure's quote/discard filter (`clojureInert`, `ingest_clojure.h`) moves onto `inInertRegion`: S, Clojure. Ready now that #380 and #349 are both on `main`. |
 | 9. Scope and state | `enclosingScopeOf` (`ingest_names.h`); module and global state in `computeNonLocalState` (`nonlocalstate.h`). | duplicated: `rustEnclosingScopeOf` and `kotlinEnclosingScopeOf` are 0.82 similar to the generic walker by `--clones`. | **9a** #356 part 1: one table-driven enclosing-scope walker (scope-owner kinds, how the name is read). S–M; Rust and Kotlin. Read the notes above both functions first: each says why it was kept apart. If a table does not make the code smaller, a written finding that closes the slice is a valid result. **State:** a table landed with #403 — `kScopeOwners` rows (owner kind, how the name is read, which defs it scopes) carry C++, Python and Go (receiver type, interface members); `kDefScopeWalkerOfLang` picks the walker per language. Rust and Kotlin keep their own walkers (the notes above each say why). The finding: the table was about +50 lines where a Go-only arm would have been about +25, kept because it removed three `Lang::` compares and the Kotlin clone pair. |
@@ -815,6 +824,13 @@ then compares `scripts/ci-xplat-outputs.sh`'s verb set between that exe and the 
   **order**, not the scores.
 - **A sort has no tolerance band.** For sorted or serialized output, use the determinism gate
   instead: run twice, `diff -q` the bytes.
+- **A legend byte pin is a target, not a ceiling.** The legend size gates (`compactlegendcheck` (U)/(L)/(M),
+  `graphlegendbudgetcheck`, `donelegendcheck`, `testgatelegendbudgetcheck`, `panellegendcheck`) share one verdict,
+  `test/lib/legendtarget.sh`. A legend past its target passes only when every extra byte is a clause registered in
+  `test/legend_over_target.tsv` (which content, why the answer needs it) that rides on that answer only beside the
+  attribute it defines; the gate prints an `OVER-TARGET` line for it. A hard runaway guard (8,000 B of comments per
+  compact answer, 16,000 B for the ten-verb loop, 2 x the target rounded up to 500 B on the full dialect) fails with
+  `LEGEND-RUNAWAY` and a clause breakdown. `RIPWIRE_LEGEND_PINS=strict` restores the hard pins (the old-path twin).
 
 ---
 
@@ -948,8 +964,17 @@ ls /tmp/tsanlog.*     # one file per process that raced; none means no report
 6. If your change alters emitted output, regenerate the goldens as their **own** commit with the
    diff reviewed by eye — never bundled with logic.
 7. Keep formatting churn out of logic commits.
-8. **Cutting a release:** bump the version in `CMakeLists.txt`'s `project()` call, rename
-   `CHANGELOG.md`'s `## [Unreleased]` section to the new version, and add the release's blurb to
+8. **Changelog entry: add a file, never edit `CHANGELOG.md`.** A user-visible change adds ONE new file
+   `changelog.d/<pr-number-or-slug>.md`: line 1 `### <Section> — <title>` (Added, Changed, Deprecated,
+   Removed, Fixed, Security, Documented), a blank line, then the entry; credit as `(thanks @handle, #N)`.
+   `changelog.d/README.md` has the format; `python3 scripts/changelog_assemble.py check` validates it
+   (`test/changelogfragcheck.sh` runs it, and fails a PR that writes under `## [Unreleased]` instead).
+   One file per change is what keeps open PRs from conflicting on the changelog after every merge.
+9. **Cutting a release:** bump the version in `CMakeLists.txt`'s `project()` call, fold the fragments
+   with `python3 scripts/changelog_assemble.py release X.Y.Z YYYY-MM-DD` (it writes the
+   `## [X.Y.Z] — date` section under the `## [Unreleased]` stub and deletes the folded files; edit the
+   section's opening summary in by hand after it), commit that before tagging (the release workflow
+   refuses a tag while `changelog.d/` still holds fragments), and add the release's blurb to
    README.md's `## Release notes` section (newest first, with a `Thanks to` line where one applies) —
    never to a `## What's new` section, which no longer exists (moved 2026-09-25; see git history if
    you are looking for it). Update the one-line **Latest: 0.6.x** pointer near the top of README.md to

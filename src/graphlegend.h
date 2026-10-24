@@ -584,6 +584,9 @@ inline constexpr const char* kCallersNextBareNameLegend = "next= is the one past
 // L8 (train 29): the same two readings when next= is the NEXT PAGE of a capped callers answer and the uses verb rides as uses_next=.
 inline constexpr const char* kCallersNextPageLegend = "next= is the one pasteable follow-up: the next page of this capped answer (the same call at next_offset=); uses_next= is the uses verb on this selector (the call sites). ";
 inline constexpr const char* kCallersNextPageBareNameLegend = "next= is the one pasteable follow-up: the next page of this capped answer (the same call at next_offset=); uses_next= is the uses verb on the called name (all same-named definitions' call sites, including sites bound to other definitions, because a declined call names no single definition). ";
+// C2 rider (train 31): the callees form's two readings — expand on the selector, or the next page with expand riding as expand_next=.
+inline constexpr const char* kCalleesNextExpandLegend = "next= is the one pasteable follow-up (expand on this selector: the body). ";
+inline constexpr const char* kCalleesNextPageLegend = "next= is the one pasteable follow-up: the next page of this capped answer (the same call at next_offset=); expand_next= is expand on this selector (the body). ";
 
 // The tested lens's reading for the form a document takes: an XML row omits a false tested=, the columnar array prints 0.
 // ONE choice for --callers/--callees (callHierarchyLegendOpen below) and --impact (verbs_navigate.h runImpact), so the verbs
@@ -605,7 +608,7 @@ inline std::string callHierarchyLegendOpen( bool wantCallers, bool nextUsesBareN
     // selector, its @FILE:LINE spelling mirrored), callees the BODY whose callees these are (expand).
     // nextUsesBareName is the emitter's OWN decision, never re-derived here; no double hyphen in comment text.
     return wantCallers ? std::string( kCallHierarchyLegendOpen ) + testedClause + kTestedLensBlindSpotLegend + callersNextClause
-                       : std::string( kCallHierarchyLegendOpen ) + testedClause + kTestedLensBlindSpotLegend + kCallHierarchyLegendCalleesOnly + "next= is the one pasteable follow-up (expand on this selector: the body). ";
+                       : std::string( kCallHierarchyLegendOpen ) + testedClause + kTestedLensBlindSpotLegend + kCallHierarchyLegendCalleesOnly + ( nextIsPage ? kCalleesNextPageLegend : kCalleesNextExpandLegend );
 }
 
 // ── LB-G (r10 GitNexus round) — the DISPLAY-CAP clause the neighbour verbs share ─────────────────────────
@@ -651,7 +654,7 @@ inline constexpr const char* kDeclinedCallsGateClause =
 // the caller's own file or directory too; charged only where that gate declined at least one call in the graph
 // (Graph::stdMemberDeclinedCalls), so a tree it never touched keeps its bytes. What it does NOT mean is in the same breath.
 inline constexpr const char* kDeclinedCallsStdClause =
-    "It also counts a call named like a standard-type member of its language (per-language name lists: C++ containers, strings, optional, smart pointers, v.push_back, s.size; Rust collections, strings, Option, Result, v.push, xs.iter) on a receiver no rule tied to an in-tree class: the standard library's own member may be the one called, so no in-tree namesake is bound; it is not a claim that the receiver is a standard type, and a Rust receiver written as an in-tree type is declined too (Rust records no receiver type yet). ";
+    "It also counts a call named like a standard-type member of its language (per-language name lists: C++ containers, strings, optional, smart pointers, v.push_back, s.size; Rust collections, strings, Option, Result, v.push, xs.iter) on a receiver no rule tied to an in-tree class: the standard library's own member may be the one called, so no in-tree namesake is bound; it is not a claim that the receiver is a standard type, and a Rust receiver of an in-tree type that no rule typed is declined too (Rust types a parameter, local or field written or constructed as an in-tree type by its name, path or use alias, and a call result; not a generic bound, dyn or impl Trait, a type alias, a glob of a glob, a tuple-struct field, a pattern other than a plain name, or a value behind Option, Result, Rc, Arc, RefCell, Cell, Mutex or RwLock). ";
 inline constexpr const char* kInertDeclinedCallsClause =
     "In the callees form it also counts ordinary Elixir call candidates in inert quote AST after unquote/unquote_splicing re-entry. "
     "These sites have no uses rows or target candidates, so they contribute no caller or impact declined_calls= candidate list. ";
@@ -660,7 +663,7 @@ inline const char* declinedCallsGateLegend( bool on ) noexcept { return on ? kDe
 inline const char* declinedCallsStdLegend( bool on ) noexcept { return on ? kDeclinedCallsStdClause : ""; }
 // The callees answer's <stdm> line (graph.h stdMemberCallsMadeBy): rides exactly when the line does.
 inline constexpr const char* kStdMemberCallsLegend =
-    "<stdm n= calls=>: of declined_calls=, the calls these definitions make that are named like a standard-type member of their language (C++ containers, strings, optional, smart pointers; Rust collections, strings, Option, Result; n=, each name once) on a receiver no rule tied to an in-tree class; calls= how many. No edge and no row: the standard library's own member may be the one called, and so may an in-tree namesake. It is not a claim that the receiver is a standard type, and a Rust receiver written as an in-tree type is listed too (Rust records no receiver type yet). It does not list every standard-library call the body makes: a name with no in-tree definition never had a candidate to decline. ";
+    "<stdm n= calls=>: of declined_calls=, the calls these definitions make that are named like a standard-type member of their language (C++ containers, strings, optional, smart pointers; Rust collections, strings, Option, Result; n=, each name once) on a receiver no rule tied to an in-tree class; calls= how many. No edge and no row: the standard library's own member may be the one called, and so may an in-tree namesake. It is not a claim that the receiver is a standard type, and a Rust receiver of an in-tree type that no rule typed is listed too (Rust types a parameter, local or field written or constructed as an in-tree type by its name, path or use alias, and a call result; not a generic bound, dyn or impl Trait, a type alias, a glob of a glob, a tuple-struct field, a pattern other than a plain name, or a value behind Option, Result, Rc, Arc, RefCell, Cell, Mutex or RwLock). It does not list every standard-library call the body makes: a name with no in-tree definition never had a candidate to decline. ";
 inline const char* stdMemberCallsLegend( bool on ) noexcept { return on ? kStdMemberCallsLegend : ""; }
 // --test-gate's own short form: the same attribute and unit, sized for a verb whose legend has an absolute byte budget
 // (test/testgatelegendbudgetcheck.sh), so it defines the one form it emits rather than all three.
@@ -706,6 +709,17 @@ inline constexpr const char* kDeclinedSitesSideClause =
     "gate=side: a Ruby call whose in-reach definitions answer on the other side of self. ";
 inline constexpr const char* kDeclinedSitesNameGateClause =
     "gate=builtin|std: declined by the builtin-method or the standard-member name gate (per-language name lists, C++ and Rust). ";
+// lane L6 (ifacedispatch.h): the interface-typed dispatch rows, and a generic receiver's bound
+inline constexpr const char* kDeclinedSitesIfaceClause =
+    "gate=\"iface\": the receiver's recorded type is an interface, trait or abstract class, and cands=K counts the methods of the called name its implementors in this tree own (and its own default): K implementors of the receiver's interface; which one runs is unproven. K is a floor where a type conforms with no implements clause (a TypeScript object literal or matching class is not counted). Never a by-name list. ";
+inline constexpr const char* kDeclinedSitesBoundClause =
+    "bound=\"G: T\": the receiver is a generic G bounded by trait T; its candidates are T's implementors', never resolved by name. ";
+inline constexpr const char* kDeclinedSitesIfaceClauseMcp =
+    "gate iface: the receiver's recorded type is an interface, trait or abstract class, and cands counts the methods of the called name its implementors in this tree own (and its own default): K implementors of the receiver's interface; which one runs is unproven; K is a floor where a type conforms with no implements clause (TypeScript). bound (G: T): a generic receiver bounded by trait T. ";
+// lane L6: an edge via="impl" — the one implementor in the tree (a row of the callers / callees answers, a map <c>)
+inline constexpr const char* kViaImplLegend =
+    "via=\"impl\" on a row: the receiver's recorded type is an interface, trait or abstract class whose only implementor in this tree owns the called method, so the edge is to it; an implementor outside the tree, or one a macro writes, may exist. ";
+inline const char* viaImplLegend( bool on ) noexcept { return on ? kViaImplLegend : ""; }
 inline constexpr const char* kDeclinedSitesOfDefCallees =
     "of_def=K on a <dc>: the definition (ix=K) making the call, a fact. ";
 inline constexpr const char* kDeclinedSitesOfDefCallers =
@@ -714,10 +728,8 @@ inline constexpr const char* kDeclinedSitesCutClause =
     "dc_shown=N: the <dc> rows printed (the callers form cuts file-first: each file's first site before any file's second); dc_next= is the call that lists every site. ";
 inline constexpr const char* kDeclinedSitesCandClause =
     "cand= (legend full only): the candidate definitions as file:line, cand_more= how many more. ";
-// The impact answer prints no <dc> row (gates review Q4): where its declined_calls= rides, it names where the sites are listed.
-inline constexpr const char* kDeclinedSitesImpactPointer =
-    "The callers verb on SYM lists its declined first-hop calls as <dc> rows. ";
-inline const char* declinedSitesImpactPointer( bool on ) noexcept { return on ? kDeclinedSitesImpactPointer : ""; }
+// The impact answer printed no <dc> row (gates review Q4) and pointed at the callers verb instead; since lane ix2-slice (IX-4) it
+// prints the rows (declinedsites.h impactDeclinedRows: one per counted call), so the pointer sentence is gone.
 // What one answer's <dc> rows carry, read off the rows it prints (never re-derived).
 struct DeclinedSitesLegendFlags
 {
@@ -728,6 +740,8 @@ struct DeclinedSitesLegendFlags
     bool ofDef = false; // a row carries of_def=
     bool cut = false; // the root carries dc_shown= / dc_next=
     bool cand = false; // a row carries cand= (legend full)
+    bool iface = false; // a row says gate="iface" (lane L6)
+    bool bound = false; // a row carries bound= (lane L6)
 };
 // train 28 (declined-sites review N3): the MCP twins carry the same sites as "declined_sites" entries with their own keys, so
 // their declined_note names those keys ({name, line, cands, via} / {in, file, line, cands}) instead of the XML attributes.
@@ -755,6 +769,8 @@ inline std::string declinedSitesLegend( const DeclinedSitesLegendFlags& f, bool 
     out += f.callersForm ? ( mcp ? kDeclinedSitesCallersFormMcp : kDeclinedSitesCallersForm ) : ( mcp ? kDeclinedSitesCalleesFormMcp : kDeclinedSitesCalleesForm );
     out += f.side ? kDeclinedSitesSideClause : "";
     out += f.nameGate ? kDeclinedSitesNameGateClause : "";
+    out += f.iface ? ( mcp ? kDeclinedSitesIfaceClauseMcp : kDeclinedSitesIfaceClause ) : "";
+    out += f.bound && !mcp ? kDeclinedSitesBoundClause : "";
     out += f.ofDef ? ( f.callersForm ? ( mcp ? kDeclinedSitesOfDefCallersMcp : kDeclinedSitesOfDefCallers )
                                      : ( mcp ? kDeclinedSitesOfDefCalleesMcp : kDeclinedSitesOfDefCallees ) )
                    : "";
@@ -820,6 +836,15 @@ inline std::string declinedCallsKeyJson( std::size_t declinedCalls )
 {
     return declinedCalls > 0 ? ",\"declined_calls\":" + std::to_string( declinedCalls ) : std::string();
 }
+
+inline std::string declinedLiteralCallsAttrXml( std::size_t declinedLiteralCalls )
+{
+    return countAttrXmlOrEmpty( "declined_literal_calls", declinedLiteralCalls );
+}
+
+inline constexpr const char* kDeclinedLiteralCallsLegend =
+    "declined_literal_calls=K (absent when 0) counts built-in member call sites on JavaScript/TypeScript literals (such as \"string\".replace or [].map) dropped because an in-repo definition shares the member name. ";
+inline const char* declinedLiteralCallsLegend( bool on ) noexcept { return on ? kDeclinedLiteralCallsLegend : ""; }
 
 // ── declined_iface= on the callers and impact answers and their MCP twins (callhierarchy.h declinedIfaceCallsNaming) ──
 // Declined TypeScript calls that share their name with an interface or abstract signature. The resolver does not narrow
@@ -1119,6 +1144,13 @@ inline constexpr const char* kPathUnboundLegend =
     "An endpoint with several definitions that nothing bound prints no from_p or to_p: unreached, or (to) reached only through a "
     "split or by-name hop. ";
 inline const char* pathUnboundLegend( bool on ) noexcept { return on ? kPathUnboundLegend : ""; }
+// QUALNAME-1 (memberowner.h MemberOwners; train 30's PATH-OWNERS widened): rides only when a row carries an owner, so an owner-free
+// answer is unchanged. One clause for every row kind that prints one (--path hops, --callers/--callees/--impact rows).
+inline constexpr const char* kMemberOwnerLegend =
+    "n=Owner.name on a row: Owner is its stored scope, shown when the index defines that name as a type or module in that language "
+    "(Owner::name C/C++/Rust, Owner#name Ruby, a singleton too; a C++ namespace sharing a name with a class prints alike); "
+    "bare: a free function, a type, a closure, or no such owner. ";
+inline const char* memberOwnerLegend( bool on ) noexcept { return on ? kMemberOwnerLegend : ""; }
 
 // ── issue #60: the module-scope owner's clause, emitted exactly when a t="modscope" ROW is in the answer ──
 // A file-scope call (a top-level statement, or a call inside an anonymous callback body) used to have no
@@ -1162,6 +1194,29 @@ inline constexpr const char* kViaNameLegend =
 inline constexpr const char* kViaNameImpactClause =
     "An impact row reached only through such an edge carries it too; one that some all-proven path reaches stays plain. ";
 inline constexpr const char* kViaNameColumnarClause = "format=columnar carries it as the <via> column (1 = via=\"name\"). ";
+inline constexpr const char* kViaLinkLegend =
+    "via=\"link\" on a row: the edge is a markdown link, not a call. ";
+inline constexpr const char* kViaLinkColumnarClause = "format=columnar carries it as the <via> column (2 = via=\"link\"). ";
+inline constexpr const char* kAnchorMissLegend =
+    "anchor=\"missing\" on a row: the markdown link named a heading this file does not have, so the edge is the file. ";
+inline std::string viaLinkLegend( bool present )
+{
+    std::string sentence;
+    if( present )
+    {
+        sentence.assign( kViaLinkLegend );
+    }
+    return sentence;
+}
+inline std::string anchorMissLegend( bool present )
+{
+    std::string sentence( kAnchorMissLegend );
+    if( !present )
+    {
+        sentence.clear();
+    }
+    return sentence;
+}
 inline std::string viaNameLegend( bool present, bool impact = false, bool columnar = false )
 {
     if( !present )
@@ -1211,20 +1266,31 @@ inline std::string viaNameLegendComment()
 {
     return std::string( "<!-- " ) + kViaNameLegend + "-->";
 }
+inline std::string viaLinkLegendComment()
+{
+    return std::string( "<!-- " ) + kViaLinkLegend + "-->";
+}
 // …and the MAP's spelling, as its own comment: the same three facts as kViaNameLegend in the fewest bytes (a map prints the
 // most hedged rows of any answer, and its --max-tokens fit pays for every legend byte in rows), plus x=, the count a merged
 // row carries (serialize.h writeMapCalleeRows), and where each merged candidate is listed. No `--` inside an XML comment:
 // the flag is named callees=.
 inline constexpr std::string_view kMapViaNameLegend =
     "<!-- via=\"name\": by name alone; all in reach shown, x=N merged (callees=FILE:SYM lists all); does NOT mean it is false -->";
-// …and MCP's spelling: the same sentence as the `via_note` key of an answer one of whose entries carries "via":"name".
-inline std::string viaNameNoteJson()
+inline constexpr std::string_view kMapViaLinkLegend =
+    "<!-- via=\"link\": a markdown link, not a call -->";
+inline constexpr std::string_view kMapAnchorMissLegend =
+    "<!-- anchor=\"missing\": the markdown link named a heading this file does not have, so the edge is the file -->";
+inline std::string anchorMissLegendComment()
 {
-    std::string text = kViaNameLegend;
-    for( std::size_t at = text.find( "via=\"name\"" ); at != std::string::npos; at = text.find( "via=\"name\"", at ) )
+    return std::string( "<!-- " ) + kAnchorMissLegend + "-->";
+}
+// …and MCP's spelling: the same sentence as the `via_note` key of an answer one of whose entries carries "via":"name".
+inline std::string viaFactNoteJson( std::string text, std::string_view from, std::string_view jsonSpelling, std::string_view key )
+{
+    for( std::size_t at = text.find( from ); at != std::string::npos; at = text.find( from, at ) )
     {
-        text.replace( at, 10, "\\\"via\\\":\\\"name\\\"" ); // via="name" -> \"via\":\"name\" inside the JSON string
-        at += 16;
+        text.replace( at, from.size(), jsonSpelling );
+        at += jsonSpelling.size();
     }
     if( const std::size_t at = text.find( "on a row" ); at != std::string::npos )
     {
@@ -1234,7 +1300,19 @@ inline std::string viaNameNoteJson()
     {
         text.pop_back();
     }
-    return ",\"via_note\":\"" + text + "\"";
+    return ",\"" + std::string( key ) + "\":\"" + text + "\"";
+}
+inline std::string viaNameNoteJson()
+{
+    return viaFactNoteJson( kViaNameLegend, "via=\"name\"", "\\\"via\\\":\\\"name\\\"", "via_note" );
+}
+inline std::string viaLinkNoteJson()
+{
+    return viaFactNoteJson( kViaLinkLegend, "via=\"link\"", "\\\"via\\\":\\\"link\\\"", "via_link_note" );
+}
+inline std::string anchorMissNoteJson()
+{
+    return viaFactNoteJson( kAnchorMissLegend, "anchor=\"missing\"", "\\\"anchor\\\":\\\"missing\\\"", "anchor_missing_note" );
 }
 
 // The same fact in --for's two dialects, which are prose strips joined by ';' and ':' rather than XML comment

@@ -269,11 +269,23 @@ def tsv(name, rows):
 
 # ── (A) an enum built from a byte reader outside ByteR::enumU8 ───────────────────────────────────────────────────
 enums = sorted({t.strip() for f, ln, fn, t in match('(enum_specifier name: (type_identifier) @n)')})
-enumRx = "^(rw::)?(%s)$" % "|".join(re.escape(e) for e in enums) if enums else "^$"
+# The enum names go into #match? alternations of at most ENUM_RX_BYTES each: the engine REFUSES a pattern past
+# kRegexMaxPatternBytes (2048, src/regexguard.h — a recursion stack bound), and one alternation over every enum in src/
+# reached 2050 B at train 31 (183 enums). The names are distinct and every pattern is anchored, so a site matches exactly
+# one part; the rows are counted per (file, function, enum) below, so the split changes no verdict (arm (A-split) proves
+# it on the probe). RIPWIRE_HAZARD_ENUM_RX_BYTES (tests only) forces a smaller part.
+ENUM_RX_BYTES = int(os.environ.get("RIPWIRE_HAZARD_ENUM_RX_BYTES") or 1024)
+enumRxs, part = [], []
+for e in enums:
+    if part and len("^(rw::)?(%s)$" % "|".join(re.escape(x) for x in part + [e])) > ENUM_RX_BYTES:
+        enumRxs.append("^(rw::)?(%s)$" % "|".join(re.escape(x) for x in part)); part = []
+    part.append(e)
+enumRxs.append("^(rw::)?(%s)$" % "|".join(re.escape(x) for x in part) if part else "^$")
 casts = []
-casts += [(f, ln, fn, t, a) for f, ln, fn, t, a in tuples(match('(call_expression function: [(identifier) (qualified_identifier)] @t arguments: (argument_list . (_) @a .) (#match? @t "%s"))' % enumRx), 2)]
-casts += [(f, ln, fn, t, a) for f, ln, fn, _c, t, a in tuples(match('(call_expression function: (template_function name: (identifier) @_c arguments: (template_argument_list . (type_descriptor) @t .)) arguments: (argument_list . (_) @a .) (#eq? @_c "static_cast") (#match? @t "%s"))' % enumRx), 3)]
-casts += [(f, ln, fn, t, a) for f, ln, fn, t, a in tuples(match('(cast_expression type: (type_descriptor) @t value: (_) @a (#match? @t "%s"))' % enumRx), 2)]
+for enumRx in enumRxs:
+    casts += [(f, ln, fn, t, a) for f, ln, fn, t, a in tuples(match('(call_expression function: [(identifier) (qualified_identifier)] @t arguments: (argument_list . (_) @a .) (#match? @t "%s"))' % enumRx), 2)]
+    casts += [(f, ln, fn, t, a) for f, ln, fn, _c, t, a in tuples(match('(call_expression function: (template_function name: (identifier) @_c arguments: (template_argument_list . (type_descriptor) @t .)) arguments: (argument_list . (_) @a .) (#eq? @_c "static_cast") (#match? @t "%s"))' % enumRx), 3)]
+    casts += [(f, ln, fn, t, a) for f, ln, fn, t, a in tuples(match('(cast_expression type: (type_descriptor) @t value: (_) @a (#match? @t "%s"))' % enumRx), 2)]
 armA = Counter()
 for f, ln, fn, t, a in casts:
     w, how = argument_width(f, fn, ln, a)
@@ -476,8 +488,8 @@ for f, ln, fn, t in match('(new_expression) @n'):
     armE[(f, fn, "new")] += 1
 tsv("e.tsv", [(f, fn, k, n) for (f, fn, k), n in sorted(armE.items())])
 
-print("SCANOK queries=%d enums=%d enum_casts=%d narrow_casts=%d catches=%d recorded=%d throws=%d fs_calls=%d owned_acq=%d" %
-      (queriesRun, len(enums), len(casts), len(ncasts), len(catchRows), recorded, len(throwRows), fsCalls, owned))
+print("SCANOK queries=%d enums=%d enum_casts=%d narrow_casts=%d catches=%d recorded=%d throws=%d fs_calls=%d owned_acq=%d enum_rx_parts=%d" %
+      (queriesRun, len(enums), len(casts), len(ncasts), len(catchRows), recorded, len(throwRows), fsCalls, owned, len(enumRxs)))
 SCANPY
 
 # ── registries: file, function, key, count, reason ─────────────────────────────────────────────────────────────
@@ -495,7 +507,7 @@ REGB1
 cat > "$TMP/reg_b2.tsv" <<'REGB2'
 alloccount.cpp	operator new	2	the one throw seam CONTRIBUTING §3 permits: operator new under RIPWIRE_ALLOC_COUNT, an A/B instrument no shipped build links
 infra/dynamic_map.hpp	at	1	vendored container API; no ripwire call site reaches it (rule C lists its one caller, the container's own non-const at)
-regexguard.h	throwIfMatchFaultInjected	1	the RIPWIRE_FAULT_REGEX_MATCH fault switch, off unless the variable is set; its three call sites are the first statement inside GuardedRegex's search, search and forEachMatch try blocks, which catch std::regex_error by type and return Exhausted
+regexguard.h	throwIfMatchFaultInjected	1	the RIPWIRE_FAULT_REGEX_MATCH fault switch, off unless the variable is set; its three call sites are the first statement inside GuardedRegex's search, search and forEachMatch try blocks, which catch std::regex_error by type and return Exhausted (a stopped --regex scan has one cause — the former MIXED sibling rode with the per-file match budget the PR #397 review removed)
 REGB2
 cat > "$TMP/reg_c.tsv" <<'REGC'
 crossref.h	listTreeRows	.at	2	readTreeLevels returns its table only when every level was served whole by catFileBatch and every child tree id was queued unless already read, so the root tree and each subtree id it walks are keys
@@ -596,6 +608,7 @@ cat > "$PROBE/probe_hazard.h" <<'PROBEH'
 #include <string>
 #include <system_error>
 #include <vector>
+enum class AProbeSplit : std::uint8_t { Only };   // no cast: sorts before ProbeKind, so (A-split) puts ProbeKind in part 2
 enum class ProbeKind : std::uint8_t { First, Second };
 inline constexpr std::size_t kProbeKindCount = 2;
 struct ProbeReader
@@ -660,7 +673,7 @@ namespace os { int socket( int domain, int type, int protocol ); }   // stands i
 inline int probeOsAcquire() { return os::socket( 0, 0, 0 ); }   // os::-spelled site, unregistered: E must still catch it
 PROBEH
 if ! python3 "$TMP/scan.py" "$BIN" "$PROBE" "$TMP/probe_out" >"$TMP/probe_scan.txt" 2>&1; then
-    no "static rules: the probe scan did not complete: $( tail -1 "$TMP/probe_scan.txt" )"
+    no "static rules: the probe scan did not complete: $( grep -v '^$' "$TMP/probe_scan.txt" | tail -1 | cut -c1-600 )"
 else
     judge_static "$TMP/probe_out" probe >"$TMP/probe_verdict.txt"
     expect_probe(){   # $1 rule, $2 regex that must match exactly $3 verdict lines of that rule, $4 label
@@ -693,10 +706,22 @@ else
     [ "$( grep -c . "$TMP/probe_verdict.txt" )" -eq 14 ] \
         && ok "probe: exactly the 14 planted violations fire, nothing else" \
         || { no "probe: expected exactly 14 verdict lines, got $( grep -c . "$TMP/probe_verdict.txt" )"; sed 's/^/          /' "$TMP/probe_verdict.txt"; }
+    # (A-split) rule A's enum alternation split one enum per part changes no verdict, and a later part's rows are kept
+    if RIPWIRE_HAZARD_ENUM_RX_BYTES=1 python3 "$TMP/scan.py" "$BIN" "$PROBE" "$TMP/probe_split" >"$TMP/probe_split.txt" 2>&1; then
+        judge_static "$TMP/probe_split" probe >"$TMP/probe_split_verdict.txt"
+        parts="$( sed -nE 's/^SCANOK .*enum_rx_parts=([0-9]+).*/\1/p' "$TMP/probe_split.txt" )"
+        if [ "${parts:-0}" -ge 2 ] && cmp -s "$TMP/probe_verdict.txt" "$TMP/probe_split_verdict.txt"; then
+            ok "(A-split) the enum alternation split into ${parts} parts gives the same $( grep -c . "$TMP/probe_verdict.txt" )-line probe verdict"
+        else
+            no "(A-split) split scan: parts=${parts:-none}, verdict differs from the whole scan:"; diff "$TMP/probe_verdict.txt" "$TMP/probe_split_verdict.txt" | sed 's/^/          /'
+        fi
+    else
+        no "(A-split) the split probe scan did not complete: $( grep -v '^$' "$TMP/probe_split.txt" | tail -1 | cut -c1-600 )"
+    fi
 fi
 
 if ! python3 "$TMP/scan.py" "$BIN" "$SRC" "$TMP/src_out" >"$TMP/src_scan.txt" 2>&1; then
-    no "static rules: the src/ scan did not complete: $( tail -1 "$TMP/src_scan.txt" )"
+    no "static rules: the src/ scan did not complete: $( grep -v '^$' "$TMP/src_scan.txt" | tail -1 | cut -c1-600 )"
 else
     SUMMARY="$( grep '^SCANOK' "$TMP/src_scan.txt" )"
     read -r enums casts ncasts catches throws fscalls <<<"$( sed -E 's/.*enums=([0-9]+) enum_casts=([0-9]+) narrow_casts=([0-9]+) catches=([0-9]+) .*throws=([0-9]+) .*fs_calls=([0-9]+).*/\1 \2 \3 \4 \5 \6/' <<<"$SUMMARY" )"

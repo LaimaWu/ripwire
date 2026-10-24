@@ -1454,36 +1454,54 @@ inline bool rustAttrIsTestMarker( std::string_view attr ) noexcept
 // `attribute_item` nodes in front of the item they decorate, not children of it (verified by --match
 // probes on real parses, not assumed) — so the scan walks backwards and stops at the first sibling
 // that is neither an attribute nor a comment, which is where this item's own attribute run began.
+// The run is walked once by rustItemAttrRunAny; `marks( attribute_item )` says whether one attribute of it is the one asked for.
+template< class Marks >
+inline bool rustItemAttrRunAny( TSNode item, const Marks& marks )
+{
+    // the run is attributes and comments (a doc comment may sit between an attribute and its item); any other sibling ends it
+    const auto inRun = []( const char* k ) { return kindIs( k, "attribute_item" ) || kindIs( k, "line_comment" ) || kindIs( k, "block_comment" ); };
+    TSNode prev = ts_node_prev_sibling( item );
+    while( !ts_node_is_null( prev ) && inRun( ts_node_type( prev ) ) )
+    {
+        const bool attr = kindIs( ts_node_type( prev ), "attribute_item" );
+        if( attr && marks( prev ) )
+        {
+            return true;
+        }
+        prev = ts_node_prev_sibling( prev );
+    }
+    return false;
+}
 inline bool rustItemCarriesTestAttr( TSNode item, std::string_view src ) noexcept
 {
-    for( TSNode prev = ts_node_prev_sibling( item ); !ts_node_is_null( prev ); prev = ts_node_prev_sibling( prev ) )
+    return rustItemAttrRunAny( item, [ & ]( TSNode attr )
     {
-        const char* t = ts_node_type( prev );
-        if( kindIs( t, "attribute_item" ) )
+        // O(children): `#[ /*…*/ test ]` puts the comments in the attribute_item — 56x at 16 000
+        // (test/childwalkscalecheck.sh, arm B23). The sibling climb this sits in is a different scan:
+        // ts_node_prev_sibling restarts from the parent's first child too (the parent-chain family).
+        // One level down (maxDepth 1): the attribute_item's own children, stopping at the first test marker (train 33: the
+        // shared tschildren.h walk, not a second hand-written cursor loop — quality-delta paired it with vrStaticMember).
+        return anyChildBelow( attr, 1, /*namedOnly=*/false, [ & ]( TSNode ch )
+                              { return kindIs( ts_node_type( ch ), "attribute" ) && rustAttrIsTestMarker( nodeTextOf( ch, src ) ); } );
+    } );
+}
+// lane L6 fix round 1 (B1 iii): a mock attribute in the run — mockall's `#[automock]` in any spelling (`#[mockall::automock]`,
+// `#[cfg_attr(any(test, feature = "mock"), automock)]`), or any attribute naming a mock (case-insensitive) — writes an
+// implementor of the trait (`MockT`) no source holds.
+inline bool rustItemCarriesMockAttr( TSNode item, std::string_view src )
+{
+    return rustItemAttrRunAny( item, [ & ]( TSNode attr )
+    {
+        const std::string_view text = nodeTextOf( attr, src );
+        for( std::size_t at = 0; at + 4 <= text.size(); ++at )
         {
-            // O(children): `#[ /*…*/ test ]` puts the comments in the attribute_item — 56x at 16 000
-            // (test/childwalkscalecheck.sh, arm B23). The sibling climb this sits in is a different scan:
-            // ts_node_prev_sibling restarts from the parent's first child too (the parent-chain family).
-            bool        marked = false;
-            ChildCursor cursor( prev );
-            forEachChild( prev, cursor.cur, [ & ]( TSNode ch )
-            {
-                marked = kindIs( ts_node_type( ch ), "attribute" ) && rustAttrIsTestMarker( nodeTextOf( ch, src ) );
-                return !marked;
-            } );
-            if( marked )
+            if( ( text[ at ] | 0x20 ) == 'm' && ( text[ at + 1 ] | 0x20 ) == 'o' && ( text[ at + 2 ] | 0x20 ) == 'c' && ( text[ at + 3 ] | 0x20 ) == 'k' )
             {
                 return true;
             }
-            continue;
         }
-        if( kindIs( t, "line_comment" ) || kindIs( t, "block_comment" ) )
-        {
-            continue;   // a doc comment may sit between an attribute and its item
-        }
-        break;
-    }
-    return false;
+        return false;
+    } );
 }
 
 // Python `class Test<Something>` — the unittest/pytest convention. The character after `Test` MUST be

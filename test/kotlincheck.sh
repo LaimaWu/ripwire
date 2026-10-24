@@ -203,7 +203,7 @@ echo "$( grep -o '<s t="fn" n="doubled"[^>]*>' "$MAP_OUT" )" | grep -q 'sc=' \
     || ok "scope: top-level extension function doubled() is correctly scope-less"
 
 CR="$( "$BIN" "$FIX" --callers=square --no-cache 2>/dev/null )"
-echo "$CR" | grep -q 'n="greet"' && ok "--callers=square lists greet (Greeter.kt -> Util.kt, cross-file)" \
+echo "$CR" | grep -q 'n="Greeter.greet"' && ok "--callers=square lists greet (Greeter.kt -> Util.kt, cross-file)" \
     || no "--callers=square did not list greet: $CR"
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -886,7 +886,7 @@ for L in split flat; do
     got="$( calleeFiles "$BL/$L" JSvc.java:call pong )"
     [ "$got" = "${J}JSvc.java" ] && ok "$L: Java's s.pong() keeps its own interface declaration — Kotlin's KPong.pong body does not evict it" \
         || no "$L: Java's s.pong() binds [${got:-nothing}], expected ${J}JSvc.java — the collapse crossed the Kotlin/Java line"
-    got="$( calleeFiles "$BL/$L" KPinger.kt:usePinger ping )"
+    got="$( calleeFiles "$BL/$L" KPinger.kt:usePinger KPinger.ping )"
     [ "$got" = "${K}KPinger.kt" ] && ok "$L: a bodyless Kotlin FUNCTION is still a declaration — p.ping() binds KPinger's override, not Pinger's member" \
         || no "$L: p.ping() binds [${got:-nothing}], expected ${K}KPinger.kt — the interface member stopped collapsing into its Kotlin body"
 done

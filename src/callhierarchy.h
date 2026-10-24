@@ -20,11 +20,17 @@
 // surface-specific by contract (the CLI has a legend, the MCP arm speaks JSON-RPC errors), and folding them
 // in would trade one drift for another.
 
+#include "closures.h"        // ClosureIndex — the callees form's <in> blocks: functions written inside of='s body
 #include "declinedsites.h"   // the <dc> rows: the declined call sites, ordered here once for every surface
+#include "editcheck.h" // rowCallSites / callSitesAttrXml — the C2 byte band estimates the rows it serves
+#include "pageview.h"  // kCallersBandMaxBytes / kCallerRowMinBytes / kCallHierarchyBandMax
 #include "defattrib.h" // the per-row definition attribution every surface of these rows serves (and tsContractSignatures)
 #include "filter.h"    // pathTierIndexOver / compareTierThenPath — the tier-then-path row order both surfaces serve
 #include "graph.h"     // resolveAllByNameQualified, the CSR, testSymbolForwardReach / countTestedIn / isTestedByReach
+#include "memberowner.h"   // QUALNAME-1: MemberOwners / qualifiedMemberName — n="Owner.name" on every member row
 #include "model.h"
+#include "nextverb.h"  // nextFlag / nextAttrXml / nextFieldJson — a cut <in> block's next=
+#include "sarif.h"     // rootRelativeUri — the <in> blocks' p=, as every other row
 #include "infra/sortutil.h"   // svLess: the explicit byte order every string_view sort here takes (portablebuildcheck #6)
 #include "valuerefs.h" // the reference-as-value rows both surfaces serve beside the call rows
 
@@ -97,6 +103,135 @@ struct CallHierarchyRows
     // file and line) — the <dc> rows, never in `rows` or any count above; uncut, declinedSites.size() == declinedCalls.
     std::vector<std::uint32_t> declinedSites;
 };
+
+// ── CLOSURE BLOCKS (lane ix2-slice, IX-2 P2): what the functions written INSIDE of='s body call ───────────────────────────
+// `--callees=getTemplate` listed what getTemplate's own body calls, but nunjucks' `const createTemplate = ( err, info ) => {
+// … new Template( … ) … }` is a definition of its own, so Template was in no row. The callees form now carries one <in> block
+// per closure (src/closures.h: a named function whose innermost enclosing definition is a function of=, at any depth) listing
+// that closure's own callees. A block is CONTAINMENT, not a call: its rows are in no count=, and of= reaches them only by
+// running the closure or handing it on (via="closure" on every block says so). kClosureBlocks blocks, kClosureRows rows each.
+inline constexpr std::size_t kClosureBlocks = 4;   // <in> blocks per answer; closures= counts them all, closures_capped="1" says so
+inline constexpr std::size_t kClosureRows   = 8;   // rows per block; count= is the closure's distinct callees, capped="1" past it
+
+// One closure's callees: its resolved out-edges, deduped, in the callees form's tier-then-path order (then line, name).
+inline std::vector<NodeId> closureCalleeRows( const IngestResult& ing, const Graph& g, NodeId inner )
+{
+    std::vector<NodeId> rows;
+    for( std::uint32_t k = g.outOff[inner]; k < g.outOff[inner + 1]; ++k )
+    {
+        if( const NodeId c = g.outTargets[k]; c < ing.symbols.size() && c != inner )
+        {
+            rows.push_back( c );
+        }
+    }
+    std::ranges::sort( rows );
+    rows.erase( std::ranges::unique( rows ).begin(), rows.end() );
+    const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( ing, rows, [ & ]( NodeId r ) { return ing.symbols[r].fileId; } );
+    std::sort( rows.begin(), rows.end(), [ & ]( NodeId a, NodeId b )
+    {
+        const Symbol& sa = ing.symbols[a];
+        const Symbol& sb = ing.symbols[b];
+        if( const int c = compareTierThenPath( ing, tierOfFile, sa.fileId, sb.fileId ); c != 0 )
+        {
+            return c < 0;
+        }
+        return sa.line != sb.line ? sa.line < sb.line : sa.name < sb.name;
+    } );
+    return rows;
+}
+
+// Does a SHOWN closure block row carry via="name" (the answer then needs that reading)? Exactly the rows closureBlocks prints.
+inline bool closureBlocksAnyVia( const IngestResult& ing, const Graph& g, std::span<const NodeId> closures )
+{
+    for( std::size_t b = 0; b < std::min( closures.size(), kClosureBlocks ); ++b )
+    {
+        const std::vector<NodeId> rows = closureCalleeRows( ing, g, closures[b] );
+        for( std::size_t i = 0; i < std::min( rows.size(), kClosureRows ); ++i )
+        {
+            if( edgeNameOnly( g, closures[b], rows[i] ) )
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// The callees root's closures="K" [closures_capped="1"] (head) and the <in> blocks (rows), or their JSON spellings: the
+// ,"closures":K[,"closures_capped":1] keys and the ,"in":[…] array (keys = the XML attribute names, rows = {t,n,p[,via]}).
+// Both empty with no closure, so an answer without one keeps its bytes.
+struct ClosureBlocksOut
+{
+    std::string head;
+    std::string rows;
+};
+inline ClosureBlocksOut closureBlocks( const IngestResult& ing, const Graph& g, std::span<const NodeId> closures, bool singleRoot,
+                                       std::string_view rootPrefix, bool json )
+{
+    if( closures.empty() )
+    {
+        return {};
+    }
+    const bool        overCap = closures.size() > kClosureBlocks;
+    const std::string k       = std::to_string( closures.size() );
+    ClosureBlocksOut  res{ json ? ",\"closures\":" + k + ( overCap ? ",\"closures_capped\":1" : "" )
+                                : " closures=\"" + k + "\"" + ( overCap ? " closures_capped=\"1\"" : "" ), {} };
+    std::vector<char> esc;
+    const auto ex  = [ & ]( std::string_view v ) -> std::string { return std::string( escapeXml( v, esc ) ); };
+    const auto rel = [ & ]( const Symbol& s ) -> std::string
+    {
+        return std::string( singleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], rootPrefix ) : std::string_view( ing.files[ s.fileId ] ) )
+             + ":" + std::to_string( s.line );
+    };
+    const auto sel = [ & ]( const Symbol& s ) -> std::string   // file:name, the selector the block's next= replays
+    {
+        return std::string( singleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], rootPrefix ) : std::string_view( ing.files[ s.fileId ] ) ) + ":" + s.name;
+    };
+    std::string out = json ? ",\"in\":[" : "";
+    const std::size_t blocks = std::min( closures.size(), kClosureBlocks );
+    const std::optional<MemberOwners> owners = json ? std::nullopt : std::optional<MemberOwners>( std::in_place, ing );   // QUALNAME-1: XML rows only (JSON keys stay)
+    for( std::size_t b = 0; b < blocks; ++b )
+    {
+        const NodeId              inner = closures[b];
+        const Symbol&             is    = ing.symbols[inner];
+        const std::vector<NodeId> rows  = closureCalleeRows( ing, g, inner );
+        const std::size_t         shown = std::min( rows.size(), kClosureRows );
+        const bool                cut   = shown < rows.size();
+        const std::string         next  = cut ? nextFlag( "--callees=", sel( is ) ) : std::string();
+        if( json )
+        {
+            out += std::string( b == 0 ? "" : "," ) + "{\"n\":\"" + jsonStr( is.name ) + "\",\"p\":\"" + jsonStr( rel( is ) ) + "\",\"via\":\"closure\",\"count\":"
+                 + std::to_string( rows.size() ) + ( cut ? ",\"shown\":" + std::to_string( shown ) + ",\"capped\":1" : "" ) + nextFieldJson( next ) + ",\"calls\":[";
+        }
+        else
+        {
+            out += "<in n=\"" + ex( is.name ) + "\" p=\"" + ex( rel( is ) ) + "\" via=\"closure\" count=\"" + std::to_string( rows.size() ) + "\""
+                 + ( cut ? " shown=\"" + std::to_string( shown ) + "\" capped=\"1\"" : "" ) + nextAttrXml( next ) + ">";
+        }
+        for( std::size_t i = 0; i < shown; ++i )
+        {
+            const Symbol& s   = ing.symbols[ rows[i] ];
+            const bool    via = edgeNameOnly( g, inner, rows[i] );   // FE-B: a name-only edge says so, as on the callees rows
+            out += json ? std::string( i == 0 ? "" : "," ) + "{\"t\":\"" + symTag( s.kind ) + "\",\"n\":\"" + jsonStr( s.name ) + "\",\"p\":\"" + jsonStr( rel( s ) ) + "\""
+                              + ( via ? ",\"via\":\"name\"" : "" ) + "}"
+                        : "<s t=\"" + std::string( symTag( s.kind ) ) + "\" n=\"" + ex( qualifiedMemberName( *owners, s ) ) + "\" p=\"" + ex( rel( s ) ) + "\"" + viaNameAttr( via ) + "/>";
+        }
+        out += json ? "]}" : "</in>";
+    }
+    res.rows = json ? out + "]" : out;
+    return res;
+}
+
+// The callees legend's closure sentence, carried only by an answer with a block (absent otherwise: byte-identical).
+inline constexpr std::string_view kClosureBlocksLegend =
+    "closures=K: K named functions are written INSIDE of='s body (closures, at any depth); each <in n= p= via=\"closure\" count=> "
+    "block lists that closure's OWN callees (count= distinct, at most 8 shown, capped=1 = cut, its next= lists them all), at most 4 "
+    "blocks (closures_capped=1 = more). A block is containment, not a call edge: its rows are in no count= above, and of= reaches "
+    "them only by running the closure or handing it on. ";
+inline std::string_view closureBlocksLegend( bool on ) noexcept
+{
+    return on ? kClosureBlocksLegend : std::string_view();
+}
 
 // The callees answer's <stdm> line (graph.h StdMemberGate, stdMemberCallsMadeBy), one spelling per dialect — the JSON keys
 // mirror the XML attributes, n= the same comma-joined value — absent when the definitions made no such call, so every
@@ -257,6 +392,52 @@ inline CallHierarchyRows withOneHopAttribution( const IngestResult& ing, const G
     return rows;
 }
 
+// LB-G (r10 §5): the served order of a one-hop listing — TIER before path (filter.h states the key once and --uses shares
+// it; plain path order put 171 `tests/` rows ahead of anything useful on django's `--callers=bulk_create`), then line, then name.
+inline void sortOneHopRows( const IngestResult& ing, std::vector<NodeId>& rows )
+{
+    const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( ing, rows, [ & ]( NodeId r ) { return ing.symbols[r].fileId; } );
+    std::sort( rows.begin(), rows.end(), [ & ]( NodeId a, NodeId b )
+    {
+        const Symbol& sa = ing.symbols[a];
+        const Symbol& sb = ing.symbols[b];
+        if( const int c = compareTierThenPath( ing, tierOfFile, sa.fileId, sb.fileId ); c != 0 )
+        {
+            return c < 0;
+        }
+        return sa.line != sb.line ? sa.line < sb.line : sa.name < sb.name;
+    } );
+}
+
+// The 1-hop CALLER rows of `defs` — the callers verb's rows, and the --for caller hop's (forcallerhop.h): every distinct
+// in-edge source of any def, in sortOneHopRows' order, then RANKED BEFORE THE CAP.
+// cut-fix C (2026-09-23): within a tier the most-called caller comes first (graph.h navRelevanceWeight; the path order is the
+// tie-break), so every window over the callers rows — the CLI's default cap, find_referencing_symbols, and find_symbol's
+// calledBy array — keeps the rows most depended on and drops the lightest (filter.h rankBeforeCap states the rule and its
+// paging guarantee). CALLERS ONLY. Fix round 1 (2026-09-24, rv-cutfix-navlists B1, blocking): the first cut of that lane
+// applied the SAME rank to the callee direction too, unmeasured. It made callees WORSE: this repo's own co-blame instrument
+// fell 0.592 -> 0.466 at the default cap (n=18, W/L 1/11), and every multi-row --callees / find_symbol `calls` answer led
+// with the row's LEAST specific neighbours (empty, empty, empty, size, c_str) because a callee's rank there is ITS OWN caller
+// count, which measures how widely-called that callee is elsewhere, not how central it is to the body that calls it.
+inline std::vector<NodeId> oneHopCallerRows( const IngestResult& ing, const Graph& g, std::span<const NodeId> defs )
+{
+    std::vector<NodeId> rows;
+    std::vector<char>   seen( ing.symbols.size(), 0 );
+    const auto*         ro = g.inEdges.rowOffsets();
+    const auto*         ci = g.inEdges.colIndices();
+    for( const NodeId x : defs )
+    {
+        for( std::uint32_t k = ro[x]; k < ro[x + 1]; ++k )
+        {
+            if( NodeId c = ci[k]; c < seen.size() && !seen[c] ) { seen[c] = 1;  rows.push_back( c ); }
+        }
+    }
+    sortOneHopRows( ing, rows );
+    rankBeforeCap( ing, rows, [ & ]( NodeId r ) { return ing.symbols[r].fileId; },
+                   [ & ]( NodeId r ) { return navRelevanceWeight( g, r ); } );
+    return rows;
+}
+
 inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph& g, std::string_view selector, bool wantCallers,
                                             const ValueRefIndex* valueIndex = nullptr )   // the MCP server passes its cached one
 {
@@ -272,19 +453,14 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
     }
     out.crossKind = crossKindValue( ing, out.matches );
 
-    std::vector<char> seen( ing.symbols.size(), 0 );
-    for( const NodeId x : out.matches )
+    if( wantCallers )
     {
-        if( wantCallers )
-        {
-            const auto* ro = g.inEdges.rowOffsets();
-            const auto* ci = g.inEdges.colIndices();
-            for( std::uint32_t k = ro[x]; k < ro[x + 1]; ++k )
-            {
-                if( NodeId c = ci[k]; c < seen.size() && !seen[c] ) { seen[c] = 1;  out.rows.push_back( c ); }
-            }
-        }
-        else
+        out.rows = oneHopCallerRows( ing, g, out.matches );   // collected, tier/path ordered and ranked before the cap (below)
+    }
+    else
+    {
+        std::vector<char> seen( ing.symbols.size(), 0 );
+        for( const NodeId x : out.matches )
         {
             for( std::uint32_t k = g.outOff[x]; k < g.outOff[x + 1]; ++k )
             {
@@ -297,52 +473,66 @@ inline CallHierarchyRows callHierarchyRows( const IngestResult& ing, const Graph
                 ++out.bodylessDefs;
             }
         }
+        sortOneHopRows( ing, out.rows );   // callees keep the tier/path order: no rank (oneHopCallerRows says why)
     }
 
     std::tie( out.declinedCalls, out.declinedSites ) = declinedCallsAndSites( ing, g, out.matches, wantCallers );   // the count and its <dc> rows
     out.declinedIface = wantCallers ? declinedIfaceCallsNaming( ing, g, out.matches ) : 0;
     out.stdCalls      = wantCallers ? StdMemberCallsMade{} : stdMemberCallsMadeBy( g, out.matches );
 
-    // LB-G (r10 §5): TIER before path — filter.h states the key once and --uses shares it. Plain path order
-    // put 171 `tests/` rows ahead of anything useful on django's `--callers=bulk_create`.
-    const std::vector<std::uint8_t> tierOfFile = pathTierIndexOver( ing, out.rows, [ & ]( NodeId r ) { return ing.symbols[r].fileId; } );
-    std::sort( out.rows.begin(), out.rows.end(), [ & ]( NodeId a, NodeId b )
-    {
-        const Symbol& sa = ing.symbols[a];
-        const Symbol& sb = ing.symbols[b];
-        if( const int c = compareTierThenPath( ing, tierOfFile, sa.fileId, sb.fileId ); c != 0 )
-        {
-            return c < 0;
-        }
-        return sa.line != sb.line ? sa.line < sb.line : sa.name < sb.name;
-    } );
-    // cut-fix C (2026-09-23): RANK BEFORE THE CAP — CALLERS ONLY. Within a tier the most-called caller comes
-    // first (graph.h navRelevanceWeight; the path order above is the tie-break), so every window over the
-    // callers rows — the CLI's default cap, find_referencing_symbols, and find_symbol's calledBy array — keeps
-    // the rows most depended on and drops the lightest (filter.h rankBeforeCap states the rule and its paging
-    // guarantee).
-    //
-    // Fix round 1 (2026-09-24, rv-cutfix-navlists B1, blocking): the first cut of this lane applied the SAME
-    // rank to the callee direction too, unmeasured. It made callees WORSE: this repo's own co-blame instrument
-    // (the same one the table above reports) fell 0.592 -> 0.466 at the default cap (n=18, W/L 1/11), and every
-    // multi-row --callees / find_symbol `calls` answer led with the row's LEAST specific neighbours (empty,
-    // empty, empty, size, c_str) because a callee's rank there is ITS OWN caller count, which measures how
-    // widely-called that callee is elsewhere, not how central it is to the body that calls it. Guarded on
-    // wantCallers so callees (and find_symbol's `calls`) keep the tier/path order above, byte-identical to
-    // origin/main.
     // Reference-as-value round: the <vr> rows beside the call rows — the binding sites of `matches` (callers), or what
     // `matches` stores/passes and may call through (callees). Never merged into `rows`: they are not calls.
     {
         const std::optional<ValueRefIndex> local = valueIndex == nullptr ? std::optional<ValueRefIndex>( std::in_place, ing ) : std::nullopt;
         const ValueRefIndex&               vri   = valueIndex != nullptr ? *valueIndex : *local;
-        out.valueRefs = wantCallers ? valueRefCallerRows( ing, vri, out.matches ) : valueRefCalleeRows( ing, vri, out.matches );
-    }
-    if( wantCallers )
-    {
-        rankBeforeCap( ing, out.rows, [ & ]( NodeId r ) { return ing.symbols[r].fileId; },
-                       [ & ]( NodeId r ) { return navRelevanceWeight( g, r ); } );
+        out.valueRefs = withPatternRows( wantCallers ? valueRefCallerRows( ing, vri, out.matches ) : valueRefCalleeRows( ing, vri, out.matches ), PatternIndex( ing, vri ), out.matches, wantCallers );
     }
     return withOneHopAttribution( ing, g, std::move( out ), wantCallers );
+}
+
+// C2 callers byte band (pageview.h kCallersBandMaxBytes): the estimated bytes of EVERY row of a callers answer, so
+// callHierarchyRowCap can serve the whole list when it fits, plus the site pass that estimate needed (the emitter reuses it
+// instead of walking the reference table twice). The estimate is the XML row each caller prints — `<s t= n= p=file:line/>`
+// with its tested=, via=, prov=, of_def= and sites_at=/sites_total= — with n= and p= XML-escaped as the row prints them
+// (a `<file-scope>` caller is `&lt;file-scope&gt;`, 6 B more; rv-callers-band2 N1) but without a macro row's role=, so it
+// reads at or a little below the bytes printed. ONE number for every surface (CLI XML, columnar, --json, MCP), so the
+// dialects agree on whether an answer is cut. rowBytes = 0 means no estimate was made: an explicit --limit, a total the row
+// band already covers, or a total too large to fit the band at kCallerRowMinBytes a row. `attr` is the rows' own
+// attribution (its row index = the position in `rows`); `testReach` the tested lens's reach (HopTestedPartition::testReach);
+// `keptForwards` Graph::keptForwards, so the band's site pass counts the same kept forwards as rowCallSites' other readers
+// (model.h forwardCounts; train 31 merge of callers-band2 over fcall-forward).
+struct CallersByteBand
+{
+    std::size_t  rowBytes;
+    RowCallSites sites;   // over every row, in row order, exactly when rowBytes > 0
+};
+
+// The band is built in a local and returned as one aggregate. (Fix round 1 restructured this for the gcc-14.2 Release/LTO
+// rc=139; the SEGV round found the cause in pageview.h callHierarchyRowCap's unstated precondition, not here.)
+inline CallersByteBand callersByteBand( const IngestResult& ing, std::span<const NodeId> defs, std::span<const NodeId> rows, const VrRender& rr, int pageLimit,
+                                        const std::vector<char>& testReach, const OneHopAttribution& attr, std::span<const std::uint32_t> keptForwards )
+{
+    if( pageLimit > 0 || rows.size() <= std::size_t( kCallHierarchyBandMax ) || rows.size() > kCallersBandMaxBytes / kCallerRowMinBytes )
+    {
+        return CallersByteBand{};
+    }
+    RowCallSites       sites = rowCallSites( ing, defs, rows, rr, keptForwards );
+    std::vector<char>  esc;   // the escape buffer the row's n= and p= are measured through
+    const MemberOwners owners( ing );   // QUALNAME-1: the row's n= is its owner-qualified name (memberowner.h), so the estimate charges it
+    std::size_t       bytes = 0;
+    for( std::size_t i = 0; i < rows.size(); ++i )
+    {
+        const Symbol&     s       = ing.symbols[ rows[i] ];
+        const std::size_t nameLen = escapeXml( qualifiedMemberName( owners, s ), esc ).size();
+        const std::size_t pathLen = escapeXml( vrPath( ing, s.fileId, rr ), esc ).size();
+        bytes += std::string_view( "<s t=\"\" n=\"\" p=\":\"/>" ).size() + std::string_view( symTag( s.kind ) ).size() + nameLen + pathLen
+               + std::to_string( s.line ).size()
+               + ( isTestedByReach( ing, testReach, rows[i] ) ? std::string_view( " tested=\"1\"" ).size() : 0 )
+               + std::string_view( viaNameAttr( attr.nameOnly( i ) ) ).size() + std::string_view( splitArmAttrXml( attr.splitArm( i ) ) ).size()
+               + ofDefAttrXml( attr.groups, attr.tokens, i ).size() + callSitesAttrXml( sites.tokens[i], sites.totals[i] ).size();
+    }
+    ENSURES( sites.tokens.size() == rows.size(), "the site pass covers every row the estimate read" );   // rowCallSites' own ENSURES
+    return CallersByteBand{ std::max( bytes, std::size_t( 1 ) ), std::move( sites ) };
 }
 
 }   // namespace rw

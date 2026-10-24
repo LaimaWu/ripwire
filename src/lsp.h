@@ -561,14 +561,14 @@ inline LspDefinitionAnswer lspDefinition( const rw::IngestResult& ing, const std
 
 // references: the house use-site scan (collectUseSites — the --uses answer, name-matched FLOOR by
 // construction; the hover carries the disclosure because the result itself has no channel for it).
-inline std::string lspReferences( const rw::IngestResult& ing, const std::string& cwd, LspDocs& docs,
+inline std::string lspReferences( const rw::IngestResult& ing, const rw::Graph& g, const std::string& cwd, LspDocs& docs,
                                   const LspPos& pos, bool includeDeclaration )
 {
     const LspAtCursor at = lspAtCursor( ing, cwd, docs, pos );
     if( !at.found ) return "[]";
     const std::vector<rw::NodeId> defs = rw::resolveAllByName( ing, at.name );
     const UsesSelector            sel  = resolveUsesSelector( ing, at.name, defs );
-    const auto                    got  = collectUseSites( ing, sel, std::span<const char>{}, std::string_view{} );
+    const auto                    got  = collectUseSites( ing, sel, std::span<const char>{}, std::string_view{}, defs, nullptr, g.keptForwards );   // kept forwards count, as on --uses and the hover
 
     std::vector<char>                                        seenDef( ing.symbols.size(), 0 );
     std::vector<std::pair<std::uint32_t, std::uint32_t>>     seenSite;
@@ -881,7 +881,7 @@ inline std::string lspHover( const rw::IngestResult& ing, const rw::Graph& g, co
     // Used at (D7): the same name-matched floor the references provider answers with. Def lines are
     // omitted — they are the block above.
     const UsesSelector sel  = resolveUsesSelector( ing, at.name, defs );
-    const auto         uses = collectUseSites( ing, sel, std::span<const char>{}, std::string_view{} );
+    const auto         uses = collectUseSites( ing, sel, std::span<const char>{}, std::string_view{}, defs, nullptr, g.keptForwards );   // kept forwards count, as the callers line does
     std::vector<std::pair<std::uint32_t, std::uint32_t>> defLines, usedAt, refAt;
     for( const rw::NodeId id : defs )
         if( id < ing.symbols.size() ) defLines.emplace_back( ing.symbols[ id ].fileId, ing.symbols[ id ].line );
@@ -1052,7 +1052,7 @@ inline int runLsp( const std::string& cliRoot )
                     rw::mcpdetail::findObject( params, "context" ), "includeDeclaration" );
                 const rw::McpIndex& mix = rw::getIndex( root );
                 LspDocs         docs( mix.ing );
-                resp = lspResultJson( id.token, lspReferences( mix.ing, cwd, docs, pos, iv.isPresent && iv.text == "true" ) );
+                resp = lspResultJson( id.token, lspReferences( mix.ing, mix.g, cwd, docs, pos, iv.isPresent && iv.text == "true" ) );
             }
         }
         else if( method == "textDocument/documentSymbol" )

@@ -4923,8 +4923,8 @@ struct RecvVarType
 
 // The provenance value of one resolved edge (Graph::outProv; graph.h provLabel spells it) from the edge sets the resolve loop
 // filled. The precedence is deliberate: scip PINS an edge (precise); binding and import NAME the mechanism that resolved it;
-// split says the resolver could not choose; final-segment says it chose by a qualified written type's last name alone
-// (test/narrowcheck.sh arm 25). prov= is single-valued and a symbol's amb= counts a split arm either way, so nothing is
+// split says the resolver could not choose; impl (lane L6) that the one implementor in the tree of the receiver's interface
+// owns the callee; final-segment says it chose by a qualified written type's last name alone (test/narrowcheck.sh arm 25). prov= is single-valued and a symbol's amb= counts a split arm either way, so nothing is
 // lost by the ordering. 0 = a uniquely resolved name-based edge, which no emitter writes.
 struct EdgeProvenanceSets
 {
@@ -4932,6 +4932,7 @@ struct EdgeProvenanceSets
     const HashMap<std::uint64_t, char>& import;
     const HashMap<std::uint64_t, char>& split;
     const HashMap<std::uint64_t, char>& finalSegment;
+    const HashMap<std::uint64_t, char>& impl;           // lane L6: 1 = every site committing the edge was a one-implementor dispatch
 };
 inline std::uint8_t edgeProvenance( bool scipPrecise, const EdgeProvenanceSets& sets, std::uint64_t edgeKey ) noexcept
 {
@@ -4951,6 +4952,10 @@ inline std::uint8_t edgeProvenance( bool scipPrecise, const EdgeProvenanceSets& 
     if( holds( sets.split ) )
     {
         return 3u;
+    }
+    if( const auto it = sets.impl.find( edgeKey ); it != sets.impl.end() && it->second == 1 )
+    {
+        return 6u;   // lane L6: graph.h kProvImpl, via="impl" — only when no other kind of site committed the edge
     }
     return holds( sets.finalSegment ) ? 5u : 0u;
 }
@@ -5615,6 +5620,7 @@ struct IdentityNarrower
     mutable std::uint32_t                                 seenGeneration = 0;
     mutable HashMap<std::string, rw::SmallVec<NodeId, 2>> subclassMemo;    // step 3 per (receiver class, callee)
     mutable const Reference*                              claimRef       = nullptr;
+    mutable bool                                          subclassClaim  = false;   // lane L6: claimRef's claim is step (3), the dispatch split
     mutable bool                                          lookupLexical  = false;   // classWalk came from an enclosing class or a class qualifier
 
     IdentityNarrower( const HashMap<std::string, rw::SmallVec<NodeId, 2>>& canon, const std::vector<std::vector<NodeId>>& incl,
@@ -5626,16 +5632,25 @@ struct IdentityNarrower
         return claimRef == &r;
     }
 
+    // lane L6: is THIS reference's claim the dispatch split — step (3), the callee's definitions in the receiver class's real
+    // subclasses, the class declaring it with no body along its ancestry — which graph.h's dispatch tier decides
+    bool dispatchClaimFor( const Reference& r ) const noexcept
+    {
+        return claimRef == &r && subclassClaim;
+    }
+
     bool forgetClaim() const noexcept
     {
-        claimRef = nullptr;
+        claimRef      = nullptr;
+        subclassClaim = false;
         return false;
     }
 
     const rw::SmallVec<NodeId, 2>* narrow( const Reference& r, WrittenType type, const rw::SmallVec<NodeId, 2>* own, const ClassIdentity& ids,
                                            const ChaUpNames& chaUp ) const
     {
-        claimRef = nullptr;
+        claimRef      = nullptr;
+        subclassClaim = false;
         nameableClasses( type, r, ids, chaUp, /*verifiedNamespace=*/ false );
         if( own != nullptr )
         {
@@ -5683,10 +5698,15 @@ struct IdentityNarrower
         }
         bool declaredAlong = false;
         bool ambiguous     = false;
-        if( inheritedDefinitions( r, receiverClass, ids, declaredAlong, ambiguous )
-         || ( !ambiguous && declaredAlong && subclassDefinitions( r, receiverClass, ids ) ) )
+        if( inheritedDefinitions( r, receiverClass, ids, declaredAlong, ambiguous ) )
         {
             claimRef = &r;
+            return &hits;
+        }
+        if( !ambiguous && declaredAlong && subclassDefinitions( r, receiverClass, ids ) )
+        {
+            claimRef      = &r;
+            subclassClaim = true;
             return &hits;
         }
         return own;
@@ -6287,6 +6307,12 @@ struct Narrower
         return identity.forgetClaim();
     }
 
+    // lane L6: THIS reference's Rule 2 answer is class identity's dispatch split (IdentityNarrower::dispatchClaimFor)
+    bool identityDispatchClaimFor( const Reference& r ) const noexcept
+    {
+        return identity.dispatchClaimFor( r );
+    }
+
     // Rule 2b's member evidence, bundled so its signatures read as its conditions: `types` = "<Class>#<field>" → the declared type
     // (graph.h buildFieldNarrowTables, from the HAS-A compose captures), `declared` = every C/C++ member "<Owner>#<field>"
     // (memberFieldNames), typed or not, and `chaUp` = class name → its direct base names, the graph both walks read. No copy.
@@ -6338,6 +6364,21 @@ struct Narrower
             return nullptr; // free function (no enclosing class), or a field-capture-free corpus
         }
 
+        const FlatRecvType* field = fieldReceiverEntry( r, callerScope, fields, localNames );
+        if( field == nullptr )
+        {
+            return nullptr;
+        }
+
+        // (4) the declared type's own method set, then its bases — shared with Rule 2c below.
+        return methodOnTypeOrBases( field->type, r, fields.chaUp );
+    }
+
+    // Rule 2b's steps (2) and (3): the field entry a named receiver reads, nullptr when a local declaration shadows it, no
+    // entry or a tombstone answers, or `.` reaches a std smart pointer's own member
+    const FlatRecvType* fieldReceiverEntry( const Reference& r, const std::string& callerScope, const FieldRecvTables& fields,
+                                            const HashMap<std::string, char>& localNames ) const
+    {
         // (2) local-shadow veto: a DECLARATION of (fromSymbol, recvVar) makes the name a LOCAL; assigning it does not.
         keyBind.clear();
         appendUint( keyBind, r.fromSymbol );
@@ -6358,9 +6399,27 @@ struct Narrower
         {
             return nullptr; // a std smart pointer's pointee: `.` names the smart pointer's own member (arm p)
         }
+        return field;
+    }
 
-        // (4) the declared type's own method set, then its bases — shared with Rule 2c below.
-        return methodOnTypeOrBases( field->type, r, fields.chaUp );
+    // lane L6: a Rule 2b field receiver whose declared type defines no body of the callee along its bases but declares one —
+    // class identity's dispatch split over its real subclasses (IdentityNarrower step 3), which graph.h's dispatch tier
+    // decides; nullptr for anything else (Rule 2b's own answer, or nothing it can claim).
+    const rw::SmallVec<NodeId, 2>* rule2bDispatchSplit( const Reference& r, const std::string& callerScope, const FieldRecvTables& fields,
+                                                        const HashMap<std::string, char>& localNames, const ClassIdentity& ids, const ChaUpNames& chaUp ) const
+    {
+        if( r.recv != RecvKind::NamedVar || r.recvVar.empty() || !r.qualifier.empty() || r.fromSymbol == kNoNode || !extent::inSet( extent::kHeadRuleLangs, r.lang )
+            || callerScope.empty() || fields.types.empty() || ids.classesByName.empty() )
+        {
+            return nullptr;
+        }
+        const FlatRecvType* field = fieldReceiverEntry( r, callerScope, fields, localNames );
+        if( field == nullptr || methodOnTypeOrBases( field->type, r, fields.chaUp ) != nullptr )
+        {
+            return nullptr;
+        }
+        const rw::SmallVec<NodeId, 2>* const hits = identity.narrow( r, WrittenType{ field->type, {} }, nullptr, ids, chaUp );
+        return identity.dispatchClaimFor( r ) ? hits : nullptr;
     }
 
     // The type-side probe Rules 2b and 2c share: `type::callee` in the type's OWN method set first (ownMethodSet: its
@@ -6911,10 +6970,18 @@ struct Narrower
                 return RecvVarType{};   // no declaration in scope (a field or global of the name), a tie, or untyped/conflicted
             }
             const Binding& declared = ( *scopedDecls.bindings )[ innermost->typeBinding ];
+            if( declared.kind == LocalBindKind::ReturnType )   // a call result's class, resolved to the one in-tree class (graph.h)
+            {
+                return RecvVarType{ declared.typeName, false, &declared };
+            }
             return namesStdType( declared.importedName ) ? RecvVarType{} : RecvVarType{ declared.typeName, !declared.importedName.empty(), &declared };
         }
         const auto vit = varType.find( keyBind );
-        return ( vit == varType.end() ) ? RecvVarType{} : RecvVarType{ vit->second.type, vit->second.writtenQualified, nullptr };
+        if( vit == varType.end() || ( vit->second.arrowOnly && !r.viaArrow ) )
+        {
+            return RecvVarType{};   // a smart pointer's pointee (a call result's, train 29) answers `->` only, never `.`
+        }
+        return RecvVarType{ vit->second.type, vit->second.writtenQualified, nullptr };
     }
 
     // the qualifier the receiver's declaration wrote — the lexical record's own, else the flat table's kept one (read while
@@ -6923,7 +6990,8 @@ struct Narrower
     {
         if( bound.declared != nullptr )
         {
-            return { true, bound.declared->importedName };
+            // a call result's written qualifier (`ns::T`) was already resolved to its one class: no final-segment question left
+            return { true, bound.declared->kind == LocalBindKind::ReturnType ? std::string_view{} : std::string_view( bound.declared->importedName ) };
         }
         const auto flat = ids.flatQualifier.find( keyBind );
         if( flat == ids.flatQualifier.end() )
