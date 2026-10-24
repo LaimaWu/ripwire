@@ -191,6 +191,29 @@ o="$( g --grep='a[0]' | root )"
 if printf '%s' "$o" | grep -q 'pattern_meta='; then no "B13 an index a[0] read as a class: $o"; else ok "B13 a[0] (an index) is no bracket class"; fi
 o="$( g --grep='^hlxb' | root )"
 if printf '%s' "$o" | grep -q 'pattern_meta="^\$"'; then ok "B14 a leading ^ → pattern_meta=^\$"; else no "B14 $o"; fi
+# FIX ROUND 2 (review N2): ordinary literals that LOOK like regex syntax must keep their --at hop; unambiguous regex keeps the meta.
+printf 'y = hlxidx[i-1] + hlxidx[i-1];\nz = hlxgrid[0][1-2];\nv.hlxuser$.subscribe();\n"hlxver": "^1.2.3"\nsee [^1] for hlxnote\n' > "$R/n.c"
+for pair in 'B23 a subscript hlxidx[i-1]|hlxidx[i-1]' 'B24 a chained subscript hlxgrid[0][1-2]|hlxgrid[0][1-2]' 'B25 an RxJS suffix hlxuser$|hlxuser$' \
+            'B26 a semver ^1.2.3|^1.2.3' 'B27 a footnote [^1]|[^1]'; do
+    lab="${pair%%|*}"; pat="${pair#*|}"
+    o="$( g --grep="$pat" --grep-in=any | root )"
+    if printf '%s' "$o" | grep -q 'pattern_meta='; then no "$lab carries a false pattern_meta: $o"
+    elif printf '%s' "$o" | grep -q 'next="--at='; then ok "$lab: no pattern_meta, keeps next= --at"
+    else no "$lab: no --at next=: $o"; fi
+done
+for pair in 'B28 ^\s*int (escape + anchor)|^\s*int ' 'B29 ^hlxb$ (both anchors)|^hlxb$' 'B30 [0-9] (a leading range class)|[0-9]' \
+            'B31 [^0-9] (a negated digit range)|[^0-9]' 'B32 a class right after a word (hlxa[a-z]) reads as a subscript: quiet (known false negative)|hlxa[a-z]'; do
+    lab="${pair%%|*}"; pat="${pair#*|}"
+    o="$( g --grep="$pat" --grep-in=any | root )"
+    case "$lab" in
+        B32*) if printf '%s' "$o" | grep -q 'pattern_meta='; then no "$lab: $o"; else ok "$lab"; fi ;;
+        *)    if printf '%s' "$o" | grep -q 'pattern_meta='; then ok "$lab keeps pattern_meta"; else no "$lab lost its pattern_meta: $o"; fi ;;
+    esac
+done
+# (N1) the compact legend and the dict say complete=/hits= speak of the LITERAL reading only.
+if g --grep='hlxa' --legend=compact | grep -q 'of the literal reading only'; then ok "B33 the compact grep legend ties complete= to the literal reading"; else no "B33 compact grep legend lacks the literal-reading clause"; fi
+if ( cd "$R" && "$BIN" "$R" --legend-dict 2>/dev/null ) | grep 'pattern_meta=:' | grep -q 'literal reading only'; then ok "B34 the pattern_meta dict entry ties complete=/hits= to the literal reading"; else no "B34 dict entry lacks the clause"; fi
+
 o="$( g --grep='hlxa|hlxb' --legend=full )"
 if printf '%s' "$o" | grep -q 'pattern_meta= (present only'; then ok "B15 the full legend defines pattern_meta= when it rides"; else no "B15 legend clause missing"; fi
 o="$( g --grep='hlxa' --legend=full )"

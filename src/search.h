@@ -2539,18 +2539,64 @@ inline std::vector<GrepHit> grepEnrichPage( const IngestResult& ing, const GrepC
     return hits;
 }
 
+inline bool grepMetaWord( std::string_view pat, std::size_t i ) noexcept
+{
+    return i < pat.size() && ( std::isalnum( (unsigned char)pat[ i ] ) || pat[ i ] == '_' );
+}
+
+// Is the `[` at `i` the opening of a bracket CLASS (grepPatternMeta's "[]")? Not a subscript (`[` right after a word byte or
+// `]`), and not a footnote label (`[^` + digits + `]`); `[^…` or a `a-z` range inside a closed bracket is.
+inline bool grepMetaClassAt( std::string_view pat, std::size_t i ) noexcept
+{
+    if( pat[ i ] != '[' || i + 2 >= pat.size() || pat.find( ']', i + 2 ) == std::string_view::npos )
+    {
+        return false;
+    }
+    if( i > 0 && ( grepMetaWord( pat, i - 1 ) || pat[ i - 1 ] == ']' ) )
+    {
+        return false;
+    }
+    if( pat[ i + 1 ] != '^' )
+    {
+        return grepMetaWord( pat, i + 1 ) && pat[ i + 2 ] == '-' && grepMetaWord( pat, i + 3 );
+    }
+    std::size_t end = i + 2;
+    while( end < pat.size() && std::isdigit( (unsigned char)pat[ end ] ) )
+    {
+        ++end;
+    }
+    return !( end > i + 2 && end < pat.size() && pat[ end ] == ']' );
+}
+
+// A leading ^ before a letter, `_` or # (never a digit: `^1.2.3` is a semver), or a trailing $ after a word byte when the
+// pattern also opens with ^ (`^foo$`; a bare `user$` is an RxJS name).
+inline bool grepMetaAnchored( std::string_view pat ) noexcept
+{
+    if( pat.size() < 2 || pat[ 0 ] != '^' )
+    {
+        return false;
+    }
+    const bool lead = ( grepMetaWord( pat, 1 ) && !std::isdigit( (unsigned char)pat[ 1 ] ) ) || pat[ 1 ] == '#';
+    return lead || ( pat.back() == '$' && grepMetaWord( pat, pat.size() - 2 ) );
+}
+
 // honest-lex GREP-META: the pieces of a LITERAL pattern that read as regex syntax, space-separated in a fixed order, or
 // "" when none. A literal scan matches them as text, so `compose|HTTPException` answered a confident zero (hono: 31
 // files hold either name) and `CHANGELOG\.md` matched only the one line spelling the backslash. The rule, each piece
 // chosen so a common literal stays quiet:
 //   |      between two word bytes (`a|b`, `x)|y`), never `||` or ` | `;  \X   a backslash before . | ( ) [ ] { } * + ? ^ $
 //          or b B w W d D s S;   .*  .+  followed by more pattern (`detail.*Budget`; a trailing `java.util.*` is a literal);
-//   ^ $    a leading ^ before a word byte or #, a trailing $ after a word byte;   []  a bracket class opening `[^` or
-//          holding a range `a-z`.   A lone '.' (`CHANGELOG.md`) is NOT a piece: it is the commonest literal dot.
+//   ^ $    a leading ^ before a letter, `_` or #, and a trailing $ after a word byte ONLY when the pattern also opens with ^
+//          (`^foo$`);   []  a bracket class opening `[^` or holding a range `a-z`.   A lone '.' (`CHANGELOG.md`) is NOT a
+//          piece: it is the commonest literal dot.
+// The rule is INVERTED toward "unambiguous regex": a meta that would replace next='s --at hop with a regex of a different
+// answer is worse than silence, so these ordinary literals stay quiet: a subscript (`[` right after a word byte or `]`:
+// `arr[i-1]`, `a[0][1]`), a semver (`^1.2.3`: ^ before a digit), an RxJS suffix (`user$`: a bare trailing $) and a
+// markdown footnote (`[^1]`: `[^` + digits + `]`).
 inline std::string grepPatternMeta( std::string_view pat )
 {
-    const auto word = [ & ]( std::size_t i ) { return i < pat.size() && ( std::isalnum( (unsigned char)pat[ i ] ) || pat[ i ] == '_' ); };
-    bool alt = false, esc = false, star = false, anchor = false, cls = false;
+    const auto word = [ & ]( std::size_t i ) { return grepMetaWord( pat, i ); };
+    bool alt = false, esc = false, star = false, cls = false;
     for( std::size_t i = 0; i < pat.size(); ++i )
     {
         const char c = pat[ i ];
@@ -2567,13 +2613,12 @@ inline std::string grepPatternMeta( std::string_view pat )
         {
             star = true;
         }
-        else if( c == '[' && i + 2 < pat.size() && pat.find( ']', i + 2 ) != std::string_view::npos
-                 && ( pat[ i + 1 ] == '^' || ( word( i + 1 ) && pat[ i + 2 ] == '-' && word( i + 3 ) ) ) )
+        else
         {
-            cls = true;
+            cls = cls || grepMetaClassAt( pat, i );
         }
     }
-    anchor = ( pat.size() > 1 && pat[ 0 ] == '^' && ( word( 1 ) || pat[ 1 ] == '#' ) ) || ( pat.size() > 1 && pat.back() == '$' && word( pat.size() - 2 ) );
+    const bool anchor = grepMetaAnchored( pat );
     std::string out;
     for( const auto& [ on, piece ] : { std::pair{ alt, "|" }, std::pair{ esc, "\\" }, std::pair{ star, ".*" }, std::pair{ anchor, "^$" }, std::pair{ cls, "[]" } } )
     {

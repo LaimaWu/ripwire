@@ -663,7 +663,7 @@ void emitCompactGrepLegend()
 {
     rw::emitTo( stdout, "<!-- ripwire grep ripwire.grep/v1: files group source-ordered hits; l=line, m=matched text, "
                  "in=enclosing name when known. shown/capped disclose the printed window; hits_capped=1 makes hits a floor; "
-                 "complete=1 only for an exhaustive literal scan whose whole unfiltered window printed. root anchors relative p; "
+                 "complete=1 only for an exhaustive literal scan (beside pattern_meta=, of the literal reading only) whose whole unfiltered window printed. root anchors relative p; "
                  "enc callers remain a call-graph floor; tier/suppressed and corpus attrs disclose excluded populations, tier_partial=1 "
                  "meaning that label was elected over a partial classification. files/hits/shown/total/complete are IN-INDEX only; "
                  "unindexed_hits sizes the second population, whose element carries its own count/shown/capped under the same window. -->" );
