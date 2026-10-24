@@ -147,7 +147,7 @@ inline std::string lspWorkspaceCapNotice( const std::string& query, std::size_t 
 inline std::string lspMultiDefNotice( const std::string& name, std::size_t total )
 {
     return lspLogMessageFrame( "ripwire: " + std::to_string( total ) + " definitions for '" + rw::mcpdetail::jsonEscape( name )
-        + "' — counts are floors; the resolver splits over them" );
+        + "' — counts are floors; a call may bind to any one of them" );
 }
 
 inline void lspWriteMessage( std::FILE* out, const std::string& body )
@@ -875,7 +875,7 @@ inline std::string lspHover( const rw::IngestResult& ing, const rw::Graph& g, co
         // The one multi-def sentence (task C): the picker's set is plural — say so in the D6 voice, beside the
         // def block it qualifies. test/lspcheck.sh arm (19).
         md += "\n*" + std::to_string( defs.size() ) + " definitions for `" + at.name
-            + "` — counts are floors; the resolver splits over them.*\n";
+            + "` — counts are floors; a call may bind to any one of them.*\n";
     }
 
     // Used at (D7): the same name-matched floor the references provider answers with. Def lines are

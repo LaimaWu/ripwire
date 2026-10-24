@@ -56,6 +56,10 @@
 #   (22) determinism x2 on the new collision dialog (house pattern)
 #   (23) the known gap stays COHERENT: --around's CLI row shows the tower front AND its defs= count, so
 #        edge-vs-display disagreement is visible on the row, never hidden
+#   (24) a constructor never outranks its class (maintainer, #432 review): Java `public Shape() {}` inside class Shape
+#        and C++ `Widget::Widget()` beside a header-first class Widget — --lego names the class and its implementor,
+#        --around focuses the class row; a near-miss Java method named like ANOTHER class keeps the Method rung
+#   (25) a C prototype beside its body is counted in the (19) sentence but never described as a resolver split
 #
 # Usage:  RIPWIRE_BIN=build/ripwire bash test/lspcheck.sh   |   bash test/lspcheck.sh path/to/ripwire
 
@@ -400,10 +404,10 @@ h_m="$( printf '%s' "$R43" | grep -bo '\*\*method\*\* `AllFour::name`' | cut -d:
     || { no "(18) tower order wrong: m=$p_m v=$p_v c=$p_c y=$p_y d_m=$q_m d_v=$q_v h_m=$h_m h_first=$h_first"; printf '%s\n' "$head40" | head -c 400; printf '%s\n' "$head41" | head -c 240; }
 
 # ── (19) the ONE multi-def disclosure sentence, hover + definition logMessage, absent on single-def ───
-printf '%s' "$R42" | grep -q '19 definitions for .name. — counts are floors; the resolver splits over them' \
-    && ok "(19) hover discloses the def count + split sentence on the colliding name" \
+printf '%s' "$R42" | grep -q '19 definitions for .name. — counts are floors; a call may bind to any one of them' \
+    && ok "(19) hover discloses the def count + may-bind sentence on the colliding name" \
     || { no "(19) hover disclosure missing"; printf '%s\n' "$R42" | head -c 400; }
-n19="$( grep -c 'window/logMessage.*19 definitions for .name. — counts are floors; the resolver splits over them' "$WORK/r18" )"
+n19="$( grep -c 'window/logMessage.*19 definitions for .name. — counts are floors; a call may bind to any one of them' "$WORK/r18" )"
 l41="$( grep -n '"id":41,' "$WORK/r18" | cut -d: -f1 )"; l19="$( grep -n 'window/logMessage.*19 definitions' "$WORK/r18" | head -1 | cut -d: -f1 )"
 [ "$n19" = 1 ] && [ -n "$l19" ] && [ -n "$l41" ] && [ "$l19" -lt "$l41" ] \
     && ok "(19) the definition answer carries ONE window/logMessage disclosure AHEAD of it" \
@@ -538,6 +542,74 @@ d23="$( cd "$WORK/collide" && "$BIN" --around=name . 2>/dev/null | grep -m1 -o '
 [ -n "$c23" ] && [ "$d23" = 'defs="19"' ] \
     && ok "(23) --around names the tower front (t=method AllFour::name) while disclosing defs=\"19\" — the edge-vs-display gap is visible on the row" \
     || { no "(23) known-gap coherence broken: focus='$c23' count='$d23'"; }
+
+# ── (24) a constructor never outranks its class ──────────────────────────────────────────────────────
+mkdir -p "$WORK/ctorj" "$WORK/ctorc"
+cat > "$WORK/ctorj/Shape.java" <<'EOF'
+public class Shape {
+  public Shape() {}
+  public void area() {}
+}
+class Sq extends Shape { public void area() {} }
+class Maker { public Sq Sq() { return null; } }
+EOF
+cat > "$WORK/ctorc/a_widget.h" <<'EOF'
+class Widget {
+public:
+    Widget();
+    virtual void draw() = 0;
+};
+EOF
+cat > "$WORK/ctorc/widget.cpp" <<'EOF'
+#include "a_widget.h"
+Widget::Widget() {}
+class Button : public Widget { public: void draw() override {} };
+EOF
+lj24="$( cd "$WORK/ctorj" && "$BIN" --lego=Shape . 2>/dev/null )"
+aj24="$( cd "$WORK/ctorj" && "$BIN" --around=Shape . 2>/dev/null )"
+lc24="$( cd "$WORK/ctorc" && "$BIN" --lego=Widget . 2>/dev/null )"
+ac24="$( cd "$WORK/ctorc" && "$BIN" --around=Widget . 2>/dev/null )"
+nm24="$( cd "$WORK/ctorj" && "$BIN" --around=Sq . 2>/dev/null )"
+printf '%s' "$lj24" | grep -q '<iface n="Shape" [^>]*defs="2" implementors="1"' && printf '%s' "$lj24" | grep -qF '<impl n="Sq"' \
+    && ok "(24) Java: --lego=Shape answers the class (implementors=1, Sq), not its constructor" \
+    || { no "(24) Java --lego=Shape lost the class to its constructor"; printf '%s' "$lj24" | grep -o '<iface [^>]*>' | head -1; }
+printf '%s' "$aj24" | grep -qF '<s t="cls" n="Shape"' \
+    && ok "(24) Java: --around=Shape focuses the class row" \
+    || { no "(24) Java --around=Shape focus is not the class"; printf '%s' "$aj24" | grep -o '<s [^>]*>' | head -1; }
+printf '%s' "$lc24" | grep -q '<iface n="Widget" p="a_widget.h" [^>]*implementors="1"' && printf '%s' "$lc24" | grep -qF '<impl n="Button"' \
+    && ok "(24) C++: --lego=Widget answers the header class (implementors=1, Button), not the out-of-line Widget::Widget()" \
+    || { no "(24) C++ --lego=Widget lost the class to its constructor"; printf '%s' "$lc24" | grep -o '<iface [^>]*>' | head -1; }
+printf '%s' "$ac24" | grep -qF '<f p="a_widget.h"><s t="cls" n="Widget"' \
+    && ok "(24) C++: --around=Widget focuses the class row in a_widget.h" \
+    || { no "(24) C++ --around=Widget focus is not the class"; printf '%s' "$ac24" | grep -o '<f p="[^"]*"><s [^>]*>' | head -1; }
+printf '%s' "$nm24" | grep -qF '<f p="Shape.java"><s t="method" n="Sq"' \
+    && ok "(24) near-miss: Maker.Sq(), a method named like ANOTHER class, keeps the Method rung (not a constructor)" \
+    || { no "(24) near-miss: the constructor rung swallowed a method that merely shares a class's name"; printf '%s' "$nm24" | grep -o '<s [^>]*>' | head -1; }
+
+# ── (25) a prototype beside its body is COUNTED, never called a split ──────────────────────────────
+# The graph binds helper(2) to the body alone (no amb=), so the sentence may count the prototype but must not say the
+# resolver split the call: "a call may bind to any one of them" is the claim the mechanism supports.
+mkdir -p "$WORK/protodef"
+printf 'int helper(int x);\n' > "$WORK/protodef/h.h"
+printf '#include "h.h"\nint helper(int x) { return x + 1; }\nint top(void) { return helper(2); }\n' > "$WORK/protodef/h.c"
+uriPD="file://$WORK/protodef/h.c"
+{
+  msg "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"rootUri\":\"file://$WORK/protodef\",\"capabilities\":{}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":51,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"$uriPD\"},\"position\":{\"line\":2,\"character\":25}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":52,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"$uriPD\"},\"position\":{\"line\":2,\"character\":25}}}"
+  msg "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\"}"
+  msg "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"
+} > "$WORK/d25"
+( cd "$WORK/protodef" && "$BIN" --lsp < "$WORK/d25" > "$WORK/raw25" 2>/dev/null )
+decodeFrames "$WORK/raw25" > "$WORK/r25" 2>/dev/null
+h25="$( grep '"id":52,' "$WORK/r25" )"
+n25="$( grep -c 'window/logMessage.*2 definitions for .helper.' "$WORK/r25" )"
+printf '%s' "$h25" | grep -q '2 definitions for .helper.' && [ "$n25" = 1 ] \
+    || no "(25) premise broken — the prototype+body pair no longer reads as 2 definitions (hover/logMessage=$n25)"
+grep -q 'splits over' "$WORK/r25" \
+    && no "(25) the disclosure says the resolver SPLIT a call it bound to the body alone" \
+    || ok "(25) prototype+body: counted as 2 definitions, no split claimed (the call binds to the body)"
 
 # ── (22) determinism x2 on the collision dialog (house pattern) ───────────────────────────────────────
 "$BIN" --lsp < "$WORK/d18" > "$WORK/raw22a" 2>/dev/null

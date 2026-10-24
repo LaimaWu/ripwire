@@ -11220,47 +11220,93 @@ inline std::vector<NodeId> resolveAllByCanonicalId( const IngestResult& ing, std
     return resolveAllByCanonicalIdExact( ing, alt );
 }
 
+// A CONSTRUCTOR is not a more specific answer than the type it builds: `Widget::Widget()` (C++, scoped by its class)
+// and `public Shape() {}` (Java/C#, enclosed by its class, no scope recorded) are Methods — the top rung — so the plain
+// ladder put them ahead of the class for a bare type name, and --lego/--around/--connect then answered about the
+// constructor (implementors=0 for a class that has one). A Method whose own scope ends in its name, or that sits
+// inside a same-named Class/Struct/Interface of the match set, ranks just BELOW the type kinds and above a free
+// function. A method named like an UNRELATED type (a Go getter `func (s *Server) Config() Config`) is not a
+// constructor and keeps the Method rung. Ranks are doubled so the constructor rung sits between two ladder values.
+inline std::vector<int> nameTowerRanks( const IngestResult& ing, std::span<const NodeId> ids )
+{
+    const auto typeKind = []( SymKind k ) noexcept { return k == SymKind::Class || k == SymKind::Interface || isStructOrNamedType( k ); };
+    std::vector<NodeId> types;
+    for( const NodeId id : ids )
+    {
+        if( typeKind( ing.symbols[ id ].kind ) )
+        {
+            types.push_back( id );
+        }
+    }
+    std::vector<int> ranks;
+    ranks.reserve( ids.size() );
+    for( const NodeId id : ids )
+    {
+        const Symbol& m    = ing.symbols[ id ];
+        bool          ctor = false;
+        if( m.kind == SymKind::Method && !types.empty() )
+        {
+            ctor = scopeLastSegment( m.scope ) == m.name
+                || std::any_of( types.begin(), types.end(), [ & ]( NodeId t )
+                                {
+                                    const Symbol& ty = ing.symbols[ t ];
+                                    return ty.fileId == m.fileId && ty.sigStartByte <= m.sigStartByte && m.endByte <= ty.endByte;
+                                } );
+        }
+        ranks.push_back( ctor ? 2 * kindSpecificity( SymKind::Class ) - 1 : 2 * kindSpecificity( m.kind ) );
+    }
+    return ranks;
+}
+
 // The tower (RIPWIRE-RUBY task C): ONE total order for every multi-definition NAME answer, applied to the
 // RESULT LIST of the name resolvers below (query-time only — buildGraph's edge candidates are deliberately
 // NOT reordered, so no extraction moved and kParserVer stays; edge-vs-display disagreement is disclosed,
-// not hidden). Key: kindSpecificity DESC (the hoisted dedup ladder — a Method beats a Var beats a Section),
-// then the language of the most specific symbol first — the tower's own leading symbol defines the
-// reference language, so in a Ruby tree a Ruby def leads a Python one on a same-kind tie — then id ASC
-// for the deterministic tail. A list already in tower order comes back untouched. DISTINCT from gitmine.h's
-// §H6 "specificity-ordered mapper", which orders file PATHS on a different axis.
+// not hidden). Key: kindSpecificity DESC (the hoisted dedup ladder — a Method beats a Var beats a Section;
+// a constructor ranks just below its type, nameTowerRanks above), then the language of the most specific
+// symbol first — the tower's own leading symbol defines the reference language, so in a Ruby tree a Ruby def
+// leads a Python one on a same-kind tie — then id ASC for the deterministic tail. A list already in tower order
+// comes back untouched. DISTINCT from gitmine.h's §H6 "specificity-ordered mapper", which orders file PATHS on a
+// different axis.
 inline std::vector<NodeId> applyNameTower( const IngestResult& ing, std::vector<NodeId> ids )
 {
     if( ids.size() < 2 )
     {
         return ids;
     }
-    NodeId referenceId = ids.front();
-    int    referenceSpec = kindSpecificity( ing.symbols[ referenceId ].kind );
-    for( const NodeId id : ids )
+    const std::vector<int> ranks = nameTowerRanks( ing, ids );
+    std::vector<std::pair<int, NodeId>> keyed;   // (rank, id): the comparator reads the rank without a lookup
+    keyed.reserve( ids.size() );
+    for( std::size_t i = 0; i < ids.size(); ++i )
     {
-        const int spec = kindSpecificity( ing.symbols[ id ].kind );
-        if( spec > referenceSpec || ( spec == referenceSpec && id < referenceId ) )
+        keyed.emplace_back( ranks[ i ], ids[ i ] );
+    }
+    std::pair<int, NodeId> reference = keyed.front();
+    for( const auto& k : keyed )
+    {
+        if( k.first > reference.first || ( k.first == reference.first && k.second < reference.second ) )
         {
-            referenceSpec = spec;
-            referenceId = id;
+            reference = k;
         }
     }
-    const Lang referenceLang = ing.symbols[ referenceId ].lang;
-    std::sort( ids.begin(), ids.end(),
-               [ &ing, referenceLang ]( NodeId a, NodeId b ) noexcept
+    const Lang referenceLang = ing.symbols[ reference.second ].lang;
+    std::sort( keyed.begin(), keyed.end(),
+               [ &ing, referenceLang ]( const std::pair<int, NodeId>& a, const std::pair<int, NodeId>& b ) noexcept
                {
-                   const int specA = kindSpecificity( ing.symbols[ a ].kind ), specB = kindSpecificity( ing.symbols[ b ].kind );
-                   if( specA != specB )
+                   if( a.first != b.first )
                    {
-                       return specA > specB;
+                       return a.first > b.first;
                    }
-                   const bool refA = ing.symbols[ a ].lang == referenceLang, refB = ing.symbols[ b ].lang == referenceLang;
+                   const bool refA = ing.symbols[ a.second ].lang == referenceLang, refB = ing.symbols[ b.second ].lang == referenceLang;
                    if( refA != refB )
                    {
                        return refA;
                    }
-                   return a < b;
+                   return a.second < b.second;
                } );
+    for( std::size_t i = 0; i < ids.size(); ++i )
+    {
+        ids[ i ] = keyed[ i ].second;
+    }
     return ids;
 }
 
