@@ -263,7 +263,13 @@ if jDef is not None and jFull is not None:
     check( cliStale is not None and cliStale == jDef.get( "stale" ) == jFull.get( "stale" ),
            "COUNT: stale= agrees on the CLI (%r), MCP default (%r) and show_stale=true (%r)" % ( cliStale, jDef.get( "stale" ), jFull.get( "stale" ) ) )
     mcpFolds = "stale_by_kind" in jDef
-    check( mcpFolds == bool( mKinds ), "COUNT: the MCP default folds exactly when the CLI does (cli=%s mcp=%s)" % ( bool( mKinds ), mcpFolds ) )
+    # the twin folds only where the CLI does, and declines only where its JSON fold would not PAY (foldPays: < 75 % of the bytes)
+    cut      = qdFull.rfind( '"sa":[' )
+    predict  = qdFull[ :cut ] + '"stale_by_kind":"' + ( mKinds.group( 1 ) if mKinds else "" ) + '","stale_next":"show_stale=true"}'
+    jsonPays = bool( mKinds ) and cut >= 0 and len( predict.encode() ) * 100 < len( qdFull.encode() ) * 75
+    check( mcpFolds == jsonPays and ( not mcpFolds or qdMcp == predict ),
+           "COUNT: the MCP default folds exactly when the CLI does AND the JSON fold pays, into the predicted bytes (cli=%s pays=%s mcp=%s)"
+           % ( bool( mKinds ), jsonPays, mcpFolds ) )
     if mcpFolds:
         check( "sa" not in jDef and jDef.get( "stale_next" ) == "show_stale=true",
                "COUNT: a folded twin drops sa and names show_stale=true in stale_next (got %r)" % ( jDef.get( "stale_next" ), ) )
