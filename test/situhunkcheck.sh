@@ -333,5 +333,43 @@ case "$CS" in *granularity=file*diff_hunks_unlocated=1*|*granularity=file*unloca
 if sec2 "$TMP/i.txt" | grep -q 'test_alpha.py'; then ok "(i) [2] keeps the file-level obligations (alpha's test)"
 else no "(i) [2] dropped alpha's test: the module-level line did not seed the file"; fi
 
+# ── (j) B2 — a constructor / property hunk must NOT narrow: callers reach the CLASS, not the member ─────────
+# Python __init__ and @property. The narrowed answer is zero callers (nobody calls `__init__` by name), which
+# would turn the gate green on an edit every user of the class feels. The honest fallback is the old file-level
+# answer, disclosed as granularity=file with the hunk unlocated.
+J="$TMP/j"; mkdir -p "$J"
+cat > "$J/svc.py" <<'EOF'
+class Svc:
+    def __init__(self):
+        self.n = 0
+
+    @property
+    def size(self):
+        return 1
+
+    def run(self, x):
+        return x
+EOF
+printf 'from svc import Svc\n\n\ndef test_svc():\n    assert Svc().run(1)\n' > "$J/test_svc.py"
+printf 'from svc import Svc\n\n\ndef test_size():\n    assert Svc().size\n' > "$J/test_size.py"
+mkrepo "$J"
+for edit in 'self.n = 0|self.n = 1|__init__' 'return 1|return 2|property'; do
+  old="${edit%%|*}"; rest="${edit#*|}"; new="${rest%%|*}"; what="${rest#*|}"
+  ( cd "$J" && git checkout -q -- svc.py )
+  python3 - "$J/svc.py" "$old" "$new" <<'EOF'
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p).read()
+assert old in s
+open(p, "w").write(s.replace(old, new, 1))
+EOF
+  ( cd "$J" && "$BIN" . --situ --no-cache >"$TMP/j.txt" 2>/dev/null )
+  CS="$( cs_line "$TMP/j.txt" )"
+  case "$CS" in *granularity=file*) ok "(j) a $what body hunk falls back: granularity=file" ;;
+    *) no "(j) a $what body hunk narrowed: $CS" ;; esac
+  if sec2 "$TMP/j.txt" | grep -q 'test_svc.py'; then ok "(j) [2] keeps test_svc.py for a $what edit (the class's users)"
+  else no "(j) [2] lost test_svc.py for a $what edit — the narrowed answer is zero callers"; fi
+done
+
 if [ "$fail" -eq 0 ]; then echo "situhunkcheck: ALL PASS"; else echo "situhunkcheck: SOME FAILED"; fi
 exit "$fail"

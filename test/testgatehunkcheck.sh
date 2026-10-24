@@ -185,6 +185,100 @@ open(p, "w").write(s.replace(old, new, 1))
 EOF
 }
 
+# ── (g) B2 — a constructor / property body hunk must NOT narrow; callers reach the CLASS, not the member ───
+# Narrowed to the constructor symbol the walk finds zero callers, so the gate turned GREEN (exit 0) on an edit
+# every user of the class feels. The honest fallback is the old file-level answer: the gate stays red (exit 4)
+# with the class's test an obligation, disclosed as change_granularity="file". One fixture per language the
+# narrowing reaches; each has an unrelated second function so that "narrowed" and "file-level" differ.
+b2_arm(){ # b2_arm LABEL DIR OLD NEW FILE EXPECT_TEST
+  ( cd "$2" && git checkout -q -- . )
+  sub "$2/$5" "$3" "$4"
+  ( cd "$2" && "$BIN" . --test-gate --no-cache >"$TMP/b2.xml" 2>/dev/null ); local rc=$?
+  if [ "$rc" -eq 4 ]; then ok "(g) $1: the gate stays red (exit 4)"; else no "(g) $1: the gate exited $rc, expected 4 (ctor/property edit narrowed to zero callers)"; fi
+  case "$( cat "$TMP/b2.xml" )" in *'change_granularity="file"'*) ok "(g) $1: change_granularity=file (honest fallback, disclosed)" ;;
+    *) no "(g) $1: the fallback is not disclosed as change_granularity=file" ;; esac
+  if grep -q "$6" "$TMP/b2.xml"; then ok "(g) $1: $6 is an obligation"; else no "(g) $1: $6 lost — the class's users are gone from the answer"; fi
+}
+PYD="$TMP/g_py"; mkdir -p "$PYD"
+cat > "$PYD/svc.py" <<'EOF'
+class Svc:
+    def __init__(self):
+        self.n = 0
+
+    @property
+    def size(self):
+        return 1
+
+    def run(self, x):
+        return x
+
+
+def other(x):
+    return x
+EOF
+printf 'from svc import Svc\n\n\ndef test_svc():\n    assert Svc().run(1)\n' > "$PYD/test_svc.py"
+printf 'from svc import Svc\n\n\ndef test_size():\n    assert Svc().size\n' > "$PYD/test_size.py"
+printf 'from svc import other\n\n\ndef test_other():\n    assert other(1)\n' > "$PYD/test_other.py"
+mkrepo "$PYD"
+b2_arm "python __init__" "$PYD" "self.n = 0" "self.n = 1" svc.py test_svc.py
+b2_arm "python @property" "$PYD" "return 1" "return 2" svc.py test_size.py
+
+TSD="$TMP/g_ts"; mkdir -p "$TSD"
+cat > "$TSD/lib.ts" <<'EOF'
+export class Box {
+  size = 1;
+  constructor() {
+    this.size = 1;
+  }
+  grow(x: number): number {
+    return x + 1;
+  }
+}
+
+export function tsOther(x: number): number {
+  return x * 2;
+}
+EOF
+printf 'import { Box } from "./lib";\n\ntest("grow", () => { expect(new Box().grow(1)).toBe(2); });\n' > "$TSD/check_box.test.ts"
+printf 'import { tsOther } from "./lib";\n\ntest("other", () => { expect(tsOther(1)).toBe(2); });\n' > "$TSD/check_other.test.ts"
+mkrepo "$TSD"
+b2_arm "typescript constructor" "$TSD" "this.size = 1;" "this.size = 2;" lib.ts check_box.test.ts
+
+CPD="$TMP/g_cpp"; mkdir -p "$CPD"
+cat > "$CPD/lib.h" <<'EOF'
+#pragma once
+int cppOther( int x );
+struct Widget
+{
+    Widget();
+    int grow( int x );
+};
+EOF
+cat > "$CPD/lib.cpp" <<'EOF'
+#include "lib.h"
+
+static const int kLimit = 5;
+
+int cppOther( int x )
+{
+    return x * 2;
+}
+
+Widget::Widget()
+{
+    kLimit;
+}
+
+int Widget::grow( int x )
+{
+    return x + 1;
+}
+EOF
+printf '#include "lib.h"\n#include <cassert>\nint main() { Widget w; assert( w.grow(1) > 0 ); }\n' > "$CPD/test_widget.cpp"
+printf '#include "lib.h"\n#include <cassert>\nint main() { assert( cppOther(1) > 0 ); }\n' > "$CPD/test_other.cpp"
+mkrepo "$CPD"
+b2_arm "c++ constructor" "$CPD" "    kLimit;" "    kLimit + 1;" lib.cpp test_widget.cpp
+
 # ── (h) B3 — an EXPLICIT file list is never narrowed by the working-tree diff ───────────────────────────────
 # A committed edit to alpha plus an UNRELATED uncommitted edit to beta: --test-gate=app.py names the FILE, so
 # the obligations are the file-level ones (alpha's test stays) and no hunk attribute rides.

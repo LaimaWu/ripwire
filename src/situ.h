@@ -597,6 +597,10 @@ inline SituSiblings lexicalSiblings( const IngestResult& ing, const std::vector<
 //   * a hunk only PARTLY inside body spans — one that also covers module-level lines (a statement right
 //     below a function, a file-wide CRLF rewrite). Located means every non-blank new-side line sits inside a
 //     body-bearing span; the module-level remainder seeds the file (maintainer round, CodeRabbit on #423);
+//   * a hunk inside a member that callers reach through its CLASS — a constructor, destructor, dunder
+//     (`__init__`, `__enter__`), initializer, or a property/getter/setter. Nobody calls `__init__` by name, so
+//     seeding it walks zero callers and the gate would go green on an edit every user of the class feels.
+//     The honest answer is the file-level one (maintainer round, owner-chosen: fall back, never guess a class).
 // An EXPLICIT file list (`--situ=F`, `--test-gate=F`, the MCP `diff` argument) is never narrowed at all: the
 // caller named FILES, and a working-tree hunk elsewhere in them says nothing about which symbols they meant.
 // In every direction the failure mode is the OLD answer (a superset), never a narrower wrong one, and the
@@ -611,7 +615,28 @@ inline bool isHunkLocatableKind( SymKind k ) noexcept
     return k == SymKind::Function || k == SymKind::Method;
 }
 
-// One file's working-tree bytes, read at most once per run and only when a hunk needs them (coverage gaps): the common narrowed edit never touches the disk beyond the index.
+// Members whose callers reach the CLASS, not the member by name — the constructor spellings of every language
+// the extractor indexes (Python `__init__`/`__new__`/`__post_init__`, PHP `__construct`, JS/TS `constructor`,
+// Swift `init`/`deinit`, Ruby `initialize`); C++/Java/C# constructors are the owner's own name, tested below.
+// Rust `new` and Go `NewT` are ordinary named functions that callers do name (measured), so they stay out.
+inline constexpr std::string_view kClassEntryNames[] = { "__construct", "__destruct", "__init__", "__new__", "__post_init__",
+                                                         "constructor", "deinit", "init", "initialize" };
+static_assert( std::ranges::is_sorted( kClassEntryNames, rw::sortutil::svLess ), "kClassEntryNames is binary-searched: keep it sorted" );
+
+// Is `s` entered through its class by NAME alone: a constructor/destructor/initializer spelling, any other
+// Python dunder (`__enter__`, `__eq__`: invoked by a protocol, never by name — quality.h's dead-code note), or a
+// member spelled as its owner (C++ `Widget::Widget`, Java/C# `Widget`, destructor `~Widget`).
+inline bool isClassEntryByName( const Symbol& s ) noexcept
+{
+    const std::string_view n = s.name;
+    if( n.empty() ) { return false; }
+    if( std::ranges::binary_search( kClassEntryNames, n, rw::sortutil::svLess ) || n.front() == '~' ) { return true; }
+    if( n.size() > 4 && n.starts_with( "__" ) && n.ends_with( "__" ) ) { return true; }
+    return !s.scope.empty() && n == scopeLastSegment( s.scope );
+}
+
+// One file's working-tree bytes, read at most once per run and only when a hunk needs them (coverage gaps,
+// accessor decorators): the common narrowed edit never touches the disk beyond the index.
 struct HunkSourceText
 {
     const IngestResult& ing;
@@ -644,6 +669,52 @@ struct HunkSourceText
         return a <= b && b <= t.size() ? std::string_view( t ).substr( a, b - a ) : std::string_view();
     }
 };
+
+// A property / getter / setter, read off the declaration's own text (the extractor keeps no flag for it):
+// Python — a decorator line directly above the def that names `property` (`@property`, `@x.setter`,
+// `@functools.cached_property`); JS/TS — a `get`/`set` keyword before the member name on its line. Callers read
+// these as attributes, so the call graph has no edge to the member. Other languages: not narrowed here.
+inline bool isAccessorDeclaration( const Symbol& s, HunkSourceText& src )
+{
+    if( s.kind != SymKind::Method && s.scope.empty() ) { return false; }   // a member: the extractor files some class members as Function with the class as scope
+    if( s.lang == Lang::Python )
+    {
+        // The symbol's line is its `def` — or, when the extractor starts a decorated def at its first decorator, a
+        // decorator line itself. Either way the decorator run is the contiguous `@` lines around that line.
+        const auto namesAccessor = [ & ]( std::uint32_t ln )
+        {
+            const std::string_view t = trimWs( src.line( ln ) );
+            return !t.empty() && t.front() == '@'
+                && ( t.find( "property" ) != std::string_view::npos || t.find( ".setter" ) != std::string_view::npos
+                     || t.find( ".getter" ) != std::string_view::npos || t.find( ".deleter" ) != std::string_view::npos );
+        };
+        const auto isDecorator = [ & ]( std::uint32_t ln ) { const std::string_view t = trimWs( src.line( ln ) ); return !t.empty() && t.front() == '@'; };
+        for( std::uint32_t k = 1; k < 8 && k < s.line && isDecorator( s.line - k ); ++k )
+        {
+            if( namesAccessor( s.line - k ) ) { return true; }
+        }
+        for( std::uint32_t ln = s.line; ln < s.line + 8 && isDecorator( ln ); ++ln )
+        {
+            if( namesAccessor( ln ) ) { return true; }
+        }
+        return false;
+    }
+    if( s.lang == Lang::TypeScript || s.lang == Lang::JavaScript )
+    {
+        const std::string_view ln  = src.line( s.line );
+        const std::size_t      pos = ln.find( s.name );
+        if( pos == std::string_view::npos ) { return false; }
+        const std::string_view before = trimWs( ln.substr( 0, pos ) );
+        for( const std::string_view kw : { std::string_view( "get" ), std::string_view( "set" ) } )
+        {
+            if( before.ends_with( kw ) && ( before.size() == kw.size() || before[before.size() - kw.size() - 1] == ' ' ) )
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 // Is every NON-BLANK new-side line of the hunk [hStart, hEnd] inside one of `spans` (sorted by start, the
 // overlapping body spans already clipped to the hunk)? A gap of blank lines (the separator between two functions
@@ -698,7 +769,8 @@ struct FileHunkLocation
     std::size_t       unlocated = 0;
 };
 
-// A hunk is LOCATED when it lies wholly inside body-bearing spans (hunkFullyInBodies). Anything else is
+// A hunk is LOCATED when it (1) lies wholly inside body-bearing spans (hunkFullyInBodies), and (2) touches no
+// member callers reach through its class (isClassEntryByName / isAccessorDeclaration). Anything else is
 // unlocated and returns the whole file to the file-granular treatment. EVERY overlapping body-bearing symbol,
 // inner and enclosing, is marked: a nested def's edit changes its outer function too.
 inline FileHunkLocation locateHunksInFile( const IngestResult& ing, std::uint32_t fileId, const std::vector<NodeId>& syms,
@@ -706,7 +778,7 @@ inline FileHunkLocation locateHunksInFile( const IngestResult& ing, std::uint32_
 {
     FileHunkLocation out;
     out.mark.assign( syms.size(), 0 );
-    HunkSourceText src( ing, fileId );   // bytes read lazily: only a gap check pays for them
+    HunkSourceText src( ing, fileId );   // bytes read lazily: only a gap check or an accessor probe pays for them
     std::vector<std::pair<std::uint32_t, std::uint32_t>> spans;
     for( const DiffHunk& h : hunks )
     {
@@ -718,6 +790,7 @@ inline FileHunkLocation locateHunksInFile( const IngestResult& ing, std::uint32_
         const std::uint32_t hStart = h.newStart;
         const std::uint32_t hEnd   = h.newStart + h.newCount - 1;
         spans.clear();
+        bool viaClass = false;
         for( std::size_t idx = 0; idx < syms.size(); ++idx )
         {
             const Symbol& s = ing.symbols[ syms[idx] ];
@@ -730,10 +803,11 @@ inline FileHunkLocation locateHunksInFile( const IngestResult& ing, std::uint32_
             {
                 out.mark[idx] = 1;
                 spans.emplace_back( std::max( s.line, hStart ), std::min( sEnd, hEnd ) );
+                viaClass = viaClass || isClassEntryByName( s ) || isAccessorDeclaration( s, src );
             }
         }
         std::sort( spans.begin(), spans.end() );
-        if( !spans.empty() && hunkFullyInBodies( spans, hStart, hEnd, src ) ) { ++out.located; } else { ++out.unlocated; }
+        if( !spans.empty() && !viaClass && hunkFullyInBodies( spans, hStart, hEnd, src ) ) { ++out.located; } else { ++out.unlocated; }
     }
     return out;
 }
