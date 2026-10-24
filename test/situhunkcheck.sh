@@ -245,5 +245,52 @@ else
   no "(d) [2] lost the payment test under the explicit selector — a clean-tree regression"
 fi
 
+# ── the boundary arms (maintainer round on #423): each one pins a way the narrowing could be WRONGER than the
+# old file-level answer. A narrower answer that drops a real obligation is the one failure this verb may not have.
+mkrepo(){ # mkrepo DIR — a committed repo whose files the caller has already written
+  ( cd "$1" && git init -q -b main >/dev/null 2>&1
+    git config user.email rw@example.invalid; git config user.name ripwire
+    git add -A >/dev/null 2>&1
+    GIT_AUTHOR_DATE='2026-01-01T00:00:00 +0000' GIT_COMMITTER_DATE='2026-01-01T00:00:00 +0000' \
+      git commit -q -m seed >/dev/null 2>&1 ) || { echo "git fixture setup failed"; exit 2; }
+}
+APPPY='def alpha(x):
+    s = """
+-- keep
+"""
+    return x + 1
+
+
+def beta(x):
+    return x * 2
+'
+mktwo(){ # mktwo DIR — app.py (alpha, beta) + one test per function
+  mkdir -p "$1"
+  printf '%s\n' "$APPPY" > "$1/app.py"
+  printf 'from app import alpha\n\n\ndef test_alpha():\n    assert alpha(1)\n' > "$1/test_alpha.py"
+  printf 'from app import beta\n\n\ndef test_beta():\n    assert beta(1)\n' > "$1/test_beta.py"
+  mkrepo "$1"
+}
+
+# ── (g) B1 — an ADDED line whose content starts "++ " is "+++ …" in the diff and is not a file header ───────
+# Before the fix the parser read it as one, reset the current path, and silently dropped every later hunk of the
+# file: beta's edit vanished and test_beta.py with it. The "-- " twin is the DELETED side: a removed line
+# "-- keep" is "--- keep" in the diff. Both sit INSIDE alpha's body, followed by a second hunk in beta.
+G="$TMP/g"; mktwo "$G"
+python3 - "$G/app.py" <<'EOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("-- keep\n", "++ added\n", 1).replace("return x * 2", "return x * 3", 1)
+open(p, "w").write(s)
+EOF
+( cd "$G" && "$BIN" . --situ --no-cache >"$TMP/g.txt" 2>/dev/null )
+CS="$( cs_line "$TMP/g.txt" )"
+case "$CS" in *'diff_hunks=2 '*) ok "(g) the parser sees BOTH hunks past a '+++ '-looking added line (and its '--- ' deleted twin)" ;;
+  *) no "(g) a '+++ ' body line cost the parser a hunk: $CS" ;; esac
+if sec2 "$TMP/g.txt" | grep -q 'test_beta.py' && sec2 "$TMP/g.txt" | grep -q 'test_alpha.py'; then
+  ok "(g) [2] keeps beta's test: the hunk after the '+++ ' body line was not dropped"
+else no "(g) [2] lost a test to the '+++ ' body line (beta's hunk was dropped)"; fi
+
 if [ "$fail" -eq 0 ]; then echo "situhunkcheck: ALL PASS"; else echo "situhunkcheck: SOME FAILED"; fi
 exit "$fail"

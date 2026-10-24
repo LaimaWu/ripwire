@@ -167,28 +167,42 @@ inline HunkDiffAll gitDiffHunksAllVsHead( const std::string& root )
 
     // fgets reads the stream in fixed chunks; a line longer than the buffer arrives in pieces. For hunk
     // headers (short, bounded) that cannot happen below 4096; for +++ path lines it degrades as documented
-    // above. `pathCut` tracks a split path line so its continuation chunks are not re-read as new headers.
+    // above. `lineCut` tracks a split line so its continuation chunks are not re-read as new lines — a body
+    // line longer than the buffer must not have its tail mistaken for a header either.
     // NOTE: no pointer into byPath is held across iterations — ankerl::unordered_dense stores values in one
     // contiguous vector, so the NEXT file's insert could reallocate and dangle it. The section key is a
     // string; each hunk pays one hash lookup, which beside a git spawn is noise.
+    //
+    // HEADER POSITION ONLY (the "+++ " trap): an ADDED line whose content starts "++ " is "+++ …" in the diff,
+    // and a DELETED line starting "-- " is "--- …". Read as a file header, the first reset the current path and
+    // silently dropped every later hunk of the file — a narrower answer from a parser bug. A hunk header
+    // announces its body exactly (oldCount '-' lines plus newCount '+' lines; "\ No newline" markers are not
+    // counted), so `bodyLeft` consumes the body before any line is allowed to be a file header again.
     char          buf[ 8192 ];
     std::string   curPath;              // the diff's NEW-side spelling of the current file section; empty = drop (deletion / preamble)
-    bool          pathCut = false;      // the previous chunk ended mid-line (no '\n') on a long path
+    bool          lineCut = false;      // the previous chunk ended mid-line (no '\n')
+    std::uint64_t bodyLeft = 0;         // '-' / '+' body lines the last hunk header announced and this stream has not yet delivered
     while( std::fgets( buf, sizeof( buf ), pipe ) )
     {
         const std::size_t len = std::strlen( buf );
         const bool        eol  = len > 0 && buf[len - 1] == '\n';
-        if( pathCut )
+        if( lineCut )
         {
-            pathCut = !eol;   // swallow the continuation; the key stays cut (documented degrade)
+            lineCut = !eol;   // swallow the continuation; a cut path key stays cut (documented degrade)
             continue;
+        }
+        lineCut = !eol;
+        if( bodyLeft > 0 )
+        {
+            if( buf[0] == '-' || buf[0] == '+' ) { --bodyLeft; continue; }
+            if( buf[0] == '\\' ) { continue; }   // "\ No newline at end of file" belongs to the body and is not counted
+            bodyLeft = 0;   // not a body line at all (the counts lied): resynchronise on the header rules below
         }
         if( buf[0] == '+' && buf[1] == '+' && buf[2] == '+' && buf[3] == ' ' )
         {
             // "+++ b/<path>" (prefixes pinned by --dst-prefix=b/ above), or "+++ /dev/null" for a deletion.
             // A trailing '\t' starts git's optional timestamp/quoting tail — cut there. Trailing '\r' (a
             // CRLF-diff artifact on the path line) is cut too.
-            pathCut = !eol;
             curPath.clear();
             if( len <= 6 || std::strncmp( buf + 4, "/dev/null", 9 ) == 0 )
             {
@@ -205,6 +219,7 @@ inline HunkDiffAll gitDiffHunksAllVsHead( const std::string& root )
         if( !curPath.empty() && parseHunkHeaderLine( buf, h ) )
         {
             out.byPath[ curPath ].push_back( h );
+            bodyLeft = std::uint64_t( h.oldCount ) + h.newCount;
         }
     }
     os::pclose( pipe );
