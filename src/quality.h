@@ -30,6 +30,7 @@
 #include "arch.h"               // fnv1a64
 #include "pathguard.h"          // CWE-59/367: rw::pathguard::openNoFollowTruncate — writeBaseline truncates, so its open must refuse a link atomically
 #include "gitmine.h"            // shSingleQuote + gitFileCommitCountsInDayWindow — short-horizon-churn window mining
+#include "diffhunks.h"          // DiffHunk + gitDiffHunksVsHead + diffHunksMemoized — THE zero-context hunk primitive (extracted from this header 2026-09-27; situ.h's change-set narrowing is its second consumer)
 #include "docparse.h"           // docparse::detail::readWholeFile — THE canonical whole-file byte read (commentcoherence.h names it that); reused rather than re-rolled, see forEachSymbolBody
 #include "filter.h"             // B10.1a: isTestPath — the general test-dir convention behind isTestScriptPath
 #include "memguard.h"           // #387: loadRefTree reads the hard line between a commit's ingest and its graph
@@ -6447,86 +6448,10 @@ inline void gitBlameRangeWindowCommits( const std::string& root, const std::stri
     os::pclose( pipe );
 }
 
-// One zero-context unified-diff hunk, in the two coordinate systems the SELF test needs: the OLD-side range
-// (what `git blame` is asked about) and the NEW-side range (what the symbol's working-tree line span is
-// compared against). SoA is pointless for four u32s read together — this is one cache line either way.
-struct DiffHunk
-{
-    std::uint32_t oldStart = 0;
-    std::uint32_t oldCount = 0;
-    std::uint32_t newStart = 0;
-    std::uint32_t newCount = 0;
-};
-static_assert( sizeof( DiffHunk ) == 16, "DiffHunk is a 4×u32 POD" );
-
-// P3 (r27) — the RUN-SCOPED hunk memo. `git diff --unified=0 HEAD -- <path>` is a pure function of (HEAD,
-// working tree), both FIXED for the life of one --quality-delta call (the code's own section comment says so),
-// yet the churn blame pass spawned it once PER SYMBOL: a subprocess-shim log showed EIGHT byte-identical
-// spawns for a single dirty file. Caller owns the storage (house rule — views/handles at seams, no hidden
-// process-global state that a second root or a second MCP request would silently share).
-using DiffHunkMemo = HashMap<std::string, std::vector<DiffHunk>>;
-
-// Parse `relPath`'s zero-context hunk headers vs HEAD. Degrade-only: no git / no HEAD / path absent at HEAD →
-// an EMPTY vector, which the caller reads as "no evidence" → AMBIENT (never inflates severity).
-//
-// Same ambient-config seam as the blame above, pinned for the same reason and in the same commit: a
-// configured `diff.algorithm` moves hunk BOUNDARIES (which lines land in an oldCount>0 hunk at all), and a
-// `diff.external` driver replaces this output wholesale with something these two sscanf forms cannot parse —
-// silently emptying the vector, which the caller reads as AMBIENT. Neither is a hang or an error, which is
-// what makes them worth pinning: they change a reported number with nothing on the record saying so.
-//
-// The external driver is disarmed with git's own `--no-ext-diff` flag, NOT with `-c diff.external=`: an
-// EMPTY diff.external is not "no external diff", it is an external diff whose command is the empty string,
-// and git dies trying to exec it ("error: cannot run : No such file or directory / fatal: external diff
-// died"). That mistake reads as a fix in review and shows up as every churn row silently going AMBIENT —
-// measured here as 8 gating churn rows collapsing to 0 before the flag replaced it.
-inline std::vector<DiffHunk> gitDiffHunksVsHead( const std::string& root, const std::string& relPath )
-{
-    std::vector<DiffHunk> hunks;
-    const std::string cmd = gitCmd( " -c core.quotepath=false -c diff.algorithm=myers -C " ) + shSingleQuote( root )
-                          + " diff --no-ext-diff --no-textconv --ignore-submodules=dirty --unified=0 --no-color HEAD -- " + shSingleQuote( relPath ) + " 2>/dev/null";
-    std::FILE* pipe = os::popen( cmd.c_str(), "r" );
-    if( !pipe ) { DISCLOSE( "quality: churn hunk diff could not be spawned" ); return hunks; }
-
-    char buf[ 4096 ];
-    while( std::fgets( buf, sizeof( buf ), pipe ) )
-    {
-        if( buf[0] != '@' || buf[1] != '@' )
-        {
-            continue; // only hunk-header lines matter here
-        }
-        int oldStart = 0, oldCount = 1, newStart = 0, newCount = 1;
-        if( std::sscanf( buf, "@@ -%d,%d +%d,%d @@", &oldStart, &oldCount, &newStart, &newCount ) == 4 ) {}
-        else if( std::sscanf( buf, "@@ -%d,%d +%d @@", &oldStart, &oldCount, &newStart ) == 3 ) { newCount = 1; }
-        else if( std::sscanf( buf, "@@ -%d +%d,%d @@", &oldStart, &newStart, &newCount ) == 3 ) { oldCount = 1; }
-        else if( std::sscanf( buf, "@@ -%d +%d @@", &oldStart, &newStart ) == 2 ) { oldCount = 1; newCount = 1; }
-        else
-        {
-            continue; // malformed/unexpected header — skip (degrade per-hunk)
-        }
-        if( oldStart < 0 || oldCount < 0 || newStart < 0 || newCount < 0 )
-        {
-            continue; // git never emits these; refuse rather than wrap
-        }
-
-        hunks.push_back( DiffHunk{ std::uint32_t( oldStart ), std::uint32_t( oldCount ),
-                                   std::uint32_t( newStart ), std::uint32_t( newCount ) } );
-    }
-    os::pclose( pipe );
-    return hunks;
-}
-
-// Memoized accessor: one `git diff` spawn per PATH per run, not per symbol. A path with no hunks memoizes the
-// empty vector too, so a repeatedly-queried clean path costs one spawn, not N.
-inline const std::vector<DiffHunk>& diffHunksMemoized( DiffHunkMemo& memo, const std::string& root, const std::string& relPath )
-{
-    const auto it = memo.find( relPath );
-    if( it != memo.end() )
-    {
-        return it->second;
-    }
-    return memo.emplace( relPath, gitDiffHunksVsHead( root, relPath ) ).first->second;
-}
+// DiffHunk / DiffHunkMemo / gitDiffHunksVsHead / diffHunksMemoized / parseHunkHeaderLine — MOVED to
+// diffhunks.h (2026-09-27) when --situ grew the symbol-granular change set and needed the same primitive:
+// one hunk parser, both consumers (this churn lens and situ.h's change-set narrowing), zero clones. The
+// types and both per-path accessors are unchanged; churnEditWindowCommitCount below consumes them as before.
 
 // HOW MANY DISTINCT in-window COMMITS last wrote the pre-existing lines that the CURRENT uncommitted edit to
 // `relPath` (vs HEAD) modifies inside the symbol's [symStart, symStart+symLoc-1] span. See the section comment
