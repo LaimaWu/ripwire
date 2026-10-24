@@ -8723,6 +8723,27 @@ inline std::string staleAcksXml( const std::vector<StaleAck>& staleAcks, EscapeF
     return out;
 }
 
+// idea #11 (lane lean-trio), shared by lane lean2b: stale= split by ack KIND as `kind:N,...`, in first-appearance order of the
+// ledger's own row order — the stale_by_kind= value of the folded CLI --quality-delta AND of the MCP quality_delta twin, so the
+// two surfaces cannot count differently. The KIND drops the ack's :new-symbol/:preexisting facet; the rows (--show-stale /
+// show_stale=true) carry it. Unescaped: each caller escapes for its own dialect.
+inline std::string staleByKindValue( const std::vector<StaleAck>& staleAcks )
+{
+    std::vector<std::pair<std::string, std::size_t>> byKind;
+    for( const StaleAck& a : staleAcks )
+    {
+        const std::string kind = a.kind.substr( 0, a.kind.find( ':' ) );
+        const auto it = std::find_if( byKind.begin(), byKind.end(), [ & ]( const auto& kv ) { return kv.first == kind; } );
+        if( it == byKind.end() ) { byKind.emplace_back( kind, 1 ); } else { ++it->second; }
+    }
+    std::string kinds;
+    for( const auto& [ kind, n ] : byKind )
+    {
+        kinds += ( kinds.empty() ? "" : "," ) + kind + ":" + std::to_string( n );
+    }
+    return kinds;
+}
+
 inline std::string staleAcksJsonArray( const std::vector<StaleAck>& staleAcks )   // returns `"sa":[...]`, ready to splice in
 {
     std::string out = "\"sa\":[";

@@ -1346,7 +1346,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                    // paraphrased — this stanza used to describe an ordering the selector does not use.
                    "{\"name\":\"exemplar\",\"description\":\"BEFORE writing a function / method / class / struct / interface / variable, get the repo's single best-in-class instance of that kind to imitate — signature AND full body. " + std::string( kExemplarSelectionRule ) + ". Beats grep/find_symbol: those find A definition, this ranks every definition and returns the one worth copying. kind = fn|method|class|struct|iface|var, OR a task string (its top match's kind is used).\","
                    + mcprefuse::toolMetadataFor( "exemplar", pathIsRequired ) + "},"
-                   "{\"name\":\"quality_delta\",\"description\":\"Your PR self-check, run every time you think a change is DONE — pairs with the CLI-only --test-gate (names the tests to run + the untested blast radius; not MCP-exposed) to form the two-step pre-PR gate. Reports ONLY what your working tree made WORSE vs baseline, across 12 kinds (complexity, verbosity, nesting, params, new duplication, new dead code, new public API surface, error-masking, short-horizon churn, new clone of a reused helper, an added stub or TODO, a defect shape). new-symbol rows never gate, except defect-shape format-arity. Read-only; auto-compares vs git HEAD with no setup, or a pinned .ripwire_quality_baseline sidecar if present and not stale (baseline says which). sev=minor does not gate; acked findings stay suppressed until one worsens. at= is the commit compared at (+dirty = the working tree differed).\","
+                   "{\"name\":\"quality_delta\",\"description\":\"Your PR self-check, run every time you think a change is DONE — pairs with the CLI-only --test-gate (names the tests to run + the untested blast radius; not MCP-exposed) to form the two-step pre-PR gate. Reports ONLY what your working tree made WORSE vs baseline, across 12 kinds (complexity, verbosity, nesting, params, new duplication, new dead code, new public API, error-masking, short-horizon churn, new helper clone, an added stub/TODO, a defect shape). new-symbol rows never gate, except defect-shape format-arity. Read-only; auto-compares vs git HEAD, or a pinned .ripwire_quality_baseline sidecar when fresh. sev=minor does not gate; acked findings stay suppressed until worse. at= is the commit compared at (+dirty = tree differed).\","
                    + mcprefuse::toolMetadataFor( "quality_delta", pathIsRequired ) + "},"
                    "{\"name\":\"quality_baseline\",\"description\":\"PIN the quality floor: writes .ripwire_quality_baseline stamped with the current git HEAD sha, snapshotting complexity / duplication / dead-code / API surface. Call once at the start of non-trivial work, then quality_delta compares against this pinned floor instead of HEAD. Side-effecting (writes a file) — skip it for a simple 'before I push' check, quality_delta already compares vs HEAD with zero setup.\","
                    + mcprefuse::toolMetadataFor( "quality_baseline", pathIsRequired ) + "},"
@@ -1503,6 +1503,9 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // whereis: full_text (the CLI --whereis-full-text twin) prints every t= line whole and lifts nothing else. A BOOLEAN,
             // read here with the other typed arguments so a wrong-shaped value refuses through the shared gate (checklist 26).
             const bool whereisFullText = boolArg( "full_text" ).value;
+            // quality_delta: show_stale (the CLI --show-stale twin, lane lean2b) lists the stale-ack "sa" rows a regression-free
+            // answer folds to stale_by_kind/stale_next. A BOOLEAN read here, before the shared shape gate (checklist 26).
+            const bool qdShowStale = boolArg( "show_stale" ).value;
             // grep: code|any (the CLI --grep-in twin). The `listing` sibling (CodeRabbit 5468003465, checklist 26): read inside the
             // grep arm, a non-string `in:5` decoded to "" after the shape gate had run, its refusal was dropped, and the arm then
             // answered the default tier as if nothing had been sent. test/greptiercheck.sh (9e).
@@ -2580,7 +2583,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 }
                 else if( name == "quality_delta" && !path.empty() )
                 {
-                    const auto [ j, qerr ] = qualityDeltaJson( path );
+                    const auto [ j, qerr ] = qualityDeltaJson( path, qdShowStale );
                     resp = j.empty() ? errResultMsg( -32602, qerr.empty() ? std::string( "quality-delta unavailable" ) : qerr ) : textResult( j );
                 }
                 else if( name == "quality_baseline" && !path.empty() )

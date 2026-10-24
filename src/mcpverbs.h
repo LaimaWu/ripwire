@@ -4535,7 +4535,13 @@ inline QualityDeltaOutcome computeQualityDelta( const std::string& root )
 // facet names, displaySym's root-relative spelling, and the CLI's own was/now omission rule for the
 // zero-magnitude kinds). `regressions_count` is gone rather than kept as an alias: two names for one number
 // is how the next consumer picks the wrong one. Gate: test/mcpclidiffcheck.sh diffs the two key sets.
-inline std::pair<std::string, std::string> qualityDeltaJson( const std::string& root )
+//
+// Lane lean2b (ideas-32b card #9, owner bar LOSSLESS): `showStale` is the MCP `show_stale` argument, the CLI --show-stale
+// twin. Absent/false, a regression-free answer with stale acks folds its "sa" rows to "stale_by_kind" (stale split by ack
+// kind, quality::staleByKindValue — the CLI's own counts) and "stale_next" (the argument that prints them), but only when
+// that PAYS (compactlegend.h foldPays, the CLI's margin). Every count (stale, acked, regressions, gating, ...) stays on the
+// root either way; show_stale=true returns the full document byte for byte as it read before this fold existed.
+inline std::pair<std::string, std::string> qualityDeltaJson( const std::string& root, bool showStale = false )
 {
     const QualityDeltaOutcome oc = computeQualityDelta( root );
     if( !oc.ok ) { return { std::string(), oc.errMsg }; }
@@ -4634,9 +4640,20 @@ inline std::pair<std::string, std::string> qualityDeltaJson( const std::string& 
         }
         out += "}";
     }
-    out += "],";     // L2 — "sa":[...], same taxonomy the CLI's <sa kind= key= why=/> rows carry (shared builder, quality::staleAcksJsonArray)
-    out += rw::quality::staleAcksJsonArray( oc.staleAcks );
+    out += "],";
+    // the regression-free fold (lane lean2b): "r" is empty, so the stale rows are the only thing left out — counted per kind
+    std::string folded;
+    if( !showStale && oc.regs.empty() && !oc.staleAcks.empty() )
+    {
+        folded = out + "\"stale_by_kind\":\"" + mcpdetail::jsonEscape( rw::quality::staleByKindValue( oc.staleAcks ) )
+               + "\",\"stale_next\":\"" + mcpdetail::jsonEscape( rw::nextFlag( "show_stale=", "true" ) ) + "\"}";
+    }
+    out += rw::quality::staleAcksJsonArray( oc.staleAcks );   // L2 — "sa":[...], same taxonomy the CLI's <sa kind= key= why=/> rows carry
     out += "}";
+    if( !folded.empty() && rw::foldPays( folded, out ) )
+    {
+        return { std::move( folded ), std::string() };
+    }
     return { std::move( out ), std::string() };
 }
 
@@ -4965,7 +4982,10 @@ inline EditCheckReply editCheckText( const std::string& root, const std::string&
     }
 
     return EditCheckReply{ editCheckBundleText( ing, g, root, kDefaultMaxFileBytes, {}, groups[0].lowestNode,
-                                                 /*ni=*/nullptr, /*preview=*/false, EditCheckPage{ pg.limit, pg.offset }, unprovenDefs ), {} };
+                                                 /*ni=*/nullptr, /*preview=*/false,
+                                                 // lane lean2b (card #9): the CLI's verdict-only fold — a clean contract at HEAD with nothing
+                                                 // flagged answers the verdict + rows_next= (the MCP call, limit=N, that lists the callers), callers= kept
+                                                 EditCheckPage{ pg.limit, pg.offset, /*verdictOnly=*/true, symbol, /*mcpSpelling=*/true }, unprovenDefs ), {} };
 }
 
 // ─── `slice` verb (lane/tc-sliceat): the ARISE def-use slice over MCP, mirroring the CLI --slice ────────
