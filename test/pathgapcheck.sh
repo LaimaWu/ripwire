@@ -90,6 +90,7 @@
 #        shadowplain), and a re-export hop that RENAMES (`from pkg.x.a import Other as Base` in the package or a middle module) exports Other,
 #        not a.py's Base (reexpalias, reexpmod, reexpmid): all withheld; K22 re-exports under the SAME name and stays a way in.
 #   (K23) fix 7: a re-export hop file that rebinds the name any way but its one plain import (star, assignment, global, globals(), setattr, def ...) is withheld at every hop.
+#   (K24) fix 8: a chain ENDPOINT whose class is rebound later in its file (assignment, global, star import) is withheld; the def alone is the way in.
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -692,6 +693,29 @@ for v in starmid starinit starqual starqualmid assignmid assigninit assignqual g
     printf "$out" > "$d/other/b.py"
 done
 # K23 end
+# K24 fixtures (lane ind4b fix 8, the endpoint rule): the chain's ENDPOINT file holds the candidate class pkg/x/a.py:Base, which is what the importer's
+#   Base means only when that name has ONE module-scope binding there, its own class statement, and no star import of that file may supply it.
+#   CPython (3.13) truth per variant: rebdirect/rebmid: `Base = Other` after the class makes Sub's base pkg.x.a.Other; globaldirect: a `global Base;
+#   Base = Other` in a def that runs does the same; stardirect/starmid: a trailing `from pkg.y.base2 import *` rebinds Base, so the base is pkg.y.base2.Base.
+#   Controls (stay a way in): K9-K22, whose endpoints bind the name by their class alone.
+# K24 begin
+for v in rebdirect rebmid globaldirect stardirect starmid; do d="$TMP/c8_$v"; mkdir -p "$d/pkg/x" "$d/pkg/y" "$d/other"
+    printf 'class Base:\n    def render_line(self):\n        return 1\n\nclass Other:\n    pass\n' > "$d/pkg/x/a.py"
+    printf 'from pkg.x.a import Base\ndef run(obj):\n    return obj.render_line()\n' > "$d/pkg/x/c.py"
+    printf 'class Base:\n    def other(self):\n        return 3\n' > "$d/pkg/y/base2.py"
+    : > "$d/pkg/__init__.py"; : > "$d/pkg/x/__init__.py"; : > "$d/pkg/y/__init__.py"
+    imp='from pkg.x.a import Base\n'
+    case "$v" in
+        rebdirect|rebmid)   printf '\nBase = Other\n' >> "$d/pkg/x/a.py" ;;
+        globaldirect)       printf '\ndef f():\n    global Base\n    Base = Other\nf()\n' >> "$d/pkg/x/a.py" ;;
+        stardirect|starmid) printf '\nfrom pkg.y.base2 import *\n' >> "$d/pkg/x/a.py" ;;
+    esac
+    case "$v" in
+        *mid) printf 'from pkg.x.a import Base\n' > "$d/pkg/x/mid.py"; imp='from pkg.x.mid import Base\n' ;;
+    esac
+    printf "${imp}\ndef target():\n    return 2\n\nclass Sub(Base):\n    def render_line(self):\n        return target()\n" > "$d/other/b.py"
+done
+# K24 end
 nsblock(){ grep -o '<near_sink [^>]*>.*</near_sink>' "$1"; }
 nshead(){ grep -o '<near_sink [^>]*>' "$1"; }
 nsrows(){ grep -o '<ns [^>]*/>' "$1"; }
@@ -1270,6 +1294,15 @@ for v in starmid starinit starqual starqualmid assignmid assigninit assignqual g
         '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
         "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:7\" withheld=\"name:1\"/>"
     brArm "(K23b) 2c hop file rebinds the name ($v): no namesake bridge to it either" "$TMP/c7_$v" "run,target" ''
+done
+
+# K24 (lane ind4b fix 8): a chain endpoint whose class is not the name's one binding there (a later rebind of any form, a star import) is withheld.
+# Every arm is shown + bridged at fix 7's head (96f6189d); the K9-K22 controls above stay a way in.
+for v in rebdirect rebmid globaldirect stardirect starmid; do
+    nsArm "(K24) 2c endpoint class is rebound after its def ($v) - withheld" "$TMP/c8_$v" "run,target" \
+        '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+        "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:7\" withheld=\"name:1\"/>"
+    brArm "(K24b) 2c endpoint class is rebound after its def ($v): no namesake bridge to it either" "$TMP/c8_$v" "run,target" ''
 done
 
 echo "(M) MCP path_between carries the same clause"

@@ -58,6 +58,11 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   file, and `sys.modules[__name__].a = x`, which is not a call, stays a floor). The import must be the name's one binding;
   otherwise the site is withheld, never shown. Not read, and not detectable statically: a rebinding made from outside
   the file (`a.Base = Other` on an imported module).
+  The chain's endpoint is held to the same standard: the class it finds is the name's meaning only when its own `class`
+  statement is the name's one module-scope binding in that file and no star import there could bind the name, so a later
+  `Base = Other`, a `global Base` in a def, a second def or class of it, or a trailing `from m import *` now withholds the
+  site (this over-hedges a class defined in both arms of an `if`/`try`). Residual: an endpoint file's `globals()` or
+  `setattr(...)` write is not read there (a hop file's is), so that shape may still be shown.
 
 ### Added — `--for` names the members of its shown owner rows on the compact route (`mem=`)
 

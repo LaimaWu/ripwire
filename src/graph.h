@@ -6473,6 +6473,17 @@ inline bool pythonFileBindsOnlyByImport( const ExternalVetoTables& v, std::uint3
         && !pythonStarMayBind( v, f, name );
 }
 
+// Is the class `name` a re-export chain finds in Python file `f` the name's binding there? Only when `name` has exactly ONE module-scope
+// binding in `f`, its own `class` statement (the def is a VarDecl row like any rebind, so a second row of any form is the later rebind: an
+// assignment, augmented assignment, loop, with or except target, walrus, another def or class, an import of the name, a `global`), and
+// no star import of `f` could bind it (pythonStarMayBind for THIS name). Anything else, or no row at all, is unknown: the chain withholds.
+inline bool pythonEndpointBindsOnlyByClass( const ExternalVetoTables& v, std::uint32_t f, std::string_view name )
+{
+    const std::vector<PythonNameBind>* binds = pythonModuleBindsOf( v, f, name );
+    return binds != nullptr && std::ranges::count_if( *binds, []( const PythonNameBind& b ) { return b.scope == kNoNode; } ) == 1
+        && std::ranges::none_of( *binds, []( const PythonNameBind& b ) { return b.scope == kNoNode && b.isImport; } ) && !pythonStarMayBind( v, f, name );
+}
+
 inline constexpr int kPythonReexportHops = 4;   // member-import hops provenBasesOf follows (a package re-exporting a re-export)
 
 // a Python `from m import N` names m's file `f`; when m defines no candidate it may RE-EXPORT the name (a package
@@ -6486,6 +6497,10 @@ inline void pythonReexportChain( const BaseEvidenceTables& t, const std::vector<
         appendCandidatesIn( t.ing, cand, f, out );
         if( !out.empty() )
         {
+            if( !pythonEndpointBindsOnlyByClass( t.extVeto, f, link ) )
+            {
+                out.clear();   // the endpoint's class is not the name's one binding there: a later rebind or a star import may supply what it means
+            }
             return;
         }
         // hop through `f` only when its import of `link` is the name's one binding there (pythonFileBindsOnlyByImport): `from pkg.x.a import
