@@ -291,7 +291,7 @@ private:
             for( const std::uint32_t c : calls )
             {
                 const NodeId f = m_ing.references[ c ].fromSymbol;
-                if( f != sink && f < m_ing.symbols.size() )   // a call made inside the sink itself is no way in
+                if( f != sink && f < m_ing.symbols.size() )   // a call made inside the sink itself is no way in (defensive: the ring's `known` and the bridge's layer test hold the seeds too)
                 {
                     slot.push_back( BackHop{ f, typed ? BackHopVia::Slot : BackHopVia::SlotName, std::uint32_t( calls.size() ), c } );
                 }
@@ -482,7 +482,7 @@ inline std::string impactRingJson( const IngestResult& ing, const ImpactRing& ri
 inline constexpr std::string_view kImpactRingLegend =
     "reaches_hedged=N (absent when 0): N functions MAY reach of= through one or two calls through a struct FIELD (the IX-1 slot "
     "join): the <vr> rows' slot called_by= (one slot hop) and their own slot callers (two), not counted in reaches= and not an "
-    "answered definition. A hedge: never a proven caller, never in reaches=/by_depth=/radius_*. ";
+    "answered definition. The one-hop set has NO width bound (a wide field's callers are all counted). A hedge: never a proven caller, never in reaches=/by_depth=/radius_*. ";
 inline constexpr std::string_view kImpactRingRowsLegend =
     "<ring d=2 total= shown=> lists the two-hop ones: <rh called_by= called_at= via=slot|slot-name calls=> = called_by may call "
     "calls= through a field at called_at=; first 16, next= the callers of the first unshown calls=. ";

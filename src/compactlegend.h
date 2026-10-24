@@ -362,7 +362,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "called_at",         "vr called_at= via=slot|slot-name: called_by='s calls through that struct field, file:line in the same order; slot = same declared struct type, slot-name = field name only (a type unknown); MAY call, not a proven call, in no count", false, "vr" },
     { "slot_name_also",    "slot_name_also=K: K name-only callers hidden behind the same-type ones", false, "vr" },
     // HOP1 (src/backhops.h kImpactRingLegend): --impact's hedged slot ring, present-only
-    { "reaches_hedged",    "reaches_hedged=N: N functions MAY reach of= through one or two calls through a struct field (the vr rows' slot callers and theirs); never in reaches= or any count" },
+    { "reaches_hedged",    "reaches_hedged=N: N functions MAY reach of= through one or two calls through a struct field (the vr rows' slot callers and theirs, no width bound); never in reaches= or any count" },
     { "calls",             "ring d=2 total= shown= next=; rh called_by= called_at= via= calls=: called_by may call calls= (a vr row's slot caller) through a struct field at called_at=; a hedge, in no count", false, "rh" },
     { "called_more",       "called_more=N: N more callers past the first 8", false, "vr" },
     { "slot_calls",        "slot_calls=N: N calls in this body go through a struct field holding a function; in no count" },
@@ -811,7 +811,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // HEDGED BRIDGE and GLOB ENDPOINT (src/pathgaps.h kPathBridgeLegend / kPathGlobLegend), present-only on a reachable=0 answer
     { "crossings", "bridge proven=0 crossings= hops=: a HEDGED chain, NOT a path; <s via=declined|value|closure|namesake cands=K> the crossing into that row, the rest proven edges", true, "bridge", MapHeaderRead::No, {}, "path" },
     // HOP1 (src/backhops.h, kPathBridgeLegend): a slot crossing's row, present-only; up to 3 crossings when every one is a slot
-    { "slot_callers", "s via=slot|slot-name slot_callers=N: the previous row calls through a struct field this row is stored in (slot-name: field name only); N functions that join names, at most 16; a hedge", true, {}, MapHeaderRead::No, {}, "path" },
+    { "slot_callers", "s via=slot|slot-name slot_callers=N: the previous row calls through a struct field this row is stored in (slot-name: field name only); N calling functions that join names, at most 16 (a crossing wider is not made); a hedge", true, {}, MapHeaderRead::No, {}, "path" },
+    { "slot_fns", "s slot_fns=K: K functions that struct field holds (the width the crossing picks from); NOT capped, a wide table is still crossed; a hedge", true, {}, MapHeaderRead::No, {}, "path" },
     { "to_glob", "to_glob=1: to='s * matched every function or method definition fitting it (to_defs= counts them)", false, "path", MapHeaderRead::No, {}, "path" },
     { "from_glob", "from_glob=1: from='s * matched every function or method definition fitting it (from_defs= counts them)", false, "path", MapHeaderRead::No, {}, "path" },
     // SINK-SIDE FRONTIER (src/pathgaps.h kNearSinkLegend), present on a reachable=0 answer: the <near_sink> block and its <ns> rows.

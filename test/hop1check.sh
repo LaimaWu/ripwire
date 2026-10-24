@@ -8,7 +8,7 @@
 # own slot row. hono's `this.router.match( … )` was never crossed: `match` is spelled like String.prototype.match.
 #
 # THE CONTRACT. Every crossing is a hedge: proven="0" on the bridge, via= named (slot | slot-name | declined), its width
-# beside it (slot_callers= / cands=, at most 16), and never counted in reachable= / hops= / reaches=. A chain whose every
+# beside it (slot_callers= at most 16, slot_fns= the field's forward width, uncapped / cands= at most 16), and never counted in reachable= / hops= / reaches=. A chain whose every
 # crossing is a slot may take 3 crossings; any other keeps 2. The ring is one or two slot hops back, reaches_hedged= beside
 # reaches=, <ring d="2"> rows after the <vrs> rows. #11 lifts the builtin skip only for one field of this/self or of a
 # parameter whose class the source states, every same-named class typing it as an in-tree class, on a Ladder decline with a
@@ -34,6 +34,8 @@
 #   (I1) --impact ring: reaches="0" reaches_hedged="2", one <rh> row; (I2) a ring member already in reaches= is not counted;
 #   (I3) no slot row: no reaches_hedged=, no <ring>; (I4) JSON twin, same names; (I5) columnar count; (I6) row cap 16 + next=.
 #   (M1) MCP path_between: the same <bridge> and next= as the CLI; (M2) MCP impact: the same reaches_hedged= and <ring>.
+#   (X1) ring cycle guard: a d=1 function is never reprinted as d=2 (ringcyc); (X2) slot_fns= prints the forward width, uncapped (fan);
+#   (X3) next= keeps --expand past 16 backward callers; (L3) the legends say exactly what is capped and define slot_fns=.
 #   (L1) full legends carry the slot / ring / callers-next sentences and parse as XML; (L2) compact legends define the terms.
 #
 # Usage: test/hop1check.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
@@ -47,7 +49,7 @@ command -v python3 >/dev/null 2>&1 || { echo "  FAIL  python3 required"; exit 2;
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 
 # ── fixtures ────────────────────────────────────────────────────────────────────────────────────────────────────────
-mkdir -p "$TMP/c3" "$TMP/mix" "$TMP/w16" "$TMP/w17" "$TMP/neg" "$TMP/known" "$TMP/cap" "$TMP/ts/routers" "$TMP/ts/app" \
+mkdir -p "$TMP/ringcyc" "$TMP/fan" "$TMP/c3" "$TMP/mix" "$TMP/w16" "$TMP/w17" "$TMP/neg" "$TMP/known" "$TMP/cap" "$TMP/ts/routers" "$TMP/ts/app" \
          "$TMP/ts2/routers" "$TMP/ts2/app" "$TMP/ts2/other" "$TMP/wide/routers" "$TMP/wide/app"
 cat > "$TMP/c3/chain.c" <<'EOF'
 struct entry { const char *name; void (*exec)( void ); };
@@ -114,6 +116,35 @@ void send_keys_exec( void )
 const struct entry send_keys_entry = { .exec = send_keys_exec };
 void fire_command( struct entry *e ) { e->exec(); }
 EOF
+# ring cycle guard (review B1): fa and fb both call sink through A.act (d=1); fb is stored in B.go, which fa calls through, so the
+# d=2 walk meets fa again from fb. self_ref calls through the field it is stored in.
+cat > "$TMP/ringcyc/r.c" <<'EOF'
+struct A { void (*act)( void ); };
+struct B { void (*go)( void ); };
+const struct A *ga( void );
+const struct B *gb( void );
+void sink( void ) { }
+const struct A SA = { .act = sink };
+void fb( void ) { const struct A *a = ga(); a->act(); }
+const struct B SB = { .go = fb };
+void fa( void ) { const struct A *a = ga(); a->act(); const struct B *b = gb(); b->go(); }
+void self_ref( void );
+struct C { void (*me)( void ); };
+const struct C *gc( void );
+const struct C SC = { .me = self_ref };
+void self_ref( void ) { const struct C *c = gc(); c->me(); }
+EOF
+# forward width (review B2): 20 functions stored in ops.run, one caller calls through it — the crossing is 1 caller of 20 functions
+{
+    echo 'struct ops { const char *name; void (*run)( void ); };'
+    i=0; while [ "$i" -lt 20 ]; do printf 'void h%d( void ) { }\n' "$i"; i=$(( i + 1 )); done
+    echo 'static const struct ops table[] = {'
+    i=0; while [ "$i" -lt 20 ]; do printf '  { "h%d", h%d }%s\n' "$i" "$i" "$( [ "$i" -lt 19 ] && echo , )"; i=$(( i + 1 )); done
+    echo '};'
+    echo 'const struct ops *pick( int i );'
+    echo 'void dispatch( int i ) { const struct ops *o = pick( i ); o->run(); }'
+    echo 'int main( void ) { dispatch( 3 ); return 0; }'
+} > "$TMP/fan/fan.c"
 # width: a field the sink is stored in, called through by 16 (w16) or 17 (w17) functions
 for n in 16 17; do
     {
@@ -322,6 +353,22 @@ check( "(D7) a typed receiver over 17 candidates is no way in (near_sink why=ext
 td = path( ts, "onString", "routers/a.ts:match" )
 check( "(D8) near_sink counts exactly the two crossed sites (why=declined:2)", 'why="declined:2"' in body( td ), repr( re.findall( r'<ns [^>]*>', body( td ) ) ) )
 
+# ── X: review fixes (fix round 1) ───────────────────────────────────────────────────────────────────────────────────
+trc = run( tmp + "/ringcyc", "--impact=sink" ) or ""; rrc = root( trc, "impact" )
+check( "(X1) ring cycle guard: fa and fb are both d=1, so reaches_hedged=2 and NO <ring> (a d=1 function is not printed again as d=2)",
+       attr( rrc, "reaches_hedged" ) == "2" and "<ring" not in body( trc ) and "<rh " not in body( trc ), rrc + " " + repr( body( trc )[-300:] ) )
+tsr = run( tmp + "/ringcyc", "--impact=self_ref" ) or ""
+check( "(X1) a function that calls through the field it is stored in is not its own ring row", tsr != "" and "<rh " not in body( tsr ), repr( body( tsr )[-300:] ) )
+tfan = path( tmp + "/fan", "main", "h7" ); bfan = bridge( tfan )
+check( "(X2) the forward width is printed, uncapped: 1 caller of a field holding 20 functions (slot_callers=1 slot_fns=20), still crossed",
+       'n="h7"' in bfan and 'via="slot" slot_callers="1" slot_fns="20"' in bfan and attr( bfan, "proven" ) == "0", repr( bfan ) )
+check( "(X2) slot_fns= rides on every slot row of the 3-slot chain and on no other row",
+       len( re.findall( r'slot_fns=', bridge( path( c3, "fire_command", "cancel_cmd" ) ) ) ) == 3 and "slot_fns" not in bridge( path( mix, "start", "copy_command" ) ).split( 'via="slot"' )[ 0 ], "" )
+t17r = path( tmp + "/w17", "c01", "sink" ); t16r = path( tmp + "/w16", "c01", "sink" )
+check( "(X3) next= keeps --expand when to='s backward set is wider than 16 (w17), and is --callers at 16 (w16)",
+       ( attr( root( t17r, "path" ), "next" ) or "" ).startswith( "--expand=" ) and ( attr( root( t16r, "path" ), "next" ) or "" ).startswith( "--callers=" ),
+       repr( ( attr( root( t17r, "path" ), "next" ), attr( root( t16r, "path" ), "next" ) ) ) )
+
 # ── N: the root next= ───────────────────────────────────────────────────────────────────────────────────────────────
 t = path( c3, "fire_command", "cancel_cmd" ); r = root( t, "path" )
 check( "(N1) to= with a slot hop: the root next= is --callers on to=", attr( r, "next" ) == "--callers=chain.c:cancel_cmd", repr( attr( r, "next" ) ) )
@@ -394,6 +441,13 @@ if shutil.which( "xmllint" ):
 else:
     print( "  SKIP  (L1) xmllint not installed: the well-formedness arm needs it" )
 check( "(L2) the compact path legend defines slot_callers=", "s via=slot|slot-name slot_callers=N:" in t )
+pfan = path( tmp + "/fan", "main", "h7", "--legend=full" )
+check( "(L3) the full bridge legend says exactly what is capped: slot_callers= at 16, slot_fns= not capped; no blanket 'each fanning out to at most 16 candidates'",
+       "slot_fns=K the functions the field holds, NOT capped" in pfan and "each slot one bounded on its callers" in pfan
+       and "each fanning out to at most 16 candidates" not in pfan and "(at most 16 callers or candidates)" in path( c3, "fire_command", "cancel_cmd", "--legend=full" ), "" )
+check( "(L3) the compact path legend defines slot_fns= (not capped)", "slot_fns=K:" in tfan and "NOT capped" in tfan, repr( tfan[ -400: ] ) )
+check( "(L3) the MCP twin of the bridge legend carries slot_fns=K too", "slot_fns=K" in m1, repr( m1[ -300: ] ) )
+check( "(L3) the full impact legend says the ring's one-hop set has no width bound", "NO width bound" in imf )
 check( "(L2) the compact impact legend defines reaches_hedged= and the ring row", "reaches_hedged=N:" in ti and "rh called_by= called_at= via= calls=:" in ti )
 sys.exit( fail )
 PY
