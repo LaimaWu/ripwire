@@ -326,11 +326,14 @@ check( "(B5) a slot joined by field name only is crossed as via=slot-name", 'n="
 neg = tmp + "/neg"
 def crossed( a, b ):
     return bridge( path( neg, a, b ) ) != ""
-check( "(B6) a positional entry after a preprocessor conditional is not crossed", not crossed( "call_ifdef", "sink_ifdef" ) )
+def not_crossed( a, b ):
+    t = path( neg, a, b )   # a negative arm needs its premise too: a failed run (or a mistyped symbol) answers "" and would pass
+    return t != "" and bridge( t ) == ""
+check( "(B6) a positional entry after a preprocessor conditional is not crossed", not_crossed( "call_ifdef", "sink_ifdef" ) )
 check( "(B6) its twin without the conditional is", crossed( "call_pos", "sink_pos" ) )
-check( "(B7) a call through a cast receiver is not crossed", not crossed( "call_cast", "sink_pos" ) )
+check( "(B7) a call through a cast receiver is not crossed", not_crossed( "call_cast", "sink_pos" ) )
 check( "(B7) the same call through a typed local is", crossed( "call_typed", "sink_pos" ) )
-check( "(B8) a same-named field of ANOTHER struct is not crossed", not crossed( "call_b", "sink_a" ) )
+check( "(B8) a same-named field of ANOTHER struct is not crossed", not_crossed( "call_b", "sink_a" ) )
 check( "(B8) the same struct's caller is", crossed( "call_a", "sink_a" ) )
 
 # ── D: #11, the builtin-name skip narrowed ──────────────────────────────────────────────────────────────────────────
