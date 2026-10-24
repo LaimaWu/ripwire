@@ -689,7 +689,7 @@ ripwire.affected/v1               840   826
 ripwire.verify/v1                 440   421
 ripwire.help-task/v1              440   429
 ripwire.query/v1                 790   775
-ripwire.grep/v1                  1380  1368
+ripwire.grep/v1                  1432  1420
 ripwire.match/v1                  370   355
 ripwire.lego/v1                  290   275
 ripwire.exemplar/v1               440   422
@@ -1715,6 +1715,8 @@ grep -q '^__ERROR__' "$TMP/m.bad" && ok "(M) MCP edit_check legend:\"terse\" is 
 # RE-PINNED 2026-09-19 (the L1 fix round, rv-r1-L1 HIGH-1: every emitted attribute defined — the (U) pins' note): uses 290 -> 510
 # (measured 500), path_between 280 -> 430 (419), exemplar 260 -> 350 (331); impact and lego did not cross their pins.
 # Fix round 2: path_between 430 -> 540 (measured 535 — the no-path hint= reading).
+# RE-PINNED 2026-10-24 (honest-lex fix 2): grep/v1 1380 -> 1432 (measured 1420; 1368 on the base binary) -- the +52 B clause
+# "(beside pattern_meta=, of the literal reading only)" that says complete=/hits= speak of the literal reading (review N1).
 # RE-PINNED 2026-10-18 (lane ix2-slice): path_between 540 -> 860 — the same <near_sink>/<ns> readings the (U) table's
 # ripwire.path/v1 row states (one emitter, src/pathgaps.h pathNearSinkXml); the (U-twin-path) arm keeps the old 550 B CLI pin.
 # RE-PINNED 2026-09-23 (cut-fix C): impact 780 -> 810 (measured 797; 777 on the base binary) — the same +20 B
