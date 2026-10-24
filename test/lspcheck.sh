@@ -60,6 +60,9 @@
 #        and C++ `Widget::Widget()` beside a header-first class Widget — --lego names the class and its implementor,
 #        --around focuses the class row; a near-miss Java method named like ANOTHER class keeps the Method rung
 #   (25) a C prototype beside its body is counted in the (19) sentence but never described as a resolver split
+#   (26) the tower's tiers in ORDER: kind before language — a Python class (rung 3) sits between a Ruby method (5)
+#        and a Ruby attr (1) although the leading language is Ruby (arms 18-23 are single-language and cannot see a
+#        swap of the two tiers)
 #
 # Usage:  RIPWIRE_BIN=build/ripwire bash test/lspcheck.sh   |   bash test/lspcheck.sh path/to/ripwire
 
@@ -73,7 +76,7 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 
-WORK="$( mktemp -d )"; trap 'rm -rf "$WORK"' EXIT
+WORK="$( cd "$( mktemp -d )" && pwd -P )"; trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/src"
 
 # C++ fixture — line numbers below are load-bearing (the arms address them):
@@ -610,6 +613,18 @@ printf '%s' "$h25" | grep -q '2 definitions for .helper.' && [ "$n25" = 1 ] \
 grep -q 'splits over' "$WORK/r25" \
     && no "(25) the disclosure says the resolver SPLIT a call it bound to the body alone" \
     || ok "(25) prototype+body: counted as 2 definitions, no split claimed (the call binds to the body)"
+
+# ── (26) kind tier before language tier ──────────────────────────────────────────────────────────────
+mkdir -p "$WORK/mixlang"
+printf 'class AllFour\n  attr_reader :name\nend\n' > "$WORK/mixlang/a.rb"
+printf 'class name:\n    pass\n' > "$WORK/mixlang/b.py"
+printf 'class Other\n  def name\n    1\n  end\nend\nOther.new.name\n' > "$WORK/mixlang/c.rb"
+o26="$( cd "$WORK/mixlang" && "$BIN" --impact=name . 2>/dev/null | grep -o '<def ix="[0-9]*" t="[a-z]*"[^>]*p="[^"]*"' | tr '\n' ' ' )"
+case "$o26" in
+    *'ix="1" t="method" sc="Other" p="c.rb:2"'*'ix="2" t="cls" sc="name" p="b.py:1"'*'ix="3" t="var" sc="AllFour" p="a.rb:2"'*)
+        ok "(26) kind before language: Ruby method, then the Python class, then the Ruby attr" ;;
+    *)  no "(26) tier order wrong (a language-first comparator puts the Ruby attr ahead of the Python class): $o26" ;;
+esac
 
 # ── (22) determinism x2 on the collision dialog (house pattern) ───────────────────────────────────────
 "$BIN" --lsp < "$WORK/d18" > "$WORK/raw22a" 2>/dev/null
