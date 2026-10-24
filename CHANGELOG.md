@@ -49,8 +49,13 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   reads `other` (the member's own name), not `a`; a dotted `import pkg.x` binds the root `pkg`, which no table names, so
   `pkg.Base` is withheld (this also over-hedges `import pkg.x as pkg`). `from pkg import a` (aliased or not) with `a.Base`
   reads the submodule `a` only when the package's `__init__` does not bind `a` itself (an import, def, class or assignment of
-  it, a star import that could bind it, or a module `__getattr__`), and a re-export hop that renames (`from pkg.x.a import
-  Other as Base` in the package or a middle module) is not followed. The import must be the name's one binding;
+  it, a star import that could bind it, or a module `__getattr__`). A re-export chain (`from pkg.x import Base`, where the
+  package or a middle module re-exports the name) is followed only through files that bind the name by ONE plain import,
+  at every hop: a hop that renames it (`from pkg.x.a import Other as Base`), reassigns it afterwards (`Base = Other`, `Base +=`,
+  a `for`, `with` or walrus target, a def or class of it, a `global Base` in any def), star-imports after it, or has no
+  record of it ends the chain, and the site is withheld. A hop file that calls `globals()` or `setattr(...)` anywhere, or
+  defines a module `__getattr__`, counts as unknown for every name (a dynamic write no table sees; this over-hedges any such
+  file, and `sys.modules[__name__].a = x`, which is not a call, stays a floor). The import must be the name's one binding;
   otherwise the site is withheld, never shown. Not read, and not detectable statically: a rebinding made from outside
   the file (`a.Base = Other` on an imported module).
 

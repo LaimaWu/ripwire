@@ -2169,6 +2169,27 @@ inline bool isPythonSourcePath( std::string_view path ) noexcept
     return ext == ".py" || ext == ".pyi";
 }
 
+// the pseudo-name a file's DYNAMIC module-namespace writes are filed under in pythonModuleRebind ("<fileId>#__getattr__"): a module
+// `def __getattr__` (an ordinary top-level def, so buildPythonModuleRebindVetoes already records it) and, added by
+// markPythonDynamicBinds, a `globals()` or `setattr(...)` call anywhere in the file (`globals()['a'] = x`, `setattr(sys.modules[__name__], ...)`):
+// writes no static table can see. The file then binds ANY name it could be asked for; pythonFileBindsOnlyByImport and pythonPackageMayBind
+// read it as unknown. `sys.modules[__name__].a = x` is not a call and stays a floor.
+inline constexpr std::string_view kPythonDynamicBind = "__getattr__";
+
+inline void markPythonDynamicBinds( const IngestResult& ing, HashMap<std::string, char>& pythonModuleRebind )
+{
+    std::string key;
+    for( const Reference& r : ing.references )
+    {
+        if( r.role == RefRole::Call && ( r.calleeName == "globals" || r.calleeName == "setattr" ) && r.fileId < ing.files.size()
+            && isPythonSourcePath( rootRelPath( ing, r.fileId ) ) )
+        {
+            key.clear();  Narrower::appendUint( key, r.fileId );  key.push_back( '#' );  key.append( kPythonDynamicBind );
+            pythonModuleRebind.try_emplace( key, '\0' );
+        }
+    }
+}
+
 // the first name of every Python class's base clause (the bare base, else its qualifier)
 inline HashMap<std::string, char> pythonBaseClauseNames( const IngestResult& ing )
 {
@@ -2480,6 +2501,7 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
         // WHOLE branch's delta against origin/main did not) — see their own doc comments for the WHY/semantics
         // of what each table means; this call site is purely the "where".
         t.pythonModuleRebind = buildPythonModuleRebindVetoes( ing );
+        markPythonDynamicBinds( ing, t.pythonModuleRebind );
         PythonImportVetoes iv = buildPythonImportVetoes( ing, fileIndex, moduleNames, t.pythonModuleRebind );
         t.importBind          = std::move( iv.importBind );
         t.importBindFile      = std::move( iv.importBindFile );
@@ -6406,11 +6428,49 @@ inline const std::vector<PythonNameBind>* pythonModuleBindsOf( const ExternalVet
     return it == v.pythonScopes.nameBinds.end() ? nullptr : &it->second;
 }
 
-// does file `f` import `name` under another name than the member's own (`from m import Other as name`)?
-inline bool pythonFileRenames( const ExternalVetoTables& v, std::uint32_t f, std::string_view name )
+// can `from m import *` (any of file `f`'s) bind `name`? A star target outside the tree could bind anything; one inside can bind
+// what its own module scope binds (a def, class, assignment or import of the name) or, when it star-imports itself, anything.
+// Unknown answers yes (no walk past one level, no __all__ read).
+inline bool pythonStarMayBind( const ExternalVetoTables& v, std::uint32_t f, std::string_view name )
+{
+    if( f >= v.pythonScopes.starTargets.size() )
+    {
+        return false;
+    }
+    std::string key;
+    for( std::uint32_t target : v.pythonScopes.starTargets[ f ] )
+    {
+        if( target == kNoFile || ( target < v.pythonScopes.starTargets.size() && !v.pythonScopes.starTargets[ target ].empty() ) )
+        {
+            return true;
+        }
+        const auto it = v.pythonScopes.nameBinds.find( fileNameKey( key, target, name ) );
+        if( it != v.pythonScopes.nameBinds.end() && std::ranges::any_of( it->second, []( const PythonNameBind& b ) { return b.scope == kNoNode; } ) )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Is `name` in Python file `f` bound by ONE thing only: a plain `from m import name`, where `name` keeps the member's own name? The
+// default-withhold test a re-export chain applies at EVERY hop: exactly one module-scope binding, a member import with no rename
+// (`import a as name` and `from m import x as name` bind something else); no later rebinding of any form (an assignment, augmented
+// assignment, for/with/except target, walrus, def or class of the name, a `global` anywhere: pythonModuleRebind), no star import that could
+// bind it, and no dynamic write (kPythonDynamicBind). Anything else, and anything unknown (no nameBinds row), is false: the chain stops
+// there, so the row is withheld, never shown and never a bridge.
+inline bool pythonFileBindsOnlyByImport( const ExternalVetoTables& v, std::uint32_t f, std::string_view name )
 {
     const std::vector<PythonNameBind>* binds = pythonModuleBindsOf( v, f, name );
-    return binds != nullptr && std::ranges::any_of( *binds, []( const PythonNameBind& b ) { return b.scope == kNoNode && !b.member.empty(); } );
+    if( binds == nullptr )
+    {
+        return false;
+    }
+    std::string key;
+    return std::ranges::count_if( *binds, []( const PythonNameBind& b ) { return b.scope == kNoNode; } ) == 1
+        && std::ranges::any_of( *binds, []( const PythonNameBind& b ) { return b.scope == kNoNode && b.isImport && !b.moduleForm && b.member.empty(); } )
+        && !v.pythonModuleRebind.contains( fileNameKey( key, f, name ) ) && !v.pythonModuleRebind.contains( fileNameKey( key, f, kPythonDynamicBind ) )
+        && !pythonStarMayBind( v, f, name );
 }
 
 inline constexpr int kPythonReexportHops = 4;   // member-import hops provenBasesOf follows (a package re-exporting a re-export)
@@ -6428,9 +6488,10 @@ inline void pythonReexportChain( const BaseEvidenceTables& t, const std::vector<
         {
             return;
         }
-        // hop through `f` only when its import of `link` keeps the name: `from pkg.x.a import Other as Base` exports Other, and the
-        // candidates here are named Base (the import keys memberImportFile by the alias)
-        f = pythonFileRenames( t.extVeto, f, link ) ? kNoFile : pythonImportFileOf( t.extVeto.memberImportFile, f, link, key );
+        // hop through `f` only when its import of `link` is the name's one binding there (pythonFileBindsOnlyByImport): `from pkg.x.a import
+        // Other as Base` exports Other, a star import or a later `Base = Other` or `global Base` exports whatever it left, and the candidates
+        // here are named Base (the import keys memberImportFile by the alias). A file that fails the test, or is unknown, ends the chain
+        f = pythonFileBindsOnlyByImport( t.extVeto, f, link ) ? pythonImportFileOf( t.extVeto.memberImportFile, f, link, key ) : kNoFile;
     }
 }
 
@@ -6466,31 +6527,6 @@ inline std::vector<NodeId> pythonClassScopeChain( const IngestResult& ing, NodeI
     return chain;
 }
 
-// can `from m import *` (any of file `f`'s) bind `name`? A star target outside the tree could bind anything; one inside can bind
-// what its own module scope binds (a def, class, assignment or import of the name) or, when it star-imports itself, anything.
-// Unknown answers yes (no walk past one level, no __all__ read).
-inline bool pythonStarMayBind( const ExternalVetoTables& v, std::uint32_t f, std::string_view name )
-{
-    if( f >= v.pythonScopes.starTargets.size() )
-    {
-        return false;
-    }
-    std::string key;
-    for( std::uint32_t target : v.pythonScopes.starTargets[ f ] )
-    {
-        if( target == kNoFile || ( target < v.pythonScopes.starTargets.size() && !v.pythonScopes.starTargets[ target ].empty() ) )
-        {
-            return true;
-        }
-        const auto it = v.pythonScopes.nameBinds.find( fileNameKey( key, target, name ) );
-        if( it != v.pythonScopes.nameBinds.end() && std::ranges::any_of( it->second, []( const PythonNameBind& b ) { return b.scope == kNoNode; } ) )
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
 // can package file `pkg` (its __init__.py) bind `name` itself? `from pkg import name` reads the package's attribute FIRST and falls back
 // to the submodule `name` only when there is none, so the submodule is the answer only when nothing in the package binds the name: no
 // import, def, class or assignment of it at module scope (a `global` anywhere counts, pythonModuleRebind), no module `__getattr__`
@@ -6503,7 +6539,7 @@ inline bool pythonPackageMayBind( const ExternalVetoTables& v, std::uint32_t pkg
     {
         return true;
     }
-    return v.pythonModuleRebind.contains( fileNameKey( key, pkg, name ) ) || v.pythonModuleRebind.contains( fileNameKey( key, pkg, "__getattr__" ) )
+    return v.pythonModuleRebind.contains( fileNameKey( key, pkg, name ) ) || v.pythonModuleRebind.contains( fileNameKey( key, pkg, kPythonDynamicBind ) )
         || pythonStarMayBind( v, pkg, name );
 }
 

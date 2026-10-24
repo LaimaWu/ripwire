@@ -532,6 +532,9 @@ private:
 //        does a Python base name with any binding but its import in the class statement's scope chain (pythonBaseNameProven:
 //        `Base = Other` at module, class-body or function scope, a parameter, a match capture, a `type` statement, a second import,
 //        a star import that could bind it; a qualifier also imported as a module outside the chain, where the file-wide tables decide).
+//        A re-export chain is followed only through files whose binding of the name is ONE plain import, at every hop
+//        (pythonFileBindsOnlyByImport): a hop that renames, rebinds, star-imports after it, writes the module namespace dynamically
+//        (`globals()`, `setattr`, `__getattr__`) or has no record of the name ends the chain, so the row is withheld.
 // Rule 2c's derivation (below): the classes that derive from a bound definition's class through PROVEN base edges only
 // (Graph::implementorBound == BaseBound::Proven), memoized per bound owner. The classes with a derived class are indexed by
 // "<file>#<name>" on first ask (one pass over the implementors map); the walk visits each class once.

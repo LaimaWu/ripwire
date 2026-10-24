@@ -89,6 +89,7 @@
 #   (K21-K22) fix 6: a package that BINDS the name (`from pkg.y import base2 as a` in pkg/x/__init__.py) is not its submodule a.py (shadowalias,
 #        shadowplain), and a re-export hop that RENAMES (`from pkg.x.a import Other as Base` in the package or a middle module) exports Other,
 #        not a.py's Base (reexpalias, reexpmod, reexpmid): all withheld; K22 re-exports under the SAME name and stays a way in.
+#   (K23) fix 7: a re-export hop file that rebinds the name any way but its one plain import (star, assignment, global, globals(), setattr, def ...) is withheld at every hop.
 #
 # Usage: test/pathgapcheck.sh [BIN]   (BIN defaults to RIPWIRE_BIN, then build/ripwire)
 set -u
@@ -640,6 +641,57 @@ for v in shadowalias shadowplain reexpalias reexpmod reexpmid reexpplain reexpmi
     printf "$out" > "$d/other/b.py"
 done
 # K21 end
+# K23 fixtures (lane ind4b fix 7, the hop-wide rule): EVERY file a re-export chain hops through must bind the name by its one, unrenamed import.
+#   CPython (3.13) truth per variant: starmid/starinit/starqual/starqualmid: the hop's star import `from pkg.y.base2 import *` follows the import, so
+#   Base is pkg.y.base2.Base; assignmid/assigninit/assignqual/globalmid: `Base = Other` (or a `global Base; Base = Other` in a def that runs) makes it
+#   pkg.x.a.Other; globalsinit: `globals()['a'] = base2` in the package binds `a` to pkg.y.base2; setattrinit: setattr(sys.modules[__name__], 'a', ...)
+#   does the same; augmid/forinit/withinit/walrusinit/defmid/classmid: later rebinds of every other form. Controls (stay a way in): the K22 pair.
+# K23 begin
+for v in starmid starinit starqual starqualmid assignmid assigninit assignqual globalmid globalsinit setattrinit augmid forinit withinit walrusinit defmid classmid; do d="$TMP/c7_$v"; mkdir -p "$d/pkg/x" "$d/pkg/y" "$d/other"
+    printf 'class Base:\n    def render_line(self):\n        return 1\n\nclass Other:\n    pass\n' > "$d/pkg/x/a.py"
+    printf 'from pkg.x.a import Base\ndef run(obj):\n    return obj.render_line()\n' > "$d/pkg/x/c.py"
+    printf 'class Base:\n    def other(self):\n        return 3\n' > "$d/pkg/y/base2.py"
+    : > "$d/pkg/__init__.py"; : > "$d/pkg/x/__init__.py"; : > "$d/pkg/y/__init__.py"
+    tgt='def target():\n    return 2\n\n'
+    sub() { printf 'class Sub(%s):\n    def render_line(self):\n        return target()\n' "$1"; }
+    hop='from pkg.x.a import Base, Other\n'
+    case "$v" in
+        starmid)      printf 'from pkg.x.a import Base\nfrom pkg.y.base2 import *\n' > "$d/pkg/x/mid.py"
+                      out="from pkg.x.mid import Base\n\n${tgt}$(sub Base)\n" ;;
+        starinit)     printf 'from pkg.x.a import Base\nfrom pkg.y.base2 import *\n' > "$d/pkg/x/__init__.py"
+                      out="from pkg.x import Base\n\n${tgt}$(sub Base)\n" ;;
+        starqual)     printf 'from pkg.x.a import Base\nfrom pkg.y.base2 import *\n' > "$d/pkg/x/__init__.py"
+                      out="import pkg.x as q\n\n${tgt}$(sub q.Base)\n" ;;
+        starqualmid)  printf 'from pkg.x.a import Base\nfrom pkg.y.base2 import *\n' > "$d/pkg/x/mid.py"
+                      out="import pkg.x.mid as q\n\n${tgt}$(sub q.Base)\n" ;;
+        assignmid)    printf "${hop}Base = Other\n" > "$d/pkg/x/mid.py"
+                      out="from pkg.x.mid import Base\n\n${tgt}$(sub Base)\n" ;;
+        assigninit)   printf "${hop}Base = Other\n" > "$d/pkg/x/__init__.py"
+                      out="from pkg.x import Base\n\n${tgt}$(sub Base)\n" ;;
+        assignqual)   printf "${hop}Base = Other\n" > "$d/pkg/x/__init__.py"
+                      out="import pkg.x as q\n\n${tgt}$(sub q.Base)\n" ;;
+        globalmid)    printf "${hop}def f():\n    global Base\n    Base = Other\nf()\n" > "$d/pkg/x/mid.py"
+                      out="from pkg.x.mid import Base\n\n${tgt}$(sub Base)\n" ;;
+        globalsinit)  printf "from pkg.y import base2 as _b\nglobals()['a'] = _b\n" > "$d/pkg/x/__init__.py"
+                      out="from pkg.x import a as q\n\n${tgt}$(sub q.Base)\n" ;;
+        setattrinit)  printf "import sys\nfrom pkg.y import base2 as _b\nsetattr(sys.modules[__name__], 'a', _b)\n" > "$d/pkg/x/__init__.py"
+                      out="from pkg.x import a as q\n\n${tgt}$(sub q.Base)\n" ;;
+        augmid)       printf "${hop}Base += Other\n" > "$d/pkg/x/mid.py"
+                      out="from pkg.x.mid import Base\n\n${tgt}$(sub Base)\n" ;;
+        forinit)      printf "${hop}for Base in (Other,):\n    pass\n" > "$d/pkg/x/__init__.py"
+                      out="from pkg.x import Base\n\n${tgt}$(sub Base)\n" ;;
+        withinit)     printf "import contextlib\n${hop}with contextlib.nullcontext(Other) as Base:\n    pass\n" > "$d/pkg/x/__init__.py"
+                      out="from pkg.x import Base\n\n${tgt}$(sub Base)\n" ;;
+        walrusinit)   printf "${hop}(Base := Other)\n" > "$d/pkg/x/__init__.py"
+                      out="from pkg.x import Base\n\n${tgt}$(sub Base)\n" ;;
+        defmid)       printf "from pkg.x.a import Base\ndef Base():\n    pass\n" > "$d/pkg/x/mid.py"
+                      out="from pkg.x.mid import Base\n\n${tgt}$(sub Base)\n" ;;
+        classmid)     printf "from pkg.x.a import Base\nclass Base:\n    pass\n" > "$d/pkg/x/mid.py"
+                      out="from pkg.x.mid import Base\n\n${tgt}$(sub Base)\n" ;;
+    esac
+    printf "$out" > "$d/other/b.py"
+done
+# K23 end
 nsblock(){ grep -o '<near_sink [^>]*>.*</near_sink>' "$1"; }
 nshead(){ grep -o '<near_sink [^>]*>' "$1"; }
 nsrows(){ grep -o '<ns [^>]*/>' "$1"; }
@@ -1209,6 +1261,15 @@ for fx in reexpplain:7:3 reexpmidplain:7:3; do v=${fx%%:*}; rest=${fx#*:}; ln=${
         "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" why=\"name:1\" in=\"run\" site=\"pkg/x/c.py:3\" met=\"1\"/>"
     brArm "(K22b) 2c re-export under the same name ($v): the bridge crosses to the override" "$TMP/c6_$v" "run,target" \
         "<bridge proven=\"0\" crossings=\"1\" hops=\"2\"><s t=\"fn\" n=\"run\" p=\"pkg/x/c.py:2\"/><s t=\"fn\" n=\"render_line\" p=\"other/b.py:$ln\" via=\"namesake\" cands=\"1\"/><s t=\"fn\" n=\"target\" p=\"other/b.py:$tl\"/></bridge>"
+done
+
+# K23 (lane ind4b fix 7): a hop file whose binding of the name is not its one unrenamed import ends the chain - at EVERY hop, whatever the shape.
+# Every arm is shown + bridged at fix 6's head (a02e8439); the K22 controls above stay a way in.
+for v in starmid starinit starqual starqualmid assignmid assigninit assignqual globalmid globalsinit setattrinit augmid forinit withinit walrusinit defmid classmid; do
+    nsArm "(K23) 2c hop file rebinds the name ($v) - withheld" "$TMP/c7_$v" "run,target" \
+        '<near_sink depth="2" callers="1" rows="1" next="--callers=other/b.py:render_line">' \
+        "<ns d=\"1\" t=\"fn\" n=\"render_line\" p=\"other/b.py:7\" withheld=\"name:1\"/>"
+    brArm "(K23b) 2c hop file rebinds the name ($v): no namesake bridge to it either" "$TMP/c7_$v" "run,target" ''
 done
 
 echo "(M) MCP path_between carries the same clause"
