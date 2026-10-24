@@ -2576,7 +2576,7 @@ inline std::vector<GrepHit> grepEnrichPage( const IngestResult& ing, const GrepC
 // Rust, ...; read as punctuation, `café|tea` was no alternation and `né[i-1]` a bracket class).
 inline bool grepMetaWord( std::string_view pat, std::size_t i ) noexcept
 {
-    return i < pat.size() && ( std::isalnum( (unsigned char)pat[ i ] ) || pat[ i ] == '_' || (unsigned char)pat[ i ] >= 0x80 );
+    return i < pat.size() && ( std::isalnum( (unsigned char)pat[ i ] ) || pat[ i ] == '_' || static_cast<unsigned char>( pat[ i ] ) >= 0x80 );
 }
 
 // Is the `[` at `i` the opening of a bracket CLASS (grepPatternMeta's "[]")? Not a subscript (`[` right after a word byte or
