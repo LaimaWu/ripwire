@@ -1280,7 +1280,8 @@ inline bool editCheckShowsModuleScope( const IngestResult& ing, const std::vecto
 // `page` (2026-09-10, folded into one value by lane lean-trio): --limit/--offset, and — idea #11 — the CLI's clean-answer
 // posture: `verdictOnly` makes an unchanged contract with nothing flagged print the verdict and the call that lists the
 // callers instead of 40 caller rows, under every legend posture; `selector` is the CLI's own spelling of SYM, replayed in
-// rows_next=. The MCP verb and the preview keep the full document (verdictOnly false).
+// rows_next=. The MCP edit_check verb takes the same fold (lane lean2b: its limit= argument is the --limit= rows_next= names);
+// the preview keeps the full document (preview=true never folds).
 struct EditCheckPage
 {
     int              limit       = 0;

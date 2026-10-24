@@ -1503,6 +1503,9 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
             // whereis: full_text (the CLI --whereis-full-text twin) prints every t= line whole and lifts nothing else. A BOOLEAN,
             // read here with the other typed arguments so a wrong-shaped value refuses through the shared gate (checklist 26).
             const bool whereisFullText = boolArg( "full_text" ).value;
+            // quality_delta: show_stale (the CLI --show-stale twin, lane lean2b) lists the stale-ack "sa" rows a regression-free
+            // answer folds to stale_by_kind/stale_next. A BOOLEAN read here, before the shared shape gate (checklist 26).
+            const bool qdShowStale = boolArg( "show_stale" ).value;
             // grep: code|any (the CLI --grep-in twin). The `listing` sibling (CodeRabbit 5468003465, checklist 26): read inside the
             // grep arm, a non-string `in:5` decoded to "" after the shape gate had run, its refusal was dropped, and the arm then
             // answered the default tier as if nothing had been sent. test/greptiercheck.sh (9e).
@@ -2580,7 +2583,7 @@ inline McpDispatchResult dispatchMcpLine( const std::string& line, int topK, boo
                 }
                 else if( name == "quality_delta" && !path.empty() )
                 {
-                    const auto [ j, qerr ] = qualityDeltaJson( path );
+                    const auto [ j, qerr ] = qualityDeltaJson( path, qdShowStale );
                     resp = j.empty() ? errResultMsg( -32602, qerr.empty() ? std::string( "quality-delta unavailable" ) : qerr ) : textResult( j );
                 }
                 else if( name == "quality_baseline" && !path.empty() )
