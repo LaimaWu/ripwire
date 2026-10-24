@@ -610,10 +610,6 @@ inline SituSiblings lexicalSiblings( const IngestResult& ing, const std::vector<
 // collected in ascending NodeId order; the HashMap bind only ever answers "which file does this diff path
 // name" through gitmine.h's forEachBoundGitPath — the ONE join the numstat mask builder itself uses, so the
 // hunks and the changed-file mask can never disagree about a path.
-inline bool isHunkLocatableKind( SymKind k ) noexcept
-{
-    return k == SymKind::Function || k == SymKind::Method;
-}
 
 // Members whose callers reach the CLASS, not the member by name — the constructor spellings of every language
 // the extractor indexes (Python `__init__`/`__new__`/`__post_init__`, PHP `__construct`, JS/TS `constructor`,
@@ -794,7 +790,7 @@ inline FileHunkLocation locateHunksInFile( const IngestResult& ing, std::uint32_
         for( std::size_t idx = 0; idx < syms.size(); ++idx )
         {
             const Symbol& s = ing.symbols[ syms[idx] ];
-            if( !isHunkLocatableKind( s.kind ) || s.line == 0 )
+            if( !ReceiverEvidence::callableKind( s.kind ) || s.line == 0 )   // body-bearing: function or method — the one test (receiverevidence.h)
             {
                 continue;
             }

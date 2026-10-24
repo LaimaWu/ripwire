@@ -381,7 +381,8 @@ mkrepo "$K"
 python3 - "$K/dense.py" <<'EOF'
 import sys
 p = sys.argv[1]
-open(p, "w").write(open(p).read().replace("x * 2", "x * 3", 1))
+s = open(p).read().replace("x * 2", "x * 3", 1)
+open(p, "w").write(s)
 EOF
 ( cd "$K" && "$BIN" . --situ --no-cache >"$TMP/k.txt" 2>/dev/null )
 case "$( cs_line "$TMP/k.txt" )" in *'changed_symbols=1 '*) ok "(k) an edit to b's last line seeds b alone (adjacent a and c stay out)" ;;
