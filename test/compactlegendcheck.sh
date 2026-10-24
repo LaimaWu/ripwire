@@ -367,6 +367,11 @@ echo "=== (A-PIN) --legend=full is BYTE-IDENTICAL to the pre-L1 default (pinned 
 # at= and est_tokens= masked) equals it exactly. 5527 -> 5688 B. The six other pins are unchanged.
 # RE-ANCHORED BY HAND 2026-10-19 (markdown section links), map.xml only: the two fixture callees gain via="link",
 # the full legend gains the via="link" comment, and est_tokens= prices them, 901 -> 929.
+# RE-ANCHORED BY HAND 2026-10-23 (lane honest-lex, CI fix round 1), grep.xml only: the lane's intended output change, nothing
+# else. Checked: the pin equals the previous head's --legend=full output with exactly four edits -- the full legend gains the
+# sentence "A hit is one LINE: occ= on a row (present only above one) counts the pattern's occurrences on that line, and
+# hits=, shown= and the window count lines, not occurrences."; the root's hits=/shown= read 7 (was 8: the two occurrences on
+# geometry.cpp:16 are one line now); that row's n="2" + its at-tagged sibling become occ="2" (one hit per line).
 PIN_DIR="$ROOT/test/compactlegendfix/pre_l1_full"
 # the one normalisation, in python on BOTH sides so no sed dialect decides it (BSD sed appends a final newline, GNU
 # sed does not): at="…" masked, trailing newlines dropped.
@@ -695,7 +700,7 @@ ripwire.affected/v1               840   826
 ripwire.verify/v1                 440   421
 ripwire.help-task/v1              440   429
 ripwire.query/v1                 790   775
-ripwire.grep/v1                  1380  1368
+ripwire.grep/v1                  1432  1420
 ripwire.match/v1                  370   355
 ripwire.lego/v1                  290   275
 ripwire.exemplar/v1               440   422
@@ -1705,6 +1710,8 @@ grep -q '^__ERROR__' "$TMP/m.bad" && ok "(M) MCP edit_check legend:\"terse\" is 
 # RE-PINNED 2026-09-19 (the L1 fix round, rv-r1-L1 HIGH-1: every emitted attribute defined — the (U) pins' note): uses 290 -> 510
 # (measured 500), path_between 280 -> 430 (419), exemplar 260 -> 350 (331); impact and lego did not cross their pins.
 # Fix round 2: path_between 430 -> 540 (measured 535 — the no-path hint= reading).
+# RE-PINNED 2026-10-24 (honest-lex fix 2): grep/v1 1380 -> 1432 (measured 1420; 1368 on the base binary) -- the +52 B clause
+# "(beside pattern_meta=, of the literal reading only)" that says complete=/hits= speak of the literal reading (review N1).
 # RE-PINNED 2026-10-18 (lane ix2-slice): path_between 540 -> 860 — the same <near_sink>/<ns> readings the (U) table's
 # ripwire.path/v1 row states (one emitter, src/pathgaps.h pathNearSinkXml); the (U-twin-path) arm keeps the old 550 B CLI pin.
 # RE-PINNED 2026-09-23 (cut-fix C): impact 780 -> 810 (measured 797; 777 on the base binary) — the same +20 B

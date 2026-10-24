@@ -111,7 +111,7 @@ inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
     { "verify",      "verify",      "ONE structured claim, verdict=confirmed|refuted|unknown, its witness rows <s t= n= p=> inline" },
     { "query",       "graph-query", "graph-query expression over the symbol graph: <s t= n= p=> matching rows" },
     { "match",       "match",       "tree-sitter structural query: <m p= in=> captured nodes with their enclosing symbol; grammars=/eligible_files= the scope" },
-    { "grep",        "grep",        "literal/regex scan grouped by file: <f p=><hit l= in=>CDATA text</hit> (<b>/<a> context around it); complete=1 only for an exhaustive literal scan; <unindexed> = off-index" },
+    { "grep",        "grep",        "literal/regex scan grouped by file: <f p=><hit l= in=>CDATA text</hit> (<b>/<a> context around it); complete=1 only for an exhaustive literal scan (beside pattern_meta=, of the literal reading only); <unindexed> = off-index" },
     { "exemplar",    "exemplar",    "the best-in-class instance of kind= for the task, chosen by role: n= p= in= ccx= tested=, <bodies><b> to imitate" },
     { "batch",       "batch",       "n= read sub-queries in one sweep (requested=, cap=): each <q> wraps one sub-answer verbatim in CDATA" },
     { "task-route",  "help-task",   "which verb answers this task: status=recommend|abstain confidence= score= margin=, <facts> the evidence" },
@@ -729,6 +729,11 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // --naming-consistency's absent-at-zero count (countAttrXmlOrEmpty, so (S) requires its row HERE): the JSX components
     // kept out of the vote (namingconsistency.h isJsxComponentName). Key-qualified: no other verb spells it.
     { "component_exempt", "component_exempt=N: PascalCase .tsx/.jsx functions (read as JSX components by extension alone), kept out of voting and flagging", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
+    // grep's per-hit tail, spelled through countAttrXmlOrEmpty (verbs_grep.h grepRowTailAttrs). Arm (S) of test/compactlegendcheck.sh
+    // reads every such name from SOURCE and demands a row in THIS table, so these two moved here from kCompactAttributeReadings
+    // (moved, not copied: the joint reading space would print a name twice). Still <hit>-qualified and grep-only.
+    { "line_bytes", "line_bytes=N: whole line N bytes; text is a cut prefix", true, "hit", MapHeaderRead::No, {}, "grep" },
+    { "occ", "occ=N: the pattern occurs N times on this one line; a hit is a line, hits= counts lines; absent = once", true, "hit", MapHeaderRead::No, {}, "grep" },
 
 };
 
@@ -974,7 +979,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "string_hits", "string_hits=N: of hits=, string-tier; rows: files named like the pattern, source, then the rest", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "ref", "hit ref=: first code site (not a comment/string) naming the hit's callerless enclosing def (where it is registered; one site)", true, "hit", MapHeaderRead::No, {}, "grep" },
     { "tier_budget", "tier_budget=: files|bytes cap hit after tier_parsed= of tier_files= hit files; tier counts floors, every row served", false, "grep", MapHeaderRead::No, {}, "grep" },
-    { "line_bytes", "line_bytes=N: whole line N bytes; text is a cut prefix", true, "hit", MapHeaderRead::No, {}, "grep" },
+    { "pattern_meta", "pattern_meta=: regex-shaped pieces of this LITERAL pattern, matched as text; complete=1 and hits= speak of that literal reading only (a zero may mean a regex was meant); next= is then the regex verb on it", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "unindexed_files_scanned", "unindexed_files_scanned=N: off-index text files also scanned; outside complete=", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "unindexed_hits", "unindexed_hits=N: hits in off-index files, NOT in hits=/total=; listed in the trailing unindexed element", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "callers", "callers=N: 1-hop distinct callers of this name, all same-named defs (a FLOOR)", true, "enc", MapHeaderRead::No, {}, "grep" },
@@ -1086,6 +1091,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "hits", "hits=N: occurrences in HEAD plus every scanned local ref's full tree (the total rows)", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "on-head", "on-head=1|0: whether HEAD's tree holds it; 0 beside hits = it lives only on a branch", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "head_labels", "head_labels=index: HEAD kind= from the parsed index; lexical: text heuristic", false, "whereis", MapHeaderRead::No, {}, "whereis" },
+    { "head_defs", "head_defs=0: lexical labels and the parsed index defines no symbol of this name: every HEAD kind=def is a text guess", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     // fix round 2 of the whereis-defs lane (crossref.h labelBranchRowsByParse): present only when a row of another ref is.
     { "ref_labels", "ref_labels=parsed: another ref's kind= from the index's own tags parse of its blob (one per blob and path; HEAD's own blob takes HEAD's labels); a blob with no line a loose lexical test calls worth parsing is not parsed and its rows read ref; kind=text: such a line no parse read, never a def", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "blobs", "unparsed blobs=N: other refs' blobs holding a line worth parsing that no parse read (past the runaway guard, or the parser could not finish); those lines read kind=text; next= lifts the guard", true, "unparsed", MapHeaderRead::No, {}, "whereis" },
