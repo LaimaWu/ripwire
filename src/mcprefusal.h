@@ -375,7 +375,7 @@ inline constexpr McpValueSpec kMcpValueFields[] = {
     // whereis-lean (review C1): the CLI --whereis-full-text twin, the replay a <t_cut next=> names. Terse: it rides tools/list.
     { "full_text",     "a BOOLEAN: true prints every t= line whole", "full_text=true", "boolean" },
     // lane lean2b: the CLI --show-stale twin, the replay quality_delta's stale_next names. Terse: it rides tools/list.
-    { "show_stale",    "a BOOLEAN: true lists the stale-ack sa rows a regression-free answer folds", "show_stale=true", "boolean" },
+    { "show_stale",    "a BOOLEAN: true = the full stale list", "show_stale=true", "boolean" },
     // ── the ENVELOPE, outside `params` (§B6 M6/M7) ──
     // These four were read through the bare findString/findObject path, which collapses "absent" onto
     // "present but not the shape I read" — so `"method":5` became `-32700 "parse error"` (a JSON that parsed

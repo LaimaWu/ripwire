@@ -102,9 +102,9 @@ echo 'int compute(int a, int b);' > "$FOLD/src/calc.h"
 } > "$FOLD/src/calc.c"
 ( cd "$FOLD" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init >/dev/null 2>&1 )
 fec(){ _s="$1"; shift; ( cd "$FOLD" && "$BIN" . --edit-check="$_s" --no-cache "$@" 2>/dev/null ); }
-fold_verdict(){   # LABEL OUT CALLERS — the verdict alone: callers= counted, no <c> rows, rows_next= naming the --limit call
+fold_verdict(){   # LABEL OUT CALLERS SYM [ROWS_NEXT] — the verdict alone: callers= counted, no <c> rows, rows_next= naming the --limit call
     if printf '%s' "$2" | grep -q "status=\"unchanged\" defs=\"1\" callers=\"$3\"" && [ -z "$( rows "$2" )" ] \
-       && printf '%s' "$2" | grep -q "rows_next=\"--edit-check=$4 --limit=$3\""; then ok "$1"; else no "$1"; printf '%s\n' "$2"; fi
+       && printf '%s' "$2" | grep -q "rows_next=\"${5:---edit-check=$4 --limit=$3}\""; then ok "$1"; else no "$1"; printf '%s\n' "$2"; fi
 }
 fold_rows(){      # LABEL OUT ROW — the full document: the named row listed, no rows_next=
     if rows "$2" | grep -qF "$3" && ! printf '%s' "$2" | grep -q 'rows_next='; then ok "$1"; else no "$1"; printf '%s\n' "$2"; fi
@@ -137,7 +137,7 @@ for line in sys.stdin:
     if c: print(c[0].get("text","")); break'; }
 if command -v python3 >/dev/null 2>&1; then
     M_TS="$( mec blend '' )"; M_TSL="$( mec blend ',"limit":16' )"
-    fold_verdict "(1v-m) MCP edit_check, clean tree, 16 callers: the verdict alone, rows_next= names --limit=16" "$M_TS" 16 blend
+    fold_verdict "(1v-m) MCP edit_check, clean tree, 16 callers: the verdict alone, rows_next= names the MCP call (fix1 B3)" "$M_TS" 16 blend "edit_check symbol=blend limit=16"
     [ "$( rows "$M_TSL" | wc -l | tr -d ' ' )" = 16 ] && [ "$( rows "$M_TSL" )" = "$( rows "$F_TSL" )" ] \
         && ok "(1v-m) MCP limit=16 lists the 16 caller rows, identical to the CLI --limit=16 rows" \
         || { no "(1v-m) MCP limit=16 does not reproduce the CLI rows"; printf '%s\n' "$M_TSL"; }

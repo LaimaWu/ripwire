@@ -4967,8 +4967,8 @@ inline EditCheckReply editCheckText( const std::string& root, const std::string&
     return EditCheckReply{ editCheckBundleText( ing, g, root, kDefaultMaxFileBytes, {}, groups[0].lowestNode,
                                                  /*ni=*/nullptr, /*preview=*/false,
                                                  // lane lean2b (card #9): the CLI's verdict-only fold — a clean contract at HEAD with nothing
-                                                 // flagged answers the verdict + rows_next= (the limit= that lists the callers), callers= kept
-                                                 EditCheckPage{ pg.limit, pg.offset, /*verdictOnly=*/true, symbol }, unprovenDefs ), {} };
+                                                 // flagged answers the verdict + rows_next= (the MCP call, limit=N, that lists the callers), callers= kept
+                                                 EditCheckPage{ pg.limit, pg.offset, /*verdictOnly=*/true, symbol, /*mcpSpelling=*/true }, unprovenDefs ), {} };
 }
 
 // ─── `slice` verb (lane/tc-sliceat): the ARISE def-use slice over MCP, mirroring the CLI --slice ────────

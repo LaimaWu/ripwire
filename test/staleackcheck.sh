@@ -143,7 +143,7 @@ for line in sys.stdin:
     if d.get("error"): sys.stdout.write("__ERROR__"+json.dumps(d["error"])); break'; }
     mcpfold(){   # LABEL EXPECT(fold|full) CLI_COLLAPSED CLI_SHOWSTALE
         mcpqd '' >"$TMP/mcp_qd_def"; mcpqd ',"show_stale":true' >"$TMP/mcp_qd_full"
-        python3 - "$TMP/mcp_qd_def" "$TMP/mcp_qd_full" "$3" "$4" "$2" <<'PY' && ok "$1" || no "$1"
+        if python3 - "$TMP/mcp_qd_def" "$TMP/mcp_qd_full" "$3" "$4" "$2" <<'PY'
 import json, re, sys
 dT, fT = ( open( p, encoding = "utf-8" ).read() for p in sys.argv[ 1:3 ] )
 cliC, cliF = ( open( p ).read() for p in sys.argv[ 3:5 ] )
@@ -165,6 +165,7 @@ for cond, msg in (
     if not cond: print( "    " + msg ); ok = False
 sys.exit( 0 if ok else 1 )
 PY
+        then ok "$1"; else no "$1"; fi
     }
     mcpfold "(2m) MCP quality_delta, 2 stale rows: the fold does not pay, the default is the show_stale=true document byte for byte" full "$TMP/targetgone_c" "$TMP/targetgone"
     # twelve more acked symbols, then deleted: 14 stale rows — the fold pays
