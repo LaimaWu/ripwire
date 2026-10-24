@@ -1674,6 +1674,32 @@ struct GrepAuxCollection
     }
 };
 
+// One unindexed file's matched sites -> GrepAuxHit rows: one row per LINE (a second site on the same line only bumps that
+// row's occ=, honest-lex — the indexed list's rule, grepFoldLines), each carrying its matched line's text. `lineStarts` is
+// the caller's scratch, refilled here for `text`. Split out of scanUnsupportedFiles (train 34) so the scan loop keeps only
+// the per-file skip / scan decisions.
+inline void appendAuxFileHits( const std::string& text, const std::string& path, const std::vector<GrepMatchSite>& sites,
+                               std::vector<std::size_t>& lineStarts, GrepAuxCollection& out )
+{
+    lineStarts.clear();
+    lineStarts.push_back( 0 );
+    for( std::size_t i = 0; i < text.size(); ++i )
+    {
+        if( text[i] == '\n' ) { lineStarts.push_back( i + 1 ); }
+    }
+    for( const GrepMatchSite& s : sites )
+    {
+        if( !out.hits.empty() && out.hits.back().line == s.line && out.hits.back().path == path )
+        {
+            ++out.hits.back().occ;   // honest-lex: one row per line, the indexed list's rule (grepFoldLines)
+            continue;
+        }
+        std::uint32_t auxLineBytes = 0;
+        std::string   auxText        = grepMatchedLine( text, lineStarts, s.line, &auxLineBytes );
+        out.hits.push_back( GrepAuxHit{ path, s.line, std::move( auxText ), auxLineBytes } );
+    }
+}
+
 // The per-file loop grepCollectAux runs, on whichever thread it chose (below). `re` is null for a literal scan.
 inline void scanUnsupportedFiles( const CrawlSkips& skips, const std::string& pat, const GuardedRegex* re, std::size_t maxAuxFileBytes,
                                   RegexLinePolicy linePolicy, GrepAuxCollection& out )
@@ -1710,23 +1736,7 @@ inline void scanUnsupportedFiles( const CrawlSkips& skips, const std::string& pa
             continue;
         }
 
-        lineStarts.clear();
-        lineStarts.push_back( 0 );
-        for( std::size_t i = 0; i < text.size(); ++i )
-        {
-            if( text[i] == '\n' ) { lineStarts.push_back( i + 1 ); }
-        }
-        for( const GrepMatchSite& s : sites )
-        {
-            if( !out.hits.empty() && out.hits.back().line == s.line && out.hits.back().path == row.path )
-            {
-                ++out.hits.back().occ;   // honest-lex: one row per line, the indexed list's rule (grepFoldLines)
-                continue;
-            }
-            std::uint32_t auxLineBytes = 0;
-            std::string   auxText        = grepMatchedLine( text, lineStarts, s.line, &auxLineBytes );
-            out.hits.push_back( GrepAuxHit{ row.path, s.line, std::move( auxText ), auxLineBytes } );
-        }
+        appendAuxFileHits( text, row.path, sites, lineStarts, out );
     }
 }
 
