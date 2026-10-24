@@ -1157,6 +1157,8 @@ enum class LocalBindKind : std::uint8_t
                //     import x [as y]` (`var` names a MEMBER of m, not m). The module-alias receiver narrow
                //     (graph.h buildGraph) reads this to refuse `x.attr()` when `x` was bound the second way
                //     — `x` there is a value from inside m, and `.attr` is not a lookup in m's own namespace.
+               //     ind4b fix 5: `from m import x as y` with y != x records "from:x" (kPythonFromMemberMark + x) — the
+               //     member's ORIGINAL name, which `var` (the local alias) loses; a plain `from m import x` stays empty.
     JsImport,  // named ES import: var=local name, typeName=module, importedName=export (empty for type-only).
     JsExport,  // ES export: var=EXPORTED name; importedName=the LOCAL name it binds (empty on the declaration
                //     form, where the two are the same word). spanStart/spanEnd is the region a definition must
@@ -1387,6 +1389,7 @@ inline constexpr std::uint8_t kWholeResult = 0xFF;
 // (LocalBindKind::RubySingletonDef, RubyClassMixin; parser version 145): written in a concern's `included do`, or a def
 // in its `class_methods do`.
 inline constexpr std::string_view kRubyIncluderMark     = "included";
+inline constexpr std::string_view kPythonFromMemberMark  = "from:";   // Python Import importedName prefix: `from m import x as y` records "from:x" (never equals "module")
 inline constexpr std::string_view kRubyClassMethodsMark = "class_methods";
 static_assert( enumCountIsExact<LocalBindKind, kLocalBindKindCount>(), "kLocalBindKindCount must name the LAST LocalBindKind enumerator — move it with the append" );
 

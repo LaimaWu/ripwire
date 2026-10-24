@@ -46,6 +46,10 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   lane l6-iface 212 / 213) and quality.h's kIngestParserVerMirror with it. kCacheVersion stays 36 and kQSnapCacheScheme
 #   stays 22: IX-1 writes struct-field slots in memberPath / memberCtor of the existing value / through records. The ix1-slot
 #   lane entry below is kept as written; its hash is superseded by this one.
+# 2026-10-23, lane ind4b-k5-tighten-k5c fix round 5: RE-PINNED with UPDATE_GOLDEN=1. Fix round 4 moved kParserVer 212 -> 224 (rich file tag
+#   225; quality.h's kIngestParserVerMirror with it) and left the pin; the manifest hashes that line and the comment under it, which this
+#   round also grew. kParserVer 224 is a PLACEHOLDER the train renumbers, and the train re-pins again then. kCacheVersion stays 36 and
+#   kQSnapCacheScheme stays 22: no record format and no watched quality.h function moved (importedName gains a value, same field).
 # 2026-10-21, train 32a (member-names 781a22fb, rust-receivers dd378171 merged onto main f156be85): RE-DERIVED ONCE with
 #   UPDATE_GOLDEN=1 on the merged tree (a667ffc55e…8a05 -> c4422a58e4…2d607). Watched text: kParserVer 206 -> 212 (rich file tag
 #   213; above main 206 / 207, lane rust-receivers 202 / 203, ix1-slot 204 / 205, l6-iface 210 / 211; #420 reserves 214 / 215) and

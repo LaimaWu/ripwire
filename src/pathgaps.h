@@ -40,11 +40,14 @@
 #include "closures.h"         // ClosureIndex — a near-sink row written inside another function's body (why=closure)
 #include "infra/sortutil.h"   // svLess: the explicit byte order every string_view sort here takes (portablebuildcheck #6)
 #include "infra/enumcount.h"  // enumCountIsExact — the kNearSinkKindCount / kBridgeViaCount sizes follow their enums
+#include "langfacts.h"         // langFacts(l).transitiveIncludes — the import rule's C-family closure (K5 rule 2b)
+#include "infra/namesplit.h"  // afterLast — a bound scope's final segment, the base index key (K5 rule 2c)
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <span>
 #include <string>
@@ -412,7 +415,7 @@ struct NearSinkRow
     std::size_t    callers = 0;   // its proven callers (in-edges), any depth
     NearSinkCounts counts{};
     NearSinkSite   site;          // the one site the row names (none when counts are all 0)
-    std::size_t    nameWithheld = 0;   // by-name hits the K5 rules withheld (owner out of reach, or no non-builtin call): never "external"
+    std::size_t    nameWithheld = 0;   // by-name hits the K5 rules withheld (rule 2b/2c refused, or no non-builtin call): never "external"
 
     bool reasoned() const noexcept { return site.valid || callers == 0; }   // a why= (external included)
 };
@@ -440,10 +443,12 @@ inline bool builtinSpelledCall( const Reference& call ) noexcept
 // `handler`). Both rules below hold for both hedges:
 //   (1) SITE: the hedge's site is C's first call of NAME that is not builtinSpelledCall (the declined pass's own filter);
 //       a caller whose every call of NAME is builtin-spelled offers no by-name hedge.
-//   (2) OWNER IN REACH: the namesake's OWNER — the class that owns it in its own file (Symbol::scope, the extractor's), or
-//       its file for a free definition — owns some definition in the forward reach set: near_sink takes
-//       PathSearchGaps::cone (every symbol the forward search reached), the bridge every symbol its layered search has
-//       reached so far (layers 0..k before crossing k+1). A namesake nothing reached shares an owner with is no way in.
+//   (2) OWNER IN REACH: the namesake's OWNER — the class that owns it in its own file (Symbol::scope, the extractor's) —
+//       owns some definition in the forward reach set: near_sink takes PathSearchGaps::cone (every symbol the forward
+//       search reached), the bridge every symbol its layered search has reached so far (layers 0..k before crossing k+1).
+//       A namesake nothing reached shares an owner with is no way in. Lane ind4b: a FILE-OWNED namesake needs the caller's
+//       file to be or import its file instead (2b), and a class-owned one is also admitted by override dispatch (2c) —
+//       NamesakeRule::admits below.
 
 // Each caller's call references in reference order, for the by-name site (rule 1).
 class ByNameCallSites
@@ -506,6 +511,192 @@ private:
         return std::to_string( s.fileId ) + "#" + s.scope;
     }
     HashMap<std::string, char> owners_;
+};
+
+// Lane ind4b sharpened rule 2 per namesake shape (one place for both hedges — near_sink and the bridge's crossing):
+//   (2b) a FILE-OWNED namesake (scope "": a free function, or a method of a language whose extractor records no class
+//        scope — JS/TS) is admitted only when the caller's file IS the namesake's file or imports it: a direct edge of the
+//        index's precise import adjacency (Graph::importAdj), or for C/C++/ObjC any transitive #include. Owner reach no
+//        longer admits one: a file the search touched is not evidence the caller can name its function (the koa accessor
+//        and nunjucks `this.init` sites the IND4 Stage-0 hand-check rejected).
+//   (2c) a CLASS-OWNED namesake is admitted when its class's owner is in reach (rule 2, unchanged) OR — override dispatch
+//        — its class derives from the class owning the definition the call was bound to through PROVEN base edges only
+//        (Graph::implementorBound == BaseBound::Proven, any depth): at every hop the deriving class's written base name is
+//        bound, in that class's own file, to the next class — a same-file declaration, the file its import of THAT name
+//        resolves to (Python FE-A memberImportFile, incl. a package re-export and the src/ layout suffix match; a JS/TS
+//        named import; a C-family include; the Java/Kotlin/Go package) — buildGraph's provenBasesOf, the one base resolver.
+//        A namesake whose base clause names another same-named class (in-tree elsewhere, or external: `ext.Base`,
+//        `from ext import Base`) has no proven edge to the bound class however its file's imports reach the bound file, and
+//        an edge no evidence binds (ByName) is withheld too: exact or no row. The residual is the binding's own: a
+//        qualified base the lookup does not read (a dotted `a.b.X`) stays withheld (withheld="name"), and so
+//        does a Python base name with any binding but its import in the class statement's scope chain (pythonBaseNameProven:
+//        `Base = Other` at module, class-body or function scope, a parameter, a match capture, a `type` statement, a second import,
+//        a star import that could bind it; a qualifier also imported as a module outside the chain, where the file-wide tables decide).
+//        A re-export chain is followed only through files whose binding of the name is ONE plain import, at every hop
+//        (pythonFileBindsOnlyByImport): a hop that renames, rebinds, star-imports after it, writes the module namespace dynamically
+//        (`globals()`, `setattr`, `__getattr__`) or has no record of the name ends the chain, so the row is withheld.
+// Rule 2c's derivation (below): the classes that derive from a bound definition's class through PROVEN base edges only
+// (Graph::implementorBound == BaseBound::Proven), memoized per bound owner. The classes with a derived class are indexed by
+// "<file>#<name>" on first ask (one pass over the implementors map); the walk visits each class once.
+class ProvenSubclasses
+{
+public:
+    explicit ProvenSubclasses( const IngestResult& ing, const Graph& g )
+        : ing_( ing ), g_( g ) {}
+    // does a class owning `ns`'s scope derive, over proven edges, from the class owning `bs`'s scope?
+    bool derives( const Symbol& ns, const Symbol& bs ) const
+    {
+        return std::ranges::any_of( below( bs ), [ & ]( NodeId d ) { return ownsScope( ing_.symbols[d], ns.fileId, ns.scope ); } );
+    }
+
+private:
+    // is `cls` the class whose members carry `scope` in file `fileId`? scope ends with its name, and is either the class's
+    // own recorded scope (Python records a class under its own qualified name) or its scope, a separator, its name
+    static bool ownsScope( const Symbol& cls, std::uint32_t fileId, std::string_view scope ) noexcept
+    {
+        if( cls.fileId != fileId || !scope.ends_with( cls.name ) )
+        {
+            return false;
+        }
+        if( cls.scope == scope )
+        {
+            return true;
+        }
+        const std::string_view outer = scope.substr( 0, scope.size() - cls.name.size() );
+        if( outer.empty() )
+        {
+            return cls.scope.empty();
+        }
+        return ( outer.ends_with( "::" ) && outer.substr( 0, outer.size() - 2 ) == cls.scope )
+               || ( outer.ends_with( "." ) && outer.substr( 0, outer.size() - 1 ) == cls.scope );
+    }
+    // the classes owning `bs`'s scope: those of its leaf name in its file that have a derived class
+    std::vector<NodeId> ownersOf( const Symbol& bs ) const
+    {
+        if( !indexed_ )
+        {
+            indexed_ = true;
+            for( NodeId b = 0; b < g_.implementors.size(); ++b )
+            {
+                if( !g_.implementors[b].empty() )
+                {
+                    basesByName_[ fileNameKey( key_, ing_.symbols[b].fileId, ing_.symbols[b].name ) ].push_back( b );
+                }
+            }
+        }
+        std::vector<NodeId>    out;
+        const std::string_view leaf = namesplit::afterLast( namesplit::afterLast( bs.scope, "::" ), "." );
+        if( const auto it = basesByName_.find( fileNameKey( key_, bs.fileId, leaf ) ); it != basesByName_.end() )
+        {
+            std::ranges::copy_if( it->second, std::back_inserter( out ), [ & ]( NodeId b ) { return ownsScope( ing_.symbols[b], bs.fileId, bs.scope ); } );
+        }
+        return out;
+    }
+    const std::vector<NodeId>& below( const Symbol& bs ) const
+    {
+        if( const auto it = below_.find( fileNameKey( key_, bs.fileId, bs.scope ) ); it != below_.end() )
+        {
+            return it->second;
+        }
+        std::vector<NodeId>   out;
+        std::vector<NodeId>   stack = ownersOf( bs );
+        HashMap<NodeId, char> seen;
+        while( !stack.empty() )
+        {
+            const NodeId b = stack.back();
+            stack.pop_back();
+            const std::vector<NodeId>&       kids  = g_.implementors[b];
+            const std::vector<std::uint8_t>& bound = g_.implementorBound[b];
+            for( std::size_t k = 0; k < kids.size(); ++k )
+            {
+                if( bound[k] == std::uint8_t( BaseBound::Proven ) && seen.try_emplace( kids[k], char( 1 ) ).second )
+                {
+                    out.push_back( kids[k] );
+                    stack.push_back( kids[k] );
+                }
+            }
+        }
+        return below_.try_emplace( fileNameKey( key_, bs.fileId, bs.scope ), std::move( out ) ).first->second;
+    }
+    const IngestResult&                               ing_;
+    const Graph&                                      g_;
+    mutable std::string                               key_;
+    mutable bool                                      indexed_ = false;
+    mutable HashMap<std::string, std::vector<NodeId>> basesByName_;   // "<file>#<class name>" → the classes with a derived class
+    mutable HashMap<std::string, std::vector<NodeId>> below_;         // "<file>#<bound scope>" → the proven-derived classes
+};
+
+class NamesakeRule
+{
+public:
+    NamesakeRule( const IngestResult& ing, const Graph& g )
+        : ing_( ing ), g_( g ), derived_( ing, g ) {}
+    void add( const Symbol& s )
+    {
+        owners_.add( s );
+    }
+    // May caller c's call, bound by name alone to `bound`, run `namesake` instead? (rules 2b / 2c above)
+    bool admits( NodeId caller, NodeId bound, NodeId namesake ) const
+    {
+        const Symbol& ns = ing_.symbols[namesake];
+        if( ns.scope.empty() )
+        {
+            const std::uint32_t from = ing_.symbols[caller].fileId;
+            return from == ns.fileId || fileSees( from, ns.fileId, langFacts( ns.lang ).transitiveIncludes );
+        }
+        const Symbol& bs = ing_.symbols[bound];
+        return owners_.reaches( ns ) || ( !bs.scope.empty() && derived_.derives( ns, bs ) );
+    }
+
+private:
+    // does file `from` import file `to` — directly (the precise adjacency only), or (transitive: a C-family #include
+    // closure) over any number of import edges? Memoized per `from`.
+    bool fileSees( std::uint32_t from, std::uint32_t to, bool transitive ) const
+    {
+        const std::vector<std::vector<std::uint32_t>>& adj = g_.importAdj;
+        if( from >= adj.size() )
+        {
+            return false;
+        }
+        if( !transitive )
+        {
+            return std::ranges::find( adj[from], to ) != adj[from].end();
+        }
+        if( reach_.empty() )
+        {
+            reach_.resize( adj.size() );
+            reachDone_.resize( adj.size(), 0 );
+        }
+        if( reachDone_[from] == 0 )
+        {
+            reachDone_[from] = 1;
+            std::vector<char>          seen( adj.size(), 0 );
+            std::vector<std::uint32_t> stack{ from };
+            seen[from] = 1;
+            while( !stack.empty() )
+            {
+                const std::uint32_t v = stack.back();
+                stack.pop_back();
+                for( const std::uint32_t w : adj[v] )
+                {
+                    if( w < adj.size() && seen[w] == 0 )
+                    {
+                        seen[w] = 1;
+                        stack.push_back( w );
+                        reach_[from].push_back( w );
+                    }
+                }
+            }
+            std::ranges::sort( reach_[from] );
+        }
+        return std::ranges::binary_search( reach_[from], to );
+    }
+    const IngestResult&                                  ing_;
+    const Graph&                                         g_;
+    NamesakeOwnerReach                                   owners_;
+    mutable std::vector<std::vector<std::uint32_t>>      reach_;          // file → the files its #includes reach (sorted), on first ask
+    mutable std::vector<char>                            reachDone_;
+    ProvenSubclasses                                     derived_;        // rule 2c
 };
 
 // Is site a preferred over site b for one row? met first, then kind (table order), then path, line, order.
@@ -668,7 +859,7 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
     if( !g.outNameOnly.empty() )
     {
         EXPECTS( g.outNameOnly.size() == g.outTargets.size(), "buildGraph allocates the hedge bits one per flattened edge" );
-        NamesakeOwnerReach ownerReach;   // K5 rule 2: the owners the forward search reached
+        NamesakeRule ownerReach( ing, g );   // K5 rule 2 (2b/2c): the owners the forward search reached
         for( const NodeId v : forwardCone )
         {
             if( v < S )
@@ -722,10 +913,10 @@ inline PathNearSink pathNearSink( const IngestResult& ing, const Graph& g, std::
                     const NodeId u = out.rows[ it->row ].id;
                     const auto   from = g.outTargets.begin() + g.outOff[c];
                     const auto   to   = g.outTargets.begin() + g.outOff[c + 1];
-                    // outTargets ascend within a source; the row's owner must be in the forward reach (K5 rule 2)
+                    // outTargets ascend within a source; the namesake must pass K5 rule 2 (2b/2c)
                     if( u != w && u != c && !std::binary_search( from, to, u ) )
                     {
-                        ( ownerReach.reaches( ing.symbols[u] ) ? nameHits : withheld ).emplace_back( c, it->row );
+                        ( ownerReach.admits( c, w, u ) ? nameHits : withheld ).emplace_back( c, it->row );
                     }
                 }
             }
@@ -798,7 +989,8 @@ inline constexpr std::string_view kNearSinkLegend =
     "entered with no edge: declined = a declined call lists it as a candidate (not one spelled like a builtin type's method), value = "
     "it is stored or passed as a value (not by a wrapper decorator such as @property), through = a "
     "call through a parameter or slot is matched to that value, name = a by-name call went to a namesake and has no edge to it (a call "
-    "not spelled like a builtin type's method, and the row's class, or its file for a free function, owns something the forward search reached), "
+    "not spelled like a builtin type's method; a row with no class needs the caller's file to be or import its file, a class method needs its class "
+    "to own something the forward search reached or to derive from the bound definition's class, each base bound by its file's import), "
     "closure = it is a named function written inside in='s body (site= its own definition: in= runs it or hands it on), "
     "external = none of those and no proven caller: no indexed way in was found (an entry point, an out-of-tree or framework caller, "
     "a hand-off the index does not record, or dead); withheld=name:N = N callers whose by-name calls reach this namesake "
@@ -1004,7 +1196,7 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
         }
     }
     const ByNameCallSites byNameSites( ing, {} );   // K5 rule 1: a namesake crossing needs a call of the name not builtin-spelled
-    NamesakeOwnerReach    ownerReach;               // K5 rule 2: the owners of every symbol layers 0..k reached
+    NamesakeRule          ownerReach( ing, g );     // K5 rule 2 (2b/2c): the owners of every symbol layers 0..k reached
     std::vector<NodeId> frontier;
     for( const NodeId s : srcDefs )
     {
@@ -1110,7 +1302,7 @@ inline PathBridge pathBridge( const IngestResult& ing, const Graph& g, std::span
                 const std::size_t fan = std::size_t( last - first ) - ( std::find( first, last, w ) != last ? 1u : 0u );
                 for( auto it = first; fan <= kBridgeFanOut && it != last; ++it )
                 {
-                    if( *it != w && ownerReach.reaches( ing.symbols[*it] ) )   // K5 rule 2: its owner is in reach
+                    if( *it != w && ownerReach.admits( u, w, *it ) )   // K5 rule 2 (2b/2c)
                     {
                         cross( u, *it, BridgeVia::Namesake, fan );
                     }
@@ -1149,8 +1341,9 @@ inline constexpr std::string_view kPathBridgeLegend =
     "runs through no test, bench, demo, generated or minified symbol, nor a .d.ts/.pyi declaration twin whose package ships its implementation; its <s> rows read like a path's, and via= on a row names the crossing INTO it: declined = "
     "one of cands= candidates of a declined call in the previous row, value = a function the previous row stores or passes as a value, "
     "closure = a function written in the previous row's body, namesake = another same-language, same-kind definition of a name the previous row "
-    "calls by name alone, not spelled like a builtin type's method, whose class (or file, for a free function) owns something the "
-    "chain's earlier layers reached (via=name rows are proven edges bound by name). Fewest crossings first. It is NOT a path: reachable= and "
+    "calls by name alone, not spelled like a builtin type's method, in a file the previous row's file is or imports when it has no class, "
+    "else whose class owns something the chain's earlier layers reached or derives from the bound definition's class in a file that imports "
+    "that one (via=name rows are proven edges bound by name). Fewest crossings first. It is NOT a path: reachable= and "
     "hops= on the root stay 0, no count includes it, and every crossing is a hedge. ";
 inline std::string_view pathBridgeLegend( bool on ) noexcept
 {
