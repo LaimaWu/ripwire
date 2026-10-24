@@ -666,47 +666,40 @@ struct HunkSourceText
     }
 };
 
-// A property / getter / setter, read off the declaration's own text (the extractor keeps no flag for it):
-// Python — a decorator line directly above the def that names `property` (`@property`, `@x.setter`,
-// `@functools.cached_property`); JS/TS — a `get`/`set` keyword before the member name on its line. Callers read
-// these as attributes, so the call graph has no edge to the member. Other languages: not narrowed here.
+// A property / getter / setter, read off the declaration's own text (the extractor keeps no flag for it), by two
+// language-neutral probes that cost nothing where they do not apply (a miss only means "narrow", a false hit only
+// means "fall back"): a decorator line at or directly above the symbol that names `property` / `.setter` / `.getter` /
+// `.deleter` (Python's `@property` family), and a `get` / `set` keyword right before the member's name on its line
+// (JS/TS accessors). Callers read these as attributes, so the call graph has no edge to the member.
 inline bool isAccessorDeclaration( const Symbol& s, HunkSourceText& src )
 {
     if( s.kind != SymKind::Method && s.scope.empty() ) { return false; }   // a member: the extractor files some class members as Function with the class as scope
-    if( s.lang == Lang::Python )
+    const auto isDecorator = [ & ]( std::uint32_t ln ) { const std::string_view t = trimWs( src.line( ln ) ); return !t.empty() && t.front() == '@'; };
+    const auto namesAccessor = [ & ]( std::uint32_t ln )
     {
-        // The symbol's line is its `def` — or, when the extractor starts a decorated def at its first decorator, a
-        // decorator line itself. Either way the decorator run is the contiguous `@` lines around that line.
-        const auto namesAccessor = [ & ]( std::uint32_t ln )
-        {
-            const std::string_view t = trimWs( src.line( ln ) );
-            return !t.empty() && t.front() == '@'
-                && ( t.find( "property" ) != std::string_view::npos || t.find( ".setter" ) != std::string_view::npos
-                     || t.find( ".getter" ) != std::string_view::npos || t.find( ".deleter" ) != std::string_view::npos );
-        };
-        const auto isDecorator = [ & ]( std::uint32_t ln ) { const std::string_view t = trimWs( src.line( ln ) ); return !t.empty() && t.front() == '@'; };
-        for( std::uint32_t k = 1; k < 8 && k < s.line && isDecorator( s.line - k ); ++k )
-        {
-            if( namesAccessor( s.line - k ) ) { return true; }
-        }
-        for( std::uint32_t ln = s.line; ln < s.line + 8 && isDecorator( ln ); ++ln )
-        {
-            if( namesAccessor( ln ) ) { return true; }
-        }
-        return false;
+        const std::string_view t = trimWs( src.line( ln ) );
+        return t.find( "property" ) != std::string_view::npos || t.find( ".setter" ) != std::string_view::npos
+            || t.find( ".getter" ) != std::string_view::npos || t.find( ".deleter" ) != std::string_view::npos;
+    };
+    // The symbol's line is its `def` — or, when the extractor starts a decorated def at its first decorator, a
+    // decorator line itself. Either way the decorator run is the contiguous `@` lines around that line.
+    for( std::uint32_t k = 1; k < 8 && k < s.line && isDecorator( s.line - k ); ++k )
+    {
+        if( namesAccessor( s.line - k ) ) { return true; }
     }
-    if( s.lang == Lang::TypeScript || s.lang == Lang::JavaScript )
+    for( std::uint32_t ln = s.line; ln < s.line + 8 && isDecorator( ln ); ++ln )
     {
-        const std::string_view ln  = src.line( s.line );
-        const std::size_t      pos = ln.find( s.name );
-        if( pos == std::string_view::npos ) { return false; }
-        const std::string_view before = trimWs( ln.substr( 0, pos ) );
-        for( const std::string_view kw : { std::string_view( "get" ), std::string_view( "set" ) } )
+        if( namesAccessor( ln ) ) { return true; }
+    }
+    const std::string_view ln  = src.line( s.line );
+    const std::size_t      pos = ln.find( s.name );
+    if( pos == std::string_view::npos ) { return false; }
+    const std::string_view before = trimWs( ln.substr( 0, pos ) );
+    for( const std::string_view kw : { std::string_view( "get" ), std::string_view( "set" ) } )
+    {
+        if( before.ends_with( kw ) && ( before.size() == kw.size() || before[before.size() - kw.size() - 1] == ' ' ) )
         {
-            if( before.ends_with( kw ) && ( before.size() == kw.size() || before[before.size() - kw.size() - 1] == ' ' ) )
-            {
-                return true;
-            }
+            return true;
         }
     }
     return false;
