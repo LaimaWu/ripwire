@@ -3242,6 +3242,8 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     sizeImportTier( imports, page.limit, symbol );   // cut-fix C: limit sizes the tier, as on the CLI
     // Reference-as-value round: SYM's binding sites, the CLI --impact's value_refs=/<vrs> by the same call.
     const ValueRefRows  imValueRefs = valueRefCallerRows( ing, valueRefIndexOf( ix ), seeds );
+    const BackwardHops  imBackHops( ing, g, valueRefIndexOf( ix ) );                  // HOP1: the CLI --impact's hedged slot ring, by the same calls
+    const ImpactRing    imRing      = impactSlotRing( ing, imBackHops, seeds, reach );
     const PageWindow    ipw         = pageWindow( show.size(), effectiveRowCap( page.limit, 40 ), page.offset );
     // idea #6: the CLI arm's rollup, under the same rule — it rides only beside a CUT symbol window
     ImpactTypeFold   typeFold;
@@ -3273,6 +3275,7 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
                     + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI
                     + std::string( slotJoinLegend( imValueRefs.slotCallers, true ) )                 // IX-1: exactly when a <vr> row carries via=, as on the CLI
+                    + impactRingLegend( imRing.hedged > 0, !imRing.rows.empty() )                     // HOP1: exactly when reaches_hedged= / <ring> ride, as on the CLI
                     + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ), !imports.next.empty(),
                                           ImpactRollupTypeClauses{ imFiles.typed, imFiles.typeDefs, imFiles.typeCapped } )   // idea #6; FIX1 R1; L7, as on the CLI
                     + defTableLegend( imAttr.groups.multi(), imListing.cut )                                                         // attrib-multidef, as on the CLI
@@ -3290,7 +3293,7 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     // root=, MCP does not) and every row answered the same question in a different path dialect.
     const std::string  imRootAttr   = imSingleRoot ? ( " root=\"" + ex( root ) + "\"" ) : std::string();
     rw::emitTo( mem, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}{}>",
-                  ex( symbol ).c_str(), seeds.size(), reach.size(), unprovenDefsAttrXml( unprovenDefs ) + defsListedAttrXml( imAttr.groups, imListing ),   // H1: where the CLI root carries it; attrib-multidef
+                  ex( symbol ).c_str(), seeds.size(), reach.size(), impactRingAttrXml( imRing ) + unprovenDefsAttrXml( unprovenDefs ) + defsListedAttrXml( imAttr.groups, imListing ),   // HOP1, as on the CLI; H1: where the CLI root carries it; attrib-multidef
                   byDepthAttrXml( byDepth ),                                                                        // 0.6.5: the CLI root's by_depth=
                   imports.xmlAttrs.c_str(), radiusTested, radiusUntested, ( declinedCallsAttrXml( declinedCalls ) + declinedSiteCutAttrXml( imDc.cut ) + declinedIfaceAttrXml( declinedIface ) ).c_str(),
                   ( valueRefsCountAttrXml( imValueRefs.rows.size() ) + valueRefsDepthAttrXml( ing, imValueRefs.depthCut, VrRender{ imSingleRoot, imRootPrefix } ) ), imRootAttr.c_str(),
@@ -3312,7 +3315,8 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     emitImportRowsXml( mem, ing, std::span<const std::uint32_t>( imports.files ).first( imports.shown ), imRootPrefix,
                        std::span<const char>( imports.lazy ).first( imports.shown ) );
     rw::emitTo( mem, "{}{}</impact>", declinedSitesXml( imDc.views, /*callersForm=*/true ),   // ix2-slice (IX-4), as on the CLI
-                  valueRefsXml( ing, imValueRefs, true, VrRender{ imSingleRoot, imRootPrefix }, "--uses=" + symbol ) );
+                  valueRefsXml( ing, imValueRefs, true, VrRender{ imSingleRoot, imRootPrefix }, "--uses=" + symbol )
+                    + impactRingXml( ing, imRing, VrRender{ imSingleRoot, imRootPrefix } ) );   // HOP1: the d=2 slot ring, as on the CLI
     return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
 
@@ -3757,7 +3761,13 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     // PATH-GAP: the CLI --path's gap clause, by the same analysis and emitter (src/pathgaps.h).
     const PathSearchGaps ptGaps = pth.empty() ? pathSearchGaps( ing, g, srcDefs, valueRefIndexOf( ix ) ) : PathSearchGaps{};
     const PathNearSink        ptNear       = pth.empty() ? pathNearSink( ing, g, dstDefs, ptGaps.cone, valueRefIndexOf( ix ) ) : PathNearSink{};   // ix2-slice, as on the CLI
-    const PathBridge          ptBridge     = pth.empty() ? pathBridge( ing, g, srcDefs, dstDefs, valueRefIndexOf( ix ) ) : PathBridge{};      // ix2-slice, as on the CLI
+    std::optional<BackwardHops> ptBackHops;   // HOP1: the CLI's one backward hop provider, as on the CLI
+    if( pth.empty() )
+    {
+        ptBackHops.emplace( ing, g, valueRefIndexOf( ix ) );
+    }
+    const PathBridge          ptBridge     = pth.empty() ? pathBridge( ing, g, srcDefs, dstDefs, valueRefIndexOf( ix ), *ptBackHops ) : PathBridge{};      // ix2-slice, as on the CLI
+    const std::string         ptSinkCallers = pth.empty() && ptGaps.any() && !dstGlob ? pathSinkCallersSelector( ing, *ptBackHops, dstDefs, to, ptSingleRoot, ptRootPrefix ) : std::string();   // HOP1 #6, as on the CLI
     const std::string         ptKindLegend = pathKindLegend( g, pth );
     const PathEndpointBinding ptBound      = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), pth );   // attrib-multidef, as on the CLI
     const bool                ptHasSplit = ptBound.splitHop;
@@ -3767,7 +3777,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to )
                                                            + memberOwnerLegend( anyPathHopOwner( ptOwners ) ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
-                  ( std::string( pathGapsLegend( ptGaps.any() ) ) + std::string( pathBridgeLegend( ptBridge.found() ) )
+                  ( pathGapsLegend( ptGaps.any(), !ptSinkCallers.empty() ) + std::string( pathBridgeLegend( ptBridge.found() ) )
                     + std::string( nearSinkLegend( !ptNear.rows.empty() ) ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
                   graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rootRelPathsLegend( ptSingleRoot ) );
     rw::emitTo( mem, "<path from=\"{}\" to=\"{}\"{}{} from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
@@ -3779,7 +3789,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     rw::emitTo( mem, "{}{}", countAttrXmlOrEmpty( "to_value_refs", ptToValueRefs.count ),   // absent at zero, as on the CLI
                   valueRefsDepthAttrXml( ing, ptToValueRefs.depthCut, VrRender{ ptSingleRoot, ptRootPrefix } ).c_str() );   // + the depth cut, as the CLI
     const PathGapsXml ptUnreached = pth.empty()
-        ? pathUnreachedXml( ing, ptGaps, ptSingleRoot, ptRootPrefix, { "the connect verb on " + from + "," + to, "uses/impact", "" } )
+        ? pathUnreachedXml( ing, ptGaps, ptSingleRoot, ptRootPrefix, { "the connect verb on " + from + "," + to, "uses/impact", "" }, ptSinkCallers )
         : PathGapsXml{};
     rw::emitTo( mem, "{}>{}{}{}", ptUnreached.rootAttrs, ptUnreached.rows, pathBridgeXml( ing, g, ptBridge, ptSingleRoot, ptRootPrefix ),
                   pathNearSinkXml( ing, ptNear, ptSingleRoot, ptRootPrefix ) );

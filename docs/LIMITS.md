@@ -129,6 +129,15 @@ Discloses: `count_capped`
 | --- | --- | --- | --- |
 | `kAtomsQueryBudget` | `100000` | — | — |
 
+### `src/backhops.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kBackHopWidth` | `16` | — | — |
+| `kImpactRingRowCap` | `16` | — | — |
+
 ### `src/binstale.h`
 
 Discloses: **none**
