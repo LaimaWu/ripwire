@@ -202,5 +202,13 @@ else no "(h) --test-gate=app.py was narrowed by the working-tree diff (alpha's o
 case "$( cat "$TMP/h.xml" )" in *change_granularity*) no "(h) an explicit list prints a hunk attribute — the diff did not shape this answer" ;;
   *) ok "(h) an explicit list carries no hunk attribute" ;; esac
 
+# ── (i) B4 — a hunk over a body AND module-level lines is not located ───────────────────────────────────────
+sub "$HD/app.py" "return x * 3" "return x * 3
+CFG = 2"
+( cd "$HD" && "$BIN" . --test-gate --no-cache >"$TMP/i.xml" 2>/dev/null )
+case "$( cat "$TMP/i.xml" )" in *'change_granularity="file"'*'diff_hunks_unlocated="1"'*|*'diff_hunks_unlocated="1"'*'change_granularity="file"'*) ok "(i) the half-in-a-body hunk is unlocated: change_granularity=file" ;;
+  *) no "(i) a hunk reaching module level counted as located: $( grep -o 'change_granularity="[a-z]*"\|diff_hunks_unlocated="[0-9]*"' "$TMP/i.xml" | tr '\n' ' ' )" ;; esac
+if grep -q 'test_alpha.py' "$TMP/i.xml"; then ok "(i) alpha's obligation stays (the file seeds whole)"; else no "(i) alpha's obligation was dropped"; fi
+
 if [ "$fail" -eq 0 ]; then echo "testgatehunkcheck: ALL PASS"; else echo "testgatehunkcheck: SOME FAILED"; fi
 exit "$fail"

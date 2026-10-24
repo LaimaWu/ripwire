@@ -16,6 +16,7 @@
 #include "filter.h"
 #include "gitmine.h"
 #include "infra/sortutil.h"   // svLess — string_view order without libstdc++'s length subtraction (#344)
+#include "lexical.h"     // lexicalScanText — the working-tree bytes of a file, read once, for the hunk-coverage and accessor checks below
 #include "diffhunks.h"   // gitDiffHunksAllVsHead — the ONE-spawn whole-tree hunk evidence the symbol-granular change set narrows by
 #include "prcontext.h"   // A3-F17b/A3-F13: reuse the ONE numstat-based mask builder (gitDiffChangedMaskNumstat)
 #include "gitstamp.h"    // r26-stamp Task A: gitstamp::atAttr — the at="<sha>[+dirty]" root anchor
@@ -592,7 +593,10 @@ inline SituSiblings lexicalSiblings( const IngestResult& ing, const std::vector<
 //   * newCount==0 — a DELETION. The removed symbol has no working-tree span to be located in, and its
 //     callers are precisely the ones that break;
 //   * no hunks for the file at all — a pure rename, a file the diff and the mask builder disagree about,
-//     or git degraded (diffhunks.h's contract: degrade-only, empty = "no evidence", never "no change").
+//     or git degraded (diffhunks.h's contract: degrade-only, empty = "no evidence", never "no change");
+//   * a hunk only PARTLY inside body spans — one that also covers module-level lines (a statement right
+//     below a function, a file-wide CRLF rewrite). Located means every non-blank new-side line sits inside a
+//     body-bearing span; the module-level remainder seeds the file (maintainer round, CodeRabbit on #423);
 // An EXPLICIT file list (`--situ=F`, `--test-gate=F`, the MCP `diff` argument) is never narrowed at all: the
 // caller named FILES, and a working-tree hunk elsewhere in them says nothing about which symbols they meant.
 // In every direction the failure mode is the OLD answer (a superset), never a narrower wrong one, and the
@@ -605,6 +609,63 @@ inline SituSiblings lexicalSiblings( const IngestResult& ing, const std::vector<
 inline bool isHunkLocatableKind( SymKind k ) noexcept
 {
     return k == SymKind::Function || k == SymKind::Method;
+}
+
+// One file's working-tree bytes, read at most once per run and only when a hunk needs them (coverage gaps): the common narrowed edit never touches the disk beyond the index.
+struct HunkSourceText
+{
+    const IngestResult& ing;
+    std::uint32_t       fileId;
+    std::string         scratch;
+    const std::string*  text  = nullptr;
+    std::vector<std::size_t> lineStart;   // byte offset of each 1-based line (index 0 = line 1)
+
+    HunkSourceText( const IngestResult& i, std::uint32_t f ) : ing( i ), fileId( f ) {}
+    const std::string& bytes()
+    {
+        if( !text )
+        {
+            text = lexicalScanText( ing, fileId, scratch );
+            lineStart.push_back( 0 );
+            for( std::size_t i = 0; i < text->size(); ++i )
+            {
+                if( ( *text )[i] == '\n' ) { lineStart.push_back( i + 1 ); }
+            }
+        }
+        return *text;
+    }
+    // the text of 1-based `line` without its newline; empty view when out of range or unreadable
+    std::string_view line( std::uint32_t n )
+    {
+        const std::string& t = bytes();
+        if( n == 0 || n > lineStart.size() ) { return {}; }
+        const std::size_t a = lineStart[n - 1];
+        const std::size_t b = n < lineStart.size() ? lineStart[n] - 1 : t.size();
+        return a <= b && b <= t.size() ? std::string_view( t ).substr( a, b - a ) : std::string_view();
+    }
+};
+
+// Is every NON-BLANK new-side line of the hunk [hStart, hEnd] inside one of `spans` (sorted by start, the
+// overlapping body spans already clipped to the hunk)? A gap of blank lines (the separator between two functions
+// a hunk straddles) is covered; a gap holding any other line is module-level text the narrowing must not drop.
+inline bool hunkFullyInBodies( const std::vector<std::pair<std::uint32_t, std::uint32_t>>& spans, std::uint32_t hStart,
+                               std::uint32_t hEnd, HunkSourceText& src )
+{
+    std::uint32_t next = hStart;   // first line not yet accounted for
+    const auto    gapIsBlank = [ & ]( std::uint32_t a, std::uint32_t b )
+    {
+        for( std::uint32_t ln = a; ln <= b; ++ln )
+        {
+            if( !trimWs( src.line( ln ) ).empty() ) { return false; }
+        }
+        return true;
+    };
+    for( const auto& [ a, b ] : spans )
+    {
+        if( a > next && !gapIsBlank( next, a - 1 ) ) { return false; }
+        next = std::max( next, b + 1 );
+    }
+    return next > hEnd || gapIsBlank( next, hEnd );
 }
 
 struct SymbolChangeSet
@@ -627,6 +688,54 @@ inline const char* changeGranularityLabel( std::size_t narrowed, std::size_t fil
     if( narrowed && !fileGranular ) { return "symbol"; }
     if( !narrowed )                 { return "file"; }
     return "mixed";
+}
+
+// One changed file's hunks located against its symbols. `mark` is parallel to the file's symbol list.
+struct FileHunkLocation
+{
+    std::vector<char> mark;
+    std::size_t       located   = 0;
+    std::size_t       unlocated = 0;
+};
+
+// A hunk is LOCATED when it lies wholly inside body-bearing spans (hunkFullyInBodies). Anything else is
+// unlocated and returns the whole file to the file-granular treatment. EVERY overlapping body-bearing symbol,
+// inner and enclosing, is marked: a nested def's edit changes its outer function too.
+inline FileHunkLocation locateHunksInFile( const IngestResult& ing, std::uint32_t fileId, const std::vector<NodeId>& syms,
+                                           const std::vector<DiffHunk>& hunks )
+{
+    FileHunkLocation out;
+    out.mark.assign( syms.size(), 0 );
+    HunkSourceText src( ing, fileId );   // bytes read lazily: only a gap check pays for them
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> spans;
+    for( const DiffHunk& h : hunks )
+    {
+        if( h.newCount == 0 )
+        {
+            ++out.unlocated;   // deletion: nothing on the NEW side to locate in — the removed symbol's callers are exactly the risk
+            continue;
+        }
+        const std::uint32_t hStart = h.newStart;
+        const std::uint32_t hEnd   = h.newStart + h.newCount - 1;
+        spans.clear();
+        for( std::size_t idx = 0; idx < syms.size(); ++idx )
+        {
+            const Symbol& s = ing.symbols[ syms[idx] ];
+            if( !isHunkLocatableKind( s.kind ) || s.line == 0 )
+            {
+                continue;
+            }
+            const std::uint32_t sEnd = s.line + ( s.loc > 0 ? s.loc - 1 : 0 );
+            if( s.line <= hEnd && hStart <= sEnd )
+            {
+                out.mark[idx] = 1;
+                spans.emplace_back( std::max( s.line, hStart ), std::min( sEnd, hEnd ) );
+            }
+        }
+        std::sort( spans.begin(), spans.end() );
+        if( !spans.empty() && hunkFullyInBodies( spans, hStart, hEnd, src ) ) { ++out.located; } else { ++out.unlocated; }
+    }
+    return out;
 }
 
 inline SymbolChangeSet computeSymbolChangeSet( const std::string& root, const IngestResult& ing,
@@ -688,41 +797,15 @@ inline SymbolChangeSet computeSymbolChangeSet( const std::string& root, const In
         if( hunks && !hunks->empty() )
         {
             out.hunksTotal += hunks->size();
-            std::size_t            unlocated = 0;
-            std::vector<char>      markLocal( symsByFile[f].size(), 0 );
-            for( const DiffHunk& h : *hunks )
+            const FileHunkLocation loc = locateHunksInFile( ing, f, symsByFile[f], *hunks );
+            out.hunksLocated += loc.located;
+            out.hunksUnlocated += loc.unlocated;
+            if( loc.unlocated == 0 )
             {
-                if( h.newCount == 0 )
-                {
-                    ++unlocated;   // deletion: nothing on the NEW side to locate in — the removed symbol's callers are exactly the risk
-                    continue;
-                }
-                const std::uint32_t hStart = h.newStart;
-                const std::uint32_t hEnd   = h.newStart + h.newCount - 1;
-                bool                any    = false;
+                narrowed = true;   // every hunk located ⇒ at least one symbol marked, by construction of locateHunksInFile
                 for( std::size_t idx = 0; idx < symsByFile[f].size(); ++idx )
                 {
-                    const Symbol& s = ing.symbols[ symsByFile[f][idx] ];
-                    if( !isHunkLocatableKind( s.kind ) || s.line == 0 )
-                    {
-                        continue;
-                    }
-                    const std::uint32_t sEnd = s.line + ( s.loc > 0 ? s.loc - 1 : 0 );
-                    if( s.line <= hEnd && hStart <= sEnd )
-                    {
-                        markLocal[idx] = 1;   // EVERY overlapping body-bearing symbol, inner and enclosing — a nested def's edit changes its outer function too
-                        any            = true;
-                    }
-                }
-                if( any ) { ++out.hunksLocated; } else { ++unlocated; }
-            }
-            out.hunksUnlocated += unlocated;
-            if( unlocated == 0 )
-            {
-                narrowed = true;   // every hunk located ⇒ at least one symbol marked, by construction of `any`
-                for( std::size_t idx = 0; idx < symsByFile[f].size(); ++idx )
-                {
-                    if( markLocal[idx] )
+                    if( loc.mark[idx] )
                     {
                         out.symMask[ symsByFile[f][idx] ] = 1;
                     }

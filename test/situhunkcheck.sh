@@ -316,5 +316,22 @@ else no "(h) --situ=app.py was narrowed by the working-tree diff (alpha's test d
 case "$( cs_line "$TMP/h.txt" )" in *granularity=file*) ok "(h) the explicit list says granularity=file" ;;
   *) no "(h) the explicit list does not say granularity=file: $( cs_line "$TMP/h.txt" )" ;; esac
 
+# ── (i) B4 — a hunk over a body AND module-level lines is not 'located' ─────────────────────────────────────
+# beta's last body line changes and "CFG = 2" lands on the next line: ONE hunk. Only part of it is inside a
+# function, so the module-level part must seed the file (file-granular, unlocated >= 1), never be dropped.
+I="$TMP/i"; mktwo "$I"
+python3 - "$I/app.py" <<'EOF'
+import sys
+p = sys.argv[1]
+s = open(p).read().replace("return x * 2\n", "return x * 3\nCFG = 2\n", 1)
+open(p, "w").write(s)
+EOF
+( cd "$I" && "$BIN" . --situ --no-cache >"$TMP/i.txt" 2>/dev/null )
+CS="$( cs_line "$TMP/i.txt" )"
+case "$CS" in *granularity=file*diff_hunks_unlocated=1*|*granularity=file*unlocated=1*) ok "(i) the half-in-a-body hunk is unlocated and the file is file-granular" ;;
+  *) no "(i) a hunk reaching module level counted as located: $CS" ;; esac
+if sec2 "$TMP/i.txt" | grep -q 'test_alpha.py'; then ok "(i) [2] keeps the file-level obligations (alpha's test)"
+else no "(i) [2] dropped alpha's test: the module-level line did not seed the file"; fi
+
 if [ "$fail" -eq 0 ]; then echo "situhunkcheck: ALL PASS"; else echo "situhunkcheck: SOME FAILED"; fi
 exit "$fail"
