@@ -292,5 +292,29 @@ if sec2 "$TMP/g.txt" | grep -q 'test_beta.py' && sec2 "$TMP/g.txt" | grep -q 'te
   ok "(g) [2] keeps beta's test: the hunk after the '+++ ' body line was not dropped"
 else no "(g) [2] lost a test to the '+++ ' body line (beta's hunk was dropped)"; fi
 
+# ── (h) B3 — an EXPLICIT file list is never narrowed by the working-tree diff ───────────────────────────────
+# A committed edit to alpha plus an UNRELATED uncommitted edit to beta: --situ=app.py names the FILE, so the
+# answer is the file-level one (both tests). Narrowing it by beta's dirty hunk drops alpha's test.
+H="$TMP/h"; mktwo "$H"
+python3 - "$H/app.py" <<'EOF'
+import sys
+p = sys.argv[1]
+s = open(p).read().replace("return x + 1", "return x + 11", 1)
+open(p, "w").write(s)
+EOF
+( cd "$H" && git commit -qam 'alpha (committed)' )
+python3 - "$H/app.py" <<'EOF'
+import sys
+p = sys.argv[1]
+s = open(p).read().replace("return x * 2", "return x * 3", 1)
+open(p, "w").write(s)
+EOF
+( cd "$H" && "$BIN" . --situ=app.py --no-cache >"$TMP/h.txt" 2>/dev/null )
+if sec2 "$TMP/h.txt" | grep -q 'test_alpha.py' && sec2 "$TMP/h.txt" | grep -q 'test_beta.py'; then
+  ok "(h) --situ=app.py keeps both tests: an explicit file list is the file-level answer on a dirty tree"
+else no "(h) --situ=app.py was narrowed by the working-tree diff (alpha's test dropped)"; fi
+case "$( cs_line "$TMP/h.txt" )" in *granularity=file*) ok "(h) the explicit list says granularity=file" ;;
+  *) no "(h) the explicit list does not say granularity=file: $( cs_line "$TMP/h.txt" )" ;; esac
+
 if [ "$fail" -eq 0 ]; then echo "situhunkcheck: ALL PASS"; else echo "situhunkcheck: SOME FAILED"; fi
 exit "$fail"

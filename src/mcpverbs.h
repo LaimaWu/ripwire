@@ -1624,7 +1624,7 @@ inline std::string situationDiffJson( const std::string& root, const std::string
         isCleanTree = !anyChanged;
     }
 
-    const SituationFacts facts = computeSituationFacts( root, ing, ix.g, changed );
+    const SituationFacts facts = computeSituationFacts( root, ing, ix.g, changed, diffOrEmpty.empty() );
 
     // R-E (2026-08-17 harvest): same single-root condition every other verb's root= carries (sarif.h) — the
     // CLI text twin (situ.h::writeSituation) states the SAME fact on its own leading "root: …" line.
@@ -1663,8 +1663,8 @@ inline std::string situationDiffJson( const std::string& root, const std::string
     // THE SYMBOL-GRANULAR CHANGE SET's JSON twin — the SAME facts the CLI report's change_set: line carries
     // (situ.h computeSymbolChangeSet, one implementation), key-for-key with that line's attributes, so the
     // two surfaces of one verb cannot disagree about what "the change" was. `hunk_evidence` rides ONLY when
-    // false (the attribute⇒clause convention): an absent key means the spawn succeeded, as every other
-    // always-true fact here does.
+    // false (the attribute⇒clause convention): an absent key means hunk evidence was used; false means the spawn
+    // failed or the `diff` argument named explicit files (never narrowed).
     out += "\"change_granularity\":\"" + std::string( changeGranularityLabel( facts.filesNarrowed, facts.filesFileGranular ) ) + "\","
          + "\"changed_symbols\":" + std::to_string( facts.changedSymbolCount )
          + ",\"file_symbols\":" + std::to_string( facts.fileSymbolCount )

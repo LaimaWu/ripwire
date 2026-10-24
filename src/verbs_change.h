@@ -397,7 +397,7 @@ std::optional<int> runChangeViews( const MainDispatch& d )
         // The gate decision (computeTestGate) is computed ONCE here and handed to whichever report emitter
         // runs, so the two report shapes can never disagree about tests/untested and never re-pay the
         // blast-radius traversal.
-        const rw::TestGateResult tg = rw::computeTestGate( root, ing, g, changed );
+        const rw::TestGateResult tg = rw::computeTestGate( root, ing, g, changed, cfg.testGateFiles.empty() );
         if( cfg.json )
         {
             rw::writeTestGateReportJson( stdout, ing, g, tg, root, cfg.pageLimit, cfg.pageOffset );

@@ -168,5 +168,39 @@ edit_fn
 if cmp -s "$TMP/f1.xml" "$TMP/f2.xml"; then ok "(f) the narrowed gate report is byte-identical across two runs"
 else no "(f) the narrowed gate report is not deterministic"; fi
 
+# ── the boundary arms (maintainer round on #423) ────────────────────────────────────────────────────────────
+mkrepo(){ # mkrepo DIR — a committed repo whose files the caller has already written
+  ( cd "$1" && git init -q -b main >/dev/null 2>&1
+    git config user.email rw@example.invalid; git config user.name ripwire
+    git add -A >/dev/null 2>&1
+    GIT_AUTHOR_DATE='2026-01-01T00:00:00 +0000' GIT_COMMITTER_DATE='2026-01-01T00:00:00 +0000' \
+      git commit -q -m seed >/dev/null 2>&1 ) || { echo "git fixture setup failed"; exit 2; }
+}
+sub(){ python3 - "$1" "$2" "$3" <<'EOF'
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p).read()
+assert old in s, old
+open(p, "w").write(s.replace(old, new, 1))
+EOF
+}
+
+# ── (h) B3 — an EXPLICIT file list is never narrowed by the working-tree diff ───────────────────────────────
+# A committed edit to alpha plus an UNRELATED uncommitted edit to beta: --test-gate=app.py names the FILE, so
+# the obligations are the file-level ones (alpha's test stays) and no hunk attribute rides.
+HD="$TMP/g_h"; mkdir -p "$HD"
+printf 'def alpha(x):\n    return x + 1\n\n\ndef beta(x):\n    return x * 2\n' > "$HD/app.py"
+printf 'from app import alpha\n\n\ndef test_alpha():\n    assert alpha(1)\n' > "$HD/test_alpha.py"
+printf 'from app import beta\n\n\ndef test_beta():\n    assert beta(1)\n' > "$HD/test_beta.py"
+mkrepo "$HD"
+sub "$HD/app.py" "return x + 1" "return x + 11"; ( cd "$HD" && git commit -qam 'alpha (committed)' )
+sub "$HD/app.py" "return x * 2" "return x * 3"
+( cd "$HD" && "$BIN" . --test-gate=app.py --no-cache >"$TMP/h.xml" 2>/dev/null ); RC_H=$?
+if grep -q 'test_alpha.py' "$TMP/h.xml" && grep -q 'test_beta.py' "$TMP/h.xml"; then
+  ok "(h) --test-gate=app.py keeps both obligations on a dirty tree (the file-level answer)"
+else no "(h) --test-gate=app.py was narrowed by the working-tree diff (alpha's obligation dropped)"; fi
+case "$( cat "$TMP/h.xml" )" in *change_granularity*) no "(h) an explicit list prints a hunk attribute — the diff did not shape this answer" ;;
+  *) ok "(h) an explicit list carries no hunk attribute" ;; esac
+
 if [ "$fail" -eq 0 ]; then echo "testgatehunkcheck: ALL PASS"; else echo "testgatehunkcheck: SOME FAILED"; fi
 exit "$fail"

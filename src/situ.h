@@ -593,6 +593,8 @@ inline SituSiblings lexicalSiblings( const IngestResult& ing, const std::vector<
 //     callers are precisely the ones that break;
 //   * no hunks for the file at all — a pure rename, a file the diff and the mask builder disagree about,
 //     or git degraded (diffhunks.h's contract: degrade-only, empty = "no evidence", never "no change").
+// An EXPLICIT file list (`--situ=F`, `--test-gate=F`, the MCP `diff` argument) is never narrowed at all: the
+// caller named FILES, and a working-tree hunk elsewhere in them says nothing about which symbols they meant.
 // In every direction the failure mode is the OLD answer (a superset), never a narrower wrong one, and the
 // report names which treatment applied — the honesty contract: a narrower answer must say what narrowed it.
 //
@@ -629,7 +631,8 @@ inline const char* changeGranularityLabel( std::size_t narrowed, std::size_t fil
 
 inline SymbolChangeSet computeSymbolChangeSet( const std::string& root, const IngestResult& ing,
                                                const std::vector<char>& changedFile,
-                                               std::uint32_t onlyRoot = UINT32_MAX )   // multi-root §5: bind this root's diff paths only
+                                               std::uint32_t onlyRoot = UINT32_MAX,   // multi-root §5: bind this root's diff paths only
+                                               bool narrow = true )   // false for an EXPLICIT file list: no spawn, every changed file stays whole
 {
     SymbolChangeSet     out;
     const std::uint32_t N = std::uint32_t( ing.symbols.size() );
@@ -660,8 +663,9 @@ inline SymbolChangeSet computeSymbolChangeSet( const std::string& root, const In
         }
     }
 
-    // ONE spawn for the whole working tree, bound to fileIds through the mask builder's own join.
-    const HunkDiffAll all = gitDiffHunksAllVsHead( root );
+    // ONE spawn for the whole working tree, bound to fileIds through the mask builder's own join. An explicit
+    // file list skips it (`narrow` false): `all` stays empty and `evidence` false, so every file is kept whole.
+    const HunkDiffAll all = narrow ? gitDiffHunksAllVsHead( root ) : HunkDiffAll{};
     out.evidence          = all.ok;
     HashMap<std::uint32_t, const std::vector<DiffHunk>*> hunksByFile;
     if( all.ok && !all.byPath.empty() )
@@ -853,7 +857,7 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
     // actually touched when hunk evidence locates them, else — per file, conservatively — every symbol of the
     // file, which is exactly the pre-narrowing set. ONE implementation, shared with computeSituationFacts,
     // so this report and its MCP twin cannot disagree about what "the change" is.
-    const SymbolChangeSet         scs         = computeSymbolChangeSet( root, ing, changedFile, onlyRoot );
+    const SymbolChangeSet         scs         = computeSymbolChangeSet( root, ing, changedFile, onlyRoot, page.selector.empty() );   // a named --situ=FILES list is never narrowed
     const std::vector<NodeId>&    changedSyms = scs.changedSyms;
 
     rw::emitTo( out, "ripwire situational-awareness — {} changed file(s), {} symbols in them\n", nChanged, scs.fileSymbols );
@@ -890,8 +894,8 @@ inline void writeSituation( std::FILE* out, const std::string& root, const Inges
 
     // THE GRANULARITY DISCLOSURE — the honesty half of the narrowing above: a narrower answer must say what
     // narrowed it, and a fallback must say the superset is back. granularity= reads as one word (symbol /
-    // file / mixed, changeGranularityLabel); the counts audit it; evidence=0 rides ONLY when the hunk spawn
-    // itself failed (the attribute⇒clause convention the floor line's graph_unindexed= uses). Every number
+    // file / mixed, changeGranularityLabel); the counts audit it; evidence=0 rides ONLY when no hunk evidence
+    // was used — the spawn failed, or an explicit FILES list (never narrowed) skipped it (the attribute⇒clause convention the floor line's graph_unindexed= uses). Every number
     // here is exact — a zero is "none found" (no hunks located) never "none exists" (the diff held none).
     rw::emitTo( out, "  change_set: granularity={} changed_symbols={} file_symbols={} files_narrowed={} files_file_granular={} diff_hunks={} diff_hunks_located={} diff_hunks_unlocated={}{}"
                      " — seeds = symbols a diff -U0-vs-HEAD hunk overlaps (function/method body spans only); "
@@ -1135,7 +1139,7 @@ struct SituationFacts
 };
 
 inline SituationFacts computeSituationFacts( const std::string& root, const IngestResult& ing, const Graph& g,
-                                             const std::vector<char>& changedFile )
+                                             const std::vector<char>& changedFile, bool narrowByDiff = true )   // false: the mask is an explicit file list
 {
     const std::uint32_t F = std::uint32_t( ing.files.size() );
     const std::uint32_t N = std::uint32_t( ing.symbols.size() );
@@ -1152,7 +1156,7 @@ inline SituationFacts computeSituationFacts( const std::string& root, const Inge
     std::vector<NodeId> changedSyms;
     // The SAME symbol-granular change set the CLI report walks (writeSituation) — one implementation, both
     // arms, so the MCP payload and the text report can never seed their blast radii from different sets.
-    const SymbolChangeSet scs = computeSymbolChangeSet( root, ing, changedFile );
+    const SymbolChangeSet scs = computeSymbolChangeSet( root, ing, changedFile, UINT32_MAX, narrowByDiff );
     changedSyms               = scs.changedSyms;
     facts.changedSymbolCount  = scs.changedSyms.size();
     facts.fileSymbolCount     = scs.fileSymbols;
@@ -1422,7 +1426,8 @@ inline TestGateResult computeTestGateFor( const IngestResult& ing, const Graph& 
 // evidence exists for a file — clean selector runs, renames, deletions, module-level edits — its treatment is
 // byte-identical to the pre-narrowing file-granular set; the disclosure attributes ride only when evidence
 // shaped the answer (testGateHunkShaped).
-inline TestGateResult computeTestGate( const std::string& root, const IngestResult& ing, const Graph& g, const std::vector<char>& changedFile )
+inline TestGateResult computeTestGate( const std::string& root, const IngestResult& ing, const Graph& g, const std::vector<char>& changedFile,
+                                       bool narrowByDiff = true )   // false: `changedFile` is an explicit --test-gate=FILES list, kept whole
 {
     const std::uint32_t F = std::uint32_t( ing.files.size() );
 
@@ -1435,7 +1440,7 @@ inline TestGateResult computeTestGate( const std::string& root, const IngestResu
         }
     }
 
-    const SymbolChangeSet scs = computeSymbolChangeSet( root, ing, changedFile );
+    const SymbolChangeSet scs = computeSymbolChangeSet( root, ing, changedFile, UINT32_MAX, narrowByDiff );
 
     TestGateResult result = computeTestGateFor( ing, g, scs.changedSyms, scs.symMask, changedFileCount, nullptr );
     result.changeSet  = scs;
