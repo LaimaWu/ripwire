@@ -2889,7 +2889,9 @@ struct ReceiverEvidence
 
     // RESOLVE: the definitions this member call's typed receiver reaches, in `found`; false when the receiver proves
     // nothing (untyped, a type this tree does not define, or a type that defines no such member anywhere in its cone).
-    bool narrow( const Reference& r ) const
+    // `spellingDecides` false: the receiver root is a name WRITTEN in its scope (graph.h JsWrittenRoot), so the class its SPELLING names
+    // is not its class — only a stated type (a typed local, a constructed receiver, `this`) may decide.
+    bool narrow( const Reference& r, bool spellingDecides = true ) const
     {
         // C++, Ruby, Rust and C keep their own receiver rules (Rules 1, 2, 2b, 2c): this one adds the languages that had none
         const bool typedLang = r.lang == Lang::JavaScript || r.lang == Lang::TypeScript || r.lang == Lang::Python || r.lang == Lang::Go
@@ -2915,7 +2917,7 @@ struct ReceiverEvidence
         bool isStatic = false, superOnly = false;
         NodeId           cls  = kNoNode;
         std::string_view type = rootClass( r, ch, isStatic, superOnly, &cls );
-        if( type.empty() || ( cls != kNoNode && !ch.path.empty() && types.sameNamedClasses( cls ) != 1 ) )
+        if( type.empty() || ( isStatic && !spellingDecides ) || ( cls != kNoNode && !ch.path.empty() && types.sameNamedClasses( cls ) != 1 ) )
         {
             return false;   // a field path is read by NAME (memberType): below a class another in-tree class names too, a floor
         }

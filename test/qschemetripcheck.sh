@@ -50,6 +50,9 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   225; quality.h's kIngestParserVerMirror with it) and left the pin; the manifest hashes that line and the comment under it, which this
 #   round also grew. kParserVer 224 is a PLACEHOLDER the train renumbers, and the train re-pins again then. kCacheVersion stays 36 and
 #   kQSnapCacheScheme stays 22: no record format and no watched quality.h function moved (importedName gains a value, same field).
+# 2026-10-22, lane fc3-js-rebind (reservation 218/219; the train renumbers): RE-PINNED with UPDATE_GOLDEN=1. Watched text:
+#   kParserVer 212 -> 218 (LocalBindKind::JsRebind records; above #420 214 / 215 and fc1 216 / 217) and quality.h's
+#   kIngestParserVerMirror with it. kCacheVersion stays 36 (the kind byte is appended) and kQSnapCacheScheme stays 22.
 # 2026-10-21, train 32a (member-names 781a22fb, rust-receivers dd378171 merged onto main f156be85): RE-DERIVED ONCE with
 #   UPDATE_GOLDEN=1 on the merged tree (a667ffc55e…8a05 -> c4422a58e4…2d607). Watched text: kParserVer 206 -> 212 (rich file tag
 #   213; above main 206 / 207, lane rust-receivers 202 / 203, ix1-slot 204 / 205, l6-iface 210 / 211; #420 reserves 214 / 215) and

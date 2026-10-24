@@ -1309,6 +1309,20 @@ enum class LocalBindKind : std::uint8_t
                    //     expression `object : T { … }` or `fun interface T` (a lambda), a Rust trait under a mock attribute
                    //     (`#[automock]` writes MockT). Read by graph.h's implementors-map pass (an unnamed one opens T's list) and
                    //     ifacedispatch.h ONLY. APPENDED.
+    // FC3 (T1 class 14 ALIAS-THROUGH-ASSIGNMENT): a JS/TS binding WRITTEN after its declaration — `Eng = Foo`, `[Eng] = [Foo]`,
+    // `({ Eng } = { Eng: Foo })`, `Eng += …`, `Eng++`, `for ( Eng of xs )`, a second `var Eng = Foo`, but not a write whose
+    // value keeps the name (`equal = util.equal`) — so a BARE call or construction by that name in its scope is undecided
+    // (ingest_jsimports.h captureJsRebindFacts). var = the name; spanStart/spanEnd = the WHOLE scope of the declaration the
+    // write resolves to (the program, for a name the file never declares): byte order is not run order, a closure or a loop
+    // sees the write anywhere in it; startByte = the file's END, so the record has no owner (fromSymbol kNoNode) and no
+    // (fromSymbol, var) local-name reader takes it for a function's local. An ES import or `const` binding records nothing:
+    // writing one throws. Read by graph.h buildGraph (a bare call is unresolved, no edge; a member call is hedged by name) and FalseEdgeRules (as a shadow: no
+    // external veto) ONLY. isFromAssignment = the declaration already BOUND a value (an initializer, a parameter, a `class` /
+    // `function` / import / `for` head — not `var x;` / `let x;` / an undeclared name): a MEMBER call through the name
+    // (`tank.spill()` after `let tank = new Tank(); tank = b`) has no receiver evidence at all then and goes to the by-name hedge
+    // (via=name); over a `var x;` / `let x;` / undeclared name only the root's SPELLING stops deciding (`Eng = Foo; Eng.make()` is
+    // not the class `Eng`) while a stated type (`let app; … app = new Hono(); app.request()`) keeps its receiver reading. APPENDED (cache u8).
+    JsRebind,
 };
 // fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
 inline constexpr std::string_view kTypeBindForward  = "forward";
@@ -1316,7 +1330,7 @@ inline constexpr std::string_view kTypeBindShadow   = "shadow";
 inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
 inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::ImplBlock ) + 1;
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::JsRebind ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
 // L6's ImplBlock is in the set for the same reason: its var is the TRAIT / interface being implemented, never a name bound in the
 // enclosing function, so the generic binding readers (localNameSet, the fn-pointer tables, nonlocalstate) must skip it (its two

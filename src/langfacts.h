@@ -168,6 +168,11 @@ struct LangFacts
     /// the includer), so the by-name hedge's import rule (pathgaps.h NamesakeRule, K5 rule 2b) follows the include closure;
     /// every other language's import names one module, so that rule reads the direct import edge only.
     bool transitiveIncludes = false;
+
+    /// JavaScript, TypeScript: a bare call by a name whose binding is WRITTEN in its scope (`Eng = Foo; new Eng()`) is undecided —
+    /// it names neither the declaration nor a same-spelled definition — so it binds nothing (FC3: the LocalBindKind::JsRebind
+    /// records of ingest_jsimports.h captureJsRebindFacts, read by graph.h buildGraph).
+    bool writtenBindingUndecided = false;
 };
 
 /// java.lang.Object's public methods an interface may redeclare abstract (LangFacts::samIgnoredMembers).
@@ -178,13 +183,15 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true, .memberSeparator = "::",
       .transitiveIncludes = true },
     { .lang = Lang::Python, .baseImportEvidence = BaseImportEvidence::PythonImport },
-    { .lang = Lang::TypeScript, .overloadSignatures = true, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport },
+    { .lang = Lang::TypeScript, .overloadSignatures = true, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport,
+      .writtenBindingUndecided = true },
     { .lang = Lang::Go, .structuralTyping = true },
     { .lang = Lang::Rust, .contractSignaturesUnindexed = true, .traitImplBlocks = true, .constructorMethod = "new", .memberSeparator = "::", .baseImportEvidence = BaseImportEvidence::RustUse },
     { .lang = Lang::Swift },
     { .lang = Lang::ObjC, .noNestedNamedFunctions = true, .transitiveIncludes = true },
     { .lang = Lang::Markdown, .linkSections = true },
-    { .lang = Lang::JavaScript, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport },
+    { .lang = Lang::JavaScript, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport,
+      .writtenBindingUndecided = true },
     { .lang = Lang::Bash },
     { .lang = Lang::Java, .samLambdas = true, .samIgnoredMembers = kJavaObjectMethods, .anonymousImplementors = true, .baseImportEvidence = BaseImportEvidence::JvmImport },
     { .lang = Lang::Ruby, .classObjectLookup = true, .mixinAncestry = true, .keepsUnshapedSubscript = true, .constantPathReceiver = true,
