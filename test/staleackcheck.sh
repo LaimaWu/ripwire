@@ -124,6 +124,45 @@ fi
 sed 's/<quality-delta.*//' "$TMP/targetgone_c" | grep -q 'stale_by_kind=' \
     && ok "(2c) stale_by_kind= and stale_next= are defined in the collapsed answer's own legend" \
     || no "(2c) stale_by_kind= emitted with no legend definition"
+# ── (2m) the MCP twin folds too (lane lean2b, card #9 MCP-FOLD; owner bar LOSSLESS). Default quality_delta on the same tree:
+#     no "sa" array, stale = the CLI's count, stale_by_kind the CLI's own string, stale_next naming show_stale=true; with
+#     show_stale=true exactly `stale` sa rows (the CLI --show-stale rows, by key) and no fold key. RED on ffbec708: the default
+#     MCP answer carries "sa" and no stale_by_kind (and show_stale is refused as an unknown argument).
+if command -v python3 >/dev/null 2>&1; then
+    mcpqd(){ printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"quality_delta","arguments":{"path":"%s"%s}}}\n' "$REPO" "$1" \
+             | env -u TMPDIR XDG_CACHE_HOME="$XDG" "$BIN" --mcp 2>/dev/null \
+             | python3 -c 'import sys,json
+for line in sys.stdin:
+    try: d=json.loads(line)
+    except Exception: continue
+    c=(d.get("result") or {}).get("content")
+    if c: print(c[0].get("text","")); break
+    if d.get("error"): print("__ERROR__"+json.dumps(d["error"])); break'; }
+    mcpqd '' >"$TMP/mcp_qd_def"; mcpqd ',"show_stale":true' >"$TMP/mcp_qd_full"
+    python3 - "$TMP/mcp_qd_def" "$TMP/mcp_qd_full" "$TMP/targetgone_c" "$TMP/targetgone" <<'PY' && ok "(2m) MCP quality_delta folds like the CLI: counts kept, stale_by_kind identical, show_stale=true lists every sa row" || no "(2m) the MCP fold is wrong"
+import json, re, sys
+d, f = ( json.loads( open( p ).read() ) for p in sys.argv[ 1:3 ] )
+cliC, cliF = ( open( p ).read() for p in sys.argv[ 3:5 ] )
+stale  = int( re.search( r'<quality-delta\b[^>]*\bstale="(\d+)"', cliC ).group( 1 ) )
+kinds  = re.search( r'<quality-delta\b[^>]*\bstale_by_kind="([^"]*)"', cliC ).group( 1 )
+cliKeys = sorted( re.findall( r'<sa kind="[^"]*" key="([0-9a-f]+)"', cliF ) )
+ok = True
+for cond, msg in (
+        ( "sa" not in d,                                    "default carries no sa array" ),
+        ( d.get( "stale" ) == stale > 0,                    "stale == the CLI's stale= (%r vs %r)" % ( d.get( "stale" ), stale ) ),
+        ( d.get( "stale_by_kind" ) == kinds,                "stale_by_kind == the CLI's (%r vs %r)" % ( d.get( "stale_by_kind" ), kinds ) ),
+        ( d.get( "stale_next" ) == "show_stale=true",       "stale_next names show_stale=true (%r)" % ( d.get( "stale_next" ), ) ),
+        ( "stale_by_kind" not in f and "stale_next" not in f, "show_stale=true carries no fold key" ),
+        ( len( f.get( "sa", [] ) ) == stale,                "show_stale=true lists stale sa rows (%d)" % len( f.get( "sa", [] ) ) ),
+        ( sorted( a[ "key" ] for a in f.get( "sa", [] ) ) == cliKeys, "the sa keys are the CLI --show-stale rows' keys" ),
+        ( { k: v for k, v in d.items() if k not in ( "stale_by_kind", "stale_next" ) } == { k: v for k, v in f.items() if k != "sa" },
+                                                            "every other key is identical across the two answers" ) ):
+    if not cond: print( "    (2m) " + msg ); ok = False
+sys.exit( 0 if ok else 1 )
+PY
+else
+    printf '  SKIP  (2m) MCP fold (no python3)\n'
+fi
 run --show-stale >/dev/null 2>&1 && no "(2c) --show-stale alone was accepted" || ok "(2c) --show-stale alone is refused (it modifies --quality-delta)"
 
 # ── (3) FINDING-GONE: knotty() survives (same canonId) but is simplified back under the complexity bar ──
