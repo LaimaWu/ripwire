@@ -6,4 +6,4 @@ rows; the interface-dispatch records carried 210 and 212 on theirs; 224 sits abo
 (212 to 223). A cache written by 0.6.8 is re-parsed once. `kCacheVersion` 36 → 39: a Rust binding typed only through a trait
 (`&dyn T`, `impl T`, a bound) and a Rust `impl T for X` block are new binding records, so a cache written before them is
 rejected and rebuilt (the branch that added them used 37 and 38). The quality-snapshot scheme stays 22. The session legend
-dictionary is `dictv=26f9d40cf044d254 entries=919`.
+dictionary is `dictv=a612d2cfd7867548 entries=923`.

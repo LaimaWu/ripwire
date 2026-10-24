@@ -371,5 +371,23 @@ EOF
   else no "(j) [2] lost test_svc.py for a $what edit — the narrowed answer is zero callers"; fi
 done
 
+# ── (k) the BOUNDARY arm — adjacent defs with no blank line: a body edit seeds that one function, not its neighbours ─
+# A hunk whose end is one line too long (or a symbol span one line too wide) reaches the next def; nothing else in
+# this gate sits on a function boundary, so an off-by-one in the overlap test would pass every arm above.
+K="$TMP/k"; mkdir -p "$K"
+printf 'def a(x):\n    return x + 1\ndef b(x):\n    return x * 2\ndef c(x):\n    return x - 1\n' > "$K/dense.py"
+for n in a b c; do printf 'from dense import %s\n\n\ndef test_%s():\n    assert %s(1) is not None\n' "$n" "$n" "$n" > "$K/test_$n.py"; done
+mkrepo "$K"
+python3 - "$K/dense.py" <<'EOF'
+import sys
+p = sys.argv[1]
+open(p, "w").write(open(p).read().replace("x * 2", "x * 3", 1))
+EOF
+( cd "$K" && "$BIN" . --situ --no-cache >"$TMP/k.txt" 2>/dev/null )
+case "$( cs_line "$TMP/k.txt" )" in *'changed_symbols=1 '*) ok "(k) an edit to b's last line seeds b alone (adjacent a and c stay out)" ;;
+  *) no "(k) the boundary edit seeded more than b: $( cs_line "$TMP/k.txt" )" ;; esac
+if sec2 "$TMP/k.txt" | grep -q 'test_b.py' && ! sec2 "$TMP/k.txt" | grep -q 'test_a.py\|test_c.py'; then ok "(k) [2] holds test_b only"
+else no "(k) [2] is not exactly test_b: a neighbour leaked in across the boundary"; fi
+
 if [ "$fail" -eq 0 ]; then echo "situhunkcheck: ALL PASS"; else echo "situhunkcheck: SOME FAILED"; fi
 exit "$fail"

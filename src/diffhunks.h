@@ -222,7 +222,15 @@ inline HunkDiffAll gitDiffHunksAllVsHead( const std::string& root )
             bodyLeft = std::uint64_t( h.oldCount ) + h.newCount;
         }
     }
-    os::pclose( pipe );
+    if( os::pclose( pipe ) != 0 )
+    {
+        // git failed (no repo, no HEAD, a killed child): whatever was parsed is a truncated or empty stream, so it
+        // is "no evidence", never a measurement of "nothing changed" — `ok=false` is what the change_set: line reads
+        // as evidence=0. `git diff` without --exit-code exits 0 on a diff, so non-zero is always a failure.
+        out.byPath.clear();
+        out.ok = false;
+        return out;
+    }
     // A file section that collected no hunks (a mode line, a pure rename's similarity block) leaves an empty
     // vector behind — indistinguishable from "no entry" to every consumer, but erase it so byPath.size()
     // counts files WITH hunk evidence, which is what situ.h's disclosure could otherwise overstate.
