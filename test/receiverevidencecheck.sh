@@ -53,6 +53,7 @@
 #   exactproven— the set of unhedged rows is exactly the given set (no false candidate rides along unhedged)
 #   visible    — the named row is present, hedged or not (a true target is never dropped)
 #   marked     — the named row is present WITH the hedge (a name-only true edge is kept and labelled)
+#   ifacenamed — lane L6: the named row is a candidate of the answer's gate="iface" <dc> row (--legend=full cand=)
 #
 # ARMS (one fixture root per language under test/receiverevidencefix/; each root is indexed on its own).
 #   (J) JS:  Bm ctx.onerror (plain, optional-chained, aliased, destructured), an object-literal module's
@@ -210,6 +211,18 @@
 #            C++ OFF (owner 2026-10-17, fix round 6: model.h callResultFamilyOf maps C++ / ObjC to None): no C++ call
 #            result is typed yet — every C++ [P] arm and U cell is a FLOOR that must HEDGE (`# [FLOOR] C++ off`; the
 #            matrix prints them N … FLOOR), every C++ [N] stays; the C++ written-type twin (useWritten) stays proven.
+#   (RS) Rust receiver evidence (lane rust-receivers; root rsrecv/, unpacked from rsrecv.txt): a receiver WRITTEN as a type
+#            — a parameter (`&T`, `&mut T`, `Box<T>`, a `crate::` / module path, a user generic, an enum), `let x: T`, a
+#            struct literal, `T::default()`, a closure's typed parameter — and a field path below one or below `self`
+#            (`s.book.m()`, `self.book.m()`, `self.inner.book.m()`, each field by its own written type) proves exactly the
+#            class the spelling resolves to at its site (the (L) resolution rule: item scopes, `use`s incl. a glob of a
+#            module's own `use`, paths); a declared `-> Self` result types its call ((L)). [N]: an untyped `let x =
+#            foo.bar()`, `dyn` / `impl` / generic-bound / bare-trait receivers (dispatch: lane L6), Option / Rc (a parameter,
+#            a `let`, a field), a shadowing `let` / `for` / closure parameter, an outside `use std::fs::File` beside an
+#            in-tree File, a tuple pattern, `String::default()`, a u32 / generic-`T` / tuple-struct field, a missing field,
+#            a same-named owner whose field differs, a glob of a module that only globs (not followed: a floor). Early
+#            gates review adds (src/adds.rs, alias.rs, samename.rs, consts.rs): self forms, lifetimes, `use … as`, same
+#            names in two modules, Box<dyn> / Arc / RefCell / index / type-alias / element-type near misses, a const block.
 #   (Q) qualified annotations and in-place rebinding (lane h1-annot; roots qualannot/<lang>/, unpacked from qualannot.txt).
 #            A Python / TS parameter, annotated local or TS field written `q.T` / `q.T<…>` names the in-tree class T only when
 #            the qualifier's ROOT `q` is an in-tree module or namespace as the file sees it: an import that resolves into the
@@ -271,11 +284,10 @@ echo "receiverevidencecheck: BIN=$BIN  CORPUS=$CORPUS"
 
 # arm (L)'s roots (callresult/<lang>) live in one text bundle unpacked into the temp dir: committed as source trees they
 # joined the repo's own indexed map (readmedriftcheck G4's --max-tokens=3000 head lost two rows)
-# arm (Q)'s roots (qualannot/<lang>) the same way, from qualannot.txt
-for BUNDLE in callresult qualannot; do
-CRBUNDLE="$CORPUS/$BUNDLE.txt"
-[ -f "$CRBUNDLE" ] || { echo "fixture missing: $CRBUNDLE"; exit 2; }
-python3 -I - "$CRBUNDLE" "$TMP/fix/$BUNDLE" <<'PY' || { echo "could not unpack $CRBUNDLE"; exit 2; }
+# (arm (RS)'s root rsrecv/ and arm (Q)'s roots qualannot/<lang> the same way, from rsrecv.txt and qualannot.txt)
+for bundle in "$CORPUS/callresult.txt:$TMP/fix/callresult" "$CORPUS/qualannot.txt:$TMP/fix/qualannot" "$CORPUS/rsrecv.txt:$TMP/fix"; do
+[ -f "${bundle%%:*}" ] || { echo "fixture missing: ${bundle%%:*}"; exit 2; }
+python3 -I - "${bundle%%:*}" "${bundle#*:}" <<'PY' || { echo "could not unpack ${bundle%%:*}"; exit 2; }
 import os, sys
 out, cur, n = sys.argv[ 2 ], None, 0
 for line in open( sys.argv[ 1 ], encoding="utf-8" ):
@@ -291,7 +303,7 @@ sys.exit( 0 if n > 0 else 1 )
 PY
 done
 # rw ROOT ARGS… — run against one fixture root (every selector below is relative to that root's `.`)
-rw(){ local r="$1" d="$CORPUS/$1"; shift; case "$r" in callresult/*|qualannot/*) d="$TMP/fix/$r" ;; esac; ( cd "$d" && "$BIN" . --no-cache "$@" 2>/dev/null ); }
+rw(){ local r="$1" d="$CORPUS/$1"; shift; case "$r" in callresult/*|qualannot/*|rsrecv) d="$TMP/fix/$r" ;; esac; ( cd "$d" && "$BIN" . --no-cache "$@" 2>/dev/null ); }
 
 # ── the one reader every predicate shares ─────────────────────────────────────────────────────────────────────
 # parse.py MODE FILE [ARGS] — prints one line per row; NOROOT when the document has no answer about a symbol.
@@ -454,11 +466,15 @@ getrows(){
     ran_ok "($1) --$2=$3" "$f" || return 1
     rowsof "($1) --$2=$3" "$f"
 }
+# QUALNAME-1: a member row prints Owner::name / Owner.name / Owner#name (the owner is part of the spelling). Every arm below keys a row by
+# (kind, BARE name, path[:line]) - the bare name matches the bare spelling AND any Owner-qualified one, so a notproven negative rejects both
+# spellings (never a vacuous pass on a row that moved to its qualified name). The exact qualified spelling is pinned by the (Qs) arms.
+AWKB='function bare( s ) { sub( /^.*(::|[.#])/, "", s ); return s }'
 # match SPEC — the awk condition for "n path[:line]" over a rows line "t n path line H d"
 specmatch(){   # prints the matching rows of $GOT for SPEC
     local n="${1%% *}" p="${1#* }" l=""
     case "$p" in *:[0-9]*) l="${p##*:}"; p="${p%:*}";; esac
-    printf '%s\n' "$GOT" | awk -v n="$n" -v p="$p" -v l="$l" 'NF >= 5 && $2 == n && $3 == p && ( l == "" || $4 == l )'
+    printf '%s\n' "$GOT" | awk -v n="$n" -v p="$p" -v l="$l" "$AWKB"' NF >= 5 && ( $2 == n || bare( $2 ) == n ) && $3 == p && ( l == "" || $4 == l )'
 }
 show(){ printf '%s' "$GOT" | awk 'NF >= 5 { printf "%s %s %s:%s%s; ", $1, $2, $3, $4, ( $5 == "name" ? " via=name" : "" ) }'; }
 
@@ -485,8 +501,8 @@ proven(){
 exactproven(){
     local r="$1" v="$2" s="$3" want="$4" got
     getrows "$r" "$v" "$s" || return
-    got="$( printf '%s\n' "$GOT" | awk 'NF >= 5 && $5 != "name" { print $1 " " $2 " " $3 }' | sort -u | tr '\n' ';' | sed 's/;$//' )"
-    want="$( printf '%s' "$want" | tr ';' '\n' | sort -u | tr '\n' ';' | sed 's/;$//' )"
+    got="$( printf '%s\n' "$GOT" | awk "$AWKB"' NF >= 5 && $5 != "name" { print $1 " " bare( $2 ) " " $3 }' | sort -u | tr '\n' ';' | sed 's/;$//' )"
+    want="$( printf '%s' "$want" | tr ';' '\n' | awk "$AWKB"' { n = $2; $2 = bare( n ); print }' | sort -u | tr '\n' ';' | sed 's/;$//' )"
     if [ "$got" = "$want" ]; then ok "($r) --$v=$s unhedged rows are exactly [${want:-none}]"
     else no "($r) --$v=$s unhedged rows are [${got:-none}], want [${want:-none}]"; fi
 }
@@ -497,6 +513,19 @@ visible(){
     for spec in "$@"; do
         if [ -n "$( specmatch "$spec" )" ]; then ok "($r) --$v=$s shows the true target [$spec] (hedged or not)"
         else no "($r) --$v=$s does not show the true target [$spec]: $( show )"; fi
+    done
+}
+# lane L6: the true targets are named as the candidates of a gate="iface" <dc> row (the call declined through its receiver's
+# interface, ifacedispatch.h) — on --legend=full, where cand= lists them as file:line
+ifacenamed(){
+    local r="$1" v="$2" s="$3"; shift 3
+    local f; f="$( answer "$r" "$v" "$s" --legend=full )"
+    ran_ok "($r) --$v=$s --legend=full" "$f" || return
+    local spec cands
+    cands="$( grep -o '<dc [^>]*gate="iface"[^>]*>' "$f" | grep -o 'cand="[^"]*"' | sed 's/^cand="//; s/"$//' | tr ' ' '\n' )"
+    for spec in "$@"; do
+        if printf '%s\n' "$cands" | grep -qx "${spec#* }"; then ok "($r) --$v=$s names the true target [$spec] as a gate=\"iface\" candidate"
+        else no "($r) --$v=$s does not name [$spec] among its gate=\"iface\" candidates: [$( printf '%s' "$cands" | tr '\n' ' ' )]"; fi
     done
 }
 marked(){
@@ -538,7 +567,7 @@ hopnotproven(){
             no "($r) --for=\"$q\" shows no hop <h n=\"$h\">, and it was no dropped hop candidate (score r=$hr on the RR-off twin, hops total=$htot, noedge=$hne)"; return
         fi
         getrows "$r" callees "$hp:$h" || return
-        if [ -z "$( printf '%s\n' "$GOT" | awk -v n="$n" 'NF >= 5 && $2 == n' )" ]; then
+        if [ -z "$( printf '%s\n' "$GOT" | awk -v n="$n" "$AWKB"' NF >= 5 && ( $2 == n || bare( $2 ) == n )' )" ]; then
             no "($r) --for=\"$q\" dropped hop $h, and --callees=$hp:$h does not list $n either: $( show )"
         elif [ -n "$( printf '%s\n' "$GOT" | awk 'NF >= 5 && $5 != "name"' )" ]; then
             no "($r) --for=\"$q\" dropped hop $h, yet --callees=$hp:$h proves a row (the hop-slot rule does not explain the drop): $( show )"
@@ -671,7 +700,7 @@ proven      java  callees src/main/java/app/Pump.java:param "method spill src/ma
 notproven   java  callees src/main/java/app/Pump.java:untyped "spill src/main/java/app/Pump.java:7" "spill src/main/java/app/Pump.java:8"       # near miss: an untyped local
 notproven   java  callees src/main/java/app/Pump.java:shadow "spill src/main/java/app/Pump.java:7" "spill src/main/java/app/Pump.java:8"        # near miss: a local hides the field
 notproven   java  callees src/main/java/app/Pump.java:viaIface "spill src/main/java/app/Pump.java:7" "spill src/main/java/app/Pump.java:8"      # near miss: an interface, two implementors
-visible     java  callees src/main/java/app/Pump.java:viaIface "spill src/main/java/app/Pump.java:7" "spill src/main/java/app/Pump.java:8"
+ifacenamed  java  callees src/main/java/app/Pump.java:viaIface "spill src/main/java/app/Pump.java:7" "spill src/main/java/app/Pump.java:8"   # lane L6: was `visible` as two via="name" rows; now one gate="iface" <dc> naming both
 exactproven cs    callees App/Pump.cs:Param "method Spill App/Pump.cs"
 exactproven cs    callees App/Pump.cs:TypedLocal "method Spill App/Pump.cs;method MakeTank App/Pump.cs"
 exactproven cs    callees App/Pump.cs:CtorLocal "method Spill App/Pump.cs;cls Tank App/Pump.cs"
@@ -692,7 +721,7 @@ proven      kt    callees src/app/Pump.kt:constructedProperty "fn spill src/app/
 notproven   kt    callees src/app/Pump.kt:untyped "spill src/app/Pump.kt:7" "spill src/app/Pump.kt:8"
 notproven   kt    callees src/app/Pump.kt:shadow "spill src/app/Pump.kt:7" "spill src/app/Pump.kt:8"
 notproven   kt    callees src/app/Pump.kt:viaIface "spill src/app/Pump.kt:7" "spill src/app/Pump.kt:8"
-visible     kt    callees src/app/Pump.kt:viaIface "spill src/app/Pump.kt:7" "spill src/app/Pump.kt:8"
+ifacenamed  kt    callees src/app/Pump.kt:viaIface "spill src/app/Pump.kt:7" "spill src/app/Pump.kt:8"   # lane L6: was `visible` as two via="name" rows; now one gate="iface" <dc> naming both
 exactproven swift callees Sources/App/Pump.swift:param "fn spill Sources/App/Pump.swift"
 exactproven swift callees Sources/App/Pump.swift:typedLocal "fn spill Sources/App/Pump.swift;fn makeTank Sources/App/Pump.swift"
 exactproven swift callees Sources/App/Pump.swift:ctorLocal "cls Tank Sources/App/Pump.swift;fn spill Sources/App/Pump.swift"
@@ -1509,12 +1538,12 @@ while read -r tag id lang form scope target root sel verdict a b c; do
     if ! getrows "$CR/$root" callees "$sel"; then mxred=$(( mxred + 1 )); continue; fi
     if [ "$verdict" = "P" ]; then
         f="${c%:*}"; l="${c##*:}"
-        want="$( printf '%s\n' "$GOT" | awk -v t="$a" -v n="$b" -v f="$f" -v l="$l" '$1 == t && $2 == n && $3 == f && $4 == l && $5 != "name"' )"
-        extra="$( printf '%s\n' "$GOT" | awk -v n="$b" -v f="$f" -v l="$l" '$2 == n && $5 != "name" && !( $3 == f && $4 == l )' )"
+        want="$( printf '%s\n' "$GOT" | awk -v t="$a" -v n="$b" -v f="$f" -v l="$l" "$AWKB"' $1 == t && ( $2 == n || bare( $2 ) == n ) && $3 == f && $4 == l && $5 != "name"' )"
+        extra="$( printf '%s\n' "$GOT" | awk -v n="$b" -v f="$f" -v l="$l" "$AWKB"' ( $2 == n || bare( $2 ) == n ) && $5 != "name" && !( $3 == f && $4 == l )' )"
         if [ -n "$want" ] && [ -z "$extra" ]; then ok "$label proves exactly [$b $c]"
         else no "$label: expected exactly the proven row [$a $b $c]: $( show )"; mxred=$(( mxred + 1 )); fi
     else
-        hits="$( printf '%s\n' "$GOT" | awk -v n="$a" '$2 == n && $5 != "name"' )"
+        hits="$( printf '%s\n' "$GOT" | awk -v n="$a" "$AWKB"' ( $2 == n || bare( $2 ) == n ) && $5 != "name"' )"
         if [ -z "$hits" ]; then ok "$label proves no [$a]${b:+ ($b)}"
         else no "$label shows [$a] as a PROVEN edge${b:+ (a $b cell must hedge)}: $( show )"; mxred=$(( mxred + 1 )); fi
     fi
@@ -1529,6 +1558,240 @@ if getrows "$CR/mx_cpp" callees "src/objcfloor.mm:cellObjc"; then
         ok "(L-objc) ObjC floor: the .mm call result is not typed (hitObjc keeps both included namesakes)"
     else no "(L-objc) ObjC floor: want hitObjc on objcfloor.h:3 AND objcdecoy.h:3 (ObjC untyped): $( show )"; fi
 fi
+
+echo "=== (RS) Rust receiver evidence (lane rust-receivers): a written or constructed type proves the receiver's class ==="
+# rsrecv/: model.rs Book::new :4, Book::spin :5, Book::iter :6, Other::spin :10, Other::iter :11, Cfg::tune :16, Knob::tune :20,
+# Stack::spin :24; other.rs other::Book::spin :4, File::sync_all :8; kinds.rs Shape::spin :4, the Render trait's default spin :7.
+# [P] a parameter (`&T`, `&mut T`, `Box<T>`, a path `crate::other::T` / `other::T`, a user generic `Stack<u8>`, an enum), a
+# `let x: T` / `let x: &T`, a struct literal (`T { .. }`, `other::T {}`), `T::new()` (its declared `-> Self`: the call-result
+# rows, which now read `Self`), `T::default()`, a closure's typed parameter, and a field path (`s.book.m()`, `self.book.m()`,
+# `self.boxed.m()`, `self.inner.book.m()`, a `Self { .. }` local's field) RESOLVE to exactly that class's method.
+RSA="src/app.rs"; RSM="src/model.rs"
+RSSPIN="spin $RSM:5|spin $RSM:10|spin $RSM:24|spin src/other.rs:4|spin src/kinds.rs:4|spin src/kinds.rs:7"
+for f in typed_param typed_param_mut typed_param_box let_typed let_typed_ref let_struct let_new closure_param field_chain; do
+    want="method spin $RSM"
+    case "$f" in let_typed|let_typed_ref|closure_param) want="$want;fn make $RSA" ;; let_new) want="$want;method new $RSM" ;; esac
+    exactproven rsrecv callees "$RSA:$f" "$want"                                                                # [P]
+    proven      rsrecv callees "$RSA:$f" "method spin $RSM:5"                                                   # [P] Book's
+    notproven   rsrecv callees "$RSA:$f" "spin $RSM:10" "spin $RSM:24"                                          # the same file's decoys
+done
+for f in typed_param_path typed_param_module let_struct_path; do
+    exactproven rsrecv callees "$RSA:$f" "method spin src/other.rs"                                             # [P] other::Book, never model's
+done
+proven      rsrecv callees "$RSA:typed_param_generic" "method spin $RSM:24"                                     # [P] Stack<u8> is a Stack
+exactproven rsrecv callees "$RSA:typed_param_generic" "method spin $RSM"
+exactproven rsrecv callees "$RSA:typed_param_enum" "method spin src/kinds.rs"                                    # [P] an enum's own impl
+proven      rsrecv callees "$RSA:typed_param_enum" "method spin src/kinds.rs:4"
+proven      rsrecv callees "$RSA:let_default" "method tune $RSM:16"                                             # [P] Cfg::default(): Cfg's
+notproven   rsrecv callees "$RSA:let_default" "tune $RSM:20"                                                    # never Knob's
+proven      rsrecv callees "$RSA:std_named" "method iter $RSM:6"                                                 # [P] book.iter() on &Book (std-named)
+for f in Shelf::self_field Shelf::self_boxed Shelf::self_two_hops Shelf::self_literal Shelf::self_param; do
+    want="method spin $RSM"; [ "$f" = Shelf::self_literal ] && want="$want;method new $RSM"
+    exactproven rsrecv callees "$RSM::$f" "$want"                                                               # [P] through the field table
+    proven      rsrecv callees "$RSM::$f" "method spin $RSM:5"
+done
+proven      rsrecv callees "$RSM::Shelf::iter" "method iter $RSM:6"                                              # [P] self.book.iter() (mdbook's MDBook::iter)
+# [N] near misses record nothing and stay as they were: an untyped `let x = foo.bar()`, `dyn Trait` / `impl Trait` / a
+# generic `T: Trait` / a trait written as a type (dispatch: lane L6), Option<T> (a parameter and a `let`), Rc<T> (its own
+# members), an inner binding hiding the typed one (`let`, `for`, a closure parameter), an outside type named like an in-tree
+# class (`use std::fs::File`), a tuple pattern, an outside `String::default()`; a field typed Option / Rc / u32, a missing
+# field, a generic struct's `T` field, a tuple-struct field `self.0`, and a same-named owner (other::Shelf) whose `book` is a Vec.
+rs_none(){   # rs_none SELECTOR — no spin candidate is proven
+    local specs; IFS='|' read -r -a specs <<<"$RSSPIN"
+    notproven rsrecv callees "$1" "${specs[@]}"
+}
+for f in near_call near_dyn near_impl near_generic near_bare_trait near_option near_let_option near_rc near_shadow near_for near_closure_shadow near_tuple; do
+    rs_none "$RSA:$f"                                                                                          # [N]
+done
+notproven rsrecv callees "$RSA:near_outside" "sync_all src/other.rs:8"                                           # [N] std::fs::File
+notproven rsrecv callees "$RSA:near_default_outside" "tune $RSM:16" "tune $RSM:20"                                # [N] String::default()
+for f in Shelf::near_self_maybe Shelf::near_self_shared Shelf::near_self_count Shelf::near_self_unknown Holder::near_generic_field Pair::near_tuple_field; do
+    rs_none "$RSM::$f"                                                                                         # [N]
+done
+rs_none "src/other.rs::Shelf::near_same_named_owner"                                                             # [N]
+# the callers side reads the same edges (Cfg::tune: few enough callers that the answer is never capped, unlike Book::spin):
+# --callers lists the [P] caller unhedged and never the [N] one; Knob::tune's callers are the typed Knob locals only
+proven      rsrecv callers "$RSM::Cfg::tune" "fn let_default $RSA"
+notproven   rsrecv callers "$RSM::Cfg::tune" "near_default_outside $RSA" "glob_default src/nest/inner.rs" "glob_of_glob_default src/glob2/leaf.rs"
+proven      rsrecv callers "$RSM::Knob::tune" "fn glob_default src/nest/inner.rs"
+notproven   rsrecv callers "$RSM::Knob::tune" "let_default $RSA" "near_default_outside $RSA" "glob_of_glob_default src/glob2/leaf.rs"
+# a glob `use super::*` brings in what the parent module's own `use` names (Rust: a glob imports the module's imports
+# too); a glob of a module that only globs in turn is not followed (stated floor: names nothing, proves nothing) — and
+# (fix round 1, rv-l3 M1) neither does its `T::default()`: a callee's declared `-> Self` types the local only through a
+# qualifier that resolves at the site, so glob_of_glob_default is declined exactly as on base
+exactproven rsrecv callees "src/nest/inner.rs:glob_param" "method spin $RSM"                                     # [P]
+proven      rsrecv callees "src/nest/inner.rs:glob_param" "method spin $RSM:5"
+proven      rsrecv callees "src/nest/inner.rs:glob_default" "method tune $RSM:20"                                # [P] Knob's
+notproven   rsrecv callees "src/nest/inner.rs:glob_default" "tune $RSM:16"
+rs_none "src/glob2/leaf.rs:glob_of_glob"                                                                        # [N] floor
+notproven   rsrecv callees "src/glob2/leaf.rs:glob_of_glob_default" "tune $RSM:20" "tune $RSM:16"                # [N] floor (= base)
+# early gates review (rv-l3-gates A1-A12; src/adds.rs, alias.rs, samename.rs, kinds.rs's trait). [P]: the field below
+# `&mut self`, by-value `self`, `&'a self`, a field written `&'a Book`, a `&Self` parameter's field, a `Self::new()` local's
+# field, a `&'a Book` parameter, a `use … as` alias (by the path it names: other::Book, never the in-tree model::Other its
+# alias spells), the same name in two modules (each scope's own Book), a block-scoped `let b: Other` beside a `&Book`
+# parameter (each call its own class). [N]: `Box<dyn Render>` (a parameter and a field), `&mut dyn Render`, `Arc<Book>`, a
+# `RefCell<Book>` field, an index receiver `self.books[0]`, a `type Tome = Book` alias (a floor: the alias is not
+# followed), a generic parameter spelled `Book`, a struct pattern parameter, `Book::try_new()` / `maybe_new()` (Result /
+# Option without its operator), the element type of `Vec<Book>` / `&[Book]` / `HashMap<_, Book>` (never Book::iter).
+RSD="src/adds.rs"
+for f in Rack::mut_self Rack::value_self Rack::life_self Rack::borrowed_field Rack::self_param Rack::self_new; do
+    proven      rsrecv callees "$RSD::$f" "method spin $RSM:5"                                                  # [P]
+    notproven   rsrecv callees "$RSD::$f" "spin $RSM:10" "spin $RSM:24" "spin src/other.rs:4" "spin src/kinds.rs:4" "spin src/kinds.rs:7"
+done
+exactproven rsrecv callees "$RSD:life_param" "method spin $RSM"                                                 # [P]
+proven      rsrecv callees "$RSD:life_param" "method spin $RSM:5"
+exactproven rsrecv callees "src/alias.rs:alias_collides" "method spin src/other.rs"                              # [P] never model's Other
+exactproven rsrecv callees "src/alias.rs:alias_plain" "method spin $RSM"                                         # [P]
+proven      rsrecv callees "src/alias.rs:alias_plain" "method spin $RSM:5"
+exactproven rsrecv callees "src/samename.rs:other_book" "method spin src/other.rs"                               # [P] the use'd other::Book
+exactproven rsrecv callees "src/samename.rs:nested_book" "method spin src/samename.rs"                           # [P] the mod's own Book
+proven      rsrecv callees "$RSD:block_shadow" "method spin $RSM:5" "method spin $RSM:10"                       # [P] each call its own class
+# CodeRabbit #424: a Rust local or parameter named `this` is an ordinary name, read by its own binding — never the enclosing
+# impl's `self` (the pin-project idiom `let this = self.project()`). Mine.book is other::Book, Shelf.book is model::Book:
+# `self.book.spin()` stays other::Book's; `this.book.spin()` follows the `this` binding's type, or proves nothing when it has none
+RST="src/thisname.rs"
+exactproven rsrecv callees "$RST::Mine::real_self" "method spin src/other.rs"                                   # [P] the real `self`
+for f in Mine::this_param Mine::this_let; do
+    exactproven rsrecv callees "$RST::$f" "method spin $RSM"                                                    # [P] Shelf's book: model::Book
+    proven      rsrecv callees "$RST::$f" "method spin $RSM:5"
+    notproven   rsrecv callees "$RST::$f" "spin src/other.rs:4"                                                 # never the enclosing impl's field
+done
+exactproven rsrecv callees "$RST::Mine::this_direct" "method spin $RSM"                                         # [P] `this: &Book` -> Book::spin
+rs_none "$RST::Mine::this_untyped"                                                                              # [N] an untyped `this` local proves nothing (no spin, not other::Book's)
+notproven rsrecv callees "$RST:near_ufcs_cast" "tune $RSM:20" "tune $RSM:16"                                   # [N] a UFCS cast's `-> Self` types nothing (a pin: by-name today)
+for f in Rack::near_box_dyn_field Rack::near_refcell_field Rack::near_index_recv; do rs_none "$RSD::$f"; done       # [N]
+for f in near_box_dyn near_mut_dyn near_arc near_type_alias near_generic_named near_struct_pattern near_try_new near_maybe_new; do
+    rs_none "$RSD:$f"                                                                                          # [N]
+done
+for f in near_vec_iter near_slice_iter near_map_get Rack::near_vec_field_iter Rack::near_chain_recv; do
+    sel="$RSD:$f"; case "$f" in Rack::*) sel="$RSD::$f" ;; esac
+    notproven rsrecv callees "$sel" "iter $RSM:6" "iter $RSM:11"                                                # [N] the element type is no receiver
+done
+proven      rsrecv callees "$RSD::Rack::near_chain_recv" "method spin $RSM:5"                                   # its inner call stays proven
+proven      rsrecv callees "$RSD:make_book_local" "method spin $RSM:5"                                           # guard: a call result (L)
+notproven   rsrecv callees "$RSD:make_book_local" "spin $RSM:10"                                                 # never Other's (the path's type)
+# FLOOR, unchanged from base (not this lane's rule): `self.spin()` inside a trait's default method is Rule 1's and proves
+# the trait's own default body (kinds.rs:7) — an implementor may override it (dispatch: lane L6, carded); a blanket
+# `impl<T: Render> Extra for T` stays hedged. Pinned so a change here is seen: exactly the base answer.
+exactproven rsrecv callees "src/kinds.rs:twice" "method spin src/kinds.rs"
+rs_none "src/kinds.rs:go"
+# a `let` / a typed closure parameter in a `const` / `static` initializer (no enclosing fn: the first cut of this lane
+# crashed reading a null fn's generics there — nushell): typed like any other, and the run exits 0 (ran_ok)
+proven      rsrecv callees "src/consts.rs:SPUN" "method spin $RSM:5"                                               # [P]
+proven      rsrecv callees "src/consts.rs:SPIN_FN" "method spin $RSM:5"                                            # [P]
+notproven   rsrecv callees "src/consts.rs:SPIN_FN" "spin $RSM:10" "spin $RSM:24" "spin src/other.rs:4"
+# `Path::new( p )` where `use std::path::Path` names std's: the canonical tier still matches the in-tree other::Path's `new`
+# by its scope name (a base edge, not this lane's), but that call's declared `-> &Self` never types the local when the
+# file imports the qualifier from outside the tree (nushell's Open::run: path.is_dir() was proven onto nu-path's Path at
+# 89f236b0); twins: with `use crate::other::Path` in scope it does, and so does a path-qualified `crate::other::Path::new( p )`
+# in that same file (fix round 1: the qualifier is resolved as a WRITTEN path at the call site, not by its last segment).
+notproven   rsrecv callees "src/stdpath.rs:std_path_new" "probe src/other.rs:17"                                   # [N]
+proven      rsrecv callees "src/stdpath.rs:own_path_new" "method probe src/other.rs:17"                             # [P]
+proven      rsrecv callees "src/ownpath.rs:own_path_use" "method probe src/other.rs:17"                             # [P]
+# fix round 1 (rv-l3 M1): the std / external class, closed for every spelling. A qualified `T::f()` types its local only
+# when its qualifier, read as a WRITTEN type at the call site, resolves to the in-tree class owning `f`. [N] (each proven
+# at bb93a270, hedged on base): `use std::fs; fs::File::open()` / `create()`, fully qualified `std::fs::File::create()`,
+# `std::path::Path::new()`, `std::path::PathBuf::from()` (nushell misc/run.rs, nu-lsp symbols.rs), a glob of a std module
+# (`use std::collections::*; HashMap::new()` / `with_capacity()`), prelude `String::from()` / `String::new()` with no
+# in-tree String in scope, `use std::time; time::Instant::now()`, a child's `use super::*` of a parent's std `use`, and an
+# external crate's glob (`use serde::*; Book::new()`, crate::model::Book never imported). [P] twins: the in-tree class by
+# its `use`, by `crate::other::T::f()`, by a `use`d module `other::T::f()`.
+QO="src/other.rs"
+for f in fs_path_open fs_path_create full_path_create; do notproven rsrecv callees "src/stdq.rs:$f" "sync_all $QO:8"; done   # [N]
+notproven   rsrecv callees "src/stdq.rs:full_path_new" "probe $QO:17"                                              # [N]
+notproven   rsrecv callees "src/stdq.rs:full_pathbuf_from" "as_pb $QO:44"                                          # [N]
+for f in glob_std_new glob_std_capacity; do notproven rsrecv callees "src/stdq.rs:$f" "get_it $QO:28"; done        # [N]
+for f in prelude_from prelude_new; do notproven rsrecv callees "src/stdq.rs:$f" "lenx $QO:34"; done                 # [N]
+notproven   rsrecv callees "src/stdq.rs:module_now" "elapsed_x $QO:39"                                             # [N]
+for f in glob_open glob_create; do notproven rsrecv callees "src/stdqp/child.rs:$f" "sync_all $QO:8"; done          # [N]
+notproven   rsrecv callees "src/stdqp/child.rs:glob_now" "elapsed_x $QO:39"                                        # [N]
+rs_none "src/extglob.rs:ext_glob_new"                                                                           # [N]
+proven      rsrecv callees "src/stdqown.rs:own_open" "method sync_all $QO:8"                                       # [P]
+proven      rsrecv callees "src/stdqown.rs:own_new" "method get_it $QO:28"                                         # [P]
+proven      rsrecv callees "src/stdqown.rs:own_full_create" "method sync_all $QO:8"                                # [P]
+proven      rsrecv callees "src/stdqown.rs:own_module_now" "method elapsed_x $QO:39"                               # [P]
+proven      rsrecv callees "src/stdqown.rs:own_full_from" "method lenx $QO:34"                                     # [P]
+# fc1 (rv-l3-delta check 2 / N-c): the same class for a result written by the TYPE'S OWN NAME (`-> OsString`, a path
+# `-> crate::nsown::OsString`, `Result<OsString, ()>` / `Option<..>` + unwrap, `Box<..>`), not `Self`. A qualified member
+# call `T::f()` types its local only when T, read as a written type at the call site, reaches f's in-tree class, whatever
+# the result spelling. [N] (each proven on base dd378171): std's fully qualified, a `use`d std module, core's, std::time's,
+# an external crate's (`serde::`), an unknown root's, a re-export of std's (`crate::stdnre::OsString`), a `use` of std's
+# type, a std glob, the prelude's String. Hedged on base too (kept): UFCS `<std::ffi::OsString>::from()`, a renamed std
+# re-export, a type alias of std's, a free function std::fs::read_to_string / fs::read_to_string beside an in-tree namesake.
+NS="src/nsown.rs"
+for f in full_from full_from_q full_try full_opt full_box mod_from ext_from unknown_from re_path ufcs_from re_alias_path free_full free_mod; do
+    notproven rsrecv callees "src/stdn.rs:$f" "as_os $NS:10"                                                   # [N]
+done
+for f in core_secs std_secs; do notproven rsrecv callees "src/stdn.rs:$f" "as_dur $NS:15"; done                    # [N]
+notproven   rsrecv callees "src/stdnuse.rs:use_from" "as_os $NS:10"                                                # [N]
+notproven   rsrecv callees "src/stdnuse.rs:glob_secs" "as_dur $NS:15"                                              # [N]
+notproven   rsrecv callees "src/stdnuse.rs:prelude_with" "lenx $QO:34"                                             # [N]
+for f in re_alias ty_alias; do notproven rsrecv callees "src/stdnre.rs:$f" "as_os $NS:10"; done                    # [N]
+# [P] twins (proven on base, kept): crate::nsown::T, its path result, Result / Option + unwrap, Box, a `use`d module, a
+# `use`d type, a re-export reaching the in-tree type (`crate::nsre::OsString`, `self::OsString` inside nsre), the in-tree
+# String by its `use`, the free function by its module path. An in-tree `mod std` (nshadow.rs): a non-import path's first
+# segment is an item of the module before the extern prelude, so `std::ffi::OsStr::new()` there IS the in-tree one [P].
+for f in own_full own_q own_try own_opt own_box own_use own_free own_free_full own_reexp; do
+    proven  rsrecv callees "src/nsownuse.rs:$f" "method as_os $NS:10"                                          # [P]
+done
+proven      rsrecv callees "src/nsownuse.rs:own_mod" "method as_dur $NS:15"                                        # [P]
+proven      rsrecv callees "src/nsownuse.rs:own_prelude_twin" "method lenx $QO:34"                                 # [P]
+proven      rsrecv callees "src/nsre.rs:re_own_self" "method as_os $NS:10"                                         # [P]
+for f in shadow_bare shadow_self; do proven rsrecv callees "src/nshadow.rs:$f" "method as_sh src/nshadow.rs:7"; done   # [P]
+# [P] a T the walk cannot follow keeps the base row: the in-tree glob re-export `pub use crate::nsown::*;` (nsglob.rs) by a
+# `use`, by its path and by the file's own glob of it (nsglobstar.rs), and a bench file outside every crate's module tree
+# (`use rsrecv::nsown::OsString`). [N] there: a std root (`std::ffi::OsString::from()`) leads out of the tree from any file.
+for f in glob_reexp_own glob_reexp_path; do proven rsrecv callees "src/nsglobuse.rs:$f" "method as_os $NS:10"; done # [P]
+proven      rsrecv callees "src/nsglobstar.rs:glob_star_own" "method as_os $NS:10"                                # [P]
+proven      rsrecv callees "benches/nsb.rs:bench_own" "method as_os $NS:10"                                         # [P]
+notproven   rsrecv callees "benches/nsb.rs:bench_std" "as_os $NS:10"                                                # [N]
+# fc1 fix 1 (rv-fc1 B1-B3, N4): the walk's "cannot follow" exits no longer fire on code that provably leaves the tree.
+# B1: a glob brings a root only when its TARGET module declares or re-exports an item of that name, and only a glob at the
+# level the call sits in (a fn body, then its module): `mod tests { use super::*; }` beside and around a std call, a glob of
+# a module with no `std` / `core`, an explicit `use std::ffi::OsString` beside an in-tree glob (it shadows the glob). B2:
+# cfg-gated duplicate `use`s lead out when every one does. B3: an inline module's re-export of std's type. N4: an extern
+# crate named like an in-tree module. [N] each proven on dd378171 and 5cd18c99; [P] twins reach the in-tree type.
+for f in rvtests.rs:t_full rvtests.rs:inner rvglob.rs:g_full rvexpl.rs:expl_from rvcfg.rs:cfg_from rvinl.rs:inl_path \
+         rvinl.rs:inl_self rvinluse.rs:inl_cross rvext.rs:ext_mod rvext.rs:ext_mod_q; do
+    notproven rsrecv callees "src/$f" "as_os $NS:10"                                                           # [N]
+done
+notproven   rsrecv callees "src/rvglob.rs:g_core" "as_dur $NS:15"                                                  # [N]
+for f in rvtests.rs:t_own rvtests.rs:inner_own rvglob.rs:g_own rvgtuse.rs:gt_own rvinl.rs:inl_own rvinluse.rs:inl_cross_own \
+         rvext.rs:ext_own; do
+    proven  rsrecv callees "src/$f" "method as_os $NS:10"                                                      # [P]
+done
+for f in rvexpl.rs:expl_glob rvcfg.rs:cfg_own; do proven rsrecv callees "src/$f" "method as_dur $NS:15"; done     # [P]
+# fc1 fix 2 (rv-fc1-delta1 C1, C2): a glob CYCLE (parent `pub use self::kid::*` + kid's `use super::*`, two files globbing each
+# other, an inline mod globbing its parent) and a 7-deep acyclic glob chain end with the true answer — no module brings `std`,
+# so the std call leads out [N] (each proven before); a private `use std::ffi::OsString` a `use super::*` sees is std's [N]
+# (`#[cfg(test)] mod tests`, a plain child mod), and so is a std name at the end of a glob chain of named re-exports [N];
+# [P] twins: the in-tree path on every cycle, a parent's `use crate::nsown::OsString`, a chain ending in the in-tree re-export.
+for f in gcpar.rs:gcpar_full gcpar/kid.rs:gckid_full gcabuse.rs:gcab_full gcinl.rs:gcinl_kid_full gcinl.rs:gcinl_full gcdeep.rs:gcdeep_full \
+         gutu.rs:gutu_in gutu.rs:gutu_bare gutu.rs:gutu_top gususe.rs:gus_bare; do
+    notproven rsrecv callees "src/$f" "as_os $NS:10"                                                           # [N]
+done
+for f in gcpar.rs:gcpar_own gcpar/kid.rs:gckid_own gcabuse.rs:gcab_own gcinl.rs:gcinl_kid_own gcinl.rs:gcinl_own gcdeep.rs:gcdeep_own \
+         gutuown.rs:gutuown_top gutuown.rs:gutuown_in gutuown.rs:gutuown_bare gususeown.rs:gusown_bare; do
+    proven  rsrecv callees "src/$f" "method as_os $NS:10"                                                      # [P]
+done
+# fc1 fix 3 (rv-fc1-delta2 D1, D2): a named `use` of the name shadows the level's globs (so `use std::ffi::OsString;` beside
+# `use crate::nsown::*;` is std's name for a child's `use super::*;` and for a glob of that module) [N]; a glob chain 4 deep
+# ending in a named std re-export is cut at the path walk's depth cap, and a cut is never a proof onto the in-tree type [N]
+# (3 deep is followed out, still [N]); [P] twins: a std glob + an explicit in-tree `use`, the same chain ending in the in-tree type.
+for f in gsh.rs:gsh_in gsreuse.rs:gsre_bare gdqx4.rs:gdq4_bare gsh.rs:gsh_top gdqx3.rs:gdq3_bare gczuse.rs:gcz_bare; do
+    notproven rsrecv callees "src/$f" "as_os $NS:10"                                                           # [N]
+done
+for f in gshown.rs:gsho_top gshown.rs:gsho_in gdox4.rs:gdo4_bare; do
+    proven  rsrecv callees "src/$f" "method as_os $NS:10"                                                      # [P]
+done
+# fc1 fix 4 (rv-fc1-delta3 E1): a named re-export chain longer than the depth cap, with NO glob in between, is cut in the TOP-LEVEL
+# walk (bare `use` and a written full path), and a cut is hedged, never proven onto the in-tree namesake [N]; [P] twin: a short chain in-tree
+for f in gctn.rs:gctn_bare gctq.rs:gctq_full; do
+    notproven rsrecv callees "src/$f" "as_os $NS:10"                                                           # [N]
+done
+proven      rsrecv callees "src/gcto.rs:gcto_bare" "method as_os $NS:10"                                      # [P]
+# guard: `Book::new()` is a path call the canonical tier answers (rustqualcheck's shape), unchanged
+proven      rsrecv callees "$RSA:let_new" "method new $RSM:4"
 
 echo "=== (Q) qualified annotations and in-place rebinding (lane h1-annot) ==="
 QA=qualannot
@@ -1577,7 +1840,7 @@ notproven $QA/js callees aug.js:augJs  "bump aug.js:1"                          
 proven    $QA/js callees aug.js:augNone "method bump aug.js:1"                    # guard
 
 echo "=== (C) conservation: no call silently disappears ==="
-ROOTS="js ts py go java kt cs cpp swift rb qualannot/py qualannot/ts qualannot/js callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/java5 callresult/kt5 callresult/cpp4 callresult/rust4 callresult/cpp5 callresult/rust5 callresult/rust6 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go"
+ROOTS="js ts py go java kt cs cpp swift rb qualannot/py qualannot/ts qualannot/js callresult/go callresult/rust callresult/cpp callresult/java callresult/kt callresult/ts callresult/cpp2 callresult/java2 callresult/java3 callresult/kt2 callresult/rust2 callresult/ts2 callresult/kt3 callresult/rust3 callresult/cpp3 callresult/java4 callresult/kt4 callresult/java5 callresult/kt5 callresult/cpp4 callresult/rust4 callresult/cpp5 callresult/rust5 callresult/rust6 callresult/mx_rust callresult/mx_cpp callresult/mx_java callresult/mx_kt callresult/mx_ts callresult/mx_go rsrecv"
 for r in $ROOTS; do
     rf="$( printf '%s' "$r" | tr '/' '_' )"   # a nested root (callresult/go) writes a flat file name
     if ! rw "$r" --pin-census="$TMP/$rf.tsv" >"$TMP/$rf.map.xml"; then no "(C) ($r) the census run exited non-zero"; continue; fi
@@ -1595,8 +1858,28 @@ PY
     else no "(C) ($r) conservation broken: $DL"; fi
 done
 
+echo "=== (Qs) the exact Owner-qualified spelling of the unhedged callee rows (QUALNAME-1; the arms above key by bare name) ==="
+# exactnames ROOT VERB SEL "kind QualName path;..." - the unhedged rows are exactly these, spelled exactly (a bare name FAILs here)
+exactnames(){
+    local r="$1" v="$2" s="$3" want="$4" got
+    getrows "$r" "$v" "$s" || return
+    got="$( printf '%s\n' "$GOT" | awk 'NF >= 5 && $5 != "name" { print $1 " " $2 " " $3 }' | sort -u | tr '\n' ';' | sed 's/;$//' )"
+    want="$( printf '%s' "$want" | tr ';' '\n' | sort -u | tr '\n' ';' | sed 's/;$//' )"
+    if [ "$got" = "$want" ]; then ok "(Qs) ($r) --$v=$s spells its unhedged rows exactly [$want]"
+    else no "(Qs) ($r) --$v=$s unhedged rows spelled [${got:-none}], want exactly [$want]"; fi
+}
+exactnames py    callees src/tui/uses.py:clone     "fn Styles.copy src/tui/css/styles.py"
+exactnames go    callees src/result.go:fromValue   "method Chars.Get src/util/chars.go"
+exactnames kt    callees src/app/Pump.kt:param     "fn Tank.spill src/app/Pump.kt"
+exactnames cpp   callees src/logger.cpp:close      "method Base::flush src/logger.cpp;method Logger::reset src/logger.cpp"
+exactnames rb    callees lib/app/logger.rb:line    "method Helpers#stamp lib/app/helpers.rb"
+exactnames rsrecv callees src/app.rs:typed_param   "method Book::spin src/model.rs"
+
 echo "=== (K) the predicates can fail ==="
 kread(){ P rows "$1" && GOT="$PARSED"; }
+printf '<callees of="x" defs="1"><s t="method" n="Application#onerror" p="lib/application.js:12"/></callees>' >"$TMP/kq.xml"; kread "$TMP/kq.xml"
+if [ -n "$( specmatch "onerror lib/application.js" | awk '$5 != "name"' )" ] && [ -z "$( specmatch "other lib/application.js" )" ]; then ok "(K) an unhedged planted Owner#name row reads as PROVEN under the bare spelling (notproven would fail it), and only that name"
+else no "(K) the reader missed an unhedged planted qualified row: [$GOT]"; fi
 printf '<callees of="x" defs="1"><s t="method" n="onerror" p="lib/application.js:12"/></callees>' >"$TMP/k1.xml"; kread "$TMP/k1.xml"
 if [ -n "$( specmatch "onerror lib/application.js" | awk '$5 != "name"' )" ]; then ok "(K) an unhedged planted row reads as PROVEN (notproven would fail it)"
 else no "(K) the reader missed an unhedged planted row: [$GOT]"; fi

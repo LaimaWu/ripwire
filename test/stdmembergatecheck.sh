@@ -51,13 +51,11 @@
 #       function-pointer call (C has no member functions) and a Go call (Go's row is EMPTY) are unchanged
 #   (R) the Rust row (rsgate/): `v.push()` / `v.iter()` on Vec parameters and a parameter of an undefined type are declined
 #       with their <stdm> line; `self.iter()` inside the defining impl stays proven; a name outside the table and a name with no
-#       in-tree definition are untouched, a qualified `Stack::push( s, 1 )` keeps its edge; STATED FLOOR until Rust records receiver types: a parameter, local or field written
-#       as the in-tree Stack / Book, or a generic bounded by an in-tree trait, is declined too (counted, never silently dropped)
-#       FLIP WHEN RUST RECORDS RECEIVER TYPES (map L3, rust-receivers): these five (R) STATED FLOOR arms pin today's decline
-#       and must turn into "keeps the edge / the via=name hedge" in the lane that types them — stack_param (parameter),
-#       stack_local (local), rsgate/lib.rs:add (field self.inner), book_iter (parameter of the in-tree Book), generic_bound
-#       (P: Pushable); with them the (R) --callers counts (rsgate/lib.rs:push declined 6, Book::iter declined 2) and
-#       attribmultidefcheck's f_rs_iter twin. vec_param / vec_iter / std_vec stay declined (their receivers are std types).
+#       in-tree definition are untouched, a qualified `Stack::push( s, 1 )` keeps its edge. FLIPPED by lane rust-receivers (Rust
+#       records receiver types): a parameter, local or field WRITTEN as the in-tree Stack / Book (stack_param, stack_local,
+#       rsgate/lib.rs:add's self.inner, book_iter, not_in_table's frobnicate) now BINDS that type's method, unhedged, and the
+#       (R) --callers counts fall with them; vec_param / vec_iter / std_vec stay declined (their receivers are std types).
+#       STATED FLOOR (lane L6): a generic bounded by an in-tree trait (generic_bound, P: Pushable) is still declined.
 #   (E) the callers side: Vec::push_back keeps exactly its typed callers and hedges and counts the ten declined calls; the one-def
 #       Solo::append keeps soloTyped and counts stdAppend; Pool::clear keeps poolTyped and counts two
 #   (F) disclosure surfaces: the map header's declined= equals the census's declined bucket, the full map legend, the
@@ -134,7 +132,7 @@ call(){ printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"
 [ -s "$TMP/c.tsv" ] || no "the census run wrote no census — the census arm below would be vacuous"
 [ -s "$TMP/map.xml" ] || no "the map run wrote nothing — every header arm below would be vacuous"
 
-PB='lib/vec.h:8:push_back lib/vec.h:9:push_back'   # Vec's two push_back overloads, as a callees answer lists them
+PB='lib/vec.h:8:Vec::push_back lib/vec.h:9:Vec::push_back'   # Vec's two push_back overloads, as a callees answer lists them
 
 # ── (A) typed receivers keep their edges ──────────────────────────────────────────────────────────────────────
 echo "=== (A) a receiver a rule types keeps its edge, unhedged ==="
@@ -144,8 +142,8 @@ check "(A) typed pointer Vec<int>* p; p->push_back()"          callees typedPtr 
 check "(A) member field Vec<int> items_ (Rule 2b)"             callees app/use.cpp:add     "$PB" '' ''
 check "(A) smart pointer field owned_->push_back() (Rule 2b, ->)" callees app/use.cpp:addOwned "$PB" '' ''
 check "(A) implicit-this and this-> calls inside Vec"          callees pushTwice           "$PB" '' ''
-check "(A) Solo so; so.append() keeps the tree's only append"  callees soloTyped           'lib/vec.h:27:append' '' ''
-check "(A) Pool& p; p.clear()"                                 callees poolTyped           'lib/vec.h:22:clear' '' ''
+check "(A) Solo so; so.append() keeps the tree's only append"  callees soloTyped           'lib/vec.h:27:Solo::append' '' ''
+check "(A) Pool& p; p.clear()"                                 callees poolTyped           'lib/vec.h:22:Pool::clear' '' ''
 
 # ── (B) std-written or untyped receivers are declined and disclosed ───────────────────────────────────────────
 echo "=== (B) a receiver written in std, or typed by nothing, binds no in-tree namesake ==="
@@ -171,14 +169,14 @@ check "(B) the ladder's own tier-3 decline (no namesake in reach) is named on th
 # ── (C) an alias of the in-tree container keeps the hedge ────────────────────────────────────────────────────
 echo "=== (C) a written non-std type whose cone reaches a candidate keeps the ladder's hedge ==="
 check "(C) SmallV<int> a (an alias of Vec); a.push_back() stays via=\"name\" on Vec" \
-                                                               callees aliasTyped          'lib/vec.h:8:push_back~ lib/vec.h:9:push_back~' '' ''
+                                                               callees aliasTyped          'lib/vec.h:8:Vec::push_back~ lib/vec.h:9:Vec::push_back~' '' ''
 
 # ── (H) field and expression receivers (sib/) ───────────────────────────────────────────────────────────────
 echo "=== (H) a field written as the in-tree Vec keeps the hedge; std fields and expression receivers are declined ==="
 check "(H) this->items_.push_back() (a field written Vec<int>) keeps the ladder's via=\"name\" hedge" \
-                                                               callees sib/sib.cpp:thisField 'lib/vec.h:8:push_back~ lib/vec.h:9:push_back~' '' ''
+                                                               callees sib/sib.cpp:thisField 'lib/vec.h:8:Vec::push_back~ lib/vec.h:9:Vec::push_back~' '' ''
 check "(H) b.items_.push_back() on Box& b (one field hop off a typed root) keeps the hedge" \
-                                                               callees fieldOfVar          'lib/vec.h:8:push_back~ lib/vec.h:9:push_back~' '' ''
+                                                               callees fieldOfVar          'lib/vec.h:8:Vec::push_back~ lib/vec.h:9:Vec::push_back~' '' ''
 check "(H) this->raw_.push_back() (a field written in std) is declined" \
                                                                callees sib/sib.cpp:thisRaw '' 1 'push_back:1'
 check "(H) b.raw_.push_back() (a std field one hop off a typed root) is declined" \
@@ -186,7 +184,7 @@ check "(H) b.raw_.push_back() (a std field one hop off a typed root) is declined
 check "(H) STATED FLOOR: ( *p ).push_back() — a dereference carries no written type, declined" \
                                                                callees derefPtr            '' 1 'push_back:1'
 check "(H) vs[ 0 ].push_back() on std::vector<Vec<int>>& — the element type reaches Vec, keeps the hedge (arm X)" \
-                                                               callees subscript           'lib/vec.h:8:push_back~ lib/vec.h:9:push_back~' '' ''
+                                                               callees subscript           'lib/vec.h:8:Vec::push_back~ lib/vec.h:9:Vec::push_back~' '' ''
 check "(H) STATED FLOOR: for( auto& v : vs ) v.push_back() — a range-for auto, declined" \
                                                                callees rangeFor            '' 1 'push_back:1'
 check "(H) template parameter C& c; c.push_back() — the receiver may be anything, declined" \
@@ -194,7 +192,7 @@ check "(H) template parameter C& c; c.push_back() — the receiver may be anythi
 
 # ── (W) written types beyond Rule 2's tables (wrap/) ─────────────────────────────────────────────────────────
 echo "=== (W) a recorded written type that names ns::List keeps the hedge; one that does not stays declined ==="
-LS='wrap/list.h:9:size~'; LF='wrap/list.h:10:find~'; LR='wrap/list.h:11:front~'
+LS='wrap/list.h:9:List::size~'; LF='wrap/list.h:10:List::find~'; LR='wrap/list.h:11:List::front~'
 check "(W) std::unique_ptr<ns::List> up; up->size() — the smart pointer's argument keeps the hedge"  callees uniqueLocal        "$LS" '' ''
 check "(W) const std::shared_ptr<ns::List>& p; p->size()"                                          callees sharedParam        "$LS" '' ''
 check "(W) std::optional<ns::List> o; o->find()"                                                    callees optionalLocal      "$LF" '' ''
@@ -217,7 +215,7 @@ check "(W) near-miss: std::string g_str; g_str.size() — a namespace-scope vari
 check "(W) near-miss: a local std::string g_list hides the namespace-scope ns::List g_list"          callees shadowedGlobal     '' 1 'size:1'
 check "(W) near-miss: a std::string field g_list hides the namespace-scope ns::List g_list"          callees fieldHidesGlobal   '' 1 'size:1'
 check "(W) near-miss: a std::vector field g_list (no recorded field type) hides it too"             callees stdFieldHidesGlobal '' 1 'size:1'
-check "(W) STATED FLOOR: h.list().size() — a call result carries no recorded type, declined"         callees callResult         'wrap/use.cpp:53:list~' 1 'size:1'
+check "(W) STATED FLOOR: h.list().size() — a call result carries no recorded type, declined"         callees callResult         'wrap/use.cpp:53:Holder2::list~' 1 'size:1'
 check "(W) v.front().size() on std::vector<ns::List>& — the element keeps the hedge (arm X); v.front() itself is the container's member" callees frontOfVector "$LS" 1 'front:1'
 check "(W) STATED FLOOR: auto it = v.begin(); it->size() — an iterator, declined"                    callees iteratorArrow      '' 1 'size:1'
 check "(W) STATED FLOOR: QList<ns::List>& l; l.size() — an unqualified template's arguments are not recorded" callees unqualifiedTemplate '' 1 'size:1'
@@ -238,7 +236,7 @@ check "(W) STATED FLOOR: a typedef inside a function body records no alias targe
 
 # ── (X) element receivers (elem/) ────────────────────────────────────────────────────────────────────────────
 echo "=== (X) one element access of a container whose recorded element type is EvalString keeps the hedge ==="
-EE='elem/eval.h:14:empty~ elem/eval.h:19:empty~'   # EvalString::empty and Piece::empty, the by-name candidates in reach
+EE='elem/eval.h:14:EvalString::empty~ elem/eval.h:19:Piece::empty~'   # EvalString::empty and Piece::empty, the by-name candidates in reach
 check "(X) auto rule = std::unique_ptr<Rule>(…); rule->bindings_[ k ].empty() — a class-scoped typedef of std::map<…, EvalString, …>" \
                                                                callees elem/use.cpp:ruleSubscript "$EE" '' ''
 check "(X) Rule& r; r.direct_[ \"a\" ].empty() — a field written std::map<std::string, EvalString>" callees elem/use.cpp:refDirect "$EE" '' ''
@@ -267,36 +265,39 @@ check "(X) STATED FLOOR: for( auto& e : v ) e.empty() — a range-for auto, decl
 # ── (D) controls ──────────────────────────────────────────────────────────────────────────────────────────────
 echo "=== (D) controls: outside the table, bare calls, C and Go keep the ladder ==="
 check "(D) v.grow() — grow is no standard member name, the ladder is unchanged" \
-                                                               callees notInTable          'lib/vec.h:14:grow~' '' ''
+                                                               callees notInTable          'lib/vec.h:14:Vec::grow~' '' ''
 check "(D) size( b ) — a bare call binds the free size, never gated" \
                                                                callees bareFree            'lib/vec.h:34:size' '' ''
 check "(D) C o->size( o ) — C has no member functions, no gate" callees viaPointer         'c/ops.c:8:size~' '' ''
 # (D) used to pin Rust's by-name split here as the gate's stated scope; the Rust row (arm R) replaced that scope by design.
 check "(D) Go f().Len() — Go's row is EMPTY (Len/Write/String are in-tree interface methods), the ladder is unchanged" \
-                                                               callees lenOfResult         'gogate/buf.go:6:Len~' '' ''
+                                                               callees lenOfResult         'gogate/buf.go:6:Buf.Len~' '' ''
 
 # ── (R) the Rust row ──────────────────────────────────────────────────────────────────────────────────────────
 echo "=== (R) Rust: a name-only call named like a std collection/string/Option member is declined, self-typed calls stay ==="
 check "(R) v.push() on a &mut Vec<i32> parameter — declined, <stdm push>" callees vec_param '' 1 'push:1'
 check "(R) x.push() on a parameter of a type the tree does not define — declined" callees unknown_param '' 1 'push:1'
 check "(R) v.iter() on a &Vec<i32> parameter — declined, <stdm iter>" callees vec_iter '' 1 'iter:1'
-check "(R) self.iter() inside Book — proven (FE-B self), kept unhedged" callees Book::first 'rsgate/lib.rs:16:iter' '' ''
-check "(R) s.frobnicate() — no std name, the ladder is unchanged" callees not_in_table 'rsgate/lib.rs:7:frobnicate~' '' ''
+check "(R) self.iter() inside Book — proven (FE-B self), kept unhedged" callees Book::first 'rsgate/lib.rs:16:Book::iter' '' ''
+check "(R) s.frobnicate() on a &Stack<i32> parameter — no std name; the written type proves Stack's (rust-receivers)" callees not_in_table 'rsgate/lib.rs:7:Stack::frobnicate' '' ''
 check "(R) m.insert() with no in-tree insert in reach — nothing to decline, nothing counted" callees map_insert '' '' ''
-check "(R) STATED FLOOR: s.push() on a &mut Stack<i32> parameter — Rust records no parameter type yet, declined" callees stack_param '' 1 'push:1'
-check "(R) STATED FLOOR: let s: Stack<i32> = Stack { .. }; s.push() — no local type either, even written, declined" callees stack_local '' 1 'push:1'
-check "(R) STATED FLOOR: self.inner.push() with inner: Stack<i32> — no Rust field type is recorded, declined" callees rsgate/lib.rs:add '' 1 'push:1'
-check "(R) STATED FLOOR: book.iter() on a &Book parameter — declined though Book defines iter" callees book_iter '' 1 'iter:1'
+check "(R) s.push() on a &mut Stack<i32> parameter — the written in-tree type BINDS Stack::push (rust-receivers)" callees stack_param 'rsgate/lib.rs:5:Stack::push' '' ''
+check "(R) let s: Stack<i32> = Stack { .. }; s.push() — the written local binds Stack::push" callees stack_local 'rsgate/lib.rs:5:Stack::push' '' ''
+check "(R) self.inner.push() with inner: Stack<i32> — the field's written type binds Stack::push" callees rsgate/lib.rs:add 'rsgate/lib.rs:5:Stack::push' '' ''
+check "(R) book.iter() on a &Book parameter — binds Book::iter (an in-tree receiver named like a std member)" callees book_iter 'rsgate/lib.rs:16:Book::iter' '' ''
 check "(R) old scope fixture: let mut v = Vec::new(); v.push() — declined" callees std_vec '' 1 'push:1'
-check "(R) near-miss: Stack::push( s, 1 ) — a qualified call, never gated, keeps its edge" callees ufcs 'rsgate/lib.rs:5:push' '' ''
-check "(R) STATED FLOOR: p.push() on a generic P: Pushable (an in-tree trait) — declined" callees generic_bound '' 1 'push:1'
-check "(R) --callers=rsgate/lib.rs:push keeps the qualified caller and counts the six declined calls" callers rsgate/lib.rs:push 'rsgate/lib.rs:28:ufcs' 6 ''
-check "(R) --callers=Book::iter keeps the proven self call and counts the two declined ones" callers Book::iter 'rsgate/lib.rs:17:first' 2 ''
+check "(R) old scope fixture: let mut s = Stack { n: 0 }; s.push() — the struct literal binds Stack::push, never Queue's (rust-receivers)" callees typed_local 'rs/lib.rs:3:Stack::push' '' ''
+check "(R) near-miss: Stack::push( s, 1 ) — a qualified call, never gated, keeps its edge" callees ufcs 'rsgate/lib.rs:5:Stack::push' '' ''
+check "(R) STATED FLOOR (L6): p.push() on a generic P: Pushable (an in-tree trait) — not typed, still declined" callees generic_bound '' 1 'push:1'
+check "(R) --callers=rsgate/lib.rs:push keeps the qualified caller and the three typed ones (add, stack_param, stack_local) and counts the three declined calls (vec_param, unknown_param, generic_bound)" \
+      callers rsgate/lib.rs:push 'rsgate/lib.rs:11:Holder::add rsgate/lib.rs:20:stack_param rsgate/lib.rs:22:stack_local rsgate/lib.rs:28:ufcs' 3 ''
+check "(R) --callers=Book::iter keeps the proven self call and the typed book_iter, and counts the one declined call (vec_iter)" \
+      callers Book::iter 'rsgate/lib.rs:17:Book::first rsgate/lib.rs:25:book_iter' 1 ''
 
 # ── (E) the callers side ──────────────────────────────────────────────────────────────────────────────────────
 echo "=== (E) callers: the typed callers stay, the declined ones are counted ==="
 check "(E) --callers=Vec::push_back is exactly its typed callers + the alias, Vec-field and element hedges; declined_calls=\"10\"" \
-      callers Vec::push_back 'app/use.cpp:10:typedPtr app/use.cpp:16:add app/use.cpp:17:addOwned app/use.cpp:22:aliasTyped~ app/use.cpp:8:typedLocal app/use.cpp:9:typedParam lib/vec.h:15:pushTwice sib/sib.cpp:10:thisField~ sib/sib.cpp:13:fieldOfVar~ sib/sib.cpp:20:subscript~' 10 ''
+      callers Vec::push_back 'app/use.cpp:10:typedPtr app/use.cpp:16:Holder::add app/use.cpp:17:Holder::addOwned app/use.cpp:22:aliasTyped~ app/use.cpp:8:typedLocal app/use.cpp:9:typedParam lib/vec.h:15:Vec::pushTwice sib/sib.cpp:10:Box::thisField~ sib/sib.cpp:13:fieldOfVar~ sib/sib.cpp:20:subscript~' 10 ''
 check "(E) --callers=lib/vec.h:append (one definition) keeps soloTyped; declined_calls=\"1\"" \
       callers lib/vec.h:append 'app/use.cpp:20:soloTyped' 1 ''
 check "(E) --callers=Pool::clear keeps poolTyped; declined_calls=\"2\"" callers Pool::clear 'app/use.cpp:21:poolTyped' 2 ''
@@ -317,14 +318,26 @@ grep -q '<stdm n= calls=>: of declined_calls=' "$TMP/ce.xml" \
 rw --callees=stdParam >"$TMP/cec.xml"
 grep -q 'stdm n= calls=: of declined_calls=' "$TMP/cec.xml" \
     && ok "(F) the compact callees legend defines stdm n= calls=" || no "(F) the compact callees legend does not define stdm"
-# every surface that defines the clause also states the Rust floor (checklist 3: what the claim does NOT mean)
+# every surface that defines the clause also states the Rust floor (checklist 3: what the claim does NOT mean). Lane
+# rust-receivers retired the old floor ("Rust records no receiver type yet": a written in-tree type now binds, arm R) and
+# states the new one: a generic bound, dyn / impl Trait, a type alias, a glob of a glob, a tuple-struct field, a non-plain
+# pattern and a value behind Option / Result / Rc / Arc / RefCell / Cell / Mutex / RwLock are not typed (one list, fix round 1).
+# The map states it through its own clause "on-a-receiver-no-rule-tied-to-an-in-tree-class" (a Rust receiver no rule typed is
+# one; the map's bytes are budgeted, readmedriftcheck G4); the other three surfaces carry the list. Train 32a (owner bytes rule
+# 2026-10-21) dropped the map's separate Rust clause, which restated that clause: the arm pins both halves.
 floor_missing=""
-grep -q 'Rust-records-no-receiver-type-yet' "$TMP/map.xml"                                            || floor_missing="$floor_missing map"
-grep -q 'a Rust receiver written as an in-tree type is declined too (Rust records no receiver type yet)' "$TMP/cl.xml" || floor_missing="$floor_missing callers"
-grep -q 'a Rust receiver written as an in-tree type is listed too (Rust records no receiver type yet)' "$TMP/ce.xml"   || floor_missing="$floor_missing callees"
-grep -q 'stdm n= calls=: [^>]*(Rust: one written as an in-tree type too, until Rust records receiver types)' "$TMP/cec.xml" || floor_missing="$floor_missing compact"
+grep -q 'hdr:declined=also-counts-calls-named-like-a-standard-type-member-of-their-language([^)]*)-on-a-receiver-no-rule-tied-to-an-in-tree-class;' "$TMP/map.xml" || floor_missing="$floor_missing map"
+grep -q 'Rust-receivers-no-rule-typed-stay-declined' "$TMP/map.xml" && floor_missing="$floor_missing map(restated-clause)"
+grep -q 'a Rust receiver of an in-tree type that no rule typed is declined too (Rust types a parameter, local or field written or constructed as an in-tree type by its name, path or use alias, and a call result; not a generic bound, dyn or impl Trait, a type alias, a glob of a glob, a tuple-struct field, a pattern other than a plain name, or a value behind Option, Result, Rc, Arc, RefCell, Cell, Mutex or RwLock)' "$TMP/cl.xml" || floor_missing="$floor_missing callers"
+grep -q 'a Rust receiver of an in-tree type that no rule typed is listed too (Rust types a parameter, local or field written or constructed as an in-tree type by its name, path or use alias, and a call result; not a generic bound, dyn or impl Trait, a type alias, a glob of a glob, a tuple-struct field, a pattern other than a plain name, or a value behind Option, Result, Rc, Arc, RefCell, Cell, Mutex or RwLock)' "$TMP/ce.xml" || floor_missing="$floor_missing callees"
+grep -q 'stdm n= calls=: [^>]*(Rust: one of an in-tree type no rule typed too: a generic bound, dyn or impl Trait, a type alias, a glob of a glob, a tuple-struct field, a non-plain pattern, behind Option / Result / Rc / Arc / RefCell / Cell / Mutex / RwLock)' "$TMP/cec.xml" || floor_missing="$floor_missing compact"
 [ -z "$floor_missing" ] && ok "(F) the map, callers, full callees and compact callees legends each state the Rust floor" \
     || no "(F) the Rust floor is missing from:$floor_missing"
+# the retired floor is gone from every surface (a stale "no receiver type yet" would now be false)
+stale=""
+for f in map.xml cl.xml ce.xml cec.xml; do grep -q 'no-receiver-type-yet\|no receiver type yet\|until Rust records receiver types' "$TMP/$f" && stale="$stale $f"; done
+if [ -z "$stale" ]; then ok "(F) the retired Rust floor (no receiver type yet) is on no surface"
+else no "(F) the retired Rust floor is still on:$stale"; fi
 rw --callees=typedLocal --legend=full >"$TMP/cen.xml"
 if [ -z "$( root_tag "$TMP/cen.xml" callees )" ]; then no "(F) --callees=typedLocal produced no <callees> root — the absence below would be vacuous"
 elif grep -q 'stdm' "$TMP/cen.xml"; then no "(F) a callees answer with no declined standard-member call mentions stdm"
@@ -373,8 +386,8 @@ BB="$ROOT/test/builtinbindfix"
 
 # ── (K) the predicates can fail ───────────────────────────────────────────────────────────────────────────────
 echo "=== (K) the predicates can fail ==="
-printf '<callees of="x" count="2"><s t="method" n="push_back" p="lib/vec.h:8" via="name"/></callees>' >"$TMP/k.xml"
-[ "$( rows "$TMP/k.xml" )" = 'lib/vec.h:8:push_back~' ] && [ -z "$( stdm "$TMP/k.xml" )" ] \
+printf '<callees of="x" count="2"><s t="method" n="Vec::push_back" p="lib/vec.h:8" via="name"/></callees>' >"$TMP/k.xml"
+[ "$( rows "$TMP/k.xml" )" = 'lib/vec.h:8:Vec::push_back~' ] && [ -z "$( stdm "$TMP/k.xml" )" ] \
     && ok "(K) a via=\"name\" row reads as one and a missing <stdm> line reads as empty" || no "(K) the row/stdm readers are blind"
 
 # ── (L) determinism, well-formedness, stderr ──────────────────────────────────────────────────────────────────

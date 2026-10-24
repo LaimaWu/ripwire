@@ -144,14 +144,16 @@ ran_ok(){
     if [ "$rc" = "0" ]; then return 0; fi
     no "($1) --$2=$3 exited rc=${rc:-unknown}"; return 1
 }
-# lacks ROOT VERB SEL "N FILE" … — no row names N at FILE (any kind); the root element must be present
+# lacks ROOT VERB SEL "N FILE" … — no row names N at FILE (any kind), spelled bare OR owner-qualified (Owner::N, Owner.N,
+# Owner#N — the member-owner vocabulary), so a wrong edge to a method cannot hide behind its qualified spelling;
+# the root element must be present
 lacks(){
     local r="$1" v="$2" s="$3"; shift 3
     local f got; f="$( answer "$r" "$v" "$s" )"; ran_ok "$r" "$v" "$s" "$f" || return; got="$( rows "$f" )"
     if [ "$got" = "NOROOT" ]; then no "($r) --$v=$s produced no <$v> answer about a symbol"; return; fi
     local nf
     for nf in "$@"; do
-        if printf '%s\n' "$got" | grep -qE "^[^ ]+ ${nf% *} ${nf#* }\$"; then
+        if printf '%s\n' "$got" | grep -qE "^[^ ]+ ([^ ]*(::|\.|#))?${nf% *} ${nf#* }\$"; then
             no "($r) --$v=$s still lists ${nf% *} at ${nf#* } — a false edge: $( printf '%s' "$got" | tr '\n' ';' )"
         else
             ok "($r) --$v=$s does not list ${nf% *} at ${nf#* }"
@@ -235,7 +237,7 @@ echo "--- (A) near misses: true edges kept"
 exactly go callees own/own.go:Pick "fn min own/own.go;fn score own/own.go"
 has go callees util/copy.go:Dup "fn copy util/copy.go"
 lacks go callees util/copy.go:Dup "len hist/cache.go"
-exactly go callees hist/history.go:Remember "method append hist/history.go"
+exactly go callees hist/history.go:Remember "method History.append hist/history.go"
 exactly go callees own/hook.go:Fire "var hook own/hook.go"
 exactly go callees algo/route.go:Route "fn Pick own/own.go"
 has go callees own/extra.go:Twice "fn min own/own.go" "fn score own/own.go" "var hook own/hook.go"
@@ -328,14 +330,14 @@ lacks py callees src/ui/siblings.py:run "helper src/ui/siblings.py"
 echo "--- (D) near misses: true edges kept, and the builtin pins"
 exactly py callees src/ui/use_lists.py:grow "fn append src/ui/lists.py"
 exactly py callees src/ui/use_lists.py:twice "fn helper src/ui/use_lists.py"
-exactly py callees src/ui/worker.py:Worker "fn _default src/ui/worker.py"
+exactly py callees src/ui/worker.py:Worker "fn Worker._default src/ui/worker.py"
 exactly py callees src/ui/star.py:use_var "var handler src/ui/star.py"
 exactly py callees src/ui/star.py:build "cls Worker src/ui/worker.py"
 exactly py callees src/ui/star.py:fmt "fn format src/ui/text.py"
-exactly py callees src/ui/alias.py:flush "fn write src/ui/alias.py"
-exactly py callees src/ui/closure.py:line_width "fn label_width src/ui/closure.py"
+exactly py callees src/ui/alias.py:flush "fn Driver.write src/ui/alias.py"
+exactly py callees src/ui/closure.py:line_width "fn Tree.label_width src/ui/closure.py"
 # a pin, not a claim of truth: a call through a CAPTURED parameter keeps whatever the unchanged ladder decided
-has py callees src/ui/closure.py:run "fn reparse src/ui/sheet.py"
+has py callees src/ui/closure.py:run "fn Sheet.reparse src/ui/sheet.py"
 lacks py callees src/ui/widget.py:read_config "open src/ui/worker.py"
 lacks py callees src/ui/report.py:render "format src/ui/text.py"
 
@@ -345,14 +347,14 @@ reaches_fn c usemacro.c:clampit region 'region\.c|usemacro\.c'
 has c callees usemacro.c:clampit "macro CLAMP macro.h"
 exactly c callees copy.c:classify "fn window_count window.c"
 exactly c callees window.c:elapsed ""
-exactly cpp callees use.cpp:origin "cls Point point.hpp;fn Point point.hpp"
+exactly cpp callees use.cpp:origin "cls Point point.hpp;fn Point::Point point.hpp"
 
 echo "=== (R) Rust: no implicit receiver either — a bare call never reaches a method ==="
 lacks rs callees src/lib.rs:draw "render src/history.rs"
-exactly rs callees src/lib.rs:paint "fn helper src/lib.rs;method render src/history.rs"
-exactly rs callees src/assoc.rs:build "method new src/assoc.rs;method render src/history.rs"
-exactly rs callees src/assoc.rs:count "method width src/assoc.rs"
-exactly rs callees src/ufcs.rs:draw_all "method render_all src/ufcs.rs"
+exactly rs callees src/lib.rs:paint "fn helper src/lib.rs;method History::render src/history.rs"
+exactly rs callees src/assoc.rs:build "method History::new src/assoc.rs;method History::render src/history.rs"
+exactly rs callees src/assoc.rs:count "method History::width src/assoc.rs"
+exactly rs callees src/ufcs.rs:draw_all "method History::render_all src/ufcs.rs"
 
 echo "=== (F) propagation: the decoys' callers and impact ==="
 exactly go callers hist/history.go:append "fn Remember hist/history.go"

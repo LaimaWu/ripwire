@@ -346,9 +346,10 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "cross_kind",        "cross_kind=kind:N,...: the defs= definitions differ in kind; rows union all of them (narrow with file:name)" },
     // lane recall: absent at zero, callers and impact only (graphlegend.h kDeclinedIfaceLegend).
     { "declined_iface",    "declined_iface=K: K declined TS calls sharing a name with an interface/abstract signature, by name only (MAY go through it); not a subset of declined_calls=" },
+    { "declined_literal_calls", "declined_literal_calls=K: K built-in member calls on JS/TS literals dropped (shares an in-repo name), in no row" },
     // graph.h StdMemberGate: the callees answer's <stdm> line, absent when the definitions made no such call (graphlegend.h kStdMemberCallsLegend).
     // Keyed on n= (read on <stdm> only): the attribute the full clause opens with, which compactlegendcheck (S) reads.
-    { "n",                 "stdm n= calls=: of declined_calls=, calls named like a standard-type member of their language (C++ container/string/optional/smart pointer, Rust collection/string/Option/Result; n=) on a receiver no rule tied to an in-tree class (Rust: one written as an in-tree type too, until Rust records receiver types); no edge or row (may be the std member)", false, "stdm" },
+    { "n",                 "stdm n= calls=: of declined_calls=, calls named like a standard-type member of their language (C++ container/string/optional/smart pointer, Rust collection/string/Option/Result; n=) on a receiver no rule tied to an in-tree class (Rust: one of an in-tree type no rule typed too: a generic bound, dyn or impl Trait, a type alias, a glob of a glob, a tuple-struct field, a non-plain pattern, behind Option / Result / Rc / Arc / RefCell / Cell / Mutex / RwLock); no edge or row (may be the std member)", false, "stdm" },
     // Reference-as-value round (graphlegend.h kValueRefs*Legend, src/valuerefs.h): every term absent at zero, present-only.
     // Each says what a value row does NOT mean in the same breath (checklist 3): matched by name, not a proven call.
     { "value_refs",        "value_refs=N: N vr rows, the function used as a VALUE (stored or passed), matched by name; not a proven call, in no count or reach" },
@@ -357,6 +358,12 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "called_by",         "called_by=: functions that may call through that slot (a called parameter, tbl[k]() or tbl.k())", false, "vr" },
     { "to",                "vr to= def=: the function used as a value and its definition; sites=N binding sites one to=/through= pair joins", false, "vr" },
     { "through",           "through=: the written callee this function may call it through", false, "vr" },
+    // IX-1 slot-type join (src/valuerefs.h slotJoinLegend): present-only; a struct-field slot and the calls through that field.
+    { "called_at",         "vr called_at= via=slot|slot-name: called_by='s calls through that struct field, file:line in the same order; slot = same declared struct type, slot-name = field name only (a type unknown); MAY call, not a proven call, in no count", false, "vr" },
+    { "slot_name_also",    "slot_name_also=K: K name-only callers hidden behind the same-type ones", false, "vr" },
+    { "called_more",       "called_more=N: N more callers past the first 8", false, "vr" },
+    { "slot_calls",        "slot_calls=N: N calls in this body go through a struct field holding a function; in no count" },
+    { "slot",              "vs l= through= slot=Type.field via= targets=K shown= next=: one such call and the functions stored in that field anywhere (t n= p=); slot = same declared type, slot-name = field name only; MAY be called, not a proven call", false, "vs" },
     { "to_value_refs",     "to_value_refs=N: to= is used as a value N times (matched by name); a run through such a slot is not a proven call and no hop here" },
     { "value-ref-excluded", "value-ref-excluded=N: internal functions kept off because a table, field or argument in another function or at file scope holds them (matched by name, not a proven call); a floor" },
     // The value walk's depth cut (ingest_valuerefs.h kVrMaxDepth, graphlegend.h kValueRefsDepthLegend): absent when none.
@@ -586,9 +593,11 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // and VALUE-qualified (<s>/<c>/<e> whose via= lists name), so impact's <f via="import"> importer rows never pull it in; the
     // columnar form names it in fields= like the tested column.
     { "via",               "via=name: the target was matched by name alone (receiver unproven); every by-name candidate in reach is listed; NOT a claim the edge is false", true, "s", MapHeaderRead::No, "name" },
+    { "via",               "via=impl: the receiver's interface/trait/abstract type has ONE implementor in the tree owning the target (an outside or macro-made one may exist)", true, "s", MapHeaderRead::No, "impl" },
     { "via",               "via=link: this edge is a markdown link, not a call", true, "s", MapHeaderRead::No, "link" },
     { "anchor",            "anchor=missing: the markdown link named a heading this file does not have, so the edge is the file", true, "s", MapHeaderRead::No, "missing" },
     { "via",               "<c via=\"name\">: that callee matched by name alone (receiver unproven); it does NOT mean the edge is false", true, "c", MapHeaderRead::No, "name" },
+    { "via",               "<c via=\"impl\">: the receiver's interface/trait/abstract type has ONE implementor in the tree owning the callee (an outside or macro-made one may exist)", true, "c", MapHeaderRead::No, "impl" },
     { "via",               "<c via=\"link\">: that callee is a markdown link, not a call", true, "c", MapHeaderRead::No, "link" },
     { "anchor",            "<c anchor=missing>: that markdown link named a heading this file does not have, so the edge is the file", true, "c", MapHeaderRead::No, "missing" },
     // CALLSITE-AT (2026-10-09): a callers row's call sites (editcheck.h rowCallSites); keyed to the callers schema, so the
@@ -617,6 +626,10 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
                            "K in-tree defs it could have meant (K may be 1), the resolver proved none; not a claim this call reaches any of them",
                            true, "dc", MapHeaderRead::No, "declined" },
     { "gate",              "dc gate=: builtin or std, a name gate declined it; side, a Ruby call whose in-reach defs answer on the other side of self", true, "dc" },
+    // lane L6 fix round 1 (N2): value-keyed, so the iface reading rides only with a gate="iface" row, never with builtin / std / side
+    { "gate",              "dc gate=iface: the receiver's interface/trait/abstract type; cands=K its implementors' methods of the name (which one runs is unproven; "
+                           "K is a floor in TS)", true, "dc", MapHeaderRead::No, "iface" },
+    { "bound",             "dc bound=G: T: a generic receiver bounded by trait T; the candidates are T's implementors', never by name", true, "dc" },
     { "of_def",            "dc of_def=K: the def ix=K making the call; K~d: its candidates include group K, never a claim it calls K", true, "dc" },
     { "dc_shown",          "dc_shown=N: dc rows printed (callers: file-first); dc_next= lists every site" },
     { "cand",              "dc cand=: the candidate defs as file:line (legend full only); cand_more= how many more", true, "dc" },
@@ -740,6 +753,8 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "reached", "reached=N: symbols the transitive caller walk reached from the seeds (seeds excluded)", false, "affected", MapHeaderRead::No, {}, "affected" },
     { "script_gates_unmodelled", "script_gates_unmodelled=N: test/*.sh runners; their subprocess reach is unmodelled, never in tests=/reached=", false, "affected", MapHeaderRead::No, {}, "affected" },
     { "run_first", "run_first=N: the first N test files have the most direct evidence (changed/partner/hops=1, else nearest hops=); not a skip list", false, "affected", MapHeaderRead::No, {}, "affected" },
+    // IX-5 (testmap.h classNewTestRows / kClassNewLegend): present only when the hedged group renders
+    { "via", "<g via=class-new total= shown= capped= next=>: tests not listed above that construct a class owning a reached method (or the changed class); <new p= l= class=>: the test file, the construction line if exact, the class. The dispatch is not proven, so never in tests=/reached=; nearest class first; a floor (Go T{}, C++ T x;, Ruby T.new are not read)", true, "g", MapHeaderRead::No, "class-new", "affected" },
     // callees: src/callhierarchy.h computeHopTestedPartition, spliced in src/verbs_navigate.h
     { "hop_tested", "hop_tested=/hop_untested=: count= split by whether an indexed test reaches the row (in-process calls only)", false, "callees", MapHeaderRead::No, {}, "callees" },   // also defines hop_untested=
     // clones: src/verbs_report.h (the <clones> root emit)

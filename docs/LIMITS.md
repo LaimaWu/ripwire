@@ -15,12 +15,25 @@ document. To reach a declaration, search its file for the name (`grep -n <name> 
 `ripwire . --grep=<name>`). A file that declares the same name, value and note more than once shows
 it once, marked `×N`.
 
+**Known residual — a single pathological match is unbounded on libstdc++.** One `std::regex` call is atomic to
+its caller, so no caller-side counter can see the work inside one, and libstdc++'s engine never throws; libc++
+returns only because its ENGINE throws `error_complexity`. The multi-quantifier family (`a*a*a*a*a*b`,
+`^(a)*(a)*(a)*(a)*(a)*$`) is admitted by the screen by construction: a subject that holds a required literal and
+then a long run is unbounded work, named and reachable, **tracked by `regex-screen-multiquantifier` (follow-on
+spec), never claimed closed**. (The guard's former per-file match budget — `kRegexFileMatchBudget`, removed in
+the PR #397 review — cannot be revived against this residual: it counted line-match attempts BETWEEN engine
+calls, so it refused fast linear answers and still bounded nothing inside one call.) A second admitted shape is a
+bounded quantifier over a group that itself repeats: `((a|aa){2,5}){2,5}b$` passes the screen because both
+quantifiers are bounded, yet it is exponential on libstdc++ (and abandoned by libc++), so "make the outer quantifier
+a small explicit bound" is safe only when nothing inside the group repeats; it is the same class as
+`(a|aa){1,100}b$`, tracked with the multi-quantifier family above.
+
 | total caps | files | caps whose file discloses | caps whose file discloses NOTHING |
 | --- | --- | --- | --- |
-| 270 | 105 | 160 | **110** |
+| 276 | 108 | 165 | **111** |
 
 Plus 7 ranking and apportionment parameters, in their own table below: they are not caps, they
-are not counted as caps, and 270 + 7 is the 277 constants this generator parses out of `src/`.
+are not counted as caps, and 276 + 7 is the 283 constants this generator parses out of `src/`.
 
 ## INDEXING, OUTPUT or BOUNDARY — which half of the answer a cap bounds
 
@@ -38,8 +51,8 @@ None of them truncates anything, so none can be judged by `shown=`/`total=` and 
 a disclosure — labelling them OUTPUT would ask for a `capped="1"` that could never honestly fire.
 The distinction was named in review on #108 and the rows below now carry it.
 
-The `class` column below carries that answer where it is known. **140 of 270 caps are classified
-(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 130 render `—`, which means NOT YET
+The `class` column below carries that answer where it is known. **140 of 276 caps are classified
+(50 INDEXING, 46 OUTPUT, 44 BOUNDARY); the remaining 136 render `—`, which means NOT YET
 CLASSIFIED — never "neither".** Classifications live in `docs/limits_classes.tsv`, a sidecar with
 a known expiry:
 the tag belongs on the declaration itself, and this file exists only because the round that
@@ -89,7 +102,7 @@ refuse to write, so the column cannot be satisfied by pointing at nothing.
 
 ## Caps, by file
 
-One table for each of the 105 files that declare a cap — the 270 caps counted above, and no parameter.
+One table for each of the 108 files that declare a cap — the 276 caps counted above, and no parameter.
 
 ### `src/abicheck.h`
 
@@ -349,6 +362,15 @@ Discloses: `capped`, `hosts_capped`
 | `kMaxFlipRows` | `25` | OUTPUT | per emitted list; a DEFAULT --limit=N raises and --detail lifts |
 | `kMaxNearMisses` | `5` | OUTPUT | "did you mean" suggestions on an unknown gate name; --limit=N raises it |
 
+### `src/forcallerhop.h`
+
+Discloses: `capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kForCallerHopDepth2Rows` | `4` | — | — |
+| `kForCallerHopRows` | `16` | — | — |
+
 ### `src/forfold.h`
 
 Discloses: **none**
@@ -357,6 +379,14 @@ Discloses: **none**
 | --- | --- | --- | --- |
 | `kForBodyFoldBudgetBytes` | `4000` | — | — |
 | `kForBodyFoldRows` | `3` | — | — |
+
+### `src/formembers.h`
+
+Discloses: **none**
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kForMemberNameCap` | `8` | — | — |
 
 ### `src/forowner.h`
 
@@ -1018,6 +1048,14 @@ Discloses: **none**
 | --- | --- | --- | --- |
 | `kMinWeakSymbolLen` | `5` | — | — |
 
+### `src/testmap.h`
+
+Discloses: `capped`
+
+| constant | value | class | note |
+| --- | --- | --- | --- |
+| `kClassNewRowCap` | `8` | — | rows shown; the group's total= counts them all, next= is --callers= of the first cut row's class |
+
 ### `src/tracelocus.h`
 
 Discloses: `name_ladder_capped`
@@ -1044,6 +1082,8 @@ Discloses: `capped`, `value_refs_depth_capped`
 | constant | value | class | note |
 | --- | --- | --- | --- |
 | `kPatternRowCap` | `8` | — | — |
+| `kSlotCallerCap` | `8` | — | — |
+| `kSlotTargetCap` | `16` | — | — |
 | `kValueRefRowCap` | `64` | — | — |
 
 ### `src/verbs_change.h`

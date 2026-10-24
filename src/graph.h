@@ -20,6 +20,7 @@
 #include "smallvec.h"            // rw::SmallVec — THE ONE ALIAS (src/smallvec.h picks the implementation)
 #include "resolve.h"             // P2-D one-hop type narrowing (Rule 1: class membership) — applied before the name-based fallback
 #include "receiverevidence.h"    // FE-B: typed receivers RESOLVE; a call nothing proves keeps its rows marked via="name"
+#include "ifacedispatch.h"       // lane L6: a call on an interface-typed receiver names its implementors' methods (BaseBound)
 #include "langfacts.h"           // langFacts(l): the per-language facts the resolver reads instead of a Lang:: compare
 #include "scipoverlay.h"         // SCIP precision overlay (data struct only; parser lives in scip.h)
 #include "pincensus.h"           // eval-only per-call-site decision census (--pin-census); inert unless armed
@@ -47,8 +48,8 @@ namespace rw
 
 // ComposeEdge defined in model.h (so serialize.h can use it without including graph.h).
 
-// Which rule declined a call (Graph::declinedSiteKind): what a <dc> row's gate= says, and what train 29's interface-typed
-// dispatch rows (L6) will add a value to. One byte per declined call; the value is never ranked or counted, only read back.
+// Which rule declined a call (Graph::declinedSiteKind): what a <dc> row's gate= says. One byte per declined call; the value is
+// never ranked or counted, only read back.
 enum class DeclinedSiteKind : std::uint8_t
 {
     Ladder,     // tier 3: two or more candidates, none in the caller's file or directory, no evidence chose one (no gate=)
@@ -56,7 +57,7 @@ enum class DeclinedSiteKind : std::uint8_t
     Std,        // the standard-member gate (StdMemberGate; C++ and Rust rows): gate="std"
     RubySide,   // Ruby: in reach of self's method lookup, but on the other side of self (class vs instance): gate="side"
     RubyNew,    // Ruby: `new` on a class object, the reachable `initialize` definitions unpicked (no gate=; the row names `new`)
-    Iface,      // RESERVED for L6 (interface-typed dispatch rows); nothing writes it yet
+    Iface,      // lane L6: the receiver's interface / trait / abstract type has two or more implementors owning the callee (ifacedispatch.h): gate="iface"
 };
 // A declined call whose candidate list internDeclinedList could not store (its uint32 offset ceiling): the record keeps the
 // call, with no list (no cands=, and no callers row — declinedCallsNaming cannot count it either).
@@ -179,6 +180,9 @@ struct Graph
     std::vector<std::uint32_t>    declinedSiteList;
     std::vector<std::uint32_t>    declinedSiteRef;
     std::vector<DeclinedSiteKind> declinedSiteKind;
+    // lane L6: the generic bound a gate="iface" record was typed through (`R: Renderer`, the row's bound=), as ( record, text )
+    // in record order — only the records that have one (a Rust generic receiver); every other record reads none.
+    std::vector<std::pair<std::uint32_t, std::string>> declinedSiteBound;
     // 1 for a definition some call the builtin-method name gate DECLINED could have meant (BuiltinMethodGate below); empty
     // on a corpus with no such decline. Read by the dead-code predicate (quality.h isDeadCandidate): a definition a
     // declined `pool.get( k )` could have meant is not provably uncalled, which is what it was before the gate, when
@@ -241,14 +245,8 @@ struct ImplementorRow
     bool          byName = false;
 };
 
-// lane lego-transitive fix 1: how an extends/implements edge base→derived was bound (Graph::implementorBound).
-//   Proven — the language's own lookup names THIS base: a same-file declaration the clause's enclosing scopes declare
-//            (ingest_relations.h localBaseBinding), the file an import binds the name (or its qualifier) to, an included
-//            C-family header, the package directory (Java/Kotlin/Go), Ruby's constant scope (RubyBaseScope).
-//   ByName — no such evidence, or it named two candidates: the edge rests on the spelling alone.
-//   Other  — the evidence names a DIFFERENT same-named type: this edge is the name collision, not a subtype.
-// The values order the merge of two references drawing the same edge: the smaller wins (a proven site proves the edge).
-enum class BaseBound : std::uint8_t { Proven = 0, ByName = 1, Other = 2 };
+// BaseBound (how an extends/implements edge base→derived was bound: Graph::implementorBound) lives in ifacedispatch.h, whose
+// dispatch tier walks the implementors map by it.
 
 // Breadth-first walk DOWN the implementors map from `base`: every type that extends/implements it directly (depth 1)
 // or through another such type (depth 2+), each ONCE at its shallowest depth. Order is depth ascending, then discovery
@@ -523,6 +521,12 @@ inline const char* viaNameAttr( bool nameOnly ) noexcept
 {
     return nameOnly ? " via=\"name\"" : "";
 }
+// lane L6: the via="impl" spelling a row of a one-implementor edge carries, "" otherwise
+inline const char* viaImplAttr( bool impl ) noexcept
+{
+    return impl ? " via=\"impl\"" : "";
+}
+
 inline const std::vector<std::uint8_t>* linkOutPtr( const Graph& g ) noexcept
 {
     return g.outNameOnly.empty() ? nullptr : &g.outNameOnly;
@@ -611,8 +615,22 @@ inline const char* provLabel( std::uint8_t prov ) noexcept
         case 3u: return "split";     // C1 one arm of a k-way split the resolver could not choose between
         case 4u: return "import";    // an ES named-import binding named the module and the export
         case 5u: return "final-segment";   // narrowed by a QUALIFIED written receiver type's last name alone (resolve.h finalSegmentTypeAt)
+        case 6u: return "impl";            // lane L6: the one implementor in the tree of the receiver's interface (ifacedispatch.h)
     }
     return "";
+}
+// lane L6: the attribute a provenance value is spelled under — via="impl" (how the receiver reached the target, like FE-B's
+// via="name"), prov= for every other value. kProvImpl is the value buildGraph writes for an implEdges edge.
+inline constexpr std::uint8_t kProvImpl = 6u;
+inline const char* provAttrName( std::uint8_t prov ) noexcept
+{
+    return prov == kProvImpl ? "via" : "prov";
+}
+// lane L6: is the edge from → to the one-implementor edge (via="impl"); false for an edge that does not exist
+inline bool edgeViaImpl( const Graph& g, NodeId from, NodeId to ) noexcept
+{
+    const std::size_t e = edgeIndex( g, from, to );
+    return e != SIZE_MAX && e < g.outProv.size() && g.outProv[ e ] == kProvImpl;
 }
 
 // ObjC/ObjC++ and C++ share ONE call namespace: a .mm calls C++ functions (declared in .h/.cpp)
@@ -1687,7 +1705,7 @@ inline JavaFieldOwnerGroups buildJavaFieldOwnerGroups( const IngestResult& ing )
     HashMap<NodeId, std::uint32_t> javaOwnerSlot;
     for( const Binding& b : ing.bindings )
     {
-        if( b.fromSymbol == kNoNode || b.fromSymbol >= ing.symbols.size() || b.var.empty() )
+        if( b.fromSymbol == kNoNode || b.fromSymbol >= ing.symbols.size() || b.var.empty() || b.kind == LocalBindKind::ImplBlock )   // an anonymous class's ImplBlock (var = the base) is no field
         {
             continue;
         }
@@ -2517,6 +2535,8 @@ struct JsImportTarget
     NodeId          node    = kNoNode;                    // meaningful only when outcome == Pinned
     JsImportOutcome outcome = JsImportOutcome::Unlisted;
     bool            renamed = false;                      // `import { f as g }` — the local spelling is private
+    std::uint32_t   moduleFile = UINT32_MAX;              // lane L6: the indexed file the specifier resolved to (UINT32_MAX: none) —
+                                                          //   an interface's module, which the export table (functions and classes) does not pin
 };
 
 // One export of one module: the definition it names, plus the region a definition must sit INSIDE to be
@@ -2653,26 +2673,31 @@ inline std::pair<std::uint32_t, JsImportOutcome> resolveJsImportModule( std::str
     return { fileId, JsImportOutcome::Unlisted };
 }
 
-inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncludeCtx* workspace )
+// The EXPORT side of the import tables, and what resolving a module needs: the corpus file index, the module
+// vocabulary, every module's export facts ("<fileId>#<exported name>" → the definition, kNoNode when ambiguous or
+// unmatched) and the JsShadow spans. buildJsImportTables pins every ES import binding through it; --affected's
+// class-new rows (testmap.h ClassNewJsBinds) pin a test file's construction through the SAME pinJsImport.
+struct JsExportTables
 {
-    PROFILE_SCOPE_DESCRIBE( "buildGraph/2g: JS/TS import tables" );
-    JsImportTables tables;
-    if( std::none_of( ing.bindings.begin(), ing.bindings.end(), []( const Binding& b ) { return b.kind == LocalBindKind::JsImport; } ) )
-    {
-        return tables;
-    }
-    tables.targets.reserve( ing.bindings.size() );
-    tables.shadows.reserve( ing.bindings.size() );
-    HashMap<std::string, std::uint32_t> files;
-    files.reserve( ing.files.size() );
+    HashMap<std::string, std::uint32_t>        files;
+    HashMap<std::string, char>                 vocabulary;
+    HashMap<std::string, JsExportFact>         exported;
+    HashMap<std::string, std::vector<VarSpan>> shadows;
+};
+
+inline JsExportTables buildJsExportTables( const IngestResult& ing )
+{
+    JsExportTables ex;
+    ex.shadows.reserve( ing.bindings.size() );
+    ex.files.reserve( ing.files.size() );
     for( std::uint32_t fileId = 0; fileId < ing.files.size(); ++fileId )
     {
-        files.emplace( lexicalNormalize( rootRelPath( ing, fileId ) ), fileId );
+        ex.files.emplace( lexicalNormalize( rootRelPath( ing, fileId ) ), fileId );
     }
     // Two views of the same export bindings: by the EXPORTED name (what an importer writes) and by the
     // LOCAL one (what the definition is called). `export { f as g }` makes them different words, so a
     // single map keyed either way would silently drop one of the two forms.
-    HashMap<std::string, JsExportFact> exported;
+    HashMap<std::string, JsExportFact>& exported = ex.exported;
     HashMap<std::string, std::vector<std::string>> byLocal;
     exported.reserve( ing.bindings.size() );
     byLocal.reserve( ing.bindings.size() );
@@ -2687,7 +2712,7 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
         }
         else if( b.kind == LocalBindKind::JsShadow )
         {
-            tables.shadows[ jsImportKey( b.fileId, b.var ) ].push_back( { b.spanStart, b.spanEnd } );
+            ex.shadows[ jsImportKey( b.fileId, b.var ) ].push_back( { b.spanStart, b.spanEnd } );
         }
     }
     for( auto& [ localKey, keys ] : byLocal )
@@ -2711,28 +2736,54 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
             else { fact.node = symbol.id; }
         }
     }
-    const HashMap<std::string, char> vocabulary = jsModuleVocabulary( ing );
-    const JsModuleCtx ctx{ files, workspace, vocabulary };
+    ex.vocabulary = jsModuleVocabulary( ing );
+    return ex;
+}
+
+// The definition `moduleFile` exports under `name` — kNoNode when the export is ambiguous, matches no definition,
+// or is not in the PARTIAL table (a re-export `export { f } from`, `export *`: ingest_jsimports.h records none).
+inline NodeId jsExportedNode( const JsExportTables& ex, std::uint32_t moduleFile, std::string_view name )
+{
+    const auto found = ex.exported.find( jsImportKey( moduleFile, name ) );
+    return found != ex.exported.end() ? found->second.node : kNoNode;
+}
+
+// Where `import { exportName } from "module"` in `fileId` lands: Pinned to the definition, or why not (resolveJsImportModule).
+// An empty exportName is a TYPE-ONLY import: it binds a type, so a call through the name is not this import's call, and
+// there is no module question to ask.
+inline JsImportTarget pinJsImport( const IngestResult& ing, const JsExportTables& ex, const WsIncludeCtx* workspace, std::uint32_t fileId,
+                                   std::string_view module, std::string_view exportName )
+{
+    JsImportTarget    target;
+    const JsModuleCtx ctx{ ex.files, workspace, ex.vocabulary };
+    const auto [ moduleFile, moduleOutcome ] = exportName.empty()
+        ? std::pair<std::uint32_t, JsImportOutcome>{ kNoFile, JsImportOutcome::Refused }
+        : resolveJsImportModule( rootRelPath( ing, fileId ), module, fileId, ctx );
+    target.outcome = moduleOutcome;
+    target.moduleFile = moduleFile == kNoFile ? UINT32_MAX : moduleFile;   // lane L6: an interface's module (the export table pins none)
+    if( moduleFile != kNoFile )
+    {
+        target.node    = jsExportedNode( ex, moduleFile, exportName );
+        target.outcome = target.node != kNoNode ? JsImportOutcome::Pinned : moduleOutcome;
+    }
+    return target;
+}
+
+inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncludeCtx* workspace )
+{
+    PROFILE_SCOPE_DESCRIBE( "buildGraph/2g: JS/TS import tables" );
+    JsImportTables tables;
+    if( std::none_of( ing.bindings.begin(), ing.bindings.end(), []( const Binding& b ) { return b.kind == LocalBindKind::JsImport; } ) )
+    {
+        return tables;
+    }
+    tables.targets.reserve( ing.bindings.size() );
+    JsExportTables ex = buildJsExportTables( ing );
     for( const Binding& b : ing.bindings )
     {
         if( b.kind != LocalBindKind::JsImport || b.fileId >= ing.files.size() ) { continue; }
-        JsImportTarget target;
-        target.renamed = b.importedName != b.var;
-        // An empty importedName is a TYPE-ONLY import: it binds a type, so a call through the name is not
-        // this import's call, and there is no module question to ask.
-        const auto [ moduleFile, moduleOutcome ] = b.importedName.empty()
-            ? std::pair<std::uint32_t, JsImportOutcome>{ kNoFile, JsImportOutcome::Refused }
-            : resolveJsImportModule( rootRelPath( ing, b.fileId ), b.typeName, b.fileId, ctx );
-        target.outcome = moduleOutcome;
-        if( moduleFile != kNoFile )
-        {
-            const auto found = exported.find( jsImportKey( moduleFile, b.importedName ) );
-            if( found != exported.end() && found->second.node != kNoNode )
-            {
-                target.outcome = JsImportOutcome::Pinned;
-                target.node    = found->second.node;
-            }
-        }
+        JsImportTarget target = pinJsImport( ing, ex, workspace, b.fileId, b.typeName, b.importedName );
+        target.renamed        = b.importedName != b.var;
         const auto [ found, inserted ] = tables.targets.try_emplace( jsImportKey( b.fileId, b.var ), target );
         if( !inserted )
         {
@@ -2740,6 +2791,7 @@ inline JsImportTables buildJsImportTables( const IngestResult& ing, const WsIncl
             found->second.outcome = JsImportOutcome::Refused;    //   included): never choose one of them
         }
     }
+    tables.shadows = std::move( ex.shadows );
     return tables;
 }
 
@@ -3322,12 +3374,13 @@ inline std::string_view stdElementType( std::string_view written ) noexcept
 // LANGUAGE SCOPE (each probed; a language is gated exactly when kStdMemberNames has a non-empty row for it): C++ as above.
 // RUST (externalnames.h kRustStdMemberNames; arm R): the same rule — `v.push( x )` on a `&mut Vec<i32>` parameter, `xs.iter()`,
 // `m.insert( k, v )` left NAME-ONLY are declined; a call the language's own lookup proves (`self.iter()` inside the impl
-// that defines iter) is not name-only and keeps its edge. The receiver exception reads nothing for Rust (stdReceiverOf reads
-// C++ written types only), so its STATED FLOOR is wider than C++'s: a receiver written as an in-tree type — a parameter
-// `s: &mut Stack<i32>`, a local `let s = Stack { .. }`, a field `self.inner` declared `Stack<i32>`, `book: &Book` where Book
-// defines iter — is declined with the false edges, because Rust records no parameter, local or field type for a call yet.
-// Such a call is counted (declined_calls=, <stdm>), never silently dropped; it keeps its edge once Rust receiver evidence
-// types it (the call is then no longer name-only). C has no member functions. GO has an EMPTY row: its common member names
+// that defines iter) is not name-only and keeps its edge, and so (lane rust-receivers) does a call on a receiver Rust
+// receiver evidence types (receiverevidence.h narrowTypedLocal): a parameter, local or field WRITTEN as an in-tree type —
+// `s: &mut Stack<i32>`, `let s = Stack { .. }`, `self.inner` declared `Stack<i32>`, `book: &Book` where Book defines iter —
+// or a call result. The receiver exception itself reads nothing for Rust (stdReceiverOf reads C++ written types only), so
+// its STATED FLOOR is what Rust does not type: a generic bound, dyn / impl Trait, a type alias, a glob of a glob, a tuple-struct
+// field, a non-plain pattern, a value behind Option / Result / Rc / Arc / RefCell / Cell / Mutex / RwLock — declined with the false edges, counted (declined_calls=, <stdm>), never silently dropped.
+// C has no member functions. GO has an EMPTY row: its common member names
 // (Len, Write, String, Error, Reset, Lock, Unlock) are methods in-tree types implement on purpose to satisfy an interface,
 // so an unproven receiver may well dispatch into the tree; a Go gate needs typed receivers, not a name list. Java, Kotlin,
 // C# and Swift likewise (add/size, Add, append). ObjC message sends carry no receiver shape. Python/JS/TS/Ruby:
@@ -6318,6 +6371,27 @@ inline void jsImportedBases( const BaseEvidenceTables& t, const Reference& r, co
         {
             out.push_back( c );
         }
+        else if( listed && pin->second.outcome == JsImportOutcome::Unlisted && !pin->second.renamed && t.ing.symbols[ c ].kind == SymKind::Interface
+                 && t.ing.symbols[ c ].fileId == pin->second.moduleFile )
+        {
+            out.push_back( c );   // lane L6: an INTERFACE of the module the import resolved (the export table pins functions and classes only)
+        }
+    }
+}
+
+// lane L6, Rust: the trait an `impl Trait for T` names, resolved like a written type at the impl header — its path as written
+// (Reference::memberPath) or its bare name through the item scopes' `use`s, items and the crate layout (CallResultTypes's
+// Rust rows) — when that is one of the candidates. A family whose base clauses no such resolver reads proves nothing here.
+inline void writtenTraitBases( const BaseEvidenceTables& t, const Reference& r, const std::vector<NodeId>& cand, std::vector<NodeId>& out )
+{
+    if( t.recvEv == nullptr || callResultFamilyOf( r.lang ) != CallResultFamily::Rust )
+    {
+        return;
+    }
+    const NodeId trait = t.recvEv->types.rustResultClass( r.fileId, r.startByte, r.memberPath, r.calleeName );
+    if( trait != kNoNode && std::find( cand.begin(), cand.end(), trait ) != cand.end() )
+    {
+        out.push_back( trait );
     }
 }
 
@@ -6430,7 +6504,11 @@ inline void provenBasesOf( const BaseEvidenceTables& t, const Reference& r, cons
     }
     else
     {
-        includedBases( t, r, cand, out );
+        writtenTraitBases( t, r, cand, out );
+        if( out.empty() )
+        {
+            includedBases( t, r, cand, out );
+        }
     }
     if( out.empty() )
     {
@@ -6764,6 +6842,68 @@ inline std::vector<std::uint16_t> paramsMinAcrossDeclarations( const IngestResul
 }
 
 inline std::uint32_t internDeclinedList( Graph& g, HashMap<std::uint64_t, rw::SmallVec<std::uint32_t, 1>>& listsByHash, std::span<const NodeId> cand );   // defined beside declinedCallsNaming, its one reader
+// TS/JS literal receivers (issue #163 twin): candidate test for literal polyfills.
+// A definition is a polyfill candidate for a literal receiver when it is a scope-matched Method (e.g. JS Foo.prototype.NAME),
+// compatible in language, and within the reference's own root in multi-root workspaces.
+[[nodiscard]] inline bool
+isJsTsLitPolyfillCandidate( const rw::IngestResult& ing, rw::NodeId candSym, std::string_view ctor, const rw::Reference& r ) noexcept
+{
+    if( candSym >= ing.symbols.size() )
+    {
+        return false;
+    }
+    const rw::Symbol& sy = ing.symbols[ candSym ];
+    if( sy.kind != rw::SymKind::Method || sy.scope != ctor || !rw::langCompatible( sy.lang, r.lang ) )
+    {
+        return false;
+    }
+    if( !ing.fileRoot.empty() )
+    {
+        if( sy.fileId >= ing.fileRoot.size() || r.fileId >= ing.fileRoot.size()
+            || ing.fileRoot[ sy.fileId ] != ing.fileRoot[ r.fileId ] )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// TS/JS literal receivers (issue #163 twin): only names that are built-in members of the literal's type
+// leave --uses when an in-repo definition shares the name. If no in-repo definition exists (valueDefs empty),
+// return false so external/stdlib queries (e.g. --uses=repeat on hono) answer with external="1" instead of refusing.
+// Python literal calls (e.g. "hello".replace) remain listed by --uses (scoping matches graph.h's #163 JS/TS block).
+// Named function-expression polyfills (String.prototype.padStart = function padStart(n) { ... }, indexed as plain functions)
+// and TS prototype assignments drop their literal calls from --uses, matching graph.h.
+[[nodiscard]] inline bool
+isBuiltinLiteralCall( const rw::IngestResult& ing, const rw::Reference& r,
+                      std::span<const rw::NodeId> valueDefs,
+                      std::span<const rw::NodeId> literalDefs = {} ) noexcept
+{
+    using namespace rw;
+    const std::span<const rw::NodeId> checkDefs = literalDefs.empty() ? valueDefs : literalDefs;
+    if( checkDefs.empty() )
+    {
+        return false;
+    }
+    if( !isJsTsLitRecv( r.recv ) )
+    {
+        return false;
+    }
+    const std::string_view ctor = jsLitCtorName( r.recv );
+    if( ctor.empty() || !isJsTsBuiltinMember( ctor, r.calleeName ) )
+    {
+        return false;
+    }
+    for( NodeId def : checkDefs )
+    {
+        if( isJsTsLitPolyfillCandidate( ing, def, ctor, r ) )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = nullptr, bool census = false )
 {
     PROFILE_SCOPE_DESCRIBE( "buildGraph: resolve refs + build CSR" );
@@ -7235,11 +7375,16 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     // FE-B (receiverevidence.h): the receiver-evidence tables, the per-edge hedge sets and the reused per-call buffers.
     // (L) fix round 1: "<fileId>#<local>" → the in-tree CLASS a TS named import pins (buildJsImportTables), for resultClassOf
     HashMap<std::string, NodeId> jsPinnedClasses;
+    HashMap<std::string, std::uint32_t> jsImportModules;   // lane L6: "<fileId>#<local>" → the indexed file its specifier resolved to
     for( const auto& [ key, target ] : jsImports.targets )
     {
         if( target.outcome == JsImportOutcome::Pinned && target.node != kNoNode && ReceiverEvidence::classLike( ing.symbols[ target.node ].kind ) )
         {
             jsPinnedClasses.try_emplace( key, target.node );
+        }
+        if( target.outcome == JsImportOutcome::Unlisted && target.moduleFile != UINT32_MAX && !target.renamed )
+        {
+            jsImportModules.try_emplace( key, target.moduleFile );
         }
     }
     ReceiverEvidence         recvEv( ing, chaUp, classNames );
@@ -7253,6 +7398,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         recvEv.types.fileIncludes    = &fileIncludes;      // (L) fix round 2: the usings a C++ callee's headers put in force
         recvEv.types.chaUp           = &chaUp;             // (L) fix round 2: a JVM member type the callee's classes inherit
         recvEv.types.jsPinnedClasses = &jsPinnedClasses;   // (L) a TS call result's imported class
+        recvEv.types.jsImportModules = &jsImportModules;   // lane L6: a TS import's module, for an interface type it names
         recvEv.build();
         // h1-annot: a Python `x op= v` that drops x's class (ReceiverEvidence::noteAugAssign) drops Rule 2's constructed type too
         std::string augKey;
@@ -7396,7 +7542,8 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 const std::uint32_t ri = rtIt->second;
                 const Binding&      rt = ing.bindings[ ri ];
-                const bool          match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth );
+                const bool          match = rt.resultIndex == cr.resultIndex && ( rule2Sink ? rt.unwrapDepth <= 1 : rt.unwrapDepth == cr.unwrapDepth )
+                                            && recvEv.rustQualifierTypes( r, cr.importedName, callee, rt.isFromAssignment );   // Rust T::f(): its T reaches f's class
                 if( !match )
                 {
                     continue;
@@ -8047,6 +8194,187 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         return narrowTo( narrower.rule1ClassMember( r, scope ), r, subscriptCand )
             || narrowTo( narrower.rule1BaseWalk( r, scope, langFacts( r.lang ).mixinAncestry ? rubyUp : chaUp, chaUpDeclared ), r, subscriptCand );
     };
+    // lane L6 (iface dispatch): built BEFORE the resolve loop, which reads it (ifacedispatch.h) — the map is a function of the
+    // inheritance references and the base-evidence tables alone, never of a call edge, so its content is what it was below it.
+    // inheritance edges (Lego view): isInherit refs (derived → base name) → implementors[base] += derived.
+    // Resolve the base name to class-like symbols (any-file, by name); dedup. The socket→bricks relation.
+    g.implementors.assign( N, {} );
+    // the SAME rule namespaceCompatible states for a type-position reference — routed through it rather
+    // than restated, because a second copy of one rule is how the two copies end up disagreeing.
+    const auto isClassLike = []( SymKind k ) noexcept
+    { return namespaceCompatible( RefRole::Extends, k ); };
+    std::vector<NodeId> baseCand;   // one inheritance reference's base candidates, reused across references
+    std::vector<NodeId> baseProven; // … and the one of them the language's lookup proves (provenBasesOf), reused
+    std::vector<ImplementorBoundEdge> boundEdges;   // every edge drawn below with how it was bound; merged after the dedup
+    // lane L6: 1 for a base some extends/implements clause names whose implementor the map cannot list (the derived type is no
+    // class the index keeps: Rust `impl T for &X`, a blanket `impl<U: A> T for U`, a generic type) — by the base NAME, every
+    // same-named class-like of the clause's language. The dispatch tier steps aside for such a type: its list would hide one.
+    std::vector<char> implementorsOpen( N, char( 0 ) );
+    const auto markImplementorsOpen = [ & ]( const Reference& ref )
+    {
+        if( const auto bit = byName.find( ref.calleeName ); bit != byName.end() )
+        {
+            for( NodeId b : bit->second )
+            {
+                implementorsOpen[ b ] = langCompatible( ing.symbols[ b ].lang, ref.lang ) ? char( 1 ) : implementorsOpen[ b ];
+            }
+        }
+    };
+    const BaseEvidenceTables baseEvidence{ ing, extVeto, jsImports, fileIncludes, includeAdj, fileDir, &recvEv };
+    {
+        PROFILE_SCOPE_DESCRIBE( "buildGraph/5: inheritance edges" );
+    for( const Reference& r : ing.references )
+    {
+        if( !r.isInherit )
+        {
+            continue;
+        }
+
+        // The DERIVED symbol. Normal case (C++/TS/Java/Python/Swift): the ref sits inside the derived class
+        // header, so byte-span attribution already set fromSymbol = the derived class — use it directly.
+        // Rust case: `impl Trait for T` is a top-level sibling of `struct T`; the ref sits in the impl HEADER
+        // (which is inside the impl body, NOT the struct span), so fromSymbol points at whatever def encloses
+        // the impl (a method, or kNoNode) — NOT T. So the Rust pass stashes the derived type NAME in
+        // `qualifier` (empty for every other lang's inherit ref); when present we resolve THAT by name here:
+        // class-like + lang-compatible, lowest id on a tie. This keeps the C++/TS/Java path byte-identical.
+        NodeId derived = r.fromSymbol;
+        if( !r.qualifier.empty() )                      // Rust impl_item → resolve the derived type by name
+        {
+            derived = kNoNode;
+            const auto dit = byName.find( r.qualifier );
+            if( dit == byName.end() )
+            {
+                markImplementorsOpen( r );
+                continue;
+            }
+            std::size_t named = 0;   // lane L6: two same-named types — the lowest id stands for both, so the map cannot list the other
+            for( NodeId cand : dit->second )
+            {
+                if( isClassLike( ing.symbols[ cand ].kind ) && langCompatible( ing.symbols[ cand ].lang, r.lang )
+                    && sameRoot( cand, r.fileId ) )
+                {
+                    derived = derived == kNoNode ? cand : derived;   // ids are ascending → lowest-id match (deterministic)
+                    ++named;
+                }
+            }
+            if( named > 1 )
+            {
+                markImplementorsOpen( r );
+            }
+        }
+        if( derived == kNoNode )
+        {
+            markImplementorsOpen( r );   // lane L6: an implementor the map cannot list (`impl T for &X`, a blanket `impl<U> T for U`)
+            continue;
+        }
+        if( ing.symbols[ derived ].lang == Lang::Ruby )
+        {
+            derived = rubyBases.canonicalClass( ing, derived );   // a reopened class is ONE implementor, not one per open
+        }
+
+        // A Ruby base resolved by Ruby's own lookup: the bases are the classes whose constant it IS, read by constant
+        // (RubyBaseScope::classesByFqn — byName's decl/def collapse would hide a body-less Ruby class). nullptr ⇒ not
+        // a scoped Ruby base (every other language, or a Ruby site the join could not place) ⇒ byName stands.
+        const rw::SmallVec<NodeId, 2>* baseIds    = nullptr;
+        const std::string*             rubyScoped = rubyBases.resolvedBase( std::size_t( &r - ing.references.data() ) );
+        if( rubyScoped != nullptr )
+        {
+            const auto sit = rubyScoped->empty() ? rubyBases.classesByFqn.end() : rubyBases.classesByFqn.find( *rubyScoped );
+            if( sit == rubyBases.classesByFqn.end() )
+            {
+                continue;   // the tree never opens the written base — no in-tree row to list it under
+            }
+            baseIds = &sit->second;
+        }
+        else
+        {
+            const auto it = byName.find( r.calleeName );
+            if( it == byName.end() )
+            {
+                continue;
+            }
+            baseIds = &it->second;
+        }
+        baseCand.clear();
+        for( NodeId baseId : *baseIds )
+        {
+            // lane lego-transitive (M1): a Ruby MODULE is a base here too. `include M` / `extend M` / `prepend M` put it in
+            // the class's ancestors (parser version 131 put them there from the captureIncludes walk; since 173 the @reference.mixin capture reads them), so the class implements its contract the way
+            // a subclass does — and --lego=M listed nobody (rake: `include Rake::DSL`). The test is BuiltinMethodGate's
+            // class-like rule, the one that already counts a Ruby module (Ruby && SymKind::Other: @definition.module maps to
+            // Other for every language, and only Ruby's tags have no other Other). Other languages need nothing here: an
+            // Elixir module is a struct-kind symbol (defimpl / @behaviour already list), a PHP trait an interface (its
+            // `use T;` is not captured — the stated floor in captureBases), a Rust trait an interface, a Python mixin a class.
+            if( !isClassLike( ing.symbols[baseId].kind ) && !BuiltinMethodGate::isClassLike( ing.symbols[baseId] ) )
+            {
+                continue;
+            }
+            if( !sameRoot( baseId, r.fileId ) )
+            {
+                continue; // §3: an extends NAME never crosses roots
+            }
+            // Lang guard (same as every call resolver above): a name resolves ACROSS files but only
+            // WITHIN a compatible language (or the ObjC↔C++ bridge). Without it a mixed-lang tree merges
+            // e.g. a TS `Animal` + a Java `Animal` into ONE interface with cross-language duplicate impls.
+            if( !langCompatible( ing.symbols[baseId].lang, r.lang ) )
+            {
+                continue;
+            }
+            if( baseId == derived )
+            {
+                continue;
+            }
+            baseCand.push_back( baseId );
+        }
+        // the call edges' JVM rule, applied to bases: a Kotlin class implements a same-named Java interface only when
+        // Kotlin defines no candidate of that name, and the reverse (keepOwnJvmLanguageCandidates; kotlincheck §14c).
+        keepOwnJvmLanguageCandidates( ing, r, baseCand );
+        // lane lego-transitive fix 1: how each candidate edge is bound. A Ruby base its constant scope placed is proven as a
+        // whole (classesByFqn holds that ONE constant's opens); every other base asks provenBasesOf.
+        provenBasesOf( baseEvidence, r, baseCand, baseProven, rubyScoped != nullptr );
+        for( NodeId baseId : baseCand )
+        {
+            g.implementors[ baseId ].push_back( derived );
+            boundEdges.push_back( ImplementorBoundEdge{ baseId, derived, boundOfCandidate( baseProven, baseId ) } );
+        }
+    }
+    }
+    for( std::vector<NodeId>& v : g.implementors )
+    {
+        std::sort( v.begin(), v.end() );
+        v.erase( std::unique( v.begin(), v.end() ), v.end() );
+    }
+    // lane L6 fix round 1 (B1): an implementor no class the index keeps names — a Java anonymous class, a Kotlin object expression or
+    // `fun interface`, a Rust trait a mock attribute implements (model.h LocalBindKind::ImplBlock, typeName "") — opens the type's
+    // list, by name, every same-named class-like of the record's language (of any language when the record sits in no definition)
+    for( const Binding& b : ing.bindings )
+    {
+        if( b.kind != LocalBindKind::ImplBlock || !b.typeName.empty() )
+        {
+            continue;
+        }
+        if( const auto bit = byName.find( b.var ); bit != byName.end() )
+        {
+            for( NodeId t : bit->second )
+            {
+                const bool sameLang = b.fromSymbol >= N || langCompatible( ing.symbols[ t ].lang, ing.symbols[ b.fromSymbol ].lang );
+                implementorsOpen[ t ] = isClassLike( ing.symbols[ t ].kind ) && sameLang ? char( 1 ) : implementorsOpen[ t ];
+            }
+        }
+    }
+    fillImplementorBound( g, boundEdges );
+    g.rubyMainMixins = rubyMainObjectMixins( ing, rubyBases );
+    // lane L6: the interface-typed dispatch tier (ifacedispatch.h) over the map just built, and the edges its one-implementor
+    // answer committed (outProv=6, rendered via="impl"); the arity rule it shares with the name tiers' B2.2 filter below.
+    const IfaceDispatch          ifaceTier( ing, recvEv, g.implementors, g.implementorBound, implementorsOpen );   // reads ing.bindings' ImplBlock spans too
+    HashMap<std::uint64_t, char> implEdges;
+    std::vector<NodeId>          ifaceCand;   // reused: one call's dispatch candidates
+    const auto arityCannotTake = [ & ]( const Reference& ref, NodeId c ) noexcept
+    {
+        const Symbol& cs = ing.symbols[ c ];
+        return ref.argCountKnown && ( ( cs.arityExact != 0 && ref.argCount > cs.params ) || ref.argCount < paramsMinOf[ c ] );
+    };
+
     {
         PROFILE_SCOPE_DESCRIBE( "buildGraph/3: resolve loop (per reference)" );
     const MdLinkPins                mdLinks    = bindMarkdownLinks( ing );   // empty unless the tree holds a cross-file markdown link
@@ -8314,9 +8642,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 }
                 for( NodeId c : it->second )
                 {
-                    const Symbol& sy = ing.symbols[c];
-                    if( sy.kind == SymKind::Method && sy.scope == ctor
-                        && langCompatible( sy.lang, r.lang ) && sameRoot( c, r.fileId ) )
+                    if( isJsTsLitPolyfillCandidate( ing, c, ctor, r ) )
                     {
                         cand.push_back( c );
                     }
@@ -8564,6 +8890,68 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                 }
             }
             narrowed = !cand.empty();
+        }
+        // lane L6 (ifacedispatch.h): the receiver's recorded type is an interface, a trait or a class declaring the callee with
+        // no body — C++ through class identity's dispatch split (Rule 2 on a local or parameter, Rule 2b's field), every other
+        // language through ReceiverEvidence::dispatchReceiverOf — and the types implementing it own the callee's bodies: one,
+        // reached through proven edges only, is the edge (via="impl"); otherwise the call declines with exactly that list
+        // (gate="iface"). A Rust standard-member name (`clone`, `iter`) on a trait object stays with the std gate below.
+        bool ifaceImpl = false;
+        if( !scipPinned && !canonical && ( !narrowed || narrower.identityDispatchClaimFor( r ) ) )
+        {
+            ifaceCand.clear();
+            bool                   proven = true;
+            std::string_view       bound;
+            const bool             cppSplit = narrowed;
+            if( cppSplit )
+            {
+                ifaceCand.assign( cand.begin(), cand.end() );   // class identity's real subclasses: proven inheritance
+            }
+            else if( const rw::SmallVec<NodeId, 2>* split = narrower.rule2bDispatchSplit( r, ing.symbols[ r.fromSymbol ].scope, { fieldNarrow.fieldTypeByClass, memberFields, chaUp },
+                                                                                          fieldNarrow.localNameSet, classIds, chaUp ) )
+            {
+                narrowTo( split, r, ifaceCand );
+                proven = false;   // a field's dispatch split: one candidate is no proof here (a mock's macro-made override is unseen)
+            }
+            else if( const ReceiverEvidence::DispatchReceiver recv = recvEv.dispatchReceiverOf( r );
+                     recv.type != kNoNode && !( langFacts( r.lang ).contractSignaturesUnindexed && StdMemberGate::tableIndexOf( r ) != StdMemberGate::kNotStd ) )
+            {
+                IfaceDispatchAnswer ans = ifaceTier.answer( recv.type, r.calleeName );
+                for( NodeId c : ans.cand )
+                {
+                    if( langCompatible( ing.symbols[ c ].lang, r.lang ) && sameRoot( c, r.fileId ) )
+                    {
+                        ifaceCand.push_back( c );
+                    }
+                }
+                proven = ans.proven;
+                bound  = recv.bound;
+            }
+            if( ifaceCand.size() > 1 && std::any_of( ifaceCand.begin(), ifaceCand.end(), [ & ]( NodeId c ) { return !arityCannotTake( r, c ); } ) )
+            {
+                std::erase_if( ifaceCand, [ & ]( NodeId c ) { return arityCannotTake( r, c ); } );   // an arity the call cannot pass is no candidate
+            }
+            if( ifaceCand.size() == 1 && proven && !cppSplit )   // C++ one subclass: class identity's own proven edge, as before
+            {
+                cand.assign( 1, ifaceCand.front() );
+                narrowed  = true;
+                ifaceImpl = true;
+            }
+            else if( ifaceCand.size() > 1 )
+            {
+                recordDecline( r, std::span<const NodeId>( ifaceCand.data(), ifaceCand.size() ), DeclinedSiteKind::Iface );
+                if( !bound.empty() )
+                {
+                    g.declinedSiteBound.emplace_back( std::uint32_t( g.declinedSiteRef.size() - 1 ), std::string( bound ) );
+                }
+                disposition = CallDisposition::Declined;
+                continue;
+            }
+            else if( cppSplit && ifaceCand.empty() )
+            {
+                cand.clear();   // the split's every definition is of another language or root: nothing narrowed, as narrowTo answers
+                narrowed = narrower.forgetClaim();
+            }
         }
         // Python Rule 2d (module-ALIAS receiver narrow, issue #287): `alias.m(...)` where `alias` is bound in
         // the caller's file by `import X as alias` / `import X` / `from pkg import X as alias` to a module X
@@ -9552,6 +9940,19 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
             {
                 finalSegmentEdges[ekey] = 1;   // remember (from,to) for prov="final-segment"
             }
+            if( ifaceImpl )
+            {
+                // lane L6: remember (from,to) for via="impl" (outProv=6); 2 once a site of another kind committed it too (here, earlier)
+                const auto [ it, fresh ] = implEdges.try_emplace( ekey, char( 1 ) );
+                it->second = ( fresh && e.nref > 1 ) ? char( 2 ) : it->second;
+            }
+            else if( !implEdges.empty() )
+            {
+                if( const auto it = implEdges.find( ekey ); it != implEdges.end() )
+                {
+                    it->second = char( 2 );   // … or later: a site that proved the edge another way wins its label
+                }
+            }
             ( nameOnly ? nameOnlyEdges : provenEdges )[ ekey ] = 1;   // FE-B: a proven site wins the merged row (Graph::outNameOnly)
             if( anyMarkdownLink )
             {
@@ -9570,7 +9971,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // target is the caller) types nothing: a floor.
         // A Rust module path (`model::load()`) is a qualifier the canonical tier cannot place but the crate layout can.
         const bool evidenced = scipPinned || canonical || narrowed || jsImportPinned || languageLookupProved || ( hedgeEligible && !nameOnly );
-        if( !callResultAt.empty() && nReal == 1 && !nameOnly && !splitPick && !bindingPinned && !subscript )
+        if( !callResultAt.empty() && nReal == 1 && !nameOnly && !splitPick && !bindingPinned && !subscript && !ifaceImpl )   // L6: one implementor in the tree types nothing
         {
             for( NodeId to : tier )
             {
@@ -9637,8 +10038,9 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     //   3 = C1 one arm of a k-way split the resolver could not choose between → prov="split";
     //   4 = an ES named-import binding named the module and the export → prov="import".
     //   5 = a receiver's QUALIFIED written type chose this edge by its last name alone → prov="final-segment".
+    //   6 = lane L6: the ONE implementor in the tree of the receiver's interface owns the callee → via="impl".
     // The value per edge comes from resolve.h edgeProvenance, which owns the precedence between them.
-    if( scip || !bindingEdges.empty() || !splitEdges.empty() || !importEdges.empty() || !finalSegmentEdges.empty() )
+    if( scip || !bindingEdges.empty() || !splitEdges.empty() || !importEdges.empty() || !finalSegmentEdges.empty() || !implEdges.empty() )
     {
         g.outProv.assign( edges.size(), 0u );
     }
@@ -9650,7 +10052,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     {
         g.outAnchorMiss.assign( edges.size(), 0u );
     }
-    const EdgeProvenanceSets provSets{ bindingEdges, importEdges, splitEdges, finalSegmentEdges };
+    const EdgeProvenanceSets provSets{ bindingEdges, importEdges, splitEdges, finalSegmentEdges, implEdges };   // lane L6: + implEdges
     // Kind byte, allocated when some edge is name-only or a markdown link. Empty ⇒ every edge is a plain call.
     const auto hedged = [ & ]( std::uint64_t k ) { return nameOnlyEdges.contains( k ) && !provenEdges.contains( k ); };
     const auto marked = [ & ]( const E& e )
@@ -9725,132 +10127,6 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
              && g.declinedSiteRef.size() == g.declinedSiteCaller.size() && g.declinedSiteKind.size() == g.declinedSiteCaller.size() );
     }
 
-    // inheritance edges (Lego view): isInherit refs (derived → base name) → implementors[base] += derived.
-    // Resolve the base name to class-like symbols (any-file, by name); dedup. The socket→bricks relation.
-    g.implementors.assign( N, {} );
-    // the SAME rule namespaceCompatible states for a type-position reference — routed through it rather
-    // than restated, because a second copy of one rule is how the two copies end up disagreeing.
-    const auto isClassLike = []( SymKind k ) noexcept
-    { return namespaceCompatible( RefRole::Extends, k ); };
-    std::vector<NodeId> baseCand;   // one inheritance reference's base candidates, reused across references
-    std::vector<NodeId> baseProven; // … and the one of them the language's lookup proves (provenBasesOf), reused
-    std::vector<ImplementorBoundEdge> boundEdges;   // every edge drawn below with how it was bound; merged after the dedup
-    const BaseEvidenceTables baseEvidence{ ing, extVeto, jsImports, fileIncludes, includeAdj, fileDir, &recvEv };
-    {
-        PROFILE_SCOPE_DESCRIBE( "buildGraph/5: inheritance edges" );
-    for( const Reference& r : ing.references )
-    {
-        if( !r.isInherit )
-        {
-            continue;
-        }
-
-        // The DERIVED symbol. Normal case (C++/TS/Java/Python/Swift): the ref sits inside the derived class
-        // header, so byte-span attribution already set fromSymbol = the derived class — use it directly.
-        // Rust case: `impl Trait for T` is a top-level sibling of `struct T`; the ref sits in the impl HEADER
-        // (which is inside the impl body, NOT the struct span), so fromSymbol points at whatever def encloses
-        // the impl (a method, or kNoNode) — NOT T. So the Rust pass stashes the derived type NAME in
-        // `qualifier` (empty for every other lang's inherit ref); when present we resolve THAT by name here:
-        // class-like + lang-compatible, lowest id on a tie. This keeps the C++/TS/Java path byte-identical.
-        NodeId derived = r.fromSymbol;
-        if( !r.qualifier.empty() )                      // Rust impl_item → resolve the derived type by name
-        {
-            derived = kNoNode;
-            const auto dit = byName.find( r.qualifier );
-            if( dit == byName.end() )
-            {
-                continue;
-            }
-            for( NodeId cand : dit->second )
-            {
-                if( isClassLike( ing.symbols[ cand ].kind ) && langCompatible( ing.symbols[ cand ].lang, r.lang )
-                    && sameRoot( cand, r.fileId ) )
-                { derived = cand; break; }              // ids are ascending → lowest-id match (deterministic)
-            }
-        }
-        if( derived == kNoNode )
-        {
-            continue;
-        }
-        if( ing.symbols[ derived ].lang == Lang::Ruby )
-        {
-            derived = rubyBases.canonicalClass( ing, derived );   // a reopened class is ONE implementor, not one per open
-        }
-
-        // A Ruby base resolved by Ruby's own lookup: the bases are the classes whose constant it IS, read by constant
-        // (RubyBaseScope::classesByFqn — byName's decl/def collapse would hide a body-less Ruby class). nullptr ⇒ not
-        // a scoped Ruby base (every other language, or a Ruby site the join could not place) ⇒ byName stands.
-        const rw::SmallVec<NodeId, 2>* baseIds    = nullptr;
-        const std::string*             rubyScoped = rubyBases.resolvedBase( std::size_t( &r - ing.references.data() ) );
-        if( rubyScoped != nullptr )
-        {
-            const auto sit = rubyScoped->empty() ? rubyBases.classesByFqn.end() : rubyBases.classesByFqn.find( *rubyScoped );
-            if( sit == rubyBases.classesByFqn.end() )
-            {
-                continue;   // the tree never opens the written base — no in-tree row to list it under
-            }
-            baseIds = &sit->second;
-        }
-        else
-        {
-            const auto it = byName.find( r.calleeName );
-            if( it == byName.end() )
-            {
-                continue;
-            }
-            baseIds = &it->second;
-        }
-        baseCand.clear();
-        for( NodeId baseId : *baseIds )
-        {
-            // lane lego-transitive (M1): a Ruby MODULE is a base here too. `include M` / `extend M` / `prepend M` put it in
-            // the class's ancestors (parser version 131 put them there from the captureIncludes walk; since 173 the @reference.mixin capture reads them), so the class implements its contract the way
-            // a subclass does — and --lego=M listed nobody (rake: `include Rake::DSL`). The test is BuiltinMethodGate's
-            // class-like rule, the one that already counts a Ruby module (Ruby && SymKind::Other: @definition.module maps to
-            // Other for every language, and only Ruby's tags have no other Other). Other languages need nothing here: an
-            // Elixir module is a struct-kind symbol (defimpl / @behaviour already list), a PHP trait an interface (its
-            // `use T;` is not captured — the stated floor in captureBases), a Rust trait an interface, a Python mixin a class.
-            if( !isClassLike( ing.symbols[baseId].kind ) && !BuiltinMethodGate::isClassLike( ing.symbols[baseId] ) )
-            {
-                continue;
-            }
-            if( !sameRoot( baseId, r.fileId ) )
-            {
-                continue; // §3: an extends NAME never crosses roots
-            }
-            // Lang guard (same as every call resolver above): a name resolves ACROSS files but only
-            // WITHIN a compatible language (or the ObjC↔C++ bridge). Without it a mixed-lang tree merges
-            // e.g. a TS `Animal` + a Java `Animal` into ONE interface with cross-language duplicate impls.
-            if( !langCompatible( ing.symbols[baseId].lang, r.lang ) )
-            {
-                continue;
-            }
-            if( baseId == derived )
-            {
-                continue;
-            }
-            baseCand.push_back( baseId );
-        }
-        // the call edges' JVM rule, applied to bases: a Kotlin class implements a same-named Java interface only when
-        // Kotlin defines no candidate of that name, and the reverse (keepOwnJvmLanguageCandidates; kotlincheck §14c).
-        keepOwnJvmLanguageCandidates( ing, r, baseCand );
-        // lane lego-transitive fix 1: how each candidate edge is bound. A Ruby base its constant scope placed is proven as a
-        // whole (classesByFqn holds that ONE constant's opens); every other base asks provenBasesOf.
-        provenBasesOf( baseEvidence, r, baseCand, baseProven, rubyScoped != nullptr );
-        for( NodeId baseId : baseCand )
-        {
-            g.implementors[ baseId ].push_back( derived );
-            boundEdges.push_back( ImplementorBoundEdge{ baseId, derived, boundOfCandidate( baseProven, baseId ) } );
-        }
-    }
-    }
-    for( std::vector<NodeId>& v : g.implementors )
-    {
-        std::sort( v.begin(), v.end() );
-        v.erase( std::unique( v.begin(), v.end() ), v.end() );
-    }
-    fillImplementorBound( g, boundEdges );
-    g.rubyMainMixins = rubyMainObjectMixins( ing, rubyBases );
 
     // doc↔code edges: isDocLink refs (markdown `backtick` → code name) → mentions[codeDef] += docFileNode.
     // Resolve the name to real DEFINITIONS (body present), any file; stored OUT of the call graph so a doc
@@ -10911,7 +11187,7 @@ inline bool canonicalIdMatches( std::string_view canonAbs, std::string_view spec
 // in id= is exactly what this accepts — including the ROOT-RELATIVE spelling every lens now emits (see
 // canonicalIdMatches above). Overloads share one canonical id by construction, so this returns
 // EVERY match — the caller decides (--expand shows all, --around picks one), same as the bare-name path.
-inline std::vector<NodeId> resolveAllByCanonicalId( const IngestResult& ing, std::string_view spec )
+inline std::vector<NodeId> resolveAllByCanonicalIdExact( const IngestResult& ing, std::string_view spec )
 {
     std::vector<NodeId> out;
     for( const Symbol& s : ing.symbols )
@@ -10922,6 +11198,26 @@ inline std::vector<NodeId> resolveAllByCanonicalId( const IngestResult& ing, std
         }
     }
     return out;
+}
+// QUALNAME-1 (memberowner.h): a member row prints n="Owner.name" / n="Owner#name" and no sc=, so the id the legend composes
+// (p::sc::n with sc absent) reads `path::Owner.name`. On a miss, the LAST `.` or `#` after the path's final "::" is read as the
+// member separator it is and the canonical id retried as path::Owner::name — exact, never a looser match.
+inline std::vector<NodeId> resolveAllByCanonicalId( const IngestResult& ing, std::string_view spec )
+{
+    std::vector<NodeId> out = resolveAllByCanonicalIdExact( ing, spec );
+    const std::size_t   cut = spec.rfind( "::" );
+    if( !out.empty() || cut == std::string_view::npos )
+    {
+        return out;
+    }
+    const std::size_t sep = spec.find_last_of( ".#" );
+    if( sep == std::string_view::npos || sep <= cut + 2 || sep + 1 >= spec.size() )
+    {
+        return out;
+    }
+    std::string alt( spec.substr( 0, sep ) );
+    alt.append( "::" ).append( spec.substr( sep + 1 ) );
+    return resolveAllByCanonicalIdExact( ing, alt );
 }
 
 // Bare name, or a canonical id. The "::" probe runs FIRST and only when the spec carries one, then falls
@@ -12120,9 +12416,9 @@ inline QMetrics computeQMetrics( const IngestResult& ing, const Graph& g )
         HashMap<NodeId, std::vector<std::string>> methodRefNames;
         for( const Reference& r : ing.references )
         {
-            if( r.fromSymbol != kNoNode && r.fromSymbol < S && ing.symbols[ r.fromSymbol ].kind == SymKind::Method )
+            if( r.fromSymbol != kNoNode && r.fromSymbol < S && ing.symbols[ r.fromSymbol ].kind == SymKind::Method && !isSlotJoinRecord( r ) )
             {
-                methodRefNames[ r.fromSymbol ].push_back( r.calleeName );
+                methodRefNames[ r.fromSymbol ].push_back( r.calleeName );   // (an IX-1 slot record is skipped: the cohesion input stays pre-IX-1)
             }
         }
 

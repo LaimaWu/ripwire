@@ -820,6 +820,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     const OneHopAttribution& calledByAttr = referencingOnly ? chRows.attr : chCallers.attr;
     const OneHopAttribution& callsAttr    = chRows.attr;
     bool anySplit = false;   // a row carried "prov":"split" — the answer then carries split_note, its reading
+    bool anyImpl  = false;   // lane L6: a row carried "via":"impl" — the answer then carries impl_note, its reading
     const auto rowArray = [ & ]( const std::vector<NodeId>& ids, const PageWindow& w, bool callersSide ) -> std::string
     {
         const OneHopAttribution& at = callersSide ? calledByAttr : callsAttr;
@@ -831,7 +832,9 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
             linkRow = ids[ i ];
             linkToward = callersSide;
             // CALLSITE-AT: a calledBy row carries its call sites (the CLI --callers row's sites_at=); a calls row never does.
-            a += withRowSites( symObj( ids[i], at.nameOnly( i ), ofDefKeyJson( at.groups, at.tokens, i ) + splitArmKeyJson( at.splitArm( i ) ) ),
+            anyImpl = anyImpl || at.viaImpl( i );
+            a += withRowSites( symObj( ids[i], at.nameOnly( i ), ofDefKeyJson( at.groups, at.tokens, i ) + splitArmKeyJson( at.splitArm( i ) )
+                                                                 + ( at.viaImpl( i ) ? ",\"via\":\"impl\"" : "" ) ),   // lane L6: the CLI row's via="impl"
                                calledBySites, i - w.begin, callersSide );
         }
         a += "]";
@@ -931,6 +934,7 @@ inline std::string symbolQueryJson( const std::string& root, const std::string& 
     }
     out += symbolQueryNotes( anyVia, anyLink, anyMiss );
     out += nextFieldJson( splitArmLegend( anySplit ), "split_note" );   // attrib-multidef Q1: likewise for "prov":"split"
+    out += nextFieldJson( viaImplLegend( anyImpl ), "impl_note" );      // lane L6: likewise for "via":"impl"
     out += declinedSitesJson( sqDc, referencingOnly, /*mcp=*/true );   // lane declined-sites: the CLI <dc> rows, never in calls/calledBy or count
     out += nextFieldJson( declinedSitesLegend( declinedSitesLegendFlags( sqDc, referencingOnly, sqDcCut ), /*mcp=*/true ), "declined_note" );   // their reading, only when they ride
     out += nextFieldJson( callSitesAtLegend( calledBySites.any, calledBySites.anyCut, kCallSitesPerRowCap ), "sites_note" );   // CALLSITE-AT: its reading, only when a row carries it (nextFieldJson: "" -> no key, JSON-escaped)
@@ -3252,9 +3256,11 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   declinedIfaceLegend( declinedIface > 0 ),                                          // likewise declined_iface=, as on the CLI
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
                     + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI
+                    + std::string( slotJoinLegend( imValueRefs.slotCallers, true ) )                 // IX-1: exactly when a <vr> row carries via=, as on the CLI
                     + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ), !imports.next.empty(),
                                           ImpactRollupTypeClauses{ imFiles.typed, imFiles.typeDefs, imFiles.typeCapped } )   // idea #6; FIX1 R1; L7, as on the CLI
-                    + defTableLegend( imAttr.groups.multi(), imListing.cut ) ).c_str(),                                              // attrib-multidef, as on the CLI
+                    + defTableLegend( imAttr.groups.multi(), imListing.cut )                                                         // attrib-multidef, as on the CLI
+                    + memberOwnerLegend( anyMemberOwnerRow( ing, std::span<const NodeId>( show ).subspan( ipw.begin, ipw.end - ipw.begin ) ) ) ).c_str(),   // QUALNAME-1, as on the CLI
                   graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), renderDisclosure( prD, DiscloseAs::LegendClause ).c_str() );
     // r27-emitters §P2.1: the listing is capped at 40 by rank. Without shown=/capped= a 40-row answer to
     // "is it safe to change X?" reads as the WHOLE blast radius when it can be 3% of it. Same attributes,
@@ -3277,11 +3283,12 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   nextAttrXml( nextFlag( "--safe-delete=", symbol ) ).c_str()  );   // P3 (L7): the CLI twin's next=, same root attribute set (mcpclidiffcheck)
     rw::emitRaw( mem, defTableXml( ing, imAttr.groups, imListing, imSingleRoot ? std::string_view( imRootPrefix ) : std::string_view() ).c_str() );   // attrib-multidef
     emitImpactFileRollupXml( mem, ing, imFiles, imSingleRoot ? std::string_view( imRootPrefix ) : std::string_view() );   // idea #6, as on the CLI
+    const MemberOwners imOwners( ing );   // QUALNAME-1: n="Owner.name" on a member row, as on the CLI (memberowner.h)
     for( std::size_t i = ipw.begin; i < ipw.end; ++i )
     { const Symbol& s = ing.symbols[ show[i] ];
       const std::string_view rp = imSingleRoot ? sarif::rootRelativeUri( ing.files[ s.fileId ], imRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
       // A6: tested="1" only (never a literal 0) — see kTestedRowLegend. 0.6.5: d= as on the CLI row.
-      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
+      rw::emitTo( mem, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}{}/>", symTag( s.kind ), ex( qualifiedMemberName( imOwners, s ) ).c_str(), ex( rp ).c_str(), s.line,
                     depthRunAttrXml( show, depth, i, ipw.begin ), isTestedByReach( ing, impTestReach, show[i] ) ? " tested=\"1\"" : "",
                     impactLinkAttrs( g, proven, seeds, depth, show[ i ] ), imAttr.ofDefXml( show[i] ) ); }
     // the import tier's rows, after the symbol rows and under their own tag — a different unit, so a
@@ -3464,9 +3471,10 @@ inline std::string usesSelectorRefusal( const IngestResult& ing, const std::stri
         {
             continue;
         }
-        if( r.isCompose || r.isDocLink || r.role == RefRole::Subscript )
+        if( r.isCompose || r.isDocLink || r.role == RefRole::Subscript || isSlotJoinRecord( r ) )
         {
-            continue; // type edge / doc mention / an element access (no use-site: valuerefindex.h UsesValueFilter::skip) — not a use-site
+            continue; // type edge / doc mention / an element access (no use-site: valuerefindex.h UsesValueFilter::skip) / an IX-1 slot
+                      // record (its name is a receiver variable) — not a use-site
         }
         if( r.lang == Lang::Markdown )
         {
@@ -3515,6 +3523,8 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
 
     struct UseSite { std::uint32_t fileId; std::uint32_t line; RefRole role; std::string in; NodeId from; };   // from: rankUseSites' weight
     std::vector<UseSite> sites;
+    const std::vector<NodeId> literalDefs = resolveAllByName( ing, sym );
+    std::size_t declinedLiteralCalls = 0;
     const ElixirResolver elixirResolver( ing );
     // CLI parity (mcpclidiffcheck): the Elixir resolver path is gated on the selector's ELIXIR definitions —
     // the CLI's resolveUsesSelector filters exactly this way, off the RAW selector, before the @-seed rebind.
@@ -3544,6 +3554,11 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
         if( r.lang == Lang::Markdown )
         {
             continue; // markdown wikilink — not a code use-site
+        }
+        if( r.role == RefRole::Call && isBuiltinLiteralCall( ing, r, defs, literalDefs ) )
+        {
+            ++declinedLiteralCalls;
+            continue;
         }
         std::string in;
         if( r.fromSymbol != kNoNode && r.fromSymbol < ing.symbols.size() )
@@ -3594,7 +3609,8 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
                        "qualified file:name and \"::\" spellings whose bare name IS defined refuse instead (the CLI uses verb narrows them). "
                        "{}{}{}-->{}", kUsesLegendOpen,
                   ( std::string( usesValueRoleLegend( std::any_of( sites.begin(), sites.end(), []( const UseSite& u ) { return u.role == RefRole::Value; } ) ) )
-                    + valueRefsDepthLegend( usDepthCut.files > 0 ) ).c_str(),   // exactly when the root carries the depth disclosure, as the CLI
+                    + valueRefsDepthLegend( usDepthCut.files > 0 )
+                    + declinedLiteralCallsLegend( declinedLiteralCalls > 0 ) ).c_str(),   // exactly when the root carries the depth disclosure, as the CLI
                   capLegendClause( computePageDisclosure( upageRows, sites.size(), upw.end,
                                                           page.limit, page.offset, usDiscloseCap ).active ),
                   graphCountDisclosure( rw::graphGaugeClauses( ix.g ) ).c_str(),
@@ -3608,7 +3624,8 @@ inline std::optional<std::string> usesText( const std::string& root, const std::
     const std::string  usRootAttr   = usSingleRoot ? ( " root=\"" + ex( root ) + "\"" ) : std::string();
     rw::emitTo( mem, "<uses of=\"{}\" defs=\"{}\" external=\"{}\" count=\"{}\"{}{}{}{}>",
                   ex( symbol ).c_str(), defs.size(), external ? 1 : 0, sites.size(), usRootAttr.c_str(), upage, graphCountFloorAttrXml( ix.g ).c_str(),
-                  valueRefsDepthAttrXml( ing, usDepthCut, VrRender{ usSingleRoot, usRootPrefix } ).c_str() );   // of= echoes the selector as TYPED (an @-seed stays an @-seed)
+                  ( valueRefsDepthAttrXml( ing, usDepthCut, VrRender{ usSingleRoot, usRootPrefix } )
+                    + declinedLiteralCallsAttrXml( declinedLiteralCalls ) ).c_str() );   // of= echoes the selector as TYPED (an @-seed stays an @-seed)
     for( std::size_t siteIndex = upw.begin; siteIndex < upw.end; ++siteIndex )
     {
         const UseSite& u = sites[ siteIndex ];
@@ -3732,7 +3749,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     rw::emitTo( mem, "<!-- ripwire path: one DIRECTED call path from= to to= (each <s> a hop); reachable= is 0 and hops= 0 when the "
                        "graph holds none. {}{}{}{}-->{}", ( unprovenDefsVerbLegend( UnprovenDefsVerb::Path, unprovenDefs > 0 ) + ptKindLegend
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to )
-                                                           + pathOwnerLegend( anyPathHopOwner( ptOwners ) ) ).c_str(),
+                                                           + memberOwnerLegend( anyPathHopOwner( ptOwners ) ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
                   ( std::string( pathGapsLegend( ptGaps.any() ) ) + std::string( pathBridgeLegend( ptBridge.found() ) )
                     + std::string( nearSinkLegend( !ptNear.rows.empty() ) ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),

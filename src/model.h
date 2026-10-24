@@ -122,6 +122,17 @@ inline bool isStructOrNamedType( SymKind k ) noexcept
     return k == SymKind::Struct || k >= SymKind::NamedType;
 }
 
+// The last segment of a scope (Symbol::scope) as written ("outer::Scanner" or "pkg.Outer" -> the innermost owner): the spelling the selector
+// resolves as Owner.name (graph.h scopeSuffixMatches).
+inline std::string_view scopeLastSegment( std::string_view sc ) noexcept
+{
+    const std::size_t colons = sc.rfind( "::" );
+    const std::size_t dot    = sc.rfind( '.' );
+    const std::size_t cut    = colons == std::string_view::npos ? ( dot == std::string_view::npos ? 0 : dot + 1 )
+                                                                : ( dot == std::string_view::npos || dot < colons ? colons + 2 : dot + 1 );
+    return sc.substr( cut );
+}
+
 // #324: a ModuleScope owner is SYNTHETIC (comment above the enum) — a CALLER minted after the tags.scm pass,
 // never something a test (or anything else) can name or invoke, so it can never be discharged as a test
 // obligation. It is legitimate wherever a CALLER is shown (--callers/--impact/--for already carry the
@@ -401,10 +412,19 @@ inline bool isJsTsBuiltinMember( std::string_view ctor, std::string_view name ) 
 //             ONE Value record per file may instead be the DEPTH CUT (qualifier = kValueRefDepthCutScope, name = "",
 //             which no identifier is): the walk stopped at its depth cap there and argCount subtrees were not visited
 //             (saturating), line = the first one. It is no row; valuerefindex.h counts it for the answers' depth disclosure.
+//             C family only (IX-1 slot-type join): a Value row whose slot is a STRUCT FIELD also carries memberPath = the
+//             field chain from the declared object to the slot ("exec"; "tty.mouse_drag_release" for an assignment
+//             `c->tty.mouse_drag_release = f`) and memberCtor = the object's declared struct type ("" when unknown). A
+//             SLOT FACT (qualifier = kValueRefSlotFactScope, name = ""): recvVar = a struct type, composeRel = one of its
+//             fields, memberCtor = that field's declared struct type; composeRel "" makes it a typedef alias (recvVar
+//             names memberCtor). No row: valuerefindex.h reads the facts to type a field chain.
 //   Through — a call THROUGH a value: a called parameter, `tbl[k](…)` / `tbl.k(…)` on a container that received a
 //             function value. name = the container, fieldName = the written callee, composeRel = the key,
 //             qualifier = p|l|f, argCount = the parameter index. Joined to Value rows only (called_by=/through=, a
 //             may-call clue); never a use site, never in the CSR.
+//             qualifier = kValueRefSlotCallScope (C family, IX-1): a call through a struct FIELD `x->f( … )`, `x.a.f( … )`,
+//             `t[ i ].f( … )`; name = the root identifier x, memberCtor = x's declared struct type ("" when no scope of the
+//             file declares x), memberPath = the field chain ("a.f"), fieldName = the written callee. Joined by (type, field).
 //   Subscript — an element access `recv[ args ]` (Ruby, Python; ingest_binds.h subscriptOperatorRef), named as the
 //             receiver class's subscript OPERATOR METHOD (kSubscriptOperatorMethods: Ruby `[]` / `[]=`, Python
 //             `__getitem__` / `__setitem__`); receiver fields as a call's. NOT a call by itself: graph.h's resolve loop
@@ -502,6 +522,15 @@ inline std::span<const CallForwarder> callForwardersOf( Lang lang ) noexcept
 // The scope char (qualifier[0]) of a file's depth-cut Value record (see RefRole::Value above): written by
 // src/ingest_valuerefs.h, read by src/valuerefindex.h — distinct from every row scope (f l a p x).
 inline constexpr char kValueRefDepthCutScope = 'd';
+// IX-1 slot-type join (see RefRole::Value / Through above): a call through a struct field, and a slot FACT (a field's
+// declared struct type, or a typedef alias). Distinct from every other scope char.
+inline constexpr char kValueRefSlotCallScope = 's';
+inline constexpr char kValueRefSlotFactScope = 't';
+// A slot type key written with the `struct` / `union` keyword (`struct thandle`) leads with this mark: a C tag is no typedef
+// name, so the join never reads it through an alias. A slot fact whose composeRel is kValueRefSlotBodyRel declares that its
+// owner's struct BODY is in this file (no field): one tag with bodies in two files is two types, so it joins nothing.
+inline constexpr char kValueRefSlotTagMark = '\x02';
+inline constexpr char kValueRefSlotBodyRel = '{';
 
 // Essential-complexity ev_why= reason vocabulary (the essential-complexity design note, §5.1). PUBLIC the
 // moment it ships (test/attrvocabcheck.sh's standing posture; test/essentialcxcheck.sh pins the spellings):
@@ -885,7 +914,8 @@ struct Reference
     //   shape here ("m", "this.items_", "rule.bindings_"; ingest_binds.h cppElementContainer) — read only by graph.h's
     //   StdMemberGate receiver exception (stdReceiverOf); chainOf reads memberPath only beside memberCall. A C/C++ type alias
     //   record and a composeRel "elem" field record carry the std container's whole written text here (ingest_relations.h
-    //   stdElementContainerText).
+    //   stdElementContainerText). Rust (lane L6): an `impl Trait for T` inherit ref carries the trait's path as written when it is
+    //   qualified (`render::Renderer`, generic arguments dropped), "" for a bare trait name (ingest_relations.h rustImplVisitNode).
     std::string   memberPath;
     std::string   memberCtor;
     // FE-B on #373: a Ruby receiver the code BUILDS (`User.new`, a finder, a FactoryBot build, a let or local holding one)
@@ -1204,12 +1234,14 @@ enum class LocalBindKind : std::uint8_t
                    //     Reference's own; with typeName it names one call), spanStart/spanEnd = where the name is visible (the same span as the name's RecvType
                    //     tombstone, which the typed fact replaces), resultIndex = the position it binds (kWholeResult: the whole
                    //     value), unwrapDepth = the unwrap operators applied before binding (Rust `?` / `.unwrap()` / `.expect()`).
+                   //     Rust: importedName = the qualifier a path call is written with (`crate::m::T`, `fs::File`, `Self`), else "".
     ReturnType,    // one DECLARED result of a function definition, at startByte = the def's own start (Symbol::sigStartByte):
                    //     resultIndex = its position (kWholeResult: a single non-tuple result), typeName = the class it names
                    //     after the language's transparent wrappers (Go `*T`, Rust `Box<T>` / `&T`), importedName = the type
                    //     written WHOLE when it is qualified (`os.File`, `std::fs::File`), else "", unwrapDepth = the
                    //     Result/Option layers above it (each needs one unwrap operator at the call site). var stays empty.
                    //     C++ writes importedName only for a non-std qualified result (`ext::Config`), which graph.h resolves.
+                   //     Rust sets isFromAssignment when the result is written `Self` (typeName = the impl's type).
     TypeImport,    // fix round 1: a file's import of a TYPE name (Java/Kotlin `import a.b.C [as D]`, Rust `use a::b::C [as D]`,
                    //     brace groups flattened): var = the local name it binds (`C` / `D`; "*" for a wildcard or glob),
                    //     typeName = the imported item's own name ("" for "*"), importedName = the path as written
@@ -1260,6 +1292,21 @@ enum class LocalBindKind : std::uint8_t
                    //     parameter bare — at least one, no `yield`, nested defs / lambdas / classes not read — or the return
                    //     annotation is `Self`) or the method's own class name (the return annotation names it: `-> Color`,
                    //     `-> "Color"`). A method that proves neither records nothing. APPENDED.
+    DispatchType,  // lane L6 (interface-typed dispatch): a Rust parameter, local or struct field typed only as SOME implementor of a
+                   //     trait — `&dyn T`, `Box<dyn T>`, `impl T` / `&impl T`, or a type parameter `G` bounded by T (`G: T` inline
+                   //     or in a `where` clause) — never as T itself. var = the name (a field: the field), typeName = the trait's
+                   //     final segment, importedName = the trait as written when qualified (`crate::render::Renderer`), else "",
+                   //     and for a generic bound `G: <the trait as written>` (the bound= text a row carries); isFromAssignment =
+                   //     a struct FIELD (fromSymbol the struct), else a parameter or local (spanStart/spanEnd where it is
+                   //     visible, as a RecvType). It stands in for the binding's tombstone: the name hides an outer binding and
+                   //     types no class. Read by receiverevidence.h (ReceiverEvidence::noteDispatchWritten) ONLY. APPENDED.
+    ImplBlock,     // lane L6 fix round 1 (candidate-set completeness): a block that implements the type named `var` (its final segment).
+                   //     typeName = the implementing type's name — a Rust `impl T for X` block (typeName "X", spanStart/spanEnd = the
+                   //     whole impl item, so a method inside it is one of X's T methods, never an inherent one) — or "" for an
+                   //     implementor no class the index keeps names: a Java anonymous class `new T() { … }`, a Kotlin object
+                   //     expression `object : T { … }` or `fun interface T` (a lambda), a Rust trait under a mock attribute
+                   //     (`#[automock]` writes MockT). Read by graph.h's implementors-map pass (an unnamed one opens T's list) and
+                   //     ifacedispatch.h ONLY. APPENDED.
 };
 // fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
 inline constexpr std::string_view kTypeBindForward  = "forward";
@@ -1267,15 +1314,19 @@ inline constexpr std::string_view kTypeBindShadow   = "shadow";
 inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
 inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::OperatorResult ) + 1;
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::ImplBlock ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
+// L6's ImplBlock is in the set for the same reason: its var is the TRAIT / interface being implemented, never a name bound in the
+// enclosing function, so the generic binding readers (localNameSet, the fn-pointer tables, nonlocalstate) must skip it (its two
+// readers, graph.h's implementors-map pass and ifacedispatch.h, filter by kind).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {
     // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result five (CallResult .. TypeAlias) after
-    // RubyMainMixin, and h1-annot's two (AugAssign, OperatorResult) right after them: one run CallResult .. OperatorResult
+    // RubyMainMixin, h1-annot's two (AugAssign, OperatorResult) right after them, and L6's DispatchType and ImplBlock after
+    // those: one run CallResult .. ImplBlock
     static_assert( std::uint8_t( LocalBindKind::StaticMember ) - std::uint8_t( LocalBindKind::RecvType ) == 4, "FE-B's five receiver-evidence kinds stay one run" );
-    static_assert( std::uint8_t( LocalBindKind::OperatorResult ) - std::uint8_t( LocalBindKind::CallResult ) == 6, "the call-result and in-place kinds stay one run" );
-    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::OperatorResult );
+    static_assert( std::uint8_t( LocalBindKind::ImplBlock ) - std::uint8_t( LocalBindKind::CallResult ) == 8, "the call-result, in-place, dispatch and impl-block kinds stay one run" );
+    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::ImplBlock );
 }
 // The language family whose call results take a callee's declared result type (train 29 call-result typing), ONE row read
 // by ingest (which records CallResult / ReturnType / TypeImport) and by graph.h (where the type resolves, and which
@@ -1296,6 +1347,39 @@ inline CallResultFamily callResultFamilyOf( Lang l ) noexcept
         case Lang::TypeScript:             return CallResultFamily::TypeScript;
         default:                           return CallResultFamily::None;
     }
+}
+// The WRAPPER rows a family's written type is read through (lane rust-receivers; the call-result reader shares them) — data,
+// one row per wrapper name, matched on the wrapper's last path segment (`std::rc::Rc` is `Rc`):
+//   Transparent: auto-deref reaches the argument's members — the class is the argument (`Box<T>`; `&T` / `&mut T` are the
+//                grammar's reference_type, read without a row).
+//   Layer:       the value is not a T until one unwrap operator (`?`, `.unwrap()`, `.expect( … )`) is applied (Result, Option):
+//                a call result counts it into unwrapDepth; a WRITTEN local, parameter or field of that type names no class.
+//   Hides:       a shared pointer or a cell whose OWN members a call written on it may reach — Rc / Arc (`clone`, `as_ref`,
+//                `borrow`, …), RefCell / Cell / Mutex / RwLock (`borrow`, `get`, `lock`, …): its argument is not read at all.
+// A generic type no row names (`Vec<T>`, `HashMap<K, V>`, an in-tree `Stack<T>`) is its own head class, resolved like any name.
+enum class TypeWrap : std::uint8_t { None, Transparent, Layer, Hides };
+struct TypeWrapperRow
+{
+    std::string_view name;
+    TypeWrap         wrap;
+};
+inline constexpr std::array<TypeWrapperRow, 9> kRustTypeWrappers = { {
+    { "Box", TypeWrap::Transparent }, { "Result", TypeWrap::Layer }, { "Option", TypeWrap::Layer },
+    { "Rc", TypeWrap::Hides }, { "Arc", TypeWrap::Hides }, { "RefCell", TypeWrap::Hides }, { "Cell", TypeWrap::Hides },
+    { "Mutex", TypeWrap::Hides }, { "RwLock", TypeWrap::Hides },
+} };
+// each family's wrapper rows, indexed by CallResultFamily (Go / C++ / JVM / TS read their wrappers in their own readers
+// today, ingest_binds.h: empty rows)
+inline constexpr std::array<std::span<const TypeWrapperRow>, std::size_t( CallResultFamily::TypeScript ) + 1> kTypeWrappersOf = { {
+    /* None */ {}, /* Go */ {}, /* Rust */ kRustTypeWrappers, /* Cpp */ {}, /* Jvm */ {}, /* TypeScript */ {},
+} };
+static_assert( enumCountIsExact<CallResultFamily, kTypeWrappersOf.size()>(), "kTypeWrappersOf must have one row per CallResultFamily — add the row with the append" );
+// the row `name` has in family `f`'s wrapper table (None: no row — the name is a class of its own)
+inline TypeWrap typeWrapOf( CallResultFamily f, std::string_view name ) noexcept
+{
+    const std::span<const TypeWrapperRow> rows = kTypeWrappersOf[ std::size_t( f ) ];
+    const auto                            row  = std::ranges::find( rows, name, &TypeWrapperRow::name );
+    return row == rows.end() ? TypeWrap::None : row->wrap;
 }
 // Binding::resultIndex of a record about a WHOLE result (a single non-tuple result; a Rust `let t = pair()?` binding all of it).
 inline constexpr std::uint8_t kWholeResult = 0xFF;
@@ -1327,6 +1411,7 @@ struct Binding
                                               // kind==Type: read off a C++ ASSIGNMENT's callee (`x = f( … )`), not a declaration —
                                               //   a function's name as often as a class's, so buildGraph drops it unless a class of
                                               //   that name exists (resolve.h assignmentNamesNoClass). Rides the padding after `kind`.
+                                              // kind==ReturnType (Rust): the result is written `Self` (LocalBindKind::ReturnType).
     std::uint8_t  resultIndex = kWholeResult; // kind==CallResult/ReturnType: the result position (see LocalBindKind). Rides the padding.
     std::uint8_t  unwrapDepth = 0;            // kind==CallResult/ReturnType: unwrap operators / layers (see LocalBindKind). Rides the padding.
     std::uint32_t startByte  = 0;         // the record's own position (RawBind::startByte). ONE declaration's
@@ -2110,6 +2195,20 @@ struct ShadowEvidence
 inline bool isMemberAccessSite( const Reference& r ) noexcept
 {
     return ( r.role == RefRole::Read || r.role == RefRole::Write ) && r.recv != RecvKind::None;
+}
+
+// IX-1: a slot-type join record (RefRole::Value / Through above): a slot FACT (a field's struct type or a typedef alias, name
+// "") or a call through a struct FIELD (name = the receiver's root variable, never a referenced symbol). Only the slot join
+// (valuerefindex.h SlotIndex) reads them; every other consumer of the reference stream skips them, so a C/C++ answer that
+// does not print the join (--context-ratio, --external-surface, stats, SCIP) reads the same stream it read before IX-1.
+inline bool isSlotJoinRecord( const Reference& r ) noexcept
+{
+    if( r.qualifier.empty() )
+    {
+        return false;
+    }
+    return ( r.role == RefRole::Value && r.qualifier[0] == kValueRefSlotFactScope )
+        || ( r.role == RefRole::Through && r.qualifier[0] == kValueRefSlotCallScope );
 }
 
 inline void buildShadowKey( std::string& key, std::uint32_t fromSymbol, std::string_view name )

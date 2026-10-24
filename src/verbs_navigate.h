@@ -225,7 +225,8 @@ inline int emitCallHierarchyAlt( const rw::Config& cfg, const rw::IngestResult& 
                    + rw::declinedIfaceKeyJson( chRows.declinedIface )
                    + rw::stdMemberCallsSpelling( chRows.stdCalls, /*json=*/true ),
                  ( rw::valueRefsCountKeyJson( chRows.valueRefs.rows.size() ) + rw::valueRefsDepthKeyJson( ing, chRows.valueRefs.depthCut, chVr )
-                   + rw::patternDispatchKeyJson( chRows.valueRefs.patternSites.size(), chRows.valueRefs.patternWideSites.size() ) ) );   // IX-3: the XML root's pattern counts
+                   + rw::patternDispatchKeyJson( chRows.valueRefs.patternSites.size(), chRows.valueRefs.patternWideSites.size() )   // IX-3: the XML root's pattern counts
+                   + rw::slotCallsKeyJson( chRows.valueRefs.slotSites.size() ) ) );   // IX-1: the XML root's slot_calls=
     rw::emitTo( stdout, "{}{}{}", pageDisclosure( pab, kPageDisclosureCap, pw.end - pw.begin, result.size(), pw.end,
                                   cfg.pageLimit, cfg.pageOffset, chDiscloseCap, kJsonPageSyntax ),
                  rw::graphCountFloorAttrJson( g ).c_str(),
@@ -253,7 +254,7 @@ inline int emitCallHierarchyAlt( const rw::Config& cfg, const rw::IngestResult& 
     printJsonSymbolRows( ing, result, pw.begin, pw.end, chRootPrefix, &chTested.testReach, nullptr, &chVia, &chAtKeys );
     rw::emitTo( stdout, "]{}{}{}{}}}", rw::declinedSitesJson( chDc, wantCallers, /*mcp=*/false ),
                  chIn.head + chIn.rows,   // ix2-slice: the closure blocks, JSON spelling
-                 rw::valueRefsJson( ing, chRows.valueRefs, wantCallers, chVr, "vrs", chVrNext ),
+                 rw::valueRefsJson( ing, chRows.valueRefs, wantCallers, chVr, "vrs", chVrNext ) + rw::slotCalleesJson( ing, chRows.valueRefs.slotSites, chVr ),   // IX-1: the <vs> rows
                  chHasLink ? rw::viaLinkNoteJson() : std::string() );
     return 0;
 }
@@ -333,6 +334,11 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                                                  : rw::CallersByteBand{};
         const PageWindow  pw = pageWindow( result.size(), rw::callHierarchyRowCap( cfg.pageLimit, result.size(), chBand.rowBytes ), cfg.pageOffset );
         const bool        chDiscloseCap = ( pw.end - pw.begin ) < result.size();
+        // QUALNAME-1: n="Owner.name" on a member row (memberowner.h) — the rows MF1-NX's <callers> block shares; its legend clause
+        // rides exactly when a shown row carries an owner.
+        const rw::MemberOwners chOwners( ing );
+        const bool             chHasOwner = std::any_of( result.begin() + std::ptrdiff_t( pw.begin ), result.begin() + std::ptrdiff_t( pw.end ),
+                                                         [ & ]( rw::NodeId id ) { return !chOwners.ownerOf( ing.symbols[ id ] ).empty(); } );
         char              pab[ kPageDisclosureCap ];
 
         const auto [ chNextSelector, chNextIsBare ] = rw::callHierarchyNextSelector( ing, chRows, sym, wantCallers );
@@ -389,11 +395,12 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             // of= and answers with ordinary rows, so the kind still needs its reading in that document.
             const bool chHasModScope = anyModuleScopeRow( ing, chPage ) || anyModuleScopeRow( ing, matches );
             // FE-B: exactly when a row on THIS page is via="name"
-            bool chHasVia = false;
+            bool chHasVia = false, chHasImpl = false;
             bool chHasLink = false;
-            for( std::size_t i = pw.begin; i < pw.end && ( !chHasVia || !chHasLink ); ++i )
+            for( std::size_t i = pw.begin; i < pw.end && ( !chHasVia || !chHasLink || !chHasImpl ); ++i )
             {
                 chHasVia  = chHasVia || chAttr.nameOnly( i );   // FE-B's via="name": every edge to the matches by name (defattrib.h, one pass)
+                chHasImpl = chHasImpl || chAttr.viaImpl( i );   // lane L6: via="impl", the one implementor in the tree
                 chHasLink = chHasLink || oneHopRowIsLink( g, matches, result[ i ], wantCallers );
             }
             const bool chHasMiss = rw::pageHasAnchorMiss( g, matches, result, pw.begin, pw.end, wantCallers );
@@ -404,18 +411,20 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                          rw::declinedCallsLegendForRows( chRows.declinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0, !chDc.empty(),
                                                            !wantCallers && rw::inertDeclinedMadeBy( g, matches ) > 0 )   // exactly when the root carries declined_calls=; the inert sentence only where THESE definitions made an inert quoted site
                            + rw::declinedSitesLegend( rw::declinedSitesLegendFlags( chDc, wantCallers, chDcCut ) ),   // and the <dc> rows, exactly when one rides
-                         std::string( rw::declinedIfaceLegend( chRows.declinedIface > 0 ) )   // likewise, exactly when declined_iface= is there
+                         std::string( rw::declinedIfaceLegend( chRows.declinedIface > 0 ) ) + rw::viaImplLegend( chHasImpl )   // likewise, exactly when declined_iface= / a via="impl" row is there
                            + rw::stdMemberCallsLegend( chRows.stdCalls.calls > 0 && !cfg.columnar ),   // and when the <stdm> line is (XML only)
                          ( std::string( rw::unprovenDefsLegend( chRows.unprovenDefs > 0 ) )      // H1: likewise, exactly when unproven_defs= is there
                            + rw::crossKindLegend( !chRows.crossKind.empty() )                      // hono-07: likewise for cross_kind=
                            + rw::viaNameLegend( chHasVia, false, cfg.columnar )                   // FE-B: likewise for via="name"
                            + rw::viaLinkLegend( chHasLink )
-                           + rw::defTableLegend( chAttr.groups.multi(), chListing.cut ) + rw::splitArmLegend( chHasSplit ) ).c_str(),   // attrib-multidef: likewise
+                           + rw::defTableLegend( chAttr.groups.multi(), chListing.cut ) + rw::splitArmLegend( chHasSplit )   // attrib-multidef: likewise
+                           + rw::memberOwnerLegend( chHasOwner ) ).c_str(),   // QUALNAME-1: likewise, exactly when a shown row names its owner
                          ( std::string( rw::modScopeLegend( chHasModScope ) )   // #60: likewise, exactly when a t="modscope" row is
                            + rw::callSitesAtLegend( chSites.any, chSites.anyCut, rw::kCallSitesPerRowCap ) ).c_str(),   // CALLSITE-AT: likewise for sites_at=/sites_total=
                          ( rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ) + rw::valueRefsLegend( !chRows.valueRefs.rows.empty(), wantCallers )
                            + rw::valueRefsDepthLegendFor( chRows.valueRefs )   // exactly when the root carries the depth disclosure
                            + rw::patternDispatchLegend( !chRows.valueRefs.patternSites.empty() || !chRows.valueRefs.patternWideSites.empty(), wantCallers )
+                           + std::string( rw::slotJoinLegend( wantCallers ? chRows.valueRefs.slotCallers : !chRows.valueRefs.slotSites.empty(), wantCallers ) )   // IX-1: exactly when a slot join rides
                            + std::string( rw::closureBlocksLegend( !chClosures.empty() ) ) ).c_str(),   // IX-3: exactly when pattern_dispatch= rides; ix2-slice: exactly when an <in> block rides
                          rw::rootRelPathsLegend( chSingleRoot ),
                          rw::multiRootTableLegend( ing.rootLabels.size() >= 2 ) );
@@ -443,7 +452,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
         // Reference-as-value round: value_refs= beside count= (never in it), absent at zero; the <vrs> window after the rows.
         const rw::VrRender   chVr { chSingleRoot, chRootPrefix };
         const std::string    chValueRefsAttr = ( rw::valueRefsCountAttrXml( chRows.valueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( ing, chRows.valueRefs.depthCut, chVr )   // + the depth cut that makes it a floor
-                                                 + rw::patternDispatchAttrXml( chRows.valueRefs.patternSites.size(), chRows.valueRefs.patternWideSites.size() ) );   // IX-3: template lookups, never in count=
+                                                 + rw::patternDispatchAttrXml( chRows.valueRefs.patternSites.size(), chRows.valueRefs.patternWideSites.size() )   // IX-3: template lookups, never in count=
+                                                 + rw::slotCallsAttrXml( chRows.valueRefs.slotSites.size() ) );   // IX-1: calls through a struct field, never in count=
         const std::string chVrNext = "--uses=" + std::string( sym );
         if( cfg.columnar || cfg.json )
         {
@@ -478,9 +488,10 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
             const std::string_view  rp = chSingleRoot ? rw::sarif::rootRelativeUri( ing.files[ s.fileId ], chRootPrefix ) : std::string_view( ing.files[ s.fileId ] );
             // A6: tested="1" only (never a literal 0) — the same absence-meaningful convention tested=
             // already follows everywhere else (serialize.h/verbs_for.h), so an untested row costs 0 bytes.
-            rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}{}{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
+            rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}{}{}{}/>", symTag( s.kind ), ex( rw::qualifiedMemberName( chOwners, s ) ).c_str(), ex( rp ).c_str(), s.line,
                          macroRoleAttr( s.kind ), rw::isTestedByReach( ing, chTested.testReach, result[i] ) ? " tested=\"1\"" : "",
                          std::string( viaEdgeAttr( chAttr.nameOnly( i ), oneHopRowIsLink( g, matches, result[ i ], wantCallers ) ) )
+                           + viaImplAttr( chAttr.viaImpl( i ) )   // lane L6: via="impl"
                            + anchorMissAttr( oneHopRowIsLink( g, matches, result[ i ], wantCallers, &g.outAnchorMiss ) ),
                          rw::splitArmAttrXml( chAttr.splitArm( i ) ), rw::ofDefAttrXml( chAttr.groups, chAttr.tokens, i ),   // attrib-multidef
                          chSites.any ? rw::callSitesAttrXml( chSites.tokens[ i - pw.begin ], chSites.totals[ i - pw.begin ] ) : std::string() );   // CALLSITE-AT
@@ -491,7 +502,8 @@ std::optional<int> runCallHierarchy( const MainDispatch& d )
                      rw::valueRefsXml( ing, chRows.valueRefs, wantCallers, chVr, chVrNext )
                        + ( wantCallers                  ? rw::patternDispatchXml( ing, chRows.valueRefs.patternSites, chVr )
                            : chRows.valueRefs.patternSites.empty() ? std::string()
-                                                         : rw::patternCalleesXml( ing, rw::PatternIndex( ing, rw::ValueRefIndex( ing ) ), chRows.valueRefs.patternSites, chVr ) ), tag );
+                                                         : rw::patternCalleesXml( ing, rw::PatternIndex( ing, rw::ValueRefIndex( ing ) ), chRows.valueRefs.patternSites, chVr ) )
+                       + rw::slotCalleesXml( ing, chRows.valueRefs.slotSites, chVr ), tag );   // IX-1: calls through a struct field (callees only)
         return 0;
     }
     return std::nullopt;
@@ -709,6 +721,14 @@ inline std::vector<char> usesChosenCallers( const rw::IngestResult& ing, const r
 // ONE use-site row: (file, line, role, enclosing canonical id). File scope ⇒ `in` empty.
 struct UseSite { std::uint32_t fileId; std::uint32_t line; rw::RefRole role; std::string in; rw::NodeId from; };   // from: the enclosing symbol (kNoNode at file scope) — rankUseSites' weight
 
+// The literal-receiver filter collectUseSites applies (issue #163 twin): `defs` are the in-repo definitions of the name, `declined`
+// (when set) counts the literal-receiver calls the filter dropped, for the declined_literal_calls= disclosure.
+struct LiteralUseFilter
+{
+    std::span<const rw::NodeId> defs;
+    std::size_t* declined = nullptr;
+};
+
 // The use-site scan: references whose NAME matches the selector and that carry a real use-site role. Markdown
 // doc-mentions / wikilinks and HAS-A compose edges are NOT name use-sites (excluded). Returns the rows in the
 // deterministic base order (tier, file path, line, role, enclosing-id; the --uses emitters then rank it, graph.h rankUseSites) plus `callSitesOfName` — the call-role
@@ -721,11 +741,10 @@ struct UseSite { std::uint32_t fileId; std::uint32_t line; rw::RefRole role; std
 // that never matched the row's own root-relative p=, the map's id=, or a git path — the M6/L1/M0-5 finding.
 //
 // `keptForwards` is Graph::keptForwards: a FORWARDED call reference (`f.call( … )` standing for `f( … )`) is a use-site only
-// where the resolver kept its call; a caller with no graph passes none, and every forwarded reference stays out, as before.
 inline std::pair<std::vector<UseSite>, std::size_t>
 collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span<const char> isChosenCaller,
                  std::string_view rootForId = {}, std::span<const rw::NodeId> valueDefs = {}, const rw::ValueRefIndex* valueIndex = nullptr,
-                 std::span<const std::uint32_t> keptForwards = {} )
+                 std::span<const std::uint32_t> keptForwards = {}, LiteralUseFilter literals = {} )
 {
     using namespace rw;
     std::vector<UseSite> sites;
@@ -754,6 +773,14 @@ collectUseSites( const rw::IngestResult& ing, const UsesSelector& sel, std::span
         if( r.role == RefRole::Call )
         {
             ++callSitesOfName;
+            if( rw::isBuiltinLiteralCall( ing, r, valueDefs, literals.defs ) )
+            {
+                if( literals.declined != nullptr )
+                {
+                    ++*literals.declined;
+                }
+                continue;
+            }
         }
         // the file: qualifier's call-role narrowing — and, since issue #164, a "::" spelling's too
         // (scopeNarrowed, the same file:name semantics off a scope-qualified selector). A file-scope call site
@@ -862,8 +889,10 @@ std::optional<int> runUses( const MainDispatch& d )
         // The value index is this verb's own, so the depth cut the --callers answer discloses (valuerefs.h) is read off the
         // SAME index the role="value" rows come from: a file nested past the walk's cap holds a use below it that no row shows.
         const rw::ValueRefIndex usVri( ing );
+        const std::vector<NodeId> literalDefs = ( sel.fileQualified || sel.scopeNarrowed ) ? rw::resolveAllByName( ing, sel.siteMatchName ) : std::vector<NodeId>{};
+        std::size_t usDeclinedLiteralCalls = 0;
         auto [ sites, callSitesOfName ] = collectUseSites( ing, sel, isChosenCaller,
-                                                           usSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, &usVri, g.keptForwards );
+                                                           usSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, &usVri, g.keptForwards, { literalDefs, &usDeclinedLiteralCalls } );
         const rw::ValueRefIndex::DepthCuts usDepthCut = usVri.depthCutsFor( defs );
         rw::rankUseSites( ing, g, sites );   // cut-fix C: most-depended-on sites first, so the cap drops the lightest
 
@@ -923,6 +952,7 @@ std::optional<int> runUses( const MainDispatch& d )
                      "{}{}{}-->{}{}", rw::kUsesLegendOpen,
                      ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Uses, usUnprovenDefs > 0 )           // H1: exactly when the root carries unproven_defs=
                        + rw::declinedCallsLegendWithGates( usDeclinedCalls > 0, g.gateDeclinedCalls > 0, g.stdMemberDeclinedCalls > 0 )                                // exactly when it carries declined_calls=
+                       + rw::declinedLiteralCallsLegend( usDeclinedLiteralCalls > 0 )
                        + rw::usesValueRoleLegend( std::any_of( sites.begin(), sites.end(), []( const UseSite& u ) { return u.role == RefRole::Value; } ) )
                        + rw::valueRefsDepthLegend( usDepthCut.files > 0 ) ).c_str(),   // exactly when the root carries the depth disclosure
                      rw::capLegendClause( rw::computePageDisclosure( pageRows, sites.size(), upw.end,
@@ -947,6 +977,7 @@ std::optional<int> runUses( const MainDispatch& d )
             // a markdown SECTION heading reaches routinely. Same shape as runImpact / the callers arm.
             const std::string attr = "of=\"" + ex( sym ) + "\" defs=\"" + std::to_string( defs.size() )
                                    + "\" external=\"" + ( external ? "1" : "0" ) + "\" count=\"" + std::to_string( sites.size() ) + "\""
+                                   + rw::declinedLiteralCallsAttrXml( usDeclinedLiteralCalls )
                                    + rw::unprovenDefsAttrXml( usUnprovenDefs )   // H1: where the XML root carries it
                                    + selectorAttrs + usRootAttr + upage + rw::graphCountFloorAttrXml( g )   // §H4 §3.4
                                    + rw::valueRefsDepthAttrXml( ing, usDepthCut, rw::VrRender{ usSingleRoot, usRootPrefix } );   // the depth cut that makes count= a floor; absent when none
@@ -954,8 +985,9 @@ std::optional<int> runUses( const MainDispatch& d )
             return 0;
         }
 
-        rw::emitTo( stdout, "<uses of=\"{}\" defs=\"{}\" external=\"{}\" count=\"{}\"{}{}{}{}{}{}>",
+        rw::emitTo( stdout, "<uses of=\"{}\" defs=\"{}\" external=\"{}\" count=\"{}\"{}{}{}{}{}{}{}>",
                      ex( sym ).c_str(), defs.size(), external ? 1 : 0, sites.size(),
+                     rw::declinedLiteralCallsAttrXml( usDeclinedLiteralCalls ).c_str(),
                      rw::unprovenDefsAttrXml( usUnprovenDefs ).c_str(),   // H1: beside the count it qualifies; absent at zero
                      selectorAttrs.c_str(), usRootAttr.c_str(), upage,
                      rw::graphCountFloorAttrXml( g ).c_str(),
@@ -1027,6 +1059,7 @@ struct SafeDeleteLegendFlags
     std::size_t valueRefs     = 0;       // value_refs= on the root (valuerefs.h): SYM is used as a value
     bool        patternDispatch = false; // IX-3: pattern_dispatch= / pattern_too_wide= on the root (valuerefs.h)
     bool        patternWideRows = false; // IX-3: the <pdw> rows ride (risk=hedged and a too-wide template can name SYM)
+    bool        slotJoin        = false; // IX-1: a <vr> row carries via=slot|slot-name
     bool        callersFloor  = false;   // callers_floor= on the root (countfloor.h): callers= may be short for THIS definition
     bool        usesFloor     = false;   // uses_floor= on the root: this kind's reads/type mentions are not indexed in this run
     bool        hasSitesAt    = false;   // a <c sites_at=> row is on this page (CALLSITE-AT)
@@ -1141,6 +1174,7 @@ inline void emitSafeDeleteLegend( std::size_t defCount, std::size_t unprovenDefs
                                + rw::declinedSitesLegend( flags.declinedSites );
     declinedClause += rw::valueRefsSafeDeleteLegend( flags.valueRefs > 0 );   // exactly when the root carries value_refs=
     declinedClause += rw::patternDispatchLegend( flags.patternDispatch, true, flags.patternWideRows );     // IX-3: exactly when the root carries pattern_dispatch=/pattern_too_wide=
+    declinedClause += rw::slotJoinLegend( flags.slotJoin, true );   // IX-1: exactly when a <vr> row carries via=
     declinedClause += rw::valueRefsDepthLegend( flags.valueRefDepthCut );      // exactly when it carries the depth disclosure
     declinedClause += safeDeleteFloorLegend( flags, risk );   // count-floor + CALLSITE-AT: present-only clauses
     rw::emitTo( stdout, "<!-- ripwire safe-delete: composes signals the tool already computes into one \"can I delete this?\" READ "
@@ -1274,8 +1308,10 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
     // selector grammar, unchanged.
     const UsesSelector        sel            = resolveUsesSelector( ing, cfg.safeDeleteSym, defs );
     const std::vector<char>   isChosenCaller = ( sel.fileQualified || sel.scopeNarrowed ) ? usesChosenCallers( ing, g, defs ) : std::vector<char>{};
+    const std::vector<NodeId> literalDefs = rw::resolveAllByName( ing, sel.siteMatchName );
+    std::size_t sdDeclinedLiteralCalls = 0;
     const auto                sitesPair      = collectUseSites( ing, sel, isChosenCaller,
-                                                                 sdSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, nullptr, g.keptForwards );
+                                                                 sdSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, nullptr, g.keptForwards, { literalDefs, &sdDeclinedLiteralCalls } );
                                                                                                // .second (the un-narrowed
                                                                                                // call-site total) is not read here;
                                                                                                // .in_id is unused on this verb too, root
@@ -1417,12 +1453,16 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                           SafeDeleteLegendFlags{ .singleRoot = sdSingleRoot, .hasUnindexed = rw::graphGaugeClauses( g ),
                                                  .hasModScope = anyModuleScopeRow( ing, std::span<const NodeId>( callerIds ).subspan( sdLw.begin, sdLw.end - sdLw.begin ) ),
                                                  .declinedCalls = sdDeclinedCalls, .gateDeclined = g.gateDeclinedCalls > 0, .stdDeclined = g.stdMemberDeclinedCalls > 0,
-                                                 .valueRefs = sdValueRefs.rows.size(), .patternDispatch = !sdPatterns.empty() || !sdWide.empty(), .patternWideRows = sdWideRows, .callersFloor = sdFloor.isFloor, .usesFloor = usesFloor,
+                                                 .valueRefs = sdValueRefs.rows.size(), .patternDispatch = !sdPatterns.empty() || !sdWide.empty(), .patternWideRows = sdWideRows, .slotJoin = sdValueRefs.slotCallers, .callersFloor = sdFloor.isFloor, .usesFloor = usesFloor,
                                                  .hasSitesAt = sdSites.any, .sitesCut = sdSites.anyCut, .valueRefDepthCut = sdValueRefs.depthCut.files > 0,
                                                  .defTable = sdAttr.groups.multi(), .defTableCut = sdListing.cut, .splitArms = sdHasSplit,
                                                  .linkRows = sdHasLink, .anchorRows = sdHasMiss,
                                                  .declinedSites = rw::declinedSitesLegendFlags( sdDc, /*callersForm=*/true, sdDcCut ) } );
 
+    if( sdDeclinedLiteralCalls > 0 )
+    {
+        rw::emitTo( stdout, "<!-- ripwire safe-delete: {}risk= describes retained evidence after these exclusions. -->", rw::declinedLiteralCallsLegend( true ) );
+    }
     const Symbol&      lead = ing.symbols[ defs[0] ];   // resolveAllByNameQualified walks ascending id — defs[0] is the
                                                         // lowest, same convention --impact/--uses/--callers's of=/defs=
                                                         // pairing relies on for orientation when defs > 1.
@@ -1445,7 +1485,7 @@ std::optional<int> runSafeDelete( const MainDispatch& d )
                 defs.size(), callerIds.size(), sdCallersFloorAttr, ambiguousCallers, reach.size(), sites.size(), sdUsesFloorAttr,
                 testedSelf ? 1 : 0, radiusTested, radiusUntested, deadCodeCandidate ? 1 : 0, risk,
                 rw::unprovenDefsAttrXml( sdUnprovenDefs ).c_str(),   // H1: beside the verdict it qualifies; absent at zero
-                ( rw::declinedCallsAttrXml( sdDeclinedCalls ) + rw::declinedSiteCutAttrXml( sdDcCut ) ).c_str(), // beside risk= too: declined calls that may reach it (+ the <dc> cut); absent at zero
+                ( rw::declinedCallsAttrXml( sdDeclinedCalls ) + rw::declinedSiteCutAttrXml( sdDcCut ) + rw::declinedLiteralCallsAttrXml( sdDeclinedLiteralCalls ) ).c_str(), // beside risk= too: declined calls that may reach it (+ the <dc> cut); absent at zero
                 ( rw::valueRefsCountAttrXml( sdValueRefs.rows.size() ) + rw::valueRefsDepthAttrXml( ing, sdValueRefs.depthCut, sdVr )
                   + rw::patternDispatchAttrXml( sdPatterns.size(), sdWide.size() ) ), // value uses + IX-3 template lookups: never in callers=/impact_reaches=; absent at zero
                 pageDisclosure( cab, sizeof( cab ), cw.end - cw.begin, callerIds.size(), cw.end, cfg.pageLimit, cfg.pageOffset, true ),
@@ -2065,8 +2105,10 @@ std::optional<int> runVerify( const MainDispatch& d )
         const std::vector<NodeId> defs = resolveAllByNameQualified( ing, sym, &vfUnprovenDefs );   // H1: the residue --uses discloses
         const UsesSelector        sel  = resolveUsesSelector( ing, sym, defs );
         const std::vector<char>   isChosenCaller = ( sel.fileQualified || sel.scopeNarrowed ) ? usesChosenCallers( ing, g, defs ) : std::vector<char>{};
+        const std::vector<NodeId> literalDefs = rw::resolveAllByName( ing, sel.siteMatchName );
+        std::size_t vfDeclinedLiteralCalls = 0;
         const auto [ sites, callSitesOfName ]    = collectUseSites( ing, sel, isChosenCaller,
-                                                                     verSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, nullptr, g.keptForwards );
+                                                                     verSingleRoot ? std::string_view( cfg.roots[0] ) : std::string_view{}, defs, nullptr, g.keptForwards, { literalDefs, &vfDeclinedLiteralCalls } );
         (void) callSitesOfName;
         if( defs.empty() && sites.empty() )
         {
@@ -2074,12 +2116,17 @@ std::optional<int> runVerify( const MainDispatch& d )
                           "ripwire: --verify symbol not found: " + std::string( sym ) ).c_str() );
             return 1;
         }
+        if( vfDeclinedLiteralCalls > 0 )
+        {
+            rw::emitTo( stdout, "<!-- ripwire verify: {}verdict= describes retained evidence after these exclusions. -->", rw::declinedLiteralCallsLegend( true ) );
+        }
         const bool        external = defs.empty() && sel.defsOfName == 0;
         const std::size_t total    = sites.size();
         const PageWindow  w        = pageWindow( total, kEvidenceCap, 0 );
         const std::string facts    = " defs=\"" + std::to_string( defs.size() ) + "\" external=\"" + ( external ? "1" : "0" )
                                    + "\" count=\"" + std::to_string( total ) + "\""
-                                   + rw::unprovenDefsAttrXml( vfUnprovenDefs );   // H1: beside the count it qualifies; absent at zero
+                                   + rw::unprovenDefsAttrXml( vfUnprovenDefs )
+                                   + rw::declinedLiteralCallsAttrXml( vfDeclinedLiteralCalls );   // H1: beside the count it qualifies; absent at zero
         const bool        anySites = total > 0;
         const char*       verdict  = claim.shape == verify::ClaimShape::Uses ? ( anySites ? "confirmed" : "not-established" )
                                                                         : ( anySites ? "refuted"   : "not-established" );
@@ -2296,9 +2343,9 @@ accumulateExternalSurface( const rw::IngestResult& ing, const rw::HashMap<std::s
             continue; // type edge / doc mention / an element access (its operator is a builtin's unless graph.h proves the class) / a name
                       // template (`watch_*`: a glob, never a name) — not a code reference
         }
-        if( r.lang == Lang::Markdown )
+        if( r.lang == Lang::Markdown || isSlotJoinRecord( r ) )
         {
-            continue; // markdown link — not a code reference
+            continue; // markdown link, or an IX-1 slot record (its name is a receiver variable) — not a code reference
         }
         if( r.calleeName.empty() )
         {
@@ -2538,7 +2585,7 @@ std::optional<int> runPath( const MainDispatch& d )
                      "graph holds none. {}{}{}{}-->{}", ( rw::unprovenDefsVerbLegend( rw::UnprovenDefsVerb::Path, pthUnprovenDefs > 0 ) + rw::viaNameLegend( pthHasVia )
                                                          + rw::viaLinkLegend( pthHasLink ) + rw::anchorMissLegend( pthHasMiss )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to )
-                                                         + rw::pathOwnerLegend( rw::anyPathHopOwner( pthOwners ) ) ).c_str(),
+                                                         + rw::memberOwnerLegend( rw::anyPathHopOwner( pthOwners ) ) ).c_str(),
                      ( std::string( rw::toValueRefsLegend( pthToValueRefs.count > 0 ) ) + rw::valueRefsDepthLegend( pthToValueRefs.depthCut.files > 0 ) ).c_str(),
                      ( std::string( rw::pathGapsLegend( pthGaps.any() ) ) + std::string( rw::pathBridgeLegend( pthBridge.found() ) )
                        + std::string( rw::nearSinkLegend( !pthNear.rows.empty() ) ) + std::string( rw::pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
@@ -2880,6 +2927,7 @@ int emitImpactXml( const ImpactView& v )
                  rw::nextAttrXml( rw::nextFlag( "--safe-delete=", v.sym ) ).c_str() );   // P3 (L7): "is it safe to change" → "can it go"
     rw::emitRaw( stdout, rw::defTableXml( v.ing, v.attrib.groups, v.defListing, v.rootPrefix ).c_str() );   // attrib-multidef: the groups, by ix=
     rw::emitImpactFileRollupXml( stdout, v.ing, v.fileRollup, v.rootPrefix );   // idea #6: before the symbol window
+    const rw::MemberOwners imOwners( v.ing );   // QUALNAME-1: n="Owner.name" on a member row (memberowner.h)
     for( std::size_t i = v.page.begin; i < v.page.end; ++i )
     {
         const Symbol&          s  = v.ing.symbols[ v.show[i] ];
@@ -2887,7 +2935,7 @@ int emitImpactXml( const ImpactView& v )
                                                  : std::string_view( v.ing.files[ s.fileId ] );
         // A6: tested="1" only (never a literal 0) — see kTestedRowLegend. 0.6.5: d= the row's hop depth, run-length (graph.h depthRunAttrXml).
         const bool imLink = rw::impactDirectLink( v.g, v.seeds, v.depth, v.show[ i ] );
-        rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}{}/>", symTag( s.kind ), ex( s.name ).c_str(), ex( rp ).c_str(), s.line,
+        rw::emitTo( stdout, "<s t=\"{}\" n=\"{}\" p=\"{}:{}\"{}{}{}{}/>", symTag( s.kind ), ex( rw::qualifiedMemberName( imOwners, s ) ).c_str(), ex( rp ).c_str(), s.line,
                      rw::depthRunAttrXml( v.show, v.depth, i, v.page.begin ),
                      rw::isTestedByReach( v.ing, *v.testReach, v.show[i] ) ? " tested=\"1\"" : "",
                      std::string( viaEdgeAttr( rw::impactRowNameOnly( v.provenReach, v.show[i] ), imLink ) )
@@ -2935,10 +2983,12 @@ inline void emitImpactLegend( const rw::Config& cfg, const rw::IngestResult& ing
                  ( std::string( rw::modScopeLegend( imHasModScope ) )
                    + rw::impactRollupLegend( !imFiles.rows.empty() && !cfg.columnar, imports.umbrella, rw::impactRollupHedged( imFiles ),
                                              !imports.next.empty() && !cfg.columnar, rw::ImpactRollupTypeClauses{ imFiles.typed, imFiles.typeDefs, imFiles.typeCapped } )
-                   + rw::defTableLegend( imAttr.groups.multi(), imListing.cut ) ).c_str(),
+                   + rw::defTableLegend( imAttr.groups.multi(), imListing.cut )
+                   + rw::memberOwnerLegend( rw::anyMemberOwnerRow( ing, std::span<const rw::NodeId>( show ).subspan( imPage.begin, imPage.end - imPage.begin ) ) ) ).c_str(),   // QUALNAME-1
                  ( std::string( rw::valueRefsReachLegend( !imValueRefs.rows.empty() ) )
                    + rw::valueRefsDepthLegendFor( imValueRefs )
-                   + rw::patternDispatchLegend( !imValueRefs.patternSites.empty() || !imValueRefs.patternWideSites.empty(), true ) ).c_str(),   // IX-3: exactly when pattern_dispatch=/pattern_too_wide= rides
+                   + rw::patternDispatchLegend( !imValueRefs.patternSites.empty() || !imValueRefs.patternWideSites.empty(), true )   // IX-3: exactly when pattern_dispatch=/pattern_too_wide= rides
+                   + std::string( rw::slotJoinLegend( imValueRefs.slotCallers, true ) ) ).c_str(),   // IX-1: exactly when a <vr> row carries via=slot|slot-name
                  rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
 }
 

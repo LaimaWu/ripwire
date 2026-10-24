@@ -144,7 +144,13 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strictly above every number a train-30 build used: lane call-result-typing
+constexpr std::uint32_t kCacheVersion = 39;           // 39: train 33 — strictly above main 36 and every live value (lane l6-iface 38, #427 / #429 38): the
+                                                      //    l6-iface record change (LocalBindKind DispatchType + ImplBlock, appended) lands; no other train-33 lane changed a format.
+                                                      // 38: train 32 lane l6-iface fix round 1 (train renumbers) — LocalBindKind gained ImplBlock
+                                                      //    (appended): an older binary would reject the byte, a newer must not read a blob that predates it as complete.
+                                                      // 37: train 32 lane l6-iface (train renumbers) — LocalBindKind gained DispatchType
+                                                      //    (appended): an older binary would reject the byte, a newer must not read a blob that predates it as complete.
+                                                      // 36: train 30 — strictly above every number a train-30 build used: lane call-result-typing
                                                       //    33 (RawBind resultIndex + unwrapDepth), lane fcall-forward 33, lane name-template-dispatch 35
                                                       //    (RefRole Pattern 11), main 34; so no blob a branch build wrote is read here.
                                                       // 35: train 30 lane name-template-dispatch (train renumbers) — RefRole gained
@@ -345,7 +351,31 @@ constexpr std::uint32_t kCacheVersion = 36;           // 36: train 30 — strict
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 206;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 224;          // bump on any grammar/.scm/extraction change
+                                                      // 224 = 2026-10-23 (train 33: ls2-size-targets, fc1-std-qualified-name, ix5-classnew, mf1-nx, qn1-qualname, l6-iface,
+                                                      //   changelog-fragments): strictly above every live number — main 220 (rich 221), lane ind5-glob-imports 222 (223, reserved),
+                                                      //   #420 214 (215), #426 / lane fc1 216 (217), lane ind4b / fc3-js-rebind 218 (219), lane l6-iface and #429 212 (213).
+                                                      //   Rich file tag 225. Mandatory: l6-iface adds DispatchType / ImplBlock records (kCacheVersion 39) and fc1 changes what a
+                                                      //   Rust qualified call result resolves to, so a 220 cache would replay the older facts.
+                                                      // 220 = 2026-10-22 (train 32b: ix1-slot + cppqual-alarm): strictly above every live number — main 212 (rich 213),
+                                                      //   lane ix1-slot 204 (205), #420 214 (215), #426 / lane fc1 216 (217), lane ind4b 218 (219), lane l6-iface 212 (213).
+                                                      //   Rich file tag 221. Mandatory for IX-1: its fix rounds changed slot extraction under the one 204 reservation, so a
+                                                      //   stale 204 cache would bring back the typedef-vs-tag and two-bodies joins. kCacheVersion stays 36: IX-1 rides
+                                                      //   memberPath/memberCtor of the existing value/through records (no record format changed); cppqual-alarm is test-only.
+                                                      // 212 = 2026-10-21 (train 32a: member-names + rust-receivers): strictly above every live number — main 206 (rich 207),
+                                                      //   lane rust-receivers 202 (203), lane ix1-slot 204 (205), lane l6-iface 210 (211); #420 reserves 214 (215), so train
+                                                      //   32b can go above. Rich file tag 213. kCacheVersion stays 36: neither lane changed a record format (rust-receivers
+                                                      //   writes ReturnType isFromAssignment in an existing byte; member-names is output only).
+                                                      // 212 = 2026-10-21 (lane l6-iface fix round 1, rich 213; the train renumbers): an ImplBlock record
+                                                      //   (model.h) for every Rust `impl T for X` block (its span), a Rust trait under a mock attribute, a Java
+                                                      //   anonymous class, a Kotlin object expression and a Kotlin `fun interface` (ingest_relations.h
+                                                      //   rustImplVisitNode, ingest_binds.h anonymousImplementorOf).
+                                                      // 210 = 2026-10-19 (train 32 lane l6-iface, reservation 210 / rich 211; the train renumbers):
+                                                      //   Rust records a DispatchType (model.h) for a parameter, `let` or struct field typed `&dyn T`,
+                                                      //   `Box<dyn T>`, `impl T` or a generic bounded by T (ingest_binds.h rustDispatchTrait) in place of
+                                                      //   its tombstone.
+                                                      //   Merge of main cd11226a: strictly above main 206 (rich 207) and lane rust-receivers 202 (203). kCacheVersion 37 is
+                                                      //   above main's 36 (main appended AugAssign / OperatorResult; DispatchType follows them).
                                                       // 206 = 2026-10-18 (#409, PR #414, renumbered again at merge with main 939dbb69): strictly above every
                                                       //   live number — main 196 (rich 197), train 31 198 (199), lane rust-receivers 202 (203), lane ix1-slot
                                                       //   204 (205). Rich file tag 207. kCacheVersion stays 36 (no record format change).
@@ -356,6 +386,18 @@ constexpr std::uint32_t kParserVer    = 206;          // bump on any grammar/.sc
                                                       // 185 = 2026-10-18 (#409): a cross-file markdown [text](other.md#slug) keeps the link as
                                                       //   written (RawRef::memberPath, unbound) so graph.h pins the exact file + heading.
                                                       //   185, not 184: 184 is train 29. Rich file tag 186. kCacheVersion stays 34.
+                                                      // 202 = 2026-10-18 (train 32 lane rust-receivers, reservation 202 / rich 203; the train renumbers):
+                                                      //   Rust records a typed RecvType for a parameter / `let x: T` / `let x = T { .. }` / `T::default()`
+                                                      //   written or constructed as a type, and a MemberType for a struct's named field (ingest_binds.h
+                                                      //   captureRustEvidence); a written or declared `Self` and a generic's head name their class.
+                                                      //   Fix round 1 changes the CONTENT under the same 202 (lane dev caches only; the train renumbers): a Rust
+                                                      //   CallResult's importedName is the call's WRITTEN qualifier path, and a ReturnType's isFromAssignment
+                                                      //   marks a result written `Self` — a cache from a pre-fix-round 202 build reads every result as not-Self.
+                                                      //   kCacheVersion unchanged (no record format changes).
+                                                      // 204 = 2026-10-18 (train 32 lane ix1-slot, IX-1 slot-type join; train renumbers): C/C++ value rows
+                                                      //   whose slot is a struct field carry memberPath/memberCtor, calls through a struct field are
+                                                      //   Through records (qualifier 's'), and struct field types / typedef aliases are slot facts
+                                                      //   (Value, qualifier 't'). Same record layout: kCacheVersion unchanged. Rich file tag 205.
                                                       // 196 = 2026-10-18 (train 30): strictly above every number a live build used — main 184 (rich 185),
                                                       //   lane call-result-typing 180 (rich 181), lane fcall-forward 188 (189), lane go-local-var 190 (191),
                                                       //   lane name-template-dispatch 192 (193), lane h1-annot (train 31) 194 (195); tail-sym and

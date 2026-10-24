@@ -199,7 +199,11 @@ PY
 # body-fold (train 31; rule 4, by design): the conceptual answer now ends with <fold kind="bodies"> (forbodyfoldcheck owns it).
 # The golden stays the pre-fold answer byte for byte — (f) reads it off the fold-off twin — and (f-fold) pins that the default
 # answer is that twin plus the fold, its legend clause, the <sigs> next pair and est_tokens, nothing else.
-RIPWIRE_NO_BODY_FOLD=1 "$BIN" docdemotefix --for="$CONCEPTQ" --no-cache --legend=full >"$TMP/conceptoff.xml" 2>/dev/null
+# member-names (train 32; rule 4, by design): owner rows may carry mem= (formembernamescheck owns it). The golden stays the pre-names
+# answer too — the twin runs with RIPWIRE_NO_MEMBER_NAMES=1 — and (f-fold) masks the names and their clause (an owner the fold serves
+# carries none, so the fold and the names are read together), plus (f-names) the default with the names off is that twin plus the fold.
+RIPWIRE_NO_BODY_FOLD=1 RIPWIRE_NO_MEMBER_NAMES=1 "$BIN" docdemotefix --for="$CONCEPTQ" --no-cache --legend=full >"$TMP/conceptoff.xml" 2>/dev/null
+RIPWIRE_NO_MEMBER_NAMES=1 "$BIN" docdemotefix --for="$CONCEPTQ" --no-cache --legend=full >"$TMP/conceptnn.xml" 2>/dev/null
 "$BIN" docdemotefix --for="$BUGQ" --no-route --no-cache --legend=full >"$TMP/noroutefor.xml" 2>/dev/null
 "$BIN" docdemotefix --recall="$BUGQ" --no-cache >"$TMP/recall.xml" 2>/dev/null
 
@@ -279,7 +283,7 @@ grep -q 'doc_tier="' "$TMP/conceptc.xml" \
 diff -q "$TMP/conceptoff.xml" "$ROOT/test/docdemotegolden_for.xml" >/dev/null \
     && ok "(f) conceptual --for (fold-off twin) byte-identical to the pre-change golden" \
     || no "(f) conceptual --for (fold-off twin) drifted from test/docdemotegolden_for.xml"
-if python3 - "$TMP/concept.xml" "$TMP/conceptoff.xml" <<'PYF'
+cat > "$TMP/ffold.py" <<'PYF'
 import re, sys
 t, o = open(sys.argv[1]).read(), open(sys.argv[2]).read()
 if '<fold kind="bodies"' not in t: sys.exit(1)
@@ -288,10 +292,17 @@ t = re.sub(r'; fold kind=bodies:.*?sigs_next= the signatures-only re-call', '', 
 m = re.search(r'<sigs\b[^>]*>', t)
 if m: t = t[:m.start()] + re.sub(r' next="--expand=[^"]*"', '', m.group(0)).replace(' sigs_next="', ' next="') + t[m.end():]
 t = t.replace('[sigs sigs_next=: one', '[sigs next=: one')
+names = len(sys.argv) > 3   # (f-fold): the member names (mem=, its clause) masked; (f-names) runs with them off and masks nothing
+if names:
+    t = re.sub(r' mem="[^"]*"( mem_more="\d+")?', '', t)
+    t = re.sub(r'; mem= on an owner d row:[^;]*?mem_more= the member names not listed', '', t)
 mask = lambda x: re.sub(r' est_tokens="\d+"', '', x)
 sys.exit(0 if mask(t) == mask(o) else 1)
 PYF
-then ok "(f-fold) the default conceptual answer is the golden's answer plus the fold, nothing else moved"; else no "(f-fold) the default conceptual answer differs from its fold-off twin outside the fold"; fi
+if python3 "$TMP/ffold.py" "$TMP/concept.xml" "$TMP/conceptoff.xml" mask-names
+then ok "(f-fold) the default conceptual answer is the golden's answer plus the fold and the member names, nothing else moved"; else no "(f-fold) the default conceptual answer differs from its fold-off twin outside the fold and the member names"; fi
+if python3 "$TMP/ffold.py" "$TMP/conceptnn.xml" "$TMP/conceptoff.xml"
+then ok "(f-names) names off: the default conceptual answer is the golden's answer plus the fold, unmasked"; else no "(f-names) names off: the default answer differs from its fold-off twin outside the fold"; fi
 # (f) one row spelling: every r= row of a --for answer omits a zero cx=/ccx=/in= (the lens legend: absent = 0), the rows
 # the code-above-docs reorder moved and re-headed (serialize.h reorderDocsAfterCode) included. This routed question
 # moves the two notes/paging_design.md rows below the code.
