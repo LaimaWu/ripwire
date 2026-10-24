@@ -929,6 +929,10 @@ struct Reference
     //   Function/Method (no via="name", no class/const/object target): an import proves a binding, not a function.
     //   Sits beside memberFactory in the alignment padding before baseBind: sizeof(Reference) is unchanged.
     bool          forwarded = false;
+    // #155 (test/kotlincheck.sh §15, test/falseedgecheck.sh arm J): a Kotlin call whose lambda is written AFTER the argument list
+    //   (`s.run { }`, `with( x ) { }`); the trailing lambda of a stdlib scope function. graph.h FalseEdgeRules' Kotlin arm drops
+    //   the Java-method edge such a call would bind.
+    bool          trailingLambda = false;
     // lane lego-transitive fix 1 (test/legotransitivecheck.sh NS arms), an INHERIT ref only (isInherit): the same-file declaration
     //   the base name binds to by the language's lexical lookup, as 1 + the byte its name starts at (ingest_relations.h
     //   localBaseBinding; 0 = no enclosing scope declares it, 0xFFFFFFFF = a scope too large to read, nothing proven). On an

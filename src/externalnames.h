@@ -375,6 +375,26 @@ inline constexpr std::string_view kRustStdMemberNames[] = {
     "to_uppercase", "to_vec", "trim", "unwrap", "unwrap_or", "unwrap_or_default", "unwrap_or_else", "values"
 };
 
+// ── THE KOTLIN SCOPE-FUNCTION TABLE (graph.h FalseEdgeRules, the Kotlin arm; gate test/kotlincheck.sh §15 and test/falseedgecheck.sh
+// arm J). A Kotlin call with a TRAILING lambda to one of these names is the stdlib scope function, never a Java method of the same
+// name: `s.run { }`, `with( sb ) { }`, `s?.let { }`, `xs.also { }`. The fact is the call's trailing lambda (ingest_metrics.h
+// kotlinTrailingLambda); the name alone is never a veto — `block.run()` on a Runnable has no lambda and keeps its edge.
+// PROVENANCE: the five functions the Kotlin documentation names as scope functions — "There are five of them: let, run, with,
+// apply, and also" (https://kotlinlang.org/docs/scope-functions.html, read 2026-10-24) — each an inline function of kotlin-stdlib
+// 2.4.0 (https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.4.0/kotlin-stdlib-2.4.0.jar), class
+// kotlin.StandardKt__StandardKt. Regenerated and diffed by ONE command, which prints exactly these five names:
+//     javap -p -cp kotlin-stdlib-2.4.0.jar kotlin.StandardKt__StandardKt | sed -n 's/.* \([a-z][A-Za-z]*\)(.*/\1/p' | grep -xE 'let|run|with|apply|also' | LC_ALL=C sort -u
+// takeIf, takeUnless, repeat and use stay OUT: the documentation does not call them scope functions, and no corpus evidence joined them.
+// 5 names; sorted by byte.
+inline constexpr std::string_view kKotlinScopeFunctionNames[] = { "also", "apply", "let", "run", "with" };
+static_assert( std::is_sorted( std::begin( kKotlinScopeFunctionNames ), std::end( kKotlinScopeFunctionNames ), rw::sortutil::svLess )
+               && std::adjacent_find( std::begin( kKotlinScopeFunctionNames ), std::end( kKotlinScopeFunctionNames ) ) == std::end( kKotlinScopeFunctionNames ),
+               "kKotlinScopeFunctionNames must be strictly sorted (binary search)" );
+inline bool isKotlinScopeFunction( std::string_view name ) noexcept
+{
+    return std::binary_search( std::begin( kKotlinScopeFunctionNames ), std::end( kKotlinScopeFunctionNames ), name, rw::sortutil::svLess );
+}
+
 // The standard templates whose `->` reaches their FIRST template argument, so a `->` call through a declaration written
 // `std::unique_ptr<ns::List>` / `std::shared_ptr<…>` / `std::optional<…>` may be a member of that argument (graph.h
 // StdMemberGate::stdArrowPointee reads the declaration's recorded text). std::weak_ptr and std::reference_wrapper have no
