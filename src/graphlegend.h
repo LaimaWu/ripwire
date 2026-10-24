@@ -709,6 +709,17 @@ inline constexpr const char* kDeclinedSitesSideClause =
     "gate=side: a Ruby call whose in-reach definitions answer on the other side of self. ";
 inline constexpr const char* kDeclinedSitesNameGateClause =
     "gate=builtin|std: declined by the builtin-method or the standard-member name gate (per-language name lists, C++ and Rust). ";
+// lane L6 (ifacedispatch.h): the interface-typed dispatch rows, and a generic receiver's bound
+inline constexpr const char* kDeclinedSitesIfaceClause =
+    "gate=\"iface\": the receiver's recorded type is an interface, trait or abstract class, and cands=K counts the methods of the called name its implementors in this tree own (and its own default): K implementors of the receiver's interface; which one runs is unproven. K is a floor where a type conforms with no implements clause (a TypeScript object literal or matching class is not counted). Never a by-name list. ";
+inline constexpr const char* kDeclinedSitesBoundClause =
+    "bound=\"G: T\": the receiver is a generic G bounded by trait T; its candidates are T's implementors', never resolved by name. ";
+inline constexpr const char* kDeclinedSitesIfaceClauseMcp =
+    "gate iface: the receiver's recorded type is an interface, trait or abstract class, and cands counts the methods of the called name its implementors in this tree own (and its own default): K implementors of the receiver's interface; which one runs is unproven; K is a floor where a type conforms with no implements clause (TypeScript). bound (G: T): a generic receiver bounded by trait T. ";
+// lane L6: an edge via="impl" — the one implementor in the tree (a row of the callers / callees answers, a map <c>)
+inline constexpr const char* kViaImplLegend =
+    "via=\"impl\" on a row: the receiver's recorded type is an interface, trait or abstract class whose only implementor in this tree owns the called method, so the edge is to it; an implementor outside the tree, or one a macro writes, may exist. ";
+inline const char* viaImplLegend( bool on ) noexcept { return on ? kViaImplLegend : ""; }
 inline constexpr const char* kDeclinedSitesOfDefCallees =
     "of_def=K on a <dc>: the definition (ix=K) making the call, a fact. ";
 inline constexpr const char* kDeclinedSitesOfDefCallers =
@@ -729,6 +740,8 @@ struct DeclinedSitesLegendFlags
     bool ofDef = false; // a row carries of_def=
     bool cut = false; // the root carries dc_shown= / dc_next=
     bool cand = false; // a row carries cand= (legend full)
+    bool iface = false; // a row says gate="iface" (lane L6)
+    bool bound = false; // a row carries bound= (lane L6)
 };
 // train 28 (declined-sites review N3): the MCP twins carry the same sites as "declined_sites" entries with their own keys, so
 // their declined_note names those keys ({name, line, cands, via} / {in, file, line, cands}) instead of the XML attributes.
@@ -756,6 +769,8 @@ inline std::string declinedSitesLegend( const DeclinedSitesLegendFlags& f, bool 
     out += f.callersForm ? ( mcp ? kDeclinedSitesCallersFormMcp : kDeclinedSitesCallersForm ) : ( mcp ? kDeclinedSitesCalleesFormMcp : kDeclinedSitesCalleesForm );
     out += f.side ? kDeclinedSitesSideClause : "";
     out += f.nameGate ? kDeclinedSitesNameGateClause : "";
+    out += f.iface ? ( mcp ? kDeclinedSitesIfaceClauseMcp : kDeclinedSitesIfaceClause ) : "";
+    out += f.bound && !mcp ? kDeclinedSitesBoundClause : "";
     out += f.ofDef ? ( f.callersForm ? ( mcp ? kDeclinedSitesOfDefCallersMcp : kDeclinedSitesOfDefCallers )
                                      : ( mcp ? kDeclinedSitesOfDefCalleesMcp : kDeclinedSitesOfDefCallees ) )
                    : "";
@@ -1129,12 +1144,13 @@ inline constexpr const char* kPathUnboundLegend =
     "An endpoint with several definitions that nothing bound prints no from_p or to_p: unreached, or (to) reached only through a "
     "split or by-name hop. ";
 inline const char* pathUnboundLegend( bool on ) noexcept { return on ? kPathUnboundLegend : ""; }
-// PATH-OWNERS (defattrib.h pathHopOwners): rides only when a hop row carries an owner, so an owner-free answer is unchanged.
-inline constexpr const char* kPathOwnerLegend =
-    "n=Owner.name on a hop: its definition's scope names a class, struct, interface, named type or module the index defines in "
-    "that language (Owner = the scope's last segment, the spelling a selector takes); a bare n= is a free function, a type, or a "
-    "member of a scope the index defines no such owner for (a C++ namespace, or a language whose defs carry no sc=). ";
-inline const char* pathOwnerLegend( bool on ) noexcept { return on ? kPathOwnerLegend : ""; }
+// QUALNAME-1 (memberowner.h MemberOwners; train 30's PATH-OWNERS widened): rides only when a row carries an owner, so an owner-free
+// answer is unchanged. One clause for every row kind that prints one (--path hops, --callers/--callees/--impact rows).
+inline constexpr const char* kMemberOwnerLegend =
+    "n=Owner.name on a row: Owner is its stored scope, shown when the index defines that name as a type or module in that language "
+    "(Owner::name C/C++/Rust, Owner#name Ruby, a singleton too; a C++ namespace sharing a name with a class prints alike); "
+    "bare: a free function, a type, a closure, or no such owner. ";
+inline const char* memberOwnerLegend( bool on ) noexcept { return on ? kMemberOwnerLegend : ""; }
 
 // ── issue #60: the module-scope owner's clause, emitted exactly when a t="modscope" ROW is in the answer ──
 // A file-scope call (a top-level statement, or a call inside an anonymous callback body) used to have no

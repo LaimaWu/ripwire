@@ -34,6 +34,12 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-23, train 33 (ls2-size-targets, fc1-std-qualified-name, ix5-classnew, mf1-nx, qn1-qualname, l6-iface,
+#   changelog-fragments merged onto main 004b4c6b): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (08e348d9d8…5b208 ->
+#   3e88ca157f…36842). Watched text: kParserVer 220 -> 224 (rich file tag 225; above main 220 / 221, lane ind5-glob-imports
+#   222 / 223, #420 214 / 215, #426 and lane fc1 216 / 217, lane ind4b 218 / 219, lane l6-iface and #429 212 / 213) and
+#   kCacheVersion 36 -> 39 (l6-iface's DispatchType / ImplBlock records; above every live 38), quality.h's two mirrors with them.
+#   kQSnapCacheScheme stays 22: no watched quality.h function moved. The l6-iface lane's pin is superseded by this one.
 # 2026-10-22, train 32b (ix1-slot 907e7297 merged onto main 320f8d8f; cppqual-alarm is test-only): RE-DERIVED ONCE with
 #   UPDATE_GOLDEN=1 on the merged tree (c4422a58e4…2d607 -> 08e348d9d8…5b208). Watched text: kParserVer 212 -> 220 (rich file
 #   tag 221; above main 212 / 213, lane ix1-slot 204 / 205, #420 214 / 215, #426 and lane fc1 216 / 217, lane ind4b 218 / 219,

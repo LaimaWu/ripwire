@@ -122,6 +122,17 @@ inline bool isStructOrNamedType( SymKind k ) noexcept
     return k == SymKind::Struct || k >= SymKind::NamedType;
 }
 
+// The last segment of a scope (Symbol::scope) as written ("outer::Scanner" or "pkg.Outer" -> the innermost owner): the spelling the selector
+// resolves as Owner.name (graph.h scopeSuffixMatches).
+inline std::string_view scopeLastSegment( std::string_view sc ) noexcept
+{
+    const std::size_t colons = sc.rfind( "::" );
+    const std::size_t dot    = sc.rfind( '.' );
+    const std::size_t cut    = colons == std::string_view::npos ? ( dot == std::string_view::npos ? 0 : dot + 1 )
+                                                                : ( dot == std::string_view::npos || dot < colons ? colons + 2 : dot + 1 );
+    return sc.substr( cut );
+}
+
 // #324: a ModuleScope owner is SYNTHETIC (comment above the enum) — a CALLER minted after the tags.scm pass,
 // never something a test (or anything else) can name or invoke, so it can never be discharged as a test
 // obligation. It is legitimate wherever a CALLER is shown (--callers/--impact/--for already carry the
@@ -903,7 +914,8 @@ struct Reference
     //   shape here ("m", "this.items_", "rule.bindings_"; ingest_binds.h cppElementContainer) — read only by graph.h's
     //   StdMemberGate receiver exception (stdReceiverOf); chainOf reads memberPath only beside memberCall. A C/C++ type alias
     //   record and a composeRel "elem" field record carry the std container's whole written text here (ingest_relations.h
-    //   stdElementContainerText).
+    //   stdElementContainerText). Rust (lane L6): an `impl Trait for T` inherit ref carries the trait's path as written when it is
+    //   qualified (`render::Renderer`, generic arguments dropped), "" for a bare trait name (ingest_relations.h rustImplVisitNode).
     std::string   memberPath;
     std::string   memberCtor;
     // FE-B on #373: a Ruby receiver the code BUILDS (`User.new`, a finder, a FactoryBot build, a let or local holding one)
@@ -1280,6 +1292,21 @@ enum class LocalBindKind : std::uint8_t
                    //     parameter bare — at least one, no `yield`, nested defs / lambdas / classes not read — or the return
                    //     annotation is `Self`) or the method's own class name (the return annotation names it: `-> Color`,
                    //     `-> "Color"`). A method that proves neither records nothing. APPENDED.
+    DispatchType,  // lane L6 (interface-typed dispatch): a Rust parameter, local or struct field typed only as SOME implementor of a
+                   //     trait — `&dyn T`, `Box<dyn T>`, `impl T` / `&impl T`, or a type parameter `G` bounded by T (`G: T` inline
+                   //     or in a `where` clause) — never as T itself. var = the name (a field: the field), typeName = the trait's
+                   //     final segment, importedName = the trait as written when qualified (`crate::render::Renderer`), else "",
+                   //     and for a generic bound `G: <the trait as written>` (the bound= text a row carries); isFromAssignment =
+                   //     a struct FIELD (fromSymbol the struct), else a parameter or local (spanStart/spanEnd where it is
+                   //     visible, as a RecvType). It stands in for the binding's tombstone: the name hides an outer binding and
+                   //     types no class. Read by receiverevidence.h (ReceiverEvidence::noteDispatchWritten) ONLY. APPENDED.
+    ImplBlock,     // lane L6 fix round 1 (candidate-set completeness): a block that implements the type named `var` (its final segment).
+                   //     typeName = the implementing type's name — a Rust `impl T for X` block (typeName "X", spanStart/spanEnd = the
+                   //     whole impl item, so a method inside it is one of X's T methods, never an inherent one) — or "" for an
+                   //     implementor no class the index keeps names: a Java anonymous class `new T() { … }`, a Kotlin object
+                   //     expression `object : T { … }` or `fun interface T` (a lambda), a Rust trait under a mock attribute
+                   //     (`#[automock]` writes MockT). Read by graph.h's implementors-map pass (an unnamed one opens T's list) and
+                   //     ifacedispatch.h ONLY. APPENDED.
 };
 // fix round 4: the TypeAlias rows that bind a spelling with no alias target (model.h LocalBindKind::TypeAlias, typeName)
 inline constexpr std::string_view kTypeBindForward  = "forward";
@@ -1287,15 +1314,19 @@ inline constexpr std::string_view kTypeBindShadow   = "shadow";
 inline constexpr std::string_view kTypeBindUnparsed = "unparsed";
 inline constexpr std::string_view kTypeBindUnrecorded = "unrecorded";
 // The number of LocalBindKind enumerators — the bound readBind validates a cached kind byte against (see kSymKindCount).
-inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::OperatorResult ) + 1;
+inline constexpr std::size_t kLocalBindKindCount = static_cast<std::size_t>( LocalBindKind::ImplBlock ) + 1;
 // FE-B: the kinds only graph.h ReceiverEvidence (and, for the two call-result kinds, its resolve loop) reads (see RecvType above).
+// L6's ImplBlock is in the set for the same reason: its var is the TRAIT / interface being implemented, never a name bound in the
+// enclosing function, so the generic binding readers (localNameSet, the fn-pointer tables, nonlocalstate) must skip it (its two
+// readers, graph.h's implementors-map pass and ifacedispatch.h, filter by kind).
 inline bool isReceiverEvidenceKind( LocalBindKind k ) noexcept
 {
     // FE-B's five are appended in one run (RecvType .. StaticMember); the call-result five (CallResult .. TypeAlias) after
-    // RubyMainMixin, and h1-annot's two (AugAssign, OperatorResult) right after them: one run CallResult .. OperatorResult
+    // RubyMainMixin, h1-annot's two (AugAssign, OperatorResult) right after them, and L6's DispatchType and ImplBlock after
+    // those: one run CallResult .. ImplBlock
     static_assert( std::uint8_t( LocalBindKind::StaticMember ) - std::uint8_t( LocalBindKind::RecvType ) == 4, "FE-B's five receiver-evidence kinds stay one run" );
-    static_assert( std::uint8_t( LocalBindKind::OperatorResult ) - std::uint8_t( LocalBindKind::CallResult ) == 6, "the call-result and in-place kinds stay one run" );
-    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::OperatorResult );
+    static_assert( std::uint8_t( LocalBindKind::ImplBlock ) - std::uint8_t( LocalBindKind::CallResult ) == 8, "the call-result, in-place, dispatch and impl-block kinds stay one run" );
+    return ( k >= LocalBindKind::RecvType && k <= LocalBindKind::StaticMember ) || ( k >= LocalBindKind::CallResult && k <= LocalBindKind::ImplBlock );
 }
 // The language family whose call results take a callee's declared result type (train 29 call-result typing), ONE row read
 // by ingest (which records CallResult / ReturnType / TypeImport) and by graph.h (where the type resolves, and which

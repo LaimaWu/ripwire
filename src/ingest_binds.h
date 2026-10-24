@@ -2710,13 +2710,13 @@ struct BindSite
 
 // the ONE bind-record emitter. A nameless declarator records nothing. kind=VarDecl is the r9 shadow-
 // evidence record: typeName stays EMPTY on it (shadow evidence, not narrowing fuel — nothing downstream
-// ever reads a type off it), so the empty-typeName refusal applies to every OTHER kind, where it is
+// ever reads a type off it), and so may an ImplBlock's (an implementor with no name), so the empty-typeName refusal applies to every OTHER kind, where it is
 // load-bearing for Rule 2 (an undecidable type must degrade to §2a, not mint a half-record). The DeclType's
 // qualified text rides importedName (see qualifiedNameText) — non-empty only on a declaration's Type/ParamType record.
 inline void pushTypedBind( std::uint32_t fileId, Lang lang, std::string_view var, DeclType type, BindSite site, LocalBindKind kind,
                            std::vector<RawBind>& binds )
 {
-    if( var.empty() || ( type.name.empty() && kind != LocalBindKind::VarDecl ) )
+    if( var.empty() || ( type.name.empty() && kind != LocalBindKind::VarDecl && kind != LocalBindKind::ImplBlock ) )
     {
         return;
     }
@@ -3970,24 +3970,29 @@ inline BindSite siteIn( std::uint32_t at, TSNode scope ) noexcept { return siteO
 inline BindSite siteFrom( std::uint32_t at, TSNode scope ) noexcept { return siteOver( at, scope, true ); }
 
 // one local binding of `var`, naming class `cls` ("" = unknown), visible over `site`'s span. `flag`: Go's method receiver.
+// one site-spanned evidence record of `kind` (RecvType, lane L6's DispatchType): `var` names `type` over `site`
+inline void pushSiteEvidence( BindCtx& cx, LocalBindKind kind, std::string_view var, std::string_view type, BindSite site, bool flag, std::string_view imported )
+{
+    RawBind b;
+    b.fileId    = cx.fileId;
+    b.startByte = site.startByte;
+    b.lang      = cx.lang;
+    b.kind      = kind;
+    b.isFromAssignment = flag;
+    b.spanStart = site.spanStart;
+    b.spanEnd   = site.spanEnd;
+    b.var.assign( var );
+    b.typeName.assign( type );
+    b.importedName.assign( imported );
+    cx.binds->push_back( std::move( b ) );
+}
 inline void pushLocalEvidence( BindCtx& cx, std::string_view var, std::string_view cls, BindSite site, bool flag = false, std::string_view whole = {} )
 {
     if( var.empty() )
     {
         return;
     }
-    RawBind b;
-    b.fileId    = cx.fileId;
-    b.startByte = site.startByte;
-    b.lang      = cx.lang;
-    b.kind      = LocalBindKind::RecvType;
-    b.isFromAssignment = flag;
-    b.spanStart = site.spanStart;
-    b.spanEnd   = site.spanEnd;
-    b.var.assign( var );
-    b.typeName.assign( cls );
-    b.importedName.assign( cls.empty() ? std::string_view{} : whole );   // Go `pkg.T`: the qualifier ReceiverEvidence::build checks
-    cx.binds->push_back( std::move( b ) );
+    pushSiteEvidence( cx, LocalBindKind::RecvType, var, cls, site, flag, cls.empty() ? std::string_view{} : whole );   // Go `pkg.T`: the qualifier ReceiverEvidence::build checks
 }
 // the same for a name NODE (an identifier of any grammar's spelling; anything else records nothing)
 inline void pushLocalEvidence( BindCtx& cx, TSNode name, std::string_view cls, BindSite site )
@@ -6204,6 +6209,149 @@ inline std::string_view rustWrittenClass( TSNode type, TSNode owner, std::string
     return cls;
 }
 
+// lane L6 (interface-typed dispatch): the marker traits a generic bound may add beside the one trait it dispatches through —
+// a bound `R: Renderer + Send + Clone` still dispatches through Renderer: the implementors of Renderer are a SUPERSET of what
+// may run there, which is the hedge's direction. A bound with two traits outside this row names no one trait (a floor).
+inline constexpr std::array<std::string_view, 15> kRustMarkerTraits = {
+    "Send", "Sync", "Unpin", "Sized", "Copy", "Clone", "Debug", "Default", "Eq", "PartialEq", "Hash", "Ord", "PartialOrd", "Display", "Any",
+};
+
+// lane L6: the trait a written trait reference names — `Renderer`, `render::Renderer` (`whole` the path), `Renderer<T>` (its
+// head); "" for anything else (a function trait `Fn( u32 )`, a lifetime, a `?Sized`).
+inline std::string_view rustTraitNamed( TSNode trait, std::string_view src, std::string_view& whole )
+{
+    whole = {};
+    for( int guard = 0; guard < 4 && !ts_node_is_null( trait ); ++guard )
+    {
+        const char* t = ts_node_type( trait );
+        if( kindIs( t, "generic_type" ) )
+        {
+            trait = fieldChild( trait, NodeField::Type );
+            continue;
+        }
+        if( kindIs( t, "type_identifier" ) )
+        {
+            return nodeTextOf( trait, src );
+        }
+        if( kindIs( t, "scoped_type_identifier" ) && !ts_node_is_null( fieldChild( trait, NodeField::Name ) ) )
+        {
+            whole = nodeTextOf( trait, src );
+            return nodeTextOf( fieldChild( trait, NodeField::Name ), src );
+        }
+        return {};
+    }
+    return {};
+}
+
+// lane L6: the ONE non-marker trait among the bounds `generic` is given by `owner`'s type parameters (`<R: T>`) and its `where`
+// clause (`where R: T`); "" when none, or two or more (each named in either place counts).
+inline std::string_view rustBoundTrait( TSNode owner, std::string_view generic, std::string_view src, std::string_view& whole )
+{
+    whole = {};
+    std::string_view one;
+    int              traits = 0;
+    const auto boundsOf = [ & ]( TSNode left, TSNode bounds )
+    {
+        if( ts_node_is_null( left ) || ts_node_is_null( bounds ) || nodeTextOf( left, src ) != generic )
+        {
+            return;
+        }
+        for( std::uint32_t i = 0, k = ts_node_named_child_count( bounds ); i < k; ++i )
+        {
+            const TSNode           b = ts_node_named_child( bounds, i );
+            std::string_view       path;
+            const std::string_view name = rustTraitNamed( b, src, path );
+            if( kindIs( ts_node_type( b ), "lifetime" ) || std::ranges::find( kRustMarkerTraits, name ) != kRustMarkerTraits.end() )
+            {
+                continue;
+            }
+            ++traits;
+            one   = name;
+            whole = path;
+        }
+    };
+    const TSNode params = ts_node_is_null( owner ) ? TSNode{} : fieldChild( owner, NodeField::TypeParameters );
+    for( std::uint32_t i = 0, k = ts_node_is_null( params ) ? 0u : ts_node_named_child_count( params ); i < k; ++i )
+    {
+        const TSNode p = ts_node_named_child( params, i );
+        if( kindIs( ts_node_type( p ), "constrained_type_parameter" ) )
+        {
+            boundsOf( fieldChild( p, NodeField::Left ), namedChildOfKind( p, { "trait_bounds" } ) );
+        }
+    }
+    const TSNode where = ts_node_is_null( owner ) ? TSNode{} : namedChildOfKind( owner, { "where_clause" } );
+    for( std::uint32_t i = 0, k = ts_node_is_null( where ) ? 0u : ts_node_named_child_count( where ); i < k; ++i )
+    {
+        const TSNode p = ts_node_named_child( where, i );
+        if( kindIs( ts_node_type( p ), "where_predicate" ) )
+        {
+            boundsOf( fieldChild( p, NodeField::Left ), namedChildOfKind( p, { "trait_bounds" } ) );
+        }
+    }
+    if( traits != 1 || one.empty() )
+    {
+        whole = {};
+        return {};
+    }
+    return one;
+}
+
+// lane L6: the TRAIT a written Rust type dispatches through, after the transparent wrappers alone (`&`, `&mut`, Box): `dyn T`,
+// `impl T`, or a type parameter of `owner` bounded by one trait (rustBoundTrait). `whole` the trait's path when qualified;
+// `generic` the type parameter's name for a bound, else "". "" for anything else — a Layer or a Hides wrapper
+// (`Option<Box<dyn T>>`, `Rc<dyn T>`: kRustTypeWrappers), a `dyn A + B` the grammar does not give one trait field.
+inline std::string_view rustDispatchTrait( TSNode type, TSNode owner, std::string_view src, std::string_view& whole, std::string_view& generic )
+{
+    whole   = {};
+    generic = {};
+    for( int guard = 0; guard < 8 && !ts_node_is_null( type ); ++guard )
+    {
+        const char* t = ts_node_type( type );
+        if( kindIs( t, "reference_type" ) )
+        {
+            type = fieldChild( type, NodeField::Type );
+            continue;
+        }
+        if( kindIs( t, "generic_type" ) )
+        {
+            const TSNode     head = fieldChild( type, NodeField::Type );
+            std::string_view name = ts_node_is_null( head ) ? std::string_view{} : nodeTextOf( head, src );
+            if( const std::size_t sep = name.rfind( "::" ); sep != std::string_view::npos )
+            {
+                name.remove_prefix( sep + 2 );
+            }
+            const TSNode args = namedChildOfKind( type, { "type_arguments" } );
+            if( typeWrapOf( CallResultFamily::Rust, name ) != TypeWrap::Transparent || ts_node_is_null( args ) || ts_node_named_child_count( args ) == 0 )
+            {
+                return {};
+            }
+            type = ts_node_named_child( args, 0 );
+            continue;
+        }
+        if( kindIs( t, "dynamic_type" ) || kindIs( t, "abstract_type" ) )
+        {
+            return rustTraitNamed( fieldChild( type, NodeField::Trait ), src, whole );
+        }
+        if( kindIs( t, "type_identifier" ) )
+        {
+            const std::string_view name = rustBoundTrait( owner, nodeTextOf( type, src ), src, whole );
+            generic = name.empty() ? std::string_view{} : nodeTextOf( type, src );
+            return name;
+        }
+        return {};
+    }
+    return {};
+}
+
+// lane L6: one Rust binding typed only as SOME implementor of a trait (model.h LocalBindKind::DispatchType): `var` over `site`
+// (a parameter or local) or, `field` set, a struct's field (fromSymbol the struct). `generic` the bound's type parameter.
+inline void pushRustDispatch( BindCtx& cx, std::string_view var, std::string_view trait, std::string_view whole, std::string_view generic,
+                              BindSite site, bool field )
+{
+    const std::string bound = generic.empty() ? std::string() : std::string( generic ).append( ": " ).append( whole.empty() ? trait : whole );   // bound= text
+    pushSiteEvidence( cx, LocalBindKind::DispatchType, var, trait, site, field, generic.empty() ? whole : std::string_view( bound ) );
+}
+
 // rust-receivers: the class a `let` VALUE constructs — a struct literal `T { .. }` / `Self { .. }` / `m::T { .. }`, or
 // `T::default()` on a type path (Default's contract: the value is a T); `whole` the path when qualified. "" for anything
 // else — `T::new( .. )` is a CALL, typed (or not) by its declared result through the call-result rows.
@@ -6260,6 +6408,35 @@ inline void pushRustBinding( BindCtx& cx, TSNode pattern, std::string_view cls, 
     pushPatternTombstones( cx, pattern, site );
 }
 
+// lane L6: a parameter or `let` NAME (a plain identifier pattern) whose written type names no class but dispatches through a trait
+// (rustDispatchTrait) records a DispatchType in place of its tombstone; false (nothing recorded) for any other binding.
+inline bool pushRustDispatchBinding( BindCtx& cx, TSNode pattern, std::string_view cls, TSNode type, TSNode owner, BindSite site )
+{
+    if( !cls.empty() || ts_node_is_null( pattern ) || !kindIs( ts_node_type( pattern ), "identifier" ) )
+    {
+        return false;
+    }
+    std::string_view       whole, generic;
+    const std::string_view trait = rustDispatchTrait( type, owner, cx.src, whole, generic );
+    if( trait.empty() )
+    {
+        return false;
+    }
+    pushRustDispatch( cx, nodeTextOf( pattern, cx.src ), trait, whole, generic, site, false );
+    return true;
+}
+
+// a parameter's or `let`'s names under their WRITTEN type: the class it names (rustWrittenClass), else (lane L6) the trait it
+// dispatches through, else the pattern's tombstones
+inline void pushRustWrittenBinding( BindCtx& cx, TSNode pattern, TSNode type, TSNode owner, BindSite site )
+{
+    std::string_view       whole;
+    const std::string_view cls = rustWrittenClass( type, owner, cx.src, whole );
+    if( !pushRustDispatchBinding( cx, pattern, cls, type, owner, site ) )
+    {
+        pushRustBinding( cx, pattern, cls, whole, site );
+    }
+}
 // rust-receivers: a `let`'s names — `let x: T` typed by its written type, `let x = T { .. }` / `T::default()` by the class
 // the value constructs, `let x = f()?` by the callee's declared result (a CallResult per bound name, a tuple by position)
 inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
@@ -6270,7 +6447,7 @@ inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
     std::string_view whole;
     if( const TSNode type = fieldChild( n, NodeField::Type ); !ts_node_is_null( type ) )
     {
-        pushRustBinding( cx, pattern, rustWrittenClass( type, owner, cx.src, whole ), whole, site );   // `let x: T = …`
+        pushRustWrittenBinding( cx, pattern, type, owner, site );   // `let x: T = …` (L6: `let x: &dyn T = …`)
         return;
     }
     // `let x = T { .. }` / `T::default()`: the class the value constructs, as the binding's site spells it. `T::default()`
@@ -6309,9 +6486,8 @@ inline void captureRustLet( BindCtx& cx, TSNode n, std::uint32_t at )
 // rust-receivers: a parameter `b: &Book` names the class it is written as (a fn's or a closure's); any other pattern: tombstones
 inline void captureRustParameter( BindCtx& cx, TSNode n, std::uint32_t at )
 {
-    std::string_view       whole;
-    const std::string_view cls = rustWrittenClass( fieldChild( n, NodeField::Type ), rustGenericsOwner( n, { "function_item", "function_signature_item" } ), cx.src, whole );
-    pushRustBinding( cx, fieldChild( n, NodeField::Pattern ), cls, whole, siteIn( at, ancestorOfKind( n, { "function_item", "closure_expression" } ) ) );
+    pushRustWrittenBinding( cx, fieldChild( n, NodeField::Pattern ), fieldChild( n, NodeField::Type ), rustGenericsOwner( n, { "function_item", "function_signature_item" } ),
+                            siteIn( at, ancestorOfKind( n, { "function_item", "closure_expression" } ) ) );
 }
 // rust-receivers: a struct's named field `book: Book` (MemberType on the struct, so `self.book.m()` narrows through it); a
 // field whose type names no class is a tombstone. An enum variant's fields are no struct's: nothing.
@@ -6326,7 +6502,14 @@ inline void captureRustField( BindCtx& cx, TSNode n, std::uint32_t at )
     }
     std::string_view       whole;
     const std::string_view cls = rustWrittenClass( fieldChild( n, NodeField::Type ), item, cx.src, whole );
-    if( cls.empty() )
+    std::string_view       traitWhole, generic;
+    const std::string_view trait = cls.empty() ? rustDispatchTrait( fieldChild( n, NodeField::Type ), item, cx.src, traitWhole, generic ) : std::string_view{};
+    if( !trait.empty() )
+    {
+        pushMemberTombstone( cx, nodeTextOf( name, cx.src ), at );   // the field names no class (memberClass), as before
+        pushRustDispatch( cx, nodeTextOf( name, cx.src ), trait, traitWhole, generic, BindSite{ at, 0u, 0u }, true );   // L6
+    }
+    else if( cls.empty() )
     {
         pushMemberTombstone( cx, nodeTextOf( name, cx.src ), at );
     }
@@ -6704,6 +6887,81 @@ inline void captureReceiverEvidence( BindCtx& cx, TSNode n, const char* t )
     }
 }
 
+// lane L6 fix round 1 (reports/dispatch-classes.md §(a) 4 and 5): the blocks that implement a type, as ImplBlock records over the
+// node (model.h LocalBindKind::ImplBlock). The implemented name is the written type's final segment, generic arguments dropped.
+// An implementor the index keeps no class for records no implementor name; graph.h then opens the type's implementors list.
+inline void pushImplBlock( BindCtx& cx, TSNode n, std::string_view written, std::string_view implementor )
+{
+    std::string_view name = written.substr( 0, std::min( written.find( '<' ), written.size() ) );
+    const std::size_t cut = name.find_last_of( ".:" );
+    name = name.substr( cut == std::string_view::npos ? 0 : cut + 1 );
+    while( !name.empty() && ( name.back() == ' ' || name.back() == '\n' || name.back() == '\t' || name.back() == '\r' || name.back() == '?' ) )
+    {
+        name.remove_suffix( 1 );
+    }
+    pushRawBind( cx.fileId, cx.lang, name, std::string( implementor ), BindSite{ ts_node_start_byte( n ), ts_node_start_byte( n ), ts_node_end_byte( n ) },
+                 LocalBindKind::ImplBlock, *cx.binds );
+}
+
+// Rust (langfacts.h traitImplBlocks): `impl T for X { … }` — its methods are X's methods for T, never inherent ones; the names are
+// the ones ingest_relations.h rustImplVisitNode gives the inherit reference. A trait under a mock attribute: the mock it writes.
+inline void rustImplBlockOf( BindCtx& cx, TSNode n, const char* t )
+{
+    if( kindIs( t, "trait_item" ) )
+    {
+        const TSNode name = fieldChild( n, NodeField::Name );
+        if( !ts_node_is_null( name ) && rustItemCarriesMockAttr( n, cx.src ) )
+        {
+            pushImplBlock( cx, n, nodeTextOf( name, cx.src ), {} );
+        }
+        return;
+    }
+    const TSNode trait = kindIs( t, "impl_item" ) ? fieldChild( n, NodeField::Trait ) : TSNode{};
+    const TSNode type  = ts_node_is_null( trait ) ? TSNode{} : fieldChild( n, NodeField::Type );
+    if( !ts_node_is_null( type ) )
+    {
+        pushImplBlock( cx, n, finalSegment( nodeTextOf( trait, cx.src ) ), finalSegment( nodeTextOf( type, cx.src ) ) );
+    }
+}
+
+// Java / Kotlin (langfacts.h anonymousImplementors): an implementor with no class — a Java anonymous class `new T( … ) { … }`, a
+// Kotlin object expression `object : A, B( x ) { … }` (each delegation specifier's user type), a Kotlin `fun interface T` (a lambda
+// implements it).
+inline void anonymousImplementorOf( BindCtx& cx, TSNode n, const char* t )
+{
+    const bool javaAnon  = kindIs( t, "object_creation_expression" );
+    const bool ktObject  = kindIs( t, "object_literal" );
+    const bool ktFunType = kindIs( t, "class_declaration" );
+    if( !javaAnon && !ktObject && !ktFunType )
+    {
+        return;
+    }
+    bool        hit = false;   // Java: a class body; Kotlin `fun interface`: the `fun` keyword
+    TSNode      named{};       // Kotlin `fun interface`: its name
+    ChildCursor cursor( n );
+    forEachChild( n, cursor.cur, [ & ]( TSNode c )
+    {
+        const char* ct = ts_node_type( c );
+        hit = hit || ( javaAnon && kindIs( ct, "class_body" ) ) || ( ktFunType && !ts_node_is_named( c ) && kindIs( ct, "fun" ) );
+        named = ktFunType && ts_node_is_null( named ) && kindIs( ct, "type_identifier" ) ? c : named;
+        if( ktObject && kindIs( ct, "delegation_specifier" ) && ts_node_named_child_count( c ) > 0 )
+        {
+            const TSNode spec = ts_node_named_child( c, 0 );
+            const TSNode user = kindIs( ts_node_type( spec ), "constructor_invocation" ) && ts_node_named_child_count( spec ) > 0 ? ts_node_named_child( spec, 0 ) : spec;
+            if( kindIs( ts_node_type( user ), "user_type" ) )
+            {
+                pushImplBlock( cx, n, nodeTextOf( user, cx.src ), {} );
+            }
+        }
+        return !kindIs( ct, "class_body" ) || javaAnon;
+    } );
+    const TSNode type = javaAnon ? fieldChild( n, NodeField::Type ) : named;
+    if( hit && !ts_node_is_null( type ) )
+    {
+        pushImplBlock( cx, n, nodeTextOf( type, cx.src ), {} );
+    }
+}
+
 void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
 {
     // The body below is the pass's own node step, unchanged; these aliases keep it reading against the
@@ -6717,6 +6975,15 @@ void bindsVisitNode( BindCtx& cx, TSNode n, const char* t )
     std::vector<FnBindClobber>& fnUnk     = cx.fnUnk;
     FnBindGateState&            fnGate    = cx.fnGate;
     const bool                  cFamilyFn = cx.cFamilyFn;
+
+    if( langFacts( lang ).anonymousImplementors )
+    {
+        anonymousImplementorOf( cx, n, t );   // lane L6 fix round 1: Java / Kotlin implementors with no class
+    }
+    else if( langFacts( lang ).traitImplBlocks )
+    {
+        rustImplBlockOf( cx, n, t );          // lane L6 fix round 1: Rust trait impl blocks and mocked traits
+    }
 
     // C++/ObjC: `Foo x;` · `Foo* x;` · `Foo x = Foo();` · `auto x = Foo();`
     if( ( lang == Lang::Cpp || lang == Lang::ObjC ) && kindIs( t, "declaration" ) )
