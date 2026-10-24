@@ -12,6 +12,8 @@ If you are about to write C++ here, §3 is the authoritative style-rules checkli
 - **What the tool does / which flag answers which question** → `README.md`, `docs/COMMANDS.md`, or
   `./build/ripwire --help` (the binary self-documents and is always current).
 - **How it is built internally** → `docs/ARCHITECTURE.md`.
+- **Where code for a graph question goes** (a new input spelling, a new indirection shape, a new verb) → the
+  seeds → hops → walks layers, `docs/ARCHITECTURE.md` §6.
 - **How its claims are measured** → `docs/EVALS.md`.
 
 ---
