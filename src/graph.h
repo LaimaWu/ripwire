@@ -2176,7 +2176,7 @@ inline bool isPythonSourcePath( std::string_view path ) noexcept
 // read it as unknown. `sys.modules[__name__].a = x` is not a call and stays a floor.
 inline constexpr std::string_view kPythonDynamicBind = "__getattr__";
 
-inline void markPythonDynamicBinds( const IngestResult& ing, HashMap<std::string, char>& pythonModuleRebind )
+inline HashMap<std::string, char> markPythonDynamicBinds( const IngestResult& ing, HashMap<std::string, char> pythonModuleRebind )
 {
     std::string key;
     for( const Reference& r : ing.references )
@@ -2188,6 +2188,7 @@ inline void markPythonDynamicBinds( const IngestResult& ing, HashMap<std::string
             pythonModuleRebind.try_emplace( key, '\0' );
         }
     }
+    return pythonModuleRebind;
 }
 
 // the first name of every Python class's base clause (the bare base, else its qualifier)
@@ -2500,8 +2501,7 @@ inline ExternalVetoTables buildExternalVetoTables( const IngestResult& ing )
         // past its pre-#287 baseline (each round's OWN delta against the previous commit looked fine; the
         // WHOLE branch's delta against origin/main did not) — see their own doc comments for the WHY/semantics
         // of what each table means; this call site is purely the "where".
-        t.pythonModuleRebind = buildPythonModuleRebindVetoes( ing );
-        markPythonDynamicBinds( ing, t.pythonModuleRebind );
+        t.pythonModuleRebind = markPythonDynamicBinds( ing, buildPythonModuleRebindVetoes( ing ) );
         PythonImportVetoes iv = buildPythonImportVetoes( ing, fileIndex, moduleNames, t.pythonModuleRebind );
         t.importBind          = std::move( iv.importBind );
         t.importBindFile      = std::move( iv.importBindFile );
