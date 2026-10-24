@@ -86,6 +86,8 @@
 #            (`Eng = Foo; Eng.run()`, `m = require( b ); m.Eng()`, `let tank = new Tank(); tank = b; tank.drip()`) keeps only the
 #            by-name hedge (via="name", every candidate) — never a pinned row, never the class its SPELLING names, with or
 #            without a declaration (FIX2 C1/C2); patterns nested 20000 deep.
+#            FLOOR (FC3 delta2 C3, card FC6, pre-existing at 320f8d8f): a member `.limit()` site rides UNHEDGED in a caller row merged
+#            with a bare imported `limit(...)` call (kysely clear.test.ts / insert.test.ts `.$call( limit( 1, dialect ) )`).
 #   (F) propagation: --callers and --impact of the in-repo decoys no longer list the false callers.
 #   (G) disclosure: every call the arms above unbind is a `C external` census row (empty targets) — except a Python bare
 #            name nothing binds and no builtin table holds (run_all's `process`, siblings.py's `helper`), which has no
