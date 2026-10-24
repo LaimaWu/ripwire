@@ -434,6 +434,17 @@ xpfloor XpPkgBase     "XpPkgReal XpPkgOutReg"
 xpfloor XpNpBase      "XpNpOutReg XpNpOutEntry"
 xpfloor XpMlBase      "XpMlOutReg"
 xpfloor XpTtBase      "XpTtOutReg"
+# fix round 7 (review rv-fc2-delta6 E1: no head is in the tree by a MODULE or DIRECTORY name match either — only a module of the using file's OWN
+# crate, `crate`/`self`/`super`, or a `path =` key): a registry crate whose name is only some other member's directory (M1: crates/xp_m1_core
+# beside `xp-m1-core = "1"`) or an unrelated module of another member (M3: app's xpm3fc.rs beside `xpm3fc = { package = "xp-m3-core", version = "1" }`)
+# is floored like the same shape without the name match. Controls: M2 (a dashed directory + a registry rename), T1 (one manifest, two tables), C5
+# (no name match), L2 (a two-line rename) keep their floor (M2, L2 and M3 also their Real implementor).
+for k in m1 m2 m3 t1 c5 l2
+do
+    K="$( printf '%s' "$k" | tr 'a-z' 'A-Z' )"
+    xpfloor "XpMd${K}Base" "XpMd${K}OutReg"
+    case "$k" in m2|m3|l2) xp "XpMd${K}Base" "" "XpMd${K}Real" ;; esac   # m1/t1/c5: the key is two-meaning for the app member too, so its Real row floors with the rest
+done
 xp XpKeyBothBase "" "XpKeyBothA XpKeyBothB"
 xp XpKeyCtlBase "XpKeyCtlOut" ""
 if lego XpKeyCtlBase && iface | grep -q 'implementors_floor'; then no "XpKeyCtlBase carries a floor for a key every member declares as a registry crate: $( iface )"; else ok "XpKeyCtlBase: a key registry in every member stays decided (no floor)"; fi

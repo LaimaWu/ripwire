@@ -6637,16 +6637,96 @@ inline void rustCrateAliases( std::string_view text, std::vector<std::pair<std::
     }
 }
 
-// Is `name` a crate of this tree: a module, a Cargo name or dependency key, or a workspace crate directory spelled with `-`?
-inline bool rustTreeCrate( const HashMap<std::string, char>& modules, const HashMap<std::string, char>& cargoNames, std::string_view name )
+// The modules of each CRATE of the tree (a crate = the .rs files whose nearest Cargo.toml above them is the same; a tree with no manifest above
+// a file is one crate): every .rs file stem and directory name a .rs path passes through BELOW its crate's directory. A name that is a module
+// of ANOTHER crate (or only a directory somewhere else in the tree) is no module of the file's own crate: a `use` of it names a crate, and only
+// Cargo can say which (rustTreeCrate, rustOutsideUses). FE-A's plain table keeps rustModuleNames (tree-wide), so its call edges stay as they were.
+struct RustCrateModules
+{
+    std::vector<std::uint32_t>             crateOf;   // file -> index into `modules`
+    std::vector<HashMap<std::string, char>> modules;   // per crate
+
+    // The modules of the crate file `f` belongs to (none for a file the table never saw).
+    [[nodiscard]] const HashMap<std::string, char>& of( std::uint32_t f ) const
+    {
+        static const HashMap<std::string, char> none;
+        return f < crateOf.size() ? modules[ crateOf[ f ] ] : none;
+    }
+};
+
+inline RustCrateModules rustCrateModuleNames( const IngestResult& ing )
+{
+    RustCrateModules out;
+    HashMap<std::string, std::uint32_t> crateAt;   // manifest directory under the root -> crate index
+    crateAt.try_emplace( std::string(), 0 );
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        const std::string_view rel = rootRelPath( ing, f );
+        if( rel == "Cargo.toml" || rel.ends_with( "/Cargo.toml" ) )
+        {
+            crateAt.try_emplace( std::string( rel.substr( 0, rel.size() == 10 ? 0 : rel.size() - 11 ) ), std::uint32_t( crateAt.size() ) );
+        }
+    }
+    out.modules.resize( crateAt.size() );
+    out.crateOf.assign( ing.files.size(), 0 );
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        std::string_view path = rootRelPath( ing, f );
+        if( !path.ends_with( ".rs" ) )
+        {
+            continue;
+        }
+        path.remove_suffix( 3 );
+        std::size_t below = 0;   // where the crate's own directory ends: the deepest manifest directory above the file
+        for( std::size_t slash = path.rfind( '/' ); slash != std::string_view::npos && slash > 0; slash = path.rfind( '/', slash - 1 ) )
+        {
+            if( const auto hit = crateAt.find( std::string( path.substr( 0, slash ) ) ); hit != crateAt.end() )
+            {
+                out.crateOf[ f ] = hit->second;
+                below            = slash + 1;
+                break;
+            }
+        }
+        path.remove_prefix( below );
+        HashMap<std::string, char>& names = out.modules[ out.crateOf[ f ] ];
+        for( std::size_t at = 0; at <= path.size(); )
+        {
+            const std::size_t slash = std::min( path.find( '/', at ), path.size() );
+            if( slash > at )
+            {
+                names.try_emplace( std::string( path.substr( at, slash - at ) ), '\0' );
+            }
+            at = slash + 1;
+        }
+    }
+    return out;
+}
+
+// Is `name` a crate of this tree: a module of the using file's OWN crate (`ownModules`: a name that is only some other crate's module or an
+// unrelated directory proves nothing, a registry crate of that name is still a registry crate), a Cargo name or dependency key some manifest
+// puts in the tree (`path =` proven, cargoCrateNames), or a workspace crate directory of that crate spelled with `-` for the `_` of the code?
+inline bool rustTreeCrate( const HashMap<std::string, char>& ownModules, const HashMap<std::string, char>& cargoNames, std::string_view name )
 {
     std::string spelled( name );
-    if( modules.contains( spelled ) || cargoNames.contains( spelled ) )
+    if( ownModules.contains( spelled ) || cargoNames.contains( spelled ) )
     {
         return true;
     }
     std::replace( spelled.begin(), spelled.end(), '_', '-' );
-    return modules.contains( spelled );
+    return ownModules.contains( spelled );
+}
+
+// Does the `use` of file `f` stay inside its own scope, so that it names no outside item and needs no verdict: no path to read, `crate` /
+// `self` / `super`, or a head that is a module? The plain table (FE-A) reads a module of ANY crate of the tree; the crate-aware one only a module of
+// the file's own crate — a head that is merely another member's directory or module goes through the Cargo verdict like any other.
+inline bool rustUseIsLocal( std::string_view path, std::string_view head, bool crateDirAware, std::uint32_t f, const HashMap<std::string, char>& treeModules,
+                            const RustCrateModules& crateMods )
+{
+    if( path.empty() || head == "crate" || head == "self" || head == "super" )
+    {
+        return true;
+    }
+    return ( crateDirAware ? crateMods.of( f ) : treeModules ).contains( std::string( head ) );
 }
 
 using RustAliasCache = HashMap<std::uint32_t, std::vector<std::pair<std::string, std::string>>>;   // per file, read once and only when asked
@@ -6691,7 +6771,7 @@ inline std::string_view rustUsePath( const IngestResult& ing, const Include& inc
 inline char rustHeadVerdict( const IngestResult& ing, std::uint32_t f, std::string_view head, const CargoNames& cargo, RustAliasCache& aliases,
                              const auto& treeCrate )
 {
-    if( treeCrate( head ) )
+    if( treeCrate( f, head ) )
     {
         return 'i';   // a crate of this tree under its own name or a Cargo key
     }
@@ -6700,7 +6780,7 @@ inline char rustHeadVerdict( const IngestResult& ing, std::uint32_t f, std::stri
         return '\0';
     }
     const std::string_view target = rustFileAlias( ing, f, head, aliases );   // `extern crate X as head;` / `use X as head;`
-    if( !target.empty() && treeCrate( target ) )
+    if( !target.empty() && treeCrate( f, target ) )
     {
         return 'i';
     }
@@ -6709,7 +6789,7 @@ inline char rustHeadVerdict( const IngestResult& ing, std::uint32_t f, std::stri
 
 // Rust: `use a::b::c;` whose first segment is not crate/self/super/a module of this tree names an outside item `c`, into
 // `out` ("<fileId>#c"). `crateDirAware` (lane fc2-lego-extparent's base clause reader) decides it differently and in three ways: a head that is a
-// crate of this tree (a module, a workspace crate directory spelled with `_` for `-`, a Cargo package or [lib] name or a
+// crate of this tree (a module of the using file's OWN crate, a workspace crate directory of it spelled with `_` for `-`, a Cargo package or [lib] name or a
 // dependency key naming one, a leading `::` stripped, or a head the file itself aliases to such a crate) is in the tree and has no
 // row; a head that is std/core/alloc/proc_macro/test or declared as a registry or git dependency (rustDecidedOutside, also through a
 // file's own alias of one) is DECIDED outside ('\0'); every other head is UNDECIDED (kRustUseUndecided): it is not read as in or out.
@@ -6721,15 +6801,16 @@ inline void rustOutsideUses( const IngestResult& ing, bool crateDirAware, HashMa
     {
         return;   // no Rust in the tree
     }
-    const CargoNames cargo = crateDirAware ? cargoCrateNames( ing ) : CargoNames{};
-    const auto treeCrate = [ & ]( std::string_view name )
-    { return name == "crate" || name == "self" || name == "super" || rustTreeCrate( modules, cargo.inTree, name ); };
+    const CargoNames       cargo      = crateDirAware ? cargoCrateNames( ing ) : CargoNames{};
+    const RustCrateModules crateMods  = crateDirAware ? rustCrateModuleNames( ing ) : RustCrateModules{};
+    const auto treeCrate = [ & ]( std::uint32_t f, std::string_view name )
+    { return name == "crate" || name == "self" || name == "super" || rustTreeCrate( crateMods.of( f ), cargo.inTree, name ); };
     RustAliasCache aliases;
     for( const Include& inc : ing.includes )
     {
         const std::string_view path = rustUsePath( ing, inc, crateDirAware );
         const std::string_view head = path.substr( 0, path.find( "::" ) );
-        if( path.empty() || head == "crate" || head == "self" || head == "super" || modules.contains( std::string( head ) ) )
+        if( rustUseIsLocal( path, head, crateDirAware, inc.fileId, modules, crateMods ) )
         {
             continue;
         }
