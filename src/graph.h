@@ -7339,7 +7339,8 @@ inline bool jvmPackageOutsideTree( const ReceiverEvidence& ev, std::string_view 
 // `path =` crate outside the root), 'n' no outside `use` names it (or a same-file declaration answers).
 inline char rustUseVerdict( const BaseEvidenceTables& t, const Reference& r )
 {
-    if( r.lang != Lang::Rust || r.baseBind != 0 || !r.memberRoot.empty() || t.rustOutsideUse == nullptr )
+    if( langFacts( r.lang ).baseImportEvidence != BaseImportEvidence::RustUse || r.baseBind != 0 || !r.memberRoot.empty()
+        || t.rustOutsideUse == nullptr )
     {
         return 'n';
     }
