@@ -210,6 +210,13 @@ for pair in 'B28 ^\s*int (escape + anchor)|^\s*int ' 'B29 ^hlxb$ (both anchors)|
         *)    if printf '%s' "$o" | grep -q 'pattern_meta='; then ok "$lab keeps pattern_meta"; else no "$lab lost its pattern_meta: $o"; fi ;;
     esac
 done
+# train 34 CR pre-pass: a UTF-8 lead/continuation byte is part of an identifier (Python, JS, Go, Rust names), so `hlxcaf\xc3\xa9|hlxtea` is an
+# alternation between two words (it read as no alternation: a silent literal zero), and a subscript after a non-ASCII name is a subscript
+printf 'hlxcaf\xc3\xa9 hlxtea\nhlxn\xc3\xa9[i-1]\n' > "$R/u.py"
+o="$( g --grep=$'hlxcaf\xc3\xa9|hlxtea' --grep-in=any | root )"
+if printf '%s' "$o" | grep -q 'pattern_meta="|"'; then ok "B35 an alternation whose word ends in a non-ASCII byte → pattern_meta=|"; else no "B35 $o"; fi
+o="$( g --grep=$'hlxn\xc3\xa9[i-1]' --grep-in=any | root )"
+if printf '%s' "$o" | grep -q 'pattern_meta='; then no "B36 a subscript after a non-ASCII name read as a bracket class: $o"; else ok "B36 a subscript after a non-ASCII name is no bracket class"; fi
 # (N1) the compact legend and the dict say complete=/hits= speak of the LITERAL reading only.
 if g --grep='hlxa' --legend=compact | grep -q 'of the literal reading only'; then ok "B33 the compact grep legend ties complete= to the literal reading"; else no "B33 compact grep legend lacks the literal-reading clause"; fi
 if ( cd "$R" && "$BIN" "$R" --legend-dict 2>/dev/null ) | grep 'pattern_meta=:' | grep -q 'literal reading only'; then ok "B34 the pattern_meta dict entry ties complete=/hits= to the literal reading"; else no "B34 dict entry lacks the clause"; fi
