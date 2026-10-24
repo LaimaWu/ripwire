@@ -182,7 +182,7 @@ if printf '%s' "$o" | grep -q 'pattern_meta='; then no "B8 '||' read as alternat
 o="$( g --grep='java.util.*' | root )"
 if printf '%s' "$o" | grep -q 'pattern_meta='; then no "B9 a trailing .* read as meta: $o"; else ok "B9 a trailing .* (java.util.*) stays literal"; fi
 o="$( g --grep='hlxa.*hlxa' | root )"
-if printf '%s' "$o" | grep -q 'pattern_meta=".*"'; then ok "B10 .* inside the pattern → pattern_meta=.*"; else no "B10 $o"; fi
+if printf '%s' "$o" | grep -qF 'pattern_meta=".*"'; then ok "B10 .* inside the pattern → pattern_meta=.*"; else no "B10 $o"; fi
 o="$( g --grep='hlxa\|hlxb' | root )"
 if printf '%s' "$o" | grep -q "next=\"--regex=&apos;hlxa|hlxb&apos;\""; then ok "B11 basic-grep a\\|b → next= the ERE a|b"; else no "B11 $o"; fi
 o="$( g --grep='[^h]lxa' | root )"
