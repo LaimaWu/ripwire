@@ -144,7 +144,9 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 39;           // 39: train 33 — strictly above main 36 and every live value (lane l6-iface 38, #427 / #429 38): the
+constexpr std::uint32_t kCacheVersion = 40;           // 40: train 34 — strictly above main 39 and every live value (train-33 refs, #432 39; #427 / #429 38): the
+                                                      //    fc3-js-rebind record change (LocalBindKind JsRebind, appended) lands; no other train-34 lane changed a format.
+                                                      // 39: train 33 — strictly above main 36 and every live value (lane l6-iface 38, #427 / #429 38): the
                                                       //    l6-iface record change (LocalBindKind DispatchType + ImplBlock, appended) lands; no other train-33 lane changed a format.
                                                       // 38: train 32 lane l6-iface fix round 1 (train renumbers) — LocalBindKind gained ImplBlock
                                                       //    (appended): an older binary would reject the byte, a newer must not read a blob that predates it as complete.
@@ -351,7 +353,12 @@ constexpr std::uint32_t kCacheVersion = 39;           // 39: train 33 — strict
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 224;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 226;          // bump on any grammar/.scm/extraction change
+                                                      // 226 = 2026-10-24 (train 34: lean2b, fc2-lego-extparent, honest-lex, ind4b-k5-tighten-k5c, hop1, fc3-js-rebind):
+                                                      //   strictly above every live number — main 224 (rich 225), #432 224, lane ind4b's placeholder 224 (it collided with
+                                                      //   main's), lane ind5-glob-imports 222 (223, reserved), lane fc3-js-rebind 218, #426 216, #420 214. Rich file tag 227.
+                                                      //   Mandatory: fc3-js-rebind adds LocalBindKind::JsRebind records (kCacheVersion 40); ind4b emits VarDecl records for a
+                                                      //   Python match capture, a PEP 695 type alias / type parameter, and "from:x" in an aliased import's importedName.
                                                       // 224 = 2026-10-23 (train 33: ls2-size-targets, fc1-std-qualified-name, ix5-classnew, mf1-nx, qn1-qualname, l6-iface,
                                                       //   changelog-fragments): strictly above every live number — main 220 (rich 221), lane ind5-glob-imports 222 (223, reserved),
                                                       //   #420 214 (215), #426 / lane fc1 216 (217), lane ind4b / fc3-js-rebind 218 (219), lane l6-iface and #429 212 (213).
