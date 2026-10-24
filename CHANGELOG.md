@@ -25,8 +25,9 @@ not published here — see `docs/EVALS.md` for the instruments behind the headli
   a registry or git dependency that some Cargo.toml of the tree declares (any dependency table, `[workspace.dependencies]`
   included; the key and its `package =` name; a `path =` crate or a key `[patch]`/`[replace]` names is not one), also through
   an alias the file itself spells (`use serde as sd;`, `use std::io::{Write as _};` moves no other head). A head that is a
-  crate of the tree keeps its row: a Cargo `[package]`/`[lib]` name from its tests/, examples/ and main.rs, a workspace crate
-  spelled with `_` for its `-` directory, a dependency key with `path =` under the indexed root (only a path puts a key in the tree)
+  crate of the tree keeps its row: a Cargo `[package]`/`[lib]` name from its tests/, examples/ and main.rs, a module of the
+  using file's OWN crate (a workspace crate directory of it spelled with `_` for its `-` directory; a name that is only another
+  member's directory or module, `crates/foo_core/` beside a registry `foo-core = "1"`, is no module of this file's crate), a dependency key with `path =` under the indexed root (only a path puts a key in the tree)
   (`core2 = { package = "foo-core", path = "../core" }`, also a `[dependencies.core2]` table or a dotted key), a leading `::`,
   an `extern crate foo_core as fc;` or `use foo_core as fc;` the file spells. EVERY other head — an unknown crate, an alias or
   re-export this scan did not see (`pub extern crate foo_core as fc;` in lib.rs, `use fc::T` from another file), a rename only

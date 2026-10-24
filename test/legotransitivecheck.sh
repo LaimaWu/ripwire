@@ -445,6 +445,20 @@ do
     xpfloor "XpMd${K}Base" "XpMd${K}OutReg"
     case "$k" in m2|m3|l2) xp "XpMd${K}Base" "" "XpMd${K}Real" ;; esac   # m1/t1/c5: the key is two-meaning for the app member too, so its Real row floors with the rest
 done
+# the same six shapes as their OWN root (the review's fixtures are standalone): M1's every outside-looking head matches another member's directory,
+# so the plain FE-A table is empty there and the crate-aware reader must still run
+for k in m1 m2 m3 t1 c5 l2
+do
+    K="$( printf '%s' "$k" | tr 'a-z' 'A-Z' )"
+    if "$BIN" "$FIX/xp/rsmod$k" --no-cache --lego="XpMd${K}Base" >"$DIR/out" 2>"$DIR/err"
+    then
+        OUT="$( sed 's/></>\n</g' "$DIR/out" )"
+        if iface | grep -q 'implementors_floor="1"'; then ok "standalone rsmod$k: the undecided clause keeps implementors_floor"; else no "standalone rsmod$k: no floor: $( iface )"; fi
+        if has "<impl n=\"XpMd${K}OutReg\""; then no "standalone rsmod$k lists XpMd${K}OutReg: $( iface )"; else ok "standalone rsmod$k: no XpMd${K}OutReg"; fi
+    else
+        no "standalone rsmod$k run exited non-zero: $( head -3 "$DIR/err" )"
+    fi
+done
 xp XpKeyBothBase "" "XpKeyBothA XpKeyBothB"
 xp XpKeyCtlBase "XpKeyCtlOut" ""
 if lego XpKeyCtlBase && iface | grep -q 'implementors_floor'; then no "XpKeyCtlBase carries a floor for a key every member declares as a registry crate: $( iface )"; else ok "XpKeyCtlBase: a key registry in every member stays decided (no floor)"; fi

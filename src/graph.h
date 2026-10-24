@@ -10705,11 +10705,11 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
     std::vector<NodeId> baseCand;   // one inheritance reference's base candidates, reused across references
     std::vector<NodeId> baseProven; // … and the one of them the language's lookup proves (provenBasesOf), reused
     std::vector<ImplementorBoundEdge> boundEdges;   // every edge drawn below with how it was bound; merged after the dedup
-    HashMap<std::string, char> rustOutsideBase;   // fc2-lego-extparent: built only when FE-A saw an outside `use` at all
-    if( !falseEdges.rustOutsideUse.empty() )
-    {
-        rustOutsideUses( ing, /*crateDirAware=*/true, rustOutsideBase );
-    }
+    // fc2-lego-extparent: the crate-aware table, read from the tree itself (it returns at once for a tree with no Rust). NOT gated on FE-A's
+    // plain table, which skips every head that is a module ANYWHERE in the tree: a tree whose every outside-looking head matches some other
+    // member's directory would otherwise have no table at all, and no Cargo verdict would ever run.
+    HashMap<std::string, char> rustOutsideBase;
+    rustOutsideUses( ing, /*crateDirAware=*/true, rustOutsideBase );
     HashMap<std::string, char> selfImport = jsImports.targets.empty() ? HashMap<std::string, char>{} : jsSelfPackageImports( ing );
     for( auto& [ k, v ] : pythonRootPackageImports( ing ) )
     {
