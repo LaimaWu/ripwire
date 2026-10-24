@@ -9594,6 +9594,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         }
         if( rustBaseUndecided( baseEvidence, r ) )
         {
+            markImplementorsOpen( r );   // composition with lane L6: the dropped clause may implement this in-tree trait, so the dispatch tier steps aside (as for any implementor the map cannot list)
             continue;   // fc2-lego-extparent: a `use` head the tree cannot place and cannot prove outside — no edge, no decision (the floor says so)
         }
         if( ing.symbols[ derived ].lang == Lang::Ruby )
