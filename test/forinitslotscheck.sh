@@ -31,7 +31,7 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "forinitslotscheck: BIN=$BIN"
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
@@ -109,32 +109,32 @@ run f2 "$FIX/c" RIPWIRE_NO_BODY_FOLD=1 -- "--for=o"
 run f3 "$FIX/c" RIPWIRE_NO_BODY_FOLD=1 -- "--for=$Q_C" --json
 run x1 "$FIX/c" RIPWIRE_NO_BODY_FOLD=1 -- "--for=$Q_C"
 
-m="$( chk slots "$TMP/a1.xml" o "run=f,stop=g" )" && ok "A1 designated initializer: slots=\"run=f,stop=g\"" || no "A1 $m"
-m="$( chk slots "$TMP/a1.xml" positional_ops "[0]=f,[1]=g" )" && ok "A2 positional initializer: slots=\"[0]=f,[1]=g\"" || no "A2 $m"
-m="$( chk slots "$TMP/a3.xml" HANDLER_TABLE '["run"]=run_handler,["stop"]=stop_handler' )" && ok "A3 Python dict literal: both handlers by key" || no "A3 $m"
+if m="$( chk slots "$TMP/a1.xml" o "run=f,stop=g" )"; then ok "A1 designated initializer: slots=\"run=f,stop=g\""; else no "A1 $m"; fi
+if m="$( chk slots "$TMP/a1.xml" positional_ops "[0]=f,[1]=g" )"; then ok "A2 positional initializer: slots=\"[0]=f,[1]=g\""; else no "A2 $m"; fi
+if m="$( chk slots "$TMP/a3.xml" HANDLER_TABLE '["run"]=run_handler,["stop"]=stop_handler' )"; then ok "A3 Python dict literal: both handlers by key"; else no "A3 $m"; fi
 CAPW="$( python3 -c 'print(",".join("s%02d=op%02d" % (i, i) for i in range(16)))' )"
-m="$( chk slots "$TMP/a4.xml" big_optable "$CAPW" 4 )" && ok "A4 cap: 16 pairs, slots_more=\"4\"" || no "A4 $m"
+if m="$( chk slots "$TMP/a4.xml" big_optable "$CAPW" 4 )"; then ok "A4 cap: 16 pairs, slots_more=\"4\""; else no "A4 $m"; fi
 if grep -q '<fold ' "$TMP/b1.xml" && grep -q 'n="o"><!\[CDATA\[const struct ops o' "$TMP/b1.xml"; then
-    m="$( chk none "$TMP/b1.xml" o )" && ok "B1 the fold serves o's body: no slots= on o" || no "B1 $m"
+    if m="$( chk none "$TMP/b1.xml" o )"; then ok "B1 the fold serves o's body: no slots= on o"; else no "B1 $m"; fi
 else
     no "B1 vacuous: the fold did not serve o's body"
 fi
-m="$( chk none "$TMP/a1.xml" ops dispatch )" && ok "B2 struct row and function row carry no slots=" || no "B2 $m"
-m="$( chk noattr "$TMP/f1.xml" )" && m2="$( chk clause "$TMP/f1.xml" 0 )" && ok "F1 RIPWIRE_NO_INIT_SLOTS=1: no slots=, no clause" || no "F1 $m ${m2:-}"
-m="$( chk prefix "$TMP/a1.xml" "$TMP/f1.xml" )" && ok "F1 prefix identity: only slots= and its clause differ (compact)" || no "F1 compact $m"
-m="$( chk prefix "$TMP/a1f.xml" "$TMP/f1f.xml" )" && ok "F1 prefix identity: only slots= and its clause differ (full legend)" || no "F1 full $m"
-m="$( chk noattr "$TMP/f2.xml" )" && ok "F1 name-exact --for=o carries no slots=" || no "F1 name-exact $m"
-m="$( chk noattr "$TMP/f3.xml" )" && ok "F1 --json carries no slots=" || no "F1 json $m"
-m="$( chk clause "$TMP/a1.xml" 1 )" && m2="$( chk clause "$TMP/a1f.xml" 1 )" && ok "L1 the clause defines slots= and slots_more= (compact and full)" || no "L1 $m ${m2:-}"
-m="$( chk clause "$TMP/b1.xml" 0 )" && ok "L2 no row carries slots=: no clause" || no "L2 $m"
-cmp -s "$TMP/a1.xml" "$TMP/x1.xml" && ok "X1 determinism" || no "X1 two runs differ"
+if m="$( chk none "$TMP/a1.xml" ops dispatch )"; then ok "B2 struct row and function row carry no slots="; else no "B2 $m"; fi
+if m="$( chk noattr "$TMP/f1.xml" )" && m2="$( chk clause "$TMP/f1.xml" 0 )"; then ok "F1 RIPWIRE_NO_INIT_SLOTS=1: no slots=, no clause"; else no "F1 $m ${m2:-}"; fi
+if m="$( chk prefix "$TMP/a1.xml" "$TMP/f1.xml" )"; then ok "F1 prefix identity: only slots= and its clause differ (compact)"; else no "F1 compact $m"; fi
+if m="$( chk prefix "$TMP/a1f.xml" "$TMP/f1f.xml" )"; then ok "F1 prefix identity: only slots= and its clause differ (full legend)"; else no "F1 full $m"; fi
+if m="$( chk noattr "$TMP/f2.xml" )"; then ok "F1 name-exact --for=o carries no slots="; else no "F1 name-exact $m"; fi
+if m="$( chk noattr "$TMP/f3.xml" )"; then ok "F1 --json carries no slots="; else no "F1 json $m"; fi
+if m="$( chk clause "$TMP/a1.xml" 1 )" && m2="$( chk clause "$TMP/a1f.xml" 1 )"; then ok "L1 the clause defines slots= and slots_more= (compact and full)"; else no "L1 $m ${m2:-}"; fi
+if m="$( chk clause "$TMP/b1.xml" 0 )"; then ok "L2 no row carries slots=: no clause"; else no "L2 $m"; fi
+if cmp -s "$TMP/a1.xml" "$TMP/x1.xml"; then ok "X1 determinism"; else no "X1 two runs differ"; fi
 if command -v xmllint >/dev/null 2>&1; then
     bad=0; for f in a1 a1f a3 a4 b1; do xmllint --noout "$TMP/$f.xml" 2>/dev/null || { bad=1; no "X2 $f.xml not well-formed"; }; done
     [ "$bad" = 0 ] && ok "X2 xmllint well-formed"
 else
     echo "  SKIP  X2 xmllint not installed"
 fi
-m="$( chk nocomment-dash "$TMP/a1f.xml" )" && ok "X3 no '--' inside the legend comment" || no "X3 $m"
+if m="$( chk nocomment-dash "$TMP/a1f.xml" )"; then ok "X3 no '--' inside the legend comment"; else no "X3 $m"; fi
 
 [ "$fail" = 0 ] && echo "forinitslotscheck: PASS" || echo "forinitslotscheck: FAIL"
 exit "$fail"

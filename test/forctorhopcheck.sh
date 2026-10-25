@@ -24,7 +24,7 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "forctorhopcheck: BIN=$BIN"
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
@@ -88,23 +88,23 @@ run f2 "$FIX/js" RIPWIRE_NO_BODY_FOLD=1 -- "--for=create"
 run f3 "$FIX/js" RIPWIRE_NO_BODY_FOLD=1 -- "--for=$Q" --json
 run x1 "$FIX/js" RIPWIRE_NO_BODY_FOLD=1 -- "--for=$Q"
 
-m="$( chk ctor "$TMP/a1.xml" create 10 makeStore,makeLogger )" && ok "A1 JS constructor: ctor_l=\"10\" ctor_calls=\"makeStore,makeLogger\"" || no "A1 $m"
-m="$( chk ctor "$TMP/a2.xml" Registry.create 6 make_store )" && ok "A2 Python __init__: ctor_l=\"6\" ctor_calls=\"make_store\"" || no "A2 $m"
-m="$( chk none "$TMP/b1.xml" create )" && ok "B1 no constructor: no ctor_l=" || no "B1 $m"
+if m="$( chk ctor "$TMP/a1.xml" create 10 makeStore,makeLogger )"; then ok "A1 JS constructor: ctor_l=\"10\" ctor_calls=\"makeStore,makeLogger\""; else no "A1 $m"; fi
+if m="$( chk ctor "$TMP/a2.xml" Registry.create 6 make_store )"; then ok "A2 Python __init__: ctor_l=\"6\" ctor_calls=\"make_store\""; else no "A2 $m"; fi
+if m="$( chk none "$TMP/b1.xml" create )"; then ok "B1 no constructor: no ctor_l="; else no "B1 $m"; fi
 if grep -q '<b t="cls" l="9" p="store.js" n="Registry">' "$TMP/b2.xml"; then
-    m="$( chk none "$TMP/b2.xml" create )" && ok "B2 the fold serves the class body: no ctor_l=" || no "B2 $m"
+    if m="$( chk none "$TMP/b2.xml" create )"; then ok "B2 the fold serves the class body: no ctor_l="; else no "B2 $m"; fi
 else
     no "B2 vacuous: the fold did not serve Registry"
 fi
-m="$( chk none "$TMP/b3.xml" Registry )" && ok "B3 r=1 is the class: no ctor_l=" || no "B3 $m"
-m="$( chk none "$TMP/f1.xml" )" && m2="$( chk clause "$TMP/f1.xml" 0 )" && ok "F1 RIPWIRE_NO_CTOR_HOP=1: none, no clause" || no "F1 $m ${m2:-}"
-m="$( chk prefix "$TMP/a1.xml" "$TMP/f1.xml" )" && ok "F1 prefix identity (compact)" || no "F1 compact $m"
-m="$( chk prefix "$TMP/a1f.xml" "$TMP/f1f.xml" )" && ok "F1 prefix identity (full legend)" || no "F1 full $m"
-m="$( chk none "$TMP/f2.xml" )" && ok "F1 name-exact --for=create carries none" || no "F1 name-exact $m"
-m="$( chk none "$TMP/f3.xml" )" && ok "F1 --json carries none" || no "F1 json $m"
-m="$( chk clause "$TMP/a1.xml" 1 )" && m2="$( chk clause "$TMP/a1f.xml" 1 )" && ok "L1 the clause rides in both dialects" || no "L1 $m ${m2:-}"
-m="$( chk clause "$TMP/b1.xml" 0 )" && ok "L2 no ctor_l=: no clause" || no "L2 $m"
-cmp -s "$TMP/a1.xml" "$TMP/x1.xml" && ok "X1 determinism" || no "X1 two runs differ"
+if m="$( chk none "$TMP/b3.xml" Registry )"; then ok "B3 r=1 is the class: no ctor_l="; else no "B3 $m"; fi
+if m="$( chk none "$TMP/f1.xml" )" && m2="$( chk clause "$TMP/f1.xml" 0 )"; then ok "F1 RIPWIRE_NO_CTOR_HOP=1: none, no clause"; else no "F1 $m ${m2:-}"; fi
+if m="$( chk prefix "$TMP/a1.xml" "$TMP/f1.xml" )"; then ok "F1 prefix identity (compact)"; else no "F1 compact $m"; fi
+if m="$( chk prefix "$TMP/a1f.xml" "$TMP/f1f.xml" )"; then ok "F1 prefix identity (full legend)"; else no "F1 full $m"; fi
+if m="$( chk none "$TMP/f2.xml" )"; then ok "F1 name-exact --for=create carries none"; else no "F1 name-exact $m"; fi
+if m="$( chk none "$TMP/f3.xml" )"; then ok "F1 --json carries none"; else no "F1 json $m"; fi
+if m="$( chk clause "$TMP/a1.xml" 1 )" && m2="$( chk clause "$TMP/a1f.xml" 1 )"; then ok "L1 the clause rides in both dialects"; else no "L1 $m ${m2:-}"; fi
+if m="$( chk clause "$TMP/b1.xml" 0 )"; then ok "L2 no ctor_l=: no clause"; else no "L2 $m"; fi
+if cmp -s "$TMP/a1.xml" "$TMP/x1.xml"; then ok "X1 determinism"; else no "X1 two runs differ"; fi
 if command -v xmllint >/dev/null 2>&1; then
     bad=0; for f in a1 a1f a2 b1 b2 b3; do xmllint --noout "$TMP/$f.xml" 2>/dev/null || { bad=1; no "X2 $f.xml not well-formed"; }; done
     [ "$bad" = 0 ] && ok "X2 xmllint well-formed"

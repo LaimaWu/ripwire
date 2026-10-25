@@ -26,7 +26,7 @@ BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "mapstemcheck: BIN=$BIN"
 fail=0
-ok(){ printf '  PASS  %s\n' "$*"; }
+ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
@@ -87,18 +87,18 @@ elif cmd == "prefix":
     if mask(on) != mask(off): print("rows beyond the stem row differ"); sys.exit(1)
 PY
 chk(){ python3 "$TMP/chk.py" "$@"; }
-m="$( chk a1 "$TMP/a1.out" )" && ok "A1 WidgetParser rides after WidgetError, stem=\"1\"" || no "A1 $m"
-m="$( chk shown "$TMP/a1.out" 4 )" && ok "A2 shown=4 counts the stem row" || no "A2 $m"
-m="$( chk json "$TMP/a3.out" )" && ok "A3 --json twin: \"stem\":1, \"shown\":4" || no "A3 $m"
-m="$( chk nostemin "$TMP/b1.out" pkg/helpers.py )" && ok "B1 a file whose kept rows hold its stem type gains nothing" || no "B1 $m"
-m="$( chk nostemin "$TMP/b2.out" tests/test_widgetparsers.py )" && ok "B2 a test file gains no stem row" || no "B2 $m"
-m="$( chk nostem "$TMP/b3.out" )" && ok "B3 every symbol kept: no stem row, no clause" || no "B3 $m"
-m="$( chk prefix "$TMP/a1.out" "$TMP/a1off.out" )" && ok "C1 no kept row lost or moved: only the stem row, its clause and shown= differ" || no "C1 $m"
-m="$( chk clause "$TMP/a1.out" )" && ok "L1 the clause defines stem=" || no "L1 $m"
-m="$( chk nostem "$TMP/a1off.out" )" && ok "L2 RIPWIRE_NO_MAP_STEM=1: no stem row, no clause" || no "L2 $m"
-cmp -s "$TMP/a1.out" "$TMP/x1.out" && ok "X1 determinism" || no "X1 two runs differ"
+if m="$( chk a1 "$TMP/a1.out" )"; then ok "A1 WidgetParser rides after WidgetError, stem=\"1\""; else no "A1 $m"; fi
+if m="$( chk shown "$TMP/a1.out" 4 )"; then ok "A2 shown=4 counts the stem row"; else no "A2 $m"; fi
+if m="$( chk json "$TMP/a3.out" )"; then ok "A3 --json twin: \"stem\":1, \"shown\":4"; else no "A3 $m"; fi
+if m="$( chk nostemin "$TMP/b1.out" pkg/helpers.py )"; then ok "B1 a file whose kept rows hold its stem type gains nothing"; else no "B1 $m"; fi
+if m="$( chk nostemin "$TMP/b2.out" tests/test_widgetparsers.py )"; then ok "B2 a test file gains no stem row"; else no "B2 $m"; fi
+if m="$( chk nostem "$TMP/b3.out" )"; then ok "B3 every symbol kept: no stem row, no clause"; else no "B3 $m"; fi
+if m="$( chk prefix "$TMP/a1.out" "$TMP/a1off.out" )"; then ok "C1 no kept row lost or moved: only the stem row, its clause and shown= differ"; else no "C1 $m"; fi
+if m="$( chk clause "$TMP/a1.out" )"; then ok "L1 the clause defines stem="; else no "L1 $m"; fi
+if m="$( chk nostem "$TMP/a1off.out" )"; then ok "L2 RIPWIRE_NO_MAP_STEM=1: no stem row, no clause"; else no "L2 $m"; fi
+if cmp -s "$TMP/a1.out" "$TMP/x1.out"; then ok "X1 determinism"; else no "X1 two runs differ"; fi
 if command -v xmllint >/dev/null 2>&1; then
-    xmllint --noout "$TMP/a1.out" 2>/dev/null && ok "X2 xmllint well-formed" || no "X2 not well-formed"
+    if xmllint --noout "$TMP/a1.out" 2>/dev/null; then ok "X2 xmllint well-formed"; else no "X2 not well-formed"; fi
 else
     echo "  SKIP  X2 xmllint not installed"
 fi
