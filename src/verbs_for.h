@@ -4247,7 +4247,7 @@ std::optional<int> runTargetedViews( const MainDispatch& d )
         // not tie to the file it named. implementors= is read off the one node picked here, so unreported, a drop reached
         // the reader as implementors="0" about a forward declaration.
         std::size_t  legoUnprovenDefs = 0;
-        const NodeId focus            = resolveFocus( ing, cfg.legoType, &legoUnprovenDefs );
+        const NodeId focus            = resolveLegoFocus( ing, g.implementors, cfg.legoType, &legoUnprovenDefs );
         if( focus == kNoNode )
         {
             // §B4.2: one shared refusal — a non-defining `file:name` says WHICH files define the type and

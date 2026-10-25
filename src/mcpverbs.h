@@ -1866,8 +1866,10 @@ inline std::string situationDiffJson( const std::string& root, const std::string
 
 // The @FILE:LINE rebind the NAME-matching scan verbs' payload fns share (2026-08-30 decision round): a
 // resolvable line-seed's ONE innermost enclosing definition — the SEED's own def, exactly the CLI twin's
-// resolveAllByNameQualified @-tier semantics, never the bare-name union (for `owners` the union's
-// lowest-id pick could name the WRONG file). kNoNode when sym is not a seed, or the seed faults — the
+// resolveAllByNameQualified @-tier semantics, NEVER the bare-name union. Once the name tier took the tower it is the
+// UNION that moved: the `owners` name-tier answer arrives tower-ordered, so the union's pick is the tower front (its
+// pre-tower lowest-id pick could name the WRONG file). The seed path is untouched by that move — seed.chain.back() is
+// a line enclosure, which no name tower reorders. kNoNode when sym is not a seed, or the seed faults — the
 // dispatch guards (qualifiedSelectorRefusal) refuse faulted seeds upstream with the shared at-diagnosis.
 inline NodeId atSeedDefOr( const IngestResult& ing, std::string_view sym )
 {
@@ -2914,7 +2916,7 @@ inline std::string legoText( const std::string& root, const std::string& type, R
     const McpIndex&     ix           = getIndex( root );
     const IngestResult& ing          = ix.ing;
     std::size_t         unprovenDefs = 0;   // H1: the decl→def residue, the CLI --lego's unproven_defs= — same resolver, same helpers
-    const NodeId        focus        = resolveFocus( ing, type, &unprovenDefs );
+    const NodeId        focus        = resolveLegoFocus( ing, ix.g.implementors, type, &unprovenDefs );
     if( focus == kNoNode )
     {
         return {};
@@ -2977,7 +2979,7 @@ inline std::optional<std::string> ownersText( const std::string& root, const std
         {
             return std::string{}; // symbol not found → caller sends -32602
         }
-        // ONE of N definitions — the lowest node id — and the report then covers that definition's file
+        // ONE of N definitions — the tower front (kind, leading language, then the lowest id) — and the report then covers that definition's file
         // alone under files="1", while callers/uses/impact/mentions on the same name all disclose defs=.
         onlyFileId  = ing.symbols[ defs[0] ].fileId;
         symDefCount = defs.size();
@@ -3012,7 +3014,7 @@ inline std::optional<std::string> ownersText( const std::string& root, const std
                        "files= means two different things by DEPTH here and is deliberately not renamed: on the ROOT it is how "
                        "many files were ANALYSED; on the <uniform/> fold it is how many of them collapsed into that one row. "
                        "With a symbol, of= echoes it and defs= is how many DEFINITIONS that name has: this report covers the "
-                       "file holding the FIRST of them (lowest node id), so defs= above 1 means the other definitions' files "
+                       "file holding the TOWER FRONT of them (most specific kind, leading language, then lowest node id), so defs= above 1 means the other definitions' files "
                        "were NOT analysed. An @FILE:LINE seed rebinds to the innermost definition enclosing that line "
                        "(sym= names it) and covers exactly that definition's file -->" );
     // 0.6.6: the CLI --owners qualification, on the same element in the same slot (before at=).
@@ -3975,7 +3977,7 @@ inline constexpr char kConnectHeader[] =
     " graph_ambiguous=/graph_unresolved= are the whole graph's resolver gauge (calls split over several defs / calls"
     " whose in-repo defs were all language-filtered), the map header's ambiguous=/unresolved=."
     " defs= on a terminal row = that NAME has N definitions; every one is scored and the one reaching the most other"
-    " terminals within radius= (fewest hops) is used, else the lowest id (a C/C++ declaration without a body yields to the"
+    " terminals within radius= (fewest hops) is used, else the tower front (most specific kind, leading language, lowest id; a C/C++ declaration without a body yields to the"
     " definition of its scope); ambiguous_terminal= on the root names terminals whose pick tied with another equally-joining"
     " definition. Qualify with file:name to pick another. Steiner rows never carry it."
     " connects= on a Steiner row = how many DISTINCT symbols that intermediary joins (its callers plus its"
@@ -5002,12 +5004,12 @@ inline EditCheckReply editCheckText( const std::string& root, const std::string&
             return EditCheckReply{ {}, "new_body " + std::string( mcpedit::kBinaryPayloadRefusal ) };
         }
         const rw::editpreview::Outcome preview =
-            rw::editpreview::run( ing, g, root, kDefaultMaxFileBytes, {}, true, symbol, groups[0].lowestNode, newBody, nullptr,
+            rw::editpreview::run( ing, g, root, kDefaultMaxFileBytes, {}, true, symbol, groups[0].focusNode, newBody, nullptr,
                                    pg.limit, pg.offset );
         return preview.ok ? EditCheckReply{ preview.xml, {} } : EditCheckReply{ {}, preview.message };
     }
 
-    return EditCheckReply{ editCheckBundleText( ing, g, root, kDefaultMaxFileBytes, {}, groups[0].lowestNode,
+    return EditCheckReply{ editCheckBundleText( ing, g, root, kDefaultMaxFileBytes, {}, groups[0].focusNode,
                                                  /*ni=*/nullptr, /*preview=*/false,
                                                  // lane lean2b (card #9): the CLI's verdict-only fold — a clean contract at HEAD with nothing
                                                  // flagged answers the verdict + rows_next= (the MCP call, limit=N, that lists the callers), callers= kept
@@ -5348,7 +5350,7 @@ inline FetchOutcome fetchBody( const std::string& root, const std::string& handl
                                RedactCounts* redact = nullptr );
 
 // R2c (the 2026-08-12 usage mine): serve fetch_body for a bare symbol NAME through the SAME lookup path
-// find_symbol uses (resolveAllByNameQualified → the lowest-id pick; resolveFocus's C/C++ body preference is NOT applied), then
+// find_symbol uses (resolveAllByNameQualified → the tower-front pick; resolveFocus's C/C++ body preference is NOT applied), then
 // RECURSE into fetchBody with the freshly-minted real handle — every staleness/overload guarantee applies
 // unchanged, and the result teaches the handle for next time. Disclosed: resolved_from_name always;
 // name_defs/other_defs (file:line + handle, capped) when the name has several DISTINCT defs — the honest

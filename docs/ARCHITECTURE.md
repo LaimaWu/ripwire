@@ -747,9 +747,11 @@ definitions and says how it got there. Input spellings: a bare name, `file:name`
 the canonical id the tool prints, `@FILE:LINE`, a `*` glob, and the changed symbols of a diff. All of them go through
 `resolveAllByNameQualified` (`graph.h`) or one of its tiers. The diff-hunk producer (`diffhunks.h`, `situ.h`) maps
 hunks to the symbols whose bodies they touch, and falls back to the whole file when no body holds a hunk
-(contributed by @llvm-x86 in #423). Matches come back in index order (ascending id); a verb that needs ONE
-focus takes it from `resolveFocus` (`graph.h`): a code definition before a docs heading or a config key, the lowest id
-among those, and a bodyless C/C++ declaration yields to the same-scope definition with a body. A seed resolver never
+(contributed by @llvm-x86 in #423). Several definitions with one name are ordered by one total order, the name tower
+(`applyNameTower`, `kindSpecificity` in `model.h`; contributed by @mpapis in #432). A verb that needs ONE focus takes
+it from `resolveFocus` (`graph.h`; `--lego` and the MCP `lego` verb take theirs from `resolveLegoFocus`: the
+role order, then `focusOfOrderedMatches`): the tower front, a code definition before a docs heading or a config
+key, and a bodyless C/C++ declaration yields to the same-scope definition with a body. A seed resolver never
 picks silently. `defs=`, `unproven_defs=`, `from_defs=`/`to_defs=` and the `<def>` table disclose the candidates.
 The rule: **any spelling the output prints is a spelling the input accepts.**
 
@@ -782,7 +784,7 @@ cut something is printed (`capped=`, `total=`, `next=`). It is never reported as
 **One coupling, stated on purpose.** When a name has several definitions, the *pick* can depend on the walk:
 the right `Loop` is the one that reaches the other endpoint. The seed layer therefore returns the ordered
 candidates. A walk that must choose uses the one shared terminal scorer (`scoreTerminalCandidates`, `graph.h`),
-with `resolveFocus`'s order as the tie-break, and it prints the alternatives it did not take.
+with the tower as the tie-break, and it prints the alternatives it did not take.
 
 **Adding to a layer.**
 - A new spelling goes in the seed resolver. The verbs pick it up from there.
