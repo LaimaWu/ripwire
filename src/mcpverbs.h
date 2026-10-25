@@ -1222,6 +1222,21 @@ inline std::string grepDegradedNoteJson( const IngestResult& ing, std::span<cons
 // and 29 unindexed rows — 2,805 B for a three-row answer — because `limit` reached the indexed list only.
 // The keys are the CLI element's attributes verbatim (count/shown/capped) so the two dialects state the
 // same facts under the same names; `rows` holds what the window admitted.
+// honest-lex: the CLI row's occ= twin — the pattern occurs N times on this one line; "" when once.
+inline std::string grepOccJson( std::uint32_t occ )
+{
+    return countFieldOrEmpty( "occ", occ > 1 ? occ : 0, /*json=*/true );
+}
+
+// The root's next for this literal-only verb: the CLI grepRootNext twin. A regex-shaped pattern → the regex run first
+// (when the regex verb accepts it), else the caller's three-way rule.
+template <class FallbackFn>
+inline std::string grepMetaNextOr( std::string_view pattern, FallbackFn&& fallback )
+{
+    const std::string metaRegex = grepPatternMeta( pattern ).empty() ? std::string() : grepMetaRegex( pattern );
+    return metaRegex.empty() ? fallback() : nextFlag( "--regex=", metaRegex );
+}
+
 inline std::string grepAuxJson( const std::vector<GrepAuxHit>& hits, const PageWindow& window, bool singleRoot,
                                 const std::string& rootPrefix )
 {
@@ -1241,7 +1256,7 @@ inline std::string grepAuxJson( const std::vector<GrepAuxHit>& hits, const PageW
         if( !first ) { out += ","; }
         first = false;
         out += "{\"file\":\"" + mcpdetail::jsonEscape( std::string( singleRoot ? sarif::rootRelativeUri( h.path, rootPrefix ) : std::string_view( h.path ) ) )
-             + "\",\"line\":" + std::to_string( h.line ) + "}";
+             + "\",\"line\":" + std::to_string( h.line ) + grepOccJson( h.occ ) + "}";
     }
     out += "]}";
     return out;
@@ -1292,12 +1307,12 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
     // the MCP `in` argument (the CLI --grep-in twin): the escape hatch has to exist here too, because an
     // MCP-only agent that reads suppressed_comment= has no CLI to re-ask from. Counters ride the payload
     // below under the CLI's own key names.
-    const GrepCollection       collected = grepApplySpanTiers( ing, grepCollect( ing, pattern, /*regex=*/false, /*noPrefilter=*/false ),
-                                                               grepInMode, tierReport, /*useMemo=*/true, pattern );
+    const GrepCollection       collected = grepFoldLines( grepApplySpanTiers( ing, grepCollect( ing, pattern, /*regex=*/false, /*noPrefilter=*/false ),
+                                                                              grepInMode, tierReport, /*useMemo=*/true, pattern ) );   // honest-lex: one row per line
     const int                  grepRowCap   = tierReport.servedString > 0 ? kGrepLiftRowCap : 100;   // the CLI's default window (idea #5; ranked lifts only)
     const PageWindow           grepPage  = pageWindow( collected.raw.size(), effectiveRowCap( page.limit, grepRowCap ), page.offset );
     const std::size_t          rowCount  = grepPage.end - grepPage.begin;
-    const std::vector<GrepHit> hits      = grepEnrich( ing, std::span<const GrepRawHit>( collected.raw ).subspan( grepPage.begin, rowCount ), 0, 0 );
+    const std::vector<GrepHit> hits      = grepEnrichPage( ing, collected, grepPage.begin, rowCount );
     // R1 <enc> rows and L4's carrier verdict, once, before the root: next= reads them (grepCarrierNext) and so does the
     // enclosing block. The MCP index is the RICH family (mcpindex.h ingests with value uses), so its own references
     // carry the reads — no second ingest here, unlike the lean CLI run. Reads are counted on the SAME pages the CLI counts
@@ -1372,6 +1387,7 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                     // G1: mirrors the CLI <grep root="…"> — same condition (singleRootJ), same fact, right
                     // after pattern like the CLI's attribute order (mcpclidiffcheck.sh's LENS2 fact-parity).
                     + ( singleRootJ ? ( "\",\"root\":\"" + mcpdetail::jsonEscape( root ) + "\"" ) : "\"" )
+                    + textFieldOrEmpty( "pattern_meta", mcpdetail::jsonEscape( grepPatternMeta( pattern ) ), /*json=*/true )   // honest-lex
                     + ",\"files\":" + std::to_string( filesMatched )
                     + ( isPaging ? std::string{} : ( ",\"total\":" + std::to_string( collected.raw.size() ) ) )
                     + pageDisclosure( pagebuf, sizeof( pagebuf ), rowCount, collected.raw.size(), grepPage.end,
@@ -1380,13 +1396,13 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
                     + ",\"hits_capped\":" + ( collected.isBudgetReached ? "true" : "false" )
                     + ( scanExhaustive && windowWhole && nothingHeldBack ? ",\"complete\":true" : "" )
                     // P3 (L7): the CLI grep root's next= — the same three-way rule (verbs_grep.h), mcpclidiffcheck LENS2
-                    + nextFieldJson( ( grepPage.end < collected.raw.size() || collected.isBudgetReached )
+                    + nextFieldJson( grepMetaNextOr( pattern, [ & ] { return ( grepPage.end < collected.raw.size() || collected.isBudgetReached )
                                          ? nextFlag( "--grep=", pattern ) + " --offset=" + std::to_string( grepPage.end ) + " --legend=compact"
                                      : !carrierNextJ.empty()
                                          ? carrierNextJ
                                      : !collected.raw.empty() && grepPage.begin < collected.raw.size()
                                          ? nextFlag( "--at=", std::string( pathForJ( collected.raw[ grepPage.begin ].fileId ) ) + ":" + std::to_string( collected.raw[ grepPage.begin ].line ) )
-                                         : nextFlag( "--for=", pattern ) )
+                                         : nextFlag( "--for=", pattern ); } ) )
                     + tierKeys
                     // G4 (2026-08-15 harvest, report-ugrep §F6): the CLI's corpus_excluded=/corpus_oversize=
                     // twins — present only when non-zero, same condition as the CLI emitter.
@@ -1430,7 +1446,7 @@ inline std::string grepHitsJson( const std::string& root, const std::string& pat
         {
             out += ",\"line_bytes\":" + std::to_string( h.lineBytes );
         }
-        out += "}";
+        out += grepOccJson( h.occ ) + "}";
     }
     out += "]";
     // parse_degraded's in-band definition (helper above) — "" on a clean answer.
@@ -2213,7 +2229,7 @@ inline McpForAssembly assembleMcpFor( const McpForAssemblyInputs& in, std::strin
     const std::string mcpLegoRootPrefix = flRootArg.empty() ? std::string() : rw::sarif::rootPrefixOf( flRootArg );
     if( !legoStr.empty() && narrowLegoToRenderedSigs( ing, legoScoped, sigsRowsAtTarget( sigsStr, mcpSigsCut ), mcpLegoRootPrefix ) )   // forbudget-soft
     {
-        legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount, &implementors ); } );   // R-R: the re-render dropped the root its first render (above) passed
+        legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, LegoTargetedArgs().withDecidedOutside( in.g.baseOutsideClauses ), &legoPreCapCount, &implementors ); } );   // R-R: the re-render dropped the root its first render (above) passed
     }
     // R2-L2' (round-2, priced re-registration of L2/B1): the CLI twin's exact stub substitution
     // (verbs_for.h) — same rule, same restoring spelling (kept as the CLI flag form: this dialect's next=
@@ -2799,7 +2815,7 @@ inline std::optional<std::string> forTaskText( const std::string& root, const st
     // L2 (round-1 lever B1): each renderer's OWN pre-cap row count, captured by the SAME call that renders
     // the real body — see verbs_for.h's identical CLI-twin comment for the full rationale.
     std::size_t legoPreCapCount = 0, composePreCapCount = 0;
-    std::string legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, {}, &legoPreCapCount, &ix.g.implementors ); } );
+    std::string legoStr = renderToString( [ & ]( std::FILE* m2 ) { packLego( m2, ing, legoScoped, lensRank, 12, redact, &impure, kNoNode, /*withPaths=*/true, flRootArg, LegoTargetedArgs().withDecidedOutside( ix.g.baseOutsideClauses ), &legoPreCapCount, &ix.g.implementors ); } );
     std::string composeStr, routeStr;
     if( !ix.g.composeEdges.empty() )
     {
@@ -2914,12 +2930,12 @@ inline std::string legoText( const std::string& root, const std::string& type, R
         // clause rides as its own comment beside the closed literal, exactly as on the CLI.
         rw::emitTo( mem, "<ctx>{}{}{}{}{}", kLegoLegend, graphUnindexedLegendComment( rw::graphGaugeClauses( ix.g ) ).c_str(),
                     unprovenDefsVerbComment( UnprovenDefsVerb::Lego, unprovenDefs > 0, "<!-- ripwire lego: " ).c_str(),
-                    implementorsFloorLegendComment( ing, ix.g.implementors, focus ),   // count-floor: the CLI twin's clause
+                    implementorsFloorLegendComment( ing, ix.g.implementors, focus, ix.g.baseOutsideClauses ),   // count-floor: the CLI twin's clause
                     legoClosureLegendComment( ix.g.implementors, ix.g.implementorBound, focus ).c_str() );   // lane lego-transitive: the deeper rows' clause, as on the CLI
         const std::string legoTargetedAttr = unprovenDefsAttrXml( unprovenDefs ) + graphCountFloorAttrXml( ix.g );   // outlives the call
         packLego( mem, ing, ix.g.implementors, flat, 1, redact, &impure, focus, /*withPaths=*/true,
                   ing.realPaths.empty() ? std::string_view( root ) : std::string_view(),    // R-R: root-relative <iface p=>
-                  LegoTargetedArgs( legoTargetedAttr, page.limit, page.offset, &ix.g.implementorBound ).withMainRows( ix.g.rubyMainMixins ) );   // H1 + M15 + the deeper-row page, as on the CLI
+                  LegoTargetedArgs( legoTargetedAttr, page.limit, page.offset, &ix.g.implementorBound ).withMainRows( ix.g.rubyMainMixins ).withDecidedOutside( ix.g.baseOutsideClauses ) );   // H1 + M15 + the deeper-row page, as on the CLI
         rw::emitRaw( mem, "</ctx>" );
     } );
 }
@@ -3226,6 +3242,8 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     sizeImportTier( imports, page.limit, symbol );   // cut-fix C: limit sizes the tier, as on the CLI
     // Reference-as-value round: SYM's binding sites, the CLI --impact's value_refs=/<vrs> by the same call.
     const ValueRefRows  imValueRefs = valueRefCallerRows( ing, valueRefIndexOf( ix ), seeds );
+    const BackwardHops  imBackHops( ing, g, valueRefIndexOf( ix ) );                  // HOP1: the CLI --impact's hedged slot ring, by the same calls
+    const ImpactRing    imRing      = impactSlotRing( ing, imBackHops, seeds, reach );
     const PageWindow    ipw         = pageWindow( show.size(), effectiveRowCap( page.limit, 40 ), page.offset );
     // idea #6: the CLI arm's rollup, under the same rule — it rides only beside a CUT symbol window
     ImpactTypeFold   typeFold;
@@ -3257,6 +3275,7 @@ inline std::optional<std::string> impactText( const std::string& root, const std
                   ( std::string( valueRefsReachLegend( !imValueRefs.rows.empty() ) )                  // exactly when the root carries value_refs=, as on the CLI
                     + valueRefsDepthLegendFor( imValueRefs )                                             // ... and the depth disclosure, as on the CLI
                     + std::string( slotJoinLegend( imValueRefs.slotCallers, true ) )                 // IX-1: exactly when a <vr> row carries via=, as on the CLI
+                    + impactRingLegend( imRing.hedged > 0, !imRing.rows.empty() )                     // HOP1: exactly when reaches_hedged= / <ring> ride, as on the CLI
                     + impactRollupLegend( !imFiles.rows.empty(), imports.umbrella, impactRollupHedged( imFiles ), !imports.next.empty(),
                                           ImpactRollupTypeClauses{ imFiles.typed, imFiles.typeDefs, imFiles.typeCapped } )   // idea #6; FIX1 R1; L7, as on the CLI
                     + defTableLegend( imAttr.groups.multi(), imListing.cut )                                                         // attrib-multidef, as on the CLI
@@ -3274,7 +3293,7 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     // root=, MCP does not) and every row answered the same question in a different path dialect.
     const std::string  imRootAttr   = imSingleRoot ? ( " root=\"" + ex( root ) + "\"" ) : std::string();
     rw::emitTo( mem, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}{}>",
-                  ex( symbol ).c_str(), seeds.size(), reach.size(), unprovenDefsAttrXml( unprovenDefs ) + defsListedAttrXml( imAttr.groups, imListing ),   // H1: where the CLI root carries it; attrib-multidef
+                  ex( symbol ).c_str(), seeds.size(), reach.size(), impactRingAttrXml( imRing ) + unprovenDefsAttrXml( unprovenDefs ) + defsListedAttrXml( imAttr.groups, imListing ),   // HOP1, as on the CLI; H1: where the CLI root carries it; attrib-multidef
                   byDepthAttrXml( byDepth ),                                                                        // 0.6.5: the CLI root's by_depth=
                   imports.xmlAttrs.c_str(), radiusTested, radiusUntested, ( declinedCallsAttrXml( declinedCalls ) + declinedSiteCutAttrXml( imDc.cut ) + declinedIfaceAttrXml( declinedIface ) ).c_str(),
                   ( valueRefsCountAttrXml( imValueRefs.rows.size() ) + valueRefsDepthAttrXml( ing, imValueRefs.depthCut, VrRender{ imSingleRoot, imRootPrefix } ) ), imRootAttr.c_str(),
@@ -3296,7 +3315,8 @@ inline std::optional<std::string> impactText( const std::string& root, const std
     emitImportRowsXml( mem, ing, std::span<const std::uint32_t>( imports.files ).first( imports.shown ), imRootPrefix,
                        std::span<const char>( imports.lazy ).first( imports.shown ) );
     rw::emitTo( mem, "{}{}</impact>", declinedSitesXml( imDc.views, /*callersForm=*/true ),   // ix2-slice (IX-4), as on the CLI
-                  valueRefsXml( ing, imValueRefs, true, VrRender{ imSingleRoot, imRootPrefix }, "--uses=" + symbol ) );
+                  valueRefsXml( ing, imValueRefs, true, VrRender{ imSingleRoot, imRootPrefix }, "--uses=" + symbol )
+                    + impactRingXml( ing, imRing, VrRender{ imSingleRoot, imRootPrefix } ) );   // HOP1: the d=2 slot ring, as on the CLI
     return mcpAnswerText( stream );   // nullopt = the buffer lost bytes (dispatch answers -32603), "" stays not-found
 }
 
@@ -3741,7 +3761,13 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     // PATH-GAP: the CLI --path's gap clause, by the same analysis and emitter (src/pathgaps.h).
     const PathSearchGaps ptGaps = pth.empty() ? pathSearchGaps( ing, g, srcDefs, valueRefIndexOf( ix ) ) : PathSearchGaps{};
     const PathNearSink        ptNear       = pth.empty() ? pathNearSink( ing, g, dstDefs, ptGaps.cone, valueRefIndexOf( ix ) ) : PathNearSink{};   // ix2-slice, as on the CLI
-    const PathBridge          ptBridge     = pth.empty() ? pathBridge( ing, g, srcDefs, dstDefs, valueRefIndexOf( ix ) ) : PathBridge{};      // ix2-slice, as on the CLI
+    std::optional<BackwardHops> ptBackHops;   // HOP1: the CLI's one backward hop provider, as on the CLI
+    if( pth.empty() )
+    {
+        ptBackHops.emplace( ing, g, valueRefIndexOf( ix ) );
+    }
+    const PathBridge          ptBridge     = pth.empty() ? pathBridge( ing, g, srcDefs, dstDefs, valueRefIndexOf( ix ), *ptBackHops ) : PathBridge{};      // ix2-slice, as on the CLI
+    const std::string         ptSinkCallers = pth.empty() && ptGaps.any() && !dstGlob ? pathSinkCallersSelector( ing, *ptBackHops, dstDefs, to, ptSingleRoot, ptRootPrefix ) : std::string();   // HOP1 #6, as on the CLI
     const std::string         ptKindLegend = pathKindLegend( g, pth );
     const PathEndpointBinding ptBound      = pathEndpointBinding( g, endpointDefinitionCount( ing, srcDefs ), endpointDefinitionCount( ing, dstDefs ), pth );   // attrib-multidef, as on the CLI
     const bool                ptHasSplit = ptBound.splitHop;
@@ -3751,7 +3777,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
                                                            + splitArmLegend( ptHasSplit ) + pathUnboundLegend( !ptBound.from || !ptBound.to )
                                                            + memberOwnerLegend( anyPathHopOwner( ptOwners ) ) ).c_str(),
                   ( std::string( toValueRefsLegend( ptToValueRefs.count > 0 ) ) + valueRefsDepthLegend( ptToValueRefs.depthCut.files > 0 ) ).c_str(),
-                  ( std::string( pathGapsLegend( ptGaps.any() ) ) + std::string( pathBridgeLegend( ptBridge.found() ) )
+                  ( pathGapsLegend( ptGaps.any(), !ptSinkCallers.empty() ) + std::string( pathBridgeLegend( ptBridge.found() ) )
                     + std::string( nearSinkLegend( !ptNear.rows.empty() ) ) + std::string( pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
                   graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rootRelPathsLegend( ptSingleRoot ) );
     rw::emitTo( mem, "<path from=\"{}\" to=\"{}\"{}{} from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
@@ -3763,7 +3789,7 @@ inline std::optional<std::string> pathText( const std::string& root, const std::
     rw::emitTo( mem, "{}{}", countAttrXmlOrEmpty( "to_value_refs", ptToValueRefs.count ),   // absent at zero, as on the CLI
                   valueRefsDepthAttrXml( ing, ptToValueRefs.depthCut, VrRender{ ptSingleRoot, ptRootPrefix } ).c_str() );   // + the depth cut, as the CLI
     const PathGapsXml ptUnreached = pth.empty()
-        ? pathUnreachedXml( ing, ptGaps, ptSingleRoot, ptRootPrefix, { "the connect verb on " + from + "," + to, "uses/impact", "" } )
+        ? pathUnreachedXml( ing, ptGaps, ptSingleRoot, ptRootPrefix, { "the connect verb on " + from + "," + to, "uses/impact", "" }, ptSinkCallers )
         : PathGapsXml{};
     rw::emitTo( mem, "{}>{}{}{}", ptUnreached.rootAttrs, ptUnreached.rows, pathBridgeXml( ing, g, ptBridge, ptSingleRoot, ptRootPrefix ),
                   pathNearSinkXml( ing, ptNear, ptSingleRoot, ptRootPrefix ) );
@@ -4535,7 +4561,13 @@ inline QualityDeltaOutcome computeQualityDelta( const std::string& root )
 // facet names, displaySym's root-relative spelling, and the CLI's own was/now omission rule for the
 // zero-magnitude kinds). `regressions_count` is gone rather than kept as an alias: two names for one number
 // is how the next consumer picks the wrong one. Gate: test/mcpclidiffcheck.sh diffs the two key sets.
-inline std::pair<std::string, std::string> qualityDeltaJson( const std::string& root )
+//
+// Lane lean2b (ideas-32b card #9, owner bar LOSSLESS): `showStale` is the MCP `show_stale` argument, the CLI --show-stale
+// twin. Absent/false, a regression-free answer with stale acks folds its "sa" rows to "stale_by_kind" (stale split by ack
+// kind, quality::staleByKindValue — the CLI's own counts) and "stale_next" (the argument that prints them), but only when
+// that PAYS (compactlegend.h foldPays, the CLI's margin). Every count (stale, acked, regressions, gating, ...) stays on the
+// root either way; show_stale=true returns the full document byte for byte as it read before this fold existed.
+inline std::pair<std::string, std::string> qualityDeltaJson( const std::string& root, bool showStale = false )
 {
     const QualityDeltaOutcome oc = computeQualityDelta( root );
     if( !oc.ok ) { return { std::string(), oc.errMsg }; }
@@ -4634,9 +4666,20 @@ inline std::pair<std::string, std::string> qualityDeltaJson( const std::string& 
         }
         out += "}";
     }
-    out += "],";     // L2 — "sa":[...], same taxonomy the CLI's <sa kind= key= why=/> rows carry (shared builder, quality::staleAcksJsonArray)
-    out += rw::quality::staleAcksJsonArray( oc.staleAcks );
+    out += "],";
+    // the regression-free fold (lane lean2b): "r" is empty, so the stale rows are the only thing left out — counted per kind
+    std::string folded;
+    if( !showStale && oc.regs.empty() && !oc.staleAcks.empty() )
+    {
+        folded = out + "\"stale_by_kind\":\"" + mcpdetail::jsonEscape( rw::quality::staleByKindValue( oc.staleAcks ) )
+               + "\",\"stale_next\":\"" + mcpdetail::jsonEscape( rw::nextFlag( "show_stale=", "true" ) ) + "\"}";
+    }
+    out += rw::quality::staleAcksJsonArray( oc.staleAcks );   // L2 — "sa":[...], same taxonomy the CLI's <sa kind= key= why=/> rows carry
     out += "}";
+    if( !folded.empty() && rw::foldPays( folded, out ) )
+    {
+        return { std::move( folded ), std::string() };
+    }
     return { std::move( out ), std::string() };
 }
 
@@ -4965,7 +5008,10 @@ inline EditCheckReply editCheckText( const std::string& root, const std::string&
     }
 
     return EditCheckReply{ editCheckBundleText( ing, g, root, kDefaultMaxFileBytes, {}, groups[0].lowestNode,
-                                                 /*ni=*/nullptr, /*preview=*/false, EditCheckPage{ pg.limit, pg.offset }, unprovenDefs ), {} };
+                                                 /*ni=*/nullptr, /*preview=*/false,
+                                                 // lane lean2b (card #9): the CLI's verdict-only fold — a clean contract at HEAD with nothing
+                                                 // flagged answers the verdict + rows_next= (the MCP call, limit=N, that lists the callers), callers= kept
+                                                 EditCheckPage{ pg.limit, pg.offset, /*verdictOnly=*/true, symbol, /*mcpSpelling=*/true }, unprovenDefs ), {} };
 }
 
 // ─── `slice` verb (lane/tc-sliceat): the ARISE def-use slice over MCP, mirroring the CLI --slice ────────

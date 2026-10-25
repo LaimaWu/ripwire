@@ -2337,8 +2337,10 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 39;   // MUST equal ingest.cpp's kCacheVersion (gated); 39 = train 33 (above main 36 and l6-iface 38), 38 = train 32 lane l6-iface fix round 1: LocalBindKind ImplBlock (train renumbers), 37 = train 32 lane l6-iface: LocalBindKind DispatchType (train renumbers), 36 = train 30 (above call-result-typing's and fcall-forward's 33, name-template-dispatch's 35, main's 34), 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 33 = lane call-result-typing: RawBind resultIndex + unwrapDepth, 33 = lane fcall-forward: ref `forwarded` byte, 35 = lane name-template-dispatch: RefRole Pattern 11, 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 224;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 40;   // MUST equal ingest.cpp's kCacheVersion (gated); 40 = train 34 (fc3-js-rebind JsRebind; above main 39), 39 = train 33 (above main 36 and l6-iface 38), 38 = train 32 lane l6-iface fix round 1: LocalBindKind ImplBlock (train renumbers), 37 = train 32 lane l6-iface: LocalBindKind DispatchType (train renumbers), 36 = train 30 (above call-result-typing's and fcall-forward's 33, name-template-dispatch's 35, main's 34), 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 33 = lane call-result-typing: RawBind resultIndex + unwrapDepth, 33 = lane fcall-forward: ref `forwarded` byte, 35 = lane name-template-dispatch: RefRole Pattern 11, 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
+constexpr std::uint32_t kIngestParserVerMirror    = 226;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 226 = 2026-10-24 (train 34: above main / #432 / ind4b 224/225, ind5 222/223,
+                                                          //   fc3 218/219; see the kParserVer note)
                                                           // 224 = 2026-10-23 (train 33: above main 220/221, ind5 222/223, #420 214/215, fc1 216/217,
                                                           //   ind4b 218/219, l6-iface 212/213; see the kParserVer note)
                                                           // 220 = 2026-10-22 (train 32b: above main 212/213, ix1-slot 204/205, #420 214/215,
@@ -8721,6 +8723,27 @@ inline std::string staleAcksXml( const std::vector<StaleAck>& staleAcks, EscapeF
         out += "\"/>";
     }
     return out;
+}
+
+// idea #11 (lane lean-trio), shared by lane lean2b: stale= split by ack KIND as `kind:N,...`, in first-appearance order of the
+// ledger's own row order — the stale_by_kind= value of the folded CLI --quality-delta AND of the MCP quality_delta twin, so the
+// two surfaces cannot count differently. The KIND drops the ack's :new-symbol/:preexisting facet; the rows (--show-stale /
+// show_stale=true) carry it. Unescaped: each caller escapes for its own dialect.
+inline std::string staleByKindValue( const std::vector<StaleAck>& staleAcks )
+{
+    std::vector<std::pair<std::string, std::size_t>> byKind;
+    for( const StaleAck& a : staleAcks )
+    {
+        const std::string kind = a.kind.substr( 0, a.kind.find( ':' ) );
+        const auto it = std::find_if( byKind.begin(), byKind.end(), [ & ]( const auto& kv ) { return kv.first == kind; } );
+        if( it == byKind.end() ) { byKind.emplace_back( kind, 1 ); } else { ++it->second; }
+    }
+    std::string kinds;
+    for( const auto& [ kind, n ] : byKind )
+    {
+        kinds += ( kinds.empty() ? "" : "," ) + kind + ":" + std::to_string( n );
+    }
+    return kinds;
 }
 
 inline std::string staleAcksJsonArray( const std::vector<StaleAck>& staleAcks )   // returns `"sa":[...]`, ready to splice in

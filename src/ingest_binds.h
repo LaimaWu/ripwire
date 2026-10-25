@@ -3279,6 +3279,105 @@ inline bool pythonNameIsGlobalOrNonlocalHere( TSNode n, std::string_view name, s
     return false;
 }
 
+// A Python match-statement pattern or a PEP 695 `type` statement binds at most ONE name at the node itself. Grammar shapes (read off the
+// tree): a capture pattern is a `case_pattern` holding a dotted_name of ONE identifier (`case Base:`), a keyword pattern's value is the same
+// dotted_name (`Cls(x=Base)`), `*Base` and `**Base` are a splat_pattern, and the `as` target of `case P as Base` is the identifier that
+// follows the case_pattern inside the `as_pattern` (no `alias` field there, unlike `with ... as`). A dotted_name of two or more
+// identifiers (`case Color.RED`) is a value pattern and binds nothing. `type Base = ...` / `type Base[T] = ...` binds the left side's
+// first identifier.
+inline TSNode pythonIdentifierChild( TSNode n, std::uint32_t i )   // the named child at i when it is an identifier, else null
+{
+    const bool ok = !ts_node_is_null( n ) && i < ts_node_named_child_count( n ) && kindIs( ts_node_type( ts_node_named_child( n, i ) ), "identifier" );
+    return ok ? ts_node_named_child( n, i ) : TSNode{};
+}
+
+inline TSNode pythonSoleName( TSNode dotted )   // a dotted_name of exactly one identifier, else null
+{
+    const bool one = !ts_node_is_null( dotted ) && kindIs( ts_node_type( dotted ), "dotted_name" ) && ts_node_named_child_count( dotted ) == 1;
+    return one ? pythonIdentifierChild( dotted, 0 ) : TSNode{};
+}
+
+inline TSNode pythonTypeAliasName( TSNode n )   // `type Base = ...` / `type Base[T] = ...`: type > identifier | generic_type > identifier
+{
+    const TSNode left = fieldChild( n, NodeField::Left );
+    const TSNode head = !ts_node_is_null( left ) && ts_node_named_child_count( left ) > 0 ? ts_node_named_child( left, 0 ) : TSNode{};
+    return !ts_node_is_null( head ) && kindIs( ts_node_type( head ), "generic_type" ) ? pythonIdentifierChild( head, 0 ) : pythonIdentifierChild( left, 0 );
+}
+
+inline TSNode pythonPatternTarget( TSNode n, const char* t )
+{
+    const std::uint32_t cc = ts_node_named_child_count( n );
+    if( kindIs( t, "case_pattern" ) )
+    {
+        return cc == 1 ? pythonSoleName( ts_node_named_child( n, 0 ) ) : TSNode{};
+    }
+    if( kindIs( t, "keyword_pattern" ) )
+    {
+        return cc == 2 ? pythonSoleName( ts_node_named_child( n, 1 ) ) : TSNode{};
+    }
+    if( kindIs( t, "splat_pattern" ) )
+    {
+        return cc == 1 ? pythonIdentifierChild( n, 0 ) : TSNode{};
+    }
+    if( kindIs( t, "as_pattern" ) && ts_node_is_null( fieldChild( n, NodeField::Alias ) ) )   // the with/except form has an alias field
+    {
+        return cc > 0 ? pythonIdentifierChild( n, cc - 1 ) : TSNode{};
+    }
+    return kindIs( t, "type_alias_statement" ) ? pythonTypeAliasName( n ) : TSNode{};
+}
+
+// a Python name node as a VarDecl at byte `at` (veto evidence: the match/`type`/type-parameter records below); a null node records nothing
+inline void pushPythonNodeDecl( TSNode id, std::uint32_t at, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
+{
+    if( !ts_node_is_null( id ) )
+    {
+        pushRawBind( fileId, Lang::Python, nodeTextOf( id, src ), std::string{}, BindSite{ at, 0u, 0u }, LocalBindKind::VarDecl, binds );
+    }
+}
+
+// the name a match pattern or `type` statement binds, as a VarDecl at the statement (veto evidence like capturePythonRebindShadowDecls'),
+// or at byte 0 when the enclosing function declares it global/nonlocal
+inline void capturePythonPatternDecls( TSNode n, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
+{
+    const TSNode id = pythonPatternTarget( n, ts_node_type( n ) );
+    if( ts_node_is_null( id ) )
+    {
+        return;
+    }
+    const std::uint32_t at = pythonNameIsGlobalOrNonlocalHere( n, nodeTextOf( id, src ), src ) ? 0u : ts_node_start_byte( n );
+    pushPythonNodeDecl( id, at, fileId, src, binds );
+}
+
+// PEP 695 `class C[Base](Base)` / `def f[Base]()`: each type parameter is a name the base clause can resolve to (a TypeVar, so CPython
+// raises TypeError and no derivation exists). One `type` per name; a bound `Base: int` wraps its name in a constrained_type, `*Ts` / `**P`
+// in a splat_type. A def's parameters are visible inside it (a VarDecl at the list); a class's are visible to its own base clause, which
+// the scope chain reads from OUTSIDE the class, so it is filed one byte before the class like the class's own name.
+inline TSNode pythonTypeParamName( TSNode param )   // `type` > identifier | constrained_type > type > identifier | splat_type > identifier
+{
+    TSNode c = param;
+    for( int depth = 0; depth < 4 && !ts_node_is_null( c ) && !kindIs( ts_node_type( c ), "identifier" ); ++depth )
+    {
+        c = ts_node_named_child_count( c ) > 0 ? ts_node_named_child( c, 0 ) : TSNode{};
+    }
+    return !ts_node_is_null( c ) && kindIs( ts_node_type( c ), "identifier" ) ? c : TSNode{};
+}
+
+inline void capturePythonTypeParamDecls( TSNode n, std::uint32_t fileId, std::string_view src, std::vector<RawBind>& binds )
+{
+    const bool isClass = kindIs( ts_node_type( n ), "class_definition" );
+    const TSNode list = isClass || kindIs( ts_node_type( n ), "function_definition" ) ? fieldChild( n, NodeField::TypeParameters ) : TSNode{};
+    if( ts_node_is_null( list ) )
+    {
+        return;
+    }
+    const std::uint32_t own = ts_node_start_byte( n );
+    const std::uint32_t at  = isClass ? ( own > 0 ? own - 1 : 0 ) : ts_node_start_byte( list );
+    for( std::uint32_t i = 0, k = ts_node_named_child_count( list ); i < k; ++i )
+    {
+        pushPythonNodeDecl( pythonTypeParamName( ts_node_named_child( list, i ) ), at, fileId, src, binds );
+    }
+}
+
 inline void capturePythonRebindShadowDecls( TSNode n, const char* t, std::uint32_t fileId, Lang lang, std::string_view src, std::vector<RawBind>& binds )
 {
     std::vector<TSNode> targets;   // reused scratch, cleared before each shape below
@@ -3412,6 +3511,8 @@ inline void captureShadowScopeDecls( TSNode n, const char* t, std::uint32_t file
             capturePythonParamShadowDecls( n, fileId, lang, src, binds );   // Phase 4b: veto evidence only (empty span)
         }
         capturePythonRebindShadowDecls( n, t, fileId, lang, src, binds );   // issue #287 round 2: rebind veto evidence
+        capturePythonPatternDecls( n, fileId, src, binds );        // ind4b fix 4: match captures and `type` statements
+        capturePythonTypeParamDecls( n, fileId, src, binds );   // ind4b fix 5: PEP 695 type parameters
         return;
     }
     if( lang != Lang::Cpp && lang != Lang::ObjC )

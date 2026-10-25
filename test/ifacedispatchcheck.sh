@@ -272,7 +272,7 @@ say( af.ok and fake in cs, "[C] n_rs_test_impl", "the #[cfg(test)] implementor i
 # map reads — a structurally conforming TS object literal or class, a Java lambda / anonymous class, a Kotlin `fun interface`
 # lambda or object expression, a Rust trait mockall's attribute implements — the tier steps aside and main's by-name rows stay.
 print( "=== (K) completeness: an implementor without a clause opens the list ===" )
-B1TS, B1JAVA, B1KT, B1RS = ( os.path.join( FIX, d ) for d in ( "b1ts", "b1java", "b1kt", "b1rs" ) )
+B1TS, B1JAVA, B1KT, B1RS, FC2U, FC2D = ( os.path.join( FIX, d ) for d in ( "b1ts", "b1java", "b1kt", "b1rs", "fc2rs_undecided", "fc2rs_decided" ) )
 def rows_are( a, want ):
     return a.ok and sorted( ( r.get( "n" ), r.get( "p" ), r.get( "via" ) ) for r in a.rows ) == sorted( want ) and not a.dc
 for root, sel, want, tag, why in (
@@ -288,9 +288,25 @@ for root, sel, want, tag, why in (
         ( B1KT, "runTwo", [ ( "first", "B.kt:3", "name" ) ], "kt_object", "Kotlin: a two-method interface with an `object : Two { … }` expression" ),
         ( B1KT, "runLam", [ ( "call", "C.kt:3", "name" ) ], "kt_fun", "Kotlin: `fun interface Lam` a lambda implements (`runLam { it + 1 }`)" ),
         ( B1RS, "send_500", [ ( "send_response", "src/mock.rs:10", "name" ) ], "rs_automock",
-          "Rust: `#[cfg_attr(any(test, feature = \"mock\"), automock)]` writes MockFilter, an implementor no source holds (envoy send_500)" ) ):
+          "Rust: `#[cfg_attr(any(test, feature = \"mock\"), automock)]` writes MockFilter, an implementor no source holds (envoy send_500)" ),
+        ( FC2U, "go", [ ( "draw", "src/a.rs:6", "name" ), ( "draw", "src/b.rs:8", "name" ) ], "rs_undecided_use",
+          "Rust (train 34, fc2 x L6): `impl Render for Square` under `use mystery_crate::Render` (no module, no std sibling, no declared dependency) is undecided, "
+          "dropped from the implementor map (--lego=Render says implementors_floor=1): the list is open, so Circle is not the proven only implementor" ) ):
     a = ask( root, "callees", sel )
     say( rows_are( a, want ), "[P] k_%s" % tag, "--callees=%s: main's by-name rows %s, no via=\"impl\" -- %s" % ( sel, [ w[ 1 ] for w in want ], why ), a.why() )
+
+# precondition and control for k_rs_undecided_use: the interface row really carries the floor (else the arm proves nothing), and the same
+# tree with the head DECLARED as a registry dependency (decided outside) keeps the one proven implementor
+rc, out = run( FC2U, "--lego=Render" )
+try:
+    ifaces = [ e.attrib for e in ET.fromstring( "<doc>" + out + "</doc>" ).iter( "iface" ) ]
+except ET.ParseError:
+    ifaces = []
+say( rc == 0 and len( ifaces ) == 1 and ifaces[ 0 ].get( "implementors_floor" ) == "1", "[C] k_rs_undecided_floor",
+     "--lego=Render on the undecided tree says implementors_floor=1 (the clause is dropped, not decided)", "rc=%s ifaces=%s" % ( rc, ifaces ) )
+a = ask( FC2D, "callees", "go" )
+say( rows_are( a, [ ( "draw", "src/a.rs:6", "impl" ) ] ), "[C] k_rs_decided_outside",
+     "--callees=go with `mystery_crate` a declared registry dependency: Square implements an outside trait, Circle is the proven only implementor", a.why() )
 
 # ── (K2) the SAM count (fix round 2, C2; the review's javaeq / javaeq2 / javasame / ktjava) ────────────────────────────────────
 # A lambda implements an interface with ONE abstract method (JLS 9.8), so every doubt opens the list: an Object method redeclared is

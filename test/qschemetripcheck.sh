@@ -34,6 +34,12 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-24, train 34 (lean2b, fc2-lego-extparent, honest-lex, ind4b-k5-tighten-k5c, hop1, fc3-js-rebind merged onto main
+#   7abad955): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (3e88ca157f…36842 -> ec5455c6c9…ca188). Watched text:
+#   kParserVer 224 -> 226 (rich file tag 227; above main / #432 224 / 225, lane ind4b's placeholder 224, lane ind5-glob-imports
+#   222 / 223, lane fc3-js-rebind 218 / 219) and kCacheVersion 39 -> 40 (fc3-js-rebind's appended LocalBindKind::JsRebind; above
+#   every live 39), quality.h's two mirrors with them. kQSnapCacheScheme stays 22: no watched quality.h function moved (lean2b's
+#   staleByKindValue is new and unwatched). The ind4b and fc3-js-rebind lane pins below are superseded by this one.
 # 2026-10-23, train 33 (ls2-size-targets, fc1-std-qualified-name, ix5-classnew, mf1-nx, qn1-qualname, l6-iface,
 #   changelog-fragments merged onto main 004b4c6b): RE-DERIVED ONCE with UPDATE_GOLDEN=1 on the merged tree (08e348d9d8…5b208 ->
 #   3e88ca157f…36842). Watched text: kParserVer 220 -> 224 (rich file tag 225; above main 220 / 221, lane ind5-glob-imports
@@ -46,6 +52,13 @@ PIN="$ROOT/test/qschemetrip.hash"
 #   lane l6-iface 212 / 213) and quality.h's kIngestParserVerMirror with it. kCacheVersion stays 36 and kQSnapCacheScheme
 #   stays 22: IX-1 writes struct-field slots in memberPath / memberCtor of the existing value / through records. The ix1-slot
 #   lane entry below is kept as written; its hash is superseded by this one.
+# 2026-10-23, lane ind4b-k5-tighten-k5c fix round 5: RE-PINNED with UPDATE_GOLDEN=1. Fix round 4 moved kParserVer 212 -> 224 (rich file tag
+#   225; quality.h's kIngestParserVerMirror with it) and left the pin; the manifest hashes that line and the comment under it, which this
+#   round also grew. kParserVer 224 is a PLACEHOLDER the train renumbers, and the train re-pins again then. kCacheVersion stays 36 and
+#   kQSnapCacheScheme stays 22: no record format and no watched quality.h function moved (importedName gains a value, same field).
+# 2026-10-22, lane fc3-js-rebind (reservation 218/219; the train renumbers): RE-PINNED with UPDATE_GOLDEN=1. Watched text:
+#   kParserVer 212 -> 218 (LocalBindKind::JsRebind records; above #420 214 / 215 and fc1 216 / 217) and quality.h's
+#   kIngestParserVerMirror with it. kCacheVersion stays 36 (the kind byte is appended) and kQSnapCacheScheme stays 22.
 # 2026-10-21, train 32a (member-names 781a22fb, rust-receivers dd378171 merged onto main f156be85): RE-DERIVED ONCE with
 #   UPDATE_GOLDEN=1 on the merged tree (a667ffc55e…8a05 -> c4422a58e4…2d607). Watched text: kParserVer 206 -> 212 (rich file tag
 #   213; above main 206 / 207, lane rust-receivers 202 / 203, ix1-slot 204 / 205, l6-iface 210 / 211; #420 reserves 214 / 215) and

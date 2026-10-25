@@ -38,3 +38,9 @@ plus near-miss calls whose edges are real and must stay.
   `h.render()`, `History::new()`, `History::render( &h )`, `Self::width()`.
 
 The names are paraphrases of graded false rows; the code is minimal and the gate never builds it.
+- `jsrebind/` — FC3: JS/TS bindings WRITTEN after their declaration (`let { Eng, Foo } = require( … ); Eng = Foo;
+  new Eng()`), one case per file under `cases/` against `src/eng.js`'s `Eng`/`Foo`. A file whose name ends in `P` is a
+  near miss whose row must stay (no write, a write to another binding of the name, a write that throws, a write that
+  keeps the name); every other case file's `Eng` (or `leaf`) call has no row — except `esimport.js` (writing an ES
+  import throws, so the import still names the call) and `memberroot.js` (`m.Eng()` after `m = require( … )`: the member
+  ladder's by-name reading, a floor the gate names).

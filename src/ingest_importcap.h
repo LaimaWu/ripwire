@@ -307,6 +307,7 @@ void emitCapturedPythonImportBind( TSNode namesNode, TSNode aliasNode, std::uint
         bound = bound.substr( 0, bound.find( '.' ) );   // `import a.b` binds `a`, not `a.b`
     }
     std::string target = importSpecifierText( isFrom ? first : namesNode, src );
+    const bool  renamed = isFrom && hasAlias && nodeTextOf( namesNode, src ) != bound;   // `from m import x as y`: y alone names no member of m
     if( bound.empty() || target.empty() )
     {
         return;
@@ -318,7 +319,7 @@ void emitCapturedPythonImportBind( TSNode namesNode, TSNode aliasNode, std::uint
     b.kind         = LocalBindKind::Import;
     b.var.assign( bound );
     b.typeName     = std::move( target );
-    b.importedName = isFrom ? std::string{} : "module";
+    b.importedName = !isFrom ? "module" : renamed ? std::string( kPythonFromMemberMark ).append( nodeTextOf( namesNode, src ) ) : std::string{};
     binds.push_back( std::move( b ) );
 }
 
