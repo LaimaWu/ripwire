@@ -7,4 +7,4 @@ Python rebind-withholding records a 224 placeholder on theirs; 226 sits above ev
 (212 to 225). A cache written by 0.6.8 is re-parsed once. `kCacheVersion` 36 → 40: a Rust binding typed only through a trait
 (`&dyn T`, `impl T`, a bound), a Rust `impl T for X` block and a JS/TS binding written after its declaration are new binding
 records, so a cache written before them is rejected and rebuilt (the branches that added them used 37, 38 and 39). The
-quality-snapshot scheme stays 22. The session legend dictionary is `dictv=2259c5025ac90271 entries=930`.
+quality-snapshot scheme moves 22 → 23 (#228: Django and unittest hooks and closure self-dispatch change the dead set; old snapshots are not used). The session legend dictionary is `dictv=2259c5025ac90271 entries=930`.

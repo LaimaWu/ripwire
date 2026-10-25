@@ -116,6 +116,10 @@ struct LangFacts
     /// open too (ifacedispatch.h). A Kotlin-only tree is unchanged.
     bool samFromJavaLambdas = false;
 
+    /// Python: unittest and Django call setUp, tearDown and the other test-framework hooks themselves, and a closure inside a method
+    /// can call `self.hook()` for its host (quality.h pythonFrameworkInvokedSymbol, pythonReceiverScope; the dead-code set reads both).
+    bool frameworkEntryHooks = false;
+
     /// Kotlin: an `interface` is a class_declaration like a class (queries/kotlin/tags.scm: "both land here as @definition.class"),
     /// so the symbol's kind cannot tell the two apart; shared code that needs an interface (ifacedispatch.h's lambda test) reads a
     /// class of such a language as a possible one.
@@ -182,7 +186,7 @@ inline constexpr std::array<std::string_view, 3> kJavaObjectMethods = { "equals"
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true, .memberSeparator = "::",
       .transitiveIncludes = true },
-    { .lang = Lang::Python, .baseImportEvidence = BaseImportEvidence::PythonImport },
+    { .lang = Lang::Python, .frameworkEntryHooks = true, .baseImportEvidence = BaseImportEvidence::PythonImport },
     { .lang = Lang::TypeScript, .overloadSignatures = true, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport,
       .writtenBindingUndecided = true },
     { .lang = Lang::Go, .structuralTyping = true },
