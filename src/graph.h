@@ -13534,9 +13534,11 @@ inline std::string memberSelectorUnservedRefusal( const IngestResult& ing, std::
 // `unprovenDefCountOut` (H1, optional): the residue the full resolver reports for the SAME selector — the same-named
 // definitions a file:name spelling dropped, which the single pick therefore never focuses on either. Passed straight
 // through, so it is written on every path exactly as resolveAllByNameQualified writes it.
-inline NodeId resolveFocus( const IngestResult& ing, std::string_view spec, std::size_t* unprovenDefCountOut = nullptr )
+//
+// focusOfOrderedMatches is the pick itself over an already-ordered match list, so a verb with its own role order
+// (--lego, serialize.h resolveLegoFocus) keeps the code-first and bodyless-C/C++ rules below without restating them.
+inline NodeId focusOfOrderedMatches( const IngestResult& ing, std::vector<NodeId> matches )
 {
-    std::vector<NodeId> matches = resolveAllByNameQualified( ing, spec, unprovenDefCountOut );
     if( matches.empty() )
     {
         return kNoNode;
@@ -13569,6 +13571,11 @@ inline NodeId resolveFocus( const IngestResult& ing, std::string_view spec, std:
         }
     }
     return matches.front();
+}
+
+inline NodeId resolveFocus( const IngestResult& ing, std::string_view spec, std::size_t* unprovenDefCountOut = nullptr )
+{
+    return focusOfOrderedMatches( ing, resolveAllByNameQualified( ing, spec, unprovenDefCountOut ) );
 }
 
 // clearly side-effecting C/C++ intrinsics (I/O, allocation, nondeterminism, process control). A

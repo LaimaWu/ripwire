@@ -9166,6 +9166,79 @@ inline const char* legoContractCaveat( bool isContractExtracted, bool isTargeted
     return ( isTargeted && !isContractExtracted ) ? "\" methods=\"0\" caveat=\"not-extracted-for-lang" : "";
 }
 
+// --lego's ROLE order over the tower (graph.h applyNameTower), view-local: the answer to "--lego=NAME" is a TYPE with
+// something to show, so every type kind (Class/Struct/Interface/named type) shares ONE rung, and on it the keys are,
+// in order: a method contract that is extracted (legoMethodContractSound — no not-extracted caveat, its <m> rows are
+// read); at least one implementor (the <impl> rows); then the tower's own key — kind rank (an Interface above a
+// Class), the leading symbol's language, id ASC. Every other rung keeps the tower rank (a Method above the types, a
+// constructor just below them). Measured (diagnosis @mpapis, #432): `--lego=Shape` on this repository answered an
+// Elixir `shape.ex` (Interface, methods="0" caveat) over the C++ `Shape` whose contract is extracted
+// (a9disclosurecheck §A9.4); `--lego=Marker` answered the Java `interface Marker` (no implementor) over the Kotlin
+// one the grammar tags as a class, which `Tagged` implements (kotlincheck §13). A Rust trait still leads a same-named
+// struct (nushell FromValue, PluginCommand): its implementors keep it ahead, and so does the kind rank.
+inline std::vector<NodeId> legoRoleOrder( const IngestResult& ing, const std::vector<std::vector<NodeId>>& implementors, std::vector<NodeId> ids )
+{
+    if( ids.size() < 2 )
+    {
+        return ids;
+    }
+    struct RoleKey
+    {
+        int    rung;
+        bool   isContractExtracted;
+        bool   hasImplementor;
+        int    towerRank;
+        NodeId id;
+    };
+    const std::vector<int> towerRanks = nameTowerRanks( ing, ids );
+    const int              typeRung   = 2 * kindSpecificity( SymKind::Interface );
+    std::vector<RoleKey>   keys;
+    keys.reserve( ids.size() );
+    for( std::size_t i = 0; i < ids.size(); ++i )
+    {
+        const NodeId  id     = ids[ i ];
+        const Symbol& s      = ing.symbols[ id ];
+        const bool    isType = namespaceCompatible( RefRole::Type, s.kind );   // graph.h's one statement of "a type definition"
+        keys.push_back( RoleKey{ isType ? typeRung : towerRanks[ i ], isType && legoMethodContractSound( s.lang ),
+                                 isType && id < implementors.size() && !implementors[ id ].empty(), towerRanks[ i ], id } );
+    }
+    const auto ahead = []( const RoleKey& a, const RoleKey& b ) noexcept
+    {
+        return std::tuple( a.rung, a.isContractExtracted, a.hasImplementor, a.towerRank )
+             > std::tuple( b.rung, b.isContractExtracted, b.hasImplementor, b.towerRank );
+    };
+    const RoleKey reference = *std::min_element( keys.begin(), keys.end(), [ & ]( const RoleKey& a, const RoleKey& b )
+                                                 { return ahead( a, b ) || ( !ahead( b, a ) && a.id < b.id ); } );
+    const Lang referenceLang = ing.symbols[ reference.id ].lang;
+    std::sort( keys.begin(), keys.end(), [ & ]( const RoleKey& a, const RoleKey& b ) noexcept
+               {
+                   if( ahead( a, b ) || ahead( b, a ) )
+                   {
+                       return ahead( a, b );
+                   }
+                   const bool refA = ing.symbols[ a.id ].lang == referenceLang, refB = ing.symbols[ b.id ].lang == referenceLang;
+                   if( refA != refB )
+                   {
+                       return refA;
+                   }
+                   return a.id < b.id;
+               } );
+    for( std::size_t i = 0; i < ids.size(); ++i )
+    {
+        ids[ i ] = keys[ i ].id;
+    }
+    return ids;
+}
+
+// --lego's single pick (CLI --lego=TYPE and the MCP lego verb): resolveFocus's pick (graph.h focusOfOrderedMatches:
+// code first, a bodyless C/C++ front yields to its same-scope body) over legoRoleOrder instead of the bare tower.
+inline NodeId resolveLegoFocus( const IngestResult& ing, const std::vector<std::vector<NodeId>>& implementors, std::string_view spec,
+                                std::size_t* unprovenDefCountOut )
+{
+    std::vector<NodeId> matches = resolveAllByNameQualified( ing, spec, unprovenDefCountOut );   // the tower order, every tier
+    return focusOfOrderedMatches( ing, legoRoleOrder( ing, implementors, std::move( matches ) ) );
+}
+
 // §P3 SCOPE (bundle embeddings only). packLego's ranked mode treats "has implementors" as "is an interface",
 // so scoping THAT map is the filter: this returns a view of `implementors` in which every interface the task
 // did not reach has an EMPTY implementor list — packLego then ranks and emits only what is left, and emits no

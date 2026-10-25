@@ -2916,7 +2916,7 @@ inline std::string legoText( const std::string& root, const std::string& type, R
     const McpIndex&     ix           = getIndex( root );
     const IngestResult& ing          = ix.ing;
     std::size_t         unprovenDefs = 0;   // H1: the decl→def residue, the CLI --lego's unproven_defs= — same resolver, same helpers
-    const NodeId        focus        = resolveFocus( ing, type, &unprovenDefs );
+    const NodeId        focus        = resolveLegoFocus( ing, ix.g.implementors, type, &unprovenDefs );
     if( focus == kNoNode )
     {
         return {};
