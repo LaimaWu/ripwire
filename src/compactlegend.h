@@ -62,7 +62,7 @@ inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
     // ── the ranked-map family (root <r>) — hinted by the map-shaping flag that rode along ──
     { "r",   "map",        "ranked symbol map: <f p= layer=> groups <s t= n= sc= k= amb=> rows (k= rank), <c n=> resolved callees; the header comment is data" },
     { "r",   "map-diff",   "the ranked map anchored at at=: what the diff touched, the map's row vocabulary" },
-    { "r",   "metrics",    "the ranked map with per-symbol metrics: in/out, cx/ccx, loc, params, nest, humps/deep, locals, cbo, amp, tested, ev" },
+    { "r",   "metrics",    "the ranked map with per-symbol metrics" },
     { "r",   "around",     "call neighbourhood of of=: depth= hops, fanout= kept per hop; absent rows lie outside that boundary" },
     { "r",   "query",      "lexical-rank map for the query term, the map's row vocabulary" },
     // ── the bundle family (root <ctx>) ──
