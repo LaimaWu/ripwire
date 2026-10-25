@@ -194,6 +194,7 @@
 "forbodyfoldcheck.sh": 60.0,
 "forheadrrcheck.sh": 30.0,
 "formembernamescheck.sh": 30.0,
+"forinitslotscheck.sh": 10.0,
 "forbodyslotcheck.sh": 150.0,
 "forbudgetmonotoncheck.sh": 2.5,
 "forcalibfactscheck.sh": 8.0,
