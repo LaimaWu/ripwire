@@ -454,6 +454,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "data_sections_cut", "data_sections_cut=N: N data Sections (headings, data keys) swapped out of this top-K for lower-ranked code rows; next= pages them first" },
     // MAP-STEM (serialize.h addMapStemRows): the map scope's reserved stem-namesake row per shown file. Present-only.
     { "stem",              "s stem=1: the file's name-sharing type, added after its top-K rows (none dropped; in shown=)" },
+    { "stem_cut",          "stem_cut=N: N stem=1 rows left out to fit max_tokens" },
     // D7 (mapinventory.h): the map scope's inventory tier, ELEMENT-qualified (p=/n=/f= mean other things on other rows).
     { "listed",            "<inv listed= unlisted=>: files the ranked rows show / do not (sum = files=), each named or counted below", true, "inv" },
     { "n",                 "<entry p= n=>: a program entry by its language's convention (C/Go/Rust main, Java/C# static main, a script main its module scope calls, __main__.py), callees as c rows; manifest entries not read", true, "entry" },

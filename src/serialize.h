@@ -2031,7 +2031,9 @@ inline DataSectionsCut codeFirstKeep( const IngestResult& ing, std::vector<NodeI
 // or interface defined in that file with the most name subtokens (3+ bytes, lowercased) found inside the file's lowercased stem
 // (`formparsers` holds `form` and `parser`: FormParser 2, MultiPartParser 1), at least one; ties go to the larger definition, then the earlier line. It is ADDED
 // after the file's kept rows (no kept row is dropped), marked stem="1", and counted in the root's shown=. A file whose kept
-// rows already hold a type with as many shared subtokens gets none, and so does a test file (layer="test"). RIPWIRE_NO_MAP_STEM (any value) turns it off.
+// rows already hold a type with as many shared subtokens gets none, and so does a test file (layer="test"). UNDER --max-tokens none is
+// printed (a stem row is extra bytes: it would displace ranked rows from the budgeted cut) and the root says how many it left out, stem_cut=N.
+// RIPWIRE_NO_MAP_STEM (any value) turns it off.
 namespace map_stem_detail
 {
 // How many of a type name's subtokens (rw::subtokens: the lexical rule, lowercased; the >= 3-byte ones, since a shorter one such
@@ -2056,6 +2058,10 @@ inline std::string_view fileStem( std::string_view path ) noexcept
     return path;
 }
 }   // namespace map_stem_detail
+
+// The XML legend clause for stem_cut=, charged only to a --max-tokens map that carries it. No double hyphen inside a comment (G4).
+inline constexpr std::string_view kMapStemCutLegend =
+    "<!-- stem_cut=N: N file-name rows (stem=1) left out to fit max_tokens -->";
 
 // The XML legend clause, charged only to a map that carries the attribute. No double hyphen inside a comment (G4).
 inline constexpr std::string_view kMapStemLegend =
@@ -2142,6 +2148,31 @@ inline std::vector<NodeId> addMapStemRows( const IngestResult& ing, std::vector<
     }
     std::ranges::sort( added );
     return added;
+}
+
+// What the map scope does with the stem rows. Under a --max-tokens fit (the budget's top-K search prices the whole emitted map)
+// a stem row is EXTRA bytes that would crowd a ranked row out of the cut, so there it is the first to go: none is printed, and the
+// count the unbudgeted map would have added is disclosed as stem_cut=N (`cut`). Unbudgeted, `rows` are added to the buckets.
+struct MapStemPick
+{
+    std::vector<NodeId> rows;      // the stem="1" ids, sorted
+    std::size_t         cut = 0;   // stem rows a --max-tokens fit left out
+};
+inline MapStemPick pickMapStemRows( const IngestResult& ing, const MapAnnotations& ann, std::vector<std::vector<NodeId>>& buckets, const std::vector<std::uint32_t>& fileOrder )
+{
+    MapStemPick pick;
+    if( !ann.codeFirstRows || !mapStemOn() )
+    {
+        return pick;
+    }
+    if( ann.maxTokensFit == nullptr )
+    {
+        pick.rows = addMapStemRows( ing, buckets, fileOrder );
+        return pick;
+    }
+    std::vector<std::vector<NodeId>> scratch = buckets;   // priced, not printed
+    pick.cut = addMapStemRows( ing, scratch, fileOrder ).size();
+    return pick;
 }
 inline std::string dataSectionsNext( const DataSectionsCut& c )
 {
@@ -3121,7 +3152,8 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         buckets[f].push_back( id );
     }
     // MAP-STEM: the map scope's one reserved row per shown file (addMapStemRows above); added after the kept rows
-    const std::vector<NodeId> stemRows = ( ann.codeFirstRows && !stubbed && mapStemOn() ) ? addMapStemRows( ing, buckets, fileOrder ) : std::vector<NodeId>{};
+    const MapStemPick         stemPick = stubbed ? MapStemPick{} : pickMapStemRows( ing, ann, buckets, fileOrder );
+    const std::vector<NodeId>& stemRows = stemPick.rows;
     // D7: the inventory over the files the kept rows did NOT reach (`seen` is exactly the printed <f> groups)
     const MapInventory inventory = ( mapInventoryWanted( ing, ann ) && !stubbed )
                                  ? computeMapInventory( ing, outOff, outTargets, seen, pathRel ) : MapInventory{};
@@ -3312,6 +3344,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     if( !stemRows.empty() )
     {
         legend += kMapStemLegend;           // MAP-STEM: charged to the map that carries stem="1"
+    }
+    if( stemPick.cut > 0 )
+    {
+        legend += kMapStemCutLegend;        // MAP-STEM: charged to the --max-tokens map that carries stem_cut=
     }
     if( inventory.active )
     {
@@ -3553,6 +3589,10 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
         {
             h += " data_sections_cut=\"";  h += std::to_string( dataSecCut.cut );  h += "\"";
             h += nextAttrXml( dataSectionsNext( dataSecCut ) );
+        }
+        if( stemPick.cut > 0 )
+        {
+            h += " stem_cut=\"";  h += std::to_string( stemPick.cut );  h += "\"";   // MAP-STEM: absent unless a --max-tokens fit left stem rows out
         }
         h += ">";
         h += renderHistoryUnread( DiscloseAs::LegendComment );   // K51: its own definition, right behind the root it marks
@@ -10501,6 +10541,7 @@ struct JsonMapHeader
     std::size_t                      nestRefusedCount   = 0;    // #157: "nest_refused":N, the JSON twin of the XML nest_refused=, absent when 0
     bool                             isEstModelled      = false;   // MapEstimate: "est_measured":false, absent when measured
     DataSectionsCut                  dataSectionsCut    = {};      // the code-first pick's swaps: "data_sections_cut":N + "next", absent at N=0
+    std::size_t                      stemCut            = 0;       // MAP-STEM: "stem_cut":N, the XML stem_cut=, absent at N=0
 };
 
 // §B1.2: the PROVENANCE stamp — the JSON half of the XML `<r at= rank_by= window=>` attributes. Without it
@@ -10730,6 +10771,10 @@ inline void writeJsonMapHeader( JsonWriter& w, std::string& esc, const JsonMapHe
         w.write( ",\"data_sections_cut\":" + std::to_string( h.dataSectionsCut.cut ) + ",\"next\":" );   // composed, not a fixed buffer
         writeJsonStr( w, dataSectionsNext( h.dataSectionsCut ), esc );
     }
+    if( h.stemCut > 0 )
+    {
+        w.write( ",\"stem_cut\":" + std::to_string( h.stemCut ) );   // the JSON twin of the XML root's stem_cut=
+    }
 
     // §A4b: the multi-root prologue (A13) — `roots_count` joins the header gauges and a
     // `roots` table maps each label to its root path, ONLY when N≥2 (single-root output byte-unchanged).
@@ -10887,7 +10932,8 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
         buckets[f].push_back( id );
     }
     // MAP-STEM: the XML twin's reserved stem-namesake rows, the same rule over the same buckets
-    const std::vector<NodeId> stemRows = ( ann.codeFirstRows && mapStemOn() ) ? addMapStemRows( ing, buckets, fileOrder ) : std::vector<NodeId>{};
+    const MapStemPick         stemPick = pickMapStemRows( ing, ann, buckets, fileOrder );
+    const std::vector<NodeId>& stemRows = stemPick.rows;
     // D7: the XML twin's inventory, the same selection (mapinventory.h) over the same printed-file set
     const MapInventory inventory = mapInventoryWanted( ing, ann ) ? computeMapInventory( ing, outOff, outTargets, seen, pathRel )
                                                                   : MapInventory{};
@@ -10954,7 +11000,7 @@ inline void serializeJson( std::FILE* out, const IngestResult& ing, const std::v
         writeJsonMapHeader( hw, esc, JsonMapHeader{ ing, S, outTargets.size(), keep + stemRows.size(), estTokens, ambTotal,
                                                     unresolvedTotal, orderAttr, outProv, &ann, rootArg, locPinTotal, externalCalls, declinedTotal,
                                                     extentSuspectTotal, macroBlankedFileCount( ing ), ing.crawlSkips.nestRefusedFiles,
-                                                    estimate.isModelled, dataSecCut } );
+                                                    estimate.isModelled, dataSecCut, stemPick.cut } );
         hw.write( ",\"r\":[" );
     };
 
