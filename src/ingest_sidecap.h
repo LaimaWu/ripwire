@@ -1649,6 +1649,7 @@ void captureSideFacts( const LangEntry& le, std::uint32_t fileId, std::string_vi
             captureIncludes( root, le.lang, fileId, src, incs, refs, binds, constOpens, shortfall );
         }
         captureJsImportFacts( root, le.lang, fileId, src, binds );
+        captureJsRebindFacts( root, le.lang, fileId, src, binds );   // FC3: written bindings → JsRebind (graph.h: the call is undecided)
         captureGoImportFacts( root, le.lang, fileId, src, binds );   // FE-A: Go import specs → ModuleAlias (graph.h FalseEdgeRules)
 
         // A4-R5: cross-language FFI binding declarations (pybind11 / extern "C" / ctypes handle). Inert on a

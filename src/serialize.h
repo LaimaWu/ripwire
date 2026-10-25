@@ -9418,12 +9418,18 @@ struct LegoTargetedArgs
     int              pageOffset = 0;        // --offset / MCP offset
     const std::vector<std::vector<std::uint8_t>>* implementorBound = nullptr;   // fix 1: Graph::implementorBound (null: nothing proven)
     std::span<const RubyMainMixinRow> mainMixins;   // lane ruby-pair: Graph::rubyMainMixins (sorted by base) — the main-object rows (withMainRows)
+    std::span<const std::uint32_t> decidedOutside;   // lane fc2-lego-extparent: Graph::baseOutsideClauses — clauses implementors_floor must not count
     LegoTargetedArgs() = default;
     LegoTargetedArgs( std::string_view floorAttr, int limit = 0, int offset = 0, const std::vector<std::vector<std::uint8_t>>* bound = nullptr )
         : graphCountFloorAttr( floorAttr ), pageLimit( limit ), pageOffset( offset ), implementorBound( bound ) {}
     LegoTargetedArgs&& withMainRows( std::span<const RubyMainMixinRow> rows ) && noexcept
     {
         mainMixins = rows;
+        return std::move( *this );
+    }
+    LegoTargetedArgs&& withDecidedOutside( std::span<const std::uint32_t> clauses ) && noexcept
+    {
+        decidedOutside = clauses;
         return std::move( *this );
     }
 };
@@ -9564,7 +9570,7 @@ inline void packLego( std::FILE* out, const IngestResult& ing, const std::vector
     // count-floor (countfloor.h implementorFloors): an extends/implements clause spelled like a kept interface that the graph
     // bound to no definition of that name — implementors= cannot count it. Both modes: absent unless such a clause exists.
     const std::vector<std::vector<NodeId>>& countMap = graphImplementors != nullptr ? *graphImplementors : implementors;
-    const std::vector<char> implFloor = implementorFloors( ing, countMap, std::span<const NodeId>( ifaces.data(), keep ) );
+    const std::vector<char> implFloor = implementorFloors( ing, countMap, std::span<const NodeId>( ifaces.data(), keep ), targeted.decidedOutside );
 
     XmlWriter         w( out );
     std::vector<char> esc;

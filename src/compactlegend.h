@@ -111,7 +111,7 @@ inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
     { "verify",      "verify",      "ONE structured claim, verdict=confirmed|refuted|unknown, its witness rows <s t= n= p=> inline" },
     { "query",       "graph-query", "graph-query expression over the symbol graph: <s t= n= p=> matching rows" },
     { "match",       "match",       "tree-sitter structural query: <m p= in=> captured nodes with their enclosing symbol; grammars=/eligible_files= the scope" },
-    { "grep",        "grep",        "literal/regex scan grouped by file: <f p=><hit l= in=>CDATA text</hit> (<b>/<a> context around it); complete=1 only for an exhaustive literal scan; <unindexed> = off-index" },
+    { "grep",        "grep",        "literal/regex scan grouped by file: <f p=><hit l= in=>CDATA text</hit> (<b>/<a> context around it); complete=1 only for an exhaustive literal scan (beside pattern_meta=, of the literal reading only); <unindexed> = off-index" },
     { "exemplar",    "exemplar",    "the best-in-class instance of kind= for the task, chosen by role: n= p= in= ccx= tested=, <bodies><b> to imitate" },
     { "batch",       "batch",       "n= read sub-queries in one sweep (requested=, cap=): each <q> wraps one sub-answer verbatim in CDATA" },
     { "task-route",  "help-task",   "which verb answers this task: status=recommend|abstain confidence= score= margin=, <facts> the evidence" },
@@ -361,6 +361,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // IX-1 slot-type join (src/valuerefs.h slotJoinLegend): present-only; a struct-field slot and the calls through that field.
     { "called_at",         "vr called_at= via=slot|slot-name: called_by='s calls through that struct field, file:line in the same order; slot = same declared struct type, slot-name = field name only (a type unknown); MAY call, not a proven call, in no count", false, "vr" },
     { "slot_name_also",    "slot_name_also=K: K name-only callers hidden behind the same-type ones", false, "vr" },
+    // HOP1 (src/backhops.h kImpactRingLegend): --impact's hedged slot ring, present-only
+    { "reaches_hedged",    "reaches_hedged=N: N functions MAY reach of= through one or two calls through a struct field (the vr rows' slot callers and theirs, no width bound); never in reaches= or any count" },
+    { "calls",             "ring d=2 total= shown= next=; rh called_by= called_at= via= calls=: called_by may call calls= (a vr row's slot caller) through a struct field at called_at=; a hedge, in no count", false, "rh" },
     { "called_more",       "called_more=N: N more callers past the first 8", false, "vr" },
     { "slot_calls",        "slot_calls=N: N calls in this body go through a struct field holding a function; in no count" },
     { "slot",              "vs l= through= slot=Type.field via= targets=K shown= next=: one such call and the functions stored in that field anywhere (t n= p=); slot = same declared type, slot-name = field name only; MAY be called, not a proven call", false, "vs" },
@@ -729,6 +732,11 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // --naming-consistency's absent-at-zero count (countAttrXmlOrEmpty, so (S) requires its row HERE): the JSX components
     // kept out of the vote (namingconsistency.h isJsxComponentName). Key-qualified: no other verb spells it.
     { "component_exempt", "component_exempt=N: PascalCase .tsx/.jsx functions (read as JSX components by extension alone), kept out of voting and flagging", false, "naming-consistency", MapHeaderRead::No, {}, "naming-consistency" },
+    // grep's per-hit tail, spelled through countAttrXmlOrEmpty (verbs_grep.h grepRowTailAttrs). Arm (S) of test/compactlegendcheck.sh
+    // reads every such name from SOURCE and demands a row in THIS table, so these two moved here from kCompactAttributeReadings
+    // (moved, not copied: the joint reading space would print a name twice). Still <hit>-qualified and grep-only.
+    { "line_bytes", "line_bytes=N: whole line N bytes; text is a cut prefix", true, "hit", MapHeaderRead::No, {}, "grep" },
+    { "occ", "occ=N: the pattern occurs N times on this one line; a hit is a line, hits= counts lines; absent = once", true, "hit", MapHeaderRead::No, {}, "grep" },
 
 };
 
@@ -815,6 +823,9 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "gap_syms", "gap_syms=N: searched symbols carrying gaps; <gap t= n= p= gaps=> rows, nearest from= first, are where the search could not see, never a hop; gap_syms_capped=1 more than shown", false, "path", MapHeaderRead::No, {}, "path" },
     // HEDGED BRIDGE and GLOB ENDPOINT (src/pathgaps.h kPathBridgeLegend / kPathGlobLegend), present-only on a reachable=0 answer
     { "crossings", "bridge proven=0 crossings= hops=: a HEDGED chain, NOT a path; <s via=declined|value|closure|namesake cands=K> the crossing into that row, the rest proven edges", true, "bridge", MapHeaderRead::No, {}, "path" },
+    // HOP1 (src/backhops.h, kPathBridgeLegend): a slot crossing's row, present-only; up to 3 crossings when every one is a slot
+    { "slot_callers", "s via=slot|slot-name slot_callers=N: the previous row calls through a struct field this row is stored in (slot-name: field name only); N calling functions that join names, at most 16 (a crossing wider is not made); a hedge", true, {}, MapHeaderRead::No, {}, "path" },
+    { "slot_fns", "s slot_fns=K: K functions that struct field holds (the width the crossing picks from); NOT capped, a wide table is still crossed; a hedge", true, {}, MapHeaderRead::No, {}, "path" },
     { "to_glob", "to_glob=1: to='s * matched every function or method definition fitting it (to_defs= counts them)", false, "path", MapHeaderRead::No, {}, "path" },
     { "from_glob", "from_glob=1: from='s * matched every function or method definition fitting it (from_defs= counts them)", false, "path", MapHeaderRead::No, {}, "path" },
     // SINK-SIDE FRONTIER (src/pathgaps.h kNearSinkLegend), present on a reachable=0 answer: the <near_sink> block and its <ns> rows.
@@ -875,6 +886,15 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "script_gates_unresolved_dynamic", "script_gates_unresolved_dynamic=N: registered gates with no mappable deps; they may cover the change unlisted", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
     { "evidence", "t evidence=script_literal|manifest_declared: why a shell gate joins tests=, its text names the changed path or its RIPWIRE_TEST_DEPS does", true, "t", MapHeaderRead::No, {}, "test-gate" },
     { "ccx_bar", "ccx_bar=N: the cognitive-complexity bar a u row's ccx= is read against", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
+    // the symbol-granular change set (situ.h computeSymbolChangeSet / testGateGranularityAttrXml) — CONDITIONAL:
+    // the attributes ride only when git-hunk evidence shaped the change set (testGateHunkShaped), and the
+    // present-only vocabulary emits these readings only when the payload carries them. diff_hunks* NOT hunks=:
+    // naming-calibration's root already owns hunks= with a different unit (§P8's collision class — a new
+    // attribute gets a new name rather than joining that table).
+    { "change_granularity", "change_granularity=: how the change set seeded — symbol = only symbols a git hunk (diff -U0 vs HEAD) locates inside a function/method body; file = whole changed files (an unlocated hunk — module-level, deletion, rename — returns its file to file-granular); mixed = both", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },
+    { "changed_symbols", "changed_symbols=/file_symbols=: the seeds the walk used vs all symbols of the changed files", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },   // also defines file_symbols=
+    { "files_narrowed", "files_narrowed=/files_file_granular=: changed files under each treatment", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },   // also defines files_file_granular=
+    { "diff_hunks", "diff_hunks=/diff_hunks_located=/diff_hunks_unlocated=: the hunk tally; an unlocated hunk is WHY a file went file-granular", false, "test-gate", MapHeaderRead::No, {}, "test-gate" },   // also defines the two located/unlocated halves
     // rv-test-gate-tsjs F3: untested_modscope=N is ALWAYS present (like the terms above), so the COMPACT
     // (default) legend needs its own reading too — the full-legend clause (situ.h::kUntestedModscopeLegend)
     // is row-gated on N>0 and pays nothing on the compact default otherwise.
@@ -965,7 +985,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "string_hits", "string_hits=N: of hits=, string-tier; rows: files named like the pattern, source, then the rest", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "ref", "hit ref=: first code site (not a comment/string) naming the hit's callerless enclosing def (where it is registered; one site)", true, "hit", MapHeaderRead::No, {}, "grep" },
     { "tier_budget", "tier_budget=: files|bytes cap hit after tier_parsed= of tier_files= hit files; tier counts floors, every row served", false, "grep", MapHeaderRead::No, {}, "grep" },
-    { "line_bytes", "line_bytes=N: whole line N bytes; text is a cut prefix", true, "hit", MapHeaderRead::No, {}, "grep" },
+    { "pattern_meta", "pattern_meta=: regex-shaped pieces of this LITERAL pattern, matched as text; complete=1 and hits= speak of that literal reading only (a zero may mean a regex was meant); next= is then the regex verb on it", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "unindexed_files_scanned", "unindexed_files_scanned=N: off-index text files also scanned; outside complete=", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "unindexed_hits", "unindexed_hits=N: hits in off-index files, NOT in hits=/total=; listed in the trailing unindexed element", false, "grep", MapHeaderRead::No, {}, "grep" },
     { "callers", "callers=N: 1-hop distinct callers of this name, all same-named defs (a FLOOR)", true, "enc", MapHeaderRead::No, {}, "grep" },
@@ -1077,6 +1097,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     { "hits", "hits=N: occurrences in HEAD plus every scanned local ref's full tree (the total rows)", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "on-head", "on-head=1|0: whether HEAD's tree holds it; 0 beside hits = it lives only on a branch", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "head_labels", "head_labels=index: HEAD kind= from the parsed index; lexical: text heuristic", false, "whereis", MapHeaderRead::No, {}, "whereis" },
+    { "head_defs", "head_defs=0: lexical labels and the parsed index defines no symbol of this name: every HEAD kind=def is a text guess", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     // fix round 2 of the whereis-defs lane (crossref.h labelBranchRowsByParse): present only when a row of another ref is.
     { "ref_labels", "ref_labels=parsed: another ref's kind= from the index's own tags parse of its blob (one per blob and path; HEAD's own blob takes HEAD's labels); a blob with no line a loose lexical test calls worth parsing is not parsed and its rows read ref; kind=text: such a line no parse read, never a def", false, "whereis", MapHeaderRead::No, {}, "whereis" },
     { "blobs", "unparsed blobs=N: other refs' blobs holding a line worth parsing that no parse read (past the runaway guard, or the parser could not finish); those lines read kind=text; next= lifts the guard", true, "unparsed", MapHeaderRead::No, {}, "whereis" },

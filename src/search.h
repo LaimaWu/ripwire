@@ -66,7 +66,7 @@ inline std::uint32_t triAt( const std::string& s, std::size_t i ) noexcept
 // initializer, so the pre-field aggregate initializers keep their meaning unchanged.
 // `lineBytes` = the WHOLE matched line's byte length, set ONLY when kGrepMatchedLineMaxBytes cut `text`;
 // 0 means "not truncated" and costs the emitters nothing (the pr_converged shape — presence is the fact).
-struct GrepHit { std::uint32_t fileId; std::uint32_t line; std::string enclosing; std::string text; std::string before; std::string after; NodeId enclosingId = kNoNode; std::uint32_t lineBytes = 0; };
+struct GrepHit { std::uint32_t fileId; std::uint32_t line; std::string enclosing; std::string text; std::string before; std::string after; NodeId enclosingId = kNoNode; std::uint32_t lineBytes = 0; std::uint32_t occ = 1; };
 
 // ─── Russ Cox regex→trigram prefilter ─────────────────────────────────────────────────────────────
 //
@@ -1373,6 +1373,9 @@ struct GrepCollection
     std::uint64_t           regexLinesSkipped       = 0;
     std::size_t             regexLineBytesMax       = 0;
     std::size_t             regexStackBytes         = 0;
+    // honest-lex: one row per LINE. occ[i] = how many occurrences row i stands for (grepFoldLines); EMPTY when every row
+    // stands for one, so an answer with no line holding the pattern twice carries nothing.
+    std::vector<std::uint32_t> occ;
 
     // The scan-side completeness conditions, stated ONCE for both emitters (the CLI XML root and the MCP
     // JSON payload) so the condition cannot fork between them — each emitter ANDs in only its own arms
@@ -1620,6 +1623,7 @@ struct GrepAuxHit
     std::uint32_t line;
     std::string   text;   // matched line, same kGrepMatchedLineMaxBytes cap as an indexed hit
     std::uint32_t lineBytes = 0;   // ... and the same disclosure: the WHOLE line's size when that cap cut it, else 0
+    std::uint32_t occ       = 1;   // honest-lex: occurrences of the pattern on this line (one row per line, as indexed hits)
 };
 
 // What grepCollectAux scanned, and exactly why any candidate was excluded — every one of these is a COUNT
@@ -1670,6 +1674,32 @@ struct GrepAuxCollection
     }
 };
 
+// One unindexed file's matched sites -> GrepAuxHit rows: one row per LINE (a second site on the same line only bumps that
+// row's occ=, honest-lex — the indexed list's rule, grepFoldLines), each carrying its matched line's text. `lineStarts` is
+// the caller's scratch, refilled here for `text`. Split out of scanUnsupportedFiles (train 34) so the scan loop keeps only
+// the per-file skip / scan decisions.
+inline void appendAuxFileHits( const std::string& text, const std::string& path, const std::vector<GrepMatchSite>& sites,
+                               std::vector<std::size_t>& lineStarts, GrepAuxCollection& out )
+{
+    lineStarts.clear();
+    lineStarts.push_back( 0 );
+    for( std::size_t i = 0; i < text.size(); ++i )
+    {
+        if( text[i] == '\n' ) { lineStarts.push_back( i + 1 ); }
+    }
+    for( const GrepMatchSite& s : sites )
+    {
+        if( !out.hits.empty() && out.hits.back().line == s.line && out.hits.back().path == path )
+        {
+            ++out.hits.back().occ;   // honest-lex: one row per line, the indexed list's rule (grepFoldLines)
+            continue;
+        }
+        std::uint32_t auxLineBytes = 0;
+        std::string   auxText        = grepMatchedLine( text, lineStarts, s.line, &auxLineBytes );
+        out.hits.push_back( GrepAuxHit{ path, s.line, std::move( auxText ), auxLineBytes } );
+    }
+}
+
 // The per-file loop grepCollectAux runs, on whichever thread it chose (below). `re` is null for a literal scan.
 inline void scanUnsupportedFiles( const CrawlSkips& skips, const std::string& pat, const GuardedRegex* re, std::size_t maxAuxFileBytes,
                                   RegexLinePolicy linePolicy, GrepAuxCollection& out )
@@ -1706,18 +1736,7 @@ inline void scanUnsupportedFiles( const CrawlSkips& skips, const std::string& pa
             continue;
         }
 
-        lineStarts.clear();
-        lineStarts.push_back( 0 );
-        for( std::size_t i = 0; i < text.size(); ++i )
-        {
-            if( text[i] == '\n' ) { lineStarts.push_back( i + 1 ); }
-        }
-        for( const GrepMatchSite& s : sites )
-        {
-            std::uint32_t auxLineBytes = 0;
-            std::string   auxText        = grepMatchedLine( text, lineStarts, s.line, &auxLineBytes );
-            out.hits.push_back( GrepAuxHit{ row.path, s.line, std::move( auxText ), auxLineBytes } );
-        }
+        appendAuxFileHits( text, row.path, sites, lineStarts, out );
     }
 }
 
@@ -2510,6 +2529,166 @@ inline GrepCollection grepApplySpanTiers( const IngestResult& ing, GrepCollectio
         grepRankLiftedStrings( ing, collected.raw, literal, fileHasCode );
     }
     return collected;
+}
+
+// honest-lex: ONE row per LINE. The scan records every occurrence, so a line holding the pattern twice printed twice
+// and counted twice in hits= (src/compactlegend.h:821 for stale_next). Fold the occurrences of one (file, line) into
+// the first; occ[i] is how many the row stands for, left EMPTY when every row stands for one. Runs after the boolean
+// and tier filters, so occ counts the occurrences that survived them (raw is sorted file, line, offset: one line's
+// occurrences are adjacent). hits_capped= still speaks of the collection budget, which counts occurrences.
+inline GrepCollection grepFoldLines( GrepCollection collected )
+{
+    std::vector<GrepRawHit>&   raw = collected.raw;
+    std::vector<std::uint32_t> occ;
+    occ.reserve( raw.size() );
+    std::size_t kept      = 0;
+    bool        anyRepeat = false;
+    for( const GrepRawHit& hit : raw )
+    {
+        if( kept > 0 && raw[ kept - 1 ].fileId == hit.fileId && raw[ kept - 1 ].line == hit.line )
+        {
+            ++occ.back();
+            anyRepeat = true;
+            continue;
+        }
+        raw[ kept++ ] = hit;
+        occ.push_back( 1 );
+    }
+    raw.resize( kept );
+    collected.occ = anyRepeat ? std::move( occ ) : std::vector<std::uint32_t>{};
+    return collected;
+}
+
+// The printable rows of one page (grepEnrich) with each row's occ= stamped from the fold — both surfaces call this,
+// so the CLI <hit occ=> and the MCP "occ" cannot disagree.
+inline std::vector<GrepHit> grepEnrichPage( const IngestResult& ing, const GrepCollection& found, std::size_t begin, std::size_t count,
+                                            int ctxBefore = 0, int ctxAfter = 0 )
+{
+    std::vector<GrepHit> hits = grepEnrich( ing, std::span<const GrepRawHit>( found.raw ).subspan( begin, count ), ctxBefore, ctxAfter );
+    for( std::size_t i = 0; i < hits.size() && begin + i < found.occ.size(); ++i )
+    {
+        hits[ i ].occ = found.occ[ begin + i ];
+    }
+    return hits;
+}
+
+// A word byte: ASCII alphanumeric, `_`, or any byte of a UTF-8 sequence (a non-ASCII letter is part of an identifier in Python, JS, Go,
+// Rust, ...; read as punctuation, `café|tea` was no alternation and `né[i-1]` a bracket class).
+inline bool grepMetaWord( std::string_view pat, std::size_t i ) noexcept
+{
+    return i < pat.size() && ( std::isalnum( (unsigned char)pat[ i ] ) || pat[ i ] == '_' || static_cast<unsigned char>( pat[ i ] ) >= 0x80 );
+}
+
+// Is the `[` at `i` the opening of a bracket CLASS (grepPatternMeta's "[]")? Not a subscript (`[` right after a word byte or
+// `]`), and not a footnote label (`[^` + digits + `]`); `[^…` or a `a-z` range inside a closed bracket is.
+inline bool grepMetaClassAt( std::string_view pat, std::size_t i ) noexcept
+{
+    if( pat[ i ] != '[' || i + 2 >= pat.size() || pat.find( ']', i + 2 ) == std::string_view::npos )
+    {
+        return false;
+    }
+    if( i > 0 && ( grepMetaWord( pat, i - 1 ) || pat[ i - 1 ] == ']' ) )
+    {
+        return false;
+    }
+    if( pat[ i + 1 ] != '^' )
+    {
+        return grepMetaWord( pat, i + 1 ) && pat[ i + 2 ] == '-' && grepMetaWord( pat, i + 3 );
+    }
+    std::size_t end = i + 2;
+    while( end < pat.size() && std::isdigit( (unsigned char)pat[ end ] ) )
+    {
+        ++end;
+    }
+    return !( end > i + 2 && end < pat.size() && pat[ end ] == ']' );
+}
+
+// A leading ^ before a letter, `_` or # (never a digit: `^1.2.3` is a semver), or a trailing $ after a word byte when the
+// pattern also opens with ^ (`^foo$`; a bare `user$` is an RxJS name).
+inline bool grepMetaAnchored( std::string_view pat ) noexcept
+{
+    if( pat.size() < 2 || pat[ 0 ] != '^' )
+    {
+        return false;
+    }
+    const bool lead = ( grepMetaWord( pat, 1 ) && !std::isdigit( (unsigned char)pat[ 1 ] ) ) || pat[ 1 ] == '#';
+    return lead || ( pat.back() == '$' && grepMetaWord( pat, pat.size() - 2 ) );
+}
+
+// honest-lex GREP-META: the pieces of a LITERAL pattern that read as regex syntax, space-separated in a fixed order, or
+// "" when none. A literal scan matches them as text, so `compose|HTTPException` answered a confident zero (hono: 31
+// files hold either name) and `CHANGELOG\.md` matched only the one line spelling the backslash. The rule, each piece
+// chosen so a common literal stays quiet:
+//   |      between two word bytes (`a|b`, `x)|y`), never `||` or ` | `;  \X   a backslash before . | ( ) [ ] { } * + ? ^ $
+//          or b B w W d D s S;   .*  .+  followed by more pattern (`detail.*Budget`; a trailing `java.util.*` is a literal);
+//   ^ $    a leading ^ before a letter, `_` or #, and a trailing $ after a word byte ONLY when the pattern also opens with ^
+//          (`^foo$`);   []  a bracket class opening `[^` or holding a range `a-z`.   A lone '.' (`CHANGELOG.md`) is NOT a
+//          piece: it is the commonest literal dot.
+// The rule is INVERTED toward "unambiguous regex": a meta that would replace next='s --at hop with a regex of a different
+// answer is worse than silence, so these ordinary literals stay quiet: a subscript (`[` right after a word byte or `]`:
+// `arr[i-1]`, `a[0][1]`), a semver (`^1.2.3`: ^ before a digit), an RxJS suffix (`user$`: a bare trailing $) and a
+// markdown footnote (`[^1]`: `[^` + digits + `]`).
+inline std::string grepPatternMeta( std::string_view pat )
+{
+    const auto word = [ & ]( std::size_t i ) { return grepMetaWord( pat, i ); };
+    bool alt = false, esc = false, star = false, cls = false;
+    for( std::size_t i = 0; i < pat.size(); ++i )
+    {
+        const char c = pat[ i ];
+        if( c == '\\' && i + 1 < pat.size() && std::string_view( ".|()[]{}*+?^$bBwWdDsS" ).find( pat[ i + 1 ] ) != std::string_view::npos )
+        {
+            esc = true;
+            ++i;
+        }
+        else if( c == '|' && i > 0 && ( word( i - 1 ) || pat[ i - 1 ] == ')' ) && word( i + 1 ) )
+        {
+            alt = true;
+        }
+        else if( c == '.' && i + 2 < pat.size() && ( pat[ i + 1 ] == '*' || pat[ i + 1 ] == '+' ) )
+        {
+            star = true;
+        }
+        else
+        {
+            cls = cls || grepMetaClassAt( pat, i );
+        }
+    }
+    const bool anchor = grepMetaAnchored( pat );
+    std::string out;
+    for( const auto& [ on, piece ] : { std::pair{ alt, "|" }, std::pair{ esc, "\\" }, std::pair{ star, ".*" }, std::pair{ anchor, "^$" }, std::pair{ cls, "[]" } } )
+    {
+        if( on )
+        {
+            out += out.empty() ? "" : " ";
+            out += piece;
+        }
+    }
+    return out;
+}
+
+// The regex a regex-shaped literal most plausibly meant, for next=: the pattern itself, except that GNU grep's basic
+// alternation `a\|b` (and no bare `|`) becomes `a|b`. "" when the regex verb would refuse it, so next= never names a
+// call the parser rejects.
+inline std::string grepMetaRegex( std::string_view pat )
+{
+    std::string re( pat );
+    bool        bareBar = false;
+    for( std::size_t i = 0; i < pat.size(); ++i )
+    {
+        bareBar = bareBar || ( pat[ i ] == '|' && ( i == 0 || pat[ i - 1 ] != '\\' ) );
+    }
+    if( pat.find( "\\|" ) != std::string_view::npos && !bareBar )
+    {
+        std::string bre;
+        for( std::size_t i = 0; i < re.size(); ++i )
+        {
+            const bool basicAlt = re[ i ] == '\\' && i + 1 < re.size() && re[ i + 1 ] == '|';
+            bre += basicAlt ? '|' : re[ i ];
+            i += basicAlt ? 1 : 0;
+        }
+        re = std::move( bre );
+    }
+    return regexCompileError( re ) ? std::string() : re;
 }
 
 // ─── R1b: the enclosing-symbol context rows (the 2026-08-12 usage mine) ───────────────────────────

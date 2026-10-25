@@ -1289,13 +1289,15 @@ inline bool editCheckShowsModuleScope( const IngestResult& ing, const std::vecto
 // `page` (2026-09-10, folded into one value by lane lean-trio): --limit/--offset, and — idea #11 — the CLI's clean-answer
 // posture: `verdictOnly` makes an unchanged contract with nothing flagged print the verdict and the call that lists the
 // callers instead of 40 caller rows, under every legend posture; `selector` is the CLI's own spelling of SYM, replayed in
-// rows_next=. The MCP verb and the preview keep the full document (verdictOnly false).
+// rows_next=. The MCP edit_check verb takes the same fold (lane lean2b: its limit= argument is the --limit= rows_next= names);
+// the preview keeps the full document (preview=true never folds).
 struct EditCheckPage
 {
     int              limit       = 0;
     int              offset      = 0;
     bool             verdictOnly = false;
     std::string_view selector;
+    bool             mcpSpelling = false;   // lean2b fix 1 (B3): rows_next= names the MCP call (symbol=SYM limit=N), not the CLI flags
 };
 
 // idea #11: the facts the VERDICT-ONLY answer is decided on, gathered by editCheckBundleText once every verdict number is
@@ -1359,8 +1361,9 @@ inline std::string editCheckVerdictOnlyText( const EditCheckVerdictFacts& f, con
     }
     std::vector<char> esc;
     const auto        ex       = [ & ]( std::string_view s ) -> std::string { return std::string( escapeXml( s, esc ) ); };
-    const std::string rowsNext = nextFlag( "--edit-check=", f.page.selector.empty() ? std::string_view( fsym.name ) : f.page.selector )
-                               + " --limit=" + std::to_string( f.callers );
+    const std::string_view rowsSel  = f.page.selector.empty() ? std::string_view( fsym.name ) : f.page.selector;
+    const std::string      rowsNext = f.page.mcpSpelling ? "edit_check " + nextFlag( "symbol=", rowsSel ) + " limit=" + std::to_string( f.callers )
+                                                         : nextFlag( "--edit-check=", rowsSel ) + " --limit=" + std::to_string( f.callers );
     std::string out = "<!-- ripwire edit-check: SYM's contract (param count + publicness) NOW vs git HEAD: status=\"unchanged\" "
                       "(nothing about the contract moved), and no 1-hop caller is flagged incompatible=\"1\" (flagged only when its "
                       "argument count was reliably counted and every candidate definition has a FIXED arity that disagrees). That arity "

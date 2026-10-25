@@ -2572,8 +2572,17 @@ std::optional<int> runPath( const MainDispatch& d )
         const rw::PathSearchGaps pthGaps = path.empty() ? rw::pathSearchGaps( ing, g, srcDefs, *pthValueIdx ) : rw::PathSearchGaps{};
         // ix2-slice: the sink-side frontier beside the forward gap rows (src/pathgaps.h pathNearSink), reachable="0" only
         const rw::PathNearSink   pthNear = path.empty() ? rw::pathNearSink( ing, g, dstDefs, pthGaps.cone, *pthValueIdx ) : rw::PathNearSink{};
-        // ix2-slice (IX-2 P1): the hedged bridge — the fewest-crossings chain over declined / value / closure / namesake hops
-        const rw::PathBridge     pthBridge = path.empty() ? rw::pathBridge( ing, g, srcDefs, dstDefs, *pthValueIdx ) : rw::PathBridge{};
+        // HOP1 (src/backhops.h): the ONE backward hop provider the bridge's slot crossings and the root next= below read
+        std::optional<rw::BackwardHops> pthBackHops;
+        if( path.empty() )
+        {
+            pthBackHops.emplace( ing, g, *pthValueIdx );
+        }
+        // ix2-slice (IX-2 P1): the hedged bridge — the fewest-crossings chain over declined / value / closure / namesake / slot hops
+        const rw::PathBridge     pthBridge = path.empty() ? rw::pathBridge( ing, g, srcDefs, dstDefs, *pthValueIdx, *pthBackHops ) : rw::PathBridge{};
+        // HOP1 (#6): to= has a backward hop the provider follows → the root next= is the callers verb on to=, not the gap bodies
+        const std::string        pthSinkCallers = path.empty() && pthGaps.any() && !dstGlob ? rw::pathSinkCallersSelector( ing, *pthBackHops, dstDefs, dstN, pthSingleRoot, pthRootPrefix )
+                                                                                             : std::string();
         const bool pthHasVia = rw::pathHasNameOnlyHop( g, path );   // FE-B: exactly when a hop of THIS path is via="name"
         const bool pthHasLink = rw::pathHasNameOnlyHop( g, path, rw::kEdgeLink );
         const bool pthHasMiss = rw::pathHasNameOnlyHop( g, path, 0 );
@@ -2587,7 +2596,7 @@ std::optional<int> runPath( const MainDispatch& d )
                                                          + rw::splitArmLegend( pthHasSplit ) + rw::pathUnboundLegend( !pthBound.from || !pthBound.to )
                                                          + rw::memberOwnerLegend( rw::anyPathHopOwner( pthOwners ) ) ).c_str(),
                      ( std::string( rw::toValueRefsLegend( pthToValueRefs.count > 0 ) ) + rw::valueRefsDepthLegend( pthToValueRefs.depthCut.files > 0 ) ).c_str(),
-                     ( std::string( rw::pathGapsLegend( pthGaps.any() ) ) + std::string( rw::pathBridgeLegend( pthBridge.found() ) )
+                     ( rw::pathGapsLegend( pthGaps.any(), !pthSinkCallers.empty() ) + std::string( rw::pathBridgeLegend( pthBridge.found() ) )
                        + std::string( rw::nearSinkLegend( !pthNear.rows.empty() ) ) + std::string( rw::pathGlobLegend( srcGlob || dstGlob ) ) ).c_str(),
                      rw::graphCountFloorBrief( rw::graphGaugeClauses( g ) ).c_str(), rw::rootRelPathsLegend( pthSingleRoot ) );
         rw::emitTo( stdout, "<path from=\"{}\" to=\"{}\"{}{} from_defs=\"{}\" to_defs=\"{}\"{} reachable=\"{}\" hops=\"{}\"{}{}",
@@ -2604,7 +2613,8 @@ std::optional<int> runPath( const MainDispatch& d )
         const rw::PathGapsXml pthUnreached = path.empty()
             ? rw::pathUnreachedXml( ing, pthGaps, pthSingleRoot, pthRootPrefix,
                                     { "--connect=" + std::string( srcN ) + "," + std::string( dstN ), "--uses/--impact",
-                                      ( srcDefs.size() > 1 || dstDefs.size() > 1 ) ? "; several defs share these names — qualify as file:name to pick one" : "" } )
+                                      ( srcDefs.size() > 1 || dstDefs.size() > 1 ) ? "; several defs share these names — qualify as file:name to pick one" : "" },
+                                    pthSinkCallers )
             : rw::PathGapsXml{};
         rw::emitTo( stdout, "{}>{}{}{}", pthUnreached.rootAttrs, pthUnreached.rows, rw::pathBridgeXml( ing, g, pthBridge, pthSingleRoot, pthRootPrefix ),
                      rw::pathNearSinkXml( ing, pthNear, pthSingleRoot, pthRootPrefix ) );
@@ -2744,6 +2754,7 @@ struct ImpactView
     std::span<const rw::NodeId>    seeds;           // the matched defs; a depth-1 row's link mark reads the edge caller → seed
     const rw::ImpactDeclinedRows&  dc;              // lane ix2-slice (IX-4, declinedsites.h): the <dc> rows declined_calls= counts, cut
     std::span<const std::uint32_t> patternSites {}; // IX-3: template lookups that may name SYM — never in reaches= (XML rows)
+    const rw::ImpactRing*          ring = nullptr;  // HOP1 (backhops.h): the hedged slot ring — reaches_hedged= and its d=2 rows; never in reaches=
 };
 
 
@@ -2801,6 +2812,7 @@ int emitImpactColumnar( const ImpactView& v )
     std::vector<NodeId>     rows( v.show.begin() + v.page.begin, v.show.begin() + v.page.end );
     const std::string       attr = "of=\"" + std::string( escapeXml( v.sym, esc ) ) + "\" defs=\"" + std::to_string( v.defs )
                                  + "\" reaches=\"" + std::to_string( v.reaches ) + "\""
+                                 + rw::impactRingAttrXml( *v.ring )                               // HOP1: the XML root's reaches_hedged= (its <ring> rows: XML/JSON only)
                                  + rw::unprovenDefsAttrXml( v.unprovenDefs )                      // H1: where the XML root carries it
                                  + rw::defsListedAttrXml( v.attrib.groups, v.defListing )         // attrib-multidef: a cut table says so
                                  + rw::byDepthAttrXml( v.byDepth )                                // 0.6.5: the XML root's, same place
@@ -2867,7 +2879,7 @@ int emitImpactJson( const ImpactView& v )
     char ipab[ kPageDisclosureCap ];
     const std::size_t shownRows = v.page.end - v.page.begin;
     rw::emitTo( stdout, "{{\"of\":\"{}\",\"defs\":{},\"reaches\":{}{}{}{}", jsonStr( v.sym ).c_str(), v.defs, v.reaches,
-                 rw::unprovenDefsKeyJson( v.unprovenDefs ).c_str(),   // H1: absent at zero, like its XML twin
+                 ( rw::impactRingKeyJson( *v.ring ) + rw::unprovenDefsKeyJson( v.unprovenDefs ) ).c_str(),   // HOP1: the XML root's reaches_hedged=; H1: absent at zero, like its XML twin
                  rw::defTableJson( v.ing, v.attrib.groups, v.defListing, v.rootPrefix, /*mcp=*/false ),   // attrib-multidef: the <def> table
                  rw::byDepthKeyJson( v.byDepth ) );                   // 0.6.5: the XML root's by_depth=, as an array
     rw::emitTo( stdout, ",\"importers\":{},\"shown_importers\":{},\"importers_capped\":{}",
@@ -2898,7 +2910,8 @@ int emitImpactJson( const ImpactView& v )
     const std::string imLinkNote = rw::impactViaLinkNote( via, v.page.begin, v.page.end );
     rw::emitTo( stdout, "{}{}{}}}", rw::declinedSitesJson( v.dc.views, /*callersForm=*/true, /*mcp=*/false ),   // ix2-slice: the XML <dc> rows
                  rw::valueRefsJson( v.ing, v.valueRefs, true, rw::VrRender{ v.singleRoot, v.rootPrefix }, "vrs",
-                                                     "--uses=" + std::string( v.sym ) ), imLinkNote.c_str() );
+                                                     "--uses=" + std::string( v.sym ) )
+                   + rw::impactRingJson( v.ing, *v.ring, rw::VrRender{ v.singleRoot, v.rootPrefix } ), imLinkNote.c_str() );   // HOP1: the XML <ring>
     return 0;
 }
 
@@ -2914,7 +2927,7 @@ int emitImpactXml( const ImpactView& v )
     char              ipab[ kPageDisclosureCap ];
     const std::size_t shownRows = v.page.end - v.page.begin;
     rw::emitTo( stdout, "<impact of=\"{}\" defs=\"{}\" reaches=\"{}\"{}{}{} radius_tested=\"{}\" radius_untested=\"{}\"{}{}{}{}{}{}{}>",
-                 ex( v.sym ).c_str(), v.defs, v.reaches, rw::unprovenDefsAttrXml( v.unprovenDefs ) + rw::defsListedAttrXml( v.attrib.groups, v.defListing ),   // H1: beside the reaches= it qualifies; attrib-multidef
+                 ex( v.sym ).c_str(), v.defs, v.reaches, rw::impactRingAttrXml( *v.ring ) + rw::unprovenDefsAttrXml( v.unprovenDefs ) + rw::defsListedAttrXml( v.attrib.groups, v.defListing ),   // HOP1: the hedged ring beside reaches=; H1; attrib-multidef
                  rw::byDepthAttrXml( v.byDepth ),                                                              // 0.6.5: partitions reaches= by hop depth
                  v.imports.xmlAttrs.c_str(), v.radiusTested, v.radiusUntested,
                  ( rw::declinedCallsAttrXml( v.declinedCalls ) + rw::declinedSiteCutAttrXml( v.dc.cut ) + rw::declinedIfaceAttrXml( v.declinedIface ) ).c_str(),   // tier-3 declines into the radius (+ the <dc> cut)
@@ -2946,6 +2959,7 @@ int emitImpactXml( const ImpactView& v )
     rw::emitTo( stdout, "{}{}</impact>", rw::declinedSitesXml( v.dc.views, /*callersForm=*/true ),   // ix2-slice (IX-4): each declined call the count names
                  rw::valueRefsXml( v.ing, v.valueRefs, true, rw::VrRender{ v.singleRoot, v.rootPrefix },
                                    "--uses=" + std::string( v.sym ) )
+                   + rw::impactRingXml( v.ing, *v.ring, rw::VrRender{ v.singleRoot, v.rootPrefix } )   // HOP1: the d=2 slot ring, after the d=1 <vr> rows
                    + rw::patternDispatchXml( v.ing, v.patternSites, rw::VrRender{ v.singleRoot, v.rootPrefix } ) );
     return 0;
 }
@@ -2955,7 +2969,7 @@ inline void emitImpactLegend( const rw::Config& cfg, const rw::IngestResult& ing
                               const rw::ImportTier& imports, const std::vector<rw::NodeId>& seeds, const std::vector<std::uint32_t>& imDepth,
                               const std::vector<char>& imProven, std::size_t imUnprovenDefs, std::size_t imDeclinedCalls, std::size_t imDeclinedIface,
                               const rw::ImpactFileRollup& imFiles, const rw::ReachAttribution& imAttr, const rw::DefTableListing& imListing,
-                              const rw::ValueRefRows& imValueRefs, const rw::RankDisclosure& prD, const rw::ImpactDeclinedRows& imDc )
+                              const rw::ValueRefRows& imValueRefs, const rw::RankDisclosure& prD, const rw::ImpactDeclinedRows& imDc, const rw::ImpactRing& imRing )
 {
     if( cfg.json )
     {
@@ -2988,7 +3002,8 @@ inline void emitImpactLegend( const rw::Config& cfg, const rw::IngestResult& ing
                  ( std::string( rw::valueRefsReachLegend( !imValueRefs.rows.empty() ) )
                    + rw::valueRefsDepthLegendFor( imValueRefs )
                    + rw::patternDispatchLegend( !imValueRefs.patternSites.empty() || !imValueRefs.patternWideSites.empty(), true )   // IX-3: exactly when pattern_dispatch=/pattern_too_wide= rides
-                   + std::string( rw::slotJoinLegend( imValueRefs.slotCallers, true ) ) ).c_str(),   // IX-1: exactly when a <vr> row carries via=slot|slot-name
+                   + std::string( rw::slotJoinLegend( imValueRefs.slotCallers, true ) )   // IX-1: exactly when a <vr> row carries via=slot|slot-name
+                   + std::string( rw::impactRingLegend( imRing.hedged > 0, !imRing.rows.empty() && !cfg.columnar ) ) ).c_str(),   // HOP1: exactly when reaches_hedged= / <ring> ride
                  rw::graphCountDisclosure( rw::graphGaugeClauses( g ) ).c_str(), rw::renderDisclosure( prD, rw::DiscloseAs::LegendClause ).c_str() );
 }
 
@@ -3076,6 +3091,9 @@ std::optional<int> runImpact( const MainDispatch& d )
         // Reference-as-value round: SYM's own binding sites, beside the radius they are not in.
         const rw::ValueRefIndex imVri( ing );
         const rw::ValueRefRows  imValueRefs = rw::withPatternRows( rw::valueRefCallerRows( ing, imVri, seeds ), rw::PatternIndex( ing, imVri ), seeds, true );
+        // HOP1 (src/backhops.h): the hedged slot ring — one or two slot hops back from SYM, beside reaches=, never in it
+        const rw::BackwardHops  imBackHops( ing, g, imVri );
+        const rw::ImpactRing    imRing      = rw::impactSlotRing( ing, imBackHops, seeds, reach );
         const std::vector<std::uint32_t>& imPatterns = imValueRefs.patternSites;   // IX-3: beside the radius, never in it
         // ix2-slice (IX-4, declinedsites.h): the <dc> rows of exactly the declines declined_calls= counts, cut as --callers cuts;
         // no cand= under any legend (as the MCP twin): --help promises the rows byte-identical across postures (legendcostcheck C)
@@ -3084,7 +3102,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                                                                     rw::VrRender{ imSingleRoot, imRootPrefix }, /*candidates=*/false );
 
         emitImpactLegend( cfg, ing, g, reach, show, imPage, imWalk, imports, seeds, imDepth, imProven, imUnprovenDefs,
-                          imDeclinedCalls, imDeclinedIface, imFiles, imAttr, imListing, imValueRefs, prD, imDc );
+                          imDeclinedCalls, imDeclinedIface, imFiles, imAttr, imListing, imValueRefs, prD, imDc, imRing );
         // P2.1 + §P8 G1: the rank-ordered listing's 40 is a DEFAULT now, not a ceiling — see the §P10.3 note
         // above runImpact; pageDisclosure emits the ` shown= capped=` bytes this verb used to hand-roll
         // (src/pageview.h, THE TRUNCATION VOCABULARY, rules 1-3). LB-G: the same NAMED constant
@@ -3094,7 +3112,7 @@ std::optional<int> runImpact( const MainDispatch& d )
                                imports, importPage, importLazyPage, prD, imSingleRoot, imRootPrefix, imRootAttr,
                                imSingleRoot ? cfg.roots[0] : std::string_view(), cfg.pageLimit, cfg.pageOffset,
                                &imTestReach, imRadiusTested, imRadiusUntested, imDeclinedCalls, imDeclinedIface, g, imDepth, imByDepth, imValueRefs,
-                               imProven, imFiles, imAttr, imListing, imWalk.typeOnly, seeds, imDc, imPatterns };
+                               imProven, imFiles, imAttr, imListing, imWalk.typeOnly, seeds, imDc, imPatterns, &imRing };
 
         if( cfg.columnar ) { return emitImpactColumnar( view ); }
         if( cfg.json     ) { return emitImpactJson( view ); }

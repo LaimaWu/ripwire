@@ -2272,19 +2272,7 @@ std::optional<int> runQualityDelta( const MainDispatch& d )
         std::string staleCollapseAttrs;
         if( collapseStale )
         {
-            std::vector<std::pair<std::string, std::size_t>> byKind;   // first-appearance order of the ledger's own row order
-            for( const quality::StaleAck& a : staleAcks )
-            {
-                // the KIND, without the ack's :new-symbol/:preexisting facet — the rows (stale_next=) carry the facet
-                const std::string kind = a.kind.substr( 0, a.kind.find( ':' ) );
-                const auto it = std::find_if( byKind.begin(), byKind.end(), [ & ]( const auto& kv ) { return kv.first == kind; } );
-                if( it == byKind.end() ) { byKind.emplace_back( kind, 1 ); } else { ++it->second; }
-            }
-            std::string kinds;
-            for( const auto& [ kind, n ] : byKind )
-            {
-                kinds += ( kinds.empty() ? "" : "," ) + kind + ":" + std::to_string( n );
-            }
+            const std::string kinds = quality::staleByKindValue( staleAcks );   // shared with the MCP twin (lane lean2b)
             std::string replay = cfg.qualityDeltaRange.empty() ? std::string( "--quality-delta" ) : rw::nextFlag( "--quality-delta=", cfg.qualityDeltaRange );
             if( scope.active() )
             {

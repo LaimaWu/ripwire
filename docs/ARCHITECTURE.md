@@ -733,3 +733,62 @@ The same lesson generalizes, and it is the reason the gate discipline in `CONTRI
 the way it is: **a gate that cannot observe what it asserts is worse than no gate**, because it
 reports confidence. Guard your probes — assert the thing you are about to search for actually exists,
 then assert the property.
+
+---
+
+## 6. Seeds → hops → walks
+
+Every graph question ripwire answers about code (`--callers`, `--callees`, `--impact`, `--path`, `--connect`,
+`--situ`, `--test-gate`, and the caller rows of `--for`) is built from three layers. A change to one layer should
+not need a change to the other two.
+
+**1. Seeds: where a walk starts.** A seed resolver turns what the user typed into an ordered list of candidate
+definitions and says how it got there. Input spellings: a bare name, `file:name`, `Scope::name`, `Class.method`,
+the canonical id the tool prints, `@FILE:LINE`, a `*` glob, and the changed symbols of a diff. All of them go through
+`resolveAllByNameQualified` (`graph.h`) or one of its tiers. The diff-hunk producer (`diffhunks.h`, `situ.h`) maps
+hunks to the symbols whose bodies they touch, and falls back to the whole file when no body holds a hunk
+(contributed by @llvm-x86 in #423). Several definitions with one name are ordered by one total order, the name tower
+(`applyNameTower`, `kindSpecificity` in `model.h`; contributed by @mpapis in #432). A verb that needs ONE focus takes
+it from `resolveFocus` (`graph.h`): the tower front, a code definition before a docs heading or a config key, and a
+bodyless C/C++ declaration yields to the same-scope definition with a body. A seed resolver never
+picks silently. `defs=`, `unproven_defs=`, `from_defs=`/`to_defs=` and the `<def>` table disclose the candidates.
+The rule: **any spelling the output prints is a spelling the input accepts.**
+
+**2. Hops: which edges leave a node, and how sure each one is.** A hop provider takes a node, a direction and a
+set of hop kinds. It returns edges, and each edge carries exactly one certainty label:
+- *proven*: the index pins the edge (a uniquely resolved call, an ES import binding, a SCIP pin, an FFI binding,
+  a single-implementor interface call `via="impl"`);
+- *hedged*: a walk may follow the edge but must print its kind and width. Examples: a split arm `prov="split"`, a
+  name-only bind `via="name"`, a struct-field slot `via="slot"`/`"slot-name"` with its caller count, a stored
+  function value, a closure, a declined call whose candidate list is short enough to name;
+- *declined*: a candidate set the walk counts but does not cross (too wide, gated as a builtin or standard member,
+  or stored without a list).
+Proven edges live in the graph CSR (`outProv`, `outNameOnly`). Hedged and declined hops come from side indexes:
+the value-ref and slot index (`valuerefindex.h`), declined call sites (`declinedsites.h`), interface dispatch
+(`ifacedispatch.h`), and the backward hop provider (`backhops.h`). The provider reports a width. The walk decides
+the bound.
+
+**3. Walks: how far to go and what to print.** A walk is a policy over seeds and hops. It sets a depth, a width
+bound, how many hedged crossings it allows, and the rows it prints:
+- `--callers`/`--callees` go one hop;
+- `--impact` is the proven caller ring plus a hedged ring (`reaches_hedged=`);
+- `--path` runs a shortest proven chain, then a hedged bridge, then gaps and `near_sink`, then a `next=`
+  continuation;
+- `--connect` joins several terminals;
+- `--situ`/`--test-gate` walk callers from the changed symbols.
+
+A walk never relabels a hop. A hedged hop is never counted in `reaches=`, `reachable=` or `hops=`. A bound that
+cut something is printed (`capped=`, `total=`, `next=`). It is never reported as "not reached".
+
+**One coupling, stated on purpose.** When a name has several definitions, the *pick* can depend on the walk:
+the right `Loop` is the one that reaches the other endpoint. The seed layer therefore returns the ordered
+candidates. A walk that must choose uses the one shared terminal scorer (`scoreTerminalCandidates`, `graph.h`),
+with the tower as the tie-break, and it prints the alternatives it did not take.
+
+**Adding to a layer.**
+- A new spelling goes in the seed resolver. The verbs pick it up from there.
+- A new indirection shape (a function table, a registry, a factory) is a new hop kind in the provider, with
+  one label and one width. Every walk then sees it.
+- A new question is a new walk policy over the existing seeds and hops.
+- Two copies of one rule in two verbs (two endpoint pickers, two hop vocabularies) are a fold candidate, the same
+  as the ingest feature families in CONTRIBUTING.
