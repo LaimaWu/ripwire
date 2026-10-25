@@ -22,7 +22,7 @@
 // whose text the answer already carries (the fold or the body slot serves it or an enclosing body); a constructor with no
 // resolved callee. Same posture as mem= (formembers.h). RIPWIRE_NO_CTOR_HOP (any value) turns it off.
 
-#include "forfold.h"            // fold_detail::overlapsServed
+#include "forfold.h"            // fold_detail::overlapsServed / spanInside — the fold's own containment reading
 #include "formembers.h"         // MemberNamesServed
 #include "graph.h"
 #include "model.h"
@@ -71,19 +71,13 @@ inline bool isCtorName( Lang lang, std::string_view name, std::string_view owner
         default:                                      return false;
     }
 }
-inline bool spanHolds( const Symbol& outer, const Symbol& inner ) noexcept
-{
-    return outer.fileId == inner.fileId && outer.sigStartByte <= inner.sigStartByte && inner.endByte <= outer.endByte
-        && ( outer.sigStartByte < inner.sigStartByte || inner.endByte < outer.endByte );
-}
 // The innermost class/struct of `id`'s file whose span holds it; kNoNode when none does.
 inline NodeId innermostOwner( const IngestResult& ing, NodeId id, const std::vector<NodeId>& fileClasses )
 {
     NodeId best = kNoNode;
     for( const NodeId c : fileClasses )
     {
-        if( c != id && spanHolds( ing.symbols[c], ing.symbols[id] )
-            && ( best == kNoNode || spanHolds( ing.symbols[best], ing.symbols[c] ) ) )
+        if( c != id && fold_detail::spanInside( ing, id, c ) && ( best == kNoNode || fold_detail::spanInside( ing, c, best ) ) )
         {
             best = c;
         }

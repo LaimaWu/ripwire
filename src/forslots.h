@@ -27,7 +27,6 @@
 #include "forfold.h"            // fold_detail::overlapsServed — the fold's own "the answer already carries this text" reading
 #include "formembers.h"         // MemberNamesServed — the bodies the answer serves
 #include "model.h"
-#include "receiverevidence.h"   // ReceiverEvidence::callableKind / classLike
 #include "valuerefindex.h"      // ValueRefIndex::targetsOf — the functions a value reference may hold
 
 #include <algorithm>
@@ -64,12 +63,6 @@ static_assert( kForSlotCap == 16, "kForInitSlotsLegend states the cap: move the 
 
 namespace slot_detail
 {
-// A row whose symbol may hold an initializer: not a callable, not an owner (mem= names those), not a section/module.
-inline bool initializerKind( SymKind k ) noexcept
-{
-    return k == SymKind::Var || k == SymKind::Field || k == SymKind::Other;
-}
-
 // The slot key as into= spells it, less the row's own name: `o.run` → `run`, `po[0]` → `[0]`, `T["k"]` → `["k"]`.
 inline std::string_view slotKey( std::string_view fieldName, std::string_view owner ) noexcept
 {
@@ -139,8 +132,9 @@ inline std::size_t spliceInitSlots( std::string& sigs, const IngestResult& ing, 
     for( std::size_t i = 0; i < shownIds.size(); ++i )
     {
         const NodeId id = shownIds[i];
-        if( id < ing.symbols.size() && slot_detail::initializerKind( ing.symbols[id].kind ) && !ReceiverEvidence::callableKind( ing.symbols[id].kind )
-            && !ReceiverEvidence::classLike( ing.symbols[id].kind ) && !fold_detail::overlapsServed( ing, id, served.bodies, /*orHolds=*/false ) )
+        // an initializer may sit on a variable, a field or an untyped binding — never a callable, an owner (mem= names those) or a section
+        const SymKind k = id < ing.symbols.size() ? ing.symbols[id].kind : SymKind::Section;
+        if( ( k == SymKind::Var || k == SymKind::Field || k == SymKind::Other ) && !fold_detail::overlapsServed( ing, id, served.bodies, /*orHolds=*/false ) )
         {
             cand.emplace_back( id, i );
         }

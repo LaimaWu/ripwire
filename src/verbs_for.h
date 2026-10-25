@@ -780,6 +780,13 @@ inline constexpr std::string_view presentOnlyClause( bool present, bool compact,
 {
     return !present ? std::string_view() : ( compact ? compactClause : fullClause );
 }
+// FOR-SLOTS (slots=) and OWNER-CTOR-HOP (ctor_l=/ctor_calls=): the two <sigs>-row splices' clauses, each present-only, in that order
+inline std::string peerRowClauses( const ForLensHeaderParts& p, bool compact )
+{
+    std::string out( presentOnlyClause( p.initSlotsPresent, compact, rw::kForCompactInitSlotsLegend, rw::kForInitSlotsLegend ) );
+    out += presentOnlyClause( p.ctorHopPresent, compact, rw::kForCompactCtorHopLegend, rw::kForCtorHopLegend );
+    return out;
+}
 inline std::string_view hopsCallsNextLegend( const ForLensHeaderParts& p, bool compact ) noexcept
 {
     return presentOnlyClause( p.hopsCallsNextPresent, compact, kForCompactHopsCallsNextClause, kForHopsCallsNextClause );
@@ -901,8 +908,7 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     h += bodySlotLegend( p, /*compact=*/true );   // for-body-slot: present-only, after the owner clause
     h += bodyFoldLegend( p, /*compact=*/true );   // body-fold: present-only, after the slot clause
     h += presentOnlyClause( p.memberNamesPresent, /*compact=*/true, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend );   // member-names: after the fold clause
-    h += presentOnlyClause( p.initSlotsPresent, /*compact=*/true, rw::kForCompactInitSlotsLegend, rw::kForInitSlotsLegend );   // FOR-SLOTS: after mem=
-    h += presentOnlyClause( p.ctorHopPresent, /*compact=*/true, rw::kForCompactCtorHopLegend, rw::kForCtorHopLegend );   // OWNER-CTOR-HOP
+    h += peerRowClauses( p, /*compact=*/true );   // FOR-SLOTS + OWNER-CTOR-HOP: present-only, after mem=
     h += presentOnlyClause( p.callerHopPresent, /*compact=*/true, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend );  // mf1-nx: present-only, after the fold clause
     // The unconditionally-droppable-free tail of this dialect: five clauses that ride exactly when the bit beside
     // them is set, in THIS order, which is the contract a reader and every byte pin depend on. A table rather than
@@ -1050,8 +1056,7 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     h.append( bodySlotLegend( p, /*compact=*/false ) );   // for-body-slot: present-only, after the owner clause
     h.append( bodyFoldLegend( p, /*compact=*/false ) );   // body-fold: present-only, after the slot clause
     h.append( presentOnlyClause( p.memberNamesPresent, /*compact=*/false, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend ) );   // member-names
-    h.append( presentOnlyClause( p.initSlotsPresent, /*compact=*/false, rw::kForCompactInitSlotsLegend, rw::kForInitSlotsLegend ) );   // FOR-SLOTS
-    h.append( presentOnlyClause( p.ctorHopPresent, /*compact=*/false, rw::kForCompactCtorHopLegend, rw::kForCtorHopLegend ) );   // OWNER-CTOR-HOP
+    h.append( peerRowClauses( p, /*compact=*/false ) );   // FOR-SLOTS + OWNER-CTOR-HOP
     h.append( presentOnlyClause( p.callerHopPresent, /*compact=*/false, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend ) );  // mf1-nx: present-only, after the fold clause
     if( p.tailLegend )
     {

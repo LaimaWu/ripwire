@@ -29,7 +29,7 @@
 #include "prconverge.h" // W2-F: RankDisclosure + the pr_iters= / pr_converged= spellings (CLI and MCP share them)
 #include "historyread.h" // K51: history_unread= on every root that prints churn=/amp=
 #include "gitmine.h"    // F3 (H2H-Graft): RecentFile — the map's <recent> rows are the churn-decay miner's own product
-#include "lexindex.h"      // MAP-STEM: forEachLexSubtoken / lexLowerByte — the one subtoken rule
+#include "lexical.h"       // MAP-STEM: rw::subtokens — the one subtoken rule (lexLowerByte rides with it)
 #include "mapinventory.h"   // D7: the map scope's <inv> tier — computeMapInventory, kMapInventoryLegend
 
 #include <algorithm>
@@ -2034,35 +2034,14 @@ inline DataSectionsCut codeFirstKeep( const IngestResult& ing, std::vector<NodeI
 // rows already hold a type with as many shared subtokens gets none, and so does a test file (layer="test"). RIPWIRE_NO_MAP_STEM (any value) turns it off.
 namespace map_stem_detail
 {
-// A name's subtokens (the lexical rule), lowercased, the >= 3-byte ones: a shorter one (`id`, `io`) matches inside too many stems.
-inline void nameSubtokens( std::string_view text, std::vector<std::string>& out )
-{
-    out.clear();
-    forEachLexSubtoken( text, [ & ]( std::size_t b, std::size_t e )
-    {
-        if( e - b < 3 )
-        {
-            return;
-        }
-        std::string tok;
-        for( std::size_t k = b; k < e; ++k )
-        {
-            tok.push_back( char( lexLowerByte( static_cast<unsigned char>( text[k] ) ) ) );
-        }
-        out.push_back( std::move( tok ) );
-    } );
-}
-// How many of a type name's subtokens occur inside the lowercased file stem: a stem is written run together as often as not
-// (`formparsers` holds `form` and `parser` of FormParser; `body_limit` holds `body` and `limit`).
+// How many of a type name's subtokens (rw::subtokens: the lexical rule, lowercased; the >= 3-byte ones, since a shorter one such
+// as `id` or `io` matches inside too many stems) occur inside the lowercased file stem: a stem is written run together as often
+// as not (`formparsers` holds `form` and `parser` of FormParser; `body_limit` holds `body` and `limit`).
 inline std::size_t sharedSubtokens( std::string_view stemLower, std::string_view name, std::vector<std::string>& scratch )
 {
-    nameSubtokens( name, scratch );
-    std::size_t n = 0;
-    for( const std::string& t : scratch )
-    {
-        n += stemLower.find( t ) != std::string_view::npos ? 1 : 0;
-    }
-    return n;
+    scratch.clear();
+    subtokens( name, scratch );
+    return std::size_t( std::ranges::count_if( scratch, [ & ]( const std::string& t ) { return t.size() >= 3 && stemLower.find( t ) != std::string_view::npos; } ) );
 }
 inline std::string_view fileStem( std::string_view path ) noexcept
 {
@@ -2075,10 +2054,6 @@ inline std::string_view fileStem( std::string_view path ) noexcept
         path = path.substr( 0, dot );
     }
     return path;
-}
-inline bool typeKind( SymKind k ) noexcept
-{
-    return k == SymKind::Class || k == SymKind::Struct || k == SymKind::Interface;
 }
 }   // namespace map_stem_detail
 
@@ -2130,7 +2105,7 @@ inline std::vector<NodeId> addMapStemRows( const IngestResult& ing, std::vector<
     for( NodeId id = 0; id < ing.symbols.size(); ++id )
     {
         const Symbol& s = ing.symbols[id];
-        if( !typeKind( s.kind ) || s.fileId >= slotOf.size() || slotOf[ s.fileId ] == UINT32_MAX || s.name.empty() )
+        if( !ReceiverEvidence::classLike( s.kind ) || s.fileId >= slotOf.size() || slotOf[ s.fileId ] == UINT32_MAX || s.name.empty() )
         {
             continue;
         }
@@ -2157,7 +2132,7 @@ inline std::vector<NodeId> addMapStemRows( const IngestResult& ing, std::vector<
         std::vector<NodeId>& rows = buckets[ fileOrder[slot] ];
         const bool held = std::ranges::any_of( rows, [ & ]( NodeId r )
         {
-            return r == pick || ( typeKind( ing.symbols[r].kind ) && sharedSubtokens( stemOf( slot ), ing.symbols[r].name, scratch ) >= bestShared[slot] );
+            return r == pick || ( ReceiverEvidence::classLike( ing.symbols[r].kind ) && sharedSubtokens( stemOf( slot ), ing.symbols[r].name, scratch ) >= bestShared[slot] );
         } );
         if( !held )
         {
