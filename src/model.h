@@ -134,7 +134,7 @@ inline bool isStructOrNamedType( SymKind k ) noexcept
 // They do not pin the other eleven: a swap of two unanchored enumerators (Var with Interface) leaves every guard true while
 // the position-indexed table reweights them, which is what the byte-pinned answers above are for. DISTINCT from gitmine.h's
 // §H6 "specificity-ordered mapper", which orders file PATHS on a different axis; nothing there reads or shares this ladder.
-inline constexpr std::array<int, kSymKindCount> kKindSpecificityTable = {
+inline constexpr auto kKindSpecificityTable = std::array{   // extent DEDUCED from the rows: a missing/extra row changes size() and trips the assert below
     /* Function = */   2,   // a bare function definition
     /* Method = */     5,   // most specific: a behaviour owned by a type
     /* Class = */      3,
