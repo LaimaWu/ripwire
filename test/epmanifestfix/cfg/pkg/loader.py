@@ -24,3 +24,7 @@ def load_other():
 
 def _ep(group):
     return group
+
+
+def prefix_only(ep):
+    return ep.group == "x.report.extra"

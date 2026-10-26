@@ -24,6 +24,11 @@
 #          [G] m.get("g") on a non-entry_points receiver is not a consumer
 #   K1 [P] the runaway guards disclose: a 13-entry group shows 12 with entries_capped="1" entries_total="13"; 4 consumers show 3
 #          with used_capped="1" used_total="4"
+#   E1 [P] a module found only by a deeper same-suffix path (setup.cfg `fmt = cli:Fmt`, only tools/cli.py exists): unresolved="1", no def=
+#   E2 [P] `sp = pkg.mod : Fmt` (blanks around the colon) prints target="pkg.mod:Fmt" and resolves to pkg/mod.py:1
+#   E3 [P] an empty group name (`= bare = pkg.mod:Fmt`) yields no <ep>
+#   E4 [P] pyproject `[project.entry-points."x.report"]  # see [docs]`: group="x.report", not a name bent by the comment's `]`
+#   (C2/C3 also pin the closing quote: loader.py `prefix_only` compares "x.report.extra", which must not be listed for x.report)
 #   N1 [G] a non-manifest .cfg (config.cfg, same text): no <ep>
 #   N2 [G] no <ep>, byte-identical to RIPWIRE_NO_EP_MANIFEST=1: --json, --token-budget=3000, --signatures-only
 #   N3 [G] prefix identity: the answer minus <ep> and its clause, est_tokens masked, equals RIPWIRE_NO_EP_MANIFEST=1
@@ -48,7 +53,7 @@ verdict(){ if [ "$1" -eq 0 ]; then ok "$2"; else no "$3"; fi; }   # rc, the PASS
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 FX="$ROOT/test/epmanifestfix"
-[ -f "$FX/cfg/setup.cfg" ] && [ -f "$FX/pyp/pyproject.toml" ] && [ -f "$FX/negcfg/config.cfg" ] && [ -f "$FX/sib/setup.cfg" ] || { echo "fixture test/epmanifestfix missing"; exit 2; }
+[ -f "$FX/edge/setup.cfg" ] && [ -f "$FX/edgetoml/pyproject.toml" ] && [ -f "$FX/cfg/setup.cfg" ] && [ -f "$FX/pyp/pyproject.toml" ] && [ -f "$FX/negcfg/config.cfg" ] && [ -f "$FX/sib/setup.cfg" ] || { echo "fixture test/epmanifestfix missing"; exit 2; }
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"; mkdir -p "$HOME"
@@ -65,7 +70,9 @@ RIPWIRE_NO_EP_MANIFEST=1 run "$FX/cfg" "$TMP/cfgoff" "$Q"
 run "$FX/pyp" "$TMP/pyp" '--for=how is the Fmt report formatter and the pkgtool main command registered'
 run "$FX/negcfg" "$TMP/neg" "$Q"
 run "$FX/sib" "$TMP/sib" '--for=how are the report formatter render and init hooks registered'
-for a in cfg cfg2 cfgfull cfgoff pyp neg sib; do okrun "$TMP/$a" || no "run $a failed (rc=$(cat "$TMP/$a.rc"))"; done
+run "$FX/edge" "$TMP/edge" "$Q"
+run "$FX/edgetoml" "$TMP/edgetoml" "$Q"
+for a in cfg cfg2 cfgfull cfgoff pyp neg sib edge edgetoml; do okrun "$TMP/$a" || no "run $a failed (rc=$(cat "$TMP/$a.rc"))"; done
 
 # eps FILE -> one JSON line: [{attrs..., "e": [{attrs}]}] of every <ep> element
 eps(){ python3 - "$1" <<'PY'
@@ -81,6 +88,7 @@ print(json.dumps(out))
 PY
 }
 CFG="$( eps "$TMP/cfg" )"; PYP="$( eps "$TMP/pyp" )"; NEG="$( eps "$TMP/neg" )"; SIB="$( eps "$TMP/sib" )"
+EDGE="$( eps "$TMP/edge" )"; EDGETOML="$( eps "$TMP/edgetoml" )"
 has(){ python3 -c "import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if ($2) else 1)" "$1"; }
 grp(){ echo "[g for g in d if g.get('group')=='$1']"; }
 
@@ -108,6 +116,18 @@ if has "$SIB" "any(g['l']=='2' and g.get('used_at')=='plug/use.py:5' and g['e']=
 # K1
 if has "$SIB" "any(len(g['e'])==12 and g.get('entries_capped')=='1' and g.get('entries_total')=='13' and g.get('used_capped')=='1' and g.get('used_total')=='4' and len(g['used_at'].split())==3 for g in $(grp x.many))"; then
     ok "K1 entry and consumer caps disclose *_capped=1 with the total"; else no "K1 caps: $SIB"; fi
+# E1: a module found only by a deeper same-suffix path (tools/cli.py for `cli`) is not that module: unresolved, never a def
+if has "$EDGE" "any(e=={'n':'fmt','target':'cli:Fmt','unresolved':'1'} for g in $(grp x.report) for e in g['e'])"; then
+    ok "E1 a suffix-only module match (tools/cli.py for cli:Fmt) is unresolved=1, not a def"; else no "E1 suffix-only module: $EDGE"; fi
+# E2: `mod : attr` (blanks around the colon) is printed and resolved as pkg.mod:Fmt
+if has "$EDGE" "any(e=={'n':'sp','target':'pkg.mod:Fmt','def':'pkg/mod.py:1'} for g in $(grp x.report) for e in g['e'])"; then
+    ok "E2 'pkg.mod : Fmt' reads as target pkg.mod:Fmt -> pkg/mod.py:1"; else no "E2 mod : attr: $EDGE"; fi
+# E3: a group line with an empty name (`= bare = pkg.mod:Fmt`) yields no <ep>
+if has "$EDGE" "not any(g.get('group','x')=='' for g in d) and len(d)==1"; then
+    ok "E3 an empty group name yields no <ep>"; else no "E3 empty group: $EDGE"; fi
+# E4: a TOML header with a trailing comment holding a `]` names the right group
+if has "$EDGETOML" "any(g['e']==[{'n':'fmt','target':'pkg.mod:Fmt','def':'pkg/mod.py:1'}] for g in $(grp x.report)) and len(d)==1"; then
+    ok "E4 a [..]  # see [docs] header comment does not bend the group name"; else no "E4 header comment: $EDGETOML"; fi
 # N1
 [ "$NEG" = "[]" ]; verdict $? "N1 a non-manifest .cfg yields no <ep>" "N1 config.cfg produced rows: $NEG"
 # N2

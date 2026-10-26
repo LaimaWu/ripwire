@@ -82,9 +82,15 @@ inline bool isDottedNameChar( char c ) noexcept
 
 // `module[:attr]` from an entry value: the leading run up to whitespace or an extras bracket. "" when it is not a dotted module
 // name with an optional dotted attribute (a path, a quoted table, garbage) — that entry is not recorded.
-inline std::string_view entryTarget( std::string_view v ) noexcept
+inline std::string entryTarget( std::string_view v )
 {
     v = trimWs( v );
+    std::string joined;   // `mod : attr` (the importlib grammar allows blanks around the colon) reads as `mod:attr`
+    if( const std::size_t c = v.find( ':' ); c != std::string_view::npos && c > 0 )
+    {
+        joined = std::string( trimWs( v.substr( 0, c ) ) ) + ":" + std::string( trimWs( v.substr( c + 1 ) ) );
+        v      = joined;
+    }
     std::size_t end = 0;
     while( end < v.size() && v[end] != ' ' && v[end] != '\t' && v[end] != '[' )
     {
@@ -99,7 +105,7 @@ inline std::string_view entryTarget( std::string_view v ) noexcept
     {
         return {};
     }
-    return t;
+    return std::string( t );
 }
 
 // `name = module:attr` (one setup.cfg entry line or the inline part of a group line).
@@ -111,12 +117,12 @@ inline void addCfgEntry( std::string_view v, std::string_view group, std::uint32
         return;
     }
     const std::string_view name   = trimWs( v.substr( 0, eq ) );
-    const std::string_view target = entryTarget( v.substr( eq + 1 ) );
+    const std::string      target = entryTarget( v.substr( eq + 1 ) );
     if( name.empty() || target.empty() )
     {
         return;
     }
-    out.push_back( EpEntry{ std::string( group ), groupLine, std::string( name ), std::string( target ), line } );
+    out.push_back( EpEntry{ std::string( group ), groupLine, std::string( name ), target, line } );
 }
 
 // A TOML key or header path split on its dots, quoted parts kept whole ("a.b" is one part). Empty on a malformed path.
@@ -166,7 +172,7 @@ inline std::vector<std::string> tomlKeyParts( std::string_view s )
 // The entry-point group a pyproject table header names, or "" when the table is no entry-point table.
 inline std::string pyprojectGroupOf( const std::vector<std::string>& k )
 {
-    if( k.size() == 3 && k[0] == "project" && k[1] == "entry-points" )
+    if( k.size() == 3 && k[0] == "project" && k[1] == "entry-points" && !k[2].empty() )
     {
         return k[2];
     }
@@ -178,7 +184,7 @@ inline std::string pyprojectGroupOf( const std::vector<std::string>& k )
     {
         return "gui_scripts";
     }
-    if( k.size() == 4 && k[0] == "tool" && k[1] == "poetry" && k[2] == "plugins" )
+    if( k.size() == 4 && k[0] == "tool" && k[1] == "poetry" && k[2] == "plugins" && !k[3].empty() )
     {
         return k[3];
     }
@@ -248,6 +254,10 @@ inline void parseSetupCfgEntryPoints( std::string_view text, std::vector<EpEntry
         }
         group     = std::string( trimWs( t.substr( 0, sep ) ) );
         groupLine = lineNo;
+        if( group.empty() )
+        {
+            return;   // `= x = m:a` names no group: nothing to search for, nothing to print
+        }
         if( const std::string_view inl = trimWs( t.substr( sep + 1 ) ); !inl.empty() )
         {
             epdetail::addCfgEntry( inl, group, groupLine, lineNo, out );
@@ -270,7 +280,23 @@ inline void parsePyprojectEntryPoints( std::string_view text, std::vector<EpEntr
         }
         if( t.front() == '[' )
         {
-            const std::size_t close = t.rfind( ']' );
+            std::size_t close = std::string_view::npos;
+            for( std::size_t i = 1, q = 0; i < t.size(); ++i )
+            {
+                if( q != 0 )
+                {
+                    q = std::size_t( t[i] ) == q ? 0 : q;
+                }
+                else if( t[i] == '"' || t[i] == '\'' )
+                {
+                    q = std::size_t( t[i] );
+                }
+                else if( t[i] == ']' )
+                {
+                    close = i;
+                    break;
+                }
+            }
             group = ( t.starts_with( "[[" ) || close == std::string_view::npos ) ? std::string()
                   : epdetail::pyprojectGroupOf( epdetail::tomlKeyParts( t.substr( 1, close - 1 ) ) );
             groupLine = lineNo;
@@ -305,12 +331,12 @@ inline void parsePyprojectEntryPoints( std::string_view text, std::vector<EpEntr
         }
         const std::vector<std::string>        key = epdetail::tomlKeyParts( t.substr( 0, eq ) );
         const std::optional<std::string_view> val = epdetail::tomlStringValue( t.substr( eq + 1 ) );
-        const std::string_view                target = val ? epdetail::entryTarget( *val ) : std::string_view();
+        const std::string                     target = val ? epdetail::entryTarget( *val ) : std::string();
         if( key.size() != 1 || key[0].empty() || target.empty() )
         {
             return;
         }
-        out.push_back( EpEntry{ group, groupLine, key[0], std::string( target ), lineNo } );
+        out.push_back( EpEntry{ group, groupLine, key[0], target, lineNo } );
     } );
 }
 
@@ -526,10 +552,8 @@ inline std::uint32_t epModuleFile( const IngestResult& ing, std::string_view mdi
         }
     }
     inTree = !any.empty();
-    if( any.size() == 1 )
-    {
-        return any.front();
-    }
+    // only a file AT the module's import path (under mdir or mdir/src) is that module; a deeper same-suffix file
+    // (tools/cli.py for `cli`, tests/fixtures/pkg/mod.py) may be another module of the same name: unresolved, never a def
     return direct.size() == 1 ? direct.front() : kNoFile;
 }
 
@@ -835,7 +859,7 @@ inline constexpr std::string_view kForEpManifestLegend =
     "; ep p= l= group=: a manifest entry-point group (setup.cfg [options.entry_points], pyproject [project.entry-points.*], "
     "[project.scripts], [tool.poetry.plugins.*]/[tool.poetry.scripts]) that registers a shown row, l= the group's line; "
     "e n= target=: each entry as written, def=file:line the in-tree definition it names, external=1 no indexed file is its module, "
-    "unresolved=1 the module is in the tree but the name is not one definition there; used_at=file:line used_in=: code that "
+    "unresolved=1 the module or the name is not exactly one file or definition in the tree; used_at=file:line used_in=: code that "
     "compares or loads that group's string literal (by literal text, not resolved; a floor); "
     "no used_at= means no such code was found; used_capped=1 used_total=, entries_capped=1 entries_total=, groups_capped=1 "
     "groups_total=: that list was cut, the total it was cut from";
