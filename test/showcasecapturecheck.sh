@@ -30,6 +30,11 @@
 #       drifts onto a line inside a DIFFERENT function exits 0 with a well-formed <at> element naming
 #       the wrong symbol. main's 09-05 and 09-07 captures shipped exactly that — l="1148"
 #       sym="buildGraph" under a rankGraphTeleport demo — and this arm is red on both.
+#   (S) SCRUB BOUNDARY (train 36, #438 review) — the capture replaces the repo root with "." and the
+#       per-run scratch dir with "<scratch>" only where the root is a WHOLE path (not inside a longer one):
+#       a checkout at /w once turned `src/wrap` into `src.rap` and `.github/workflows` into `.github.orkflows`.
+#       Byte-exact over a planted text with ROOT=/w and a scratch dir outside it; a mutation (plain str.replace)
+#       must differ; and the generator refuses a scratch dir inside the repo (it would publish ./… paths).
 #
 # NOTE: the python3 helpers below live in FILES under $TMP, not `<<'PY' ... PY` heredocs inside a `$( )`
 # command substitution — macOS's stock bash (3.2.57, frozen there for licensing reasons) has a long-standing
@@ -632,6 +637,55 @@ EOF
     else
         no "(I) mutation control: the planted stale figure [$mutRecorded] was NOT distinguishable from the live reading [$live] — (I) proves nothing"
     fi
+fi
+
+# (S) SCRUB BOUNDARY — see the header. The planted text and its expected bytes are files (bash 3.2 note above).
+cat >"$TMP/s_in.txt" <<'EOF'
+$ ./build/ripwire /w --at=/w/src/graph.h:10
+src/wrap.h .github/workflows/ci.yml which.hy /which.hy a/w /w/x/w b "/w" (/w) /w. /w/
+scratch=/tmp/rw_sc_q/aux/b.txt /tmp/rw_sc_qq /w/.github/workflows/ci.yml
+EOF
+cat >"$TMP/s_want.txt" <<'EOF'
+$ ./build/ripwire . --at=./src/graph.h:10
+src/wrap.h .github/workflows/ci.yml which.hy /which.hy a/w ./x/w b "." (.) .. ./
+scratch=<scratch>/aux/b.txt /tmp/rw_sc_qq ./.github/workflows/ci.yml
+EOF
+cat >"$TMP/s_run.py" <<'EOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+import docs_commands_build as ex
+t = open(sys.argv[2]).read()
+if sys.argv[3] == "mutant":
+    out = t.replace("/w", ".").replace("/tmp/rw_sc_q", "<scratch>")
+else:
+    out = ex.scrub_root(ex.scrub_root(t, "/tmp/rw_sc_q", "<scratch>"), "/w", ".")
+sys.stdout.write(out)
+EOF
+if python3 "$TMP/s_run.py" "$ROOT/docs" "$TMP/s_in.txt" fixed >"$TMP/s_got.txt" 2>"$TMP/s_err.txt" && cmp -s "$TMP/s_got.txt" "$TMP/s_want.txt"; then
+    ok "(S) scrub boundary: ROOT=/w + an outside scratch dir scrub byte-exact (src/wrap, .github/workflows, which.hy, a/w kept)"
+else
+    no "(S) scrub boundary: ROOT=/w output differs from the expected bytes: $( diff "$TMP/s_want.txt" "$TMP/s_got.txt" 2>&1 | head -6 | tr '\n' '|' ) $( tail -1 "$TMP/s_err.txt" )"
+fi
+python3 "$TMP/s_run.py" "$ROOT/docs" "$TMP/s_in.txt" mutant >"$TMP/s_mut.txt" 2>/dev/null
+if ! cmp -s "$TMP/s_mut.txt" "$TMP/s_want.txt" && grep -q 'src\.rap' "$TMP/s_mut.txt"; then
+    ok "(S) mutation control: a plain str.replace scrub produces src.rap (the arm can fail)"
+else
+    no "(S) mutation control: the plain-replace mutant matched the expected bytes — (S) proves nothing"
+fi
+cat >"$TMP/s_inside.py" <<'EOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+import docs_commands_build as ex
+r = sys.argv[2]
+cases = [(r + "/build/sc", False), (r + "/../elsewhere_sc", True), (r + "_sc", True), ("/tmp/rw_sc_q", True)]
+bad = [c for c, want in cases if ex.scratch_outside_repo(r, c) != want]
+print("BAD " + " ".join(bad) if bad else "OK")
+EOF
+sOut="$( python3 "$TMP/s_inside.py" "$ROOT/docs" "$ROOT" 2>&1 | tail -1 )"
+if [ "$sOut" = "OK" ] && grep -q 'scratch_outside_repo( *REPO, *SCRATCH *)' "$SCRIPT"; then
+    ok "(S) a scratch dir inside the repo is refused (scratch_outside_repo: inside / sibling-prefix / outside cases; the generator calls it)"
+else
+    no "(S) scratch-inside-repo refusal missing or wrong: $sOut"
 fi
 
 echo
