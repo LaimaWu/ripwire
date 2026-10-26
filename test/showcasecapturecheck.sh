@@ -687,6 +687,13 @@ if [ "$sOut" = "OK" ] && grep -q 'scratch_outside_repo( *REPO, *SCRATCH *)' "$SC
 else
     no "(S) scratch-inside-repo refusal missing or wrong: $sOut"
 fi
+# The arms above call scrub_root directly; they cannot see the generator go back to a plain replace. Pin the call site: both the
+# scratch dir and the repo root go through exportscrub.scrub_root, and no .replace( REPO / SCRATCH ) is left in the generator.
+if grep -qE 'scrub_root\(.*SCRATCH, *"<scratch>"\), *REPO, *"\."' "$SCRIPT" && ! grep -qE '\.replace\( *(REPO|SCRATCH)\b' "$SCRIPT"; then
+    ok "(S) the generator scrubs the scratch dir and the repo root through scrub_root (no plain .replace( REPO / SCRATCH ))"
+else
+    no "(S) showcase_capture.py no longer routes the root and scratch scrub through exportscrub.scrub_root"
+fi
 
 echo
 if [ "$fail" -eq 0 ]; then
