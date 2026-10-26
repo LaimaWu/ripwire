@@ -4068,17 +4068,25 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             rw::spliceFoldSigsNext( sigsStr, sigsCeilingNote, fold.firstSkipNext );
         }
+        // The text the answer already serves whole, ONE reading for the three late splices below (member-names, FOR-SLOTS, OWNER-CTOR-HOP):
+        // the fold's bodies and member slices, plus the body slot's owner (the fold lists it too when the fold rode). A body section added
+        // here reaches every splice at once; each splice takes the set by const reference and never writes it.
+        const auto servedAnswerBodies = [ & ]()
+        {
+            rw::MemberNamesServed served{ fold.bodies, fold.sliced };
+            if( slot.served )
+            {
+                served.bodies.push_back( slotOwner.id );
+            }
+            return served;
+        };
         // ── member-names (formembers.h): mem= on the shown owner rows, spliced into the rendered rows AFTER they were chosen (a name
         // never costs a row) and before the root is priced (est_tokens prices the names with <sigs>). The fold's posture — the compact
         // route, XML, the default regime — and the whole answer measured (the splice reads the shown ids against the rendered rows).
         if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forMemberNamesOn() && sigsPreRendered
             && !enrich.surfaceOff && !enrich.hopsCutMarker )
         {
-            rw::MemberNamesServed answerBodies{ fold.bodies, fold.sliced };
-            if( slot.served )
-            {
-                answerBodies.bodies.push_back( slotOwner.id );   // the body slot's owner (the fold lists it too when the fold rode)
-            }
+            const rw::MemberNamesServed answerBodies = servedAnswerBodies();
             if( rw::spliceMemberNames( sigsStr, ing, shownSigIds, cfg.forTask, answerBodies ) > 0 )
             {
                 headerParts.memberNamesPresent = true;   // the clause rides beside the attribute it defines
@@ -4089,11 +4097,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forInitSlotsOn() && sigsPreRendered
             && !enrich.surfaceOff && !enrich.hopsCutMarker )
         {
-            rw::MemberNamesServed answerBodies{ fold.bodies, fold.sliced };
-            if( slot.served )
-            {
-                answerBodies.bodies.push_back( slotOwner.id );
-            }
+            const rw::MemberNamesServed answerBodies = servedAnswerBodies();
             if( rw::spliceInitSlots( sigsStr, ing, shownSigIds, answerBodies ) > 0 )
             {
                 headerParts.initSlotsPresent = true;   // the clause rides beside the attribute it defines
@@ -4104,11 +4108,7 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forCtorHopOn() && sigsPreRendered
             && !enrich.surfaceOff && !enrich.hopsCutMarker )
         {
-            rw::MemberNamesServed answerBodies{ fold.bodies, fold.sliced };
-            if( slot.served )
-            {
-                answerBodies.bodies.push_back( slotOwner.id );
-            }
+            const rw::MemberNamesServed answerBodies = servedAnswerBodies();
             if( rw::spliceCtorHop( sigsStr, ing, g, shownSigIds, answerBodies ) > 0 )
             {
                 headerParts.ctorHopPresent = true;   // the clause rides beside the attributes it defines
