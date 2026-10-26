@@ -220,7 +220,11 @@ def measure(n):
         data = json.loads(mp)
     except json.JSONDecodeError:
         return None, "could not parse --top-k=%d --json map" % n
-    sels = ["%s:%s" % (f["p"], s["n"]) for f in data.get("r", []) for s in f.get("s", [])]
+    # MAP-STEM (train 35): the map adds one "stem":1 row per shown file AFTER its top-K rows (outside the ranked
+    # set). --pack-top-n=N packs only the N ranked symbols, so the body side must take the same N: counting the stem
+    # rows put 2/10/27 extra class bodies in the denominator (88.9/86.1/87.9 -> 90.0/88.1/89.9 with no signature byte
+    # changed) — a population change, not an elision change.
+    sels = ["%s:%s" % (f["p"], s["n"]) for f in data.get("r", []) for s in f.get("s", []) if not s.get("stem")]
     if not sels:
         return None, "empty top-%d symbol set" % n
     # L1 (2026-09-19): the CLI default legend is compact, and its legend spells row shapes (<d r=N>, <b t= n= p= l=>)

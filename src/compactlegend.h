@@ -62,7 +62,7 @@ inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
     // ── the ranked-map family (root <r>) — hinted by the map-shaping flag that rode along ──
     { "r",   "map",        "ranked symbol map: <f p= layer=> groups <s t= n= sc= k= amb=> rows (k= rank), <c n=> resolved callees; the header comment is data" },
     { "r",   "map-diff",   "the ranked map anchored at at=: what the diff touched, the map's row vocabulary" },
-    { "r",   "metrics",    "the ranked map with per-symbol metrics: in/out, cx/ccx, loc, params, nest, humps/deep, locals, cbo, amp, tested, ev" },
+    { "r",   "metrics",    "the ranked map with per-symbol metrics" },
     { "r",   "around",     "call neighbourhood of of=: depth= hops, fanout= kept per hop; absent rows lie outside that boundary" },
     { "r",   "query",      "lexical-rank map for the query term, the map's row vocabulary" },
     // ── the bundle family (root <ctx>) ──
@@ -120,14 +120,14 @@ inline constexpr CompactLegendSpec kCompactLegendSpecs[] =
     { "edit-check",   "edit-check",   "sym='s contract NOW vs HEAD: status=unchanged|new-symbol|contract-change; <c n= p= incompatible=1 sites_l=> callers" },
     // safe-delete (2026-09-12, the fourth sweep): radius_tested=/radius_untested= ride every answer and read here, by the same
     // isTestedByReach lens as --impact's pair (verbs_navigate.h runSafeDelete), over impact_reaches= instead of reaches=. The
-    // sweep's last pass read the rest of that root against runSafeDelete: t= and p= are defs[0]'s, the lowest id
+    // sweep's last pass read the rest of that root against runSafeDelete: t= and p= are defs[0]'s, the tower-front match
     // resolveAllByNameQualified returns. That is a MATCH, not always a definition (the sweep's design review): on a
     // header-qualified file:name selector the decl→def widening keeps the declarations beside the definitions it adds
-    // (graph.h declToDefFollowThrough), and a declaration can hold the lowest id, so the reading names the unit defs= counts.
+    // (graph.h declToDefFollowThrough), and a declaration can hold the front, so the reading names the unit defs= counts.
     // ambiguous_callers= counts callers whose g.ambOut is non-zero; dead_code_candidate=1 needs defs=1, no 1-hop caller,
     // deadCodeEligibleKind (SymKind::Function with a body, not in a .h/.hpp/.hh/.hxx path) and a whole-word `static` inside the
     // signature span (quality.h sourceHasStaticToken).
-    { "safe-delete",  "safe-delete",  "can sym= go, a READ never a verdict: callers= impact_reaches= uses= tested_self= risk=; <c n= p= amb=>; radius_tested= non-tests of impact_reaches= an indexed test reaches, radius_untested= the rest; t= p= its lowest-id match's kind and file:line; defs= matched; ambiguous_callers= callers with a call split over several defs; dead_code_candidate=1 only at defs=1 with no caller, for a t=fn with a body, outside .h/.hpp/.hh/.hxx, whose signature spells static (0 never means in use)" },
+    { "safe-delete",  "safe-delete",  "can sym= go, a READ never a verdict: callers= impact_reaches= uses= tested_self= risk=; <c n= p= amb=>; radius_tested= non-tests of impact_reaches= an indexed test reaches, radius_untested= the rest; t= p= its tower-front match's kind and file:line; defs= matched; ambiguous_callers= callers with a call split over several defs; dead_code_candidate=1 only at defs=1 with no caller, for a t=fn with a body, outside .h/.hpp/.hh/.hxx, whose signature spells static (0 never means in use)" },
     { "quality-delta","quality-delta","only what the change made WORSE vs baseline=: regressions= minor= gating=; <r kind= sym= p= was= now= gating= bar=>, <sa> acked" },
     { "test-gate",    "test-gate",    "tests <t p= changed= partner= hops= run=> + untested blast radius <u sym= p= l= ccx=>; exit 4 while either exists" },
     { "affected",     "affected",     "test files that transitively reach the changed files/symbols: <test p= partner= hops= run=> in evidence order (order= partners=); seeded_by= the reading taken" },
@@ -452,6 +452,9 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     { "pr_iters",          "pr_iters=N: PageRank iterations" },
     // The map scope's code-first pick (serialize.h codeFirstKeep): the Sections it swapped out. Present-only.
     { "data_sections_cut", "data_sections_cut=N: N data Sections (headings, data keys) swapped out of this top-K for lower-ranked code rows; next= pages them first" },
+    // MAP-STEM (serialize.h addMapStemRows): the map scope's reserved stem-namesake row per shown file. Present-only.
+    { "stem",              "s stem=1: the file's name-sharing type, added after its top-K rows (none dropped; in shown=)" },
+    { "stem_cut",          "stem_cut=N: N stem=1 rows left out to fit max_tokens" },
     // D7 (mapinventory.h): the map scope's inventory tier, ELEMENT-qualified (p=/n=/f= mean other things on other rows).
     { "listed",            "<inv listed= unlisted=>: files the ranked rows show / do not (sum = files=), each named or counted below", true, "inv" },
     { "n",                 "<entry p= n=>: a program entry by its language's convention (C/Go/Rust main, Java/C# static main, a script main its module scope calls, __main__.py), callees as c rows; manifest entries not read", true, "entry" },
@@ -466,7 +469,7 @@ inline constexpr CompactCompletenessTerm kCompactCompletenessTerms[] =
     // defs= names resolveFocus's pick (graph.h), and the body preference there holds only IN THE DECLARATION'S SCOPE: a pure
     // virtual beside another class's override keeps the focus. Unconditional, this reading described that answer wrongly
     // (test/decltodefcheck.sh E3g, which also holds the full --around and --connect readings to the same condition).
-    { "defs",              "defs=N: of= names N defs; lowest-id walked, code first, a C/C++ body in the same scope over its declaration", true, "r" },
+    { "defs",              "defs=N: of= names N defs; most-specific kind walked first, its language ahead, id last, code first, a C/C++ body in the same scope over its declaration", true, "r" },
     // The map HEADER's absent-at-zero gauges: `<!-- files=` is kept as data while the `<!-- hdr:` clauses that define
     // these fields go (kDeclinedMapLegend, kIgnoredLegend, kExtentSuspectHdrLegend, kMacroBlankedHdrLegend, the absent-if-0
     // half of the always-on legend, kMaxTokensFitLegend). Header-ONLY: several are quoted attributes elsewhere.
@@ -1155,7 +1158,7 @@ inline constexpr CompactCompletenessTerm kCompactAttributeReadings[] =
     // external-surface: src/verbs_navigate.h
     { "names", "names=N: distinct external names (the x rows' total)", false, "external-surface", MapHeaderRead::No, {}, "external-surface" },
     // metrics: src/serialize.h (the metrics <s> row)
-    { "cx", "s in= out= cx= ccx= loc= params= nest= cbo= amp=: callers, callees, cyclomatic/cognitive complexity, lines, parameters, nesting depth, coupled types, callers + co-changed files", true, "s", MapHeaderRead::No, {}, "metrics" },
+    { "cx", "s in= out= cx= ccx= loc= params= nest= cbo= lcom4= amp=: callers, callees, cyclomatic/cognitive complexity, lines, parameters, nesting depth, coupled types, class cohesion, callers + co-changed files", true, "s", MapHeaderRead::No, {}, "metrics" },
     // pr-context: src/prcontext.h
     { "files", "files=N: changed files in the diff (shown= of them listed)", false, "pr-context", MapHeaderRead::No, {}, "pr-context" },
     { "symbols", "file symbols=: indexed symbols in that changed file", true, "file", MapHeaderRead::No, {}, "pr-context" },

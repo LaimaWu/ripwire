@@ -593,7 +593,11 @@ def inCaseUnshown( n ):
         gone.append( "the <symbols stubbed=> stub (past the display cut)" )
     return gone
 
-def chooseInWindow( lo=2, hi=14 ):
+# lo=1 (N from 2) since 2026-10-25 (train 35): main's first-parent history is one merge commit per train, so every
+# HEAD~N with N >= 3 spans a whole earlier train (train 34: 37+ indexed files) and its global <recent> block pushes the
+# scoped page past the display cut; HEAD~2 (margin HEAD~1) spans only this train's own merges. Every promise is still
+# measured as before; only the smallest N tried moved.
+def chooseInWindow( lo=1, hi=14 ):
     tried = []
     for n in range( lo + 1, hi + 1 ):
         gone, goneMargin = inCaseUnshown( n ), inCaseUnshown( n - 1 )

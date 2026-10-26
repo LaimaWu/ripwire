@@ -8,6 +8,8 @@
 #include "forowner.h"   // the question's owner (owner-hop's found set) and the one owner body of an explanatory question
 #include "forfold.h"    // body-fold: the whole bodies of the top ranked rows, appended to a compact-route answer
 #include "formembers.h" // member-names: mem= on the shown owner rows of a compact-route answer
+#include "forslots.h"   // FOR-SLOTS: slots= on the shown initializer rows of a compact-route answer
+#include "forctorhop.h" // OWNER-CTOR-HOP: ctor_l=/ctor_calls= on the r=1 method row of a compact-route answer
 #include "forcallerhop.h"   // mf1-nx: a name-exact answer about ONE function carries that function's callers
 #include <optional>          // the redaction-tally snapshots a degraded pre-render restores
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
@@ -572,6 +574,9 @@ struct ForLensHeaderParts
                                             // set after construction, cleared with the section
     bool             memberNamesPresent = false; // member-names (formembers.h): a shown owner row carries mem= (set after the
                                             // <sigs> splice), so its clause defines it
+    bool             initSlotsPresent = false;   // FOR-SLOTS (forslots.h): a shown initializer row carries slots= (set after the
+                                            // <sigs> splice), so its clause defines it
+    bool             ctorHopPresent = false;     // OWNER-CTOR-HOP (forctorhop.h): the r=1 row carries ctor_l= (set after the splice)
     bool             callerHopPresent = false; // mf1-nx: a name-exact answer whose body candidates are ONE function in the default
                                             // regime (forcallerhop.h forCallerHopTargets), so a <callers> rides and its clause
                                             // defines it; set after construction, cleared with the section
@@ -775,6 +780,13 @@ inline constexpr std::string_view presentOnlyClause( bool present, bool compact,
 {
     return !present ? std::string_view() : ( compact ? compactClause : fullClause );
 }
+// FOR-SLOTS (slots=) and OWNER-CTOR-HOP (ctor_l=/ctor_calls=): the two <sigs>-row splices' clauses, each present-only, in that order
+inline std::string peerRowClauses( const ForLensHeaderParts& p, bool compact )
+{
+    std::string out( presentOnlyClause( p.initSlotsPresent, compact, rw::kForCompactInitSlotsLegend, rw::kForInitSlotsLegend ) );
+    out += presentOnlyClause( p.ctorHopPresent, compact, rw::kForCompactCtorHopLegend, rw::kForCtorHopLegend );
+    return out;
+}
 inline std::string_view hopsCallsNextLegend( const ForLensHeaderParts& p, bool compact ) noexcept
 {
     return presentOnlyClause( p.hopsCallsNextPresent, compact, kForCompactHopsCallsNextClause, kForHopsCallsNextClause );
@@ -896,6 +908,7 @@ inline void appendCompactForLegend( std::string& h, const ForLensHeaderParts& p,
     h += bodySlotLegend( p, /*compact=*/true );   // for-body-slot: present-only, after the owner clause
     h += bodyFoldLegend( p, /*compact=*/true );   // body-fold: present-only, after the slot clause
     h += presentOnlyClause( p.memberNamesPresent, /*compact=*/true, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend );   // member-names: after the fold clause
+    h += peerRowClauses( p, /*compact=*/true );   // FOR-SLOTS + OWNER-CTOR-HOP: present-only, after mem=
     h += presentOnlyClause( p.callerHopPresent, /*compact=*/true, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend );  // mf1-nx: present-only, after the fold clause
     // The unconditionally-droppable-free tail of this dialect: five clauses that ride exactly when the bit beside
     // them is set, in THIS order, which is the contract a reader and every byte pin depend on. A table rather than
@@ -1043,6 +1056,7 @@ inline std::string forLensHeaderText( const ForLensHeaderParts& p, bool withRout
     h.append( bodySlotLegend( p, /*compact=*/false ) );   // for-body-slot: present-only, after the owner clause
     h.append( bodyFoldLegend( p, /*compact=*/false ) );   // body-fold: present-only, after the slot clause
     h.append( presentOnlyClause( p.memberNamesPresent, /*compact=*/false, rw::kForCompactMemberNamesLegend, rw::kForMemberNamesLegend ) );   // member-names
+    h.append( peerRowClauses( p, /*compact=*/false ) );   // FOR-SLOTS + OWNER-CTOR-HOP
     h.append( presentOnlyClause( p.callerHopPresent, /*compact=*/false, rw::kForCompactCallerHopLegend, rw::kForCallerHopLegend ) );  // mf1-nx: present-only, after the fold clause
     if( p.tailLegend )
     {
@@ -4054,20 +4068,50 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         {
             rw::spliceFoldSigsNext( sigsStr, sigsCeilingNote, fold.firstSkipNext );
         }
+        // The text the answer already serves whole, ONE reading for the three late splices below (member-names, FOR-SLOTS, OWNER-CTOR-HOP):
+        // the fold's bodies and member slices, plus the body slot's owner (the fold lists it too when the fold rode). A body section added
+        // here reaches every splice at once; each splice takes the set by const reference and never writes it.
+        const auto servedAnswerBodies = [ & ]()
+        {
+            rw::MemberNamesServed served{ fold.bodies, fold.sliced };
+            if( slot.served )
+            {
+                served.bodies.push_back( slotOwner.id );
+            }
+            return served;
+        };
         // ── member-names (formembers.h): mem= on the shown owner rows, spliced into the rendered rows AFTER they were chosen (a name
         // never costs a row) and before the root is priced (est_tokens prices the names with <sigs>). The fold's posture — the compact
         // route, XML, the default regime — and the whole answer measured (the splice reads the shown ids against the rendered rows).
         if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forMemberNamesOn() && sigsPreRendered
             && !enrich.surfaceOff && !enrich.hopsCutMarker )
         {
-            rw::MemberNamesServed answerBodies{ fold.bodies, fold.sliced };
-            if( slot.served )
-            {
-                answerBodies.bodies.push_back( slotOwner.id );   // the body slot's owner (the fold lists it too when the fold rode)
-            }
+            const rw::MemberNamesServed answerBodies = servedAnswerBodies();
             if( rw::spliceMemberNames( sigsStr, ing, shownSigIds, cfg.forTask, answerBodies ) > 0 )
             {
                 headerParts.memberNamesPresent = true;   // the clause rides beside the attribute it defines
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+            }
+        }
+        // ── FOR-SLOTS (forslots.h): slots= on the shown initializer rows, the same posture and the same "text already served" rule
+        if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forInitSlotsOn() && sigsPreRendered
+            && !enrich.surfaceOff && !enrich.hopsCutMarker )
+        {
+            const rw::MemberNamesServed answerBodies = servedAnswerBodies();
+            if( rw::spliceInitSlots( sigsStr, ing, shownSigIds, answerBodies ) > 0 )
+            {
+                headerParts.initSlotsPresent = true;   // the clause rides beside the attribute it defines
+                headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+            }
+        }
+        // ── OWNER-CTOR-HOP (forctorhop.h): the r=1 method's owner constructor on its row, the same posture and served-text rule
+        if( autoBundleMode && plan.compact && !cfg.json && cfg.tokenBudget <= 0 && rw::forCtorHopOn() && sigsPreRendered
+            && !enrich.surfaceOff && !enrich.hopsCutMarker )
+        {
+            const rw::MemberNamesServed answerBodies = servedAnswerBodies();
+            if( rw::spliceCtorHop( sigsStr, ing, g, shownSigIds, answerBodies ) > 0 )
+            {
+                headerParts.ctorHopPresent = true;   // the clause rides beside the attributes it defines
                 headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
             }
         }
@@ -4247,7 +4291,7 @@ std::optional<int> runTargetedViews( const MainDispatch& d )
         // not tie to the file it named. implementors= is read off the one node picked here, so unreported, a drop reached
         // the reader as implementors="0" about a forward declaration.
         std::size_t  legoUnprovenDefs = 0;
-        const NodeId focus            = resolveFocus( ing, cfg.legoType, &legoUnprovenDefs );
+        const NodeId focus            = resolveLegoFocus( ing, g.implementors, cfg.legoType, &legoUnprovenDefs );
         if( focus == kNoNode )
         {
             // §B4.2: one shared refusal — a non-defining `file:name` says WHICH files define the type and
