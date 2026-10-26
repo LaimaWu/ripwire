@@ -130,6 +130,11 @@ refuse tsns 'Api.run'                           # run is an object-literal membe
 bind   tsns 'Fine.fine' tsnsFineHelper tsnsWrongHelper
 bind   tsns 'Svc.serve' tsnsSvcHelper tsnsOtherHelper    # an owner-hit still binds beside an object-literal and a namespace `serve` the spelling does not name
 
+echo "-- cr-prepass-37b: an anonymous-namespace candidate is a spelling's namesake, so a plain namesake never binds alone"
+refuse cpp 'Anon::Box::put'                     # plain.cc's Anon::Box::put beside hidden.cc's Anon::(anonymous)::Box::put: a spelling that skips the unnamed namespace names both (a namespace-scope free function is the scope tier's, not this one's)
+bind   cpp 'Plain::Pad::put' cppSoloHelper      # KEEP: no anonymous namesake of Plain::Pad, the chain tail still binds
+refuse cpp 'Solo::Pad::put'                     # the only Solo::Pad is in an unnamed namespace: refused, as an unreadable chain is
+
 echo "-- round trip: every member row --callees prints binds back to the same definition"
 for sub in ts py go rs cpp rb; do
     for seed in $( cd "$FIX/$sub" && "$BIN" "$FIX/$sub" --no-cache 2>/dev/null | grep -oE '<s t="(method|fn)" n="[^"]+"( sc="[^"]+")?' | sed -E 's/.* n="([^"]+)"( sc="([^"]+)")?/\3::\1/; s/^:://' | sort -u ); do

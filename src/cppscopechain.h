@@ -18,6 +18,9 @@
 namespace rw
 {
 
+// The chain label of a namespace written with no name (`namespace {`): no spelling writes it, name lookup skips it.
+inline constexpr std::string_view kAnonymousNamespaceLabel = "(anonymous)";
+
 // ── the source, with comments blanked ─────────────────────────────────────────────────────────────────────────
 // Comments become spaces, BYTE FOR BYTE, so every recorded span still indexes the same text: a `/* = 2 */` reminder no
 // longer reads as a default and a trailing `// (a, b)` no longer splits a parameter (review S1). String and character
@@ -354,7 +357,7 @@ private:
         }
         if( labels.empty() && isNamespace )
         {
-            labels.emplace_back( "(anonymous)" );
+            labels.emplace_back( kAnonymousNamespaceLabel );
         }
         return labels;
     }

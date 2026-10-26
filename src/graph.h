@@ -13509,6 +13509,19 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
                     key.append( c ).append( "::" );
                 }
             }
+            else if( chain && eligible && std::ranges::find( *chain, kAnonymousNamespaceLabel ) != chain->end() )
+            {   // cr-prepass-37b: an unnamed namespace is skipped by name lookup (`A::f` names `namespace A { namespace { f } }` too), so a
+                // candidate whose chain only misses the prefix THROUGH one is UNKNOWN, never dropped: the plain namesake must not bind alone
+                std::vector<std::string_view> named;
+                for( const std::string& c : *chain )
+                {
+                    if( c != kAnonymousNamespaceLabel )
+                    {
+                        named.push_back( c );
+                    }
+                }
+                unknownChain = unknownChain || ( named.size() >= prefix.size() && std::equal( prefix.begin(), prefix.end(), named.end() - std::ptrdiff_t( prefix.size() ) ) );
+            }
         }
         else if( owner.size() <= prefix.size() && std::equal( owner.begin(), owner.end(), prefix.end() - std::ptrdiff_t( owner.size() ) )
                  && writtenHeadNamesModule( prefix.first( prefix.size() - owner.size() ), rootRelPath( ing, s.fileId ), rule ) )
