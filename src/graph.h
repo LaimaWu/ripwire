@@ -13216,6 +13216,33 @@ inline bool namesInOrder( std::span<const std::string_view> want, const Have& ha
     return true;
 }
 
+// Does a written prefix HEAD name the module of a definition at root-relative `rel`? Go (PackageDir): a package is exactly
+// its directory, so the head's last segment names the file's own directory (never a file stem, a parent or a sub-package;
+// Go has no re-export) and the rest names earlier directories in order. Every other rule: an in-order subsequence of the
+// directories and the file stem (segmentNamesComponent).
+inline bool writtenHeadNamesModule( std::span<const std::string_view> head, std::string_view rel, WrittenModuleRule rule )
+{
+    std::vector<std::string_view> comps = pathSpellingComponents( rel );
+    if( rule != WrittenModuleRule::PackageDir )
+    {
+        return namesInOrder( head, comps, rule == WrittenModuleRule::ConstantPath );
+    }
+    if( !comps.empty() )
+    {
+        comps.pop_back();   // the file stem
+    }
+    if( head.empty() )
+    {
+        return true;
+    }
+    if( comps.empty() || !segmentNamesComponent( head.back(), comps.back(), false ) )
+    {
+        return false;
+    }
+    comps.pop_back();
+    return namesInOrder( head.first( head.size() - 1 ), comps, false );
+}
+
 // The C/C++ full chain of one definition (enclosing namespaces and classes, then its written qualifier), read off the
 // comment-blanked source; nullopt when the reader cannot prove it (see the tier's contract above).
 inline std::optional<std::vector<std::string>> cppFullChainOf( const Symbol& s, std::string_view file )
@@ -13270,7 +13297,7 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
     std::vector<std::uint32_t> ownerFiles;
     for( const NodeId id : cands )
     {
-        if( ing.symbols[ id ].scope.empty() && ing.symbols[ id ].kind == SymKind::Method )
+        if( ing.symbols[ id ].scope.empty() )
         {
             ownerFiles.push_back( ing.symbols[ id ].fileId );
         }
@@ -13280,7 +13307,7 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
     std::vector<NodeId> types;
     for( const Symbol& t : ownerFiles.empty() ? std::span<const Symbol>{} : std::span<const Symbol>( ing.symbols ) )
     {
-        if( namespaceCompatible( RefRole::Type, t.kind ) && std::binary_search( ownerFiles.begin(), ownerFiles.end(), t.fileId ) )
+        if( std::binary_search( ownerFiles.begin(), ownerFiles.end(), t.fileId ) )   // every symbol: a type is an owner, a function a nest
         {
             types.push_back( t.id );
         }
@@ -13313,6 +13340,7 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
         std::string key;   // the owner chain the match was made on, joined: the one-entity identity
     };
     std::vector<Match>                   matches;
+    bool                                 unknownChain = false;
     const std::span<const std::string_view> prefix( w->prefix );
     for( const NodeId id : cands )
     {
@@ -13325,14 +13353,30 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
                 owner.clear();
             }
         }
-        else if( s.kind == SymKind::Method )
-        {
+        else
+        {   // review rv-qn-input: an enclosing function or method (a local def, an object literal returned by a method) is
+            // neither an owner nor a module, so no written spelling reaches the candidate; a scope-less METHOD nothing typed
+            // encloses (an object-literal or class-expression member) has an UNKNOWN owner, never read as a module-level def.
+            bool nested = false;
             for( const NodeId t : types )
             {
-                if( t != id && typeEnclosesMember( ing.symbols[ t ], s ) )
+                const Symbol& ty = ing.symbols[ t ];
+                if( t == id || ty.name == s.name || !typeEnclosesMember( ty, s ) )
                 {
-                    owner.push_back( ing.symbols[ t ].name );
+                    continue;   // itself, or its own binding (`const run = () => …`)
                 }
+                if( namespaceCompatible( RefRole::Type, ty.kind ) )
+                {
+                    owner.push_back( ty.name );
+                }
+                else if( ty.kind != SymKind::ModuleScope )
+                {
+                    nested = true;
+                }
+            }
+            if( nested || ( s.kind == SymKind::Method && owner.empty() ) )
+            {
+                continue;
             }
         }
         std::string key;
@@ -13340,11 +13384,16 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
         const WrittenModuleRule rule = langFacts( s.lang ).writtenModule;
         if( rule == WrittenModuleRule::SourceChain )
         {   // C/C++: the namespaces and classes read off the source are the authority — never a path component
-            const std::string* text = ( s.scope.empty() || scopeLastSegment( s.scope ) == prefix.back() ) ? textOf( s.fileId ) : nullptr;
+            const bool         eligible = s.scope.empty() || scopeLastSegment( s.scope ) == prefix.back();
+            const std::string* text     = eligible ? textOf( s.fileId ) : nullptr;
             const std::optional<std::vector<std::string>> chain = text ? cppFullChainOf( s, *text ) : std::nullopt;
-            if( chain && !chain->empty() && chain->back() == prefix.back() )
+            // review rv-qn-input: a candidate whose stored owner matches but whose chain cannot be read is UNKNOWN, not "no":
+            // dropping it would let a readable namesake in another namespace bind alone
+            unknownChain = unknownChain || ( eligible && !s.scope.empty() && !chain );
+            // the prefix is the chain's contiguous TAIL: `Net::Utility` never names `Net::Conn::Utility`
+            if( chain && chain->size() >= prefix.size() && std::equal( prefix.begin(), prefix.end(), chain->end() - std::ptrdiff_t( prefix.size() ) ) )
             {
-                hit = namesInOrder( prefix.first( prefix.size() - 1 ), std::span<const std::string>( *chain ).first( chain->size() - 1 ), false );
+                hit = true;
                 for( const std::string& c : *chain )
                 {
                     key.append( c ).append( "::" );
@@ -13352,7 +13401,7 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
             }
         }
         else if( owner.size() <= prefix.size() && std::equal( owner.begin(), owner.end(), prefix.end() - std::ptrdiff_t( owner.size() ) )
-                 && namesInOrder( prefix.first( prefix.size() - owner.size() ), pathSpellingComponents( rootRelPath( ing, s.fileId ) ), rule == WrittenModuleRule::ConstantPath ) )
+                 && writtenHeadNamesModule( prefix.first( prefix.size() - owner.size() ), rootRelPath( ing, s.fileId ), rule ) )
         {
             hit = true;
             for( const std::string_view o : owner )
@@ -13370,8 +13419,11 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
         }
     }
     const std::size_t bodied = std::size_t( std::count_if( matches.begin(), matches.end(), [ & ]( const Match& m ) { return isDefinitionNotDeclaration( ing.symbols[ m.id ] ); } ) );
-    const bool oneEntity = bodied <= 1 || std::all_of( matches.begin(), matches.end(), [ & ]( const Match& m ) { return m.key == matches.front().key; } );
-    if( matches.empty() || !oneEntity )
+    // review rv-qn-input: a declaration-only match is one entity with a body only when it shares that body's owner chain
+    const auto chainOf   = []( const std::string& k ) { return std::string_view( k ).substr( 0, k.rfind( '@' ) ); };
+    const bool sameChain = std::all_of( matches.begin(), matches.end(), [ & ]( const Match& m ) { return chainOf( m.key ) == chainOf( matches.front().key ); } );
+    const bool oneEntity = sameChain && ( bodied <= 1 || std::all_of( matches.begin(), matches.end(), [ & ]( const Match& m ) { return m.key == matches.front().key; } ) );
+    if( unknownChain || matches.empty() || !oneEntity )
     {
         return {};
     }

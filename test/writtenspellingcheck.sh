@@ -97,6 +97,21 @@ bind   rb 'Cart#total' rb_cart_total_helper
 bind   go 'Cmd.Eval' goEvalHelper
 bind   cpp 'ActiveStream::decodeHeaders' cppStreamHelper cppRouterHelper
 
+echo "-- review rv-qn-input: a spelling never binds a def it does not name"
+refuse go 'batcheval.PutSub'                   # Go has no re-export: a sub-package's func is not batcheval's
+refuse go 'r.PutSub'                           # a Go file stem is not a namespace
+bind   go 'sub.PutSub' goSubPutHelper
+refuse py 'nest.nested_fn'                     # a local def is not a module attribute
+refuse ts 'Nest.localFn'                       # a function local to a method is not a member
+refuse ts 'Nest.litFn'                         # an object literal returned by a method is not the class
+refuse ts 'objlit.actFn'                       # an object-literal member is not a module export
+refuse rs 'my_crate::buf::local_fn'            # a fn local to another fn is not a module item
+refuse cpp 'Envoy::Stats::Sink::flush'         # the real def's chain is unreadable: unknown, never the namesake
+refuse cpp 'Stats::Sink::flush'
+refuse cpp 'Net::Pool::drain'                  # the prefix is the chain's contiguous tail
+bind   cpp 'Conn::Pool::drain' cppDrainHelper
+bind   py 'Dup.run' py_dup_a_helper            # KEEP: an earlier tier's union stays (skip-the-guard mutant turns this red)
+
 echo "-- round trip: every member row --callees prints binds back to the same definition"
 for sub in ts py go rs cpp rb; do
     for seed in $( cd "$FIX/$sub" && "$BIN" "$FIX/$sub" --no-cache 2>/dev/null | grep -oE '<s t="(method|fn)" n="[^"]+"( sc="[^"]+")?' | sed -E 's/.* n="([^"]+)"( sc="([^"]+)")?/\3::\1/; s/^:://' | sort -u ); do
