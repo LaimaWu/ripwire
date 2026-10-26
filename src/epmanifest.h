@@ -792,6 +792,34 @@ inline flipimpact::SymbolLineIndex consumerLineIndex( const IngestResult& ing, c
     return ix;
 }
 
+// One <ep> element: the group's manifest row, the cap disclosures (the groups cap rides the first element), its consumers, its entries.
+inline void appendEpGroup( std::string& x, const IngestResult& ing, const flipimpact::SymbolLineIndex& lineIx, const Manifest& man,
+                           const std::vector<EpTarget>& targets, const std::string& group, const std::vector<EpConsumer>& consumers,
+                           const std::string& groupsCap, std::vector<char>& esc )
+{
+    std::vector<std::size_t> ks;   // the group's entries, manifest order
+    for( std::size_t k = 0; k < man.entries.size(); ++k )
+    {
+        if( man.entries[k].group == group )
+        {
+            ks.push_back( k );
+        }
+    }
+    x += "<ep";
+    appendAttr( x, "p", man.rel, esc );
+    x += std::format( " l=\"{}\"", man.entries[ ks.front() ].groupLine );
+    appendAttr( x, "group", group, esc );
+    x += groupsCap;
+    x += ks.size() > kForEpEntryRows ? std::format( " entries_capped=\"1\" entries_total=\"{}\"", ks.size() ) : std::string();
+    appendEpConsumers( x, ing, lineIx, consumers, esc );
+    x += '>';
+    for( std::size_t i = 0; i < ks.size() && i < kForEpEntryRows; ++i )
+    {
+        appendEpEntry( x, ing, man.entries[ ks[i] ], targets[ ks[i] ], esc );
+    }
+    x += "</ep>";
+}
+
 }   // namespace epdetail
 
 // The element(s). `shown` is the answer's ranked head (the rows <sigs> serves, rank order). Single-root runs only.
@@ -833,31 +861,11 @@ inline EpRender renderForEpManifest( const IngestResult& ing, std::span<const No
     const std::vector<std::vector<EpConsumer>> consumers = findGroupConsumers( ing, literals );
     const flipimpact::SymbolLineIndex          lineIx    = epdetail::consumerLineIndex( ing, consumers );
     std::vector<char>                          esc;
-    std::string&                               x = out.xml;
     for( std::size_t pi = 0; pi < picks.size(); ++pi )
     {
-        const epdetail::Manifest& man = manifests[ picks[pi].m ];
-        std::vector<std::size_t>  ks;   // the group's entries, manifest order
-        for( std::size_t k = 0; k < man.entries.size(); ++k )
-        {
-            if( man.entries[k].group == picks[pi].group )
-            {
-                ks.push_back( k );
-            }
-        }
-        x += "<ep";
-        epdetail::appendAttr( x, "p", man.rel, esc );
-        x += std::format( " l=\"{}\"", man.entries[ ks.front() ].groupLine );
-        epdetail::appendAttr( x, "group", picks[pi].group, esc );
-        x += ( pi == 0 && groupsTotal > picks.size() ) ? std::format( " groups_capped=\"1\" groups_total=\"{}\"", groupsTotal ) : std::string();
-        x += ks.size() > kForEpEntryRows ? std::format( " entries_capped=\"1\" entries_total=\"{}\"", ks.size() ) : std::string();
-        epdetail::appendEpConsumers( x, ing, lineIx, consumers[ std::size_t( std::ranges::find( literals, picks[pi].group ) - literals.begin() ) ], esc );
-        x += '>';
-        for( std::size_t i = 0; i < ks.size() && i < kForEpEntryRows; ++i )
-        {
-            epdetail::appendEpEntry( x, ing, man.entries[ ks[i] ], targets[ picks[pi].m ][ ks[i] ], esc );
-        }
-        x += "</ep>";
+        const std::string groupsCap = ( pi == 0 && groupsTotal > picks.size() ) ? std::format( " groups_capped=\"1\" groups_total=\"{}\"", groupsTotal ) : std::string();
+        epdetail::appendEpGroup( out.xml, ing, lineIx, manifests[ picks[pi].m ], targets[ picks[pi].m ], picks[pi].group,
+                                 consumers[ std::size_t( std::ranges::find( literals, picks[pi].group ) - literals.begin() ) ], groupsCap, esc );
     }
     return out;
 }
