@@ -12,6 +12,7 @@
 #include "forctorhop.h" // OWNER-CTOR-HOP: ctor_l=/ctor_calls= on the r=1 method row of a compact-route answer
 #include "forcallerhop.h"   // mf1-nx: a name-exact answer about ONE function carries that function's callers
 #include "epmanifest.h"     // ep-manifest: the manifest entry-point groups that register a shown row
+#include <algorithm>         // std::ranges::find: the ep manifest re-picked from the rows <sigs> emits
 #include <optional>          // the redaction-tally snapshots a degraded pre-render restores
 #include <string_view>       // %.*s (precision, pointer) collapses to one view
 
@@ -3168,10 +3169,10 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
         headerParts.callerHopPresent = !callerHopIds.empty();
         // ep-manifest (epmanifest.h): the manifest entry-point groups that register a row of the ranked head — rendered here
         // because the header's clause reads it. The default regime and XML only, as the fold and the caller hop.
-        rw::EpRender epManifest;
+        rw::EpRender            epManifest;
+        std::vector<rw::NodeId> epHead;   // the ranked head the clause was priced for; narrowed to the rows <sigs> emits once it renders
         if( autoBundleMode && !cfg.json && cfg.tokenBudget <= 0 && rw::forEpManifestOn() )
         {
-            std::vector<rw::NodeId> epHead;
             for( std::size_t i = 0; i < lensSurfaceIds.size() && i < std::size_t( std::max( forTopN, 0 ) ); ++i )
             {
                 if( lensSurfaceIds[i] < lensRank.size() && lensRank[ lensSurfaceIds[i] ] > 0.0f )
@@ -4092,6 +4093,30 @@ std::optional<int> runForLensPass( const MainDispatch& d, rw::LensRanking lr, co
             }
         }
 
+        // ep-manifest (CodeRabbit 4381174525): the groups were picked from the ranked head BEFORE <sigs> rendered, and the
+        // renderer may drop a head row (the budget gate, the trim ladder, a soft target's refill). The manifest is re-picked from
+        // the head rows <sigs> finally emits, so its legend's "registers a shown row" holds; nothing dropped = no change, and a
+        // manifest left with no group goes with its clause (as the degraded branch above).
+        if( headerParts.epPresent && sigsPreRendered )
+        {
+            std::vector<rw::NodeId> epEmitted;
+            for( const rw::NodeId id : epHead )
+            {
+                if( std::ranges::find( shownSigIds, id ) != shownSigIds.end() )
+                {
+                    epEmitted.push_back( id );
+                }
+            }
+            if( epEmitted.size() != epHead.size() )
+            {
+                epManifest = rw::renderForEpManifest( ing, epEmitted );
+                if( epManifest.xml.empty() )
+                {
+                    headerParts.epPresent = false;   // its clause goes with it
+                    headerStr = buildForHeader( /*withRouteAttr=*/true, /*withTaskEcho=*/true, {} );
+                }
+            }
+        }
         // body-fold C3: the <sigs> continuation pair, once the fold rode (forfold.h spliceFoldSigsNext; before the root is priced)
         if( !fold.xml.empty() )
         {

@@ -32,7 +32,10 @@
 #   N1 [G] a non-manifest .cfg (config.cfg, same text): no <ep>
 #   N2 [G] no <ep>, byte-identical to RIPWIRE_NO_EP_MANIFEST=1: --json, --token-budget=3000, --signatures-only
 #   N3 [G] prefix identity: the answer minus <ep> and its clause, est_tokens masked, equals RIPWIRE_NO_EP_MANIFEST=1
-#   L1 [P] the clause rides (compact and full) and defines every attribute <ep>/<e> carry
+#   R1 [P] (CodeRabbit 4381174525) the groups register rows <sigs> EMITS: --pack-budget-bytes=1 leaves only Fmt in <sigs> (shown=1), so only x.report rides (Other / Lonely were dropped)
+#   R2 [P] every head row that a group registers dropped (load_other alone shown): no <ep> and no clause   R3 [G] --pack-budget-bytes=300 drops only reload_reports (no target): all three groups stay
+#   L1 [P] the clause rides (compact and full) and defines every attribute <ep>/<e> carry, searched in the ep clause alone as whole names (CodeRabbit 4381174537),
+#          capped attributes included; L1-MUT [G] a clause missing one definition makes the same check fail (the arm can fail)
 #   X1 [G] determinism  X2 [G] xmllint well-formed (when xmllint exists)  X3 [G] no "--" inside the legend comment
 #
 # Usage:  bash test/epmanifestcheck.sh [BIN]   |   RIPWIRE_BIN=asan/ripwire bash test/epmanifestcheck.sh
@@ -144,17 +147,47 @@ a = re.sub(r"; ep p= l= group=:.*?groups_total= if cut", "", a, flags=re.S)
 m = lambda s: re.sub(r'est_tokens="\d+"', 'est_tokens="N"', s)
 sys.exit(0 if m(a) == m(b) and a != open(sys.argv[1]).read() else 1)
 PY
+# R1-R3: the manifest is picked from the rows <sigs> emitted, not from the head it was asked to render
+Q2='--for=load other group consumer'
+run "$FX/cfg" "$TMP/r1" "$Q" --pack-budget-bytes=1
+run "$FX/cfg" "$TMP/r2" "$Q2" --pack-budget-bytes=1
+run "$FX/cfg" "$TMP/r3" "$Q" --pack-budget-bytes=300
+for a in r1 r2 r3; do okrun "$TMP/$a" || no "run $a failed (rc=$(cat "$TMP/$a.rc"))"; done
+R1="$( eps "$TMP/r1" )"; R3="$( eps "$TMP/r3" )"
+if grep -q '<sigs shown="1" ' "$TMP/r1" && has "$R1" "[g['group'] for g in d]==['x.report']"; then
+    ok "R1 one <sigs> row (Fmt): only the group registering it rides, not y.other / z.quiet"; else no "R1 groups for a dropped target: $R1"; fi
+if grep -q '<sigs shown="1" ' "$TMP/r2" && ! grep -q '<ep ' "$TMP/r2" && ! grep -q '; ep p= l= group=' "$TMP/r2"; then
+    ok "R2 no group registers an emitted row: no <ep>, no clause"; else no "R2 an <ep> or its clause rides over a row <sigs> dropped"; fi
+if grep -q '<sigs shown="8" ' "$TMP/r3" && has "$R3" "sorted(g['group'] for g in d)==['x.report','y.other','z.quiet']"; then
+    ok "R3 the dropped row registers nothing: all three groups stay"; else no "R3 a trim that dropped no target changed the groups: $R3"; fi
 # L1
 for f in cfg cfgfull; do
 python3 - "$TMP/$f" <<'PY'; verdict $? "L1 $f: the clause rides and defines every <ep>/<e> attribute" "L1 $f: clause missing or an attribute undefined"
 import re, sys
 t = open(sys.argv[1]).read()
 leg = " ".join(re.findall(r"<!--(.*?)-->", t, flags=re.S))
-if "; ep p= l= group=:" not in leg: sys.exit(1)
+m = re.search(r"; ep p= l= group=:.*?(?:groups_total= if cut|the total it was cut from)", leg, flags=re.S)
+if not m: sys.exit(1)
+clause = m.group(0)   # the ep clause alone: p= l= n= target= are defined by the root and hops clauses too
 attrs = set()
 for el in re.findall(r"<(?:ep|e) ([^>]*?)/?>", re.sub(r"<!--.*?-->", "", t, flags=re.S)):
     attrs |= set(re.findall(r'(\w+)="', el))
-sys.exit(0 if all((a + "=") in leg for a in attrs) else 1)
+attrs |= {"used_capped", "used_total", "entries_capped", "entries_total", "groups_capped", "groups_total"}   # present only when cut
+sys.exit(0 if all(re.search(r"(?<!\w)" + a + "=", clause) for a in attrs) else 1)
+PY
+done
+# L1-MUT: drop one definition from the ep clause (def= in the compact clause, used_capped= in both): the same check must go red
+for f in cfg cfgfull; do
+sed -e 's/def=file:line/DEF-GONE/' -e 's/used_capped=/USED-GONE=/' "$TMP/$f" >"$TMP/$f.mut"
+python3 - "$TMP/$f.mut" <<'PY'; [ $? -ne 0 ]; verdict $? "L1-MUT $f: a clause without def= / used_capped= fails the L1 check" "L1-MUT $f: the L1 check passed a clause missing definitions (it cannot fail)"
+import re, sys
+t = open(sys.argv[1]).read()
+leg = " ".join(re.findall(r"<!--(.*?)-->", t, flags=re.S))
+m = re.search(r"; ep p= l= group=:.*?(?:groups_total= if cut|the total it was cut from)", leg, flags=re.S)
+if not m: sys.exit(1)
+clause = m.group(0)
+attrs = {"def", "used_capped"}
+sys.exit(0 if all(re.search(r"(?<!\w)" + a + "=", clause) for a in attrs) else 1)
 PY
 done
 # X1 X2 X3
