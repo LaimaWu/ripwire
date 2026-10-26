@@ -13519,8 +13519,11 @@ inline std::string memberSelectorUnservedRefusal( const IngestResult& ing, std::
 // THE PICK is the tower front — the most specific kind, the leading language, then the lowest id — with ONE
 // exception: a bodyless C/C++ front (a header prototype, an in-class method declaration, a forward-declared class) yields to
 // the TOWER-FRONT bodied definition of the SAME scope, when the set holds one: the scan walks the tower-ordered matches and
-// returns the FIRST bodied same-scope candidate, so a mixed-kind same-name C collision (struct X + void X()) is won by its
-// kind, not by its id. The lowest id alone made the declaration the focus whenever its header sorted first, and a declaration
+// returns the FIRST bodied same-scope candidate OF THE FRONT'S FAMILY (a type follows to a type's body, a function to a
+// function's: namespaceCompatible( RefRole::Type, kind ) is the type family), so a mixed-kind same-name C collision
+// (struct X + void X()) is won by its kind, not by its id, and a forward-declared `typedef struct X X;` never yields to the
+// body of an unrelated `void X() {}` (decltodefcheck E3h). The lowest id alone made the declaration the focus whenever its
+// header sorted first, and a declaration
 // has no call or extends edges — so --around served its own row, --connect found no join and --lego counted no implementor,
 // for a bare name and a fully proven file:name alike (decltodefcheck E3a..E3d). Everything else keeps the tower front:
 //   * a set of declarations only, or a single match — nothing to prefer;
@@ -13565,7 +13568,8 @@ inline NodeId focusOfOrderedMatches( const IngestResult& ing, std::vector<NodeId
     for( NodeId id : matches )
     {
         const Symbol& candidate = ing.symbols[ id ];
-        if( isDefinitionNotDeclaration( candidate ) && cOrCpp( candidate.lang ) && candidate.scope == towerFront.scope )
+        if( isDefinitionNotDeclaration( candidate ) && cOrCpp( candidate.lang ) && candidate.scope == towerFront.scope
+            && namespaceCompatible( RefRole::Type, candidate.kind ) == namespaceCompatible( RefRole::Type, towerFront.kind ) )
         {
             return id;
         }
