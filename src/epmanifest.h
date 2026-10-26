@@ -857,10 +857,10 @@ inline EpRender renderForEpManifest( const IngestResult& ing, std::span<const No
 // The element's legend clauses, present-only beside it: the full and the compact dialect. No "--": they ride inside an XML comment.
 inline constexpr std::string_view kForEpManifestLegend =
     "; ep p= l= group=: a manifest entry-point group (setup.cfg [options.entry_points], pyproject [project.entry-points.*], "
-    "[project.scripts], [tool.poetry.plugins.*]/[tool.poetry.scripts]) that registers a shown row, l= the group's line; "
+    "[project.scripts], [project.gui-scripts], [tool.poetry.plugins.*]/[tool.poetry.scripts]) that registers a shown row, l= the group's line; "
     "e n= target=: each entry as written, def=file:line the in-tree definition it names, external=1 no indexed file is its module, "
     "unresolved=1 the module or the name is not exactly one file or definition in the tree; used_at=file:line used_in=: code that "
-    "compares or loads that group's string literal (by literal text, not resolved; a floor); "
+    "compares or loads that group's string literal (by literal text, not resolved, so a docstring or a parameter default that quotes it is listed too; a floor); "
     "no used_at= means no such code was found; used_capped=1 used_total=, entries_capped=1 entries_total=, groups_capped=1 "
     "groups_total=: that list was cut, the total it was cut from";
 inline constexpr std::string_view kForCompactEpManifestLegend =
