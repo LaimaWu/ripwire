@@ -178,7 +178,7 @@ inline void skipQuoteOrLifetime( Cursor& c ) noexcept
     const std::uint32_t q    = c.pos;
     if( q + 1 < size && c.src[ q + 1 ] == '\\' )
     {
-        std::uint32_t p = q + 2;
+        std::uint32_t p = q + 3 < size ? q + 3 : size;   // past the escaped byte too: a quote it escapes is not the close
         while( p < size && c.src[ p ] != '\'' && c.src[ p ] != '\n' )
         {
             ++p;

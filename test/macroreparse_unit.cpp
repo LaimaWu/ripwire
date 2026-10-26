@@ -130,6 +130,7 @@ void rustLayerCases()
     expectUseBounds( "rust: trait method declaration", "trait T { fn f(&self) -> impl Sized + use<Self>; }\n", U{ "+ use<Self>" } );
     expectUseBounds( "rust: two bounds in one file", "fn f() -> impl A + use<> {}\nfn g() -> impl B + use<> {}\n", U{ "+ use<>", "+ use<>" } );
     expectUseBounds( "rust: char literal and lifetime before it", "fn f<'a>() -> impl Fn(char) + use<'a> { let c = '{'; let d = '\\''; g }\n", U{ "+ use<'a>" } );
+    expectUseBounds( "rust: an escaped-quote char literal does not desync the lexer", "fn f() { let v = ['\\'','\"']; }\nfn g() -> impl Send + use<> { 1 }\nfn h() { let s = \"x + use<T> y\"; }\n", U{ "+ use<>" } );
     expectUseBounds( "refuse rust: a use declaration", "use std::io;\nuse crate::{a, b};\n", U{} );
     expectUseBounds( "refuse rust: use not after + or impl", "fn f() -> Box<use<>> { a }\n", U{} );
     expectUseBounds( "refuse rust: in a line comment", "// impl Send + use<>\nfn f() {}\n", U{} );
