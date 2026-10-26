@@ -2029,7 +2029,11 @@ inline DataSectionsCut codeFirstKeep( const IngestResult& ing, std::vector<NodeI
 // FormParser, MultiPartParser) could show only its exception and data classes, which outrank the type the file is named for.
 // The map scope now reserves one row per shown file for its STEM-NAMESAKE type when the rank cut left it out: a class, struct
 // or interface defined in that file with the most name subtokens (3+ bytes, lowercased) found inside the file's lowercased stem
-// (`formparsers` holds `form` and `parser`: FormParser 2, MultiPartParser 1), at least one; ties go to the larger definition, then the earlier line. It is ADDED
+// (`formparsers` holds `form` and `parser`: FormParser 2, MultiPartParser 1); ties go to the larger definition, then the earlier line.
+// TIGHT (lane map-stem-tight; the loose rule cost +16.9 KB over 14 maps for one needed row): only a COMPLETE namesake is a candidate,
+// at least 2 subtokens and EVERY one of the name's 3+ byte subtokens inside the stem (FormParser in formparsers.py; not
+// BaseHTTPMiddleware in base.py, not WidgetRegistryStore in widgetstore.py). The filter is applied per candidate, so an incomplete
+// class never shadows a complete one. RIPWIRE_NO_MAP_STEM_TIGHT (any value) restores the loose rule. It is ADDED
 // after the file's kept rows (no kept row is dropped), marked stem="1", and counted in the root's shown=. A file whose kept
 // rows already hold a type with as many shared subtokens gets none, and so does a test file (layer="test"). UNDER --max-tokens none is
 // printed (a stem row is extra bytes: it would displace ranked rows from the budgeted cut) and the root says how many it left out, stem_cut=N.
@@ -2039,11 +2043,31 @@ namespace map_stem_detail
 // How many of a type name's subtokens (rw::subtokens: the lexical rule, lowercased; the >= 3-byte ones, since a shorter one such
 // as `id` or `io` matches inside too many stems) occur inside the lowercased file stem: a stem is written run together as often
 // as not (`formparsers` holds `form` and `parser` of FormParser; `body_limit` holds `body` and `limit`).
-inline std::size_t sharedSubtokens( std::string_view stemLower, std::string_view name, std::vector<std::string>& scratch )
+struct StemShare
+{
+    std::size_t shared = 0;   // the >= 3-byte subtokens of the name found inside the stem
+    std::size_t total  = 0;   // all the name's >= 3-byte subtokens
+};
+inline StemShare stemShare( std::string_view stemLower, std::string_view name, std::vector<std::string>& scratch )
 {
     scratch.clear();
     subtokens( name, scratch );
-    return std::size_t( std::ranges::count_if( scratch, [ & ]( const std::string& t ) { return t.size() >= 3 && stemLower.find( t ) != std::string_view::npos; } ) );
+    StemShare r;
+    for( const std::string& t : scratch )
+    {
+        if( t.size() >= 3 )
+        {
+            ++r.total;
+            r.shared += stemLower.find( t ) != std::string_view::npos ? 1 : 0;
+        }
+    }
+    return r;
+}
+// The tight rule (lane map-stem-tight): a stem row must be a COMPLETE namesake, at least kMapStemMinShared subtokens and every one of them in the stem.
+inline constexpr std::size_t kMapStemMinShared = 2;
+inline bool completeNamesake( const StemShare& s ) noexcept
+{
+    return s.shared >= kMapStemMinShared && s.shared == s.total;
 }
 inline std::string_view fileStem( std::string_view path ) noexcept
 {
@@ -2065,7 +2089,7 @@ inline constexpr std::string_view kMapStemCutLegend =
 
 // The XML legend clause, charged only to a map that carries the attribute. No double hyphen inside a comment (G4).
 inline constexpr std::string_view kMapStemLegend =
-    "<!-- stem=\"1\": a class/struct/interface of that file whose name shares the most subtokens with the file name, "
+    "<!-- stem=\"1\": the class/struct/interface a file is named for (2+ name words, all in the file name), "
     "added after the file's top-K rows because the rank cut left it out (no kept row dropped; counted in shown=) -->";
 
 inline bool mapStemOn()
@@ -2073,10 +2097,17 @@ inline bool mapStemOn()
     return std::getenv( "RIPWIRE_NO_MAP_STEM" ) == nullptr;
 }
 
+// RIPWIRE_NO_MAP_STEM_TIGHT (any value) restores the loose rule: any one shared subtoken makes a candidate (the pre-tight map, +16.9 KB over the 14 -01 rows).
+inline bool mapStemTightOn()
+{
+    return std::getenv( "RIPWIRE_NO_MAP_STEM_TIGHT" ) == nullptr;
+}
+
 // Appends each shown file's ranked-out stem-namesake type to its bucket; returns the added ids, sorted (the stem="1" lookup).
 inline std::vector<NodeId> addMapStemRows( const IngestResult& ing, std::vector<std::vector<NodeId>>& buckets, const std::vector<std::uint32_t>& fileOrder )
 {
     using namespace map_stem_detail;
+    const bool tight = mapStemTightOn();
     std::vector<NodeId> added;
     if( fileOrder.empty() )
     {
@@ -2116,8 +2147,9 @@ inline std::vector<NodeId> addMapStemRows( const IngestResult& ing, std::vector<
             continue;
         }
         const std::uint32_t slot   = slotOf[ s.fileId ];
-        const std::size_t   shared = sharedSubtokens( stemOf( slot ), s.name, scratch );
-        if( shared == 0 )
+        const StemShare     share  = stemShare( stemOf( slot ), s.name, scratch );
+        const std::size_t   shared = share.shared;
+        if( shared == 0 || ( tight && !completeNamesake( share ) ) )
         {
             continue;
         }
@@ -2138,7 +2170,7 @@ inline std::vector<NodeId> addMapStemRows( const IngestResult& ing, std::vector<
         std::vector<NodeId>& rows = buckets[ fileOrder[slot] ];
         const bool held = std::ranges::any_of( rows, [ & ]( NodeId r )
         {
-            return r == pick || ( ReceiverEvidence::classLike( ing.symbols[r].kind ) && sharedSubtokens( stemOf( slot ), ing.symbols[r].name, scratch ) >= bestShared[slot] );
+            return r == pick || ( ReceiverEvidence::classLike( ing.symbols[r].kind ) && stemShare( stemOf( slot ), ing.symbols[r].name, scratch ).shared >= bestShared[slot] );
         } );
         if( !held )
         {
