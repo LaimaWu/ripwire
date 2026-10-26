@@ -43,6 +43,7 @@ echo "epmanifestcheck: BIN=$BIN"
 fail=0
 ok(){ printf '  PASS  %s\n' "$*" || { fail=1; printf '  FAIL  could not write the PASS line for: %s\n' "$*"; }; return 0; }
 no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
+verdict(){ if [ "$1" -eq 0 ]; then ok "$2"; else no "$3"; fi; }   # rc, the PASS line, the FAIL line
 
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
@@ -108,14 +109,14 @@ if has "$SIB" "any(g['l']=='2' and g.get('used_at')=='plug/use.py:5' and g['e']=
 if has "$SIB" "any(len(g['e'])==12 and g.get('entries_capped')=='1' and g.get('entries_total')=='13' and g.get('used_capped')=='1' and g.get('used_total')=='4' and len(g['used_at'].split())==3 for g in $(grp x.many))"; then
     ok "K1 entry and consumer caps disclose *_capped=1 with the total"; else no "K1 caps: $SIB"; fi
 # N1
-[ "$NEG" = "[]" ] && ok "N1 a non-manifest .cfg yields no <ep>" || no "N1 config.cfg produced rows: $NEG"
+[ "$NEG" = "[]" ]; verdict $? "N1 a non-manifest .cfg yields no <ep>" "N1 config.cfg produced rows: $NEG"
 # N2
 for v in --json --token-budget=3000 --signatures-only; do
     run "$FX/cfg" "$TMP/n2on" "$Q" "$v"; RIPWIRE_NO_EP_MANIFEST=1 run "$FX/cfg" "$TMP/n2off" "$Q" "$v"
     if okrun "$TMP/n2on" && okrun "$TMP/n2off" && cmp -s "$TMP/n2on" "$TMP/n2off" && ! grep -q '<ep ' "$TMP/n2on"; then ok "N2 $v: no <ep>, byte-identical to off"; else no "N2 $v differs or carries <ep>"; fi
 done
 # N3 prefix identity (compact legend)
-python3 - "$TMP/cfg" "$TMP/cfgoff" <<'PY' && ok "N3 answer minus <ep> and its clause equals RIPWIRE_NO_EP_MANIFEST=1 (est_tokens masked)" || no "N3 prefix identity broken"
+python3 - "$TMP/cfg" "$TMP/cfgoff" <<'PY'; verdict $? "N3 answer minus <ep> and its clause equals RIPWIRE_NO_EP_MANIFEST=1 (est_tokens masked)" "N3 prefix identity broken"
 import re, sys
 a = open(sys.argv[1]).read(); b = open(sys.argv[2]).read()
 a = re.sub(r"<ep [^>]*>.*?</ep>", "", a, flags=re.S)
@@ -125,7 +126,7 @@ sys.exit(0 if m(a) == m(b) and a != open(sys.argv[1]).read() else 1)
 PY
 # L1
 for f in cfg cfgfull; do
-python3 - "$TMP/$f" <<'PY' && ok "L1 $f: the clause rides and defines every <ep>/<e> attribute" || no "L1 $f: clause missing or an attribute undefined"
+python3 - "$TMP/$f" <<'PY'; verdict $? "L1 $f: the clause rides and defines every <ep>/<e> attribute" "L1 $f: clause missing or an attribute undefined"
 import re, sys
 t = open(sys.argv[1]).read()
 leg = " ".join(re.findall(r"<!--(.*?)-->", t, flags=re.S))
@@ -137,13 +138,13 @@ sys.exit(0 if all((a + "=") in leg for a in attrs) else 1)
 PY
 done
 # X1 X2 X3
-cmp -s "$TMP/cfg" "$TMP/cfg2" && ok "X1 deterministic" || no "X1 two runs differ"
+cmp -s "$TMP/cfg" "$TMP/cfg2"; verdict $? "X1 deterministic" "X1 two runs differ"
 if command -v xmllint >/dev/null 2>&1; then
-    for f in cfg cfgfull pyp; do xmllint --noout "$TMP/$f" 2>/dev/null && ok "X2 $f well-formed" || no "X2 $f not well-formed"; done
+    for f in cfg cfgfull pyp; do xmllint --noout "$TMP/$f" 2>/dev/null; verdict $? "X2 $f well-formed" "X2 $f not well-formed"; done
 else
     echo "  SKIP  X2 xmllint not installed"
 fi
-python3 - "$TMP/cfg" "$TMP/cfgfull" <<'PY' && ok "X3 no '--' inside a legend comment" || no "X3 '--' inside a legend comment"
+python3 - "$TMP/cfg" "$TMP/cfgfull" <<'PY'; verdict $? "X3 no '--' inside a legend comment" "X3 '--' inside a legend comment"
 import re, sys
 for f in sys.argv[1:]:
     for c in re.findall(r"<!--(.*?)-->", open(f).read(), flags=re.S):
