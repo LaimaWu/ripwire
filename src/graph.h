@@ -13223,6 +13223,10 @@ inline bool namesInOrder( std::span<const std::string_view> want, const Have& ha
 inline bool writtenHeadNamesModule( std::span<const std::string_view> head, std::string_view rel, WrittenModuleRule rule )
 {
     std::vector<std::string_view> comps = pathSpellingComponents( rel );
+    if( rule == WrittenModuleRule::DirsOnly && !comps.empty() )
+    {
+        comps.pop_back();   // review rv-qn-input-delta: the file stem is never a namespace here
+    }
     if( rule != WrittenModuleRule::PackageDir )
     {
         return namesInOrder( head, comps, rule == WrittenModuleRule::ConstantPath );

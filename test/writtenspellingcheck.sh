@@ -112,6 +112,13 @@ refuse cpp 'Net::Pool::drain'                  # the prefix is the chain's conti
 bind   cpp 'Conn::Pool::drain' cppDrainHelper
 bind   py 'Dup.run' py_dup_a_helper            # KEEP: an earlier tier's union stays (skip-the-guard mutant turns this red)
 
+echo "-- review rv-qn-input-delta (C5): a file stem is not a namespace where a file is never one (Swift, Kotlin, Java)"
+refuse swift 'Foo.bar'                          # the extension member is owner-less in the index; Foo.swift's top-level bar is not Foo.bar
+bind   swift 'Kls.go' swGoHelper
+refuse kt 'Reg.top'                             # a Kotlin top-level fun in Reg.kt is not Reg.top
+refuse java 'Outer.Loose.m'                     # a second top-level class in Outer.java is com.x.Loose, never Outer.Loose
+bind   java 'com.x.Outer.Inner.m' javaInnerHelper
+
 echo "-- round trip: every member row --callees prints binds back to the same definition"
 for sub in ts py go rs cpp rb; do
     for seed in $( cd "$FIX/$sub" && "$BIN" "$FIX/$sub" --no-cache 2>/dev/null | grep -oE '<s t="(method|fn)" n="[^"]+"( sc="[^"]+")?' | sed -E 's/.* n="([^"]+)"( sc="([^"]+)")?/\3::\1/; s/^:://' | sort -u ); do
