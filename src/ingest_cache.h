@@ -144,7 +144,9 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-constexpr std::uint32_t kCacheVersion = 40;           // 40: train 34 — strictly above main 39 and every live value (train-33 refs, #432 39; #427 / #429 38): the
+constexpr std::uint32_t kCacheVersion = 42;           // 42: lane rust-degraded PLACEHOLDER (renumbered at landing; above #155's placeholder 41): the
+                                                      //    FILE record gains FileHealth::useBoundsBlanked (the Rust precise-capture re-parse, src/rustusebounds.h).
+                                                      // 40: train 34 — strictly above main 39 and every live value (train-33 refs, #432 39; #427 / #429 38): the
                                                       //    fc3-js-rebind record change (LocalBindKind JsRebind, appended) lands; no other train-34 lane changed a format.
                                                       // 39: train 33 — strictly above main 36 and every live value (lane l6-iface 38, #427 / #429 38): the
                                                       //    l6-iface record change (LocalBindKind DispatchType + ImplBlock, appended) lands; no other train-33 lane changed a format.
@@ -353,7 +355,10 @@ constexpr std::uint32_t kCacheVersion = 40;           // 40: train 34 — strict
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 226;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 229;          // bump on any grammar/.scm/extraction change
+                                                      // 229 = 2026-10-25 lane rust-degraded PLACEHOLDER (renumbered at landing; above train 35's 226 and
+                                                      //   #438's placeholder 228; rich file tag 230): a Rust file whose first parse holds error bytes is
+                                                      //   re-parsed with its precise-capturing use<..> bounds blanked (src/rustusebounds.h) — different defs.
                                                       // 226 = 2026-10-24 (train 34: lean2b, fc2-lego-extparent, honest-lex, ind4b-k5-tighten-k5c, hop1, fc3-js-rebind):
                                                       //   strictly above every live number — main 224 (rich 225), #432 224, lane ind4b's placeholder 224 (it collided with
                                                       //   main's), lane ind5-glob-imports 222 (223, reserved), lane fc3-js-rebind 218, #426 216, #420 214. Rich file tag 227.
@@ -2675,6 +2680,7 @@ inline bool readFileRecord( ByteR& r, bool captureValueUses, std::vector<std::ui
     ffOut.health.fileBytes = r.u32();
     ffOut.health.wsBytes   = r.u32();
     ffOut.health.macroBlanked = r.u32();   // v20: member-macro re-parse — rides the record so the disclosure survives a warm run
+    ffOut.health.useBoundsBlanked = r.u32();   // v42: its Rust layer (use<..> bounds blanked) — same reason
     if( !r.ok )
     {
         return false;
@@ -3308,6 +3314,7 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
                 const FileHealth fh = f < fileHealth.size() ? fileHealth[f] : FileHealth{};
                 w.u32( fh.errNodes );  w.u32( fh.errBytes );  w.u32( fh.fileBytes );  w.u32( fh.wsBytes );
                 w.u32( fh.macroBlanked );   // v20: the member-macro re-parse's per-file count (0 ⇒ the first parse was kept)
+                w.u32( fh.useBoundsBlanked );   // v42: the Rust precise-capture re-parse's per-file count (0 ⇒ first parse kept)
             }
             if( captureValueUses )
             {
