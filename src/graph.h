@@ -13337,7 +13337,8 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
         }
         std::string key;
         bool        hit = false;
-        if( s.lang == Lang::Cpp || s.lang == Lang::C )
+        const WrittenModuleRule rule = langFacts( s.lang ).writtenModule;
+        if( rule == WrittenModuleRule::SourceChain )
         {   // C/C++: the namespaces and classes read off the source are the authority — never a path component
             const std::string* text = ( s.scope.empty() || scopeLastSegment( s.scope ) == prefix.back() ) ? textOf( s.fileId ) : nullptr;
             const std::optional<std::vector<std::string>> chain = text ? cppFullChainOf( s, *text ) : std::nullopt;
@@ -13351,7 +13352,7 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
             }
         }
         else if( owner.size() <= prefix.size() && std::equal( owner.begin(), owner.end(), prefix.end() - std::ptrdiff_t( owner.size() ) )
-                 && namesInOrder( prefix.first( prefix.size() - owner.size() ), pathSpellingComponents( rootRelPath( ing, s.fileId ) ), s.lang == Lang::Ruby ) )
+                 && namesInOrder( prefix.first( prefix.size() - owner.size() ), pathSpellingComponents( rootRelPath( ing, s.fileId ) ), rule == WrittenModuleRule::ConstantPath ) )
         {
             hit = true;
             for( const std::string_view o : owner )
@@ -13363,7 +13364,7 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
         {
             // a Go package is its directory (build-tag twins are one entity); every other language's module is its file
             const std::string_view rel = rootRelPath( ing, s.fileId );
-            const std::size_t      dir = s.lang == Lang::Go ? rel.rfind( '/' ) : rel.size();
+            const std::size_t      dir = langFacts( s.lang ).writtenModule == WrittenModuleRule::PackageDir ? rel.rfind( '/' ) : rel.size();
             key.append( "@" ).append( dir == std::string_view::npos ? std::string_view{} : rel.substr( 0, dir ) );
             matches.push_back( { id, std::move( key ) } );
         }
