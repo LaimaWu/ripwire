@@ -40,16 +40,10 @@
 namespace rw::rustusebounds
 {
 
-enum class TokKind : std::uint8_t { End, Word, Punct, Literal };
-
-struct Tok
-{
-    TokKind       kind  = TokKind::End;
-    char          punct = 0;   // a Punct token's byte; 0 on every other token
-    std::uint32_t start = 0;
-    std::uint32_t end   = 0;
-    std::uint32_t line  = 1;   // 1-based line of `start`
-};
+// The token shape is the family's (macroreparse::Token): kind, the one-byte punctuator (0 on every other token), the
+// byte span and the 1-based line. A Rust word lexes as TokenKind::Ident.
+using macroreparse::Token;
+using macroreparse::TokenKind;
 
 struct Cursor
 {
@@ -60,7 +54,7 @@ struct Cursor
 
 inline bool at( const Cursor& c, std::uint32_t pos, std::string_view text ) noexcept
 {
-    return pos <= c.src.size() && c.src.substr( pos ).starts_with( text );
+    return macroreparse::startsWith( c.src, pos, text );
 }
 
 // Advance to `to`, counting the newlines crossed.
@@ -195,56 +189,67 @@ inline void skipQuoteOrLifetime( Cursor& c ) noexcept
     moveTo( c, p );
 }
 
-// A word at c.pos — or the literal it prefixes (b"…", c"…", br"…", cr#"…"#, r"…", b'x'), or a raw identifier
-// r#name, which is lexed as a Literal so `r#use` is never the keyword.
-inline TokKind lexWord( Cursor& c ) noexcept
+// The literal a word prefixes, with c.pos still on the word and `p` just past it: b"…", c"…", b'x', a raw string
+// r"…" / br#"…"# / cr#"…"#, or the raw identifier r#name (a Literal, so `r#use` is never the keyword). False: a word.
+inline bool skipPrefixedLiteral( Cursor& c, std::string_view word, std::uint32_t p ) noexcept
 {
-    const auto          size  = std::uint32_t( c.src.size() );
-    const std::uint32_t start = c.pos;
-    std::uint32_t       p     = start;
+    const auto size = std::uint32_t( c.src.size() );
+    const char next = p < size ? c.src[ p ] : '\0';
+    if( next == '"' && ( word == "b" || word == "c" ) )
+    {
+        skipQuotedString( c, p );
+        return true;
+    }
+    if( next == '\'' && word == "b" )
+    {
+        moveTo( c, p );
+        skipQuoteOrLifetime( c );
+        return true;
+    }
+    if( word != "r" && word != "br" && word != "cr" )
+    {
+        return false;
+    }
+    const std::uint32_t rawEnd = rawStringEnd( c, p - 1 );
+    if( rawEnd != 0 )
+    {
+        moveTo( c, rawEnd );
+        return true;
+    }
+    if( word != "r" || next != '#' || p + 1 >= size || !namesplit::isIdentStart( c.src[ p + 1 ] ) )
+    {
+        return false;
+    }
+    std::uint32_t q = p + 1;
+    while( q < size && namesplit::isIdentChar( c.src[ q ] ) )
+    {
+        ++q;
+    }
+    moveTo( c, q );
+    return true;
+}
+
+// A word at c.pos, or the literal it prefixes (skipPrefixedLiteral).
+inline TokenKind lexWord( Cursor& c ) noexcept
+{
+    const auto    size = std::uint32_t( c.src.size() );
+    std::uint32_t p    = c.pos;
     while( p < size && namesplit::isIdentChar( c.src[ p ] ) )
     {
         ++p;
     }
-    const std::string_view word = c.src.substr( start, p - start );
-    if( p < size && c.src[ p ] == '"' && ( word == "b" || word == "c" ) )
+    if( skipPrefixedLiteral( c, c.src.substr( c.pos, p - c.pos ), p ) )
     {
-        skipQuotedString( c, p );
-        return TokKind::Literal;
-    }
-    if( p < size && c.src[ p ] == '\'' && word == "b" )
-    {
-        moveTo( c, p );
-        skipQuoteOrLifetime( c );
-        return TokKind::Literal;
-    }
-    if( word == "r" || word == "br" || word == "cr" )
-    {
-        const std::uint32_t rawEnd = rawStringEnd( c, p - 1 );
-        if( rawEnd != 0 )
-        {
-            moveTo( c, rawEnd );
-            return TokKind::Literal;
-        }
-        if( word == "r" && p + 1 < size && c.src[ p ] == '#' && namesplit::isIdentStart( c.src[ p + 1 ] ) )
-        {
-            p += 1;
-            while( p < size && namesplit::isIdentChar( c.src[ p ] ) )
-            {
-                ++p;
-            }
-            moveTo( c, p );
-            return TokKind::Literal;   // r#name: a raw identifier, never a keyword
-        }
+        return TokenKind::Literal;
     }
     moveTo( c, p );
-    return TokKind::Word;
+    return TokenKind::Ident;
 }
 
-inline Tok nextTok( Cursor& c ) noexcept
+inline Token nextTok( Cursor& c ) noexcept
 {
     skipTrivia( c );
-    Tok t;
+    Token t;
     t.start = c.pos;
     t.line  = c.line;
     if( c.pos >= c.src.size() )
@@ -256,12 +261,12 @@ inline Tok nextTok( Cursor& c ) noexcept
     if( ch == '\'' )
     {
         skipQuoteOrLifetime( c );   // never a candidate token: lexed as a Literal
-        t.kind = TokKind::Literal;
+        t.kind = TokenKind::Literal;
     }
     else if( ch == '"' )
     {
         skipQuotedString( c, c.pos );
-        t.kind = TokKind::Literal;
+        t.kind = TokenKind::Literal;
     }
     else if( namesplit::isIdentChar( ch ) )
     {
@@ -269,7 +274,7 @@ inline Tok nextTok( Cursor& c ) noexcept
     }
     else
     {
-        t.kind  = TokKind::Punct;
+        t.kind  = TokenKind::Punct;
         t.punct = ch;
         moveTo( c, c.pos + 1 );
     }
@@ -277,19 +282,16 @@ inline Tok nextTok( Cursor& c ) noexcept
     return t;
 }
 
-inline bool isWord( const Tok& t, std::string_view src, std::string_view word ) noexcept
+inline bool isWord( const Token& t, std::string_view src, std::string_view word ) noexcept
 {
-    return t.kind == TokKind::Word && src.substr( t.start, t.end - t.start ) == word;
+    return t.kind == TokenKind::Ident && src.substr( t.start, t.end - t.start ) == word;
 }
 
-inline bool isPunct( const Tok& t, char ch ) noexcept
-{
-    return t.kind == TokKind::Punct && t.punct == ch;
-}
+using macroreparse::isPunct;   // sound as a bare byte compare: nextTok leaves punct 0 on every non-punctuator
 
 // `c` sits just past `use`. The next code token must be `<`, balanced before a structural byte; on a match `c` is left
 // past the closing `>` and its token returned.
-inline bool matchUseList( Cursor& c, Tok& close ) noexcept
+inline bool matchUseList( Cursor& c, Token& close ) noexcept
 {
     Cursor probe = c;
     if( !isPunct( nextTok( probe ), '<' ) )
@@ -297,9 +299,9 @@ inline bool matchUseList( Cursor& c, Tok& close ) noexcept
         return false;
     }
     std::uint32_t depth = 1;
-    for( Tok t = nextTok( probe ); t.kind != TokKind::End; t = nextTok( probe ) )
+    for( Token t = nextTok( probe ); t.kind != TokenKind::End; t = nextTok( probe ) )
     {
-        if( t.kind == TokKind::Punct && ( t.punct == ';' || t.punct == '{' || t.punct == '}' || t.punct == '(' || t.punct == ')' || t.punct == '=' ) )
+        if( t.punct != '\0' && std::string_view( ";{}()=" ).find( t.punct ) != std::string_view::npos )
         {
             return false;
         }
@@ -315,6 +317,22 @@ inline bool matchUseList( Cursor& c, Tok& close ) noexcept
     return false;
 }
 
+// `use` (token t) after `prev` (`+` or `impl`) with its list matched up to `close`: the span to blank. After `impl`, a
+// following `+` joins the span (and `c` moves past it) so the bound list stays well formed.
+inline macroreparse::BlankSpan boundSpan( Cursor& c, const Token& prev, const Token& t, const Token& close ) noexcept
+{
+    const bool              afterPlus = isPunct( prev, '+' );
+    macroreparse::BlankSpan span{ afterPlus ? prev.start : t.start, close.end, t.end, afterPlus ? prev.line : t.line };
+    Cursor                  probe = c;
+    const Token             next  = nextTok( probe );
+    if( !afterPlus && isPunct( next, '+' ) )
+    {
+        span.endByte = next.end;
+        c            = probe;
+    }
+    return span;
+}
+
 // Every precise-capturing bound in `src`, in source order (see THE CANDIDATE). Deterministic in the bytes alone.
 inline void findPreciseCaptureBounds( std::string_view src, std::vector<macroreparse::BlankSpan>& out )
 {
@@ -324,27 +342,15 @@ inline void findPreciseCaptureBounds( std::string_view src, std::vector<macrorep
         return;   // offsets are 32-bit; the crawl's size ceiling keeps every indexed file far below this
     }
     Cursor c{ src };
-    Tok    prev;
-    for( Tok t = nextTok( c ); t.kind != TokKind::End; t = nextTok( c ) )
+    Token  prev;
+    for( Token t = nextTok( c ); t.kind != TokenKind::End; t = nextTok( c ) )
     {
-        const bool afterPlus = isPunct( prev, '+' );
-        const bool afterImpl = isWord( prev, src, "impl" );
-        Tok        close;
-        if( isWord( t, src, "use" ) && ( afterPlus || afterImpl ) && matchUseList( c, close ) )
+        const bool isBoundPosition = isPunct( prev, '+' ) || isWord( prev, src, "impl" );
+        Token      close;
+        if( isBoundPosition && isWord( t, src, "use" ) && matchUseList( c, close ) )
         {
-            macroreparse::BlankSpan span{ afterPlus ? prev.start : t.start, close.end, t.end, afterPlus ? prev.line : t.line };
-            if( afterImpl )
-            {
-                Cursor probe = c;
-                const Tok next = nextTok( probe );
-                if( isPunct( next, '+' ) )
-                {
-                    span.endByte = next.end;
-                    c            = probe;
-                }
-            }
-            out.push_back( span );
-            prev = Tok{};   // the blanked bound is gone: what follows sees no `+` or `impl` before it
+            out.push_back( boundSpan( c, prev, t, close ) );
+            prev = Token{};   // the blanked bound is gone: what follows sees no `+` or `impl` before it
             continue;
         }
         prev = t;

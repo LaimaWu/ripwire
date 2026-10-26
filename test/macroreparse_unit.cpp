@@ -105,17 +105,43 @@ void expectUseBounds( std::string_view label, std::string_view src, const std::v
 {
     std::vector<rw::macroreparse::BlankSpan> spans;
     rw::rustusebounds::findPreciseCaptureBounds( src, spans );
-    std::string got;
-    bool        isMatch = spans.size() == want.size();
-    for( std::size_t i = 0; i < spans.size(); ++i )
+    std::vector<std::string_view> texts;
+    for( const rw::macroreparse::BlankSpan& span : spans )
     {
-        const rw::macroreparse::BlankSpan& s = spans[ i ];
-        const bool             isWellFormed = s.startByte < s.endByte && s.endByte <= src.size();
-        const std::string_view text         = isWellFormed ? src.substr( s.startByte, s.endByte - s.startByte ) : std::string_view( "<malformed>" );
-        got += "[" + std::string( text ) + "] ";
-        isMatch = isMatch && isWellFormed && i < want.size() && text == want[ i ];
+        texts.push_back( span.startByte < span.endByte && span.endByte <= src.size() ? src.substr( span.startByte, span.endByte - span.startByte )
+                                                                                    : std::string_view( "<malformed>" ) );
     }
-    report( isMatch, label, "got " + got );
+    std::string got;
+    for( std::string_view text : texts )
+    {
+        got += "[" + std::string( text ) + "] ";
+    }
+    report( texts == want, label, "got " + got );
+}
+
+void rustLayerCases()
+{
+    // ── (4) the Rust layer: which bytes are a precise-capturing bound ───────────────────────────────────────────
+    using U = std::vector<std::string_view>;
+    expectUseBounds( "rust: empty list after +", "fn f() -> impl Send + use<> { a }\n", U{ "+ use<>" } );
+    expectUseBounds( "rust: lifetimes and type parameters", "fn f<'a, T>(x: &'a T) -> impl Sized + use<'a, T> { x }\n", U{ "+ use<'a, T>" } );
+    expectUseBounds( "rust: impl use<..> + Trait takes the following +", "fn f() -> impl use<'a> + Iterator<Item = u8> { a }\n", U{ "use<'a> +" } );
+    expectUseBounds( "rust: bound split across lines, comment between", "fn f() -> impl Send\n    + /* c */ use<>\n{ a }\n", U{ "+ /* c */ use<>" } );
+    expectUseBounds( "rust: trait method declaration", "trait T { fn f(&self) -> impl Sized + use<Self>; }\n", U{ "+ use<Self>" } );
+    expectUseBounds( "rust: two bounds in one file", "fn f() -> impl A + use<> {}\nfn g() -> impl B + use<> {}\n", U{ "+ use<>", "+ use<>" } );
+    expectUseBounds( "rust: char literal and lifetime before it", "fn f<'a>() -> impl Fn(char) + use<'a> { let c = '{'; let d = '\\''; g }\n", U{ "+ use<'a>" } );
+    expectUseBounds( "refuse rust: a use declaration", "use std::io;\nuse crate::{a, b};\n", U{} );
+    expectUseBounds( "refuse rust: use not after + or impl", "fn f() -> Box<use<>> { a }\n", U{} );
+    expectUseBounds( "refuse rust: in a line comment", "// impl Send + use<>\nfn f() {}\n", U{} );
+    expectUseBounds( "refuse rust: in a nested block comment", "/* outer /* inner */ + use<> */\nfn f() {}\n", U{} );
+    expectUseBounds( "refuse rust: in a string", "fn f() { let s = \"+ use<>\"; }\n", U{} );
+    expectUseBounds( "refuse rust: in a raw string", "fn f() { let s = r#\"impl use<'a> + X \"# ; }\n", U{} );
+    expectUseBounds( "refuse rust: in a byte string", "fn f() { let s = b\"+ use<>\"; }\n", U{} );
+    expectUseBounds( "refuse rust: the raw identifier r#use", "fn f() { let r#use = a + r#use<b; }\n", U{} );
+    expectUseBounds( "refuse rust: unbalanced, a brace before the >", "fn f() -> impl A + use< { a }\n", U{} );
+    expectUseBounds( "refuse rust: a paren before the >", "fn f(x: u8) -> bool { x + use<(a) }\n", U{} );
+    expectUseBounds( "refuse rust: unterminated at end of file", "fn f() -> impl A + use<'a", U{} );
+    expectBlankKeepsOffsets( "blank rust: a split bound keeps its newline", "fn f() -> impl Send\n    + use<>\n{ a }\n", true );
 }
 
 int main()
@@ -183,27 +209,7 @@ int main()
     expectAdopt( "keep: more error bytes", 100, 101, false );
     expectAdopt( "keep: no error bytes before (a MISSING-only parse)", 0, 0, false );
 
-    // ── (4) the Rust layer: which bytes are a precise-capturing bound ───────────────────────────────────────────
-    using U = std::vector<std::string_view>;
-    expectUseBounds( "rust: empty list after +", "fn f() -> impl Send + use<> { a }\n", U{ "+ use<>" } );
-    expectUseBounds( "rust: lifetimes and type parameters", "fn f<'a, T>(x: &'a T) -> impl Sized + use<'a, T> { x }\n", U{ "+ use<'a, T>" } );
-    expectUseBounds( "rust: impl use<..> + Trait takes the following +", "fn f() -> impl use<'a> + Iterator<Item = u8> { a }\n", U{ "use<'a> +" } );
-    expectUseBounds( "rust: bound split across lines, comment between", "fn f() -> impl Send\n    + /* c */ use<>\n{ a }\n", U{ "+ /* c */ use<>" } );
-    expectUseBounds( "rust: trait method declaration", "trait T { fn f(&self) -> impl Sized + use<Self>; }\n", U{ "+ use<Self>" } );
-    expectUseBounds( "rust: two bounds in one file", "fn f() -> impl A + use<> {}\nfn g() -> impl B + use<> {}\n", U{ "+ use<>", "+ use<>" } );
-    expectUseBounds( "rust: char literal and lifetime before it", "fn f<'a>() -> impl Fn(char) + use<'a> { let c = '{'; let d = '\\''; g }\n", U{ "+ use<'a>" } );
-    expectUseBounds( "refuse rust: a use declaration", "use std::io;\nuse crate::{a, b};\n", U{} );
-    expectUseBounds( "refuse rust: use not after + or impl", "fn f() -> Box<use<>> { a }\n", U{} );
-    expectUseBounds( "refuse rust: in a line comment", "// impl Send + use<>\nfn f() {}\n", U{} );
-    expectUseBounds( "refuse rust: in a nested block comment", "/* outer /* inner */ + use<> */\nfn f() {}\n", U{} );
-    expectUseBounds( "refuse rust: in a string", "fn f() { let s = \"+ use<>\"; }\n", U{} );
-    expectUseBounds( "refuse rust: in a raw string", "fn f() { let s = r#\"impl use<'a> + X \"# ; }\n", U{} );
-    expectUseBounds( "refuse rust: in a byte string", "fn f() { let s = b\"+ use<>\"; }\n", U{} );
-    expectUseBounds( "refuse rust: the raw identifier r#use", "fn f() { let r#use = a + r#use<b; }\n", U{} );
-    expectUseBounds( "refuse rust: unbalanced, a brace before the >", "fn f() -> impl A + use< { a }\n", U{} );
-    expectUseBounds( "refuse rust: a paren before the >", "fn f(x: u8) -> bool { x + use<(a) }\n", U{} );
-    expectUseBounds( "refuse rust: unterminated at end of file", "fn f() -> impl A + use<'a", U{} );
-    expectBlankKeepsOffsets( "blank rust: a split bound keeps its newline", "fn f() -> impl Send\n    + use<>\n{ a }\n", true );
+    rustLayerCases();
 
     // ── the name shape and the language set ─────────────────────────────────────────────────────────────────────
     report( rw::macroreparse::isMacroShapedName( "NAME_OF" ) && rw::macroreparse::isMacroShapedName( "_TAG2" ) && rw::macroreparse::isMacroShapedName( "X" ),
