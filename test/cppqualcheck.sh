@@ -326,6 +326,8 @@ rrun US --uses=selectBaseline \
 # pyproject.toml through the canonical helper (two call sites, fix 1), and rustFileAlias (called by rustOutsideUses) reads a .rs file to find its
 # `extern crate … as` / `use … as` crate aliases (one more, fix 2) — three new call sites, same helper.
 # 35 -> 36 (lane/ep-manifest): findGroupConsumers reads each indexed .py file once for the entry-point group literals.
+# 36 -> 37 (lane/qn-input, train 37b): the written-spelling seed tier (graph.h resolveAllByWrittenSpelling) reads a C/C++ candidate's
+# source through the canonical helper to read its namespace and class chain — one new call site, same helper.
 rrun RW --uses=readWholeFile \
 && { [ "$( cnt "$RW" )" = 36 ] \
     && ok "repo: --uses=readWholeFile count=36 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
