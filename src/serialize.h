@@ -2040,14 +2040,17 @@ inline DataSectionsCut codeFirstKeep( const IngestResult& ing, std::vector<NodeI
 // RIPWIRE_NO_MAP_STEM (any value) turns it off.
 namespace map_stem_detail
 {
-// How many of a type name's subtokens (rw::subtokens: the lexical rule, lowercased; the >= 3-byte ones, since a shorter one such
-// as `id` or `io` matches inside too many stems) occur inside the lowercased file stem: a stem is written run together as often
-// as not (`formparsers` holds `form` and `parser` of FormParser; `body_limit` holds `body` and `limit`).
+// The tight rule (lane map-stem-tight): a stem row must be a COMPLETE namesake, at least kMapStemMinShared subtokens and every one of them in the stem.
+inline constexpr std::size_t kMapStemMinShared = 2;
 struct StemShare
 {
     std::size_t shared = 0;   // the >= 3-byte subtokens of the name found inside the stem
     std::size_t total  = 0;   // all the name's >= 3-byte subtokens
+    [[nodiscard]] bool complete() const noexcept { return shared >= kMapStemMinShared && shared == total; }
 };
+// How many of a type name's subtokens (rw::subtokens: the lexical rule, lowercased; the >= 3-byte ones, since a shorter one such
+// as `id` or `io` matches inside too many stems) occur inside the lowercased file stem: a stem is written run together as often
+// as not (`formparsers` holds `form` and `parser` of FormParser; `body_limit` holds `body` and `limit`).
 inline StemShare stemShare( std::string_view stemLower, std::string_view name, std::vector<std::string>& scratch )
 {
     scratch.clear();
@@ -2062,12 +2065,6 @@ inline StemShare stemShare( std::string_view stemLower, std::string_view name, s
         }
     }
     return r;
-}
-// The tight rule (lane map-stem-tight): a stem row must be a COMPLETE namesake, at least kMapStemMinShared subtokens and every one of them in the stem.
-inline constexpr std::size_t kMapStemMinShared = 2;
-inline bool completeNamesake( const StemShare& s ) noexcept
-{
-    return s.shared >= kMapStemMinShared && s.shared == s.total;
 }
 inline std::string_view fileStem( std::string_view path ) noexcept
 {
@@ -2149,7 +2146,7 @@ inline std::vector<NodeId> addMapStemRows( const IngestResult& ing, std::vector<
         const std::uint32_t slot   = slotOf[ s.fileId ];
         const StemShare     share  = stemShare( stemOf( slot ), s.name, scratch );
         const std::size_t   shared = share.shared;
-        if( shared == 0 || ( tight && !completeNamesake( share ) ) )
+        if( shared == 0 || ( tight && !share.complete() ) )
         {
             continue;
         }

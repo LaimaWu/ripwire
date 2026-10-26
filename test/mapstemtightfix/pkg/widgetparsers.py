@@ -3,10 +3,10 @@ class WidgetError(Exception):
 
 
 class WidgetParser:
-    def __init__(self, text):
-        self.text = text
+    def __init__(self, source):
+        self.source = source
 
     def parse(self):
-        if not self.text:
-            raise WidgetError("empty")
-        return self.text.split(",")
+        if self.source is None:
+            raise WidgetError("no source")
+        return [part.strip() for part in self.source.split(";")]
