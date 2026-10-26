@@ -620,6 +620,17 @@ class TestShop:
     def test_buy(self):
         return 9
 """)
+(root / "plugin_hooks.py").write_text("""import pytest
+
+
+@pytest.fixture
+def shared_resource():
+    return 1
+
+
+def pytest_configure(config):
+    return 2
+""")
 (root / "checks").mkdir()
 (root / "checks/tests.py").write_text("""from django.test import TestCase
 
@@ -653,7 +664,9 @@ rows = dead_rows(run("--quality-delta=HEAD~1..HEAD"))
 # its own parameter does not keep the host's overrides live (the bound-receiver clause). The pytest xunit hooks in
 # tests/test_xunit.py are live (kXunitHooks, shared with pythonRunnerRoot); the same name in application code
 # (Svc.setup_method) is not.
-expected = sorted(["tests/base_case.py::BaseCase::never_called", "unused_helper", "test_helper",
+# plugin_hooks.py: a conftest hook (pytest_configure) is still reported; the @pytest.fixture beside it is not (the changelog
+# fragment says so, and a decorated def is a value-use: ingest_valuerefs.h emitDecorators).
+expected = sorted(["tests/base_case.py::BaseCase::never_called", "unused_helper", "test_helper", "pytest_configure",
                    "app_helpers.py::Svc::testThing", "app_helpers.py::Svc::setup_method",
                    "tests/test_fw.py::FwCase::bound_hook"])
 assert rows == expected, rows
