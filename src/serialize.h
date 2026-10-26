@@ -2035,7 +2035,7 @@ inline DataSectionsCut codeFirstKeep( const IngestResult& ing, std::vector<NodeI
 // BaseHTTPMiddleware in base.py, not WidgetRegistryStore in widgetstore.py). The filter is applied per candidate, so an incomplete
 // class never shadows a complete one. RIPWIRE_NO_MAP_STEM_TIGHT (any value) restores the loose rule. It is ADDED
 // after the file's kept rows (no kept row is dropped), marked stem="1", and counted in the root's shown=. A file whose kept
-// rows already hold a type with as many shared subtokens gets none, and so does a test file (layer="test"). UNDER --max-tokens none is
+// rows already hold a COMPLETE namesake with as many shared subtokens gets none (a kept FormParserError does not hold off FormParser), and so does a test file (layer="test"). UNDER --max-tokens none is
 // printed (a stem row is extra bytes: it would displace ranked rows from the budgeted cut) and the root says how many it left out, stem_cut=N.
 // RIPWIRE_NO_MAP_STEM (any value) turns it off.
 namespace map_stem_detail
@@ -2165,9 +2165,20 @@ inline std::vector<NodeId> addMapStemRows( const IngestResult& ing, std::vector<
             continue;
         }
         std::vector<NodeId>& rows = buckets[ fileOrder[slot] ];
+        // Tight: a kept class holds the slot only if it is itself a COMPLETE namesake (the candidate filter above), so a kept
+        // FormParserError (form+parser of form+parser+error) does not suppress the complete FormParser.
         const bool held = std::ranges::any_of( rows, [ & ]( NodeId r )
         {
-            return r == pick || ( ReceiverEvidence::classLike( ing.symbols[r].kind ) && stemShare( stemOf( slot ), ing.symbols[r].name, scratch ).shared >= bestShared[slot] );
+            if( r == pick )
+            {
+                return true;
+            }
+            if( !ReceiverEvidence::classLike( ing.symbols[r].kind ) )
+            {
+                return false;
+            }
+            const StemShare kept = stemShare( stemOf( slot ), ing.symbols[r].name, scratch );
+            return kept.shared >= bestShared[slot] && ( !tight || kept.complete() );
         } );
         if( !held )
         {
