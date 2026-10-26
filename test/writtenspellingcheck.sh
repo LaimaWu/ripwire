@@ -119,6 +119,10 @@ refuse kt 'Reg.top'                             # a Kotlin top-level fun in Reg.
 refuse java 'Outer.Loose.m'                     # a second top-level class in Outer.java is com.x.Loose, never Outer.Loose
 bind   java 'com.x.Outer.Inner.m' javaInnerHelper
 
+echo "-- review rv-qn-input-delta (C6): a declaration never joins a body on another owner chain"
+refuse cpp 'Http::Codec::h'                     # Core's decl + Ext's body: two owner chains, not one entity
+bind   cpp 'Ext::Http::Codec::h' cppCodecWrongHelper
+
 echo "-- round trip: every member row --callees prints binds back to the same definition"
 for sub in ts py go rs cpp rb; do
     for seed in $( cd "$FIX/$sub" && "$BIN" "$FIX/$sub" --no-cache 2>/dev/null | grep -oE '<s t="(method|fn)" n="[^"]+"( sc="[^"]+")?' | sed -E 's/.* n="([^"]+)"( sc="([^"]+)")?/\3::\1/; s/^:://' | sort -u ); do
