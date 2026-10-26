@@ -130,20 +130,23 @@ inline std::size_t spliceCtorHop( std::string& sigs, const IngestResult& ing, co
     {
         return 0;
     }
-    std::vector<std::string_view> calls;
-    std::size_t                   more = 0;
+    // The callee names, DISTINCT and in NAME order BEFORE the cap: the 16 kept are a function of the constructor's own callees,
+    // not of which file defines each (target ids follow path order), and a name two definitions share is cut or counted once.
+    std::vector<std::string_view> names;
     for( std::uint32_t e = g.outOff[ctor]; e < g.outOff[ctor + 1]; ++e )
     {
         const NodeId t = g.outTargets[e];
-        if( t >= ing.symbols.size() )
+        if( t < ing.symbols.size() && !ing.symbols[t].name.empty() )
         {
-            continue;
+            names.emplace_back( ing.symbols[t].name );
         }
-        const std::string_view n = ing.symbols[t].name;
-        if( n.empty() || std::ranges::find( calls, n ) != calls.end() )
-        {
-            continue;
-        }
+    }
+    std::ranges::sort( names );
+    names.erase( std::unique( names.begin(), names.end() ), names.end() );
+    std::vector<std::string_view> calls;
+    std::size_t                   more = 0;
+    for( const std::string_view n : names )
+    {
         if( n.find( ',' ) != std::string_view::npos || std::ssize( calls ) >= kForCtorHopCap )
         {
             ++more;   // cut by the count, or a name the list's comma would split: counted, never silent
