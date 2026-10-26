@@ -88,6 +88,10 @@
 #            without a declaration (FIX2 C1/C2); patterns nested 20000 deep.
 #            FLOOR (FC3 delta2 C3, card FC6, pre-existing at 320f8d8f): a member `.limit()` site rides UNHEDGED in a caller row merged
 #            with a bare imported `limit(...)` call (kysely clear.test.ts / insert.test.ts `.$call( limit( 1, dialect ) )`).
+#   (J) Kotlin (#155): a call with a TRAILING lambda to let/run/with/apply/also is the stdlib scope function: its Java
+#            candidates are dropped, and an emptied set is external= (kt/: `s.run { }`, `with( sb ) { }`, `s?.let { }`,
+#            `xs.also { }`, `apply { }`). The same Java names with no lambda (`block.run()`), and Kotlin's own definition of
+#            `run` (ktown/: `go` binds Task.run; build's `s.run { length }` is pinned there, the receiver gap), keep their edges.
 #   (F) propagation: --callers and --impact of the in-repo decoys no longer list the false callers.
 #   (G) disclosure: every call the arms above unbind is a `C external` census row (empty targets) — except a Python bare
 #            name nothing binds and no builtin table holds (run_all's `process`, siblings.py's `helper`), which has no
@@ -251,7 +255,7 @@ reaches_fn(){
 }
 
 # ── census: one per root, written FIRST so no arm reads a missing file ─────────────────────────────────────────
-ROOTS="go gonomod gomodcomment goreplace js ts tsimport py c cpp rs jsrebind"
+ROOTS="go gonomod gomodcomment goreplace js ts tsimport py c cpp rs jsrebind kt ktown"
 for r in $ROOTS; do
     if ! rw "$r" --pin-census="$TMP/$r.tsv" >"$TMP/$r.map.xml"; then no "($r) the census run exited non-zero"; fi
     if [ ! -s "$TMP/$r.tsv" ]; then no "($r) the census run wrote no census — every census arm for this root would be vacuous"; fi
@@ -462,6 +466,26 @@ elif ! grep -q '<callers [^>]* defs="1"' "$deepf"; then no "(jsrebind) --callers
 elif grep -q 'test/assign.test.js' "$deepf"; then no "(jsrebind) the 20000-deep assignment still binds a row: $( tr '<' '\n' <"$deepf" | grep 'assign.test' | tr '\n' ';' )"
 else ok "(jsrebind) 20000-deep object patterns: exit 0, the written \`Eng\` binds no row"; fi
 
+echo "=== (J) Kotlin: a trailing-lambda scope function never binds a Java method (#155) ==="
+# A Kotlin call with a trailing lambda to let/run/with/apply/also is the stdlib scope function: its Java candidates are dropped
+# and an emptied set is external= (kotlin scope arm of FalseEdgeRules). Kotlin's own candidates are kept, and a call with no
+# lambda (`block.run()` on a Runnable) keeps every candidate the ladder had.
+exactly kt callers java/jobs/Job.java:run "fn dispatch kt/Dispatch.kt;fn kick kt/Use.kt"
+lacks kt callers java/jobs/Job.java:run "build kt/Use.kt"
+exactly kt callers java/lib/Builder.java:with "fn realWith kt/Scopes.kt"
+exactly kt callers java/lib/Builder.java:apply ""
+exactly kt callers java/lib/Builder.java:let ""
+exactly kt callers java/lib/Builder.java:also ""
+# Kotlin DEFINES run (ktown): own-language-first keeps the Kotlin run for go and build (the receiver gap, pinned); kick's j.run()
+# has no lambda and keeps Job.run, as it did before the fix.
+exactly ktown callers kt/Task.kt:run "fn build kt/Task.kt;fn go kt/Task.kt"
+exactly ktown callers java/jobs/Job.java:run "fn kick kt/Task.kt"
+
+externals kt kt/Use.kt build run
+externals kt kt/Scopes.kt useWith with
+externals kt kt/Scopes.kt useApply apply
+externals kt kt/Scopes.kt useLet let
+externals kt kt/Scopes.kt useAlso also
 echo "=== (F) propagation: the decoys' callers and impact ==="
 exactly go callers hist/history.go:append "fn Remember hist/history.go"
 lacks go impact hist/history.go:append "Collect algo/algo.go"

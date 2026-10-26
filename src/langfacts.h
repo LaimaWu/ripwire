@@ -116,6 +116,11 @@ struct LangFacts
     /// open too (ifacedispatch.h). A Kotlin-only tree is unchanged.
     bool samFromJavaLambdas = false;
 
+    /// Kotlin: `run`, `let`, `apply`, `also` and `with` are stdlib scope functions, and a call to one with a trailing lambda is
+    /// that function, never a Java or other-language method of the same name (graph.h FE-A, kotlinScopeDecide; the call-site fact
+    /// is captured in ingest_sidecap.h).
+    bool trailingLambdaScopeFns = false;
+
     /// Kotlin: an `interface` is a class_declaration like a class (queries/kotlin/tags.scm: "both land here as @definition.class"),
     /// so the symbol's kind cannot tell the two apart; shared code that needs an interface (ifacedispatch.h's lambda test) reads a
     /// class of such a language as a possible one.
@@ -206,7 +211,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Lua },
     { .lang = Lang::Elixir, .hasInertQuoteRegions = true },
     { .lang = Lang::Dart },
-    { .lang = Lang::Kotlin, .samFromJavaLambdas = true, .interfaceReadsAsClass = true, .anonymousImplementors = true, .overloadsWithoutArity = true,
+    { .lang = Lang::Kotlin, .samFromJavaLambdas = true, .trailingLambdaScopeFns = true, .interfaceReadsAsClass = true, .anonymousImplementors = true, .overloadsWithoutArity = true,
       .baseImportEvidence = BaseImportEvidence::JvmImport },
     { .lang = Lang::GDScript },
     { .lang = Lang::Clojure },
