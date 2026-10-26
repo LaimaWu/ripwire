@@ -811,9 +811,17 @@ inline EpRender renderForEpManifest( const IngestResult& ing, std::span<const No
             epdetail::collectManifestsAbove( ing, ing.symbols[id].fileId, seenDirs, manifests );
         }
     }
+    if( manifests.empty() )
+    {
+        return out;   // no manifest above a shown Python row: resolveEpTargets and consumerLineIndex would each walk every symbol for nothing
+    }
     const std::vector<std::vector<EpTarget>> targets     = epdetail::resolveEpTargets( ing, manifests );
     std::size_t                              groupsTotal = 0;
     const std::vector<epdetail::EpPick>      picks       = epdetail::pickEpGroups( manifests, targets, shown, groupsTotal );
+    if( picks.empty() )
+    {
+        return out;   // no group holds a shown row: nothing to scan for consumers, no element to print
+    }
     std::vector<std::string>                 literals;   // one consumer scan per distinct group literal
     for( const epdetail::EpPick& p : picks )
     {
@@ -822,7 +830,7 @@ inline EpRender renderForEpManifest( const IngestResult& ing, std::span<const No
             literals.push_back( p.group );
         }
     }
-    const std::vector<std::vector<EpConsumer>> consumers = picks.empty() ? std::vector<std::vector<EpConsumer>>{} : findGroupConsumers( ing, literals );
+    const std::vector<std::vector<EpConsumer>> consumers = findGroupConsumers( ing, literals );
     const flipimpact::SymbolLineIndex          lineIx    = epdetail::consumerLineIndex( ing, consumers );
     std::vector<char>                          esc;
     std::string&                               x = out.xml;
