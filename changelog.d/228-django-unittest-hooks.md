@@ -10,7 +10,7 @@ method (any name that starts with `test`) and an xunit hook count as called only
 that calls `self.` or `cls.` keeps the overrides of the method it calls live. A closure that binds `self` or `cls` as its own
 parameter does not.
 
-The HEAD snapshot scheme moves from 22 to 23. Old cached snapshots are not used.
+The HEAD snapshot scheme moves from 22 to 24. Old cached snapshots are not used.
 
 Not covered, still reported: pytest's conftest hooks such as `pytest_configure`. (`@pytest.fixture` functions are not reported as dead code here.)
 
