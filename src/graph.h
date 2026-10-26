@@ -30,6 +30,7 @@
 #include "infra/mdslug.h"        // mdSlugOf — bindMarkdownLinks matches a link slug to a heading
 #include "infra/namesplit.h"     // isIdentChar — identifierRunCount, the identifier runs inside a string annotation
 #include "docparse.h"            // detail::readWholeFile — resolveAtSeed reads the seed line's byte range off disk
+#include "cppscopechain.h"       // EditCheckBraceLexer / editCheckWrittenQualifier — the written-spelling tier's C/C++ full chain
 #include "infra/profileScope.h"  // PROFILE_SCOPE self-profiling — gated by PROFILE_ENABLED (off unless -DRIPWIRE_PROFILE=ON)
 
 #include <algorithm>
@@ -37,6 +38,7 @@
 #include <cmath>
 #include <cstdint>
 #include <charconv>      // std::from_chars — collectFileClassEvidence reads the fileId back out of a "<fileId>#name" key
+#include <deque>         // resolveAllByWrittenSpelling's per-answer source cache (stable references)
 #include <cstring>       // std::memcmp — internDeclinedList confirms a bucket hit against the stored list
 #include <span>          // std::span — transitiveCallers' seed seam takes any contiguous NodeId range
 #include <string>
@@ -12569,9 +12571,21 @@ inline std::vector<NodeId> resolveAllByCanonicalId( const IngestResult& ing, std
 // inside a same-named Class/Struct/Interface of the match set, ranks just BELOW the type kinds and above a free
 // function. A method named like an UNRELATED type (a Go getter `func (s *Server) Config() Config`) is not a
 // constructor and keeps the Method rung. Ranks are doubled so the constructor rung sits between two ladder values.
+// The tower's TYPE kinds, and a type's lexical enclosure of a member (same file, byte span): the containment rule
+// nameTowerRanks reads a constructor by, and the written-spelling tier (resolveAllByWrittenSpelling) reads a TS/JS/Java
+// method's owner by — one rule, so the two cannot drift.
+inline bool isTowerTypeKind( SymKind k ) noexcept
+{
+    return k == SymKind::Class || k == SymKind::Interface || isStructOrNamedType( k );
+}
+inline bool typeEnclosesMember( const Symbol& ty, const Symbol& m ) noexcept
+{
+    return ty.fileId == m.fileId && ty.sigStartByte <= m.sigStartByte && m.endByte <= ty.endByte;
+}
+
 inline std::vector<int> nameTowerRanks( const IngestResult& ing, std::span<const NodeId> ids )
 {
-    const auto typeKind = []( SymKind k ) noexcept { return k == SymKind::Class || k == SymKind::Interface || isStructOrNamedType( k ); };
+    const auto typeKind = []( SymKind k ) noexcept { return isTowerTypeKind( k ); };
     std::vector<NodeId> types;
     for( const NodeId id : ids )
     {
@@ -12590,10 +12604,7 @@ inline std::vector<int> nameTowerRanks( const IngestResult& ing, std::span<const
         {
             ctor = scopeLastSegment( m.scope ) == m.name
                 || std::any_of( types.begin(), types.end(), [ & ]( NodeId t )
-                                {
-                                    const Symbol& ty = ing.symbols[ t ];
-                                    return ty.fileId == m.fileId && ty.sigStartByte <= m.sigStartByte && m.endByte <= ty.endByte;
-                                } );
+                                { return typeEnclosesMember( ing.symbols[ t ], m ); } );
         }
         ranks.push_back( ctor ? 2 * kindSpecificity( SymKind::Class ) - 1 : 2 * kindSpecificity( m.kind ) );
     }
@@ -13030,6 +13041,350 @@ inline std::vector<NodeId> preferExactFile( const IngestResult& ing, std::string
     return found;
 }
 
+// THE WRITTEN-SPELLING TIER (lane qn-input, 2026-10-25). Agents, docs and gold notes write a seed the way the SOURCE
+// spells it, not the way the index stores it, and every SYM verb answered "not found" for three shapes that name one
+// definition: (1) a TS/JS/Java/C#/Swift method as `Class.method` (those grammars record no Symbol::scope, so the
+// Scope::name and dotted tiers never match; the owner is read by containment instead — the QN1 storage half will
+// replace that with a stored scope); (2) a module, crate or package prefix: `asyncio.run`, `json.dump`, Go `batcheval.Put`,
+// Rust `crate::buf::Buffer::edit`; (3) a C++ owner the index keeps only the innermost label of: an out-of-line
+// `ConnectionManagerImpl::ActiveStream::decodeHeaders`, a namespace-qualified `HttpConnectionManager::Utility::f`.
+// Probed LAST, only when every other tier matched nothing, so a spelling that resolved before resolves byte-identically.
+//
+// THE RULE. The spec (an optional `file:` half, then segments split on `::`, `.` and `#`; leading Rust `crate`/`self`/
+// `super` dropped) has a LEAF and a PREFIX. A definition named LEAF matches when
+//   generic : its OWNER CHAIN (Symbol::scope's segments; for a scope-less method, the enclosing types by containment,
+//             outermost first) equals the prefix's TAIL in full — no owner segment is ever stripped — and the prefix's
+//             remaining HEAD names directories or the file stem of its root-relative path, in order (a skipped component
+//             is a re-export through a parent module; segmentNamesComponent reads `_` for a directory's `-` and a
+//             CamelCase segment as its snake_case name, Ruby's `Shop::Cart` in shop/cart.rb);
+//   C/C++   : (instead) its FULL chain read off the source — every enclosing namespace and class plus the declarator's
+//             written qualifier (cppscopechain.h, --edit-check's reader) — ends with the prefix's last segment and holds
+//             the rest of the prefix, in order. No path component is read: the namespace is the authority. An unreadable
+//             chain (unbalanced braces, a scope macro, `S<T>::f`, a `using namespace` before a qualified declarator) or a
+//             global definition (an empty chain) matches nothing here.
+// BOUND only when the matches are ONE entity: at most one has a body (a declaration beside its definition, overload
+// signatures), or every bodied match shares one owner chain and one module — the file, or for Go the package directory
+// (cfg twins in one file, Go build-tag twins; disclosed by the verbs' defs= as today). Anything else returns EMPTY, so the caller's refusal and near= are what they were.
+// What it does NOT do: read imports (a Go import alias `be.Put` names no directory and stays refused), peel a type
+// alias (`type A = B; A::m` stays refused), read a Go package clause that differs from its directory, read a Cargo
+// `[lib] name` override, or recover an owner a degraded parse lost (a Rust fn indexed scope-less inside an impl).
+struct WrittenSpec
+{
+    std::string_view              file;     // the `file:` half, or empty
+    std::vector<std::string_view> prefix;   // every segment before the leaf, Rust path keywords dropped; never empty
+    std::string_view              leaf;
+};
+
+// segments of `text` split on "::", '.' and '#'; false when any segment is empty
+inline bool splitSpellingSegments( std::string_view text, std::vector<std::string_view>& out )
+{
+    std::size_t start = 0;
+    for( std::size_t i = 0; i <= text.size(); )
+    {
+        const bool end    = i == text.size();
+        const bool colons = !end && text.compare( i, 2, "::" ) == 0;
+        if( end || colons || text[i] == '.' || text[i] == '#' )
+        {
+            if( i == start )
+            {
+                return false;
+            }
+            out.push_back( text.substr( start, i - start ) );
+            i    += colons ? 2 : 1;
+            start = i;
+            continue;
+        }
+        ++i;
+    }
+    return true;
+}
+
+inline std::optional<WrittenSpec> splitWrittenSpec( std::string_view spec )
+{
+    if( spec.empty() || spec.front() == '@' )
+    {
+        return std::nullopt;
+    }
+    std::size_t fileCut = std::string_view::npos;   // the last ':' that is not half of a "::"
+    for( std::size_t i = 0; i < spec.size(); ++i )
+    {
+        const bool doubled = ( i + 1 < spec.size() && spec[ i + 1 ] == ':' ) || ( i > 0 && spec[ i - 1 ] == ':' );
+        fileCut = ( spec[i] == ':' && !doubled ) ? i : fileCut;
+    }
+    WrittenSpec      w;
+    std::string_view qual = spec;
+    if( fileCut != std::string_view::npos )
+    {
+        w.file = stripLineLocator( spec.substr( 0, fileCut ) );
+        qual   = spec.substr( fileCut + 1 );
+    }
+    std::vector<std::string_view> segs;
+    if( qual.find( '/' ) != std::string_view::npos || !splitSpellingSegments( qual, segs ) || segs.size() < 2 )
+    {
+        return std::nullopt;
+    }
+    w.leaf = segs.back();
+    segs.pop_back();
+    std::size_t keywords = 0;
+    while( keywords < segs.size() && ( segs[ keywords ] == "crate" || segs[ keywords ] == "self" || segs[ keywords ] == "super" ) )
+    {
+        ++keywords;
+    }
+    w.prefix.assign( segs.begin() + std::ptrdiff_t( keywords ), segs.end() );
+    if( w.prefix.empty() )
+    {
+        return std::nullopt;   // `self.run` / `crate::f` names no owner and no module: never a bare-name pick
+    }
+    return w;
+}
+
+// a root-relative path's directories and file stem, in order
+inline std::vector<std::string_view> pathSpellingComponents( std::string_view rel )
+{
+    std::vector<std::string_view> comps;
+    for( std::size_t start = 0; start < rel.size(); )
+    {
+        std::size_t slash = rel.find( '/', start );
+        slash             = ( slash == std::string_view::npos ) ? rel.size() : slash;
+        std::string_view c = rel.substr( start, slash - start );
+        if( slash == rel.size() )
+        {
+            const std::size_t dot = c.rfind( '.' );
+            c = ( dot == std::string_view::npos || dot == 0 ) ? c : c.substr( 0, dot );
+        }
+        if( !c.empty() && c != "." )
+        {
+            comps.push_back( c );
+        }
+        start = slash + 1;
+    }
+    return comps;
+}
+
+// does a written segment name a path component? Verbatim; with `_` for a directory's `-` (`nu_command` names the crate
+// directory `nu-command`); or, for a CamelCase segment, as its snake_case file/directory spelling (Ruby `Shop::Cart`
+// lives in shop/cart.rb, a C++ `HttpConnectionManager` namespace in http_connection_manager/).
+inline bool segmentNamesComponent( std::string_view seg, std::string_view comp ) noexcept
+{
+    const auto same = []( char want, char have ) noexcept { return want == have || ( want == '_' && have == '-' ); };
+    if( seg.size() == comp.size() && std::equal( seg.begin(), seg.end(), comp.begin(), same ) )
+    {
+        return true;
+    }
+    if( seg.empty() || !( seg[0] >= 'A' && seg[0] <= 'Z' ) )
+    {
+        return false;
+    }
+    std::size_t at = 0;   // walk comp against seg's snake_case spelling, never building it
+    for( std::size_t i = 0; i < seg.size(); ++i )
+    {
+        const char c     = seg[i];
+        const bool upper = c >= 'A' && c <= 'Z';
+        if( upper && i > 0 && !( seg[ i - 1 ] >= 'A' && seg[ i - 1 ] <= 'Z' ) && seg[ i - 1 ] != '_' )
+        {
+            if( at >= comp.size() || !same( '_', comp[ at ] ) )
+            {
+                return false;
+            }
+            ++at;
+        }
+        const char lower = upper ? char( c - 'A' + 'a' ) : c;
+        if( at >= comp.size() || !same( lower, comp[ at ] ) )
+        {
+            return false;
+        }
+        ++at;
+    }
+    return at == comp.size();
+}
+
+// is `want` an in-order subsequence of `have` (each want[i] naming a later have element than want[i-1])?
+template <class Have>
+inline bool namesInOrder( std::span<const std::string_view> want, const Have& have )
+{
+    std::size_t at = 0;
+    for( const std::string_view w : want )
+    {
+        while( at < have.size() && !segmentNamesComponent( w, have[ at ] ) )
+        {
+            ++at;
+        }
+        if( at == have.size() )
+        {
+            return false;
+        }
+        ++at;
+    }
+    return true;
+}
+
+// The C/C++ full chain of one definition (enclosing namespaces and classes, then its written qualifier), read off the
+// comment-blanked source; nullopt when the reader cannot prove it (see the tier's contract above).
+inline std::optional<std::vector<std::string>> cppFullChainOf( const Symbol& s, std::string_view file )
+{
+    const std::uint32_t end = std::min<std::uint32_t>( isDefinitionNotDeclaration( s ) ? s.sigEndByte : s.endByte, std::uint32_t( file.size() ) );
+    if( end <= s.sigStartByte )
+    {
+        return std::nullopt;
+    }
+    const std::size_t nameAt = editCheckParamOpen( file.substr( s.sigStartByte, end - s.sigStartByte ), s.name ).first;
+    if( nameAt == std::string_view::npos )
+    {
+        return std::nullopt;
+    }
+    const std::size_t                              nameInFile = s.sigStartByte + nameAt;
+    const std::optional<EditCheckWrittenQualifier> written    = editCheckWrittenQualifier( file, nameInFile );
+    EditCheckBraceLexer                            lexer( file );
+    std::optional<std::vector<std::string>>        chain      = lexer.chainAt( nameInFile );
+    if( !written || !chain || ( !written->names.empty() && !written->absolute && lexer.usingDirectiveBefore() ) )
+    {
+        return std::nullopt;
+    }
+    if( written->absolute )
+    {
+        chain->clear();
+    }
+    chain->insert( chain->end(), written->names.begin(), written->names.end() );
+    return chain;
+}
+
+inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing, std::string_view spec )
+{
+    const std::optional<WrittenSpec> w = splitWrittenSpec( spec );
+    if( !w )
+    {
+        return {};
+    }
+    std::vector<NodeId> cands;
+    for( const Symbol& s : ing.symbols )
+    {
+        if( elixirNameMatches( s, w->leaf ) && ( w->file.empty() || filePathContainsRootRel( ing, s.fileId, w->file ) ) )
+        {
+            cands.push_back( s.id );
+        }
+    }
+    if( cands.empty() )
+    {
+        return {};
+    }
+    // the enclosing types of every scope-less method candidate's file, one pass (outermost first: ascending start)
+    std::vector<std::uint32_t> ownerFiles;
+    for( const NodeId id : cands )
+    {
+        if( ing.symbols[ id ].scope.empty() && ing.symbols[ id ].kind == SymKind::Method )
+        {
+            ownerFiles.push_back( ing.symbols[ id ].fileId );
+        }
+    }
+    std::sort( ownerFiles.begin(), ownerFiles.end() );
+    ownerFiles.erase( std::unique( ownerFiles.begin(), ownerFiles.end() ), ownerFiles.end() );
+    std::vector<NodeId> types;
+    for( const Symbol& t : ownerFiles.empty() ? std::span<const Symbol>{} : std::span<const Symbol>( ing.symbols ) )
+    {
+        if( isTowerTypeKind( t.kind ) && std::binary_search( ownerFiles.begin(), ownerFiles.end(), t.fileId ) )
+        {
+            types.push_back( t.id );
+        }
+    }
+    std::sort( types.begin(), types.end(), [ & ]( NodeId a, NodeId b ) { return ing.symbols[ a ].sigStartByte < ing.symbols[ b ].sigStartByte; } );
+
+    std::deque<std::pair<std::uint32_t, std::string>> texts;   // comment-blanked C/C++ sources, each read once; a deque keeps handed-out pointers valid
+    const auto textOf = [ & ]( std::uint32_t fileId ) -> const std::string*
+    {
+        for( const auto& [ f, body ] : texts )
+        {
+            if( f == fileId )
+            {
+                return &body;
+            }
+        }
+        std::optional<std::string> body = docparse::detail::readWholeFile( diskPath( ing, fileId ) );
+        if( !body )
+        {
+            return nullptr;
+        }
+        editCheckBlankComments( *body );
+        texts.emplace_back( fileId, std::move( *body ) );
+        return &texts.back().second;
+    };
+
+    struct Match
+    {
+        NodeId      id;
+        std::string key;   // the owner chain the match was made on, joined: the one-entity identity
+    };
+    std::vector<Match>                   matches;
+    const std::span<const std::string_view> prefix( w->prefix );
+    for( const NodeId id : cands )
+    {
+        const Symbol&                 s = ing.symbols[ id ];
+        std::vector<std::string_view> owner;
+        if( !s.scope.empty() )
+        {
+            if( !splitSpellingSegments( s.scope, owner ) )
+            {
+                owner.clear();
+            }
+        }
+        else if( s.kind == SymKind::Method )
+        {
+            for( const NodeId t : types )
+            {
+                if( t != id && typeEnclosesMember( ing.symbols[ t ], s ) )
+                {
+                    owner.push_back( ing.symbols[ t ].name );
+                }
+            }
+        }
+        std::string key;
+        bool        hit = false;
+        if( s.lang == Lang::Cpp || s.lang == Lang::C )
+        {   // C/C++: the namespaces and classes read off the source are the authority — never a path component
+            const std::string* text = ( s.scope.empty() || scopeLastSegment( s.scope ) == prefix.back() ) ? textOf( s.fileId ) : nullptr;
+            const std::optional<std::vector<std::string>> chain = text ? cppFullChainOf( s, *text ) : std::nullopt;
+            if( chain && !chain->empty() && chain->back() == prefix.back() )
+            {
+                hit = namesInOrder( prefix.first( prefix.size() - 1 ), std::span<const std::string>( *chain ).first( chain->size() - 1 ) );
+                for( const std::string& c : *chain )
+                {
+                    key.append( c ).append( "::" );
+                }
+            }
+        }
+        else if( owner.size() <= prefix.size() && std::equal( owner.begin(), owner.end(), prefix.end() - std::ptrdiff_t( owner.size() ) )
+                 && namesInOrder( prefix.first( prefix.size() - owner.size() ), pathSpellingComponents( rootRelPath( ing, s.fileId ) ) ) )
+        {
+            hit = true;
+            for( const std::string_view o : owner )
+            {
+                key.append( o ).append( "::" );
+            }
+        }
+        if( hit )
+        {
+            // a Go package is its directory (build-tag twins are one entity); every other language's module is its file
+            const std::string_view rel = rootRelPath( ing, s.fileId );
+            const std::size_t      dir = s.lang == Lang::Go ? rel.rfind( '/' ) : rel.size();
+            key.append( "@" ).append( dir == std::string_view::npos ? std::string_view{} : rel.substr( 0, dir ) );
+            matches.push_back( { id, std::move( key ) } );
+        }
+    }
+    const std::size_t bodied = std::size_t( std::count_if( matches.begin(), matches.end(), [ & ]( const Match& m ) { return isDefinitionNotDeclaration( ing.symbols[ m.id ] ); } ) );
+    const bool oneEntity = bodied <= 1 || std::all_of( matches.begin(), matches.end(), [ & ]( const Match& m ) { return m.key == matches.front().key; } );
+    if( matches.empty() || !oneEntity )
+    {
+        return {};
+    }
+    std::vector<NodeId> out;
+    out.reserve( matches.size() );
+    for( const Match& m : matches )
+    {
+        out.push_back( m.id );
+    }
+    out = preferExactFile( ing, w->file, std::move( out ) );
+    return applyNameTower( ing, std::move( out ) );
+}
+
 // `unprovenDefCountOut` (H1, optional): the residue declToDefFollowThrough dropped — see its contract. Zero
 // on every path that never reaches the widening (an @FILE:LINE seed, a canonical id, a Scope::name tier, a
 // bare name), so a reader never has to ask whether the number is stale.
@@ -13085,7 +13440,8 @@ inline std::vector<NodeId> resolveAllByNameQualified( const IngestResult& ing, s
     // Widen to the definitions they stand for. Full contract and its limits: declToDefFollowThrough above.
     declToDefFollowThrough( ing, file, name, out, unprovenDefCountOut );
     out = applyNameTower( ing, std::move( out ) );   // the tower orders the name/file tier (task C); the early tiers above stay as-is
-    return resolveAllByDottedScope( ing, spec, std::move( out ) );   // `Class.method` / `Class#method`, only when `out` is empty
+    out = resolveAllByDottedScope( ing, spec, std::move( out ) );   // `Class.method` / `Class#method`, only when `out` is empty
+    return out.empty() ? resolveAllByWrittenSpelling( ing, spec ) : out;   // the source's own spelling, last (see its contract)
 }
 
 // ─── MEMBER VARIABLES: `Owner.field` selection + per-site use resolution (the member-variable round, card A3) ─

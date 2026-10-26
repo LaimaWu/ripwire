@@ -622,6 +622,7 @@
 "withprofilecheck.sh": 6.8,
 "wrapverbscheck.sh": 48.5,
 "writetargetcheck.sh": 2.1,
+"writtenspellingcheck.sh": 6.0,
 "xmlwellformed.sh": 98.7,
 "yamllangcheck.sh": 0.9,
 "zonecheck.sh": 0.8,
