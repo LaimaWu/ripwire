@@ -526,6 +526,7 @@ class BaseCase(TestCase):
 
     def test_thing(self):
         self.run_closure()
+        self.run_bound()
         return self.value
 
     def testCamel(self):
@@ -538,6 +539,14 @@ class BaseCase(TestCase):
 
     def closure_hook(self):
         return 4
+
+    def run_bound(self):
+        def cb(self):
+            return self.bound_hook()
+        return cb
+
+    def bound_hook(self):
+        return 10
 
     def never_called(self):
         return 5
@@ -562,6 +571,17 @@ class FwCase(BaseCase):
 
     def closure_hook(self):
         return 8
+
+    def bound_hook(self):
+        return 11
+""")
+(root / "app_helpers.py").write_text("""def test_helper():
+    return 1
+
+
+class Svc:
+    def testThing(self):
+        return 2
 """)
 (root / "checks").mkdir()
 (root / "checks/tests.py").write_text("""from django.test import TestCase
@@ -592,7 +612,10 @@ git("commit", "-qm", "django hooks")
 # Framework hooks, the closure dispatch, and the subclass overrides must not be dead. The two orphans
 # (never_called, unused_helper) are the control: the arm must still see real dead code in this shape.
 rows = dead_rows(run("--quality-delta=HEAD~1..HEAD"))
-expected = sorted(["tests/base_case.py::BaseCase::never_called", "unused_helper"])
+# Negatives: a test* def in application code stays dead (the test-module clause), and a closure that binds self as
+# its own parameter does not keep the host's overrides live (the bound-receiver clause).
+expected = sorted(["tests/base_case.py::BaseCase::never_called", "unused_helper", "test_helper",
+                   "app_helpers.py::Svc::testThing", "tests/test_fw.py::FwCase::bound_hook"])
 assert rows == expected, rows
 print("django hooks and closure dispatch stay live; the two orphans gate")
 PYHOOKS
