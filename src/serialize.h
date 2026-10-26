@@ -2066,6 +2066,12 @@ inline StemShare stemShare( std::string_view stemLower, std::string_view name, s
     }
     return r;
 }
+// Does a KEPT class already stand for the file's namesake? Loose: it shares as many subtokens as the pick. Tight: it must also be a
+// COMPLETE namesake itself, so a kept FormParserError (form+parser of form+parser+error) does not hold off the complete FormParser.
+inline bool holdsStemSlot( const StemShare& kept, std::size_t pickShared, bool tight ) noexcept
+{
+    return kept.shared >= pickShared && ( !tight || kept.complete() );
+}
 inline std::string_view fileStem( std::string_view path ) noexcept
 {
     if( const std::size_t slash = path.find_last_of( "/\\" ); slash != std::string_view::npos )
@@ -2165,20 +2171,9 @@ inline std::vector<NodeId> addMapStemRows( const IngestResult& ing, std::vector<
             continue;
         }
         std::vector<NodeId>& rows = buckets[ fileOrder[slot] ];
-        // Tight: a kept class holds the slot only if it is itself a COMPLETE namesake (the candidate filter above), so a kept
-        // FormParserError (form+parser of form+parser+error) does not suppress the complete FormParser.
         const bool held = std::ranges::any_of( rows, [ & ]( NodeId r )
         {
-            if( r == pick )
-            {
-                return true;
-            }
-            if( !ReceiverEvidence::classLike( ing.symbols[r].kind ) )
-            {
-                return false;
-            }
-            const StemShare kept = stemShare( stemOf( slot ), ing.symbols[r].name, scratch );
-            return kept.shared >= bestShared[slot] && ( !tight || kept.complete() );
+            return r == pick || ( ReceiverEvidence::classLike( ing.symbols[r].kind ) && holdsStemSlot( stemShare( stemOf( slot ), ing.symbols[r].name, scratch ), bestShared[slot], tight ) );
         } );
         if( !held )
         {
