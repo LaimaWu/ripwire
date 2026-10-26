@@ -13336,6 +13336,21 @@ inline std::optional<std::vector<std::string>> cppFullChainOf( const Symbol& s, 
     return chain;
 }
 
+// An unnamed namespace is skipped by name lookup (`A::C` names `namespace A { namespace { C } }` too). True when `chain` (a C++
+// definition's full chain) is not the prefix's contiguous tail as read, but is once its unnamed-namespace labels are dropped.
+inline bool chainNamesPrefixThroughUnnamed( const std::vector<std::string>& chain, std::span<const std::string_view> prefix )
+{
+    std::vector<std::string_view> named;
+    for( const std::string& c : chain )
+    {
+        if( c != kAnonymousNamespaceLabel )
+        {
+            named.push_back( c );
+        }
+    }
+    return named.size() != chain.size() && named.size() >= prefix.size() && std::equal( prefix.begin(), prefix.end(), named.end() - std::ptrdiff_t( prefix.size() ) );
+}
+
 // `found` is what the earlier tiers matched, returned untouched unless it is empty (resolveAllByDottedScope's contract).
 inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing, std::string_view spec, std::vector<NodeId> found )
 {
@@ -13509,18 +13524,9 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
                     key.append( c ).append( "::" );
                 }
             }
-            else if( chain && eligible && std::ranges::find( *chain, kAnonymousNamespaceLabel ) != chain->end() )
-            {   // cr-prepass-37b: an unnamed namespace is skipped by name lookup (`A::f` names `namespace A { namespace { f } }` too), so a
-                // candidate whose chain only misses the prefix THROUGH one is UNKNOWN, never dropped: the plain namesake must not bind alone
-                std::vector<std::string_view> named;
-                for( const std::string& c : *chain )
-                {
-                    if( c != kAnonymousNamespaceLabel )
-                    {
-                        named.push_back( c );
-                    }
-                }
-                unknownChain = unknownChain || ( named.size() >= prefix.size() && std::equal( prefix.begin(), prefix.end(), named.end() - std::ptrdiff_t( prefix.size() ) ) );
+            else if( chain && eligible && chainNamesPrefixThroughUnnamed( *chain, prefix ) )
+            {   // cr-prepass-37b: the chain misses the prefix only THROUGH an unnamed namespace: UNKNOWN, never dropped
+                unknownChain = true;
             }
         }
         else if( owner.size() <= prefix.size() && std::equal( owner.begin(), owner.end(), prefix.end() - std::ptrdiff_t( owner.size() ) )
