@@ -321,6 +321,8 @@ cmp -s "$TMP/h_rcold.xml" "$TMP/h_rwarm.xml" && cmp -s "$TMP/h_rwarm.xml" "$TMP/
 #      use_bounds_blanked_files="2", the legend defines the vocabulary it emits.
 #   RS3 controls (clean, non-empty forms that already parse, spellings only in comment/string/raw string/r#use, and a
 #      bound whose re-parse cannot reduce an unrelated error): no use_bounds_blanked anywhere; rust_kept keeps its error.
+#      The string/comment/raw-string controls prove "not adopted", not "the scanner skipped the text" (a scanner that
+#      blanked a string could not reduce error bytes either): the lexer's literal handling is pinned by the (U) unit cases.
 #      With RIPWIRE_RUST_BASE_BIN: map, --skipped and --callers over the controls are byte-identical to that binary.
 #   RS4 with RIPWIRE_RUST_BASE_BIN: the capture fixtures still REPRODUCE the collapse on the base binary (else RS1/RS2 test nothing).
 #   RS5 a cache-writing run and the warm read agree, and the warm read still carries use_bounds_blanked=.
