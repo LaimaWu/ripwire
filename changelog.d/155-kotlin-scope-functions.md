@@ -13,4 +13,6 @@ Known floors:
 - A parenthesised lambda, such as `s.let( { } )`, is not a trailing lambda. Its edge is unchanged.
 - A Java method called from Kotlin with a trailing lambda is dropped when its name is a scope-function name.
   The spelling alone does not tell the two apart.
-- Receiver types are not checked.
+- A receiver of a Java type is not checked. A receiver whose type is an in-tree Kotlin class that defines the method
+  keeps its own binding (`t.run { }` on a `t: Task` binds `Task.run`).
+- A qualified `kotlin.run { }` can still bind an in-tree Kotlin `run`, hedged.

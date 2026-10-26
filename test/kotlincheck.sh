@@ -1266,6 +1266,27 @@ expectCallers "$SC/c" Task.kt:run 'build@kt/Task.kt go@kt/Task.kt ' "15g tree C:
 expectCallers "$SC/c" Job.java:run 'kick@kt/Task.kt ' "15h tree C: kick's j.run() still binds Job.run (no lambda, so the fix does not touch it)"
 # FLOOR, pinned: a parenthesised lambda is not the trailing-lambda grammar, so its Java edge stays (disclosed, not closed).
 expectCallers "$SC/e" let 'useParen@kt/Paren.kt ' "15i floor: s.let({ it.length }) keeps its Builder.let edge (the parenthesised lambda is out of scope)"
+# Tree F (Kotlin only, two classes define run): a receiver whose type the source states still picks ITS class's run — the arm
+# skips a receiver pick only when it holds a Java method (rv-pr438: skipping every pick split go and go2 over both runs, via="name").
+mkdir -p "$SC/f/kt"
+cat > "$SC/f/kt/A.kt" <<'KT'
+class Task {
+    fun run(block: () -> Unit) = block()
+}
+class Other {
+    fun run(block: () -> Unit) = block()
+}
+fun go(t: Task) = t.run { }
+fun go2() { val o = Other(); o.run { } }
+KT
+expectCallers "$SC/f" Task.run 'go@kt/A.kt ' "15l tree F: t.run { } on a typed t: Task binds Task.run alone (the receiver rule still decides a Kotlin pick)"
+expectCallers "$SC/f" Other.run 'go2@kt/A.kt ' "15l tree F: o.run { } on a constructed Other binds Other.run alone"
+goRow="$( "$BIN" "$SC/c" --callers=Task.kt:run --no-cache 2>/dev/null | grep -oE '<s t="fn" n="go" [^>]*>' )"
+case "$goRow" in
+    "") no "15m tree C: --callers=Task.kt:run printed no go row — the via= check below would be vacuous" ;;
+    *'via="name"'*) no "15m tree C: go's t.run { } binds Task.run only by name ($goRow), but its receiver t: Task proves it" ;;
+    *) ok "15m tree C: go's t.run { } binds Task.run with its receiver proof (no via=\"name\")" ;;
+esac
 
 # DISPOSITION: every refused site is a C external census row, the header gauge rises by exactly that many, and nothing is unaccounted.
 ext_names(){ python3 - "$1" <<'PY'
