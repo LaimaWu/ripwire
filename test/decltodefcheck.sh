@@ -1742,6 +1742,34 @@ run "$TMP/free" --connect=helper,unrelatedCaller >"$TMP/e3_cn_free.xml"
 e3Pick "(E3d) --connect=helper,unrelatedCaller over api.h, other.cpp, third.cpp" "$TMP/e3_cn_free.xml" helper other.cpp:2 1
 
 echo
+echo "=== (E3h) a bodyless type never yields to the body of a FUNCTION of the same name (CodeRabbit #439): the family of the pick is kept ==="
+# kindfam: `typedef struct S5 S5;` (a bodyless type, a_fwd.h) beside `void S5() {}` (a bodied function): the tower front is the type, and the
+# follow-through used to hand the focus to the function (an `enum E : int;` does the same). kindctl: a forward `class S5;` beside a bodied
+# class S5 {…} in the next header, the function still beside it — a body of the SAME family, which the follow-through must keep reaching.
+mkdir -p "$TMP/kindfam" "$TMP/kindctl"
+printf '#pragma once\ntypedef struct S5 S5;\n' >"$TMP/kindfam/a_fwd.h"
+printf '#include "a_fwd.h"\nvoid S5() {}\n' >"$TMP/kindfam/w.cpp"
+printf '#include "a_fwd.h"\nint use(S5* p)\n{\n    S5();\n    return p != 0;\n}\n' >"$TMP/kindfam/use.cpp"
+cp "$TMP/kindfam/"* "$TMP/kindctl/"
+printf '#pragma once\nclass S5;\n' >"$TMP/kindctl/a_fwd.h"
+printf '#pragma once\nclass S5 { public: int x; };\n' >"$TMP/kindctl/b_def.h"
+run "$TMP/kindfam" --lego=S5 >"$TMP/e3_kf.xml"
+run "$TMP/kindctl" --lego=S5 >"$TMP/e3_kc.xml"
+IKF="$( elNC "$TMP/e3_kf.xml" iface )"; IKC="$( elNC "$TMP/e3_kc.xml" iface )"
+nonempty "(E3h) no <iface> row for the typedef-beside-a-function corpus" "$IKF" || true
+nonempty "(E3h) no <iface> row for the class-with-a-body control" "$IKC" || true
+if [ "$( attr "$IKF" defs )" = "2" ] && [ "$( attr "$IKF" p )" = "a_fwd.h" ]; then
+    ok "(E3h) typedef struct S5 S5; beside void S5() {}: the lego focus stays the type, <iface p=\"a_fwd.h\" defs=\"2\">"
+else
+    no "(E3h) typedef struct S5 S5; beside void S5() {}: <iface p=\"$( attr "$IKF" p )\" defs=\"$( attr "$IKF" defs )\"> — the type's focus went to the function"
+fi
+if [ "$( attr "$IKC" defs )" = "3" ] && [ "$( attr "$IKC" p )" = "b_def.h" ]; then
+    ok "(E3h) control: class S5; then class S5 {...} beside void S5() {}: the type still follows to its own body, <iface p=\"b_def.h\" defs=\"3\">"
+else
+    no "(E3h) control: class S5; then class S5 {...}: <iface p=\"$( attr "$IKC" p )\" defs=\"$( attr "$IKC" defs )\"> — a type no longer follows to its body"
+fi
+
+echo
 echo "=== (E3e, E3f) a TypeScript overload signature, and a C++ pure virtual beside another class's override: --connect searches from the definition that JOINS ==="
 # 0.6.6 D1: resolveFocus keeps its pick on these corpora (E3g's --around=area still answers from Base's pure virtual), but
 # --connect no longer searches from that pick alone: every definition of the name is scored by the terminals it reaches

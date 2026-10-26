@@ -8,7 +8,10 @@
 #            and ctor_calls_more="N" (names cut). Posture: mem='s (compact route, XML, default regime).
 #   NOT ON   a class with no constructor; an r=1 row that is the class itself; a constructor the fold serves (the class body).
 # Arms:
-#   A1 [P] JS: create (r=1) carries ctor_l="10" ctor_calls="makeStore,makeLogger" (fold off)
+#   A1 [P] JS: create (r=1) carries ctor_l="10" ctor_calls="makeLogger,makeStore" (name order; fold off)
+#   A1b [P] cap over NAME order: a constructor calling 18 distinct names (9 zeta* in the earlier-sorting file, 9 alpha* in the
+#            later one, alpha9 defined twice) keeps alpha1..alpha9,zeta1..zeta7 and ctor_calls_more="2" (zeta8, zeta9): the kept
+#            16 do not follow which file defines each, and the twice-defined cut name is counted once
 #   A2 [P] Python control: Registry.create carries ctor_l="6" ctor_calls="make_store" — the same rule on `__init__` (fold off)
 #   B1 [G] a class with no constructor: create carries no ctor_l=
 #   B2 [G] fold on: the fold serves Registry's body (it holds the constructor): no ctor_l=
@@ -29,7 +32,7 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 FIX="$ROOT/test/ownerctorfix"
-for d in js py noctor; do [ -d "$FIX/$d" ] || { echo "fixture $FIX/$d missing"; exit 2; }; done
+for d in js py noctor many; do [ -d "$FIX/$d" ] || { echo "fixture $FIX/$d missing"; exit 2; }; done
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"; mkdir -p "$HOME"
 Q="how does create make an entry from the store?"
@@ -53,11 +56,11 @@ def rows(t): return re.findall(r'<d [^>]*>', t)
 def attr(r, a):
     m = re.search(r'\b%s="([^"]*)"' % a, r or "")
     return html.unescape(m.group(1)) if m else None
-if cmd == "ctor":      # FILE NAME LINE CALLS
+if cmd == "ctor":      # FILE NAME LINE CALLS [MORE]
     rs = rows(load(args[0]))
     if not rs or attr(rs[0], "n") != args[1] or attr(rs[0], "r") != "1": print("r=1 is %r" % (rs and attr(rs[0], "n"))); sys.exit(1)
     got = (attr(rs[0], "ctor_l"), attr(rs[0], "ctor_calls"), attr(rs[0], "ctor_calls_more"))
-    if got != (args[2], args[3], None): print("got %r" % (got,)); sys.exit(1)
+    if got != (args[2], args[3], args[4] if len(args) > 4 else None): print("got %r" % (got,)); sys.exit(1)
 elif cmd == "none":    # FILE [R1NAME]: no row carries ctor_l=; the r=1 row is R1NAME (non-vacuous)
     t = load(args[0]); rs = rows(t)
     if len(args) > 1 and (not rs or attr(rs[0], "n") != args[1]): print("r=1 is %r, want %s" % (rs and attr(rs[0], "n"), args[1])); sys.exit(1)
@@ -93,6 +96,7 @@ chk(){ python3 "$TMP/chk.py" "$@"; }
 
 run a1 "$FIX/js" RIPWIRE_NO_BODY_FOLD=1 -- "--for=$Q"
 run a1f "$FIX/js" RIPWIRE_NO_BODY_FOLD=1 -- "--for=$Q" --legend=full
+run a1b "$FIX/many" RIPWIRE_NO_BODY_FOLD=1 -- "--for=$Q"
 run a2 "$FIX/py" RIPWIRE_NO_BODY_FOLD=1 -- "--for=$Q"
 run b1 "$FIX/noctor" RIPWIRE_NO_BODY_FOLD=1 -- "--for=$Q"
 run b2 "$FIX/js" -- "--for=$Q"
@@ -103,7 +107,8 @@ run f2 "$FIX/js" RIPWIRE_NO_BODY_FOLD=1 -- "--for=create"
 run f3 "$FIX/js" RIPWIRE_NO_BODY_FOLD=1 -- "--for=$Q" --json
 run x1 "$FIX/js" RIPWIRE_NO_BODY_FOLD=1 -- "--for=$Q"
 
-if m="$( chk ctor "$TMP/a1.xml" create 10 makeStore,makeLogger )"; then ok "A1 JS constructor: ctor_l=\"10\" ctor_calls=\"makeStore,makeLogger\""; else no "A1 $m"; fi
+if m="$( chk ctor "$TMP/a1.xml" create 10 makeLogger,makeStore )"; then ok "A1 JS constructor: ctor_l=\"10\" ctor_calls=\"makeLogger,makeStore\" (name order)"; else no "A1 $m"; fi
+if m="$( chk ctor "$TMP/a1b.xml" create 2 alpha1,alpha2,alpha3,alpha4,alpha5,alpha6,alpha7,alpha8,alpha9,zeta1,zeta2,zeta3,zeta4,zeta5,zeta6,zeta7 2 )"; then ok "A1b 18 distinct callees: the 16 kept are the first 16 by NAME, ctor_calls_more=\"2\" (the twice-defined alpha9 is kept, not double counted)"; else no "A1b $m"; fi
 if m="$( chk ctor "$TMP/a2.xml" Registry.create 6 make_store )"; then ok "A2 Python __init__: ctor_l=\"6\" ctor_calls=\"make_store\""; else no "A2 $m"; fi
 if m="$( chk none "$TMP/b1.xml" create )"; then ok "B1 no constructor: no ctor_l="; else no "B1 $m"; fi
 if grep -q '<b t="cls" l="9" p="store.js" n="Registry">' "$TMP/b2.xml"; then
