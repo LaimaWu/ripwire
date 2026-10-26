@@ -748,11 +748,12 @@ the canonical id the tool prints, `@FILE:LINE`, a `*` glob, and the changed symb
 `resolveAllByNameQualified` (`graph.h`) or one of its tiers. The diff-hunk producer (`diffhunks.h`, `situ.h`) maps
 hunks to the symbols whose bodies they touch, and falls back to the whole file when no body holds a hunk
 (contributed by @llvm-x86 in #423). Several definitions with one name are ordered by one total order, the name tower
-(`applyNameTower`, `kindSpecificity` in `model.h`; contributed by @mpapis in #432). A verb that needs ONE focus takes
-it from `resolveFocus` (`graph.h`; `--lego` and the MCP `lego` verb take theirs from `resolveLegoFocus`: the
-role order, then `focusOfOrderedMatches`): the tower front, a code definition before a docs heading or a config
-key, and a bodyless C/C++ declaration yields to the same-scope definition with a body. A seed resolver never
-picks silently. `defs=`, `unproven_defs=`, `from_defs=`/`to_defs=` and the `<def>` table disclose the candidates.
+(`applyNameTower` in `graph.h`, `kindSpecificity` in `model.h`; contributed by @mpapis in #432). A verb that needs
+ONE focus takes it from `resolveFocus` (`graph.h`; `--lego` and the MCP `lego` verb take theirs from
+`resolveLegoFocus`: the role order, then `focusOfOrderedMatches`): the tower front, a code definition before a docs
+heading or a config key, and a bodyless C/C++ declaration yields to the same-scope definition with a body. A seed
+resolver never picks silently. `defs=`, `unproven_defs=`, `from_defs=`/`to_defs=` and the `<def>` table disclose the
+candidates.
 The rule: **any spelling the output prints is a spelling the input accepts.**
 
 **2. Hops: which edges leave a node, and how sure each one is.** A hop provider takes a node, a direction and a
