@@ -1682,30 +1682,11 @@ inline ParamShape cc_paramShape( TSNode defNode, Lang lang, SymKind kind, std::s
 // #155 KOTLIN TRAILING LAMBDA: true when a Kotlin call_expression writes its lambda AFTER the argument list — the grammar's
 // annotated_lambda directly under its call_suffix: `s.run { }`, `with( sb ) { }`, `s?.let { }`, `xs.also { }`. The lambda of
 // `s.let( { } )` sits inside value_arguments, so it is NOT a trailing lambda (a disclosed floor, FalseEdgeRules' Kotlin arm).
-// Not noexcept: forEachChild's callback may allocate (infra/tschildren.h).
+// Not noexcept: firstChildOfKind's cursor allocates (infra/tschildren.h A4-F25).
 inline bool kotlinTrailingLambda( TSNode call )
 {
-    if( !kindIs( ts_node_type( call ), "call_expression" ) )
-    {
-        return false;
-    }
-    bool found = false;
-    ChildCursor cursor( call );
-    forEachChild( call, cursor.cur, [ & ]( TSNode suffix )
-    {
-        if( !kindIs( ts_node_type( suffix ), "call_suffix" ) )
-        {
-            return true;
-        }
-        ChildCursor inner( suffix );
-        forEachChild( suffix, inner.cur, [ & ]( TSNode c )
-        {
-            found = kindIs( ts_node_type( c ), "annotated_lambda" );
-            return !found;
-        } );
-        return false;   // a call_expression carries one call_suffix
-    } );
-    return found;
+    const TSNode suffix = kindIs( ts_node_type( call ), "call_expression" ) ? firstChildOfKind( call, /*namedOnly=*/true, { "call_suffix" } ) : TSNode{};   // one call_suffix per call_expression
+    return !ts_node_is_null( suffix ) && !ts_node_is_null( firstChildOfKind( suffix, /*namedOnly=*/true, { "annotated_lambda" } ) );
 }
 
 // B2.2 CALL-SITE ARITY: count the positional arguments of the call whose callee identifier is `nameNode`.

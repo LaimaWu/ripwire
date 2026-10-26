@@ -385,15 +385,8 @@ inline constexpr std::string_view kRustStdMemberNames[] = {
 // kotlin.StandardKt__StandardKt. Regenerated and diffed by ONE command, which prints exactly these five names:
 //     javap -p -cp kotlin-stdlib-2.4.0.jar kotlin.StandardKt__StandardKt | sed -n 's/.* \([a-z][A-Za-z]*\)(.*/\1/p' | grep -xE 'let|run|with|apply|also' | LC_ALL=C sort -u
 // takeIf, takeUnless, repeat and use stay OUT: the documentation does not call them scope functions, and no corpus evidence joined them.
-// 5 names; sorted by byte.
+// 5 names; sorted by byte (isStrictlySortedTable below).
 inline constexpr std::string_view kKotlinScopeFunctionNames[] = { "also", "apply", "let", "run", "with" };
-static_assert( std::is_sorted( std::begin( kKotlinScopeFunctionNames ), std::end( kKotlinScopeFunctionNames ), rw::sortutil::svLess )
-               && std::adjacent_find( std::begin( kKotlinScopeFunctionNames ), std::end( kKotlinScopeFunctionNames ) ) == std::end( kKotlinScopeFunctionNames ),
-               "kKotlinScopeFunctionNames must be strictly sorted (binary search)" );
-inline bool isKotlinScopeFunction( std::string_view name ) noexcept
-{
-    return std::binary_search( std::begin( kKotlinScopeFunctionNames ), std::end( kKotlinScopeFunctionNames ), name, rw::sortutil::svLess );
-}
 
 // The standard templates whose `->` reaches their FIRST template argument, so a `->` call through a declaration written
 // `std::unique_ptr<ns::List>` / `std::shared_ptr<…>` / `std::optional<…>` may be a member of that argument (graph.h
@@ -426,6 +419,16 @@ static_assert( isStrictlySortedTable( kRustStdMemberNames ), "kRustStdMemberName
 static_assert( isStrictlySortedTable( kCppStdArrowTemplates ), "kCppStdArrowTemplates must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kCppStdElementFirstArg ), "kCppStdElementFirstArg must be strictly sorted (binary search)" );
 static_assert( isStrictlySortedTable( kCppStdElementSecondArg ), "kCppStdElementSecondArg must be strictly sorted (binary search)" );
+static_assert( isStrictlySortedTable( kKotlinScopeFunctionNames ), "kKotlinScopeFunctionNames must be strictly sorted (binary search)" );
+// #155: the lookup of a strictly sorted table (isStrictlySortedTable), taken as a span so a new table reuses it.
+inline bool inSortedTable( std::span<const std::string_view> table, std::string_view name ) noexcept
+{
+    return std::binary_search( table.begin(), table.end(), name, rw::sortutil::svLess );
+}
+inline bool isKotlinScopeFunction( std::string_view name ) noexcept
+{
+    return inSortedTable( kKotlinScopeFunctionNames, name );
+}
 
 // Which template argument an element access of the standard container `name` ("map", "vector") yields: 0 or 1, or -1 when `name`
 // is no container of kCppStdElementFirstArg / kCppStdElementSecondArg.
