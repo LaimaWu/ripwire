@@ -319,24 +319,17 @@ namespace epdetail
 {
 
 // The trailing dotted name of `s` (after trimming), e.g. "loaded.plugin.entry_point.group" → its last segment "group".
-// The last dot-separated segment of a dotted name ("loaded.plugin.entry_point.group" → "group").
-inline std::string_view lastDotSegment( std::string_view name ) noexcept
-{
-    const std::size_t dot = name.rfind( '.' );
-    return dot == std::string_view::npos ? name : name.substr( dot + 1 );
-}
-
-// The last segment of the dotted name `s` ENDS with (after trimming), and of the one it STARTS with.
+// The last segment of the dotted name `s` ENDS with (after trimming), and of the one it STARTS with (model.h scopeLastSegment).
 inline std::string_view lastSegmentOfTrailingName( std::string_view s ) noexcept
 {
     s = trimWs( s );
     const auto from = std::find_if_not( s.rbegin(), s.rend(), isDottedNameChar );
-    return lastDotSegment( s.substr( std::size_t( s.rend() - from ) ) );
+    return scopeLastSegment( s.substr( std::size_t( s.rend() - from ) ) );
 }
 inline std::string_view leadingName( std::string_view s ) noexcept
 {
     s = trimWs( s );
-    return lastDotSegment( s.substr( 0, std::size_t( std::ranges::find_if_not( s, isDottedNameChar ) - s.begin() ) ) );
+    return scopeLastSegment( s.substr( 0, std::size_t( std::ranges::find_if_not( s, isDottedNameChar ) - s.begin() ) ) );
 }
 
 // Is a '#' outside a string literal before the end of `before`? (then the occurrence sits in a comment)
