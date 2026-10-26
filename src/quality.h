@@ -834,8 +834,9 @@ inline constexpr std::array<std::string_view, 3> kUnittestModuleHooks = { "setUp
 // kXunitHooks names (setup_method, teardown_module, ...) of a test module. No call in the indexed tree names them, so zero
 // in-edges says nothing. Name-level, like the dunder rule in languageInvokedSymbol: errs toward live. The test* and xunit
 // clauses also need a test module (isTestPath, or Django's tests.py), so a helper named testSomething or setup_method in
-// application code still reads as dead. Not covered, still reported: pytest's conftest hooks (pytest_configure ...) and
-// @pytest.fixture functions.
+// application code still reads as dead. Not covered, still reported: pytest's conftest hooks (pytest_configure ...).
+// @pytest.fixture functions need no clause here: a decorated def is handed to its decorator as a value (ingest_valuerefs.h
+// emitDecorators), so --quality-delta never reports one, and --dead-code lists none (pythonDecoratedDef, decorated-excluded=).
 inline bool pythonFrameworkInvokedSymbol( const Symbol& s, std::string_view p ) noexcept
 {
     if( !langFacts( s.lang ).frameworkEntryHooks || ( s.kind != SymKind::Method && s.kind != SymKind::Function ) )
