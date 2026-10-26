@@ -55,7 +55,7 @@ run(){
 }
 
 cat > "$TMP/chk.py" <<'PY'
-import html, re, sys
+import html, json, re, sys
 cmd, args = sys.argv[1], sys.argv[2:]
 def load(p): return open(p, "rb").read().decode("utf-8", "replace")
 def row(t, n):
@@ -79,6 +79,21 @@ elif cmd == "none":         # FILE NAME...: each named row is shown and carries 
 elif cmd == "noattr":       # FILE: no slots= anywhere and no clause
     t = load(args[0])
     if "slots=" in t: print("slots= present"); sys.exit(1)
+elif cmd == "jsonnone":     # FILE ROW PREFIX: a LIVE --json answer (parses; sigs[] holds ROW) in which no key starts with PREFIX
+    # JSON spells an attribute as a key ("slots":...), never `slots=`: the XML-spelled needle cannot appear in it, so a
+    # noattr arm over JSON passes on any output at all. This one reads the keys, and first proves the answer is live.
+    try: d = json.loads(load(args[0]))
+    except ValueError as e: print("not JSON: %s" % e); sys.exit(1)
+    if not any(isinstance(x, dict) and x.get("n") == args[1] for x in d.get("sigs", [])): print("sigs[] holds no row %s (vacuous)" % args[1]); sys.exit(1)
+    def keys(x):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                yield k
+                yield from keys(v)
+        elif isinstance(x, list):
+            for v in x: yield from keys(v)
+    bad = sorted({k for k in keys(d) if k.startswith(args[2])})
+    if bad: print("JSON keys %r" % bad); sys.exit(1)
 elif cmd == "clause":       # FILE PRESENT(0|1): the compact or full clause rides iff a row carries slots=
     t = load(args[0]); present = args[1] == "1"
     has = "d slots=" in t or "; slots= on a variable" in t
@@ -124,7 +139,7 @@ if m="$( chk noattr "$TMP/f1.xml" )" && m2="$( chk clause "$TMP/f1.xml" 0 )"; th
 if m="$( chk prefix "$TMP/a1.xml" "$TMP/f1.xml" )"; then ok "F1 prefix identity: only slots= and its clause differ (compact)"; else no "F1 compact $m"; fi
 if m="$( chk prefix "$TMP/a1f.xml" "$TMP/f1f.xml" )"; then ok "F1 prefix identity: only slots= and its clause differ (full legend)"; else no "F1 full $m"; fi
 if m="$( chk noattr "$TMP/f2.xml" )"; then ok "F1 name-exact --for=o carries no slots="; else no "F1 name-exact $m"; fi
-if m="$( chk noattr "$TMP/f3.xml" )"; then ok "F1 --json carries no slots="; else no "F1 json $m"; fi
+if m="$( chk jsonnone "$TMP/f3.xml" positional_ops slots )"; then ok "F1 --json carries no slots key (a live answer that holds the initializer row)"; else no "F1 json $m"; fi
 if m="$( chk clause "$TMP/a1.xml" 1 )" && m2="$( chk clause "$TMP/a1f.xml" 1 )"; then ok "L1 the clause defines slots= and slots_more= (compact and full)"; else no "L1 $m ${m2:-}"; fi
 if m="$( chk clause "$TMP/b1.xml" 0 )"; then ok "L2 no row carries slots=: no clause"; else no "L2 $m"; fi
 if cmp -s "$TMP/a1.xml" "$TMP/x1.xml"; then ok "X1 determinism"; else no "X1 two runs differ"; fi

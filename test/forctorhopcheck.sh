@@ -46,7 +46,7 @@ run(){
 }
 
 cat > "$TMP/chk.py" <<'PY'
-import html, re, sys
+import html, json, re, sys
 cmd, args = sys.argv[1], sys.argv[2:]
 def load(p): return open(p, "rb").read().decode("utf-8", "replace")
 def rows(t): return re.findall(r'<d [^>]*>', t)
@@ -62,6 +62,21 @@ elif cmd == "none":    # FILE [R1NAME]: no row carries ctor_l=; the r=1 row is R
     t = load(args[0]); rs = rows(t)
     if len(args) > 1 and (not rs or attr(rs[0], "n") != args[1]): print("r=1 is %r, want %s" % (rs and attr(rs[0], "n"), args[1])); sys.exit(1)
     if "ctor_l=" in t: print("ctor_l= present"); sys.exit(1)
+elif cmd == "jsonnone":  # FILE ROW PREFIX: a LIVE --json answer (parses; sigs[] holds ROW) in which no key starts with PREFIX
+    # JSON spells an attribute as a key ("ctor_l":...), never `ctor_l=`: the XML-spelled needle cannot appear in it, so a
+    # `none` arm over JSON passes on any output at all. This one reads the keys, and first proves the answer is live.
+    try: d = json.loads(load(args[0]))
+    except ValueError as e: print("not JSON: %s" % e); sys.exit(1)
+    if not any(isinstance(x, dict) and x.get("n") == args[1] for x in d.get("sigs", [])): print("sigs[] holds no row %s (vacuous)" % args[1]); sys.exit(1)
+    def keys(x):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                yield k
+                yield from keys(v)
+        elif isinstance(x, list):
+            for v in x: yield from keys(v)
+    bad = sorted({k for k in keys(d) if k.startswith(args[2])})
+    if bad: print("JSON keys %r" % bad); sys.exit(1)
 elif cmd == "clause":  # FILE 0|1
     t = load(args[0]); has = "d ctor_l= ctor_calls=" in t or "; ctor_l= on the r=1" in t
     if has != (args[1] == "1"): print("clause present=%s" % has); sys.exit(1)
@@ -101,7 +116,7 @@ if m="$( chk none "$TMP/f1.xml" )" && m2="$( chk clause "$TMP/f1.xml" 0 )"; then
 if m="$( chk prefix "$TMP/a1.xml" "$TMP/f1.xml" )"; then ok "F1 prefix identity (compact)"; else no "F1 compact $m"; fi
 if m="$( chk prefix "$TMP/a1f.xml" "$TMP/f1f.xml" )"; then ok "F1 prefix identity (full legend)"; else no "F1 full $m"; fi
 if m="$( chk none "$TMP/f2.xml" )"; then ok "F1 name-exact --for=create carries none"; else no "F1 name-exact $m"; fi
-if m="$( chk none "$TMP/f3.xml" )"; then ok "F1 --json carries none"; else no "F1 json $m"; fi
+if m="$( chk jsonnone "$TMP/f3.xml" create ctor_ )"; then ok "F1 --json carries no ctor_ key (a live answer that holds the r=1 row)"; else no "F1 json $m"; fi
 if m="$( chk clause "$TMP/a1.xml" 1 )" && m2="$( chk clause "$TMP/a1f.xml" 1 )"; then ok "L1 the clause rides in both dialects"; else no "L1 $m ${m2:-}"; fi
 if m="$( chk clause "$TMP/b1.xml" 0 )"; then ok "L2 no ctor_l=: no clause"; else no "L2 $m"; fi
 if cmp -s "$TMP/a1.xml" "$TMP/x1.xml"; then ok "X1 determinism"; else no "X1 two runs differ"; fi
