@@ -747,9 +747,12 @@ definitions and says how it got there. Input spellings: a bare name, `file:name`
 the canonical id the tool prints, `@FILE:LINE`, a `*` glob, and the changed symbols of a diff. All of them go through
 `resolveAllByNameQualified` (`graph.h`) or one of its tiers. Its last tier, `resolveAllByWrittenSpelling`, accepts the
 spelling the source writes when every other tier found nothing: a TypeScript method's `Class.method` (owner read by
-containment), a module, crate or package prefix that names the definition's directories or file stem (`json.dump`,
-`batcheval.Put`, `crate::buf::Buffer::edit`), and a C++ owner read off the source's namespaces and written qualifier;
-it binds only one entity, else the caller refuses as before. The diff-hunk producer (`diffhunks.h`, `situ.h`) maps
+containment), a module, crate or package prefix (`json.dump`, `batcheval.Put`, `crate::buf::Buffer::edit`; in Python and
+Rust a prefix component with no matching path component is ASSUMED to be a re-export, in Go the prefix names the file's own
+directory and nothing else), and a C++ prefix that is the TAIL of the owner chain read off the source's namespaces and
+written qualifier; it binds only one entity, else the caller refuses as before. It refuses what it cannot read: a C++
+candidate whose chain is unreadable (a scope-macro line), a def nested in a function, method or object literal, an
+anonymous or inline namespace in the middle of a chain. The diff-hunk producer (`diffhunks.h`, `situ.h`) maps
 hunks to the symbols whose bodies they touch, and falls back to the whole file when no body holds a hunk
 (contributed by @llvm-x86 in #423). Several definitions with one name are ordered by one total order, the name tower
 (`applyNameTower`, `kindSpecificity` in `model.h`; contributed by @mpapis in #432). A verb that needs ONE focus takes
