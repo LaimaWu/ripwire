@@ -400,7 +400,11 @@ fi
 "$BIN" "$TMP/rcap" --cache="$TMP/r.cache" --skipped >"$TMP/r5_cold.xml" 2>/dev/null
 "$BIN" "$TMP/rcap" --cache="$TMP/r.cache" --skipped >"$TMP/r5_warm.xml" 2>/dev/null
 XMLS+=( "$TMP/r5_cold.xml" "$TMP/r5_warm.xml" )
-cmp -s "$TMP/r5_cold.xml" "$TMP/r5_warm.xml" && ok "(RS5) cache-writing run and warm read are byte-identical" || no "(RS5) cold and warm cache runs differ"
+if cmp -s "$TMP/r5_cold.xml" "$TMP/r5_warm.xml"; then
+    ok "(RS5) cache-writing run and warm read are byte-identical"
+else
+    no "(RS5) cold and warm cache runs differ"
+fi
 grep -q 'use_bounds_blanked="1"' "$TMP/r5_warm.xml" && ok "(RS5) the warm read still carries use_bounds_blanked=" \
     || no "(RS5) the warm read lost use_bounds_blanked= — the per-file count did not survive the cache"
 

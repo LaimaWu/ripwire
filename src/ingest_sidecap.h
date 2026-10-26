@@ -1447,7 +1447,7 @@ inline FileHealth measureHealthAdoptingMemberMacroReparse( TSParser* parser, Lan
 {
     const FileHealth first = measureFileHealth( ts_tree_root_node( tree.get() ), bytes );
     work.spans.clear();
-    const bool isRust = lang == Lang::Rust;   // the Rust layer (src/rustusebounds.h): precise-capturing use<..> bounds
+    const bool isRust = rustusebounds::isUseBoundsReparseLang( lang );   // the Rust layer (src/rustusebounds.h): use<..> bounds
     if( first.errBytes == 0 || ( !isRust && !macroreparse::isMacroReparseLang( lang ) ) )
     {
         return first;

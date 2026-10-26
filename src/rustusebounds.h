@@ -29,9 +29,11 @@
 // COST. The scan runs only on a Rust file whose first parse holds error bytes (one linear pass, no allocation beyond
 // the span list); the second parse only when the scan names at least one bound.
 
+#include "extentsuspect.h"     // extent::inSet — the declarative membership test the language set reads
 #include "infra/namesplit.h"   // namesplit::isIdentStart / isIdentChar — the ONE ASCII identifier byte class
 #include "macroreparse.h"      // BlankSpan + blankInvocations + adoptsReparse — the family's shared half
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -39,6 +41,15 @@
 
 namespace rw::rustusebounds
 {
+
+// The language set this layer reads: Rust alone. A set, not an equality, so the call site carries no per-language
+// predicate (langidentitycheck's ratchet) and a second grammar with the same gap joins here.
+inline constexpr std::array<Lang, 1> kUseBoundsReparseLangs = { Lang::Rust };
+
+inline bool isUseBoundsReparseLang( Lang lang ) noexcept
+{
+    return extent::inSet( kUseBoundsReparseLangs, lang );
+}
 
 // The token shape is the family's (macroreparse::Token): kind, the one-byte punctuator (0 on every other token), the
 // byte span and the 1-based line. A Rust word lexes as TokenKind::Ident.
