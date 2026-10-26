@@ -13345,6 +13345,44 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
     };
     std::vector<Match>                   matches;
     bool                                 unknownChain = false;
+    // review rv-qn-input-delta (D2): a TS `namespace` and an object literal are containers the index has no symbol for. A candidate
+    // inside one that the spelling could name makes the spelling UNKNOWN, as an unreadable C++ chain does — never dropped, so a
+    // same-named file (`Zone.f` beside Zone.ts) cannot bind alone in its place.
+    bool                                 unplaced = false;
+    bool                                 objectMember = false;   // a TS / JS object-literal member nothing typed encloses was dropped (name unknown)
+    bool                                 headNamed    = false;   // a match leans on a path-named head (a stem or directory), which a container could also be
+    std::vector<const Binding*>          namespaces;   // the TS `namespace` / `module` bodies (index Namespace binds), built at the first TS candidate
+    bool                                 namespacesBuilt = false;
+    const auto enclosingNamespaceNames = [ & ]( const Symbol& s, std::vector<std::string_view>& names )
+    {   // false when no namespace body holds `s`; otherwise the segments of every holding namespace's name (`namespace A.B` = A, B)
+        if( !langFacts( s.lang ).namespaceBodies )
+        {
+            return false;
+        }
+        if( !std::exchange( namespacesBuilt, true ) )
+        {
+            for( const Binding& b : ing.bindings )
+            {
+                if( b.kind == LocalBindKind::Namespace && b.spanEnd != 0 )
+                {
+                    namespaces.push_back( &b );
+                }
+            }
+        }
+        bool inside = false;
+        for( const Binding* b : namespaces )
+        {
+            if( b->fileId == s.fileId && b->spanStart <= s.sigStartByte && s.sigStartByte < b->spanEnd )
+            {
+                inside = true;
+                if( !splitSpellingSegments( b->var, names ) )
+                {
+                    names.emplace_back();   // an unreadable name (a string module name) matches no written segment
+                }
+            }
+        }
+        return inside;
+    };
     const std::span<const std::string_view> prefix( w->prefix );
     for( const NodeId id : cands )
     {
@@ -13378,10 +13416,19 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
                     nested = true;
                 }
             }
+            objectMember = objectMember || ( !nested && s.kind == SymKind::Method && owner.empty() && langFacts( s.lang ).objectLiteralMembers );
             if( nested || ( s.kind == SymKind::Method && owner.empty() ) )
             {
                 continue;
             }
+        }
+        std::vector<std::string_view> namespaceNames;
+        if( enclosingNamespaceNames( s, namespaceNames ) )
+        {   // the namespace is an owner the index does not store: the spelling either writes it (unplaced: refuse) or does not name this member
+            const bool ownerFits = owner.size() <= prefix.size() && std::equal( owner.begin(), owner.end(), prefix.end() - std::ptrdiff_t( owner.size() ) );
+            const auto head      = prefix.first( ownerFits ? prefix.size() - owner.size() : 0 );
+            unplaced = unplaced || ( ownerFits && std::ranges::all_of( namespaceNames, [ & ]( std::string_view n ) { return std::ranges::find( head, n ) != head.end(); } ) );
+            continue;
         }
         std::string key;
         bool        hit = false;
@@ -13408,6 +13455,7 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
                  && writtenHeadNamesModule( prefix.first( prefix.size() - owner.size() ), rootRelPath( ing, s.fileId ), rule ) )
         {
             hit = true;
+            headNamed = headNamed || prefix.size() > owner.size();
             for( const std::string_view o : owner )
             {
                 key.append( o ).append( "::" );
@@ -13427,7 +13475,8 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
     const auto chainOf   = []( const std::string& k ) { return std::string_view( k ).substr( 0, k.rfind( '@' ) ); };
     const bool sameChain = std::all_of( matches.begin(), matches.end(), [ & ]( const Match& m ) { return chainOf( m.key ) == chainOf( matches.front().key ); } );
     const bool oneEntity = sameChain && ( bodied <= 1 || std::all_of( matches.begin(), matches.end(), [ & ]( const Match& m ) { return m.key == matches.front().key; } ) );
-    if( unknownChain || matches.empty() || !oneEntity )
+    // an object-literal member's object has no stored name: when a match rests on a path-named head, that object could be the head
+    if( unknownChain || unplaced || ( objectMember && headNamed ) || matches.empty() || !oneEntity )
     {
         return {};
     }

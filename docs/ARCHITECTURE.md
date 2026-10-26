@@ -751,7 +751,9 @@ containment), a module, crate or package prefix (`json.dump`, `batcheval.Put`, `
 Rust a prefix component with no matching path component is ASSUMED to be a re-export, in Go the prefix names the file's own
 directory and nothing else, in Swift, Kotlin, Java and C# directories only: `WrittenModuleRule::DirsOnly`), and a C++ prefix that is the TAIL of the owner chain read off the source's namespaces and
 written qualifier; it binds only one entity, else the caller refuses as before. It refuses what it cannot read: a C++
-candidate whose chain is unreadable (a scope-macro line), a def nested in a function, method or object literal, an
+candidate whose chain is unreadable (a scope-macro line), a def nested in a function, method or object literal, a TypeScript
+`namespace` member the spelling writes or an object-literal member beside a path-named head (an unplaced candidate makes the
+spelling unknown; it is never dropped), an
 anonymous or inline namespace in the middle of a chain. The diff-hunk producer (`diffhunks.h`, `situ.h`) maps
 hunks to the symbols whose bodies they touch, and falls back to the whole file when no body holds a hunk
 (contributed by @llvm-x86 in #423). Several definitions with one name are ordered by one total order, the name tower

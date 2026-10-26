@@ -123,6 +123,13 @@ echo "-- review rv-qn-input-delta (C6): a declaration never joins a body on anot
 refuse cpp 'Http::Codec::h'                     # Core's decl + Ext's body: two owner chains, not one entity
 bind   cpp 'Ext::Http::Codec::h' cppCodecWrongHelper
 
+echo "-- review rv-qn-input-delta (D2): a TS namespace member or object-literal member is unplaced, so a stem namesake never binds"
+refuse tsns 'Zone.f'                            # f lives in `namespace Zone` (holder.ts); Zone.ts's f is not it
+refuse tsns 'NSX.Inner.act'                     # Inner is inside `namespace NSX` (a.ts); NSX.ts's Inner is not it
+refuse tsns 'Api.run'                           # run is an object-literal member (obj.ts); Api.ts's run is not it
+bind   tsns 'Fine.fine' tsnsFineHelper tsnsWrongHelper
+bind   tsns 'Svc.serve' tsnsSvcHelper tsnsOtherHelper    # an owner-hit still binds beside an object-literal and a namespace `serve` the spelling does not name
+
 echo "-- round trip: every member row --callees prints binds back to the same definition"
 for sub in ts py go rs cpp rb; do
     for seed in $( cd "$FIX/$sub" && "$BIN" "$FIX/$sub" --no-cache 2>/dev/null | grep -oE '<s t="(method|fn)" n="[^"]+"( sc="[^"]+")?' | sed -E 's/.* n="([^"]+)"( sc="([^"]+)")?/\3::\1/; s/^:://' | sort -u ); do

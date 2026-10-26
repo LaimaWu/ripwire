@@ -12,7 +12,8 @@ and the written prefix must be the tail of that chain). The new rule runs only a
 so a symbol that resolved before resolves exactly as before. It binds only when the spelling names one definition (a declaration
 beside its definition on the same owner chain counts as one); two same-named classes, a prefix two crates both satisfy, an
 import alias (`be.Put`), a type alias, a module no path names, a definition nested in a function, method, object literal or
-class expression, and a C++ chain it cannot read keep the "not found" answer. Known floors, all refusals: a C++ file with a
+class expression, a spelling a TypeScript `namespace` member or an object-literal member could carry (`Zone.f`, `NSX.Inner.act` and `Api.run` are refused even
+when a `Zone.ts`, `NSX.ts` or `Api.ts` has its own; an object-literal member only counts against a spelling whose head is a file or directory name), and a C++ chain it cannot read keep the "not found" answer. Known floors, all refusals: a C++ file with a
 scope-macro line at namespace scope (`FOO_REGISTRATION(x);`) is unreadable, so `HttpConnectionManager::Utility::createSingletons`
 (envoy) still answers "not found", and so does `Router::Filter::decodeHeaders` (envoy), because a same-named
 `Filter::decodeHeaders` in a macro-line file makes the spelling unknown; an anonymous or inline namespace in the middle of a
