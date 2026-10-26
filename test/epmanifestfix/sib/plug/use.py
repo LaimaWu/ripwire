@@ -25,3 +25,7 @@ def many_c():
 
 def many_d():
     return entry_points().select(group="x.many")
+
+
+def by_name():
+    return entry_points(name="i", group="x.pkg")

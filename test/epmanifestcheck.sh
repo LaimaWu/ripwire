@@ -20,7 +20,7 @@
 #   P1 [P] pyproject variant (src layout): [project.entry-points."x.report"] → def="src/pkg/mod.py:1", used_at=src/pkg/loader.py:5
 #          (`.select(group=…)`); [project.scripts] → group="console_scripts", def="src/pkg/cli.py:1", no used_at=
 #   S1 [P] siblings: a `key: value` group line, a dotted method target (plug.mod:Fmt.render → the method, not the same-named
-#          top-level render), a package target (plug/sub/__init__.py), iter_entry_points("g") and entry_points()["g"] consumers;
+#          top-level render), a package target (plug/sub/__init__.py), iter_entry_points("g"), entry_points()["g"] and a later group= keyword (entry_points(name=, group=)) consumers;
 #          [G] m.get("g") on a non-entry_points receiver is not a consumer
 #   K1 [P] the runaway guards disclose: a 13-entry group shows 12 with entries_capped="1" entries_total="13"; 4 consumers show 3
 #          with used_capped="1" used_total="4"
@@ -102,7 +102,7 @@ if has "$CFG" "len($(grp z.quiet))==1 and 'used_at' not in $(grp z.quiet)[0] and
 if has "$PYP" "any(g['p']=='pyproject.toml' and g.get('used_at')=='src/pkg/loader.py:5' and g.get('used_in')=='load_reports' and g['e']==[{'n':'fmt','target':'pkg.mod:Fmt','def':'src/pkg/mod.py:1'}] for g in $(grp x.report)) and any(g['e']==[{'n':'pkgtool','target':'pkg.cli:main','def':'src/pkg/cli.py:1'}] and 'used_at' not in g for g in $(grp console_scripts))"; then
     ok "P1 pyproject entry-points + project.scripts (src layout), select(group=) consumer"; else no "P1 pyproject: $PYP"; fi
 # S1
-if has "$SIB" "any(g['l']=='2' and g.get('used_at')=='plug/use.py:5' and g['e']==[{'n':'m','target':'plug.mod:Fmt.render','def':'plug/mod.py:3'}] for g in $(grp x.hooks)) and any(g.get('used_at')=='plug/use.py:7' and g.get('used_in')=='go' and {'n':'i','target':'plug.sub:Init','def':'plug/sub/__init__.py:1'} in g['e'] for g in $(grp x.pkg))"; then
+if has "$SIB" "any(g['l']=='2' and g.get('used_at')=='plug/use.py:5' and g['e']==[{'n':'m','target':'plug.mod:Fmt.render','def':'plug/mod.py:3'}] for g in $(grp x.hooks)) and any(g.get('used_at')=='plug/use.py:7 plug/use.py:31' and g.get('used_in')=='go by_name' and {'n':'i','target':'plug.sub:Init','def':'plug/sub/__init__.py:1'} in g['e'] for g in $(grp x.pkg))"; then
     ok "S1 key: group line, dotted method target, package target, iter_entry_points / entry_points()[] consumers, m.get not"; else no "S1 siblings: $SIB"; fi
 # K1
 if has "$SIB" "any(len(g['e'])==12 and g.get('entries_capped')=='1' and g.get('entries_total')=='13' and g.get('used_capped')=='1' and g.get('used_total')=='4' and len(g['used_at'].split())==3 for g in $(grp x.many))"; then

@@ -319,30 +319,24 @@ namespace epdetail
 {
 
 // The trailing dotted name of `s` (after trimming), e.g. "loaded.plugin.entry_point.group" → its last segment "group".
-inline std::string_view lastSegmentOfTrailingName( std::string_view s ) noexcept
+// The last dot-separated segment of a dotted name ("loaded.plugin.entry_point.group" → "group").
+inline std::string_view lastDotSegment( std::string_view name ) noexcept
 {
-    s = trimWs( s );
-    std::size_t b = s.size();
-    while( b > 0 && isDottedNameChar( s[b - 1] ) )
-    {
-        --b;
-    }
-    const std::string_view name = s.substr( b );
-    const std::size_t      dot  = name.rfind( '.' );
+    const std::size_t dot = name.rfind( '.' );
     return dot == std::string_view::npos ? name : name.substr( dot + 1 );
 }
 
+// The last segment of the dotted name `s` ENDS with (after trimming), and of the one it STARTS with.
+inline std::string_view lastSegmentOfTrailingName( std::string_view s ) noexcept
+{
+    s = trimWs( s );
+    const auto from = std::find_if_not( s.rbegin(), s.rend(), isDottedNameChar );
+    return lastDotSegment( s.substr( std::size_t( s.rend() - from ) ) );
+}
 inline std::string_view leadingName( std::string_view s ) noexcept
 {
     s = trimWs( s );
-    std::size_t e = 0;
-    while( e < s.size() && isDottedNameChar( s[e] ) )
-    {
-        ++e;
-    }
-    const std::string_view name = s.substr( 0, e );
-    const std::size_t      dot  = name.rfind( '.' );
-    return dot == std::string_view::npos ? name : name.substr( dot + 1 );
+    return lastDotSegment( s.substr( 0, std::size_t( std::ranges::find_if_not( s, isDottedNameChar ) - s.begin() ) ) );
 }
 
 // Is a '#' outside a string literal before the end of `before`? (then the occurrence sits in a comment)
@@ -370,9 +364,31 @@ inline bool inLineComment( std::string_view before ) noexcept
 // The loaders whose argument (or group= keyword) names an entry-point group: importlib.metadata entry_points / select,
 // pkg_resources iter_entry_points / get_entry_map, the importlib_metadata backport's same names.
 inline constexpr std::string_view kEpGroupLoaders[] = { "entry_points", "select", "iter_entry_points", "get_group_all", "get_group_named", "get_entry_map" };
-inline bool groupLoaderCallee( std::string_view callee ) noexcept
+
+// `b` ends with `group=`: cut it back to the call's open paren — `f( group=` → `f(`, and `f( x, y, group=` past the arguments
+// before it to the last unclosed '(' — so the caller reads the callee. False (b untouched) when the keyword is not `group`
+// or no paren is open.
+inline bool groupKeywordCall( std::string_view& b ) noexcept
 {
-    return std::ranges::find( kEpGroupLoaders, callee ) != std::end( kEpGroupLoaders );
+    std::string_view k = trimWs( b.substr( 0, b.size() - 1 ) );
+    if( !k.ends_with( "group" ) || ( k.size() > 5 && isDottedNameChar( k[k.size() - 6] ) ) )
+    {
+        return false;
+    }
+    k = trimWs( k.substr( 0, k.size() - 5 ) );
+    int         depth = 0;
+    std::size_t i     = k.ends_with( "," ) ? k.size() : 0;   // after a comma: walk back to the unclosed '('
+    while( i > 0 && depth >= 0 )
+    {
+        --i;
+        depth += k[i] == ')' ? 1 : ( k[i] == '(' ? -1 : 0 );
+    }
+    if( k.ends_with( "," ) && depth >= 0 )
+    {
+        return false;
+    }
+    b = k.ends_with( "," ) ? k.substr( 0, i + 1 ) : k;
+    return true;
 }
 
 // `before` = the line up to the literal's opening quote, `after` = from its closing quote on.
@@ -400,41 +416,15 @@ inline bool consumerShape( std::string_view before, std::string_view after ) noe
         return true;
     }
     // loader( "g" ) / loader( group="g" ) — the literal is the first argument or the group= keyword
-    if( b.ends_with( "=" ) )
+    if( b.ends_with( "=" ) && !groupKeywordCall( b ) )
     {
-        std::string_view k = trimWs( b.substr( 0, b.size() - 1 ) );
-        if( !k.ends_with( "group" ) || ( k.size() > 5 && isDottedNameChar( k[k.size() - 6] ) ) )
-        {
-            return false;
-        }
-        k = trimWs( k.substr( 0, k.size() - 5 ) );
-        if( k.ends_with( "," ) )
-        {
-            // a later keyword: the callee is the name before the last unclosed '('
-            int depth = 0;
-            std::size_t i = k.size();
-            while( i > 0 )
-            {
-                --i;
-                depth += k[i] == ')' ? 1 : ( k[i] == '(' ? -1 : 0 );
-                if( depth < 0 )
-                {
-                    break;
-                }
-            }
-            if( depth >= 0 )
-            {
-                return false;
-            }
-            k = k.substr( 0, i + 1 );
-        }
-        b = k;
+        return false;
     }
     if( !b.ends_with( "(" ) )
     {
         return false;
     }
-    return groupLoaderCallee( lastSegmentOfTrailingName( b.substr( 0, b.size() - 1 ) ) );
+    return std::ranges::find( kEpGroupLoaders, lastSegmentOfTrailingName( b.substr( 0, b.size() - 1 ) ) ) != std::end( kEpGroupLoaders );
 }
 
 }   // namespace epdetail
