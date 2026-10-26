@@ -322,13 +322,14 @@ rrun US --uses=selectBaseline \
 # through the canonical helper — one new call site, same helper.
 # 31 -> 32 (lane/cr-qd-kinds-068): quality.h defectSitesOf reads each C++ / Python / Bash test-script file for the
 # defect-shape scanners through the canonical helper — one new call site, same helper.
+# 35 -> 36 (lane/ep-manifest): findGroupConsumers reads each indexed .py file once for the entry-point group literals.
 # 32 -> 35 (lane/fc2-lego-extparent fix 1 + fix 2): cargoCrateNames and pythonRootPackageImports read each Cargo.toml / the root
 # pyproject.toml through the canonical helper (two call sites, fix 1), and rustFileAlias (called by rustOutsideUses) reads a .rs file to find its
 # `extern crate … as` / `use … as` crate aliases (one more, fix 2) — three new call sites, same helper.
 rrun RW --uses=readWholeFile \
-&& { [ "$( cnt "$RW" )" = 35 ] \
-    && ok "repo: --uses=readWholeFile count=35 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
-    || no "repo: --uses=readWholeFile expected 35, got '$( cnt "$RW" )'"; }
+&& { [ "$( cnt "$RW" )" = 36 ] \
+    && ok "repo: --uses=readWholeFile count=36 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
+    || no "repo: --uses=readWholeFile expected 36, got '$( cnt "$RW" )'"; }
 rrun WC --callers=writeTally \
 && { [ "$( cnt "$WC" )" = 1 ] \
     && ok "repo: --callers=writeTally count=1 (was 0 — both template call sites are in writeDocDriftPage)" \
