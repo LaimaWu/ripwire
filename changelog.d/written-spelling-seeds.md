@@ -19,5 +19,5 @@ scope-macro line at namespace scope (`FOO_REGISTRATION(x);`) is unreadable, so `
 `Filter::decodeHeaders` in a macro-line file makes the spelling unknown; an anonymous or inline namespace in the middle of a
 C++ chain; a TypeScript interface and an unrelated same-named class in another file bind together as a disclosed `defs=2`. Measured
 on the 15 failing listed argvs of the round-6 tables: of the 11 that name one definition, 6 now resolve (one Go, two Python, three
-TypeScript, one of them a `--connect`), 2 stay refused behind the C++ macro-line floor, and 3 sit in Rust files the grammar fails to parse
-(a separate fix). Gate: `test/writtenspellingcheck.sh`.
+TypeScript, one of them a `--connect`), 2 stay refused behind the C++ macro-line floor, and the 3 that sat in Rust files the grammar
+failed to parse now resolve through the Rust precise-capture re-parse (zed `Pane::save_item`, `Editor::backspace`, `Workspace::new_local`). Gate: `test/writtenspellingcheck.sh`.
