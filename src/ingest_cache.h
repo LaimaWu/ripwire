@@ -148,7 +148,10 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 // 43 (train 36, #155 Kotlin scope functions; the PR's placeholder was 41): the `trailingLambda` u8 in writeRef/readRef changes
 // the on-disk ref record, so an older cache must be rejected. 43 sits above every live value: main / train 35 40, #438's 41,
 // lane rust-degraded's placeholder 42.
-constexpr std::uint32_t kCacheVersion = 43;           // 43: train 36 — #155 Kotlin trailingLambda ref byte (above 40 / 41 / 42)
+// 44 (train 37b, lane rust-degraded; its placeholder was 42): the FILE record gains a sixth FileHealth u32, useBoundsBlanked
+// (the Rust precise-capture re-parse, src/rustusebounds.h), so an older cache must be rejected. 44 is above train 36's 43.
+constexpr std::uint32_t kCacheVersion = 44;           // 44: train 37b — rust-degraded FileHealth::useBoundsBlanked (above 43 / placeholder 42)
+                                                      // 43: train 36 — #155 Kotlin trailingLambda ref byte (above 40 / 41 / 42)
                                                       // 40: train 34 — strictly above main 39 and every live value (train-33 refs, #432 39; #427 / #429 38): the
                                                       //    fc3-js-rebind record change (LocalBindKind JsRebind, appended) lands; no other train-34 lane changed a format.
                                                       // 39: train 33 — strictly above main 36 and every live value (lane l6-iface 38, #427 / #429 38): the
@@ -358,7 +361,10 @@ constexpr std::uint32_t kCacheVersion = 43;           // 43: train 36 — #155 K
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 231;          // bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 233;          // bump on any grammar/.scm/extraction change
+                                                      // 233 = 2026-10-26 (train 37b: lane rust-degraded, placeholder 229 / rich 230): a Rust file whose
+                                                      //   first parse holds error bytes is re-parsed with its precise-capturing use<..> bounds blanked
+                                                      //   (src/rustusebounds.h) — different defs. Strictly above train 36's 231 (rich 232). Rich file tag 234.
                                                       // 231 = 2026-10-25 (train 36: #438 Kotlin trailing-lambda capture, #437, #431): strictly above every
                                                       //   live number — main / train 35 226 (rich 227), #438's placeholder 228, lane rust-degraded's placeholder
                                                       //   229 (rich 230). Rich file tag 232. kCacheVersion 43 moves with it (#438's trailingLambda ref byte).
@@ -2690,6 +2696,7 @@ inline bool readFileRecord( ByteR& r, bool captureValueUses, std::vector<std::ui
     ffOut.health.fileBytes = r.u32();
     ffOut.health.wsBytes   = r.u32();
     ffOut.health.macroBlanked = r.u32();   // v20: member-macro re-parse — rides the record so the disclosure survives a warm run
+    ffOut.health.useBoundsBlanked = r.u32();   // v44: its Rust layer (use<..> bounds blanked) — same reason
     if( !r.ok )
     {
         return false;
@@ -3323,6 +3330,7 @@ inline void saveCache( const std::string& path, std::string_view rootDir, const 
                 const FileHealth fh = f < fileHealth.size() ? fileHealth[f] : FileHealth{};
                 w.u32( fh.errNodes );  w.u32( fh.errBytes );  w.u32( fh.fileBytes );  w.u32( fh.wsBytes );
                 w.u32( fh.macroBlanked );   // v20: the member-macro re-parse's per-file count (0 ⇒ the first parse was kept)
+                w.u32( fh.useBoundsBlanked );   // v44: the Rust precise-capture re-parse's per-file count (0 ⇒ first parse kept)
             }
             if( captureValueUses )
             {

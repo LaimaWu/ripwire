@@ -2868,6 +2868,10 @@ for f in leak_anon.cpp leak_plain.cpp leak_lambda.cpp leak_c.c leak_objc.m leak_
 done
 "$BIN" "$XHOT"  --skipped --legend=compact >"$TMP/s.hot"  2>/dev/null </dev/null
 "$BIN" "$XLEAK" --skipped --legend=compact >"$TMP/s.leak" 2>/dev/null </dev/null
+# the Rust layer of the same re-parse (src/rustusebounds.h): its row and root counts take the same live route
+XRUST="$TMP/xrust"; mkdir -p "$XRUST"
+for f in capture_plus.rs capture_split.rs; do cp "$ROOT/test/macroreparsefix/rust/$f" "$XRUST/" 2>/dev/null || no "(S) fixture missing: test/macroreparsefix/rust/$f"; done
+"$BIN" "$XRUST" --skipped --legend=compact >"$TMP/s.rust" 2>/dev/null </dev/null
 # #60: graphlegend.h kModScopeLegend is conditional and its clause opens with `t="modscope"`, so the source
 # reader above asks for a `t` term. It deliberately has none. `t=` is not an absent-at-zero attribute like
 # the rest of this population — it is on EVERY <s> row of every ranked answer, and a term keyed on it would
@@ -2880,7 +2884,7 @@ MODS="$TMP/modscope/src"; mkdir -p "$MODS"
 printf 'export function setPhase(p: string): void { console.log(p) }\n' > "$MODS/lifecycle.ts"
 printf "import { setPhase } from './lifecycle'\nsetPhase('starting')\n"  > "$MODS/index.ts"
 "$BIN" "$TMP/modscope" --no-cache --callers=setPhase --legend=compact >"$TMP/s.mods" 2>/dev/null </dev/null
-liveDoc(){ case "$1" in extent_suspect_files|extent_suspect_syms) printf '%s' "$TMP/s.hot" ;; macro_blanked_files|macro_blanked) printf '%s' "$TMP/s.leak" ;; t) printf '%s' "$TMP/s.mods" ;; *) printf '' ;; esac; }
+liveDoc(){ case "$1" in extent_suspect_files|extent_suspect_syms) printf '%s' "$TMP/s.hot" ;; macro_blanked_files|macro_blanked) printf '%s' "$TMP/s.leak" ;; use_bounds_blanked_files|use_bounds_blanked) printf '%s' "$TMP/s.rust" ;; t) printf '%s' "$TMP/s.mods" ;; *) printf '' ;; esac; }
 while IFS='|' read -r kind name where <&3; do
     case "$kind" in
         PASS) ok "(S) $name" ;;
