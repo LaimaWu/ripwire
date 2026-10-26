@@ -818,12 +818,24 @@ inline bool languageInvokedSymbol( const Symbol& s ) noexcept
     return false;
 }
 
-// Python test-framework entry points (#228). unittest and Django's TestCase call setUp/tearDown/setUpClass/
-// tearDownClass/setUpTestData around tests, setUpModule/tearDownModule/load_tests around a module, runTest/asyncSetUp/asyncTearDown, and run every
-// test* method as a test. Pytest runs test_* too. No call in the indexed tree names them, so zero in-edges says
-// nothing. Name-level, like the dunder rule in languageInvokedSymbol: errs toward live. The test* clause also
-// needs a test module (isTestPath, or Django's tests.py), so a helper named testSomething in application code
-// still reads as dead.
+// Python test-framework hook names, ONE table per framework (CONTRIBUTING: one place per feature family). Two consumers read
+// them: pythonFrameworkInvokedSymbol below (the --quality-delta dead set) and pythonRunnerRoot (--dead-code / --safe-delete).
+//   kXunitHooks           pytest's xunit-style fixtures, collected from a test module with no call in the tree
+//   kUnittestHooks        unittest/Django TestCase methods the runner calls around a test (class scope)
+//   kUnittestModuleHooks  unittest's module-level entry points
+inline constexpr std::array<std::string_view, 8> kXunitHooks = { "setup_module", "teardown_module", "setup_function", "teardown_function",
+                                                                  "setup_class",  "teardown_class",  "setup_method",   "teardown_method" };
+inline constexpr std::array<std::string_view, 8> kUnittestHooks = { "setUp",         "tearDown",     "setUpClass", "tearDownClass",
+                                                                    "setUpTestData", "runTest",      "asyncSetUp", "asyncTearDown" };
+inline constexpr std::array<std::string_view, 3> kUnittestModuleHooks = { "setUpModule", "tearDownModule", "load_tests" };
+
+// Python test-framework entry points (#228). unittest and Django's TestCase call the kUnittestHooks names around tests, the
+// kUnittestModuleHooks names around a module, and run every test* method as a test. Pytest runs test_* too, and calls the
+// kXunitHooks names (setup_method, teardown_module, ...) of a test module. No call in the indexed tree names them, so zero
+// in-edges says nothing. Name-level, like the dunder rule in languageInvokedSymbol: errs toward live. The test* and xunit
+// clauses also need a test module (isTestPath, or Django's tests.py), so a helper named testSomething or setup_method in
+// application code still reads as dead. Not covered, still reported: pytest's conftest hooks (pytest_configure ...) and
+// @pytest.fixture functions.
 inline bool pythonFrameworkInvokedSymbol( const Symbol& s, std::string_view p ) noexcept
 {
     if( !langFacts( s.lang ).frameworkEntryHooks || ( s.kind != SymKind::Method && s.kind != SymKind::Function ) )
@@ -831,12 +843,11 @@ inline bool pythonFrameworkInvokedSymbol( const Symbol& s, std::string_view p ) 
         return false;
     }
     const std::string_view n = s.name;
-    if( n == "setUp" || n == "tearDown" || n == "setUpClass" || n == "tearDownClass" || n == "setUpTestData"
-        || n == "setUpModule" || n == "tearDownModule" || n == "load_tests" || n == "runTest" || n == "asyncSetUp" || n == "asyncTearDown" )
+    if( std::ranges::contains( kUnittestHooks, n ) || std::ranges::contains( kUnittestModuleHooks, n ) )
     {
         return true;
     }
-    if( n.substr( 0, 4 ) != "test" )
+    if( n.substr( 0, 4 ) != "test" && !std::ranges::contains( kXunitHooks, n ) )
     {
         return false;
     }
@@ -1321,7 +1332,7 @@ inline PythonReceivers pythonReceiverParameters( const IngestResult& ing )
     receivers.bound.assign( ing.symbols.size(), 0 );
     for( const Binding& b : ing.bindings )
     {
-        if( b.fromSymbol >= receivers.kind.size() || !langFacts( ing.symbols[b.fromSymbol].lang ).frameworkEntryHooks
+        if( b.fromSymbol >= receivers.kind.size() || !langFacts( ing.symbols[b.fromSymbol].lang ).closureReceiverDispatch
             || b.kind != LocalBindKind::VarDecl || b.spanStart != 0 || b.spanEnd != 0 )
         {
             continue;
@@ -1363,7 +1374,7 @@ inline std::vector<std::pair<NodeId, std::string_view>> pythonDispatchRequests( 
     for( const Reference& r : ing.references )
     {
         const bool selfOrCls = r.recv == RecvKind::ThisObj || ( r.recv == RecvKind::NamedVar && r.recvVar == "cls" );
-        if( !langFacts( r.lang ).frameworkEntryHooks || r.role != RefRole::Call || r.fromSymbol >= scopes.owner.size()
+        if( !langFacts( r.lang ).closureReceiverDispatch || r.role != RefRole::Call || r.fromSymbol >= scopes.owner.size()
             || !r.qualifier.empty() || !selfOrCls )
         {
             continue;
@@ -10164,15 +10175,11 @@ inline bool pythonRunnerRoot( std::string_view path, const Symbol& s, std::strin
     const std::string_view baseName   = slash == std::string_view::npos ? path : path.substr( slash + 1 );
     const bool             pytestFile = ( baseName.starts_with( "test_" ) || baseName.ends_with( "_test.py" ) ) && baseName.ends_with( ".py" );
     const std::string_view name       = s.name;
-    constexpr std::array<std::string_view, 8> kXunitHooks = { "setup_module", "teardown_module", "setup_function", "teardown_function",
-                                                              "setup_class",  "teardown_class",  "setup_method",   "teardown_method" };
-    constexpr std::array<std::string_view, 6> kUnittestHooks = { "setUp", "tearDown", "setUpClass", "tearDownClass", "asyncSetUp", "asyncTearDown" };
-    const auto listed = []( const auto& table, std::string_view n ) noexcept { return std::find( table.begin(), table.end(), n ) != table.end(); };
-    if( pytestFile && ( name.starts_with( "test" ) || listed( kXunitHooks, name ) ) )
+    if( pytestFile && ( name.starts_with( "test" ) || std::ranges::contains( kXunitHooks, name ) ) )
     {
         return true;
     }
-    if( s.scope.empty() || !( name.starts_with( "test" ) || listed( kUnittestHooks, name ) ) )
+    if( s.scope.empty() || !( name.starts_with( "test" ) || std::ranges::contains( kUnittestHooks, name ) ) )
     {
         return false;
     }

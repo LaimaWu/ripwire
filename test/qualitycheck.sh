@@ -582,6 +582,43 @@ class FwCase(BaseCase):
 class Svc:
     def testThing(self):
         return 2
+
+    def setup_method(self, method):
+        return 3
+""")
+(root / "tests/test_xunit.py").write_text("""def setup_module(module):
+    return 1
+
+
+def teardown_module(module):
+    return 2
+
+
+def setup_function(function):
+    return 3
+
+
+def teardown_function(function):
+    return 4
+
+
+class TestShop:
+    @classmethod
+    def setup_class(cls):
+        return 5
+
+    @classmethod
+    def teardown_class(cls):
+        return 6
+
+    def setup_method(self, method):
+        return 7
+
+    def teardown_method(self, method):
+        return 8
+
+    def test_buy(self):
+        return 9
 """)
 (root / "checks").mkdir()
 (root / "checks/tests.py").write_text("""from django.test import TestCase
@@ -613,9 +650,12 @@ git("commit", "-qm", "django hooks")
 # (never_called, unused_helper) are the control: the arm must still see real dead code in this shape.
 rows = dead_rows(run("--quality-delta=HEAD~1..HEAD"))
 # Negatives: a test* def in application code stays dead (the test-module clause), and a closure that binds self as
-# its own parameter does not keep the host's overrides live (the bound-receiver clause).
+# its own parameter does not keep the host's overrides live (the bound-receiver clause). The pytest xunit hooks in
+# tests/test_xunit.py are live (kXunitHooks, shared with pythonRunnerRoot); the same name in application code
+# (Svc.setup_method) is not.
 expected = sorted(["tests/base_case.py::BaseCase::never_called", "unused_helper", "test_helper",
-                   "app_helpers.py::Svc::testThing", "tests/test_fw.py::FwCase::bound_hook"])
+                   "app_helpers.py::Svc::testThing", "app_helpers.py::Svc::setup_method",
+                   "tests/test_fw.py::FwCase::bound_hook"])
 assert rows == expected, rows
 print("django hooks and closure dispatch stay live; the two orphans gate")
 PYHOOKS

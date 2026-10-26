@@ -34,6 +34,10 @@ SRC="$ROOT/src/quality.h"
 ING="$ROOT/src/ingest_cache.h"   # extraction-identity constants moved here (2026-08-29 ingest.cpp section split); the hashed CONCAT label keeps its historical spelling so the pin holds
 PIN="$ROOT/test/qschemetrip.hash"
 # RE-PIN LOG (the pin is a bare hash, so its justification has to live here).
+# 2026-10-25, #437 maintainer finish (#228): RE-PINNED ONCE with UPDATE_GOLDEN=1 (e0519551… -> 957e1fb2…) after pythonFrameworkInvokedSymbol
+#   gained the pytest xunit hooks (kXunitHooks, shared with pythonRunnerRoot) and pythonReceiverParameters / pythonDispatchRequests moved
+#   from the frameworkEntryHooks fact to its own closureReceiverDispatch fact (no behavior change). kQSnapCacheScheme stays 23, the
+#   PR's placeholder: the train renumbers it and re-pins again.
 # 2026-10-24, #228 (Django/unittest hooks, closure self-dispatch): RE-PINNED with UPDATE_GOLDEN=1 after isDeadCandidate gained
 #   pythonFrameworkInvokedSymbol and pythonMethodOwners / pythonDispatchRequests gained the closure host. kQSnapCacheScheme 22 -> 23.
 # 2026-10-24, train 34 (lean2b, fc2-lego-extparent, honest-lex, ind4b-k5-tighten-k5c, hop1, fc3-js-rebind merged onto main
