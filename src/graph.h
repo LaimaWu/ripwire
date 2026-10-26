@@ -13002,7 +13002,7 @@ inline void declToDefFollowThrough( const IngestResult& ing, std::string_view fi
 // Scope::name tier resolves at once. Probed LAST, only when every other tier matched nothing, and only for a spec with
 // no ':' (a file:name or Scope::name spelling is never re-read) and no '/' (a path): each '.' and '#' becomes "::" and
 // the Scope::name tier answers with exactly its own match (so a dotted spelling resolves precisely where its `::`
-// spelling does, and a namespace-qualified one does not, as `ns::Class::method` does not). Purely additive: a spec that resolved before resolves identically, because this runs only on an empty result.
+// spelling does; a namespace- or module-qualified one is the written-spelling tier's, below). Purely additive: a spec that resolved before resolves identically, because this runs only on an empty result.
 // Several matches are returned as they are (the verbs' defs= discloses a union; --edit-check refuses and lists them).
 // `found` is what the earlier tiers matched, returned untouched unless it is empty.
 inline std::vector<NodeId> resolveAllByDottedScope( const IngestResult& ing, std::string_view spec, std::vector<NodeId> found )

@@ -745,7 +745,11 @@ not need a change to the other two.
 **1. Seeds: where a walk starts.** A seed resolver turns what the user typed into an ordered list of candidate
 definitions and says how it got there. Input spellings: a bare name, `file:name`, `Scope::name`, `Class.method`,
 the canonical id the tool prints, `@FILE:LINE`, a `*` glob, and the changed symbols of a diff. All of them go through
-`resolveAllByNameQualified` (`graph.h`) or one of its tiers. The diff-hunk producer (`diffhunks.h`, `situ.h`) maps
+`resolveAllByNameQualified` (`graph.h`) or one of its tiers. Its last tier, `resolveAllByWrittenSpelling`, accepts the
+spelling the source writes when every other tier found nothing: a TypeScript method's `Class.method` (owner read by
+containment), a module, crate or package prefix that names the definition's directories or file stem (`json.dump`,
+`batcheval.Put`, `crate::buf::Buffer::edit`), and a C++ owner read off the source's namespaces and written qualifier;
+it binds only one entity, else the caller refuses as before. The diff-hunk producer (`diffhunks.h`, `situ.h`) maps
 hunks to the symbols whose bodies they touch, and falls back to the whole file when no body holds a hunk
 (contributed by @llvm-x86 in #423). Several definitions with one name are ordered by one total order, the name tower
 (`applyNameTower`, `kindSpecificity` in `model.h`; contributed by @mpapis in #432). A verb that needs ONE focus takes
