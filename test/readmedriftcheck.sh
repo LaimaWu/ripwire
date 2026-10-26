@@ -758,6 +758,8 @@ esac
 # (G4-THIN) the guard counts DATA rows only. Mutation controls on a synthetic cut map (red on the gate before G4-THIN, which counted the
 # legend's literal `<s t= n= ...>` and every stem row as a row: 5 ranked rows + the literal + 14 stem rows = 20, not below its
 # 20 guard, so it passed): 5 ranked rows padded that way must FAIL the presence guard; 10 ranked rows with the same padding pass.
+# (a) alone catches the stem-row half only (cr-prepass-37a mutation: dropping the `"k" not in attrs` test left it green, since
+# 5 + the literal = 6 is still below the guard); (c) is the legend-literal half: 9 ranked rows + the literal = 10 would pass.
 python3 - "$TMP" <<'PY'
 import sys
 tmp = sys.argv[ 1 ]
@@ -769,12 +771,18 @@ def mk( est, shown, n ):
 open( tmp + "/g4_bare.xml", "w" ).write( mk( 900, 99, 30 ) )
 open( tmp + "/g4_thin.xml", "w" ).write( mk( 100, 19, 5 ) )
 open( tmp + "/g4_ok.xml", "w" ).write( mk( 100, 24, 10 ) )
+open( tmp + "/g4_thin9.xml", "w" ).write( mk( 100, 23, 9 ) )
 PY
 v_thin="$( python3 "$TMP/g4.py" "$TMP/g4_bare.xml" "$TMP/g4_thin.xml" )"
 v_ok="$( python3 "$TMP/g4.py" "$TMP/g4_bare.xml" "$TMP/g4_ok.xml" )"
+v_thin9="$( python3 "$TMP/g4.py" "$TMP/g4_bare.xml" "$TMP/g4_thin9.xml" )"
 case "$v_thin" in
     FAIL*presence*) ok "(G4-THIN a) 5 ranked rows padded with the legend literal and 14 stem rows still FAIL the presence guard" ;;
     *)              no "(G4-THIN a) a map of 5 ranked rows padded to 20 'rows' by the legend literal and stem rows was not refused: $v_thin" ;;
+esac
+case "$v_thin9" in
+    FAIL*presence*) ok "(G4-THIN c) 9 ranked rows plus the legend literal (10 'rows') still FAIL the presence guard" ;;
+    *)              no "(G4-THIN c) 9 ranked rows were counted up to the guard by the legend literal: $v_thin9" ;;
 esac
 case "$v_ok" in
     OK*) ok "(G4-THIN b) 10 ranked rows pass the presence guard with or without stem-row padding" ;;
