@@ -2095,6 +2095,12 @@ inline constexpr std::string_view kMapStemLegend =
     "<!-- stem=\"1\": the class/struct/interface a file is named for (2+ name words, all in the file name), "
     "added after the file's top-K rows because the rank cut left it out (no kept row dropped; counted in shown=) -->";
 
+// The same clause under RIPWIRE_NO_MAP_STEM_TIGHT (CodeRabbit 4381174514): the loose rule needs ONE shared name word, so the tight
+// clause's "2+ name words, all in the file name" would be false. (compactlegend.h's stem reading is never printed beside a map: this comment is spelled in both dialects.)
+inline constexpr std::string_view kMapStemLooseLegend =
+    "<!-- stem=\"1\" (loose rule, RIPWIRE_NO_MAP_STEM_TIGHT): the class/struct/interface a file is named for (1+ name word in the file name), "
+    "added after the file's top-K rows because the rank cut left it out (no kept row dropped; counted in shown=) -->";
+
 inline bool mapStemOn()
 {
     return std::getenv( "RIPWIRE_NO_MAP_STEM" ) == nullptr;
@@ -3378,7 +3384,7 @@ inline void serialize( std::FILE* out, const IngestResult& ing, const std::vecto
     }
     if( !stemRows.empty() )
     {
-        legend += kMapStemLegend;           // MAP-STEM: charged to the map that carries stem="1"
+        legend += mapStemTightOn() ? kMapStemLegend : kMapStemLooseLegend;   // MAP-STEM: charged to the map that carries stem="1"; the rule the run selected
     }
     if( stemPick.cut > 0 )
     {

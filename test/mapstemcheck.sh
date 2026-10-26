@@ -31,6 +31,7 @@
 #   E5 [G] pkg/sinkwriter.py keeps IOSinkWriter (`io` is under 3 bytes: it never counts against completeness)
 #   E6 [P] --json twin: the same stem rows (no cache/widgetstore row, GizmoLoader)   E7 [G] RIPWIRE_NO_MAP_STEM_TIGHT=1 restores the loose rows
 #   E8 [P] shown= counts exactly the rows printed (3 stem rows, not 5)
+#   E9-E12 (CodeRabbit 4381174514) the stem legend (full and compact dialects; the map keeps the XML clause in both) states the rule the run selected: tight = 2+ name words all in the file name, RIPWIRE_NO_MAP_STEM_TIGHT=1 = 1+ name word
 #   F1-F3 (cr-prepass-37a, "already held" check): a KEPT class holds the slot only if it is itself a complete namesake. Fixture
 #          test/mapstemheldfix, --top-k=3: pkg/formparsers.py keeps FormParserError (form+parser of form+parser+error: incomplete)
 #   F1 [P] the complete FormParser still gains its stem="1" row behind the kept FormParserError   F2 [P] --json twin
@@ -100,6 +101,10 @@ runh f3 -- --top-k=5
 runt e1 -- --top-k=7
 runt e6 -- --top-k=7 --json
 runt e7 RIPWIRE_NO_MAP_STEM_TIGHT=1 -- --top-k=7
+runt e9 RIPWIRE_NO_MAP_STEM_TIGHT=1 -- --top-k=7 --legend=full
+runt e10 -- --top-k=7 --legend=full
+runt e11 RIPWIRE_NO_MAP_STEM_TIGHT=1 -- --top-k=7 --legend=compact
+runt e12 -- --top-k=7 --legend=compact
 runrel d1 -- --max-tokens=1060
 runrel d1off RIPWIRE_NO_MAP_STEM=1 -- --max-tokens=1060
 runrel d2 -- --max-tokens=1000
@@ -197,6 +202,13 @@ if m="$( chk stemset "$TMP/e7.out" pkg/cache.py CacheBackendFactory )" && m="$( 
 if m="$( chk keptstem "$TMP/f1.out" pkg/formparsers.py FormParserError FormParser )"; then ok "F1 a kept incomplete FormParserError does not suppress the complete FormParser"; else no "F1 $m"; fi
 if m="$( chk keptstemjson "$TMP/f2.out" pkg/formparsers.py FormParserError FormParser )"; then ok "F2 --json twin: the same rows"; else no "F2 $m"; fi
 if m="$( chk keptstem "$TMP/f3.out" pkg/formparsers.py FormParser "" )"; then ok "F3 a kept complete namesake still holds the slot (FormParser kept, no stem row)"; else no "F3 $m"; fi
+# E9-E12 (CodeRabbit 4381174514): the legend states the rule the run selected - the tight clause ("2+ name words, all in the file name") is false under the loose rule
+leg(){ python3 -c "import re,sys; print(' '.join(re.findall(r'<!--(.*?)-->', open(sys.argv[1], encoding='utf-8').read(), flags=re.S)))" "$1"; }
+L9="$( leg "$TMP/e9.out" )"; L10="$( leg "$TMP/e10.out" )"; L11="$( leg "$TMP/e11.out" )"; L12="$( leg "$TMP/e12.out" )"
+case "$L9" in *'stem="1" (loose rule'*'1+ name word in the file name'*) case "$L9" in *'2+ name words, all in the file name'*) no "E9 the loose run still carries the tight claim" ;; *) ok "E9 loose rule, full legend: states 1+ name word, not the tight claim" ;; esac ;; *) no "E9 the loose run carries no loose stem clause" ;; esac
+case "$L10" in *'2+ name words, all in the file name'*) case "$L10" in *'loose rule'*) no "E10 the tight run names the loose rule" ;; *) ok "E10 tight rule, full legend: 2+ name words, all in the file name" ;; esac ;; *) no "E10 the tight run lost its stem clause" ;; esac
+case "$L11" in *'stem="1" (loose rule'*'1+ name word in the file name'*) case "$L11" in *'2+ name words, all in the file name'*|*'s stem=1: the type the file is named for (2+'*) no "E11 the loose compact legend carries a tight claim" ;; *) ok "E11 loose rule, compact legend: the stem clause says 1+ name word (no tight reading)" ;; esac ;; *) no "E11 the loose compact legend has no loose stem clause" ;; esac
+case "$L12" in *'2+ name words, all in the file name'*) case "$L12" in *'loose rule'*) no "E12 the tight compact legend names the loose rule" ;; *) ok "E12 tight rule, compact legend: 2+ name words, all in the file name" ;; esac ;; *) no "E12 the tight compact legend lost its stem clause" ;; esac
 if m="$( chk shownrows "$TMP/e1.out" 3 )"; then ok "E8 shown= counts the 3 stem rows and the ranked rows printed, no more"; else no "E8 $m"; fi
 if m="$( chk prefix "$TMP/a1.out" "$TMP/a1off.out" )"; then ok "C1 no kept row lost or moved: only the stem row, its clause and shown= differ"; else no "C1 $m"; fi
 if m="$( chk budget "$TMP/d1.out" "$TMP/d1off.out" )"; then ok "D1 --max-tokens=1060: no stem row, the same ranked rows as the no-stem run"; else no "D1 $m"; fi
