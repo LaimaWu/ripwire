@@ -12571,13 +12571,9 @@ inline std::vector<NodeId> resolveAllByCanonicalId( const IngestResult& ing, std
 // inside a same-named Class/Struct/Interface of the match set, ranks just BELOW the type kinds and above a free
 // function. A method named like an UNRELATED type (a Go getter `func (s *Server) Config() Config`) is not a
 // constructor and keeps the Method rung. Ranks are doubled so the constructor rung sits between two ladder values.
-// The tower's TYPE kinds, and a type's lexical enclosure of a member (same file, byte span): the containment rule
-// nameTowerRanks reads a constructor by, and the written-spelling tier (resolveAllByWrittenSpelling) reads a TS/JS/Java
-// method's owner by — one rule, so the two cannot drift.
-inline bool isTowerTypeKind( SymKind k ) noexcept
-{
-    return k == SymKind::Class || k == SymKind::Interface || isStructOrNamedType( k );
-}
+// A type's lexical enclosure of a member (same file, byte span): the containment rule nameTowerRanks reads a constructor
+// by, and the written-spelling tier (resolveAllByWrittenSpelling) reads a TS/JS/Java method's owner by — one rule, so the
+// two cannot drift.
 inline bool typeEnclosesMember( const Symbol& ty, const Symbol& m ) noexcept
 {
     return ty.fileId == m.fileId && ty.sigStartByte <= m.sigStartByte && m.endByte <= ty.endByte;
@@ -12585,7 +12581,7 @@ inline bool typeEnclosesMember( const Symbol& ty, const Symbol& m ) noexcept
 
 inline std::vector<int> nameTowerRanks( const IngestResult& ing, std::span<const NodeId> ids )
 {
-    const auto typeKind = []( SymKind k ) noexcept { return isTowerTypeKind( k ); };
+    const auto typeKind = []( SymKind k ) noexcept { return k == SymKind::Class || k == SymKind::Interface || isStructOrNamedType( k ); };
     std::vector<NodeId> types;
     for( const NodeId id : ids )
     {
@@ -13248,12 +13244,13 @@ inline std::optional<std::vector<std::string>> cppFullChainOf( const Symbol& s, 
     return chain;
 }
 
-inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing, std::string_view spec )
+// `found` is what the earlier tiers matched, returned untouched unless it is empty (resolveAllByDottedScope's contract).
+inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing, std::string_view spec, std::vector<NodeId> found )
 {
-    const std::optional<WrittenSpec> w = splitWrittenSpec( spec );
+    const std::optional<WrittenSpec> w = found.empty() ? splitWrittenSpec( spec ) : std::nullopt;
     if( !w )
     {
-        return {};
+        return found;
     }
     std::vector<NodeId> cands;
     for( const Symbol& s : ing.symbols )
@@ -13281,7 +13278,7 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
     std::vector<NodeId> types;
     for( const Symbol& t : ownerFiles.empty() ? std::span<const Symbol>{} : std::span<const Symbol>( ing.symbols ) )
     {
-        if( isTowerTypeKind( t.kind ) && std::binary_search( ownerFiles.begin(), ownerFiles.end(), t.fileId ) )
+        if( namespaceCompatible( RefRole::Type, t.kind ) && std::binary_search( ownerFiles.begin(), ownerFiles.end(), t.fileId ) )
         {
             types.push_back( t.id );
         }
@@ -13441,7 +13438,7 @@ inline std::vector<NodeId> resolveAllByNameQualified( const IngestResult& ing, s
     declToDefFollowThrough( ing, file, name, out, unprovenDefCountOut );
     out = applyNameTower( ing, std::move( out ) );   // the tower orders the name/file tier (task C); the early tiers above stay as-is
     out = resolveAllByDottedScope( ing, spec, std::move( out ) );   // `Class.method` / `Class#method`, only when `out` is empty
-    return out.empty() ? resolveAllByWrittenSpelling( ing, spec ) : out;   // the source's own spelling, last (see its contract)
+    return resolveAllByWrittenSpelling( ing, spec, std::move( out ) );   // the source's own spelling, last, only when still empty
 }
 
 // ─── MEMBER VARIABLES: `Owner.field` selection + per-site use resolution (the member-variable round, card A3) ─
