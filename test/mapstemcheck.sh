@@ -23,10 +23,18 @@
 #          one) and no stem="1" row
 #   D2 [P] at --max-tokens=1000 (WidgetParser is cut, its stem row would have been added) it says what it left out: stem_cut=1 on the root, defined by its legend clause, shown= = the rows printed
 #   D3 [P] --json twin: "stem_cut":1, no "stem":1 row   D4 [G] no budget (A1) and RIPWIRE_NO_MAP_STEM=1 carry no stem_cut
+#   E1-E8 (lane map-stem-tight, owner 2026-10-25: MAP-STEM cost +16.9 KB over 14 rows for 1): a stem row must be a COMPLETE namesake -
+#          >= 2 of the class name's >= 3-byte subtokens and ALL of them inside the file stem. Fixture test/mapstemtightfix, --top-k=7:
+#   E1 [P] pkg/cache.py (CacheBackendFactory: 1 of 3 subtokens) gains no stem row   E2 [P] pkg/widgetstore.py (WidgetRegistryStore: 2 of 3) gains none
+#   E3 [G] pkg/widgetparsers.py keeps WidgetParser stem="1" (2 of 2: the strong match stays)
+#   E4 [P] pkg/gizmoloader.py shows GizmoLoader (2 of 2), not the larger GizmoLoaderBase (2 of 3): an incomplete class does not shadow the complete one
+#   E5 [G] pkg/sinkwriter.py keeps IOSinkWriter (`io` is under 3 bytes: it never counts against completeness)
+#   E6 [P] --json twin: the same stem rows (no cache/widgetstore row, GizmoLoader)   E7 [G] RIPWIRE_NO_MAP_STEM_TIGHT=1 restores the loose rows
+#   E8 [P] shown= counts exactly the rows printed (3 stem rows, not 5)
 set -u
 ROOT="$( cd "$( dirname "$0" )/.." && pwd )"
 . "$ROOT/test/lib/clean-env.sh"
-unset RIPWIRE_NO_MAP_STEM
+unset RIPWIRE_NO_MAP_STEM RIPWIRE_NO_MAP_STEM_TIGHT
 BIN="${1:-${RIPWIRE_BIN:-$ROOT/build/ripwire}}"
 [ "${BIN#/}" = "$BIN" ] && BIN="$ROOT/$BIN"
 echo "mapstemcheck: BIN=$BIN"
@@ -36,7 +44,9 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 FIX="$ROOT/test/mapstemfix"
+FIXT="$ROOT/test/mapstemtightfix"
 [ -f "$FIX/pkg/widgetparsers.py" ] || { echo "fixture $FIX missing"; exit 2; }
+[ -f "$FIXT/pkg/widgetparsers.py" ] || { echo "fixture $FIXT missing"; exit 2; }
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"; mkdir -p "$HOME"
 
@@ -64,6 +74,17 @@ runrel(){
     ( cd "$FIX" || exit 1; env ${envs[@]+"${envs[@]}"} "$BIN" . "$@" --cache="$TMP/$name.cache" >"$TMP/$name.out" 2>"$TMP/$name.err" ) \
         || no "$name: ripwire exited non-zero ($( head -c 200 "$TMP/$name.err" | tr '\n' ' ' ))"
 }
+runt(){
+    local name="$1"; shift
+    local envs=()
+    while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do envs+=( "$1" ); shift; done
+    shift
+    ( cd "$FIXT" || exit 1; env ${envs[@]+"${envs[@]}"} "$BIN" "$FIXT" "$@" --cache="$TMP/$name.cache" >"$TMP/$name.out" 2>"$TMP/$name.err" ) \
+        || no "$name: ripwire exited non-zero ($( head -c 200 "$TMP/$name.err" | tr '\n' ' ' ))"
+}
+runt e1 -- --top-k=7
+runt e6 -- --top-k=7 --json
+runt e7 RIPWIRE_NO_MAP_STEM_TIGHT=1 -- --top-k=7
 runrel d1 -- --max-tokens=1060
 runrel d1off RIPWIRE_NO_MAP_STEM=1 -- --max-tokens=1060
 runrel d2 -- --max-tokens=1000
@@ -104,6 +125,21 @@ elif cmd == "cutjson":
     if d.get("stem_cut") != 1 or any(s.get("stem") for x in d["r"] for s in x["s"]): print(d.get("stem_cut")); sys.exit(1)
 elif cmd == "nocut":
     if "stem_cut" in t: print("stem_cut present"); sys.exit(1)
+elif cmd == "stemset":   # stemset OUT FILE EXPECTED(comma list, empty = none): the stem="1" row names of that file
+    want = sorted(x for x in a[2].split(",") if x)
+    rows = file_rows(t, a[1])
+    if rows is None: print("%s not shown (vacuous)" % a[1]); sys.exit(1)
+    got = sorted(name(r) for r in rows if 'stem="1"' in r)
+    if got != want: print("%s stem rows %s, want %s" % (a[1], got, want)); sys.exit(1)
+elif cmd == "stemsetjson":
+    d = json.loads(t); want = sorted(x for x in a[2].split(",") if x)
+    f = [x for x in d["r"] if x["p"] == a[1]]
+    if not f: print("%s not shown (vacuous)" % a[1]); sys.exit(1)
+    got = sorted(s["n"] for s in f[0]["s"] if s.get("stem"))
+    if got != want: print("%s stem rows %s, want %s" % (a[1], got, want)); sys.exit(1)
+elif cmd == "shownrows":
+    sh = re.search(r' shown=(\d+) ', t); n = len(re.findall(r'<s [^>]*\bk="', t)); st = len(re.findall(r'<s [^>]*stem="1"', t))
+    if not sh or int(sh.group(1)) != n or st != int(a[1]): print("shown=%s rows=%d stem rows=%d want %s" % (sh and sh.group(1), n, st, a[1])); sys.exit(1)
 elif cmd == "nostemin":
     rows = file_rows(t, a[1])
     if rows is None: print("%s not shown (vacuous)" % a[1]); sys.exit(1)
@@ -126,6 +162,14 @@ if m="$( chk json "$TMP/a3.out" )"; then ok "A3 --json twin: \"stem\":1, \"shown
 if m="$( chk nostemin "$TMP/b1.out" pkg/helpers.py )"; then ok "B1 a file whose kept rows hold its stem type gains nothing"; else no "B1 $m"; fi
 if m="$( chk nostemin "$TMP/b2.out" tests/test_widgetparsers.py )"; then ok "B2 a test file gains no stem row"; else no "B2 $m"; fi
 if m="$( chk nostem "$TMP/b3.out" )"; then ok "B3 every symbol kept: no stem row, no clause"; else no "B3 $m"; fi
+if m="$( chk stemset "$TMP/e1.out" pkg/cache.py "" )"; then ok "E1 a 1-of-3 subtoken class (CacheBackendFactory) gains no stem row"; else no "E1 $m"; fi
+if m="$( chk stemset "$TMP/e1.out" pkg/widgetstore.py "" )"; then ok "E2 a 2-of-3 subtoken class (WidgetRegistryStore) gains no stem row"; else no "E2 $m"; fi
+if m="$( chk stemset "$TMP/e1.out" pkg/widgetparsers.py WidgetParser )"; then ok "E3 the strong 2-of-2 match (WidgetParser) stays"; else no "E3 $m"; fi
+if m="$( chk stemset "$TMP/e1.out" pkg/gizmoloader.py GizmoLoader )"; then ok "E4 the complete GizmoLoader, not the larger incomplete GizmoLoaderBase"; else no "E4 $m"; fi
+if m="$( chk stemset "$TMP/e1.out" pkg/sinkwriter.py IOSinkWriter )"; then ok "E5 a sub-3-byte subtoken (io) does not count against completeness"; else no "E5 $m"; fi
+if m="$( chk stemsetjson "$TMP/e6.out" pkg/cache.py "" )" && m="$( chk stemsetjson "$TMP/e6.out" pkg/widgetstore.py "" )" && m="$( chk stemsetjson "$TMP/e6.out" pkg/gizmoloader.py GizmoLoader )" && m="$( chk stemsetjson "$TMP/e6.out" pkg/widgetparsers.py WidgetParser )"; then ok "E6 --json twin: the same stem rows"; else no "E6 $m"; fi
+if m="$( chk stemset "$TMP/e7.out" pkg/cache.py CacheBackendFactory )" && m="$( chk stemset "$TMP/e7.out" pkg/widgetstore.py WidgetRegistryStore )" && m="$( chk stemset "$TMP/e7.out" pkg/gizmoloader.py GizmoLoaderBase )"; then ok "E7 RIPWIRE_NO_MAP_STEM_TIGHT=1 restores the loose rows"; else no "E7 $m"; fi
+if m="$( chk shownrows "$TMP/e1.out" 3 )"; then ok "E8 shown= counts the 3 stem rows and the ranked rows printed, no more"; else no "E8 $m"; fi
 if m="$( chk prefix "$TMP/a1.out" "$TMP/a1off.out" )"; then ok "C1 no kept row lost or moved: only the stem row, its clause and shown= differ"; else no "C1 $m"; fi
 if m="$( chk budget "$TMP/d1.out" "$TMP/d1off.out" )"; then ok "D1 --max-tokens=1060: no stem row, the same ranked rows as the no-stem run"; else no "D1 $m"; fi
 if m="$( chk cut "$TMP/d2.out" )"; then ok "D2 stem_cut=1 + its clause, shown= = rows printed"; else no "D2 $m"; fi
