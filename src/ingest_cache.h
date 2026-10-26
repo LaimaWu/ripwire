@@ -145,9 +145,10 @@ constexpr std::uint32_t kCacheMagic   = 0x4b505443;   // "CTPK"
 //   all match) rather than silently re-absolutizing a key that was never root-relative to begin
 //   with — a v2 cache simply misses on every lookup that survives the guard, which is exactly the
 //   self-healing full-reparse path already used for any other corrupt/stale cache.
-// PLACEHOLDER (#155 Kotlin scope functions): 41 is a placeholder above every live value, and the train renumbers it. The
-// `trailingLambda` u8 in writeRef/readRef changes the on-disk ref record, so an older cache must be rejected.
-constexpr std::uint32_t kCacheVersion = 41;           // 41: PLACEHOLDER — #155 Kotlin trailingLambda ref byte (train renumbers)
+// 43 (train 36, #155 Kotlin scope functions; the PR's placeholder was 41): the `trailingLambda` u8 in writeRef/readRef changes
+// the on-disk ref record, so an older cache must be rejected. 43 sits above every live value: main / train 35 40, #438's 41,
+// lane rust-degraded's placeholder 42.
+constexpr std::uint32_t kCacheVersion = 43;           // 43: train 36 — #155 Kotlin trailingLambda ref byte (above 40 / 41 / 42)
                                                       // 40: train 34 — strictly above main 39 and every live value (train-33 refs, #432 39; #427 / #429 38): the
                                                       //    fc3-js-rebind record change (LocalBindKind JsRebind, appended) lands; no other train-34 lane changed a format.
                                                       // 39: train 33 — strictly above main 36 and every live value (lane l6-iface 38, #427 / #429 38): the
@@ -357,7 +358,10 @@ constexpr std::uint32_t kCacheVersion = 41;           // 41: PLACEHOLDER — #15
                                                       //    (Py `pkg.mod`, TS `./x`, Rust `crate::a::b`/`mod:x`) —
                                                       //    a target FORMAT change → old caches must be rejected.
                                                       // 4: Include gained a `bool isAngle` (quote/angle) field
-constexpr std::uint32_t kParserVer    = 228;          // 228: PLACEHOLDER — #155 Kotlin trailing-lambda capture (train renumbers); bump on any grammar/.scm/extraction change
+constexpr std::uint32_t kParserVer    = 231;          // bump on any grammar/.scm/extraction change
+                                                      // 231 = 2026-10-25 (train 36: #438 Kotlin trailing-lambda capture, #437, #431): strictly above every
+                                                      //   live number — main / train 35 226 (rich 227), #438's placeholder 228, lane rust-degraded's placeholder
+                                                      //   229 (rich 230). Rich file tag 232. kCacheVersion 43 moves with it (#438's trailingLambda ref byte).
                                                       // 226 = 2026-10-24 (train 34: lean2b, fc2-lego-extparent, honest-lex, ind4b-k5-tighten-k5c, hop1, fc3-js-rebind):
                                                       //   strictly above every live number — main 224 (rich 225), #432 224, lane ind4b's placeholder 224 (it collided with
                                                       //   main's), lane ind5-glob-imports 222 (223, reserved), lane fc3-js-rebind 218, #426 216, #420 214. Rich file tag 227.
