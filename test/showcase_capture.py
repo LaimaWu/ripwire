@@ -11,7 +11,6 @@ BIN = "./build/ripwire"
 ABIN = os.path.join(REPO, "build", "ripwire")
 DIRTY = os.path.join(SCRATCH, "dirty")          # throwaway --local clone with ONE deliberate regression
 AUX = os.path.join(SCRATCH, "aux")
-os.makedirs(AUX, exist_ok=True)
 
 # The capture is a SHIPPED document, so it goes through the SAME public-export scrub docs/COMMANDS.md
 # is built with — imported, not re-spelled, so the two can never drift apart and a new leak shape has
@@ -23,6 +22,10 @@ try:
 except ImportError as exc:
     sys.exit(f"showcase_capture: cannot import the export scrub from docs/docs_commands_build.py ({exc}) — "
              f"refusing to write an unscrubbed capture")
+if not exportscrub.scratch_outside_repo( REPO, SCRATCH ):
+    sys.exit(f"showcase_capture: the scratch dir is inside the repo ({SCRATCH}) — it would publish as ./… paths, "
+             f"not <scratch>; point RIPWIRE_SHOWCASE_SCRATCH outside the checkout")
+os.makedirs(AUX, exist_ok=True)
 
 # --- formatting (defined HERE, above the command table, because the --in=DIR case DERIVES its own
 # --since window from what the PUBLISHED block shows — see chooseInWindow below — and cannot do that
@@ -1014,10 +1017,12 @@ os.makedirs(os.path.dirname(outpath), exist_ok=True)
 # Root-neutralise the published text: the checkout's absolute path is machine detail, not a claim
 # (same rationale as the --pack-signatures methodology), and the public scrub gate bans home paths.
 # Disclosed here rather than silent, in the order applied:
-#   1. every occurrence of the repo root becomes "."
-#   2. every occurrence of this run's per-run temp dir becomes "<scratch>" — same mechanism, same
+#   1. every occurrence of this run's per-run temp dir becomes "<scratch>" (first: it is the longer,
+#      more specific path) — same mechanism as 2, same
 #      reason: `/var/folders/…/ripwire_showcase_o6h2ey7l/aux/batch2.txt` is one mktemp draw on one
 #      machine, so publishing it dates the document to a directory nobody can reproduce
+#   2. every occurrence of the repo root becomes "." — both via exportscrub.scrub_root, which replaces only
+#      a WHOLE path (a checkout at /w once turned src/wrap into src.rap; showcasecapturecheck arm (S))
 #   3. the shared public-export scrub (exportscrub.scrub): home paths, other temp paths, internal
 #      branch/document names, OWNERSHIP-row identity attributes and git author addresses. The last two
 #      matter most here — --owners and --pr-context read real git history, so a capture of a real run
@@ -1025,7 +1030,7 @@ os.makedirs(os.path.dirname(outpath), exist_ok=True)
 #      docs/docs_commands_build.py): `top=` on --hotspots is a SYMBOL NAME and survives untouched, as
 #      do ripwire's own `symbol@file.ext` community labels, which have the address shape but are not
 #      addresses. One implementation, shared with docs/COMMANDS.md, so a widened scrub reaches both.
-published = "\n".join(doc).replace(REPO, ".").replace(SCRATCH, "<scratch>")
+published = exportscrub.scrub_root(exportscrub.scrub_root("\n".join(doc), SCRATCH, "<scratch>"), REPO, ".")
 published = exportscrub.scrub(published, "ripwire")
 
 # Refuse rather than write what test/docscommandscheck.sh arm (E) would reject. Note which class is

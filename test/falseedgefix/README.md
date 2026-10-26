@@ -34,6 +34,10 @@ plus near-miss calls whose edges are real and must stay.
   callable variable, a bare `Worker()` construction, a class-body call.
 - `c/` — the functions `opts_parse()` and `region()` beside same-named structs; the macro `CLAMP` is kept; `find_type()` (an outside library) beside
   `enum find_type`. `cpp/` is the control: `Point( v )` constructs a struct in C++ and keeps its rows.
+- `kt/` (Kotlin beside Java) — `s.run { }`, `with( sb ) { }`, `s?.let { }`, `xs.also { }`, `apply { }` each carry a TRAILING
+  lambda and bind no Java method (`Job.run`, `Builder.with/apply/let/also`); the same Java names reached with no lambda
+  (`block.run()` on a Runnable) and a real `b.with( "x" )` keep their edges. `ktown/` — Kotlin DEFINES `run`: the
+  trailing-lambda `go` binds the Kotlin `Task.run`, and `build`'s `s.run { length }` is pinned there (the receiver gap).
 - `rs/` — `use termkit::render; render( n )` beside the method `History::render`. Kept: a same-module function,
   `h.render()`, `History::new()`, `History::render( &h )`, `Self::width()`.
 

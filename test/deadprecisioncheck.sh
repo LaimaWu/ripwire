@@ -84,6 +84,12 @@ class LegacyCase(unittest.TestCase):
 
     def test_case(self, static=None):
         self.assertEqual(self.x, 1)
+
+    def setUpTestData(self, static=None):
+        pass
+
+    def runTest(self, static=None):
+        pass
 PYSRC
 cat >"$T/pkg/core.py" <<'PYSRC'
 def app_route(fn):
@@ -123,11 +129,11 @@ root = ET.parse(sys.argv[1]).getroot()
 names = [node.get("n") for node in root.findall("d")]
 if names != ["orphan_c"]:
     raise SystemExit(f"FAIL R1/R2/R3 expected only the C static orphan, found {names}")
-if root.get("runner-root-excluded") != "4":
-    raise SystemExit(f"FAIL R2 runner-root-excluded= should count the 4 test-runner roots (test_param, setup_module, setUp, test_case), found {root.get('runner-root-excluded')!r}")
+if root.get("runner-root-excluded") != "6":
+    raise SystemExit(f"FAIL R2 runner-root-excluded= should count the 6 test-runner roots (test_param, setup_module, setUp, test_case, setUpTestData, runTest), found {root.get('runner-root-excluded')!r}")
 if root.get("decorated-excluded") != "2":
     raise SystemExit(f"FAIL R2 decorated-excluded= should count the 2 decorated defs (@pytest.fixture resource, @app_route handler), found {root.get('decorated-excluded')!r}")
-print("PASS R1-R3 comment static is not linkage; test-runner roots (runner-root-excluded=4) and decorated defs (decorated-excluded=2) counted apart; C orphan kept")
+print("PASS R1-R3 comment static is not linkage; test-runner roots (runner-root-excluded=6) and decorated defs (decorated-excluded=2) counted apart; C orphan kept")
 PY
 [ $? -eq 0 ] || exit 1
 if grep -qE 'runner-root-excluded|decorated-excluded' "$TMP/a"; then echo "FAIL R2 runner-root-excluded=/decorated-excluded= must be absent at 0 (deadfix corpus)"; exit 1; fi

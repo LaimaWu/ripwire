@@ -116,6 +116,19 @@ struct LangFacts
     /// open too (ifacedispatch.h). A Kotlin-only tree is unchanged.
     bool samFromJavaLambdas = false;
 
+    /// Kotlin: `run`, `let`, `apply`, `also` and `with` are stdlib scope functions, and a call to one with a trailing lambda is
+    /// that function, never a Java or other-language method of the same name (graph.h FE-A, kotlinScopeDecide; the call-site fact
+    /// is captured in ingest_sidecap.h).
+    bool trailingLambdaScopeFns = false;
+
+    /// Python: unittest, Django and pytest call setUp, tearDown, setup_method and the other test-framework hooks themselves
+    /// (quality.h pythonFrameworkInvokedSymbol).
+    bool frameworkEntryHooks = false;
+
+    /// Python: a closure inside a method can call `self.hook()` / `cls.hook()` for its host, so a receiver-bound call dispatches
+    /// through the host's overrides (quality.h pythonReceiverParameters, pythonDispatchRequests). A separate fact from the hooks.
+    bool closureReceiverDispatch = false;
+
     /// Kotlin: an `interface` is a class_declaration like a class (queries/kotlin/tags.scm: "both land here as @definition.class"),
     /// so the symbol's kind cannot tell the two apart; shared code that needs an interface (ifacedispatch.h's lambda test) reads a
     /// class of such a language as a possible one.
@@ -182,7 +195,7 @@ inline constexpr std::array<std::string_view, 3> kJavaObjectMethods = { "equals"
 inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Cpp, .defectShapeNeedsMacroSet = true, .noNestedNamedFunctions = true, .memberSeparator = "::",
       .transitiveIncludes = true },
-    { .lang = Lang::Python, .baseImportEvidence = BaseImportEvidence::PythonImport },
+    { .lang = Lang::Python, .frameworkEntryHooks = true, .closureReceiverDispatch = true, .baseImportEvidence = BaseImportEvidence::PythonImport },
     { .lang = Lang::TypeScript, .overloadSignatures = true, .structuralTyping = true, .importBoundConstruction = true, .baseImportEvidence = BaseImportEvidence::JsImport,
       .writtenBindingUndecided = true },
     { .lang = Lang::Go, .structuralTyping = true },
@@ -206,7 +219,7 @@ inline constexpr std::array<LangFacts, kLangCount> kLangFacts = { {
     { .lang = Lang::Lua },
     { .lang = Lang::Elixir, .hasInertQuoteRegions = true },
     { .lang = Lang::Dart },
-    { .lang = Lang::Kotlin, .samFromJavaLambdas = true, .interfaceReadsAsClass = true, .anonymousImplementors = true, .overloadsWithoutArity = true,
+    { .lang = Lang::Kotlin, .samFromJavaLambdas = true, .trailingLambdaScopeFns = true, .interfaceReadsAsClass = true, .anonymousImplementors = true, .overloadsWithoutArity = true,
       .baseImportEvidence = BaseImportEvidence::JvmImport },
     { .lang = Lang::GDScript },
     { .lang = Lang::Clojure },

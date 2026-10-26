@@ -5668,8 +5668,17 @@ struct DispositionTally
 // external= with proof (one `C external` census row) or unresolved= without, and every other call keeps the unchanged ladder.
 // CLASS-BODY KEEP. A function of the class whose BODY is the caller survives rule (1): Python evaluates a class body as a
 // scope, so `DEFAULTS = _default()` there reaches the `_default` defined above it.
-// STATED FLOORS (named in test/falseedgecheck.sh's header): implicit-receiver languages (Java, C#, C++, Kotlin, Swift,
-// Ruby, ObjC) are untouched — a bare call there reaches the enclosing class's methods; PHP, Lua and Zig have no arm; a
+// (4) KOTLIN SCOPE FUNCTIONS (#155; test/kotlincheck.sh §15, test/falseedgecheck.sh arm J). A Kotlin call with a TRAILING lambda to
+//     let/run/with/apply/also (externalnames.h kKotlinScopeFunctionNames) is the stdlib inline function. Java and other JVM
+//     candidates of that name drop; Kotlin candidates keep; an emptied set is external=. A receiver rule that already picked a Kotlin
+//     member (`t.run { }` on a `t: Task` whose class defines run) keeps its proof; a pick holding a Java method is undone, so
+//     `s.run { }` (which carries a receiver) is decided here. One fact: Reference::trailingLambda (ingest_metrics.h kotlinTrailingLambda).
+// STATED FLOORS (named in test/falseedgecheck.sh's header): implicit-receiver languages (Java, C#, C++, Swift, Ruby, ObjC) are
+// untouched — a bare call there reaches the enclosing class's methods. Kotlin's scope arm (4) keys on the spelling and the
+// trailing lambda ALONE: no receiver typing beyond the Kotlin pick above (a receiver of a Java type is not checked), no SAM conversion, qualified `kotlin.run { }` can still bind an in-tree Kotlin `run` (hedged),
+// a parenthesised lambda (`s.let( { } )`, `with( x, { } )`) is NOT trailing and keeps the ladder, and a Java method of
+// that name called from Kotlin WITH a trailing lambda is dropped (the same spelling is indistinguishable here).
+// PHP, Lua and Zig have no arm; a
 // Go package whose name differs from its path's last element is not recognised as an import (its calls keep the
 // ladder); a JS `require` inside a function body and browser-only globals are not modelled; a JS script's top-level
 // function reached from another script by a bare global-table name would read as external.
@@ -5999,6 +6008,32 @@ struct FalseEdgeRules
         }
         return ( !lookup( r.fileId, r.calleeName, bound ) && externalnames::isJsGlobalName( r.calleeName ) ) ? Verdict::External : Verdict::Keep;
     }
+    // #155 KOTLIN SCOPE FUNCTIONS (test/kotlincheck.sh §15, test/falseedgecheck.sh arm J): a Kotlin call with a trailing lambda to
+    // let/run/with/apply/also IS the stdlib inline function. A Java (or other JVM-compatible) candidate of that name is a method
+    // the call cannot reach: dropped. Kotlin candidates are kept and narrowed. An emptied set is External with that proof (the name
+    // is the stdlib scope function, externalnames.h). Nothing dropped → Keep: the ladder decides exactly as before.
+    Verdict kotlinScopeDecide( const Reference& r, std::span<const NodeId> ids, rw::SmallVec<NodeId, 2>& kept ) const
+    {
+        kept.clear();
+        bool dropped = false;
+        for( NodeId c : ids )
+        {
+            const Symbol& s = ing.symbols[ c ];
+            if( langCompatible( s.lang, r.lang ) && !langFacts( s.lang ).trailingLambdaScopeFns )
+            {
+                dropped = true;
+                continue;
+            }
+            kept.push_back( c );
+        }
+        if( !dropped )
+        {
+            kept.clear();
+            return Verdict::Keep;
+        }
+        const bool anyKotlin = std::any_of( kept.begin(), kept.end(), [ & ]( NodeId c ) { return langFacts( ing.symbols[ c ].lang ).trailingLambdaScopeFns; } );
+        return anyKotlin ? Verdict::Narrow : Verdict::External;
+    }
     bool aliasIsForeign( const Alias& a, const Reference& r ) const
     {
         if( a.fromIdentifier )   // `const { x } = G`: foreign iff G is a global object no binding in the file hides
@@ -6012,6 +6047,10 @@ struct FalseEdgeRules
     Verdict decide( const Reference& r, std::span<const NodeId> ids, rw::SmallVec<NodeId, 2>& kept ) const
     {
         kept.clear();
+        if( active && langFacts( r.lang ).trailingLambdaScopeFns && r.role == RefRole::Call && r.trailingLambda && externalnames::isKotlinScopeFunction( r.calleeName ) )
+        {
+            return kotlinScopeDecide( r, ids, kept );   // #155: ahead of the receiver gate — `s.run { }` carries a receiver
+        }
         if( !active || r.role != RefRole::Call || !r.qualifier.empty() || r.fromSymbol >= ing.symbols.size() || r.recv != RecvKind::None )
         {
             return Verdict::Keep;
@@ -10189,9 +10228,29 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
         // nested namesakes dropped, an inherited body, an interface's dispatch split); otherwise narrowed stays false and the name-based fallback
         // runs. Skipped when the call was already pinned canonically or by Rule 1 (the more specific / already-resolved signals).
         const bool narrowedBeforeReceiverRules = narrowed;
+        // #155: a Kotlin trailing-lambda scope call is the stdlib function unless its receiver's type proves a Kotlin member; FE-A decides the rest.
+        const bool kotlinScopeCall = langFacts( r.lang ).trailingLambdaScopeFns && r.role == RefRole::Call && r.trailingLambda
+                                     && externalnames::isKotlinScopeFunction( r.calleeName );
+        // #155: a receiver rule still decides such a call when every candidate it picks is a Kotlin definition (`t.run { }` on a
+        // `t: Task` whose class defines run, beside another class's run); a pick holding a Java (non-Kotlin) method is undone, and
+        // FE-A below decides the call (kotlincheck §15 tree f).
+        const auto kotlinScopeUndo = [ & ]() noexcept -> bool
+        {
+            if( !kotlinScopeCall
+                || std::all_of( cand.begin(), cand.end(), [ & ]( NodeId c ) noexcept { return langFacts( ing.symbols[ c ].lang ).trailingLambdaScopeFns; } ) )
+            {
+                return false;
+            }
+            cand.clear();
+            return true;
+        };
         if( !scipPinned && !canonical && !narrowed && writtenRoot != JsWrittenRoot::Pinned )
         {
             narrowed = narrowTo( narrower.rule2RecvVarType( r, classIds, chaUp ), r, cand ) || narrower.forgetClaim();
+            if( narrowed && kotlinScopeUndo() )
+            {
+                narrowed = narrower.forgetClaim();
+            }
         }
         // P2-D Rule 2c (CLASS-NAME receiver, Phase 4b): `Cls.m()` resolves to `Cls::m` (or the shallowest base defining `m`) when Cls is an in-repo class that no
         // local and no C++ member of the caller's class or its bases hides (then 2b reads the member). After Rule 2, before 2b. See Narrower::rule2cClassNameRecv.
@@ -10230,7 +10289,7 @@ inline Graph buildGraph( const IngestResult& ing, const ScipOverlay* scip = null
                     cand.push_back( c );
                 }
             }
-            narrowed = !cand.empty();
+            narrowed = !cand.empty() && !kotlinScopeUndo();
         }
         // lane L6 (ifacedispatch.h): the receiver's recorded type is an interface, a trait or a class declaring the callee with
         // no body — C++ through class identity's dispatch split (Rule 2 on a local or parameter, Rule 2b's field), every other

@@ -818,6 +818,45 @@ inline bool languageInvokedSymbol( const Symbol& s ) noexcept
     return false;
 }
 
+// Python test-framework hook names, ONE table per framework (CONTRIBUTING: one place per feature family). Two consumers read
+// them: pythonFrameworkInvokedSymbol below (the --quality-delta dead set) and pythonRunnerRoot (--dead-code / --safe-delete).
+//   kXunitHooks           pytest's xunit-style fixtures, collected from a test module with no call in the tree
+//   kUnittestHooks        unittest/Django TestCase methods the runner calls around a test (class scope)
+//   kUnittestModuleHooks  unittest's module-level entry points
+inline constexpr std::array<std::string_view, 8> kXunitHooks = { "setup_module", "teardown_module", "setup_function", "teardown_function",
+                                                                  "setup_class",  "teardown_class",  "setup_method",   "teardown_method" };
+inline constexpr std::array<std::string_view, 8> kUnittestHooks = { "setUp",         "tearDown",     "setUpClass", "tearDownClass",
+                                                                    "setUpTestData", "runTest",      "asyncSetUp", "asyncTearDown" };
+inline constexpr std::array<std::string_view, 3> kUnittestModuleHooks = { "setUpModule", "tearDownModule", "load_tests" };
+
+// Python test-framework entry points (#228). unittest and Django's TestCase call the kUnittestHooks names around tests, the
+// kUnittestModuleHooks names around a module, and run every test* method as a test. Pytest runs test_* too, and calls the
+// kXunitHooks names (setup_method, teardown_module, ...) of a test module. No call in the indexed tree names them, so zero
+// in-edges says nothing. Name-level, like the dunder rule in languageInvokedSymbol: errs toward live. The test* and xunit
+// clauses also need a test module (isTestPath, or Django's tests.py), so a helper named testSomething or setup_method in
+// application code still reads as dead. Not covered, still reported: pytest's conftest hooks (pytest_configure ...).
+// @pytest.fixture functions need no clause here: a decorated def is handed to its decorator as a value (ingest_valuerefs.h
+// emitDecorators), so --quality-delta never reports one, and --dead-code lists none (pythonDecoratedDef, decorated-excluded=).
+inline bool pythonFrameworkInvokedSymbol( const Symbol& s, std::string_view p ) noexcept
+{
+    if( !langFacts( s.lang ).frameworkEntryHooks || ( s.kind != SymKind::Method && s.kind != SymKind::Function ) )
+    {
+        return false;
+    }
+    const std::string_view n = s.name;
+    if( std::ranges::contains( kUnittestHooks, n ) || std::ranges::contains( kUnittestModuleHooks, n ) )
+    {
+        return true;
+    }
+    if( n.substr( 0, 4 ) != "test" && !std::ranges::contains( kXunitHooks, n ) )
+    {
+        return false;
+    }
+    const std::size_t      sl = p.rfind( '/' );
+    const std::string_view fn = sl == std::string_view::npos ? p : p.substr( sl + 1 );
+    return isTestPath( p ) || fn == "tests.py";
+}
+
 // A "dead deletion-candidate": has a body, no caller in the indexed tree, not invoked from file scope, not
 // invoked by the LANGUAGE itself (languageInvokedSymbol, above), not a test fixture, not produced by a
 // registered self-registering macro. A SIMPLE,
@@ -865,6 +904,10 @@ inline bool isDeadCandidate( const IngestResult& ing, const Graph& g, NodeId i,
         return false; // Q-DIAL-2: the LANGUAGE calls it — see languageInvokedSymbol (this replaced a blanket header exclusion)
     }
     const std::string_view p = rootRelPath( ing, s.fileId );   // #228: a directory above the root never decides this
+    if( pythonFrameworkInvokedSymbol( s, p ) )
+    {
+        return false; // #228: unittest/Django/pytest call this by protocol (see pythonFrameworkInvokedSymbol)
+    }
     if( isFixturePath( p ) )
     {
         return false; // fixtures are dead by design (noise rules)
@@ -1204,8 +1247,29 @@ inline void forEachSymbolBody( const IngestResult& ing, Fn&& visit )
     }
 }
 
-// Direct Python class members only; module-level and nested functions have no class owner.
-inline std::vector<NodeId> pythonMethodOwners( const IngestResult& ing )
+// Direct Python class members get an owner: the enclosing class. A def nested inside a method gets a host: the
+// nearest enclosing method, whose self/cls it reads as a free variable. Module-level functions have neither.
+struct PythonScopes
+{
+    std::vector<NodeId> owner;
+    std::vector<NodeId> host;
+};
+
+// Records one definition's enclosing scope: a class makes it a direct member; a method, or a closure in one, makes
+// the nearest method its host.
+inline void pythonRecordParent( PythonScopes& scopes, const IngestResult& ing, NodeId id, NodeId parent ) noexcept
+{
+    if( ing.symbols[parent].kind != SymKind::Class )
+    {
+        scopes.host[id] = scopes.owner[parent] != kNoNode ? parent : scopes.host[parent];
+    }
+    else if( ing.symbols[id].kind != SymKind::Class )
+    {
+        scopes.owner[id] = parent;
+    }
+}
+
+inline PythonScopes pythonMethodOwners( const IngestResult& ing )
 {
     const bool hasClasses = std::any_of( ing.symbols.begin(), ing.symbols.end(), []( const Symbol& s )
     {
@@ -1215,7 +1279,9 @@ inline std::vector<NodeId> pythonMethodOwners( const IngestResult& ing )
     {
         return {};
     }
-    std::vector<NodeId> owner( ing.symbols.size(), kNoNode );
+    PythonScopes scopes;
+    scopes.owner.assign( ing.symbols.size(), kNoNode );
+    scopes.host.assign( ing.symbols.size(), kNoNode );
     SymbolsByFile byFile = symbolsByFileInIdOrder( ing, []( const Symbol& s )
     {
         return s.lang == Lang::Python && ( s.kind == SymKind::Class || s.kind == SymKind::Function || s.kind == SymKind::Method );
@@ -1240,50 +1306,85 @@ inline std::vector<NodeId> pythonMethodOwners( const IngestResult& ing )
             {
                 parents.pop_back();
             }
-            if( s.kind != SymKind::Class && !parents.empty() && ing.symbols[parents.back()].kind == SymKind::Class )
+            if( !parents.empty() )
             {
-                owner[id] = parents.back();
+                pythonRecordParent( scopes, ing, id, parents.back() );
             }
             parents.push_back( id );
         }
     }
-    return owner;
+    return scopes;
 }
 
-// Python VarDecl bindings are parameter names in source order (emitBindings); the first one
-// identifies the conventional receiver. Reuse those AST facts, including commented/typed parameters.
-// A non-receiver first parameter is marked 3 so a later parameter named cls cannot replace it.
-inline std::vector<std::uint8_t> pythonReceiverParameters( const IngestResult& ing )
+// The conventional receiver of each Python def and the receiver names it binds as parameters. Parameters are
+// VarDecl bindings in source order (emitBindings). kind: 1 self, 2 cls, 3 a first parameter that is neither, 0 none;
+// the first parameter decides it, so a later parameter named cls cannot replace it. bound: bit 1 self, bit 2 cls,
+// wherever the name sits in the list.
+struct PythonReceivers
 {
-    std::vector<std::uint8_t> receiver( ing.symbols.size(), 0 );
+    std::vector<std::uint8_t> kind;
+    std::vector<std::uint8_t> bound;
+};
+
+inline PythonReceivers pythonReceiverParameters( const IngestResult& ing )
+{
+    PythonReceivers receivers;
+    receivers.kind.assign( ing.symbols.size(), 0 );
+    receivers.bound.assign( ing.symbols.size(), 0 );
     for( const Binding& b : ing.bindings )
     {
-        if( b.fromSymbol >= receiver.size() || ing.symbols[b.fromSymbol].lang != Lang::Python
-            || b.kind != LocalBindKind::VarDecl || b.spanStart != 0 || b.spanEnd != 0 || receiver[b.fromSymbol] != 0 )
+        if( b.fromSymbol >= receivers.kind.size() || !langFacts( ing.symbols[b.fromSymbol].lang ).closureReceiverDispatch
+            || b.kind != LocalBindKind::VarDecl || b.spanStart != 0 || b.spanEnd != 0 )
         {
             continue;
         }
-        receiver[b.fromSymbol] = b.var == "self" ? 1 : b.var == "cls" ? 2 : 3;
+        const std::uint8_t name = b.var == "self" ? 1 : b.var == "cls" ? 2 : 0;
+        receivers.bound[ b.fromSymbol ] |= name;
+        if( receivers.kind[ b.fromSymbol ] == 0 )
+        {
+            receivers.kind[ b.fromSymbol ] = name != 0 ? name : 3;
+        }
     }
-    return receiver;
+    return receivers;
 }
 
-// Deduplicate receiver-call evidence before walking inheritance; repeated call sites have the same
-// possible targets. Views borrow the ingested reference names for this one snapshot computation.
+// The method whose receiver a self./cls. call reads, or kNoNode. A method reads its own receiver. A closure nested
+// in a method reads the enclosing method's, unless the closure binds that receiver name itself. The method's receiver
+// must be the conventional one: self for ThisObj, cls for the NamedVar cls.
+inline NodeId pythonReceiverScope( const PythonScopes& scopes, const PythonReceivers& receivers, const Reference& r ) noexcept
+{
+    const std::uint8_t want  = r.recv == RecvKind::ThisObj ? 1 : 2;
+    NodeId             scope = kNoNode;
+    if( scopes.owner[ r.fromSymbol ] != kNoNode )
+    {
+        scope = r.fromSymbol;
+    }
+    else if( scopes.host[ r.fromSymbol ] != kNoNode && ( receivers.bound[ r.fromSymbol ] & want ) == 0 )
+    {
+        scope = scopes.host[ r.fromSymbol ];
+    }
+    return scope != kNoNode && receivers.kind[ scope ] == want ? scope : kNoNode;
+}
+
+// Deduplicate receiver-call evidence before walking inheritance; repeated call sites have the same possible targets.
+// Views borrow the ingested reference names for this one snapshot computation.
 inline std::vector<std::pair<NodeId, std::string_view>> pythonDispatchRequests( const IngestResult& ing,
-    std::span<const NodeId> owner, std::span<const std::uint8_t> receiver )
+    const PythonScopes& scopes, const PythonReceivers& receivers )
 {
     std::vector<std::pair<NodeId, std::string_view>> requests;
     for( const Reference& r : ing.references )
     {
-        if( r.lang != Lang::Python || r.role != RefRole::Call || r.fromSymbol >= owner.size()
-            || owner[r.fromSymbol] == kNoNode || !r.qualifier.empty()
-            || !( ( r.recv == RecvKind::ThisObj && receiver[r.fromSymbol] == 1 )
-                  || ( r.recv == RecvKind::NamedVar && r.recvVar == "cls" && receiver[r.fromSymbol] == 2 ) ) )
+        const bool selfOrCls = r.recv == RecvKind::ThisObj || ( r.recv == RecvKind::NamedVar && r.recvVar == "cls" );
+        if( !langFacts( r.lang ).closureReceiverDispatch || r.role != RefRole::Call || r.fromSymbol >= scopes.owner.size()
+            || !r.qualifier.empty() || !selfOrCls )
         {
             continue;
         }
-        requests.emplace_back( owner[r.fromSymbol], r.calleeName );
+        const NodeId scope = pythonReceiverScope( scopes, receivers, r );
+        if( scope != kNoNode )
+        {
+            requests.emplace_back( scopes.owner[ scope ], r.calleeName );
+        }
     }
     std::sort( requests.begin(), requests.end(), []( const auto& a, const auto& b )
     {
@@ -1311,11 +1412,12 @@ inline std::vector<NodeId> pythonDispatchClasses( const Graph& g, NodeId base )
 // This is conservative liveness, not a model of Python's MRO, descriptors, or monkey-patching.
 inline std::vector<NodeId> pythonDispatchedMethodIds( const IngestResult& ing, const Graph& g )
 {
-    const std::vector<NodeId> owner = pythonMethodOwners( ing );
-    if( owner.empty() )
+    const PythonScopes scopes = pythonMethodOwners( ing );
+    if( scopes.owner.empty() )
     {
         return {};
     }
+    const std::vector<NodeId>& owner = scopes.owner;
     HashMap<NodeId, std::vector<NodeId>> methods;
     methods.reserve( 32 );
     for( NodeId i = 0; i < owner.size(); ++i )
@@ -1325,9 +1427,9 @@ inline std::vector<NodeId> pythonDispatchedMethodIds( const IngestResult& ing, c
             methods[ owner[i] ].push_back( i );
         }
     }
-    const std::vector<std::uint8_t> receiver = pythonReceiverParameters( ing );
+    const PythonReceivers receivers = pythonReceiverParameters( ing );
     std::vector<NodeId> result;
-    for( const auto& [ base, name ] : pythonDispatchRequests( ing, owner, receiver ) )
+    for( const auto& [ base, name ] : pythonDispatchRequests( ing, scopes, receivers ) )
     {
         for( NodeId id : pythonDispatchClasses( g, base ) )
         {
@@ -2337,8 +2439,10 @@ inline std::string cacheRootKeyHex( const std::string& root )
 // `static_assert( quality::kIngestParserVerMirror == kParserVer && … )`, so a missed mirror now fails the build. It does
 // not include this header; it relies on ingest.cpp including quality.h (line 13) before ingest_cache.h, and a reorder
 // that broke that fails the build on the undeclared name rather than passing.
-constexpr std::uint32_t kIngestCacheVersionMirror   = 40;   // MUST equal ingest.cpp's kCacheVersion (gated); 40 = train 34 (fc3-js-rebind JsRebind; above main 39), 39 = train 33 (above main 36 and l6-iface 38), 38 = train 32 lane l6-iface fix round 1: LocalBindKind ImplBlock (train renumbers), 37 = train 32 lane l6-iface: LocalBindKind DispatchType (train renumbers), 36 = train 30 (above call-result-typing's and fcall-forward's 33, name-template-dispatch's 35, main's 34), 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 33 = lane call-result-typing: RawBind resultIndex + unwrapDepth, 33 = lane fcall-forward: ref `forwarded` byte, 35 = lane name-template-dispatch: RefRole Pattern 11, 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
-constexpr std::uint32_t kIngestParserVerMirror    = 226;  // MUST equal ingest.cpp's kParserVer   (gated)
+constexpr std::uint32_t kIngestCacheVersionMirror   = 43;   // MUST equal ingest.cpp's kCacheVersion (gated); 43 = train 36 (#155 trailingLambda ref byte; above main 40, #438's placeholder 41, rust-degraded's 42), 40 = train 34 (fc3-js-rebind JsRebind; above main 39), 39 = train 33 (above main 36 and l6-iface 38), 38 = train 32 lane l6-iface fix round 1: LocalBindKind ImplBlock (train renumbers), 37 = train 32 lane l6-iface: LocalBindKind DispatchType (train renumbers), 36 = train 30 (above call-result-typing's and fcall-forward's 33, name-template-dispatch's 35, main's 34), 34 = train 29 (above lane arity-min's and call-result-typing's 33), 33 = train 29 lane arity-min: def record paramsMin (the train renumbers), 33 = lane call-result-typing: RawBind resultIndex + unwrapDepth, 33 = lane fcall-forward: ref `forwarded` byte, 35 = lane name-template-dispatch: RefRole Pattern 11, 32 = train 28: RefRole Subscript 9 + Inert 10, 31 = train 27: lego-transitive's inherit-ref baseBind (the lane's 30), 29 = FE-B ref memberPath/memberCtor + 4 bind kinds, 28 = FE-A ref memberCall/memberRoot, 27 = corrected fnScope values, 26 = function-local def scope span (25 = #157 + #150)
+constexpr std::uint32_t kIngestParserVerMirror    = 231;  // MUST equal ingest.cpp's kParserVer   (gated)
+                                                          // 231 = 2026-10-25 (train 36: above main 226/227, #438 228, rust-degraded 229/230;
+                                                          //   see the kParserVer note)
                                                           // 226 = 2026-10-24 (train 34: above main / #432 / ind4b 224/225, ind5 222/223,
                                                           //   fc3 218/219; see the kParserVer note)
                                                           // 224 = 2026-10-23 (train 33: above main 220/221, ind5 222/223, #420 214/215, fc1 216/217,
@@ -3520,6 +3624,9 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 //   pythonDispatchClasses     (quality.h) — downward-only inheritance reachability
 //   pythonDispatchedMethodIds  (quality.h) — Python inherited receiver-call evidence for the dead set
 //   isDeadCandidate            (quality.h) — the dead-set predicate itself
+//   pythonFrameworkInvokedSymbol (quality.h) — the framework-hook exemption isDeadCandidate calls into (#228)
+//   pythonRecordParent         (quality.h) — fills the closure host and owner that pythonReceiverScope reads (#228)
+//   pythonReceiverScope        (quality.h) — which method a self./cls. call in a closure belongs to (#228)
 //   isFixturePath              (quality.h) — a fixture-path exemption isDeadCandidate calls into
 //   isTestScriptPath           (quality.h) — the test-script exemption isDeadCandidate calls into (the exact
 //                                             helper B10.1a added without a bump — the finding this guards)
@@ -3657,7 +3764,14 @@ inline void evictOldHeadSnapCaches( const std::string& dir, const std::string& r
 // the standard-member gate gained a Rust row (graph.h kStdMemberNames), so a Rust definition a DECLINED call could have meant is
 // no dead candidate (Graph::gateDeclinedTarget), as v15 did for the builtin-method gate. No extraction change: kParserVer and its
 // mirror stay. The producer identity already keeps this build's blobs apart; bumped 21 -> 22 so the history above stays complete.
-constexpr std::uint32_t kQSnapCacheScheme = 22;
+// v23 (2026-10-24, #228: Django/unittest hooks and closure dispatch) — no blob shape change; the dead SET's inputs moved.
+// isDeadCandidate exempts Python framework entry points (pythonFrameworkInvokedSymbol: setUp, tearDown, setUpClass,
+// tearDownClass, setUpTestData, setUpModule, tearDownModule, load_tests, and test* methods in test modules), and
+// pythonDispatchedMethodIds keeps a self./cls. call inside a closure nested in a method live: the overrides of the called name on that method's class and its subclasses.
+// The producer identity already keeps this build's blobs apart; bumped 22 -> 23 so the history above stays complete.
+// v24 (2026-10-25, train 36) — #228's v23 was the PR's placeholder; renumbered above every live value (main / train 35 / every
+// other ref 22, #437 23). No further shape change.
+constexpr std::uint32_t kQSnapCacheScheme = 24;
 constexpr char          kQSnapMagic[4]    = { 'Q', 'S', 'N', 'P' };
 
 // The qsnap EXCLUDES-config key folds the qsnap SCHEME (independent of the ingest cache's kHeadSnapCacheScheme)
@@ -10066,15 +10180,11 @@ inline bool pythonRunnerRoot( std::string_view path, const Symbol& s, std::strin
     const std::string_view baseName   = slash == std::string_view::npos ? path : path.substr( slash + 1 );
     const bool             pytestFile = ( baseName.starts_with( "test_" ) || baseName.ends_with( "_test.py" ) ) && baseName.ends_with( ".py" );
     const std::string_view name       = s.name;
-    constexpr std::array<std::string_view, 8> kXunitHooks = { "setup_module", "teardown_module", "setup_function", "teardown_function",
-                                                              "setup_class",  "teardown_class",  "setup_method",   "teardown_method" };
-    constexpr std::array<std::string_view, 6> kUnittestHooks = { "setUp", "tearDown", "setUpClass", "tearDownClass", "asyncSetUp", "asyncTearDown" };
-    const auto listed = []( const auto& table, std::string_view n ) noexcept { return std::find( table.begin(), table.end(), n ) != table.end(); };
-    if( pytestFile && ( name.starts_with( "test" ) || listed( kXunitHooks, name ) ) )
+    if( pytestFile && ( name.starts_with( "test" ) || std::ranges::contains( kXunitHooks, name ) ) )
     {
         return true;
     }
-    if( s.scope.empty() || !( name.starts_with( "test" ) || listed( kUnittestHooks, name ) ) )
+    if( s.scope.empty() || !( name.starts_with( "test" ) || std::ranges::contains( kUnittestHooks, name ) ) )
     {
         return false;
     }
