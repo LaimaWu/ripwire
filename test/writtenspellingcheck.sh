@@ -77,6 +77,8 @@ bind   rs 'othercrate::buf::Buffer::edit' rs_other_edit_helper rs_my_edit_helper
 refuse rs 'crate::buf::Buffer::edit'           # both crates satisfy the prefix: not one entity
 refuse rs 'language::Buffer::edit'
 refuse rs 'my_crate::Alias::edit'              # a type alias is not peeled
+refuse rs 'Buf::grow'                          # a CamelCase segment is a type, never the module buf.rs (no owner-less bind)
+bind   rs 'my_crate::buf::grow' rs_free_grow_helper
 
 echo "-- (3) C++ written qualifier + enclosing namespaces"
 bind   cpp 'ConnectionManagerImpl::ActiveStream::decodeHeaders' cppStreamHelper cppRouterHelper cppUpstreamHelper

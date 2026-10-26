@@ -13051,8 +13051,8 @@ inline std::vector<NodeId> preferExactFile( const IngestResult& ing, std::string
 //   generic : its OWNER CHAIN (Symbol::scope's segments; for a scope-less method, the enclosing types by containment,
 //             outermost first) equals the prefix's TAIL in full — no owner segment is ever stripped — and the prefix's
 //             remaining HEAD names directories or the file stem of its root-relative path, in order (a skipped component
-//             is a re-export through a parent module; segmentNamesComponent reads `_` for a directory's `-` and a
-//             CamelCase segment as its snake_case name, Ruby's `Shop::Cart` in shop/cart.rb);
+//             is a re-export through a parent module; segmentNamesComponent reads `_` for a directory's `-` and, for
+//             Ruby only, a CamelCase segment as its snake_case name: `Shop::Cart` in shop/cart.rb);
 //   C/C++   : (instead) its FULL chain read off the source — every enclosing namespace and class plus the declarator's
 //             written qualifier (cppscopechain.h, --edit-check's reader) — ends with the prefix's last segment and holds
 //             the rest of the prefix, in order. No path component is read: the namespace is the authority. An unreadable
@@ -13158,16 +13158,18 @@ inline std::vector<std::string_view> pathSpellingComponents( std::string_view re
 }
 
 // does a written segment name a path component? Verbatim; with `_` for a directory's `-` (`nu_command` names the crate
-// directory `nu-command`); or, for a CamelCase segment, as its snake_case file/directory spelling (Ruby `Shop::Cart`
-// lives in shop/cart.rb, a C++ `HttpConnectionManager` namespace in http_connection_manager/).
-inline bool segmentNamesComponent( std::string_view seg, std::string_view comp ) noexcept
+// directory `nu-command`); or, only where the language's loader makes it the rule (Ruby: `Shop::Cart` lives in
+// shop/cart.rb — `camelAsSnake`), a CamelCase segment as its snake_case spelling. Never for Rust/Python/TS/Go, where a
+// CamelCase segment is a TYPE: reading `Pane::save_item` as module pane.rs would bind an owner-less fn (review rule:
+// no owner segment is ever stripped).
+inline bool segmentNamesComponent( std::string_view seg, std::string_view comp, bool camelAsSnake ) noexcept
 {
     const auto same = []( char want, char have ) noexcept { return want == have || ( want == '_' && have == '-' ); };
     if( seg.size() == comp.size() && std::equal( seg.begin(), seg.end(), comp.begin(), same ) )
     {
         return true;
     }
-    if( seg.empty() || !( seg[0] >= 'A' && seg[0] <= 'Z' ) )
+    if( !camelAsSnake || seg.empty() || !( seg[0] >= 'A' && seg[0] <= 'Z' ) )
     {
         return false;
     }
@@ -13196,12 +13198,12 @@ inline bool segmentNamesComponent( std::string_view seg, std::string_view comp )
 
 // is `want` an in-order subsequence of `have` (each want[i] naming a later have element than want[i-1])?
 template <class Have>
-inline bool namesInOrder( std::span<const std::string_view> want, const Have& have )
+inline bool namesInOrder( std::span<const std::string_view> want, const Have& have, bool camelAsSnake )
 {
     std::size_t at = 0;
     for( const std::string_view w : want )
     {
-        while( at < have.size() && !segmentNamesComponent( w, have[ at ] ) )
+        while( at < have.size() && !segmentNamesComponent( w, have[ at ], camelAsSnake ) )
         {
             ++at;
         }
@@ -13341,7 +13343,7 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
             const std::optional<std::vector<std::string>> chain = text ? cppFullChainOf( s, *text ) : std::nullopt;
             if( chain && !chain->empty() && chain->back() == prefix.back() )
             {
-                hit = namesInOrder( prefix.first( prefix.size() - 1 ), std::span<const std::string>( *chain ).first( chain->size() - 1 ) );
+                hit = namesInOrder( prefix.first( prefix.size() - 1 ), std::span<const std::string>( *chain ).first( chain->size() - 1 ), false );
                 for( const std::string& c : *chain )
                 {
                     key.append( c ).append( "::" );
@@ -13349,7 +13351,7 @@ inline std::vector<NodeId> resolveAllByWrittenSpelling( const IngestResult& ing,
             }
         }
         else if( owner.size() <= prefix.size() && std::equal( owner.begin(), owner.end(), prefix.end() - std::ptrdiff_t( owner.size() ) )
-                 && namesInOrder( prefix.first( prefix.size() - owner.size() ), pathSpellingComponents( rootRelPath( ing, s.fileId ) ) ) )
+                 && namesInOrder( prefix.first( prefix.size() - owner.size() ), pathSpellingComponents( rootRelPath( ing, s.fileId ) ), s.lang == Lang::Ruby ) )
         {
             hit = true;
             for( const std::string_view o : owner )
