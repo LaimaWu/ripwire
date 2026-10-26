@@ -13,7 +13,7 @@
 // (file:line), external="1" when no indexed file is that module, unresolved="1" when the module is in the tree but the
 // attribute is not exactly one definition there. used_at= / used_in= are the code consumers of the group's string literal —
 // a comparison with a `.group`, `entry_points(group=…)`, `.select(group=…)`, `iter_entry_points(…)`, `entry_points()[…]` —
-// by literal text (not resolved), file:line and the enclosing definition, at most kForEpUsedAt with used_total= past it.
+// by literal text (not resolved), file:line and the enclosing definition, at most kForEpUsedAtRows with used_capped="1" used_total= past it.
 // No consumer: no used_at= (never a guess). The manifest group l= is the group's own line (setup.cfg key, pyproject header).
 //
 // READERS (one per manifest format, language data separate from the shared row): setup.cfg `[options.entry_points]` (INI keys
@@ -45,10 +45,10 @@ namespace rw
 {
 
 // Runaway guards, not size targets (knob census ADDENDUM): every group or entry past them is dropped WITH a disclosure
-// (groups_total= on the first element, entries_total= on the group) — a manifest rarely has more than a handful of either.
-inline constexpr std::size_t kForEpGroups   = 4;    // groups per answer
-inline constexpr std::size_t kForEpEntries  = 12;   // entries shown per group
-inline constexpr std::size_t kForEpUsedAt   = 3;    // consumer sites shown per group (used_total= counts all)
+// (groups_capped="1" groups_total= on the first element, entries_capped="1" entries_total= on the group, used_capped="1" used_total=) — a manifest rarely has more than a handful of either.
+inline constexpr std::size_t kForEpGroupRows   = 4;    // groups per answer
+inline constexpr std::size_t kForEpEntryRows  = 12;   // entries shown per group
+inline constexpr std::size_t kForEpUsedAtRows   = 3;    // consumer sites shown per group (used_total= counts all)
 
 inline bool forEpManifestOn()
 {
@@ -492,6 +492,8 @@ inline std::vector<std::vector<EpConsumer>> findGroupConsumers( const IngestResu
         {
             const std::string& g = groups[gi];
             std::uint32_t      lastLine = 0;
+            std::size_t        countedTo = 0;   // the newlines before countedTo are in countedLines (one forward pass per literal)
+            std::uint32_t      countedLines = 0;
             for( std::size_t at = text->find( g ); at != std::string::npos; at = text->find( g, at + 1 ) )
             {
                 const std::size_t close = at + g.size();
@@ -507,7 +509,9 @@ inline std::vector<std::vector<EpConsumer>> findGroupConsumers( const IngestResu
                 {
                     continue;
                 }
-                const std::uint32_t line = std::uint32_t( 1 + std::count( text->begin(), text->begin() + std::ptrdiff_t( lb ), '\n' ) );
+                countedLines += std::uint32_t( std::count( text->begin() + std::ptrdiff_t( countedTo ), text->begin() + std::ptrdiff_t( lb ), '\n' ) );
+                countedTo = lb;
+                const std::uint32_t line = 1 + countedLines;
                 if( line != lastLine )
                 {
                     out[gi].push_back( EpConsumer{ f, line } );
@@ -773,7 +777,7 @@ inline EpRender renderForEpManifest( const IngestResult& ing, std::span<const No
     {
         return out;
     }
-    picks.resize( std::min( picks.size(), kForEpGroups ) );
+    picks.resize( std::min( picks.size(), kForEpGroupRows ) );
     // 4. the code consumers of each picked group's literal, and their enclosing definitions
     std::vector<std::string> literals;
     for( const Pick& p : picks )
@@ -787,7 +791,7 @@ inline EpRender renderForEpManifest( const IngestResult& ing, std::span<const No
     std::vector<char>                          siteFile( ing.files.size(), 0 );
     for( const std::vector<EpConsumer>& cs : consumers )
     {
-        for( std::size_t i = 0; i < cs.size() && i < kForEpUsedAt; ++i )
+        for( std::size_t i = 0; i < cs.size() && i < kForEpUsedAtRows; ++i )
         {
             siteFile[ cs[i].fileId ] = 1;
         }
@@ -816,18 +820,18 @@ inline EpRender renderForEpManifest( const IngestResult& ing, std::span<const No
         epdetail::appendAttr( x, "group", g, esc );
         if( pi == 0 && groupsTotal > picks.size() )
         {
-            x += " groups_total=\"" + std::to_string( groupsTotal ) + "\"";
+            x += " groups_capped=\"1\" groups_total=\"" + std::to_string( groupsTotal ) + "\"";
         }
-        if( ks.size() > kForEpEntries )
+        if( ks.size() > kForEpEntryRows )
         {
-            x += " entries_total=\"" + std::to_string( ks.size() ) + "\"";
+            x += " entries_capped=\"1\" entries_total=\"" + std::to_string( ks.size() ) + "\"";
         }
         const std::vector<EpConsumer>& cs = consumers[ std::size_t( std::find( literals.begin(), literals.end(), g ) - literals.begin() ) ];
         if( !cs.empty() )
         {
             std::string at;
             std::string in;
-            for( std::size_t i = 0; i < cs.size() && i < kForEpUsedAt; ++i )
+            for( std::size_t i = 0; i < cs.size() && i < kForEpUsedAtRows; ++i )
             {
                 at += ( i ? " " : "" ) + std::string( rootRelPath( ing, cs[i].fileId ) ) + ":" + std::to_string( cs[i].line );
                 const NodeId  host = flipimpact::innermostAtLine( ing, lineIx, cs[i].fileId, cs[i].line );
@@ -841,13 +845,13 @@ inline EpRender renderForEpManifest( const IngestResult& ing, std::span<const No
             }
             epdetail::appendAttr( x, "used_at", at, esc );
             epdetail::appendAttr( x, "used_in", in, esc );
-            if( cs.size() > kForEpUsedAt )
+            if( cs.size() > kForEpUsedAtRows )
             {
-                x += " used_total=\"" + std::to_string( cs.size() ) + "\"";
+                x += " used_capped=\"1\" used_total=\"" + std::to_string( cs.size() ) + "\"";
             }
         }
         x += '>';
-        for( std::size_t i = 0; i < ks.size() && i < kForEpEntries; ++i )
+        for( std::size_t i = 0; i < ks.size() && i < kForEpEntryRows; ++i )
         {
             const EpEntry&  e = man.entries[ ks[i] ];
             const EpTarget& t = targets[ picks[pi].m ][ ks[i] ];
@@ -876,11 +880,12 @@ inline constexpr std::string_view kForEpManifestLegend =
     "[project.scripts], [tool.poetry.plugins.*]/[tool.poetry.scripts]) that registers a shown row, l= the group's line; "
     "e n= target=: each entry as written, def=file:line the in-tree definition it names, external=1 no indexed file is its module, "
     "unresolved=1 the module is in the tree but the name is not one definition there; used_at=file:line used_in=: code that "
-    "compares or loads that group's string literal (by literal text, not resolved; a floor), used_total= when more; "
-    "no used_at= means no such code was found; groups_total=/entries_total= when cut";
+    "compares or loads that group's string literal (by literal text, not resolved; a floor); "
+    "no used_at= means no such code was found; used_capped=1 used_total=, entries_capped=1 entries_total=, groups_capped=1 "
+    "groups_total=: that list was cut, the total it was cut from";
 inline constexpr std::string_view kForCompactEpManifestLegend =
     "; ep p= l= group=: a manifest entry-point group registering a shown row; e n= target= as written, def=file:line in tree, "
     "external=1 module not in tree, unresolved=1 not one def; used_at=file:line used_in=: code reading that group literal "
-    "(by text, a floor), used_total= if more; groups_total=/entries_total= if cut";
+    "(by text, a floor); used_capped=1/entries_capped=1/groups_capped=1 with used_total=/entries_total=/groups_total= if cut";
 
 }   // namespace rw

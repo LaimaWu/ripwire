@@ -19,6 +19,11 @@
 #   C6 [P] a group with no consumer (z.quiet) has a row and NO used_at= (no guess)
 #   P1 [P] pyproject variant (src layout): [project.entry-points."x.report"] → def="src/pkg/mod.py:1", used_at=src/pkg/loader.py:5
 #          (`.select(group=…)`); [project.scripts] → group="console_scripts", def="src/pkg/cli.py:1", no used_at=
+#   S1 [P] siblings: a `key: value` group line, a dotted method target (plug.mod:Fmt.render → the method, not the same-named
+#          top-level render), a package target (plug/sub/__init__.py), iter_entry_points("g") and entry_points()["g"] consumers;
+#          [G] m.get("g") on a non-entry_points receiver is not a consumer
+#   K1 [P] the runaway guards disclose: a 13-entry group shows 12 with entries_capped="1" entries_total="13"; 4 consumers show 3
+#          with used_capped="1" used_total="4"
 #   N1 [G] a non-manifest .cfg (config.cfg, same text): no <ep>
 #   N2 [G] no <ep>, byte-identical to RIPWIRE_NO_EP_MANIFEST=1: --json, --token-budget=3000, --signatures-only
 #   N3 [G] prefix identity: the answer minus <ep> and its clause, est_tokens masked, equals RIPWIRE_NO_EP_MANIFEST=1
@@ -42,7 +47,7 @@ no(){ printf '  FAIL  %s\n' "$*"; fail=1; }
 [ -x "$BIN" ] || { echo "no ripwire binary at $BIN — build first"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 required"; exit 2; }
 FX="$ROOT/test/epmanifestfix"
-[ -f "$FX/cfg/setup.cfg" ] && [ -f "$FX/pyp/pyproject.toml" ] && [ -f "$FX/negcfg/config.cfg" ] || { echo "fixture test/epmanifestfix missing"; exit 2; }
+[ -f "$FX/cfg/setup.cfg" ] && [ -f "$FX/pyp/pyproject.toml" ] && [ -f "$FX/negcfg/config.cfg" ] && [ -f "$FX/sib/setup.cfg" ] || { echo "fixture test/epmanifestfix missing"; exit 2; }
 
 TMP="$( mktemp -d )"; trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP/home"; mkdir -p "$HOME"
@@ -58,7 +63,8 @@ run "$FX/cfg" "$TMP/cfgfull" "$Q" --legend=full
 RIPWIRE_NO_EP_MANIFEST=1 run "$FX/cfg" "$TMP/cfgoff" "$Q"
 run "$FX/pyp" "$TMP/pyp" '--for=how is the Fmt report formatter and the pkgtool main command registered'
 run "$FX/negcfg" "$TMP/neg" "$Q"
-for a in cfg cfg2 cfgfull cfgoff pyp neg; do okrun "$TMP/$a" || no "run $a failed (rc=$(cat "$TMP/$a.rc"))"; done
+run "$FX/sib" "$TMP/sib" '--for=how are the report formatter render and init hooks registered'
+for a in cfg cfg2 cfgfull cfgoff pyp neg sib; do okrun "$TMP/$a" || no "run $a failed (rc=$(cat "$TMP/$a.rc"))"; done
 
 # eps FILE -> one JSON line: [{attrs..., "e": [{attrs}]}] of every <ep> element
 eps(){ python3 - "$1" <<'PY'
@@ -73,7 +79,7 @@ for m in re.finditer(r"<ep( [^>]*)>(.*?)</ep>", t, flags=re.S):
 print(json.dumps(out))
 PY
 }
-CFG="$( eps "$TMP/cfg" )"; PYP="$( eps "$TMP/pyp" )"; NEG="$( eps "$TMP/neg" )"
+CFG="$( eps "$TMP/cfg" )"; PYP="$( eps "$TMP/pyp" )"; NEG="$( eps "$TMP/neg" )"; SIB="$( eps "$TMP/sib" )"
 has(){ python3 -c "import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if ($2) else 1)" "$1"; }
 grp(){ echo "[g for g in d if g.get('group')=='$1']"; }
 
@@ -95,6 +101,12 @@ if has "$CFG" "len($(grp z.quiet))==1 and 'used_at' not in $(grp z.quiet)[0] and
 # P1
 if has "$PYP" "any(g['p']=='pyproject.toml' and g.get('used_at')=='src/pkg/loader.py:5' and g.get('used_in')=='load_reports' and g['e']==[{'n':'fmt','target':'pkg.mod:Fmt','def':'src/pkg/mod.py:1'}] for g in $(grp x.report)) and any(g['e']==[{'n':'pkgtool','target':'pkg.cli:main','def':'src/pkg/cli.py:1'}] and 'used_at' not in g for g in $(grp console_scripts))"; then
     ok "P1 pyproject entry-points + project.scripts (src layout), select(group=) consumer"; else no "P1 pyproject: $PYP"; fi
+# S1
+if has "$SIB" "any(g['l']=='2' and g.get('used_at')=='plug/use.py:5' and g['e']==[{'n':'m','target':'plug.mod:Fmt.render','def':'plug/mod.py:3'}] for g in $(grp x.hooks)) and any(g.get('used_at')=='plug/use.py:7' and g.get('used_in')=='go' and {'n':'i','target':'plug.sub:Init','def':'plug/sub/__init__.py:1'} in g['e'] for g in $(grp x.pkg))"; then
+    ok "S1 key: group line, dotted method target, package target, iter_entry_points / entry_points()[] consumers, m.get not"; else no "S1 siblings: $SIB"; fi
+# K1
+if has "$SIB" "any(len(g['e'])==12 and g.get('entries_capped')=='1' and g.get('entries_total')=='13' and g.get('used_capped')=='1' and g.get('used_total')=='4' and len(g['used_at'].split())==3 for g in $(grp x.many))"; then
+    ok "K1 entry and consumer caps disclose *_capped=1 with the total"; else no "K1 caps: $SIB"; fi
 # N1
 [ "$NEG" = "[]" ] && ok "N1 a non-manifest .cfg yields no <ep>" || no "N1 config.cfg produced rows: $NEG"
 # N2
@@ -107,7 +119,7 @@ python3 - "$TMP/cfg" "$TMP/cfgoff" <<'PY' && ok "N3 answer minus <ep> and its cl
 import re, sys
 a = open(sys.argv[1]).read(); b = open(sys.argv[2]).read()
 a = re.sub(r"<ep [^>]*>.*?</ep>", "", a, flags=re.S)
-a = re.sub(r"; ep p= l= group=:.*?entries_total= if cut", "", a, flags=re.S)
+a = re.sub(r"; ep p= l= group=:.*?groups_total= if cut", "", a, flags=re.S)
 m = lambda s: re.sub(r'est_tokens="\d+"', 'est_tokens="N"', s)
 sys.exit(0 if m(a) == m(b) and a != open(sys.argv[1]).read() else 1)
 PY
