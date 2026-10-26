@@ -329,9 +329,9 @@ rrun US --uses=selectBaseline \
 # 36 -> 37 (lane/qn-input, train 37b): the written-spelling seed tier (graph.h resolveAllByWrittenSpelling) reads a C/C++ candidate's
 # source through the canonical helper to read its namespace and class chain — one new call site, same helper.
 rrun RW --uses=readWholeFile \
-&& { [ "$( cnt "$RW" )" = 36 ] \
-    && ok "repo: --uses=readWholeFile count=36 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
-    || no "repo: --uses=readWholeFile expected 36, got '$( cnt "$RW" )'"; }
+&& { [ "$( cnt "$RW" )" = 37 ] \
+    && ok "repo: --uses=readWholeFile count=37 (docparse::detail:: — a seam the audit's rw::-anchored grep missed)" \
+    || no "repo: --uses=readWholeFile expected 37, got '$( cnt "$RW" )'"; }
 rrun WC --callers=writeTally \
 && { [ "$( cnt "$WC" )" = 1 ] \
     && ok "repo: --callers=writeTally count=1 (was 0 — both template call sites are in writeDocDriftPage)" \
