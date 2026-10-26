@@ -1,0 +1,886 @@
+#pragma once
+// epmanifest.h — MANIFEST ENTRY POINTS on a --for answer (lane ep-manifest; CONTRIBUTING family 10, slice 10a, first readers).
+//
+// WHY. A Python plugin is registered in a manifest, not in code: setup.cfg `[options.entry_points] flake8.report = pylint =
+// flake8.formatting.default:Pylint`, and the host loads the group by its string literal (`ep.group == "flake8.report"`). Neither
+// file names the other, so a registration question ("how is a formatter registered?") reached the class and never the
+// manifest nor the loader: no edge joins a config key to a code literal. Measured before this code (reports/ep-manifest.md
+// Stage 0): flake8-02's answer ranked all four flake8.report targets and printed 0 hits for setup.cfg and the loader.
+//
+// WHAT. <ep p= l= group= [used_at= used_in= used_total=]><e n= target= [def=|external=1|unresolved=1]/>…</ep>, after the file
+// tail and before the caller hop and the bodies: one element per manifest group that holds a SHOWN ranked row, every entry of
+// that group (n= the entry name, target= the module:attr as written), def= the in-tree definition the target names
+// (file:line), external="1" when no indexed file is that module, unresolved="1" when the module is in the tree but the
+// attribute is not exactly one definition there. used_at= / used_in= are the code consumers of the group's string literal —
+// a comparison with a `.group`, `entry_points(group=…)`, `.select(group=…)`, `iter_entry_points(…)`, `entry_points()[…]` —
+// by literal text (not resolved), file:line and the enclosing definition, at most kForEpUsedAt with used_total= past it.
+// No consumer: no used_at= (never a guess). The manifest group l= is the group's own line (setup.cfg key, pyproject header).
+//
+// READERS (one per manifest format, language data separate from the shared row): setup.cfg `[options.entry_points]` (INI keys
+// and continuation lines), pyproject.toml `[project.entry-points.G]`, `[project.scripts]` (console_scripts), `[project.gui-scripts]`
+// (gui_scripts), `[tool.poetry.plugins.G]`, `[tool.poetry.scripts]` (string values only). A manifest is read where a shown
+// Python row's directory or one of its ancestors up to the root holds one — a package's manifest always sits above its modules.
+// FLOORS (stated in the legend's absence of them, and in the lane report): setup.py `entry_points={…}` (a call, not a table),
+// package.json "bin"/"exports" (a file, not a symbol: no def to tie), pyproject inline tables, a group literal built at run
+// time, a multi-root run. The DEFAULT regime and the XML dialect only, as the caller hop: --json, --token-budget=N,
+// --signatures-only and --detail=N carry none. RIPWIRE_NO_EP_MANIFEST (any value) turns it off — the A/B handle.
+
+#include "docparse.h"     // readRegularFile — a fixed-name file in the tree, refused when it is not a regular file
+#include "flipimpact.h"   // SymbolLineIndex / innermostAtLine — the innermost def covering a line (the consumer's enclosing def)
+#include "model.h"        // IngestResult, rootRelPath, diskPath, symbolsByFile
+#include "serialize.h"    // escapeXml
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace rw
+{
+
+// Runaway guards, not size targets (knob census ADDENDUM): every group or entry past them is dropped WITH a disclosure
+// (groups_total= on the first element, entries_total= on the group) — a manifest rarely has more than a handful of either.
+inline constexpr std::size_t kForEpGroups   = 4;    // groups per answer
+inline constexpr std::size_t kForEpEntries  = 12;   // entries shown per group
+inline constexpr std::size_t kForEpUsedAt   = 3;    // consumer sites shown per group (used_total= counts all)
+
+inline bool forEpManifestOn()
+{
+    return std::getenv( "RIPWIRE_NO_EP_MANIFEST" ) == nullptr;
+}
+
+// One manifest entry: the group it sits in, the group's line (setup.cfg key / pyproject header), the entry name and its
+// target exactly as written (extras and trailing text cut), and the entry's own line.
+struct EpEntry
+{
+    std::string   group;
+    std::uint32_t groupLine = 0;
+    std::string   name;
+    std::string   target;
+    std::uint32_t line = 0;
+};
+
+namespace epdetail
+{
+
+inline std::string_view trim( std::string_view s ) noexcept
+{
+    while( !s.empty() && ( s.front() == ' ' || s.front() == '\t' ) )
+    {
+        s.remove_prefix( 1 );
+    }
+    while( !s.empty() && ( s.back() == ' ' || s.back() == '\t' || s.back() == '\r' ) )
+    {
+        s.remove_suffix( 1 );
+    }
+    return s;
+}
+
+inline bool isDottedNameChar( char c ) noexcept
+{
+    return ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ) || c == '_' || c == '.';
+}
+
+// `module[:attr]` from an entry value: the leading run up to whitespace or an extras bracket. "" when it is not a dotted module
+// name with an optional dotted attribute (a path, a quoted table, garbage) — that entry is not recorded.
+inline std::string_view entryTarget( std::string_view v ) noexcept
+{
+    v = trim( v );
+    std::size_t end = 0;
+    while( end < v.size() && v[end] != ' ' && v[end] != '\t' && v[end] != '[' )
+    {
+        ++end;
+    }
+    const std::string_view t     = v.substr( 0, end );
+    const std::size_t      colon = t.find( ':' );
+    const std::string_view mod   = t.substr( 0, colon );
+    const std::string_view attr  = colon == std::string_view::npos ? std::string_view() : t.substr( colon + 1 );
+    const auto             dotted = []( std::string_view s ) { return !s.empty() && s.front() != '.' && s.back() != '.' && std::ranges::all_of( s, isDottedNameChar ); };
+    if( !dotted( mod ) || ( colon != std::string_view::npos && !dotted( attr ) ) )
+    {
+        return {};
+    }
+    return t;
+}
+
+// `name = module:attr` (one setup.cfg entry line or the inline part of a group line).
+inline void addCfgEntry( std::string_view v, std::string_view group, std::uint32_t groupLine, std::uint32_t line, std::vector<EpEntry>& out )
+{
+    const std::size_t eq = v.find( '=' );
+    if( eq == std::string_view::npos )
+    {
+        return;
+    }
+    const std::string_view name   = trim( v.substr( 0, eq ) );
+    const std::string_view target = entryTarget( v.substr( eq + 1 ) );
+    if( name.empty() || target.empty() )
+    {
+        return;
+    }
+    out.push_back( EpEntry{ std::string( group ), groupLine, std::string( name ), std::string( target ), line } );
+}
+
+// A TOML key or header path split on its dots, quoted parts kept whole ("a.b" is one part). Empty on a malformed path.
+inline std::vector<std::string> tomlKeyParts( std::string_view s )
+{
+    std::vector<std::string> parts;
+    std::string              cur;
+    bool                     any = false;
+    for( std::size_t i = 0; i < s.size(); ++i )
+    {
+        const char c = s[i];
+        if( c == '"' || c == '\'' )
+        {
+            const std::size_t close = s.find( c, i + 1 );
+            if( close == std::string_view::npos )
+            {
+                return {};
+            }
+            cur.append( s.substr( i + 1, close - i - 1 ) );
+            any = true;
+            i   = close;
+        }
+        else if( c == '.' )
+        {
+            if( !any )
+            {
+                return {};
+            }
+            parts.push_back( std::string( trim( cur ) ) );
+            cur.clear();
+            any = false;
+        }
+        else if( c != ' ' && c != '\t' )
+        {
+            cur += c;
+            any = true;
+        }
+    }
+    if( !any )
+    {
+        return {};
+    }
+    parts.push_back( std::move( cur ) );
+    return parts;
+}
+
+// The entry-point group a pyproject table header names, or "" when the table is no entry-point table.
+inline std::string pyprojectGroupOf( const std::vector<std::string>& k )
+{
+    if( k.size() == 3 && k[0] == "project" && k[1] == "entry-points" )
+    {
+        return k[2];
+    }
+    if( k.size() == 2 && k[0] == "project" && k[1] == "scripts" )
+    {
+        return "console_scripts";
+    }
+    if( k.size() == 2 && k[0] == "project" && k[1] == "gui-scripts" )
+    {
+        return "gui_scripts";
+    }
+    if( k.size() == 4 && k[0] == "tool" && k[1] == "poetry" && k[2] == "plugins" )
+    {
+        return k[3];
+    }
+    if( k.size() == 3 && k[0] == "tool" && k[1] == "poetry" && k[2] == "scripts" )
+    {
+        return "console_scripts";
+    }
+    return {};
+}
+
+// A TOML basic or literal string value (`"x"` / `'x'`), or nullopt for any other value (a table, an array, a number).
+inline std::optional<std::string_view> tomlStringValue( std::string_view v ) noexcept
+{
+    v = trim( v );
+    if( v.size() < 2 || ( v.front() != '"' && v.front() != '\'' ) )
+    {
+        return std::nullopt;
+    }
+    const std::size_t close = v.find( v.front(), 1 );
+    if( close == std::string_view::npos )
+    {
+        return std::nullopt;
+    }
+    return v.substr( 1, close - 1 );
+}
+
+// Calls `fn( line, lineNo )` per line of `text` (1-based, '\r' kept for trim to drop).
+template<class Fn>
+inline void forEachLine( std::string_view text, Fn&& fn )
+{
+    std::uint32_t lineNo = 0;
+    for( std::size_t pos = 0; pos <= text.size(); )
+    {
+        const std::size_t nl  = text.find( '\n', pos );
+        const std::size_t end = nl == std::string_view::npos ? text.size() : nl;
+        ++lineNo;
+        fn( text.substr( pos, end - pos ), lineNo );
+        if( nl == std::string_view::npos )
+        {
+            break;
+        }
+        pos = nl + 1;
+    }
+}
+
+}   // namespace epdetail
+
+// setup.cfg: the `[options.entry_points]` section. A group is an unindented `key = value` (or `key: value`) line; its entries are
+// the inline value and every indented continuation line `name = module:attr`. Comment lines (# ;) are skipped.
+inline void parseSetupCfgEntryPoints( std::string_view text, std::vector<EpEntry>& out )
+{
+    bool          inSection = false;
+    std::string   group;
+    std::uint32_t groupLine = 0;
+    epdetail::forEachLine( text, [ & ]( std::string_view line, std::uint32_t lineNo )
+    {
+        const std::string_view t = epdetail::trim( line );
+        if( t.empty() || t.front() == '#' || t.front() == ';' )
+        {
+            return;
+        }
+        if( t.front() == '[' )
+        {
+            inSection = t == "[options.entry_points]";
+            group.clear();
+            return;
+        }
+        if( !inSection )
+        {
+            return;
+        }
+        if( line.front() == ' ' || line.front() == '\t' )
+        {
+            if( !group.empty() )
+            {
+                epdetail::addCfgEntry( t, group, groupLine, lineNo, out );
+            }
+            return;
+        }
+        const std::size_t sep = t.find_first_of( "=:" );
+        if( sep == std::string_view::npos )
+        {
+            group.clear();
+            return;
+        }
+        group     = std::string( epdetail::trim( t.substr( 0, sep ) ) );
+        groupLine = lineNo;
+        if( const std::string_view inl = epdetail::trim( t.substr( sep + 1 ) ); !inl.empty() )
+        {
+            epdetail::addCfgEntry( inl, group, groupLine, lineNo, out );
+        }
+    } );
+}
+
+// pyproject.toml: `[project.entry-points.G]` / `[project.scripts]` / `[project.gui-scripts]` / `[tool.poetry.plugins.G]` /
+// `[tool.poetry.scripts]` tables, each `name = "module:attr"` line whose value is a string.
+inline void parsePyprojectEntryPoints( std::string_view text, std::vector<EpEntry>& out )
+{
+    std::string   group;
+    std::uint32_t groupLine = 0;
+    epdetail::forEachLine( text, [ & ]( std::string_view line, std::uint32_t lineNo )
+    {
+        const std::string_view t = epdetail::trim( line );
+        if( t.empty() || t.front() == '#' )
+        {
+            return;
+        }
+        if( t.front() == '[' )
+        {
+            const std::size_t close = t.rfind( ']' );
+            group = ( t.starts_with( "[[" ) || close == std::string_view::npos ) ? std::string()
+                  : epdetail::pyprojectGroupOf( epdetail::tomlKeyParts( t.substr( 1, close - 1 ) ) );
+            groupLine = lineNo;
+            return;
+        }
+        if( group.empty() )
+        {
+            return;
+        }
+        // the key ends at the first '=' outside quotes
+        std::size_t eq = std::string_view::npos;
+        char        q  = 0;
+        for( std::size_t i = 0; i < t.size(); ++i )
+        {
+            if( q != 0 )
+            {
+                q = t[i] == q ? char( 0 ) : q;
+            }
+            else if( t[i] == '"' || t[i] == '\'' )
+            {
+                q = t[i];
+            }
+            else if( t[i] == '=' )
+            {
+                eq = i;
+                break;
+            }
+        }
+        if( eq == std::string_view::npos )
+        {
+            return;
+        }
+        const std::vector<std::string>        key = epdetail::tomlKeyParts( t.substr( 0, eq ) );
+        const std::optional<std::string_view> val = epdetail::tomlStringValue( t.substr( eq + 1 ) );
+        const std::string_view                target = val ? epdetail::entryTarget( *val ) : std::string_view();
+        if( key.size() != 1 || key[0].empty() || target.empty() )
+        {
+            return;
+        }
+        out.push_back( EpEntry{ group, groupLine, key[0], std::string( target ), lineNo } );
+    } );
+}
+
+// ── the consumer shapes: a quoted occurrence of the group literal whose line reads it as an entry-point group ──────────────
+namespace epdetail
+{
+
+// The trailing dotted name of `s` (after trimming), e.g. "loaded.plugin.entry_point.group" → its last segment "group".
+inline std::string_view lastSegmentOfTrailingName( std::string_view s ) noexcept
+{
+    s = trim( s );
+    std::size_t b = s.size();
+    while( b > 0 && isDottedNameChar( s[b - 1] ) )
+    {
+        --b;
+    }
+    const std::string_view name = s.substr( b );
+    const std::size_t      dot  = name.rfind( '.' );
+    return dot == std::string_view::npos ? name : name.substr( dot + 1 );
+}
+
+inline std::string_view leadingName( std::string_view s ) noexcept
+{
+    s = trim( s );
+    std::size_t e = 0;
+    while( e < s.size() && isDottedNameChar( s[e] ) )
+    {
+        ++e;
+    }
+    const std::string_view name = s.substr( 0, e );
+    const std::size_t      dot  = name.rfind( '.' );
+    return dot == std::string_view::npos ? name : name.substr( dot + 1 );
+}
+
+// Is a '#' outside a string literal before the end of `before`? (then the occurrence sits in a comment)
+inline bool inLineComment( std::string_view before ) noexcept
+{
+    char q = 0;
+    for( const char c : before )
+    {
+        if( q != 0 )
+        {
+            q = c == q ? char( 0 ) : q;
+        }
+        else if( c == '"' || c == '\'' )
+        {
+            q = c;
+        }
+        else if( c == '#' )
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The loaders whose argument (or group= keyword) names an entry-point group: importlib.metadata entry_points / select,
+// pkg_resources iter_entry_points / get_entry_map, the importlib_metadata backport's same names.
+inline bool groupLoaderCallee( std::string_view callee ) noexcept
+{
+    return callee == "entry_points" || callee == "select" || callee == "iter_entry_points" || callee == "get_group_all"
+        || callee == "get_group_named" || callee == "get_entry_map";
+}
+
+// `before` = the line up to the literal's opening quote, `after` = from its closing quote on.
+inline bool consumerShape( std::string_view before, std::string_view after ) noexcept
+{
+    if( inLineComment( before ) )
+    {
+        return false;
+    }
+    std::string_view b = trim( before );
+    std::string_view a = trim( after );
+    // X.group == "g" / X.group != "g"
+    if( b.ends_with( "==" ) || b.ends_with( "!=" ) )
+    {
+        return lastSegmentOfTrailingName( b.substr( 0, b.size() - 2 ) ) == "group";
+    }
+    // "g" == X.group
+    if( a.starts_with( "==" ) || a.starts_with( "!=" ) )
+    {
+        return leadingName( a.substr( 2 ) ) == "group";
+    }
+    // entry_points()["g"] / entry_points().get("g")
+    if( b.ends_with( "entry_points()[" ) || b.ends_with( "entry_points().get(" ) )
+    {
+        return true;
+    }
+    // loader( "g" ) / loader( group="g" ) — the literal is the first argument or the group= keyword
+    if( b.ends_with( "=" ) )
+    {
+        std::string_view k = trim( b.substr( 0, b.size() - 1 ) );
+        if( !k.ends_with( "group" ) || ( k.size() > 5 && isDottedNameChar( k[k.size() - 6] ) ) )
+        {
+            return false;
+        }
+        k = trim( k.substr( 0, k.size() - 5 ) );
+        if( k.ends_with( "," ) )
+        {
+            // a later keyword: the callee is the name before the last unclosed '('
+            int depth = 0;
+            std::size_t i = k.size();
+            while( i > 0 )
+            {
+                --i;
+                depth += k[i] == ')' ? 1 : ( k[i] == '(' ? -1 : 0 );
+                if( depth < 0 )
+                {
+                    break;
+                }
+            }
+            if( depth >= 0 )
+            {
+                return false;
+            }
+            k = k.substr( 0, i + 1 );
+        }
+        b = k;
+    }
+    if( !b.ends_with( "(" ) )
+    {
+        return false;
+    }
+    return groupLoaderCallee( lastSegmentOfTrailingName( b.substr( 0, b.size() - 1 ) ) );
+}
+
+}   // namespace epdetail
+
+// One code consumer of a group literal: the file and line, as a site.
+struct EpConsumer
+{
+    std::uint32_t fileId = 0;
+    std::uint32_t line   = 0;
+};
+
+// Every consumer site of each literal in `groups`, over the indexed .py files, in file order then line. One read per file that
+// holds any of the literals (a substring pre-filter on the whole text first); an unreadable file is skipped (it can only make
+// the list shorter, and the legend says the sites are a floor).
+inline std::vector<std::vector<EpConsumer>> findGroupConsumers( const IngestResult& ing, std::span<const std::string> groups )
+{
+    std::vector<std::vector<EpConsumer>> out( groups.size() );
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        if( !rootRelPath( ing, f ).ends_with( ".py" ) )
+        {
+            continue;
+        }
+        const std::optional<std::string> text = docparse::detail::readWholeFile( diskPath( ing, f ) );
+        if( !text )
+        {
+            continue;
+        }
+        for( std::size_t gi = 0; gi < groups.size(); ++gi )
+        {
+            const std::string& g = groups[gi];
+            std::uint32_t      lastLine = 0;
+            for( std::size_t at = text->find( g ); at != std::string::npos; at = text->find( g, at + 1 ) )
+            {
+                const std::size_t close = at + g.size();
+                if( at == 0 || close >= text->size() || ( ( *text )[at - 1] != '"' && ( *text )[at - 1] != '\'' ) || ( *text )[close] != ( *text )[at - 1] )
+                {
+                    continue;
+                }
+                const std::size_t ls  = text->rfind( '\n', at - 1 );
+                const std::size_t lb  = ls == std::string::npos ? 0 : ls + 1;
+                const std::size_t le  = std::min( text->find( '\n', close ), text->size() );
+                const std::string_view tv( *text );
+                if( !epdetail::consumerShape( tv.substr( lb, at - 1 - lb ), tv.substr( close + 1, le - close - 1 ) ) )
+                {
+                    continue;
+                }
+                const std::uint32_t line = std::uint32_t( 1 + std::count( text->begin(), text->begin() + std::ptrdiff_t( lb ), '\n' ) );
+                if( line != lastLine )
+                {
+                    out[gi].push_back( EpConsumer{ f, line } );
+                    lastLine = line;
+                }
+            }
+        }
+    }
+    return out;
+}
+
+// The in-tree definition an entry's target names, or why there is none.
+enum class EpTargetState : std::uint8_t { Def, External, Unresolved };
+struct EpTarget
+{
+    EpTargetState state = EpTargetState::External;
+    NodeId        def   = kNoNode;
+};
+
+// The indexed module file of `module` (dotted) for a manifest in directory `mdir` (root-relative, "" = the root): a .py file
+// under mdir whose path within it is `a/b/c.py` or `a/b/c/__init__.py`, or ends with "/" + one of those (a package directory
+// such as src/). Several: the one directly under mdir or under mdir/src wins when it is the only such; else ambiguous (kNoFile).
+// `inTree` says whether any file matched at all.
+inline std::uint32_t epModuleFile( const IngestResult& ing, std::string_view mdir, std::string_view module, bool& inTree )
+{
+    std::string path( module );
+    std::replace( path.begin(), path.end(), '.', '/' );
+    const std::string asFile = path + ".py";
+    const std::string asPkg  = path + "/__init__.py";
+    std::vector<std::uint32_t> any;
+    std::vector<std::uint32_t> direct;
+    for( std::uint32_t f = 0; f < ing.files.size(); ++f )
+    {
+        std::string_view rel = rootRelPath( ing, f );
+        if( !mdir.empty() )
+        {
+            if( rel.size() <= mdir.size() || !rel.starts_with( mdir ) || rel[ mdir.size() ] != '/' )
+            {
+                continue;
+            }
+            rel.remove_prefix( mdir.size() + 1 );
+        }
+        for( const std::string_view want : { std::string_view( asFile ), std::string_view( asPkg ) } )
+        {
+            if( rel == want || rel == "src/" + std::string( want ) )
+            {
+                direct.push_back( f );
+                any.push_back( f );
+            }
+            else if( rel.size() > want.size() && rel.ends_with( want ) && rel[ rel.size() - want.size() - 1 ] == '/' )
+            {
+                any.push_back( f );
+            }
+        }
+    }
+    inTree = !any.empty();
+    if( any.size() == 1 )
+    {
+        return any.front();
+    }
+    return direct.size() == 1 ? direct.front() : kNoFile;
+}
+
+// Is `s` what the attribute path `attr` names in its module? The last segment is the name; the rest is the owner chain, which
+// must equal the symbol's scope (a top-level def has no scope, or — a class — its own name as scope, as the index stores it).
+inline bool epAttrNames( const Symbol& s, std::string_view attr )
+{
+    const std::size_t      dot   = attr.rfind( '.' );
+    const std::string_view name  = dot == std::string_view::npos ? attr : attr.substr( dot + 1 );
+    const std::string_view owner = dot == std::string_view::npos ? std::string_view() : attr.substr( 0, dot );
+    if( s.name != name )
+    {
+        return false;
+    }
+    if( s.kind != SymKind::Function && s.kind != SymKind::Method && s.kind != SymKind::Class && s.kind != SymKind::Var )
+    {
+        return false;
+    }
+    if( owner.empty() )
+    {
+        return s.scope.empty() || s.scope == s.name;
+    }
+    if( s.scope == owner )
+    {
+        return true;
+    }
+    // the index may spell a nested owner with "::" — compare segment by segment
+    std::string dotted = s.scope;
+    for( std::size_t k = dotted.find( "::" ); k != std::string::npos; k = dotted.find( "::", k + 1 ) )
+    {
+        dotted.replace( k, 2, "." );
+    }
+    return dotted == owner;
+}
+
+struct EpRender
+{
+    std::string xml;   // the <ep> elements; empty when no manifest group holds a shown row
+};
+
+namespace epdetail
+{
+
+struct Manifest
+{
+    std::string          rel;   // root-relative path of the manifest file
+    std::string          dir;   // its root-relative directory ("" = the root)
+    std::vector<EpEntry> entries;
+};
+
+// The manifests above one root-relative file path: its own directory and each ancestor up to the root, setup.cfg then
+// pyproject.toml in each, read once per directory (`seen`). Only manifests that hold entries are kept.
+inline void collectManifestsAbove( const IngestResult& ing, std::uint32_t fileId, std::vector<std::string>& seenDirs, std::vector<Manifest>& out )
+{
+    const std::string_view rel  = rootRelPath( ing, fileId );
+    std::filesystem::path  disk = std::filesystem::path( diskPath( ing, fileId ) ).parent_path();
+    std::string_view       dir  = rel.substr( 0, rel.rfind( '/' ) == std::string_view::npos ? 0 : rel.rfind( '/' ) );
+    while( true )
+    {
+        if( std::find( seenDirs.begin(), seenDirs.end(), dir ) == seenDirs.end() )
+        {
+            seenDirs.emplace_back( dir );
+            for( const char* name : { "setup.cfg", "pyproject.toml" } )
+            {
+                const std::optional<std::string> text = docparse::detail::readRegularFile( name, ( disk / name ).string() );
+                if( !text )
+                {
+                    continue;
+                }
+                Manifest m{ dir.empty() ? std::string( name ) : std::string( dir ) + "/" + name, std::string( dir ), {} };
+                if( std::string_view( name ) == "setup.cfg" )
+                {
+                    parseSetupCfgEntryPoints( *text, m.entries );
+                }
+                else
+                {
+                    parsePyprojectEntryPoints( *text, m.entries );
+                }
+                if( !m.entries.empty() )
+                {
+                    out.push_back( std::move( m ) );
+                }
+            }
+        }
+        if( dir.empty() )
+        {
+            break;
+        }
+        const std::size_t up = dir.rfind( '/' );
+        dir  = up == std::string_view::npos ? std::string_view() : dir.substr( 0, up );
+        disk = disk.parent_path();
+    }
+}
+
+inline void appendAttr( std::string& x, std::string_view key, std::string_view val, std::vector<char>& esc )
+{
+    x += ' ';
+    x += key;
+    x += "=\"";
+    x += escapeXml( val, esc );
+    x += '"';
+}
+
+}   // namespace epdetail
+
+// The element(s). `shown` is the answer's ranked head (the rows <sigs> serves, rank order). Single-root runs only.
+inline EpRender renderForEpManifest( const IngestResult& ing, std::span<const NodeId> shown )
+{
+    EpRender out;
+    if( ing.crawlRoot.empty() || shown.empty() )
+    {
+        return out;   // a multi-root run has no one root to place a manifest under
+    }
+    // 1. the manifests above every shown Python row
+    std::vector<std::string>        seenDirs;
+    std::vector<epdetail::Manifest> manifests;
+    for( const NodeId id : shown )
+    {
+        if( id < ing.symbols.size() && rootRelPath( ing, ing.symbols[id].fileId ).ends_with( ".py" ) )
+        {
+            epdetail::collectManifestsAbove( ing, ing.symbols[id].fileId, seenDirs, manifests );
+        }
+    }
+    if( manifests.empty() )
+    {
+        return out;
+    }
+    // 2. each entry's module file, then ONE pass over the symbols of those files for the attribute
+    std::vector<std::vector<std::uint32_t>> moduleFile( manifests.size() );
+    std::vector<std::vector<char>>          moduleInTree( manifests.size() );
+    std::vector<char>                       wantFile( ing.files.size(), 0 );
+    for( std::size_t m = 0; m < manifests.size(); ++m )
+    {
+        for( const EpEntry& e : manifests[m].entries )
+        {
+            bool                inTree = false;
+            const std::uint32_t f      = epModuleFile( ing, manifests[m].dir, std::string_view( e.target ).substr( 0, e.target.find( ':' ) ), inTree );
+            moduleFile[m].push_back( f );
+            moduleInTree[m].push_back( char( inTree ? 1 : 0 ) );
+            if( f != kNoFile )
+            {
+                wantFile[f] = 1;
+            }
+        }
+    }
+    const SymbolsByFile byFile = symbolsByFile( ing, [ & ]( const Symbol& s ) { return wantFile[ s.fileId ] != 0; },
+                                                []( NodeId a, NodeId b ) { return a < b; } );
+    std::vector<std::vector<EpTarget>> targets( manifests.size() );
+    for( std::size_t m = 0; m < manifests.size(); ++m )
+    {
+        for( std::size_t k = 0; k < manifests[m].entries.size(); ++k )
+        {
+            const EpEntry&    e     = manifests[m].entries[k];
+            const std::size_t colon = e.target.find( ':' );
+            EpTarget          t;
+            if( moduleFile[m][k] != kNoFile && colon != std::string::npos )
+            {
+                std::size_t hits = 0;
+                for( const NodeId id : byFile[ moduleFile[m][k] ] )
+                {
+                    if( epAttrNames( ing.symbols[id], std::string_view( e.target ).substr( colon + 1 ) ) )
+                    {
+                        t.def = id;
+                        ++hits;
+                    }
+                }
+                t.def   = hits == 1 ? t.def : kNoNode;
+                t.state = hits == 1 ? EpTargetState::Def : EpTargetState::Unresolved;
+            }
+            else
+            {
+                t.state = moduleInTree[m][k] != 0 ? EpTargetState::Unresolved : EpTargetState::External;
+            }
+            targets[m].push_back( t );
+        }
+    }
+    // 3. the groups that hold a shown row, by the rank of their first shown target
+    struct Pick
+    {
+        std::size_t m;
+        std::string group;
+    };
+    std::vector<Pick> picks;
+    std::size_t       groupsTotal = 0;
+    for( const NodeId id : shown )
+    {
+        for( std::size_t m = 0; m < manifests.size(); ++m )
+        {
+            for( std::size_t k = 0; k < manifests[m].entries.size(); ++k )
+            {
+                const std::string& g = manifests[m].entries[k].group;
+                if( targets[m][k].def != id
+                    || std::ranges::any_of( picks, [ & ]( const Pick& p ) { return p.m == m && p.group == g; } ) )
+                {
+                    continue;
+                }
+                ++groupsTotal;
+                picks.push_back( Pick{ m, g } );
+            }
+        }
+    }
+    if( picks.empty() )
+    {
+        return out;
+    }
+    picks.resize( std::min( picks.size(), kForEpGroups ) );
+    // 4. the code consumers of each picked group's literal, and their enclosing definitions
+    std::vector<std::string> literals;
+    for( const Pick& p : picks )
+    {
+        if( std::find( literals.begin(), literals.end(), p.group ) == literals.end() )
+        {
+            literals.push_back( p.group );
+        }
+    }
+    const std::vector<std::vector<EpConsumer>> consumers = findGroupConsumers( ing, literals );
+    std::vector<char>                          siteFile( ing.files.size(), 0 );
+    for( const std::vector<EpConsumer>& cs : consumers )
+    {
+        for( std::size_t i = 0; i < cs.size() && i < kForEpUsedAt; ++i )
+        {
+            siteFile[ cs[i].fileId ] = 1;
+        }
+    }
+    flipimpact::SymbolLineIndex lineIx;
+    lineIx.byFile = symbolsByFile( ing, [ & ]( const Symbol& s ) { return siteFile[ s.fileId ] != 0 && s.kind != SymKind::ModuleScope; },
+                                   [ & ]( NodeId a, NodeId b ) { return ing.symbols[a].line != ing.symbols[b].line ? ing.symbols[a].line < ing.symbols[b].line : a < b; } );
+    // 5. render
+    std::vector<char> esc;
+    std::string&      x = out.xml;
+    for( std::size_t pi = 0; pi < picks.size(); ++pi )
+    {
+        const epdetail::Manifest& man = manifests[ picks[pi].m ];
+        const std::string&        g   = picks[pi].group;
+        std::vector<std::size_t>  ks;
+        for( std::size_t k = 0; k < man.entries.size(); ++k )
+        {
+            if( man.entries[k].group == g )
+            {
+                ks.push_back( k );
+            }
+        }
+        x += "<ep";
+        epdetail::appendAttr( x, "p", man.rel, esc );
+        x += " l=\"" + std::to_string( man.entries[ ks.front() ].groupLine ) + "\"";
+        epdetail::appendAttr( x, "group", g, esc );
+        if( pi == 0 && groupsTotal > picks.size() )
+        {
+            x += " groups_total=\"" + std::to_string( groupsTotal ) + "\"";
+        }
+        if( ks.size() > kForEpEntries )
+        {
+            x += " entries_total=\"" + std::to_string( ks.size() ) + "\"";
+        }
+        const std::vector<EpConsumer>& cs = consumers[ std::size_t( std::find( literals.begin(), literals.end(), g ) - literals.begin() ) ];
+        if( !cs.empty() )
+        {
+            std::string at;
+            std::string in;
+            for( std::size_t i = 0; i < cs.size() && i < kForEpUsedAt; ++i )
+            {
+                at += ( i ? " " : "" ) + std::string( rootRelPath( ing, cs[i].fileId ) ) + ":" + std::to_string( cs[i].line );
+                const NodeId  host = flipimpact::innermostAtLine( ing, lineIx, cs[i].fileId, cs[i].line );
+                std::string   hn   = "-";
+                if( host != kNoNode )
+                {
+                    const Symbol& h = ing.symbols[host];
+                    hn = ( h.scope.empty() || h.scope == h.name ) ? h.name : h.scope + "." + h.name;
+                }
+                in += ( i ? " " : "" ) + hn;
+            }
+            epdetail::appendAttr( x, "used_at", at, esc );
+            epdetail::appendAttr( x, "used_in", in, esc );
+            if( cs.size() > kForEpUsedAt )
+            {
+                x += " used_total=\"" + std::to_string( cs.size() ) + "\"";
+            }
+        }
+        x += '>';
+        for( std::size_t i = 0; i < ks.size() && i < kForEpEntries; ++i )
+        {
+            const EpEntry&  e = man.entries[ ks[i] ];
+            const EpTarget& t = targets[ picks[pi].m ][ ks[i] ];
+            x += "<e";
+            epdetail::appendAttr( x, "n", e.name, esc );
+            epdetail::appendAttr( x, "target", e.target, esc );
+            if( t.state == EpTargetState::Def )
+            {
+                const Symbol& s = ing.symbols[ t.def ];
+                epdetail::appendAttr( x, "def", std::string( rootRelPath( ing, s.fileId ) ) + ":" + std::to_string( s.line ), esc );
+            }
+            else
+            {
+                x += t.state == EpTargetState::External ? " external=\"1\"" : " unresolved=\"1\"";
+            }
+            x += "/>";
+        }
+        x += "</ep>";
+    }
+    return out;
+}
+
+// The element's legend clauses, present-only beside it: the full and the compact dialect. No "--": they ride inside an XML comment.
+inline constexpr std::string_view kForEpManifestLegend =
+    "; ep p= l= group=: a manifest entry-point group (setup.cfg [options.entry_points], pyproject [project.entry-points.*], "
+    "[project.scripts], [tool.poetry.plugins.*]/[tool.poetry.scripts]) that registers a shown row, l= the group's line; "
+    "e n= target=: each entry as written, def=file:line the in-tree definition it names, external=1 no indexed file is its module, "
+    "unresolved=1 the module is in the tree but the name is not one definition there; used_at=file:line used_in=: code that "
+    "compares or loads that group's string literal (by literal text, not resolved; a floor), used_total= when more; "
+    "no used_at= means no such code was found; groups_total=/entries_total= when cut";
+inline constexpr std::string_view kForCompactEpManifestLegend =
+    "; ep p= l= group=: a manifest entry-point group registering a shown row; e n= target= as written, def=file:line in tree, "
+    "external=1 module not in tree, unresolved=1 not one def; used_at=file:line used_in=: code reading that group literal "
+    "(by text, a floor), used_total= if more; groups_total=/entries_total= if cut";
+
+}   // namespace rw
