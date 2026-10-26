@@ -1,4 +1,4 @@
-### Fixed — Django and unittest hooks no longer read as dead code
+### Fixed — Django and unittest hooks no longer read as dead code (#437, thanks @llvm-x86)
 
 Before: `--quality-delta` reported a Python hook as dead when no call in the tree named it. unittest and Django call
 `setUp`, `tearDown`, `setUpClass` and `setUpTestData` themselves. The runner calls each `test*` method. A closure inside a

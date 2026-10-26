@@ -1,4 +1,4 @@
-### Fixed — Kotlin scope functions no longer bind Java methods
+### Fixed — Kotlin scope functions no longer bind Java methods (#438, thanks @llvm-x86)
 
 A Kotlin call with a trailing lambda to `let`, `run`, `with`, `apply` or `also` now stays off the Java
 method of the same name. Before this change, `s.run { }` bound `Job.run`, and `with( sb ) { }` bound
