@@ -136,11 +136,17 @@ bind   cpp 'Plain::Pad::put' cppSoloHelper      # KEEP: no anonymous namesake of
 refuse cpp 'Solo::Pad::put'                     # the only Solo::Pad is in an unnamed namespace: refused, as an unreadable chain is
 
 echo "-- round trip: every member row --callees prints binds back to the same definition"
+# cr-harvest-444 (CR 4383991762): a failed enumeration or --callers run, or a sub with no seeds, is a FAIL, never a silent PASS
 for sub in ts py go rs cpp rb; do
-    for seed in $( cd "$FIX/$sub" && "$BIN" "$FIX/$sub" --no-cache 2>/dev/null | grep -oE '<s t="(method|fn)" n="[^"]+"( sc="[^"]+")?' | sed -E 's/.* n="([^"]+)"( sc="([^"]+)")?/\3::\1/; s/^:://' | sort -u ); do
-        got="$( cd "$FIX/$sub" && "$BIN" "$FIX/$sub" --no-cache --callers="$seed" 2>&1 )"
-        if printf '%s' "$got" | grep -q 'found="0"'; then no "round trip $sub $seed refused"; fi
-    done
+    rows="$( cd "$FIX/$sub" && "$BIN" "$FIX/$sub" --no-cache 2>/dev/null )"; rc=$?
+    if [ "$rc" -ne 0 ]; then no "round trip $sub enumeration failed (rc=$rc)"; continue; fi
+    seeds="$( printf '%s\n' "$rows" | grep -oE '<s t="(method|fn)" n="[^"]+"( sc="[^"]+")?' | sed -E 's/.* n="([^"]+)"( sc="([^"]+)")?/\3::\1/; s/^:://' | sort -u )"
+    if [ -z "$seeds" ]; then no "round trip $sub enumerated no member rows"; continue; fi
+    while IFS= read -r seed; do
+        got="$( cd "$FIX/$sub" && "$BIN" "$FIX/$sub" --no-cache --callers="$seed" 2>&1 )"; rc=$?
+        if [ "$rc" -ne 0 ]; then no "round trip $sub $seed failed (rc=$rc)"
+        elif printf '%s' "$got" | grep -q 'found="0"'; then no "round trip $sub $seed refused"; fi
+    done <<< "$seeds"
 done
 [ "$fail" -eq 0 ] && ok "round trip: every printed sc::n / n resolves again (none refused)"
 
