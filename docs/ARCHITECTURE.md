@@ -760,7 +760,7 @@ the canonical id the tool prints, `@FILE:LINE`, a `*` glob, and the changed symb
 `resolveAllByNameQualified` (`graph.h`) or one of its tiers. Its last tier, `resolveAllByWrittenSpelling`, accepts the
 spelling the source writes when every other tier found nothing: a TypeScript method's `Class.method` (owner read by
 containment), a module, crate or package prefix (`json.dump`, `batcheval.Put`, `crate::buf::Buffer::edit`; in Python and
-Rust a prefix component with no matching path component is ASSUMED to be a re-export, in Go the prefix names the file's own
+Rust every prefix component must name a path component, in order, and a skipped path component is the re-export, in Go the prefix names the file's own
 directory and nothing else, in Swift, Kotlin, Java and C# directories only: `WrittenModuleRule::DirsOnly`), and a C++ prefix that is the TAIL of the owner chain read off the source's namespaces and
 written qualifier; it binds only one entity, else the caller refuses as before. It refuses what it cannot read: a C++
 candidate whose chain is unreadable (a scope-macro line), a def nested in a function, method or object literal, a TypeScript

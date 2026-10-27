@@ -4,7 +4,7 @@ Every verb that takes a symbol (`--callers`, `--callees`, `--path`, `--impact`, 
 answered "symbol not found" for three spellings that name exactly one definition: a TypeScript/JavaScript method as
 `Class.method` (those grammars store no owner scope, so the owner is now read from the enclosing class), a module, crate or
 package prefix (`asyncio.run`, `json.dump`, Go `batcheval.Put` and `batcheval.Cmd.Eval`, Rust `crate::buf::Buffer::edit` or
-`my_crate::Buffer::edit`; in Python and Rust a prefix component that no path component names is ASSUMED to be a re-export, in
+`my_crate::Buffer::edit`; in Python and Rust every prefix component must name a path component, in order, and a skipped path component is the re-export, in
 Go the prefix names the file's own directory and nothing else, in Swift, Kotlin, Java and C# it names directories only: a file there
 is never a namespace), and a C++ owner the index keeps only the innermost label of
 (an out-of-line `ConnectionManagerImpl::ActiveStream::decodeHeaders`; read from the source's namespaces and written qualifier,
