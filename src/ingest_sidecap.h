@@ -1438,7 +1438,8 @@ struct MemberMacroReparse
 };
 
 // §L1 health of the parse this file's symbols will come from. For a C-family file whose FIRST parse holds error bytes,
-// try the re-parse with its semicolon-less member macro invocations blanked, and swap `tree` for it only when
+// try the re-parse with its semicolon-less member macro invocations blanked (for a Rust file: its precise-capturing
+// `use<..>` bounds, src/rustusebounds.h, counted in useBoundsBlanked instead), and swap `tree` for it only when
 // macroreparse::adoptsReparse says it holds strictly fewer error bytes. The returned health then describes the ADOPTED
 // tree (errNodes/errBytes measured on it, wsBytes on the original bytes) and carries macroBlanked; otherwise it is the
 // first parse's, byte for byte what measureFileHealth always returned. A clean first parse pays one comparison.
@@ -1446,16 +1447,24 @@ inline FileHealth measureHealthAdoptingMemberMacroReparse( TSParser* parser, Lan
 {
     const FileHealth first = measureFileHealth( ts_tree_root_node( tree.get() ), bytes );
     work.spans.clear();
-    if( first.errBytes == 0 || !macroreparse::isMacroReparseLang( lang ) )
+    const bool isRust = rustusebounds::isUseBoundsReparseLang( lang );   // the Rust layer (src/rustusebounds.h): use<..> bounds
+    if( first.errBytes == 0 || ( !isRust && !macroreparse::isMacroReparseLang( lang ) ) )
     {
         return first;
     }
-    macroreparse::findMemberMacroInvocations( bytes, work.spans, work.scan );
+    if( isRust )
+    {
+        rustusebounds::findPreciseCaptureBounds( bytes, work.spans );
+    }
+    else
+    {
+        macroreparse::findMemberMacroInvocations( bytes, work.spans, work.scan );
+    }
     if( work.spans.empty() )
     {
         return first;
     }
-    PROFILE_SCOPE_DESCRIBE( "ingest/extractFile: member-macro re-parse" );
+    PROFILE_SCOPE_DESCRIBE( "ingest/extractFile: blank-and-re-parse" );
     macroreparse::blankInvocations( bytes, work.spans, work.blanked );
     TreeGuard  second( parseTree( parser, work.blanked ) );
     FileHealth reparsed = second.get() != nullptr ? measureFileHealth( ts_tree_root_node( second.get() ), bytes ) : first;
@@ -1464,7 +1473,7 @@ inline FileHealth measureHealthAdoptingMemberMacroReparse( TSParser* parser, Lan
         work.spans.clear();
         return first;
     }
-    reparsed.macroBlanked = std::uint32_t( work.spans.size() );
+    ( isRust ? reparsed.useBoundsBlanked : reparsed.macroBlanked ) = std::uint32_t( work.spans.size() );
     tree = std::move( second );
     return reparsed;
 }

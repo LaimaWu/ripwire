@@ -1805,6 +1805,8 @@ struct FileHealth
     std::uint32_t macroBlanked = 0;   // member-macro re-parse (src/macroreparse.h): invocations blanked for the ADOPTED
                                       // parse this file's symbols came from; 0 ⇒ the first parse was kept. errNodes and
                                       // errBytes above always describe the parse extraction actually read.
+    std::uint32_t useBoundsBlanked = 0;   // its Rust layer (src/rustusebounds.h): precise-capturing use<..> bounds
+                                          // blanked for the ADOPTED parse; 0 ⇒ the first parse was kept
 };
 
 // Output of ingestion. Deterministic: files sorted lexicographically, symbol ids assigned
@@ -2080,6 +2082,13 @@ inline bool fileParseDegraded( const IngestResult& ing, std::size_t fileIndex ) 
 inline bool isMacroBlankedHealth( const FileHealth& health ) noexcept
 {
     return health.macroBlanked > 0;
+}
+
+// The Rust layer's per-file predicate (src/rustusebounds.h): this file's symbols come from a re-parse with its
+// precise-capturing use<..> bounds blanked. The skipped verb rows it (why=use-bounds-blanked).
+inline bool isUseBoundsBlankedHealth( const FileHealth& health ) noexcept
+{
+    return health.useBoundsBlanked > 0;
 }
 
 // ...and its corpus count: macro_blanked_files= on the map and --json headers (the skipped verb's root counts the same rows).
